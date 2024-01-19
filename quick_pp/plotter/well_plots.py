@@ -1,0 +1,289 @@
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import matplotlib.pyplot as plt
+
+
+plt.rcParams.update({
+                    'axes.labelsize': 10,
+                    'xtick.labelsize': 10,
+                    'legend.fontsize': 'small'
+                    })
+
+COLOR_DICT = {
+    'BADHOLE': 'rgba(0, 0, 0, .25)',
+    'BS': 'brown',
+    'CALI': '#618F63',
+    'COAL_FLAG': '#262626',
+    'GR': '#0000FF',
+    'NPHI': '#0000FF',
+    'PERFORATED': '#E20000',
+    'PERM': '#FF0000',
+    'PHIT': '#FF0000',
+    'PHIE': '#0000FF',
+    'RHOB': '#FF0000',
+    'RT': '#FF0000',
+    'SWT': '#FF0000',
+    'SWE': '#0000FF',
+    'VCLW': '#BFBFBF',
+    'VCOAL': '#000000',
+    'VGAS': '#FF0000',
+    'VOIL': '#00FF00',
+    'VSAND': '#F6F674',
+    'VSHALE': '#A65628',
+    'VSILT': '#FE9800'
+}
+
+def plotly_log(df):  # noqa
+    track = 7
+    index = df.DEPTH
+
+    for k, v in COLOR_DICT.items():
+        if k not in df.columns:
+            df[k] = 0
+
+    fig = make_subplots(rows=1, cols=track, shared_yaxes=True, horizontal_spacing=0.02,
+                        specs=[list([{'secondary_y': True}]*track)])
+
+    # Add GR trace #1.
+    fig.add_trace(go.Scatter(x=df['GR'], y=index, name='GR', line_color=COLOR_DICT['GR']),
+                  row=1, col=1)
+
+    # Add RESISTIVITY trace #2.
+    fig.add_trace(go.Scatter(x=df['RT'], y=index, name='RT', line_color=COLOR_DICT['RT'], line_dash='dot'),
+                  row=1, col=2)
+
+    # Add RHOB trace #3.
+    fig.add_trace(go.Scatter(x=df['RHOB'], y=index, name='RHOB', line_color=COLOR_DICT['RHOB']),
+                  row=1, col=3, secondary_y=False)
+
+    # Add PHIT trace #4.
+    fig.add_trace(go.Scatter(x=df['PHIT'], y=index, name='PHIT', line_color=COLOR_DICT['PHIT']),
+                  row=1, col=4, secondary_y=False)
+
+    # Add PERM trace #5.
+    fig.add_trace(go.Scatter(x=df['PERM'], y=index, name='PERM', line_color=COLOR_DICT['PERM']),
+                  row=1, col=5, secondary_y=False)
+
+    # Add SWT trace #6.
+    fig.add_trace(go.Scatter(x=df['SWT'], y=index, name='SWT', line_color=COLOR_DICT['SWT']),
+                  row=1, col=6, secondary_y=False)
+
+    # Add VCLW trace #7.
+    fig.add_trace(go.Scatter(x=df['VCLW'], y=index, name='VCLW', line_color='#000000', line_width=1,
+                  fill='tozerox',
+                  fillpattern_bgcolor=COLOR_DICT['VCLW'],
+                  fillpattern_fgcolor='#000000',
+                  fillpattern_fillmode='replace',
+                  fillpattern_shape='-',
+                  fillpattern_size=2,
+                  fillpattern_solidity=0.1,
+                  stackgroup='litho',
+                  orientation='h'),
+                  row=1, col=7, secondary_y=False)
+
+    # Add NPHI trace #8.
+    fig.add_trace(go.Scatter(x=df['NPHI'], y=index, name='NPHI', line_color=COLOR_DICT['NPHI'], line_dash='dot'),
+                  row=1, col=3, secondary_y=True)
+    fig.data[7].update(xaxis='x8')
+
+    # Add PHIE trace #9.
+    fig.add_trace(go.Scatter(x=df['PHIE'], y=index, name='PHIE', line_color=COLOR_DICT['PHIE']),
+                  row=1, col=4, secondary_y=True)
+    fig.data[8].update(xaxis='x9')
+
+    # Add SWE trace #10.
+    fig.add_trace(go.Scatter(x=df['SWE'], y=index, name='SWE', line_color=COLOR_DICT['SWE']),
+                  row=1, col=6, secondary_y=True)
+    fig.data[9].update(xaxis='x10')
+
+    # Add CALI trace #11.
+    fig.add_trace(go.Scatter(x=df['CALI'], y=index, name='CALI', line_color=COLOR_DICT['CALI'], line_dash='dot',
+                  fill='tozerox', fillcolor='rgba(165, 42, 42, .25)'),
+                  row=1, col=1, secondary_y=False)
+    fig.data[10].update(xaxis='x11')
+
+    # Add BITSIZE trace #12.
+    fig.add_trace(go.Scatter(x=df['BS'], y=index, name='BS', line_color=COLOR_DICT['BS']),
+                  row=1, col=1, secondary_y=False)
+    fig.data[11].update(xaxis='x12')
+
+    # Add BADHOLE trace #13.
+    fig.add_trace(go.Scatter(x=df['BADHOLE'], y=index, name='BADHOLE', line_color=COLOR_DICT['BADHOLE'],
+                  fill='tozerox', fillcolor='rgba(0, 0, 0, .25)'),
+                  row=1, col=1, secondary_y=False)
+    fig.data[12].update(xaxis='x13')
+
+    # Add VSILT trace #14.
+    fig.add_trace(go.Scatter(x=df['VSILT'], y=index, name='VSILT', line_color='#000000', line_width=1,
+                  fill='tonextx',
+                  fillpattern_bgcolor=COLOR_DICT['VSILT'],
+                  fillpattern_fgcolor='#000000',
+                  fillpattern_fillmode='replace',
+                  fillpattern_shape='.',
+                  fillpattern_size=3,
+                  fillpattern_solidity=0.1,
+                  stackgroup='litho',
+                  orientation='h'),
+                  row=1, col=7, secondary_y=False)
+
+    # Add VSAND trace #15.
+    fig.add_trace(go.Scatter(x=df['VSAND'], y=index, name='VSAND', line_color='#000000', line_width=1,
+                  fill='tonextx',
+                  fillpattern_bgcolor=COLOR_DICT['VSAND'],
+                  fillpattern_fgcolor='#000000',
+                  fillpattern_fillmode='replace',
+                  fillpattern_shape='.',
+                  fillpattern_size=3,
+                  fillpattern_solidity=0.1,
+                  stackgroup='litho',
+                  orientation='h'),
+                  row=1, col=7, secondary_y=False)
+
+    # Add VGAS trace #16.
+    fig.add_trace(go.Scatter(x=df['VGAS'], y=index, name='VGAS', line_color='#000000', line_width=1,
+                  fill='tonextx', fillcolor=COLOR_DICT['VGAS'], stackgroup='litho', orientation='h'),
+                  row=1, col=7, secondary_y=False)
+
+    # Add VOIL trace #17.
+    fig.add_trace(go.Scatter(x=df['VOIL'], y=index, name='VOIL', line_color='#000000', line_width=1,
+                  fill='tonextx', fillcolor=COLOR_DICT['VOIL'], stackgroup='litho', orientation='h'),
+                  row=1, col=7, secondary_y=False)
+
+    # Add VSHALE trace #18.
+    fig.add_trace(go.Scatter(x=df['VSHALE'], y=index, name='VSHALE', line_color=COLOR_DICT['VSHALE']),
+                  row=1, col=7, secondary_y=True)
+
+    i = 18
+    # Add COAL_FLAG trace.
+    for c in [4, 5, 6, 7]:
+        fig.add_trace(go.Scatter(x=df['COAL_FLAG'], y=index, name='', line_color=COLOR_DICT['COAL_FLAG'],
+                      fill='tozerox', fillcolor='rgba(0,0,0,1)', opacity=1),
+                      row=1, col=c, secondary_y=True)
+        fig.data[i].update(xaxis=f'x{i + 1}')
+        i += 1
+
+    if 'RHO_CLW' in df.columns and 'NPHI_CLW' in df.columns:
+        # Add NPHI_CLW trace #23
+        fig.add_trace(go.Scatter(x=df['NPHI_CLW'], y=index, name='NPHI_CLW', line_color='magenta'),
+                      row=1, col=3, secondary_y=True)
+        fig.data[i].update(xaxis=f'x{i + 1}')
+        i += 1
+        # Add RHO_CLW trace #24
+        fig.add_trace(go.Scatter(x=df['RHO_CLW'], y=index, name='RHO_CLW', line_color='purple'),
+                      row=1, col=3, secondary_y=False)
+        fig.data[i].update(xaxis=f'x{i + 1}')
+        i += 1
+
+    font_size = 9
+    fig.update_layout(
+        xaxis1=dict(title='GR', titlefont=dict(color=COLOR_DICT['GR'], size=font_size),
+                    tickfont=dict(color=COLOR_DICT['GR'], size=font_size), side='top', anchor='free', position=.9,
+                    title_standoff=.1, dtick=40, range=[0, 200], type='linear'),
+        xaxis2=dict(title='RT', titlefont=dict(color=COLOR_DICT['RT'], size=font_size),
+                    tickfont=dict(color=COLOR_DICT['RT'], size=font_size), side='top', anchor='free', position=.9,
+                    title_standoff=.1, range=[np.log10(.2), np.log10(200)], type='log'),
+        xaxis3=dict(title='RHOB', titlefont=dict(color=COLOR_DICT['RHOB'], size=font_size),
+                    tickformat=".2f", tick0=1.85, dtick=0.2,
+                    tickfont=dict(color=COLOR_DICT['RHOB'], size=font_size), side='top', anchor='free', position=.9,
+                    title_standoff=.1, range=[1.85, 2.85], type='linear'),
+        xaxis4=dict(title='PHIT', titlefont=dict(color=COLOR_DICT['PHIT'], size=font_size),
+                    tickfont=dict(color=COLOR_DICT['PHIT'], size=font_size),
+                    side='top', anchor='free', position=.9, title_standoff=.1,
+                    dtick=0.1, range=[0, 0.5], type='linear'),
+        xaxis5=dict(title='PERM', titlefont=dict(color=COLOR_DICT['PERM'], size=font_size),
+                    tickfont=dict(color=COLOR_DICT['PERM'], size=font_size),
+                    side='top', anchor='free', position=.9, title_standoff=.1,
+                    range=[np.log10(0.1), np.log10(10000)], type='log'),
+        xaxis6=dict(title='SWT', titlefont=dict(color=COLOR_DICT['SWT'], size=font_size),
+                    tickfont=dict(color=COLOR_DICT['SWT'], size=font_size),
+                    side='top', anchor='free', position=.9, title_standoff=.1,
+                    dtick=0.2, range=[0, 1], type='linear'),
+        xaxis7=dict(title='LITHOLOGY', titlefont=dict(color='black', size=font_size),
+                    tickfont=dict(color='black', size=font_size),
+                    side='top', anchor='free', position=.9, title_standoff=.1,
+                    range=[0, 1], type='linear'),
+        xaxis8=dict(title='NPHI', titlefont=dict(color=COLOR_DICT['NPHI'], size=font_size),
+                    tickfont=dict(color=COLOR_DICT['NPHI'], size=font_size),
+                    zeroline=False,
+                    side='top', anchor='free', position=.94, title_standoff=.1, overlaying='x3',
+                    tickformat=".2f", tick0=-.15, dtick=0.12, range=[.45, -.15], type='linear'),
+        xaxis9=dict(title='PHIE', titlefont=dict(color=COLOR_DICT['PHIE'], size=font_size),
+                    tickfont=dict(color=COLOR_DICT['PHIE'], size=font_size),
+                    side='top', anchor='free', position=.94, title_standoff=.1, overlaying='x4',
+                    dtick=0.1, range=[0, 0.5], type='linear'),
+        xaxis10=dict(title='SWE', titlefont=dict(color=COLOR_DICT['SWE'], size=font_size),
+                     tickfont=dict(color=COLOR_DICT['SWE'], size=font_size),
+                     side='top', anchor='free', position=.94, title_standoff=.1, overlaying='x6',
+                     dtick=0.2, range=[0, 1], type='linear'),
+        xaxis11=dict(title='CALI', titlefont=dict(color=COLOR_DICT['CALI'], size=font_size),
+                     tickfont=dict(color=COLOR_DICT['CALI'], size=font_size),
+                     side='top', anchor='free', position=.94, title_standoff=.1, overlaying='x1',
+                     dtick=2, range=[6, 16], type='linear'),
+        xaxis12=dict(title='BS', titlefont=dict(color=COLOR_DICT['BS'], size=font_size),
+                     tickfont=dict(color=COLOR_DICT['BS'], size=font_size),
+                     side='top', anchor='free', position=.98, title_standoff=.1, overlaying='x1',
+                     dtick=2, range=[6, 16], type='linear'),
+        xaxis13=dict(title='BADHOLE', titlefont=dict(color=COLOR_DICT['BADHOLE'], size=font_size),
+                     tickfont=dict(size=1),
+                     side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x1',
+                     range=[0, 5], type='linear', showgrid=False, zeroline=False,),
+
+        # make room to display double x-axes
+        yaxis=dict(domain=[0, .9], title='DEPTH (FT MD)', showgrid=False),
+        yaxis2=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis3=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis4=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis5=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis6=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis7=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis8=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis9=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis10=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis11=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis12=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis13=dict(domain=[0, .9], visible=False, showgrid=False),
+
+        # Update x and y axes for COAL_FLAG
+        xaxis19=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
+                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
+        yaxis19=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis20=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
+                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
+        yaxis20=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis21=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
+                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
+        yaxis21=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis22=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
+                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
+        yaxis22=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis23=dict(title='', range=[0.45, -0.15], type='linear', overlaying='x3', zeroline=False, showgrid=False),
+        yaxis23=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis24=dict(title='', range=[1.85, 2.85], type='linear', overlaying='x3', zeroline=False, showgrid=False),
+        yaxis24=dict(domain=[0, .9], visible=False, showgrid=False),
+
+        height=750,
+        width=900,
+        showlegend=False,
+        title={
+            'text': '%s Logs' % df.WELL_NAME.dropna().unique()[0],
+            'y': .99,
+            'xanchor': 'center',
+            'yanchor': 'top',
+            'font_size': font_size + 4
+        },
+        hovermode='y unified',
+        template='none',
+        margin=dict(l=70, r=0, t=20, b=10),
+        paper_bgcolor='#e6f2ff',
+        hoverlabel_bgcolor='#F3F3F3'
+    )
+
+    fig.update_xaxes(fixedrange=True)
+    fig.update_yaxes(matches='y', constrain='domain', autorange='reversed')
+
+    return fig
