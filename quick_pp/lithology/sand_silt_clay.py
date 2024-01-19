@@ -1,7 +1,7 @@
 import numpy as np
 import math
 
-from ..config import Config
+from .. import Config
 from ..utils import min_max_line, length_a_b, line_intersection
 from ..porosity import neu_den_xplot_poro_pt, clay_porosity
 from ..plotter import neutron_density_xplot

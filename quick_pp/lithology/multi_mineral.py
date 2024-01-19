@@ -1,6 +1,6 @@
 from scipy.optimize import minimize
 
-from ..config import Config
+from .. import Config
 
 
 def multi_mineral_model(gr, nphi, rhob):

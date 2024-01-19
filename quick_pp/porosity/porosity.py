@@ -1,6 +1,6 @@
 import numpy as np
 
-from ..config import Config
+from .. import Config
 from ..utils import length_a_b, line_intersection
 
 
