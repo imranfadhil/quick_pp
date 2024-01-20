@@ -1,8 +1,3 @@
-"""
-Created on Thu Dec 24 15:35:42 2020
-
-@author: imran.fadhil
-"""
 import re
 import lasio
 import numpy as np
@@ -159,8 +154,7 @@ def read_las_file(file_object, required_sets=['PEP']):  # noqa
 
 
 def pre_process(welly_object):
-    """
-    Pre-process welly_object
+    """Pre-process welly_object
 
     1. Resample depth for welly_object
     2. Replace NULL value with nan
@@ -188,8 +182,7 @@ def pre_process(welly_object):
 
 
 def extract_dataset(section_dict):
-    """
-    Extract dataset from section_dict. For only Las file with ONE (1) dataset
+    """Extract dataset from section_dict. For only Las file with ONE (1) dataset
 
     1. Assign well information section as header_bytes
     2. Loop through parameter, curve, and ASCII sections, assign their section values into data_bytes
@@ -225,8 +218,7 @@ def extract_dataset(section_dict):
 
 
 def concat_datasets(file_object, header_line_numbers, parameter_line_numbers, required_sets=['PEP']):
-    """
-    Concat required datasets in the LAS file.
+    """Concat required datasets in the LAS file.
 
     1. Iterate through list of parameter_line_numbers, by extracting only param_set of 'PEP'
     2. Through pointer position, subset and then concat well_info and file_object
