@@ -185,12 +185,11 @@ class SandShale:
         self.silt_line_angle = silt_line_angle or Config.SSC_ENDPOINTS["SILT_LINE_ANGLE"]
 
     def estimate_lithology(self, nphi, rhob, xplot: bool = False):
-        """Estimate lithology volumetrics based on Kuttan's litho-porosity model
+        """Estimate lithology volumetrics based on neutron density cross plot.
 
         Args:
             nphi (array): Neutron Porosity log in v/v
             rhob (array): Bulk Density log in g/cc
-            model (str, optional): Model to choose from 'kuttan' or 'kuttan_modified'. Defaults to 'kuttan'.
             xplot (bool, optional): To plot Neutron Density cross plot. Defaults to False.
 
         Returns:
@@ -263,12 +262,12 @@ class MultiMineral():
         """Modified from https://github.com/ruben-charles/petrophysical_evaluation_optimization_methods.git
 
         Args:
-            gr (float or array): Gamma Ray log in GAPI.
-            nphi (float or array): Neutron Porosity log in v/v.
-            rhob (float or array): Bulk Density log in g/cc.
+            gr (array): Gamma Ray log in GAPI.
+            nphi (array): Neutron Porosity log in v/v.
+            rhob (array): Bulk Density log in g/cc.
 
         Returns:
-            _type_: _description_
+            (array, array, array, array, array): vol_quartz, vol_calcite, vol_dolomite, vol_shale, vol_mud
         """
         # Getting default values from Config which may need to be changed based on the dataset
         responses = Config.MINERALS_LOG_VALUE
@@ -312,7 +311,6 @@ class MultiMineral():
 
 
 class Shale:
-    """Shale model"""
 
     def shale_volume_larinov_tertiary(igr):
         """
