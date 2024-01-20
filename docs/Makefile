@@ -1,5 +1,5 @@
 # Minimal makefile for Sphinx documentation
-# Steps:
+# Steps (execute in the docs folder):
 # 1. "sphinx-apidoc -o ./source ../quick_pp" to generate the module.rst files
 # 2. "make html" to generate the html files
 

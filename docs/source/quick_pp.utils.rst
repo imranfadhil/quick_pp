@@ -12,14 +12,6 @@ quick\_pp.utils.las\_handler module
    :undoc-members:
    :show-inheritance:
 
-quick\_pp.utils.utils module
-----------------------------
-
-.. automodule:: quick_pp.utils.utils
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 Module contents
 ---------------
 
