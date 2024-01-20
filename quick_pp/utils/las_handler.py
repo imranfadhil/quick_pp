@@ -169,7 +169,6 @@ def pre_process(welly_object):
 
     Args:
         welly_object (well object): Welly object for PEP dataset
-        data_df (pd.Dataframe): dataframe consist of PEP dataset
 
     Returns:
         pd.Dataframe: Processed data.
