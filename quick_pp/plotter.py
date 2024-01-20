@@ -3,7 +3,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
 
-from ..utils import line_intersection
+from .utils import line_intersection
 
 plt.style.use('Solarize_Light2')
 

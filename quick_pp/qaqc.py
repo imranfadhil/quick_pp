@@ -1,9 +1,9 @@
 import pandas as pd
 import numpy as np
 
-from ..utils import length_a_b, line_intersection
-from ..lithology import gr_index
-from .. import Config
+from .utils import length_a_b, line_intersection
+from .lithology import Shale
+from . import Config
 
 
 def mask_outside_threshold(data, fill=False):
@@ -163,7 +163,7 @@ def neu_den_xplot_hc_correction(
     D = fluid_point
     rocklithofrac = length_a_b(A, C)
 
-    frac_vsh_gr = gr_index(gr) * rocklithofrac
+    frac_vsh_gr = Shale.gr_index(gr) * rocklithofrac
     nphi_corrected = []
     rhob_corrected = []
     for i, point in enumerate(list(zip(nphi, rhob, frac_vsh_gr))):

@@ -1,23 +1,88 @@
 quick\_pp package
 =================
 
-Subpackages
------------
+Submodules
+----------
 
-.. toctree::
-   :maxdepth: 4
+quick\_pp.las\_handler module
+-----------------------------
 
-   quick_pp.fluid_type
-   quick_pp.lithology
-   quick_pp.permeability
-   quick_pp.plotter
-   quick_pp.porosity
-   quick_pp.qaqc
-   quick_pp.ressum
-   quick_pp.rock_physics
-   quick_pp.rock_type
-   quick_pp.saturation
-   quick_pp.utils
+.. automodule:: quick_pp.las_handler
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+quick\_pp.lithology module
+--------------------------
+
+.. automodule:: quick_pp.lithology
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+quick\_pp.permeability module
+-----------------------------
+
+.. automodule:: quick_pp.permeability
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+quick\_pp.plotter module
+------------------------
+
+.. automodule:: quick_pp.plotter
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+quick\_pp.porosity module
+-------------------------
+
+.. automodule:: quick_pp.porosity
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+quick\_pp.qaqc module
+---------------------
+
+.. automodule:: quick_pp.qaqc
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+quick\_pp.ressum module
+-----------------------
+
+.. automodule:: quick_pp.ressum
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+quick\_pp.rock\_type module
+---------------------------
+
+.. automodule:: quick_pp.rock_type
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+quick\_pp.saturation module
+---------------------------
+
+.. automodule:: quick_pp.saturation
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+quick\_pp.utils module
+----------------------
+
+.. automodule:: quick_pp.utils
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 Module contents
 ---------------

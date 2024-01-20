@@ -317,7 +317,7 @@ def export_to_las(well_data, well_name):
         data_df (pd.DataFrame): data input
         well_name (str): well name
     """
-    from .. import Config
+    from . import Config
     units = Config.vars_units(well_data)
     well_data['DEPT'] = well_data['DEPTH']
     well_data.set_index('DEPT', inplace=True, drop=True)
