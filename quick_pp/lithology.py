@@ -8,7 +8,7 @@ from sklearn.preprocessing import MinMaxScaler
 from .utils import min_max_line, length_a_b, line_intersection
 from .porosity import neu_den_xplot_poro_pt, clay_porosity
 from .plotter import neutron_density_xplot
-from . import Config
+from .config import Config
 
 
 class SandSiltClay:

@@ -3,7 +3,7 @@ import numpy as np
 
 from .utils import length_a_b, line_intersection
 from .lithology import Shale
-from . import Config
+from .config import Config
 
 
 def mask_outside_threshold(data, fill=False):
