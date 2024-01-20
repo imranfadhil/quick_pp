@@ -272,7 +272,7 @@ class MultiMineral():
     """Multi-mineral model
     """
 
-    def multi_mineral_model(gr, nphi, rhob):
+    def multi_mineral_model(self, gr, nphi, rhob):
         """Modified from https://github.com/ruben-charles/petrophysical_evaluation_optimization_methods.git
 
         Args:
@@ -374,7 +374,7 @@ class SandShale:
         else:
             return vsand, vcld, None
 
-    def lithology_fraction(nphi, rhob,
+    def lithology_fraction(self, nphi, rhob,
                            dry_sand_point: tuple = None,
                            dry_clay_point: tuple = None,
                            fluid_point: tuple = None):
