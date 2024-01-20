@@ -1,1 +1,4 @@
+lasio==0.30
+numpy==1.26.0
+pandas==2.1.1
 sphinx-rtd-theme==2.0.0
