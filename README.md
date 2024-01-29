@@ -1,7 +1,7 @@
 # quick_pp
 
 Python package to assist in providing quick-look/ preliminary petrophysical estimation.
-<video src="docs/static/quick_pp_example.mp4" controls title="quick_pp demo"></video>
+![quick_pp demo](docs/static/quick_pp_demo.gif)
 
 ## Install
 To install, use the following command:  
