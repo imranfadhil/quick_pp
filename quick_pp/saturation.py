@@ -133,10 +133,10 @@ def estimate_temperature_gradient(tvd, unit='metric'):
     """Estimate formation temperature based on gradient of 25 degC/km or 15 degF/1000ft.
 
     Args:
-        tvd (float or array): True vertical depth in m.
+        tvd (float): True vertical depth in m.
 
     Returns:
-        float or array: Formation temperature in degC.
+        float: Formation temperature in degC.
     """
     assert unit in ['metric', 'imperial'], "Please choose from 'metric' or 'imperial' units."
     return 32 + 25 * tvd / 1000 if unit == 'metric' else 90 + 15 * tvd / 1000
@@ -146,8 +146,8 @@ def estimate_b_waxman_smits(T, rw):
     """Estimating B (conductance parameter) for Waxman-Smits model based on Juhasz 1981.
 
     Args:
-        T (float or array): Temperature in degC.
-        rw (float or array): Water resistivity in ohm.m.
+        T (float): Temperature in degC.
+        rw (float): Water resistivity in ohm.m.
 
     Returns:
         float: B parameter.
@@ -200,12 +200,12 @@ def estimate_qv_hill(vclb, phit, water_salinity=10000):
     """Estimating Qv based on Hill et. al, 1979.
 
     Args:
-        vclb (float or array): _description_
-        phit (float or array): _description_
+        vclb (float): Volume of clay bound water in fraction.
+        phit (float): Total porosity in fraction.
         water_salinity (float): Water salinity in ppm or meq/cc.
 
     Returns:
-        float or array: _description_ in meq/cc
+        float: Qv in meq/cc
     """
     return (vclb / phit) / (0.084 * water_salinity**-0.5 + 0.22)
 
@@ -214,12 +214,12 @@ def estimate_qv_lavers(phit, a=3.05e-4, b=3.49):
     """Based on Lavers, 1975.
 
     Args:
-        phit (float or array): Total porosity
-        a (float): _description_
-        b (float): _description_
+        phit (float): Total porosity in fraction.
+        a (float): Constant, defaults to 3.05e-4.
+        b (float): Constant, defaults to 3.49.
 
     Returns:
-        float or array: _description_
+        float: Qv in meq/cc.
     """
     return a * phit**-b
 

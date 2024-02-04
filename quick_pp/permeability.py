@@ -29,23 +29,6 @@ def kozeny_carman_permeability(phit, S=0.01):
     return phit**3 / (5 * S**2 * (1 - phit**2))
 
 
-def permeability_thickness(phit, Swirr, A, B, C):
-    """KH = A * phit**B / Swirr**C
-
-    Args:
-        phit (float): _description_
-        Swirr (float): _description_
-        h (float): _description_
-        A (float): _description_
-        B (float): _description_
-        C (float): _description_
-
-    Returns:
-        float: _description_
-    """
-    return A * phit**B / Swirr**C
-
-
 def timur_permeability(phit, Swirr):
     """Based on Timur (1968) emperical equation established on 155 sandstone samples from 3 different
     oil fields in North America.

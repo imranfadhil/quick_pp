@@ -2,12 +2,12 @@ import pandas as pd
 import numpy as np
 
 from .utils import length_a_b, line_intersection
-from .lithology import Shale
+from .lithology import gr_index
 from .config import Config
 
 
 def mask_outside_threshold(data, fill=False):
-    """ Replace values outside of min and max with null
+    """ Replace values outside of min and max with null or the min/ max value.
 
     Args:
         data (pd.DataFrame): Data to be transformed
@@ -18,7 +18,7 @@ def mask_outside_threshold(data, fill=False):
     for model_, vars_ in Config.VARS.items():
         for var_ in vars_:
             var = var_['var']
-            if (('min' in var_.keys()) or ('max' in var_.keys())):  # and var_['as_input']:
+            if (('min' in var_.keys()) or ('max' in var_.keys())):
                 if var in data.columns:
                     if not fill:
                         data.loc[:, var] = np.where(data[var] < var_['min'], np.nan, data[var])
@@ -30,7 +30,7 @@ def mask_outside_threshold(data, fill=False):
 
 
 def badhole_flag(df, thold=4):
-    """Generate BADHOLE flag using ruptures package. Modified from https://hallau.world/post/bitsize-from-caliper/
+    """Generate BADHOLE flag using ruptures package. Modified based on https://hallau.world/post/bitsize-from-caliper/
 
     Args:
         df (pd.DataFrame): Dataframe used to generate the BADHOLE_FLAG
@@ -83,8 +83,6 @@ def badhole_flag(df, thold=4):
                 else:
                     peaks = []
 
-                # sigma = 5  # noise standard deviation
-                # my_bkps = algo.predict(pen=np.log(len(signal_data) * sigma**2))
                 jump = 60
                 algo = rpt.BottomUp(model=model, jump=jump).fit(signal_data)
                 my_bkps = algo.predict(n_bkps=len(peaks))
@@ -126,6 +124,17 @@ def badhole_flag(df, thold=4):
 
 
 def porosity_correction_averaging(nphi, dphi, method='weighted'):
+    """Correct porosity using averaging method.
+
+    Args:
+        nphi (float): Neutron porosity.
+        dphi (float): Density porosity.
+        method (str, optional): Averaging method selection from 'weighted', 'arithmetic' or 'gaymard'.
+         Defaults to 'weighted'.
+
+    Returns:
+        float: Corrected porosity.
+    """
     assert method in ['weighted', 'arithmetic', 'gaymard'], "method must be either \
         'weighted', 'arithmetic' or 'gaymard' "
 
@@ -143,27 +152,27 @@ def neu_den_xplot_hc_correction(
         dry_sand_point: tuple = None,
         dry_clay_point: tuple = None,
         fluid_point: tuple = (1.0, 1.0),
-        corr_degree: float = 50):
-    """_summary_
+        corr_angle: float = 50):
+    """Estimate correction for neutron porosity and bulk density based on correction angle.
 
     Args:
-        nphi (_type_): _description_
-        rhob (_type_): _description_
-        gr (_type_, optional): _description_. Defaults to None.
-        dry_sand_point (tuple, optional): _description_. Defaults to None.
-        dry_clay_point (tuple, optional): _description_. Defaults to None.
-        fluid_point (tuple, optional): _description_. Defaults to (1.0, 1.0).
-        corr_degree (float, optional): _description_. Defaults to 50.
+        nphi (float): Neutron porosity log in fraction.
+        rhob (float): Bulk density log in g/cc.
+        gr (float, optional): Gamma ray log in GAPI. Defaults to None.
+        dry_sand_point (tuple, optional): Neutron porosity and bulk density of dry sand point. Defaults to None.
+        dry_clay_point (tuple, optional): Neutron porosity and bulk density of dry clay point. Defaults to None.
+        fluid_point (tuple, optional): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
+        corr_angle (float, optional): Correction angle (degree) from east horizontal line. Defaults to 50.
 
     Returns:
-        _type_: _description_
+        (float, float): Corrected neutron porosity and bulk density.
     """
     A = dry_sand_point
     C = dry_clay_point
     D = fluid_point
     rocklithofrac = length_a_b(A, C)
 
-    frac_vsh_gr = Shale.gr_index(gr) * rocklithofrac
+    frac_vsh_gr = gr_index(gr) * rocklithofrac
     nphi_corrected = []
     rhob_corrected = []
     for i, point in enumerate(list(zip(nphi, rhob, frac_vsh_gr))):
@@ -176,8 +185,8 @@ def neu_den_xplot_hc_correction(
             nphi_corr = point[0]
             rhob_corr = point[1]
             while vsh_dn < point[2] and not np.isnan(point[2]):
-                nphi_corr = point[0] + shi * np.sin(np.radians(corr_degree))
-                rhob_corr = point[1] + shi * np.cos(np.radians(corr_degree))
+                nphi_corr = point[0] + shi * np.sin(np.radians(corr_angle))
+                rhob_corr = point[1] + shi * np.cos(np.radians(corr_angle))
                 shi += 0.01
                 # Recalculate vsh_dn
                 var_pt = line_intersection((A, C), (D, (nphi_corr, rhob_corr)))

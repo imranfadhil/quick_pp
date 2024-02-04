@@ -103,8 +103,8 @@ def picket_plot(rt, phit):
       rw = Formation water resistivity. The intercept of the best-fit line at rt when phit = 100%.
 
     Args:
-        rt (_type_): _description_
-        phit (_type_): _description_
+        rt (float): True resistivity or deep resistivity log.
+        phit (float): Total porosity.
 
     Returns:
         matplotlib.pyplot.Figure: Picket plot.

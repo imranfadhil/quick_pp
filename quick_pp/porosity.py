@@ -86,15 +86,15 @@ def rho_matrix(vsand, vsilt, vclay, rho_sand: float = None, rho_silt: float = No
     """Estimate average matrix density based on dry sand, dry silt and dry clay volume and density.
 
     Args:
-        vsand (float or array): Volume of dry sand.
-        vsilt (float or array): Volume of dry silt.
-        vclay (float or array): Volume of dry clay.
-        rho_sand (float, optional): _description_. Defaults to None.
-        rho_silt (float, optional): _description_. Defaults to None.
-        rho_clay (float, optional): _description_. Defaults to None.
+        vsand (float): Volume of dry sand.
+        vsilt (float): Volume of dry silt.
+        vclay (float): Volume of dry clay.
+        rho_sand (float, optional): Density of sand in g/cc. Defaults to None.
+        rho_silt (float, optional): Density of silt in g/cc. Defaults to None.
+        rho_clay (float, optional): Density of clay in g/cc. Defaults to None.
 
     Returns:
-        float: _description_
+        float: Matrix density in g/cc.
     """
     ssc_endpoints = Config.SSC_ENDPOINTS
     rho_sand = rho_sand or ssc_endpoints['DRY_SAND_POINT'][1]
@@ -107,9 +107,9 @@ def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
     """Computes density porosity from bulk, matrix and fluid densities
 
     Args:
-        rhob (float): _description_
-        rho_matrix (float): _description_
-        rho_fluid (float, optional): _description_. Defaults to 1.0.
+        rhob (float): Bulk density log in g/cc.
+        rho_matrix (float): Matrix density in g/cc.
+        rho_fluid (float, optional): Density of fluid in g/cc. Defaults to 1.0 g/cc.
 
     Returns:
         float: Density porosity [fraction]

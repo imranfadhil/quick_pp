@@ -8,11 +8,11 @@ def min_max_line(feature, alpha: float = 0.05):
     """Calculates the minimum and maximum line of a feature.
 
     Args:
-        feature (array): _description_
-        alpha (float, optional): _description_. Defaults to 0.05.
+        feature (float): Input feature to calculate the minimum and maximum line.
+        alpha (float, optional): Confidence interval. Defaults to 0.05.
 
     Returns:
-        (array, array): Minimum and maximum line of a feature.
+        (float, float): Minimum and maximum line of a feature.
     """
     y = np.arange(0, len(feature))
     Y = sm.add_constant(y)
@@ -28,8 +28,8 @@ def length_a_b(A: tuple, B: tuple):
     """Calculates the length of line between two points.
 
     Args:
-        A (tuple): _description_
-        B (tuple): _description_
+        A (tuple): Cartesian coordinates of point A.
+        B (tuple): Cartesian coordinates of point B.
 
     Returns:
         float: Length of line between two points.
@@ -45,7 +45,7 @@ def line_intersection(line1, line2):
         line2 (tuple of tuples): ((x22, y22), (x22, y22))
 
     Raises:
-        Exception: _description_
+        Exception: If lines do not intersect.
 
     Returns:
         float, float: Cartesian coordinates of the intersection of two lines.
