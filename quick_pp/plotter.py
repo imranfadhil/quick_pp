@@ -44,7 +44,20 @@ def neutron_density_xplot(nphi, rhob,
                           dry_clay_point: tuple,
                           fluid_point: tuple,
                           wet_clay_point: tuple):
+    """Neutron-Density crossplot with lithology lines based on specified end points.
 
+    Args:
+        nphi (float): Neutron porosity log.
+        rhob (float): Bulk density log.
+        dry_sand_point (tuple): Neutron porosity and bulk density of dry sand point.
+        dry_silt_point (tuple): Neutron porosity and bulk density of dry silt point.
+        dry_clay_point (tuple): Neutron porosity and bulk density of dry clay point.
+        fluid_point (tuple): Neutron porosity and bulk density of fluid point.
+        wet_clay_point (tuple): Neutron porosity and bulk density of wet clay point.
+
+    Returns:
+        matplotlib.pyplot.Figure: Neutron porosity and bulk density cross plot.
+    """
     A = dry_sand_point
     B = dry_silt_point
     C = dry_clay_point
@@ -85,14 +98,16 @@ def neutron_density_xplot(nphi, rhob,
 
 
 def picket_plot(rt, phit):
-    """_summary_
+    """Generate Pickett plot which is used to plot phit and rt at water bearing interval to determine;
+      m = The slope of best-fit line crossing the cleanest sand.
+      rw = Formation water resistivity. The intercept of the best-fit line at rt when phit = 100%.
 
     Args:
         rt (_type_): _description_
         phit (_type_): _description_
 
     Returns:
-        _type_: _description_
+        matplotlib.pyplot.Figure: Picket plot.
     """
     fig = plt.Figure(figsize=(5, 5))
     ax = fig.add_subplot(111)
@@ -119,6 +134,14 @@ def sonic_neutron_xplot():
 
 
 def plotly_log(df):  # noqa
+    """Plot well logs using Plotly.
+
+    Args:
+        df (pandas.Datafraem): Pandas dataframe containing well log data.
+
+    Returns:
+        plotly.graph_objects.Figure: Return well plot.
+    """
     track = 7
     index = df.DEPTH
 
@@ -247,18 +270,6 @@ def plotly_log(df):  # noqa
         fig.data[i].update(xaxis=f'x{i + 1}')
         i += 1
 
-    if 'RHO_CLW' in df.columns and 'NPHI_CLW' in df.columns:
-        # Add NPHI_CLW trace #23
-        fig.add_trace(go.Scatter(x=df['NPHI_CLW'], y=index, name='NPHI_CLW', line_color='magenta'),
-                      row=1, col=3, secondary_y=True)
-        fig.data[i].update(xaxis=f'x{i + 1}')
-        i += 1
-        # Add RHO_CLW trace #24
-        fig.add_trace(go.Scatter(x=df['RHO_CLW'], y=index, name='RHO_CLW', line_color='purple'),
-                      row=1, col=3, secondary_y=False)
-        fig.data[i].update(xaxis=f'x{i + 1}')
-        i += 1
-
     font_size = 9
     fig.update_layout(
         xaxis1=dict(title='GR', titlefont=dict(color=COLOR_DICT['GR'], size=font_size),
@@ -288,8 +299,7 @@ def plotly_log(df):  # noqa
                     side='top', anchor='free', position=.9, title_standoff=.1,
                     range=[0, 1], type='linear'),
         xaxis8=dict(title='NPHI', titlefont=dict(color=COLOR_DICT['NPHI'], size=font_size),
-                    tickfont=dict(color=COLOR_DICT['NPHI'], size=font_size),
-                    zeroline=False,
+                    tickfont=dict(color=COLOR_DICT['NPHI'], size=font_size), zeroline=False,
                     side='top', anchor='free', position=.94, title_standoff=.1, overlaying='x3',
                     tickformat=".2f", tick0=-.15, dtick=0.12, range=[.45, -.15], type='linear'),
         xaxis9=dict(title='PHIE', titlefont=dict(color=COLOR_DICT['PHIE'], size=font_size),
@@ -314,7 +324,7 @@ def plotly_log(df):  # noqa
                      range=[0, 5], type='linear', showgrid=False, zeroline=False,),
 
         # make room to display double x-axes
-        yaxis=dict(domain=[0, .9], title='DEPTH (FT MD)', showgrid=False),
+        yaxis=dict(domain=[0, .9], title='DEPTH', showgrid=False),
         yaxis2=dict(domain=[0, .9], visible=False, showgrid=False),
         yaxis3=dict(domain=[0, .9], visible=False, showgrid=False),
         yaxis4=dict(domain=[0, .9], visible=False, showgrid=False),
@@ -345,10 +355,6 @@ def plotly_log(df):  # noqa
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
         yaxis22=dict(domain=[0, .9], visible=False, showgrid=False),
-        xaxis23=dict(title='', range=[0.45, -0.15], type='linear', overlaying='x3', zeroline=False, showgrid=False),
-        yaxis23=dict(domain=[0, .9], visible=False, showgrid=False),
-        xaxis24=dict(title='', range=[1.85, 2.85], type='linear', overlaying='x3', zeroline=False, showgrid=False),
-        yaxis24=dict(domain=[0, .9], visible=False, showgrid=False),
 
         height=750,
         width=900,
