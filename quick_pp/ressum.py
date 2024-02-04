@@ -4,19 +4,19 @@ from scipy.stats import gmean
 
 
 def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs: list = [], uom: str = 'ft'):
-    """_summary_
+    """Calculate reservoir summary based on cutoffs on vshale, phit, and swt.
 
     Args:
-        depth (_type_): _description_
-        vshale (_type_): _description_
-        phit (_type_): _description_
-        swt (_type_): _description_
-        zones (_type_): _description_
-        cutoffs (list, optional): _description_. Defaults to [].
-        uom (str, optional): _description_. Defaults to 'ft'.
+        depth (float): Depth either in MD or TVD.
+        vshale (float): Volume of shale in fraction.
+        phit (float): Total porosity in fraction.
+        swt (float): Total water saturation in fraction
+        zones (str): Zone names.
+        cutoffs (list, optional): [vshale cutoff, phit cutoff, swt cutoff]. Defaults to [].
+        uom (str, optional): Unit of measurement for depth. Defaults to 'ft'.
 
     Returns:
-        _type_: _description_
+        pd.Dataframe: Reservoir summary in tabular format.
     """
     step = 0.1524 if uom == 'm' else 0.5
     df = pd.DataFrame({'depth': depth, 'vshale': vshale, 'phit': phit, 'swt': swt, 'perm': perm, 'zones': zones})
@@ -66,13 +66,13 @@ def flag_interval(vshale, phit, swt, cutoffs: list = []):
     """Flag interval based on cutoffs.
 
     Args:
-        vshale (float or array_like): Vshale.
-        phit (float or array_like): Total porosity.
-        swt (float or array_like): Water saturation.
+        vshale (float): Vshale.
+        phit (float): Total porosity.
+        swt (float): Water saturation.
         cutoffs (list, optional): List of cutoffs. Defaults to [].
 
     Returns:
-        float or array_like: Flagged interval.
+        float: Flagged interval.
     """
     assert len(cutoffs) == 3, 'cutoffs must be a list of 3 values: [vshale, phit, swt].'
     rock_flag = np.where(vshale < cutoffs[0], 1, 0)
