@@ -12,7 +12,14 @@ from .config import Config
 
 
 class SandSiltClay:
-    """Sand-silt-clay model based on Kuttan's litho-porosity model"""
+    """Sand-silt-clay model based on Kuttan's litho-porosity model.
+
+     The original is a binary model where reservoir sections (left to the silt line) consist of combination of
+     sand-silt while non-reservoir sections (right to the silt line) consist of silt-clay combination.
+
+     PCSB proposed a model based on Kuttan, where the reservoir sections consist of combination of sand-silt-clay
+     while non-reservoir sections remain a combination of silt-clay only. This module is a simplified version of the
+     original PCSB model."""
 
     def __init__(self, dry_sand_point: tuple = None, dry_silt_point: tuple = None, dry_clay_point: tuple = None,
                  fluid_point: tuple = None, wet_clay_point: tuple = None, silt_line_angle: float = None):
@@ -28,14 +35,14 @@ class SandSiltClay:
         """Estimate sand silt clay lithology volumetrics.
 
         Args:
-            nphi (array): Neutron Porosity log in v/v
-            rhob (array): Bulk Density log in g/cc
+            nphi (float): Neutron Porosity log in v/v
+            rhob (float): Bulk Density log in g/cc
             model (str, optional): Model to choose from 'kuttan' or 'kuttan_modified'. Defaults to 'kuttan'.
             xplot (bool, optional): To plot Neutron Density cross plot. Defaults to False.
             normalize (bool, optional): To normalize with porosity. Defaults to True.
 
         Returns:
-            (array, array, array, boolean): vsand, vsilt, vcld, vclb, cross-plot if xplot True else None
+            (float, float, float, boolean): vsand, vsilt, vcld, vclb, cross-plot if xplot True else None
         """
         assert model in ['kuttan', 'kuttan_modified'], f"'{model}' model is not available."
         # Initialize the endpoints
@@ -85,12 +92,12 @@ class SandSiltClay:
         """Estimate lithology volumetrics based on Kuttan's litho-porosity model.
 
         Args:
-            nphi (array): Neutron Porosity log in v/v.
-            rhob (array): Bulk Density log in g/cc.
+            nphi (float): Neutron Porosity log in v/v.
+            rhob (float): Bulk Density log in g/cc.
             normalize (bool, optional): To normalize with porosity. Defaults to True.
 
         Returns:
-            (array, array, array): vsand, vsilt, vcld
+            (float, float, float): vsand, vsilt, vcld
         """
         A = self.dry_sand_point
         B = self.dry_silt_point
@@ -128,12 +135,12 @@ class SandSiltClay:
         (simplification of PCSB's litho-porosity model).
 
         Args:
-            nphi (array): Neutron Porosity log in v/v.
-            rhob (array): Bulk Density log in g/cc.
+            nphi (float): Neutron Porosity log in v/v.
+            rhob (float): Bulk Density log in g/cc.
             normalize (bool, optional): To normalize with porosity. Defaults to True.
 
         Returns:
-            (array, array, array): vsand, vsilt, vcld
+            (float, float, float): vsand, vsilt, vcld
         """
         A = self.dry_sand_point
         B = self.dry_silt_point
@@ -173,7 +180,7 @@ class SandSiltClay:
 
 
 class SandShale:
-    """Sand-shale model"""
+    """This binary model only consider a combination of sand-shale components. """
 
     def __init__(self, dry_sand_point: tuple = None, dry_clay_point: tuple = None,
                  fluid_point: tuple = None, wet_clay_point: tuple = None, silt_line_angle: float = None):
@@ -188,12 +195,12 @@ class SandShale:
         """Estimate lithology volumetrics based on neutron density cross plot.
 
         Args:
-            nphi (array): Neutron Porosity log in v/v
-            rhob (array): Bulk Density log in g/cc
+            nphi (float): Neutron Porosity log in v/v
+            rhob (float): Bulk Density log in g/cc
             xplot (bool, optional): To plot Neutron Density cross plot. Defaults to False.
 
         Returns:
-            (array, array): vsand, vcld, cross-plot if xplot True else None
+            (float, float): vsand, vcld, cross-plot if xplot True else None
         """
         # Initialize the endpoints
         A = self.dry_sand_point
@@ -228,11 +235,11 @@ class SandShale:
         """Estimate sand and shale based on neutron density cross plot.
 
         Args:
-            nphi (array): Neutron Porosity log in v/v
-            rhob (array): Bulk Density log in g/cc
+            nphi (float): Neutron Porosity log in v/v
+            rhob (float): Bulk Density log in g/cc
 
         Returns:
-            (array, array): vsand, vcld
+            (float, float): vsand, vcld
         """
         A = self.dry_sand_point
         C = self.dry_clay_point
@@ -256,18 +263,19 @@ class SandShale:
 
 
 class MultiMineral():
-    """Multi-mineral model"""
+    """This multi-mineral model utilizes optimization method to determine each mineral components."""
 
     def estimate_lithology(self, gr, nphi, rhob):
         """Modified from https://github.com/ruben-charles/petrophysical_evaluation_optimization_methods.git
+        This module only takes in gr, nphi and rhob to estimate the volumetric of quartz, calcite, dolomite and shale.
 
         Args:
-            gr (array): Gamma Ray log in GAPI.
-            nphi (array): Neutron Porosity log in v/v.
-            rhob (array): Bulk Density log in g/cc.
+            gr (float): Gamma Ray log in GAPI.
+            nphi (float): Neutron Porosity log in v/v.
+            rhob (float): Bulk Density log in g/cc.
 
         Returns:
-            (array, array, array, array, array): vol_quartz, vol_calcite, vol_dolomite, vol_shale, vol_mud
+            (float, float, float, float, float): vol_quartz, vol_calcite, vol_dolomite, vol_shale, vol_mud
         """
         # Getting default values from Config which may need to be changed based on the dataset
         responses = Config.MINERALS_LOG_VALUE
@@ -310,76 +318,77 @@ class MultiMineral():
         return vol_quartz, vol_calcite, vol_dolomite, vol_shale, vol_mud
 
 
-class Shale:
+def shale_volume_larinov_tertiary(igr):
+    """
+    Computes shale volume from gamma ray using Larinov's method for tertiary rocks.
 
-    def shale_volume_larinov_tertiary(igr):
-        """
-        Computes shale volume from gamma ray using Larinov's method for tertiary rocks.
+    Parameters
+    ----------
+    igr : float
+        Interval gamma ray [API].
 
-        Parameters
-        ----------
-        igr : float
-            Interval gamma ray [API].
+    Returns
+    -------
+    vshale : float
+        Shale volume [fraction].
 
-        Returns
-        -------
-        vshale : float
-            Shale volume [fraction].
+    """
+    return 0.083 * (2**(3.7 * igr) - 1)
 
-        """
-        return 0.083 * (2**(3.7 * igr) - 1)
 
-    def shale_volume_larinov_older(igr):
-        """
-        Computes shale volume from gamma ray using Larinov's method for older rocks.
+def shale_volume_larinov_older(igr):
+    """
+    Computes shale volume from gamma ray using Larinov's method for older rocks.
 
-        Parameters
-        ----------
-        igr : float
-            Interval gamma ray [API].
+    Parameters
+    ----------
+    igr : float
+        Interval gamma ray [API].
 
-        Returns
-        -------
-        vshale : float
-            Shale volume [fraction].
+    Returns
+    -------
+    vshale : float
+        Shale volume [fraction].
 
-        """
-        return 0.33 * (2**(2 * igr) - 1)
+    """
+    return 0.33 * (2**(2 * igr) - 1)
 
-    def shale_volume_steiber(igr):
-        """
-        Computes shale volume from gamma ray using Steiber's method.
 
-        Parameters
-        ----------
-        igr : float
-            Interval gamma ray [API].
+def shale_volume_steiber(igr):
+    """
+    Computes shale volume from gamma ray using Steiber's method.
 
-        Returns
-        -------
-        vshale : float
-            Shale volume [fraction].
+    Parameters
+    ----------
+    igr : float
+        Interval gamma ray [API].
 
-        """
-        return igr / (3 - 2 * igr)
+    Returns
+    -------
+    vshale : float
+        Shale volume [fraction].
 
-    def gr_index(gr):
-        """
-        Computes gamma ray index from gamma ray.
+    """
+    return igr / (3 - 2 * igr)
 
-        Parameters
-        ----------
-        gr : float
-            Gamma ray [API].
 
-        Returns
-        -------
-        gr_index : float
-            Gamma ray index [API].
+def gr_index(gr):
+    """
+    Computes gamma ray index from gamma ray.
 
-        """
-        gr = np.where(np.isnan(gr), np.min(gr), gr)
-        dtr_gr = detrend(gr, axis=0) + statistics.mean(gr)
-        scaler = MinMaxScaler()
-        igr = scaler.fit_transform(dtr_gr.reshape(-1, 1))
-        return igr
+    Parameters
+    ----------
+    gr : float
+        Gamma ray [API].
+
+    Returns
+    -------
+    gr_index : float
+        Gamma ray index [API].
+
+    """
+    gr = np.where(np.isnan(gr), np.min(gr), gr)
+    dtr_gr = detrend(gr, axis=0) + statistics.mean(gr)
+    scaler = MinMaxScaler()
+    igr = scaler.fit_transform(dtr_gr.reshape(-1, 1))
+    return igr
