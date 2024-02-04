@@ -5,6 +5,17 @@ from .utils import length_a_b, line_intersection
 
 
 def normalize_volumetric(vsand, vsilt, vclay, phit):
+    """Normalize lithology (vsand, vsilt and vclay) given total porosity.
+
+    Args:
+        vsand (float): Volume of sand in fraction (v/v).
+        vsilt (float): Volume of silt in fraction (v/v).
+        vclay (float): Volume of clay in fraction (v/v).
+        phit (float): Total porosity in fraction (v/v).
+
+    Returns:
+        float: Normalized vsand, vsilt and vclay.
+    """
     # Normalize the volumetrics
     vmatrix = 1 - phit
     vsand = vsand * vmatrix
@@ -37,6 +48,16 @@ def effective_porosity(phit, phi_shale, vshale):
 
 
 def clay_porosity(rho_clw: np.array, rho_dry_clay: float = 2.72, rho_fluid: float = 1.0):
+    """Calculate clay porosity given bulk density of wet clay line.
+
+    Args:
+        rho_clw (float): Bulk density of wet clay line.
+        rho_dry_clay (float, optional): Bulk density of dry clay. Defaults to 2.72.
+        rho_fluid (float, optional): Bulk density of fluid. Defaults to 1.0.
+
+    Returns:
+        float: Clay porosity.
+    """
     rho_dry_clay = rho_dry_clay or Config.SSC_ENDPOINTS["DRY_CLAY_POINT"][1]
     return (rho_dry_clay - rho_clw) / (rho_dry_clay - rho_fluid)
 
@@ -73,7 +94,7 @@ def rho_matrix(vsand, vsilt, vclay, rho_sand: float = None, rho_silt: float = No
         rho_clay (float, optional): _description_. Defaults to None.
 
     Returns:
-        _type_: _description_
+        float: _description_
     """
     ssc_endpoints = Config.SSC_ENDPOINTS
     rho_sand = rho_sand or ssc_endpoints['DRY_SAND_POINT'][1]
@@ -86,12 +107,12 @@ def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
     """Computes density porosity from bulk, matrix and fluid densities
 
     Args:
-        rhob (_type_): _description_
-        rho_matrix (_type_): _description_
+        rhob (float): _description_
+        rho_matrix (float): _description_
         rho_fluid (float, optional): _description_. Defaults to 1.0.
 
     Returns:
-        _type_: Density porosity [fraction]
+        float: Density porosity [fraction]
     """
     return (rho_matrix - rhob) / (rho_matrix - rho_fluid)
 
@@ -146,6 +167,21 @@ def neu_den_xplot_poro_pt(
         dry_silt_point: tuple = None,
         dry_clay_point: tuple = None,
         fluid_point: tuple = (1.0, 1.0)):
+    """Calculate porosity given a pair of neutron porosity and bulk density data point.
+
+    Args:
+        nphi (float): Neutron porosity log.
+        rhob (float): Bulk density log.
+        model (str, optional): Lithology model, either 'ssc' (Sand Silt Clay) or 'ss' (Sand Shale). Defaults to 'ssc'.
+        reservoir (bool, optional): Either in reservoir or non-reservoir section. Defaults to False.
+        dry_sand_point (tuple): Neutron porosity and bulk density of dry sand point.
+        dry_silt_point (tuple): Neutron porosity and bulk density of dry silt point.
+        dry_clay_point (tuple): Neutron porosity and bulk density of dry clay point.
+        fluid_point (tuple): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
+
+    Returns:
+        float: Total porosity.
+    """
     assert model in ['ssc', 'ss'], f"'{model}' model is not available."
     A = dry_sand_point
     B = dry_silt_point
@@ -182,20 +218,20 @@ def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc', reservoir=True,
                        dry_silt_point: tuple = None,
                        dry_clay_point: tuple = None,
                        fluid_point: tuple = (1.0, 1.0)):
-    """_summary_
+    """Calculate porosity given neutron porosity and bulk density logs.
 
     Args:
-        nphi (_type_): _description_
-        rhob (_type_): _description_
-        model (str, optional): _description_. Defaults to 'ssc'.
-        reservoir (bool, optional): _description_. Defaults to True.
-        dry_sand_point (tuple, optional): _description_. Defaults to None.
-        dry_silt_point (tuple, optional): _description_. Defaults to None.
-        dry_clay_point (tuple, optional): _description_. Defaults to None.
-        fluid_point (tuple, optional): _description_. Defaults to (1.0, 1.0).
+        nphi (float): Neutron porosity log.
+        rhob (float): Bulk density log.
+        model (str, optional): Lithology model, either 'ssc' (Sand Silt Clay) or 'ss' (Sand Shale). Defaults to 'ssc'.
+        reservoir (bool, optional): Either in reservoir or non-reservoir section. Defaults to False.
+        dry_sand_point (tuple): Neutron porosity and bulk density of dry sand point. Defaults to None.
+        dry_silt_point (tuple): Neutron porosity and bulk density of dry silt point. Defaults to None.
+        dry_clay_point (tuple): Neutron porosity and bulk density of dry clay point. Defaults to None.
+        fluid_point (tuple): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
 
     Returns:
-        _type_: _description_
+        float: Total porosity.
     """
     A = dry_sand_point
     B = dry_silt_point
@@ -214,15 +250,15 @@ def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc', reservoir=True,
 
 
 def neu_den_poro(nphi, rhob, rho_ma=2.65, method='simplified'):
-    """_summary_
+    """Calculate porosity based 'simple', 'emperical' or 'gas' method, given neutron porosity and bulk density logs.
 
     Args:
-        nphi (_type_): _description_
-        rhob (_type_): _description_
-        rho_ma (float or array, optional): _description_. Defaults to 2.65.
+        nphi (float): Neutron porosity log.
+        rhob (float): Bulk density log.
+        rho_ma (float, optional): Matrix bulk density. Defaults to 2.65.
 
     Returns:
-        _type_: _description_
+        float: Porosity.
     """
     assert method in ['simple', 'emperical', 'gas'], 'Please select either simple, emperical or gas method.'
     phid = density_porosity(rhob, rho_ma, 1.0)
