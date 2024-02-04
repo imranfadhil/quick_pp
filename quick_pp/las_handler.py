@@ -8,16 +8,16 @@ import welly
 
 def read_las_files(las_files):
     """
-    1. Return df and well_header as dfs from .las files
-    2. For every las files, curves_df, header_df, welly_object are returned through function "check_las_file"
+    1. Return df and well_header as df from .las files
+    2. For every las files, curves_df, header_df, welly_object are returned through function "read_las_file"
     3. curves_df from all files are appended into merged_data
     4. header_df from all files are appended into header_data
 
     Args:
-        las_file (list): list of las files opened as binary
+        las_files (list): list of las files opened as binary.
 
     Returns:
-        pd.DataFrame: Two dataframes consist of appended curves data and header data from all las files.
+        pd.DataFrame: Merged data, header data.
     """
     merged_data = pd.DataFrame()
     header_data = pd.DataFrame()
@@ -59,10 +59,10 @@ def read_las_file(file_object, required_sets=['PEP']):  # noqa
 
     Args:
         file_object (str): las file object.
-        required_sets (list, optional): Required param set to be extracted.Defaults to ['PEP'].
+        required_sets (list, optional): Required param set to be extracted. Defaults to ['PEP'].
 
     Returns:
-        pd.Dataframe: 3 dfs including well_df, header_df and welly_object
+        pd.Dataframe: well_df, header_df and welly_object
     """
     fileno = file_object.fileno()  # identifier for files
     parameter_line_numbers = []
@@ -194,8 +194,7 @@ def extract_dataset(section_dict):
         section_dict (dict): Dictionary containing the LAS file section values.
 
     Returns:
-        well_df, header_df, welly_object (pd.DataFrame, pd.DataFrame, welly_object): 3 dfs including well_df,
-        header_df and welly_object
+        pd.DataFrame, pd.DataFrame, welly_object: well_df, header_df and welly_object
     """
     header_bytes = section_dict['WELL']
     data_bytes = b''
@@ -232,7 +231,7 @@ def concat_datasets(file_object, header_line_numbers, parameter_line_numbers, re
         required_sets (list): Required sets to be concatenated.
 
     Returns:
-        pd.Dataframe: 3 dfs including well_df, header_df and welly_object
+        pd.Dataframe, pd.Dataframe, welly_object: well_df, header_df and welly_object
     """
     well_df = pd.DataFrame()
     header_df = pd.DataFrame()
