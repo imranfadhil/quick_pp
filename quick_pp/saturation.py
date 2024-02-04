@@ -5,13 +5,13 @@ def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
     """Archie's saturation model.
 
     Args:
-        sw (float or array_like): Water saturation.
+        sw (float): Water saturation.
         a (float): Cementation exponent.
         m (float): Saturation exponent.
         n (float): Porosity exponent.
 
     Returns:
-        float or array_like: Water saturation.
+        float: Water saturation.
 
     """
     swt = ((a / (phit ** m)) * (rw / rt)) ** (1 / n)
@@ -24,16 +24,16 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
     I. Simple Methods Of Solution; Ii. Error Analysis." The Log Analyst 26 (1985)
 
     Args:
-        rt (_type_): _description_
-        rw (_type_): _description_
-        phit (_type_): _description_
-        B (_type_): _description_
-        Qv (_type_): _description_
-        m (_type_): _description_
-        n (_type_): _description_
+        rt (float): True resistivity or deep resistivity log.
+        rw (float): Formation water resistivity.
+        phit (float): Total porosity.
+        B (float): Conductance parameter.
+        Qv (float): Cation exchange capacity per unit total pore volume (meq/cm3).
+        m (float): Saturation factor.
+        n (float): Cementartion factor.
 
     Returns:
-        float or array_like: Water saturation.
+        float: Water saturation.
     """
     # Estimate B at 25 degC if not provided
     if B is None:
@@ -58,15 +58,15 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
     """Dual water saturation model, extension from Waxman-Smits.
 
     Args:
-        sw (float or array_like): Water saturation.
+        sw (float): Water saturation.
         a (float): Cementation exponent.
         m (float): Saturation exponent.
         n (float): Porosity exponent.
-        swb (float or array_like): Bound water saturation.
-        rwb (float or array_like): Bound water resistivity.
+        swb (float): Bound water saturation.
+        rwb (float): Bound water resistivity.
 
     Returns:
-        float or array_like: Water saturation.
+        float: Water saturation.
 
     """
     # TODO: Estimate swb and rwb if not provided
@@ -86,13 +86,13 @@ def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
     """Indonesian saturation model may work well with fresh formation water. Based on Poupon-Leveaux 1971.
 
     Args:
-        sw (float or array_like): Water saturation.
+        sw (float): Water saturation.
         a (float): Cementation exponent.
         m (float): Saturation exponent.
         n (float): Porosity exponent.
 
     Returns:
-        float or array_like: Water saturation.
+        float: Water saturation.
 
     """
     swt = ((1 / rt)**(1 / 2) / ((vsh**(1 - 0.5 * vsh) / rsh**(1 / 2)) + (phie**m / (a * rw))**(1 / 2)))**(2 / n)
@@ -103,13 +103,13 @@ def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
     """Simandoux's saturation model.
 
     Args:
-        sw (float or array_like): Water saturation.
+        sw (float): Water saturation.
         a (float): Cementation exponent.
         m (float): Saturation exponent.
         n (float): Porosity exponent.
 
     Returns:
-        float or array_like: Water saturation.
+        float: Water saturation.
 
     """
     shale_factor = vsh / rsh
@@ -118,33 +118,13 @@ def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
 
 
 def modified_simandoux_saturation(sw, a, m, n):
-    """Modified Simandoux's saturation model.
-
-    Args:
-        sw (float or array_like): Water saturation.
-        a (float): Cementation exponent.
-        m (float): Saturation exponent.
-        n (float): Porosity exponent.
-
-    Returns:
-        float or array_like: Hydrocarbon saturation.
-
+    """TODO: Modified Simandoux's saturation model.
     """
     pass
 
 
-def saturation_height_function(sw, a, m, n):
-    """Saturation height function saturation model.
-
-    Args:
-        sw (float or array_like): Water saturation.
-        a (float): Cementation exponent.
-        m (float): Saturation exponent.
-        n (float): Porosity exponent.
-
-    Returns:
-        float or array_like: Hydrocarbon saturation.
-
+def saturation_height_function():
+    """TODO: Saturation height function.
     """
     pass
 
@@ -163,55 +143,55 @@ def estimate_temperature_gradient(tvd, unit='metric'):
 
 
 def estimate_b_waxman_smits(T, rw):
-    """Estimating B parameter (conductance) for Waxman-Smits model based on Juhasz 1981.
+    """Estimating B (conductance parameter) for Waxman-Smits model based on Juhasz 1981.
 
     Args:
         T (float or array): Temperature in degC.
         rw (float or array): Water resistivity in ohm.m.
 
     Returns:
-        _type_: _description_
+        float: B parameter.
     """
     return (-1.28 + 0.225 * T - 0.0004059 * T**2) / (1 + (0.045 * T - 0.27) * rw**1.23)
 
 
 def estimate_rw_temperature_salinity(temperature_gradient, water_salinity):
-    """_summary_
+    """Estimate formation water resistivity based on temperature gradient and water salinity.
 
     Args:
-        temperature_gradient (_type_): _description_
-        water_salinity (_type_): _description_
+        temperature_gradient (float): Temperature gradient in degC/meter
+        water_salinity (float): Water salinity in ppm
 
     Returns:
-        _type_: _description_
+        float: Formation water resistivity.
     """
     return (400000 / temperature_gradient / water_salinity)**.88
 
 
 def estimate_rw_archie(phit, rt, a=1, m=2):
-    """_summary_
+    """Estimate water saturation based on Archie's equation.
 
     Args:
-        phit (_type_): _description_
-        rt (_type_): _description_
+        phit (float): Total porosity.
+        rt (float): True resistivity.
 
     Returns:
-        _type_: _description_
+        float: Formation water resistivity.
     """
     return phit**m * rt / a
 
 
 def estimate_qv(vcld, phit, rho_clay=2.65, cec_clay=.062):
-    """_summary_
+    """Estimate Qv, cation exchange capacity per unit total pore volume (meq/cm3).
 
     Args:
-        vcld (_type_): _description_ in fraction
-        phit (_type_): _description_ in fraction
-        rho_clay (_type_): _description_ in g/cc
-        cec_clay (_type_): _description_ in meq/g
+        vcld (float): Volume of dry clay in fraction
+        phit (float): Total porosity in fraction
+        rho_clay (float): Bulk density of clay in g/cc
+        cec_clay (float): Cation exchange capacity of clay in meq/g
 
     Returns:
-        _type_: _description_
+        float: Qv in meq/cm3.
     """
     return vcld * rho_clay * cec_clay / phit
 
@@ -245,31 +225,31 @@ def estimate_qv_lavers(phit, a=3.05e-4, b=3.49):
 
 
 def estimate_m_archie(rt, rw, phit):
-    """Estimate apparent m based on Archie's equation in water bearing zone.
+    """Estimate apparent m (saturation factor) based on Archie's equation in water bearing zone.
 
     Args:
-        rt (float or array): _description_
-        rw (float or array): _description_
-        phit (float or array): _description_
+        rt (float): True resistivity or deep resistivity log.
+        rw (float): Formation water resistivity.
+        phit (float): Total porosity.
 
     Returns:
-        _type_: _description_
+        float: Apparent m parameter.
     """
     return np.log(rw / rt) / np.log(phit)
 
 
 def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
-    """Estimate  apparent m based on Indonesian model in water bearing zone (shaly ~ vshale < 25%).
+    """Estimate apparent m based on Indonesian model in water bearing zone (shaly ~ vshale < 25%).
 
     Args:
-        rt (float or array): _description_
-        rw (float or array): _description_
-        phie (float or array): _description_
-        vsh (float or array): _description_
-        rsh (float or array): _description_
+        rt (float): True resistivity or deep resistivity log.
+        rw (float): Formation water resistivity.
+        phie (float): Effective porosity.
+        vsh (float): Volume of shale.
+        rsh (float): Resistivity of shale
 
     Returns:
-        _type_: _description_
+        float: Apparent m parameter.
     """
     m = (2 / np.log(phie)) * np.log(rw**0.5 * ((1 / rt)**0.5 - (vsh**(1 - 0.5 * vsh) / rsh**0.5)))
     return m
