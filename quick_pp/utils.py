@@ -33,7 +33,7 @@ def length_a_b(A: tuple, B: tuple):
 
     Returns:
         float: Length of line between two points.
-    """    
+    """
     return math.sqrt(sum([(a - b) ** 2 for a, b in zip(A, B)]))
 
 
@@ -49,7 +49,7 @@ def line_intersection(line1, line2):
 
     Returns:
         float, float: Cartesian coordinates of the intersection of two lines.
-    """    
+    """
     xdiff = (line1[0][0] - line1[1][0], line2[0][0] - line2[1][0])
     ydiff = (line1[0][1] - line1[1][1], line2[0][1] - line2[1][1])
 
