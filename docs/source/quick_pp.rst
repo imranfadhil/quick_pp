@@ -1,8 +1,6 @@
-quick\_pp package
+Docstrings for quick_pp package
 =================
 
-Submodules
-----------
 
 quick\_pp.las\_handler module
 -----------------------------
@@ -80,14 +78,6 @@ quick\_pp.utils module
 ----------------------
 
 .. automodule:: quick_pp.utils
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: quick_pp
    :members:
    :undoc-members:
    :show-inheritance:
