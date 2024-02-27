@@ -22,3 +22,5 @@ statsmodels==0.14.0
 twine==1.14.0
 urllib3==1.25.11
 welly==0.5.2
+fastapi==0.110.0
+uvicorn==0.27.1
