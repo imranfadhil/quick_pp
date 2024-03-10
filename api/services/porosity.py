@@ -9,7 +9,7 @@ from quick_pp.porosity import neu_den_xplot_poro, density_porosity, rho_matrix
 router = APIRouter(prefix="/porosity", tags=["Porosity"])
 
 
-@router.post("/den")
+@router.post("/den", description="Estimate density porosity based on neutron porosity and bulk density.")
 async def estimate_phit_den(inputs: phit_inputData = Body(..., example=PHIT_EXAMPLE)):
 
     input_dict = inputs.model_dump()
@@ -44,7 +44,7 @@ async def estimate_phit_den(inputs: phit_inputData = Body(..., example=PHIT_EXAM
     return return_dict
 
 
-@router.post("/neu_den")
+@router.post("/neu_den", description="Estimate total porosity based on neutron porosity and bulk density.")
 async def estimate_phit_neu_den(inputs: phit_inputData = Body(..., example=PHIT_EXAMPLE)):
 
     input_dict = inputs.model_dump()

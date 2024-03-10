@@ -16,6 +16,14 @@ tags_metadata = [
     {
         "name": "Saturation",
         "description": "Saturation related endpoints."
+    },
+    {
+        "name": "Permeability",
+        "description": "Permeability related endpoints."
+    },
+    {
+        "name": "Reservoir Summary",
+        "description": "Reservoir summary related endpoints."
     }
 ]
 
@@ -34,7 +42,7 @@ app.include_router(api_router)
 
 @app.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "Welcome to quick_pp API. Please refer to the documentation at /docs or /redoc."}
 
 
 @app.exception_handler(Exception)

@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Body
 import pandas as pd
 
-from api.schemas.saturation_ws import swt_ws_inputData, SWT_WS_EXAMPLE
-from api.schemas.saturation_a import swt_a_inputData, SWT_A_EXAMPLE
+from api.schemas.saturation_waxman_smits import swt_ws_inputData, SWT_WS_EXAMPLE
+from api.schemas.saturation_archie import swt_a_inputData, SWT_A_EXAMPLE
 from api.schemas.saturation_temp_grad import temp_grad_inputData, TEMP_GRAD_EXAMPLE
 from api.schemas.saturation_rw import rw_inputData, RW_EXAMPLE
 from api.schemas.saturation_b import b_inputData, B_EXAMPLE
@@ -26,7 +26,7 @@ async def estimate_temperature_gradient_(inputs: temp_grad_inputData = Body(...,
 
     temp_grad = estimate_temperature_gradient(input_df['tvdss'], meas_system)
 
-    return_dict = pd.DataFrame({'temp_grad': temp_grad.ravel()}).to_dict(orient='records')
+    return_dict = pd.DataFrame({'TEMP_GRAD': temp_grad.ravel()}).to_dict(orient='records')
     return return_dict
 
 
