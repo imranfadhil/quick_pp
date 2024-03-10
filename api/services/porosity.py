@@ -1,48 +1,16 @@
 from fastapi import APIRouter, Body
-from pydantic import BaseModel
-from typing import List
 import pandas as pd
+
+from api.schemas.porosity import phit_inputData, PHIT_EXAMPLE
 
 from quick_pp.lithology import SandSiltClay
 from quick_pp.porosity import neu_den_xplot_poro, density_porosity, rho_matrix
 
-router = APIRouter(prefix="/phit", tags=["Porosity"])
-
-
-class data(BaseModel):
-    nphi: float
-    rhob: float
-
-
-class inputData(BaseModel):
-    dry_sand_point: tuple
-    dry_silt_point: tuple
-    dry_clay_point: tuple
-    fluid_point: tuple
-    wet_clay_point: tuple
-    method: str
-    silt_line_angle: float
-    data: List[data]
-
-
-EXAMPLE = {
-    'dry_sand_point': (-0.02, 2.65),
-    'dry_silt_point': (0.1, 2.68),
-    'dry_clay_point': (0.27, 2.7),
-    'fluid_point': (1.0, 1.0),
-    'wet_clay_point': (None, None),
-    'method': 'kuttan_modified',
-    'silt_line_angle': 117,
-    'data': [
-        {'nphi': 0.3, 'rhob': 1.85},
-        {'nphi': 0.35, 'rhob': 1.95},
-        {'nphi': 0.34, 'rhob': 1.9},
-    ],
-}
+router = APIRouter(prefix="/porosity", tags=["Porosity"])
 
 
 @router.post("/den")
-async def estimate_phit_den(inputs: inputData = Body(..., example=EXAMPLE)):
+async def estimate_phit_den(inputs: phit_inputData = Body(..., example=PHIT_EXAMPLE)):
 
     input_dict = inputs.model_dump()
     assert all([len(input_dict[k]) == 2 for k in input_dict.keys() if "_point" in k]), \
@@ -77,7 +45,7 @@ async def estimate_phit_den(inputs: inputData = Body(..., example=EXAMPLE)):
 
 
 @router.post("/neu_den")
-async def estimate_phit_neu_den(inputs: inputData = Body(..., example=EXAMPLE)):
+async def estimate_phit_neu_den(inputs: phit_inputData = Body(..., example=PHIT_EXAMPLE)):
 
     input_dict = inputs.model_dump()
     assert all([len(input_dict[k]) == 2 for k in input_dict.keys() if "_point" in k]), \

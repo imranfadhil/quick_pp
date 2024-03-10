@@ -4,11 +4,28 @@ from .exceptions import return_exception_message
 
 from .router import api_router
 
+tags_metadata = [
+    {
+        "name": "Lithology",
+        "description": "Lithology related endpoints."
+    },
+    {
+        "name": "Porosity",
+        "description": "Porosity related endpoints."
+    },
+    {
+        "name": "Saturation",
+        "description": "Saturation related endpoints."
+    }
+]
+
 app = FastAPI(
     title="quick_pp API",
-    license_info={"name": "imranfadhil", "email": "imranfadhil@gmail.com",
-                  "url": "https://github.com/imranfadhil/quick_pp"},
+    description="API for quick_pp library.",
+    contact={"name": "Imran Fadhil",
+             "url": "https://github.com/imranfadhil/quick_pp", "email": "imranfadhil@gmail.com"},
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
+    openapi_tags=tags_metadata,
     debug=False
 )
 
