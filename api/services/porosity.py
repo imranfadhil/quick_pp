@@ -65,7 +65,7 @@ async def estimate_phit_den(inputs: inputData = Body(..., example=EXAMPLE)):
         dry_sand_point=DrySandPoint, dry_silt_point=DrySiltPoint, dry_clay_point=DryClayPoint,
         fluid_point=FluidPoint, wet_clay_point=WetClayPoint, silt_line_angle=SiltLineAngle
     )
-    vsand, vsilt, vcld, vclb, _ = ssc_model.estimate_lithology(nphi, rhob, model=Method)
+    vsand, vsilt, vcld, vclb, _ = ssc_model.estimate_lithology(nphi, rhob, model=Method, normalize=False)
     df_ssc_model = pd.DataFrame(
         {'VSAND': vsand, 'VSILT': vsilt, 'VCLW': vcld + vclb, 'VCLD': vcld},
     )
@@ -100,5 +100,5 @@ async def estimate_phit_neu_den(inputs: inputData = Body(..., example=EXAMPLE)):
         fluid_point=FluidPoint
     )
 
-    return_dict = pd.DataFrame({'PHID': phit}).to_dict(orient='records')
+    return_dict = pd.DataFrame({'PHIT': phit}).to_dict(orient='records')
     return return_dict

@@ -46,6 +46,8 @@ async def estimate_ssc(inputs: inputData = Body(..., example=EXAMPLE)):
     input_dict = inputs.model_dump()
     assert all([len(input_dict[k]) == 2 for k in input_dict.keys() if "_point" in k]), \
         "End points must be of 2 elements: neutron porosity and bulk density."
+    assert all([all(input_dict[k]) for k in ['dry_sand_point', 'fluid_point']]), \
+        "'dry_sand_point' and 'fluid_point' points must not be None."
 
     DrySandPoint = input_dict['dry_sand_point']
     DrySiltPoint = input_dict['dry_silt_point']
