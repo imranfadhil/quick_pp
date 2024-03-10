@@ -5,7 +5,7 @@ import pandas as pd
 
 from quick_pp.lithology import gr_index
 
-router = APIRouter(prefix="/vsh_gr", tags=["lithology"])
+router = APIRouter(prefix="/vsh_gr", tags=["Lithology"])
 
 
 class data(BaseModel):
@@ -30,10 +30,9 @@ EXAMPLE = {'data': [
 async def estimate_vsh_gr(inputs: inputData = Body(..., example=EXAMPLE)):
 
     input_dict = inputs.model_dump()
+    # Get the data
     input_df = pd.DataFrame.from_records(input_dict['data'])
 
-    gr = input_df['gr']
-    vsh_gr = gr_index(gr)
-    return_df = pd.DataFrame({'GR': vsh_gr.ravel()})
-    return_dict = return_df.to_dict(orient='records')
+    vsh_gr = gr_index(input_df['gr'])
+    return_dict = pd.DataFrame({'GR': vsh_gr.ravel()}).to_dict(orient='records')
     return return_dict

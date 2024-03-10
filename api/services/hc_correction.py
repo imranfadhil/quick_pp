@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body
 from pydantic import BaseModel
 from typing import List
 import pandas as pd
@@ -6,7 +6,7 @@ import pandas as pd
 from quick_pp.qaqc import neu_den_xplot_hc_correction
 from quick_pp.lithology import SandSiltClay
 
-router = APIRouter(prefix="/hc_correction", tags=["lithology"])
+router = APIRouter(prefix="/hc_correction", tags=["Lithology"])
 
 
 class data(BaseModel):
@@ -16,43 +16,52 @@ class data(BaseModel):
 
 
 class inputData(BaseModel):
+    dry_sand_point: tuple
+    dry_silt_point: tuple
+    dry_clay_point: tuple
+    fluid_point: tuple
+    wet_clay_point: tuple
+    method: str
+    silt_line_angle: float
+    corr_angle: float
     data: List[data]
 
 
-EXAMPLE = {'data': [
-    {'gr': 40, 'nphi': 0.3, 'rhob': 1.85},
-    {'gr': 50, 'nphi': 0.35, 'rhob': 1.95},
-    {'gr': 60, 'nphi': 0.34, 'rhob': 1.9},
-]}
+EXAMPLE = {
+    'dry_sand_point': (-0.02, 2.65),
+    'dry_silt_point': (None, 2.68),
+    'dry_clay_point': (0.33, 2.7),
+    'fluid_point': (1.0, 1.0),
+    'wet_clay_point': (None, None),
+    'method': 'kuttan_modified',
+    'silt_line_angle': 117,
+    'corr_angle': 50,
+    'data': [
+        {'gr': 40, 'nphi': 0.3, 'rhob': 1.85},
+        {'gr': 50, 'nphi': 0.35, 'rhob': 1.95},
+        {'gr': 60, 'nphi': 0.34, 'rhob': 1.9},
+    ],
+}
 
 
 @router.post("")
-async def estimate_hc_correction(
-    inputs: inputData = Body(..., example=EXAMPLE),
-    DrySandPoint: tuple = Query(
-        (-0.02, 2.65), max_length=2, description="(Neutron porosity of dry sand, Bulk density of dry sand)"),
-    DrySiltPoint: tuple = Query(
-        (None, 2.68), max_length=2, description="(Neutron porosity of dry silt, Bulk density of dry silt)"),
-    DryClayPoint: tuple = Query(
-        (0.33, 2.7), max_length=2, description="(Neutron porosity of dry clay, Bulk density of dry clay)"),
-    FluidPoint: tuple = Query(
-        (1.0, 1.0), max_length=2, description="(Neutron porosity of fluid, Bulk density of fluid)"),
-    WetClayPoint: tuple = Query(
-        (None, None), max_length=2, description="(Neutron porosity of wet clay, Bulk density of wet clay)"),
-    Method: str = Query("kuttan_modified",
-                        description="Choose the method to estimate lithology, either 'kuttan' or 'kuttan_modified'."),
-    SiltLineAngle: float = 117, CorrAngle: float = 50
-):
-    # Change the tuples from str to float
-    DrySandPoint = tuple(map(float, DrySandPoint))
-    DrySiltPoint = tuple(map(lambda x: float(x) if x != '' else None, DrySiltPoint))
-    DryClayPoint = tuple(map(lambda x: float(x) if x != '' else None, DryClayPoint))
-    FluidPoint = tuple(map(lambda x: float(x) if x != '' else None, FluidPoint))
-    WetClayPoint = tuple(map(lambda x: float(x) if x != '' else None, WetClayPoint))
+async def estimate_hc_correction(inputs: inputData = Body(..., example=EXAMPLE)):
 
     input_dict = inputs.model_dump()
-    input_df = pd.DataFrame.from_records(input_dict['data'])
+    assert all([len(input_dict[k]) == 2 for k in input_dict.keys() if "_point" in k]), \
+        "End points must be of 2 elements: neutron porosity and bulk density."
 
+    DrySandPoint = input_dict['dry_sand_point']
+    DrySiltPoint = input_dict['dry_silt_point']
+    DryClayPoint = input_dict['dry_clay_point']
+    FluidPoint = input_dict['fluid_point']
+    WetClayPoint = input_dict['wet_clay_point']
+    Method = input_dict['method']
+    SiltLineAngle = input_dict['silt_line_angle']
+    CorrAngle = input_dict['corr_angle']
+
+    # Get the data
+    input_df = pd.DataFrame.from_records(input_dict['data'])
     nphihc, rhobhc = neu_den_xplot_hc_correction(input_df['nphi'], input_df['rhob'], gr=input_df['gr'],
                                                  dry_sand_point=DrySandPoint,
                                                  dry_clay_point=DryClayPoint,
