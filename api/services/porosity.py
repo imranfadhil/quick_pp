@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Body
 import pandas as pd
 
-from api.schemas.porosity import phit_inputData, PHIT_EXAMPLE
+from api.schemas.porosity import inputData as phit_inputData, EXAMPLE as PHIT_EXAMPLE
 
 from quick_pp.lithology import SandSiltClay
 from quick_pp.porosity import neu_den_xplot_poro, density_porosity, rho_matrix

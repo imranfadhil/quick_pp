@@ -8,11 +8,11 @@ class data(BaseModel):
     phit: float
 
 
-class swt_a_inputData(BaseModel):
+class inputData(BaseModel):
     data: List[data]
 
 
-SWT_A_EXAMPLE = {
+EXAMPLE = {
     'data': [
         {'rt': 1.834, 'rw': 0.343, 'phit': 0.141},
         {'rt': 1.955, 'rw': 0.343, 'phit': 0.152},

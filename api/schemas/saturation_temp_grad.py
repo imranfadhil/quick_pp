@@ -6,12 +6,12 @@ class data(BaseModel):
     tvdss: float
 
 
-class temp_grad_inputData(BaseModel):
+class inputData(BaseModel):
     data: List[data]
     meas_system: str = 'metric'
 
 
-TEMP_GRAD_EXAMPLE = {
+EXAMPLE = {
     'meas_system': 'metric',
     'data': [
         {'tvdss': 4098.49},

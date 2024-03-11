@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Body
 import pandas as pd
 
-from api.schemas.saturation_waxman_smits import swt_ws_inputData, SWT_WS_EXAMPLE
-from api.schemas.saturation_archie import swt_a_inputData, SWT_A_EXAMPLE
-from api.schemas.saturation_temp_grad import temp_grad_inputData, TEMP_GRAD_EXAMPLE
-from api.schemas.saturation_rw import rw_inputData, RW_EXAMPLE
-from api.schemas.saturation_b import b_inputData, B_EXAMPLE
+from api.schemas.saturation_waxman_smits import inputData as swt_ws_inputData, EXAMPLE as SWT_WS_EXAMPLE
+from api.schemas.saturation_archie import inputData as swt_a_inputData, EXAMPLE as SWT_A_EXAMPLE
+from api.schemas.saturation_temp_grad import inputData as temp_grad_inputData, EXAMPLE as TEMP_GRAD_EXAMPLE
+from api.schemas.saturation_rw import inputData as rw_inputData, EXAMPLE as RW_EXAMPLE
+from api.schemas.saturation_b import inputData as b_inputData, EXAMPLE as B_EXAMPLE
+from api.schemas.saturation_qv import inputData as qv_inputData, EXAMPLE as QV_EXAMPLE
 
 from quick_pp.saturation import (
     waxman_smits_saturation, archie_saturation, estimate_rw_temperature_salinity, estimate_temperature_gradient,
-    estimate_b_waxman_smits
+    estimate_b_waxman_smits, estimate_qv
 )
 
 router = APIRouter(prefix="/saturation", tags=["Saturation"])
@@ -56,6 +57,19 @@ async def estimate_b_waxman_smits_(inputs: b_inputData = Body(..., example=B_EXA
     b = estimate_b_waxman_smits(input_df['temp_grad'], input_df['rw'])
 
     return_dict = pd.DataFrame({'B': b.ravel()}).to_dict(orient='records')
+    return return_dict
+
+
+@router.post("/estimate_qv", description="Estimating Qv (cation exchange capacity per unit total pore volume (meq/cm3)")
+async def estimate_qv_(inputs: qv_inputData = Body(..., example=QV_EXAMPLE)):
+
+    input_dict = inputs.model_dump()
+    # Get the data
+    input_df = pd.DataFrame.from_records(input_dict['data'])
+
+    qv = estimate_qv(input_df['vcld'], input_df['phit'], input_dict['rho_clay'], input_dict['cec_clay'])
+
+    return_dict = pd.DataFrame({'QV': qv.ravel()}).to_dict(orient='records')
     return return_dict
 
 

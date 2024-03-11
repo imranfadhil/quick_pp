@@ -7,11 +7,11 @@ class data(BaseModel):
     rw: float
 
 
-class b_inputData(BaseModel):
+class inputData(BaseModel):
     data: List[data]
 
 
-B_EXAMPLE = {
+EXAMPLE = {
     'data': [
         {'temp_grad': 44.92, 'rw': 0.34},
         {'temp_grad': 46.08, 'rw': 0.34},

@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Body
 import pandas as pd
 
-from api.schemas.lithology_ssc import ssc_inputData, SSC_EXAMPLE
-from api.schemas.lithology_vsh_gr import vsh_gr_inputData, VSH_GR_EXAMPLE
-from api.schemas.lithology_hc_correction import hc_corr_inputData, HC_CORR_EXAMPLE
+from api.schemas.lithology_ssc import inputData as ssc_inputData, EXAMPLE as SSC_EXAMPLE
+from api.schemas.lithology_vsh_gr import inputData as vsh_gr_inputData, EXAMPLE as VSH_GR_EXAMPLE
+from api.schemas.lithology_hc_correction import inputData as hc_corr_inputData, EXAMPLE as HC_CORR_EXAMPLE
 
 from quick_pp.lithology import SandSiltClay
 from quick_pp.lithology import gr_index

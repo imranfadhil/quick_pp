@@ -11,11 +11,11 @@ class data(BaseModel):
     m: float
 
 
-class swt_ws_inputData(BaseModel):
+class inputData(BaseModel):
     data: List[data]
 
 
-SWT_WS_EXAMPLE = {
+EXAMPLE = {
     'data': [
         {'rt': 1.834, 'rw': 0.342, 'phit': 0.148, 'qv': 1.197, 'b': 5.479, 'm': 2},
         {'rt': 2.123, 'rw': 0.338, 'phit': 0.122, 'qv': 1.545, 'b': 5.541, 'm': 2},

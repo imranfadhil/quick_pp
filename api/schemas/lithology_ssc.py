@@ -7,7 +7,7 @@ class data(BaseModel):
     rhob: float
 
 
-class ssc_inputData(BaseModel):
+class inputData(BaseModel):
     dry_sand_point: tuple
     dry_silt_point: tuple
     dry_clay_point: tuple
@@ -18,7 +18,7 @@ class ssc_inputData(BaseModel):
     data: List[data]
 
 
-SSC_EXAMPLE = {
+EXAMPLE = {
     'dry_sand_point': (-0.02, 2.65),
     'dry_silt_point': (None, 2.68),
     'dry_clay_point': (None, 2.7),

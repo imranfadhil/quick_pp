@@ -6,12 +6,12 @@ class data(BaseModel):
     temp_grad: float
 
 
-class rw_inputData(BaseModel):
+class inputData(BaseModel):
     data: List[data]
     water_salinity: float
 
 
-RW_EXAMPLE = {
+EXAMPLE = {
     'water_salinity': 30000.0,
     'data': [
         {

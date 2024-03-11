@@ -6,11 +6,11 @@ class data(BaseModel):
     gr: float
 
 
-class vsh_gr_inputData(BaseModel):
+class inputData(BaseModel):
     data: List[data]
 
 
-VSH_GR_EXAMPLE = {'data': [
+EXAMPLE = {'data': [
     {'gr': 121.54},
     {'gr': 120.133},
     {'gr': 117.059},
