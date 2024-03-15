@@ -34,7 +34,9 @@ COLOR_DICT = {
     'VOIL': '#00FF00',
     'VSAND': '#F6F674',
     'VSHALE': '#A65628',
-    'VSILT': '#FE9800'
+    'VSILT': '#FE9800',
+    'VCALC': '#b0e0e6',
+    'VDOLO': '#ba55d3',
 }
 
 
@@ -247,21 +249,47 @@ def plotly_log(df):  # noqa
                   orientation='h'),
                   row=1, col=7, secondary_y=False)
 
-    # Add VGAS trace #16.
+    # Add VCALC trace #16.
+    fig.add_trace(go.Scatter(x=df['VCALC'], y=index, name='VCALC', line_color='#000000', line_width=1,
+                  fill='tonextx',
+                  fillpattern_bgcolor=COLOR_DICT['VCALC'],
+                  fillpattern_fgcolor='#000000',
+                  fillpattern_fillmode='replace',
+                  fillpattern_shape='x',
+                  fillpattern_size=3,
+                  fillpattern_solidity=0.1,
+                  stackgroup='litho',
+                  orientation='h'),
+                  row=1, col=7, secondary_y=False)
+
+    # Add VDOLO trace #17.
+    fig.add_trace(go.Scatter(x=df['VDOLO'], y=index, name='VDOLO', line_color='#000000', line_width=1,
+                  fill='tonextx',
+                  fillpattern_bgcolor=COLOR_DICT['VDOLO'],
+                  fillpattern_fgcolor='#000000',
+                  fillpattern_fillmode='replace',
+                  fillpattern_shape='-',
+                  fillpattern_size=3,
+                  fillpattern_solidity=0.3,
+                  stackgroup='litho',
+                  orientation='h'),
+                  row=1, col=7, secondary_y=False)
+
+    # Add VGAS trace #18.
     fig.add_trace(go.Scatter(x=df['VGAS'], y=index, name='VGAS', line_color='#000000', line_width=1,
                   fill='tonextx', fillcolor=COLOR_DICT['VGAS'], stackgroup='litho', orientation='h'),
                   row=1, col=7, secondary_y=False)
 
-    # Add VOIL trace #17.
+    # Add VOIL trace #19.
     fig.add_trace(go.Scatter(x=df['VOIL'], y=index, name='VOIL', line_color='#000000', line_width=1,
                   fill='tonextx', fillcolor=COLOR_DICT['VOIL'], stackgroup='litho', orientation='h'),
                   row=1, col=7, secondary_y=False)
 
-    # Add VSHALE trace #18.
+    # Add VSHALE trace #20.
     fig.add_trace(go.Scatter(x=df['VSHALE'], y=index, name='VSHALE', line_color=COLOR_DICT['VSHALE']),
                   row=1, col=7, secondary_y=True)
 
-    i = 18
+    i = 20
     # Add COAL_FLAG trace.
     for c in [4, 5, 6, 7]:
         fig.add_trace(go.Scatter(x=df['COAL_FLAG'], y=index, name='', line_color=COLOR_DICT['COAL_FLAG'],
@@ -339,22 +367,22 @@ def plotly_log(df):  # noqa
         yaxis13=dict(domain=[0, .9], visible=False, showgrid=False),
 
         # Update x and y axes for COAL_FLAG
-        xaxis19=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
-                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis19=dict(domain=[0, .9], visible=False, showgrid=False),
-        xaxis20=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
-                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis20=dict(domain=[0, .9], visible=False, showgrid=False),
         xaxis21=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
         yaxis21=dict(domain=[0, .9], visible=False, showgrid=False),
         xaxis22=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
         yaxis22=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis23=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
+                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
+        yaxis23=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis24=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
+                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
+        yaxis24=dict(domain=[0, .9], visible=False, showgrid=False),
 
         height=750,
         width=900,
