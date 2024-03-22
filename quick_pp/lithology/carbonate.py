@@ -2,6 +2,7 @@ import numpy as np
 
 from . import shale_volume_steiber, gr_index
 from ..utils import length_a_b, line_intersection
+from ..qaqc import neu_den_xplot_hc_correction
 from ..config import Config
 
 
@@ -23,7 +24,7 @@ class Carbonate:
         self.dry_clay_point = dry_clay_point or Config.CARB_NEU_DEN_ENDPOINTS["DRY_CLAY_POINT"]
         self.fluid_point = fluid_point or Config.CARB_NEU_DEN_ENDPOINTS["FLUID_POINT"]
 
-    def estimate_lithology(self, gr, nphi, rhob, pef: float = [0], model: str = 'single',
+    def estimate_lithology(self, gr, nphi, rhob, pef: float = [0], model: str = 'single', method: str = 'neu_den',
                            carbonate_type: str = 'limestone'):
         """Estimate sand silt clay lithology volumetrics.
 
@@ -33,6 +34,8 @@ class Carbonate:
             rhob (float): Bulk Density log in g/cc
             pef (float, optional): Photoelectric Factor log in barns/electron. Defaults to [0].
             model (str, optional): Model to choose from 'single' or 'double'. Defaults to 'single'.
+            method (str, optional): Method for 2 minerals model, to choose from 'neu_den' or 'den_pef'.
+                                    Defaults to 'neu_den'.
             carbonate_type (str, optional): Carbonate type to choose from 'limestone' or 'dolostone'.
                                             Defaults to 'limestone'.
             xplot (bool, optional): To plot Neutron Density cross plot. Defaults to False.
@@ -42,54 +45,67 @@ class Carbonate:
             (float, float, float): vcld, vcalc, vdolo
         """
         assert model in ['single', 'double'], f"'{model}' model is not available."
+        assert method in ['neu_den', 'den_pef'], f"'{method}' method is not available."
 
+        # Apply HC correction to neutron porosity and bulk density
+        carb_point = self.dry_calc_point if carbonate_type == 'limestone' else self.dry_dolo_point
+        nphi_hc, rhob_hc = neu_den_xplot_hc_correction(nphi, rhob, gr, carb_point, self.dry_clay_point)
         if model == 'single':
-            # Estimate vshale and apply clay correction
-            vcld, _ = self.lithology_fraction_neu_den(nphi, rhob, carbonate_type)
-            nphi_cc, rhob_cc, pef_cc = self.clay_correction(vcld, nphi, rhob, pef)
+            # Estimate vshale
+            vcld, vcarb = self.lithology_fraction_neu_den(nphi_hc, rhob_hc, carbonate_type)
+            print(f'## Info for vcld \nmean: {np.mean(vcld)}, min: {np.min(vcld)}, max: {np.max(vcld)}')
 
-            vcld, vcarb = self.lithology_fraction_neu_den(nphi_cc, rhob_cc, carbonate_type)
-            print(np.mean(vcld), np.mean(vcarb), len(vcld), len(vcarb))
             vdolo = vcarb if carbonate_type == 'dolostone' else 0
             vcalc = vcarb if carbonate_type == 'limestone' else 0
             return vcld, vcalc, vdolo
         else:
             # Estimate vshale and apply clay correction
             vcld = shale_volume_steiber(gr_index(gr)).reshape(-1)
-            print(type(vcld), np.shape(vcld), np.mean(vcld))
-            nphi_cc, rhob_cc, pef_cc = self.clay_correction(vcld, nphi, rhob, pef)
-            print(np.mean(nphi_cc), np.mean(rhob_cc), np.mean(pef_cc))
-            vcalc, vdolo = self.lithology_fraction_pef(pef_cc, rhob_cc)
+            print(f'## Info for vcld \nmean: {np.mean(vcld)}, min: {np.min(vcld)}, max: {np.max(vcld)}')
+            nphi_cc, rhob_cc, pef_cc = self.clay_correction(vcld, nphi_hc, rhob_hc, pef)
+            print(f'## Info for nphi_cc \nmean: {np.mean(nphi_cc)}, min: {np.min(nphi_cc)}, max: {np.max(nphi_cc)}')
+            print(f'## Info for rhob_cc \nmean: {np.mean(rhob_cc)}, min: {np.min(rhob_cc)}, max: {np.max(rhob_cc)}')
+            print(f'## Info for pef_cc \nmean: {np.mean(pef_cc)}, min: {np.min(pef_cc)}, max: {np.max(pef_cc)}')
+            if method == 'neu_den':
+                vcalc, vdolo = self.lithology_fraction_neu_den(nphi_cc, rhob_cc, model='double')
+            else:
+                vcalc, vdolo = self.lithology_fraction_pef(pef_cc, rhob_cc)
             vcalc = vcalc*(1 - vcld)
             vdolo = vdolo*(1 - vcld)
             return vcld, vcalc, vdolo
 
-    def lithology_fraction_neu_den(self, nphi, rhob, carbonate_type: str = 'limestone'):
+    def lithology_fraction_neu_den(self, nphi, rhob, model: str = 'single', carbonate_type: str = 'limestone'):
         """Estimate clay and carbonate (either limestone or dolostone) based on neutron density cross plot.
 
         Args:
             nphi (float): Neutron Porosity log in v/v
             rhob (float): Bulk Density log in g/cc
+            model (str, optional): Model to choose from 'single' or 'double'. Defaults to 'single'.
+            carbonate_type (str, optional): Carbonate type to choose from 'limestone' or 'dolostone'.
 
         Returns:
-            (float, float): vcld, vcarb
+            (float, float): vlitho1, vlitho2
         """
-        A = self.dry_calc_point if carbonate_type == 'limestone' else self.dry_dolo_point
-        C = self.dry_clay_point
+        if model == 'single':
+            A = self.dry_calc_point if carbonate_type == 'limestone' else self.dry_dolo_point
+            C = self.dry_clay_point
+        else:
+            A = self.dry_dolo_point
+            C = self.dry_calc_point
         D = self.fluid_point
         E = zip(nphi, rhob)
         rocklithofrac = length_a_b(A, C)
 
-        vcarb = np.empty(0)
-        vcld = np.empty(0)
+        vlitho1 = np.empty(0)
+        vlitho2 = np.empty(0)
         for i, point in enumerate(E):
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
-            vshale = projlithofrac / rocklithofrac
-            vcarb = np.append(vcarb, 1 - vshale)
-            vcld = np.append(vcld, vshale)
+            vfrac = projlithofrac / rocklithofrac
+            vlitho1 = np.append(vlitho1, vfrac)
+            vlitho2 = np.append(vlitho2, 1 - vfrac)
 
-        return vcld, vcarb
+        return vlitho1, vlitho2
 
     def lithology_fraction_pef(self, pef, rhob):
         """Estimate limestone and dolostone based on pef density cross plot. Expecting the inputs to b clay corrected.
@@ -119,7 +135,7 @@ class Carbonate:
         return vcalc, vdolo
 
     def clay_correction(self, vcld, nphi, rhob, pef):
-        # Convert to numpy array
+        # Convert to numpy array for vectorized operations
         nphi = np.array(nphi)
         rhob = np.array(rhob)
         pef = np.array(pef)

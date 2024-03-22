@@ -26,6 +26,7 @@ COLOR_DICT = {
     'PHIE': '#0000FF',
     'RHOB': '#FF0000',
     'RT': '#FF0000',
+    'PEF': '#ba55d3',
     'SWT': '#FF0000',
     'SWE': '#0000FF',
     'VCLW': '#BFBFBF',
@@ -289,7 +290,13 @@ def plotly_log(df):  # noqa
     fig.add_trace(go.Scatter(x=df['VSHALE'], y=index, name='VSHALE', line_color=COLOR_DICT['VSHALE']),
                   row=1, col=7, secondary_y=True)
 
-    i = 20
+    # Add PEF trace #21.
+    fig.add_trace(go.Scatter(x=df['PEF'], y=index, name='PEF', line_color=COLOR_DICT['PEF'], line_dash='dashdot',
+                             line_width=.75),
+                  row=1, col=3, secondary_y=True)
+    fig.data[20].update(xaxis='x21')
+
+    i = 21
     # Add COAL_FLAG trace.
     for c in [4, 5, 6, 7]:
         fig.add_trace(go.Scatter(x=df['COAL_FLAG'], y=index, name='', line_color=COLOR_DICT['COAL_FLAG'],
@@ -305,7 +312,7 @@ def plotly_log(df):  # noqa
                     title_standoff=.1, dtick=40, range=[0, 200], type='linear'),
         xaxis2=dict(title='RT', titlefont=dict(color=COLOR_DICT['RT'], size=font_size),
                     tickfont=dict(color=COLOR_DICT['RT'], size=font_size), side='top', anchor='free', position=.9,
-                    title_standoff=.1, range=[np.log10(.2), np.log10(200)], type='log'),
+                    title_standoff=.1, range=[np.log10(.2), np.log10(2000)], type='log'),
         xaxis3=dict(title='RHOB', titlefont=dict(color=COLOR_DICT['RHOB'], size=font_size),
                     tickformat=".2f", tick0=1.85, dtick=0.2,
                     tickfont=dict(color=COLOR_DICT['RHOB'], size=font_size), side='top', anchor='free', position=.9,
@@ -350,6 +357,10 @@ def plotly_log(df):  # noqa
                      tickfont=dict(size=1),
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x1',
                      range=[0, 5], type='linear', showgrid=False, zeroline=False,),
+        xaxis21=dict(title='PEF', titlefont=dict(color=COLOR_DICT['PEF'], size=font_size),
+                     tickfont=dict(color=COLOR_DICT['PEF'], size=font_size), zeroline=False,
+                     side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x3',
+                     range=[-10, 10], type='linear', showgrid=False),
 
         # make room to display double x-axes
         yaxis=dict(domain=[0, .9], title='DEPTH', showgrid=False),
@@ -367,22 +378,22 @@ def plotly_log(df):  # noqa
         yaxis13=dict(domain=[0, .9], visible=False, showgrid=False),
 
         # Update x and y axes for COAL_FLAG
-        xaxis21=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
-                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis21=dict(domain=[0, .9], visible=False, showgrid=False),
         xaxis22=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
         yaxis22=dict(domain=[0, .9], visible=False, showgrid=False),
         xaxis23=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
         yaxis23=dict(domain=[0, .9], visible=False, showgrid=False),
         xaxis24=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
         yaxis24=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis25=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
+                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
+        yaxis25=dict(domain=[0, .9], visible=False, showgrid=False),
 
         height=750,
         width=900,
