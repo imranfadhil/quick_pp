@@ -47,12 +47,12 @@ class Carbonate:
         assert model in ['single', 'double'], f"'{model}' model is not available."
         assert method in ['neu_den', 'den_pef'], f"'{method}' method is not available."
 
-        # Apply HC correction to neutron porosity and bulk density
-        carb_point = self.dry_calc_point if carbonate_type == 'limestone' else self.dry_dolo_point
-        nphi_hc, rhob_hc = neu_den_xplot_hc_correction(nphi, rhob, gr, carb_point, self.dry_clay_point)
         if model == 'single':
+            # Apply HC correction
+            carb_point = self.dry_calc_point if carbonate_type == 'limestone' else self.dry_dolo_point
+            nphi, rhob = neu_den_xplot_hc_correction(nphi, rhob, gr, carb_point, self.dry_clay_point)
             # Estimate vshale
-            vcld, vcarb = self.lithology_fraction_neu_den(nphi_hc, rhob_hc, carbonate_type)
+            vcld, vcarb = self.lithology_fraction_neu_den(nphi, rhob, carbonate_type)
             print(f'## Info for vcld \nmean: {np.mean(vcld)}, min: {np.min(vcld)}, max: {np.max(vcld)}')
 
             vdolo = vcarb if carbonate_type == 'dolostone' else 0
@@ -62,7 +62,7 @@ class Carbonate:
             # Estimate vshale and apply clay correction
             vcld = shale_volume_steiber(gr_index(gr)).reshape(-1)
             print(f'## Info for vcld \nmean: {np.mean(vcld)}, min: {np.min(vcld)}, max: {np.max(vcld)}')
-            nphi_cc, rhob_cc, pef_cc = self.clay_correction(vcld, nphi_hc, rhob_hc, pef)
+            nphi_cc, rhob_cc, pef_cc = self.clay_correction(vcld, nphi, rhob, pef)
             print(f'## Info for nphi_cc \nmean: {np.mean(nphi_cc)}, min: {np.min(nphi_cc)}, max: {np.max(nphi_cc)}')
             print(f'## Info for rhob_cc \nmean: {np.mean(rhob_cc)}, min: {np.min(rhob_cc)}, max: {np.max(rhob_cc)}')
             print(f'## Info for pef_cc \nmean: {np.mean(pef_cc)}, min: {np.min(pef_cc)}, max: {np.max(pef_cc)}')
@@ -87,8 +87,8 @@ class Carbonate:
             (float, float): vlitho1, vlitho2
         """
         if model == 'single':
-            A = self.dry_calc_point if carbonate_type == 'limestone' else self.dry_dolo_point
-            C = self.dry_clay_point
+            A = self.dry_clay_point
+            C = self.dry_calc_point if carbonate_type == 'limestone' else self.dry_dolo_point
         else:
             A = self.dry_dolo_point
             C = self.dry_calc_point
@@ -102,8 +102,8 @@ class Carbonate:
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
             vfrac = projlithofrac / rocklithofrac
-            vlitho1 = np.append(vlitho1, vfrac)
-            vlitho2 = np.append(vlitho2, 1 - vfrac)
+            vlitho1 = np.append(vlitho1, 1 - vfrac)
+            vlitho2 = np.append(vlitho2, vfrac)
 
         return vlitho1, vlitho2
 

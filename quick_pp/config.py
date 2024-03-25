@@ -44,7 +44,7 @@ class Config(object):
     CARB_NEU_DEN_ENDPOINTS = dict(
         FLUID_POINT=(1.0, 1.0),
         DRY_CALC_POINT=(0.0, 2.71),
-        DRY_DOLO_POINT=(0.009, 2.87),
+        DRY_DOLO_POINT=(0.01, 2.87),
         DRY_CLAY_POINT=(0.24, 2.78),
     )
 
@@ -69,14 +69,20 @@ class Config(object):
         'PEF_CALCITE': 5.08,
 
         'GR_DOLOMITE': 0.0,
-        'NPHI_DOLOMITE': 0.009,
+        'NPHI_DOLOMITE': 0.01,
         'RHOB_DOLOMITE': 2.87,
         'DTC_DOLOMITE': 43.5,
         'PEF_DOLOMITE': 3.14,
 
+        'GR_SILT': 80.0,
+        'NPHI_SILT': 0.1,
+        'RHOB_SILT': 2.68,
+        'DTC_SILT': 100.0,
+        'PEF_SILT': 2.0,
+
         'GR_SH': 110.0,
         'NPHI_SH': 0.3,
-        'RHOB_SH': 2.5,
+        'RHOB_SH': 2.7,
         'DTC_SH': 110.0,
         'PEF_SH': 2.2,
 

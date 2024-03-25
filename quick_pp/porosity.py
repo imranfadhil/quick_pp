@@ -82,25 +82,36 @@ def shale_porosity(vshale, phi_shale):
     return vshale * phi_shale
 
 
-def rho_matrix(vsand, vsilt, vclay, rho_sand: float = None, rho_silt: float = None, rho_clay: float = None):
+def rho_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
+               rho_sand: float = None, rho_silt: float = None, rho_clay: float = None,
+               rho_calc: float = None, rho_dolo: float = None, rho_heavy: float = 0):
     """Estimate average matrix density based on dry sand, dry silt and dry clay volume and density.
 
     Args:
-        vsand (float): Volume of dry sand.
-        vsilt (float): Volume of dry silt.
-        vclay (float): Volume of dry clay.
+        vsand (float): Volume of sand.
+        vsilt (float): Volume of silt.
+        vclay (float): Volume of clay.
+        vcalc (float): Volume of calcite.
+        vdolo (float): Volume of dolomite.
+        vheavy (float): Volume of heavy minerals.
         rho_sand (float, optional): Density of sand in g/cc. Defaults to None.
         rho_silt (float, optional): Density of silt in g/cc. Defaults to None.
         rho_clay (float, optional): Density of clay in g/cc. Defaults to None.
+        rho_calc (float, optional): Density of calcite in g/cc. Defaults to None.
+        rho_dolo (float, optional): Density of dolomite in g/cc. Defaults to None.
+        rho_heavy (float, optional): Density of heavy minerals in g/cc. Defaults to 0.
 
     Returns:
         float: Matrix density in g/cc.
     """
-    ssc_endpoints = Config.SSC_ENDPOINTS
-    rho_sand = rho_sand or ssc_endpoints['DRY_SAND_POINT'][1]
-    rho_silt = rho_silt or ssc_endpoints['DRY_SILT_POINT'][1]
-    rho_clay = rho_clay or ssc_endpoints['DRY_CLAY_POINT'][1]
-    return vsand * rho_sand + vsilt * rho_silt + vclay * rho_clay
+    minerals_log_value = Config.MINERALS_LOG_VALUE
+    rho_sand = rho_sand or minerals_log_value['RHOB_QUARTZ']
+    rho_silt = rho_silt or minerals_log_value['RHOB_SILT']
+    rho_clay = rho_clay or minerals_log_value['RHOB_SH']
+    rho_calc = rho_calc or minerals_log_value['RHOB_CALCITE']
+    rho_dolo = rho_dolo or minerals_log_value['RHOB_DOLOMITE']
+    return vsand * rho_sand + vsilt * rho_silt + vclay * rho_clay + \
+        vcalc * rho_calc + vdolo * rho_dolo + vheavy * rho_heavy
 
 
 def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
