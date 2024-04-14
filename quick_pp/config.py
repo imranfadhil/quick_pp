@@ -42,7 +42,7 @@ class Config(object):
     )
 
     CARB_NEU_DEN_ENDPOINTS = dict(
-        FLUID_POINT=(1.0, 1.0),
+        FLUID_POINT=(.93, 1.0),
         DRY_CALC_POINT=(0.0, 2.71),
         DRY_DOLO_POINT=(0.01, 2.87),
         DRY_CLAY_POINT=(0.24, 2.78),

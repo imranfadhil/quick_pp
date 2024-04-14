@@ -50,7 +50,7 @@ class Carbonate:
         if model == 'single':
             # Apply HC correction
             carb_point = self.dry_calc_point if carbonate_type == 'limestone' else self.dry_dolo_point
-            nphi, rhob = neu_den_xplot_hc_correction(nphi, rhob, gr, carb_point, self.dry_clay_point)
+            nphi, rhob = neu_den_xplot_hc_correction(nphi, rhob, gr, carb_point, self.dry_clay_point, self.fluid_point)
             # Estimate vshale
             vcld, vcarb = self.lithology_fraction_neu_den(nphi, rhob, carbonate_type)
             print(f'## Info for vcld \nmean: {np.mean(vcld)}, min: {np.min(vcld)}, max: {np.max(vcld)}')
