@@ -2,7 +2,7 @@ import numpy as np
 
 from . import shale_volume_steiber, gr_index
 from ..utils import length_a_b, line_intersection
-from ..qaqc import neu_den_xplot_hc_correction
+from ..porosity import neu_den_xplot_poro_pt, rho_matrix, density_porosity
 from ..config import Config
 
 
@@ -24,8 +24,8 @@ class Carbonate:
         self.dry_clay_point = dry_clay_point or Config.CARB_NEU_DEN_ENDPOINTS["DRY_CLAY_POINT"]
         self.fluid_point = fluid_point or Config.CARB_NEU_DEN_ENDPOINTS["FLUID_POINT"]
 
-    def estimate_lithology(self, gr, nphi, rhob, pef: float = [0], model: str = 'single', method: str = 'neu_den',
-                           carbonate_type: str = 'limestone'):
+    def estimate_lithology(self, nphi, rhob, gr, pef=None, normalize: bool = True,
+                           model: str = 'single', method: str = 'neu_den', carbonate_type: str = 'limestone'):
         """Estimate sand silt clay lithology volumetrics.
 
         Args:
@@ -48,33 +48,34 @@ class Carbonate:
         assert method in ['neu_den', 'den_pef'], f"'{method}' method is not available."
 
         if model == 'single':
-            # Apply HC correction
-            carb_point = self.dry_calc_point if carbonate_type == 'limestone' else self.dry_dolo_point
-            nphi, rhob = neu_den_xplot_hc_correction(nphi, rhob, gr, carb_point, self.dry_clay_point, self.fluid_point)
             # Estimate vshale
-            vcld, vcarb = self.lithology_fraction_neu_den(nphi, rhob, carbonate_type)
-            print(f'## Info for vcld \nmean: {np.mean(vcld)}, min: {np.min(vcld)}, max: {np.max(vcld)}')
-
+            vcld = self.estimate_vcld_from_gr(gr)
+            vcarb = 1 - vcld
             vdolo = vcarb if carbonate_type == 'dolostone' else 0
             vcalc = vcarb if carbonate_type == 'limestone' else 0
+            if normalize:
+                # Estimate total porosity
+                rho_ma = rho_matrix(vcalc=vcalc, vdolo=vdolo, vclay=vcld)
+                phit = density_porosity(rhob, rho_ma)
+                vmatrix = (1 - phit).values
+                vcalc = vcalc*vmatrix
+                vdolo = vdolo*vmatrix
+                vcld = vcld*vmatrix
             return vcld, vcalc, vdolo
-        else:
-            # Estimate vshale and apply clay correction
-            vcld = shale_volume_steiber(gr_index(gr)).reshape(-1)
-            print(f'## Info for vcld \nmean: {np.mean(vcld)}, min: {np.min(vcld)}, max: {np.max(vcld)}')
-            nphi_cc, rhob_cc, pef_cc = self.clay_correction(vcld, nphi, rhob, pef)
-            print(f'## Info for nphi_cc \nmean: {np.mean(nphi_cc)}, min: {np.min(nphi_cc)}, max: {np.max(nphi_cc)}')
-            print(f'## Info for rhob_cc \nmean: {np.mean(rhob_cc)}, min: {np.min(rhob_cc)}, max: {np.max(rhob_cc)}')
-            print(f'## Info for pef_cc \nmean: {np.mean(pef_cc)}, min: {np.min(pef_cc)}, max: {np.max(pef_cc)}')
+        elif model == 'double':
+            # Estimate vshale
+            vcld = self.estimate_vcld_from_gr(gr)
             if method == 'neu_den':
-                vcalc, vdolo = self.lithology_fraction_neu_den(nphi_cc, rhob_cc, model='double')
+                vcalc, vdolo = self.lithology_fraction_neu_den(nphi, rhob, model='double', normalize=normalize)
             else:
-                vcalc, vdolo = self.lithology_fraction_pef(pef_cc, rhob_cc)
+                assert(pef is not None), "PEF log is required for 'den_pef' method."
+                vcalc, vdolo = self.lithology_fraction_pef(pef, rhob, normalize=normalize)
             vcalc = vcalc*(1 - vcld)
             vdolo = vdolo*(1 - vcld)
             return vcld, vcalc, vdolo
 
-    def lithology_fraction_neu_den(self, nphi, rhob, model: str = 'single', carbonate_type: str = 'limestone'):
+    def lithology_fraction_neu_den(self, nphi, rhob, model: str = 'single', carbonate_type: str = 'limestone',
+                                   normalize: bool = True):
         """Estimate clay and carbonate (either limestone or dolostone) based on neutron density cross plot.
 
         Args:
@@ -102,13 +103,16 @@ class Carbonate:
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
             vfrac = projlithofrac / rocklithofrac
-            vlitho1 = np.append(vlitho1, 1 - vfrac)
-            vlitho2 = np.append(vlitho2, vfrac)
+
+            phit = neu_den_xplot_poro_pt(point[0], point[1], 'ss', None, A, (0, 0), C, D) if normalize else 0
+            vmatrix = 1 - phit
+            vlitho1 = np.append(vlitho1, (1 - vfrac)*vmatrix)
+            vlitho2 = np.append(vlitho2, vfrac*vmatrix)
 
         return vlitho1, vlitho2
 
-    def lithology_fraction_pef(self, pef, rhob):
-        """Estimate limestone and dolostone based on pef density cross plot. Expecting the inputs to b clay corrected.
+    def lithology_fraction_pef(self, pef, rhob, normalize: bool = True):
+        """Estimate limestone and dolostone based on pef density cross plot. Expecting the inputs are clay corrected.
 
         Args:
             pef (float): Photoelectric Factor in barns/electron
@@ -129,12 +133,26 @@ class Carbonate:
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
             dolo_frac = projlithofrac / rocklithofrac
-            vcalc = np.append(vcalc, 1 - dolo_frac)
-            vdolo = np.append(vdolo, dolo_frac)
+
+            phit = neu_den_xplot_poro_pt(point[0], point[1], 'ss', None, A, (0, 0), C, D) if normalize else 0
+            vmatrix = 1 - phit
+            vcalc = np.append(vcalc, (1 - dolo_frac)*vmatrix)
+            vdolo = np.append(vdolo, dolo_frac*vmatrix)
 
         return vcalc, vdolo
 
     def clay_correction(self, vcld, nphi, rhob, pef):
+        """Apply clay correction to the input logs.
+
+        Args:
+            vcld (_type_): _description_
+            nphi (_type_): _description_
+            rhob (_type_): _description_
+            pef (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
         # Convert to numpy array for vectorized operations
         nphi = np.array(nphi)
         rhob = np.array(rhob)
@@ -145,3 +163,14 @@ class Carbonate:
         pefcc = (pef - vcld*Config.MINERALS_LOG_VALUE['PEF_SH']) / (1 - vcld)
 
         return nphicc, rhobcc, pefcc
+
+    def estimate_vcld_from_gr(self, gr):
+        """Estimate Vclay from Gamma Ray log.
+
+        Args:
+            gr (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        return shale_volume_steiber(gr_index(gr)).flatten()
