@@ -41,27 +41,51 @@ class Config(object):
         SILT_LINE_ANGLE=119  # Deg angle from horizontal
     )
 
+    CARB_NEU_DEN_ENDPOINTS = dict(
+        FLUID_POINT=(.93, 1.0),
+        DRY_CALC_POINT=(0.0, 2.71),
+        DRY_DOLO_POINT=(0.01, 2.87),
+        DRY_CLAY_POINT=(0.24, 2.78),
+    )
+
+    CARB_DEN_PEF_ENDPOINTS = dict(
+        FLUID_POINT=(1.0, 1.0),
+        DRY_CALC_POINT=(5.08, 2.71),
+        DRY_DOLO_POINT=(3.14, 2.87),
+        DRY_CLAY_POINT=(2.2, 2.78),
+    )
+
     MINERALS_LOG_VALUE = {
         'GR_QUARTZ': 30.0,
         'NPHI_QUARTZ': -0.04,
         'RHOB_QUARTZ': 2.65,
         'DTC_QUARTZ': 55.0,
         'PEF_QUARTZ': 1.8,
+
         'GR_CALCITE': 0.0,
         'NPHI_CALCITE': 0.0,
         'RHOB_CALCITE': 2.71,
         'DTC_CALCITE': 47.6,
         'PEF_CALCITE': 5.08,
+
         'GR_DOLOMITE': 0.0,
-        'NPHI_DOLOMITE': 0.009,
+        'NPHI_DOLOMITE': 0.01,
         'RHOB_DOLOMITE': 2.87,
         'DTC_DOLOMITE': 43.5,
         'PEF_DOLOMITE': 3.14,
+
+        'GR_SILT': 80.0,
+        'NPHI_SILT': 0.1,
+        'RHOB_SILT': 2.68,
+        'DTC_SILT': 100.0,
+        'PEF_SILT': 2.0,
+
         'GR_SH': 110.0,
         'NPHI_SH': 0.3,
-        'RHOB_SH': 2.5,
+        'RHOB_SH': 2.7,
         'DTC_SH': 110.0,
         'PEF_SH': 2.2,
+
         'GR_MUD': 0.0,
         'NPHI_MUD': 1.0,
         'RHOB_MUD': 1.3,
