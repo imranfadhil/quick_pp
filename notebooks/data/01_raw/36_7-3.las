@@ -11,13 +11,13 @@ STOP .m      2949.2934570 :
 STEP .m     0.00000000 :
 NULL .        -999.250000 :
 COMP.           : COMPANY
-WELL.  36/7-3   : WELL
+WELL.  36_7-3   : WELL
 FLD.            : FIELD
 LOC.            : LOCATION
 SRVC.           : SERVICE COMPANY
 DATE.  2018-09-11 14:49:03   : Log Export Date {yyyy-MM-dd HH:mm:ss}
 PROV.           : PROVINCE
-UWI.   36/7-3   : UNIQUE WELL ID
+UWI.   36_7-3   : UNIQUE WELL ID
 API.            : API NUMBER
 #==================================================================
 ~Curve
@@ -30,7 +30,7 @@ RHOB .g/cm3               : RHOB
 PEF .b/e                  : PEF
 GR .gAPI                  : GR
 DTC .us/ft                : DTC
-RDEP .ohm.m               : RDEP
+RT .ohm.m               : RDEP
 RMED .ohm.m               : RMED
 ~Parameter
 #==================================================================

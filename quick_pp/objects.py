@@ -62,13 +62,21 @@ class Project:
         self.data[well_name].ressum = data
         self.update_history(action=f"Updated ressum for well {well_name}")
 
-    def save(self, name="", folder="data/04_project", ext=".qpp"):
+    def save_data(self, name="", folder="data/02_intermediate", ext=".parquet"):
         if not os.path.exists(folder):
             os.makedirs(folder)
-        path = os.path.join(folder, f"{name}{ext}" or f"{self.name}.qpp")
+        path = os.path.join(folder, f"{name}{ext}" if name else f"{self.name}.parquet")
+        data = self.get_all_data()
+        data.to_parquet(path)
+
+    def save(self, name="", folder="data/04_project", ext=".qpp", notes=""):
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        date_hash = datetime.now().strftime('%Y%m%d%H%M%S')
+        path = os.path.join(folder, f"{name}{ext}" if name else f"{self.name}_{date_hash}.qpp")
         with open(path, "wb") as f:
             pickle.dump(self, f)
-        self.update_history(action=f"Saved project to {path}")
+        self.update_history(action=f"Saved project to {path} | {notes}")
 
     def load(self, path: str):
         with open(path, "rb") as f:
