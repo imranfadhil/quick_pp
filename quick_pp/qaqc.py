@@ -174,8 +174,9 @@ def neu_den_xplot_hc_correction(
     rocklithofrac = length_a_b(A, C)
 
     frac_vsh_gr = gr_index(gr) * rocklithofrac
-    nphi_corrected = []
-    rhob_corrected = []
+    nphi_corrected = np.empty(0)
+    rhob_corrected = np.empty(0)
+    hc_flag = np.empty(0)
     for i, point in enumerate(list(zip(nphi, rhob, frac_vsh_gr))):
         var_pt = line_intersection((A, C), (D, (point[0], point[1])))
         projlithofrac = length_a_b(var_pt, C)
@@ -195,10 +196,12 @@ def neu_den_xplot_hc_correction(
                 new_vsh_dn = projlithofrac / rocklithofrac
                 vsh_dn = new_vsh_dn if 0 < new_vsh_dn < 1 else rocklithofrac - projlithofrac
 
-            nphi_corrected.append(nphi_corr)
-            rhob_corrected.append(rhob_corr)
+            nphi_corrected = np.append(nphi_corrected, nphi_corr)
+            rhob_corrected = np.append(rhob_corrected, rhob_corr)
+            hc_flag = np.append(hc_flag, 1)
         else:
-            nphi_corrected.append(point[0])
-            rhob_corrected.append(point[1])
+            nphi_corrected = np.append(nphi_corrected, point[0])
+            rhob_corrected = np.append(rhob_corrected, point[1])
+            hc_flag = np.append(hc_flag, 0)
 
-    return nphi_corrected, rhob_corrected
+    return nphi_corrected, rhob_corrected, hc_flag

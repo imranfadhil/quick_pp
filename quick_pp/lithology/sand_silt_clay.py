@@ -50,11 +50,11 @@ class SandSiltClay:
         # Redefine wetclay point
         _, rhob_max_line = min_max_line(rhob, 0.05)
         _, nphi_max_line = min_max_line(nphi, 0.05)
-        wetclay_RHOB = np.min(rhob_max_line)
-        wetclay_NPHI = np.max(nphi_max_line)
+        wetclay_RHOB = np.nanmin(rhob_max_line)
+        wetclay_NPHI = np.nanmax(nphi_max_line)
         if not all(self.wet_clay_point):
             self.wet_clay_point = (wetclay_NPHI, wetclay_RHOB)
-        # print(f'#### wet_clay_point: {wet_clay_point}')
+        # print(f'#### wet_clay_point: {self.wet_clay_point}')
 
         # Redefine drysilt point
         drysilt_NPHI = 1 - 1.68*(math.tan(float(self.silt_line_angle - 90)*math.pi / 180))
@@ -104,9 +104,9 @@ class SandSiltClay:
         sandsiltfrac = length_a_b(A, B)
         matrix_ratio_x = sandsiltfrac / rocklithofrac
 
-        vsand = []
-        vsilt = []
-        vcld = []
+        vsand = np.empty(0)
+        vsilt = np.empty(0)
+        vcld = np.empty(0)
         for i, point in enumerate(E):
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
@@ -114,15 +114,15 @@ class SandSiltClay:
             if matrix_ratio < matrix_ratio_x:
                 phit = neu_den_xplot_poro_pt(point[0], point[1], 'ssc', True, A, B, C, D) if normalize else 0
                 vmatrix = 1 - phit
-                vsilt.append((matrix_ratio / matrix_ratio_x) * vmatrix)
-                vsand.append((1 - vsilt[i]) * vmatrix)
-                vcld.append(0)
+                vsilt = np.append(vsilt, (matrix_ratio / matrix_ratio_x) * vmatrix)
+                vsand = np.append(vsand, (1 - vsilt[i]) * vmatrix)
+                vcld = np.append(vcld, 0)
             else:
                 phit = neu_den_xplot_poro_pt(point[0], point[1], 'ssc', False, A, B, C, D) if normalize else 0
                 vmatrix = 1 - phit
-                vsand.append(0)
-                vsilt.append(((1 - matrix_ratio) * vmatrix) / (1 - matrix_ratio_x))
-                vcld.append((1 - vsilt[i]) * vmatrix)
+                vsand = np.append(vsand, 0)
+                vsilt = np.append(vsilt, ((1 - matrix_ratio) * vmatrix) / (1 - matrix_ratio_x))
+                vcld = np.append(vcld, (1 - vsilt[i]) * vmatrix)
 
         return vsand, vsilt, vcld
 
@@ -150,9 +150,9 @@ class SandSiltClay:
         sandsiltfrac = length_a_b(A, B)
         matrix_ratio_x = sandsiltfrac / rocklithofrac
 
-        vsand = []
-        vsilt = []
-        vcld = []
+        vsand = np.empty(0)
+        vsilt = np.empty(0)
+        vcld = np.empty(0)
         for i, point in enumerate(E):
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
@@ -160,16 +160,16 @@ class SandSiltClay:
             if matrix_ratio < matrix_ratio_x:
                 phit = neu_den_xplot_poro_pt(point[0], point[1], 'ssc', True, A, B, C, D) if normalize else 0
                 vmatrix = 1 - phit
-                vsand.append(((-projlithofrac / sandsiltfrac) + 1) * vmatrix)
-                vsilt.append(siltclayratio / sandsiltfrac * projlithofrac * vmatrix)
-                vcld.append(((1 - siltclayratio) / sandsiltfrac * projlithofrac) * vmatrix)
+                vsand = np.append(vsand, ((-projlithofrac / sandsiltfrac) + 1) * vmatrix)
+                vsilt = np.append(vsilt, siltclayratio / sandsiltfrac * projlithofrac * vmatrix)
+                vcld = np.append(vcld, ((1 - siltclayratio) / sandsiltfrac * projlithofrac) * vmatrix)
             else:
                 phit = neu_den_xplot_poro_pt(point[0], point[1], 'ssc', False, A, B, C, D) if normalize else 0
                 vmatrix = 1 - phit
-                vsand.append(0)
-                vsilt.append((-siltclayratio / claysiltfrac * projlithofrac + (
+                vsand = np.append(vsand, 0)
+                vsilt = np.append(vsilt, (-siltclayratio / claysiltfrac * projlithofrac + (
                     rocklithofrac * siltclayratio / claysiltfrac)) * vmatrix)
-                vcld.append((siltclayratio / claysiltfrac * projlithofrac + (
+                vcld = np.append(vcld, (siltclayratio / claysiltfrac * projlithofrac + (
                     1 - (siltclayratio * rocklithofrac / claysiltfrac))) * vmatrix)
 
         return vsand, vsilt, vcld
