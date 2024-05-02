@@ -37,6 +37,31 @@ class Project:
             self.add_well(well)
         self.update_history(action=f"Read LAS file for project {self.name}")
 
+    def get_all_data(self):
+        data = pd.DataFrame()
+        for well in self.data.values():
+            data = pd.concat([data, well.data])
+        return data
+
+    def update_all_data(self, data: pd.DataFrame):
+        for well in self.data.values():
+            well.add_data(data[data['WELL_NAME'] == well.name])
+        self.update_history(action=f"Updated all data in project {self.name}")
+
+    def get_well_names(self):
+        return list(self.data.keys())
+
+    def get_well_data(self, well_name: str):
+        return self.data[well_name].data
+
+    def update_well_data(self, well_name: str, data: pd.DataFrame):
+        self.data[well_name].add_data(data)
+        self.update_history(action=f"Updated data for well {well_name}")
+
+    def update_well_ressum(self, well_name: str, data: pd.DataFrame):
+        self.data[well_name].ressum = data
+        self.update_history(action=f"Updated ressum for well {well_name}")
+
     def save(self, name="", folder="data/04_project", ext=".qpp"):
         if not os.path.exists(folder):
             os.makedirs(folder)
@@ -65,9 +90,10 @@ class Well:
         self.modified_date = time
         self.header = {}
         self.data = pd.DataFrame()
+        self.ressum = pd.DataFrame()
         self.history = []
 
-    def add_data(self, data):
+    def add_data(self, data: pd.DataFrame):
         self.data = data
         self.update_history(action=f"Added data to well {self.name}")
 
