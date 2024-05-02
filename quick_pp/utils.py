@@ -14,12 +14,15 @@ def min_max_line(feature, alpha: float = 0.05):
     Returns:
         (float, float): Minimum and maximum line of a feature.
     """
+    # Fill missing values with the median
+    feature = np.where(np.isnan(feature), np.nanmedian(feature), feature)
     y = np.arange(0, len(feature))
     Y = sm.add_constant(y)
     modeltemp = sm.OLS(feature, Y).fit()
     prstd, min_line, max_line = wls_prediction_std(modeltemp, alpha=alpha)
-    min_line = min_line.to_numpy()
-    max_line = max_line.to_numpy()
+    if not isinstance(min_line, np.ndarray):
+        min_line = min_line.to_numpy()
+        max_line = max_line.to_numpy()
 
     return min_line, max_line
 

@@ -250,12 +250,12 @@ def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc', reservoir=True,
     D = fluid_point
     E = list(zip(nphi, rhob))
 
-    phit = []
+    phit = np.empty(0)
     for i, point in enumerate(E):
         if model == 'ssc':
-            phit.append(neu_den_xplot_poro_pt(point[0], point[1], 'ssc', reservoir, A, B, C, D))
+            phit = np.append(phit, neu_den_xplot_poro_pt(point[0], point[1], 'ssc', reservoir, A, B, C, D))
         else:
-            phit.append(neu_den_xplot_poro_pt(point[0], point[1], 'ss', reservoir, A, (0, 0), C, D))
+            phit = np.append(phit, neu_den_xplot_poro_pt(point[0], point[1], 'ss', reservoir, A, (0, 0), C, D))
 
     return phit
 
