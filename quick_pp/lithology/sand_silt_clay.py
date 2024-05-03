@@ -3,7 +3,6 @@ import math
 
 from ..utils import min_max_line, length_a_b, line_intersection
 from ..porosity import neu_den_xplot_poro_pt, clay_porosity
-from ..plotter import neutron_density_xplot
 from ..config import Config
 
 
@@ -27,7 +26,7 @@ class SandSiltClay:
         self.wet_clay_point = wet_clay_point or Config.SSC_ENDPOINTS["WET_CLAY_POINT"]
         self.silt_line_angle = silt_line_angle or Config.SSC_ENDPOINTS["SILT_LINE_ANGLE"]
 
-    def estimate_lithology(self, nphi, rhob, model: str = 'kuttan', xplot: bool = False, normalize: bool = True):
+    def estimate_lithology(self, nphi, rhob, model: str = 'kuttan', normalize: bool = True):
         """Estimate sand silt clay lithology volumetrics.
 
         Args:
@@ -42,7 +41,6 @@ class SandSiltClay:
         """
         assert model in ['kuttan', 'kuttan_modified'], f"'{model}' model is not available."
         # Initialize the endpoints
-        A = self.dry_sand_point
         B = self.dry_silt_point
         C = self.dry_clay_point
         D = self.fluid_point
@@ -78,11 +76,7 @@ class SandSiltClay:
         clay_phit = clay_porosity(rhob_max_line, C[1])
         vclb = vcld * clay_phit
 
-        if xplot:
-            fig = neutron_density_xplot(nphi, rhob, A, B, C, D, self.wet_clay_point)
-            return vsand, vsilt, vcld, vclb, fig
-        else:
-            return vsand, vsilt, vcld, vclb, None
+        return vsand, vsilt, vcld, vclb
 
     def lithology_fraction_kuttan(self, nphi, rhob, normalize: bool = True):
         """Estimate lithology volumetrics based on Kuttan's litho-porosity model.

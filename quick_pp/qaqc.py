@@ -167,7 +167,6 @@ def neu_den_xplot_hc_correction(
     Returns:
         (float, float): Corrected neutron porosity and bulk density.
     """
-    # TODO: Return HC flag
     A = dry_sand_point
     C = dry_clay_point
     D = fluid_point

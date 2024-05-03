@@ -2,7 +2,6 @@ import numpy as np
 
 from ..utils import min_max_line, length_a_b, line_intersection
 from ..porosity import neu_den_xplot_poro_pt
-from ..plotter import neutron_density_xplot
 from ..config import Config
 
 
@@ -18,7 +17,7 @@ class SandShale:
         self.wet_clay_point = wet_clay_point or Config.SSC_ENDPOINTS["WET_CLAY_POINT"]
         self.silt_line_angle = silt_line_angle or Config.SSC_ENDPOINTS["SILT_LINE_ANGLE"]
 
-    def estimate_lithology(self, nphi, rhob, xplot: bool = False):
+    def estimate_lithology(self, nphi, rhob):
         """Estimate lithology volumetrics based on neutron density cross plot.
 
         Args:
@@ -30,7 +29,6 @@ class SandShale:
             (float, float): vsand, vcld, cross-plot if xplot True else None
         """
         # Initialize the endpoints
-        A = self.dry_sand_point
         C = self.dry_clay_point
         D = self.fluid_point
 
@@ -52,11 +50,7 @@ class SandShale:
 
         vsand, vcld = self.lithology_fraction(nphi, rhob)
 
-        if xplot:
-            fig = neutron_density_xplot(nphi, rhob, A, (0, 0), C, D, self.wet_clay_point)
-            return vsand, vcld, fig
-        else:
-            return vsand, vcld, None
+        return vsand, vcld
 
     def lithology_fraction(self, nphi, rhob):
         """Estimate sand and shale based on neutron density cross plot.
