@@ -47,9 +47,6 @@ def line_intersection(line1, line2):
         line1 (tuple of tuples): ((x11, y11), (x12, y12))
         line2 (tuple of tuples): ((x22, y22), (x22, y22))
 
-    Raises:
-        Exception: If lines do not intersect.
-
     Returns:
         float, float: Cartesian coordinates of the intersection of two lines.
     """
@@ -61,7 +58,8 @@ def line_intersection(line1, line2):
 
     div = det(xdiff, ydiff)
     if div == 0:
-        raise Exception('lines do not intersect')
+        print(f'\r{line1} and {line2} lines do not intersect', end='')
+        return np.nan, np.nan
 
     d = (det(*line1), det(*line2))
     x = det(d, xdiff) / div

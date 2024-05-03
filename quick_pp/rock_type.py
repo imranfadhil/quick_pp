@@ -27,7 +27,7 @@ def rqi(k, phit):
     return (0.0314 * (k / phit)**0.5)
 
 
-def rock_flag(vclw):
+def rock_flagging(vclw):
     """Rock type classification based on clay bound water volume.
 
     Args:

@@ -136,7 +136,7 @@ def sonic_neutron_xplot():
     pass
 
 
-def plotly_log(df):  # noqa
+def plotly_log(df, depth_uom=""):  # noqa
     """Plot well logs using Plotly.
 
     Args:
@@ -363,7 +363,7 @@ def plotly_log(df):  # noqa
                      range=[-10, 10], type='linear', showgrid=False),
 
         # make room to display double x-axes
-        yaxis=dict(domain=[0, .9], title='DEPTH', showgrid=False),
+        yaxis=dict(domain=[0, .9], title=f'DEPTH ({depth_uom})', showgrid=False),
         yaxis2=dict(domain=[0, .9], visible=False, showgrid=False),
         yaxis3=dict(domain=[0, .9], visible=False, showgrid=False),
         yaxis4=dict(domain=[0, .9], visible=False, showgrid=False),
