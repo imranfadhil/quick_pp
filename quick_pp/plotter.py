@@ -404,15 +404,34 @@ def plotly_log(df, depth_uom=""):  # noqa
             'xanchor': 'center',
             'yanchor': 'top',
             'font_size': font_size + 4
-        },
-        hovermode='y unified',
-        template='none',
-        margin=dict(l=70, r=0, t=20, b=10),
-        paper_bgcolor='#e6f2ff',
-        hoverlabel_bgcolor='#F3F3F3'
+        }
     )
 
     fig.update_xaxes(fixedrange=True)
     fig.update_yaxes(matches='y', constrain='domain', autorange='reversed')
+
+    # Plot horizontal line marker
+    if 'ZONES' in df.columns:
+        tops_df = df[['DEPTH', 'ZONES']].reset_index()
+        zone_tops_idx = [0] + [idx for idx, (i, j) in enumerate(
+            zip(tops_df['ZONES'], tops_df['ZONES'][1:]), 1) if i != j]
+        zone_tops = tops_df.loc[zone_tops_idx, :]
+        if not zone_tops.empty:
+            for tops in zone_tops.values:
+                fig.add_shape(
+                    dict(type='line', x0=-5, y0=tops[1], x1=150, y1=tops[1]), row=1, col='all',
+                    line=dict(color='#763F98', dash='dot', width=1.5)
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        name=tops[2], x=[1.1, 1.1], y=[tops[1] - 1, tops[1] - 1],
+                        text=tops[2], mode='text', textfont=dict(color='#763F98', size=14), textposition='top right'
+                    ), row=1, col=2)
+
+    fig.update_layout(hovermode='y unified',
+                      template='none',
+                      margin=dict(l=70, r=0, t=20, b=10),
+                      paper_bgcolor='#e6f2ff',
+                      hoverlabel_bgcolor='#F3F3F3')
 
     return fig

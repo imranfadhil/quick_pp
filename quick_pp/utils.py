@@ -1,30 +1,51 @@
 import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+from scipy.signal import detrend
 import statsmodels.api as sm
 from statsmodels.sandbox.regression.predstd import wls_prediction_std
 import math
 
 
-def min_max_line(feature, alpha: float = 0.05):
+def min_max_line(feature, alpha: float = 0.05, num_bins: int = 1):
     """Calculates the minimum and maximum line of a feature.
 
     Args:
         feature (float): Input feature to calculate the minimum and maximum line.
         alpha (float, optional): Confidence interval. Defaults to 0.05.
+        num_bins (int, optional): Number of bins. Defaults to 1.
 
     Returns:
         (float, float): Minimum and maximum line of a feature.
     """
     # Fill missing values with the median
     feature = np.where(np.isnan(feature), np.nanmedian(feature), feature)
-    y = np.arange(0, len(feature))
-    Y = sm.add_constant(y)
-    modeltemp = sm.OLS(feature, Y).fit()
-    prstd, min_line, max_line = wls_prediction_std(modeltemp, alpha=alpha)
-    if not isinstance(min_line, np.ndarray):
-        min_line = min_line.to_numpy()
-        max_line = max_line.to_numpy()
 
-    return min_line, max_line
+    # Redefine the bins
+    window = int(len(feature) / num_bins)
+    bins = np.arange(0, len(feature), window)
+    bins = np.append(bins, len(feature))
+
+    min_lines = np.empty(0)
+    max_lines = np.empty(0)
+    # Enumerate over the bins
+    for i, bin in enumerate(bins[:-1]):
+        data = feature[bin: bins[i+1]]
+        y = np.arange(0, len(data))
+        if y.size > 0:
+            Y = sm.add_constant(y)
+            modeltemp = sm.OLS(data, Y).fit()
+            prstd, min_line, max_line = wls_prediction_std(modeltemp, alpha=alpha)
+            if not isinstance(min_line, np.ndarray):
+                min_line = min_line.to_numpy()
+                max_line = max_line.to_numpy()
+            min_lines = np.append(min_lines, min_line)
+            max_lines = np.append(max_lines, max_line)
+        else:
+            min_lines = np.append(min_lines, np.nan)
+            max_lines = np.append(max_lines, np.nan)
+
+    return min_lines, max_lines
 
 
 def length_a_b(A: tuple, B: tuple):
@@ -66,3 +87,53 @@ def line_intersection(line1, line2):
     y = det(d, ydiff) / div
 
     return x, y
+
+
+def sand_flagging(df: pd.DataFrame):
+    """Flagging sand zones based on VSHALE, VCLW, and VSH_GR.
+
+    Returns:
+        pd.DataFrame: Original DataFrame with SAND_FLAG and ZONES columns.
+    """
+
+    if 'ZONES' not in df.columns:
+        df['ZONES'] = 'FORMATION'
+    else:
+        df['ZONES'].fillna('FORMATION', inplace=True)
+
+    return_df = pd.DataFrame()
+    for well_name, well_data in df.groupby('WELL_NAME'):
+        # Using VSH_GR
+        dtr_gr = detrend(well_data[['GR']].fillna(well_data['GR'].median()), axis=0) + well_data['GR'].mean()
+        well_data['VSH_GR'] = MinMaxScaler().fit_transform(dtr_gr)
+        threshold = np.nanquantile(well_data['VSH_GR'], .75, method='median_unbiased')
+
+        # Estimate SAND_FLAG using VSH_GR
+        well_data['SAND_FLAG'] = np.where(
+            well_data['VSH_GR'].rolling(50, center=True, closed='both').mean() < threshold, 1, 0)
+        well_data['SAND_FLAG'] = np.where(
+            well_data['SAND_FLAG'].rolling(13, win_type='boxcar', closed='left').mean() > 0.5, 1, 0)
+
+        # Fill in empty ZONES
+        no_zones_df = well_data[well_data['ZONES'] == 'FORMATION'].copy()
+        if not no_zones_df.empty:
+            # Assign generic ZONES
+            df_temp = pd.DataFrame()
+            sand_counter = 1
+            shale_counter = 0
+            for i, data in no_zones_df.iterrows():
+                if data['SAND_FLAG'] == 1 and shale_counter == 1:
+                    sand_counter += 1
+                    shale_counter = 0
+                if data['SAND_FLAG'] == 1:
+                    data['ZONES'] = f'SAND_{sand_counter}'
+                else:
+                    data['ZONES'] = f'SAND_{sand_counter}'
+                    shale_counter = 1
+                df_temp = pd.concat([df_temp, pd.DataFrame(data[['DEPTH', 'SAND_FLAG', 'ZONES']]).T], axis=0)
+            df_temp.reset_index(drop=True, inplace=True)
+            well_data.loc[well_data['DEPTH'].isin(df_temp['DEPTH']), 'ZONES'] = df_temp['ZONES']
+
+        return_df = pd.concat([return_df, well_data], ignore_index=True)
+
+    return return_df

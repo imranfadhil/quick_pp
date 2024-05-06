@@ -185,7 +185,7 @@ def neu_den_xplot_hc_correction(
             shi = 0
             nphi_corr = point[0]
             rhob_corr = point[1]
-            while vsh_dn < point[2] and not np.isnan(point[2]):
+            while vsh_dn <= point[2] and not np.isnan(point[2]):
                 nphi_corr = point[0] + shi * np.sin(np.radians(corr_angle))
                 rhob_corr = point[1] + shi * np.cos(np.radians(corr_angle))
                 shi += 0.01
