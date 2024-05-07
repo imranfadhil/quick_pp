@@ -3,7 +3,6 @@ import math
 
 from ..utils import min_max_line, length_a_b, line_intersection
 from ..porosity import neu_den_xplot_poro_pt, clay_porosity
-from ..plotter import neutron_density_xplot
 from ..config import Config
 
 
@@ -18,7 +17,7 @@ class SandSiltClay:
      original PCSB model."""
 
     def __init__(self, dry_sand_point: tuple = None, dry_silt_point: tuple = None, dry_clay_point: tuple = None,
-                 fluid_point: tuple = None, wet_clay_point: tuple = None, silt_line_angle: float = None):
+                 fluid_point: tuple = None, wet_clay_point: tuple = None, silt_line_angle: float = None, **kwargs):
         # Initialize the endpoints
         self.dry_sand_point = dry_sand_point or Config.SSC_ENDPOINTS["DRY_SAND_POINT"]
         self.dry_silt_point = dry_silt_point or Config.SSC_ENDPOINTS["DRY_SILT_POINT"]
@@ -27,7 +26,7 @@ class SandSiltClay:
         self.wet_clay_point = wet_clay_point or Config.SSC_ENDPOINTS["WET_CLAY_POINT"]
         self.silt_line_angle = silt_line_angle or Config.SSC_ENDPOINTS["SILT_LINE_ANGLE"]
 
-    def estimate_lithology(self, nphi, rhob, model: str = 'kuttan', xplot: bool = False, normalize: bool = True):
+    def estimate_lithology(self, nphi, rhob, model: str = 'kuttan', normalize: bool = True):
         """Estimate sand silt clay lithology volumetrics.
 
         Args:
@@ -48,8 +47,8 @@ class SandSiltClay:
         D = self.fluid_point
 
         # Redefine wetclay point
-        _, rhob_max_line = min_max_line(rhob, 0.05)
-        _, nphi_max_line = min_max_line(nphi, 0.05)
+        _, rhob_max_line = min_max_line(rhob, 0.1, num_bins=1)
+        _, nphi_max_line = min_max_line(nphi, 0.1, num_bins=1)
         wetclay_RHOB = np.nanmin(rhob_max_line)
         wetclay_NPHI = np.nanmax(nphi_max_line)
         if not all(self.wet_clay_point):
@@ -64,9 +63,14 @@ class SandSiltClay:
 
         # Define dryclay point
         if not all(C):
-            m = (D[1] - self.wet_clay_point[1]) / (D[0] - self.wet_clay_point[0])
-            dryclay_NPHI = ((C[1] - D[1]) / m) + D[0]
-            C = self.dry_clay_point = (dryclay_NPHI, C[1])
+            # # Calculate dryclay_NPHI given dryclay_RHOB
+            # m = (D[1] - self.wet_clay_point[1]) / (D[0] - self.wet_clay_point[0])
+            # dryclay_NPHI = ((C[1] - D[1]) / m) + D[0]
+            # C = self.dry_clay_point = (dryclay_NPHI, C[1])
+
+            # Calculate dryclay point, the intersection between rock line and clay line
+            updated_drysilt_pt = (B[0], np.nanmax(rhob))
+            C = self.dry_clay_point = line_intersection((A, updated_drysilt_pt), (D, self.wet_clay_point))
         # print(f'#### dryclay_pt: {C}, {m}')
 
         if model == 'kuttan':
@@ -75,14 +79,10 @@ class SandSiltClay:
             vsand, vsilt, vcld = self.lithology_fraction_kuttan_modified(nphi, rhob, normalize)
 
         # Calculate vclb: volume of clay bound water
-        clay_phit = clay_porosity(rhob_max_line, C[1])
+        clay_phit = clay_porosity(rhob, C[1])
         vclb = vcld * clay_phit
 
-        if xplot:
-            fig = neutron_density_xplot(nphi, rhob, A, B, C, D, self.wet_clay_point)
-            return vsand, vsilt, vcld, vclb, fig
-        else:
-            return vsand, vsilt, vcld, vclb, None
+        return vsand, vsilt, vcld, vclb, (nphi_max_line, rhob_max_line)
 
     def lithology_fraction_kuttan(self, nphi, rhob, normalize: bool = True):
         """Estimate lithology volumetrics based on Kuttan's litho-porosity model.

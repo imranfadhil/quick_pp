@@ -68,7 +68,7 @@ class Carbonate:
             if method == 'neu_den':
                 vcalc, vdolo = self.lithology_fraction_neu_den(nphi, rhob, model='double', normalize=normalize)
             else:
-                assert(pef is not None), "PEF log is required for 'den_pef' method."
+                assert pef is not None, "PEF log is required for 'den_pef' method."
                 vcalc, vdolo = self.lithology_fraction_pef(pef, rhob, normalize=normalize)
             vcalc = vcalc*(1 - vcld)
             vdolo = vdolo*(1 - vcld)

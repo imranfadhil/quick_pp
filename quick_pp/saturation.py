@@ -1,4 +1,6 @@
 import numpy as np
+import pandas as pd
+from quick_pp.utils import min_max_line
 
 
 def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
@@ -178,7 +180,45 @@ def estimate_rw_archie(phit, rt, a=1, m=2):
     Returns:
         float: Formation water resistivity.
     """
-    return phit**m * rt / a
+    rw = pd.Series(phit**m * rt / a)
+    _, rw = min_max_line(rw, alpha=0.2)
+    return rw
+
+
+def estimate_rw_waxman_smits(phit, rt, a=1, m=2, B=None, Qv=None):
+    """Estimate water saturation based on Archie's equation.
+
+    Args:
+        phit (float): Total porosity.
+        rt (float): True resistivity.
+
+    Returns:
+        float: Formation water resistivity.
+    """
+    if B is None:
+        B = 2
+    if Qv is None:
+        Qv = 0.3
+
+    rw = pd.Series(1 / ((a / phit**m * rt) - (B * Qv)))
+    _, rw = min_max_line(rw, alpha=0.2)
+    return rw
+
+
+def estimate_rt_water_trend(rt, alpha=0.3, num_bins=1):
+    """Estimate trend RT of formation water based.
+
+    Args:
+        rt (float): True resistivity.
+        sand_flag (int): Sand flag.
+
+    Returns:
+        float: Formation water resistivity.
+    """
+    rt = np.log(rt)
+    rt = np.where(rt <= 0, 1e-3, rt)
+    min_rt, _ = min_max_line(rt, alpha, num_bins=num_bins)
+    return np.exp(min_rt)
 
 
 def estimate_qv(vcld, phit, rho_clay=2.65, cec_clay=.062):
