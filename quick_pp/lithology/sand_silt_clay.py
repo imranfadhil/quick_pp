@@ -17,7 +17,7 @@ class SandSiltClay:
      original PCSB model."""
 
     def __init__(self, dry_sand_point: tuple = None, dry_silt_point: tuple = None, dry_clay_point: tuple = None,
-                 fluid_point: tuple = None, wet_clay_point: tuple = None, silt_line_angle: float = None):
+                 fluid_point: tuple = None, wet_clay_point: tuple = None, silt_line_angle: float = None, **kwargs):
         # Initialize the endpoints
         self.dry_sand_point = dry_sand_point or Config.SSC_ENDPOINTS["DRY_SAND_POINT"]
         self.dry_silt_point = dry_silt_point or Config.SSC_ENDPOINTS["DRY_SILT_POINT"]

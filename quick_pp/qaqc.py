@@ -43,6 +43,10 @@ def badhole_flag(df, thold=4):
     import scipy.stats
     from scipy.signal import find_peaks
 
+    if 'CALI' not in df.columns:
+        df['BADHOLE'] = 0
+        return df
+
     def reject_outliers(data, m=3):
         data = np.where((data > 8.5) & (data < 21.5), data, np.nan)
         d = np.abs(data - np.nanmedian(data))
@@ -112,15 +116,18 @@ def badhole_flag(df, thold=4):
 
         return_df = pd.concat([return_df, well_data])
 
-    bitsize = np.where(return_df.BS.notna(), return_df.BS, return_df.ESTIMATED_BITSIZE)
-    return_df['BS'] = bitsize
-    absdiff = np.where(return_df.CALI.notna(), abs(return_df.CALI - bitsize), 0)
-    return_df['BADHOLE'] = np.where(absdiff < thold, 0, 1)
+    if not return_df.empty:
+        bitsize = np.where(return_df.BS.notna(), return_df.BS, return_df.ESTIMATED_BITSIZE)
+        return_df['BS'] = bitsize
+        absdiff = np.where(return_df.CALI.notna(), abs(return_df.CALI - bitsize), 0)
+        return_df['BADHOLE'] = np.where(absdiff < thold, 0, 1)
 
-    # Drop BIN and ESTIMATED_BITSIZE
-    return_df.drop(['BIN', 'ESTIMATED_BITSIZE'], axis=1, inplace=True)
+        # Drop BIN and ESTIMATED_BITSIZE
+        return_df.drop(['BIN', 'ESTIMATED_BITSIZE'], axis=1, inplace=True)
 
-    return return_df
+        return return_df
+    else:
+        return df
 
 
 def porosity_correction_averaging(nphi, dphi, method='weighted'):
@@ -152,7 +159,7 @@ def neu_den_xplot_hc_correction(
         dry_sand_point: tuple = None,
         dry_clay_point: tuple = None,
         fluid_point: tuple = (1.0, 1.0),
-        corr_angle: float = 50):
+        corr_angle: float = 50, buffer=0.0):
     """Estimate correction for neutron porosity and bulk density based on correction angle.
 
     Args:
@@ -163,6 +170,7 @@ def neu_den_xplot_hc_correction(
         dry_clay_point (tuple, optional): Neutron porosity and bulk density of dry clay point. Defaults to None.
         fluid_point (tuple, optional): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
         corr_angle (float, optional): Correction angle (degree) from east horizontal line. Defaults to 50.
+        buffer (float, optional): Buffer to be included in correction. Defaults to 0.0.
 
     Returns:
         (float, float): Corrected neutron porosity and bulk density.
@@ -172,28 +180,29 @@ def neu_den_xplot_hc_correction(
     D = fluid_point
     rocklithofrac = length_a_b(A, C)
 
-    frac_vsh_gr = gr_index(gr) * rocklithofrac
+    frac_vsh_gr = gr_index(gr)
     nphi_corrected = np.empty(0)
     rhob_corrected = np.empty(0)
     hc_flag = np.empty(0)
     for i, point in enumerate(list(zip(nphi, rhob, frac_vsh_gr))):
         var_pt = line_intersection((A, C), (D, (point[0], point[1])))
-        projlithofrac = length_a_b(var_pt, C)
+        projlithofrac = length_a_b(var_pt, C) + buffer
         if projlithofrac > rocklithofrac:
             # Iteration until vsh_dn = vsh_gr
-            vsh_dn = rocklithofrac - projlithofrac
-            shi = 0
+            vsh_dn = 1 - (projlithofrac / rocklithofrac)
             nphi_corr = point[0]
             rhob_corr = point[1]
-            while vsh_dn <= point[2] and not np.isnan(point[2]):
+            shi = 0
+            count = 0
+            while vsh_dn <= point[2] and not np.isnan(point[2]) and count < 100:
                 nphi_corr = point[0] + shi * np.sin(np.radians(corr_angle))
                 rhob_corr = point[1] + shi * np.cos(np.radians(corr_angle))
                 shi += 0.01
+                count += 1
                 # Recalculate vsh_dn
                 var_pt = line_intersection((A, C), (D, (nphi_corr, rhob_corr)))
                 projlithofrac = length_a_b(var_pt, C)
-                new_vsh_dn = projlithofrac / rocklithofrac
-                vsh_dn = new_vsh_dn if 0 < new_vsh_dn < 1 else rocklithofrac - projlithofrac
+                vsh_dn = 1 - (projlithofrac / rocklithofrac)
 
             nphi_corrected = np.append(nphi_corrected, nphi_corr)
             rhob_corrected = np.append(rhob_corrected, rhob_corr)
