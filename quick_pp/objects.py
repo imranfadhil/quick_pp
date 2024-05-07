@@ -5,6 +5,7 @@ import pickle
 import os
 
 import quick_pp.las_handler as las
+from quick_pp.config import Config
 
 
 class Project(object):
@@ -15,7 +16,9 @@ class Project(object):
         self.history = []
         self.project_path = project_path or os.path.join("data", "04_project")
         self.data_path = os.path.join(self.project_path, self.name)
+        self.output_path = os.path.join(self.data_path, "outputs")
         os.makedirs(self.data_path, exist_ok=True)
+        os.makedirs(self.output_path, exist_ok=True)
 
     def read_las(self, path: list):
         for file in path:
@@ -48,10 +51,15 @@ class Project(object):
     def get_well(self, well_name: str):
         return Well().load(self.data[well_name])
 
-    def export_all_data(self, path):
-        path = path if path.endswith(".parquet") else f"{path}.parquet"
+    def export_all_to_parquet(self):
+        path = os.path.join(self.output_path, f"{self.name}.parquet")
         data = self.get_all_data()
         data.to_parquet(path)
+
+    def export_all_to_las(self):
+        data = self.get_all_data()
+        for well_name, well_data in data.groupby("WELL_NAME"):
+            las.export_to_las(well_data=well_data, well_name=well_name, folder=self.output_path)
 
     def save_well(self, well):
         well_path = os.path.join(self.data_path, f"{well.name}.qppw")
@@ -77,16 +85,46 @@ class Project(object):
         return f"Project: {self.name} - {self.description}"
 
 
+class WellConfig(object):
+    litho_model: str = "ssc"
+    dry_sand_point: tuple = Config.SSC_ENDPOINTS["DRY_SAND_POINT"]
+    dry_silt_point: tuple = Config.SSC_ENDPOINTS["DRY_SILT_POINT"]
+    dry_clay_point: tuple = Config.SSC_ENDPOINTS["DRY_CLAY_POINT"]
+    wet_clay_point: tuple = Config.SSC_ENDPOINTS["WET_CLAY_POINT"]
+    fluid_point: tuple = Config.SSC_ENDPOINTS["FLUID_POINT"]
+    dry_calc_point: tuple = Config.CARB_NEU_DEN_ENDPOINTS["DRY_CALC_POINT"]
+    dry_dolo_point: tuple = Config.CARB_NEU_DEN_ENDPOINTS["DRY_DOLO_POINT"]
+    silt_line_angle: float = Config.SSC_ENDPOINTS["SILT_LINE_ANGLE"]
+    sw_water_salinity: int = 6000
+    sw_m: float = 2.0
+    hc_corr_angle: int = 50
+    hc_buffer: float = 0.0
+    ressum_cutoffs: dict = Config.RESSUM_CUTOFFS
+
+    def update(self, config: dict):
+        for key, value in config.items():
+            setattr(self, key, value)
+
+    def __setattr__(self, name, value):
+        if hasattr(self, name):
+            # Allow modification of existing attributes
+            super().__setattr__(name, value)
+        else:
+            # Prevent adding new attributes
+            raise AttributeError(f"Cannot add new attribute '{name}' to instances of {self.__class__.__name__}")
+
+
 class Well(object):
+    header: pd.DataFrame = pd.DataFrame()
+    data: pd.DataFrame = pd.DataFrame()
+    ressum: pd.DataFrame = pd.DataFrame()
+    depth_uom: str = ""
+    config: WellConfig = WellConfig()
+    history: list = []
+
     def __init__(self, name="", description=""):
         self.name = name
         self.description = description
-        self.header = pd.DataFrame()
-        self.data = pd.DataFrame()
-        self.ressum = pd.DataFrame()
-        self.depth_uom = ""
-        self.config = {}
-        self.history = []
 
     def read_las(self, path: str):
         with open(path, "rb") as f:
@@ -111,10 +149,14 @@ class Well(object):
         self.config.update(config)
         self.update_history(action=f"Updated config for well {self.name}")
 
-    def export_data(self, name="", folder="data/02_intermediate", ext=".parquet"):
+    def export_to_parquet(self, folder=os.path.join("data", "04_project", "outputs")):
         os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, f"{name}{ext}" if name else f"{self.name}.parquet")
+        path = os.path.join(folder, f"{self.name}.parquet")
         self.data.to_parquet(path)
+
+    def export_to_las(self, folder=os.path.join("data", "04_project", "outputs")):
+        os.makedirs(folder, exist_ok=True)
+        las.export_to_las(well_data=self.data, well_name=self.name, folder=folder)
 
     def save(self, path, notes=""):
         path = path if path.endswith(".qppw") else f"{path}.qppw"

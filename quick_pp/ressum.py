@@ -5,7 +5,7 @@ import random
 from scipy.stats import truncnorm
 
 
-def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs: list = [], uom: str = 'ft'):
+def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs: dict, uom: str = 'ft'):
     """Calculate reservoir summary based on cutoffs on vshale, phit, and swt.
 
     Args:
@@ -64,7 +64,7 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs: list 
     return ressum_df[cols]
 
 
-def flag_interval(vshale, phit, swt, cutoffs: list = []):
+def flag_interval(vshale, phit, swt, cutoffs: dict):
     """Flag interval based on cutoffs.
 
     Args:
@@ -76,10 +76,10 @@ def flag_interval(vshale, phit, swt, cutoffs: list = []):
     Returns:
         float: Flagged interval.
     """
-    assert len(cutoffs) == 3, 'cutoffs must be a list of 3 values: [vshale, phit, swt].'
-    rock_flag = np.where(vshale < cutoffs[0], 1, 0)
-    reservoir_flag = np.where(rock_flag == 1, np.where(phit > cutoffs[1], 1, 0), 0)
-    pay_flag = np.where(reservoir_flag == 1, np.where(swt < cutoffs[2], 1, 0), 0)
+    assert len(cutoffs) == 3, 'cutoffs must be 3 key-value pairs: {VSHALE: , PHIT: , SWT: }.'
+    rock_flag = np.where(vshale < cutoffs['VSHALE'], 1, 0)
+    reservoir_flag = np.where(rock_flag == 1, np.where(phit > cutoffs['PHIT'], 1, 0), 0)
+    pay_flag = np.where(reservoir_flag == 1, np.where(swt < cutoffs['SWT'], 1, 0), 0)
 
     return rock_flag, reservoir_flag, pay_flag
 

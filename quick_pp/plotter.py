@@ -46,7 +46,7 @@ def neutron_density_xplot(nphi, rhob,
                           dry_silt_point: tuple,
                           dry_clay_point: tuple,
                           fluid_point: tuple,
-                          wet_clay_point: tuple):
+                          wet_clay_point: tuple, **kwargs):
     """Neutron-Density crossplot with lithology lines based on specified end points.
 
     Args:

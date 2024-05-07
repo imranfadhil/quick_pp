@@ -1,5 +1,6 @@
 import re
 import lasio
+import os
 import numpy as np
 import pandas as pd
 import mmap
@@ -301,7 +302,7 @@ def resample_depth(welly_object, step_depth=0.5):
     return return_df
 
 
-def export_to_las(well_data, well_name):
+def export_to_las(well_data, well_name, folder=''):
     """Export dataframe to las file.
 
     Args:
@@ -313,7 +314,8 @@ def export_to_las(well_data, well_name):
     well_data['DEPT'] = well_data['DEPTH']
     well_data.set_index('DEPT', inplace=True, drop=True)
     w = welly.Well().from_df(well_data, units=units, name=well_name)
-    w.to_las(f'{well_name}.las')
+    well_path = os.path.join(folder, f"{well_name}.las")
+    w.to_las(well_path)
 
 
 if __name__ == '__main__':
