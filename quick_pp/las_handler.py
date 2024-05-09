@@ -177,7 +177,8 @@ def pre_process(welly_object):
 
     well_name = header_df[
         (header_df['mnemonic'] == 'WELL') | (header_df['descr'].str.upper() == 'WELL')]['value'].values[0]
-    data_df.insert(0, 'WELL_NAME', well_name)
+    if 'WELL_NAME' not in data_df.columns:
+        data_df.insert(0, 'WELL_NAME', well_name)
 
     return data_df
 
@@ -204,8 +205,9 @@ def extract_dataset(section_dict):
             data_bytes = data_bytes + v
 
     file_object = header_bytes.decode('Windows-1252') + data_bytes.decode('Windows-1252')
-    las_object = lasio.read(file_object)
+    las_object = lasio.read(file_object, read_policy=())
 
+    # Fix las_object
     df = las_object.df()
     df = df.apply(pd.to_numeric, errors='coerce')
     las_object.set_data_from_df(df)
@@ -246,13 +248,39 @@ def concat_datasets(file_object, header_line_numbers, parameter_line_numbers, re
             else:
                 temp_file_object = file_object[pointer:].decode('Windows-1252')
             temp_file_object = well_info + temp_file_object
-            las_object = lasio.read(temp_file_object)
+            las_object = lasio.read(temp_file_object, read_policy=())
+
+            # Fix las_object
+            df = las_object.df()
+            df = df.apply(pd.to_numeric, errors='coerce')
+            las_object.set_data_from_df(df)
+
             welly_object = welly.Well.from_lasio(las_object)
             temp_well_df = pre_process(welly_object)
             well_df = pd.concat([well_df, temp_well_df], axis=1)
             header_df = welly_object.header
 
     return well_df, header_df, welly_object
+
+
+def check_index_consistent(welly_object):
+    """Check if index is consistent in welly_object
+
+    Args:
+        welly_object (object): Welly object
+
+    Returns:
+        bool: True if index is consistent
+    """
+    try:
+        index_diff = np.diff(welly_object.las[0].index)
+        if all(index_diff == index_diff[0]) and all(index_diff > 0):
+            return True
+        else:
+            return False
+    except Exception as e:
+        print(f"[las_handler] `check_index_consistent` Error | {e}")
+        return False
 
 
 def resample_depth(welly_object, step_depth=0.5):
@@ -265,34 +293,37 @@ def resample_depth(welly_object, step_depth=0.5):
     Returns:
         pd.DataFrame: Resampled dataframe
     """
-    return_df = welly_object.df()
-    for i, curve_name in enumerate(list(welly_object.data.keys())):
-        pre_curve = welly_object.data[curve_name]
-        if pre_curve.index_units and pre_curve.index_units.lower() in ['metres', 'm']:
-            pre_curve.df.index = welly.well._convert_depth_index_units(pre_curve.index, unit_from='m', unit_to='ft')
-            pre_curve.index_units = 'ft'
+    if check_index_consistent(welly_object):
+        for i, curve_name in enumerate(list(welly_object.data.keys())):
+            pre_curve = welly_object.data[curve_name]
+            if pre_curve.index_units and pre_curve.index_units.lower() in ['metres', 'm']:
+                pre_curve.df.index = welly.well._convert_depth_index_units(pre_curve.index, unit_from='m', unit_to='ft')
+                pre_curve.index_units = 'ft'
 
-        # Set new start if not 0.5
-        new_start = pre_curve.start
-        if np.mod(new_start, 0.5) != 0:
-            new_start = np.round((new_start * 2)) / 2
+            # Set new start if not 0.5
+            new_start = pre_curve.start
+            if np.mod(new_start, 0.5) != 0:
+                new_start = np.round((new_start * 2)) / 2
 
-        # Set the new stop of depth.
-        new_stop = pre_curve.start + (
-            step_depth * np.ceil((pre_curve.stop - pre_curve.start) / step_depth)
-        )
+            # Set the new stop of depth.
+            new_stop = pre_curve.start + (
+                step_depth * np.ceil((pre_curve.stop - pre_curve.start) / step_depth)
+            )
+            new_curve = pre_curve.to_basis(start=new_start, stop=new_stop, step=step_depth)
+            new_curve = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
+            # Create new dataframe when first loop.
+            if i == 0:
+                new_clips_df = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
+            # Merge new dataframe with the previous loop.
+            else:
+                new_curve_df = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
+                new_clips_df = pd.merge(new_clips_df, new_curve_df, left_index=True, right_index=True)
 
-        new_curve = pre_curve.to_basis(start=new_start, stop=new_stop, step=step_depth)
-        new_curve = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
-        # Create new dataframe when first loop.
-        if i == 0:
-            new_clips_df = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
-        # Merge new dataframe with the previous loop.
-        else:
-            new_curve_df = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
-            new_clips_df = pd.merge(new_clips_df, new_curve_df, left_index=True, right_index=True)
+        return_df = new_clips_df.copy()
 
-    return_df = new_clips_df.copy()
+    else:
+        return_df = welly_object.las[0]
+
     # Convert index 'DEPTH' as column
     if "DEPTH" in return_df.columns:
         return_df.set_index('DEPTH', inplace=True)
