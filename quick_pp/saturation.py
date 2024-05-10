@@ -125,12 +125,6 @@ def modified_simandoux_saturation(sw, a, m, n):
     pass
 
 
-def saturation_height_function():
-    """TODO: Saturation height function.
-    """
-    pass
-
-
 def estimate_temperature_gradient(tvd, unit='metric'):
     """Estimate formation temperature based on gradient of 25 degC/km or 15 degF/1000ft.
 
