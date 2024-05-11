@@ -21,13 +21,13 @@ COLOR_DICT = {
     'GR': '#0000FF',
     'NPHI': '#0000FF',
     'PERFORATED': '#E20000',
-    'PERM': '#FF0000',
-    'PHIT': '#FF0000',
+    'PERM': '#262626',
+    'PHIT': '#262626',
     'PHIE': '#0000FF',
     'RHOB': '#FF0000',
     'RT': '#FF0000',
     'PEF': '#ba55d3',
-    'SWT': '#FF0000',
+    'SWT': '#262626',
     'SWE': '#0000FF',
     'VCLW': '#BFBFBF',
     'VCOAL': '#000000',
@@ -38,6 +38,10 @@ COLOR_DICT = {
     'VSILT': '#FE9800',
     'VCALC': '#b0e0e6',
     'VDOLO': '#ba55d3',
+    'CPORE': '#FF0000',
+    'CPERM': '#FF0000',
+    'CSAT': '#FF0000',
+    'SHF': '#618F63',
 }
 
 
@@ -136,21 +140,22 @@ def sonic_neutron_xplot():
     pass
 
 
-def plotly_log(df, depth_uom=""):  # noqa
+def plotly_log(well_data, depth_uom=""):  # noqa
     """Plot well logs using Plotly.
 
     Args:
-        df (pandas.Datafraem): Pandas dataframe containing well log data.
+        well_data (pandas.Datafraem): Pandas dataframe containing well log data.
 
     Returns:
         plotly.graph_objects.Figure: Return well plot.
     """
     track = 7
+    df = well_data.copy()
     index = df.DEPTH
 
     for k, v in COLOR_DICT.items():
         if k not in df.columns:
-            df[k] = 0
+            df[k] = np.nan
 
     fig = make_subplots(rows=1, cols=track, shared_yaxes=True, horizontal_spacing=0.02,
                         specs=[list([{'secondary_y': True}]*track)])
@@ -198,12 +203,12 @@ def plotly_log(df, depth_uom=""):  # noqa
     fig.data[7].update(xaxis='x8')
 
     # Add PHIE trace #9.
-    fig.add_trace(go.Scatter(x=df['PHIE'], y=index, name='PHIE', line_color=COLOR_DICT['PHIE']),
+    fig.add_trace(go.Scatter(x=df['PHIE'], y=index, name='PHIE', line_color=COLOR_DICT['PHIE'], line_dash='dot'),
                   row=1, col=4, secondary_y=True)
     fig.data[8].update(xaxis='x9')
 
     # Add SWE trace #10.
-    fig.add_trace(go.Scatter(x=df['SWE'], y=index, name='SWE', line_color=COLOR_DICT['SWE']),
+    fig.add_trace(go.Scatter(x=df['SWE'], y=index, name='SWE', line_color=COLOR_DICT['SWE'], line_dash='dot'),
                   row=1, col=6, secondary_y=True)
     fig.data[9].update(xaxis='x10')
 
@@ -296,7 +301,30 @@ def plotly_log(df, depth_uom=""):  # noqa
                   row=1, col=3, secondary_y=True)
     fig.data[20].update(xaxis='x21')
 
-    i = 21
+    # Add CPORE trace #22.
+    fig.add_trace(go.Scatter(x=df['CPORE'], y=index, name='CPORE', mode='markers',
+                             marker=dict(color=COLOR_DICT['CPORE'], size=7)),
+                  row=1, col=4, secondary_y=True)
+    fig.data[21].update(xaxis='x22')
+
+    # Add CPERM trace #23.
+    fig.add_trace(go.Scatter(x=df['CPERM'], y=index, name='CPERM', mode='markers',
+                             marker=dict(color=COLOR_DICT['CPERM'], size=7)),
+                  row=1, col=5, secondary_y=True)
+    fig.data[22].update(xaxis='x23')
+
+    # Add CSAT trace #24.
+    fig.add_trace(go.Scatter(x=df['CSAT'], y=index, name='CSAT', mode='markers',
+                             marker=dict(color=COLOR_DICT['CSAT'], size=7)),
+                  row=1, col=6, secondary_y=True)
+    fig.data[23].update(xaxis='x24')
+
+    # Add SHF trace #24.
+    fig.add_trace(go.Scatter(x=df['SHF'], y=index, name='SHF', line_color=COLOR_DICT['SHF'], line_dash='dashdot'),
+                  row=1, col=6, secondary_y=True)
+    fig.data[24].update(xaxis='x25')
+
+    i = 25
     # Add COAL_FLAG trace.
     for c in [4, 5, 6, 7]:
         fig.add_trace(go.Scatter(x=df['COAL_FLAG'], y=index, name='', line_color=COLOR_DICT['COAL_FLAG'],
@@ -305,7 +333,7 @@ def plotly_log(df, depth_uom=""):  # noqa
         fig.data[i].update(xaxis=f'x{i + 1}')
         i += 1
 
-    font_size = 9
+    font_size = 8
     fig.update_layout(
         xaxis1=dict(title='GR', titlefont=dict(color=COLOR_DICT['GR'], size=font_size),
                     tickfont=dict(color=COLOR_DICT['GR'], size=font_size), side='top', anchor='free', position=.9,
@@ -323,7 +351,7 @@ def plotly_log(df, depth_uom=""):  # noqa
                     dtick=0.1, range=[0, 0.5], type='linear'),
         xaxis5=dict(title='PERM', titlefont=dict(color=COLOR_DICT['PERM'], size=font_size),
                     tickfont=dict(color=COLOR_DICT['PERM'], size=font_size),
-                    side='top', anchor='free', position=.9, title_standoff=.1,
+                    side='top', anchor='free', position=.92, title_standoff=.1,
                     range=[np.log10(0.1), np.log10(10000)], type='log'),
         xaxis6=dict(title='SWT', titlefont=dict(color=COLOR_DICT['SWT'], size=font_size),
                     tickfont=dict(color=COLOR_DICT['SWT'], size=font_size),
@@ -361,6 +389,22 @@ def plotly_log(df, depth_uom=""):  # noqa
                      tickfont=dict(color=COLOR_DICT['PEF'], size=font_size), zeroline=False,
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x3',
                      range=[-10, 10], type='linear', showgrid=False),
+        xaxis22=dict(title='CPORE', titlefont=dict(color=COLOR_DICT['CPORE'], size=font_size),
+                     tickfont=dict(color=COLOR_DICT['CPORE'], size=font_size), zeroline=False,
+                     side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x4',
+                     dtick=0.1, range=[0, .5], type='linear', showgrid=False),
+        xaxis23=dict(title='CPERM', titlefont=dict(color=COLOR_DICT['CPERM'], size=font_size),
+                     tickfont=dict(color=COLOR_DICT['CPERM'], size=font_size), zeroline=False,
+                     side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x5',
+                     range=[np.log10(0.1), np.log10(10000)], type='log', showgrid=False),
+        xaxis24=dict(title='CSAT', titlefont=dict(color=COLOR_DICT['CSAT'], size=font_size),
+                     tickfont=dict(color=COLOR_DICT['CSAT'], size=font_size), zeroline=False,
+                     side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x6',
+                     dtick=0.2, range=[0, 1], type='linear', showgrid=False),
+        xaxis25=dict(title='SHF', titlefont=dict(color=COLOR_DICT['SHF'], size=font_size),
+                     tickfont=dict(color=COLOR_DICT['SHF'], size=font_size), zeroline=False,
+                     side='top', anchor='free', position=.98, title_standoff=.1, overlaying='x6',
+                     dtick=0.2, range=[0, 1], type='linear', showgrid=False),
 
         # make room to display double x-axes
         yaxis=dict(domain=[0, .9], title=f'DEPTH ({depth_uom})', showgrid=False),
@@ -378,24 +422,24 @@ def plotly_log(df, depth_uom=""):  # noqa
         yaxis13=dict(domain=[0, .9], visible=False, showgrid=False),
 
         # Update x and y axes for COAL_FLAG
-        xaxis22=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis26=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis22=dict(domain=[0, .9], visible=False, showgrid=False),
-        xaxis23=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        yaxis26=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis27=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis23=dict(domain=[0, .9], visible=False, showgrid=False),
-        xaxis24=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        yaxis27=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis28=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis24=dict(domain=[0, .9], visible=False, showgrid=False),
-        xaxis25=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        yaxis28=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis29=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis25=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis29=dict(domain=[0, .9], visible=False, showgrid=False),
 
-        height=750,
+        height=1000,
         width=900,
         showlegend=False,
         title={
@@ -411,7 +455,7 @@ def plotly_log(df, depth_uom=""):  # noqa
     fig.update_yaxes(matches='y', constrain='domain', autorange='reversed')
 
     # Plot horizontal line marker
-    if 'ZONES' in df.columns:
+    if 'ZONES' in df.columns and not df.ZONES.isnull().all():
         tops_df = df[['DEPTH', 'ZONES']].reset_index()
         zone_tops_idx = [0] + [idx for idx, (i, j) in enumerate(
             zip(tops_df['ZONES'], tops_df['ZONES'][1:]), 1) if i != j]
