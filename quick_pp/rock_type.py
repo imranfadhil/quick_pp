@@ -1,4 +1,6 @@
 import numpy as np
+from scipy.signal import detrend
+from sklearn.preprocessing import MinMaxScaler
 
 
 def fzi(k, phit):
@@ -27,21 +29,24 @@ def rqi(k, phit):
     return (0.0314 * (k / phit)**0.5)
 
 
-def rock_flagging(vclw):
-    """Rock type classification based on clay bound water volume.
+def vsh_gr(gr):
+    """Estimate volume of shale from gamma ray.
 
     Args:
-        vclw (float): Volume of clay bound water in fraction.
+        gr (float): Gamma ray from well log.
 
     Returns:
-        str: Rock flag classification.
+        float: VSH_GR.
     """
-    std = np.nanstd(vclw)
-    standard_q = [0.05, 0.15, 0.5]
-    proportion = [pct - std for pct in standard_q]
-    proportion = standard_q if any([p < 0.15 for p in proportion]) else proportion
-    q_list = np.nanquantile(vclw, proportion)
-    rock_flag = np.where(vclw < q_list[0], 1,
-                         np.where(vclw < q_list[1], 2,
-                                  np.where(vclw < q_list[2], 3, 4)))
-    return rock_flag
+    dtr_gr = detrend(gr, axis=0) + np.nanmean(gr)
+    scaler = MinMaxScaler()
+    gri = scaler.fit_transform(np.reshape(dtr_gr, (-1, 1)))
+    # Apply Steiber equation
+    return gri / (3 - 2 * gri)
+
+
+def rock_typing(curve, cut_offs=[.33, .45, .7], higher_is_better=True):
+    rock_type = [1, 2, 3, 4] if higher_is_better else [4, 3, 2, 1]
+    return np.where(curve < cut_offs[0], rock_type[0],
+                    np.where(curve < cut_offs[1], rock_type[1],
+                             np.where(curve < cut_offs[2], rock_type[2], rock_type[3])))
