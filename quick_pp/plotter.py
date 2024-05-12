@@ -386,7 +386,7 @@ def plotly_log(well_data, depth_uom=""):  # noqa
 
     i += 1
     # Add COAL_FLAG trace.
-    for c in [4, 5, 6, 8]:
+    for c in [4, 5, 6, 7, 8]:
         fig.add_trace(go.Scatter(x=df['COAL_FLAG'], y=index, name='', line_color=COLOR_DICT['COAL_FLAG'],
                       fill='tozerox', fillcolor='rgba(0,0,0,1)', opacity=1),
                       row=1, col=c, secondary_y=True)
@@ -489,19 +489,23 @@ def plotly_log(well_data, depth_uom=""):  # noqa
         xaxis30=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis30=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis30=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
         xaxis31=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis31=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis31=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
         xaxis32=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis32=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis32=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
         xaxis33=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
+                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
+        yaxis33=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
+        xaxis34=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x8',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis33=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis34=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
 
         height=1000,
         width=900,
@@ -519,12 +523,12 @@ def plotly_log(well_data, depth_uom=""):  # noqa
     fig.update_yaxes(matches='y', constrain='domain', autorange='reversed')
 
     # Plot horizontal line marker
-    if 'ZONES' in df.columns and not df.ZONES.isnull().all():
-        tops_df = df[['DEPTH', 'ZONES']].reset_index()
+    if 'ZONES' in df.columns:
+        tops_df = df[['DEPTH', 'ZONES']].dropna().reset_index()
         zone_tops_idx = [0] + [idx for idx, (i, j) in enumerate(
             zip(tops_df['ZONES'], tops_df['ZONES'][1:]), 1) if i != j]
         zone_tops = tops_df.loc[zone_tops_idx, :]
-        if not zone_tops.empty:
+        if not zone_tops.empty and sum([1 for c in zone_tops.ZONES.unique() if 'SAND_' in c]) < 50:
             for tops in zone_tops.values:
                 fig.add_shape(
                     dict(type='line', x0=-5, y0=tops[1], x1=150, y1=tops[1]), row=1, col='all',

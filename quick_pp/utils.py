@@ -89,30 +89,29 @@ def line_intersection(line1, line2):
     return x, y
 
 
-def sand_flagging(df: pd.DataFrame):
+def sand_flagging(data: pd.DataFrame):
     """Flagging sand zones based on VSHALE, VCLW, and VSH_GR.
 
     Returns:
         pd.DataFrame: Original DataFrame with SAND_FLAG and ZONES columns.
     """
-
+    df = data.copy()
     if 'ZONES' not in df.columns:
         df['ZONES'] = 'FORMATION'
     else:
         df['ZONES'].fillna('FORMATION', inplace=True)
 
     return_df = pd.DataFrame()
-    for well_name, well_data in df.groupby('WELL_NAME'):
+    for _, well_data in df.groupby('WELL_NAME'):
         # Using VSH_GR
         dtr_gr = detrend(well_data[['GR']].fillna(well_data['GR'].median()), axis=0) + well_data['GR'].mean()
         well_data['VSH_GR'] = MinMaxScaler().fit_transform(dtr_gr)
         threshold = np.nanquantile(well_data['VSH_GR'], .75, method='median_unbiased')
 
         # Estimate SAND_FLAG using VSH_GR
+        well_data['SAND_FLAG'] = np.where(well_data['VSH_GR'] < threshold, 1, -1)
         well_data['SAND_FLAG'] = np.where(
-            well_data['VSH_GR'].rolling(50, center=True, closed='both').mean() < threshold, 1, 0)
-        well_data['SAND_FLAG'] = np.where(
-            well_data['SAND_FLAG'].rolling(13, win_type='boxcar', closed='left').mean() > 0.5, 1, 0)
+            well_data['SAND_FLAG'].rolling(13, center=True, closed='both').mean() > 0, 1, 0)
 
         # Fill in empty ZONES
         no_zones_df = well_data[well_data['ZONES'] == 'FORMATION'].copy()

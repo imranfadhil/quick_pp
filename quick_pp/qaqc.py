@@ -15,6 +15,7 @@ def mask_outside_threshold(data, fill=False):
     Returns:
         (pd.DataFrame): masked dataframe
     """
+    data = data.copy()
     for model_, vars_ in Config.VARS.items():
         for var_ in vars_:
             var = var_['var']
@@ -29,7 +30,7 @@ def mask_outside_threshold(data, fill=False):
     return data
 
 
-def badhole_flag(df, thold=4):
+def badhole_flag(data, thold=4):
     """Generate BADHOLE flag using ruptures package. Modified based on https://hallau.world/post/bitsize-from-caliper/
 
     Args:
@@ -42,7 +43,7 @@ def badhole_flag(df, thold=4):
     import ruptures as rpt
     import scipy.stats
     from scipy.signal import find_peaks
-
+    df = data.copy()
     if 'CALI' not in df.columns:
         df['BADHOLE'] = 0
         return df
@@ -213,3 +214,30 @@ def neu_den_xplot_hc_correction(
             hc_flag = np.append(hc_flag, 0)
 
     return nphi_corrected, rhob_corrected, hc_flag
+
+
+def quick_qc(well_data):
+    """Quick QC for well data.
+
+    Args:
+        well_data (pd.DataFrame): Well data.
+
+    Returns:
+        pd.DataFrame: Well data with QC flags.
+    """
+    return_df = well_data.copy()
+    return_df['QC_FLAG'] = 0
+
+    # Compare vsh_gr and vsh_dn
+    return_df['VSH_GR'] = gr_index(return_df['GR'])
+    return_df['QC_FLAG'] = np.where(abs(return_df['VSH_GR'] - return_df['VCLW']) > 0.1, 1, return_df['QC_FLAG'])
+
+    # Compare phit_dn, phit_d and nphi
+    return_df['QC_FLAG'] = np.where(abs(return_df['PHIT'] - return_df['PHID']) > 0.1, 2, return_df['QC_FLAG'])
+
+    # Check average swt in non-reservoir zone
+    return_df['QC_FLAG'] = np.where((return_df['SAND_FLAG'] == 0) & (return_df['SWT'] < 0.8), 3, return_df['QC_FLAG'])
+    print(return_df['QC_FLAG'].value_counts())
+    print(return_df.QC_FLAG.describe())
+
+    return return_df
