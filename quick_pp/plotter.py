@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
@@ -42,6 +43,10 @@ COLOR_DICT = {
     'CPERM': '#FF0000',
     'CSAT': '#FF0000',
     'SHF': '#618F63',
+    'ROCK_FLAG_1': '#F6F674',
+    'ROCK_FLAG_2': 'gold',
+    'ROCK_FLAG_3': '#FE9800',
+    'ROCK_FLAG_4': 'darkgray',
 }
 
 
@@ -149,42 +154,61 @@ def plotly_log(well_data, depth_uom=""):  # noqa
     Returns:
         plotly.graph_objects.Figure: Return well plot.
     """
-    track = 7
+    track = 8
     df = well_data.copy()
     index = df.DEPTH
+
+    # Create one hot for ROCK_FLAG
+    if 'ROCK_FLAG' in df.columns:
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].astype('category')
+        df = pd.get_dummies(df, columns=['ROCK_FLAG'], prefix='ROCK_FLAG', dtype=int)
 
     for k, v in COLOR_DICT.items():
         if k not in df.columns:
             df[k] = np.nan
 
     fig = make_subplots(rows=1, cols=track, shared_yaxes=True, horizontal_spacing=0.02,
+                        column_widths=[1, 1, 1, 1, 1, 1, .15, 1],
                         specs=[list([{'secondary_y': True}]*track)])
 
+    i = 0
     # Add GR trace #1.
     fig.add_trace(go.Scatter(x=df['GR'], y=index, name='GR', line_color=COLOR_DICT['GR']),
                   row=1, col=1)
 
+    i += 1
     # Add RESISTIVITY trace #2.
     fig.add_trace(go.Scatter(x=df['RT'], y=index, name='RT', line_color=COLOR_DICT['RT'], line_dash='dot'),
                   row=1, col=2)
 
+    i += 1
     # Add RHOB trace #3.
     fig.add_trace(go.Scatter(x=df['RHOB'], y=index, name='RHOB', line_color=COLOR_DICT['RHOB']),
                   row=1, col=3, secondary_y=False)
 
+    i += 1
     # Add PHIT trace #4.
     fig.add_trace(go.Scatter(x=df['PHIT'], y=index, name='PHIT', line_color=COLOR_DICT['PHIT']),
                   row=1, col=4, secondary_y=False)
 
+    i += 1
     # Add PERM trace #5.
     fig.add_trace(go.Scatter(x=df['PERM'], y=index, name='PERM', line_color=COLOR_DICT['PERM']),
                   row=1, col=5, secondary_y=False)
 
+    i += 1
     # Add SWT trace #6.
     fig.add_trace(go.Scatter(x=df['SWT'], y=index, name='SWT', line_color=COLOR_DICT['SWT']),
                   row=1, col=6, secondary_y=False)
 
-    # Add VCLW trace #7.
+    i += 1
+    # Add ROCK_FLAG trace #7.
+    fig.add_trace(go.Scatter(x=df['ROCK_FLAG_1'], y=index, name='ROCK_FLAG', line_color=COLOR_DICT['ROCK_FLAG_1'],
+                             fill='tozerox', fillcolor=COLOR_DICT['ROCK_FLAG_1'], opacity=1),
+                  row=1, col=7, secondary_y=False)
+
+    i += 1
+    # Add VCLW trace #8.
     fig.add_trace(go.Scatter(x=df['VCLW'], y=index, name='VCLW', line_color='#000000', line_width=1,
                   fill='tozerox',
                   fillpattern_bgcolor=COLOR_DICT['VCLW'],
@@ -195,41 +219,48 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                   fillpattern_solidity=0.1,
                   stackgroup='litho',
                   orientation='h'),
-                  row=1, col=7, secondary_y=False)
+                  row=1, col=8, secondary_y=False)
 
-    # Add NPHI trace #8.
+    i += 1
+    # Add NPHI trace #9.
     fig.add_trace(go.Scatter(x=df['NPHI'], y=index, name='NPHI', line_color=COLOR_DICT['NPHI'], line_dash='dot'),
                   row=1, col=3, secondary_y=True)
-    fig.data[7].update(xaxis='x8')
+    fig.data[i].update(xaxis=f'x{i + 1}')
 
-    # Add PHIE trace #9.
+    i += 1
+    # Add PHIE
     fig.add_trace(go.Scatter(x=df['PHIE'], y=index, name='PHIE', line_color=COLOR_DICT['PHIE'], line_dash='dot'),
                   row=1, col=4, secondary_y=True)
-    fig.data[8].update(xaxis='x9')
+    fig.data[i].update(xaxis=f'x{i + 1}')
 
-    # Add SWE trace #10.
+    i += 1
+    # Add SWE
     fig.add_trace(go.Scatter(x=df['SWE'], y=index, name='SWE', line_color=COLOR_DICT['SWE'], line_dash='dot'),
                   row=1, col=6, secondary_y=True)
-    fig.data[9].update(xaxis='x10')
+    fig.data[i].update(xaxis=f'x{i + 1}')
 
-    # Add CALI trace #11.
+    i += 1
+    # Add CALI
     fig.add_trace(go.Scatter(x=df['CALI'], y=index, name='CALI', line_color=COLOR_DICT['CALI'], line_dash='dot',
                   fill='tozerox', fillcolor='rgba(165, 42, 42, .25)'),
                   row=1, col=1, secondary_y=False)
-    fig.data[10].update(xaxis='x11')
+    fig.data[i].update(xaxis=f'x{i + 1}')
 
-    # Add BITSIZE trace #12.
+    i += 1
+    # Add BITSIZE
     fig.add_trace(go.Scatter(x=df['BS'], y=index, name='BS', line_color=COLOR_DICT['BS']),
                   row=1, col=1, secondary_y=False)
-    fig.data[11].update(xaxis='x12')
+    fig.data[i].update(xaxis=f'x{i + 1}')
 
-    # Add BADHOLE trace #13.
+    i += 1
+    # Add BADHOLE
     fig.add_trace(go.Scatter(x=df['BADHOLE'], y=index, name='BADHOLE', line_color=COLOR_DICT['BADHOLE'],
                   fill='tozerox', fillcolor='rgba(0, 0, 0, .25)'),
                   row=1, col=1, secondary_y=False)
-    fig.data[12].update(xaxis='x13')
+    fig.data[i].update(xaxis=f'x{i + 1}')
 
-    # Add VSILT trace #14.
+    i += 1
+    # Add VSILT
     fig.add_trace(go.Scatter(x=df['VSILT'], y=index, name='VSILT', line_color='#000000', line_width=1,
                   fill='tonextx',
                   fillpattern_bgcolor=COLOR_DICT['VSILT'],
@@ -240,9 +271,10 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                   fillpattern_solidity=0.1,
                   stackgroup='litho',
                   orientation='h'),
-                  row=1, col=7, secondary_y=False)
+                  row=1, col=8, secondary_y=False)
 
-    # Add VSAND trace #15.
+    i += 1
+    # Add VSAND
     fig.add_trace(go.Scatter(x=df['VSAND'], y=index, name='VSAND', line_color='#000000', line_width=1,
                   fill='tonextx',
                   fillpattern_bgcolor=COLOR_DICT['VSAND'],
@@ -253,9 +285,10 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                   fillpattern_solidity=0.1,
                   stackgroup='litho',
                   orientation='h'),
-                  row=1, col=7, secondary_y=False)
+                  row=1, col=8, secondary_y=False)
 
-    # Add VCALC trace #16.
+    i += 1
+    # Add VCALC
     fig.add_trace(go.Scatter(x=df['VCALC'], y=index, name='VCALC', line_color='#000000', line_width=1,
                   fill='tonextx',
                   fillpattern_bgcolor=COLOR_DICT['VCALC'],
@@ -266,9 +299,10 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                   fillpattern_solidity=0.1,
                   stackgroup='litho',
                   orientation='h'),
-                  row=1, col=7, secondary_y=False)
+                  row=1, col=8, secondary_y=False)
 
-    # Add VDOLO trace #17.
+    i += 1
+    # Add VDOLO
     fig.add_trace(go.Scatter(x=df['VDOLO'], y=index, name='VDOLO', line_color='#000000', line_width=1,
                   fill='tonextx',
                   fillpattern_bgcolor=COLOR_DICT['VDOLO'],
@@ -279,54 +313,80 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                   fillpattern_solidity=0.3,
                   stackgroup='litho',
                   orientation='h'),
-                  row=1, col=7, secondary_y=False)
+                  row=1, col=8, secondary_y=False)
 
-    # Add VGAS trace #18.
+    i += 1
+    # Add VGAS
     fig.add_trace(go.Scatter(x=df['VGAS'], y=index, name='VGAS', line_color='#000000', line_width=1,
                   fill='tonextx', fillcolor=COLOR_DICT['VGAS'], stackgroup='litho', orientation='h'),
-                  row=1, col=7, secondary_y=False)
+                  row=1, col=8, secondary_y=False)
 
-    # Add VOIL trace #19.
+    i += 1
+    # Add VOIL
     fig.add_trace(go.Scatter(x=df['VOIL'], y=index, name='VOIL', line_color='#000000', line_width=1,
                   fill='tonextx', fillcolor=COLOR_DICT['VOIL'], stackgroup='litho', orientation='h'),
-                  row=1, col=7, secondary_y=False)
+                  row=1, col=8, secondary_y=False)
 
-    # Add VSHALE trace #20.
+    i += 1
+    # Add VSHALE
     fig.add_trace(go.Scatter(x=df['VSHALE'], y=index, name='VSHALE', line_color=COLOR_DICT['VSHALE']),
-                  row=1, col=7, secondary_y=True)
+                  row=1, col=8, secondary_y=True)
 
-    # Add PEF trace #21.
+    i += 1
+    # Add PEF
     fig.add_trace(go.Scatter(x=df['PEF'], y=index, name='PEF', line_color=COLOR_DICT['PEF'], line_dash='dashdot',
                              line_width=.75),
                   row=1, col=3, secondary_y=True)
-    fig.data[20].update(xaxis='x21')
+    fig.data[i].update(xaxis=f'x{i + 1}')
 
-    # Add CPORE trace #22.
+    i += 1
+    # Add CPORE
     fig.add_trace(go.Scatter(x=df['CPORE'], y=index, name='CPORE', mode='markers',
                              marker=dict(color=COLOR_DICT['CPORE'], size=7)),
                   row=1, col=4, secondary_y=True)
-    fig.data[21].update(xaxis='x22')
+    fig.data[i].update(xaxis=f'x{i + 1}')
 
-    # Add CPERM trace #23.
+    i += 1
+    # Add CPERM
     fig.add_trace(go.Scatter(x=df['CPERM'], y=index, name='CPERM', mode='markers',
                              marker=dict(color=COLOR_DICT['CPERM'], size=7)),
                   row=1, col=5, secondary_y=True)
-    fig.data[22].update(xaxis='x23')
+    fig.data[i].update(xaxis=f'x{i + 1}')
 
-    # Add CSAT trace #24.
+    i += 1
+    # Add CSAT
     fig.add_trace(go.Scatter(x=df['CSAT'], y=index, name='CSAT', mode='markers',
                              marker=dict(color=COLOR_DICT['CSAT'], size=7)),
                   row=1, col=6, secondary_y=True)
-    fig.data[23].update(xaxis='x24')
+    fig.data[i].update(xaxis=f'x{i + 1}')
 
-    # Add SHF trace #24.
+    i += 1
+    # Add SHF
     fig.add_trace(go.Scatter(x=df['SHF'], y=index, name='SHF', line_color=COLOR_DICT['SHF'], line_dash='dashdot'),
                   row=1, col=6, secondary_y=True)
-    fig.data[24].update(xaxis='x25')
+    fig.data[i].update(xaxis=f'x{i + 1}')
 
-    i = 25
+    i += 1
+    # Add ROCK_FLAG_2
+    fig.add_trace(go.Scatter(x=df['ROCK_FLAG_2'], y=index, name='ROCK_FLAG_2', line_color=COLOR_DICT['ROCK_FLAG_2'],
+                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT['ROCK_FLAG_2'], opacity=1),
+                  row=1, col=7, secondary_y=False)
+
+    i += 1
+    # Add ROCK_FLAG_3
+    fig.add_trace(go.Scatter(x=df['ROCK_FLAG_3'], y=index, name='ROCK_FLAG_3', line_color=COLOR_DICT['ROCK_FLAG_3'],
+                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT['ROCK_FLAG_3'], opacity=1),
+                  row=1, col=7, secondary_y=False)
+
+    i += 1
+    # Add ROCK_FLAG_4
+    fig.add_trace(go.Scatter(x=df['ROCK_FLAG_4'], y=index, name='ROCK_FLAG_4', line_color=COLOR_DICT['ROCK_FLAG_4'],
+                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT['ROCK_FLAG_4'], opacity=1),
+                  row=1, col=7, secondary_y=False)
+
+    i += 1
     # Add COAL_FLAG trace.
-    for c in [4, 5, 6, 7]:
+    for c in [4, 5, 6, 8]:
         fig.add_trace(go.Scatter(x=df['COAL_FLAG'], y=index, name='', line_color=COLOR_DICT['COAL_FLAG'],
                       fill='tozerox', fillcolor='rgba(0,0,0,1)', opacity=1),
                       row=1, col=c, secondary_y=True)
@@ -357,51 +417,53 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                     tickfont=dict(color=COLOR_DICT['SWT'], size=font_size),
                     side='top', anchor='free', position=.9, title_standoff=.1,
                     dtick=0.2, range=[0, 1], type='linear'),
-        xaxis7=dict(title='LITHOLOGY', titlefont=dict(color='black', size=font_size),
+        xaxis7=dict(title='', titlefont_size=1, tickfont_size=1, side='top', anchor='free', position=.9,
+                    title_standoff=.1, range=[0, 0.1], type='linear', showgrid=False, zeroline=False),
+        xaxis8=dict(title='LITHOLOGY', titlefont=dict(color='black', size=font_size),
                     tickfont=dict(color='black', size=font_size),
                     side='top', anchor='free', position=.9, title_standoff=.1,
                     range=[0, 1], type='linear'),
-        xaxis8=dict(title='NPHI', titlefont=dict(color=COLOR_DICT['NPHI'], size=font_size),
+        xaxis9=dict(title='NPHI', titlefont=dict(color=COLOR_DICT['NPHI'], size=font_size),
                     tickfont=dict(color=COLOR_DICT['NPHI'], size=font_size), zeroline=False,
                     side='top', anchor='free', position=.94, title_standoff=.1, overlaying='x3',
                     tickformat=".2f", tick0=-.15, dtick=0.12, range=[.45, -.15], type='linear'),
-        xaxis9=dict(title='PHIE', titlefont=dict(color=COLOR_DICT['PHIE'], size=font_size),
-                    tickfont=dict(color=COLOR_DICT['PHIE'], size=font_size),
-                    side='top', anchor='free', position=.94, title_standoff=.1, overlaying='x4',
-                    dtick=0.1, range=[0, 0.5], type='linear'),
-        xaxis10=dict(title='SWE', titlefont=dict(color=COLOR_DICT['SWE'], size=font_size),
+        xaxis10=dict(title='PHIE', titlefont=dict(color=COLOR_DICT['PHIE'], size=font_size),
+                     tickfont=dict(color=COLOR_DICT['PHIE'], size=font_size),
+                     side='top', anchor='free', position=.94, title_standoff=.1, overlaying='x4',
+                     dtick=0.1, range=[0, 0.5], type='linear'),
+        xaxis11=dict(title='SWE', titlefont=dict(color=COLOR_DICT['SWE'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['SWE'], size=font_size),
                      side='top', anchor='free', position=.94, title_standoff=.1, overlaying='x6',
                      dtick=0.2, range=[0, 1], type='linear'),
-        xaxis11=dict(title='CALI', titlefont=dict(color=COLOR_DICT['CALI'], size=font_size),
+        xaxis12=dict(title='CALI', titlefont=dict(color=COLOR_DICT['CALI'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['CALI'], size=font_size),
                      side='top', anchor='free', position=.94, title_standoff=.1, overlaying='x1',
                      dtick=2, range=[6, 16], type='linear'),
-        xaxis12=dict(title='BS', titlefont=dict(color=COLOR_DICT['BS'], size=font_size),
+        xaxis13=dict(title='BS', titlefont=dict(color=COLOR_DICT['BS'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['BS'], size=font_size),
                      side='top', anchor='free', position=.98, title_standoff=.1, overlaying='x1',
                      dtick=2, range=[6, 16], type='linear'),
-        xaxis13=dict(title='BADHOLE', titlefont=dict(color=COLOR_DICT['BADHOLE'], size=font_size),
+        xaxis14=dict(title='BADHOLE', titlefont=dict(color=COLOR_DICT['BADHOLE'], size=font_size),
                      tickfont=dict(size=1),
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x1',
                      range=[0, 5], type='linear', showgrid=False, zeroline=False,),
-        xaxis21=dict(title='PEF', titlefont=dict(color=COLOR_DICT['PEF'], size=font_size),
+        xaxis22=dict(title='PEF', titlefont=dict(color=COLOR_DICT['PEF'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['PEF'], size=font_size), zeroline=False,
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x3',
                      range=[-10, 10], type='linear', showgrid=False),
-        xaxis22=dict(title='CPORE', titlefont=dict(color=COLOR_DICT['CPORE'], size=font_size),
+        xaxis23=dict(title='CPORE', titlefont=dict(color=COLOR_DICT['CPORE'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['CPORE'], size=font_size), zeroline=False,
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x4',
                      dtick=0.1, range=[0, .5], type='linear', showgrid=False),
-        xaxis23=dict(title='CPERM', titlefont=dict(color=COLOR_DICT['CPERM'], size=font_size),
+        xaxis24=dict(title='CPERM', titlefont=dict(color=COLOR_DICT['CPERM'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['CPERM'], size=font_size), zeroline=False,
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x5',
                      range=[np.log10(0.1), np.log10(10000)], type='log', showgrid=False),
-        xaxis24=dict(title='CSAT', titlefont=dict(color=COLOR_DICT['CSAT'], size=font_size),
+        xaxis25=dict(title='CSAT', titlefont=dict(color=COLOR_DICT['CSAT'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['CSAT'], size=font_size), zeroline=False,
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x6',
                      dtick=0.2, range=[0, 1], type='linear', showgrid=False),
-        xaxis25=dict(title='SHF', titlefont=dict(color=COLOR_DICT['SHF'], size=font_size),
+        xaxis26=dict(title='SHF', titlefont=dict(color=COLOR_DICT['SHF'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['SHF'], size=font_size), zeroline=False,
                      side='top', anchor='free', position=.98, title_standoff=.1, overlaying='x6',
                      dtick=0.2, range=[0, 1], type='linear', showgrid=False),
@@ -420,24 +482,26 @@ def plotly_log(well_data, depth_uom=""):  # noqa
         yaxis11=dict(domain=[0, .9], visible=False, showgrid=False),
         yaxis12=dict(domain=[0, .9], visible=False, showgrid=False),
         yaxis13=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis14=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis15=dict(domain=[0, .9], visible=False, showgrid=False),
 
         # Update x and y axes for COAL_FLAG
-        xaxis26=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis30=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis26=dict(domain=[0, .9], visible=False, showgrid=False),
-        xaxis27=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        yaxis30=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis31=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis27=dict(domain=[0, .9], visible=False, showgrid=False),
-        xaxis28=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        yaxis31=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis32=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis28=dict(domain=[0, .9], visible=False, showgrid=False),
-        xaxis29=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
+        yaxis32=dict(domain=[0, .9], visible=False, showgrid=False),
+        xaxis33=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x8',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis29=dict(domain=[0, .9], visible=False, showgrid=False),
+        yaxis33=dict(domain=[0, .9], visible=False, showgrid=False),
 
         height=1000,
         width=900,

@@ -80,10 +80,12 @@ def j_xplot(sw, j, a, b, label):
     sc = plt.scatter(sw, j, marker='o', label=label)
     line_color = sc.get_facecolors()[0]
     line_color[-1] = 0.5
-    csw = np.linspace(0.15, 1.0, 30)
+    csw = np.geomspace(0.1, 1.0, 30)
     plt.scatter(csw, func(csw, a, b), marker='x', color=line_color)
     plt.xlabel('Sw (frac)')
+    plt.xlim(0, 1)
     plt.ylabel('J')
+    plt.ylim(0, np.max(j) * 1.5)
     plt.legend()
 
 
@@ -109,9 +111,10 @@ def poroperm_xplot(poro, perm, a, b, label):
     sc = plt.scatter(poro, perm, marker='o', label=label)
     line_color = sc.get_facecolors()[0]
     line_color[-1] = 0.5
-    cpore = np.linspace(0.05, 0.5, 30)
+    cpore = np.geomspace(0.05, 0.5, 30)
     plt.scatter(cpore, func(cpore, a, b), marker='x', color=line_color)
     plt.xlabel('CPORE (frac)')
+    plt.xlim(0, 0.5)
     plt.ylabel('CPERM (mD)')
     plt.yscale('log')
     plt.legend()
