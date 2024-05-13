@@ -69,7 +69,8 @@ class SandSiltClay:
             # C = self.dry_clay_point = (dryclay_NPHI, C[1])
 
             # Calculate dryclay point, the intersection between rock line and clay line
-            updated_drysilt_pt = (B[0], np.nanmax(rhob))
+            drysilt_RHOB = B[1] if B[1] > np.nanmax(rhob) else np.nanmax(rhob)
+            updated_drysilt_pt = (B[0], drysilt_RHOB)
             C = self.dry_clay_point = line_intersection((A, updated_drysilt_pt), (D, self.wet_clay_point))
         # print(f'#### dryclay_pt: {C}, {m}')
 

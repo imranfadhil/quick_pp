@@ -528,7 +528,7 @@ def plotly_log(well_data, depth_uom=""):  # noqa
         zone_tops_idx = [0] + [idx for idx, (i, j) in enumerate(
             zip(tops_df['ZONES'], tops_df['ZONES'][1:]), 1) if i != j]
         zone_tops = tops_df.loc[zone_tops_idx, :]
-        if not zone_tops.empty and sum([1 for c in zone_tops.ZONES.unique() if 'SAND_' in c]) < 50:
+        if not zone_tops.empty and sum([1 for c in zone_tops.ZONES.unique() if 'SAND_' in c]) < 30:
             for tops in zone_tops.values:
                 fig.add_shape(
                     dict(type='line', x0=-5, y0=tops[1], x1=150, y1=tops[1]), row=1, col='all',
