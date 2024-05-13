@@ -194,7 +194,7 @@ def estimate_rw_waxman_smits(phit, rt, a=1, m=2, B=None, Qv=None):
     if Qv is None:
         Qv = 0.3
 
-    rw = pd.Series(1 / ((a / phit**m * rt) - (B * Qv)))
+    rw = pd.Series(1 / ((a / (phit**m * rt)) - (B * Qv)))
     _, rw = min_max_line(rw, alpha=0.2)
     return rw
 
