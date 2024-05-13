@@ -30,7 +30,7 @@ class Project(object):
     def update_data(self, data: pd.DataFrame, group_by: str = "WELL_NAME"):
         for well_name, well_data in data.groupby(group_by):
             well = Well(well_name)
-            well.add_data(well_data)
+            well.update_data(well_data)
             self.save_well(well)
         self.update_history(action=f"Added data to project {self.name}")
 

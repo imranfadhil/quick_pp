@@ -3,6 +3,7 @@ import numpy as np
 
 from .utils import length_a_b, line_intersection
 from .lithology import gr_index
+from .rock_type import vsh_gr
 from .config import Config
 
 
@@ -229,15 +230,26 @@ def quick_qc(well_data):
     return_df['QC_FLAG'] = 0
 
     # Compare vsh_gr and vsh_dn
-    return_df['VSH_GR'] = gr_index(return_df['GR'])
+    return_df['VSH_GR'] = vsh_gr(return_df['GR'])
     return_df['QC_FLAG'] = np.where(abs(return_df['VSH_GR'] - return_df['VCLW']) > 0.1, 1, return_df['QC_FLAG'])
 
-    # Compare phit_dn, phit_d and nphi
-    return_df['QC_FLAG'] = np.where(abs(return_df['PHIT'] - return_df['PHID']) > 0.1, 2, return_df['QC_FLAG'])
+    # Compare phit_dn and phit_d
+    if 'PHID' in return_df.columns:
+        return_df['QC_FLAG'] = np.where(abs(return_df['PHIT'] - return_df['PHID']) > 0.1, 2, return_df['QC_FLAG'])
 
     # Check average swt in non-reservoir zone
     return_df['QC_FLAG'] = np.where((return_df['SAND_FLAG'] == 0) & (return_df['SWT'] < 0.8), 3, return_df['QC_FLAG'])
-    print(return_df['QC_FLAG'].value_counts())
-    print(return_df.QC_FLAG.describe())
 
-    return return_df
+    # Summarize
+    # return_df['QC_FLAG'] = return_df['QC_FLAG'].astype('category')
+    summary_df = return_df.groupby('ZONES').agg({
+        'VCLW': 'mean',
+        'PHIT': 'mean',
+        'SWT': 'mean',
+        'SAND_FLAG': 'sum',
+        'QC_FLAG': 'sum'
+    })
+    summary_df['QC_FLAG_mode'] = return_df.groupby('ZONES')['QC_FLAG'].agg(lambda x: x.mode())
+    summary_df = summary_df.sort_values(by='QC_FLAG', ascending=False).reset_index().round(3)
+
+    return return_df, summary_df

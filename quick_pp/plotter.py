@@ -34,6 +34,7 @@ COLOR_DICT = {
     'VCOAL': '#000000',
     'VGAS': '#FF0000',
     'VOIL': '#00FF00',
+    'VHC': 'brown',
     'VSAND': '#F6F674',
     'VSHALE': '#A65628',
     'VSILT': '#FE9800',
@@ -316,6 +317,12 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                   row=1, col=8, secondary_y=False)
 
     i += 1
+    # Add VHC
+    fig.add_trace(go.Scatter(x=df['VHC'], y=index, name='VHC', line_color='#000000', line_width=1,
+                  fill='tonextx', fillcolor=COLOR_DICT['VHC'], stackgroup='litho', orientation='h'),
+                  row=1, col=8, secondary_y=False)
+
+    i += 1
     # Add VGAS
     fig.add_trace(go.Scatter(x=df['VGAS'], y=index, name='VGAS', line_color='#000000', line_width=1,
                   fill='tonextx', fillcolor=COLOR_DICT['VGAS'], stackgroup='litho', orientation='h'),
@@ -447,23 +454,23 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                      tickfont=dict(size=1),
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x1',
                      range=[0, 5], type='linear', showgrid=False, zeroline=False,),
-        xaxis22=dict(title='PEF', titlefont=dict(color=COLOR_DICT['PEF'], size=font_size),
+        xaxis23=dict(title='PEF', titlefont=dict(color=COLOR_DICT['PEF'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['PEF'], size=font_size), zeroline=False,
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x3',
                      range=[-10, 10], type='linear', showgrid=False),
-        xaxis23=dict(title='CPORE', titlefont=dict(color=COLOR_DICT['CPORE'], size=font_size),
+        xaxis24=dict(title='CPORE', titlefont=dict(color=COLOR_DICT['CPORE'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['CPORE'], size=font_size), zeroline=False,
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x4',
                      dtick=0.1, range=[0, .5], type='linear', showgrid=False),
-        xaxis24=dict(title='CPERM', titlefont=dict(color=COLOR_DICT['CPERM'], size=font_size),
+        xaxis25=dict(title='CPERM', titlefont=dict(color=COLOR_DICT['CPERM'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['CPERM'], size=font_size), zeroline=False,
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x5',
                      range=[np.log10(0.1), np.log10(10000)], type='log', showgrid=False),
-        xaxis25=dict(title='CSAT', titlefont=dict(color=COLOR_DICT['CSAT'], size=font_size),
+        xaxis26=dict(title='CSAT', titlefont=dict(color=COLOR_DICT['CSAT'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['CSAT'], size=font_size), zeroline=False,
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x6',
                      dtick=0.2, range=[0, 1], type='linear', showgrid=False),
-        xaxis26=dict(title='SHF', titlefont=dict(color=COLOR_DICT['SHF'], size=font_size),
+        xaxis27=dict(title='SHF', titlefont=dict(color=COLOR_DICT['SHF'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['SHF'], size=font_size), zeroline=False,
                      side='top', anchor='free', position=.98, title_standoff=.1, overlaying='x6',
                      dtick=0.2, range=[0, 1], type='linear', showgrid=False),
@@ -486,26 +493,26 @@ def plotly_log(well_data, depth_uom=""):  # noqa
         yaxis15=dict(domain=[0, .9], visible=False, showgrid=False),
 
         # Update x and y axes for COAL_FLAG
-        xaxis30=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
-                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
-        yaxis30=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
         xaxis31=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
         yaxis31=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
         xaxis32=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
         yaxis32=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
         xaxis33=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
         yaxis33=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
         xaxis34=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
-                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x8',
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
         yaxis34=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
+        xaxis35=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+                     side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x8',
+                     tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
+        yaxis35=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
 
         height=1000,
         width=900,
@@ -525,10 +532,10 @@ def plotly_log(well_data, depth_uom=""):  # noqa
     # Plot horizontal line marker
     if 'ZONES' in df.columns:
         tops_df = df[['DEPTH', 'ZONES']].dropna().reset_index()
-        zone_tops_idx = [0] + [idx for idx, (i, j) in enumerate(
-            zip(tops_df['ZONES'], tops_df['ZONES'][1:]), 1) if i != j]
-        zone_tops = tops_df.loc[zone_tops_idx, :]
-        if not zone_tops.empty and sum([1 for c in zone_tops.ZONES.unique() if 'SAND_' in c]) < 30:
+        if not tops_df.empty and sum([1 for c in tops_df.ZONES.unique() if 'SAND_' in c]) < 30:
+            zone_tops_idx = [0] + [idx for idx, (i, j) in enumerate(
+                zip(tops_df['ZONES'], tops_df['ZONES'][1:]), 1) if i != j]
+            zone_tops = tops_df.loc[zone_tops_idx, :]
             for tops in zone_tops.values:
                 fig.add_shape(
                     dict(type='line', x0=-5, y0=tops[1], x1=150, y1=tops[1]), row=1, col='all',
