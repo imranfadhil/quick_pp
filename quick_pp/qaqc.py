@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from scipy.stats import gmean
 
 from .utils import length_a_b, line_intersection
 from .lithology import gr_index
@@ -246,10 +247,18 @@ def quick_qc(well_data):
         'VCLW': 'mean',
         'PHIT': 'mean',
         'SWT': 'mean',
-        'SAND_FLAG': 'sum',
-        'QC_FLAG': 'sum'
+        'PERM': gmean,
+        'SAND_FLAG': 'sum'
     })
+    summary_df['QC_FLAG'] = return_df.where(return_df['QC_FLAG'] == 1, 0).groupby('ZONES')['QC_FLAG'].sum()
     summary_df['QC_FLAG_mode'] = return_df.groupby('ZONES')['QC_FLAG'].agg(lambda x: x.mode())
+    summary_df['ROCK_FLAG_mode'] = return_df.groupby('ZONES')['ROCK_FLAG'].agg(lambda x: x.mode())
+    summary_df['TOP'] = return_df.groupby('ZONES')['DEPTH'].agg(lambda x: x.min())
+    summary_df['BOTTOM'] = return_df.groupby('ZONES')['DEPTH'].agg(lambda x: x.max())
+    summary_df['GROSS'] = summary_df['BOTTOM'] - summary_df['TOP']
+    summary_df['COUNT'] = return_df.groupby('ZONES')['DEPTH'].count()
+    summary_df['NET'] = summary_df['SAND_FLAG'] * summary_df['GROSS'] / summary_df['COUNT']
+    summary_df['NTG'] = summary_df['NET'] / summary_df['GROSS']
     summary_df = summary_df.sort_values(by='QC_FLAG', ascending=False).reset_index().round(3)
 
     return return_df, summary_df
