@@ -243,13 +243,13 @@ def plotly_log(well_data, depth_uom=""):  # noqa
     i += 1
     # Add CALI
     fig.add_trace(go.Scatter(x=df['CALI'], y=index, name='CALI', line_color=COLOR_DICT['CALI'], line_dash='dot',
-                  fill='tozerox', fillcolor='rgba(165, 42, 42, .25)'),
+                  fill='tozerox', fillcolor='rgba(165, 42, 42, .15)'),
                   row=1, col=1, secondary_y=False)
     fig.data[i].update(xaxis=f'x{i + 1}')
 
     i += 1
     # Add BITSIZE
-    fig.add_trace(go.Scatter(x=df['BS'], y=index, name='BS', line_color=COLOR_DICT['BS']),
+    fig.add_trace(go.Scatter(x=df['BS'], y=index, name='BS', line_color=COLOR_DICT['BS'], line_dash='dashdot'),
                   row=1, col=1, secondary_y=False)
     fig.data[i].update(xaxis=f'x{i + 1}')
 
@@ -445,11 +445,11 @@ def plotly_log(well_data, depth_uom=""):  # noqa
         xaxis12=dict(title='CALI', titlefont=dict(color=COLOR_DICT['CALI'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['CALI'], size=font_size),
                      side='top', anchor='free', position=.94, title_standoff=.1, overlaying='x1',
-                     dtick=2, range=[6, 16], type='linear'),
+                     dtick=6, range=[6, 24], type='linear', showgrid=False),
         xaxis13=dict(title='BS', titlefont=dict(color=COLOR_DICT['BS'], size=font_size),
                      tickfont=dict(color=COLOR_DICT['BS'], size=font_size),
                      side='top', anchor='free', position=.98, title_standoff=.1, overlaying='x1',
-                     dtick=2, range=[6, 16], type='linear'),
+                     dtick=6, range=[6, 24], type='linear', showgrid=False),
         xaxis14=dict(title='BADHOLE', titlefont=dict(color=COLOR_DICT['BADHOLE'], size=font_size),
                      tickfont=dict(size=1),
                      side='top', anchor='free', position=.87, title_standoff=.1, overlaying='x1',
@@ -514,7 +514,7 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                      tick0=0, dtick=1, range=[0, 1], type='linear', tickfont=dict(size=1)),
         yaxis35=dict(domain=[0, .9], visible=False, showgrid=False, zeroline=False),
 
-        height=1000,
+        height=900,
         width=900,
         showlegend=False,
         title={
@@ -548,6 +548,7 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                     ), row=1, col=2)
 
     fig.update_layout(hovermode='y unified',
+                      modebar_remove=['lasso', 'select', 'autoscale'],
                       template='none',
                       margin=dict(l=70, r=0, t=20, b=10),
                       paper_bgcolor='#e6f2ff',

@@ -242,14 +242,25 @@ def quick_qc(well_data):
     return_df['QC_FLAG'] = np.where((return_df['SAND_FLAG'] == 0) & (return_df['SWT'] < 0.8), 3, return_df['QC_FLAG'])
 
     # Summarize
-    # return_df['QC_FLAG'] = return_df['QC_FLAG'].astype('category')
-    summary_df = return_df.groupby('ZONES').agg({
-        'VCLW': 'mean',
-        'PHIT': 'mean',
-        'SWT': 'mean',
-        'PERM': gmean,
-        'SAND_FLAG': 'sum'
-    })
+    summary_df = pd.DataFrame()
+    for group in ['SAND', 'SHALE']:
+        index = return_df['SAND_FLAG'] == 1 if group == 'SAND' else return_df['SAND_FLAG'] == 0
+        temp_df = return_df[index].groupby('ZONES').agg({
+            'VCLW': 'mean',
+            'PHIT': 'mean',
+            'SWT': 'mean',
+            'PERM': gmean,
+        })
+        # Rename columns
+        cols_rename = {
+            'VCLW': f'AV_VCLW_{group}',
+            'PHIT': f'AV_PHIT_{group}',
+            'SWT': f'AV_SWT_{group}',
+            'PERM': f'AV_PERM_GM_{group}',
+        }
+        temp_df = temp_df.rename(columns=cols_rename)
+        summary_df = pd.concat([summary_df, temp_df], axis=1)
+    summary_df['SAND_FLAG'] = return_df.groupby('ZONES')['SAND_FLAG'].sum()
     summary_df['QC_FLAG'] = return_df.where(return_df['QC_FLAG'] == 1, 0).groupby('ZONES')['QC_FLAG'].sum()
     summary_df['QC_FLAG_mode'] = return_df.groupby('ZONES')['QC_FLAG'].agg(lambda x: x.mode())
     summary_df['ROCK_FLAG_mode'] = return_df.groupby('ZONES')['ROCK_FLAG'].agg(lambda x: x.mode())
@@ -260,5 +271,22 @@ def quick_qc(well_data):
     summary_df['NET'] = summary_df['SAND_FLAG'] * summary_df['GROSS'] / summary_df['COUNT']
     summary_df['NTG'] = summary_df['NET'] / summary_df['GROSS']
     summary_df = summary_df.sort_values(by='QC_FLAG', ascending=False).reset_index().round(3)
+
+    # Sort columns
+    cols = ['ZONES', 'TOP', 'BOTTOM', 'GROSS', 'NET', 'NTG',
+            'AV_VCLW_SAND', 'AV_PHIT_SAND', 'AV_SWT_SAND', 'AV_PERM_GM_SAND',
+            'AV_VCLW_SHALE', 'AV_PHIT_SHALE', 'AV_SWT_SHALE', 'AV_PERM_GM_SHALE',
+            'COUNT', 'SAND_FLAG', 'QC_FLAG', 'QC_FLAG_mode', 'ROCK_FLAG_mode']
+    summary_df = summary_df[cols]
+
+    # Rename columns
+    cols_rename = {
+        'COUNT': 'DATA_COUNT',
+        'SAND_FLAG': 'SAND_COUNT',
+        'QC_FLAG': 'QC_FLAG_COUNT',
+        'QC_FLAG_mode': 'QC_FLAG_mode',
+        'ROCK_FLAG_mode': 'ROCK_FLAG_mode',
+    }
+    summary_df = summary_df.rename(columns=cols_rename)
 
     return return_df, summary_df
