@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 from .utils import line_intersection
 
-plt.style.use('Solarize_Light2')
+plt.style.use('seaborn-v0_8-paper')
 
 plt.rcParams.update({
                     'axes.labelsize': 10,

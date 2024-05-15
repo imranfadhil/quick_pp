@@ -1,11 +1,14 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import gmean
+import matplotlib.pyplot as plt
 
 from .utils import length_a_b, line_intersection
 from .lithology import gr_index
 from .rock_type import vsh_gr
 from .config import Config
+
+plt.style.use('seaborn-v0_8-paper')
 
 
 def mask_outside_threshold(data, fill=False):
@@ -222,10 +225,13 @@ def quick_qc(well_data):
     """Quick QC for well data.
 
     Args:
-        well_data (pd.DataFrame): Well data.
+        well_data (pd.DataFrame): Well data, meant to process one well at a time.
 
     Returns:
         pd.DataFrame: Well data with QC flags.
+        pd.DataFrame: Reservoir summary.
+        plt.Figure: Distribution plot.
+        plt.Figure: Depth plot.
     """
     return_df = well_data.copy()
     return_df['QC_FLAG'] = 0
@@ -274,8 +280,8 @@ def quick_qc(well_data):
 
     # Sort columns
     cols = ['ZONES', 'TOP', 'BOTTOM', 'GROSS', 'NET', 'NTG',
-            'AV_VCLW_SAND', 'AV_PHIT_SAND', 'AV_SWT_SAND', 'AV_PERM_GM_SAND',
-            'AV_VCLW_SHALE', 'AV_PHIT_SHALE', 'AV_SWT_SHALE', 'AV_PERM_GM_SHALE',
+            'AV_VCLW_SAND', 'AV_VCLW_SHALE', 'AV_PHIT_SAND', 'AV_PHIT_SHALE',
+            'AV_SWT_SAND', 'AV_SWT_SHALE', 'AV_PERM_GM_SAND', 'AV_PERM_GM_SHALE',
             'COUNT', 'SAND_FLAG', 'QC_FLAG', 'QC_FLAG_mode', 'ROCK_FLAG_mode']
     summary_df = summary_df[cols]
 
@@ -289,4 +295,55 @@ def quick_qc(well_data):
     }
     summary_df = summary_df.rename(columns=cols_rename)
 
-    return return_df, summary_df
+    # Distribution plot
+    dist_fig, axs = plt.subplots(4, 1, figsize=(5, 8))
+    for group, data in return_df.groupby('SAND_FLAG'):
+        label = 'SAND' if group == 1 else 'SHALE'
+        axs[0].hist(data['VCLW'], bins=100, alpha=0.7, density=True, label=label)
+        axs[1].hist(data['PHIT'], bins=100, alpha=0.7, label=label)
+        axs[2].hist(data['SWT'], bins=100, alpha=0.7, label=label)
+        axs[3].hist(data['PERM'], bins=100, alpha=0.7, label=label)
+    axs[0].set_title('VCLW Distribution')
+    axs[0].legend()
+
+    axs[1].set_title('PHIT Distribution')
+    axs[1].legend()
+
+    axs[2].set_title('SWT Distribution')
+    axs[2].set_yscale('log')
+    axs[2].legend()
+
+    axs[3].set_title('PERM Distribution')
+    axs[3].set_yscale('log')
+    axs[3].legend()
+
+    dist_fig.tight_layout()
+
+    # Depth plot
+    depth_fig, axs = plt.subplots(4, 1, figsize=(20, 5), sharex=True)
+    axs[0].plot(return_df['DEPTH'], return_df['VCLW'], label='VCLW')
+    axs[0].plot(return_df['DEPTH'], return_df['VSH_GR'], label='VSH_GR')
+    axs[0].set_frame_on(False)
+    axs[0].set_title('VCLW')
+    axs[0].legend()
+
+    axs[1].plot(return_df['DEPTH'], return_df['PHIT'], label='PHIT')
+    axs[1].plot(return_df['DEPTH'], return_df['PHID'], label='PHID')
+    axs[1].set_frame_on(False)
+    axs[1].set_title('PHIT')
+    axs[1].legend()
+
+    axs[2].plot(return_df['DEPTH'], return_df['SWT'], label='SWT')
+    axs[2].plot(return_df['DEPTH'], return_df['SAND_FLAG'], label='SAND_FLAG')
+    axs[2].set_frame_on(False)
+    axs[2].set_title('SWT')
+    axs[2].legend()
+
+    axs[3].plot(return_df['DEPTH'], return_df['QC_FLAG'], label='QC_FLAG')
+    axs[3].set_frame_on(False)
+    axs[3].set_title('QC_FLAG')
+    axs[3].legend()
+
+    depth_fig.tight_layout()
+
+    return return_df, summary_df, dist_fig, depth_fig
