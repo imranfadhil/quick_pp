@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
 
 from .utils import line_intersection
 
@@ -136,6 +137,58 @@ def picket_plot(rt, phit):
     fig.tight_layout()
 
     return fig
+
+
+def func(x, m, c):
+    return m * x + c
+
+
+def fit_pressure_gradient(tvdss, formation_pressure):
+    """Fit pressure gradient from formation pressure and true vertical depth subsea.
+
+    Args:
+        tvdss (float): True vertical depth subsea.
+        formation_pressure (float): Formation pressure.
+
+    Returns:
+        tuple: Gradient and intercept of the best-fit line.
+    """
+    popt, _ = curve_fit(func, tvdss, formation_pressure)
+    return popt
+
+
+def fluid_contact_plot(tvdss, formation_pressue, m, c, fluid_type: str = 'WATER',
+                       ylim: tuple = (5000, 3000), xlim: tuple = (1000, 5000)):
+    """Generate fluid contact plot which is used to determine the fluid contact in a well.
+
+    Args:
+        tvdss (float): True vertical depth subsea.
+        formation_pressure (float): Formation pressure.
+
+    Returns:
+        matplotlib.pyplot.Figure: Fluid contact plot.
+    """
+    color_dict = dict(
+        OIL=('green', 'o'),
+        GAS=('red', 'x'),
+        WATER=('blue', '^'),
+    )
+    marker = color_dict.get(fluid_type.upper(), ('black', 'o'))
+    label = f'{fluid_type} gradient: {round(m, 3)} psi/ft'
+    sc = plt.scatter(formation_pressue, tvdss, label=label, c=marker[0], marker=marker[1])
+
+    line_color = sc.get_facecolors()[0]
+    line_color[-1] = 0.5
+    tvd_pts = np.linspace(ylim[0] - 30, ylim[1] + 30, 30)
+    plt.plot(func(tvd_pts, m, c), tvd_pts, color=line_color)
+
+    plt.ylim(ylim)
+    plt.ylabel('TVDSS (ft)')
+    plt.xlim(xlim)
+    plt.xlabel('Formation Pressure (psi)')
+    plt.legend()
+
+    # TODO: add fluid contact line?
 
 
 def sonic_density_xplot():
@@ -548,7 +601,10 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                     ), row=1, col=2)
 
     fig.update_layout(hovermode='y unified',
+                      dragmode='pan',
                       modebar_remove=['lasso', 'select', 'autoscale'],
+                      modebar_add=['drawline', 'drawcircle', 'drawrect', 'eraseshape'],
+                      newshape_line_color='cyan', newshape_line_width=3,
                       template='none',
                       margin=dict(l=70, r=0, t=20, b=10),
                       paper_bgcolor='#e6f2ff',
