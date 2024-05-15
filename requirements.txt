@@ -28,3 +28,5 @@ fastapi==0.110.0
 uvicorn==0.27.1
 ydata-profiling==4.7.0
 ipywidgets==8.1.2
+fastparquet==2024.2.0
+pyarrow==16.0.0

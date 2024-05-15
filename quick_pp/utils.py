@@ -89,50 +89,60 @@ def line_intersection(line1, line2):
     return x, y
 
 
-def sand_flagging(df: pd.DataFrame):
+def zone_flagging(data: pd.DataFrame):
     """Flagging sand zones based on VSHALE, VCLW, and VSH_GR.
 
     Returns:
-        pd.DataFrame: Original DataFrame with SAND_FLAG and ZONES columns.
+        pd.DataFrame: Original DataFrame with ZONE_FLAG and ZONES columns.
     """
-
+    df = data.copy()
     if 'ZONES' not in df.columns:
         df['ZONES'] = 'FORMATION'
-    else:
-        df['ZONES'].fillna('FORMATION', inplace=True)
+    df['ZONES'].fillna('FORMATION', inplace=True)
 
     return_df = pd.DataFrame()
-    for well_name, well_data in df.groupby('WELL_NAME'):
-        # Using VSH_GR
-        dtr_gr = detrend(well_data[['GR']].fillna(well_data['GR'].median()), axis=0) + well_data['GR'].mean()
-        well_data['VSH_GR'] = MinMaxScaler().fit_transform(dtr_gr)
-        threshold = np.nanquantile(well_data['VSH_GR'], .75, method='median_unbiased')
+    for _, well_data in df.groupby('WELL_NAME'):
+        # Using VSHALE if available otherwise calculate VSH_GR
+        if 'VSHALE' in well_data.columns:
+            well_data['vsh_curve'] = well_data['VSHALE']
+        else:
+            dtr_gr = detrend(well_data[['GR']].fillna(well_data['GR'].median()), axis=0) + well_data['GR'].mean()
+            well_data['vsh_curve'] = MinMaxScaler().fit_transform(dtr_gr)
+        threshold = np.nanquantile(well_data['vsh_curve'], .7, method='median_unbiased')
 
-        # Estimate SAND_FLAG using VSH_GR
-        well_data['SAND_FLAG'] = np.where(
-            well_data['VSH_GR'].rolling(50, center=True, closed='both').mean() < threshold, 1, 0)
-        well_data['SAND_FLAG'] = np.where(
-            well_data['SAND_FLAG'].rolling(13, win_type='boxcar', closed='left').mean() > 0.5, 1, 0)
+        # Estimate ZONE_FLAG using VSH_GR
+        well_data['SAND_FLAG'] = np.where(well_data['vsh_curve'] < threshold, 1, 0)
+        well_data['ZONES_FLAG'] = np.where(
+            well_data['vsh_curve'].rolling(25, win_type='boxcar', center=True).mean() < threshold, 1, 0)
+        well_data['ZONES_FLAG'] = well_data['ZONES_FLAG'].fillna(0)
 
         # Fill in empty ZONES
-        no_zones_df = well_data[well_data['ZONES'] == 'FORMATION'].copy()
+        no_zones_df = well_data[well_data['ZONES'] == 'FORMATION']
         if not no_zones_df.empty:
             # Assign generic ZONES
             df_temp = pd.DataFrame()
             sand_counter = 1
             shale_counter = 0
             for i, data in no_zones_df.iterrows():
-                if data['SAND_FLAG'] == 1 and shale_counter == 1:
+                if data['ZONES_FLAG'] == 1 and shale_counter == 1:
                     sand_counter += 1
                     shale_counter = 0
-                if data['SAND_FLAG'] == 1:
-                    data['ZONES'] = f'SAND_{sand_counter}'
+                if data['ZONES_FLAG'] == 1:
+                    data['ZONES'] = f'ZONE_{sand_counter}'
                 else:
-                    data['ZONES'] = f'SAND_{sand_counter}'
+                    data['ZONES'] = f'ZONE_{sand_counter}'
                     shale_counter = 1
-                df_temp = pd.concat([df_temp, pd.DataFrame(data[['DEPTH', 'SAND_FLAG', 'ZONES']]).T], axis=0)
+                df_temp = pd.concat([df_temp, pd.DataFrame(data[['DEPTH', 'ZONES']]).T], axis=0)
             df_temp.reset_index(drop=True, inplace=True)
             well_data.loc[well_data['DEPTH'].isin(df_temp['DEPTH']), 'ZONES'] = df_temp['ZONES']
+
+            # Replace small 'ZONE_'s with np.nan and ffill
+            remove_sands = well_data[well_data['ZONES'].str.contains('ZONE_', na=False)][['DEPTH', 'ZONES']].groupby(
+                'ZONES').count().reset_index()
+            remove_sands = remove_sands[remove_sands['DEPTH'] < 70]
+            well_data['ZONES'] = well_data['ZONES'].apply(
+                lambda x: x if x not in remove_sands['ZONES'].to_list() else np.nan)
+            well_data['ZONES'] = well_data['ZONES'].ffill().bfill()
 
         return_df = pd.concat([return_df, well_data], ignore_index=True)
 
