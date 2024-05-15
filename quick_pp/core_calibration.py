@@ -174,7 +174,8 @@ def sw_shf_leverett_j(perm, poro, depth, fwl, ift, gw, ghc, a, b):
     h = fwl - depth
     pc = h * (gw - ghc)
     shf = ((0.216 * (pc / ift) * (perm / poro)**(0.5)) / a)**(1 / b)
-    return np.where(shf > 1, 1, shf)
+    # return np.where(shf > 1, 1, shf)
+    return shf
 
 
 def sw_shf_cuddy(poro, depth, fwl, gw, ghc, a, b):
@@ -192,4 +193,31 @@ def sw_shf_cuddy(poro, depth, fwl, gw, ghc, a, b):
     """
     h = fwl - depth
     shf = (h * (gw - ghc) / a)**(1 / b) / poro
-    return np.where(shf > 1, 1, shf)
+    # return np.where(shf > 1, 1, shf)
+    return shf
+
+
+def sw_shf_choo(perm, phit, phie, depth, fwl, ift, gw, ghc, b0):
+    """Saturation height function.
+
+    Args:
+        perm (float): Permeability (mD).
+        poro (float): Porosity (frac).
+        depth (_type_): _description_
+        fwl (_type_): _description_
+        ift (float): Interfacial tension (dynes/cm).
+        gw (float): Gas density (psi/ft).
+        ghc (float): Gas height (psi/ft).
+        a (float): A constant from J function.
+        b (float): B constant from J function.
+
+    Returns:
+        _type_: _description_
+    """
+    swb = 1 - (phie / phit)
+    h = fwl - depth
+    pc = h * (gw - ghc)
+    shf = 10**((2 * b0 - 1) * np.log10(1 + swb**-1) + np.log10(1 + swb)) / (
+        (0.2166 * (pc / ift) * (perm / phit)**(0.5))**(b0 * np.log10(1 + swb**-1) / 3))
+    # return np.where(shf > 1, 1, shf)
+    return shf
