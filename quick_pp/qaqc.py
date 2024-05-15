@@ -296,26 +296,44 @@ def quick_qc(well_data):
     summary_df = summary_df.rename(columns=cols_rename)
 
     # Distribution plot
-    dist_fig, axs = plt.subplots(4, 1, figsize=(5, 8))
+    dist_fig, axs = plt.subplots(8, 1, figsize=(5, 15))
     for group, data in return_df.groupby('SAND_FLAG'):
         label = 'SAND' if group == 1 else 'SHALE'
         axs[0].hist(data['VCLW'], bins=100, alpha=0.7, density=True, label=label)
-        axs[1].hist(data['PHIT'], bins=100, alpha=0.7, label=label)
-        axs[2].hist(data['SWT'], bins=100, alpha=0.7, label=label)
-        axs[3].hist(data['PERM'], bins=100, alpha=0.7, label=label)
+        axs[1].hist(summary_df[f'AV_VCLW_{label}'], bins=100, alpha=0.7, density=True, label=f'AV_{label}')
+        axs[2].hist(data['PHIT'], bins=100, alpha=0.7, label=label)
+        axs[3].hist(summary_df[f'AV_PHIT_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
+        axs[4].hist(data['SWT'], bins=100, alpha=0.7, label=label)
+        axs[5].hist(summary_df[f'AV_SWT_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
+        axs[6].hist(data['PERM'], bins=100, alpha=0.7, label=label)
+        axs[7].hist(summary_df[f'AV_PERM_GM_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
     axs[0].set_title('VCLW Distribution')
     axs[0].legend()
 
-    axs[1].set_title('PHIT Distribution')
+    axs[1].set_title('AV_VCLW Distribution')
     axs[1].legend()
 
-    axs[2].set_title('SWT Distribution')
-    axs[2].set_yscale('log')
+    axs[2].set_title('PHIT Distribution')
     axs[2].legend()
 
-    axs[3].set_title('PERM Distribution')
-    axs[3].set_yscale('log')
+    axs[3].set_title('AV_PHIT Distribution')
     axs[3].legend()
+
+    axs[4].set_title('SWT Distribution')
+    axs[4].set_yscale('log')
+    axs[4].legend()
+
+    axs[5].set_title('AV_SWT Distribution')
+    axs[5].set_yscale('log')
+    axs[5].legend()
+
+    axs[6].set_title('PERM Distribution')
+    axs[6].set_yscale('log')
+    axs[6].legend()
+
+    axs[7].set_title('AV_PERM_GM Distribution')
+    axs[7].set_yscale('log')
+    axs[7].legend()
 
     dist_fig.tight_layout()
 
