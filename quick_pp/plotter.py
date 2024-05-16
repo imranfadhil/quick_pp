@@ -3,17 +3,17 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
 
 from .utils import line_intersection
 
 plt.style.use('seaborn-v0_8-paper')
-
-plt.rcParams.update({
-                    'axes.labelsize': 10,
-                    'xtick.labelsize': 10,
-                    'legend.fontsize': 'small'
-                    })
+plt.rcParams.update(
+    {
+        'axes.labelsize': 10,
+        'xtick.labelsize': 10,
+        'legend.fontsize': 'small'
+    }
+)
 
 COLOR_DICT = {
     'BADHOLE': 'rgba(0, 0, 0, .25)',
@@ -139,58 +139,6 @@ def picket_plot(rt, phit):
     return fig
 
 
-def func(x, m, c):
-    return m * x + c
-
-
-def fit_pressure_gradient(tvdss, formation_pressure):
-    """Fit pressure gradient from formation pressure and true vertical depth subsea.
-
-    Args:
-        tvdss (float): True vertical depth subsea.
-        formation_pressure (float): Formation pressure.
-
-    Returns:
-        tuple: Gradient and intercept of the best-fit line.
-    """
-    popt, _ = curve_fit(func, tvdss, formation_pressure)
-    return popt
-
-
-def fluid_contact_plot(tvdss, formation_pressue, m, c, fluid_type: str = 'WATER',
-                       ylim: tuple = (5000, 3000), xlim: tuple = (1000, 5000)):
-    """Generate fluid contact plot which is used to determine the fluid contact in a well.
-
-    Args:
-        tvdss (float): True vertical depth subsea.
-        formation_pressure (float): Formation pressure.
-
-    Returns:
-        matplotlib.pyplot.Figure: Fluid contact plot.
-    """
-    color_dict = dict(
-        OIL=('green', 'o'),
-        GAS=('red', 'x'),
-        WATER=('blue', '^'),
-    )
-    marker = color_dict.get(fluid_type.upper(), ('black', 'o'))
-    label = f'{fluid_type} gradient: {round(m, 3)} psi/ft'
-    sc = plt.scatter(formation_pressue, tvdss, label=label, c=marker[0], marker=marker[1])
-
-    line_color = sc.get_facecolors()[0]
-    line_color[-1] = 0.5
-    tvd_pts = np.linspace(ylim[0] - 30, ylim[1] + 30, 30)
-    plt.plot(func(tvd_pts, m, c), tvd_pts, color=line_color)
-
-    plt.ylim(ylim)
-    plt.ylabel('TVDSS (ft)')
-    plt.xlim(xlim)
-    plt.xlabel('Formation Pressure (psi)')
-    plt.legend()
-
-    # TODO: add fluid contact line?
-
-
 def sonic_density_xplot():
     pass
 
@@ -221,7 +169,7 @@ def plotly_log(well_data, depth_uom=""):  # noqa
         if k not in df.columns:
             df[k] = np.nan
 
-    fig = make_subplots(rows=1, cols=track, shared_yaxes=True, horizontal_spacing=0.02,
+    fig = make_subplots(rows=1, cols=track, shared_yaxes=True, horizontal_spacing=0.015,
                         column_widths=[1, 1, 1, 1, 1, 1, .15, 1],
                         specs=[list([{'secondary_y': True}]*track)])
 
