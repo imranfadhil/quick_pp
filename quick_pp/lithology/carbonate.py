@@ -17,7 +17,7 @@ class Carbonate:
      original PCSB model."""
 
     def __init__(self, dry_calc_point: tuple = None, dry_dolo_point: tuple = None, dry_clay_point: tuple = None,
-                 fluid_point: tuple = None):
+                 fluid_point: tuple = None, **kwargs):
         # Initialize the endpoints
         self.dry_calc_point = dry_calc_point or Config.CARB_NEU_DEN_ENDPOINTS["DRY_CALC_POINT"]
         self.dry_dolo_point = dry_dolo_point or Config.CARB_NEU_DEN_ENDPOINTS["DRY_DOLO_POINT"]
@@ -57,7 +57,7 @@ class Carbonate:
                 # Estimate total porosity
                 rho_ma = rho_matrix(vcalc=vcalc, vdolo=vdolo, vclay=vcld)
                 phit = density_porosity(rhob, rho_ma)
-                vmatrix = (1 - phit).values
+                vmatrix = (1 - phit)
                 vcalc = vcalc*vmatrix
                 vdolo = vdolo*vmatrix
                 vcld = vcld*vmatrix
