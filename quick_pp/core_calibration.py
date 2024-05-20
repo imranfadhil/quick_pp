@@ -106,18 +106,20 @@ def fit_poroperm_curve(poro, perm):
         return 1, 1
 
 
-def poroperm_xplot(poro, perm, a, b, label):
+def poroperm_xplot(poro, perm, a, b, label, log_log=False):
 
     sc = plt.scatter(poro, perm, marker='o', label=label)
     line_color = sc.get_facecolors()[0]
     line_color[-1] = 0.5
     cpore = np.geomspace(0.05, 0.5, 30)
-    plt.scatter(cpore, func(cpore, a, b), marker='x', color=line_color)
+    plt.plot(cpore, func(cpore, a, b), color=line_color, linestyle='dashed')
     plt.xlabel('CPORE (frac)')
     plt.xlim(0, 0.5)
     plt.ylabel('CPERM (mD)')
     plt.yscale('log')
     plt.legend()
+    if log_log:
+        plt.xscale('log')
 
 
 def bvw_xplot(bvw, pc, a, b, label):
