@@ -38,6 +38,7 @@ def vsh_gr(gr):
     Returns:
         float: VSH_GR.
     """
+    gr = np.where(np.isnan(gr), np.nanmedian(gr), gr)
     dtr_gr = detrend(gr, axis=0) + np.nanmean(gr)
     scaler = MinMaxScaler()
     gri = scaler.fit_transform(np.reshape(dtr_gr, (-1, 1)))

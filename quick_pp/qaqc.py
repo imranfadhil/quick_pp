@@ -255,8 +255,8 @@ def quick_qc(well_data):
             'VCLW': 'mean',
             'PHIT': 'mean',
             'SWT': 'mean',
-            'PERM': gmean,
         })
+        temp_df['PERM'] = return_df[index].groupby('ZONES')['PERM'].agg(gmean, nan_policy='omit')
         # Rename columns
         cols_rename = {
             'VCLW': f'AV_VCLW_{group}',
