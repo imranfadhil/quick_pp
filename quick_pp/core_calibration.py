@@ -18,6 +18,21 @@ def leverett_j_function(pc, ift, perm, phit):
     return 0.216 * (pc / ift) * (perm / phit)**(0.5)
 
 
+def pseudo_leverett_j_function(pc, ift, perm, phit):
+    """Pseudo-Leverett J function.
+
+    Args:
+        pc (float): Capillary pressure.
+        ift (float): Interfacial tension.
+        perm (float): Permeability.
+        phit (float): Total porosity.
+
+    Returns:
+        float: Pseudo-Leverett J function.
+    """
+    pass
+
+
 def sw_leverett_j(pc, ift, perm, phit, a, b):
     """Saturation J function.
 
@@ -75,18 +90,21 @@ def fit_j_curve(sw, j):
         return 1, 1
 
 
-def j_xplot(sw, j, a, b, label):
+def j_xplot(sw, j, a=None, b=None, label='', log_log=False, ylim=None):
 
-    sc = plt.scatter(sw, j, marker='o', label=label)
-    line_color = sc.get_facecolors()[0]
-    line_color[-1] = 0.5
-    csw = np.geomspace(0.1, 1.0, 30)
-    plt.scatter(csw, func(csw, a, b), marker='x', color=line_color)
+    sc = plt.plot(sw, j, marker='s', label=label)
+    if a and b:
+        line_color = sc[0].get_color() + '80'  # Set opacity to 0.5
+        csw = np.geomspace(0.1, 1.0, 30)
+        plt.plot(csw, func(csw, a, b), color=line_color, linestyle='dashed')
     plt.xlabel('Sw (frac)')
-    plt.xlim(0, 1)
+    plt.xlim(0.01, 1)
     plt.ylabel('J')
-    plt.ylim(0, np.max(j) * 1.5)
+    plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
     plt.legend()
+    if log_log:
+        plt.xscale('log')
+        plt.yscale('log')
 
 
 def fit_poroperm_curve(poro, perm):
@@ -106,13 +124,14 @@ def fit_poroperm_curve(poro, perm):
         return 1, 1
 
 
-def poroperm_xplot(poro, perm, a, b, label, log_log=False):
+def poroperm_xplot(poro, perm, a=None, b=None, label='', log_log=False):
 
     sc = plt.scatter(poro, perm, marker='o', label=label)
-    line_color = sc.get_facecolors()[0]
-    line_color[-1] = 0.5
-    cpore = np.geomspace(0.05, 0.5, 30)
-    plt.plot(cpore, func(cpore, a, b), color=line_color, linestyle='dashed')
+    if a and b:
+        line_color = sc.get_facecolors()[0]
+        line_color[-1] = 0.5
+        cpore = np.geomspace(0.05, 0.5, 30)
+        plt.plot(cpore, func(cpore, a, b), color=line_color, linestyle='dashed')
     plt.xlabel('CPORE (frac)')
     plt.xlim(0, 0.5)
     plt.ylabel('CPERM (mD)')
@@ -122,16 +141,20 @@ def poroperm_xplot(poro, perm, a, b, label, log_log=False):
         plt.xscale('log')
 
 
-def bvw_xplot(bvw, pc, a, b, label):
+def bvw_xplot(bvw, pc, a=None, b=None, label='', ylim=None, log_log=False):
 
-    sc = plt.scatter(bvw, pc, marker='o', label=label)
-    line_color = sc.get_facecolors()[0]
-    line_color[-1] = 0.5
-    cbvw = np.linspace(0.05, 0.35, 30)
-    plt.scatter(cbvw, func(cbvw, a, b), marker='x', color=line_color)
+    sc = plt.plot(bvw, pc, marker='s', label=label)
+    if a and b:
+        line_color = sc[0].get_color() + '66'  # Set opacity to 0
+        cbvw = np.linspace(0.05, 0.35, 30)
+        plt.scatter(cbvw, func(cbvw, a, b), marker='x', color=line_color)
     plt.xlabel('BVW (frac)')
     plt.ylabel('Pc (psi)')
+    plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
     plt.legend()
+    if log_log:
+        plt.xscale('log')
+        plt.yscale('log')
 
 
 def estimate_hafwl(sw, poro, perm, ift, gw, ghc, a, b):

@@ -47,7 +47,8 @@ def vsh_gr(gr):
 
 
 def rock_typing(curve, cut_offs=[.33, .45, .7], higher_is_better=True):
-    rock_type = [1, 2, 3, 4] if higher_is_better else [4, 3, 2, 1]
-    return np.where(curve < cut_offs[0], rock_type[0],
+    rock_type = [4, 3, 2, 1] if higher_is_better else [1, 2, 3, 4]
+    return np.where(np.isnan(curve), 4, np.where(
+        curve < cut_offs[0], rock_type[0],
                     np.where(curve < cut_offs[1], rock_type[1],
-                             np.where(curve < cut_offs[2], rock_type[2], rock_type[3])))
+                             np.where(curve < cut_offs[2], rock_type[2], rock_type[3]))))
