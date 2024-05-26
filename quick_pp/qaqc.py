@@ -4,7 +4,6 @@ from scipy.stats import gmean
 import matplotlib.pyplot as plt
 
 from .utils import length_a_b, line_intersection, min_max_line
-from .lithology import gr_index
 from .rock_type import estimate_vsh_gr
 from .config import Config
 
@@ -161,7 +160,7 @@ def porosity_correction_averaging(nphi, dphi, method='weighted'):
 
 
 def neu_den_xplot_hc_correction(
-        nphi, rhob, gr=None,
+        nphi, rhob, gr=None, hc_flag=None,
         dry_sand_point: tuple = None,
         dry_clay_point: tuple = None,
         fluid_point: tuple = (1.0, 1.0),
@@ -186,14 +185,14 @@ def neu_den_xplot_hc_correction(
     D = fluid_point
     rocklithofrac = length_a_b(A, C)
 
-    frac_vsh_gr = gr_index(gr)
+    frac_vsh_gr = estimate_vsh_gr(gr)  # gr_index(gr)
     nphi_corrected = np.empty(0)
     rhob_corrected = np.empty(0)
-    hc_flag = np.empty(0)
+    hc_flag = np.empty(len(nphi)) if hc_flag is None else hc_flag
     for i, point in enumerate(list(zip(nphi, rhob, frac_vsh_gr))):
         var_pt = line_intersection((A, C), (D, (point[0], point[1])))
         projlithofrac = length_a_b(var_pt, C) + buffer
-        if projlithofrac > rocklithofrac:
+        if projlithofrac > rocklithofrac or hc_flag[i] == 1:
             # Iteration until vsh_dn = vsh_gr
             vsh_dn = 1 - (projlithofrac / rocklithofrac)
             nphi_corr = point[0]
@@ -212,11 +211,11 @@ def neu_den_xplot_hc_correction(
 
             nphi_corrected = np.append(nphi_corrected, nphi_corr)
             rhob_corrected = np.append(rhob_corrected, rhob_corr)
-            hc_flag = np.append(hc_flag, 1)
+            hc_flag[i] = 1
         else:
             nphi_corrected = np.append(nphi_corrected, point[0])
             rhob_corrected = np.append(rhob_corrected, point[1])
-            hc_flag = np.append(hc_flag, 0)
+            hc_flag[i] = 0
 
     return nphi_corrected, rhob_corrected, hc_flag
 
