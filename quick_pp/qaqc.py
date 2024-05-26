@@ -3,9 +3,9 @@ import numpy as np
 from scipy.stats import gmean
 import matplotlib.pyplot as plt
 
-from .utils import length_a_b, line_intersection
+from .utils import length_a_b, line_intersection, min_max_line
 from .lithology import gr_index
-from .rock_type import vsh_gr
+from .rock_type import estimate_vsh_gr
 from .config import Config
 
 plt.style.use('seaborn-v0_8-paper')
@@ -221,6 +221,13 @@ def neu_den_xplot_hc_correction(
     return nphi_corrected, rhob_corrected, hc_flag
 
 
+def den_correction(rhob, gr):
+
+    _, rhob_max_line = min_max_line(rhob, 0.1, num_bins=1)
+    vsh_gr = estimate_vsh_gr(gr)
+    return rhob - (rhob - rhob_max_line) * vsh_gr
+
+
 def quick_qc(well_data):
     """Quick QC for well data.
 
@@ -237,7 +244,7 @@ def quick_qc(well_data):
     return_df['QC_FLAG'] = 0
 
     # Compare vsh_gr and vsh_dn
-    return_df['VSH_GR'] = vsh_gr(return_df['GR'])
+    return_df['VSH_GR'] = estimate_vsh_gr(return_df['GR'])
     return_df['QC_FLAG'] = np.where(abs(return_df['VSH_GR'] - return_df['VCLW']) > 0.1, 1, return_df['QC_FLAG'])
 
     # Compare phit_dn and phit_d

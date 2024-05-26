@@ -145,7 +145,7 @@ class SandSiltClay:
         D = self.fluid_point
         E = list(zip(nphi, rhob))
 
-        siltclayratio = 0.4  # empirical value
+        siltclayratio = 0.25  # empirical value
         claysiltfrac = length_a_b(C, B)
         rocklithofrac = length_a_b(A, C)
         sandsiltfrac = length_a_b(A, B)

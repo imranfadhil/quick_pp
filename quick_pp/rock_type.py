@@ -29,7 +29,7 @@ def rqi(k, phit):
     return (0.0314 * (k / phit)**0.5)
 
 
-def vsh_gr(gr):
+def estimate_vsh_gr(gr):
     """Estimate volume of shale from gamma ray.
 
     Args:
@@ -41,12 +41,12 @@ def vsh_gr(gr):
     gr = np.where(np.isnan(gr), np.nanmedian(gr), gr)
     dtr_gr = detrend(gr, axis=0) + np.nanmean(gr)
     scaler = MinMaxScaler()
-    gri = scaler.fit_transform(np.reshape(dtr_gr, (-1, 1)))
+    gri = scaler.fit_transform(np.reshape(dtr_gr, (-1, 1))).reshape(-1)
     # Apply Steiber equation
     return gri / (3 - 2 * gri)
 
 
-def rock_typing(curve, cut_offs=[.33, .45, .7], higher_is_better=True):
+def rock_typing(curve, cut_offs=[.1, .3, .4], higher_is_better=True):
     rock_type = [4, 3, 2, 1] if higher_is_better else [1, 2, 3, 4]
     return np.where(np.isnan(curve), 4, np.where(
         curve < cut_offs[0], rock_type[0],

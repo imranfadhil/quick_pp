@@ -101,7 +101,7 @@ def j_xplot(sw, j, a=None, b=None, label='', log_log=False, ylim=None):
     plt.xlim(0.01, 1)
     plt.ylabel('J')
     plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
-    plt.legend()
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
     if log_log:
         plt.xscale('log')
         plt.yscale('log')
@@ -136,7 +136,7 @@ def poroperm_xplot(poro, perm, a=None, b=None, label='', log_log=False):
     plt.xlim(0, 0.5)
     plt.ylabel('CPERM (mD)')
     plt.yscale('log')
-    plt.legend()
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
     if log_log:
         plt.xscale('log')
 
@@ -151,7 +151,7 @@ def bvw_xplot(bvw, pc, a=None, b=None, label='', ylim=None, log_log=False):
     plt.xlabel('BVW (frac)')
     plt.ylabel('Pc (psi)')
     plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
-    plt.legend()
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
     if log_log:
         plt.xscale('log')
         plt.yscale('log')
@@ -222,19 +222,19 @@ def sw_shf_cuddy(poro, depth, fwl, gw, ghc, a, b):
     return shf
 
 
-def sw_shf_choo(perm, phit, phie, depth, fwl, ift, gw, ghc, b0):
+def sw_shf_choo(perm, phit, phie, depth, fwl, ift, gw, ghc, b0=0.4):
     """Saturation height function.
 
     Args:
         perm (float): Permeability (mD).
-        poro (float): Porosity (frac).
-        depth (_type_): _description_
-        fwl (_type_): _description_
+        phit (float): Total porosity (frac).
+        phie (float): Effective porosity (frac).
+        depth (float): _description_
+        fwl (float): _description_
         ift (float): Interfacial tension (dynes/cm).
         gw (float): Gas density (psi/ft).
         ghc (float): Gas height (psi/ft).
-        a (float): A constant from J function.
-        b (float): B constant from J function.
+        b0 (float): _description_. Defaults to 0.4.
 
     Returns:
         _type_: _description_
