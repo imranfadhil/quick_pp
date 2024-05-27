@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.signal import detrend
-from sklearn.preprocessing import MinMaxScaler
+from .utils import min_max_line
 
 
 def fzi(k, phit):
@@ -29,7 +29,7 @@ def rqi(k, phit):
     return (0.0314 * (k / phit)**0.5)
 
 
-def estimate_vsh_gr(gr):
+def estimate_vsh_gr(gr, alpha=0.1):
     """Estimate volume of shale from gamma ray.
 
     Args:
@@ -40,8 +40,9 @@ def estimate_vsh_gr(gr):
     """
     gr = np.where(np.isnan(gr), np.nanmedian(gr), gr)
     dtr_gr = detrend(gr, axis=0) + np.nanmean(gr)
-    scaler = MinMaxScaler()
-    gri = scaler.fit_transform(np.reshape(dtr_gr, (-1, 1))).reshape(-1)
+    min_gr, max_gr = min_max_line(dtr_gr, alpha)
+    gri = np.where(dtr_gr > max_gr, max_gr, np.where(dtr_gr < min_gr, min_gr, dtr_gr))
+    gri = (gri - min_gr) / (max_gr - min_gr)
     # Apply Steiber equation
     return gri / (3 - 2 * gri)
 
