@@ -119,10 +119,13 @@ def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
     return np.where(swt < 1, swt, 1)
 
 
-def modified_simandoux_saturation(sw, a, m, n):
+def modified_simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
     """TODO: Modified Simandoux's saturation model.
     """
-    pass
+    shale_factor = vsh / rsh
+    swt = (a * rw * (1 - vsh) / (2 * phit**m)) * (
+        (shale_factor**2 + (4 * phit**m / (a * rw * rt)))**(1 / 2) - shale_factor)
+    return np.where(swt < 1, swt, 1)
 
 
 def estimate_temperature_gradient(tvd, unit='metric'):

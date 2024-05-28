@@ -26,7 +26,7 @@ def kozeny_carman_permeability(phit, S=0.01):
     Returns:
         float: Permeability in mD.
     """
-    return phit**3 / (5 * S**2 * (1 - phit**2))
+    return phit**3 / (5 * S**2 * (1 - phit)**2)
 
 
 def timur_permeability(phit, Swirr):
@@ -40,7 +40,7 @@ def timur_permeability(phit, Swirr):
     Returns:
         float: Permeability in mD.
     """
-    return 8.58 * phit**4.4 / Swirr**2
+    return 0.136 * phit**4.4 / Swirr**2
 
 
 def coates_permeability(phie, Swirr, a=1):
@@ -82,3 +82,7 @@ def morris_biggs_permeability(phit, phie, Vbwi):
         float: Permeability in mD.
     """
     return (1e2 * phie**2 * (phit - Vbwi) / Vbwi)**2
+
+
+def estimate_swirr():
+    pass
