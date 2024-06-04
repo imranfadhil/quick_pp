@@ -2,6 +2,15 @@ from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as np
 
+plt.style.use('seaborn-v0_8-paper')
+plt.rcParams.update(
+    {
+        'axes.labelsize': 10,
+        'xtick.labelsize': 10,
+        'legend.fontsize': 'small'
+    }
+)
+
 
 def leverett_j_function(pc, ift, perm, phit):
     """Leverett J function.

@@ -70,7 +70,21 @@ def tixier_permeability(phit, Swirr):
     return 62.5 * phit**6 / Swirr**2
 
 
-def morris_biggs_permeability(phit, phie, Vbwi):
+def morris_biggs_permeability(phit, C, Swirr):
+    """Based on Morris and Biggs (1967)
+
+    Args:
+        phit (float): Total porosity in fraction.
+        phie (float): Effective porosity in fraction.
+        Vbwi (float): Volume of bound water in fraction.
+
+    Returns:
+        float: Permeability in mD.
+    """
+    return (C * phit**3 / Swirr)**2
+
+
+def morris_biggs_modified_permeability(phit, phie, Vbwi):
     """Based on Morris and Biggs (1967)
 
     Args:
@@ -84,5 +98,38 @@ def morris_biggs_permeability(phit, phie, Vbwi):
     return (1e2 * phie**2 * (phit - Vbwi) / Vbwi)**2
 
 
-def estimate_swirr():
-    pass
+def estimate_krw(swt, swirr):
+    """Based on Park Jones (1945)"""
+    return ((swt - swirr) / (1 - swirr))**3
+
+
+def estimate_kro(swt, swirr):
+    """Based on Park Jones (1945)"""
+    return ((0.9 - swt) / (0.9 - swirr))**2
+
+
+def estimate_wor(krw, kro, A=2):
+    """Estimating Water Oil Ratio of surface production. Based on Pirson (1950).
+
+    Args:
+        krw (float): Water relative permeability.
+        kro (float): Oil relative permeability.
+        A (float): Constant. Defaults to 2.
+            Light oil: 1 - 5
+            Medium oil: 10 - 50
+            Heavy oil: > 50
+    Returns:
+        float: Water Oil Ratio.
+    """
+    return (krw / kro) * A
+
+
+def estimate_wc(wor):
+    """Estimating Water Cut of surface production.
+
+    Args:
+        wor (float): Water Oil Ratio.
+    Returns:
+        float: Water Cut.
+    """
+    return wor / (1 + wor)

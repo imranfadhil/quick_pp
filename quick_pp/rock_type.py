@@ -29,7 +29,7 @@ def rqi(k, phit):
     return (0.0314 * (k / phit)**0.5)
 
 
-def estimate_vsh_gr(gr, alpha=0.25):
+def estimate_vsh_gr(gr, alpha=0.1):
     """Estimate volume of shale from gamma ray.
 
     Args:

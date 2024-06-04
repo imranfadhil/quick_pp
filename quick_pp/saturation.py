@@ -1,6 +1,17 @@
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+
 from quick_pp.utils import min_max_line
+
+plt.style.use('seaborn-v0_8-paper')
+plt.rcParams.update(
+    {
+        'axes.labelsize': 10,
+        'xtick.labelsize': 10,
+        'legend.fontsize': 'small'
+    }
+)
 
 
 def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
@@ -290,3 +301,30 @@ def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
     """
     m = (2 / np.log(phie)) * np.log(rw**0.5 * ((1 / rt)**0.5 - (vsh**(1 - 0.5 * vsh) / rsh**0.5)))
     return m
+
+
+def func(x, a, b):
+    return a * x**b
+
+
+def swirr_xplot(swt, phit, c=None, q=None, label='', log_log=False):
+    """Plot SWT vs PHIT for sand intervales only and estimate Swirr from X-plot.
+    Args:
+        swt (float): Water saturation.
+        phit (float): Total porosity.
+        c (float): Constant.
+        q (float): Constant.
+    """
+    sc = plt.scatter(swt, phit, marker='s', label=label)
+    if c and q:
+        line_color = sc.get_facecolors()[0]
+        line_color[-1] = 0.5
+        cphit = np.geomspace(0.1, 1.0, 30)
+        plt.plot(cphit, func(cphit, c, q), color=line_color, linestyle='dashed')
+    plt.xlabel('SWT (frac)')
+    plt.ylabel('PHIT (frac)')
+    plt.ylim(0.01, .5)
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    if log_log:
+        plt.xscale('log')
+        plt.yscale('log')

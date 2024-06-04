@@ -220,11 +220,20 @@ def neu_den_xplot_hc_correction(
     return nphi_corrected, rhob_corrected, hc_flag
 
 
-def den_correction(rhob, gr):
+def den_correction(rhob, gr, alpha=0.1):
+    """Correct bulk density using gamma ray.
 
-    _, rhob_max_line = min_max_line(rhob, 0.1, num_bins=1)
-    vsh_gr = estimate_vsh_gr(gr)
-    return rhob - (rhob - rhob_max_line) * vsh_gr
+    Args:
+        rhob (float): Bulk density log in g/cc.
+        gr (float): Gamma ray log in GAPI.
+        alpha (float, optional): Alpha value for min_max_line. Defaults to 0.1.
+
+    Returns:
+        float: Corrected bulk density.
+    """
+    rhob_min_line, rhob_max_line = min_max_line(rhob, alpha=alpha, num_bins=1)
+    vsh_gr = estimate_vsh_gr(gr, alpha=alpha)
+    return rhob_min_line + (rhob_max_line - rhob_min_line) * vsh_gr
 
 
 def quick_qc(well_data):
