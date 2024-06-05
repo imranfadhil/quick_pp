@@ -56,23 +56,23 @@ class Config(object):
     )
 
     MINERALS_LOG_VALUE = {
-        'GR_QUARTZ': 30.0,
-        'NPHI_QUARTZ': -0.04,
-        'RHOB_QUARTZ': 2.65,
-        'DTC_QUARTZ': 55.0,
+        'GR_QUARTZ': 0.0,
+        'NPHI_QUARTZ': -0.02,
+        'RHOB_QUARTZ': 2.64,
+        'DTC_QUARTZ': 52.9,
         'PEF_QUARTZ': 1.8,
 
         'GR_CALCITE': 0.0,
         'NPHI_CALCITE': 0.0,
         'RHOB_CALCITE': 2.71,
-        'DTC_CALCITE': 47.6,
-        'PEF_CALCITE': 5.08,
+        'DTC_CALCITE': 49.7,
+        'PEF_CALCITE': 5.1,
 
         'GR_DOLOMITE': 0.0,
         'NPHI_DOLOMITE': 0.01,
-        'RHOB_DOLOMITE': 2.87,
+        'RHOB_DOLOMITE': 2.85,
         'DTC_DOLOMITE': 43.5,
-        'PEF_DOLOMITE': 3.14,
+        'PEF_DOLOMITE': 3.1,
 
         'GR_SILT': 80.0,
         'NPHI_SILT': 0.1,
@@ -80,11 +80,12 @@ class Config(object):
         'DTC_SILT': 100.0,
         'PEF_SILT': 2.0,
 
-        'GR_SH': 110.0,
-        'NPHI_SH': 0.3,
-        'RHOB_SH': 2.7,
-        'DTC_SH': 110.0,
-        'PEF_SH': 2.2,
+        # Kaolinite
+        'GR_SH': 130.0,
+        'NPHI_SH': 0.34,
+        'RHOB_SH': 2.41,
+        'DTC_SH': 143.0,
+        'PEF_SH': 1.8,
 
         'GR_MUD': 0.0,
         'NPHI_MUD': 1.0,

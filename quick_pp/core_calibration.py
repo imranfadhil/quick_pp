@@ -2,6 +2,15 @@ from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as np
 
+plt.style.use('seaborn-v0_8-paper')
+plt.rcParams.update(
+    {
+        'axes.labelsize': 10,
+        'xtick.labelsize': 10,
+        'legend.fontsize': 'small'
+    }
+)
+
 
 def leverett_j_function(pc, ift, perm, phit):
     """Leverett J function.
@@ -16,6 +25,21 @@ def leverett_j_function(pc, ift, perm, phit):
         float: Leverett J function.
     """
     return 0.216 * (pc / ift) * (perm / phit)**(0.5)
+
+
+def pseudo_leverett_j_function(pc, ift, perm, phit):
+    """Pseudo-Leverett J function.
+
+    Args:
+        pc (float): Capillary pressure.
+        ift (float): Interfacial tension.
+        perm (float): Permeability.
+        phit (float): Total porosity.
+
+    Returns:
+        float: Pseudo-Leverett J function.
+    """
+    pass
 
 
 def sw_leverett_j(pc, ift, perm, phit, a, b):
@@ -75,18 +99,21 @@ def fit_j_curve(sw, j):
         return 1, 1
 
 
-def j_xplot(sw, j, a, b, label):
+def j_xplot(sw, j, a=None, b=None, label='', log_log=False, ylim=None):
 
-    sc = plt.scatter(sw, j, marker='o', label=label)
-    line_color = sc.get_facecolors()[0]
-    line_color[-1] = 0.5
-    csw = np.geomspace(0.1, 1.0, 30)
-    plt.scatter(csw, func(csw, a, b), marker='x', color=line_color)
+    sc = plt.plot(sw, j, marker='s', label=label)
+    if a and b:
+        line_color = sc[0].get_color() + '80'  # Set opacity to 0.5
+        csw = np.geomspace(0.1, 1.0, 30)
+        plt.plot(csw, func(csw, a, b), color=line_color, linestyle='dashed')
     plt.xlabel('Sw (frac)')
-    plt.xlim(0, 1)
+    plt.xlim(0.01, 1)
     plt.ylabel('J')
-    plt.ylim(0, np.max(j) * 1.5)
-    plt.legend()
+    plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    if log_log:
+        plt.xscale('log')
+        plt.yscale('log')
 
 
 def fit_poroperm_curve(poro, perm):
@@ -106,30 +133,37 @@ def fit_poroperm_curve(poro, perm):
         return 1, 1
 
 
-def poroperm_xplot(poro, perm, a, b, label):
+def poroperm_xplot(poro, perm, a=None, b=None, label='', log_log=False):
 
     sc = plt.scatter(poro, perm, marker='o', label=label)
-    line_color = sc.get_facecolors()[0]
-    line_color[-1] = 0.5
-    cpore = np.geomspace(0.05, 0.5, 30)
-    plt.scatter(cpore, func(cpore, a, b), marker='x', color=line_color)
+    if a and b:
+        line_color = sc.get_facecolors()[0]
+        line_color[-1] = 0.5
+        cpore = np.geomspace(0.05, 0.5, 30)
+        plt.plot(cpore, func(cpore, a, b), color=line_color, linestyle='dashed')
     plt.xlabel('CPORE (frac)')
     plt.xlim(0, 0.5)
     plt.ylabel('CPERM (mD)')
     plt.yscale('log')
-    plt.legend()
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    if log_log:
+        plt.xscale('log')
 
 
-def bvw_xplot(bvw, pc, a, b, label):
+def bvw_xplot(bvw, pc, a=None, b=None, label='', ylim=None, log_log=False):
 
-    sc = plt.scatter(bvw, pc, marker='o', label=label)
-    line_color = sc.get_facecolors()[0]
-    line_color[-1] = 0.5
-    cbvw = np.linspace(0.05, 0.35, 30)
-    plt.scatter(cbvw, func(cbvw, a, b), marker='x', color=line_color)
+    sc = plt.plot(bvw, pc, marker='s', label=label)
+    if a and b:
+        line_color = sc[0].get_color() + '66'  # Set opacity to 0
+        cbvw = np.linspace(0.05, 0.35, 30)
+        plt.scatter(cbvw, func(cbvw, a, b), marker='x', color=line_color)
     plt.xlabel('BVW (frac)')
     plt.ylabel('Pc (psi)')
-    plt.legend()
+    plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    if log_log:
+        plt.xscale('log')
+        plt.yscale('log')
 
 
 def estimate_hafwl(sw, poro, perm, ift, gw, ghc, a, b):
@@ -174,7 +208,8 @@ def sw_shf_leverett_j(perm, poro, depth, fwl, ift, gw, ghc, a, b):
     h = fwl - depth
     pc = h * (gw - ghc)
     shf = ((0.216 * (pc / ift) * (perm / poro)**(0.5)) / a)**(1 / b)
-    return np.where(shf > 1, 1, shf)
+    # return np.where(shf > 1, 1, shf)
+    return shf
 
 
 def sw_shf_cuddy(poro, depth, fwl, gw, ghc, a, b):
@@ -192,4 +227,31 @@ def sw_shf_cuddy(poro, depth, fwl, gw, ghc, a, b):
     """
     h = fwl - depth
     shf = (h * (gw - ghc) / a)**(1 / b) / poro
-    return np.where(shf > 1, 1, shf)
+    # return np.where(shf > 1, 1, shf)
+    return shf
+
+
+def sw_shf_choo(perm, phit, phie, depth, fwl, ift, gw, ghc, b0=0.4):
+    """Saturation height function.
+
+    Args:
+        perm (float): Permeability (mD).
+        phit (float): Total porosity (frac).
+        phie (float): Effective porosity (frac).
+        depth (float): _description_
+        fwl (float): _description_
+        ift (float): Interfacial tension (dynes/cm).
+        gw (float): Gas density (psi/ft).
+        ghc (float): Gas height (psi/ft).
+        b0 (float): _description_. Defaults to 0.4.
+
+    Returns:
+        _type_: _description_
+    """
+    swb = 1 - (phie / phit)
+    h = fwl - depth
+    pc = h * (gw - ghc)
+    shf = 10**((2 * b0 - 1) * np.log10(1 + swb**-1) + np.log10(1 + swb)) / (
+        (0.2166 * (pc / ift) * (perm / phit)**(0.5))**(b0 * np.log10(1 + swb**-1) / 3))
+    # return np.where(shf > 1, 1, shf)
+    return shf

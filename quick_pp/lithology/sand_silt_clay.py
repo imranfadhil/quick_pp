@@ -1,6 +1,7 @@
 import numpy as np
 import math
 
+from ..rock_type import estimate_vsh_gr
 from ..utils import min_max_line, length_a_b, line_intersection
 from ..porosity import neu_den_xplot_poro_pt, clay_porosity
 from ..config import Config
@@ -26,7 +27,7 @@ class SandSiltClay:
         self.wet_clay_point = wet_clay_point or Config.SSC_ENDPOINTS["WET_CLAY_POINT"]
         self.silt_line_angle = silt_line_angle or Config.SSC_ENDPOINTS["SILT_LINE_ANGLE"]
 
-    def estimate_lithology(self, nphi, rhob, model: str = 'kuttan', normalize: bool = True):
+    def estimate_lithology(self, nphi, rhob, gr=None, badhole_flag=None, model: str = 'kuttan', normalize: bool = True):
         """Estimate sand silt clay lithology volumetrics.
 
         Args:
@@ -45,6 +46,9 @@ class SandSiltClay:
         B = self.dry_silt_point
         C = self.dry_clay_point
         D = self.fluid_point
+
+        # Estimate vsh_gr for badhole interval
+        vsh_gr = estimate_vsh_gr(gr) if gr is not None else None
 
         # Redefine wetclay point
         _, rhob_max_line = min_max_line(rhob, 0.1, num_bins=1)
@@ -77,7 +81,9 @@ class SandSiltClay:
         if model == 'kuttan':
             vsand, vsilt, vcld = self.lithology_fraction_kuttan(nphi, rhob, normalize)
         else:
-            vsand, vsilt, vcld = self.lithology_fraction_kuttan_modified(nphi, rhob, normalize)
+            vsand, vsilt, vcld = self.lithology_fraction_kuttan_modified(
+                nphi, rhob, vsh_gr=vsh_gr, badhole_flag=badhole_flag, normalize=normalize
+            )
 
         # Calculate vclb: volume of clay bound water
         clay_phit = clay_porosity(rhob, C[1])
@@ -127,7 +133,7 @@ class SandSiltClay:
 
         return vsand, vsilt, vcld
 
-    def lithology_fraction_kuttan_modified(self, nphi, rhob, normalize: bool = True):
+    def lithology_fraction_kuttan_modified(self, nphi, rhob, vsh_gr=None, badhole_flag=None, normalize: bool = True):
         """Estimate lithology volumetrics based on modified Kuttan's litho-porosity model
         (simplification of PCSB's litho-porosity model).
 
@@ -143,9 +149,11 @@ class SandSiltClay:
         B = self.dry_silt_point
         C = self.dry_clay_point
         D = self.fluid_point
-        E = list(zip(nphi, rhob))
+        badhole_flag = badhole_flag if badhole_flag is not None else np.zeros(len(nphi))
+        vsh_gr = vsh_gr if vsh_gr is not None else np.zeros(len(nphi))
+        E = list(zip(nphi, rhob, badhole_flag, vsh_gr))
 
-        siltclayratio = 0.4  # empirical value
+        siltclayratio = 0.25  # empirical value
         claysiltfrac = length_a_b(C, B)
         rocklithofrac = length_a_b(A, C)
         sandsiltfrac = length_a_b(A, B)
@@ -158,7 +166,13 @@ class SandSiltClay:
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
             matrix_ratio = projlithofrac / rocklithofrac
-            if matrix_ratio < matrix_ratio_x:
+            if point[2] == 1:
+                phit = neu_den_xplot_poro_pt(point[0], point[1], 'ssc', True, A, B, C, D) if normalize else 0
+                vmatrix = 1 - phit
+                vsand = np.append(vsand, (1 - point[3]) * vmatrix)
+                vsilt = np.append(vsilt, siltclayratio * point[3] * vmatrix)
+                vcld = np.append(vcld, (1 - siltclayratio) * point[3] * vmatrix)
+            elif matrix_ratio < matrix_ratio_x:
                 phit = neu_den_xplot_poro_pt(point[0], point[1], 'ssc', True, A, B, C, D) if normalize else 0
                 vmatrix = 1 - phit
                 vsand = np.append(vsand, ((-projlithofrac / sandsiltfrac) + 1) * vmatrix)

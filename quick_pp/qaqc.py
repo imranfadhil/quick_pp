@@ -3,9 +3,8 @@ import numpy as np
 from scipy.stats import gmean
 import matplotlib.pyplot as plt
 
-from .utils import length_a_b, line_intersection
-from .lithology import gr_index
-from .rock_type import vsh_gr
+from .utils import length_a_b, line_intersection, min_max_line
+from .rock_type import estimate_vsh_gr
 from .config import Config
 
 plt.style.use('seaborn-v0_8-paper')
@@ -186,7 +185,7 @@ def neu_den_xplot_hc_correction(
     D = fluid_point
     rocklithofrac = length_a_b(A, C)
 
-    frac_vsh_gr = gr_index(gr)
+    frac_vsh_gr = estimate_vsh_gr(gr)
     nphi_corrected = np.empty(0)
     rhob_corrected = np.empty(0)
     hc_flag = np.empty(0)
@@ -221,6 +220,22 @@ def neu_den_xplot_hc_correction(
     return nphi_corrected, rhob_corrected, hc_flag
 
 
+def den_correction(rhob, gr, alpha=0.1):
+    """Correct bulk density using gamma ray.
+
+    Args:
+        rhob (float): Bulk density log in g/cc.
+        gr (float): Gamma ray log in GAPI.
+        alpha (float, optional): Alpha value for min_max_line. Defaults to 0.1.
+
+    Returns:
+        float: Corrected bulk density.
+    """
+    rhob_min_line, rhob_max_line = min_max_line(rhob, alpha=alpha, num_bins=1)
+    vsh_gr = estimate_vsh_gr(gr, alpha=alpha)
+    return rhob_min_line + (rhob_max_line - rhob_min_line) * vsh_gr
+
+
 def quick_qc(well_data):
     """Quick QC for well data.
 
@@ -237,7 +252,7 @@ def quick_qc(well_data):
     return_df['QC_FLAG'] = 0
 
     # Compare vsh_gr and vsh_dn
-    return_df['VSH_GR'] = vsh_gr(return_df['GR'])
+    return_df['VSH_GR'] = estimate_vsh_gr(return_df['GR'])
     return_df['QC_FLAG'] = np.where(abs(return_df['VSH_GR'] - return_df['VCLW']) > 0.1, 1, return_df['QC_FLAG'])
 
     # Compare phit_dn and phit_d
@@ -255,8 +270,8 @@ def quick_qc(well_data):
             'VCLW': 'mean',
             'PHIT': 'mean',
             'SWT': 'mean',
-            'PERM': gmean,
         })
+        temp_df['PERM'] = return_df[index].groupby('ZONES')['PERM'].agg(gmean, nan_policy='omit')
         # Rename columns
         cols_rename = {
             'VCLW': f'AV_VCLW_{group}',
@@ -296,26 +311,44 @@ def quick_qc(well_data):
     summary_df = summary_df.rename(columns=cols_rename)
 
     # Distribution plot
-    dist_fig, axs = plt.subplots(4, 1, figsize=(5, 8))
+    dist_fig, axs = plt.subplots(8, 1, figsize=(5, 15))
     for group, data in return_df.groupby('SAND_FLAG'):
         label = 'SAND' if group == 1 else 'SHALE'
         axs[0].hist(data['VCLW'], bins=100, alpha=0.7, density=True, label=label)
-        axs[1].hist(data['PHIT'], bins=100, alpha=0.7, label=label)
-        axs[2].hist(data['SWT'], bins=100, alpha=0.7, label=label)
-        axs[3].hist(data['PERM'], bins=100, alpha=0.7, label=label)
+        axs[1].hist(summary_df[f'AV_VCLW_{label}'], bins=100, alpha=0.7, density=True, label=f'AV_{label}')
+        axs[2].hist(data['PHIT'], bins=100, alpha=0.7, label=label)
+        axs[3].hist(summary_df[f'AV_PHIT_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
+        axs[4].hist(data['SWT'], bins=100, alpha=0.7, label=label)
+        axs[5].hist(summary_df[f'AV_SWT_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
+        axs[6].hist(data['PERM'], bins=100, alpha=0.7, label=label)
+        axs[7].hist(summary_df[f'AV_PERM_GM_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
     axs[0].set_title('VCLW Distribution')
     axs[0].legend()
 
-    axs[1].set_title('PHIT Distribution')
+    axs[1].set_title('AV_VCLW Distribution')
     axs[1].legend()
 
-    axs[2].set_title('SWT Distribution')
-    axs[2].set_yscale('log')
+    axs[2].set_title('PHIT Distribution')
     axs[2].legend()
 
-    axs[3].set_title('PERM Distribution')
-    axs[3].set_yscale('log')
+    axs[3].set_title('AV_PHIT Distribution')
     axs[3].legend()
+
+    axs[4].set_title('SWT Distribution')
+    axs[4].set_yscale('log')
+    axs[4].legend()
+
+    axs[5].set_title('AV_SWT Distribution')
+    axs[5].set_yscale('log')
+    axs[5].legend()
+
+    axs[6].set_title('PERM Distribution')
+    axs[6].set_yscale('log')
+    axs[6].legend()
+
+    axs[7].set_title('AV_PERM_GM Distribution')
+    axs[7].set_yscale('log')
+    axs[7].legend()
 
     dist_fig.tight_layout()
 
