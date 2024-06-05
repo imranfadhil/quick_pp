@@ -48,6 +48,16 @@ def estimate_vsh_gr(gr, alpha=0.1):
 
 
 def rock_typing(curve, cut_offs=[.1, .3, .4], higher_is_better=True):
+    """Rock typing based on cutoffs.
+
+    Args:
+        curve (float): Curve to be used for rock typing.
+        cut_offs (list, optional): 3 cutoffs to group the curve into 4 rock types. Defaults to [.1, .3, .4].
+        higher_is_better (bool, optional): Whether higher value of curve is better quality or not. Defaults to True.
+
+    Returns:
+        float: Rock type.
+    """
     rock_type = [4, 3, 2, 1] if higher_is_better else [1, 2, 3, 4]
     return np.where(np.isnan(curve), 4, np.where(
         curve < cut_offs[0], rock_type[0],

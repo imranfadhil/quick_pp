@@ -1,19 +1,34 @@
 Docstrings for quick_pp package
-=================
+===============================
 
+quick\_pp.lithology module
+--------------------------
+
+.. toctree::
+   :maxdepth: 4
+
+   quick_pp.lithology
+
+quick\_pp.core\_calibration module
+----------------------------------
+
+.. automodule:: quick_pp.core_calibration
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+quick\_pp.fluid\_type module
+----------------------------
+
+.. automodule:: quick_pp.fluid_type
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 quick\_pp.las\_handler module
 -----------------------------
 
 .. automodule:: quick_pp.las_handler
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-quick\_pp.lithology module
---------------------------
-
-.. automodule:: quick_pp.lithology
    :members:
    :undoc-members:
    :show-inheritance:
@@ -78,6 +93,14 @@ quick\_pp.utils module
 ----------------------
 
 .. automodule:: quick_pp.utils
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Module contents
+---------------
+
+.. automodule:: quick_pp
    :members:
    :undoc-members:
    :show-inheritance:
