@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
+from .utils import straight_line_func as func
+
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(
     {
@@ -10,10 +12,6 @@ plt.rcParams.update(
         'legend.fontsize': 'small'
     }
 )
-
-
-def func(x, m, c):
-    return m * x + c
 
 
 def fit_pressure_gradient(tvdss, formation_pressure):

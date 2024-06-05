@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from quick_pp.utils import min_max_line
+from .utils import power_law_func as func
 
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(
@@ -33,8 +34,8 @@ def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
 
 def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
     """Waxman-Smits saturation model for dispersed clay mineral.
-    ref: Ausburn, Brian E., and Robert Freedman. "The Waxman-smits Equation For Shaly Sands:
-    I. Simple Methods Of Solution; Ii. Error Analysis." The Log Analyst 26 (1985)
+       ref: Ausburn, Brian E., and Robert Freedman. "The Waxman-smits Equation For Shaly Sands:
+            I. Simple Methods Of Solution; Ii. Error Analysis." The Log Analyst 26 (1985)
 
     Args:
         rt (float): True resistivity or deep resistivity log.
@@ -69,7 +70,7 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
 
 def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
     """Dual water saturation model, extension from Waxman-Smits.
-
+       TODO: Estimate swb and rwb if not provided
     Args:
         sw (float): Water saturation.
         a (float): Cementation exponent.
@@ -82,7 +83,6 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
         float: Water saturation.
 
     """
-    # TODO: Estimate swb and rwb if not provided
     # Initial guess
     swt = 1
     swt_i = 0
@@ -130,13 +130,10 @@ def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
     return np.where(swt < 1, swt, 1)
 
 
-def modified_simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
-    """TODO: Modified Simandoux's saturation model.
+def modified_simandoux_saturation():
+    """ TODO: Modified Simandoux's saturation model.
     """
-    shale_factor = vsh / rsh
-    swt = (a * rw * (1 - vsh) / (2 * phit**m)) * (
-        (shale_factor**2 + (4 * phit**m / (a * rw * rt)))**(1 / 2) - shale_factor)
-    return np.where(swt < 1, swt, 1)
+    pass
 
 
 def estimate_temperature_gradient(tvd, unit='metric'):
@@ -301,10 +298,6 @@ def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
     """
     m = (2 / np.log(phie)) * np.log(rw**0.5 * ((1 / rt)**0.5 - (vsh**(1 - 0.5 * vsh) / rsh**0.5)))
     return m
-
-
-def func(x, a, b):
-    return a * x**b
 
 
 def swirr_xplot(swt, phit, c=None, q=None, label='', log_log=False):

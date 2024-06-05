@@ -1,9 +1,6 @@
 quick\_pp.lithology package
 ===========================
 
-Submodules
-----------
-
 quick\_pp.lithology.carbonate module
 ------------------------------------
 

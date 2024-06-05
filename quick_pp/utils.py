@@ -147,3 +147,31 @@ def zone_flagging(data: pd.DataFrame):
         return_df = pd.concat([return_df, well_data], ignore_index=True)
 
     return return_df
+
+
+def power_law_func(x, a, b):
+    """Generic power law function.
+
+    Args:
+        x (float): Input variable.
+        a (float): a constant.
+        b (float): b constant.
+
+    Returns:
+        float: y = a * x^b
+    """
+    return a * x**b
+
+
+def straight_line_func(x, m, c):
+    """Generic straight line function.
+
+    Args:
+        x (float): Input variable.
+        m (float): Slope of the line.
+        c (float): Y intercept of the line.
+
+    Returns:
+        float: y = m * x + c
+    """
+    return m * x + c

@@ -141,10 +141,14 @@ def picket_plot(rt, phit):
 
 
 def sonic_density_xplot():
+    """ TODO: Implement sonic density crossplot
+    """
     pass
 
 
 def sonic_neutron_xplot():
+    """ TODO: Implement sonic neutron crossplot
+    """
     pass
 
 
@@ -152,7 +156,7 @@ def plotly_log(well_data, depth_uom=""):  # noqa
     """Plot well logs using Plotly.
 
     Args:
-        well_data (pandas.Datafraem): Pandas dataframe containing well log data.
+        well_data (pandas.Dataframe): Pandas dataframe containing well log data.
 
     Returns:
         plotly.graph_objects.Figure: Return well plot.

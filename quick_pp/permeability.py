@@ -99,12 +99,27 @@ def morris_biggs_modified_permeability(phit, phie, Vbwi):
 
 
 def estimate_krw(swt, swirr):
-    """Based on Park Jones (1945)"""
+    """Based on Park Jones (1945)
+
+    Args:
+        swt (float): Total water saturation.
+        swirr (float): Irreducible water saturation.
+
+    Returns:
+        _type_: _description_
+    """
     return ((swt - swirr) / (1 - swirr))**3
 
 
 def estimate_kro(swt, swirr):
-    """Based on Park Jones (1945)"""
+    """Based on Park Jones (1945)
+
+    Args:
+        swt (float): Total water saturation.
+        swirr (float): Irreducible water saturation.
+    Returns:
+        _type_: _description_
+    """
     return ((0.9 - swt) / (0.9 - swirr))**2
 
 
