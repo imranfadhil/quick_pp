@@ -1,2 +1,5 @@
 docs/** linguist-documentation=false
-docs/** linguist-vendored
+docs/** linguist-vendored=false
+
+notebooks/** linguist-documentation=false
+notebooks/** linguist-vendored=false
