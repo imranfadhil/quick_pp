@@ -21,3 +21,7 @@ History
 0.1.5 (2024-06-05)
 ------------------
 * Add core calibration module.
+
+0.1.8 (2024-06-24)
+------------------
+* Update requirements.
