@@ -210,20 +210,23 @@ def estimate_rw_waxman_smits(phit, rt, a=1, m=2, B=None, Qv=None):
     return rw
 
 
-def estimate_rt_water_trend(rt, alpha=0.3, num_bins=1):
+def estimate_rw_from_shale_trend(rt, phit, alpha=0.1, num_bins=1):
     """Estimate trend RT of formation water based.
 
     Args:
         rt (float): True resistivity.
-        sand_flag (int): Sand flag.
+        phit (float): Total porosity.
+        alpha (float): Alpha value for percentile calculation.
+        num_bins (int): Number of bins for min-max line calculation.
 
     Returns:
         float: Formation water resistivity.
     """
     rt = np.log(rt)
     rt = np.where(rt <= 0, 1e-3, rt)
-    min_rt, _ = min_max_line(rt, alpha, num_bins=num_bins)
-    return np.exp(min_rt)
+    min_rt, _ = min_max_line(rt, alpha=alpha, num_bins=num_bins)
+    min_phit, _ = min_max_line(phit, alpha=alpha, num_bins=num_bins)
+    return min_phit ** 1.3 * np.exp(min_rt)
 
 
 def estimate_qv(vcld, phit, rho_clay=2.65, cec_clay=.062):
