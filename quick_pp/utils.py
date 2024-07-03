@@ -30,7 +30,7 @@ def min_max_line(feature, alpha: float = 0.05, num_bins: int = 1):
     max_lines = np.empty(0)
     # Enumerate over the bins
     for i, bin in enumerate(bins[:-1]):
-        data = feature[bin: bins[i+1]]
+        data = feature[bin: bins[i + 1]]
         y = np.arange(0, len(data))
         if y.size > 0:
             Y = sm.add_constant(y)
