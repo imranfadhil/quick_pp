@@ -76,7 +76,7 @@ def morris_biggs_permeability(phit, C, Swirr):
     Args:
         phit (float): Total porosity in fraction.
         C (float): A constant which depends on the density of hydrocarbon in the formation.
-                   250 for medium oil. 79 for gas. 
+                   250 for medium oil. 79 for gas.
         Swirr (float): Irreduceable water saturation in fraction.
 
     Returns:
