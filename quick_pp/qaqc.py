@@ -231,7 +231,7 @@ def den_correction(rhob, gr, alpha=0.1):
     Returns:
         float: Corrected bulk density.
     """
-    rhob_min_line, rhob_max_line = min_max_line(rhob, alpha=alpha, num_bins=1)
+    rhob_min_line, rhob_max_line = min_max_line(rhob, alpha=alpha)
     vsh_gr = estimate_vsh_gr(gr, alpha=alpha)
     return rhob_min_line + (rhob_max_line - rhob_min_line) * vsh_gr
 
