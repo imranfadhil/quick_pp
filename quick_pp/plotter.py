@@ -176,7 +176,7 @@ def plotly_log(well_data, depth_uom=""):  # noqa
 
     fig = make_subplots(rows=1, cols=track, shared_yaxes=True, horizontal_spacing=0.015,
                         column_widths=[1, 1, 1, 1, 1, 1, .15, 1],
-                        specs=[list([{'secondary_y': True}]*track)])
+                        specs=[list([{'secondary_y': True}] * track)])
 
     i = 0
     # Add GR trace #1.

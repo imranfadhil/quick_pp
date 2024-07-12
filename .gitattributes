@@ -1,5 +1,3 @@
-docs/** linguist-documentation=false
-docs/** linguist-vendored=false
-
-notebooks/** linguist-documentation=false
-notebooks/** linguist-vendored=false
+* linguist-vendored
+*.py linguist-vendored=false
+*.ipynb linguist-vendored=false

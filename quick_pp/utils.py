@@ -5,15 +5,17 @@ from scipy.signal import detrend
 import statsmodels.api as sm
 from statsmodels.sandbox.regression.predstd import wls_prediction_std
 import math
+import ruptures.detection as rpt
+import scipy.stats as stats
+from scipy.signal import find_peaks
 
 
-def min_max_line(feature, alpha: float = 0.05, num_bins: int = 1):
+def min_max_line(feature, alpha: float = 0.1):
     """Calculates the minimum and maximum line of a feature.
 
     Args:
         feature (float): Input feature to calculate the minimum and maximum line.
         alpha (float, optional): Confidence interval. Defaults to 0.05.
-        num_bins (int, optional): Number of bins. Defaults to 1.
 
     Returns:
         (float, float): Minimum and maximum line of a feature.
@@ -21,16 +23,24 @@ def min_max_line(feature, alpha: float = 0.05, num_bins: int = 1):
     # Fill missing values with the median
     feature = np.where(np.isnan(feature), np.nanmedian(feature), feature)
 
-    # Redefine the bins
-    window = int(len(feature) / num_bins)
-    bins = np.arange(0, len(feature), window)
-    bins = np.append(bins, len(feature))
+    # Estimating number of peaks
+    signal_data = feature
+    kde = stats.gaussian_kde(signal_data[~np.isnan(signal_data)])
+    evaluated = kde.evaluate(np.linspace(np.nanmin(signal_data), np.nanmax(signal_data), 100))
+    peaks, _ = find_peaks(evaluated, height=np.nanmedian(evaluated))
+
+    # Detecting change points
+    model = "rbf"
+    jump = 500
+    my_bkps = rpt.BottomUp(model=model, jump=jump).fit_predict(signal_data, n_bkps=len(peaks))
+    my_bkps = np.insert(my_bkps, 0, 0)
+
+    list_of_dfs = [feature[my_bkps[i]:my_bkps[i + 1]] for i in range(len(my_bkps) - 1)]
 
     min_lines = np.empty(0)
     max_lines = np.empty(0)
     # Enumerate over the bins
-    for i, bin in enumerate(bins[:-1]):
-        data = feature[bin: bins[i+1]]
+    for data in list_of_dfs:
         y = np.arange(0, len(data))
         if y.size > 0:
             Y = sm.add_constant(y)

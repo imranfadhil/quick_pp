@@ -29,7 +29,7 @@ def rqi(k, phit):
     return (0.0314 * (k / phit)**0.5)
 
 
-def estimate_vsh_gr(gr, alpha=0.1, num_bins=1):
+def estimate_vsh_gr(gr, alpha=0.1):
     """Estimate volume of shale from gamma ray.
 
     Args:
@@ -40,9 +40,8 @@ def estimate_vsh_gr(gr, alpha=0.1, num_bins=1):
     """
     gr = np.where(np.isnan(gr), np.nanmedian(gr), gr)
     dtr_gr = detrend(gr, axis=0) + np.nanmean(gr)
-    min_gr, max_gr = min_max_line(dtr_gr, alpha, num_bins)
-    gri = np.where(dtr_gr > max_gr, max_gr, np.where(dtr_gr < min_gr, min_gr, dtr_gr))
-    gri = (gri - min_gr) / (max_gr - min_gr)
+    _, max_gr = min_max_line(dtr_gr, alpha)
+    gri = dtr_gr / max_gr
     # Apply Steiber equation
     return gri / (3 - 2 * gri)
 
