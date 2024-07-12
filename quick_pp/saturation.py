@@ -211,13 +211,13 @@ def estimate_rw_waxman_smits(phit, rt, a=1, m=2, B=None, Qv=None):
 
 
 def estimate_rw_from_shale_trend(rt, phit, m=1.3, alpha=0.1):
-    """Estimate trend RT of formation water based.
+    """Estimate Rw from shale trend.
 
     Args:
         rt (float): True resistivity.
         phit (float): Total porosity.
-        m (float): Shale cementation or shape factor.
-        alpha (float): Alpha value for percentile calculation.
+        m (float): Shale cementation or shape factor. Defaults to 1.3.
+        alpha (float): Alpha value for percentile calculation. Defaults to 0.1.
 
     Returns:
         float: Formation water resistivity.

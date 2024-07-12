@@ -25,3 +25,7 @@ History
 0.1.8 (2024-06-24)
 ------------------
 * Update requirements.
+
+0.1.9 (2024-07-12)
+------------------
+* Refactor SSC module.

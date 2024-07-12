@@ -11,7 +11,7 @@ from scipy.signal import find_peaks
 
 
 def min_max_line(feature, alpha: float = 0.1):
-    """Calculates the minimum and maximum line of a feature.
+    """Calculates the minimum and maximum line of a feature, grouped based on change points.
 
     Args:
         feature (float): Input feature to calculate the minimum and maximum line.

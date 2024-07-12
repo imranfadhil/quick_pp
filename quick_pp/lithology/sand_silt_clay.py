@@ -30,8 +30,6 @@ class SandSiltClay:
         Args:
             nphi (float): Neutron Porosity log in v/v
             rhob (float): Bulk Density log in g/cc
-            xplot (bool, optional): To plot Neutron Density cross plot. Defaults to False.
-            normalize (bool, optional): To normalize with porosity. Defaults to True.
 
         Returns:
             (float, float, float, boolean): vsand, vsilt, vcld, vclb, cross-plot if xplot True else None
@@ -109,6 +107,16 @@ class SandSiltClay:
         return vsand, vsilt, vcld
 
     def lithology_chart(self, proj_len, rock_len, res_ratio):
+        """Estimate lithology fraction based on Kuttan's modified chart.
+
+        Args:
+            proj_len (float): Length of projected point from dry sand point.
+            rock_len (float): Length of rock line.
+            res_ratio (float): Ratio of reservoir length to rock length.
+
+        Returns:
+            (float, float, float): vsand, vsilt, vcld
+        """        
         siltclayratio = 0.25  # empirical value
         res_len = rock_len * res_ratio
         non_res_len = rock_len * (1 - res_ratio)

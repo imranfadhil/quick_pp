@@ -6,7 +6,7 @@ def choo_permeability(vclw, vsilt, phit, m=2, B=None, A=20e7, C=2):
         vsilt (float): Volume of silt in fraction.
         phit (float): Total porosity in fraction.
         A (float): Constant based on 0.125 * rg**2 / 10. Defaults to 20e7.
-        B (float): Constant, defaults to m * ((2 / C) + 1) + 2.
+        B (float): Constant derived from cementation and compaction factor, defaults to m * ((2 / C) + 1) + 2.
         C (float): Constant, defaults to 2.
 
     Returns:
