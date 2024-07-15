@@ -116,7 +116,7 @@ class SandSiltClay:
 
         Returns:
             (float, float, float): vsand, vsilt, vcld
-        """        
+        """
         siltclayratio = 0.25  # empirical value
         res_len = rock_len * res_ratio
         non_res_len = rock_len * (1 - res_ratio)

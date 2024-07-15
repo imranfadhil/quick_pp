@@ -1,7 +1,7 @@
 Docstrings for quick_pp package
 ===============================
 
-quick\_pp.lithology module
+lithology module
 --------------------------
 
 .. toctree::
@@ -9,7 +9,7 @@ quick\_pp.lithology module
 
    quick_pp.lithology
 
-quick\_pp.core\_calibration module
+core\_calibration module
 ----------------------------------
 
 .. automodule:: quick_pp.core_calibration
@@ -17,7 +17,7 @@ quick\_pp.core\_calibration module
    :undoc-members:
    :show-inheritance:
 
-quick\_pp.fluid\_type module
+fluid\_type module
 ----------------------------
 
 .. automodule:: quick_pp.fluid_type
@@ -25,7 +25,7 @@ quick\_pp.fluid\_type module
    :undoc-members:
    :show-inheritance:
 
-quick\_pp.las\_handler module
+las\_handler module
 -----------------------------
 
 .. automodule:: quick_pp.las_handler
@@ -33,7 +33,7 @@ quick\_pp.las\_handler module
    :undoc-members:
    :show-inheritance:
 
-quick\_pp.permeability module
+permeability module
 -----------------------------
 
 .. automodule:: quick_pp.permeability
@@ -41,7 +41,7 @@ quick\_pp.permeability module
    :undoc-members:
    :show-inheritance:
 
-quick\_pp.plotter module
+plotter module
 ------------------------
 
 .. automodule:: quick_pp.plotter
@@ -49,7 +49,7 @@ quick\_pp.plotter module
    :undoc-members:
    :show-inheritance:
 
-quick\_pp.porosity module
+porosity module
 -------------------------
 
 .. automodule:: quick_pp.porosity
@@ -57,7 +57,7 @@ quick\_pp.porosity module
    :undoc-members:
    :show-inheritance:
 
-quick\_pp.qaqc module
+qaqc module
 ---------------------
 
 .. automodule:: quick_pp.qaqc
@@ -65,7 +65,7 @@ quick\_pp.qaqc module
    :undoc-members:
    :show-inheritance:
 
-quick\_pp.ressum module
+ressum module
 -----------------------
 
 .. automodule:: quick_pp.ressum
@@ -73,7 +73,7 @@ quick\_pp.ressum module
    :undoc-members:
    :show-inheritance:
 
-quick\_pp.rock\_type module
+rock\_type module
 ---------------------------
 
 .. automodule:: quick_pp.rock_type
@@ -81,7 +81,7 @@ quick\_pp.rock\_type module
    :undoc-members:
    :show-inheritance:
 
-quick\_pp.saturation module
+saturation module
 ---------------------------
 
 .. automodule:: quick_pp.saturation
@@ -89,18 +89,10 @@ quick\_pp.saturation module
    :undoc-members:
    :show-inheritance:
 
-quick\_pp.utils module
+utils module
 ----------------------
 
 .. automodule:: quick_pp.utils
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Module contents
----------------
-
-.. automodule:: quick_pp
    :members:
    :undoc-members:
    :show-inheritance:
