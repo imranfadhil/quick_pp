@@ -2,7 +2,7 @@ from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .utils import power_law_func as func
+from quick_pp.utils import power_law_func as func
 
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(

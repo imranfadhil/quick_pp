@@ -3,9 +3,9 @@ import numpy as np
 from scipy.stats import gmean
 import matplotlib.pyplot as plt
 
-from .utils import length_a_b, line_intersection, min_max_line
-from .rock_type import estimate_vsh_gr
-from .config import Config
+from quick_pp.utils import length_a_b, line_intersection, min_max_line
+from quick_pp.rock_type import estimate_vsh_gr
+from quick_pp.config import Config
 
 plt.style.use('seaborn-v0_8-paper')
 

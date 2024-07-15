@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.signal import detrend
-from .utils import min_max_line
+from quick_pp.utils import min_max_line
 
 
 def fzi(k, phit):

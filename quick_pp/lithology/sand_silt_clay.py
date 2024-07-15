@@ -1,8 +1,8 @@
 import numpy as np
 import math
 
-from ..utils import min_max_line, length_a_b, line_intersection
-from ..config import Config
+from quick_pp.utils import min_max_line, length_a_b, line_intersection
+from quick_pp.config import Config
 
 
 class SandSiltClay:
