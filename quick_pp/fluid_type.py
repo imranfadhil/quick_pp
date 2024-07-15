@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-from .utils import straight_line_func as func
+from quick_pp.utils import straight_line_func as func
 
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(

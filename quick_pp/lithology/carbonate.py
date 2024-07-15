@@ -1,9 +1,9 @@
 import numpy as np
 
-from . import shale_volume_steiber, gr_index
-from ..utils import length_a_b, line_intersection
-from ..porosity import neu_den_xplot_poro_pt, rho_matrix, density_porosity
-from ..config import Config
+from quick_pp.lithology import shale_volume_steiber, gr_index
+from quick_pp.utils import length_a_b, line_intersection
+from quick_pp.porosity import neu_den_xplot_poro_pt, rho_matrix, density_porosity
+from quick_pp.config import Config
 
 
 class Carbonate:

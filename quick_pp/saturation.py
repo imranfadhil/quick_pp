@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from quick_pp.utils import min_max_line
-from .utils import power_law_func as func
+from quick_pp.utils import power_law_func as func
 
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(
@@ -210,6 +210,22 @@ def estimate_rw_waxman_smits(phit, rt, a=1, m=2, B=None, Qv=None):
     return rw
 
 
+def estimate_rt_water_trend(rt, alpha=0.3):
+    """Estimate trend RT of formation water based.
+
+    Args:
+        rt (float): True resistivity.
+        sand_flag (int): Sand flag.
+
+    Returns:
+        float: Formation water resistivity.
+    """
+    rt = np.log(rt)
+    rt = np.where(rt <= 0, 1e-3, rt)
+    min_rt, _ = min_max_line(rt, alpha)
+    return np.exp(min_rt)
+
+
 def estimate_rw_from_shale_trend(rt, phit, m=1.3, alpha=0.1):
     """Estimate Rw from shale trend.
 
@@ -222,9 +238,7 @@ def estimate_rw_from_shale_trend(rt, phit, m=1.3, alpha=0.1):
     Returns:
         float: Formation water resistivity.
     """
-    rt = np.log(rt)
-    rt = np.where(rt <= 0, 1e-3, rt)
-    min_rt, _ = min_max_line(rt, alpha=alpha)
+    min_rt = estimate_rt_water_trend(rt, alpha=alpha)
     min_phit, _ = min_max_line(phit, alpha=alpha)
     return min_phit ** m * np.exp(min_rt)
 

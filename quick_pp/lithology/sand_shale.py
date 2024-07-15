@@ -1,8 +1,8 @@
 import numpy as np
 
-from ..utils import min_max_line, length_a_b, line_intersection
-from ..porosity import neu_den_xplot_poro_pt
-from ..config import Config
+from quick_pp.utils import min_max_line, length_a_b, line_intersection
+from quick_pp.porosity import neu_den_xplot_poro_pt
+from quick_pp.config import Config
 
 
 class SandShale:

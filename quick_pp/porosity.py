@@ -1,7 +1,7 @@
 import numpy as np
 
-from .config import Config
-from .utils import length_a_b, line_intersection
+from quick_pp.config import Config
+from quick_pp.utils import length_a_b, line_intersection
 
 
 def normalize_volumetric(vsand, vsilt, vclay, phit):

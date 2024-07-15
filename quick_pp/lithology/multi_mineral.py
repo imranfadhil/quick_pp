@@ -1,7 +1,7 @@
 from scipy.optimize import minimize
 import numpy as np
 
-from ..config import Config
+from quick_pp.config import Config
 
 
 def constraint_(x):
