@@ -9,6 +9,7 @@ the popular scientific computing libraries in Python, such as NumPy, SciPy, and 
    :maxdepth: 2
    :caption: User Guide:
 
+   readme
    installation
    usage
 
