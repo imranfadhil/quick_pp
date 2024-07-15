@@ -29,3 +29,7 @@ History
 0.1.9 (2024-07-12)
 ------------------
 * Refactor SSC module.
+
+0.1.10 (2024-07-15)
+------------------
+* Update documentation in readthedocs.

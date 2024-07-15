@@ -1,55 +1,7 @@
 Docstrings for quick_pp package
 ===============================
 
-lithology module
---------------------------
-
-.. toctree::
-   :maxdepth: 4
-
-   quick_pp.lithology
-
-core\_calibration module
-----------------------------------
-
-.. automodule:: quick_pp.core_calibration
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-fluid\_type module
-----------------------------
-
-.. automodule:: quick_pp.fluid_type
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-las\_handler module
------------------------------
-
-.. automodule:: quick_pp.las_handler
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-permeability module
------------------------------
-
-.. automodule:: quick_pp.permeability
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-plotter module
-------------------------
-
-.. automodule:: quick_pp.plotter
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-porosity module
+Porosity module
 -------------------------
 
 .. automodule:: quick_pp.porosity
@@ -57,31 +9,15 @@ porosity module
    :undoc-members:
    :show-inheritance:
 
-qaqc module
----------------------
+Lithology module
+--------------------------
 
-.. automodule:: quick_pp.qaqc
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. toctree::
+   :maxdepth: 4
 
-ressum module
------------------------
+   quick_pp.lithology
 
-.. automodule:: quick_pp.ressum
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-rock\_type module
----------------------------
-
-.. automodule:: quick_pp.rock_type
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-saturation module
+Saturation module
 ---------------------------
 
 .. automodule:: quick_pp.saturation
@@ -89,10 +25,74 @@ saturation module
    :undoc-members:
    :show-inheritance:
 
-utils module
+Permeability module
+-----------------------------
+
+.. automodule:: quick_pp.permeability
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Reservoir Summary module
+--------------------------------
+
+.. automodule:: quick_pp.ressum
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Rock Type module
+---------------------------
+
+.. automodule:: quick_pp.rock_type
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Core Calibration module
+----------------------------------
+
+.. automodule:: quick_pp.core_calibration
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Fluid Type module
+----------------------------
+
+.. automodule:: quick_pp.fluid_type
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+QAQC module
+---------------------
+
+.. automodule:: quick_pp.qaqc
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+LAS Handler module
+-----------------------------
+
+.. automodule:: quick_pp.las_handler
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Utilities module
 ----------------------
 
 .. automodule:: quick_pp.utils
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Plotter module
+------------------------
+
+.. automodule:: quick_pp.plotter
    :members:
    :undoc-members:
    :show-inheritance:
