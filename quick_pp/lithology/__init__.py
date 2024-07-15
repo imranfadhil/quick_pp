@@ -3,11 +3,6 @@ import statistics
 from scipy.signal import detrend
 from sklearn.preprocessing import MinMaxScaler
 
-from .carbonate import Carbonate  # noqa: F401
-from .multi_mineral import MultiMineral  # noqa: F401
-from .sand_shale import SandShale  # noqa: F401
-from .sand_silt_clay import SandSiltClay  # noqa: F401
-
 
 def shale_volume_larinov_tertiary(igr):
     """
