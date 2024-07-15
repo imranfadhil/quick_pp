@@ -19,7 +19,7 @@
 #
 import os
 import sys
-sys.path.insert(0, os.path.abspath('../..'))
+sys.path.insert(0, os.path.abspath('../../quick_pp'))
 
 # import sphinx_rtd_theme
 import quick_pp # noqa
@@ -32,7 +32,14 @@ import quick_pp # noqa
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode', "sphinx.ext.napoleon"]
+extensions = [
+    'readthedocs_ext.readthedocs',
+    'sphinx.ext.viewcode',
+    'sphinx.ext.todo',
+    'sphinx_toolbox.more_autodoc',
+    "sphinx.ext.napoleon",
+    'sphinx.ext.autodoc',
+]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
