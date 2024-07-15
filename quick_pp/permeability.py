@@ -107,7 +107,7 @@ def estimate_krw(swt, swirr):
         swirr (float): Irreducible water saturation.
 
     Returns:
-        _type_: _description_
+        float: Water relative permeability.
     """
     return ((swt - swirr) / (1 - swirr))**3
 
@@ -119,7 +119,7 @@ def estimate_kro(swt, swirr):
         swt (float): Total water saturation.
         swirr (float): Irreducible water saturation.
     Returns:
-        _type_: _description_
+        float: Oil relative permeability.
     """
     return ((0.9 - swt) / (0.9 - swirr))**2
 

@@ -20,7 +20,8 @@ class MultiMineral():
 
     def estimate_lithology(self, gr, nphi, rhob, pef, dtc):
         """Modified from https://github.com/ruben-charles/petrophysical_evaluation_optimization_methods.git
-        This module only takes in gr, nphi and rhob to estimate the volumetric of quartz, calcite, dolomite and shale.
+        This module takes in gr, nphi, rhob, pef and dtc to estimate the volumetric of
+        quartz, calcite, dolomite and shale.
 
         Args:
             gr (float): Gamma Ray log in GAPI.
