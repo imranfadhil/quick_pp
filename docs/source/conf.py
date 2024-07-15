@@ -20,6 +20,7 @@
 import os
 import sys
 sys.path.insert(0, os.path.abspath('../../quick_pp'))
+sys.path.insert(0, os.path.abspath('../../'))
 
 # import sphinx_rtd_theme
 import quick_pp # noqa
@@ -39,6 +40,7 @@ extensions = [
     'sphinx_toolbox.more_autodoc',
     "sphinx.ext.napoleon",
     'sphinx.ext.autodoc',
+    'sphinx_rtd_theme',
 ]
 
 # Add any paths that contain templates here, relative to this directory.
