@@ -105,7 +105,7 @@ def badhole_flag(data, thold=4):
 
                 estimated_bits = []
                 for i in bits_percentiles['1%'].values:
-                    bit_ = bit_sizes[min(bit_sizes.keys(), key=lambda k: abs(k-i))]
+                    bit_ = bit_sizes[min(bit_sizes.keys(), key=lambda k: abs(k - i))]
                     estimated_bits.append(bit_)
 
                 bits_diff_1 = np.array(estimated_bits[1:] + [estimated_bits[-1]])
