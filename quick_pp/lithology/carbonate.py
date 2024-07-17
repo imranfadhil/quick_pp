@@ -58,9 +58,9 @@ class Carbonate:
                 rho_ma = rho_matrix(vcalc=vcalc, vdolo=vdolo, vclay=vcld)
                 phit = density_porosity(rhob, rho_ma)
                 vmatrix = (1 - phit)
-                vcalc = vcalc*vmatrix
-                vdolo = vdolo*vmatrix
-                vcld = vcld*vmatrix
+                vcalc = vcalc * vmatrix
+                vdolo = vdolo * vmatrix
+                vcld = vcld * vmatrix
             return vcld, vcalc, vdolo
         elif model == 'double':
             # Estimate vshale
@@ -70,8 +70,8 @@ class Carbonate:
             else:
                 assert pef is not None, "PEF log is required for 'den_pef' method."
                 vcalc, vdolo = self.lithology_fraction_pef(pef, rhob, normalize=normalize)
-            vcalc = vcalc*(1 - vcld)
-            vdolo = vdolo*(1 - vcld)
+            vcalc = vcalc * (1 - vcld)
+            vdolo = vdolo * (1 - vcld)
             return vcld, vcalc, vdolo
 
     def lithology_fraction_neu_den(self, nphi, rhob, model: str = 'single', carbonate_type: str = 'limestone',
@@ -106,8 +106,8 @@ class Carbonate:
 
             phit = neu_den_xplot_poro_pt(point[0], point[1], 'ss', None, A, (0, 0), C, D) if normalize else 0
             vmatrix = 1 - phit
-            vlitho1 = np.append(vlitho1, (1 - vfrac)*vmatrix)
-            vlitho2 = np.append(vlitho2, vfrac*vmatrix)
+            vlitho1 = np.append(vlitho1, (1 - vfrac) * vmatrix)
+            vlitho2 = np.append(vlitho2, vfrac * vmatrix)
 
         return vlitho1, vlitho2
 
@@ -136,8 +136,8 @@ class Carbonate:
 
             phit = neu_den_xplot_poro_pt(point[0], point[1], 'ss', None, A, (0, 0), C, D) if normalize else 0
             vmatrix = 1 - phit
-            vcalc = np.append(vcalc, (1 - dolo_frac)*vmatrix)
-            vdolo = np.append(vdolo, dolo_frac*vmatrix)
+            vcalc = np.append(vcalc, (1 - dolo_frac) * vmatrix)
+            vdolo = np.append(vdolo, dolo_frac * vmatrix)
 
         return vcalc, vdolo
 
@@ -145,22 +145,22 @@ class Carbonate:
         """Apply clay correction to the input logs.
 
         Args:
-            vcld (_type_): _description_
-            nphi (_type_): _description_
-            rhob (_type_): _description_
-            pef (_type_): _description_
+            vcld (float): Volume of clay in v/v
+            nphi (float): Neutron Porosity log in v/v
+            rhob (float): Bulk Density log in g/cc
+            pef (float): Photoelectric Factor log in barns/electron
 
         Returns:
-            _type_: _description_
+            float, float, float: nphicc, rhobcc, pefcc
         """
         # Convert to numpy array for vectorized operations
         nphi = np.array(nphi)
         rhob = np.array(rhob)
         pef = np.array(pef)
 
-        nphicc = (nphi - vcld*self.dry_clay_point[0]) / (1 - vcld)
-        rhobcc = (rhob - vcld*self.dry_clay_point[1]) / (1 - vcld)
-        pefcc = (pef - vcld*Config.MINERALS_LOG_VALUE['PEF_SH']) / (1 - vcld)
+        nphicc = (nphi - vcld * self.dry_clay_point[0]) / (1 - vcld)
+        rhobcc = (rhob - vcld * self.dry_clay_point[1]) / (1 - vcld)
+        pefcc = (pef - vcld * Config.MINERALS_LOG_VALUE['PEF_SH']) / (1 - vcld)
 
         return nphicc, rhobcc, pefcc
 
@@ -168,9 +168,9 @@ class Carbonate:
         """Estimate Vclay from Gamma Ray log.
 
         Args:
-            gr (_type_): _description_
+            gr (float): _description_
 
         Returns:
-            _type_: _description_
+            float: _description_
         """
         return shale_volume_steiber(gr_index(gr)).flatten()

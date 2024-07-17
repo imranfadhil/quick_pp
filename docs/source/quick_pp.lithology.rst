@@ -1,4 +1,4 @@
-sand\_silt\_clay module
+Sand Silt Clay module
 -------------------------------------------
 
 .. autoclass:: quick_pp.lithology.sand_silt_clay.SandSiltClay
@@ -6,14 +6,14 @@ sand\_silt\_clay module
 .. automethod:: quick_pp.lithology.sand_silt_clay.SandSiltClay.lithology_fraction_kuttan_modified
 .. automethod:: quick_pp.lithology.sand_silt_clay.SandSiltClay.lithology_chart
 
-sand\_shale module
+Sand Shale module
 --------------------------------------
 
 .. autoclass:: quick_pp.lithology.sand_shale.SandShale
 .. automethod:: quick_pp.lithology.sand_shale.SandShale.estimate_lithology
 .. automethod:: quick_pp.lithology.sand_shale.SandShale.lithology_fraction
 
-carbonate module
+Carbonate module
 ------------------------------------
 
 .. autoclass:: quick_pp.lithology.carbonate.Carbonate
@@ -23,13 +23,13 @@ carbonate module
 .. automethod:: quick_pp.lithology.carbonate.Carbonate.clay_correction
 .. automethod:: quick_pp.lithology.carbonate.Carbonate.estimate_vcld_from_gr
 
-multi\_mineral module
+Multi Mineral module
 -----------------------------------------
 
 .. autoclass:: quick_pp.lithology.multi_mineral.MultiMineral
 .. automethod:: quick_pp.lithology.multi_mineral.MultiMineral.estimate_lithology
 
-General lithology functions
+General Lithology functions
 -----------------------------------------
 
 .. automodule:: quick_pp.lithology
