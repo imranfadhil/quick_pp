@@ -64,15 +64,17 @@ def minimizer_1(gr, nphi, rhob):
     def error_recon(volumes, *args):
         vol_quartz, vol_calcite, vol_dolomite, vol_shale, vol_mud = volumes
         GR, NPHI, RHOB = args
-        GR_RECON = vol_quartz*responses["GR_QUARTZ"] + vol_calcite*responses["GR_CALCITE"] + \
-            vol_dolomite*responses["GR_DOLOMITE"] + vol_shale*responses["GR_SH"] + vol_mud*responses["GR_MUD"]
-        NPHI_RECON = vol_quartz*responses["NPHI_QUARTZ"] + vol_calcite*responses["NPHI_CALCITE"] + \
-            vol_dolomite*responses["NPHI_DOLOMITE"] + vol_shale*responses["NPHI_SH"] + vol_mud*responses["NPHI_MUD"]
-        RHOB_RECON = vol_quartz*responses["RHOB_QUARTZ"] + vol_calcite*responses["RHOB_CALCITE"] + \
-            vol_dolomite*responses["RHOB_DOLOMITE"] + vol_shale*responses["RHOB_SH"] + vol_mud*responses["RHOB_MUD"]
+        GR_RECON = vol_quartz * responses["GR_QUARTZ"] + vol_calcite * responses["GR_CALCITE"] + \
+            vol_dolomite * responses["GR_DOLOMITE"] + vol_shale * responses["GR_SH"] + vol_mud * responses["GR_MUD"]
+        NPHI_RECON = vol_quartz * responses["NPHI_QUARTZ"] + vol_calcite * responses["NPHI_CALCITE"] + \
+            vol_dolomite * responses["NPHI_DOLOMITE"] + vol_shale * responses["NPHI_SH"] + \
+            vol_mud * responses["NPHI_MUD"]
+        RHOB_RECON = vol_quartz * responses["RHOB_QUARTZ"] + vol_calcite * responses["RHOB_CALCITE"] + \
+            vol_dolomite * responses["RHOB_DOLOMITE"] + vol_shale * responses["RHOB_SH"] + \
+            vol_mud * responses["RHOB_MUD"]
 
         # Some magic numbers to adjust the precision of differents magnitude orders (needs improvement)
-        return (GR - GR_RECON)**2 + (NPHI*300 - NPHI_RECON*300)**2 + (RHOB*100 - RHOB_RECON*100)**2
+        return (GR - GR_RECON)**2 + (NPHI * 300 - NPHI_RECON * 300)**2 + (RHOB * 100 - RHOB_RECON * 100)**2
 
     return minimize(error_recon, ((0, 0, 0, 0, 0)),
                     args=(gr, nphi, rhob), bounds=bounds, constraints=constrains)
@@ -82,17 +84,19 @@ def minimizer_2(gr, nphi, rhob, pef):
     def error_recon(volumes, *args):
         vol_quartz, vol_calcite, vol_dolomite, vol_shale, vol_mud = volumes
         GR, NPHI, RHOB, PEF = args
-        GR_RECON = vol_quartz*responses["GR_QUARTZ"] + vol_calcite*responses["GR_CALCITE"] + \
-            vol_dolomite*responses["GR_DOLOMITE"] + vol_shale*responses["GR_SH"] + vol_mud*responses["GR_MUD"]
-        NPHI_RECON = vol_quartz*responses["NPHI_QUARTZ"] + vol_calcite*responses["NPHI_CALCITE"] + \
-            vol_dolomite*responses["NPHI_DOLOMITE"] + vol_shale*responses["NPHI_SH"] + vol_mud*responses["NPHI_MUD"]
-        RHOB_RECON = vol_quartz*responses["RHOB_QUARTZ"] + vol_calcite*responses["RHOB_CALCITE"] + \
-            vol_dolomite*responses["RHOB_DOLOMITE"] + vol_shale*responses["RHOB_SH"] + vol_mud*responses["RHOB_MUD"]
-        PEF_RECON = vol_quartz*responses["PEF_QUARTZ"] + vol_calcite*responses["PEF_CALCITE"] + \
-            vol_dolomite*responses["PEF_DOLOMITE"] + vol_shale*responses["PEF_SH"] + vol_mud*responses["PEF_MUD"]
+        GR_RECON = vol_quartz * responses["GR_QUARTZ"] + vol_calcite * responses["GR_CALCITE"] + \
+            vol_dolomite * responses["GR_DOLOMITE"] + vol_shale * responses["GR_SH"] + vol_mud * responses["GR_MUD"]
+        NPHI_RECON = vol_quartz * responses["NPHI_QUARTZ"] + vol_calcite * responses["NPHI_CALCITE"] + \
+            vol_dolomite * responses["NPHI_DOLOMITE"] + vol_shale * responses["NPHI_SH"] + \
+            vol_mud * responses["NPHI_MUD"]
+        RHOB_RECON = vol_quartz * responses["RHOB_QUARTZ"] + vol_calcite * responses["RHOB_CALCITE"] + \
+            vol_dolomite * responses["RHOB_DOLOMITE"] + vol_shale * responses["RHOB_SH"] + \
+            vol_mud * responses["RHOB_MUD"]
+        PEF_RECON = vol_quartz * responses["PEF_QUARTZ"] + vol_calcite * responses["PEF_CALCITE"] + \
+            vol_dolomite * responses["PEF_DOLOMITE"] + vol_shale * responses["PEF_SH"] + vol_mud * responses["PEF_MUD"]
 
         # Some magic numbers to adjust the precision of differents magnitude orders (needs improvement)
-        return (GR - GR_RECON)**2 + (NPHI*300 - NPHI_RECON*300)**2 + (RHOB*100 - RHOB_RECON*100)**2 + \
+        return (GR - GR_RECON)**2 + (NPHI * 300 - NPHI_RECON * 300)**2 + (RHOB * 100 - RHOB_RECON * 100)**2 + \
             (PEF - PEF_RECON)**2
 
     return minimize(error_recon, ((0, 0, 0, 0, 0)),
@@ -103,17 +107,19 @@ def minimizer_3(gr, nphi, rhob, dtc):
     def error_recon(volumes, *args):
         vol_quartz, vol_calcite, vol_dolomite, vol_shale, vol_mud = volumes
         GR, NPHI, RHOB, DTC = args
-        GR_RECON = vol_quartz*responses["GR_QUARTZ"] + vol_calcite*responses["GR_CALCITE"] + \
-            vol_dolomite*responses["GR_DOLOMITE"] + vol_shale*responses["GR_SH"] + vol_mud*responses["GR_MUD"]
-        NPHI_RECON = vol_quartz*responses["NPHI_QUARTZ"] + vol_calcite*responses["NPHI_CALCITE"] + \
-            vol_dolomite*responses["NPHI_DOLOMITE"] + vol_shale*responses["NPHI_SH"] + vol_mud*responses["NPHI_MUD"]
-        RHOB_RECON = vol_quartz*responses["RHOB_QUARTZ"] + vol_calcite*responses["RHOB_CALCITE"] + \
-            vol_dolomite*responses["RHOB_DOLOMITE"] + vol_shale*responses["RHOB_SH"] + vol_mud*responses["RHOB_MUD"]
-        DTC_RECON = vol_quartz*responses["DTC_QUARTZ"] + vol_calcite*responses["DTC_CALCITE"] + \
-            vol_dolomite*responses["DTC_DOLOMITE"] + vol_shale*responses["DTC_SH"] + vol_mud*responses["DTC_MUD"]
+        GR_RECON = vol_quartz * responses["GR_QUARTZ"] + vol_calcite * responses["GR_CALCITE"] + \
+            vol_dolomite * responses["GR_DOLOMITE"] + vol_shale * responses["GR_SH"] + vol_mud * responses["GR_MUD"]
+        NPHI_RECON = vol_quartz * responses["NPHI_QUARTZ"] + vol_calcite * responses["NPHI_CALCITE"] + \
+            vol_dolomite * responses["NPHI_DOLOMITE"] + vol_shale * responses["NPHI_SH"] + \
+            vol_mud * responses["NPHI_MUD"]
+        RHOB_RECON = vol_quartz * responses["RHOB_QUARTZ"] + vol_calcite * responses["RHOB_CALCITE"] + \
+            vol_dolomite * responses["RHOB_DOLOMITE"] + vol_shale * responses["RHOB_SH"] + \
+            vol_mud * responses["RHOB_MUD"]
+        DTC_RECON = vol_quartz * responses["DTC_QUARTZ"] + vol_calcite * responses["DTC_CALCITE"] + \
+            vol_dolomite * responses["DTC_DOLOMITE"] + vol_shale * responses["DTC_SH"] + vol_mud * responses["DTC_MUD"]
 
         # Some magic numbers to adjust the precision of differents magnitude orders (needs improvement)
-        return (GR - GR_RECON)**2 + (NPHI*300 - NPHI_RECON*300)**2 + (RHOB*100 - RHOB_RECON*100)**2 + \
+        return (GR - GR_RECON)**2 + (NPHI * 300 - NPHI_RECON * 300)**2 + (RHOB * 100 - RHOB_RECON * 100)**2 + \
             (DTC - DTC_RECON)**2
 
     return minimize(error_recon, ((0, 0, 0, 0, 0)),
@@ -124,19 +130,21 @@ def minimizer_4(gr, nphi, rhob, pef, dtc):
     def error_recon(volumes, *args):
         vol_quartz, vol_calcite, vol_dolomite, vol_shale, vol_mud = volumes
         GR, NPHI, RHOB, PEF, DTC = args
-        GR_RECON = vol_quartz*responses["GR_QUARTZ"] + vol_calcite*responses["GR_CALCITE"] + \
-            vol_dolomite*responses["GR_DOLOMITE"] + vol_shale*responses["GR_SH"] + vol_mud*responses["GR_MUD"]
-        NPHI_RECON = vol_quartz*responses["NPHI_QUARTZ"] + vol_calcite*responses["NPHI_CALCITE"] + \
-            vol_dolomite*responses["NPHI_DOLOMITE"] + vol_shale*responses["NPHI_SH"] + vol_mud*responses["NPHI_MUD"]
-        RHOB_RECON = vol_quartz*responses["RHOB_QUARTZ"] + vol_calcite*responses["RHOB_CALCITE"] + \
-            vol_dolomite*responses["RHOB_DOLOMITE"] + vol_shale*responses["RHOB_SH"] + vol_mud*responses["RHOB_MUD"]
-        PEF_RECON = vol_quartz*responses["PEF_QUARTZ"] + vol_calcite*responses["PEF_CALCITE"] + \
-            vol_dolomite*responses["PEF_DOLOMITE"] + vol_shale*responses["PEF_SH"] + vol_mud*responses["PEF_MUD"]
-        DTC_RECON = vol_quartz*responses["DTC_QUARTZ"] + vol_calcite*responses["DTC_CALCITE"] + \
-            vol_dolomite*responses["DTC_DOLOMITE"] + vol_shale*responses["DTC_SH"] + vol_mud*responses["DTC_MUD"]
+        GR_RECON = vol_quartz * responses["GR_QUARTZ"] + vol_calcite * responses["GR_CALCITE"] + \
+            vol_dolomite * responses["GR_DOLOMITE"] + vol_shale * responses["GR_SH"] + vol_mud * responses["GR_MUD"]
+        NPHI_RECON = vol_quartz * responses["NPHI_QUARTZ"] + vol_calcite * responses["NPHI_CALCITE"] + \
+            vol_dolomite * responses["NPHI_DOLOMITE"] + vol_shale * responses["NPHI_SH"] + \
+            vol_mud * responses["NPHI_MUD"]
+        RHOB_RECON = vol_quartz * responses["RHOB_QUARTZ"] + vol_calcite * responses["RHOB_CALCITE"] + \
+            vol_dolomite * responses["RHOB_DOLOMITE"] + vol_shale * responses["RHOB_SH"] + \
+            vol_mud * responses["RHOB_MUD"]
+        PEF_RECON = vol_quartz * responses["PEF_QUARTZ"] + vol_calcite * responses["PEF_CALCITE"] + \
+            vol_dolomite * responses["PEF_DOLOMITE"] + vol_shale * responses["PEF_SH"] + vol_mud * responses["PEF_MUD"]
+        DTC_RECON = vol_quartz * responses["DTC_QUARTZ"] + vol_calcite * responses["DTC_CALCITE"] + \
+            vol_dolomite * responses["DTC_DOLOMITE"] + vol_shale * responses["DTC_SH"] + vol_mud * responses["DTC_MUD"]
 
         # Some magic numbers to adjust the precision of differents magnitude orders (needs improvement)
-        return (GR - GR_RECON)**2 + (NPHI*300 - NPHI_RECON*300)**2 + (RHOB*100 - RHOB_RECON*100)**2 + \
+        return (GR - GR_RECON)**2 + (NPHI * 300 - NPHI_RECON * 300)**2 + (RHOB * 100 - RHOB_RECON * 100)**2 + \
             (PEF - PEF_RECON)**2 + (DTC - DTC_RECON)**2
 
     return minimize(error_recon, ((0, 0, 0, 0, 0)),

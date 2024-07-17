@@ -50,7 +50,7 @@ class SandSiltClay:
         # print(f'#### wet_clay_point: {self.wet_clay_point}')
 
         # Redefine drysilt point
-        drysilt_NPHI = 1 - 1.68*(math.tan(float(self.silt_line_angle - 90)*math.pi / 180))
+        drysilt_NPHI = 1 - 1.68 * (math.tan(float(self.silt_line_angle - 90) * math.pi / 180))
         if not all(B):
             B = self.dry_silt_point = (drysilt_NPHI, B[1])
         # print(f'#### drysilt_pt: {drysilt_pt}')
