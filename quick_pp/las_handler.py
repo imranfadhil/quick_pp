@@ -334,7 +334,7 @@ def resample_depth(welly_object, step_depth=0.5):
 
 
 def export_to_las(well_data, well_name, folder=''):
-    """Export dataframe to las file.
+    """Export dataframe to las file. Expecting a DEPTH column in meters unit.
 
     Args:
         data_df (pd.DataFrame): data input
