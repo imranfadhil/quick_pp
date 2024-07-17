@@ -168,9 +168,8 @@ class Carbonate:
         """Estimate Vclay from Gamma Ray log.
 
         Args:
-            gr (float): _description_
-
+            gr (float): Gamma Ray log in API
         Returns:
-            float: _description_
+            float: Vclay in v/v
         """
         return shale_volume_steiber(gr_index(gr)).flatten()
