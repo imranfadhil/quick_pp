@@ -334,7 +334,7 @@ def resample_depth(welly_object, step_depth=0.5):
 
 
 def export_to_las(well_data, well_name, folder=''):
-    """Export dataframe to las file.
+    """Export dataframe to las file. Expecting a DEPTH column in meters unit.
 
     Args:
         data_df (pd.DataFrame): data input
@@ -342,11 +342,16 @@ def export_to_las(well_data, well_name, folder=''):
     """
     from .config import Config
     units = Config.vars_units(well_data)
-    well_data['DEPT'] = well_data['DEPTH']
-    well_data.set_index('DEPT', inplace=True, drop=True)
+    well_data.set_index('DEPTH', inplace=True, drop=True)
     w = welly.Well().from_df(well_data, units=units, name=well_name)
+
+    w = w.from_df(well_data, units=units, name=well_name)
+    # Convert to lasio to handle index name
+    las = w.to_lasio()
+    las.curves[0].mnemonic = 'DEPTH'
+    # Write to LAS format
     well_path = os.path.join(folder, f"{well_name}.las")
-    w.to_las(well_path)
+    las.write(well_path)
 
 
 if __name__ == '__main__':
