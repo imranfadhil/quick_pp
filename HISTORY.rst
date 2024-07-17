@@ -33,3 +33,7 @@ History
 0.1.10 (2024-07-15)
 -------------------
 * Update documentation in readthedocs.
+
+0.1.11 (2024-07-17)
+-------------------
+* Update requirements to fix security risks.
