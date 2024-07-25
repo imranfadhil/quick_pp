@@ -261,7 +261,7 @@ def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc', reservoir=True,
 
 
 def neu_den_poro(nphi, rhob, rho_ma=2.65, method='simplified'):
-    """Calculate porosity based 'simple', 'emperical' or 'gas' method, given neutron porosity and bulk density logs.
+    """Calculate porosity based on 'simple', 'emperical' or 'gas' method, given neutron porosity and bulk density logs.
 
     Args:
         nphi (float): Neutron porosity log.

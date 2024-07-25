@@ -41,23 +41,6 @@ def read_las_files(las_files):
 def read_las_file(file_object, required_sets=['PEP']):  # noqa
     """Check LAS file and concat datasets if more than one.
 
-       If more than one set in las file,
-
-       1. Loop through every line,
-       2. If ~Well is found, add one to well_count
-       3. If ~Curve is found, add one to dataset_count
-       4. If ~P or ~Tops_Parameter found, append tuple of (parameter_count, parameter_set, pointer location,
-       line number) into a list "parameter_line_numbers".
-       5. If SET found, split the line using delimiter and assign only "VALUE" as parameter_set, then add parameter_set
-       into tuple in list "parameter_line_numbers"
-       6. Record well header numbers in tuple: (0, '', pointer location, line number)
-       7. Through function "concat_datasets", return data_df, header_df and welly_object else(to catch las file with
-       only 1 dataset),
-       8. Loop through every line,
-       9. If ~ is found, rename every sets accordingly,
-       10. Assign every line in every section (Version/Well/Parameter etc) into a section dictionary
-       11. Through function "extract_dataset", return data_df, header_df and welly_object
-
     Args:
         file_object (str): las file object.
         required_sets (list, optional): Required param set to be extracted. Defaults to ['PEP'].

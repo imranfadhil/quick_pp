@@ -16,7 +16,7 @@ plt.rcParams.update(
 
 
 def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
-    """Archie's saturation model.
+    """Estimate water saturation based on Archie's model for clean sand.
 
     Args:
         sw (float): Water saturation.
@@ -33,9 +33,10 @@ def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
 
 
 def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
-    """Waxman-Smits saturation model for dispersed clay mineral.
-       ref: Ausburn, Brian E., and Robert Freedman. "The Waxman-smits Equation For Shaly Sands:
-            I. Simple Methods Of Solution; Ii. Error Analysis." The Log Analyst 26 (1985)
+    """Estimate water saturation based on Waxman-Smits model for dispersed clay mineral.
+    ref: Ausburn, Brian E., and Robert Freedman. "The Waxman-smits Equation For Shaly Sands:
+        i. Simple Methods Of Solution
+        ii. Error Analysis." The Log Analyst 26 (1985)
 
     Args:
         rt (float): True resistivity or deep resistivity log.
@@ -69,8 +70,9 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
 
 
 def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
-    """Dual water saturation model, extension from Waxman-Smits.
-       TODO: Estimate swb and rwb if not provided
+    """Estimate water saturation based on dual water model, an extension from Waxman-Smits.
+    TODO: Estimate swb and rwb if not provided
+
     Args:
         sw (float): Water saturation.
         a (float): Cementation exponent.
@@ -96,7 +98,8 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
 
 
 def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
-    """Indonesian saturation model may work well with fresh formation water. Based on Poupon-Leveaux 1971.
+    """Estimate water saturation based on Indonesian model which may work well with fresh formation water.
+    Based on Poupon-Leveaux 1971.
 
     Args:
         sw (float): Water saturation.
@@ -113,7 +116,7 @@ def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
 
 
 def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
-    """Simandoux's saturation model.
+    """Estimate water saturation based on Simandoux's model.
 
     Args:
         sw (float): Water saturation.
@@ -131,7 +134,7 @@ def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
 
 
 def modified_simandoux_saturation():
-    """ TODO: Modified Simandoux's saturation model.
+    """ TODO: Estimate water saturation based on modified Simandoux's model.
     """
     pass
 
@@ -150,7 +153,7 @@ def estimate_temperature_gradient(tvd, unit='metric'):
 
 
 def estimate_b_waxman_smits(T, rw):
-    """Estimating B (conductance parameter) for Waxman-Smits model based on Juhasz 1981.
+    """Estimate B (conductance parameter) for Waxman-Smits model based on Juhasz 1981.
 
     Args:
         T (float): Temperature in degC.
