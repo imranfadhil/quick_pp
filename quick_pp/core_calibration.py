@@ -170,7 +170,7 @@ def sw_skelt_harrison():
 
 
 def sw_cuddy(phit, h, a, b):
-    """Cuddy's saturation model.
+    """Estaimte water saturation based on Cuddy's.
 
     Args:
         sw (float): Water saturation.

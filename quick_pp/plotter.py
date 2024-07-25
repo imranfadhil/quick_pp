@@ -114,8 +114,8 @@ def neutron_density_xplot(nphi, rhob,
 
 def picket_plot(rt, phit):
     """Generate Pickett plot which is used to plot phit and rt at water bearing interval to determine;
-      m = The slope of best-fit line crossing the cleanest sand.
-      rw = Formation water resistivity. The intercept of the best-fit line at rt when phit = 100%.
+    m = The slope of best-fit line crossing the cleanest sand.
+    rw = Formation water resistivity. The intercept of the best-fit line at rt when phit = 100%.
 
     Args:
         rt (float): True resistivity or deep resistivity log.

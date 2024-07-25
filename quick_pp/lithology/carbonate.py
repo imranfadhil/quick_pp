@@ -7,14 +7,7 @@ from quick_pp.config import Config
 
 
 class Carbonate:
-    """Sand-silt-clay model based on Kuttan's litho-porosity model.
-
-     The original is a binary model where reservoir sections (left to the silt line) consist of combination of
-     sand-silt while non-reservoir sections (right to the silt line) consist of silt-clay combination.
-
-     PCSB proposed a model based on Kuttan, where the reservoir sections consist of combination of sand-silt-clay
-     while non-reservoir sections remain a combination of silt-clay only. This module is a simplified version of the
-     original PCSB model."""
+    """Carbonate model based on neutron density or density pef cross plots."""
 
     def __init__(self, dry_calc_point: tuple = None, dry_dolo_point: tuple = None, dry_clay_point: tuple = None,
                  fluid_point: tuple = None, **kwargs):

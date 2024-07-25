@@ -30,8 +30,8 @@ def kozeny_carman_permeability(phit, S=0.01):
 
 
 def timur_permeability(phit, Swirr):
-    """Based on Timur (1968) emperical equation established on 155 sandstone samples from 3 different
-    oil fields in North America.
+    """Estimate permeability based on Timur (1968) emperical equation established on 155 sandstone samples from
+    3 different oil fields in North America.
 
     Args:
         phit (float): Porosity in fraction.
@@ -44,7 +44,7 @@ def timur_permeability(phit, Swirr):
 
 
 def coates_permeability(phie, Swirr, a=1):
-    """Based on Coates (1974)
+    """Estimate permeability based on Coates (1974)
 
     Args:
         phie (float): Effective porosity in fraction.
@@ -58,7 +58,7 @@ def coates_permeability(phie, Swirr, a=1):
 
 
 def tixier_permeability(phit, Swirr):
-    """Based on Tixier (1949)
+    """Estimate permeability based on Tixier (1949)
 
     Args:
         phit (float): Porosity in fraction.
@@ -71,7 +71,7 @@ def tixier_permeability(phit, Swirr):
 
 
 def morris_biggs_permeability(phit, C, Swirr):
-    """Based on Morris and Biggs (1967)
+    """Estimate permeability based on Morris and Biggs (1967)
 
     Args:
         phit (float): Total porosity in fraction.
@@ -86,7 +86,7 @@ def morris_biggs_permeability(phit, C, Swirr):
 
 
 def morris_biggs_modified_permeability(phit, phie, Vbwi):
-    """Based on Morris and Biggs (1967)
+    """Estimate permeability based on Morris and Biggs (1967)
 
     Args:
         phit (float): Total porosity in fraction.
@@ -100,7 +100,7 @@ def morris_biggs_modified_permeability(phit, phie, Vbwi):
 
 
 def estimate_krw(swt, swirr):
-    """Based on Park Jones (1945)
+    """Estimate permeability based on Park Jones (1945)
 
     Args:
         swt (float): Total water saturation.
@@ -113,7 +113,7 @@ def estimate_krw(swt, swirr):
 
 
 def estimate_kro(swt, swirr):
-    """Based on Park Jones (1945)
+    """Estimate permeability based on Park Jones (1945)
 
     Args:
         swt (float): Total water saturation.
