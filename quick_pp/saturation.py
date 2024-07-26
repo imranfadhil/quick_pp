@@ -34,7 +34,7 @@ def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
 
 def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
     """Estimate water saturation based on Waxman-Smits model for dispersed clay mineral.
-    ref: Ausburn, Brian E., and Robert Freedman. "The Waxman-smits Equation For Shaly Sands:
+    Based on Ausburn, Brian E., and Robert Freedman. "The Waxman-smits Equation For Shaly Sands:
         i. Simple Methods Of Solution
         ii. Error Analysis." The Log Analyst 26 (1985)
 
@@ -322,6 +322,7 @@ def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
 
 def swirr_xplot(swt, phit, c=None, q=None, label='', log_log=False):
     """Plot SWT vs PHIT for sand intervales only and estimate Swirr from X-plot.
+
     Args:
         swt (float): Water saturation.
         phit (float): Total porosity.
