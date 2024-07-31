@@ -4,7 +4,7 @@ from quick_pp.utils import min_max_line
 
 
 def fzi(k, phit):
-    """Calculate FZI from Kozeny-Carman equation, based on Amaefule et al. (1993)
+    """Calculate FZI (Flow Zone Indicator) from Kozeny-Carman equation, based on Amaefule et al. (1993)
 
     Args:
         k (float): Permeability in mD
@@ -17,7 +17,7 @@ def fzi(k, phit):
 
 
 def rqi(k, phit):
-    """Calculate RQI from Kozeny-Carman equation, based on Amaefule et al. (1993)
+    """Calculate RQI (Rock Quality Index) from Kozeny-Carman equation, based on Amaefule et al. (1993)
 
     Args:
         k (float): Permeability in mD
