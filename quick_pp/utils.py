@@ -31,7 +31,7 @@ def min_max_line(feature, alpha: float = 0.1):
 
     # Detecting change points
     model = "rbf"
-    jump = len(signal_data) // 5
+    jump = len(signal_data) // (len(peaks) + 1)
     my_bkps = rpt.BottomUp(model=model, jump=jump).fit_predict(signal_data, n_bkps=len(peaks))
     my_bkps = np.insert(my_bkps, 0, 0)
 
