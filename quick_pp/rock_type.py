@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.signal import detrend
+from sklearn.preprocessing import MinMaxScaler
 from quick_pp.utils import min_max_line
 
 
@@ -42,6 +43,8 @@ def estimate_vsh_gr(gr, alpha=0.1):
     dtr_gr = detrend(gr, axis=0) + np.nanmean(gr)
     _, max_gr = min_max_line(dtr_gr, alpha)
     gri = dtr_gr / max_gr
+    # Apply min-max scaling
+    gri = MinMaxScaler().fit_transform(gri.reshape(-1, 1)).flatten()
     # Apply Steiber equation
     return gri / (3 - 2 * gri)
 
