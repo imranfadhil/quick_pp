@@ -4,33 +4,77 @@ import math
 from quick_pp.saturation import estimate_rt_water_trend
 
 
-def estimate_hydrostatic_pressure(depth, rhob_water=1.0, g=9.81):
-    """Estimate hydrostatic pressure from bulk density and depth.
+def extrapolate_rhob(rhob, tvd, a, b):
+    # TODO: Revisit
+    """Extrapolate density log to the surface using a power law model.
 
     Args:
-        depth (float): Depth in m.
+        rhob (float): Bulk density in g/cm^3.
+        tvd (float): True vertical depth in m.
+        a (float): _description_
+        b (float): _description_
+
+    Returns:
+        float: Extrapolated density in g/cm^3.
+    """
+    rhob_extrapolated = 1.8 + a * tvd**b
+    return np.append(rhob_extrapolated, rhob)
+
+
+def estimate_gardner_density(vp, alpha=.23, beta=.25):
+    """
+    Estimate density from vp using Gardner's relation.
+
+    Args:
+        vp (float): P-wave velocity in ft/s.
+        alpha (float): Gardner's coefficient alpha. 1.75 for shale and 1.66 for sandstone.
+        beta (float): Gardner's coefficient beta. 0.265 for shale and 0.261 for sandstone.
+
+    Returns:
+        float: Estimated density in g/cm^3.
+    """
+    return alpha * vp**beta
+
+
+def estimate_shear_wave_velocity(vp):
+    """Estimate shear wave velocity from P-wave velocity using the empirical relation by Castagna et al. 1985.
+
+    Args:
+        vp (float): P-wave velocity in m/s.
+
+    Returns:
+        float: Estimated S-wave velocity in m/s.
+    """
+    return 0.8043 * vp - 855.9
+
+
+def estimate_hydrostatic_pressure(tvd, rhob_water=1.0, g=9.81):
+    """Estimate hydrostatic pressure from bulk density and true vertical.
+
+    Args:
+        tvd (float): Depth in m.
         rhob_water (float, optional): Bulk density of water in g/cm^3. Defaults to 1.0.
         g (float, optional): Acceleration due to gravity in m/s^2. Defaults to 9.81.
 
     Returns:
         float: Estimated hydrostatic pressure in MPa.
     """
-    return rhob_water * g * depth
+    return 1000 * rhob_water * g * tvd
 
 
-def estimate_overburden_pressure(rhob, depth, rhob_water=1.0, depth_water=0, g=9.81):
+def estimate_overburden_pressure(rhob, tvd, rhob_water=1.0, depth_water=0, g=9.81):
     # TODO: revisit
-    """Estimate overburden pressure from bulk density and depth.
+    """Estimate overburden pressure from bulk density and true vertical depth.
 
     Args:
         rhob (float): Bulk density in g/cm^3.
-        depth (float): Depth in m.
+        tvd (float): Depth in m.
         g (float, optional): Acceleration due to gravity in m/s^2. Defaults to 9.81.
 
     Returns:
         float: Estimated overburden pressure in MPa.
     """
-    return rhob_water * g * depth_water + np.cumsum(rhob)[-1] * g * depth
+    return 1000 * (rhob_water * g * depth_water + np.cumsum(rhob) * g * tvd)
 
 
 def estimate_pore_pressure_dt(s, p_hyd, dtc, dtc_shale, x=3.0):
@@ -66,9 +110,9 @@ def estimate_pore_pressure_res(s, p_hyd, res, res_shale=None, x=1.2):
     return s - (s - p_hyd) * (res_shale / res)**x
 
 
-def estimate_fracture_pressure(pp, tvdss):
+def estimate_fracture_pressure(pp, tvd):
     # TODO: Revisit
-    return 1 / 3 * (1 + 2 * pp / tvdss), 1 / 2 * (1 + 2 * pp / tvdss)
+    return 1 / 3 * (1 + 2 * pp / tvd), 1 / 2 * (1 + 2 * pp / tvd)
 
 
 def estimate_ucs(dtc):
@@ -97,25 +141,27 @@ def estimate_poisson_ratio(vp, vs):
 
 
 def estimate_shear_modulus(rhob, vs, a):
-    """Estimate shear modulus from density, S-wave velocity and a constant a.
+    """Estimate shear modulus from density, S-wave velocity and constant a.
+     Shear modulus is the shear stiffness of a material, which is the ratio of shear stress to shear strain.
+     Also known as the modulus of rigidity.
 
     Args:
-        rhob (_type_): _description_
-        vs (_type_): _description_
-        a (_type_): _description_
+        rhob (float): Bulk density in g/cm^3.
+        vs (float): S-wave velocity in m/s.
+        a (float): _description_
     """
     return a * rhob / vs**2
 
 
 def estimate_young_modulus(rhob, vp, vs):
     """Estimate Young's modulus from density, P-wave and S-wave velocities.
-     Young's modulus measures the resistance of a material to stress where it quantifies the relationship between
-     stress and strain in a material.
+     Young's modulus is the measure of the resistance of a material to stress.
+     It quantifies the relationship between stress and strain in a material.
 
     Args:
         rhob (float): Bulk density in g/cm^3.
-        vp (_type_): P-wave velocity in m/s.
-        vs (_type_): S-wave velocity in m/s.
+        vp (float): P-wave velocity in m/s.
+        vs (float): S-wave velocity in m/s.
 
     Returns:
         float: Estimated Young's modulus in Pa.
@@ -124,48 +170,17 @@ def estimate_young_modulus(rhob, vp, vs):
 
 
 def estimate_bulk_modulus(rhob, vp, vs, a):
-    """Estimate Bulk modulus which is the reciprocal of compressibility.
+    """Estimate Bulk modulus from density, P-wave and S-wave velocities.
+     Bulk modulus is the measure of resistance of a material to bulk compression.
+     It is the reciprocal of compressibility.
 
     Args:
         rhob (float): Bulk density in g/cm^3.
-        vp (_type_): P-wave velocity in m/s.
-        vs (_type_): S-wave velocity in m/s.
-        a (_type_): _description_
+        vp (float): P-wave velocity in m/s.
+        vs (float): S-wave velocity in m/s.
+        a (float): _description_
 
     Returns:
         float: Estimated Bulk modulus in Pa.
     """
     return a * rhob * (1 / vp**2 - 4 / (3 * vs**2))
-
-
-def estimate_gardner_density(vp, alpha=.23, beta=.25):
-    """
-    Estimate density from vp using Gardner's relation.
-
-    Args:
-        vp (float): P-wave velocity in ft/s.
-        alpha (float): Gardner's coefficient alpha. 1.75 for shale and 1.66 for sandstone.
-        beta (float): Gardner's coefficient beta. 0.265 for shale and 0.261 for sandstone.
-
-    Returns:
-        float: Estimated density in g/cm^3.
-    """
-    return alpha * vp**beta
-
-
-def estimate_shear_wave_velocity(vp):
-    """Estimate shear wave velocity from P-wave velocity using the empirical relation by Castagna et al. 1985.
-
-    Args:
-        vp (float): P-wave velocity in m/s.
-
-    Returns:
-        float: Estimated S-wave velocity in m/s.
-    """
-    return 0.8043 * vp - 855.9
-
-
-def extrapolate_rhob(rhob, tvdss, a, b):
-    # TODO: Revisit
-    rhob_extrapolated = 0 + a * tvdss**b
-    return np.append(rhob_extrapolated, rhob)
