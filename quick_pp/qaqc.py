@@ -220,6 +220,57 @@ def neu_den_xplot_hc_correction(
     return nphi_corrected, rhob_corrected, hc_flag
 
 
+def den_xplot_correction(
+        nphi, rhob, gr=None, badhole_flag=None,
+        dry_sand_point: tuple = None,
+        dry_clay_point: tuple = None,
+        fluid_point: tuple = (1.0, 1.0)):
+    """Estimate correction for neutron porosity and bulk density based on correction angle.
+
+    Args:
+        nphi (float): Neutron porosity log in fraction.
+        rhob (float): Bulk density log in g/cc.
+        gr (float, optional): Gamma ray log in GAPI. Defaults to None.
+        dry_sand_point (tuple, optional): Neutron porosity and bulk density of dry sand point. Defaults to None.
+        dry_clay_point (tuple, optional): Neutron porosity and bulk density of dry clay point. Defaults to None.
+        fluid_point (tuple, optional): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
+
+    Returns:
+        (float, float): Corrected neutron porosity and bulk density.
+    """
+    A = dry_sand_point
+    C = dry_clay_point
+    D = fluid_point
+    rocklithofrac = length_a_b(A, C)
+
+    frac_vsh_gr = estimate_vsh_gr(gr)
+    rhob_corrected = np.empty(0)
+    for i, point in enumerate(list(zip(nphi, rhob, frac_vsh_gr, badhole_flag))):
+        var_pt = line_intersection((A, C), (D, (point[0], point[1])))
+        projlithofrac = length_a_b(var_pt, C)
+        if point[3] == 1:
+            # Iteration until vsh_dn = vsh_gr
+            vsh_dn = 1 - (projlithofrac / rocklithofrac)
+            nphi_corr = point[0]
+            rhob_corr = point[1]
+            shi = 0
+            count = 0
+            while vsh_dn <= point[2] and count < 100:
+                rhob_corr = point[1] + shi
+                shi += 0.01
+                count += 1
+                # Recalculate vsh_dn
+                var_pt = line_intersection((A, C), (D, (nphi_corr, rhob_corr)))
+                projlithofrac = length_a_b(var_pt, C)
+                vsh_dn = 1 - (projlithofrac / rocklithofrac)
+
+            rhob_corrected = np.append(rhob_corrected, rhob_corr)
+        else:
+            rhob_corrected = np.append(rhob_corrected, point[1])
+
+    return rhob_corrected
+
+
 def den_correction(rhob, gr, alpha=0.1):
     """Correct bulk density using gamma ray.
 
