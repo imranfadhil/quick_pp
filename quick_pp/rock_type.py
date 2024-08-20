@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.signal import detrend
 from sklearn.preprocessing import MinMaxScaler
 from quick_pp.utils import min_max_line
 
@@ -39,11 +38,16 @@ def estimate_vsh_gr(gr, alpha=0.1):
     Returns:
         float: VSH_GR.
     """
-    gr = np.where(np.isnan(gr), np.nanmedian(gr), gr)
-    dtr_gr = detrend(gr, axis=0) + np.nanmean(gr)
-    _, max_gr = min_max_line(dtr_gr, alpha)
-    gri = dtr_gr / max_gr
-    # Apply min-max scaling
+    # Remove high outliers and forward fill missing values
+    gr = np.where(np.abs(gr - np.nanmean(gr)) <= 1.5 * np.nanstd(gr), gr, np.nan)
+    mask = np.isnan(gr)
+    idx = np.where(~mask, np.arange(len(mask)), 0)
+    np.maximum.accumulate(idx, axis=0, out=idx)
+    gr = gr[idx]
+
+    # Normalize gamma ray
+    _, max_gr = min_max_line(gr, alpha)
+    gri = gr / max_gr
     gri = MinMaxScaler().fit_transform(gri.reshape(-1, 1)).flatten()
     # Apply Steiber equation
     return gri / (3 - 2 * gri)
