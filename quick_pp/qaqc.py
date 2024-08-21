@@ -3,7 +3,7 @@ import numpy as np
 from scipy.stats import gmean
 import matplotlib.pyplot as plt
 
-from quick_pp.utils import length_a_b, line_intersection, min_max_line
+from quick_pp.utils import length_a_b, line_intersection
 from quick_pp.rock_type import estimate_vsh_gr
 from quick_pp.config import Config
 
@@ -271,7 +271,7 @@ def den_xplot_correction(
     return rhob_corrected
 
 
-def den_correction(rhob, gr, alpha=0.1):
+def den_correction(phin, gr, phin_sh=.35, phid_sh=.05, rho_ma=2.71, rho_fluid=1.0, alpha=0.1):
     """Correct bulk density using gamma ray.
 
     Args:
@@ -282,9 +282,9 @@ def den_correction(rhob, gr, alpha=0.1):
     Returns:
         float: Corrected bulk density.
     """
-    rhob_min_line, rhob_max_line = min_max_line(rhob, alpha=alpha)
     vsh_gr = estimate_vsh_gr(gr, alpha=alpha)
-    return rhob_min_line + (rhob_max_line - rhob_min_line) * vsh_gr
+    phid = phin - (phin_sh - phid_sh) * vsh_gr
+    return rho_ma - (rho_ma - rho_fluid) * phid
 
 
 def quick_qc(well_data):

@@ -53,6 +53,10 @@ def estimate_vsh_gr(gr, alpha=0.1):
     return gri / (3 - 2 * gri)
 
 
+def estimate_vsh_dn(phin, phid, phin_sh=0.35, phid_sh=0.05):
+    return (phin - phid) / (phin_sh - phid_sh)
+
+
 def rock_typing(curve, cut_offs=[.1, .3, .4], higher_is_better=True):
     """Rock typing based on cutoffs.
 
