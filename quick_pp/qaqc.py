@@ -220,70 +220,25 @@ def neu_den_xplot_hc_correction(
     return nphi_corrected, rhob_corrected, hc_flag
 
 
-def den_xplot_correction(
-        nphi, rhob, gr=None, badhole_flag=None,
-        dry_sand_point: tuple = None,
-        dry_clay_point: tuple = None,
-        fluid_point: tuple = (1.0, 1.0)):
-    """Estimate correction for neutron porosity and bulk density based on correction angle.
+def den_correction(nphi, gr, phin_sh=.35, phid_sh=.05, rho_ma=2.68, rho_fluid=1.0, alpha=0.1):
+    """Correct bulk density based on nphi and gamma ray.
 
     Args:
         nphi (float): Neutron porosity log in fraction.
-        rhob (float): Bulk density log in g/cc.
-        gr (float, optional): Gamma ray log in GAPI. Defaults to None.
-        dry_sand_point (tuple, optional): Neutron porosity and bulk density of dry sand point. Defaults to None.
-        dry_clay_point (tuple, optional): Neutron porosity and bulk density of dry clay point. Defaults to None.
-        fluid_point (tuple, optional): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
-
-    Returns:
-        (float, float): Corrected neutron porosity and bulk density.
-    """
-    A = dry_sand_point
-    C = dry_clay_point
-    D = fluid_point
-    rocklithofrac = length_a_b(A, C)
-
-    frac_vsh_gr = estimate_vsh_gr(gr)
-    rhob_corrected = np.empty(0)
-    for i, point in enumerate(list(zip(nphi, rhob, frac_vsh_gr, badhole_flag))):
-        var_pt = line_intersection((A, C), (D, (point[0], point[1])))
-        projlithofrac = length_a_b(var_pt, C)
-        if point[3] == 1:
-            # Iteration until vsh_dn = vsh_gr
-            vsh_dn = 1 - (projlithofrac / rocklithofrac)
-            nphi_corr = point[0]
-            rhob_corr = point[1]
-            shi = 0
-            count = 0
-            while vsh_dn <= point[2] and count < 100:
-                rhob_corr = point[1] + shi
-                shi += 0.01
-                count += 1
-                # Recalculate vsh_dn
-                var_pt = line_intersection((A, C), (D, (nphi_corr, rhob_corr)))
-                projlithofrac = length_a_b(var_pt, C)
-                vsh_dn = 1 - (projlithofrac / rocklithofrac)
-
-            rhob_corrected = np.append(rhob_corrected, rhob_corr)
-        else:
-            rhob_corrected = np.append(rhob_corrected, point[1])
-
-    return rhob_corrected
-
-
-def den_correction(phin, gr, phin_sh=.35, phid_sh=.05, rho_ma=2.71, rho_fluid=1.0, alpha=0.1):
-    """Correct bulk density using gamma ray.
-
-    Args:
-        rhob (float): Bulk density log in g/cc.
         gr (float): Gamma ray log in GAPI.
-        alpha (float, optional): Alpha value for min_max_line. Defaults to 0.1.
+        phin_sh (float, optional): Neutron porosity of shale. Defaults to .35.
+        phid_sh (float, optional): Density porosity of shale. Defaults to .05.
+        rho_ma (float, optional): Matrix density. Defaults to 2.68.
+        rho_fluid (float, optional): Fluid density. Defaults to 1.0.
+        alpha (float, optional): Alpha value for gamma ray normalization. Defaults
 
     Returns:
         float: Corrected bulk density.
     """
+    # Estimate vsh_gr
     vsh_gr = estimate_vsh_gr(gr, alpha=alpha)
-    phid = phin - (phin_sh - phid_sh) * vsh_gr
+    # Estimate phid assuming vsh_gr = vsh_dn = (phin - phid) / (phin_sh - phid_sh)
+    phid = nphi - (phin_sh - phid_sh) * vsh_gr
     return rho_ma - (rho_ma - rho_fluid) * phid
 
 

@@ -39,7 +39,7 @@ def estimate_vsh_gr(gr, alpha=0.1):
         float: VSH_GR.
     """
     # Remove high outliers and forward fill missing values
-    gr = np.where(np.abs(gr - np.nanmean(gr)) <= 1.5 * np.nanstd(gr), gr, np.nan)
+    gr = np.where(gr <= np.nanmean(gr) + 2 * np.nanstd(gr), gr, np.nan)
     mask = np.isnan(gr)
     idx = np.where(~mask, np.arange(len(mask)), 0)
     np.maximum.accumulate(idx, axis=0, out=idx)
