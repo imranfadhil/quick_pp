@@ -34,7 +34,7 @@ def mask_outside_threshold(data, fill=False):
     return data
 
 
-def badhole_flag(data, thold=4):
+def badhole_flagging(data, thold=4):
     """Generate BADHOLE flag using ruptures package. Modified based on https://hallau.world/post/bitsize-from-caliper/
 
     Args:
@@ -192,7 +192,7 @@ def neu_den_xplot_hc_correction(
     for i, point in enumerate(list(zip(nphi, rhob, frac_vsh_gr))):
         var_pt = line_intersection((A, C), (D, (point[0], point[1])))
         projlithofrac = length_a_b(var_pt, C) + buffer
-        if projlithofrac > rocklithofrac:
+        if (projlithofrac > rocklithofrac) and (point[0] < .4):
             # Iteration until vsh_dn = vsh_gr
             vsh_dn = 1 - (projlithofrac / rocklithofrac)
             nphi_corr = point[0]
