@@ -10,7 +10,7 @@ import scipy.stats as stats
 from scipy.signal import find_peaks
 
 
-def min_max_line(feature, alpha: float = 0.1):
+def min_max_line(feature, alpha: float = 0.1, auto_bin=False):
     """Calculates the minimum and maximum line of a feature, grouped based on change points.
 
     Args:
@@ -23,19 +23,21 @@ def min_max_line(feature, alpha: float = 0.1):
     # Fill missing values with the median
     feature = np.where(np.isnan(feature), np.nanmedian(feature), feature)
 
-    # Estimating number of peaks
-    signal_data = feature
-    kde = stats.gaussian_kde(signal_data[~np.isnan(signal_data)])
-    evaluated = kde.evaluate(np.linspace(np.nanmin(signal_data), np.nanmax(signal_data), 100))
-    peaks, _ = find_peaks(evaluated, height=np.nanmedian(evaluated))
+    list_of_dfs = [feature]
+    if auto_bin:
+        # Estimating number of peaks
+        signal_data = feature
+        kde = stats.gaussian_kde(signal_data[~np.isnan(signal_data)])
+        evaluated = kde.evaluate(np.linspace(np.nanmin(signal_data), np.nanmax(signal_data), 100))
+        peaks, _ = find_peaks(evaluated, height=np.nanmedian(evaluated))
 
-    # Detecting change points
-    model = "rbf"
-    jump = len(signal_data) // (len(peaks) + 1)
-    my_bkps = rpt.BottomUp(model=model, jump=jump).fit_predict(signal_data, n_bkps=len(peaks))
-    my_bkps = np.insert(my_bkps, 0, 0)
+        # Detecting change points
+        model = "l2"
+        jump = len(signal_data) // (len(peaks) + 1)
+        my_bkps = rpt.BottomUp(model=model, jump=jump).fit_predict(signal_data, n_bkps=len(peaks))
+        my_bkps = np.insert(my_bkps, 0, 0)
 
-    list_of_dfs = [feature[my_bkps[i]:my_bkps[i + 1]] for i in range(len(my_bkps) - 1)]
+        list_of_dfs = [feature[my_bkps[i]:my_bkps[i + 1]] for i in range(len(my_bkps) - 1)]
 
     min_lines = np.empty(0)
     max_lines = np.empty(0)
@@ -45,7 +47,7 @@ def min_max_line(feature, alpha: float = 0.1):
         if y.size > 0:
             Y = sm.add_constant(y)
             modeltemp = sm.OLS(data, Y).fit()
-            prstd, min_line, max_line = wls_prediction_std(modeltemp, alpha=alpha)
+            _, min_line, max_line = wls_prediction_std(modeltemp, alpha=alpha)
             if not isinstance(min_line, np.ndarray):
                 min_line = min_line.to_numpy()
                 max_line = max_line.to_numpy()

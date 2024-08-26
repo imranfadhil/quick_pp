@@ -3,7 +3,7 @@ import numpy as np
 from scipy.stats import gmean
 import matplotlib.pyplot as plt
 
-from quick_pp.utils import length_a_b, line_intersection, min_max_line
+from quick_pp.utils import length_a_b, line_intersection
 from quick_pp.rock_type import estimate_vsh_gr
 from quick_pp.config import Config
 
@@ -34,7 +34,7 @@ def mask_outside_threshold(data, fill=False):
     return data
 
 
-def badhole_flag(data, thold=4):
+def badhole_flagging(data, thold=4):
     """Generate BADHOLE flag using ruptures package. Modified based on https://hallau.world/post/bitsize-from-caliper/
 
     Args:
@@ -192,7 +192,7 @@ def neu_den_xplot_hc_correction(
     for i, point in enumerate(list(zip(nphi, rhob, frac_vsh_gr))):
         var_pt = line_intersection((A, C), (D, (point[0], point[1])))
         projlithofrac = length_a_b(var_pt, C) + buffer
-        if projlithofrac > rocklithofrac:
+        if (projlithofrac > rocklithofrac) and (point[0] < .4):
             # Iteration until vsh_dn = vsh_gr
             vsh_dn = 1 - (projlithofrac / rocklithofrac)
             nphi_corr = point[0]
@@ -220,20 +220,26 @@ def neu_den_xplot_hc_correction(
     return nphi_corrected, rhob_corrected, hc_flag
 
 
-def den_correction(rhob, gr, alpha=0.1):
-    """Correct bulk density using gamma ray.
+def den_correction(nphi, gr, phin_sh=.35, phid_sh=.05, rho_ma=2.68, rho_fluid=1.0, alpha=0.1):
+    """Correct bulk density based on nphi and gamma ray.
 
     Args:
-        rhob (float): Bulk density log in g/cc.
+        nphi (float): Neutron porosity log in fraction.
         gr (float): Gamma ray log in GAPI.
-        alpha (float, optional): Alpha value for min_max_line. Defaults to 0.1.
+        phin_sh (float, optional): Neutron porosity of shale. Defaults to .35.
+        phid_sh (float, optional): Density porosity of shale. Defaults to .05.
+        rho_ma (float, optional): Matrix density. Defaults to 2.68.
+        rho_fluid (float, optional): Fluid density. Defaults to 1.0.
+        alpha (float, optional): Alpha value for gamma ray normalization. Defaults
 
     Returns:
         float: Corrected bulk density.
     """
-    rhob_min_line, rhob_max_line = min_max_line(rhob, alpha=alpha)
+    # Estimate vsh_gr
     vsh_gr = estimate_vsh_gr(gr, alpha=alpha)
-    return rhob_min_line + (rhob_max_line - rhob_min_line) * vsh_gr
+    # Estimate phid assuming vsh_gr = vsh_dn = (phin - phid) / (phin_sh - phid_sh)
+    phid = nphi - (phin_sh - phid_sh) * vsh_gr
+    return rho_ma - (rho_ma - rho_fluid) * phid
 
 
 def quick_qc(well_data):
