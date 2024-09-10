@@ -39,7 +39,7 @@ def estimate_vsh_gr(gr, alpha=0.1):
         float: VSH_GR.
     """
     # Remove high outliers and forward fill missing values
-    gr = np.where(gr <= np.nanmean(gr) + 2 * np.nanstd(gr), gr, np.nan)
+    gr = np.where(gr <= np.nanmean(gr) + 1.5 * np.nanstd(gr), gr, np.nan)
     mask = np.isnan(gr)
     idx = np.where(~mask, np.arange(len(mask)), 0)
     np.maximum.accumulate(idx, axis=0, out=idx)
@@ -47,7 +47,7 @@ def estimate_vsh_gr(gr, alpha=0.1):
 
     # Normalize gamma ray
     _, max_gr = min_max_line(gr, alpha)
-    gri = gr / max_gr
+    gri = np.where(gr < max_gr, gr / max_gr, 1)
     gri = MinMaxScaler().fit_transform(gri.reshape(-1, 1)).flatten()
     # Apply Steiber equation
     return gri / (3 - 2 * gri)

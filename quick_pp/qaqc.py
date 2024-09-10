@@ -220,7 +220,7 @@ def neu_den_xplot_hc_correction(
     return nphi_corrected, rhob_corrected, hc_flag
 
 
-def den_correction(nphi, gr, phin_sh=.35, phid_sh=.05, rho_ma=2.68, rho_fluid=1.0, alpha=0.1):
+def den_correction(nphi, gr, phin_sh=.35, phid_sh=.05, rho_ma=2.68, rho_fluid=1.0, alpha=0.05):
     """Correct bulk density based on nphi and gamma ray.
 
     Args:
