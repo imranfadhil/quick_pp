@@ -52,7 +52,7 @@ def read_las_file(file_object, required_sets=['PEP']):  # noqa
     parameter_line_numbers = []
     with mmap.mmap(fileno, length=0, access=mmap.ACCESS_READ) as mmap_obj:
         all_text = mmap_obj.read()
-        set_count = len(re.findall(r'\b(SET)\s+', all_text.decode('Windows-1252')))
+        set_count = len(re.findall(r'\b(SET)\s+', all_text.decode(), re.MULTILINE))
         if set_count > 1:
             well_count = 0
             dataset_count = 0
@@ -72,8 +72,8 @@ def read_las_file(file_object, required_sets=['PEP']):  # noqa
                     # Record parameter info in tuple:(parameter_count, parameter_set, pointer location, line number)
                     parameter_line_numbers.append((parameter_count, '', pointer, line_number))
                     parameter_count += 1
-                if re.compile(r'^\b(SET)\s+').search(text.decode('Windows-1252')):
-                    parameter_set = re.split(r'[\s+,.:]', text.decode('Windows-1252').replace(' ', ''))[1]
+                if re.compile(r'^\b(SET)\s+').search(text.decode()):
+                    parameter_set = re.split(r'[\s+,.:]', text.decode().replace(' ', ''))[1]
                     temp_list_from_tuple = list(parameter_line_numbers[parameter_count - 1])
                     temp_list_from_tuple[1] = parameter_set
                     temp_list_from_tuple = tuple(temp_list_from_tuple)
@@ -102,7 +102,7 @@ def read_las_file(file_object, required_sets=['PEP']):  # noqa
                     pointer_list.append(pointer)
                     counter += 1
                 if b'~' in text:
-                    section = text.decode('Windows-1252').replace('~', '').rstrip().split(' ')[0].upper()
+                    section = text.decode().replace('~', '').rstrip().split(' ')[0].upper()
                     rename_set = {
                         'V': 'VERSION',
                         'W': 'WELL',
@@ -187,7 +187,7 @@ def extract_dataset(section_dict):
         if k in ['PARAMETER', 'CURVE', 'ASCII']:
             data_bytes = data_bytes + v
 
-    file_object = header_bytes.decode('Windows-1252') + data_bytes.decode('Windows-1252')
+    file_object = header_bytes.decode() + data_bytes.decode()
     las_object = lasio.read(file_object, read_policy=())
 
     # Fix las_object
@@ -225,11 +225,11 @@ def concat_datasets(file_object, header_line_numbers, parameter_line_numbers, re
     for i, (param_count, param_set, pointer, line_number) in enumerate(parameter_line_numbers):
         # Currently only extracting one dataset: PEP
         if param_set in required_sets:
-            well_info = file_object[header_line_numbers[0][2]: header_line_numbers[1][2] + 1].decode('Windows-1252')
+            well_info = file_object[header_line_numbers[0][2]: header_line_numbers[1][2] + 1].decode()
             if i < len(parameter_line_numbers) - 1:
-                temp_file_object = file_object[pointer: parameter_line_numbers[i + 1][2]].decode('Windows-1252')
+                temp_file_object = file_object[pointer: parameter_line_numbers[i + 1][2]].decode()
             else:
-                temp_file_object = file_object[pointer:].decode('Windows-1252')
+                temp_file_object = file_object[pointer:].decode()
             temp_file_object = well_info + temp_file_object
             las_object = lasio.read(temp_file_object, read_policy=())
 
@@ -280,7 +280,8 @@ def resample_depth(welly_object, step_depth=0.5):
         for i, curve_name in enumerate(list(welly_object.data.keys())):
             pre_curve = welly_object.data[curve_name]
             if pre_curve.index_units and pre_curve.index_units.lower() in ['metres', 'm']:
-                pre_curve.df.index = welly.well._convert_depth_index_units(pre_curve.index, unit_from='m', unit_to='ft')
+                pre_curve.df.index = welly.well._convert_depth_index_units(
+                    pre_curve.index, unit_from='m', unit_to='ft')
                 pre_curve.index_units = 'ft'
 
             # Set new start if not 0.5
