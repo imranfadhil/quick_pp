@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 
 from quick_pp.utils import min_max_line
 from quick_pp.utils import power_law_func as func
@@ -8,7 +9,7 @@ from quick_pp.utils import power_law_func as func
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(
     {
-        'axes.labelsize': 10,
+        'axes.labelsize': 8,
         'xtick.labelsize': 10,
         'legend.fontsize': 'small'
     }
@@ -19,7 +20,9 @@ def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
     """Estimate water saturation based on Archie's model for clean sand.
 
     Args:
-        sw (float): Water saturation.
+        rt (float): True resistivity or deep resistivity log.
+        rw (float): Formation water resistivity.
+        phit (float): Total porosity.
         a (float): Cementation exponent.
         m (float): Saturation exponent.
         n (float): Porosity exponent.
@@ -74,7 +77,9 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
     TODO: Estimate swb and rwb if not provided
 
     Args:
-        sw (float): Water saturation.
+        rt (float): True resistivity or deep resistivity log.
+        rw (float): Formation water resistivity.
+        phit (float): Total porosity
         a (float): Cementation exponent.
         m (float): Saturation exponent.
         n (float): Porosity exponent.
@@ -102,7 +107,11 @@ def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
     Based on Poupon-Leveaux 1971.
 
     Args:
-        sw (float): Water saturation.
+        rt (float): True resistivity or deep resistivity log.
+        rw (float): Formation water resistivity.
+        phie (float): Effective porosity.
+        vsh (float): Volume of shale.
+        rsh (float): Resistivity of shale.
         a (float): Cementation exponent.
         m (float): Saturation exponent.
         n (float): Porosity exponent.
@@ -119,10 +128,13 @@ def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
     """Estimate water saturation based on Simandoux's model.
 
     Args:
-        sw (float): Water saturation.
+        rt (float): True resistivity or deep resistivity log.
+        rw (float): Formation water resistivity.
+        phit (float): Total porosity.
+        vsh (float): Volume of shale.
+        rsh (float): Resistivity of shale.
         a (float): Cementation exponent.
         m (float): Saturation exponent.
-        n (float): Porosity exponent.
 
     Returns:
         float: Water saturation.
@@ -342,3 +354,87 @@ def swirr_xplot(swt, phit, c=None, q=None, label='', log_log=False):
     if log_log:
         plt.xscale('log')
         plt.yscale('log')
+
+
+def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2):
+    """Generate Pickett plot which is used to plot phit and rt at water bearing interval to determine;
+        m = The slope of best-fit line crossing the cleanest sand.
+        rw = Formation water resistivity. The intercept of the best-fit line at rt when phit = 100%.
+
+    Args:
+        rt (float): True resistivity or deep resistivity log.
+        phit (float): Total porosity.
+
+    Returns:
+        matplotlib.pyplot.Figure: Picket plot.
+    """
+    m = m if m < 0 else -m
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.set_title('Pickett Plot')
+    ax.scatter(rt, phit)
+    # Add iso-lines
+    phit_i = np.arange(0, 1, 1 / len(phit))
+    for i in np.geomspace(1, 5, num=5):
+        c = round(min_rw + (i - 1) * shift, 3)
+        rt_i = (phit_i**m) * c
+        ax.plot(rt_i, phit_i, linestyle='dashed', alpha=0.5, label=f'Rw={c} ohm.m')
+    # Set up y axis
+    ax.set_yscale('log')
+    ax.set_ylim(0.01, 1)
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
+        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+    ax.set_ylabel('PHIT (v/v)')
+    # Set up x axis
+    ax.set_xscale('log')
+    ax.set_xlim(0.01, 100)
+    ax.tick_params(top=True, labeltop=True)
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(
+        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+    ax.set_xlabel('RT (ohm.m)')
+
+    ax.legend()
+    fig.tight_layout()
+
+    return fig
+
+
+def hingle_plot(rt, phit, m=-2, min_rw=0.1, shift=.2):
+    """Generate Pickett plot which is used to plot phit and rt at water bearing interval to determine;
+        m = The slope of best-fit line crossing the cleanest sand.
+        rw = Formation water resistivity. The intercept of the best-fit line at rt when phit = 100%.
+
+    Args:
+        rt (float): True resistivity or deep resistivity log.
+        phit (float): Total porosity.
+
+    Returns:
+        matplotlib.pyplot.Figure: Picket plot.
+    """
+    m = m if m < 0 else -m
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.set_title('Pickett Plot')
+    ax.scatter(rt, phit)
+    # Add iso-lines
+    phit_i = np.arange(0, 1, 1 / len(phit))
+    for i in np.geomspace(1, 5, num=5):
+        c = round(min_rw + (i - 1) * shift, 3)
+        rt_i = (phit_i**m) * c
+        ax.plot(rt_i, phit_i, linestyle='dashed', alpha=0.5, label=f'Rw={c} ohm.m')
+    # Set up y axis
+    ax.set_yscale('log')
+    ax.set_ylim(0.01, 1)
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
+        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+    ax.set_ylabel('PHIT (v/v)')
+    # Set up x axis
+    ax.set_xscale('log')
+    ax.set_xlim(0.01, 100)
+    ax.tick_params(top=True, labeltop=True)
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(
+        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+    ax.set_xlabel('RT (ohm.m)')
+
+    ax.legend()
+    fig.tight_layout()
+
+    return fig
