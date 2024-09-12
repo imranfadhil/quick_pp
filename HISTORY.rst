@@ -37,3 +37,7 @@ History
 0.1.11 (2024-07-17)
 -------------------
 * Update requirements to fix security risks.
+
+0.1.12 (2024-09-12)
+-------------------
+* Update min max function and notebook examples.
