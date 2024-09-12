@@ -1,6 +1,6 @@
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
 from quick_pp.utils import min_max_line
+from quick_pp.lithology import shale_volume_steiber
 
 
 def fzi(k, phit):
@@ -29,11 +29,15 @@ def rqi(k, phit):
     return (0.0314 * (k / phit)**0.5)
 
 
-def estimate_vsh_gr(gr, alpha=0.1):
-    """Estimate volume of shale from gamma ray.
+def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
+    """Estimate volume of shale from gamma ray. If min_gr and max_gr are not provided,
+    it will be automatically estimated.
 
     Args:
         gr (float): Gamma ray from well log.
+        min_gr (float, optional): Minimum gamma ray value. Defaults to None.
+        max_gr (float, optional): Maximum gamma ray value. Defaults to None.
+        alpha (float, optional): Alpha value for min-max normalization. Defaults to 0.1.
 
     Returns:
         float: VSH_GR.
@@ -46,14 +50,27 @@ def estimate_vsh_gr(gr, alpha=0.1):
     gr = gr[idx]
 
     # Normalize gamma ray
-    _, max_gr = min_max_line(gr, alpha)
-    gri = np.where(gr < max_gr, gr / max_gr, 1)
-    gri = MinMaxScaler().fit_transform(gri.reshape(-1, 1)).flatten()
-    # Apply Steiber equation
-    return gri / (3 - 2 * gri)
+    if not max_gr or (not min_gr and min_gr != 0):
+        _, max_gr = min_max_line(gr, alpha)
+        gri = np.where(gr < max_gr, gr / max_gr, 1)
+    else:
+        gri = (gr - min_gr) / (max_gr - min_gr)
+        gri = np.where(gri < 1, gri, 1)
+    return shale_volume_steiber(gri).flatten()
 
 
 def estimate_vsh_dn(phin, phid, phin_sh=0.35, phid_sh=0.05):
+    """Estimate volume of shale from neutron porosity and density porosity.
+
+    Args:
+        phin (float): Neutron porosity in fraction.
+        phid (float): Density porosity in fraction.
+        phin_sh (float, optional): Neutron porosity for shale. Defaults to 0.35.
+        phid_sh (float, optional): Density porosity for shale. Defaults to 0.05.
+
+    Returns:
+        float: Volume of shale.
+    """
     return (phin - phid) / (phin_sh - phid_sh)
 
 
