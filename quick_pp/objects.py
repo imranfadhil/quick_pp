@@ -97,6 +97,7 @@ class WellConfig(object):
     silt_line_angle: float = Config.SSC_ENDPOINTS["SILT_LINE_ANGLE"]
     sw_water_salinity: int = 6000
     sw_m: float = 2.0
+    sw_n: float = 2.0
     hc_corr_angle: int = 50
     hc_buffer: float = 0.0
     ressum_cutoffs: dict = Config.RESSUM_CUTOFFS

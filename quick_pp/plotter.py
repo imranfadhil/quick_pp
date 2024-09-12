@@ -107,34 +107,9 @@ def neutron_density_xplot(nphi, rhob,
     ax.set_xlim(-0.15, 1)
     ax.set_xlabel('NPHI')
     ax.legend(loc="upper left", prop={'size': 9})
-    fig.tight_layout()
-
-    return fig
-
-
-def picket_plot(rt, phit):
-    """Generate Pickett plot which is used to plot phit and rt at water bearing interval to determine;
-        m = The slope of best-fit line crossing the cleanest sand.
-        rw = Formation water resistivity. The intercept of the best-fit line at rt when phit = 100%.
-
-    Args:
-        rt (float): True resistivity or deep resistivity log.
-        phit (float): Total porosity.
-
-    Returns:
-        matplotlib.pyplot.Figure: Picket plot.
-    """
-    fig = plt.Figure(figsize=(5, 5))
-    ax = fig.add_subplot(111)
-    ax.set_title('Pickett Plot')
-    ax.scatter(rt, phit)
-    ax.set_yscale('log')
-    ax.set_ylim(0.01, 1)
-    ax.set_ylabel('PHIT (v/v)')
-    ax.set_xscale('log')
-    ax.set_xlim(0.01, 100)
-    ax.set_xlabel('RT (ohm.m)')
-    ax.legend()
+    ax.minorticks_on()
+    ax.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
+    ax.grid(True, which='minor', linestyle=':', linewidth='0.4', color='gray')
     fig.tight_layout()
 
     return fig

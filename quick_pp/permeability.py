@@ -1,4 +1,4 @@
-def choo_permeability(vclw, vsilt, phit, m=2, B=None, A=20e7, C=2):
+def choo_permeability(vclw, vsilt, phit, m=2, B=None, A=20e7, C=3):
     """Estimate permeability using Choo's equation.
 
     Args:

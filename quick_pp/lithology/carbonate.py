@@ -1,8 +1,8 @@
 import numpy as np
 
-from quick_pp.lithology import shale_volume_steiber, gr_index
 from quick_pp.utils import length_a_b, line_intersection
 from quick_pp.porosity import neu_den_xplot_poro_pt, rho_matrix, density_porosity
+from quick_pp.rock_type import estimate_vsh_gr
 from quick_pp.config import Config
 
 
@@ -17,7 +17,7 @@ class Carbonate:
         self.dry_clay_point = dry_clay_point or Config.CARB_NEU_DEN_ENDPOINTS["DRY_CLAY_POINT"]
         self.fluid_point = fluid_point or Config.CARB_NEU_DEN_ENDPOINTS["FLUID_POINT"]
 
-    def estimate_lithology(self, nphi, rhob, gr, pef=None, normalize: bool = True,
+    def estimate_lithology(self, nphi, rhob, gr, pef=None, vsh_gr=None, normalize: bool = True,
                            model: str = 'single', method: str = 'neu_den', carbonate_type: str = 'limestone'):
         """Estimate sand silt clay lithology volumetrics.
 
@@ -40,9 +40,9 @@ class Carbonate:
         assert model in ['single', 'double'], f"'{model}' model is not available."
         assert method in ['neu_den', 'den_pef'], f"'{method}' method is not available."
 
+        vcld = vsh_gr if vsh_gr is not None else estimate_vsh_gr(gr)
         if model == 'single':
             # Estimate vshale
-            vcld = self.estimate_vcld_from_gr(gr)
             vcarb = 1 - vcld
             vdolo = vcarb if carbonate_type == 'dolostone' else 0
             vcalc = vcarb if carbonate_type == 'limestone' else 0
@@ -57,7 +57,6 @@ class Carbonate:
             return vcld, vcalc, vdolo
         elif model == 'double':
             # Estimate vshale
-            vcld = self.estimate_vcld_from_gr(gr)
             if method == 'neu_den':
                 vcalc, vdolo = self.lithology_fraction_neu_den(nphi, rhob, model='double', normalize=normalize)
             else:
@@ -156,13 +155,3 @@ class Carbonate:
         pefcc = (pef - vcld * Config.MINERALS_LOG_VALUE['PEF_SH']) / (1 - vcld)
 
         return nphicc, rhobcc, pefcc
-
-    def estimate_vcld_from_gr(self, gr):
-        """Estimate Vclay from Gamma Ray log.
-
-        Args:
-            gr (float): Gamma Ray log in API
-        Returns:
-            float: Vclay in v/v
-        """
-        return shale_volume_steiber(gr_index(gr)).flatten()
