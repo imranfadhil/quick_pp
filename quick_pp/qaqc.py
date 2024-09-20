@@ -160,7 +160,7 @@ def porosity_correction_averaging(nphi, dphi, method='weighted'):
 
 
 def neu_den_xplot_hc_correction(
-        nphi, rhob, gr=None,
+        nphi, rhob, gr=None, vsh_gr=None,
         dry_sand_point: tuple = None,
         dry_clay_point: tuple = None,
         fluid_point: tuple = (1.0, 1.0),
@@ -185,7 +185,7 @@ def neu_den_xplot_hc_correction(
     D = fluid_point
     rocklithofrac = length_a_b(A, C)
 
-    frac_vsh_gr = estimate_vsh_gr(gr)
+    frac_vsh_gr = vsh_gr if vsh_gr is not None else estimate_vsh_gr(gr)
     nphi_corrected = np.empty(0)
     rhob_corrected = np.empty(0)
     hc_flag = np.empty(0)
