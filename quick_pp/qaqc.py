@@ -242,7 +242,7 @@ def den_correction(nphi, gr, phin_sh=.35, phid_sh=.05, rho_ma=2.68, rho_fluid=1.
     return rho_ma - (rho_ma - rho_fluid) * phid
 
 
-def quick_qc(well_data):
+def quick_qc(well_data, return_fig=False):
     """Quick QC for well data.
 
     Args:
@@ -258,8 +258,17 @@ def quick_qc(well_data):
     return_df['QC_FLAG'] = 0
 
     # Compare vsh_gr and vsh_dn
-    return_df['VSH_GR'] = estimate_vsh_gr(return_df['GR'])
-    return_df['QC_FLAG'] = np.where(abs(return_df['VSH_GR'] - return_df['VCLW']) > 0.1, 1, return_df['QC_FLAG'])
+    if 'VSH_GR' in return_df.columns:
+        return_df['QC_FLAG'] = np.where(abs(return_df['VSH_GR'] - return_df['VCLW']) > 0.1, 1, return_df['QC_FLAG'])
+    else:
+        try:
+            return_df['VSH_GR'] = estimate_vsh_gr(return_df['GR'])
+            return_df['QC_FLAG'] = np.where(
+                abs(return_df['VSH_GR'] - return_df['VCLW']) > 0.1, 1, return_df['QC_FLAG'])
+        except Exception as e:
+            print(f"Error: {e}")
+            return_df['VSH_GR'] = np.nan
+            return_df['QC_FLAG'] = 0
 
     # Compare phit_dn and phit_d
     if 'PHID' in return_df.columns:
@@ -316,73 +325,89 @@ def quick_qc(well_data):
     }
     summary_df = summary_df.rename(columns=cols_rename)
 
-    # Distribution plot
-    dist_fig, axs = plt.subplots(8, 1, figsize=(5, 15))
-    for group, data in return_df.groupby('SAND_FLAG'):
-        label = 'SAND' if group == 1 else 'SHALE'
-        axs[0].hist(data['VCLW'], bins=100, alpha=0.7, density=True, label=label)
-        axs[1].hist(summary_df[f'AV_VCLW_{label}'], bins=100, alpha=0.7, density=True, label=f'AV_{label}')
-        axs[2].hist(data['PHIT'], bins=100, alpha=0.7, label=label)
-        axs[3].hist(summary_df[f'AV_PHIT_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
-        axs[4].hist(data['SWT'], bins=100, alpha=0.7, label=label)
-        axs[5].hist(summary_df[f'AV_SWT_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
-        axs[6].hist(data['PERM'], bins=100, alpha=0.7, label=label)
-        axs[7].hist(summary_df[f'AV_PERM_GM_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
-    axs[0].set_title('VCLW Distribution')
-    axs[0].legend()
+    if return_fig:
+        # Distribution plot
+        dist_fig, axs = plt.subplots(8, 1, figsize=(5, 15))
+        for group, data in return_df.groupby('SAND_FLAG'):
+            label = 'SAND' if group == 1 else 'SHALE'
+            axs[0].hist(data['VCLW'], bins=100, alpha=0.7, density=True, label=label)
+            axs[1].hist(summary_df[f'AV_VCLW_{label}'], bins=100, alpha=0.7, density=True, label=f'AV_{label}')
+            axs[2].hist(data['PHIT'], bins=100, alpha=0.7, label=label)
+            axs[3].hist(summary_df[f'AV_PHIT_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
+            axs[4].hist(data['SWT'], bins=100, alpha=0.7, label=label)
+            axs[5].hist(summary_df[f'AV_SWT_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
+            axs[6].hist(data['PERM'], bins=100, alpha=0.7, label=label)
+            axs[7].hist(summary_df[f'AV_PERM_GM_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
+        axs[0].set_title('VCLW Distribution')
+        axs[0].legend()
 
-    axs[1].set_title('AV_VCLW Distribution')
-    axs[1].legend()
+        axs[1].set_title('AV_VCLW Distribution')
+        axs[1].legend()
 
-    axs[2].set_title('PHIT Distribution')
-    axs[2].legend()
+        axs[2].set_title('PHIT Distribution')
+        axs[2].legend()
 
-    axs[3].set_title('AV_PHIT Distribution')
-    axs[3].legend()
+        axs[3].set_title('AV_PHIT Distribution')
+        axs[3].legend()
 
-    axs[4].set_title('SWT Distribution')
-    axs[4].set_yscale('log')
-    axs[4].legend()
+        axs[4].set_title('SWT Distribution')
+        axs[4].set_yscale('log')
+        axs[4].legend()
 
-    axs[5].set_title('AV_SWT Distribution')
-    axs[5].set_yscale('log')
-    axs[5].legend()
+        axs[5].set_title('AV_SWT Distribution')
+        axs[5].set_yscale('log')
+        axs[5].legend()
 
-    axs[6].set_title('PERM Distribution')
-    axs[6].set_yscale('log')
-    axs[6].legend()
+        axs[6].set_title('PERM Distribution')
+        axs[6].set_yscale('log')
+        axs[6].legend()
 
-    axs[7].set_title('AV_PERM_GM Distribution')
-    axs[7].set_yscale('log')
-    axs[7].legend()
+        axs[7].set_title('AV_PERM_GM Distribution')
+        axs[7].set_yscale('log')
+        axs[7].legend()
 
-    dist_fig.tight_layout()
+        dist_fig.tight_layout()
 
-    # Depth plot
-    depth_fig, axs = plt.subplots(4, 1, figsize=(20, 5), sharex=True)
-    axs[0].plot(return_df['DEPTH'], return_df['VCLW'], label='VCLW')
-    axs[0].plot(return_df['DEPTH'], return_df['VSH_GR'], label='VSH_GR')
-    axs[0].set_frame_on(False)
-    axs[0].set_title('VCLW')
-    axs[0].legend()
+        # Depth plot
+        depth_fig, axs = plt.subplots(4, 1, figsize=(20, 5), sharex=True)
+        axs[0].plot(return_df['DEPTH'], return_df['VCLW'], label='VCLW')
+        axs[0].plot(return_df['DEPTH'], return_df['VSH_GR'], label='VSH_GR')
+        axs[0].set_frame_on(False)
+        axs[0].set_title('VCLW')
+        axs[0].legend()
 
-    axs[1].plot(return_df['DEPTH'], return_df['PHIT'], label='PHIT')
-    axs[1].plot(return_df['DEPTH'], return_df['PHID'], label='PHID')
-    axs[1].set_frame_on(False)
-    axs[1].set_title('PHIT')
-    axs[1].legend()
+        axs[1].plot(return_df['DEPTH'], return_df['PHIT'], label='PHIT')
+        axs[1].plot(return_df['DEPTH'], return_df['PHID'], label='PHID')
+        axs[1].set_frame_on(False)
+        axs[1].set_title('PHIT')
+        axs[1].legend()
 
-    axs[2].plot(return_df['DEPTH'], return_df['SWT'], label='SWT')
-    axs[2].plot(return_df['DEPTH'], return_df['SAND_FLAG'], label='SAND_FLAG')
-    axs[2].set_frame_on(False)
-    axs[2].set_title('SWT')
-    axs[2].legend()
+        axs[2].plot(return_df['DEPTH'], return_df['SWT'], label='SWT')
+        axs[2].plot(return_df['DEPTH'], return_df['SAND_FLAG'], label='SAND_FLAG')
+        axs[2].set_frame_on(False)
+        axs[2].set_title('SWT')
+        axs[2].legend()
 
-    axs[3].plot(return_df['DEPTH'], return_df['QC_FLAG'], label='QC_FLAG')
-    axs[3].set_frame_on(False)
-    axs[3].set_title('QC_FLAG')
-    axs[3].legend()
+        axs[3].plot(return_df['DEPTH'], return_df['QC_FLAG'], label='QC_FLAG')
+        axs[3].set_frame_on(False)
+        axs[3].set_title('QC_FLAG')
+        axs[3].legend()
 
-    depth_fig.tight_layout()
+        depth_fig.tight_layout()
 
-    return return_df, summary_df, dist_fig, depth_fig
+        return return_df, summary_df, dist_fig, depth_fig
+
+    else:
+        return return_df, summary_df, None, None
+
+
+def quick_compare(field_data):
+
+    field_data['ZONES'] = "ALL"
+    compare_df = pd.DataFrame()
+    for well, well_data in field_data.groupby('WELL_NAME'):
+        print(f"Processing {well}")
+        _, summary_df, _, _ = quick_qc(well_data, return_fig=False)
+        compare_df = pd.concat([compare_df, summary_df])
+
+    return compare_df
