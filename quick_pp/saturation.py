@@ -230,7 +230,7 @@ def estimate_rt_water_trend(rt, alpha=0.3):
 
     Args:
         rt (float): True resistivity.
-        sand_flag (int): Sand flag.
+        RES_FLAG (int): Reservoir flag.
 
     Returns:
         float: Formation water resistivity.

@@ -161,7 +161,7 @@ def porosity_correction_averaging(nphi, dphi, method='weighted'):
 
 def neu_den_xplot_hc_correction(
         nphi, rhob, gr=None, vsh_gr=None,
-        dry_sand_point: tuple = None,
+        dry_RES_point: tuple = None,
         dry_clay_point: tuple = None,
         fluid_point: tuple = (1.0, 1.0),
         corr_angle: float = 50, buffer=0.0):
@@ -171,7 +171,7 @@ def neu_den_xplot_hc_correction(
         nphi (float): Neutron porosity log in fraction.
         rhob (float): Bulk density log in g/cc.
         gr (float, optional): Gamma ray log in GAPI. Defaults to None.
-        dry_sand_point (tuple, optional): Neutron porosity and bulk density of dry sand point. Defaults to None.
+        dry_RES_point (tuple, optional): Neutron porosity and bulk density of dry sand point. Defaults to None.
         dry_clay_point (tuple, optional): Neutron porosity and bulk density of dry clay point. Defaults to None.
         fluid_point (tuple, optional): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
         corr_angle (float, optional): Correction angle (degree) from east horizontal line. Defaults to 50.
@@ -180,7 +180,7 @@ def neu_den_xplot_hc_correction(
     Returns:
         (float, float): Corrected neutron porosity and bulk density.
     """
-    A = dry_sand_point
+    A = dry_RES_point
     C = dry_clay_point
     D = fluid_point
     rocklithofrac = length_a_b(A, C)
@@ -275,12 +275,12 @@ def quick_qc(well_data, return_fig=False):
         return_df['QC_FLAG'] = np.where(abs(return_df['PHIT'] - return_df['PHID']) > 0.1, 2, return_df['QC_FLAG'])
 
     # Check average swt in non-reservoir zone
-    return_df['QC_FLAG'] = np.where((return_df['SAND_FLAG'] == 0) & (return_df['SWT'] < 0.8), 3, return_df['QC_FLAG'])
+    return_df['QC_FLAG'] = np.where((return_df['RES_FLAG'] == 0) & (return_df['SWT'] < 0.8), 3, return_df['QC_FLAG'])
 
     # Summarize
     summary_df = pd.DataFrame()
-    for group in ['SAND', 'SHALE']:
-        index = return_df['SAND_FLAG'] == 1 if group == 'SAND' else return_df['SAND_FLAG'] == 0
+    for group in ['RES', 'NON-RES']:
+        index = return_df['RES_FLAG'] == 1 if group == 'SAND' else return_df['RES_FLAG'] == 0
         temp_df = return_df[index].groupby('ZONES').agg({
             'VCLW': 'mean',
             'PHIT': 'mean',
@@ -296,7 +296,7 @@ def quick_qc(well_data, return_fig=False):
         }
         temp_df = temp_df.rename(columns=cols_rename)
         summary_df = pd.concat([summary_df, temp_df], axis=1)
-    summary_df['SAND_FLAG'] = return_df.groupby('ZONES')['SAND_FLAG'].sum()
+    summary_df['RES_FLAG'] = return_df.groupby('ZONES')['RES_FLAG'].sum()
     summary_df['QC_FLAG'] = return_df.where(return_df['QC_FLAG'] == 1, 0).groupby('ZONES')['QC_FLAG'].sum()
     summary_df['QC_FLAG_mode'] = return_df.groupby('ZONES')['QC_FLAG'].agg(lambda x: x.mode())
     summary_df['ROCK_FLAG_mode'] = return_df.groupby('ZONES')['ROCK_FLAG'].agg(lambda x: x.mode())
@@ -304,21 +304,21 @@ def quick_qc(well_data, return_fig=False):
     summary_df['BOTTOM'] = return_df.groupby('ZONES')['DEPTH'].agg(lambda x: x.max())
     summary_df['GROSS'] = summary_df['BOTTOM'] - summary_df['TOP']
     summary_df['COUNT'] = return_df.groupby('ZONES')['DEPTH'].count()
-    summary_df['NET'] = summary_df['SAND_FLAG'] * summary_df['GROSS'] / summary_df['COUNT']
+    summary_df['NET'] = summary_df['RES_FLAG'] * summary_df['GROSS'] / summary_df['COUNT']
     summary_df['NTG'] = summary_df['NET'] / summary_df['GROSS']
     summary_df = summary_df.sort_values(by='QC_FLAG', ascending=False).reset_index().round(3)
 
     # Sort columns
     cols = ['ZONES', 'TOP', 'BOTTOM', 'GROSS', 'NET', 'NTG',
-            'AV_VCLW_SAND', 'AV_VCLW_SHALE', 'AV_PHIT_SAND', 'AV_PHIT_SHALE',
-            'AV_SWT_SAND', 'AV_SWT_SHALE', 'AV_PERM_GM_SAND', 'AV_PERM_GM_SHALE',
-            'COUNT', 'SAND_FLAG', 'QC_FLAG', 'QC_FLAG_mode', 'ROCK_FLAG_mode']
+            'AV_VCLW_RES', 'AV_VCLW_NON-RES', 'AV_PHIT_RES', 'AV_PHIT_NON-RES',
+            'AV_SWT_RES', 'AV_SWT_NON-RES', 'AV_PERM_GM_RES', 'AV_PERM_GM_NON-RES',
+            'COUNT', 'RES_FLAG', 'QC_FLAG', 'QC_FLAG_mode', 'ROCK_FLAG_mode']
     summary_df = summary_df[cols]
 
     # Rename columns
     cols_rename = {
         'COUNT': 'DATA_COUNT',
-        'SAND_FLAG': 'SAND_COUNT',
+        'RES_FLAG': 'SAND_COUNT',
         'QC_FLAG': 'QC_FLAG_COUNT',
         'QC_FLAG_mode': 'QC_FLAG_mode',
         'ROCK_FLAG_mode': 'ROCK_FLAG_mode',
@@ -328,7 +328,7 @@ def quick_qc(well_data, return_fig=False):
     if return_fig:
         # Distribution plot
         dist_fig, axs = plt.subplots(8, 1, figsize=(5, 15))
-        for group, data in return_df.groupby('SAND_FLAG'):
+        for group, data in return_df.groupby('RES_FLAG'):
             label = 'SAND' if group == 1 else 'SHALE'
             axs[0].hist(data['VCLW'], bins=100, alpha=0.7, density=True, label=label)
             axs[1].hist(summary_df[f'AV_VCLW_{label}'], bins=100, alpha=0.7, density=True, label=f'AV_{label}')
@@ -383,7 +383,7 @@ def quick_qc(well_data, return_fig=False):
         axs[1].legend()
 
         axs[2].plot(return_df['DEPTH'], return_df['SWT'], label='SWT')
-        axs[2].plot(return_df['DEPTH'], return_df['SAND_FLAG'], label='SAND_FLAG')
+        axs[2].plot(return_df['DEPTH'], return_df['RES_FLAG'], label='RES_FLAG')
         axs[2].set_frame_on(False)
         axs[2].set_title('SWT')
         axs[2].legend()
@@ -401,13 +401,27 @@ def quick_qc(well_data, return_fig=False):
         return return_df, summary_df, None, None
 
 
-def quick_compare(field_data):
-
-    field_data['ZONES'] = "ALL"
+def quick_compare(field_data, level='WELL', return_fig=False):
+    assert level in ['WELL', 'ZONE'], "Level must be either 'WELL' or 'ZONE'"
+    field_data['ZONES'] = "ALL" if level == 'WELL' else field_data['ZONES']
     compare_df = pd.DataFrame()
     for well, well_data in field_data.groupby('WELL_NAME'):
         print(f"Processing {well}")
         _, summary_df, _, _ = quick_qc(well_data, return_fig=False)
+        summary_df.insert(0, 'WELL_NAME', well)
         compare_df = pd.concat([compare_df, summary_df])
 
-    return compare_df
+    if return_fig:
+        # Box plot
+        curves = ['VCLW', 'PHIT', 'SWT', 'PERM_GM']
+        fig, axes = plt.subplots(4, 2, figsize=(6, 10))
+        for i, curve in enumerate(curves):
+            axes[i, 0].boxplot(compare_df[f'AV_{curve}_RES'], labels=[curve])
+            axes[i, 1].scatter(compare_df['WELL_NAME'], compare_df[f'AV_{curve}_RES'])
+            axes[i, 1].set_xticks(ticks=axes[i, 1].get_xticks(),
+                                  labels=compare_df['WELL_NAME'], rotation=45)
+        plt.tight_layout()
+        return compare_df.reset_index(drop=True), fig
+
+    else:
+        return compare_df.reset_index(drop=True), None

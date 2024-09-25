@@ -71,7 +71,7 @@ def zone_flagging(data: pd.DataFrame):
         threshold = np.nanquantile(well_data['vsh_curve'], .7, method='median_unbiased')
 
         # Estimate ZONE_FLAG using VSH_GR
-        well_data['SAND_FLAG'] = np.where(well_data['vsh_curve'] < threshold, 1, 0)
+        well_data['RES_FLAG'] = np.where(well_data['vsh_curve'] < threshold, 1, 0)
         well_data['ZONES_FLAG'] = np.where(
             well_data['vsh_curve'].rolling(25, win_type='boxcar', center=True).mean() < threshold, 1, 0)
         well_data['ZONES_FLAG'] = well_data['ZONES_FLAG'].fillna(0)
