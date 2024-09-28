@@ -161,7 +161,7 @@ def porosity_correction_averaging(nphi, dphi, method='weighted'):
 
 def neu_den_xplot_hc_correction(
         nphi, rhob, gr=None, vsh_gr=None,
-        dry_RES_point: tuple = None,
+        dry_sand_point: tuple = None,
         dry_clay_point: tuple = None,
         fluid_point: tuple = (1.0, 1.0),
         corr_angle: float = 50, buffer=0.0):
@@ -171,7 +171,7 @@ def neu_den_xplot_hc_correction(
         nphi (float): Neutron porosity log in fraction.
         rhob (float): Bulk density log in g/cc.
         gr (float, optional): Gamma ray log in GAPI. Defaults to None.
-        dry_RES_point (tuple, optional): Neutron porosity and bulk density of dry sand point. Defaults to None.
+        dry_sand_point (tuple, optional): Neutron porosity and bulk density of dry sand point. Defaults to None.
         dry_clay_point (tuple, optional): Neutron porosity and bulk density of dry clay point. Defaults to None.
         fluid_point (tuple, optional): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
         corr_angle (float, optional): Correction angle (degree) from east horizontal line. Defaults to 50.
@@ -180,7 +180,7 @@ def neu_den_xplot_hc_correction(
     Returns:
         (float, float): Corrected neutron porosity and bulk density.
     """
-    A = dry_RES_point
+    A = dry_sand_point
     C = dry_clay_point
     D = fluid_point
     rocklithofrac = length_a_b(A, C)
@@ -282,6 +282,10 @@ def quick_qc(well_data, return_fig=False):
     for group in ['RES', 'NON-RES']:
         index = return_df['RES_FLAG'] == 1 if group == 'SAND' else return_df['RES_FLAG'] == 0
         temp_df = return_df[index].groupby('ZONES').agg({
+            'GR': 'mean',
+            'RT': 'mean',
+            'NPHI': 'mean',
+            'RHOB': 'mean',
             'VCLW': 'mean',
             'PHIT': 'mean',
             'SWT': 'mean',
@@ -289,6 +293,10 @@ def quick_qc(well_data, return_fig=False):
         temp_df['PERM'] = return_df[index].groupby('ZONES')['PERM'].agg(gmean, nan_policy='omit')
         # Rename columns
         cols_rename = {
+            'GR': f'AV_GR_{group}',
+            'RT': f'AV_RT_{group}',
+            'NPHI': f'AV_NPHI_{group}',
+            'RHOB': f'AV_RHOB_{group}',
             'VCLW': f'AV_VCLW_{group}',
             'PHIT': f'AV_PHIT_{group}',
             'SWT': f'AV_SWT_{group}',
@@ -312,7 +320,9 @@ def quick_qc(well_data, return_fig=False):
     cols = ['ZONES', 'TOP', 'BOTTOM', 'GROSS', 'NET', 'NTG',
             'AV_VCLW_RES', 'AV_VCLW_NON-RES', 'AV_PHIT_RES', 'AV_PHIT_NON-RES',
             'AV_SWT_RES', 'AV_SWT_NON-RES', 'AV_PERM_GM_RES', 'AV_PERM_GM_NON-RES',
-            'COUNT', 'RES_FLAG', 'QC_FLAG', 'QC_FLAG_mode', 'ROCK_FLAG_mode']
+            'COUNT', 'RES_FLAG', 'QC_FLAG', 'QC_FLAG_mode', 'ROCK_FLAG_mode',
+            'AV_GR_RES', 'AV_GR_NON-RES', 'AV_RT_RES', 'AV_RT_NON-RES',
+            'AV_NPHI_RES', 'AV_NPHI_NON-RES', 'AV_RHOB_RES', 'AV_RHOB_NON-RES']
     summary_df = summary_df[cols]
 
     # Rename columns
@@ -413,13 +423,15 @@ def quick_compare(field_data, level='WELL', return_fig=False):
 
     if return_fig:
         # Box plot
-        curves = ['VCLW', 'PHIT', 'SWT', 'PERM_GM']
-        fig, axes = plt.subplots(4, 2, figsize=(6, 10))
+        curves = ['AV_GR_RES', 'AV_RT_RES', 'AV_NPHI_RES', 'AV_RHOB_RES',
+                  'AV_VCLW_RES', 'AV_PHIT_RES', 'AV_SWT_RES', 'AV_PERM_GM_RES']
+        no_curves = len(curves)
+        fig, axes = plt.subplots(no_curves, 2, figsize=(6, 2.5 * no_curves))
         for i, curve in enumerate(curves):
-            axes[i, 0].boxplot(compare_df[f'AV_{curve}_RES'], labels=[curve])
-            axes[i, 1].scatter(compare_df['WELL_NAME'], compare_df[f'AV_{curve}_RES'])
-            axes[i, 1].set_xticks(ticks=axes[i, 1].get_xticks(),
-                                  labels=compare_df['WELL_NAME'], rotation=45)
+            axes[i, 0].boxplot(compare_df[curve], labels=[curve])
+            df = compare_df[['WELL_NAME', curve]].sort_values(by=curve, ascending=False)
+            axes[i, 1].table(cellText=df.values, colLabels=df.columns, loc='center')
+            axes[i, 1].axis('off')
         plt.tight_layout()
         return compare_df.reset_index(drop=True), fig
 
