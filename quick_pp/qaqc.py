@@ -279,8 +279,9 @@ def quick_qc(well_data, return_fig=False):
 
     # Summarize
     summary_df = pd.DataFrame()
-    for group in ['RES', 'NON-RES']:
-        index = return_df['RES_FLAG'] == 1 if group == 'SAND' else return_df['RES_FLAG'] == 0
+    for group in ['ALL', 'RES', 'NON-RES']:
+        index = return_df['WELL_NAME'].notna() if group == 'ALL' else return_df['RES_FLAG'] == 1 if group == 'SAND' \
+            else return_df['RES_FLAG'] == 0
         temp_df = return_df[index].groupby('ZONES').agg({
             'GR': 'mean',
             'RT': 'mean',
@@ -318,11 +319,15 @@ def quick_qc(well_data, return_fig=False):
 
     # Sort columns
     cols = ['ZONES', 'TOP', 'BOTTOM', 'GROSS', 'NET', 'NTG',
-            'AV_VCLW_RES', 'AV_VCLW_NON-RES', 'AV_PHIT_RES', 'AV_PHIT_NON-RES',
-            'AV_SWT_RES', 'AV_SWT_NON-RES', 'AV_PERM_GM_RES', 'AV_PERM_GM_NON-RES',
+            'AV_VCLW_ALL', 'AV_VCLW_RES', 'AV_VCLW_NON-RES',
+            'AV_PHIT_ALL', 'AV_PHIT_RES', 'AV_PHIT_NON-RES',
+            'AV_SWT_ALL', 'AV_SWT_RES', 'AV_SWT_NON-RES',
+            'AV_PERM_GM_ALL', 'AV_PERM_GM_RES', 'AV_PERM_GM_NON-RES',
             'COUNT', 'RES_FLAG', 'QC_FLAG', 'QC_FLAG_mode', 'ROCK_FLAG_mode',
-            'AV_GR_RES', 'AV_GR_NON-RES', 'AV_RT_RES', 'AV_RT_NON-RES',
-            'AV_NPHI_RES', 'AV_NPHI_NON-RES', 'AV_RHOB_RES', 'AV_RHOB_NON-RES']
+            'AV_GR_ALL', 'AV_GR_RES', 'AV_GR_NON-RES',
+            'AV_RT_ALL', 'AV_RT_RES', 'AV_RT_NON-RES',
+            'AV_NPHI_ALL', 'AV_NPHI_RES', 'AV_NPHI_NON-RES',
+            'AV_RHOB_ALL', 'AV_RHOB_RES', 'AV_RHOB_NON-RES']
     summary_df = summary_df[cols]
 
     # Rename columns
@@ -339,7 +344,7 @@ def quick_qc(well_data, return_fig=False):
         # Distribution plot
         dist_fig, axs = plt.subplots(8, 1, figsize=(5, 15))
         for group, data in return_df.groupby('RES_FLAG'):
-            label = 'SAND' if group == 1 else 'SHALE'
+            label = 'RES' if group == 1 else 'NON-RES'
             axs[0].hist(data['VCLW'], bins=100, alpha=0.7, density=True, label=label)
             axs[1].hist(summary_df[f'AV_VCLW_{label}'], bins=100, alpha=0.7, density=True, label=f'AV_{label}')
             axs[2].hist(data['PHIT'], bins=100, alpha=0.7, label=label)
@@ -423,8 +428,8 @@ def quick_compare(field_data, level='WELL', return_fig=False):
 
     if return_fig:
         # Box plot
-        curves = ['AV_GR_RES', 'AV_RT_RES', 'AV_NPHI_RES', 'AV_RHOB_RES',
-                  'AV_VCLW_RES', 'AV_PHIT_RES', 'AV_SWT_RES', 'AV_PERM_GM_RES']
+        curves = ['AV_GR_ALL', 'AV_RT_ALL', 'AV_NPHI_ALL', 'AV_RHOB_ALL',
+                  'AV_VCLW_ALL', 'AV_PHIT_ALL', 'AV_SWT_ALL', 'AV_PERM_GM_ALL']
         no_curves = len(curves)
         fig, axes = plt.subplots(no_curves, 2, figsize=(6, 2.5 * no_curves))
         for i, curve in enumerate(curves):
