@@ -17,3 +17,27 @@ History
 0.1.4 (2024-02-04)
 ------------------
 * Update docstrings.
+
+0.1.5 (2024-06-05)
+------------------
+* Add core calibration module.
+
+0.1.8 (2024-06-24)
+------------------
+* Update requirements.
+
+0.1.9 (2024-07-12)
+------------------
+* Refactor SSC module.
+
+0.1.10 (2024-07-15)
+-------------------
+* Update documentation in readthedocs.
+
+0.1.11 (2024-07-17)
+-------------------
+* Update requirements to fix security risks.
+
+0.1.12 (2024-09-12)
+-------------------
+* Update min max function and notebook examples.

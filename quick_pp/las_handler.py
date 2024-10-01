@@ -1,5 +1,6 @@
 import re
 import lasio
+import os
 import numpy as np
 import pandas as pd
 import mmap
@@ -40,23 +41,6 @@ def read_las_files(las_files):
 def read_las_file(file_object, required_sets=['PEP']):  # noqa
     """Check LAS file and concat datasets if more than one.
 
-       If more than one set in las file,
-
-       1. Loop through every line,
-       2. If ~Well is found, add one to well_count
-       3. If ~Curve is found, add one to dataset_count
-       4. If ~P or ~Tops_Parameter found, append tuple of (parameter_count, parameter_set, pointer location,
-       line number) into a list "parameter_line_numbers".
-       5. If SET found, split the line using delimiter and assign only "VALUE" as parameter_set, then add parameter_set
-       into tuple in list "parameter_line_numbers"
-       6. Record well header numbers in tuple: (0, '', pointer location, line number)
-       7. Through function "concat_datasets", return data_df, header_df and welly_object else(to catch las file with
-       only 1 dataset),
-       8. Loop through every line,
-       9. If ~ is found, rename every sets accordingly,
-       10. Assign every line in every section (Version/Well/Parameter etc) into a section dictionary
-       11. Through function "extract_dataset", return data_df, header_df and welly_object
-
     Args:
         file_object (str): las file object.
         required_sets (list, optional): Required param set to be extracted. Defaults to ['PEP'].
@@ -68,7 +52,7 @@ def read_las_file(file_object, required_sets=['PEP']):  # noqa
     parameter_line_numbers = []
     with mmap.mmap(fileno, length=0, access=mmap.ACCESS_READ) as mmap_obj:
         all_text = mmap_obj.read()
-        set_count = len(re.findall(r'\b(SET)\s+', all_text.decode('Windows-1252')))
+        set_count = len(re.findall(r'\b(SET)\s+', all_text.decode(), re.MULTILINE))
         if set_count > 1:
             well_count = 0
             dataset_count = 0
@@ -88,8 +72,8 @@ def read_las_file(file_object, required_sets=['PEP']):  # noqa
                     # Record parameter info in tuple:(parameter_count, parameter_set, pointer location, line number)
                     parameter_line_numbers.append((parameter_count, '', pointer, line_number))
                     parameter_count += 1
-                if re.compile(r'^\b(SET)\s+').search(text.decode('Windows-1252')):
-                    parameter_set = re.split(r'[\s+,.:]', text.decode('Windows-1252').replace(' ', ''))[1]
+                if re.compile(r'^\b(SET)\s+').search(text.decode()):
+                    parameter_set = re.split(r'[\s+,.:]', text.decode().replace(' ', ''))[1]
                     temp_list_from_tuple = list(parameter_line_numbers[parameter_count - 1])
                     temp_list_from_tuple[1] = parameter_set
                     temp_list_from_tuple = tuple(temp_list_from_tuple)
@@ -118,7 +102,7 @@ def read_las_file(file_object, required_sets=['PEP']):  # noqa
                     pointer_list.append(pointer)
                     counter += 1
                 if b'~' in text:
-                    section = text.decode('Windows-1252').replace('~', '').rstrip().split(' ')[0].upper()
+                    section = text.decode().replace('~', '').rstrip().split(' ')[0].upper()
                     rename_set = {
                         'V': 'VERSION',
                         'W': 'WELL',
@@ -176,7 +160,8 @@ def pre_process(welly_object):
 
     well_name = header_df[
         (header_df['mnemonic'] == 'WELL') | (header_df['descr'].str.upper() == 'WELL')]['value'].values[0]
-    data_df.insert(0, 'WELL_NAME', well_name)
+    if 'WELL_NAME' not in data_df.columns:
+        data_df.insert(0, 'WELL_NAME', well_name)
 
     return data_df
 
@@ -202,9 +187,10 @@ def extract_dataset(section_dict):
         if k in ['PARAMETER', 'CURVE', 'ASCII']:
             data_bytes = data_bytes + v
 
-    file_object = header_bytes.decode('Windows-1252') + data_bytes.decode('Windows-1252')
-    las_object = lasio.read(file_object)
+    file_object = header_bytes.decode() + data_bytes.decode()
+    las_object = lasio.read(file_object, read_policy=())
 
+    # Fix las_object
     df = las_object.df()
     df = df.apply(pd.to_numeric, errors='coerce')
     las_object.set_data_from_df(df)
@@ -239,19 +225,45 @@ def concat_datasets(file_object, header_line_numbers, parameter_line_numbers, re
     for i, (param_count, param_set, pointer, line_number) in enumerate(parameter_line_numbers):
         # Currently only extracting one dataset: PEP
         if param_set in required_sets:
-            well_info = file_object[header_line_numbers[0][2]: header_line_numbers[1][2] + 1].decode('Windows-1252')
+            well_info = file_object[header_line_numbers[0][2]: header_line_numbers[1][2] + 1].decode()
             if i < len(parameter_line_numbers) - 1:
-                temp_file_object = file_object[pointer: parameter_line_numbers[i + 1][2]].decode('Windows-1252')
+                temp_file_object = file_object[pointer: parameter_line_numbers[i + 1][2]].decode()
             else:
-                temp_file_object = file_object[pointer:].decode('Windows-1252')
+                temp_file_object = file_object[pointer:].decode()
             temp_file_object = well_info + temp_file_object
-            las_object = lasio.read(temp_file_object)
+            las_object = lasio.read(temp_file_object, read_policy=())
+
+            # Fix las_object
+            df = las_object.df()
+            df = df.apply(pd.to_numeric, errors='coerce')
+            las_object.set_data_from_df(df)
+
             welly_object = welly.Well.from_lasio(las_object)
             temp_well_df = pre_process(welly_object)
             well_df = pd.concat([well_df, temp_well_df], axis=1)
             header_df = welly_object.header
 
     return well_df, header_df, welly_object
+
+
+def check_index_consistent(welly_object):
+    """Check if index is consistent in welly_object
+
+    Args:
+        welly_object (object): Welly object
+
+    Returns:
+        bool: True if index is consistent
+    """
+    try:
+        index_diff = np.diff(welly_object.las[0].index)
+        if all(index_diff == index_diff[0]) and all(index_diff > 0):
+            return True
+        else:
+            return False
+    except Exception as e:
+        print(f"[las_handler] `check_index_consistent` Error | {e}")
+        return False
 
 
 def resample_depth(welly_object, step_depth=0.5):
@@ -264,34 +276,38 @@ def resample_depth(welly_object, step_depth=0.5):
     Returns:
         pd.DataFrame: Resampled dataframe
     """
-    return_df = welly_object.df()
-    for i, curve_name in enumerate(list(welly_object.data.keys())):
-        pre_curve = welly_object.data[curve_name]
-        if pre_curve.index_units and pre_curve.index_units.lower() in ['metres', 'm']:
-            pre_curve.df.index = welly.well._convert_depth_index_units(pre_curve.index, unit_from='m', unit_to='ft')
-            pre_curve.index_units = 'ft'
+    if check_index_consistent(welly_object):
+        for i, curve_name in enumerate(list(welly_object.data.keys())):
+            pre_curve = welly_object.data[curve_name]
+            if pre_curve.index_units and pre_curve.index_units.lower() in ['metres', 'm']:
+                pre_curve.df.index = welly.well._convert_depth_index_units(
+                    pre_curve.index, unit_from='m', unit_to='ft')
+                pre_curve.index_units = 'ft'
 
-        # Set new start if not 0.5
-        new_start = pre_curve.start
-        if np.mod(new_start, 0.5) != 0:
-            new_start = np.round((new_start * 2)) / 2
+            # Set new start if not 0.5
+            new_start = pre_curve.start
+            if np.mod(new_start, 0.5) != 0:
+                new_start = np.round((new_start * 2)) / 2
 
-        # Set the new stop of depth.
-        new_stop = pre_curve.start + (
-            step_depth * np.ceil((pre_curve.stop - pre_curve.start) / step_depth)
-        )
+            # Set the new stop of depth.
+            new_stop = pre_curve.start + (
+                step_depth * np.ceil((pre_curve.stop - pre_curve.start) / step_depth)
+            )
+            new_curve = pre_curve.to_basis(start=new_start, stop=new_stop, step=step_depth)
+            new_curve = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
+            # Create new dataframe when first loop.
+            if i == 0:
+                new_clips_df = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
+            # Merge new dataframe with the previous loop.
+            else:
+                new_curve_df = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
+                new_clips_df = pd.merge(new_clips_df, new_curve_df, left_index=True, right_index=True)
 
-        new_curve = pre_curve.to_basis(start=new_start, stop=new_stop, step=step_depth)
-        new_curve = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
-        # Create new dataframe when first loop.
-        if i == 0:
-            new_clips_df = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
-        # Merge new dataframe with the previous loop.
-        else:
-            new_curve_df = pd.DataFrame(new_curve.values, index=new_curve.index.values, columns=[curve_name])
-            new_clips_df = pd.merge(new_clips_df, new_curve_df, left_index=True, right_index=True)
+        return_df = new_clips_df.copy()
 
-    return_df = new_clips_df.copy()
+    else:
+        return_df = welly_object.las[0]
+
     # Convert index 'DEPTH' as column
     if "DEPTH" in return_df.columns:
         return_df.set_index('DEPTH', inplace=True)
@@ -301,8 +317,8 @@ def resample_depth(welly_object, step_depth=0.5):
     return return_df
 
 
-def export_to_las(well_data, well_name):
-    """Export dataframe to las file.
+def export_to_las(well_data, well_name, folder=''):
+    """Export dataframe to las file. Expecting a DEPTH column in meters unit.
 
     Args:
         data_df (pd.DataFrame): data input
@@ -310,10 +326,16 @@ def export_to_las(well_data, well_name):
     """
     from .config import Config
     units = Config.vars_units(well_data)
-    well_data['DEPT'] = well_data['DEPTH']
-    well_data.set_index('DEPT', inplace=True, drop=True)
+    well_data.set_index('DEPTH', inplace=True, drop=True)
     w = welly.Well().from_df(well_data, units=units, name=well_name)
-    w.to_las(f'{well_name}.las')
+
+    w = w.from_df(well_data, units=units, name=well_name)
+    # Convert to lasio to handle index name
+    las = w.to_lasio()
+    las.curves[0].mnemonic = 'DEPTH'
+    # Write to LAS format
+    well_path = os.path.join(folder, f"{well_name}.las")
+    las.write(well_path)
 
 
 if __name__ == '__main__':

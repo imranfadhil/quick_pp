@@ -1,4 +1,4 @@
-def choo_permeability(vclw, vsilt, phit, m=2, B=None, A=20e7, C=2):
+def choo_permeability(vclw, vsilt, phit, m=2, B=None, A=20e7, C=3):
     """Estimate permeability using Choo's equation.
 
     Args:
@@ -6,7 +6,7 @@ def choo_permeability(vclw, vsilt, phit, m=2, B=None, A=20e7, C=2):
         vsilt (float): Volume of silt in fraction.
         phit (float): Total porosity in fraction.
         A (float): Constant based on 0.125 * rg**2 / 10. Defaults to 20e7.
-        B (float): Constant, defaults m * ((2 / C) + 1) + 2.
+        B (float): Constant derived from cementation and compaction factor, defaults to m * ((2 / C) + 1) + 2.
         C (float): Constant, defaults to 2.
 
     Returns:
@@ -26,12 +26,12 @@ def kozeny_carman_permeability(phit, S=0.01):
     Returns:
         float: Permeability in mD.
     """
-    return phit**3 / (5 * S**2 * (1 - phit**2))
+    return phit**3 / (5 * S**2 * (1 - phit)**2)
 
 
 def timur_permeability(phit, Swirr):
-    """Based on Timur (1968) emperical equation established on 155 sandstone samples from 3 different
-    oil fields in North America.
+    """Estimate permeability based on Timur (1968) emperical equation established on 155 sandstone samples from
+    3 different oil fields in North America.
 
     Args:
         phit (float): Porosity in fraction.
@@ -40,11 +40,11 @@ def timur_permeability(phit, Swirr):
     Returns:
         float: Permeability in mD.
     """
-    return 8.58 * phit**4.4 / Swirr**2
+    return 0.136 * phit**4.4 / Swirr**2
 
 
 def coates_permeability(phie, Swirr, a=1):
-    """Based on Coates (1974)
+    """Estimate permeability based on Coates (1974)
 
     Args:
         phie (float): Effective porosity in fraction.
@@ -58,7 +58,7 @@ def coates_permeability(phie, Swirr, a=1):
 
 
 def tixier_permeability(phit, Swirr):
-    """Based on Tixier (1949)
+    """Estimate permeability based on Tixier (1949)
 
     Args:
         phit (float): Porosity in fraction.
@@ -70,8 +70,23 @@ def tixier_permeability(phit, Swirr):
     return 62.5 * phit**6 / Swirr**2
 
 
-def morris_biggs_permeability(phit, phie, Vbwi):
-    """Based on Morris and Biggs (1967)
+def morris_biggs_permeability(phit, C, Swirr):
+    """Estimate permeability based on Morris and Biggs (1967)
+
+    Args:
+        phit (float): Total porosity in fraction.
+        C (float): A constant which depends on the density of hydrocarbon in the formation.
+                   250 for medium oil. 79 for gas.
+        Swirr (float): Irreduceable water saturation in fraction.
+
+    Returns:
+        float: Permeability in mD.
+    """
+    return (C * phit**3 / Swirr)**2
+
+
+def morris_biggs_modified_permeability(phit, phie, Vbwi):
+    """Estimate permeability based on Morris and Biggs (1967)
 
     Args:
         phit (float): Total porosity in fraction.
@@ -82,3 +97,55 @@ def morris_biggs_permeability(phit, phie, Vbwi):
         float: Permeability in mD.
     """
     return (1e2 * phie**2 * (phit - Vbwi) / Vbwi)**2
+
+
+def estimate_krw(swt, swirr):
+    """Estimate permeability based on Park Jones (1945)
+
+    Args:
+        swt (float): Total water saturation.
+        swirr (float): Irreducible water saturation.
+
+    Returns:
+        float: Water relative permeability.
+    """
+    return ((swt - swirr) / (1 - swirr))**3
+
+
+def estimate_kro(swt, swirr):
+    """Estimate permeability based on Park Jones (1945)
+
+    Args:
+        swt (float): Total water saturation.
+        swirr (float): Irreducible water saturation.
+    Returns:
+        float: Oil relative permeability.
+    """
+    return ((0.9 - swt) / (0.9 - swirr))**2
+
+
+def estimate_wor(krw, kro, A=2):
+    """Estimating Water Oil Ratio of surface production. Based on Pirson (1950).
+
+    Args:
+        krw (float): Water relative permeability.
+        kro (float): Oil relative permeability.
+        A (float): Constant. Defaults to 2.
+            Light oil: 1 - 5
+            Medium oil: 10 - 50
+            Heavy oil: > 50
+    Returns:
+        float: Water Oil Ratio.
+    """
+    return (krw / kro) * A
+
+
+def estimate_wc(wor):
+    """Estimating Water Cut of surface production.
+
+    Args:
+        wor (float): Water Oil Ratio.
+    Returns:
+        float: Water Cut.
+    """
+    return wor / (1 + wor)
