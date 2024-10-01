@@ -1,3 +1,4 @@
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
@@ -61,3 +62,53 @@ def fluid_contact_plot(tvdss, formation_pressue, m, c, fluid_type: str = 'WATER'
     plt.xlabel('Formation Pressure (psi)')
     plt.legend()
     plt.title('Fluid Contact Plot')
+
+
+def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
+    """Analyze gas composition based on the concentration of each component based on Haworth 1985.
+
+    Args:
+        c1 (float): Concentration of methane in ppm.
+        c2 (float): Concentration of ethane in ppm.
+        c3 (float): Concentration of propane in ppm.
+        ic4 (float): Concentration of isobutane in ppm.
+        nc4 (float): Concentration of normal butane in ppm.
+        ic5 (float): Concentration of isopentane in ppm.
+        nc5 (float): Concentration of normal pentane in ppm.
+
+    Returns:
+        pd.DataFrame: Gas composition analysis.
+    """
+    total = c1 + c2 + c3 + ic4 + nc4 + ic5 + nc5
+    # Gas Quality Ration
+    gqr = total / (c1 + 2 * c2 + 3 * c3 + 4 * (ic4 + nc4) + 5 * (ic5 + nc5))
+    # Wetness ratio
+    wh = (c2 + c3 + ic4 + nc4 + ic5 + nc5) / total * 100
+    # Balance ration
+    bal = (c1 + c2) / (c3 + ic4 + nc4 + ic5 + nc5)
+    # Character ratio
+    ch = (ic4 + nc4 + ic5 + nc5) / c3
+
+    hc_type_dict = {
+        0: 'Non Representative Sample',
+        1: 'Non Productive Dry Gas',
+        2: 'Potentially Productive Gas',
+        3: 'Potentially Productive High GOR Oil',
+        4: 'Potentially Productive Condensate',
+        5: 'Potentially Productive Oil',
+    }
+    hc_type = np.zeros(1 if isinstance(c1, int) else len(c1))
+    hc_type = np.where((wh < 5) & (bal > 100), 1, hc_type)
+    hc_type = np.where((wh > 5) & (wh < 17.5) & (wh < bal) & (bal < 100), 2, hc_type)
+    hc_type = np.where((wh > 5) & (wh < 17.5) & (wh > bal) & (ch > 0.5), 3, hc_type)
+    hc_type = np.where((wh > 5) & (wh < 17.5) & (wh > bal) & (ch < 0.5), 4, hc_type)
+    hc_type = np.where((wh > 17.5) & (wh < 40) & (wh > bal), 5, hc_type)
+
+    return pd.DataFrame({
+        'Gas Quality Ratio': gqr,
+        'Wetness Ratio': wh,
+        'Balance Ratio': bal,
+        'Character Ratio': ch,
+        'Hydrocarbon Type': [hc_type_dict[x] for x in hc_type],
+        'HC_FLAG': hc_type
+    })
