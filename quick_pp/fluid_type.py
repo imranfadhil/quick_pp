@@ -65,7 +65,7 @@ def fluid_contact_plot(tvdss, formation_pressue, m, c, fluid_type: str = 'WATER'
 
 
 def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
-    """Analyze gas composition based on the concentration of each component based on Haworth 1985.
+    """Analyze gas composition based on the concentration of each component (Haworth 1985).
 
     Args:
         c1 (float): Concentration of methane in ppm.
@@ -110,5 +110,5 @@ def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
         'Balance Ratio': bal,
         'Character Ratio': ch,
         'Hydrocarbon Type': [hc_type_dict[x] for x in hc_type],
-        'HC_FLAG': hc_type
+        'HC_TYPE_FLAG': hc_type
     })
