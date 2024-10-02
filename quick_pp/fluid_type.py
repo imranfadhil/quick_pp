@@ -65,7 +65,7 @@ def fluid_contact_plot(tvdss, formation_pressue, m, c, fluid_type: str = 'WATER'
 
 
 def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
-    """Analyze gas composition based on the concentration of each component (Haworth 1985).
+    """Analyze gas composition based on the concentration of each gas component (Haworth 1985).
 
     Args:
         c1 (float): Concentration of methane in ppm.
@@ -80,8 +80,9 @@ def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
         pd.DataFrame: Gas composition analysis.
     """
     total = c1 + c2 + c3 + ic4 + nc4 + ic5 + nc5
-    # Gas Quality Ration
+    # Gas Quality Ratio and flag
     gqr = total / (c1 + 2 * c2 + 3 * c3 + 4 * (ic4 + nc4) + 5 * (ic5 + nc5))
+    gq_flag = np.where((gqr > 0.8) & (gqr < 1.2), 1, 0)
     # Wetness ratio
     wh = (c2 + c3 + ic4 + nc4 + ic5 + nc5) / total * 100
     # Balance ration
@@ -106,6 +107,7 @@ def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
 
     return pd.DataFrame({
         'Gas Quality Ratio': gqr,
+        'GQ_FLAG': gq_flag,
         'Wetness Ratio': wh,
         'Balance Ratio': bal,
         'Character Ratio': ch,
