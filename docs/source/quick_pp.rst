@@ -65,6 +65,14 @@ Fluid Type module
    :undoc-members:
    :show-inheritance:
 
+Geomechanics module
+----------------------------
+
+.. automodule:: quick_pp.geomechanics
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 QAQC module
 ---------------------
 
