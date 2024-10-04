@@ -85,7 +85,8 @@ def shale_porosity(vshale, phi_shale):
 def rho_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
                rho_sand: float = None, rho_silt: float = None, rho_clay: float = None,
                rho_calc: float = None, rho_dolo: float = None, rho_heavy: float = 0):
-    """Estimate average matrix density based on dry sand, dry silt and dry clay volume and density.
+    """Estimate average matrix density based on dry sand, dry silt, dry clay, dry calcite and
+    dry dolomite volume and density of each.
 
     Args:
         vsand (float): Volume of sand.
@@ -127,6 +128,37 @@ def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
     """
     return (rho_matrix - rhob) / (rho_matrix - rho_fluid)
 
+def dt_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
+              dt_sand: float = None, dt_silt: float = None, dt_clay: float = None,
+              dt_calc: float = None, dt_dolo: float = None, dt_heavy: float = 0):
+    """Estimate average matrix sonic transit time based on dry sand, dry silt dry calcite and
+    dry dolomite volume and transit time of each.
+
+    Args:
+        vsand (float): Volume of sand.
+        vsilt (float): Volume of silt.
+        vclay (float): Volume of clay.
+        vcalc (float): Volume of calcite.
+        vdolo (float): Volume of dolomite.
+        vheavy (float): Volume of heavy minerals.
+        dt_sand (float, optional): Sonic transit time of sand in us/ft. Defaults to None.
+        dt_silt (float, optional): Sonic transit time of silt in us/ft. Defaults to None.
+        dt_clay (float, optional): Sonic transit time of clay in us/ft. Defaults to None.
+        dt_calc (float, optional): Sonic transit time of calcite in us/ft. Defaults to None.
+        dt_dolo (float, optional): Sonic transit time of dolomite in us/ft. Defaults to None.
+        dt_heavy (float, optional): Sonic transit time of heavy minerals in us/ft. Defaults to 0.
+
+    Returns:
+        float: Matrix sonic transit time in us/ft.
+    """
+    minerals_log_value = Config.MINERALS_LOG_VALUE
+    dt_sand = dt_sand or minerals_log_value['DTC_QUARTZ']
+    dt_silt = dt_silt or minerals_log_value['DTC_SILT']
+    dt_clay = dt_clay or minerals_log_value['DTC_SH']
+    dt_calc = dt_calc or minerals_log_value['DTC_CALCITE']
+    dt_dolo = dt_dolo or minerals_log_value['DTC_DOLOMITE']
+    return vsand * dt_sand + vsilt * dt_silt + vclay * dt_clay + vcalc * dt_calc + vdolo * dt_dolo + vheavy * dt_heavy
+
 
 def sonic_porosity_wyllie(dt, dt_matrix, dt_fluid):
     """
@@ -137,9 +169,9 @@ def sonic_porosity_wyllie(dt, dt_matrix, dt_fluid):
     dt : float
         Interval transit time [us/ft].
     dt_matrix : float
-        Matrix transit time [us/ft].
+        Matrix transit time [us/ft]. Sandstone: 51-55, Limestone: 43-48, Dolomite: 43-39, Shale: 60-170.
     dt_fluid : float
-        Fluid transit time [us/ft].
+        Fluid transit time [us/ft]. Water: 190, Oil: 240, Gas: 630.
 
     Returns
     -------
@@ -159,7 +191,7 @@ def sonic_porosity_hunt_raymer(dt, dt_matrix, c):
     dt : float
         Interval transit time [us/ft].
     dt_matrix : float
-        Matrix transit time [us/ft].
+        Matrix transit time [us/ft]. Sandstone: 51-55, Limestone: 43-48, Dolomite: 43-39, Shale: 60-170.
     c : float
         constant (0.62 to 0.7).
 
@@ -174,7 +206,7 @@ def sonic_porosity_hunt_raymer(dt, dt_matrix, c):
 
 def neu_den_xplot_poro_pt(
         nphi: float, rhob: float, model: str = 'ssc', reservoir: bool = False,
-        dry_sand_point: tuple = None,
+        dry_min1_point: tuple = None,
         dry_silt_point: tuple = None,
         dry_clay_point: tuple = None,
         fluid_point: tuple = (1.0, 1.0)):
@@ -185,7 +217,7 @@ def neu_den_xplot_poro_pt(
         rhob (float): Bulk density log.
         model (str, optional): Lithology model, either 'ssc' (Sand Silt Clay) or 'ss' (Sand Shale). Defaults to 'ssc'.
         reservoir (bool, optional): Either in reservoir or non-reservoir section. Defaults to False.
-        dry_sand_point (tuple): Neutron porosity and bulk density of dry sand point.
+        dry_min1_point (tuple): Neutron porosity and bulk density of mineral 1 point.
         dry_silt_point (tuple): Neutron porosity and bulk density of dry silt point.
         dry_clay_point (tuple): Neutron porosity and bulk density of dry clay point.
         fluid_point (tuple): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
@@ -193,8 +225,9 @@ def neu_den_xplot_poro_pt(
     Returns:
         float: Total porosity.
     """
-    assert model in ['ssc', 'ss'], f"'{model}' model is not available."
-    A = dry_sand_point
+    assert model in ['ssc', 'ss', 'carb'], "Please specify either 'ssc', 'ss' or 'carb' model."
+
+    A = dry_min1_point
     B = dry_silt_point
     C = dry_clay_point
     D = fluid_point
@@ -225,7 +258,7 @@ def neu_den_xplot_poro_pt(
 
 
 def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc', reservoir=True,
-                       dry_sand_point: tuple = None,
+                       dry_min1_point: tuple = None,
                        dry_silt_point: tuple = None,
                        dry_clay_point: tuple = None,
                        fluid_point: tuple = (1.0, 1.0)):
@@ -234,9 +267,10 @@ def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc', reservoir=True,
     Args:
         nphi (float): Neutron porosity log.
         rhob (float): Bulk density log.
-        model (str, optional): Lithology model, either 'ssc' (Sand Silt Clay) or 'ss' (Sand Shale). Defaults to 'ssc'.
+        model (str, optional): Lithology model, either 'ssc' (Sand Silt Clay), 'ss' (Sand Shale) or 'carb' (Carbonate).
+                               Defaults to 'ssc'.
         reservoir (bool, optional): Either in reservoir or non-reservoir section. Defaults to False.
-        dry_sand_point (tuple): Neutron porosity and bulk density of dry sand point. Defaults to None.
+        dry_min1_point (tuple): Neutron porosity and bulk density of dry min1 point. Defaults to None.
         dry_silt_point (tuple): Neutron porosity and bulk density of dry silt point. Defaults to None.
         dry_clay_point (tuple): Neutron porosity and bulk density of dry clay point. Defaults to None.
         fluid_point (tuple): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
@@ -244,7 +278,9 @@ def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc', reservoir=True,
     Returns:
         float: Total porosity.
     """
-    A = dry_sand_point
+    assert model in ['ssc', 'ss', 'carb'], "Please specify either 'ssc', 'ss' or 'carb' model."
+
+    A = dry_min1_point
     B = dry_silt_point
     C = dry_clay_point
     D = fluid_point

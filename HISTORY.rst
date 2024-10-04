@@ -41,3 +41,11 @@ History
 0.1.12 (2024-09-12)
 -------------------
 * Update min max function and notebook examples.
+
+0.1.13 (2024-10-04)
+-------------------
+* Add hydrocarbon typing based on gas composition.
+* Add geomechanics module.
+* Add quick compare function.
+* Update estimate vsh_gr function.
+* Update porosity and qaqc module.

@@ -161,7 +161,7 @@ def porosity_correction_averaging(nphi, dphi, method='weighted'):
 
 def neu_den_xplot_hc_correction(
         nphi, rhob, gr=None, vsh_gr=None,
-        dry_sand_point: tuple = None,
+        dry_min1_point: tuple = None,
         dry_clay_point: tuple = None,
         fluid_point: tuple = (1.0, 1.0),
         corr_angle: float = 50, buffer=0.0):
@@ -171,7 +171,7 @@ def neu_den_xplot_hc_correction(
         nphi (float): Neutron porosity log in fraction.
         rhob (float): Bulk density log in g/cc.
         gr (float, optional): Gamma ray log in GAPI. Defaults to None.
-        dry_sand_point (tuple, optional): Neutron porosity and bulk density of dry sand point. Defaults to None.
+        dry_min1_point (tuple, optional): Neutron porosity and bulk density of mineral 1 point. Defaults to None.
         dry_clay_point (tuple, optional): Neutron porosity and bulk density of dry clay point. Defaults to None.
         fluid_point (tuple, optional): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
         corr_angle (float, optional): Correction angle (degree) from east horizontal line. Defaults to 50.
@@ -180,7 +180,7 @@ def neu_den_xplot_hc_correction(
     Returns:
         (float, float): Corrected neutron porosity and bulk density.
     """
-    A = dry_sand_point
+    A = dry_min1_point
     C = dry_clay_point
     D = fluid_point
     rocklithofrac = length_a_b(A, C)

@@ -65,7 +65,19 @@ def fluid_contact_plot(tvdss, formation_pressue, m, c, fluid_type: str = 'WATER'
 
 
 def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
-    """Analyze gas composition based on the concentration of each gas component (Haworth 1985).
+    """Analyze hydrocarbon type based on gas composition (Haworth 1985).
+
+    Hydrocarbon type flag (HC_TYPE_FLAG) is classified into 6 categories:
+    0: Non Representative Sample
+    1: Non Productive Dry Gas
+    2: Potentially Productive Gas
+    3: Potentially Productive High GOR Oil
+    4: Potentially Productive Condensate
+    5: Potentially Productive Oil
+
+    Gas quality flag (GQ_FLAG) is classified into 2 categories:
+    0: Not within the range of 0.8 to 1.2
+    1: Within the range of 0.8 to 1.2
 
     Args:
         c1 (float): Concentration of methane in ppm.
