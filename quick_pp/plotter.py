@@ -319,7 +319,7 @@ def plotly_log(well_data, depth_uom=""):  # noqa
 
     i += 1
     # Add VSHALE
-    fig.add_trace(go.Scatter(x=df['VSHALE'], y=index, name='VSHALE', line_color=COLOR_DICT['VSHALE']),
+    fig.add_trace(go.Scatter(x=df['VSHALE'], y=index, name='VSHALE', line_color=COLOR_DICT['VSHALE'], line_width=1),
                   row=1, col=8, secondary_y=True)
 
     i += 1
