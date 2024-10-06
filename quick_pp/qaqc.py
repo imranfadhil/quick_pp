@@ -220,7 +220,7 @@ def neu_den_xplot_hc_correction(
     return nphi_corrected, rhob_corrected, hc_flag
 
 
-def den_correction(nphi, gr, phin_sh=.35, phid_sh=.05, rho_ma=2.68, rho_fluid=1.0, alpha=0.05):
+def den_correction(nphi, gr, vsh_gr=None, phin_sh=.35, phid_sh=.05, rho_ma=2.68, rho_fluid=1.0, alpha=0.05):
     """Correct bulk density based on nphi and gamma ray.
 
     Args:
@@ -236,7 +236,7 @@ def den_correction(nphi, gr, phin_sh=.35, phid_sh=.05, rho_ma=2.68, rho_fluid=1.
         float: Corrected bulk density.
     """
     # Estimate vsh_gr
-    vsh_gr = estimate_vsh_gr(gr, alpha=alpha)
+    vsh_gr = vsh_gr if vsh_gr is not None else estimate_vsh_gr(gr, alpha=alpha)
     # Estimate phid assuming vsh_gr = vsh_dn = (phin - phid) / (phin_sh - phid_sh)
     phid = nphi - (phin_sh - phid_sh) * vsh_gr
     return rho_ma - (rho_ma - rho_fluid) * phid
@@ -257,30 +257,13 @@ def quick_qc(well_data, return_fig=False):
     return_df = well_data.copy()
     return_df['QC_FLAG'] = 0
 
-    # Compare vsh_gr and vsh_dn
-    if 'VSH_GR' in return_df.columns:
-        return_df['QC_FLAG'] = np.where(abs(return_df['VSH_GR'] - return_df['VCLW']) > 0.1, 1, return_df['QC_FLAG'])
-    else:
-        try:
-            return_df['VSH_GR'] = estimate_vsh_gr(return_df['GR'])
-            return_df['QC_FLAG'] = np.where(
-                abs(return_df['VSH_GR'] - return_df['VCLW']) > 0.1, 1, return_df['QC_FLAG'])
-        except Exception as e:
-            print(f"Error: {e}")
-            return_df['VSH_GR'] = np.nan
-            return_df['QC_FLAG'] = 0
-
-    # Compare phit_dn and phit_d
-    if 'PHID' in return_df.columns:
-        return_df['QC_FLAG'] = np.where(abs(return_df['PHIT'] - return_df['PHID']) > 0.1, 2, return_df['QC_FLAG'])
-
     # Check average swt in non-reservoir zone
     return_df['QC_FLAG'] = np.where((return_df['RES_FLAG'] == 0) & (return_df['SWT'] < 0.8), 3, return_df['QC_FLAG'])
 
     # Summarize
     summary_df = pd.DataFrame()
     for group in ['ALL', 'RES', 'NON-RES']:
-        index = return_df['WELL_NAME'].notna() if group == 'ALL' else return_df['RES_FLAG'] == 1 if group == 'SAND' \
+        index = return_df['WELL_NAME'].notna() if group == 'ALL' else return_df['RES_FLAG'] == 1 if group == 'RES' \
             else return_df['RES_FLAG'] == 0
         temp_df = return_df[index].groupby('ZONES').agg({
             'GR': 'mean',
@@ -345,14 +328,14 @@ def quick_qc(well_data, return_fig=False):
         dist_fig, axs = plt.subplots(8, 1, figsize=(5, 15))
         for group, data in return_df.groupby('RES_FLAG'):
             label = 'RES' if group == 1 else 'NON-RES'
-            axs[0].hist(data['VCLW'], bins=100, alpha=0.7, density=True, label=label)
-            axs[1].hist(summary_df[f'AV_VCLW_{label}'], bins=100, alpha=0.7, density=True, label=f'AV_{label}')
+            axs[0].hist(data['VCLW'], bins=100, alpha=0.7, label=label)
+            axs[1].hist(summary_df[f'AV_VCLW_{label}'], bins=25, alpha=0.7, label=f'AV_{label}')
             axs[2].hist(data['PHIT'], bins=100, alpha=0.7, label=label)
-            axs[3].hist(summary_df[f'AV_PHIT_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
+            axs[3].hist(summary_df[f'AV_PHIT_{label}'], bins=25, alpha=0.7, label=f'AV_{label}')
             axs[4].hist(data['SWT'], bins=100, alpha=0.7, label=label)
-            axs[5].hist(summary_df[f'AV_SWT_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
+            axs[5].hist(summary_df[f'AV_SWT_{label}'], bins=25, alpha=0.7, label=f'AV_{label}')
             axs[6].hist(data['PERM'], bins=100, alpha=0.7, label=label)
-            axs[7].hist(summary_df[f'AV_PERM_GM_{label}'], bins=100, alpha=0.7, label=f'AV_{label}')
+            axs[7].hist(summary_df[f'AV_PERM_GM_{label}'], bins=25, alpha=0.7, label=f'AV_{label}')
         axs[0].set_title('VCLW Distribution')
         axs[0].legend()
 
@@ -386,13 +369,19 @@ def quick_qc(well_data, return_fig=False):
         # Depth plot
         depth_fig, axs = plt.subplots(4, 1, figsize=(20, 5), sharex=True)
         axs[0].plot(return_df['DEPTH'], return_df['VCLW'], label='VCLW')
-        axs[0].plot(return_df['DEPTH'], return_df['VSH_GR'], label='VSH_GR')
+        # Compare vsh_gr and vsh_dn
+        if 'VSH_GR' in return_df.columns:
+            return_df['QC_FLAG'] = np.where(abs(return_df['VSH_GR'] - return_df['VCLW']) > 0.1, 1, return_df['QC_FLAG'])
+            axs[0].plot(return_df['DEPTH'], return_df['VSH_GR'], label='VSH_GR')
         axs[0].set_frame_on(False)
         axs[0].set_title('VCLW')
         axs[0].legend()
 
         axs[1].plot(return_df['DEPTH'], return_df['PHIT'], label='PHIT')
-        axs[1].plot(return_df['DEPTH'], return_df['PHID'], label='PHID')
+        # Compare phit_dn and phit_d
+        if 'PHID' in return_df.columns:
+            return_df['QC_FLAG'] = np.where(abs(return_df['PHIT'] - return_df['PHID']) > 0.1, 2, return_df['QC_FLAG'])
+            axs[1].plot(return_df['DEPTH'], return_df['PHID'], label='PHID')
         axs[1].set_frame_on(False)
         axs[1].set_title('PHIT')
         axs[1].legend()
@@ -421,7 +410,7 @@ def quick_compare(field_data, level='WELL', return_fig=False):
     field_data['ZONES'] = "ALL" if level == 'WELL' else field_data['ZONES']
     compare_df = pd.DataFrame()
     for well, well_data in field_data.groupby('WELL_NAME'):
-        print(f"Processing {well}")
+        print(f"Processing {well}", end='\r')
         _, summary_df, _, _ = quick_qc(well_data, return_fig=False)
         summary_df.insert(0, 'WELL_NAME', well)
         compare_df = pd.concat([compare_df, summary_df])
@@ -431,12 +420,26 @@ def quick_compare(field_data, level='WELL', return_fig=False):
         curves = ['AV_GR_ALL', 'AV_RT_ALL', 'AV_NPHI_ALL', 'AV_RHOB_ALL',
                   'AV_VCLW_ALL', 'AV_PHIT_ALL', 'AV_SWT_ALL', 'AV_PERM_GM_ALL']
         no_curves = len(curves)
-        fig, axes = plt.subplots(no_curves, 2, figsize=(6, 2.5 * no_curves))
+        idx_percentiles = [int(x * (len(compare_df) - 1)) for x in [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]]
+        fig, axes = plt.subplots(no_curves, 3, figsize=(7, 2.5 * no_curves),
+                                 gridspec_kw={'width_ratios': [1, 3, 5]})
         for i, curve in enumerate(curves):
-            axes[i, 0].boxplot(compare_df[curve], labels=[curve])
-            df = compare_df[['WELL_NAME', curve]].sort_values(by=curve, ascending=False)
-            axes[i, 1].table(cellText=df.values, colLabels=df.columns, loc='center')
-            axes[i, 1].axis('off')
+            # Box plot
+            axes[i, 0].set_title(curve)
+            axes[i, 0].boxplot(compare_df[curve], labels=[''])
+
+            # Distribution plot
+            axes[i, 1].hist(compare_df[curve], bins=25, alpha=0.7, orientation='horizontal')
+
+            # Summary table
+            df = compare_df[['WELL_NAME', curve]].sort_values(by=curve, ascending=True).reset_index(drop=True)
+            df = df.loc[idx_percentiles, :].round(2)
+            df['PERCENTILES'] = ['0%', '10%', '25%', '50%', '75%', '90%', '100%']
+            df = df[['PERCENTILES', curve, 'WELL_NAME']]
+            axes[i, 2].table(cellText=df.values, colLabels=df.columns, loc='center', cellLoc='center',
+                             colColours=['#f2f2f2'] * 3)
+            axes[i, 2].axis('off')
+
         plt.tight_layout()
         return compare_df.reset_index(drop=True), fig
 
