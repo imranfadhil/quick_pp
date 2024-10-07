@@ -57,7 +57,7 @@ def neutron_density_xplot(nphi, rhob,
                           dry_min1_point: tuple,
                           dry_clay_point: tuple,
                           fluid_point: tuple,
-                          wet_clay_point: tuple,
+                          wet_clay_point: tuple = None,
                           dry_silt_point: tuple = None, **kwargs):
     """Neutron-Density crossplot with lithology lines based on specified end points.
 
@@ -83,7 +83,7 @@ def neutron_density_xplot(nphi, rhob,
         projected_pt.append(line_intersection((A, C), (D, E[i])))
     rockline_from_pt = (A, C)
     min1line_from_pt = (D, A)
-    clayline_from_pt = (D, wet_clay_point)
+    clayline_from_pt = (D, C)
 
     fig = plt.Figure(figsize=(5, 5))
     ax = fig.add_subplot(111)
@@ -102,7 +102,10 @@ def neutron_density_xplot(nphi, rhob,
     ax.scatter(*zip(*projected_pt), label='Projected Line', color='purple')
     ax.scatter(dry_min1_point[0], dry_min1_point[1], label='Mineral 1 Point', color='yellow')
     ax.scatter(dry_clay_point[0], dry_clay_point[1], label='Dry Clay Point', color='black')
-    ax.scatter(wet_clay_point[0], wet_clay_point[1], label='Wet Clay Point', color='gray')
+
+    if wet_clay_point:
+        ax.scatter(wet_clay_point[0], wet_clay_point[1], label='Wet Clay Point', color='gray')
+
     ax.scatter(fluid_point[0], fluid_point[1], label='Fluid Point', color='blue')
     ax.set_ylim(3, 0)
     ax.set_ylabel('RHOB')

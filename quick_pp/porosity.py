@@ -260,7 +260,7 @@ def neu_den_xplot_poro_pt(
     return phit
 
 
-def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc', reservoir=True,
+def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc',
                        dry_min1_point: tuple = None,
                        dry_silt_point: tuple = None,
                        dry_clay_point: tuple = None,

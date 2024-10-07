@@ -406,6 +406,17 @@ def quick_qc(well_data, return_fig=False):
 
 
 def quick_compare(field_data, level='WELL', return_fig=False):
+    """Quick comparison of field data.
+
+    Args:
+        field_data (pd.DataFrame): Field data.
+        level (str, optional): Level of comparison, either 'WELL' or 'ZONE'. Defaults to 'WELL'.
+        return_fig (bool, optional): Whether to return figure. Defaults to False.
+
+    Returns:
+        pd.DataFrame: Comparison dataframe.
+        plt.Figure: Comparison figure.
+    """
     assert level in ['WELL', 'ZONE'], "Level must be either 'WELL' or 'ZONE'"
     field_data['ZONES'] = "ALL" if level == 'WELL' else field_data['ZONES']
     compare_df = pd.DataFrame()
