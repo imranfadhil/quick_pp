@@ -128,6 +128,7 @@ def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
     """
     return (rho_matrix - rhob) / (rho_matrix - rho_fluid)
 
+
 def dt_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
               dt_sand: float = None, dt_silt: float = None, dt_clay: float = None,
               dt_calc: float = None, dt_dolo: float = None, dt_heavy: float = 0):
@@ -318,3 +319,19 @@ def neu_den_poro(nphi, rhob, rho_ma=2.65, method='simplified'):
         return (1 / 3) * nphi + (2 / 3) * phid
     elif method == 'gas':
         return ((nphi**2 + phid**2) / 2)**0.5
+
+
+def porosity_trend(tvdss, unit='ft'):
+    """Calculate porosity trend based on TVDSS (Schmoker, 1982)
+
+    Args:
+        tvdss (float): True Vertical Depth Subsea.
+
+    Returns:
+        float: Porosity trend.
+    """
+    assert unit in ['ft', 'm'], 'Please specify either ft or m as unit.'
+    if unit == 'ft':
+        return 41.73 * np.exp(-tvdss / 8197)
+    else:
+        return 41.73 * np.exp(-tvdss / 2498)
