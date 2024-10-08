@@ -173,13 +173,18 @@ def min_max_line(feature, alpha: float = 0.05, auto_bin=False):
     for data in list_of_dfs:
         num_data = len(data)
         if num_data > 0:
-            (min_line_slope, min_line_intercept), (max_line_slope, max_line_intercept) = fit_trendlines_single(data)
-            min_line = straight_line_func(
-                np.arange(num_data), min_line_slope, min_line_intercept) + alpha * max(abs(data))
-            max_line = straight_line_func(
-                np.arange(num_data), max_line_slope, max_line_intercept) - alpha * max(abs(data))
-            min_lines = np.append(min_lines, min_line)
-            max_lines = np.append(max_lines, max_line)
+            try:
+                (min_line_slope, min_line_intercept), (max_line_slope, max_line_intercept) = fit_trendlines_single(data)
+                min_line = straight_line_func(
+                    np.arange(num_data), min_line_slope, min_line_intercept) + alpha * max(abs(data))
+                max_line = straight_line_func(
+                    np.arange(num_data), max_line_slope, max_line_intercept) - alpha * max(abs(data))
+                min_lines = np.append(min_lines, min_line)
+                max_lines = np.append(max_lines, max_line)
+            except Exception as e:
+                print(f'Error: {e}', end='\r')
+                min_lines = np.append(min_lines, np.nan)
+                max_lines = np.append(max_lines, np.nan)
         else:
             min_lines = np.append(min_lines, np.nan)
             max_lines = np.append(max_lines, np.nan)

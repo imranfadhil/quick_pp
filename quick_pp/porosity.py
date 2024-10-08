@@ -205,7 +205,7 @@ def sonic_porosity_hunt_raymer(dt, dt_matrix, c):
 
 
 def neu_den_xplot_poro_pt(
-        nphi: float, rhob: float, model: str = 'ssc', reservoir: bool = False,
+        nphi: float, rhob: float, model: str = 'ssc',
         dry_min1_point: tuple = None,
         dry_silt_point: tuple = None,
         dry_clay_point: tuple = None,
@@ -234,8 +234,12 @@ def neu_den_xplot_poro_pt(
 
     phit = []
     if model == 'ssc':
-        poro_line = length_a_b(D, B)
-        if reservoir:
+        # Check if the point is in the reservoir or non-reservoir section
+        thold_pt = line_intersection((A, C), (D, B))
+        thold_line = length_a_b(thold_pt, A)
+        proj_pt = line_intersection((A, C), (D, (nphi, rhob)))
+        proj_line = length_a_b(proj_pt, A)
+        if proj_line < thold_line:
             m = (A[1] - B[1]) / (A[0] - B[0])
         else:
             m = (C[1] - B[1]) / (C[0] - B[0])
@@ -243,21 +247,20 @@ def neu_den_xplot_poro_pt(
         c = rhob - m * nphi
         iso_poro_pt = line_intersection(((0, c), (nphi, rhob)), (D, B))
         iso_poro_line = length_a_b(iso_poro_pt, B)
+        poro_line = length_a_b(D, B)
         phit = iso_poro_line / poro_line
-        return phit
-
     else:
-        poro_line = length_a_b(D, A)
         m = (A[1] - C[1]) / (A[0] - C[0])
         c = rhob - m * nphi
         iso_poro_pt = line_intersection(((0, c), (nphi, rhob)), (D, A))
         iso_poro_line = length_a_b(iso_poro_pt, A)
-        phit = iso_poro_line / poro_line
+        poro_line = length_a_b(D, A)
 
+    phit = iso_poro_line / poro_line
     return phit
 
 
-def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc', reservoir=True,
+def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc',
                        dry_min1_point: tuple = None,
                        dry_silt_point: tuple = None,
                        dry_clay_point: tuple = None,
@@ -289,9 +292,9 @@ def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc', reservoir=True,
     phit = np.empty(0)
     for i, point in enumerate(E):
         if model == 'ssc':
-            phit = np.append(phit, neu_den_xplot_poro_pt(point[0], point[1], 'ssc', reservoir, A, B, C, D))
+            phit = np.append(phit, neu_den_xplot_poro_pt(point[0], point[1], 'ssc', A, B, C, D))
         else:
-            phit = np.append(phit, neu_den_xplot_poro_pt(point[0], point[1], 'ss', reservoir, A, (0, 0), C, D))
+            phit = np.append(phit, neu_den_xplot_poro_pt(point[0], point[1], 'ss', A, (0, 0), C, D))
 
     return phit
 

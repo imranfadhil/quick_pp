@@ -5,8 +5,7 @@ from quick_pp.saturation import estimate_rt_water_trend
 
 
 def extrapolate_rhob(rhob, tvd, a, b):
-    # TODO: Revisit
-    """Extrapolate density log to the surface using a power law model.
+    """(TODO: Revisit) Extrapolate density log to the surface using a power law model.
 
     Args:
         rhob (float): Bulk density in g/cm^3.
@@ -63,8 +62,7 @@ def estimate_hydrostatic_pressure(tvd, rhob_water=1.0, g=9.81):
 
 
 def estimate_overburden_pressure(rhob, tvd, rhob_water=1.0, depth_water=0, g=9.81):
-    # TODO: revisit
-    """Estimate overburden pressure from bulk density and true vertical depth.
+    """(TODO: Revisit) Estimate overburden pressure from bulk density and true vertical depth.
 
     Args:
         rhob (float): Bulk density in g/cm^3.
@@ -111,7 +109,15 @@ def estimate_pore_pressure_res(s, p_hyd, res, res_shale=None, x=1.2):
 
 
 def estimate_fracture_pressure(pp, tvd):
-    # TODO: Revisit
+    """(TODO: Revisit) Estimate fracture pressure from pore pressure and true vertical depth.
+
+    Args:
+        pp (float): Pore pressure in MPa.
+        tvd (float): True vertical depth in m.
+
+    Returns:
+        float: Estimated fracture pressure in MPa.
+    """
     return 1 / 3 * (1 + 2 * pp / tvd), 1 / 2 * (1 + 2 * pp / tvd)
 
 

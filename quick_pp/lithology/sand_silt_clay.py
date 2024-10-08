@@ -35,7 +35,6 @@ class SandSiltClay:
             (float, float, float, boolean): vsand, vsilt, vcld, vclb, cross-plot if xplot True else None
         """
         # Initialize the endpoints
-        A = self.dry_sand_point
         B = self.dry_silt_point
         C = self.dry_clay_point
         D = self.fluid_point
@@ -47,26 +46,24 @@ class SandSiltClay:
         wetclay_NPHI = np.nanmax(nphi_max_line)
         if not all(self.wet_clay_point):
             self.wet_clay_point = (wetclay_NPHI, wetclay_RHOB)
-        # print(f'#### wet_clay_point: {self.wet_clay_point}')
 
         # Redefine drysilt point
         drysilt_NPHI = 1 - 1.68 * (math.tan(float(self.silt_line_angle - 90) * math.pi / 180))
         if not all(B):
             B = self.dry_silt_point = (drysilt_NPHI, B[1])
-        # print(f'#### drysilt_pt: {drysilt_pt}')
 
         # Define dryclay point
         if not all(C):
-            # # Calculate dryclay_NPHI given dryclay_RHOB
-            # m = (D[1] - self.wet_clay_point[1]) / (D[0] - self.wet_clay_point[0])
-            # dryclay_NPHI = ((C[1] - D[1]) / m) + D[0]
-            # C = self.dry_clay_point = (dryclay_NPHI, C[1])
+            # Calculate dryclay_NPHI given dryclay_RHOB
+            m = (D[1] - self.wet_clay_point[1]) / (D[0] - self.wet_clay_point[0])
+            dryclay_NPHI = ((C[1] - D[1]) / m) + D[0]
+            C = self.dry_clay_point = (dryclay_NPHI, C[1])
 
-            # Calculate dryclay point, the intersection between rock line and clay line
-            drysilt_RHOB = B[1] if B[1] > np.nanmax(rhob) else np.nanmax(rhob)
-            updated_drysilt_pt = (B[0], drysilt_RHOB)
-            C = self.dry_clay_point = line_intersection((A, updated_drysilt_pt), (D, self.wet_clay_point))
-        # print(f'#### dryclay_pt: {C}, {m}')
+            # # Calculate dryclay point, the intersection between rock line and clay line
+            # drysilt_RHOB = B[1]  # if B[1] > np.nanmax(rhob) else np.nanmax(rhob)
+            # updated_drysilt_pt = (B[0], drysilt_RHOB)
+            # A = self.dry_sand_point
+            # C = self.dry_clay_point = line_intersection((A, updated_drysilt_pt), (D, self.wet_clay_point))
 
         # Calculate lithology fraction
         vsand, vsilt, vcld = self.lithology_fraction_kuttan_modified(nphi, rhob)
