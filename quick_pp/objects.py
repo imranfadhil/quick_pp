@@ -131,7 +131,7 @@ class Well(object):
         with open(path, "rb") as f:
             data, header = las.read_las_files([f])
         header_df = header.T
-        self.name = header_df[header_df['mnemonic'] == 'WELL']['value'].values[0]
+        self.name = header_df[header_df['mnemonic'] == 'WELL']['value'].values[0].replace("/", "-")
         self.description = f"Well {self.name}"
         self.depth_uom = header_df[header_df['mnemonic'] == 'STRT']['unit'].values[0]
         self.data = data

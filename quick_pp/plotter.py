@@ -100,13 +100,17 @@ def neutron_density_xplot(nphi, rhob,
     ax.plot(*zip(*clayline_from_pt), label='Clay Line', color='gray')
     ax.plot(*zip(*rockline_from_pt), label='Rock Line', color='black')
     ax.scatter(*zip(*projected_pt), label='Projected Line', color='purple')
-    ax.scatter(dry_min1_point[0], dry_min1_point[1], label='Mineral 1 Point', color='yellow')
-    ax.scatter(dry_clay_point[0], dry_clay_point[1], label='Dry Clay Point', color='black')
+    ax.scatter(dry_min1_point[0], dry_min1_point[1],
+               label=f'Mineral 1 Point: ({dry_min1_point[0]}, {dry_min1_point[1]})', color='yellow')
+    ax.scatter(dry_clay_point[0], dry_clay_point[1],
+               label=f'Dry Clay Point: ({dry_clay_point[0]}, {dry_clay_point[1]})', color='black')
 
     if wet_clay_point:
         ax.scatter(wet_clay_point[0], wet_clay_point[1], label='Wet Clay Point', color='gray')
 
-    ax.scatter(fluid_point[0], fluid_point[1], label='Fluid Point', color='blue')
+    ax.scatter(fluid_point[0], fluid_point[1],
+               label=f'Fluid Point: ({fluid_point[0]}, {fluid_point[1]})', color='blue')
+
     ax.set_ylim(3, 0)
     ax.set_ylabel('RHOB')
     ax.set_xlim(-0.15, 1)
