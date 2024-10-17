@@ -1,19 +1,9 @@
 import numpy as np
-import matplotlib.pyplot as plt
 
 from quick_pp.utils import length_a_b, line_intersection
 from quick_pp.porosity import neu_den_xplot_poro_pt, rho_matrix, density_porosity
 from quick_pp.rock_type import estimate_vsh_gr
 from quick_pp.config import Config
-
-plt.style.use('seaborn-v0_8-paper')
-plt.rcParams.update(
-    {
-        'axes.labelsize': 10,
-        'xtick.labelsize': 10,
-        'legend.fontsize': 'small'
-    }
-)
 
 
 class Carbonate:
@@ -165,46 +155,6 @@ class Carbonate:
         pefcc = (pef - vcld * Config.MINERALS_LOG_VALUE['PEF_SH']) / (1 - vcld)
 
         return nphicc, rhobcc, pefcc
-
-
-def plot_rfn(cpore, cperm, title='Lucia RFN'):
-    """Plot the Rock Fabric Number (RFN) lines on porosity and permeability cross plot. The permeability (mD) is
-    calculated based on Lucia-Jenkins, 2003 -
-    > k = exp(27.56 - 12.0838 * log(RFN) + (8.6711 - 3.603 * log(RFN)) * log(phi))
-
-    Args:
-        cpore (float): Critical porosity in v/v
-        cperm (float): Critical permeability in mD
-    """
-    # Plot the RFN cross plot
-    plt.figure(figsize=(5, 4))
-    plt.title(title)
-    plt.scatter(cpore, cperm, marker='s')
-    pore_points = np.linspace(0, .6, 20)
-    for rfn in np.arange(.5, 4.5, .5):
-        perm_points = np.exp(27.56 - 12.0838 * np.log(rfn) + (8.6711 - 3.603 * np.log(rfn)) * np.log(pore_points))
-        plt.plot(pore_points, perm_points, linestyle='dashed', label=f'RFN={rfn}')
-
-    plt.xlabel('Porosity (frac)')
-    plt.xlim(0, .5)
-    plt.ylabel('Permeability (mD)')
-    plt.ylim(0.1, 10000)
-    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
-
-    plt.yscale('log')
-
-
-def determine_rfn(phig, swirr):
-    """Determine the Rock Fabric Number (RFN) based on Lucia-Jenkins, 2003.
-
-    Args:
-        phig (float): Inter-grain porosity in v/v
-        swirr (float): Irreducible Water Saturation in v/v
-
-    Returns:
-        float: Rock Fabric Number (RFN)
-    """
-    return np.exp((7.163 + 1.883 * np.log(phig) + np.log(swirr)) / (3.063 + 0.610 * np.log(phig)))
 
 
 def sep_vug_poro(phit, phis, dtc=None, model='base', alpha=2.0, p=0.1):
