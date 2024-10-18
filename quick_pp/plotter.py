@@ -48,8 +48,9 @@ COLOR_DICT = {
     'SHF': '#618F63',
     'ROCK_FLAG_1': '#F6F674',
     'ROCK_FLAG_2': 'gold',
-    'ROCK_FLAG_3': '#FE9800',
-    'ROCK_FLAG_4': 'darkgray',
+    'ROCK_FLAG_3': 'brown',
+    'ROCK_FLAG_4': '#FE9800',
+    'ROCK_FLAG_5': 'darkgray',
 }
 
 
@@ -373,20 +374,30 @@ def plotly_log(well_data, depth_uom=""):  # noqa
 
     i += 1
     # Add ROCK_FLAG_2
-    fig.add_trace(go.Scatter(x=df['ROCK_FLAG_2'], y=index, name='ROCK_FLAG_2', line_color=COLOR_DICT['ROCK_FLAG_2'],
-                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT['ROCK_FLAG_2'], opacity=1),
+    feature = 'ROCK_FLAG_2'
+    fig.add_trace(go.Scatter(x=df[feature], y=index, name=feature, line_color=COLOR_DICT[feature],
+                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT[feature], opacity=1),
                   row=1, col=7, secondary_y=False)
 
     i += 1
     # Add ROCK_FLAG_3
-    fig.add_trace(go.Scatter(x=df['ROCK_FLAG_3'], y=index, name='ROCK_FLAG_3', line_color=COLOR_DICT['ROCK_FLAG_3'],
-                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT['ROCK_FLAG_3'], opacity=1),
+    feature = 'ROCK_FLAG_3'
+    fig.add_trace(go.Scatter(x=df[feature], y=index, name=feature, line_color=COLOR_DICT[feature],
+                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT[feature], opacity=1),
                   row=1, col=7, secondary_y=False)
 
     i += 1
     # Add ROCK_FLAG_4
-    fig.add_trace(go.Scatter(x=df['ROCK_FLAG_4'], y=index, name='ROCK_FLAG_4', line_color=COLOR_DICT['ROCK_FLAG_4'],
-                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT['ROCK_FLAG_4'], opacity=1),
+    feature = 'ROCK_FLAG_4'
+    fig.add_trace(go.Scatter(x=df[feature], y=index, name=feature, line_color=COLOR_DICT[feature],
+                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT[feature], opacity=1),
+                  row=1, col=7, secondary_y=False)
+
+    i += 1
+    # Add ROCK_FLAG_5
+    feature = 'ROCK_FLAG_5'
+    fig.add_trace(go.Scatter(x=df[feature], y=index, name=feature, line_color=COLOR_DICT[feature],
+                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT[feature], opacity=1),
                   row=1, col=7, secondary_y=False)
 
     i += 1
@@ -499,26 +510,21 @@ def plotly_log(well_data, depth_uom=""):  # noqa
         yaxis16=dict(domain=[0, .84], visible=True, showgrid=False),
 
         # Update x and y axes for COAL_FLAG
-        xaxis32=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis33=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
                      tick0=0, dtick=1, range=[0.1, .2], type='linear', tickfont=dict(size=1)),
-        yaxis32=dict(domain=[0, .88], visible=False, showgrid=False, zeroline=False),
-        xaxis33=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis34=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
                      tick0=0, dtick=1, range=[0.1, .2], type='linear', tickfont=dict(size=1)),
-        yaxis33=dict(domain=[0, .88], visible=False, showgrid=False, zeroline=False),
-        xaxis34=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis35=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
                      tick0=0, dtick=1, range=[0.1, .2], type='linear', tickfont=dict(size=1)),
-        yaxis34=dict(domain=[0, .88], visible=False, showgrid=False, zeroline=False),
-        xaxis35=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis36=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
                      tick0=0, dtick=1, range=[0.1, .2], type='linear', tickfont=dict(size=1)),
-        yaxis35=dict(domain=[0, .88], visible=False, showgrid=False, zeroline=False),
-        xaxis36=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis37=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x8',
                      tick0=0, dtick=1, range=[0.1, .2], type='linear', tickfont=dict(size=1)),
-        yaxis36=dict(domain=[0, .88], visible=False, showgrid=False, zeroline=False),
 
         height=900,
         width=900,
