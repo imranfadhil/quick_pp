@@ -155,3 +155,29 @@ class Carbonate:
         pefcc = (pef - vcld * Config.MINERALS_LOG_VALUE['PEF_SH']) / (1 - vcld)
 
         return nphicc, rhobcc, pefcc
+
+
+def sep_vug_poro(phit, phis, dtc=None, model='base', alpha=2.0, p=0.1):
+    """Separate vug porosity from total porosity and sonic porosity.
+    Base model (Lucia-Conti, 1987)
+    Power model (Wang-Lucia, 1993)
+    Quadratic model (Wang-Lucia, 1993)
+
+    Args:
+        phit (float): Total porosity in v/v
+        phis (float): Sonic porosity in v/v
+        dtc (float, optional): Compressional slowness log in us/ft. Defaults to None.
+        model (str, optional): Model to choose from 'base', 'power', or 'quadratic'. Defaults to 'base'.
+        alpha (float, optional): Scaling factor for power model. Defaults to 2.0.
+        p (float, optional): Emperical coefficient for quadratic model. Defaults to 0.1.
+
+    Returns:
+        float: Separate vug porosity in v/v
+    """
+    assert model in ['base', 'power', 'quadratic'], 'Please choose from "base", "power", or "quadratic" model.'
+    if model == 'base' and dtc is not None:
+        return 10 ** (4.09 - 0.145 * (dtc - 141.5 * phit))
+    elif model == 'power':
+        return (phit / phis) ** alpha * (phit - phis)
+    elif model == 'quadratic':
+        return (phit - phis) + p * (phit - phis) ** 2

@@ -312,9 +312,7 @@ def resample_depth(welly_object, step_depth=0.5):
     if "DEPTH" in return_df.columns:
         return_df.set_index('DEPTH', inplace=True)
     return_df.index.rename('DEPTH', inplace=True)
-    return_df.reset_index(drop=False, inplace=True)
-
-    return return_df
+    return return_df.reset_index(drop=False)
 
 
 def export_to_las(well_data, well_name, folder=''):

@@ -135,30 +135,6 @@ def badhole_flagging(data, thold=4):
         return df
 
 
-def porosity_correction_averaging(nphi, dphi, method='weighted'):
-    """Correct porosity using averaging method.
-
-    Args:
-        nphi (float): Neutron porosity.
-        dphi (float): Density porosity.
-        method (str, optional): Averaging method selection from 'weighted', 'arithmetic' or 'gaymard'.
-         Defaults to 'weighted'.
-
-    Returns:
-        float: Corrected porosity.
-    """
-    assert method in ['weighted', 'arithmetic', 'gaymard'], "method must be either \
-        'weighted', 'arithmetic' or 'gaymard' "
-
-    if method == 'weighted':
-        phit = (2 * dphi + nphi) / 3
-    elif method == 'arithmetic':
-        phit = (dphi + nphi) / 2
-    elif method == 'gaymard':
-        phit = np.sqrt((dphi**2 + nphi**2) / 2)
-    return phit
-
-
 def neu_den_xplot_hc_correction(
         nphi, rhob, gr=None, vsh_gr=None,
         dry_min1_point: tuple = None,

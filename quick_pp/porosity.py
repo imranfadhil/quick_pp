@@ -128,6 +128,7 @@ def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
     """
     return (rho_matrix - rhob) / (rho_matrix - rho_fluid)
 
+
 def dt_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
               dt_sand: float = None, dt_silt: float = None, dt_clay: float = None,
               dt_calc: float = None, dt_dolo: float = None, dt_heavy: float = 0):
@@ -299,22 +300,46 @@ def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc',
     return phit
 
 
-def neu_den_poro(nphi, rhob, rho_ma=2.65, method='simplified'):
-    """Calculate porosity based on 'simple', 'emperical' or 'gas' method, given neutron porosity and bulk density logs.
+def porosity_correction_averaging(nphi, rhob, rho_ma=2.65, method='weighted'):
+    """Correct porosity using averaging method.
+    Weighted average: (2 * dphi + nphi) / 3
+    Arithmetic average: (dphi + nphi) / 2
+    Gaymard average: sqrt((dphi**2 + nphi**2) / 2)
+    Gas average: sqrt((dphi**2 + nphi**2) / 2)
 
     Args:
-        nphi (float): Neutron porosity log.
-        rhob (float): Bulk density log.
-        rho_ma (float, optional): Matrix bulk density. Defaults to 2.65.
+        nphi (float): Neutron porosity.
+        dphi (float): Density porosity.
+        method (str, optional): Averaging method selection from 'weighted', 'arithmetic' or 'gaymard'.
+         Defaults to 'weighted'.
 
     Returns:
-        float: Porosity.
+        float: Corrected porosity.
     """
-    assert method in ['simple', 'emperical', 'gas'], 'Please select either simple, emperical or gas method.'
-    phid = density_porosity(rhob, rho_ma, 1.0)
-    if method == 'simple':
-        return (nphi + phid) / 2
-    elif method == 'emperical':
-        return (1 / 3) * nphi + (2 / 3) * phid
+    assert method in ['weighted', 'arithmetic', 'gaymard', 'gas'], "method must be either \
+        'weighted', 'arithmetic', 'gaymard' or 'gas"
+    dphi = density_porosity(rhob, rho_ma, 1.0)
+    if method == 'weighted':
+        return (2 * dphi + nphi) / 3
+    elif method == 'arithmetic':
+        return (dphi + nphi) / 2
+    elif method == 'gaymard':
+        return np.sqrt((dphi**2 + nphi**2) / 2)
     elif method == 'gas':
-        return ((nphi**2 + phid**2) / 2)**0.5
+        return ((nphi**2 + dphi**2) / 2)**0.5
+
+
+def porosity_trend(tvdss, unit='ft'):
+    """Calculate porosity trend based on TVDSS (Schmoker, 1982)
+
+    Args:
+        tvdss (float): True Vertical Depth Subsea.
+
+    Returns:
+        float: Porosity trend.
+    """
+    assert unit in ['ft', 'm'], 'Please specify either ft or m as unit.'
+    if unit == 'ft':
+        return 41.73 * np.exp(-tvdss / 8197)
+    else:
+        return 41.73 * np.exp(-tvdss / 2498)
