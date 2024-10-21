@@ -1,8 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import classification_report, r2_score, mean_absolute_error
+from sklearn.metrics import classification_report, r2_score, mean_absolute_error, auc
 
 from quick_pp.utils import min_max_line
 from quick_pp.lithology import shale_volume_steiber
@@ -64,7 +65,8 @@ def plot_fzi(cpore, cperm, fzi=None, rock_type=None, title='Flow Zone Indicator 
         phit (float): Total porosity in fraction
     """
     # Plot the FZI cross plot
-    plt.figure(figsize=(5, 4))
+    # plt.figure(figsize=(5, 4))
+    _, ax = plt.subplots(figsize=(5, 4))
     plt.title(title)
     plt.scatter(cpore, cperm, marker='s', c=rock_type, cmap='viridis')
     fzi_list = fzi if fzi is not None else np.arange(0.5, 5)
@@ -76,10 +78,82 @@ def plot_fzi(cpore, cperm, fzi=None, rock_type=None, title='Flow Zone Indicator 
     plt.xlabel('Porosity (frac)')
     plt.xlim(-.05, .5)
     plt.ylabel('Permeability (mD)')
-    plt.ylim(0.001, 10000)
+    plt.ylim(1e-3, 1e4)
     plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
     plt.yscale('log')
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
+        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+
+    plt.minorticks_on()
+    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
+    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
+
+
+def plot_rfn(cpore, cperm, rock_type=None, title='Lucia RFN'):
+    """Plot the Rock Fabric Number (RFN) lines on porosity and permeability cross plot. The permeability (mD) is
+    calculated based on Lucia-Jenkins, 2003 -
+    > k = 10**(9.7892 - 12.0838 * log(RFN) + (8.6711 - 8.2965 * log(RFN)) * log(phi))
+
+    Args:
+        cpore (float): Critical porosity in v/v
+        cperm (float): Critical permeability in mD
+    """
+    # Plot the RFN cross plot
+    _, ax = plt.subplots(figsize=(5, 4))
+    plt.title(title)
+    plt.scatter(cpore, cperm, marker='s', c=rock_type, cmap='viridis')
+    pore_points = np.linspace(0, .6, 20)
+    for rfn in np.arange(.5, 4.5, .5):
+        perm_points = 10**(9.7892 - 12.0838 * np.log10(rfn) + (8.6711 - 8.2965 * np.log10(rfn)) * np.log10(pore_points))
+        plt.plot(pore_points, perm_points, linestyle='dashed', label=f'RFN={rfn}')
+
+    plt.xlabel('Porosity (frac)')
+    plt.xlim(-.05, .5)
+    plt.ylabel('Permeability (mD)')
+    plt.ylim(1e-3, 1e4)
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+
+    plt.yscale('log')
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
+        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+
+    plt.minorticks_on()
+    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
+    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
+
+
+def plot_winland(cpore, cperm, rock_type=None, title='Winland R35'):
+    """Plot the Winland R35 lines on porosity and permeability cross plot. The permeability (mD) is calculated based on
+    Winland, 1979 -
+    > k = 10**((log(r35) - 0.731 + 0.864 * log(phi)) / 0.538)
+
+    Args:
+        cpore (float): Critical porosity in v/v
+        cperm (float): Critical permeability in mD
+    """
+    # Plot the Winland R35 cross plot
+    _, ax = plt.subplots(figsize=(5, 4))
+    plt.title(title)
+    plt.scatter(cpore, cperm, marker='s', c=rock_type, cmap='viridis')
+    pore_points = np.linspace(0, .6, 20)
+    for r35 in [.05, .1, .5, 2, 10, 100]:
+        perm_points = 10**((np.log10(r35) - 0.732 + 0.864 * np.log10(pore_points * 100)) / 0.588)
+        plt.plot(pore_points, perm_points, linestyle='dashed', label=f'R35={r35}')
+
+    plt.xlabel('Porosity (frac)')
+    plt.xlim(-.05, .5)
+    plt.ylabel('Permeability (mD)')
+    plt.ylim(1e-3, 1e4)
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+
+    plt.yscale('log')
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
+        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+
+    plt.minorticks_on()
+    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
+    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
 
 
 def plot_ward(cpore, cperm, title="Ward's Plot"):
@@ -106,7 +180,7 @@ def plot_ward(cpore, cperm, title="Ward's Plot"):
     plt.ylabel('zi')
     plt.minorticks_on()
     plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
-    plt.grid(True, which='minor', linestyle=':', linewidth='0.4', color='gray')
+    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
     plt.xticks(np.arange(min(log_fzi[log_fzi != -np.inf]), max(log_fzi[log_fzi != np.inf]), .2))
 
 
@@ -118,48 +192,20 @@ def plot_lorenz(cpore, cperm, title="Lorenz's Plot"):
         cperm (float): Core permeability in mD.
         title (str, optional): Title of the plot. Defaults to "Lorenz's Plot".
     """
-    fzi = calc_fzi(cperm, cpore)
-    fzi = fzi[~np.isnan(fzi)]
-    sorted_fzi = np.sort(fzi)
-    p_log_fzi = np.arange(1, len(sorted_fzi) + 1)
-    log_fzi = np.log10(sorted_fzi)
+    sorted_perm, sorted_phit = zip(*sorted(zip(cperm, cpore), reverse=True))
+    perm_cdf = np.cumsum(sorted_perm) / np.sum(sorted_perm)
+    phit_cdf = np.cumsum(sorted_phit) / np.sum(sorted_phit)
+    lorenz_coeff = (auc(phit_cdf, perm_cdf) - 0.5) / 0.5
     # Generate Lorenz's plot
-    plt.figure(figsize=(10, 4))
-    plt.title(title)
-    plt.scatter(log_fzi, p_log_fzi, marker='s')
-    plt.xlabel('log(fzi)')
-    plt.ylabel('Count')
-    plt.minorticks_on()
-    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
-    plt.grid(True, which='minor', linestyle=':', linewidth='0.4', color='gray')
-    plt.xticks(np.arange(min(log_fzi[log_fzi != -np.inf]), max(log_fzi[log_fzi != np.inf]), .2))
-
-
-def plot_rfn(cpore, cperm, rock_type=None, title='Lucia RFN'):
-    """Plot the Rock Fabric Number (RFN) lines on porosity and permeability cross plot. The permeability (mD) is
-    calculated based on Lucia-Jenkins, 2003 -
-    > k = 10**(9.7892 - 12.0838 * log(RFN) + (8.6711 - 8.2965 * log(RFN)) * log(phi))
-
-    Args:
-        cpore (float): Critical porosity in v/v
-        cperm (float): Critical permeability in mD
-    """
-    # Plot the RFN cross plot
     plt.figure(figsize=(5, 4))
     plt.title(title)
-    plt.scatter(cpore, cperm, marker='s', c=rock_type, cmap='viridis')
-    pore_points = np.linspace(0, .6, 20)
-    for rfn in np.arange(.5, 4.5, .5):
-        perm_points = 10**(9.7892 - 12.0838 * np.log10(rfn) + (8.6711 - 8.2965 * np.log10(rfn)) * np.log10(pore_points))
-        plt.plot(pore_points, perm_points, linestyle='dashed', label=f'RFN={rfn}')
-
-    plt.xlabel('Porosity (frac)')
-    plt.xlim(-.05, .5)
-    plt.ylabel('Permeability (mD)')
-    plt.ylim(0.001, 10000)
-    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
-
-    plt.yscale('log')
+    plt.text(.4, .1, f'Lorenz Coefficient: {lorenz_coeff:.2f}', fontsize=10, transform=plt.gca().transAxes)
+    plt.scatter(phit_cdf, perm_cdf, marker='s')
+    plt.plot([0, 1], [0, 1], linestyle='dashed', color='gray')
+    plt.xlabel('CDF of Porosity')
+    plt.ylabel('CDF of Permeability')
+    plt.xlim(0, 1)
+    plt.ylim(0, 1)
 
 
 def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
@@ -212,7 +258,7 @@ def rock_typing(curve, cut_offs=[.1, .2, .3, .4], higher_is_better=True):
 
     Args:
         curve (float): Curve to be used for rock typing.
-        cut_offs (list, optional): 3 cutoffs to group the curve into 4 rock types. Defaults to [.1, .3, .4].
+        cut_offs (list, optional): 3 cutoffs to group the curve into 4 rock types. Defaults to [.1, .2, .3, .4].
         higher_is_better (bool, optional): Whether higher value of curve is better quality or not. Defaults to True.
 
     Returns:
