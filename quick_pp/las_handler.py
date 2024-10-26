@@ -24,7 +24,12 @@ def read_las_files(las_files):
     header_data = pd.DataFrame()
 
     for f in las_files:
-        df, well_header, _ = read_las_file(f)
+        try:
+            df = welly.las.from_las(f.name)['Curves']
+            well_header = welly.las.from_las(f.name)['Header']
+        except Exception as e:
+            print(f"[read_las_files] Exception for {f.name} | {e} ")
+            df, well_header, _ = read_las_file(f)
         merged_data = pd.concat([merged_data, df], ignore_index=True)
         header_data = pd.concat([header_data, well_header], ignore_index=True)
 

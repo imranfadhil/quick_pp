@@ -184,8 +184,8 @@ def plot_ward(cpore, cperm, title="Ward's Plot"):
     plt.xticks(np.arange(min(log_fzi[log_fzi != -np.inf]), max(log_fzi[log_fzi != np.inf]), .2))
 
 
-def plot_lorenz(cpore, cperm, title="Lorenz's Plot"):
-    """Plot Lorenz's plot to identify possible flow units.
+def plot_lorenz_heterogeneity(cpore, cperm, title="Lorenz's Plot"):
+    """Plot Lorenz's plot to estimate heteroginity.
 
     Args:
         cpore (float): Core porosity in fraction.
@@ -206,6 +206,29 @@ def plot_lorenz(cpore, cperm, title="Lorenz's Plot"):
     plt.ylabel('CDF of Permeability')
     plt.xlim(0, 1)
     plt.ylim(0, 1)
+
+
+def plot_modified_lorenz(cpore, cperm, title="Modified Lorenz's Plot"):
+    """Plot Lorenz's plot to identify possible flow units.
+
+    Args:
+        cpore (float): Core porosity in fraction.
+        cperm (float): Core permeability in mD.
+        title (str, optional): Title of the plot. Defaults to "Lorenz's Plot".
+    """
+    fzi = calc_fzi(cperm, cpore)
+    sorted_fzi, sorted_perm, sorted_pore = zip(*sorted(zip(fzi, cperm, cpore), reverse=False))
+    perm_cdf = np.cumsum(sorted_perm) / np.sum(sorted_perm)
+    pore_cdf = np.cumsum(sorted_pore) / np.sum(sorted_pore)
+    # Generate Lorenz's plot
+    plt.figure(figsize=(5, 4))
+    plt.title(title)
+    plt.scatter(pore_cdf, perm_cdf, marker='s')
+    plt.xlabel('CDF of Porosity')
+    plt.ylabel('CDF of Permeability')
+    plt.minorticks_on()
+    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
+    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
 
 
 def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
