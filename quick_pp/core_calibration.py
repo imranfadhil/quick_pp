@@ -2,7 +2,8 @@ from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as np
 
-from quick_pp.utils import power_law_func as func
+from quick_pp.utils import power_law_func, inv_power_law_func
+
 
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(
@@ -15,7 +16,7 @@ plt.rcParams.update(
 
 
 # Cross plots
-def poroperm_xplot(poro, perm, a=None, b=None, label='', log_log=False):
+def poroperm_xplot(poro, perm, a=None, b=None, core_group=None, label='', log_log=False):
     """Generate porosity-permeability cross plot.
 
     Args:
@@ -26,12 +27,12 @@ def poroperm_xplot(poro, perm, a=None, b=None, label='', log_log=False):
         label (str, optional): Label for the data group. Defaults to ''.
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
-    sc = plt.scatter(poro, perm, marker='o', label=label)
+    sc = plt.scatter(poro, perm, marker='o', label=label, c=core_group)
     if a and b:
         line_color = sc.get_facecolors()[0]
         line_color[-1] = 0.5
         cpore = np.geomspace(0.05, 0.5, 30)
-        plt.plot(cpore, func(cpore, a, b), color=line_color, linestyle='dashed')
+        plt.plot(cpore, power_law_func(cpore, a, b), color=line_color, linestyle='dashed')
     plt.xlabel('CPORE (frac)')
     plt.xlim(0, 0.5)
     plt.ylabel('CPERM (mD)')
@@ -57,7 +58,7 @@ def bvw_xplot(bvw, pc, a=None, b=None, label=None, ylim=None, log_log=False):
     if a is not None and b is not None:
         line_color = sc[0].get_color() + '66'  # Set opacity to 0
         cbvw = np.linspace(0.05, 0.35, 30)
-        plt.scatter(cbvw, func(cbvw, a, b), marker='x', color=line_color)
+        plt.scatter(cbvw, inv_power_law_func(cbvw, a, b), marker='x', color=line_color)
     plt.xlabel('BVW (frac)')
     plt.ylabel('Pc (psi)')
     plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
@@ -68,7 +69,7 @@ def bvw_xplot(bvw, pc, a=None, b=None, label=None, ylim=None, log_log=False):
         plt.yscale('log')
 
 
-def j_xplot(sw, j, a=None, b=None, label=None, ylim=None, log_log=False):
+def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False):
     """Generate J-Sw cross plot.
 
     Args:
@@ -80,15 +81,13 @@ def j_xplot(sw, j, a=None, b=None, label=None, ylim=None, log_log=False):
         ylim (tuple, optional): Range for the y axis in (min, max) format. Defaults to None.
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
-    sc = plt.plot(sw, j, marker='.', label=label, linestyle='None')
+    plt.scatter(sw, j, marker='.', c=core_group, cmap='Set1')
     if a is not None and b is not None:
-        line_color = sc[0].get_color() + '80'  # Set opacity to 0.5
-        csw = np.geomspace(0.01, 1.0, 30)
-        plt.plot(csw, func(csw, a, b), color=line_color, linestyle='dashed')
+        csw = np.geomspace(0.01, 1.0, 20)
+        plt.plot(csw, inv_power_law_func(csw, a, b), label=label, linestyle='dashed')
     plt.xlabel('Sw (frac)')
     plt.xlim(0.01, 1)
     plt.ylabel('J')
-    # plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
     plt.yscale('log')
     if log_log:
         plt.xscale('log')
@@ -108,7 +107,7 @@ def fit_j_curve(sw, j):
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        popt, _ = curve_fit(func, sw, j)
+        popt, _ = curve_fit(inv_power_law_func, sw, j, p0=[.01, .5])
         a = [round(c, 3) for c in popt][0]
         b = [round(c, 3) for c in popt][1]
         return a, b
@@ -128,7 +127,7 @@ def fit_poroperm_curve(poro, perm):
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        popt, _ = curve_fit(func, poro, perm)
+        popt, _ = curve_fit(power_law_func, poro, perm)
         a = [round(c) for c in popt][0]
         b = [round(c, 3) for c in popt][1]
         return a, b
@@ -210,7 +209,7 @@ def sw_shf_leverett_j(perm, phit, depth, fwl, ift, theta, gw, ghc, a, b, phie=No
     """
     h = fwl - depth
     pc = h * (gw - ghc)
-    shf = ((0.216 * (pc / (ift * abs(np.cos(np.radians(theta))))) * (perm / phit)**(0.5)) / a)**(1 / b)
+    shf = (a / leverett_j(pc, ift, theta, perm, phit))**(1 / b)
     # return np.where(shf > 1, 1, shf)
     return shf if not phie else shf * (1 - (phie / phit)) + (phie / phit)
 

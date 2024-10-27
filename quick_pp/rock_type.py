@@ -65,7 +65,6 @@ def plot_fzi(cpore, cperm, fzi=None, rock_type=None, title='Flow Zone Indicator 
         phit (float): Total porosity in fraction
     """
     # Plot the FZI cross plot
-    # plt.figure(figsize=(5, 4))
     _, ax = plt.subplots(figsize=(5, 4))
     plt.title(title)
     plt.scatter(cpore, cperm, marker='s', c=rock_type, cmap='viridis')
