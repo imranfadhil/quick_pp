@@ -152,7 +152,7 @@ def plotly_log(well_data, depth_uom=""):  # noqa
 
     # Create one hot for ROCK_FLAG
     if 'ROCK_FLAG' in df.columns:
-        df['ROCK_FLAG'] = df['ROCK_FLAG'].astype('category')
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].astype(int).astype('category')
         df = pd.get_dummies(df, columns=['ROCK_FLAG'], prefix='ROCK_FLAG', dtype=int)
 
     for k, v in COLOR_DICT.items():

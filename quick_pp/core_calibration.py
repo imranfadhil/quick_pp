@@ -27,19 +27,20 @@ def poroperm_xplot(poro, perm, a=None, b=None, core_group=None, label='', log_lo
         label (str, optional): Label for the data group. Defaults to ''.
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
-    sc = plt.scatter(poro, perm, marker='o', label=label, c=core_group)
+    sc = plt.scatter(poro, perm, marker='o', c=core_group, cmap='Set1')
     if a and b:
         line_color = sc.get_facecolors()[0]
         line_color[-1] = 0.5
         cpore = np.geomspace(0.05, 0.5, 30)
-        plt.plot(cpore, power_law_func(cpore, a, b), color=line_color, linestyle='dashed')
+        plt.plot(cpore, power_law_func(cpore, a, b), color=line_color, label=label, linestyle='dashed')
     plt.xlabel('CPORE (frac)')
     plt.xlim(0, 0.5)
     plt.ylabel('CPERM (mD)')
     plt.yscale('log')
-    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
     if log_log:
         plt.xscale('log')
+    if label:
+        plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
 
 def bvw_xplot(bvw, pc, a=None, b=None, label=None, ylim=None, log_log=False):
@@ -67,6 +68,26 @@ def bvw_xplot(bvw, pc, a=None, b=None, label=None, ylim=None, log_log=False):
     if log_log:
         plt.xscale('log')
         plt.yscale('log')
+
+
+def pc_xplot(sw, pc, label=None):
+    """Generate J-Sw cross plot.
+
+    Args:
+        sw (float): Core water saturation (frac).
+        j (float): Calculated J value (unitless).
+        a (float, optional): a constant in j=a*sw^b. Defaults to None.
+        b (float, optional): b constant in j=a*sw^b. Defaults to None.
+        label (str, optional): Label for the data group. Defaults to ''.
+        ylim (tuple, optional): Range for the y axis in (min, max) format. Defaults to None.
+        log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
+    """
+    plt.plot(sw, pc, marker='.', label=label)
+    plt.xlabel('Sw (frac)')
+    plt.xlim(0.01, 1)
+    plt.ylabel('Pc (psi)')
+    if label:
+        plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
 
 def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False):
