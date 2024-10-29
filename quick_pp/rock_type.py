@@ -245,6 +245,13 @@ def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
     """
     # Normalize gamma ray
     if not max_gr or (not min_gr and min_gr != 0):
+        # Remove high outliers and forward fill missing values
+        gr = np.where(gr <= np.nanmean(gr) + 1.5 * np.nanstd(gr), gr, np.nan)
+        mask = np.isnan(gr)
+        idx = np.where(~mask, np.arange(len(mask)), 0)
+        np.maximum.accumulate(idx, axis=0, out=idx)
+        gr = gr[idx]
+
         _, max_gr = min_max_line(gr, alpha)
         gri = np.where(gr < max_gr, gr / max_gr, 1)
     else:

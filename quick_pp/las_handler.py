@@ -25,11 +25,10 @@ def read_las_files(las_files):
 
     for f in las_files:
         try:
-            df = welly.las.from_las(f.name)['Curves']
-            well_header = welly.las.from_las(f.name)['Header']
+            df, well_header = read_las_file_welly(f)
         except Exception as e:
             print(f"[read_las_files] Exception for {f.name} | {e} ")
-            df, well_header, _ = read_las_file(f)
+            df, well_header, _ = read_las_file_mmap(f)
         merged_data = pd.concat([merged_data, df], ignore_index=True)
         header_data = pd.concat([header_data, well_header], ignore_index=True)
 
@@ -43,7 +42,7 @@ def read_las_files(las_files):
     return merged_data, header_data
 
 
-def read_las_file(file_object, required_sets=['PEP']):  # noqa
+def read_las_file_mmap(file_object, required_sets=['PEP']):  # noqa
     """Check LAS file and concat datasets if more than one.
 
     Args:
@@ -140,6 +139,14 @@ def read_las_file(file_object, required_sets=['PEP']):  # noqa
             curves_df, header_df, welly_object = extract_dataset(section_dict)
 
     return curves_df, header_df, welly_object
+
+
+def read_las_file_welly(file_object):  # noqa
+    welly_object = welly.las.from_las(file_object.name)
+    df = pre_process(welly_object)
+    well_header = welly.las.from_las(file_object.name)['Header']
+
+    return df, well_header
 
 
 def pre_process(welly_object):
