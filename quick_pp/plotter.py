@@ -48,33 +48,33 @@ COLOR_DICT = {
     'SHF': '#618F63',
     'ROCK_FLAG_1': '#F6F674',
     'ROCK_FLAG_2': 'gold',
-    'ROCK_FLAG_3': '#FE9800',
-    'ROCK_FLAG_4': 'darkgray',
+    'ROCK_FLAG_3': 'brown',
+    'ROCK_FLAG_4': '#FE9800',
+    'ROCK_FLAG_5': 'darkgray',
 }
 
 
 def neutron_density_xplot(nphi, rhob,
-                          dry_sand_point: tuple,
-                          dry_silt_point: tuple,
+                          dry_min1_point: tuple,
                           dry_clay_point: tuple,
                           fluid_point: tuple,
-                          wet_clay_point: tuple, **kwargs):
+                          wet_clay_point: tuple = None,
+                          dry_silt_point: tuple = None, **kwargs):
     """Neutron-Density crossplot with lithology lines based on specified end points.
 
     Args:
         nphi (float): Neutron porosity log.
         rhob (float): Bulk density log.
-        dry_sand_point (tuple): Neutron porosity and bulk density of dry sand point.
-        dry_silt_point (tuple): Neutron porosity and bulk density of dry silt point.
+        dry_min1_point (tuple): Neutron porosity and bulk density of mineral 1 point.
         dry_clay_point (tuple): Neutron porosity and bulk density of dry clay point.
         fluid_point (tuple): Neutron porosity and bulk density of fluid point.
         wet_clay_point (tuple): Neutron porosity and bulk density of wet clay point.
+        dry_silt_point (tuple): Neutron porosity and bulk density of dry silt point. Default is None.
 
     Returns:
         matplotlib.pyplot.Figure: Neutron porosity and bulk density cross plot.
     """
-    A = dry_sand_point
-    B = dry_silt_point
+    A = dry_min1_point
     C = dry_clay_point
     D = fluid_point
     E = list(zip(nphi, rhob))
@@ -83,25 +83,35 @@ def neutron_density_xplot(nphi, rhob,
     for i in range(len(nphi)):
         projected_pt.append(line_intersection((A, C), (D, E[i])))
     rockline_from_pt = (A, C)
-    sandline_from_pt = (D, A)
-    siltline_from_pt = (D, B)
-    clayline_from_pt = (D, wet_clay_point)
+    min1line_from_pt = (D, A)
+    clayline_from_pt = (D, C)
 
     fig = plt.Figure(figsize=(5, 5))
     ax = fig.add_subplot(111)
     ax.set_title('NPHI-RHOB Crossplot')
     ax.scatter(nphi, rhob, c=np.arange(0, len(nphi)), cmap='rainbow')
-    ax.plot(*zip(*sandline_from_pt), label='Sand Line', color='blue')
-    ax.plot(*zip(*siltline_from_pt), label='Silt Line', color='green')
+    ax.plot(*zip(*min1line_from_pt), label='Mineral 1 Line', color='blue')
+
+    if dry_silt_point:
+        B = dry_silt_point
+        siltline_from_pt = (D, B)
+        ax.plot(*zip(*siltline_from_pt), label='Silt Line', color='green')
+        ax.scatter(dry_silt_point[0], dry_silt_point[1], label='Dry Silt Point', color='orange')
+
     ax.plot(*zip(*clayline_from_pt), label='Clay Line', color='gray')
     ax.plot(*zip(*rockline_from_pt), label='Rock Line', color='black')
     ax.scatter(*zip(*projected_pt), label='Projected Line', color='purple')
-    # ax.scatter(NPHI_reg, RHOB_reg, label='Wet Clay Line', color='gray')
-    ax.scatter(dry_sand_point[0], dry_sand_point[1], label='Dry Sand Point', color='yellow')
-    ax.scatter(dry_silt_point[0], dry_silt_point[1], label='Dry Silt Point', color='orange')
-    ax.scatter(dry_clay_point[0], dry_clay_point[1], label='Dry Clay Point', color='black')
-    ax.scatter(wet_clay_point[0], wet_clay_point[1], label='Wet Clay Point', color='gray')
-    ax.scatter(fluid_point[0], fluid_point[1], label='Fluid Point', color='blue')
+    ax.scatter(dry_min1_point[0], dry_min1_point[1],
+               label=f'Mineral 1 Point: ({dry_min1_point[0]}, {dry_min1_point[1]})', color='yellow')
+    ax.scatter(dry_clay_point[0], dry_clay_point[1],
+               label=f'Dry Clay Point: ({dry_clay_point[0]}, {dry_clay_point[1]})', color='black')
+
+    if wet_clay_point:
+        ax.scatter(wet_clay_point[0], wet_clay_point[1], label='Wet Clay Point', color='gray')
+
+    ax.scatter(fluid_point[0], fluid_point[1],
+               label=f'Fluid Point: ({fluid_point[0]}, {fluid_point[1]})', color='blue')
+
     ax.set_ylim(3, 0)
     ax.set_ylabel('RHOB')
     ax.set_xlim(-0.15, 1)
@@ -317,7 +327,7 @@ def plotly_log(well_data, depth_uom=""):  # noqa
 
     i += 1
     # Add VSHALE
-    fig.add_trace(go.Scatter(x=df['VSHALE'], y=index, name='VSHALE', line_color=COLOR_DICT['VSHALE']),
+    fig.add_trace(go.Scatter(x=df['VSHALE'], y=index, name='VSHALE', line_color=COLOR_DICT['VSHALE'], line_width=1),
                   row=1, col=8, secondary_y=True)
 
     i += 1
@@ -364,20 +374,30 @@ def plotly_log(well_data, depth_uom=""):  # noqa
 
     i += 1
     # Add ROCK_FLAG_2
-    fig.add_trace(go.Scatter(x=df['ROCK_FLAG_2'], y=index, name='ROCK_FLAG_2', line_color=COLOR_DICT['ROCK_FLAG_2'],
-                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT['ROCK_FLAG_2'], opacity=1),
+    feature = 'ROCK_FLAG_2'
+    fig.add_trace(go.Scatter(x=df[feature], y=index, name=feature, line_color=COLOR_DICT[feature],
+                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT[feature], opacity=1),
                   row=1, col=7, secondary_y=False)
 
     i += 1
     # Add ROCK_FLAG_3
-    fig.add_trace(go.Scatter(x=df['ROCK_FLAG_3'], y=index, name='ROCK_FLAG_3', line_color=COLOR_DICT['ROCK_FLAG_3'],
-                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT['ROCK_FLAG_3'], opacity=1),
+    feature = 'ROCK_FLAG_3'
+    fig.add_trace(go.Scatter(x=df[feature], y=index, name=feature, line_color=COLOR_DICT[feature],
+                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT[feature], opacity=1),
                   row=1, col=7, secondary_y=False)
 
     i += 1
     # Add ROCK_FLAG_4
-    fig.add_trace(go.Scatter(x=df['ROCK_FLAG_4'], y=index, name='ROCK_FLAG_4', line_color=COLOR_DICT['ROCK_FLAG_4'],
-                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT['ROCK_FLAG_4'], opacity=1),
+    feature = 'ROCK_FLAG_4'
+    fig.add_trace(go.Scatter(x=df[feature], y=index, name=feature, line_color=COLOR_DICT[feature],
+                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT[feature], opacity=1),
+                  row=1, col=7, secondary_y=False)
+
+    i += 1
+    # Add ROCK_FLAG_5
+    feature = 'ROCK_FLAG_5'
+    fig.add_trace(go.Scatter(x=df[feature], y=index, name=feature, line_color=COLOR_DICT[feature],
+                             line_width=1, fill='tozerox', fillcolor=COLOR_DICT[feature], opacity=1),
                   row=1, col=7, secondary_y=False)
 
     i += 1
@@ -490,26 +510,21 @@ def plotly_log(well_data, depth_uom=""):  # noqa
         yaxis16=dict(domain=[0, .84], visible=True, showgrid=False),
 
         # Update x and y axes for COAL_FLAG
-        xaxis32=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis33=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x4',
                      tick0=0, dtick=1, range=[0.1, .2], type='linear', tickfont=dict(size=1)),
-        yaxis32=dict(domain=[0, .88], visible=False, showgrid=False, zeroline=False),
-        xaxis33=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis34=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x5',
                      tick0=0, dtick=1, range=[0.1, .2], type='linear', tickfont=dict(size=1)),
-        yaxis33=dict(domain=[0, .88], visible=False, showgrid=False, zeroline=False),
-        xaxis34=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis35=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x6',
                      tick0=0, dtick=1, range=[0.1, .2], type='linear', tickfont=dict(size=1)),
-        yaxis34=dict(domain=[0, .88], visible=False, showgrid=False, zeroline=False),
-        xaxis35=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis36=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x7',
                      tick0=0, dtick=1, range=[0.1, .2], type='linear', tickfont=dict(size=1)),
-        yaxis35=dict(domain=[0, .88], visible=False, showgrid=False, zeroline=False),
-        xaxis36=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
+        xaxis37=dict(title='', titlefont=dict(color=COLOR_DICT['COAL_FLAG'], size=font_size),
                      side='top', anchor='free', position=.97, title_standoff=.1, overlaying='x8',
                      tick0=0, dtick=1, range=[0.1, .2], type='linear', tickfont=dict(size=1)),
-        yaxis36=dict(domain=[0, .88], visible=False, showgrid=False, zeroline=False),
 
         height=900,
         width=900,

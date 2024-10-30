@@ -151,7 +151,7 @@ def leverett_j(pc, ift, perm, phit):
 
 
 def pseudo_leverett_j():
-    """Generate Pseudo-Leverett J based on .
+    """TODO: Generate Pseudo-Leverett J based.
 
     Args:
         pc (float): Capillary pressure.
@@ -166,11 +166,12 @@ def pseudo_leverett_j():
 
 
 def sw_skelt_harrison():
+    """TODO: Estimate water saturation based on Skelt-Harrison."""
     pass
 
 
 def sw_cuddy(phit, h, a, b):
-    """Estaimte water saturation based on Cuddy's.
+    """Estimate water saturation based on Cuddy's.
 
     Args:
         sw (float): Water saturation.

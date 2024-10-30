@@ -34,15 +34,15 @@ class Config(object):
 
     SSC_ENDPOINTS = dict(
         FLUID_POINT=(1.0, 1.0),
-        DRY_SAND_POINT=(-0.08, 2.65),
+        DRY_SAND_POINT=(-0.02, 2.65),
         DRY_SILT_POINT=(None, 2.68),  # None means it will be calculated
-        DRY_CLAY_POINT=(None, 2.7),  # None means it will be calculated
+        DRY_CLAY_POINT=(None, 2.71),  # None means it will be calculated
         WET_CLAY_POINT=(None, None),  # None means it will be calculated
         SILT_LINE_ANGLE=119  # Deg angle from horizontal
     )
 
     CARB_NEU_DEN_ENDPOINTS = dict(
-        FLUID_POINT=(.93, 1.0),
+        FLUID_POINT=(1.0, 1.0),
         DRY_CALC_POINT=(0.0, 2.71),
         DRY_DOLO_POINT=(0.01, 2.87),
         DRY_CLAY_POINT=(0.24, 2.78),

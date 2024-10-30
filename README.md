@@ -14,6 +14,9 @@ Python package to assist in providing quick-look/ preliminary petrophysical esti
     > pip install -r requirements.txt
 
 4. Launch the notebook and run the cells
+    - 01_data_handler: create the MOCK qppp project file.
+    - 02_EDA: quick look on the data
+    - 03_*: quick petropohysical interpretation of the MOCK wells.
     - For API notebook, need to run the following before running the cells
         > uvicorn api.main:app
 
