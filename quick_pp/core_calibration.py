@@ -137,6 +137,20 @@ def fit_j_curve(sw, j):
         return 1, 1
 
 
+def perm_transform(poro, a, b):
+    """Transform porosity to permeability using a and b constants.
+
+    Args:
+        poro (float): Core porosity (frac).
+        a (float): a constant from the best-fit curve.
+        b (float): b constant from the best-fit curve.
+
+    Returns:
+        float: Permeability (mD).
+    """
+    return a * poro**b
+
+
 def fit_poroperm_curve(poro, perm):
     """Estimate a and b constants of best fit given core porosity and permeability values.
 
