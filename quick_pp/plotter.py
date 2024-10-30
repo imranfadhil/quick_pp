@@ -152,7 +152,8 @@ def plotly_log(well_data, depth_uom=""):  # noqa
 
     # Create one hot for ROCK_FLAG
     if 'ROCK_FLAG' in df.columns:
-        df['ROCK_FLAG'] = df['ROCK_FLAG'].astype('category')
+        df['ROCK_FLAG'].fillna(0, inplace=True)
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].astype(int).astype('category')
         df = pd.get_dummies(df, columns=['ROCK_FLAG'], prefix='ROCK_FLAG', dtype=int)
 
     for k, v in COLOR_DICT.items():
@@ -419,9 +420,9 @@ def plotly_log(well_data, depth_uom=""):  # noqa
                     title_standoff=.1, range=[np.log10(.2), np.log10(2000)], type='log',
                     tickmode='array', tickvals=np.geomspace(0.2, 2000, 5), tickangle=-90, minor_showgrid=True),
         xaxis3=dict(title='RHOB', titlefont=dict(color=COLOR_DICT['RHOB'], size=font_size),
-                    tickformat=".2f", tick0=1.85, dtick=0.2, tickangle=-90,
+                    tickformat=".2f", tick0=1.95, dtick=0.2, tickangle=-90,
                     tickfont=dict(color=COLOR_DICT['RHOB'], size=font_size), side='top', anchor='free', position=.89,
-                    title_standoff=.1, range=[1.85, 2.85], type='linear'),
+                    title_standoff=.1, range=[1.95, 2.95], type='linear'),
         xaxis4=dict(title='PHIT', titlefont=dict(color=COLOR_DICT['PHIT'], size=font_size),
                     tickfont=dict(color=COLOR_DICT['PHIT'], size=font_size),
                     side='top', anchor='free', position=.88, title_standoff=.1,

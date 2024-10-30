@@ -3,6 +3,7 @@ import pandas as pd
 from scipy.stats import gmean
 import random
 from scipy.stats import truncnorm
+import matplotlib.pyplot as plt
 
 
 def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
@@ -92,21 +93,27 @@ def volumetric_method(
     water_saturation_bound: tuple,
     volume_factor_bound: tuple,
     recovery_factor_bound: tuple,
-    random_state=123
+    random_state=None
 ):
-    """Calculate reserves using the volumetric method.
+    """Calculate volume using the volumetric method.
 
     Args:
-        area_bound (tuple): (min, max, mean, std) - Truncated normal distribution parameters for area.
-        thickness_bound (tuple): (min, max, mean, std) - Truncated normal distribution parameters for thickness.
-        porosity_bound (tuple): (min, max, mean, std) - Truncated normal distribution parameters for porosity.
-        water_saturation_bound (tuple): (min, max, mode) - Triangular distribution parameters for water saturation.
-        volume_factor_bound (tuple): (min, max) - Uniform distribution parameters for volume factor.
-        recovery_factor_bound (tuple): (min, max, mean, std) - Truncated normal distribution parameters for RF.
+        area_bound (tuple): (min, max, mean, std) in acre.
+            - Truncated normal distribution parameters for area.
+        thickness_bound (tuple): (min, max, mean, std) in feet.
+            - Truncated normal distribution parameters for thickness.
+        porosity_bound (tuple): (min, max, mean, std) in fraction.
+            - Truncated normal distribution parameters for porosity.
+        water_saturation_bound (tuple): (min, max, mode) in fraction.
+            - Triangular distribution parameters for water saturation.
+        volume_factor_bound (tuple): (min, max) unitless.
+            - Uniform distribution parameters for volume factor.
+        recovery_factor_bound (tuple): (min, max, mean, std) in fraction.
+            - Truncated normal distribution parameters for RF.
         random_state (int, optional): Random seed. Defaults to 123.
 
     Returns:
-        _type_: _description_
+        float: Estimated volume in MM bbl.
     """
     random.seed(random_state)
     a = truncnorm.rvs(area_bound[0], area_bound[1], loc=area_bound[2], scale=area_bound[3],
@@ -123,7 +130,7 @@ def volumetric_method(
         loc=recovery_factor_bound[2],
         scale=recovery_factor_bound[3],
         random_state=random_state)
-    return a * h * poro * (1 - sw) / bo * rf
+    return a, h, poro, sw, bo, rf
 
 
 def mc_volumetric_method(
@@ -133,33 +140,72 @@ def mc_volumetric_method(
     water_saturation_bound: tuple,
     volume_factor_bound: tuple,
     recovery_factor_bound: tuple,
-    n_try=10000, random_state=123
+    n_try=10000, percentile=[10, 50, 90]
 ):
     """Monte Carlo simulation for volumetric method.
 
     Args:
-        area_bound (tuple): (min, max, mean, std) - Truncated normal distribution parameters for area.
-        thickness_bound (tuple): (min, max, mean, std) - Truncated normal distribution parameters for thickness.
-        porosity_bound (tuple): (min, max, mean, std) - Truncated normal distribution parameters for porosity.
-        water_saturation_bound (tuple): (min, max, mode) - Triangular distribution parameters for water saturation.
-        volume_factor_bound (tuple): (min, max) - Uniform distribution parameters for volume factor.
-        recovery_factor_bound (tuple): (min, max, mean, std) - Truncated normal distribution parameters for RF.
+        area_bound (tuple): (min, max, mean, std) in acre.
+            - Truncated normal distribution parameters for area.
+        thickness_bound (tuple): (min, max, mean, std) in feet.
+            - Truncated normal distribution parameters for thickness.
+        porosity_bound (tuple): (min, max, mean, std) in fraction.
+            - Truncated normal distribution parameters for porosity.
+        water_saturation_bound (tuple): (min, max, mode) in fraction.
+            - Triangular distribution parameters for water saturation.
+        volume_factor_bound (tuple): (min, max) unitless.
+            - Uniform distribution parameters for volume factor.
+        recovery_factor_bound (tuple): (min, max, mean, std) in fraction.
+            - Truncated normal distribution parameters for RF.
         n_try (int, optional): Number of trials. Defaults to 10000.
-        random_state (int, optional): Random seed. Defaults to 123.
-
-    Returns:
-        _type_: _description_
+        percentile (list, optional): Percentiles to calculate. Defaults to [10, 50, 90].
     """
-    reserves = np.empty(0)
+    area = np.empty(0)
+    thickness = np.empty(0)
+    porosity = np.empty(0)
+    water_saturation = np.empty(0)
+    volume_factor = np.empty(0)
+    recovery_factor = np.empty(0)
+    volumes = np.empty(0)
     for i in range(n_try):
-        result = volumetric_method(
+        a, h, poro, sw, bo, rf = volumetric_method(
             area_bound=area_bound,
             thickness_bound=thickness_bound,
             porosity_bound=porosity_bound,
             water_saturation_bound=water_saturation_bound,
             volume_factor_bound=volume_factor_bound,
-            recovery_factor_bound=recovery_factor_bound,
-            random_state=random_state
+            recovery_factor_bound=recovery_factor_bound
         )
-        reserves = np.append(reserves, result)
-    return reserves
+        area = np.append(area, a)
+        thickness = np.append(thickness, h)
+        porosity = np.append(porosity, poro)
+        water_saturation = np.append(water_saturation, sw)
+        volume_factor = np.append(volume_factor, bo)
+        recovery_factor = np.append(recovery_factor, rf)
+        result = (43560 * 0.1781) * a * h * poro * (1 - sw) / bo * rf
+        volumes = np.append(volumes, result * 1e-6)
+
+    # Plot tornado chart
+    plt.figure(figsize=(10, 2))
+    plt.boxplot(area, vert=False, labels=['Area (acre)'], widths=0.5, )
+    plt.figure(figsize=(10, 2))
+    plt.boxplot(thickness, vert=False, labels=['Thickness (ft)'], widths=0.5)
+    plt.figure(figsize=(10, 2))
+    plt.boxplot(porosity, vert=False, labels=['Porosity (frac)'], widths=0.5)
+    plt.figure(figsize=(10, 2))
+    plt.boxplot(water_saturation, vert=False, labels=['Water Saturation (frac)'], widths=0.5)
+    plt.figure(figsize=(10, 2))
+    plt.boxplot(volume_factor, vert=False, labels=['Volume Factor'], widths=0.5)
+    plt.figure(figsize=(10, 2))
+    plt.boxplot(recovery_factor, vert=False, labels=['Recovery Factor (frac)'], widths=0.5)
+
+    plt.figure(figsize=(12, 6))
+    a = np.hstack(volumes)
+    _ = plt.hist(a, density=True, bins='auto')  # arguments are passed to np.histogram
+    plt.title(f"Volume Estimation ({n_try} samples)")
+    plt.xlabel('Volume (MM bbl)')
+    for i, pct in enumerate(np.percentile(volumes, percentile)):
+        plt.axvline(x=pct, color='r', linestyle='dashed', label=f'P{percentile[i]}: {round(pct)} MM bbl')
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+
+    return volumes, area, thickness, porosity, water_saturation, volume_factor, recovery_factor
