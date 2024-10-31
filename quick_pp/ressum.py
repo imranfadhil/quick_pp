@@ -1,9 +1,12 @@
 import numpy as np
 import pandas as pd
 from scipy.stats import gmean
-import random
 from scipy.stats import truncnorm
+import random
 import matplotlib.pyplot as plt
+from SALib.analyze.sobol import analyze
+from SALib.sample.sobol import sample
+from SALib.test_functions import Ishigami
 
 
 def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
@@ -209,3 +212,72 @@ def mc_volumetric_method(
     plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
     return volumes, area, thickness, porosity, water_saturation, volume_factor, recovery_factor
+
+
+def sensitivity_analysis(
+    area_bound: tuple,
+    thickness_bound: tuple,
+    porosity_bound: tuple,
+    water_saturation_bound: tuple,
+    volume_factor_bound: tuple,
+    recovery_factor_bound: tuple
+):
+    """Sensitivity analysis for volumetric method.
+
+    Args:
+        area_bound (tuple): (min, max, mean, std) in acre.
+            - Truncated normal distribution parameters for area.
+        thickness_bound (tuple): (min, max, mean, std) in feet.
+            - Truncated normal distribution parameters for thickness.
+        porosity_bound (tuple): (min, max, mean, std) in fraction.
+            - Truncated normal distribution parameters for porosity.
+        water_saturation_bound (tuple): (min, max, mode) in fraction.
+            - Triangular distribution parameters for water saturation.
+        volume_factor_bound (tuple): (min, max) unitless.
+            - Uniform distribution parameters for volume factor.
+        recovery_factor_bound (tuple): (min, max, mean, std) in fraction.
+            - Truncated normal distribution parameters for RF.
+    """
+    # Define the model inputs
+    problem = {
+        'num_vars': 6,
+        'names': ['area', 'thickness', 'porosity', 'water_saturation', 'volume_factor', 'recovery_factor'],
+        'bounds': [
+            [area_bound[0], area_bound[1]],
+            [thickness_bound[0], thickness_bound[1]],
+            [porosity_bound[0], porosity_bound[1]],
+            [water_saturation_bound[0], water_saturation_bound[1]],
+            [volume_factor_bound[0], volume_factor_bound[1]],
+            [recovery_factor_bound[0], recovery_factor_bound[1]]
+        ]
+    }
+
+    # Generate samples
+    param_values = sample(problem, 1024)
+
+    # Run model (example)
+    Y = Ishigami.evaluate(param_values)
+
+    # Perform analysis
+    Si = analyze(problem, Y, print_to_console=True)
+
+    # Extract the sensitivity indices
+    S1 = Si['S1']
+    S1_conf = Si['S1_conf']
+    names = problem['names']
+
+    # Sort the indices for better visualization
+    sorted_indices = np.argsort(S1)
+    sorted_S1 = S1[sorted_indices]
+    sorted_S1_conf = S1_conf[sorted_indices]
+    sorted_names = [names[i] for i in sorted_indices]
+
+    # Plot the tornado chart
+    plt.figure(figsize=(10, 6))
+    plt.barh(range(len(sorted_S1)), sorted_S1, xerr=sorted_S1_conf,
+             align='center', alpha=0.7, color='blue', ecolor='black')
+    plt.yticks(range(len(sorted_S1)), sorted_names)
+    plt.xlabel('First-order Sensitivity Index')
+    plt.title('Tornado Chart of Sensitivity Indices')
+    plt.grid(True)
+    plt.show()
