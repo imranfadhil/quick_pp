@@ -33,14 +33,13 @@ def poroperm_xplot(poro, perm, a=None, b=None, core_group=None, label='', log_lo
         line_color[-1] = 0.5
         cpore = np.geomspace(0.05, 0.5, 30)
         plt.plot(cpore, power_law_func(cpore, a, b), color=line_color, label=label, linestyle='dashed')
+        plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
     plt.xlabel('CPORE (frac)')
     plt.xlim(0, 0.5)
     plt.ylabel('CPERM (mD)')
     plt.yscale('log')
     if log_log:
         plt.xscale('log')
-    if label:
-        plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
 
 def bvw_xplot(bvw, pc, a=None, b=None, label=None, ylim=None, log_log=False):
