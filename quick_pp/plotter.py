@@ -54,25 +54,24 @@ COLOR_DICT = {
 }
 
 
-def update_fluid_contacts(well_data, well_name: str, well_config: dict):
+def update_fluid_contacts(well_data, well_config: dict):
     """Update fluid flags based on fluid contacts.
 
     Args:
         well_data (pandas.DataFrame): Pandas dataframe containing well log data.
-        well_name (str): well_name
         well_config (dict): Dictionary containing well sorting and fluid contacts.
 
     Returns:
         pandas.DataFrame: Pandas dataframe containing updated fluid
     """
-    owc = well_config[well_name].get('OWC', np.nan)
-    odt = well_config[well_name].get('ODT', np.nan)
-    out = well_config[well_name].get('OUT', np.nan)
-    goc = well_config[well_name].get('GOC', np.nan)
-    gdt = well_config[well_name].get('GDT', np.nan)
-    gut = well_config[well_name].get('GUT', np.nan)
-    gwc = well_config[well_name].get('GWC', np.nan)
-    wut = well_config[well_name].get('WUT', np.nan)
+    owc = well_config.get('OWC', np.nan)
+    odt = well_config.get('ODT', np.nan)
+    out = well_config.get('OUT', np.nan)
+    goc = well_config.get('GOC', np.nan)
+    gdt = well_config.get('GDT', np.nan)
+    gut = well_config.get('GUT', np.nan)
+    gwc = well_config.get('GWC', np.nan)
+    wut = well_config.get('WUT', np.nan)
 
     well_data = well_data.copy()
     well_data['OIL_FLAG'] = np.where(
@@ -93,28 +92,114 @@ def update_fluid_contacts(well_data, well_name: str, well_config: dict):
     return well_data
 
 
-def well_config_example():
-    well_config = {
-        'X': {'sorting': 0, 'GUT': 0, 'GDT': 0, 'GOC': 0, 'GWC': 0, 'OUT': 0, 'ODT': 0, 'OWC': 0, 'WUT': 0},
-    }
+def generate_zone_config(zones: list = ['ALL']):
+    """Generate zone configuration.
+
+    Args:
+        zones (list, optional): List of zone names. Defaults to ['ALL'].
+
+    Returns:
+        dict: Zone configuration
+    """
+    zone_config = {}
+    for zone in zones:
+        zone_config[zone] = {
+            'GUT': 0, 'GDT': 0, 'GOC': 0, 'GWC': 0, 'OUT': 0, 'ODT': 0, 'OWC': 0, 'WUT': 0
+        }
+    return zone_config
+
+
+def update_zone_config(zone_config: dict, zone: str, fluid_contacts: dict):
+    """Update zone configuration with fluid contacts.
+
+    Args:
+        zone_config (dict): Dictionary containing zone configuration.
+        zone (str): Zone name for which configuration is to be updated.
+        fluid_contacts (dict): Fluid contacts for the specified zone.
+
+    Returns:
+        dict: Updated zone configuration
+    """
+    if zone in zone_config:
+        zone_config[zone].update(fluid_contacts)
+    else:
+        zone_config[zone] = fluid_contacts
+    return zone_config
+
+
+def generate_well_config(well_names: list = ['X']):
+    """Generate well configuration.
+
+    Args:
+        well_names (list, optional): List of well names. Defaults to ['X'].
+
+    Returns:
+        dict: Well configuration
+    """
+    well_config = {}
+    for i, well in enumerate(well_names):
+        well_config[well] = {
+            'sorting': i + 1,
+            'zones': {
+                'ALL': {'GUT': 0, 'GDT': 0, 'GOC': 0, 'GWC': 0, 'OUT': 0, 'ODT': 0, 'OWC': 0, 'WUT': 0},
+            }
+        }
+    return well_config
+
+
+def update_well_config(
+        well_config: dict, well_name: str, zone: str = '', fluid_contacts: dict = {}, sorting: int = None):
+    """Update well configuration with fluid contacts.
+
+    Args:
+        well_config (dict): Dictionary containing well sorting and fluid contacts.
+        well_name (str): Well name for which configuration is to be updated.
+        zone (str): Zone name for which configuration is to be updated.
+        fluid_contacts (dict): Fluid contacts for the specified zone.
+        sorting (int, optional): Sorting of the wells on the stick plot. Defaults to None.
+
+    Returns:
+        dict: Updated well configuration
+    """
+    if zone in well_config[well_name]['zones']:
+        well_config[well_name]['zones'][zone].update(fluid_contacts)
+    elif zone:
+        well_config[well_name]['zones'][zone] = fluid_contacts
+
+    if sorting:
+        well_config[well_name]['sorting'] = sorting
     return well_config
 
 
 def assert_well_config_structure(well_config):
-    required_keys = {'sorting'}
+    """Assert well configuration structure.
+
+    Args:
+        well_config (dict): Dictionary containing well sorting and fluid contacts.
+    """
+    required_keys = {'sorting', 'zones'}
     optional_keys = {'GUT', 'GDT', 'GOC', 'GWC', 'OUT', 'ODT', 'OWC', 'WUT'}
     for well, config in well_config.items():
         assert isinstance(config, dict), f"Value for well '{well}' is not a dictionary"
         assert set(config.keys()).intersection(required_keys), f"Well '{well}' does not have the required keys"
-        assert set(config.keys()).intersection(optional_keys), f"Well '{well}' has invalid keys"
+
+        for zone, fluid_contacts in config['zones'].items():
+            assert isinstance(fluid_contacts, dict), f"Value for zone '{zone}' in well '{well}' is not a dictionary"
+            assert set(fluid_contacts.keys()).intersection(
+                optional_keys), f"zone '{zone}' in well '{well}' has invalid keys"
 
 
-def stick_plot(data, well_config: dict):
-    """Generate stick plot with water saturation and fluid contacts.
+def stick_plot(data, well_config: dict, zone: str = 'ALL'):
+    """Generate stick plot with water saturation and fluid contacts for specified zone.
 
     Example of well_config:
     well_config = {
-        'X': {'sorting': 0, 'GUT': 0, 'GDT': 0, 'GOC': 0, 'GWC': 0, 'OUT': 0, 'ODT': 0, 'OWC': 0, 'WUT': 0},
+        'X': {
+            'sorting': 0,
+            'zones': {
+                'ALL': {'GUT': 0, 'GDT': 0, 'GOC': 0, 'GWC': 0, 'OUT': 0, 'ODT': 0, 'OWC': 0, 'WUT': 0},
+            }
+        }
     }
 
     Args:
@@ -133,7 +218,7 @@ def stick_plot(data, well_config: dict):
     # Plot each well's data
     for ax, well_name in zip(axes, well_names):
         well_data = data[data['WELL_NAME'] == well_name]
-        well_data = update_fluid_contacts(well_data, well_name, well_config)
+        well_data = update_fluid_contacts(well_data, well_config[well_name]['zones'][zone])
         ax.plot(well_data['SWT'], well_data['DEPTH'], label='SWT')
 
         # Fill between based on fluid flag
