@@ -54,6 +54,106 @@ COLOR_DICT = {
 }
 
 
+def update_fluid_contacts(well_data, well_name: str, well_config: dict):
+    """Update fluid flags based on fluid contacts.
+
+    Args:
+        well_data (pandas.DataFrame): Pandas dataframe containing well log data.
+        well_name (str): well_name
+        well_config (dict): Dictionary containing well sorting and fluid contacts.
+
+    Returns:
+        pandas.DataFrame: Pandas dataframe containing updated fluid
+    """
+    owc = well_config[well_name].get('OWC', np.nan)
+    odt = well_config[well_name].get('ODT', np.nan)
+    out = well_config[well_name].get('OUT', np.nan)
+    goc = well_config[well_name].get('GOC', np.nan)
+    gdt = well_config[well_name].get('GDT', np.nan)
+    gut = well_config[well_name].get('GUT', np.nan)
+    gwc = well_config[well_name].get('GWC', np.nan)
+    wut = well_config[well_name].get('WUT', np.nan)
+
+    well_data = well_data.copy()
+    well_data['OIL_FLAG'] = np.where(
+        ((well_data['DEPTH'] > out) | (well_data['DEPTH'] > goc)) & (
+            (well_data['DEPTH'] < odt) | (well_data['DEPTH'] < owc)), 1, 0)
+
+    well_data['GAS_FLAG'] = np.where(
+        ((well_data['DEPTH'] < gdt) | (well_data['DEPTH'] < gwc) | (well_data['DEPTH'] < goc)) & (
+            well_data['DEPTH'] > gut), 1, 0)
+
+    well_data['WATER_FLAG'] = np.where(
+        ((well_data['DEPTH'] > wut) | (well_data['DEPTH'] > owc) | (well_data['DEPTH'] > gwc)), 1, 0)
+
+    well_data['FLUID_FLAG'] = np.where(
+        well_data['OIL_FLAG'] == 1, 1, np.where(
+            well_data['GAS_FLAG'] == 1, 2, 0))
+
+    return well_data
+
+
+def well_config_example():
+    well_config = {
+        'X': {'sorting': 0, 'GUT': 0, 'GDT': 0, 'GOC': 0, 'GWC': 0, 'OUT': 0, 'ODT': 0, 'OWC': 0, 'WUT': 0},
+    }
+    return well_config
+
+
+def assert_well_config_structure(well_config):
+    required_keys = {'sorting'}
+    optional_keys = {'GUT', 'GDT', 'GOC', 'GWC', 'OUT', 'ODT', 'OWC', 'WUT'}
+    for well, config in well_config.items():
+        assert isinstance(config, dict), f"Value for well '{well}' is not a dictionary"
+        assert set(config.keys()).intersection(required_keys), f"Well '{well}' does not have the required keys"
+        assert set(config.keys()).intersection(optional_keys), f"Well '{well}' has invalid keys"
+
+
+def stick_plot(data, well_config: dict):
+    """Generate stick plot with water saturation and fluid contacts.
+
+    Example of well_config:
+    well_config = {
+        'X': {'sorting': 0, 'GUT': 0, 'GDT': 0, 'GOC': 0, 'GWC': 0, 'OUT': 0, 'ODT': 0, 'OWC': 0, 'WUT': 0},
+    }
+
+    Args:
+        data (pandas.DataFrame): Pandas dataframe containing well log data.
+        well_config (dict): Dictionary containing well sorting and fluid contacts.
+    """
+    assert 'SWT' in data.columns, 'SWT column not found in data.'
+    assert_well_config_structure(well_config)
+
+    # Sort well names based on sorting key
+    well_names = sorted(data['WELL_NAME'].unique(), key=lambda name: well_config[name]['sorting'])
+
+    # Create subplots
+    fig, axes = plt.subplots(nrows=1, ncols=len(well_names), sharey=True, figsize=(len(well_names) * 2, 10))
+
+    # Plot each well's data
+    for ax, well_name in zip(axes, well_names):
+        well_data = data[data['WELL_NAME'] == well_name]
+        well_data = update_fluid_contacts(well_data, well_name, well_config)
+        ax.plot(well_data['SWT'], well_data['DEPTH'], label='SWT')
+
+        # Fill between based on fluid flag
+        ax.fill_betweenx(
+            well_data['DEPTH'], 0, 1, where=well_data['FLUID_FLAG'] == 1, color='g', alpha=0.3, label='Oil')
+        ax.fill_betweenx(
+            well_data['DEPTH'], 0, 1, where=well_data['FLUID_FLAG'] == 2, color='r', alpha=0.3, label='Gas')
+        ax.fill_betweenx(
+            well_data['DEPTH'], 0, 1, where=well_data['FLUID_FLAG'] == 0, color='b', alpha=0.3, label='Water')
+
+        ax.set_title(f'Well: {well_name}')
+        ax.set_xlim(0, 1)
+        ax.legend()
+
+    axes[0].set_ylabel('Depth')
+    fig.subplots_adjust(wspace=0.3, hspace=0)
+    plt.gca().invert_yaxis()
+    plt.show()
+
+
 def neutron_density_xplot(nphi, rhob,
                           dry_min1_point: tuple,
                           dry_clay_point: tuple,
