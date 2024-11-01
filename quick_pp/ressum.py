@@ -6,7 +6,6 @@ import random
 import matplotlib.pyplot as plt
 from SALib.analyze.sobol import analyze
 from SALib.sample.sobol import sample
-from SALib.test_functions import Ishigami
 
 
 def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
@@ -214,6 +213,24 @@ def mc_volumetric_method(
     return volumes, area, thickness, porosity, water_saturation, volume_factor, recovery_factor
 
 
+def calculate_volume(x, area, thickness, porosity, water_saturation, volume_factor, recovery_factor):
+    """Calculate volume using the volumetric method.
+
+    Args:
+        area (float): Area in acre.
+        thickness (float): Thickness in feet.
+        porosity (float): Porosity in fraction.
+        water_saturation (float): Water saturation in fraction.
+        volume_factor (float): Volume factor.
+        recovery_factor (float): Recovery factor in fraction.
+
+    Returns:
+        float: Estimated volume in MM bbl.
+    """
+    return x * (43560 * 0.1781) * area * thickness * porosity * (1 - water_saturation) / (
+        volume_factor) * recovery_factor * 1e-6
+
+
 def sensitivity_analysis(
     area_bound: tuple,
     thickness_bound: tuple,
@@ -253,13 +270,14 @@ def sensitivity_analysis(
     }
 
     # Generate samples
-    param_values = sample(problem, 1024)
+    param_values = sample(problem, 2**10)
 
-    # Run model (example)
-    Y = Ishigami.evaluate(param_values)
+    # evaluate
+    x = np.linspace(-1, 1, 100)
+    y = np.array([calculate_volume(x, *params) for params in param_values])
 
-    # Perform analysis
-    Si = analyze(problem, Y, print_to_console=True)
+    # analyse
+    Si = [analyze(problem, Y) for Y in y.T][0]
 
     # Extract the sensitivity indices
     S1 = Si['S1']
