@@ -193,14 +193,25 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
     """Generate stick plot with water saturation and fluid contacts for specified zone.
 
     Example of well_config:
+    ```python
     well_config = {
         'X': {
             'sorting': 0,
             'zones': {
-                'ALL': {'GUT': 0, 'GDT': 0, 'GOC': 0, 'GWC': 0, 'OUT': 0, 'ODT': 0, 'OWC': 0, 'WUT': 0},
+                'ALL': {
+                    'GUT': 0,
+                    'GDT': 0,
+                    'GOC': 0,
+                    'GWC': 0,
+                    'OUT': 0,
+                    'ODT': 0,
+                    'OWC': 0,
+                    'WUT': 0
+                },
             }
         }
     }
+    ```
 
     Args:
         data (pandas.DataFrame): Pandas dataframe containing well log data.
@@ -217,7 +228,7 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
 
     # Plot each well's data
     for ax, well_name in zip(axes, well_names):
-        well_data = data[data['WELL_NAME'] == well_name]
+        well_data = data[(data['WELL_NAME'] == well_name) & (data['ZONES'] == zone)].copy()
         well_data = update_fluid_contacts(well_data, well_config[well_name]['zones'][zone])
         ax.plot(well_data['SWT'], well_data['DEPTH'], label='SWT')
 

@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import classification_report, r2_score, mean_absolute_error, auc
+from sklearn.metrics import (classification_report, auc, ConfusionMatrixDisplay, confusion_matrix,
+                             r2_score, mean_absolute_error)
 
 from quick_pp.utils import min_max_line
 from quick_pp.lithology import shale_volume_steiber
@@ -117,8 +118,10 @@ def plot_fzi(cpore, cperm, fzi=None, rock_type=None, title='Flow Zone Indicator 
 
 def plot_rfn(cpore, cperm, rock_type=None, title='Lucia RFN'):
     """Plot the Rock Fabric Number (RFN) lines on porosity and permeability cross plot. The permeability (mD) is
-    calculated based on Lucia-Jenkins, 2003 -
-    > perm = 10**(9.7892 - 12.0838 * log(RFN) + (8.6711 - 8.2965 * log(RFN)) * log(phi))
+    calculated based on Lucia-Jenkins, 2003.
+    ```
+    perm = 10**(9.7892 - 12.0838 * log(RFN) + (8.6711 - 8.2965 * log(RFN)) * log(phi))
+    ```
 
     Args:
         cpore (float): Critical porosity in v/v
@@ -150,8 +153,10 @@ def plot_rfn(cpore, cperm, rock_type=None, title='Lucia RFN'):
 
 def plot_winland(cpore, cperm, rock_type=None, title='Winland R35'):
     """Plot the Winland R35 lines on porosity and permeability cross plot. The permeability (mD) is calculated based on
-    Winland, 1979 -
-    > perm = 10**((log(r35) - 0.731 + 0.864 * log(phi)) / 0.538)
+    Winland, 1979.
+    ```
+    perm = 10**((log(r35) - 0.731 + 0.864 * log(phi)) / 0.538)
+    ```
 
     Args:
         cpore (float): Critical porosity in v/v
@@ -320,58 +325,83 @@ def rock_typing(curve, cut_offs=[.1, .2, .3, .4], higher_is_better=True):
                                       np.where(curve < cut_offs[3], rock_type[3], rock_type[4])))))
 
 
-def train_rock_type(X, y):
-    """Train a classification Random Forest model to predict rock type.
+def train_classification_model(data, input_features: list, target_feature: str):
+    """Train a classification Random Forest model to predict a binary feature.
 
     Args:
-        X (DataFrame): Dataframe containing features and rock type.
-        y (Series): Rock type.
+        data (DataFrame): Dataframe containing input and target features.
+        input_features (list): List of input features.
+        target_feature (str): The target feature.
 
     Returns:
         RandomForestClassifier: Trained model.
     """
     random_seed = 123
+    X = data[input_features]
+    y = data[target_feature]
     y = y.astype(int)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=random_seed, stratify=y)
+
+    # Hyperparameter tuning
     param_dist = {
         'n_estimators': [10, 100, 200],
         'max_depth': [5, 30, None],
         'min_samples_split': [2, 5, 10],
     }
-    model = RandomizedSearchCV(RandomForestClassifier(), param_dist, random_state=random_seed)
+    model = RandomizedSearchCV(RandomForestClassifier(), param_dist, cv=5, random_state=random_seed)
     model.fit(X_train, y_train)
 
+    # Model evaluation
     y_pred = model.predict(X_test)
+    print(f'Score for {target_feature} model\n')
     print('Best parameters found:\n', model.best_params_)
     print('Classification Report:\n', classification_report(y_test, y_pred))
+    cm = confusion_matrix(y_test, y_pred, labels=model.classes_)
+    ConfusionMatrixDisplay(cm, display_labels=model.classes_).plot()
 
     return model
 
 
-def train_fzi(X, y, stratifier=None):
-    """Train a regression Random Forest model to predict FZI.
+def train_regression_model(data, input_features: list, target_feature: list, stratifier=None):
+    """Train a regression Random Forest model to predict a continuous feature.
 
     Args:
-        X (DataFrame): Dataframe containing features and rock type.
-        y (Series): Flow Zone Indicator.
+        data (DataFrame): Dataframe containing input, target and stratifier features.
+        input_features (list): List of input features.
+        target_feature (str): The target feature.
+        stratifier (array, optional): Stratifier for train-test split. Defaults to None.
 
     Returns:
         RandomForestRegressor: Trained model.
     """
     random_seed = 123
+    X = data[input_features]
+    y = data[target_feature]
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=random_seed, stratify=stratifier)
+
+    # Hyperparameter tuning
     param_dist = {
-        'n_estimators': [10, 100, 200],
+        'n_estimators': [10, 50, 100],
         'max_depth': [5, 30, None],
         'min_samples_split': [2, 5, 10],
     }
-    model = RandomizedSearchCV(RandomForestRegressor(), param_dist, random_state=random_seed)
+    model = RandomizedSearchCV(RandomForestRegressor(), param_dist, cv=3, random_state=random_seed)
     model.fit(X_train, y_train)
 
+    # Model evaluation
     y_pred = model.predict(X_test)
+    print(f'Score for {target_feature} model\n')
     print('Best parameters found:\n', model.best_params_)
     print('R2 Score:', r2_score(y_test, y_pred))
     print('Mean Absolute Error:', mean_absolute_error(y_test, y_pred))
+
+    # Plot the true vs predicted values
+    plt.figure(figsize=(5, 4))
+    plt.plot(y_test, y_pred, 'o')
+    plt.xlabel('True')
+    plt.ylabel('Predicted')
+    plt.title(f'{target_feature} Prediction')
+    plt.show()
 
     return model
