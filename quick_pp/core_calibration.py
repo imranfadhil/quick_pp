@@ -69,7 +69,7 @@ def bvw_xplot(bvw, pc, a=None, b=None, label=None, ylim=None, log_log=False):
         plt.yscale('log')
 
 
-def pc_xplot(sw, pc, label=None):
+def pc_xplot(sw, pc, label=None, ylim=None):
     """Generate J-Sw cross plot.
 
     Args:
@@ -85,6 +85,7 @@ def pc_xplot(sw, pc, label=None):
     plt.xlabel('Sw (frac)')
     plt.xlim(0.01, 1)
     plt.ylabel('Pc (psi)')
+    plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
     if label:
         plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
@@ -244,7 +245,6 @@ def sw_shf_leverett_j(perm, phit, depth, fwl, ift, theta, gw, ghc, a, b, phie=No
     h = fwl - depth
     pc = h * (gw - ghc)
     shf = (a / leverett_j(pc, ift, theta, perm, phit))**(1 / b)
-    # return np.where(shf > 1, 1, shf)
     return shf if not phie else shf * (1 - (phie / phit)) + (phie / phit)
 
 
@@ -263,7 +263,6 @@ def sw_shf_cuddy(phit, depth, fwl, gw, ghc, a, b):
     """
     h = fwl - depth
     shf = (h * (gw - ghc) / a)**(1 / b) / phit
-    # return np.where(shf > 1, 1, shf)
     return shf
 
 
@@ -291,5 +290,4 @@ def sw_shf_choo(perm, phit, phie, depth, fwl, ift, theta, gw, ghc, b0=0.4):
     shf = 10**((2 * b0 - 1) * np.log10(1 + swb**-1) + np.log10(1 + swb)) / (
         (0.2166 * (pc / (ift * abs(np.cos(np.radians(theta))))) * (
             perm / phit)**(0.5))**(b0 * np.log10(1 + swb**-1) / 3))
-    # return np.where(shf > 1, 1, shf)
     return shf

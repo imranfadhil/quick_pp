@@ -317,12 +317,13 @@ def rock_typing(curve, cut_offs=[.1, .2, .3, .4], higher_is_better=True):
     Returns:
         float: Rock type.
     """
-    rock_type = [5, 4, 3, 2, 1] if higher_is_better else [1, 2, 3, 4, 5]
-    return np.where(np.isnan(curve), np.nan, np.where(
-        curve < cut_offs[0], rock_type[0],
-                    np.where(curve < cut_offs[1], rock_type[1],
-                             np.where(curve < cut_offs[2], rock_type[2],
-                                      np.where(curve < cut_offs[3], rock_type[3], rock_type[4])))))
+    # Set number of rock types
+    rock_type = np.arange(1, len(cut_offs) + 2)
+    rock_type = rock_type[::-1] if higher_is_better else rock_type
+    # Rock typing based on cutoffs
+    conditions = [curve < cut_off for cut_off in cut_offs] + [curve >= cut_offs[-1]]
+    choices = rock_type[-len(conditions):]
+    return np.where(np.isnan(curve), np.nan, np.select(conditions, choices))
 
 
 def train_classification_model(data, input_features: list, target_feature: str):
