@@ -48,10 +48,9 @@ COLOR_DICT = {
     'SHF': '#618F63',
 }
 
-for i in range(1, 21):
-    COLOR_DICT[f'ROCK_FLAG_{i}'] = f'hsl({i * 36}, 70%, 40%)'
-    lightness = 50 + i * 2
-    COLOR_DICT[f'EARTH_FLAG_{i}'] = f'hsl(30, 70%, {lightness}%)'
+for i in range(1, 30):
+    lightness = 95 - i * 3
+    COLOR_DICT[f'ROCK_FLAG_{i}'] = f'hsl(30, 70%, {lightness}%)'
 
 
 def update_fluid_contacts(well_data, well_config: dict):
@@ -193,7 +192,7 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
     """Generate stick plot with water saturation and fluid contacts for specified zone.
 
     Example of well_config:
-    ```python
+    ```
     well_config = {
         'X': {
             'sorting': 0,

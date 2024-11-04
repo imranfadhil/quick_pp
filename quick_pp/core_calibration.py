@@ -27,16 +27,17 @@ def poroperm_xplot(poro, perm, a=None, b=None, core_group=None, label='', log_lo
         label (str, optional): Label for the data group. Defaults to ''.
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
-    sc = plt.scatter(poro, perm, marker='o', c=core_group, cmap='Set1')
+    sc = plt.scatter(poro, perm, marker='.', c=core_group, cmap='Set1')
     if a and b:
         line_color = sc.get_facecolors()[0]
         line_color[-1] = 0.5
-        cpore = np.geomspace(0.05, 0.5, 30)
+        cpore = np.geomspace(0.01, 0.5, 30)
         plt.plot(cpore, power_law_func(cpore, a, b), color=line_color, label=label, linestyle='dashed')
         plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
     plt.xlabel('CPORE (frac)')
-    plt.xlim(0, 0.5)
+    plt.xlim(0.001, 0.5)
     plt.ylabel('CPERM (mD)')
+    plt.ylim(.001, 10000)
     plt.yscale('log')
     if log_log:
         plt.xscale('log')
@@ -128,13 +129,62 @@ def fit_j_curve(sw, j):
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        popt, _ = curve_fit(inv_power_law_func, sw, j, p0=[.01, .5])
+        popt, _ = curve_fit(inv_power_law_func, sw, j, p0=[.01, 1])
         a = [round(c, 3) for c in popt][0]
         b = [round(c, 3) for c in popt][1]
         return a, b
     except Exception as e:
         print(e)
         return 1, 1
+
+
+def skelt_harrison_xplot(sw, pc, gw, ghc, a, b, c, d, core_group=None, label=None, ylim=None):
+    """Generate Skelt-Harrison curve.
+
+    Args:
+        pc (float): Capillary pressure (psi).
+        sw (float): Core water saturation (frac).
+        h (float): Height above free water level (ft).
+        a (float): a constant from the best-fit curve. Related to Swirr.
+        b (float): b constant from the best-fit curve. Related to HAFWL.
+        c (float): c constant from the best-fit curve. Related to PTSD.
+        d (float): d constant from the best-fit curve. Related to entry pressure.
+    """
+    plt.scatter(sw, pc, marker='.', c=core_group, cmap='Set1')
+    h = np.geomspace(.01, 10000, 100)
+    pci = h * (gw - ghc) * .433  # Convert g/cc to psi/ft
+    plt.plot(skelt_harrison_func(h, a, b, c, d), pci, label=label)
+    plt.ylabel('Pc (psi)')
+    plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
+    plt.xlabel('Sw (frac)')
+    plt.xlim(0, 1)
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+
+
+def skelt_harrison_func(h, a, b, c, d):
+    return 1 - a * np.exp(-(b / (h + d))**c)
+
+
+def fit_skelt_harrison_curve(sw, h):
+    """Estimate a and b constants of best fit given core water saturation and capillary pressure values.
+
+    Args:
+        sw (float): Core water saturation (frac).
+        h (float): Height above free water level (ft).
+
+    Returns:
+        tuple: a and b constants from the best-fit curve.
+    """
+    try:
+        popt, _ = curve_fit(skelt_harrison_func, h, sw, p0=[.9, 100, 1.5, 1.5])
+        a = [round(c, 3) for c in popt][0]
+        b = [round(c, 3) for c in popt][1]
+        c = [round(c, 3) for c in popt][2]
+        d = [round(c, 3) for c in popt][3]
+        return a, b, c, d
+    except Exception as e:
+        print(e)
+        return 1, 1, 1, 1
 
 
 def perm_transform(poro, a, b):
@@ -202,9 +252,22 @@ def pseudo_leverett_j():
     pass
 
 
-def sw_skelt_harrison():
-    """TODO: Estimate water saturation based on Skelt-Harrison."""
-    pass
+def sw_skelt_harrison(depth, fwl, a, b, c, d):
+    """Estimate water saturation based on Skelt-Harrison.
+
+    Args:
+        depth (float): True vertical depth.
+        fwl (float): Free water level in true vertical depth.
+        a (float): a constant from the best-fit curve.
+        b (float): b constant from the best-fit curve.
+        c (float): c constant from the best-fit curve.
+        d (float): d constant from the best-fit curve.
+
+    Returns:
+        float: Water saturation.
+    """
+    h = fwl - depth
+    return skelt_harrison_func(h, a, b, c, d)
 
 
 def sw_cuddy(phit, h, a, b):
@@ -233,8 +296,8 @@ def sw_shf_leverett_j(perm, phit, depth, fwl, ift, theta, gw, ghc, a, b, phie=No
         fwl (float): Free water level in true vertical depth (ft).
         ift (float): Interfacial tension (dynes/cm).
         theta (float): Wetting angle (degree).
-        gw (float): Gas density (psi/ft).
-        ghc (float): Gas height (psi/ft).
+        gw (float): Gas density (g/cc).
+        ghc (float): Gas height (g/cc).
         a (float): A constant from J function.
         b (float): B constant from J function.
         phie (float): Effective porosity (frac), required for clay bound water calculation. Defaults to None.
@@ -243,7 +306,7 @@ def sw_shf_leverett_j(perm, phit, depth, fwl, ift, theta, gw, ghc, a, b, phie=No
         float: Water saturation from saturation height function.
     """
     h = fwl - depth
-    pc = h * (gw - ghc)
+    pc = h * (gw - ghc) * .433  # Convert g/cc to psi/ft
     shf = (a / leverett_j(pc, ift, theta, perm, phit))**(1 / b)
     return shf if not phie else shf * (1 - (phie / phit)) + (phie / phit)
 
@@ -255,6 +318,8 @@ def sw_shf_cuddy(phit, depth, fwl, gw, ghc, a, b):
         phit (float): Porosity (frac).
         depth (float): True vertical depth (ft).
         fwl (float): Free water level in true vertical depth (ft).
+        gw (float): Gas density (g/cc).
+        ghc (float): Gas height (g/cc).
         a (float): Cementation exponent.
         b (float): Saturation exponent.
 
@@ -262,7 +327,7 @@ def sw_shf_cuddy(phit, depth, fwl, gw, ghc, a, b):
         float: Water saturation from saturation height function.
     """
     h = fwl - depth
-    shf = (h * (gw - ghc) / a)**(1 / b) / phit
+    shf = (h * (gw - ghc) * .433 / a)**(1 / b) / phit
     return shf
 
 
@@ -277,8 +342,8 @@ def sw_shf_choo(perm, phit, phie, depth, fwl, ift, theta, gw, ghc, b0=0.4):
         fwl (float): Free water level in true vertical depth (ft).
         ift (float): Interfacial tension (dynes/cm).
         theta (float): Wetting angle (degree).
-        gw (float): Gas density (psi/ft).
-        ghc (float): Gas height (psi/ft).
+        gw (float): Gas density (g/cc).
+        ghc (float): Gas height (g/cc).
         b0 (float): _description_. Defaults to 0.4.
 
     Returns:
@@ -286,7 +351,7 @@ def sw_shf_choo(perm, phit, phie, depth, fwl, ift, theta, gw, ghc, b0=0.4):
     """
     swb = 1 - (phie / phit)
     h = fwl - depth
-    pc = h * (gw - ghc)
+    pc = h * (gw - ghc) * .433
     shf = 10**((2 * b0 - 1) * np.log10(1 + swb**-1) + np.log10(1 + swb)) / (
         (0.2166 * (pc / (ift * abs(np.cos(np.radians(theta))))) * (
             perm / phit)**(0.5))**(b0 * np.log10(1 + swb**-1) / 3))

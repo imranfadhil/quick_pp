@@ -68,7 +68,7 @@ def calc_r35(pore, perm):
     Returns:
         float: R35
     """
-    return 10**(.732 + .588 * np.log10(perm) - .864 * np.log10(pore * 100))
+    return 10**(.731 + .538 * np.log10(perm) - .864 * np.log10(pore * 100))
 
 
 def calc_r35_perm(r35, pore):
@@ -84,7 +84,7 @@ def calc_r35_perm(r35, pore):
     return 10**((np.log10(r35) - 0.732 + 0.864 * np.log10(pore * 100)) / 0.588)
 
 
-def plot_fzi(cpore, cperm, fzi=None, rock_type=None, title='Flow Zone Indicator (FZI)'):
+def plot_fzi(cpore, cperm, cut_offs=None, rock_type=None, title='Flow Zone Indicator (FZI)'):
     """Plot the FZI cross plot.
 
     Args:
@@ -94,10 +94,10 @@ def plot_fzi(cpore, cperm, fzi=None, rock_type=None, title='Flow Zone Indicator 
     # Plot the FZI cross plot
     _, ax = plt.subplots(figsize=(5, 4))
     plt.title(title)
-    plt.scatter(cpore, cperm, marker='s', c=rock_type, cmap='viridis')
-    fzi_list = fzi if fzi is not None else np.arange(0.5, 5)
+    plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
+    cut_offs = cut_offs if cut_offs is not None else np.arange(0.5, 5)
     phit_points = np.geomspace(0.001, 1, 20)
-    for fzi in fzi_list:
+    for fzi in cut_offs:
         perm_points = phit_points * ((phit_points * fzi) / (.0314 * (1 - phit_points)))**2
         plt.plot(phit_points, perm_points, linestyle='dashed', label=f'FZI={round(fzi, 3)}')
 
@@ -130,7 +130,7 @@ def plot_rfn(cpore, cperm, rock_type=None, title='Lucia RFN'):
     # Plot the RFN cross plot
     _, ax = plt.subplots(figsize=(5, 4))
     plt.title(title)
-    plt.scatter(cpore, cperm, marker='s', c=rock_type, cmap='viridis')
+    plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
     pore_points = np.linspace(0, .6, 20)
     for rfn in np.arange(.5, 4.5, .5):
         perm_points = 10**(9.7892 - 12.0838 * np.log10(rfn) + (8.6711 - 8.2965 * np.log10(rfn)) * np.log10(pore_points))
@@ -151,7 +151,7 @@ def plot_rfn(cpore, cperm, rock_type=None, title='Lucia RFN'):
     plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
 
 
-def plot_winland(cpore, cperm, rock_type=None, title='Winland R35'):
+def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title='Winland R35'):
     """Plot the Winland R35 lines on porosity and permeability cross plot. The permeability (mD) is calculated based on
     Winland, 1979.
     ```
@@ -165,9 +165,10 @@ def plot_winland(cpore, cperm, rock_type=None, title='Winland R35'):
     # Plot the Winland R35 cross plot
     _, ax = plt.subplots(figsize=(5, 4))
     plt.title(title)
-    plt.scatter(cpore, cperm, marker='s', c=rock_type, cmap='viridis')
+    plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
+    cut_offs = cut_offs if cut_offs is not None else [.05, .1, .5, 2, 10, 100]
     pore_points = np.linspace(0.001, .6, 20)
-    for r35 in [.05, .1, .5, 2, 10, 100]:
+    for r35 in cut_offs:
         perm_points = calc_r35_perm(r35, pore_points)
         plt.plot(pore_points, perm_points, linestyle='dashed', label=f'R35={r35}')
 
@@ -205,7 +206,7 @@ def plot_ward(cpore, cperm, title="Ward's Plot"):
     # Generate Ward's plot
     plt.figure(figsize=(8, 4))
     plt.title(title)
-    plt.scatter(log_fzi, zi, marker='s')
+    plt.scatter(log_fzi, zi, marker='.')
     plt.xlabel('log(fzi)')
     plt.ylabel('zi')
     plt.minorticks_on()
@@ -230,7 +231,7 @@ def plot_lorenz_heterogeneity(cpore, cperm, title="Lorenz's Plot"):
     plt.figure(figsize=(5, 4))
     plt.title(title)
     plt.text(.4, .1, f'Lorenz Coefficient: {lorenz_coeff:.2f}', fontsize=10, transform=plt.gca().transAxes)
-    plt.scatter(phit_cdf, perm_cdf, marker='s')
+    plt.scatter(phit_cdf, perm_cdf, marker='.')
     plt.plot([0, 1], [0, 1], linestyle='dashed', color='gray')
     plt.xlabel('CDF of Porosity')
     plt.ylabel('CDF of Permeability')
@@ -253,7 +254,7 @@ def plot_modified_lorenz(cpore, cperm, title="Modified Lorenz's Plot"):
     # Generate Lorenz's plot
     plt.figure(figsize=(5, 4))
     plt.title(title)
-    plt.scatter(pore_cdf, perm_cdf, marker='s')
+    plt.scatter(pore_cdf, perm_cdf, marker='.')
     plt.xlabel('CDF of Porosity')
     plt.ylabel('CDF of Permeability')
     plt.minorticks_on()
@@ -399,7 +400,7 @@ def train_regression_model(data, input_features: list, target_feature: list, str
 
     # Plot the true vs predicted values
     plt.figure(figsize=(5, 4))
-    plt.plot(y_test, y_pred, 'o')
+    plt.plot(y_test, y_pred, '.')
     plt.xlabel('True')
     plt.ylabel('Predicted')
     plt.title(f'{target_feature} Prediction')
