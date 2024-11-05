@@ -123,6 +123,20 @@ def power_law_func(x, a, b):
     return a * x**b
 
 
+def inv_power_law_func(x, a, b):
+    """Generic power law function.
+
+    Args:
+        x (float): Input variable.
+        a (float): a constant.
+        b (float): b constant.
+
+    Returns:
+        float: y = a * x^-b
+    """
+    return a * x**-b
+
+
 def straight_line_func(x, m, c):
     """Generic straight line function.
 

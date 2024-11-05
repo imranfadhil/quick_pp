@@ -31,8 +31,7 @@ def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
         float: Water saturation.
 
     """
-    swt = ((a / (phit ** m)) * (rw / rt)) ** (1 / n)
-    return np.where(swt < 1, swt, 1)
+    return ((a / (phit ** m)) * (rw / rt)) ** (1 / n)
 
 
 def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
@@ -69,7 +68,7 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
         swt_i = swt
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
 
-    return np.where(swt < 1, swt, 1)
+    return swt
 
 
 def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
@@ -99,7 +98,7 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
         swt_i = swt
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
 
-    return np.where(swt < 1, swt, 1)
+    return swt
 
 
 def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
@@ -120,8 +119,7 @@ def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
         float: Water saturation.
 
     """
-    swt = ((1 / rt)**(1 / 2) / ((vsh**(1 - 0.5 * vsh) / rsh**(1 / 2)) + (phie**m / (a * rw))**(1 / 2)))**(2 / n)
-    return np.where(swt < 1, swt, 1)
+    return ((1 / rt)**(1 / 2) / ((vsh**(1 - 0.5 * vsh) / rsh**(1 / 2)) + (phie**m / (a * rw))**(1 / 2)))**(2 / n)
 
 
 def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
@@ -141,8 +139,7 @@ def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
 
     """
     shale_factor = vsh / rsh
-    swt = (a * rw / (2 * phit**m)) * ((shale_factor**2 + (4 * phit**m / (a * rw * rt)))**(1 / 2) - shale_factor)
-    return np.where(swt < 1, swt, 1)
+    return (a * rw / (2 * phit**m)) * ((shale_factor**2 + (4 * phit**m / (a * rw * rt)))**(1 / 2) - shale_factor)
 
 
 def modified_simandoux_saturation():
@@ -375,9 +372,10 @@ def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2):
     # Add iso-lines
     phit_i = np.arange(0, 1, 1 / len(phit))
     for i in np.geomspace(1, 5, num=5):
-        c = round(min_rw + (i - 1) * shift, 3)
+        c = min_rw + (i - 1) * shift
+        sw = round(min_rw / c * 100)
         rt_i = (phit_i**m) * c
-        ax.plot(rt_i, phit_i, linestyle='dashed', alpha=0.5, label=f'Rw={c} ohm.m')
+        ax.plot(rt_i, phit_i, linestyle='dashed', alpha=0.5, label=f'SW={sw}%')
     # Set up y axis
     ax.set_yscale('log')
     ax.set_ylim(0.01, 1)
@@ -386,7 +384,7 @@ def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2):
     ax.set_ylabel('PHIT (v/v)')
     # Set up x axis
     ax.set_xscale('log')
-    ax.set_xlim(0.01, 100)
+    ax.set_xlim(0.01, 10000)
     ax.tick_params(top=True, labeltop=True)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(
         lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
@@ -398,43 +396,59 @@ def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2):
     return fig
 
 
-def hingle_plot(rt, phit, m=-2, min_rw=0.1, shift=.2):
-    """Generate Pickett plot which is used to plot phit and rt at water bearing interval to determine;
-        m = The slope of best-fit line crossing the cleanest sand.
-        rw = Formation water resistivity. The intercept of the best-fit line at rt when phit = 100%.
+def RI_plot(sw, rt, ro):
+    """Generate resistivity index plot to estimate saturation exponent. The inputs are from lab measurements.
+    - Assumed a = 1.
+    - Trend line must cross (1, 1) point.
+    - The slope of the trend line is the saturation exponent.
 
     Args:
+        sw (float): Water saturation.
         rt (float): True resistivity or deep resistivity log.
-        phit (float): Total porosity.
+        ro (float): Resistivity of 100% water saturated rock.
 
     Returns:
-        matplotlib.pyplot.Figure: Picket plot.
+        matplotlib.pyplot.Figure: RI plot.
     """
-    m = m if m < 0 else -m
     fig, ax = plt.subplots(figsize=(5, 5))
-    ax.set_title('Pickett Plot')
-    ax.scatter(rt, phit)
-    # Add iso-lines
-    phit_i = np.arange(0, 1, 1 / len(phit))
-    for i in np.geomspace(1, 5, num=5):
-        c = round(min_rw + (i - 1) * shift, 3)
-        rt_i = (phit_i**m) * c
-        ax.plot(rt_i, phit_i, linestyle='dashed', alpha=0.5, label=f'Rw={c} ohm.m')
-    # Set up y axis
-    ax.set_yscale('log')
-    ax.set_ylim(0.01, 1)
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
-        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
-    ax.set_ylabel('PHIT (v/v)')
-    # Set up x axis
+    ax.set_title('Resistivity Index Plot')
+    ax.scatter(sw, rt / ro)
+    ax.set_xlim(0.01, 1)
+    ax.set_ylim(1, 1000)
     ax.set_xscale('log')
-    ax.set_xlim(0.01, 100)
-    ax.tick_params(top=True, labeltop=True)
-    ax.xaxis.set_major_formatter(ticker.FuncFormatter(
-        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
-    ax.set_xlabel('RT (ohm.m)')
+    ax.set_yscale('log')
+    ax.set_xlabel('SW')
+    ax.set_ylabel('RT/Rw')
+    ax.grid(True)
+    fig.tight_layout()
 
-    ax.legend()
+    return fig
+
+
+def FF_plot(phit, ro, rw):
+    """Generate formation factor plot to estimate cementation exponent. The inputs are from lab measurements.
+    - Assumed a = 1.
+    - Trend line must cross (1, 1) point.
+    - The slope of the trend line is the cementation exponent.
+
+    Args:
+        phit (float): Total porosity.
+        ro (float): Resistivity of 100% water saturated rock.
+        rw (float): Formation water resistivity.
+
+    Returns:
+        matplotlib.pyplot.Figure: FF plot.
+    """
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.set_title('Formation Factor Plot')
+    ax.scatter(phit, ro / rw)
+    ax.set_xlim(0.01, 1)
+    ax.set_ylim(1, 1000)
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('PHIT')
+    ax.set_ylabel('Ro/Rw')
+    ax.grid(True)
     fig.tight_layout()
 
     return fig
