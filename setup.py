@@ -7,7 +7,7 @@
 
 """The setup script."""
 
-from setuptools import setup  # find_packages
+from setuptools import setup, find_packages
 import quick_pp
 
 with open('README.rst') as readme_file:
@@ -16,8 +16,7 @@ with open('README.rst') as readme_file:
 with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
-requirements = [
-    'Click>=7.0', 'ruptures>=1.1.8', 'welly>=0.5.2', 'pandas>=2.1.1', 'numpy>=1.26.0', 'statsmodels>=0.14.0']
+requirements = ['Click>=7.0', 'ruptures', 'welly', 'pandas', 'numpy', 'statsmodels']
 
 test_requirements = []
 
@@ -44,7 +43,7 @@ setup(
     include_package_data=True,
     keywords='quick_pp, petrophysics, geoscience, well log analysis',
     name='quick_pp',
-    packages=('quick_pp', ),  # find_packages(include=['quick_pp', 'quick_pp.*']),  # where='quick_pp'),  #
+    packages=find_packages(include=['quick_pp', 'quick_pp.*']),  # where='quick_pp'),  #
     test_suite='tests',
     tests_require=test_requirements,
     url='https://github.com/imranfadhil/quick_pp',
