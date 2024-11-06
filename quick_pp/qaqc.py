@@ -267,7 +267,6 @@ def quick_qc(well_data, return_fig=False):
     summary_df['RES_FLAG'] = return_df.groupby('ZONES')['RES_FLAG'].sum()
     summary_df['QC_FLAG'] = return_df.where(return_df['QC_FLAG'] == 1, 0).groupby('ZONES')['QC_FLAG'].sum()
     summary_df['QC_FLAG_mode'] = return_df.groupby('ZONES')['QC_FLAG'].agg(lambda x: x.mode())
-    summary_df['ROCK_FLAG_mode'] = return_df.groupby('ZONES')['ROCK_FLAG'].agg(lambda x: x.mode())
     summary_df['TOP'] = return_df.groupby('ZONES')['DEPTH'].agg(lambda x: x.min())
     summary_df['BOTTOM'] = return_df.groupby('ZONES')['DEPTH'].agg(lambda x: x.max())
     summary_df['GROSS'] = summary_df['BOTTOM'] - summary_df['TOP']
@@ -286,7 +285,7 @@ def quick_qc(well_data, return_fig=False):
             'STD_PHIT_ALL', 'STD_PHIT_RES', 'STD_PHIT_NON-RES',
             'STD_SWT_ALL', 'STD_SWT_RES', 'STD_SWT_NON-RES',
             'STD_PERM_GM_ALL', 'STD_PERM_GM_RES', 'STD_PERM_GM_NON-RES',
-            'COUNT', 'RES_FLAG', 'QC_FLAG', 'QC_FLAG_mode', 'ROCK_FLAG_mode',
+            'COUNT', 'RES_FLAG', 'QC_FLAG', 'QC_FLAG_mode',
             'AV_GR_ALL', 'AV_GR_RES', 'AV_GR_NON-RES',
             'AV_RT_ALL', 'AV_RT_RES', 'AV_RT_NON-RES',
             'AV_NPHI_ALL', 'AV_NPHI_RES', 'AV_NPHI_NON-RES',
@@ -299,7 +298,6 @@ def quick_qc(well_data, return_fig=False):
         'RES_FLAG': 'SAND_COUNT',
         'QC_FLAG': 'QC_FLAG_COUNT',
         'QC_FLAG_mode': 'QC_FLAG_mode',
-        'ROCK_FLAG_mode': 'ROCK_FLAG_mode',
     }
     summary_df = summary_df.rename(columns=cols_rename)
 
