@@ -49,3 +49,10 @@ History
 * Add quick compare function.
 * Update estimate vsh_gr function.
 * Update porosity and qaqc module.
+
+0.1.14 (2024-11-06)
+-------------------
+* Add stick plot.
+* Update rock typing module.
+* Add skelt harrison saturation function.
+* Add sensitivity analysis in ressum module.

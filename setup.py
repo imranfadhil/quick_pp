@@ -16,7 +16,8 @@ with open('README.rst') as readme_file:
 with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
-requirements = ['Click>=7.0', 'ruptures', 'welly', 'pandas', 'numpy', 'statsmodels']
+requirements = [
+    'Click>=7.0', 'ruptures>=1.1.8', 'welly>=0.5.2', 'pandas>=2.1.1', 'numpy>=1.26.0', 'statsmodels>=0.14.0']
 
 test_requirements = []
 
