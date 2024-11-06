@@ -368,7 +368,7 @@ def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2):
     m = m if m < 0 else -m
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.set_title('Pickett Plot')
-    ax.scatter(rt, phit)
+    ax.scatter(rt, phit, marker='.', color='b')
     # Add iso-lines
     phit_i = np.arange(0, 1, 1 / len(phit))
     for i in np.geomspace(1, 5, num=5):
@@ -384,7 +384,7 @@ def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2):
     ax.set_ylabel('PHIT (v/v)')
     # Set up x axis
     ax.set_xscale('log')
-    ax.set_xlim(0.01, 10000)
+    ax.set_xlim(0.01, 1000)
     ax.tick_params(top=True, labeltop=True)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(
         lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
