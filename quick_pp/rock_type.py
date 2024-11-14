@@ -327,7 +327,7 @@ def rock_typing(curve, cut_offs=[.1, .2, .3, .4], higher_is_better=True):
     return np.where(np.isnan(curve), np.nan, np.select(conditions, choices))
 
 
-def train_classification_model(data, input_features: list, target_feature: str):
+def train_classification_model(data, input_features: list, target_feature: str, stratifier=None):
     """Train a classification Random Forest model to predict a binary feature.
 
     Args:
@@ -342,7 +342,8 @@ def train_classification_model(data, input_features: list, target_feature: str):
     X = data[input_features]
     y = data[target_feature]
     y = y.astype(int)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=random_seed, stratify=y)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=random_seed, stratifier=stratifier)
 
     # Hyperparameter tuning
     param_dist = {

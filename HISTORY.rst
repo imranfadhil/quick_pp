@@ -50,7 +50,7 @@ History
 * Update estimate vsh_gr function.
 * Update porosity and qaqc module.
 
-0.1.16 (2024-11-06)
+0.1.18 (2024-11-14)
 -------------------
 * Add stick plot.
 * Update rock typing module.
