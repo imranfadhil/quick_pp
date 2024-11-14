@@ -92,7 +92,7 @@ def plot_fzi(cpore, cperm, cut_offs=None, rock_type=None, title='Flow Zone Indic
         pore (float): Total porosity in fraction
     """
     # Plot the FZI cross plot
-    _, ax = plt.subplots(figsize=(5, 4))
+    _, ax = plt.subplots(figsize=(10, 8))
     plt.title(title)
     plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
     cut_offs = cut_offs if cut_offs is not None else np.arange(0.5, 5)
@@ -128,7 +128,7 @@ def plot_rfn(cpore, cperm, rock_type=None, title='Lucia RFN'):
         cperm (float): Critical permeability in mD
     """
     # Plot the RFN cross plot
-    _, ax = plt.subplots(figsize=(5, 4))
+    _, ax = plt.subplots(figsize=(10, 8))
     plt.title(title)
     plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
     pore_points = np.linspace(0, .6, 20)
@@ -163,7 +163,7 @@ def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title='Winland R35
         cperm (float): Critical permeability in mD
     """
     # Plot the Winland R35 cross plot
-    _, ax = plt.subplots(figsize=(5, 4))
+    _, ax = plt.subplots(figsize=(10, 8))
     plt.title(title)
     plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
     cut_offs = cut_offs if cut_offs is not None else [.05, .1, .5, 2, 10, 100]
@@ -228,7 +228,7 @@ def plot_lorenz_heterogeneity(cpore, cperm, title="Lorenz's Plot"):
     phit_cdf = np.cumsum(sorted_phit) / np.sum(sorted_phit)
     lorenz_coeff = (auc(phit_cdf, perm_cdf) - 0.5) / 0.5
     # Generate Lorenz's plot
-    plt.figure(figsize=(5, 4))
+    plt.figure(figsize=(10, 8))
     plt.title(title)
     plt.text(.4, .1, f'Lorenz Coefficient: {lorenz_coeff:.2f}', fontsize=10, transform=plt.gca().transAxes)
     plt.scatter(phit_cdf, perm_cdf, marker='.')
@@ -252,7 +252,7 @@ def plot_modified_lorenz(cpore, cperm, title="Modified Lorenz's Plot"):
     perm_cdf = np.cumsum(sorted_perm) / np.sum(sorted_perm)
     pore_cdf = np.cumsum(sorted_pore) / np.sum(sorted_pore)
     # Generate Lorenz's plot
-    plt.figure(figsize=(5, 4))
+    plt.figure(figsize=(10, 8))
     plt.title(title)
     plt.scatter(pore_cdf, perm_cdf, marker='.')
     plt.xlabel('CDF of Porosity')
@@ -399,7 +399,7 @@ def train_regression_model(data, input_features: list, target_feature: list, str
     print('Mean Absolute Error:', mean_absolute_error(y_test, y_pred))
 
     # Plot the true vs predicted values
-    plt.figure(figsize=(5, 4))
+    plt.figure(figsize=(10, 8))
     plt.plot(y_test, y_pred, '.')
     plt.xlabel('True')
     plt.ylabel('Predicted')
