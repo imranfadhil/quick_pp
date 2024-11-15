@@ -28,6 +28,9 @@ def poroperm_xplot(poro, perm, a=None, b=None, core_group=None, label='', log_lo
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
     sc = plt.scatter(poro, perm, marker='.', c=core_group, cmap='Set1')
+    if core_group is not None:
+        for i, row in enumerate(zip(poro, perm, core_group)):
+            plt.annotate(row[2], (row[0], row[1]), fontsize=8, alpha=0.7)
     if a and b:
         line_color = sc.get_facecolors()[0]
         line_color[-1] = 0.5
