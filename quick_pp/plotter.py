@@ -230,6 +230,8 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
         well_data = data[(data['WELL_NAME'] == well_name) & (data['ZONES'] == zone)].copy()
         well_data = update_fluid_contacts(well_data, well_config[well_name]['zones'][zone])
         ax.plot(well_data['SWT'], well_data['DEPTH'], label='SWT')
+        if 'SHF' in well_data.columns:
+            ax.plot(well_data['SHF'], well_data['DEPTH'], label='SHF')
 
         # Fill between based on fluid flag
         ax.fill_betweenx(
@@ -536,21 +538,21 @@ def plotly_log(well_data, depth_uom=""):  # noqa
     i += 1
     # Add CPORE
     fig.add_trace(go.Scatter(x=df['CPORE'], y=index, name='CPORE', mode='markers',
-                             marker=dict(color=COLOR_DICT['CPORE'], size=7)),
+                             marker=dict(color=COLOR_DICT['CPORE'], size=3)),
                   row=1, col=4, secondary_y=True)
     fig.data[i].update(xaxis=f'x{i + 1}')
 
     i += 1
     # Add CPERM
     fig.add_trace(go.Scatter(x=df['CPERM'], y=index, name='CPERM', mode='markers',
-                             marker=dict(color=COLOR_DICT['CPERM'], size=7)),
+                             marker=dict(color=COLOR_DICT['CPERM'], size=3)),
                   row=1, col=5, secondary_y=True)
     fig.data[i].update(xaxis=f'x{i + 1}')
 
     i += 1
     # Add CSAT
     fig.add_trace(go.Scatter(x=df['CSAT'], y=index, name='CSAT', mode='markers',
-                             marker=dict(color=COLOR_DICT['CSAT'], size=7)),
+                             marker=dict(color=COLOR_DICT['CSAT'], size=3)),
                   row=1, col=6, secondary_y=True)
     fig.data[i].update(xaxis=f'x{i + 1}')
 
