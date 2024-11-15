@@ -343,7 +343,7 @@ def train_classification_model(data, input_features: list, target_feature: str, 
     y = data[target_feature]
     y = y.astype(int)
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=random_seed, stratifier=stratifier)
+        X, y, test_size=0.2, random_state=random_seed, stratify=stratifier)
 
     # Hyperparameter tuning
     param_dist = {
