@@ -143,11 +143,10 @@ def read_las_file_mmap(file_object, required_sets=['PEP']):  # noqa
 
 def read_las_file_welly(file_object):  # noqa
     welly_dataset = welly.las.from_las(file_object.name)
+    well_header = welly_dataset['Header']
     welly_object = welly.well.Well.from_datasets(welly_dataset)
     print('welly_object:', welly_object)
     df = pre_process(welly_object)
-    well_header = welly.las.from_las(file_object.name)['Header']
-
     return df, well_header
 
 
@@ -168,7 +167,7 @@ def pre_process(welly_object):
     # Convert index 'DEPTH' as column
     data_df = welly_object.las[0]
     data_df.index.rename('DEPTH', inplace=True)
-    data_df.reset_index(drop=False, inplace=True)
+    data_df = data_df.reset_index(drop=False)
 
     header_df = welly_object.header
     nullValue = header_df[header_df['mnemonic'] == 'NULL']['value'].values[0] if \
@@ -176,9 +175,15 @@ def pre_process(welly_object):
     data_df = data_df.where(data_df >= nullValue, np.nan)
 
     well_name = header_df[
-        (header_df['mnemonic'] == 'WELL') | (header_df['descr'].str.upper() == 'WELL')]['value'].values[0]
+        (header_df['mnemonic'] == 'WELL') | (header_df['descr'].str.upper() == 'WELL')
+    ]['value'].values[0]
     if 'WELL_NAME' not in data_df.columns:
         data_df.insert(0, 'WELL_NAME', well_name)
+    uwi = header_df[
+        (header_df['mnemonic'] == 'UWI') | (header_df['descr'].str.upper() == 'UNIQUE WELL ID')
+    ]['value'].values[0]
+    if 'UWI' not in data_df.columns:
+        data_df.insert(0, 'UWI', uwi)
 
     return data_df
 
