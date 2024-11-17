@@ -75,7 +75,7 @@ class SandShale:
             projlithofrac = length_a_b(var_pt, A)
             vshale = projlithofrac / rocklithofrac
 
-            phit = neu_den_xplot_poro_pt(point[0], point[1], 'ss', None, A, (0, 0), C, D)
+            phit = neu_den_xplot_poro_pt(point[0], point[1], 'ss', A, (0, 0), C, D)
             vmatrix = 1 - phit
             vsand.append((1 - vshale) * vmatrix)
             vcld.append(vshale * vmatrix)

@@ -179,6 +179,8 @@ def pre_process(welly_object):
     ]['value'].values[0]
     if 'WELL_NAME' not in data_df.columns:
         data_df.insert(0, 'WELL_NAME', well_name)
+    else:
+        data_df['WELL_NAME'] = well_name
     uwi = header_df[
         (header_df['mnemonic'] == 'UWI') | (header_df['descr'].str.upper() == 'UNIQUE WELL ID')
     ]['value'].values[0]
