@@ -297,7 +297,7 @@ def neutron_density_xplot(nphi, rhob,
 
     ax.plot(*zip(*clayline_from_pt), label='Clay Line', color='gray')
     ax.plot(*zip(*rockline_from_pt), label='Rock Line', color='black')
-    ax.scatter(*zip(*projected_pt), label='Projected Line', color='purple', marker='s')
+    ax.scatter(*zip(*projected_pt), label='Projected Line', color='purple', marker='.')
     ax.scatter(dry_min1_point[0], dry_min1_point[1],
                label=f'Mineral 1 Point: ({dry_min1_point[0]}, {dry_min1_point[1]})', color='yellow')
     ax.scatter(dry_clay_point[0], dry_clay_point[1],

@@ -1,8 +1,6 @@
 import numpy as np
 
 from quick_pp.utils import length_a_b, line_intersection
-from quick_pp.porosity import neu_den_xplot_poro_pt, rho_matrix, density_porosity
-from quick_pp.rock_type import estimate_vsh_gr
 from quick_pp.config import Config
 
 
@@ -17,22 +15,20 @@ class Carbonate:
         self.dry_clay_point = dry_clay_point or Config.CARB_NEU_DEN_ENDPOINTS["DRY_CLAY_POINT"]
         self.fluid_point = fluid_point or Config.CARB_NEU_DEN_ENDPOINTS["FLUID_POINT"]
 
-    def estimate_lithology(self, nphi, rhob, gr, pef=None, vsh_gr=None, normalize: bool = True,
-                           model: str = 'single', method: str = 'neu_den', carbonate_type: str = 'limestone'):
+    def estimate_lithology(self, nphi, rhob, pef=None, vsh_gr=None, model: str = 'single',
+                           method: str = 'neu_den', carbonate_type: str = 'limestone'):
         """Estimate sand silt clay lithology volumetrics.
 
         Args:
-            gr (float): Gamma Ray log in API
             nphi (float): Neutron Porosity log in v/v
             rhob (float): Bulk Density log in g/cc
             pef (float, optional): Photoelectric Factor log in barns/electron. Defaults to [0].
+            vsh_gr (float, optional): Volume of shale from gamma ray log in v/v. Defaults to None.
             model (str, optional): Model to choose from 'single' or 'double'. Defaults to 'single'.
             method (str, optional): Method for 2 minerals model, to choose from 'neu_den' or 'den_pef'.
                                     Defaults to 'neu_den'.
             carbonate_type (str, optional): Carbonate type to choose from 'limestone' or 'dolostone'.
                                             Defaults to 'limestone'.
-            xplot (bool, optional): To plot Neutron Density cross plot. Defaults to False.
-            normalize (bool, optional): To normalize with porosity. Defaults to True.
 
         Returns:
             (float, float, float): vcld, vcalc, vdolo
@@ -40,34 +36,25 @@ class Carbonate:
         assert model in ['single', 'double'], f"'{model}' model is not available."
         assert method in ['neu_den', 'den_pef'], f"'{method}' method is not available."
 
-        vcld = vsh_gr if vsh_gr is not None else estimate_vsh_gr(gr)
+        vcld = vsh_gr if vsh_gr is not None else np.zeros(len(nphi))
         if model == 'single':
             # Estimate vshale
             vcarb = 1 - vcld
             vdolo = vcarb if carbonate_type == 'dolostone' else 0
             vcalc = vcarb if carbonate_type == 'limestone' else 0
-            if normalize:
-                # Estimate total porosity
-                rho_ma = rho_matrix(vcalc=vcalc, vdolo=vdolo, vclay=vcld)
-                phit = density_porosity(rhob, rho_ma)
-                vmatrix = (1 - phit)
-                vcalc = vcalc * vmatrix
-                vdolo = vdolo * vmatrix
-                vcld = vcld * vmatrix
             return vcld, vcalc, vdolo
         elif model == 'double':
             # Estimate vshale
             if method == 'neu_den':
-                vcalc, vdolo = self.lithology_fraction_neu_den(nphi, rhob, model='double', normalize=normalize)
+                vcalc, vdolo = self.lithology_fraction_neu_den(nphi, rhob, model='double')
             else:
                 assert pef is not None, "PEF log is required for 'den_pef' method."
-                vcalc, vdolo = self.lithology_fraction_pef(pef, rhob, normalize=normalize)
+                vcalc, vdolo = self.lithology_fraction_pef(pef, rhob)
             vcalc = vcalc * (1 - vcld)
             vdolo = vdolo * (1 - vcld)
             return vcld, vcalc, vdolo
 
-    def lithology_fraction_neu_den(self, nphi, rhob, model: str = 'single', carbonate_type: str = 'limestone',
-                                   normalize: bool = True):
+    def lithology_fraction_neu_den(self, nphi, rhob, model: str = 'single', carbonate_type: str = 'limestone'):
         """Estimate clay and carbonate (either limestone or dolostone) based on neutron density cross plot.
 
         Args:
@@ -96,14 +83,12 @@ class Carbonate:
             projlithofrac = length_a_b(var_pt, A)
             vfrac = projlithofrac / rocklithofrac
 
-            phit = neu_den_xplot_poro_pt(point[0], point[1], 'ss', None, A, (0, 0), C, D) if normalize else 0
-            vmatrix = 1 - phit
-            vlitho1 = np.append(vlitho1, (1 - vfrac) * vmatrix)
-            vlitho2 = np.append(vlitho2, vfrac * vmatrix)
+            vlitho1 = np.append(vlitho1, (1 - vfrac))
+            vlitho2 = np.append(vlitho2, vfrac)
 
         return vlitho1, vlitho2
 
-    def lithology_fraction_pef(self, pef, rhob, normalize: bool = True):
+    def lithology_fraction_pef(self, pef, rhob):
         """Estimate limestone and dolostone based on pef density cross plot. Expecting the inputs are clay corrected.
 
         Args:
@@ -126,10 +111,8 @@ class Carbonate:
             projlithofrac = length_a_b(var_pt, A)
             dolo_frac = projlithofrac / rocklithofrac
 
-            phit = neu_den_xplot_poro_pt(point[0], point[1], 'ss', None, A, (0, 0), C, D) if normalize else 0
-            vmatrix = 1 - phit
-            vcalc = np.append(vcalc, (1 - dolo_frac) * vmatrix)
-            vdolo = np.append(vdolo, dolo_frac * vmatrix)
+            vcalc = np.append(vcalc, (1 - dolo_frac))
+            vdolo = np.append(vdolo, dolo_frac)
 
         return vcalc, vdolo
 

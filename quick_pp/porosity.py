@@ -4,25 +4,21 @@ from quick_pp.config import Config
 from quick_pp.utils import length_a_b, line_intersection
 
 
-def normalize_volumetric(vsand, vsilt, vclay, phit):
-    """Normalize lithology (vsand, vsilt and vclay) given total porosity.
+def normalize_volumetric(phit, **volumetrics):
+    """Normalize lithology given total porosity.
 
     Args:
-        vsand (float): Volume of sand in fraction (v/v).
-        vsilt (float): Volume of silt in fraction (v/v).
-        vclay (float): Volume of clay in fraction (v/v).
         phit (float): Total porosity in fraction (v/v).
+        **volumetrics: Keyword arguments representing volumetric fractions (v/v).
 
     Returns:
-        float: Normalized vsand, vsilt and vclay.
+        dict: Normalized volumetric fractions.
     """
     # Normalize the volumetrics
     vmatrix = 1 - phit
-    vsand = vsand * vmatrix
-    vsilt = vsilt * vmatrix
-    vclay = vclay * vmatrix
+    normalized_volumetrics = {key: value * vmatrix for key, value in volumetrics.items()}
 
-    return vsand, vsilt, vclay
+    return normalized_volumetrics
 
 
 def effective_porosity(phit, phi_shale, vshale):

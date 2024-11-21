@@ -136,7 +136,7 @@ def badhole_flagging(data, thold=4):
 
 
 def neu_den_xplot_hc_correction(
-        nphi, rhob, gr=None, vsh_gr=None,
+        nphi, rhob, vsh_gr=None,
         dry_min1_point: tuple = None,
         dry_clay_point: tuple = None,
         fluid_point: tuple = (1.0, 1.0),
@@ -146,7 +146,7 @@ def neu_den_xplot_hc_correction(
     Args:
         nphi (float): Neutron porosity log in fraction.
         rhob (float): Bulk density log in g/cc.
-        gr (float, optional): Gamma ray log in GAPI. Defaults to None.
+        vsh_gr (float, optional): Vshale from gamma ray log. Defaults to None.
         dry_min1_point (tuple, optional): Neutron porosity and bulk density of mineral 1 point. Defaults to None.
         dry_clay_point (tuple, optional): Neutron porosity and bulk density of dry clay point. Defaults to None.
         fluid_point (tuple, optional): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
@@ -156,12 +156,13 @@ def neu_den_xplot_hc_correction(
     Returns:
         (float, float): Corrected neutron porosity and bulk density.
     """
+    corr_angle = 90 - corr_angle
     A = dry_min1_point
     C = dry_clay_point
     D = fluid_point
     rocklithofrac = length_a_b(A, C)
 
-    frac_vsh_gr = vsh_gr if vsh_gr is not None else estimate_vsh_gr(gr)
+    frac_vsh_gr = vsh_gr if vsh_gr is not None else np.zeros(len(nphi))
     nphi_corrected = np.empty(0)
     rhob_corrected = np.empty(0)
     hc_flag = np.empty(0)
