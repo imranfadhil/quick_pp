@@ -94,7 +94,7 @@ def pc_xplot(sw, pc, label=None, ylim=None):
         plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
 
-def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False):
+def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False, ax=None):
     """Generate J-Sw cross plot.
 
     Args:
@@ -106,18 +106,20 @@ def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False):
         ylim (tuple, optional): Range for the y axis in (min, max) format. Defaults to None.
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
-    plt.scatter(sw, j, marker='.', c=core_group, cmap='Set1')
+    ax = ax or plt.gca()
+    ax.scatter(sw, j, marker='.', c=core_group, cmap='Set1')
     if a is not None and b is not None:
         csw = np.geomspace(0.01, 1.0, 20)
-        plt.plot(csw, inv_power_law_func(csw, a, b), label=label, linestyle='dashed')
-    plt.xlabel('Sw (frac)')
-    plt.xlim(0.01, 1)
-    plt.ylabel('J')
-    plt.yscale('log')
+        ax.plot(csw, inv_power_law_func(csw, a, b), label=label, linestyle='dashed')
+    ax.set_xlabel('Sw (frac)')
+    ax.set_xlim(0.01, 1)
+    ax.set_ylabel('J')
+    ax.set_yscale('log')
     if log_log:
-        plt.xscale('log')
+        ax.set_xscale('log')
     if label:
-        plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+        ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    return ax
 
 
 # Best-fit functions
@@ -141,7 +143,7 @@ def fit_j_curve(sw, j):
         return 1, 1
 
 
-def skelt_harrison_xplot(sw, pc, gw, ghc, a, b, c, d, core_group=None, label=None, ylim=None):
+def skelt_harrison_xplot(sw, pc, gw, ghc, a, b, c, d, core_group=None, label=None, ylim=None, ax=None):
     """Generate Skelt-Harrison curve.
 
     Args:
@@ -153,15 +155,17 @@ def skelt_harrison_xplot(sw, pc, gw, ghc, a, b, c, d, core_group=None, label=Non
         c (float): c constant from the best-fit curve. Related to PTSD.
         d (float): d constant from the best-fit curve. Related to entry pressure.
     """
-    plt.scatter(sw, pc, marker='.', c=core_group, cmap='Set1')
+    ax = ax or plt.gca()
+    ax.scatter(sw, pc, marker='.', c=core_group, cmap='Set1')
     h = np.geomspace(.01, 10000, 100)
     pci = h * (gw - ghc) * .433  # Convert g/cc to psi/ft
-    plt.plot(skelt_harrison_func(h, a, b, c, d), pci, label=label)
-    plt.ylabel('Pc (psi)')
-    plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
-    plt.xlabel('Sw (frac)')
-    plt.xlim(0, 1)
-    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    ax.plot(skelt_harrison_func(h, a, b, c, d), pci, label=label)
+    ax.set_ylabel('Pc (psi)')
+    ax.set_ylim(ylim) if ylim else ax.set_ylim(0.01, ax.get_lines()[-1].get_ydata().max())
+    ax.set_xlabel('Sw (frac)')
+    ax.set_xlim(0, 1)
+    ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    return ax
 
 
 def skelt_harrison_func(h, a, b, c, d):

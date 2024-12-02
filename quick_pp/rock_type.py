@@ -68,7 +68,7 @@ def calc_r35(pore, perm):
     Returns:
         float: R35
     """
-    return 10**(.731 + .538 * np.log10(perm) - .864 * np.log10(pore * 100))
+    return 10**(.732 + .588 * np.log10(perm) - .864 * np.log10(pore * 100))
 
 
 def calc_r35_perm(r35, pore):
@@ -81,7 +81,7 @@ def calc_r35_perm(r35, pore):
     Returns:
         float: Permeability in mD
     """
-    return 10**((np.log10(r35) - 0.732 + 0.864 * np.log10(pore * 100)) / 0.588)
+    return 10**((np.log10(r35) - .732 + .864 * np.log10(pore * 100)) / .588)
 
 
 def plot_fzi(cpore, cperm, cut_offs=None, rock_type=None, title='Flow Zone Indicator (FZI)'):
@@ -153,9 +153,9 @@ def plot_rfn(cpore, cperm, rock_type=None, title='Lucia RFN'):
 
 def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title='Winland R35'):
     """Plot the Winland R35 lines on porosity and permeability cross plot. The permeability (mD) is calculated based on
-    Winland, 1979.
+    Winland, 1972.
     ```
-    perm = 10**((log(r35) - 0.731 + 0.864 * log(phi)) / 0.538)
+    perm = 10**((log(r35) - 0.732 + 0.864 * log(phi)) / 0.588)
     ```
 
     Args:
@@ -187,7 +187,7 @@ def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title='Winland R35
     plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
 
 
-def plot_ward(cpore, cperm, title="Ward's Plot"):
+def plot_ward(cpore, cperm, cutoffs=[], title="Ward's Plot"):
     """Plot Ward's plot to identify possible flow units.
 
     Args:
@@ -213,6 +213,8 @@ def plot_ward(cpore, cperm, title="Ward's Plot"):
     plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
     plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
     plt.xticks(np.arange(min(log_fzi[log_fzi != -np.inf]), max(log_fzi[log_fzi != np.inf]), .2))
+    for i, c in enumerate(cutoffs):
+        plt.axvline(x=c, color='r', linestyle='dashed', label=cutoffs[i])
 
 
 def plot_lorenz_heterogeneity(cpore, cperm, title="Lorenz's Plot"):

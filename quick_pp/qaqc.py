@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from scipy.stats import gmean
+from scipy.stats import gmean, hmean
 import matplotlib.pyplot as plt
 
 from quick_pp.utils import length_a_b, line_intersection
@@ -232,6 +232,7 @@ def quick_qc(well_data, return_fig=False):
         plt.Figure: Depth plot.
     """
     return_df = well_data.copy()
+    return_df['PERM'].where(return_df['PERM'] > 0, np.nan, inplace=True)
     return_df['QC_FLAG'] = 0
 
     # Check average swt in non-reservoir zone
@@ -260,8 +261,10 @@ def quick_qc(well_data, return_fig=False):
         temp_df.columns = temp_df.columns.droplevel(0)
         temp_df.columns = cols_rename
 
+        temp_df[f'AV_PERM_AM_{group}'] = return_df[index].groupby('ZONES')['PERM'].agg('mean')
         temp_df[f'AV_PERM_GM_{group}'] = return_df[index].groupby('ZONES')['PERM'].agg(gmean, nan_policy='omit')
-        temp_df[f'STD_PERM_GM_{group}'] = return_df[index].groupby('ZONES')['PERM'].agg('std')
+        temp_df[f'AV_PERM_HM_{group}'] = return_df[index].groupby('ZONES')['PERM'].agg(hmean, nan_policy='omit')
+        temp_df[f'STD_PERM_{group}'] = return_df[index].groupby('ZONES')['PERM'].agg('std')
 
         summary_df = pd.concat([summary_df, temp_df], axis=1)
 
@@ -281,11 +284,13 @@ def quick_qc(well_data, return_fig=False):
             'AV_VSHALE_ALL', 'AV_VSHALE_RES', 'AV_VSHALE_NON-RES',
             'AV_PHIT_ALL', 'AV_PHIT_RES', 'AV_PHIT_NON-RES',
             'AV_SWT_ALL', 'AV_SWT_RES', 'AV_SWT_NON-RES',
+            'AV_PERM_AM_ALL', 'AV_PERM_AM_RES', 'AV_PERM_AM_NON-RES',
             'AV_PERM_GM_ALL', 'AV_PERM_GM_RES', 'AV_PERM_GM_NON-RES',
+            'AV_PERM_HM_ALL', 'AV_PERM_HM_RES', 'AV_PERM_HM_NON-RES',
             'STD_VSHALE_ALL', 'STD_VSHALE_RES', 'STD_VSHALE_NON-RES',
             'STD_PHIT_ALL', 'STD_PHIT_RES', 'STD_PHIT_NON-RES',
             'STD_SWT_ALL', 'STD_SWT_RES', 'STD_SWT_NON-RES',
-            'STD_PERM_GM_ALL', 'STD_PERM_GM_RES', 'STD_PERM_GM_NON-RES',
+            'STD_PERM_ALL', 'STD_PERM_RES', 'STD_PERM_NON-RES',
             'COUNT', 'RES_FLAG', 'QC_FLAG', 'QC_FLAG_mode',
             'AV_GR_ALL', 'AV_GR_RES', 'AV_GR_NON-RES',
             'AV_RT_ALL', 'AV_RT_RES', 'AV_RT_NON-RES',
