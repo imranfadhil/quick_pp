@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from scipy.stats import gmean
+from scipy.stats import gmean, hmean
 from scipy.stats import truncnorm
 import random
 import matplotlib.pyplot as plt
@@ -27,9 +27,9 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
     step = 0.1524 if uom == 'm' else 0.5
     df = pd.DataFrame({'depth': depth, 'vshale': vshale, 'phit': phit, 'swt': swt, 'perm': perm, 'zones': zones})
     df['rock_flag'], df['reservoir_flag'], df['pay_flag'] = flag_interval(df['vshale'], df['phit'], df['swt'], cutoffs)
-
+    df['all_flag'] = 1
     ressum_df = pd.DataFrame()
-    for flag in ['rock', 'reservoir', 'pay']:
+    for flag in ['all', 'rock', 'reservoir', 'pay']:
         temp_df = pd.DataFrame()
         # Calculate net thickness
         temp_df[["zones", "net"]] = df.groupby(["zones"])[[f"{flag}_flag"]].agg(
@@ -37,20 +37,28 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
 
         # Average the properties and merge
         flag_df = df[df[f"{flag}_flag"] == 1].copy()
-        avg_mddf = flag_df.groupby(["zones"]).agg({
+        avg_df = flag_df.groupby(["zones"]).agg({
             "vshale": lambda x: np.nanmean(x),
             "phit": lambda x: np.nanmean(x),
-            "swt": lambda x: np.nanmean(x),
-            "perm": lambda x: gmean(x, nan_policy='omit')
-        }).reset_index()
-        temp_df = temp_df.merge(avg_mddf, on=["zones"], how="left", validate="1:1")
+            "swt": lambda x: np.nanmean(x)
+        }).reset_index().rename(columns={"vshale": "av_vshale", "phit": "av_phit", "swt": "av_swt"})
+        avg_df['perm_am'] = flag_df.groupby('zones')['perm'].agg('mean').reset_index(drop=True)
+        avg_df['perm_gm'] = flag_df.groupby('zones')['perm'].agg(gmean, nan_policy='omit').reset_index(drop=True)
+        avg_df['perm_hm'] = flag_df.groupby('zones')['perm'].agg(hmean, nan_policy='omit').reset_index(drop=True)
+        temp_df = temp_df.merge(avg_df, on=["zones"], how="left", validate="1:1")
 
-        # Calculate gross thickness and merge
+        # Calculate gross thickness
         gross = df.groupby(["zones"])[["depth"]].agg(lambda x: np.nanmax(x) - np.nanmin(x)).reset_index().rename(
             columns={"depth": "gross"})
         temp_df = temp_df.merge(gross[["zones", 'gross']], on=["zones"], how="left", validate="1:1")
+        temp_df['ntg'] = temp_df['net'] / temp_df['gross']
 
-        # Set the minimum depth as top depth and merge
+        # Set the maximum depth as bottom depth
+        bottom = df.groupby(["zones"])[["depth"]].agg(lambda x: np.nanmax(x)).reset_index().rename(
+            columns={"depth": "bottom"})
+        temp_df = temp_df.merge(bottom[["zones", 'bottom']], on=["zones"], how="left", validate="1:1")
+
+        # Set the minimum depth as top depth
         top = df.groupby(["zones"])[["depth"]].agg(lambda x: np.nanmin(x)).reset_index().rename(
             columns={"depth": "top"})
         temp_df = temp_df.merge(top[["zones", 'top']], on=["zones"], how="left", validate="1:1")
@@ -63,7 +71,8 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
     ressum_df = ressum_df.sort_values(by=['top'], ignore_index=True)
 
     # Sort the columns
-    cols = ['zones', 'flag', 'top', 'gross', 'net', 'vshale', 'phit', 'swt', 'perm']
+    cols = ['zones', 'flag', 'top', 'bottom', 'gross', 'net', 'ntg',
+            'av_vshale', 'av_phit', 'av_swt', 'perm_am', 'perm_gm', 'perm_hm']
 
     return ressum_df[cols]
 
@@ -106,8 +115,8 @@ def volumetric_method(
             - Truncated normal distribution parameters for thickness.
         porosity_bound (tuple): (min, max, mean, std) in fraction.
             - Truncated normal distribution parameters for porosity.
-        water_saturation_bound (tuple): (min, max, mode) in fraction.
-            - Triangular distribution parameters for water saturation.
+        water_saturation_bound (tuple): (min, max, mean, std) in fraction.
+            - Truncated normal distribution parameters for water saturation.
         volume_factor_bound (tuple): (min, max) unitless.
             - Uniform distribution parameters for volume factor.
         recovery_factor_bound (tuple): (min, max, mean, std) in fraction.
@@ -118,20 +127,31 @@ def volumetric_method(
         float: Estimated volume in MM bbl.
     """
     random.seed(random_state)
-    a = truncnorm.rvs(area_bound[0], area_bound[1], loc=area_bound[2], scale=area_bound[3],
-                      random_state=random_state)
-    h = truncnorm.rvs(thickness_bound[0], thickness_bound[1], loc=thickness_bound[2], scale=thickness_bound[3],
-                      random_state=random_state)
-    poro = truncnorm.rvs(porosity_bound[0], porosity_bound[1], loc=porosity_bound[2], scale=porosity_bound[3],
-                         random_state=random_state)
-    sw = random.triangular(water_saturation_bound[0], water_saturation_bound[1], mode=water_saturation_bound[2])
+    a_min_transformed = (area_bound[0] - area_bound[2]) / area_bound[3]
+    a_max_transformed = (area_bound[1] - area_bound[2]) / area_bound[3]
+    a = truncnorm.rvs(a_min_transformed, a_max_transformed,
+                      loc=area_bound[2], scale=area_bound[3], random_state=random_state)
+
+    h_min_transformed = (thickness_bound[0] - thickness_bound[2]) / thickness_bound[3]
+    h_max_transformed = (thickness_bound[1] - thickness_bound[2]) / thickness_bound[3]
+    h = truncnorm.rvs(h_min_transformed, h_max_transformed,
+                      loc=thickness_bound[2], scale=thickness_bound[3], random_state=random_state)
+
+    poro_min_transformed = (porosity_bound[0] - porosity_bound[2]) / porosity_bound[3]
+    poro_max_transformed = (porosity_bound[1] - porosity_bound[2]) / porosity_bound[3]
+    poro = truncnorm.rvs(poro_min_transformed, poro_max_transformed,
+                         loc=porosity_bound[2], scale=porosity_bound[3], random_state=random_state)
+    sw_min_transformed = (water_saturation_bound[0] - water_saturation_bound[2]) / water_saturation_bound[3]
+    sw_max_transformed = (water_saturation_bound[1] - water_saturation_bound[2]) / water_saturation_bound[3]
+    sw = truncnorm.rvs(sw_min_transformed, sw_max_transformed,
+                       loc=water_saturation_bound[2], scale=water_saturation_bound[3], random_state=random_state)
+
     bo = random.uniform(volume_factor_bound[0], volume_factor_bound[1])
-    rf = truncnorm.rvs(
-        recovery_factor_bound[0],
-        recovery_factor_bound[1],
-        loc=recovery_factor_bound[2],
-        scale=recovery_factor_bound[3],
-        random_state=random_state)
+
+    rf_min_transformed = (recovery_factor_bound[0] - recovery_factor_bound[2]) / recovery_factor_bound[3]
+    rf_max_transformed = (recovery_factor_bound[1] - recovery_factor_bound[2]) / recovery_factor_bound[3]
+    rf = truncnorm.rvs(rf_min_transformed, rf_max_transformed,
+                       loc=recovery_factor_bound[2], scale=recovery_factor_bound[3], random_state=random_state)
     return a, h, poro, sw, bo, rf
 
 
@@ -153,8 +173,8 @@ def mc_volumetric_method(
             - Truncated normal distribution parameters for thickness.
         porosity_bound (tuple): (min, max, mean, std) in fraction.
             - Truncated normal distribution parameters for porosity.
-        water_saturation_bound (tuple): (min, max, mode) in fraction.
-            - Triangular distribution parameters for water saturation.
+        water_saturation_bound (tuple): (min, max, mean, std) in fraction.
+            - Truncated normal distribution parameters for water saturation.
         volume_factor_bound (tuple): (min, max) unitless.
             - Uniform distribution parameters for volume factor.
         recovery_factor_bound (tuple): (min, max, mean, std) in fraction.
@@ -188,18 +208,21 @@ def mc_volumetric_method(
         volumes = np.append(volumes, result * 1e-6)
 
     # Plot tornado chart
-    plt.figure(figsize=(10, 2))
-    plt.boxplot(area, vert=False, labels=['Area (acre)'], widths=0.5, )
-    plt.figure(figsize=(10, 2))
-    plt.boxplot(thickness, vert=False, labels=['Thickness (ft)'], widths=0.5)
-    plt.figure(figsize=(10, 2))
-    plt.boxplot(porosity, vert=False, labels=['Porosity (frac)'], widths=0.5)
-    plt.figure(figsize=(10, 2))
-    plt.boxplot(water_saturation, vert=False, labels=['Water Saturation (frac)'], widths=0.5)
-    plt.figure(figsize=(10, 2))
-    plt.boxplot(volume_factor, vert=False, labels=['Volume Factor'], widths=0.5)
-    plt.figure(figsize=(10, 2))
-    plt.boxplot(recovery_factor, vert=False, labels=['Recovery Factor (frac)'], widths=0.5)
+    fig, axs = plt.subplots(6, 1, figsize=(10, 10), constrained_layout=True)
+    axs[0].boxplot(area, vert=False, widths=0.5)
+    axs[0].set_ylabel('Area (acre)')
+    axs[1].boxplot(thickness, vert=False, widths=0.5)
+    axs[1].set_ylabel('Thickness (ft)')
+    axs[2].boxplot(porosity, vert=False, widths=0.5)
+    axs[2].set_ylabel('Porosity (frac)')
+    axs[3].boxplot(water_saturation, vert=False, widths=0.5)
+    axs[3].set_ylabel('Water Saturation (frac)')
+    axs[4].boxplot(volume_factor, vert=False, widths=0.5)
+    axs[4].set_ylabel('Volume Factor')
+    axs[5].boxplot(recovery_factor, vert=False, widths=0.5)
+    axs[5].set_ylabel('Recovery Factor (frac)')
+    fig.set_facecolor('aliceblue')
+    fig.show()
 
     plt.figure(figsize=(12, 6))
     a = np.hstack(volumes)
@@ -248,8 +271,8 @@ def sensitivity_analysis(
             - Truncated normal distribution parameters for thickness.
         porosity_bound (tuple): (min, max, mean, std) in fraction.
             - Truncated normal distribution parameters for porosity.
-        water_saturation_bound (tuple): (min, max, mode) in fraction.
-            - Triangular distribution parameters for water saturation.
+        water_saturation_bound (tuple): (min, max, mean, std) in fraction.
+            - Truncated normal distribution parameters for water saturation.
         volume_factor_bound (tuple): (min, max) unitless.
             - Uniform distribution parameters for volume factor.
         recovery_factor_bound (tuple): (min, max, mean, std) in fraction.

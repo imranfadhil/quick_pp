@@ -1,11 +1,11 @@
 import pandas as pd
 import numpy as np
-from scipy.stats import gmean, hmean
 import matplotlib.pyplot as plt
 
 from quick_pp.utils import length_a_b, line_intersection
 from quick_pp.rock_type import estimate_vsh_gr
 from quick_pp.config import Config
+from quick_pp.ressum import calc_reservoir_summary, flag_interval
 
 plt.style.use('seaborn-v0_8-paper')
 
@@ -232,80 +232,49 @@ def quick_qc(well_data, return_fig=False):
         plt.Figure: Depth plot.
     """
     return_df = well_data.copy()
-    return_df['PERM'].where(return_df['PERM'] > 0, np.nan, inplace=True)
+    return_df['ZONES'] = "ALL"
     return_df['QC_FLAG'] = 0
+    return_df['PERM'].where(return_df['PERM'] > 0, np.nan, inplace=True)
+
+    cutoffs = dict(VSHALE=0.4, PHIT=0.01, SWT=0.9)
+    _, return_df['RES_FLAG'], _ = flag_interval(return_df['VCLW'], return_df['PHIT'], return_df['SWT'], cutoffs)
+    return_df['ALL_FLAG'] = 1
 
     # Check average swt in non-reservoir zone
     return_df['QC_FLAG'] = np.where((return_df['RES_FLAG'] == 0) & (return_df['SWT'] < 0.8), 3, return_df['QC_FLAG'])
 
     # Summarize
-    summary_df = pd.DataFrame()
-    for group in ['ALL', 'RES', 'NON-RES']:
-        index = return_df['WELL_NAME'].notna() if group == 'ALL' else return_df['RES_FLAG'] == 1 if group == 'RES' \
-            else return_df['RES_FLAG'] == 0
+    summary_df = calc_reservoir_summary(
+        return_df.DEPTH, return_df.VCLW, return_df.PHIT, return_df.SWT, return_df.PERM, return_df.ZONES
+    )
+    summary_df.columns = [col.upper() for col in summary_df.columns]
+    for group in ['all', 'reservoir']:
+        index = return_df['ALL_FLAG'] == 1 if group == 'all' else return_df['RES_FLAG'] == 1
+        data = return_df[index]
 
         # Calculate average and standard deviation
-        temp_df = return_df[index].groupby('ZONES').agg({
+        temp_df = data.groupby('ZONES').agg({
             'GR': ['mean', 'std'],
             'RT': ['mean', 'std'],
             'NPHI': ['mean', 'std'],
             'RHOB': ['mean', 'std'],
-            'VSHALE': ['mean', 'std'],
-            'PHIT': ['mean', 'std'],
-            'SWT': ['mean', 'std'],
         })
         # Rename columns
-        cols_rename = [f'{stat}_{col}_{group}' for col, stat in temp_df.columns]
-        cols_rename = [col.replace('mean', 'AV') for col in cols_rename]
-        cols_rename = [col.replace('std', 'STD') for col in cols_rename]
-        temp_df.columns = temp_df.columns.droplevel(0)
+        cols_rename = [f'{stat}_{col}' for col, stat in temp_df.columns]
+        cols_rename = [col.replace('mean', 'AV').replace('std', 'STD') for col in cols_rename]
         temp_df.columns = cols_rename
 
-        temp_df[f'AV_PERM_AM_{group}'] = return_df[index].groupby('ZONES')['PERM'].agg('mean')
-        temp_df[f'AV_PERM_GM_{group}'] = return_df[index].groupby('ZONES')['PERM'].agg(gmean, nan_policy='omit')
-        temp_df[f'AV_PERM_HM_{group}'] = return_df[index].groupby('ZONES')['PERM'].agg(hmean, nan_policy='omit')
-        temp_df[f'STD_PERM_{group}'] = return_df[index].groupby('ZONES')['PERM'].agg('std')
+        summary_df.loc[summary_df.FLAG == group, ['AV_GR', 'AV_RT', 'AV_NPHI', 'AV_RHOB']] = temp_df[
+            ['AV_GR', 'AV_RT', 'AV_NPHI', 'AV_RHOB']].values
 
-        summary_df = pd.concat([summary_df, temp_df], axis=1)
+        summary_df.loc[summary_df.FLAG == group, ['STD_GR', 'STD_RT', 'STD_NPHI', 'STD_RHOB']] = temp_df[
+            ['STD_GR', 'STD_RT', 'STD_NPHI', 'STD_RHOB']].values
 
-    summary_df['RES_FLAG'] = return_df.groupby('ZONES')['RES_FLAG'].sum()
-    summary_df['QC_FLAG'] = return_df.where(return_df['QC_FLAG'] == 1, 0).groupby('ZONES')['QC_FLAG'].sum()
-    summary_df['QC_FLAG_mode'] = return_df.groupby('ZONES')['QC_FLAG'].agg(lambda x: x.mode())
-    summary_df['TOP'] = return_df.groupby('ZONES')['DEPTH'].agg(lambda x: x.min())
-    summary_df['BOTTOM'] = return_df.groupby('ZONES')['DEPTH'].agg(lambda x: x.max())
-    summary_df['GROSS'] = summary_df['BOTTOM'] - summary_df['TOP']
-    summary_df['COUNT'] = return_df.groupby('ZONES')['DEPTH'].count()
-    summary_df['NET'] = summary_df['RES_FLAG'] * summary_df['GROSS'] / summary_df['COUNT']
-    summary_df['NTG'] = summary_df['NET'] / summary_df['GROSS']
-    summary_df = summary_df.sort_values(by='QC_FLAG', ascending=False).reset_index().round(3)
+        summary_df.loc[summary_df.FLAG == group, 'QC_FLAG_COUNT'] = data.where(
+            data['QC_FLAG'] == 1, 0).groupby('ZONES')['QC_FLAG'].sum().values
 
-    # Sort columns
-    cols = ['ZONES', 'TOP', 'BOTTOM', 'GROSS', 'NET', 'NTG',
-            'AV_VSHALE_ALL', 'AV_VSHALE_RES', 'AV_VSHALE_NON-RES',
-            'AV_PHIT_ALL', 'AV_PHIT_RES', 'AV_PHIT_NON-RES',
-            'AV_SWT_ALL', 'AV_SWT_RES', 'AV_SWT_NON-RES',
-            'AV_PERM_AM_ALL', 'AV_PERM_AM_RES', 'AV_PERM_AM_NON-RES',
-            'AV_PERM_GM_ALL', 'AV_PERM_GM_RES', 'AV_PERM_GM_NON-RES',
-            'AV_PERM_HM_ALL', 'AV_PERM_HM_RES', 'AV_PERM_HM_NON-RES',
-            'STD_VSHALE_ALL', 'STD_VSHALE_RES', 'STD_VSHALE_NON-RES',
-            'STD_PHIT_ALL', 'STD_PHIT_RES', 'STD_PHIT_NON-RES',
-            'STD_SWT_ALL', 'STD_SWT_RES', 'STD_SWT_NON-RES',
-            'STD_PERM_ALL', 'STD_PERM_RES', 'STD_PERM_NON-RES',
-            'COUNT', 'RES_FLAG', 'QC_FLAG', 'QC_FLAG_mode',
-            'AV_GR_ALL', 'AV_GR_RES', 'AV_GR_NON-RES',
-            'AV_RT_ALL', 'AV_RT_RES', 'AV_RT_NON-RES',
-            'AV_NPHI_ALL', 'AV_NPHI_RES', 'AV_NPHI_NON-RES',
-            'AV_RHOB_ALL', 'AV_RHOB_RES', 'AV_RHOB_NON-RES']
-    summary_df = summary_df[cols]
-
-    # Rename columns
-    cols_rename = {
-        'COUNT': 'DATA_COUNT',
-        'RES_FLAG': 'SAND_COUNT',
-        'QC_FLAG': 'QC_FLAG_COUNT',
-        'QC_FLAG_mode': 'QC_FLAG_mode',
-    }
-    summary_df = summary_df.rename(columns=cols_rename)
+        summary_df.loc[summary_df.FLAG == group, 'QC_FLAG_mode'] = data.groupby(
+            'ZONES')['QC_FLAG'].agg(lambda x: x.mode()).values
 
     if return_fig:
         # Distribution plot
@@ -414,22 +383,23 @@ def quick_compare(field_data, level='WELL', return_fig=False):
 
     if return_fig:
         # Box plot
-        curves = ['AV_GR_ALL', 'AV_RT_ALL', 'AV_NPHI_ALL', 'AV_RHOB_ALL',
-                  'AV_VSHALE_ALL', 'AV_PHIT_ALL', 'AV_SWT_ALL', 'AV_PERM_GM_ALL']
+        curves = ['AV_GR', 'AV_RT', 'AV_NPHI', 'AV_RHOB',
+                  'AV_VSHALE', 'AV_PHIT', 'AV_SWT', 'PERM_GM']
         no_curves = len(curves)
-        idx_percentiles = [int(x * (len(compare_df) - 1)) for x in [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]]
+        plot_df = compare_df[compare_df.FLAG == 'all']
+        idx_percentiles = [int(x * (len(plot_df) - 1)) for x in [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]]
         fig, axes = plt.subplots(no_curves, 3, figsize=(7, 2.5 * no_curves),
                                  gridspec_kw={'width_ratios': [1, 3, 5]})
         for i, curve in enumerate(curves):
             # Box plot
             axes[i, 0].set_title(curve)
-            axes[i, 0].boxplot(compare_df[curve], labels=[''])
+            axes[i, 0].boxplot(plot_df[curve], labels=[''])
 
             # Distribution plot
-            axes[i, 1].hist(compare_df[curve], bins=25, alpha=0.7, orientation='horizontal')
+            axes[i, 1].hist(plot_df[curve], bins=25, alpha=0.7, orientation='horizontal')
 
             # Summary table
-            df = compare_df[['WELL_NAME', curve]].sort_values(by=curve, ascending=True).reset_index(drop=True)
+            df = plot_df[['WELL_NAME', curve]].sort_values(by=curve, ascending=True).reset_index(drop=True)
             df = df.loc[idx_percentiles, :].round(2)
             df['PERCENTILES'] = ['0%', '10%', '25%', '50%', '75%', '90%', '100%']
             df = df[['PERCENTILES', curve, 'WELL_NAME']]
@@ -453,11 +423,12 @@ def extract_quick_stats(compare_df):
     Returns:
         pd.DataFrame: Quick stats dataframe
     """
+    compare_df = compare_df[compare_df.FLAG == 'all'].copy()
     # Extract quick stats
     reqs = ['PHIT', 'SWT']
     stats_df = pd.DataFrame()
     for col in compare_df.columns:
-        if (('AV' in col or 'STD' in col) and 'ALL' in col and any([req in col for req in reqs])) or col == 'NTG':
+        if any([req in col for req in reqs]) or col in ['NET', 'NTG']:
             stats = compare_df[col].describe(percentiles=[0.1, 0.5, 0.9])
             stats_df[col] = stats
 

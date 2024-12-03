@@ -223,7 +223,7 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
     well_names = sorted(data['WELL_NAME'].unique(), key=lambda name: well_config[name]['sorting'])
 
     # Create subplots
-    fig, axes = plt.subplots(nrows=1, ncols=len(well_names), sharey=True, figsize=(len(well_names) * 2, 10))
+    fig, axes = plt.subplots(nrows=1, ncols=len(well_names), sharey=True, figsize=(len(well_names) * 2, 15))
 
     # Plot each well's data
     for ax, well_name in zip(axes, well_names):

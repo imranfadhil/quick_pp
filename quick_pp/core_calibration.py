@@ -94,7 +94,7 @@ def pc_xplot(sw, pc, label=None, ylim=None):
         plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
 
-def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False, ax=None):
+def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False, ax=None, ylim=None):
     """Generate J-Sw cross plot.
 
     Args:
@@ -114,8 +114,9 @@ def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False, a
     ax.set_xlabel('Sw (frac)')
     ax.set_xlim(0.01, 1)
     ax.set_ylabel('J')
-    ax.set_yscale('log')
+    ax.set_ylim(ylim) if ylim else ax.set_ylim(0.01, ax.get_lines()[-1].get_ydata().max())
     if log_log:
+        ax.set_yscale('log')
         ax.set_xscale('log')
     if label:
         ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
@@ -241,7 +242,7 @@ def leverett_j(pc, ift, theta, perm, phit):
     Returns:
         float: Leverett J value.
     """
-    return 0.216 * (pc / (ift * abs(np.cos(np.radians(theta))))) * (perm / phit)**(0.5)
+    return 0.21665 * pc / (ift * abs(np.cos(np.radians(theta)))) * (perm / phit)**(0.5)
 
 
 def pseudo_leverett_j():
