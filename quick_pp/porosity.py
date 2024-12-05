@@ -179,7 +179,7 @@ def sonic_porosity_wyllie(dt, dt_matrix, dt_fluid):
     return (dt - dt_matrix) / (dt_fluid - dt_matrix)
 
 
-def sonic_porosity_hunt_raymer(dt, dt_matrix, c):
+def sonic_porosity_hunt_raymer(dt, dt_matrix, dt_fluid):
     """
     Computes sonic porosity based on Hunt-Raymer's equation from interval, matrix and transit time.
 
@@ -189,8 +189,8 @@ def sonic_porosity_hunt_raymer(dt, dt_matrix, c):
         Interval transit time [us/ft].
     dt_matrix : float
         Matrix transit time [us/ft]. Sandstone: 51-55, Limestone: 43-48, Dolomite: 43-39, Shale: 60-170.
-    c : float
-        constant (0.62 to 0.7).
+    dt_fluid : float
+        Fluid transit time [us/ft]. Water: 190, Oil: 240, Gas: 630.
 
     Returns
     -------
@@ -198,7 +198,8 @@ def sonic_porosity_hunt_raymer(dt, dt_matrix, c):
         Sonic porosity [fraction].
 
     """
-    return c * (dt - dt_matrix) / dt_matrix
+    c = (dt_matrix / (2 * dt_fluid)) - 1
+    return - c - (c**2 + (dt_matrix / dt) - 1)**0.5
 
 
 def neu_den_xplot_poro_pt(

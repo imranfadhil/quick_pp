@@ -264,6 +264,20 @@ def plot_modified_lorenz(cpore, cperm, title="Modified Lorenz's Plot"):
     plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
 
 
+def estimate_pore_throat(pc, ift, theta):
+    """Estimate pore throat size from capillary pressure curve based on Washburn 1921.
+
+    Args:
+        pc (float): Capillary pressure in psi.
+        ift (float): Interfacial tension in mN/m.
+        theta (float): Contact angle in degree.
+
+    Returns:
+        float: Pore throat size in micrometer.
+    """
+    return 2 * 0.145 * ift * abs(np.cos(np.radians(theta))) / pc
+
+
 def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
     """Estimate volume of shale from gamma ray. If min_gr and max_gr are not provided,
     it will be automatically estimated.

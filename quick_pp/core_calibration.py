@@ -220,7 +220,7 @@ def fit_poroperm_curve(poro, perm):
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        popt, _ = curve_fit(power_law_func, poro, perm)
+        popt, _ = curve_fit(power_law_func, poro, perm, nan_policy='omit')
         a = [round(c) for c in popt][0]
         b = [round(c, 3) for c in popt][1]
         return a, b
