@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
@@ -350,6 +351,7 @@ def train_classification_model(data, input_features: list, target_feature: str, 
         data (DataFrame): Dataframe containing input and target features.
         input_features (list): List of input features.
         target_feature (str): The target feature.
+        stratifier (array, optional): Stratifier for train-test split. Defaults to None.
 
     Returns:
         RandomForestClassifier: Trained model.
@@ -363,17 +365,40 @@ def train_classification_model(data, input_features: list, target_feature: str, 
 
     # Hyperparameter tuning
     param_dist = {
-        'n_estimators': [10, 100, 200],
-        'max_depth': [5, 30, None],
-        'min_samples_split': [2, 5, 10],
+        'n_estimators': [150, 200],
+        'max_depth': [30, None],
+        'max_features': [.5, 'sqrt'],
+        'min_samples_split': [2, .5],
+        'min_samples_leaf': [1, .2],
+        'criterion': ['gini', 'entropy']
     }
-    model = RandomizedSearchCV(RandomForestClassifier(), param_dist, cv=5, random_state=random_seed)
+    model = RandomizedSearchCV(RandomForestClassifier(), param_dist, cv=7, scoring='f1_weighted',
+                               random_state=random_seed)
     model.fit(X_train, y_train)
 
+    # Feature importance
+    best_model = model.best_estimator_
+    importances = best_model.feature_importances_
+    std = np.std([tree.feature_importances_ for tree in best_model.estimators_], axis=0)
+    rf_importances = pd.Series(importances, index=input_features)
+
+    fig, ax = plt.subplots()
+    rf_importances.plot.bar(yerr=std, ax=ax)
+    ax.set_title("Feature importances using MDI")
+    ax.set_ylabel("Mean decrease in impurity")
+    fig.tight_layout()
+
     # Model evaluation
+    y_pred_train = model.predict(X_train)
     y_pred = model.predict(X_test)
     print(f'Score for {target_feature} model\n')
     print('Best parameters found:\n', model.best_params_)
+    print('### Train Set ###')
+    print('Classification Report:\n', classification_report(y_train, y_pred_train))
+    cm = confusion_matrix(y_train, y_pred_train, labels=model.classes_)
+    ConfusionMatrixDisplay(cm, display_labels=model.classes_).plot()
+
+    print('\n### Test Set ###')
     print('Classification Report:\n', classification_report(y_test, y_pred))
     cm = confusion_matrix(y_test, y_pred, labels=model.classes_)
     ConfusionMatrixDisplay(cm, display_labels=model.classes_).plot()
@@ -401,26 +426,50 @@ def train_regression_model(data, input_features: list, target_feature: list, str
 
     # Hyperparameter tuning
     param_dist = {
-        'n_estimators': [10, 50, 100],
-        'max_depth': [5, 30, None],
-        'min_samples_split': [2, 5, 10],
+        'n_estimators': [150, 200],
+        'max_depth': [30, None],
+        'max_features': [.5, 'sqrt'],
+        'min_samples_split': [2, .5],
+        'min_samples_leaf': [1, .2],
+        'criterion': ['squared_error', 'absolute_error']
     }
-    model = RandomizedSearchCV(RandomForestRegressor(), param_dist, cv=3, random_state=random_seed)
+    model = RandomizedSearchCV(RandomForestRegressor(), param_dist, cv=5, scoring='r2',
+                               random_state=random_seed)
     model.fit(X_train, y_train)
 
+    # Feature importance
+    best_model = model.best_estimator_
+    importances = best_model.feature_importances_
+    std = np.std([tree.feature_importances_ for tree in best_model.estimators_], axis=0)
+    rf_importances = pd.Series(importances, index=input_features)
+
+    fig, ax = plt.subplots()
+    rf_importances.plot.bar(yerr=std, ax=ax)
+    ax.set_title("Feature importances using MDI")
+    ax.set_ylabel("Mean decrease in impurity")
+    fig.tight_layout()
+
     # Model evaluation
+    y_pred_train = model.predict(X_train)
     y_pred = model.predict(X_test)
     print(f'Score for {target_feature} model\n')
     print('Best parameters found:\n', model.best_params_)
+    print('### Train Set ###')
+    print('R2 Score:', r2_score(y_train, y_pred_train))
+    print('Mean Absolute Error:', mean_absolute_error(y_train, y_pred_train))
+
+    print('\n### Test Set ###')
     print('R2 Score:', r2_score(y_test, y_pred))
     print('Mean Absolute Error:', mean_absolute_error(y_test, y_pred))
 
     # Plot the true vs predicted values
     plt.figure(figsize=(10, 8))
-    plt.plot(y_test, y_pred, '.')
+    plt.plot(y_train, y_pred_train, '.', label='Actual', markersize=8)
+    plt.plot(y_test, y_pred, '.', label='Predicted', markersize=6)
     plt.xlabel('True')
     plt.ylabel('Predicted')
     plt.title(f'{target_feature} Prediction')
+    plt.legend(bbox_to_anchor=(1, 1), loc="upper left")
     plt.show()
 
     return model
