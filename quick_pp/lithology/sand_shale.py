@@ -1,7 +1,6 @@
 import numpy as np
 
 from quick_pp.utils import min_max_line, length_a_b, line_intersection
-from quick_pp.porosity import neu_den_xplot_poro_pt
 from quick_pp.config import Config
 
 
@@ -9,7 +8,7 @@ class SandShale:
     """This binary model only consider a combination of sand-shale components. """
 
     def __init__(self, dry_sand_point: tuple = None, dry_clay_point: tuple = None,
-                 fluid_point: tuple = None, wet_clay_point: tuple = None, silt_line_angle: float = None):
+                 fluid_point: tuple = None, wet_clay_point: tuple = None, silt_line_angle: float = None, **kwargs):
         # Initialize the endpoints
         self.dry_sand_point = dry_sand_point or Config.SSC_ENDPOINTS["DRY_SAND_POINT"]
         self.dry_clay_point = dry_clay_point or Config.SSC_ENDPOINTS["DRY_CLAY_POINT"]
@@ -68,16 +67,13 @@ class SandShale:
         E = list(zip(nphi, rhob))
         rocklithofrac = length_a_b(A, C)
 
-        vsand = []
-        vcld = []
+        vsand = np.empty(0)
+        vcld = np.empty(0)
         for i, point in enumerate(E):
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
             vshale = projlithofrac / rocklithofrac
-
-            phit = neu_den_xplot_poro_pt(point[0], point[1], 'ss', A, (0, 0), C, D)
-            vmatrix = 1 - phit
-            vsand.append((1 - vshale) * vmatrix)
-            vcld.append(vshale * vmatrix)
+            vsand = np.append(vsand, (1 - vshale))
+            vcld = np.append(vcld, vshale)
 
         return vsand, vcld

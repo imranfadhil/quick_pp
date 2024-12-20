@@ -173,18 +173,17 @@ def pre_process(welly_object):
     nullValue = header_df[header_df['mnemonic'] == 'NULL']['value'].values[0] if \
         header_df[header_df['mnemonic'] == 'NULL']['value'].values else -999.25
     data_df = data_df.where(data_df >= nullValue, np.nan)
-
+    # Insert well name
     well_name = header_df[
         (header_df['mnemonic'] == 'WELL') | (header_df['descr'].str.upper() == 'WELL')
     ]['value'].values[0]
     if 'WELL_NAME' not in data_df.columns:
         data_df.insert(0, 'WELL_NAME', well_name)
-    else:
-        data_df['WELL_NAME'] = well_name
-    uwi = header_df[
-        (header_df['mnemonic'] == 'UWI') | (header_df['descr'].str.upper() == 'UNIQUE WELL ID')
-    ]['value'].values[0]
-    if 'UWI' not in data_df.columns:
+    # Insert UWI if available
+    if 'UWI' in header_df['mnemonic'].values:
+        uwi = header_df[
+            (header_df['mnemonic'] == 'UWI') | (header_df['descr'].str.upper() == 'UNIQUE WELL ID')
+        ]['value'].values[0]
         data_df.insert(0, 'UWI', uwi)
 
     return data_df
