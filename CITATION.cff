@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: Please cite this software using these metadata.
+title: quick_pp
+abstract: Quick petrophysical interpretation.
+authors:
+  - family-names: Fadhil
+    given-names: Imran
+    orcid: https://orcid.org/0000-0001-9392-8083
+repository-code: "https://github.com/imranfadhil/quick_pp"
+version: 0.1.18
+license: MIT
+type: software
