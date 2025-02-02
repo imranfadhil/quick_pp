@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
 from quick_pp.utils import min_max_line
-from quick_pp.utils import power_law_func as func
 
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(
@@ -223,7 +222,7 @@ def estimate_rw_waxman_smits(phit, rt, a=1, m=2, B=None, Qv=None):
 
 
 def estimate_rt_water_trend(rt, alpha=0.3):
-    """Estimate trend RT of formation water based.
+    """Estimate trend RT of formation water (experiment).
 
     Args:
         rt (float): True resistivity.
@@ -329,31 +328,35 @@ def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
     return m
 
 
-def swirr_xplot(swt, phit, c=None, q=None, label='', log_log=False):
-    """Plot SWT vs PHIT for sand intervales only and estimate Swirr from X-plot.
+def swirr_xplot(swt, phit, c=.0125, label='', log_log=False, title=''):
+    """Plot SWT vs PHIT for sand intervales only and estimate Swirr from cross plot.
+    Based on Buckles, 1965.
 
     Args:
         swt (float): Water saturation.
         phit (float): Total porosity.
-        c (float): Constant.
-        q (float): Constant.
+        c (float): Constant. Defaults to 0.125.
     """
-    sc = plt.scatter(swt, phit, marker='s', label=label)
-    if c and q:
+    fig, ax = plt.subplots()
+    ax.set_title(title)
+    sc = ax.scatter(swt, phit, marker='.', label=label)
+    if c:
         line_color = sc.get_facecolors()[0]
-        line_color[-1] = 0.5
-        cphit = np.geomspace(0.1, 1.0, 30)
-        plt.plot(cphit, func(cphit, c, q), color=line_color, linestyle='dashed')
-    plt.xlabel('SWT (frac)')
-    plt.ylabel('PHIT (frac)')
-    plt.ylim(0.01, .5)
-    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+        line_color[-1] = 0.75
+        cphit = np.geomspace(0.0001, 0.4, 30)
+        ax.plot(c / cphit, cphit, label=rf'$\phi$ S = {c}',
+                color=line_color, linestyle='dashed')
+    ax.set_ylabel('PHIT (frac)')
+    ax.set_xlabel('SWT (frac)')
+    ax.set_xlim(0, 1)
+    ax.legend()
     if log_log:
-        plt.xscale('log')
-        plt.yscale('log')
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+    fig.tight_layout()
 
 
-def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2):
+def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2, title='Pickett Plot'):
     """Generate Pickett plot which is used to plot phit and rt at water bearing interval to determine;
         m = The slope of best-fit line crossing the cleanest sand.
         rw = Formation water resistivity. The intercept of the best-fit line at rt when phit = 100%.
@@ -367,7 +370,7 @@ def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2):
     """
     m = m if m < 0 else -m
     fig, ax = plt.subplots(figsize=(5, 5))
-    ax.set_title('Pickett Plot')
+    ax.set_title(title)
     ax.scatter(rt, phit, marker='.', color='b')
     # Add iso-lines
     phit_i = np.arange(0, 1, 1 / len(phit))
@@ -392,8 +395,6 @@ def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2):
 
     ax.legend()
     fig.tight_layout()
-
-    return fig
 
 
 def RI_plot(sw, rt, ro):

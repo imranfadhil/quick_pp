@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+from scipy.cluster.hierarchy import ward, dendrogram
+from scipy.spatial.distance import pdist
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
@@ -188,28 +190,44 @@ def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title='Winland R35
     plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
 
 
-def plot_ward(cpore, cperm, cutoffs=[], title="Ward's Plot"):
-    """Plot Ward's plot to identify possible flow units.
+def plot_ward_dendogram(X, p=10, title="Ward's Dendogram"):
+    # Calculate the pairwise distance matrix
+    input_df = X.dropna().sort_values().reset_index(drop=True).values.reshape(-1, 1)
+    distance_matrix = pdist(input_df)
+
+    # Perform Ward's linkage
+    linkage_matrix = ward(distance_matrix)
+
+    # Plot the dendrogram
+    fig_width = min(10, p * 0.5)
+    plt.figure(figsize=(fig_width, 10))
+    dendrogram(linkage_matrix, truncate_mode='lastp', p=p)
+    plt.title('Ward\'s Dendrogram')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Distance')
+    plt.show()
+
+
+def plot_cumulative_probability(cpore, cperm, cutoffs=[], title="Cumulative Probability Plot"):
+    """Plot cumulative probability to identify possible flow units.
 
     Args:
         cpore (float): Core porosity in fraction.
         cperm (float): Core permeability in mD.
-        title (str, optional): Title of the plot. Defaults to "Ward's Plot".
+        title (str, optional): Title of the plot. Defaults to "Cumulative Probability Plot".
     """
     fzi = calc_fzi(cpore, cperm)
     fzi = fzi[~np.isnan(fzi)]
     sorted_fzi = sorted(fzi)
     log_fzi = np.log10(sorted_fzi)
-    p_log_fzi = (np.arange(1, len(log_fzi) + 1) - .5) / len(log_fzi)
-    t = (-2 * np.log(p_log_fzi))**0.5
-    zi = abs(t - ((2.30753 + .27061 * t) / (1 + 0.99229 * t + 0.04481 * t**2)))
+    zi = np.cumsum(sorted_fzi) / np.sum(sorted_fzi)
 
-    # Generate Ward's plot
+    # Generate cumulative probability plot
     plt.figure(figsize=(8, 4))
     plt.title(title)
     plt.scatter(log_fzi, zi, marker='.')
-    plt.xlabel('log(fzi)')
-    plt.ylabel('zi')
+    plt.xlabel('log(FZI)')
+    plt.ylabel('Cumulative Probability')
     plt.minorticks_on()
     plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
     plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')

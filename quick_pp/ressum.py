@@ -4,6 +4,7 @@ from scipy.stats import gmean, hmean
 from scipy.stats import truncnorm
 import random
 import matplotlib.pyplot as plt
+import ptitprince as pt
 from SALib.analyze.sobol import analyze
 from SALib.sample.sobol import sample
 
@@ -26,6 +27,7 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
     """
     step = 0.1524 if uom == 'm' else 0.5
     df = pd.DataFrame({'depth': depth, 'vshale': vshale, 'phit': phit, 'swt': swt, 'perm': perm, 'zones': zones})
+    df['bvo'] = df['phit'] * (1 - df['swt'])
     df['rock_flag'], df['reservoir_flag'], df['pay_flag'] = flag_interval(df['vshale'], df['phit'], df['swt'], cutoffs)
     df['all_flag'] = 1
     ressum_df = pd.DataFrame()
@@ -40,8 +42,9 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
         avg_df = flag_df.groupby(["zones"]).agg({
             "vshale": lambda x: np.nanmean(x),
             "phit": lambda x: np.nanmean(x),
-            "swt": lambda x: np.nanmean(x)
-        }).reset_index().rename(columns={"vshale": "av_vshale", "phit": "av_phit", "swt": "av_swt"})
+            "swt": lambda x: np.nanmean(x),
+            "bvo": lambda x: np.nanmean(x)
+        }).reset_index().rename(columns={"vshale": "av_vshale", "phit": "av_phit", "swt": "av_swt", "bvo": "av_bvo"})
         avg_df['perm_am'] = flag_df.groupby('zones')['perm'].agg('mean').reset_index(drop=True)
         avg_df['perm_gm'] = flag_df.groupby('zones')['perm'].agg(gmean, nan_policy='omit').reset_index(drop=True)
         avg_df['perm_hm'] = flag_df.groupby('zones')['perm'].agg(hmean, nan_policy='omit').reset_index(drop=True)
@@ -72,7 +75,7 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
 
     # Sort the columns
     cols = ['zones', 'flag', 'top', 'bottom', 'gross', 'net', 'ntg',
-            'av_vshale', 'av_phit', 'av_swt', 'perm_am', 'perm_gm', 'perm_hm']
+            'av_vshale', 'av_phit', 'av_swt', 'av_bvo', 'perm_am', 'perm_gm', 'perm_hm']
 
     return ressum_df[cols]
 
@@ -103,7 +106,7 @@ def volumetric_method(
     porosity_bound: tuple,
     water_saturation_bound: tuple,
     volume_factor_bound: tuple,
-    recovery_factor_bound: tuple,
+    recovery_factor_bound: tuple = None,
     random_state=None
 ):
     """Calculate volume using the volumetric method.
@@ -148,10 +151,13 @@ def volumetric_method(
 
     bo = random.uniform(volume_factor_bound[0], volume_factor_bound[1])
 
-    rf_min_transformed = (recovery_factor_bound[0] - recovery_factor_bound[2]) / recovery_factor_bound[3]
-    rf_max_transformed = (recovery_factor_bound[1] - recovery_factor_bound[2]) / recovery_factor_bound[3]
-    rf = truncnorm.rvs(rf_min_transformed, rf_max_transformed,
-                       loc=recovery_factor_bound[2], scale=recovery_factor_bound[3], random_state=random_state)
+    if recovery_factor_bound is not None:
+        rf_min_transformed = (recovery_factor_bound[0] - recovery_factor_bound[2]) / recovery_factor_bound[3]
+        rf_max_transformed = (recovery_factor_bound[1] - recovery_factor_bound[2]) / recovery_factor_bound[3]
+        rf = truncnorm.rvs(rf_min_transformed, rf_max_transformed,
+                           loc=recovery_factor_bound[2], scale=recovery_factor_bound[3], random_state=random_state)
+    else:
+        rf = 1.0
     return a, h, poro, sw, bo, rf
 
 
@@ -161,7 +167,6 @@ def mc_volumetric_method(
     porosity_bound: tuple,
     water_saturation_bound: tuple,
     volume_factor_bound: tuple,
-    recovery_factor_bound: tuple,
     n_try=10000, percentile=[10, 50, 90]
 ):
     """Monte Carlo simulation for volumetric method.
@@ -177,8 +182,6 @@ def mc_volumetric_method(
             - Truncated normal distribution parameters for water saturation.
         volume_factor_bound (tuple): (min, max) unitless.
             - Uniform distribution parameters for volume factor.
-        recovery_factor_bound (tuple): (min, max, mean, std) in fraction.
-            - Truncated normal distribution parameters for RF.
         n_try (int, optional): Number of trials. Defaults to 10000.
         percentile (list, optional): Percentiles to calculate. Defaults to [10, 50, 90].
     """
@@ -187,40 +190,43 @@ def mc_volumetric_method(
     porosity = np.empty(0)
     water_saturation = np.empty(0)
     volume_factor = np.empty(0)
-    recovery_factor = np.empty(0)
     volumes = np.empty(0)
     for i in range(n_try):
-        a, h, poro, sw, bo, rf = volumetric_method(
+        a, h, poro, sw, bo, _ = volumetric_method(
             area_bound=area_bound,
             thickness_bound=thickness_bound,
             porosity_bound=porosity_bound,
             water_saturation_bound=water_saturation_bound,
-            volume_factor_bound=volume_factor_bound,
-            recovery_factor_bound=recovery_factor_bound
+            volume_factor_bound=volume_factor_bound
         )
         area = np.append(area, a)
         thickness = np.append(thickness, h)
         porosity = np.append(porosity, poro)
         water_saturation = np.append(water_saturation, sw)
         volume_factor = np.append(volume_factor, bo)
-        recovery_factor = np.append(recovery_factor, rf)
-        result = (43560 * 0.1781) * a * h * poro * (1 - sw) / bo * rf
+        result = (43560 * 0.1781) * a * h * poro * (1 - sw) / bo
         volumes = np.append(volumes, result * 1e-6)
 
     # Plot tornado chart
-    fig, axs = plt.subplots(6, 1, figsize=(10, 10), constrained_layout=True)
-    axs[0].boxplot(area, vert=False, widths=0.5)
+    data = pd.DataFrame({
+        'Area': area,
+        'Thickness': thickness,
+        'Porosity': porosity,
+        'Water Saturation': water_saturation,
+        'Volume Factor': volume_factor,
+        'Volume': volumes
+    })
+    fig, axs = plt.subplots(5, 1, figsize=(7, 11), constrained_layout=True)
+    pt.RainCloud(data=data, y='Area', ax=axs[0], orient='h', bw=0.1, width_viol=0.5, alpha=0.6, dodge=True)
     axs[0].set_ylabel('Area (acre)')
-    axs[1].boxplot(thickness, vert=False, widths=0.5)
+    pt.RainCloud(data=data, y='Thickness', ax=axs[1], orient='h', bw=0.1, width_viol=0.5, alpha=0.6, dodge=True)
     axs[1].set_ylabel('Thickness (ft)')
-    axs[2].boxplot(porosity, vert=False, widths=0.5)
+    pt.RainCloud(data=data, y='Porosity', ax=axs[2], orient='h', bw=0.1, width_viol=0.5, alpha=0.6, dodge=True)
     axs[2].set_ylabel('Porosity (frac)')
-    axs[3].boxplot(water_saturation, vert=False, widths=0.5)
+    pt.RainCloud(data=data, y='Water Saturation', ax=axs[3], orient='h', bw=0.1, width_viol=0.5, alpha=0.6, dodge=True)
     axs[3].set_ylabel('Water Saturation (frac)')
-    axs[4].boxplot(volume_factor, vert=False, widths=0.5)
+    pt.RainCloud(data=data, y='Volume Factor', ax=axs[4], orient='h', bw=0.1, width_viol=0.5, alpha=0.6, dodge=True)
     axs[4].set_ylabel('Volume Factor')
-    axs[5].boxplot(recovery_factor, vert=False, widths=0.5)
-    axs[5].set_ylabel('Recovery Factor (frac)')
     fig.set_facecolor('aliceblue')
     fig.show()
 
@@ -233,10 +239,10 @@ def mc_volumetric_method(
         plt.axvline(x=pct, color='r', linestyle='dashed', label=f'P{percentile[i]}: {round(pct)} MM bbl')
     plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
-    return volumes, area, thickness, porosity, water_saturation, volume_factor, recovery_factor
+    return volumes, area, thickness, porosity, water_saturation, volume_factor
 
 
-def calculate_volume(x, area, thickness, porosity, water_saturation, volume_factor, recovery_factor):
+def calculate_volume(x, area, thickness, porosity, water_saturation, volume_factor, recovery_factor=1):
     """Calculate volume using the volumetric method.
 
     Args:
@@ -259,8 +265,7 @@ def sensitivity_analysis(
     thickness_bound: tuple,
     porosity_bound: tuple,
     water_saturation_bound: tuple,
-    volume_factor_bound: tuple,
-    recovery_factor_bound: tuple
+    volume_factor_bound: tuple
 ):
     """Sensitivity analysis for volumetric method.
 
@@ -275,20 +280,17 @@ def sensitivity_analysis(
             - Truncated normal distribution parameters for water saturation.
         volume_factor_bound (tuple): (min, max) unitless.
             - Uniform distribution parameters for volume factor.
-        recovery_factor_bound (tuple): (min, max, mean, std) in fraction.
-            - Truncated normal distribution parameters for RF.
     """
     # Define the model inputs
     problem = {
-        'num_vars': 6,
-        'names': ['area', 'thickness', 'porosity', 'water_saturation', 'volume_factor', 'recovery_factor'],
+        'num_vars': 5,
+        'names': ['area', 'thickness', 'porosity', 'water_saturation', 'volume_factor'],
         'bounds': [
             [area_bound[0], area_bound[1]],
             [thickness_bound[0], thickness_bound[1]],
             [porosity_bound[0], porosity_bound[1]],
             [water_saturation_bound[0], water_saturation_bound[1]],
-            [volume_factor_bound[0], volume_factor_bound[1]],
-            [recovery_factor_bound[0], recovery_factor_bound[1]]
+            [volume_factor_bound[0], volume_factor_bound[1]]
         ]
     }
 

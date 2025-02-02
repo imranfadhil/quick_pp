@@ -414,7 +414,7 @@ def quick_compare(field_data, level='WELL', return_fig=False):
         return compare_df.reset_index(drop=True), None
 
 
-def extract_quick_stats(compare_df):
+def extract_quick_stats(compare_df, flag='all'):
     """Extract quick stats from average comparison dataframe.
 
     Args:
@@ -423,7 +423,7 @@ def extract_quick_stats(compare_df):
     Returns:
         pd.DataFrame: Quick stats dataframe
     """
-    compare_df = compare_df[compare_df.FLAG == 'all'].copy()
+    compare_df = compare_df[compare_df.FLAG == flag].copy()
     # Extract quick stats
     reqs = ['PHIT', 'SWT']
     stats_df = pd.DataFrame()

@@ -219,6 +219,10 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
     assert 'SWT' in data.columns, 'SWT column not found in data.'
     assert_well_config_structure(well_config)
 
+    # Create BVO and BVOH columns
+    data['BVO'] = data['PHIT'] * (1 - data['SWT'])
+    data['BVOH'] = data['PHIT'] * (1 - data['SHF']) if 'SHF' in data.columns else 0
+
     # Sort well names based on sorting key
     well_names = sorted(data['WELL_NAME'].unique(), key=lambda name: well_config[name]['sorting'])
 
@@ -229,9 +233,9 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
     for ax, well_name in zip(axes, well_names):
         well_data = data[(data['WELL_NAME'] == well_name) & (data['ZONES'] == zone)].copy()
         well_data = update_fluid_contacts(well_data, well_config[well_name]['zones'][zone])
-        ax.plot(well_data['SWT'], well_data['DEPTH'], label='SWT')
-        if 'SHF' in well_data.columns:
-            ax.plot(well_data['SHF'], well_data['DEPTH'], label='SHF')
+        ax.plot(well_data['BVO'], well_data['DEPTH'], label=r'$BVO_{Log}$')
+        if 'BVOH' in well_data.columns:
+            ax.plot(well_data['BVOH'], well_data['DEPTH'], label=r'$BVO_{SHF}$')
 
         # Fill between based on fluid flag
         ax.fill_betweenx(
@@ -242,11 +246,12 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
             well_data['DEPTH'], 0, 1, where=well_data['FLUID_FLAG'] == 0, color='b', alpha=0.3, label='Water')
 
         ax.set_title(f'Well: {well_name}')
-        ax.set_xlim(0, 1)
+        ax.set_xlim(0, .5)
         ax.legend()
 
     axes[0].set_ylabel('Depth')
     fig.subplots_adjust(wspace=0.3, hspace=0)
+    fig.set_facecolor('aliceblue')
     plt.gca().invert_yaxis()
     plt.show()
 
