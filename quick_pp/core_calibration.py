@@ -1,6 +1,7 @@
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
 
 from quick_pp.utils import power_law_func, inv_power_law_func
 
@@ -92,6 +93,28 @@ def pc_xplot(sw, pc, label=None, ylim=None):
     plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
     if label:
         plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+
+
+def pc_xplot_plotly(sw, pc, label=None, ylim=None, fig=go.Figure()):
+    """Generate J-Sw cross plot using Plotly.
+
+    Args:
+        sw (float): Core water saturation (frac).
+        pc (float): Capillary pressure (psi).
+        label (str, optional): Label for the data group. Defaults to ''.
+        ylim (tuple, optional): Range for the y axis in (min, max) format. Defaults to None.
+    """
+    fig.add_trace(go.Scatter(x=sw, y=pc, name=label))
+    fig.update_layout(
+        xaxis_title='Sw (frac)',
+        yaxis_title='Pc (psi)',
+        xaxis_range=[0, 1],
+        yaxis_range=[0, 50] if ylim is None else [ylim[0], ylim[1]],
+        legend=dict(x=1.04, y=1, traceorder='normal'),
+        height=500,
+        width=800
+    )
+    return fig
 
 
 def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False, ax=None, ylim=None):

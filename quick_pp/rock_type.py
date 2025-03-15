@@ -100,9 +100,15 @@ def plot_fzi(cpore, cperm, cut_offs=None, rock_type=None, title='Flow Zone Indic
     plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
     cut_offs = cut_offs if cut_offs is not None else np.arange(0.5, 5)
     phit_points = np.geomspace(0.001, 1, 20)
-    for fzi in cut_offs:
+    prt_num = len(cut_offs)
+    ax.annotate(f'PRT {prt_num + 1}', xy=(.3, .7), xytext=(1, 1),
+                textcoords='offset points', fontsize=10, fontweight='bold')
+    for i, fzi in enumerate(cut_offs):
         perm_points = phit_points * ((phit_points * fzi) / (.0314 * (1 - phit_points)))**2
-        plt.plot(phit_points, perm_points, linestyle='dashed', label=f'FZI={round(fzi, 3)}')
+        ax.plot(phit_points, perm_points, linestyle='dashed', label=f'FZI={round(fzi, 3)}')
+        prt_num = len(cut_offs) - i
+        ax.annotate(f'PRT {prt_num}', xy=(.3, perm_points[-4]), xytext=(1, 1),
+                    textcoords='offset points', fontsize=10, fontweight='bold')
 
     plt.xlabel('Porosity (frac)')
     plt.xlim(-.05, .5)
