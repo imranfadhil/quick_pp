@@ -130,7 +130,10 @@ def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False, a
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
     ax = ax or plt.gca()
-    ax.scatter(sw, j, marker='.', c=core_group, cmap='Set1')
+    scatter = ax.scatter(sw, j, marker='.', c=core_group, cmap='Set1')
+    if core_group is not None:
+        legend1 = ax.legend(*scatter.legend_elements(), title="Core Sample")
+        ax.add_artist(legend1)
     if a is not None and b is not None:
         csw = np.geomspace(0.01, 1.0, 20)
         ax.plot(csw, inv_power_law_func(csw, a, b), label=label, linestyle='dashed')
@@ -140,6 +143,7 @@ def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False, a
     ax.set_ylim(ylim) if ylim else ax.set_ylim(0.01, ax.get_lines()[-1].get_ydata().max())
     if log_log:
         ax.set_yscale('log')
+        ax.set_ylim(0.01, 100)
         ax.set_xscale('log')
     if label:
         ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
