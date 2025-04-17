@@ -49,6 +49,32 @@ def line_intersection(line1, line2):
     return x, y
 
 
+def angle_between_lines(line1, line2):
+    """Calculates the angle between two lines in degrees.
+
+    Args:
+        line1 (tuple of tuples): ((x11, y11), (x12, y12))
+        line2 (tuple of tuples): ((x21, y21), (x22, y22))
+
+    Returns:
+        float: Angle between the two lines in degrees.
+    """
+    def slope(line):
+        (x1, y1), (x2, y2) = line
+        return (y2 - y1) / (x2 - x1) if x2 != x1 else float('inf')
+
+    m1 = slope(line1)
+    m2 = slope(line2)
+
+    if m1 == float('inf') or m2 == float('inf'):
+        return 90.0  # Angle is 90 degrees if one of the lines is vertical
+
+    tan_theta = abs((m2 - m1) / (1 + m1 * m2))
+    angle = math.degrees(math.atan(tan_theta))
+
+    return angle
+
+
 def zone_flagging(data: pd.DataFrame):
     """Flagging sand zones based on VSHALE, VCLW, and VSH_GR.
 

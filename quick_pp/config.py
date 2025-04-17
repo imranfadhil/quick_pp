@@ -41,6 +41,14 @@ class Config(object):
         SILT_LINE_ANGLE=119  # Deg angle from horizontal
     )
 
+    TS_ENDPOINTS = dict(
+        FLUID_POINT=(1.0, 1.0),
+        DRY_SAND_POINT=(-0.02, 2.65),
+        DRY_SHALE_POINT=(0.44, 2.71),
+        DRY_SAND_PORO=.26,
+        DRY_SHALE_PORO=.1,
+    )
+
     CARB_NEU_DEN_ENDPOINTS = dict(
         FLUID_POINT=(1.0, 1.0),
         DRY_CALC_POINT=(0.0, 2.71),
