@@ -89,7 +89,7 @@ class ThinBeds:
             vsh_dis_pt = line_intersection((A, C), (B, point))
             proj_vsh_dis_frac = length_a_b(vsh_dis_pt, A)
             vsh_dis_frac = length_a_b(A, C)
-            vsh_dis = np.append(vsh_dis, proj_vsh_dis_frac / vsh_dis_frac)
+            vsh_dis = np.append(vsh_dis, proj_vsh_dis_frac / vsh_dis_frac * A[1])
             vsand_dis = np.append(vsand_dis, (1 - vsh_dis[i]))
 
             phit_sand = np.append(phit_sand, line_intersection((A, C), (B, point))[1])
@@ -123,13 +123,13 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float):
     vsh_dis_from_pt = (A, C)
     vsh_lower_envlope_from_pt = ((0, 0), B)
 
-    fig = plt.Figure(figsize=(5, 5))
+    fig = plt.Figure(figsize=(7, 7))
     ax = fig.add_subplot(111)
     ax.set_title('NPHI-RHOB Crossplot')
     ax.scatter(vsh, phit, c=np.arange(0, len(vsh)), cmap='rainbow', marker='.')
 
     ax.plot(*zip(*vsh_lam_from_pt), label='Laminated', color='blue')
-    ax.plot(*zip(*vsh_dis_from_pt), label='Dispersed (pore filling)', color='gray')
+    ax.plot(*zip(*vsh_dis_from_pt), label='Dispersed (pore filling)', color='green')
     ax.plot(*zip(*vsh_lower_envlope_from_pt), label='Dispersed (grain replacing)', color='black')
 
     # Add isolines parallel to vsh_lam_from_pt
@@ -140,26 +140,43 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float):
             (A[0] + t * (B[0] - A[0]), A[1] + t * (B[1] - A[1])),
             (C[0] + t * (B[0] - C[0]), C[1] + t * (B[1] - C[1]))
         ]
-        ax.plot(*zip(*intermediate_line), linestyle='--', color='blue', alpha=0.5)
+        ax.plot(*zip(*intermediate_line), linestyle='--', color='blue', alpha=0.75)
+        ax.text(
+            intermediate_line[0][0], intermediate_line[0][1] + .007,
+            f'{int(t * 100)}%',
+            fontsize=8,
+            color='blue',
+            ha='center',
+            va='center'
+        )
 
     # Add lines equally distributed between vsh_lam_from_pt and vsh_dis_from_pt
-    num_lines = 10
+    num_lines = 5
     for i in range(1, num_lines + 1):
         t = i / (num_lines + 1)
         intermediate_line = [
             (A[0] + t * (C[0] - A[0]), A[1] + t * (C[1] - A[1])),
             (B[0] + t * (C[0] - B[0]), B[1] + t * (C[1] - B[1]))
         ]
-        ax.plot(*zip(*intermediate_line), linestyle='--', color='green', alpha=0.5)
+        ax.plot(*zip(*intermediate_line), linestyle='--', color='green', alpha=0.75)
+        ax.text(
+            intermediate_line[0][0] - .03, intermediate_line[0][1],
+            f'{int(t * 100 * A[1])}%',
+            fontsize=8,
+            color='green',
+            ha='center',
+            va='center'
+        )
 
-    # # Add lines with different slopes originating from point B
-    # theta = angle_between_lines((A, B), (B, C))
-    # num_lines = 10
-    # for i in range(1, num_lines + 1):
-
-    #     projected_pt = line_intersection
-
-    #     ax.plot(*zip(*intermediate_line), linestyle='--', color='red', alpha=0.5)
+    # Add lines with different slopes originating from point B
+    num_lines = 5
+    for i in range(1, num_lines + 1):
+        t = i / (num_lines + 1)
+        intermediate_line = [
+            (B[0], B[1]),
+            (A[0] + t * (C[0] - A[0]), A[1] + t * (C[1] - A[1]))
+        ]
+        ax.plot(*zip(*intermediate_line), linestyle='--', color='red', alpha=0.75)
 
     ax.scatter(A[0], A[1], label=f'Clean Sand: ({A[0]}, {A[1]})', color='orange')
     ax.scatter(B[0], B[1], label=f'Pure Shale: ({B[0]}, {B[1]})', color='black')
@@ -167,7 +184,7 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float):
 
     ax.set_ylim(0, 0.5)
     ax.set_ylabel('PHIT (v/v)')
-    ax.set_xlim(-.02, 1)
+    ax.set_xlim(-.05, 1)
     ax.set_xlabel('Vshale (v/v)')
     ax.legend(loc="upper left", prop={'size': 9})
     ax.minorticks_on()
