@@ -69,27 +69,29 @@ class ThinBeds:
         A = (0, self.dry_sand_poro)
         B = (1, self.dry_shale_poro)
         lower_vertex_phit = self.dry_sand_poro * self.dry_shale_poro
-        lower_vertex_vshale = self.dry_shale_poro * lower_vertex_phit
-        C = (lower_vertex_phit, lower_vertex_vshale)
+        lower_vertex_vshale = lower_vertex_phit / self.dry_shale_poro
+        C = (lower_vertex_vshale, lower_vertex_phit)
 
         theta_vsh_lam = angle_between_lines((A, C), (A, (0, 0)))
+        theta_vsh_dis = angle_between_lines((A, B), (B, (0, B[1])))
 
+        vsh_lam_frac = length_a_b(B, C)
+        vsh_dis_frac = length_a_b(A, C)
         vsh_lam = np.empty(0)
         vsh_dis = np.empty(0)
         vsand_dis = np.empty(0)
         phit_sand = np.empty(0)
         D = list(zip(vshale, phit))
         for i, point in enumerate(D):
-            vsh_pt = point[0] + length_a_b(point, (point[0], 0)) * math.tan(theta_vsh_lam)
+            vsh_pt = point[0] + length_a_b(point, (point[0], 0)) * math.tan(math.radians(theta_vsh_lam))
             vsh_lam_pt = line_intersection((B, C), ((vsh_pt, 0), point))
             proj_vsh_lam_frac = length_a_b(vsh_lam_pt, C)
-            vsh_lam_frac = length_a_b(B, C)
             vsh_lam = np.append(vsh_lam, proj_vsh_lam_frac / vsh_lam_frac)
 
-            vsh_dis_pt = line_intersection((A, C), (B, point))
+            poro_pt = point[1] + length_a_b(point, (0, point[1])) * math.tan(math.radians(theta_vsh_dis))
+            vsh_dis_pt = line_intersection((A, C), ((0, poro_pt), point))
             proj_vsh_dis_frac = length_a_b(vsh_dis_pt, A)
-            vsh_dis_frac = length_a_b(A, C)
-            vsh_dis = np.append(vsh_dis, proj_vsh_dis_frac / vsh_dis_frac * A[1])
+            vsh_dis = np.append(vsh_dis, proj_vsh_dis_frac / vsh_dis_frac * (A[1] - C[1]))
             vsand_dis = np.append(vsand_dis, (1 - vsh_dis[i]))
 
             phit_sand = np.append(phit_sand, line_intersection((A, C), (B, point))[1])
@@ -97,7 +99,7 @@ class ThinBeds:
         return vsh_lam, vsh_dis, vsand_dis, phit_sand
 
 
-def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float):
+def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwargs):
     """Neutron-Density crossplot with lithology lines based on specified end points.
 
     Args:
@@ -115,8 +117,8 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float):
     A = (0, dry_sand_poro)
     B = (1, dry_shale_poro)
     lower_vertex_phit = round(dry_sand_poro * dry_shale_poro, 4)
-    lower_vertex_vshale = round(dry_shale_poro * lower_vertex_phit, 4)
-    C = (lower_vertex_phit, lower_vertex_vshale)
+    lower_vertex_vshale = round(lower_vertex_phit / dry_shale_poro, 4)
+    C = (lower_vertex_vshale, lower_vertex_phit)
 
     # Plotting the NPHI-RHOB crossplot
     vsh_lam_from_pt = (A, B)
@@ -133,7 +135,7 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float):
     ax.plot(*zip(*vsh_lower_envlope_from_pt), label='Dispersed (grain replacing)', color='black')
 
     # Add isolines parallel to vsh_lam_from_pt
-    num_lines = 10
+    num_lines = 9
     for i in range(1, num_lines + 1):
         t = i / (num_lines + 1)
         intermediate_line = [
@@ -151,7 +153,7 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float):
         )
 
     # Add lines equally distributed between vsh_lam_from_pt and vsh_dis_from_pt
-    num_lines = 5
+    num_lines = 9
     for i in range(1, num_lines + 1):
         t = i / (num_lines + 1)
         intermediate_line = [
@@ -161,7 +163,7 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float):
         ax.plot(*zip(*intermediate_line), linestyle='--', color='green', alpha=0.75)
         ax.text(
             intermediate_line[0][0] - .03, intermediate_line[0][1],
-            f'{int(t * 100 * A[1])}%',
+            f'{int(t * 100 * (A[1] - C[1]))}%',
             fontsize=8,
             color='green',
             ha='center',
@@ -169,7 +171,7 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float):
         )
 
     # Add lines with different slopes originating from point B
-    num_lines = 5
+    num_lines = 4
     for i in range(1, num_lines + 1):
         t = i / (num_lines + 1)
         intermediate_line = [

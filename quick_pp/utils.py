@@ -50,7 +50,7 @@ def line_intersection(line1, line2):
 
 
 def angle_between_lines(line1, line2):
-    """Calculates the angle between two lines in degrees.
+    """Calculates the convex angle between two lines in degrees.
 
     Args:
         line1 (tuple of tuples): ((x11, y11), (x12, y12))
@@ -61,16 +61,28 @@ def angle_between_lines(line1, line2):
     """
     def slope(line):
         (x1, y1), (x2, y2) = line
-        return (y2 - y1) / (x2 - x1) if x2 != x1 else float('inf')
+        if x2 == x1:  # Vertical line
+            return None
+        elif y2 == y1:  # Horizontal line
+            return 0
+        return (y2 - y1) / (x2 - x1)
 
     m1 = slope(line1)
     m2 = slope(line2)
 
-    if m1 == float('inf') or m2 == float('inf'):
-        return 90.0  # Angle is 90 degrees if one of the lines is vertical
+    if m1 is None and m2 is None:
+        return 0.0  # Both lines are vertical, angle is 0 degrees
+    elif m1 is None:  # Line1 is vertical
+        angle = 90.0 if m2 == 0 else math.degrees(math.atan(abs(1 / m2)))
+    elif m2 is None:  # Line2 is vertical
+        angle = 90.0 if m1 == 0 else math.degrees(math.atan(abs(1 / m1)))
+    else:
+        tan_theta = abs((m2 - m1) / (1 + m1 * m2))
+        angle = math.degrees(math.atan(tan_theta))
 
-    tan_theta = abs((m2 - m1) / (1 + m1 * m2))
-    angle = math.degrees(math.atan(tan_theta))
+    # Ensure the angle is convex (less than or equal to 180 degrees)
+    if angle > 90.0:
+        angle = 180.0 - angle
 
     return angle
 
