@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from .exceptions import return_exception_message
+from fastapi_mcp import FastApiMCP
 
 from .router import api_router
 
@@ -36,8 +37,10 @@ app = FastAPI(
     openapi_tags=tags_metadata,
     debug=False
 )
-
 app.include_router(api_router)
+
+mcp = FastApiMCP(app)
+mcp.mount()
 
 
 @app.get("/")
