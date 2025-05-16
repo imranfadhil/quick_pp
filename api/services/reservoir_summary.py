@@ -17,7 +17,7 @@ async def calculate_reservoir_summary_(inputs: inputData = Body(..., example=EXA
     input_df = pd.DataFrame.from_records(input_dict['data'])
     ressum_df = calc_reservoir_summary(
         depth=input_df['depth'],
-        vshale=input_df['vclw'],
+        vshale=input_df['vcld'],
         phit=input_df['phit'],
         swt=input_df['swt'],
         perm=input_df['perm'],

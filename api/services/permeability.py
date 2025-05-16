@@ -17,7 +17,7 @@ async def estimate_perm_choo(inputs: perm_ch_inputData = Body(..., example=PERM_
 
     # Get the data
     input_df = pd.DataFrame.from_records(input_dict['data'])
-    perm = choo_permeability(input_df['vclw'], input_df['vsilt'], input_df['phit'])
+    perm = choo_permeability(input_df['vcld'], input_df['vsilt'], input_df['phit'])
     return_dict = pd.DataFrame({'PERM': perm.ravel()}).to_dict(orient='records')
     return return_dict
 
@@ -65,6 +65,6 @@ async def estimate_perm_kozeny_carman(inputs: perm_others_inputData = Body(..., 
 
     # Get the data
     input_df = pd.DataFrame.from_records(input_dict['data'])
-    perm = kozeny_carman_permeability(input_df['phit'], input_df['swirr'])
+    perm = input_df.apply(lambda row: kozeny_carman_permeability(row['phit'], row['swirr']), axis=1)
     return_dict = pd.DataFrame({'PERM': perm.ravel()}).to_dict(orient='records')
     return return_dict

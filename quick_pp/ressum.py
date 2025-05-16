@@ -106,7 +106,7 @@ def volumetric_method(
     porosity_bound: tuple,
     water_saturation_bound: tuple,
     volume_factor_bound: tuple,
-    recovery_factor_bound: tuple = None,
+    recovery_factor_bound: tuple = (),
     random_state=None
 ):
     """Calculate volume using the volumetric method.
@@ -231,7 +231,7 @@ def mc_volumetric_method(
     fig.show()
 
     plt.figure(figsize=(12, 6))
-    a = np.hstack(volumes)
+    a = np.hstack(volumes.tolist())
     _ = plt.hist(a, density=True, bins='auto')  # arguments are passed to np.histogram
     plt.title(f"Volume Estimation ({n_try} samples)")
     plt.xlabel('Volume (MM bbl)')

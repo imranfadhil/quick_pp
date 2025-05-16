@@ -137,8 +137,8 @@ def badhole_flagging(data, thold=4):
 
 def neu_den_xplot_hc_correction(
         nphi, rhob, vsh_gr=None,
-        dry_min1_point: tuple = None,
-        dry_clay_point: tuple = None,
+        dry_min1_point: tuple = (),
+        dry_clay_point: tuple = (),
         fluid_point: tuple = (1.0, 1.0),
         corr_angle: float = 50, buffer=0.0):
     """Estimate correction for neutron porosity and bulk density based on correction angle.

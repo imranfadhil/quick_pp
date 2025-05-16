@@ -147,7 +147,7 @@ def generate_well_config(well_names: list = ['X']):
 
 
 def update_well_config(
-        well_config: dict, well_name: str, zone: str = '', fluid_contacts: dict = {}, sorting: int = None):
+        well_config: dict, well_name: str, zone: str = '', fluid_contacts: dict = {}, sorting: int = 0):
     """Update well configuration with fluid contacts.
 
     Args:
@@ -260,8 +260,8 @@ def neutron_density_xplot(nphi, rhob,
                           dry_min1_point: tuple,
                           dry_clay_point: tuple,
                           fluid_point: tuple,
-                          wet_clay_point: tuple = None,
-                          dry_silt_point: tuple = None, **kwargs):
+                          wet_clay_point: tuple = (),
+                          dry_silt_point: tuple = (), **kwargs):
     """Neutron-Density crossplot with lithology lines based on specified end points.
 
     Args:
@@ -291,7 +291,7 @@ def neutron_density_xplot(nphi, rhob,
     fig = plt.Figure(figsize=(5, 5))
     ax = fig.add_subplot(111)
     ax.set_title('NPHI-RHOB Crossplot')
-    ax.scatter(nphi, rhob, c=np.arange(0, len(nphi)), cmap='rainbow', marker='.')
+    ax.scatter(nphi, rhob, c=np.arange(0, len(nphi)).tolist(), cmap='rainbow', marker='.')
     ax.plot(*zip(*min1line_from_pt), label='Mineral 1 Line', color='blue')
 
     if dry_silt_point:

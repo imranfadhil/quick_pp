@@ -3,7 +3,7 @@ import pandas as pd
 
 from api.schemas.porosity import inputData as phit_inputData, EXAMPLE as PHIT_EXAMPLE
 
-from quick_pp.lithology import SandSiltClay
+from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.porosity import neu_den_xplot_poro, density_porosity, rho_matrix
 
 router = APIRouter(prefix="/porosity", tags=["Porosity"])
@@ -21,7 +21,6 @@ async def estimate_phit_den(inputs: phit_inputData = Body(..., example=PHIT_EXAM
     DryClayPoint = input_dict['dry_clay_point']
     FluidPoint = input_dict['fluid_point']
     WetClayPoint = input_dict['wet_clay_point']
-    Method = input_dict['method']
     SiltLineAngle = input_dict['silt_line_angle']
 
     # Get the data
@@ -33,11 +32,11 @@ async def estimate_phit_den(inputs: phit_inputData = Body(..., example=PHIT_EXAM
         dry_sand_point=DrySandPoint, dry_silt_point=DrySiltPoint, dry_clay_point=DryClayPoint,
         fluid_point=FluidPoint, wet_clay_point=WetClayPoint, silt_line_angle=SiltLineAngle
     )
-    vsand, vsilt, vcld, vclb, _ = ssc_model.estimate_lithology(nphi, rhob, model=Method, normalize=False)
+    vsand, vsilt, vcld, _ = ssc_model.estimate_lithology(nphi, rhob)
     df_ssc_model = pd.DataFrame(
-        {'VSAND': vsand, 'VSILT': vsilt, 'VCLW': vcld + vclb, 'VCLD': vcld},
+        {'VSAND': vsand, 'VSILT': vsilt, 'VCLD': vcld},
     )
-    rho_ma = rho_matrix(df_ssc_model['VSAND'], df_ssc_model['VSILT'], df_ssc_model['VCLD'])
+    rho_ma = df_ssc_model.apply(lambda row: rho_matrix(row['VSAND'], row['VSILT'], row['VCLD']), axis=1)
 
     phid = density_porosity(rhob, rho_ma, FluidPoint[1])
     return_dict = pd.DataFrame({'PHID': phid.ravel()}).to_dict(orient='records')
@@ -64,7 +63,7 @@ async def estimate_phit_neu_den(inputs: phit_inputData = Body(..., example=PHIT_
 
     phit = neu_den_xplot_poro(
         nphi, rhob, model=Method,
-        dry_sand_point=DrySandPoint, dry_silt_point=DrySiltPoint, dry_clay_point=DryClayPoint,
+        dry_min1_point=DrySandPoint, dry_silt_point=DrySiltPoint, dry_clay_point=DryClayPoint,
         fluid_point=FluidPoint
     )
 
