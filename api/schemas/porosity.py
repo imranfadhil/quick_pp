@@ -1,21 +1,21 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Tuple, Optional
 
 
-class data(BaseModel):
+class Data(BaseModel):
     nphi: float
     rhob: float
 
 
-class inputData(BaseModel):
-    dry_sand_point: tuple
-    dry_silt_point: tuple
-    dry_clay_point: tuple
-    fluid_point: tuple
-    wet_clay_point: tuple
+class InputData(BaseModel):
+    dry_sand_point: Tuple[float, float]
+    dry_silt_point: Tuple[float, float]
+    dry_clay_point: Tuple[float, float]
+    fluid_point: Tuple[float, float]
+    wet_clay_point: Optional[Tuple[float, float]]
     method: str
     silt_line_angle: float
-    data: List[data]
+    data: List[Data]
 
 
 EXAMPLE = {

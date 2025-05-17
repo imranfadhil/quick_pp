@@ -1,19 +1,21 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List
 
 
-class data(BaseModel):
-    depth: float
-    vcld: float
-    phit: float
-    swt: float
-    perm: float
-    zones: str
+class Data(BaseModel):
+    """Schema for a single reservoir data point."""
+    depth: float = Field(..., description="Depth of the sample")
+    vcld: float = Field(..., description="Volume of clay")
+    phit: float = Field(..., description="Total porosity")
+    swt: float = Field(..., description="Water saturation")
+    perm: float = Field(..., description="Permeability")
+    zones: str = Field(..., description="Zone identifier")
 
 
-class inputData(BaseModel):
-    cut_offs: dict
-    data: List[data]
+class InputData(BaseModel):
+    """Input schema for reservoir summary, including cut-offs and data list."""
+    cut_offs: dict = Field(..., description="Dictionary of cut-off values")
+    data: List[Data] = Field(..., description="List of reservoir data points")
 
 
 EXAMPLE = {

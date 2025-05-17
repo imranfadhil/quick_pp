@@ -1,9 +1,13 @@
+"""
+API endpoints for lithology-related calculations: SSC, Vsh from GR, and hydrocarbon correction.
+Optimized for readability, reliability, and maintainability.
+"""
 from fastapi import APIRouter, Body
 import pandas as pd
 
-from api.schemas.lithology_ssc import inputData as ssc_inputData, EXAMPLE as SSC_EXAMPLE
-from api.schemas.lithology_vsh_gr import inputData as vsh_gr_inputData, EXAMPLE as VSH_GR_EXAMPLE
-from api.schemas.lithology_hc_correction import inputData as hc_corr_inputData, EXAMPLE as HC_CORR_EXAMPLE
+from api.schemas.lithology_ssc import LithologySSCInput, EXAMPLE as SSC_EXAMPLE
+from api.schemas.lithology_vsh_gr import LithologyVshGRInput, EXAMPLE as VSH_GR_EXAMPLE
+from api.schemas.lithology_hc_correction import LithologyHCCorrectionInput, EXAMPLE as HC_CORR_EXAMPLE
 
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.lithology import gr_index
@@ -12,84 +16,193 @@ from quick_pp.qaqc import neu_den_xplot_hc_correction
 router = APIRouter(prefix="/lithology", tags=["Lithology"])
 
 
-@router.post("/ssc")
-async def estimate_ssc(inputs: ssc_inputData = Body(..., example=SSC_EXAMPLE)):
+def _validate_points(input_dict, required_points):
+    """
+    Validate that all required endpoint keys in input_dict are present and contain two elements (NPHI, RHOB),
+    and that required points are not None or contain None values.
+    Raises ValueError if validation fails.
+    """
+    for k in [key for key in input_dict if key.endswith('_point')]:
+        if not (isinstance(input_dict[k], (list, tuple)) and len(input_dict[k]) == 2):
+            raise ValueError(f"'{k}' must be a tuple/list of length 2 (NPHI, RHOB). Got: {input_dict[k]}")
+    for k in required_points:
+        if not all(input_dict.get(k, ())):
+            raise ValueError(f"'{k}' point must not be None or contain None values.")
 
-    input_dict = inputs.model_dump()
-    assert all([len(input_dict[k]) == 2 for k in input_dict.keys() if "_point" in k]), \
-        "End points must be of 2 elements: neutron porosity and bulk density."
-    assert all([all(input_dict[k]) for k in ['dry_sand_point', 'fluid_point']]), \
-        "'dry_sand_point' and 'fluid_point' points must not be None."
 
-    DrySandPoint = input_dict['dry_sand_point']
-    DrySiltPoint = input_dict['dry_silt_point']
-    DryClayPoint = input_dict['dry_clay_point']
-    FluidPoint = input_dict['fluid_point']
-    WetClayPoint = input_dict['wet_clay_point']
-    SiltLineAngle = input_dict['silt_line_angle']
+def _to_dataframe(data, columns=None):
+    """
+    Convert a list of dicts to a pandas DataFrame and check for required columns.
+    Raises ValueError if any required columns are missing.
+    """
+    df = pd.DataFrame.from_records(data)
+    if columns:
+        missing = set(columns) - set(df.columns)
+        if missing:
+            raise ValueError(f"Missing columns in input data: {missing}")
+    return df
 
-    # Get the data
-    input_df = pd.DataFrame.from_records(input_dict['data'])
-    nphi = input_df['nphi']
-    rhob = input_df['rhob']
 
-    ssc_model = SandSiltClay(
-        dry_sand_point=DrySandPoint, dry_silt_point=DrySiltPoint, dry_clay_point=DryClayPoint,
-        fluid_point=FluidPoint, wet_clay_point=WetClayPoint, silt_line_angle=SiltLineAngle
+@router.post(
+    "/ssc",
+    summary="Estimate Sand, Silt, and Clay (SSC) Volume Fractions",
+    description=(
+        "Estimate sand, silt, and clay (SSC) volume fractions based on neutron and density well logs "
+        "data using a multi-endpoint lithology model."
     )
-    vsand, vsilt, vcld, _ = ssc_model.estimate_lithology(nphi, rhob)
-    return_dict = pd.DataFrame(
-        {'VSAND': vsand, 'VSILT': vsilt, 'VCLD': vcld}, index=input_df.index
-    ).to_dict(orient='records')
-    return return_dict
+)
+async def estimate_ssc(inputs: LithologySSCInput = Body(..., example=SSC_EXAMPLE)):
+    """
+    Estimate sand, silt, and clay (SSC) volume fractions from well log data using a multi-endpoint lithology model.
 
+    Parameters
+    ----------
+    inputs : LithologySSCInput
+        Pydantic model containing:
+            - dry_sand_point: Tuple[float, float]
+            - dry_silt_point: Tuple[Optional[float], Optional[float]]
+            - dry_clay_point: Tuple[Optional[float], Optional[float]]
+            - fluid_point: Tuple[float, float]
+            - wet_clay_point: Tuple[Optional[float], Optional[float]]
+            - method: str
+            - silt_line_angle: float
+            - data: List[dict] with 'nphi' and 'rhob' keys
 
-@router.post("/vsh_gr")
-async def estimate_vsh_gr(inputs: vsh_gr_inputData = Body(..., example=VSH_GR_EXAMPLE)):
+    Returns
+    -------
+    List[dict]
+        List of dictionaries, each containing the estimated volume fractions:
+            - 'VSAND': float (sand fraction)
+            - 'VSILT': float (silt fraction)
+            - 'VCLD': float (clay fraction)
 
+    Raises
+    ------
+    ValueError
+        If endpoint validation fails or required data columns are missing.
+
+    Technical Details
+    ----------------
+    - Validates endpoint coordinates for completeness and correct dimensionality.
+    - Constructs a SandSiltClay model using the provided endpoints and silt line angle.
+    - Estimates lithology fractions for each input data point using neutron porosity and bulk density logs.
+    - Returns results as a list of dictionaries, preserving input order.
+    """
     input_dict = inputs.model_dump()
-    # Get the data
-    input_df = pd.DataFrame.from_records(input_dict['data'])
-
-    vsh_gr = gr_index(input_df['gr'])
-    return_dict = pd.DataFrame({'GR': vsh_gr.ravel()}).to_dict(orient='records')
-    return return_dict
-
-
-@router.post("/hc_corr")
-async def estimate_hc_correction(inputs: hc_corr_inputData = Body(..., example=HC_CORR_EXAMPLE)):
-
-    input_dict = inputs.model_dump()
-    assert all([len(input_dict[k]) == 2 for k in input_dict.keys() if "_point" in k]), \
-        "End points must be of 2 elements: neutron porosity and bulk density."
-    assert all([all(input_dict[k]) for k in ['dry_sand_point', 'dry_clay_point', 'fluid_point']]), \
-        "'dry_sand_point', 'dry_clay_point' and 'fluid_point' points must not be None."
-
-    DrySandPoint = input_dict['dry_sand_point']
-    DrySiltPoint = input_dict['dry_silt_point']
-    DryClayPoint = input_dict['dry_clay_point']
-    FluidPoint = input_dict['fluid_point']
-    WetClayPoint = input_dict['wet_clay_point']
-    SiltLineAngle = input_dict['silt_line_angle']
-    CorrAngle = input_dict['corr_angle']
-
-    # Get the data
-    input_df = pd.DataFrame.from_records(input_dict['data'])
-    nphihc, rhobhc, _ = neu_den_xplot_hc_correction(input_df['nphi'], input_df['rhob'],
-                                                    dry_min1_point=DrySandPoint,
-                                                    dry_clay_point=DryClayPoint,
-                                                    corr_angle=CorrAngle)
-    df_corr = pd.DataFrame({'NPHI': nphihc, 'RHOB': rhobhc}).astype(float)
-    # neu_den_df = df_corr[['DEPTH', 'NPHI', 'RHOB']].dropna()
-
+    _validate_points(input_dict, required_points=['dry_sand_point', 'fluid_point'])
+    df = _to_dataframe(input_dict['data'], columns=['nphi', 'rhob'])
     ssc_model = SandSiltClay(
-        dry_sand_point=DrySandPoint, dry_silt_point=DrySiltPoint, dry_clay_point=DryClayPoint,
-        fluid_point=FluidPoint, wet_clay_point=WetClayPoint, silt_line_angle=SiltLineAngle
+        dry_sand_point=input_dict['dry_sand_point'],
+        dry_silt_point=input_dict['dry_silt_point'],
+        dry_clay_point=input_dict['dry_clay_point'],
+        fluid_point=input_dict['fluid_point'],
+        wet_clay_point=input_dict['wet_clay_point'],
+        silt_line_angle=input_dict['silt_line_angle']
+    )
+    vsand, vsilt, vcld, _ = ssc_model.estimate_lithology(df['nphi'], df['rhob'])
+    return pd.DataFrame({'VSAND': vsand, 'VSILT': vsilt, 'VCLD': vcld}, index=df.index).to_dict(orient='records')
+
+
+@router.post(
+    "/vsh_gr",
+    summary="Estimate Volume of Shale (Vsh) from Gamma Ray Log Data",
+    description="Estimate the volume of shale (Vsh) using gamma ray log data."
+)
+async def estimate_vsh_gr(inputs: LithologyVshGRInput = Body(..., example=VSH_GR_EXAMPLE)):
+    """
+    Estimate the volume of shale (Vsh) from gamma ray (GR) log data.
+
+    Parameters
+    ----------
+    inputs : LithologyVshGRInput
+        Pydantic model containing:
+            - data: List[dict] with 'gr' key (gamma ray log values)
+
+    Returns
+    -------
+    List[dict]
+        List of dictionaries, each with a single key 'GR'.
+        Each value represents the estimated volume of shale for the corresponding input record.
+
+    Raises
+    ------
+    ValueError
+        If required data columns are missing.
+
+    Technical Details
+    ----------------
+    - Converts input data to a DataFrame and checks for the 'gr' column.
+    - Applies the gamma ray index calculation using the gr_index function.
+    - Returns the result as a list of dictionaries, preserving input order.
+    """
+    input_dict = inputs.model_dump()
+    df = _to_dataframe(input_dict['data'], columns=['gr'])
+    vsh_gr = gr_index(df['gr'])
+    return pd.DataFrame({'GR': vsh_gr.ravel()}, index=df.index).to_dict(orient='records')
+
+
+@router.post(
+    "/hc_corr",
+    summary="Estimate Hydrocarbon Correction and Lithology Fractions",
+    description="Estimate hydrocarbon correction and lithology fractions from well log data."
+)
+async def estimate_hc_correction(inputs: LithologyHCCorrectionInput = Body(..., example=HC_CORR_EXAMPLE)):
+    """
+    Estimate hydrocarbon correction and lithology fractions from input data.
+
+    Parameters
+    ----------
+    inputs : LithologyHCCorrectionInput
+        Pydantic model containing:
+            - dry_sand_point: Tuple[float, float]
+            - dry_silt_point: Tuple[Optional[float], Optional[float]]
+            - dry_clay_point: Tuple[Optional[float], Optional[float]]
+            - fluid_point: Tuple[float, float]
+            - wet_clay_point: Tuple[Optional[float], Optional[float]]
+            - method: str
+            - silt_line_angle: float
+            - corr_angle: float
+            - data: List[dict] with 'nphi' and 'rhob' keys
+
+    Returns
+    -------
+    List[dict]
+        List of dictionaries, each containing the estimated volume fractions:
+            - 'VSAND': float (sand fraction)
+            - 'VSILT': float (silt fraction)
+            - 'VCLD': float (clay fraction)
+
+    Raises
+    ------
+    ValueError
+        If endpoint validation fails or required data columns are missing.
+
+    Technical Details
+    ----------------
+    - Validates endpoint coordinates for completeness and correct dimensionality.
+    - Applies hydrocarbon correction to neutron porosity and bulk density logs using neu_den_xplot_hc_correction,
+      which rotates the crossplot by the specified correction angle.
+    - Constructs a SandSiltClay model using the provided endpoints and silt line angle.
+    - Estimates lithology fractions for each corrected data point.
+    - Returns results as a list of dictionaries, preserving input order.
+    """
+    input_dict = inputs.model_dump()
+    _validate_points(input_dict, required_points=['dry_sand_point', 'dry_clay_point', 'fluid_point'])
+    df = _to_dataframe(input_dict['data'], columns=['nphi', 'rhob'])
+    nphihc, rhobhc, _ = neu_den_xplot_hc_correction(
+        df['nphi'], df['rhob'],
+        dry_min1_point=input_dict['dry_sand_point'],
+        dry_clay_point=input_dict['dry_clay_point'],
+        corr_angle=input_dict['corr_angle']
+    )
+    df_corr = pd.DataFrame({'NPHI': nphihc, 'RHOB': rhobhc}).astype(float)
+    ssc_model = SandSiltClay(
+        dry_sand_point=input_dict['dry_sand_point'],
+        dry_silt_point=input_dict['dry_silt_point'],
+        dry_clay_point=input_dict['dry_clay_point'],
+        fluid_point=input_dict['fluid_point'],
+        wet_clay_point=input_dict['wet_clay_point'],
+        silt_line_angle=input_dict['silt_line_angle']
     )
     vsand, vsilt, vcld, _ = ssc_model.estimate_lithology(df_corr['NPHI'], df_corr['RHOB'])
-    return_df = pd.DataFrame(
-        {'VSAND': vsand, 'VSILT': vsilt, 'VCLD': vcld},
-        index=input_df.index
-    )
-    return_dict = return_df.to_dict(orient='records')
-    return return_dict
+    return pd.DataFrame({'VSAND': vsand, 'VSILT': vsilt, 'VCLD': vcld}, index=df.index).to_dict(orient='records')

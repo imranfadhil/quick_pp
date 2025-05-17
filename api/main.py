@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from .exceptions import return_exception_message
 from fastapi_mcp import FastApiMCP
 
@@ -35,12 +36,18 @@ app = FastAPI(
              "url": "https://github.com/imranfadhil/quick_pp", "email": "imranfadhil@gmail.com"},
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
     openapi_tags=tags_metadata,
-    debug=False
+    debug=True
 )
 app.include_router(api_router)
 
-mcp = FastApiMCP(app)
-mcp.mount()
+origins = ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=origins,
+    allow_headers=origins,
+)
 
 
 @app.get("/")
@@ -57,3 +64,6 @@ async def internal_server_exception_handler(request: Request, exc: Exception):
             "detail": f"{repr(exc)}"
         }
     )
+
+mcp = FastApiMCP(app)
+mcp.mount()

@@ -1,17 +1,24 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict, Any
 
 
-class data(BaseModel):
+class Data(BaseModel):
+    """Input record for permeability estimation (other models)."""
+
     phit: float
     swirr: float
 
 
-class inputData(BaseModel):
-    data: List[data]
+class InputData(BaseModel):
+    """Input data wrapper for permeability endpoints (other models)."""
+
+    data: List[Data]
+
+    class Config:
+        orm_mode = True
 
 
-EXAMPLE = {
+EXAMPLE: Dict[str, Any] = {
     'data': [
         {'phit': 0.328, 'swirr': 0.003},
         {'phit': 0.114, 'swirr': 0.016},

@@ -1,23 +1,26 @@
+"""
+Schemas for hydrocarbon correction lithology input.
+"""
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional, Tuple
 
 
-class data(BaseModel):
+class HCCorrectionData(BaseModel):
     gr: float
     nphi: float
     rhob: float
 
 
-class inputData(BaseModel):
-    dry_sand_point: tuple
-    dry_silt_point: tuple
-    dry_clay_point: tuple
-    fluid_point: tuple
-    wet_clay_point: tuple
+class LithologyHCCorrectionInput(BaseModel):
+    dry_sand_point: Tuple[Optional[float], Optional[float]]
+    dry_silt_point: Tuple[Optional[float], Optional[float]]
+    dry_clay_point: Tuple[Optional[float], Optional[float]]
+    fluid_point: Tuple[Optional[float], Optional[float]]
+    wet_clay_point: Tuple[Optional[float], Optional[float]]
     method: str
     silt_line_angle: float
     corr_angle: float
-    data: List[data]
+    data: List[HCCorrectionData]
 
 
 EXAMPLE = {
@@ -39,6 +42,6 @@ EXAMPLE = {
         {'gr': 128.918, 'nphi': 0.388, 'rhob': 2.093},
         {'gr': 60.707, 'nphi': 0.067, 'rhob': 2.073},
         {'gr': 125.888, 'nphi': 0.327, 'rhob': 2.448},
-        {'gr': 119.909, 'nphi': 0.313, 'rhob': 2.55}
+        {'gr': 119.909, 'nphi': 0.313, 'rhob': 2.55},
     ],
 }

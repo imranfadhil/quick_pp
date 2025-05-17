@@ -1,21 +1,24 @@
+"""
+Schemas for sand-silt-clay lithology input.
+"""
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional, Tuple
 
 
-class data(BaseModel):
+class SSCData(BaseModel):
     nphi: float
     rhob: float
 
 
-class inputData(BaseModel):
-    dry_sand_point: tuple
-    dry_silt_point: tuple
-    dry_clay_point: tuple
-    fluid_point: tuple
-    wet_clay_point: tuple
+class LithologySSCInput(BaseModel):
+    dry_sand_point: Tuple[Optional[float], Optional[float]]
+    dry_silt_point: Tuple[Optional[float], Optional[float]]
+    dry_clay_point: Tuple[Optional[float], Optional[float]]
+    fluid_point: Tuple[Optional[float], Optional[float]]
+    wet_clay_point: Tuple[Optional[float], Optional[float]]
     method: str
     silt_line_angle: float
-    data: List[data]
+    data: List[SSCData]
 
 
 EXAMPLE = {
@@ -36,6 +39,6 @@ EXAMPLE = {
         {'nphi': 0.323, 'rhob': 2.438},
         {'nphi': 0.097, 'rhob': 2.177},
         {'nphi': 0.353, 'rhob': 2.5},
-        {'nphi': 0.208, 'rhob': 2.487}
+        {'nphi': 0.208, 'rhob': 2.487},
     ],
 }
