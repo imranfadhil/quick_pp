@@ -1,24 +1,25 @@
-from pydantic import BaseModel
+"""
+Schemas for Vshale from GR log input.
+"""
+
+from pydantic import BaseModel, Field
 from typing import List
 
 
-class data(BaseModel):
-    gr: float
+class GRData(BaseModel):
+    gr: float = Field(..., description="Gamma Ray value (API units)")
 
 
-class inputData(BaseModel):
-    data: List[data]
-
-
-EXAMPLE = {'data': [
-    {'gr': 121.54},
-    {'gr': 120.133},
-    {'gr': 117.059},
-    {'gr': 124.022},
-    {'gr': 125.076},
-    {'gr': 86.06},
-    {'gr': 130.02},
-    {'gr': 131.419},
-    {'gr': 103.284},
-    {'gr': 102.317},
-]}
+class LithologyVshGRInput(BaseModel):
+    data: List[GRData] = Field([
+        GRData(gr=121.54),
+        GRData(gr=120.133),
+        GRData(gr=117.059),
+        GRData(gr=124.022),
+        GRData(gr=125.076),
+        GRData(gr=86.06),
+        GRData(gr=130.02),
+        GRData(gr=131.419),
+        GRData(gr=103.284),
+        GRData(gr=102.317),
+    ], description="List of gamma ray values (API units)")

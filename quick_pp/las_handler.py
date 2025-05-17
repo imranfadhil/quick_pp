@@ -315,8 +315,7 @@ if __name__ == '__main__':
 
     root = Tk()
     file_objects = filedialog.askopenfiles(title='Choose well Log ASCII Standard (LAS) files to be combined',
-                                           filetype=(('LAS Files', '*.LAS *.las'), ('All Files', '*.*')),
-                                           multiple=True,
+                                           filetypes=(('LAS Files', '*.LAS *.las'), ('All Files', '*.*')),
                                            mode='rb')
     root.destroy()
     if file_objects:

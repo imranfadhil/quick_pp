@@ -1,28 +1,24 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List
 
 
-class data(BaseModel):
-    tvdss: float
+class Data(BaseModel):
+    """Temperature gradient input data for a single sample."""
+    tvdss: float = Field(..., description="True vertical depth subsea (meters or feet)")
 
 
-class inputData(BaseModel):
-    data: List[data]
-    meas_system: str = 'metric'
-
-
-EXAMPLE = {
-    'meas_system': 'metric',
-    'data': [
-        {'tvdss': 4098.49},
-        {'tvdss': 4098.65},
-        {'tvdss': 4098.8},
-        {'tvdss': 4098.95},
-        {'tvdss': 4099.1},
-        {'tvdss': 4099.26},
-        {'tvdss': 4099.41},
-        {'tvdss': 4099.56},
-        {'tvdss': 4099.71},
-        {'tvdss': 4099.86}
-    ]
-}
+class InputData(BaseModel):
+    """Temperature gradient input data for a batch of samples, with measurement system."""
+    meas_system: str = Field('metric', description="Measurement system: 'metric' or 'imperial'")
+    data: List[Data] = Field([
+        Data(tvdss=4098.49),
+        Data(tvdss=4098.65),
+        Data(tvdss=4098.8),
+        Data(tvdss=4098.95),
+        Data(tvdss=4099.1),
+        Data(tvdss=4099.26),
+        Data(tvdss=4099.41),
+        Data(tvdss=4099.56),
+        Data(tvdss=4099.71),
+        Data(tvdss=4099.86)
+    ], description="List of true vertical depths.")

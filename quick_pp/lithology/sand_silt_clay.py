@@ -14,8 +14,9 @@ class SandSiltClay:
      This module is modified based on Kuttan, where the reservoir sections consist of combination of sand-silt-clay
      while non-reservoir sections remain a combination of silt-clay only."""
 
-    def __init__(self, dry_sand_point: tuple = None, dry_silt_point: tuple = None, dry_clay_point: tuple = None,
-                 fluid_point: tuple = None, wet_clay_point: tuple = None, silt_line_angle: float = None, **kwargs):
+    def __init__(self, dry_sand_point: tuple = (float, float), dry_silt_point: tuple = (float, float),
+                 dry_clay_point: tuple = (float, float), fluid_point: tuple = (float, float),
+                 wet_clay_point: tuple = (float, float), silt_line_angle: float = 0, **kwargs):
         # Initialize the endpoints
         self.dry_sand_point = dry_sand_point or Config.SSC_ENDPOINTS["DRY_SAND_POINT"]
         self.dry_silt_point = dry_silt_point or Config.SSC_ENDPOINTS["DRY_SILT_POINT"]
