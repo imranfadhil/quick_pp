@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Body
-from api.schemas.porosity import InputData, EXAMPLE
+from fastapi import APIRouter
+from api.schemas.porosity import InputData
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.porosity import neu_den_xplot_poro, density_porosity, rho_matrix
 from typing import List, Dict
@@ -20,9 +20,7 @@ def _validate_points(input_dict: dict, required_points: List[str]):
     summary="Estimate Density Porosity (PHID)",
     description="Estimate Density Porosity (PHID) using the density porosity method.",
 )
-async def estimate_phit_den(
-    inputs: InputData = Body(..., example=EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
     """
     Estimates density porosity (PHID) for a set of input data using a sand-silt-clay (SSC) model.
     This asynchronous function receives input containing neutron porosity (nphi) and bulk density (rhob) measurements,
@@ -76,9 +74,7 @@ async def estimate_phit_den(
     summary="Estimate Total Porosity (PHIT)",
     description="Estimate Total Porosity (PHIT) using neutron-density crossplot analysis.",
 )
-async def estimate_phit_neu_den(
-    inputs: InputData = Body(..., example=EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_phit_neu_den(inputs: InputData) -> List[Dict[str, float]]:
     """
     This asynchronous endpoint receives input data containing neutron porosity (NPHI) and bulk density (RHOB)
     measurements, along with reference points for dry sand, silt, clay, and fluid, and applies a crossplot

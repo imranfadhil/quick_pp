@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, HTTPException
 import pandas as pd
 from typing import List, Dict
 
-from api.schemas.ressum import InputData, EXAMPLE
+from api.schemas.ressum import InputData
 from quick_pp.ressum import calc_reservoir_summary
 
 router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
@@ -14,9 +14,7 @@ router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
     description="Calculate reservoir summary statistics based on input petrophysical data.",
     response_model=List[Dict],
 )
-async def calculate_reservoir_summary_(
-    inputs: InputData = Body(..., example=EXAMPLE)
-):
+async def calculate_reservoir_summary_(inputs: InputData):
     """
     Calculates reservoir summary statistics based on input petrophysical data.
     Args:

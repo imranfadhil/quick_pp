@@ -2,12 +2,12 @@
 API endpoints for lithology-related calculations: SSC, Vsh from GR, and hydrocarbon correction.
 Optimized for readability, reliability, and maintainability.
 """
-from fastapi import APIRouter, Body
+from fastapi import APIRouter
 import pandas as pd
 
-from api.schemas.lithology_ssc import LithologySSCInput, EXAMPLE as SSC_EXAMPLE
-from api.schemas.lithology_vsh_gr import LithologyVshGRInput, EXAMPLE as VSH_GR_EXAMPLE
-from api.schemas.lithology_hc_correction import LithologyHCCorrectionInput, EXAMPLE as HC_CORR_EXAMPLE
+from api.schemas.lithology_ssc import LithologySSCInput
+from api.schemas.lithology_vsh_gr import LithologyVshGRInput
+from api.schemas.lithology_hc_correction import LithologyHCCorrectionInput
 
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.lithology import gr_index
@@ -51,7 +51,7 @@ def _to_dataframe(data, columns=None):
         "data using a multi-endpoint lithology model."
     )
 )
-async def estimate_ssc(inputs: LithologySSCInput = Body(..., example=SSC_EXAMPLE)):
+async def estimate_ssc(inputs: LithologySSCInput):
     """
     Estimate sand, silt, and clay (SSC) volume fractions from well log data using a multi-endpoint lithology model.
 
@@ -108,7 +108,7 @@ async def estimate_ssc(inputs: LithologySSCInput = Body(..., example=SSC_EXAMPLE
     summary="Estimate Volume of Shale (Vsh) from Gamma Ray Log Data",
     description="Estimate the volume of shale (Vsh) using gamma ray log data."
 )
-async def estimate_vsh_gr(inputs: LithologyVshGRInput = Body(..., example=VSH_GR_EXAMPLE)):
+async def estimate_vsh_gr(inputs: LithologyVshGRInput):
     """
     Estimate the volume of shale (Vsh) from gamma ray (GR) log data.
 
@@ -146,7 +146,7 @@ async def estimate_vsh_gr(inputs: LithologyVshGRInput = Body(..., example=VSH_GR
     summary="Estimate Hydrocarbon Correction and Lithology Fractions",
     description="Estimate hydrocarbon correction and lithology fractions from well log data."
 )
-async def estimate_hc_correction(inputs: LithologyHCCorrectionInput = Body(..., example=HC_CORR_EXAMPLE)):
+async def estimate_hc_correction(inputs: LithologyHCCorrectionInput):
     """
     Estimate hydrocarbon correction and lithology fractions from input data.
 

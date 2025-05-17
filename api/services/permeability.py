@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, HTTPException
 import pandas as pd
 from typing import List, Dict
 import logging
 
-from api.schemas.permeability_choo import InputData as PermChInputData, EXAMPLE as PERM_CH_EXAMPLE
-from api.schemas.permeability_others import InputData as PermOthersInputData, EXAMPLE as PERM_OTHERS_EXAMPLE
+from api.schemas.permeability_choo import InputData as PermChInputData
+from api.schemas.permeability_others import InputData as PermOthersInputData
 from quick_pp.permeability import (
     choo_permeability, timur_permeability, coates_permeability, kozeny_carman_permeability, tixier_permeability
 )
@@ -18,9 +18,7 @@ logger = logging.getLogger("api.services.permeability")
     summary="Estimate Choo permeability",
     description="Estimate permeability using the Choo empirical model.",
 )
-async def estimate_perm_choo(
-    inputs: PermChInputData = Body(..., example=PERM_CH_EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_perm_choo(inputs: PermChInputData) -> List[Dict[str, float]]:
     """
     Estimate permeability using the Choo empirical model.
 
@@ -44,7 +42,7 @@ async def estimate_perm_choo(
         - Any errors during processing are logged and returned as HTTP 400 errors.
     """
     try:
-        input_dict = inputs.dict()
+        input_dict = inputs.model_dump()
         input_df = pd.DataFrame.from_records(input_dict['data'])
         perm = choo_permeability(
             input_df['vcld'], input_df['vsilt'], input_df['phit']
@@ -65,9 +63,7 @@ async def estimate_perm_choo(
     summary="Estimate Timur permeability",
     description="Estimate permeability using the Timur empirical model.",
 )
-async def estimate_perm_timur(
-    inputs: PermOthersInputData = Body(..., example=PERM_OTHERS_EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_perm_timur(inputs: PermOthersInputData) -> List[Dict[str, float]]:
     """
     Estimate permeability using the Timur empirical equation.
 
@@ -90,7 +86,7 @@ async def estimate_perm_timur(
         - Errors are logged and returned as HTTP 400 errors.
     """
     try:
-        input_dict = inputs.dict()
+        input_dict = inputs.model_dump()
         input_df = pd.DataFrame.from_records(input_dict['data'])
         perm = timur_permeability(input_df['phit'], input_df['swirr'])
         df_result = pd.DataFrame({'PERM': perm.ravel()})
@@ -108,9 +104,7 @@ async def estimate_perm_timur(
     summary="Estimate Tixier permeability",
     description="Estimate permeability using the Tixier empirical model.",
 )
-async def estimate_perm_tixier(
-    inputs: PermOthersInputData = Body(..., example=PERM_OTHERS_EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_perm_tixier(inputs: PermOthersInputData) -> List[Dict[str, float]]:
     """
     Estimate permeability using the Tixier empirical correlation.
 
@@ -129,7 +123,7 @@ async def estimate_perm_tixier(
         - Errors are logged and returned as HTTP 400 errors.
     """
     try:
-        input_dict = inputs.dict()
+        input_dict = inputs.model_dump()
         input_df = pd.DataFrame.from_records(input_dict['data'])
         perm = tixier_permeability(input_df['phit'], input_df['swirr'])
         df_result = pd.DataFrame({'PERM': perm.ravel()})
@@ -147,9 +141,7 @@ async def estimate_perm_tixier(
     summary="Estimate Coates permeability",
     description="Estimate permeability using the Coates empirical model.",
 )
-async def estimate_perm_coates(
-    inputs: PermOthersInputData = Body(..., example=PERM_OTHERS_EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_perm_coates(inputs: PermOthersInputData) -> List[Dict[str, float]]:
     """
     Estimate permeability using the Coates method.
 
@@ -169,7 +161,7 @@ async def estimate_perm_coates(
         - Errors are logged and returned as HTTP 400 errors.
     """
     try:
-        input_dict = inputs.dict()
+        input_dict = inputs.model_dump()
         input_df = pd.DataFrame.from_records(input_dict['data'])
         perm = coates_permeability(input_df['phit'], input_df['swirr'])
         df_result = pd.DataFrame({'PERM': perm.ravel()})
@@ -187,9 +179,7 @@ async def estimate_perm_coates(
     summary="Estimate Kozeny-Carman permeability",
     description="Estimate permeability using the Kozeny-Carman equation.",
 )
-async def estimate_perm_kozeny_carman(
-    inputs: PermOthersInputData = Body(..., example=PERM_OTHERS_EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_perm_kozeny_carman(inputs: PermOthersInputData) -> List[Dict[str, float]]:
     """
     Estimate permeability using the Kozeny-Carman equation.
 
@@ -209,7 +199,7 @@ async def estimate_perm_kozeny_carman(
         - Errors are logged and returned as HTTP 400 errors.
     """
     try:
-        input_dict = inputs.dict()
+        input_dict = inputs.model_dump()
         input_df = pd.DataFrame.from_records(input_dict['data'])
         perm = input_df.apply(lambda row: kozeny_carman_permeability(row['phit'], row['swirr']), axis=1)
         df_result = pd.DataFrame({'PERM': perm.ravel()})

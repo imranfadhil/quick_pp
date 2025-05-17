@@ -1,14 +1,14 @@
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, HTTPException
 import pandas as pd
 from typing import List, Dict, Any, Optional
 import numpy as np
 
-from api.schemas.saturation_waxman_smits import InputData as WaxmanSmitsInput, EXAMPLE as SWT_WS_EXAMPLE
-from api.schemas.saturation_archie import InputData as ArchieInput, EXAMPLE as SWT_A_EXAMPLE
-from api.schemas.saturation_temp_grad import InputData as TempGradInput, EXAMPLE as TEMP_GRAD_EXAMPLE
-from api.schemas.saturation_rw import InputData as RwInput, EXAMPLE as RW_EXAMPLE
-from api.schemas.saturation_b import InputData as BInput, EXAMPLE as B_EXAMPLE
-from api.schemas.saturation_qv import InputData as QvInput, EXAMPLE as QV_EXAMPLE
+from api.schemas.saturation_waxman_smits import InputData as WaxmanSmitsInput
+from api.schemas.saturation_archie import InputData as ArchieInput
+from api.schemas.saturation_temp_grad import InputData as TempGradInput
+from api.schemas.saturation_rw import InputData as RwInput
+from api.schemas.saturation_b import InputData as BInput
+from api.schemas.saturation_qv import InputData as QvInput
 
 from quick_pp.saturation import (
     waxman_smits_saturation, archie_saturation, estimate_rw_temperature_salinity, estimate_temperature_gradient,
@@ -88,9 +88,7 @@ def _parse_and_respond(
     summary="Estimate Temperature Gradient",
     description="Estimate the temperature gradient based on input depth data and measurement system."
 )
-async def estimate_temperature_gradient_(
-    inputs: TempGradInput = Body(..., example=TEMP_GRAD_EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_temperature_gradient_(inputs: TempGradInput) -> List[Dict[str, float]]:
     """
     Estimate the temperature gradient for each input record.
 
@@ -126,9 +124,7 @@ async def estimate_temperature_gradient_(
     summary="Estimate Formation Water Resistivity (Rw)",
     description="Estimate formation water resistivity (Rw) based on input temperature gradient and water salinity."
 )
-async def estimate_rw(
-    inputs: RwInput = Body(..., example=RW_EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
     """
     Estimate formation water resistivity (Rw) for each input record.
 
@@ -166,9 +162,7 @@ async def estimate_rw(
         "and formation water resistivity."
     )
 )
-async def estimate_b_waxman_smits_(
-    inputs: BInput = Body(..., example=B_EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_b_waxman_smits_(inputs: BInput) -> List[Dict[str, float]]:
     """
     Estimate the B parameter using the Waxman-Smits model for each input record.
 
@@ -198,9 +192,7 @@ async def estimate_b_waxman_smits_(
     summary="Estimate Cation Exchange Capacity per Unit Pore Volume (Qv)",
     description="Estimate Qv using well log measurements and clay properties."
 )
-async def estimate_qv_(
-    inputs: QvInput = Body(..., example=QV_EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
     """
     Estimate the cation exchange capacity per unit pore volume (Qv) for each input record.
 
@@ -239,9 +231,7 @@ async def estimate_qv_(
     summary="Estimate Water Saturation using Waxman-Smits Model",
     description="Estimate water saturation (SWT) using the Waxman-Smits model based on input data."
 )
-async def estimate_swt_waxman_smits(
-    inputs: WaxmanSmitsInput = Body(..., example=SWT_WS_EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, float]]:
     """
     Estimate water saturation (SWT) using the Waxman-Smits model for each input record.
 
@@ -286,9 +276,7 @@ async def estimate_swt_waxman_smits(
     summary="Estimate Water Saturation using Archie Model",
     description="Estimate water saturation (SWT) using the Archie model based on input data."
 )
-async def estimate_swt_archie(
-    inputs: ArchieInput = Body(..., example=SWT_A_EXAMPLE)
-) -> List[Dict[str, float]]:
+async def estimate_swt_archie(inputs: ArchieInput) -> List[Dict[str, float]]:
     """
     Estimate water saturation (SWT) using Archie's equation for each input record.
 
