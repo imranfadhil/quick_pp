@@ -257,7 +257,7 @@ TRACE_DEFS = dict(
 
 # Centralize axis definitions for maintainability
 font_size = 8
-AXIS_DEFS = {
+XAXIS_DEFS = {
     'xaxis1': {
         'title': 'GR',
         'titlefont': {'color': COLOR_DICT['GR'], 'size': font_size},
@@ -427,7 +427,7 @@ AXIS_DEFS = {
     },
 }
 
-def plotly_log(well_data, depth_uom=""):  # noqa
+def plotly_log(well_data, depth_uom="", trace_defs=TRACE_DEFS, xaxis_defs=XAXIS_DEFS):  # noqa
     """Plot well logs using Plotly.
 
     Args:
@@ -445,16 +445,17 @@ def plotly_log(well_data, depth_uom=""):  # noqa
         if k not in df.columns:
             df[k] = np.nan
 
-    # Add ROCK_FLAG colors
-    no_of_rock_flags = df['ROCK_FLAG'].nunique()
-    for i in range(no_of_rock_flags):
-        lightness = 95 - int(i / no_of_rock_flags * 100)
-        COLOR_DICT[f'ROCK_FLAG_{i + 1}'] = f'hsl(30, 70%, {lightness}%)'
-
     # One-hot encode ROCK_FLAG if present
-    if 'ROCK_FLAG' in df.columns and 'ROCK_FLAG_1' not in df.columns:
-        df['ROCK_FLAG'].fillna(0, inplace=True)
+    if 'ROCK_FLAG' in df.columns:
+        # Add ROCK_FLAG colors
+        no_of_rock_flags = df['ROCK_FLAG'].nunique() + 1
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(no_of_rock_flags)
+        for i in df['ROCK_FLAG'].unique():
+            lightness = 100 - (int(i) / no_of_rock_flags * 100)
+            COLOR_DICT[f'ROCK_FLAG_{i}'] = f'hsl(30, 70%, {lightness}%)'
+
         df['ROCK_FLAG'] = df['ROCK_FLAG'].astype(int).astype('category')
+        df = df.drop(columns=[c for c in df.columns if 'ROCK_FLAG_' in c])
         df = pd.get_dummies(df, columns=['ROCK_FLAG'], prefix='ROCK_FLAG', dtype=int)
 
     fig = make_subplots(
@@ -463,9 +464,9 @@ def plotly_log(well_data, depth_uom=""):  # noqa
         specs=[list([{'secondary_y': True}] * track)]
     )
 
-    # --- Helper to add traces from TRACE_DEFS ---
+    # --- Helper to add traces from trace_defs ---
     def add_defined_traces(fig, df, index):
-        for i, (col, trace_def) in enumerate(TRACE_DEFS.items()):
+        for i, (col, trace_def) in enumerate(trace_defs.items()):
             # Skip special cases handled separately
             if col.startswith('ROCK_FLAG_') or col in ['COAL_FLAG', 'ZONES']:
                 continue
@@ -502,7 +503,7 @@ def plotly_log(well_data, depth_uom=""):  # noqa
             row=1, col=7, secondary_y=False)
 
     # --- Layout dict ---
-    layout_dict = {k: v for k, v in AXIS_DEFS.items()}
+    layout_dict = {k: v for k, v in xaxis_defs.items()}
     layout_dict['yaxis'] = {'domain': [0, .84], 'title': f'DEPTH ({depth_uom})'}
     for i in range(2, track * 2 + 1):
         layout_dict[f'yaxis{i}'] = {
