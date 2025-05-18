@@ -8,6 +8,10 @@ from .router import api_router
 
 tags_metadata = [
     {
+        "name": "LAS File Handler",
+        "description": "LAS file related endpoints."
+    },
+    {
         "name": "Lithology",
         "description": "Lithology related endpoints."
     },

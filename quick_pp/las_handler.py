@@ -141,11 +141,10 @@ def read_las_file_mmap(file_object, required_sets=['PEP']):  # noqa
     return curves_df, header_df, welly_object
 
 
-def read_las_file_welly(file_object):  # noqa
+def read_las_file_welly(file_object):
     welly_dataset = welly.las.from_las(file_object.name)
     well_header = welly_dataset['Header']
     welly_object = welly.well.Well.from_datasets(welly_dataset)
-    print('welly_object:', welly_object)
     df = pre_process(welly_object)
     return df, well_header
 
