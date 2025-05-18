@@ -33,6 +33,7 @@ COLOR_DICT = {
     'CPERM': '#FF0000',
     'CSAT': '#FF0000',
     'SHF': '#618F63',
+    'ROCK_FLAG_1': "#F3E3CA",
 }
 
 # Define the trace definitions for the well log plot
@@ -78,7 +79,10 @@ TRACE_DEFS = OrderedDict(
         track=7,
         secondary_y=False,
         hide_xaxis=False,
-        style={'fill': 'tozerox', 'opacity': 1}
+        style={
+            'line_width': 1, 'line_color': COLOR_DICT['ROCK_FLAG_1'], 'fill': 'tozerox',
+            'fillcolor': COLOR_DICT['ROCK_FLAG_1']
+        }
     ),
     VCLD=dict(
         track=8,
@@ -262,7 +266,7 @@ XAXIS_DEFS = {
         'title': 'GR',
         'titlefont': {'color': COLOR_DICT['GR'], 'size': font_size},
         'tickfont': {'color': COLOR_DICT['GR'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .88,
+        'side': 'top', 'anchor': 'free', 'position': .85,
         'title_standoff': .1, 'dtick': 40, 'range': [0, 200], 'type': 'linear', 'zeroline': False
     },
     'RT': {
@@ -278,7 +282,7 @@ XAXIS_DEFS = {
         'titlefont': {'color': COLOR_DICT['RHOB'], 'size': font_size},
         'tickformat': ".2f", 'tick0': 1.95, 'dtick': 0.2, 'tickangle': -90,
         'tickfont': {'color': COLOR_DICT['RHOB'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .89,
+        'side': 'top', 'anchor': 'free', 'position': .85,
         'title_standoff': .1, 'range': [1.95, 2.95], 'type': 'linear'
     },
     'PHIT': {
@@ -318,7 +322,7 @@ XAXIS_DEFS = {
         'title': 'NPHI',
         'titlefont': {'color': COLOR_DICT['NPHI'], 'size': font_size},
         'tickfont': {'color': COLOR_DICT['NPHI'], 'size': font_size}, 'zeroline': False,
-        'side': 'top', 'anchor': 'free', 'position': .94, 'title_standoff': .1, 'overlaying': 'x3',
+        'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x3',
         'tickformat': ".2f", 'tick0': -.15, 'dtick': 0.12, 'range': [.45, -.15], 'type': 'linear', 'tickangle': -90
     },
     'PHIE': {
@@ -339,28 +343,28 @@ XAXIS_DEFS = {
         'title': 'CALI',
         'titlefont': {'color': COLOR_DICT['CALI'], 'size': font_size},
         'tickfont': {'color': COLOR_DICT['CALI'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .92, 'title_standoff': .1, 'overlaying': 'x1',
+        'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x1',
         'dtick': 6, 'range': [6, 24], 'type': 'linear', 'showgrid': False
     },
     'BS': {
         'title': 'BS',
         'titlefont': {'color': COLOR_DICT['BS'], 'size': font_size},
         'tickfont': {'color': COLOR_DICT['BS'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .96, 'title_standoff': .1, 'overlaying': 'x1',
+        'side': 'top', 'anchor': 'free', 'position': .92, 'title_standoff': .1, 'overlaying': 'x1',
         'dtick': 6, 'range': [6, 24], 'type': 'linear', 'showgrid': False
     },
     'BADHOLE': {
         'title': 'BADHOLE',
         'titlefont': {'color': COLOR_DICT['BADHOLE'], 'size': font_size},
         'tickfont': {'size': 1},
-        'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1, 'overlaying': 'x1',
+        'side': 'top', 'anchor': 'free', 'position': .96, 'title_standoff': .1, 'overlaying': 'x1',
         'range': [0.1, 5], 'type': 'linear', 'showgrid': False, 'zeroline': False
     },
     'PEF': {
         'title': 'PEF',
         'titlefont': {'color': COLOR_DICT['PEF'], 'size': font_size},
         'tickfont': {'color': COLOR_DICT['PEF'], 'size': font_size}, 'zeroline': False,
-        'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1, 'overlaying': 'x3',
+        'side': 'top', 'anchor': 'free', 'position': .94, 'title_standoff': .1, 'overlaying': 'x3',
         'range': [-10, 10], 'type': 'linear', 'showgrid': False
     },
     'CPORE': {
