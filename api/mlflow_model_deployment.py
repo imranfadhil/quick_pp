@@ -3,6 +3,7 @@ from starlette.types import Message
 from datetime import datetime
 import mlflow
 from mlflow.pyfunc import load_model
+import mlflow.tracking as mlflow_tracking
 
 # # Uncomment below 3 lines to run >> if __name__ == "__main__"
 # import os
@@ -10,26 +11,10 @@ from mlflow.pyfunc import load_model
 # sys.path.append(os.getcwd())
 
 from api.fastapi_mlflow.applications import build_app
+from quick_pp.modelling.utils import get_model_info, run_mlflow_server
 
 
-def get_model_info(registered_model):
-    """Extract information of the registered models to load models automatically for predictions.
-
-    Args:
-        registered_model (class): Model that has been loaded and registered
-    """
-    model_info = {}
-
-    for model in registered_model:
-        model_info['reg_model_name'] = model.name
-        model_info['run_id'] = model.run_id
-        model_info['version'] = model.version
-        model_info['model_uri'] = model.source
-        model_info['stage'] = model.current_stage
-    return model_info
-
-
-app = FastAPI(title='ERMAI RTP - ML Models', debug=True)
+app = FastAPI(title='quick_pp - ML Models', debug=True)
 
 
 # set_body and get_body required to extract request body in middleware
@@ -45,7 +30,7 @@ async def get_body(request: Request) -> bytes:
     return body
 
 
-client = mlflow.tracking.MlflowClient()
+client = mlflow_tracking.MlflowClient()
 
 start_time = datetime.now()
 model_count = 0
@@ -72,19 +57,11 @@ duration = round((datetime.now() - start_time).total_seconds() / 60, 3)
 print(f"Completed mounting {model_count} models in {duration} minutes")
 
 
-def build_model_api():
-    return app
-
-
 if __name__ == '__main__':
     import uvicorn
 
-    from quick_pp.modelling.config import MLFLOW_CONFIG
-
     # Make sure mlflow server is running first
     env = 'local'
-    mlflow.set_tracking_uri(
-        f"http://{MLFLOW_CONFIG[env]['tracking_host']}:{MLFLOW_CONFIG[env]['tracking_port']}")
-    print(f"MLflow tracking URI: {mlflow.get_tracking_uri()}")
+    run_mlflow_server(env)
 
     uvicorn.run("api.mlflow_model_deployment:app", host='0.0.0.0', port=5555, reload=False)

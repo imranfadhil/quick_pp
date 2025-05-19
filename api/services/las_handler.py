@@ -78,7 +78,7 @@ async def process_las_file(files: List[UploadFile] = File(...)):
     for file in files:
         try:
             # Validate file extension
-            validate_file_extension(file.filename)
+            validate_file_extension(str(file.filename))
 
             # Save the raw LAS file
             file_name = f"{unique_id(file)}-{file.filename}"

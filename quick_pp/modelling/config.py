@@ -19,7 +19,7 @@ MLFLOW_CONFIG = dict(
 
 raw_features = ['GR', 'RT', 'NPHI', 'RHOB']
 MODELLING_CONFIG = dict(
-    fluid_type=OrderedDict(
+    clastic=OrderedDict(
         OIL=dict(
             alg=RandomForestClassifier,
             targets=['OIL_FLAG'],
@@ -32,28 +32,27 @@ MODELLING_CONFIG = dict(
             features=raw_features + ['OIL_FLAG'],
             description='Gas flag classification',
         ),
-    ),
-    clastic=OrderedDict(
-        POROSAT=dict(
+        CLASTIC=dict(
             alg=RandomForestRegressor,
-            targets=['PHIT', 'SWT'],
+            targets=['PHIT', 'SWT', 'LOG_PERM', 'VSAND', 'VSILT', 'VCLW'],
             features=raw_features,
-            description='Total porosity and total water saturation prediction',
-        ),
-        LITHO=dict(
-            alg=RandomForestRegressor,
-            targets=['VSAND', 'VSILT', 'VCLW'],
-            features=raw_features + ['PHIT', 'SWT'],
-            description='Lithology volumetric prediction consisting of sand, silt, and clay',
-        ),
-        PERM=dict(
-            alg=RandomForestRegressor,
-            targets=['LOG_PERM'],
-            features=raw_features + ['VSAND', 'VSILT', 'VCLW'],
-            description='Permeability prediction',
+            description=('Clastic properties prediction consisting of total porosity, total water saturation, '
+                         'log permeability, sand volume, silt volume, and clay volume'),
         ),
     ),
     carbonate=OrderedDict(
+        OIL=dict(
+            alg=RandomForestClassifier,
+            targets=['OIL_FLAG'],
+            features=raw_features,
+            description='Oil flag classification',
+        ),
+        GAS=dict(
+            alg=RandomForestClassifier,
+            targets=['GAS_FLAG'],
+            features=raw_features + ['OIL_FLAG'],
+            description='Gas flag classification',
+        ),
         CARBONATE=dict(
             alg=RandomForestRegressor,
             targets=['PHIT', 'SWT', 'LOG_PERM', 'VCALC', 'VCLW', 'VDOLO'],

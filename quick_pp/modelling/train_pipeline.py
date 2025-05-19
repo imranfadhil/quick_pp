@@ -4,6 +4,7 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_absolute_error, f1_score, accuracy_score
 import mlflow
+import mlflow.sklearn as mlflow_sklearn
 from mlflow.models.signature import infer_signature
 
 # # Uncomment below 3 lines to run >> if __name__ == "__main__"
@@ -11,7 +12,7 @@ from mlflow.models.signature import infer_signature
 # import sys
 # sys.path.append(os.getcwd())
 
-from quick_pp.modelling.config import MLFLOW_CONFIG, MODELLING_CONFIG
+from quick_pp.modelling.config import MODELLING_CONFIG
 
 
 # 1. Load data
@@ -25,10 +26,11 @@ def load_data(hash):
 
 
 # 2. Preprocess data
-def preprocess_data(df, target_column, features):
+def preprocess_data(df: pd.DataFrame, target_column: list[str], features: list[str]):
     # Add log perm if not already present
-    if 'LOG_PERM' not in df.columns and 'PERM' in df.columns:
-        df['LOG_PERM'] = np.log10(df['PERM'].clip(0.001))
+    if 'LOG_PERM' not in df.columns and 'PERM' in df.columns and (
+            'LOG_PERM' in target_column or 'LOG_PERM' in features):
+        df['LOG_PERM'] = np.log10(df['PERM'].clip(lower=1e-3))
 
     # Drop rows with NaN in target or features
     return_df = df.dropna(subset=target_column + features)
@@ -75,6 +77,11 @@ def train_pipeline(model_config: str, data_hash: str):
         targets = model_values['targets']
         features = model_values['features']
 
+        if not (isinstance(targets, list) and all(isinstance(t, str) for t in targets)):
+            raise TypeError(f"Targets must be a list of strings, got {targets}")
+        if not (isinstance(features, list) and all(isinstance(f, str) for f in features)):
+            raise TypeError(f"Features must be a list of strings, got {features}")
+
         df = load_data(data_hash)
         X, y = preprocess_data(df, targets, features)
         X_train, X_test, y_train, y_test = split_data(X, y)
@@ -90,41 +97,23 @@ def train_pipeline(model_config: str, data_hash: str):
 
             # Log model
             signature = infer_signature(X_train, y_train)
-            mlflow.sklearn.log_model(
+            mlflow_sklearn.log_model(
                 model, "model", signature=signature, input_example=X_test.sample(),
                 registered_model_name=f'{model_config}_{model_key}')
 
 
 if __name__ == "__main__":
     import os
-    import socket
-    from subprocess import Popen
+
+    from quick_pp.modelling.utils import run_mlflow_server
+
     # Set up MLflow
     os.makedirs('./mlruns', exist_ok=True)
     os.makedirs('data/input', exist_ok=True)
-    env = 'local'
-    cmd_mlflow_server = (f"mlflow server --backend-store-uri {MLFLOW_CONFIG[env]['backend_store_uri']} "
-                         f"--default-artifact-root {MLFLOW_CONFIG[env]['artifact_location']} "
-                         f"--host {MLFLOW_CONFIG[env]['tracking_host']} "
-                         f"--port {MLFLOW_CONFIG[env]['tracking_port']}")
-    print(f"Start MLflow server with command: {cmd_mlflow_server}")
 
-    def is_mlflow_server_running(host, port):
-        try:
-            with socket.create_connection((host, int(port)), timeout=2):
-                return True
-        except Exception:
-            return False
-
-    if not is_mlflow_server_running(MLFLOW_CONFIG[env]['tracking_host'], MLFLOW_CONFIG[env]['tracking_port']):
-        print("MLflow server is not running. Starting it now...")
-        Popen(cmd_mlflow_server, shell=False)
-
-    mlflow.set_tracking_uri(
-        f"http://{MLFLOW_CONFIG[env]['tracking_host']}:{MLFLOW_CONFIG[env]['tracking_port']}")
-    print(f"MLflow tracking URI: {mlflow.get_tracking_uri()}")
+    run_mlflow_server('local')
 
     # Example usage
-    data_hash = "APAC"  # Update with your hash for your data in the 'data/input/' folder
+    data_hash = "x2x2"  # Update with your hash for your data in the 'data/input/' folder
     model_config = "carbonate"  # Update with your model config
     train_pipeline(model_config, data_hash)
