@@ -159,7 +159,7 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
             # Log model
             signature = infer_signature(X_train, y_train)
             mlflow_sklearn.log_model(
-                model, "model", signature=signature, input_example=X_test.sample(),
+                model, "model", signature=signature, input_example=X_test.sample(5),
                 registered_model_name=f'{model_config}_{model_key}')
 
 

@@ -44,10 +44,9 @@ def build_predictor(model: PyFuncModel) -> Callable[[BaseModel], Any]:
     """
     input_schema = model.metadata.get_input_schema()
     input_model = create_model("RequestRow", **(build_model_fields(input_schema)))
-    output_model = create_model(
-        "ResponseRow",
-        **(build_model_fields(model.metadata.get_output_schema(), nullable=True)),
-    )
+    output_schema = model.metadata.get_output_schema()
+    output_features = [item['name'] for item in output_schema.to_dict()]
+    output_model = create_model("ResponseRow", **(build_model_fields(output_schema, nullable=True)))
 
     class Request(BaseModel):
         data: List[input_model]
@@ -72,7 +71,7 @@ def build_predictor(model: PyFuncModel) -> Callable[[BaseModel], Any]:
     async def predictor(request: Request) -> Response:
         try:
             predictions = model.predict(await request_to_dataframe(request))
-            response_data = await convert_predictions_to_python(predictions)
+            response_data = await convert_predictions_to_python(predictions, output_features)
             return Response(data=response_data)
         except Exception as exc:
             raise DictSerialisableException.from_exception(exc) from exc
@@ -80,9 +79,10 @@ def build_predictor(model: PyFuncModel) -> Callable[[BaseModel], Any]:
     return predictor  # type: ignore
 
 
-async def convert_predictions_to_python(results) -> List[Dict[str, Any]]:
+async def convert_predictions_to_python(results, output_features) -> List[Dict[str, Any]]:
     """Convert and return predictions in native Python types."""
     try:
+        results = pd.DataFrame(results, columns=output_features)
         response_data = (
             results.fillna(np.nan).replace([np.nan], [None]).to_dict(orient="records")
         )

@@ -12,6 +12,7 @@ matplotlib==3.8.0
 mlflow==2.22.0
 nbformat==5.9.2
 numpy==1.26.0
+orjson==3.10.18
 pandas==2.1.1
 plotly==5.17.0
 psycopg2==2.9.9

@@ -30,6 +30,8 @@ async def get_body(request: Request) -> bytes:
     await set_body(request, body)
     return body
 
+# Run MLflow server
+run_mlflow_server('local')
 
 client = mlflow_tracking.MlflowClient()
 
@@ -64,9 +66,5 @@ print(f"Completed mounting {model_count} models in {duration} minutes")
 
 if __name__ == '__main__':
     import uvicorn
-
-    # Make sure mlflow server is running first
-    env = 'local'
-    run_mlflow_server(env)
 
     uvicorn.run("quick_pp.api.mlflow_model_deployment:app", host='0.0.0.0', port=5555, reload=False)

@@ -53,7 +53,7 @@ def model_deployment(debug):
     """Run the MLflow model deployment."""
     if not is_server_running('localhost', 5555):
         reload_ = "--reload" if debug else ""
-        cmd = f"uvicorn quick_pp.api.mlflow_model_deployment:app --port 5555 {reload_}"
+        cmd = f"uvicorn quick_pp.api.mlflow_model_deployment:app --host 0.0.0.0 --port 5555 {reload_}"
         click.echo(f"Model server is not running. Starting it now... | {cmd}")
         process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
         process.wait()
