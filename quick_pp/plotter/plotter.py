@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from quick_pp.utils import line_intersection
-import quick_pp.plotter_well_log as plotter_wells
+import quick_pp.plotter.well_log as plotter_wells
 plotly_log = plotter_wells.plotly_log
 
 plt.style.use('seaborn-v0_8-paper')

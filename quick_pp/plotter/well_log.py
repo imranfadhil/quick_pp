@@ -4,7 +4,7 @@ from collections import OrderedDict
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from quick_pp.plotter_well_log_config import COLOR_DICT, TRACE_DEFS, XAXIS_DEFS
+from quick_pp.plotter.well_log_config import COLOR_DICT, TRACE_DEFS, XAXIS_DEFS
 
 
 # --- Helper to add traces from trace_defs ---
