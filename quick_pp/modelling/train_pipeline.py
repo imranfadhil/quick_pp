@@ -13,10 +13,21 @@ from mlflow.models.signature import infer_signature
 # sys.path.append(os.getcwd())
 
 from quick_pp.modelling.config import MODELLING_CONFIG
+from quick_pp.modelling.utils import run_mlflow_server
 
 
-# 1. Load data
-def load_data(hash):
+def load_data(hash: str):
+    """Load data from the specified directory using a hash to identify the file.
+
+    Args:
+        hash (str): Hash to identify the file.
+
+    Raises:
+        FileNotFoundError: If no file is found with the specified hash.
+
+    Returns:
+        pd.DataFrame: Loaded DataFrame.
+    """
     data_dir = Path("data/input/")
     matching_files = list(data_dir.glob(f"*{hash}*.parquet"))
     if not matching_files:
@@ -25,8 +36,18 @@ def load_data(hash):
     return pd.read_parquet(path)
 
 
-# 2. Preprocess data
-def preprocess_data(df: pd.DataFrame, target_column: list[str], features: list[str]):
+def preprocess_data(
+        df: pd.DataFrame, target_column: list[str], features: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Preprocess the DataFrame by adding a log-perm column if needed and dropping rows with NaN values.
+
+    Args:
+        df (pd.DataFrame): DataFrame to preprocess.
+        target_column (list[str]): Target column(s) for the model.
+        features (list[str]): Feature columns for the model.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: Tuple containing the features DataFrame and target DataFrame.
+    """
     # Add log perm if not already present
     if 'LOG_PERM' not in df.columns and 'PERM' in df.columns and (
             'LOG_PERM' in target_column or 'LOG_PERM' in features):
@@ -39,21 +60,48 @@ def preprocess_data(df: pd.DataFrame, target_column: list[str], features: list[s
     return X, y
 
 
-# 3. Split data
-def split_data(X, y, test_size=0.2, random_state=42):
+def split_data(X, y, test_size=0.2, random_state=42) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Split the data into training and testing sets.
+
+    Args:
+        X (pd.DataFrame): Feature DataFrame.
+        y (pd.DataFrame): Target DataFrame.
+        test_size (float, optional): Proportion of the dataset to include in the test split. Defaults to 0.2.
+        random_state (int, optional): Random seed for reproducibility. Defaults to 42.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]: Tuple containing the training and testing sets.
+    """
     return train_test_split(X, y, test_size=test_size, random_state=random_state)
 
 
-# 4. Train model
-def train_model(alg, X_train, y_train):
-    print(f"Training model: {alg.__name__}")
+def train_model(alg, X_train: pd.DataFrame, y_train: pd.DataFrame):
+    """Train the model using the specified algorithm.
+
+    Args:
+        alg (_type_): Algorithm to use for training.
+        X_train (pd.DataFrame): Feature DataFrame.
+        y_train (pd.DataFrame): Target DataFrame.
+
+    Returns:
+        _type_: _description_
+    """
     model = alg(random_state=42)
     model.fit(X_train, y_train)
     return model
 
 
-# 5. Evaluate model
-def evaluate_model(model, X_test, y_test):
+def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.DataFrame) -> dict:
+    """Evaluate the model using the test data.
+
+    Args:
+        model (_type_): Trained model to evaluate.
+        X_test (pd.DataFrame): Feature DataFrame for testing.
+        y_test (pd.DataFrame): Target DataFrame for testing.
+
+    Returns:
+        dict: Dictionary containing evaluation metrics.
+    """
     y_pred = model.predict(X_test)
 
     # Check model type
@@ -70,9 +118,22 @@ def evaluate_model(model, X_test, y_test):
 
 
 # 6. Train pipeline
-def train_pipeline(model_config: str, data_hash: str):
+def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
+    """This function automates the process of training, evaluating, and logging multiple models as defined in
+    a configuration, leveraging MLflow for experiment tracking and model management.
+
+    Args:
+        model_config (str): Key for the model configuration in the MODELLING_CONFIG dictionary.
+        data_hash (str): Hash to identify the data file in the 'data/input/' directory.
+        env (str, optional): MLflow environment to use. Defaults to 'local'.
+
+    Raises:
+        TypeError: If the targets or features are not lists of strings.
+    """
+    # Run MLflow server
+    run_mlflow_server(env)
+
     for model_key, model_values in MODELLING_CONFIG[model_config].items():
-        print(model_values['targets'])
         alg = model_values['alg']
         targets = model_values['targets']
         features = model_values['features']
@@ -105,13 +166,9 @@ def train_pipeline(model_config: str, data_hash: str):
 if __name__ == "__main__":
     import os
 
-    from quick_pp.modelling.utils import run_mlflow_server
-
     # Set up MLflow
     os.makedirs('./mlruns', exist_ok=True)
     os.makedirs('data/input', exist_ok=True)
-
-    run_mlflow_server('local')
 
     # Example usage
     data_hash = "x2x2"  # Update with your hash for your data in the 'data/input/' folder

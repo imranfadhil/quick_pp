@@ -1,4 +1,5 @@
 import pandas as pd
+import os
 from pandas.util import hash_pandas_object
 import mlflow
 from mlflow.tracking import MlflowClient
@@ -48,6 +49,11 @@ def run_mlflow_server(env):
         - Sets the MLflow tracking URI for the current process.
         - Prints status messages to the console.
     """
+    # Create mlruns directory if it doesn't exist
+    mlruns_dir = MLFLOW_CONFIG[env]['artifact_location']
+    os.makedirs(mlruns_dir, exist_ok=True)
+
+    # Check if MLflow server is running, if not, start it
     mlflog_config = MLFLOW_CONFIG[env]
     if not is_mlflow_server_running(mlflog_config['tracking_host'], mlflog_config['tracking_port']):
         cmd_mlflow_server = (
@@ -58,6 +64,7 @@ def run_mlflow_server(env):
         )
         print(f"MLflow server is not running. Starting it now... | {cmd_mlflow_server}")
         Popen(cmd_mlflow_server, shell=True)
+        print("MLflow server started successfully.")
 
     mlflow.set_tracking_uri(
         f"http://{MLFLOW_CONFIG[env]['tracking_host']}:{MLFLOW_CONFIG[env]['tracking_port']}")
@@ -80,7 +87,7 @@ def get_model_info(registered_model):
     return model_info
 
 
-def get_latest_registered_models(client: MlflowClient, experiment_name: str):
+def get_latest_registered_models(client: MlflowClient, experiment_name: str) -> dict:
     """Get the latest registered models from MLflow.
 
     Args:
@@ -88,12 +95,12 @@ def get_latest_registered_models(client: MlflowClient, experiment_name: str):
         experiment_name (str): Name of the experiment to filter registered models.
 
     Returns:
-        list: List of latest registered models.
+        dict: Dictionary containing the latest registered models with their details.
     """
     latest_rm_models = {}
     filter_str = f"name ILIKE '{experiment_name}_%'"
     for rm in client.search_registered_models(filter_string=filter_str):
         latest_rm_info = get_model_info(rm.latest_versions)
         latest_rm_models[latest_rm_info['reg_model_name']] = latest_rm_info
-        print("Adding model to latest_rm_models: ", latest_rm_info['reg_model_name'])
+        print(f"Adding {latest_rm_info['reg_model_name']} to latest_rm_models dictionary")
     return latest_rm_models

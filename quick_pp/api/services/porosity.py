@@ -3,6 +3,7 @@ from quick_pp.api.schemas.porosity import InputData
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.porosity import neu_den_xplot_poro, density_porosity, rho_matrix
 from typing import List, Dict
+import numpy as np
 
 router = APIRouter(prefix="/porosity", tags=["Porosity"])
 
@@ -52,8 +53,8 @@ async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
     input_dict = inputs.model_dump()
     _validate_points(input_dict, [k for k in input_dict if k.endswith('_point')])
 
-    nphi = [d.nphi for d in inputs.data]
-    rhob = [d.rhob for d in inputs.data]
+    nphi = np.array([d.nphi for d in inputs.data])
+    rhob = np.array([d.rhob for d in inputs.data])
 
     ssc_model = SandSiltClay(
         dry_sand_point=inputs.dry_sand_point,
@@ -103,8 +104,8 @@ async def estimate_phit_neu_den(inputs: InputData) -> List[Dict[str, float]]:
     input_dict = inputs.model_dump()
     _validate_points(input_dict, [k for k in input_dict if k.endswith('_point')])
 
-    nphi = [d.nphi for d in inputs.data]
-    rhob = [d.rhob for d in inputs.data]
+    nphi = np.array([d.nphi for d in inputs.data])
+    rhob = np.array([d.rhob for d in inputs.data])
 
     phit = neu_den_xplot_poro(
         nphi,

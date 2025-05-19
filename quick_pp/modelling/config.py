@@ -17,25 +17,25 @@ MLFLOW_CONFIG = dict(
     ),
 )
 
-raw_features = ['GR', 'RT', 'NPHI', 'RHOB']
+RAW_FEATURES = ['GR', 'RT', 'NPHI', 'RHOB']
 MODELLING_CONFIG = dict(
     clastic=OrderedDict(
         OIL=dict(
             alg=RandomForestClassifier,
             targets=['OIL_FLAG'],
-            features=raw_features,
+            features=RAW_FEATURES,
             description='Oil flag classification',
         ),
         GAS=dict(
             alg=RandomForestClassifier,
             targets=['GAS_FLAG'],
-            features=raw_features + ['OIL_FLAG'],
+            features=RAW_FEATURES + ['OIL_FLAG'],
             description='Gas flag classification',
         ),
         CLASTIC=dict(
             alg=RandomForestRegressor,
             targets=['PHIT', 'SWT', 'LOG_PERM', 'VSAND', 'VSILT', 'VCLW'],
-            features=raw_features,
+            features=RAW_FEATURES,
             description=('Clastic properties prediction consisting of total porosity, total water saturation, '
                          'log permeability, sand volume, silt volume, and clay volume'),
         ),
@@ -44,19 +44,19 @@ MODELLING_CONFIG = dict(
         OIL=dict(
             alg=RandomForestClassifier,
             targets=['OIL_FLAG'],
-            features=raw_features,
+            features=RAW_FEATURES,
             description='Oil flag classification',
         ),
         GAS=dict(
             alg=RandomForestClassifier,
             targets=['GAS_FLAG'],
-            features=raw_features + ['OIL_FLAG'],
+            features=RAW_FEATURES + ['OIL_FLAG'],
             description='Gas flag classification',
         ),
         CARBONATE=dict(
             alg=RandomForestRegressor,
             targets=['PHIT', 'SWT', 'LOG_PERM', 'VCALC', 'VCLW', 'VDOLO'],
-            features=raw_features,
+            features=RAW_FEATURES,
             description=('Carbonate properties prediction consisting of total porosity, total water saturation, '
                          'log permeability, calcite volume, clay volume, and dolomite volume'),
         ),
