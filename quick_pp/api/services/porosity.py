@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from api.schemas.porosity import InputData
+from quick_pp.api.schemas.porosity import InputData
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.porosity import neu_den_xplot_poro, density_porosity, rho_matrix
 from typing import List, Dict

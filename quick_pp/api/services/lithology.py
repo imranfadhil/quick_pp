@@ -5,9 +5,9 @@ Optimized for readability, reliability, and maintainability.
 from fastapi import APIRouter
 import pandas as pd
 
-from api.schemas.lithology_ssc import LithologySSCInput
-from api.schemas.lithology_vsh_gr import LithologyVshGRInput
-from api.schemas.lithology_hc_correction import LithologyHCCorrectionInput
+from quick_pp.api.schemas.lithology_ssc import LithologySSCInput
+from quick_pp.api.schemas.lithology_vsh_gr import LithologyVshGRInput
+from quick_pp.api.schemas.lithology_hc_correction import LithologyHCCorrectionInput
 
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.lithology import gr_index

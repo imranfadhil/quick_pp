@@ -3,8 +3,8 @@ import pandas as pd
 from typing import List, Dict
 import logging
 
-from api.schemas.permeability_choo import InputData as PermChInputData
-from api.schemas.permeability_others import InputData as PermOthersInputData
+from quick_pp.api.schemas.permeability_choo import InputData as PermChInputData
+from quick_pp.api.schemas.permeability_others import InputData as PermOthersInputData
 from quick_pp.permeability import (
     choo_permeability, timur_permeability, coates_permeability, kozeny_carman_permeability, tixier_permeability
 )

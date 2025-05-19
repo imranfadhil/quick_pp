@@ -18,11 +18,11 @@ import pandas as pd
 from mlflow.pyfunc import PyFuncModel  # type: ignore
 from pydantic import BaseModel, create_model
 
-from fastapi_mlflow._mlflow_types import (
+from quick_pp.api.fastapi_mlflow._mlflow_types import (
     MLFLOW_SIGNATURE_TO_PYTHON_TYPE_MAP,
     build_model_fields,
 )
-from fastapi_mlflow.exceptions import DictSerialisableException
+from quick_pp.api.fastapi_mlflow.exceptions import DictSerialisableException
 
 
 @no_type_check  # Some types here are too dynamic for type checking

@@ -10,7 +10,7 @@ import mlflow.tracking as mlflow_tracking
 # import sys
 # sys.path.append(os.getcwd())
 
-from api.fastapi_mlflow.applications import build_app
+from quick_pp.api.fastapi_mlflow.applications import build_app
 from quick_pp.modelling.utils import get_model_info, run_mlflow_server
 
 
@@ -64,4 +64,4 @@ if __name__ == '__main__':
     env = 'local'
     run_mlflow_server(env)
 
-    uvicorn.run("api.mlflow_model_deployment:app", host='0.0.0.0', port=5555, reload=False)
+    uvicorn.run("quick_pp.api.mlflow_model_deployment:app", host='0.0.0.0', port=5555, reload=False)

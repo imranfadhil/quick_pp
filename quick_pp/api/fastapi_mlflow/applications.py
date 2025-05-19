@@ -12,8 +12,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import ORJSONResponse
 from mlflow.pyfunc import PyFuncModel  # type: ignore
 
-from fastapi_mlflow.exceptions import DictSerialisableException
-from fastapi_mlflow.predictors import build_predictor
+from quick_pp.api.fastapi_mlflow.exceptions import DictSerialisableException
+from quick_pp.api.fastapi_mlflow.predictors import build_predictor
 
 
 def build_app(app, pyfunc_model: PyFuncModel, route: str) -> FastAPI:

@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 import pandas as pd
 from typing import List, Dict
 
-from api.schemas.ressum import InputData
+from quick_pp.api.schemas.ressum import InputData
 from quick_pp.ressum import calc_reservoir_summary
 
 router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])

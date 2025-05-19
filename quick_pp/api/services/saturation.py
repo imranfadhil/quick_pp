@@ -3,12 +3,12 @@ import pandas as pd
 from typing import List, Dict, Any, Optional
 import numpy as np
 
-from api.schemas.saturation_waxman_smits import InputData as WaxmanSmitsInput
-from api.schemas.saturation_archie import InputData as ArchieInput
-from api.schemas.saturation_temp_grad import InputData as TempGradInput
-from api.schemas.saturation_rw import InputData as RwInput
-from api.schemas.saturation_b import InputData as BInput
-from api.schemas.saturation_qv import InputData as QvInput
+from quick_pp.api.schemas.saturation_waxman_smits import InputData as WaxmanSmitsInput
+from quick_pp.api.schemas.saturation_archie import InputData as ArchieInput
+from quick_pp.api.schemas.saturation_temp_grad import InputData as TempGradInput
+from quick_pp.api.schemas.saturation_rw import InputData as RwInput
+from quick_pp.api.schemas.saturation_b import InputData as BInput
+from quick_pp.api.schemas.saturation_qv import InputData as QvInput
 
 from quick_pp.saturation import (
     waxman_smits_saturation, archie_saturation, estimate_rw_temperature_salinity, estimate_temperature_gradient,

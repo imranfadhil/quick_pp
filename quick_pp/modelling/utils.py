@@ -57,7 +57,7 @@ def run_mlflow_server(env):
             f"--port {mlflog_config['tracking_port']}"
         )
         print(f"MLflow server is not running. Starting it now... | {cmd_mlflow_server}")
-        Popen(cmd_mlflow_server, shell=False)
+        Popen(cmd_mlflow_server, shell=True)
 
     mlflow.set_tracking_uri(
         f"http://{MLFLOW_CONFIG[env]['tracking_host']}:{MLFLOW_CONFIG[env]['tracking_port']}")
