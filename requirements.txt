@@ -20,7 +20,7 @@ ptitprince==0.2.7
 pyarrow==16.0.0
 ruptures==1.1.8
 SALib==1.5.1
-scikit-learn==1.5.1
+scikit-learn==1.6.1
 scipy==1.13.0
 sphinx-rtd-theme==2.0.0
 Sphinx==7.2.6
