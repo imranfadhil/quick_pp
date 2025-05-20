@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi_mcp import FastApiMCP
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import Message
 from datetime import datetime
 import mlflow
@@ -52,6 +53,16 @@ try:
             route = fr"/{model_info['reg_model_name']}"
             app = build_app(app, model, route)
             print(f"Mounting #{model_count} | {route}")
+
+    # Set up CORS middleware
+    origins = ["*"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=origins,
+        allow_headers=origins,
+    )
 
     # Mount the model using FastApiMCP
     mcp = FastApiMCP(app)
