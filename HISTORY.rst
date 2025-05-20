@@ -56,3 +56,10 @@ History
 * Update rock typing module.
 * Add skelt harrison saturation function.
 * Add sensitivity analysis in ressum module.
+
+0.2.1 (2025-05-20)
+-------------------
+* Refactor the API module.
+* Add ML modelling module.
+* Add cli using click.
+* Refactor the well log plotter module.

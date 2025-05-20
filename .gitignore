@@ -113,3 +113,5 @@ notebooks/data/04_project/*
 notebooks/local/*
 notebooks/03_qpp__*
 uploads/*
+mlruns/*
+data/*

@@ -16,14 +16,20 @@ with open('README.rst') as readme_file:
 with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
-requirements = ['Click>=7.0', 'ruptures', 'welly', 'pandas', 'numpy', 'statsmodels']
+requirements = [
+    'Click>=7.0', 'ruptures', 'welly', 'pandas', 'numpy', 'statsmodels', 'scikit-learn==1.6.1', 'mlflow',
+    'fastapi', 'fastapi_mcp', 'psycopg2-binary', 'ptitprince', 'matplotlib==3.8.0', 'SALib==1.5.1', 'orjson'
+]
 
 test_requirements = []
 
 setup(
-    author="Imran Fadhil",
-    author_email='imranfadhil@gmail.com',
-    python_requires='>=3.6',
+    name='quick_pp',
+    version=quick_pp.__version__,
+    author=quick_pp.__author__,
+    author_email=quick_pp.__email__,
+    url='https://github.com/imranfadhil/quick_pp',
+    python_requires='>=3.10',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Developers',
@@ -32,21 +38,18 @@ setup(
         'Programming Language :: Python :: 3.10',
     ],
     description="Python package to assist in providing quick-look/ preliminary petrophysical estimation.",
-    # entry_points={
-    #     'console_scripts': [
-    #         'quick_pp=quick_pp.cli:main',
-    #     ],
-    # },
+    entry_points={
+        'console_scripts': [
+            'quick_pp=main:cli',
+        ],
+    },
     install_requires=requirements,
     license="MIT license",
     long_description=readme + '\n\n' + history,
     include_package_data=True,
     keywords='quick_pp, petrophysics, geoscience, well log analysis',
-    name='quick_pp',
     packages=find_packages(include=['quick_pp', 'quick_pp.*']),  # where='quick_pp'),  #
     test_suite='tests',
     tests_require=test_requirements,
-    url='https://github.com/imranfadhil/quick_pp',
-    version=quick_pp.__version__,
     zip_safe=False,
 )

@@ -18,7 +18,7 @@ Python package to assist in providing quick-look/ preliminary petrophysical esti
     - 02_EDA: quick look on the data
     - 03_*: quick petropohysical interpretation of the MOCK wells.
     - For API notebook, need to run the following before running the cells
-        > uvicorn api.main:app
+        > uvicorn quick_pp.api.main:app
 
 ## Install
 To install, use the following command:  
