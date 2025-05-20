@@ -32,9 +32,9 @@ def cli():
 @click.option('--debug', is_flag=True)
 def api_server(debug):
     """Run the API server."""
-    if not is_server_running('localhost', 8000):
+    if not is_server_running('localhost', 8888):
         reload_ = "--reload" if debug else ""
-        cmd = f"uvicorn quick_pp.api.main:app {reload_}"
+        cmd = f"uvicorn quick_pp.api.main:app --host 0.0.0.0 --port 8888 {reload_}"
         click.echo(f"API server is not running. Starting it now... | {cmd}")
         process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
         process.wait()
