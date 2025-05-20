@@ -1,11 +1,12 @@
 import pandas as pd
-import os
 from pandas.util import hash_pandas_object
+import os
 import mlflow
 from mlflow.tracking import MlflowClient
 import socket
 from subprocess import Popen
 from hashlib import sha256
+from pathlib import Path
 
 from quick_pp.modelling.config import MLFLOW_CONFIG
 
@@ -50,7 +51,7 @@ def run_mlflow_server(env):
         - Prints status messages to the console.
     """
     # Create mlruns directory if it doesn't exist
-    mlruns_dir = MLFLOW_CONFIG[env]['artifact_location']
+    mlruns_dir = Path(str(MLFLOW_CONFIG[env]['artifact_location']))
     os.makedirs(mlruns_dir, exist_ok=True)
 
     # Check if MLflow server is running, if not, start it
@@ -87,7 +88,7 @@ def get_model_info(registered_model):
     return model_info
 
 
-def get_latest_registered_models(client: MlflowClient, experiment_name: str) -> dict:
+def get_latest_registered_models(client: MlflowClient, experiment_name: str, data_hash: str) -> dict:
     """Get the latest registered models from MLflow.
 
     Args:
@@ -98,7 +99,7 @@ def get_latest_registered_models(client: MlflowClient, experiment_name: str) -> 
         dict: Dictionary containing the latest registered models with their details.
     """
     latest_rm_models = {}
-    filter_str = f"name ILIKE '{experiment_name}_%'"
+    filter_str = f"name ILIKE '{experiment_name}%' AND name like '%{data_hash}'"
     for rm in client.search_registered_models(filter_string=filter_str):
         latest_rm_info = get_model_info(rm.latest_versions)
         latest_rm_models[latest_rm_info['reg_model_name']] = latest_rm_info

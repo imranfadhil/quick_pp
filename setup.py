@@ -16,16 +16,20 @@ with open('README.rst') as readme_file:
 with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
-requirements = ['Click>=7.0', 'ruptures', 'welly', 'pandas', 'numpy', 'statsmodels']
+requirements = [
+    'Click>=7.0', 'ruptures', 'welly', 'pandas', 'numpy', 'statsmodels', 'scikit-learn', 'mlflow',
+    'fastapi', 'fastapi_mcp', 'psycopg2-binary'
+]
 
 test_requirements = []
 
 setup(
     name='quick_pp',
     version=quick_pp.__version__,
-    author="Imran Fadhil",
-    author_email='imranfadhil@gmail.com',
-    python_requires='>=3.6',
+    author=quick_pp.__author__,
+    author_email=quick_pp.__email__,
+    url='https://github.com/imranfadhil/quick_pp',
+    python_requires='>=3.10',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Developers',
@@ -47,6 +51,5 @@ setup(
     packages=find_packages(include=['quick_pp', 'quick_pp.*']),  # where='quick_pp'),  #
     test_suite='tests',
     tests_require=test_requirements,
-    url='https://github.com/imranfadhil/quick_pp',
     zip_safe=False,
 )

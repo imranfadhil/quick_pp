@@ -77,7 +77,7 @@ def predict_pipeline(model_config: str, data_hash: str, output_file_name: str, e
 
     # Get the information of the latest registered models
     client = mlflow_tracking.MlflowClient()
-    latest_rms = get_latest_registered_models(client, model_config)
+    latest_rms = get_latest_registered_models(client, model_config, data_hash)
 
     # Load the data
     data = load_data(data_hash)
@@ -86,7 +86,7 @@ def predict_pipeline(model_config: str, data_hash: str, output_file_name: str, e
     for model_key, model_values in MODELLING_CONFIG[model_config].items():
         targets = model_values['targets']
         features = model_values['features']
-        reg_model_name = f'{model_config}_{model_key}'
+        reg_model_name = f'{model_config}_{model_key}_{data_hash}'
         print(f"Predicting with model: {model_key} | {reg_model_name}")
 
         # Load the model

@@ -60,7 +60,7 @@ def preprocess_data(
     return X, y
 
 
-def split_data(X, y, test_size=0.2, random_state=42) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def split_data(X, y, test_size=0.2, random_state=42) -> list:
     """Split the data into training and testing sets.
 
     Args:
@@ -70,7 +70,7 @@ def split_data(X, y, test_size=0.2, random_state=42) -> tuple[pd.DataFrame, pd.D
         random_state (int, optional): Random seed for reproducibility. Defaults to 42.
 
     Returns:
-        tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]: Tuple containing the training and testing sets.
+        list: List containing the training and testing sets for features and target.
     """
     return train_test_split(X, y, test_size=test_size, random_state=random_state)
 
@@ -157,10 +157,11 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
                 mlflow.log_metric(metric_name, float(metric_value))
 
             # Log model
+            reg_model_name = f'{model_config}_{model_key}_{data_hash}'
             signature = infer_signature(X_train, y_train)
             mlflow_sklearn.log_model(
                 model, "model", signature=signature, input_example=X_test.sample(5),
-                registered_model_name=f'{model_config}_{model_key}')
+                registered_model_name=reg_model_name)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 
 from quick_pp.utils import line_intersection
 import quick_pp.plotter.well_log as plotter_wells
@@ -250,7 +251,7 @@ def neutron_density_xplot(nphi, rhob,
     min1line_from_pt = (D, A)
     clayline_from_pt = (D, C)
 
-    fig = plt.Figure(figsize=(5, 5))
+    fig = Figure(figsize=(5, 5))
     ax = fig.add_subplot(111)
     ax.set_title('NPHI-RHOB Crossplot')
     ax.scatter(nphi, rhob, c=np.arange(0, len(nphi)).tolist(), cmap='rainbow', marker='.')

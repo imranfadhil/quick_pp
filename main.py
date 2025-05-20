@@ -63,20 +63,22 @@ def model_deployment(debug):
 @click.command()
 @click.argument('model_config', required=True, type=click.STRING)
 @click.argument('data_hash', required=True, type=click.STRING)
-def train(model_config, data_hash):
+@click.argument('env', default='local', type=click.Choice(['local', 'remote']))
+def train(model_config, data_hash, env):
     """Train the model with the specified parameters."""
     click.echo(f"Training {model_config} model with data hash {data_hash}")
-    train_pipeline(model_config, data_hash)
+    train_pipeline(model_config, data_hash, env)
 
 
 @click.command()
 @click.argument('model_config', required=True, type=click.STRING)
 @click.argument('data_hash', required=True, type=click.STRING)
 @click.argument('output_file_name', required=False, default='test', type=click.STRING)
-def predict(model_config, data_hash, output_file_name):
+@click.argument('env', default='local', type=click.Choice(['local', 'remote']))
+def predict(model_config, data_hash, output_file_name, env):
     """Run the prediction."""
     click.echo("Running prediction...")
-    predict_pipeline(model_config, data_hash, output_file_name)
+    predict_pipeline(model_config, data_hash, output_file_name, env)
 
 
 # Add commands to the CLI group
