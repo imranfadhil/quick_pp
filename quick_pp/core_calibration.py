@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from quick_pp.utils import power_law_func, inv_power_law_func
+from quick_pp.logger import logger
 
 
 plt.style.use('seaborn-v0_8-paper')
@@ -140,7 +141,7 @@ def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False, a
     ax.set_xlabel('Sw (frac)')
     ax.set_xlim(0.01, 1)
     ax.set_ylabel('J')
-    ax.set_ylim(ylim) if ylim else ax.set_ylim(0.01, ax.get_lines()[-1].get_ydata().max())
+    ax.set_ylim(ylim) if ylim else ax.set_ylim(0.01, max(ax.get_lines()[-1].get_ydata()))
     if log_log:
         ax.set_yscale('log')
         ax.set_ylim(0.01, 100)
@@ -167,7 +168,7 @@ def fit_j_curve(sw, j):
         b = [round(c, 3) for c in popt][1]
         return a, b
     except Exception as e:
-        print(e)
+        logger.error(e)
         return 1, 1
 
 
@@ -218,7 +219,7 @@ def fit_skelt_harrison_curve(sw, h):
         d = [round(c, 3) for c in popt][3]
         return a, b, c, d
     except Exception as e:
-        print(e)
+        logger.error(e)
         return 1, 1, 1, 1
 
 
@@ -252,7 +253,7 @@ def fit_poroperm_curve(poro, perm):
         b = [round(c, 3) for c in popt][1]
         return a, b
     except Exception as e:
-        print(e)
+        logger.error(e)
         return 1, 1
 
 

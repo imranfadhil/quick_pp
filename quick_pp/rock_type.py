@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import (classification_report, auc, ConfusionMatrixDisplay, confusion_matrix,
                              r2_score, mean_absolute_error)
+from quick_pp.logger import logger
 
 from quick_pp.utils import min_max_line
 from quick_pp.lithology import shale_volume_steiber
@@ -415,15 +416,15 @@ def train_classification_model(data, input_features: list, target_feature: str, 
     # Model evaluation
     y_pred_train = model.predict(X_train)
     y_pred = model.predict(X_test)
-    print(f'Score for {target_feature} model\n')
-    print('Best parameters found:\n', model.best_params_)
-    print('### Train Set ###')
-    print('Classification Report:\n', classification_report(y_train, y_pred_train))
+    logger.info(f'Score for {target_feature} model')
+    logger.info('Best parameters found: %s', model.best_params_)
+    logger.info('### Train Set ###')
+    logger.info('Classification Report:\n%s', classification_report(y_train, y_pred_train))
     cm = confusion_matrix(y_train, y_pred_train, labels=model.classes_)
     ConfusionMatrixDisplay(cm, display_labels=model.classes_).plot()
 
-    print('\n### Test Set ###')
-    print('Classification Report:\n', classification_report(y_test, y_pred))
+    logger.info('\n### Test Set ###')
+    logger.info('Classification Report:\n%s', classification_report(y_test, y_pred))
     cm = confusion_matrix(y_test, y_pred, labels=model.classes_)
     ConfusionMatrixDisplay(cm, display_labels=model.classes_).plot()
 
@@ -476,15 +477,14 @@ def train_regression_model(data, input_features: list, target_feature: list, str
     # Model evaluation
     y_pred_train = model.predict(X_train)
     y_pred = model.predict(X_test)
-    print(f'Score for {target_feature} model\n')
-    print('Best parameters found:\n', model.best_params_)
-    print('### Train Set ###')
-    print('R2 Score:', r2_score(y_train, y_pred_train))
-    print('Mean Absolute Error:', mean_absolute_error(y_train, y_pred_train))
-
-    print('\n### Test Set ###')
-    print('R2 Score:', r2_score(y_test, y_pred))
-    print('Mean Absolute Error:', mean_absolute_error(y_test, y_pred))
+    logger.info(f'Score for {target_feature} model')
+    logger.info('Best parameters found: %s', model.best_params_)
+    logger.info('### Train Set ###')
+    logger.info('R2 Score: %s', r2_score(y_train, y_pred_train))
+    logger.info('Mean Absolute Error: %s', mean_absolute_error(y_train, y_pred_train))
+    logger.info('\n### Test Set ###')
+    logger.info('R2 Score: %s', r2_score(y_test, y_pred))
+    logger.info('Mean Absolute Error: %s', mean_absolute_error(y_test, y_pred))
 
     # Plot the true vs predicted values
     plt.figure(figsize=(10, 8))
