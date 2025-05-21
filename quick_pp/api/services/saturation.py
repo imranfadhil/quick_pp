@@ -86,7 +86,8 @@ def _parse_and_respond(
 @router.post(
     "/temp_grad",
     summary="Estimate Temperature Gradient",
-    description="Estimate the temperature gradient based on input depth data and measurement system."
+    description="Estimate the temperature gradient based on input depth data and measurement system.",
+    operation_id="estimate_temperature_gradient",
 )
 async def estimate_temperature_gradient_(inputs: TempGradInput) -> List[Dict[str, float]]:
     """
@@ -122,7 +123,8 @@ async def estimate_temperature_gradient_(inputs: TempGradInput) -> List[Dict[str
 @router.post(
     "/rw",
     summary="Estimate Formation Water Resistivity (Rw)",
-    description="Estimate formation water resistivity (Rw) based on input temperature gradient and water salinity."
+    description="Estimate formation water resistivity (Rw) based on input temperature gradient and water salinity.",
+    operation_id="estimate_formation_water_resistivity",
 )
 async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
     """
@@ -160,7 +162,8 @@ async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
     description=(
         "Estimate the B parameter using the Waxman-Smits model based on input temperature gradient "
         "and formation water resistivity."
-    )
+    ),
+    operation_id="estimate_b_parameter_waxman_smits",
 )
 async def estimate_b_waxman_smits_(inputs: BInput) -> List[Dict[str, float]]:
     """
@@ -190,7 +193,8 @@ async def estimate_b_waxman_smits_(inputs: BInput) -> List[Dict[str, float]]:
 @router.post(
     "/estimate_qv",
     summary="Estimate Cation Exchange Capacity per Unit Pore Volume (Qv)",
-    description="Estimate Qv using well log measurements and clay properties."
+    description="Estimate Qv using well log measurements and clay properties.",
+    operation_id="estimate_cation_exchange_capacity",
 )
 async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
     """
@@ -229,7 +233,8 @@ async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
 @router.post(
     "/waxman_smits",
     summary="Estimate Water Saturation using Waxman-Smits Model",
-    description="Estimate water saturation (SWT) using the Waxman-Smits model based on input data."
+    description="Estimate water saturation (SWT) using the Waxman-Smits model based on input data.",
+    operation_id="estimate_waxman_smits_water_saturation",
 )
 async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, float]]:
     """
@@ -274,7 +279,8 @@ async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, 
 @router.post(
     "/archie",
     summary="Estimate Water Saturation using Archie Model",
-    description="Estimate water saturation (SWT) using the Archie model based on input data."
+    description="Estimate water saturation (SWT) using the Archie model based on input data.",
+    operation_id="estimate_archie_water_saturation",
 )
 async def estimate_swt_archie(inputs: ArchieInput) -> List[Dict[str, float]]:
     """

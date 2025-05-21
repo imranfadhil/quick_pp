@@ -69,5 +69,10 @@ async def internal_server_exception_handler(exc: Exception):
         }
     )
 
-mcp = FastApiMCP(app)
+mcp = FastApiMCP(
+    app,
+    name="quick_pp API MCP",
+    describe_all_responses=True,  # Include all possible response schemas
+    describe_full_response_schema=True  # Include full JSON schema in descriptions
+)
 mcp.mount()

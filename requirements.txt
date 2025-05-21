@@ -1,14 +1,16 @@
-# Python3.10.9
+# Python3.11.0
 build==1.0.3
 bump2version==0.5.11
 coverage==4.5.4
-fastapi==0.110.0
-fastapi-mcp==0.3.3
+fastapi==0.115.12
+fastapi-mcp==0.3.4
 fastparquet==2024.2.0
 flake8==3.7.8
 ipywidgets==8.1.2
 lasio==0.30
 matplotlib==3.8.0
+mcp==1.9.0
+mcp-proxy==0.6.0
 mlflow==2.22.0
 nbformat==5.9.2
 numpy==1.26.0
@@ -29,7 +31,7 @@ statsmodels==0.14.0
 tox==3.14.0
 twine==1.14.0
 urllib3==1.26.19
-uvicorn==0.27.1
+uvicorn==0.34.2
 watchdog==0.9.0
 welly==0.5.2
 wheel==0.38.1

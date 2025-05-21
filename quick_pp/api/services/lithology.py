@@ -49,7 +49,8 @@ def _to_dataframe(data, columns=None):
     description=(
         "Estimate sand, silt, and clay (SSC) volume fractions based on neutron and density well logs "
         "data using a multi-endpoint lithology model."
-    )
+    ),
+    operation_id="estimate_sand_silt_clay_lithology",
 )
 async def estimate_ssc(inputs: LithologySSCInput):
     """
@@ -106,7 +107,8 @@ async def estimate_ssc(inputs: LithologySSCInput):
 @router.post(
     "/vsh_gr",
     summary="Estimate Volume of Shale (Vsh) from Gamma Ray Log Data",
-    description="Estimate the volume of shale (Vsh) using gamma ray log data."
+    description="Estimate the volume of shale (Vsh) using gamma ray log data.",
+    operation_id="estimate_vshale_gamma_ray",
 )
 async def estimate_vsh_gr(inputs: LithologyVshGRInput):
     """
@@ -144,7 +146,8 @@ async def estimate_vsh_gr(inputs: LithologyVshGRInput):
 @router.post(
     "/hc_corr",
     summary="Estimate Hydrocarbon Correction and Lithology Fractions",
-    description="Estimate hydrocarbon correction and lithology fractions from well log data."
+    description="Estimate hydrocarbon correction and lithology fractions from well log data.",
+    operation_id="estimate_hydro_carbon_correction",
 )
 async def estimate_hc_correction(inputs: LithologyHCCorrectionInput):
     """

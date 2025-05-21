@@ -8,7 +8,7 @@ from .services.permeability import router as permeability_router
 from .services.reservoir_summary import router as ressum_router
 
 
-api_router = APIRouter(prefix="/api")
+api_router = APIRouter(prefix="/quick_pp")
 
 api_router.include_router(las_router)
 api_router.include_router(lithology_router)

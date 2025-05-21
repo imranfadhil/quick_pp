@@ -7,8 +7,8 @@ from quick_pp.config import Config
 class Carbonate:
     """Carbonate model based on neutron density or density pef cross plots."""
 
-    def __init__(self, dry_calc_point: tuple = None, dry_dolo_point: tuple = None, dry_clay_point: tuple = None,
-                 fluid_point: tuple = None, **kwargs):
+    def __init__(self, dry_calc_point: tuple = (float, float), dry_dolo_point: tuple = (float, float),
+                 dry_clay_point: tuple = (float, float), fluid_point: tuple = (float, float), **kwargs):
         # Initialize the endpoints
         self.dry_calc_point = dry_calc_point or Config.CARB_NEU_DEN_ENDPOINTS["DRY_CALC_POINT"]
         self.dry_dolo_point = dry_dolo_point or Config.CARB_NEU_DEN_ENDPOINTS["DRY_DOLO_POINT"]

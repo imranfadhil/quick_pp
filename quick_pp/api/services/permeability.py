@@ -17,6 +17,7 @@ logger = logging.getLogger("api.services.permeability")
     "/choo",
     summary="Estimate Choo permeability",
     description="Estimate permeability using the Choo empirical model.",
+    operation_id="estimate_choo_permeability",
 )
 async def estimate_perm_choo(inputs: PermChInputData) -> List[Dict[str, float]]:
     """
@@ -62,6 +63,7 @@ async def estimate_perm_choo(inputs: PermChInputData) -> List[Dict[str, float]]:
     "/timur",
     summary="Estimate Timur permeability",
     description="Estimate permeability using the Timur empirical model.",
+    operation_id="estimate_timur_permeability",
 )
 async def estimate_perm_timur(inputs: PermOthersInputData) -> List[Dict[str, float]]:
     """
@@ -103,6 +105,7 @@ async def estimate_perm_timur(inputs: PermOthersInputData) -> List[Dict[str, flo
     "/tixier",
     summary="Estimate Tixier permeability",
     description="Estimate permeability using the Tixier empirical model.",
+    operation_id="estimate_tixier_permeability",
 )
 async def estimate_perm_tixier(inputs: PermOthersInputData) -> List[Dict[str, float]]:
     """
@@ -140,6 +143,7 @@ async def estimate_perm_tixier(inputs: PermOthersInputData) -> List[Dict[str, fl
     "/coates",
     summary="Estimate Coates permeability",
     description="Estimate permeability using the Coates empirical model.",
+    operation_id="estimate_coates_permeability",
 )
 async def estimate_perm_coates(inputs: PermOthersInputData) -> List[Dict[str, float]]:
     """
@@ -178,6 +182,7 @@ async def estimate_perm_coates(inputs: PermOthersInputData) -> List[Dict[str, fl
     "/kozeny_carman",
     summary="Estimate Kozeny-Carman permeability",
     description="Estimate permeability using the Kozeny-Carman equation.",
+    operation_id="estimate_kozeny_carman_permeability",
 )
 async def estimate_perm_kozeny_carman(inputs: PermOthersInputData) -> List[Dict[str, float]]:
     """
