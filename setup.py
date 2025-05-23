@@ -30,13 +30,13 @@ setup(
     author=quick_pp.__author__,
     author_email=quick_pp.__email__,
     url='https://github.com/imranfadhil/quick_pp',
-    python_requires='>=3.10',
+    python_requires='>=3.11',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Developers',
         'License :: OSI Approved :: MIT License',
         'Natural Language :: English',
-        'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
     ],
     description="Python package to assist in providing quick-look/ preliminary petrophysical estimation.",
     entry_points={

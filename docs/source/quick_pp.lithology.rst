@@ -21,7 +21,6 @@ Carbonate module
 .. automethod:: quick_pp.lithology.carbonate.Carbonate.lithology_fraction_neu_den
 .. automethod:: quick_pp.lithology.carbonate.Carbonate.lithology_fraction_pef
 .. automethod:: quick_pp.lithology.carbonate.Carbonate.clay_correction
-.. automethod:: quick_pp.lithology.carbonate.Carbonate.estimate_vcld_from_gr
 
 Multi Mineral module
 -----------------------------------------
