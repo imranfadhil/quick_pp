@@ -115,3 +115,5 @@ notebooks/03_qpp__*
 uploads/*
 mlruns/*
 data/*
+.chainlit*
+chainlit*

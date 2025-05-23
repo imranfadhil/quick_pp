@@ -17,8 +17,9 @@ with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
 requirements = [
-    'Click>=7.0', 'ruptures', 'welly', 'pandas', 'numpy', 'statsmodels', 'scikit-learn==1.6.1', 'mlflow',
-    'fastapi', 'fastapi_mcp', 'psycopg2-binary', 'ptitprince', 'matplotlib==3.8.0', 'SALib==1.5.1', 'orjson'
+    'Click>=7.0', 'numpy==1.26.2', 'scikit-learn==1.6.1', 'matplotlib==3.8.0', 'SALib==1.5.1',
+    'langchain_ollama==0.3.3', 'chainlit==2.5.5', 'ruptures', 'welly', 'pandas', 'statsmodels', 'mlflow',
+    'fastapi', 'fastapi_mcp', 'psycopg2-binary', 'ptitprince', 'orjson'
 ]
 
 test_requirements = []

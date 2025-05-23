@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from .exceptions import return_exception_message
 from fastapi_mcp import FastApiMCP
+from chainlit.utils import mount_chainlit
 
 from .router import api_router
 
@@ -56,7 +57,8 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to quick_pp API. Please refer to the documentation at /docs or /redoc."}
+    return {"message": "Welcome to quick_pp API. Please refer to the documentation at /docs or /redoc. "
+            "You can also use the chat assistant at /qpp_assistant."}
 
 
 @app.exception_handler(Exception)
@@ -76,3 +78,5 @@ mcp = FastApiMCP(
     describe_full_response_schema=True  # Include full JSON schema in descriptions
 )
 mcp.mount()
+
+mount_chainlit(app=app, target=r"quick_pp\api\qpp_chainlit.py", path="/qpp_assistant")
