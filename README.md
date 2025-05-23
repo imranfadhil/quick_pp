@@ -25,6 +25,38 @@ To install, use the following command:
   
   `pip install quick_pp`
 
+To use qpp_assistant, you would need to;
+1. Install Ollama
+2. Run `ollama pull qwen3` in the terminal
+
+## CLI
+To start the API server 
+> quick_pp api-server
+
+You can then access the Swagger UI at http://localhost:8888/docs and qpp_assistant at http://localhost:8888/qpp_assistant.
+
+To use the mcp tools, you would need to first add the following SSE URLS through the interface;
+http://localhost:8888/mcp - quick_pp tools.
+
+http://localhost:5555/mcp - quick_pp ML model prediction tools (will only be available after ML models are trained and registered).
+
+
+To train an ML model 
+> quick_pp train <model_key> <data_hash>
+
+To run prediction
+> quick_pp predict <model_key> <data_hash>
+
+To run the MLFlow server 
+> quick_pp mlflow-server
+
+You can access the mlflow server at http://localhost:5015
+
+To deploy the trained ML models 
+> quick_pp model-deployment
+
+You can access the deployed model Swagger UI at http://localhost:5555/docs
+
 ## Documentation
 Documentation is available at:
 <https://quick-pp.readthedocs.io/en/latest/index.html>

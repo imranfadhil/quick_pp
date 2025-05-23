@@ -20,6 +20,7 @@ def _validate_points(input_dict: dict, required_points: List[str]):
     "/den",
     summary="Estimate Density Porosity (PHID)",
     description="Estimate Density Porosity (PHID) using the density porosity method.",
+    operation_id="estimate_density_porosity",
 )
 async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
     """
@@ -74,6 +75,7 @@ async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
     "/neu_den",
     summary="Estimate Total Porosity (PHIT)",
     description="Estimate Total Porosity (PHIT) using neutron-density crossplot analysis.",
+    operation_id="estimate_total_porosity",
 )
 async def estimate_phit_neu_den(inputs: InputData) -> List[Dict[str, float]]:
     """

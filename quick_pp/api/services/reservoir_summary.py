@@ -12,6 +12,7 @@ router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
     "",
     summary="Calculate Reservoir Summary",
     description="Calculate reservoir summary statistics based on input petrophysical data.",
+    operation_id="calculate_reservoir_summary",
     response_model=List[Dict],
 )
 async def calculate_reservoir_summary_(inputs: InputData):

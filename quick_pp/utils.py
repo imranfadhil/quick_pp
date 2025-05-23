@@ -6,6 +6,7 @@ import math
 import ruptures.detection as rpt
 import scipy.stats as stats
 from scipy.signal import find_peaks
+from quick_pp.logger import logger
 
 
 def length_a_b(A: tuple, B: tuple):
@@ -39,7 +40,7 @@ def line_intersection(line1, line2):
 
     div = det(xdiff, ydiff)
     if div == 0:
-        print(f'\r{line1} and {line2} lines do not intersect', end='')
+        logger.error(f'\r{line1} and {line2} lines do not intersect')
         return np.nan, np.nan
 
     d = (det(*line1), det(*line2))
@@ -196,7 +197,7 @@ def min_max_line(feature, alpha: float = 0.05, auto_bin=False):
                 min_lines = np.append(min_lines, min_line)
                 max_lines = np.append(max_lines, max_line)
             except Exception as e:
-                print(f'Error: {e}', end='\r')
+                logger.error(f'Error: {e}')
                 min_lines = np.append(min_lines, np.nan)
                 max_lines = np.append(max_lines, np.nan)
         else:

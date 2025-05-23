@@ -21,12 +21,15 @@ def build_app(app, pyfunc_model: PyFuncModel, route: str) -> FastAPI:
     logger = logging.getLogger(__name__)
     predictor = build_predictor(pyfunc_model)
     response_model = signature(predictor).return_annotation
+    model_name = route.removeprefix('/')
     app.add_api_route(
-        f"{route}/predictions",
+        f"{route}",
         predictor,
         response_model=response_model,
         response_class=ORJSONResponse,
         methods=["POST"],
+        description=f"Predict using {model_name} model",
+        operation_id=f"predict_{model_name}",
     )
 
     @app.exception_handler(DictSerialisableException)

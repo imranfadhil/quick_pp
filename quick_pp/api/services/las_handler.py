@@ -51,7 +51,8 @@ def read_las_file(input_path: Path, destination: Path):
 @router.post(
     "",
     summary="Process LAS Files",
-    description="Processes uploaded LAS files by saving them and converting to Parquet format."
+    description="Processes uploaded LAS files by saving them and converting to Parquet format.",
+    operation_id="process_las_file",
 )
 async def process_las_file(files: List[UploadFile] = File(...)):
     """

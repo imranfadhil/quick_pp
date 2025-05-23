@@ -17,8 +17,9 @@ with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
 requirements = [
-    'Click>=7.0', 'ruptures', 'welly', 'pandas', 'numpy', 'statsmodels', 'scikit-learn==1.6.1', 'mlflow',
-    'fastapi', 'fastapi_mcp', 'psycopg2-binary', 'ptitprince', 'matplotlib==3.8.0', 'SALib==1.5.1', 'orjson'
+    'Click>=7.0', 'numpy==1.26.2', 'scikit-learn==1.6.1', 'matplotlib==3.8.0', 'SALib==1.5.1',
+    'langchain_ollama==0.3.3', 'chainlit==2.5.5', 'ruptures', 'welly', 'pandas', 'statsmodels', 'mlflow',
+    'fastapi', 'fastapi_mcp', 'psycopg2-binary', 'ptitprince', 'orjson'
 ]
 
 test_requirements = []
@@ -29,13 +30,13 @@ setup(
     author=quick_pp.__author__,
     author_email=quick_pp.__email__,
     url='https://github.com/imranfadhil/quick_pp',
-    python_requires='>=3.10',
+    python_requires='>=3.11',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Developers',
         'License :: OSI Approved :: MIT License',
         'Natural Language :: English',
-        'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
     ],
     description="Python package to assist in providing quick-look/ preliminary petrophysical estimation.",
     entry_points={
