@@ -16,6 +16,7 @@ import mlflow.tracking as mlflow_tracking
 
 from quick_pp.api.fastapi_mlflow.applications import build_app
 from quick_pp.modelling.utils import get_model_info, run_mlflow_server
+from quick_pp.logger import logger
 
 
 app = FastAPI(
@@ -52,7 +53,7 @@ client = mlflow_tracking.MlflowClient()
 
 start_time = datetime.now()
 model_count = 0
-print(f"Tracking uri {mlflow.get_tracking_uri()}")
+logger.info(f"Tracking uri {mlflow.get_tracking_uri()}")
 
 try:
     # Get latest registered models
@@ -60,13 +61,14 @@ try:
         model_info = get_model_info(rm.latest_versions)
         if 'reg_model_name' in model_info.keys():
             model_uri = f"models:/{model_info['reg_model_name']}/{model_info['version']}"
+            logger.info(f"Loading model: {model_uri}")
             model = load_model(model_uri)
 
             model_count += 1
             # Build API for the loaded model
             route = fr"/{model_info['reg_model_name']}"
             app = build_app(app, model, route)
-            print(f"Mounting #{model_count} | {route}")
+            logger.info(f"Mounted model #{model_count} at route: {route}")
 
     # Set up CORS middleware
     origins = ["*"]
@@ -81,12 +83,14 @@ try:
     # Mount the model using FastApiMCP
     mcp = FastApiMCP(app)
     mcp.mount()
+    logger.info("FastApiMCP mounted successfully.")
 
 except Exception as e:
-    print(f"Mounting #{model_count} | {model_info['reg_model_name']}/{model_info['version']} - Error: {e}")
+    logger.error(f"Mounting #{model_count} | {model_info.get('reg_model_name', 'unknown')}/"
+                 f"{model_info.get('version', 'unknown')} - Error: {e}")
 
 duration = round((datetime.now() - start_time).total_seconds() / 60, 3)
-print(f"Completed mounting {model_count} models in {duration} minutes")
+logger.info(f"Completed mounting {model_count} models in {duration} minutes")
 
 
 if __name__ == '__main__':

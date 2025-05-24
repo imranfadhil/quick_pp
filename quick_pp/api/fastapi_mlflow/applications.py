@@ -21,6 +21,13 @@ def build_app(app, pyfunc_model: PyFuncModel, route: str) -> FastAPI:
     logger = logging.getLogger(__name__)
     predictor = build_predictor(pyfunc_model)
     response_model = signature(predictor).return_annotation
+
+    # Get input and output schemas from the model metadata
+    input_schema = pyfunc_model.metadata.get_input_schema()
+    input_features = [item['name'] for item in input_schema.to_dict()]
+    output_schema = pyfunc_model.metadata.get_output_schema()
+    target_features = [item['name'] for item in output_schema.to_dict()]
+
     model_name = route.removeprefix('/')
     app.add_api_route(
         f"{route}",
@@ -28,7 +35,8 @@ def build_app(app, pyfunc_model: PyFuncModel, route: str) -> FastAPI:
         response_model=response_model,
         response_class=ORJSONResponse,
         methods=["POST"],
-        description=f"Predict using {model_name} model",
+        description=f"Predict using {model_name} model with input features: {', '.join(input_features)} and "
+        f"output features: {', '.join(target_features)}",
         operation_id=f"predict_{model_name}",
     )
 
