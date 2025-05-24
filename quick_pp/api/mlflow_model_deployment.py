@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Request
 from fastapi_mcp import FastApiMCP
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from starlette.types import Message
 from datetime import datetime
 import mlflow
@@ -16,7 +18,19 @@ from quick_pp.api.fastapi_mlflow.applications import build_app
 from quick_pp.modelling.utils import get_model_info, run_mlflow_server
 
 
-app = FastAPI(title='quick_pp - ML Models', debug=True)
+app = FastAPI(
+    title='quick_pp - ML Models',
+    description="API for quick_pp library.",
+    contact={"name": "Imran Fadhil",
+             "url": "https://github.com/imranfadhil/quick_pp", "email": "imranfadhil@gmail.com"},
+    swagger_ui_parameters={"defaultModelsExpandDepth": -1},
+    debug=True)
+app.mount("/static", StaticFiles(directory=r"quick_pp/api/static"), name="static")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse("static/favicon.ico")
 
 
 # set_body and get_body required to extract request body in middleware

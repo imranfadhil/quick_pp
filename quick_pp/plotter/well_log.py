@@ -37,8 +37,8 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
     return fig
 
 
-def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = TRACE_DEFS,
-               xaxis_defs: dict = XAXIS_DEFS, column_widths: list = []):
+def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
+               xaxis_defs: dict = {}, column_widths: list = []):
     """
     Generate a multi-track well log plot using Plotly, supporting custom traces, rock/coal flags, and zone markers.
     Parameters
@@ -75,6 +75,8 @@ def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = TRACE_DEFS,
     >>> fig = plotly_log(well_data, depth_uom='m')
     >>> fig.show()
     """
+    trace_defs = trace_defs or TRACE_DEFS
+    xaxis_defs = xaxis_defs or XAXIS_DEFS
     no_of_track = max([trace['track'] for trace in trace_defs.values()])
     column_widths = column_widths or [1] * no_of_track
     df = well_data.copy()
