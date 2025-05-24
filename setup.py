@@ -17,8 +17,8 @@ with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
 requirements = [
-    'Click>=7.0', 'numpy==1.26.2', 'scikit-learn==1.6.1', 'matplotlib==3.8.0', 'SALib==1.5.1',
-    'langchain_ollama==0.3.3', 'chainlit==2.5.5', 'ruptures', 'welly', 'pandas', 'statsmodels', 'mlflow',
+    'Click>=7.0', 'matplotlib==3.8.0', 'SALib==1.5.1', 'langchain_ollama==0.3.3', 'chainlit==2.5.5',
+    'scikit-learn', 'ruptures', 'welly', 'pandas', 'statsmodels', 'mlflow', 'loguru',
     'fastapi', 'fastapi_mcp', 'psycopg2-binary', 'ptitprince', 'orjson'
 ]
 
@@ -41,7 +41,7 @@ setup(
     description="Python package to assist in providing quick-look/ preliminary petrophysical estimation.",
     entry_points={
         'console_scripts': [
-            'quick_pp=main:cli',
+            'quick_pp=quick_pp.cli:cli',
         ],
     },
     install_requires=requirements,

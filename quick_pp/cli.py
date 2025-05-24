@@ -30,15 +30,15 @@ def cli():
 
 @click.command()
 @click.option('--debug', is_flag=True)
-def api_server(debug):
-    """Run the API server."""
+def app(debug):
+    """Run the App consisting of API server and qpp assistant module."""
     if not is_server_running('localhost', 8888):
         reload_ = "--reload" if debug else ""
         cmd = f"uvicorn quick_pp.api.main:app --host 0.0.0.0 --port 8888 {reload_}"
-        click.echo(f"API server is not running. Starting it now... | {cmd}")
+        click.echo(f"App is not running. Starting it now... | {cmd}")
         process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
         process.wait()
-        click.echo("API server started successfully.")
+        click.echo("App started successfully.")
 
 
 @click.command()
@@ -82,11 +82,12 @@ def predict(model_config, data_hash, output_file_name, env):
 
 
 # Add commands to the CLI group
-cli.add_command(api_server)
+cli.add_command(app)
 cli.add_command(mlflow_server)
 cli.add_command(model_deployment)
 cli.add_command(train)
 cli.add_command(predict)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     cli()

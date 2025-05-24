@@ -30,8 +30,8 @@ To use qpp_assistant, you would need to;
 2. Run `ollama pull qwen3` in the terminal
 
 ## CLI
-To start the API server 
-> quick_pp api-server
+To start the App 
+> quick_pp app
 
 You can then access the Swagger UI at http://localhost:8888/docs and qpp_assistant at http://localhost:8888/qpp_assistant.
 

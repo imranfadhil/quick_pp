@@ -14,6 +14,7 @@ from mlflow.models.signature import infer_signature
 
 from quick_pp.modelling.config import MODELLING_CONFIG
 from quick_pp.modelling.utils import run_mlflow_server
+from quick_pp.logger import logger
 
 
 def load_data(hash: str):
@@ -86,8 +87,10 @@ def train_model(alg, X_train: pd.DataFrame, y_train: pd.DataFrame):
     Returns:
         _type_: _description_
     """
+    logger.info(f"Training model: {getattr(alg, '__name__', str(alg))}")
     model = alg(random_state=42)
     model.fit(X_train, y_train)
+    logger.debug("Model training complete")
     return model
 
 
@@ -102,15 +105,18 @@ def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.DataFrame) -> dict:
     Returns:
         dict: Dictionary containing evaluation metrics.
     """
+    logger.info(f"Evaluating model: {type(model).__name__}")
     y_pred = model.predict(X_test)
 
     # Check model type
     if hasattr(model, "predict_proba"):
+        logger.debug("Classification metrics calculated")
         return dict(
             f1_score=f1_score(y_test, y_pred),
             accuracy=accuracy_score(y_test, y_pred),
         )
     else:
+        logger.debug("Regression metrics calculated")
         return dict(
             r2_score=r2_score(y_test, y_pred),
             mean_absolute_error=mean_absolute_error(y_test, y_pred),
@@ -130,6 +136,7 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
     Raises:
         TypeError: If the targets or features are not lists of strings.
     """
+    logger.info(f"Starting train_pipeline with model_config={model_config}, data_hash={data_hash}, env={env}")
     # Run MLflow server
     run_mlflow_server(env)
 
@@ -138,9 +145,12 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
         targets = model_values['targets']
         features = model_values['features']
 
+        logger.info(f"Processing model: {model_key}")
         if not (isinstance(targets, list) and all(isinstance(t, str) for t in targets)):
+            logger.error(f"Targets must be a list of strings, got {targets}")
             raise TypeError(f"Targets must be a list of strings, got {targets}")
         if not (isinstance(features, list) and all(isinstance(f, str) for f in features)):
+            logger.error(f"Features must be a list of strings, got {features}")
             raise TypeError(f"Features must be a list of strings, got {features}")
 
         df = load_data(data_hash)
@@ -155,6 +165,7 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
             metrics_dict = evaluate_model(model, X_test, y_test)
             for metric_name, metric_value in metrics_dict.items():
                 mlflow.log_metric(metric_name, float(metric_value))
+                logger.info(f"Logged metric: {metric_name}={metric_value}")
 
             # Log model
             reg_model_name = f'{model_config}_{model_key}_{data_hash}'
@@ -162,6 +173,7 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
             mlflow_sklearn.log_model(
                 model, "model", signature=signature, input_example=X_test.sample(5),
                 registered_model_name=reg_model_name)
+            logger.info(f"Model logged and registered as: {reg_model_name}")
 
 
 if __name__ == "__main__":
