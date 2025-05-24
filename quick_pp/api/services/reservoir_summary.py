@@ -11,7 +11,9 @@ router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
 @router.post(
     "",
     summary="Calculate Reservoir Summary",
-    description="Calculate reservoir summary statistics based on input petrophysical data.",
+    description="Calculate reservoir summary statistics based on input petrophysical data. "
+    "This includes calculating average porosity, average water saturation, "
+    "average permeability, and other relevant metrics for the specified zones.",
     operation_id="calculate_reservoir_summary",
     response_model=List[Dict],
 )

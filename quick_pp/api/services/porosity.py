@@ -19,7 +19,9 @@ def _validate_points(input_dict: dict, required_points: List[str]):
 @router.post(
     "/den",
     summary="Estimate Density Porosity (PHID)",
-    description="Estimate Density Porosity (PHID) using the density porosity method.",
+    description="Estimate Density Porosity (PHID) using the density porosity method. "
+    "Requires neutron porosity (NPHI) and bulk density (RHOB) measurements, "
+    "along with reference points for dry sand, silt, clay, and fluid.",
     operation_id="estimate_density_porosity",
 )
 async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
@@ -74,7 +76,9 @@ async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
 @router.post(
     "/neu_den",
     summary="Estimate Total Porosity (PHIT)",
-    description="Estimate Total Porosity (PHIT) using neutron-density crossplot analysis.",
+    description="Estimate Total Porosity (PHIT) using neutron-density crossplot analysis. "
+    "Requires neutron porosity (NPHI) and bulk density (RHOB) measurements, "
+    "along with reference points for dry sand, silt, clay, and fluid.",
     operation_id="estimate_total_porosity",
 )
 async def estimate_phit_neu_den(inputs: InputData) -> List[Dict[str, float]]:

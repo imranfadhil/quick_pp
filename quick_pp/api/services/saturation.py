@@ -86,7 +86,8 @@ def _parse_and_respond(
 @router.post(
     "/temp_grad",
     summary="Estimate Temperature Gradient",
-    description="Estimate the temperature gradient based on input depth data and measurement system.",
+    description="Estimate the temperature gradient based on depth data and specified measurement system "
+    "(metric or imperial).",
     operation_id="estimate_temperature_gradient",
 )
 async def estimate_temperature_gradient_(inputs: TempGradInput) -> List[Dict[str, float]]:
@@ -123,7 +124,8 @@ async def estimate_temperature_gradient_(inputs: TempGradInput) -> List[Dict[str
 @router.post(
     "/rw",
     summary="Estimate Formation Water Resistivity (Rw)",
-    description="Estimate formation water resistivity (Rw) based on input temperature gradient and water salinity.",
+    description="Estimate formation water resistivity (Rw) based on temperature gradient and water salinity. "
+    "The temperature gradient is provided in the input data, and the water salinity is a scalar value.",
     operation_id="estimate_formation_water_resistivity",
 )
 async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
@@ -159,10 +161,8 @@ async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
 @router.post(
     "/b_waxman_smits",
     summary="Estimate B Parameter using Waxman-Smits Model",
-    description=(
-        "Estimate the B parameter using the Waxman-Smits model based on input temperature gradient "
-        "and formation water resistivity."
-    ),
+    description="Estimate the B parameter using the Waxman-Smits model based on temperature gradient "
+    "and formation water resistivity.",
     operation_id="estimate_b_parameter_waxman_smits",
 )
 async def estimate_b_waxman_smits_(inputs: BInput) -> List[Dict[str, float]]:
@@ -193,7 +193,8 @@ async def estimate_b_waxman_smits_(inputs: BInput) -> List[Dict[str, float]]:
 @router.post(
     "/estimate_qv",
     summary="Estimate Cation Exchange Capacity per Unit Pore Volume (Qv)",
-    description="Estimate Qv using well log measurements and clay properties.",
+    description="Estimate Qv based on volume of clay (vcld), total porosity (phit), and specific clay properties "
+    "which are clay density (rho_clay) and cation exchange capacity (cec_clay).",
     operation_id="estimate_cation_exchange_capacity",
 )
 async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
@@ -233,7 +234,9 @@ async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
 @router.post(
     "/waxman_smits",
     summary="Estimate Water Saturation using Waxman-Smits Model",
-    description="Estimate water saturation (SWT) using the Waxman-Smits model based on input data.",
+    description="Estimate total water saturation (SWT) using the Waxman-Smits model based on input data. "
+    "The model requires resistivity (rt), water resistivity (rw), total porosity (phit), "
+    "cation exchange capacity per unit pore volume (qv), b parameter, and m parameter.",
     operation_id="estimate_waxman_smits_water_saturation",
 )
 async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, float]]:
@@ -279,7 +282,8 @@ async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, 
 @router.post(
     "/archie",
     summary="Estimate Water Saturation using Archie Model",
-    description="Estimate water saturation (SWT) using the Archie model based on input data.",
+    description="Estimate total water saturation (SWT) using the Archie model based on input data. "
+    "The model requires resistivity (rt), water resistivity (rw), and total porosity (phit).",
     operation_id="estimate_archie_water_saturation",
 )
 async def estimate_swt_archie(inputs: ArchieInput) -> List[Dict[str, float]]:

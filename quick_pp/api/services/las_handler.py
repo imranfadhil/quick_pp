@@ -7,7 +7,7 @@ from hashlib import sha256
 
 from quick_pp.las_handler import read_las_file_welly
 
-router = APIRouter(prefix="/las_handler", tags=["LAS File Handler"])
+router = APIRouter(prefix="/las_handler", tags=["File Handler"])
 
 # Allowed file extensions
 ALLOWED_EXTENSIONS = {".LAS", ".las"}
