@@ -52,7 +52,7 @@ def read_las_file(input_path: Path, destination: Path):
     "",
     summary="Process LAS Files",
     description="Processes uploaded LAS files by saving them and converting to Parquet format.",
-    operation_id="process_las_file",
+    operation_id="process_las_file_to_parquet",
 )
 async def process_las_file(files: List[UploadFile] = File(...)):
     """

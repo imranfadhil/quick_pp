@@ -46,9 +46,11 @@ def _to_dataframe(data, columns=None):
 @router.post(
     "/ssc",
     summary="Estimate Sand, Silt, and Clay (SSC) Volume Fractions",
-    description="Estimate sand, silt, and clay (SSC) volume fractions based multi-endpoint lithology model. "
-    "Requires neutron porosity (NPHI) and bulk density (RHOB) measurements, "
-    "along with reference points for dry sand, silt, clay, and fluid.",
+    description=(
+        "Estimate sand, silt, and clay (SSC) volume fractions based multi-endpoint lithology model. "
+        "Requires neutron porosity (NPHI) and bulk density (RHOB) measurements, "
+        "along with reference points for dry sand, silt, clay, and fluid."
+    ),
     operation_id="estimate_sand_silt_clay_lithology",
 )
 async def estimate_ssc(inputs: LithologySSCInput):
@@ -145,9 +147,11 @@ async def estimate_vsh_gr(inputs: LithologyVshGRInput):
 @router.post(
     "/hc_corr",
     summary="Estimate Hydrocarbon Correction and Lithology Fractions",
-    description="Estimate hydrocarbon correction and lithology fractions from well log data."
-    "Requires neutron porosity (NPHI) and bulk density (RHOB) measurements, "
-    "along with reference points for dry sand, silt, clay, and fluid as well as correction angle.",
+    description=(
+        "Estimate hydrocarbon correction and lithology fractions from well log data."
+        "Requires neutron porosity (NPHI) and bulk density (RHOB) measurements, "
+        "along with reference points for dry sand, silt, clay, and fluid as well as correction angle."
+    ),
     operation_id="estimate_hydro_carbon_correction",
 )
 async def estimate_hc_correction(inputs: LithologyHCCorrectionInput):
