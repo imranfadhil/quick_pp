@@ -20,9 +20,8 @@ async def on_mcp(connection, session: ClientSession):
 
     # Store tools for later use
     mcp_tools = cl.user_session.get("mcp_tools", {})
-    if mcp_tools:
-        mcp_tools[connection.name] = tools
-        cl.user_session.set("mcp_tools", mcp_tools)
+    mcp_tools[connection.name] = tools
+    cl.user_session.set("mcp_tools", mcp_tools)
 
 
 @cl.step(type="tool")
@@ -147,13 +146,13 @@ async def on_message(msg: cl.Message):
 
             response = await call_ollama(chat_messages)
 
-            final_response = next(
-                (block.text for block in response.content if hasattr(block, "text")),
-                None,
-            )
+    final_response = next(
+        (block.text for block in response.content if hasattr(block, "text")),
+        None,
+    )
 
-            chat_messages = cl.user_session.get("chat_messages")
-            chat_messages.append({"role": "assistant", "content": final_response})
+    chat_messages = cl.user_session.get("chat_messages")
+    chat_messages.append({"role": "assistant", "content": final_response})
 
     # Send a response back to the user
     await cl.Message(content=str(response.content)).send()

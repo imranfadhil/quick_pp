@@ -7,29 +7,19 @@ class Config(object):
     )
 
     VARS = dict(
-        RAW=[
-            dict(var="GR", name="Gamma Ray", unit="GAPI", min=0, max=200),
-            dict(var="RT", name="True Resistivity", unit="ohm.m", min=0, max=2000),
-            dict(var="NPHI", name="Neutron Porosity", unit="v/v", min=-.05, max=0.45),
-            dict(var="RHOB", name="Bulk Density", unit="g/cc", min=1.85, max=2.85)
-        ],
-        LITHOLOGY=[
-            dict(var="VSAND", name="Sand Volume", unit="v/v", min=0, max=1),
-            dict(var="VSILT", name="Silt Volume", unit="v/v", min=0, max=1),
-            dict(var="VCLAY", name="Clay Volume", unit="v/v", min=0, max=1),
-            dict(var="VSHALE", name="Shale Volume", unit="v/v", min=0, max=1)
-        ],
-        POROSITY=[
-            dict(var="PHIT", name="Total Porosity", unit="v/v", min=0, max=0.5),
-            dict(var="PHIE", name="Effective Porosity", unit="v/v", min=0, max=0.5)
-        ],
-        SATURATION=[
-            dict(var="SWT", name="Total Water Saturation", unit="v/v", min=0, max=1),
-            dict(var="SWE", name="Effective Water Saturation", unit="v/v", min=0, max=1)
-        ],
-        PERMEABILITY=[
-            dict(var="PERM", name="Permeability", unit="mD", min=0.01, max=100000)
-        ]
+        GR=dict(name="Gamma Ray", unit="GAPI", min=0, max=200),
+        RT=dict(name="True Resistivity", unit="ohm.m", min=0, max=2000),
+        NPHI=dict(name="Neutron Porosity", unit="v/v", min=-.05, max=0.45),
+        RHOB=dict(name="Bulk Density", unit="g/cc", min=1.85, max=2.85),
+        VSAND=dict(name="Sand Volume", unit="v/v", min=0, max=1),
+        VSILT=dict(name="Silt Volume", unit="v/v", min=0, max=1),
+        VCLAY=dict(name="Clay Volume", unit="v/v", min=0, max=1),
+        VSHALE=dict(name="Shale Volume", unit="v/v", min=0, max=1),
+        PHIT=dict(name="Total Porosity", unit="v/v", min=0, max=0.5),
+        PHIE=dict(name="Effective Porosity", unit="v/v", min=0, max=0.5),
+        SWT=dict(vname="Total Water Saturation", unit="v/v", min=0, max=1),
+        SWE=dict(vname="Effective Water Saturation", unit="v/v", min=0, max=1),
+        PERM=dict(name="Permeability", unit="mD", min=0.01, max=100000)
     )
 
     SSC_ENDPOINTS = dict(
@@ -101,5 +91,4 @@ class Config(object):
         Returns:
             list: List of units for variables exist in data.columns.
         """
-        return {d['var']: d['unit'] for models_, vars_ in Config.VARS.items() for d in vars_
-                if d['var'] in data.columns and 'unit' in d.keys()}
+        return {k: v['unit'] for k, v in Config.VARS.items() if k in data.columns and 'unit' in v.keys()}

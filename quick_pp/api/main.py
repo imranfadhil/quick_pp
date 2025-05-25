@@ -87,4 +87,4 @@ mcp = FastApiMCP(
 )
 mcp.mount()
 
-mount_chainlit(app=app, target=r"quick_pp\api\qpp_chainlit.py", path="/qpp_assistant")
+mount_chainlit(app=app, target=r"quick_pp\api\qpp_assistant.py", path="/qpp_assistant")
