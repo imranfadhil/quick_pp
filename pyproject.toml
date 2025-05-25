@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "quick-pp"
+version = "0.2.2"
+description = "Python package to assist in providing quick-look/ preliminary petrophysical estimation."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Imran Fadhil", email = "imranfadhil@gmail.com" },
+]
+keywords = [
+    "analysis",
+    "geoscience",
+    "log",
+    "petrophysics",
+    "quick_pp",
+    "well",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "chainlit==2.5.5",
+    "Click>=7.0",
+    "fastapi",
+    "fastapi_mcp",
+    "langchain_ollama==0.3.3",
+    "loguru",
+    "matplotlib==3.8.0",
+    "mlflow",
+    "orjson",
+    "pandas",
+    "psycopg2-binary",
+    "ptitprince",
+    "ruptures",
+    "SALib==1.5.1",
+    "scikit-learn",
+    "statsmodels",
+    "welly",
+]
+
+[project.scripts]
+quick_pp = "quick_pp.cli:cli"
+
+[project.urls]
+Homepage = "https://github.com/imranfadhil/quick_pp"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/quick_pp",
+]

@@ -2,11 +2,16 @@ import click
 from subprocess import Popen
 import sys
 import socket
+import importlib.metadata
 
-import quick_pp
 from quick_pp.modelling.train_pipeline import train_pipeline
 from quick_pp.modelling.predict_pipeline import predict_pipeline
 from quick_pp.modelling.utils import run_mlflow_server
+
+try:
+    quick_ppVersion = importlib.metadata.version('quick_pp')
+except importlib.metadata.PackageNotFoundError:
+    quick_ppVersion = "0.0.0"
 
 
 def is_server_running(host, port):
@@ -20,7 +25,7 @@ def is_server_running(host, port):
 @click.group()
 @click.version_option(
     prog_name="quick_pp",
-    version=quick_pp.__version__,
+    version=quick_ppVersion,
     message="%(prog)s version: %(version)s",
 )
 def cli():
