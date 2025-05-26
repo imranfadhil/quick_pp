@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from .exceptions import return_exception_message
 from fastapi_mcp import FastApiMCP
 from chainlit.utils import mount_chainlit
+from importlib import resources
 
 from .router import api_router
 
@@ -45,7 +46,9 @@ app = FastAPI(
     openapi_tags=tags_metadata,
     debug=True
 )
-app.mount("/static", StaticFiles(directory=r"quick_pp/api/static"), name="static")
+with resources.files('quick_pp.api') as api_folder:
+    static_folder = api_folder / "static"
+app.mount("/static", StaticFiles(directory=static_folder), name="static")
 app.include_router(api_router)
 
 
@@ -87,4 +90,5 @@ mcp = FastApiMCP(
 )
 mcp.mount()
 
-mount_chainlit(app=app, target=r"quick_pp\api\qpp_assistant.py", path="/qpp_assistant")
+qpp_assistant_file = resources.files('quick_pp.api').joinpath('qpp_assistant.py')
+mount_chainlit(app=app, target=str(qpp_assistant_file), path="/qpp_assistant")

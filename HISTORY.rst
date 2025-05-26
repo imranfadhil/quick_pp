@@ -70,5 +70,5 @@ History
 * Updated the requirements to use Python 3.11.
 * Updated the readme and documentation.
 
-0.2.3 (2025-05-26)
+0.2.4 (2025-05-26)
 -------------------

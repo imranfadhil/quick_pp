@@ -8,6 +8,7 @@ from datetime import datetime
 import mlflow
 from mlflow.pyfunc import load_model
 import mlflow.tracking as mlflow_tracking
+from importlib import resources
 
 # # Uncomment below 3 lines to run >> if __name__ == "__main__"
 # import os
@@ -26,7 +27,9 @@ app = FastAPI(
              "url": "https://github.com/imranfadhil/quick_pp", "email": "imranfadhil@gmail.com"},
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
     debug=True)
-app.mount("/static", StaticFiles(directory=r"quick_pp/api/static"), name="static")
+with resources.files('quick_pp.api') as api_folder:
+    static_folder = api_folder / "static"
+app.mount("/static", StaticFiles(directory=static_folder), name="static")
 
 
 @app.get("/favicon.ico", include_in_schema=False)
