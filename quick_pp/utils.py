@@ -6,6 +6,7 @@ import math
 import ruptures.detection as rpt
 import scipy.stats as stats
 from scipy.signal import find_peaks
+
 from quick_pp.logger import logger
 
 

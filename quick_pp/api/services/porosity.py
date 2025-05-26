@@ -19,7 +19,22 @@ def _validate_points(input_dict: dict, required_points: List[str]):
 @router.post(
     "/den",
     summary="Estimate Density Porosity (PHID)",
-    description="Estimate Density Porosity (PHID) using the density porosity method.",
+    description=(
+        """
+        Estimate Density Porosity (PHID) using the density porosity method.
+        The `InputData` Pydantic model includes:
+            - data: List of measurement objects, each with:
+                - nphi (float): Neutron porosity value.
+                - rhob (float): Bulk density value.
+            - dry_sand_point: Tuple[float, float] - Reference point for dry sand (nphi, rhob).
+            - dry_silt_point: Tuple[float, float] - Reference point for dry silt (nphi, rhob).
+            - dry_clay_point: Tuple[float, float] - Reference point for dry clay (nphi, rhob).
+            - fluid_point: Tuple[float, float] - Reference point for fluid (nphi, rhob).
+            - wet_clay_point: Optional[Tuple[float, float]] - Reference point for wet clay (nphi, rhob), optional.
+            - silt_line_angle: float - Angle parameter for the silt line.
+            - method: Optional[str] - Crossplot model or method to use (used in /neu_den endpoint).
+        """
+    ),
     operation_id="estimate_density_porosity",
 )
 async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
@@ -74,7 +89,22 @@ async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
 @router.post(
     "/neu_den",
     summary="Estimate Total Porosity (PHIT)",
-    description="Estimate Total Porosity (PHIT) using neutron-density crossplot analysis.",
+    description=(
+        """
+        Estimate Total Porosity (PHIT) using neutron-density crossplot analysis.
+        The `InputData` Pydantic model includes:
+            - data: List of measurement objects, each with:
+                - nphi (float): Neutron porosity value.
+                - rhob (float): Bulk density value.
+            - dry_sand_point: Tuple[float, float] - Reference point for dry sand (nphi, rhob).
+            - dry_silt_point: Tuple[float, float] - Reference point for dry silt (nphi, rhob).
+            - dry_clay_point: Tuple[float, float] - Reference point for dry clay (nphi, rhob).
+            - fluid_point: Tuple[float, float] - Reference point for fluid (nphi, rhob).
+            - wet_clay_point: Optional[Tuple[float, float]] - Reference point for wet clay (nphi, rhob), optional.
+            - silt_line_angle: float - Angle parameter for the silt line.
+            - method: Optional[str] - Crossplot model or method to use (used in /neu_den endpoint).
+        """
+    ),
     operation_id="estimate_total_porosity",
 )
 async def estimate_phit_neu_den(inputs: InputData) -> List[Dict[str, float]]:

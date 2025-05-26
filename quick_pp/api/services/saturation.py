@@ -86,7 +86,15 @@ def _parse_and_respond(
 @router.post(
     "/temp_grad",
     summary="Estimate Temperature Gradient",
-    description="Estimate the temperature gradient based on input depth data and measurement system.",
+    description=(
+        "Estimate the temperature gradient based on depth data and specified measurement system (metric or imperial).\n"
+        "Input model: TempGradInput (see quick_pp.api.schemas.saturation_temp_grad.InputData).\n"
+        "Request body must be a JSON object with the following fields:\n"
+        "- meas_system: string (required, 'metric' or 'imperial')\n"
+        "- data: list of objects, each with key 'tvdss' (float, required)\n"
+        "Example:\n"
+        "{\n  'meas_system': 'metric',\n  'data': [ {'tvdss': 1500.0}, {'tvdss': 2000.0} ]\n}"
+    ),
     operation_id="estimate_temperature_gradient",
 )
 async def estimate_temperature_gradient_(inputs: TempGradInput) -> List[Dict[str, float]]:
@@ -123,7 +131,15 @@ async def estimate_temperature_gradient_(inputs: TempGradInput) -> List[Dict[str
 @router.post(
     "/rw",
     summary="Estimate Formation Water Resistivity (Rw)",
-    description="Estimate formation water resistivity (Rw) based on input temperature gradient and water salinity.",
+    description=(
+        "Estimate formation water resistivity (Rw) based on temperature gradient and water salinity.\n"
+        "Input model: RwInput (see quick_pp.api.schemas.saturation_rw.InputData).\n"
+        "Request body must be a JSON object with the following fields:\n"
+        "- water_salinity: float (required)\n"
+        "- data: list of objects, each with key 'temp_grad' (float, required)\n"
+        "Example:\n"
+        "{\n  'water_salinity': 35000.0,\n  'data': [ {'temp_grad': 0.025}, {'temp_grad': 0.030} ]\n}"
+    ),
     operation_id="estimate_formation_water_resistivity",
 )
 async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
@@ -160,8 +176,13 @@ async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
     "/b_waxman_smits",
     summary="Estimate B Parameter using Waxman-Smits Model",
     description=(
-        "Estimate the B parameter using the Waxman-Smits model based on input temperature gradient "
-        "and formation water resistivity."
+        "Estimate the B parameter using the Waxman-Smits model based on temperature gradient and "
+        "formation water resistivity.\n"
+        "Input model: BInput (see quick_pp.api.schemas.saturation_b.InputData).\n"
+        "Request body must be a JSON object with the following fields:\n"
+        "- data: list of objects, each with keys 'temp_grad' (float, required) and 'rw' (float, required)\n"
+        "Example:\n"
+        "{\n  'data': [ {'temp_grad': 0.025, 'rw': 0.12},\n            {'temp_grad': 0.030, 'rw': 0.10} ]\n}"
     ),
     operation_id="estimate_b_parameter_waxman_smits",
 )
@@ -193,7 +214,15 @@ async def estimate_b_waxman_smits_(inputs: BInput) -> List[Dict[str, float]]:
 @router.post(
     "/estimate_qv",
     summary="Estimate Cation Exchange Capacity per Unit Pore Volume (Qv)",
-    description="Estimate Qv using well log measurements and clay properties.",
+    description=(
+        "Estimate Qv based on volume of clay (vcld), total porosity (phit), and specific clay properties.\n"
+        "Input model: QvInput (see quick_pp.api.schemas.saturation_qv.InputData).\n"
+        "Request body must be a JSON object with the following fields:\n"
+        "- rho_clay: float (required)\n"
+        "- cec_clay: float (required)\n"
+        "- data: list of objects, each with keys 'vcld' (float, required) and 'phit' (float, required)\n"
+        "Example (truncated): { 'rho_clay': 2.58, 'cec_clay': 0.9, 'data': [ {'vcld': 0.35, 'phit': 0.22}, ... ] }"
+    ),
     operation_id="estimate_cation_exchange_capacity",
 )
 async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
@@ -233,7 +262,16 @@ async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
 @router.post(
     "/waxman_smits",
     summary="Estimate Water Saturation using Waxman-Smits Model",
-    description="Estimate water saturation (SWT) using the Waxman-Smits model based on input data.",
+    description=(
+        "Estimate total water saturation (SWT) using the Waxman-Smits model based on input data.\n"
+        "Input model: WaxmanSmitsInput (see quick_pp.api.schemas.saturation_waxman_smits.InputData).\n"
+        "Request body must be a JSON object with the following field:\n"
+        "- data: list of objects, each with keys 'rt', 'rw', 'phit', 'qv', 'b' (all float, required), "
+        "and 'm' (int, required)\n"
+        "Example:\n"
+        "{\n  'data': [\n    {'rt': 12.0, 'rw': 0.12, 'phit': 0.22, 'qv': 0.05, 'b': 0.8, 'm': 2},\n"
+        "           {'rt': 10.0, 'rw': 0.10, 'phit': 0.18, 'qv': 0.04, 'b': 0.7, 'm': 2}\n  ]\n}"
+    ),
     operation_id="estimate_waxman_smits_water_saturation",
 )
 async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, float]]:
@@ -279,7 +317,13 @@ async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, 
 @router.post(
     "/archie",
     summary="Estimate Water Saturation using Archie Model",
-    description="Estimate water saturation (SWT) using the Archie model based on input data.",
+    description=(
+        "Estimate total water saturation (SWT) using the Archie model based on input data.\n"
+        "Input model: ArchieInput (see quick_pp.api.schemas.saturation_archie.InputData).\n"
+        "Request body must be a JSON object with the following field:\n"
+        "- data: list of objects, each with keys 'rt', 'rw', 'phit' (all float, required)\n"
+        "Example (truncated): { 'data': [ {'rt': 12.0, 'rw': 0.12, 'phit': 0.22}, ... ] }"
+    ),
     operation_id="estimate_archie_water_saturation",
 )
 async def estimate_swt_archie(inputs: ArchieInput) -> List[Dict[str, float]]:

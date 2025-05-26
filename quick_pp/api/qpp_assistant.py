@@ -20,9 +20,8 @@ async def on_mcp(connection, session: ClientSession):
 
     # Store tools for later use
     mcp_tools = cl.user_session.get("mcp_tools", {})
-    if mcp_tools:
-        mcp_tools[connection.name] = tools
-        cl.user_session.set("mcp_tools", mcp_tools)
+    mcp_tools[connection.name] = tools
+    cl.user_session.set("mcp_tools", mcp_tools)
 
 
 @cl.step(type="tool")
@@ -78,7 +77,8 @@ async def call_ollama(messages):
     # Create the prompt template with tools info
     prompt = ChatPromptTemplate.from_messages([
         ("system", f'''
-You are a helpful assistant that can call tools to answer user questions.
+You are a Petrophysics specialist and you need to answer accurately and efficiently.
+You can call tools to answer user questions.
 You can use the following tools: {tool_names}.
 Here are the tools' descriptions: {tool_descriptions}.
 When a user asks a question, select the single best tool to answer it (if any).
@@ -94,12 +94,15 @@ Example: If the user asks 'Calculate porosity for well X', and there is a 'calcu
         ("user", "{input}")
     ])
 
-    llm = ChatOllama(model='qwen3', num_ctx=8192)
+    llm = ChatOllama(model='qwen3', num_ctx=16384, temperature=0.9)
     chain = prompt | llm
     user_input = messages[-1]["content"] if messages else ""
     response = chain.invoke({
         "input": user_input,
     })
+    # Remove all substrings bounded by <think>...</think>
+    if isinstance(response.content, str):
+        response.content = re.sub(r"<think>(.|\n)*?</think>", "", response.content, flags=re.DOTALL)
 
     return response
 
@@ -147,13 +150,11 @@ async def on_message(msg: cl.Message):
 
             response = await call_ollama(chat_messages)
 
-            final_response = next(
-                (block.text for block in response.content if hasattr(block, "text")),
-                None,
-            )
+    final_response = next((block.text for block in response.content if hasattr(block, "text")), None)
+    final_response = final_response or response.content
 
-            chat_messages = cl.user_session.get("chat_messages")
-            chat_messages.append({"role": "assistant", "content": final_response})
+    chat_messages = cl.user_session.get("chat_messages")
+    chat_messages.append({"role": "assistant", "content": final_response})
 
     # Send a response back to the user
     await cl.Message(content=str(response.content)).send()

@@ -7,7 +7,7 @@ from hashlib import sha256
 
 from quick_pp.las_handler import read_las_file_welly
 
-router = APIRouter(prefix="/las_handler", tags=["LAS File Handler"])
+router = APIRouter(prefix="/las_handler", tags=["File Handler"])
 
 # Allowed file extensions
 ALLOWED_EXTENSIONS = {".LAS", ".las"}
@@ -51,8 +51,39 @@ def read_las_file(input_path: Path, destination: Path):
 @router.post(
     "",
     summary="Process LAS Files",
-    description="Processes uploaded LAS files by saving them and converting to Parquet format.",
-    operation_id="process_las_file",
+    description=(
+        """
+        Processes uploaded LAS files by saving them and converting to Parquet format.
+
+        Input:
+        - files: List of LAS files uploaded as multipart/form-data. Each file must have a .las or .LAS extension.
+
+        Request:
+        - Content-Type: multipart/form-data
+        - Field: files (required) — one or more LAS files to be processed.
+
+        Example (using curl):
+        curl -X POST "<host>/las_handler" -F "files=@/path/to/file1.las" -F "files=@/path/to/file2.las"
+
+        Workflow:
+        - For each file:
+            1. Validate file extension (.las or .LAS).
+            2. Generate a unique file name using a hash of the file content and the original filename.
+            3. Save the raw LAS file to 'uploads/las/'.
+            4. Convert the LAS file to Parquet and save to 'uploads/parquet/'.
+            5. Raise HTTP 500 error if something goes wrong.
+            6. Ensure the uploaded file is closed after processing.
+
+        Returns:
+        - message: Success message listing the original filenames processed.
+        - file_paths: List of output Parquet file paths (relative to the server).
+
+        Raises:
+        - HTTPException 400: If file extension is invalid.
+        - HTTPException 500: On any processing error.
+        """
+    ),
+    operation_id="process_las_file_to_parquet",
 )
 async def process_las_file(files: List[UploadFile] = File(...)):
     """

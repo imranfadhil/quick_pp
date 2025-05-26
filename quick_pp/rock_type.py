@@ -8,10 +8,10 @@ from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import (classification_report, auc, ConfusionMatrixDisplay, confusion_matrix,
                              r2_score, mean_absolute_error)
-from quick_pp.logger import logger
 
 from quick_pp.utils import min_max_line
 from quick_pp.lithology import shale_volume_steiber
+from quick_pp.logger import logger
 
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(

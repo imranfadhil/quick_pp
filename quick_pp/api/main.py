@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from .exceptions import return_exception_message
 from fastapi_mcp import FastApiMCP
 from chainlit.utils import mount_chainlit
@@ -9,8 +11,8 @@ from .router import api_router
 
 tags_metadata = [
     {
-        "name": "LAS File Handler",
-        "description": "LAS file related endpoints."
+        "name": "File Handler",
+        "description": "File handler related endpoints."
     },
     {
         "name": "Lithology",
@@ -43,7 +45,13 @@ app = FastAPI(
     openapi_tags=tags_metadata,
     debug=True
 )
+app.mount("/static", StaticFiles(directory=r"quick_pp/api/static"), name="static")
 app.include_router(api_router)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse("static/favicon.ico")
 
 origins = ["*"]
 app.add_middleware(
@@ -55,7 +63,7 @@ app.add_middleware(
 )
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def root():
     return {"message": "Welcome to quick_pp API. Please refer to the documentation at /docs or /redoc. "
             "You can also use the chat assistant at /qpp_assistant."}
@@ -79,4 +87,4 @@ mcp = FastApiMCP(
 )
 mcp.mount()
 
-mount_chainlit(app=app, target=r"quick_pp\api\qpp_chainlit.py", path="/qpp_assistant")
+mount_chainlit(app=app, target=r"quick_pp\api\qpp_assistant.py", path="/qpp_assistant")

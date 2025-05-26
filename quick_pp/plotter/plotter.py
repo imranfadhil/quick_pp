@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 from quick_pp.utils import line_intersection
+from quick_pp.logger import logger
 import quick_pp.plotter.well_log as plotter_wells
 plotly_log = plotter_wells.plotly_log
 
@@ -17,6 +18,7 @@ plt.rcParams.update(
 
 
 def update_fluid_contacts(well_data, well_config: dict):
+    logger.debug(f"Updating fluid contacts for well with config: {well_config}")
     """Update fluid flags based on fluid contacts.
 
     Args:
@@ -36,6 +38,7 @@ def update_fluid_contacts(well_data, well_config: dict):
     wut = well_config.get('WUT', np.nan)
 
     well_data = well_data.copy()
+    logger.debug(f"well_data columns before update: {well_data.columns.tolist()}")
     well_data['OIL_FLAG'] = np.where(
         ((well_data['DEPTH'] > out) | (well_data['DEPTH'] > goc)) & (
             (well_data['DEPTH'] < odt) | (well_data['DEPTH'] < owc)), 1, 0)
@@ -55,6 +58,7 @@ def update_fluid_contacts(well_data, well_config: dict):
 
 
 def generate_zone_config(zones: list = ['ALL']):
+    logger.info(f"Generating zone config for zones: {zones}")
     """Generate zone configuration.
 
     Args:
@@ -72,6 +76,7 @@ def generate_zone_config(zones: list = ['ALL']):
 
 
 def update_zone_config(zone_config: dict, zone: str, fluid_contacts: dict):
+    logger.info(f"Updating zone config for zone: {zone} with contacts: {fluid_contacts}")
     """Update zone configuration with fluid contacts.
 
     Args:
@@ -90,6 +95,7 @@ def update_zone_config(zone_config: dict, zone: str, fluid_contacts: dict):
 
 
 def generate_well_config(well_names: list = ['X']):
+    logger.info(f"Generating well config for wells: {well_names}")
     """Generate well configuration.
 
     Args:
@@ -111,6 +117,7 @@ def generate_well_config(well_names: list = ['X']):
 
 def update_well_config(
         well_config: dict, well_name: str, zone: str = '', fluid_contacts: dict = {}, sorting: int = 0):
+    logger.info(f"Updating well config for well: {well_name}, zone: {zone}, sorting: {sorting}")
     """Update well configuration with fluid contacts.
 
     Args:
@@ -134,6 +141,7 @@ def update_well_config(
 
 
 def assert_well_config_structure(well_config):
+    logger.debug("Asserting well config structure.")
     """Assert well configuration structure.
 
     Args:
@@ -152,6 +160,7 @@ def assert_well_config_structure(well_config):
 
 
 def stick_plot(data, well_config: dict, zone: str = 'ALL'):
+    logger.info(f"Generating stick plot for zone: {zone}")
     """Generate stick plot with water saturation and fluid contacts for specified zone.
 
     Example of well_config:
@@ -194,6 +203,7 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
 
     # Plot each well's data
     for ax, well_name in zip(axes, well_names):
+        logger.debug(f"Plotting well: {well_name}")
         well_data = data[(data['WELL_NAME'] == well_name) & (data['ZONES'] == zone)].copy()
         well_data = update_fluid_contacts(well_data, well_config[well_name]['zones'][zone])
         ax.plot(well_data['BVO'], well_data['DEPTH'], label=r'$BVO_{Log}$')
@@ -225,6 +235,7 @@ def neutron_density_xplot(nphi, rhob,
                           fluid_point: tuple,
                           wet_clay_point: tuple = (),
                           dry_silt_point: tuple = (), **kwargs):
+    logger.info("Generating neutron-density crossplot.")
     """Neutron-Density crossplot with lithology lines based on specified end points.
 
     Args:
@@ -291,12 +302,14 @@ def neutron_density_xplot(nphi, rhob,
 
 
 def sonic_density_xplot():
+    logger.info("Called sonic_density_xplot (not implemented)")
     """ TODO: Implement sonic density crossplot
     """
     pass
 
 
 def sonic_neutron_xplot():
+    logger.info("Called sonic_neutron_xplot (not implemented)")
     """ TODO: Implement sonic neutron crossplot
     """
     pass

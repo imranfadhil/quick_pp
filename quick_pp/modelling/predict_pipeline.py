@@ -10,6 +10,7 @@ import mlflow.tracking as mlflow_tracking
 
 from quick_pp.modelling.config import MODELLING_CONFIG, RAW_FEATURES
 from quick_pp.modelling.utils import get_latest_registered_models, unique_id, run_mlflow_server
+from quick_pp.logger import logger
 
 
 def load_data(hash: str) -> pd.DataFrame:
@@ -27,8 +28,10 @@ def load_data(hash: str) -> pd.DataFrame:
     data_dir = Path("data/input/")
     matching_files = list(data_dir.glob(f"*{hash}*.parquet"))
     if not matching_files:
+        logger.error(f"No file found in {data_dir} containing hash '{hash}'")
         raise FileNotFoundError(f"No file found in {data_dir} containing hash '{hash}'")
     path = matching_files[0]
+    logger.info(f"Loading data from {path}")
     return pd.read_parquet(path)
 
 
@@ -43,6 +46,7 @@ def postprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     """
     # Invert LOG_PERM to PERM if exists
     if 'LOG_PERM' in df.columns and 'PERM' not in df.columns:
+        logger.info("Inverting LOG_PERM to PERM")
         df['PERM'] = 10 ** df['LOG_PERM']
     return df
 
@@ -59,7 +63,7 @@ def save_predictions(pred_df: pd.DataFrame, output_file_name: str):
     os.makedirs(output_dir, exist_ok=True)
     output_path = Path(f"{output_dir}/{output_file_name}_{hash}.parquet")
     pred_df.to_parquet(output_path, index=False)
-    print(f"Predictions saved to {output_path}")
+    logger.info(f"Predictions saved to {output_path}")
 
 
 def predict_pipeline(model_config: str, data_hash: str, output_file_name: str, env: str = 'local'):
@@ -72,6 +76,7 @@ def predict_pipeline(model_config: str, data_hash: str, output_file_name: str, e
         output_file_name (str): Base name for the output predictions file.
         env (str, optional): Environment for MLflow server. Defaults to 'local'.
     """
+    logger.info("Starting prediction pipeline")
     # Run MLflow server
     run_mlflow_server(env)
 
@@ -87,7 +92,7 @@ def predict_pipeline(model_config: str, data_hash: str, output_file_name: str, e
         targets = model_values['targets']
         features = model_values['features']
         reg_model_name = f'{model_config}_{model_key}_{data_hash}'
-        print(f"Predicting with model: {model_key} | {reg_model_name}")
+        logger.info(f"Predicting with model: {model_key} | {reg_model_name}")
 
         # Load the model
         model = load_model(latest_rms[reg_model_name]['model_uri'])
@@ -100,6 +105,7 @@ def predict_pipeline(model_config: str, data_hash: str, output_file_name: str, e
     # Postprocess the predictions and save
     pred_df = postprocess_data(pred_df)
     save_predictions(pred_df, output_file_name)
+    logger.info("Prediction pipeline completed successfully")
 
 
 if __name__ == "__main__":
@@ -114,7 +120,7 @@ if __name__ == "__main__":
     # Set up MLflow
     os.makedirs('data/output', exist_ok=True)
 
-    print(args.model_config)
-    print(args.data)
+    logger.info(f"Model config: {args.model_config}")
+    logger.info(f"Data hash: {args.data}")
 
     predict_pipeline(args.model_config, args.data, args.output)
