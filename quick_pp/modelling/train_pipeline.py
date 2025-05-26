@@ -1,20 +1,37 @@
 import pandas as pd
 import numpy as np
+import os
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_absolute_error, f1_score, accuracy_score
 import mlflow
 import mlflow.sklearn as mlflow_sklearn
 from mlflow.models.signature import infer_signature
+import importlib.util
 
 # # Uncomment below 3 lines to run >> if __name__ == "__main__"
-# import os
 # import sys
 # sys.path.append(os.getcwd())
 
 from quick_pp.modelling.config import MODELLING_CONFIG
 from quick_pp.modelling.utils import run_mlflow_server
 from quick_pp.logger import logger
+
+# Check if config.py exists in the root directory and update MODELLING_CONFIG if found
+root_config_path = Path(os.getcwd(), "config.py")
+if root_config_path.exists():
+    try:
+        spec = importlib.util.spec_from_file_location("root_config", root_config_path)
+        root_config = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(root_config)
+        if hasattr(root_config, "MODELLING_CONFIG"):
+            logger.info("Updating MODELLING_CONFIG from root config.py")
+            MODELLING_CONFIG.clear()
+            MODELLING_CONFIG.update(root_config.MODELLING_CONFIG)
+        else:
+            logger.warning("MODELLING_CONFIG not found in root config.py, using default MODELLING_CONFIG")
+    except Exception as e:
+        logger.warning(f"Could not import MODELLING_CONFIG from root config.py: {e}")
 
 
 def load_data(hash: str):
@@ -137,6 +154,13 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
         TypeError: If the targets or features are not lists of strings.
     """
     logger.info(f"Starting train_pipeline with model_config={model_config}, data_hash={data_hash}, env={env}")
+
+    # Check if the model_config exists in MODELLING_CONFIG
+    if model_config not in MODELLING_CONFIG:
+        error_msg = f"Model configuration '{model_config}' not found in MODELLING_CONFIG"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
     # Run MLflow server
     run_mlflow_server(env)
 
@@ -154,8 +178,16 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
             raise TypeError(f"Features must be a list of strings, got {features}")
 
         df = load_data(data_hash)
+        # Skip if targets or features are not in the DataFrame
+        if not all(col in df.columns for col in targets + features):
+            missing_cols = [col for col in targets + features if col not in df.columns]
+            logger.warning(f"Skipping model {model_key} due to missing columns: {missing_cols}")
+            continue
         X, y = preprocess_data(df, targets, features)
         X_train, X_test, y_train, y_test = split_data(X, y)
+
+        mlflow_dir = Path('./mlruns')
+        os.makedirs(mlflow_dir, exist_ok=True)
         mlflow.set_experiment(model_config)
         with mlflow.start_run(run_name=model_key, description=str(model_values['description'])):
             # Train model
@@ -177,9 +209,8 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
 
 
 if __name__ == "__main__":
-    import os
 
-    # Set up MLflow
+    # Set up folders
     os.makedirs('./mlruns', exist_ok=True)
     os.makedirs('data/input', exist_ok=True)
 

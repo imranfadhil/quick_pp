@@ -1,16 +1,19 @@
 import click
 from subprocess import Popen
 import sys
+from pathlib import Path
+import os
+import shutil
 import socket
-import importlib.metadata
+from importlib import metadata, resources
 
 from quick_pp.modelling.train_pipeline import train_pipeline
 from quick_pp.modelling.predict_pipeline import predict_pipeline
 from quick_pp.modelling.utils import run_mlflow_server
 
 try:
-    quick_ppVersion = importlib.metadata.version('quick_pp')
-except importlib.metadata.PackageNotFoundError:
+    quick_ppVersion = metadata.version('quick_pp')
+except metadata.PackageNotFoundError:
     quick_ppVersion = "0.0.0"
 
 
@@ -71,6 +74,23 @@ def model_deployment(debug):
 @click.argument('env', default='local', type=click.Choice(['local', 'remote']))
 def train(model_config, data_hash, env):
     """Train the model with the specified parameters."""
+
+    # Copy config.py into the root directory if it doesn't exist
+    config_file = resources.files('quick_pp.modelling').joinpath('config.py')
+    root_config_file = Path(os.getcwd(), 'config.py')
+    if os.path.exists(config_file) and not os.path.exists(root_config_file):
+        shutil.copyfile(config_file, root_config_file)
+        click.echo(f"Copied {config_file} to {root_config_file}")
+
+    # Copy mock_data.parquet into data/input if it doesn't exist
+    mock_file = resources.files('quick_pp.modelling.mock_data').joinpath('mock_data.parquet')
+    data_dir = Path(os.getcwd(), 'data', 'input')
+    os.makedirs(data_dir, exist_ok=True)
+    root_mock_file = Path(data_dir, 'mock_data.parquet')
+    if os.path.exists(mock_file) and not os.path.exists(root_mock_file):
+        shutil.copyfile(mock_file, root_mock_file)
+        click.echo(f"Copied {mock_file} to {root_mock_file}")
+
     click.echo(f"Training {model_config} model with data hash {data_hash}")
     train_pipeline(model_config, data_hash, env)
 

@@ -19,6 +19,14 @@ MLFLOW_CONFIG = dict(
 
 RAW_FEATURES = ['GR', 'RT', 'NPHI', 'RHOB']
 MODELLING_CONFIG = dict(
+    mock=OrderedDict(
+        POROSAT=dict(
+            alg=RandomForestRegressor,
+            targets=['PHIE', 'SW'],
+            features=RAW_FEATURES,
+            description=('Mock clastic properties prediction consisting of total porosity and total water saturation.'),
+        ),
+    ),
     clastic=OrderedDict(
         OIL=dict(
             alg=RandomForestClassifier,
