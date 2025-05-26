@@ -77,7 +77,7 @@ async def call_ollama(messages):
     # Create the prompt template with tools info
     prompt = ChatPromptTemplate.from_messages([
         ("system", f'''
-You are a Petrophysics specialist and you need to answer user questions accurately and efficiently.
+You are a Petrophysics specialist and you need to answer accurately and efficiently.
 You can call tools to answer user questions.
 You can use the following tools: {tool_names}.
 Here are the tools' descriptions: {tool_descriptions}.
@@ -94,7 +94,7 @@ Example: If the user asks 'Calculate porosity for well X', and there is a 'calcu
         ("user", "{input}")
     ])
 
-    llm = ChatOllama(model='qwen3', num_ctx=8192, temperature=0.9)
+    llm = ChatOllama(model='qwen3', num_ctx=16384, temperature=0.9)
     chain = prompt | llm
     user_input = messages[-1]["content"] if messages else ""
     response = chain.invoke({
@@ -150,10 +150,8 @@ async def on_message(msg: cl.Message):
 
             response = await call_ollama(chat_messages)
 
-    final_response = next(
-        (block.text for block in response.content if hasattr(block, "text")),
-        None,
-    )
+    final_response = next((block.text for block in response.content if hasattr(block, "text")), None)
+    final_response = final_response or response.content
 
     chat_messages = cl.user_session.get("chat_messages")
     chat_messages.append({"role": "assistant", "content": final_response})

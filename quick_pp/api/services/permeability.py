@@ -18,7 +18,11 @@ logger = logging.getLogger("api.services.permeability")
     summary="Estimate Choo permeability",
     description=(
         "Estimate permeability using the Choo empirical model. "
-        "Requires volume of clay (vcld), volume of silt (vsilt), and total porosity (phit) measurements."
+        "Requires volume of clay (vcld), volume of silt (vsilt), and total porosity (phit) measurements.\n"
+        "Input model: PermChInputData (see quick_pp.api.schemas.permeability_choo.InputData).\n"
+        "Request body must be a JSON object with the following field:\n"
+        "- data: list of objects, each with keys 'vcld', 'vsilt', 'phit' (all float, required)\n"
+        "Example (truncated): { 'data': [ {'vcld': 0.25, 'vsilt': 0.10, 'phit': 0.18}, ... ] }"
     ),
     operation_id="estimate_choo_permeability",
 )
@@ -67,7 +71,11 @@ async def estimate_perm_choo(inputs: PermChInputData) -> List[Dict[str, float]]:
     summary="Estimate Timur permeability",
     description=(
         "Estimate permeability using the Timur empirical model. "
-        "Requires porosity (phit) and irreducible water saturation (swirr) measurements."
+        "Requires porosity (phit) and irreducible water saturation (swirr) measurements.\n"
+        "Input model: PermOthersInputData (see quick_pp.api.schemas.permeability_others.InputData).\n"
+        "Request body must be a JSON object with the following field:\n"
+        "- data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)\n"
+        "Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }"
     ),
     operation_id="estimate_timur_permeability",
 )
@@ -112,7 +120,11 @@ async def estimate_perm_timur(inputs: PermOthersInputData) -> List[Dict[str, flo
     summary="Estimate Tixier permeability",
     description=(
         "Estimate permeability using the Tixier empirical model. "
-        "Requires porosity (phit) and irreducible water saturation (swirr) measurements."
+        "Requires porosity (phit) and irreducible water saturation (swirr) measurements.\n"
+        "Input model: PermOthersInputData (see quick_pp.api.schemas.permeability_others.InputData).\n"
+        "Request body must be a JSON object with the following field:\n"
+        "- data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)\n"
+        "Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }"
     ),
     operation_id="estimate_tixier_permeability",
 )
@@ -153,7 +165,11 @@ async def estimate_perm_tixier(inputs: PermOthersInputData) -> List[Dict[str, fl
     summary="Estimate Coates permeability",
     description=(
         "Estimate permeability using the Coates empirical model. "
-        "Requires porosity (phit) and irreducible water saturation (swirr) measurements."
+        "Requires porosity (phit) and irreducible water saturation (swirr) measurements.\n"
+        "Input model: PermOthersInputData (see quick_pp.api.schemas.permeability_others.InputData).\n"
+        "Request body must be a JSON object with the following field:\n"
+        "- data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)\n"
+        "Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }"
     ),
     operation_id="estimate_coates_permeability",
 )
@@ -195,7 +211,11 @@ async def estimate_perm_coates(inputs: PermOthersInputData) -> List[Dict[str, fl
     summary="Estimate Kozeny-Carman permeability",
     description=(
         "Estimate permeability using the Kozeny-Carman equation. "
-        "Requires porosity (phit) and irreducible water saturation (swirr) measurements."
+        "Requires porosity (phit) and irreducible water saturation (swirr) measurements.\n"
+        "Input model: PermOthersInputData (see quick_pp.api.schemas.permeability_others.InputData).\n"
+        "Request body must be a JSON object with the following field:\n"
+        "- data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)\n"
+        "Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }"
     ),
     operation_id="estimate_kozeny_carman_permeability",
 )

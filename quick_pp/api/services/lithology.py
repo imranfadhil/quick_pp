@@ -1,6 +1,12 @@
 """
 API endpoints for lithology-related calculations: SSC, Vsh from GR, and hydrocarbon correction.
 Optimized for readability, reliability, and maintainability.
+
+Input Pydantic Models:
+- estimate_ssc: LithologySSCInput (see quick_pp.api.schemas.lithology_ssc.LithologySSCInput)
+- estimate_vsh_gr: LithologyVshGRInput (see quick_pp.api.schemas.lithology_vsh_gr.LithologyVshGRInput)
+- estimate_hc_correction: LithologyHCCorrectionInput \
+    (see quick_pp.api.schemas.lithology_hc_correction.LithologyHCCorrectionInput)
 """
 from fastapi import APIRouter
 import pandas as pd
@@ -47,9 +53,30 @@ def _to_dataframe(data, columns=None):
     "/ssc",
     summary="Estimate Sand, Silt, and Clay (SSC) Volume Fractions",
     description=(
-        "Estimate sand, silt, and clay (SSC) volume fractions based multi-endpoint lithology model. "
-        "Requires neutron porosity (NPHI) and bulk density (RHOB) measurements, "
-        "along with reference points for dry sand, silt, clay, and fluid."
+        """
+        Estimate sand, silt, and clay (SSC) volume fractions based on a multi-endpoint lithology model.
+        Input model: LithologySSCInput (see quick_pp.api.schemas.lithology_ssc.LithologySSCInput).
+        Request body must be a JSON object with the following fields:
+        - dry_sand_point: [float, float] (required)
+        - dry_silt_point: [float, float] or [null, null] (optional)
+        - dry_clay_point: [float, float] or [null, null] (optional)
+        - fluid_point: [float, float] (required)
+        - wet_clay_point: [float, float] or [null, null] (optional)
+        - method: string (optional)
+        - silt_line_angle: float (required)
+        - data: list of objects, each with keys 'nphi' (float) and 'rhob' (float) (required)
+        Example:
+        {
+            'dry_sand_point': [0.1, 2.65],
+            'dry_silt_point': [0.2, 2.5],
+            'dry_clay_point': [0.3, 2.4],
+            'fluid_point': [1.0, 1.0],
+            'wet_clay_point': [0.5, 2.2],
+            'method': 'default',
+            'silt_line_angle': 35.0,
+            'data': [{'nphi': 0.25, 'rhob': 2.45}, ... ]
+        }
+        """
     ),
     operation_id="estimate_sand_silt_clay_lithology",
 )
@@ -108,7 +135,16 @@ async def estimate_ssc(inputs: LithologySSCInput):
 @router.post(
     "/vsh_gr",
     summary="Estimate Volume of Shale (Vsh) from Gamma Ray Log Data",
-    description="Estimate volume of shale (Vsh) using gamma ray log data. Requires gamma ray (GR) measurements.",
+    description=(
+        """
+        Estimate volume of shale (Vsh) using gamma ray log data. Requires gamma ray (GR) measurements.
+        Input model: LithologyVshGRInput (see quick_pp.api.schemas.lithology_vsh_gr.LithologyVshGRInput).
+        Request body must be a JSON object with the following field:
+        - data: list of objects, each with key 'gr' (float) (required)
+        Example:
+        {'data': [{'gr': 85.0}, {'gr': 110.0}, ... ]}
+        """
+    ),
     operation_id="estimate_vshale_gamma_ray",
 )
 async def estimate_vsh_gr(inputs: LithologyVshGRInput):
@@ -148,9 +184,35 @@ async def estimate_vsh_gr(inputs: LithologyVshGRInput):
     "/hc_corr",
     summary="Estimate Hydrocarbon Correction and Lithology Fractions",
     description=(
-        "Estimate hydrocarbon correction and lithology fractions from well log data."
-        "Requires neutron porosity (NPHI) and bulk density (RHOB) measurements, "
-        "along with reference points for dry sand, silt, clay, and fluid as well as correction angle."
+        """
+        Estimate hydrocarbon correction and lithology fractions from well log data.
+        Requires neutron porosity (NPHI) and bulk density (RHOB) measurements,
+        along with reference points for dry sand, silt, clay, and fluid as well as correction angle.
+        Input model: LithologyHCCorrectionInput
+        (see quick_pp.api.schemas.lithology_hc_correction.LithologyHCCorrectionInput).
+        Request body must be a JSON object with the following fields:
+        - dry_sand_point: [float, float] (required)
+        - dry_silt_point: [float, float] or [null, null] (optional)
+        - dry_clay_point: [float, float] or [null, null] (required)
+        - fluid_point: [float, float] (required)
+        - wet_clay_point: [float, float] or [null, null] (optional)
+        - method: string (optional)
+        - silt_line_angle: float (required)
+        - corr_angle: float (required)
+        - data: list of objects, each with keys 'nphi' (float) and 'rhob' (float) (required)
+        Example:
+        {
+            'dry_sand_point': [0.1, 2.65],
+            'dry_silt_point': [0.2, 2.5],
+            'dry_clay_point': [0.3, 2.4],
+            'fluid_point': [1.0, 1.0],
+            'wet_clay_point': [0.5, 2.2],
+            'method': 'default',
+            'silt_line_angle': 35.0,
+            'corr_angle': 12.0,
+            'data': [{'nphi': 0.25, 'rhob': 2.45}, ... ]
+        }
+        """
     ),
     operation_id="estimate_hydro_carbon_correction",
 )

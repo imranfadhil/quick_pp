@@ -29,14 +29,24 @@ def build_app(app, pyfunc_model: PyFuncModel, route: str) -> FastAPI:
     target_features = [item['name'] for item in output_schema.to_dict()]
 
     model_name = route.removeprefix('/')
+    input_example = ', '.join([f'\"{f}\": <value>' for f in input_features])
+    output_example = ', '.join([f'\"{f}\": <predicted_value>' for f in target_features])
     app.add_api_route(
         f"{route}",
         predictor,
         response_model=response_model,
         response_class=ORJSONResponse,
         methods=["POST"],
-        description=f"Predict using {model_name} model with input features: {', '.join(input_features)} and "
-        f"output features: {', '.join(target_features)}",
+        description=(
+            f"Predict using the '{model_name}' MLflow model.\n\n"
+            f"**Input:**\n"
+            f"- Request body must be a JSON object with the following features as keys:\n"
+            f"  {', '.join(input_features)}\n"
+            f"- Example: {{ {input_example} }}\n\n"
+            f"**Output:**\n"
+            f"- JSON object with the following keys: {', '.join(target_features)}\n"
+            f"- Example: {{ {output_example} }}\n"
+        ),
         operation_id=f"predict_{model_name}",
     )
 

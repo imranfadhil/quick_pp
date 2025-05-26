@@ -12,9 +12,40 @@ router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
     "",
     summary="Calculate Reservoir Summary",
     description=(
-        "Calculate reservoir summary statistics for respective zones based on input petrophysical data. "
-        "This includes calculating average porosity, average water saturation, "
-        "average permeability, and other relevant metrics for the specified zones."
+        """
+        Calculate reservoir summary statistics for respective zones based on input petrophysical data.
+        This includes calculating average porosity, average water saturation, average permeability,
+        and other relevant metrics for the specified zones.
+
+        Input model: InputData (see quick_pp.api.schemas.ressum.InputData)
+
+        Request body must be a JSON object with the following fields:
+        - data: list of objects, each with keys:
+            - depth: float (required)
+            - vcld: float (volume of clay, required)
+            - phit: float (total porosity, required)
+            - swt: float (water saturation, required)
+            - perm: float (permeability, required)
+            - zones: string or int (zone identifier, required)
+        - cut_offs: dict with cutoff parameters for filtering, e.g.:
+            - min_phit: float (optional, minimum porosity)
+            - max_swt: float (optional, maximum water saturation)
+            - min_perm: float (optional, minimum permeability)
+            - ... (other cutoffs as needed)
+
+        Example:
+        {
+            "data": [
+                {"depth": 1000.0, "vcld": 0.25, "phit": 0.18, "swt": 0.35, "perm": 120.0, "zones": "A"},
+                {"depth": 1001.0, "vcld": 0.22, "phit": 0.20, "swt": 0.30, "perm": 150.0, "zones": "A"},
+                {"depth": 1020.0, "vcld": 0.30, "phit": 0.15, "swt": 0.40, "perm": 90.0, "zones": "B"}
+            ],
+            "cut_offs": {
+                "min_phit": 0.12,
+                "max_swt": 0.45
+            }
+        }
+        """
     ),
     operation_id="calculate_reservoir_summary",
     response_model=List[Dict],
