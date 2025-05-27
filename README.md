@@ -32,16 +32,6 @@ To use qpp_assistant, you would need to;
 2. Run `ollama pull qwen3` in the terminal
 
 ## CLI
-To start the App 
-> quick_pp app
-
-You can then access the Swagger UI at http://localhost:8888/docs and qpp_assistant at http://localhost:8888/qpp_assistant.
-
-To use the mcp tools, you would need to first add the following SSE URLS through the interface;
-http://localhost:8888/mcp - quick_pp tools.
-
-http://localhost:5555/mcp - quick_pp ML model prediction tools (will only be available after ML models are trained and registered).
-
 
 To train an ML model, these are the requirements;  
 1. The input file in parquet format need to be available; /data/input/<data_hash>___.parquet
@@ -53,15 +43,27 @@ To train an ML model, these are the requirements;
 To run the MLflow server 
 > quick_pp mlflow-server
 
+You can access the mlflow server at http://localhost:5015
+
 To run prediction, the trained models need to be registered in MLflow first.
 > quick_pp predict <model_config> <data_hash>
 
-You can access the mlflow server at http://localhost:5015
+> Example >> quick_pp predict mock mock
 
 To deploy the trained ML models 
 > quick_pp model-deployment
 
 You can access the deployed model Swagger UI at http://localhost:5555/docs
+
+To start the App 
+> quick_pp app
+
+You can then access the Swagger UI at http://localhost:8888/docs and qpp_assistant at http://localhost:8888/qpp_assistant.
+
+To use the mcp tools, you would need to first add the following SSE URLS through the interface;
+http://localhost:8888/mcp - quick_pp tools.
+
+http://localhost:5555/mcp - quick_pp ML model prediction tools (need to run `quick_pp model-deployment` first).
 
 ## Documentation
 Documentation is available at:
