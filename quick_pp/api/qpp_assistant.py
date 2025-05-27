@@ -94,7 +94,7 @@ Example: If the user asks 'Calculate porosity for well X', and there is a 'calcu
         ("user", "{input}")
     ])
 
-    llm = ChatOllama(model='qwen3', num_ctx=16384, temperature=0.9)
+    llm = ChatOllama(model='qwen3', num_ctx=16384, temperature=0.0)
     chain = prompt | llm
     user_input = messages[-1]["content"] if messages else ""
     response = chain.invoke({
