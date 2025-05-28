@@ -47,7 +47,7 @@ app = FastAPI(
     debug=True
 )
 with resources.files('quick_pp.api') as api_folder:
-    static_folder = api_folder / "static"
+    static_folder = api_folder / "public"
 app.mount("/static", StaticFiles(directory=static_folder), name="static")
 app.include_router(api_router)
 
