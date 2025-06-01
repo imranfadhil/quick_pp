@@ -90,5 +90,5 @@ mcp = FastApiMCP(
 )
 mcp.mount()
 
-qpp_assistant_file = resources.files('quick_pp.api').joinpath('qpp_assistant.py')
+qpp_assistant_file = resources.files('quick_pp.api.qpp_assistant').joinpath('chat.py')
 mount_chainlit(app=app, target=str(qpp_assistant_file), path="/qpp_assistant")
