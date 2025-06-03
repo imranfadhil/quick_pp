@@ -5,12 +5,10 @@ from langchain_core.runnables import RunnableConfig
 from langchain_ollama.chat_models import ChatOllama
 from mcp import ClientSession
 
-from quick_pp.api.qpp_assistant.agents.base_agent import BaseQPPAgent
-from quick_pp.api.qpp_assistant.agents.plan_execute_agent import PlanExecuteAgent
+from quick_pp.api.qpp_assistant.agents.qpp_agent import QPPAgent
 
-llm = ChatOllama(model="granite3.2", temperature=0.0)
-graph_executor = PlanExecuteAgent(llm).build()
-agent_executor = BaseQPPAgent(llm).get_agent_executor()
+llm = ChatOllama(model="qwen3", temperature=0.0)
+graph_executor = QPPAgent(llm).build()
 
 
 @cl.on_mcp_connect
@@ -87,13 +85,13 @@ async def on_message(message: cl.Message):
         config=RunnableConfig(
             callbacks=[
                 cl.LangchainCallbackHandler(
-                    to_ignore=[
-                        "ChannelRead",
-                        "RunnableLambda",
-                        "ChannelWrite",
-                        "__start__",
-                        "_execute",
-                    ]
+                    # to_ignore=[
+                    #     "ChannelRead",
+                    #     "RunnableLambda",
+                    #     "ChannelWrite",
+                    #     "__start__",
+                    #     "_execute",
+                    # ]
                 )
             ]
         )

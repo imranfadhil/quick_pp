@@ -30,11 +30,3 @@ REPLANNER_PROMPT = ChatPromptTemplate.from_template(
     "Otherwise, fill out the plan. Only add steps to the plan that still NEED to be done. "
     "Do not return previously done steps as part of the plan."
 )
-
-CONCLUDE_PROMPT = ChatPromptTemplate.from_template(
-    "Your task is to conclude and generate a clear and concise response to the user based on the plan and past steps. "
-    "Your objective was this:\n"
-    "{input}\n\n"
-    "You have currently done the follow steps:\n"
-    "{past_steps}\n\n"
-)
