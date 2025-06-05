@@ -56,3 +56,19 @@ History
 * Update rock typing module.
 * Add skelt harrison saturation function.
 * Add sensitivity analysis in ressum module.
+
+0.2.1 (2025-05-20)
+-------------------
+* Refactor the API module.
+* Add ML modelling module.
+* Add cli using click.
+* Refactor the well log plotter module.
+
+0.2.2 (2025-05-23)
+-------------------
+* Add qpp_assistant module based on chainlit.
+* Updated the requirements to use Python 3.11.
+* Updated the readme and documentation.
+
+0.2.4 (2025-05-26)
+-------------------

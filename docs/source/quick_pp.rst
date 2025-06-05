@@ -100,7 +100,15 @@ Utilities module
 Plotter module
 ------------------------
 
-.. automodule:: quick_pp.plotter
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. toctree::
+   :maxdepth: 4
+
+   quick_pp.plotter
+
+Machine Learning Modelling module
+----------------------------------
+
+.. toctree::
+   :maxdepth: 4
+   
+   quick_pp.modelling

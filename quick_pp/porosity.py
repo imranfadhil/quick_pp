@@ -43,7 +43,7 @@ def effective_porosity(phit, phi_shale, vshale):
     return phit - (vshale * phi_shale)
 
 
-def clay_porosity(rho_clw: np.array, rho_dry_clay: float = 2.72, rho_fluid: float = 1.0):
+def clay_porosity(rho_clw: np.ndarray, rho_dry_clay: float = 2.72, rho_fluid: float = 1.0):
     """Calculate clay porosity given bulk density of wet clay line.
 
     Args:
@@ -54,7 +54,6 @@ def clay_porosity(rho_clw: np.array, rho_dry_clay: float = 2.72, rho_fluid: floa
     Returns:
         float: Clay porosity.
     """
-    rho_dry_clay = rho_dry_clay or Config.SSC_ENDPOINTS["DRY_CLAY_POINT"][1]
     return (rho_dry_clay - rho_clw) / (rho_dry_clay - rho_fluid)
 
 
@@ -79,8 +78,8 @@ def shale_porosity(vshale, phi_shale):
 
 
 def rho_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
-               rho_sand: float = None, rho_silt: float = None, rho_clay: float = None,
-               rho_calc: float = None, rho_dolo: float = None, rho_heavy: float = 0):
+               rho_sand: float = 0, rho_silt: float = 0, rho_clay: float = 0,
+               rho_calc: float = 0, rho_dolo: float = 0, rho_heavy: float = 0):
     """Estimate average matrix density based on dry sand, dry silt, dry clay, dry calcite and
     dry dolomite volume and density of each.
 
@@ -126,8 +125,8 @@ def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
 
 
 def dt_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
-              dt_sand: float = None, dt_silt: float = None, dt_clay: float = None,
-              dt_calc: float = None, dt_dolo: float = None, dt_heavy: float = 0):
+              dt_sand: float = 0, dt_silt: float = 0, dt_clay: float = 0,
+              dt_calc: float = 0, dt_dolo: float = 0, dt_heavy: float = 0):
     """Estimate average matrix sonic transit time based on dry sand, dry silt dry calcite and
     dry dolomite volume and transit time of each.
 
@@ -204,9 +203,9 @@ def sonic_porosity_hunt_raymer(dt, dt_matrix, dt_fluid):
 
 def neu_den_xplot_poro_pt(
         nphi: float, rhob: float, model: str = 'ssc',
-        dry_min1_point: tuple = None,
-        dry_silt_point: tuple = None,
-        dry_clay_point: tuple = None,
+        dry_min1_point: tuple = (),
+        dry_silt_point: tuple = (),
+        dry_clay_point: tuple = (),
         fluid_point: tuple = (1.0, 1.0)):
     """Calculate porosity given a pair of neutron porosity and bulk density data point.
 
@@ -259,9 +258,9 @@ def neu_den_xplot_poro_pt(
 
 
 def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc',
-                       dry_min1_point: tuple = None,
-                       dry_silt_point: tuple = None,
-                       dry_clay_point: tuple = None,
+                       dry_min1_point: tuple = (),
+                       dry_silt_point: tuple = (),
+                       dry_clay_point: tuple = (),
                        fluid_point: tuple = (1.0, 1.0)):
     """Calculate porosity given neutron porosity and bulk density logs.
 

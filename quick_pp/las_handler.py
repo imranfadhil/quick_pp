@@ -5,6 +5,9 @@ import numpy as np
 import pandas as pd
 import mmap
 import welly
+import welly.las
+
+from quick_pp.logger import logger
 
 
 def read_las_files(las_files):
@@ -27,7 +30,7 @@ def read_las_files(las_files):
         try:
             df, well_header = read_las_file_welly(f)
         except Exception as e:
-            print(f"[read_las_files] Exception for {f.name} | {e} ")
+            logger.error(f"[read_las_files] Exception for {f.name} | {e} ")
             df, well_header, _ = read_las_file_mmap(f)
         merged_data = pd.concat([merged_data, df], ignore_index=True)
         header_data = pd.concat([header_data, well_header], ignore_index=True)
@@ -141,11 +144,10 @@ def read_las_file_mmap(file_object, required_sets=['PEP']):  # noqa
     return curves_df, header_df, welly_object
 
 
-def read_las_file_welly(file_object):  # noqa
+def read_las_file_welly(file_object):
     welly_dataset = welly.las.from_las(file_object.name)
     well_header = welly_dataset['Header']
     welly_object = welly.well.Well.from_datasets(welly_dataset)
-    print('welly_object:', welly_object)
     df = pre_process(welly_object)
     return df, well_header
 
@@ -285,7 +287,7 @@ def check_index_consistent(welly_object):
         else:
             return False
     except Exception as e:
-        print(f"[las_handler] `check_index_consistent` Error | {e}")
+        logger.error(f"[las_handler] `check_index_consistent` Error | {e}")
         return False
 
 
@@ -315,8 +317,7 @@ if __name__ == '__main__':
 
     root = Tk()
     file_objects = filedialog.askopenfiles(title='Choose well Log ASCII Standard (LAS) files to be combined',
-                                           filetype=(('LAS Files', '*.LAS *.las'), ('All Files', '*.*')),
-                                           multiple=True,
+                                           filetypes=(('LAS Files', '*.LAS *.las'), ('All Files', '*.*')),
                                            mode='rb')
     root.destroy()
     if file_objects:

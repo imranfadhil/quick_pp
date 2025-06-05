@@ -6,6 +6,7 @@ from quick_pp.utils import length_a_b, line_intersection
 from quick_pp.rock_type import estimate_vsh_gr
 from quick_pp.config import Config
 from quick_pp.ressum import calc_reservoir_summary, flag_interval
+from quick_pp.logger import logger
 
 plt.style.use('seaborn-v0_8-paper')
 
@@ -78,7 +79,7 @@ def badhole_flagging(data, thold=4):
         well_data['BIN'] = 0
         well_data['ESTIMATED_BITSIZE'] = 8.5
         if not well_data[well_data["CALI"].notna()].empty:
-            print(f"[feature_transformer `badhole_flag`] Processing {well}.")
+            logger.info(f"[feature_transformer `badhole_flag`] Processing {well}.")
 
             signal_data = well_data['CALI']
             signal_data = reject_outliers(signal_data)
@@ -116,7 +117,7 @@ def badhole_flagging(data, thold=4):
                 categories = dict(zip(well_data.BIN.unique(), estimated_bits))
                 well_data['ESTIMATED_BITSIZE'] = well_data.apply(lambda x: categories.get(x.BIN), axis=1)
             except Exception as e:
-                print(f"[feature_transformer `badhole_flag`] Error {e}.")
+                logger.error(f"[feature_transformer `badhole_flag`] Error {e}.")
                 continue
 
         return_df = pd.concat([return_df, well_data])
@@ -137,8 +138,8 @@ def badhole_flagging(data, thold=4):
 
 def neu_den_xplot_hc_correction(
         nphi, rhob, vsh_gr=None,
-        dry_min1_point: tuple = None,
-        dry_clay_point: tuple = None,
+        dry_min1_point: tuple = (),
+        dry_clay_point: tuple = (),
         fluid_point: tuple = (1.0, 1.0),
         corr_angle: float = 50, buffer=0.0):
     """Estimate correction for neutron porosity and bulk density based on correction angle.
@@ -375,11 +376,11 @@ def quick_compare(field_data, level='WELL', return_fig=False):
     field_data['ZONES'] = "ALL" if level == 'WELL' else field_data['ZONES']
     compare_df = pd.DataFrame()
     for well, well_data in field_data.groupby('WELL_NAME'):
-        print(f"Processing {well}", end='\r')
+        logger.info(f"Processing {well}")
         _, summary_df, _, _ = quick_qc(well_data, return_fig=False)
         summary_df.insert(0, 'WELL_NAME', well)
         compare_df = pd.concat([compare_df, summary_df])
-    print("Finished processing all wells.", end='\r')
+    logger.info("Finished processing all wells.")
 
     if return_fig:
         # Box plot

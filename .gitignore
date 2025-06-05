@@ -112,3 +112,8 @@ notebooks/data/03_processed/*
 notebooks/data/04_project/*
 notebooks/local/*
 notebooks/03_qpp__*
+uploads/*
+mlruns/*
+data/*
+.chainlit*
+chainlit*
