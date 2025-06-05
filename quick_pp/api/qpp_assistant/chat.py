@@ -1,7 +1,6 @@
 import chainlit as cl
 import json
 from langchain_core.messages import HumanMessage
-from langchain_core.runnables import RunnableConfig
 from langchain_ollama.chat_models import ChatOllama
 from mcp import ClientSession
 
@@ -76,27 +75,15 @@ async def on_message(message: cl.Message):
     chat_messages.append({"role": "user", "content": HumanMessage(content=message.content)})
     cl.user_session.set("chat_messages", chat_messages)
 
-    # Prepare the input for the agent executor
-    input_data = {"input": chat_messages}
+    config = {
+        "recursion_limit": 50,
+        # "configurable": {"thread_id": session_id},
+    }
 
     # Invoke the agent executor
-    response = graph_executor.invoke(
-        input_data,
-        config=RunnableConfig(
-            callbacks=[
-                cl.LangchainCallbackHandler(
-                    # to_ignore=[
-                    #     "ChannelRead",
-                    #     "RunnableLambda",
-                    #     "ChannelWrite",
-                    #     "__start__",
-                    #     "_execute",
-                    # ]
-                )
-            ]
-        )
-    )
-    response_content = response["messages"][-1].content if response["messages"] else "No response generated."
+    for event in graph_executor.stream({"input": message.content}, config=config, stream_mode='updates'):
+        response = event
+    response_content = response["messages"][-1].content if hasattr(response, "messages") else "No response generated."
     chat_messages.append({"role": "assistant", "content": response_content})
     cl.user_session.set("chat_messages", chat_messages)
     await cl.Message(content=response_content).send()
