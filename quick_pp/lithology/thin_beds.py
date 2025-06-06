@@ -91,10 +91,13 @@ class ThinBeds:
             poro_pt = point[1] + length_a_b(point, (0, point[1])) * math.tan(math.radians(theta_vsh_dis))
             vsh_dis_pt = line_intersection((A, C), ((0, poro_pt), point))
             proj_vsh_dis_frac = length_a_b(vsh_dis_pt, A)
-            vsh_dis = np.append(vsh_dis, proj_vsh_dis_frac / vsh_dis_frac * (A[1] - C[1]))
+            vsh_dis = np.append(vsh_dis, proj_vsh_dis_frac / vsh_dis_frac * (C[0] - A[0]))
             vsand_dis = np.append(vsand_dis, (1 - vsh_dis[i]))
 
-            phit_sand = np.append(phit_sand, line_intersection((A, C), (B, point))[1])
+            proj_pt = line_intersection((A, C), (B, point))
+            proj_poro_frac = length_a_b(proj_pt, C)
+            poro_sand_pt = proj_poro_frac / vsh_lam_frac * (A[1] - C[1])
+            phit_sand = np.append(phit_sand, poro_sand_pt)
 
         return vsh_lam, vsh_dis, vsand_dis, phit_sand
 
@@ -163,7 +166,7 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
         ax.plot(*zip(*intermediate_line), linestyle='--', color='green', alpha=0.75)
         ax.text(
             intermediate_line[0][0] - .03, intermediate_line[0][1],
-            f'{int(t * 100 * (A[1] - C[1]))}%',
+            f'{int(t * 100 * (C[0] - A[0]))}%',
             fontsize=8,
             color='green',
             ha='center',
@@ -171,14 +174,21 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
         )
 
     # Add lines with different slopes originating from point B
-    num_lines = 4
+    num_lines = 9
     for i in range(1, num_lines + 1):
         t = i / (num_lines + 1)
         intermediate_line = [
-            (B[0], B[1]),
-            (A[0] + t * (C[0] - A[0]), A[1] + t * (C[1] - A[1]))
+            (A[0] + t * (C[0] - A[0]), A[1] + t * (C[1] - A[1])), (B[0], B[1])
         ]
         ax.plot(*zip(*intermediate_line), linestyle='--', color='red', alpha=0.75)
+        ax.text(
+            intermediate_line[0][0] - .075, intermediate_line[0][1],
+            f'{int((1 - t) * 100 * (A[1] - C[1]))}%',
+            fontsize=8,
+            color='red',
+            ha='center',
+            va='center'
+        )
 
     ax.scatter(A[0], A[1], label=f'Clean Sand: ({A[0]}, {A[1]})', color='orange')
     ax.scatter(B[0], B[1], label=f'Pure Shale: ({B[0]}, {B[1]})', color='black')
