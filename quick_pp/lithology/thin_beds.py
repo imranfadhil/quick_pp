@@ -73,7 +73,6 @@ class ThinBeds:
         C = (lower_vertex_vshale, lower_vertex_phit)
 
         theta_vsh_lam = angle_between_lines((A, C), (A, (0, 0)))
-        theta_vsh_dis = angle_between_lines((A, B), (B, (0, B[1])))
 
         vsh_lam_frac = length_a_b(B, C)
         vsh_dis_frac = length_a_b(A, C)
@@ -88,18 +87,25 @@ class ThinBeds:
             proj_vsh_lam_frac = length_a_b(vsh_lam_pt, C)
             vsh_lam = np.append(vsh_lam, proj_vsh_lam_frac / vsh_lam_frac)
 
-            poro_pt = point[1] + length_a_b(point, (0, point[1])) * math.tan(math.radians(theta_vsh_dis))
-            vsh_dis_pt = line_intersection((A, C), ((0, poro_pt), point))
-            proj_vsh_dis_frac = length_a_b(vsh_dis_pt, A)
-            vsh_dis = np.append(vsh_dis, proj_vsh_dis_frac / vsh_dis_frac * (C[0] - A[0]))
-            vsand_dis = np.append(vsand_dis, (1 - vsh_dis[i]))
-
             proj_pt = line_intersection((A, C), (B, point))
             proj_poro_frac = length_a_b(proj_pt, C)
-            poro_sand_pt = proj_poro_frac / vsh_lam_frac * (A[1] - C[1])
+            vsand_dis_pt = proj_poro_frac / vsh_dis_frac
+            poro_sand_pt = vsand_dis_pt * (A[1] - C[1])
             phit_sand = np.append(phit_sand, poro_sand_pt)
+            vsand_dis = np.append(vsand_dis, vsand_dis_pt)
+            vsh_dis = np.append(vsh_dis, (1 - vsand_dis_pt))
 
         return vsh_lam, vsh_dis, vsand_dis, phit_sand
+
+    def resistivity_modelling(self, vsh_lam, rsand, rshale, theta):
+        # Estimate the resisitivty of dispsersed sand
+        sand_shale_ratio = (1 - vsh_lam) / vsh_lam
+        csd = 1 / rsand
+        csh = 1 / rshale
+        ch = csh * (1 - sand_shale_ratio) + csd * sand_shale_ratio
+        rv = rshale * (1 - vsh_lam) + rsand * vsh_lam
+
+        return ch * (math.cos(math.radians(theta)) ** 2 + ch * rv * math.sin(math.radians(theta)) ** 2)
 
 
 def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwargs):
@@ -155,24 +161,6 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
             va='center'
         )
 
-    # Add lines equally distributed between vsh_lam_from_pt and vsh_dis_from_pt
-    num_lines = 9
-    for i in range(1, num_lines + 1):
-        t = i / (num_lines + 1)
-        intermediate_line = [
-            (A[0] + t * (C[0] - A[0]), A[1] + t * (C[1] - A[1])),
-            (B[0] + t * (C[0] - B[0]), B[1] + t * (C[1] - B[1]))
-        ]
-        ax.plot(*zip(*intermediate_line), linestyle='--', color='green', alpha=0.75)
-        ax.text(
-            intermediate_line[0][0] - .03, intermediate_line[0][1],
-            f'{int(t * 100 * (C[0] - A[0]))}%',
-            fontsize=8,
-            color='green',
-            ha='center',
-            va='center'
-        )
-
     # Add lines with different slopes originating from point B
     num_lines = 9
     for i in range(1, num_lines + 1):
@@ -182,7 +170,7 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
         ]
         ax.plot(*zip(*intermediate_line), linestyle='--', color='red', alpha=0.75)
         ax.text(
-            intermediate_line[0][0] - .075, intermediate_line[0][1],
+            intermediate_line[0][0] - .03, intermediate_line[0][1],
             f'{int((1 - t) * 100 * (A[1] - C[1]))}%',
             fontsize=8,
             color='red',
