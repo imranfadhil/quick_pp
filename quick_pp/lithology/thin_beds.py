@@ -98,14 +98,39 @@ class ThinBeds:
         return vsh_lam, vsh_dis, vsand_dis, phit_sand
 
     def resistivity_modelling(self, vsh_lam, rsand, rshale, theta):
-        # Estimate the resisitivty of dispsersed sand
-        sand_shale_ratio = (1 - vsh_lam) / vsh_lam
+        """Calculate the resistivity based on the laminated and dispersed shale based on Hagiwara (1995).
+
+        Args:
+            vsh_lam (float): Fraction of laminated shale.
+            rsand (float): Resistivity of the sand.
+            rshale (float): Resistivity of the shale.
+            theta (float): Dip angle in degrees.
+
+        Returns:
+            float: Resistivity of the formation.
+        """
         csd = 1 / rsand
         csh = 1 / rshale
-        ch = csh * (1 - sand_shale_ratio) + csd * sand_shale_ratio
-        rv = rshale * (1 - vsh_lam) + rsand * vsh_lam
+        ch = csh * vsh_lam + csd * (1 - vsh_lam)
+        rv = rshale * vsh_lam + rsand * (1 - vsh_lam)
 
-        return ch * (math.cos(math.radians(theta)) ** 2 + ch * rv * math.sin(math.radians(theta)) ** 2)
+        return 1 / (ch * (math.cos(math.radians(theta)) ** 2 + ch * rv * math.sin(math.radians(theta)) ** 2))
+
+    def apparent_resistivity(self, rv, rh, theta):
+        """Calculate the apparent resistivity based on the laminated and dispersed shale based on
+        Moran and Gianzero (1979).
+
+        Args:
+            rv (float): Resistivity of the dispersed sand.
+            rh (float): Resistivity of the shale.
+            theta (float): Dip angle in degrees.
+
+        Returns:
+            float: Apparent resistivity.
+        """
+        lambda_ = (rv / rh) ** 0.5
+        return rh * lambda_ / (
+            lambda_ ** 2 * math.cos(math.radians(theta)) ** 2 + math.sin(math.radians(theta)) ** 2) ** 0.5
 
 
 def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwargs):
