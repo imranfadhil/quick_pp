@@ -97,22 +97,23 @@ class ThinBeds:
 
         return vsh_lam, vsh_dis, vsand_dis, phit_sand
 
-    def resistivity_modelling(self, vsh_lam, rsand, rshale, theta):
+    def resistivity_modelling(self, vsh_lam, rsand, rh_shale, rv_shale, theta):
         """Calculate the resistivity based on the laminated and dispersed shale based on Hagiwara (1995).
 
         Args:
             vsh_lam (float): Fraction of laminated shale.
             rsand (float): Resistivity of the sand.
-            rshale (float): Resistivity of the shale.
+            rh_shale (float): Horizontal resistivity of the shale.
+            rv_shale (float): Vertical resistivity of the shale.
             theta (float): Dip angle in degrees.
 
         Returns:
             float: Resistivity of the formation.
         """
         csd = 1 / rsand
-        csh = 1 / rshale
+        csh = 1 / rh_shale
         ch = csh * vsh_lam + csd * (1 - vsh_lam)
-        rv = rshale * vsh_lam + rsand * (1 - vsh_lam)
+        rv = rv_shale * vsh_lam + rsand * (1 - vsh_lam)
 
         return 1 / (ch * (math.cos(math.radians(theta)) ** 2 + ch * rv * math.sin(math.radians(theta)) ** 2))
 
