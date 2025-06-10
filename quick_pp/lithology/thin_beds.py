@@ -97,7 +97,7 @@ class ThinBeds:
 
         return vsh_lam, vsh_dis, vsand_dis, phit_sand
 
-    def resistivity_modelling(self, vsh_lam, rsand, rh_shale, rv_shale, theta):
+    def resistivity_modelling(self, vsh_lam, rsand, rv_shale, rh_shale, theta):
         """Calculate the resistivity based on the laminated and dispersed shale based on Hagiwara (1995).
 
         Args:
@@ -114,11 +114,10 @@ class ThinBeds:
         csh = 1 / rh_shale
         ch = csh * vsh_lam + csd * (1 - vsh_lam)
         rv = rv_shale * vsh_lam + rsand * (1 - vsh_lam)
-        return 1 / (ch * (math.cos(math.radians(theta)) ** 2 + ch * rv * math.sin(math.radians(theta)) ** 2))
+        return 1 / (ch * (math.cos(math.radians(theta))**2 + ch * rv * math.sin(math.radians(theta))**2))
 
     def apparent_resistivity(self, rv, rh, theta):
-        """Calculate the apparent resistivity based on the laminated and dispersed shale based on
-        Moran and Gianzero (1979).
+        """Calculate the apparent resistivity based on Hagiwara (1997).
 
         Args:
             rv (float): Resistivity of the dispersed sand.
@@ -128,9 +127,37 @@ class ThinBeds:
         Returns:
             float: Apparent resistivity.
         """
-        lambda_ = (rv / rh) ** 0.5
-        return rh * lambda_ / (
-            lambda_ ** 2 * math.cos(math.radians(theta)) ** 2 + math.sin(math.radians(theta)) ** 2) ** 0.5
+        return rh / (math.cos(math.radians(theta))**2 + (rh / rv) * math.sin(math.radians(theta))**2)**.5
+
+    def sand_resistivity_macro(self, rv, rh, rshale):
+        """Calculate the (macroscopic anistropy) resistivity of the sand based on Hagiwara (1997).
+
+        Args:
+            rv (float): Resistivity of the dispersed sand.
+            rh (float): Resistivity of the shale.
+            rv_shale (float): Vertical resistivity of the shale.
+            rh_shale (float): Horizontal resistivity of the shale.
+
+        Returns:
+            float: Resistivity of the sand.
+        """
+        return (rv - rshale) / (rh - rshale)
+
+    def sand_resistivity_micro(self, rv, rh, rv_shale, rh_shale):
+        """Calculate the (microscopic anisotropy) resistivity of the sand based on Hagiwara (1997).
+
+        Args:
+            rv (float): Resistivity of the dispersed sand.
+            rh (float): Resistivity of the shale.
+            rv_shale (float): Vertical resistivity of the shale.
+            rh_shale (float): Horizontal resistivity of the shale.
+
+        Returns:
+            float: Resistivity of the sand.
+        """
+        alpha = self.sand_resistivity_macro(rv, rh, rh_shale)
+        beta = alpha / rh_shale
+        return alpha / (1 + .5 * (beta - 1 - ((beta - 1)**2 + 4 * beta * (rh_shale / rv_shale - 1))**.5))
 
 
 def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwargs):
