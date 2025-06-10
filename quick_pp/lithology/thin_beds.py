@@ -114,7 +114,6 @@ class ThinBeds:
         csh = 1 / rh_shale
         ch = csh * vsh_lam + csd * (1 - vsh_lam)
         rv = rv_shale * vsh_lam + rsand * (1 - vsh_lam)
-
         return 1 / (ch * (math.cos(math.radians(theta)) ** 2 + ch * rv * math.sin(math.radians(theta)) ** 2))
 
     def apparent_resistivity(self, rv, rh, theta):
@@ -138,13 +137,10 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
     """Neutron-Density crossplot with lithology lines based on specified end points.
 
     Args:
-        nphi (float): Neutron porosity log.
-        rhob (float): Bulk density log.
-        dry_min1_point (tuple): Neutron porosity and bulk density of mineral 1 point.
-        dry_clay_point (tuple): Neutron porosity and bulk density of dry clay point.
-        fluid_point (tuple): Neutron porosity and bulk density of fluid point.
-        wet_clay_point (tuple): Neutron porosity and bulk density of wet clay point.
-        dry_silt_point (tuple): Neutron porosity and bulk density of dry silt point. Default is None.
+        vsh (np.ndarray): Array of shale volume fraction.
+        phit (np.ndarray): Array of total porosity.
+        dry_sand_poro (float): Dry sand porosity endpoint.
+        dry_shale_poro (float): Dry shale porosity endpoint.
 
     Returns:
         matplotlib.pyplot.Figure: Neutron porosity and bulk density cross plot.
