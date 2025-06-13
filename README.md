@@ -30,6 +30,8 @@ To install, use the following command:
 To use qpp_assistant, you would need to;
 1. Install Ollama
 2. Run `ollama pull qwen3` in the terminal
+3. Run `docker-compose up -d`
+4. Run `python init_db.py`
 
 ## CLI
 
@@ -59,6 +61,7 @@ To start the App
 > quick_pp app
 
 You can then access the Swagger UI at http://localhost:8888/docs and qpp_assistant at http://localhost:8888/qpp_assistant.
+You can enter any username and password to login the qpp_assistant.
 
 To use the mcp tools, you would need to first add the following SSE URLS through the interface;
 http://localhost:8888/mcp - quick_pp tools.
