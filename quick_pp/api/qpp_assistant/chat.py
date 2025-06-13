@@ -1,14 +1,15 @@
 import chainlit as cl
 from chainlit.input_widget import Select
-import re
+from chainlit.types import ThreadDict
 import json
 from langchain_ollama.chat_models import ChatOllama
-from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
 from langchain.schema.runnable.config import RunnableConfig
-from langchain.memory import ConversationBufferMemory
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.runnables import RunnableWithMessageHistory
 from mcp import ClientSession
-from operator import itemgetter
-from typing import Dict, Any
+import re
+from typing import Dict, Any, List
 
 from quick_pp.api.qpp_assistant.agents.qpp_agent import QPPAgent
 from quick_pp.logger import logger
@@ -17,6 +18,36 @@ from quick_pp.logger import logger
 # Initialize the LLM and agent
 llm = ChatOllama(model="qwen3", temperature=0.0)
 graph_executor = QPPAgent(llm).build()
+
+
+class ChainlitChatMessageHistory(BaseChatMessageHistory):
+    """Chat message history that stores messages in Chainlit's user session."""
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.messages: List[Any] = []
+
+    @property
+    def messages(self) -> List[Any]:
+        """Get all messages."""
+        return cl.user_session.get("chat_history", [])
+
+    @messages.setter
+    def messages(self, value: List[Any]) -> None:
+        """Set all messages."""
+        cl.user_session.set("chat_history", value)
+
+    def add_user_message(self, message: str) -> None:
+        """Add a user message to the store."""
+        self.messages.append(HumanMessage(content=message))
+
+    def add_ai_message(self, message: str) -> None:
+        """Add an AI message to the store."""
+        self.messages.append(AIMessage(content=message))
+
+    def clear(self) -> None:
+        """Clear all messages."""
+        self.messages = []
 
 
 @cl.on_mcp_connect
@@ -91,14 +122,17 @@ async def call_tool(tool_use):
 
 
 def setup_runnable() -> None:
-    """Setup the runnable chain with memory."""
-    memory = cl.user_session.get("memory")
-    runnable = (
-        RunnablePassthrough.assign(
-            history=RunnableLambda(memory.load_memory_variables) | itemgetter("history")
-        )
-        | graph_executor  # Chain the graph executor after memory
+    """Setup the runnable chain with message history."""
+    session_id = cl.user_session.get("user").identifier
+    message_history = ChainlitChatMessageHistory(session_id=session_id)
+
+    runnable = RunnableWithMessageHistory(
+        graph_executor,
+        lambda session_id: message_history,
+        input_messages_key="input",
+        history_messages_key="history",
     )
+
     cl.user_session.set("runnable", runnable)
 
 
@@ -113,7 +147,6 @@ async def start_chat():
         app_user = cl.user_session.get("user")
         await cl.Message(f"Hello {app_user.identifier}").send()
 
-        cl.user_session.set("memory", ConversationBufferMemory(return_messages=True))
         setup_runnable()
 
         settings = await cl.ChatSettings(
@@ -134,38 +167,32 @@ async def start_chat():
 
 
 @cl.on_chat_resume
-async def on_chat_resume(thread):
-    memory = ConversationBufferMemory(return_messages=True)
-    root_messages = [m for m in thread["steps"] if m["parentId"] is None]
+async def on_chat_resume(thread: ThreadDict):
+    message_history = ChainlitChatMessageHistory(session_id=cl.user_session.get("user").identifier)
+    root_messages = [m for m in thread["steps"]]
+
     for message in root_messages:
         if message["type"] == "user_message":
-            memory.chat_memory.add_user_message(message["output"])
-        else:
-            memory.chat_memory.add_ai_message(message["output"])
+            message_history.add_user_message(message["output"])
+        elif message["type"] == "assistant_message":
+            message_history.add_ai_message(message["output"])
 
-    cl.user_session.set("memory", memory)
     setup_runnable()
 
 
 @cl.on_message
 async def on_message(message: cl.Message):
     try:
-        memory = cl.user_session.get("memory")  # type: ConversationBufferMemory
-        runnable = cl.user_session.get("runnable")  # type: RunnablePassthrough
-
-        # Show processing message
-        await cl.Message(content="Processing your request...").send()
-
-        # Add user message to memory before processing
-        memory.chat_memory.add_user_message(message.content)
+        runnable = cl.user_session.get("runnable")
+        message_history = ChainlitChatMessageHistory(session_id=cl.user_session.get("user").identifier)
 
         # Configure the execution
         config = RunnableConfig(
             recursion_limit=50,
-            configurable={"memory": memory}
+            configurable={"session_id": cl.user_session.get("user").identifier}
         )
 
-        # Run the chain with memory
+        # Run the chain with message history
         try:
             chain_input: Dict[str, Any] = {"input": message.content}
             response = await runnable.ainvoke(chain_input, config=config)
@@ -195,8 +222,9 @@ async def on_message(message: cl.Message):
             await cl.Message(content=error_msg).send()
             return
 
-        # Add assistant response to memory
-        memory.chat_memory.add_ai_message(response_content)
+        # Add user message and assistant response to history
+        message_history.add_user_message(message.content)
+        message_history.add_ai_message(response_content)
 
         # Send response
         await cl.Message(content=response_content).send()
