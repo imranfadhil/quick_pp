@@ -1,8 +1,14 @@
 import chainlit as cl
+from chainlit.input_widget import Select
+import re
 import json
-from langchain_core.messages import HumanMessage
 from langchain_ollama.chat_models import ChatOllama
+from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
+from langchain.schema.runnable.config import RunnableConfig
+from langchain.memory import ConversationBufferMemory
 from mcp import ClientSession
+from operator import itemgetter
+from typing import Dict, Any
 
 from quick_pp.api.qpp_assistant.agents.qpp_agent import QPPAgent
 from quick_pp.logger import logger
@@ -84,38 +90,88 @@ async def call_tool(tool_use):
         return json.dumps({"error": error_msg})
 
 
+def setup_runnable() -> None:
+    """Setup the runnable chain with memory."""
+    memory = cl.user_session.get("memory")
+    runnable = (
+        RunnablePassthrough.assign(
+            history=RunnableLambda(memory.load_memory_variables) | itemgetter("history")
+        )
+        | graph_executor  # Chain the graph executor after memory
+    )
+    cl.user_session.set("runnable", runnable)
+
+
+@cl.password_auth_callback
+def auth_callback(username: str):
+    return cl.User(identifier=username)
+
+
 @cl.on_chat_start
 async def start_chat():
     try:
-        cl.user_session.set("chat_messages", [])
+        app_user = cl.user_session.get("user")
+        await cl.Message(f"Hello {app_user.identifier}").send()
+
+        cl.user_session.set("memory", ConversationBufferMemory(return_messages=True))
+        setup_runnable()
+
+        settings = await cl.ChatSettings(
+            [
+                Select(
+                    id="Show Thinking Process",
+                    label="Show Thinking Process",
+                    values=["Yes", "No"],
+                    initial_index=1,
+                )
+            ]
+        ).send()
+        cl.user_session.set("show_thinking_process", settings["Show Thinking Process"] == "Yes")
+
         logger.info("Chat session started")
     except Exception as e:
         logger.error(f"Error starting chat: {str(e)}", exc_info=True)
 
 
+@cl.on_chat_resume
+async def on_chat_resume(thread):
+    memory = ConversationBufferMemory(return_messages=True)
+    root_messages = [m for m in thread["steps"] if m["parentId"] is None]
+    for message in root_messages:
+        if message["type"] == "user_message":
+            memory.chat_memory.add_user_message(message["output"])
+        else:
+            memory.chat_memory.add_ai_message(message["output"])
+
+    cl.user_session.set("memory", memory)
+    setup_runnable()
+
+
 @cl.on_message
 async def on_message(message: cl.Message):
     try:
-        # Update chat history
-        chat_messages = cl.user_session.get("chat_messages", [])
-        chat_messages.append({"role": "user", "content": HumanMessage(content=message.content)})
-        cl.user_session.set("chat_messages", chat_messages)
+        memory = cl.user_session.get("memory")  # type: ConversationBufferMemory
+        runnable = cl.user_session.get("runnable")  # type: RunnablePassthrough
 
         # Show processing message
         await cl.Message(content="Processing your request...").send()
 
-        # Configure the execution
-        config = {
-            "recursion_limit": 50,
-        }
+        # Add user message to memory before processing
+        memory.chat_memory.add_user_message(message.content)
 
-        # Invoke the agent executor
+        # Configure the execution
+        config = RunnableConfig(
+            recursion_limit=50,
+            configurable={"memory": memory}
+        )
+
+        # Run the chain with memory
         try:
-            for event in graph_executor.stream({"input": message.content}, config=config, stream_mode='updates'):
-                response = event
-                logger.info(f"Received event: {event}")
+            chain_input: Dict[str, Any] = {"input": message.content}
+            response = await runnable.ainvoke(chain_input, config=config)
+            logger.info(f"Received response: {response}")
         except Exception as e:
-            error_msg = f"Error during graph execution: {str(e)}"
+            error_msg = f"Error during chain execution: {str(e)}"
             logger.error(error_msg, exc_info=True)
             await cl.Message(content=error_msg).send()
             return
@@ -129,17 +185,21 @@ async def on_message(message: cl.Message):
             if hasattr(response, "messages") and response["messages"]:
                 response_content = response["messages"][-1].content
             else:
-                response_content = str(response)
+                response_content = response["generated_response"]
+                if not cl.user_session.get("show_thinking_process"):
+                    # Remove thinking process content and tags if user doesn't want to see them
+                    response_content = re.sub(r'<think>(.|\n)*?</think>', '', response_content)
         except Exception as e:
             error_msg = f"Error processing response: {str(e)}"
             logger.error(error_msg, exc_info=True)
             await cl.Message(content=error_msg).send()
             return
 
-        # Update chat history and send response
-        chat_messages.append({"role": "assistant", "content": response_content})
-        cl.user_session.set("chat_messages", chat_messages)
-        await cl.Message(elements=[cl.Text(content=response_content)]).send()
+        # Add assistant response to memory
+        memory.chat_memory.add_ai_message(response_content)
+
+        # Send response
+        await cl.Message(content=response_content).send()
 
     except Exception as e:
         error_msg = f"Unexpected error in message handling: {str(e)}"
