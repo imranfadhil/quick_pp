@@ -4,7 +4,7 @@ Python package to assist in providing quick-look/ preliminary petrophysical esti
 ![quick_pp demo](docs/static/quick_pp_demo.gif)
 
 ## Quick Start (Jupyter Notebook Examples)
-1. Create virtual environment (tested working with Python3.10.9)
+1. Create virtual environment (tested working with Python3.11)
     
         python -m venv venv
 
@@ -24,7 +24,7 @@ Python package to assist in providing quick-look/ preliminary petrophysical esti
     - 03_*: quick petropohysical interpretation of the MOCK wells.
     - For API notebook, need to run the following before running the cells
 
-            uvicorn quick_pp.api.main:app
+            python main.py app
 
 ## Install
 To install, use the following command:  
@@ -38,6 +38,7 @@ To use qpp_assistant, you would need to;
 4. Run `ollama pull qwen3` in the terminal
 5. Run `docker-compose up -d`
 6. Run `python init_db.py`
+7. Specify the required credentials in .env (based on `.env copy` file)
 
 ## CLI
 

@@ -4,8 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from .exceptions import return_exception_message
-from fastapi_mcp import FastApiMCP
-from chainlit.utils import mount_chainlit
+try:
+    from fastapi_mcp import FastApiMCP
+    from chainlit.utils import mount_chainlit
+except ImportError:
+    FastApiMCP = None
+    mount_chainlit = None
 from importlib import resources
 
 from .router import api_router
@@ -82,13 +86,16 @@ async def internal_server_exception_handler(exc: Exception):
         }
     )
 
-mcp = FastApiMCP(
-    app,
-    name="quick_pp API MCP",
-    describe_all_responses=True,  # Include all possible response schemas
-    describe_full_response_schema=True  # Include full JSON schema in descriptions
-)
-mcp.mount()
 
-qpp_assistant_file = resources.files('quick_pp.api.qpp_assistant').joinpath('chat.py')
-mount_chainlit(app=app, target=str(qpp_assistant_file), path="/qpp_assistant")
+if FastApiMCP is not None:
+    mcp = FastApiMCP(
+        app,
+        name="quick_pp API MCP",
+        describe_all_responses=True,  # Include all possible response schemas
+        describe_full_response_schema=True  # Include full JSON schema in descriptions
+    )
+    mcp.mount()
+
+if mount_chainlit is not None:
+    qpp_assistant_file = resources.files('quick_pp.api.qpp_assistant').joinpath('chat.py')
+    mount_chainlit(app=app, target=str(qpp_assistant_file), path="/qpp_assistant")

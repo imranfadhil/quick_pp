@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16
+    restart: always
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     environment:
@@ -11,6 +12,7 @@ services:
       - ${POSTGRES_PORT:-5432}:5432
   localstack:
     image: localstack/localstack:latest
+    restart: always
     environment:
       SERVICES: s3
     ports:
