@@ -1,15 +1,13 @@
 import chainlit as cl
-from chainlit.input_widget import Select
+from chainlit.input_widget import Switch
 from chainlit.types import ThreadDict
 import json
 from langchain_ollama.chat_models import ChatOllama
-from langchain.schema.runnable.config import RunnableConfig
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.chat_history import BaseChatMessageHistory
-from langchain_core.runnables import RunnableWithMessageHistory
+from langchain.memory import ConversationBufferMemory
+from langgraph.checkpoint.memory import InMemorySaver
 from mcp import ClientSession
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 from quick_pp.api.qpp_assistant.agents.qpp_agent import QPPAgent
 from quick_pp.logger import logger
@@ -17,37 +15,6 @@ from quick_pp.logger import logger
 
 # Initialize the LLM and agent
 llm = ChatOllama(model="qwen3", temperature=0.0)
-graph_executor = QPPAgent(llm).build()
-
-
-class ChainlitChatMessageHistory(BaseChatMessageHistory):
-    """Chat message history that stores messages in Chainlit's user session."""
-
-    def __init__(self, session_id: str):
-        self.session_id = session_id
-        self.messages: List[Any] = []
-
-    @property
-    def messages(self) -> List[Any]:
-        """Get all messages."""
-        return cl.user_session.get("chat_history", [])
-
-    @messages.setter
-    def messages(self, value: List[Any]) -> None:
-        """Set all messages."""
-        cl.user_session.set("chat_history", value)
-
-    def add_user_message(self, message: str) -> None:
-        """Add a user message to the store."""
-        self.messages.append(HumanMessage(content=message))
-
-    def add_ai_message(self, message: str) -> None:
-        """Add an AI message to the store."""
-        self.messages.append(AIMessage(content=message))
-
-    def clear(self) -> None:
-        """Clear all messages."""
-        self.messages = []
 
 
 @cl.on_mcp_connect
@@ -121,21 +88,6 @@ async def call_tool(tool_use):
         return json.dumps({"error": error_msg})
 
 
-def setup_runnable() -> None:
-    """Setup the runnable chain with message history."""
-    session_id = cl.user_session.get("user").identifier
-    message_history = ChainlitChatMessageHistory(session_id=session_id)
-
-    runnable = RunnableWithMessageHistory(
-        graph_executor,
-        lambda session_id: message_history,
-        input_messages_key="input",
-        history_messages_key="history",
-    )
-
-    cl.user_session.set("runnable", runnable)
-
-
 @cl.password_auth_callback
 def auth_callback(username: str):
     return cl.User(identifier=username)
@@ -147,50 +99,54 @@ async def start_chat():
         app_user = cl.user_session.get("user")
         await cl.Message(f"Hello {app_user.identifier}").send()
 
-        setup_runnable()
+        memory: InMemorySaver = InMemorySaver()
+        thread_id = str(cl.context.session.thread_id)
+        graph_executor = QPPAgent(llm,  memory, thread_id).build()
+        cl.user_session.set("runnable", graph_executor)
+
+        cl.user_session.set("memory", ConversationBufferMemory(return_messages=True))
 
         settings = await cl.ChatSettings(
             [
-                Select(
+                Switch(
                     id="Show Thinking Process",
                     label="Show Thinking Process",
-                    values=["Yes", "No"],
-                    initial_index=1,
+                    initial=False,
                 )
             ]
         ).send()
-        cl.user_session.set("show_thinking_process", settings["Show Thinking Process"] == "Yes")
+        cl.user_session.set("show_thinking_process", settings["Show Thinking Process"])
 
         logger.info("Chat session started")
     except Exception as e:
         logger.error(f"Error starting chat: {str(e)}", exc_info=True)
+        await cl.Message(content=f"Error starting chat: {str(e)}").send()
 
 
 @cl.on_chat_resume
 async def on_chat_resume(thread: ThreadDict):
-    message_history = ChainlitChatMessageHistory(session_id=cl.user_session.get("user").identifier)
+    memory = ConversationBufferMemory(return_messages=True)
     root_messages = [m for m in thread["steps"]]
-
     for message in root_messages:
         if message["type"] == "user_message":
-            message_history.add_user_message(message["output"])
-        elif message["type"] == "assistant_message":
-            message_history.add_ai_message(message["output"])
+            memory.chat_memory.add_user_message(message["output"])
+        else:
+            memory.chat_memory.add_ai_message(message["output"])
 
-    setup_runnable()
+    cl.user_session.set("memory", memory)
 
 
 @cl.on_message
 async def on_message(message: cl.Message):
     try:
         runnable = cl.user_session.get("runnable")
-        message_history = ChainlitChatMessageHistory(session_id=cl.user_session.get("user").identifier)
 
-        # Configure the execution
-        config = RunnableConfig(
-            recursion_limit=50,
-            configurable={"session_id": cl.user_session.get("user").identifier}
-        )
+        await cl.Message(f'Thread ID: {cl.context.session.thread_id}').send()
+
+        config = {
+            "configurable": {"thread_id": str(cl.context.session.thread_id)},
+            "recursion_limit": 50
+        }
 
         # Run the chain with message history
         try:
@@ -223,8 +179,10 @@ async def on_message(message: cl.Message):
             return
 
         # Add user message and assistant response to history
-        message_history.add_user_message(message.content)
-        message_history.add_ai_message(response_content)
+        memory = cl.user_session.get("memory")  # type: ConversationBufferMemory
+        memory.chat_memory.add_user_message(message.content)
+        memory.chat_memory.add_ai_message(response_content)
+        cl.user_session.set("memory", memory)
 
         # Send response
         await cl.Message(content=response_content).send()

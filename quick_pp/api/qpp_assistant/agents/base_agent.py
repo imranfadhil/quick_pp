@@ -1,7 +1,9 @@
+from langchain_ollama.chat_models import ChatOllama
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
 from typing import Annotated, Dict, Any, List
 from pydantic import BaseModel, Field
+from langgraph.checkpoint.memory import InMemorySaver
 
 from quick_pp.api.qpp_assistant.prompt_templates.base_prompt import BASE_PROMPT
 from quick_pp.api.qpp_assistant.tools import TOOLS
@@ -16,9 +18,11 @@ class State(BaseModel):
 
 
 class BaseAgent:
-    def __init__(self, llm):
+    def __init__(self, llm: ChatOllama, memory: InMemorySaver, thread_id: str):
         self.llm = llm
-        self.agent_executor = create_react_agent(llm, TOOLS, prompt=BASE_PROMPT)
+        self.thread_id = thread_id
+        self.memory = memory
+        self.agent_executor = create_react_agent(llm, TOOLS, prompt=BASE_PROMPT, checkpointer=memory)
         logger.info("BaseAgent initialized with tools: %s", [tool.name for tool in TOOLS])
 
     def setup(self, state: State) -> Dict[str, Any]:
@@ -32,18 +36,14 @@ class BaseAgent:
                     "error": ""
                 }
 
-            # Get recent message history (last 10 messages)
-            history = state.messages[-10:] if state.messages else []
+            config = {"configurable": {"thread_id": self.thread_id}}
 
             # Prepare the input for the agent
-            agent_input = {
-                "messages": history + [{"role": "user", "content": question}]
-            }
-
+            agent_input = {"messages": [("user", question)]}
             logger.info("Invoking agent executor with input: %s", agent_input)
 
             # Invoke the agent executor
-            raw_response = self.agent_executor.invoke(agent_input)
+            raw_response = self.agent_executor.invoke(agent_input, config=config)
 
             if not raw_response or "messages" not in raw_response:
                 raise ValueError("Invalid response format from agent executor")
@@ -71,3 +71,11 @@ class BaseAgent:
     def get_agent_executor(self):
         """Get the agent executor."""
         return self.agent_executor
+
+    def get_thread_id(self):
+        """Get the thread id."""
+        return self.thread_id
+
+    def get_memory(self):
+        """Get the memory."""
+        return self.memory

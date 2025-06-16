@@ -42,10 +42,12 @@ class Act(BaseModel):
 
 class PlanExecuteAgent:
 
-    def __init__(self, llm: ChatOllama):
+    def __init__(self, llm: ChatOllama, base_agent: BaseAgent):
         """Initialize the PlanExecuteAgent with an LLM and a base agent."""
         self.llm = llm
-        self.agent_executor = BaseAgent(llm).get_agent_executor()
+        self.agent_executor = base_agent.get_agent_executor()
+        self.thread_id = base_agent.get_thread_id()
+
         logger.info("PlanExecuteAgent initialized.")
 
     def execute_step(self, state: PlanExecute):
@@ -55,7 +57,8 @@ class PlanExecuteAgent:
         task_formatted = f"""For the following plan:\n{plan_str}\n\nYou are tasked with executing step {1}, {task}."""
         logger.debug(f"Executing step: {task}")
         agent_response = self.agent_executor.invoke(
-            {"messages": [("user", task_formatted)]}
+            {"messages": [("user", task_formatted)]},
+            config={"configurable": {"thread_id": self.thread_id}}
         )
         logger.debug(f"Agent response: {agent_response['messages'][-1].content}")
         return {
