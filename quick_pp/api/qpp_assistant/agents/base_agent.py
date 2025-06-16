@@ -4,7 +4,7 @@ from typing import Annotated, Dict, Any, List
 from pydantic import BaseModel, Field
 
 from quick_pp.api.qpp_assistant.prompt_templates.base_prompt import BASE_PROMPT
-from quick_pp.api.qpp_assistant import TOOLS
+from quick_pp.api.qpp_assistant.tools import TOOLS
 from quick_pp.logger import logger
 
 
