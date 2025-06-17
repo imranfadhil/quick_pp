@@ -1,4 +1,19 @@
 services:
+  langflow:
+    image: langflowai/langflow:latest # or another version tag on https://hub.docker.com/r/langflowai/langflow
+    restart: always
+    pull_policy: always               # set to 'always' when using 'latest' image
+    ports:
+      - "7860:7860"
+    depends_on:
+      - postgres
+    environment:
+      - LANGFLOW_DATABASE_URL=postgresql://root:root@postgres:5432/postgres
+      # This variable defines where the logs, file storage, monitor data and secret keys are stored.
+      - LANGFLOW_CONFIG_DIR=app/langflow
+    volumes:
+      - ./data/langflow:/app/langflow
+
   postgres:
     image: postgres:16
     restart: always
@@ -10,6 +25,7 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-postgres}
     ports:
       - ${POSTGRES_PORT:-5432}:5432
+
   localstack:
     image: localstack/localstack:latest
     restart: always

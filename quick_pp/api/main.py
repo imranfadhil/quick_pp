@@ -38,6 +38,10 @@ tags_metadata = [
     {
         "name": "Reservoir Summary",
         "description": "Reservoir summary related endpoints."
+    },
+    {
+        "name": "Chat",
+        "description": "Chat related endpoints."
     }
 ]
 
