@@ -163,15 +163,11 @@ def create_database():
         END
         $$;
     """)
-    admin_cur.execute("""
-        DO $$
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'langflow') THEN
-                EXECUTE 'CREATE DATABASE langflow OWNER langflow';
-            END IF;
-        END
-        $$;
-    """)
+    # Check if database exists first
+    admin_cur.execute("SELECT 1 FROM pg_database WHERE datname = 'langflow'")
+    if not admin_cur.fetchone():
+        # Create database directly without using DO block since CREATE DATABASE can't be in transaction
+        admin_cur.execute("CREATE DATABASE langflow OWNER langflow")
     admin_cur.close()
     admin_conn.close()
 

@@ -1,0 +1,15 @@
+# Use an official Python runtime as a parent image
+FROM python:3.11-slim
+
+# Set the working directory in the container
+WORKDIR /code
+
+# Copy the current directory contents into the container at /code
+COPY init_db.py /code
+COPY .env /code
+
+# Install any needed packages specified in requirements.txt
+RUN apt-get update && \
+    python -m pip install --upgrade pip && \
+    pip install psycopg2-binary dotenv && \
+    python init_db.py

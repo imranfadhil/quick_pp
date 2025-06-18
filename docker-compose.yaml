@@ -1,22 +1,7 @@
 services:
-  langflow:
-    image: langflowai/langflow:latest # or another version tag on https://hub.docker.com/r/langflowai/langflow
-    restart: always
-    pull_policy: always               # set to 'always' when using 'latest' image
-    ports:
-      - "7860:7860"
-    depends_on:
-      - postgres
-    environment:
-      - LANGFLOW_DATABASE_URL=postgresql://langflow:langflow@postgres:5432/langflow
-      # This variable defines where the logs, file storage, monitor data and secret keys are stored.
-      - LANGFLOW_CONFIG_DIR=app/langflow
-    volumes:
-      - ./data/langflow:/app/langflow
-
   postgres:
-    image: postgres:16
-    restart: always
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     environment:
@@ -25,16 +10,40 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-postgres}
     ports:
       - ${POSTGRES_PORT:-5432}:5432
+    
+  python:
+    build:
+      context: .
+      dockerfile: Dockerfile-psycopg
+    depends_on:
+      - postgres
+    volumes:
+      - ./init_db.py:/code/init_db.py
+
+  langflow:
+    image: langflowai/langflow:latest # or another version tag on https://hub.docker.com/r/langflowai/langflow
+    restart: unless-stopped
+    pull_policy: always               # set to 'always' when using 'latest' image
+    ports:
+      - "7860:7860"
+    depends_on:
+      - python
+    environment:
+      - LANGFLOW_DATABASE_URL=postgresql://langflow:langflow@postgres:5432/langflow
+      # This variable defines where the logs, file storage, monitor data and secret keys are stored.
+      - LANGFLOW_CONFIG_DIR=app/langflow
+    volumes:
+      - ./data/langflow:/app/langflow
 
   localstack:
     image: localstack/localstack:latest
-    restart: always
+    restart: unless-stopped
     environment:
       SERVICES: s3
     ports:
       - 4566:4566
     volumes:
-      - ./localstack-script.sh:/etc/localstack/init/ready.d/script.sh
+      - ./data/localstack-script.sh:/etc/localstack/init/ready.d/script.sh
       - "/var/run/docker.sock:/var/run/docker.sock"
 
   # Uncomment below to simulate Azure Blob Storage (don't forget to run the init_azure_storage.py to create the container)
