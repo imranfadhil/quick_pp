@@ -150,6 +150,31 @@ def create_database():
     CREATE INDEX IF NOT EXISTS "Thread_name_idx" ON "Thread"(name);
     """)
 
+    # Connect to default database with autocommit to create new database for langflow
+    admin_conn = psycopg2.connect(connection_str)
+    admin_conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    admin_cur = admin_conn.cursor()
+    admin_cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'langflow') THEN
+                CREATE ROLE langflow LOGIN PASSWORD 'langflow';
+            END IF;
+        END
+        $$;
+    """)
+    admin_cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'langflow') THEN
+                EXECUTE 'CREATE DATABASE langflow OWNER langflow';
+            END IF;
+        END
+        $$;
+    """)
+    admin_cur.close()
+    admin_conn.close()
+
     conn.commit()
     cur.close()
     conn.close()
