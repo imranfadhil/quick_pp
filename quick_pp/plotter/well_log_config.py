@@ -34,6 +34,8 @@ COLOR_DICT = {
     'CSAT': '#FF0000',
     'SHF': '#618F63',
     'ROCK_FLAG_1': "#F3E3CA",
+    'DTC': '#FF0000',
+    'DTS': '#0000FF',
 }
 
 # Define the trace definitions for the well log plot
@@ -406,4 +408,18 @@ XAXIS_DEFS = {
     'COAL_FLAG': {
         'range': [0.1, .2], 'type': 'linear', 'showgrid': False, 'zeroline': False,
     },
+    'DTC': {
+        'title': 'DTC',
+        'titlefont': {'color': COLOR_DICT['DTC'], 'size': font_size},
+        'tickfont': {'color': COLOR_DICT['DTC'], 'size': font_size},
+        'side': 'top', 'anchor': 'free', 'position': .92, 'title_standoff': .1,
+        'dtick': 10, 'range': [0, 200], 'type': 'linear', 'zeroline': False
+    },
+    'DTS': {
+        'title': 'DTS',
+        'titlefont': {'color': COLOR_DICT['DTS'], 'size': font_size},
+        'tickfont': {'color': COLOR_DICT['DTS'], 'size': font_size},
+        'side': 'top', 'anchor': 'free', 'position': .96, 'title_standoff': .1,
+        'dtick': 10, 'range': [0, 200], 'type': 'linear', 'zeroline': False
+    }
 }
