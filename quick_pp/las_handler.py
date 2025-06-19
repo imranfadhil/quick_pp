@@ -7,7 +7,7 @@ import mmap
 import welly
 import welly.las
 
-from quick_pp.logger import logger
+from quick_pp import logger
 
 
 def read_las_files(las_files):

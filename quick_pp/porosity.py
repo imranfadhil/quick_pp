@@ -2,6 +2,7 @@ import numpy as np
 
 from quick_pp.config import Config
 from quick_pp.utils import length_a_b, line_intersection
+from quick_pp import logger
 
 
 def normalize_volumetric(phit, **volumetrics):
@@ -14,10 +15,11 @@ def normalize_volumetric(phit, **volumetrics):
     Returns:
         dict: Normalized volumetric fractions.
     """
+    logger.debug("Normalizing volumetrics with total porosity")
     # Normalize the volumetrics
     vmatrix = 1 - phit
     normalized_volumetrics = {key: value * vmatrix for key, value in volumetrics.items()}
-
+    logger.debug(f"Normalized volumetrics: {list(normalized_volumetrics.keys())}")
     return normalized_volumetrics
 
 
@@ -40,7 +42,10 @@ def effective_porosity(phit, phi_shale, vshale):
         Effective porosity [fraction].
 
     """
-    return phit - (vshale * phi_shale)
+    logger.debug(f"Calculating effective porosity with shale porosity: {phi_shale:.3f}")
+    phie = phit - (vshale * phi_shale)
+    logger.debug(f"Effective porosity range: {phie.min():.3f} - {phie.max():.3f}")
+    return phie
 
 
 def clay_porosity(rho_clw: np.ndarray, rho_dry_clay: float = 2.72, rho_fluid: float = 1.0):
@@ -54,7 +59,10 @@ def clay_porosity(rho_clw: np.ndarray, rho_dry_clay: float = 2.72, rho_fluid: fl
     Returns:
         float: Clay porosity.
     """
-    return (rho_dry_clay - rho_clw) / (rho_dry_clay - rho_fluid)
+    logger.debug(f"Calculating clay porosity with dry clay density: {rho_dry_clay} g/cm³")
+    phi_clay = (rho_dry_clay - rho_clw) / (rho_dry_clay - rho_fluid)
+    logger.debug(f"Clay porosity range: {phi_clay.min():.3f} - {phi_clay.max():.3f}")
+    return phi_clay
 
 
 def shale_porosity(vshale, phi_shale):
@@ -74,7 +82,10 @@ def shale_porosity(vshale, phi_shale):
         Shale porosity [fraction].
 
     """
-    return vshale * phi_shale
+    logger.debug(f"Calculating shale porosity with shale porosity: {phi_shale:.3f}")
+    phi_sh = vshale * phi_shale
+    logger.debug(f"Shale porosity range: {phi_sh.min():.3f} - {phi_sh.max():.3f}")
+    return phi_sh
 
 
 def rho_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
@@ -100,14 +111,19 @@ def rho_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
     Returns:
         float: Matrix density in g/cc.
     """
+    logger.debug("Calculating matrix density from mineral volumes")
     minerals_log_value = Config.MINERALS_LOG_VALUE
     rho_sand = rho_sand or minerals_log_value['RHOB_QUARTZ']
     rho_silt = rho_silt or minerals_log_value['RHOB_SILT']
-    rho_clay = rho_clay or minerals_log_value['RHOB_SH']
+    rho_clay = rho_clay or minerals_log_value['RHOB_SHALE']
     rho_calc = rho_calc or minerals_log_value['RHOB_CALCITE']
     rho_dolo = rho_dolo or minerals_log_value['RHOB_DOLOMITE']
-    return vsand * rho_sand + vsilt * rho_silt + vclay * rho_clay + \
+
+    rho_matrix = vsand * rho_sand + vsilt * rho_silt + vclay * rho_clay + \
         vcalc * rho_calc + vdolo * rho_dolo + vheavy * rho_heavy
+
+    logger.debug(f"Matrix density range: {rho_matrix.min():.3f} - {rho_matrix.max():.3f} g/cm³")
+    return rho_matrix
 
 
 def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
@@ -121,7 +137,10 @@ def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
     Returns:
         float: Density porosity [fraction]
     """
-    return (rho_matrix - rhob) / (rho_matrix - rho_fluid)
+    logger.debug("Calculating density porosity with fluid density")
+    phi_d = (rho_matrix - rhob) / (rho_matrix - rho_fluid)
+    logger.debug(f"Density porosity range: {phi_d.min():.3f} - {phi_d.max():.3f}")
+    return phi_d
 
 
 def dt_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
@@ -147,13 +166,18 @@ def dt_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
     Returns:
         float: Matrix sonic transit time in us/ft.
     """
+    logger.debug("Calculating matrix sonic transit time from mineral volumes")
     minerals_log_value = Config.MINERALS_LOG_VALUE
     dt_sand = dt_sand or minerals_log_value['DTC_QUARTZ']
     dt_silt = dt_silt or minerals_log_value['DTC_SILT']
-    dt_clay = dt_clay or minerals_log_value['DTC_SH']
+    dt_clay = dt_clay or minerals_log_value['DTC_SHALE']
     dt_calc = dt_calc or minerals_log_value['DTC_CALCITE']
     dt_dolo = dt_dolo or minerals_log_value['DTC_DOLOMITE']
-    return vsand * dt_sand + vsilt * dt_silt + vclay * dt_clay + vcalc * dt_calc + vdolo * dt_dolo + vheavy * dt_heavy
+
+    dt_matrix = (vsand * dt_sand + vsilt * dt_silt + vclay * dt_clay +
+                 vcalc * dt_calc + vdolo * dt_dolo + vheavy * dt_heavy)
+    logger.debug(f"Matrix sonic transit time range: {dt_matrix.min():.1f} - {dt_matrix.max():.1f} us/ft")
+    return dt_matrix
 
 
 def sonic_porosity_wyllie(dt, dt_matrix, dt_fluid):
@@ -175,7 +199,10 @@ def sonic_porosity_wyllie(dt, dt_matrix, dt_fluid):
         Sonic porosity [fraction].
 
     """
-    return (dt - dt_matrix) / (dt_fluid - dt_matrix)
+    logger.debug(f"Calculating Wyllie sonic porosity with fluid transit time: {dt_fluid} us/ft")
+    phi_s = (dt - dt_matrix) / (dt_fluid - dt_matrix)
+    logger.debug(f"Wyllie sonic porosity range: {phi_s.min():.3f} - {phi_s.max():.3f}")
+    return phi_s
 
 
 def sonic_porosity_hunt_raymer(dt, dt_matrix, dt_fluid):
@@ -197,8 +224,11 @@ def sonic_porosity_hunt_raymer(dt, dt_matrix, dt_fluid):
         Sonic porosity [fraction].
 
     """
+    logger.debug(f"Calculating Hunt-Raymer sonic porosity with fluid transit time: {dt_fluid} us/ft")
     c = (dt_matrix / (2 * dt_fluid)) - 1
-    return - c - (c**2 + (dt_matrix / dt) - 1)**0.5
+    phi_s = - c - (c**2 + (dt_matrix / dt) - 1)**0.5
+    logger.debug(f"Hunt-Raymer sonic porosity range: {phi_s.min():.3f} - {phi_s.max():.3f}")
+    return phi_s
 
 
 def neu_den_xplot_poro_pt(
@@ -222,6 +252,7 @@ def neu_den_xplot_poro_pt(
     Returns:
         float: Total porosity.
     """
+    logger.debug(f"Calculating neutron-density crossplot porosity with model: {model}")
     assert model in ['ssc', 'ss', 'carb'], "Please specify either 'ssc', 'ss' or 'carb' model."
 
     A = dry_min1_point
@@ -254,6 +285,7 @@ def neu_den_xplot_poro_pt(
         poro_line = length_a_b(D, A)
 
     phit = iso_poro_line / poro_line
+    logger.debug(f"Crossplot porosity: {phit:.3f}")
     return phit
 
 
@@ -278,7 +310,8 @@ def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc',
     Returns:
         float: Total porosity.
     """
-    assert model in ['ssc', 'ss', 'carb'], "Please specify either 'ssc', 'ss' or 'carb' model."
+    logger.debug(f"Calculating neutron-density crossplot porosity for {len(nphi)} points with model: {model}")
+    assert model in ['ssc', 'ss', 'carb'], ("Please specify either 'ssc', 'ss' or 'carb' model.")
 
     A = dry_min1_point
     B = dry_silt_point
@@ -293,6 +326,7 @@ def neu_den_xplot_poro(nphi, rhob, model: str = 'ssc',
         else:
             phit = np.append(phit, neu_den_xplot_poro_pt(point[0], point[1], 'ss', A, (0, 0), C, D))
 
+    logger.debug(f"Crossplot porosity range: {phit.min():.3f} - {phit.max():.3f}")
     return phit
 
 
@@ -312,17 +346,21 @@ def porosity_correction_averaging(nphi, rhob, rho_ma=2.65, method='weighted'):
     Returns:
         float: Corrected porosity.
     """
+    logger.debug(f"Correcting porosity using {method} averaging method")
     assert method in ['weighted', 'arithmetic', 'gaymard', 'gas'], "method must be either \
         'weighted', 'arithmetic', 'gaymard' or 'gas"
     dphi = density_porosity(rhob, rho_ma, 1.0)
     if method == 'weighted':
-        return (2 * dphi + nphi) / 3
+        phi_corr = (2 * dphi + nphi) / 3
     elif method == 'arithmetic':
-        return (dphi + nphi) / 2
+        phi_corr = (dphi + nphi) / 2
     elif method == 'gaymard':
-        return np.sqrt((dphi**2 + nphi**2) / 2)
+        phi_corr = np.sqrt((dphi**2 + nphi**2) / 2)
     elif method == 'gas':
-        return ((nphi**2 + dphi**2) / 2)**0.5
+        phi_corr = ((nphi**2 + dphi**2) / 2)**0.5
+
+    logger.debug(f"Corrected porosity range: {phi_corr.min():.3f} - {phi_corr.max():.3f}")
+    return phi_corr
 
 
 def porosity_trend(tvdss, unit='ft'):
@@ -334,8 +372,12 @@ def porosity_trend(tvdss, unit='ft'):
     Returns:
         float: Porosity trend.
     """
+    logger.debug(f"Calculating porosity trend with unit: {unit}")
     assert unit in ['ft', 'm'], 'Please specify either ft or m as unit.'
     if unit == 'ft':
-        return 41.73 * np.exp(-tvdss / 8197)
+        phi_trend = 41.73 * np.exp(-tvdss / 8197)
     else:
-        return 41.73 * np.exp(-tvdss / 2498)
+        phi_trend = 41.73 * np.exp(-tvdss / 2498)
+
+    logger.debug(f"Porosity trend range: {phi_trend.min():.3f} - {phi_trend.max():.3f}")
+    return phi_trend

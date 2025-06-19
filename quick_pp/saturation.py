@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
 from quick_pp.utils import min_max_line
+from quick_pp import logger
 
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(
@@ -30,7 +31,10 @@ def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
         float: Water saturation.
 
     """
-    return ((a / (phit ** m)) * (rw / rt)) ** (1 / n)
+    logger.debug(f"Calculating Archie saturation with a={a}, m={m}, n={n}")
+    sw = ((a / (phit ** m)) * (rw / rt)) ** (1 / n)
+    logger.debug(f"Archie saturation range: {sw.min():.3f} - {sw.max():.3f}")
+    return sw
 
 
 def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
@@ -51,22 +55,30 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
     Returns:
         float: Water saturation.
     """
+    logger.debug("Calculating Waxman-Smits saturation")
     # Estimate B at 25 degC if not provided
     if B is None:
         B = (1 - 0.83 * np.exp(-0.5 / rw)) * 3.83
+        logger.debug(f"Estimated B parameter: {B:.3f}")
 
     if Qv is None:
         Qv = 0.3
+        logger.debug(f"Using default Qv: {Qv}")
 
     # Initial guess
     swt = 1
     swt_i = 0
+    logger.debug("Starting iterative solution for Waxman-Smits")
     for i in range(50):
         fx = swt**n + rw * B * Qv * swt**(n - 1) - (phit**-m * rw / rt)  # Ausburn, 1985
         delta_sat = abs(swt - swt_i) / 2
         swt_i = swt
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
 
+        if i % 10 == 0:
+            logger.debug(f"Iteration {i}: max change = {delta_sat.max():.6f}")
+
+    logger.debug(f"Waxman-Smits saturation range: {swt.min():.3f} - {swt.max():.3f}")
     return swt
 
 
@@ -88,15 +100,21 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
         float: Water saturation.
 
     """
+    logger.debug("Calculating dual water saturation")
     # Initial guess
     swt = 1
     swt_i = 0
+    logger.debug("Starting iterative solution for dual water model")
     for i in range(50):
         fx = phit**m * swt**n / a * (1 / rw * (swb / swt) * (1 / rwb - 1 / rw)) - 1 / rt
         delta_sat = abs(swt - swt_i) / 2
         swt_i = swt
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
 
+        if i % 10 == 0:
+            logger.debug(f"Iteration {i}: max change = {delta_sat.max():.6f}")
+
+    logger.debug(f"Dual water saturation range: {swt.min():.3f} - {swt.max():.3f}")
     return swt
 
 
@@ -118,7 +136,10 @@ def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
         float: Water saturation.
 
     """
-    return ((1 / rt)**(1 / 2) / ((vsh**(1 - 0.5 * vsh) / rsh**(1 / 2)) + (phie**m / (a * rw))**(1 / 2)))**(2 / n)
+    logger.debug("Calculating Indonesian saturation")
+    sw = ((1 / rt)**(1 / 2) / ((vsh**(1 - 0.5 * vsh) / rsh**(1 / 2)) + (phie**m / (a * rw))**(1 / 2)))**(2 / n)
+    logger.debug(f"Indonesian saturation range: {sw.min():.3f} - {sw.max():.3f}")
+    return sw
 
 
 def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
@@ -137,13 +158,17 @@ def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
         float: Water saturation.
 
     """
+    logger.debug("Calculating Simandoux saturation")
     shale_factor = vsh / rsh
-    return (a * rw / (2 * phit**m)) * ((shale_factor**2 + (4 * phit**m / (a * rw * rt)))**(1 / 2) - shale_factor)
+    sw = (a * rw / (2 * phit**m)) * ((shale_factor**2 + (4 * phit**m / (a * rw * rt)))**(1 / 2) - shale_factor)
+    logger.debug(f"Simandoux saturation range: {sw.min():.3f} - {sw.max():.3f}")
+    return sw
 
 
 def modified_simandoux_saturation():
     """ TODO: Estimate water saturation based on modified Simandoux's model.
     """
+    logger.warning("Modified Simandoux saturation not implemented yet")
     pass
 
 
@@ -156,8 +181,11 @@ def estimate_temperature_gradient(tvd, unit='metric'):
     Returns:
         float: Formation temperature in degC.
     """
+    logger.debug(f"Estimating temperature gradient with unit: {unit}")
     assert unit in ['metric', 'imperial'], "Please choose from 'metric' or 'imperial' units."
-    return 32 + 25 * tvd / 1000 if unit == 'metric' else 90 + 15 * tvd / 1000
+    temp = 32 + 25 * tvd / 1000 if unit == 'metric' else 90 + 15 * tvd / 1000
+    logger.debug(f"Temperature range: {temp.min():.1f} - {temp.max():.1f} °C")
+    return temp
 
 
 def estimate_b_waxman_smits(T, rw):
@@ -170,7 +198,10 @@ def estimate_b_waxman_smits(T, rw):
     Returns:
         float: B parameter.
     """
-    return (-1.28 + 0.225 * T - 0.0004059 * T**2) / (1 + (0.045 * T - 0.27) * rw**1.23)
+    logger.debug("Estimating B parameter for Waxman-Smits (Juhasz 1981)")
+    B = (-1.28 + 0.225 * T - 0.0004059 * T**2) / (1 + (0.045 * T - 0.27) * rw**1.23)
+    logger.debug(f"B parameter range: {B.min():.3f} - {B.max():.3f}")
+    return B
 
 
 def estimate_rw_temperature_salinity(temperature_gradient, water_salinity):
@@ -183,7 +214,10 @@ def estimate_rw_temperature_salinity(temperature_gradient, water_salinity):
     Returns:
         float: Formation water resistivity.
     """
-    return (400000 / temperature_gradient / water_salinity)**.88
+    logger.debug("Estimating Rw from temperature and salinity")
+    rw = (400000 / temperature_gradient / water_salinity)**.88
+    logger.debug(f"Formation water resistivity range: {rw.min():.3f} - {rw.max():.3f} ohm.m")
+    return rw
 
 
 def estimate_rw_archie(phit, rt, a=1, m=2):
@@ -196,8 +230,10 @@ def estimate_rw_archie(phit, rt, a=1, m=2):
     Returns:
         float: Formation water resistivity.
     """
+    logger.debug("Estimating Rw using Archie's equation")
     rw = pd.Series(phit**m * rt / a)
     _, rw = min_max_line(rw, alpha=0.2)
+    logger.debug(f"Estimated Rw range: {rw.min():.3f} - {rw.max():.3f} ohm.m")
     return rw
 
 
@@ -211,6 +247,7 @@ def estimate_rw_waxman_smits(phit, rt, a=1, m=2, B=None, Qv=None):
     Returns:
         float: Formation water resistivity.
     """
+    logger.debug("Estimating Rw using Waxman-Smits equation")
     if B is None:
         B = 2
     if Qv is None:
@@ -218,6 +255,7 @@ def estimate_rw_waxman_smits(phit, rt, a=1, m=2, B=None, Qv=None):
 
     rw = pd.Series(1 / ((a / (phit**m * rt)) - (B * Qv)))
     _, rw = min_max_line(rw, alpha=0.2)
+    logger.debug(f"Estimated Rw range: {rw.min():.3f} - {rw.max():.3f} ohm.m")
     return rw
 
 
@@ -231,10 +269,13 @@ def estimate_rt_water_trend(rt, alpha=0.3):
     Returns:
         float: Formation water resistivity.
     """
+    logger.debug(f"Estimating RT water trend with alpha={alpha}")
     rt = np.log(rt)
     rt = np.where(rt <= 0, 1e-3, rt)
     min_rt, _ = min_max_line(rt, alpha)
-    return np.exp(min_rt)
+    rw_trend = np.exp(min_rt)
+    logger.debug(f"RT water trend range: {rw_trend.min():.3f} - {rw_trend.max():.3f} ohm.m")
+    return rw_trend
 
 
 def estimate_rw_from_shale_trend(rt, phit, m=1.3, alpha=0.1):
@@ -249,9 +290,12 @@ def estimate_rw_from_shale_trend(rt, phit, m=1.3, alpha=0.1):
     Returns:
         float: Formation water resistivity.
     """
+    logger.debug(f"Estimating Rw from shale trend with m={m}, alpha={alpha}")
     min_rt = estimate_rt_water_trend(rt, alpha=alpha)
     min_phit, _ = min_max_line(phit, alpha=alpha)
-    return min_phit ** m * np.exp(min_rt)
+    rw = min_phit ** m * np.exp(min_rt)
+    logger.debug(f"Shale trend Rw range: {rw.min():.3f} - {rw.max():.3f} ohm.m")
+    return rw
 
 
 def estimate_qv(vcld, phit, rho_clay=2.65, cec_clay=.062):
@@ -266,7 +310,10 @@ def estimate_qv(vcld, phit, rho_clay=2.65, cec_clay=.062):
     Returns:
         float: Qv in meq/cm3.
     """
-    return vcld * rho_clay * cec_clay / phit
+    logger.debug(f"Estimating Qv with clay density={rho_clay} g/cm³, CEC={cec_clay} meq/g")
+    qv = vcld * rho_clay * cec_clay / phit
+    logger.debug(f"Qv range: {qv.min():.3f} - {qv.max():.3f} meq/cm³")
+    return qv
 
 
 def estimate_qv_hill(vclb, phit, water_salinity=10000):
@@ -280,7 +327,10 @@ def estimate_qv_hill(vclb, phit, water_salinity=10000):
     Returns:
         float: Qv in meq/cc
     """
-    return (vclb / phit) / (0.084 * water_salinity**-0.5 + 0.22)
+    logger.debug(f"Estimating Qv using Hill method with water salinity={water_salinity}")
+    qv = (vclb / phit) / (0.084 * water_salinity**-0.5 + 0.22)
+    logger.debug(f"Hill Qv range: {qv.min():.3f} - {qv.max():.3f} meq/cc")
+    return qv
 
 
 def estimate_qv_lavers(phit, a=3.05e-4, b=3.49):
@@ -294,7 +344,10 @@ def estimate_qv_lavers(phit, a=3.05e-4, b=3.49):
     Returns:
         float: Qv in meq/cc.
     """
-    return a * phit**-b
+    logger.debug(f"Estimating Qv using Lavers method with a={a}, b={b}")
+    qv = a * phit**-b
+    logger.debug(f"Lavers Qv range: {qv.min():.3f} - {qv.max():.3f} meq/cc")
+    return qv
 
 
 def estimate_m_archie(rt, rw, phit):
@@ -308,7 +361,10 @@ def estimate_m_archie(rt, rw, phit):
     Returns:
         float: Apparent m parameter.
     """
-    return np.log(rw / rt) / np.log(phit)
+    logger.debug("Estimating apparent m using Archie's equation")
+    m = np.log(rw / rt) / np.log(phit)
+    logger.debug(f"Apparent m range: {m.min():.3f} - {m.max():.3f}")
+    return m
 
 
 def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
@@ -324,7 +380,9 @@ def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
     Returns:
         float: Apparent m parameter.
     """
+    logger.debug("Estimating apparent m using Indonesian model")
     m = (2 / np.log(phie)) * np.log(rw**0.5 * ((1 / rt)**0.5 - (vsh**(1 - 0.5 * vsh) / rsh**0.5)))
+    logger.debug(f"Indonesian apparent m range: {m.min():.3f} - {m.max():.3f}")
     return m
 
 
@@ -337,6 +395,7 @@ def swirr_xplot(swt, phit, c=.0125, label='', log_log=False, title=''):
         phit (float): Total porosity.
         c (float): Constant. Defaults to 0.125.
     """
+    logger.debug(f"Creating Swirr crossplot with constant c={c}")
     fig, ax = plt.subplots()
     ax.set_title(title)
     sc = ax.scatter(swt, phit, marker='.', label=label)
@@ -354,6 +413,7 @@ def swirr_xplot(swt, phit, c=.0125, label='', log_log=False, title=''):
         ax.set_xscale('log')
         ax.set_yscale('log')
     fig.tight_layout()
+    logger.debug("Swirr crossplot created")
 
 
 def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2, title='Pickett Plot'):
@@ -368,6 +428,7 @@ def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2, title='Pickett Plot'):
     Returns:
         matplotlib.pyplot.Figure: Picket plot.
     """
+    logger.debug(f"Creating Pickett plot with m={m}, min_rw={min_rw}")
     m = m if m < 0 else -m
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.set_title(title)
@@ -395,6 +456,7 @@ def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2, title='Pickett Plot'):
 
     ax.legend()
     fig.tight_layout()
+    logger.debug("Pickett plot created")
 
 
 def RI_plot(sw, rt, ro):
@@ -411,6 +473,7 @@ def RI_plot(sw, rt, ro):
     Returns:
         matplotlib.pyplot.Figure: RI plot.
     """
+    logger.debug("Creating resistivity index plot")
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.set_title('Resistivity Index Plot')
     ax.scatter(sw, rt / ro)
@@ -422,7 +485,7 @@ def RI_plot(sw, rt, ro):
     ax.set_ylabel('RT/Rw')
     ax.grid(True)
     fig.tight_layout()
-
+    logger.debug("Resistivity index plot created")
     return fig
 
 
@@ -440,6 +503,7 @@ def FF_plot(phit, ro, rw):
     Returns:
         matplotlib.pyplot.Figure: FF plot.
     """
+    logger.debug("Creating formation factor plot")
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.set_title('Formation Factor Plot')
     ax.scatter(phit, ro / rw)
@@ -451,5 +515,5 @@ def FF_plot(phit, ro, rw):
     ax.set_ylabel('Ro/Rw')
     ax.grid(True)
     fig.tight_layout()
-
+    logger.debug("Formation factor plot created")
     return fig

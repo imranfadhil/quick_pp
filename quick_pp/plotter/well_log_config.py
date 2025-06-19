@@ -33,7 +33,7 @@ COLOR_DICT = {
     'CPERM': '#FF0000',
     'CSAT': '#FF0000',
     'SHF': '#618F63',
-    'ROCK_FLAG_1': "#F3E3CA",
+    'ROCK_FLAG_0': "#F3E3CA",
     'DTC': '#FF0000',
     'DTS': '#0000FF',
 }
@@ -77,13 +77,13 @@ TRACE_DEFS = OrderedDict(
         hide_xaxis=False,
         style={'line_width': 1, 'line_color': COLOR_DICT['SWT']}
     ),
-    ROCK_FLAG_1=dict(
+    ROCK_FLAG_0=dict(
         track=7,
         secondary_y=False,
         hide_xaxis=False,
         style={
-            'line_width': 1, 'line_color': COLOR_DICT['ROCK_FLAG_1'], 'fill': 'tozerox',
-            'fillcolor': COLOR_DICT['ROCK_FLAG_1']
+            'line_width': 1, 'line_color': COLOR_DICT['ROCK_FLAG_0'], 'fill': 'tozerox',
+            'fillcolor': COLOR_DICT['ROCK_FLAG_0']
         }
     ),
     VCLD=dict(
@@ -309,7 +309,7 @@ XAXIS_DEFS = {
         'side': 'top', 'anchor': 'free', 'position': .88, 'title_standoff': .1,
         'dtick': 0.2, 'range': [0, 1], 'type': 'linear', 'zeroline': False
     },
-    'ROCK_FLAG_1': {
+    'ROCK_FLAG_0': {
         'title': '', 'tickfont_size': 1, 'side': 'top', 'anchor': 'free', 'position': .88,
         'title_standoff': .1, 'range': [0.1, 0.2], 'type': 'linear', 'showgrid': False, 'zeroline': False
     },

@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
 from quick_pp.utils import straight_line_func as func
+from quick_pp import logger
 
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(
@@ -25,8 +26,11 @@ def fit_pressure_gradient(tvdss, formation_pressure):
     Returns:
         tuple: Gradient and intercept of the best-fit line.
     """
+    logger.debug(f"Fitting pressure gradient with {len(tvdss)} data points")
     popt, _ = curve_fit(func, tvdss, formation_pressure)
-    return round(popt[0], 3), round(popt[1], 3)
+    gradient, intercept = round(popt[0], 3), round(popt[1], 3)
+    logger.debug(f"Fitted pressure gradient: {gradient} psi/ft, intercept: {intercept}")
+    return gradient, intercept
 
 
 def fluid_contact_plot(tvdss, formation_pressue, m, c, fluid_type: str = 'WATER',
@@ -41,6 +45,7 @@ def fluid_contact_plot(tvdss, formation_pressue, m, c, fluid_type: str = 'WATER'
     Returns:
         matplotlib.pyplot.Figure: Fluid contact plot.
     """
+    logger.debug(f"Creating fluid contact plot for {fluid_type} with gradient {m} psi/ft")
     color_dict = dict(
         OIL=('green', 'o'),
         GAS=('red', 'x'),
@@ -62,6 +67,7 @@ def fluid_contact_plot(tvdss, formation_pressue, m, c, fluid_type: str = 'WATER'
     plt.xlabel('Formation Pressure (psi)')
     plt.legend()
     plt.title('Fluid Contact Plot')
+    logger.debug("Fluid contact plot created successfully")
 
 
 def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
@@ -91,10 +97,14 @@ def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
     Returns:
         pd.DataFrame: Gas composition analysis.
     """
+    logger.debug("Performing gas composition analysis using Haworth 1985 method")
     total = c1 + c2 + c3 + ic4 + nc4 + ic5 + nc5
+
     # Gas Quality Ratio and flag
     gqr = total / (c1 + 2 * c2 + 3 * c3 + 4 * (ic4 + nc4) + 5 * (ic5 + nc5))
     gq_flag = np.where((gqr > 0.8) & (gqr < 1.2), 1, 0)
+    logger.debug(f"Gas quality ratio range: {np.min(gqr):.3f} - {np.max(gqr):.3f}")
+
     # Wetness ratio
     wh = (c2 + c3 + ic4 + nc4 + ic5 + nc5) / total * 100
     # Balance ration
@@ -117,7 +127,7 @@ def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
     hc_type = np.where((wh > 5) & (wh < 17.5) & (wh > bal) & (ch < 0.5), 4, hc_type)
     hc_type = np.where((wh > 17.5) & (wh < 40) & (wh > bal), 5, hc_type)
 
-    return pd.DataFrame({
+    result_df = pd.DataFrame({
         'Gas Quality Ratio': gqr,
         'GQ_FLAG': gq_flag,
         'Wetness Ratio': wh,
@@ -126,3 +136,6 @@ def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
         'Hydrocarbon Type': [hc_type_dict[x] for x in hc_type],
         'HC_TYPE_FLAG': hc_type
     })
+
+    logger.debug(f"Gas composition analysis completed. HC types found: {np.unique(hc_type)}")
+    return result_df

@@ -15,7 +15,7 @@ import importlib.util
 
 from quick_pp.modelling.config import MODELLING_CONFIG
 from quick_pp.modelling.utils import run_mlflow_server
-from quick_pp.logger import logger
+from quick_pp import logger
 
 # Check if config.py exists in the root directory and update MODELLING_CONFIG if found
 root_config_path = Path(os.getcwd(), "config.py")

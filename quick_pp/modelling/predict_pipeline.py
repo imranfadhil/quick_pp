@@ -10,7 +10,7 @@ import mlflow.tracking as mlflow_tracking
 
 from quick_pp.modelling.config import MODELLING_CONFIG, RAW_FEATURES
 from quick_pp.modelling.utils import get_latest_registered_models, unique_id, run_mlflow_server
-from quick_pp.logger import logger
+from quick_pp import logger
 
 
 def load_data(hash: str) -> pd.DataFrame:

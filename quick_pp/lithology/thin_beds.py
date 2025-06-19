@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from quick_pp.utils import length_a_b, line_intersection, angle_between_lines
 from quick_pp.porosity import neu_den_xplot_poro
 from quick_pp.config import Config
+from quick_pp import logger
 
 
 class ThinBeds:
@@ -19,6 +20,12 @@ class ThinBeds:
         self.dry_clay_point = dry_clay_point or Config.TS_ENDPOINTS["DRY_SHALE_POINT"]
         self.fluid_point = fluid_point or Config.TS_ENDPOINTS["FLUID_POINT"]
 
+        logger.debug(
+            f"ThinBeds model initialized with endpoints: sand_poro={self.dry_sand_poro}, "
+            f"shale_poro={self.dry_shale_poro}, sand_point={self.dry_sand_point}, "
+            f"clay_point={self.dry_clay_point}, fluid_point={self.fluid_point}"
+        )
+
     def estimate_litho_poro(self, nphi, rhob):
         """Estimate laminated and dispersed shale based on neutron density cross plot.
 
@@ -29,6 +36,8 @@ class ThinBeds:
         Returns:
             (float, float): vsh_lam, vsh_dis, phit_sand
         """
+        logger.info(f"Estimating thin bed lithology and porosity for {len(nphi)} data points")
+
         # Calculate porosity
         phit = neu_den_xplot_poro(
             nphi, rhob, model='ss',
@@ -53,6 +62,12 @@ class ThinBeds:
 
         vsh_lam, vsh_dis, vsand_dis, phit_sand = self.litho_poro_fraction(phit, vshale)
 
+        logger.debug(
+            f"Thin bed estimation completed - mean vsand: {vsand.mean():.3f}, "
+            f"vshale: {vshale.mean():.3f}, vsh_lam: {vsh_lam.mean():.3f}, "
+            f"vsh_dis: {vsh_dis.mean():.3f}"
+        )
+
         return vsand, vshale, phit, vsh_lam, vsh_dis, vsand_dis, phit_sand
 
     def litho_poro_fraction(self, phit, vshale):
@@ -65,6 +80,8 @@ class ThinBeds:
         Returns:
             (float, float): vsand, vcld
         """
+        logger.debug("Calculating lithology-porosity fractions for thin beds")
+
         # Initialize the endpoints
         A = (0, self.dry_sand_poro)
         B = (1, self.dry_shale_poro)
@@ -95,6 +112,7 @@ class ThinBeds:
             vsand_dis = np.append(vsand_dis, vsand_dis_pt)
             vsh_dis = np.append(vsh_dis, (1 - vsand_dis_pt))
 
+        logger.debug(f"Lithology-porosity fraction calculation completed for {len(vsh_lam)} points")
         return vsh_lam, vsh_dis, vsand_dis, phit_sand
 
     def resistivity_modelling(self, vsh_lam, rsand, rv_shale, rh_shale, theta):
@@ -110,6 +128,8 @@ class ThinBeds:
         Returns:
             float: Resistivity of the formation.
         """
+        logger.debug(f"Calculating resistivity using Hagiwara (1995) model with theta={theta}°")
+
         csd = 1 / rsand
         csh = 1 / rh_shale
         ch = csh * vsh_lam + csd * (1 - vsh_lam)
@@ -127,6 +147,7 @@ class ThinBeds:
         Returns:
             float: Apparent resistivity.
         """
+        logger.debug(f"Calculating apparent resistivity using Hagiwara (1997) with theta={theta}°")
         return rh / (math.cos(math.radians(theta))**2 + (rh / rv) * math.sin(math.radians(theta))**2)**.5
 
     def sand_resistivity_macro(self, rv, rh, rshale):
@@ -141,6 +162,7 @@ class ThinBeds:
         Returns:
             float: Resistivity of the sand.
         """
+        logger.debug("Calculating macroscopic sand resistivity")
         return (rv - rshale) / (rh - rshale)
 
     def sand_resistivity_micro(self, rv, rh, rv_shale, rh_shale):
@@ -155,6 +177,7 @@ class ThinBeds:
         Returns:
             float: Resistivity of the sand.
         """
+        logger.debug("Calculating microscopic sand resistivity")
         alpha = self.sand_resistivity_macro(rv, rh, rh_shale)
         beta = alpha / rh_shale
         return alpha / (1 + .5 * (beta - 1 - ((beta - 1)**2 + 4 * beta * (rh_shale / rv_shale - 1))**.5))
@@ -172,6 +195,8 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
     Returns:
         matplotlib.pyplot.Figure: Neutron porosity and bulk density cross plot.
     """
+    logger.info(f"Creating VSH-PHIT crossplot for {len(vsh)} data points")
+
     A = (0, dry_sand_poro)
     B = (1, dry_shale_poro)
     lower_vertex_phit = round(dry_sand_poro * dry_shale_poro, 4)
@@ -241,4 +266,5 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
     ax.grid(True, which='minor', linestyle=':', linewidth='0.4', color='gray')
     fig.tight_layout()
 
+    logger.debug("VSH-PHIT crossplot created successfully")
     return fig

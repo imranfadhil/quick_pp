@@ -3,6 +3,7 @@ import math
 
 from quick_pp.utils import min_max_line, length_a_b, line_intersection
 from quick_pp.config import Config
+from quick_pp import logger
 
 
 class SandSiltClay:
@@ -25,6 +26,12 @@ class SandSiltClay:
         self.wet_clay_point = wet_clay_point or Config.SSC_ENDPOINTS["WET_CLAY_POINT"]
         self.silt_line_angle = silt_line_angle or Config.SSC_ENDPOINTS["SILT_LINE_ANGLE"]
 
+        logger.debug(
+            f"SandSiltClay model initialized with endpoints: sand_point={self.dry_sand_point}, "
+            f"silt_point={self.dry_silt_point}, clay_point={self.dry_clay_point}, "
+            f"fluid_point={self.fluid_point}, silt_line_angle={self.silt_line_angle}"
+        )
+
     def estimate_lithology(self, nphi, rhob):
         """Estimate sand silt clay lithology volumetrics.
 
@@ -35,6 +42,8 @@ class SandSiltClay:
         Returns:
             (float, float, float, boolean): vsand, vsilt, vcld, vclb, cross-plot if xplot True else None
         """
+        logger.info(f"Estimating sand-silt-clay lithology for {len(nphi)} data points")
+
         # Initialize the endpoints
         B = self.dry_silt_point
         C = self.dry_clay_point
@@ -47,11 +56,13 @@ class SandSiltClay:
         wetclay_NPHI = np.nanmax(nphi_max_line)
         if not all(self.wet_clay_point):
             self.wet_clay_point = (wetclay_NPHI, wetclay_RHOB)
+            logger.debug(f"Updated wet clay point to: ({wetclay_NPHI:.3f}, {wetclay_RHOB:.3f})")
 
         # Redefine drysilt point
         drysilt_NPHI = 1 - 1.68 * (math.tan(float(self.silt_line_angle - 90) * math.pi / 180))
         if not all(B):
             B = self.dry_silt_point = (drysilt_NPHI, B[1])
+            logger.debug(f"Updated dry silt point to: ({drysilt_NPHI:.3f}, {B[1]:.3f})")
 
         # Define dryclay point
         if not all(C):
@@ -59,15 +70,15 @@ class SandSiltClay:
             m = (D[1] - self.wet_clay_point[1]) / (D[0] - self.wet_clay_point[0])
             dryclay_NPHI = ((C[1] - D[1]) / m) + D[0]
             C = self.dry_clay_point = (dryclay_NPHI, C[1])
-
-            # # Calculate dryclay point, the intersection between rock line and clay line
-            # drysilt_RHOB = B[1]  # if B[1] > np.nanmax(rhob) else np.nanmax(rhob)
-            # updated_drysilt_pt = (B[0], drysilt_RHOB)
-            # A = self.dry_sand_point
-            # C = self.dry_clay_point = line_intersection((A, updated_drysilt_pt), (D, self.wet_clay_point))
+            logger.debug(f"Updated dry clay point to: ({dryclay_NPHI:.3f}, {C[1]:.3f})")
 
         # Calculate lithology fraction
         vsand, vsilt, vcld = self.lithology_fraction_kuttan_modified(nphi, rhob)
+
+        logger.debug(
+            f"Sand-silt-clay estimation completed - mean vsand: {vsand.mean():.3f}, "
+            f"vsilt: {vsilt.mean():.3f}, vcld: {vcld.mean():.3f}"
+        )
 
         return vsand, vsilt, vcld, (nphi_max_line, rhob_max_line)
 
@@ -81,6 +92,8 @@ class SandSiltClay:
         Returns:
             (float, float, float): vsand, vsilt, vcld
         """
+        logger.debug("Calculating lithology fractions using modified Kuttan model")
+
         A = self.dry_sand_point
         B = self.dry_silt_point
         C = self.dry_clay_point
@@ -102,6 +115,7 @@ class SandSiltClay:
             vsilt = np.append(vsilt, vsilt_pt)
             vcld = np.append(vcld, vcld_pt)
 
+        logger.debug(f"Kuttan modified calculation completed for {len(vsand)} points")
         return vsand, vsilt, vcld
 
     def lithology_chart(self, proj_len, rock_len, res_ratio):

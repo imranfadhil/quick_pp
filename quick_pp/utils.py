@@ -7,7 +7,7 @@ import ruptures.detection as rpt
 import scipy.stats as stats
 from scipy.signal import find_peaks
 
-from quick_pp.logger import logger
+from quick_pp import logger
 
 
 def length_a_b(A: tuple, B: tuple):
@@ -23,7 +23,7 @@ def length_a_b(A: tuple, B: tuple):
     return math.sqrt(sum([(a - b) ** 2 for a, b in zip(A, B)]))
 
 
-def line_intersection(line1, line2):
+def line_intersection(line1: tuple, line2: tuple):
     """Calculates the intersection of two lines.
 
     Args:
@@ -51,7 +51,7 @@ def line_intersection(line1, line2):
     return x, y
 
 
-def angle_between_lines(line1, line2):
+def angle_between_lines(line1: tuple, line2: tuple):
     """Calculates the convex angle between two lines in degrees.
 
     Args:
