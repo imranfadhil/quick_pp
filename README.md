@@ -34,11 +34,10 @@ To install, use the following command:
 To use qpp_assistant, you would need to;
 1. Run `git clone https://github.com/imranfadhil/quick_pp.git`
 2. Run `pip install -r requirements.txt`
-3. Install Ollama
-4. Run `ollama pull qwen3` in the terminal
-5. Run `docker-compose up -d`
-6. Run `python init_db.py`
-7. Specify the required credentials in .env (based on `.env copy` file)
+3. Specify the required credentials in .env (based on `.env copy` file)
+4. Run `docker-compose up -d`
+5. Go to Langflow at http://localhost:7860 and build your flow.
+6. Run `python main.py app` and go to the qpp Assistant at http://localhost:8888/qpp_assistant to test your flow.
 
 ## CLI
 

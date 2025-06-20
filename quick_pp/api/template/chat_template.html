@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>qpp Assistant</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .controls {
+            padding: 20px;
+            border-bottom: 1px solid #eee;
+            background: #eeeeee;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            background: white;
+        }
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+        }
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        .btn:hover {
+            background: #5a6fd8;
+        }
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .loading {
+            color: #666;
+            font-style: italic;
+        }
+        .error {
+            color: #e74c3c;
+            background: #fdf2f2;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        .chat-container {
+            height: calc(100vh - 300px);
+            position: relative;
+            background-color: #eeeeee;
+        }
+        .chat-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #666;
+            font-size: 16px;
+            background: #eeeeee;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div style="text-align: center; margin-bottom: 15px;">
+                <img src="/static/logo.png" alt="qpp Logo" style="max-width: 150px; height: auto; filter: brightness(0) invert(1);">
+            </div>
+            <h1>qpp Assistant</h1>
+            <p>Select a project and flow to start chatting</p>
+        </div>
+        
+        <div class="controls">
+            <div class="form-group">
+                <label for="projectSelect">Project:</label>
+                <select id="projectSelect" onchange="loadFlows()">
+                    <option value="">Loading projects...</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="flowSelect">Flow:</label>
+                <select id="flowSelect" onchange="initializeChat()">
+                    <option value="">Select a project first</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <button class="btn" onclick="refreshData()">Refresh Data</button>
+                <button class="btn" onclick="resetSelection()">Reset Selection</button>
+            </div>
+            
+            <div id="errorMessage" class="error hidden"></div>
+        </div>
+        
+        <div class="chat-container">
+            <div id="chatPlaceholder" class="chat-placeholder" style="text-align: center;">
+                Please select a project and flow to start chatting. <br>
+                The project and flow need to be created and saved in Langflow first.
+            </div>
+            <div id="chatInterface" class="hidden"></div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_BASE = '{{ api_base_url }}';
+        const LANGFLOW_HOST = '{{ langflow_host }}';
+        
+        // State
+        let projects = [];
+        let flows = [];
+        let currentFlowId = null;
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadProjects();
+        });
+        
+        async function loadProjects() {
+            try {
+                showLoading('projectSelect', 'Loading projects...');
+                const response = await fetch(`${API_BASE}/langflow/get_projects_id`);
+                console.log(response);
+                if (!response.ok) throw new Error('Failed to fetch projects');
+                
+                projects = await response.json();
+                if (!Array.isArray(projects)) {
+                    throw new Error('Invalid response format - expected array of projects');
+                }
+                projects = projects.map(project => ({
+                    id: project.id,
+                    name: project.name
+                }));
+                populateProjectSelect(projects);
+                hideError();
+            } catch (error) {
+                console.error('Error loading projects:', error);
+                showError('Failed to load projects: ' + error.message);
+                showLoading('projectSelect', 'Error loading projects');
+            }
+        }
+        
+        async function loadFlows() {
+            const projectSelect = document.getElementById('projectSelect');
+            const flowSelect = document.getElementById('flowSelect');
+            
+            if (!projectSelect.value) {
+                flowSelect.innerHTML = '<option value="">Select a project first</option>';
+                return;
+            }
+            
+            try {
+                showLoading('flowSelect', 'Loading flows...');
+                const response = await fetch(`${API_BASE}/langflow/get_flows_id`);
+                if (!response.ok) throw new Error('Failed to fetch flows');
+                
+                flows = await response.json();
+                populateFlowSelect(flows);
+                hideError();
+            } catch (error) {
+                console.error('Error loading flows:', error);
+                showError('Failed to load flows: ' + error.message);
+                showLoading('flowSelect', 'Error loading flows');
+            }
+        }
+        
+        function populateProjectSelect(projects) {
+            const select = document.getElementById('projectSelect');
+            select.innerHTML = '<option value="">Select a project</option>';
+            
+            if (Array.isArray(projects)) {
+                projects.forEach(project => {
+                    const option = document.createElement('option');
+                    option.value = project.id || project.project_id;
+                    option.textContent = project.name || project.project_name || 'Unnamed Project';
+                    select.appendChild(option);
+                });
+            }
+        }
+        
+        function populateFlowSelect(flows) {
+            const select = document.getElementById('flowSelect');
+            select.innerHTML = '<option value="">Select a flow</option>';
+            
+            if (Array.isArray(flows)) {
+                flows.forEach(flow => {
+                    const option = document.createElement('option');
+                    option.value = flow.id || flow.flow_id;
+                    option.textContent = flow.name || flow.flow_name || 'Unnamed Flow';
+                    select.appendChild(option);
+                });
+            }
+        }
+        
+        function initializeChat() {
+            const flowSelect = document.getElementById('flowSelect');
+            const chatPlaceholder = document.getElementById('chatPlaceholder');
+            const chatInterface = document.getElementById('chatInterface');
+            
+            if (!flowSelect.value) {
+                chatPlaceholder.classList.remove('hidden');
+                chatInterface.classList.add('hidden');
+                return;
+            }
+            
+            currentFlowId = flowSelect.value;
+            currentFlowName = flowSelect.options[flowSelect.selectedIndex].text;
+            
+            // Hide placeholder and show chat interface
+            chatPlaceholder.classList.add('hidden');
+            chatInterface.classList.remove('hidden');
+            
+            // Load Langflow chat widget
+            loadLangflowChat(currentFlowId, currentFlowName);
+        }
+        
+        function loadLangflowChat(flowId, flowName) {
+            const chatInterface = document.getElementById('chatInterface');
+            
+            // Clear previous chat interface
+            chatInterface.innerHTML = '';
+            
+            // Create script element for Langflow chat
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/gh/logspace-ai/langflow-embedded-chat@v1.0.7/dist/build/static/js/bundle.min.js';
+            
+            // Create langflow-chat element
+            const chatElement = document.createElement('langflow-chat');
+            chatElement.setAttribute('window_title', flowName);
+            chatElement.setAttribute('flow_id', flowId);
+            chatElement.setAttribute('host_url', LANGFLOW_HOST);
+            
+            // Append elements
+            chatInterface.appendChild(script);
+            chatInterface.appendChild(chatElement);
+        }
+        
+        function refreshData() {
+            loadProjects();
+            document.getElementById('flowSelect').innerHTML = '<option value="">Select a project first</option>';
+            resetChat();
+        }
+        
+        function resetSelection() {
+            document.getElementById('projectSelect').value = '';
+            document.getElementById('flowSelect').innerHTML = '<option value="">Select a project first</option>';
+            resetChat();
+        }
+        
+        function resetChat() {
+            const chatPlaceholder = document.getElementById('chatPlaceholder');
+            const chatInterface = document.getElementById('chatInterface');
+            
+            chatPlaceholder.classList.remove('hidden');
+            chatInterface.classList.add('hidden');
+            chatInterface.innerHTML = '';
+            
+            currentFlowId = null;
+        }
+        
+        function showLoading(selectId, message) {
+            const select = document.getElementById(selectId);
+            select.innerHTML = `<option value="">${message}</option>`;
+        }
+        
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.classList.remove('hidden');
+        }
+        
+        function hideError() {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
