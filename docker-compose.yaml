@@ -17,8 +17,14 @@ services:
       dockerfile: Dockerfile-psycopg
     depends_on:
       - postgres
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-root}:${POSTGRES_PASSWORD:-root}@postgres:5432/${POSTGRES_DB:-postgres}
+      - POSTGRES_USER=${POSTGRES_USER:-root}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-root}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
     volumes:
       - ./init_db.py:/code/init_db.py
+      - ./.env:/code/.env
 
   langflow:
     image: langflowai/langflow:latest # or another version tag on https://hub.docker.com/r/langflowai/langflow
