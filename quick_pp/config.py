@@ -79,11 +79,11 @@ class Config(object):
         'PEF_SILT': 2.0,
 
         # Kaolinite
-        'GR_SH': 130.0,
-        'NPHI_SH': 0.34,
-        'RHOB_SH': 2.41,
-        'DTC_SH': 143.0,
-        'PEF_SH': 1.8,
+        'GR_SHALE': 130.0,
+        'NPHI_SHALE': 0.34,
+        'RHOB_SHALE': 2.41,
+        'DTC_SHALE': 143.0,
+        'PEF_SHALE': 1.8,
 
         'GR_MUD': 0.0,
         'NPHI_MUD': 1.0,

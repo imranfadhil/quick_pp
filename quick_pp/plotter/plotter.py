@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 from quick_pp.utils import line_intersection
-from quick_pp.logger import logger
+from quick_pp import logger
 import quick_pp.plotter.well_log as plotter_wells
 plotly_log = plotter_wells.plotly_log
 
@@ -232,7 +232,7 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
 def neutron_density_xplot(nphi, rhob,
                           dry_min1_point: tuple,
                           dry_clay_point: tuple,
-                          fluid_point: tuple,
+                          fluid_point: tuple = (1.0, 1.0),
                           wet_clay_point: tuple = (),
                           dry_silt_point: tuple = (), **kwargs):
     logger.info("Generating neutron-density crossplot.")

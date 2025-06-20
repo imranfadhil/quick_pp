@@ -4,7 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from quick_pp.utils import power_law_func, inv_power_law_func
-from quick_pp.logger import logger
+from quick_pp import logger
 
 
 plt.style.use('seaborn-v0_8-paper')

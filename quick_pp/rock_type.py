@@ -11,7 +11,7 @@ from sklearn.metrics import (classification_report, auc, ConfusionMatrixDisplay,
 
 from quick_pp.utils import min_max_line
 from quick_pp.lithology import shale_volume_steiber
-from quick_pp.logger import logger
+from quick_pp import logger
 
 plt.style.use('seaborn-v0_8-paper')
 plt.rcParams.update(

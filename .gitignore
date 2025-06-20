@@ -117,3 +117,4 @@ mlruns/*
 data/*
 .chainlit*
 chainlit*
+.files/*

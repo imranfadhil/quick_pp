@@ -1,3 +1,6 @@
+from quick_pp import logger
+
+
 def choo_permeability(vclw, vsilt, phit, m=2, B=None, A=20e7, C=3):
     """Estimate permeability using Choo's equation.
 
@@ -12,8 +15,11 @@ def choo_permeability(vclw, vsilt, phit, m=2, B=None, A=20e7, C=3):
     Returns:
         float: Choo's permeability in mD.
     """
+    logger.debug(f"Calculating Choo permeability with A={A}, m={m}, C={C}")
     B = B or m * ((2 / C) + 1) + 2
-    return A * phit**B / 10**(6 * vclw + 3 * vsilt)
+    permeability = A * phit**B / 10**(6 * vclw + 3 * vsilt)
+    logger.debug(f"Choo permeability range: {permeability.min():.3e} - {permeability.max():.3e} mD")
+    return permeability
 
 
 def kozeny_carman_permeability(phit, S=0.01):
@@ -26,7 +32,10 @@ def kozeny_carman_permeability(phit, S=0.01):
     Returns:
         float: Permeability in mD.
     """
-    return phit**3 / (5 * S**2 * (1 - phit)**2)
+    logger.debug(f"Calculating Kozeny-Carman permeability with S={S}")
+    permeability = phit**3 / (5 * S**2 * (1 - phit)**2)
+    logger.debug(f"Kozeny-Carman permeability range: {permeability.min():.3e} - {permeability.max():.3e} mD")
+    return permeability
 
 
 def timur_permeability(phit, Swirr):
@@ -40,7 +49,10 @@ def timur_permeability(phit, Swirr):
     Returns:
         float: Permeability in mD.
     """
-    return 0.136 * phit**4.4 / Swirr**2
+    logger.debug("Calculating Timur permeability (1968)")
+    permeability = 0.136 * phit**4.4 / Swirr**2
+    logger.debug(f"Timur permeability range: {permeability.min():.3e} - {permeability.max():.3e} mD")
+    return permeability
 
 
 def coates_permeability(phie, Swirr, a=1):
@@ -54,7 +66,10 @@ def coates_permeability(phie, Swirr, a=1):
     Returns:
         float: Coates permeability in mD.
     """
-    return (phie**2 / a * (1 - Swirr) / Swirr)**2
+    logger.debug(f"Calculating Coates permeability with constant a={a}")
+    permeability = (phie**2 / a * (1 - Swirr) / Swirr)**2
+    logger.debug(f"Coates permeability range: {permeability.min():.3e} - {permeability.max():.3e} mD")
+    return permeability
 
 
 def tixier_permeability(phit, Swirr):
@@ -67,7 +82,10 @@ def tixier_permeability(phit, Swirr):
     Returns:
         float: Permeability in mD
     """
-    return 62.5 * phit**6 / Swirr**2
+    logger.debug("Calculating Tixier permeability (1949)")
+    permeability = 62.5 * phit**6 / Swirr**2
+    logger.debug(f"Tixier permeability range: {permeability.min():.3e} - {permeability.max():.3e} mD")
+    return permeability
 
 
 def morris_biggs_permeability(phit, C, Swirr):
@@ -82,7 +100,10 @@ def morris_biggs_permeability(phit, C, Swirr):
     Returns:
         float: Permeability in mD.
     """
-    return (C * phit**3 / Swirr)**2
+    logger.debug(f"Calculating Morris-Biggs permeability with C={C}")
+    permeability = (C * phit**3 / Swirr)**2
+    logger.debug(f"Morris-Biggs permeability range: {permeability.min():.3e} - {permeability.max():.3e} mD")
+    return permeability
 
 
 def morris_biggs_modified_permeability(phit, phie, Vbwi):
@@ -96,7 +117,10 @@ def morris_biggs_modified_permeability(phit, phie, Vbwi):
     Returns:
         float: Permeability in mD.
     """
-    return (1e2 * phie**2 * (phit - Vbwi) / Vbwi)**2
+    logger.debug("Calculating modified Morris-Biggs permeability")
+    permeability = (1e2 * phie**2 * (phit - Vbwi) / Vbwi)**2
+    logger.debug(f"Modified Morris-Biggs permeability range: {permeability.min():.3e} - {permeability.max():.3e} mD")
+    return permeability
 
 
 def estimate_krw(swt, swirr):
@@ -109,7 +133,10 @@ def estimate_krw(swt, swirr):
     Returns:
         float: Water relative permeability.
     """
-    return ((swt - swirr) / (1 - swirr))**3
+    logger.debug("Calculating water relative permeability (Park Jones 1945)")
+    krw = ((swt - swirr) / (1 - swirr))**3
+    logger.debug(f"Water relative permeability range: {krw.min():.3f} - {krw.max():.3f}")
+    return krw
 
 
 def estimate_kro(swt, swirr):
@@ -121,7 +148,10 @@ def estimate_kro(swt, swirr):
     Returns:
         float: Oil relative permeability.
     """
-    return ((0.9 - swt) / (0.9 - swirr))**2
+    logger.debug("Calculating oil relative permeability (Park Jones 1945)")
+    kro = ((0.9 - swt) / (0.9 - swirr))**2
+    logger.debug(f"Oil relative permeability range: {kro.min():.3f} - {kro.max():.3f}")
+    return kro
 
 
 def estimate_wor(krw, kro, A=2):
@@ -137,7 +167,10 @@ def estimate_wor(krw, kro, A=2):
     Returns:
         float: Water Oil Ratio.
     """
-    return (krw / kro) * A
+    logger.debug(f"Calculating Water Oil Ratio with constant A={A}")
+    wor = (krw / kro) * A
+    logger.debug(f"Water Oil Ratio range: {wor.min():.3f} - {wor.max():.3f}")
+    return wor
 
 
 def estimate_wc(wor):
@@ -148,4 +181,7 @@ def estimate_wc(wor):
     Returns:
         float: Water Cut.
     """
-    return wor / (1 + wor)
+    logger.debug("Calculating Water Cut from Water Oil Ratio")
+    wc = wor / (1 + wor)
+    logger.debug(f"Water Cut range: {wc.min():.3f} - {wc.max():.3f}")
+    return wc

@@ -9,7 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from quick_pp.modelling.config import MLFLOW_CONFIG
-from quick_pp.logger import logger
+from quick_pp import logger
 
 
 def unique_id(df: pd.DataFrame) -> str:

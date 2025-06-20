@@ -90,15 +90,19 @@ def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
     # One-hot encode ROCK_FLAG if present
     if 'ROCK_FLAG' in df.columns:
         # Add ROCK_FLAG colors
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(0).astype(int)
         no_of_rock_flags = df['ROCK_FLAG'].nunique() + 1
         df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(no_of_rock_flags)
         for i in df['ROCK_FLAG'].unique():
+            print(f"i: {i}")
             lightness = 100 - (int(i) / no_of_rock_flags * 100)
             COLOR_DICT[f'ROCK_FLAG_{i}'] = f'hsl(30, 70%, {lightness}%)'
 
-        df['ROCK_FLAG'] = df['ROCK_FLAG'].astype(int).astype('category')
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].astype('category')
         df = df.drop(columns=[c for c in df.columns if 'ROCK_FLAG_' in c])
         df = pd.get_dummies(df, columns=['ROCK_FLAG'], prefix='ROCK_FLAG', dtype=int)
+        if 'ROCK_FLAG_0' not in df.columns:
+            df['ROCK_FLAG_0'] = 0
 
     fig = make_subplots(
         rows=1, cols=no_of_track, shared_yaxes=True, horizontal_spacing=.02,
@@ -115,11 +119,11 @@ def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
                 row=1, col=c, secondary_y=True)
 
     # --- ROCK_FLAG_X traces (special style, always on track 7, secondary_y=False) ---
-    if 'ROCK_FLAG_1' in trace_defs.keys():
+    if 'ROCK_FLAG_0' in trace_defs.keys():
         rock_flag_columns = [col for col in df.columns if col.startswith('ROCK_FLAG_')]
-        # Remove 'ROCK_FLAG_1' if it already exists as a trace in fig.data
-        rock_flag_columns.remove('ROCK_FLAG_1') if any(
-            trace.name == 'ROCK_FLAG_1' for trace in fig.data) and 'ROCK_FLAG_1' in rock_flag_columns else None
+        # Remove 'ROCK_FLAG_0' if it already exists as a trace in fig.data
+        rock_flag_columns.remove('ROCK_FLAG_0') if any(
+            trace.name == 'ROCK_FLAG_0' for trace in fig.data) and 'ROCK_FLAG_0' in rock_flag_columns else None
         for feature in rock_flag_columns:
             fig.add_trace(
                 go.Scatter(x=df[feature], y=index, line_color=COLOR_DICT[feature], name=feature,

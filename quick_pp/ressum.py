@@ -7,6 +7,9 @@ import matplotlib.pyplot as plt
 import ptitprince as pt
 from SALib.analyze.sobol import analyze
 from SALib.sample.sobol import sample
+from tqdm import tqdm
+
+from quick_pp import logger
 
 
 def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
@@ -25,11 +28,19 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
     Returns:
         pd.Dataframe: Reservoir summary in tabular format.
     """
+    logger.debug(f"Starting reservoir summary calculation with {len(depth)} data points, uom={uom}")
+
     step = 0.1524 if uom == 'm' else 0.5
     df = pd.DataFrame({'depth': depth, 'vshale': vshale, 'phit': phit, 'swt': swt, 'perm': perm, 'zones': zones})
     df['bvo'] = df['phit'] * (1 - df['swt'])
     df['rock_flag'], df['reservoir_flag'], df['pay_flag'] = flag_interval(df['vshale'], df['phit'], df['swt'], cutoffs)
     df['all_flag'] = 1
+
+    logger.debug(
+        f"Data flags calculated - Rock: {df['rock_flag'].sum()}, "
+        f"Reservoir: {df['reservoir_flag'].sum()}, Pay: {df['pay_flag'].sum()}"
+    )
+
     ressum_df = pd.DataFrame()
     for flag in ['all', 'rock', 'reservoir', 'pay']:
         temp_df = pd.DataFrame()
@@ -77,6 +88,7 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
     cols = ['zones', 'flag', 'top', 'bottom', 'gross', 'net', 'ntg',
             'av_vshale', 'av_phit', 'av_swt', 'av_bvo', 'perm_am', 'perm_gm', 'perm_hm']
 
+    logger.debug(f"Reservoir summary calculation completed with {len(ressum_df)} summary rows")
     return ressum_df[cols]
 
 
@@ -92,7 +104,15 @@ def flag_interval(vshale, phit, swt, cutoffs: dict):
     Returns:
         float: Flagged interval.
     """
-    assert len(cutoffs) == 3, 'cutoffs must be 3 key-value pairs: {VSHALE: x, PHIT: y, SWT: z}.'
+    if len(cutoffs) != 3:
+        logger.error(f"Invalid cutoffs format: expected 3 key-value pairs, got {len(cutoffs)}")
+        raise AssertionError('cutoffs must be 3 key-value pairs: {VSHALE: x, PHIT: y, SWT: z}.')
+
+    logger.debug(
+        f"Flagging intervals with cutoffs: VSHALE={cutoffs.get('VSHALE')}, "
+        f"PHIT={cutoffs.get('PHIT')}, SWT={cutoffs.get('SWT')}"
+    )
+
     rock_flag = np.where(vshale < cutoffs['VSHALE'], 1, 0)
     reservoir_flag = np.where(rock_flag == 1, np.where(phit > cutoffs['PHIT'], 1, 0), 0)
     pay_flag = np.where(reservoir_flag == 1, np.where(swt < cutoffs['SWT'], 1, 0), 0)
@@ -129,6 +149,8 @@ def volumetric_method(
     Returns:
         float: Estimated volume in MM bbl.
     """
+    logger.debug(f"Starting volumetric method calculation with random_state={random_state}")
+
     random.seed(random_state)
     a_min_transformed = (area_bound[0] - area_bound[2]) / area_bound[3]
     a_max_transformed = (area_bound[1] - area_bound[2]) / area_bound[3]
@@ -158,6 +180,11 @@ def volumetric_method(
                            loc=recovery_factor_bound[2], scale=recovery_factor_bound[3], random_state=random_state)
     else:
         rf = 1.0
+
+    logger.debug(
+        f"Volumetric parameters generated - Area: {a:.2f}, Thickness: {h:.2f}, "
+        f"Porosity: {poro:.3f}, Sw: {sw:.3f}, Bo: {bo:.3f}, RF: {rf:.3f}"
+    )
     return a, h, poro, sw, bo, rf
 
 
@@ -185,13 +212,16 @@ def mc_volumetric_method(
         n_try (int, optional): Number of trials. Defaults to 10000.
         percentile (list, optional): Percentiles to calculate. Defaults to [10, 50, 90].
     """
+    logger.info(f"Starting Monte Carlo simulation with {n_try} trials")
+
     area = np.empty(0)
     thickness = np.empty(0)
     porosity = np.empty(0)
     water_saturation = np.empty(0)
     volume_factor = np.empty(0)
     volumes = np.empty(0)
-    for i in range(n_try):
+
+    for i in tqdm(range(n_try), desc="Monte Carlo simulation", unit="trials"):
         a, h, poro, sw, bo, _ = volumetric_method(
             area_bound=area_bound,
             thickness_bound=thickness_bound,
@@ -206,6 +236,11 @@ def mc_volumetric_method(
         volume_factor = np.append(volume_factor, bo)
         result = (43560 * 0.1781) * a * h * poro * (1 - sw) / bo
         volumes = np.append(volumes, result * 1e-6)
+
+    logger.info(
+        f"Monte Carlo simulation completed. Volume statistics - "
+        f"Mean: {np.mean(volumes):.2f} MM bbl, Std: {np.std(volumes):.2f} MM bbl"
+    )
 
     # Plot tornado chart
     data = pd.DataFrame({
@@ -281,6 +316,8 @@ def sensitivity_analysis(
         volume_factor_bound (tuple): (min, max) unitless.
             - Uniform distribution parameters for volume factor.
     """
+    logger.info("Starting sensitivity analysis for volumetric method")
+
     # Define the model inputs
     problem = {
         'num_vars': 5,
@@ -293,6 +330,8 @@ def sensitivity_analysis(
             [volume_factor_bound[0], volume_factor_bound[1]]
         ]
     }
+
+    logger.debug(f"Problem defined with {problem['num_vars']} variables and {2**10} samples")
 
     # Generate samples
     param_values = sample(problem, 2**10)
@@ -314,6 +353,11 @@ def sensitivity_analysis(
     sorted_S1 = S1[sorted_indices]
     sorted_S1_conf = S1_conf[sorted_indices]
     sorted_names = [names[i] for i in sorted_indices]
+
+    logger.info(
+        f"Sensitivity analysis completed. Top parameter: {sorted_names[-1]} "
+        f"(S1={sorted_S1[-1]:.3f})"
+    )
 
     # Plot the tornado chart
     plt.figure(figsize=(10, 6))

@@ -17,7 +17,7 @@ from importlib import resources
 
 from quick_pp.api.fastapi_mlflow.applications import build_app
 from quick_pp.modelling.utils import get_model_info, run_mlflow_server
-from quick_pp.logger import logger
+from quick_pp import logger
 
 
 app = FastAPI(

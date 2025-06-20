@@ -6,7 +6,7 @@ from quick_pp.utils import length_a_b, line_intersection
 from quick_pp.rock_type import estimate_vsh_gr
 from quick_pp.config import Config
 from quick_pp.ressum import calc_reservoir_summary, flag_interval
-from quick_pp.logger import logger
+from quick_pp import logger
 
 plt.style.use('seaborn-v0_8-paper')
 
@@ -21,17 +21,15 @@ def mask_outside_threshold(data, fill=False):
         (pd.DataFrame): masked dataframe
     """
     data = data.copy()
-    for model_, vars_ in Config.VARS.items():
-        for var_ in vars_:
-            var = var_['var']
-            if (('min' in var_.keys()) or ('max' in var_.keys())):
-                if var in data.columns:
-                    if not fill:
-                        data.loc[:, var] = np.where(data[var] < var_['min'], np.nan, data[var])
-                        data.loc[:, var] = np.where(data[var] > var_['max'], np.nan, data[var])
-                    else:
-                        data.loc[:, var] = np.where(data[var] < var_['min'], var_['min'], data[var])
-                        data.loc[:, var] = np.where(data[var] > var_['max'], var_['max'], data[var])
+    for var, var_dict in Config.VARS.items():
+        if (('min' in var_dict.keys()) or ('max' in var_dict.keys())):
+            if var in data.columns:
+                if not fill:
+                    data.loc[:, var] = np.where(data[var] < var_dict['min'], np.nan, data[var])
+                    data.loc[:, var] = np.where(data[var] > var_dict['max'], np.nan, data[var])
+                else:
+                    data.loc[:, var] = np.where(data[var] < var_dict['min'], var_dict['min'], data[var])
+                    data.loc[:, var] = np.where(data[var] > var_dict['max'], var_dict['max'], data[var])
     return data
 
 
