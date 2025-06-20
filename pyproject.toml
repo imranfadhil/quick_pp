@@ -28,11 +28,8 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-    "chainlit==2.5.5",
     "Click>=7.0",
     "fastapi",
-    "fastapi_mcp",
-    "langchain_ollama==0.3.3",
     "loguru",
     "matplotlib==3.8.0",
     "mlflow",
@@ -40,6 +37,7 @@ dependencies = [
     "pandas",
     "psycopg2-binary",
     "ptitprince",
+    "python-multipart",
     "ruptures",
     "SALib==1.5.1",
     "scikit-learn",

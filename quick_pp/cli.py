@@ -1,11 +1,11 @@
 import click
-from subprocess import Popen
-import sys
-from pathlib import Path
 import os
 import shutil
 import socket
+import sys
 from importlib import metadata, resources
+from pathlib import Path
+from subprocess import Popen
 
 
 try:
@@ -43,7 +43,6 @@ def app(debug):
         click.echo(f"App is not running. Starting it now... | {cmd}")
         process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
         process.wait()
-        click.echo("App started successfully.")
 
 
 @click.command()
@@ -65,7 +64,6 @@ def model_deployment(debug):
         click.echo(f"Model server is not running. Starting it now... | {cmd}")
         process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
         process.wait()
-        click.echo("Model server started successfully.")
 
 
 @click.command()

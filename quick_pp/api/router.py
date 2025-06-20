@@ -6,7 +6,7 @@ from .services.porosity import router as porosity_router
 from .services.saturation import router as saturation_router
 from .services.permeability import router as permeability_router
 from .services.reservoir_summary import router as ressum_router
-
+from .services.chat import router as chat_router
 
 api_router = APIRouter(prefix="/quick_pp")
 
@@ -16,3 +16,4 @@ api_router.include_router(porosity_router)
 api_router.include_router(saturation_router)
 api_router.include_router(permeability_router)
 api_router.include_router(ressum_router)
+api_router.include_router(chat_router)

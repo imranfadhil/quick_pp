@@ -1,0 +1,8 @@
+TAVILY_API_KEY="xxx"  # Your Tavily API key
+# To link to the PostgreSQL instance.
+DATABASE_URL=postgresql://root:root@localhost:5432/postgres
+CHAINLIT_AUTH_SECRET="CR-xxx"
+POSTGRES_USER=root
+POSTGRES_PASSWORD=root
+POSTGRES_DB=postgres
+POSTGRES_PORT=5432

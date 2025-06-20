@@ -1,0 +1,33 @@
+# Use an official Python runtime as a parent image
+FROM python:3.11-slim
+
+# Set the working directory in the container
+WORKDIR /code
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the initialization script and environment file
+COPY init_db.py /code/
+COPY .env /code/
+
+# Install Python dependencies
+RUN python -m pip install --upgrade pip && \
+    pip install psycopg2-binary python-dotenv
+
+# Create a script to wait for PostgreSQL and then run initialization
+RUN echo '#!/bin/bash\n\
+echo "Waiting for PostgreSQL to be ready..."\n\
+until pg_isready -h postgres -p 5432 -U ${POSTGRES_USER:-root}; do\n\
+  echo "PostgreSQL is unavailable - sleeping"\n\
+  sleep 2\n\
+done\n\
+echo "PostgreSQL is up - executing database initialization"\n\
+python init_db.py\n\
+' > /code/wait_and_init.sh && chmod +x /code/wait_and_init.sh
+
+# Set the default command to run the wait and init script
+CMD ["/code/wait_and_init.sh"]

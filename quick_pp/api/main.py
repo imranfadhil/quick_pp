@@ -1,14 +1,21 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.templating import Jinja2Templates
 from .exceptions import return_exception_message
-from fastapi_mcp import FastApiMCP
-from chainlit.utils import mount_chainlit
+try:
+    from fastapi_mcp import FastApiMCP
+except ImportError:
+    FastApiMCP = None
 from importlib import resources
+import os
 
 from .router import api_router
+
+# Configuration
+LANGFLOW_HOST = os.getenv("LANGFLOW_HOST", "http://localhost:7860")
 
 tags_metadata = [
     {
@@ -34,6 +41,10 @@ tags_metadata = [
     {
         "name": "Reservoir Summary",
         "description": "Reservoir summary related endpoints."
+    },
+    {
+        "name": "Langflow",
+        "description": "Langflow related endpoints."
     }
 ]
 
@@ -46,15 +57,23 @@ app = FastAPI(
     openapi_tags=tags_metadata,
     debug=True
 )
+
+# Setup static files and templates
 with resources.files('quick_pp.api') as api_folder:
-    static_folder = api_folder / "public"
+    static_folder = api_folder / "static"
+    template_folder = api_folder / "template"
+
 app.mount("/static", StaticFiles(directory=static_folder), name="static")
+
+# Initialize Jinja2 templates
+templates = Jinja2Templates(directory=str(template_folder))
+
 app.include_router(api_router)
 
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    return FileResponse("static/favicon.ico")
+    return FileResponse(str(static_folder / "favicon.ico"))
 
 origins = ["*"]
 app.add_middleware(
@@ -67,9 +86,26 @@ app.add_middleware(
 
 
 @app.get("/", include_in_schema=False)
-async def root():
-    return {"message": "Welcome to quick_pp API. Please refer to the documentation at /docs or /redoc. "
-            "You can also use the chat assistant at /qpp_assistant."}
+async def root(request: Request):
+    return templates.TemplateResponse("home.html", {"request": request})
+
+
+@app.get("/qpp_assistant", include_in_schema=False)
+async def qpp_assistant(request: Request):
+    """
+    Serve the Langflow chat interface with dynamic project/flow selection.
+    """
+    # Get the base URL for API calls
+    base_url = str(request.base_url).rstrip('/')
+
+    # Configuration for the template
+    context = {
+        "request": request,
+        "api_base_url": base_url + "/quick_pp",
+        "langflow_host": LANGFLOW_HOST
+    }
+
+    return templates.TemplateResponse("chat.html", context)
 
 
 @app.exception_handler(Exception)
@@ -82,13 +118,12 @@ async def internal_server_exception_handler(exc: Exception):
         }
     )
 
-mcp = FastApiMCP(
-    app,
-    name="quick_pp API MCP",
-    describe_all_responses=True,  # Include all possible response schemas
-    describe_full_response_schema=True  # Include full JSON schema in descriptions
-)
-mcp.mount()
 
-qpp_assistant_file = resources.files('quick_pp.api').joinpath('qpp_assistant.py')
-mount_chainlit(app=app, target=str(qpp_assistant_file), path="/qpp_assistant")
+if FastApiMCP is not None:
+    mcp = FastApiMCP(
+        app,
+        name="quick_pp API MCP",
+        describe_all_responses=True,  # Include all possible response schemas
+        describe_full_response_schema=True  # Include full JSON schema in descriptions
+    )
+    mcp.mount()
