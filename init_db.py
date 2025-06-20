@@ -6,7 +6,10 @@ from dotenv import load_dotenv
 
 def create_database():
     load_dotenv()
-    database_url = os.getenv('DATABASE_URL')
+    user = os.getenv('POSTGRES_USER')
+    password = os.getenv('POSTGRES_PASSWORD')
+    db_name = os.getenv('POSTGRES_DB')
+    database_url = f"postgresql://{user}:{password}@localhost:5432/{db_name}"
 
     if not database_url:
         raise ValueError("DATABASE_URL environment variable is not set")

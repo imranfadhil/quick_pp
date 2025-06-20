@@ -21,7 +21,7 @@ RUN python -m pip install --upgrade pip && \
 # Create a script to wait for PostgreSQL and then run initialization
 RUN echo '#!/bin/bash\n\
 echo "Waiting for PostgreSQL to be ready..."\n\
-until pg_isready -h postgres -p 5432 -U ${POSTGRES_USER:-root}; do\n\
+until pg_isready -h postgres -p 5432 -U ${POSTGRES_USER}; do\n\
   echo "PostgreSQL is unavailable - sleeping"\n\
   sleep 2\n\
 done\n\
