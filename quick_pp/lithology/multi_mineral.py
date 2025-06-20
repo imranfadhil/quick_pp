@@ -1,7 +1,8 @@
 from scipy.optimize import minimize
 import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, Optional
 from tqdm import tqdm
+import pandas as pd
 
 from quick_pp.config import Config
 from quick_pp import logger
@@ -25,17 +26,8 @@ class MultiMineralOptimizer:
             'GR': 1.0,
             'NPHI': 300.0,
             'RHOB': 100.0,
-            'PEF': 1.0,
+            'PEF': 30.0,
             'DTC': 1.0
-        }
-
-        # Available log types and their corresponding mineral response keys
-        self.log_types = {
-            'GR': 'GR',
-            'NPHI': 'NPHI',
-            'RHOB': 'RHOB',
-            'PEF': 'PEF',
-            'DTC': 'DTC'
         }
 
         # Mineral names in order
@@ -54,9 +46,32 @@ class MultiMineralOptimizer:
                 response += volumes[i] * self.responses[response_key]
         return response
 
+    def _calculate_average_error(self, volumes: np.ndarray, log_values: Dict[str, float]) -> float:
+        """
+        Calculate the average absolute error between measured and reconstructed log values.
+
+        Args:
+            volumes: Mineral volumes [quartz, calcite, dolomite, shale, mud]
+            log_values: Dictionary of measured log values
+
+        Returns:
+            Average error across all log types
+        """
+        total_error = 0.0
+        valid_count = 0
+
+        for log_type, measured_value in log_values.items():
+            if measured_value is not None and not np.isnan(measured_value):
+                reconstructed_value = self._calculate_log_response(volumes, log_type)
+                error = abs(measured_value - reconstructed_value)
+                total_error += error
+                valid_count += 1
+
+        return total_error / valid_count if valid_count > 0 else np.nan
+
     def _error_function(self, volumes: np.ndarray, log_values: Dict[str, float]) -> float:
         """
-        Calculate the error between measured and reconstructed log values.
+        Calculate the sum of squared error between measured and reconstructed log values.
 
         Args:
             volumes: Mineral volumes [quartz, calcite, dolomite, shale, mud]
@@ -71,7 +86,7 @@ class MultiMineralOptimizer:
             if measured_value is not None and not np.isnan(measured_value):
                 reconstructed_value = self._calculate_log_response(volumes, log_type)
                 scaling = self.scaling_factors.get(log_type, 1.0)
-                error = (measured_value * scaling - reconstructed_value * scaling) ** 2
+                error = (scaling * (measured_value - reconstructed_value)) ** 2
                 total_error += error
 
         return total_error
@@ -94,7 +109,7 @@ class MultiMineralOptimizer:
             raise ValueError("No valid log measurements provided")
 
         # Initial guess: equal distribution among minerals
-        initial_guess = np.array([0.2, 0.2, 0.05, 0.2, 0.35])
+        initial_guess = np.array([0.3, 0.3, 0.3, 0.3, 0.3])
 
         # Run optimization
         result = minimize(
@@ -109,7 +124,7 @@ class MultiMineralOptimizer:
         return result.x
 
     def estimate_lithology(self, gr: np.ndarray, nphi: np.ndarray, rhob: np.ndarray, pef: Optional[np.ndarray] = None,
-                           dtc: Optional[np.ndarray] = None) -> Tuple[np.ndarray, ...]:
+                           dtc: Optional[np.ndarray] = None) -> pd.DataFrame:
         """
         Estimate mineral volumes using available log measurements.
 
@@ -121,7 +136,14 @@ class MultiMineralOptimizer:
             dtc: Compressional slowness log in us/ft (optional)
 
         Returns:
-            Tuple of mineral volumes (vol_quartz, vol_calcite, vol_dolomite, vol_shale, vol_mud)
+            DataFrame containing:
+            - VSAND: Quartz volume fraction
+            - VCALC: Calcite volume fraction
+            - VDOLO: Dolomite volume fraction
+            - VCLD: Shale volume fraction
+            - VMUD: Mud volume fraction
+            - AVERAGE_ERROR: Average error between measured and reconstructed logs
+            - *_RECONSTRUCTED: Reconstructed log values for each log type
         """
         # Initialize output arrays
         n_samples = len(gr)
@@ -131,6 +153,16 @@ class MultiMineralOptimizer:
         vol_shale = np.full(n_samples, np.nan)
         vol_mud = np.full(n_samples, np.nan)
 
+        # Initialize the reconstructed logs
+        gr_reconstructed = np.full(n_samples, np.nan)
+        nphi_reconstructed = np.full(n_samples, np.nan)
+        rhob_reconstructed = np.full(n_samples, np.nan)
+        pef_reconstructed = np.full(n_samples, np.nan)
+        dtc_reconstructed = np.full(n_samples, np.nan)
+
+        # Initialize error array
+        average_errors = np.full(n_samples, np.nan)
+
         # Process each depth point
         for i in tqdm(range(n_samples), desc="Processing depth points", unit="points"):
             # Prepare log values for current depth
@@ -138,8 +170,8 @@ class MultiMineralOptimizer:
                 'GR': gr[i],
                 'NPHI': nphi[i],
                 'RHOB': rhob[i],
-                'PEF': pef[i] if pef is not None else None,
-                'DTC': dtc[i] if dtc is not None else None
+                'PEF': pef[i] if pef is not None and not np.isnan(pef[i]) else None,
+                'DTC': dtc[i] if dtc is not None and not np.isnan(dtc[i]) else None
             }
 
             # Check if we have valid measurements
@@ -158,12 +190,40 @@ class MultiMineralOptimizer:
                     vol_shale[i] = volumes[3]
                     vol_mud[i] = volumes[4]
 
+                    # Calculate and store average error
+                    average_errors[i] = self._calculate_average_error(volumes, log_values)
+
+                    # Store the reconstructed logs
+                    gr_reconstructed[i] = self._calculate_log_response(
+                        volumes, 'GR') if log_values['GR'] is not None else np.nan
+                    nphi_reconstructed[i] = self._calculate_log_response(
+                        volumes, 'NPHI') if log_values['NPHI'] is not None else np.nan
+                    rhob_reconstructed[i] = self._calculate_log_response(
+                        volumes, 'RHOB') if log_values['RHOB'] is not None else np.nan
+                    pef_reconstructed[i] = self._calculate_log_response(
+                        volumes, 'PEF') if log_values['PEF'] is not None else np.nan
+                    dtc_reconstructed[i] = self._calculate_log_response(
+                        volumes, 'DTC') if log_values['DTC'] is not None else np.nan
+
                 except Exception as e:
                     logger.error(f'\rError at depth {i}: {e}')
                     continue
             else:
                 logger.error(f'\rInsufficient data at depth {i}')
-        return vol_quartz, vol_calcite, vol_dolomite, vol_shale, vol_mud
+
+        return pd.DataFrame({
+            'VSAND': vol_quartz,
+            'VCALC': vol_calcite,
+            'VDOLO': vol_dolomite,
+            'VCLD': vol_shale,
+            'VMUD': vol_mud,
+            'AVG_ERROR': average_errors,
+            'GR_RECONSTRUCTED': gr_reconstructed,
+            'NPHI_RECONSTRUCTED': nphi_reconstructed,
+            'RHOB_RECONSTRUCTED': rhob_reconstructed,
+            'PEF_RECONSTRUCTED': pef_reconstructed,
+            'DTC_RECONSTRUCTED': dtc_reconstructed
+        })
 
 
 class MultiMineral:
