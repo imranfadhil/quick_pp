@@ -84,7 +84,7 @@ celerybeat-schedule
 .env
 
 # virtualenv
-.venv
+.venv**
 venv**
 ENV/
 
@@ -106,16 +106,16 @@ ENV/
 .idea/
 
 # Folders
-notebooks/outputs/*
+notebooks/outputs**
 notebooks/data/02_intermediate/*
 notebooks/data/03_processed/*
 notebooks/data/04_project/*
 notebooks/local/*
 notebooks/03_qpp__*
-uploads/*
-mlruns/*
-*/mlruns/*
+uploads**
+**mlruns**
 data/*
 .chainlit*
 chainlit*
-.files/*
+.files**
+**_info**

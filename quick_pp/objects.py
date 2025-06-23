@@ -93,12 +93,17 @@ class Project(object):
     def load(self, path: str):
         logger.info(f"Loading project from: {path}")
         with open(path, "rb") as f:
-            project = pickle.load(f)        
+            project = pickle.load(f)
         return project
 
     def update_history(self, user=getpass.getuser(), time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'), action=""):
         self.history.append({"user": user, "time": time, "action": action})
         logger.debug(f"History updated: {action}")
+
+    def update_data_path(self, path: str):
+        self.data_path = path
+        self.data = {k: os.path.join(path, self.name, f'{k}.qppw') for k, _ in self.data.items()}
+        logger.info(f"Updated data path to: {path}")
 
     def __str__(self):
         return f"Project: {self.name} - {self.description}"
