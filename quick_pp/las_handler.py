@@ -7,6 +7,10 @@ import mmap
 import welly
 import welly.las
 
+# # Uncomment to run module as a standalone script
+# import sys
+# sys.path.append(os.getcwd())
+
 from quick_pp import logger
 
 
