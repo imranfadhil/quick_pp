@@ -10,10 +10,10 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 
-# Uncomment to run module as a standalone script
-import os
-import sys
-sys.path.append(os.getcwd())
+# # Uncomment to run module as a standalone script
+# import os
+# import sys
+# sys.path.append(os.getcwd())
 
 from quick_pp import logger
 
