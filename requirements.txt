@@ -1,6 +1,7 @@
 # Python3.11.0
 bokeh==3.7.3
 coverage==4.5.4
+dlisio==1.0.3
 fastapi==0.115.12
 fastapi-mcp==0.3.4
 fastparquet==2024.2.0
