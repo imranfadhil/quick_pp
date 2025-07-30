@@ -30,7 +30,7 @@ RHOB .g/cm3               : RHOB
 PEF .b/e                  : PEF
 GR .gAPI                  : GR
 DTC .us/ft                : DTC
-RDEP .ohm.m               : RDEP
+RT .ohm.m               : RDEP
 RMED .ohm.m               : RMED
 ~Parameter
 #==================================================================
