@@ -33,14 +33,14 @@ TOWN  .                            :
 ~Curve Information -----------------------------------------
 DEPTH    .m     : 
 WELL_NAME.unitless  : None
-LFP_GR   .API  : None
-LFP_RT   .ohm.m  : None
-LFP_NPHI .v/v  : None
-LFP_RHOB .g/cc  : None
-LFP_CALI .inches  : None
-LFP_COAL .unitless  : None
-LFP_DT   .us/ft  : None
-LFP_DTS  .us/ft  : None
+GR   .API  : None
+RT   .ohm.m  : None
+NPHI .v/v  : None
+RHOB .g/cc  : None
+CALI .inches  : None
+COAL .unitless  : None
+DT   .us/ft  : None
+DTS  .us/ft  : None
 ~Params ----------------------------------------------------
 EKB.      : 
 EGL.      : 
