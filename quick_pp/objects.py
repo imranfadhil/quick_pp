@@ -9,18 +9,83 @@ from quick_pp.config import Config
 from quick_pp import logger
 
 
+def get_package_root():
+    """Get the absolute path to the package root directory."""
+    import quick_pp
+    return os.path.dirname(os.path.dirname(os.path.abspath(quick_pp.__file__)))
+
+
+def get_default_project_path():
+    """Get the default project path relative to the package root."""
+    package_root = get_package_root()
+    return os.path.join(package_root, "data", "04_project")
+
+
+def get_default_output_path():
+    """Get the default output path relative to the package root."""
+    package_root = get_package_root()
+    return os.path.join(package_root, "data", "04_project", "outputs")
+
+
+def resolve_path(path, base_path=None):
+    """Resolve a path to an absolute path, optionally relative to a base path."""
+    if os.path.isabs(path):
+        return path
+    elif base_path:
+        return os.path.abspath(os.path.join(base_path, path))
+    else:
+        return os.path.abspath(path)
+
+
 class Project(object):
     def __init__(self, name="", description="", project_path=""):
         self.name = name
         self.description = description
         self.data = {}
         self.history = []
-        self.project_path = project_path or os.path.join("data", "04_project")
+
+        # Use absolute paths for better robustness
+        if project_path:
+            self.project_path = resolve_path(project_path)
+        else:
+            self.project_path = get_default_project_path()
+
         self.data_path = os.path.join(self.project_path, self.name)
         self.output_path = os.path.join(self.data_path, "outputs")
-        os.makedirs(self.data_path, exist_ok=True)
-        os.makedirs(self.output_path, exist_ok=True)
-        logger.info(f"Project '{name}' initialized with path: {self.data_path}")
+
+        # Ensure directories exist
+        try:
+            os.makedirs(self.data_path, exist_ok=True)
+            os.makedirs(self.output_path, exist_ok=True)
+            logger.info(f"Project '{name}' initialized with path: {self.data_path}")
+        except PermissionError:
+            logger.error(f"Permission denied when creating directories: {self.data_path}")
+            raise
+        except Exception as e:
+            logger.error(f"Error creating project directories: {e}")
+            raise
+
+    def __getstate__(self):
+        """Custom pickle state for serialization."""
+        return {
+            'name': self.name,
+            'description': self.description,
+            'project_path': self.project_path,
+            'data': self.data,
+            'history': self.history,
+            'data_path': self.data_path,
+            'output_path': self.output_path
+        }
+
+    def __setstate__(self, state):
+        """Custom pickle state restoration."""
+        self.name = state['name']
+        self.description = state['description']
+        self.project_path = state['project_path']
+        self.data = state['data']
+        self.history = state['history']
+        self.data_path = state['data_path']
+        self.output_path = state['output_path']
 
     def read_las(self, path: list):
         logger.info(f"Reading {len(path)} LAS files for project '{self.name}'")
@@ -86,24 +151,81 @@ class Project(object):
     def save(self, notes=""):
         path = os.path.join(self.project_path, f"{self.name}.qppp")
         logger.info(f"Saving project to: {path}")
-        with open(path, "wb") as f:
-            pickle.dump(self, f)
-        self.update_history(action=f"Saved project to {path} | {notes}")
+        try:
+            with open(path, "wb") as f:
+                pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+            self.update_history(action=f"Saved project to {path} | {notes}")
+        except pickle.PicklingError as e:
+            logger.error(f"Pickling error when saving project: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Error saving project: {e}")
+            raise
 
     def load(self, path: str):
+        path = resolve_path(path)
         logger.info(f"Loading project from: {path}")
-        with open(path, "rb") as f:
-            project = pickle.load(f)
-        return project
+        try:
+            with open(path, "rb") as f:
+                project = pickle.load(f)
+            return project
+        except FileNotFoundError:
+            logger.error(f"Project file not found: {path}")
+            raise
+        except pickle.UnpicklingError as e:
+            logger.error(f"Unpickling error when loading project: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Error loading project: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise
 
     def update_history(self, user=getpass.getuser(), time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'), action=""):
         self.history.append({"user": user, "time": time, "action": action})
         logger.debug(f"History updated: {action}")
 
     def update_data_path(self, path: str):
-        self.data_path = path
-        self.data = {k: os.path.join(path, self.name, f'{k}.qppw') for k, _ in self.data.items()}
-        logger.info(f"Updated data path to: {path}")
+        self.data_path = os.path.abspath(path)
+        self.data = {k: os.path.join(self.data_path, f'{k}.qppw') for k, _ in self.data.items()}
+        logger.info(f"Updated data path to: {self.data_path}")
+
+    def get_absolute_paths(self):
+        """Get absolute paths for all project directories."""
+        return {
+            'project_path': self.project_path,
+            'data_path': self.data_path,
+            'output_path': self.output_path
+        }
+
+    def validate_paths(self):
+        """Validate that all project paths exist and are accessible."""
+        paths_to_check = [
+            ('project_path', self.project_path),
+            ('data_path', self.data_path),
+            ('output_path', self.output_path)
+        ]
+
+        validation_results = {}
+        for name, path in paths_to_check:
+            try:
+                exists = os.path.exists(path)
+                writable = os.access(path, os.W_OK) if exists else False
+                validation_results[name] = {
+                    'exists': exists,
+                    'writable': writable,
+                    'path': path
+                }
+            except Exception as e:
+                validation_results[name] = {
+                    'exists': False,
+                    'writable': False,
+                    'error': str(e),
+                    'path': path
+                }
+
+        return validation_results
 
     def __str__(self):
         return f"Project: {self.name} - {self.description}"
@@ -140,6 +262,44 @@ class WellConfig(object):
             # Prevent adding new attributes
             raise AttributeError(f"Cannot add new attribute '{name}' to instances of {self.__class__.__name__}")
 
+    def __getstate__(self):
+        """Custom pickle state for serialization."""
+        return {
+            'litho_model': self.litho_model,
+            'dry_sand_point': self.dry_sand_point,
+            'dry_silt_point': self.dry_silt_point,
+            'dry_clay_point': self.dry_clay_point,
+            'wet_clay_point': self.wet_clay_point,
+            'fluid_point': self.fluid_point,
+            'dry_calc_point': self.dry_calc_point,
+            'dry_dolo_point': self.dry_dolo_point,
+            'silt_line_angle': self.silt_line_angle,
+            'sw_water_salinity': self.sw_water_salinity,
+            'sw_m': self.sw_m,
+            'sw_n': self.sw_n,
+            'hc_corr_angle': self.hc_corr_angle,
+            'hc_buffer': self.hc_buffer,
+            'ressum_cutoffs': self.ressum_cutoffs
+        }
+
+    def __setstate__(self, state):
+        """Custom pickle state restoration."""
+        self.litho_model = state['litho_model']
+        self.dry_sand_point = state['dry_sand_point']
+        self.dry_silt_point = state['dry_silt_point']
+        self.dry_clay_point = state['dry_clay_point']
+        self.wet_clay_point = state['wet_clay_point']
+        self.fluid_point = state['fluid_point']
+        self.dry_calc_point = state['dry_calc_point']
+        self.dry_dolo_point = state['dry_dolo_point']
+        self.silt_line_angle = state['silt_line_angle']
+        self.sw_water_salinity = state['sw_water_salinity']
+        self.sw_m = state['sw_m']
+        self.sw_n = state['sw_n']
+        self.hc_corr_angle = state['hc_corr_angle']
+        self.hc_buffer = state['hc_buffer']
+        self.ressum_cutoffs = state['ressum_cutoffs']
+
 
 class Well(object):
     header: pd.DataFrame = pd.DataFrame()
@@ -153,6 +313,30 @@ class Well(object):
         self.name = name
         self.description = description
         logger.debug(f"Well object initialized: {name}")
+
+    def __getstate__(self):
+        """Custom pickle state for serialization."""
+        return {
+            'name': self.name,
+            'description': self.description,
+            'header': self.header,
+            'data': self.data,
+            'ressum': self.ressum,
+            'depth_uom': self.depth_uom,
+            'config': self.config,
+            'history': self.history
+        }
+
+    def __setstate__(self, state):
+        """Custom pickle state restoration."""
+        self.name = state['name']
+        self.description = state['description']
+        self.header = state['header']
+        self.data = state['data']
+        self.ressum = state['ressum']
+        self.depth_uom = state['depth_uom']
+        self.config = state['config']
+        self.history = state['history']
 
     def read_las(self, path: str):
         logger.info(f"Reading LAS file: {path}")
@@ -182,30 +366,73 @@ class Well(object):
         self.config.update(config)
         self.update_history(action=f"Updated config for well {self.name}")
 
-    def export_to_parquet(self, folder=os.path.join("data", "04_project", "outputs")):
-        os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, f"{self.name}.parquet")
-        logger.info(f"Exporting well data to parquet: {path}")
-        self.data.to_parquet(path)
-        logger.debug(f"Exported {len(self.data)} records to parquet")
+    def export_to_parquet(self, folder=None):
+        if folder is None:
+            folder = get_default_output_path()
+        else:
+            folder = resolve_path(folder)
 
-    def export_to_las(self, folder=os.path.join("data", "04_project", "outputs")):
-        os.makedirs(folder, exist_ok=True)
-        logger.info(f"Exporting well data to LAS format in folder: {folder}")
-        las.export_to_las(well_data=self.data, well_name=self.name, folder=folder)
+        try:
+            os.makedirs(folder, exist_ok=True)
+            path = os.path.join(folder, f"{self.name}.parquet")
+            logger.info(f"Exporting well data to parquet: {path}")
+            self.data.to_parquet(path)
+            logger.debug(f"Exported {len(self.data)} records to parquet")
+        except Exception as e:
+            logger.error(f"Error exporting to parquet: {e}")
+            raise
+
+    def export_to_las(self, folder=None):
+        if folder is None:
+            folder = get_default_output_path()
+        else:
+            folder = resolve_path(folder)
+
+        try:
+            os.makedirs(folder, exist_ok=True)
+            logger.info(f"Exporting well data to LAS format in folder: {folder}")
+            las.export_to_las(well_data=self.data, well_name=self.name, folder=folder)
+        except Exception as e:
+            logger.error(f"Error exporting to LAS: {e}")
+            raise
 
     def save(self, path, notes=""):
+        path = resolve_path(path)
         path = path if path.endswith(".qppw") else f"{path}.qppw"
-        logger.info(f"Saving well to: {path}")
-        with open(path, "wb") as f:
-            pickle.dump(self, f)
-        self.update_history(action=f"Saved well to {path} | {notes}")
+
+        try:
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            logger.info(f"Saving well to: {path}")
+            with open(path, "wb") as f:
+                pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+            self.update_history(action=f"Saved well to {path} | {notes}")
+        except pickle.PicklingError as e:
+            logger.error(f"Pickling error when saving well: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Error saving well: {e}")
+            raise
 
     def load(self, path: str):
+        path = resolve_path(path)
         logger.info(f"Loading well from: {path}")
-        with open(path, "rb") as f:
-            well = pickle.load(f)
-        return well
+        try:
+            with open(path, "rb") as f:
+                well = pickle.load(f)
+            return well
+        except FileNotFoundError:
+            logger.error(f"Well file not found: {path}")
+            raise
+        except pickle.UnpicklingError as e:
+            logger.error(f"Unpickling error when loading well: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Error loading well: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise
 
     def update_history(self, user=getpass.getuser(), time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'), action=""):
         self.history.append({"user": user, "time": time, "action": action})
