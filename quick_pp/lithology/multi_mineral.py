@@ -1,6 +1,6 @@
 from scipy.optimize import minimize
 import numpy as np
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from tqdm import tqdm
 import pandas as pd
 
@@ -11,9 +11,33 @@ from quick_pp import logger
 class MultiMineralOptimizer:
     """Optimization-based multi-mineral model for lithology estimation."""
 
-    def __init__(self):
-        # Mineral volume bounds (quartz, calcite, dolomite, shale, mud)
-        self.bounds = ((0, 1), (0, 1), (0, 0.1), (0, 1), (0, 0.45))
+    def __init__(self, minerals: Optional[List[str]] = None):
+        """
+        Initialize the MultiMineralOptimizer.
+
+        Args:
+            minerals: List of minerals to include in the optimization.
+                     If None, uses default minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'MUD']
+                     Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SILT', 'SHALE', 'MUD'
+        """
+        # Default minerals if none specified
+        if minerals is None:
+            minerals = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SILT', 'SHALE', 'MUD']
+
+        self.minerals = minerals
+
+        # Define bounds for each mineral type
+        mineral_bounds = {
+            'QUARTZ': (0, 1),
+            'CALCITE': (0, 1),
+            'DOLOMITE': (0, 0.1),
+            'SILT': (0, 1),
+            'SHALE': (0, 1),
+            'MUD': (0, 0.45)
+        }
+
+        # Set bounds based on selected minerals
+        self.bounds = tuple(mineral_bounds[mineral] for mineral in self.minerals)
 
         # Constraint: sum of mineral volumes must equal 1
         self.constraints = [{"type": "eq", "fun": self._volume_constraint}]
@@ -29,9 +53,6 @@ class MultiMineralOptimizer:
             'PEF': 30.0,
             'DTC': 1.0
         }
-
-        # Mineral names in order
-        self.minerals = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'MUD']
 
     def _volume_constraint(self, volumes: np.ndarray) -> float:
         """Constraint function ensuring mineral volumes sum to 1."""
@@ -51,7 +72,7 @@ class MultiMineralOptimizer:
         Calculate the average absolute error between measured and reconstructed log values.
 
         Args:
-            volumes: Mineral volumes [quartz, calcite, dolomite, shale, mud]
+            volumes: Mineral volumes in the order of self.minerals
             log_values: Dictionary of measured log values
 
         Returns:
@@ -74,7 +95,7 @@ class MultiMineralOptimizer:
         Calculate the sum of squared error between measured and reconstructed log values.
 
         Args:
-            volumes: Mineral volumes [quartz, calcite, dolomite, shale, mud]
+            volumes: Mineral volumes in the order of self.minerals
             log_values: Dictionary of measured log values
 
         Returns:
@@ -99,7 +120,7 @@ class MultiMineralOptimizer:
             log_values: Dictionary of measured log values
 
         Returns:
-            Optimized mineral volumes [quartz, calcite, dolomite, shale, mud]
+            Optimized mineral volumes in the order of self.minerals
         """
         # Filter out None and NaN values
         valid_logs = {k: v for k, v in log_values.items()
@@ -109,7 +130,8 @@ class MultiMineralOptimizer:
             raise ValueError("No valid log measurements provided")
 
         # Initial guess: equal distribution among minerals
-        initial_guess = np.array([0.3, 0.3, 0.3, 0.3, 0.3])
+        n_minerals = len(self.minerals)
+        initial_guess = np.full(n_minerals, 1.0 / n_minerals)
 
         # Run optimization
         result = minimize(
@@ -137,21 +159,17 @@ class MultiMineralOptimizer:
 
         Returns:
             DataFrame containing:
-            - VSAND: Quartz volume fraction
-            - VCALC: Calcite volume fraction
-            - VDOLO: Dolomite volume fraction
-            - VCLD: Shale volume fraction
-            - VMUD: Mud volume fraction
+            - Mineral volume fractions for each mineral in self.minerals
             - AVERAGE_ERROR: Average error between measured and reconstructed logs
             - *_RECONSTRUCTED: Reconstructed log values for each log type
         """
         # Initialize output arrays
         n_samples = len(gr)
-        vol_quartz = np.full(n_samples, np.nan)
-        vol_calcite = np.full(n_samples, np.nan)
-        vol_dolomite = np.full(n_samples, np.nan)
-        vol_shale = np.full(n_samples, np.nan)
-        vol_mud = np.full(n_samples, np.nan)
+
+        # Initialize mineral volume arrays
+        mineral_volumes = {}
+        for mineral in self.minerals:
+            mineral_volumes[mineral] = np.full(n_samples, np.nan)
 
         # Initialize the reconstructed logs
         gr_reconstructed = np.full(n_samples, np.nan)
@@ -183,12 +201,9 @@ class MultiMineralOptimizer:
                     # Optimize mineral volumes
                     volumes = self._optimize_mineral_volumes(log_values)
 
-                    # Store results
-                    vol_quartz[i] = volumes[0]
-                    vol_calcite[i] = volumes[1]
-                    vol_dolomite[i] = volumes[2]
-                    vol_shale[i] = volumes[3]
-                    vol_mud[i] = volumes[4]
+                    # Store results for each mineral
+                    for j, mineral in enumerate(self.minerals):
+                        mineral_volumes[mineral][i] = volumes[j]
 
                     # Calculate and store average error
                     average_errors[i] = self._calculate_average_error(volumes, log_values)
@@ -211,12 +226,25 @@ class MultiMineralOptimizer:
             else:
                 logger.error(f'\rInsufficient data at depth {i}')
 
-        return pd.DataFrame({
-            'VSAND': vol_quartz,
-            'VCALC': vol_calcite,
-            'VDOLO': vol_dolomite,
-            'VCLD': vol_shale,
-            'VMUD': vol_mud,
+        # Create output DataFrame
+        output_data = {}
+
+        # Add mineral volumes with appropriate column names
+        mineral_column_mapping = {
+            'QUARTZ': 'VSAND',
+            'CALCITE': 'VCALC',
+            'DOLOMITE': 'VDOLO',
+            'SILT': 'VSILT',
+            'SHALE': 'VCLD',
+            'MUD': 'VMUD'
+        }
+
+        for mineral in self.minerals:
+            column_name = mineral_column_mapping.get(mineral, f'V{mineral}')
+            output_data[column_name] = mineral_volumes[mineral]
+
+        # Add error and reconstructed logs
+        output_data.update({
             'AVG_ERROR': average_errors,
             'GR_RECONSTRUCTED': gr_reconstructed,
             'NPHI_RECONSTRUCTED': nphi_reconstructed,
@@ -225,64 +253,35 @@ class MultiMineralOptimizer:
             'DTC_RECONSTRUCTED': dtc_reconstructed
         })
 
+        return pd.DataFrame(output_data)
+
 
 class MultiMineral:
     """Legacy interface for backward compatibility."""
 
-    def __init__(self):
-        self.optimizer = MultiMineralOptimizer()
-
-    def estimate_lithology(self, gr, nphi, rhob, pef, dtc):
+    def __init__(self, minerals: Optional[List[str]] = None):
         """
-        Legacy method for backward compatibility.
+        Initialize MultiMineral with optional mineral specification.
 
         Args:
-            gr (float): Gamma Ray log in GAPI.
-            nphi (float): Neutron Porosity log in v/v.
-            rhob (float): Bulk Density log in g/cc.
-            dtc (float): Compressional slowness log in us/ft.
-            pef (float): Photoelectric Factor log in barns/electron.
+            minerals: List of minerals to include in the optimization.
+                     If None, uses default minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'MUD']
+                     Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SILT', 'SHALE', 'MUD'
+        """
+        self.optimizer = MultiMineralOptimizer(minerals)
+
+    def estimate_lithology(self, gr, nphi, rhob, pef=None, dtc=None):
+        """
+        Estimate lithology using multi-mineral optimization.
+
+        Args:
+            gr (np.ndarray): Gamma Ray log in GAPI.
+            nphi (np.ndarray): Neutron Porosity log in v/v.
+            rhob (np.ndarray): Bulk Density log in g/cc.
+            pef (np.ndarray, optional): Photoelectric Factor log in barns/electron.
+            dtc (np.ndarray, optional): Compressional slowness log in us/ft.
 
         Returns:
-            (float, float, float, float, float): vol_quartz, vol_calcite, vol_dolomite, vol_shale, vol_mud
+            pd.DataFrame: DataFrame containing mineral volumes and reconstructed logs
         """
         return self.optimizer.estimate_lithology(gr, nphi, rhob, pef, dtc)
-
-
-# Legacy functions for backward compatibility (deprecated)
-def constraint_(x):
-    """Legacy constraint function (deprecated)."""
-    return x[0] + x[1] + x[2] + x[3] + x[4] - 1
-
-
-constrains = [{"type": "eq", "fun": constraint_}]
-bounds = ((0, 1), (0, 1), (0, 0.1), (0, 1), (0, 0.45))
-responses = Config.MINERALS_LOG_VALUE
-
-
-def minimizer_1(gr, nphi, rhob):
-    """Legacy minimizer function (deprecated)."""
-    optimizer = MultiMineralOptimizer()
-    log_values = {'GR': gr, 'NPHI': nphi, 'RHOB': rhob}
-    return type('Result', (), {'x': optimizer._optimize_mineral_volumes(log_values)})()
-
-
-def minimizer_2(gr, nphi, rhob, pef):
-    """Legacy minimizer function (deprecated)."""
-    optimizer = MultiMineralOptimizer()
-    log_values = {'GR': gr, 'NPHI': nphi, 'RHOB': rhob, 'PEF': pef}
-    return type('Result', (), {'x': optimizer._optimize_mineral_volumes(log_values)})()
-
-
-def minimizer_3(gr, nphi, rhob, dtc):
-    """Legacy minimizer function (deprecated)."""
-    optimizer = MultiMineralOptimizer()
-    log_values = {'GR': gr, 'NPHI': nphi, 'RHOB': rhob, 'DTC': dtc}
-    return type('Result', (), {'x': optimizer._optimize_mineral_volumes(log_values)})()
-
-
-def minimizer_4(gr, nphi, rhob, pef, dtc):
-    """Legacy minimizer function (deprecated)."""
-    optimizer = MultiMineralOptimizer()
-    log_values = {'GR': gr, 'NPHI': nphi, 'RHOB': rhob, 'PEF': pef, 'DTC': dtc}
-    return type('Result', (), {'x': optimizer._optimize_mineral_volumes(log_values)})()
