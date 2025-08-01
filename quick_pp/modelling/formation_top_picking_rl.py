@@ -27,7 +27,7 @@ class FormationTopPickingEnv:
         Initialize the formation top picking environment.
 
         Args:
-            well_data: DataFrame with columns ['DEPTH', 'GR', 'NPHI', 'RHOB', 'RT', 'VSHALE', 'PHIT']
+            well_data: DataFrame with columns ['DEPTH', 'GR', 'NPHI', 'RHOB', 'RT']
             max_depth_window: Number of depth points to consider in each step
             reward_weights: Weights for different reward components
         """
@@ -65,7 +65,7 @@ class FormationTopPickingEnv:
 
     def _normalize_logs(self, skip=False):
         """Normalize log data for better learning."""
-        log_columns = ['GR', 'NPHI', 'RHOB', 'RT', 'VSHALE', 'PHIT']
+        log_columns = ['GR', 'NPHI', 'RHOB', 'RT']
 
         for col in log_columns:
             if col in self.well_data.columns and not skip:
@@ -107,7 +107,7 @@ class FormationTopPickingEnv:
 
         # Extract normalized log values
         log_features = []
-        for col in ['GR_NORM', 'NPHI_NORM', 'RHOB_NORM', 'RT_NORM', 'VSHALE_NORM', 'PHIT_NORM']:
+        for col in ['GR_NORM', 'NPHI_NORM', 'RHOB_NORM', 'RT_NORM']:
             log_features.extend(window_data[col].fillna(0).values)
 
         # Pad if window is smaller than max_depth_window
@@ -137,8 +137,8 @@ class FormationTopPickingEnv:
         window_end = min(len(self.well_data), self.current_depth_idx + self.max_depth_window)
         window_data = self.well_data.iloc[window_start:window_end]
 
-        # Calculate variance in VSHALE (lithology indicator)
-        vshale_var = window_data['VSHALE_NORM'].var()
+        # Calculate variance in GR (lithology indicator)
+        vshale_var = window_data['GR_NORM'].var()
         return min(1.0, vshale_var)  # Normalize to [0, 1]
 
     def _get_log_variance_score(self) -> float:
@@ -194,7 +194,7 @@ class FormationTopPickingEnv:
         # 1. Lithology change reward
         if self.current_depth_idx > 0:
             prev_data = self.well_data.iloc[self.current_depth_idx - 1]
-            lithology_change = abs(current_data['VSHALE_NORM'] - prev_data['VSHALE_NORM'])
+            lithology_change = abs(current_data['GR_NORM'] - prev_data['GR_NORM'])
             # Use a sigmoid function to reward significant changes more
             lithology_reward = 2.0 / (1 + np.exp(-5 * (lithology_change - 0.3)))
             reward += self.reward_weights['lithology_change'] * lithology_reward
@@ -630,7 +630,7 @@ if __name__ == "__main__":
     with open(file_name, 'rb') as f:
         df, _ = las.read_las_file_welly(f)
         df['RT'] = np.log10(df['RT'])
-    well_data = df  # [['DEPTH', 'GR']]
+    well_data = df[['DEPTH', 'GR', 'NPHI', 'RHOB', 'RT']].fillna(0)
 
     # Create environment
     env = FormationTopPickingEnv(well_data, max_depth_window=50)
