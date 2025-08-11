@@ -287,6 +287,11 @@ XAXIS_DEFS = {
         'side': 'top', 'anchor': 'free', 'position': .85,
         'title_standoff': .1, 'range': [1.95, 2.95], 'type': 'linear'
     },
+    'RHOB_FILL': {
+        'title': '', 'tickfont_size': 1, 'overlaying': 'x3',
+        'side': 'top', 'anchor': 'free', 'position': .85,
+        'title_standoff': .1, 'range': [1.95, 2.95], 'type': 'linear'
+    },
     'PHIT': {
         'title': 'PHIT',
         'titlefont': {'color': COLOR_DICT['PHIT'], 'size': font_size},
@@ -324,6 +329,11 @@ XAXIS_DEFS = {
         'title': 'NPHI',
         'titlefont': {'color': COLOR_DICT['NPHI'], 'size': font_size},
         'tickfont': {'color': COLOR_DICT['NPHI'], 'size': font_size}, 'zeroline': False,
+        'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x3',
+        'tickformat': ".2f", 'tick0': -.15, 'dtick': 0.12, 'range': [.45, -.15], 'type': 'linear', 'tickangle': -90
+    },
+    'NPHI_FILL': {
+        'title': '', 'tickfont_size': 1, 'overlaying': 'x3',
         'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x3',
         'tickformat': ".2f", 'tick0': -.15, 'dtick': 0.12, 'range': [.45, -.15], 'type': 'linear', 'tickangle': -90
     },
