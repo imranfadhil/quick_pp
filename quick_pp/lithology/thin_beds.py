@@ -1,6 +1,7 @@
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+from typing import Optional
 
 from quick_pp.utils import length_a_b, line_intersection, angle_between_lines
 from quick_pp.porosity import neu_den_xplot_poro
@@ -11,8 +12,10 @@ from quick_pp import logger
 class ThinBeds:
     """This binary model only consider a combination of sand-shale components. """
 
-    def __init__(self, dry_sand_poro: tuple = None, dry_shale_poro: tuple = None,
-                 dry_sand_point: tuple = None, dry_clay_point: tuple = None, fluid_point: tuple = None, **kwargs):
+    def __init__(self, dry_sand_poro: Optional[float] = None, dry_shale_poro: Optional[float] = None,
+                 dry_sand_point: Optional[tuple[float, float]] = None,
+                 dry_clay_point: Optional[tuple[float, float]] = None,
+                 fluid_point: Optional[tuple[float, float]] = None, **kwargs):
         # Initialize the endpoints
         self.dry_sand_poro = dry_sand_poro or Config.TS_ENDPOINTS["DRY_SAND_PORO"]
         self.dry_shale_poro = dry_shale_poro or Config.TS_ENDPOINTS["DRY_SHALE_PORO"]

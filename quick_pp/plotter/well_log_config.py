@@ -292,7 +292,7 @@ XAXIS_DEFS = {
     'GAS_XOVER_BOTTOM': {
         'title': {'text': '', 'font': {'size': 1}}, 'tickfont': {'size': 1},
         'side': 'top', 'anchor': 'free', 'position': .88,
-        'zeroline': False, 'range': [.45, -.15], 'type': 'linear'
+        'zeroline': False, 'range': [.45, -.15], 'type': 'linear', 'showgrid': False
     },
     'PHIT': {
         'title': {'text': 'PHIT', 'font': {'color': COLOR_DICT['PHIT'], 'size': font_size}},
@@ -327,7 +327,7 @@ XAXIS_DEFS = {
     'GAS_XOVER_TOP': {
         'title': {'text': '', 'font': {'size': 1}}, 'tickfont': {'size': 1},
         'side': 'top', 'anchor': 'free', 'position': .88, 'overlaying': 'x3',
-        'zeroline': False, 'range': [.45, -.15], 'type': 'linear'
+        'zeroline': False, 'range': [.45, -.15], 'type': 'linear', 'showgrid': False
     },
     'NPHI': {
         'title': {'text': 'NPHI', 'font': {'color': COLOR_DICT['NPHI'], 'size': font_size}},
