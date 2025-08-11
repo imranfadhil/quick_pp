@@ -53,11 +53,11 @@ TRACE_DEFS = OrderedDict(
         hide_xaxis=False,
         style={'line_dash': 'dot', 'line_width': 1, 'line_color': COLOR_DICT['RT']}
     ),
-    RHOB=dict(
+    GAS_XOVER_BOTTOM=dict(
         track=3,
         secondary_y=False,
         hide_xaxis=False,
-        style={'line_width': 1, 'line_color': COLOR_DICT['RHOB']}
+        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': 'rgba(255, 255, 0, 0.4)', 'hoverinfo': 'none'}
     ),
     PHIT=dict(
         track=4,
@@ -96,11 +96,23 @@ TRACE_DEFS = OrderedDict(
             'fillpattern_size': 2, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
         }
     ),
+    GAS_XOVER_TOP=dict(
+        track=3,
+        secondary_y=False,
+        hide_xaxis=False,
+        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': 'white', 'hoverinfo': 'none'}
+    ),
     NPHI=dict(
+        track=3,
+        secondary_y=False,
+        hide_xaxis=False,
+        style={'line_dash': 'dot', 'line_width': 1, 'line_color': COLOR_DICT['NPHI']}
+    ),
+    RHOB=dict(
         track=3,
         secondary_y=True,
         hide_xaxis=False,
-        style={'line_dash': 'dot', 'line_width': 1, 'line_color': COLOR_DICT['NPHI']}
+        style={'line_width': 1, 'line_color': COLOR_DICT['RHOB']}
     ),
     PHIE=dict(
         track=4,
@@ -279,13 +291,9 @@ XAXIS_DEFS = {
         'title_standoff': .1, 'range': [np.log10(.2), np.log10(2000)], 'type': 'log',
         'tickmode': 'array', 'tickvals': np.geomspace(0.2, 2000, 5), 'tickangle': -90, 'minor_showgrid': True
     },
-    'RHOB': {
-        'title': 'RHOB',
-        'titlefont': {'color': COLOR_DICT['RHOB'], 'size': font_size},
-        'tickformat': ".2f", 'tick0': 1.95, 'dtick': 0.2, 'tickangle': -90,
-        'tickfont': {'color': COLOR_DICT['RHOB'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .85,
-        'title_standoff': .1, 'range': [1.95, 2.95], 'type': 'linear'
+    'GAS_XOVER_BOTTOM': {
+        'title': '', 'tickfont_size': 1, 'side': 'top', 'anchor': 'free', 'position': .88,
+        'zeroline': False, 'range': [.45, -.15], 'type': 'linear'
     },
     'PHIT': {
         'title': 'PHIT',
@@ -320,12 +328,24 @@ XAXIS_DEFS = {
         'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1,
         'range': [0, 1], 'type': 'linear', 'zeroline': False
     },
+    'GAS_XOVER_TOP': {
+        'title': '', 'tickfont_size': 1, 'side': 'top', 'anchor': 'free', 'position': .88, 'overlaying': 'x3',
+        'zeroline': False, 'range': [.45, -.15], 'type': 'linear'
+    },
     'NPHI': {
         'title': 'NPHI',
         'titlefont': {'color': COLOR_DICT['NPHI'], 'size': font_size},
         'tickfont': {'color': COLOR_DICT['NPHI'], 'size': font_size}, 'zeroline': False,
         'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x3',
         'tickformat': ".2f", 'tick0': -.15, 'dtick': 0.12, 'range': [.45, -.15], 'type': 'linear', 'tickangle': -90
+    },
+    'RHOB': {
+        'title': 'RHOB',
+        'titlefont': {'color': COLOR_DICT['RHOB'], 'size': font_size}, 'overlaying': 'x3',
+        'tickformat': ".2f", 'tick0': 1.95, 'dtick': 0.2, 'tickangle': -90,
+        'tickfont': {'color': COLOR_DICT['RHOB'], 'size': font_size},
+        'side': 'top', 'anchor': 'free', 'position': .85,
+        'title_standoff': .1, 'range': [1.95, 2.95], 'type': 'linear'
     },
     'PHIE': {
         'title': 'PHIE',

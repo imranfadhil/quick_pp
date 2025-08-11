@@ -37,6 +37,17 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
     return fig
 
 
+def add_crossover_traces(df):
+    rhob_min, rhob_max = 1.95, 2.95
+    nphi_min, nphi_max = 0.45, -0.15
+    rhob_on_nphi_scale = nphi_min + (df['RHOB'] - rhob_min) * (nphi_max - nphi_min) / (rhob_max - rhob_min)
+    crossover_condition = df['NPHI'] < rhob_on_nphi_scale
+    df['GAS_XOVER_TOP'] = np.where(crossover_condition, rhob_on_nphi_scale, nphi_min)
+    df['GAS_XOVER_BOTTOM'] = np.where(crossover_condition, df['NPHI'], nphi_min)
+
+    return df
+
+
 def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
                xaxis_defs: dict = {}, column_widths: list = []):
     """
@@ -81,6 +92,10 @@ def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
     column_widths = column_widths or [1] * no_of_track
     df = well_data.copy()
     index = df.DEPTH
+
+    # Add yellow shaded crossover if NPHI RHOB present in df
+    if 'NPHI' in df.columns and 'RHOB' in df.columns and 'NPHI_XOVER_BOTTOM' not in df.columns:
+        df = add_crossover_traces(df)
 
     # Ensure all required columns exist (fill with NaN if missing)
     for k in trace_defs.keys():
