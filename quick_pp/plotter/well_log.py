@@ -108,10 +108,12 @@ def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
         df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(0).astype(int)
         no_of_rock_flags = df['ROCK_FLAG'].nunique() + 1
         df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(no_of_rock_flags)
-        for i in df['ROCK_FLAG'].unique():
-            print(f"i: {i}")
+        sorted_rock_flags = sorted(df['ROCK_FLAG'].unique().tolist())
+        for i, rock_flag in enumerate(sorted_rock_flags):
             lightness = 100 - (int(i) / no_of_rock_flags * 100)
-            COLOR_DICT[f'ROCK_FLAG_{i}'] = f'hsl(30, 70%, {lightness}%)'
+            fill_color = f'hsl(30, 70%, {lightness}%)'
+            COLOR_DICT[f'ROCK_FLAG_{rock_flag}'] = fill_color
+            # print(f"i: {i}, rock_flag: {rock_flag}, fill_color: {fill_color}")
 
         df['ROCK_FLAG'] = df['ROCK_FLAG'].astype('category')
         df = df.drop(columns=[c for c in df.columns if 'ROCK_FLAG_' in c])
