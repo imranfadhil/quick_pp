@@ -57,7 +57,7 @@ TRACE_DEFS = OrderedDict(
         track=3,
         secondary_y=False,
         hide_xaxis=False,
-        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': 'rgba(255, 255, 0, 0.4)'}
+        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': 'rgba(255, 255, 0, 0.4)', 'hoverinfo': 'none'}
     ),
     PHIT=dict(
         track=4,
@@ -100,7 +100,7 @@ TRACE_DEFS = OrderedDict(
         track=3,
         secondary_y=False,
         hide_xaxis=False,
-        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': 'white'}
+        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': 'white', 'hoverinfo': 'none'}
     ),
     NPHI=dict(
         track=3,
