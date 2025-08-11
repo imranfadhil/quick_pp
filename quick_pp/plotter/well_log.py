@@ -48,7 +48,7 @@ def add_crossover_traces(df):
     return df
 
 
-def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
+def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: OrderedDict = OrderedDict(),
                xaxis_defs: dict = {}, column_widths: list = []):
     """
     Generate a multi-track well log plot using Plotly, supporting custom traces, rock/coal flags, and zone markers.
@@ -188,7 +188,7 @@ def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
         autosize=True,
         showlegend=False,
         title={
-            'text': '%s Logs' % df.WELL_NAME.dropna().unique()[0],
+            'text': '%s Logs' % well_name,
             'y': .99,
             'xanchor': 'center',
             'yanchor': 'top',
