@@ -153,15 +153,17 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: Ordered
                    if k in visible_xaxis and x.name == k}
     layout_dict['yaxis'] = {'domain': [0, .84], 'title': f'DEPTH ({depth_uom})'}
 
-    for i in range(2, no_of_track * 2 + 1):
+    for i in range(1, no_of_track * 2 + 1):
         layout_dict[f'yaxis{i}'] = {
             'domain': [0, .84],
-            'visible': False if i % 2 == 0 else True,
+            'visible': False if i % 2 == 0 and i != no_of_track * 2 else True,
             'showgrid': False
         }
     fig.update_layout(**layout_dict)
     fig.update_xaxes(fixedrange=True)
-    fig.update_yaxes(matches='y', constrain='domain', autorange='reversed')
+    fig.update_yaxes(
+        matches='y', constrain='domain', range=[df['DEPTH'].max() + 10, df['DEPTH'].min() - 10]
+    )
 
     # --- Helper for zone markers (ZONES) ---
     def add_zone_markers(fig, df):

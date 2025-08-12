@@ -314,8 +314,8 @@ XAXIS_DEFS = {
         'dtick': 0.2, 'range': [0, 1], 'type': 'linear', 'zeroline': False
     },
     'ROCK_FLAG_0': {
-        'title': {'text': '', 'font': {'size': 1}}, 'tickfont': {'size': 1},
-        'side': 'top', 'anchor': 'free', 'position': .88,
+        'title': {'text': 'ROCK_FLAG', 'font': {'size': font_size}}, 'tickfont': {'size': 1},
+        'side': 'top', 'anchor': 'free', 'position': .85,
         'title_standoff': .1, 'range': [0.1, 0.2], 'type': 'linear', 'showgrid': False, 'zeroline': False
     },
     'VCLD': {
