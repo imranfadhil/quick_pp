@@ -55,10 +55,14 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
             "phit": lambda x: np.nanmean(x),
             "swt": lambda x: np.nanmean(x),
             "bvo": lambda x: np.nanmean(x)
-        }).reset_index().rename(columns={"vshale": "av_vshale", "phit": "av_phit", "swt": "av_swt", "bvo": "av_bvo"})
+        }).reset_index()
         avg_df['perm_am'] = flag_df.groupby('zones')['perm'].agg('mean').reset_index(drop=True)
         avg_df['perm_gm'] = flag_df.groupby('zones')['perm'].agg(gmean, nan_policy='omit').reset_index(drop=True)
         avg_df['perm_hm'] = flag_df.groupby('zones')['perm'].agg(hmean, nan_policy='omit').reset_index(drop=True)
+        avg_df = avg_df.rename(columns={
+            "vshale": "av_vshale", "phit": "av_phit", "swt": "av_swt", "bvo": "av_bvo",
+            "perm_gm": "av_perm_gm", "perm_am": "av_perm_am", "perm_hm": "av_perm_hm"
+        })
         temp_df = temp_df.merge(avg_df, on=["zones"], how="left", validate="1:1")
 
         # Calculate gross thickness
@@ -86,7 +90,7 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
 
     # Sort the columns
     cols = ['zones', 'flag', 'top', 'bottom', 'gross', 'net', 'ntg',
-            'av_vshale', 'av_phit', 'av_swt', 'av_bvo', 'perm_am', 'perm_gm', 'perm_hm']
+            'av_vshale', 'av_phit', 'av_swt', 'av_bvo', 'av_perm_am', 'av_perm_gm', 'av_perm_hm']
 
     logger.debug(f"Reservoir summary calculation completed with {len(ressum_df)} summary rows")
     return ressum_df[cols]
