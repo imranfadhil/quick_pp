@@ -33,7 +33,7 @@ COLOR_DICT = {
     'CPERM': '#FF0000',
     'CSAT': '#FF0000',
     'SHF': '#618F63',
-    'ROCK_FLAG_0': "#F3E3CA",
+    'ROCK_FLAG_0': "#FFFFFF",
     'DTC': '#FF0000',
     'DTS': '#0000FF',
 }
