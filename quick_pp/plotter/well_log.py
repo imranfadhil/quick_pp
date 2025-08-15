@@ -38,19 +38,47 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
 
 
 def add_crossover_traces(df):
-    rhob_min, rhob_max = 1.95, 2.95
-    nphi_min_scale, nphi_max_scale = 0.45, -0.15
-    rhob_on_nphi_scale = nphi_min_scale + (
-        df['RHOB'] - rhob_min) * (nphi_max_scale - nphi_min_scale) / (rhob_max - rhob_min)
-    crossover_condition = df['NPHI'] < rhob_on_nphi_scale
-    # Fill first and last crossover_condition values with False to avoid edge effects when plotting
-    if len(crossover_condition) > 0:
-        crossover_condition.iloc[0] = False
-        crossover_condition.iloc[-1] = False
-    df['RHOB_ON_NPHI_SCALE'] = rhob_on_nphi_scale
-    df['GAS_XOVER_TOP'] = np.where(crossover_condition, rhob_on_nphi_scale, nphi_min_scale)
-    df['GAS_XOVER_BOTTOM'] = np.where(crossover_condition, df['NPHI'], nphi_min_scale)
+    if 'NPHI' in df.columns and 'RHOB' in df.columns and 'NPHI_XOVER_BOTTOM' not in df.columns:
+        rhob_min, rhob_max = 1.95, 2.95
+        nphi_min_scale, nphi_max_scale = 0.45, -0.15
+        rhob_on_nphi_scale = nphi_min_scale + (
+            df['RHOB'] - rhob_min) * (nphi_max_scale - nphi_min_scale) / (rhob_max - rhob_min)
+        crossover_condition = df['NPHI'] < rhob_on_nphi_scale
+        # Fill first and last crossover_condition values with False to avoid edge effects when plotting
+        if len(crossover_condition) > 0:
+            crossover_condition.iloc[0] = False
+            crossover_condition.iloc[-1] = False
+        df['RHOB_ON_NPHI_SCALE'] = rhob_on_nphi_scale
+        df['GAS_XOVER_TOP'] = np.where(crossover_condition, rhob_on_nphi_scale, nphi_min_scale)
+        df['GAS_XOVER_BOTTOM'] = np.where(crossover_condition, df['NPHI'], nphi_min_scale)
+    return df
 
+
+def add_rock_flag_traces(df):
+    if 'ROCK_FLAG' in df.columns:
+        # Add ROCK_FLAG colors
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(0).astype(int)
+        no_of_rock_flags = df['ROCK_FLAG'].nunique() + 1
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(no_of_rock_flags)
+        sorted_rock_flags = sorted(df['ROCK_FLAG'].unique().tolist())
+        for i, rock_flag in enumerate(sorted_rock_flags):
+            lightness = 100 - ((i * 1 + 2) / no_of_rock_flags * 100)
+            fill_color = f'hsl(30, 70%, {lightness}%)'
+            COLOR_DICT[f'ROCK_FLAG_{rock_flag}'] = fill_color
+            # print(f"i: {i}, rock_flag: {rock_flag}, fill_color: {fill_color}")
+
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].astype('category')
+        df = df.drop(columns=[c for c in df.columns if 'ROCK_FLAG_' in c])
+        df = pd.get_dummies(df, columns=['ROCK_FLAG'], prefix='ROCK_FLAG', dtype=int)
+        if 'ROCK_FLAG_0' not in df.columns:
+            df['ROCK_FLAG_0'] = 0
+    return df
+
+
+def fix_missing_volumetrics(df):
+    volumetrics = ['VCLD', 'VSILT', 'VSAND', 'VCALC', 'VDOLO', 'VGAS', 'VOIL', 'VHC']
+    for col in volumetrics:
+        df[col] = df[col].fillna(0) if col in df.columns else None
     return df
 
 
@@ -100,8 +128,7 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: Ordered
     index = df.DEPTH
 
     # Add yellow shaded crossover if NPHI RHOB present in df
-    if 'NPHI' in df.columns and 'RHOB' in df.columns and 'NPHI_XOVER_BOTTOM' not in df.columns:
-        df = add_crossover_traces(df)
+    df = add_crossover_traces(df)
 
     # Ensure all required columns exist (fill with NaN if missing)
     for k in trace_defs.keys():
@@ -109,23 +136,10 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: Ordered
             df[k] = np.nan
 
     # One-hot encode ROCK_FLAG if present
-    if 'ROCK_FLAG' in df.columns:
-        # Add ROCK_FLAG colors
-        df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(0).astype(int)
-        no_of_rock_flags = df['ROCK_FLAG'].nunique() + 1
-        df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(no_of_rock_flags)
-        sorted_rock_flags = sorted(df['ROCK_FLAG'].unique().tolist())
-        for i, rock_flag in enumerate(sorted_rock_flags):
-            lightness = 100 - ((i * 1 + 2) / no_of_rock_flags * 100)
-            fill_color = f'hsl(30, 70%, {lightness}%)'
-            COLOR_DICT[f'ROCK_FLAG_{rock_flag}'] = fill_color
-            # print(f"i: {i}, rock_flag: {rock_flag}, fill_color: {fill_color}")
+    df = add_rock_flag_traces(df)
 
-        df['ROCK_FLAG'] = df['ROCK_FLAG'].astype('category')
-        df = df.drop(columns=[c for c in df.columns if 'ROCK_FLAG_' in c])
-        df = pd.get_dummies(df, columns=['ROCK_FLAG'], prefix='ROCK_FLAG', dtype=int)
-        if 'ROCK_FLAG_0' not in df.columns:
-            df['ROCK_FLAG_0'] = 0
+    # Fix missing volumetrics
+    df = fix_missing_volumetrics(df)
 
     fig = make_subplots(
         rows=1, cols=no_of_track, shared_yaxes=True, horizontal_spacing=.02,
