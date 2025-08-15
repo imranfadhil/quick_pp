@@ -39,11 +39,17 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
 
 def add_crossover_traces(df):
     rhob_min, rhob_max = 1.95, 2.95
-    nphi_min, nphi_max = 0.45, -0.15
-    rhob_on_nphi_scale = nphi_min + (df['RHOB'] - rhob_min) * (nphi_max - nphi_min) / (rhob_max - rhob_min)
+    nphi_min_scale, nphi_max_scale = 0.45, -0.15
+    rhob_on_nphi_scale = nphi_min_scale + (
+        df['RHOB'] - rhob_min) * (nphi_max_scale - nphi_min_scale) / (rhob_max - rhob_min)
     crossover_condition = df['NPHI'] < rhob_on_nphi_scale
-    df['GAS_XOVER_TOP'] = np.where(crossover_condition, rhob_on_nphi_scale, nphi_min)
-    df['GAS_XOVER_BOTTOM'] = np.where(crossover_condition, df['NPHI'], nphi_min)
+    # Fill first and last crossover_condition values with False to avoid edge effects when plotting
+    if len(crossover_condition) > 0:
+        crossover_condition.iloc[0] = False
+        crossover_condition.iloc[-1] = False
+    df['RHOB_ON_NPHI_SCALE'] = rhob_on_nphi_scale
+    df['GAS_XOVER_TOP'] = np.where(crossover_condition, rhob_on_nphi_scale, nphi_min_scale)
+    df['GAS_XOVER_BOTTOM'] = np.where(crossover_condition, df['NPHI'], nphi_min_scale)
 
     return df
 
