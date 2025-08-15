@@ -82,6 +82,19 @@ def fix_missing_volumetrics(df):
     return df
 
 
+def fix_missing_depths(df):
+    depth_min = df['DEPTH'].min()
+    depth_max = df['DEPTH'].max()
+    depth_step = df['DEPTH'].diff().mode()[0].round(4)  # Most common depth step
+    complete_depths = np.arange(depth_min, depth_max + depth_step, depth_step)
+
+    # Create new dataframe with complete depths and merge with original data
+    df_complete = pd.DataFrame({'DEPTH': np.round(complete_depths, 4)})
+    df = pd.merge_asof(df_complete, df, on='DEPTH', direction='nearest', tolerance=depth_step)
+    df = df.sort_values(by='DEPTH', ascending=True)
+    return df
+
+
 def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: OrderedDict = OrderedDict(),
                xaxis_defs: dict = {}, column_widths: list = []):
     """
@@ -125,6 +138,9 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: Ordered
     no_of_track = max([trace['track'] for trace in trace_defs.values()])
     column_widths = column_widths or [1] * no_of_track
     df = well_data.copy()
+
+    # Fix missing depths
+    df = fix_missing_depths(df)
     index = df.DEPTH
 
     # Add yellow shaded crossover if NPHI RHOB present in df
