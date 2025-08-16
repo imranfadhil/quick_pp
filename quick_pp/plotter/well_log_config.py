@@ -33,7 +33,7 @@ COLOR_DICT = {
     'CPERM': '#FF0000',
     'CSAT': '#FF0000',
     'SHF': '#618F63',
-    'ROCK_FLAG_0': "#F3E3CA",
+    'ROCK_FLAG_0': "hsl(30, 70%, 97%)",
     'DTC': '#FF0000',
     'DTS': '#0000FF',
 }
@@ -53,11 +53,11 @@ TRACE_DEFS = OrderedDict(
         hide_xaxis=False,
         style={'line_dash': 'dot', 'line_width': 1, 'line_color': COLOR_DICT['RT']}
     ),
-    RHOB=dict(
+    GAS_XOVER_BOTTOM=dict(
         track=3,
         secondary_y=False,
         hide_xaxis=False,
-        style={'line_width': 1, 'line_color': COLOR_DICT['RHOB']}
+        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': 'rgba(255, 255, 0, 0.4)', 'hoverinfo': 'none'}
     ),
     PHIT=dict(
         track=4,
@@ -96,11 +96,23 @@ TRACE_DEFS = OrderedDict(
             'fillpattern_size': 2, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
         }
     ),
+    GAS_XOVER_TOP=dict(
+        track=3,
+        secondary_y=False,
+        hide_xaxis=False,
+        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': 'white', 'hoverinfo': 'none'}
+    ),
     NPHI=dict(
+        track=3,
+        secondary_y=False,
+        hide_xaxis=False,
+        style={'line_dash': 'dot', 'line_width': 1, 'line_color': COLOR_DICT['NPHI']}
+    ),
+    RHOB=dict(
         track=3,
         secondary_y=True,
         hide_xaxis=False,
-        style={'line_dash': 'dot', 'line_width': 1, 'line_color': COLOR_DICT['NPHI']}
+        style={'line_width': 1, 'line_color': COLOR_DICT['RHOB']}
     ),
     PHIE=dict(
         track=4,
@@ -265,142 +277,134 @@ TRACE_DEFS = OrderedDict(
 font_size = 8
 XAXIS_DEFS = {
     'GR': {
-        'title': 'GR',
-        'titlefont': {'color': COLOR_DICT['GR'], 'size': font_size},
+        'title': {'text': 'GR', 'font': {'color': COLOR_DICT['GR'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['GR'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .85,
         'title_standoff': .1, 'dtick': 40, 'range': [0, 200], 'type': 'linear', 'zeroline': False
     },
     'RT': {
-        'title': 'RT',
-        'titlefont': {'color': COLOR_DICT['RT'], 'size': font_size},
+        'title': {'text': 'RT', 'font': {'color': COLOR_DICT['RT'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['RT'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .85,
         'title_standoff': .1, 'range': [np.log10(.2), np.log10(2000)], 'type': 'log',
         'tickmode': 'array', 'tickvals': np.geomspace(0.2, 2000, 5), 'tickangle': -90, 'minor_showgrid': True
     },
-    'RHOB': {
-        'title': 'RHOB',
-        'titlefont': {'color': COLOR_DICT['RHOB'], 'size': font_size},
-        'tickformat': ".2f", 'tick0': 1.95, 'dtick': 0.2, 'tickangle': -90,
-        'tickfont': {'color': COLOR_DICT['RHOB'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .85,
-        'title_standoff': .1, 'range': [1.95, 2.95], 'type': 'linear'
+    'GAS_XOVER_BOTTOM': {
+        'title': {'text': '', 'font': {'size': 1}}, 'tickfont': {'size': 1},
+        'side': 'top', 'anchor': 'free', 'position': .88,
+        'zeroline': False, 'range': [.45, -.15], 'type': 'linear', 'showgrid': False
     },
     'PHIT': {
-        'title': 'PHIT',
-        'titlefont': {'color': COLOR_DICT['PHIT'], 'size': font_size},
+        'title': {'text': 'PHIT', 'font': {'color': COLOR_DICT['PHIT'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['PHIT'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .88, 'title_standoff': .1,
         'dtick': 0.1, 'range': [0, 0.5], 'type': 'linear', 'zeroline': False
     },
     'PERM': {
-        'title': 'PERM',
-        'titlefont': {'color': COLOR_DICT['PERM'], 'size': font_size},
+        'title': {'text': 'PERM', 'font': {'color': COLOR_DICT['PERM'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['PERM'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .91, 'title_standoff': .1,
         'range': [np.log10(0.1), np.log10(10000)], 'type': 'log', 'tickformat': 'd', 'tickangle': -90,
         'minor_showgrid': True
     },
     'SWT': {
-        'title': 'SWT',
-        'titlefont': {'color': COLOR_DICT['SWT'], 'size': font_size},
+        'title': {'text': 'SWT', 'font': {'color': COLOR_DICT['SWT'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['SWT'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .88, 'title_standoff': .1,
         'dtick': 0.2, 'range': [0, 1], 'type': 'linear', 'zeroline': False
     },
     'ROCK_FLAG_0': {
-        'title': '', 'tickfont_size': 1, 'side': 'top', 'anchor': 'free', 'position': .88,
+        'title': {'text': 'ROCK_FLAG', 'font': {'size': font_size}}, 'tickfont': {'size': 1},
+        'side': 'top', 'anchor': 'free', 'position': .85,
         'title_standoff': .1, 'range': [0.1, 0.2], 'type': 'linear', 'showgrid': False, 'zeroline': False
     },
     'VCLD': {
-        'title': 'VOLUMETRIC',
-        'titlefont': {'color': 'black', 'size': font_size},
+        'title': {'text': 'VOLUMETRIC', 'font': {'color': 'black', 'size': font_size}},
         'tickfont': {'color': 'black', 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1,
         'range': [0, 1], 'type': 'linear', 'zeroline': False
     },
+    'GAS_XOVER_TOP': {
+        'title': {'text': '', 'font': {'size': 1}}, 'tickfont': {'size': 1},
+        'side': 'top', 'anchor': 'free', 'position': .88, 'overlaying': 'x3',
+        'zeroline': False, 'range': [.45, -.15], 'type': 'linear', 'showgrid': False
+    },
     'NPHI': {
-        'title': 'NPHI',
-        'titlefont': {'color': COLOR_DICT['NPHI'], 'size': font_size},
+        'title': {'text': 'NPHI', 'font': {'color': COLOR_DICT['NPHI'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['NPHI'], 'size': font_size}, 'zeroline': False,
         'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x3',
         'tickformat': ".2f", 'tick0': -.15, 'dtick': 0.12, 'range': [.45, -.15], 'type': 'linear', 'tickangle': -90
     },
+    'RHOB': {
+        'title': {'text': 'RHOB', 'font': {'color': COLOR_DICT['RHOB'], 'size': font_size}},
+        'tickformat': ".2f", 'tick0': 1.95, 'dtick': 0.2, 'tickangle': -90,
+        'tickfont': {'color': COLOR_DICT['RHOB'], 'size': font_size},
+        'side': 'top', 'anchor': 'free', 'position': .85, 'overlaying': 'x3',
+        'title_standoff': .1, 'range': [1.95, 2.95], 'type': 'linear'
+    },
     'PHIE': {
-        'title': 'PHIE',
-        'titlefont': {'color': COLOR_DICT['PHIE'], 'size': font_size},
+        'title': {'text': 'PHIE', 'font': {'color': COLOR_DICT['PHIE'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['PHIE'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .92, 'title_standoff': .1, 'overlaying': 'x4',
         'dtick': 0.1, 'range': [0, 0.5], 'type': 'linear', 'zeroline': False
     },
     'SWE': {
-        'title': 'SWE',
-        'titlefont': {'color': COLOR_DICT['SWE'], 'size': font_size},
+        'title': {'text': 'SWE', 'font': {'color': COLOR_DICT['SWE'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['SWE'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .92, 'title_standoff': .1, 'overlaying': 'x6',
         'dtick': 0.2, 'range': [0, 1], 'type': 'linear', 'zeroline': False
     },
     'CALI': {
-        'title': 'CALI',
-        'titlefont': {'color': COLOR_DICT['CALI'], 'size': font_size},
+        'title': {'text': 'CALI', 'font': {'color': COLOR_DICT['CALI'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['CALI'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x1',
         'dtick': 6, 'range': [6, 24], 'type': 'linear', 'showgrid': False
     },
     'BS': {
-        'title': 'BS',
-        'titlefont': {'color': COLOR_DICT['BS'], 'size': font_size},
+        'title': {'text': 'BS', 'font': {'color': COLOR_DICT['BS'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['BS'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .92, 'title_standoff': .1, 'overlaying': 'x1',
         'dtick': 6, 'range': [6, 24], 'type': 'linear', 'showgrid': False
     },
     'BADHOLE': {
-        'title': 'BADHOLE',
-        'titlefont': {'color': COLOR_DICT['BADHOLE'], 'size': font_size},
+        'title': {'text': 'BADHOLE', 'font': {'color': COLOR_DICT['BADHOLE'], 'size': font_size}},
         'tickfont': {'size': 1},
         'side': 'top', 'anchor': 'free', 'position': .96, 'title_standoff': .1, 'overlaying': 'x1',
         'range': [0.1, 5], 'type': 'linear', 'showgrid': False, 'zeroline': False
     },
     'PEF': {
-        'title': 'PEF',
-        'titlefont': {'color': COLOR_DICT['PEF'], 'size': font_size},
+        'title': {'text': 'PEF', 'font': {'color': COLOR_DICT['PEF'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['PEF'], 'size': font_size}, 'zeroline': False,
         'side': 'top', 'anchor': 'free', 'position': .94, 'title_standoff': .1, 'overlaying': 'x3',
         'range': [-10, 10], 'type': 'linear', 'showgrid': False
     },
     'CPORE': {
-        'title': 'CPORE',
-        'titlefont': {'color': COLOR_DICT['CPORE'], 'size': font_size},
+        'title': {'text': 'CPORE', 'font': {'color': COLOR_DICT['CPORE'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['CPORE'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1, 'overlaying': 'x4',
         'dtick': 0.1, 'range': [0, .5], 'type': 'linear', 'showgrid': False, 'zeroline': False
     },
     'CPERM': {
-        'title': 'CPERM',
-        'titlefont': {'color': COLOR_DICT['CPERM'], 'size': font_size},
+        'title': {'text': 'CPERM', 'font': {'color': COLOR_DICT['CPERM'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['CPERM'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1, 'overlaying': 'x5',
         'range': [np.log10(0.1), np.log10(10000)], 'type': 'log', 'tickformat': 'd', 'tickangle': -90,
         'zeroline': False, 'showgrid': False
     },
     'CSAT': {
-        'title': 'CSAT',
-        'titlefont': {'color': COLOR_DICT['CSAT'], 'size': font_size},
+        'title': {'text': 'CSAT', 'font': {'color': COLOR_DICT['CSAT'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['CSAT'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1, 'overlaying': 'x6',
         'dtick': 0.2, 'range': [0, 1], 'type': 'linear', 'zeroline': False, 'showgrid': False
     },
     'SHF': {
-        'title': 'SHF',
-        'titlefont': {'color': COLOR_DICT['SHF'], 'size': font_size},
+        'title': {'text': 'SHF', 'font': {'color': COLOR_DICT['SHF'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['SHF'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .96, 'title_standoff': .1, 'overlaying': 'x6',
         'dtick': 0.2, 'range': [0, 1], 'type': 'linear', 'zeroline': False, 'showgrid': False
     },
     'BVW': {
-        'title': 'BVW',
-        'titlefont': {'color': COLOR_DICT['BVW'], 'size': font_size},
+        'title': {'text': 'BVW', 'font': {'color': COLOR_DICT['BVW'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['BVW'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .96, 'title_standoff': .1, 'overlaying': 'x4',
         'dtick': 0.1, 'range': [0, 0.5], 'type': 'linear', 'zeroline': False
@@ -409,15 +413,13 @@ XAXIS_DEFS = {
         'range': [0.1, .2], 'type': 'linear', 'showgrid': False, 'zeroline': False,
     },
     'DTC': {
-        'title': 'DTC',
-        'titlefont': {'color': COLOR_DICT['DTC'], 'size': font_size},
+        'title': {'text': 'DTC', 'font': {'color': COLOR_DICT['DTC'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['DTC'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .92, 'title_standoff': .1,
         'dtick': 10, 'range': [0, 200], 'type': 'linear', 'zeroline': False
     },
     'DTS': {
-        'title': 'DTS',
-        'titlefont': {'color': COLOR_DICT['DTS'], 'size': font_size},
+        'title': {'text': 'DTS', 'font': {'color': COLOR_DICT['DTS'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['DTS'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .96, 'title_standoff': .1,
         'dtick': 10, 'range': [0, 200], 'type': 'linear', 'zeroline': False

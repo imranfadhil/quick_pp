@@ -1,5 +1,6 @@
 import numpy as np
 import math
+from typing import Optional
 
 from quick_pp.utils import min_max_line, length_a_b, line_intersection
 from quick_pp.config import Config
@@ -15,9 +16,12 @@ class SandSiltClay:
      This module is modified based on Kuttan, where the reservoir sections consist of combination of sand-silt-clay
      while non-reservoir sections remain a combination of silt-clay only."""
 
-    def __init__(self, dry_sand_point: tuple = (float, float), dry_silt_point: tuple = (float, float),
-                 dry_clay_point: tuple = (float, float), fluid_point: tuple = (float, float),
-                 wet_clay_point: tuple = (float, float), silt_line_angle: float = 0, **kwargs):
+    def __init__(self, dry_sand_point: Optional[tuple[float, float]] = None,
+                 dry_silt_point: Optional[tuple[float, float]] = None,
+                 dry_clay_point: Optional[tuple[float, float]] = None,
+                 fluid_point: Optional[tuple[float, float]] = None,
+                 wet_clay_point: Optional[tuple[float, float]] = None,
+                 silt_line_angle: Optional[float] = None, **kwargs):
         # Initialize the endpoints
         self.dry_sand_point = dry_sand_point or Config.SSC_ENDPOINTS["DRY_SAND_POINT"]
         self.dry_silt_point = dry_silt_point or Config.SSC_ENDPOINTS["DRY_SILT_POINT"]
@@ -52,9 +56,9 @@ class SandSiltClay:
         # Redefine wetclay point
         _, rhob_max_line = min_max_line(rhob, 0.1)
         _, nphi_max_line = min_max_line(nphi, 0.1)
-        wetclay_RHOB = np.nanmin(rhob_max_line)
-        wetclay_NPHI = np.nanmax(nphi_max_line)
         if not all(self.wet_clay_point):
+            wetclay_RHOB = np.nanmin(rhob_max_line)
+            wetclay_NPHI = np.nanmax(nphi_max_line)
             self.wet_clay_point = (wetclay_NPHI, wetclay_RHOB)
             logger.debug(f"Updated wet clay point to: ({wetclay_NPHI:.3f}, {wetclay_RHOB:.3f})")
 

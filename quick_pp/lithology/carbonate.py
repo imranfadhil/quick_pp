@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from typing import Optional
 
 from quick_pp.utils import length_a_b, line_intersection
 from quick_pp.config import Config
@@ -9,8 +10,10 @@ from quick_pp import logger
 class Carbonate:
     """Carbonate model based on neutron density or density pef cross plots."""
 
-    def __init__(self, dry_calc_point: tuple = (float, float), dry_dolo_point: tuple = (float, float),
-                 dry_clay_point: tuple = (float, float), fluid_point: tuple = (float, float), **kwargs):
+    def __init__(self, dry_calc_point: Optional[tuple[float, float]] = None,
+                 dry_dolo_point: Optional[tuple[float, float]] = None,
+                 dry_clay_point: Optional[tuple[float, float]] = None,
+                 fluid_point: Optional[tuple[float, float]] = None, **kwargs):
         # Initialize the endpoints
         self.dry_calc_point = dry_calc_point or Config.CARB_NEU_DEN_ENDPOINTS["DRY_CALC_POINT"]
         self.dry_dolo_point = dry_dolo_point or Config.CARB_NEU_DEN_ENDPOINTS["DRY_DOLO_POINT"]

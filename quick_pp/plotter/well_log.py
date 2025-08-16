@@ -37,7 +37,65 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
     return fig
 
 
-def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
+def add_crossover_traces(df):
+    if 'NPHI' in df.columns and 'RHOB' in df.columns and 'NPHI_XOVER_BOTTOM' not in df.columns:
+        rhob_min, rhob_max = 1.95, 2.95
+        nphi_min_scale, nphi_max_scale = 0.45, -0.15
+        rhob_on_nphi_scale = nphi_min_scale + (
+            df['RHOB'] - rhob_min) * (nphi_max_scale - nphi_min_scale) / (rhob_max - rhob_min)
+        crossover_condition = df['NPHI'] < rhob_on_nphi_scale
+        # Fill first and last crossover_condition values with False to avoid edge effects when plotting
+        if len(crossover_condition) > 0:
+            crossover_condition.iloc[0] = False
+            crossover_condition.iloc[-1] = False
+        df['RHOB_ON_NPHI_SCALE'] = rhob_on_nphi_scale
+        df['GAS_XOVER_TOP'] = np.where(crossover_condition, rhob_on_nphi_scale, nphi_min_scale)
+        df['GAS_XOVER_BOTTOM'] = np.where(crossover_condition, df['NPHI'], nphi_min_scale)
+    return df
+
+
+def add_rock_flag_traces(df):
+    if 'ROCK_FLAG' in df.columns:
+        # Add ROCK_FLAG colors
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(0).astype(int)
+        no_of_rock_flags = df['ROCK_FLAG'].nunique() + 1
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(no_of_rock_flags)
+        sorted_rock_flags = sorted(df['ROCK_FLAG'].unique().tolist())
+        for i, rock_flag in enumerate(sorted_rock_flags):
+            lightness = 100 - ((i * 1 + 2) / no_of_rock_flags * 100)
+            fill_color = f'hsl(30, 70%, {lightness}%)'
+            COLOR_DICT[f'ROCK_FLAG_{rock_flag}'] = fill_color
+            # print(f"i: {i}, rock_flag: {rock_flag}, fill_color: {fill_color}")
+
+        df['ROCK_FLAG'] = df['ROCK_FLAG'].astype('category')
+        df = df.drop(columns=[c for c in df.columns if 'ROCK_FLAG_' in c])
+        df = pd.get_dummies(df, columns=['ROCK_FLAG'], prefix='ROCK_FLAG', dtype=int)
+        if 'ROCK_FLAG_0' not in df.columns:
+            df['ROCK_FLAG_0'] = 0
+    return df
+
+
+def fix_missing_volumetrics(df):
+    volumetrics = ['VCLD', 'VSILT', 'VSAND', 'VCALC', 'VDOLO', 'VGAS', 'VOIL', 'VHC']
+    for col in volumetrics:
+        df[col] = df[col].fillna(0) if col in df.columns else None
+    return df
+
+
+def fix_missing_depths(df):
+    depth_min = df['DEPTH'].min()
+    depth_max = df['DEPTH'].max()
+    depth_step = df['DEPTH'].diff().mode()[0].round(4)  # Most common depth step
+    complete_depths = np.arange(depth_min, depth_max + depth_step, depth_step)
+
+    # Create new dataframe with complete depths and merge with original data
+    df_complete = pd.DataFrame({'DEPTH': np.round(complete_depths, 4)})
+    df = pd.merge_asof(df_complete, df, on='DEPTH', direction='nearest', tolerance=depth_step)
+    df = df.sort_values(by='DEPTH', ascending=True)
+    return df
+
+
+def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: OrderedDict = OrderedDict(),
                xaxis_defs: dict = {}, column_widths: list = []):
     """
     Generate a multi-track well log plot using Plotly, supporting custom traces, rock/coal flags, and zone markers.
@@ -80,7 +138,13 @@ def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
     no_of_track = max([trace['track'] for trace in trace_defs.values()])
     column_widths = column_widths or [1] * no_of_track
     df = well_data.copy()
+
+    # Fix missing depths
+    df = fix_missing_depths(df)
     index = df.DEPTH
+
+    # Add yellow shaded crossover if NPHI RHOB present in df
+    df = add_crossover_traces(df)
 
     # Ensure all required columns exist (fill with NaN if missing)
     for k in trace_defs.keys():
@@ -88,21 +152,10 @@ def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
             df[k] = np.nan
 
     # One-hot encode ROCK_FLAG if present
-    if 'ROCK_FLAG' in df.columns:
-        # Add ROCK_FLAG colors
-        df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(0).astype(int)
-        no_of_rock_flags = df['ROCK_FLAG'].nunique() + 1
-        df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(no_of_rock_flags)
-        for i in df['ROCK_FLAG'].unique():
-            print(f"i: {i}")
-            lightness = 100 - (int(i) / no_of_rock_flags * 100)
-            COLOR_DICT[f'ROCK_FLAG_{i}'] = f'hsl(30, 70%, {lightness}%)'
+    df = add_rock_flag_traces(df)
 
-        df['ROCK_FLAG'] = df['ROCK_FLAG'].astype('category')
-        df = df.drop(columns=[c for c in df.columns if 'ROCK_FLAG_' in c])
-        df = pd.get_dummies(df, columns=['ROCK_FLAG'], prefix='ROCK_FLAG', dtype=int)
-        if 'ROCK_FLAG_0' not in df.columns:
-            df['ROCK_FLAG_0'] = 0
+    # Fix missing volumetrics
+    df = fix_missing_volumetrics(df)
 
     fig = make_subplots(
         rows=1, cols=no_of_track, shared_yaxes=True, horizontal_spacing=.02,
@@ -136,15 +189,17 @@ def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
                    if k in visible_xaxis and x.name == k}
     layout_dict['yaxis'] = {'domain': [0, .84], 'title': f'DEPTH ({depth_uom})'}
 
-    for i in range(2, no_of_track * 2 + 1):
+    for i in range(1, no_of_track * 2 + 1):
         layout_dict[f'yaxis{i}'] = {
             'domain': [0, .84],
-            'visible': False if i % 2 == 0 else True,
+            'visible': False if i % 2 == 0 and i != no_of_track * 2 else True,
             'showgrid': False
         }
     fig.update_layout(**layout_dict)
     fig.update_xaxes(fixedrange=True)
-    fig.update_yaxes(matches='y', constrain='domain', autorange='reversed')
+    fig.update_yaxes(
+        matches='y', constrain='domain', range=[df['DEPTH'].max() + 10, df['DEPTH'].min() - 10]
+    )
 
     # --- Helper for zone markers (ZONES) ---
     def add_zone_markers(fig, df):
@@ -171,7 +226,7 @@ def plotly_log(well_data, depth_uom="", trace_defs: OrderedDict = OrderedDict(),
         autosize=True,
         showlegend=False,
         title={
-            'text': '%s Logs' % df.WELL_NAME.dropna().unique()[0],
+            'text': '%s Logs' % well_name,
             'y': .99,
             'xanchor': 'center',
             'yanchor': 'top',

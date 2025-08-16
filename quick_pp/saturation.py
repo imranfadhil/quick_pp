@@ -59,7 +59,7 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
     # Estimate B at 25 degC if not provided
     if B is None:
         B = (1 - 0.83 * np.exp(-0.5 / rw)) * 3.83
-        logger.debug(f"Estimated B parameter: {B:.3f}")
+        logger.debug(f"Estimated average B parameter: {B.mean():.3f}")
 
     if Qv is None:
         Qv = 0.3
@@ -76,9 +76,10 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
 
         if i % 10 == 0:
-            logger.debug(f"Iteration {i}: max change = {delta_sat.max():.6f}")
+            logger.debug(f"Iteration {i}: max change = {np.max(delta_sat):.6f}"
+                         if hasattr(delta_sat, '__len__') else f"Iteration {i}: max change = {delta_sat:.6f}")
 
-    logger.debug(f"Waxman-Smits saturation range: {swt.min():.3f} - {swt.max():.3f}")
+    logger.debug(f"Waxman-Smits saturation range: {min(swt)} - {max(swt)}")
     return swt
 
 

@@ -233,7 +233,7 @@ def quick_qc(well_data, return_fig=False):
     return_df = well_data.copy()
     return_df['ZONES'] = "ALL"
     return_df['QC_FLAG'] = 0
-    return_df['PERM'].where(return_df['PERM'] > 0, np.nan, inplace=True)
+    return_df['PERM'] = return_df['PERM'].clip(lower=1e-3, upper=1e5)
 
     cutoffs = dict(VSHALE=0.4, PHIT=0.01, SWT=0.9)
     _, return_df['RES_FLAG'], _ = flag_interval(return_df['VCLW'], return_df['PHIT'], return_df['SWT'], cutoffs)
@@ -277,54 +277,36 @@ def quick_qc(well_data, return_fig=False):
 
     if return_fig:
         # Distribution plot
-        dist_fig, axs = plt.subplots(8, 1, figsize=(5, 15))
+        dist_fig, axs = plt.subplots(4, 1, figsize=(5, 10))
         for group, data in return_df.groupby('RES_FLAG'):
             label = 'RES' if group == 1 else 'NON-RES'
-            axs[0].hist(data['VSHALE'], bins=100, alpha=0.7, label=label)
-            axs[1].hist(summary_df[f'AV_VSHALE_{label}'], bins=25, alpha=0.7, label=f'AV_{label}')
-            axs[2].hist(data['PHIT'], bins=100, alpha=0.7, label=label)
-            axs[3].hist(summary_df[f'AV_PHIT_{label}'], bins=25, alpha=0.7, label=f'AV_{label}')
-            axs[4].hist(data['SWT'], bins=100, alpha=0.7, label=label)
-            axs[5].hist(summary_df[f'AV_SWT_{label}'], bins=25, alpha=0.7, label=f'AV_{label}')
-            axs[6].hist(data['PERM'], bins=100, alpha=0.7, label=label)
-            axs[7].hist(summary_df[f'AV_PERM_GM_{label}'], bins=25, alpha=0.7, label=f'AV_{label}')
+            axs[0].hist(data['VCLD'], bins=100, alpha=0.7, label=label, range=[0, 1])
+            axs[1].hist(data['PHIT'], bins=100, alpha=0.7, label=label, range=[0, .5])
+            axs[2].hist(data['SWT'], bins=100, alpha=0.7, label=label, range=[0, 1])
+            axs[3].hist(np.log10(data['PERM']), bins=100, alpha=0.7, label=f'Log PERM_{label}')
         axs[0].set_title('VSHALE Distribution')
         axs[0].legend()
 
-        axs[1].set_title('AV_VSHALE Distribution')
+        axs[1].set_title('PHIT Distribution')
         axs[1].legend()
 
-        axs[2].set_title('PHIT Distribution')
+        axs[2].set_title('SWT Distribution')
+        axs[2].set_yscale('log')
         axs[2].legend()
 
-        axs[3].set_title('AV_PHIT Distribution')
+        axs[3].set_title('Log PERM Distribution')
+        axs[3].set_yscale('log')
         axs[3].legend()
-
-        axs[4].set_title('SWT Distribution')
-        axs[4].set_yscale('log')
-        axs[4].legend()
-
-        axs[5].set_title('AV_SWT Distribution')
-        axs[5].set_yscale('log')
-        axs[5].legend()
-
-        axs[6].set_title('PERM Distribution')
-        axs[6].set_yscale('log')
-        axs[6].legend()
-
-        axs[7].set_title('AV_PERM_GM Distribution')
-        axs[7].set_yscale('log')
-        axs[7].legend()
 
         dist_fig.tight_layout()
 
         # Depth plot
         depth_fig, axs = plt.subplots(4, 1, figsize=(20, 5), sharex=True)
-        axs[0].plot(return_df['DEPTH'], return_df['VSHALE'], label='VSHALE')
+        axs[0].plot(return_df['DEPTH'], return_df['VCLD'], label='VSHALE')
         # Compare vsh_gr and vsh_dn
         if 'VSH_GR' in return_df.columns:
             return_df['QC_FLAG'] = np.where(
-                abs(return_df['VSH_GR'] - return_df['VSHALE']) > 0.1, 1, return_df['QC_FLAG'])
+                abs(return_df['VSH_GR'] - return_df['VCLD']) > 0.1, 1, return_df['QC_FLAG'])
             axs[0].plot(return_df['DEPTH'], return_df['VSH_GR'], label='VSH_GR')
         axs[0].set_frame_on(False)
         axs[0].set_title('VSHALE')
@@ -383,7 +365,7 @@ def quick_compare(field_data, level='WELL', return_fig=False):
     if return_fig:
         # Box plot
         curves = ['AV_GR', 'AV_RT', 'AV_NPHI', 'AV_RHOB',
-                  'AV_VSHALE', 'AV_PHIT', 'AV_SWT', 'PERM_GM']
+                  'AV_VSHALE', 'AV_PHIT', 'AV_SWT', 'AV_PERM_GM']
         no_curves = len(curves)
         plot_df = compare_df[compare_df.FLAG == 'all']
         idx_percentiles = [int(x * (len(plot_df) - 1)) for x in [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]]
