@@ -46,6 +46,21 @@ def app(debug):
 
 
 @click.command()
+@click.option('--debug', is_flag=True)
+@click.option('--port', default=8000, help='Port to run the web app on')
+def web(debug, port):
+    """Run the high-performance web interface for quick_pp."""
+    if not is_server_running('localhost', port):
+        reload_ = "--reload" if debug else ""
+        cmd = f"uvicorn quick_pp.web_app.web_app:app --host 0.0.0.0 --port {port} {reload_}"
+        click.echo(f"Web app is not running. Starting it now on port {port}... | {cmd}")
+        process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
+        process.wait()
+    else:
+        click.echo(f"Web app is already running on port {port}")
+
+
+@click.command()
 @click.argument('env', default='local', type=click.Choice(['local', 'remote']))
 def mlflow_server(env):
     """Run the MLflow server."""
@@ -109,6 +124,7 @@ def predict(model_config, data_hash, output_file_name, env):
 
 # Add commands to the CLI group
 cli.add_command(app)
+cli.add_command(web)
 cli.add_command(mlflow_server)
 cli.add_command(model_deployment)
 cli.add_command(train)

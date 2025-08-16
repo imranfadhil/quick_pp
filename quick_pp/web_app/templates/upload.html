@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload LAS Files - Quick PP</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .upload-area {
+            border: 2px dashed #cbd5e0;
+            transition: all 0.3s ease;
+        }
+        .upload-area:hover {
+            border-color: #667eea;
+            background-color: #f7fafc;
+        }
+        .upload-area.dragover {
+            border-color: #667eea;
+            background-color: #ebf8ff;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Navigation -->
+    <nav class="gradient-bg text-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center py-6">
+                <div class="flex items-center">
+                    <h1 class="text-2xl font-bold">Quick PP</h1>
+                    <span class="ml-2 text-sm opacity-75">Petrophysical Analysis</span>
+                </div>
+                <div class="flex space-x-4">
+                    <a href="/" class="hover:opacity-75 transition-opacity">Dashboard</a>
+                    <a href="/upload" class="hover:opacity-75 transition-opacity">Upload</a>
+                    <a href="/wells" class="hover:opacity-75 transition-opacity">Wells</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Page Header -->
+        <div class="text-center mb-8">
+            <h2 class="text-3xl font-bold text-gray-900 mb-4">Upload LAS Files</h2>
+            <p class="text-lg text-gray-600">
+                Upload your well log data in LAS format to begin petrophysical analysis
+            </p>
+        </div>
+
+        <!-- Upload Form -->
+        <div class="bg-white rounded-xl shadow-lg p-8">
+            <form hx-post="/upload-las" hx-encoding="multipart/form-data" hx-target="#upload-result">
+                <!-- Well Name Input -->
+                <div class="mb-6">
+                    <label for="well_name" class="block text-sm font-medium text-gray-700 mb-2">
+                        Well Name
+                    </label>
+                    <input 
+                        type="text" 
+                        id="well_name" 
+                        name="well_name" 
+                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="Enter well name (e.g., Well-001)"
+                        required
+                    >
+                </div>
+
+                <!-- File Upload Area -->
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        LAS File
+                    </label>
+                    <div 
+                        class="upload-area rounded-lg p-8 text-center cursor-pointer"
+                        onclick="document.getElementById('file_input').click()"
+                        ondrop="handleDrop(event)"
+                        ondragover="handleDragOver(event)"
+                        ondragleave="handleDragLeave(event)"
+                    >
+                        <input 
+                            type="file" 
+                            id="file_input" 
+                            name="file" 
+                            accept=".las,.LAS"
+                            class="hidden"
+                            required
+                            onchange="handleFileSelect(event)"
+                        >
+                        <div id="upload-content">
+                            <svg class="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                            </svg>
+                            <p class="text-lg font-medium text-gray-600 mb-2">
+                                Click to select or drag and drop
+                            </p>
+                            <p class="text-sm text-gray-500">
+                                Supports .las and .LAS files
+                            </p>
+                        </div>
+                        <div id="file-info" class="hidden">
+                            <svg class="w-16 h-16 mx-auto mb-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <p class="text-lg font-medium text-green-600 mb-2" id="file-name"></p>
+                            <p class="text-sm text-gray-500" id="file-size"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Submit Button -->
+                <div class="text-center">
+                    <button 
+                        type="submit" 
+                        class="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium text-lg"
+                        id="submit-btn"
+                        disabled
+                    >
+                        Upload and Process
+                    </button>
+                </div>
+            </form>
+
+            <!-- Upload Result -->
+            <div id="upload-result" class="mt-6"></div>
+        </div>
+
+        <!-- Instructions -->
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-6 mt-8">
+            <h3 class="text-lg font-semibold text-blue-800 mb-3">File Requirements</h3>
+            <ul class="text-blue-700 space-y-2">
+                <li class="flex items-start">
+                    <svg class="w-5 h-5 mr-2 mt-0.5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    File must be in LAS (Log ASCII Standard) format
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-5 h-5 mr-2 mt-0.5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    Supported extensions: .las and .LAS
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-5 h-5 mr-2 mt-0.5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    Maximum file size: 100 MB
+                </li>
+                <li class="flex items-start">
+                    <svg class="w-5 h-5 mr-2 mt-0.5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    File should contain depth and log curve data
+                </li>
+            </ul>
+        </div>
+
+        <!-- Back to Dashboard -->
+        <div class="text-center mt-8">
+            <a href="/" class="inline-flex items-center text-blue-600 hover:text-blue-800 transition-colors">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                </svg>
+                Back to Dashboard
+            </a>
+        </div>
+    </div>
+
+    <script>
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                displayFileInfo(file);
+                enableSubmit();
+            }
+        }
+
+        function handleDragOver(event) {
+            event.preventDefault();
+            event.currentTarget.classList.add('dragover');
+        }
+
+        function handleDragLeave(event) {
+            event.currentTarget.classList.remove('dragover');
+        }
+
+        function handleDrop(event) {
+            event.preventDefault();
+            event.currentTarget.classList.remove('dragover');
+            
+            const files = event.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                if (file.name.toLowerCase().endsWith('.las')) {
+                    document.getElementById('file_input').files = files;
+                    displayFileInfo(file);
+                    enableSubmit();
+                } else {
+                    alert('Please select a .las file');
+                }
+            }
+        }
+
+        function displayFileInfo(file) {
+            document.getElementById('upload-content').classList.add('hidden');
+            document.getElementById('file-info').classList.remove('hidden');
+            document.getElementById('file-name').textContent = file.name;
+            document.getElementById('file-size').textContent = formatFileSize(file.size);
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function enableSubmit() {
+            document.getElementById('submit-btn').disabled = false;
+        }
+
+        // Reset form after successful upload
+        document.addEventListener('htmx:afterRequest', function(event) {
+            if (event.detail.successful) {
+                // Reset form after 3 seconds
+                setTimeout(() => {
+                    document.getElementById('upload-content').classList.remove('hidden');
+                    document.getElementById('file-info').classList.add('hidden');
+                    document.getElementById('submit-btn').disabled = true;
+                    document.getElementById('well_name').value = '';
+                    document.getElementById('file_input').value = '';
+                }, 3000);
+            }
+        });
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quick PP - Petrophysical Analysis Dashboard</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .card-hover {
+            transition: all 0.3s ease;
+        }
+        .card-hover:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Navigation -->
+    <nav class="gradient-bg text-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center py-6">
+                <div class="flex items-center">
+                    <h1 class="text-2xl font-bold">Quick PP</h1>
+                    <span class="ml-2 text-sm opacity-75">Petrophysical Analysis</span>
+                </div>
+                <div class="flex space-x-4">
+                    <a href="/" class="hover:opacity-75 transition-opacity">Dashboard</a>
+                    <a href="/upload" class="hover:opacity-75 transition-opacity">Upload</a>
+                    <a href="/wells" class="hover:opacity-75 transition-opacity">Wells</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Welcome Section -->
+        <div class="text-center mb-12">
+            <h2 class="text-4xl font-bold text-gray-900 mb-4">
+                Welcome to Quick PP
+            </h2>
+            <p class="text-xl text-gray-600 max-w-3xl mx-auto">
+                High-performance petrophysical analysis platform for quick-look evaluation of well log data.
+                Upload your LAS files and perform comprehensive analysis in real-time.
+            </p>
+        </div>
+
+        <!-- Feature Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mb-12">
+            <!-- File Upload Card -->
+            <div class="bg-white rounded-xl shadow-lg p-6 card-hover">
+                <div class="text-blue-600 mb-4">
+                    <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-semibold text-gray-900 mb-2">Upload LAS Files</h3>
+                <p class="text-gray-600 mb-4">Upload and process your well log data in LAS format for analysis.</p>
+                <a href="/upload" class="inline-block bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+                    Upload Files
+                </a>
+            </div>
+
+            <!-- Analysis Card -->
+            <div class="bg-white rounded-xl shadow-lg p-6 card-hover">
+                <div class="text-green-600 mb-4">
+                    <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-semibold text-gray-900 mb-2">Petrophysical Analysis</h3>
+                <p class="text-gray-600 mb-4">Perform comprehensive analysis including lithology, porosity, and saturation.</p>
+                <a href="/wells" class="inline-block bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors">
+                    View Wells
+                </a>
+            </div>
+
+            <!-- Real-time Card -->
+            <div class="bg-white rounded-xl shadow-lg p-6 card-hover">
+                <div class="text-purple-600 mb-4">
+                    <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-semibold text-gray-900 mb-2">Real-time Processing</h3>
+                <p class="text-gray-600 mb-4">High-performance analysis with instant results and interactive visualizations.</p>
+                <span class="inline-block bg-purple-600 text-white px-4 py-2 rounded-lg">
+                    Fast & Responsive
+                </span>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+            <h3 class="text-2xl font-semibold text-gray-900 mb-6">Quick Actions</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <h4 class="text-lg font-medium text-gray-800 mb-3">Upload New Well</h4>
+                    <p class="text-gray-600 mb-4">Start by uploading a LAS file to begin your analysis.</p>
+                    <a href="/upload" class="inline-flex items-center bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                        </svg>
+                        Upload LAS File
+                    </a>
+                </div>
+                <div>
+                    <h4 class="text-lg font-medium text-gray-800 mb-3">View Existing Wells</h4>
+                    <p class="text-gray-600 mb-4">Access previously uploaded wells and continue your analysis.</p>
+                    <button onclick="loadWells()" class="inline-flex items-center bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path>
+                        </svg>
+                        Load Wells
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Wells Section -->
+        <div class="bg-white rounded-xl shadow-lg p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-2xl font-semibold text-gray-900">Loaded Wells</h3>
+                <button onclick="loadWells()" class="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors">
+                    Refresh
+                </button>
+            </div>
+            <div id="wells-container" class="min-h-[200px]">
+                <div class="text-center text-gray-500 py-8">
+                    <svg class="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    <p>No wells loaded yet. Upload a LAS file to get started.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="bg-gray-800 text-white py-8 mt-16">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <p>&copy; 2024 Quick PP. Built with FastAPI and modern web technologies.</p>
+        </div>
+    </footer>
+
+    <script>
+        function loadWells() {
+            htmx.ajax('GET', '/wells', {target: '#wells-container'});
+        }
+
+        function loadWell(dataId) {
+            window.location.href = `/well/${dataId}/analysis`;
+        }
+
+        function deleteWell(dataId) {
+            if (confirm('Are you sure you want to delete this well?')) {
+                fetch(`/api/well/${dataId}`, {method: 'DELETE'})
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.message) {
+                            loadWells(); // Refresh the wells list
+                        }
+                    });
+            }
+        }
+
+        // Auto-load wells on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadWells();
+        });
+    </script>
+</body>
+</html>
+
