@@ -4,6 +4,9 @@ import xarray as xr
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 from scipy.signal import convolve
+import wellpathpy as wpp
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
 
 
 def calculate_acoustic_impedance(rhob, dtc):
@@ -44,11 +47,6 @@ def auto_identify_layers(gr, rhob, dtc, depth):
     Returns:
         numpy.ndarray: Array of identified layer boundaries
     """
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.decomposition import PCA
-    from sklearn.cluster import KMeans
-    import pandas as pd
-
     # Stack logs into feature matrix
     X = np.column_stack([gr, rhob, dtc])
 
@@ -60,24 +58,20 @@ def auto_identify_layers(gr, rhob, dtc, depth):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # Apply PCA
-    pca = PCA(n_components=2)
-    X_pca = pca.fit_transform(X_scaled)
-
     # Use elbow method to determine optimal number of clusters
     distortions = []
     K = range(1, 10)
     for k in K:
         kmeans = KMeans(n_clusters=k, random_state=42)
-        kmeans.fit(X_pca)
+        kmeans.fit(X_scaled)
         distortions.append(kmeans.inertia_)
 
     # Find elbow point (simple method)
-    k_optimal = np.argmin(np.diff(distortions)) + 2
+    k_optimal = np.argmin(np.diff(distortions)) + 7
 
     # Final clustering
     kmeans = KMeans(n_clusters=k_optimal, random_state=42)
-    labels = kmeans.fit_predict(X_pca)
+    labels = kmeans.fit_predict(X_scaled)
 
     # Find layer boundaries where cluster labels change
     layer_boundaries = np.where(np.diff(labels) != 0)[0]
@@ -131,7 +125,7 @@ def calculate_reflectivity(df):
         R = (Z2 - Z1)/(Z2 + Z1)
 
         # Assign reflectivity to all points in the upper layer
-        df.loc[df['LAYERS'] == layer1, 'REFLECTIVITY'] = R
+        df.loc[df['LAYERS'] == layer1, ['AVG_AI', 'REFLECTIVITY']] = Z1, R
 
     return df.sort_values(by='DEPTH')
 
@@ -173,10 +167,10 @@ def extract_seismic_along_well(seismic_cube, well_trajectory):
         - Uses xarray's interp() method for extraction
         - Handles both inline/xline and CDP coordinate systems
     """
-    well_ilxl, tvdss = convert_well_trajectory_to_ilxl(seismic_cube, well_trajectory)
+    well_ilxl, z = convert_well_trajectory_to_ilxl(seismic_cube, well_trajectory)
 
     # Extract seismic trace
-    well_seismic_trace = seismic_cube.interp(**well_ilxl, samples=tvdss)
+    well_seismic_trace = seismic_cube.interp(**well_ilxl, samples=z)
 
     return well_seismic_trace.data
 
@@ -195,21 +189,41 @@ def convert_well_trajectory_to_ilxl(seismic_cube, well_trajectory):
         print(f"Error scaling coordinates: {e}")
 
     # Verify required columns exist in well trajectory
-    required_cols = ['md', 'x', 'y', 'z']
+    required_cols = ['md', 'incl', 'azim', 'x', 'y', 'z']
     missing_cols = [col for col in required_cols if col not in well_trajectory.columns]
     if missing_cols:
         raise ValueError(f"Well trajectory missing required columns: {missing_cols}")
 
+    # Recalculate well deviation for higher sampling rate
+    well_dev_pos = wpp.deviation(
+        well_trajectory['md'], well_trajectory['incl'], well_trajectory['azim']
+    )
+    # depth values in MD that we want to sample the seismic cube at
+    new_depths = np.arange(0, int(well_trajectory['md'].max()), 1)
+
+    # use minimum curvature and resample to 1m interval
+    well_dev_pos = well_dev_pos.minimum_curvature().resample(new_depths)
+
+    # adjust position of deviation to local coordinates and TVDSS
+    well_dev_pos.to_wellhead(
+        well_trajectory['y'][0],
+        well_trajectory['x'][0],
+        inplace=True,
+    )
+
+    # Get resampled md based on well_dev_pos
+    md_depths = np.linspace(0, well_trajectory['md'].max(), len(well_dev_pos.depth))
+
     affine = seismic_cube.segysak.get_affine_transform().inverted()
-    ilxl = affine.transform(np.dstack([well_trajectory['x'], well_trajectory['y']])[0])
+    ilxl = affine.transform(np.dstack([well_dev_pos.easting, well_dev_pos.northing])[0])
     well_ilxl = dict(
-        iline=xr.DataArray(ilxl[:, 0], dims="DEPTH", coords={"DEPTH": well_trajectory['md']}),
-        xline=xr.DataArray(ilxl[:, 1], dims="DEPTH", coords={"DEPTH": well_trajectory['md']}),
+        iline=xr.DataArray(ilxl[:, 0], dims="well", coords={"well": md_depths}),
+        xline=xr.DataArray(ilxl[:, 1], dims="well", coords={"well": md_depths}),
     )
     z = xr.DataArray(
-        1.0 * well_trajectory['z'],
-        dims="DEPTH",
-        coords={"DEPTH": well_trajectory['md']},
+        1.0 * well_dev_pos.depth,
+        dims="well",
+        coords={"well": md_depths},
     )
     return well_ilxl, z
 
@@ -317,51 +331,51 @@ def plot_seismic_along_well(seismic_cube, well_trajectory):
     return fig
 
 
-def optimize_wavelet(seismic_trace, reflectivity, max_iter=100):
-    """Optimize a wavelet to match seismic trace with well reflectivity.
-
-    Uses least squares optimization to find the wavelet that best convolves
-    with the reflectivity series to match the actual seismic trace.
-
-    Args:
-        seismic_trace (numpy.ndarray): Actual seismic trace at well location
-        reflectivity (numpy.ndarray): Reflectivity coefficients from well logs
-        wavelet_length (int): Length of wavelet in samples (odd number)
-        max_iter (int): Maximum number of iterations for optimization
+def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=31, max_iter=100):
+    """Estimate the seismic wavelet by matching synthetic to actual seismic trace.
 
     Returns:
-        numpy.ndarray: Optimized wavelet
-        float: Final error between synthetic and actual trace
+        numpy.ndarray: Estimated wavelet
+        float: Final error (RMSE) between synthetic and seismic trace
+        numpy.ndarray: Synthetic seismic trace generated with the estimated wavelet
     """
     # Ensure wavelet length is odd
-    wavelet_length = len(reflectivity)
     if wavelet_length % 2 == 0:
         wavelet_length += 1
 
-    # Initial guess - zero phase wavelet
-    init_wavelet = np.zeros(wavelet_length)
+    # Initial guess: zero-phase Ricker wavelet
+    def ricker_wavelet(length, a=2.0):
+        t = np.linspace(-length // 2, length // 2, length)
+        pi2 = (np.pi ** 2)
+        return (1 - 2 * pi2 * (t / a) ** 2) * np.exp(-pi2 * (t / a) ** 2)
 
+    init_wavelet = ricker_wavelet(wavelet_length)
+
+    # Objective: minimize RMSE between synthetic and seismic
     def objective(wavelet):
-        """Objective function to minimize"""
-        # Generate synthetic trace
         synthetic = convolve(reflectivity, wavelet, mode='same')
-
-        # Calculate error
-        error = np.mean(np.abs(synthetic - seismic_trace))
+        scaled_synthetic = StandardScaler().fit_transform(synthetic.reshape(-1, 1)).flatten()
+        scaled_seismic = StandardScaler().fit_transform(seismic_trace.values.reshape(-1, 1)).flatten()
+        error = np.sqrt(np.mean((scaled_synthetic - scaled_seismic) ** 2))
         return error
 
-    # Run optimization
+    bounds = [(-2, 2)] * wavelet_length
+
     result = minimize(
         objective,
         init_wavelet,
         method='L-BFGS-B',
+        bounds=bounds,
         options={'maxiter': max_iter}
     )
 
-    optimized_wavelet = result.x
+    estimated_wavelet = result.x
     final_error = result.fun
 
-    return optimized_wavelet, final_error
+    # To produce the synthetic seismic trace with the estimated wavelet:
+    synthetic_trace = convolve(reflectivity, estimated_wavelet, mode='same')
+
+    return estimated_wavelet, final_error, synthetic_trace
 
 
 def create_synthetic_seismogram(wavelet, reflectivity):
