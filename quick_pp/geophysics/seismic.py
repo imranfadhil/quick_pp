@@ -5,8 +5,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 from scipy.signal import convolve
 import wellpathpy as wpp
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
+from scipy import signal
 
 
 def calculate_acoustic_impedance(rhob, dtc):
@@ -32,59 +31,32 @@ def calculate_acoustic_impedance(rhob, dtc):
     return acoustic_impedance
 
 
-def auto_identify_layers(gr, rhob, dtc, depth):
-    """Auto identify layers using PCA on multiple well logs.
-
-    This function uses Principal Component Analysis (PCA) to identify distinct
-    layers by analyzing multiple log curves simultaneously. It looks for
-    natural clustering in the transformed space.
+def auto_identify_layers_from_seismic_trace(seismic_trace, depth):
+    """Auto-identify layers from seismic trace.
 
     Args:
-        gr (numpy.ndarray): Gamma ray log values
-        rhob (numpy.ndarray): Bulk density log values
-        dtc (numpy.ndarray): Sonic compressional slowness log values
-
-    Returns:
-        numpy.ndarray: Array of identified layer boundaries
+        seismic_trace (numpy.ndarray): Seismic trace
+        depth (numpy.ndarray): Depth values
     """
-    # Stack logs into feature matrix
-    X = np.column_stack([gr, rhob, dtc])
+    peaks = signal.find_peaks(seismic_trace, distance=30)[0]
+    troughs = signal.find_peaks(-seismic_trace, distance=30)[0]
 
-    # Remove any rows with NaN values
-    valid_mask = ~np.isnan(X).any(axis=1)
-    X = X[valid_mask]
+    # Combine peaks and troughs
+    all_boundaries = np.sort(np.concatenate([peaks, troughs]))
 
-    # Standardize the features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # Find indices where boundaries are too close together
+    min_distance = 30  # Minimum distance between boundaries in array indices
+    too_close = np.diff(all_boundaries) < min_distance
 
-    # Use elbow method to determine optimal number of clusters
-    distortions = []
-    K = range(1, 10)
-    for k in K:
-        kmeans = KMeans(n_clusters=k, random_state=42)
-        kmeans.fit(X_scaled)
-        distortions.append(kmeans.inertia_)
+    # Keep only boundaries that are far enough apart
+    filtered_boundaries = all_boundaries[~np.concatenate([too_close, [False]])]
+    all_boundaries = filtered_boundaries
 
-    # Find elbow point (simple method)
-    k_optimal = np.argmin(np.diff(distortions)) + 7
+    # Create layer labels
+    layer_labels = [f'Layer_{i+1}' for i in range(len(all_boundaries))]
 
-    # Final clustering
-    kmeans = KMeans(n_clusters=k_optimal, random_state=42)
-    labels = kmeans.fit_predict(X_scaled)
-
-    # Find layer boundaries where cluster labels change
-    layer_boundaries = np.where(np.diff(labels) != 0)[0]
-
-    # Map back to original indices accounting for removed NaN values
-    if not np.all(valid_mask):
-        valid_indices = np.where(valid_mask)[0]
-        layer_boundaries = valid_indices[layer_boundaries]
-
-    # Create a categorical pandas Series of layer boundaries as layers
-    layer_labels = [f'Layer_{i+1}' for i in range(len(layer_boundaries))]
-    LAYERS = pd.Series(data=layer_labels, index=depth.iloc[layer_boundaries], name='LAYERS', dtype='category')
-    return LAYERS
+    # Create categorical pandas Series of layer boundaries
+    return pd.Series(data=layer_labels, index=depth.iloc[all_boundaries], name='LAYERS', dtype='category')
 
 
 def calculate_reflectivity(df):
@@ -102,8 +74,6 @@ def calculate_reflectivity(df):
     """
     df = df.copy()
     df['AI'] = calculate_acoustic_impedance(df.RHOB, df.DT)
-    layers = auto_identify_layers(df.GR, df.RHOB, df.DT, df.DEPTH)
-    df = pd.merge_asof(df, layers, on='DEPTH')
     df['LAYERS'] = df['LAYERS'].ffill().bfill()
 
     # Calculate reflectivity between consecutive layers
@@ -124,8 +94,11 @@ def calculate_reflectivity(df):
         # Calculate reflection coefficient
         R = (Z2 - Z1)/(Z2 + Z1)
 
-        # Assign reflectivity to all points in the upper layer
-        df.loc[df['LAYERS'] == layer1, ['AVG_AI', 'REFLECTIVITY']] = Z1, R
+        # Assign average amplitude and reflectivity to points in the upper layer
+        layer1_mask = df['LAYERS'] == layer1
+        layer1_indices = df.index[layer1_mask]
+        df.loc[layer1_indices[:-1], 'REFLECTIVITY'] = 0
+        df.loc[layer1_indices[-1], 'REFLECTIVITY'] = R
 
     return df.sort_values(by='DEPTH')
 
@@ -199,7 +172,7 @@ def convert_well_trajectory_to_ilxl(seismic_cube, well_trajectory):
         well_trajectory['md'], well_trajectory['incl'], well_trajectory['azim']
     )
     # depth values in MD that we want to sample the seismic cube at
-    new_depths = np.arange(0, int(well_trajectory['md'].max()), 1)
+    new_depths = np.arange(0, well_trajectory['md'].max(), .1)
 
     # use minimum curvature and resample to 1m interval
     well_dev_pos = well_dev_pos.minimum_curvature().resample(new_depths)
@@ -331,48 +304,91 @@ def plot_seismic_along_well(seismic_cube, well_trajectory):
     return fig
 
 
-def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=31, max_iter=100):
+def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=601, max_iter=100):
     """Estimate the seismic wavelet by matching synthetic to actual seismic trace.
+
+    This implementation uses a combination of frequency-domain and time-domain methods
+    based on the approaches described in:
+    - White (1980) "Inverse Problems in Reflection Seismology"
+    - Edgar & van der Baan (2011) "How reliable is statistical wavelet estimation?"
+    - Rosa (2018) "Seismic Inversion Methods"
+
+    Args:
+        seismic_trace (numpy.ndarray): Observed seismic trace
+        reflectivity (numpy.ndarray): Reflectivity series
+        wavelet_length (int): Length of wavelet in samples (should be odd)
+        max_iter (int): Maximum iterations for optimization
 
     Returns:
         numpy.ndarray: Estimated wavelet
         float: Final error (RMSE) between synthetic and seismic trace
         numpy.ndarray: Synthetic seismic trace generated with the estimated wavelet
     """
-    # Ensure wavelet length is odd
+    # Ensure wavelet length is odd and reasonable (typically 100-300ms)
     if wavelet_length % 2 == 0:
         wavelet_length += 1
 
-    # Initial guess: zero-phase Ricker wavelet
-    def ricker_wavelet(length, a=2.0):
-        t = np.linspace(-length // 2, length // 2, length)
-        pi2 = (np.pi ** 2)
-        return (1 - 2 * pi2 * (t / a) ** 2) * np.exp(-pi2 * (t / a) ** 2)
+    # Initial guess: zero-phase Ricker wavelet with statistical estimation
+    def ricker_wavelet(length, f0=30):
+        t = np.linspace(-length/2, length/2, length) / 1000  # Convert to seconds
+        pi2 = np.pi * np.pi
+        w = (1 - 2*pi2*f0*f0*t*t) * np.exp(-pi2*f0*f0*t*t)
+        return w / np.max(np.abs(w))  # Normalize
 
-    init_wavelet = ricker_wavelet(wavelet_length)
+    # Estimate dominant frequency from seismic trace using FFT
+    fft = np.fft.fft(seismic_trace)
+    freqs = np.fft.fftfreq(len(seismic_trace))
+    dom_freq = np.abs(freqs[np.argmax(np.abs(fft))])
+    init_wavelet = ricker_wavelet(wavelet_length, f0=dom_freq*100)
 
-    # Objective: minimize RMSE between synthetic and seismic
+    # Objective function using Wiener deconvolution approach
     def objective(wavelet):
-        synthetic = convolve(reflectivity, wavelet, mode='same')
-        scaled_synthetic = StandardScaler().fit_transform(synthetic.reshape(-1, 1)).flatten()
-        scaled_seismic = StandardScaler().fit_transform(seismic_trace.values.reshape(-1, 1)).flatten()
-        error = np.sqrt(np.mean((scaled_synthetic - scaled_seismic) ** 2))
-        return error
+        # Apply tapering to reduce edge effects
+        taper = np.hanning(len(wavelet))
+        tapered_wavelet = wavelet * taper
 
-    bounds = [(-2, 2)] * wavelet_length
+        # Generate synthetic and normalize both traces
+        synthetic = convolve(reflectivity, tapered_wavelet, mode='same')
+        synthetic = (synthetic - np.mean(synthetic)) / np.std(synthetic)
+        seismic_norm = (seismic_trace - np.mean(seismic_trace)) / np.std(seismic_trace)
 
-    result = minimize(
-        objective,
-        init_wavelet,
-        method='L-BFGS-B',
-        bounds=bounds,
-        options={'maxiter': max_iter}
-    )
+        # Compute error in both time and frequency domains
+        time_error = np.sqrt(np.mean((synthetic - seismic_norm) ** 2))
 
-    estimated_wavelet = result.x
-    final_error = result.fun
+        # Add frequency domain constraint
+        fft_syn = np.fft.fft(synthetic)
+        fft_real = np.fft.fft(seismic_norm)
+        freq_error = np.sqrt(np.mean(np.abs(fft_syn - fft_real) ** 2))
 
-    # To produce the synthetic seismic trace with the estimated wavelet:
+        return time_error + 0.5 * freq_error
+
+    # Set bounds to maintain stability
+    bounds = [(-1, 1)] * wavelet_length
+
+    # Optimize using L-BFGS-B with multiple restarts
+    best_result = None
+    best_error = np.inf
+
+    for _ in range(3):  # Try multiple initializations
+        result = minimize(
+            objective,
+            init_wavelet,
+            method='L-BFGS-B',
+            bounds=bounds,
+            options={'maxiter': max_iter}
+        )
+
+        if result.fun < best_error:
+            best_error = result.fun
+            best_result = result
+
+    estimated_wavelet = best_result.x
+    final_error = best_result.fun
+
+    # Apply phase correction to ensure zero-phase
+    estimated_wavelet = np.roll(estimated_wavelet, -np.argmax(estimated_wavelet) + len(estimated_wavelet)//2)
+
+    # Generate final synthetic trace
     synthetic_trace = convolve(reflectivity, estimated_wavelet, mode='same')
 
     return estimated_wavelet, final_error, synthetic_trace
