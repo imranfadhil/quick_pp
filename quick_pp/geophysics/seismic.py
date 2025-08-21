@@ -31,13 +31,15 @@ def calculate_acoustic_impedance(rhob, dtc):
     return acoustic_impedance
 
 
-def auto_identify_layers_from_seismic_trace(seismic_trace, depth):
+def auto_identify_layers_from_seismic_trace(df):
     """Auto-identify layers from seismic trace.
 
     Args:
         seismic_trace (numpy.ndarray): Seismic trace
         depth (numpy.ndarray): Depth values
     """
+    seismic_trace = df['TRACE'].values
+    depth = df['DEPTH']
     peaks = signal.find_peaks(seismic_trace, distance=30)[0]
     troughs = signal.find_peaks(-seismic_trace, distance=30)[0]
 
@@ -56,7 +58,9 @@ def auto_identify_layers_from_seismic_trace(seismic_trace, depth):
     layer_labels = [f'Layer_{i+1}' for i in range(len(all_boundaries))]
 
     # Create categorical pandas Series of layer boundaries
-    return pd.Series(data=layer_labels, index=depth.iloc[all_boundaries], name='LAYERS', dtype='category')
+    layers = pd.Series(data=layer_labels, index=depth.iloc[all_boundaries], name='LAYERS', dtype='category')
+    df['LAYERS'] = layers.reindex(df['DEPTH']).ffill().bfill().values
+    return df
 
 
 def calculate_reflectivity(df):
@@ -67,14 +71,13 @@ def calculate_reflectivity(df):
     where Z2 and Z1 are the acoustic impedances of the layers above and below the interface.
 
     Args:
-        acoustic_impedance (numpy.ndarray): Array of acoustic impedance values
-        layers (pandas.Series): Series of layer boundaries
+        df (pandas.DataFrame): Input DataFrame containing well log data; RHOB, DT and LAYERS
     Returns:
         numpy.ndarray: Array of reflection coefficients at each interface
     """
     df = df.copy()
     df['AI'] = calculate_acoustic_impedance(df.RHOB, df.DT)
-    df['LAYERS'] = df['LAYERS'].ffill().bfill()
+    df['LAYERS'] = df['LAYERS'].ffill().bfill()  # Ensure LAYERS column is filled
 
     # Calculate reflectivity between consecutive layers
     df = df.sort_values(by='DEPTH')
@@ -99,7 +102,7 @@ def calculate_reflectivity(df):
         layer1_indices = df.index[layer1_mask]
         df.loc[layer1_indices[:-1], 'REFLECTIVITY'] = 0
         df.loc[layer1_indices[-1], 'REFLECTIVITY'] = R
-
+    df['REFLECTIVITY'] = df['REFLECTIVITY'].fillna(0)
     return df.sort_values(by='DEPTH')
 
 
