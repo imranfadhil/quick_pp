@@ -3,7 +3,7 @@ import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
-from scipy.signal import convolve
+from scipy.signal import convolve, hilbert
 import wellpathpy as wpp
 from scipy import signal
 
@@ -182,8 +182,8 @@ def convert_well_trajectory_to_ilxl(seismic_cube, well_trajectory):
 
     # adjust position of deviation to local coordinates and TVDSS
     well_dev_pos.to_wellhead(
-        well_trajectory['y'][0],
-        well_trajectory['x'][0],
+        well_trajectory['y'].iloc[0],
+        well_trajectory['x'].iloc[0],
         inplace=True,
     )
 
@@ -307,7 +307,7 @@ def plot_seismic_along_well(seismic_cube, well_trajectory):
     return fig
 
 
-def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=601, max_iter=100):
+def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=31, max_iter=100):
     """Estimate the seismic wavelet by matching synthetic to actual seismic trace.
 
     This implementation uses a combination of frequency-domain and time-domain methods
@@ -332,41 +332,60 @@ def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=601, max_iter=1
         wavelet_length += 1
 
     # Initial guess: zero-phase Ricker wavelet with statistical estimation
-    def ricker_wavelet(length, f0=30):
+    def ricker_wavelet(length, f0=30, amplitude=.3, phase=0.0):
+        """Generate a Ricker wavelet with specified parameters.
+
+        Args:
+            length (int): Length of wavelet in samples
+            f0 (float): Peak frequency in Hz
+            amplitude (float): Maximum amplitude of wavelet
+            phase (float): Phase rotation in degrees
+
+        Returns:
+            numpy.ndarray: Ricker wavelet
+        """
         t = np.linspace(-length/2, length/2, length) / 1000  # Convert to seconds
         pi2 = np.pi * np.pi
-        w = (1 - 2*pi2*f0*f0*t*t) * np.exp(-pi2*f0*f0*t*t)
-        return w / np.max(np.abs(w))  # Normalize
 
-    # Estimate dominant frequency from seismic trace using FFT
-    fft = np.fft.fft(seismic_trace)
-    freqs = np.fft.fftfreq(len(seismic_trace))
-    dom_freq = np.abs(freqs[np.argmax(np.abs(fft))])
-    init_wavelet = ricker_wavelet(wavelet_length, f0=dom_freq*100)
+        # Generate zero-phase Ricker wavelet
+        w = (1 - 2*pi2*f0**2*t**2) * np.exp(-pi2*f0**2*t**2)
+        w = w / np.max(np.abs(w))  # Normalize
+
+        # Apply phase rotation
+        phase_rad = np.deg2rad(phase)
+        w = w * np.cos(phase_rad) + np.imag(hilbert(w)) * np.sin(phase_rad)
+
+        # Apply amplitude scaling
+        w = w * amplitude
+
+        # Apply tapering to reduce edge effects
+        taper = np.hanning(len(w))
+
+        return w * taper
+
+    init_params = np.array([
+        wavelet_length,  # length
+        3,  # frequency
+        0.3,  # amplitude
+        0.0,  # phase
+    ])
 
     # Objective function using Wiener deconvolution approach
-    def objective(wavelet):
-        # Apply tapering to reduce edge effects
-        taper = np.hanning(len(wavelet))
-        tapered_wavelet = wavelet * taper
-
+    def objective(params):
+        length, f0, amplitude, phase = params
+        length = int(length)
+        wavelet = ricker_wavelet(length, f0, amplitude, phase)
         # Generate synthetic and normalize both traces
-        synthetic = convolve(reflectivity, tapered_wavelet, mode='same')
-        synthetic = (synthetic - np.mean(synthetic)) / np.std(synthetic)
-        seismic_norm = (seismic_trace - np.mean(seismic_trace)) / np.std(seismic_trace)
-
-        # Compute error in both time and frequency domains
-        time_error = np.sqrt(np.mean((synthetic - seismic_norm) ** 2))
-
-        # Add frequency domain constraint
-        fft_syn = np.fft.fft(synthetic)
-        fft_real = np.fft.fft(seismic_norm)
-        freq_error = np.sqrt(np.mean(np.abs(fft_syn - fft_real) ** 2))
-
-        return time_error + 0.5 * freq_error
+        synthetic = convolve(reflectivity, wavelet, mode='same')
+        return np.sqrt(np.mean((synthetic - seismic_trace)**2))
 
     # Set bounds to maintain stability
-    bounds = [(-1, 1)] * wavelet_length
+    bounds = [
+        (201, 301),     # length bounds (odd numbers)
+        (3, 100),      # frequency bounds
+        (10, 30),    # amplitude bounds
+        (-180, 180)    # phase bounds
+    ]
 
     # Optimize using L-BFGS-B with multiple restarts
     best_result = None
@@ -375,8 +394,8 @@ def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=601, max_iter=1
     for _ in range(3):  # Try multiple initializations
         result = minimize(
             objective,
-            init_wavelet,
-            method='L-BFGS-B',
+            init_params,
+            method='SLSQP',
             bounds=bounds,
             options={'maxiter': max_iter}
         )
@@ -385,13 +404,11 @@ def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=601, max_iter=1
             best_error = result.fun
             best_result = result
 
-    estimated_wavelet = best_result.x
+    best_params = best_result.x
     final_error = best_result.fun
 
-    # Apply phase correction to ensure zero-phase
-    estimated_wavelet = np.roll(estimated_wavelet, -np.argmax(estimated_wavelet) + len(estimated_wavelet)//2)
-
     # Generate final synthetic trace
+    estimated_wavelet = ricker_wavelet(int(best_params[0]), best_params[1], best_params[2], best_params[3])
     synthetic_trace = convolve(reflectivity, estimated_wavelet, mode='same')
 
     return estimated_wavelet, final_error, synthetic_trace
