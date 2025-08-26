@@ -31,39 +31,46 @@ def calculate_acoustic_impedance(rhob, dtc):
     return acoustic_impedance
 
 
-def auto_identify_layers_from_seismic_trace(df):
-    """Auto-identify layers from seismic trace.
+def auto_identify_layers_from_seismic_trace(df, method='peaks_troughs', min_distance=30):
+    """Auto-identify layers from seismic trace using peaks/troughs or zero crossings.
 
     Args:
-        seismic_trace (numpy.ndarray): Seismic trace
-        depth (numpy.ndarray): Depth values
+        df (pandas.DataFrame): DataFrame with 'TRACE' and 'DEPTH' columns.
+        method (str): 'peaks_troughs' or 'zero_crossings' to select boundary detection method.
+        min_distance (int): Minimum distance between boundaries in array indices.
+
+    Returns:
+        pandas.DataFrame: DataFrame with 'LAYERS' column added.
     """
     seismic_trace = df['TRACE'].values
     depth = df['DEPTH']
-    peaks = signal.find_peaks(seismic_trace, distance=30)[0]
-    troughs = signal.find_peaks(-seismic_trace, distance=30)[0]
 
-    # Combine peaks and troughs
-    all_boundaries = np.sort(np.concatenate([peaks, troughs]))
+    if method == 'peaks_troughs':
+        peaks = signal.find_peaks(seismic_trace, distance=min_distance)[0]
+        troughs = signal.find_peaks(-seismic_trace, distance=min_distance)[0]
+        all_boundaries = np.sort(np.concatenate([peaks, troughs]))
+    elif method == 'zero_crossings':
+        # Find indices where the sign changes (zero crossings)
+        zero_crossings = np.where(np.diff(np.sign(seismic_trace)))[0]
+        # Filter zero crossings by minimum distance
+        all_boundaries = zero_crossings[np.insert(np.diff(zero_crossings) >= min_distance, 0, True)]
+    else:
+        raise ValueError("method must be 'peaks_troughs' or 'zero_crossings'")
 
-    # Find indices where boundaries are too close together
-    min_distance = 30  # Minimum distance between boundaries in array indices
-    too_close = np.diff(all_boundaries) < min_distance
-
-    # Keep only boundaries that are far enough apart
-    filtered_boundaries = all_boundaries[~np.concatenate([too_close, [False]])]
-    all_boundaries = filtered_boundaries
+    # Remove boundaries that are too close together (for peaks/troughs)
+    if method == 'peaks_troughs':
+        too_close = np.diff(all_boundaries) < min_distance
+        filtered_boundaries = all_boundaries[~np.concatenate([too_close, [False]])]
+        all_boundaries = filtered_boundaries
 
     # Create layer labels
     layer_labels = [f'Layer_{i+1}' for i in range(len(all_boundaries))]
-
-    # Create categorical pandas Series of layer boundaries
     layers = pd.Series(data=layer_labels, index=depth.iloc[all_boundaries], name='LAYERS', dtype='category')
     df['LAYERS'] = layers.reindex(df['DEPTH']).ffill().bfill().values
     return df
 
 
-def calculate_reflectivity(df):
+def calculate_reflectivity_from_layers(df):
     """Calculate reflection coefficients from acoustic impedance log.
 
     The reflection coefficient at an interface is calculated as:
@@ -76,7 +83,7 @@ def calculate_reflectivity(df):
         numpy.ndarray: Array of reflection coefficients at each interface
     """
     df = df.copy()
-    df['AI'] = calculate_acoustic_impedance(df.RHOB, df.DT)
+    df['AI'] = calculate_acoustic_impedance(df.RHOB, df.DT.rolling(30).mean())
     df['LAYERS'] = df['LAYERS'].ffill().bfill()  # Ensure LAYERS column is filled
 
     # Calculate reflectivity between consecutive layers
@@ -102,6 +109,32 @@ def calculate_reflectivity(df):
         layer1_indices = df.index[layer1_mask]
         df.loc[layer1_indices[:-1], 'REFLECTIVITY'] = 0
         df.loc[layer1_indices[-1], 'REFLECTIVITY'] = R
+    df['REFLECTIVITY'] = df['REFLECTIVITY'].fillna(0)
+    return df.sort_values(by='DEPTH')
+
+
+def calculate_reflectivity_each_step(df):
+    """Calculate reflection coefficients for each step in the well log.
+
+    Args:
+        df (pandas.DataFrame): Input DataFrame containing well log data; LAYERS and AI
+
+    Returns:
+        pandas.DataFrame: DataFrame with REFLECTIVITY column added.
+    """
+    df = df.copy()
+    df['AI'] = calculate_acoustic_impedance(df.RHOB, df.DT.rolling(30).mean())
+    df['AVG_DIFF_AI'] = df['AI'].rolling(50).mean().diff()
+    df['AVG_DIFF_AI_2'] = df['AVG_DIFF_AI'].shift()
+    df['REFLECTIVITY'] = (df['AVG_DIFF_AI_2'] - df['AVG_DIFF_AI']) / (df['AVG_DIFF_AI_2'] + df['AVG_DIFF_AI'])
+    # Remove outliers from REFLECTIVITY using IQR method
+    q1, q3 = df['REFLECTIVITY'].quantile([0.25, 0.75])
+    iqr = q3 - q1
+    lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
+    df.loc[(df['REFLECTIVITY'] < lower_bound) | (df['REFLECTIVITY'] > upper_bound), 'REFLECTIVITY'] = np.nan
+    std = df['REFLECTIVITY'].std()
+    df.loc[df['REFLECTIVITY'].between(-std, std), 'REFLECTIVITY'] = np.nan
     df['REFLECTIVITY'] = df['REFLECTIVITY'].fillna(0)
     return df.sort_values(by='DEPTH')
 
@@ -377,17 +410,18 @@ def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=31, max_iter=10
         wavelet = ricker_wavelet(length, f0, amplitude, phase)
         # Generate synthetic and normalize both traces
         synthetic = convolve(reflectivity, wavelet, mode='same')
+        synthetic = (synthetic - np.mean(synthetic)) / np.std(synthetic)
         return np.sqrt(np.mean((synthetic - seismic_trace)**2))
 
     # Set bounds to maintain stability
     bounds = [
-        (201, 301),     # length bounds (odd numbers)
-        (3, 100),      # frequency bounds
-        (10, 30),    # amplitude bounds
-        (-180, 180)    # phase bounds
+        (3, 31),  # length bounds (odd numbers)
+        (3, 15),  # frequency bounds
+        (.1, 1),  # amplitude bounds
+        (0, 180)  # phase bounds
     ]
 
-    # Optimize using L-BFGS-B with multiple restarts
+    # Optimize with multiple restarts
     best_result = None
     best_error = np.inf
 
