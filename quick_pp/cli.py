@@ -49,7 +49,7 @@ def app(debug):
 @click.argument('env', default='local', type=click.Choice(['local', 'remote']))
 def mlflow_server(env):
     """Run the MLflow server."""
-    from quick_pp.modelling.utils import run_mlflow_server
+    from quick_pp.machine_learning.utils import run_mlflow_server
 
     run_mlflow_server(env)
 
@@ -72,7 +72,7 @@ def model_deployment(debug):
 @click.argument('env', default='local', type=click.Choice(['local', 'remote']))
 def train(model_config, data_hash, env):
     """Train the model with the specified parameters."""
-    from quick_pp.modelling.train_pipeline import train_pipeline
+    from quick_pp.machine_learning.train_pipeline import train_pipeline
 
     # Copy config.py into the root directory if it doesn't exist
     config_file = resources.files('quick_pp.modelling').joinpath('config.py')
@@ -101,7 +101,7 @@ def train(model_config, data_hash, env):
 @click.argument('env', default='local', type=click.Choice(['local', 'remote']))
 def predict(model_config, data_hash, output_file_name, env):
     """Run the prediction."""
-    from quick_pp.modelling.predict_pipeline import predict_pipeline
+    from quick_pp.machine_learning.predict_pipeline import predict_pipeline
 
     click.echo("Running prediction...")
     predict_pipeline(model_config, data_hash, output_file_name, env)

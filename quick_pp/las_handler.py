@@ -7,6 +7,10 @@ import mmap
 import welly
 import welly.las
 
+# # Uncomment to run module as a standalone script
+# import sys
+# sys.path.append(os.getcwd())
+
 from quick_pp import logger
 
 
@@ -180,7 +184,7 @@ def pre_process(welly_object):
         (header_df['mnemonic'] == 'WELL') | (header_df['descr'].str.upper() == 'WELL')
     ]['value'].values[0]
     if 'WELL_NAME' not in data_df.columns:
-        data_df.insert(0, 'WELL_NAME', well_name)
+        data_df.insert(0, 'WELL_NAME', well_name.replace("/", "-").replace(" ", "-"))
     # Insert UWI if available
     if 'UWI' in header_df['mnemonic'].values:
         uwi = header_df[
@@ -291,7 +295,7 @@ def check_index_consistent(welly_object):
         return False
 
 
-def export_to_las(well_data, well_name, folder=''):
+def export_to_las(well_data, well_name, folder='', vars_units=None):
     """Export dataframe to las file. Expecting a DEPTH column in meters unit.
 
     Args:
@@ -299,7 +303,7 @@ def export_to_las(well_data, well_name, folder=''):
         well_name (str): well name
     """
     from .config import Config
-    units = Config.vars_units(well_data)
+    units = vars_units if vars_units else Config.vars_units(well_data)
     well_data.set_index('DEPTH', inplace=True, drop=True)
     w = welly.Well().from_df(well_data, units=units, name=well_name)
 
