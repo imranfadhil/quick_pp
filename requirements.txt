@@ -25,6 +25,7 @@ psycopg2-binary==2.9.9
 ptitprince==0.2.7
 pyarrow==16.0.0
 pyshp==2.3.1
+rockphypy==0.0.2
 ruptures==1.1.8
 SALib==1.5.1
 segyio==1.9.13

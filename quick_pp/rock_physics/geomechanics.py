@@ -42,6 +42,21 @@ def estimate_gardner_density(vp, alpha=.23, beta=.25):
     return density
 
 
+def estimate_compressional_velocity(density, alpha=.31, beta=.25):
+    """Estimate compressional wave velocity from density using the empirical relation by Gardner et al. 1974.
+
+    Args:
+        density (float): Density in g/cm^3.
+
+    Returns:
+        float: Estimated P-wave velocity in m/s.
+    """
+    logger.debug(f"Estimating compressional velocity using Gardner's relation with alpha={alpha}, beta={beta}")
+    vp = (density / alpha)**(1 / beta) * 1e-3
+    logger.debug(f"Estimated P-wave velocity range: {np.min(vp):.1f} - {np.max(vp):.1f} m/s")
+    return vp
+
+
 def estimate_shear_wave_velocity(vp):
     """Estimate shear wave velocity from P-wave velocity using the empirical relation by Castagna et al. 1985.
 
