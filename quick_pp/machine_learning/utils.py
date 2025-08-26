@@ -8,7 +8,7 @@ from subprocess import Popen
 from hashlib import sha256
 from pathlib import Path
 
-from quick_pp.modelling.config import MLFLOW_CONFIG
+from quick_pp.machine_learning.config import MLFLOW_CONFIG
 from quick_pp import logger
 
 

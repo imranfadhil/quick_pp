@@ -13,8 +13,8 @@ import importlib.util
 # import sys
 # sys.path.append(os.getcwd())
 
-from quick_pp.modelling.config import MODELLING_CONFIG
-from quick_pp.modelling.utils import run_mlflow_server
+from quick_pp.machine_learning.config import MODELLING_CONFIG
+from quick_pp.machine_learning.utils import run_mlflow_server
 from quick_pp import logger
 
 # Check if config.py exists in the root directory and update MODELLING_CONFIG if found

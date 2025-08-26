@@ -8,8 +8,8 @@ import mlflow.tracking as mlflow_tracking
 # import sys
 # sys.path.append(os.getcwd())
 
-from quick_pp.modelling.config import MODELLING_CONFIG, RAW_FEATURES
-from quick_pp.modelling.utils import get_latest_registered_models, unique_id, run_mlflow_server
+from quick_pp.machine_learning.config import MODELLING_CONFIG, RAW_FEATURES
+from quick_pp.machine_learning.utils import get_latest_registered_models, unique_id, run_mlflow_server
 from quick_pp import logger
 
 

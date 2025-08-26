@@ -16,7 +16,7 @@ from importlib import resources
 # sys.path.append(os.getcwd())
 
 from quick_pp.api.fastapi_mlflow.applications import build_app
-from quick_pp.modelling.utils import get_model_info, run_mlflow_server
+from quick_pp.machine_learning.utils import get_model_info, run_mlflow_server
 from quick_pp import logger
 
 
