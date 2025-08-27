@@ -142,21 +142,68 @@ def calculate_reflectivity_each_step(df):
 def convert_depth_to_time(depth, velocity):
     """Convert depth domain to time domain using velocity information.
 
-    The two-way-time (TWT) is calculated as:
-    TWT = 2 * depth / velocity
-    where depth is in meters and velocity is in m/s
+    The two-way-time (TWT) is calculated by integrating interval times over depth:
+    1. Calculate interval time: dt = 2/velocity (s/m)
+    2. Multiply by depth gradient: dt * gradient(depth)
+    3. Cumulative sum to get total TWT: cumsum(dt * gradient(depth))
 
     Args:
         depth (numpy.ndarray): Depth values in meters
         velocity (numpy.ndarray): P-wave velocity in m/s. Must be same length as depth.
 
     Returns:
-        numpy.ndarray: Two-way-time values in seconds
+        numpy.ndarray: Two-way-time values in seconds. Array has same length as input depth.
+
+    Note:
+        This uses integration rather than simple division to account for varying
+        velocities at different depths. The gradient and cumsum ensure proper
+        accumulation of travel times through each depth interval.
     """
-    # Calculate two-way-time
-    twt = 2 * depth / velocity
+    # Calculate interval time from velocity
+    dt = 2 / velocity  # Two-way interval time in seconds per meter
+    # Integrate interval time over depth using cumsum to get total time
+    twt = np.cumsum(dt * np.gradient(depth))  # Two-way time in seconds
 
     return twt
+
+
+def convert_md_to_tvd(df, well_coords):
+    """Convert MD to TVD using well coordinates and resample to 0.5m interval.
+    Args:
+        df (pandas.DataFrame): Input DataFrame containing well log data; MD and DEPTH
+        well_coords (pandas.DataFrame): Well coordinates with columns for MD, INCL and AZIM
+    Returns:
+        pandas.DataFrame: DataFrame with TVD column added.
+    """
+    dev_survey = wpp.deviation(
+        well_coords['md'], well_coords['incl'], well_coords['azim']
+    )
+    md_range = np.arange(df.DEPTH.min(), df.DEPTH.max(), df.DEPTH.diff().mode()[0])
+    df['TVD'] = dev_survey.minimum_curvature().resample(md_range).depth
+
+    # Get list of columns to resample
+    numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+    object_cols = df.select_dtypes(include='object').columns.tolist()
+
+    # Create new TVD range with 0.5m increment
+    tvd_range = np.arange(df.TVD.min(), df.TVD.max(), 0.5).round(4)
+
+    # Create new dataframe resampled on TVD
+    resampled_df = pd.DataFrame({'TVD': tvd_range})
+
+    # Interpolate numeric columns based on TVD
+    for col in numeric_cols:
+        if col != 'TVD':
+            resampled_df[col] = np.interp(tvd_range, df.TVD, df[col]).round(4)
+
+    # Forward fill object columns based on nearest TVD
+    for col in object_cols:
+        # Create temporary series indexed by TVD
+        temp_series = pd.Series(df[col].values, index=df.TVD)
+        # Reindex to new TVD values and forward fill
+        resampled_df[col] = temp_series.reindex(tvd_range, method='ffill')
+
+    return resampled_df
 
 
 def extract_seismic_along_well(seismic_cube, well_trajectory):
@@ -340,7 +387,7 @@ def plot_seismic_along_well(seismic_cube, well_trajectory):
     return fig
 
 
-def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=31, max_iter=100):
+def optimize_wavelet(seismic_trace, reflectivity):
     """Estimate the seismic wavelet by matching synthetic to actual seismic trace.
 
     This implementation uses a combination of frequency-domain and time-domain methods
@@ -360,54 +407,39 @@ def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=31, max_iter=10
         float: Final error (RMSE) between synthetic and seismic trace
         numpy.ndarray: Synthetic seismic trace generated with the estimated wavelet
     """
-    # Ensure wavelet length is odd and reasonable (typically 100-300ms)
-    if wavelet_length % 2 == 0:
-        wavelet_length += 1
-
     # Initial guess: zero-phase Ricker wavelet with statistical estimation
-    def ricker_wavelet(length, f0=30, amplitude=.3, phase=0.0):
+    def ricker_wavelet(f0=30, phase=0.0):
         """Generate a Ricker wavelet with specified parameters.
 
         Args:
             length (int): Length of wavelet in samples
             f0 (float): Peak frequency in Hz
-            amplitude (float): Maximum amplitude of wavelet
             phase (float): Phase rotation in degrees
 
         Returns:
             numpy.ndarray: Ricker wavelet
         """
-        t = np.linspace(-length/2, length/2, length) / 1000  # Convert to seconds
+        dt = 0.001
+        tmin = -0.15
+        tmax = 0.15
+        t = np.arange(tmin, tmax, dt)
         pi2 = np.pi * np.pi
 
         # Generate zero-phase Ricker wavelet
         w = (1 - 2*pi2*f0**2*t**2) * np.exp(-pi2*f0**2*t**2)
-        w = w / np.max(np.abs(w))  # Normalize
 
         # Apply phase rotation
         phase_rad = np.deg2rad(phase)
         w = w * np.cos(phase_rad) + np.imag(hilbert(w)) * np.sin(phase_rad)
 
-        # Apply amplitude scaling
-        w = w * amplitude
-
         # Apply tapering to reduce edge effects
         taper = np.hanning(len(w))
-
         return w * taper
-
-    init_params = np.array([
-        wavelet_length,  # length
-        3,  # frequency
-        0.3,  # amplitude
-        0.0,  # phase
-    ])
 
     # Objective function using Wiener deconvolution approach
     def objective(params):
-        length, f0, amplitude, phase = params
-        length = int(length)
-        wavelet = ricker_wavelet(length, f0, amplitude, phase)
+        f0, phase = params
+        wavelet = ricker_wavelet(f0, phase)
         # Generate synthetic and normalize both traces
         synthetic = convolve(reflectivity, wavelet, mode='same')
         synthetic = (synthetic - np.mean(synthetic)) / np.std(synthetic)
@@ -415,23 +447,25 @@ def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=31, max_iter=10
 
     # Set bounds to maintain stability
     bounds = [
-        (3, 31),  # length bounds (odd numbers)
-        (3, 15),  # frequency bounds
-        (.1, 1),  # amplitude bounds
-        (0, 180)  # phase bounds
+        (10, 100),  # frequency bounds
+        (-180, 180)  # phase bounds
     ]
+
+    init_params = np.array([
+        30,  # frequency
+        0.0,  # phase
+    ])
 
     # Optimize with multiple restarts
     best_result = None
     best_error = np.inf
-
     for _ in range(3):  # Try multiple initializations
         result = minimize(
             objective,
             init_params,
-            method='SLSQP',
+            method='L-BFGS-B',
             bounds=bounds,
-            options={'maxiter': max_iter}
+            options={'maxiter': 100}
         )
 
         if result.fun < best_error:
@@ -440,9 +474,10 @@ def optimize_wavelet(seismic_trace, reflectivity, wavelet_length=31, max_iter=10
 
     best_params = best_result.x
     final_error = best_result.fun
+    print(f"Best parameters: {best_params}")
 
     # Generate final synthetic trace
-    estimated_wavelet = ricker_wavelet(int(best_params[0]), best_params[1], best_params[2], best_params[3])
+    estimated_wavelet = ricker_wavelet(best_params[0], best_params[1])
     synthetic_trace = convolve(reflectivity, estimated_wavelet, mode='same')
 
     return estimated_wavelet, final_error, synthetic_trace
