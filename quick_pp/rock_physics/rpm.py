@@ -1,3 +1,8 @@
+import matplotlib.pyplot as plt
+
+from quick_pp.rock_physics.geomechanics import estimate_shear_velocity, estimate_compressional_velocity
+
+
 def contact_model(K_matrix, G_matrix, K_grain, G_grain, porosity):
     """
     Contact model (Hertz-Mindlin) for dry rock frame moduli.
@@ -27,6 +32,56 @@ def rock_physics_model(K_matrix, G_matrix, K_grain, G_grain, K_fluid, G_fluid, p
     # Effective moduli from inclusion model
     K_eff, G_eff = inclusion_model(K_dry, G_dry, K_fluid, G_fluid, inclusion_fraction)
     return K_eff, G_eff
+
+
+def qaqc_xplots(rhob, vp=None, vs=None):
+    """Create crossplots for rock physics QC.
+
+    Args:
+        rhob (numpy.ndarray): Bulk density in g/cm³
+        vp (numpy.ndarray): P-wave velocity in m/s
+        vs (numpy.ndarray): S-wave velocity in m/s
+
+    Returns:
+        matplotlib.figure.Figure: Figure containing the QC crossplots
+    """
+    # Calculate Vs from Vp if not provided
+    if vs is None and vp is not None:
+        vs = estimate_shear_velocity(vp)
+    # Calculate vp from rhob and vs
+    if vp is None:
+        vp = estimate_compressional_velocity(rhob)
+
+    # Calculate acoustic impedance
+    ai = vp * rhob
+    vp_vs = vp/vs
+
+    # Create figure with 3 subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+
+    # Vp vs density crossplot
+    ax1.scatter(rhob, vp/1000, alpha=0.5, s=20)
+    ax1.set_xlabel('Density (g/cm³)')
+    ax1.set_ylabel('Vp (km/s)')
+    ax1.set_title('Vp vs Density')
+    ax1.grid(True)
+
+    # Vp vs Vs crossplot
+    ax2.scatter(vs/1000, vp/1000, alpha=0.5, s=20)
+    ax2.set_xlabel('Vs (km/s)')
+    ax2.set_ylabel('Vp (km/s)')
+    ax2.set_title('Vp vs Vs')
+    ax2.grid(True)
+
+    # AI vs Vp/Vs crossplot
+    ax3.scatter(vp_vs, ai/1e6, alpha=0.5, s=20)
+    ax3.set_xlabel('Vp/Vs')
+    ax3.set_ylabel('AI (g/cm³ * km/s)')
+    ax3.set_title('AI vs Vp/Vs')
+    ax3.grid(True)
+
+    plt.tight_layout()
+    return fig
 
 
 # Example usage

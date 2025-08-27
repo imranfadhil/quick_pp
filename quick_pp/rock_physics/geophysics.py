@@ -23,7 +23,7 @@ def calculate_acoustic_impedance(rhob, dtc):
         numpy.ndarray: Acoustic impedance in (g/cm³)*(m/s)
     """
     # Convert slowness from us/ft to velocity in m/s
-    velocity = (1 / dtc) * (1e6 / 0.3048)
+    velocity = (1 / dtc) * (1e6 / 3.281)
 
     # Calculate acoustic impedance
     acoustic_impedance = rhob * velocity

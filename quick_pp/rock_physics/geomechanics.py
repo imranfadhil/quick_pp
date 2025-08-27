@@ -24,12 +24,12 @@ def extrapolate_rhob(rhob, tvd, a, b):
     return np.append(rhob_extrapolated, rhob)
 
 
-def estimate_gardner_density(vp, alpha=.23, beta=.25):
+def estimate_gardner_density(vp, alpha=.31, beta=.25):
     """
     Estimate density from vp using Gardner's relation.
 
     Args:
-        vp (float): P-wave velocity in ft/s.
+        vp (float): P-wave velocity in m/s.
         alpha (float): Gardner's coefficient alpha. 1.75 for shale and 1.66 for sandstone.
         beta (float): Gardner's coefficient beta. 0.265 for shale and 0.261 for sandstone.
 
@@ -52,12 +52,12 @@ def estimate_compressional_velocity(density, alpha=.31, beta=.25):
         float: Estimated P-wave velocity in m/s.
     """
     logger.debug(f"Estimating compressional velocity using Gardner's relation with alpha={alpha}, beta={beta}")
-    vp = (density / alpha)**(1 / beta) * 1e-3
+    vp = (density / alpha)**(1 / beta)
     logger.debug(f"Estimated P-wave velocity range: {np.min(vp):.1f} - {np.max(vp):.1f} m/s")
     return vp
 
 
-def estimate_shear_wave_velocity(vp):
+def estimate_shear_velocity(vp):
     """Estimate shear wave velocity from P-wave velocity using the empirical relation by Castagna et al. 1985.
 
     Args:
@@ -194,12 +194,13 @@ def estimate_poisson_ratio(vp, vs):
         float: Estimated Poisson's ratio.
     """
     logger.debug("Calculating Poisson's ratio from P and S wave velocities")
-    poisson = (vp**2 - 2 * vs**2) / (2 * (vp**2 - vs**2))
-    logger.debug(f"Poisson's ratio range: {np.min(poisson):.3f} - {np.max(poisson):.3f}")
-    return poisson
+    vp_vs = vp / vs
+    poisson_ratio = (.5 * vp_vs**2 - 1) / (vp_vs**2 - 1)
+    logger.debug(f"Poisson's ratio range: {np.min(poisson_ratio):.3f} - {np.max(poisson_ratio):.3f}")
+    return poisson_ratio
 
 
-def estimate_shear_modulus(rhob, vs, a):
+def estimate_shear_modulus(rhob, vs):
     """Estimate shear modulus from density, S-wave velocity and constant a.
      Shear modulus is the shear stiffness of a material, which is the ratio of shear stress to shear strain.
      Also known as the modulus of rigidity.
@@ -207,12 +208,31 @@ def estimate_shear_modulus(rhob, vs, a):
     Args:
         rhob (float): Bulk density in g/cm^3.
         vs (float): S-wave velocity in m/s.
-        a (float): _description_
     """
-    logger.debug(f"Calculating shear modulus with constant a={a}")
-    shear_modulus = a * rhob / vs**2
+    logger.debug("Calculating shear modulus from density and S-wave velocity")
+    shear_modulus = rhob * vs**2
     logger.debug(f"Shear modulus range: {np.min(shear_modulus):.2e} - {np.max(shear_modulus):.2e} Pa")
     return shear_modulus
+
+
+def estimate_bulk_modulus(rhob, vp, vs):
+    """Estimate Bulk modulus from density, P-wave and S-wave velocities.
+     Bulk modulus is the measure of resistance of a material to bulk compression.
+     It is the reciprocal of compressibility.
+
+    Args:
+        rhob (float): Bulk density in g/cm^3.
+        vp (float): P-wave velocity in m/s.
+        vs (float): S-wave velocity in m/s.
+
+    Returns:
+        float: Estimated Bulk modulus in Pa.
+    """
+    logger.debug("Calculating bulk modulus from density, P-wave and S-wave velocities")
+    shear_modulus = estimate_shear_modulus(rhob, vs)
+    bulk_modulus = rhob * vp**2 - 4 / 3 * shear_modulus
+    logger.debug(f"Bulk modulus range: {np.min(bulk_modulus):.2e} - {np.max(bulk_modulus):.2e} Pa")
+    return bulk_modulus
 
 
 def estimate_young_modulus(rhob, vp, vs):
@@ -229,26 +249,8 @@ def estimate_young_modulus(rhob, vp, vs):
         float: Estimated Young's modulus in Pa.
     """
     logger.debug("Calculating Young's modulus from density and wave velocities")
-    young_modulus = rhob * 1000 * vp**2 * (3 * vp**2 - 4 * vs**2) / (vp**2 - vs**2)
+    shear_modulus = estimate_shear_modulus(rhob, vs)
+    bulk_modulus = estimate_bulk_modulus(rhob, vp, vs)
+    young_modulus = shear_modulus * (3 * bulk_modulus + shear_modulus) / (bulk_modulus + shear_modulus)
     logger.debug(f"Young's modulus range: {np.min(young_modulus):.2e} - {np.max(young_modulus):.2e} Pa")
     return young_modulus
-
-
-def estimate_bulk_modulus(rhob, vp, vs, a):
-    """Estimate Bulk modulus from density, P-wave and S-wave velocities.
-     Bulk modulus is the measure of resistance of a material to bulk compression.
-     It is the reciprocal of compressibility.
-
-    Args:
-        rhob (float): Bulk density in g/cm^3.
-        vp (float): P-wave velocity in m/s.
-        vs (float): S-wave velocity in m/s.
-        a (float): _description_
-
-    Returns:
-        float: Estimated Bulk modulus in Pa.
-    """
-    logger.debug(f"Calculating bulk modulus with constant a={a}")
-    bulk_modulus = a * rhob * (1 / vp**2 - 4 / (3 * vs**2))
-    logger.debug(f"Bulk modulus range: {np.min(bulk_modulus):.2e} - {np.max(bulk_modulus):.2e} Pa")
-    return bulk_modulus
