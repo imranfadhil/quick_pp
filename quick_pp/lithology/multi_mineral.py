@@ -272,7 +272,7 @@ class MultiMineral:
 
     def estimate_lithology(self, gr, nphi, rhob, pef=None, dtc=None):
         """
-        Estimate lithology using multi-mineral optimization.
+        Estimate lithology using multi-mineral optimization. The indexes of the input arrays must be reset and aligned.
 
         Args:
             gr (np.ndarray): Gamma Ray log in GAPI.
