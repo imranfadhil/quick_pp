@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import numpy as np
 
 from quick_pp.rock_physics.geomechanics import estimate_shear_velocity, estimate_compressional_velocity
 
@@ -80,6 +81,56 @@ def qaqc_xplots(rhob, vp=None, vs=None):
     ax3.set_title('AI vs Vp/Vs')
     ax3.grid(True)
 
+    plt.tight_layout()
+    return fig
+
+
+def fluid_typing_xplots(rhob, vp=None, vs=None):
+    """Create crossplots for fluid typing.
+    """
+    if vs is None and vp is not None:
+        vs = estimate_shear_velocity(vp)
+    if vp is None:
+        vp = estimate_compressional_velocity(rhob)
+    ai = vp * rhob
+    vp_vs = vp/vs
+    dtc = 1 / vp * (1e6 / 3.281)
+    dts = 1 / vs * (1e6 / 3.281)
+
+    x = np.linspace(70, 170, 100)
+    lst_vpvs = 82.3 / 43.4
+    lst_line = lst_vpvs * x
+    print(lst_line)
+    dol_vpvs = 72.5 / 39.8
+    dol_line = dol_vpvs * x
+    sst_vpvs = 78.6 / 48.5
+    sst_line = sst_vpvs * x
+
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+    ax1.ticklabel_format(style='plain')
+    ax2.ticklabel_format(style='plain')
+    ax3.ticklabel_format(style='plain')
+
+    ax1.scatter(dts, dtc, alpha=0.5, s=20)
+    ax1.plot(x, lst_line, label='LST', color='red')
+    ax1.plot(x, dol_line, label='DOL', color='green')
+    ax1.plot(x, sst_line, label='SST', color='blue')
+    ax1.set_xlim(70, 170)
+    ax1.set_ylim(100, 40)
+    ax1.set_xlabel('DTs (us/ft)')
+    ax1.set_ylabel('Dtc (us/ft)')
+    ax1.set_title('Dtc vs Dts')
+    ax1.grid(True)
+    ax2.scatter(vs/1000, vp/1000, alpha=0.5, s=20)
+    ax2.set_xlabel('Vs (km/s)')
+    ax2.set_ylabel('Vp (km/s)')
+    ax2.set_title('Vp vs Vs')
+    ax2.grid(True)
+    ax3.scatter(ai, vp_vs, alpha=0.5, s=20)
+    ax3.set_xlabel('AI (g/cm³ * m/s)')
+    ax3.set_ylabel('Vp/Vs')
+    ax3.set_title('AI vs Vp/Vs')
+    ax3.grid(True)
     plt.tight_layout()
     return fig
 
