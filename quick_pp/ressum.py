@@ -8,6 +8,7 @@ import ptitprince as pt
 from SALib.analyze.sobol import analyze
 from SALib.sample.sobol import sample
 from tqdm import tqdm
+from sklearn.preprocessing import MinMaxScaler
 
 from quick_pp import logger
 
@@ -130,7 +131,7 @@ def volumetric_method(
     porosity_bound: tuple,
     water_saturation_bound: tuple,
     volume_factor_bound: tuple,
-    recovery_factor_bound: tuple = (),
+    recovery_factor_bound: tuple = None,
     random_state=None
 ):
     """Calculate volume using the volumetric method.
@@ -372,3 +373,123 @@ def sensitivity_analysis(
     plt.title('Tornado Chart of Sensitivity Indices')
     plt.grid(True)
     plt.show()
+
+
+def cutoffs_analysis(df, percentile=95):
+    """Perform sensitivity analysis on Vshale, PHIT and SWT cutoffs against hydrocarbon pore volume.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing VSHALE, PHIT, SWT columns
+        percentile (int): Percentile to use for finding optimal cutoff
+
+    Returns:
+        tuple: Optimal cutoffs for VSHALE, PHIT and SWT
+    """
+    logger.debug("Starting cutoffs sensitivity analysis")
+
+    # Calculate distances from each point to line between endpoints
+    def find_percentile_point(x, y, percentile):
+        # Sort values by y
+        sorted_indices = y.sort_values().index
+        sorted_y = y.iloc[sorted_indices]
+        sorted_x = x.iloc[sorted_indices]
+        # Remove duplicates and find index closest to specified percentile
+        unique_y = sorted_y.drop_duplicates()
+        target_value = np.percentile(unique_y, percentile)
+        idx = (np.abs(sorted_y - target_value)).argmin()
+        # Return x value at percentile
+        return sorted_x.iloc[idx]
+
+    # Define parameter ranges
+    vsh_range = np.linspace(1.0, 0.0, 100)
+    phit_range = np.linspace(0.0, 1.0, 100)
+    swt_range = np.linspace(1.0, 0.0, 100)
+
+    # Calculate total hydrocarbon pore volume
+    df['HCPV'] = df['PHIT'] * (1 - df['SWT'])
+
+    # Sensitivity analysis for VSHALE
+    results = []
+    phi = 0
+    sw = 1
+    for vsh in tqdm(vsh_range, desc="Analyzing cutoffs"):
+        cutoffs = dict(VSHALE=vsh, PHIT=phi, SWT=sw)
+        rock_flag, _, _ = flag_interval(df['VSHALE'], df['PHIT'], df['SWT'], cutoffs)
+        # Calculate total hydrocarbon pore volume
+        hcpv = np.sum(df.loc[rock_flag == 1, 'HCPV'])
+        results.append({
+            'flag': 'rock',
+            'vshale_cut': vsh,
+            'phit_cut': phi,
+            'swt_cut': sw,
+            'HCPV': hcpv
+        })
+    temp_df = pd.DataFrame(results).reset_index(drop=True)
+    temp_df['HCPV'] = MinMaxScaler().fit_transform(temp_df[['HCPV']])
+    optimal_vsh_cut = find_percentile_point(temp_df['vshale_cut'], temp_df['HCPV'], percentile)
+
+    # Sensitivity analysis for PHIT
+    vsh = optimal_vsh_cut
+    sw = 1
+    for phi in phit_range:
+        cutoffs = dict(VSHALE=vsh, PHIT=phi, SWT=sw)
+        _, res_flag, _ = flag_interval(df['VSHALE'], df['PHIT'], df['SWT'], cutoffs)
+        # Calculate total hydrocarbon pore volume
+        hcpv = np.sum(df.loc[res_flag == 1, 'HCPV'])
+        results.append({
+            'flag': 'res',
+            'vshale_cut': vsh,
+            'phit_cut': phi,
+            'swt_cut': sw,
+            'HCPV': hcpv
+        })
+    temp_df = pd.DataFrame(results)
+    temp_df = temp_df[temp_df['flag'] == 'res'].reset_index(drop=True)
+    temp_df['HCPV'] = MinMaxScaler().fit_transform(temp_df[['HCPV']])
+    optimal_phit_cut = find_percentile_point(temp_df['phit_cut'], temp_df['HCPV'], percentile)
+
+    # Sensitivity analysis for SWT
+    vsh = optimal_vsh_cut
+    phi = optimal_phit_cut
+    for sw in swt_range:
+        cutoffs = dict(VSHALE=vsh, PHIT=phi, SWT=sw)
+        _, _, pay_flag = flag_interval(df['VSHALE'], df['PHIT'], df['SWT'], cutoffs)
+        # Calculate total hydrocarbon pore volume
+        hcpv = np.sum(df.loc[pay_flag == 1, 'HCPV'])
+        results.append({
+            'flag': 'pay',
+            'vshale_cut': vsh,
+            'phit_cut': phi,
+            'swt_cut': sw,
+            'HCPV': hcpv
+        })
+
+    # Convert results to DataFrame
+    results_df = pd.DataFrame(results)
+    temp_df = results_df[results_df['flag'] == 'pay'].reset_index(drop=True)
+    temp_df['HCPV'] = MinMaxScaler().fit_transform(temp_df[['HCPV']])
+    optimal_sw_cut = find_percentile_point(temp_df['swt_cut'], temp_df['HCPV'], percentile)
+
+    logger.info(
+        f"Optimal cutoffs found - Vshale: {optimal_vsh_cut:.3f}, "
+        f"PHIT: {optimal_phit_cut:.3f}, SWT: {optimal_sw_cut:.3f}"
+    )
+
+    # Plot sensitivity crossplots
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    for ax, (flag, data) in zip(axes, results_df.groupby('flag')):
+        param = 'vshale_cut' if flag == 'rock' else 'phit_cut' if flag == 'res' else 'swt_cut'
+        data['HCPV'] = MinMaxScaler().fit_transform(data[['HCPV']])
+        ax.plot(data[param], data['HCPV'], 'b-', label='HCPV')
+        cut_off = optimal_vsh_cut if flag == 'rock' else optimal_phit_cut if flag == 'res' else optimal_sw_cut
+        ax.axvline(x=cut_off, color='r', linestyle='--', label=f'Optimal Cutoff for {param}={round(cut_off, 3)}')
+        ax.set_xlabel(param)
+        ax.set_ylabel('HCPV')
+        ax.set_title('HCPV vs ' + param + ' with Optimal Cutoff Point')
+        ax.grid(True)
+        ax.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+    return optimal_vsh_cut, optimal_phit_cut, optimal_sw_cut
