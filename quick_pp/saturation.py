@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+from tqdm import tqdm
 
 from quick_pp.utils import min_max_line
 from quick_pp import logger
@@ -69,33 +70,31 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
     swt = 1
     swt_i = 0
     logger.debug("Starting iterative solution for Waxman-Smits")
-    for i in range(50):
+
+    # Use tqdm for progress bar during iterations
+    for i in tqdm(range(50), desc="Waxman-Smits iteration"):
         fx = swt**n + rw * B * Qv * swt**(n - 1) - (phit**-m * rw / rt)  # Ausburn, 1985
         delta_sat = abs(swt - swt_i) / 2
         swt_i = swt
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
-
-        if i % 10 == 0:
-            logger.debug(f"Iteration {i}: max change = {np.max(delta_sat):.6f}"
-                         if hasattr(delta_sat, '__len__') else f"Iteration {i}: max change = {delta_sat:.6f}")
 
     logger.debug(f"Waxman-Smits saturation range: {min(swt)} - {max(swt)}")
     return swt
 
 
 def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
-    """Estimate water saturation based on dual water model, an extension from Waxman-Smits.
-    TODO: Estimate swb and rwb if not provided
+    """Estimate water saturation based on dual water model, an extension from Waxman-Smits by Clavier, Coates and
+    Dumanoir (1977).
 
     Args:
-        rt (float): True resistivity or deep resistivity log.
-        rw (float): Formation water resistivity.
-        phit (float): Total porosity
+        rt (float): True resistivity or deep resistivity log in ohm.m.
+        rw (float): Formation water resistivity in ohm.m.
+        phit (float): Total porosity in fraction.
         a (float): Cementation exponent.
         m (float): Saturation exponent.
         n (float): Porosity exponent.
-        swb (float): Bound water saturation.
-        rwb (float): Bound water resistivity.
+        swb (float): Bound water saturation in fraction.
+        rwb (float): Bound water resistivity in ohm.m.
 
     Returns:
         float: Water saturation.
@@ -106,17 +105,30 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
     swt = 1
     swt_i = 0
     logger.debug("Starting iterative solution for dual water model")
-    for i in range(50):
+
+    # Use tqdm for progress bar during iterations
+    for i in tqdm(range(50), desc="Dual water iteration"):
         fx = phit**m * swt**n / a * (1 / rw * (swb / swt) * (1 / rwb - 1 / rw)) - 1 / rt
         delta_sat = abs(swt - swt_i) / 2
         swt_i = swt
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
 
-        if i % 10 == 0:
-            logger.debug(f"Iteration {i}: max change = {delta_sat.max():.6f}")
-
     logger.debug(f"Dual water saturation range: {swt.min():.3f} - {swt.max():.3f}")
     return swt
+
+
+def estimate_swb(phit, vsh, nphi_sh):
+    """Estimate bound water saturation based on dual water model.
+    Args:
+        phit (float): Total porosity.
+        vsh (float): Volume of shale.
+        nphi_sh (float): Neutron porosity reading in a nearby 100% shale interval.
+
+    Returns:
+        float: Bound water saturation.
+    """
+    swb = vsh * nphi_sh / phit
+    return swb
 
 
 def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
