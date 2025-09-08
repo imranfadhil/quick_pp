@@ -391,8 +391,8 @@ def cutoffs_analysis(df, percentile=95):
     def find_percentile_point(x, y, percentile):
         # Sort values by y
         sorted_indices = y.sort_values().index
-        sorted_y = y.iloc[sorted_indices]
-        sorted_x = x.iloc[sorted_indices]
+        sorted_y = y.iloc[sorted_indices].round(3)
+        sorted_x = x.iloc[sorted_indices].round(3)
         # Remove duplicates and find index closest to specified percentile
         unique_y = sorted_y.drop_duplicates()
         target_value = np.percentile(unique_y, percentile)
