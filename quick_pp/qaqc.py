@@ -138,7 +138,7 @@ def neu_den_xplot_hc_correction(
         nphi, rhob, vsh_gr=None,
         dry_min1_point: tuple = (),
         dry_clay_point: tuple = (),
-        fluid_point: tuple = (1.0, 1.0),
+        water_point: tuple = (1.0, 1.0),
         corr_angle: float = 50, buffer=0.0):
     """Estimate correction for neutron porosity and bulk density based on correction angle.
 
@@ -148,7 +148,7 @@ def neu_den_xplot_hc_correction(
         vsh_gr (float, optional): Vshale from gamma ray log. Defaults to None.
         dry_min1_point (tuple, optional): Neutron porosity and bulk density of mineral 1 point. Defaults to None.
         dry_clay_point (tuple, optional): Neutron porosity and bulk density of dry clay point. Defaults to None.
-        fluid_point (tuple, optional): Neutron porosity and bulk density of fluid point. Defaults to (1.0, 1.0).
+        water_point (tuple, optional): Neutron porosity and bulk density of water point. Defaults to (1.0, 1.0).
         corr_angle (float, optional): Correction angle (degree) from east horizontal line. Defaults to 50.
         buffer (float, optional): Buffer to be included in correction. Defaults to 0.0.
 
@@ -158,7 +158,7 @@ def neu_den_xplot_hc_correction(
     corr_angle = 90 - corr_angle
     A = dry_min1_point
     C = dry_clay_point
-    D = fluid_point
+    D = water_point
     rocklithofrac = length_a_b(A, C)
 
     frac_vsh_gr = vsh_gr if vsh_gr is not None else np.zeros(len(nphi))
@@ -196,7 +196,25 @@ def neu_den_xplot_hc_correction(
     return nphi_corrected, rhob_corrected, hc_flag
 
 
-def den_correction(nphi, gr, vsh_gr=None, phin_sh=.35, phid_sh=.05, rho_ma=2.68, rho_fluid=1.0, alpha=0.05):
+def neu_den_xplot_hc_correction_angle(rho_water=1.0, rho_hc=0.3, HI_hc=None):
+    """Estimate correction angle for neutron porosity and bulk density based on water and hydrocarbon density.
+
+    Args:
+        rho_water (float): Fluid density, ranges from 0.8 to 1.2. Defaults to 1.0.
+        rho_hc (float): Hydrocarbon density; Gas: 0.1 - 0.3; Oil: 0.4 - 0.8. Defaults to 0.3.
+        HI_hc (float): HI hydrocarbon index; Gas: 0.2 - 0.7; Oil: 0.8 - 1.0. Defaults to None.
+
+    Returns:
+        float: Correction angle (degree).
+    """
+    if HI_hc is None:
+        HI_hc = 2.2 * rho_hc
+    # Estimate correction angle
+    corr_angle = np.arctan((rho_water - rho_hc) / (1 - HI_hc))
+    return corr_angle * 180 / np.pi
+
+
+def den_correction(nphi, gr, vsh_gr=None, phin_sh=.35, phid_sh=.05, rho_ma=2.68, rho_water=1.0, alpha=0.05):
     """Correct bulk density based on nphi and gamma ray.
 
     Args:
@@ -205,7 +223,7 @@ def den_correction(nphi, gr, vsh_gr=None, phin_sh=.35, phid_sh=.05, rho_ma=2.68,
         phin_sh (float, optional): Neutron porosity of shale. Defaults to .35.
         phid_sh (float, optional): Density porosity of shale. Defaults to .05.
         rho_ma (float, optional): Matrix density. Defaults to 2.68.
-        rho_fluid (float, optional): Fluid density. Defaults to 1.0.
+        rho_water (float, optional): Fluid density. Defaults to 1.0.
         alpha (float, optional): Alpha value for gamma ray normalization. Defaults
 
     Returns:
@@ -215,7 +233,7 @@ def den_correction(nphi, gr, vsh_gr=None, phin_sh=.35, phid_sh=.05, rho_ma=2.68,
     vsh_gr = vsh_gr if vsh_gr is not None else estimate_vsh_gr(gr, alpha=alpha)
     # Estimate phid assuming vsh_gr = vsh_dn = (phin - phid) / (phin_sh - phid_sh)
     phid = nphi - (phin_sh - phid_sh) * vsh_gr
-    return rho_ma - (rho_ma - rho_fluid) * phid
+    return rho_ma - (rho_ma - rho_water) * phid
 
 
 def quick_qc(well_data, return_fig=False):

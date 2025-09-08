@@ -166,6 +166,46 @@ def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
     return sw
 
 
+def connectivity_saturation(rt, rw, phit, mu=2, chi_w=0):
+    """Estimate water saturation based on connectivity model Montaron 2009
+    Args:
+        rt (float): True resistivity or deep resistivity log.
+        rw (float): Formation water resistivity.
+        phit (float): Total porosity.
+        mu (float): Conductivity exponent, ranges from 1.6 to 2. Defaults to 2.
+        chi_w (float): Water connectivity correction index, ranges from -0.02 to 0.02. Defaults to 0.
+
+    Returns:
+        float: Water saturation.
+
+    """
+    logger.debug("Calculating connectivity saturation")
+
+    rw_prime = rw * (1 + chi_w) ** mu
+    sw = ((rw_prime / rt) ** (1 / mu) + chi_w) / phit
+    logger.debug(f"Connectivity saturation range: {sw.min():.3f} - {sw.max():.3f}")
+    return sw
+
+
+def estimate_chi_w(s_cw, phit, sigma_cw, sigma_w, mu=2):
+    """Estimate water connectivity correction index based on connectivity model Montaron 2009
+    Args:
+        s_cw (float): Water saturation, ranges from 0 to 1.
+        phit (float): Total porosity.
+        sigma_cw (float): Conductivity of clay water, ranges from 0 to 1.
+        sigma_w (float): Water conductivity, ranges from 0 to 1.
+        mu (float): Conductivity exponent, ranges from 1.6 to 2. Defaults to 2.
+
+    Returns:
+        float: Water connectivity correction index.
+
+    """
+    logger.debug("Calculating water connectivity correction index")
+    chi_w = -s_cw * phit * ((sigma_cw / sigma_w)**(1 / mu) - 1)
+    logger.debug(f"Water connectivity correction index range: {chi_w.min():.3f} - {chi_w.max():.3f}")
+    return chi_w
+
+
 def modified_simandoux_saturation():
     """ TODO: Estimate water saturation based on modified Simandoux's model.
     """
