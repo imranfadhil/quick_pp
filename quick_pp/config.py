@@ -72,24 +72,39 @@ class Config(object):
         'DTC_DOLOMITE': 43.5,
         'PEF_DOLOMITE': 3.1,
 
-        'GR_SILT': 80.0,
-        'NPHI_SILT': 0.1,
-        'RHOB_SILT': 2.68,
-        'DTC_SILT': 100.0,
-        'PEF_SILT': 2.0,
-
         # Kaolinite
         'GR_SHALE': 130.0,
-        'NPHI_SHALE': 0.34,
+        'NPHI_SHALE': 0.37,
         'RHOB_SHALE': 2.41,
         'DTC_SHALE': 143.0,
         'PEF_SHALE': 1.8,
+
+        # Anhydrite
+        'GR_ANHYDRITE': 0.0,
+        'NPHI_ANHYDRITE': -0.02,
+        'RHOB_ANHYDRITE': 2.98,
+        'DTC_ANHYDRITE': 50.0,
+        'PEF_ANHYDRITE': 5.1,
+
+        # Gypsum
+        'GR_GYPSUM': 0.0,
+        'NPHI_GYPSUM': 0.6,
+        'RHOB_GYPSUM': 2.35,
+        'DTC_GYPSUM': 52.0,
+        'PEF_GYPSUM': 4.0,
+
+        # Halite
+        'GR_HALITE': 0.0,
+        'NPHI_HALITE': -0.03,
+        'RHOB_HALITE': 2.04,
+        'DTC_HALITE': 67.0,
+        'PEF_HALITE': 4.7,
 
         'GR_MUD': 0.0,
         'NPHI_MUD': 1.0,
         'RHOB_MUD': 1.3,
         'DTC_MUD': 180.0,
-        'PEF_MUD': 0.0
+        'PEF_MUD': 0.0,
     }
 
     @staticmethod

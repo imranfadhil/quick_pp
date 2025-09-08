@@ -17,12 +17,12 @@ class MultiMineralOptimizer:
 
         Args:
             minerals: List of minerals to include in the optimization.
-                     If None, uses default minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'MUD']
-                     Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SILT', 'SHALE', 'MUD'
+                     If None, uses default minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'MUD']
+                     Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'GYPSUM', 'HALITE', 'MUD'
         """
         # Default minerals if none specified
         if minerals is None:
-            minerals = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SILT', 'SHALE', 'MUD']
+            minerals = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'MUD']
 
         self.minerals = minerals
 
@@ -31,8 +31,10 @@ class MultiMineralOptimizer:
             'QUARTZ': (0, 1),
             'CALCITE': (0, 1),
             'DOLOMITE': (0, 0.1),
-            'SILT': (0, 1),
             'SHALE': (0, 1),
+            'ANHYDRITE': (0, 1),
+            'GYPSUM': (0, 1),
+            'HALITE': (0, 1),
             'MUD': (0, 0.45)
         }
 
@@ -234,8 +236,10 @@ class MultiMineralOptimizer:
             'QUARTZ': 'VSAND',
             'CALCITE': 'VCALC',
             'DOLOMITE': 'VDOLO',
-            'SILT': 'VSILT',
             'SHALE': 'VCLD',
+            'ANHYDRITE': 'VANHY',
+            'GYPSUM': 'VGYPS',
+            'HALITE': 'VHALI',
             'MUD': 'VMUD'
         }
 
@@ -265,8 +269,9 @@ class MultiMineral:
 
         Args:
             minerals: List of minerals to include in the optimization.
-                     If None, uses default minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'MUD']
-                     Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SILT', 'SHALE', 'MUD'
+                     If None, uses default minerals: 
+                        ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'MUD']
+                     Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'GYPSUM', 'HALITE', 'MUD'
         """
         self.optimizer = MultiMineralOptimizer(minerals)
 
