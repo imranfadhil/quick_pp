@@ -192,7 +192,7 @@ TRACE_DEFS = OrderedDict(
         secondary_y=False,
         hide_xaxis=True,
         style={
-            'line_width': .5, 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VHC'],
+            'line_width': .1, 'line_color': 'black', 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VHC'],
             'stackgroup': 'litho', 'orientation': 'h'
         }
     ),
@@ -201,7 +201,7 @@ TRACE_DEFS = OrderedDict(
         secondary_y=False,
         hide_xaxis=True,
         style={
-            'line_width': .5, 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VGAS'],
+            'line_width': .1, 'line_color': 'black', 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VGAS'],
             'stackgroup': 'litho', 'orientation': 'h'
         }
     ),
@@ -210,7 +210,7 @@ TRACE_DEFS = OrderedDict(
         secondary_y=False,
         hide_xaxis=True,
         style={
-            'line_width': .5, 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VOIL'],
+            'line_width': .1, 'line_color': 'black', 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VOIL'],
             'stackgroup': 'litho', 'orientation': 'h'
         }
     ),

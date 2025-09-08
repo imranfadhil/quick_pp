@@ -120,9 +120,9 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
 def estimate_swb(phit, vsh, nphi_sh):
     """Estimate bound water saturation based on dual water model.
     Args:
-        phit (float): Total porosity.
-        vsh (float): Volume of shale.
-        nphi_sh (float): Neutron porosity reading in a nearby 100% shale interval.
+        phit (float): Total porosity in fraction.
+        vsh (float): Volume of shale in fraction.
+        nphi_sh (float): Neutron porosity reading in a nearby 100% shale interval in fraction.
 
     Returns:
         float: Bound water saturation.
