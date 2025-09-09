@@ -99,12 +99,6 @@ class Config(object):
         'RHOB_HALITE': 2.04,
         'DTC_HALITE': 67.0,
         'PEF_HALITE': 4.7,
-
-        'GR_MUD': 0.0,
-        'NPHI_MUD': 1.0,
-        'RHOB_MUD': 1.3,
-        'DTC_MUD': 180.0,
-        'PEF_MUD': 0.0,
     }
 
     @staticmethod
