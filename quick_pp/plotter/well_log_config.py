@@ -24,6 +24,7 @@ COLOR_DICT = {
     'VGAS': '#FF0000',
     'VOIL': '#00FF00',
     'VHC': 'brown',
+    'VWATER': '#56C0E4',
     'VSAND': '#F6F674',
     'VSHALE': '#A65628',
     'VSILT': '#FE9800',
@@ -60,7 +61,7 @@ TRACE_DEFS = OrderedDict(
         track=3,
         secondary_y=False,
         hide_xaxis=False,
-        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': 'rgba(255, 255, 0, 0.4)', 'hoverinfo': 'none'}
+        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': '#FFFF0066', 'hoverinfo': 'none'}
     ),
     PHIT=dict(
         track=4,
@@ -244,6 +245,15 @@ TRACE_DEFS = OrderedDict(
         hide_xaxis=True,
         style={
             'line_width': .1, 'line_color': 'black', 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VOIL'],
+            'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
+    VWATER=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .1, 'line_color': 'black', 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VWATER'],
             'stackgroup': 'litho', 'orientation': 'h'
         }
     ),

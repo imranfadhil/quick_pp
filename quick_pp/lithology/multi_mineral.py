@@ -10,12 +10,12 @@ from quick_pp.porosity import neu_den_xplot_poro_pt, density_porosity
 
 
 class MultiMineralOptimizer:
-    """Optimization-based multi-mineral model for lithology estimation."""
+    """Optimization-based multi-mineral model for lithology estimation with fluid volumes."""
 
     def __init__(self, minerals: Optional[List[str]] = None,
+                 fluid_properties: Optional[Dict] = None,
                  porosity_method: str = 'neutron_density',
-                 porosity_endpoints: Optional[Dict] = None,
-                 rho_fluid: float = 1.0):
+                 porosity_endpoints: Optional[Dict] = None):
         """
         Initialize the MultiMineralOptimizer.
 
@@ -23,9 +23,15 @@ class MultiMineralOptimizer:
             minerals: List of minerals to include in the optimization.
                      If None, uses default minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE']
                      Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'GYPSUM', 'HALITE'
+            fluid_properties: Dictionary containing fluid properties for oil, gas, and water.
+                            If None, uses default properties:
+                            {
+                                'OIL': {'density': 0.8, 'nphi': 0.0, 'pef': 0.0, 'dtc': 200.0},
+                                'GAS': {'density': 0.2, 'nphi': 0.0, 'pef': 0.0, 'dtc': 400.0},
+                                'WATER': {'density': 1.0, 'nphi': 1.0, 'pef': 0.0, 'dtc': 190.0}
+                            }
             porosity_method: Method for calculating porosity ('neutron_density', 'density', 'sonic')
             porosity_endpoints: Endpoints for porosity calculation (for neutron_density method)
-            rho_fluid: Fluid density for porosity calculations
         """
         # Default minerals if none specified
         if minerals is None:
@@ -34,7 +40,17 @@ class MultiMineralOptimizer:
         self.minerals = minerals
         self.porosity_method = porosity_method
         self.porosity_endpoints = porosity_endpoints or {}
-        self.rho_fluid = rho_fluid
+
+        # Default fluid properties if none specified
+        if fluid_properties is None:
+            fluid_properties = {
+                'OIL': {'density': 0.8, 'nphi': 0.0, 'pef': 0.0, 'dtc': 200.0},
+                'GAS': {'density': 0.2, 'nphi': 0.0, 'pef': 0.0, 'dtc': 400.0},
+                'WATER': {'density': 1.0, 'nphi': 1.0, 'pef': 0.0, 'dtc': 190.0}
+            }
+
+        self.fluid_properties = fluid_properties
+        self.fluids = ['OIL', 'GAS', 'WATER']
 
         # Define bounds for each mineral type
         mineral_bounds = {
@@ -47,10 +63,21 @@ class MultiMineralOptimizer:
             'HALITE': (0, 1)
         }
 
-        # Set bounds based on selected minerals
-        self.bounds = tuple(mineral_bounds[mineral] for mineral in self.minerals)
+        # Define bounds for fluid volumes (0 to 1 for each fluid)
+        fluid_bounds = {
+            'OIL': (0, 1),
+            'GAS': (0, 1),
+            'WATER': (0, 1)
+        }
 
-        # Constraint: sum of mineral volumes + porosity must equal 1
+        # Set bounds based on selected minerals and fluids
+        self.mineral_bounds = tuple(mineral_bounds[mineral] for mineral in self.minerals)
+        self.fluid_bounds = tuple(fluid_bounds[fluid] for fluid in self.fluids)
+
+        # Combined bounds: minerals first, then fluids
+        self.bounds = self.mineral_bounds + self.fluid_bounds
+
+        # Constraint: sum of mineral volumes + fluid volumes must equal 1
         self.constraints = [{"type": "eq", "fun": self._volume_constraint}]
 
         # Mineral log responses from Config
@@ -65,26 +92,23 @@ class MultiMineralOptimizer:
             'DTC': 1.0
         }
 
-    def _volume_constraint(self, volumes: np.ndarray, porosity: float = 0.0) -> float:
-        """Constraint function ensuring mineral volumes + porosity sum to 1."""
-        return np.sum(volumes) + porosity - 1
+    def _volume_constraint(self, volumes: np.ndarray) -> float:
+        """Constraint function ensuring mineral volumes + fluid volumes sum to 1."""
+        return np.sum(volumes) - 1
 
     def _calculate_porosity(self, nphi: float, rhob: float, dtc: Optional[float] = None) -> float:
         """Calculate porosity using the specified method."""
         if self.porosity_method == 'neutron_density':
             # Use neutron-density crossplot porosity
-            model = self.porosity_endpoints.get('model', 'ssc')
             dry_sand_point = self.porosity_endpoints.get('dry_sand_point', (-0.02, 2.65))
-            dry_silt_point = self.porosity_endpoints.get('dry_silt_point', (0.0, 2.68))
             dry_clay_point = self.porosity_endpoints.get('dry_clay_point', (0.37, 2.41))
             fluid_point = self.porosity_endpoints.get('fluid_point', (1.0, 1.0))
 
             return neu_den_xplot_poro_pt(
-                nphi, rhob, model=model,
+                nphi, rhob, model='ss',
                 dry_min1_point=dry_sand_point,
-                dry_silt_point=dry_silt_point,
                 dry_clay_point=dry_clay_point,
-                fluid_point=fluid_point
+                fluid_point=fluid_point,
             )
 
         elif self.porosity_method == 'density':
@@ -113,38 +137,41 @@ class MultiMineralOptimizer:
                 rho_ma += volumes[i] * self.responses[rho_key]
         return rho_ma
 
-    def _calculate_log_response(self, volumes: np.ndarray, log_type: str, porosity: float = 0.0) -> float:
+    def _calculate_log_response(self, volumes: np.ndarray, log_type: str) -> float:
         """Calculate reconstructed log response for a given log type."""
         response = 0.0
 
         # Add mineral contributions
+        n_minerals = len(self.minerals)
         for i, mineral in enumerate(self.minerals):
             response_key = f"{log_type}_{mineral}"
             if response_key in self.responses:
                 response += volumes[i] * self.responses[response_key]
 
-        # Add porosity contribution (fluid-filled space)
-        if log_type == 'NPHI':
-            response += porosity * 1.0  # Fluid has NPHI = 1.0
-        elif log_type == 'RHOB':
-            response += porosity * self.rho_fluid  # Fluid density
-        elif log_type == 'DTC':
-            response += porosity * 190.0  # Fluid slowness (us/ft)
-        elif log_type == 'PEF':
-            response += porosity * 0.0  # Fluid PEF = 0
-        # GR doesn't change with porosity (assuming fresh water)
+        # Add fluid contributions
+        for i, fluid in enumerate(self.fluids):
+            fluid_idx = n_minerals + i
+            fluid_vol = volumes[fluid_idx]
+
+            if log_type == 'NPHI':
+                response += fluid_vol * self.fluid_properties[fluid]['nphi']
+            elif log_type == 'RHOB':
+                response += fluid_vol * self.fluid_properties[fluid]['density']
+            elif log_type == 'DTC':
+                response += fluid_vol * self.fluid_properties[fluid]['dtc']
+            elif log_type == 'PEF':
+                response += fluid_vol * self.fluid_properties[fluid]['pef']
+            # GR doesn't change with fluid type (assuming fresh water)
 
         return response
 
-    def _calculate_average_error(self, volumes: np.ndarray, log_values: Dict[str, float],
-                                 porosity: float = 0.0) -> float:
+    def _calculate_average_error(self, volumes: np.ndarray, log_values: Dict[str, float]) -> float:
         """
         Calculate the average absolute error between measured and reconstructed log values.
 
         Args:
-            volumes: Mineral volumes in the order of self.minerals
+            volumes: Combined mineral and fluid volumes in the order of self.minerals + self.fluids
             log_values: Dictionary of measured log values
-            porosity: Porosity value
 
         Returns:
             Average error across all log types
@@ -154,21 +181,20 @@ class MultiMineralOptimizer:
 
         for log_type, measured_value in log_values.items():
             if measured_value is not None and not np.isnan(measured_value):
-                reconstructed_value = self._calculate_log_response(volumes, log_type, porosity)
+                reconstructed_value = self._calculate_log_response(volumes, log_type)
                 error = abs(measured_value - reconstructed_value)
                 total_error += error
                 valid_count += 1
 
         return total_error / valid_count if valid_count > 0 else np.nan
 
-    def _error_function(self, volumes: np.ndarray, log_values: Dict[str, float], porosity: float = 0.0) -> float:
+    def _error_function(self, volumes: np.ndarray, log_values: Dict[str, float]) -> float:
         """
         Calculate the sum of squared error between measured and reconstructed log values.
 
         Args:
-            volumes: Mineral volumes in the order of self.minerals
+            volumes: Combined mineral and fluid volumes in the order of self.minerals + self.fluids
             log_values: Dictionary of measured log values
-            porosity: Porosity value
 
         Returns:
             Total squared error
@@ -177,22 +203,22 @@ class MultiMineralOptimizer:
 
         for log_type, measured_value in log_values.items():
             if measured_value is not None and not np.isnan(measured_value):
-                reconstructed_value = self._calculate_log_response(volumes, log_type, porosity)
+                reconstructed_value = self._calculate_log_response(volumes, log_type)
                 scaling = self.scaling_factors.get(log_type, 1.0)
                 error = (scaling * (measured_value - reconstructed_value)) ** 2
                 total_error += error
 
         return total_error
 
-    def _optimize_mineral_volumes(self, log_values: Dict[str, float]) -> Tuple[np.ndarray, float]:
+    def _optimize_volumes(self, log_values: Dict[str, float]) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Optimize mineral volumes and porosity given available log measurements.
+        Optimize mineral and fluid volumes given available log measurements.
 
         Args:
             log_values: Dictionary of measured log values
 
         Returns:
-            Tuple of (optimized mineral volumes, porosity) in the order of self.minerals
+            Tuple of (optimized mineral volumes, fluid volumes) in the order of self.minerals and self.fluids
         """
         # Filter out None and NaN values
         valid_logs = {k: v for k, v in log_values.items()
@@ -201,7 +227,7 @@ class MultiMineralOptimizer:
         if not valid_logs:
             raise ValueError("No valid log measurements provided")
 
-        # Calculate initial porosity estimate
+        # Calculate initial porosity estimate for fluid volume initialization
         nphi = log_values.get('NPHI', 0.0)
         rhob = log_values.get('RHOB', 2.65)
         dtc = log_values.get('DTC', None)
@@ -212,34 +238,39 @@ class MultiMineralOptimizer:
         else:
             initial_porosity = 0.1  # Default porosity
 
-        # Initial guess: equal distribution among minerals, adjusted for porosity
+        # Initial guess: equal distribution among minerals and fluids
         n_minerals = len(self.minerals)
+        n_fluids = len(self.fluids)
+
+        # Distribute volume between minerals and fluids
         mineral_volume = (1.0 - initial_porosity) / n_minerals
-        initial_guess = np.full(n_minerals, mineral_volume)
+        fluid_volume = initial_porosity / n_fluids
 
-        # Create constraint function that includes porosity
-        def constraint_func(volumes):
-            return self._volume_constraint(volumes, initial_porosity)
-
-        # Update constraints
-        constraints = [{"type": "eq", "fun": constraint_func}]
+        initial_guess = np.concatenate([
+            np.full(n_minerals, mineral_volume),
+            np.full(n_fluids, fluid_volume)
+        ])
 
         # Run optimization
         result = minimize(
             self._error_function,
             initial_guess,
-            args=(valid_logs, initial_porosity),
+            args=(valid_logs,),
             bounds=self.bounds,
-            constraints=constraints,
+            constraints=self.constraints,
             method='SLSQP'
         )
 
-        return result.x, initial_porosity
+        # Split results into mineral and fluid volumes
+        mineral_volumes = result.x[:n_minerals]
+        fluid_volumes = result.x[n_minerals:]
+
+        return mineral_volumes, fluid_volumes
 
     def estimate_lithology(self, gr: np.ndarray, nphi: np.ndarray, rhob: np.ndarray, pef: Optional[np.ndarray] = None,
                            dtc: Optional[np.ndarray] = None) -> pd.DataFrame:
         """
-        Estimate mineral volumes and porosity using available log measurements.
+        Estimate mineral and fluid volumes using available log measurements.
 
         Args:
             gr: Gamma Ray log in GAPI
@@ -251,7 +282,8 @@ class MultiMineralOptimizer:
         Returns:
             DataFrame containing:
             - Mineral volume fractions for each mineral in self.minerals
-            - PHIT_CONSTRUCTED: Total porosity constructed by the optimizer
+            - Fluid volume fractions for each fluid in self.fluids
+            - PHIT_CONSTRUCTED: Total porosity (sum of fluid volumes)
             - AVERAGE_ERROR: Average error between measured and reconstructed logs
             - *_RECONSTRUCTED: Reconstructed log values for each log type
         """
@@ -263,7 +295,12 @@ class MultiMineralOptimizer:
         for mineral in self.minerals:
             mineral_volumes[mineral] = np.full(n_samples, np.nan)
 
-        # Initialize porosity array
+        # Initialize fluid volume arrays
+        fluid_volumes = {}
+        for fluid in self.fluids:
+            fluid_volumes[fluid] = np.full(n_samples, np.nan)
+
+        # Initialize porosity array (sum of fluid volumes)
         porosity_constructed = np.full(n_samples, np.nan)
 
         # Initialize the reconstructed logs
@@ -293,30 +330,37 @@ class MultiMineralOptimizer:
 
             if len(valid_measurements) >= 3:  # Need at least 3 measurements
                 try:
-                    # Optimize mineral volumes and porosity
-                    volumes, phit = self._optimize_mineral_volumes(log_values)
+                    # Optimize mineral and fluid volumes
+                    mineral_vols, fluid_vols = self._optimize_volumes(log_values)
 
                     # Store results for each mineral
                     for j, mineral in enumerate(self.minerals):
-                        mineral_volumes[mineral][i] = volumes[j]
+                        mineral_volumes[mineral][i] = mineral_vols[j]
 
-                    # Store porosity
-                    porosity_constructed[i] = phit
+                    # Store results for each fluid
+                    for j, fluid in enumerate(self.fluids):
+                        fluid_volumes[fluid][i] = fluid_vols[j]
+
+                    # Store total porosity (sum of fluid volumes)
+                    porosity_constructed[i] = np.sum(fluid_vols)
+
+                    # Combine volumes for error calculation and log reconstruction
+                    combined_volumes = np.concatenate([mineral_vols, fluid_vols])
 
                     # Calculate and store average error
-                    average_errors[i] = self._calculate_average_error(volumes, log_values, phit)
+                    average_errors[i] = self._calculate_average_error(combined_volumes, log_values)
 
                     # Store the reconstructed logs
                     gr_reconstructed[i] = self._calculate_log_response(
-                        volumes, 'GR', phit) if log_values['GR'] is not None else np.nan
+                        combined_volumes, 'GR') if log_values['GR'] is not None else np.nan
                     nphi_reconstructed[i] = self._calculate_log_response(
-                        volumes, 'NPHI', phit) if log_values['NPHI'] is not None else np.nan
+                        combined_volumes, 'NPHI') if log_values['NPHI'] is not None else np.nan
                     rhob_reconstructed[i] = self._calculate_log_response(
-                        volumes, 'RHOB', phit) if log_values['RHOB'] is not None else np.nan
+                        combined_volumes, 'RHOB') if log_values['RHOB'] is not None else np.nan
                     pef_reconstructed[i] = self._calculate_log_response(
-                        volumes, 'PEF', phit) if log_values['PEF'] is not None else np.nan
+                        combined_volumes, 'PEF') if log_values['PEF'] is not None else np.nan
                     dtc_reconstructed[i] = self._calculate_log_response(
-                        volumes, 'DTC', phit) if log_values['DTC'] is not None else np.nan
+                        combined_volumes, 'DTC') if log_values['DTC'] is not None else np.nan
 
                 except Exception as e:
                     logger.error(f'\rError at depth {i}: {e}')
@@ -342,7 +386,18 @@ class MultiMineralOptimizer:
             column_name = mineral_column_mapping.get(mineral, f'V{mineral}')
             output_data[column_name] = mineral_volumes[mineral]
 
-        # Add porosity
+        # Add fluid volumes with appropriate column names
+        fluid_column_mapping = {
+            'OIL': 'VOIL',
+            'GAS': 'VGAS',
+            'WATER': 'VWATER'
+        }
+
+        for fluid in self.fluids:
+            column_name = fluid_column_mapping.get(fluid, f'V{fluid}')
+            output_data[column_name] = fluid_volumes[fluid]
+
+        # Add total porosity (sum of fluid volumes)
         output_data['PHIT_CONSTRUCTED'] = porosity_constructed
 
         # Add error and reconstructed logs
@@ -362,31 +417,32 @@ class MultiMineral:
     """Legacy interface for backward compatibility."""
 
     def __init__(self, minerals: Optional[List[str]] = None,
+                 fluid_properties: Optional[Dict] = None,
                  porosity_method: str = 'neutron_density',
-                 porosity_endpoints: Optional[Dict] = None,
-                 rho_fluid: float = 1.0):
+                 porosity_endpoints: Optional[Dict] = None):
         """
-        Initialize MultiMineral with optional mineral specification.
+        Initialize MultiMineral with optional mineral and fluid specification.
 
         Args:
             minerals: List of minerals to include in the optimization.
                      If None, uses default minerals:
                         ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE']
                      Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'GYPSUM', 'HALITE'
+            fluid_properties: Dictionary containing fluid properties for oil, gas, and water.
+                            If None, uses default properties
             porosity_method: Method for calculating porosity ('neutron_density', 'density', 'sonic')
             porosity_endpoints: Endpoints for porosity calculation (for neutron_density method)
-            rho_fluid: Fluid density for porosity calculations
         """
         self.optimizer = MultiMineralOptimizer(
             minerals=minerals,
+            fluid_properties=fluid_properties,
             porosity_method=porosity_method,
-            porosity_endpoints=porosity_endpoints,
-            rho_fluid=rho_fluid
+            porosity_endpoints=porosity_endpoints
         )
 
     def estimate_lithology(self, gr, nphi, rhob, pef=None, dtc=None):
         """
-        Estimate lithology and porosity using multi-mineral optimization.
+        Estimate lithology and fluid volumes using multi-mineral optimization.
 
         Args:
             gr (np.ndarray): Gamma Ray log in GAPI.
@@ -396,6 +452,6 @@ class MultiMineral:
             dtc (np.ndarray, optional): Compressional slowness log in us/ft.
 
         Returns:
-            pd.DataFrame: DataFrame containing mineral volumes, porosity, and reconstructed logs
+            pd.DataFrame: DataFrame containing mineral volumes, fluid volumes, and reconstructed logs
         """
         return self.optimizer.estimate_lithology(gr, nphi, rhob, pef, dtc)
