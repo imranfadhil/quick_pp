@@ -53,32 +53,54 @@ def qaqc_xplots(rhob, vp=None, vs=None):
         vp = estimate_compressional_velocity(rhob)
 
     # Calculate acoustic impedance
-    ai = vp * rhob
+    ai_p = vp * rhob
+    ai_s = vs * rhob
     vp_vs = vp/vs
 
-    # Create figure with 3 subplots
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
-
-    # Vp vs density crossplot
-    ax1.scatter(rhob, vp/1000, alpha=0.5, s=20)
-    ax1.set_xlabel('Density (g/cm³)')
-    ax1.set_ylabel('Vp (km/s)')
-    ax1.set_title('Vp vs Density')
-    ax1.grid(True)
+    # Create figure with 6 subplots
+    fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(2, 3, figsize=(15, 10))
 
     # Vp vs Vs crossplot
-    ax2.scatter(vs/1000, vp/1000, alpha=0.5, s=20)
-    ax2.set_xlabel('Vs (km/s)')
-    ax2.set_ylabel('Vp (km/s)')
-    ax2.set_title('Vp vs Vs')
+    ax1.scatter(vp/1000, vs/1000, alpha=0.5, s=20)
+    ax1.set_xlabel('Vp (km/s)')
+    ax1.set_ylabel('Vs (km/s)')
+    ax1.set_title('Vp vs Vs')
+    ax1.grid(True)
+
+    # AI_p vs AI_s crossplot
+    ax2.scatter(ai_p/1e6, ai_s/1e6, alpha=0.5, s=20)
+    ax2.set_xlabel('AI_p (g/cm³ * km/s)')
+    ax2.set_ylabel('AI_s (g/cm³ * km/s)')
+    ax2.set_title('AI_p vs AI_s')
     ax2.grid(True)
 
-    # AI vs Vp/Vs crossplot
-    ax3.scatter(vp_vs, ai/1e6, alpha=0.5, s=20)
+    # Vp/Vs vs Vs crossplot
+    ax3.scatter(vp_vs, vs/1000, alpha=0.5, s=20)
     ax3.set_xlabel('Vp/Vs')
-    ax3.set_ylabel('AI (g/cm³ * km/s)')
-    ax3.set_title('AI vs Vp/Vs')
+    ax3.set_ylabel('Vs (km/s)')
+    ax3.set_title('Vp/Vs vs Vs')
     ax3.grid(True)
+
+    # Vp vs Vs crossplot
+    ax4.scatter(vs/1000, vp/1000, alpha=0.5, s=20)
+    ax4.set_xlabel('Vs (km/s)')
+    ax4.set_ylabel('Vp (km/s)')
+    ax4.set_title('Vs vs Vp')
+    ax4.grid(True)
+
+    # Vp vs density crossplot
+    ax5.scatter(rhob, vp/1000, alpha=0.5, s=20)
+    ax5.set_xlabel('Density (g/cm³)')
+    ax5.set_ylabel('Vp (km/s)')
+    ax5.set_title('Density vs Vp')
+    ax5.grid(True)
+
+    # AI vs Vp/Vs crossplot
+    ax6.scatter(ai_p/1e6, vp_vs, alpha=0.5, s=20)
+    ax6.set_xlabel('Vp/Vs')
+    ax6.set_ylabel('AIp (g/cm³ * km/s)')
+    ax6.set_title('Vp/Vs vs AIp')
+    ax6.grid(True)
 
     plt.tight_layout()
     return fig
