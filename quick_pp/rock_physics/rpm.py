@@ -1,38 +1,10 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from rockphypy import QI, GM
 
 from quick_pp.rock_physics.geomechanics import estimate_shear_velocity, estimate_compressional_velocity
-
-
-def contact_model(K_matrix, G_matrix, K_grain, G_grain, porosity):
-    """
-    Contact model (Hertz-Mindlin) for dry rock frame moduli.
-    """
-    phi_c = 0.36  # Critical porosity
-    C = (1 - porosity / phi_c)
-    K_dry = (C ** 2) * K_grain
-    G_dry = (C ** 2) * G_grain
-    return K_dry, G_dry
-
-
-def inclusion_model(K_matrix, G_matrix, K_incl, G_incl, inclusion_fraction):
-    """
-    Inclusion model (Self-consistent approximation) for effective moduli.
-    """
-    K_eff = K_matrix + inclusion_fraction * (K_incl - K_matrix)
-    G_eff = G_matrix + inclusion_fraction * (G_incl - G_matrix)
-    return K_eff, G_eff
-
-
-def rock_physics_model(K_matrix, G_matrix, K_grain, G_grain, K_fluid, G_fluid, porosity, inclusion_fraction):
-    """
-    Combines contact and inclusion models to estimate saturated rock moduli.
-    """
-    # Dry frame moduli from contact model
-    K_dry, G_dry = contact_model(K_matrix, G_matrix, K_grain, G_grain, porosity)
-    # Effective moduli from inclusion model
-    K_eff, G_eff = inclusion_model(K_dry, G_dry, K_fluid, G_fluid, inclusion_fraction)
-    return K_eff, G_eff
+from quick_pp.rock_type import estimate_vsh_gr
+from quick_pp.config import Config
 
 
 def qaqc_xplots(rhob, vp=None, vs=None):
@@ -83,10 +55,10 @@ def qaqc_xplots(rhob, vp=None, vs=None):
     ax3.grid(True)
 
     # Vp vs Vs crossplot
-    ax4.scatter(vs/1000, vp/1000, alpha=0.5, s=20)
-    ax4.set_xlabel('Vs (km/s)')
-    ax4.set_ylabel('Vp (km/s)')
-    ax4.set_title('Vs vs Vp')
+    ax4.scatter(rhob, vs/1000, alpha=0.5, s=20)
+    ax4.set_xlabel('Density (g/cm³)')
+    ax4.set_ylabel('Vs (km/s)')
+    ax4.set_title('Density vs Vs')
     ax4.grid(True)
 
     # Vp vs density crossplot
@@ -114,42 +86,36 @@ def fluid_typing_xplots(rhob, vp=None, vs=None):
         vs = estimate_shear_velocity(vp)
     if vp is None:
         vp = estimate_compressional_velocity(rhob)
+
+    vs = vs/1000
+    vp = vp/1000
     ai = vp * rhob
     vp_vs = vp/vs
-    dtc = 1 / vp * (1e6 / 3.281)
-    dts = 1 / vs * (1e6 / 3.281)
-
-    x = np.linspace(70, 170, 100)
-    lst_vpvs = 82.3 / 43.4
-    lst_line = lst_vpvs * x
-    print(lst_line)
-    dol_vpvs = 72.5 / 39.8
-    dol_line = dol_vpvs * x
-    sst_vpvs = 78.6 / 48.5
-    sst_line = sst_vpvs * x
+    mu_rho = (vs * rhob)**2
+    lambda_rho = ai**2 - 2 * mu_rho
 
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
     ax1.ticklabel_format(style='plain')
     ax2.ticklabel_format(style='plain')
     ax3.ticklabel_format(style='plain')
 
-    ax1.scatter(dts, dtc, alpha=0.5, s=20)
-    ax1.plot(x, lst_line, label='LST', color='red')
-    ax1.plot(x, dol_line, label='DOL', color='green')
-    ax1.plot(x, sst_line, label='SST', color='blue')
-    ax1.set_xlim(70, 170)
-    ax1.set_ylim(100, 40)
-    ax1.set_xlabel('DTs (us/ft)')
-    ax1.set_ylabel('Dtc (us/ft)')
-    ax1.set_title('Dtc vs Dts')
+    # Vp vs Vs
+    ax1.scatter(vs, vp, alpha=0.5, s=20)
+    ax1.set_xlabel('Vs (km/s)')
+    ax1.set_ylabel('Vp (km/s)')
+    ax1.set_title('Vp vs Vs')
     ax1.grid(True)
-    ax2.scatter(vs/1000, vp/1000, alpha=0.5, s=20)
-    ax2.set_xlabel('Vs (km/s)')
-    ax2.set_ylabel('Vp (km/s)')
-    ax2.set_title('Vp vs Vs')
+
+    # Lambda_rho vs Mu_rho
+    ax2.scatter(lambda_rho, mu_rho, alpha=0.5, s=20)
+    ax2.set_xlabel('Lambda_rho (g/cm³ * km/s)²')
+    ax2.set_ylabel('Mu_rho (g/cm³ * km/s)²')
+    ax2.set_title('Lambda_rho vs Mu_rho')
     ax2.grid(True)
+
+    # AI vs Vp/Vs
     ax3.scatter(ai, vp_vs, alpha=0.5, s=20)
-    ax3.set_xlabel('AI (g/cm³ * m/s)')
+    ax3.set_xlabel('AI (g/cm³ * km/s)')
     ax3.set_ylabel('Vp/Vs')
     ax3.set_title('AI vs Vp/Vs')
     ax3.grid(True)
@@ -157,22 +123,119 @@ def fluid_typing_xplots(rhob, vp=None, vs=None):
     return fig
 
 
-# Example usage
-if __name__ == "__main__":
-    # Matrix (quartz) properties
-    K_matrix = 37.0  # GPa
-    G_matrix = 44.0  # GPa
-    # Grain properties
-    K_grain = 36.6   # GPa
-    G_grain = 45.0   # GPa
-    # Fluid properties
-    K_fluid = 2.2    # GPa
-    G_fluid = 0.0    # GPa
-    porosity = 0.25
-    inclusion_fraction = 0.1
+def QI_screening(gr, rhob, vp):
 
-    K_sat, G_sat = rock_physics_model(
-        K_matrix, G_matrix, K_grain, G_grain, K_fluid, G_fluid, porosity, inclusion_fraction
+    # compute the elastic bounds
+    Dqz = Config.GEOMECHANICS_VALUE['RHOB_QUARTZ']
+    Kqz = Config.GEOMECHANICS_VALUE['K_QUARTZ']
+    Gqz = Config.GEOMECHANICS_VALUE['G_QUARTZ']
+    Dsh = Config.GEOMECHANICS_VALUE['RHOB_SHALE']
+    Ksh = Config.GEOMECHANICS_VALUE['K_SHALE']
+    Gsh = Config.GEOMECHANICS_VALUE['G_SHALE']
+    Dc = Config.GEOMECHANICS_VALUE['RHOB_QUARTZ']
+    Kc = Config.GEOMECHANICS_VALUE['K_QUARTZ']
+    Gc = Config.GEOMECHANICS_VALUE['G_QUARTZ']
+    Db = Config.GEOMECHANICS_VALUE['RHOB_BRINE']
+    Kb = Config.GEOMECHANICS_VALUE['K_BRINE']
+
+    vsh_gr = estimate_vsh_gr(gr)
+    phit = (Dqz - rhob) / (Dqz - Db)
+
+    phib_p = 0.3  # Adjusted high porosity limit
+    phi_c = 0.4  # Critical porosity
+    sigma = 20  # Effective stress
+    scheme = 2  # Scheme of cement deposition
+    f = 0.5  # Reduced shear factor
+    Cn = 8.6  # Coordination number
+    phi, vp1, vp2, vp3, vs1, vs2, vs3 = QI.screening(
+        Dqz, Kqz, Gqz,
+        Dsh, Ksh, Gsh,
+        Dc, Kc, Gc,
+        Db, Kb,
+        phib_p, phi_c, sigma, 0, scheme, f, Cn
     )
-    print(f"Saturated Bulk Modulus: {K_sat:.2f} GPa")
-    print(f"Saturated Shear Modulus: {G_sat:.2f} GPa")
+    qi = QI(vp, phit, Vsh=vsh_gr)
+
+    # call the screening plot method
+    fig = qi.screening_plot(phi, vp1, vp2, vp3)
+    plt.ylim([1900, 6100])
+    plt.yticks(np.arange(2000, 6200, 1000), [2, 3, 4, 5, 6])
+    plt.ylabel('Vp (Km/s)')
+    plt.xlim(-0.01, 0.51)
+    return fig
+
+
+def rpt_plot(rhob, vp=None, vs=None, model='soft_sand', fluid_type='gas', sigma=20, phi_c=0.4, Cn=8.6, f=0.0, scheme=2):
+    """Plot the RPT plot.
+    Args:
+        rhob (float): Bulk density in g/cm³
+        vp (float): P-wave velocity in m/s
+        vs (float): S-wave velocity in m/s
+        model (str): Model to use for the RPT plot. Defaults to 'soft_sand'.
+                     Options are 'soft_sand', 'stiff_sand', 'contact_cement', 'hertz_mindlin'.
+        fluid_type (str): Fluid type. Defaults to 'gas'. Options are 'water', 'gas', 'oil'.
+        sigma (float): Effective stress. Defaults to 20.
+        phi_c (float): Critical porosity. Defaults to 0.4.
+        Cn (float): Coordination number. Defaults to 8.6.
+        f (float): Reduced shear factor. Defaults to 0.0.
+        scheme (int): Scheme of cement deposition. Defaults to 2.
+    """
+    model_options = ['soft_sand', 'stiff_sand', 'contact_cement', 'hertz_mindlin']
+    assert model in model_options, f"Model must be one of {model_options}"
+    fluid_type_options = ['water', 'gas', 'oil']
+    assert fluid_type in ['water', 'gas', 'oil'], f"Fluid type must be one of {fluid_type_options}"
+
+    if vs is None and vp is not None:
+        vs = estimate_shear_velocity(vp)
+    if vp is None:
+        vp = estimate_compressional_velocity(rhob)
+
+    ai = vp * rhob
+    vp_vs = vp/vs
+
+    # Define the elastic bounds
+    Dqz = Config.GEOMECHANICS_VALUE['RHOB_QUARTZ']
+    Kqz = Config.GEOMECHANICS_VALUE['K_QUARTZ']
+    Gqz = Config.GEOMECHANICS_VALUE['G_QUARTZ']
+    Kc = Config.GEOMECHANICS_VALUE['K_CEMENT']
+    Gc = Config.GEOMECHANICS_VALUE['G_CEMENT']
+
+    Db = Config.GEOMECHANICS_VALUE['RHOB_BRINE']
+    Kb = Config.GEOMECHANICS_VALUE['K_BRINE']
+    Dg = Config.GEOMECHANICS_VALUE['RHOB_GAS']
+    Kg = Config.GEOMECHANICS_VALUE['K_GAS']
+    Do = Config.GEOMECHANICS_VALUE['RHOB_OIL']
+    Ko = Config.GEOMECHANICS_VALUE['K_OIL']
+
+    if fluid_type == 'water':
+        Df = Db
+        Kf = Kb
+    elif fluid_type == 'gas':
+        Df = Dg
+        Kf = Kg
+    elif fluid_type == 'oil':
+        Df = Do
+        Kf = Ko
+
+    phi = np.linspace(0.1, phi_c, 10)  # Define porosity range according to critical porosity
+    sw = np.linspace(0, 1, 5)  # Water saturation
+
+    if model == 'soft_sand':
+        K, G = GM.softsand(Kqz, Gqz, phi, phi_c, Cn, sigma, f)
+    elif model == 'stiff_sand':
+        K, G = GM.stiffsand(Kqz, Gqz, phi, phi_c, Cn, sigma, f)
+    elif model == 'contact_cement':
+        K, G = GM.contactcement(Kqz, Gqz, Kc, Gc, phi, phi_c, Cn, scheme)
+    elif model == 'hertz_mindlin':
+        K, G = GM.hertzmindlin(Kqz, Gqz, phi_c, Cn, sigma, f)
+
+    # Plot the elastic properties
+    fig = QI.plot_rpt(K, G, Kqz, Dqz, Kb, Db, Kf, Df, phi, sw)
+    fig.set_size_inches(7, 6)
+    plt.scatter(ai, vp_vs)
+    plt.xlabel('AI (g/cm³ * m/s)')
+    plt.ylabel('Vp/Vs')
+    plt.xlim(1000, 14000)
+    plt.ylim(1.4, 2.4)
+
+    return fig
