@@ -40,11 +40,11 @@ def qaqc_xplots(rhob, vp=None, vs=None):
     ax1.set_title('Vp vs Vs')
     ax1.grid(True)
 
-    # AI_p vs AI_s crossplot
+    # AIp vs AIs crossplot
     ax2.scatter(ai_p/1e6, ai_s/1e6, alpha=0.5, s=20)
-    ax2.set_xlabel('AI_p (g/cm³ * km/s)')
-    ax2.set_ylabel('AI_s (g/cm³ * km/s)')
-    ax2.set_title('AI_p vs AI_s')
+    ax2.set_xlabel('AIp (g/cm³ * km/s)')
+    ax2.set_ylabel('AIs (g/cm³ * km/s)')
+    ax2.set_title('AIp vs AIs')
     ax2.grid(True)
 
     # Vp/Vs vs Vs crossplot
@@ -233,6 +233,7 @@ def rpt_plot(rhob, vp=None, vs=None, model='soft_sand', fluid_type='gas', sigma=
     fig = QI.plot_rpt(K, G, Kqz, Dqz, Kb, Db, Kf, Df, phi, sw)
     fig.set_size_inches(7, 6)
     plt.scatter(ai, vp_vs)
+    plt.title(f'RPT Plot: {model.replace("_", " ").title()} - {fluid_type.title()}')
     plt.xlabel('AI (g/cm³ * m/s)')
     plt.ylabel('Vp/Vs')
     plt.xlim(1000, 14000)
