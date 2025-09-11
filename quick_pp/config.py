@@ -11,6 +11,9 @@ class Config(object):
         RT=dict(name="True Resistivity", unit="ohm.m", min=0, max=2000),
         NPHI=dict(name="Neutron Porosity", unit="v/v", min=-.05, max=0.45),
         RHOB=dict(name="Bulk Density", unit="g/cc", min=1.85, max=2.85),
+        PEF=dict(name="Peak Frequency", unit="Hz", min=0, max=10),
+        DTC=dict(name="DTC", unit="us/ft", min=40, max=200),
+        DTS=dict(name="DTS", unit="us/ft", min=100, max=200),
         VSAND=dict(name="Sand Volume", unit="v/v", min=0, max=1),
         VSILT=dict(name="Silt Volume", unit="v/v", min=0, max=1),
         VCLAY=dict(name="Clay Volume", unit="v/v", min=0, max=1),
@@ -100,6 +103,38 @@ class Config(object):
         'DTC_HALITE': 67.0,
         'PEF_HALITE': 4.7,
     }
+
+    GEOMECHANICS_VALUE = dict(
+        # Quartz
+        RHOB_QUARTZ=2.65,
+        K_QUARTZ=36.6,
+        G_QUARTZ=45.0,
+        # Shale
+        RHOB_SHALE=2.7,
+        K_SHALE=21.0,
+        G_SHALE=7.0,
+        # Calcite
+        RHOB_CALCITE=2.71,
+        K_CALCITE=75.0,
+        G_CALCITE=30.0,
+        # Dolomite
+        RHOB_DOLOMITE=2.85,
+        K_DOLOMITE=100.0,
+        G_DOLOMITE=40.0,
+        # Cement
+        RHOB_CEMENT=2.65,
+        K_CEMENT=37.0,
+        G_CEMENT=45.0,
+        # Brine
+        RHOB_BRINE=1.0,
+        K_BRINE=2.5,
+        # Oil
+        RHOB_OIL=0.8,
+        K_OIL=1.5,
+        # Gas
+        RHOB_GAS=0.2,
+        K_GAS=0.06,
+    )
 
     @staticmethod
     def vars_units(data):
