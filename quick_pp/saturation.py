@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+from tqdm import tqdm
 
 from quick_pp.utils import min_max_line
 from quick_pp import logger
@@ -69,33 +70,31 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
     swt = 1
     swt_i = 0
     logger.debug("Starting iterative solution for Waxman-Smits")
-    for i in range(50):
+
+    # Use tqdm for progress bar during iterations
+    for i in tqdm(range(50), desc="Waxman-Smits iteration"):
         fx = swt**n + rw * B * Qv * swt**(n - 1) - (phit**-m * rw / rt)  # Ausburn, 1985
         delta_sat = abs(swt - swt_i) / 2
         swt_i = swt
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
-
-        if i % 10 == 0:
-            logger.debug(f"Iteration {i}: max change = {np.max(delta_sat):.6f}"
-                         if hasattr(delta_sat, '__len__') else f"Iteration {i}: max change = {delta_sat:.6f}")
 
     logger.debug(f"Waxman-Smits saturation range: {min(swt)} - {max(swt)}")
     return swt
 
 
 def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
-    """Estimate water saturation based on dual water model, an extension from Waxman-Smits.
-    TODO: Estimate swb and rwb if not provided
+    """Estimate water saturation based on dual water model, an extension from Waxman-Smits by Clavier, Coates and
+    Dumanoir (1977).
 
     Args:
-        rt (float): True resistivity or deep resistivity log.
-        rw (float): Formation water resistivity.
-        phit (float): Total porosity
+        rt (float): True resistivity or deep resistivity log in ohm.m.
+        rw (float): Formation water resistivity in ohm.m.
+        phit (float): Total porosity in fraction.
         a (float): Cementation exponent.
         m (float): Saturation exponent.
         n (float): Porosity exponent.
-        swb (float): Bound water saturation.
-        rwb (float): Bound water resistivity.
+        swb (float): Bound water saturation in fraction.
+        rwb (float): Bound water resistivity in ohm.m.
 
     Returns:
         float: Water saturation.
@@ -106,17 +105,30 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
     swt = 1
     swt_i = 0
     logger.debug("Starting iterative solution for dual water model")
-    for i in range(50):
+
+    # Use tqdm for progress bar during iterations
+    for i in tqdm(range(50), desc="Dual water iteration"):
         fx = phit**m * swt**n / a * (1 / rw * (swb / swt) * (1 / rwb - 1 / rw)) - 1 / rt
         delta_sat = abs(swt - swt_i) / 2
         swt_i = swt
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
 
-        if i % 10 == 0:
-            logger.debug(f"Iteration {i}: max change = {delta_sat.max():.6f}")
-
     logger.debug(f"Dual water saturation range: {swt.min():.3f} - {swt.max():.3f}")
     return swt
+
+
+def estimate_swb(phit, vsh, nphi_sh):
+    """Estimate bound water saturation based on dual water model.
+    Args:
+        phit (float): Total porosity in fraction.
+        vsh (float): Volume of shale in fraction.
+        nphi_sh (float): Neutron porosity reading in a nearby 100% shale interval in fraction.
+
+    Returns:
+        float: Bound water saturation.
+    """
+    swb = vsh * nphi_sh / phit
+    return swb
 
 
 def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
@@ -164,6 +176,46 @@ def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
     sw = (a * rw / (2 * phit**m)) * ((shale_factor**2 + (4 * phit**m / (a * rw * rt)))**(1 / 2) - shale_factor)
     logger.debug(f"Simandoux saturation range: {sw.min():.3f} - {sw.max():.3f}")
     return sw
+
+
+def connectivity_saturation(rt, rw, phit, mu=2, chi_w=0):
+    """Estimate water saturation based on connectivity model Montaron 2009
+    Args:
+        rt (float): True resistivity or deep resistivity log.
+        rw (float): Formation water resistivity.
+        phit (float): Total porosity.
+        mu (float): Conductivity exponent, ranges from 1.6 to 2. Defaults to 2.
+        chi_w (float): Water connectivity correction index, ranges from -0.02 to 0.02. Defaults to 0.
+
+    Returns:
+        float: Water saturation.
+
+    """
+    logger.debug("Calculating connectivity saturation")
+
+    rw_prime = rw * (1 + chi_w) ** mu
+    sw = ((rw_prime / rt) ** (1 / mu) + chi_w) / phit
+    logger.debug(f"Connectivity saturation range: {sw.min():.3f} - {sw.max():.3f}")
+    return sw
+
+
+def estimate_chi_w(s_cw, phit, sigma_cw, sigma_w, mu=2):
+    """Estimate water connectivity correction index based on connectivity model Montaron 2009
+    Args:
+        s_cw (float): Water saturation, ranges from 0 to 1.
+        phit (float): Total porosity.
+        sigma_cw (float): Conductivity of clay water, ranges from 0 to 1.
+        sigma_w (float): Water conductivity, ranges from 0 to 1.
+        mu (float): Conductivity exponent, ranges from 1.6 to 2. Defaults to 2.
+
+    Returns:
+        float: Water connectivity correction index.
+
+    """
+    logger.debug("Calculating water connectivity correction index")
+    chi_w = -s_cw * phit * ((sigma_cw / sigma_w)**(1 / mu) - 1)
+    logger.debug(f"Water connectivity correction index range: {chi_w.min():.3f} - {chi_w.max():.3f}")
+    return chi_w
 
 
 def modified_simandoux_saturation():

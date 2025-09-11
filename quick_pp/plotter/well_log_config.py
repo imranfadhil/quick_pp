@@ -24,11 +24,15 @@ COLOR_DICT = {
     'VGAS': '#FF0000',
     'VOIL': '#00FF00',
     'VHC': 'brown',
+    'VWATER': '#56C0E4',
     'VSAND': '#F6F674',
     'VSHALE': '#A65628',
     'VSILT': '#FE9800',
     'VCALC': '#b0e0e6',
     'VDOLO': '#ba55d3',
+    'VANHY': '#E9DF53',
+    'VGYPS': '#6C55D3',
+    'VHALI': '#6ED355',
     'CPORE': '#FF0000',
     'CPERM': '#FF0000',
     'CSAT': '#FF0000',
@@ -57,7 +61,7 @@ TRACE_DEFS = OrderedDict(
         track=3,
         secondary_y=False,
         hide_xaxis=False,
-        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': 'rgba(255, 255, 0, 0.4)', 'hoverinfo': 'none'}
+        style={'line_width': 0, 'fill': 'tonexty', 'fillcolor': '#FFFF0066', 'hoverinfo': 'none'}
     ),
     PHIT=dict(
         track=4,
@@ -187,12 +191,42 @@ TRACE_DEFS = OrderedDict(
             'fillpattern_size': 3, 'fillpattern_solidity': 0.3, 'stackgroup': 'litho', 'orientation': 'h'
         }
     ),
+    VANHY=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VANHY'],
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': 'x',
+            'fillpattern_size': 4, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
+    VGYPS=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VGYPS'],
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '\\',
+            'fillpattern_size': 4, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
+    VHALI=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VHALI'],
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '+',
+            'fillpattern_size': 4, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
     VHC=dict(
         track=8,
         secondary_y=False,
         hide_xaxis=True,
         style={
-            'line_width': .5, 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VHC'],
+            'line_width': .1, 'line_color': 'black', 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VHC'],
             'stackgroup': 'litho', 'orientation': 'h'
         }
     ),
@@ -201,7 +235,7 @@ TRACE_DEFS = OrderedDict(
         secondary_y=False,
         hide_xaxis=True,
         style={
-            'line_width': .5, 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VGAS'],
+            'line_width': .1, 'line_color': 'black', 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VGAS'],
             'stackgroup': 'litho', 'orientation': 'h'
         }
     ),
@@ -210,7 +244,16 @@ TRACE_DEFS = OrderedDict(
         secondary_y=False,
         hide_xaxis=True,
         style={
-            'line_width': .5, 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VOIL'],
+            'line_width': .1, 'line_color': 'black', 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VOIL'],
+            'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
+    VWATER=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .1, 'line_color': 'black', 'fill': 'tonextx', 'fillcolor': COLOR_DICT['VWATER'],
             'stackgroup': 'litho', 'orientation': 'h'
         }
     ),

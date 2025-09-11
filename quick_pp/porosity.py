@@ -381,3 +381,31 @@ def porosity_trend(tvdss, unit='ft'):
 
     logger.debug(f"Porosity trend range: {phi_trend.min():.3f} - {phi_trend.max():.3f}")
     return phi_trend
+
+
+def nmr_porosity(t2_dist, t2_bins, t2_cutoff=33):
+    """Calculate NMR porosity from T2 distribution.
+
+    Total porosity is the sum of all T2 distribution amplitudes.
+    Effective porosity is the sum of T2 distribution amplitudes above the T2 cutoff.
+
+    Args:
+        t2_dist (array-like): T2 distribution amplitudes
+        t2_bins (array-like): T2 time bins corresponding to distribution
+        t2_cutoff (float, optional): T2 cutoff time in ms. Defaults to 33ms.
+
+    Returns:
+        tuple: Total porosity and effective porosity (phit, phie)
+    """
+    logger.debug(f"Calculating NMR porosity with T2 cutoff: {t2_cutoff}ms")
+
+    # Total porosity is sum of all T2 amplitudes
+    phit = np.sum(t2_dist)
+
+    # Effective porosity is sum of amplitudes above T2 cutoff
+    phie = np.sum(t2_dist[t2_bins >= t2_cutoff])
+
+    logger.debug(f"NMR total porosity range: {phit.min():.3f} - {phit.max():.3f}")
+    logger.debug(f"NMR effective porosity range: {phie.min():.3f} - {phie.max():.3f}")
+
+    return phit, phie
