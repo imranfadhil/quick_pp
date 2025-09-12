@@ -114,7 +114,7 @@ def rho_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
     logger.debug("Calculating matrix density from mineral volumes")
     minerals_log_value = Config.MINERALS_LOG_VALUE
     rho_sand = rho_sand or minerals_log_value['RHOB_QUARTZ']
-    rho_silt = rho_silt or minerals_log_value['RHOB_SILT']
+    rho_silt = rho_silt or 2.68
     rho_clay = rho_clay or minerals_log_value['RHOB_SHALE']
     rho_calc = rho_calc or minerals_log_value['RHOB_CALCITE']
     rho_dolo = rho_dolo or minerals_log_value['RHOB_DOLOMITE']

@@ -1,8 +1,12 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from rockphypy import QI, GM
+from rockphypy import QI, GM, EM, Fluid
+from rockphypy.Emp import Empirical as emp
 
-from quick_pp.rock_physics.geomechanics import estimate_shear_velocity, estimate_compressional_velocity
+from quick_pp.rock_physics.geomechanics import (
+    estimate_shear_velocity, estimate_compressional_velocity,
+    estimate_shear_modulus, estimate_bulk_modulus
+)
 from quick_pp.rock_type import estimate_vsh_gr
 from quick_pp.config import Config
 
@@ -189,6 +193,8 @@ def rpt_plot(rhob, vp=None, vs=None, model='soft_sand', fluid_type='gas', sigma=
         vs = estimate_shear_velocity(vp)
     if vp is None:
         vp = estimate_compressional_velocity(rhob)
+    if Cn is None and phi_c is not None:
+        Cn = emp.Cp(phi_c)
 
     ai = vp * rhob
     vp_vs = vp/vs
@@ -236,7 +242,81 @@ def rpt_plot(rhob, vp=None, vs=None, model='soft_sand', fluid_type='gas', sigma=
     plt.title(f'RPT Plot: {model.replace("_", " ").title()} - {fluid_type.title()}')
     plt.xlabel('AI (g/cm³ * m/s)')
     plt.ylabel('Vp/Vs')
-    plt.xlim(1000, 14000)
-    plt.ylim(1.4, 2.4)
+    plt.xlim(1000, 20000)
+    plt.ylim(1.0, 4.0)
+
+    return fig
+
+
+def elastic_bounds_plot(rhob, vp=None, vs=None):
+    """Plot the elastic bounds.
+    Args:
+        rhob (float): Bulk density in g/cm³
+        vp (float): P-wave velocity in m/s
+        vs (float): S-wave velocity in m/s
+
+    Returns:
+        matplotlib.figure.Figure: Figure containing the elastic bounds plot
+    """
+    if vs is None and vp is not None:
+        vs = estimate_shear_velocity(vp)
+    if vp is None:
+        vp = estimate_compressional_velocity(rhob)
+
+    # Estimate bulk modulus and porosity
+    K = estimate_bulk_modulus(rhob, vp, vs) * 1e-6
+    G = estimate_shear_modulus(rhob, vs) * 1e-6
+    phi_calc = (Config.GEOMECHANICS_VALUE['RHOB_QUARTZ'] - rhob) / (
+        Config.GEOMECHANICS_VALUE['RHOB_QUARTZ'] - Config.GEOMECHANICS_VALUE['RHOB_BRINE'])
+
+    # specify model parameters
+    phi = np.linspace(0, 1, 100, endpoint=True)
+    K0 = Config.GEOMECHANICS_VALUE['K_QUARTZ']
+    G0 = Config.GEOMECHANICS_VALUE['G_QUARTZ']
+    Kw = Config.GEOMECHANICS_VALUE['K_BRINE']
+    Gw = 0
+
+    # VRH bounds
+    volumes = np.vstack((1 - phi, phi)).T
+    M = np.array([K0, Kw])
+    K_v, K_r, K_h = EM.VRH(volumes, M)
+    M = np.array([G0, Gw])
+    G_v, G_r, G_h = EM.VRH(volumes, M)
+    # Hashin-Strikmann bound
+    K_UHS, G_UHS = EM.HS(1 - phi, K0, Kw, G0, Gw, bound='upper')
+    # Critical porosity model
+    phic = 0.4  # Critical porosity
+    phi_ = np.linspace(0.001, phic, 100, endpoint=True)
+    K_dry, G_dry = EM.cripor(K0, G0, phi_, phic)  # Compute dry-rock moduli
+    Ksat, Gsat = Fluid.Gassmann(K_dry, G_dry, K0, Kw, phi_)  # Saturate rock with water
+
+    # Create subplot with 2 columns and 1 row
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+
+    # Plot Bulk modulus bounds
+    ax1.set_xlabel('Porosity')
+    ax1.set_ylabel('Bulk modulus [GPa]')
+    ax1.set_title('V, R, VRH, HS bounds')
+    ax1.scatter(phi_calc, K, label='K')
+    ax1.plot(phi, K_v, label='K Voigt')
+    ax1.plot(phi, K_r, label='K Reuss = K HS-')
+    ax1.plot(phi, K_h, label='K VRH')
+    ax1.plot(phi, K_UHS, label='K HS+')
+    ax1.plot(phi_, Ksat, label='K CriPor')
+    ax1.legend(loc='best')
+    ax1.grid(ls='--')
+
+    # Plot Shear modulus bounds
+    ax2.set_xlabel('Porosity')
+    ax2.set_ylabel('Shear modulus [GPa]')
+    ax2.set_title('V, R, VRH, HS bounds')
+    ax2.scatter(phi_calc, G, label='G')
+    ax2.plot(phi, G_v, label='G Voigt')
+    ax2.plot(phi, G_r, label='G Reuss = G HS-')
+    ax2.plot(phi, G_h, label='G VRH')
+    ax2.plot(phi, G_UHS, label='G HS+')
+    ax2.plot(phi_, Gsat, label='G CriPor')
+    ax2.legend(loc='best')
+    ax2.grid(ls='--')
 
     return fig

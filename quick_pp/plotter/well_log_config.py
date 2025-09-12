@@ -402,7 +402,8 @@ XAXIS_DEFS = {
         'title': {'text': 'DRHO (g/cc)', 'font': {'color': COLOR_DICT['DRHO'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['DRHO'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .96, 'overlaying': 'x3',
-        'title_standoff': .1, 'range': [-.05, .35], 'type': 'linear', 'zeroline': False, 'showgrid': False
+        'title_standoff': .1, 'zeroline': False, 'showgrid': False,
+        'tick0': -.05, 'dtick': 0.1, 'range': [-.05, .35], 'tickangle': -90, 'type': 'linear'
     },
     'PHIE': {
         'title': {'text': 'PHIE (v/v)', 'font': {'color': COLOR_DICT['PHIE'], 'size': font_size}},
@@ -472,12 +473,12 @@ XAXIS_DEFS = {
         'title': {'text': 'DTC (us/ft)', 'font': {'color': COLOR_DICT['DTC'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['DTC'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1,
-        'dtick': 20, 'range': [140, 40], 'type': 'linear', 'zeroline': False
+        'dtick': 40, 'range': [200, 0], 'type': 'linear', 'zeroline': False
     },
     'DTS': {
         'title': {'text': 'DTS (us/ft)', 'font': {'color': COLOR_DICT['DTS'], 'size': font_size}},
         'tickfont': {'color': COLOR_DICT['DTS'], 'size': font_size},
         'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x9',
-        'dtick': 20, 'range': [140, 40], 'type': 'linear', 'zeroline': False
+        'dtick': 40, 'range': [200, 0], 'type': 'linear', 'zeroline': False
     }
 }
