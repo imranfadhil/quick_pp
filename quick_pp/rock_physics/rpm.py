@@ -248,7 +248,7 @@ def rpt_plot(rhob, vp=None, vs=None, model='soft_sand', fluid_type='gas', sigma=
     return fig
 
 
-def elastic_bounds_plot(rhob, vp=None, vs=None):
+def elastic_bounds_plot(rhob, vp=None, vs=None, phi_calc=None):
     """Plot the elastic bounds.
     Args:
         rhob (float): Bulk density in g/cm³
@@ -266,8 +266,9 @@ def elastic_bounds_plot(rhob, vp=None, vs=None):
     # Estimate bulk modulus and porosity
     K = estimate_bulk_modulus(rhob, vp, vs) * 1e-6
     G = estimate_shear_modulus(rhob, vs) * 1e-6
-    phi_calc = (Config.GEOMECHANICS_VALUE['RHOB_QUARTZ'] - rhob) / (
-        Config.GEOMECHANICS_VALUE['RHOB_QUARTZ'] - Config.GEOMECHANICS_VALUE['RHOB_BRINE'])
+    if phi_calc is None:
+        phi_calc = (Config.GEOMECHANICS_VALUE['RHOB_QUARTZ'] - rhob) / (
+            Config.GEOMECHANICS_VALUE['RHOB_QUARTZ'] - Config.GEOMECHANICS_VALUE['RHOB_BRINE'])
 
     # specify model parameters
     phi = np.linspace(0, 1, 100, endpoint=True)
