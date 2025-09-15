@@ -369,6 +369,31 @@ def rock_typing(curve, cut_offs=[.1, .2, .3, .4], higher_is_better=True):
     return np.where(np.isnan(curve), np.nan, np.select(conditions, choices))
 
 
+def find_cutoffs(curve, no_of_cutoffs=3):
+    """Find optimal cutoffs for a given curve using KMeans clustering.
+
+    Args:
+        curve (pd.Series or np.array): The curve data to find cutoffs for.
+        no_of_cutoffs (int, optional): The number of cutoffs to find. This will result in `no_of_cutoffs + 1` clusters.
+                                     Defaults to 3.
+
+    Returns:
+        np.array: An array of cutoff values.
+    """
+    from sklearn.cluster import KMeans
+
+    # Reshape data for KMeans and remove NaNs
+    if not isinstance(curve, pd.Series):
+        curve = pd.Series(curve)
+
+    data = curve.dropna().values.reshape(-1, 1)
+    n_clusters = no_of_cutoffs + 1
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init='auto').fit(data)
+    centers = np.sort(kmeans.cluster_centers_.flatten())
+    cutoffs = (centers[:-1] + centers[1:]) / 2
+    return cutoffs
+
+
 def train_classification_model(data, input_features: list, target_feature: str, stratifier=None):
     """Train a classification Random Forest model to predict a binary feature.
 

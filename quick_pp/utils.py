@@ -89,8 +89,12 @@ def angle_between_lines(line1: tuple, line2: tuple):
     return angle
 
 
-def zone_flagging(data: pd.DataFrame):
+def zone_flagging(data: pd.DataFrame, min_zone_thickness: int = 150):
     """Flagging sand zones based on VSHALE, VCLW, and VSH_GR.
+
+    Args:
+        data (pd.DataFrame): DataFrame with well log data.
+        min_zone_thickness (int): The minimum number of data points for a zone to be kept.
 
     Returns:
         pd.DataFrame: Original DataFrame with ZONE_FLAG and ZONES columns.
@@ -113,39 +117,29 @@ def zone_flagging(data: pd.DataFrame):
             well_data['vsh_curve'] = MinMaxScaler().fit_transform(dtr_gr)
         threshold = np.nanquantile(well_data['vsh_curve'], .7, method='median_unbiased')
 
-        # Estimate ZONE_FLAG using VSH_GR
+        # Estimate RES_FLAG (reservoir flag) using vsh_curve
         well_data['RES_FLAG'] = np.where(well_data['vsh_curve'] < threshold, 1, 0)
-        well_data['ZONES_FLAG'] = np.where(
-            well_data['vsh_curve'].rolling(25, win_type='boxcar', center=True).mean() < threshold, 1, 0)
-        well_data['ZONES_FLAG'] = well_data['ZONES_FLAG'].fillna(0)
 
         # Fill in empty ZONES
         no_zones_df = well_data[well_data['ZONES'] == 'FORMATION']
         if not no_zones_df.empty:
-            # Assign generic ZONES
-            df_temp = pd.DataFrame()
-            sand_counter = 1
-            shale_counter = 0
-            for i, data in no_zones_df.iterrows():
-                if data['ZONES_FLAG'] == 1 and shale_counter == 1:
-                    sand_counter += 1
-                    shale_counter = 0
-                if data['ZONES_FLAG'] == 1:
-                    data['ZONES'] = f'ZONE_{sand_counter}'
-                else:
-                    data['ZONES'] = f'ZONE_{sand_counter}'
-                    shale_counter = 1
-                df_temp = pd.concat([df_temp, pd.DataFrame(data[['DEPTH', 'ZONES']]).T], axis=0)
-            df_temp.reset_index(drop=True, inplace=True)
-            well_data.loc[well_data['DEPTH'].isin(df_temp['DEPTH']), 'ZONES'] = df_temp['ZONES']
+            # Assign initial zone names
+            sand_zone_numbers = (well_data['RES_FLAG'].diff().clip(lower=0) == 1).cumsum()
 
-            # Replace small 'ZONE_'s with np.nan and ffill
-            remove_sands = well_data[well_data['ZONES'].str.contains('ZONE_', na=False)][['DEPTH', 'ZONES']].groupby(
-                'ZONES').count().reset_index()
-            remove_sands = remove_sands[remove_sands['DEPTH'] < 70]
-            well_data['ZONES'] = well_data['ZONES'].apply(
-                lambda x: x if x not in remove_sands['ZONES'].to_list() else np.nan)
-            well_data['ZONES'] = well_data['ZONES'].ffill().bfill()
+            well_data['ZONES'] = np.where(
+                well_data['RES_FLAG'] == 1,
+                'ZONE_' + sand_zone_numbers.astype(str),
+                np.nan
+            )
+
+            # Merge small zones
+            zone_counts = well_data['ZONES'].value_counts()
+            small_zones = zone_counts[zone_counts < min_zone_thickness].index
+
+            while len(small_zones) > 0:
+                well_data['ZONES'] = well_data['ZONES'].replace(small_zones, np.nan).ffill().bfill()
+                zone_counts = well_data['ZONES'].value_counts()
+                small_zones = zone_counts[zone_counts < min_zone_thickness].index
 
         return_df = pd.concat([return_df, well_data], ignore_index=True)
 

@@ -321,10 +321,6 @@ TRACE_DEFS = dict(
         track=8,
         secondary_y=True,
         hide_xaxis=True,
-        style={
-            'line_color': COLOR_DICT['COAL_FLAG'], 'fill': 'tozerox',
-            'fillcolor': 'rgba(0,0,0,1)', 'opacity': 1
-        }
     )
 )
 

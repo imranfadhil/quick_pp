@@ -64,6 +64,7 @@ def postprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Postprocessed DataFrame.
     """
+    # TODO: Clear predictions at COAL_FLAG interval
     # Invert LOG_PERM to PERM if exists
     if 'LOG_PERM' in df.columns and 'PERM' not in df.columns:
         logger.info("Inverting LOG_PERM to PERM")
@@ -131,7 +132,7 @@ def save_predictions(pred_df: pd.DataFrame, output_file_name: str, plot: bool = 
         output_dir = Path("data/output/plots")
         os.makedirs(output_dir, exist_ok=True)
         for well_name, well_df in tqdm(pred_df.groupby('WELL_NAME'), desc="Generating plots", ):
-            fig = plotly_log(well_df, well_name=well_name, column_widths=[1, 1, 1, 1, 1, 1, .5, 1, 1],)
+            fig = plotly_log(well_df, well_name=well_name, column_widths=[1, 1, 1, 1, 1, 1, .3, 1, 1],)
             plot_path = Path(f"{output_dir}/{well_name}.html")
             fig.write_html(plot_path, config=dict(scrollZoom=True))
             tqdm.write(f"Plot for well {well_name} saved to {plot_path}")
@@ -176,6 +177,11 @@ def predict_pipeline(
         preds = model.predict(data[features].astype('float'))
         temp_df = pd.DataFrame(preds, columns=targets)
         pred_df = pd.concat([pred_df, temp_df], axis=1)
+
+    # Merge specific columns from original data missing from pred_df
+    merge_cols = ['WELL_NAME', 'DEPTH']
+    missing_cols = ['ROCK_FLAG', 'COAL_FLAG']
+    pred_df = pd.merge(pred_df, data[merge_cols + missing_cols], on=merge_cols, how='left')
 
     # Postprocess the predictions and save
     pred_df = postprocess_data(pred_df)

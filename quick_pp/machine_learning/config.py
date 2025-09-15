@@ -1,4 +1,3 @@
-from collections import OrderedDict
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 
 MLFLOW_CONFIG = dict(
@@ -20,7 +19,7 @@ MLFLOW_CONFIG = dict(
 RAW_FEATURES = ['GR', 'RT', 'NPHI', 'RHOB']
 FE_FEATURES = ['RHOB_INT', 'DPHI', 'GAS_XOVER']
 MODELLING_CONFIG = dict(
-    mock=OrderedDict(
+    mock=dict(
         POROSAT=dict(
             alg=RandomForestRegressor,
             targets=['PHIE', 'SW'],
@@ -28,7 +27,7 @@ MODELLING_CONFIG = dict(
             description=('Mock clastic properties prediction consisting of total porosity and total water saturation.'),
         ),
     ),
-    clastic=OrderedDict(
+    clastic=dict(
         OIL=dict(
             alg=RandomForestClassifier,
             targets=['OIL_FLAG'],
@@ -49,7 +48,7 @@ MODELLING_CONFIG = dict(
                          'log permeability, sand volume, silt volume, and clay volume'),
         ),
     ),
-    carbonate=OrderedDict(
+    carbonate=dict(
         OIL=dict(
             alg=RandomForestClassifier,
             targets=['OIL_FLAG'],

@@ -62,7 +62,7 @@ def add_rock_flag_traces(df):
         df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(no_of_rock_flags)
         sorted_rock_flags = sorted(df['ROCK_FLAG'].unique().tolist())
         for i, rock_flag in enumerate(sorted_rock_flags):
-            lightness = 100 - ((i * 1 + 2) / no_of_rock_flags * 100)
+            lightness = 100 - (i / no_of_rock_flags * 100)
             fill_color = f'hsl(30, 70%, {lightness}%)'
             COLOR_DICT[f'ROCK_FLAG_{rock_flag}'] = fill_color
             # print(f"i: {i}, rock_flag: {rock_flag}, fill_color: {fill_color}")
@@ -165,6 +165,7 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: Ordered
 
     # --- COAL_FLAG traces (special style, always on tracks 4-8, secondary_y=True) ---
     if 'COAL_FLAG' in trace_defs.keys():
+        df['COAL_FLAG'] = df['COAL_FLAG'].replace({1: 1e4})  # Cater for plotting on log scale
         for c in [4, 5, 6, 7, 8]:
             fig.add_trace(
                 go.Scatter(x=df['COAL_FLAG'], y=index, name='', line_color=COLOR_DICT['COAL_FLAG'],
@@ -205,7 +206,7 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: Ordered
     def add_zone_markers(fig, df):
         if 'ZONES' in df.columns:
             tops_df = df[['DEPTH', 'ZONES']].dropna().reset_index()
-            if not tops_df.empty and sum([1 for c in tops_df.ZONES.unique() if 'SAND_' in c]) < 30:
+            if not tops_df.empty and sum([1 for c in tops_df.ZONES.unique() if 'ZONE_' in c]) < 30:
                 zone_tops_idx = [0] + [idx for idx, (i, j) in enumerate(
                     zip(tops_df['ZONES'], tops_df['ZONES'][1:]), 1) if i != j]
                 zone_tops = tops_df.loc[zone_tops_idx, :]
