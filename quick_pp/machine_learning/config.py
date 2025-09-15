@@ -18,6 +18,7 @@ MLFLOW_CONFIG = dict(
 )
 
 RAW_FEATURES = ['GR', 'RT', 'NPHI', 'RHOB']
+FE_FEATURES = ['RHOB_INT', 'DPHI', 'GAS_XOVER']
 MODELLING_CONFIG = dict(
     mock=OrderedDict(
         POROSAT=dict(
@@ -31,19 +32,19 @@ MODELLING_CONFIG = dict(
         OIL=dict(
             alg=RandomForestClassifier,
             targets=['OIL_FLAG'],
-            features=RAW_FEATURES,
+            features=RAW_FEATURES + FE_FEATURES,
             description='Oil flag classification',
         ),
         GAS=dict(
             alg=RandomForestClassifier,
             targets=['GAS_FLAG'],
-            features=RAW_FEATURES + ['OIL_FLAG'],
+            features=RAW_FEATURES + FE_FEATURES + ['OIL_FLAG'],
             description='Gas flag classification',
         ),
         CLASTIC=dict(
             alg=RandomForestRegressor,
-            targets=['PHIT', 'SWT', 'LOG_PERM', 'VSAND', 'VSILT', 'VCLW'],
-            features=RAW_FEATURES,
+            targets=['PHIT', 'SWT', 'LOG_PERM', 'VSAND', 'VSILT', 'VCLD'],
+            features=RAW_FEATURES + FE_FEATURES,
             description=('Clastic properties prediction consisting of total porosity, total water saturation, '
                          'log permeability, sand volume, silt volume, and clay volume'),
         ),
@@ -63,7 +64,7 @@ MODELLING_CONFIG = dict(
         ),
         CARBONATE=dict(
             alg=RandomForestRegressor,
-            targets=['PHIT', 'SWT', 'LOG_PERM', 'VCALC', 'VCLW', 'VDOLO'],
+            targets=['PHIT', 'SWT', 'LOG_PERM', 'VCALC', 'VCLD', 'VDOLO'],
             features=RAW_FEATURES,
             description=('Carbonate properties prediction consisting of total porosity, total water saturation, '
                          'log permeability, calcite volume, clay volume, and dolomite volume'),

@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import os
 from pathlib import Path
 from sklearn.model_selection import train_test_split
@@ -14,6 +13,7 @@ import importlib.util
 # sys.path.append(os.getcwd())
 
 from quick_pp.machine_learning.config import MODELLING_CONFIG
+from quick_pp.machine_learning.feature_engineering import generate_fe_features
 from quick_pp.machine_learning.utils import run_mlflow_server
 from quick_pp import logger
 
@@ -54,42 +54,36 @@ def load_data(hash: str):
     return pd.read_parquet(path)
 
 
-def preprocess_data(
-        df: pd.DataFrame, target_column: list[str], features: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     """Preprocess the DataFrame by adding a log-perm column if needed and dropping rows with NaN values.
 
     Args:
         df (pd.DataFrame): DataFrame to preprocess.
-        target_column (list[str]): Target column(s) for the model.
-        features (list[str]): Feature columns for the model.
 
     Returns:
-        tuple[pd.DataFrame, pd.DataFrame]: Tuple containing the features DataFrame and target DataFrame.
+        pd.DataFrame: Preprocessed DataFrame.
     """
-    # Add log perm if not already present
-    if 'LOG_PERM' not in df.columns and 'PERM' in df.columns and (
-            'LOG_PERM' in target_column or 'LOG_PERM' in features):
-        df['LOG_PERM'] = np.log10(df['PERM'].clip(lower=1e-3))
-
-    # Drop rows with NaN in target or features
-    return_df = df.dropna(subset=target_column + features)
-    X = return_df[features]
-    y = return_df[target_column]
-    return X, y
+    df = generate_fe_features(df)
+    return df
 
 
-def split_data(X, y, test_size=0.2, random_state=42) -> list:
+def split_data(df: pd.DataFrame, target_column: list[str], features: list[str], test_size=0.2, random_state=42) -> list:
     """Split the data into training and testing sets.
 
     Args:
-        X (pd.DataFrame): Feature DataFrame.
-        y (pd.DataFrame): Target DataFrame.
+        df (pd.DataFrame): DataFrame to split.
+        target_column (list[str]): List of target column names.
+        features (list[str]): List of feature column names.
         test_size (float, optional): Proportion of the dataset to include in the test split. Defaults to 0.2.
         random_state (int, optional): Random seed for reproducibility. Defaults to 42.
 
     Returns:
         list: List containing the training and testing sets for features and target.
     """
+    # Drop rows with NaN in target or features
+    return_df = df.dropna(subset=target_column + features)
+    X = return_df[features].astype('float')
+    y = return_df[target_column].astype('float')
     return train_test_split(X, y, test_size=test_size, random_state=random_state)
 
 
@@ -178,13 +172,13 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
             raise TypeError(f"Features must be a list of strings, got {features}")
 
         df = load_data(data_hash)
+        df = preprocess_data(df)
         # Skip if targets or features are not in the DataFrame
         if not all(col in df.columns for col in targets + features):
             missing_cols = [col for col in targets + features if col not in df.columns]
             logger.warning(f"Skipping model {model_key} due to missing columns: {missing_cols}")
             continue
-        X, y = preprocess_data(df, targets, features)
-        X_train, X_test, y_train, y_test = split_data(X, y)
+        X_train, X_test, y_train, y_test = split_data(df, targets, features)
 
         mlflow_dir = Path('./mlruns')
         os.makedirs(mlflow_dir, exist_ok=True)

@@ -75,14 +75,14 @@ def train(model_config, data_hash, env):
     from quick_pp.machine_learning.train_pipeline import train_pipeline
 
     # Copy config.py into the root directory if it doesn't exist
-    config_file = resources.files('quick_pp.modelling').joinpath('config.py')
+    config_file = resources.files('quick_pp.machine_learning').joinpath('config.py')
     root_config_file = Path(os.getcwd(), 'config.py')
     if os.path.exists(config_file) and not os.path.exists(root_config_file):
         shutil.copyfile(config_file, root_config_file)
         click.echo(f"Copied {config_file} to {root_config_file}")
 
     # Copy mock_data.parquet into data/input if it doesn't exist
-    mock_file = resources.files('quick_pp.modelling.mock_data').joinpath('mock_data.parquet')
+    mock_file = resources.files('quick_pp.machine_learning.mock_data').joinpath('mock_data.parquet')
     data_dir = Path(os.getcwd(), 'data', 'input')
     os.makedirs(data_dir, exist_ok=True)
     root_mock_file = Path(data_dir, 'mock_data.parquet')
@@ -99,12 +99,13 @@ def train(model_config, data_hash, env):
 @click.argument('data_hash', required=True, type=click.STRING)
 @click.argument('output_file_name', required=False, default='test', type=click.STRING)
 @click.argument('env', default='local', type=click.Choice(['local', 'remote']))
-def predict(model_config, data_hash, output_file_name, env):
+@click.option('--plot', is_flag=True, help="Generate and save plots for predictions.")
+def predict(model_config, data_hash, output_file_name, env, plot):
     """Run the prediction."""
     from quick_pp.machine_learning.predict_pipeline import predict_pipeline
 
     click.echo("Running prediction...")
-    predict_pipeline(model_config, data_hash, output_file_name, env)
+    predict_pipeline(model_config, data_hash, output_file_name, env, plot)
 
 
 # Add commands to the CLI group

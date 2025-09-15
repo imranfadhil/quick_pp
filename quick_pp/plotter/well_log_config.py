@@ -1,5 +1,4 @@
 import numpy as np
-from collections import OrderedDict
 
 
 COLOR_DICT = {
@@ -45,7 +44,7 @@ COLOR_DICT = {
 
 # Define the trace definitions for the well log plot
 # Each trace is defined with its properties such as track number, secondary y-axis, and style
-TRACE_DEFS = OrderedDict(
+TRACE_DEFS = dict(
     GR=dict(
         track=1,
         secondary_y=False,
@@ -331,154 +330,154 @@ TRACE_DEFS = OrderedDict(
 
 # Centralize axis definitions for maintainability
 font_size = 8
-XAXIS_DEFS = {
-    'GR': {
-        'title': {'text': 'GR (API)', 'font': {'color': COLOR_DICT['GR'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['GR'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .85,
-        'title_standoff': .1, 'dtick': 40, 'range': [0, 200], 'type': 'linear', 'zeroline': False
-    },
-    'RT': {
-        'title': {'text': 'RT (ohm.m)', 'font': {'color': COLOR_DICT['RT'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['RT'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .85,
-        'title_standoff': .1, 'range': [np.log10(.2), np.log10(2000)], 'type': 'log',
-        'tickmode': 'array', 'tickvals': np.geomspace(0.2, 2000, 5), 'tickangle': -90, 'minor_showgrid': True
-    },
-    'GAS_XOVER_BOTTOM': {
-        'title': {'text': '', 'font': {'size': 1}}, 'tickfont': {'size': 1},
-        'side': 'top', 'anchor': 'free', 'position': .88,
-        'zeroline': False, 'range': [.45, -.15], 'type': 'linear', 'showgrid': False
-    },
-    'PHIT': {
-        'title': {'text': 'PHIT (v/v)', 'font': {'color': COLOR_DICT['PHIT'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['PHIT'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .88, 'title_standoff': .1,
-        'dtick': 0.1, 'range': [0, 0.5], 'type': 'linear', 'zeroline': False
-    },
-    'PERM': {
-        'title': {'text': 'PERM (mD)', 'font': {'color': COLOR_DICT['PERM'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['PERM'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .91, 'title_standoff': .1,
-        'range': [np.log10(0.1), np.log10(10000)], 'type': 'log', 'tickformat': 'd', 'tickangle': -90,
-        'minor_showgrid': True
-    },
-    'SWT': {
-        'title': {'text': 'SWT (v/v)', 'font': {'color': COLOR_DICT['SWT'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['SWT'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1,
-        'dtick': 0.2, 'range': [0, 1], 'type': 'linear', 'zeroline': False
-    },
-    'ROCK_FLAG_0': {
-        'title': {'text': 'ROCK_FLAG', 'font': {'size': font_size}}, 'tickfont': {'size': 1},
-        'side': 'top', 'anchor': 'free', 'position': .85,
-        'title_standoff': .1, 'range': [0.1, 0.2], 'type': 'linear', 'showgrid': False, 'zeroline': False
-    },
-    'VCLD': {
-        'title': {'text': 'VOLUMETRIC', 'font': {'color': 'black', 'size': font_size}},
-        'tickfont': {'color': 'black', 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1,
-        'range': [0, 1], 'type': 'linear', 'zeroline': False
-    },
-    'GAS_XOVER_TOP': {
-        'title': {'text': '', 'font': {'size': 1}}, 'tickfont': {'size': 1},
-        'side': 'top', 'anchor': 'free', 'position': .88, 'overlaying': 'x3',
-        'zeroline': False, 'range': [.45, -.15], 'type': 'linear', 'showgrid': False
-    },
-    'NPHI': {
-        'title': {'text': 'NPHI (v/v)', 'font': {'color': COLOR_DICT['NPHI'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['NPHI'], 'size': font_size}, 'zeroline': False,
-        'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x3',
-        'tickformat': ".2f", 'tick0': -.15, 'dtick': 0.12, 'range': [.45, -.15], 'type': 'linear', 'tickangle': -90
-    },
-    'RHOB': {
-        'title': {'text': 'RHOB (g/cc)', 'font': {'color': COLOR_DICT['RHOB'], 'size': font_size}},
-        'tickformat': ".2f", 'tick0': 1.95, 'dtick': 0.2, 'tickangle': -90,
-        'tickfont': {'color': COLOR_DICT['RHOB'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .85, 'overlaying': 'x3',
-        'title_standoff': .1, 'range': [1.95, 2.95], 'type': 'linear'
-    },
-    'DRHO': {
-        'title': {'text': 'DRHO (g/cc)', 'font': {'color': COLOR_DICT['DRHO'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['DRHO'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .96, 'overlaying': 'x3',
-        'title_standoff': .1, 'zeroline': False, 'showgrid': False,
-        'tick0': -.05, 'dtick': 0.1, 'range': [-.05, .35], 'tickangle': -90, 'type': 'linear'
-    },
-    'PHIE': {
-        'title': {'text': 'PHIE (v/v)', 'font': {'color': COLOR_DICT['PHIE'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['PHIE'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .92, 'title_standoff': .1, 'overlaying': 'x4',
-        'dtick': 0.1, 'range': [0, 0.5], 'type': 'linear', 'zeroline': False
-    },
-    'SWE': {
-        'title': {'text': 'SWE (v/v)', 'font': {'color': COLOR_DICT['SWE'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['SWE'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x6',
-        'dtick': 0.2, 'range': [0, 1], 'type': 'linear', 'zeroline': False
-    },
-    'CALI': {
-        'title': {'text': 'CALI (inches)', 'font': {'color': COLOR_DICT['CALI'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['CALI'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x1',
-        'dtick': 6, 'range': [6, 24], 'type': 'linear', 'showgrid': False
-    },
-    'BS': {
-        'title': {'text': 'BS (inches)', 'font': {'color': COLOR_DICT['BS'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['BS'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .92, 'title_standoff': .1, 'overlaying': 'x1',
-        'dtick': 6, 'range': [6, 24], 'type': 'linear', 'showgrid': False
-    },
-    'BADHOLE': {
-        'title': {'text': 'BADHOLE', 'font': {'color': COLOR_DICT['BADHOLE'], 'size': font_size}},
-        'tickfont': {'size': 1},
-        'side': 'top', 'anchor': 'free', 'position': .96, 'title_standoff': .1, 'overlaying': 'x1',
-        'range': [0.1, 5], 'type': 'linear', 'showgrid': False, 'zeroline': False
-    },
-    'PEF': {
-        'title': {'text': 'PEF', 'font': {'color': COLOR_DICT['PEF'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['PEF'], 'size': font_size}, 'zeroline': False,
-        'side': 'top', 'anchor': 'free', 'position': .93, 'title_standoff': .1, 'overlaying': 'x3',
-        'range': [-10, 10], 'type': 'linear', 'showgrid': False
-    },
-    'CPORE': {
-        'title': {'text': 'CPORE (v/v)', 'font': {'color': COLOR_DICT['CPORE'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['CPORE'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1, 'overlaying': 'x4',
-        'dtick': 0.1, 'range': [0, .5], 'type': 'linear', 'showgrid': False, 'zeroline': False
-    },
-    'CPERM': {
-        'title': {'text': 'CPERM (mD)', 'font': {'color': COLOR_DICT['CPERM'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['CPERM'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1, 'overlaying': 'x5',
-        'range': [np.log10(0.1), np.log10(10000)], 'type': 'log', 'tickformat': 'd', 'tickangle': -90,
-        'zeroline': False, 'showgrid': False
-    },
-    'SHF': {
-        'title': {'text': 'SHF (v/v)', 'font': {'color': COLOR_DICT['SHF'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['SHF'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .93, 'title_standoff': .1, 'overlaying': 'x6',
-        'dtick': 0.2, 'range': [0, 1], 'type': 'linear', 'zeroline': False, 'showgrid': False
-    },
-    'BVW': {
-        'title': {'text': 'BVW (v/v)', 'font': {'color': COLOR_DICT['BVW'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['BVW'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .96, 'title_standoff': .1, 'overlaying': 'x4',
-        'dtick': 0.1, 'range': [0, 0.5], 'type': 'linear', 'zeroline': False
-    },
-    'COAL_FLAG': {
-        'range': [0.1, .2], 'type': 'linear', 'showgrid': False, 'zeroline': False,
-    },
-    'DTC': {
-        'title': {'text': 'DTC (us/ft)', 'font': {'color': COLOR_DICT['DTC'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['DTC'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .85, 'title_standoff': .1,
-        'dtick': 40, 'range': [200, 0], 'type': 'linear', 'zeroline': False
-    },
-    'DTS': {
-        'title': {'text': 'DTS (us/ft)', 'font': {'color': COLOR_DICT['DTS'], 'size': font_size}},
-        'tickfont': {'color': COLOR_DICT['DTS'], 'size': font_size},
-        'side': 'top', 'anchor': 'free', 'position': .89, 'title_standoff': .1, 'overlaying': 'x9',
-        'dtick': 40, 'range': [200, 0], 'type': 'linear', 'zeroline': False
-    }
-}
+XAXIS_DEFS = dict(
+    GR=dict(
+        title={'text': 'GR (API)', 'font': {'color': COLOR_DICT['GR'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['GR'], 'size': font_size},
+        side='top', anchor='free', position=.85,
+        title_standoff=.1, dtick=40, range=[0, 200], type='linear', zeroline=False
+    ),
+    RT=dict(
+        title={'text': 'RT (ohm.m)', 'font': {'color': COLOR_DICT['RT'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['RT'], 'size': font_size},
+        side='top', anchor='free', position=.85,
+        title_standoff=.1, range=[np.log10(.2), np.log10(2000)], type='log',
+        tickmode='array', tickvals=np.geomspace(0.2, 2000, 5), tickangle=-90, minor_showgrid=True
+    ),
+    GAS_XOVER_BOTTOM=dict(
+        title={'text': '', 'font': {'size': 1}}, tickfont={'size': 1},
+        side='top', anchor='free', position=.88,
+        zeroline=False, range=[.45, -.15], type='linear', showgrid=False
+    ),
+    PHIT=dict(
+        title={'text': 'PHIT (v/v)', 'font': {'color': COLOR_DICT['PHIT'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['PHIT'], 'size': font_size},
+        side='top', anchor='free', position=.88, title_standoff=.1,
+        dtick=0.1, range=[0, 0.5], type='linear', zeroline=False
+    ),
+    PERM=dict(
+        title={'text': 'PERM (mD)', 'font': {'color': COLOR_DICT['PERM'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['PERM'], 'size': font_size},
+        side='top', anchor='free', position=.91, title_standoff=.1,
+        range=[np.log10(0.1), np.log10(10000)], type='log', tickformat='d', tickangle=-90,
+        minor_showgrid=True
+    ),
+    SWT=dict(
+        title={'text': 'SWT (v/v)', 'font': {'color': COLOR_DICT['SWT'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['SWT'], 'size': font_size},
+        side='top', anchor='free', position=.85, title_standoff=.1,
+        dtick=0.2, range=[0, 1], type='linear', zeroline=False
+    ),
+    ROCK_FLAG_0=dict(
+        title={'text': 'ROCK_FLAG', 'font': {'size': font_size}}, tickfont={'size': 1},
+        side='top', anchor='free', position=.85,
+        title_standoff=.1, range=[0.1, 0.2], type='linear', showgrid=False, zeroline=False
+    ),
+    VCLD=dict(
+        title={'text': 'VOLUMETRIC', 'font': {'color': 'black', 'size': font_size}},
+        tickfont={'color': 'black', 'size': font_size},
+        side='top', anchor='free', position=.85, title_standoff=.1,
+        range=[0, 1], type='linear', zeroline=False
+    ),
+    GAS_XOVER_TOP=dict(
+        title={'text': '', 'font': {'size': 1}}, tickfont={'size': 1},
+        side='top', anchor='free', position=.88, overlaying='x3',
+        zeroline=False, range=[.45, -.15], type='linear', showgrid=False
+    ),
+    NPHI=dict(
+        title={'text': 'NPHI (v/v)', 'font': {'color': COLOR_DICT['NPHI'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['NPHI'], 'size': font_size}, zeroline=False,
+        side='top', anchor='free', position=.89, title_standoff=.1, overlaying='x3',
+        tickformat=".2f", tick0=-.15, dtick=0.12, range=[.45, -.15], type='linear', tickangle=-90
+    ),
+    RHOB=dict(
+        title={'text': 'RHOB (g/cc)', 'font': {'color': COLOR_DICT['RHOB'], 'size': font_size}},
+        tickformat=".2f", tick0=1.95, dtick=0.2, tickangle=-90,
+        tickfont={'color': COLOR_DICT['RHOB'], 'size': font_size},
+        side='top', anchor='free', position=.85, overlaying='x3',
+        title_standoff=.1, range=[1.95, 2.95], type='linear'
+    ),
+    DRHO=dict(
+        title={'text': 'DRHO (g/cc)', 'font': {'color': COLOR_DICT['DRHO'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['DRHO'], 'size': font_size},
+        side='top', anchor='free', position=.96, overlaying='x3',
+        title_standoff=.1, zeroline=False, showgrid=False,
+        tick0=-.05, dtick=0.1, range=[-.05, .35], tickangle=-90, type='linear'
+    ),
+    PHIE=dict(
+        title={'text': 'PHIE (v/v)', 'font': {'color': COLOR_DICT['PHIE'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['PHIE'], 'size': font_size},
+        side='top', anchor='free', position=.92, title_standoff=.1, overlaying='x4',
+        dtick=0.1, range=[0, 0.5], type='linear', zeroline=False
+    ),
+    SWE=dict(
+        title={'text': 'SWE (v/v)', 'font': {'color': COLOR_DICT['SWE'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['SWE'], 'size': font_size},
+        side='top', anchor='free', position=.89, title_standoff=.1, overlaying='x6',
+        dtick=0.2, range=[0, 1], type='linear', zeroline=False
+    ),
+    CALI=dict(
+        title={'text': 'CALI (inches)', 'font': {'color': COLOR_DICT['CALI'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['CALI'], 'size': font_size},
+        side='top', anchor='free', position=.89, title_standoff=.1, overlaying='x1',
+        dtick=6, range=[6, 24], type='linear', showgrid=False
+    ),
+    BS=dict(
+        title={'text': 'BS (inches)', 'font': {'color': COLOR_DICT['BS'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['BS'], 'size': font_size},
+        side='top', anchor='free', position=.92, title_standoff=.1, overlaying='x1',
+        dtick=6, range=[6, 24], type='linear', showgrid=False
+    ),
+    BADHOLE=dict(
+        title={'text': 'BADHOLE', 'font': {'color': COLOR_DICT['BADHOLE'], 'size': font_size}},
+        tickfont={'size': 1},
+        side='top', anchor='free', position=.96, title_standoff=.1, overlaying='x1',
+        range=[0.1, 5], type='linear', showgrid=False, zeroline=False
+    ),
+    PEF=dict(
+        title={'text': 'PEF', 'font': {'color': COLOR_DICT['PEF'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['PEF'], 'size': font_size}, zeroline=False,
+        side='top', anchor='free', position=.93, title_standoff=.1, overlaying='x3',
+        range=[-10, 10], type='linear', showgrid=False
+    ),
+    CPORE=dict(
+        title={'text': 'CPORE (v/v)', 'font': {'color': COLOR_DICT['CPORE'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['CPORE'], 'size': font_size},
+        side='top', anchor='free', position=.85, title_standoff=.1, overlaying='x4',
+        dtick=0.1, range=[0, .5], type='linear', showgrid=False, zeroline=False
+    ),
+    CPERM=dict(
+        title={'text': 'CPERM (mD)', 'font': {'color': COLOR_DICT['CPERM'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['CPERM'], 'size': font_size},
+        side='top', anchor='free', position=.85, title_standoff=.1, overlaying='x5',
+        range=[np.log10(0.1), np.log10(10000)], type='log', tickformat='d', tickangle=-90,
+        zeroline=False, showgrid=False
+    ),
+    SHF=dict(
+        title={'text': 'SHF (v/v)', 'font': {'color': COLOR_DICT['SHF'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['SHF'], 'size': font_size},
+        side='top', anchor='free', position=.93, title_standoff=.1, overlaying='x6',
+        dtick=0.2, range=[0, 1], type='linear', zeroline=False, showgrid=False
+    ),
+    BVW=dict(
+        title={'text': 'BVW (v/v)', 'font': {'color': COLOR_DICT['BVW'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['BVW'], 'size': font_size},
+        side='top', anchor='free', position=.96, title_standoff=.1, overlaying='x4',
+        dtick=0.1, range=[0, 0.5], type='linear', zeroline=False
+    ),
+    COAL_FLAG=dict(
+        range=[0.1, .2], type='linear', showgrid=False, zeroline=False,
+    ),
+    DTC=dict(
+        title={'text': 'DTC (us/ft)', 'font': {'color': COLOR_DICT['DTC'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['DTC'], 'size': font_size},
+        side='top', anchor='free', position=.85, title_standoff=.1,
+        dtick=40, range=[200, 0], tickangle=-90, type='linear', zeroline=False
+    ),
+    DTS=dict(
+        title={'text': 'DTS (us/ft)', 'font': {'color': COLOR_DICT['DTS'], 'size': font_size}},
+        tickfont={'color': COLOR_DICT['DTS'], 'size': font_size},
+        side='top', anchor='free', position=.89, title_standoff=.1, overlaying='x9',
+        dtick=40, range=[200, 0], tickangle=-90, type='linear', zeroline=False
+    )
+)
