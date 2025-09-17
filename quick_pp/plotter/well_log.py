@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from collections import OrderedDict
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -95,7 +94,7 @@ def fix_missing_depths(df):
     return df
 
 
-def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: OrderedDict = OrderedDict(),
+def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = dict(),
                xaxis_defs: dict = {}, column_widths: list = []):
     """
     Generate a multi-track well log plot using Plotly, supporting custom traces, rock/coal flags, and zone markers.
@@ -133,7 +132,11 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: Ordered
     >>> fig = plotly_log(well_data, depth_uom='m')
     >>> fig.show()
     """
-    trace_defs = trace_defs or TRACE_DEFS
+    default_flags = False
+    if trace_defs == dict():
+        trace_defs = TRACE_DEFS
+        default_flags = True
+
     xaxis_defs = xaxis_defs or XAXIS_DEFS
     no_of_track = max([trace['track'] for trace in trace_defs.values()])
     column_widths = column_widths or [1] * no_of_track
@@ -164,8 +167,8 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: Ordered
     fig = add_defined_traces(fig, df, index, no_of_track, trace_defs)
 
     # --- COAL_FLAG traces (special style, always on tracks 4-8, secondary_y=True) ---
-    if 'COAL_FLAG' in trace_defs.keys():
-        df['COAL_FLAG'] = df['COAL_FLAG'].replace({1: 1e4})  # Cater for plotting on log scale
+    if 'COAL_FLAG' in df.columns and no_of_track >= 8 and default_flags:
+        df['COAL_FLAG'] = df['COAL_FLAG'].replace({0: 1e-3, 1: 1e9})  # Cater for plotting on log scale
         for c in [4, 5, 6, 7, 8]:
             fig.add_trace(
                 go.Scatter(x=df['COAL_FLAG'], y=index, name='', line_color=COLOR_DICT['COAL_FLAG'],
@@ -173,7 +176,7 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: Ordered
                 row=1, col=c, secondary_y=True)
 
     # --- ROCK_FLAG_X traces (special style, always on track 7, secondary_y=False) ---
-    if 'ROCK_FLAG_0' in trace_defs.keys():
+    if 'ROCK_FLAG_0' in df.columns and no_of_track >= 7 and default_flags:
         rock_flag_columns = [col for col in df.columns if col.startswith('ROCK_FLAG_')]
         # Remove 'ROCK_FLAG_0' if it already exists as a trace in fig.data
         rock_flag_columns.remove('ROCK_FLAG_0') if any(
@@ -202,7 +205,6 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: Ordered
         matches='y', constrain='domain', range=[df['DEPTH'].max() + 10, df['DEPTH'].min() - 10]
     )
 
-    # --- Helper for zone markers (ZONES) ---
     def add_zone_markers(fig, df):
         if 'ZONES' in df.columns:
             tops_df = df[['DEPTH', 'ZONES']].dropna().reset_index()

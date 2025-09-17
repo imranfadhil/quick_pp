@@ -308,20 +308,6 @@ TRACE_DEFS = dict(
             'fillcolor': 'rgba(98, 180, 207, .5)'
         }
     ),
-    COAL_FLAG=dict(
-        track=8,
-        secondary_y=True,
-        hide_xaxis=False,
-        style={
-            'line_color': COLOR_DICT['COAL_FLAG'], 'fill': 'tozerox',
-            'fillcolor': 'rgba(0,0,0,1)', 'opacity': 1
-        }
-    ),
-    ZONES=dict(
-        track=8,
-        secondary_y=True,
-        hide_xaxis=True,
-    )
 )
 
 # Centralize axis definitions for maintainability
@@ -462,7 +448,7 @@ XAXIS_DEFS = dict(
         dtick=0.1, range=[0, 0.5], type='linear', zeroline=False
     ),
     COAL_FLAG=dict(
-        range=[0.1, .2], type='linear', showgrid=False, zeroline=False,
+        range=[.1, .2], type='linear', showgrid=False, zeroline=False,
     ),
     DTC=dict(
         title={'text': 'DTC (us/ft)', 'font': {'color': COLOR_DICT['DTC'], 'size': font_size}},
