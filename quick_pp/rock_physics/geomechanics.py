@@ -108,13 +108,13 @@ def estimate_overburden_pressure(rhob, tvd, rhob_water=1.0, depth_water=0, g=9.8
 
 
 def estimate_pore_pressure_dt(s, p_hyd, dtc, dtc_shale, x=3.0):
-    """Estimate pore pressure from sonic transit time and hydrostatic pressure.
+    """Estimate pore pressure from sonic transit time and hydrostatic pressure, based on Eaton's method.
 
     Args:
         s (float): Overburden stress in MPa.
         p_hyd (float): Hydrostatic pressure in MPa.
         dtc (float): Compressional sonic transit time in us/ft.
-        dtc_shale (float): Compressional sonic transit time in us/ft for shale.
+        dtc_shale (float): Compressional sonic transit time in us/ft for shale. Represents the normal compaction trend.
         x (float, optional): Exponent for the empirical relation. Defaults to 3.0.
 
     Returns:
@@ -127,13 +127,13 @@ def estimate_pore_pressure_dt(s, p_hyd, dtc, dtc_shale, x=3.0):
 
 
 def estimate_pore_pressure_res(s, p_hyd, res, res_shale=None, x=1.2):
-    """Estimate pore pressure from resistivity and hydrostatic pressure.
+    """Estimate pore pressure from resistivity and hydrostatic pressure, based on Eaton's method.
 
     Args:
         s (float): Overburden stress in MPa.
         p_hyd (float): Hydrostatic pressure in MPa.
         res (float): Resistivity in ohm.m.
-        res_shale (float): Resistivity in ohm.m for shale.
+        res_shale (float): Resistivity in ohm.m for shale. Represents the normal compaction trend. Defaults to None.
         x (float, optional): Exponent for the empirical relation. Defaults to 1.2.
 
     Returns:
@@ -254,3 +254,135 @@ def estimate_young_modulus(rhob, vp, vs):
     young_modulus = shear_modulus * (3 * bulk_modulus + shear_modulus) / (bulk_modulus + shear_modulus)
     logger.debug(f"Young's modulus range: {np.min(young_modulus):.2e} - {np.max(young_modulus):.2e} Pa")
     return young_modulus
+
+
+def estimate_mohrs_circle(sigma1, sigma3):
+    """Estimate Mohr's circle parameters from principal stresses.
+
+    Args:
+        sigma1 (float): Major principal stress.
+        sigma3 (float): Minor principal stress.
+
+    Returns:
+        tuple: (center, radius) of Mohr's circle.
+    """
+    center = (sigma1 + sigma3) / 2
+    radius = (sigma1 - sigma3) / 2
+    normal_stress = np.linspace(sigma3, sigma1, 100)
+    shear_stress = np.sqrt(radius**2 - (normal_stress - center)**2)
+
+    return shear_stress, normal_stress
+
+
+def estimate_mohrs_coulomb_failure(sigma1, sigma3, return_tangent_points=False):
+    """
+    Determines the Mohr-Coulomb failure envelope from multiple Mohr's circles.
+
+    This function calculates the best-fit straight line (failure envelope) that is
+    tangent to a series of Mohr's circles defined by pairs of major (sigma1) and
+    minor (sigma3) principal stresses. It uses linear regression to find the
+    cohesion (c) and the angle of internal friction (phi).
+
+    Args:
+        sigma1 (array-like): Major principal stresses.
+        sigma3 (array-like): Minor principal stresses.
+        return_tangent_points (bool, optional): If True, also returns the coordinates
+                                                of the tangent points. Defaults to False.
+
+    Returns:
+        tuple: A tuple containing:
+            - cohesion (float): The y-intercept of the failure envelope (c).
+            - friction_angle (float): The angle of internal friction in degrees (phi).
+            - (Optional) tangent_points (tuple): A tuple of (normal_stresses, shear_stresses)
+                                                  at the tangent points.
+    """
+    sigma1 = np.asarray(sigma1)
+    sigma3 = np.asarray(sigma3)
+
+    if sigma1.shape != sigma3.shape or sigma1.ndim != 1:
+        raise ValueError("sigma1 and sigma3 must be 1D arrays of the same shape.")
+
+    centers = (sigma1 + sigma3) / 2
+    radii = (sigma1 - sigma3) / 2
+
+    # Fit a line to the centers and radii of the circles
+    # The slope of this line is sin(phi) and intercept is c*cos(phi)
+    sin_phi, c_cos_phi = np.polyfit(centers, radii, 1)
+
+    # Calculate cohesion (c) and friction angle (phi)
+    friction_angle_rad = np.arcsin(sin_phi)
+    cohesion = c_cos_phi / np.cos(friction_angle_rad)
+
+    # Calculate slope (tan(phi)) and intercept (c) of the failure envelope
+    slope = np.tan(friction_angle_rad)
+    intercept = cohesion
+
+    if return_tangent_points:
+        # Calculate tangent points for plotting
+        tangent_normal_stress = centers - radii * np.sin(friction_angle_rad)
+        tangent_shear_stress = radii * np.cos(friction_angle_rad)
+        # Calculate angle from horizontal east line of the individual circles to the tangent points
+        angles = np.arctan2(tangent_shear_stress, tangent_normal_stress - centers)
+
+        return intercept, slope, (tangent_normal_stress, tangent_shear_stress, angles)
+
+    return intercept, slope
+
+
+def plot_mohrs_circle(sigma1, sigma3, ax=None, **kwargs):
+    """Plot Mohr's semi-circle on a shear vs. normal stress plot.
+    Can plot single or multiple circles if inputs are iterables.
+
+    Args:
+        sigma1 (float or array-like): Major principal stress(es).
+        sigma3 (float or array-like): Minor principal stress(es).
+        ax (matplotlib.axes.Axes, optional): Matplotlib axes object to plot on.
+                                              If None, a new figure and axes will be created.
+                                              Defaults to None.
+        **kwargs: Additional keyword arguments to be passed to `ax.plot()`.
+
+    Returns:
+        matplotlib.axes.Axes: The matplotlib axes object with the plot.
+    """
+    import matplotlib.pyplot as plt
+    import collections.abc
+
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    # Ensure sigma1 and sigma3 are iterable
+    if not isinstance(sigma1, collections.abc.Iterable):
+        sigma1 = [sigma1]
+    if not isinstance(sigma3, collections.abc.Iterable):
+        sigma3 = [sigma3]
+
+    if len(sigma1) != len(sigma3):
+        raise ValueError("sigma1 and sigma3 must have the same length.")
+
+    for s1, s3 in zip(sigma1, sigma3):
+        shear_stress, normal_stress = estimate_mohrs_circle(s1, s3)
+        ax.plot(normal_stress, shear_stress, **kwargs)
+
+    cohesion, tan_friction_angle, (tangent_x, tangent_y, angles) = estimate_mohrs_coulomb_failure(
+        sigma1, sigma3, return_tangent_points=True)
+    x = np.linspace(0, np.max(sigma1), 100)
+    failure_line = cohesion + tan_friction_angle * x
+    beta_angle = np.unique(angles * 180 / np.pi)[0] / 2
+    ax.plot(x, failure_line,
+            label=f'Cohesion: {cohesion:.2f}\n'
+            f'Friction Angle: {np.degrees(np.arctan(tan_friction_angle)):.2f}°\n'
+            f'Beta Angles: {beta_angle:.2f}°')
+
+    # Plot the tangent points
+    ax.plot(tangent_x, tangent_y, 'ro', label='Tangent Points')
+
+    ax.set_xlabel("Normal Stress (σ)")
+    ax.set_ylabel("Shear Stress (τ)")
+    ax.set_title("Mohr's Circle")
+    ax.grid(True)
+    ax.axis('equal')
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0)
+    ax.legend()
+
+    return ax
