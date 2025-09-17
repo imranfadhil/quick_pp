@@ -2,9 +2,10 @@ import numpy as np
 import pandas as pd
 
 from quick_pp.rock_type import estimate_vsh_gr, rock_typing, find_cutoffs
+from tqdm import tqdm
 
 
-def rhob_integral(rhob):
+def rhob_integral(rhob, step=15):
     """Calculate the integral of the bulk density log.
 
     Args:
@@ -13,7 +14,7 @@ def rhob_integral(rhob):
     Returns:
         numpy.ndarray: Integral of the bulk density log in g/cm³
     """
-    return np.cumsum(rhob.clip(2, 3).diff(15).cumsum())
+    return np.cumsum(rhob.clip(2, 3).diff(step).cumsum())
 
 
 def density_porosity(rhob):
@@ -56,12 +57,19 @@ def log_perm(perm):
 
 
 def rock_flag_gr(gr):
-    vsh_gr = estimate_vsh_gr(gr)
+    # get the IQRs as the min and max value
+    q1 = gr.quantile(0.25)
+    q3 = gr.quantile(0.75)
+    iqr = q3 - q1
+    min_gr = q1 - 1.5 * iqr
+    max_gr = q3 + 1.5 * iqr
+
+    vsh_gr = estimate_vsh_gr(gr, min_gr, max_gr)
     cutoffs = find_cutoffs(vsh_gr, 4)
     return rock_typing(vsh_gr, cut_offs=cutoffs, higher_is_better=False)
 
 
-def coal_flagging(nphi, rhob, rhob_threshold=2.0, nphi_threshold=0.3, window_size=21, trend_factor=0.5):
+def coal_flagging(nphi, rhob, rhob_threshold=2.0, nphi_threshold=0.3, window_size=21, trend_factor=0.1):
     """Flag coal intervals based on high NPHI and low RHOB, considering log trends.
 
     Coal is typically characterized by very low bulk density and high
@@ -103,10 +111,15 @@ def generate_fe_features(df):
     df = df.copy()
 
     # Well based features
-    for well_name, well_df in df.groupby('WELL_NAME'):
-        well_df = well_df.sort_values('DEPTH')
+    for well_name, well_df in tqdm(df.groupby('WELL_NAME'), desc="Generating well-based features"):
+        tqdm.write(f'Processing well {well_name}')
+        well_df = well_df.sort_values('DEPTH').copy()
+
+        df.loc[well_df.index, 'COAL_FLAG'] = coal_flagging(well_df['NPHI'], well_df['RHOB'])
+
         rhob_mask = well_df['RHOB'].notna()
-        rhob_int_values = rhob_integral(well_df.loc[rhob_mask, 'RHOB'])
+        step = np.ceil(well_df['DEPTH'].diff().mean())
+        rhob_int_values = rhob_integral(well_df.loc[rhob_mask, 'RHOB'], step=step)
         df.loc[well_df.index, 'RHOB_INT'] = pd.Series(rhob_int_values, index=well_df.index)
 
         gr_mask = well_df['GR'].notna()
@@ -115,7 +128,7 @@ def generate_fe_features(df):
 
     # Point based features
     df['DPHI'] = density_porosity(df['RHOB'])
-    df['GAS_XOVER'] = gas_xover(df['RHOB'], df['DPHI'])
+    df['GAS_XOVER'] = gas_xover(df['RHOB'], df['NPHI'])
     if 'PERM' in df.columns and 'LOG_PERM' not in df.columns:
         df['LOG_PERM'] = log_perm(df['PERM'])
     return df

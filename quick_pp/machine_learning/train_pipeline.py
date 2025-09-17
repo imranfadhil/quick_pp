@@ -64,6 +64,10 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
         pd.DataFrame: Preprocessed DataFrame.
     """
     df = generate_fe_features(df)
+    # Drop duplicates based on WELL_NAME and DEPTH, including duplicated columns
+    df = df.drop_duplicates(subset=['WELL_NAME', 'DEPTH'])
+    df = df.loc[:, ~df.columns.duplicated()]
+
     return df
 
 
