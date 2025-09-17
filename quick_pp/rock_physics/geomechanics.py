@@ -322,9 +322,9 @@ def estimate_mohrs_coulomb_failure(sigma1, sigma3, return_tangent_points=False):
         tangent_normal_stress = centers - radii * np.sin(friction_angle_rad)
         tangent_shear_stress = radii * np.cos(friction_angle_rad)
         # Calculate angle from horizontal east line of the individual circles to the tangent points
-        angles = np.arctan2(tangent_shear_stress, tangent_normal_stress - centers)
+        angle = np.arctan2(tangent_shear_stress, tangent_normal_stress - centers)[0]
 
-        return intercept, slope, (tangent_normal_stress, tangent_shear_stress, angles)
+        return intercept, slope, (tangent_normal_stress, tangent_shear_stress, angle)
 
     return intercept, slope
 
@@ -359,22 +359,30 @@ def plot_mohrs_circle(sigma1, sigma3, ax=None, **kwargs):
     if len(sigma1) != len(sigma3):
         raise ValueError("sigma1 and sigma3 must have the same length.")
 
-    for s1, s3 in zip(sigma1, sigma3):
-        shear_stress, normal_stress = estimate_mohrs_circle(s1, s3)
-        ax.plot(normal_stress, shear_stress, **kwargs)
-
-    cohesion, tan_friction_angle, (tangent_x, tangent_y, angles) = estimate_mohrs_coulomb_failure(
+    cohesion, tan_friction_angle, (tangent_x, tangent_y, angle) = estimate_mohrs_coulomb_failure(
         sigma1, sigma3, return_tangent_points=True)
     x = np.linspace(0, np.max(sigma1), 100)
     failure_line = cohesion + tan_friction_angle * x
-    beta_angle = np.unique(angles * 180 / np.pi)[0] / 2
-    ax.plot(x, failure_line,
+    beta_angle = angle * 180 / np.pi / 2
+    ax.plot(x, failure_line, linestyle='--', color='magenta',
             label=f'Cohesion: {cohesion:.2f}\n'
             f'Friction Angle: {np.degrees(np.arctan(tan_friction_angle)):.2f}°\n'
-            f'Beta Angles: {beta_angle:.2f}°')
+            f'Beta Angle: {beta_angle:.2f}°')
 
-    # Plot the tangent points
-    ax.plot(tangent_x, tangent_y, 'ro', label='Tangent Points')
+    centers = (np.asarray(sigma1) + np.asarray(sigma3)) / 2
+    radii = (np.asarray(sigma1) - np.asarray(sigma3)) / 2
+    for s1, s3 in zip(sigma1, sigma3):
+        shear_stress, normal_stress = estimate_mohrs_circle(s1, s3)
+        line, = ax.plot(normal_stress, shear_stress, **kwargs)
+        # Plot lines from center to tangent points
+        center = (s1 + s3) / 2
+        radius = (s1 - s3) / 2
+        # Find the index of the current circle's tangent point
+        idx = np.where(np.isclose(centers, center) & np.isclose(radii, radius))[0][0]
+        ax.plot([center, tangent_x[idx]], [0, tangent_y[idx]], color=line.get_color(), linestyle=':')
+        # Plot the tangent and center points
+        ax.plot(center, 0, 'o', markersize=3, color=line.get_color())
+        ax.plot(tangent_x[idx], tangent_y[idx], 'o', markersize=5, color=line.get_color())
 
     ax.set_xlabel("Normal Stress (σ)")
     ax.set_ylabel("Shear Stress (τ)")
