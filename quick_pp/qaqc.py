@@ -51,13 +51,13 @@ def badhole_flagging(data, thold=4):
         df['BADHOLE'] = 0
         return df
 
-    def reject_outliers(data, m=3):
-        data = np.where((data > 8.5) & (data < 21.5), data, np.nan)
-        d = np.abs(data - np.nanmedian(data))
+    def reject_outliers(series, m=3):
+        # Works on a pandas Series
+        series = series.where((series > 6.0) & (series < 21.5))  # Widened range
+        d = np.abs(series - series.median())
         mdev = np.nanmedian(d)
         s = d / mdev if mdev else 0.0
-        data = np.where(s < m, data, np.nanmedian(data))
-        return data
+        return series.where(s < m, series.median())
 
     bit_sizes = {
         # 6.0: 6.0,
@@ -67,13 +67,12 @@ def badhole_flagging(data, thold=4):
     }
 
     model = "rbf"
-    return_df = pd.DataFrame()
+    processed_wells = []
 
     df['BS'] = np.nan if 'BS' not in df.columns else df['BS']
 
     for well, well_data in df.groupby('WELL_NAME'):
-        # Determine the breakpoints for different bit size
-        well_data.sort_values(by='DEPTH', inplace=True)
+        well_data = well_data.sort_values(by='DEPTH').copy()
         well_data['BIN'] = 0
         well_data['ESTIMATED_BITSIZE'] = 8.5
         if not well_data[well_data["CALI"].notna()].empty:
@@ -81,12 +80,13 @@ def badhole_flagging(data, thold=4):
 
             signal_data = well_data['CALI']
             signal_data = reject_outliers(signal_data)
+            clean_signal = signal_data.dropna()
+
             try:
                 # Identifying number of clusters/breakpoints from Kernel Density Estimation
-                # gaussian_kde couldn't handle constant value
-                if (len(np.unique(signal_data)) > 1) & (len(signal_data[~np.isnan(signal_data)]) > 1):
-                    kde = scipy.stats.gaussian_kde(signal_data[~np.isnan(signal_data)])
-                    evaluated = kde.evaluate(np.linspace(signal_data.min(), signal_data.max(), 100))
+                if clean_signal.nunique() > 1:
+                    kde = scipy.stats.gaussian_kde(clean_signal)
+                    evaluated = kde.evaluate(np.linspace(clean_signal.min(), clean_signal.max(), 100))
                     peaks, _ = find_peaks(evaluated, height=0.1)
                 else:
                     peaks = []
@@ -113,14 +113,16 @@ def badhole_flagging(data, thold=4):
                 estimated_bits = np.where(bits_diff_1 == bits_diff_neg1, bits_diff_1, estimated_bits)
 
                 categories = dict(zip(well_data.BIN.unique(), estimated_bits))
-                well_data['ESTIMATED_BITSIZE'] = well_data.apply(lambda x: categories.get(x.BIN), axis=1)
+                well_data['ESTIMATED_BITSIZE'] = well_data['BIN'].map(categories)
             except Exception as e:
-                logger.error(f"[feature_transformer `badhole_flag`] Error {e}.")
+                logger.error(f"[badhole_flagging] Error processing well {well}: {e}.")
                 continue
 
-        return_df = pd.concat([return_df, well_data])
+        processed_wells.append(well_data)
 
-    if not return_df.empty:
+    if processed_wells:
+        return_df = pd.concat(processed_wells, ignore_index=True)
+
         bitsize = np.where(return_df.BS.notna(), return_df.BS, return_df.ESTIMATED_BITSIZE)
         return_df['BS'] = bitsize
         absdiff = np.where(return_df.CALI.notna(), abs(return_df.CALI - bitsize), 0)

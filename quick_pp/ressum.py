@@ -14,7 +14,7 @@ from quick_pp import logger
 
 
 def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
-                           cutoffs=dict(VSHALE=0.4, PHIT=0.01, SWT=0.9), uom: str = 'ft'):
+                           cutoffs=dict(VSHALE=0.4, PHIT=0.01, SWT=0.9)):
     """Calculate reservoir summary based on cutoffs on vshale, phit, and swt.
 
     Args:
@@ -29,10 +29,10 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones,
     Returns:
         pd.Dataframe: Reservoir summary in tabular format.
     """
-    logger.debug(f"Starting reservoir summary calculation with {len(depth)} data points, uom={uom}")
+    logger.debug(f"Starting reservoir summary calculation with {len(depth)} data points")
 
-    step = 0.1524 if uom == 'm' else 0.5
     df = pd.DataFrame({'depth': depth, 'vshale': vshale, 'phit': phit, 'swt': swt, 'perm': perm, 'zones': zones})
+    step = df['depth'].diff().mean()
     df['bvo'] = df['phit'] * (1 - df['swt'])
     df['rock_flag'], df['reservoir_flag'], df['pay_flag'] = flag_interval(df['vshale'], df['phit'], df['swt'], cutoffs)
     df['all_flag'] = 1

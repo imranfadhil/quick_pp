@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 from scipy.optimize import curve_fit
 
 from quick_pp.utils import straight_line_func as func
@@ -139,3 +140,40 @@ def gas_composition_analysis(c1, c2, c3, ic4, nc4, ic5, nc5):
 
     logger.debug(f"Gas composition analysis completed. HC types found: {np.unique(hc_type)}")
     return result_df
+
+
+def fix_fluid_segregation(df: pd.DataFrame) -> pd.DataFrame:
+    logger.info("Generating fluid volume fractions from OIL_FLAG and GAS_FLAG")
+    df['VOIL'] = df['OIL_FLAG'] * df['VHC']
+    df['VGAS'] = df['GAS_FLAG'] * df['VHC']
+
+    for well_name, well_df in tqdm(df.groupby('WELL_NAME'), desc="Fixing fluid segregation"):
+        tqdm.write(f"Processing well {well_name}")
+        # Fix fluid segregation issues bounded by continuous hydrocarbon intervals
+        hc_mask = ((well_df['VHC'] >= 1e-2)).astype(int)
+        # Identify continuous hydrocarbon intervals
+        hc_groups = (hc_mask.diff() != 0).cumsum()
+
+        for _, group_df in well_df.groupby(hc_groups):
+            # Process only hydrocarbon-bearing intervals
+            if hc_mask.loc[group_df.index].sum() > 0:
+                # If both gas and oil are predicted in the same interval
+                if (group_df['GAS_FLAG'] == 1).any() and (group_df['OIL_FLAG'] == 1).any():
+                    # Find the deepest depth where gas is predicted
+                    last_gas_depth = group_df[group_df['GAS_FLAG'] == 1]['DEPTH'].max()
+                    # Identify indices of oil intervals above this deepest gas
+                    oil_above_gas_indices = group_df[(group_df['DEPTH'] <= last_gas_depth) & (
+                        group_df['OIL_FLAG'] == 1)].index
+                    # Re-assign oil volumes to gas for these intervals in the main dataframe
+                    df.loc[oil_above_gas_indices, 'VGAS'] = df.loc[oil_above_gas_indices, 'VHC']
+                    df.loc[oil_above_gas_indices, 'VOIL'] = 0
+                if (group_df['GAS_FLAG'] == 1).any() and (group_df['OIL_FLAG'] == 0).all():
+                    df.loc[group_df.index, 'VGAS'] = df.loc[group_df.index, 'VHC']
+                    df.loc[group_df.index, 'VHC'] = 0
+                if (group_df['OIL_FLAG'] == 1).any() and (group_df['GAS_FLAG'] == 0).all():
+                    df.loc[group_df.index, 'VOIL'] = df.loc[group_df.index, 'VHC']
+                    df.loc[group_df.index, 'VHC'] = 0
+
+    df['VHC'] = np.where((df['VOIL'] > 0) | (df['VGAS'] > 0), 0, df['VHC'])
+
+    return df
