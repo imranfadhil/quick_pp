@@ -1,5 +1,7 @@
 import numpy as np
 import math
+import matplotlib.pyplot as plt
+import collections.abc
 
 from quick_pp.saturation import estimate_rt_water_trend
 from quick_pp import logger
@@ -310,23 +312,20 @@ def estimate_mohrs_coulomb_failure(sigma1, sigma3, return_tangent_points=False):
     sin_phi, c_cos_phi = np.polyfit(centers, radii, 1)
 
     # Calculate cohesion (c) and friction angle (phi)
-    friction_angle_rad = np.arcsin(sin_phi)
-    cohesion = c_cos_phi / np.cos(friction_angle_rad)
-
-    # Calculate slope (tan(phi)) and intercept (c) of the failure envelope
-    slope = np.tan(friction_angle_rad)
-    intercept = cohesion
+    theta = np.arcsin(sin_phi)
+    friction_angle = math.degrees(theta)
+    cohesion = c_cos_phi / np.cos(theta)
 
     if return_tangent_points:
         # Calculate tangent points for plotting
-        tangent_normal_stress = centers - radii * np.sin(friction_angle_rad)
-        tangent_shear_stress = radii * np.cos(friction_angle_rad)
+        tangent_normal_stress = centers - radii * np.sin(theta)
+        tangent_shear_stress = radii * np.cos(theta)
         # Calculate angle from horizontal east line of the individual circles to the tangent points
         angle = np.arctan2(tangent_shear_stress, tangent_normal_stress - centers)[0]
 
-        return intercept, slope, (tangent_normal_stress, tangent_shear_stress, angle)
+        return cohesion, friction_angle, (tangent_normal_stress, tangent_shear_stress, angle)
 
-    return intercept, slope
+    return cohesion, friction_angle
 
 
 def plot_mohrs_circle(sigma1, sigma3, ax=None, **kwargs):
@@ -344,9 +343,6 @@ def plot_mohrs_circle(sigma1, sigma3, ax=None, **kwargs):
     Returns:
         matplotlib.axes.Axes: The matplotlib axes object with the plot.
     """
-    import matplotlib.pyplot as plt
-    import collections.abc
-
     if ax is None:
         fig, ax = plt.subplots()
 
@@ -359,14 +355,14 @@ def plot_mohrs_circle(sigma1, sigma3, ax=None, **kwargs):
     if len(sigma1) != len(sigma3):
         raise ValueError("sigma1 and sigma3 must have the same length.")
 
-    cohesion, tan_friction_angle, (tangent_x, tangent_y, angle) = estimate_mohrs_coulomb_failure(
+    cohesion, friction_angle, (tangent_x, tangent_y, angle) = estimate_mohrs_coulomb_failure(
         sigma1, sigma3, return_tangent_points=True)
     x = np.linspace(0, np.max(sigma1), 100)
-    failure_line = cohesion + tan_friction_angle * x
+    failure_line = cohesion + np.tan(np.radians(friction_angle)) * x
     beta_angle = angle * 180 / np.pi / 2
     ax.plot(x, failure_line, linestyle='--', color='magenta',
             label=f'Cohesion: {cohesion:.2f}\n'
-            f'Friction Angle: {np.degrees(np.arctan(tan_friction_angle)):.2f}°\n'
+            f'Friction Angle: {friction_angle:.2f}°\n'
             f'Beta Angle: {beta_angle:.2f}°')
 
     centers = (np.asarray(sigma1) + np.asarray(sigma3)) / 2
@@ -394,3 +390,47 @@ def plot_mohrs_circle(sigma1, sigma3, ax=None, **kwargs):
     ax.legend()
 
     return ax
+
+
+def estimate_rock_strength(sigma1, sigma3):
+    """Estimate rock strength parameters from triaxial test data (sigma1 vs sigma3).
+
+    This function performs a linear regression on the major (sigma1) and minor (sigma3)
+    principal stresses to determine the unconfined compressive strength (UCS) and
+    the parameter 'n'. From these, it calculates the cohesion and the internal
+    friction angle based on the Mohr-Coulomb failure criterion. It also generates
+    a plot of sigma1 vs sigma3 with the best-fit line and annotations.
+
+    Args:
+        sigma1 (array-like): Major principal stresses.
+        sigma3 (array-like): Minor principal stresses.
+
+    Returns:
+        tuple: A tuple containing:
+            - cohesion (float): The cohesion of the rock.
+            - internal_friction_angle (float): The internal friction angle in degrees.
+            - ucs (float): The unconfined compressive strength.
+    """
+    n, ucs = np.polyfit(sigma3, sigma1, 1)
+
+    sin_phi = (n - 1) / (n + 1)
+    phi = np.arcsin(sin_phi)
+    cohesion = ucs * (1 - np.sin(phi)) / (2 * np.cos(phi))
+    internal_friction_angle = math.degrees(phi)
+
+    _, ax = plt.subplots()
+    ax.plot(sigma3, sigma1, 'o')
+    x = np.linspace(0, np.max(sigma3), 100)
+    ax.plot(x, n * np.asarray(x) + ucs, 'r-',
+            label=f'UCS: {ucs:.2f}\n'
+                  f'Cohesion: {cohesion:.2f}\n'
+                  f'Friction Angle: {internal_friction_angle:.2f}°')
+    ax.set_xlabel("Sigma 3 (Minor Principal Stress)")
+    ax.set_ylabel("Sigma 1 (Major Principal Stress)")
+    ax.set_title("Rock Strength Analysis")
+    ax.set_xlim(left=-10)
+    ax.set_ylim(bottom=0)
+    ax.legend()
+    ax.grid(True)
+
+    return cohesion, internal_friction_angle, ucs
