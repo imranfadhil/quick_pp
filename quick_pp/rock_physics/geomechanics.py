@@ -186,16 +186,16 @@ def estimate_ucs(dtc):
 
 
 def estimate_poisson_ratio(vp, vs):
-    """Estimate Poisson's ratio from P-wave and S-wave velocities.
+    """Estimate dynamic Poisson's ratio from P-wave and S-wave velocities.
 
     Args:
         vp (float): P-wave velocity in m/s.
         vs (float): S-wave velocity in m/s.
 
     Returns:
-        float: Estimated Poisson's ratio.
+        float: Estimated dynamic Poisson's ratio.
     """
-    logger.debug("Calculating Poisson's ratio from P and S wave velocities")
+    logger.debug("Calculating dynamic Poisson's ratio from P and S wave velocities")
     vp_vs = vp / vs
     poisson_ratio = (.5 * vp_vs**2 - 1) / (vp_vs**2 - 1)
     logger.debug(f"Poisson's ratio range: {np.min(poisson_ratio):.3f} - {np.max(poisson_ratio):.3f}")
@@ -203,7 +203,7 @@ def estimate_poisson_ratio(vp, vs):
 
 
 def estimate_shear_modulus(rhob, vs):
-    """Estimate shear modulus from density, S-wave velocity and constant a.
+    """Estimate dynamic shear modulus from density, S-wave velocity and constant a.
      Shear modulus is the shear stiffness of a material, which is the ratio of shear stress to shear strain.
      Also known as the modulus of rigidity.
 
@@ -211,14 +211,14 @@ def estimate_shear_modulus(rhob, vs):
         rhob (float): Bulk density in g/cm^3.
         vs (float): S-wave velocity in m/s.
     """
-    logger.debug("Calculating shear modulus from density and S-wave velocity")
+    logger.debug("Calculating dynamic shear modulus from density and S-wave velocity")
     shear_modulus = rhob * vs**2
     logger.debug(f"Shear modulus range: {np.min(shear_modulus):.2e} - {np.max(shear_modulus):.2e} Pa")
     return shear_modulus
 
 
 def estimate_bulk_modulus(rhob, vp, vs):
-    """Estimate Bulk modulus from density, P-wave and S-wave velocities.
+    """Estimate dynamic Bulk modulus from density, P-wave and S-wave velocities.
      Bulk modulus is the measure of resistance of a material to bulk compression.
      It is the reciprocal of compressibility.
 
@@ -228,7 +228,7 @@ def estimate_bulk_modulus(rhob, vp, vs):
         vs (float): S-wave velocity in m/s.
 
     Returns:
-        float: Estimated Bulk modulus in Pa.
+        float: Estimated dynamic Bulk modulus in Pa.
     """
     logger.debug("Calculating bulk modulus from density, P-wave and S-wave velocities")
     shear_modulus = estimate_shear_modulus(rhob, vs)
@@ -238,7 +238,7 @@ def estimate_bulk_modulus(rhob, vp, vs):
 
 
 def estimate_young_modulus(rhob, vp, vs):
-    """Estimate Young's modulus from density, P-wave and S-wave velocities.
+    """Estimate dynamic Young's modulus from density, P-wave and S-wave velocities.
      Young's modulus is the measure of the resistance of a material to stress.
      It quantifies the relationship between stress and strain in a material.
 
@@ -248,9 +248,9 @@ def estimate_young_modulus(rhob, vp, vs):
         vs (float): S-wave velocity in m/s.
 
     Returns:
-        float: Estimated Young's modulus in Pa.
+        float: Estimated dynamic Young's modulus in Pa.
     """
-    logger.debug("Calculating Young's modulus from density and wave velocities")
+    logger.debug("Calculating dynamic Young's modulus from density and wave velocities")
     shear_modulus = estimate_shear_modulus(rhob, vs)
     bulk_modulus = estimate_bulk_modulus(rhob, vp, vs)
     young_modulus = shear_modulus * (3 * bulk_modulus + shear_modulus) / (bulk_modulus + shear_modulus)
@@ -307,23 +307,22 @@ def estimate_mohrs_coulomb_failure(sigma1, sigma3, return_tangent_points=False):
     centers = (sigma1 + sigma3) / 2
     radii = (sigma1 - sigma3) / 2
 
-    # Fit a line to the centers and radii of the circles
-    # The slope of this line is sin(phi) and intercept is c*cos(phi)
+    # Fit a line to the centers and radii of the circles: Radius=sin(ϕ)⋅Center+c⋅cos(ϕ)
     sin_phi, c_cos_phi = np.polyfit(centers, radii, 1)
 
     # Calculate cohesion (c) and friction angle (phi)
-    theta = np.arcsin(sin_phi)
-    friction_angle = math.degrees(theta)
-    cohesion = c_cos_phi / np.cos(theta)
+    phi = np.arcsin(sin_phi)
+    friction_angle = math.degrees(phi)
+    cohesion = c_cos_phi / np.cos(phi)
 
     if return_tangent_points:
         # Calculate tangent points for plotting
-        tangent_normal_stress = centers - radii * np.sin(theta)
-        tangent_shear_stress = radii * np.cos(theta)
+        tangent_normal_stress = centers - radii * np.sin(phi)
+        tangent_shear_stress = radii * np.cos(phi)
         # Calculate angle from horizontal east line of the individual circles to the tangent points
-        angle = np.arctan2(tangent_shear_stress, tangent_normal_stress - centers)[0]
+        beta2_rad = np.arctan2(tangent_shear_stress, tangent_normal_stress - centers)[0]
 
-        return cohesion, friction_angle, (tangent_normal_stress, tangent_shear_stress, angle)
+        return cohesion, friction_angle, (tangent_normal_stress, tangent_shear_stress, beta2_rad)
 
     return cohesion, friction_angle
 
@@ -355,15 +354,15 @@ def plot_mohrs_circle(sigma1, sigma3, ax=None, **kwargs):
     if len(sigma1) != len(sigma3):
         raise ValueError("sigma1 and sigma3 must have the same length.")
 
-    cohesion, friction_angle, (tangent_x, tangent_y, angle) = estimate_mohrs_coulomb_failure(
+    cohesion, friction_angle, (tangent_x, tangent_y, beta2_rad) = estimate_mohrs_coulomb_failure(
         sigma1, sigma3, return_tangent_points=True)
     x = np.linspace(0, np.max(sigma1), 100)
     failure_line = cohesion + np.tan(np.radians(friction_angle)) * x
-    beta_angle = angle * 180 / np.pi / 2
+    beta2 = beta2_rad * 180 / np.pi / 2
     ax.plot(x, failure_line, linestyle='--', color='magenta',
             label=f'Cohesion: {cohesion:.2f}\n'
             f'Friction Angle: {friction_angle:.2f}°\n'
-            f'Beta Angle: {beta_angle:.2f}°')
+            f'Beta Angle: {beta2:.2f}°')
 
     centers = (np.asarray(sigma1) + np.asarray(sigma3)) / 2
     radii = (np.asarray(sigma1) - np.asarray(sigma3)) / 2
