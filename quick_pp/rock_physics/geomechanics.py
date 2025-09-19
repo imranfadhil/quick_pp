@@ -122,24 +122,59 @@ def estimate_normal_compaction_trend_dt(dtc, vshale, depth, vsh_threshold=0.6):
         vshale (np.ndarray): Volume of shale.
         depth (np.ndarray): Depth array, typically TVD.
         vsh_threshold (float, optional): Vshale cutoff to identify shales. Defaults to 0.6.
+        plot (bool, optional): If True, a plot of the trend will be generated. Defaults to False.
 
     Returns:
-        np.ndarray: The normal compaction trend for dtc over the entire depth range.
+        tuple: A tuple containing:
+            - np.ndarray: The normal compaction trend for dtc over the entire depth range.
+            - matplotlib.figure.Figure or None: The figure object if plot=True, otherwise None.
     """
+    # Ensure inputs are numpy arrays and handle NaNs
+    dtc = np.asarray(dtc)
+    vshale = np.asarray(vshale)
+    depth = np.asarray(depth)
+
+    # Create a mask for valid, finite data points
+    valid_data_mask = np.isfinite(dtc) & np.isfinite(vshale) & np.isfinite(depth) & (depth > 0)
+
     # Identify shale intervals
-    shale_mask = vshale >= vsh_threshold
+    shale_mask = (vshale >= vsh_threshold) & valid_data_mask
     dtc_shale = dtc[shale_mask]
     depth_shale = depth[shale_mask]
 
-    print(dtc_shale.describe())
-    print(depth_shale.describe())
+    if len(depth_shale) < 2:
+        logger.warning(
+            "Not enough valid shale data points (< 2) to estimate normal compaction trend. "
+            "Returning original dtc."
+        )
+        return dtc, None
 
     # Estimate trendline on the filtered data
     # A logarithmic fit is common for compaction trends: dt = a - b*log(depth)
-    params = np.polyfit(np.log(depth_shale), dtc_shale, 1)
-    print(params)
-    dtc_nct = params[0] * np.log(depth) + params[1]
-    return dtc_nct
+    try:
+        params = np.polyfit(np.log(depth_shale), dtc_shale, 1)
+        dtc_nct = params[0] * np.log(depth) + params[1]
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.scatter(1 / dtc_shale, depth_shale, alpha=0.5, label='Shale Data Points')
+        # Use the calculated trend for the full depth range for plotting
+        valid_depth_mask = depth > 0
+        ax.plot(1 / dtc_nct[valid_depth_mask], depth[valid_depth_mask], 'r-',
+                label=f'NCT Fit (y = {params[0]:.2f}*log(x) + {params[1]:.2f})')
+        ax.set_xlabel("Compressional Sonic (dtc) [us/ft]")
+        ax.set_ylabel("Depth [m]")
+        ax.set_title("Normal Compaction Trend (NCT) on Shales")
+        ax.invert_yaxis()
+        ax.set_xscale('log')
+        ax.set_ylim(top=np.min(depth_shale) - 100)
+        ax.grid(True)
+        ax.legend()
+        fig.tight_layout()
+
+        return dtc_nct
+    except np.linalg.LinAlgError as e:
+        logger.error(f"Failed to fit normal compaction trend due to a linear algebra error: {e}")
+        return dtc, None
 
 
 def estimate_pore_pressure_dt(s, p_hyd, dtc, dtc_shale, x=3.0):
