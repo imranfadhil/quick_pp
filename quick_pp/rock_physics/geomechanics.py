@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import collections.abc
 
 from quick_pp.saturation import estimate_rt_water_trend
+from quick_pp.rock_type import estimate_vsh_gr
 from quick_pp import logger
 
 
@@ -91,7 +92,7 @@ def estimate_hydrostatic_pressure(tvd, rhob_water=1.0, g=9.81):
     return pressure
 
 
-def estimate_overburden_pressure(rhob, tvd, rhob_water=1.0, depth_water=0, g=9.81):
+def estimate_overburden_pressure(rhob, tvd, rhob_water=1.0, water_depth=0, g=9.81):
     """Estimate overburden pressure from bulk density and true vertical depth.
     TODO: Revisit
 
@@ -103,10 +104,42 @@ def estimate_overburden_pressure(rhob, tvd, rhob_water=1.0, depth_water=0, g=9.8
     Returns:
         float: Estimated overburden pressure in MPa.
     """
-    logger.debug(f"Calculating overburden pressure with water depth={depth_water} m")
-    pressure = 1000 * (rhob_water * g * depth_water + np.cumsum(rhob) * g * tvd)
+    logger.debug(f"Calculating overburden pressure with water depth={water_depth} m")
+    pressure = 1000 * (rhob_water * g * water_depth + np.cumsum(rhob) * g * tvd)
     logger.debug(f"Overburden pressure range: {np.min(pressure):.2f} - {np.max(pressure):.2f} MPa")
     return pressure
+
+
+def estimate_normal_compaction_trend_dt(dtc, vshale, depth, vsh_threshold=0.6):
+    """Estimate normal compaction trend from sonic transit time accounting shale intervals only.
+
+    This function identifies shale intervals based on a Vshale threshold, then fits a
+    logarithmic trendline to the sonic transit time (dtc) in those intervals against depth.
+    This trendline represents the normal compaction trend.
+
+    Args:
+        dtc (np.ndarray): Compressional sonic transit time in us/ft.
+        vshale (np.ndarray): Volume of shale.
+        depth (np.ndarray): Depth array, typically TVD.
+        vsh_threshold (float, optional): Vshale cutoff to identify shales. Defaults to 0.6.
+
+    Returns:
+        np.ndarray: The normal compaction trend for dtc over the entire depth range.
+    """
+    # Identify shale intervals
+    shale_mask = vshale >= vsh_threshold
+    dtc_shale = dtc[shale_mask]
+    depth_shale = depth[shale_mask]
+
+    print(dtc_shale.describe())
+    print(depth_shale.describe())
+
+    # Estimate trendline on the filtered data
+    # A logarithmic fit is common for compaction trends: dt = a - b*log(depth)
+    params = np.polyfit(np.log(depth_shale), dtc_shale, 1)
+    print(params)
+    dtc_nct = params[0] * np.log(depth) + params[1]
+    return dtc_nct
 
 
 def estimate_pore_pressure_dt(s, p_hyd, dtc, dtc_shale, x=3.0):
@@ -185,8 +218,34 @@ def estimate_ucs(dtc):
     return ucs
 
 
+def estimate_friction_angle(gr):
+    """Estimate internal friction angle using GR.
+
+    Args:
+        gr (float): Gamma ray log (API)
+
+    Returns:
+        float: Internal friction angle in degrees. Bounded between 15 and 40 degrees.
+    """
+    return (40 - 0.1875 * (gr - 13.33)).clip(15, 40)
+
+
+def estimate_cohesion(ucs, friction_angle):
+    """Estimate cohesion from UCS and internal friction angle.
+
+    Args:
+        ucs (float): Unconfined compressive strength in MPa.
+        friction_angle (float): Internal friction angle in degrees.
+
+    Returns:
+        float: Estimated cohesion in MPa.
+    """
+    return ucs * (1 - np.sin(friction_angle)) / (2 * np.cos(friction_angle))
+
+
 def estimate_poisson_ratio(vp, vs):
-    """Estimate dynamic Poisson's ratio from P-wave and S-wave velocities.
+    """Estimate dynamic Poisson's ratio from P-wave and S-wave velocities. Usually is assumed the same as static,
+     especially if the lab radial strain measurement uncertainty).
 
     Args:
         vp (float): P-wave velocity in m/s.
@@ -256,6 +315,35 @@ def estimate_young_modulus(rhob, vp, vs):
     young_modulus = shear_modulus * (3 * bulk_modulus + shear_modulus) / (bulk_modulus + shear_modulus)
     logger.debug(f"Young's modulus range: {np.min(young_modulus):.2e} - {np.max(young_modulus):.2e} Pa")
     return young_modulus
+
+
+def estimate_shmin(vp, vs, rhob, gr, tvd, biot_coef=1):
+    """Estimate minimum horizontal stress (Shmin) using an empirical formula.
+
+    This function calculates Shmin based on Poisson's ratio, overburden stress,
+    pore pressure, and Biot's coefficient. It internally estimates several
+    required parameters if they are not provided.
+
+    Args:
+        vp (np.ndarray): P-wave velocity in m/s.
+        vs (np.ndarray): S-wave velocity in m/s.
+        rhob (np.ndarray): Bulk density in g/cm^3.
+        gr (np.ndarray): Gamma ray log in API.
+        tvd (np.ndarray): True vertical depth in m.
+        biot_coef (float, optional): Biot's coefficient, representing the ratio of fluid
+                                     pressure to rock stress. Defaults to 1.
+
+    Returns:
+        np.ndarray: Estimated minimum horizontal stress (Shmin) in MPa.
+    """
+    hydrostatic_pres = estimate_hydrostatic_pressure(tvd)
+    overburden_pres = estimate_overburden_pressure(rhob, tvd)
+    vshale = estimate_vsh_gr(gr)
+    dtc_shale = estimate_normal_compaction_trend_dt(1/vp, vshale, tvd)
+    pore_pres = estimate_pore_pressure_dt(overburden_pres, hydrostatic_pres, 1/vp, dtc_shale)
+    poisson_ratio = estimate_poisson_ratio(vp, vs)
+    k = poisson_ratio / (1 - poisson_ratio)
+    return k * (overburden_pres - pore_pres * biot_coef)
 
 
 def estimate_mohrs_circle(sigma1, sigma3):
