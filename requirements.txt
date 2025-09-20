@@ -42,5 +42,6 @@ uvicorn==0.34.2
 watchdog==6.0.0
 welly==0.5.2
 wheel==0.38.1
+xlrd==2.0.2
 ydata-profiling==4.9.0
 python-dotenv==1.0.0

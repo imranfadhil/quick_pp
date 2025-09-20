@@ -285,13 +285,13 @@ TRACE_DEFS = dict(
         track=4,
         secondary_y=True,
         hide_xaxis=False,
-        style={'mode': 'markers', 'marker': dict(color=COLOR_DICT['CPORE'], size=3)}
+        style={'mode': 'markers', 'marker': dict(color=COLOR_DICT['CPORE'], size=5)}
     ),
     CPERM=dict(
         track=5,
         secondary_y=True,
         hide_xaxis=False,
-        style={'mode': 'markers', 'marker': dict(color=COLOR_DICT['CPERM'], size=3)}
+        style={'mode': 'markers', 'marker': dict(color=COLOR_DICT['CPERM'], size=5)}
     ),
     SHF=dict(
         track=6,

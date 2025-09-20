@@ -396,9 +396,9 @@ def remove_straights(log, window: int = 30, threshold: float = 0.001):
 
     Args:
         log (pd.Series or np.array): The input log data.
-        window (int, optional): The size of the rolling window. Defaults to 20.
+        window (int, optional): The size of the rolling window. Defaults to 30.
         threshold (float, optional): The standard deviation threshold below which
-                                     a segment is considered straight. Defaults to 0.01.
+                                     a segment is considered straight. Defaults to 0.001.
 
     Returns:
         np.array: The log with straight sections replaced by np.nan.
