@@ -376,7 +376,7 @@ class MultiMineralOptimizer:
             'QUARTZ': 'VSAND',
             'CALCITE': 'VCALC',
             'DOLOMITE': 'VDOLO',
-            'SHALE': 'VCLD',
+            'SHALE': 'VCLAY',
             'ANHYDRITE': 'VANHY',
             'GYPSUM': 'VGYPS',
             'HALITE': 'VHALI'

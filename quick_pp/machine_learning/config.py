@@ -42,7 +42,7 @@ MODELLING_CONFIG = dict(
         ),
         CLASTIC=dict(
             alg=RandomForestRegressor,
-            targets=['PHIT', 'SWT', 'LOG_PERM', 'VSAND', 'VSILT', 'VCLD'],
+            targets=['PHIT', 'SWT', 'LOG_PERM', 'VSAND', 'VSILT', 'VCLAY'],
             features=RAW_FEATURES + FE_FEATURES,
             description=('Clastic properties prediction consisting of total porosity, total water saturation, '
                          'log permeability, sand volume, silt volume, and clay volume'),
@@ -63,7 +63,7 @@ MODELLING_CONFIG = dict(
         ),
         CARBONATE=dict(
             alg=RandomForestRegressor,
-            targets=['PHIT', 'SWT', 'LOG_PERM', 'VCALC', 'VCLD', 'VDOLO'],
+            targets=['PHIT', 'SWT', 'LOG_PERM', 'VCALC', 'VCLAY', 'VDOLO'],
             features=RAW_FEATURES,
             description=('Carbonate properties prediction consisting of total porosity, total water saturation, '
                          'log permeability, calcite volume, clay volume, and dolomite volume'),

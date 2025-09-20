@@ -75,7 +75,7 @@ def add_rock_flag_traces(df):
 
 
 def fix_missing_volumetrics(df):
-    volumetrics = ['VCLD', 'VSILT', 'VSAND', 'VCALC', 'VDOLO', 'VGAS', 'VOIL', 'VHC']
+    volumetrics = ['VCLAY', 'VSILT', 'VSAND', 'VCALC', 'VDOLO', 'VGAS', 'VOIL', 'VHC']
     for col in volumetrics:
         df[col] = df[col].fillna(0) if col in df.columns else None
     return df

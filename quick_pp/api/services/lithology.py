@@ -103,7 +103,7 @@ async def estimate_ssc(inputs: LithologySSCInput):
         List of dictionaries, each containing the estimated volume fractions:
             - 'VSAND': float (sand fraction)
             - 'VSILT': float (silt fraction)
-            - 'VCLD': float (clay fraction)
+            - 'VCLAY': float (clay fraction)
 
     Raises
     ------
@@ -129,7 +129,7 @@ async def estimate_ssc(inputs: LithologySSCInput):
         silt_line_angle=input_dict['silt_line_angle']
     )
     vsand, vsilt, vcld, _ = ssc_model.estimate_lithology(df['nphi'], df['rhob'])
-    return pd.DataFrame({'VSAND': vsand, 'VSILT': vsilt, 'VCLD': vcld}, index=df.index).to_dict(orient='records')
+    return pd.DataFrame({'VSAND': vsand, 'VSILT': vsilt, 'VCLAY': vcld}, index=df.index).to_dict(orient='records')
 
 
 @router.post(
@@ -240,7 +240,7 @@ async def estimate_hc_correction(inputs: LithologyHCCorrectionInput):
         List of dictionaries, each containing the estimated volume fractions:
             - 'VSAND': float (sand fraction)
             - 'VSILT': float (silt fraction)
-            - 'VCLD': float (clay fraction)
+            - 'VCLAY': float (clay fraction)
 
     Raises
     ------
@@ -275,4 +275,4 @@ async def estimate_hc_correction(inputs: LithologyHCCorrectionInput):
         silt_line_angle=input_dict['silt_line_angle']
     )
     vsand, vsilt, vcld, _ = ssc_model.estimate_lithology(df_corr['NPHI'], df_corr['RHOB'])
-    return pd.DataFrame({'VSAND': vsand, 'VSILT': vsilt, 'VCLD': vcld}, index=df.index).to_dict(orient='records')
+    return pd.DataFrame({'VSAND': vsand, 'VSILT': vsilt, 'VCLAY': vcld}, index=df.index).to_dict(orient='records')

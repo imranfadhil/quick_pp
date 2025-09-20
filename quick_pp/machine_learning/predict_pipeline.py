@@ -95,7 +95,7 @@ def save_predictions(pred_df: pd.DataFrame, output_file_name: str, plot: bool = 
         output_dir = Path("data/output/plots")
         os.makedirs(output_dir, exist_ok=True)
         for well_name, well_df in tqdm(pred_df.groupby('WELL_NAME'), desc="Generating plots", ):
-            fig = plotly_log(well_df, well_name=well_name, column_widths=[1, 1, 1, 1, 1, 1, .3, 1, 1],)
+            fig = plotly_log(well_df, well_name=well_name, column_widths=[1, 1, 1, 1, 1, 1, .3, 1, 1])
             plot_path = Path(f"{output_dir}/{well_name}.html")
             fig.write_html(plot_path, config=dict(scrollZoom=True))
             tqdm.write(f"Plot for well {well_name} saved to {plot_path}")

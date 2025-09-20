@@ -1,11 +1,11 @@
 from quick_pp import logger
 
 
-def choo_permeability(vclw, vsilt, phit, m=2, B=None, A=20e7, C=3):
+def choo_permeability(vclay, vsilt, phit, m=2, B=None, A=20e7, C=3):
     """Estimate permeability using Choo's equation.
 
     Args:
-        vclw (float): Volume of clay in fraction.
+        vclay (float): Volume of clay in fraction.
         vsilt (float): Volume of silt in fraction.
         phit (float): Total porosity in fraction.
         A (float): Constant based on 0.125 * rg**2 / 10. Defaults to 20e7.
@@ -17,7 +17,7 @@ def choo_permeability(vclw, vsilt, phit, m=2, B=None, A=20e7, C=3):
     """
     logger.debug(f"Calculating Choo permeability with A={A}, m={m}, C={C}")
     B = B or m * ((2 / C) + 1) + 2
-    permeability = A * phit**B / 10**(6 * vclw + 3 * vsilt)
+    permeability = A * phit**B / 10**(6 * vclay + 3 * vsilt)
     logger.debug(f"Choo permeability range: {permeability.min():.3e} - {permeability.max():.3e} mD")
     return permeability
 

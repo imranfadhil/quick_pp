@@ -28,7 +28,7 @@ COLOR_DICT = {
     'SWT': '#262626',
     'VANHY': '#E9DF53',
     'VCALC': '#b0e0e6',
-    'VCLD': '#BFBFBF',
+    'VCLAY': '#BFBFBF',
     'VCOAL': '#000000',
     'VDOLO': '#ba55d3',
     'VGAS': '#FF0000',
@@ -90,12 +90,12 @@ TRACE_DEFS = dict(
             'fillcolor': COLOR_DICT['ROCK_FLAG_0']
         }
     ),
-    VCLD=dict(
+    VCLAY=dict(
         track=8,
         secondary_y=False,
         hide_xaxis=False,
         style={
-            'line_width': .5, 'line_color': 'black', 'fill': 'tozerox', 'fillpattern_bgcolor': COLOR_DICT['VCLD'],
+            'line_width': .5, 'line_color': 'black', 'fill': 'tozerox', 'fillpattern_bgcolor': COLOR_DICT['VCLAY'],
             'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '-',
             'fillpattern_size': 2, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
         }
@@ -355,7 +355,7 @@ XAXIS_DEFS = dict(
         side='top', anchor='free', position=.85,
         title_standoff=.1, range=[0.1, 0.2], type='linear', showgrid=False, zeroline=False
     ),
-    VCLD=dict(
+    VCLAY=dict(
         title={'text': 'VOLUMETRIC', 'font': {'color': 'black', 'size': font_size}},
         tickfont={'color': 'black', 'size': font_size},
         side='top', anchor='free', position=.85, title_standoff=.1,
