@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import math
 import matplotlib.pyplot as plt
 
 from quick_pp.utils import length_a_b, line_intersection
@@ -155,51 +156,55 @@ def neu_den_xplot_hc_correction(
         buffer (float, optional): Buffer to be included in correction. Defaults to 0.0.
 
     Returns:
-        (float, float): Corrected neutron porosity and bulk density.
+        (np.ndarray, np.ndarray, np.ndarray): Corrected neutron porosity, bulk density, and hydrocarbon flag.
     """
-    corr_angle = 90 - corr_angle
     A = dry_min1_point
     C = dry_clay_point
     D = water_point
     rocklithofrac = length_a_b(A, C)
 
-    frac_vsh_gr = vsh_gr if vsh_gr is not None else np.zeros(len(nphi))
-    nphi_corrected = np.empty(0)
-    rhob_corrected = np.empty(0)
-    hc_flag = np.empty(0)
-    for i, point in enumerate(list(zip(nphi, rhob, frac_vsh_gr))):
-        var_pt = line_intersection((A, C), (D, (point[0], point[1])))
-        projlithofrac = length_a_b(var_pt, C) + buffer
-        if (projlithofrac > rocklithofrac) and (point[0] < .4):
-            # Iteration until vsh_dn = vsh_gr
-            vsh_dn = 1 - (projlithofrac / rocklithofrac)
-            nphi_corr = point[0]
-            rhob_corr = point[1]
-            shi = 0
-            count = 0
-            while vsh_dn <= point[2] and not np.isnan(point[2]) and count < 100:
-                nphi_corr = point[0] + shi * np.sin(np.radians(corr_angle))
-                rhob_corr = point[1] + shi * np.cos(np.radians(corr_angle))
-                shi += 0.01
-                count += 1
-                # Recalculate vsh_dn
-                var_pt = line_intersection((A, C), (D, (nphi_corr, rhob_corr)))
-                projlithofrac = length_a_b(var_pt, C)
-                vsh_dn = 1 - (projlithofrac / rocklithofrac)
+    # Ensure inputs are numpy arrays
+    nphi = np.array(nphi)
+    rhob = np.array(rhob)
+    frac_vsh_gr = np.array(vsh_gr) if vsh_gr is not None else np.zeros_like(nphi)
 
-            nphi_corrected = np.append(nphi_corrected, nphi_corr)
-            rhob_corrected = np.append(rhob_corrected, rhob_corr)
-            hc_flag = np.append(hc_flag, 1)
-        else:
-            nphi_corrected = np.append(nphi_corrected, point[0])
-            rhob_corrected = np.append(rhob_corrected, point[1])
-            hc_flag = np.append(hc_flag, 0)
+    # Initialize corrected logs and flags
+    nphi_corrected = nphi.copy()
+    rhob_corrected = rhob.copy()
+    hc_flag = np.zeros_like(nphi, dtype=int)
 
-    return nphi_corrected, rhob_corrected, hc_flag
+    # Calculate initial projection and vsh_dn
+    var_pts = line_intersection((A, C), (D, (nphi, rhob)))
+    projlithofrac = length_a_b(var_pts, C) + buffer
+    vsh_dn = 1 - (projlithofrac / rocklithofrac)
+
+    # Identify points needing correction
+    correction_mask = (projlithofrac > rocklithofrac) & (nphi < 0.45)
+    hc_flag[correction_mask] = 1
+
+    # Iteratively correct points
+    # Using a max iteration count to prevent infinite loops
+    for i in range(100):
+        # Only work on points that still need correction
+        active_mask = correction_mask & (vsh_dn <= frac_vsh_gr) & ~np.isnan(frac_vsh_gr)
+        if not np.any(active_mask):
+            break  # Exit if no more points need correction
+
+        # Apply correction shift
+        nphi_corrected[active_mask] += 1e-2 * np.cos(np.radians(corr_angle))
+        rhob_corrected[active_mask] += 1e-2 * np.sin(np.radians(corr_angle))
+
+        # Recalculate vsh_dn for the corrected points
+        var_pts_corr = line_intersection((A, C), (D, (nphi_corrected[active_mask], rhob_corrected[active_mask])))
+        projlithofrac_corr = length_a_b(var_pts_corr, C)
+        vsh_dn[active_mask] = 1 - (projlithofrac_corr / rocklithofrac)
+
+    return nphi_corrected, rhob_corrected, hc_flag.astype(float)
 
 
 def neu_den_xplot_hc_correction_angle(rho_water=1.0, rho_hc=0.3, HI_hc=None):
     """Estimate correction angle for neutron porosity and bulk density based on water and hydrocarbon density.
+     The angle is from east horizontal line.
 
     Args:
         rho_water (float): Fluid density, ranges from 0.8 to 1.2. Defaults to 1.0.
@@ -213,7 +218,7 @@ def neu_den_xplot_hc_correction_angle(rho_water=1.0, rho_hc=0.3, HI_hc=None):
         HI_hc = 2.2 * rho_hc
     # Estimate correction angle
     corr_angle = np.arctan((rho_water - rho_hc) / (1 - HI_hc))
-    return corr_angle * 180 / np.pi
+    return 90 - math.degrees(corr_angle)
 
 
 def den_correction(nphi, gr, vsh_gr=None, phin_sh=.35, phid_sh=.05, rho_ma=2.68, rho_water=1.0, alpha=0.05):
@@ -256,7 +261,7 @@ def quick_qc(well_data, return_fig=False):
     return_df['PERM'] = return_df['PERM'].clip(lower=1e-3, upper=1e5)
 
     cutoffs = dict(VSHALE=0.4, PHIT=0.01, SWT=0.9)
-    _, return_df['RES_FLAG'], _ = flag_interval(return_df['VCLW'], return_df['PHIT'], return_df['SWT'], cutoffs)
+    _, return_df['RES_FLAG'], _ = flag_interval(return_df['VCLAY'], return_df['PHIT'], return_df['SWT'], cutoffs)
     return_df['ALL_FLAG'] = 1
 
     # Check average swt in non-reservoir zone
@@ -264,7 +269,7 @@ def quick_qc(well_data, return_fig=False):
 
     # Summarize
     summary_df = calc_reservoir_summary(
-        return_df.DEPTH, return_df.VCLW, return_df.PHIT, return_df.SWT, return_df.PERM, return_df.ZONES
+        return_df.DEPTH, return_df.VCLAY, return_df.PHIT, return_df.SWT, return_df.PERM, return_df.ZONES
     )
     summary_df.columns = [col.upper() for col in summary_df.columns]
     for group in ['all', 'reservoir']:
@@ -300,7 +305,7 @@ def quick_qc(well_data, return_fig=False):
         dist_fig, axs = plt.subplots(4, 1, figsize=(5, 10))
         for group, data in return_df.groupby('RES_FLAG'):
             label = 'RES' if group == 1 else 'NON-RES'
-            axs[0].hist(data['VCLD'], bins=100, alpha=0.7, label=label, range=[0, 1])
+            axs[0].hist(data['VCLAY'], bins=100, alpha=0.7, label=label, range=[0, 1])
             axs[1].hist(data['PHIT'], bins=100, alpha=0.7, label=label, range=[0, .5])
             axs[2].hist(data['SWT'], bins=100, alpha=0.7, label=label, range=[0, 1])
             axs[3].hist(np.log10(data['PERM']), bins=100, alpha=0.7, label=f'Log PERM_{label}')
@@ -322,11 +327,11 @@ def quick_qc(well_data, return_fig=False):
 
         # Depth plot
         depth_fig, axs = plt.subplots(4, 1, figsize=(20, 5), sharex=True)
-        axs[0].plot(return_df['DEPTH'], return_df['VCLD'], label='VSHALE')
+        axs[0].plot(return_df['DEPTH'], return_df['VCLAY'], label='VSHALE')
         # Compare vsh_gr and vsh_dn
         if 'VSH_GR' in return_df.columns:
             return_df['QC_FLAG'] = np.where(
-                abs(return_df['VSH_GR'] - return_df['VCLD']) > 0.1, 1, return_df['QC_FLAG'])
+                abs(return_df['VSH_GR'] - return_df['VCLAY']) > 0.1, 1, return_df['QC_FLAG'])
             axs[0].plot(return_df['DEPTH'], return_df['VSH_GR'], label='VSH_GR')
         axs[0].set_frame_on(False)
         axs[0].set_title('VSHALE')

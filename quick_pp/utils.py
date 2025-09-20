@@ -20,18 +20,25 @@ def length_a_b(A: tuple, B: tuple):
     Returns:
         float: Length of line between two points.
     """
-    return math.sqrt(sum([(a - b) ** 2 for a, b in zip(A, B)]))
+    return np.sqrt(sum([(a - b) ** 2 for a, b in zip(A, B)]))
 
 
 def line_intersection(line1: tuple, line2: tuple):
     """Calculates the intersection of two lines.
 
+    This function is vectorized to handle arrays of points.
+
     Args:
-        line1 (tuple of tuples): ((x11, y11), (x12, y12))
-        line2 (tuple of tuples): ((x22, y22), (x22, y22))
+        line1 (tuple): A tuple containing two points, where each point can be a
+                       tuple of coordinates or a NumPy array of coordinates.
+                       Example: ((x11, y11), (x12, y12))
+        line2 (tuple): A tuple containing two points for the second line.
+                       Example: ((x21, y21), (x22, y22))
 
     Returns:
-        float, float: Cartesian coordinates of the intersection of two lines.
+        (np.ndarray, np.ndarray): A tuple of NumPy arrays (x, y) for the
+                                  intersection coordinates. If lines are parallel,
+                                  coordinates will be np.nan.
     """
     xdiff = (line1[0][0] - line1[1][0], line2[0][0] - line2[1][0])
     ydiff = (line1[0][1] - line1[1][1], line2[0][1] - line2[1][1])
@@ -40,13 +47,12 @@ def line_intersection(line1: tuple, line2: tuple):
         return a[0] * b[1] - a[1] * b[0]
 
     div = det(xdiff, ydiff)
-    if div == 0:
-        logger.error(f'\r{line1} and {line2} lines do not intersect')
-        return np.nan, np.nan
-
+    # Use np.divide for safe division, returning np.nan where div is 0
+    # Create a mask for non-zero divisors to avoid warnings
+    mask = div != 0
     d = (det(*line1), det(*line2))
-    x = det(d, xdiff) / div
-    y = det(d, ydiff) / div
+    x = np.divide(det(d, xdiff), div, where=mask, out=np.full_like(div, np.nan, dtype=float))
+    y = np.divide(det(d, ydiff), div, where=mask, out=np.full_like(div, np.nan, dtype=float))
 
     return x, y
 
@@ -90,7 +96,7 @@ def angle_between_lines(line1: tuple, line2: tuple):
 
 
 def zone_flagging(data: pd.DataFrame, min_zone_thickness: int = 150):
-    """Flagging sand zones based on VSHALE, VCLW, and VSH_GR.
+    """Flagging sand zones based on VSHALE, VCLAY, and VSH_GR.
 
     Args:
         data (pd.DataFrame): DataFrame with well log data.
@@ -199,47 +205,64 @@ def min_max_line(feature, alpha: float = 0.05, auto_bin=False):
     Returns:
         (float, float): Minimum and maximum line of a feature.
     """
-    # Reset index if feature is a Series
+    # Ensure feature is a numpy array and handle NaNs
     if isinstance(feature, pd.Series):
-        feature.reset_index(drop=True, inplace=True)
-    list_of_dfs = [feature]
+        feature_np = feature.to_numpy()
+    else:
+        feature_np = np.array(feature)
+
+    segments = [feature_np]
     if auto_bin:
-        # Estimating number of peaks
-        signal_data = feature
-        kde = stats.gaussian_kde(signal_data[~np.isnan(signal_data)])
-        evaluated = kde.evaluate(np.linspace(np.nanmin(signal_data), np.nanmax(signal_data), 100))
-        peaks, _ = find_peaks(evaluated, height=np.nanmedian(evaluated))
+        signal_data = feature_np[~np.isnan(feature_np)]
+        if len(signal_data) < 2:
+            logger.warning("Not enough data for auto-binning. Processing as a single segment.")
+            segments = [feature_np]
+        else:
+            # Estimating number of peaks
+            try:
+                kde = stats.gaussian_kde(signal_data)
+                evaluated = kde.evaluate(np.linspace(np.nanmin(signal_data), np.nanmax(signal_data), 100))
+                peaks, _ = find_peaks(evaluated, height=np.nanmedian(evaluated))
 
-        # Detecting change points
-        model = "l2"
-        jump = len(signal_data) // (len(peaks) + 1)
-        my_bkps = rpt.BottomUp(model=model, jump=jump).fit_predict(signal_data, n_bkps=len(peaks))
-        my_bkps = np.insert(my_bkps, 0, 0)
+                # Detecting change points
+                model = "l2"
+                jump = len(feature_np) // (len(peaks) + 2)  # +2 to be safe
+                algo = rpt.BottomUp(model=model, jump=jump).fit(feature_np)
+                my_bkps = algo.predict(n_bkps=len(peaks))
+                my_bkps = np.insert(my_bkps, 0, 0)
 
-        list_of_dfs = [feature[my_bkps[i]:my_bkps[i + 1]] for i in range(len(my_bkps) - 1)]
+                segments = [feature_np[my_bkps[i]:my_bkps[i + 1]] for i in range(len(my_bkps) - 1)]
+            except Exception as e:
+                logger.error(f"Auto-binning failed: {e}. Processing as a single segment.")
+                segments = [feature_np]
 
-    min_lines = np.empty(0)
-    max_lines = np.empty(0)
+    min_lines_list = []
+    max_lines_list = []
     # Enumerate over the bins
-    for data in list_of_dfs:
-        num_data = len(data)
+    for data_segment in segments:
+        num_data = len(data_segment)
         if num_data > 0:
             try:
-                (min_line_slope, min_line_intercept), (max_line_slope, max_line_intercept) = fit_trendlines_single(data)
-                min_line = straight_line_func(
-                    np.arange(num_data), min_line_slope, min_line_intercept) + alpha * max(abs(data))
-                max_line = straight_line_func(
-                    np.arange(num_data), max_line_slope, max_line_intercept) - alpha * max(abs(data))
-                min_lines = np.append(min_lines, min_line)
-                max_lines = np.append(max_lines, max_line)
+                clean_data = data_segment[~np.isnan(data_segment)]
+                if len(clean_data) < 2:
+                    raise ValueError("Not enough valid data in segment to fit trendlines.")
+
+                (min_slope, min_intercept), (max_slope, max_intercept) = fit_trendlines_single(clean_data)
+                x_range = np.arange(num_data)
+                correction = alpha * np.nanmax(np.abs(clean_data))
+                min_line = straight_line_func(x_range, min_slope, min_intercept) + correction
+                max_line = straight_line_func(x_range, max_slope, max_intercept) - correction
+                min_lines_list.append(min_line)
+                max_lines_list.append(max_line)
             except Exception as e:
-                logger.error(f'Error: {e}')
-                min_lines = np.append(min_lines, np.nan)
-                max_lines = np.append(max_lines, np.nan)
+                logger.error(f'Error fitting trendline for a segment: {e}')
+                min_lines_list.append(np.full(num_data, np.nan))
+                max_lines_list.append(np.full(num_data, np.nan))
         else:
-            min_lines = np.append(min_lines, np.nan)
-            max_lines = np.append(max_lines, np.nan)
-    return min_lines, max_lines
+            min_lines_list.append(np.empty(0))
+            max_lines_list.append(np.empty(0))
+
+    return np.concatenate(min_lines_list), np.concatenate(max_lines_list)
 
 
 def check_trend_line(minimum: bool, pivot: int, slope: float, y: np.array):
@@ -361,3 +384,29 @@ def fit_trendlines_single(data: np.array):
     max_line_coefs = optimize_slope(False, upper_pivot, slope, data)
 
     return (min_line_coefs, max_line_coefs)
+
+
+def remove_straights(log, window: int = 30, threshold: float = 0.001):
+    """Removes straight line sections from a log by replacing them with np.nan.
+
+    This function identifies flat or "stuck" tool readings by calculating the
+    standard deviation over a rolling window. Where the standard deviation is
+    below a given threshold, the original log values in that window are
+    flagged for removal.
+
+    Args:
+        log (pd.Series or np.array): The input log data.
+        window (int, optional): The size of the rolling window. Defaults to 20.
+        threshold (float, optional): The standard deviation threshold below which
+                                     a segment is considered straight. Defaults to 0.01.
+
+    Returns:
+        np.array: The log with straight sections replaced by np.nan.
+    """
+    if not isinstance(log, pd.Series):
+        log_series = pd.Series(log)
+    else:
+        log_series = log.copy()
+
+    rolling_std = log_series.rolling(window=window, center=True, min_periods=window // 2).std()
+    return np.where(rolling_std < threshold, np.nan, log_series.values)

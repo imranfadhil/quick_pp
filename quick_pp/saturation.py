@@ -273,6 +273,24 @@ def estimate_rw_temperature_salinity(temperature_gradient, water_salinity):
     return rw
 
 
+def estimate_rw_surface(temperature_gradient, rw_surface, temp_surface=20):
+    """Estimate formation water resistivity based on surface resistivity and temperature.
+    This uses Arps' formula to adjust resistivity for temperature.
+
+    Args:
+        temperature_gradient (float): Formation temperature in degC.
+        rw_surface (float): Water resistivity at surface temperature in ohm.m.
+        temp_surface (float, optional): Surface temperature in degC. Defaults to 20.
+
+    Returns:
+        float: Formation water resistivity in ohm.m.
+    """
+    logger.debug("Estimating Rw from surface temperature and resistivity using Arps' formula")
+    rw = rw_surface * (temp_surface + 21.5) / (temperature_gradient + 21.5)
+    logger.debug(f"Formation water resistivity range: {rw.min():.3f} - {rw.max():.3f} ohm.m")
+    return rw
+
+
 def estimate_rw_archie(phit, rt, a=1, m=2):
     """Estimate water saturation based on Archie's equation.
 
@@ -312,26 +330,7 @@ def estimate_rw_waxman_smits(phit, rt, a=1, m=2, B=None, Qv=None):
     return rw
 
 
-def estimate_rt_water_trend(rt, alpha=0.3):
-    """Estimate trend RT of formation water (experiment).
-
-    Args:
-        rt (float): True resistivity.
-        RES_FLAG (int): Reservoir flag.
-
-    Returns:
-        float: Formation water resistivity.
-    """
-    logger.debug(f"Estimating RT water trend with alpha={alpha}")
-    rt = np.log(rt)
-    rt = np.where(rt <= 0, 1e-3, rt)
-    min_rt, _ = min_max_line(rt, alpha)
-    rw_trend = np.exp(min_rt)
-    logger.debug(f"RT water trend range: {rw_trend.min():.3f} - {rw_trend.max():.3f} ohm.m")
-    return rw_trend
-
-
-def estimate_rw_from_shale_trend(rt, phit, m=1.3, alpha=0.1):
+def estimate_rw_from_shale_trend(rt, phit, vshale, depth, m=1.3):
     """Estimate Rw from shale trend.
 
     Args:
@@ -343,10 +342,21 @@ def estimate_rw_from_shale_trend(rt, phit, m=1.3, alpha=0.1):
     Returns:
         float: Formation water resistivity.
     """
-    logger.debug(f"Estimating Rw from shale trend with m={m}, alpha={alpha}")
-    min_rt = estimate_rt_water_trend(rt, alpha=alpha)
-    min_phit, _ = min_max_line(phit, alpha=alpha)
-    rw = min_phit ** m * np.exp(min_rt)
+    logger.debug(f"Estimating Rw from shale trend with m={m}")
+
+    # Create a mask for valid, finite data points
+    valid_data_mask = np.isfinite(rt) & np.isfinite(phit) & np.isfinite(vshale) & np.isfinite(depth) & (depth > 0)
+
+    # Identify shale intervals
+    vsh_threshold = np.nanquantile(vshale, .5)
+    shale_mask = (vshale >= vsh_threshold) & valid_data_mask
+    rt_shale = rt[shale_mask]
+    depth_shale = depth[shale_mask]
+
+    params = np.polyfit(np.log(depth_shale), np.log(rt_shale), 1)
+    min_rt = params[0] * np.log(depth) + params[1]
+
+    rw = phit ** m * np.exp(min_rt)
     logger.debug(f"Shale trend Rw range: {rw.min():.3f} - {rw.max():.3f} ohm.m")
     return rw
 

@@ -320,12 +320,15 @@ def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
     # Normalize gamma ray
     if not max_gr or (not min_gr and min_gr != 0):
         # Remove high outliers and forward fill missing values
-        gr = np.where(gr <= np.nanmean(gr) + 1.5 * np.nanstd(gr), gr, np.nan)
-        mask = np.isnan(gr)
-        idx = np.where(~mask, np.arange(len(mask)), 0)
-        np.maximum.accumulate(idx, axis=0, out=idx)
-        gr = gr[idx]
+        # Use IQR for robust outlier detection
+        q1, q3 = np.nanquantile(gr, [0.25, 0.75])
+        iqr = q3 - q1
+        upper_bound = q3 + 1.5 * iqr
+        lower_bound = q1 - 1.5 * iqr
 
+        # Replace outliers with NaN and then forward fill
+        gr_series = pd.Series(gr)
+        gr = gr_series.where((gr_series >= lower_bound) & (gr_series <= upper_bound)).ffill().to_numpy()
         _, max_gr = min_max_line(gr, alpha)
         gri = np.where(gr < max_gr, gr / max_gr, 1)
     else:
