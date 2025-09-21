@@ -69,7 +69,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = 'quick_pp'
-copyright = "2023, Imran Fadhil"
+copyright = "2025, Imran Fadhil"
 author = "Imran Fadhil"
 
 # The version info for the project you're documenting, acts as replacement
