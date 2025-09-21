@@ -34,6 +34,7 @@ setuptools==80.9.0
 scikit-learn==1.4.2
 scipy==1.11.4
 sphinx-rtd-theme==2.0.0
+sphinx-copybutton==0.5.2
 Sphinx==7.2.6
 sqlalchemy==2.0.28
 statsmodels==0.14.0

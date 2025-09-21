@@ -1,80 +1,105 @@
 # quick_pp
 
-Python package to assist in providing quick-look/ preliminary petrophysical estimation.
+A Python package for quick-look preliminary petrophysical estimations.
+
 ![quick_pp demo](docs/static/quick_pp_demo.gif)
 
-## Quick Start (Jupyter Notebook Examples)
-1. Create virtual environment (tested working with Python3.11)
-    
-        python -m venv venv
+## Installation
 
-2. Activate virtual environment
-        
-        > venv\Scripts\activate (Windows)
+You can install `quick_pp` directly from PyPI:
 
-        > source venv/bin/activate (Linux)
+```bash
+pip install quick_pp
+```
 
-3. Install requirements
+For development or to use the `qpp_assistant`, you'll need to clone the repository and install dependencies:
 
-        pip install -r requirements.txt
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/imranfadhil/quick_pp.git
+    cd quick_pp
+    ```
 
-4. Launch the notebook and run the cells
-    - 01_data_handler: create the MOCK qppp project file.
-    - 02_EDA: quick look on the data
-    - 03_*: quick petropohysical interpretation of the MOCK wells.
-    - For API notebook, need to run the following before running the cells
+2.  **Create and activate a virtual environment** (tested with Python 3.11):
+    ```bash
+    uv venv --python 3.11
+    source .venv/bin/activate  # On Windows, use: .venv\Scripts\activate
+    ```
 
-            python main.py app
+3.  **Install the required packages:**
+    ```bash
+    uv pip install -r requirements.txt
+    ```
 
-## Install
-To install, use the following command:  
-  
-  `pip install quick_pp`
+## Quick Start
 
-To use qpp_assistant, you would need to;
-1. Run `git clone https://github.com/imranfadhil/quick_pp.git`
-2. Run `pip install -r requirements.txt`
-3. Specify the required credentials in .env (based on `.env copy` file)
-4. Run `docker-compose up -d`
-5. Go to Langflow at http://localhost:7860 and build your flow.
-6. Run `python main.py app` and go to the qpp Assistant at http://localhost:8888/qpp_assistant to test your flow.
+### Jupyter Notebook Examples
+
+The included notebooks demonstrate the core functionalities:
+
+-   `01_data_handler`: Create a MOCK `qppp` project file.
+-   `02_EDA`: Perform a quick exploratory data analysis.
+-   `03_*`: Carry out petrophysical interpretation of the MOCK wells.
+
+> **Note:** For the API notebook, you need to run `python main.py app` before executing the cells.
+
+### `qpp_assistant` Setup
+
+To use the `qpp_assistant`, follow these steps after the development installation:
+
+1.  Specify the required credentials in a `.env` file (you can use `.env copy` as a template).
+2.  Run Docker Compose: `docker-compose up -d`.
+3.  Build your flow in Langflow at `http://localhost:7860`.
+4.  Run the main application: `python main.py app`.
+5.  Test your flow in the qpp Assistant at `http://localhost:8888/qpp_assistant`.
 
 ## CLI
 
-To train an ML model, these are the requirements;
+### Train a Machine Learning Model
 
-1. The input file in parquet format need to be available; /data/input/<data_hash>___.parquet
+**Requirements:**
+-   The input data must be a Parquet file located at `/data/input/<data_hash>___.parquet`.
+-   The Parquet file must contain the input and target features as specified in `MODELLING_CONFIG` in `config.py`.
 
-2. The parquet file need to have the input and target features as specified in MODELLING_CONFIG in config.py.
+**Command:**
 
 > quick_pp train <model_config> <data_hash>
 
     quick_pp train mock mock
 
-To run the MLflow server 
+### Run the MLflow Server
 
-    quick_pp mlflow-server
+**Command:**
+```bash
+quick_pp mlflow-server
+```
+You can access the MLflow UI at `http://localhost:5015`.
 
-You can access the mlflow server at http://localhost:5015
+### Run Predictions
 
-To run prediction, the trained models need to be registered in MLflow first.
+> **Note:** Trained models must be registered in MLflow before running predictions.
 
 > quick_pp predict <model_config> <data_hash>
 
+**Example:**
+```bash
     quick_pp predict mock mock
+```
 
-To deploy the trained ML models
+### Deploy Trained Models as an API
 
-    quick_pp model-deployment
+```bash
+quick_pp model-deployment
+```
+You can access the deployed model's Swagger UI at `http://localhost:5555/docs`.
 
-You can access the deployed model Swagger UI at http://localhost:5555/docs
+### Start the Main Application
 
-To start the App
-
-    quick_pp app
-
-You can then access the Swagger UI at http://localhost:8888/docs and qpp_assistant at http://localhost:8888/qpp_assistant.
-You can enter any user name and password to login the qpp_assistant.
+```bash
+quick_pp app
+```
+-   **API Docs:** `http://localhost:8888/docs`
+-   **qpp_assistant:** `http://localhost:8888/qpp_assistant` (you can log in with any username and password).
 
 To use the mcp tools, you would need to first add the following SSE URLS through the interface;
 http://localhost:8888/mcp - quick_pp tools.
@@ -82,5 +107,6 @@ http://localhost:8888/mcp - quick_pp tools.
 http://localhost:5555/mcp - quick_pp ML model prediction tools (need to run `quick_pp model-deployment` first).
 
 ## Documentation
+
 Documentation is available at:
 <https://quick-pp.readthedocs.io/en/latest/index.html>
