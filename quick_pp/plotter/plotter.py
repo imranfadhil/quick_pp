@@ -18,7 +18,6 @@ plt.rcParams.update(
 
 
 def update_fluid_contacts(well_data, well_config: dict):
-    logger.debug(f"Updating fluid contacts for well with config: {well_config}")
     """Update fluid flags based on fluid contacts.
 
     Args:
@@ -58,7 +57,6 @@ def update_fluid_contacts(well_data, well_config: dict):
 
 
 def generate_zone_config(zones: list = ['ALL']):
-    logger.info(f"Generating zone config for zones: {zones}")
     """Generate zone configuration.
 
     Args:
@@ -67,6 +65,7 @@ def generate_zone_config(zones: list = ['ALL']):
     Returns:
         dict: Zone configuration
     """
+    logger.info(f"Generating zone config for zones: {zones}")
     zone_config = {}
     for zone in zones:
         zone_config[zone] = {
@@ -76,7 +75,6 @@ def generate_zone_config(zones: list = ['ALL']):
 
 
 def update_zone_config(zone_config: dict, zone: str, fluid_contacts: dict):
-    logger.info(f"Updating zone config for zone: {zone} with contacts: {fluid_contacts}")
     """Update zone configuration with fluid contacts.
 
     Args:
@@ -87,6 +85,7 @@ def update_zone_config(zone_config: dict, zone: str, fluid_contacts: dict):
     Returns:
         dict: Updated zone configuration
     """
+    logger.info(f"Updating zone config for zone: {zone} with contacts: {fluid_contacts}")
     if zone in zone_config:
         zone_config[zone].update(fluid_contacts)
     else:
@@ -95,7 +94,6 @@ def update_zone_config(zone_config: dict, zone: str, fluid_contacts: dict):
 
 
 def generate_well_config(well_names: list = ['X']):
-    logger.info(f"Generating well config for wells: {well_names}")
     """Generate well configuration.
 
     Args:
@@ -104,6 +102,7 @@ def generate_well_config(well_names: list = ['X']):
     Returns:
         dict: Well configuration
     """
+    logger.info(f"Generating well config for wells: {well_names}")
     well_config = {}
     for i, well in enumerate(well_names):
         well_config[well] = {
@@ -115,9 +114,7 @@ def generate_well_config(well_names: list = ['X']):
     return well_config
 
 
-def update_well_config(
-        well_config: dict, well_name: str, zone: str = '', fluid_contacts: dict = {}, sorting: int = 0):
-    logger.info(f"Updating well config for well: {well_name}, zone: {zone}, sorting: {sorting}")
+def update_well_config(well_config: dict, well_name: str, zone: str = '', fluid_contacts: dict = {}, sorting: int = 0):
     """Update well configuration with fluid contacts.
 
     Args:
@@ -130,6 +127,7 @@ def update_well_config(
     Returns:
         dict: Updated well configuration
     """
+    logger.info(f"Updating well config for well: {well_name}, zone: {zone}, sorting: {sorting}")
     if zone in well_config[well_name]['zones']:
         well_config[well_name]['zones'][zone].update(fluid_contacts)
     elif zone:
@@ -141,12 +139,12 @@ def update_well_config(
 
 
 def assert_well_config_structure(well_config):
-    logger.debug("Asserting well config structure.")
     """Assert well configuration structure.
 
     Args:
         well_config (dict): Dictionary containing well sorting and fluid contacts.
     """
+    logger.debug("Asserting well config structure.")
     required_keys = {'sorting', 'zones'}
     optional_keys = {'GUT', 'GDT', 'GOC', 'GWC', 'OUT', 'ODT', 'OWC', 'WUT'}
     for well, config in well_config.items():
@@ -160,7 +158,6 @@ def assert_well_config_structure(well_config):
 
 
 def stick_plot(data, well_config: dict, zone: str = 'ALL'):
-    logger.info(f"Generating stick plot for zone: {zone}")
     """Generate stick plot with water saturation and fluid contacts for specified zone.
 
     Example of well_config:
@@ -188,6 +185,7 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
         data (pandas.DataFrame): Pandas dataframe containing well log data.
         well_config (dict): Dictionary containing well sorting and fluid contacts.
     """
+    logger.info(f"Generating stick plot for zone: {zone}")
     assert 'SWT' in data.columns, 'SWT column not found in data.'
     assert_well_config_structure(well_config)
 
@@ -235,7 +233,6 @@ def neutron_density_xplot(nphi, rhob,
                           fluid_point: tuple = (1.0, 1.0),
                           wet_clay_point: tuple = (),
                           dry_silt_point: tuple = (), **kwargs):
-    logger.info("Generating neutron-density crossplot.")
     """Neutron-Density crossplot with lithology lines based on specified end points.
 
     Args:
@@ -250,6 +247,7 @@ def neutron_density_xplot(nphi, rhob,
     Returns:
         matplotlib.pyplot.Figure: Neutron porosity and bulk density cross plot.
     """
+    logger.info("Generating neutron-density crossplot.")
     A = dry_min1_point
     C = dry_clay_point
     D = fluid_point

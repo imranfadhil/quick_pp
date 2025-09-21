@@ -1,7 +1,7 @@
 Predict Pipeline module
 --------------------------------------------
 
-.. automodule:: quick_pp.modelling.predict_pipeline
+.. automodule:: quick_pp.machine_learning.predict_pipeline
    :members:
    :undoc-members:
    :show-inheritance:
@@ -9,7 +9,7 @@ Predict Pipeline module
 Train Pipeline module
 ------------------------------------------
 
-.. automodule:: quick_pp.modelling.train_pipeline
+.. automodule:: quick_pp.machine_learning.train_pipeline
    :members:
    :undoc-members:
    :show-inheritance:
@@ -17,7 +17,7 @@ Train Pipeline module
 Utils module
 --------------------------------
 
-.. automodule:: quick_pp.modelling.utils
+.. automodule:: quick_pp.machine_learning.utils
    :members:
    :undoc-members:
    :show-inheritance:

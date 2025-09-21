@@ -12,12 +12,19 @@ from quick_pp.config import Config
 
 
 def qaqc_xplots(rhob, vp=None, vs=None):
-    """Create crossplots for rock physics QC.
+    """Create a series of crossplots for rock physics quality control (QC).
+
+    This function generates a 2x3 grid of common rock physics crossplots to
+    visually inspect the relationships between bulk density, P-wave velocity,
+    and S-wave velocity. If Vp or Vs are not provided, they are estimated
+    using empirical relationships.
 
     Args:
-        rhob (numpy.ndarray): Bulk density in g/cm³
-        vp (numpy.ndarray): P-wave velocity in m/s
-        vs (numpy.ndarray): S-wave velocity in m/s
+        rhob (np.ndarray): Bulk density in g/cm³.
+        vp (np.ndarray, optional): P-wave velocity in m/s. If None, it will be
+            estimated from `rhob`. Defaults to None.
+        vs (np.ndarray, optional): S-wave velocity in m/s. If None, it will be
+            estimated from `vp`. Defaults to None.
 
     Returns:
         matplotlib.figure.Figure: Figure containing the QC crossplots
@@ -84,7 +91,20 @@ def qaqc_xplots(rhob, vp=None, vs=None):
 
 
 def fluid_typing_xplots(rhob, vp=None, vs=None):
-    """Create crossplots for fluid typing.
+    """Create crossplots commonly used for fluid typing and lithology discrimination.
+
+    This function generates a 1x3 grid of crossplots including Vp-Vs,
+    Lambda-Rho vs. Mu-Rho, and AI vs. Vp/Vs. These plots help in
+    identifying fluid effects in reservoir rocks. If Vp or Vs are not
+    provided, they are estimated.
+
+    Args:
+        rhob (np.ndarray): Bulk density in g/cm³.
+        vp (np.ndarray, optional): P-wave velocity in m/s. If None, it will be
+            estimated from `rhob`. Defaults to None.
+        vs (np.ndarray, optional): S-wave velocity in m/s. If None, it will be
+            estimated from `vp`. Defaults to None.
+
     """
     if vs is None and vp is not None:
         vs = estimate_shear_velocity(vp)
@@ -128,6 +148,21 @@ def fluid_typing_xplots(rhob, vp=None, vs=None):
 
 
 def QI_screening(gr, rhob, vp):
+    """Perform Quantitative Interpretation (QI) screening.
+
+    This function uses the `rockphypy` library to create a Vp vs. Porosity
+    screening plot, overlaying the input data on theoretical rock physics model
+    lines. It helps to assess where the data lies with respect to different
+    lithology and fluid scenarios.
+
+    Args:
+        gr (np.ndarray): Gamma Ray log in API units.
+        rhob (np.ndarray): Bulk density in g/cm³.
+        vp (np.ndarray): P-wave velocity in m/s.
+
+    Returns:
+        matplotlib.figure.Figure: Figure containing the QI screening plot.
+    """
 
     # compute the elastic bounds
     Dqz = Config.GEOMECHANICS_VALUE['RHOB_QUARTZ']
@@ -170,19 +205,29 @@ def QI_screening(gr, rhob, vp):
 
 
 def rpt_plot(rhob, vp=None, vs=None, model='soft_sand', fluid_type='gas', sigma=20, phi_c=0.4, Cn=8.6, f=0.0, scheme=2):
-    """Plot the RPT plot.
+    """Generate a Rock Physics Template (RPT) plot.
+
+    This function overlays well log data (AI vs. Vp/Vs) on a theoretical
+    Rock Physics Template (RPT) generated using models from the `rockphypy`
+    library. The template shows lines of constant porosity and water saturation
+    for a given rock and fluid model.
+
     Args:
-        rhob (float): Bulk density in g/cm³
-        vp (float): P-wave velocity in m/s
-        vs (float): S-wave velocity in m/s
+        rhob (np.ndarray): Bulk density in g/cm³.
+        vp (np.ndarray, optional): P-wave velocity in m/s. Defaults to None.
+        vs (np.ndarray, optional): S-wave velocity in m/s. Defaults to None.
         model (str): Model to use for the RPT plot. Defaults to 'soft_sand'.
                      Options are 'soft_sand', 'stiff_sand', 'contact_cement', 'hertz_mindlin'.
-        fluid_type (str): Fluid type. Defaults to 'gas'. Options are 'water', 'gas', 'oil'.
-        sigma (float): Effective stress. Defaults to 20.
+        fluid_type (str): Fluid type for the model. Defaults to 'gas'.
+                          Options are 'water', 'gas', 'oil'.
+        sigma (float): Effective stress in MPa. Defaults to 20.
         phi_c (float): Critical porosity. Defaults to 0.4.
         Cn (float): Coordination number. Defaults to 8.6.
-        f (float): Reduced shear factor. Defaults to 0.0.
-        scheme (int): Scheme of cement deposition. Defaults to 2.
+        f (float): Shear modulus correction factor for unconsolidated sands. Defaults to 0.0.
+        scheme (int): Cement deposition scheme for contact cement model. Defaults to 2.
+
+    Returns:
+        matplotlib.figure.Figure: Figure containing the RPT plot.
     """
     model_options = ['soft_sand', 'stiff_sand', 'contact_cement', 'hertz_mindlin']
     assert model in model_options, f"Model must be one of {model_options}"
@@ -249,11 +294,19 @@ def rpt_plot(rhob, vp=None, vs=None, model='soft_sand', fluid_type='gas', sigma=
 
 
 def elastic_bounds_plot(rhob, vp=None, vs=None, phi_calc=None):
-    """Plot the elastic bounds.
+    """Plot elastic moduli data against theoretical elastic bounds.
+
+    This function plots calculated Bulk (K) and Shear (G) moduli against
+    various theoretical bounds (Voigt, Reuss, Hashin-Shtrikman) and the
+    critical porosity model. It helps to validate the elastic properties
+    of the rock.
+
     Args:
-        rhob (float): Bulk density in g/cm³
-        vp (float): P-wave velocity in m/s
-        vs (float): S-wave velocity in m/s
+        rhob (np.ndarray): Bulk density in g/cm³.
+        vp (np.ndarray, optional): P-wave velocity in m/s. Defaults to None.
+        vs (np.ndarray, optional): S-wave velocity in m/s. Defaults to None.
+        phi_calc (np.ndarray, optional): Calculated porosity. If None, it will be
+            estimated from `rhob`. Defaults to None.
 
     Returns:
         matplotlib.figure.Figure: Figure containing the elastic bounds plot
