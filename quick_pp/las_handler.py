@@ -5,11 +5,6 @@ import numpy as np
 import pandas as pd
 import mmap
 import welly
-import welly.las
-
-# # Uncomment to run module as a standalone script
-# import sys
-# sys.path.append(os.getcwd())
 
 from quick_pp import logger
 
@@ -314,18 +309,3 @@ def export_to_las(well_data, well_name, folder='', vars_units=None):
     # Write to LAS format
     well_path = os.path.join(folder, f"{well_name}.las")
     las.write(well_path)
-
-
-if __name__ == '__main__':
-    from tkinter import Tk, filedialog
-
-    root = Tk()
-    file_objects = filedialog.askopenfiles(title='Choose well Log ASCII Standard (LAS) files to be combined',
-                                           filetypes=(('LAS Files', '*.LAS *.las'), ('All Files', '*.*')),
-                                           mode='rb')
-    root.destroy()
-    if file_objects:
-        # Test read_las_file function
-        merged_df, _ = read_las_files(file_objects)
-        fname = 'well_df.csv'
-        merged_df.to_csv(fname)

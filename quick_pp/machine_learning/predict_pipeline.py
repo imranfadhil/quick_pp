@@ -5,10 +5,6 @@ from mlflow.pyfunc import load_model
 import mlflow.tracking as mlflow_tracking
 from tqdm import tqdm
 
-# # Uncomment below 2 lines to run >> if __name__ == "__main__"
-# import sys
-# sys.path.append(os.getcwd())
-
 from quick_pp.machine_learning.config import MODELLING_CONFIG, RAW_FEATURES
 from quick_pp.machine_learning.feature_engineering import generate_fe_features
 from quick_pp.machine_learning.utils import get_latest_registered_models, unique_id, run_mlflow_server
@@ -150,21 +146,3 @@ def predict_pipeline(
     pred_df = postprocess_data(pred_df)
     save_predictions(pred_df, output_file_name, plot=plot_predictions)
     logger.info("Prediction pipeline completed successfully")
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Prediction pipeline")
-    parser.add_argument("--model-config", type=str, required=True, help="Path to model config")
-    parser.add_argument("--data", type=str, required=True, help="Path to input data parquet file")
-    parser.add_argument("--output", type=str, default='test', help="Path to save predictions parquet file")
-    args = parser.parse_args()
-
-    # Set up MLflow
-    os.makedirs('data/output', exist_ok=True)
-
-    logger.info(f"Model config: {args.model_config}")
-    logger.info(f"Data hash: {args.data}")
-
-    predict_pipeline(args.model_config, args.data, args.output)

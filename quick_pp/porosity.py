@@ -143,7 +143,7 @@ def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
     return phi_d
 
 
-def dt_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
+def dt_matrix(vsand=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
               dt_sand: float = 0, dt_silt: float = 0, dt_clay: float = 0,
               dt_calc: float = 0, dt_dolo: float = 0, dt_heavy: float = 0):
     """Estimate average matrix sonic transit time based on dry sand, dry silt dry calcite and
@@ -151,7 +151,6 @@ def dt_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
 
     Args:
         vsand (float): Volume of sand.
-        vsilt (float): Volume of silt.
         vclay (float): Volume of clay.
         vcalc (float): Volume of calcite.
         vdolo (float): Volume of dolomite.
@@ -169,12 +168,11 @@ def dt_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
     logger.debug("Calculating matrix sonic transit time from mineral volumes")
     minerals_log_value = Config.MINERALS_LOG_VALUE
     dt_sand = dt_sand or minerals_log_value['DTC_QUARTZ']
-    dt_silt = dt_silt or minerals_log_value['DTC_SILT']
     dt_clay = dt_clay or minerals_log_value['DTC_SHALE']
     dt_calc = dt_calc or minerals_log_value['DTC_CALCITE']
     dt_dolo = dt_dolo or minerals_log_value['DTC_DOLOMITE']
 
-    dt_matrix = (vsand * dt_sand + vsilt * dt_silt + vclay * dt_clay +
+    dt_matrix = (vsand * dt_sand + vclay * dt_clay +
                  vcalc * dt_calc + vdolo * dt_dolo + vheavy * dt_heavy)
     logger.debug(f"Matrix sonic transit time range: {dt_matrix.min():.1f} - {dt_matrix.max():.1f} us/ft")
     return dt_matrix

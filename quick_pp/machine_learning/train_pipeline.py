@@ -8,10 +8,6 @@ import mlflow.sklearn as mlflow_sklearn
 from mlflow.models.signature import infer_signature
 import importlib.util
 
-# # Uncomment below 3 lines to run >> if __name__ == "__main__"
-# import sys
-# sys.path.append(os.getcwd())
-
 from quick_pp.machine_learning.config import MODELLING_CONFIG
 from quick_pp.machine_learning.feature_engineering import generate_fe_features
 from quick_pp.machine_learning.utils import run_mlflow_server
@@ -204,15 +200,3 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
                 model, "model", signature=signature, input_example=X_test.sample(5),
                 registered_model_name=reg_model_name)
             logger.info(f"Model logged and registered as: {reg_model_name}")
-
-
-if __name__ == "__main__":
-
-    # Set up folders
-    os.makedirs('./mlruns', exist_ok=True)
-    os.makedirs('data/input', exist_ok=True)
-
-    # Example usage
-    data_hash = "x2x2"  # Update with your hash for your data in the 'data/input/' folder
-    model_config = "carbonate"  # Update with your model config
-    train_pipeline(model_config, data_hash)

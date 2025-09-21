@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quick-pp"
-version = "0.2.4"
+version = "0.2.51"
 description = "Python package to assist in providing quick-look/ preliminary petrophysical estimation."
 readme = "README.md"
 license = "MIT"
@@ -41,6 +41,7 @@ dependencies = [
     "ruptures",
     "SALib==1.5.1",
     "scikit-learn",
+    "setuptools<81",
     "statsmodels",
     "welly",
 ]
