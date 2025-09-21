@@ -8,6 +8,25 @@ from quick_pp.plotter.well_log_config import COLOR_DICT, TRACE_DEFS, XAXIS_DEFS
 
 # --- Helper to add traces from trace_defs ---
 def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
+    """Adds traces to the figure based on a definitions dictionary.
+
+    Args:
+        fig (plotly.graph_objects.Figure): The Plotly figure to add traces to.
+        df (pd.DataFrame): The DataFrame containing the log data.
+        index (pd.Series): The depth index for the y-axis.
+        no_of_track (int): The total number of tracks in the plot.
+        trace_defs (dict): A dictionary defining the traces to be plotted.
+        **kwargs: Additional keyword arguments to pass to `go.Scatter`.
+
+    Returns:
+        plotly.graph_objects.Figure: The figure with the added traces.
+
+    Notes:
+        - Skips 'COAL_FLAG' and 'ZONES' as they are handled separately.
+        - Updates trace styles from `trace_defs`.
+        - Manages x-axis visibility for overlapping traces.
+
+    """
     trace_ix = 0
     for col, trace_def in trace_defs.items():
         # Skip special cases handled separately
@@ -37,6 +56,20 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
 
 
 def add_crossover_traces(df):
+    """Calculates and adds gas crossover shading traces to the DataFrame.
+
+    If 'NPHI' and 'RHOB' are present, this function calculates the region
+    where neutron porosity crosses over bulk density, indicating potential
+    gas zones. It adds 'RHOB_ON_NPHI_SCALE', 'GAS_XOVER_TOP', and
+    'GAS_XOVER_BOTTOM' columns to the DataFrame for plotting.
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing log data.
+
+    Returns:
+        pd.DataFrame: The DataFrame with added crossover-related columns.
+
+    """
     if 'NPHI' in df.columns and 'RHOB' in df.columns and 'NPHI_XOVER_BOTTOM' not in df.columns:
         rhob_min, rhob_max = 1.95, 2.95
         nphi_min_scale, nphi_max_scale = 0.45, -0.15
@@ -54,6 +87,20 @@ def add_crossover_traces(df):
 
 
 def add_rock_flag_traces(df):
+    """Prepares rock flag data for plotting by one-hot encoding.
+
+    If a 'ROCK_FLAG' column exists, this function:
+    1. Converts it to integer type.
+    2. Assigns a unique color to each flag value in `COLOR_DICT`.
+    3. One-hot encodes the 'ROCK_FLAG' column into separate 'ROCK_FLAG_X' columns.
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing log data.
+
+    Returns:
+        pd.DataFrame: The DataFrame with one-hot encoded rock flag columns.
+
+    """
     if 'ROCK_FLAG' in df.columns:
         # Add ROCK_FLAG colors
         df['ROCK_FLAG'] = df['ROCK_FLAG'].fillna(0).astype(int)
@@ -75,6 +122,17 @@ def add_rock_flag_traces(df):
 
 
 def fix_missing_volumetrics(df):
+    """Ensures standard volumetric columns exist in the DataFrame.
+
+    Iterates through a predefined list of volumetric curve names. If a column
+    exists, it fills missing values with 0. If it doesn't exist, it is not added.
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing log data.
+
+    Returns:
+        pd.DataFrame: The DataFrame with NaNs filled in volumetric columns.
+    """
     volumetrics = ['VCLAY', 'VSILT', 'VSAND', 'VCALC', 'VDOLO', 'VGAS', 'VOIL', 'VHC']
     for col in volumetrics:
         df[col] = df[col].fillna(0) if col in df.columns else None
@@ -82,6 +140,18 @@ def fix_missing_volumetrics(df):
 
 
 def fix_missing_depths(df):
+    """Resamples the DataFrame to a regular depth interval.
+
+    This function ensures the DataFrame has a consistent depth step by
+    creating a complete depth range and merging the original data onto it.
+    This prevents gaps in the final plot.
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing log data with a 'DEPTH' column.
+
+    Returns:
+        pd.DataFrame: A resampled DataFrame with consistent depth steps.
+    """
     depth_min = df['DEPTH'].min()
     depth_max = df['DEPTH'].max()
     depth_step = df['DEPTH'].diff().mode()[0].round(4)  # Most common depth step
@@ -206,6 +276,17 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
     )
 
     def add_zone_markers(fig, df):
+        """Adds horizontal lines and labels for formation tops.
+
+        If a 'ZONES' column is present, this function identifies changes in
+        the zone names and adds a horizontal line and a text annotation to the
+        plot for each formation top.
+
+        Args:
+            fig (plotly.graph_objects.Figure): The figure to add markers to.
+            df (pd.DataFrame): The DataFrame containing 'DEPTH' and 'ZONES' columns.
+
+        """
         if 'ZONES' in df.columns:
             tops_df = df[['DEPTH', 'ZONES']].dropna().reset_index()
             if not tops_df.empty and sum([1 for c in tops_df.ZONES.unique() if 'ZONE_' in c]) < 30:

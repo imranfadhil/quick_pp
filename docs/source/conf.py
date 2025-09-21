@@ -18,8 +18,7 @@
 # absolute, like shown here.
 #
 import os
-import sys
-sys.path.insert(0, os.path.abspath('../../quick_pp'))
+import sys  # noqa
 sys.path.insert(0, os.path.abspath('../../'))
 
 # import sphinx_rtd_theme
@@ -36,10 +35,25 @@ import quick_pp # noqa
 extensions = [
     'sphinx.ext.viewcode',
     'sphinx.ext.todo',
-    "sphinx.ext.napoleon",
     'sphinx.ext.autodoc',
+    'sphinx.ext.napoleon',
+    'sphinx.ext.intersphinx',
+    'sphinx.ext.autosectionlabel',
     'sphinx_rtd_theme',
+    'sphinx_copybutton',
 ]
+
+# -- Extension configuration ---------------------------------------------------
+intersphinx_mapping = {'python': ('https://docs.python.org/3', None)}
+
+autodoc_default_options = {
+    'members': True,
+    'undoc-members': True,
+    'private-members': True,
+    'show-inheritance': True,
+    'member-order': 'bysource',
+}
+autosectionlabel_prefix_document = True
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -83,7 +97,7 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 pygments_style = 'sphinx'
 
 # If true, `todo` and `todoList` produce output, else they produce nothing.
-todo_include_todos = False
+todo_include_todos = True
 
 
 # -- Options for HTML output -------------------------------------------

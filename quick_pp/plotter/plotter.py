@@ -299,17 +299,3 @@ def neutron_density_xplot(nphi, rhob,
     fig.tight_layout()
 
     return fig
-
-
-def sonic_density_xplot():
-    logger.info("Called sonic_density_xplot (not implemented)")
-    """ TODO: Implement sonic density crossplot
-    """
-    pass
-
-
-def sonic_neutron_xplot():
-    logger.info("Called sonic_neutron_xplot (not implemented)")
-    """ TODO: Implement sonic neutron crossplot
-    """
-    pass

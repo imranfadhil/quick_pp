@@ -65,13 +65,13 @@ Fluid Type module
    :undoc-members:
    :show-inheritance:
 
-Geomechanics module
+Rock Physics module
 ----------------------------
 
-.. automodule:: quick_pp.geomechanics
-   :members:
-   :undoc-members:
-   :show-inheritance:
+.. toctree::
+   :maxdepth: 4
+
+   quick_pp.rock_physics
 
 QAQC module
 ---------------------
@@ -111,4 +111,4 @@ Machine Learning Modelling module
 .. toctree::
    :maxdepth: 4
    
-   quick_pp.modelling
+   quick_pp.machine_learning
