@@ -108,12 +108,12 @@ def zone_flagging(data: pd.DataFrame, min_zone_thickness: int = 150):
     df = data.copy()
     if 'ZONES' not in df.columns:
         df['ZONES'] = 'FORMATION'
-    df['ZONES'].fillna('FORMATION', inplace=True)
+    df['ZONES'] = df['ZONES'].fillna('FORMATION')
 
     return_df = pd.DataFrame()
     if 'WELL_NAME' not in df.columns:
         df['WELL_NAME'] = 'WELL'
-    df['WELL_NAME'].fillna('WELL', inplace=True)
+    df['WELL_NAME'] = df['WELL_NAME'].fillna('WELL')
     for _, well_data in df.groupby('WELL_NAME'):
         # Using VSHALE if available otherwise calculate VSH_GR
         if 'VSHALE' in well_data.columns:

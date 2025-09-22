@@ -114,7 +114,7 @@ def plot_fzi(cpore, cperm, cut_offs=None, rock_type=None, title='Flow Zone Indic
     plt.xlabel('Porosity (frac)')
     plt.xlim(-.05, .5)
     plt.ylabel('Permeability (mD)')
-    plt.ylim(1e-3, 1e4)
+    plt.ylim(1e-3, 1e5)
     plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
     plt.yscale('log')
