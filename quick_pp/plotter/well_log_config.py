@@ -166,8 +166,8 @@ TRACE_DEFS = dict(
     BADHOLE=dict(
         track=1,
         secondary_y=False,
-        hide_xaxis=True,
-        style={'fill': 'tozerox', 'fillcolor': 'rgba(0, 0, 0, .25)'}
+        hide_xaxis=False,
+        style={'line_width': 0, 'fill': 'tozerox', 'fillcolor': 'rgba(0, 0, 0, .15)'}
     ),
     VSILT=dict(
         track=8,
@@ -308,6 +308,12 @@ TRACE_DEFS = dict(
             'fillcolor': 'rgba(98, 180, 207, .5)'
         }
     ),
+    TIGHT_FLAG=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=False,
+        style={'line_width': 0, 'fill': 'tozerox', 'fillcolor': '#0000A0'}
+    ),
 )
 
 # Centralize axis definitions for maintainability
@@ -341,7 +347,7 @@ XAXIS_DEFS = dict(
         title={'text': 'PERM (mD)', 'font': {'color': COLOR_DICT['PERM'], 'size': font_size}},
         tickfont={'color': COLOR_DICT['PERM'], 'size': font_size},
         side='top', anchor='free', position=.91, title_standoff=.1,
-        range=[np.log10(0.1), np.log10(10000)], type='log', tickformat='d', tickangle=-90,
+        range=[np.log10(0.1), np.log10(1e5)], type='log', tickformat='d', tickangle=-90,
         minor_showgrid=True
     ),
     SWT=dict(
@@ -414,7 +420,7 @@ XAXIS_DEFS = dict(
         title={'text': 'BADHOLE', 'font': {'color': COLOR_DICT['BADHOLE'], 'size': font_size}},
         tickfont={'size': 1},
         side='top', anchor='free', position=.96, title_standoff=.1, overlaying='x1',
-        range=[0.1, 5], type='linear', showgrid=False, zeroline=False
+        range=[0.1, 4], type='linear', showgrid=False, zeroline=False
     ),
     PEF=dict(
         title={'text': 'PEF', 'font': {'color': COLOR_DICT['PEF'], 'size': font_size}},
@@ -432,7 +438,7 @@ XAXIS_DEFS = dict(
         title={'text': 'CPERM (mD)', 'font': {'color': COLOR_DICT['CPERM'], 'size': font_size}},
         tickfont={'color': COLOR_DICT['CPERM'], 'size': font_size},
         side='top', anchor='free', position=.85, title_standoff=.1, overlaying='x5',
-        range=[np.log10(0.1), np.log10(10000)], type='log', tickformat='d', tickangle=-90,
+        range=[np.log10(0.1), np.log10(1e5)], type='log', tickformat='d', tickangle=-90,
         zeroline=False, showgrid=False
     ),
     SHF=dict(
@@ -449,6 +455,9 @@ XAXIS_DEFS = dict(
     ),
     COAL_FLAG=dict(
         range=[.1, .2], type='linear', showgrid=False, zeroline=False,
+    ),
+    TIGHT_FLAG=dict(
+        range=[.1, .2], type='linear', showgrid=False, zeroline=False, overlaying='x8'
     ),
     DTC=dict(
         title={'text': 'DTC (us/ft)', 'font': {'color': COLOR_DICT['DTC'], 'size': font_size}},

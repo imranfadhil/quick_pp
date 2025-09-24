@@ -410,3 +410,18 @@ def remove_straights(log, window: int = 30, threshold: float = 0.001):
 
     rolling_std = log_series.rolling(window=window, center=True, min_periods=window // 2).std()
     return np.where(rolling_std < threshold, np.nan, log_series.values)
+
+
+def get_tvd(df, well_coords):
+    """_summary_
+
+    Args:
+        df (_type_): _description_
+        well_coords (_type_): _description_
+    """
+    import wellpathpy as wpp
+
+    dev_survey = wpp.deviation(md=well_coords['md'], inc=well_coords['incl'], azi=well_coords['azim'])
+    # Resample the survey at the exact MD points from the log data
+    tvd = dev_survey.minimum_curvature().resample(df['DEPTH'].values).depth
+    return tvd

@@ -469,8 +469,9 @@ def swirr_xplot(swt, phit, c=.0125, label='', log_log=False, title=''):
         ax.plot(c / cphit, cphit, label=rf'$\phi$ S = {c}',
                 color=line_color, linestyle='dashed')
     ax.set_ylabel('PHIT (frac)')
+    ax.set_ylim(1e-3, 1)
     ax.set_xlabel('SWT (frac)')
-    ax.set_xlim(0, 1)
+    ax.set_xlim(1e-3, 1)
     ax.legend()
     if log_log:
         ax.set_xscale('log')

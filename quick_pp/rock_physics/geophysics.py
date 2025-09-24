@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import xarray as xr
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 from scipy.signal import convolve, hilbert
@@ -175,11 +174,8 @@ def convert_md_to_tvd(df, well_coords):
     Returns:
         pandas.DataFrame: DataFrame with TVD column added.
     """
-    dev_survey = wpp.deviation(
-        well_coords['md'], well_coords['incl'], well_coords['azim']
-    )
-    md_range = np.arange(df.DEPTH.min(), df.DEPTH.max(), df.DEPTH.diff().mode()[0])
-    df['TVD'] = dev_survey.minimum_curvature().resample(md_range).depth
+    dev_survey = wpp.deviation(md=well_coords['md'], inc=well_coords['incl'], azi=well_coords['azim'])
+    df['TVD'] = dev_survey.minimum_curvature().resample(df.DEPTH.values).depth
 
     # Get list of columns to resample
     numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
@@ -238,6 +234,8 @@ def convert_well_trajectory_to_ilxl(seismic_cube, well_trajectory):
         seismic_cube (xarray.Dataset): 3D seismic cube with coordinates (inline, xline, twt/depth)
         well_trajectory (pandas.DataFrame): Well trajectory with columns for X,Y coordinates and depth/time
     """
+    import xarray as xr
+
     # Scale the coordinates if required
     try:
         seismic_cube.segysak.scale_coords()

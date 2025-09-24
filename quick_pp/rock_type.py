@@ -88,6 +88,39 @@ def calc_r35_perm(r35, pore):
     return 10**((np.log10(r35) - .732 + .864 * np.log10(pore * 100)) / .588)
 
 
+def plot_rqi(cpore, cperm, cut_offs=None, rock_type=None, title='Rock Quality Index (RQI)'):
+    """Plot the RQI cross plot.
+
+    Args:
+        cpore (float): Core porosity in fraction.
+        cperm (float): Core permeability in mD.
+        cut_offs (list, optional): List of RQI values to plot as lines.
+                                   Defaults to None, which will use [0.1, 0.3, 0.5, 1.0].
+        rock_type (array, optional): Array of rock types for coloring points. Defaults to None.
+        title (str, optional): Plot title. Defaults to 'Rock Quality Index (RQI)'.
+    """
+    _, ax = plt.subplots(figsize=(10, 8))
+    plt.title(title)
+    plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
+    cut_offs = cut_offs if cut_offs is not None else [0.1, 0.3, 0.5, 1.0]
+    pore_points = np.geomspace(0.001, 1, 20)
+    for rqi in cut_offs:
+        perm_points = pore_points * (rqi / 0.0314)**2
+        ax.plot(pore_points, perm_points, linestyle='dashed', label=f'RQI={round(rqi, 3)}')
+
+    plt.xlabel('Porosity (frac)')
+    plt.xlim(-.05, .5)
+    plt.ylabel('Permeability (mD)')
+    plt.ylim(1e-3, 1e5)
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    plt.yscale('log')
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
+        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+    plt.minorticks_on()
+    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
+    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
+
+
 def plot_fzi(cpore, cperm, cut_offs=None, rock_type=None, title='Flow Zone Indicator (FZI)'):
     """Plot the FZI cross plot.
 

@@ -139,7 +139,7 @@ def predict_pipeline(
 
     # Merge specific columns from original data missing from pred_df
     merge_cols = ['WELL_NAME', 'DEPTH']
-    missing_cols = ['ROCK_FLAG', 'COAL_FLAG']
+    missing_cols = ['ROCK_FLAG', 'COAL_FLAG', 'TIGHT_FLAG']
     pred_df = pd.merge(pred_df, data[merge_cols + missing_cols], on=merge_cols, how='left')
 
     # Postprocess the predictions and save
