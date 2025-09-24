@@ -99,7 +99,7 @@ def coal_flagging(nphi, rhob, rhob_threshold=2.0, nphi_threshold=0.3, window_siz
     return (trend_condition & threshold_condition).astype(float)
 
 
-def tight_streak_flagging(rhob, rt, rhob_threshold=2.5, rt_threshold=2, window_size=15, trend_factor=0.03):
+def tight_streak_flagging(rhob, rhob_threshold=2.3, window_size=15, trend_factor=0.03):
     """Flag tight streak intervals based on high RHOB, high RT, and low NPHI.
 
     Tight streaks (e.g., carbonate cemented layers) are characterized by high
@@ -109,9 +109,7 @@ def tight_streak_flagging(rhob, rt, rhob_threshold=2.5, rt_threshold=2, window_s
 
     Args:
         rhob (pd.Series): Bulk density log (g/cm³).
-        rt (pd.Series): True resistivity log (ohm.m).
         rhob_threshold (float, optional): RHOB threshold for tight streak. Defaults to 2.5.
-        rt_threshold (float, optional): RT threshold for tight streak. Defaults to 50.
         window_size (int, optional): The size of the rolling window for trend calculation. Defaults to 21.
         trend_factor (float, optional): A factor to control sensitivity to trend deviation.
                           Defaults to 0.05 (5%).
@@ -121,16 +119,12 @@ def tight_streak_flagging(rhob, rt, rhob_threshold=2.5, rt_threshold=2, window_s
     """
     # Calculate rolling averages to establish local trends
     rhob_trend = rhob.rolling(window=window_size, center=True, min_periods=1).mean()
-    rt_trend = rt.rolling(window=window_size, center=True, min_periods=1).mean()
 
-    # Flag where RHOB/RT are significantly above trend and NPHI is significantly below trend
-    trend_condition = (
-        (rhob > rhob_trend * (1 + trend_factor)) &
-        (rt > rt_trend * (1 + trend_factor))
-    )
+    # Flag where RHOB are significantly above trend
+    trend_condition = (rhob > rhob_trend * (1 + trend_factor)) 
 
     # Flag where values cross absolute thresholds
-    threshold_condition = ((rhob > rhob_threshold) & (rt > rt_threshold))
+    threshold_condition = (rhob > rhob_threshold)
 
     return (trend_condition & threshold_condition).astype(float)
 
