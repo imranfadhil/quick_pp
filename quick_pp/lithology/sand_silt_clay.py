@@ -2,7 +2,7 @@ import numpy as np
 import math
 from typing import Optional
 
-from quick_pp.utils import min_max_line, length_a_b, line_intersection
+from quick_pp.utils import min_max_line, length_a_b, line_intersection, remove_outliers
 from quick_pp.config import Config
 from quick_pp import logger
 
@@ -54,9 +54,13 @@ class SandSiltClay:
         D = self.fluid_point
 
         # Redefine wetclay point
-        _, rhob_max_line = min_max_line(rhob, 0.1)
-        _, nphi_max_line = min_max_line(nphi, 0.1)
+        nphi_max_line = None
+        rhob_max_line = None
         if not all(self.wet_clay_point):
+            rhob_clean = remove_outliers(rhob)
+            nphi_clean = remove_outliers(nphi)
+            _, rhob_max_line = min_max_line(rhob_clean, 0.1)
+            _, nphi_max_line = min_max_line(nphi_clean, 0.1)
             wetclay_RHOB = np.nanmin(rhob_max_line)
             wetclay_NPHI = np.nanmax(nphi_max_line)
             self.wet_clay_point = (wetclay_NPHI, wetclay_RHOB)

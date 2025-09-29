@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Optional
 
-from quick_pp.utils import min_max_line, length_a_b, line_intersection
+from quick_pp.utils import min_max_line, length_a_b, line_intersection, remove_outliers
 from quick_pp.config import Config
 from quick_pp import logger
 
@@ -45,9 +45,13 @@ class SandShale:
         D = self.fluid_point
 
         # Redefine wetclay point
-        _, rhob_max_line = min_max_line(rhob, 0.05)
-        _, nphi_max_line = min_max_line(nphi, 0.05)
-        if not all(self.wet_clay_point):  
+        nphi_max_line = None
+        rhob_max_line = None
+        if not all(self.wet_clay_point):
+            rhob_clean = remove_outliers(rhob)
+            nphi_clean = remove_outliers(nphi)
+            _, rhob_max_line = min_max_line(rhob_clean, 0.05)
+            _, nphi_max_line = min_max_line(nphi_clean, 0.05)
             wetclay_RHOB = np.min(rhob_max_line)
             wetclay_NPHI = np.max(nphi_max_line)
             self.wet_clay_point = (wetclay_NPHI, wetclay_RHOB)
@@ -67,7 +71,7 @@ class SandShale:
             f"vcld: {vcld.mean():.3f}"
         )
 
-        return vsand, vcld
+        return vsand, vcld, (nphi_max_line, rhob_max_line)
 
     def lithology_fraction(self, nphi, rhob):
         """Estimate sand and shale based on neutron density cross plot.

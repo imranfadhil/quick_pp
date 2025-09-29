@@ -413,11 +413,14 @@ def remove_straights(log, window: int = 30, threshold: float = 0.001):
 
 
 def get_tvd(df, well_coords):
-    """_summary_
+    """Calculate true vertical depth (TVD) given well survey data.
 
     Args:
-        df (_type_): _description_
-        well_coords (_type_): _description_
+        df (pd.DataFrame): Dataframe with DEPTH column.
+        well_coords (pd.DataFrame): Dataframe with md, incl and azim columns.
+
+    Returns:
+        np.array: TVD values.
     """
     import wellpathpy as wpp
 
@@ -425,3 +428,22 @@ def get_tvd(df, well_coords):
     # Resample the survey at the exact MD points from the log data
     tvd = dev_survey.minimum_curvature().resample(df['DEPTH'].values).depth
     return tvd
+
+
+def remove_outliers(curve):
+    """Removes outliers from a curve using the IQR method and forward fills the NaNs.
+
+    Args:
+        curve (np.array): The input curve data.
+
+    Returns:
+        np.array: The curve with outliers replaced by NaN and then forward filled.
+    """
+    q1, q3 = np.nanquantile(curve, [0.25, 0.75])
+    iqr = q3 - q1
+    upper_bound = q3 + 1.5 * iqr
+    lower_bound = q1 - 1.5 * iqr
+
+    # Replace outliers with NaN and then forward fill
+    curve_series = pd.Series(curve)
+    return curve_series.where((curve_series >= lower_bound) & (curve_series <= upper_bound))

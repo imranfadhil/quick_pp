@@ -48,7 +48,7 @@ def effective_porosity(phit, phi_shale, vshale):
     return phie
 
 
-def clay_porosity(rho_clw: np.ndarray, rho_dry_clay: float = 2.72, rho_fluid: float = 1.0):
+def estimate_shale_porosity_trend(rho_clw: np.ndarray, rho_dry_clay: float = 2.72, rho_fluid: float = 1.0):
     """Calculate clay porosity given bulk density of wet clay line.
 
     Args:
@@ -65,27 +65,20 @@ def clay_porosity(rho_clw: np.ndarray, rho_dry_clay: float = 2.72, rho_fluid: fl
     return phi_clay
 
 
-def shale_porosity(vshale, phi_shale):
+def estimate_shale_porosity(nphi, phit):
     """
-    Computes shale porosity from shale volume and total porosity of shale.
+    Computes shale porosity from neutron porosity and total porosity.
 
-    Parameters
-    ----------
-    vshale : float
-        Shale volume [fraction].
-    phi_vsh : float
-        Total porosity of shale [fraction].
+    Args:
+        nphi (float): Neutron porosity (hydrocarbon corrected) [fraction].
+        phit (float): Total porosity [fraction].
 
-    Returns
-    -------
-    porosity : float
-        Shale porosity [fraction].
+    Returns:
+        float: Shale porosity [fraction].
 
     """
-    logger.debug(f"Calculating shale porosity with shale porosity: {phi_shale:.3f}")
-    phi_sh = vshale * phi_shale
-    logger.debug(f"Shale porosity range: {phi_sh.min():.3f} - {phi_sh.max():.3f}")
-    return phi_sh
+    phit_sh = nphi - phit
+    return np.where(phit_sh > 0, phit_sh, phit).clip(1e-2, 1.0)
 
 
 def rho_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,

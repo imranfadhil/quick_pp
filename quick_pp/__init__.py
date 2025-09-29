@@ -20,4 +20,4 @@ logging.getLogger("mlflow").setLevel(logging.WARNING)
 
 __author__ = """Imran Fadhil"""
 __email__ = 'imranfadhil@gmail.com'
-__version__ = '0.2.54'  # Need to be updated manually when releasing a new version/ change in pyproject.toml
+__version__ = '0.2.55'  # Need to be updated manually when releasing a new version/ change in pyproject.toml

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from tqdm import tqdm
 
-from quick_pp.utils import min_max_line
+from quick_pp.utils import min_max_line, remove_outliers
 from quick_pp import logger
 
 plt.style.use('seaborn-v0_8-paper')
@@ -82,6 +82,43 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
     return swt
 
 
+def normalized_waxman_smits_saturation(rt, rw, phit, vshale, phit_shale, rt_shale, m=2, n=2):
+    """Estimate water saturation based on Waxman-Smits model for dispersed clay mineral.
+    Based on Ausburn, Brian E., and Robert Freedman. "The Waxman-smits Equation For Shaly Sands:
+        i. Simple Methods Of Solution
+        ii. Error Analysis." The Log Analyst 26 (1985)
+
+    Args:
+        rt (float): True resistivity or deep resistivity log.
+        rw (float): Formation water resistivity.
+        phit (float): Total porosity.
+
+        m (float): Saturation factor.
+        n (float): Cementartion factor.
+
+    Returns:
+        float: Water saturation.
+    """
+    logger.debug("Calculating Normalized Waxman-Smits saturation")
+    Qvn = estimate_qvn(vclay=vshale, phit=phit, phit_clay=phit_shale)
+    B = (phit_shale**-m / rt_shale) - (1 / rw)
+
+    # Initial guess
+    swt = 1
+    swt_i = 0
+    logger.debug("Starting iterative solution for Waxman-Smits")
+
+    # Use tqdm for progress bar during iterations
+    for i in tqdm(range(50), desc="Normalized Waxman-Smits iteration"):
+        fx = swt**n / rw + Qvn * B * swt**(n - 1) - (phit**-m / rt)  # Juhasz, 1981
+        delta_sat = abs(swt - swt_i) / 2
+        swt_i = swt
+        swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
+
+    logger.debug(f"Normalized Waxman-Smits saturation range: {min(swt)} - {max(swt)}")
+    return swt
+
+
 def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
     """Estimate water saturation based on dual water model, an extension from Waxman-Smits by Clavier, Coates and
     Dumanoir (1977).
@@ -115,20 +152,6 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
 
     logger.debug(f"Dual water saturation range: {swt.min():.3f} - {swt.max():.3f}")
     return swt
-
-
-def estimate_swb(phit, vsh, nphi_sh):
-    """Estimate bound water saturation based on dual water model.
-    Args:
-        phit (float): Total porosity in fraction.
-        vsh (float): Volume of shale in fraction.
-        nphi_sh (float): Neutron porosity reading in a nearby 100% shale interval in fraction.
-
-    Returns:
-        float: Bound water saturation.
-    """
-    swb = vsh * nphi_sh / phit
-    return swb
 
 
 def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
@@ -199,6 +222,20 @@ def connectivity_saturation(rt, rw, phit, mu=2, chi_w=0):
     return sw
 
 
+def estimate_swb(phit, vsh, nphi_sh):
+    """Estimate bound water saturation based on dual water model.
+    Args:
+        phit (float): Total porosity in fraction.
+        vsh (float): Volume of shale in fraction.
+        nphi_sh (float): Neutron porosity reading in a nearby 100% shale interval in fraction.
+
+    Returns:
+        float: Bound water saturation.
+    """
+    swb = vsh * nphi_sh / phit
+    return swb
+
+
 def estimate_chi_w(s_cw, phit, sigma_cw, sigma_w, mu=2):
     """Estimate water connectivity correction index based on connectivity model Montaron 2009
     Args:
@@ -216,13 +253,6 @@ def estimate_chi_w(s_cw, phit, sigma_cw, sigma_w, mu=2):
     chi_w = -s_cw * phit * ((sigma_cw / sigma_w)**(1 / mu) - 1)
     logger.debug(f"Water connectivity correction index range: {chi_w.min():.3f} - {chi_w.max():.3f}")
     return chi_w
-
-
-def modified_simandoux_saturation():
-    """ TODO: Estimate water saturation based on modified Simandoux's model.
-    """
-    logger.warning("Modified Simandoux saturation not implemented yet")
-    pass
 
 
 def estimate_temperature_gradient(tvd, unit='metric'):
@@ -246,7 +276,7 @@ def estimate_b_waxman_smits(T, rw):
 
     Args:
         T (float): Temperature in degC.
-        rw (float): Water resistivity in ohm.m.
+        rw (float): Formation water resistivity in ohm.m.
 
     Returns:
         float: B parameter.
@@ -361,6 +391,31 @@ def estimate_rw_from_shale_trend(rt, phit, vshale, depth, m=1.3):
     return rw
 
 
+def estimate_rt_shale(rt, vshale):
+    """Estimate resistivity of shale.
+
+    Args:
+        rt (float): True resistivity.
+        vshale (float): Volume of shale.
+
+    Returns:
+        float: Resistivity of shale.
+    """
+    # Identify shale intervals
+    vshale = remove_outliers(vshale)
+
+    vsh_threshold = np.nanquantile(vshale, 0.5)
+    shale_mask = vshale >= vsh_threshold
+
+    # Create a series with phit values only at shale intervals
+    rt_shale = rt.where(shale_mask).rolling(31, center=True, min_periods=1).mean()
+
+    # Forward-fill and then back-fill to propagate shale porosity
+    rt_shale = rt_shale.ffill().bfill()
+    logger.debug(f"Shale porosity range: {rt_shale.min():.3f} - {rt_shale.max():.3f}")
+    return rt_shale
+
+
 def estimate_qv(vcld, phit, rho_clay=2.65, cec_clay=.062):
     """Estimate Qv, cation exchange capacity per unit total pore volume (meq/cm3).
 
@@ -377,6 +432,36 @@ def estimate_qv(vcld, phit, rho_clay=2.65, cec_clay=.062):
     qv = vcld * rho_clay * cec_clay / phit
     logger.debug(f"Qv range: {qv.min():.3f} - {qv.max():.3f} meq/cm³")
     return qv
+
+
+def estimate_qvn(vclay, phit, phit_clay):
+    """Estimate normalized Qv
+
+    Args:
+        vclay (float): Volume of clay in fraction
+        phit (float): Total porosity in fraction
+        phit_clay (float): Total porosity of clay in fraction
+
+    Returns:
+        float: Normalized Qv.
+    """
+    return vclay * phit_clay / phit
+
+
+def estimate_qv_ward(rt, phit, B, rw, m):
+    """Estimate Qv based on B. Ward (SIPM), 1973
+
+    Args:
+        rt (float): True resistivity in ohm.m from a water-bearing zone.
+        phit (float): Total porosity in fraction.
+        B (float): Conductance parameter for Waxman-Smits.
+        rw (float): Formation water resistivity in ohm.m.
+        m (float): Cementation exponent.
+
+    Returns:
+        float: Qv in meq/cm3.
+    """
+    return 1 / B * ((1 / (rt * phit**m)) - (1 / rw))
 
 
 def estimate_qv_hill(vclb, phit, water_salinity=10000):
@@ -411,6 +496,20 @@ def estimate_qv_lavers(phit, a=3.05e-4, b=3.49):
     qv = a * phit**-b
     logger.debug(f"Lavers Qv range: {qv.min():.3f} - {qv.max():.3f} meq/cc")
     return qv
+
+
+def estimate_bqv(phit, max_phit_clean_sand, C):
+    """Estimate BQv (Bulk volume of clay bound water) based on Juhasz/ Rackley method.
+
+    Args:
+        phit (float): Total porosity.
+        max_phit_clean_sand (float): Maximum porosity of clean sand.
+        C (float): Constant depending on clay type.
+
+    Returns:
+        float: Bulk volume of clay bound water.
+    """
+    return (max_phit_clean_sand - phit) / (C * phit)
 
 
 def estimate_m_archie(rt, rw, phit):
@@ -449,6 +548,58 @@ def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
     return m
 
 
+def qv_phit_xplot(phit, qv):
+    """Generate BQV plot (Cwa vs 1/PHIT) and fit a best straight line."""
+    fig, ax = plt.subplots()
+    ax.set_title("Qv vs 1/PHIT")
+
+    # Prepare data for plotting and fitting
+    x = 1 / phit
+    y = qv
+
+    # Remove non-finite values for a clean fit
+    mask = np.isfinite(x) & np.isfinite(y)
+    ax.scatter(x[mask], y[mask], marker='.')
+
+    # Fit a straight line using np.polyfit
+    m, c = np.polyfit(x[mask], y[mask], 1)
+    ax.plot(x[mask], m * x[mask] + c, color='r', linestyle='--', label=f'y = {m:.2f}x + {c:.2f}')
+
+    ax.set_xlabel('1 / PHIT (frac)')
+    ax.set_ylabel('Qv (meq/cc)')
+    ax.legend()
+    ax.minorticks_on()
+    ax.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
+    ax.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
+
+
+def cwa_qvn_xplot(rt, phit, qvn, m=2.0, rw=.2, B=None, C=None, slope=250):
+    """Generate Cwa vs Qvn plot."""
+    x = qvn
+    y = 1 / (rt * phit**m)
+    if len(x) != len(y):
+        logger.warning(f"Length mismatch between Qvn ({len(x)}) and Cwa ({len(y)}). Plot may be incorrect.")
+
+    fig, ax = plt.subplots()
+    ax.set_title("Cwa vs Qvn")
+    ax.scatter(x, y, marker='.')
+
+    # Add straight line
+    x_line = np.linspace(0, 1.0, len(x))
+    y_line = 1 / rw + x_line * slope
+    ax.plot(x_line, y_line, 'r--', label=f'm= {m} \nrw= {rw} \nslope= {slope}')
+
+    ax.set_xlabel('Qvn (meq/cc)')
+    ax.set_ylabel('Cwa (1 / ohm.m)')
+    ax.set_xlim(0, 1.0)
+    ax.set_ylim(0, 100)
+    ax.minorticks_on()
+    ax.grid(True)
+    fig.tight_layout()
+    ax.legend()
+    return fig
+
+
 def swirr_xplot(swt, phit, c=.0125, label='', log_log=False, title=''):
     """Plot SWT vs PHIT for sand intervales only and estimate Swirr from cross plot.
     Based on Buckles, 1965.
@@ -476,8 +627,54 @@ def swirr_xplot(swt, phit, c=.0125, label='', log_log=False, title=''):
     if log_log:
         ax.set_xscale('log')
         ax.set_yscale('log')
+    ax.minorticks_on()
+    ax.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
+    ax.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
     fig.tight_layout()
     logger.debug("Swirr crossplot created")
+
+
+def rt_phit_xplot(rt, phit, m=2, rw=.01):
+    """Generate RT vs PHIT plot.
+
+    This plot is useful for visualizing the relationship between true resistivity
+    and total porosity, often used for identifying water-bearing zones and estimating
+    formation water resistivity (Rw) and cementation exponent (m).
+
+    Args:
+        rt (float): True resistivity or deep resistivity log (ohm.m).
+        phit (float): Total porosity (fraction).
+        m (float, optional): Cementation exponent for the iso-line. Defaults to 2.
+        rw (float, optional): Formation water resistivity for the iso-line (ohm.m). Defaults to 0.01.
+
+    Returns:
+        matplotlib.figure.Figure: The RT vs PHIT plot.
+    """
+    fig, ax = plt.subplots()
+    ax.set_title("RT vs PHIT")
+    ax.scatter(phit, rt, marker='.')
+
+    # Add iso-lines
+    phit_i = np.arange(0, 1, 1 / len(phit))
+    rt_i = phit_i**-m * rw
+    ax.plot(phit_i, rt_i, 'r--', alpha=0.5, label=f'm= {m} \nrw= {rw}')
+
+    ax.set_ylabel('RT (ohm.m)')
+    ax.set_xlabel('PHIT (frac)')
+    ax.loglog()
+    ax.set_xlim(1e-2, 1)
+    ax.set_ylim(1e-2, 1e2)
+
+    ax.minorticks_on()
+    ax.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
+    ax.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(
+        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
+        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+    ax.legend()
+    fig.tight_layout()
+    return fig
 
 
 def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2, title='Pickett Plot'):
@@ -519,6 +716,9 @@ def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2, title='Pickett Plot'):
     ax.set_xlabel('RT (ohm.m)')
 
     ax.legend()
+    ax.minorticks_on()
+    ax.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
+    ax.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
     fig.tight_layout()
     logger.debug("Pickett plot created")
 
