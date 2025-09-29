@@ -182,7 +182,7 @@ def plot_rfn(cpore, cperm, rock_type=None, title='Lucia RFN'):
     plt.xlabel('Porosity (frac)')
     plt.xlim(-.05, .5)
     plt.ylabel('Permeability (mD)')
-    plt.ylim(1e-3, 1e4)
+    plt.ylim(1e-3, 1e5)
     plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
     plt.yscale('log')
@@ -218,7 +218,7 @@ def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title='Winland R35
     plt.xlabel('Porosity (frac)')
     plt.xlim(-.05, .5)
     plt.ylabel('Permeability (mD)')
-    plt.ylim(1e-3, 1e4)
+    plt.ylim(1e-3, 1e5)
     plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
     plt.yscale('log')

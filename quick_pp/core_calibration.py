@@ -42,7 +42,7 @@ def poroperm_xplot(poro, perm, a=None, b=None, core_group=None, label='', log_lo
     plt.xlabel('CPORE (frac)')
     plt.xlim(0.001, 0.5)
     plt.ylabel('CPERM (mD)')
-    plt.ylim(.001, 10000)
+    plt.ylim(.001, 1e5)
     plt.yscale('log')
     if log_log:
         plt.xscale('log')

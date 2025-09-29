@@ -12,7 +12,7 @@ from quick_pp import logger
 plt.style.use('seaborn-v0_8-paper')
 
 
-def mask_outside_threshold(data, fill=False):
+def handle_outer_limit(data, fill=False):
     """ Replace values outside of min and max with null or the min/ max value.
 
     Args:
