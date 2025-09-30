@@ -312,7 +312,11 @@ TRACE_DEFS = dict(
         track=8,
         secondary_y=False,
         hide_xaxis=False,
-        style={'line_width': 0, 'fill': 'tozerox', 'fillcolor': '#0000A0'}
+        style={
+            'line_width': 0, 'fill': 'tozerox', 'fillpattern_bgcolor': "#4D4DB8",
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '|',
+            'fillpattern_size': 3, 'fillpattern_solidity': 0.3
+        }
     ),
 )
 
@@ -463,12 +467,12 @@ XAXIS_DEFS = dict(
         title={'text': 'DTC (us/ft)', 'font': {'color': COLOR_DICT['DTC'], 'size': font_size}},
         tickfont={'color': COLOR_DICT['DTC'], 'size': font_size},
         side='top', anchor='free', position=.85, title_standoff=.1,
-        dtick=40, range=[200, 0], tickangle=-90, type='linear', zeroline=False
+        dtick=20, range=[140, 40], tickangle=-90, type='linear', zeroline=False
     ),
     DTS=dict(
         title={'text': 'DTS (us/ft)', 'font': {'color': COLOR_DICT['DTS'], 'size': font_size}},
         tickfont={'color': COLOR_DICT['DTS'], 'size': font_size},
         side='top', anchor='free', position=.89, title_standoff=.1, overlaying='x9',
-        dtick=40, range=[200, 0], tickangle=-90, type='linear', zeroline=False
+        dtick=40, range=[240, 40], tickangle=-90, type='linear', zeroline=False
     )
 )

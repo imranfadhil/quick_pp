@@ -26,6 +26,7 @@ def poroperm_xplot(poro, perm, a=None, b=None, core_group=None, label='', log_lo
         perm (float): Core permeability (mD).
         a (float, optional): a constant in perm=a*poro^b. Defaults to None.
         b (float, optional): b constant in perm=a*poro^b. Defaults to None.
+        core_group (array-like, optional): Grouping for core samples to be used for coloring. Defaults to None.
         label (str, optional): Label for the data group. Defaults to ''.
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
