@@ -35,13 +35,15 @@ For development or to use the `qpp_assistant`, you'll need to clone the reposito
 
 ### Jupyter Notebook Examples
 
+> More structured analysis/ examples are done in https://github.com/imranfadhil/pp_portfolio
+
 The included notebooks demonstrate the core functionalities:
 
 -   `01_data_handler`: Create a MOCK `qppp` project file.
 -   `02_EDA`: Perform a quick exploratory data analysis.
 -   `03_*`: Carry out petrophysical interpretation of the MOCK wells.
 
-> **Note:** For the API notebook, you need to run `python main.py app` before executing the cells.
+**Note:** For the API notebook, you need to run `python main.py app` before executing the cells.
 
 ### `qpp_assistant` Setup
 
