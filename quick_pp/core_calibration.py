@@ -488,10 +488,22 @@ def autocorrelate_core_depth(df):
             right_on='DEPTH_CORRECTED',
             how='left'
         )
+
+        # Remove original depths if being corrected
+        ori_core_ids = df_corrected['CORE_ID'].dropna().unique()
+        shifted_core_ids = df_corrected['CORE_ID_SHIFTED'].dropna().unique()
+
+        mask_shifted = df_corrected['CORE_ID'].isin(shifted_core_ids)
+        mask_ori = df_corrected['CORE_ID_SHIFTED'].isin(ori_core_ids)
+
+        df_corrected.loc[mask_shifted, ['CORE_ID', 'CPORE', 'CPERM']] = np.nan
+        df_corrected.loc[mask_ori, ['CORE_ID', 'CPORE', 'CPERM']] = df_corrected.loc[
+            mask_ori, ['CORE_ID_SHIFTED', 'CPORE_SHIFTED', 'CPERM_SHIFTED']].values
+
         return_df = pd.concat([return_df, df_corrected])
 
-    final_summary_df = pd.DataFrame()
     # After the loop, combine all summaries into a single DataFrame
+    final_summary_df = pd.DataFrame()
     if shift_summaries:
         final_summary_df = pd.concat(shift_summaries, ignore_index=True)
 
