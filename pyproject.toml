@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quick-pp"
-version = "0.2.55"
+version = "0.2.56"
 description = "Python package to assist in providing quick-look/ preliminary petrophysical estimation."
 readme = "README.md"
 license = "MIT"
@@ -29,6 +29,7 @@ classifiers = [
 ]
 dependencies = [
     "Click>=7.0",
+    "dtw-python",
     "fastapi",
     "loguru",
     "matplotlib==3.8.0",

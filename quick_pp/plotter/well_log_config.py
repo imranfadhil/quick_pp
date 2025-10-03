@@ -458,10 +458,10 @@ XAXIS_DEFS = dict(
         dtick=0.1, range=[0, 0.5], type='linear', zeroline=False
     ),
     COAL_FLAG=dict(
-        range=[.1, .2], type='linear', showgrid=False, zeroline=False,
+        range=[.1, .2], type='linear', showgrid=False, zeroline=False, tickfont={'size': 1}
     ),
     TIGHT_FLAG=dict(
-        range=[.1, .2], type='linear', showgrid=False, zeroline=False, overlaying='x8'
+        range=[.1, .2], type='linear', showgrid=False, zeroline=False, tickfont={'size': 1}, overlaying='x8'
     ),
     DTC=dict(
         title={'text': 'DTC (us/ft)', 'font': {'color': COLOR_DICT['DTC'], 'size': font_size}},

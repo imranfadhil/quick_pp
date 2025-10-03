@@ -2,6 +2,9 @@ from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as np
 import plotly.graph_objects as go
+from tqdm import tqdm
+from dtw import dtw
+import pandas as pd
 
 from quick_pp.utils import power_law_func, inv_power_law_func
 from quick_pp import logger
@@ -393,3 +396,103 @@ def sw_shf_choo(perm, phit, phie, depth, fwl, ift, theta, gw, ghc, b0=0.4):
         (0.2166 * (pc / (ift * abs(np.cos(np.radians(theta))))) * (
             perm / phit)**(0.5))**(b0 * np.log10(1 + swb**-1) / 3))
     return shf
+
+
+def autocorrelate_core_depth(df):
+    """Automatically shift core depths to match log depths using Dynamic Time Warping (DTW).
+
+    This function aligns core porosity (CPORE) with log porosity (PHIT) to correct for
+    depth discrepancies between core and wireline log measurements. It processes the data
+    on a per-well basis.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing well log and core data. Must include
+                           'WELL_NAME', 'DEPTH', 'PHIT', 'CPORE', 'CPERM', and 'CORE_ID'.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]:
+            - A DataFrame with the original data merged with the depth-corrected core
+              data. New columns include 'DEPTH_CORRECTED', 'CORE_ID_SHIFTED',
+              'CPORE_SHIFTED', and 'CPERM_SHIFTED'.
+            - A summary DataFrame detailing the depth shifts for each core sample,
+              including 'WELL_NAME', 'CORE_ID', 'ORIGINAL_DEPTH', 'DEPTH_CORRECTED',
+              and 'DEPTH_SHIFT'.
+    """
+    required_cols = ['WELL_NAME', 'DEPTH', 'PHIT', 'CPORE', 'CPERM', 'CORE_ID']
+    for col in required_cols:
+        if col not in df.columns:
+            raise AssertionError(f"Missing required column: {col}")
+
+    shift_summaries = []
+    return_df = pd.DataFrame()
+    for well, data in tqdm(df.groupby('WELL_NAME'), desc='Correlating core depths'):
+        core_data = data[['DEPTH', 'CORE_ID', 'CPORE', 'CPERM']].dropna().sort_values('DEPTH').reset_index(drop=True)
+
+        if core_data.empty:
+            return_df = pd.concat([return_df, data])
+            continue
+
+        log_data = data[['DEPTH', 'PHIT']].dropna().sort_values('DEPTH').reset_index(drop=True)
+        tqdm.write(f'Processing {well}: {len(core_data)} core data and {len(log_data)} log data')
+
+        # Create a window of log data around core points to speed up DTW
+        core_indices_in_log = np.searchsorted(log_data.DEPTH, core_data.DEPTH, side='left')
+        window = 1
+        window_indices = core_indices_in_log[:, None] + np.arange(-window, window + 1)
+        window_indices = np.clip(window_indices, 0, len(log_data) - 1)
+        unique_indices = np.unique(window_indices.flatten())
+        log_data_subset = log_data.iloc[unique_indices].reset_index(drop=True)
+
+        # Extract the numpy arrays for the DTW algorithm
+        phit_vals = log_data_subset['PHIT'].values
+        cpore_vals = core_data['CPORE'].values
+
+        alignment = dtw(cpore_vals, phit_vals,
+                        distance_only=False,
+                        keep_internals=True,
+                        step_pattern="symmetric2")
+
+        # The alignment object contains the mapping between indices
+        core_indices = alignment.index1  # Indices for the `core_data` DataFrame
+        log_indices = alignment.index2   # Indices for the `log_data_subset` DataFrame
+
+        # Create a detailed map from the alignment
+        correction_map_df = pd.DataFrame({
+            'ORIGINAL_DEPTH': core_data.loc[core_indices, 'DEPTH'].values,
+            'CORE_ID_SHIFTED': core_data.loc[core_indices, 'CORE_ID'].values,
+            'CPORE_SHIFTED': core_data.loc[core_indices, 'CPORE'].values,
+            'CPERM_SHIFTED': core_data.loc[core_indices, 'CPERM'].values,
+            'MATCHED_PHIT': log_data_subset.loc[log_indices, 'PHIT'].values,
+            'DEPTH_CORRECTED': log_data_subset.loc[log_indices, 'DEPTH'].values
+        })
+
+        # Find the best match for each original core depth by minimizing porosity difference
+        correction_map_df['PORO_DIFF'] = (correction_map_df['CPORE_SHIFTED'] - correction_map_df['MATCHED_PHIT']).abs()
+        correction_map_df['DEPTH_SHIFT'] = round(
+            correction_map_df.DEPTH_CORRECTED - correction_map_df.ORIGINAL_DEPTH, 3)
+        best_matches = correction_map_df.sort_values('PORO_DIFF').drop_duplicates('ORIGINAL_DEPTH')
+
+        if not best_matches.empty:
+            summary = best_matches[['CORE_ID_SHIFTED', 'ORIGINAL_DEPTH', 'DEPTH_CORRECTED', 'DEPTH_SHIFT']].copy()
+            summary.rename(columns={'CORE_ID_SHIFTED': 'CORE_ID'}, inplace=True)
+            summary['WELL_NAME'] = well
+            # Reorder columns for clarity
+            summary = summary[['WELL_NAME', 'CORE_ID', 'ORIGINAL_DEPTH', 'DEPTH_CORRECTED', 'DEPTH_SHIFT']]
+            shift_summaries.append(summary)
+
+        # Merge the corrected core data back into the original well data
+        df_corrected = pd.merge(
+            data,
+            best_matches[['DEPTH_CORRECTED', 'CORE_ID_SHIFTED', 'CPORE_SHIFTED', 'CPERM_SHIFTED']],
+            left_on='DEPTH',
+            right_on='DEPTH_CORRECTED',
+            how='left'
+        )
+        return_df = pd.concat([return_df, df_corrected])
+
+    final_summary_df = pd.DataFrame()
+    # After the loop, combine all summaries into a single DataFrame
+    if shift_summaries:
+        final_summary_df = pd.concat(shift_summaries, ignore_index=True)
+
+    return return_df, final_summary_df
