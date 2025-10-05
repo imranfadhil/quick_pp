@@ -252,10 +252,12 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
     # --- COAL_FLAG traces (special style, always on tracks 4-8, secondary_y=True) ---
     if 'COAL_FLAG' in df.columns and no_of_track >= 8 and default_flags:
         df['COAL_FLAG'] = df['COAL_FLAG'].replace({0: 1e-3, 1: 1e9})  # Cater for plotting on log scale
+        name = 'COAL_FLAG'
         for c in [4, 5, 6, 7, 8]:
             fig.add_trace(
-                go.Scatter(x=df['COAL_FLAG'], y=index, name='COAL_FLAG', line_width=0,
-                           fill='tozerox', fillcolor='rgba(0,0,0,1)', opacity=1),
+                go.Scatter(x=df['COAL_FLAG'], y=index, name=name, line_width=0,
+                           fill='tozerox', fillcolor='rgba(0,0,0,1)', opacity=1,
+                           hovertemplate=f'{name}<extra></extra>'),
                 row=1, col=c, secondary_y=True)
 
     # Add TVD to each tracks if available
