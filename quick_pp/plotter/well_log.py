@@ -245,9 +245,13 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
         fig.update_traces(selector=dict(name='ROCK_FLAG_0'), visible=False)
         for feature in rock_flag_columns:
             fig.add_trace(
-                go.Scatter(x=df[feature], y=index, line_color=COLOR_DICT[feature], name=feature,
-                           fill='tozerox', fillcolor=COLOR_DICT.get(feature, '#000000')),
-                row=1, col=7, secondary_y=False)
+                go.Scatter(
+                    x=df[feature].replace(0, -999.25),
+                    y=index,
+                    line_color=COLOR_DICT[feature],
+                    name=feature,
+                    fill='tozerox', fillcolor=COLOR_DICT.get(feature, '#000000')
+                ), row=1, col=7, secondary_y=False)
 
     # --- COAL_FLAG traces (special style, always on tracks 4-8, secondary_y=True) ---
     if 'COAL_FLAG' in df.columns and no_of_track >= 8 and default_flags:
@@ -255,17 +259,38 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
         name = 'COAL_FLAG'
         for c in [4, 5, 6, 7, 8]:
             fig.add_trace(
-                go.Scatter(x=df['COAL_FLAG'], y=index, name=name, line_width=0,
-                           fill='tozerox', fillcolor='rgba(0,0,0,1)', opacity=1,
-                           hovertemplate=f'{name}<extra></extra>'),
-                row=1, col=c, secondary_y=True)
+                go.Scatter(
+                    x=df['COAL_FLAG'],
+                    y=index, name=name,
+                    line_width=0,
+                    fill='tozerox', fillcolor='rgba(0,0,0,1)', opacity=1,
+                    hovertemplate=f'<b>{name}</b><extra></extra>'
+                    ), row=1, col=c, secondary_y=True)
 
-    # Add TVD to each tracks if available
+    # Add ZONES to hover box in each tracks if available
+    if 'ZONES' in df.columns:
+        for c in range(1, no_of_track + 1):
+            fig.add_trace(
+                go.Scatter(
+                    x=np.zeros(len(df)),
+                    y=index,
+                    name='ZONES',
+                    line={'width': 0},
+                    text=df['ZONES'],
+                    hovertemplate='<b>ZONES</b>: %{text}<extra></extra>',
+                ), row=1, col=c, secondary_y=False)
+
+    # Add TVD to hover box in each tracks if available
     if 'TVD' in df.columns:
         for c in range(1, no_of_track + 1):
             fig.add_trace(
-                go.Scatter(x=df['TVD'], y=index, name='TVD', line={'width': 0}),
-                row=1, col=c, secondary_y=False)
+                go.Scatter(
+                    x=df['TVD'],
+                    y=index,
+                    name='TVD',
+                    line={'width': 0},
+                    hovertemplate='<b>TVD</b>: %{x}<extra></extra>'
+                ), row=1, col=c, secondary_y=False)
 
     # Update xaxis and yaxis layout configurations
     visible_xaxis = [col for col, trace_def in trace_defs.items() if not trace_def.get('hide_xaxis', True)]
