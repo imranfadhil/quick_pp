@@ -35,7 +35,7 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
 
         style = trace_def.get('style', {})
         trace_args = dict(
-            x=df[col],
+            x=round(df[col], 3) if df[col].dtype == 'float64' else df[col],
             y=index,
             name=col,
             **kwargs
@@ -257,6 +257,13 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
                 go.Scatter(x=df[feature], y=index, line_color=COLOR_DICT[feature], name=feature,
                            fill='tozerox', fillcolor=COLOR_DICT.get(feature, '#000000')),
                 row=1, col=7, secondary_y=False)
+
+    # Add TVD to each tracks if available
+    if 'TVD' in df.columns:
+        for c in range(1, no_of_track + 1):
+            fig.add_trace(
+                go.Scatter(x=df['TVD'], y=index, name='TVD', line={'width': 0}),
+                row=1, col=c, secondary_y=False)
 
     # Update xaxis and yaxis layout configurations
     visible_xaxis = [col for col, trace_def in trace_defs.items() if not trace_def.get('hide_xaxis', True)]
