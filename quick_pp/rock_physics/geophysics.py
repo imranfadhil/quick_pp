@@ -174,7 +174,9 @@ def convert_md_to_tvd(df, well_coords):
     Returns:
         pandas.DataFrame: DataFrame with TVD column added.
     """
+    # Filter temp_df to only the range covered by the survey
     dev_survey = wpp.deviation(md=well_coords['md'], inc=well_coords['incl'], azi=well_coords['azim'])
+    df = df[df.DEPTH.between(well_coords['md'].min(), well_coords['md'].max())]
     df['TVD'] = dev_survey.minimum_curvature().resample(df.DEPTH.values).depth
 
     # Get list of columns to resample

@@ -249,8 +249,9 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
     if 'ROCK_FLAG_0' in df.columns and no_of_track >= 7 and default_flags:
         rock_flag_columns = [col for col in df.columns if col.startswith('ROCK_FLAG_')]
         # Remove 'ROCK_FLAG_0' if it already exists as a trace in fig.data
-        rock_flag_columns.remove('ROCK_FLAG_0') if any(
-            trace.name == 'ROCK_FLAG_0' for trace in fig.data) and 'ROCK_FLAG_0' in rock_flag_columns else None
+        if any(trace.name == 'ROCK_FLAG_0' for trace in fig.data):
+            rock_flag_columns.remove('ROCK_FLAG_0')
+        fig.update_traces(selector=dict(name='ROCK_FLAG_0'), visible=False)
         for feature in rock_flag_columns:
             fig.add_trace(
                 go.Scatter(x=df[feature], y=index, line_color=COLOR_DICT[feature], name=feature,

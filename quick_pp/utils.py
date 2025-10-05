@@ -426,6 +426,7 @@ def get_tvd(df, well_coords):
 
     dev_survey = wpp.deviation(md=well_coords['md'], inc=well_coords['incl'], azi=well_coords['azim'])
     # Resample the survey at the exact MD points from the log data
+    df = df[df.DEPTH.between(well_coords['md'].min(), well_coords['md'].max())]
     tvd = dev_survey.minimum_curvature().resample(df['DEPTH'].values).depth
     return tvd
 
