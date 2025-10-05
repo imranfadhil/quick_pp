@@ -351,7 +351,8 @@ XAXIS_DEFS = dict(
         title={'text': 'PERM (mD)', 'font': {'color': COLOR_DICT['PERM'], 'size': font_size}},
         tickfont={'color': COLOR_DICT['PERM'], 'size': font_size},
         side='top', anchor='free', position=.91, title_standoff=.1,
-        range=[np.log10(0.1), np.log10(1e5)], type='log', tickformat='d', tickangle=-90,
+        dtick=0.1, range=[np.log10(0.1), np.log10(1e5)], type='log', 
+        tickmode='array', tickvals=np.geomspace(0.1, 1e5, 7), tickangle=-90,
         minor_showgrid=True
     ),
     SWT=dict(
@@ -442,7 +443,8 @@ XAXIS_DEFS = dict(
         title={'text': 'CPERM (mD)', 'font': {'color': COLOR_DICT['CPERM'], 'size': font_size}},
         tickfont={'color': COLOR_DICT['CPERM'], 'size': font_size},
         side='top', anchor='free', position=.85, title_standoff=.1, overlaying='x5',
-        range=[np.log10(0.1), np.log10(1e5)], type='log', tickformat='d', tickangle=-90,
+        range=[np.log10(0.1), np.log10(1e5)], type='log',
+        tickmode='array', tickvals=np.geomspace(0.1, 1e5, 7), tickangle=-90,
         zeroline=False, showgrid=False
     ),
     SHF=dict(
