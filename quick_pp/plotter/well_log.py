@@ -236,15 +236,6 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
     )
     fig = add_defined_traces(fig, df, index, no_of_track, trace_defs)
 
-    # --- COAL_FLAG traces (special style, always on tracks 4-8, secondary_y=True) ---
-    if 'COAL_FLAG' in df.columns and no_of_track >= 8 and default_flags:
-        df['COAL_FLAG'] = df['COAL_FLAG'].replace({0: 1e-3, 1: 1e9})  # Cater for plotting on log scale
-        for c in [4, 5, 6, 7, 8]:
-            fig.add_trace(
-                go.Scatter(x=df['COAL_FLAG'], y=index, name='COAL_FLAG', line_width=0,
-                           fill='tozerox', fillcolor='rgba(0,0,0,1)', opacity=1),
-                row=1, col=c, secondary_y=True)
-
     # --- ROCK_FLAG_X traces (special style, always on track 7, secondary_y=False) ---
     if 'ROCK_FLAG_0' in df.columns and no_of_track >= 7 and default_flags:
         rock_flag_columns = [col for col in df.columns if col.startswith('ROCK_FLAG_')]
@@ -257,6 +248,15 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
                 go.Scatter(x=df[feature], y=index, line_color=COLOR_DICT[feature], name=feature,
                            fill='tozerox', fillcolor=COLOR_DICT.get(feature, '#000000')),
                 row=1, col=7, secondary_y=False)
+
+    # --- COAL_FLAG traces (special style, always on tracks 4-8, secondary_y=True) ---
+    if 'COAL_FLAG' in df.columns and no_of_track >= 8 and default_flags:
+        df['COAL_FLAG'] = df['COAL_FLAG'].replace({0: 1e-3, 1: 1e9})  # Cater for plotting on log scale
+        for c in [4, 5, 6, 7, 8]:
+            fig.add_trace(
+                go.Scatter(x=df['COAL_FLAG'], y=index, name='COAL_FLAG', line_width=0,
+                           fill='tozerox', fillcolor='rgba(0,0,0,1)', opacity=1),
+                row=1, col=c, secondary_y=True)
 
     # Add TVD to each tracks if available
     if 'TVD' in df.columns:
