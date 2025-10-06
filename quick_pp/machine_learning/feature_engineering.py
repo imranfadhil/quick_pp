@@ -57,15 +57,8 @@ def log_perm(perm):
 
 
 def rock_flag_gr(gr):
-    # get the IQRs as the min and max value
-    q1 = gr.quantile(0.25)
-    q3 = gr.quantile(0.75)
-    iqr = q3 - q1
-    min_gr = q1 - 1.5 * iqr
-    max_gr = q3 + 1.5 * iqr
-
-    vsh_gr = estimate_vsh_gr(gr, min_gr, max_gr)
-    cutoffs = find_cutoffs(vsh_gr, 4)
+    vsh_gr = estimate_vsh_gr(gr)
+    cutoffs = find_cutoffs(vsh_gr, 5)
     return rock_typing(vsh_gr, cut_offs=cutoffs, higher_is_better=False)
 
 

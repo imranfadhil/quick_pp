@@ -9,7 +9,6 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import (classification_report, auc, ConfusionMatrixDisplay, confusion_matrix,
                              r2_score, mean_absolute_error)
 
-from quick_pp.utils import min_max_line
 from quick_pp.lithology import shale_volume_steiber
 from quick_pp import logger
 
@@ -350,20 +349,10 @@ def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
     Returns:
         float: VSH_GR.
     """
+    from sklearn.preprocessing import robust_scale, minmax_scale
     # Normalize gamma ray
     if not max_gr or (not min_gr and min_gr != 0):
-        # Remove high outliers and forward fill missing values
-        # Use IQR for robust outlier detection
-        q1, q3 = np.nanquantile(gr, [0.25, 0.75])
-        iqr = q3 - q1
-        upper_bound = q3 + 1.5 * iqr
-        lower_bound = q1 - 1.5 * iqr
-
-        # Replace outliers with NaN and then forward fill
-        gr_series = pd.Series(gr)
-        gr = gr_series.where((gr_series >= lower_bound) & (gr_series <= upper_bound)).ffill().to_numpy()
-        _, max_gr = min_max_line(gr, alpha)
-        gri = np.where(gr < max_gr, gr / max_gr, 1)
+        gri = minmax_scale(robust_scale(gr))
     else:
         gri = (gr - min_gr) / (max_gr - min_gr)
         gri = np.where(gri < 1, gri, 1)
