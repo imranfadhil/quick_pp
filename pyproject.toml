@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quick-pp"
-version = "0.2.60"
+version = "0.2.61"
 description = "Python package to assist in providing quick-look/ preliminary petrophysical estimation."
 readme = "README.md"
 license = "MIT"
