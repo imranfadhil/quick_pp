@@ -354,6 +354,7 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
             'font_size': 12
         },
         hovermode='y unified',
+        hoverdistance=1,
         dragmode='pan',
         modebar_remove=['lasso', 'select', 'autoscale'],
         modebar_add=['drawline', 'drawcircle', 'drawrect', 'eraseshape'],
