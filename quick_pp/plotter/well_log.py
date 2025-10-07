@@ -255,17 +255,15 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
 
     # --- COAL_FLAG traces (special style, always on tracks 4-8, secondary_y=True) ---
     if 'COAL_FLAG' in df.columns and no_of_track >= 8 and default_flags:
+        COAL_FLAG_HOVER = np.where(df['COAL_FLAG'] == 1, 'COAL_FLAG<extra></extra>', '<extra></extra>')
         df['COAL_FLAG'] = df['COAL_FLAG'].replace({0: 1e-3, 1: 1e9})  # Cater for plotting on log scale
-        name = 'COAL_FLAG'
         for c in [4, 5, 6, 7, 8]:
             fig.add_trace(
                 go.Scatter(
-                    x=df['COAL_FLAG'],
-                    y=index, name=name,
-                    line_width=0,
-                    fill='tozerox', fillcolor='rgba(0,0,0,1)', opacity=1,
-                    hovertemplate=f'<b>{name}</b><extra></extra>'
-                    ), row=1, col=c, secondary_y=True)
+                    x=df['COAL_FLAG'], y=index, text=COAL_FLAG_HOVER,
+                    line_width=0, fill='tozerox', fillcolor='rgba(0,0,0,1)',
+                    hovertemplate='%{text}'
+                ), row=1, col=c, secondary_y=True)
 
     # Add ZONES to hover box in each tracks if available
     if 'ZONES' in df.columns:
@@ -342,8 +340,12 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
                         ), row=1, col=2)
     add_zone_markers(fig, df)
 
+    # Rename y axis to display horizontal lines across
+    for i in range(0, len(fig.data)):
+        fig.data[i].yaxis = 'y'
+
     fig.update_layout(
-        height=1000,
+        height=900,
         autosize=True,
         showlegend=False,
         title={
@@ -355,6 +357,8 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
         },
         hovermode='y unified',
         hoverdistance=1,
+        hoverlabel_font_size=10,
+        hoverlabel_bgcolor='#F3F3F3',
         dragmode='pan',
         modebar_remove=['lasso', 'select', 'autoscale'],
         modebar_add=['drawline', 'drawcircle', 'drawrect', 'eraseshape'],
@@ -362,7 +366,6 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
         template='none',
         margin=dict(l=70, r=0, t=20, b=10),
         paper_bgcolor="#dadada",
-        hoverlabel_bgcolor='#F3F3F3'
     )
 
     return fig
