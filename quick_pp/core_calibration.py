@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import plotly.graph_objects as go
 from tqdm import tqdm
-from dtw import dtw
 import pandas as pd
 
 from quick_pp.utils import power_law_func, inv_power_law_func
@@ -277,21 +276,6 @@ def leverett_j(pc, ift, theta, perm, phit):
     return 0.21665 * pc / (ift * abs(np.cos(np.radians(theta)))) * (perm / phit)**(0.5)
 
 
-def pseudo_leverett_j():
-    """TODO: Generate Pseudo-Leverett J based.
-
-    Args:
-        pc (float): Capillary pressure.
-        ift (float): Interfacial tension.
-        perm (float): Permeability.
-        phit (float): Total porosity.
-
-    Returns:
-        float: Pseudo-Leverett J function.
-    """
-    pass
-
-
 def sw_skelt_harrison(depth, fwl, a, b, c, d):
     """Estimate water saturation based on Skelt-Harrison.
 
@@ -308,6 +292,22 @@ def sw_skelt_harrison(depth, fwl, a, b, c, d):
     """
     h = fwl - depth
     return skelt_harrison_func(h, a, b, c, d)
+
+
+def sw_lambda(phit, h, a, b, lamda):
+    """Estimate water saturation based on Lambda model (Thomeer-type Hyperbolic).
+
+    Args:
+        phit (float): Total porosity in fraction.
+        h (float): Height above free water level.
+        a (float): A constant from the best-fit curve.
+        b (float): B constant from the best-fit curve.
+        lamda (float): Lambda constant from the best-fit curve, related to pore size distribution.
+
+    Returns:
+        float: Water saturation.
+    """
+    return (a / (h * phit**b))**(1 / lamda)
 
 
 def sw_cuddy(phit, h, a, b):
@@ -418,6 +418,7 @@ def autocorrelate_core_depth(df):
               including 'WELL_NAME', 'CORE_ID', 'ORIGINAL_DEPTH', 'DEPTH_CORRECTED',
               and 'DEPTH_SHIFT'.
     """
+    from dtw import dtw
     required_cols = ['WELL_NAME', 'DEPTH', 'PHIT', 'CPORE', 'CPERM', 'CORE_ID']
     for col in required_cols:
         if col not in df.columns:
