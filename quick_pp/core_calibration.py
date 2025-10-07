@@ -290,7 +290,7 @@ def sw_skelt_harrison(depth, fwl, a, b, c, d):
     Returns:
         float: Water saturation.
     """
-    h = fwl - depth
+    h = (fwl - depth).clip(0)
     return skelt_harrison_func(h, a, b, c, d)
 
 
@@ -323,7 +323,7 @@ def sw_cuddy(phit, h, a, b):
     Returns:
         float: Water saturation.
     """
-    return a / phit * h**b
+    return a * h**b / phit
 
 
 def sw_shf_leverett_j(perm, phit, depth, fwl, ift, theta, gw, ghc, a, b, phie=None):
@@ -336,8 +336,8 @@ def sw_shf_leverett_j(perm, phit, depth, fwl, ift, theta, gw, ghc, a, b, phie=No
         fwl (float): Free water level in true vertical depth (ft).
         ift (float): Interfacial tension (dynes/cm).
         theta (float): Wetting angle (degree).
-        gw (float): Gas density (g/cc).
-        ghc (float): Gas height (g/cc).
+        gw (float): Water density (g/cc).
+        ghc (float): Hydrocarbon density (g/cc).
         a (float): A constant from J function.
         b (float): B constant from J function.
         phie (float): Effective porosity (frac), required for clay bound water calculation. Defaults to None.
@@ -345,7 +345,7 @@ def sw_shf_leverett_j(perm, phit, depth, fwl, ift, theta, gw, ghc, a, b, phie=No
     Returns:
         float: Water saturation from saturation height function.
     """
-    h = fwl - depth
+    h = (fwl - depth).clip(0)
     pc = h * (gw - ghc) * .433  # Convert g/cc to psi/ft
     shf = (a / leverett_j(pc, ift, theta, perm, phit))**(1 / b)
     return shf if not phie else shf * (1 - (phie / phit)) + (phie / phit)
@@ -358,16 +358,16 @@ def sw_shf_cuddy(phit, depth, fwl, gw, ghc, a, b):
         phit (float): Porosity (frac).
         depth (float): True vertical depth (ft).
         fwl (float): Free water level in true vertical depth (ft).
-        gw (float): Gas density (g/cc).
-        ghc (float): Gas height (g/cc).
+        gw (float): Water density (g/cc).
+        ghc (float): Hydrocarbon density (g/cc).
         a (float): Cementation exponent.
-        b (float): Saturation exponent.
+        b (float): Saturation exponent (Negative value).
 
     Returns:
         float: Water saturation from saturation height function.
     """
-    h = fwl - depth
-    shf = (h * (gw - ghc) * .433 / a)**(1 / b) / phit
+    h = (fwl - depth).clip(0)
+    shf = a * (h * (gw - ghc) * .433)**b / phit
     return shf
 
 
@@ -382,15 +382,15 @@ def sw_shf_choo(perm, phit, phie, depth, fwl, ift, theta, gw, ghc, b0=0.4):
         fwl (float): Free water level in true vertical depth (ft).
         ift (float): Interfacial tension (dynes/cm).
         theta (float): Wetting angle (degree).
-        gw (float): Gas density (g/cc).
-        ghc (float): Gas height (g/cc).
+        gw (float): Water density (g/cc).
+        ghc (float): Hydrocarbon density (g/cc).
         b0 (float): _description_. Defaults to 0.4.
 
     Returns:
         float: Water saturation from saturation height function.
     """
     swb = 1 - (phie / phit)
-    h = fwl - depth
+    h = (fwl - depth).clip(0)
     pc = h * (gw - ghc) * .433
     shf = 10**((2 * b0 - 1) * np.log10(1 + swb**-1) + np.log10(1 + swb)) / (
         (0.2166 * (pc / (ift * abs(np.cos(np.radians(theta))))) * (
