@@ -201,6 +201,25 @@ def skelt_harrison_xplot(sw, pc, gw, ghc, a, b, c, d, core_group=None, label=Non
 
 
 def skelt_harrison_func(h, a, b, c, d):
+    """Calculate water saturation using the Skelt-Harrison model.
+
+    This function models the relationship between water saturation and the height
+    above the free water level using an exponential decay function.
+
+    Args:
+        h (float or np.array): Height above free water level (ft).
+        a (float): A constant related to irreducible water saturation (Swirr).
+                   It influences the maximum water saturation.
+        b (float): A constant related to the height above free water level (HAFWL).
+                   It controls the rate of saturation change with height.
+        c (float): A constant related to the pore throat size distribution (PTSD).
+                   It affects the shape of the saturation curve.
+        d (float): A constant related to the entry pressure. It shifts the curve
+                   along the height axis.
+
+    Returns:
+        float or np.array: The calculated water saturation (fraction).
+    """
     return 1 - a * np.exp(-(b / (h + d))**c)
 
 
@@ -317,13 +336,13 @@ def sw_cuddy(phit, h, a, b):
         sw (float): Water saturation (frac).
         phit (float): Total porosity (frac).
         h (float): True vertical depth.
-        a (float): Cementation exponent.
-        b (float): Saturation exponent.
+        a (float): Fitting parameter.
+        b (float): Fitting parameter (negative value).
 
     Returns:
         float: Water saturation.
     """
-    return a * h**b / phit
+    return a / (h**b * phit)
 
 
 def sw_shf_leverett_j(perm, phit, depth, fwl, ift, theta, gw, ghc, a, b, phie=None):
@@ -360,14 +379,14 @@ def sw_shf_cuddy(phit, depth, fwl, gw, ghc, a, b):
         fwl (float): Free water level in true vertical depth (ft).
         gw (float): Water density (g/cc).
         ghc (float): Hydrocarbon density (g/cc).
-        a (float): Cementation exponent.
-        b (float): Saturation exponent (Negative value).
+        a (float): Fitting parameter.
+        b (float): Fitting parameter (negative value).
 
     Returns:
         float: Water saturation from saturation height function.
     """
     h = (fwl - depth).clip(0)
-    shf = a * (h * (gw - ghc) * .433)**b / phit
+    shf = a / ((h * (gw - ghc) * .433)**b * phit)
     return shf
 
 
