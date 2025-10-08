@@ -340,10 +340,6 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
                         ), row=1, col=2)
     add_zone_markers(fig, df)
 
-    # Rename y axis to display horizontal lines across
-    for i in range(0, len(fig.data)):
-        fig.data[i].yaxis = 'y'
-
     fig.update_layout(
         height=900,
         autosize=True,
