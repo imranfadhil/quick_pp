@@ -79,6 +79,9 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
 
     logger.debug(f"Waxman-Smits saturation range: {min(swt)} - {max(swt)}")
+    # Post process only valid data
+    invalid_mask = ~((rt > 0) & np.isfinite(rt))
+    swt[invalid_mask] = 1.0
     return swt
 
 
@@ -116,6 +119,9 @@ def normalized_waxman_smits_saturation(rt, rw, phit, vshale, phit_shale, rt_shal
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
 
     logger.debug(f"Normalized Waxman-Smits saturation range: {min(swt)} - {max(swt)}")
+    # Post process only valid data
+    invalid_mask = ~((rt > 0) & np.isfinite(rt))
+    swt[invalid_mask] = 1.0
     return swt
 
 
@@ -151,6 +157,9 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
 
     logger.debug(f"Dual water saturation range: {swt.min():.3f} - {swt.max():.3f}")
+    # Post process only valid data
+    invalid_mask = ~((rt > 0) & np.isfinite(rt))
+    swt[invalid_mask] = 1.0
     return swt
 
 
@@ -298,7 +307,7 @@ def estimate_rw_temperature_salinity(temperature_gradient, water_salinity):
         float: Formation water resistivity.
     """
     logger.debug("Estimating Rw from temperature and salinity")
-    rw = (400000 / temperature_gradient / water_salinity)**.88
+    rw = (400000 / water_salinity)**.88 / temperature_gradient
     logger.debug(f"Formation water resistivity range: {rw.min():.3f} - {rw.max():.3f} ohm.m")
     return rw
 
