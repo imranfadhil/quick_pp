@@ -187,6 +187,7 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
     """
     logger.info(f"Generating stick plot for zone: {zone}")
     assert 'SWT' in data.columns, 'SWT column not found in data.'
+    assert 'TVD' in data.columns, 'TVD column not found in data.'
     assert_well_config_structure(well_config)
 
     # Create BVO and BVOH columns
@@ -204,17 +205,17 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
         logger.debug(f"Plotting well: {well_name}")
         well_data = data[(data['WELL_NAME'] == well_name) & (data['ZONES'] == zone)].copy()
         well_data = update_fluid_contacts(well_data, well_config[well_name]['zones'][zone])
-        ax.plot(well_data['BVO'], well_data['DEPTH'], label=r'$BVO_{Log}$')
+        ax.plot(well_data['BVO'], well_data['TVD'], label=r'$BVO_{Log}$')
         if 'BVOH' in well_data.columns:
-            ax.plot(well_data['BVOH'], well_data['DEPTH'], label=r'$BVO_{SHF}$')
+            ax.plot(well_data['BVOH'], well_data['TVD'], label=r'$BVO_{SHF}$')
 
         # Fill between based on fluid flag
         ax.fill_betweenx(
-            well_data['DEPTH'], 0, 1, where=well_data['FLUID_FLAG'] == 1, color='g', alpha=0.3, label='Oil')
+            well_data['TVD'], 0, 1, where=well_data['FLUID_FLAG'] == 1, color='g', alpha=0.3, label='Oil')
         ax.fill_betweenx(
-            well_data['DEPTH'], 0, 1, where=well_data['FLUID_FLAG'] == 2, color='r', alpha=0.3, label='Gas')
+            well_data['TVD'], 0, 1, where=well_data['FLUID_FLAG'] == 2, color='r', alpha=0.3, label='Gas')
         ax.fill_betweenx(
-            well_data['DEPTH'], 0, 1, where=well_data['FLUID_FLAG'] == 0, color='b', alpha=0.3, label='Water')
+            well_data['TVD'], 0, 1, where=well_data['FLUID_FLAG'] == 0, color='b', alpha=0.3, label='Water')
 
         ax.set_title(f'Well: {well_name}')
         ax.set_xlim(0, .5)
