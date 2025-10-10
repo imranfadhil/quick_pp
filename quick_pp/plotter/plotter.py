@@ -39,19 +39,20 @@ def update_fluid_contacts(well_data, well_config: dict):
     well_data = well_data.copy()
     logger.debug(f"well_data columns before update: {well_data.columns.tolist()}")
     well_data['OIL_FLAG'] = np.where(
-        ((well_data['DEPTH'] > out) | (well_data['DEPTH'] > goc)) & (
-            (well_data['DEPTH'] < odt) | (well_data['DEPTH'] < owc)), 1, 0)
+        ((well_data['TVD'] > out) | (well_data['TVD'] > goc)) & (
+            (well_data['TVD'] < odt) | (well_data['TVD'] < owc)), 1, 0)
 
     well_data['GAS_FLAG'] = np.where(
-        ((well_data['DEPTH'] < gdt) | (well_data['DEPTH'] < gwc) | (well_data['DEPTH'] < goc)) & (
-            well_data['DEPTH'] > gut), 1, 0)
+        ((well_data['TVD'] < gdt) | (well_data['TVD'] < gwc) | (well_data['TVD'] < goc)) & (
+            well_data['TVD'] > gut), 1, 0)
 
     well_data['WATER_FLAG'] = np.where(
-        ((well_data['DEPTH'] > wut) | (well_data['DEPTH'] > owc) | (well_data['DEPTH'] > gwc)), 1, 0)
+        ((well_data['TVD'] > wut) | (well_data['TVD'] > owc) | (well_data['TVD'] > gwc)), 1, 0)
 
     well_data['FLUID_FLAG'] = np.where(
         well_data['OIL_FLAG'] == 1, 1, np.where(
-            well_data['GAS_FLAG'] == 1, 2, 0))
+            well_data['GAS_FLAG'] == 1, 2, np.where(
+                well_data['WATER_FLAG'] == 1, 0, -1)))
 
     return well_data
 
@@ -221,7 +222,7 @@ def stick_plot(data, well_config: dict, zone: str = 'ALL'):
         ax.set_xlim(0, .5)
         ax.legend()
 
-    axes[0].set_ylabel('Depth')
+    axes[0].set_ylabel('Depth (TVD)')
     fig.subplots_adjust(wspace=0.3, hspace=0)
     fig.set_facecolor('aliceblue')
     plt.gca().invert_yaxis()
