@@ -18,7 +18,6 @@ class Project(object):
         self.project_path = project_path or os.path.join("data", "04_project")
         self.data_path = os.path.join(self.project_path, self.name)
         self.output_path = os.path.join(self.data_path, "outputs")
-        os.makedirs(self.data_path, exist_ok=True)
         os.makedirs(self.output_path, exist_ok=True)
         logger.info(f"Project '{name}' initialized with path: {self.data_path}")
 
@@ -182,15 +181,17 @@ class Well(object):
         self.config.update(config)
         self.update_history(action=f"Updated config for well {self.name}")
 
-    def export_to_parquet(self, folder=os.path.join("data", "04_project", "outputs")):
-        os.makedirs(folder, exist_ok=True)
+    def export_to_parquet(self, folder=None):
+        if not folder:
+            folder = self.output_path
         path = os.path.join(folder, f"{self.name}.parquet")
         logger.info(f"Exporting well data to parquet: {path}")
         self.data.to_parquet(path)
         logger.debug(f"Exported {len(self.data)} records to parquet")
 
-    def export_to_las(self, folder=os.path.join("data", "04_project", "outputs")):
-        os.makedirs(folder, exist_ok=True)
+    def export_to_las(self, folder=None):
+        if not folder:
+            folder = self.output_path
         logger.info(f"Exporting well data to LAS format in folder: {folder}")
         las.export_to_las(well_data=self.data, well_name=self.name, folder=folder)
 
