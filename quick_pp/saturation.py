@@ -80,7 +80,7 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
 
     logger.debug(f"Waxman-Smits saturation range: {min(swt)} - {max(swt)}")
     # Post process only valid data
-    invalid_mask = ~((rt > 0) & np.isfinite(rt))
+    invalid_mask = ~((rt > 0) & np.isfinite(rt) & (phit > 0) & np.isfinite(phit))
     swt[invalid_mask] = 1.0
     return swt
 
@@ -120,7 +120,7 @@ def normalized_waxman_smits_saturation(rt, rw, phit, vshale, phit_shale, rt_shal
 
     logger.debug(f"Normalized Waxman-Smits saturation range: {min(swt)} - {max(swt)}")
     # Post process only valid data
-    invalid_mask = ~((rt > 0) & np.isfinite(rt))
+    invalid_mask = ~((rt > 0) & np.isfinite(rt) & (phit > 0) & np.isfinite(phit))
     swt[invalid_mask] = 1.0
     return swt
 
@@ -158,7 +158,7 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
 
     logger.debug(f"Dual water saturation range: {swt.min():.3f} - {swt.max():.3f}")
     # Post process only valid data
-    invalid_mask = ~((rt > 0) & np.isfinite(rt))
+    invalid_mask = ~((rt > 0) & np.isfinite(rt) & (phit > 0) & np.isfinite(phit))
     swt[invalid_mask] = 1.0
     return swt
 
