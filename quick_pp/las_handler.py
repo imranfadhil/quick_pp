@@ -9,7 +9,7 @@ import welly
 from quick_pp import logger
 
 
-def read_las_files(las_files):
+def read_las_files(las_files, depth_uom=None):
     """
     1. Return df and well_header as df from .las files
     2. For every las files, curves_df, header_df, welly_object are returned through function "read_las_file"
@@ -27,7 +27,7 @@ def read_las_files(las_files):
 
     for f in las_files:
         try:
-            df, well_header = read_las_file_welly(f)
+            df, well_header = read_las_file_welly(f, depth_uom)
         except Exception as e:
             logger.error(f"[read_las_files] Exception for {f.name} | {e} ")
             df, well_header, _ = read_las_file_mmap(f)
@@ -143,10 +143,10 @@ def read_las_file_mmap(file_object, required_sets=['PEP']):  # noqa
     return curves_df, header_df, welly_object
 
 
-def read_las_file_welly(file_object):
+def read_las_file_welly(file_object, depth_uom=None):
     welly_dataset = welly.las.from_las(file_object.name)
     well_header = welly_dataset['Header']
-    welly_object = welly.well.Well.from_datasets(welly_dataset)
+    welly_object = welly.well.Well.from_datasets(welly_dataset, index_units=depth_uom)
     df = pre_process(welly_object)
     return df, well_header
 

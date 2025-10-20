@@ -21,12 +21,12 @@ class Project(object):
         os.makedirs(self.output_path, exist_ok=True)
         logger.info(f"Project '{name}' initialized with path: {self.data_path}")
 
-    def read_las(self, path: list):
+    def read_las(self, path: list, depth_uom=None):
         logger.info(f"Reading {len(path)} LAS files for project '{self.name}'")
         for file in path:
             logger.debug(f"Processing LAS file: {file}")
             well = Well()
-            well.read_las(file)
+            well.read_las(file, depth_uom)
             self.save_well(well)
         self.update_history(action=f"Read LAS file for project {self.name}")
 
@@ -153,14 +153,14 @@ class Well(object):
         self.description = description
         logger.debug(f"Well object initialized: {name}")
 
-    def read_las(self, path: str):
+    def read_las(self, path: str, depth_uom=None):
         logger.info(f"Reading LAS file: {path}")
         with open(path, "rb") as f:
-            data, header = las.read_las_files([f])
+            data, header = las.read_las_files([f], depth_uom)
         header_df = header.T
         self.name = header_df[header_df['mnemonic'] == 'WELL']['value'].values[0].replace("/", "-")
         self.description = f"Well {self.name}"
-        self.depth_uom = header_df[header_df['mnemonic'] == 'STRT']['unit'].values[0]
+        self.depth_uom = depth_uom or header_df[header_df['mnemonic'] == 'STRT']['unit'].values[0]
         self.data = data
         self.header = header
         logger.info(f"LAS file loaded: {self.name} with {len(data)} records, depth unit: {self.depth_uom}")
