@@ -61,7 +61,7 @@ def badhole_flagging(data, thold=4):
         return series.where(s < m, series.median())
 
     bit_sizes = {
-        # 6.0: 6.0,
+        6.0: 6.0,
         8.5: 8.5,
         12.25: 12.25,
         17.5: 17.5
