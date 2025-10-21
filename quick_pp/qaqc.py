@@ -93,7 +93,7 @@ def badhole_flagging(data, thold=4):
                     peaks = []
 
                 jump = 60
-                algo = rpt.BottomUp(model=model, jump=jump).fit(signal_data)
+                algo = rpt.BottomUp(model=model, jump=jump).fit(signal_data.to_numpy())
                 my_bkps = algo.predict(n_bkps=len(peaks))
 
                 # Determine the bit sizes based on break points
