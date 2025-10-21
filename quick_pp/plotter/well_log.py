@@ -251,7 +251,7 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
                 ), row=1, col=7, secondary_y=False)
 
     # --- COAL_FLAG traces (special style, always on tracks 4-8, secondary_y=True) ---
-    if 'COAL_FLAG' in df.columns and no_of_track >= 8 and trace_defs == TRACE_DEFS:
+    if 'COAL_FLAG' in df.columns and no_of_track >= 8:
         COAL_FLAG_HOVER = np.where(df['COAL_FLAG'] == 1, 'COAL_FLAG<extra></extra>', '<extra></extra>')
         df['COAL_FLAG'] = df['COAL_FLAG'].replace({0: 1e-3, 1: 1e9})  # Cater for plotting on log scale
         for c in [4, 5, 6, 7, 8]:
