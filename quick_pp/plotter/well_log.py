@@ -202,10 +202,7 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
     >>> fig = plotly_log(well_data, depth_uom='m')
     >>> fig.show()
     """
-    default_flags = False
-    if trace_defs == dict():
-        trace_defs = TRACE_DEFS
-        default_flags = True
+    trace_defs = TRACE_DEFS if trace_defs == dict() else trace_defs
 
     xaxis_defs = xaxis_defs or XAXIS_DEFS
     no_of_track = max([trace['track'] for trace in trace_defs.values()])
@@ -237,7 +234,7 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
     fig = add_defined_traces(fig, df, index, no_of_track, trace_defs)
 
     # --- ROCK_FLAG_X traces (special style, always on track 7, secondary_y=False) ---
-    if 'ROCK_FLAG_0' in df.columns and no_of_track >= 7 and default_flags:
+    if 'ROCK_FLAG_0' in df.columns and no_of_track >= 7 and 'ROCK_FLAG_0' in trace_defs.keys():
         rock_flag_columns = [col for col in df.columns if col.startswith('ROCK_FLAG_')]
         # Remove 'ROCK_FLAG_0' if it already exists as a trace in fig.data
         if any(trace.name == 'ROCK_FLAG_0' for trace in fig.data):
@@ -254,7 +251,7 @@ def plotly_log(well_data, well_name: str = '', depth_uom="", trace_defs: dict = 
                 ), row=1, col=7, secondary_y=False)
 
     # --- COAL_FLAG traces (special style, always on tracks 4-8, secondary_y=True) ---
-    if 'COAL_FLAG' in df.columns and no_of_track >= 8 and default_flags:
+    if 'COAL_FLAG' in df.columns and no_of_track >= 8 and trace_defs == TRACE_DEFS:
         COAL_FLAG_HOVER = np.where(df['COAL_FLAG'] == 1, 'COAL_FLAG<extra></extra>', '<extra></extra>')
         df['COAL_FLAG'] = df['COAL_FLAG'].replace({0: 1e-3, 1: 1e9})  # Cater for plotting on log scale
         for c in [4, 5, 6, 7, 8]:
