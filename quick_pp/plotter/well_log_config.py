@@ -327,7 +327,7 @@ XAXIS_DEFS = dict(
         title={'text': 'GR (API)', 'font': {'color': COLOR_DICT['GR'], 'size': font_size}},
         tickfont={'color': COLOR_DICT['GR'], 'size': font_size},
         side='top', anchor='free', position=.85,
-        title_standoff=.1, dtick=40, range=[0, 200], type='linear', zeroline=False
+        title_standoff=.1, dtick=50, range=[0, 200], type='linear', zeroline=False
     ),
     RT=dict(
         title={'text': 'RT (ohm.m)', 'font': {'color': COLOR_DICT['RT'], 'size': font_size}},
@@ -413,13 +413,13 @@ XAXIS_DEFS = dict(
         title={'text': 'CALI (inches)', 'font': {'color': COLOR_DICT['CALI'], 'size': font_size}},
         tickfont={'color': COLOR_DICT['CALI'], 'size': font_size},
         side='top', anchor='free', position=.89, title_standoff=.1, overlaying='x1',
-        dtick=6, range=[6, 24], type='linear', showgrid=False
+        dtick=4, range=[4, 20], type='linear', showgrid=False
     ),
     BS=dict(
         title={'text': 'BS (inches)', 'font': {'color': COLOR_DICT['BS'], 'size': font_size}},
         tickfont={'color': COLOR_DICT['BS'], 'size': font_size},
         side='top', anchor='free', position=.92, title_standoff=.1, overlaying='x1',
-        dtick=6, range=[6, 24], type='linear', showgrid=False
+        dtick=4, range=[4, 20], type='linear', showgrid=False
     ),
     BADHOLE=dict(
         title={'text': 'BADHOLE', 'font': {'color': COLOR_DICT['BADHOLE'], 'size': font_size}},
