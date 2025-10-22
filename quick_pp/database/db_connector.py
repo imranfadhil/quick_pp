@@ -34,7 +34,7 @@ class DBConnector:
 
         if db_url is None:
             # Default to a local SQLite DB if no URL is provided.
-            db_url = os.environ.get("DATABASE_URL", "sqlite:///./data/quick_pp.db")
+            db_url = os.environ.get("QPP_DATABASE_URL", "sqlite:///./data/quick_pp.db")
 
         DBConnector._engine = create_engine(db_url, pool_pre_ping=True)
         DBConnector._Session = sessionmaker(

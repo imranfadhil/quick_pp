@@ -92,10 +92,10 @@ CREATE TABLE "curves" (
 CREATE TABLE "curve_data" (
     "curve_data_id" INTEGER PRIMARY KEY AUTOINCREMENT,
     "curve_id" INTEGER NOT NULL REFERENCES "curves"("curve_id") ON DELETE CASCADE,
-    "depth" REAL NOT NULL,
+    "data_idx" INTEGER NOT NULL,
     "value_numeric" REAL,
     "value_text" TEXT,
-    UNIQUE("curve_id", "depth"),
+    UNIQUE("curve_id", "data_idx"),
     -- Ensure that for any row, either the numeric or the text value is populated, but not both.
     CHECK ((value_numeric IS NOT NULL AND value_text IS NULL) OR (value_numeric IS NULL AND value_text IS NOT NULL) OR (value_numeric IS NULL AND value_text IS NULL))
 );

@@ -124,7 +124,6 @@ class Project(object):
                 well_obj.update_data(well_data)
             else:
                 logger.warning(f"Well '{well_name}' not found in project '{self.name}'. Skipping update.")
-        # Commit is handled by the session context manager
 
     def get_all_data(self) -> pd.DataFrame:
         logger.debug(f"Retrieving all data from project '{self.name}'")
@@ -353,12 +352,12 @@ class Well(object):
             # Create new data points
             if is_numeric:
                 curve_data_points = [
-                    ORMCurveData(depth=depth, value_numeric=value)
-                    for depth, value in zip(parsed_data.index, values) if pd.notna(value)]
+                    ORMCurveData(data_idx=data_idx, value_numeric=value)
+                    for data_idx, value in zip(parsed_data.index, values) if pd.notna(value)]
             else:
                 curve_data_points = [
-                    ORMCurveData(depth=depth, value_text=value)
-                    for depth, value in zip(parsed_data.index, values) if pd.notna(value)]
+                    ORMCurveData(data_idx=data_idx, value_text=value)
+                    for data_idx, value in zip(parsed_data.index, values) if pd.notna(value)]
             orm_curve.data.extend(curve_data_points)
 
         logger.info(f"Well '{self.name}' data updated from LAS parse. {len(parsed_data.columns)} curves processed.")
@@ -391,13 +390,13 @@ class Well(object):
             # Create new data points, skipping NaNs
             if is_numeric:
                 curve_data_points = [
-                    ORMCurveData(depth=depth, value_numeric=value)
-                    for depth, value in zip(data.index, values) if pd.notna(value)
+                    ORMCurveData(data_idx=data_idx, value_numeric=value)
+                    for data_idx, value in zip(data.index, values) if pd.notna(value)
                 ]
             else:
                 curve_data_points = [
-                    ORMCurveData(depth=depth, value_text=value)
-                    for depth, value in zip(data.index, values) if pd.notna(value)
+                    ORMCurveData(data_idx=data_idx, value_text=value)
+                    for data_idx, value in zip(data.index, values) if pd.notna(value)
                 ]
             orm_curve.data.extend(curve_data_points)
         logger.debug(f"Updated {len(data.columns)} curves for well '{self.name}'.")
@@ -417,12 +416,12 @@ class Well(object):
         for curve in self._orm_well.curves:
             if not curve.data:
                 continue
-            depths = [d.depth for d in curve.data]
+            data_idx = [d.data_idx for d in curve.data]
             if curve.data_type == 'numeric':
                 values = [d.value_numeric for d in curve.data]
             else:  # 'text'
                 values = [d.value_text for d in curve.data]
-            curve_df = pd.DataFrame({curve.mnemonic: values}, index=pd.Index(depths, name='DEPTH'), dtype=object)
+            curve_df = pd.DataFrame({curve.mnemonic: values}, index=pd.Index(data_idx, name='DATA_IDX'), dtype=object)
             all_curves_data.append(curve_df)
 
         if not all_curves_data:
