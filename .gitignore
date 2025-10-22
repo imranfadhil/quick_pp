@@ -121,3 +121,4 @@ data/*
 chainlit*
 .files**
 **_info**
+**/quick_pp.db*
