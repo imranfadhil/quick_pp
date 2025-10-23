@@ -94,7 +94,7 @@ class Project(object):
                 logger.warning(f"Well '{well_name}' already exists in project '{self.name}'. Skipping or updating.")
                 # Optionally, load and update the existing well
                 well_obj = Well(self.db_session, well_id=existing_well.well_id)
-                well_obj.update_data_from_las_parse(well_data, header_data_dict)
+                well_obj.update_data_from_las_parse(well_data, header_data)
             else:
                 well_obj = Well(
                     self.db_session,
@@ -104,7 +104,7 @@ class Project(object):
                     header_data=header_data_dict,
                     depth_uom=depth_uom
                 )
-                well_obj.update_data_from_las_parse(well_data, header_data_dict)
+                well_obj.update_data_from_las_parse(well_data, header_data)
                 self.db_session.add(well_obj._orm_well)
                 self.db_session.flush()
 
@@ -120,7 +120,8 @@ class Project(object):
             if orm_well:
                 well_obj = Well(self.db_session, well_id=orm_well.well_id)
                 well_obj.update_data(well_data)
-                well_obj.update_config(well_configs.get(well_name, {}))
+                if well_configs is not None:
+                    well_obj.update_config(well_configs.get(well_name, {}))
                 well_obj.save()  # Persist the updated data and config to the DB
             else:
                 logger.warning(f"Well '{well_name}' not found in project '{self.name}'. Skipping update.")
@@ -306,14 +307,14 @@ class Well(object):
         """Loads a well from the database by ID."""
         return cls(db_session=db_session, well_id=well_id)
 
-    def update_data_from_las_parse(self, parsed_data: pd.DataFrame, parsed_header: Dict[str, Any]):
+    def update_data_from_las_parse(self, parsed_data: pd.DataFrame, parsed_header: pd.DataFrame):
         """
         Updates well's header and curve data from LAS parsing results.
         `parsed_data` is expected to be a DataFrame where index is depth and columns are curve mnemonics.
         `parsed_header` is a dictionary of header information.
         """
         logger.info(f"Updating well '{self.name}' from LAS parse.")
-        self.header_data = parsed_header
+        self.header_data = parsed_header.to_dict()
 
         # Get existing curve mnemonics for this well
         existing_mnemonics = {c.mnemonic for c in self._orm_well.curves}
@@ -338,8 +339,8 @@ class Well(object):
                 orm_curve = ORMCurve(
                     well_id=self.well_id,
                     mnemonic=mnemonic,
-                    unit=parsed_header.get(mnemonic, {}).get('unit'),
-                    description=parsed_header.get(mnemonic, {}).get('description'),
+                    unit=las.get_unit_from_header(parsed_header, mnemonic),
+                    description=las.get_descr_from_header(parsed_header, mnemonic),
                     data_type=data_type
                 )
                 self._orm_well.curves.append(orm_curve)

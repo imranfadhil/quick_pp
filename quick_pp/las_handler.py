@@ -10,17 +10,22 @@ from quick_pp import logger
 
 
 def read_las_files(las_files, depth_uom=None):
-    """
-    1. Return df and well_header as df from .las files
-    2. For every las files, curves_df, header_df, welly_object are returned through function "read_las_file"
-    3. curves_df from all files are appended into merged_data
-    4. header_df from all files are appended into header_data
+    """Reads multiple LAS files and merges their data and headers.
+
+    This function iterates through a list of LAS file objects, reads each one,
+    and concatenates the curve data and header information into two separate
+    pandas DataFrames. It attempts to read with `welly` first and falls back
+    to a memory-mapped approach if `welly` fails.
 
     Args:
-        las_files (list): list of las files opened as binary.
+        las_files (list): A list of file-like objects opened in binary mode.
+        depth_uom (str, optional): The unit of measurement for the depth index.
+                                   Used by `welly` during reading. Defaults to None.
 
     Returns:
-        pd.DataFrame: Merged data, header data.
+        tuple[pd.DataFrame, pd.DataFrame]:
+            - A DataFrame containing the merged curve data from all LAS files.
+            - A DataFrame containing the merged header information from all LAS files.
     """
     merged_data = pd.DataFrame()
     header_data = pd.DataFrame()
@@ -40,14 +45,25 @@ def read_las_files(las_files, depth_uom=None):
 
 
 def read_las_file_mmap(file_object, required_sets=['PEP']):  # noqa
-    """Check LAS file and concat datasets if more than one.
+    """Reads a single LAS file using a memory-mapped approach, handling multiple data sets.
+
+    This function is designed to parse LAS files, especially those with multiple
+    data sets (e.g., different logging runs), which might not be handled correctly
+    by standard parsers. It uses memory-mapping for efficient file access and can
+    selectively extract required data sets.
 
     Args:
-        file_object (str): las file object.
-        required_sets (list, optional): Required param set to be extracted. Defaults to ['PEP'].
+        file_object (file): A file-like object opened in binary mode.
+        required_sets (list, optional): A list of data set identifiers to extract.
+                                        If the LAS file contains multiple sets, only
+                                        those matching the identifiers in this list
+                                        will be processed. Defaults to ['PEP'].
 
     Returns:
-        pd.Dataframe: well_df, header_df and welly_object
+        tuple[pd.DataFrame, pd.DataFrame, welly.well.Well]:
+            - A DataFrame containing the curve data.
+            - A DataFrame containing the header information.
+            - A `welly.well.Well` object representing the well.
     """
     fileno = file_object.fileno()  # identifier for files
     parameter_line_numbers = []
@@ -139,6 +155,23 @@ def read_las_file_mmap(file_object, required_sets=['PEP']):  # noqa
 
 
 def read_las_file_welly(file_object, depth_uom=None):
+    """Reads a LAS file using the welly library.
+
+    This function provides a straightforward way to read a LAS file into a
+    `welly` object, which is then processed to extract curve data and header
+    information into pandas DataFrames.
+
+    Args:
+        file_object (file): A file-like object, from which the `.name` attribute
+                            (file path) is used by `welly`.
+        depth_uom (str, optional): The unit of measurement for the depth index.
+                                   Passed to `welly` for index creation. Defaults to None.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]:
+            - A DataFrame containing the processed curve data.
+            - A DataFrame containing the header information.
+    """
     welly_dataset = welly.las.from_las(file_object.name)
     welly_object = welly.well.Well.from_datasets(welly_dataset, index_units=depth_uom)
     df, well_header = pre_process(welly_object)
@@ -146,18 +179,21 @@ def read_las_file_welly(file_object, depth_uom=None):
 
 
 def pre_process(welly_object):
-    """Pre-process welly_object
+    """Pre-processes a `welly` object to extract and clean data.
 
-    1. Resample depth for welly_object
-    2. Replace NULL value with nan
-    3. Insert well name at first column
-    4. Insert field name at first column
+    This function takes a `welly.well.Well` object and performs several
+    pre-processing steps:
+    1. Converts the depth index to a 'DEPTH' column.
+    2. Replaces LAS-defined NULL values with `np.nan`.
+    3. Inserts 'WELL_NAME' and 'UWI' columns at the beginning of the DataFrame.
 
     Args:
-        welly_object (well object): Welly object for PEP dataset
+        welly_object (welly.well.Well): The welly object to process.
 
     Returns:
-        pd.Dataframe: Processed data.
+        tuple[pd.DataFrame, pd.DataFrame]:
+            - A DataFrame containing the processed curve data.
+            - A DataFrame containing the header information.
     """
     # Convert index 'DEPTH' as column
     data_df = welly_object.las[0]
@@ -172,7 +208,7 @@ def pre_process(welly_object):
     # Insert well name
     well_name = get_wellname_from_header(header_df)
     if 'WELL_NAME' not in data_df.columns:
-        data_df.insert(0, 'WELL_NAME', well_name.replace("/", "-").replace(" ", "-"))
+        data_df.insert(0, 'WELL_NAME', well_name)
     # Insert UWI if available
     if 'UWI' in header_df['mnemonic'].values:
         uwi = get_uwi_from_header(header_df)
@@ -182,26 +218,70 @@ def pre_process(welly_object):
 
 
 def get_wellname_from_header(header_df):
+    """Extracts the well name from the LAS header DataFrame.
+
+    Args:
+        header_df (pd.DataFrame): The LAS header data.
+
+    Returns:
+        str: The well name, with slashes and spaces replaced by hyphens.
+    """
     return header_df[
         (header_df['mnemonic'] == 'WELL') | (header_df['descr'].str.upper() == 'WELL')
-    ]['value'].values[0]
+    ]['value'].values[0].replace("/", "-").replace(" ", "-")
 
 
 def get_uwi_from_header(header_df):
+    """Extracts the Unique Well Identifier (UWI) from the LAS header DataFrame.
+
+    If the UWI is not found, it falls back to using the well name.
+
+    Args:
+        header_df (pd.DataFrame): The LAS header data.
+
+    Returns:
+        str: The UWI or well name, with slashes and spaces replaced by hyphens.
+    """
     uwi = header_df[
             (header_df['mnemonic'] == 'UWI') | (header_df['descr'].str.upper() == 'UNIQUE WELL ID')
-        ]['value'].values[0]
+        ]['value'].values[0].replace("/", "-").replace(" ", "-")
     return uwi if uwi else get_wellname_from_header(header_df)
 
 
-def extract_dataset(section_dict):
-    """Extract dataset from section_dict. For only Las file with ONE (1) dataset
+def get_unit_from_header(header_df, mnemonic):
+    """Extracts the unit for a specific curve mnemonic from the LAS header.
 
-    1. Assign well information section as header_bytes
-    2. Loop through parameter, curve, and ASCII sections, assign their section values into data_bytes
-    3. create file_object by decoding and concat header_bytes and data_bytes
-    4. Using lasio.read and welly.well.from_lasio, create welly_object & well_df from file_object
-    5. Through function "pre_process", return df with null replaced by nan, addition of column with well and field name
+    Args:
+        header_df (pd.DataFrame): The LAS header data.
+        mnemonic (str): The curve mnemonic to look for.
+
+    Returns:
+        str or None: The unit of the curve, or None if not found.
+    """
+    return header_df[header_df['mnemonic'] == mnemonic]['unit'].values[0] if any(
+        header_df['mnemonic'].str.contains(mnemonic)) else None
+
+
+def get_descr_from_header(header_df, mnemonic):
+    """Extracts the description for a specific curve mnemonic from the LAS header.
+
+    Args:
+        header_df (pd.DataFrame): The LAS header data.
+        mnemonic (str): The curve mnemonic to look for.
+
+    Returns:
+        str or None: The description of the curve, or None if not found.
+    """
+    return header_df[header_df['mnemonic'] == mnemonic]['descr'].values[0] if any(
+        header_df['mnemonic'].str.contains(mnemonic)) else None
+
+
+def extract_dataset(section_dict):
+    """Extracts a single dataset from a dictionary of LAS file sections.
+
+    This function is intended for LAS files that contain only one data set.
+    It reconstructs the LAS file content from the separated sections, reads it
+    using `lasio` and `welly`, and then pre-processes the result.
 
     Args:
         section_dict (dict): Dictionary containing the LAS file section values.
@@ -231,18 +311,21 @@ def extract_dataset(section_dict):
 
 
 def concat_datasets(file_object, header_line_numbers, parameter_line_numbers, required_sets=['PEP']):
-    """Concat required datasets in the LAS file.
+    """Extracts and concatenates specified datasets from a multi-set LAS file.
 
-    1. Iterate through list of parameter_line_numbers, by extracting only param_set of 'PEP'
-    2. Through pointer position, subset and then concat well_info and file_object
-    3. Through function "pre_process", return df with null replaced by nan, addition of column with well and field name
+    This function iterates through the parameter sections identified in a LAS file.
+    For each section that matches the `required_sets`, it reconstructs a temporary
+    single-set LAS file in memory, reads it, and concatenates the resulting data.
 
     Args:
-        file_object (object): File .read() object.
-        header_line_numbers (list of tuples): Pointer location and line number of the header information.
-        parameter_line_numbers (list of tuples): (parameter_count, parameter_set, pointer location, line number) of the
-        ~Parameters in the LAS file.
-        required_sets (list): Required sets to be concatenated.
+        file_object (bytes): The full content of the LAS file as a bytes object.
+        header_line_numbers (list): A list of tuples defining the start and end
+                                    pointers for the main well header section.
+        parameter_line_numbers (list): A list of tuples, each containing metadata
+                                       about a `~Parameter` section, including its
+                                       set identifier and pointer location.
+        required_sets (list, optional): A list of data set identifiers to extract
+                                        and concatenate. Defaults to ['PEP'].
 
     Returns:
         pd.Dataframe, pd.Dataframe, welly_object: well_df, header_df and welly_object
@@ -275,13 +358,15 @@ def concat_datasets(file_object, header_line_numbers, parameter_line_numbers, re
 
 
 def check_index_consistent(welly_object):
-    """Check if index is consistent in welly_object
+    """Checks if the depth index of a welly object is consistent.
+
+    A consistent index means it is monotonically increasing with a constant step.
 
     Args:
-        welly_object (object): Welly object
+        welly_object (welly.well.Well): The welly object to check.
 
     Returns:
-        bool: True if index is consistent
+        bool: True if the index is consistent, False otherwise.
     """
     try:
         index_diff = np.diff(welly_object.las[0].index)
@@ -295,11 +380,18 @@ def check_index_consistent(welly_object):
 
 
 def export_to_las(well_data, well_name, folder='', vars_units=None):
-    """Export dataframe to las file. Expecting a DEPTH column in meters unit.
+    """Exports a DataFrame of well data to a LAS file.
+
+    The input DataFrame is expected to have a 'DEPTH' column, which will be
+    used as the index for the LAS file.
 
     Args:
-        data_df (pd.DataFrame): data input
-        well_name (str): well name
+        well_data (pd.DataFrame): The DataFrame containing the well log data.
+        well_name (str): The name of the well, used for the output filename.
+        folder (str, optional): The directory to save the LAS file in. Defaults to ''.
+        vars_units (dict, optional): A dictionary mapping curve mnemonics to their
+                                     units. If not provided, it will be inferred
+                                     from the configuration.
     """
     from .config import Config
     units = vars_units if vars_units else Config.vars_units(well_data)

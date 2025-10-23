@@ -86,9 +86,9 @@ class DBConnector:
         script_dir = os.path.dirname(__file__)
         db_type = "sqlite" if "sqlite" in DBConnector._engine.url.drivername else "postgresql"
         if db_type == "sqlite":
-            sql_script = "sqlite_setup.sql"
+            sql_script = "setup_sqlite_db.sql"
         elif db_type == "postgresql":
-            sql_script = "postgresql_setup.sql"
+            sql_script = "setup_postgresql_db.sql"
         else:
             raise ValueError(f"Unsupported database type: {db_type}")
 
