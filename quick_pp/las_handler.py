@@ -163,6 +163,7 @@ def pre_process(welly_object):
     data_df = welly_object.las[0]
     data_df.index.rename('DEPTH', inplace=True)
     data_df = data_df.reset_index(drop=False)
+    data_df['DEPTH'] = data_df['DEPTH'].round(4)
 
     header_df = welly_object.header
     nullValue = header_df[header_df['mnemonic'] == 'NULL']['value'].values[0] if \

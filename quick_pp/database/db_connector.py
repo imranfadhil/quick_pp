@@ -25,7 +25,7 @@ class DBConnector:
 
         Args:
             db_url (str | None): The database connection URL. If not provided,
-                                 it will try to use the DATABASE_URL environment
+                                 it will try to use the QPP_DATABASE_URL environment
                                  variable. Defaults to a local SQLite database
                                  if the environment variable is not set.
         """
@@ -84,4 +84,12 @@ class DBConnector:
         Setup quick_pp database.
         """
         script_dir = os.path.dirname(__file__)
-        self.run_sql_script(os.path.join(script_dir, 'setup_db.sql'))
+        db_type = "sqlite" if "sqlite" in DBConnector._engine.url.drivername else "postgresql"
+        if db_type == "sqlite":
+            sql_script = "sqlite_setup.sql"
+        elif db_type == "postgresql":
+            sql_script = "postgresql_setup.sql"
+        else:
+            raise ValueError(f"Unsupported database type: {db_type}")
+
+        self.run_sql_script(os.path.join(script_dir, sql_script))

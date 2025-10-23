@@ -118,12 +118,12 @@ class CurveData(Base):
 
     curve_data_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     curve_id: Mapped[int] = mapped_column(ForeignKey("curves.curve_id", ondelete="CASCADE"), nullable=False)
-    data_idx: Mapped[float] = mapped_column(Integer, nullable=False)
+    depth: Mapped[float] = mapped_column(REAL, nullable=False)
     value_numeric: Mapped[Optional[float]] = mapped_column(REAL)
     value_text: Mapped[Optional[str]] = mapped_column(Text)
 
     __table_args__ = (
-        UniqueConstraint("curve_id", "data_idx", name="uq_curve_id_data_idx"),
+        UniqueConstraint("curve_id", "depth", name="uq_curve_id_depth"),
         CheckConstraint(
             "(value_numeric IS NOT NULL AND value_text IS NULL) OR "
             "(value_numeric IS NULL AND value_text IS NOT NULL) OR "
@@ -135,7 +135,7 @@ class CurveData(Base):
     curve: Mapped["Curve"] = relationship("Curve", back_populates="data")
 
     def __repr__(self):
-        return f"<CurveData(curve_id={self.curve_id}, data_idx={self.data_idx}, " \
+        return f"<CurveData(curve_id={self.curve_id}, depth={self.depth}, " \
             f"num={self.value_numeric}, txt='{self.value_text}')>"
 
 

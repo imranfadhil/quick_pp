@@ -68,7 +68,6 @@ class Project(object):
     def save(self):
         """Persists the project and its associated wells/curves to the database."""
         self.db_session.add(self._orm_project)
-        # Commit is handled by the session context manager in DBConnector
         logger.info(f"Project '{self.name}' saved to database.")
 
     @classmethod
@@ -95,7 +94,7 @@ class Project(object):
                 logger.warning(f"Well '{well_name}' already exists in project '{self.name}'. Skipping or updating.")
                 # Optionally, load and update the existing well
                 well_obj = Well(self.db_session, well_id=existing_well.well_id)
-                well_obj.update_data_from_las_parse(well_data, header_data_dict, depth_uom)
+                well_obj.update_data_from_las_parse(well_data, header_data_dict)
             else:
                 well_obj = Well(
                     self.db_session,
@@ -105,14 +104,13 @@ class Project(object):
                     header_data=header_data_dict,
                     depth_uom=depth_uom
                 )
-                well_obj.update_data_from_las_parse(well_data, header_data_dict, depth_uom)
+                well_obj.update_data_from_las_parse(well_data, header_data_dict)
                 self.db_session.add(well_obj._orm_well)
                 self.db_session.flush()
 
             logger.debug(f"Processed well '{well_obj.name}' for project '{self.name}'.")
-        # Commit is handled by the session context manager
 
-    def update_data(self, data: pd.DataFrame, group_by: str = "WELL_NAME"):
+    def update_data(self, data: pd.DataFrame, group_by: str = "WELL_NAME", well_configs: Optional[dict] = None):
         logger.info(f"Updating project data with {len(data)} records, grouped by {group_by}")
         for well_name, well_data in data.groupby(group_by):
             logger.debug(f"Processing well: {well_name} with {len(well_data)} records")
@@ -122,6 +120,8 @@ class Project(object):
             if orm_well:
                 well_obj = Well(self.db_session, well_id=orm_well.well_id)
                 well_obj.update_data(well_data)
+                well_obj.update_config(well_configs.get(well_name, {}))
+                well_obj.save()  # Persist the updated data and config to the DB
             else:
                 logger.warning(f"Well '{well_name}' not found in project '{self.name}'. Skipping update.")
 
@@ -306,9 +306,7 @@ class Well(object):
         """Loads a well from the database by ID."""
         return cls(db_session=db_session, well_id=well_id)
 
-    def update_data_from_las_parse(self, parsed_data: pd.DataFrame,
-                                   parsed_header: Dict[str, Any],
-                                   depth_uom: Optional[str] = None):
+    def update_data_from_las_parse(self, parsed_data: pd.DataFrame, parsed_header: Dict[str, Any]):
         """
         Updates well's header and curve data from LAS parsing results.
         `parsed_data` is expected to be a DataFrame where index is depth and columns are curve mnemonics.
@@ -320,6 +318,7 @@ class Well(object):
         # Get existing curve mnemonics for this well
         existing_mnemonics = {c.mnemonic for c in self._orm_well.curves}
         new_mnemonics = set(parsed_data.columns)
+        parsed_data = parsed_data.set_index('DEPTH')
 
         # Delete curves that are no longer in the new data
         curves_to_delete = [c for c in self._orm_well.curves if c.mnemonic in (existing_mnemonics - new_mnemonics)]
@@ -345,19 +344,21 @@ class Well(object):
                 )
                 self._orm_well.curves.append(orm_curve)
             else:
-                # Clear existing data points for this curve to replace them
-                orm_curve.data.clear()
-                orm_curve.data_type = data_type  # Update data type if it changed
+                # Delete existing data points for this curve to replace them.
+                for data_point in orm_curve.data:
+                    self.db_session.delete(data_point)
+                self.db_session.flush()
+                orm_curve.data_type = data_type
 
             # Create new data points
             if is_numeric:
                 curve_data_points = [
-                    ORMCurveData(data_idx=data_idx, value_numeric=value)
-                    for data_idx, value in zip(parsed_data.index, values) if pd.notna(value)]
+                    ORMCurveData(depth=depth, value_numeric=value)
+                    for depth, value in zip(parsed_data.index, values) if pd.notna(value)]
             else:
                 curve_data_points = [
-                    ORMCurveData(data_idx=data_idx, value_text=value)
-                    for data_idx, value in zip(parsed_data.index, values) if pd.notna(value)]
+                    ORMCurveData(depth=depth, value_text=value)
+                    for depth, value in zip(parsed_data.index, values) if pd.notna(value)]
             orm_curve.data.extend(curve_data_points)
 
         logger.info(f"Well '{self.name}' data updated from LAS parse. {len(parsed_data.columns)} curves processed.")
@@ -365,7 +366,7 @@ class Well(object):
     def update_data(self, data: pd.DataFrame):
         """Updates curve data for the well from a DataFrame."""
         logger.debug(f"Updating well data for '{self.name}': {len(data)} records")
-        # Assuming 'data' DataFrame has a depth index and curve columns
+        data = data.set_index('DEPTH')
 
         for mnemonic, values in data.items():
             # Determine data type from pandas series
@@ -383,27 +384,29 @@ class Well(object):
                 )
                 self._orm_well.curves.append(orm_curve)
             else:
-                # Clear existing data points to replace them
-                orm_curve.data.clear()
-                orm_curve.data_type = data_type  # Update data type if it changed
+                # Delete existing data points for this curve to replace them.
+                for data_point in orm_curve.data:
+                    self.db_session.delete(data_point)
+                self.db_session.flush()
+                orm_curve.data_type = data_type
 
             # Create new data points, skipping NaNs
             if is_numeric:
                 curve_data_points = [
-                    ORMCurveData(data_idx=data_idx, value_numeric=value)
-                    for data_idx, value in zip(data.index, values) if pd.notna(value)
+                    ORMCurveData(depth=depth, value_numeric=value)
+                    for depth, value in zip(data.index, values) if pd.notna(value)
                 ]
             else:
                 curve_data_points = [
-                    ORMCurveData(data_idx=data_idx, value_text=value)
-                    for data_idx, value in zip(data.index, values) if pd.notna(value)
+                    ORMCurveData(depth=depth, value_text=value)
+                    for depth, value in zip(data.index, values) if pd.notna(value)
                 ]
             orm_curve.data.extend(curve_data_points)
         logger.debug(f"Updated {len(data.columns)} curves for well '{self.name}'.")
 
     def update_config(self, config: dict):
         logger.debug(f"Updating well configuration with {len(config)} parameters")
-        self.config.update(config)
+        self._config_instance.update(config)
         # The config will be saved to the ORM model when Well.save() is called
         logger.debug(f"Well config for '{self.name}' updated in memory.")
 
@@ -416,21 +419,20 @@ class Well(object):
         for curve in self._orm_well.curves:
             if not curve.data:
                 continue
-            data_idx = [d.data_idx for d in curve.data]
+            depth = [d.depth for d in curve.data]
             if curve.data_type == 'numeric':
                 values = [d.value_numeric for d in curve.data]
             else:  # 'text'
                 values = [d.value_text for d in curve.data]
-            curve_df = pd.DataFrame({curve.mnemonic: values}, index=pd.Index(data_idx, name='DATA_IDX'), dtype=object)
+            curve_df = pd.DataFrame({curve.mnemonic: values}, index=pd.Index(depth))
             all_curves_data.append(curve_df)
 
         if not all_curves_data:
             return pd.DataFrame()
 
         # Join all curve dataframes on their depth index.
-        # This handles curves with different depth ranges or sampling rates.
         df = pd.concat(all_curves_data, axis=1)
-        df.index.name = 'DEPTH'
+        df.insert(0, 'DEPTH', df.index)
         df['WELL_NAME'] = self.name
         logger.debug(f"Retrieved {len(df)} records for well '{self.name}'.")
         return df
