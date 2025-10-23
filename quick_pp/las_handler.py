@@ -34,11 +34,6 @@ def read_las_files(las_files, depth_uom=None):
         merged_data = pd.concat([merged_data, df], ignore_index=True)
         header_data = pd.concat([header_data, well_header], ignore_index=True)
 
-    header_data_cols = header_data.columns
-    header_data = header_data.transpose()
-    header_data.rename({0: 'well_name'}, axis=1, inplace=True)
-    header_data.rename({x: v for x, v in enumerate(header_data_cols)}, axis=0, inplace=True)
-
     merged_data.reset_index(inplace=True, drop=True)
 
     return merged_data, header_data
@@ -145,9 +140,8 @@ def read_las_file_mmap(file_object, required_sets=['PEP']):  # noqa
 
 def read_las_file_welly(file_object, depth_uom=None):
     welly_dataset = welly.las.from_las(file_object.name)
-    well_header = welly_dataset['Header']
     welly_object = welly.well.Well.from_datasets(welly_dataset, index_units=depth_uom)
-    df = pre_process(welly_object)
+    df, well_header = pre_process(welly_object)
     return df, well_header
 
 
@@ -169,25 +163,35 @@ def pre_process(welly_object):
     data_df = welly_object.las[0]
     data_df.index.rename('DEPTH', inplace=True)
     data_df = data_df.reset_index(drop=False)
+    data_df['DEPTH'] = data_df['DEPTH'].round(4)
 
     header_df = welly_object.header
     nullValue = header_df[header_df['mnemonic'] == 'NULL']['value'].values[0] if \
         header_df[header_df['mnemonic'] == 'NULL']['value'].values else -999.25
     data_df = data_df.where(data_df >= nullValue, np.nan)
     # Insert well name
-    well_name = header_df[
-        (header_df['mnemonic'] == 'WELL') | (header_df['descr'].str.upper() == 'WELL')
-    ]['value'].values[0]
+    well_name = get_wellname_from_header(header_df)
     if 'WELL_NAME' not in data_df.columns:
         data_df.insert(0, 'WELL_NAME', well_name.replace("/", "-").replace(" ", "-"))
     # Insert UWI if available
     if 'UWI' in header_df['mnemonic'].values:
-        uwi = header_df[
-            (header_df['mnemonic'] == 'UWI') | (header_df['descr'].str.upper() == 'UNIQUE WELL ID')
-        ]['value'].values[0]
+        uwi = get_uwi_from_header(header_df)
         data_df.insert(0, 'UWI', uwi)
 
-    return data_df
+    return data_df, header_df
+
+
+def get_wellname_from_header(header_df):
+    return header_df[
+        (header_df['mnemonic'] == 'WELL') | (header_df['descr'].str.upper() == 'WELL')
+    ]['value'].values[0]
+
+
+def get_uwi_from_header(header_df):
+    uwi = header_df[
+            (header_df['mnemonic'] == 'UWI') | (header_df['descr'].str.upper() == 'UNIQUE WELL ID')
+        ]['value'].values[0]
+    return uwi if uwi else get_wellname_from_header(header_df)
 
 
 def extract_dataset(section_dict):

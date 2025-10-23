@@ -1,4 +1,6 @@
 TAVILY_API_KEY="xxx"  # Your Tavily API key
+QPP_DATABASE_URL=sqlite:///./data/quick_pp.db
+#  QPP_DATABASE_URL=postgresql://root:root@localhost:5432/postgres
 POSTGRES_USER=root
 POSTGRES_PASSWORD=xxx
 POSTGRES_DB=postgres

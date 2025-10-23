@@ -11,9 +11,6 @@ def create_database():
     db_name = os.getenv('POSTGRES_DB')
     database_url = f"postgresql://{user}:{password}@localhost:5432/{db_name}"
 
-    if not database_url:
-        raise ValueError("DATABASE_URL environment variable is not set")
-
     # Parse the connection string
     if '?' in database_url:
         database_url = database_url.split('?')[0]
