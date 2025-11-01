@@ -172,16 +172,6 @@ TRACE_DEFS = dict(
         hide_xaxis=False,
         style={'line_width': 0, 'fill': 'tozerox', 'fillcolor': 'rgba(0, 0, 0, .15)'}
     ),
-    VKAOL=dict(
-        track=8,
-        secondary_y=False,
-        hide_xaxis=True,
-        style={
-            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VKAOL'],
-            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '-',
-            'fillpattern_size': 2, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
-        }
-    ),
     VFELD=dict(
         track=8,
         secondary_y=False,
@@ -192,14 +182,14 @@ TRACE_DEFS = dict(
             'fillpattern_size': 3, 'fillpattern_solidity': 0.2, 'stackgroup': 'litho', 'orientation': 'h'
         }
     ),
-    VPYRI=dict(
+    VKAOL=dict(
         track=8,
         secondary_y=False,
         hide_xaxis=True,
         style={
-            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VPYRI'],
-            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': 'x',
-            'fillpattern_size': 2, 'fillpattern_solidity': 0.4, 'stackgroup': 'litho', 'orientation': 'h'
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VKAOL'],
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '-',
+            'fillpattern_size': 2, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
         }
     ),
     VCOAL=dict(
@@ -208,8 +198,17 @@ TRACE_DEFS = dict(
         hide_xaxis=True,
         style={
             'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VCOAL'],
-            'fillpattern_fgcolor': '#FFFFFF', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '',
-            'fillpattern_size': 1, 'fillpattern_solidity': 1, 'stackgroup': 'litho', 'orientation': 'h'
+            'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
+    VPYRI=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VPYRI'],
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': 'x',
+            'fillpattern_size': 2, 'fillpattern_solidity': 0.4, 'stackgroup': 'litho', 'orientation': 'h'
         }
     ),
     VANHY=dict(

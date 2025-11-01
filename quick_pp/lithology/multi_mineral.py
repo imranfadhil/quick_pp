@@ -51,6 +51,7 @@ class MultiMineral:
             }
 
         self.fluid_properties = fluid_properties
+        self.rho_fluid = self.fluid_properties['WATER']['density']  # Assume water for fluid density
         self.fluids = ['OIL', 'GAS', 'WATER']
 
         # Define bounds for each mineral type
@@ -101,7 +102,8 @@ class MultiMineral:
         """Constraint function ensuring mineral volumes + fluid volumes sum to 1."""
         return np.sum(volumes) - 1
 
-    def _calculate_porosity(self, nphi: float, rhob: float, dtc: Optional[float] = None) -> float:
+    def _calculate_porosity(self, nphi: float, rhob: float, dtc: Optional[float] = None,
+                            volumes: Optional[np.ndarray] = None) -> float:
         """Calculate porosity using the specified method."""
         if self.porosity_method == 'neutron_density':
             # Use neutron-density crossplot porosity
@@ -117,9 +119,16 @@ class MultiMineral:
             )
 
         elif self.porosity_method == 'density':
-            # Calculate matrix density from mineral volumes (will be updated during optimization)
-            # For now, use a default matrix density
-            rho_ma = 2.65  # Default matrix density
+            if volumes is not None:
+                # Calculate matrix density from the current mineral volumes during optimization
+                mineral_vols = volumes[:len(self.minerals)]
+                matrix_vol = np.sum(mineral_vols)
+                if matrix_vol > 1e-3:
+                    rho_ma = self._calculate_matrix_density(mineral_vols) / matrix_vol
+                else:
+                    rho_ma = 2.65  # Fallback if no matrix
+            else:
+                rho_ma = 2.65  # Default for initial guess if volumes are not provided
             return density_porosity(rhob, rho_ma, self.rho_fluid)
 
         elif self.porosity_method == 'sonic':
@@ -206,9 +215,19 @@ class MultiMineral:
         """
         total_error = 0.0
 
+        # Porosity is the sum of fluid volumes
+        porosity = np.sum(volumes[len(self.minerals):])
+
         for log_type, measured_value in log_values.items():
             if measured_value is not None and not np.isnan(measured_value):
-                reconstructed_value = self._calculate_log_response(volumes, log_type)
+                if self.porosity_method == 'density' and log_type == 'RHOB':
+                    # For density porosity, RHOB is reconstructed from porosity and matrix density
+                    mineral_vols = volumes[:len(self.minerals)]
+                    rho_ma = self._calculate_matrix_density(mineral_vols)
+                    reconstructed_value = rho_ma * (1 - porosity) + self.rho_fluid * porosity
+                else:
+                    reconstructed_value = self._calculate_log_response(volumes, log_type)
+
                 scaling = self.scaling_factors.get(log_type, 1.0)
                 error = (scaling * (measured_value - reconstructed_value)) ** 2
                 total_error += error
@@ -237,15 +256,20 @@ class MultiMineral:
         rhob = log_values.get('RHOB', 2.65)
         dtc = log_values.get('DTC', None)
 
-        if nphi is not None and rhob is not None:
-            initial_porosity = self._calculate_porosity(nphi, rhob, dtc)
-            initial_porosity = max(0.0, min(0.5, initial_porosity))  # Constrain to reasonable range
-        else:
-            initial_porosity = 0.1  # Default porosity
-
         # Initial guess: equal distribution among minerals and fluids
         n_minerals = len(self.minerals)
         n_fluids = len(self.fluids)
+
+        # Create an initial guess for volumes to pass to porosity calculation
+        initial_mineral_guess = np.full(n_minerals, (1.0 - 0.1) / n_minerals)
+        initial_fluid_guess = np.full(n_fluids, 0.1 / n_fluids)
+        initial_guess_for_poro = np.concatenate([initial_mineral_guess, initial_fluid_guess])
+
+        if nphi is not None and rhob is not None:
+            initial_porosity = self._calculate_porosity(nphi, rhob, dtc, volumes=initial_guess_for_poro)
+            initial_porosity = max(0.0, min(0.4, initial_porosity))  # Constrain to reasonable range
+        else:
+            initial_porosity = 0.01  # Default porosity
 
         # Distribute volume between minerals and fluids
         mineral_volume = (1.0 - initial_porosity) / n_minerals
