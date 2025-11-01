@@ -21,8 +21,9 @@ class MultiMineral:
 
         Args:
             minerals: List of minerals to include in the optimization.
-                     If None, uses default minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE']
-                     Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'GYPSUM', 'HALITE'
+                     If None, uses default minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE']
+                     Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE',
+                                      'GYPSUM', 'HALITE', 'PYRITE', 'FELDSPAR', 'COAL'
             fluid_properties: Dictionary containing fluid properties for oil, gas, and water.
                             If None, uses default properties:
                             {
@@ -35,7 +36,7 @@ class MultiMineral:
         """
         # Default minerals if none specified
         if minerals is None:
-            minerals = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE']
+            minerals = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE']
 
         self.minerals = minerals
         self.porosity_method = porosity_method
@@ -58,9 +59,13 @@ class MultiMineral:
             'CALCITE': (0, 1),
             'DOLOMITE': (0, 1),
             'SHALE': (0, 1),
+            'KAOLINITE': (0, 1),
+            'FELDSPAR': (0, 1),
             'ANHYDRITE': (0, 1),
             'GYPSUM': (0, 1),
-            'HALITE': (0, 1)
+            'HALITE': (0, 1),
+            'PYRITE': (0, 1),
+            'COAL': (0, 1)
         }
 
         # Define bounds for fluid volumes (0 to 1 for each fluid)
@@ -330,7 +335,7 @@ class MultiMineral:
                         p95 = np.percentile(valid_data, 95)
                         log_range = p95 - p05
                         if log_range > 1e-6:  # Avoid division by zero for flat logs
-                            self.scaling_factors[log_type] = 1.0 / log_range
+                            self.scaling_factors[log_type] = round(1.0 / log_range, 4)
                         else:
                             self.scaling_factors[log_type] = 1.0  # Default if range is zero
 
@@ -398,9 +403,13 @@ class MultiMineral:
             'CALCITE': 'VCALC',
             'DOLOMITE': 'VDOLO',
             'SHALE': 'VCLAY',
+            'KAOLINITE': 'VKAOL',
+            'FELDSPAR': 'VFELD',
             'ANHYDRITE': 'VANHY',
             'GYPSUM': 'VGYPS',
-            'HALITE': 'VHALI'
+            'HALITE': 'VHALI',
+            'PYRITE': 'VPYRI',
+            'COAL': 'VCOAL'
         }
 
         for mineral in self.minerals:

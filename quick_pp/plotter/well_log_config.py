@@ -4,7 +4,7 @@ import numpy as np
 COLOR_DICT = {
     'BADHOLE': 'rgba(0, 0, 0, .25)',
     'BS': 'brown',
-    'BVW': "#56C0E4",
+    'BVW': "#B7EDFF",
     'CALI': '#618F63',
     'COAL_FLAG': '#262626',
     'CPERM': '#FF0000',
@@ -28,8 +28,10 @@ COLOR_DICT = {
     'SWT': '#262626',
     'VANHY': '#E9DF53',
     'VCALC': '#b0e0e6',
-    'VCLAY': '#BFBFBF',
-    'VCOAL': '#000000',
+    'VCLAY': "#949494",
+    'VFELD': "#B6B5B5",
+    'VKAOL': '#D3D3D3',
+    'VCOAL': "#000000",
     'VDOLO': '#ba55d3',
     'VGAS': '#FF0000',
     'VGYPS': '#6C55D3',
@@ -38,8 +40,9 @@ COLOR_DICT = {
     'VOIL': '#00FF00',
     'VSAND': '#F6F674',
     'VSHALE': '#A65628',
+    'VPYRI': "#007FD4",
     'VSILT': '#FE9800',
-    'VWATER': '#56C0E4',
+    'VWATER': "#B7EDFF",
 }
 
 # Define the trace definitions for the well log plot
@@ -169,6 +172,76 @@ TRACE_DEFS = dict(
         hide_xaxis=False,
         style={'line_width': 0, 'fill': 'tozerox', 'fillcolor': 'rgba(0, 0, 0, .15)'}
     ),
+    VKAOL=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VKAOL'],
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '-',
+            'fillpattern_size': 2, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
+    VFELD=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VFELD'],
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '+',
+            'fillpattern_size': 3, 'fillpattern_solidity': 0.2, 'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
+    VPYRI=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VPYRI'],
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': 'x',
+            'fillpattern_size': 2, 'fillpattern_solidity': 0.4, 'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
+    VCOAL=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VCOAL'],
+            'fillpattern_fgcolor': '#FFFFFF', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '',
+            'fillpattern_size': 1, 'fillpattern_solidity': 1, 'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
+    VANHY=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VANHY'],
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': 'x',
+            'fillpattern_size': 4, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
+    VGYPS=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VGYPS'],
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '\\',
+            'fillpattern_size': 4, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
+    VHALI=dict(
+        track=8,
+        secondary_y=False,
+        hide_xaxis=True,
+        style={
+            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VHALI'],
+            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '+',
+            'fillpattern_size': 4, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
+        }
+    ),
     VSILT=dict(
         track=8,
         secondary_y=False,
@@ -207,36 +280,6 @@ TRACE_DEFS = dict(
             'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VDOLO'],
             'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '-',
             'fillpattern_size': 3, 'fillpattern_solidity': 0.3, 'stackgroup': 'litho', 'orientation': 'h'
-        }
-    ),
-    VANHY=dict(
-        track=8,
-        secondary_y=False,
-        hide_xaxis=True,
-        style={
-            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VANHY'],
-            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': 'x',
-            'fillpattern_size': 4, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
-        }
-    ),
-    VGYPS=dict(
-        track=8,
-        secondary_y=False,
-        hide_xaxis=True,
-        style={
-            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VGYPS'],
-            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '\\',
-            'fillpattern_size': 4, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
-        }
-    ),
-    VHALI=dict(
-        track=8,
-        secondary_y=False,
-        hide_xaxis=True,
-        style={
-            'line_width': .5, 'line_color': 'black', 'fill': 'tonextx', 'fillpattern_bgcolor': COLOR_DICT['VHALI'],
-            'fillpattern_fgcolor': '#000000', 'fillpattern_fillmode': 'replace', 'fillpattern_shape': '+',
-            'fillpattern_size': 4, 'fillpattern_solidity': 0.1, 'stackgroup': 'litho', 'orientation': 'h'
         }
     ),
     VHC=dict(
@@ -351,7 +394,7 @@ XAXIS_DEFS = dict(
         title={'text': 'PERM (mD)', 'font': {'color': COLOR_DICT['PERM'], 'size': font_size}},
         tickfont={'color': COLOR_DICT['PERM'], 'size': font_size},
         side='top', anchor='free', position=.91, title_standoff=.1,
-        dtick=0.1, range=[np.log10(0.1), np.log10(1e5)], type='log', 
+        dtick=0.1, range=[np.log10(0.1), np.log10(1e5)], type='log',
         tickmode='array', tickvals=np.geomspace(0.1, 1e5, 7), tickangle=-90,
         minor_showgrid=True
     ),

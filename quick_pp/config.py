@@ -75,12 +75,26 @@ class Config(object):
         'DTC_DOLOMITE': 43.5,
         'PEF_DOLOMITE': 3.1,
 
-        # Kaolinite
-        'GR_SHALE': 130.0,
-        'NPHI_SHALE': 0.37,
-        'RHOB_SHALE': 2.41,
-        'DTC_SHALE': 143.0,
-        'PEF_SHALE': 1.8,
+        # Generic Shale (e.g., Illite/Smectite mix)
+        'GR_SHALE': 150.0,
+        'NPHI_SHALE': 0.30,
+        'RHOB_SHALE': 2.55,
+        'DTC_SHALE': 120.0,
+        'PEF_SHALE': 3.5,
+
+        # Kaolinite (as a separate mineral option)
+        'GR_KAOLINITE': 35.0,
+        'NPHI_KAOLINITE': 0.37,
+        'RHOB_KAOLINITE': 2.41,
+        'DTC_KAOLINITE': 143.0,
+        'PEF_KAOLINITE': 1.8,
+
+        # Feldspar
+        'GR_FELDSPAR': 150.0,
+        'NPHI_FELDSPAR': 0.02,
+        'RHOB_FELDSPAR': 2.56,
+        'DTC_FELDSPAR': 70.0,
+        'PEF_FELDSPAR': 3.1,
 
         # Anhydrite
         'GR_ANHYDRITE': 0.0,
@@ -102,6 +116,20 @@ class Config(object):
         'RHOB_HALITE': 2.04,
         'DTC_HALITE': 67.0,
         'PEF_HALITE': 4.7,
+
+        # Pyrite
+        'GR_PYRITE': 0.0,
+        'NPHI_PYRITE': -0.02,
+        'RHOB_PYRITE': 5.0,
+        'DTC_PYRITE': 65.0,
+        'PEF_PYRITE': 17.0,
+
+        # Coal
+        'GR_COAL': 30.0,
+        'NPHI_COAL': 0.50,
+        'RHOB_COAL': 1.3,
+        'DTC_COAL': 150.0,
+        'PEF_COAL': 0.2,
     }
 
     GEOMECHANICS_VALUE = dict(
