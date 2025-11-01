@@ -9,7 +9,7 @@ from quick_pp import logger
 from quick_pp.porosity import neu_den_xplot_poro_pt, density_porosity
 
 
-class MultiMineralOptimizer:
+class MultiMineral:
     """Optimization-based multi-mineral model for lithology estimation with fluid volumes."""
 
     def __init__(self, minerals: Optional[List[str]] = None,
@@ -56,7 +56,7 @@ class MultiMineralOptimizer:
         mineral_bounds = {
             'QUARTZ': (0, 1),
             'CALCITE': (0, 1),
-            'DOLOMITE': (0, 0.1),
+            'DOLOMITE': (0, 1),
             'SHALE': (0, 1),
             'ANHYDRITE': (0, 1),
             'GYPSUM': (0, 1),
@@ -210,7 +210,7 @@ class MultiMineralOptimizer:
 
         return total_error
 
-    def _optimize_volumes(self, log_values: Dict[str, float]) -> Tuple[np.ndarray, np.ndarray]:
+    def _optimize_volumes(self, log_values: Dict[str, float]) -> Tuple[np.ndarray, np.ndarray, bool]:
         """
         Optimize mineral and fluid volumes given available log measurements.
 
@@ -218,7 +218,7 @@ class MultiMineralOptimizer:
             log_values: Dictionary of measured log values
 
         Returns:
-            Tuple of (optimized mineral volumes, fluid volumes) in the order of self.minerals and self.fluids
+            Tuple of (optimized mineral volumes, fluid volumes, success_flag)
         """
         # Filter out None and NaN values
         valid_logs = {k: v for k, v in log_values.items()
@@ -265,10 +265,10 @@ class MultiMineralOptimizer:
         mineral_volumes = result.x[:n_minerals]
         fluid_volumes = result.x[n_minerals:]
 
-        return mineral_volumes, fluid_volumes
+        return mineral_volumes, fluid_volumes, result.success
 
     def estimate_lithology(self, gr: np.ndarray, nphi: np.ndarray, rhob: np.ndarray, pef: Optional[np.ndarray] = None,
-                           dtc: Optional[np.ndarray] = None) -> pd.DataFrame:
+                           dtc: Optional[np.ndarray] = None, auto_scale: bool = True) -> pd.DataFrame:
         """
         Estimate mineral and fluid volumes using available log measurements.
 
@@ -278,6 +278,7 @@ class MultiMineralOptimizer:
             rhob: Bulk Density log in g/cc
             pef: Photoelectric Factor log in barns/electron (optional)
             dtc: Compressional slowness log in us/ft (optional)
+            auto_scale: If True, automatically calculate scaling factors based on log ranges.
 
         Returns:
             DataFrame containing:
@@ -285,6 +286,7 @@ class MultiMineralOptimizer:
             - Fluid volume fractions for each fluid in self.fluids
             - PHIT_CONSTRUCTED: Total porosity (sum of fluid volumes)
             - AVERAGE_ERROR: Average error between measured and reconstructed logs
+            - OPTIMIZER_SUCCESS: Boolean flag indicating if the optimization was successful.
             - *_RECONSTRUCTED: Reconstructed log values for each log type
         """
         # Initialize output arrays
@@ -313,6 +315,26 @@ class MultiMineralOptimizer:
         # Initialize error array
         average_errors = np.full(n_samples, np.nan)
 
+        # Initialize QC flags
+        success_flags = np.full(n_samples, False, dtype=bool)
+
+        # Dynamic scaling based on log ranges for robustness
+        if auto_scale:
+            all_logs = {'GR': gr, 'NPHI': nphi, 'RHOB': rhob, 'PEF': pef, 'DTC': dtc}
+            for log_type, log_data in all_logs.items():
+                if log_data is not None:
+                    # Use 5th and 95th percentiles to calculate a robust range, ignoring NaNs
+                    valid_data = log_data[~np.isnan(log_data)]
+                    if len(valid_data) > 1:
+                        p05 = np.percentile(valid_data, 5)
+                        p95 = np.percentile(valid_data, 95)
+                        log_range = p95 - p05
+                        if log_range > 1e-6:  # Avoid division by zero for flat logs
+                            self.scaling_factors[log_type] = 1.0 / log_range
+                        else:
+                            self.scaling_factors[log_type] = 1.0  # Default if range is zero
+
+        logger.info(f"Scaling factors: {self.scaling_factors}")
         # Process each depth point
         for i in tqdm(range(n_samples), desc="Processing depth points", unit="points"):
             # Prepare log values for current depth
@@ -331,7 +353,7 @@ class MultiMineralOptimizer:
             if len(valid_measurements) >= 3:  # Need at least 3 measurements
                 try:
                     # Optimize mineral and fluid volumes
-                    mineral_vols, fluid_vols = self._optimize_volumes(log_values)
+                    mineral_vols, fluid_vols, success = self._optimize_volumes(log_values)
 
                     # Store results for each mineral
                     for j, mineral in enumerate(self.minerals):
@@ -343,6 +365,7 @@ class MultiMineralOptimizer:
 
                     # Store total porosity (sum of fluid volumes)
                     porosity_constructed[i] = np.sum(fluid_vols)
+                    success_flags[i] = success
 
                     # Combine volumes for error calculation and log reconstruction
                     combined_volumes = np.concatenate([mineral_vols, fluid_vols])
@@ -363,10 +386,8 @@ class MultiMineralOptimizer:
                         combined_volumes, 'DTC') if log_values['DTC'] is not None else np.nan
 
                 except Exception as e:
-                    logger.error(f'\rError at depth {i}: {e}')
+                    tqdm.write(f'\rError at depth {i}: {e}', end='\r')
                     continue
-            else:
-                logger.error(f'\rInsufficient data at depth {i}')
 
         # Create output DataFrame
         output_data = {}
@@ -403,6 +424,7 @@ class MultiMineralOptimizer:
         # Add error and reconstructed logs
         output_data.update({
             'AVG_ERROR': average_errors,
+            'OPTIMIZER_SUCCESS': success_flags,
             'GR_RECONSTRUCTED': gr_reconstructed,
             'NPHI_RECONSTRUCTED': nphi_reconstructed,
             'RHOB_RECONSTRUCTED': rhob_reconstructed,
@@ -411,47 +433,3 @@ class MultiMineralOptimizer:
         })
 
         return pd.DataFrame(output_data)
-
-
-class MultiMineral:
-    """Legacy interface for backward compatibility."""
-
-    def __init__(self, minerals: Optional[List[str]] = None,
-                 fluid_properties: Optional[Dict] = None,
-                 porosity_method: str = 'neutron_density',
-                 porosity_endpoints: Optional[Dict] = None):
-        """
-        Initialize MultiMineral with optional mineral and fluid specification.
-
-        Args:
-            minerals: List of minerals to include in the optimization.
-                     If None, uses default minerals:
-                        ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE']
-                     Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'GYPSUM', 'HALITE'
-            fluid_properties: Dictionary containing fluid properties for oil, gas, and water.
-                            If None, uses default properties
-            porosity_method: Method for calculating porosity ('neutron_density', 'density', 'sonic')
-            porosity_endpoints: Endpoints for porosity calculation (for neutron_density method)
-        """
-        self.optimizer = MultiMineralOptimizer(
-            minerals=minerals,
-            fluid_properties=fluid_properties,
-            porosity_method=porosity_method,
-            porosity_endpoints=porosity_endpoints
-        )
-
-    def estimate_lithology(self, gr, nphi, rhob, pef=None, dtc=None):
-        """
-        Estimate lithology and fluid volumes using multi-mineral optimization.
-
-        Args:
-            gr (np.ndarray): Gamma Ray log in GAPI.
-            nphi (np.ndarray): Neutron Porosity log in v/v.
-            rhob (np.ndarray): Bulk Density log in g/cc.
-            pef (np.ndarray, optional): Photoelectric Factor log in barns/electron.
-            dtc (np.ndarray, optional): Compressional slowness log in us/ft.
-
-        Returns:
-            pd.DataFrame: DataFrame containing mineral volumes, fluid volumes, and reconstructed logs
-        """
-        return self.optimizer.estimate_lithology(gr, nphi, rhob, pef, dtc)
