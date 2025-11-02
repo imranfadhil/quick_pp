@@ -443,13 +443,14 @@ def autocorrelate_core_depth(df):
         if col not in df.columns:
             raise AssertionError(f"Missing required column: {col}")
 
+    all_wells_data = []
     shift_summaries = []
-    return_df = pd.DataFrame()
+
     for well, data in tqdm(df.groupby('WELL_NAME'), desc='Correlating core depths'):
         core_data = data[['DEPTH', 'CORE_ID', 'CPORE', 'CPERM']].dropna().sort_values('DEPTH').reset_index(drop=True)
 
         if core_data.empty:
-            return_df = pd.concat([return_df, data])
+            all_wells_data.append(data)
             continue
 
         log_data = data[['DEPTH', 'PHIT']].dropna().sort_values('DEPTH').reset_index(drop=True)
@@ -457,74 +458,85 @@ def autocorrelate_core_depth(df):
 
         # Create a window of log data around core points to speed up DTW
         core_indices_in_log = np.searchsorted(log_data.DEPTH, core_data.DEPTH, side='left')
-        window = 1
+        window = 50  # Increased window size to allow for larger shifts
         window_indices = core_indices_in_log[:, None] + np.arange(-window, window + 1)
         window_indices = np.clip(window_indices, 0, len(log_data) - 1)
         unique_indices = np.unique(window_indices.flatten())
         log_data_subset = log_data.iloc[unique_indices].reset_index(drop=True)
 
-        # Extract the numpy arrays for the DTW algorithm
+        # Extract numpy arrays for DTW
         phit_vals = log_data_subset['PHIT'].values
         cpore_vals = core_data['CPORE'].values
 
-        alignment = dtw(cpore_vals, phit_vals,
-                        distance_only=False,
-                        keep_internals=True,
-                        step_pattern="symmetric2")
+        alignment = dtw(cpore_vals, phit_vals, keep_internals=True, step_pattern="symmetric2")
 
-        # The alignment object contains the mapping between indices
-        core_indices = alignment.index1  # Indices for the `core_data` DataFrame
-        log_indices = alignment.index2   # Indices for the `log_data_subset` DataFrame
+        # Map alignment indices back to original data
+        core_indices = alignment.index1
+        log_subset_indices = alignment.index2
 
-        # Create a detailed map from the alignment
-        correction_map_df = pd.DataFrame({
-            'ORIGINAL_DEPTH': core_data.loc[core_indices, 'DEPTH'].values,
-            'CORE_ID_SHIFTED': core_data.loc[core_indices, 'CORE_ID'].values,
-            'CPORE_SHIFTED': core_data.loc[core_indices, 'CPORE'].values,
-            'CPERM_SHIFTED': core_data.loc[core_indices, 'CPERM'].values,
-            'MATCHED_PHIT': log_data_subset.loc[log_indices, 'PHIT'].values,
-            'DEPTH_CORRECTED': log_data_subset.loc[log_indices, 'DEPTH'].values
+        original_depths = core_data.loc[core_indices, 'DEPTH'].values
+        corrected_depths = log_data_subset.loc[log_subset_indices, 'DEPTH'].values
+
+        # Calculate the shift for each point in the DTW path
+        depth_shifts = corrected_depths - original_depths
+
+        # Determine the single best shift for the entire core sequence (using the median for robustness)
+        if len(depth_shifts) > 0:
+            best_shift = round(np.median(depth_shifts), 4)
+        else:
+            best_shift = 0.0
+
+        tqdm.write(f"Determined best shift for {well}: {best_shift:.2f}")
+
+        # Apply the consistent shift to all original core data for this well
+        shifted_core_data = core_data.copy()
+        shifted_core_data['DEPTH_CORRECTED'] = shifted_core_data['DEPTH'] + best_shift
+        shifted_core_data['DEPTH_SHIFT'] = best_shift
+
+        # Create summary for this well
+        summary = shifted_core_data[['CORE_ID', 'DEPTH', 'DEPTH_CORRECTED', 'DEPTH_SHIFT']].copy()
+        summary.rename(columns={'DEPTH': 'ORIGINAL_DEPTH'}, inplace=True)
+        summary['WELL_NAME'] = well
+        summary = summary[['WELL_NAME', 'CORE_ID', 'ORIGINAL_DEPTH', 'DEPTH_CORRECTED', 'DEPTH_SHIFT']]
+        shift_summaries.append(summary)
+
+        # Prepare shifted data for merging
+        final_shifted = shifted_core_data.rename(columns={
+            'CPORE': 'CPORE_SHIFTED',
+            'CPERM': 'CPERM_SHIFTED',
+            'CORE_ID': 'CORE_ID_SHIFTED'
         })
 
-        # Find the best match for each original core depth by minimizing porosity difference
-        correction_map_df['PORO_DIFF'] = (correction_map_df['CPORE_SHIFTED'] - correction_map_df['MATCHED_PHIT']).abs()
-        correction_map_df['DEPTH_SHIFT'] = round(
-            correction_map_df.DEPTH_CORRECTED - correction_map_df.ORIGINAL_DEPTH, 3)
-        best_matches = correction_map_df.sort_values('PORO_DIFF').drop_duplicates('ORIGINAL_DEPTH')
+        # --- SOLUTION: Use index-based merging to avoid column conflicts ---
 
-        if not best_matches.empty:
-            summary = best_matches[['CORE_ID_SHIFTED', 'ORIGINAL_DEPTH', 'DEPTH_CORRECTED', 'DEPTH_SHIFT']].copy()
-            summary.rename(columns={'CORE_ID_SHIFTED': 'CORE_ID'}, inplace=True)
-            summary['WELL_NAME'] = well
-            # Reorder columns for clarity
-            summary = summary[['WELL_NAME', 'CORE_ID', 'ORIGINAL_DEPTH', 'DEPTH_CORRECTED', 'DEPTH_SHIFT']]
-            shift_summaries.append(summary)
+        # Prepare the log data: keep only necessary columns and set DEPTH as index
+        log_df_to_merge = data.set_index('DEPTH')
 
-        # Merge the corrected core data back into the original well data
-        df_corrected = pd.merge(
-            data,
-            best_matches[['DEPTH_CORRECTED', 'CORE_ID_SHIFTED', 'CPORE_SHIFTED', 'CPERM_SHIFTED']],
-            left_on='DEPTH',
-            right_on='DEPTH_CORRECTED',
-            how='left'
-        )
+        # Prepare the shifted core data: keep shifted values and set corrected depth as index
+        core_df_to_merge = final_shifted[['DEPTH_CORRECTED', 'CPORE_SHIFTED', 'CPERM_SHIFTED', 'CORE_ID_SHIFTED']] \
+            .set_index('DEPTH_CORRECTED')
 
-        # Remove original depths if being corrected
-        ori_core_ids = df_corrected['CORE_ID'].dropna().unique()
-        shifted_core_ids = df_corrected['CORE_ID_SHIFTED'].dropna().unique()
+        # Merge the two dataframes on their indices (which are the depths)
+        well_corrected_df = pd.merge(
+            log_df_to_merge,
+            core_df_to_merge,
+            left_index=True,
+            right_index=True,
+            how='outer'
+        ).reset_index()
 
-        mask_shifted = df_corrected['CORE_ID'].isin(shifted_core_ids)
-        mask_ori = df_corrected['CORE_ID_SHIFTED'].isin(ori_core_ids)
+        # The merged 'index' column is the unified depth column, so rename it
+        well_corrected_df.rename(columns={'index': 'DEPTH'}, inplace=True)
 
-        df_corrected.loc[mask_shifted, ['CORE_ID', 'CPORE', 'CPERM']] = np.nan
-        df_corrected.loc[mask_ori, ['CORE_ID', 'CPORE', 'CPERM']] = df_corrected.loc[
-            mask_ori, ['CORE_ID_SHIFTED', 'CPORE_SHIFTED', 'CPERM_SHIFTED']].values
+        # Sort by the final unified depth
+        well_corrected_df.sort_values('DEPTH', inplace=True)
 
-        return_df = pd.concat([return_df, df_corrected])
+        # Add well name back if lost during merge
+        well_corrected_df['WELL_NAME'] = well
+        all_wells_data.append(well_corrected_df)
 
-    # After the loop, combine all summaries into a single DataFrame
-    final_summary_df = pd.DataFrame()
-    if shift_summaries:
-        final_summary_df = pd.concat(shift_summaries, ignore_index=True)
+    # Combine all processed well data and summaries
+    return_df = pd.concat(all_wells_data, ignore_index=True)
+    final_summary_df = pd.concat(shift_summaries, ignore_index=True) if shift_summaries else pd.DataFrame()
 
     return return_df, final_summary_df
