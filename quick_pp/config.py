@@ -57,79 +57,31 @@ class Config(object):
     )
 
     MINERALS_LOG_VALUE = {
-        'GR_QUARTZ': 0.0,
-        'NPHI_QUARTZ': -0.02,
-        'RHOB_QUARTZ': 2.64,
-        'DTC_QUARTZ': 52.9,
-        'PEF_QUARTZ': 1.8,
+        'QUARTZ': {'GR': 0.0, 'NPHI': -0.02, 'RHOB': 2.64, 'DTC': 52.9, 'PEF': 1.8},
+        'CALCITE': {'GR': 0.0, 'NPHI': 0.0, 'RHOB': 2.71, 'DTC': 49.7, 'PEF': 5.1},
+        'DOLOMITE': {'GR': 0.0, 'NPHI': 0.01, 'RHOB': 2.85, 'DTC': 43.5, 'PEF': 3.1},
+        'SHALE': {'GR': 150.0, 'NPHI': 0.30, 'RHOB': 2.55, 'DTC': 120.0, 'PEF': 3.5},
+        'KAOLINITE': {'GR': 35.0, 'NPHI': 0.37, 'RHOB': 2.41, 'DTC': 143.0, 'PEF': 1.8},
+        'FELDSPAR': {'GR': 150.0, 'NPHI': 0.02, 'RHOB': 2.56, 'DTC': 70.0, 'PEF': 3.1},
+        'ANHYDRITE': {'GR': 0.0, 'NPHI': -0.02, 'RHOB': 2.98, 'DTC': 50.0, 'PEF': 5.1},
+        'GYPSUM': {'GR': 0.0, 'NPHI': 0.6, 'RHOB': 2.35, 'DTC': 52.0, 'PEF': 4.0},
+        'HALITE': {'GR': 0.0, 'NPHI': -0.03, 'RHOB': 2.04, 'DTC': 67.0, 'PEF': 4.7},
+        'PYRITE': {'GR': 0.0, 'NPHI': -0.02, 'RHOB': 5.0, 'DTC': 65.0, 'PEF': 17.0},
+        'COAL': {'GR': 30.0, 'NPHI': 0.50, 'RHOB': 1.3, 'DTC': 150.0, 'PEF': 0.2},
+    }
 
-        'GR_CALCITE': 0.0,
-        'NPHI_CALCITE': 0.0,
-        'RHOB_CALCITE': 2.71,
-        'DTC_CALCITE': 49.7,
-        'PEF_CALCITE': 5.1,
-
-        'GR_DOLOMITE': 0.0,
-        'NPHI_DOLOMITE': 0.01,
-        'RHOB_DOLOMITE': 2.85,
-        'DTC_DOLOMITE': 43.5,
-        'PEF_DOLOMITE': 3.1,
-
-        # Generic Shale (e.g., Illite/Smectite mix)
-        'GR_SHALE': 150.0,
-        'NPHI_SHALE': 0.30,
-        'RHOB_SHALE': 2.55,
-        'DTC_SHALE': 120.0,
-        'PEF_SHALE': 3.5,
-
-        # Kaolinite (as a separate mineral option)
-        'GR_KAOLINITE': 35.0,
-        'NPHI_KAOLINITE': 0.37,
-        'RHOB_KAOLINITE': 2.41,
-        'DTC_KAOLINITE': 143.0,
-        'PEF_KAOLINITE': 1.8,
-
-        # Feldspar
-        'GR_FELDSPAR': 150.0,
-        'NPHI_FELDSPAR': 0.02,
-        'RHOB_FELDSPAR': 2.56,
-        'DTC_FELDSPAR': 70.0,
-        'PEF_FELDSPAR': 3.1,
-
-        # Anhydrite
-        'GR_ANHYDRITE': 0.0,
-        'NPHI_ANHYDRITE': -0.02,
-        'RHOB_ANHYDRITE': 2.98,
-        'DTC_ANHYDRITE': 50.0,
-        'PEF_ANHYDRITE': 5.1,
-
-        # Gypsum
-        'GR_GYPSUM': 0.0,
-        'NPHI_GYPSUM': 0.6,
-        'RHOB_GYPSUM': 2.35,
-        'DTC_GYPSUM': 52.0,
-        'PEF_GYPSUM': 4.0,
-
-        # Halite
-        'GR_HALITE': 0.0,
-        'NPHI_HALITE': -0.03,
-        'RHOB_HALITE': 2.04,
-        'DTC_HALITE': 67.0,
-        'PEF_HALITE': 4.7,
-
-        # Pyrite
-        'GR_PYRITE': 0.0,
-        'NPHI_PYRITE': -0.02,
-        'RHOB_PYRITE': 5.0,
-        'DTC_PYRITE': 65.0,
-        'PEF_PYRITE': 17.0,
-
-        # Coal
-        'GR_COAL': 30.0,
-        'NPHI_COAL': 0.50,
-        'RHOB_COAL': 1.3,
-        'DTC_COAL': 150.0,
-        'PEF_COAL': 0.2,
+    MINERALS_NAME_MAPPING = {
+        'QUARTZ': 'VSAND',
+        'CALCITE': 'VCALC',
+        'DOLOMITE': 'VDOLO',
+        'SHALE': 'VCLAY',
+        'KAOLINITE': 'VKAOL',
+        'FELDSPAR': 'VFELD',
+        'ANHYDRITE': 'VANHY',
+        'GYPSUM': 'VGYPS',
+        'HALITE': 'VHALI',
+        'PYRITE': 'VPYRI',
+        'COAL': 'VCOAL'
     }
 
     GEOMECHANICS_VALUE = dict(

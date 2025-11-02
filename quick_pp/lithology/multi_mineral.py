@@ -14,16 +14,15 @@ class MultiMineral:
 
     def __init__(self, minerals: Optional[List[str]] = None,
                  fluid_properties: Optional[Dict] = None,
-                 porosity_method: str = 'neutron_density',
+                 porosity_method: str = 'density',
                  porosity_endpoints: Optional[Dict] = None):
         """
         Initialize the MultiMineralOptimizer.
 
         Args:
             minerals: List of minerals to include in the optimization.
-                     If None, uses default minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE']
-                     Available options: 'QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE',
-                                      'GYPSUM', 'HALITE', 'PYRITE', 'FELDSPAR', 'COAL'
+                     If None, uses default minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'].
+                     Available minerals are dynamically loaded from `Config.MINERALS_LOG_VALUE`.
             fluid_properties: Dictionary containing fluid properties for oil, gas, and water.
                             If None, uses default properties:
                             {
@@ -34,9 +33,16 @@ class MultiMineral:
             porosity_method: Method for calculating porosity ('neutron_density', 'density', 'sonic')
             porosity_endpoints: Endpoints for porosity calculation (for neutron_density method)
         """
+        self.responses = Config.MINERALS_LOG_VALUE
+        available_minerals = list(self.responses.keys())
+
         # Default minerals if none specified
         if minerals is None:
             minerals = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE']
+
+        for mineral in minerals:
+            if mineral not in available_minerals:
+                raise ValueError(f"Mineral '{mineral}' is not defined in Config.MINERALS_LOG_VALUE.")
 
         self.minerals = minerals
         self.porosity_method = porosity_method
@@ -49,25 +55,11 @@ class MultiMineral:
                 'GAS': {'density': 0.2, 'nphi': 0.0, 'pef': 0.0, 'dtc': 400.0},
                 'WATER': {'density': 1.0, 'nphi': 1.0, 'pef': 0.0, 'dtc': 190.0}
             }
-
         self.fluid_properties = fluid_properties
-        self.rho_fluid = self.fluid_properties['WATER']['density']  # Assume water for fluid density
         self.fluids = ['OIL', 'GAS', 'WATER']
 
         # Define bounds for each mineral type
-        mineral_bounds = {
-            'QUARTZ': (0, 1),
-            'CALCITE': (0, 1),
-            'DOLOMITE': (0, 1),
-            'SHALE': (0, 1),
-            'KAOLINITE': (0, 1),
-            'FELDSPAR': (0, 1),
-            'ANHYDRITE': (0, 1),
-            'GYPSUM': (0, 1),
-            'HALITE': (0, 1),
-            'PYRITE': (0, 1),
-            'COAL': (0, 1)
-        }
+        mineral_bounds = {mineral: (0, 1) for mineral in available_minerals}
 
         # Define bounds for fluid volumes (0 to 1 for each fluid)
         fluid_bounds = {
@@ -85,51 +77,45 @@ class MultiMineral:
 
         # Constraint: sum of mineral volumes + fluid volumes must equal 1
         self.constraints = [{"type": "eq", "fun": self._volume_constraint}]
-
-        # Mineral log responses from Config
-        self.responses = Config.MINERALS_LOG_VALUE
-
-        # Scaling factors for different log types to balance their contribution to the error
-        self.scaling_factors = {
-            'GR': 1.0,
-            'NPHI': 300.0,
-            'RHOB': 100.0,
-            'PEF': 30.0,
-            'DTC': 1.0
-        }
+        self.scaling_factors = {}
 
     def _volume_constraint(self, volumes: np.ndarray) -> float:
         """Constraint function ensuring mineral volumes + fluid volumes sum to 1."""
         return np.sum(volumes) - 1
 
-    def _calculate_porosity(self, nphi: float, rhob: float, dtc: Optional[float] = None,
-                            volumes: Optional[np.ndarray] = None) -> float:
+    def _calculate_porosity(self, nphi: float, rhob: float, dtc: Optional[float] = None) -> float:
         """Calculate porosity using the specified method."""
-        if self.porosity_method == 'neutron_density':
+        if self.porosity_method == 'density':
+            # Calculate an initial rho_ma based on the selected minerals
+            initial_rho_ma = sum(
+                self.responses[mineral].get('RHOB', 0) for mineral in self.minerals if mineral in self.responses
+            )
+            count_minerals_with_density = sum(
+                1 for mineral in self.minerals if mineral in self.responses and 'RHOB' in self.responses[mineral]
+            )
+
+            if count_minerals_with_density > 0:
+                rho_ma = initial_rho_ma / count_minerals_with_density
+            else:
+                rho_ma = 2.65  # Default matrix density (Quartz)
+
+            # Calculate average fluid density for porosity calculation
+            rho_fluid_avg = np.mean([prop['density'] for prop in self.fluid_properties.values()])
+
+            return density_porosity(rhob, rho_ma, rho_fluid_avg)
+
+        elif self.porosity_method == 'neutron_density':
             # Use neutron-density crossplot porosity
-            dry_sand_point = self.porosity_endpoints.get('dry_sand_point', (-0.02, 2.65))
+            dry_min1_point = self.porosity_endpoints.get('dry_min1_point', (-0.02, 2.65))
             dry_clay_point = self.porosity_endpoints.get('dry_clay_point', (0.37, 2.41))
             fluid_point = self.porosity_endpoints.get('fluid_point', (1.0, 1.0))
 
             return neu_den_xplot_poro_pt(
                 nphi, rhob, model='ss',
-                dry_min1_point=dry_sand_point,
+                dry_min1_point=dry_min1_point,
                 dry_clay_point=dry_clay_point,
                 fluid_point=fluid_point,
             )
-
-        elif self.porosity_method == 'density':
-            if volumes is not None:
-                # Calculate matrix density from the current mineral volumes during optimization
-                mineral_vols = volumes[:len(self.minerals)]
-                matrix_vol = np.sum(mineral_vols)
-                if matrix_vol > 1e-3:
-                    rho_ma = self._calculate_matrix_density(mineral_vols) / matrix_vol
-                else:
-                    rho_ma = 2.65  # Fallback if no matrix
-            else:
-                rho_ma = 2.65  # Default for initial guess if volumes are not provided
-            return density_porosity(rhob, rho_ma, self.rho_fluid)
 
         elif self.porosity_method == 'sonic':
             # Sonic porosity calculation (simplified)
@@ -142,14 +128,25 @@ class MultiMineral:
         else:
             raise ValueError(f"Unknown porosity method: {self.porosity_method}")
 
-    def _calculate_matrix_density(self, volumes: np.ndarray) -> float:
+    def _calculate_matrix_density(self, mineral_volumes: np.ndarray) -> float:
         """Calculate matrix density from mineral volumes."""
         rho_ma = 0.0
+        total_mineral_vol = np.sum(mineral_volumes)
+        if total_mineral_vol < 1e-6:
+            return 2.65  # Return default if no minerals
+
         for i, mineral in enumerate(self.minerals):
-            rho_key = f"RHOB_{mineral}"
-            if rho_key in self.responses:
-                rho_ma += volumes[i] * self.responses[rho_key]
-        return rho_ma
+            if mineral in self.responses and 'RHOB' in self.responses[mineral]:
+                rho_ma += mineral_volumes[i] * self.responses[mineral]['RHOB']
+
+        return rho_ma / total_mineral_vol
+
+    def _calculate_fluid_density(self, fluid_volumes: np.ndarray) -> float:
+        """Calculate average fluid density from fluid volumes."""
+        rho_fluid = 0.0
+        for i, fluid in enumerate(self.fluids):
+            rho_fluid += fluid_volumes[i] * self.fluid_properties[fluid]['density']
+        return rho_fluid
 
     def _calculate_log_response(self, volumes: np.ndarray, log_type: str) -> float:
         """Calculate reconstructed log response for a given log type."""
@@ -158,9 +155,8 @@ class MultiMineral:
         # Add mineral contributions
         n_minerals = len(self.minerals)
         for i, mineral in enumerate(self.minerals):
-            response_key = f"{log_type}_{mineral}"
-            if response_key in self.responses:
-                response += volumes[i] * self.responses[response_key]
+            if mineral in self.responses and log_type in self.responses[mineral]:
+                response += volumes[i] * self.responses[mineral][log_type]
 
         # Add fluid contributions
         for i, fluid in enumerate(self.fluids):
@@ -215,16 +211,18 @@ class MultiMineral:
         """
         total_error = 0.0
 
-        # Porosity is the sum of fluid volumes
-        porosity = np.sum(volumes[len(self.minerals):])
-
         for log_type, measured_value in log_values.items():
             if measured_value is not None and not np.isnan(measured_value):
+                # Special handling for RHOB when using density porosity method
                 if self.porosity_method == 'density' and log_type == 'RHOB':
-                    # For density porosity, RHOB is reconstructed from porosity and matrix density
                     mineral_vols = volumes[:len(self.minerals)]
+                    fluid_vols = volumes[len(self.minerals):]
+                    porosity = np.sum(fluid_vols)
+
+                    # For density porosity, RHOB is reconstructed from porosity and matrix density
                     rho_ma = self._calculate_matrix_density(mineral_vols)
-                    reconstructed_value = rho_ma * (1 - porosity) + self.rho_fluid * porosity
+                    rho_fluid = self._calculate_fluid_density(fluid_vols)
+                    reconstructed_value = rho_ma * (1 - porosity) + rho_fluid * porosity
                 else:
                     reconstructed_value = self._calculate_log_response(volumes, log_type)
 
@@ -256,21 +254,14 @@ class MultiMineral:
         rhob = log_values.get('RHOB', 2.65)
         dtc = log_values.get('DTC', None)
 
-        # Initial guess: equal distribution among minerals and fluids
-        n_minerals = len(self.minerals)
-        n_fluids = len(self.fluids)
-
-        # Create an initial guess for volumes to pass to porosity calculation
-        initial_mineral_guess = np.full(n_minerals, (1.0 - 0.1) / n_minerals)
-        initial_fluid_guess = np.full(n_fluids, 0.1 / n_fluids)
-        initial_guess_for_poro = np.concatenate([initial_mineral_guess, initial_fluid_guess])
-
         if nphi is not None and rhob is not None:
-            initial_porosity = self._calculate_porosity(nphi, rhob, dtc, volumes=initial_guess_for_poro)
+            initial_porosity = self._calculate_porosity(nphi, rhob, dtc)
             initial_porosity = max(0.0, min(0.4, initial_porosity))  # Constrain to reasonable range
         else:
-            initial_porosity = 0.01  # Default porosity
+            initial_porosity = 0.1  # Default porosity
 
+        n_minerals = len(self.minerals)
+        n_fluids = len(self.fluids)
         # Distribute volume between minerals and fluids
         mineral_volume = (1.0 - initial_porosity) / n_minerals
         fluid_volume = initial_porosity / n_fluids
@@ -423,17 +414,7 @@ class MultiMineral:
 
         # Add mineral volumes with appropriate column names
         mineral_column_mapping = {
-            'QUARTZ': 'VSAND',
-            'CALCITE': 'VCALC',
-            'DOLOMITE': 'VDOLO',
-            'SHALE': 'VCLAY',
-            'KAOLINITE': 'VKAOL',
-            'FELDSPAR': 'VFELD',
-            'ANHYDRITE': 'VANHY',
-            'GYPSUM': 'VGYPS',
-            'HALITE': 'VHALI',
-            'PYRITE': 'VPYRI',
-            'COAL': 'VCOAL'
+            mineral: Config.MINERALS_NAME_MAPPING.get(mineral, f'V{mineral}') for mineral in self.minerals
         }
 
         for mineral in self.minerals:

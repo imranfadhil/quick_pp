@@ -23,6 +23,47 @@ def normalize_volumetric(phit, **volumetrics):
     return normalized_volumetrics
 
 
+def unnormalize_volumetric(phit, **normalized_volumetrics):
+    """Unnormalize lithology given total porosity.
+
+    This is the reverse of normalize_volumetric. It calculates the matrix-relative
+    volumetrics from bulk-relative (normalized) volumetrics.
+
+    Args:
+        phit (np.ndarray or float): Total porosity in fraction (v/v).
+        **normalized_volumetrics: Keyword arguments representing normalized
+                                  volumetric fractions of the bulk volume (v/v).
+
+    Returns:
+        dict: Unnormalized volumetric fractions relative to the matrix volume.
+    """
+    logger.debug("Unnormalizing volumetrics with total porosity")
+    # Unnormalize the volumetrics
+    vmatrix = 1 - phit
+    # Use np.divide for safe division by zero, returning np.nan
+    unnormalized_volumetrics = {key: np.divide(value, vmatrix, out=np.full_like(value, np.nan), where=vmatrix != 0)
+                                for key, value in normalized_volumetrics.items()}
+    logger.debug(f"Unnormalized volumetrics: {list(unnormalized_volumetrics.keys())}")
+    return unnormalized_volumetrics
+
+
+def get_volumetric_dict(df):
+    """Given dataframe, return a dictionary of the key and values of lithology metrics in the data.
+
+    Args:
+        df (pd.DataFrame): Dataframe with well log data.
+
+    Returns:
+        dict: Dictionary of the key and values of lithology metrics in the data.
+    """
+    volumetric_dict = {}
+    for vol_log in Config.MINERALS_LOG_VALUE.keys():
+        vol_log = Config.MINERALS_NAME_MAPPING.get(vol_log, vol_log)
+        if vol_log in df.columns:
+            volumetric_dict[vol_log.lower()] = df[vol_log].values
+    return volumetric_dict
+
+
 def effective_porosity(phit, phi_shale, vshale):
     """
     Computes effective porosity from total porosity, total porosity of shale and shale volume.
@@ -81,42 +122,36 @@ def estimate_shale_porosity(nphi, phit):
     return np.where(phit_sh > 0, phit_sh, phit).clip(1e-2, 1.0)
 
 
-def rho_matrix(vsand=0, vsilt=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
-               rho_sand: float = 0, rho_silt: float = 0, rho_clay: float = 0,
-               rho_calc: float = 0, rho_dolo: float = 0, rho_heavy: float = 0):
-    """Estimate average matrix density based on dry sand, dry silt, dry clay, dry calcite and
-    dry dolomite volume and density of each.
+def rho_matrix(**volumetrics):
+    """Estimate average matrix density based on mineral volumes and their densities from Config.
 
     Args:
-        vsand (float): Volume of sand.
-        vsilt (float): Volume of silt.
-        vclay (float): Volume of clay.
-        vcalc (float): Volume of calcite.
-        vdolo (float): Volume of dolomite.
-        vheavy (float): Volume of heavy minerals.
-        rho_sand (float, optional): Density of sand in g/cc. Defaults to None.
-        rho_silt (float, optional): Density of silt in g/cc. Defaults to None.
-        rho_clay (float, optional): Density of clay in g/cc. Defaults to None.
-        rho_calc (float, optional): Density of calcite in g/cc. Defaults to None.
-        rho_dolo (float, optional): Density of dolomite in g/cc. Defaults to None.
-        rho_heavy (float, optional): Density of heavy minerals in g/cc. Defaults to 0.
+        **volumetrics: Keyword arguments where keys are mineral volume names
+                       (e.g., VSAND, VCLAY) and values are their volume fractions.
+
 
     Returns:
         float: Matrix density in g/cc.
     """
     logger.debug("Calculating matrix density from mineral volumes")
-    minerals_log_value = Config.MINERALS_LOG_VALUE
-    rho_sand = rho_sand or minerals_log_value['RHOB_QUARTZ']
-    rho_silt = rho_silt or 2.68
-    rho_clay = rho_clay or minerals_log_value['RHOB_SHALE']
-    rho_calc = rho_calc or minerals_log_value['RHOB_CALCITE']
-    rho_dolo = rho_dolo or minerals_log_value['RHOB_DOLOMITE']
+    rho_ma = 0.0
+    mineral_properties = Config.MINERALS_LOG_VALUE
+    # Create a reverse mapping from volume name (e.g., 'VSAND') to mineral name (e.g., 'QUARTZ')
+    name_to_mineral_map = {v: k for k, v in Config.MINERALS_NAME_MAPPING.items()}
 
-    rho_matrix = vsand * rho_sand + vsilt * rho_silt + vclay * rho_clay + \
-        vcalc * rho_calc + vdolo * rho_dolo + vheavy * rho_heavy
+    for vol_name, vol_value in volumetrics.items():
+        # Find the mineral name (e.g., 'QUARTZ') from the volume name (e.g., 'VSAND')
+        mineral_name = name_to_mineral_map.get(vol_name.upper())
 
-    logger.debug(f"Matrix density range: {rho_matrix.min():.3f} - {rho_matrix.max():.3f} g/cm³")
-    return rho_matrix
+        if mineral_name and mineral_name in mineral_properties:
+            rho_mineral = mineral_properties[mineral_name].get('RHOB')
+            if rho_mineral is not None:
+                rho_ma += vol_value * rho_mineral
+        elif vol_name.upper() == 'VSILT':  # Handle silt separately if not in main config
+            rho_ma += vol_value * 2.68
+
+    logger.debug(f"Matrix density range: {np.nanmin(rho_ma):.3f} - {np.nanmax(rho_ma):.3f} g/cm³")
+    return rho_ma
 
 
 def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
@@ -160,10 +195,10 @@ def dt_matrix(vsand=0, vclay=0, vcalc=0, vdolo=0, vheavy=0,
     """
     logger.debug("Calculating matrix sonic transit time from mineral volumes")
     minerals_log_value = Config.MINERALS_LOG_VALUE
-    dt_sand = dt_sand or minerals_log_value['DTC_QUARTZ']
-    dt_clay = dt_clay or minerals_log_value['DTC_SHALE']
-    dt_calc = dt_calc or minerals_log_value['DTC_CALCITE']
-    dt_dolo = dt_dolo or minerals_log_value['DTC_DOLOMITE']
+    dt_sand = dt_sand or minerals_log_value['QUARTZ']['DTC']
+    dt_clay = dt_clay or minerals_log_value['SHALE']['DTC']
+    dt_calc = dt_calc or minerals_log_value['CALCITE']['DTC']
+    dt_dolo = dt_dolo or minerals_log_value['DOLOMITE']['DTC']
 
     dt_matrix = (vsand * dt_sand + vclay * dt_clay +
                  vcalc * dt_calc + vdolo * dt_dolo + vheavy * dt_heavy)
