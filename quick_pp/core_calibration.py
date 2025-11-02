@@ -438,6 +438,7 @@ def autocorrelate_core_depth(df):
               and 'DEPTH_SHIFT'.
     """
     from dtw import dtw
+    from sklearn.preprocessing import minmax_scale
     required_cols = ['WELL_NAME', 'DEPTH', 'PHIT', 'CPORE', 'CPERM', 'CORE_ID']
     for col in required_cols:
         if col not in df.columns:
@@ -465,8 +466,8 @@ def autocorrelate_core_depth(df):
         log_data_subset = log_data.iloc[unique_indices].reset_index(drop=True)
 
         # Extract numpy arrays for DTW
-        phit_vals = log_data_subset['PHIT'].values
-        cpore_vals = core_data['CPORE'].values
+        phit_vals = minmax_scale(log_data_subset['PHIT'].values)
+        cpore_vals = minmax_scale(core_data['CPORE'].values)
 
         alignment = dtw(cpore_vals, phit_vals, keep_internals=True, step_pattern="symmetric2")
 
