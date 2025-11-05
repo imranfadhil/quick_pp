@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "quick-pp"
 version = "0.2.70"
-description = "Python package to assist in providing quick-look/ preliminary petrophysical estimation."
+description = "Python package to assist in providing quick-look preliminary petrophysical estimation."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -13,12 +13,13 @@ authors = [
     { name = "Imran Fadhil", email = "imranfadhil@gmail.com" },
 ]
 keywords = [
-    "analysis",
     "geoscience",
-    "log",
     "petrophysics",
+    "well log", "well plot",
     "quick_pp",
-    "well",
+    "multi mineral",
+    "rock typing",
+    "saturation height function", "shf",
 ]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
