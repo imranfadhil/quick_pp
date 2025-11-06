@@ -30,9 +30,9 @@ To use ``quick_pp`` in a project, import it and call its functions::
 
     import quick_pp
 
-More examples are available in `pp_portfolio github <https://github.com/imranfadhil/pp_portfolio>` _.
+More examples are available in `pp_portfolio <https://github.com/imranfadhil/pp_portfolio>`_ github repository.
 
-An article demonstrating the use of ``quick_pp`` has been published in Petrophysics Journal - Vol. 66, No.5 (October 2025): Pages 807-838 `Enhanced Learning Experience for New Petrophysicists Using Open-Source Carbonate Data and Python Programming <https://www.researchgate.net/publication/396099755_Enhanced_Learning_Experience_for_New_Petrophysicists_Using_Open-Source_Carbonate_Data_and_Python_Programming>` _.
+An article demonstrating the use of ``quick_pp`` has been published in Petrophysics Journal - Vol. 66, No.5 (October 2025): Pages 807-838 `Enhanced Learning Experience for New Petrophysicists Using Open-Source Carbonate Data and Python Programming <https://www.researchgate.net/publication/396099755_Enhanced_Learning_Experience_for_New_Petrophysicists_Using_Open-Source_Carbonate_Data_and_Python_Programming>`_.
 
 
 Jupyter Notebooks
