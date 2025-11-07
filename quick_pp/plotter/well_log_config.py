@@ -3,9 +3,9 @@ import numpy as np
 
 COLOR_DICT = {
     'BADHOLE': 'rgba(0, 0, 0, .25)',
-    'BS': 'brown',
+    'BS': 'black',
     'BVW': "#B7EDFF",
-    'CALI': '#618F63',
+    'CALI': 'brown',
     'COAL_FLAG': '#262626',
     'CPERM': '#FF0000',
     'CPORE': '#FF0000',
@@ -157,7 +157,7 @@ TRACE_DEFS = dict(
         hide_xaxis=False,
         style={
             'line_dash': 'dot', 'line_width': 1, 'line_color': COLOR_DICT['CALI'], 'fill': 'tozerox',
-            'fillcolor': 'rgba(165, 42, 42, .15)'
+            'fillcolor': "#FF880020"
         }
     ),
     BS=dict(
