@@ -157,7 +157,7 @@ TRACE_DEFS = dict(
         hide_xaxis=False,
         style={
             'line_dash': 'dot', 'line_width': 1, 'line_color': COLOR_DICT['CALI'], 'fill': 'tozerox',
-            'fillcolor': "#FF880020"
+            'fillcolor': 'rgba(165, 42, 42, .15)'
         }
     ),
     BS=dict(

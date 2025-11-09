@@ -95,7 +95,7 @@ class SandShale:
         vcld = np.empty(0)
         for i, point in enumerate(E):
             var_pt = line_intersection((A, C), (D, point))
-            projlithofrac = length_a_b(var_pt, A)
+            projlithofrac = length_a_b(var_pt, C)
             sand_frac = projlithofrac / rocklithofrac
             sand_frac = 0 if var_pt[0] > C[0] else sand_frac
             vsand = np.append(vsand, sand_frac)
