@@ -21,15 +21,20 @@ def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
     """Estimate water saturation based on Archie's model for clean sand.
 
     Args:
-        rt (float): True resistivity or deep resistivity log.
-        rw (float): Formation water resistivity.
-        phit (float): Total porosity.
-        a (float): Cementation exponent.
-        m (float): Saturation exponent.
-        n (float): Porosity exponent.
+        rt (np.ndarray or float): True resistivity or deep resistivity log (ohm.m).
+        rw (np.ndarray or float): Formation water resistivity (ohm.m).
+        phit (np.ndarray or float): Total porosity (fraction).
+        a (float, optional): Tortuosity factor. Defaults to 1.
+        m (float, optional): Cementation exponent. Defaults to 2.
+        n (float, optional): Saturation exponent. Defaults to 2.
 
     Returns:
-        float: Water saturation.
+        np.ndarray or float: Water saturation (fraction).
+
+    References:
+        Archie, G.E. (1942). The Electrical Resistivity Log as an Aid in
+        Determining Some Reservoir Characteristics. Transactions of the AIME,
+        146(1), 54-62.
 
     """
     logger.debug(f"Calculating Archie saturation with a={a}, m={m}, n={n}")
@@ -39,22 +44,31 @@ def archie_saturation(rt, rw, phit, a=1, m=2, n=2):
 
 
 def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
-    """Estimate water saturation based on Waxman-Smits model for dispersed clay mineral.
-    Based on Ausburn, Brian E., and Robert Freedman. "The Waxman-smits Equation For Shaly Sands:
-        i. Simple Methods Of Solution
-        ii. Error Analysis." The Log Analyst 26 (1985)
+    """Estimate water saturation using the Waxman-Smits model for shaly sands.
+
+    This function iteratively solves the Waxman-Smits equation, which accounts
+    for the conductivity of clay minerals in the formation.
 
     Args:
-        rt (float): True resistivity or deep resistivity log.
-        rw (float): Formation water resistivity.
-        phit (float): Total porosity.
-        B (float): Conductance parameter.
-        Qv (float): Cation exchange capacity per unit total pore volume (meq/cm3).
-        m (float): Saturation factor.
-        n (float): Cementartion factor.
+        rt (np.ndarray or float): True resistivity of the formation (ohm.m).
+        rw (np.ndarray or float): Formation water resistivity (ohm.m).
+        phit (np.ndarray or float): Total porosity (fraction).
+        Qv (np.ndarray or float, optional): Cation exchange capacity per unit pore volume (meq/cm³).
+                                            Defaults to 0.3 if not provided.
+        B (np.ndarray or float, optional): Equivalent conductance of clay exchange cations (S·m²/meq).
+                                           If not provided, it is estimated based on Rw at 25°C.
+        m (float, optional): Cementation exponent. Defaults to 2.
+        n (float, optional): Saturation exponent. Defaults to 2.
 
     Returns:
-        float: Water saturation.
+        np.ndarray or float: Water saturation (fraction).
+
+    References:
+        Waxman, M.H. and Smits, L.J.M. (1968). Electrical Conductivities in Oil-Bearing Shaly Sands.
+        Society of Petroleum Engineers Journal, 8(2), 107-122.
+
+        Ausburn, B.E. and Freedman, R. (1985). The Waxman-Smits Equation For Shaly Sands:
+        I. Simple Methods Of Solution, II. Error Analysis. The Log Analyst, 26.
     """
     logger.debug("Calculating Waxman-Smits saturation")
     # Estimate B at 25 degC if not provided
@@ -86,21 +100,27 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
 
 
 def normalized_waxman_smits_saturation(rt, rw, phit, vshale, phit_shale, rt_shale, m=2, n=2):
-    """Estimate water saturation based on Waxman-Smits model for dispersed clay mineral.
-    Based on Ausburn, Brian E., and Robert Freedman. "The Waxman-smits Equation For Shaly Sands:
-        i. Simple Methods Of Solution
-        ii. Error Analysis." The Log Analyst 26 (1985)
+    """Estimate water saturation using the normalized Waxman-Smits model (Juhasz, 1981).
+
+    This is a variation of the Waxman-Smits model that uses normalized Qv (Qvn)
+    and derives the B parameter from shale properties.
 
     Args:
-        rt (float): True resistivity or deep resistivity log.
-        rw (float): Formation water resistivity.
-        phit (float): Total porosity.
-
-        m (float): Saturation factor.
-        n (float): Cementartion factor.
+        rt (np.ndarray or float): True resistivity of the formation (ohm.m).
+        rw (np.ndarray or float): Formation water resistivity (ohm.m).
+        phit (np.ndarray or float): Total porosity (fraction).
+        vshale (np.ndarray or float): Volume of shale (fraction).
+        phit_shale (np.ndarray or float): Porosity of the shale (fraction).
+        rt_shale (np.ndarray or float): Resistivity of the shale (ohm.m).
+        m (float, optional): Cementation exponent. Defaults to 2.
+        n (float, optional): Saturation exponent. Defaults to 2.
 
     Returns:
-        float: Water saturation.
+        np.ndarray or float: Water saturation (fraction).
+
+    References:
+        Juhasz, I. (1981). Normalized Qv—The Key to Shaly Sand Evaluation Using the Waxman-Smits Equation
+        in the Absence of Core Data. SPWLA 22nd Annual Logging Symposium.
     """
     logger.debug("Calculating Normalized Waxman-Smits saturation")
     Qvn = estimate_qvn(vclay=vshale, phit=phit, phit_clay=phit_shale)
@@ -126,22 +146,28 @@ def normalized_waxman_smits_saturation(rt, rw, phit, vshale, phit_shale, rt_shal
 
 
 def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
-    """Estimate water saturation based on dual water model, an extension from Waxman-Smits by Clavier, Coates and
-    Dumanoir (1977).
+    """Estimate water saturation using the Dual Water model.
+
+    The Dual Water model is an extension of the Waxman-Smits model that considers
+    two types of water in the pore space: bound water and free water.
 
     Args:
-        rt (float): True resistivity or deep resistivity log in ohm.m.
-        rw (float): Formation water resistivity in ohm.m.
-        phit (float): Total porosity in fraction.
-        a (float): Cementation exponent.
-        m (float): Saturation exponent.
-        n (float): Porosity exponent.
-        swb (float): Bound water saturation in fraction.
-        rwb (float): Bound water resistivity in ohm.m.
+        rt (np.ndarray or float): True resistivity of the formation (ohm.m).
+        rw (np.ndarray or float): Formation (free) water resistivity (ohm.m).
+        phit (np.ndarray or float): Total porosity (fraction).
+        a (float): Tortuosity factor.
+        m (float): Cementation exponent.
+        n (float): Saturation exponent.
+        swb (np.ndarray or float): Bound water saturation (fraction of total porosity).
+        rwb (np.ndarray or float): Bound water resistivity (ohm.m).
 
     Returns:
-        float: Water saturation.
+        np.ndarray or float: Total water saturation (fraction).
 
+    References:
+        Clavier, C., Coates, G., and Dumanoir, J. (1984). The Theoretical and Experimental
+        Bases for the "Dual Water" Model for the Interpretation of Shaly Sands.
+        Society of Petroleum Engineers Journal, 24(2), 153-168.
     """
     logger.debug("Calculating dual water saturation")
     # Initial guess
@@ -164,22 +190,27 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
 
 
 def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
-    """Estimate water saturation based on Indonesian model which may work well with fresh formation water.
-    Based on Poupon-Leveaux 1971.
+    """Estimate water saturation using the Indonesian model (Poupon-Leveaux, 1971).
+
+    This model is often used for shaly sands, particularly in formations with
+    fresh water.
 
     Args:
-        rt (float): True resistivity or deep resistivity log.
-        rw (float): Formation water resistivity.
-        phie (float): Effective porosity.
-        vsh (float): Volume of shale.
-        rsh (float): Resistivity of shale.
-        a (float): Cementation exponent.
-        m (float): Saturation exponent.
-        n (float): Porosity exponent.
+        rt (np.ndarray or float): True resistivity of the formation (ohm.m).
+        rw (np.ndarray or float): Formation water resistivity (ohm.m).
+        phie (np.ndarray or float): Effective porosity (fraction).
+        vsh (np.ndarray or float): Volume of shale (fraction).
+        rsh (np.ndarray or float): Resistivity of shale (ohm.m).
+        a (float): Tortuosity factor.
+        m (float): Cementation exponent.
+        n (float): Saturation exponent.
 
     Returns:
-        float: Water saturation.
+        np.ndarray or float: Water saturation (fraction).
 
+    References:
+        Poupon, A., and Leveaux, J. (1971). Evaluation of Water Saturation in Shaly Formations.
+        The Log Analyst, 12(4).
     """
     logger.debug("Calculating Indonesian saturation")
     sw = ((1 / rt)**(1 / 2) / ((vsh**(1 - 0.5 * vsh) / rsh**(1 / 2)) + (phie**m / (a * rw))**(1 / 2)))**(2 / n)
@@ -188,20 +219,22 @@ def indonesian_saturation(rt, rw, phie, vsh, rsh, a, m, n):
 
 
 def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
-    """Estimate water saturation based on Simandoux's model.
+    """Estimate water saturation using the Simandoux model (1963).
+
+    This is a classic shaly sand model that adds a shale conductivity term
+    to the clean sand Archie equation.
 
     Args:
-        rt (float): True resistivity or deep resistivity log.
-        rw (float): Formation water resistivity.
-        phit (float): Total porosity.
-        vsh (float): Volume of shale.
-        rsh (float): Resistivity of shale.
-        a (float): Cementation exponent.
-        m (float): Saturation exponent.
+        rt (np.ndarray or float): True resistivity of the formation (ohm.m).
+        rw (np.ndarray or float): Formation water resistivity (ohm.m).
+        phit (np.ndarray or float): Total porosity (fraction).
+        vsh (np.ndarray or float): Volume of shale (fraction).
+        rsh (np.ndarray or float): Resistivity of shale (ohm.m).
+        a (float): Tortuosity factor.
+        m (float): Cementation exponent.
 
     Returns:
-        float: Water saturation.
-
+        np.ndarray or float: Water saturation (fraction).
     """
     logger.debug("Calculating Simandoux saturation")
     shale_factor = vsh / rsh
@@ -211,17 +244,25 @@ def simandoux_saturation(rt, rw, phit, vsh, rsh, a, m):
 
 
 def connectivity_saturation(rt, rw, phit, mu=2, chi_w=0):
-    """Estimate water saturation based on connectivity model Montaron 2009
+    """Estimate water saturation using the Connectivity Equation (Montaron, 2009).
+
+    This model relates water saturation to porosity and a water connectivity
+    index, offering an alternative to traditional shaly sand models.
+
     Args:
-        rt (float): True resistivity or deep resistivity log.
-        rw (float): Formation water resistivity.
-        phit (float): Total porosity.
-        mu (float): Conductivity exponent, ranges from 1.6 to 2. Defaults to 2.
-        chi_w (float): Water connectivity correction index, ranges from -0.02 to 0.02. Defaults to 0.
+        rt (np.ndarray or float): True resistivity of the formation (ohm.m).
+        rw (np.ndarray or float): Formation water resistivity (ohm.m).
+        phit (np.ndarray or float): Total porosity (fraction).
+        mu (float, optional): Conductivity exponent, typically between 1.6 and 2.0. Defaults to 2.
+        chi_w (float, optional): Water connectivity correction index, typically between -0.02 and 0.02.
+                                 Defaults to 0.
 
     Returns:
-        float: Water saturation.
+        np.ndarray or float: Water saturation (fraction).
 
+    References:
+        Montaron, B. (2009). The Connectivity Equation: A New Formation Evaluation Concept.
+        SPWLA 50th Annual Logging Symposium.
     """
     logger.debug("Calculating connectivity saturation")
 
@@ -269,9 +310,11 @@ def estimate_temperature_gradient(tvd, unit='metric'):
 
     Args:
         tvd (float): True vertical depth in m.
+        unit (str, optional): The unit system for depth and gradient, either 'metric' or 'imperial'.
+                              Defaults to 'metric'.
 
     Returns:
-        float: Formation temperature in degC.
+        np.ndarray or float: Formation temperature in degrees Celsius.
     """
     logger.debug(f"Estimating temperature gradient with unit: {unit}")
     assert unit in ['metric', 'imperial'], "Please choose from 'metric' or 'imperial' units."
@@ -281,14 +324,21 @@ def estimate_temperature_gradient(tvd, unit='metric'):
 
 
 def estimate_b_waxman_smits(T, rw):
-    """Estimate B (conductance parameter) for Waxman-Smits model based on Juhasz 1981.
+    """Estimate the B parameter (equivalent conductance) for the Waxman-Smits model.
+
+    This function uses the empirical relationship proposed by Juhasz (1981) which
+    relates B to formation temperature and water resistivity.
 
     Args:
-        T (float): Temperature in degC.
-        rw (float): Formation water resistivity in ohm.m.
+        T (np.ndarray or float): Formation temperature in degrees Celsius.
+        rw (np.ndarray or float): Formation water resistivity (ohm.m).
 
     Returns:
-        float: B parameter.
+        np.ndarray or float: The B parameter for the Waxman-Smits equation.
+
+    References:
+        Juhasz, I. (1981). Normalized Qv—The Key to Shaly Sand Evaluation Using the Waxman-Smits Equation
+        in the Absence of Core Data. SPWLA 22nd Annual Logging Symposium.
     """
     logger.debug("Estimating B parameter for Waxman-Smits (Juhasz 1981)")
     B = (-1.28 + 0.225 * T - 0.0004059 * T**2) / (1 + (0.045 * T - 0.27) * rw**1.23)
@@ -297,14 +347,16 @@ def estimate_b_waxman_smits(T, rw):
 
 
 def estimate_rw_temperature_salinity(temperature_gradient, water_salinity):
-    """Estimate formation water resistivity based on temperature gradient and water salinity.
+    """Estimate formation water resistivity (Rw) from temperature and salinity.
+
+    This function uses a common empirical formula to approximate Rw.
 
     Args:
-        temperature_gradient (float): Temperature gradient in degC/meter
-        water_salinity (float): Water salinity in ppm
+        temperature_gradient (np.ndarray or float): Formation temperature in degrees Celsius.
+        water_salinity (np.ndarray or float): Water salinity in parts per million (ppm).
 
     Returns:
-        float: Formation water resistivity.
+        np.ndarray or float: Estimated formation water resistivity (ohm.m).
     """
     logger.debug("Estimating Rw from temperature and salinity")
     rw = (400000 / water_salinity)**.88 / temperature_gradient
@@ -313,16 +365,17 @@ def estimate_rw_temperature_salinity(temperature_gradient, water_salinity):
 
 
 def estimate_rw_surface(temperature_gradient, rw_surface, temp_surface=20):
-    """Estimate formation water resistivity based on surface resistivity and temperature.
+    """Estimate downhole formation water resistivity (Rw) from surface measurements.
+
     This uses Arps' formula to adjust resistivity for temperature.
 
     Args:
-        temperature_gradient (float): Formation temperature in degC.
-        rw_surface (float): Water resistivity at surface temperature in ohm.m.
-        temp_surface (float, optional): Surface temperature in degC. Defaults to 20.
+        temperature_gradient (np.ndarray or float): Formation temperature in degrees Celsius.
+        rw_surface (float): Water resistivity measured at surface temperature (ohm.m).
+        temp_surface (float, optional): Surface temperature in degrees Celsius. Defaults to 20.
 
     Returns:
-        float: Formation water resistivity in ohm.m.
+        np.ndarray or float: Estimated formation water resistivity at formation temperature (ohm.m).
     """
     logger.debug("Estimating Rw from surface temperature and resistivity using Arps' formula")
     rw = rw_surface * (temp_surface + 21.5) / (temperature_gradient + 21.5)
@@ -331,14 +384,20 @@ def estimate_rw_surface(temperature_gradient, rw_surface, temp_surface=20):
 
 
 def estimate_rw_archie(phit, rt, a=1, m=2):
-    """Estimate water saturation based on Archie's equation.
+    """Estimate formation water resistivity (Rw) from a water-bearing interval using Archie's equation.
+
+    This method assumes the interval is 100% water-saturated (Sw=1) and calculates
+    Rw. It then fits a minimum trend line to the calculated values to find a
+    representative Rw.
 
     Args:
-        phit (float): Total porosity.
-        rt (float): True resistivity.
+        phit (np.ndarray or float): Total porosity (fraction).
+        rt (np.ndarray or float): True resistivity (ohm.m).
+        a (float, optional): Tortuosity factor. Defaults to 1.
+        m (float, optional): Cementation exponent. Defaults to 2.
 
     Returns:
-        float: Formation water resistivity.
+        np.ndarray or float: Estimated formation water resistivity (ohm.m).
     """
     logger.debug("Estimating Rw using Archie's equation")
     rw = pd.Series(phit**m * rt / a)
@@ -348,14 +407,21 @@ def estimate_rw_archie(phit, rt, a=1, m=2):
 
 
 def estimate_rw_waxman_smits(phit, rt, a=1, m=2, B=None, Qv=None):
-    """Estimate water saturation based on Archie's equation.
+    """Estimate Rw from a water-bearing interval using the Waxman-Smits equation.
+
+    This method assumes the interval is 100% water-saturated (Sw=1) and calculates
+    Rw. It then fits a minimum trend line to the calculated values.
 
     Args:
-        phit (float): Total porosity.
-        rt (float): True resistivity.
+        phit (np.ndarray or float): Total porosity (fraction).
+        rt (np.ndarray or float): True resistivity (ohm.m).
+        a (float, optional): Tortuosity factor. Defaults to 1.
+        m (float, optional): Cementation exponent. Defaults to 2.
+        B (float, optional): Equivalent conductance of clay exchange cations. Defaults to 2.
+        Qv (float, optional): Cation exchange capacity. Defaults to 0.3.
 
     Returns:
-        float: Formation water resistivity.
+        np.ndarray or float: Estimated formation water resistivity (ohm.m).
     """
     logger.debug("Estimating Rw using Waxman-Smits equation")
     if B is None:
@@ -370,16 +436,21 @@ def estimate_rw_waxman_smits(phit, rt, a=1, m=2, B=None, Qv=None):
 
 
 def estimate_rw_from_shale_trend(rt, phit, vshale, depth, m=1.3):
-    """Estimate Rw from shale trend.
+    """Estimate Rw by extrapolating the resistivity trend from shales into sands.
+
+    This method identifies a resistivity trend with depth in nearby shales and
+    assumes this trend represents the Ro (resistivity of 100% water-saturated rock)
+    baseline. Rw is then calculated from this Ro trend and formation porosity.
 
     Args:
-        rt (float): True resistivity.
-        phit (float): Total porosity.
-        m (float): Shale cementation or shape factor. Defaults to 1.3.
-        alpha (float): Alpha value for percentile calculation. Defaults to 0.1.
+        rt (np.ndarray or float): True resistivity (ohm.m).
+        phit (np.ndarray or float): Total porosity (fraction).
+        vshale (np.ndarray or float): Volume of shale (fraction).
+        depth (np.ndarray or float): Depth log.
+        m (float, optional): Shale cementation or shape factor. Defaults to 1.3.
 
     Returns:
-        float: Formation water resistivity.
+        np.ndarray or float: Estimated formation water resistivity (ohm.m).
     """
     logger.debug(f"Estimating Rw from shale trend with m={m}")
 
@@ -401,14 +472,18 @@ def estimate_rw_from_shale_trend(rt, phit, vshale, depth, m=1.3):
 
 
 def estimate_rt_shale(rt, vshale):
-    """Estimate resistivity of shale.
+    """Estimate shale resistivity (Rsh) from log data.
+
+    This function identifies shale intervals based on a Vshale cutoff (50th percentile),
+    applies a rolling average to the resistivity in those intervals, and then
+    propagates this value across the entire log interval.
 
     Args:
-        rt (float): True resistivity.
-        vshale (float): Volume of shale.
+        rt (pd.Series or np.ndarray): True resistivity log (ohm.m).
+        vshale (pd.Series or np.ndarray): Volume of shale log (fraction).
 
     Returns:
-        float: Resistivity of shale.
+        pd.Series: Estimated shale resistivity log (ohm.m).
     """
     # Identify shale intervals
     vshale = remove_outliers(vshale)
@@ -426,16 +501,16 @@ def estimate_rt_shale(rt, vshale):
 
 
 def estimate_qv(vcld, phit, rho_clay=2.65, cec_clay=.062):
-    """Estimate Qv, cation exchange capacity per unit total pore volume (meq/cm3).
+    """Estimate Qv (cation exchange capacity per unit pore volume) from clay properties.
 
     Args:
-        vcld (float): Volume of dry clay in fraction
-        phit (float): Total porosity in fraction
-        rho_clay (float): Bulk density of clay in g/cc
-        cec_clay (float): Cation exchange capacity of clay in meq/g
+        vcld (np.ndarray or float): Volume of dry clay (fraction of bulk volume).
+        phit (np.ndarray or float): Total porosity (fraction).
+        rho_clay (float, optional): Bulk density of dry clay (g/cm³). Defaults to 2.65.
+        cec_clay (float, optional): Cation exchange capacity of clay (meq/g). Defaults to 0.062.
 
     Returns:
-        float: Qv in meq/cm3.
+        np.ndarray or float: Qv in meq/cm³.
     """
     logger.debug(f"Estimating Qv with clay density={rho_clay} g/cm³, CEC={cec_clay} meq/g")
     qv = vcld * rho_clay * cec_clay / phit
@@ -444,45 +519,56 @@ def estimate_qv(vcld, phit, rho_clay=2.65, cec_clay=.062):
 
 
 def estimate_qvn(vclay, phit, phit_clay):
-    """Estimate normalized Qv
+    """Estimate normalized Qv (Qvn) for the Juhasz (1981) model.
 
     Args:
-        vclay (float): Volume of clay in fraction
-        phit (float): Total porosity in fraction
-        phit_clay (float): Total porosity of clay in fraction
+        vclay (np.ndarray or float): Volume of clay (fraction).
+        phit (np.ndarray or float): Total porosity (fraction).
+        phit_clay (np.ndarray or float): Total porosity of the clay (fraction).
 
     Returns:
-        float: Normalized Qv.
+        np.ndarray or float: Normalized Qv (Qvn).
     """
     return vclay * phit_clay / phit
 
 
 def estimate_qv_ward(rt, phit, B, rw, m):
-    """Estimate Qv based on B. Ward (SIPM), 1973
+    """Estimate Qv from water-bearing zone logs using the Ward (1973) method.
+
+    This method inverts the Waxman-Smits equation, assuming Sw=1, to solve for Qv.
 
     Args:
-        rt (float): True resistivity in ohm.m from a water-bearing zone.
-        phit (float): Total porosity in fraction.
-        B (float): Conductance parameter for Waxman-Smits.
-        rw (float): Formation water resistivity in ohm.m.
+        rt (np.ndarray or float): True resistivity in a water-bearing zone (ohm.m).
+        phit (np.ndarray or float): Total porosity (fraction).
+        B (float): Equivalent conductance of clay exchange cations (S·m²/meq).
+        rw (float): Formation water resistivity (ohm.m).
         m (float): Cementation exponent.
 
     Returns:
-        float: Qv in meq/cm3.
+        np.ndarray or float: Qv in meq/cm³.
+
+    References:
+        Ward, B. (1973). Internal SIPM Report.
     """
     return 1 / B * ((1 / (rt * phit**m)) - (1 / rw))
 
 
 def estimate_qv_hill(vclb, phit, water_salinity=10000):
-    """Estimating Qv based on Hill et. al, 1979.
+    """Estimate Qv using the empirical relationship from Hill, Shirley, and Klein (1979).
+
+    This method relates Qv to the bulk volume of clay-bound water and water salinity.
 
     Args:
-        vclb (float): Volume of clay bound water in fraction.
-        phit (float): Total porosity in fraction.
-        water_salinity (float): Water salinity in ppm or meq/cc.
+        vclb (np.ndarray or float): Volume of clay bound water (fraction of bulk volume).
+        phit (np.ndarray or float): Total porosity (fraction).
+        water_salinity (float, optional): Water salinity in ppm. Defaults to 10000.
 
     Returns:
-        float: Qv in meq/cc
+        np.ndarray or float: Qv in meq/cm³.
+
+    References:
+        Hill, H.J., Shirley, O.J., and Klein, G.E. (1979). Bound Water in Shaly Sands—Its
+        Relation to Qv and Other Formation Properties. The Log Analyst, 20(3).
     """
     logger.debug(f"Estimating Qv using Hill method with water salinity={water_salinity}")
     qv = (vclb / phit) / (0.084 * water_salinity**-0.5 + 0.22)
@@ -491,15 +577,22 @@ def estimate_qv_hill(vclb, phit, water_salinity=10000):
 
 
 def estimate_qv_lavers(phit, a=3.05e-4, b=3.49):
-    """Based on Lavers, 1975.
+    """Estimate Qv from porosity using the Lavers (1975) empirical equation.
+
+    This method provides a quick estimate of Qv based on a power-law relationship
+    with total porosity.
 
     Args:
-        phit (float): Total porosity in fraction.
-        a (float): Constant, defaults to 3.05e-4.
-        b (float): Constant, defaults to 3.49.
+        phit (np.ndarray or float): Total porosity (fraction).
+        a (float, optional): Empirical constant. Defaults to 3.05e-4.
+        b (float, optional): Empirical exponent. Defaults to 3.49.
 
     Returns:
-        float: Qv in meq/cc.
+        np.ndarray or float: Qv in meq/cm³.
+
+    References:
+        Lavers, B.A., Smits, L.J.M., and van Baaren, C. (1975). Some fundamental problems of
+        formation evaluation in the North Sea. The Log Analyst, 16(3).
     """
     logger.debug(f"Estimating Qv using Lavers method with a={a}, b={b}")
     qv = a * phit**-b
@@ -508,29 +601,35 @@ def estimate_qv_lavers(phit, a=3.05e-4, b=3.49):
 
 
 def estimate_bqv(phit, max_phit_clean_sand, C):
-    """Estimate BQv (Bulk volume of clay bound water) based on Juhasz/ Rackley method.
+    """Estimate BQv (Bulk Volume of clay-bound water) using the Juhasz/Rackley method.
+
+    This method relates the reduction in porosity from a clean sand trend to the
+    amount of clay-bound water.
 
     Args:
-        phit (float): Total porosity.
-        max_phit_clean_sand (float): Maximum porosity of clean sand.
-        C (float): Constant depending on clay type.
+        phit (np.ndarray or float): Total porosity (fraction).
+        max_phit_clean_sand (float): Maximum porosity of the clean sand trend.
+        C (float): A constant that depends on the clay type.
 
     Returns:
-        float: Bulk volume of clay bound water.
+        np.ndarray or float: Bulk volume of clay-bound water (fraction of bulk volume).
     """
     return (max_phit_clean_sand - phit) / (C * phit)
 
 
 def estimate_m_archie(rt, rw, phit):
-    """Estimate apparent m (saturation factor) based on Archie's equation in water bearing zone.
+    """Estimate the apparent cementation exponent (m) using Archie's equation.
+
+    This function inverts Archie's equation in a water-bearing zone (assuming Sw=1)
+    to solve for 'm'.
 
     Args:
-        rt (float): True resistivity or deep resistivity log.
-        rw (float): Formation water resistivity.
-        phit (float): Total porosity.
+        rt (np.ndarray or float): True resistivity in a water-bearing zone (ohm.m).
+        rw (np.ndarray or float): Formation water resistivity (ohm.m).
+        phit (np.ndarray or float): Total porosity (fraction).
 
     Returns:
-        float: Apparent m parameter.
+        np.ndarray or float: Apparent cementation exponent (m).
     """
     logger.debug("Estimating apparent m using Archie's equation")
     m = np.log(rw / rt) / np.log(phit)
@@ -539,17 +638,20 @@ def estimate_m_archie(rt, rw, phit):
 
 
 def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
-    """Estimate apparent m based on Indonesian model in water bearing zone (shaly ~ vshale < 25%).
+    """Estimate the apparent cementation exponent (m) using the Indonesian model.
+
+    This function inverts the Indonesian saturation equation in a water-bearing
+    zone (assuming Sw=1) to solve for 'm'. It is typically used in shaly intervals.
 
     Args:
-        rt (float): True resistivity or deep resistivity log.
-        rw (float): Formation water resistivity.
-        phie (float): Effective porosity.
-        vsh (float): Volume of shale.
-        rsh (float): Resistivity of shale
+        rt (np.ndarray or float): True resistivity in a water-bearing zone (ohm.m).
+        rw (np.ndarray or float): Formation water resistivity (ohm.m).
+        phie (np.ndarray or float): Effective porosity (fraction).
+        vsh (np.ndarray or float): Volume of shale (fraction).
+        rsh (np.ndarray or float): Resistivity of shale (ohm.m).
 
     Returns:
-        float: Apparent m parameter.
+        np.ndarray or float: Apparent cementation exponent (m).
     """
     logger.debug("Estimating apparent m using Indonesian model")
     m = (2 / np.log(phie)) * np.log(rw**0.5 * ((1 / rt)**0.5 - (vsh**(1 - 0.5 * vsh) / rsh**0.5)))
@@ -558,7 +660,16 @@ def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
 
 
 def qv_phit_xplot(phit, qv):
-    """Generate BQV plot (Cwa vs 1/PHIT) and fit a best straight line."""
+    """Generate a Qv vs 1/PHIT crossplot.
+
+    This plot is used to analyze the relationship between cation exchange capacity (Qv)
+    and porosity, which can help in understanding clay distribution. A best-fit
+    straight line is overlaid on the data.
+
+    Args:
+        phit (np.ndarray or float): Total porosity (fraction).
+        qv (np.ndarray or float): Cation exchange capacity per unit pore volume (meq/cm³).
+    """
     fig, ax = plt.subplots()
     ax.set_title("Qv vs 1/PHIT")
 
@@ -582,8 +693,20 @@ def qv_phit_xplot(phit, qv):
     ax.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
 
 
-def cwa_qvn_xplot(rt, phit, qvn, m=2.0, rw=.2, B=None, C=None, slope=250):
-    """Generate Cwa vs Qvn plot."""
+def cwa_qvn_xplot(rt, phit, qvn, m=2.0, rw=.2, slope=250):
+    """Generate a Cwa vs Qvn plot for shaly sand analysis.
+
+    This plot is used to graphically solve for water saturation in the
+    normalized Waxman-Smits (Juhasz) model.
+
+    Args:
+        rt (np.ndarray or float): True resistivity of the formation (ohm.m).
+        phit (np.ndarray or float): Total porosity (fraction).
+        qvn (np.ndarray or float): Normalized Qv.
+        m (float, optional): Cementation exponent. Defaults to 2.0.
+        rw (float, optional): Formation water resistivity (ohm.m). Used for the trend line. Defaults to 0.2.
+        slope (float, optional): Slope of the interpretation line. Defaults to 250.
+    """
     x = qvn
     y = 1 / (rt * phit**m)
     if len(x) != len(y):
@@ -610,13 +733,18 @@ def cwa_qvn_xplot(rt, phit, qvn, m=2.0, rw=.2, B=None, C=None, slope=250):
 
 
 def swirr_xplot(swt, phit, c=.0125, label='', log_log=False, title=''):
-    """Plot SWT vs PHIT for sand intervales only and estimate Swirr from cross plot.
-    Based on Buckles, 1965.
+    """Generate a Buckles plot (SWT vs. PHIT) to estimate irreducible water saturation.
+
+    This crossplot helps identify the hyperbolic trend of irreducible water
+    saturation, where PHIT * Swirr = constant (C).
 
     Args:
-        swt (float): Water saturation.
-        phit (float): Total porosity.
-        c (float): Constant. Defaults to 0.125.
+        swt (np.ndarray or float): Water saturation (fraction).
+        phit (np.ndarray or float): Total porosity (fraction).
+        c (float, optional): The Buckles constant (PHIT * Swirr). Used to plot an iso-line. Defaults to 0.0125.
+        label (str, optional): Label for the scattered data points. Defaults to ''.
+        log_log (bool, optional): If True, both axes will be logarithmic. Defaults to False.
+        title (str, optional): Title for the plot. Defaults to ''.
     """
     logger.debug(f"Creating Swirr crossplot with constant c={c}")
     fig, ax = plt.subplots()
@@ -644,15 +772,15 @@ def swirr_xplot(swt, phit, c=.0125, label='', log_log=False, title=''):
 
 
 def rt_phit_xplot(rt, phit, m=2, rw=.01):
-    """Generate RT vs PHIT plot.
+    """Generate an Rt vs. PHIT (Hingle) plot.
 
     This plot is useful for visualizing the relationship between true resistivity
     and total porosity, often used for identifying water-bearing zones and estimating
     formation water resistivity (Rw) and cementation exponent (m).
 
     Args:
-        rt (float): True resistivity or deep resistivity log (ohm.m).
-        phit (float): Total porosity (fraction).
+        rt (np.ndarray or float): True resistivity or deep resistivity log (ohm.m).
+        phit (np.ndarray or float): Total porosity (fraction).
         m (float, optional): Cementation exponent for the iso-line. Defaults to 2.
         rw (float, optional): Formation water resistivity for the iso-line (ohm.m). Defaults to 0.01.
 
@@ -687,16 +815,21 @@ def rt_phit_xplot(rt, phit, m=2, rw=.01):
 
 
 def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2, title='Pickett Plot'):
-    """Generate Pickett plot which is used to plot phit and rt at water bearing interval to determine;
-        m = The slope of best-fit line crossing the cleanest sand.
-        rw = Formation water resistivity. The intercept of the best-fit line at rt when phit = 100%.
+    """Generate a Pickett plot (log-log of Rt vs. PHIT).
+
+    This plot is a graphical tool to determine the cementation exponent (m),
+    formation water resistivity (Rw), and water saturation (Sw) from log data.
 
     Args:
-        rt (float): True resistivity or deep resistivity log.
-        phit (float): Total porosity.
+        rt (np.ndarray or float): True resistivity log (ohm.m).
+        phit (np.ndarray or float): Total porosity log (fraction).
+        m (float, optional): The slope of the water-bearing line (should be negative). Defaults to -2.
+        min_rw (float, optional): The Rw value for the 100% water saturation line. Defaults to 0.1.
+        shift (float, optional): Increment to generate other iso-Sw lines. Defaults to 0.2.
+        title (str, optional): Title for the plot. Defaults to 'Pickett Plot'.
 
     Returns:
-        matplotlib.pyplot.Figure: Picket plot.
+        matplotlib.pyplot.Figure: The Pickett plot figure.
     """
     logger.debug(f"Creating Pickett plot with m={m}, min_rw={min_rw}")
     m = m if m < 0 else -m
@@ -733,18 +866,19 @@ def pickett_plot(rt, phit, m=-2, min_rw=0.1, shift=.2, title='Pickett Plot'):
 
 
 def RI_plot(sw, rt, ro):
-    """Generate resistivity index plot to estimate saturation exponent. The inputs are from lab measurements.
-    - Assumed a = 1.
-    - Trend line must cross (1, 1) point.
-    - The slope of the trend line is the saturation exponent.
+    """Generate a Resistivity Index (RI) vs. Sw plot from lab data.
+
+    This log-log plot is used to determine the saturation exponent (n). The
+    slope of the best-fit line through the data is -n. The trend line should
+    pass through the (1, 1) point.
 
     Args:
-        sw (float): Water saturation.
-        rt (float): True resistivity or deep resistivity log.
-        ro (float): Resistivity of 100% water saturated rock.
+        sw (np.ndarray or float): Water saturation from core analysis (fraction).
+        rt (np.ndarray or float): True resistivity of the core sample at a given Sw (ohm.m).
+        ro (np.ndarray or float): Resistivity of the same core sample when 100% water-saturated (ohm.m).
 
     Returns:
-        matplotlib.pyplot.Figure: RI plot.
+        matplotlib.pyplot.Figure: The Resistivity Index plot figure.
     """
     logger.debug("Creating resistivity index plot")
     fig, ax = plt.subplots(figsize=(5, 5))
@@ -763,18 +897,19 @@ def RI_plot(sw, rt, ro):
 
 
 def FF_plot(phit, ro, rw):
-    """Generate formation factor plot to estimate cementation exponent. The inputs are from lab measurements.
-    - Assumed a = 1.
-    - Trend line must cross (1, 1) point.
-    - The slope of the trend line is the cementation exponent.
+    """Generate a Formation Factor (FF) vs. Porosity plot from lab data.
+
+    This log-log plot is used to determine the tortuosity factor (a) and the
+    cementation exponent (m). The slope of the best-fit line is -m, and the
+    intercept at PHIT=1 is 'a'.
 
     Args:
-        phit (float): Total porosity.
-        ro (float): Resistivity of 100% water saturated rock.
-        rw (float): Formation water resistivity.
+        phit (np.ndarray or float): Porosity from core analysis (fraction).
+        ro (np.ndarray or float): Resistivity of the 100% water-saturated core sample (ohm.m).
+        rw (np.ndarray or float): Resistivity of the saturating water (ohm.m).
 
     Returns:
-        matplotlib.pyplot.Figure: FF plot.
+        matplotlib.pyplot.Figure: The Formation Factor plot figure.
     """
     logger.debug("Creating formation factor plot")
     fig, ax = plt.subplots(figsize=(5, 5))

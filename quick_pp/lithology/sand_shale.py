@@ -96,9 +96,10 @@ class SandShale:
         for i, point in enumerate(E):
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
-            vshale = projlithofrac / rocklithofrac
-            vsand = np.append(vsand, (1 - vshale))
-            vcld = np.append(vcld, vshale)
+            sand_frac = projlithofrac / rocklithofrac
+            sand_frac = 0 if var_pt[0] > C[0] else sand_frac
+            vsand = np.append(vsand, sand_frac)
+            vcld = np.append(vcld, 1 - sand_frac)
 
         logger.debug(f"Lithology fraction calculation completed for {len(vsand)} points")
         return vsand, vcld
