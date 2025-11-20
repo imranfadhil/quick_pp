@@ -9,18 +9,16 @@ from quick_pp.utils import power_law_func, inv_power_law_func
 from quick_pp import logger
 
 
-plt.style.use('seaborn-v0_8-paper')
+plt.style.use("seaborn-v0_8-paper")
 plt.rcParams.update(
-    {
-        'axes.labelsize': 10,
-        'xtick.labelsize': 10,
-        'legend.fontsize': 'small'
-    }
+    {"axes.labelsize": 10, "xtick.labelsize": 10, "legend.fontsize": "small"}
 )
 
 
 # Cross plots
-def poroperm_xplot(poro, perm, a=None, b=None, core_group=None, label='', log_log=False):
+def poroperm_xplot(
+    poro, perm, a=None, b=None, core_group=None, label="", log_log=False
+):
     """Generate porosity-permeability cross plot.
 
     Args:
@@ -32,7 +30,7 @@ def poroperm_xplot(poro, perm, a=None, b=None, core_group=None, label='', log_lo
         label (str, optional): Label for the data group. Defaults to ''.
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
-    sc = plt.scatter(poro, perm, marker='.', c=core_group, cmap='Set1')
+    sc = plt.scatter(poro, perm, marker=".", c=core_group, cmap="Set1")
     if core_group is not None:
         for i, row in enumerate(zip(poro, perm, core_group)):
             plt.annotate(row[2], (row[0], row[1]), fontsize=8, alpha=0.7)
@@ -40,15 +38,21 @@ def poroperm_xplot(poro, perm, a=None, b=None, core_group=None, label='', log_lo
         line_color = sc.get_facecolors()[0]
         line_color[-1] = 0.5
         cpore = np.geomspace(0.01, 0.5, 30)
-        plt.plot(cpore, power_law_func(cpore, a, b), color=line_color, label=label, linestyle='dashed')
+        plt.plot(
+            cpore,
+            power_law_func(cpore, a, b),
+            color=line_color,
+            label=label,
+            linestyle="dashed",
+        )
         plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
-    plt.xlabel('CPORE (frac)')
+    plt.xlabel("CPORE (frac)")
     plt.xlim(0.001, 0.5)
-    plt.ylabel('CPERM (mD)')
-    plt.ylim(.001, 1e5)
-    plt.yscale('log')
+    plt.ylabel("CPERM (mD)")
+    plt.ylim(0.001, 1e5)
+    plt.yscale("log")
     if log_log:
-        plt.xscale('log')
+        plt.xscale("log")
 
 
 def bvw_xplot(bvw, pc, a=None, b=None, label=None, ylim=None, log_log=False):
@@ -63,19 +67,21 @@ def bvw_xplot(bvw, pc, a=None, b=None, label=None, ylim=None, log_log=False):
         ylim (tuple, optional): Range for the y axis in (min, max) format. Defaults to None.
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
-    sc = plt.plot(bvw, pc, marker='s', label=label)
+    sc = plt.plot(bvw, pc, marker="s", label=label)
     if a is not None and b is not None:
-        line_color = sc[0].get_color() + '66'  # Set opacity to 0
+        line_color = sc[0].get_color() + "66"  # Set opacity to 0
         cbvw = np.linspace(0.05, 0.35, 30)
-        plt.scatter(cbvw, inv_power_law_func(cbvw, a, b), marker='x', color=line_color)
-    plt.xlabel('BVW (frac)')
-    plt.ylabel('Pc (psi)')
-    plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
+        plt.scatter(cbvw, inv_power_law_func(cbvw, a, b), marker="x", color=line_color)
+    plt.xlabel("BVW (frac)")
+    plt.ylabel("Pc (psi)")
+    plt.ylim(ylim) if ylim else plt.ylim(
+        0.01, plt.gca().get_lines()[-1].get_ydata().max()
+    )
     if label:
         plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
     if log_log:
-        plt.xscale('log')
-        plt.yscale('log')
+        plt.xscale("log")
+        plt.yscale("log")
 
 
 def pc_xplot(sw, pc, label=None, ylim=None):
@@ -90,11 +96,13 @@ def pc_xplot(sw, pc, label=None, ylim=None):
         ylim (tuple, optional): Range for the y axis in (min, max) format. Defaults to None.
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
-    plt.plot(sw, pc, marker='.', label=label)
-    plt.xlabel('Sw (frac)')
+    plt.plot(sw, pc, marker=".", label=label)
+    plt.xlabel("Sw (frac)")
     plt.xlim(0.01, 1)
-    plt.ylabel('Pc (psi)')
-    plt.ylim(ylim) if ylim else plt.ylim(0.01, plt.gca().get_lines()[-1].get_ydata().max())
+    plt.ylabel("Pc (psi)")
+    plt.ylim(ylim) if ylim else plt.ylim(
+        0.01, plt.gca().get_lines()[-1].get_ydata().max()
+    )
     if label:
         plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
@@ -110,18 +118,28 @@ def pc_xplot_plotly(sw, pc, label=None, ylim=None, fig=go.Figure()):
     """
     fig.add_trace(go.Scatter(x=sw, y=pc, name=label))
     fig.update_layout(
-        xaxis_title='Sw (frac)',
-        yaxis_title='Pc (psi)',
+        xaxis_title="Sw (frac)",
+        yaxis_title="Pc (psi)",
         xaxis_range=[0, 1],
         yaxis_range=[0, 50] if ylim is None else [ylim[0], ylim[1]],
-        legend=dict(x=1.04, y=1, traceorder='normal'),
+        legend=dict(x=1.04, y=1, traceorder="normal"),
         height=500,
-        width=800
+        width=800,
     )
     return fig
 
 
-def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False, ax=None, ylim=None):
+def j_xplot(
+    sw,
+    j,
+    a=None,
+    b=None,
+    core_group=None,
+    label=None,
+    log_log=False,
+    ax=None,
+    ylim=None,
+):
     """Generate J-Sw cross plot.
 
     Args:
@@ -129,26 +147,51 @@ def j_xplot(sw, j, a=None, b=None, core_group=None, label=None, log_log=False, a
         j (float): Calculated J value (unitless).
         a (float, optional): a constant in j=a*sw^b. Defaults to None.
         b (float, optional): b constant in j=a*sw^b. Defaults to None.
+        core_group (array-like, optional): Grouping for core samples to be used for coloring. Defaults to None.
         label (str, optional): Label for the data group. Defaults to ''.
         ylim (tuple, optional): Range for the y axis in (min, max) format. Defaults to None.
         log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
     ax = ax or plt.gca()
-    scatter = ax.scatter(sw, j, marker='.', c=core_group, cmap='Set1')
+
     if core_group is not None:
-        legend1 = ax.legend(*scatter.legend_elements(), title="Core Sample")
-        ax.add_artist(legend1)
+        # Check if core_group contains non-numeric data
+        if any(isinstance(item, str) for item in core_group):
+            color_data, uniques = pd.factorize(core_group)
+            scatter = ax.scatter(sw, j, marker=".", c=color_data, cmap="Set1")
+            legend1 = ax.legend(
+                handles=scatter.legend_elements()[0],
+                labels=uniques.tolist(),
+                title="Core Sample",
+                bbox_to_anchor=(1.04, 0.9),
+                loc="upper left",
+            )
+            ax.add_artist(legend1)
+        else:
+            scatter = ax.scatter(sw, j, marker=".", c=core_group, cmap="Set1")
+            legend1 = ax.legend(
+                *scatter.legend_elements(),
+                title="Core Sample",
+                bbox_to_anchor=(1.04, 0.9),
+                loc="upper left",
+            )
+            ax.add_artist(legend1)
+    else:
+        ax.scatter(sw, j, marker=".")
+
     if a is not None and b is not None:
         csw = np.geomspace(0.01, 1.0, 20)
-        ax.plot(csw, inv_power_law_func(csw, a, b), label=label, linestyle='dashed')
-    ax.set_xlabel('Sw (frac)')
+        ax.plot(csw, inv_power_law_func(csw, a, b), label=label, linestyle="dashed")
+    ax.set_xlabel("Sw (frac)")
     ax.set_xlim(0.01, 1)
-    ax.set_ylabel('J')
-    ax.set_ylim(ylim) if ylim else ax.set_ylim(0.01, max(ax.get_lines()[-1].get_ydata()))
+    ax.set_ylabel("J")
+    ax.set_ylim(ylim) if ylim else ax.set_ylim(
+        0.01, max(ax.get_lines()[-1].get_ydata())
+    )
     if log_log:
-        ax.set_yscale('log')
+        ax.set_yscale("log")
         ax.set_ylim(0.01, 100)
-        ax.set_xscale('log')
+        ax.set_xscale("log")
     if label:
         ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
     return ax
@@ -166,7 +209,7 @@ def fit_j_curve(sw, j):
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        popt, _ = curve_fit(inv_power_law_func, sw, j, p0=[.01, 1])
+        popt, _ = curve_fit(inv_power_law_func, sw, j, p0=[0.01, 1])
         a = [round(c, 3) for c in popt][0]
         b = [round(c, 3) for c in popt][1]
         return a, b
@@ -175,7 +218,9 @@ def fit_j_curve(sw, j):
         return 1, 1
 
 
-def skelt_harrison_xplot(sw, pc, gw, ghc, a, b, c, d, core_group=None, label=None, ylim=None, ax=None):
+def skelt_harrison_xplot(
+    sw, pc, gw, ghc, a, b, c, d, core_group=None, label=None, ylim=None, ax=None
+):
     """Generate Skelt-Harrison curve.
 
     Args:
@@ -188,13 +233,15 @@ def skelt_harrison_xplot(sw, pc, gw, ghc, a, b, c, d, core_group=None, label=Non
         d (float): d constant from the best-fit curve. Related to entry pressure.
     """
     ax = ax or plt.gca()
-    ax.scatter(sw, pc, marker='.', c=core_group, cmap='Set1')
-    h = np.geomspace(.01, 10000, 100)
-    pci = h * (gw - ghc) * .433  # Convert g/cc to psi/ft
+    ax.scatter(sw, pc, marker=".", c=core_group, cmap="Set1")
+    h = np.geomspace(0.01, 10000, 100)
+    pci = h * (gw - ghc) * 0.433  # Convert g/cc to psi/ft
     ax.plot(skelt_harrison_func(h, a, b, c, d), pci, label=label)
-    ax.set_ylabel('Pc (psi)')
-    ax.set_ylim(ylim) if ylim else ax.set_ylim(0.01, ax.get_lines()[-1].get_ydata().max())
-    ax.set_xlabel('Sw (frac)')
+    ax.set_ylabel("Pc (psi)")
+    ax.set_ylim(ylim) if ylim else ax.set_ylim(
+        0.01, ax.get_lines()[-1].get_ydata().max()
+    )
+    ax.set_xlabel("Sw (frac)")
     ax.set_xlim(0, 1)
     ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
     return ax
@@ -220,7 +267,7 @@ def skelt_harrison_func(h, a, b, c, d):
     Returns:
         float or np.array: The calculated water saturation (fraction).
     """
-    return 1 - a * np.exp(-(b / (h + d))**c)
+    return 1 - a * np.exp(-((b / (h + d)) ** c))
 
 
 def fit_skelt_harrison_curve(sw, h):
@@ -234,7 +281,7 @@ def fit_skelt_harrison_curve(sw, h):
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        popt, _ = curve_fit(skelt_harrison_func, h, sw, p0=[.9, 100, 1.5, 1.5])
+        popt, _ = curve_fit(skelt_harrison_func, h, sw, p0=[0.9, 100, 1.5, 1.5])
         a = [round(c, 3) for c in popt][0]
         b = [round(c, 3) for c in popt][1]
         c = [round(c, 3) for c in popt][2]
@@ -270,7 +317,7 @@ def fit_poroperm_curve(poro, perm):
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        popt, _ = curve_fit(power_law_func, poro, perm, nan_policy='omit')
+        popt, _ = curve_fit(power_law_func, poro, perm, nan_policy="omit")
         a = [round(c) for c in popt][0]
         b = [round(c, 3) for c in popt][1]
         return a, b
@@ -280,7 +327,7 @@ def fit_poroperm_curve(poro, perm):
 
 
 def leverett_j(pc, ift, theta, perm, phit):
-    """ Estimate Leverett J.
+    """Estimate Leverett J.
 
     Args:
         pc (float): Capillary pressure (psi).
@@ -292,7 +339,9 @@ def leverett_j(pc, ift, theta, perm, phit):
     Returns:
         float: Leverett J value.
     """
-    return 0.21665 * pc / (ift * abs(np.cos(np.radians(theta)))) * (perm / phit)**(0.5)
+    return (
+        0.21665 * pc / (ift * abs(np.cos(np.radians(theta)))) * (perm / phit) ** (0.5)
+    )
 
 
 def sw_skelt_harrison(depth, fwl, a, b, c, d):
@@ -326,7 +375,7 @@ def sw_lambda(phit, h, a, b, lamda):
     Returns:
         float: Water saturation.
     """
-    return (a / (h * phit**b))**(1 / lamda)
+    return (a / (h * phit**b)) ** (1 / lamda)
 
 
 def sw_cuddy(phit, h, a, b):
@@ -365,8 +414,8 @@ def sw_shf_leverett_j(perm, phit, depth, fwl, ift, theta, gw, ghc, a, b, phie=No
         float: Water saturation from saturation height function.
     """
     h = (fwl - depth).clip(0)
-    pc = h * (gw - ghc) * .433  # Convert g/cc to psi/ft
-    shf = (a / leverett_j(pc, ift, theta, perm, phit))**(1 / b)
+    pc = h * (gw - ghc) * 0.433  # Convert g/cc to psi/ft
+    shf = (a / leverett_j(pc, ift, theta, perm, phit)) ** (1 / b)
     return shf if not phie else shf * (1 - (phie / phit)) + (phie / phit)
 
 
@@ -386,7 +435,7 @@ def sw_shf_cuddy(phit, depth, fwl, gw, ghc, a, b):
         float: Water saturation from saturation height function.
     """
     h = (fwl - depth).clip(0)
-    shf = a / ((h * (gw - ghc) * .433)**b * phit)
+    shf = a / ((h * (gw - ghc) * 0.433) ** b * phit)
     return shf
 
 
@@ -410,10 +459,15 @@ def sw_shf_choo(perm, phit, phie, depth, fwl, ift, theta, gw, ghc, b0=0.4):
     """
     swb = 1 - (phie / phit)
     h = (fwl - depth).clip(0)
-    pc = h * (gw - ghc) * .433
-    shf = 10**((2 * b0 - 1) * np.log10(1 + swb**-1) + np.log10(1 + swb)) / (
-        (0.2166 * (pc / (ift * abs(np.cos(np.radians(theta))))) * (
-            perm / phit)**(0.5))**(b0 * np.log10(1 + swb**-1) / 3))
+    pc = h * (gw - ghc) * 0.433
+    shf = 10 ** ((2 * b0 - 1) * np.log10(1 + swb**-1) + np.log10(1 + swb)) / (
+        (
+            0.2166
+            * (pc / (ift * abs(np.cos(np.radians(theta)))))
+            * (perm / phit) ** (0.5)
+        )
+        ** (b0 * np.log10(1 + swb**-1) / 3)
+    )
     return shf
 
 
@@ -439,7 +493,8 @@ def autocorrelate_core_depth(df):
     """
     from dtw import dtw
     from sklearn.preprocessing import minmax_scale
-    required_cols = ['WELL_NAME', 'DEPTH', 'PHIT', 'CPORE', 'CPERM', 'CORE_ID']
+
+    required_cols = ["WELL_NAME", "DEPTH", "PHIT", "CPORE", "CPERM", "CORE_ID"]
     for col in required_cols:
         if col not in df.columns:
             raise AssertionError(f"Missing required column: {col}")
@@ -447,18 +502,29 @@ def autocorrelate_core_depth(df):
     all_wells_data = []
     shift_summaries = []
 
-    for well, data in tqdm(df.groupby('WELL_NAME'), desc='Correlating core depths'):
-        core_data = data[['DEPTH', 'CORE_ID', 'CPORE', 'CPERM']].dropna().sort_values('DEPTH').reset_index(drop=True)
+    for well, data in tqdm(df.groupby("WELL_NAME"), desc="Correlating core depths"):
+        core_data = (
+            data[["DEPTH", "CORE_ID", "CPORE", "CPERM"]]
+            .dropna()
+            .sort_values("DEPTH")
+            .reset_index(drop=True)
+        )
 
         if core_data.empty:
             all_wells_data.append(data)
             continue
 
-        log_data = data[['DEPTH', 'PHIT']].dropna().sort_values('DEPTH').reset_index(drop=True)
-        tqdm.write(f'Processing {well}: {len(core_data)} core data and {len(log_data)} log data')
+        log_data = (
+            data[["DEPTH", "PHIT"]].dropna().sort_values("DEPTH").reset_index(drop=True)
+        )
+        tqdm.write(
+            f"Processing {well}: {len(core_data)} core data and {len(log_data)} log data"
+        )
 
         # Create a window of log data around core points to speed up DTW
-        core_indices_in_log = np.searchsorted(log_data.DEPTH, core_data.DEPTH, side='left')
+        core_indices_in_log = np.searchsorted(
+            log_data.DEPTH, core_data.DEPTH, side="left"
+        )
         window = 50  # Increased window size to allow for larger shifts
         window_indices = core_indices_in_log[:, None] + np.arange(-window, window + 1)
         window_indices = np.clip(window_indices, 0, len(log_data) - 1)
@@ -466,17 +532,19 @@ def autocorrelate_core_depth(df):
         log_data_subset = log_data.iloc[unique_indices].reset_index(drop=True)
 
         # Extract numpy arrays for DTW
-        phit_vals = minmax_scale(log_data_subset['PHIT'].values)
-        cpore_vals = minmax_scale(core_data['CPORE'].values)
+        phit_vals = minmax_scale(log_data_subset["PHIT"].values)
+        cpore_vals = minmax_scale(core_data["CPORE"].values)
 
-        alignment = dtw(cpore_vals, phit_vals, keep_internals=True, step_pattern="symmetric2")
+        alignment = dtw(
+            cpore_vals, phit_vals, keep_internals=True, step_pattern="symmetric2"
+        )
 
         # Map alignment indices back to original data
         core_indices = alignment.index1
         log_subset_indices = alignment.index2
 
-        original_depths = core_data.loc[core_indices, 'DEPTH'].values
-        corrected_depths = log_data_subset.loc[log_subset_indices, 'DEPTH'].values
+        original_depths = core_data.loc[core_indices, "DEPTH"].values
+        corrected_depths = log_data_subset.loc[log_subset_indices, "DEPTH"].values
 
         # Calculate the shift for each point in the DTW path
         depth_shifts = corrected_depths - original_depths
@@ -491,31 +559,38 @@ def autocorrelate_core_depth(df):
 
         # Apply the consistent shift to all original core data for this well
         shifted_core_data = core_data.copy()
-        shifted_core_data['DEPTH_CORRECTED'] = shifted_core_data['DEPTH'] + best_shift
-        shifted_core_data['DEPTH_SHIFT'] = best_shift
+        shifted_core_data["DEPTH_CORRECTED"] = shifted_core_data["DEPTH"] + best_shift
+        shifted_core_data["DEPTH_SHIFT"] = best_shift
 
         # Create summary for this well
-        summary = shifted_core_data[['CORE_ID', 'DEPTH', 'DEPTH_CORRECTED', 'DEPTH_SHIFT']].copy()
-        summary.rename(columns={'DEPTH': 'ORIGINAL_DEPTH'}, inplace=True)
-        summary['WELL_NAME'] = well
-        summary = summary[['WELL_NAME', 'CORE_ID', 'ORIGINAL_DEPTH', 'DEPTH_CORRECTED', 'DEPTH_SHIFT']]
+        summary = shifted_core_data[
+            ["CORE_ID", "DEPTH", "DEPTH_CORRECTED", "DEPTH_SHIFT"]
+        ].copy()
+        summary.rename(columns={"DEPTH": "ORIGINAL_DEPTH"}, inplace=True)
+        summary["WELL_NAME"] = well
+        summary = summary[
+            ["WELL_NAME", "CORE_ID", "ORIGINAL_DEPTH", "DEPTH_CORRECTED", "DEPTH_SHIFT"]
+        ]
         shift_summaries.append(summary)
 
         # Prepare shifted data for merging
-        final_shifted = shifted_core_data.rename(columns={
-            'CPORE': 'CPORE_SHIFTED',
-            'CPERM': 'CPERM_SHIFTED',
-            'CORE_ID': 'CORE_ID_SHIFTED'
-        })
+        final_shifted = shifted_core_data.rename(
+            columns={
+                "CPORE": "CPORE_SHIFTED",
+                "CPERM": "CPERM_SHIFTED",
+                "CORE_ID": "CORE_ID_SHIFTED",
+            }
+        )
 
         # --- SOLUTION: Use index-based merging to avoid column conflicts ---
 
         # Prepare the log data: keep only necessary columns and set DEPTH as index
-        log_df_to_merge = data.set_index('DEPTH')
+        log_df_to_merge = data.set_index("DEPTH")
 
         # Prepare the shifted core data: keep shifted values and set corrected depth as index
-        core_df_to_merge = final_shifted[['DEPTH_CORRECTED', 'CPORE_SHIFTED', 'CPERM_SHIFTED', 'CORE_ID_SHIFTED']] \
-            .set_index('DEPTH_CORRECTED')
+        core_df_to_merge = final_shifted[
+            ["DEPTH_CORRECTED", "CPORE_SHIFTED", "CPERM_SHIFTED", "CORE_ID_SHIFTED"]
+        ].set_index("DEPTH_CORRECTED")
 
         # Merge the two dataframes on their indices (which are the depths)
         well_corrected_df = pd.merge(
@@ -523,21 +598,25 @@ def autocorrelate_core_depth(df):
             core_df_to_merge,
             left_index=True,
             right_index=True,
-            how='outer'
+            how="outer",
         ).reset_index()
 
         # The merged 'index' column is the unified depth column, so rename it
-        well_corrected_df.rename(columns={'index': 'DEPTH'}, inplace=True)
+        well_corrected_df.rename(columns={"index": "DEPTH"}, inplace=True)
 
         # Sort by the final unified depth
-        well_corrected_df.sort_values('DEPTH', inplace=True)
+        well_corrected_df.sort_values("DEPTH", inplace=True)
 
         # Add well name back if lost during merge
-        well_corrected_df['WELL_NAME'] = well
+        well_corrected_df["WELL_NAME"] = well
         all_wells_data.append(well_corrected_df)
 
     # Combine all processed well data and summaries
     return_df = pd.concat(all_wells_data, ignore_index=True)
-    final_summary_df = pd.concat(shift_summaries, ignore_index=True) if shift_summaries else pd.DataFrame()
+    final_summary_df = (
+        pd.concat(shift_summaries, ignore_index=True)
+        if shift_summaries
+        else pd.DataFrame()
+    )
 
     return return_df, final_summary_df
