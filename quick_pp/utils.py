@@ -11,14 +11,14 @@ from quick_pp import logger
 
 
 def length_a_b(A: tuple, B: tuple):
-    """Calculates the length of line between two points.
+    """Calculate the Euclidean distance between two points.
 
     Args:
         A (tuple): Cartesian coordinates of point A.
         B (tuple): Cartesian coordinates of point B.
 
     Returns:
-        float: Length of line between two points.
+        float: The distance between points A and B.
     """
     return np.sqrt(sum([(a - b) ** 2 for a, b in zip(A, B)]))
 
@@ -29,14 +29,12 @@ def line_intersection(line1: tuple, line2: tuple):
     This function is vectorized to handle arrays of points.
 
     Args:
-        line1 (tuple): A tuple containing two points, where each point can be a
-                       tuple of coordinates or a NumPy array of coordinates.
-                       Example: ((x11, y11), (x12, y12))
-        line2 (tuple): A tuple containing two points for the second line.
-                       Example: ((x21, y21), (x22, y22))
+        line1 (tuple): A tuple of two points defining the first line, e.g., `((x1, y1), (x2, y2))`.
+                       Coordinates can be single values or arrays.
+        line2 (tuple): A tuple of two points defining the second line.
 
     Returns:
-        (np.ndarray, np.ndarray): A tuple of NumPy arrays (x, y) for the
+        tuple[np.ndarray, np.ndarray]: A tuple of NumPy arrays `(x, y)` for the
                                   intersection coordinates. If lines are parallel,
                                   coordinates will be np.nan.
     """
@@ -51,8 +49,12 @@ def line_intersection(line1: tuple, line2: tuple):
     # Create a mask for non-zero divisors to avoid warnings
     mask = div != 0
     d = (det(*line1), det(*line2))
-    x = np.divide(det(d, xdiff), div, where=mask, out=np.full_like(div, np.nan, dtype=float))
-    y = np.divide(det(d, ydiff), div, where=mask, out=np.full_like(div, np.nan, dtype=float))
+    x = np.divide(
+        det(d, xdiff), div, where=mask, out=np.full_like(div, np.nan, dtype=float)
+    )
+    y = np.divide(
+        det(d, ydiff), div, where=mask, out=np.full_like(div, np.nan, dtype=float)
+    )
 
     return x, y
 
@@ -61,12 +63,13 @@ def angle_between_lines(line1: tuple, line2: tuple):
     """Calculates the convex angle between two lines in degrees.
 
     Args:
-        line1 (tuple of tuples): ((x11, y11), (x12, y12))
-        line2 (tuple of tuples): ((x21, y21), (x22, y22))
+        line1 (tuple): A tuple of two points defining the first line, e.g., `((x1, y1), (x2, y2))`.
+        line2 (tuple): A tuple of two points defining the second line.
 
     Returns:
-        float: Angle between the two lines in degrees.
+        float: The angle between the two lines in degrees (between 0 and 90).
     """
+
     def slope(line):
         (x1, y1), (x2, y2) = line
         if x2 == x1:  # Vertical line
@@ -96,55 +99,68 @@ def angle_between_lines(line1: tuple, line2: tuple):
 
 
 def zone_flagging(data: pd.DataFrame, min_zone_thickness: int = 150):
-    """Flagging sand zones based on VSHALE, VCLAY, and VSH_GR.
+    """Identify and flag sand zones based on shale volume.
+
+    This function uses a shale volume curve (VSHALE or estimated VSH_GR) to
+    delineate reservoir zones. It identifies continuous sand intervals and merges
+    smaller zones into larger adjacent ones based on a minimum thickness criterion.
 
     Args:
-        data (pd.DataFrame): DataFrame with well log data.
-        min_zone_thickness (int): The minimum number of data points for a zone to be kept.
+        data (pd.DataFrame): The input DataFrame with well log data.
+        min_zone_thickness (int, optional): The minimum number of data points for a zone to be considered valid. Defaults to 150.
 
     Returns:
-        pd.DataFrame: Original DataFrame with ZONE_FLAG and ZONES columns.
+        pd.DataFrame: The DataFrame with added 'ZONE_FLAG' and updated 'ZONES' columns.
     """
     df = data.copy()
-    if 'ZONES' not in df.columns:
-        df['ZONES'] = 'FORMATION'
-    df['ZONES'] = df['ZONES'].fillna('FORMATION')
+    if "ZONES" not in df.columns:
+        df["ZONES"] = "FORMATION"
+    df["ZONES"] = df["ZONES"].fillna("FORMATION")
 
     return_df = pd.DataFrame()
-    if 'WELL_NAME' not in df.columns:
-        df['WELL_NAME'] = 'WELL'
-    df['WELL_NAME'] = df['WELL_NAME'].fillna('WELL')
-    for _, well_data in df.groupby('WELL_NAME'):
+    if "WELL_NAME" not in df.columns:
+        df["WELL_NAME"] = "WELL"
+    df["WELL_NAME"] = df["WELL_NAME"].fillna("WELL")
+    for _, well_data in df.groupby("WELL_NAME"):
         # Using VSHALE if available otherwise calculate VSH_GR
-        if 'VSHALE' in well_data.columns:
-            well_data['vsh_curve'] = well_data['VSHALE']
+        if "VSHALE" in well_data.columns:
+            well_data["vsh_curve"] = well_data["VSHALE"]
         else:
-            dtr_gr = detrend(well_data[['GR']].fillna(well_data['GR'].median()), axis=0) + well_data['GR'].mean()
-            well_data['vsh_curve'] = MinMaxScaler().fit_transform(dtr_gr)
-        threshold = np.nanquantile(well_data['vsh_curve'], .7, method='median_unbiased')
+            dtr_gr = (
+                detrend(well_data[["GR"]].fillna(well_data["GR"].median()), axis=0)
+                + well_data["GR"].mean()
+            )
+            well_data["vsh_curve"] = MinMaxScaler().fit_transform(dtr_gr)
+        threshold = np.nanquantile(
+            well_data["vsh_curve"], 0.7, method="median_unbiased"
+        )
 
         # Estimate RES_FLAG (reservoir flag) using vsh_curve
-        well_data['RES_FLAG'] = np.where(well_data['vsh_curve'] < threshold, 1, 0)
+        well_data["RES_FLAG"] = np.where(well_data["vsh_curve"] < threshold, 1, 0)
 
         # Fill in empty ZONES
-        no_zones_df = well_data[well_data['ZONES'] == 'FORMATION']
+        no_zones_df = well_data[well_data["ZONES"] == "FORMATION"]
         if not no_zones_df.empty:
             # Assign initial zone names
-            sand_zone_numbers = (well_data['RES_FLAG'].diff().clip(lower=0) == 1).cumsum()
+            sand_zone_numbers = (
+                well_data["RES_FLAG"].diff().clip(lower=0) == 1
+            ).cumsum()
 
-            well_data['ZONES'] = np.where(
-                well_data['RES_FLAG'] == 1,
-                'ZONE_' + sand_zone_numbers.astype(str),
-                np.nan
+            well_data["ZONES"] = np.where(
+                well_data["RES_FLAG"] == 1,
+                "ZONE_" + sand_zone_numbers.astype(str),
+                np.nan,
             )
 
             # Merge small zones
-            zone_counts = well_data['ZONES'].value_counts()
+            zone_counts = well_data["ZONES"].value_counts()
             small_zones = zone_counts[zone_counts < min_zone_thickness].index
 
             while len(small_zones) > 0:
-                well_data['ZONES'] = well_data['ZONES'].replace(small_zones, np.nan).ffill().bfill()
-                zone_counts = well_data['ZONES'].value_counts()
+                well_data["ZONES"] = (
+                    well_data["ZONES"].replace(small_zones, np.nan).ffill().bfill()
+                )
+                zone_counts = well_data["ZONES"].value_counts()
                 small_zones = zone_counts[zone_counts < min_zone_thickness].index
 
         return_df = pd.concat([return_df, well_data], ignore_index=True)
@@ -156,12 +172,12 @@ def power_law_func(x, a, b):
     """Generic power law function.
 
     Args:
-        x (float): Input variable.
+        x (np.ndarray or float): Input variable.
         a (float): a constant.
         b (float): b constant.
 
     Returns:
-        float: y = a * x^b
+        np.ndarray or float: `y = a * x^b`
     """
     return a * x**b
 
@@ -170,12 +186,12 @@ def inv_power_law_func(x, a, b):
     """Generic power law function.
 
     Args:
-        x (float): Input variable.
+        x (np.ndarray or float): Input variable.
         a (float): a constant.
         b (float): b constant.
 
     Returns:
-        float: y = a * x^-b
+        np.ndarray or float: `y = a * x^-b`
     """
     return a * x**-b
 
@@ -184,26 +200,29 @@ def straight_line_func(x, m, c):
     """Generic straight line function.
 
     Args:
-        x (float): Input variable.
+        x (np.ndarray or float): Input variable.
         m (float): Slope of the line.
         c (float): Y intercept of the line.
 
     Returns:
-        float: y = m * x + c
+        np.ndarray or float: `y = m * x + c`
     """
     return m * x + c
 
 
 def min_max_line(feature, alpha: float = 0.05, auto_bin=False):
-    """Calculates the minimum and maximum line of a feature, grouped based on change points.
+    """Calculate the minimum and maximum trend lines for a given feature.
+
+    This function can optionally segment the data based on change points before
+    fitting trend lines to each segment.
 
     Args:
-        feature (float): Input feature to calculate the minimum and maximum line.
+        feature (np.ndarray or float): Input feature to calculate the minimum and maximum line.
         alpha (float, optional): Correction in percentage. Defaults to 0.05.
         auto_bin (bool, optional): Automatically bin the feature. Defaults to False.
 
     Returns:
-        (float, float): Minimum and maximum line of a feature.
+        tuple[np.ndarray, np.ndarray]: A tuple containing the minimum and maximum trend lines.
     """
     # Ensure feature is a numpy array and handle NaNs
     if isinstance(feature, pd.Series):
@@ -215,13 +234,17 @@ def min_max_line(feature, alpha: float = 0.05, auto_bin=False):
     if auto_bin:
         signal_data = feature_np[~np.isnan(feature_np)]
         if len(signal_data) < 2:
-            logger.warning("Not enough data for auto-binning. Processing as a single segment.")
+            logger.warning(
+                "Not enough data for auto-binning. Processing as a single segment."
+            )
             segments = [feature_np]
         else:
             # Estimating number of peaks
             try:
                 kde = stats.gaussian_kde(signal_data)
-                evaluated = kde.evaluate(np.linspace(np.nanmin(signal_data), np.nanmax(signal_data), 100))
+                evaluated = kde.evaluate(
+                    np.linspace(np.nanmin(signal_data), np.nanmax(signal_data), 100)
+                )
                 peaks, _ = find_peaks(evaluated, height=np.nanmedian(evaluated))
 
                 # Detecting change points
@@ -231,9 +254,14 @@ def min_max_line(feature, alpha: float = 0.05, auto_bin=False):
                 my_bkps = algo.predict(n_bkps=len(peaks))
                 my_bkps = np.insert(my_bkps, 0, 0)
 
-                segments = [feature_np[my_bkps[i]:my_bkps[i + 1]] for i in range(len(my_bkps) - 1)]
+                segments = [
+                    feature_np[my_bkps[i] : my_bkps[i + 1]]
+                    for i in range(len(my_bkps) - 1)
+                ]
             except Exception as e:
-                logger.error(f"Auto-binning failed: {e}. Processing as a single segment.")
+                logger.error(
+                    f"Auto-binning failed: {e}. Processing as a single segment."
+                )
                 segments = [feature_np]
 
     min_lines_list = []
@@ -245,17 +273,25 @@ def min_max_line(feature, alpha: float = 0.05, auto_bin=False):
             try:
                 clean_data = data_segment[~np.isnan(data_segment)]
                 if len(clean_data) < 2:
-                    raise ValueError("Not enough valid data in segment to fit trendlines.")
+                    raise ValueError(
+                        "Not enough valid data in segment to fit trendlines."
+                    )
 
-                (min_slope, min_intercept), (max_slope, max_intercept) = fit_trendlines_single(clean_data)
+                (min_slope, min_intercept), (max_slope, max_intercept) = (
+                    fit_trendlines_single(clean_data)
+                )
                 x_range = np.arange(num_data)
                 correction = alpha * np.nanmax(np.abs(clean_data))
-                min_line = straight_line_func(x_range, min_slope, min_intercept) + correction
-                max_line = straight_line_func(x_range, max_slope, max_intercept) - correction
+                min_line = (
+                    straight_line_func(x_range, min_slope, min_intercept) + correction
+                )
+                max_line = (
+                    straight_line_func(x_range, max_slope, max_intercept) - correction
+                )
                 min_lines_list.append(min_line)
                 max_lines_list.append(max_line)
             except Exception as e:
-                logger.error(f'Error fitting trendline for a segment: {e}')
+                logger.error(f"Error fitting trendline for a segment: {e}")
                 min_lines_list.append(np.full(num_data, np.nan))
                 max_lines_list.append(np.full(num_data, np.nan))
         else:
@@ -266,17 +302,20 @@ def min_max_line(feature, alpha: float = 0.05, auto_bin=False):
 
 
 def check_trend_line(minimum: bool, pivot: int, slope: float, y: np.array):
-    """Check if the trend line is valid. Based on TrendLineAutomation by neurotrader888.
-    Computes sum of differences between trend line and feature, return negative val if invalid
+    """Check if a trend line is valid and calculate its error.
+
+    This function, based on TrendLineAutomation by neurotrader888, computes the
+    sum of squared differences between a trend line and the data, returning -1.0
+    if the line is invalid.
 
     Args:
-        minimum (bool): Whether to check for minimum or maximum.
+        minimum (bool): If True, checks for a minimum trend line (support); otherwise, a maximum (resistance).
         pivot (int): Anchor point of the trend line.
         slope (float): Slope of the trend line.
         y (np.array): Data to fit the trend line.
 
     Returns:
-        float: Sum of differences between trend line and feature.
+        float: The sum of squared differences, or -1.0 if the line is invalid.
     """
     # Find the intercept of the line going through pivot point with given slope
     intercept = -slope * pivot + y[pivot]
@@ -289,21 +328,22 @@ def check_trend_line(minimum: bool, pivot: int, slope: float, y: np.array):
         return -1.0
 
     # Squared sum of diffs between data and line
-    err = (diffs ** 2.0).sum()
+    err = (diffs**2.0).sum()
     return err
 
 
 def optimize_slope(minimum: bool, pivot: int, init_slope: float, y: np.array):
-    """Optimize the slope of the trend line. Based on TrendLineAutomation by neurotrader888.
+    """Optimize the slope of a trend line to best fit the data.
+
+    This function, based on TrendLineAutomation by neurotrader888, iteratively
+    adjusts the slope to minimize the error while maintaining the line's validity
+    as either a support or resistance line.
 
     Args:
-        minimum (bool): Whether to optimize for minimum or maximum.
+        minimum (bool): If True, optimizes for a minimum trend line; otherwise, a maximum.
         pivot (int): Anchor point of the trend line.
         init_slope (float): Initial slope of the trend line.
         y (np.array): Data to fit the trend line.
-
-    Raises:
-        Exception: If the derivative fails.
 
     Returns:
         tuple: Tuple containing the slope and intercept of the optimized trend
@@ -315,13 +355,12 @@ def optimize_slope(minimum: bool, pivot: int, init_slope: float, y: np.array):
     # Initiate at the slope of the line of best fit
     best_slope = init_slope
     best_err = check_trend_line(minimum, pivot, init_slope, y)
-    assert (best_err >= 0.0)  # Shouldn't ever fail with initial slope
+    assert best_err >= 0.0  # Shouldn't ever fail with initial slope
 
     slope_unit = (y.max() - y.min()) / len(y)
     get_derivative = True
     derivative = None
     while curr_step > min_step:
-
         if get_derivative:
             # Numerical differentiation, increase slope by very small amount to see if error increases/ decreases.
             # Gives us the direction to change slope.
@@ -359,13 +398,17 @@ def optimize_slope(minimum: bool, pivot: int, init_slope: float, y: np.array):
 
 
 def fit_trendlines_single(data: np.array):
-    """Find line of best fit (least squared). Based on TrendLineAutomation by neurotrader888.
+    """Find the best-fit minimum and maximum trend lines for a single data segment.
+
+    This function, based on TrendLineAutomation by neurotrader888, uses a least-squares
+    fit to find an initial trend and then optimizes for the tightest possible support
+    and resistance lines.
 
     Args:
-        data (np.array): Curve to fit the trend lines.
+        data (np.ndarray): The data segment to fit the trend lines to.
 
     Returns:
-        tuple: Tuples containing the slope and intercept of the min and max trend line.
+        tuple: A tuple of tuples containing the (slope, intercept) for the minimum and maximum trend lines.
     """
     x = np.arange(len(data))
     coefs = np.polyfit(x, data, 1)
@@ -395,20 +438,22 @@ def remove_straights(log, window: int = 30, threshold: float = 0.001):
     flagged for removal.
 
     Args:
-        log (pd.Series or np.array): The input log data.
+        log (pd.Series or np.ndarray): The input log data.
         window (int, optional): The size of the rolling window. Defaults to 30.
         threshold (float, optional): The standard deviation threshold below which
                                      a segment is considered straight. Defaults to 0.001.
 
     Returns:
-        np.array: The log with straight sections replaced by np.nan.
+        np.ndarray: The log with straight sections replaced by np.nan.
     """
     if not isinstance(log, pd.Series):
         log_series = pd.Series(log)
     else:
         log_series = log.copy()
 
-    rolling_std = log_series.rolling(window=window, center=True, min_periods=window // 2).std()
+    rolling_std = log_series.rolling(
+        window=window, center=True, min_periods=window // 2
+    ).std()
     return np.where(rolling_std < threshold, np.nan, log_series.values)
 
 
@@ -416,18 +461,20 @@ def get_tvd(df, well_coords):
     """Calculate true vertical depth (TVD) given well survey data.
 
     Args:
-        df (pd.DataFrame): Dataframe with DEPTH column.
-        well_coords (pd.DataFrame): Dataframe with md, incl and azim columns.
+        df (pd.DataFrame): A DataFrame with a 'DEPTH' column.
+        well_coords (pd.DataFrame): A DataFrame with 'md', 'incl', and 'azim' columns for the deviation survey.
 
     Returns:
-        np.array: TVD values.
+        np.ndarray: An array of TVD values corresponding to the input depths.
     """
     import wellpathpy as wpp
 
-    dev_survey = wpp.deviation(md=well_coords['md'], inc=well_coords['incl'], azi=well_coords['azim'])
+    dev_survey = wpp.deviation(
+        md=well_coords["md"], inc=well_coords["incl"], azi=well_coords["azim"]
+    )
     # Resample the survey at the exact MD points from the log data
-    df = df[df.DEPTH.between(well_coords['md'].min(), well_coords['md'].max())]
-    tvd = dev_survey.minimum_curvature().resample(df['DEPTH'].values).depth
+    df = df[df.DEPTH.between(well_coords["md"].min(), well_coords["md"].max())]
+    tvd = dev_survey.minimum_curvature().resample(df["DEPTH"].values).depth
     return tvd
 
 
@@ -435,10 +482,10 @@ def remove_outliers(curve):
     """Removes outliers from a curve using the IQR method and forward fills the NaNs.
 
     Args:
-        curve (np.array): The input curve data.
+        curve (np.ndarray): The input curve data.
 
     Returns:
-        np.array: The curve with outliers replaced by NaN and then forward filled.
+        pd.Series: The curve with outliers replaced by NaN and then forward filled.
     """
     q1, q3 = np.nanquantile(curve, [0.25, 0.75])
     iqr = q3 - q1
@@ -447,4 +494,6 @@ def remove_outliers(curve):
 
     # Replace outliers with NaN and then forward fill
     curve_series = pd.Series(curve)
-    return curve_series.where((curve_series >= lower_bound) & (curve_series <= upper_bound))
+    return curve_series.where(
+        (curve_series >= lower_bound) & (curve_series <= upper_bound)
+    )

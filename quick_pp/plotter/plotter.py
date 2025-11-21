@@ -5,15 +5,12 @@ from matplotlib.figure import Figure
 from quick_pp.utils import line_intersection
 from quick_pp import logger
 import quick_pp.plotter.well_log as plotter_wells
+
 plotly_log = plotter_wells.plotly_log
 
-plt.style.use('seaborn-v0_8-paper')
+plt.style.use("seaborn-v0_8-paper")
 plt.rcParams.update(
-    {
-        'axes.labelsize': 10,
-        'xtick.labelsize': 10,
-        'legend.fontsize': 'small'
-    }
+    {"axes.labelsize": 10, "xtick.labelsize": 10, "legend.fontsize": "small"}
 )
 
 
@@ -21,43 +18,59 @@ def update_fluid_contacts(well_data, well_config: dict):
     """Update fluid flags based on fluid contacts.
 
     Args:
-        well_data (pandas.DataFrame): Pandas dataframe containing well log data.
-        well_config (dict): Dictionary containing well sorting and fluid contacts.
+        well_data (pd.DataFrame): DataFrame containing well log data, including a 'TVD' column.
+        well_config (dict): A dictionary defining the fluid contacts for a specific zone (e.g., GOC, OWC).
 
     Returns:
-        pandas.DataFrame: Pandas dataframe containing updated fluid
+        pd.DataFrame: The input DataFrame with added 'OIL_FLAG', 'GAS_FLAG', 'WATER_FLAG', and 'FLUID_FLAG' columns.
     """
-    owc = well_config.get('OWC', np.nan)
-    odt = well_config.get('ODT', np.nan)
-    out = well_config.get('OUT', np.nan)
-    goc = well_config.get('GOC', np.nan)
-    gdt = well_config.get('GDT', np.nan)
-    gut = well_config.get('GUT', np.nan)
-    gwc = well_config.get('GWC', np.nan)
-    wut = well_config.get('WUT', np.nan)
+    owc = well_config.get("OWC", np.nan)
+    odt = well_config.get("ODT", np.nan)
+    out = well_config.get("OUT", np.nan)
+    goc = well_config.get("GOC", np.nan)
+    gdt = well_config.get("GDT", np.nan)
+    gut = well_config.get("GUT", np.nan)
+    gwc = well_config.get("GWC", np.nan)
+    wut = well_config.get("WUT", np.nan)
 
     well_data = well_data.copy()
     logger.debug(f"well_data columns before update: {well_data.columns.tolist()}")
-    well_data['OIL_FLAG'] = np.where(
-        ((well_data['TVD'] > out) | (well_data['TVD'] > goc)) & (
-            (well_data['TVD'] < odt) | (well_data['TVD'] < owc)), 1, 0)
+    well_data["OIL_FLAG"] = np.where(
+        ((well_data["TVD"] > out) | (well_data["TVD"] > goc))
+        & ((well_data["TVD"] < odt) | (well_data["TVD"] < owc)),
+        1,
+        0,
+    )
 
-    well_data['GAS_FLAG'] = np.where(
-        ((well_data['TVD'] < gdt) | (well_data['TVD'] < gwc) | (well_data['TVD'] < goc)) & (
-            well_data['TVD'] > gut), 1, 0)
+    well_data["GAS_FLAG"] = np.where(
+        ((well_data["TVD"] < gdt) | (well_data["TVD"] < gwc) | (well_data["TVD"] < goc))
+        & (well_data["TVD"] > gut),
+        1,
+        0,
+    )
 
-    well_data['WATER_FLAG'] = np.where(
-        ((well_data['TVD'] > wut) | (well_data['TVD'] > owc) | (well_data['TVD'] > gwc)), 1, 0)
+    well_data["WATER_FLAG"] = np.where(
+        (
+            (well_data["TVD"] > wut)
+            | (well_data["TVD"] > owc)
+            | (well_data["TVD"] > gwc)
+        ),
+        1,
+        0,
+    )
 
-    well_data['FLUID_FLAG'] = np.where(
-        well_data['OIL_FLAG'] == 1, 1, np.where(
-            well_data['GAS_FLAG'] == 1, 2, np.where(
-                well_data['WATER_FLAG'] == 1, 0, -1)))
+    well_data["FLUID_FLAG"] = np.where(
+        well_data["OIL_FLAG"] == 1,
+        1,
+        np.where(
+            well_data["GAS_FLAG"] == 1, 2, np.where(well_data["WATER_FLAG"] == 1, 0, -1)
+        ),
+    )
 
     return well_data
 
 
-def generate_zone_config(zones: list = ['ALL']):
+def generate_zone_config(zones: list = ["ALL"]):
     """Generate zone configuration.
 
     Args:
@@ -70,7 +83,14 @@ def generate_zone_config(zones: list = ['ALL']):
     zone_config = {}
     for zone in zones:
         zone_config[zone] = {
-            'GUT': 0, 'GDT': 0, 'GOC': 0, 'GWC': 0, 'OUT': 0, 'ODT': 0, 'OWC': 0, 'WUT': 0
+            "GUT": 0,
+            "GDT": 0,
+            "GOC": 0,
+            "GWC": 0,
+            "OUT": 0,
+            "ODT": 0,
+            "OWC": 0,
+            "WUT": 0,
         }
     return zone_config
 
@@ -86,7 +106,9 @@ def update_zone_config(zone_config: dict, zone: str, fluid_contacts: dict):
     Returns:
         dict: Updated zone configuration
     """
-    logger.info(f"Updating zone config for zone: {zone} with contacts: {fluid_contacts}")
+    logger.info(
+        f"Updating zone config for zone: {zone} with contacts: {fluid_contacts}"
+    )
     if zone in zone_config:
         zone_config[zone].update(fluid_contacts)
     else:
@@ -94,7 +116,7 @@ def update_zone_config(zone_config: dict, zone: str, fluid_contacts: dict):
     return zone_config
 
 
-def generate_well_config(well_names: list = ['X']):
+def generate_well_config(well_names: list = ["X"]):
     """Generate well configuration.
 
     Args:
@@ -107,15 +129,30 @@ def generate_well_config(well_names: list = ['X']):
     well_config = {}
     for i, well in enumerate(well_names):
         well_config[well] = {
-            'sorting': i + 1,
-            'zones': {
-                'ALL': {'GUT': 0, 'GDT': 0, 'GOC': 0, 'GWC': 0, 'OUT': 0, 'ODT': 0, 'OWC': 0, 'WUT': 0},
-            }
+            "sorting": i + 1,
+            "zones": {
+                "ALL": {
+                    "GUT": 0,
+                    "GDT": 0,
+                    "GOC": 0,
+                    "GWC": 0,
+                    "OUT": 0,
+                    "ODT": 0,
+                    "OWC": 0,
+                    "WUT": 0,
+                },
+            },
         }
     return well_config
 
 
-def update_well_config(well_config: dict, well_name: str, zone: str = '', fluid_contacts: dict = {}, sorting: int = 0):
+def update_well_config(
+    well_config: dict,
+    well_name: str,
+    zone: str = "",
+    fluid_contacts: dict = {},
+    sorting: int = 0,
+):
     """Update well configuration with fluid contacts.
 
     Args:
@@ -128,14 +165,16 @@ def update_well_config(well_config: dict, well_name: str, zone: str = '', fluid_
     Returns:
         dict: Updated well configuration
     """
-    logger.info(f"Updating well config for well: {well_name}, zone: {zone}, sorting: {sorting}")
-    if zone in well_config[well_name]['zones']:
-        well_config[well_name]['zones'][zone].update(fluid_contacts)
+    logger.info(
+        f"Updating well config for well: {well_name}, zone: {zone}, sorting: {sorting}"
+    )
+    if zone in well_config[well_name]["zones"]:
+        well_config[well_name]["zones"][zone].update(fluid_contacts)
     elif zone:
-        well_config[well_name]['zones'][zone] = fluid_contacts
+        well_config[well_name]["zones"][zone] = fluid_contacts
 
     if sorting:
-        well_config[well_name]['sorting'] = sorting
+        well_config[well_name]["sorting"] = sorting
     return well_config
 
 
@@ -146,108 +185,136 @@ def assert_well_config_structure(well_config):
         well_config (dict): Dictionary containing well sorting and fluid contacts.
     """
     logger.debug("Asserting well config structure.")
-    required_keys = {'sorting', 'zones'}
-    optional_keys = {'GUT', 'GDT', 'GOC', 'GWC', 'OUT', 'ODT', 'OWC', 'WUT'}
+    required_keys = {"sorting", "zones"}
+    optional_keys = {"GUT", "GDT", "GOC", "GWC", "OUT", "ODT", "OWC", "WUT"}
     for well, config in well_config.items():
         assert isinstance(config, dict), f"Value for well '{well}' is not a dictionary"
-        assert set(config.keys()).intersection(required_keys), f"Well '{well}' does not have the required keys"
+        assert set(config.keys()).intersection(required_keys), (
+            f"Well '{well}' does not have the required keys"
+        )
 
-        for zone, fluid_contacts in config['zones'].items():
-            assert isinstance(fluid_contacts, dict), f"Value for zone '{zone}' in well '{well}' is not a dictionary"
-            assert set(fluid_contacts.keys()).intersection(
-                optional_keys), f"zone '{zone}' in well '{well}' has invalid keys"
+        for zone, fluid_contacts in config["zones"].items():
+            assert isinstance(fluid_contacts, dict), (
+                f"Value for zone '{zone}' in well '{well}' is not a dictionary"
+            )
+            assert set(fluid_contacts.keys()).intersection(optional_keys), (
+                f"zone '{zone}' in well '{well}' has invalid keys"
+            )
 
 
-def stick_plot(data, well_config: dict, zone: str = 'ALL'):
-    """Generate stick plot with water saturation and fluid contacts for specified zone.
+def stick_plot(data, well_config: dict, zone: str = "ALL"):
+    """Generate a multi-well stick plot to visualize fluid distribution.
 
-    Example of well_config:
-    ```
-    well_config = {
-        'X': {
-            'sorting': 0,
-            'zones': {
-                'ALL': {
-                    'GUT': 0,
-                    'GDT': 0,
-                    'GOC': 0,
-                    'GWC': 0,
-                    'OUT': 0,
-                    'ODT': 0,
-                    'OWC': 0,
-                    'WUT': 0
-                },
-            }
-        }
-    }
-    ```
+    This function creates a series of vertical tracks, one for each well,
+    displaying the Bulk Volume of Oil (BVO) against True Vertical Depth (TVD).
+    It shades the background of each track based on the fluid flags (oil, gas, water)
+    derived from the fluid contacts specified in the `well_config`.
 
     Args:
-        data (pandas.DataFrame): Pandas dataframe containing well log data.
-        well_config (dict): Dictionary containing well sorting and fluid contacts.
+        data (pd.DataFrame): DataFrame with log data for one or more wells.
+                               Must include 'WELL_NAME', 'TVD', 'PHIT', and 'SWT'.
+        well_config (dict): A configuration dictionary where keys are well names.
+                            Each well's value is a dictionary containing a 'sorting'
+                            integer and a 'zones' dictionary. The 'zones' dictionary
+                            maps zone names to their respective fluid contacts.
+        zone (str, optional): The specific zone to plot. Defaults to 'ALL'.
     """
     logger.info(f"Generating stick plot for zone: {zone}")
-    assert 'SWT' in data.columns, 'SWT column not found in data.'
-    assert 'TVD' in data.columns, 'TVD column not found in data.'
+    assert "SWT" in data.columns, "SWT column not found in data."
+    assert "TVD" in data.columns, "TVD column not found in data."
     assert_well_config_structure(well_config)
 
     # Create BVO and BVOH columns
-    data['BVO'] = data['PHIT'] * (1 - data['SWT'])
-    data['BVOH'] = data['PHIT'] * (1 - data['SHF']) if 'SHF' in data.columns else 0
+    data["BVO"] = data["PHIT"] * (1 - data["SWT"])
+    data["BVOH"] = data["PHIT"] * (1 - data["SHF"]) if "SHF" in data.columns else 0
 
     # Sort well names based on sorting key
-    well_names = sorted(data['WELL_NAME'].unique(), key=lambda name: well_config[name]['sorting'])
+    well_names = sorted(
+        data["WELL_NAME"].unique(), key=lambda name: well_config[name]["sorting"]
+    )
 
     # Create subplots
-    fig, axes = plt.subplots(nrows=1, ncols=len(well_names), sharey=True, figsize=(len(well_names) * 2, 15))
+    fig, axes = plt.subplots(
+        nrows=1, ncols=len(well_names), sharey=True, figsize=(len(well_names) * 2, 15)
+    )
 
     # Plot each well's data
     for ax, well_name in zip(axes, well_names):
         logger.debug(f"Plotting well: {well_name}")
-        well_data = data[(data['WELL_NAME'] == well_name) & (data['ZONES'] == zone)].copy()
-        well_data = update_fluid_contacts(well_data, well_config[well_name]['zones'][zone])
-        ax.plot(well_data['BVO'], well_data['TVD'], label=r'$BVO_{Log}$')
-        if 'BVOH' in well_data.columns:
-            ax.plot(well_data['BVOH'], well_data['TVD'], label=r'$BVO_{SHF}$')
+        well_data = data[
+            (data["WELL_NAME"] == well_name) & (data["ZONES"] == zone)
+        ].copy()
+        well_data = update_fluid_contacts(
+            well_data, well_config[well_name]["zones"][zone]
+        )
+        ax.plot(well_data["BVO"], well_data["TVD"], label=r"$BVO_{Log}$")
+        if "BVOH" in well_data.columns:
+            ax.plot(well_data["BVOH"], well_data["TVD"], label=r"$BVO_{SHF}$")
 
         # Fill between based on fluid flag
         ax.fill_betweenx(
-            well_data['TVD'], 0, 1, where=well_data['FLUID_FLAG'] == 1, color='g', alpha=0.3, label='Oil')
+            well_data["TVD"],
+            0,
+            1,
+            where=well_data["FLUID_FLAG"] == 1,
+            color="g",
+            alpha=0.3,
+            label="Oil",
+        )
         ax.fill_betweenx(
-            well_data['TVD'], 0, 1, where=well_data['FLUID_FLAG'] == 2, color='r', alpha=0.3, label='Gas')
+            well_data["TVD"],
+            0,
+            1,
+            where=well_data["FLUID_FLAG"] == 2,
+            color="r",
+            alpha=0.3,
+            label="Gas",
+        )
         ax.fill_betweenx(
-            well_data['TVD'], 0, 1, where=well_data['FLUID_FLAG'] == 0, color='b', alpha=0.3, label='Water')
+            well_data["TVD"],
+            0,
+            1,
+            where=well_data["FLUID_FLAG"] == 0,
+            color="b",
+            alpha=0.3,
+            label="Water",
+        )
 
-        ax.set_title(f'Well: {well_name}')
-        ax.set_xlim(0, .5)
+        ax.set_title(f"Well: {well_name}")
+        ax.set_xlim(0, 0.5)
         ax.legend()
 
-    axes[0].set_ylabel('Depth (TVD)')
+    axes[0].set_ylabel("Depth (TVD)")
     fig.subplots_adjust(wspace=0.3, hspace=0)
-    fig.set_facecolor('aliceblue')
+    fig.set_facecolor("aliceblue")
     plt.gca().invert_yaxis()
     plt.show()
 
 
-def neutron_density_xplot(nphi, rhob,
-                          dry_min1_point: tuple,
-                          dry_clay_point: tuple,
-                          fluid_point: tuple = (1.0, 1.0),
-                          wet_clay_point: tuple = (),
-                          dry_silt_point: tuple = (), **kwargs):
+def neutron_density_xplot(
+    nphi,
+    rhob,
+    dry_min1_point: tuple,
+    dry_clay_point: tuple,
+    fluid_point: tuple = (1.0, 1.0),
+    wet_clay_point: tuple = (),
+    dry_silt_point: tuple = (),
+    **kwargs,
+):
     """Neutron-Density crossplot with lithology lines based on specified end points.
+    This plot is a standard petrophysical tool used to identify lithology and porosity.
 
     Args:
-        nphi (float): Neutron porosity log.
-        rhob (float): Bulk density log.
-        dry_min1_point (tuple): Neutron porosity and bulk density of mineral 1 point.
-        dry_clay_point (tuple): Neutron porosity and bulk density of dry clay point.
-        fluid_point (tuple): Neutron porosity and bulk density of fluid point.
-        wet_clay_point (tuple): Neutron porosity and bulk density of wet clay point.
-        dry_silt_point (tuple): Neutron porosity and bulk density of dry silt point. Default is None.
+        nphi (np.ndarray or float): Neutron porosity log values.
+        rhob (np.ndarray or float): Bulk density log values.
+        dry_min1_point (tuple): (NPHI, RHOB) coordinates for the primary matrix mineral.
+        dry_clay_point (tuple): (NPHI, RHOB) coordinates for dry clay.
+        fluid_point (tuple, optional): (NPHI, RHOB) coordinates for the formation fluid. Defaults to (1.0, 1.0).
+        wet_clay_point (tuple, optional): (NPHI, RHOB) coordinates for wet clay. Defaults to ().
+        dry_silt_point (tuple, optional): (NPHI, RHOB) coordinates for dry silt. Defaults to ().
 
     Returns:
-        matplotlib.pyplot.Figure: Neutron porosity and bulk density cross plot.
+        matplotlib.figure.Figure: The generated Neutron-Density crossplot figure.
     """
     logger.info("Generating neutron-density crossplot.")
     A = dry_min1_point
@@ -264,38 +331,56 @@ def neutron_density_xplot(nphi, rhob,
 
     fig = Figure(figsize=(5, 5))
     ax = fig.add_subplot(111)
-    ax.set_title('NPHI-RHOB Crossplot')
-    ax.scatter(nphi, rhob, c=np.arange(0, len(nphi)).tolist(), cmap='rainbow', marker='.')
-    ax.plot(*zip(*min1line_from_pt), label='Mineral 1 Line', color='blue')
+    ax.set_title("NPHI-RHOB Crossplot")
+    ax.scatter(
+        nphi, rhob, c=np.arange(0, len(nphi)).tolist(), cmap="rainbow", marker="."
+    )
+    ax.plot(*zip(*min1line_from_pt), label="Mineral 1 Line", color="blue")
 
     if dry_silt_point:
         B = dry_silt_point
         siltline_from_pt = (D, B)
-        ax.plot(*zip(*siltline_from_pt), label='Silt Line', color='green')
-        ax.scatter(dry_silt_point[0], dry_silt_point[1], label='Dry Silt Point', color='orange')
+        ax.plot(*zip(*siltline_from_pt), label="Silt Line", color="green")
+        ax.scatter(
+            dry_silt_point[0], dry_silt_point[1], label="Dry Silt Point", color="orange"
+        )
 
-    ax.plot(*zip(*clayline_from_pt), label='Clay Line', color='gray')
-    ax.plot(*zip(*rockline_from_pt), label='Rock Line', color='black')
-    ax.scatter(*zip(*projected_pt), label='Projected Line', color='purple', marker='.')
-    ax.scatter(dry_min1_point[0], dry_min1_point[1],
-               label=f'Mineral 1 Point: ({dry_min1_point[0]}, {dry_min1_point[1]})', color='yellow')
-    ax.scatter(dry_clay_point[0], dry_clay_point[1],
-               label=f'Dry Clay Point: ({dry_clay_point[0]}, {dry_clay_point[1]})', color='black')
+    ax.plot(*zip(*clayline_from_pt), label="Clay Line", color="gray")
+    ax.plot(*zip(*rockline_from_pt), label="Rock Line", color="black")
+    ax.scatter(*zip(*projected_pt), label="Projected Line", color="purple", marker=".")
+    ax.scatter(
+        dry_min1_point[0],
+        dry_min1_point[1],
+        label=f"Mineral 1 Point: ({dry_min1_point[0]}, {dry_min1_point[1]})",
+        color="yellow",
+    )
+    ax.scatter(
+        dry_clay_point[0],
+        dry_clay_point[1],
+        label=f"Dry Clay Point: ({dry_clay_point[0]}, {dry_clay_point[1]})",
+        color="black",
+    )
 
     if wet_clay_point:
-        ax.scatter(wet_clay_point[0], wet_clay_point[1], label='Wet Clay Point', color='gray')
+        ax.scatter(
+            wet_clay_point[0], wet_clay_point[1], label="Wet Clay Point", color="gray"
+        )
 
-    ax.scatter(fluid_point[0], fluid_point[1],
-               label=f'Fluid Point: ({fluid_point[0]}, {fluid_point[1]})', color='blue')
+    ax.scatter(
+        fluid_point[0],
+        fluid_point[1],
+        label=f"Fluid Point: ({fluid_point[0]}, {fluid_point[1]})",
+        color="blue",
+    )
 
     ax.set_ylim(3, 0)
-    ax.set_ylabel('RHOB')
+    ax.set_ylabel("RHOB")
     ax.set_xlim(-0.15, 1)
-    ax.set_xlabel('NPHI')
-    ax.legend(loc="upper left", prop={'size': 9})
+    ax.set_xlabel("NPHI")
+    ax.legend(loc="upper left", prop={"size": 9})
     ax.minorticks_on()
-    ax.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
-    ax.grid(True, which='minor', linestyle=':', linewidth='0.4', color='gray')
+    ax.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
+    ax.grid(True, which="minor", linestyle=":", linewidth="0.4", color="gray")
     fig.tight_layout()
 
     return fig

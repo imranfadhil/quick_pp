@@ -7,7 +7,11 @@ from tqdm import tqdm
 
 from quick_pp.machine_learning.config import MODELLING_CONFIG, RAW_FEATURES
 from quick_pp.machine_learning.feature_engineering import generate_fe_features
-from quick_pp.machine_learning.utils import get_latest_registered_models, unique_id, run_mlflow_server
+from quick_pp.machine_learning.utils import (
+    get_latest_registered_models,
+    unique_id,
+    run_mlflow_server,
+)
 from quick_pp.plotter.well_log import plotly_log
 from quick_pp.fluid_type import fix_fluid_segregation
 from quick_pp import logger
@@ -17,13 +21,13 @@ def load_data(hash: str) -> pd.DataFrame:
     """Load data from the specified directory using a hash to identify the file.
 
     Args:
-        hash (str): Hash to identify the file.
+        hash (str): A unique hash string contained within the target Parquet filename.
 
     Raises:
         FileNotFoundError: If no file is found with the specified hash.
 
     Returns:
-        pd.DataFrame: Loaded DataFrame.
+        pd.DataFrame: The loaded well log data as a DataFrame.
     """
     data_dir = Path("data/input/")
     matching_files = list(data_dir.glob(f"*{hash}*.parquet"))
@@ -36,16 +40,16 @@ def load_data(hash: str) -> pd.DataFrame:
 
 
 def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Preprocess the DataFrame by ensuring required columns are present.
+    """Preprocess the input DataFrame by generating engineered features.
 
     Args:
-        df (pd.DataFrame): DataFrame to preprocess.
+        df (pd.DataFrame): The raw input DataFrame.
 
     Raises:
-        ValueError: If required columns are missing.
+        ValueError: If required columns for feature engineering are missing.
 
     Returns:
-        pd.DataFrame: Preprocessed DataFrame.
+        pd.DataFrame: The DataFrame with added feature-engineered columns.
     """
     df = generate_fe_features(df)
     return df
@@ -53,22 +57,24 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
 
 def postprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     """Postprocess the DataFrame by inverting LOG_PERM to PERM if needed.
+    This function also calculates hydrocarbon volumes and corrects for fluid segregation.
 
     Args:
-        df (pd.DataFrame): DataFrame to postprocess.
+        df (pd.DataFrame): The DataFrame containing model predictions.
 
     Returns:
-        pd.DataFrame: Postprocessed DataFrame.
+        pd.DataFrame: The postprocessed DataFrame with added 'PERM', 'VHC', 'VOIL',
+                      and 'VGAS' columns.
     """
     # TODO: Clear predictions at COAL_FLAG interval
     # Invert LOG_PERM to PERM if exists
-    if 'LOG_PERM' in df.columns and 'PERM' not in df.columns:
+    if "LOG_PERM" in df.columns and "PERM" not in df.columns:
         logger.info("Inverting LOG_PERM to PERM")
-        df['PERM'] = 10 ** df['LOG_PERM']
+        df["PERM"] = 10 ** df["LOG_PERM"]
 
     # Generate fluid volume fractions if OIL_FLAG and GAS_FLAG exist
-    df['VHC'] = (1 - df.get('SWT', 1)) * df.get('PHIT', 0)
-    if 'OIL_FLAG' in df.columns and 'GAS_FLAG' in df.columns:
+    df["VHC"] = (1 - df.get("SWT", 1)) * df.get("PHIT", 0)
+    if "OIL_FLAG" in df.columns and "GAS_FLAG" in df.columns:
         df = fix_fluid_segregation(df)
 
     return df
@@ -76,10 +82,12 @@ def postprocess_data(df: pd.DataFrame) -> pd.DataFrame:
 
 def save_predictions(pred_df: pd.DataFrame, output_file_name: str, plot: bool = False):
     """Save the predictions DataFrame to a Parquet file.
+    Optionally, generate and save individual well log plots.
 
     Args:
         pred_df (pd.DataFrame): DataFrame containing predictions.
-        output_file_name (str): Base name for the output file.
+        output_file_name (str): The base name for the output Parquet and plot files.
+        plot (bool, optional): If True, generate and save well log plots. Defaults to False.
     """
     hash = unique_id(pred_df)
     output_dir = Path("data/output/")
@@ -90,8 +98,15 @@ def save_predictions(pred_df: pd.DataFrame, output_file_name: str, plot: bool = 
     if plot:
         output_dir = Path("data/output/plots")
         os.makedirs(output_dir, exist_ok=True)
-        for well_name, well_df in tqdm(pred_df.groupby('WELL_NAME'), desc="Generating plots", ):
-            fig = plotly_log(well_df, well_name=well_name, column_widths=[1, 1, 1, 1, 1, 1, .3, 1, 1])
+        for well_name, well_df in tqdm(
+            pred_df.groupby("WELL_NAME"),
+            desc="Generating plots",
+        ):
+            fig = plotly_log(
+                well_df,
+                well_name=well_name,
+                column_widths=[1, 1, 1, 1, 1, 1, 0.3, 1, 1],
+            )
             plot_path = Path(f"{output_dir}/{well_name}.html")
             fig.write_html(plot_path, config=dict(scrollZoom=True))
             tqdm.write(f"Plot for well {well_name} saved to {plot_path}")
@@ -99,16 +114,23 @@ def save_predictions(pred_df: pd.DataFrame, output_file_name: str, plot: bool = 
 
 
 def predict_pipeline(
-        model_config: str, data_hash: str, output_file_name: str, env: str = 'local', plot_predictions: bool = False
+    model_config: str,
+    data_hash: str,
+    output_file_name: str,
+    env: str = "local",
+    plot_predictions: bool = False,
 ) -> None:
-    """
-    Run the prediction pipeline: load the latest models, make predictions on input data, postprocess, and save results.
+    """Execute the end-to-end prediction pipeline.
+
+    This function orchestrates loading data, preprocessing, loading the latest registered
+    MLflow models, making predictions, postprocessing the results, and saving the output.
 
     Args:
-        model_config (str): Model configuration key.
-        data_hash (str): Hash to identify the input data file.
-        output_file_name (str): Base name for the output predictions file.
+        model_config (str): The key for the model configuration (e.g., 'clastic', 'carbonate').
+        data_hash (str): The unique hash identifying the input data file.
+        output_file_name (str): The base name for the output predictions file.
         env (str, optional): Environment for MLflow server. Defaults to 'local'.
+        plot_predictions (bool, optional): If True, generate plots for each well. Defaults to False.
     """
     logger.info("Starting prediction pipeline")
     # Run MLflow server
@@ -122,25 +144,27 @@ def predict_pipeline(
     data = load_data(data_hash)
     data = preprocess_data(data)
 
-    pred_df = data[['DEPTH', 'WELL_NAME'] + RAW_FEATURES].copy()
+    pred_df = data[["DEPTH", "WELL_NAME"] + RAW_FEATURES].copy()
     for model_key, model_values in MODELLING_CONFIG[model_config].items():
-        targets = model_values['targets']
-        features = model_values['features']
-        reg_model_name = f'{model_config}_{model_key}_{data_hash}'
+        targets = model_values["targets"]
+        features = model_values["features"]
+        reg_model_name = f"{model_config}_{model_key}_{data_hash}"
         logger.info(f"Predicting with model: {model_key} | {reg_model_name}")
 
         # Load the model
-        model = load_model(latest_rms[reg_model_name]['model_uri'])
+        model = load_model(latest_rms[reg_model_name]["model_uri"])
 
         # Run predictions and concat to pred_df
-        preds = model.predict(data[features].astype('float'))
+        preds = model.predict(data[features].astype("float"))
         temp_df = pd.DataFrame(preds, columns=targets)
         pred_df = pd.concat([pred_df, temp_df], axis=1)
 
     # Merge specific columns from original data missing from pred_df
-    merge_cols = ['WELL_NAME', 'DEPTH']
-    missing_cols = ['ROCK_FLAG', 'COAL_FLAG', 'TIGHT_FLAG']
-    pred_df = pd.merge(pred_df, data[merge_cols + missing_cols], on=merge_cols, how='left')
+    merge_cols = ["WELL_NAME", "DEPTH"]
+    missing_cols = ["ROCK_FLAG", "COAL_FLAG", "TIGHT_FLAG"]
+    pred_df = pd.merge(
+        pred_df, data[merge_cols + missing_cols], on=merge_cols, how="left"
+    )
 
     # Postprocess the predictions and save
     pred_df = postprocess_data(pred_df)

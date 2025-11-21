@@ -6,19 +6,21 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import (classification_report, auc, ConfusionMatrixDisplay, confusion_matrix,
-                             r2_score, mean_absolute_error)
+from sklearn.metrics import (
+    classification_report,
+    auc,
+    ConfusionMatrixDisplay,
+    confusion_matrix,
+    r2_score,
+    mean_absolute_error,
+)
 
 from quick_pp.lithology import shale_volume_steiber
 from quick_pp import logger
 
-plt.style.use('seaborn-v0_8-paper')
+plt.style.use("seaborn-v0_8-paper")
 plt.rcParams.update(
-    {
-        'axes.labelsize': 10,
-        'xtick.labelsize': 10,
-        'legend.fontsize': 'small'
-    }
+    {"axes.labelsize": 10, "xtick.labelsize": 10, "legend.fontsize": "small"}
 )
 
 
@@ -26,24 +28,24 @@ def calc_rqi(pore, perm):
     """Calculate RQI (Rock Quality Index) from Kozeny-Carman equation, based on Amaefule et al. (1993)
 
     Args:
-        perm (float): Permeability in mD
-        pore (float): Total porosity in fraction
+        pore (np.ndarray or float): Total porosity in fraction.
+        perm (np.ndarray or float): Permeability in mD.
 
     Returns:
-        float: RQI
+        np.ndarray or float: The Rock Quality Index (RQI).
     """
-    return 0.0314 * (perm / pore)**0.5
+    return 0.0314 * (perm / pore) ** 0.5
 
 
 def calc_fzi(pore, perm):
     """Calculate FZI (Flow Zone Indicator) from Kozeny-Carman equation, based on Amaefule et al. (1993)
 
     Args:
-        perm (float): Permeability in mD
-        pore (float): Total porosity in fraction
+        pore (np.ndarray or float): Total porosity in fraction.
+        perm (np.ndarray or float): Permeability in mD.
 
     Returns:
-        float: FZI
+        np.ndarray or float: The Flow Zone Indicator (FZI).
     """
     return calc_rqi(pore, perm) / (pore / (1 - pore))
 
@@ -52,47 +54,49 @@ def calc_fzi_perm(fzi, pore):
     """Calculate permeability from FZI and porosity, based on Amaefule et al. (1993)
 
     Args:
-        fzi (float): Flow Zone Indicator
-        pore (float): Total porosity in fraction
+        fzi (np.ndarray or float): Flow Zone Indicator.
+        pore (np.ndarray or float): Total porosity in fraction.
 
     Returns:
-        float: Permeability in mD
+        np.ndarray or float: Permeability in mD.
     """
-    return pore * ((pore * fzi) / (.0314 * (1 - pore)))**2
+    return pore * ((pore * fzi) / (0.0314 * (1 - pore))) ** 2
 
 
 def calc_r35(pore, perm):
     """Calculate Winland R35 from Kozeny-Carman equation, based on Winland (1979)
 
     Args:
-        perm (float): Permeability in mD
-        pore (float): Total porosity in fraction
+        pore (np.ndarray or float): Total porosity in fraction.
+        perm (np.ndarray or float): Permeability in mD.
 
     Returns:
-        float: R35
+        np.ndarray or float: The Winland R35 value.
     """
-    return 10**(.732 + .588 * np.log10(perm) - .864 * np.log10(pore * 100))
+    return 10 ** (0.732 + 0.588 * np.log10(perm) - 0.864 * np.log10(pore * 100))
 
 
 def calc_r35_perm(r35, pore):
     """Calculate permeability from Winland R35 and porosity, based on Winland (1979)
 
     Args:
-        r35 (float): Winland R35
-        pore (float): Total porosity in fraction
+        r35 (np.ndarray or float): Winland R35 value.
+        pore (np.ndarray or float): Total porosity in fraction.
 
     Returns:
-        float: Permeability in mD
+        np.ndarray or float: Permeability in mD.
     """
-    return 10**((np.log10(r35) - .732 + .864 * np.log10(pore * 100)) / .588)
+    return 10 ** ((np.log10(r35) - 0.732 + 0.864 * np.log10(pore * 100)) / 0.588)
 
 
-def plot_rqi(cpore, cperm, cut_offs=None, rock_type=None, title='Rock Quality Index (RQI)'):
-    """Plot the RQI cross plot.
+def plot_rqi(
+    cpore, cperm, cut_offs=None, rock_type=None, title="Rock Quality Index (RQI)"
+):
+    """Generate a Rock Quality Index (RQI) cross-plot.
 
     Args:
-        cpore (float): Core porosity in fraction.
-        cperm (float): Core permeability in mD.
+        cpore (np.ndarray or float): Core porosity in fraction.
+        cperm (np.ndarray or float): Core permeability in mD.
         cut_offs (list, optional): List of RQI values to plot as lines.
                                    Defaults to None, which will use [0.1, 0.3, 0.5, 1.0].
         rock_type (array, optional): Array of rock types for coloring points. Defaults to None.
@@ -100,65 +104,98 @@ def plot_rqi(cpore, cperm, cut_offs=None, rock_type=None, title='Rock Quality In
     """
     _, ax = plt.subplots(figsize=(10, 8))
     plt.title(title)
-    plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
+    plt.scatter(cpore, cperm, marker=".", c=rock_type, cmap="viridis")
     cut_offs = cut_offs if cut_offs is not None else [0.1, 0.3, 0.5, 1.0]
     pore_points = np.geomspace(0.001, 1, 20)
     for rqi in cut_offs:
-        perm_points = pore_points * (rqi / 0.0314)**2
-        ax.plot(pore_points, perm_points, linestyle='dashed', label=f'RQI={round(rqi, 3)}')
+        perm_points = pore_points * (rqi / 0.0314) ** 2
+        ax.plot(
+            pore_points, perm_points, linestyle="dashed", label=f"RQI={round(rqi, 3)}"
+        )
 
-    plt.xlabel('Porosity (frac)')
-    plt.xlim(-.05, .5)
-    plt.ylabel('Permeability (mD)')
+    plt.xlabel("Porosity (frac)")
+    plt.xlim(-0.05, 0.5)
+    plt.ylabel("Permeability (mD)")
     plt.ylim(1e-3, 1e5)
     plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
-    plt.yscale('log')
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
-        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+    plt.yscale("log")
+    ax.yaxis.set_major_formatter(
+        ticker.FuncFormatter(
+            lambda x, pos: (
+                "{{:.{:1d}f}}".format(int(np.maximum(-np.log10(x), 0)))
+            ).format(x)
+        )
+    )
     plt.minorticks_on()
-    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
-    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
+    plt.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
+    plt.grid(True, which="minor", linestyle=":", linewidth="0.3", color="gray")
 
 
-def plot_fzi(cpore, cperm, cut_offs=None, rock_type=None, title='Flow Zone Indicator (FZI)'):
-    """Plot the FZI cross plot.
+def plot_fzi(
+    cpore, cperm, cut_offs=None, rock_type=None, title="Flow Zone Indicator (FZI)"
+):
+    """Generate a Flow Zone Indicator (FZI) cross-plot.
 
     Args:
-        perm (float): Permeability in mD
-        pore (float): Total porosity in fraction
+        cpore (np.ndarray or float): Core porosity in fraction.
+        cperm (np.ndarray or float): Core permeability in mD.
+        cut_offs (list, optional): List of FZI values to plot as lines. Defaults to `np.arange(0.5, 5)`.
+        rock_type (array, optional): Array of rock types for coloring points. Defaults to None.
+        title (str, optional): Plot title. Defaults to 'Flow Zone Indicator (FZI)'.
     """
     # Plot the FZI cross plot
     _, ax = plt.subplots(figsize=(10, 8))
     plt.title(title)
-    plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
+    plt.scatter(cpore, cperm, marker=".", c=rock_type, cmap="viridis")
     cut_offs = cut_offs if cut_offs is not None else np.arange(0.5, 5)
     phit_points = np.geomspace(0.001, 1, 20)
     prt_num = len(cut_offs)
-    ax.annotate(f'PRT {prt_num + 1}', xy=(.3, .7), xytext=(1, 1),
-                textcoords='offset points', fontsize=10, fontweight='bold')
+    ax.annotate(
+        f"PRT {prt_num + 1}",
+        xy=(0.3, 0.7),
+        xytext=(1, 1),
+        textcoords="offset points",
+        fontsize=10,
+        fontweight="bold",
+    )
     for i, fzi in enumerate(cut_offs):
-        perm_points = phit_points * ((phit_points * fzi) / (.0314 * (1 - phit_points)))**2
-        ax.plot(phit_points, perm_points, linestyle='dashed', label=f'FZI={round(fzi, 3)}')
+        perm_points = (
+            phit_points * ((phit_points * fzi) / (0.0314 * (1 - phit_points))) ** 2
+        )
+        ax.plot(
+            phit_points, perm_points, linestyle="dashed", label=f"FZI={round(fzi, 3)}"
+        )
         prt_num = len(cut_offs) - i
-        ax.annotate(f'PRT {prt_num}', xy=(.3, perm_points[-4]), xytext=(1, 1),
-                    textcoords='offset points', fontsize=10, fontweight='bold')
+        ax.annotate(
+            f"PRT {prt_num}",
+            xy=(0.3, perm_points[-4]),
+            xytext=(1, 1),
+            textcoords="offset points",
+            fontsize=10,
+            fontweight="bold",
+        )
 
-    plt.xlabel('Porosity (frac)')
-    plt.xlim(-.05, .5)
-    plt.ylabel('Permeability (mD)')
+    plt.xlabel("Porosity (frac)")
+    plt.xlim(-0.05, 0.5)
+    plt.ylabel("Permeability (mD)")
     plt.ylim(1e-3, 1e5)
     plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
-    plt.yscale('log')
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
-        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+    plt.yscale("log")
+    ax.yaxis.set_major_formatter(
+        ticker.FuncFormatter(
+            lambda x, pos: (
+                "{{:.{:1d}f}}".format(int(np.maximum(-np.log10(x), 0)))
+            ).format(x)
+        )
+    )
 
     plt.minorticks_on()
-    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
-    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
+    plt.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
+    plt.grid(True, which="minor", linestyle=":", linewidth="0.3", color="gray")
 
 
-def plot_rfn(cpore, cperm, rock_type=None, title='Lucia RFN'):
+def plot_rfn(cpore, cperm, rock_type=None, title="Lucia RFN"):
     """Plot the Rock Fabric Number (RFN) lines on porosity and permeability cross plot. The permeability (mD) is
     calculated based on Lucia-Jenkins, 2003.
     ```
@@ -166,34 +203,45 @@ def plot_rfn(cpore, cperm, rock_type=None, title='Lucia RFN'):
     ```
 
     Args:
-        cpore (float): Critical porosity in v/v
-        cperm (float): Critical permeability in mD
+        cpore (np.ndarray or float): Core porosity in v/v.
+        cperm (np.ndarray or float): Core permeability in mD.
+        rock_type (array, optional): Array of rock types for coloring points. Defaults to None.
+        title (str, optional): Plot title. Defaults to 'Lucia RFN'.
     """
     # Plot the RFN cross plot
     _, ax = plt.subplots(figsize=(10, 8))
     plt.title(title)
-    plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
-    pore_points = np.linspace(0, .6, 20)
-    for rfn in np.arange(.5, 4.5, .5):
-        perm_points = 10**(9.7892 - 12.0838 * np.log10(rfn) + (8.6711 - 8.2965 * np.log10(rfn)) * np.log10(pore_points))
-        plt.plot(pore_points, perm_points, linestyle='dashed', label=f'RFN={rfn}')
+    plt.scatter(cpore, cperm, marker=".", c=rock_type, cmap="viridis")
+    pore_points = np.linspace(0, 0.6, 20)
+    for rfn in np.arange(0.5, 4.5, 0.5):
+        perm_points = 10 ** (
+            9.7892
+            - 12.0838 * np.log10(rfn)
+            + (8.6711 - 8.2965 * np.log10(rfn)) * np.log10(pore_points)
+        )
+        plt.plot(pore_points, perm_points, linestyle="dashed", label=f"RFN={rfn}")
 
-    plt.xlabel('Porosity (frac)')
-    plt.xlim(-.05, .5)
-    plt.ylabel('Permeability (mD)')
+    plt.xlabel("Porosity (frac)")
+    plt.xlim(-0.05, 0.5)
+    plt.ylabel("Permeability (mD)")
     plt.ylim(1e-3, 1e5)
     plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
-    plt.yscale('log')
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
-        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+    plt.yscale("log")
+    ax.yaxis.set_major_formatter(
+        ticker.FuncFormatter(
+            lambda x, pos: (
+                "{{:.{:1d}f}}".format(int(np.maximum(-np.log10(x), 0)))
+            ).format(x)
+        )
+    )
 
     plt.minorticks_on()
-    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
-    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
+    plt.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
+    plt.grid(True, which="minor", linestyle=":", linewidth="0.3", color="gray")
 
 
-def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title='Winland R35'):
+def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title="Winland R35"):
     """Plot the Winland R35 lines on porosity and permeability cross plot. The permeability (mD) is calculated based on
     Winland, 1972.
     ```
@@ -201,35 +249,53 @@ def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title='Winland R35
     ```
 
     Args:
-        cpore (float): Critical porosity in v/v
-        cperm (float): Critical permeability in mD
+        cpore (np.ndarray or float): Core porosity in v/v.
+        cperm (np.ndarray or float): Core permeability in mD.
+        cut_offs (list, optional): List of R35 values to plot as lines. Defaults to [.05, .1, .5, 2, 10, 100].
+        rock_type (array, optional): Array of rock types for coloring points. Defaults to None.
+        title (str, optional): Plot title. Defaults to 'Winland R35'.
     """
     # Plot the Winland R35 cross plot
     _, ax = plt.subplots(figsize=(10, 8))
     plt.title(title)
-    plt.scatter(cpore, cperm, marker='.', c=rock_type, cmap='viridis')
-    cut_offs = cut_offs if cut_offs is not None else [.05, .1, .5, 2, 10, 100]
-    pore_points = np.linspace(0.001, .6, 20)
+    plt.scatter(cpore, cperm, marker=".", c=rock_type, cmap="viridis")
+    cut_offs = cut_offs if cut_offs is not None else [0.05, 0.1, 0.5, 2, 10, 100]
+    pore_points = np.linspace(0.001, 0.6, 20)
     for r35 in cut_offs:
         perm_points = calc_r35_perm(r35, pore_points)
-        plt.plot(pore_points, perm_points, linestyle='dashed', label=f'R35={r35}')
+        plt.plot(pore_points, perm_points, linestyle="dashed", label=f"R35={r35}")
 
-    plt.xlabel('Porosity (frac)')
-    plt.xlim(-.05, .5)
-    plt.ylabel('Permeability (mD)')
+    plt.xlabel("Porosity (frac)")
+    plt.xlim(-0.05, 0.5)
+    plt.ylabel("Permeability (mD)")
     plt.ylim(1e-3, 1e5)
     plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
-    plt.yscale('log')
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(
-        lambda x, pos: ('{{:.{:1d}f}}'.format(int(np.maximum(-np.log10(x), 0)))).format(x)))
+    plt.yscale("log")
+    ax.yaxis.set_major_formatter(
+        ticker.FuncFormatter(
+            lambda x, pos: (
+                "{{:.{:1d}f}}".format(int(np.maximum(-np.log10(x), 0)))
+            ).format(x)
+        )
+    )
 
     plt.minorticks_on()
-    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
-    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
+    plt.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
+    plt.grid(True, which="minor", linestyle=":", linewidth="0.3", color="gray")
 
 
 def plot_ward_dendogram(X, p=10, title="Ward's Dendogram"):
+    """Generate and display a Ward's dendrogram for hierarchical clustering.
+
+    This function is useful for visualizing the hierarchical relationships within a
+    dataset to identify natural groupings or clusters.
+
+    Args:
+        X (np.ndarray): The input data array for clustering.
+        p (int, optional): The number of clusters to display in the truncated dendrogram. Defaults to 10.
+        title (str, optional): The title of the plot. Defaults to "Ward's Dendogram".
+    """
     # Calculate the pairwise distance matrix
     input_df = X.dropna().sort_values().reset_index(drop=True).values.reshape(-1, 1)
     distance_matrix = pdist(input_df)
@@ -240,20 +306,26 @@ def plot_ward_dendogram(X, p=10, title="Ward's Dendogram"):
     # Plot the dendrogram
     fig_width = min(10, p * 0.5)
     plt.figure(figsize=(fig_width, 10))
-    dendrogram(linkage_matrix, truncate_mode='lastp', p=p)
-    plt.title('Ward\'s Dendrogram')
-    plt.xlabel('Sample Index')
-    plt.ylabel('Distance')
+    dendrogram(linkage_matrix, truncate_mode="lastp", p=p)
+    plt.title("Ward's Dendrogram")
+    plt.xlabel("Sample Index")
+    plt.ylabel("Distance")
     plt.show()
 
 
-def plot_cumulative_probability(cpore, cperm, cutoffs=[], title="Cumulative Probability Plot"):
+def plot_cumulative_probability(
+    cpore, cperm, cutoffs=[], title="Cumulative Probability Plot"
+):
     """Plot cumulative probability to identify possible flow units.
 
+    This plot helps in identifying different flow units by visualizing the
+    cumulative probability distribution of the Flow Zone Indicator (FZI).
+
     Args:
-        cpore (float): Core porosity in fraction.
-        cperm (float): Core permeability in mD.
-        title (str, optional): Title of the plot. Defaults to "Cumulative Probability Plot".
+        cpore (np.ndarray or float): Core porosity in fraction.
+        cperm (np.ndarray or float): Core permeability in mD.
+        cutoffs (list, optional): A list of cutoff values to display as vertical lines. Defaults to [].
+        title (str, optional): The title of the plot. Defaults to "Cumulative Probability Plot".
     """
     fzi = calc_fzi(cpore, cperm)
     fzi = fzi[~np.isnan(fzi)]
@@ -264,24 +336,31 @@ def plot_cumulative_probability(cpore, cperm, cutoffs=[], title="Cumulative Prob
     # Generate cumulative probability plot
     plt.figure(figsize=(8, 4))
     plt.title(title)
-    plt.scatter(log_fzi, zi, marker='.')
-    plt.xlabel('log(FZI)')
-    plt.ylabel('Cumulative Probability')
+    plt.scatter(log_fzi, zi, marker=".")
+    plt.xlabel("log(FZI)")
+    plt.ylabel("Cumulative Probability")
     plt.minorticks_on()
-    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
-    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
-    plt.xticks(np.arange(min(log_fzi[log_fzi != -np.inf]), max(log_fzi[log_fzi != np.inf]), .2))
+    plt.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
+    plt.grid(True, which="minor", linestyle=":", linewidth="0.3", color="gray")
+    plt.xticks(
+        np.arange(
+            min(log_fzi[log_fzi != -np.inf]), max(log_fzi[log_fzi != np.inf]), 0.2
+        )
+    )
     for i, c in enumerate(cutoffs):
-        plt.axvline(x=c, color='r', linestyle='dashed', label=cutoffs[i])
+        plt.axvline(x=c, color="r", linestyle="dashed", label=cutoffs[i])
 
 
 def plot_lorenz_heterogeneity(cpore, cperm, title="Lorenz's Plot"):
     """Plot Lorenz's plot to estimate heteroginity.
 
+    This plot is used to assess the degree of heterogeneity in a reservoir by
+    comparing the cumulative distribution of porosity with that of permeability.
+
     Args:
-        cpore (float): Core porosity in fraction.
-        cperm (float): Core permeability in mD.
-        title (str, optional): Title of the plot. Defaults to "Lorenz's Plot".
+        cpore (np.ndarray or float): Core porosity in fraction.
+        cperm (np.ndarray or float): Core permeability in mD.
+        title (str, optional): The title of the plot. Defaults to "Lorenz's Plot".
     """
     sorted_perm, sorted_phit = zip(*sorted(zip(cperm, cpore), reverse=True))
     perm_cdf = np.cumsum(sorted_perm) / np.sum(sorted_perm)
@@ -290,11 +369,17 @@ def plot_lorenz_heterogeneity(cpore, cperm, title="Lorenz's Plot"):
     # Generate Lorenz's plot
     plt.figure(figsize=(10, 8))
     plt.title(title)
-    plt.text(.4, .1, f'Lorenz Coefficient: {lorenz_coeff:.2f}', fontsize=10, transform=plt.gca().transAxes)
-    plt.scatter(phit_cdf, perm_cdf, marker='.')
-    plt.plot([0, 1], [0, 1], linestyle='dashed', color='gray')
-    plt.xlabel('CDF of Porosity')
-    plt.ylabel('CDF of Permeability')
+    plt.text(
+        0.4,
+        0.1,
+        f"Lorenz Coefficient: {lorenz_coeff:.2f}",
+        fontsize=10,
+        transform=plt.gca().transAxes,
+    )
+    plt.scatter(phit_cdf, perm_cdf, marker=".")
+    plt.plot([0, 1], [0, 1], linestyle="dashed", color="gray")
+    plt.xlabel("CDF of Porosity")
+    plt.ylabel("CDF of Permeability")
     plt.xlim(0, 1)
     plt.ylim(0, 1)
 
@@ -302,36 +387,41 @@ def plot_lorenz_heterogeneity(cpore, cperm, title="Lorenz's Plot"):
 def plot_modified_lorenz(cpore, cperm, title="Modified Lorenz's Plot"):
     """Plot Lorenz's plot to identify possible flow units.
 
+    This is a variation of the Lorenz plot where data is sorted by the Flow Zone
+    Indicator (FZI) to better delineate hydraulic flow units.
+
     Args:
-        cpore (float): Core porosity in fraction.
-        cperm (float): Core permeability in mD.
-        title (str, optional): Title of the plot. Defaults to "Lorenz's Plot".
+        cpore (np.ndarray or float): Core porosity in fraction.
+        cperm (np.ndarray or float): Core permeability in mD.
+        title (str, optional): The title of the plot. Defaults to "Modified Lorenz's Plot".
     """
     fzi = calc_fzi(cpore, cperm)
-    sorted_fzi, sorted_perm, sorted_pore = zip(*sorted(zip(fzi, cperm, cpore), reverse=False))
+    sorted_fzi, sorted_perm, sorted_pore = zip(
+        *sorted(zip(fzi, cperm, cpore), reverse=False)
+    )
     perm_cdf = np.cumsum(sorted_perm) / np.sum(sorted_perm)
     pore_cdf = np.cumsum(sorted_pore) / np.sum(sorted_pore)
     # Generate Lorenz's plot
     plt.figure(figsize=(10, 8))
     plt.title(title)
-    plt.scatter(pore_cdf, perm_cdf, marker='.')
-    plt.xlabel('CDF of Porosity')
-    plt.ylabel('CDF of Permeability')
+    plt.scatter(pore_cdf, perm_cdf, marker=".")
+    plt.xlabel("CDF of Porosity")
+    plt.ylabel("CDF of Permeability")
     plt.minorticks_on()
-    plt.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
-    plt.grid(True, which='minor', linestyle=':', linewidth='0.3', color='gray')
+    plt.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
+    plt.grid(True, which="minor", linestyle=":", linewidth="0.3", color="gray")
 
 
 def estimate_pore_throat(pc, ift, theta):
     """Estimate pore throat size from capillary pressure curve based on Washburn 1921.
 
     Args:
-        pc (float): Capillary pressure in psi.
+        pc (np.ndarray or float): Capillary pressure in psi.
         ift (float): Interfacial tension in mN/m.
         theta (float): Contact angle in degree.
 
     Returns:
-        float: Pore throat size in micrometer.
+        np.ndarray or float: Pore throat size in micrometer.
     """
     return 2 * 0.145 * ift * abs(np.cos(np.radians(theta))) / pc
 
@@ -341,15 +431,16 @@ def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
     it will be automatically estimated.
 
     Args:
-        gr (float): Gamma ray from well log.
+        gr (np.ndarray or float): Gamma ray from well log.
         min_gr (float, optional): Minimum gamma ray value. Defaults to None.
         max_gr (float, optional): Maximum gamma ray value. Defaults to None.
         alpha (float, optional): Alpha value for min-max normalization. Defaults to 0.1.
 
     Returns:
-        float: VSH_GR.
+        np.ndarray or float: Volume of shale from gamma ray (VSH_GR).
     """
     from sklearn.preprocessing import robust_scale, minmax_scale
+
     # Normalize gamma ray
     if not max_gr or (not min_gr and min_gr != 0):
         # Remove high outliers and forward fill missing values
@@ -360,7 +451,11 @@ def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
         lower_bound = (q1 - 1.5 * iqr).clip(0)
         # Replace outliers with NaN and then forward fill
         gr_series = pd.Series(gr)
-        gr = gr_series.where((gr_series >= lower_bound) & (gr_series <= upper_bound)).ffill().to_numpy()
+        gr = (
+            gr_series.where((gr_series >= lower_bound) & (gr_series <= upper_bound))
+            .ffill()
+            .to_numpy()
+        )
         gri = minmax_scale(robust_scale(gr))
     else:
         gri = (gr - min_gr) / (max_gr - min_gr)
@@ -372,34 +467,34 @@ def estimate_vsh_dn(phin, phid, phin_sh=0.35, phid_sh=0.05):
     """Estimate volume of shale from neutron porosity and density porosity.
 
     Args:
-        phin (float): Neutron porosity in fraction.
-        phid (float): Density porosity in fraction.
+        phin (np.ndarray or float): Neutron porosity in fraction.
+        phid (np.ndarray or float): Density porosity in fraction.
         phin_sh (float, optional): Neutron porosity for shale. Defaults to 0.35.
         phid_sh (float, optional): Density porosity for shale. Defaults to 0.05.
 
     Returns:
-        float: Volume of shale.
+        np.ndarray or float: Volume of shale.
     """
     return (phin - phid) / (phin_sh - phid_sh)
 
 
-def rock_typing(curve, cut_offs=[.1, .2, .3, .4], higher_is_better=True):
+def rock_typing(curve, cut_offs=[0.1, 0.2, 0.3, 0.4], higher_is_better=True):
     """Rock typing based on cutoffs.
 
     Args:
-        curve (float): Curve to be used for rock typing.
+        curve (np.ndarray or float): The curve to be used for rock typing.
         cut_offs (list, optional): 3 cutoffs to group the curve into 4 rock types. Defaults to [.1, .2, .3, .4].
         higher_is_better (bool, optional): Whether higher value of curve is better quality or not. Defaults to True.
 
     Returns:
-        float: Rock type.
+        np.ndarray or float: An array of rock type classifications.
     """
     # Set number of rock types
     rock_type = np.arange(1, len(cut_offs) + 2)
     rock_type = rock_type[::-1] if higher_is_better else rock_type
     # Rock typing based on cutoffs
     conditions = [curve < cut_off for cut_off in cut_offs] + [curve >= cut_offs[-1]]
-    choices = rock_type[-len(conditions):]
+    choices = rock_type[-len(conditions) :]
     return np.where(np.isnan(curve), np.nan, np.select(conditions, choices))
 
 
@@ -407,12 +502,12 @@ def find_cutoffs(curve, no_of_cutoffs=3):
     """Find optimal cutoffs for a given curve using KMeans clustering.
 
     Args:
-        curve (pd.Series or np.array): The curve data to find cutoffs for.
+        curve (pd.Series or np.ndarray): The curve data to find cutoffs for.
         no_of_cutoffs (int, optional): The number of cutoffs to find. This will result in `no_of_cutoffs + 1` clusters.
                                      Defaults to 3.
 
     Returns:
-        np.array: An array of cutoff values.
+        np.ndarray: An array of cutoff values.
     """
     from sklearn.cluster import KMeans
 
@@ -422,13 +517,15 @@ def find_cutoffs(curve, no_of_cutoffs=3):
 
     data = curve.dropna().values.reshape(-1, 1)
     n_clusters = no_of_cutoffs + 1
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init='auto').fit(data)
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init="auto").fit(data)
     centers = np.sort(kmeans.cluster_centers_.flatten())
     cutoffs = (centers[:-1] + centers[1:]) / 2
     return cutoffs
 
 
-def train_classification_model(data, input_features: list, target_feature: str, stratifier=None):
+def train_classification_model(
+    data, input_features: list, target_feature: str, stratifier=None
+):
     """Train a classification Random Forest model to predict a binary feature.
 
     Args:
@@ -445,19 +542,25 @@ def train_classification_model(data, input_features: list, target_feature: str, 
     y = data[target_feature]
     y = y.astype(int)
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=random_seed, stratify=stratifier)
+        X, y, test_size=0.2, random_state=random_seed, stratify=stratifier
+    )
 
     # Hyperparameter tuning
     param_dist = {
-        'n_estimators': [150, 200],
-        'max_depth': [30, None],
-        'max_features': [.5, 'sqrt'],
-        'min_samples_split': [2, .5],
-        'min_samples_leaf': [1, .2],
-        'criterion': ['gini', 'entropy']
+        "n_estimators": [150, 200],
+        "max_depth": [30, None],
+        "max_features": [0.5, "sqrt"],
+        "min_samples_split": [2, 0.5],
+        "min_samples_leaf": [1, 0.2],
+        "criterion": ["gini", "entropy"],
     }
-    model = RandomizedSearchCV(RandomForestClassifier(), param_dist, cv=7, scoring='f1_weighted',
-                               random_state=random_seed)
+    model = RandomizedSearchCV(
+        RandomForestClassifier(),
+        param_dist,
+        cv=7,
+        scoring="f1_weighted",
+        random_state=random_seed,
+    )
     model.fit(X_train, y_train)
 
     # Feature importance
@@ -475,22 +578,26 @@ def train_classification_model(data, input_features: list, target_feature: str, 
     # Model evaluation
     y_pred_train = model.predict(X_train)
     y_pred = model.predict(X_test)
-    logger.info(f'Score for {target_feature} model')
-    logger.info(f'Best parameters found: {model.best_params_}')
-    logger.info('### Train Set ###')
-    logger.info(f'Classification Report:\n {classification_report(y_train, y_pred_train)}')
+    logger.info(f"Score for {target_feature} model")
+    logger.info(f"Best parameters found: {model.best_params_}")
+    logger.info("### Train Set ###")
+    logger.info(
+        f"Classification Report:\n {classification_report(y_train, y_pred_train)}"
+    )
     cm = confusion_matrix(y_train, y_pred_train, labels=model.classes_)
     ConfusionMatrixDisplay(cm, display_labels=model.classes_).plot()
 
-    logger.info('### Test Set ###')
-    logger.info(f'Classification Report:\n {classification_report(y_test, y_pred)}')
+    logger.info("### Test Set ###")
+    logger.info(f"Classification Report:\n {classification_report(y_test, y_pred)}")
     cm = confusion_matrix(y_test, y_pred, labels=model.classes_)
     ConfusionMatrixDisplay(cm, display_labels=model.classes_).plot()
 
     return model
 
 
-def train_regression_model(data, input_features: list, target_feature: list, stratifier=None):
+def train_regression_model(
+    data, input_features: list, target_feature: list, stratifier=None
+):
     """Train a regression Random Forest model to predict a continuous feature.
 
     Args:
@@ -506,19 +613,25 @@ def train_regression_model(data, input_features: list, target_feature: list, str
     X = data[input_features]
     y = data[target_feature]
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=random_seed, stratify=stratifier)
+        X, y, test_size=0.2, random_state=random_seed, stratify=stratifier
+    )
 
     # Hyperparameter tuning
     param_dist = {
-        'n_estimators': [150, 200],
-        'max_depth': [30, None],
-        'max_features': [.5, 'sqrt'],
-        'min_samples_split': [2, .5],
-        'min_samples_leaf': [1, .2],
-        'criterion': ['squared_error', 'absolute_error']
+        "n_estimators": [150, 200],
+        "max_depth": [30, None],
+        "max_features": [0.5, "sqrt"],
+        "min_samples_split": [2, 0.5],
+        "min_samples_leaf": [1, 0.2],
+        "criterion": ["squared_error", "absolute_error"],
     }
-    model = RandomizedSearchCV(RandomForestRegressor(), param_dist, cv=5, scoring='r2',
-                               random_state=random_seed)
+    model = RandomizedSearchCV(
+        RandomForestRegressor(),
+        param_dist,
+        cv=5,
+        scoring="r2",
+        random_state=random_seed,
+    )
     model.fit(X_train, y_train)
 
     # Feature importance
@@ -536,22 +649,22 @@ def train_regression_model(data, input_features: list, target_feature: list, str
     # Model evaluation
     y_pred_train = model.predict(X_train)
     y_pred = model.predict(X_test)
-    logger.info(f'Score for {target_feature} model')
-    logger.info(f'Best parameters found: {model.best_params_}')
-    logger.info('### Train Set ###')
-    logger.info(f'R2 Score: {r2_score(y_train, y_pred_train)}')
-    logger.info(f'Mean Absolute Error: {mean_absolute_error(y_train, y_pred_train)}')
-    logger.info('### Test Set ###')
-    logger.info(f'R2 Score: {r2_score(y_test, y_pred)}')
-    logger.info(f'Mean Absolute Error: {mean_absolute_error(y_test, y_pred)}')
+    logger.info(f"Score for {target_feature} model")
+    logger.info(f"Best parameters found: {model.best_params_}")
+    logger.info("### Train Set ###")
+    logger.info(f"R2 Score: {r2_score(y_train, y_pred_train)}")
+    logger.info(f"Mean Absolute Error: {mean_absolute_error(y_train, y_pred_train)}")
+    logger.info("### Test Set ###")
+    logger.info(f"R2 Score: {r2_score(y_test, y_pred)}")
+    logger.info(f"Mean Absolute Error: {mean_absolute_error(y_test, y_pred)}")
 
     # Plot the true vs predicted values
     plt.figure(figsize=(10, 8))
-    plt.plot(y_train, y_pred_train, '.', label='Actual', markersize=8)
-    plt.plot(y_test, y_pred, '.', label='Predicted', markersize=6)
-    plt.xlabel('True')
-    plt.ylabel('Predicted')
-    plt.title(f'{target_feature} Prediction')
+    plt.plot(y_train, y_pred_train, ".", label="Actual", markersize=8)
+    plt.plot(y_test, y_pred, ".", label="Predicted", markersize=6)
+    plt.xlabel("True")
+    plt.ylabel("Predicted")
+    plt.title(f"{target_feature} Prediction")
     plt.legend(bbox_to_anchor=(1, 1), loc="upper left")
     plt.show()
 

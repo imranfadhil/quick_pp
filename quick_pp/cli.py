@@ -1,3 +1,11 @@
+"""
+Command-Line Interface for the quick_pp library.
+
+This script provides a set of commands to interact with the various components
+of the quick_pp application, including running the web app, managing MLflow
+servers, and executing machine learning training and prediction pipelines.
+"""
+
 import click
 import os
 import shutil
@@ -9,12 +17,21 @@ from subprocess import Popen
 
 
 try:
-    quick_ppVersion = metadata.version('quick_pp')
+    quick_ppVersion = metadata.version("quick_pp")
 except metadata.PackageNotFoundError:
     quick_ppVersion = "0.0.0"
 
 
 def is_server_running(host, port):
+    """Check if a server is running on the specified host and port.
+
+    Args:
+        host (str): The hostname or IP address of the server.
+        port (int): The port number of the server.
+
+    Returns:
+        bool: True if the server is accessible, False otherwise.
+    """
     try:
         with socket.create_connection((host, port), timeout=2):
             return True
@@ -29,15 +46,23 @@ def is_server_running(host, port):
     message="%(prog)s version: %(version)s",
 )
 def cli():
-    """A handy CLI tool for quick_pp."""
+    """
+    Command-line interface for the quick_pp library.
+
+    Provides commands to run the web application, manage MLflow servers,
+    and execute machine learning pipelines for training and prediction.
+    """
     pass
 
 
 @click.command()
-@click.option('--debug', is_flag=True)
+@click.option("--debug", is_flag=True)
 def app(debug):
-    """Run the App consisting of API server and qpp assistant module."""
-    if not is_server_running('localhost', 8888):
+    """Start the quick_pp web application.
+
+    This launches a Uvicorn server to run the FastAPI backend and the associated qpp assistant module.
+    The --debug flag enables auto-reload for development."""
+    if not is_server_running("localhost", 8888):
         reload_ = "--reload" if debug else ""
         cmd = f"uvicorn quick_pp.api.main:app --host 0.0.0.0 --port 8888 {reload_}"
         click.echo(f"App is not running. Starting it now... | {cmd}")
@@ -46,19 +71,27 @@ def app(debug):
 
 
 @click.command()
-@click.argument('env', default='local', type=click.Choice(['local', 'remote']))
+@click.argument("env", default="local", type=click.Choice(["local", "remote"]))
 def mlflow_server(env):
-    """Run the MLflow server."""
+    """Start the MLflow tracking server.
+
+    This command can launch a local server or is intended to be used with a
+    pre-configured remote server based on the 'env' argument.
+    """
     from quick_pp.machine_learning.utils import run_mlflow_server
 
     run_mlflow_server(env)
 
 
 @click.command()
-@click.option('--debug', is_flag=True)
+@click.option("--debug", is_flag=True)
 def model_deployment(debug):
     """Run the MLflow model deployment."""
-    if not is_server_running('localhost', 5555):
+    """Serve the latest registered MLflow models via a FastAPI endpoint.
+
+    This makes the trained models available for prediction over a REST API.
+    The --debug flag enables auto-reload for development."""
+    if not is_server_running("localhost", 5555):
         reload_ = "--reload" if debug else ""
         cmd = f"uvicorn quick_pp.api.mlflow_model_deployment:app --host 0.0.0.0 --port 5555 {reload_}"
         click.echo(f"Model server is not running. Starting it now... | {cmd}")
@@ -67,25 +100,38 @@ def model_deployment(debug):
 
 
 @click.command()
-@click.argument('model_config', required=True, type=click.STRING)
-@click.argument('data_hash', required=True, type=click.STRING)
-@click.argument('env', default='local', type=click.Choice(['local', 'remote']))
+@click.argument("model_config", required=True, type=click.STRING)
+@click.argument("data_hash", required=True, type=click.STRING)
+@click.argument("env", default="local", type=click.Choice(["local", "remote"]))
 def train(model_config, data_hash, env):
-    """Train the model with the specified parameters."""
+    """Execute the model training pipeline.
+
+    This command automates the process of training, evaluating, and logging models
+    as defined in the configuration. It sets up the necessary environment by copying
+    default configuration and data files if they don't exist, then starts the training
+    process using MLflow for experiment tracking.
+
+    MODEL_CONFIG: The key for the modelling suite (e.g., 'clastic', 'carbonate').
+    DATA_HASH: The unique hash identifying the input data file for training.
+    ENV: The MLflow environment ('local' or 'remote').
+    """
     from quick_pp.machine_learning.train_pipeline import train_pipeline
 
-    # Copy config.py into the root directory if it doesn't exist
-    config_file = resources.files('quick_pp.machine_learning').joinpath('config.py')
-    root_config_file = Path(os.getcwd(), 'config.py')
+    # Set up the environment by copying default config and data if they don't exist.
+    # This allows users to customize them easily.
+    config_file = resources.files("quick_pp.machine_learning").joinpath("config.py")
+    root_config_file = Path(os.getcwd(), "config.py")
     if os.path.exists(config_file) and not os.path.exists(root_config_file):
         shutil.copyfile(config_file, root_config_file)
         click.echo(f"Copied {config_file} to {root_config_file}")
 
     # Copy mock_data.parquet into data/input if it doesn't exist
-    mock_file = resources.files('quick_pp.machine_learning.mock_data').joinpath('mock_data.parquet')
-    data_dir = Path(os.getcwd(), 'data', 'input')
+    mock_file = resources.files("quick_pp.machine_learning.mock_data").joinpath(
+        "mock_data.parquet"
+    )
+    data_dir = Path(os.getcwd(), "data", "input")
     os.makedirs(data_dir, exist_ok=True)
-    root_mock_file = Path(data_dir, 'mock_data.parquet')
+    root_mock_file = Path(data_dir, "mock_data.parquet")
     if os.path.exists(mock_file) and not os.path.exists(root_mock_file):
         shutil.copyfile(mock_file, root_mock_file)
         click.echo(f"Copied {mock_file} to {root_mock_file}")
@@ -95,13 +141,22 @@ def train(model_config, data_hash, env):
 
 
 @click.command()
-@click.argument('model_config', required=True, type=click.STRING)
-@click.argument('data_hash', required=True, type=click.STRING)
-@click.argument('output_file_name', required=False, default='test', type=click.STRING)
-@click.argument('env', default='local', type=click.Choice(['local', 'remote']))
-@click.option('--plot', is_flag=True, help="Generate and save plots for predictions.")
+@click.argument("model_config", required=True, type=click.STRING)
+@click.argument("data_hash", required=True, type=click.STRING)
+@click.argument("output_file_name", required=False, default="test", type=click.STRING)
+@click.argument("env", default="local", type=click.Choice(["local", "remote"]))
+@click.option("--plot", is_flag=True, help="Generate and save plots for predictions.")
 def predict(model_config, data_hash, output_file_name, env, plot):
-    """Run the prediction."""
+    """Run the prediction pipeline using the latest registered models.
+
+    This command loads data, fetches the appropriate trained models from the MLflow
+    registry, runs predictions, post-processes the results, and saves the output.
+
+    MODEL_CONFIG: The key for the modelling suite whose models will be used.
+    DATA_HASH: The unique hash identifying the input data file for prediction.
+    OUTPUT_FILE_NAME: The base name for the output predictions file.
+    ENV: The MLflow environment ('local' or 'remote').
+    """
     from quick_pp.machine_learning.predict_pipeline import predict_pipeline
 
     click.echo("Running prediction...")

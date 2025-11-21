@@ -25,7 +25,9 @@ if root_config_path.exists():
             MODELLING_CONFIG.clear()
             MODELLING_CONFIG.update(root_config.MODELLING_CONFIG)
         else:
-            logger.warning("MODELLING_CONFIG not found in root config.py, using default MODELLING_CONFIG")
+            logger.warning(
+                "MODELLING_CONFIG not found in root config.py, using default MODELLING_CONFIG"
+            )
     except Exception as e:
         logger.warning(f"Could not import MODELLING_CONFIG from root config.py: {e}")
 
@@ -34,13 +36,13 @@ def load_data(hash: str):
     """Load data from the specified directory using a hash to identify the file.
 
     Args:
-        hash (str): Hash to identify the file.
+        hash (str): A unique hash string contained within the target Parquet filename.
 
     Raises:
         FileNotFoundError: If no file is found with the specified hash.
 
     Returns:
-        pd.DataFrame: Loaded DataFrame.
+        pd.DataFrame: The loaded well log data as a DataFrame.
     """
     data_dir = Path("data/input/")
     matching_files = list(data_dir.glob(f"*{hash}*.parquet"))
@@ -51,39 +53,46 @@ def load_data(hash: str):
 
 
 def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Preprocess the DataFrame by adding a log-perm column if needed and dropping rows with NaN values.
+    """Preprocess the DataFrame by generating features and cleaning the data.
 
     Args:
-        df (pd.DataFrame): DataFrame to preprocess.
+        df (pd.DataFrame): The raw input DataFrame.
 
     Returns:
-        pd.DataFrame: Preprocessed DataFrame.
+        pd.DataFrame: The preprocessed DataFrame with engineered features and
+                      duplicates removed.
     """
     df = generate_fe_features(df)
     # Drop duplicates based on WELL_NAME and DEPTH, including duplicated columns
-    df = df.drop_duplicates(subset=['WELL_NAME', 'DEPTH'])
+    df = df.drop_duplicates(subset=["WELL_NAME", "DEPTH"])
     df = df.loc[:, ~df.columns.duplicated()]
 
     return df
 
 
-def split_data(df: pd.DataFrame, target_column: list[str], features: list[str], test_size=0.2, random_state=42) -> list:
+def split_data(
+    df: pd.DataFrame,
+    target_column: list[str],
+    features: list[str],
+    test_size=0.2,
+    random_state=42,
+) -> list:
     """Split the data into training and testing sets.
 
     Args:
-        df (pd.DataFrame): DataFrame to split.
+        df (pd.DataFrame): The DataFrame to be split.
         target_column (list[str]): List of target column names.
         features (list[str]): List of feature column names.
         test_size (float, optional): Proportion of the dataset to include in the test split. Defaults to 0.2.
         random_state (int, optional): Random seed for reproducibility. Defaults to 42.
 
     Returns:
-        list: List containing the training and testing sets for features and target.
+        list: A list containing `[X_train, X_test, y_train, y_test]`.
     """
     # Drop rows with NaN in target or features
     return_df = df.dropna(subset=target_column + features)
-    X = return_df[features].astype('float')
-    y = return_df[target_column].astype('float')
+    X = return_df[features].astype("float")
+    y = return_df[target_column].astype("float")
     return train_test_split(X, y, test_size=test_size, random_state=random_state)
 
 
@@ -91,12 +100,12 @@ def train_model(alg, X_train: pd.DataFrame, y_train: pd.DataFrame):
     """Train the model using the specified algorithm.
 
     Args:
-        alg (_type_): Algorithm to use for training.
-        X_train (pd.DataFrame): Feature DataFrame.
-        y_train (pd.DataFrame): Target DataFrame.
+        alg (callable): The scikit-learn model class to instantiate.
+        X_train (pd.DataFrame): The training feature DataFrame.
+        y_train (pd.DataFrame): The training target DataFrame.
 
     Returns:
-        _type_: _description_
+        object: The trained model instance.
     """
     logger.info(f"Training model: {getattr(alg, '__name__', str(alg))}")
     model = alg(random_state=42)
@@ -109,12 +118,12 @@ def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.DataFrame) -> dict:
     """Evaluate the model using the test data.
 
     Args:
-        model (_type_): Trained model to evaluate.
-        X_test (pd.DataFrame): Feature DataFrame for testing.
-        y_test (pd.DataFrame): Target DataFrame for testing.
+        model (object): The trained model to evaluate.
+        X_test (pd.DataFrame): The testing feature DataFrame.
+        y_test (pd.DataFrame): The testing target DataFrame.
 
     Returns:
-        dict: Dictionary containing evaluation metrics.
+        dict: A dictionary of evaluation metrics (e.g., 'f1_score', 'r2_score').
     """
     logger.info(f"Evaluating model: {type(model).__name__}")
     y_pred = model.predict(X_test)
@@ -135,23 +144,29 @@ def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.DataFrame) -> dict:
 
 
 # 6. Train pipeline
-def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
-    """This function automates the process of training, evaluating, and logging multiple models as defined in
-    a configuration, leveraging MLflow for experiment tracking and model management.
+def train_pipeline(model_config: str, data_hash: str, env: str = "local"):
+    """Execute the end-to-end model training pipeline.
+
+    This function automates training, evaluating, and logging multiple models as defined
+    in the configuration, leveraging MLflow for experiment tracking and model management.
 
     Args:
-        model_config (str): Key for the model configuration in the MODELLING_CONFIG dictionary.
-        data_hash (str): Hash to identify the data file in the 'data/input/' directory.
-        env (str, optional): MLflow environment to use. Defaults to 'local'.
+        model_config (str): The key for the model configuration (e.g., 'clastic').
+        data_hash (str): The unique hash identifying the data file.
+        env (str, optional): The MLflow environment ('local' or 'remote'). Defaults to 'local'.
 
     Raises:
         TypeError: If the targets or features are not lists of strings.
     """
-    logger.info(f"Starting train_pipeline with model_config={model_config}, data_hash={data_hash}, env={env}")
+    logger.info(
+        f"Starting train_pipeline with model_config={model_config}, data_hash={data_hash}, env={env}"
+    )
 
     # Check if the model_config exists in MODELLING_CONFIG
     if model_config not in MODELLING_CONFIG:
-        error_msg = f"Model configuration '{model_config}' not found in MODELLING_CONFIG"
+        error_msg = (
+            f"Model configuration '{model_config}' not found in MODELLING_CONFIG"
+        )
         logger.error(error_msg)
         raise ValueError(error_msg)
 
@@ -159,15 +174,17 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
     run_mlflow_server(env)
 
     for model_key, model_values in MODELLING_CONFIG[model_config].items():
-        alg = model_values['alg']
-        targets = model_values['targets']
-        features = model_values['features']
+        alg = model_values["alg"]
+        targets = model_values["targets"]
+        features = model_values["features"]
 
         logger.info(f"Processing model: {model_key}")
         if not (isinstance(targets, list) and all(isinstance(t, str) for t in targets)):
             logger.error(f"Targets must be a list of strings, got {targets}")
             raise TypeError(f"Targets must be a list of strings, got {targets}")
-        if not (isinstance(features, list) and all(isinstance(f, str) for f in features)):
+        if not (
+            isinstance(features, list) and all(isinstance(f, str) for f in features)
+        ):
             logger.error(f"Features must be a list of strings, got {features}")
             raise TypeError(f"Features must be a list of strings, got {features}")
 
@@ -176,14 +193,18 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
         # Skip if targets or features are not in the DataFrame
         if not all(col in df.columns for col in targets + features):
             missing_cols = [col for col in targets + features if col not in df.columns]
-            logger.warning(f"Skipping model {model_key} due to missing columns: {missing_cols}")
+            logger.warning(
+                f"Skipping model {model_key} due to missing columns: {missing_cols}"
+            )
             continue
         X_train, X_test, y_train, y_test = split_data(df, targets, features)
 
-        mlflow_dir = Path('./mlruns')
+        mlflow_dir = Path("./mlruns")
         os.makedirs(mlflow_dir, exist_ok=True)
         mlflow.set_experiment(model_config)
-        with mlflow.start_run(run_name=model_key, description=str(model_values['description'])):
+        with mlflow.start_run(
+            run_name=model_key, description=str(model_values["description"])
+        ):
             # Train model
             model = train_model(alg, X_train, y_train)
 
@@ -194,9 +215,13 @@ def train_pipeline(model_config: str, data_hash: str, env: str = 'local'):
                 logger.info(f"Logged metric: {metric_name}={metric_value}")
 
             # Log model
-            reg_model_name = f'{model_config}_{model_key}_{data_hash}'
+            reg_model_name = f"{model_config}_{model_key}_{data_hash}"
             signature = infer_signature(X_train, y_train)
             mlflow_sklearn.log_model(
-                model, "model", signature=signature, input_example=X_test.sample(5),
-                registered_model_name=reg_model_name)
+                model,
+                "model",
+                signature=signature,
+                input_example=X_test.sample(5),
+                registered_model_name=reg_model_name,
+            )
             logger.info(f"Model logged and registered as: {reg_model_name}")

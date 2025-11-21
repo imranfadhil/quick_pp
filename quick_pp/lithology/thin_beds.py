@@ -10,12 +10,32 @@ from quick_pp import logger
 
 
 class ThinBeds:
-    """This binary model only consider a combination of sand-shale components. """
+    """A model for analyzing thin-bedded sand-shale sequences.
 
-    def __init__(self, dry_sand_poro: Optional[float] = None, dry_shale_poro: Optional[float] = None,
-                 dry_sand_point: Optional[tuple[float, float]] = None,
-                 dry_clay_point: Optional[tuple[float, float]] = None,
-                 fluid_point: Optional[tuple[float, float]] = None, **kwargs):
+    This class implements methods to estimate the volumes of laminated and
+    dispersed shale, as well as sand porosity, from neutron-density crossplots.
+    It also includes resistivity modeling based on Hagiwara's work to account
+    for the effects of thin beds on resistivity logs.
+    """
+
+    def __init__(
+        self,
+        dry_sand_poro: Optional[float] = None,
+        dry_shale_poro: Optional[float] = None,
+        dry_sand_point: Optional[tuple[float, float]] = None,
+        dry_clay_point: Optional[tuple[float, float]] = None,
+        fluid_point: Optional[tuple[float, float]] = None,
+        **kwargs,
+    ):
+        """Initializes the ThinBeds model with specified or default endpoints.
+
+        Args:
+            dry_sand_poro (float, optional): Porosity of dry sand. Defaults to config values.
+            dry_shale_poro (float, optional): Porosity of dry shale. Defaults to config values.
+            dry_sand_point (tuple, optional): (NPHI, RHOB) for dry sand. Defaults to config values.
+            dry_clay_point (tuple, optional): (NPHI, RHOB) for dry clay. Defaults to config values.
+            fluid_point (tuple, optional): (NPHI, RHOB) for the formation fluid. Defaults to config values.
+        """
         # Initialize the endpoints
         self.dry_sand_poro = dry_sand_poro or Config.TS_ENDPOINTS["DRY_SAND_PORO"]
         self.dry_shale_poro = dry_shale_poro or Config.TS_ENDPOINTS["DRY_SHALE_PORO"]
@@ -33,17 +53,22 @@ class ThinBeds:
         """Estimate laminated and dispersed shale based on neutron density cross plot.
 
         Args:
-            nphi (float): Neutron Porosity log in v/v
-            rhob (float): Bulk Density log in g/cc
+            nphi (np.ndarray or float): Neutron Porosity log [v/v].
+            rhob (np.ndarray or float): Bulk Density log [g/cc].
 
         Returns:
-            (float, float): vsh_lam, vsh_dis, phit_sand
+            tuple: A tuple containing volumes of sand, shale, total porosity, laminated shale,
+                   dispersed shale, dispersed sand, and sand porosity.
         """
-        logger.info(f"Estimating thin bed lithology and porosity for {len(nphi)} data points")
+        logger.info(
+            f"Estimating thin bed lithology and porosity for {len(nphi)} data points"
+        )
 
         # Calculate porosity
         phit = neu_den_xplot_poro(
-            nphi, rhob, model='ss',
+            nphi,
+            rhob,
+            model="ss",
             dry_min1_point=self.dry_sand_point,
             dry_clay_point=self.dry_clay_point,
         )
@@ -77,11 +102,12 @@ class ThinBeds:
         """Estimate sand and shale based on neutron density cross plot.
 
         Args:
-            nphi (float): Neutron Porosity log in v/v
-            rhob (float): Bulk Density log in g/cc
+            phit (np.ndarray or float): Total porosity [v/v].
+            vshale (np.ndarray or float): Volume of shale [v/v].
 
         Returns:
-            (float, float): vsand, vcld
+            tuple: A tuple containing volumes of laminated shale, dispersed shale,
+                   dispersed sand, and sand porosity.
         """
         logger.debug("Calculating lithology-porosity fractions for thin beds")
 
@@ -102,7 +128,9 @@ class ThinBeds:
         phit_sand = np.empty(0)
         D = list(zip(vshale, phit))
         for i, point in enumerate(D):
-            vsh_pt = point[0] + length_a_b(point, (point[0], 0)) * math.tan(math.radians(theta_vsh_lam))
+            vsh_pt = point[0] + length_a_b(point, (point[0], 0)) * math.tan(
+                math.radians(theta_vsh_lam)
+            )
             vsh_lam_pt = line_intersection((B, C), ((vsh_pt, 0), point))
             proj_vsh_lam_frac = length_a_b(vsh_lam_pt, C)
             vsh_lam = np.append(vsh_lam, proj_vsh_lam_frac / vsh_lam_frac)
@@ -115,55 +143,73 @@ class ThinBeds:
             vsand_dis = np.append(vsand_dis, vsand_dis_pt)
             vsh_dis = np.append(vsh_dis, (1 - vsand_dis_pt))
 
-        logger.debug(f"Lithology-porosity fraction calculation completed for {len(vsh_lam)} points")
+        logger.debug(
+            f"Lithology-porosity fraction calculation completed for {len(vsh_lam)} points"
+        )
         return vsh_lam, vsh_dis, vsand_dis, phit_sand
 
     def resistivity_modelling(self, vsh_lam, rsand, rv_shale, rh_shale, theta):
         """Calculate the resistivity based on the laminated and dispersed shale based on Hagiwara (1995).
 
         Args:
-            vsh_lam (float): Fraction of laminated shale.
-            rsand (float): Resistivity of the sand.
-            rh_shale (float): Horizontal resistivity of the shale.
-            rv_shale (float): Vertical resistivity of the shale.
-            theta (float): Dip angle in degrees.
+            vsh_lam (np.ndarray or float): Fraction of laminated shale.
+            rsand (np.ndarray or float): Resistivity of the sand layers.
+            rv_shale (np.ndarray or float): Vertical resistivity of the shale layers.
+            rh_shale (np.ndarray or float): Horizontal resistivity of the shale layers.
+            theta (float): The relative dip angle in degrees.
 
         Returns:
-            float: Resistivity of the formation.
+            np.ndarray or float: The modeled resistivity of the formation.
         """
-        logger.debug(f"Calculating resistivity using Hagiwara (1995) model with theta={theta}°")
+        logger.debug(
+            f"Calculating resistivity using Hagiwara (1995) model with theta={theta}°"
+        )
 
         csd = 1 / rsand
         csh = 1 / rh_shale
         ch = csh * vsh_lam + csd * (1 - vsh_lam)
         rv = rv_shale * vsh_lam + rsand * (1 - vsh_lam)
-        return 1 / (ch * (math.cos(math.radians(theta))**2 + ch * rv * math.sin(math.radians(theta))**2))
+        return 1 / (
+            ch
+            * (
+                math.cos(math.radians(theta)) ** 2
+                + ch * rv * math.sin(math.radians(theta)) ** 2
+            )
+        )
 
     def apparent_resistivity(self, rv, rh, theta):
         """Calculate the apparent resistivity based on Hagiwara (1997).
 
         Args:
-            rv (float): Resistivity of the dispersed sand.
-            rh (float): Resistivity of the shale.
-            theta (float): Dip angle in degrees.
+            rv (np.ndarray or float): Vertical resistivity of the formation.
+            rh (np.ndarray or float): Horizontal resistivity of the formation.
+            theta (float): The relative dip angle in degrees.
 
         Returns:
-            float: Apparent resistivity.
+            np.ndarray or float: The apparent resistivity.
         """
-        logger.debug(f"Calculating apparent resistivity using Hagiwara (1997) with theta={theta}°")
-        return rh / (math.cos(math.radians(theta))**2 + (rh / rv) * math.sin(math.radians(theta))**2)**.5
+        logger.debug(
+            f"Calculating apparent resistivity using Hagiwara (1997) with theta={theta}°"
+        )
+        return (
+            rh
+            / (
+                math.cos(math.radians(theta)) ** 2
+                + (rh / rv) * math.sin(math.radians(theta)) ** 2
+            )
+            ** 0.5
+        )
 
     def sand_resistivity_macro(self, rv, rh, rshale):
         """Calculate the (macroscopic anistropy) resistivity of the sand based on Hagiwara (1997).
 
         Args:
-            rv (float): Resistivity of the dispersed sand.
-            rh (float): Resistivity of the shale.
-            rv_shale (float): Vertical resistivity of the shale.
-            rh_shale (float): Horizontal resistivity of the shale.
+            rv (np.ndarray or float): Vertical resistivity of the formation.
+            rh (np.ndarray or float): Horizontal resistivity of the formation.
+            rshale (np.ndarray or float): Resistivity of the shale.
 
         Returns:
-            float: Resistivity of the sand.
+            np.ndarray or float: The macroscopic resistivity of the sand layers.
         """
         logger.debug("Calculating macroscopic sand resistivity")
         return (rv - rshale) / (rh - rshale)
@@ -172,31 +218,42 @@ class ThinBeds:
         """Calculate the (microscopic anisotropy) resistivity of the sand based on Hagiwara (1997).
 
         Args:
-            rv (float): Resistivity of the dispersed sand.
-            rh (float): Resistivity of the shale.
-            rv_shale (float): Vertical resistivity of the shale.
-            rh_shale (float): Horizontal resistivity of the shale.
+            rv (np.ndarray or float): Vertical resistivity of the formation.
+            rh (np.ndarray or float): Horizontal resistivity of the formation.
+            rv_shale (np.ndarray or float): Vertical resistivity of the shale.
+            rh_shale (np.ndarray or float): Horizontal resistivity of the shale.
 
         Returns:
-            float: Resistivity of the sand.
+            np.ndarray or float: The microscopic resistivity of the sand layers.
         """
         logger.debug("Calculating microscopic sand resistivity")
         alpha = self.sand_resistivity_macro(rv, rh, rh_shale)
         beta = alpha / rh_shale
-        return alpha / (1 + .5 * (beta - 1 - ((beta - 1)**2 + 4 * beta * (rh_shale / rv_shale - 1))**.5))
+        return alpha / (
+            1
+            + 0.5
+            * (
+                beta
+                - 1
+                - ((beta - 1) ** 2 + 4 * beta * (rh_shale / rv_shale - 1)) ** 0.5
+            )
+        )
 
 
 def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwargs):
-    """Neutron-Density crossplot with lithology lines based on specified end points.
+    """Generate a Vshale vs. Porosity crossplot for thin bed analysis.
+
+    This plot helps visualize the distribution of data points relative to
+    laminated, dispersed, and structural shale models.
 
     Args:
-        vsh (np.ndarray): Array of shale volume fraction.
-        phit (np.ndarray): Array of total porosity.
-        dry_sand_poro (float): Dry sand porosity endpoint.
-        dry_shale_poro (float): Dry shale porosity endpoint.
+        vsh (np.ndarray): An array of shale volume fractions.
+        phit (np.ndarray): An array of total porosity values.
+        dry_sand_poro (float): The porosity endpoint for clean sand.
+        dry_shale_poro (float): The porosity endpoint for pure shale.
 
     Returns:
-        matplotlib.pyplot.Figure: Neutron porosity and bulk density cross plot.
+        matplotlib.figure.Figure: The generated Vshale-PHIT crossplot figure.
     """
     logger.info(f"Creating VSH-PHIT crossplot for {len(vsh)} data points")
 
@@ -213,12 +270,16 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
 
     fig = plt.Figure(figsize=(7, 7))
     ax = fig.add_subplot(111)
-    ax.set_title('NPHI-RHOB Crossplot')
-    ax.scatter(vsh, phit, c=np.arange(0, len(vsh)), cmap='rainbow', marker='.')
+    ax.set_title("NPHI-RHOB Crossplot")
+    ax.scatter(vsh, phit, c=np.arange(0, len(vsh)), cmap="rainbow", marker=".")
 
-    ax.plot(*zip(*vsh_lam_from_pt), label='Laminated', color='blue')
-    ax.plot(*zip(*vsh_dis_from_pt), label='Dispersed (pore filling)', color='green')
-    ax.plot(*zip(*vsh_lower_envlope_from_pt), label='Dispersed (grain replacing)', color='black')
+    ax.plot(*zip(*vsh_lam_from_pt), label="Laminated", color="blue")
+    ax.plot(*zip(*vsh_dis_from_pt), label="Dispersed (pore filling)", color="green")
+    ax.plot(
+        *zip(*vsh_lower_envlope_from_pt),
+        label="Dispersed (grain replacing)",
+        color="black",
+    )
 
     # Add isolines parallel to vsh_lam_from_pt
     num_lines = 9
@@ -226,16 +287,17 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
         t = i / (num_lines + 1)
         intermediate_line = [
             (A[0] + t * (B[0] - A[0]), A[1] + t * (B[1] - A[1])),
-            (C[0] + t * (B[0] - C[0]), C[1] + t * (B[1] - C[1]))
+            (C[0] + t * (B[0] - C[0]), C[1] + t * (B[1] - C[1])),
         ]
-        ax.plot(*zip(*intermediate_line), linestyle='--', color='blue', alpha=0.75)
+        ax.plot(*zip(*intermediate_line), linestyle="--", color="blue", alpha=0.75)
         ax.text(
-            intermediate_line[0][0], intermediate_line[0][1] + .007,
-            f'{int(t * 100)}%',
+            intermediate_line[0][0],
+            intermediate_line[0][1] + 0.007,
+            f"{int(t * 100)}%",
             fontsize=8,
-            color='blue',
-            ha='center',
-            va='center'
+            color="blue",
+            ha="center",
+            va="center",
         )
 
     # Add lines with different slopes originating from point B
@@ -243,30 +305,32 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
     for i in range(1, num_lines + 1):
         t = i / (num_lines + 1)
         intermediate_line = [
-            (A[0] + t * (C[0] - A[0]), A[1] + t * (C[1] - A[1])), (B[0], B[1])
+            (A[0] + t * (C[0] - A[0]), A[1] + t * (C[1] - A[1])),
+            (B[0], B[1]),
         ]
-        ax.plot(*zip(*intermediate_line), linestyle='--', color='red', alpha=0.75)
+        ax.plot(*zip(*intermediate_line), linestyle="--", color="red", alpha=0.75)
         ax.text(
-            intermediate_line[0][0] - .03, intermediate_line[0][1],
-            f'{int((1 - t) * 100 * (A[1] - C[1]))}%',
+            intermediate_line[0][0] - 0.03,
+            intermediate_line[0][1],
+            f"{int((1 - t) * 100 * (A[1] - C[1]))}%",
             fontsize=8,
-            color='red',
-            ha='center',
-            va='center'
+            color="red",
+            ha="center",
+            va="center",
         )
 
-    ax.scatter(A[0], A[1], label=f'Clean Sand: ({A[0]}, {A[1]})', color='orange')
-    ax.scatter(B[0], B[1], label=f'Pure Shale: ({B[0]}, {B[1]})', color='black')
-    ax.scatter(C[0], C[1], label=f'Lower vertex: ({C[0]}, {C[1]})', color='blue')
+    ax.scatter(A[0], A[1], label=f"Clean Sand: ({A[0]}, {A[1]})", color="orange")
+    ax.scatter(B[0], B[1], label=f"Pure Shale: ({B[0]}, {B[1]})", color="black")
+    ax.scatter(C[0], C[1], label=f"Lower vertex: ({C[0]}, {C[1]})", color="blue")
 
     ax.set_ylim(0, 0.5)
-    ax.set_ylabel('PHIT (v/v)')
-    ax.set_xlim(-.05, 1)
-    ax.set_xlabel('Vshale (v/v)')
-    ax.legend(loc="upper left", prop={'size': 9})
+    ax.set_ylabel("PHIT (v/v)")
+    ax.set_xlim(-0.05, 1)
+    ax.set_xlabel("Vshale (v/v)")
+    ax.legend(loc="upper left", prop={"size": 9})
     ax.minorticks_on()
-    ax.grid(True, which='major', linestyle='--', linewidth='0.5', color='gray')
-    ax.grid(True, which='minor', linestyle=':', linewidth='0.4', color='gray')
+    ax.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
+    ax.grid(True, which="minor", linestyle=":", linewidth="0.4", color="gray")
     fig.tight_layout()
 
     logger.debug("VSH-PHIT crossplot created successfully")

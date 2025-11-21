@@ -6,13 +6,14 @@ from tqdm import tqdm
 
 
 def rhob_integral(rhob, step=15):
-    """Calculate the integral of the bulk density log.
+    """Calculate a pseudo-integral of the bulk density log.
 
     Args:
-        rhob (pd.Series): Bulk density log
+        rhob (pd.Series): Bulk density log [g/cm³].
+        step (int, optional): The step for calculating the difference before integration. Defaults to 15.
 
     Returns:
-        numpy.ndarray: Integral of the bulk density log in g/cm³
+        np.ndarray: An array representing the cumulative sum of the stepped difference of RHOB.
     """
     return np.cumsum(rhob.clip(2, 3).diff(step).cumsum())
 
@@ -21,25 +22,27 @@ def density_porosity(rhob):
     """Calculate the density porosity from the bulk density log.
 
     Args:
-        rhob (pd.Series): Bulk density log
+        rhob (pd.Series): Bulk density log [g/cm³].
 
     Returns:
-        pd.Series: Density porosity
+        pd.Series: Density porosity, scaled to a typical neutron porosity range.
     """
     rhob_min, rhob_max = 1.95, 2.95
     nphi_min_scale, nphi_max_scale = 0.45, -0.15
-    return nphi_min_scale + (
-        rhob - rhob_min) * (nphi_max_scale - nphi_min_scale) / (rhob_max - rhob_min)
+    return nphi_min_scale + (rhob - rhob_min) * (nphi_max_scale - nphi_min_scale) / (
+        rhob_max - rhob_min
+    )
 
 
 def gas_xover(rhob, nphi):
     """Calculate the gas crossover from the bulk density and neutron porosity logs.
+
     Args:
-        rhob (pd.Series): Bulk density log
-        nphi (pd.Series): Neutron porosity log
+        rhob (pd.Series): Bulk density log [g/cm³].
+        nphi (pd.Series): Neutron porosity log [v/v].
 
     Returns:
-        int: Gas crossover
+        pd.Series: A float series (0.0 or 1.0) indicating gas crossover.
     """
     return (nphi < density_porosity(rhob)).astype(float)
 
@@ -48,21 +51,34 @@ def log_perm(perm):
     """Calculate the log permeability from the permeability.
 
     Args:
-        perm (pd.Series): Permeability
+        perm (pd.Series): Permeability [mD].
 
     Returns:
-        pd.Series: Log permeability
+        pd.Series: Log10 of permeability, clipped at a minimum of 1e-3 mD.
     """
     return np.log10(perm.clip(lower=1e-3))
 
 
 def rock_flag_gr(gr):
+    """Generate rock type flags based on the gamma-ray log.
+
+    This function estimates shale volume from GR, finds optimal cutoffs using
+    KMeans clustering, and then assigns rock type flags.
+
+    Args:
+        gr (pd.Series): Gamma-ray log [API].
+
+    Returns:
+        np.ndarray: An array of integer rock type flags.
+    """
     vsh_gr = estimate_vsh_gr(gr)
     cutoffs = find_cutoffs(vsh_gr, 5)
     return rock_typing(vsh_gr, cut_offs=cutoffs, higher_is_better=False)
 
 
-def coal_flagging(nphi, rhob, rhob_threshold=2.0, nphi_threshold=0.3, window_size=21, trend_factor=0.1):
+def coal_flagging(
+    nphi, rhob, rhob_threshold=2.0, nphi_threshold=0.3, window_size=21, trend_factor=0.1
+):
     """Flag coal intervals based on high NPHI and low RHOB, considering log trends.
 
     Coal is typically characterized by very low bulk density and high
@@ -71,41 +87,42 @@ def coal_flagging(nphi, rhob, rhob_threshold=2.0, nphi_threshold=0.3, window_siz
     from their rolling average.
 
     Args:
-        nphi (pd.Series): Neutron porosity log (fraction).
-        rhob (pd.Series): Bulk density log (g/cm³).
-        rhob_threshold (float, optional): RHOB threshold for coal. Defaults to 1.95.
-        nphi_threshold (float, optional): NPHI threshold for coal. Defaults to 0.45.
+        nphi (pd.Series): Neutron porosity log [v/v].
+        rhob (pd.Series): Bulk density log [g/cm³].
+        rhob_threshold (float, optional): Absolute RHOB threshold for coal. Defaults to 2.0.
+        nphi_threshold (float, optional): Absolute NPHI threshold for coal. Defaults to 0.3.
         window_size (int, optional): The size of the rolling window to calculate trends. Defaults to 21.
-        trend_factor (float, optional): A factor to control sensitivity to trend deviation. Defaults to 0.5.
+        trend_factor (float, optional): A factor to control sensitivity to trend deviation. Defaults to 0.1.
 
     Returns:
-        pd.Series: A series of booleans, True where coal is flagged.
+        pd.Series: A series of floats (0.0 or 1.0), where 1.0 indicates coal.
     """
     # Calculate rolling averages to establish local trends
     rhob_trend = rhob.rolling(window=window_size, center=True, min_periods=1).mean()
     nphi_trend = nphi.rolling(window=window_size, center=True, min_periods=1).mean()
 
     # Flag where RHOB is significantly below its trend and NPHI is significantly above its trend
-    trend_condition = (rhob < rhob_trend * (1 - trend_factor)) & (nphi > nphi_trend * (1 + trend_factor))
+    trend_condition = (rhob < rhob_trend * (1 - trend_factor)) & (
+        nphi > nphi_trend * (1 + trend_factor)
+    )
     threshold_condition = (rhob < rhob_threshold) & (nphi > nphi_threshold)
 
     return (trend_condition & threshold_condition).astype(float)
 
 
 def tight_streak_flagging(rhob, rhob_threshold=2.3, window_size=15, trend_factor=0.03):
-    """Flag tight streak intervals based on high RHOB, high RT, and low NPHI.
+    """Flag tight streak intervals based on high RHOB.
 
-    Tight streaks (e.g., carbonate cemented layers) are characterized by high
-    bulk density, high resistivity, and low porosity. This function flags
-    these zones by identifying points where log values deviate significantly
-    from their local trend, in addition to crossing absolute thresholds.
+    Tight streaks (e.g., carbonate-cemented layers) are characterized by high
+    bulk density. This function flags these zones by identifying points where
+    RHOB deviates significantly from its local trend and also crosses an
+    absolute threshold.
 
     Args:
-        rhob (pd.Series): Bulk density log (g/cm³).
-        rhob_threshold (float, optional): RHOB threshold for tight streak. Defaults to 2.5.
+        rhob (pd.Series): Bulk density log [g/cm³].
+        rhob_threshold (float, optional): Absolute RHOB threshold for a tight streak. Defaults to 2.3.
         window_size (int, optional): The size of the rolling window for trend calculation. Defaults to 21.
-        trend_factor (float, optional): A factor to control sensitivity to trend deviation.
-                          Defaults to 0.05 (5%).
+        trend_factor (float, optional): A factor to control sensitivity to trend deviation. Defaults to 0.03.
 
     Returns:
         pd.Series: A series of floats (0.0 or 1.0), 1.0 where a tight streak is flagged.
@@ -114,46 +131,56 @@ def tight_streak_flagging(rhob, rhob_threshold=2.3, window_size=15, trend_factor
     rhob_trend = rhob.rolling(window=window_size, center=True, min_periods=1).mean()
 
     # Flag where RHOB are significantly above trend
-    trend_condition = (rhob > rhob_trend * (1 + trend_factor)) 
+    trend_condition = rhob > rhob_trend * (1 + trend_factor)
 
     # Flag where values cross absolute thresholds
-    threshold_condition = (rhob > rhob_threshold)
+    threshold_condition = rhob > rhob_threshold
 
     return (trend_condition & threshold_condition).astype(float)
 
 
 def generate_fe_features(df):
-    """Generate feature engineered features from the raw features.
+    """Generate a suite of engineered features from raw well log data.
 
     Args:
-        df (pd.DataFrame): DataFrame containing the raw features.
+        df (pd.DataFrame): DataFrame containing raw log data, including 'WELL_NAME' and 'DEPTH'.
 
     Returns:
-        pd.DataFrame: DataFrame containing the engineered features.
+        pd.DataFrame: The input DataFrame with added feature-engineered columns.
     """
     df = df.copy()
 
     # Well based features
-    for well_name, well_df in tqdm(df.groupby('WELL_NAME'), desc="Generating well-based features"):
-        tqdm.write(f'Processing well {well_name}')
-        well_df = well_df.sort_values('DEPTH').copy()
+    for well_name, well_df in tqdm(
+        df.groupby("WELL_NAME"), desc="Generating well-based features"
+    ):
+        tqdm.write(f"Processing well {well_name}")
+        well_df = well_df.sort_values("DEPTH").copy()
 
-        df.loc[well_df.index, 'TIGHT_FLAG'] = tight_streak_flagging(well_df['RHOB'], well_df['RT'])
+        df.loc[well_df.index, "TIGHT_FLAG"] = tight_streak_flagging(
+            well_df["RHOB"], well_df["RT"]
+        )
 
-        df.loc[well_df.index, 'COAL_FLAG'] = coal_flagging(well_df['NPHI'], well_df['RHOB'])
+        df.loc[well_df.index, "COAL_FLAG"] = coal_flagging(
+            well_df["NPHI"], well_df["RHOB"]
+        )
 
-        rhob_mask = well_df['RHOB'].notna()
-        step = np.ceil(well_df['DEPTH'].diff().mean())
-        rhob_int_values = rhob_integral(well_df.loc[rhob_mask, 'RHOB'], step=step)
-        df.loc[well_df.index, 'RHOB_INT'] = pd.Series(rhob_int_values, index=well_df.index)
+        rhob_mask = well_df["RHOB"].notna()
+        step = np.ceil(well_df["DEPTH"].diff().mean())
+        rhob_int_values = rhob_integral(well_df.loc[rhob_mask, "RHOB"], step=step)
+        df.loc[well_df.index, "RHOB_INT"] = pd.Series(
+            rhob_int_values, index=well_df.index
+        )
 
-        gr_mask = well_df['GR'].notna()
-        rock_flag_values = rock_flag_gr(well_df.loc[gr_mask, 'GR'])
-        df.loc[well_df.index, 'ROCK_FLAG'] = pd.Series(rock_flag_values, index=well_df.index)
+        gr_mask = well_df["GR"].notna()
+        rock_flag_values = rock_flag_gr(well_df.loc[gr_mask, "GR"])
+        df.loc[well_df.index, "ROCK_FLAG"] = pd.Series(
+            rock_flag_values, index=well_df.index
+        )
 
     # Point based features
-    df['DPHI'] = density_porosity(df['RHOB'])
-    df['GAS_XOVER'] = gas_xover(df['RHOB'], df['NPHI'])
-    if 'PERM' in df.columns and 'LOG_PERM' not in df.columns:
-        df['LOG_PERM'] = log_perm(df['PERM'])
+    df["DPHI"] = density_porosity(df["RHOB"])
+    df["GAS_XOVER"] = gas_xover(df["RHOB"], df["NPHI"])
+    if "PERM" in df.columns and "LOG_PERM" not in df.columns:
+        df["LOG_PERM"] = log_perm(df["PERM"])
     return df

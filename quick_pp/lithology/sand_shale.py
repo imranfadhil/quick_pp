@@ -7,19 +7,39 @@ from quick_pp import logger
 
 
 class SandShale:
-    """This binary model only consider a combination of sand-shale components. """
+    """A binary lithology model for sand-shale sequences.
 
-    def __init__(self, dry_sand_point: Optional[tuple[float, float]] = None,
-                 dry_clay_point: Optional[tuple[float, float]] = None,
-                 fluid_point: Optional[tuple[float, float]] = None,
-                 wet_clay_point: Optional[tuple[float, float]] = None,
-                 silt_line_angle: Optional[float] = None, **kwargs):
+    This model uses a neutron-density crossplot to estimate the volumetric
+    fractions of sand and shale. It dynamically defines endpoints if not
+    explicitly provided, making it adaptable to different datasets.
+    """
+
+    def __init__(
+        self,
+        dry_sand_point: Optional[tuple[float, float]] = None,
+        dry_clay_point: Optional[tuple[float, float]] = None,
+        fluid_point: Optional[tuple[float, float]] = None,
+        wet_clay_point: Optional[tuple[float, float]] = None,
+        silt_line_angle: Optional[float] = None,
+        **kwargs,
+    ):
         # Initialize the endpoints
         self.dry_sand_point = dry_sand_point or Config.SSC_ENDPOINTS["DRY_SAND_POINT"]
+        """
+        Initializes the SandShale model with specified or default endpoints.
+
+        Args:
+            dry_sand_point (tuple, optional): (NPHI, RHOB) for dry sand. Defaults to config values.
+            dry_clay_point (tuple, optional): (NPHI, RHOB) for dry clay. Defaults to config values.
+            fluid_point (tuple, optional): (NPHI, RHOB) for the formation fluid. Defaults to config values.
+            wet_clay_point (tuple, optional): (NPHI, RHOB) for wet clay, used for dynamic endpoint calculation. Defaults to config values.
+        """
         self.dry_clay_point = dry_clay_point or Config.SSC_ENDPOINTS["DRY_CLAY_POINT"]
         self.fluid_point = fluid_point or Config.SSC_ENDPOINTS["FLUID_POINT"]
         self.wet_clay_point = wet_clay_point or Config.SSC_ENDPOINTS["WET_CLAY_POINT"]
-        self.silt_line_angle = silt_line_angle or Config.SSC_ENDPOINTS["SILT_LINE_ANGLE"]
+        self.silt_line_angle = (
+            silt_line_angle or Config.SSC_ENDPOINTS["SILT_LINE_ANGLE"]
+        )
 
         logger.debug(
             f"SandShale model initialized with endpoints: sand_point={self.dry_sand_point}, "
@@ -31,12 +51,12 @@ class SandShale:
         """Estimate lithology volumetrics based on neutron density cross plot.
 
         Args:
-            nphi (float): Neutron Porosity log in v/v
-            rhob (float): Bulk Density log in g/cc
-            xplot (bool, optional): To plot Neutron Density cross plot. Defaults to False.
+            nphi (np.ndarray or float): Neutron Porosity log [v/v].
+            rhob (np.ndarray or float): Bulk Density log [g/cc].
 
         Returns:
-            (float, float): vsand, vcld, cross-plot if xplot True else None
+            tuple[np.ndarray, np.ndarray, tuple]: A tuple containing the volumes of sand and clay,
+                                                   and a tuple with the calculated min/max trend lines for NPHI and RHOB.
         """
         logger.info(f"Estimating sand-shale lithology for {len(nphi)} data points")
 
@@ -55,7 +75,9 @@ class SandShale:
             wetclay_RHOB = np.min(rhob_max_line)
             wetclay_NPHI = np.max(nphi_max_line)
             self.wet_clay_point = (wetclay_NPHI, wetclay_RHOB)
-            logger.debug(f"Updated wet clay point to: ({wetclay_NPHI:.3f}, {wetclay_RHOB:.3f})")
+            logger.debug(
+                f"Updated wet clay point to: ({wetclay_NPHI:.3f}, {wetclay_RHOB:.3f})"
+            )
 
         # Define dryclay point
         if not all(C):
@@ -77,11 +99,11 @@ class SandShale:
         """Estimate sand and shale based on neutron density cross plot.
 
         Args:
-            nphi (float): Neutron Porosity log in v/v
-            rhob (float): Bulk Density log in g/cc
+            nphi (np.ndarray or float): Neutron Porosity log [v/v].
+            rhob (np.ndarray or float): Bulk Density log [g/cc].
 
         Returns:
-            (float, float): vsand, vcld
+            tuple[np.ndarray, np.ndarray]: A tuple containing the volumes of sand and clay.
         """
         logger.debug("Calculating sand-shale lithology fractions")
 
@@ -101,5 +123,7 @@ class SandShale:
             vsand = np.append(vsand, sand_frac)
             vcld = np.append(vcld, 1 - sand_frac)
 
-        logger.debug(f"Lithology fraction calculation completed for {len(vsand)} points")
+        logger.debug(
+            f"Lithology fraction calculation completed for {len(vsand)} points"
+        )
         return vsand, vcld
