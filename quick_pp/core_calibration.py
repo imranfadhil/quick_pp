@@ -4,7 +4,10 @@ import numpy as np
 import plotly.graph_objects as go
 from tqdm import tqdm
 import pandas as pd
+import hashlib
+from sklearn.metrics import root_mean_squared_error
 
+from quick_pp.rock_type import estimate_pore_throat
 from quick_pp.utils import power_law_func, inv_power_law_func
 from quick_pp import logger
 
@@ -85,16 +88,13 @@ def bvw_xplot(bvw, pc, a=None, b=None, label=None, ylim=None, log_log=False):
 
 
 def pc_xplot(sw, pc, label=None, ylim=None):
-    """Generate J-Sw cross plot.
+    """Generate Pc-Sw cross plot.
 
     Args:
         sw (float): Core water saturation (frac).
-        j (float): Calculated J value (unitless).
-        a (float, optional): a constant in j=a*sw^b. Defaults to None.
-        b (float, optional): b constant in j=a*sw^b. Defaults to None.
+        pc (float): Capillary pressure (psi) from core.
         label (str, optional): Label for the data group. Defaults to ''.
         ylim (tuple, optional): Range for the y axis in (min, max) format. Defaults to None.
-        log_log (bool, optional): Whether to plot log-log or not. Defaults to False.
     """
     plt.plot(sw, pc, marker=".", label=label)
     plt.xlabel("Sw (frac)")
@@ -317,10 +317,21 @@ def fit_poroperm_curve(poro, perm):
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        popt, _ = curve_fit(power_law_func, poro, perm, nan_policy="omit")
+        # Filter out non-positive values which are invalid for logarithmic fitting
+        valid_data = (poro > 0) & (perm > 0)
+        if not np.any(valid_data):
+            logger.warning("No valid data points for poroperm curve fitting.")
+            return 1, 1
+
+        popt, _ = curve_fit(
+            power_law_func, poro[valid_data], perm[valid_data], nan_policy="omit"
+        )
         a = [round(c) for c in popt][0]
         b = [round(c, 3) for c in popt][1]
         return a, b
+    except RuntimeError as e:
+        logger.error(f"Curve fit failed for poroperm: {e}")
+        return 1, 1
     except Exception as e:
         logger.error(e)
         return 1, 1
@@ -582,8 +593,6 @@ def autocorrelate_core_depth(df):
             }
         )
 
-        # --- SOLUTION: Use index-based merging to avoid column conflicts ---
-
         # Prepare the log data: keep only necessary columns and set DEPTH as index
         log_df_to_merge = data.set_index("DEPTH")
 
@@ -620,3 +629,290 @@ def autocorrelate_core_depth(df):
     )
 
     return return_df, final_summary_df
+
+
+def restructure_scal_data(df_wide):
+    """
+    Restructures a SCAL dataset from a wide format (multiple Pc/Sw columns per depth)
+    to a long format (one Pc/Sw pair per row).
+
+    Args:
+        df_wide (pd.DataFrame): The input DataFrame in wide format.
+
+    Returns:
+        pd.DataFrame: The restructured DataFrame in long format.
+    """
+    # Identify columns to rename
+    columns = df_wide.columns
+    new_columns = {}
+    for col in columns:
+        if col.startswith("Pc_") or col.startswith("Sw_"):
+            parts = col.split("_")
+            if len(parts) == 2 and parts[1].isdigit():
+                new_columns[col] = f"{parts[0]}.{parts[1]}"
+
+    df_temp = df_wide.rename(columns=new_columns)
+
+    # 2. Apply the wide_to_long function
+    cols = ["Well", "Sample ID", "Depth_m", "K_mD", "PHI_frac"]
+    df_long = pd.wide_to_long(
+        df_temp,
+        # The 'stubnames' are the prefixes we want to turn into columns
+        stubnames=["Pc", "Sw"],
+        # 'i' is the column that identifies the groups/rows (Depth)
+        i=cols,
+        # 'j' is the new column that holds the suffix (the measurement index)
+        j="Measurement_Index",
+        # The separator used between the stubname and the suffix (e.g., Pc.1 uses '.')
+        sep=".",
+    ).reset_index()
+
+    # Remove rows where all the newly created measurement columns are NaN (if any exist)
+    df_long.dropna(subset=["Pc", "Sw"], how="all", inplace=True)
+
+    # Sort by Depth and Measurement_Index for clean viewing (optional)
+    df_long.sort_values(
+        by=["Well", "Sample ID", "Depth_m", "Measurement_Index"], inplace=True
+    )
+
+    # Finalize columns for output
+    df_final = df_long[cols + ["Pc", "Sw"]].copy()
+
+    # Reset index and return
+    df_final.reset_index(drop=True, inplace=True)
+
+    return df_final
+
+
+def string_to_int_hash(s):
+    """Converts a string to a stable integer hash of at most 4 digits (0-9999).
+
+    This function uses a SHA256 hash to ensure that the same string always
+    produces the same integer, which is useful for creating reproducible
+    color mappings or short identifiers.
+
+    Args:
+        s (str): The input string to hash.
+
+    Returns:
+        int or None: An integer between 0 and 9999, or None if the input is NaN.
+    """
+    if pd.isna(s):  # Handle NaN values
+        return None
+    # Use SHA256 for stability across runs
+    hash_obj = hashlib.sha256(s.encode("utf-8"))
+    # Convert first 4 bytes to a large integer
+    large_int = int.from_bytes(hash_obj.digest()[:4], "big", signed=False)
+    # Constrain the integer to a 4-digit number (0-9999)
+    return large_int % 10000
+
+
+def auto_j_params(df, excluded_samples=[]):
+    """Automatically calculates J-function parameters (a, b) for each rock type.
+
+    This function groups the data by 'ROCK_FLAG', fits a J-curve for each group,
+    and returns the best-fit parameters 'a' and 'b' along with the RMSE.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing 'ROCK_FLAG', 'SWN', and 'J' columns.
+        excluded_samples (list, optional): A list of 'Sample' names to exclude from the calculation.
+            Defaults to [].
+
+    Returns:
+        dict: A dictionary where keys are rock type flags and values are dictionaries
+              containing the rock flag, 'a', 'b', and 'rmse' for the J-curve.
+    """
+    copy_df = df.copy()
+    copy_df = copy_df[~copy_df["Sample"].isin(excluded_samples)]
+    j_params = {}
+    for rt, data in copy_df.groupby("ROCK_FLAG"):
+        a, b = fit_j_curve(data["SWN"], data["J"])
+        rmse = round(root_mean_squared_error(data["J"], a * data["SWN"] ** b), 4)
+        j_params[rt] = {
+            "ROCK_FLAG": rt,
+            "a": round(a, 4),
+            "b": round(b, 4),
+            "rmse": rmse,
+        }
+
+    return j_params
+
+
+def plot_ptsd_by_prt(df, ift, theta, no_of_rocks=5):
+    """Plots Pore Throat Size Distribution (PTSD) for each Petrophysical Rock Type (PRT).
+
+    This function calculates the pore throat radius from capillary pressure data and
+    plots the derivative of water saturation with respect to the log of the radius
+    (dSw/dLogR) against the log of the radius. This provides a visual representation
+    of the pore throat size distribution for different rock types.
+
+    Args:
+        df (pd.DataFrame): DataFrame with core data, including 'Well', 'Sample',
+            'PC_RES', 'SW', and 'ROCK_FLAG'.
+        ift (float): Interfacial tension (dynes/cm).
+        theta (float): Contact angle (degrees).
+        no_of_rocks (int, optional): The number of rock types to plot. Defaults to 5.
+
+    Returns:
+        pd.DataFrame: The input DataFrame with added columns 'R', 'LOG_R', and 'DSW'.
+    """
+    copy_df = df.copy()
+
+    temp_dfs = []
+    for sample, data in copy_df.groupby(["Well", "Sample"]):
+        # Sort by PC to ensure monotonic change in R and LOG_R
+        data = data.sort_values("PC_RES", ascending=True).copy()
+        r = estimate_pore_throat(data["PC_RES"], ift, theta)
+        log_r = np.log10(r)
+        dsw = np.gradient(data["SW"], log_r)
+        data["R"] = r
+        data["LOG_R"] = log_r
+        data["DSW"] = dsw
+        temp_dfs.append(data)
+
+    if not temp_dfs:
+        print("No data to plot.")
+        return
+
+    processed_df = pd.concat(temp_dfs)
+
+    fig, axes = plt.subplots(4, 3, figsize=(15, 17))
+    axes = axes.flatten()
+    for i in range(no_of_rocks):
+        rock = i + 1
+        data = processed_df[processed_df.ROCK_FLAG == rock]
+        if data.empty:
+            continue  # Skip rock types with no data
+        ax = axes[i]
+        for sample, sample_data in data.groupby(["Well", "Sample"]):
+            ax.plot(
+                sample_data["LOG_R"],
+                sample_data["DSW"],
+                label=f"Sample {sample}",
+                zorder=-1,
+            )
+            color = ax.lines[-1].get_color()
+            ax.fill_between(
+                sample_data["LOG_R"], sample_data["DSW"], color=color, alpha=0.9
+            )
+
+        ax.set_title(f"PRT {rock}")
+        ax.set_xlabel("Log Pore Throat Radius (microns)")
+        ax.set_xlim(-2, 2)
+        ax.set_ylabel("dSw/dLogR")
+        ax.legend(loc=2, prop={"size": 5})
+
+    # Hide any unused subplots
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+
+    fig.set_facecolor("aliceblue")
+    plt.tight_layout()
+
+    return processed_df
+
+
+def plot_pc_by_prt(df, ymax=10):
+    """Generates a grid of Pc-Sw plots, one for each Reservoir Rock Type (RRT).
+
+    This function creates subplots to visualize the capillary pressure (Pc) versus
+    water saturation (Sw) relationship for each rock type present in the dataset.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing core data, including 'Well', 'Sample',
+            'ROCK_FLAG', 'SW', and 'PC_RES'.
+        ymax (int, optional): The maximum limit for the y-axis (Pc). Defaults to 10.
+    """
+    core_data = df.copy()
+
+    # Get unique rock flags
+    unique_rock_flags = sorted(core_data["ROCK_FLAG"].unique())
+
+    # Create subplots
+    fig, axes = plt.subplots(nrows=4, ncols=3, figsize=(15, 20))
+    axes = axes.flatten()
+
+    # Plot Pc vs SW for each rock flag
+    for i, rock in enumerate(unique_rock_flags):
+        ax = axes[i]
+        data = core_data[core_data["ROCK_FLAG"] == rock]
+        if data.empty:
+            continue
+        for sample, sample_data in data.groupby(["Well", "Sample"]):
+            sample_data = sample_data.sort_values("PC_RES").copy()
+            ax.plot(
+                sample_data["SW"],
+                sample_data["PC_RES"],
+                label=f"Sample {sample}",
+                marker="o",
+            )
+        ax.set_ylabel("Pc (psia)")
+        ax.set_xlabel("SW (frac)")
+        ax.set_ylim(0, ymax)
+        ax.set_xlim(0, 1)
+        ax.set_title(f"RRT {int(rock)}")
+        ax.legend()
+        ax.grid(True)
+
+    # Hide any unused subplots
+    for j in range(len(unique_rock_flags), len(axes)):
+        fig.delaxes(axes[j])
+
+    fig.set_facecolor("aliceblue")
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_j_by_prt(df, mapped_fzi_params, ymax=10, log_log=False):
+    """Generates a grid of J-Sw plots, one for each Reservoir Rock Type (RRT).
+
+    This function creates subplots to visualize the Leverett J-function (J) versus
+    normalized water saturation (SWN) for each rock type. It also overlays the
+    best-fit J-curve using the provided parameters.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing core data, including 'ROCK_FLAG',
+            'SWN', and 'J'.
+        mapped_fzi_params (dict): A dictionary containing the 'a' and 'b' parameters
+            for the J-curve for each rock type. The keys should be the rock flags.
+        ymax (int, optional): The maximum limit for the y-axis (J). Defaults to 10.
+        log_log (bool, optional): If True, both axes will be on a logarithmic scale. Defaults to False.
+    """
+    core_data = df.copy()
+    # Get unique rock flags
+    unique_rock_flags = sorted(core_data["ROCK_FLAG"].unique())
+
+    # Create subplots
+    fig, axes = plt.subplots(nrows=4, ncols=3, figsize=(20, 25))
+    axes = axes.flatten()
+
+    # Plot j_xplot for each rock flag
+    for i, rock in enumerate(unique_rock_flags):
+        if rock not in mapped_fzi_params:
+            continue
+        ax = axes[i]
+        data = core_data[core_data["ROCK_FLAG"] == rock]
+        if data.empty:
+            continue
+        a, b = mapped_fzi_params[rock]["a"], mapped_fzi_params[rock]["b"]
+        ax = j_xplot(
+            data["SWN"],
+            data["J"],
+            a=a,
+            b=b,
+            label=f"a:{a}\nb:{b}",
+            ax=ax,
+            ylim=(0.01 if log_log else 0, ymax),
+            log_log=log_log,
+        )
+        ax.set_title(f"RRT {rock}")
+        ax.legend()
+        ax.grid(True)
+
+    # Hide any unused subplots
+    for j in range(len(unique_rock_flags), len(axes)):
+        fig.delaxes(axes[j])
+
+    fig.set_facecolor("aliceblue")
+    plt.tight_layout()
+    plt.show()
