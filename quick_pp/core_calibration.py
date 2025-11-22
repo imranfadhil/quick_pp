@@ -3,13 +3,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 import plotly.graph_objects as go
 from tqdm import tqdm
+import re
 import pandas as pd
 import hashlib
 from sklearn.metrics import root_mean_squared_error
 
 from quick_pp.rock_type import estimate_pore_throat
 from quick_pp.utils import power_law_func, inv_power_law_func
+from quick_pp.config import Config
 from quick_pp import logger
+
+GEO_ABBREVIATIONS = Config.CORE_GEO_ABBREVIATIONS
+WORD_CATEGORIES = Config.CORE_WORD_CATEGORIES
+SPECIAL_CASE_DESCRIPTIONS = Config.CORE_SPECIAL_CASE_DESCRIPTIONS
 
 
 plt.style.use("seaborn-v0_8-paper")
@@ -886,6 +892,150 @@ def auto_j_params(core_data, excluded_samples=[], cluster_by=None):
         key=lambda x: (x.get("ROCK_FLAG", 0), x.get("a", 0), x.get("b", 0))
     )
     return j_params_list
+
+
+def auto_group_core_description(
+    core_data, geo_abbrv=None, word_cat=None, special_case_desc=None
+):
+    """Groups core descriptions into standardized categories using NLP and clustering.
+
+    The function follows a multi-step process:
+    1.  It first identifies and categorizes special descriptions (e.g., "NO PLUG POSSIBLE")
+        based on the `special_case_desc` dictionary.
+    2.  For the remaining descriptions, it expands common geological abbreviations
+        (e.g., "ss" -> "sandstone") using the `geo_abbrv` dictionary.
+    3.  It then uses TF-IDF to vectorize the cleaned text and DBSCAN to cluster
+        similar descriptions together.
+    4.  Finally, it generates a structured, descriptive name for each cluster
+        (e.g., "sandstone_fine_grained") by selecting the most representative term
+        from each category defined in `word_cat`.
+
+    Args:
+        core_data (pd.DataFrame): DataFrame containing a 'CORE_DESC' column with
+                                  textual core descriptions.
+        geo_abbrv (dict, optional): Dictionary mapping geological abbreviations to
+            their full terms. Defaults to `Config.CORE_GEO_ABBREVIATIONS`.
+        word_cat (dict, optional): Dictionary categorizing geological terms for
+            structured naming. Defaults to `Config.CORE_WORD_CATEGORIES`.
+        special_case_desc (dict, optional): Dictionary for special descriptions
+            that bypass clustering. Defaults to `Config.CORE_SPECIAL_CASE_DESCRIPTIONS`.
+
+    Returns:
+        pd.DataFrame: The input DataFrame with an added 'CORE_DESC_GRP' column
+                      containing the generated group names.
+    """
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.cluster import DBSCAN
+
+    geo_abbrv = geo_abbrv or GEO_ABBREVIATIONS
+    word_cat = word_cat or WORD_CATEGORIES
+    special_case_desc = special_case_desc or SPECIAL_CASE_DESCRIPTIONS
+
+    if "CORE_DESC" not in core_data.columns:
+        raise ValueError("Input DataFrame must contain a 'CORE_DESC' column.")
+
+    core_data = core_data.copy()
+    descriptions = core_data["CORE_DESC"].fillna("").astype(str)
+    core_data["CORE_DESC_GRP"] = "Miscellaneous"  # Default group
+
+    # 1. Handle special cases first
+    remaining_indices = core_data.index.to_series()
+    for phrase, group_name in special_case_desc.items():
+        is_special_case = descriptions.str.lower().str.contains(phrase, na=False)
+        core_data.loc[is_special_case, "CORE_DESC_GRP"] = group_name
+        # Exclude these from the clustering process
+        remaining_indices = remaining_indices[~is_special_case]
+
+    if remaining_indices.empty:
+        return core_data  # All descriptions were special cases
+
+    # Continue with clustering only on the remaining data
+    clustering_data = core_data.loc[remaining_indices]
+    descriptions_to_cluster = clustering_data["CORE_DESC"].fillna("").astype(str)
+
+    # Keep only unique descriptions for clustering to improve performance
+    unique_descriptions = descriptions_to_cluster.unique()
+
+    def preprocess_text(text, abbreviations):
+        # This function is now only used for the text that goes into clustering
+        text = text.lower()
+        # Expand abbreviations using word boundaries for safety
+        for abbr, full in abbreviations.items():
+            text = re.sub(rf"\b{abbr}\b", full, text)
+        # Remove punctuation, numbers, and extra spaces
+        text = re.sub(r"[^a-z\s]", "", text)
+        return text
+
+    processed_descriptions = [
+        preprocess_text(desc, geo_abbrv) for desc in unique_descriptions
+    ]
+
+    # If after preprocessing there are no descriptions left with enough features, return
+    if not processed_descriptions:
+        return core_data
+
+    # 2. Vectorize the text using TF-IDF
+    vectorizer = TfidfVectorizer(stop_words="english", min_df=2)
+    tfidf_matrix = vectorizer.fit_transform(processed_descriptions)
+
+    # 3. Cluster the vectors using DBSCAN
+    # eps is a crucial parameter; 0.5 is a reasonable starting point for normalized data
+    dbscan = DBSCAN(eps=0.5, min_samples=2, metric="cosine")
+
+    # Handle case where tfidf_matrix is empty
+    if tfidf_matrix.shape[0] == 0:
+        return core_data
+
+    clusters = dbscan.fit_predict(tfidf_matrix)
+
+    # 4. Generate representative names for each cluster
+    cluster_names = {}
+    feature_names = vectorizer.get_feature_names_out()
+    for cluster_id in np.unique(clusters):
+        if cluster_id == -1:
+            cluster_names[cluster_id] = "Miscellaneous"
+            continue
+
+        # Find indices of descriptions in this cluster
+        indices = np.where(clusters == cluster_id)[0]
+        # Get the TF-IDF vectors for this cluster
+        cluster_vectors = tfidf_matrix[indices]
+        # Calculate the mean TF-IDF score for each word in the cluster
+        mean_tfidf = cluster_vectors.mean(axis=0).A1
+
+        # Create a dictionary of term -> score
+        term_scores = {term: mean_tfidf[i] for i, term in enumerate(feature_names)}
+
+        # Select the best term from each category based on score
+        ordered_terms = []
+        for category_name in word_cat:
+            category_words = word_cat[category_name]
+
+            # Find the word from this category with the highest score in the current cluster
+            best_term = max(
+                (term for term in category_words if term in term_scores),
+                key=lambda term: term_scores[term],
+                default=None,
+            )
+            if best_term:
+                ordered_terms.append(best_term)
+
+        cluster_names[cluster_id] = (
+            "_".join(ordered_terms) if ordered_terms else "Undefined"
+        )
+
+    # 5. Create a mapping from unique description to its named group
+    desc_to_group_map = {
+        desc: cluster_names[cluster_id]
+        for desc, cluster_id in zip(unique_descriptions, clusters)
+    }
+
+    # 6. Assign the descriptive group names to the remaining part of the DataFrame
+    core_data.loc[remaining_indices, "CORE_DESC_GRP"] = descriptions_to_cluster.map(
+        desc_to_group_map
+    )
+
+    return core_data
 
 
 def plot_ptsd_by_prt(core_data, ift, theta, no_of_rocks=5):

@@ -134,6 +134,88 @@ class Config:
         K_GAS=0.06,
     )
 
+    # A dictionary of common geological abbreviations and their expanded forms.
+    # This can be expanded with more terms as needed.
+    CORE_GEO_ABBREVIATIONS = {
+        "ss": "sandstone",
+        "sh": "shale",
+        "ls": "limestone",
+        "dol": "dolomite",
+        "cgl": "conglomerate",
+        "gr": "grained",
+        "crs": "coarse",
+        "med": "medium",
+        "f": "fine",
+        "fg": "fine grain",
+        "vf": "very fine",
+        "sl": "slightly",
+        "spar": "sparry",
+        "cmt": "cemented",
+        "lam": "laminated",
+        "xbed": "cross-bedded",
+        "bioturb": "bioturbated",
+        "arg": "argillaceous",
+        "calc": "calcareous",
+        "calcar": "calcareous",
+        "calclut": "calcilutite",
+        "lut": "lutite",
+        "carb": "carbonaceous",
+        "glauc": "glauconitic",
+        "pyr": "pyritic",
+        "gy": "grey",
+        "wh": "white",
+        "crm": "cream",
+        "shale": "shale",
+        "siltstone": "siltstone",
+        "stylolite": "stylolite",
+    }
+
+    # Categories of geological terms (expanded form) used for structured naming.
+    # The order of keys in this dictionary determines the final name structure.
+    CORE_WORD_CATEGORIES = {
+        "FORMATION": [
+            "sandstone",
+            "shale",
+            "siltstone",
+            "limestone",
+            "dolomite",
+            "conglomerate",
+            "calcilutite",
+            "lutite",
+        ],
+        "GRAIN_SIZE": [
+            "grained",
+            "coarse",
+            "medium",
+            "fine",
+            "very fine",
+            "rubble",
+            "sparry",
+        ],
+        "MODIFIER": [
+            "slightly",
+            "laminated",
+            "cross-bedded",
+            "bioturbated",
+            "argillaceous",
+            "calcareous",
+            "carbonaceous",
+            "glauconitic",
+            "pyritic",
+            "cemented",
+            "stylolite",
+        ],
+    }
+
+    # Define special case descriptions that should be handled directly, not clustered.
+    # The key is the phrase to search for (case-insensitive), and the value is the group name to assign.
+    CORE_SPECIAL_CASE_DESCRIPTIONS = {
+        "no plug possible": "NO_PLUG_POSSIBLE",
+        "fractured": "FRACTURED",
+        "preserved sample": "PRESERVED_SAMPLE",
+        "rubble": "RUBBLE",
+    }
+
     @staticmethod
     def vars_units(data):
         """Return a dictionary of units for variables present in the DataFrame.
