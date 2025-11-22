@@ -1,5 +1,8 @@
 import numpy as np
 import pandas as pd
+from imblearn.over_sampling import SMOTE
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from quick_pp.rock_type import estimate_vsh_gr, rock_typing, find_cutoffs
 from tqdm import tqdm
@@ -184,3 +187,80 @@ def generate_fe_features(df):
     if "PERM" in df.columns and "LOG_PERM" not in df.columns:
         df["LOG_PERM"] = log_perm(df["PERM"])
     return df
+
+
+def perform_rrt_smote(core_data, input_features: list, plot_distribution: bool = True):
+    """Address class imbalance for RRT using SMOTE.
+
+    This function uses the Synthetic Minority Over-sampling Technique (SMOTE) to
+    address class imbalance in the Reservoir Rock Type (RRT) data. It is assumed
+    that the 'ROCK_FLAG' column is the target variable and other numeric columns
+    are features.
+
+    Args:
+        core_data (pd.DataFrame): DataFrame containing features and the 'ROCK_FLAG' target column.
+        input_features (list): A list of column names to be used as features for SMOTE.
+        plot_distribution (bool, optional): If True, plots the class distribution before and after SMOTE. Defaults to False.
+
+    Returns:
+        pd.DataFrame: A new DataFrame with a balanced class distribution for 'ROCK_FLAG'.
+    """
+    if "ROCK_FLAG" not in core_data.columns:
+        raise ValueError(
+            "Input DataFrame must contain a 'ROCK_FLAG' column as the target variable."
+        )
+
+    # Drop non-feature columns and rows with missing target values
+    data = core_data.dropna(subset=["ROCK_FLAG"])
+    y = data["ROCK_FLAG"]
+    X = data.drop(columns=["ROCK_FLAG", "WELL_NAME", "DEPTH"], errors="ignore")
+
+    # Select only numeric features for SMOTE
+    X_numeric = X[input_features]
+
+    # SMOTE cannot handle NaN values in features, so we drop them.
+    # This might reduce the dataset size. Consider imputation as an alternative.
+    valid_indices = X_numeric.dropna().index
+    X_res = X_numeric.loc[valid_indices]
+    y_res = y.loc[valid_indices]
+
+    # Determine the number of samples in the smallest class
+    min_class_count = y_res.value_counts().min()
+
+    # k_neighbors must be less than the number of samples in the smallest class.
+    # The default for k_neighbors is 5.
+    if min_class_count <= 1:
+        print("Warning: Cannot apply SMOTE. One of the classes has 1 or fewer samples.")
+        return core_data.loc[valid_indices]
+
+    k_neighbors = min(5, min_class_count - 1)
+
+    smote = SMOTE(random_state=42, k_neighbors=k_neighbors)
+    X_smote, y_smote = smote.fit_resample(X_res, y_res)
+
+    if plot_distribution:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+        # Before SMOTE
+        sns.countplot(x=y_res, ax=axes[0], palette="viridis")
+        axes[0].set_title("Class Distribution Before SMOTE")
+        axes[0].set_xlabel("ROCK_FLAG")
+        axes[0].set_ylabel("Count")
+
+        # After SMOTE
+        sns.countplot(x=y_smote, ax=axes[1], palette="viridis")
+        axes[1].set_title("Class Distribution After SMOTE")
+        axes[1].set_xlabel("ROCK_FLAG")
+        axes[1].set_ylabel("Count")
+
+        fig.suptitle("ROCK_FLAG Distribution Before and After SMOTE", fontsize=16)
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+
+    return pd.concat(
+        [
+            pd.DataFrame(X_smote, columns=X_res.columns),
+            pd.DataFrame(y_smote, columns=["ROCK_FLAG"]),
+        ],
+        axis=1,
+    )
