@@ -707,38 +707,188 @@ def string_to_int_hash(s):
     return large_int % 10000
 
 
-def auto_j_params(df, excluded_samples=[]):
+def normalize_sw(sw):
+    """Normalizes water saturation (Sw) values to a range between 0 and 1.
+
+    This function scales the input water saturation values such that the minimum
+    value becomes 0 and the maximum value becomes 1.
+
+    Args:
+    sw (np.ndarray or pd.Series): Array or Series of water saturation values.
+
+    Returns:
+    np.ndarray or pd.Series: Normalized water saturation values.
+    """
+    return (sw - sw.min()) / (1 - sw.min())
+
+
+def auto_cluster_scal_data(core_data):
+    """Automatically clusters core samples into rock types based on J-function parameters.
+
+    This function first calculates the 'a' and 'b' parameters of the J-curve for
+    each individual core sample. It then uses K-Means clustering on these parameters
+    to group the samples into a specified number of clusters (rock types). If the
+    number of clusters is not provided, it determines the optimal number using the
+    Elbow method.
+
+    Args:
+        core_data (pd.DataFrame): DataFrame with SCAL data. Must include 'Well',
+            'Sample', 'SWN', and 'J' columns.
+
+    Returns:
+        pd.DataFrame: The input DataFrame with an added 'ROCK_FLAG' column containing
+                      the cluster label for each sample.
+    """
+    from sklearn.cluster import DBSCAN
+    from sklearn.neighbors import NearestNeighbors
+    from sklearn.preprocessing import StandardScaler
+
+    core_data = core_data.copy()
+
+    # Calculate 'a' and 'b' for each sample
+    sample_params = []
+    for sample_id, data in core_data.groupby(["ROCK_FLAG", "Well", "Sample"]):
+        clean_data = data.dropna(subset=["SWN", "J"]).query("SWN > 0")
+
+        # Ensure there's still data left to fit
+        if len(clean_data) < 2:
+            continue  # Skip groups with insufficient data after filtering
+
+        a, b = fit_j_curve(clean_data["SWN"], clean_data["J"])
+        # Exclude samples where fitting might have failed (returned default values)
+        if not (a == 1 and b == 1):
+            sample_params.append(
+                {
+                    "ROCK_FLAG": sample_id[0],
+                    "Well": sample_id[1],
+                    "Sample": sample_id[2],
+                    "CPORE": clean_data["CPORE"].iloc[0],
+                    "CPERM": np.log10(clean_data["CPERM"].iloc[0].clip(1e-6)),
+                    "a": a,
+                    "b": b,
+                }
+            )
+
+    if not sample_params:
+        return core_data.assign(ROCK_FLAG=0)
+
+    params_df = pd.DataFrame(sample_params)
+    # Initialize an offset to ensure cluster labels are unique across all ROCK_FLAGs
+    cluster_offset = 0
+    for _, data in params_df.groupby("ROCK_FLAG"):
+        X = data[["CPORE", "CPERM", "a", "b"]].values
+
+        # Scale features for better clustering performance
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        # 2. Automatically determine the optimal 'eps' for DBSCAN
+        min_samples = 2
+        if len(X_scaled) <= min_samples:
+            # Not enough data to cluster, assign all to a single group
+            params_df.loc[data.index, "CORE_CLUSTER"] = 1 + cluster_offset
+            cluster_offset += 1
+            continue
+
+        neighbors = NearestNeighbors(n_neighbors=min_samples)
+        neighbors_fit = neighbors.fit(X_scaled)
+        distances, _ = neighbors_fit.kneighbors(X_scaled)
+        sorted_distances = np.sort(distances[:, min_samples - 1])
+        # The point of maximum curvature (the "knee") is a good estimate for eps
+        optimal_eps = sorted_distances[np.argmax(np.diff(sorted_distances, 2))] + 1e-6
+
+        dbscan = DBSCAN(eps=optimal_eps, min_samples=min_samples)
+        clusters = dbscan.fit_predict(X_scaled)
+
+        # Assign cluster labels, adding offset to ensure uniqueness across ROCK_FLAGs
+        # Noise points (labeled -1 by DBSCAN) are assigned to cluster 0
+        params_df.loc[data.index, "CORE_CLUSTER"] = np.where(
+            clusters == -1, 0, clusters + 1 + cluster_offset
+        )
+
+        # Update the offset for the next ROCK_FLAG group
+        if clusters.max() > -1:
+            cluster_offset += clusters.max() + 1
+
+    if "CORE_CLUSTER" in core_data.columns:
+        core_data = core_data.drop(columns=["CORE_CLUSTER"])
+
+    return pd.merge(
+        core_data,
+        params_df[["Well", "Sample", "CORE_CLUSTER"]],
+        on=["Well", "Sample"],
+        how="left",
+    )
+
+
+def auto_j_params(core_data, excluded_samples=[], cluster_by=None):
     """Automatically calculates J-function parameters (a, b) for each rock type.
 
     This function groups the data by 'ROCK_FLAG', fits a J-curve for each group,
-    and returns the best-fit parameters 'a' and 'b' along with the RMSE.
+    and returns the best-fit parameters 'a' and 'b' along with the RMSE. It can
+    also create sub-groups within each rock type for more granular parameterization.
 
     Args:
-        df (pd.DataFrame): DataFrame containing 'ROCK_FLAG', 'SWN', and 'J' columns.
+        core_data (pd.DataFrame): DataFrame containing 'ROCK_FLAG', 'SWN', and 'J' columns.
         excluded_samples (list, optional): A list of 'Sample' names to exclude from the calculation.
             Defaults to [].
+        cluster_by (list, optional): A list of column names to create sub-groups
+            within each 'ROCK_FLAG'. If provided, parameters will be calculated
+            for each unique combination of 'ROCK_FLAG' and the cluster_by columns.
+            Defaults to None.
 
     Returns:
-        dict: A dictionary where keys are rock type flags and values are dictionaries
-              containing the rock flag, 'a', 'b', and 'rmse' for the J-curve.
+        list: A list of dictionaries, where each dictionary contains the
+              group identifiers (e.g., 'ROCK_FLAG') and the J-parameters ('a', 'b', 'rmse').
     """
-    copy_df = df.copy()
-    copy_df = copy_df[~copy_df["Sample"].isin(excluded_samples)]
-    j_params = {}
-    for rt, data in copy_df.groupby("ROCK_FLAG"):
-        a, b = fit_j_curve(data["SWN"], data["J"])
-        rmse = round(root_mean_squared_error(data["J"], a * data["SWN"] ** b), 4)
-        j_params[rt] = {
-            "ROCK_FLAG": rt,
-            "a": round(a, 4),
-            "b": round(b, 4),
-            "rmse": rmse,
+    core_data = core_data[~core_data["Sample"].isin(excluded_samples)].copy()
+
+    grouping_cols = ["ROCK_FLAG"]
+    if cluster_by:
+        if not isinstance(cluster_by, list):
+            cluster_by = [cluster_by]
+        grouping_cols.extend(cluster_by)
+
+    j_params_list = []
+    for group_key, data in core_data.groupby(grouping_cols):
+        clean_data = data.dropna(subset=["SWN", "J"]).query("SWN > 0")
+
+        # Ensure there's still data left to fit
+        if len(clean_data) < 2:
+            continue  # Skip groups with insufficient data after filtering
+
+        a, b = fit_j_curve(clean_data["SWN"], clean_data["J"])
+        rmse = round(
+            root_mean_squared_error(clean_data["J"], a * clean_data["SWN"] ** b),
+            4,
+        )
+
+        # Create a dictionary for the group identifiers
+        params = {
+            # Cast to standard python types to ensure JSON serializability
+            col: (
+                int(val) if isinstance(val, (np.integer, np.int32, np.int64)) else val
+            )
+            for col, val in zip(
+                grouping_cols,
+                group_key if isinstance(group_key, tuple) else [group_key],
+            )
         }
 
-    return j_params
+        # Add the calculated J-parameters
+        params.update({"a": round(a, 4), "b": round(b, 4), "rmse": rmse})
+        j_params_list.append(params)
+
+    # Sort the list to ensure the best rock quality for each ROCK_FLAG is first.
+    # Best quality = lowest 'a' (entry pressure) and most negative 'b' (pore distribution).
+    # The sorting is done by ROCK_FLAG, then 'a', then 'b'.
+    j_params_list.sort(
+        key=lambda x: (x.get("ROCK_FLAG", 0), x.get("a", 0), x.get("b", 0))
+    )
+    return j_params_list
 
 
-def plot_ptsd_by_prt(df, ift, theta, no_of_rocks=5):
+def plot_ptsd_by_prt(core_data, ift, theta, no_of_rocks=5):
     """Plots Pore Throat Size Distribution (PTSD) for each Petrophysical Rock Type (PRT).
 
     This function calculates the pore throat radius from capillary pressure data and
@@ -747,7 +897,7 @@ def plot_ptsd_by_prt(df, ift, theta, no_of_rocks=5):
     of the pore throat size distribution for different rock types.
 
     Args:
-        df (pd.DataFrame): DataFrame with core data, including 'Well', 'Sample',
+        core_data (pd.DataFrame): DataFrame with core data, including 'Well', 'Sample',
             'PC_RES', 'SW', and 'ROCK_FLAG'.
         ift (float): Interfacial tension (dynes/cm).
         theta (float): Contact angle (degrees).
@@ -756,18 +906,15 @@ def plot_ptsd_by_prt(df, ift, theta, no_of_rocks=5):
     Returns:
         pd.DataFrame: The input DataFrame with added columns 'R', 'LOG_R', and 'DSW'.
     """
-    copy_df = df.copy()
+    core_data = core_data.copy()
 
     temp_dfs = []
-    for sample, data in copy_df.groupby(["Well", "Sample"]):
+    for sample, data in core_data.groupby(["Well", "Sample"]):
         # Sort by PC to ensure monotonic change in R and LOG_R
         data = data.sort_values("PC_RES", ascending=True).copy()
-        r = estimate_pore_throat(data["PC_RES"], ift, theta)
-        log_r = np.log10(r)
-        dsw = np.gradient(data["SW"], log_r)
-        data["R"] = r
-        data["LOG_R"] = log_r
-        data["DSW"] = dsw
+        data["R"] = estimate_pore_throat(data["PC_RES"], ift, theta)
+        data["LOG_R"] = np.log10(data["R"])
+        data["DSW"] = np.gradient(data["SWN"], data["LOG_R"])
         temp_dfs.append(data)
 
     if not temp_dfs:
@@ -812,18 +959,18 @@ def plot_ptsd_by_prt(df, ift, theta, no_of_rocks=5):
     return processed_df
 
 
-def plot_pc_by_prt(df, ymax=10):
+def plot_pc_by_prt(core_data, ymax=10):
     """Generates a grid of Pc-Sw plots, one for each Reservoir Rock Type (RRT).
 
     This function creates subplots to visualize the capillary pressure (Pc) versus
     water saturation (Sw) relationship for each rock type present in the dataset.
 
     Args:
-        df (pd.DataFrame): DataFrame containing core data, including 'Well', 'Sample',
+        core_data (pd.DataFrame): DataFrame containing core data, including 'Well', 'Sample',
             'ROCK_FLAG', 'SW', and 'PC_RES'.
         ymax (int, optional): The maximum limit for the y-axis (Pc). Defaults to 10.
     """
-    core_data = df.copy()
+    core_data = core_data.copy()
 
     # Get unique rock flags
     unique_rock_flags = sorted(core_data["ROCK_FLAG"].unique())
@@ -863,7 +1010,7 @@ def plot_pc_by_prt(df, ymax=10):
     plt.show()
 
 
-def plot_j_by_prt(df, mapped_fzi_params, ymax=10, log_log=False):
+def plot_j_by_prt(core_data, mapped_fzi_params, ymax=10, log_log=False):
     """Generates a grid of J-Sw plots, one for each Reservoir Rock Type (RRT).
 
     This function creates subplots to visualize the Leverett J-function (J) versus
@@ -871,14 +1018,15 @@ def plot_j_by_prt(df, mapped_fzi_params, ymax=10, log_log=False):
     best-fit J-curve using the provided parameters.
 
     Args:
-        df (pd.DataFrame): DataFrame containing core data, including 'ROCK_FLAG',
+        core_data (pd.DataFrame): DataFrame containing core data, including 'ROCK_FLAG',
             'SWN', and 'J'.
-        mapped_fzi_params (dict): A dictionary containing the 'a' and 'b' parameters
-            for the J-curve for each rock type. The keys should be the rock flags.
+        mapped_fzi_params (list[dict]): A list of dictionaries, where each dictionary
+            contains the 'a' and 'b' parameters for the J-curve for a specific
+            rock type, identified by a 'ROCK_FLAG' key.
         ymax (int, optional): The maximum limit for the y-axis (J). Defaults to 10.
         log_log (bool, optional): If True, both axes will be on a logarithmic scale. Defaults to False.
     """
-    core_data = df.copy()
+    core_data = core_data.copy()
     # Get unique rock flags
     unique_rock_flags = sorted(core_data["ROCK_FLAG"].unique())
 
@@ -888,13 +1036,10 @@ def plot_j_by_prt(df, mapped_fzi_params, ymax=10, log_log=False):
 
     # Plot j_xplot for each rock flag
     for i, rock in enumerate(unique_rock_flags):
-        if rock not in mapped_fzi_params:
-            continue
         ax = axes[i]
         data = core_data[core_data["ROCK_FLAG"] == rock]
-        if data.empty:
-            continue
-        a, b = mapped_fzi_params[rock]["a"], mapped_fzi_params[rock]["b"]
+        params = next(item for item in mapped_fzi_params if item["ROCK_FLAG"] == rock)
+        a, b = params["a"], params["b"]
         ax = j_xplot(
             data["SWN"],
             data["J"],
