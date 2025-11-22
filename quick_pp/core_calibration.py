@@ -652,15 +652,23 @@ def restructure_scal_data(df_wide):
     columns = df_wide.columns
     new_columns = {}
     for col in columns:
-        if col.startswith("Pc_") or col.startswith("Sw_"):
-            parts = col.split("_")
-            if len(parts) == 2 and parts[1].isdigit():
-                new_columns[col] = f"{parts[0]}.{parts[1]}"
+        if col.startswith("Pc") or col.startswith("Sw"):
+            new_col = col.split("_")[0]
+            new_col = f"{new_col[:2]}.{new_col[-1]}"
+            new_columns[col] = new_col
 
     df_temp = df_wide.rename(columns=new_columns)
 
     # 2. Apply the wide_to_long function
-    cols = ["Well", "Sample ID", "Depth_m", "K_mD", "PHI_frac"]
+    cols = [
+        "Well",
+        "Sample ID",
+        "Depth_m",
+        "K_mD",
+        "PHI_frac",
+        "Formation Tops",
+        "Model",
+    ]
     df_long = pd.wide_to_long(
         df_temp,
         # The 'stubnames' are the prefixes we want to turn into columns

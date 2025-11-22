@@ -72,7 +72,7 @@ class DBConnector:
         if DBConnector._engine is None:
             raise RuntimeError("DBConnector not initialized. Call __init__ first.")
 
-        with open(script_path, 'r') as f:
+        with open(script_path, "r") as f:
             sql_script = f.read()
 
         with DBConnector._engine.connect() as connection:
@@ -84,7 +84,9 @@ class DBConnector:
         Setup quick_pp database.
         """
         script_dir = os.path.dirname(__file__)
-        db_type = "sqlite" if "sqlite" in DBConnector._engine.url.drivername else "postgresql"
+        db_type = (
+            "sqlite" if "sqlite" in DBConnector._engine.url.drivername else "postgresql"
+        )
         if db_type == "sqlite":
             sql_script = "setup_sqlite_db.sql"
         elif db_type == "postgresql":

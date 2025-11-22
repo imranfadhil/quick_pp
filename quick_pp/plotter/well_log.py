@@ -133,28 +133,57 @@ def fix_missing_volumetrics(df):
     return df
 
 
-def fix_missing_depths(df):
-    """Resample the DataFrame to a regular depth interval.
+def fix_missing_depths(df: pd.DataFrame) -> pd.DataFrame:
+    """Resamples a DataFrame to a regular depth interval.
 
-    This function ensures the DataFrame has a consistent depth step by
-    creating a complete depth range and merging the original data onto it.
-    This prevents gaps in the final plot.
+    This function addresses gaps in depth data by creating a complete,
+    evenly-spaced depth range and merging the original data onto it. It uses
+    the most common depth interval found in the data as the new step.
+
+    Args:
+        df (pd.DataFrame): The input DataFrame, which must contain a 'DEPTH' column.
 
     Returns:
-        pd.DataFrame: A resampled DataFrame with consistent depth steps.
+        pd.DataFrame: A new, resampled DataFrame with consistent depth steps.
+                      Returns an empty DataFrame if the input is invalid.
     """
+    if df.empty or "DEPTH" not in df.columns or df["DEPTH"].nunique() < 2:
+        # Cannot process if DataFrame is empty, no 'DEPTH' column,
+        # or not enough data points to determine an interval.
+        return pd.DataFrame(columns=df.columns)
+
+    # --- FIX: Sort the right DataFrame (df) by the merge key ('DEPTH') ---
+    # This is required by pd.merge_asof.
+    df = df.sort_values(by="DEPTH").reset_index(drop=True)
+
+    # Calculate the most common depth interval (step).
+    # Using the median of positive differences is more robust against outliers.
+    depth_diffs = df["DEPTH"].diff()
+    if depth_diffs.iloc[1:].empty:  # Check if diff() resulted in an empty series
+        return df  # Not enough data to resample, return sorted original
+    depth_step = depth_diffs.iloc[1:].median()
+
+    # If the calculated step is zero or negative, we can't proceed.
+    if depth_step <= 0:
+        return df  # Return the sorted original DataFrame
+
     depth_min = df["DEPTH"].min()
     depth_max = df["DEPTH"].max()
-    depth_step = df["DEPTH"].diff().mode()[0].round(4)  # Most common depth step
+
+    # Create a new, complete depth range.
+    # The tolerance ensures the max depth is included in the range.
     complete_depths = np.arange(depth_min, depth_max + depth_step, depth_step)
 
-    # Create new dataframe with complete depths and merge with original data
-    df_complete = pd.DataFrame({"DEPTH": np.round(complete_depths, 4)})
-    df = pd.merge_asof(
+    # Create a new DataFrame with the complete depth range.
+    df_complete = pd.DataFrame({"DEPTH": complete_depths})
+
+    # Merge the original data onto the complete depth range.
+    # 'direction="nearest"' finds the closest original depth for each new depth point.
+    df_resampled = pd.merge_asof(
         df_complete, df, on="DEPTH", direction="nearest", tolerance=depth_step
     )
-    df = df.sort_values(by="DEPTH", ascending=True)
-    return df
+
+    return df_resampled
 
 
 def plotly_log(
