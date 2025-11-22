@@ -12,6 +12,7 @@ from sklearn.metrics import (
     ConfusionMatrixDisplay,
     confusion_matrix,
     r2_score,
+    silhouette_score,
     mean_absolute_error,
 )
 
@@ -283,6 +284,118 @@ def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title="Winland R35
     plt.minorticks_on()
     plt.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
     plt.grid(True, which="minor", linestyle=":", linewidth="0.3", color="gray")
+
+
+def plot_fzi_log_log(
+    cpore,
+    cperm,
+    cut_offs=None,
+    rock_type=None,
+    title="FZI Log-Log Plot",
+    density=True,
+):
+    """Generate a log-log plot of RQI vs. pore-to-solid volume ratio to identify rock types.
+
+    On this plot, data points belonging to the same rock type (i.e., same FZI) will
+    fall along a straight line with a unit slope.
+
+    Args:
+        cpore (np.ndarray or float): Core porosity in fraction.
+        cperm (np.ndarray or float): Core permeability in mD.
+        cut_offs (list, optional): List of FZI values to plot as lines.
+                                   Defaults to `np.arange(0.5, 5)`.
+        rock_type (array, optional): Array of rock types for coloring points. Defaults to None.
+        title (str, optional): Plot title. Defaults to 'FZI Log-Log Plot'.
+        density (bool, optional): If True, show data density with a 2D histogram and contours.
+                                  Defaults to False.
+    """
+    rqi = calc_rqi(cpore, cperm)
+    phi_z = cpore / (1 - cpore)
+
+    _, ax = plt.subplots(figsize=(10, 8))
+    ax.set_title(title)
+
+    if density:
+        # Use hist2d to show data density
+        valid_data = (phi_z > 0) & (rqi > 0) & np.isfinite(phi_z) & np.isfinite(rqi)
+        x = phi_z[valid_data]
+        y = rqi[valid_data]
+
+        # Create 2D histogram
+        bins = 50
+        hist, x_edges, y_edges = np.histogram2d(np.log10(x), np.log10(y), bins=bins)
+
+        # Plot filled contours
+        x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+        y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+        cf = ax.contourf(
+            10**x_centers, 10**y_centers, hist.T, levels=10, cmap="viridis", alpha=0.8
+        )
+        plt.colorbar(cf, ax=ax, label="Data Density")
+    else:
+        ax.scatter(phi_z, rqi, marker=".", c=rock_type, cmap="viridis")
+
+    cut_offs = cut_offs if cut_offs is not None else np.arange(0.5, 5)
+    phi_z_points = np.geomspace(np.nanmin(phi_z[phi_z > 0]), np.nanmax(phi_z), 20)
+
+    for fzi in cut_offs:
+        rqi_points = fzi * phi_z_points
+        ax.plot(
+            phi_z_points,
+            rqi_points,
+            linestyle="dashed",
+            label=f"FZI={round(fzi, 3)}",
+        )
+
+    ax.set_xlabel("Pore to Solid Volume Ratio (phi_z)")
+    ax.set_ylabel("Rock Quality Index (RQI)")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    ax.set_aspect("equal", adjustable="box")
+
+    ax.minorticks_on()
+    ax.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
+    ax.grid(True, which="minor", linestyle=":", linewidth="0.3", color="gray")
+
+
+def plot_fzi_histogram(
+    cpore, cperm, bins="auto", cutoffs=None, title="Log(FZI) Histogram"
+):
+    """
+    Plot a histogram of Log(FZI) to identify modes and define cutoffs.
+
+    Different rock types should appear as distinct modes (peaks) in the histogram.
+    The troughs between these modes can be used as objective cutoffs.
+
+    Args:
+        cpore (np.ndarray or float): Core porosity in fraction.
+        cperm (np.ndarray or float): Core permeability in mD.
+        bins (int or str, optional): The number of bins for the histogram. Defaults to "auto".
+        cutoffs (list, optional): A list of Log(FZI) cutoff values to display as vertical lines. Defaults to None.
+        title (str, optional): The title of the plot. Defaults to "Log(FZI) Histogram".
+    """
+    # Calculate Log(FZI)
+    fzi = calc_fzi(cpore, cperm)
+    log_fzi = np.log10(fzi)
+
+    # Clean data by removing infinite and NaN values
+    log_fzi = log_fzi[np.isfinite(log_fzi)]
+
+    # Generate histogram
+    _, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(log_fzi, bins=bins, edgecolor="black", alpha=0.7)
+    ax.set_title(title)
+    ax.set_xlabel("Log(FZI)")
+    ax.set_ylabel("Frequency")
+
+    # Plot cutoff lines if provided
+    if cutoffs:
+        for cutoff in cutoffs:
+            ax.axvline(x=cutoff, color="r", linestyle="--", label=f"Cutoff={cutoff}")
+        ax.legend()
+
+    ax.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
 
 
 def plot_ward_dendogram(X, p=10, title="Ward's Dendogram"):
@@ -669,3 +782,69 @@ def train_regression_model(
     plt.show()
 
     return model
+
+
+def cluster_fzi(cpore, cperm, n_clusters=None, max_clusters=10):
+    """
+    Determine rock types by applying k-Means clustering on the Flow Zone Indicator (FZI).
+
+    This function calculates Log(FZI), then uses k-Means to partition the data
+    into a specified number of clusters (rock types). It returns the cluster
+    assignments and descriptive statistics for each cluster.
+
+    Args:
+        cpore (np.ndarray or float): Core porosity in fraction.
+        cperm (np.ndarray or float): Core permeability in mD.
+        n_clusters (int, optional): The number of rock types (clusters) to identify.
+                                   If None, it will be auto-detected. Defaults to None.
+        max_clusters (int, optional): The maximum number of clusters to consider for auto-detection. Defaults to 10.
+
+    Returns:
+        tuple: A tuple containing:
+            - pd.Series: Cluster assignment for each data point.
+            - pd.DataFrame: Mean and standard deviation of Log(FZI) for each cluster.
+    """
+    from sklearn.cluster import KMeans
+
+    # Calculate Log(FZI) and prepare data for clustering
+    fzi = calc_fzi(cpore, cperm)
+    log_fzi = pd.Series(np.log10(fzi), name="log_fzi").replace(
+        [-np.inf, np.inf], np.nan
+    )
+    data = log_fzi.dropna().values.reshape(-1, 1)
+
+    if n_clusters is None:
+        best_score = -1
+        optimal_clusters = 2
+        # Ensure we have enough samples for clustering
+        max_k = min(max_clusters, data.shape[0] - 1)
+
+        for k in range(2, max_k + 1):
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto").fit(data)
+            score = silhouette_score(data, kmeans.labels_)
+            if score > best_score:
+                best_score = score
+                optimal_clusters = k
+
+        n_clusters = optimal_clusters
+        logger.info(
+            f"Optimal number of clusters identified: {n_clusters} with silhouette score: {best_score:.2f}"
+        )
+    elif data.shape[0] < n_clusters:
+        raise ValueError(
+            f"Number of samples ({data.shape[0]}) must be >= n_clusters ({n_clusters})."
+        )
+
+    # Apply k-Means clustering
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init="auto").fit(data)
+    labels = kmeans.labels_
+
+    # Map cluster labels back to the original series length
+    cluster_series = pd.Series(labels, index=log_fzi.dropna().index)
+    cluster_series = cluster_series.reindex(log_fzi.index)
+
+    # Calculate statistics for each cluster
+    stats_df = pd.DataFrame({"log_fzi": log_fzi.dropna(), "cluster": labels})
+    cluster_stats = stats_df.groupby("cluster")["log_fzi"].agg(["mean", "std"])
+
+    return cluster_series, cluster_stats
