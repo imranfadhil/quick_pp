@@ -490,19 +490,35 @@ def sw_shf_choo(perm, phit, phie, depth, fwl, ift, theta, gw, ghc, b0=0.4):
 
 def autocorrelate_core_depth(df):
     """
-    Automatically shift core depths to match log depths using a hybrid DTW and clustering approach.
+    Automatically shift core depths to match log depths.
 
-    This function aligns core porosity (CPORE) with log porosity (PHIT) by first using
-    Dynamic Time Warping (DTW) to find an optimal alignment path. It then clusters the
-    resulting depth shifts using DBSCAN to identify coherent segments (requiring bulk shifts
-    or stretch/squeeze) and outliers (requiring individual shifts).
+    This function aligns core porosity (CPORE) with log porosity (PHIT) for each
+    well in the DataFrame. It uses a hybrid approach combining Dynamic Time Warping
+    (DTW) for alignment and machine learning models for correction.
 
-    A linear correction is applied to each segment, and an isotonic regression ensures the final corrected depths are monotonic.
+    The process is as follows:
+    1.  **Segmentation**: Core data is clustered by depth proximity using DBSCAN to
+        identify continuous segments.
+    2.  **Interpolation & Smoothing**: Within each segment, sparse core porosity is
+        interpolated to match log data resolution. Both core and log porosity
+        signals are then smoothed to focus on trends.
+    3.  **Weighted DTW Alignment**: A weighted Dynamic Time Warping (DTW) is used
+        to find the optimal alignment path between the two porosity signals. The
+        weighting is achieved by adding a second feature channel that identifies
+        peaks and troughs, guiding the alignment.
+    4.  **Filtered Model Training**: A RandomForestRegressor model is trained on the
+        DTW alignment path. The training data is filtered to include only points
+        where the proposed shift is within a plausible window, preventing the
+        model from learning from extreme outliers.
+    5.  **Correction & Post-processing**: The model predicts the corrected depths.
+        This shift is clipped to the window size. A spacing correction ensures
+        that core samples are not artificially compressed.
+    6.  **Finalization**: Isotonic regression is applied across all corrected depths
+        for the well to enforce strict monotonicity.
 
     Args:
         df (pd.DataFrame): DataFrame containing well log and core data. Must include
                            'WELL_NAME', 'DEPTH', 'PHIT', 'CPORE', 'CPERM', and 'CORE_ID'.
-
     Returns:
         tuple[pd.DataFrame, pd.DataFrame]:
             - A DataFrame with the original data merged with the depth-corrected core data.
@@ -510,21 +526,20 @@ def autocorrelate_core_depth(df):
     """
     from dtw import dtw
     from sklearn.preprocessing import minmax_scale
-    from sklearn.linear_model import LinearRegression
+    from sklearn.ensemble import RandomForestRegressor
     from sklearn.isotonic import IsotonicRegression
     from sklearn.cluster import DBSCAN
     from scipy.signal import find_peaks
+    from scipy.interpolate import interp1d
 
     required_cols = ["WELL_NAME", "DEPTH", "PHIT", "CPORE", "CPERM", "CORE_ID"]
     for col in required_cols:
         if col not in df.columns:
             raise AssertionError(f"Missing required column: {col}")
 
-    # Work on a copy to avoid SettingWithCopyWarning
     df = df.copy()
-    # Ensure CPERM is numeric and handle potential non-numeric values
+    # Ensure porosity and permeability columns are numeric, coercing errors.
     df["CPERM"] = pd.to_numeric(df["CPERM"], errors="coerce")
-    # Ensure PHIT is numeric
     df["PHIT"] = pd.to_numeric(df["PHIT"], errors="coerce")
     all_wells_data = []
     shift_summaries = []
@@ -548,18 +563,16 @@ def autocorrelate_core_depth(df):
             f"Processing {well}: {len(core_data)} core data and {len(log_data)} log data"
         )
 
-        # --- Cluster core data into segments based on depth proximity ---
+        # Cluster core data into segments based on depth proximity.
         depth_clusters = DBSCAN(eps=0.01, min_samples=3).fit(
             minmax_scale(core_data["DEPTH"].values.reshape(-1, 1))
         )
-        # Use .assign() to avoid SettingWithCopyWarning
         core_data = core_data.assign(cluster=depth_clusters.labels_)
 
         all_alignments = []
-        # Initialize corrected_depths array
         final_corrected_depths = np.zeros(len(core_data))
 
-        # --- Process each cluster independently ---
+        # Process each core data segment (cluster) independently.
         for cluster_id in np.unique(core_data["cluster"]):
             cluster_core_data = core_data[core_data["cluster"] == cluster_id]
             core_indices_in_cluster = cluster_core_data.index
@@ -569,52 +582,80 @@ def autocorrelate_core_depth(df):
                 cluster_core_data["DEPTH"].min(),
                 cluster_core_data["DEPTH"].max(),
             )
-            window = 7  # Window size in depth units
+            window = 5  # Window size in depth units for log data subset.
             log_subset = log_data[
                 (log_data["DEPTH"] >= min_depth - window)
                 & (log_data["DEPTH"] <= max_depth + window)
             ].reset_index(drop=True)
 
             if log_subset.empty:
-                # If no log data, keep original depths for this cluster
+                # If no log data is found in the window, keep original depths.
                 final_corrected_depths[core_indices_in_cluster] = cluster_core_data[
                     "DEPTH"
                 ].values
                 continue
 
-            # Smooth the log data to focus on trends rather than noise
+            # Smooth the log data to focus on trends rather than high-frequency noise.
             log_phit_smooth = (
                 log_subset["PHIT"]
                 .rolling(window=window, center=True, min_periods=1)
                 .mean()
             )
 
-            # --- Perform Weighted DTW by augmenting the data with an anchor channel ---
-            # 1. Scale the primary signals (porosity)
-            cpore_vals = minmax_scale(cluster_core_data["CPORE"].values)
+            # Interpolate sparse core data to create a dense signal for DTW.
+            core_depths = cluster_core_data["DEPTH"].values
+            core_poro = cluster_core_data["CPORE"].values
+
+            # Use cubic interpolation if possible for a smoother curve.
+            interp_kind = "cubic" if len(core_depths) >= 4 else "linear"
+            interp_func = interp1d(
+                core_depths,
+                core_poro,
+                kind=interp_kind,
+                bounds_error=False,
+                fill_value="extrapolate",
+            )
+
+            dense_core_depths = np.linspace(
+                core_depths.min(), core_depths.max(), num=len(log_subset)
+            )
+            dense_core_poro = interp_func(dense_core_depths)
+
+            # Smooth the interpolated core data to match the smoothing of log data.
+            dense_core_poro_smooth = (
+                pd.Series(dense_core_poro)
+                .rolling(window=window, center=True, min_periods=1)
+                .mean()
+            )
+
+            # Scale both signals to a [0, 1] range for DTW.
+            cpore_vals = minmax_scale(dense_core_poro_smooth)
             phit_vals = minmax_scale(log_phit_smooth.values)
 
-            # 2. Identify peaks and troughs in the core data to act as anchor points
+            # Identify peaks and troughs in both signals to act as anchor points.
+            # This creates a second feature channel to guide the DTW alignment.
             peaks, _ = find_peaks(phit_vals, prominence=0.1, distance=2)
             troughs, _ = find_peaks(-phit_vals, prominence=0.1, distance=2)
             anchor_indices = np.concatenate([peaks, troughs])
 
-            # 3. Create a second feature channel to represent the anchors
-            # This channel is 1.0 at anchor points and 0.0 otherwise.
             phit_anchor_channel = np.zeros_like(phit_vals)
             if len(anchor_indices) > 0:
                 phit_anchor_channel[anchor_indices] = 1.0
 
-            # The log data has no pre-defined anchors, so its channel is all zeros.
+            # Repeat for the core porosity signal.
+            peaks, _ = find_peaks(cpore_vals, prominence=0.1, distance=2)
+            troughs, _ = find_peaks(-cpore_vals, prominence=0.1, distance=2)
+            anchor_indices = np.concatenate([peaks, troughs])
             cpore_anchor_channel = np.zeros_like(cpore_vals)
+            if len(anchor_indices) > 0:
+                cpore_anchor_channel[anchor_indices] = 1.0
 
-            # 4. Stack the original signal and the anchor channel to create 2D inputs for DTW
-            # The 'weight' of the anchor channel can be tuned by multiplying it by a factor.
-            weight_factor = 1.0
+            # Stack signals and anchor channels for 2D DTW.
+            weight_factor = 5.0
             cpore_2d = np.vstack([cpore_vals, cpore_anchor_channel * weight_factor]).T
             phit_2d = np.vstack([phit_vals, phit_anchor_channel * weight_factor]).T
 
-            # 5. Run DTW on the 2D augmented data
+            # 5. Run DTW on the augmented 2D data.
             alignment = dtw(
                 cpore_2d,
                 phit_2d,
@@ -622,52 +663,91 @@ def autocorrelate_core_depth(df):
                 step_pattern="symmetric2",
             )
 
-            # Map local DTW indices back to original dataframe indices
-            # Create a dataframe with all possible alignments from the DTW path
             cluster_alignment = pd.DataFrame(
                 {
-                    "core_idx": cluster_core_data.index[alignment.index1],
+                    "original_depth": dense_core_depths[
+                        alignment.index1
+                    ],  # Interpolated depths
                     "log_idx": log_subset.index[alignment.index2],
                 }
             )
-            cluster_alignment["original_depth"] = core_data.loc[
-                cluster_alignment["core_idx"], "DEPTH"
-            ].values
             cluster_alignment["aligned_depth"] = log_subset.loc[
                 cluster_alignment["log_idx"], "DEPTH"
             ].values
             cluster_alignment["cluster"] = cluster_id
             all_alignments.append(cluster_alignment)
 
-            # --- Apply correction based on this cluster's alignment ---
-            X_fit = cluster_alignment["original_depth"].values.reshape(-1, 1)
-            y_fit = cluster_alignment["aligned_depth"].values
-            # --- Use the direct DTW alignment results ---
-            # The LinearRegression step was over-simplifying the result. By using the
-            # aligned_depth directly, we honor the detailed point-by-point match from DTW.
-            final_corrected_depths[cluster_alignment["core_idx"]] = cluster_alignment[
-                "aligned_depth"
-            ].values
+            # Filter the DTW path to create a reliable training set for the model,
+            # excluding alignments that suggest an impossibly large shift.
+            cluster_alignment["shift"] = (
+                cluster_alignment["aligned_depth"] - cluster_alignment["original_depth"]
+            )
+            training_alignment = cluster_alignment[
+                cluster_alignment["shift"].abs() <= window
+            ]
 
-            # Use Linear Regression to model the shift (handles bulk shift and stretch/squeeze)
-            lr = LinearRegression().fit(X_fit, y_fit)
-            slope, intercept = lr.coef_[0], lr.intercept_
+            # If filtering removes all points, the alignment is unreliable; skip this cluster.
+            if training_alignment.empty:
+                tqdm.write(
+                    f"Well {well}, Cluster {cluster_id}: No reliable alignment found within window. "
+                    f"Skipping shift for this segment."
+                )
+                final_corrected_depths[core_indices_in_cluster] = cluster_core_data[
+                    "DEPTH"
+                ].values
+                continue
 
-            # Apply the calculated transformation to the original depths of this cluster
+            # Train a model on the filtered, reliable alignment points.
+            X_fit = training_alignment["original_depth"].values.reshape(-1, 1)
+            y_fit = training_alignment["aligned_depth"].values
+
+            rf = RandomForestRegressor(random_state=42)
+            rf.fit(X_fit, y_fit)
+
+            # Predict the corrected depths for the original core points.
             original_depths = cluster_core_data["DEPTH"].values
-            corrected_depths_for_cluster = slope * original_depths + intercept
+            corrected_depths_for_cluster = rf.predict(original_depths.reshape(-1, 1))
+
+            # Post-process the predicted depths for this cluster.
+            # 1. Clip the shift to the maximum allowed window size.
+            shift = corrected_depths_for_cluster - original_depths
+            clipped_shift = np.clip(shift, -window, window)
+            corrected_depths_for_cluster = original_depths + clipped_shift
+
+            # 2. Ensure the spacing between points is not less than original spacing.
+            if len(corrected_depths_for_cluster) > 1:
+                original_diffs = cluster_core_data["DEPTH"].diff().to_numpy()
+                for i in range(1, len(corrected_depths_for_cluster)):
+                    current_position = (
+                        corrected_depths_for_cluster[i] - original_depths[i]
+                    )
+                    min_spacing = (
+                        original_diffs[i]
+                        if current_position < 0
+                        else -original_diffs[i]
+                    )
+                    current_spacing = (
+                        corrected_depths_for_cluster[i]
+                        - corrected_depths_for_cluster[i - 1]
+                    )
+                    if current_spacing < min_spacing:
+                        corrected_depths_for_cluster[i] = (
+                            corrected_depths_for_cluster[i - 1] + min_spacing
+                        )  # Enforce minimum spacing
+
             final_corrected_depths[core_indices_in_cluster] = (
                 corrected_depths_for_cluster
             )
 
-        # Combine alignment results for plotting/QC
+        # Combine alignment results from all clusters for this well.
         alignment_df = (
             pd.concat(all_alignments, ignore_index=True)
             if all_alignments
             else pd.DataFrame()
         )
 
-        # Enforce monotonicity using Isotonic Regression
+        # Enforce strict monotonicity across all corrected depths for the well.
+        # This ensures no depth inversions occur between different clusters.
         ir = IsotonicRegression(out_of_bounds="clip")
         final_corrected_depths = ir.fit_transform(
             core_data["DEPTH"], final_corrected_depths
@@ -693,46 +773,49 @@ def autocorrelate_core_depth(df):
             f"Well {well}: Applied segmented correction. Mean shift: {summary['DEPTH_SHIFT'].mean():.2f}m"
         )
 
-        # --- Create the final corrected dataframe for the well ---
-        # 1. Start with the original well data and drop rows that have core data
+        # Reconstruct the well's DataFrame with the newly corrected core depths.
         log_only_data = data.loc[data["CORE_ID"].isna()].copy()
         log_only_data["WELL_NAME"] = well
 
-        # 2. Prepare the shifted core data to be merged back in
-        # Rename corrected depth to 'DEPTH' to align with the main dataframe
         corrected_core_df = shifted_core_data.copy()
-        # First, rename the original depth to avoid a name collision.
         corrected_core_df.rename(columns={"DEPTH": "ORIGINAL_DEPTH"}, inplace=True)
-        # Now, rename the corrected depth to be the primary 'DEPTH' column.
         corrected_core_df.rename(columns={"DEPTH_CORRECTED": "DEPTH"}, inplace=True)
 
-        # Add a 'REMARKS' column to document the shift
         corrected_core_df["REMARKS"] = corrected_core_df.apply(
             lambda row: f"Corrected from {row['ORIGINAL_DEPTH']:.2f} (Shift: {row['DEPTH_SHIFT']:.2f})",
             axis=1,
         )
 
-        # Drop the now-redundant columns before concatenation
         corrected_core_df.drop(columns=["ORIGINAL_DEPTH", "DEPTH_SHIFT"], inplace=True)
         corrected_core_df["WELL_NAME"] = well
 
         # 3. Combine the log-only data with the newly depth-corrected core data
-        well_corrected_df = pd.concat(
-            [log_only_data, corrected_core_df], ignore_index=True
+        data.sort_values("DEPTH", inplace=True)
+        corrected_core_df.sort_values("DEPTH", inplace=True)
+        core_cols_to_merge = ["DEPTH", "CPORE", "CPERM", "CORE_ID", "REMARKS"]
+        well_corrected_df = pd.merge_asof(
+            data,
+            corrected_core_df[core_cols_to_merge],
+            on="DEPTH",
+            direction="nearest",
+            tolerance=1e-2,
+            suffixes=("_ORI", ""),
         )
 
-        # 4. Sort the final dataframe by the unified 'DEPTH' column
         well_corrected_df.sort_values("DEPTH", inplace=True)
 
         all_wells_data.append(well_corrected_df.reset_index(drop=True))
 
-        # Plot results for visualization and QC
         _plot_autocorrelation_results(
             well, log_data, core_data, shifted_core_data, alignment_df
         )
 
-    # Combine all processed well data and summaries
+    # Combine data from all processed wells into the final return DataFrames.
     return_df = pd.concat(all_wells_data, ignore_index=True)
+
+    # Plot xplot comparing the original and shifted data points together with R2 score and RMSE
+    _plot_correction_xplot(return_df)
+
     final_summary_df = (
         pd.concat(shift_summaries, ignore_index=True)
         if shift_summaries
@@ -742,10 +825,103 @@ def autocorrelate_core_depth(df):
     return return_df, final_summary_df
 
 
+def _plot_correction_xplot(df):
+    """
+    Plots a crossplot comparing log porosity (PHIT) with original and corrected
+    core porosity (CPORE), showing R-squared and RMSE for both.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing 'PHIT', 'CPORE', 'CPORE_ORI', and 'CORE_ID'.
+    """
+    from sklearn.metrics import r2_score, root_mean_squared_error
+
+    # Prepare data by dropping NaNs
+    plot_df = df[["PHIT", "CPORE_ORI", "CPORE", "CORE_ID"]].dropna().copy()
+
+    # Calculate metrics for original data
+    r2_original = r2_score(plot_df["PHIT"], plot_df["CPORE_ORI"])
+    rmse_original = root_mean_squared_error(plot_df["PHIT"], plot_df["CPORE_ORI"])
+
+    # Calculate metrics for corrected data
+    r2_corrected = r2_score(plot_df["PHIT"], plot_df["CPORE"])
+    rmse_corrected = root_mean_squared_error(plot_df["PHIT"], plot_df["CPORE"])
+
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    # Scatter plot for original and corrected data
+    ax.scatter(
+        plot_df["PHIT"],
+        plot_df["CPORE_ORI"],
+        alpha=0.5,
+        label=f"Original (R2={r2_original:.2f}, RMSE={rmse_original:.3f})",
+        marker="x",
+    )
+    ax.scatter(
+        plot_df["PHIT"],
+        plot_df["CPORE"],
+        alpha=0.5,
+        label=f"Corrected (R2={r2_corrected:.2f}, RMSE={rmse_corrected:.3f})",
+        marker="o",
+    )
+
+    # Add lines and annotations connecting original to corrected points
+    for _, row in plot_df.iterrows():
+        # Add a line from the original point to the corrected point
+        ax.plot(
+            [row["PHIT"], row["PHIT"]],
+            [row["CPORE_ORI"], row["CPORE"]],
+            color="gray",
+            linestyle="--",
+            linewidth=0.8,
+            alpha=0.7,
+        )
+        # Annotate the CORE_ID near the corrected point
+        ax.text(
+            row["PHIT"] * 1.01, row["CPORE"], str(row["CORE_ID"]), fontsize=7, alpha=0.8
+        )
+
+    # Add 1:1 line for reference
+    lims = [
+        min(ax.get_xlim()[0], ax.get_ylim()[0]),
+        max(ax.get_xlim()[1], ax.get_ylim()[1]),
+    ]
+    ax.plot(lims, lims, "k--", alpha=0.75, zorder=0, label="1:1 Line")
+
+    # Formatting
+    ax.set_xlabel("Log Porosity (PHIT)")
+    ax.set_ylabel("Core Porosity (CPORE)")
+    ax.set_title("Core vs. Log Porosity Before and After Depth Correction")
+    ax.legend()
+    ax.grid(True)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlim(lims)
+    ax.set_ylim(lims)
+
+    plt.tight_layout()
+    plt.show()
+
+
 def _plot_autocorrelation_results(
     well_name, log_data, original_core, corrected_core, alignment_df
 ):
-    """Helper function to visualize the results of the core depth correction using Plotly."""
+    """
+    Visualize the results of the core depth correction using Plotly.
+
+    This helper function generates a two-panel plot for quality control:
+    1.  **Porosity Alignment**: Shows log porosity, original core porosity, and
+        depth-corrected core porosity versus depth. Lines connect original to
+        corrected points to visualize the shifts.
+    2.  **DTW Alignment**: Plots the DTW path, showing how original core depths
+        were mapped to log depths. A 1:1 line indicates no shift.
+
+    Args:
+        well_name (str): The name of the well being plotted.
+        log_data (pd.DataFrame): DataFrame with log data ('DEPTH', 'PHIT').
+        original_core (pd.DataFrame): DataFrame with original core data.
+        corrected_core (pd.DataFrame): DataFrame with depth-corrected core data.
+        alignment_df (pd.DataFrame): DataFrame containing the DTW alignment path.
+    """
     from plotly.subplots import make_subplots
     import plotly.graph_objects as go
 
@@ -756,8 +932,7 @@ def _plot_autocorrelation_results(
         shared_yaxes=True,
     )
 
-    # --- Plot 1: Depth vs Porosity ---
-    # Log PHIT
+    # Panel 1: Porosity Alignment Plot
     fig.add_trace(
         go.Scatter(
             x=log_data["PHIT"],
@@ -769,7 +944,6 @@ def _plot_autocorrelation_results(
         row=1,
         col=1,
     )
-    # Original CPORE
     fig.add_trace(
         go.Scatter(
             x=original_core["CPORE"],
@@ -784,7 +958,6 @@ def _plot_autocorrelation_results(
         row=1,
         col=1,
     )
-    # Corrected CPORE
     fig.add_trace(
         go.Scatter(
             x=corrected_core["CPORE"],
@@ -799,7 +972,7 @@ def _plot_autocorrelation_results(
         col=1,
     )
 
-    # Draw lines connecting original to corrected points
+    # Add lines connecting original to corrected points to show the shift.
     x_lines, y_lines = [], []
     for _, row in corrected_core.iterrows():
         x_lines.extend([row["CPORE"], row["CPORE"], None])
@@ -817,8 +990,7 @@ def _plot_autocorrelation_results(
         col=1,
     )
 
-    # --- Plot 2: Depth Shift Analysis ---
-    # DTW Path
+    # Panel 2: DTW Path and Cluster Visualization
     fig.add_trace(
         go.Scatter(
             x=alignment_df["original_depth"],
@@ -831,7 +1003,6 @@ def _plot_autocorrelation_results(
         col=2,
     )
 
-    # Clustered points
     fig.add_trace(
         go.Scatter(
             x=alignment_df["original_depth"],
@@ -843,7 +1014,6 @@ def _plot_autocorrelation_results(
                 colorscale="Viridis",
                 showscale=False,
                 colorbar=dict(title="Cluster ID"),
-                # Distinguish noise points (cluster == -1)
                 cmin=0,
                 cmid=alignment_df["cluster"].max() / 2
                 if alignment_df["cluster"].max() > 0
@@ -856,7 +1026,7 @@ def _plot_autocorrelation_results(
         col=2,
     )
 
-    # Add a 1:1 line for reference (no shift)
+    # Add a 1:1 line to represent no depth shift.
     lim_min = min(
         alignment_df["original_depth"].min(), alignment_df["aligned_depth"].min()
     )
@@ -874,16 +1044,13 @@ def _plot_autocorrelation_results(
         col=2,
     )
 
-    # --- Update Layout ---
     fig.update_layout(
         title_text=f"Core Depth Autocorrelation Results for Well: {well_name}",
         legend_title_text="Data",
         height=700,
         width=1200,
     )
-    # Update y-axis to be reversed (depth increasing downwards)
     fig.update_yaxes(autorange="reversed")
-    # Update axis titles
     fig.update_xaxes(title_text="Porosity (frac)", row=1, col=1)
     fig.update_yaxes(title_text="Depth", row=1, col=1)
     fig.update_xaxes(title_text="Original Core Depth", row=1, col=2)
