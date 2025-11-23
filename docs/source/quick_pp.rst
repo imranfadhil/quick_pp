@@ -52,7 +52,7 @@ Rock Type module
 Core Calibration module
 ----------------------------------
 
-.. automodule:: quick_pp.core_calibration
+.. automodule:: quick_pp.core_analysis
    :members:
    :undoc-members:
    :show-inheritance:
