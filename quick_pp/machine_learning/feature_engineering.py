@@ -62,7 +62,7 @@ def log_perm(perm):
     return np.log10(perm.clip(lower=1e-3))
 
 
-def rock_flag_gr(gr):
+def rock_flag_gr(gr, no_of_rocks=5):
     """Generate rock type flags based on the gamma-ray log.
 
     This function estimates shale volume from GR, finds optimal cutoffs using
@@ -70,12 +70,13 @@ def rock_flag_gr(gr):
 
     Args:
         gr (pd.Series): Gamma-ray log [API].
+        no_of_rocks (int, optional): The number of rock types to identify. Defaults to 5.
 
     Returns:
         np.ndarray: An array of integer rock type flags.
     """
     vsh_gr = estimate_vsh_gr(gr)
-    cutoffs = find_cutoffs(vsh_gr, 5)
+    cutoffs = find_cutoffs(vsh_gr, no_of_rocks)
     return rock_typing(vsh_gr, cut_offs=cutoffs, higher_is_better=False)
 
 

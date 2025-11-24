@@ -286,6 +286,119 @@ def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title="Winland R35
     plt.grid(True, which="minor", linestyle=":", linewidth="0.3", color="gray")
 
 
+def plot_neuden_vsh(
+    nphi,
+    rhob,
+    vshale_lines=[0, 0.25, 0.5, 0.75, 1.0],
+    shale_point=(0.45, 2.55),
+    sand_point=(-0.035, 2.65),
+    lime_point=(0.0, 2.71),
+    dolo_point=(0.02, 2.87),
+    fluid_point=(1.0, 1.0),
+    rock_flag=None,
+):
+    """
+    Generate a Neutron-Density crossplot with Vshale lines for rock typing.
+
+    This plot helps in identifying lithology and visually estimating shale volume.
+    It includes standard matrix lines for sandstone, limestone, and dolomite,
+    and overlays lines of constant shale volume.
+
+    Args:
+        nphi (pd.Series or np.ndarray): Neutron Porosity log values (v/v).
+        rhob (pd.Series or np.ndarray): Bulk Density log values (g/cc).
+        shale_point (tuple, optional): (NPHI, RHOB) coordinates of the 100% shale point.
+                                       Defaults to (0.45, 2.55).
+        sand_point (tuple, optional): (NPHI, RHOB) coordinates of the sandstone matrix.
+                                      Defaults to (-0.035, 2.65).
+        lime_point (tuple, optional): (NPHI, RHOB) coordinates of the limestone matrix.
+                                      Defaults to (0.0, 2.71).
+        dolo_point (tuple, optional): (NPHI, RHOB) coordinates of the dolomite matrix.
+                                      Defaults to (0.02, 2.87).
+        rock_flag (pd.Series or np.ndarray, optional): An array of values (e.g., GR, Vshale, or rock types)
+                                                       to color the data points. Defaults to None.
+        fluid_point (tuple, optional): (NPHI, RHOB) coordinates of the fluid point (water).
+                                       Defaults to (1.0, 1.0).
+        vshale_lines (list, optional): List of Vshale fractions (0 to 1) to plot as lines.
+                                       Defaults to [0, 0.25, 0.5, 0.75, 1.0].
+    """
+    _, ax = plt.subplots(figsize=(10, 8))
+    ax.set_title("Neutron-Density Crossplot with Vshale Lines")
+
+    # Handle plotting based on whether rock_flag is provided
+    if rock_flag is None:
+        # Plot all data points in a single color
+        ax.scatter(nphi, rhob, marker=".", alpha=0.5, label="Log Data")
+    else:
+        # Plot data points colored by unique rock flags
+        unique_flags = sorted(rock_flag.dropna().unique())
+        colors = plt.get_cmap("tab10", len(unique_flags))
+
+        for i, flag in enumerate(unique_flags):
+            mask = rock_flag == flag
+            ax.scatter(
+                nphi[mask],
+                rhob[mask],
+                color=colors(i),
+                marker=".",
+                alpha=0.7,
+                label=f"Flag: {flag}",
+            )
+        ax.legend(title=rock_flag.name if hasattr(rock_flag, "name") else "Rock Flag")
+
+    # Plot matrix lines
+    ax.plot(
+        [sand_point[0], fluid_point[0]],
+        [sand_point[1], fluid_point[1]],
+        "g-",
+        label="Sandstone",
+    )
+    ax.plot(
+        [lime_point[0], fluid_point[0]],
+        [lime_point[1], fluid_point[1]],
+        "b-",
+        label="Limestone",
+    )
+    ax.plot(
+        [dolo_point[0], fluid_point[0]],
+        [dolo_point[1], fluid_point[1]],
+        "r-",
+        label="Dolomite",
+    )
+
+    # Plot Vshale lines (from clean sand to shale point)
+    for vsh in vshale_lines:
+        nphi_line = sand_point[0] * (1 - vsh) + shale_point[0] * vsh
+        rhob_line = sand_point[1] * (1 - vsh) + shale_point[1] * vsh
+        start_point = np.array([nphi_line, rhob_line])
+        end_point = np.array(fluid_point)
+        ax.plot(
+            [start_point[0], end_point[0]],
+            [start_point[1], end_point[1]],
+            "k--",
+            alpha=0.7,
+        )
+
+        # Calculate a point slightly along the line for the text, for better positioning
+        direction_vector = end_point - start_point
+        norm_vector = direction_vector / np.linalg.norm(direction_vector)
+        # Adjust the offset_factor to move text closer or further from the matrix line
+        offset_factor = 0.03
+        text_pos = start_point + norm_vector * offset_factor
+
+        ax.text(
+            text_pos[0], text_pos[1], f"{int(vsh * 100)}%", ha="center", va="bottom"
+        )
+
+    ax.set_xlabel("Neutron Porosity (v/v)")
+    ax.set_ylabel("Bulk Density (g/cc)")
+    ax.set_xlim(-0.1, 0.6)
+    ax.set_ylim(3.0, 1.8)  # Inverted Y-axis for density
+    ax.legend()
+    ax.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
+    ax.grid(True, which="minor", linestyle=":", linewidth="0.3", color="gray")
+
+
 def plot_fzi_log_log(
     cpore,
     cperm,
@@ -351,7 +464,7 @@ def plot_fzi_log_log(
     ax.set_ylabel("Rock Quality Index (RQI)")
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+    ax.legend(bbox_to_anchor=(0.1, 1), loc="upper left")
     ax.set_aspect("equal", adjustable="box")
 
     ax.minorticks_on()
@@ -589,6 +702,50 @@ def estimate_vsh_dn(phin, phid, phin_sh=0.35, phid_sh=0.05):
         np.ndarray or float: Volume of shale.
     """
     return (phin - phid) / (phin_sh - phid_sh)
+
+
+def estimate_rock_flag_neuden(
+    nphi,
+    rhob,
+    vsh_cutoffs=[0.1, 0.25, 0.35, 0.5],
+    sand_point=(-0.035, 2.65),
+    shale_point=(0.45, 2.55),
+    fluid_point=(1.0, 1.0),
+):
+    """
+    Estimates rock type by calculating Vshale from a Neutron-Density crossplot
+    and classifying it based on provided cutoffs.
+
+    This method determines the shale volume for each data point by its geometric
+    position between a clean sand line and a 100% shale line. The calculated
+    Vshale is then used to assign a rock type.
+
+    Args:
+        nphi (pd.Series or np.ndarray): Neutron Porosity log values (v/v).
+        rhob (pd.Series or np.ndarray): Bulk Density log values (g/cc).
+        vsh_cut_offs (list): A list of Vshale cutoff values to define rock types.
+        sand_point (tuple, optional): (NPHI, RHOB) coordinates of the clean sand matrix.
+                                      Defaults to (-0.035, 2.65).
+        shale_point (tuple, optional): (NPHI, RHOB) coordinates of the 100% shale point.
+                                       Defaults to (0.45, 2.55).
+        fluid_point (tuple, optional): (NPHI, RHOB) coordinates of the fluid point.
+                                       Defaults to (1.0, 1.0).
+
+    Returns:
+        np.ndarray: An array of integer rock type flags.
+    """
+    from quick_pp.utils import length_a_b, line_intersection
+
+    # Calculate Vshale from the crossplot geometry
+    matrix_line = (sand_point, shale_point)
+    data_point_line = (fluid_point, (nphi, rhob))
+    intersection_pt = line_intersection(matrix_line, data_point_line)
+    dist_to_shale = length_a_b(intersection_pt, shale_point)
+    total_dist = length_a_b(sand_point, shale_point)
+    vsh_neuden = 1 - (dist_to_shale / total_dist)
+
+    # Classify Vshale into rock types using the provided cutoffs
+    return rock_typing(vsh_neuden, cut_offs=vsh_cutoffs, higher_is_better=False)
 
 
 def rock_typing(curve, cut_offs=[0.1, 0.2, 0.3, 0.4], higher_is_better=True):
@@ -848,3 +1005,114 @@ def cluster_fzi(cpore, cperm, n_clusters=None, max_clusters=10):
     cluster_stats = stats_df.groupby("cluster")["log_fzi"].agg(["mean", "std"])
 
     return cluster_series, cluster_stats
+
+
+def cluster_rock_types_from_logs(
+    df,
+    features=["GR", "NPHI", "RHOB"],
+    n_clusters=None,
+    max_clusters=10,
+    random_state=42,
+):
+    """
+    Clusters well log data into rock types using k-Means clustering.
+
+    This function takes a DataFrame with well log data, scales the features, and then
+    applies k-Means to identify distinct rock types. If 'WELL_NAME' is in the
+    DataFrame, scaling is performed on a per-well basis.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing the log data. Must include columns
+                           specified in `features`, and optionally 'WELL_NAME'.
+        features (list, optional): A list of feature columns to use for clustering.
+                                   Defaults to ["GR", "NPHI", "RHOB"].
+        n_clusters (int, optional): The number of rock types (clusters) to identify.
+                                   If None, the optimal number of clusters will be
+                                   determined using the Silhouette Score. Defaults to None.
+
+    Returns:
+        pd.Series: A Series containing the cluster assignment (rock type) for each data point.
+                   NaN values are preserved where input logs had NaNs.
+    """
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+
+    # Combine logs into a DataFrame
+    log_data = df.copy()[
+        features + (["WELL_NAME"] if "WELL_NAME" in df.columns else [])
+    ]
+
+    # Drop rows with any NaN values for clustering
+    cleaned_data = log_data.dropna(subset=features)
+
+    # Remove outliers using IQR for each feature
+    for feature in features:
+        Q1 = cleaned_data[feature].quantile(0.25)
+        Q3 = cleaned_data[feature].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        cleaned_data = cleaned_data[
+            (cleaned_data[feature] >= lower_bound)
+            & (cleaned_data[feature] <= upper_bound)
+        ]
+
+    if cleaned_data.empty:
+        logger.warning("No complete log data available for clustering.")
+        return pd.Series(np.nan, index=log_data.index)
+
+    # Scale the features
+    if "WELL_NAME" in cleaned_data.columns:
+        logger.info("Scaling features by WELL_NAME.")
+        # Use transform for group-wise scaling to avoid dtype issues with apply
+        scaled_features = cleaned_data.groupby("WELL_NAME")[features].transform(
+            # Handle std dev of zero by replacing it with 1 to avoid division by zero
+            lambda x: (x - x.mean()) / (x.std() if x.std() > 0 else 1)
+        )
+    else:
+        logger.info("Scaling features across all data.")
+        scaler = StandardScaler()
+        scaled_features = scaler.fit_transform(cleaned_data[features])
+    scaled_data = pd.DataFrame(
+        scaled_features, index=cleaned_data.index, columns=features
+    )
+
+    if n_clusters is None:
+        best_score = -1
+        optimal_clusters = 2
+        # Ensure we have enough samples for clustering
+        max_k = min(max_clusters, scaled_data.shape[0] - 1)
+
+        if max_k < 2:
+            logger.warning(
+                "Not enough samples to determine optimal clusters. Defaulting to 1 cluster."
+            )
+            n_clusters = 1
+        else:
+            for k in range(2, max_k + 1):
+                kmeans = KMeans(
+                    n_clusters=k,
+                    random_state=random_state,
+                    n_init="auto",
+                    init="k-means++",
+                ).fit(scaled_data)
+                score = silhouette_score(scaled_data, kmeans.labels_)
+                if score > best_score:
+                    best_score = score
+                    optimal_clusters = k
+            n_clusters = optimal_clusters
+            logger.info(
+                f"Optimal number of clusters identified: {n_clusters} with silhouette score: {best_score:.2f}"
+            )
+
+    # Apply k-Means clustering with the determined or specified number of clusters
+    kmeans = KMeans(
+        n_clusters=n_clusters, random_state=random_state, n_init="auto"
+    ).fit(scaled_data)
+
+    # Map cluster labels back to the original DataFrame index
+    cluster_assignments = pd.Series(
+        kmeans.labels_, index=cleaned_data.index, name="ROCK_TYPE_LOGS"
+    )
+
+    return cluster_assignments.reindex(log_data.index)
