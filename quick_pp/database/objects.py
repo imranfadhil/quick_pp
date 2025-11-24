@@ -13,6 +13,13 @@ from quick_pp.database.models import (
     Well as ORMWell,
     Curve as ORMCurve,
     CurveData as ORMCurveData,  # , User as ORMUser
+    FormationTop as ORMFormationTop,
+    FluidContact as ORMFluidContact,
+    PressureTest as ORMPressureTest,
+    CoreSample as ORMCoreSample,
+    CoreMeasurement as ORMCoreMeasurement,
+    RelativePermeability as ORMRelativePermeability,
+    CapillaryPressure as ORMCapillaryPressure,
 )
 
 
@@ -703,3 +710,281 @@ class Well(object):
 
     def __str__(self):
         return f"Well: {self.name} (ID: {self.well_id}, UWI: {self.uwi})"
+
+    def add_formation_tops(self, tops: List[Dict[str, Any]]):
+        """Adds or updates a list of formation tops for the well.
+
+        Args:
+            tops (List[Dict[str, Any]]): A list of dictionaries, where each dictionary
+                                         represents a top and must contain 'name' and 'depth'.
+        """
+        logger.info(
+            f"Adding/updating {len(tops)} formation tops for well '{self.name}'."
+        )
+        for top_data in tops:
+            if not all(k in top_data for k in ["name", "depth"]):
+                logger.warning(f"Skipping invalid formation top data: {top_data}")
+                continue
+
+            # Check if a top with the same name already exists for this well
+            orm_top = self.db_session.scalar(
+                select(ORMFormationTop).filter_by(
+                    well_id=self.well_id, name=top_data["name"]
+                )
+            )
+            if orm_top:
+                # Update existing top
+                orm_top.depth = top_data["depth"]
+                logger.debug(
+                    f"Updated formation top '{top_data['name']}' to depth {top_data['depth']}."
+                )
+            else:
+                # Create new top
+                orm_top = ORMFormationTop(
+                    well_id=self.well_id,
+                    name=top_data["name"],
+                    depth=top_data["depth"],
+                )
+                self.db_session.add(orm_top)
+                logger.debug(
+                    f"Added new formation top '{top_data['name']}' at depth {top_data['depth']}."
+                )
+
+    def get_formation_tops(self) -> pd.DataFrame:
+        """Retrieves all formation tops for the well as a DataFrame."""
+        tops = self._orm_well.formation_tops
+        if not tops:
+            return pd.DataFrame(columns=["name", "depth"])
+
+        data = [{"name": top.name, "depth": top.depth} for top in tops]
+        df = pd.DataFrame(data).sort_values(by="depth").reset_index(drop=True)
+        logger.debug(f"Retrieved {len(df)} formation tops for well '{self.name}'.")
+        return df
+
+    def add_fluid_contacts(self, contacts: List[Dict[str, Any]]):
+        """Adds or updates a list of fluid contacts for the well.
+
+        Args:
+            contacts (List[Dict[str, Any]]): A list of dictionaries, where each
+                                              dictionary represents a contact and must
+                                              contain 'name' and 'depth'.
+        """
+        logger.info(
+            f"Adding/updating {len(contacts)} fluid contacts for well '{self.name}'."
+        )
+        for contact_data in contacts:
+            if not all(k in contact_data for k in ["name", "depth"]):
+                logger.warning(f"Skipping invalid fluid contact data: {contact_data}")
+                continue
+
+            orm_contact = self.db_session.scalar(
+                select(ORMFluidContact).filter_by(
+                    well_id=self.well_id, name=contact_data["name"]
+                )
+            )
+            if orm_contact:
+                orm_contact.depth = contact_data["depth"]
+                logger.debug(
+                    f"Updated fluid contact '{contact_data['name']}' to depth {contact_data['depth']}."
+                )
+            else:
+                orm_contact = ORMFluidContact(well_id=self.well_id, **contact_data)
+                self.db_session.add(orm_contact)
+                logger.debug(
+                    f"Added new fluid contact '{contact_data['name']}' at depth {contact_data['depth']}."
+                )
+
+    def get_fluid_contacts(self) -> pd.DataFrame:
+        """Retrieves all fluid contacts for the well as a DataFrame."""
+        contacts = self._orm_well.fluid_contacts
+        if not contacts:
+            return pd.DataFrame(columns=["name", "depth"])
+
+        data = [{"name": c.name, "depth": c.depth} for c in contacts]
+        df = pd.DataFrame(data).sort_values(by="depth").reset_index(drop=True)
+        logger.debug(f"Retrieved {len(df)} fluid contacts for well '{self.name}'.")
+        return df
+
+    def add_pressure_tests(self, tests: List[Dict[str, Any]]):
+        """Adds or updates a list of pressure tests for the well.
+
+        Args:
+            tests (List[Dict[str, Any]]): A list of dictionaries, where each
+                                          dictionary represents a test and must contain
+                                          'depth' and 'pressure'. 'pressure_uom' is optional.
+        """
+        logger.info(
+            f"Adding/updating {len(tests)} pressure tests for well '{self.name}'."
+        )
+        for test_data in tests:
+            if not all(k in test_data for k in ["depth", "pressure"]):
+                logger.warning(f"Skipping invalid pressure test data: {test_data}")
+                continue
+
+            orm_test = self.db_session.scalar(
+                select(ORMPressureTest).filter_by(
+                    well_id=self.well_id, depth=test_data["depth"]
+                )
+            )
+            if orm_test:
+                orm_test.pressure = test_data["pressure"]
+                orm_test.pressure_uom = test_data.get(
+                    "pressure_uom", orm_test.pressure_uom
+                )
+            else:
+                orm_test = ORMPressureTest(well_id=self.well_id, **test_data)
+                self.db_session.add(orm_test)
+
+    def get_pressure_tests(self) -> pd.DataFrame:
+        """Retrieves all pressure tests for the well as a DataFrame."""
+        tests = self._orm_well.pressure_tests
+        if not tests:
+            return pd.DataFrame(columns=["depth", "pressure", "pressure_uom"])
+
+        data = [
+            {"depth": t.depth, "pressure": t.pressure, "pressure_uom": t.pressure_uom}
+            for t in tests
+        ]
+        df = pd.DataFrame(data).sort_values(by="depth").reset_index(drop=True)
+        logger.debug(f"Retrieved {len(df)} pressure tests for well '{self.name}'.")
+        return df
+
+    def add_core_sample_with_measurements(
+        self,
+        sample_name: str,
+        depth: float,
+        measurements: List[Dict[str, Any]],
+        description: Optional[str] = None,
+        remark: Optional[str] = None,
+        relperm_data: Optional[List[Dict[str, Any]]] = None,
+        pc_data: Optional[List[Dict[str, Any]]] = None,
+    ):
+        """Adds a core sample and its associated measurements to the well.
+
+        This is a comprehensive method to add a core plug and all its related
+        SCAL data (point measurements, rel-perm, and pc curves) in one go.
+
+        Args:
+            sample_name (str): The unique name or ID of the core sample.
+            depth (float): The depth from which the sample was taken.
+            description (Optional[str]): A geological description of the core sample.
+            remark (Optional[str]): A remark about data quality, depth shifts, etc.
+            measurements (List[Dict[str, Any]]): List of point measurements.
+                Each dict must contain 'property_name', 'value', and optionally 'unit'.
+                Example: [{'property_name': 'POR', 'value': 0.21, 'unit': 'v/v'}]
+            relperm_data (Optional[List[Dict[str, Any]]]): List of relative permeability points.
+                Each dict must contain 'saturation', 'kr', and 'phase'.
+            pc_data (Optional[List[Dict[str, Any]]]): List of capillary pressure points.
+                Each dict must contain 'saturation', 'pressure', and optionally 'experiment_type' and 'cycle'.
+        """
+        logger.info(
+            f"Adding core sample '{sample_name}' at depth {depth} for well '{self.name}'."
+        )
+
+        # Create or get the core sample
+        orm_sample = self.db_session.scalar(
+            select(ORMCoreSample).filter_by(
+                well_id=self.well_id, sample_name=sample_name
+            )
+        )
+        if not orm_sample:
+            orm_sample = ORMCoreSample(
+                well_id=self.well_id,
+                sample_name=sample_name,
+                depth=depth,
+                description=description,
+                remark=remark,
+            )
+            self.db_session.add(orm_sample)
+            self.db_session.flush()  # Ensure we get the sample_id
+        else:
+            orm_sample.description = description
+            orm_sample.remark = remark
+            # Clear existing child data for a full replacement
+            for m in orm_sample.measurements:
+                self.db_session.delete(m)
+            for rp in orm_sample.relperm_data:
+                self.db_session.delete(rp)
+            for pc in orm_sample.capillary_pressure_data:
+                self.db_session.delete(pc)
+            self.db_session.flush()
+
+        # Add point measurements
+        for m_data in measurements:
+            orm_measurement = ORMCoreMeasurement(
+                sample_id=orm_sample.sample_id, **m_data
+            )
+            orm_sample.measurements.append(orm_measurement)
+
+        # Add relative permeability data
+        if relperm_data:
+            for rp_data in relperm_data:
+                orm_relperm = ORMRelativePermeability(
+                    sample_id=orm_sample.sample_id, **rp_data
+                )
+                orm_sample.relperm_data.append(orm_relperm)
+
+        # Add capillary pressure data
+        if pc_data:
+            for pc_point in pc_data:
+                orm_pc = ORMCapillaryPressure(
+                    sample_id=orm_sample.sample_id, **pc_point
+                )
+                orm_sample.capillary_pressure_data.append(orm_pc)
+
+        logger.debug(
+            f"Successfully added/updated data for core sample '{sample_name}'."
+        )
+
+    def get_core_data(self) -> Dict[str, pd.DataFrame]:
+        """Retrieves all core data for the well, organized by sample."""
+        core_data = {}
+        for sample in self._orm_well.core_samples:
+            sample_data = {
+                "depth": sample.depth,
+                "description": sample.description,
+                "remark": sample.remark,
+            }
+            measurements = pd.DataFrame(
+                [
+                    {"property": m.property_name, "value": m.value, "unit": m.unit}
+                    for m in sample.measurements
+                ]
+            )
+            # Consolidate relperm data by saturation
+            relperm = pd.DataFrame(
+                [
+                    {"saturation": rp.saturation, f"kr_{rp.phase}": rp.kr}
+                    for rp in sample.relperm_data
+                ]
+            )
+            pc = pd.DataFrame(
+                [
+                    {
+                        "saturation": p.saturation,
+                        "pressure": p.pressure,
+                        "type": p.experiment_type,
+                        "cycle": p.cycle,
+                    }
+                    for p in sample.capillary_pressure_data
+                ]
+            )
+
+            if not relperm.empty:
+                relperm = (
+                    relperm.groupby("saturation")
+                    .first()
+                    .reset_index()
+                    .sort_values("saturation")
+                )
+
+            sample_data["measurements"] = measurements
+            sample_data["relperm"] = relperm
+            sample_data["pc"] = pc
+
+            core_data[sample.sample_name] = sample_data
+
+        logger.debug(
+            f"Retrieved core data for {len(core_data)} samples in well '{self.name}'."
+        )
+        return core_data

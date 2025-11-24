@@ -14,6 +14,13 @@ BEGIN;
 DROP TRIGGER IF EXISTS "trg_set_projects_timestamp" ON "projects";
 DROP TRIGGER IF EXISTS "trg_set_wells_timestamp" ON "wells";
 DROP TABLE IF EXISTS "audit_log";
+DROP TABLE IF EXISTS "capillary_pressure";
+DROP TABLE IF EXISTS "relative_permeability";
+DROP TABLE IF EXISTS "core_measurements";
+DROP TABLE IF EXISTS "core_samples";
+DROP TABLE IF EXISTS "pressure_tests";
+DROP TABLE IF EXISTS "fluid_contacts";
+DROP TABLE IF EXISTS "formation_tops";
 DROP TABLE IF EXISTS "curve_data";
 DROP TABLE IF EXISTS "curves";
 DROP TABLE IF EXISTS "wells";
@@ -105,6 +112,98 @@ CREATE TABLE "curve_data" (
 );
 
 -- -----------------------------------------------------------------------------
+-- TABLE: formation_tops
+-- Stores discrete depth markers for formation tops.
+-- -----------------------------------------------------------------------------
+CREATE TABLE "formation_tops" (
+    "top_id" SERIAL PRIMARY KEY,
+    "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
+    "name" VARCHAR(255) NOT NULL,
+    "depth" REAL NOT NULL,
+    UNIQUE("well_id", "name")
+);
+
+-- -----------------------------------------------------------------------------
+-- TABLE: fluid_contacts
+-- Stores discrete depth markers for fluid contacts (e.g., OWC, GOC).
+-- -----------------------------------------------------------------------------
+CREATE TABLE "fluid_contacts" (
+    "contact_id" SERIAL PRIMARY KEY,
+    "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
+    "name" VARCHAR(100) NOT NULL,
+    "depth" REAL NOT NULL,
+    UNIQUE("well_id", "name")
+);
+
+-- -----------------------------------------------------------------------------
+-- TABLE: pressure_tests
+-- Stores point pressure measurements.
+-- -----------------------------------------------------------------------------
+CREATE TABLE "pressure_tests" (
+    "test_id" SERIAL PRIMARY KEY,
+    "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
+    "depth" REAL NOT NULL,
+    "pressure" REAL NOT NULL,
+    "pressure_uom" VARCHAR(50) DEFAULT 'psi',
+    UNIQUE("well_id", "depth")
+);
+
+-- -----------------------------------------------------------------------------
+-- TABLE: core_samples
+-- Represents a physical core plug taken from a well.
+-- -----------------------------------------------------------------------------
+CREATE TABLE "core_samples" (
+    "sample_id" SERIAL PRIMARY KEY,
+    "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
+    "sample_name" VARCHAR(100) NOT NULL,
+    "depth" REAL NOT NULL,
+    "description" TEXT,
+    "remark" TEXT,
+    UNIQUE("well_id", "sample_name"),
+    UNIQUE("well_id", "depth")
+);
+
+-- -----------------------------------------------------------------------------
+-- TABLE: core_measurements
+-- Stores single-value measurements for a core sample (e.g., porosity).
+-- -----------------------------------------------------------------------------
+CREATE TABLE "core_measurements" (
+    "measurement_id" SERIAL PRIMARY KEY,
+    "sample_id" INTEGER NOT NULL REFERENCES "core_samples"("sample_id") ON DELETE CASCADE,
+    "property_name" VARCHAR(100) NOT NULL,
+    "value" REAL NOT NULL,
+    "unit" VARCHAR(50),
+    UNIQUE("sample_id", "property_name")
+);
+
+-- -----------------------------------------------------------------------------
+-- TABLE: relative_permeability
+-- Stores relative permeability data series for a core sample.
+-- -----------------------------------------------------------------------------
+CREATE TABLE "relative_permeability" (
+    "relperm_id" SERIAL PRIMARY KEY,
+    "sample_id" INTEGER NOT NULL REFERENCES "core_samples"("sample_id") ON DELETE CASCADE,
+    "saturation" REAL NOT NULL,
+    "kr" REAL NOT NULL,
+    "phase" VARCHAR(50) NOT NULL,
+    UNIQUE("sample_id", "phase", "saturation")
+);
+
+-- -----------------------------------------------------------------------------
+-- TABLE: capillary_pressure
+-- Stores capillary pressure data series for a core sample.
+-- -----------------------------------------------------------------------------
+CREATE TABLE "capillary_pressure" (
+    "pc_id" SERIAL PRIMARY KEY,
+    "sample_id" INTEGER NOT NULL REFERENCES "core_samples"("sample_id") ON DELETE CASCADE,
+    "saturation" REAL NOT NULL,
+    "pressure" REAL NOT NULL,
+    "experiment_type" VARCHAR(50),
+    "cycle" VARCHAR(50) NOT NULL DEFAULT 'drainage' CHECK (cycle IN ('drainage', 'imbibition')),
+    UNIQUE("sample_id", "saturation", "experiment_type", "cycle")
+);
+
+-- -----------------------------------------------------------------------------
 -- TABLE: audit_log
 -- Records all changes.
 -- !! IMPORTANT: Your application MUST write to this table manually.
@@ -127,6 +226,13 @@ CREATE TABLE "audit_log" (
 CREATE INDEX "idx_wells_project_id" ON "wells" ("project_id");
 CREATE INDEX "idx_curves_well_id" ON "curves" ("well_id");
 CREATE INDEX "idx_project_members_user_id" ON "project_members" ("user_id");
+CREATE INDEX "idx_formation_tops_well_id" ON "formation_tops" ("well_id");
+CREATE INDEX "idx_fluid_contacts_well_id" ON "fluid_contacts" ("well_id");
+CREATE INDEX "idx_pressure_tests_well_id" ON "pressure_tests" ("well_id");
+CREATE INDEX "idx_core_samples_well_id" ON "core_samples" ("well_id");
+CREATE INDEX "idx_core_measurements_sample_id" ON "core_measurements" ("sample_id");
+CREATE INDEX "idx_relative_permeability_sample_id" ON "relative_permeability" ("sample_id");
+CREATE INDEX "idx_capillary_pressure_sample_id" ON "capillary_pressure" ("sample_id");
 
 -- Indexes for the 'curve_data' table
 CREATE INDEX "idx_curve_data_curve_id" ON "curve_data" ("curve_id");

@@ -118,9 +118,83 @@ class Well(Base):
     curves: Mapped[List["Curve"]] = relationship(
         "Curve", back_populates="well", cascade="all, delete-orphan"
     )
+    formation_tops: Mapped[List["FormationTop"]] = relationship(
+        "FormationTop", back_populates="well", cascade="all, delete-orphan"
+    )
+    fluid_contacts: Mapped[List["FluidContact"]] = relationship(
+        "FluidContact", back_populates="well", cascade="all, delete-orphan"
+    )
+    pressure_tests: Mapped[List["PressureTest"]] = relationship(
+        "PressureTest", back_populates="well", cascade="all, delete-orphan"
+    )
+    core_samples: Mapped[List["CoreSample"]] = relationship(
+        "CoreSample", back_populates="well", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Well(well_id={self.well_id}, name='{self.name}', uwi='{self.uwi}')>"
+
+
+# Interval and Point Data Models
+class FormationTop(Base):
+    __tablename__ = "formation_tops"
+
+    top_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    well_id: Mapped[int] = mapped_column(
+        ForeignKey("wells.well_id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    depth: Mapped[float] = mapped_column(REAL, nullable=False)
+
+    well: Mapped["Well"] = relationship("Well", back_populates="formation_tops")
+
+    __table_args__ = (UniqueConstraint("well_id", "name", name="uq_well_id_top_name"),)
+
+    def __repr__(self):
+        return f"<FormationTop(top_id={self.top_id}, well_id={self.well_id}, name='{self.name}', depth={self.depth})>"
+
+
+class FluidContact(Base):
+    __tablename__ = "fluid_contacts"
+
+    contact_id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    well_id: Mapped[int] = mapped_column(
+        ForeignKey("wells.well_id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    depth: Mapped[float] = mapped_column(REAL, nullable=False)
+
+    well: Mapped["Well"] = relationship("Well", back_populates="fluid_contacts")
+
+    __table_args__ = (
+        UniqueConstraint("well_id", "name", name="uq_well_id_contact_name"),
+    )
+
+    def __repr__(self):
+        return f"<FluidContact(contact_id={self.contact_id}, name='{self.name}', depth={self.depth})>"
+
+
+class PressureTest(Base):
+    __tablename__ = "pressure_tests"
+
+    test_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    well_id: Mapped[int] = mapped_column(
+        ForeignKey("wells.well_id", ondelete="CASCADE"), nullable=False
+    )
+    depth: Mapped[float] = mapped_column(REAL, nullable=False)
+    pressure: Mapped[float] = mapped_column(REAL, nullable=False)
+    pressure_uom: Mapped[str] = mapped_column(String(50), default="psi")
+
+    well: Mapped["Well"] = relationship("Well", back_populates="pressure_tests")
+
+    __table_args__ = (
+        UniqueConstraint("well_id", "depth", name="uq_well_id_pressure_depth"),
+    )
+
+    def __repr__(self):
+        return f"<PressureTest(test_id={self.test_id}, depth={self.depth}, pressure={self.pressure} {self.pressure_uom})>"
 
 
 class Curve(Base):
@@ -180,6 +254,128 @@ class CurveData(Base):
         return (
             f"<CurveData(curve_id={self.curve_id}, depth={self.depth}, "
             f"num={self.value_numeric}, txt='{self.value_text}')>"
+        )
+
+
+class CoreSample(Base):
+    __tablename__ = "core_samples"
+
+    sample_id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    well_id: Mapped[int] = mapped_column(
+        ForeignKey("wells.well_id", ondelete="CASCADE"), nullable=False
+    )
+    sample_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    depth: Mapped[float] = mapped_column(REAL, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    remark: Mapped[Optional[str]] = mapped_column(Text)
+
+    well: Mapped["Well"] = relationship("Well", back_populates="core_samples")
+    measurements: Mapped[List["CoreMeasurement"]] = relationship(
+        "CoreMeasurement", back_populates="sample", cascade="all, delete-orphan"
+    )
+    relperm_data: Mapped[List["RelativePermeability"]] = relationship(
+        "RelativePermeability", back_populates="sample", cascade="all, delete-orphan"
+    )
+    capillary_pressure_data: Mapped[List["CapillaryPressure"]] = relationship(
+        "CapillaryPressure", back_populates="sample", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("well_id", "depth", name="uq_well_id_sample_depth"),
+        UniqueConstraint("well_id", "sample_name", name="uq_well_id_sample_name"),
+    )
+
+    def __repr__(self):
+        return f"<CoreSample(sample_id={self.sample_id}, name='{self.sample_name}', depth={self.depth})>"
+
+
+class CoreMeasurement(Base):
+    __tablename__ = "core_measurements"
+
+    measurement_id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    sample_id: Mapped[int] = mapped_column(
+        ForeignKey("core_samples.sample_id", ondelete="CASCADE"), nullable=False
+    )
+    property_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    value: Mapped[float] = mapped_column(REAL, nullable=False)
+    unit: Mapped[Optional[str]] = mapped_column(String(50))
+
+    sample: Mapped["CoreSample"] = relationship(
+        "CoreSample", back_populates="measurements"
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "sample_id", "property_name", name="uq_sample_id_property_name"
+        ),
+    )
+
+    def __repr__(self):
+        return f"<CoreMeasurement(property='{self.property_name}', value={self.value})>"
+
+
+class RelativePermeability(Base):
+    __tablename__ = "relative_permeability"
+
+    relperm_id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    sample_id: Mapped[int] = mapped_column(
+        ForeignKey("core_samples.sample_id", ondelete="CASCADE"), nullable=False
+    )
+    saturation: Mapped[float] = mapped_column(REAL, nullable=False)
+    kr: Mapped[float] = mapped_column(REAL, nullable=False)  # Relative Permeability
+    phase: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # e.g., 'oil', 'water', 'gas'
+
+    sample: Mapped["CoreSample"] = relationship(
+        "CoreSample", back_populates="relperm_data"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("sample_id", "phase", "saturation", name="uq_relperm_point"),
+    )
+
+    def __repr__(self):
+        return f"<RelativePermeability(sample_id={self.sample_id}, sat={self.saturation}, kr_{self.phase}={self.kr})>"
+
+
+class CapillaryPressure(Base):
+    __tablename__ = "capillary_pressure"
+
+    pc_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sample_id: Mapped[int] = mapped_column(
+        ForeignKey("core_samples.sample_id", ondelete="CASCADE"), nullable=False
+    )
+    saturation: Mapped[float] = mapped_column(REAL, nullable=False)
+    pressure: Mapped[float] = mapped_column(REAL, nullable=False)
+    experiment_type: Mapped[Optional[str]] = mapped_column(
+        String(50)
+    )  # e.g., 'micp', 'porous-plate'
+    cycle: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="drainage"
+    )  # 'drainage' or 'imbibition'
+
+    sample: Mapped["CoreSample"] = relationship(
+        "CoreSample", back_populates="capillary_pressure_data"
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "sample_id", "saturation", "experiment_type", "cycle", name="uq_pc_point"
+        ),
+        CheckConstraint(cycle.in_(["drainage", "imbibition"]), name="pc_cycle_check"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<CapillaryPressure(sample_id={self.sample_id}, "
+            f"sat={self.saturation}, pc={self.pressure})>"
         )
 
 
