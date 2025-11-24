@@ -488,7 +488,7 @@ def sw_shf_choo(perm, phit, phie, depth, fwl, ift, theta, gw, ghc, b0=0.4):
     return shf
 
 
-def autocorrelate_core_depth(df):
+def autocorrelate_core_depth(df, replace_ori=False):
     """
     Automatically shift core depths to match log depths.
 
@@ -519,6 +519,12 @@ def autocorrelate_core_depth(df):
     Args:
         df (pd.DataFrame): DataFrame containing well log and core data. Must include
                            'WELL_NAME', 'DEPTH', 'PHIT', 'CPORE', 'CPERM', and 'CORE_ID'.
+        replace_ori (bool, optional): If True, the original core data columns
+                                      (CPORE, CPERM) will be overwritten with
+                                      the corrected ones. If False, the original
+                                      columns will be preserved with an '_ORI' suffix.
+                                      Defaults to False.
+
     Returns:
         tuple[pd.DataFrame, pd.DataFrame]:
             - A DataFrame with the original data merged with the depth-corrected core data.
@@ -774,32 +780,8 @@ def autocorrelate_core_depth(df):
         )
 
         # Reconstruct the well's DataFrame with the newly corrected core depths.
-        log_only_data = data.loc[data["CORE_ID"].isna()].copy()
-        log_only_data["WELL_NAME"] = well
-
-        corrected_core_df = shifted_core_data.copy()
-        corrected_core_df.rename(columns={"DEPTH": "ORIGINAL_DEPTH"}, inplace=True)
-        corrected_core_df.rename(columns={"DEPTH_CORRECTED": "DEPTH"}, inplace=True)
-
-        corrected_core_df["REMARKS"] = corrected_core_df.apply(
-            lambda row: f"Corrected from {row['ORIGINAL_DEPTH']:.2f} (Shift: {row['DEPTH_SHIFT']:.2f})",
-            axis=1,
-        )
-
-        corrected_core_df.drop(columns=["ORIGINAL_DEPTH", "DEPTH_SHIFT"], inplace=True)
-        corrected_core_df["WELL_NAME"] = well
-
-        # 3. Combine the log-only data with the newly depth-corrected core data
-        data.sort_values("DEPTH", inplace=True)
-        corrected_core_df.sort_values("DEPTH", inplace=True)
-        core_cols_to_merge = ["DEPTH", "CPORE", "CPERM", "CORE_ID", "REMARKS"]
-        well_corrected_df = pd.merge_asof(
-            data,
-            corrected_core_df[core_cols_to_merge],
-            on="DEPTH",
-            direction="nearest",
-            tolerance=1e-2,
-            suffixes=("_ORI", ""),
+        well_corrected_df = apply_autocorrelation_correction(
+            data, shifted_core_data, replace_core_data=replace_ori
         )
 
         well_corrected_df.sort_values("DEPTH", inplace=True)
@@ -823,6 +805,113 @@ def autocorrelate_core_depth(df):
     )
 
     return return_df, final_summary_df
+
+
+def apply_autocorrelation_correction(data, shifted_core_data, replace_core_data=False):
+    """
+    Applies the depth correction to the core data and merges it back into the main DataFrame.
+
+    This function takes the original well data and the core data with corrected depths,
+    then merges them. It can either replace the original core data columns or preserve
+    them with an '_ORI' suffix.
+
+    Args:
+        data (pd.DataFrame): The original DataFrame for a single well.
+        shifted_core_data (pd.DataFrame): A DataFrame containing the core data with
+            'DEPTH_CORRECTED' and 'DEPTH_SHIFT' columns from the autocorrelation process.
+        replace_core_data (bool, optional): If True, the original core data columns
+            (CPORE, CPERM) will be overwritten. If False, they will be preserved with an
+            '_ORI' suffix. Defaults to False.
+
+    Returns:
+        pd.DataFrame: The merged DataFrame with depth-corrected core data.
+    """
+    corrected_core_df = shifted_core_data.copy()
+    corrected_core_df.rename(columns={"DEPTH": "ORIGINAL_DEPTH"}, inplace=True)
+    corrected_core_df.rename(columns={"DEPTH_CORRECTED": "DEPTH"}, inplace=True)
+
+    corrected_core_df["REMARKS"] = corrected_core_df.apply(
+        lambda row: f"Corrected from {row['ORIGINAL_DEPTH']:.2f} (Shift: {row['DEPTH_SHIFT']:.2f})",
+        axis=1,
+    )
+
+    corrected_core_df.drop(columns=["ORIGINAL_DEPTH"], inplace=True, errors="ignore")
+
+    # Prepare for merge
+    data_to_merge = data.copy()
+    if replace_core_data:
+        # Drop original core columns to be replaced by the corrected ones
+        cols_to_drop = ["CPORE", "CPERM", "CORE_ID", "REMARKS"]
+        data_to_merge.drop(columns=cols_to_drop, inplace=True, errors="ignore")
+        suffixes = ("", "")  # No suffix needed as columns are dropped
+    else:
+        # Clean up any pre-existing _ORI columns before creating new ones
+        data_to_merge = data_to_merge.drop(
+            columns=[c for c in data_to_merge.columns if "_ORI" in c]
+        )
+        suffixes = ("_ORI", "")
+
+    data_to_merge.sort_values("DEPTH", inplace=True)
+    corrected_core_df.sort_values("DEPTH", inplace=True)
+
+    core_cols_to_merge = ["DEPTH", "CPORE", "CPERM", "CORE_ID", "REMARKS"]
+    # Use only columns that exist in corrected_core_df
+    core_cols_to_merge = [
+        col for col in core_cols_to_merge if col in corrected_core_df.columns
+    ]
+
+    well_corrected_df = pd.merge_asof(
+        data_to_merge,
+        corrected_core_df[core_cols_to_merge],
+        on="DEPTH",
+        direction="nearest",
+        tolerance=1e-2,
+        suffixes=suffixes,
+    )
+
+    # After merge, drop the temporary shift column
+    well_corrected_df.drop(columns=["DEPTH_SHIFT"], inplace=True, errors="ignore")
+
+    return well_corrected_df
+
+
+def revert_autocorrelation_core_depth(df):
+    """
+    Reverts the core depth autocorrelation by restoring original depths and data.
+
+    This function undoes the changes made by `autocorrelate_core_depth`. It
+    looks for columns with the '_ORI' suffix, which are created during the
+    correction process to store the original data. It restores the original
+    depth, porosity, and permeability values and removes the columns added
+    during correction.
+
+    Args:
+        df (pd.DataFrame): A DataFrame that has been processed by
+                           `autocorrelate_core_depth`. It is expected to
+                           contain columns like 'DEPTH_CORRECTED', 'CPORE_ORI', etc.
+
+    Returns:
+        pd.DataFrame: A DataFrame with the core data reverted to its original
+                      state before depth correction.
+    """
+    df_reverted = df.copy()
+
+    # Identify columns that were created during the original merge
+    ori_cols = [col for col in df_reverted.columns if col.endswith("_ORI")]
+
+    # Restore original values from the '_ORI' columns
+    for col in ori_cols:
+        original_col_name = col.replace("_ORI", "")
+        # Use np.where to only fill in values where the original existed
+        df_reverted[original_col_name] = np.where(
+            df_reverted[col].notna(), df_reverted[col], df_reverted[original_col_name]
+        )
+
+    # Columns to drop: the backup '_ORI' columns and any correction artifacts
+    cols_to_drop = ori_cols + ["REMARKS", "DEPTH_SHIFT", "cluster"]
+    df_reverted.drop(columns=cols_to_drop, inplace=True, errors="ignore")
+
+    return df_reverted
 
 
 def _plot_correction_xplot(df):
