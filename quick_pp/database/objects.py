@@ -208,6 +208,58 @@ class Project(object):
                     f"Well '{well_name}' not found in project '{self.name}'. Skipping update."
                 )
 
+    def update_ancillary_data(self, data: Dict[str, Dict[str, List[Dict[str, Any]]]]):
+        """Updates ancillary data for multiple wells in the project.
+
+        This method iterates through a dictionary where each key is a well name.
+        The value for each well is another dictionary containing the ancillary data
+        to be updated, keyed by data type (e.g., 'formation_tops').
+
+        Args:
+            data (Dict[str, Dict[str, List[Dict[str, Any]]]]):
+                A dictionary where keys are well names. The values are dictionaries
+                where keys are the type of ancillary data ('formation_tops',
+                'fluid_contacts', 'pressure_tests', 'core_data') and values are
+                the data in the format expected by the corresponding 'add_*'
+                methods in the Well class.
+
+        Example:
+            project.update_ancillary_data({
+                "Well-A": {
+                    "formation_tops": [{"name": "Top-1", "depth": 1000}],
+                    "pressure_tests": [{"depth": 1050, "pressure": 2500}]
+                },
+                "Well-B": {
+                    "fluid_contacts": [{"name": "GOC", "depth": 2100}]
+                }
+            })
+        """
+        logger.info(f"Updating ancillary data for {len(data)} wells.")
+        for well_name, ancillary_data in data.items():
+            logger.debug(f"Processing ancillary data for well: {well_name}")
+            try:
+                well_obj = self.get_well(well_name)
+            except ValueError:
+                logger.warning(
+                    f"Well '{well_name}' not found in project '{self.name}'. Skipping ancillary data update."
+                )
+                continue
+
+            if "formation_tops" in ancillary_data:
+                well_obj.add_formation_tops(ancillary_data["formation_tops"])
+            if "fluid_contacts" in ancillary_data:
+                well_obj.add_fluid_contacts(ancillary_data["fluid_contacts"])
+            if "pressure_tests" in ancillary_data:
+                well_obj.add_pressure_tests(ancillary_data["pressure_tests"])
+            if "core_data" in ancillary_data:
+                for core_sample_data in ancillary_data["core_data"]:
+                    well_obj.add_core_sample_with_measurements(**core_sample_data)
+
+            # Persist the changes for the well
+            well_obj.save()
+
+        logger.info("Ancillary data update process completed.")
+
     def get_all_data(self) -> pd.DataFrame:
         """Retrieves all data from all wells in the project into a single DataFrame.
 
@@ -257,6 +309,30 @@ class Project(object):
         if orm_well:
             well_obj = Well(self.db_session, well_id=orm_well.well_id)
             return well_obj.get_data()
+        raise ValueError(f"Well '{well_name}' not found in project '{self.name}'.")
+
+    def get_well_ancillary_data(self, well_name: str) -> Dict[str, Any]:
+        """Retrieves all ancillary (non-curve) data for a specific well.
+
+        Args:
+            well_name (str): The name of the well to retrieve ancillary data for.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing ancillary data like formation
+                            tops, core data, etc.
+
+        Raises:
+            ValueError: If the well is not found in the project.
+        """
+        logger.debug(
+            f"Retrieving ancillary data for well: {well_name} in project '{self.name}'"
+        )
+        orm_well = self.db_session.scalar(
+            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
+        )
+        if orm_well:
+            well_obj = Well(self.db_session, well_id=orm_well.well_id)
+            return well_obj.get_ancillary_data()
         raise ValueError(f"Well '{well_name}' not found in project '{self.name}'.")
 
     def get_well(self, well_name: str) -> "Well":
@@ -988,3 +1064,23 @@ class Well(object):
             f"Retrieved core data for {len(core_data)} samples in well '{self.name}'."
         )
         return core_data
+
+    def get_ancillary_data(self) -> Dict[str, Any]:
+        """Retrieves all ancillary (non-curve) data for the well.
+
+        This includes formation tops, fluid contacts, pressure tests, and core data,
+        returned in a structured dictionary.
+
+        Returns:
+            Dict[str, Any]: A dictionary where keys are the data type (e.g.,
+                            'formation_tops', 'core_data') and values are the
+                            corresponding data, typically as pandas DataFrames or dicts.
+        """
+        logger.info(f"Retrieving all ancillary data for well '{self.name}'.")
+        ancillary_data = {
+            "formation_tops": self.get_formation_tops(),
+            "fluid_contacts": self.get_fluid_contacts(),
+            "pressure_tests": self.get_pressure_tests(),
+            "core_data": self.get_core_data(),
+        }
+        return ancillary_data
