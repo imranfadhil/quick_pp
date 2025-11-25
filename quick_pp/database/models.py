@@ -130,6 +130,9 @@ class Well(Base):
     core_samples: Mapped[List["CoreSample"]] = relationship(
         "CoreSample", back_populates="well", cascade="all, delete-orphan"
     )
+    survey_points: Mapped[List["WellSurvey"]] = relationship(
+        "WellSurvey", back_populates="well", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Well(well_id={self.well_id}, name='{self.name}', uwi='{self.uwi}')>"
@@ -398,3 +401,24 @@ class AuditLog(Base):
 
     def __repr__(self):
         return f"<AuditLog(log_id={self.log_id}, table='{self.table_name}', action='{self.action}')>"
+
+
+class WellSurvey(Base):
+    __tablename__ = "well_surveys"
+
+    survey_id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    well_id: Mapped[int] = mapped_column(
+        ForeignKey("wells.well_id", ondelete="CASCADE"), nullable=False
+    )
+    md: Mapped[float] = mapped_column(REAL, nullable=False)  # Measured Depth
+    inc: Mapped[float] = mapped_column(REAL, nullable=False)  # Inclination
+    azim: Mapped[float] = mapped_column(REAL, nullable=False)  # Azimuth
+
+    well: Mapped["Well"] = relationship("Well", back_populates="survey_points")
+
+    __table_args__ = (UniqueConstraint("well_id", "md", name="uq_well_id_survey_md"),)
+
+    def __repr__(self):
+        return f"<WellSurvey(well_id={self.well_id}, md={self.md}, inc={self.inc}, azim={self.azim})>"

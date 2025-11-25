@@ -12,6 +12,7 @@ BEGIN;
 -- -----------------------------------------------------------------------------
 DROP TABLE IF EXISTS "audit_log";
 DROP TABLE IF EXISTS "curve_data";
+DROP TABLE IF EXISTS "well_surveys";
 DROP TABLE IF EXISTS "capillary_pressure";
 DROP TABLE IF EXISTS "relative_permeability";
 DROP TABLE IF EXISTS "core_measurements";
@@ -145,6 +146,19 @@ CREATE TABLE "pressure_tests" (
 );
 
 -- -----------------------------------------------------------------------------
+-- TABLE: well_surveys
+-- Stores directional survey points (MD, Inc, Azim).
+-- -----------------------------------------------------------------------------
+CREATE TABLE "well_surveys" (
+    "survey_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+    "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
+    "md" REAL NOT NULL, -- Measured Depth
+    "inc" REAL NOT NULL, -- Inclination
+    "azim" REAL NOT NULL, -- Azimuth
+    UNIQUE("well_id", "md")
+);
+
+-- -----------------------------------------------------------------------------
 -- TABLE: core_samples
 -- Represents a physical core plug taken from a well.
 -- -----------------------------------------------------------------------------
@@ -225,6 +239,7 @@ CREATE INDEX "idx_project_members_user_id" ON "project_members" ("user_id");
 CREATE INDEX "idx_formation_tops_well_id" ON "formation_tops" ("well_id");
 CREATE INDEX "idx_fluid_contacts_well_id" ON "fluid_contacts" ("well_id");
 CREATE INDEX "idx_pressure_tests_well_id" ON "pressure_tests" ("well_id");
+CREATE INDEX "idx_well_surveys_well_id" ON "well_surveys" ("well_id");
 CREATE INDEX "idx_core_samples_well_id" ON "core_samples" ("well_id");
 CREATE INDEX "idx_core_measurements_sample_id" ON "core_measurements" ("sample_id");
 CREATE INDEX "idx_relative_permeability_sample_id" ON "relative_permeability" ("sample_id");

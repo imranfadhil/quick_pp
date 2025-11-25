@@ -19,6 +19,7 @@ from quick_pp.database.models import (
     CoreSample as ORMCoreSample,
     CoreMeasurement as ORMCoreMeasurement,
     RelativePermeability as ORMRelativePermeability,
+    WellSurvey as ORMWellSurvey,
     CapillaryPressure as ORMCapillaryPressure,
 )
 
@@ -251,6 +252,8 @@ class Project(object):
                 well_obj.add_fluid_contacts(ancillary_data["fluid_contacts"])
             if "pressure_tests" in ancillary_data:
                 well_obj.add_pressure_tests(ancillary_data["pressure_tests"])
+            if "well_surveys" in ancillary_data:
+                well_obj.add_well_surveys(ancillary_data["well_surveys"])
             if "core_data" in ancillary_data:
                 for core_sample_data in ancillary_data["core_data"]:
                     well_obj.add_core_sample_with_measurements(**core_sample_data)
@@ -925,6 +928,45 @@ class Well(object):
         logger.debug(f"Retrieved {len(df)} pressure tests for well '{self.name}'.")
         return df
 
+    def add_well_surveys(self, surveys: List[Dict[str, Any]]):
+        """Adds or updates a list of well survey points for the well.
+
+        Args:
+            surveys (List[Dict[str, Any]]): A list of dictionaries, where each
+                                            dictionary represents a survey point and must contain
+                                            'md', 'inc', and 'azim'.
+        """
+        logger.info(
+            f"Adding/updating {len(surveys)} well survey points for well '{self.name}'."
+        )
+        for survey_data in surveys:
+            if not all(k in survey_data for k in ["md", "inc", "azim"]):
+                logger.warning(f"Skipping invalid well survey data: {survey_data}")
+                continue
+
+            orm_survey = self.db_session.scalar(
+                select(ORMWellSurvey).filter_by(
+                    well_id=self.well_id, md=survey_data["md"]
+                )
+            )
+            if orm_survey:
+                orm_survey.inc = survey_data["inc"]
+                orm_survey.azim = survey_data["azim"]
+            else:
+                orm_survey = ORMWellSurvey(well_id=self.well_id, **survey_data)
+                self.db_session.add(orm_survey)
+
+    def get_well_surveys(self) -> pd.DataFrame:
+        """Retrieves all well survey points for the well as a DataFrame."""
+        surveys = self._orm_well.survey_points
+        if not surveys:
+            return pd.DataFrame(columns=["md", "inc", "azim"])
+
+        data = [{"md": s.md, "inc": s.inc, "azim": s.azim} for s in surveys]
+        df = pd.DataFrame(data).sort_values(by="md").reset_index(drop=True)
+        logger.debug(f"Retrieved {len(df)} well survey points for well '{self.name}'.")
+        return df
+
     def add_core_sample_with_measurements(
         self,
         sample_name: str,
@@ -1012,6 +1054,146 @@ class Well(object):
             f"Successfully added/updated data for core sample '{sample_name}'."
         )
 
+    @staticmethod
+    def transform_wide_core_df_to_long(
+        df: pd.DataFrame,
+        id_cols: List[str],
+        property_cols: List[str],
+        unit_map: Dict[str, str],
+        sample_name_col: str = "SAMPLE_NAME",
+    ) -> pd.DataFrame:
+        """Transforms a wide-format core data DataFrame to a long format.
+
+        This is a static helper method to unpivot a DataFrame where each row is a
+        unique core sample and measurements (like porosity and permeability) are in
+        separate columns. The output is a long-format DataFrame compatible with
+        `prepare_core_data_from_df`.
+
+        Example of a wide DataFrame:
+           SAMPLE_NAME   DEPTH  CORE_POROSITY  CORE_PERMEABILITY
+        0      Plug-1A  2500.5           15.5              120.3
+        1      Plug-1B  2501.0            5.2                0.5
+
+        Args:
+            df (pd.DataFrame): The wide-format DataFrame.
+            id_cols (List[str]): A list of column names to keep as identifier
+                variables (e.g., ['SAMPLE_NAME', 'DEPTH', 'DESCRIPTION']).
+            property_cols (List[str]): A list of column names to unpivot. These
+                are the columns containing the measurement values.
+            unit_map (Dict[str, str]): A dictionary mapping the property column
+                names to their corresponding units.
+                Example: {'CORE_POROSITY': '%', 'CORE_PERMEABILITY': 'mD'}
+            sample_name_col (str): The name of the column in `id_cols` that
+                uniquely identifies the core sample. Defaults to 'SAMPLE_NAME'.
+
+        Returns:
+            pd.DataFrame: A long-format DataFrame with 'PROPERTY_NAME', 'VALUE',
+                          and 'UNIT' columns.
+        """
+        if not all(col in df.columns for col in id_cols + property_cols):
+            raise ValueError("One or more specified columns not found in DataFrame.")
+
+        if sample_name_col not in id_cols:
+            raise ValueError(
+                f"The sample_name_col '{sample_name_col}' must be in id_cols."
+            )
+
+        # Rename sample identifier column to the expected 'SAMPLE_NAME' if different
+        if sample_name_col != "SAMPLE_NAME":
+            df = df.rename(columns={sample_name_col: "SAMPLE_NAME"})
+            id_cols[id_cols.index(sample_name_col)] = "SAMPLE_NAME"
+
+        long_df = pd.melt(
+            df,
+            id_vars=id_cols,
+            value_vars=property_cols,
+            var_name="PROPERTY_NAME",
+            value_name="VALUE",
+        )
+
+        long_df["UNIT"] = long_df["PROPERTY_NAME"].map(unit_map)
+        return long_df
+
+    @staticmethod
+    def prepare_core_data_from_df(
+        df: pd.DataFrame,
+    ) -> List[Dict[str, Any]]:
+        """Transforms a core data DataFrame into the structured format for loading.
+
+        This is a static helper method to convert a flat DataFrame containing various
+        types of core data (measurements, relperm, pc) into the nested list of
+        dictionaries required by `add_core_sample_with_measurements` or
+        `Project.update_ancillary_data`.
+
+        The input DataFrame should be structured with columns like:
+        - 'SAMPLE_NAME': Unique identifier for the core sample.
+        - 'DEPTH': Depth of the sample.
+        - 'DESCRIPTION', 'REMARK': Optional sample-level information.
+        - 'PROPERTY_NAME', 'VALUE', 'UNIT': For point core measurements (e.g., POR, PERM).
+        - 'RP_SAT', 'RP_KR', 'RP_PHASE': For relative permeability data.
+        - 'PC_SAT', 'PC_PRESSURE', 'PC_TYPE', 'PC_CYCLE': For capillary pressure data.
+
+        Rows with the same 'SAMPLE_NAME' will be grouped together.
+
+        Args:
+            df (pd.DataFrame): A DataFrame containing the core data.
+
+        Returns:
+            List[Dict[str, Any]]: A list of dictionaries, where each dictionary
+                                  represents a core sample and its associated data,
+                                  ready to be used with `add_core_sample_with_measurements`.
+        """
+        core_data_list = []
+        required_cols = ["SAMPLE_NAME", "DEPTH"]
+        if not all(col in df.columns for col in required_cols):
+            raise ValueError(
+                f"Input DataFrame must contain required columns: {required_cols}"
+            )
+
+        for sample_name, group in df.groupby("SAMPLE_NAME"):
+            first_row = group.iloc[0]
+            sample_dict = {
+                "sample_name": sample_name,
+                "depth": first_row["DEPTH"],
+                "description": first_row.get("DESCRIPTION"),
+                "remark": first_row.get("REMARK"),
+            }
+
+            # Process point measurements
+            measurements_df = group[
+                group["PROPERTY_NAME"].notna() & group["VALUE"].notna()
+            ][["PROPERTY_NAME", "VALUE", "UNIT"]].drop_duplicates()
+            sample_dict["measurements"] = [
+                {"property_name": r.PROPERTY_NAME, "value": r.VALUE, "unit": r.UNIT}
+                for r in measurements_df.itertuples()
+            ]
+
+            # Process relative permeability data
+            relperm_df = group[group["RP_SAT"].notna() & group["RP_KR"].notna()][
+                ["RP_SAT", "RP_KR", "RP_PHASE"]
+            ].drop_duplicates()
+            sample_dict["relperm_data"] = [
+                {"saturation": r.RP_SAT, "kr": r.RP_KR, "phase": r.RP_PHASE}
+                for r in relperm_df.itertuples()
+            ]
+
+            # Process capillary pressure data
+            pc_df = group[group["PC_SAT"].notna() & group["PC_PRESSURE"].notna()][
+                ["PC_SAT", "PC_PRESSURE", "PC_TYPE", "PC_CYCLE"]
+            ].drop_duplicates()
+            sample_dict["pc_data"] = [
+                {
+                    "saturation": r.PC_SAT,
+                    "pressure": r.PC_PRESSURE,
+                    "experiment_type": r.PC_TYPE,
+                    "cycle": r.PC_CYCLE,
+                }
+                for r in pc_df.itertuples()
+            ]
+
+            core_data_list.append(sample_dict)
+        return core_data_list
+
     def get_core_data(self) -> Dict[str, pd.DataFrame]:
         """Retrieves all core data for the well, organized by sample."""
         core_data = {}
@@ -1081,6 +1263,7 @@ class Well(object):
             "formation_tops": self.get_formation_tops(),
             "fluid_contacts": self.get_fluid_contacts(),
             "pressure_tests": self.get_pressure_tests(),
+            "well_surveys": self.get_well_surveys(),
             "core_data": self.get_core_data(),
         }
         return ancillary_data
