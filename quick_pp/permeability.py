@@ -2,7 +2,8 @@ from quick_pp import logger
 
 
 def choo_permeability(vclay, vsilt, phit, m=2, B=None, A=20e7, C=3):
-    """Estimate permeability using Choo's equation.
+    """Estimate permeability using Choo's equation. Suitable for shaly sand
+    formations.
 
     Args:
         vclay (np.ndarray or float): Volume of clay in fraction.
@@ -27,7 +28,8 @@ def choo_permeability(vclay, vsilt, phit, m=2, B=None, A=20e7, C=3):
 
 
 def kozeny_carman_permeability(phit, S=0.01):
-    """Estimate permeability using Kozeny-Carman's equation.
+    """Estimate permeability using Kozeny-Carman's equation. Generally suitable
+    for clean and unconsolidated sands.
 
     Args:
         phit (np.ndarray or float): Total porosity in fraction.
@@ -45,8 +47,9 @@ def kozeny_carman_permeability(phit, S=0.01):
 
 
 def timur_permeability(phit, Swirr):
-    """Estimate permeability based on Timur (1968) emperical equation established on 155 sandstone samples from
-    3 different oil fields in North America.
+    """Estimate permeability based on Timur (1968) empirical equation
+    established on 155 sandstone samples from 3 different oil fields in North
+    America. Best suited for sandstones.
 
     Args:
         phit (np.ndarray or float): Porosity in fraction.
@@ -64,7 +67,8 @@ def timur_permeability(phit, Swirr):
 
 
 def coates_permeability(phie, Swirr, a=1):
-    """Estimate permeability based on Coates (1974)
+    """Estimate permeability based on Coates (1974). Suitable for
+    sandstones, including shaly formations.
 
     Args:
         phie (np.ndarray or float): Effective porosity in fraction.
@@ -83,7 +87,8 @@ def coates_permeability(phie, Swirr, a=1):
 
 
 def tixier_permeability(phit, Swirr):
-    """Estimate permeability based on Tixier (1949)
+    """Estimate permeability based on Tixier (1949). Suitable for clean formations
+    at irreducible water saturation.
 
     Args:
         phit (np.ndarray or float): Porosity in fraction.
@@ -101,7 +106,8 @@ def tixier_permeability(phit, Swirr):
 
 
 def morris_biggs_permeability(phit, C, Swirr):
-    """Estimate permeability based on Morris and Biggs (1967)
+    """Estimate permeability based on Morris and Biggs (1967). Suitable for sandstone
+    reservoirs.
 
     Args:
         phit (np.ndarray or float): Total porosity in fraction.
@@ -121,7 +127,8 @@ def morris_biggs_permeability(phit, C, Swirr):
 
 
 def morris_biggs_modified_permeability(phit, phie, Vbwi):
-    """Estimate permeability based on Morris and Biggs (1967)
+    """Estimate permeability based on Morris and Biggs (1967). Suitable for
+    sandstone reservoirs.
 
     Args:
         phit (np.ndarray or float): Total porosity in fraction.

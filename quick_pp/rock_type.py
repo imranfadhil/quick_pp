@@ -1045,18 +1045,6 @@ def cluster_rock_types_from_logs(
     # Drop rows with any NaN values for clustering
     cleaned_data = log_data.dropna(subset=features)
 
-    # Remove outliers using IQR for each feature
-    for feature in features:
-        Q1 = cleaned_data[feature].quantile(0.25)
-        Q3 = cleaned_data[feature].quantile(0.75)
-        IQR = Q3 - Q1
-        lower_bound = Q1 - 1.5 * IQR
-        upper_bound = Q3 + 1.5 * IQR
-        cleaned_data = cleaned_data[
-            (cleaned_data[feature] >= lower_bound)
-            & (cleaned_data[feature] <= upper_bound)
-        ]
-
     if cleaned_data.empty:
         logger.warning("No complete log data available for clustering.")
         return pd.Series(np.nan, index=log_data.index)
