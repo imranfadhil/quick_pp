@@ -1,27 +1,16 @@
 <script lang="ts">
-	import BadgeCheckIcon from "@lucide/svelte/icons/badge-check";
-	import BellIcon from "@lucide/svelte/icons/bell";
-	import ChevronsUpDownIcon from "@lucide/svelte/icons/chevrons-up-down";
-	import CreditCardIcon from "@lucide/svelte/icons/credit-card";
-	import LogOutIcon from "@lucide/svelte/icons/log-out";
-	import SparklesIcon from "@lucide/svelte/icons/sparkles";
-
+	import CreditCardIcon from "@tabler/icons-svelte/icons/credit-card";
+	import DotsVerticalIcon from "@tabler/icons-svelte/icons/dots-vertical";
+	import LogoutIcon from "@tabler/icons-svelte/icons/logout";
+	import NotificationIcon from "@tabler/icons-svelte/icons/notification";
+	import UserCircleIcon from "@tabler/icons-svelte/icons/user-circle";
 	import * as Avatar from "$lib/components/ui/avatar/index.js";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
-	import { useSidebar } from "$lib/components/ui/sidebar/index.js";
 
-	let {
-		user,
-	}: {
-		user: {
-			name: string;
-			email: string;
-			avatar: string;
-		};
-	} = $props();
+	let { user }: { user: { name: string; email: string; avatar: string } } = $props();
 
-	const sidebar = useSidebar();
+	const sidebar = Sidebar.useSidebar();
 </script>
 
 <Sidebar.Menu>
@@ -34,15 +23,17 @@
 						size="lg"
 						class="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
 					>
-						<Avatar.Root class="size-8 rounded-lg">
+						<Avatar.Root class="size-8 rounded-lg grayscale">
 							<Avatar.Image src={user.avatar} alt={user.name} />
 							<Avatar.Fallback class="rounded-lg">CN</Avatar.Fallback>
 						</Avatar.Root>
 						<div class="grid flex-1 text-start text-sm leading-tight">
 							<span class="truncate font-medium">{user.name}</span>
-							<span class="truncate text-xs">{user.email}</span>
+							<span class="text-muted-foreground truncate text-xs">
+								{user.email}
+							</span>
 						</div>
-						<ChevronsUpDownIcon class="ms-auto size-4" />
+						<DotsVerticalIcon class="ms-auto size-4" />
 					</Sidebar.MenuButton>
 				{/snippet}
 			</DropdownMenu.Trigger>
@@ -60,21 +51,16 @@
 						</Avatar.Root>
 						<div class="grid flex-1 text-start text-sm leading-tight">
 							<span class="truncate font-medium">{user.name}</span>
-							<span class="truncate text-xs">{user.email}</span>
+							<span class="text-muted-foreground truncate text-xs">
+								{user.email}
+							</span>
 						</div>
 					</div>
 				</DropdownMenu.Label>
 				<DropdownMenu.Separator />
 				<DropdownMenu.Group>
 					<DropdownMenu.Item>
-						<SparklesIcon />
-						Upgrade to Pro
-					</DropdownMenu.Item>
-				</DropdownMenu.Group>
-				<DropdownMenu.Separator />
-				<DropdownMenu.Group>
-					<DropdownMenu.Item>
-						<BadgeCheckIcon />
+						<UserCircleIcon />
 						Account
 					</DropdownMenu.Item>
 					<DropdownMenu.Item>
@@ -82,13 +68,13 @@
 						Billing
 					</DropdownMenu.Item>
 					<DropdownMenu.Item>
-						<BellIcon />
+						<NotificationIcon />
 						Notifications
 					</DropdownMenu.Item>
 				</DropdownMenu.Group>
 				<DropdownMenu.Separator />
 				<DropdownMenu.Item>
-					<LogOutIcon />
+					<LogoutIcon />
 					Log out
 				</DropdownMenu.Item>
 			</DropdownMenu.Content>

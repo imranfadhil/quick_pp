@@ -1,102 +1,102 @@
-<script lang="ts" module>
-	import BookOpenIcon from "@lucide/svelte/icons/book-open";
-	import BotIcon from "@lucide/svelte/icons/bot";
-	import ChartPieIcon from "@lucide/svelte/icons/chart-pie";
-	import FrameIcon from "@lucide/svelte/icons/frame";
-	import LifeBuoyIcon from "@lucide/svelte/icons/life-buoy";
-	import MapIcon from "@lucide/svelte/icons/map";
-	import SendIcon from "@lucide/svelte/icons/send";
-	import Settings2Icon from "@lucide/svelte/icons/settings-2";
-	import SquareTerminalIcon from "@lucide/svelte/icons/square-terminal";
+<script lang="ts">
+	import CameraIcon from "@tabler/icons-svelte/icons/camera";
+	import ChartBarIcon from "@tabler/icons-svelte/icons/chart-bar";
+	import DashboardIcon from "@tabler/icons-svelte/icons/dashboard";
+	import DatabaseIcon from "@tabler/icons-svelte/icons/database";
+	import FileAiIcon from "@tabler/icons-svelte/icons/file-ai";
+	import FileDescriptionIcon from "@tabler/icons-svelte/icons/file-description";
+	import FileWordIcon from "@tabler/icons-svelte/icons/file-word";
+	import FolderIcon from "@tabler/icons-svelte/icons/folder";
+	import HelpIcon from "@tabler/icons-svelte/icons/help";
+	import InnerShadowTopIcon from "@tabler/icons-svelte/icons/inner-shadow-top";
+	import ListDetailsIcon from "@tabler/icons-svelte/icons/list-details";
+	import ReportIcon from "@tabler/icons-svelte/icons/report";
+	import SearchIcon from "@tabler/icons-svelte/icons/search";
+	import SettingsIcon from "@tabler/icons-svelte/icons/settings";
+	import UsersIcon from "@tabler/icons-svelte/icons/users";
+	import NavDocuments from "./nav-documents.svelte";
+	import NavMain from "./nav-main.svelte";
+	import NavSecondary from "./nav-secondary.svelte";
+	import NavUser from "./nav-user.svelte";
+	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
+	import type { ComponentProps } from "svelte";
 
 	const data = {
 		user: {
-			name: "shadcn",
+			name: "quick-pp",
 			email: "m@example.com",
 			avatar: "/avatars/shadcn.jpg",
 		},
 		navMain: [
 			{
-				title: "Playground",
+				title: "Data QC",
 				url: "#",
-				icon: SquareTerminalIcon,
+				icon: DashboardIcon,
+			},
+			{
+				title: "Lithology & Porosity",
+				url: "#",
+				icon: ListDetailsIcon,
+			},
+			{
+				title: "Permeability & Rock Type",
+				url: "#",
+				icon: ChartBarIcon,
+			},
+			{
+				title: "Water Saturation",
+				url: "#",
+				icon: FolderIcon,
+			},
+			{
+				title: "Reservoir Summary",
+				url: "#",
+				icon: UsersIcon,
+			},
+		],
+		navClouds: [
+			{
+				title: "Capture",
+				icon: CameraIcon,
 				isActive: true,
+				url: "#",
 				items: [
 					{
-						title: "History",
+						title: "Active Proposals",
 						url: "#",
 					},
 					{
-						title: "Starred",
-						url: "#",
-					},
-					{
-						title: "Settings",
+						title: "Archived",
 						url: "#",
 					},
 				],
 			},
 			{
-				title: "Models",
+				title: "Proposal",
+				icon: FileDescriptionIcon,
 				url: "#",
-				icon: BotIcon,
 				items: [
 					{
-						title: "Genesis",
+						title: "Active Proposals",
 						url: "#",
 					},
 					{
-						title: "Explorer",
-						url: "#",
-					},
-					{
-						title: "Quantum",
+						title: "Archived",
 						url: "#",
 					},
 				],
 			},
 			{
-				title: "Documentation",
+				title: "Prompts",
+				icon: FileAiIcon,
 				url: "#",
-				icon: BookOpenIcon,
 				items: [
 					{
-						title: "Introduction",
+						title: "Active Proposals",
 						url: "#",
 					},
 					{
-						title: "Get Started",
-						url: "#",
-					},
-					{
-						title: "Tutorials",
-						url: "#",
-					},
-					{
-						title: "Changelog",
-						url: "#",
-					},
-				],
-			},
-			{
-				title: "Settings",
-				url: "#",
-				icon: Settings2Icon,
-				items: [
-					{
-						title: "General",
-						url: "#",
-					},
-					{
-						title: "Team",
-						url: "#",
-					},
-					{
-						title: "Billing",
-						url: "#",
-					},
-					{
-						title: "Limits",
+						title: "Archived",
 						url: "#",
 					},
 				],
@@ -104,64 +104,52 @@
 		],
 		navSecondary: [
 			{
-				title: "Support",
+				title: "Settings",
 				url: "#",
-				icon: LifeBuoyIcon,
+				icon: SettingsIcon,
 			},
 			{
-				title: "Feedback",
+				title: "Get Help",
 				url: "#",
-				icon: SendIcon,
+				icon: HelpIcon,
+			},
+			{
+				title: "Search",
+				url: "#",
+				icon: SearchIcon,
 			},
 		],
-		projects: [
+		documents: [
 			{
-				name: "Design Engineering",
+				name: "Data Library",
 				url: "#",
-				icon: FrameIcon,
+				icon: DatabaseIcon,
 			},
 			{
-				name: "Sales & Marketing",
+				name: "Reports",
 				url: "#",
-				icon: ChartPieIcon,
+				icon: ReportIcon,
 			},
 			{
-				name: "Travel",
+				name: "Word Assistant",
 				url: "#",
-				icon: MapIcon,
+				icon: FileWordIcon,
 			},
 		],
 	};
+
+	let { ...restProps }: ComponentProps<typeof Sidebar.Root> = $props();
 </script>
 
-<script lang="ts">
-	import NavMain from "./nav-main.svelte";
-	import NavProjects from "./nav-projects.svelte";
-	import NavSecondary from "./nav-secondary.svelte";
-	import NavUser from "./nav-user.svelte";
-	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
-	import CommandIcon from "@lucide/svelte/icons/command";
-	import type { ComponentProps } from "svelte";
-
-	let { ref = $bindable(null), ...restProps }: ComponentProps<typeof Sidebar.Root> = $props();
-</script>
-
-<Sidebar.Root bind:ref variant="inset" {...restProps}>
+<Sidebar.Root collapsible="offcanvas" {...restProps}>
 	<Sidebar.Header>
 		<Sidebar.Menu>
 			<Sidebar.MenuItem>
-				<Sidebar.MenuButton size="lg">
+				<Sidebar.MenuButton class="data-[slot=sidebar-menu-button]:!p-1.5">
 					{#snippet child({ props })}
 						<a href="##" {...props}>
-							<div
-								class="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg"
-							>
-								<CommandIcon class="size-4" />
-							</div>
-							<div class="grid flex-1 text-start text-sm leading-tight">
-								<span class="truncate font-medium">Acme Inc</span>
-								<span class="truncate text-xs">Enterprise</span>
-							</div>
+							<InnerShadowTopIcon class="!size-5" />
+							<span class="text-base font-semibold">quick-pp</span>
 						</a>
 					{/snippet}
 				</Sidebar.MenuButton>
@@ -170,7 +158,7 @@
 	</Sidebar.Header>
 	<Sidebar.Content>
 		<NavMain items={data.navMain} />
-		<NavProjects projects={data.projects} />
+		<NavDocuments items={data.documents} />
 		<NavSecondary items={data.navSecondary} class="mt-auto" />
 	</Sidebar.Content>
 	<Sidebar.Footer>
