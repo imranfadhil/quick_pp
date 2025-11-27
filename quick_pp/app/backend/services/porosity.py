@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from quick_pp.api.schemas.porosity import InputData
+from quick_pp.app.backend.schemas.porosity import InputData
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.porosity import neu_den_xplot_poro, density_porosity, rho_matrix
 from typing import List, Dict
@@ -22,17 +22,18 @@ def _validate_points(input_dict: dict, required_points: List[str]):
     description=(
         """
         Estimate Density Porosity (PHID) using the density porosity method.
+        
         The `InputData` Pydantic model includes:
-            - data: List of measurement objects, each with:
-                - nphi (float): Neutron porosity value.
-                - rhob (float): Bulk density value.
-            - dry_sand_point: Tuple[float, float] - Reference point for dry sand (nphi, rhob).
-            - dry_silt_point: Tuple[float, float] - Reference point for dry silt (nphi, rhob).
-            - dry_clay_point: Tuple[float, float] - Reference point for dry clay (nphi, rhob).
-            - fluid_point: Tuple[float, float] - Reference point for fluid (nphi, rhob).
-            - wet_clay_point: Optional[Tuple[float, float]] - Reference point for wet clay (nphi, rhob), optional.
-            - silt_line_angle: float - Angle parameter for the silt line.
-            - method: Optional[str] - Crossplot model or method to use (used in /neu_den endpoint).
+        - data: List of measurement objects, each with:
+            - nphi (float): Neutron porosity value.
+            - rhob (float): Bulk density value.
+        - dry_sand_point: Tuple[float, float] - Reference point for dry sand (nphi, rhob).
+        - dry_silt_point: Tuple[float, float] - Reference point for dry silt (nphi, rhob).
+        - dry_clay_point: Tuple[float, float] - Reference point for dry clay (nphi, rhob).
+        - fluid_point: Tuple[float, float] - Reference point for fluid (nphi, rhob).
+        - wet_clay_point: Optional[Tuple[float, float]] - Reference point for wet clay (nphi, rhob), optional.
+        - silt_line_angle: float - Angle parameter for the silt line.
+        - method: Optional[str] - Crossplot model or method to use (used in /neu_den endpoint).
         """
     ),
     operation_id="estimate_density_porosity",
@@ -67,7 +68,7 @@ async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
         - Returns the results as a list of dictionaries, each with a single key "PHID" and its corresponding value.
     """
     input_dict = inputs.model_dump()
-    _validate_points(input_dict, [k for k in input_dict if k.endswith('_point')])
+    _validate_points(input_dict, [k for k in input_dict if k.endswith("_point")])
 
     nphi = np.array([d.nphi for d in inputs.data])
     rhob = np.array([d.rhob for d in inputs.data])
@@ -77,12 +78,17 @@ async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
         dry_silt_point=inputs.dry_silt_point,
         dry_clay_point=inputs.dry_clay_point,
         fluid_point=inputs.fluid_point,
-        wet_clay_point=inputs.wet_clay_point if inputs.wet_clay_point is not None else (None, None),
+        wet_clay_point=inputs.wet_clay_point
+        if inputs.wet_clay_point is not None
+        else (None, None),
         silt_line_angle=inputs.silt_line_angle,
     )
     vsand, vsilt, vcld, _ = ssc_model.estimate_lithology(nphi, rhob)
     rho_ma = [rho_matrix(vs, vsi, vc) for vs, vsi, vc in zip(vsand, vsilt, vcld)]
-    phid = [density_porosity(rhb, rhma, inputs.fluid_point[1]) for rhb, rhma in zip(rhob, rho_ma)]
+    phid = [
+        density_porosity(rhb, rhma, inputs.fluid_point[1])
+        for rhb, rhma in zip(rhob, rho_ma)
+    ]
     return [{"PHID": float(val)} for val in phid]
 
 
@@ -92,17 +98,18 @@ async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
     description=(
         """
         Estimate Total Porosity (PHIT) using neutron-density crossplot analysis.
+        
         The `InputData` Pydantic model includes:
-            - data: List of measurement objects, each with:
-                - nphi (float): Neutron porosity value.
-                - rhob (float): Bulk density value.
-            - dry_sand_point: Tuple[float, float] - Reference point for dry sand (nphi, rhob).
-            - dry_silt_point: Tuple[float, float] - Reference point for dry silt (nphi, rhob).
-            - dry_clay_point: Tuple[float, float] - Reference point for dry clay (nphi, rhob).
-            - fluid_point: Tuple[float, float] - Reference point for fluid (nphi, rhob).
-            - wet_clay_point: Optional[Tuple[float, float]] - Reference point for wet clay (nphi, rhob), optional.
-            - silt_line_angle: float - Angle parameter for the silt line.
-            - method: Optional[str] - Crossplot model or method to use (used in /neu_den endpoint).
+        - data: List of measurement objects, each with:
+            - nphi (float): Neutron porosity value.
+            - rhob (float): Bulk density value.
+        - dry_sand_point: Tuple[float, float] - Reference point for dry sand (nphi, rhob).
+        - dry_silt_point: Tuple[float, float] - Reference point for dry silt (nphi, rhob).
+        - dry_clay_point: Tuple[float, float] - Reference point for dry clay (nphi, rhob).
+        - fluid_point: Tuple[float, float] - Reference point for fluid (nphi, rhob).
+        - wet_clay_point: Optional[Tuple[float, float]] - Reference point for wet clay (nphi, rhob), optional.
+        - silt_line_angle: float - Angle parameter for the silt line.
+        - method: Optional[str] - Crossplot model or method to use (used in /neu_den endpoint).
         """
     ),
     operation_id="estimate_total_porosity",
@@ -134,7 +141,7 @@ async def estimate_phit_neu_den(inputs: InputData) -> List[Dict[str, float]]:
         - The output is formatted as a list of dictionaries for compatibility with API responses.
     """
     input_dict = inputs.model_dump()
-    _validate_points(input_dict, [k for k in input_dict if k.endswith('_point')])
+    _validate_points(input_dict, [k for k in input_dict if k.endswith("_point")])
 
     nphi = np.array([d.nphi for d in inputs.data])
     rhob = np.array([d.rhob for d in inputs.data])

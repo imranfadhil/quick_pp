@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 import pandas as pd
 from typing import List, Dict
 
-from quick_pp.api.schemas.ressum import InputData
+from quick_pp.app.backend.schemas.ressum import InputData
 from quick_pp.ressum import calc_reservoir_summary
 
 router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
         This includes calculating average porosity, average water saturation, average permeability,
         and other relevant metrics for the specified zones.
 
-        Input model: InputData (see quick_pp.api.schemas.ressum.InputData)
+        Input model: InputData (see quick_pp.app.backend.schemas.ressum.InputData)
 
         Request body must be a JSON object with the following fields:
         - data: list of objects, each with keys:
@@ -62,17 +62,19 @@ async def calculate_reservoir_summary_(inputs: InputData):
     """
     try:
         input_dict = inputs.model_dump()
-        input_df = pd.DataFrame.from_records(input_dict['data'])
+        input_df = pd.DataFrame.from_records(input_dict["data"])
         ressum_df = calc_reservoir_summary(
-            depth=input_df['depth'],
-            vshale=input_df['vcld'],
-            phit=input_df['phit'],
-            swt=input_df['swt'],
-            perm=input_df['perm'],
-            zones=input_df['zones'],
-            cutoffs=input_dict['cut_offs']
+            depth=input_df["depth"],
+            vshale=input_df["vcld"],
+            phit=input_df["phit"],
+            swt=input_df["swt"],
+            perm=input_df["perm"],
+            zones=input_df["zones"],
+            cutoffs=input_dict["cut_offs"],
         )
         ressum_df.dropna(inplace=True)
-        return ressum_df.to_dict(orient='records')
+        return ressum_df.to_dict(orient="records")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error calculating reservoir summary: {e}")
+        raise HTTPException(
+            status_code=400, detail=f"Error calculating reservoir summary: {e}"
+        )

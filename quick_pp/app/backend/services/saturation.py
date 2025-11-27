@@ -3,16 +3,22 @@ import pandas as pd
 from typing import List, Dict, Any, Optional
 import numpy as np
 
-from quick_pp.api.schemas.saturation_waxman_smits import InputData as WaxmanSmitsInput
-from quick_pp.api.schemas.saturation_archie import InputData as ArchieInput
-from quick_pp.api.schemas.saturation_temp_grad import InputData as TempGradInput
-from quick_pp.api.schemas.saturation_rw import InputData as RwInput
-from quick_pp.api.schemas.saturation_b import InputData as BInput
-from quick_pp.api.schemas.saturation_qv import InputData as QvInput
+from quick_pp.app.backend.schemas.saturation_waxman_smits import (
+    InputData as WaxmanSmitsInput,
+)
+from quick_pp.app.backend.schemas.saturation_archie import InputData as ArchieInput
+from quick_pp.app.backend.schemas.saturation_temp_grad import InputData as TempGradInput
+from quick_pp.app.backend.schemas.saturation_rw import InputData as RwInput
+from quick_pp.app.backend.schemas.saturation_b import InputData as BInput
+from quick_pp.app.backend.schemas.saturation_qv import InputData as QvInput
 
 from quick_pp.saturation import (
-    waxman_smits_saturation, archie_saturation, estimate_rw_temperature_salinity, estimate_temperature_gradient,
-    estimate_b_waxman_smits, estimate_qv
+    waxman_smits_saturation,
+    archie_saturation,
+    estimate_rw_temperature_salinity,
+    estimate_temperature_gradient,
+    estimate_b_waxman_smits,
+    estimate_qv,
 )
 
 router = APIRouter(prefix="/saturation", tags=["Saturation"])
@@ -38,7 +44,7 @@ def _parse_and_respond(
     func_args: List[str],
     result_key: str,
     extra_args: Optional[Dict[str, Any]] = None,
-    dtypes: Optional[Dict[str, Any]] = None
+    dtypes: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, float]]:
     """
     Helper to parse input, call calculation, and format response for batch endpoints.
@@ -64,7 +70,7 @@ def _parse_and_respond(
     """
     try:
         input_dict = inputs.model_dump()
-        input_df = pd.DataFrame.from_records(input_dict['data'])
+        input_df = pd.DataFrame.from_records(input_dict["data"])
         if dtypes:
             for col, dtype in dtypes.items():
                 if col in input_df:
@@ -87,17 +93,27 @@ def _parse_and_respond(
     "/temp_grad",
     summary="Estimate Temperature Gradient",
     description=(
-        "Estimate the temperature gradient based on depth data and specified measurement system (metric or imperial).\n"
-        "Input model: TempGradInput (see quick_pp.api.schemas.saturation_temp_grad.InputData).\n"
-        "Request body must be a JSON object with the following fields:\n"
-        "- meas_system: string (required, 'metric' or 'imperial')\n"
-        "- data: list of objects, each with key 'tvdss' (float, required)\n"
-        "Example:\n"
-        "{\n  'meas_system': 'metric',\n  'data': [ {'tvdss': 1500.0}, {'tvdss': 2000.0} ]\n}"
+        """
+        Estimate the temperature gradient based on depth data and specified measurement system (metric or imperial).
+
+        Input model: TempGradInput (see quick_pp.app.backend.schemas.saturation_temp_grad.InputData).
+
+        Request body must be a JSON object with the following fields:
+        - meas_system: string (required, 'metric' or 'imperial')
+        - data: list of objects, each with key 'tvdss' (float, required)
+        
+        Example:
+        {
+        'meas_system': 'metric',
+        'data': [ {'tvdss': 1500.0}, {'tvdss': 2000.0} ]
+        }
+        """
     ),
     operation_id="estimate_temperature_gradient",
 )
-async def estimate_temperature_gradient_(inputs: TempGradInput) -> List[Dict[str, float]]:
+async def estimate_temperature_gradient_(
+    inputs: TempGradInput,
+) -> List[Dict[str, float]]:
     """
     Estimate the temperature gradient for each input record.
 
@@ -114,11 +130,13 @@ async def estimate_temperature_gradient_(inputs: TempGradInput) -> List[Dict[str
         - Raises HTTPException with status 400 on any error.
     """
     input_dict = inputs.model_dump()
-    meas_system = input_dict['meas_system']
+    meas_system = input_dict["meas_system"]
     try:
-        input_df = pd.DataFrame.from_records(input_dict['data'])
-        input_df['tvdss'] = input_df['tvdss'].astype(np.float64)
-        temp_grad = estimate_temperature_gradient(np.asarray(input_df['tvdss']), meas_system)
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        input_df["tvdss"] = input_df["tvdss"].astype(np.float64)
+        temp_grad = estimate_temperature_gradient(
+            np.asarray(input_df["tvdss"]), meas_system
+        )
         if np.isscalar(temp_grad):
             result_list = [_safe_float(temp_grad)]
         else:
@@ -132,13 +150,21 @@ async def estimate_temperature_gradient_(inputs: TempGradInput) -> List[Dict[str
     "/rw",
     summary="Estimate Formation Water Resistivity (Rw)",
     description=(
-        "Estimate formation water resistivity (Rw) based on temperature gradient and water salinity.\n"
-        "Input model: RwInput (see quick_pp.api.schemas.saturation_rw.InputData).\n"
-        "Request body must be a JSON object with the following fields:\n"
-        "- water_salinity: float (required)\n"
-        "- data: list of objects, each with key 'temp_grad' (float, required)\n"
-        "Example:\n"
-        "{\n  'water_salinity': 35000.0,\n  'data': [ {'temp_grad': 0.025}, {'temp_grad': 0.030} ]\n}"
+        """
+        Estimate formation water resistivity (Rw) based on temperature gradient and water salinity.
+
+        Input model: RwInput (see quick_pp.app.backend.schemas.saturation_rw.InputData).
+
+        Request body must be a JSON object with the following fields:
+        - water_salinity: float (required)
+        - data: list of objects, each with key 'temp_grad' (float, required)
+        
+        Example:
+        {
+        'water_salinity': 35000.0,
+        'data': [ {'temp_grad': 0.025}, {'temp_grad': 0.030} ]
+        }
+        """
     ),
     operation_id="estimate_formation_water_resistivity",
 )
@@ -158,11 +184,13 @@ async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
         - Raises HTTPException with status 400 on any error.
     """
     input_dict = inputs.model_dump()
-    water_salinity = input_dict['water_salinity']
+    water_salinity = input_dict["water_salinity"]
     try:
-        input_df = pd.DataFrame.from_records(input_dict['data'])
-        input_df['temp_grad'] = input_df['temp_grad'].astype(np.float64)
-        rw = estimate_rw_temperature_salinity(np.asarray(input_df['temp_grad']), water_salinity)
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        input_df["temp_grad"] = input_df["temp_grad"].astype(np.float64)
+        rw = estimate_rw_temperature_salinity(
+            np.asarray(input_df["temp_grad"]), water_salinity
+        )
         if np.isscalar(rw):
             result_list = [_safe_float(rw)]
         else:
@@ -176,13 +204,20 @@ async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
     "/b_waxman_smits",
     summary="Estimate B Parameter using Waxman-Smits Model",
     description=(
-        "Estimate the B parameter using the Waxman-Smits model based on temperature gradient and "
-        "formation water resistivity.\n"
-        "Input model: BInput (see quick_pp.api.schemas.saturation_b.InputData).\n"
-        "Request body must be a JSON object with the following fields:\n"
-        "- data: list of objects, each with keys 'temp_grad' (float, required) and 'rw' (float, required)\n"
-        "Example:\n"
-        "{\n  'data': [ {'temp_grad': 0.025, 'rw': 0.12},\n            {'temp_grad': 0.030, 'rw': 0.10} ]\n}"
+        """
+        Estimate the B parameter using the Waxman-Smits model based on temperature gradient and formation water resistivity.
+    
+        Input model: BInput (see quick_pp.app.backend.schemas.saturation_b.InputData).
+        
+        Request body must be a JSON object with the following fields:
+        - data: list of objects, each with keys 'temp_grad' (float, required) and 'rw' (float, required)
+        
+        Example:
+        {
+        'data': [ {'temp_grad': 0.025, 'rw': 0.12},
+                    {'temp_grad': 0.030, 'rw': 0.10} ]
+        }
+        """
     ),
     operation_id="estimate_b_parameter_waxman_smits",
 )
@@ -205,9 +240,9 @@ async def estimate_b_waxman_smits_(inputs: BInput) -> List[Dict[str, float]]:
     return _parse_and_respond(
         inputs,
         estimate_b_waxman_smits,
-        ['temp_grad', 'rw'],
-        'B',
-        dtypes={"temp_grad": np.float64, "rw": np.float64}
+        ["temp_grad", "rw"],
+        "B",
+        dtypes={"temp_grad": np.float64, "rw": np.float64},
     )
 
 
@@ -215,13 +250,18 @@ async def estimate_b_waxman_smits_(inputs: BInput) -> List[Dict[str, float]]:
     "/estimate_qv",
     summary="Estimate Cation Exchange Capacity per Unit Pore Volume (Qv)",
     description=(
-        "Estimate Qv based on volume of clay (vcld), total porosity (phit), and specific clay properties.\n"
-        "Input model: QvInput (see quick_pp.api.schemas.saturation_qv.InputData).\n"
-        "Request body must be a JSON object with the following fields:\n"
-        "- rho_clay: float (required)\n"
-        "- cec_clay: float (required)\n"
-        "- data: list of objects, each with keys 'vcld' (float, required) and 'phit' (float, required)\n"
-        "Example (truncated): { 'rho_clay': 2.58, 'cec_clay': 0.9, 'data': [ {'vcld': 0.35, 'phit': 0.22}, ... ] }"
+        """
+        Estimate Qv based on volume of clay (vcld), total porosity (phit), and specific clay properties.
+
+        Input model: QvInput (see quick_pp.app.backend.schemas.saturation_qv.InputData).
+
+        Request body must be a JSON object with the following fields:
+        - rho_clay: float (required)
+        - cec_clay: float (required)
+        - data: list of objects, each with keys 'vcld' (float, required) and 'phit' (float, required)
+        
+        Example (truncated): { 'rho_clay': 2.58, 'cec_clay': 0.9, 'data': [ {'vcld': 0.35, 'phit': 0.22}, ... ] }
+        """
     ),
     operation_id="estimate_cation_exchange_capacity",
 )
@@ -243,12 +283,14 @@ async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
     """
     input_dict = inputs.model_dump()
     try:
-        input_df = pd.DataFrame.from_records(input_dict['data'])
-        input_df['vcld'] = input_df['vcld'].astype(np.float64)
-        input_df['phit'] = input_df['phit'].astype(np.float64)
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        input_df["vcld"] = input_df["vcld"].astype(np.float64)
+        input_df["phit"] = input_df["phit"].astype(np.float64)
         qv = estimate_qv(
-            np.asarray(input_df['vcld']), np.asarray(input_df['phit']),
-            input_dict['rho_clay'], input_dict['cec_clay']
+            np.asarray(input_df["vcld"]),
+            np.asarray(input_df["phit"]),
+            input_dict["rho_clay"],
+            input_dict["cec_clay"],
         )
         if np.isscalar(qv):
             result_list = [_safe_float(qv)]
@@ -263,14 +305,22 @@ async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
     "/waxman_smits",
     summary="Estimate Water Saturation using Waxman-Smits Model",
     description=(
-        "Estimate total water saturation (SWT) using the Waxman-Smits model based on input data.\n"
-        "Input model: WaxmanSmitsInput (see quick_pp.api.schemas.saturation_waxman_smits.InputData).\n"
-        "Request body must be a JSON object with the following field:\n"
-        "- data: list of objects, each with keys 'rt', 'rw', 'phit', 'qv', 'b' (all float, required), "
-        "and 'm' (int, required)\n"
-        "Example:\n"
-        "{\n  'data': [\n    {'rt': 12.0, 'rw': 0.12, 'phit': 0.22, 'qv': 0.05, 'b': 0.8, 'm': 2},\n"
-        "           {'rt': 10.0, 'rw': 0.10, 'phit': 0.18, 'qv': 0.04, 'b': 0.7, 'm': 2}\n  ]\n}"
+        """
+        Estimate total water saturation (SWT) using the Waxman-Smits model based on input data.
+
+        Input model: WaxmanSmitsInput (see quick_pp.app.backend.schemas.saturation_waxman_smits.InputData).
+
+        Request body must be a JSON object with the following field:
+        - data: list of objects, each with keys 'rt', 'rw', 'phit', 'qv', 'b' (all float, required), and 'm' (int, required)
+        
+        Example:
+        {
+            'data': [
+                {'rt': 12.0, 'rw': 0.12, 'phit': 0.22, 'qv': 0.05, 'b': 0.8, 'm': 2},
+                {'rt': 10.0, 'rw': 0.10, 'phit': 0.18, 'qv': 0.04, 'b': 0.7, 'm': 2}
+            ]
+        }
+        """
     ),
     operation_id="estimate_waxman_smits_water_saturation",
 )
@@ -292,18 +342,22 @@ async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, 
     """
     input_dict = inputs.model_dump()
     try:
-        input_df = pd.DataFrame.from_records(input_dict['data'])
-        input_df['rt'] = input_df['rt'].astype(np.float64)
-        input_df['rw'] = input_df['rw'].astype(np.float64)
-        input_df['phit'] = input_df['phit'].astype(np.float64)
-        input_df['qv'] = input_df['qv'].astype(np.float64)
-        input_df['b'] = input_df['b'].astype(np.float64)
-        input_df['m'] = input_df['m'].astype(np.int_)
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        input_df["rt"] = input_df["rt"].astype(np.float64)
+        input_df["rw"] = input_df["rw"].astype(np.float64)
+        input_df["phit"] = input_df["phit"].astype(np.float64)
+        input_df["qv"] = input_df["qv"].astype(np.float64)
+        input_df["b"] = input_df["b"].astype(np.float64)
+        input_df["m"] = input_df["m"].astype(np.int_)
         # Use the first value of m for all records if function expects a scalar
-        m_value = int(input_df['m'].iloc[0])
+        m_value = int(input_df["m"].iloc[0])
         swt = waxman_smits_saturation(
-            np.asarray(input_df['rt']), np.asarray(input_df['rw']), np.asarray(input_df['phit']),
-            np.asarray(input_df['qv']), np.asarray(input_df['b']), m_value
+            np.asarray(input_df["rt"]),
+            np.asarray(input_df["rw"]),
+            np.asarray(input_df["phit"]),
+            np.asarray(input_df["qv"]),
+            np.asarray(input_df["b"]),
+            m_value,
         )
         if np.isscalar(swt):
             result_list = [_safe_float(swt)]
@@ -318,11 +372,16 @@ async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, 
     "/archie",
     summary="Estimate Water Saturation using Archie Model",
     description=(
-        "Estimate total water saturation (SWT) using the Archie model based on input data.\n"
-        "Input model: ArchieInput (see quick_pp.api.schemas.saturation_archie.InputData).\n"
-        "Request body must be a JSON object with the following field:\n"
-        "- data: list of objects, each with keys 'rt', 'rw', 'phit' (all float, required)\n"
-        "Example (truncated): { 'data': [ {'rt': 12.0, 'rw': 0.12, 'phit': 0.22}, ... ] }"
+        """
+        Estimate total water saturation (SWT) using the Archie model based on input data.
+
+        Input model: ArchieInput (see quick_pp.app.backend.schemas.saturation_archie.InputData).
+
+        Request body must be a JSON object with the following field:
+        - data: list of objects, each with keys 'rt', 'rw', 'phit' (all float, required)
+        
+        Example (truncated): { 'data': [ {'rt': 12.0, 'rw': 0.12, 'phit': 0.22}, ... ] }
+        """
     ),
     operation_id="estimate_archie_water_saturation",
 )
@@ -343,12 +402,17 @@ async def estimate_swt_archie(inputs: ArchieInput) -> List[Dict[str, float]]:
     """
     input_dict = inputs.model_dump()
     try:
-        input_df = pd.DataFrame.from_records(input_dict['data'])
-        input_df['rt'] = input_df['rt'].astype(np.float64)
-        input_df['rw'] = input_df['rw'].astype(np.float64)
-        input_df['phit'] = input_df['phit'].astype(np.float64)
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        input_df["rt"] = input_df["rt"].astype(np.float64)
+        input_df["rw"] = input_df["rw"].astype(np.float64)
+        input_df["phit"] = input_df["phit"].astype(np.float64)
         swt = archie_saturation(
-            np.asarray(input_df['rt']), np.asarray(input_df['rw']), np.asarray(input_df['phit']), 1, 2, 2
+            np.asarray(input_df["rt"]),
+            np.asarray(input_df["rw"]),
+            np.asarray(input_df["phit"]),
+            1,
+            2,
+            2,
         )
         if np.isscalar(swt):
             result_list = [_safe_float(swt)]

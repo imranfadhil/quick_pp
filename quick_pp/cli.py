@@ -62,9 +62,9 @@ def app(debug):
 
     This launches a Uvicorn server to run the FastAPI backend and the associated qpp assistant module.
     The --debug flag enables auto-reload for development."""
-    if not is_server_running("localhost", 8888):
+    if not is_server_running("localhost", 6312):
         reload_ = "--reload" if debug else ""
-        cmd = f"uvicorn quick_pp.api.main:app --host 0.0.0.0 --port 8888 {reload_}"
+        cmd = f"uvicorn quick_pp.app.backend.main:app --host 0.0.0.0 --port 6312 {reload_}"
         click.echo(f"App is not running. Starting it now... | {cmd}")
         process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
         process.wait()
@@ -93,7 +93,7 @@ def model_deployment(debug):
     The --debug flag enables auto-reload for development."""
     if not is_server_running("localhost", 5555):
         reload_ = "--reload" if debug else ""
-        cmd = f"uvicorn quick_pp.api.mlflow_model_deployment:app --host 0.0.0.0 --port 5555 {reload_}"
+        cmd = f"uvicorn quick_pp.app.backend.mlflow_model_deployment:app --host 0.0.0.0 --port 5555 {reload_}"
         click.echo(f"Model server is not running. Starting it now... | {cmd}")
         process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
         process.wait()

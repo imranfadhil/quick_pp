@@ -22,7 +22,7 @@ Accessing the Chat Interface
 
 2. Navigate to the chat interface:
    ```
-   http://localhost:8888/langflow/chat
+   http://localhost:6312/langflow/chat
    ```
 
 3. Select a project and flow from the dropdown menus
@@ -53,7 +53,7 @@ Usage Example
 
 1. Start your Langflow server
 2. Start the quick_pp API server
-3. Open http://localhost:8888/qpp_assistant in your browser
+3. Open http://localhost:6312/qpp_assistant in your browser
 4. Select a project from the dropdown
 5. Select a flow from the second dropdown
 6. The chat interface will load and you can start conversing

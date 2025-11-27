@@ -3,10 +3,16 @@ import pandas as pd
 from typing import List, Dict
 import logging
 
-from quick_pp.api.schemas.permeability_choo import InputData as PermChInputData
-from quick_pp.api.schemas.permeability_others import InputData as PermOthersInputData
+from quick_pp.app.backend.schemas.permeability_choo import InputData as PermChInputData
+from quick_pp.app.backend.schemas.permeability_others import (
+    InputData as PermOthersInputData,
+)
 from quick_pp.permeability import (
-    choo_permeability, timur_permeability, coates_permeability, kozeny_carman_permeability, tixier_permeability
+    choo_permeability,
+    timur_permeability,
+    coates_permeability,
+    kozeny_carman_permeability,
+    tixier_permeability,
 )
 
 router = APIRouter(prefix="/permeability", tags=["Permeability"])
@@ -17,12 +23,18 @@ logger = logging.getLogger("api.services.permeability")
     "/choo",
     summary="Estimate Choo permeability",
     description=(
-        "Estimate permeability using the Choo empirical model. "
-        "Requires volume of clay (vcld), volume of silt (vsilt), and total porosity (phit) measurements.\n"
-        "Input model: PermChInputData (see quick_pp.api.schemas.permeability_choo.InputData).\n"
-        "Request body must be a JSON object with the following field:\n"
-        "- data: list of objects, each with keys 'vcld', 'vsilt', 'phit' (all float, required)\n"
-        "Example (truncated): { 'data': [ {'vcld': 0.25, 'vsilt': 0.10, 'phit': 0.18}, ... ] }"
+        """
+        Estimate permeability using the Choo empirical model.
+
+        Requires volume of clay (vcld), volume of silt (vsilt), and total porosity (phit) measurements.
+
+        Input model: PermChInputData (see quick_pp.app.backend.schemas.permeability_choo.InputData).
+
+        Request body must be a JSON object with the following field:
+        - data: list of objects, each with keys 'vcld', 'vsilt', 'phit' (all float, required)
+        
+        Example (truncated): { 'data': [ {'vcld': 0.25, 'vsilt': 0.10, 'phit': 0.18}, ... ] }
+        """
     ),
     operation_id="estimate_choo_permeability",
 )
@@ -51,15 +63,13 @@ async def estimate_perm_choo(inputs: PermChInputData) -> List[Dict[str, float]]:
     """
     try:
         input_dict = inputs.model_dump()
-        input_df = pd.DataFrame.from_records(input_dict['data'])
-        perm = choo_permeability(
-            input_df['vcld'], input_df['vsilt'], input_df['phit']
-        )
-        df_result = pd.DataFrame({'PERM': perm.ravel()})
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        perm = choo_permeability(input_df["vcld"], input_df["vsilt"], input_df["phit"])
+        df_result = pd.DataFrame({"PERM": perm.ravel()})
         # Ensure output is List[Dict[str, float]]
         return [
             {str(k): float(v) for k, v in row.items()}
-            for row in df_result.to_dict(orient='records')
+            for row in df_result.to_dict(orient="records")
         ]
     except Exception as e:
         logger.error(f"Error in estimate_perm_choo: {e}")
@@ -70,12 +80,18 @@ async def estimate_perm_choo(inputs: PermChInputData) -> List[Dict[str, float]]:
     "/timur",
     summary="Estimate Timur permeability",
     description=(
-        "Estimate permeability using the Timur empirical model. "
-        "Requires porosity (phit) and irreducible water saturation (swirr) measurements.\n"
-        "Input model: PermOthersInputData (see quick_pp.api.schemas.permeability_others.InputData).\n"
-        "Request body must be a JSON object with the following field:\n"
-        "- data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)\n"
-        "Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }"
+        """
+        Estimate permeability using the Timur empirical model.
+
+        Requires porosity (phit) and irreducible water saturation (swirr) measurements.
+
+        Input model: PermOthersInputData (see quick_pp.app.backend.schemas.permeability_others.InputData).
+
+        Request body must be a JSON object with the following field:
+        - data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)
+        
+        Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }
+        """
     ),
     operation_id="estimate_timur_permeability",
 )
@@ -103,12 +119,12 @@ async def estimate_perm_timur(inputs: PermOthersInputData) -> List[Dict[str, flo
     """
     try:
         input_dict = inputs.model_dump()
-        input_df = pd.DataFrame.from_records(input_dict['data'])
-        perm = timur_permeability(input_df['phit'], input_df['swirr'])
-        df_result = pd.DataFrame({'PERM': perm.ravel()})
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        perm = timur_permeability(input_df["phit"], input_df["swirr"])
+        df_result = pd.DataFrame({"PERM": perm.ravel()})
         return [
             {str(k): float(v) for k, v in row.items()}
-            for row in df_result.to_dict(orient='records')
+            for row in df_result.to_dict(orient="records")
         ]
     except Exception as e:
         logger.error(f"Error in estimate_perm_timur: {e}")
@@ -119,12 +135,18 @@ async def estimate_perm_timur(inputs: PermOthersInputData) -> List[Dict[str, flo
     "/tixier",
     summary="Estimate Tixier permeability",
     description=(
-        "Estimate permeability using the Tixier empirical model. "
-        "Requires porosity (phit) and irreducible water saturation (swirr) measurements.\n"
-        "Input model: PermOthersInputData (see quick_pp.api.schemas.permeability_others.InputData).\n"
-        "Request body must be a JSON object with the following field:\n"
-        "- data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)\n"
-        "Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }"
+        """
+        Estimate permeability using the Tixier empirical model.
+
+        Requires porosity (phit) and irreducible water saturation (swirr) measurements.
+
+        Input model: PermOthersInputData (see quick_pp.app.backend.schemas.permeability_others.InputData).
+
+        Request body must be a JSON object with the following field:
+        - data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)
+        
+        Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }
+        """
     ),
     operation_id="estimate_tixier_permeability",
 )
@@ -148,12 +170,12 @@ async def estimate_perm_tixier(inputs: PermOthersInputData) -> List[Dict[str, fl
     """
     try:
         input_dict = inputs.model_dump()
-        input_df = pd.DataFrame.from_records(input_dict['data'])
-        perm = tixier_permeability(input_df['phit'], input_df['swirr'])
-        df_result = pd.DataFrame({'PERM': perm.ravel()})
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        perm = tixier_permeability(input_df["phit"], input_df["swirr"])
+        df_result = pd.DataFrame({"PERM": perm.ravel()})
         return [
             {str(k): float(v) for k, v in row.items()}
-            for row in df_result.to_dict(orient='records')
+            for row in df_result.to_dict(orient="records")
         ]
     except Exception as e:
         logger.error(f"Error in estimate_perm_tixier: {e}")
@@ -164,12 +186,17 @@ async def estimate_perm_tixier(inputs: PermOthersInputData) -> List[Dict[str, fl
     "/coates",
     summary="Estimate Coates permeability",
     description=(
-        "Estimate permeability using the Coates empirical model. "
-        "Requires porosity (phit) and irreducible water saturation (swirr) measurements.\n"
-        "Input model: PermOthersInputData (see quick_pp.api.schemas.permeability_others.InputData).\n"
-        "Request body must be a JSON object with the following field:\n"
-        "- data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)\n"
-        "Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }"
+        """
+        Estimate permeability using the Coates empirical model.
+
+        Requires porosity (phit) and irreducible water saturation (swirr) measurements.
+
+        Input model: PermOthersInputData (see quick_pp.app.backend.schemas.permeability_others.InputData).
+        Request body must be a JSON object with the following field:
+        - data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)
+        
+        Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }
+        """
     ),
     operation_id="estimate_coates_permeability",
 )
@@ -194,12 +221,12 @@ async def estimate_perm_coates(inputs: PermOthersInputData) -> List[Dict[str, fl
     """
     try:
         input_dict = inputs.model_dump()
-        input_df = pd.DataFrame.from_records(input_dict['data'])
-        perm = coates_permeability(input_df['phit'], input_df['swirr'])
-        df_result = pd.DataFrame({'PERM': perm.ravel()})
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        perm = coates_permeability(input_df["phit"], input_df["swirr"])
+        df_result = pd.DataFrame({"PERM": perm.ravel()})
         return [
             {str(k): float(v) for k, v in row.items()}
-            for row in df_result.to_dict(orient='records')
+            for row in df_result.to_dict(orient="records")
         ]
     except Exception as e:
         logger.error(f"Error in estimate_perm_coates: {e}")
@@ -210,16 +237,23 @@ async def estimate_perm_coates(inputs: PermOthersInputData) -> List[Dict[str, fl
     "/kozeny_carman",
     summary="Estimate Kozeny-Carman permeability",
     description=(
-        "Estimate permeability using the Kozeny-Carman equation. "
-        "Requires porosity (phit) and irreducible water saturation (swirr) measurements.\n"
-        "Input model: PermOthersInputData (see quick_pp.api.schemas.permeability_others.InputData).\n"
-        "Request body must be a JSON object with the following field:\n"
-        "- data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)\n"
-        "Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }"
+        """
+        Estimate permeability using the Kozeny-Carman equation.
+
+        Requires porosity (phit) and irreducible water saturation (swirr) measurements.
+
+        Input model: PermOthersInputData (see quick_pp.app.backend.schemas.permeability_others.InputData).
+        Request body must be a JSON object with the following field:
+        - data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)
+        
+        Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }
+        """
     ),
     operation_id="estimate_kozeny_carman_permeability",
 )
-async def estimate_perm_kozeny_carman(inputs: PermOthersInputData) -> List[Dict[str, float]]:
+async def estimate_perm_kozeny_carman(
+    inputs: PermOthersInputData,
+) -> List[Dict[str, float]]:
     """
     Estimate permeability using the Kozeny-Carman equation.
 
@@ -240,12 +274,14 @@ async def estimate_perm_kozeny_carman(inputs: PermOthersInputData) -> List[Dict[
     """
     try:
         input_dict = inputs.model_dump()
-        input_df = pd.DataFrame.from_records(input_dict['data'])
-        perm = input_df.apply(lambda row: kozeny_carman_permeability(row['phit'], row['swirr']), axis=1)
-        df_result = pd.DataFrame({'PERM': perm.ravel()})
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        perm = input_df.apply(
+            lambda row: kozeny_carman_permeability(row["phit"], row["swirr"]), axis=1
+        )
+        df_result = pd.DataFrame({"PERM": perm.ravel()})
         return [
             {str(k): float(v) for k, v in row.items()}
-            for row in df_result.to_dict(orient='records')
+            for row in df_result.to_dict(orient="records")
         ]
     except Exception as e:
         logger.error(f"Error in estimate_perm_kozeny_carman: {e}")

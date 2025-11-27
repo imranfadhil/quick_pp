@@ -12,8 +12,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import ORJSONResponse
 from mlflow.pyfunc import PyFuncModel  # type: ignore
 
-from quick_pp.api.fastapi_mlflow.exceptions import DictSerialisableException
-from quick_pp.api.fastapi_mlflow.predictors import build_predictor
+from quick_pp.app.backend.fastapi_mlflow.exceptions import DictSerialisableException
+from quick_pp.app.backend.fastapi_mlflow.predictors import build_predictor
 
 
 def build_app(app, pyfunc_model: PyFuncModel, route: str) -> FastAPI:
@@ -24,13 +24,13 @@ def build_app(app, pyfunc_model: PyFuncModel, route: str) -> FastAPI:
 
     # Get input and output schemas from the model metadata
     input_schema = pyfunc_model.metadata.get_input_schema()
-    input_features = [item['name'] for item in input_schema.to_dict()]
+    input_features = [item["name"] for item in input_schema.to_dict()]
     output_schema = pyfunc_model.metadata.get_output_schema()
-    target_features = [item['name'] for item in output_schema.to_dict()]
+    target_features = [item["name"] for item in output_schema.to_dict()]
 
-    model_name = route.removeprefix('/')
-    input_example = ', '.join([f'\"{f}\": <value>' for f in input_features])
-    output_example = ', '.join([f'\"{f}\": <predicted_value>' for f in target_features])
+    model_name = route.removeprefix("/")
+    input_example = ", ".join([f'"{f}": <value>' for f in input_features])
+    output_example = ", ".join([f'"{f}": <predicted_value>' for f in target_features])
     app.add_api_route(
         f"{route}",
         predictor,
