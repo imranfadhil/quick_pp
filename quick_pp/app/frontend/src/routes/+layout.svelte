@@ -1,8 +1,12 @@
 <script lang="ts">
-    import AppLayout from '../layouts/AppLayout.svelte';
-    import '../app.css'; // Import the centralized styles
+	import './layout.css';
+	import favicon from '$lib/assets/favicon.svg';
+	
+	let { children } = $props();
 </script>
 
-<AppLayout>
-    <slot />
-</AppLayout>
+<svelte:head>
+	<link rel="icon" href={favicon} />
+</svelte:head>
+
+{@render children()}
