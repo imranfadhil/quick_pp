@@ -5,6 +5,14 @@
 
 	let { items }: { items: { title: string; url: string; icon?: Icon }[] } = $props();
 	import { onMount } from "svelte";
+	import { page } from '$app/stores';
+
+	function isActive(url: string) {
+		const path = $page.url.pathname;
+		if (!url) return false;
+		// exact match or prefix match (so /projects matches /projects/123)
+		return path === url || (url !== '/' && path.startsWith(url));
+	}
 
 	let creating = $state(false);
 	let showForm = $state(false);
@@ -38,22 +46,6 @@
 			}
 		} catch (err) {
 			console.error('Error fetching projects', err);
-		}
-	}
-
-	async function fetchProjectDetails(projectId: number | string) {
-		try {
-			const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}`);
-			if (!res.ok) {
-				const txt = await res.text();
-				throw new Error(txt || res.statusText);
-			}
-			const data = await res.json();
-			selectedProject = data;
-			activeTab = 'overview';
-		} catch (err) {
-			console.error('Failed to load project details', err);
-			alert('Failed to load project details');
 		}
 	}
 
@@ -150,10 +142,17 @@
 			{#each items as item (item.title)}
 				<Sidebar.MenuItem>
 					<Sidebar.MenuButton tooltipContent={item.title}>
-						{#if item.icon}
-							<item.icon />
-						{/if}
-						<span>{item.title}</span>
+						{#snippet child({ props })}
+							<a href={item.url} {...props}
+								class="{isActive(item.url) ? 'bg-panel-foreground/5 font-semibold' : ''} flex items-center gap-2 w-full"
+								aria-current={isActive(item.url) ? 'page' : undefined}
+							>
+								{#if item.icon}
+									<item.icon />
+								{/if}
+								<span>{item.title}</span>
+							</a>
+						{/snippet}
 					</Sidebar.MenuButton>
 				</Sidebar.MenuItem>
 			{/each}

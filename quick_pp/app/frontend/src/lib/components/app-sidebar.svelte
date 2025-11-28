@@ -37,77 +37,29 @@
 		],
 		navWell: [
 			{
-				title: "Data QC",
-				url: "#",
+				title: "Data Overview",
+				url: "/wells/data",
 				icon: DashboardIcon,
 			},
 			{
 				title: "Lithology & Porosity",
-				url: "#",
+				url: "/wells/lithology",
 				icon: ListDetailsIcon,
 			},
 			{
 				title: "Permeability & Rock Type",
-				url: "#",
+				url: "/wells/permeability",
 				icon: ChartBarIcon,
 			},
 			{
 				title: "Water Saturation",
-				url: "#",
+				url: "/wells/saturation",
 				icon: FolderIcon,
 			},
 			{
 				title: "Reservoir Summary",
-				url: "#",
+				url: "/wells/summary",
 				icon: UsersIcon,
-			},
-		],
-		navClouds: [
-			{
-				title: "Capture",
-				icon: CameraIcon,
-				isActive: true,
-				url: "#",
-				items: [
-					{
-						title: "Active Proposals",
-						url: "#",
-					},
-					{
-						title: "Archived",
-						url: "#",
-					},
-				],
-			},
-			{
-				title: "Proposal",
-				icon: FileDescriptionIcon,
-				url: "#",
-				items: [
-					{
-						title: "Active Proposals",
-						url: "#",
-					},
-					{
-						title: "Archived",
-						url: "#",
-					},
-				],
-			},
-			{
-				title: "Prompts",
-				icon: FileAiIcon,
-				url: "#",
-				items: [
-					{
-						title: "Active Proposals",
-						url: "#",
-					},
-					{
-						title: "Archived",
-						url: "#",
-					},
-				],
 			},
 		],
 		navSecondary: [

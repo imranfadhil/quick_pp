@@ -1,13 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { selectProject, setWorkspaceTitle } from '$lib/stores/workspace';
+  import { selectProject, setWorkspaceTitleIfDifferent as setWorkspaceTitle } from '$lib/stores/workspace';
+  import { goto } from '$app/navigation';
 
   const API_BASE = 'http://localhost:6312';
-
-  let creating = false;
-  let showForm = false;
-  let newName = '';
-  let newDescription = '';
 
   let projects: any[] = [];
   let selectedProject: any = null;
@@ -25,10 +21,6 @@
   }
 
   async function fetchProjectDetails(id: string | number) {
-    // The backend exposes list_projects and a wells endpoint, but not
-    // a dedicated GET /projects/{id} detail endpoint. Use the cached
-    // list to populate basic details and call the wells endpoint for
-    // extra info (if available).
     try {
       const proj = projects.find((p) => String(p.project_id) === String(id));
       if (proj) {
@@ -41,6 +33,13 @@
         selectedProject = { project_id: id, name: `Project ${id}` };
         selectProject(selectedProject);
         setWorkspaceTitle(selectedProject.name, `ID: ${selectedProject.project_id}`);
+      }
+
+      // auto-navigate to wells workspace so user continues analysis there
+      try {
+        goto('/wells');
+      } catch (navErr) {
+        console.warn('Navigation to /wells failed', navErr);
       }
 
       // Try to fetch wells for richer detail (optional endpoint)
@@ -110,6 +109,11 @@
         {:else}
           <div class="text-sm text-muted">No wells in this project.</div>
         {/if}
+        <div class="mt-3">
+          <button class="btn btn-secondary" on:click={() => goto('/wells')}>
+            Open in Well Analysis
+          </button>
+        </div>
       </div>
     {:else}
       <div class="text-muted">Select a project from the left to view details.</div>
