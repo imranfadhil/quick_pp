@@ -1,3 +1,4 @@
+import os
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from typing import List, Optional
 from pathlib import Path
@@ -21,8 +22,15 @@ async def init_db(payload: dict):
     Example: {"db_url": "sqlite:///./data/quick_pp.db", "setup": true}
     """
     global connector
-    db_url = payload.get("db_url") if isinstance(payload, dict) else None
-    setup = bool(payload.get("setup")) if isinstance(payload, dict) else False
+    # Prefer explicit `db_url` from payload; fall back to the environment variable
+    # `QPP_DATABASE_URL` so the service can initialize using container config.
+    db_url = None
+    if isinstance(payload, dict):
+        db_url = payload.get("db_url")
+        setup = bool(payload.get("setup")) if isinstance(payload, dict) else False
+    if not db_url:
+        db_url = os.environ.get("QPP_DATABASE_URL")
+        setup = True
 
     try:
         connector = DBConnector(db_url=db_url)

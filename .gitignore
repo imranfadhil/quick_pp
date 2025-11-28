@@ -121,3 +121,4 @@ chainlit*
 .files**
 **_info**
 **/quick_pp.db*
+**/docker/data/postgres/

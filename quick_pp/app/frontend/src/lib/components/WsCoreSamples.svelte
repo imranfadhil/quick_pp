@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { workspace } from '$lib/stores/workspace';
 
-  const API_BASE = 'http://localhost:6312';
+  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
   export let projectId: number | string;
   export let wellName: string;

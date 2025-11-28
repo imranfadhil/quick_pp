@@ -4,7 +4,7 @@
   import WsWellPlot from '$lib/components/WsWellPlot.svelte';
   import { goto } from '$app/navigation';
 
-  const API_BASE = 'http://localhost:6312';
+  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
   let selectedProject: any = null;
   let loadingWells = false;

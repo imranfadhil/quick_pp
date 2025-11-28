@@ -23,7 +23,7 @@
 	let activeTab = $state<'list' | 'overview'>('list');
 	let projects = $state<Array<any>>([]);
 	let selectedProject: any = $state(null);
-	const API_BASE = "http://localhost:6312";
+	const API_BASE = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:6312";
 
 	function openForm() {
 		showForm = true;

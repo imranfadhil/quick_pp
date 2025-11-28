@@ -11,10 +11,11 @@ services:
     ports:
       - ${POSTGRES_PORT:-5432}:5432
     
-  python:
+  qpp-backend:
     build:
-      context: .
-      dockerfile: Dockerfile-psycopg
+      # Build from the repository root so the Dockerfile can COPY project files
+      context: ../../..
+      dockerfile: quick_pp/app/docker/Dockerfile
     depends_on:
       - postgres
     environment:
@@ -22,18 +23,44 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
+    # Mount project files into the container for live development
     volumes:
-      - ./init_db.py:/code/init_db.py
+      - ../../..:/code:delegated
       - ./.env:/code/.env
+    # Use entrypoint script that waits for Postgres, runs DB init, then starts app
+    command: sh -c "/code/quick_pp/app/docker/backend-entrypoint.sh"
+    # Expose the python API so other services (and host) can reach it
+    ports:
+      - "6312:6312"
+
+  qpp-frontend:
+    image: node:20-alpine
+    working_dir: /app
+    restart: unless-stopped
+    # mount the frontend source so local edits reflect inside container
+    volumes:
+      - ../frontend:/app:delegated
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - qpp-backend
+    environment:
+      - VITE_BACKEND_URL=http://localhost:6312
+      - HOST=0.0.0.0
+    # Install deps and run the Vite/SvelteKit dev server listening on all interfaces
+    command: sh -c "npm install --silent && npm run dev -- --host 0.0.0.0"
 
   langflow:
-    image: langflowai/langflow:latest # or another version tag on https://hub.docker.com/r/langflowai/langflow
+    profiles:
+      - disabled  # enable with `--profile langflow` on docker-compose command line
+    image: langflowai/langflow:latest  # or another version tag on https://hub.docker.com/r/langflowai/langflow
     restart: unless-stopped
     pull_policy: always  # set to 'always' when using 'latest' image
     ports:
       - "7860:7860"
     depends_on:
-      - python
+      - qpp-backend
     environment:
       - LANGFLOW_DATABASE_URL=postgresql://langflow:langflow@postgres:5432/langflow
       # This variable defines where the logs, file storage, monitor data and secret keys are stored.

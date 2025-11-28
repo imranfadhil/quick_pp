@@ -12,7 +12,7 @@
   let loading = false;
   let error: string | null = null;
 
-  const API_BASE = 'http://localhost:6312';
+  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
   async function ensurePlotly() {
     if (!browser) throw new Error('Plotly can only be loaded in the browser');

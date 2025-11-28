@@ -3,7 +3,7 @@
   export let projectId: string | number;
   export let wellName: string;
 
-  const API_BASE = 'http://localhost:6312';
+  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
   let contacts: Array<{name:string, depth:number}> = [];
   let loading = false; let error: string | null = null;
   let newContact = { name: '', depth: null } as {name:string, depth:number|null};

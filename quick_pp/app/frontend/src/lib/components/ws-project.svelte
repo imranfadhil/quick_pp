@@ -3,7 +3,7 @@
   import { selectProject, setWorkspaceTitleIfDifferent as setWorkspaceTitle } from '$lib/stores/workspace';
   import { goto } from '$app/navigation';
 
-  const API_BASE = 'http://localhost:6312';
+  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
   let projects: any[] = [];
   let selectedProject: any = null;

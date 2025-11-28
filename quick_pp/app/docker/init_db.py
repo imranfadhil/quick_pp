@@ -6,18 +6,26 @@ from dotenv import load_dotenv
 
 def create_database():
     load_dotenv()
-    user = os.getenv('POSTGRES_USER')
-    password = os.getenv('POSTGRES_PASSWORD')
-    db_name = os.getenv('POSTGRES_DB')
-    database_url = f"postgresql://{user}:{password}@localhost:5432/{db_name}"
+    user = os.getenv("POSTGRES_USER")
+    password = os.getenv("POSTGRES_PASSWORD")
+    db_name = os.getenv("POSTGRES_DB")
+    # Prefer an explicit QPP_DATABASE_URL if provided; otherwise use the Docker
+    # postgres service hostname ("postgres") so this script can run inside a
+    # container and reach the DB service.
+    database_url = os.getenv("QPP_DATABASE_URL")
+    if not database_url:
+        pg_host = os.getenv("POSTGRES_HOST", "postgres")
+        database_url = f"postgresql://{user}:{password}@{pg_host}:5432/{db_name}"
 
     # Parse the connection string
-    if '?' in database_url:
-        database_url = database_url.split('?')[0]
+    if "?" in database_url:
+        database_url = database_url.split("?")[0]
 
-    parts = database_url.split('/')
+    parts = database_url.split("/")
     db_name = parts[-1]
-    connection_str = '/'.join(parts[:-1]) + '/postgres'  # Connect to default postgres db first
+    connection_str = (
+        "/".join(parts[:-1]) + "/postgres"
+    )  # Connect to default postgres db first
 
     # Create database if it doesn't exist
     conn = psycopg2.connect(connection_str)
@@ -37,7 +45,7 @@ def create_database():
     cur = conn.cursor()
 
     # Enable pgcrypto extension
-    cur.execute('CREATE EXTENSION IF NOT EXISTS pgcrypto;')
+    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
 
     # Create StepType enum
     cur.execute("""

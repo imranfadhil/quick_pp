@@ -3,7 +3,7 @@
   export let projectId: string | number;
   export let wellName: string;
 
-  const API_BASE = 'http://localhost:6312';
+  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
   let tests: Array<{depth:number, pressure:number, pressure_uom?:string}> = [];
   let loading = false; let error: string | null = null;
   let newTest = { depth: null, pressure: null, pressure_uom: 'psi' } as any;

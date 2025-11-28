@@ -1,7 +1,7 @@
 <script lang="ts">
   export let projectId: number | string;
   export let wellName: string;
-  const API_BASE = 'http://localhost:6312';
+  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
   let notes = '';
 </script>

@@ -6,7 +6,7 @@
 	let { children } = $props();
 
 	// Initialize backend DB connector once when the app mounts.
-	const API_BASE = "http://localhost:6312";
+	const API_BASE = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:6312";
 	onMount(async () => {
 		try {
 			const res = await fetch(`${API_BASE}/quick_pp/database/init`, {

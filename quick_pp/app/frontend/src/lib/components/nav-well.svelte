@@ -6,7 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { onDestroy } from 'svelte';
 
-	const API_BASE = 'http://localhost:6312';
+	const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
 	let project: any = $state(null);
 	let wells: string[] = $state([]);
