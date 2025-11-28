@@ -211,18 +211,30 @@ def pre_process(welly_object):
             - A DataFrame containing the processed curve data.
             - A DataFrame containing the header information.
     """
-    # Convert index 'DEPTH' as column
-    data_df = welly_object.las[0]
+    header_df = getattr(welly_object, "header", pd.DataFrame())
+
+    # Guard against welly objects with no LAS data
+    try:
+        data_df = welly_object.las[0]
+    except Exception as e:
+        logger.error(f"[las_handler] pre_process: no las data in welly_object | {e}")
+        return pd.DataFrame(), header_df
+
     data_df.index.rename("DEPTH", inplace=True)
     data_df = data_df.reset_index(drop=False)
     data_df["DEPTH"] = data_df["DEPTH"].round(4)
 
-    header_df = welly_object.header
-    nullValue = (
-        header_df[header_df["mnemonic"] == "NULL"]["value"].values[0]
-        if header_df[header_df["mnemonic"] == "NULL"]["value"].values
-        else -999.25
-    )
+    # Safely determine NULL value from header, with sensible default
+    try:
+        null_rows = header_df[header_df.get("mnemonic", pd.Series()) == "NULL"]["value"]
+        nullValue = (
+            float(null_rows.values[0])
+            if len(null_rows) and pd.notna(null_rows.values[0])
+            else -999.25
+        )
+    except Exception:
+        nullValue = -999.25
+
     data_df = data_df.where(data_df >= nullValue, np.nan)
     # Insert well name
     well_name = get_wellname_from_header(header_df)
@@ -245,15 +257,17 @@ def get_wellname_from_header(header_df):
     Returns:
         str: The well name, with slashes and spaces replaced by hyphens.
     """
-    return (
-        header_df[
-            (header_df["mnemonic"] == "WELL")
-            | (header_df["descr"].str.upper() == "WELL")
-        ]["value"]
-        .values[0]
-        .replace("/", "-")
-        .replace(" ", "-")
-    )
+    try:
+        descr = header_df.get("descr", pd.Series()).fillna("").str.upper()
+        mask = (header_df.get("mnemonic", pd.Series()) == "WELL") | (descr == "WELL")
+        if mask.any():
+            val = header_df.loc[mask, "value"].values[0]
+            if pd.isna(val) or str(val).strip() == "":
+                return "UNKNOWN_WELL"
+            return str(val).replace("/", "-").replace(" ", "-")
+    except Exception as e:
+        logger.error(f"[las_handler] get_wellname_from_header error | {e}")
+    return "UNKNOWN_WELL"
 
 
 def get_uwi_from_header(header_df):
@@ -267,16 +281,20 @@ def get_uwi_from_header(header_df):
     Returns:
         str: The UWI or well name, with slashes and spaces replaced by hyphens.
     """
-    uwi = (
-        header_df[
-            (header_df["mnemonic"] == "UWI")
-            | (header_df["descr"].str.upper() == "UNIQUE WELL ID")
-        ]["value"]
-        .values[0]
-        .replace("/", "-")
-        .replace(" ", "-")
-    )
-    return uwi if uwi else get_wellname_from_header(header_df)
+    try:
+        descr = header_df.get("descr", pd.Series()).fillna("").str.upper()
+        mask = (header_df.get("mnemonic", pd.Series()) == "UWI") | (
+            descr == "UNIQUE WELL ID"
+        )
+        if mask.any():
+            val = header_df.loc[mask, "value"].values[0]
+            if pd.isna(val) or str(val).strip() == "":
+                return get_wellname_from_header(header_df)
+            uwi = str(val).replace("/", "-").replace(" ", "-")
+            return uwi
+    except Exception as e:
+        logger.error(f"[las_handler] get_uwi_from_header error | {e}")
+    return get_wellname_from_header(header_df)
 
 
 def get_unit_from_header(header_df, mnemonic):
@@ -289,11 +307,13 @@ def get_unit_from_header(header_df, mnemonic):
     Returns:
         str or None: The unit of the curve, or None if not found.
     """
-    return (
-        header_df[header_df["mnemonic"] == mnemonic]["unit"].values[0]
-        if any(header_df["mnemonic"].str.contains(mnemonic))
-        else None
-    )
+    try:
+        matches = header_df[
+            header_df.get("mnemonic", pd.Series()).str.contains(mnemonic, na=False)
+        ]
+        return matches["unit"].values[0] if len(matches) else None
+    except Exception:
+        return None
 
 
 def get_descr_from_header(header_df, mnemonic):
@@ -306,11 +326,13 @@ def get_descr_from_header(header_df, mnemonic):
     Returns:
         str or None: The description of the curve, or None if not found.
     """
-    return (
-        header_df[header_df["mnemonic"] == mnemonic]["descr"].values[0]
-        if any(header_df["mnemonic"].str.contains(mnemonic))
-        else None
-    )
+    try:
+        matches = header_df[
+            header_df.get("mnemonic", pd.Series()).str.contains(mnemonic, na=False)
+        ]
+        return matches["descr"].values[0] if len(matches) else None
+    except Exception:
+        return None
 
 
 def extract_dataset(section_dict):

@@ -115,6 +115,56 @@ async def list_wells(project_id: int):
         raise HTTPException(status_code=500, detail=f"Failed to list wells: {e}")
 
 
+@router.post("/projects/{project_id}/wells", summary="Create a new well in a project")
+async def create_well(project_id: int, payload: dict):
+    """Create a new well record in the project.
+
+    Payload example: {"name": "Well-1", "uwi": "UWI-123", "depth_uom": "m"}
+    """
+    global connector
+    if connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+    name = payload.get("name")
+    if not name:
+        raise HTTPException(status_code=400, detail="Well name is required")
+
+    uwi = payload.get("uwi")
+    depth_uom = payload.get("depth_uom")
+
+    try:
+        with connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            # check for existing well in this project by name
+            existing = session.scalar(
+                select(db_models.Well).filter_by(project_id=project_id, name=name)
+            )
+            if existing:
+                return {"message": "Well already exists", "well_name": existing.name}
+
+            well_obj = db_objects.Well(
+                session,
+                project_id=project_id,
+                name=name,
+                uwi=uwi or "",
+                header_data={},
+                depth_uom=depth_uom,
+            )
+            # persist
+            well_obj.save()
+            return {"well_name": well_obj.name, "well_id": well_obj.well_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create well: {e}")
+
+
 @router.post("/projects/{project_id}/read_las", summary="Upload LAS files into project")
 async def project_read_las(project_id: int, files: List[UploadFile] = File(...)):
     """Upload LAS files and add them into the project in the database."""
