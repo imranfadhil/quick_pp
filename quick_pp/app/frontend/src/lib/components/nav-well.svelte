@@ -11,6 +11,7 @@
 	let project: any = $state(null);
 	let wells: string[] = $state([]);
 	let loadingWells = $state(false);
+	let selectedWell: any = $state(null);
 
 	async function fetchWells(projectId: string | number) {
 		loadingWells = true;
@@ -31,11 +32,13 @@
 	const unsubscribe = workspace.subscribe((w) => {
 		if (w && w.project && w.project.project_id) {
 			project = { ...w.project };
+			selectedWell = w.selectedWell ?? null;
 			// fetch wells for this project
 			fetchWells(w.project.project_id);
 		} else {
 			project = null;
 			wells = [];
+			selectedWell = null;
 		}
 	});
 
@@ -47,6 +50,22 @@
 			const path = $page.url.pathname;
 			if (!url) return false;
 			return path === url || (url !== '/' && path.startsWith(url));
+		}
+
+		function computeHref(itemUrl: string) {
+			if (!project) return itemUrl;
+			try {
+				if (itemUrl && itemUrl.startsWith('/wells')) {
+					const suffix = itemUrl.replace(/^\/wells/, '');
+					if (selectedWell && selectedWell.name) {
+						return `/wells/${project.project_id}/${encodeURIComponent(selectedWell.name)}${suffix}`;
+					}
+					return `/wells/${project.project_id}`;
+				}
+			} catch (e) {
+				console.warn('Failed to compute href for nav item', e);
+			}
+			return itemUrl;
 		}
 </script>
 
@@ -88,9 +107,18 @@
 					<Sidebar.MenuItem>
 						<Sidebar.MenuButton tooltipContent={item.title}>
 							{#snippet child({ props })}
-								<a href={item.url} {...props}
-									class="{isActive(item.url) ? 'bg-panel-foreground/5 font-semibold' : ''} flex items-center gap-2 w-full"
-									aria-current={isActive(item.url) ? 'page' : undefined}
+								<a href={computeHref(item.url)} {...props}
+									class="{isActive(computeHref(item.url)) ? 'bg-panel-foreground/5 font-semibold' : ''} flex items-center gap-2 w-full"
+									aria-current={isActive(computeHref(item.url)) ? 'page' : undefined}
+									onclick={(e) => {
+										e.preventDefault();
+										const href = computeHref(item.url);
+										// If navigating to a per-well page, ensure workspace selectedWell is set
+										if (project && selectedWell && item.url.startsWith('/wells')) {
+											selectWell({ id: selectedWell.id ?? selectedWell.name, name: selectedWell.name });
+										}
+										goto(href);
+									}}
 								>
 									{#if item.icon}
 										<item.icon />

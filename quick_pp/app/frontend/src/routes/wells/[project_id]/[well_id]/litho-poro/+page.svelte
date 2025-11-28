@@ -2,10 +2,11 @@
   import * as Sidebar from "$lib/components/ui/sidebar/index.js";
   import AppSidebar from "$lib/components/app-sidebar.svelte";
   import SiteHeader from "$lib/components/site-header.svelte";
-  import WsLithology from '$lib/components/WsLithoPoro.svelte';
+  import WsLithoPoro from '$lib/components/WsLithoPoro.svelte';
   import WsWellPlot from '$lib/components/WsWellPlot.svelte';
   import { onMount, onDestroy } from 'svelte';
-  import { workspace, setWorkspaceTitle } from '$lib/stores/workspace';
+  import { workspace, setWorkspaceTitle, selectProject, selectWell } from '$lib/stores/workspace';
+  import { page } from '$app/stores';
   import { goto } from '$app/navigation';
 
   let selectedProject: any = null;
@@ -16,7 +17,13 @@
     selectedWell = w?.selectedWell ?? null;
   });
 
-  onMount(() => setWorkspaceTitle('Lithology & Porosity', 'Lithology tools'));
+  onMount(() => {
+    const projectId = $page.params.project_id;
+    const wellId = decodeURIComponent($page.params.well_id || '');
+    selectProject({ project_id: projectId, name: `Project ${projectId}` });
+    selectWell({ id: wellId, name: wellId });
+    setWorkspaceTitle('Lithology & Porosity', 'Lithology tools');
+  });
   onDestroy(() => unsubscribe());
 </script>
 
@@ -32,7 +39,7 @@
               <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div class="col-span-1">
                   <div class="bg-panel rounded p-4">
-                    <WsLithology projectId={selectedProject.project_id} wellName={selectedWell?.name} />
+                    <WsLithoPoro projectId={selectedProject.project_id} wellName={selectedWell?.name} />
                   </div>
                 </div>
                 <div class="col-span-2">

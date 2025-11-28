@@ -58,7 +58,7 @@
 			},
 			{
 				title: "Reservoir Summary",
-				url: "/wells/summary",
+				url: "/wells/ressum",
 				icon: UsersIcon,
 			},
 		],
