@@ -77,7 +77,7 @@
 				<div class="text-sm font-semibold">{project.name}</div>
 				{#if loadingWells}
 					<div class="text-sm">Loading wells…</div>
-				{:else}
+					{:else}
 					{#if wells && wells.length}
 						<ul class="mt-2 space-y-1">
 							{#each wells as w}
@@ -94,12 +94,12 @@
 							{/each}
 						</ul>
 					{:else}
-						<div class="text-sm text-muted mt-2">No wells in this project.</div>
+						<div class="text-sm text-muted-foreground mt-2">No wells in this project.</div>
 					{/if}
 				{/if}
 			</div>
 		{:else}
-			<div class="px-2 py-2 text-sm text-muted">No project selected <a href="/projects" class="ml-1">Open Projects</a></div>
+			<div class="px-2 py-2 text-sm text-muted-foreground">No project selected <a href="/projects" class="ml-1">Open Projects</a></div>
 		{/if}
 		<Sidebar.Menu>
 			

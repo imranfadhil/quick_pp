@@ -1,19 +1,15 @@
 <script lang="ts">
-	import CameraIcon from "@tabler/icons-svelte/icons/camera";
-	import ChartBarIcon from "@tabler/icons-svelte/icons/chart-bar";
-	import DashboardIcon from "@tabler/icons-svelte/icons/dashboard";
+	// Import icons from Tabler Icons Svelte
+	import { IconTextWrapDisabled, IconWall, IconWashTemperature6, IconTable, IconMapSearch, IconTrendingUp } from '@tabler/icons-svelte';
 	import DatabaseIcon from "@tabler/icons-svelte/icons/database";
-	import FileAiIcon from "@tabler/icons-svelte/icons/file-ai";
-	import FileDescriptionIcon from "@tabler/icons-svelte/icons/file-description";
 	import FileWordIcon from "@tabler/icons-svelte/icons/file-word";
-	import FolderIcon from "@tabler/icons-svelte/icons/folder";
 	import HelpIcon from "@tabler/icons-svelte/icons/help";
-	import InnerShadowTopIcon from "@tabler/icons-svelte/icons/inner-shadow-top";
 	import ListDetailsIcon from "@tabler/icons-svelte/icons/list-details";
 	import ReportIcon from "@tabler/icons-svelte/icons/report";
 	import SearchIcon from "@tabler/icons-svelte/icons/search";
 	import SettingsIcon from "@tabler/icons-svelte/icons/settings";
-	import UsersIcon from "@tabler/icons-svelte/icons/users";
+
+	// Import custom navigation components
 	import NavProject from "./nav-project.svelte";
 	import NavWell from "./nav-well.svelte";
 	import NavReporting from "./nav-reporting.svelte";
@@ -32,34 +28,34 @@
 			{
 				title: "Project Overview",
 				url: "/projects",
-				icon: DatabaseIcon,
+				icon: IconMapSearch,
 			},
 		],
 		navWell: [
 			{
 				title: "Data Overview",
 				url: "/wells/data",
-				icon: DashboardIcon,
+				icon: ListDetailsIcon,
 			},
 			{
 				title: "Lithology & Porosity",
 				url: "/wells/litho-poro",
-				icon: ListDetailsIcon,
+				icon: IconWall,
 			},
 			{
 				title: "Permeability & Rock Type",
 				url: "/wells/perm-rt",
-				icon: ChartBarIcon,
+				icon: IconTextWrapDisabled,
 			},
 			{
 				title: "Water Saturation",
 				url: "/wells/saturation",
-				icon: FolderIcon,
+				icon: IconWashTemperature6,
 			},
 			{
 				title: "Reservoir Summary",
 				url: "/wells/ressum",
-				icon: UsersIcon,
+				icon: IconTable,
 			},
 		],
 		navSecondary: [
@@ -108,7 +104,7 @@
 				<Sidebar.MenuButton class="data-[slot=sidebar-menu-button]:!p-1.5">
 					{#snippet child({ props })}
 						<a href="##" {...props}>
-							<InnerShadowTopIcon class="!size-5" />
+							<IconTrendingUp class="!size-5" />
 							<span class="text-base font-semibold">quick-pp</span>
 						</a>
 					{/snippet}
