@@ -52,11 +52,11 @@
   {#if selectedProject}
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <!-- Left column: project details and well list -->
-      <div class="col-span-1">
-        <div class="bg-panel rounded p-4">
+          <div class="col-span-1">
+            <div class="bg-panel rounded p-4">
           placeholder
-        </div>
-      </div>
+            </div>
+          </div>
 
       <!-- Right column: focused well / plot -->
       <div class="col-span-2">

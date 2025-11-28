@@ -43,12 +43,12 @@
 			},
 			{
 				title: "Lithology & Porosity",
-				url: "/wells/lithology",
+				url: "/wells/litho-poro",
 				icon: ListDetailsIcon,
 			},
 			{
 				title: "Permeability & Rock Type",
-				url: "/wells/permeability",
+				url: "/wells/perm-rt",
 				icon: ChartBarIcon,
 			},
 			{

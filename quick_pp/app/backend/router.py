@@ -9,6 +9,7 @@ from .services.reservoir_summary import router as ressum_router
 from .services.chat import router as chat_router
 from .services.database import router as database_router
 from .services.plotter import router as plotter_router
+from .services.ancillary import router as ancillary_router
 
 api_router = APIRouter(prefix="/quick_pp")
 
@@ -21,3 +22,4 @@ api_router.include_router(ressum_router)
 api_router.include_router(chat_router)
 api_router.include_router(database_router)
 api_router.include_router(plotter_router)
+api_router.include_router(ancillary_router)

@@ -37,11 +37,13 @@
       const PlotlyLib = await ensurePlotly();
       if (!PlotlyLib) throw new Error('Failed to load Plotly library');
       // Use Plotly.react if available for smoother updates; ensure responsive
-      const config = { ...(fig.config || {}), responsive: true };
+      // Enable scroll zoom and set a sensible default dragmode for the layout.
+      const config = { ...(fig.config || {}), responsive: true, scrollZoom: true };
+      const layout = { ...(fig.layout || {}), dragmode: fig.layout?.dragmode ?? 'zoom' };
       if ((PlotlyLib as any).react) {
-        (PlotlyLib as any).react(container, fig.data, fig.layout || {}, config);
+        (PlotlyLib as any).react(container, fig.data, layout, config);
       } else {
-        (PlotlyLib as any).newPlot(container, fig.data, fig.layout || {}, config);
+        (PlotlyLib as any).newPlot(container, fig.data, layout, config);
       }
 
       // Setup ResizeObserver to call Plotly resize when container changes size
