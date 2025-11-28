@@ -1,21 +1,60 @@
 <script lang="ts">
 	import CirclePlusFilledIcon from "@tabler/icons-svelte/icons/circle-plus-filled";
-	import MailIcon from "@tabler/icons-svelte/icons/mail";
-	import { Button } from "$lib/components/ui/button/index.js";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import type { Icon } from "@tabler/icons-svelte";
 
 	let { items }: { items: { title: string; url: string; icon?: Icon }[] } = $props();
+	import { onMount } from "svelte";
+
 	let creating = $state(false);
 	let showForm = $state(false);
 	let newName = $state("");
 	let newDescription = $state("");
+
+	// Projects overview state
+	let activeTab = $state<'list' | 'overview'>('list');
+	let projects = $state<Array<any>>([]);
+	let selectedProject: any = $state(null);
 	const API_BASE = "http://localhost:6312";
 
 	function openForm() {
 		showForm = true;
 		newName = "";
 		newDescription = "";
+	}
+
+	async function fetchProjects() {
+		try {
+			const res = await fetch(`${API_BASE}/quick_pp/database/projects`);
+			if (!res.ok) {
+				console.warn('Failed to load projects list', res.statusText);
+				return;
+			}
+			const data = await res.json();
+			projects = Array.isArray(data) ? data : [];
+			// If items nav wasn't provided or is empty, map items from projects
+			if (!(items && items.length)) {
+				items = projects.map((p: any) => ({ title: p.name, url: `/projects/${p.project_id}` }));
+			}
+		} catch (err) {
+			console.error('Error fetching projects', err);
+		}
+	}
+
+	async function fetchProjectDetails(projectId: number | string) {
+		try {
+			const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}`);
+			if (!res.ok) {
+				const txt = await res.text();
+				throw new Error(txt || res.statusText);
+			}
+			const data = await res.json();
+			selectedProject = data;
+			activeTab = 'overview';
+		} catch (err) {
+			console.error('Failed to load project details', err);
+			alert('Failed to load project details');
+		}
 	}
 
 	function cancelForm() {
@@ -48,6 +87,8 @@
 			const data = await res.json();
 			const newItem = { title: data.name ?? newName, url: `/projects/${data.project_id}` };
 			items = [...(items || []), newItem];
+			// Refresh projects list so overview tab shows the new project
+			await fetchProjects();
 			cancelForm();
 		} catch (err) {
 			console.error(err);
@@ -56,9 +97,13 @@
 			creating = false;
 		}
 	}
+    // ensure projects load when component mounts
+    onMount(() => { fetchProjects(); });
+
 </script>
 
 <Sidebar.Group>
+	<Sidebar.GroupLabel>Project Management</Sidebar.GroupLabel>
 	<Sidebar.GroupContent class="flex flex-col gap-2">
 		<Sidebar.Menu>
 			<Sidebar.MenuItem class="flex items-center gap-2">
@@ -114,4 +159,4 @@
 			{/each}
 		</Sidebar.Menu>
 	</Sidebar.GroupContent>
-</Sidebar.Group>
+	</Sidebar.Group>

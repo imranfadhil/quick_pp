@@ -14,8 +14,9 @@
 	import SearchIcon from "@tabler/icons-svelte/icons/search";
 	import SettingsIcon from "@tabler/icons-svelte/icons/settings";
 	import UsersIcon from "@tabler/icons-svelte/icons/users";
-	import NavDocuments from "./nav-documents.svelte";
-	import NavMain from "./nav-main.svelte";
+	import NavProject from "./nav-project.svelte";
+	import NavWell from "./nav-well.svelte";
+	import NavReporting from "./nav-reporting.svelte";
 	import NavSecondary from "./nav-secondary.svelte";
 	import NavUser from "./nav-user.svelte";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
@@ -27,7 +28,14 @@
 			email: "m@example.com",
 			avatar: "/avatars/shadcn.jpg",
 		},
-		navMain: [
+		navProject: [
+			{
+				title: "Project Overview",
+				url: "/projects",
+				icon: DatabaseIcon,
+			},
+		],
+		navWell: [
 			{
 				title: "Data QC",
 				url: "#",
@@ -119,7 +127,7 @@
 				icon: SearchIcon,
 			},
 		],
-		documents: [
+		navReporting: [
 			{
 				name: "Data Library",
 				url: "#",
@@ -157,8 +165,9 @@
 		</Sidebar.Menu>
 	</Sidebar.Header>
 	<Sidebar.Content>
-		<NavMain items={data.navMain} />
-		<NavDocuments items={data.documents} />
+		<NavProject items={data.navProject} />
+		<NavWell items={data.navWell} />
+		<NavReporting items={data.navReporting} />
 		<NavSecondary items={data.navSecondary} class="mt-auto" />
 	</Sidebar.Content>
 	<Sidebar.Footer>
