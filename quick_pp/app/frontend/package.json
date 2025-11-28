@@ -50,4 +50,8 @@
 		"vite-plugin-devtools-json": "^1.0.0",
 		"zod": "^3.25.76"
 	}
+,
+	"dependencies": {
+		"plotly.js-dist-min": "^2.25.1"
+	}
 }

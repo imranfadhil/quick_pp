@@ -1,24 +1,89 @@
 <script lang="ts">
-	import CirclePlusFilledIcon from "@tabler/icons-svelte/icons/circle-plus-filled";
-	import MailIcon from "@tabler/icons-svelte/icons/mail";
-	import { Button } from "$lib/components/ui/button/index.js";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import type { Icon } from "@tabler/icons-svelte";
 	import { page } from '$app/stores';
+	import { workspace, selectWell } from '$lib/stores/workspace';
+	import { goto } from '$app/navigation';
+	import { onDestroy } from 'svelte';
 
-	let { items }: { items: { title: string; url: string; icon?: Icon }[] } = $props();
+	const API_BASE = 'http://localhost:6312';
 
-	function isActive(url: string) {
-		const path = $page.url.pathname;
-		if (!url) return false;
-		return path === url || (url !== '/' && path.startsWith(url));
+	let project: any = $state(null);
+	let wells: string[] = $state([]);
+	let loadingWells = $state(false);
+
+	async function fetchWells(projectId: string | number) {
+		loadingWells = true;
+		wells = [];
+		try {
+			const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells`);
+			if (res.ok) {
+				const data = await res.json();
+				wells = data?.wells || [];
+			}
+		} catch (e) {
+			console.warn('Failed to fetch wells for sidebar', e);
+		} finally {
+			loadingWells = false;
+		}
 	}
+
+	const unsubscribe = workspace.subscribe((w) => {
+		if (w && w.project && w.project.project_id) {
+			project = { ...w.project };
+			// fetch wells for this project
+			fetchWells(w.project.project_id);
+		} else {
+			project = null;
+			wells = [];
+		}
+	});
+
+	onDestroy(() => unsubscribe());
+
+		let { items }: { items: { title: string; url: string; icon?: Icon }[] } = $props();
+
+		function isActive(url: string) {
+			const path = $page.url.pathname;
+			if (!url) return false;
+			return path === url || (url !== '/' && path.startsWith(url));
+		}
 </script>
 
 <Sidebar.Group>	
 	<Sidebar.GroupLabel>Well Analysis</Sidebar.GroupLabel>
 	<Sidebar.GroupContent class="flex flex-col gap-2">
+		{#if project}
+			<div class="px-2 py-2">
+				<div class="text-sm font-semibold">{project.name}</div>
+				{#if loadingWells}
+					<div class="text-sm">Loading wells…</div>
+				{:else}
+					{#if wells && wells.length}
+						<ul class="mt-2 space-y-1">
+							{#each wells as w}
+								<li>
+									<a href={`/wells/${project.project_id}/${encodeURIComponent(String(w))}`}
+										onclick={(e) => {
+										e.preventDefault();
+										selectWell({ id: w, name: w });
+										goto(`/wells/${project.project_id}/${encodeURIComponent(String(w))}`);
+									}}
+									class="block text-sm px-2 py-1 rounded hover:bg-panel-foreground/5"
+									>{w}</a>
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<div class="text-sm text-muted mt-2">No wells in this project.</div>
+					{/if}
+				{/if}
+			</div>
+		{:else}
+			<div class="px-2 py-2 text-sm text-muted">No project selected <a href="/projects" class="ml-1">Open Projects</a></div>
+		{/if}
 		<Sidebar.Menu>
+			
 				{#each items as item (item.title)}
 					<Sidebar.MenuItem>
 						<Sidebar.MenuButton tooltipContent={item.title}>
