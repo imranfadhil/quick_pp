@@ -35,13 +35,12 @@
 </script>
 
 <div class="pressure-tests">
-  <h4 class="mb-2">Pressure Tests</h4>
   {#if loading}<div class="text-sm">Loading…</div>{:else}
     {#if error}<div class="text-sm text-red-600">{error}</div>{/if}
     <div class="mb-3">
-      <input placeholder="Depth" type="number" bind:value={newTest.depth} class="input mr-2" />
-      <input placeholder="Pressure" type="number" bind:value={newTest.pressure} class="input mr-2" />
-      <select bind:value={newTest.pressure_uom} class="input mr-2"><option>psi</option><option>bar</option></select>
+      <input placeholder="Depth" type="number" bind:value={newTest.depth} class="input mr-2 w-24" />
+      <input placeholder="Pressure" type="number" bind:value={newTest.pressure} class="input mr-2 w-24" />
+      <select bind:value={newTest.pressure_uom} class="input mr-2 w-24"><option>psi</option><option>bar</option></select>
       <button class="btn btn-primary" on:click={addTest}>Add</button>
     </div>
     {#if tests.length===0}

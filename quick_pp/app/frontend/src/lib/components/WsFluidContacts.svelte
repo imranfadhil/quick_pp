@@ -36,7 +36,6 @@
 </script>
 
 <div class="fluid-contacts">
-  <h4 class="mb-2">Fluid Contacts</h4>
   {#if loading}<div class="text-sm">Loading…</div>{:else}
     {#if error}<div class="text-sm text-red-600">{error}</div>{/if}
     <div class="mb-3">

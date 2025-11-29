@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException
+import pandas as pd
 from typing import List, Dict, Any
+import pandas as pd
 
 from .database import connector as db_connector
 from quick_pp.database import objects as db_objects
@@ -281,6 +283,87 @@ def list_core_samples(project_id: int, well_name: str):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list core samples: {e}")
+
+
+@router.get("/data", summary="Get top-to-bottom well data (rows of logs)")
+def get_well_top_to_bottom_data(
+    project_id: int, well_name: str, include_ancillary: bool = False
+):
+    """Return the full well data (curve logs) as a JSON array of rows.
+
+    Each row is a dict mapping column names (lowercased) to values. The DEPTH
+    column from the DataFrame is renamed to `depth` (lowercase) so clients can
+    rely on a consistent key.
+    """
+    if db_connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+
+    try:
+        with db_connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            # get_well_data returns a pandas DataFrame with DEPTH and curve columns
+            df = proj.get_well_data(well_name)
+            if df.empty:
+                return []
+
+            # normalize column names to lowercase and ensure DEPTH -> depth
+            df = df.reset_index(drop=True)
+            df.columns = [c.lower() for c in df.columns]
+
+            # convert NaNs to None for JSON serialization
+            df = df.where(pd.notnull(df), None)
+
+            records = df.to_dict(orient="records")
+
+            if include_ancillary:
+                # collect ancillary data to return alongside rows
+                well = proj.get_well(well_name)
+                tops_df = well.get_formation_tops()
+                contacts_df = well.get_fluid_contacts()
+                pressure_df = well.get_pressure_tests()
+                core_raw = well.get_core_data()
+                # convert frames to records (lists/dicts)
+                tops = tops_df.to_dict(orient="records") if not tops_df.empty else []
+                contacts = (
+                    contacts_df.to_dict(orient="records")
+                    if not contacts_df.empty
+                    else []
+                )
+                pressure = (
+                    pressure_df.to_dict(orient="records")
+                    if not pressure_df.empty
+                    else []
+                )
+                # core_raw is a dict of sample_name -> dict with 'depth','measurements' DataFrame
+                core_samples = []
+                for name, s in core_raw.items():
+                    measurements = []
+                    if hasattr(s.get("measurements"), "to_dict"):
+                        measurements = s.get("measurements").to_dict(orient="records")
+                    core_samples.append(
+                        {
+                            "sample_name": name,
+                            "depth": s.get("depth"),
+                            "measurements": measurements,
+                        }
+                    )
+
+                return {
+                    "data": records,
+                    "formation_tops": tops,
+                    "fluid_contacts": contacts,
+                    "pressure_tests": pressure,
+                    "core_samples": core_samples,
+                }
+
+            return records
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get well data: {e}")
 
 
 @router.get("/rca", summary="List core point measurements (RCA) for a well")

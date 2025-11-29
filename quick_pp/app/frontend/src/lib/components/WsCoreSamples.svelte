@@ -113,11 +113,6 @@
 </script>
 
 <div class="ws-core-samples">
-  <div class="mb-3">
-    <div class="font-semibold">Core Samples</div>
-    <div class="text-sm text-muted">List and add core samples (SCAL & RCA).</div>
-  </div>
-
   {#if loading}
     <div>Loading...</div>
   {:else}

@@ -133,7 +133,6 @@
 </script>
 
 <div class="formation-tops">
-  <h4 class="mb-2">Formation Tops</h4>
   {#if loading}
     <div class="text-sm">Loading…</div>
   {:else}
