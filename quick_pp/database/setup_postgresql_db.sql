@@ -9,32 +9,10 @@
 BEGIN;
 
 -- -----------------------------------------------------------------------------
--- Clean Slate: Drop existing tables in reverse order of dependency
--- -----------------------------------------------------------------------------
-DROP TRIGGER IF EXISTS "trg_set_projects_timestamp" ON "projects";
-DROP TRIGGER IF EXISTS "trg_set_wells_timestamp" ON "wells";
-DROP TABLE IF EXISTS "audit_log";
-DROP TABLE IF EXISTS "well_surveys";
-DROP TABLE IF EXISTS "capillary_pressure";
-DROP TABLE IF EXISTS "relative_permeability";
-DROP TABLE IF EXISTS "core_measurements";
-DROP TABLE IF EXISTS "core_samples";
-DROP TABLE IF EXISTS "pressure_tests";
-DROP TABLE IF EXISTS "fluid_contacts";
-DROP TABLE IF EXISTS "formation_tops";
-DROP TABLE IF EXISTS "curve_data";
-DROP TABLE IF EXISTS "curves";
-DROP TABLE IF EXISTS "wells";
-DROP TABLE IF EXISTS "project_members";
-DROP TABLE IF EXISTS "projects";
-DROP TABLE IF EXISTS "users";
-DROP FUNCTION IF EXISTS update_updated_at_column();
-
--- -----------------------------------------------------------------------------
 -- TABLE: users
 -- Stores user authentication and identity info.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "users" (
+CREATE TABLE IF NOT EXISTS "users" (
     "user_id" SERIAL PRIMARY KEY,
     "username" VARCHAR(50) UNIQUE NOT NULL,
     "email" VARCHAR(255) UNIQUE NOT NULL,
@@ -46,7 +24,7 @@ CREATE TABLE "users" (
 -- TABLE: projects
 -- The main container for a collection of wells.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "projects" (
+CREATE TABLE IF NOT EXISTS "projects" (
     "project_id" SERIAL PRIMARY KEY,
     "name" VARCHAR(255) NOT NULL,
     "description" TEXT,
@@ -59,7 +37,7 @@ CREATE TABLE "projects" (
 -- TABLE: project_members (Junction Table)
 -- Links users to projects (many-to-many relationship) and defines their role.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "project_members" (
+CREATE TABLE IF NOT EXISTS "project_members" (
     "project_id" INTEGER NOT NULL REFERENCES "projects"("project_id") ON DELETE CASCADE,
     "user_id" INTEGER NOT NULL REFERENCES "users"("user_id") ON DELETE CASCADE,
     "role" VARCHAR(50) NOT NULL DEFAULT 'viewer' CHECK (role IN ('admin', 'editor', 'viewer')),
@@ -70,7 +48,7 @@ CREATE TABLE "project_members" (
 -- TABLE: wells
 -- The central well object, linked to one project.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "wells" (
+CREATE TABLE IF NOT EXISTS "wells" (
     "well_id" SERIAL PRIMARY KEY,
     "project_id" INTEGER NOT NULL REFERENCES "projects"("project_id") ON DELETE CASCADE,
     "name" VARCHAR(255) NOT NULL,
@@ -87,7 +65,7 @@ CREATE TABLE "wells" (
 -- Stores the *metadata* for each curve, linked to one well.
 -- The actual data points are in 'curve_data'.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "curves" (
+CREATE TABLE IF NOT EXISTS "curves" (
     "curve_id" SERIAL PRIMARY KEY,
     "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
     "mnemonic" VARCHAR(100) NOT NULL,
@@ -101,7 +79,7 @@ CREATE TABLE "curves" (
 -- TABLE: curve_data (The "Long" Data Table)
 -- Stores the actual data points for every curve.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "curve_data" (
+CREATE TABLE IF NOT EXISTS "curve_data" (
     "curve_data_id" SERIAL PRIMARY KEY,
     "curve_id" INTEGER NOT NULL REFERENCES "curves"("curve_id") ON DELETE CASCADE,
     "depth" REAL NOT NULL,
@@ -116,7 +94,7 @@ CREATE TABLE "curve_data" (
 -- TABLE: formation_tops
 -- Stores discrete depth markers for formation tops.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "formation_tops" (
+CREATE TABLE IF NOT EXISTS "formation_tops" (
     "top_id" SERIAL PRIMARY KEY,
     "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
     "name" VARCHAR(255) NOT NULL,
@@ -128,7 +106,7 @@ CREATE TABLE "formation_tops" (
 -- TABLE: fluid_contacts
 -- Stores discrete depth markers for fluid contacts (e.g., OWC, GOC).
 -- -----------------------------------------------------------------------------
-CREATE TABLE "fluid_contacts" (
+CREATE TABLE IF NOT EXISTS "fluid_contacts" (
     "contact_id" SERIAL PRIMARY KEY,
     "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
     "name" VARCHAR(100) NOT NULL,
@@ -140,7 +118,7 @@ CREATE TABLE "fluid_contacts" (
 -- TABLE: pressure_tests
 -- Stores point pressure measurements.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "pressure_tests" (
+CREATE TABLE IF NOT EXISTS "pressure_tests" (
     "test_id" SERIAL PRIMARY KEY,
     "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
     "depth" REAL NOT NULL,
@@ -153,7 +131,7 @@ CREATE TABLE "pressure_tests" (
 -- TABLE: well_surveys
 -- Stores directional survey points (MD, Inc, Azim).
 -- -----------------------------------------------------------------------------
-CREATE TABLE "well_surveys" (
+CREATE TABLE IF NOT EXISTS "well_surveys" (
     "survey_id" SERIAL PRIMARY KEY,
     "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
     "md" REAL NOT NULL, -- Measured Depth
@@ -167,7 +145,7 @@ CREATE TABLE "well_surveys" (
 -- TABLE: core_samples
 -- Represents a physical core plug taken from a well.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "core_samples" (
+CREATE TABLE IF NOT EXISTS "core_samples" (
     "sample_id" SERIAL PRIMARY KEY,
     "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
     "sample_name" VARCHAR(100) NOT NULL,
@@ -182,7 +160,7 @@ CREATE TABLE "core_samples" (
 -- TABLE: core_measurements
 -- Stores single-value measurements for a core sample (e.g., porosity).
 -- -----------------------------------------------------------------------------
-CREATE TABLE "core_measurements" (
+CREATE TABLE IF NOT EXISTS "core_measurements" (
     "measurement_id" SERIAL PRIMARY KEY,
     "sample_id" INTEGER NOT NULL REFERENCES "core_samples"("sample_id") ON DELETE CASCADE,
     "property_name" VARCHAR(100) NOT NULL,
@@ -195,7 +173,7 @@ CREATE TABLE "core_measurements" (
 -- TABLE: relative_permeability
 -- Stores relative permeability data series for a core sample.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "relative_permeability" (
+CREATE TABLE IF NOT EXISTS "relative_permeability" (
     "relperm_id" SERIAL PRIMARY KEY,
     "sample_id" INTEGER NOT NULL REFERENCES "core_samples"("sample_id") ON DELETE CASCADE,
     "saturation" REAL NOT NULL,
@@ -208,7 +186,7 @@ CREATE TABLE "relative_permeability" (
 -- TABLE: capillary_pressure
 -- Stores capillary pressure data series for a core sample.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "capillary_pressure" (
+CREATE TABLE IF NOT EXISTS "capillary_pressure" (
     "pc_id" SERIAL PRIMARY KEY,
     "sample_id" INTEGER NOT NULL REFERENCES "core_samples"("sample_id") ON DELETE CASCADE,
     "saturation" REAL NOT NULL,
@@ -224,7 +202,7 @@ CREATE TABLE "capillary_pressure" (
 -- !! IMPORTANT: Your application MUST write to this table manually.
 -- !! Triggers were removed as SQLite cannot get the 'user_id'.
 -- -----------------------------------------------------------------------------
-CREATE TABLE "audit_log" (
+CREATE TABLE IF NOT EXISTS "audit_log" (
     "log_id" SERIAL PRIMARY KEY,
     "user_id" INTEGER REFERENCES "users"("user_id") ON DELETE SET NULL,
     "action" VARCHAR(10) NOT NULL, -- 'INSERT', 'UPDATE', 'DELETE'
@@ -238,25 +216,25 @@ CREATE TABLE "audit_log" (
 -- INDEXES
 -- Speed up common queries.
 -- -----------------------------------------------------------------------------
-CREATE INDEX "idx_wells_project_id" ON "wells" ("project_id");
-CREATE INDEX "idx_curves_well_id" ON "curves" ("well_id");
-CREATE INDEX "idx_project_members_user_id" ON "project_members" ("user_id");
-CREATE INDEX "idx_formation_tops_well_id" ON "formation_tops" ("well_id");
-CREATE INDEX "idx_fluid_contacts_well_id" ON "fluid_contacts" ("well_id");
-CREATE INDEX "idx_pressure_tests_well_id" ON "pressure_tests" ("well_id");
-CREATE INDEX "idx_well_surveys_well_id" ON "well_surveys" ("well_id");
-CREATE INDEX "idx_core_samples_well_id" ON "core_samples" ("well_id");
-CREATE INDEX "idx_core_measurements_sample_id" ON "core_measurements" ("sample_id");
-CREATE INDEX "idx_relative_permeability_sample_id" ON "relative_permeability" ("sample_id");
-CREATE INDEX "idx_capillary_pressure_sample_id" ON "capillary_pressure" ("sample_id");
+CREATE INDEX IF NOT EXISTS "idx_wells_project_id" ON "wells" ("project_id");
+CREATE INDEX IF NOT EXISTS "idx_curves_well_id" ON "curves" ("well_id");
+CREATE INDEX IF NOT EXISTS "idx_project_members_user_id" ON "project_members" ("user_id");
+CREATE INDEX IF NOT EXISTS "idx_formation_tops_well_id" ON "formation_tops" ("well_id");
+CREATE INDEX IF NOT EXISTS "idx_fluid_contacts_well_id" ON "fluid_contacts" ("well_id");
+CREATE INDEX IF NOT EXISTS "idx_pressure_tests_well_id" ON "pressure_tests" ("well_id");
+CREATE INDEX IF NOT EXISTS "idx_well_surveys_well_id" ON "well_surveys" ("well_id");
+CREATE INDEX IF NOT EXISTS "idx_core_samples_well_id" ON "core_samples" ("well_id");
+CREATE INDEX IF NOT EXISTS "idx_core_measurements_sample_id" ON "core_measurements" ("sample_id");
+CREATE INDEX IF NOT EXISTS "idx_relative_permeability_sample_id" ON "relative_permeability" ("sample_id");
+CREATE INDEX IF NOT EXISTS "idx_capillary_pressure_sample_id" ON "capillary_pressure" ("sample_id");
 
 -- Indexes for the 'curve_data' table
-CREATE INDEX "idx_curve_data_curve_id" ON "curve_data" ("curve_id");
-CREATE INDEX "idx_curve_data_curve_id_depth" ON "curve_data" ("curve_id", "depth");
+CREATE INDEX IF NOT EXISTS "idx_curve_data_curve_id" ON "curve_data" ("curve_id");
+CREATE INDEX IF NOT EXISTS "idx_curve_data_curve_id_depth" ON "curve_data" ("curve_id", "depth");
 
 -- Indexes for the 'audit_log' table
-CREATE INDEX "idx_audit_log_user_table" ON "audit_log" ("user_id", "table_name");
-CREATE INDEX "idx_audit_log_record_id" ON "audit_log" ("record_id");
+CREATE INDEX IF NOT EXISTS "idx_audit_log_user_table" ON "audit_log" ("user_id", "table_name");
+CREATE INDEX IF NOT EXISTS "idx_audit_log_record_id" ON "audit_log" ("record_id");
 
 -- =============================================================================
 -- AUTOMATION: TRIGGERS
@@ -269,25 +247,41 @@ CREATE INDEX "idx_audit_log_record_id" ON "audit_log" ("record_id");
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = now();
-    RETURN NEW;
+        NEW.updated_at = now();
+        RETURN NEW;
 END;
 $$ language 'plpgsql';
 
 -- -----------------------------------------------------------------------------
 -- TRIGGER 1: Auto-update the 'updated_at' timestamp for 'projects'
 -- -----------------------------------------------------------------------------
-CREATE TRIGGER "trg_set_projects_timestamp"
-BEFORE UPDATE ON "projects"
-FOR EACH ROW
-EXECUTE FUNCTION update_updated_at_column();
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger WHERE tgname = 'trg_set_projects_timestamp'
+    ) THEN
+        EXECUTE 'CREATE TRIGGER trg_set_projects_timestamp
+            BEFORE UPDATE ON projects
+            FOR EACH ROW
+            EXECUTE FUNCTION update_updated_at_column();';
+    END IF;
+END
+$$;
 
 -- -----------------------------------------------------------------------------
 -- TRIGGER 2: Auto-update the 'updated_at' timestamp for 'wells'
 -- -----------------------------------------------------------------------------
-CREATE TRIGGER "trg_set_wells_timestamp"
-BEFORE UPDATE ON "wells"
-FOR EACH ROW
-EXECUTE FUNCTION update_updated_at_column();
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger WHERE tgname = 'trg_set_wells_timestamp'
+    ) THEN
+        EXECUTE 'CREATE TRIGGER trg_set_wells_timestamp
+            BEFORE UPDATE ON wells
+            FOR EACH ROW
+            EXECUTE FUNCTION update_updated_at_column();';
+    END IF;
+END
+$$;
 
 COMMIT;

@@ -1,3 +1,13 @@
+from pathlib import Path
+
+# Prefer python-dotenv to load a repository .env automatically when the
+# application module is imported. This ensures running `uvicorn quick_pp.app.backend.main:app`
+# from the repo root picks up the .env file even if the working directory differs.
+try:
+    from dotenv import load_dotenv
+except Exception:
+    load_dotenv = None
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,6 +53,16 @@ app = FastAPI(
     openapi_tags=tags_metadata,
     debug=True,
 )
+
+# Load .env from a parent directory (repo root) if python-dotenv is available.
+# Walk upwards from this file and load the first `.env` file we find.
+if load_dotenv is not None:
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        candidate = parent / ".env"
+        if candidate.exists():
+            load_dotenv(dotenv_path=str(candidate))
+            break
 
 # Setup static files and templates
 with resources.files("quick_pp.app.backend") as api_folder:
