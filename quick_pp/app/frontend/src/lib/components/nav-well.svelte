@@ -12,6 +12,7 @@
 	let wells: string[] = $state([]);
 	let loadingWells = $state(false);
 	let selectedWell: any = $state(null);
+	let selectedWellName: string = '';
 
 	async function fetchWells(projectId: string | number) {
 		loadingWells = true;
@@ -33,12 +34,14 @@
 		if (w && w.project && w.project.project_id) {
 			project = { ...w.project };
 			selectedWell = w.selectedWell ?? null;
+			selectedWellName = selectedWell?.name ?? '';
 			// fetch wells for this project
 			fetchWells(w.project.project_id);
 		} else {
 			project = null;
 			wells = [];
 			selectedWell = null;
+			selectedWellName = '';
 		}
 	});
 
@@ -77,25 +80,26 @@
 				<div class="text-sm font-semibold">{project.name}</div>
 				{#if loadingWells}
 					<div class="text-sm">Loading wells…</div>
-					{:else}
-					{#if wells && wells.length}
-						<ul class="mt-2 space-y-1">
+				{:else}
+				{#if wells && wells.length}
+					<div class="mt-2">
+						<select id="well-select" class="input w-full mt-1 text-sm h-9" value={selectedWellName} onchange={(e) => {
+							const name = (e.target as HTMLSelectElement).value;
+							if (!name) return;
+							selectedWellName = name;
+							// update shared workspace and navigate
+							selectWell({ id: name, name });
+							goto(`/wells/${project.project_id}/${encodeURIComponent(String(name))}`);
+						}}>
+							<option value="">— select well —</option>
 							{#each wells as w}
-								<li>
-									<a href={`/wells/${project.project_id}/${encodeURIComponent(String(w))}`}
-										onclick={(e) => {
-										e.preventDefault();
-										selectWell({ id: w, name: w });
-										goto(`/wells/${project.project_id}/${encodeURIComponent(String(w))}`);
-									}}
-									class="block text-sm px-2 py-1 rounded hover:bg-panel-foreground/5"
-									>{w}</a>
-								</li>
+								<option value={w}>{w}</option>
 							{/each}
-						</ul>
-					{:else}
-						<div class="text-sm text-muted-foreground mt-2">No wells in this project.</div>
-					{/if}
+						</select>
+					</div>
+				{:else}
+					<div class="text-sm text-muted-foreground mt-2">No wells in this project.</div>
+				{/if}
 				{/if}
 			</div>
 		{:else}
