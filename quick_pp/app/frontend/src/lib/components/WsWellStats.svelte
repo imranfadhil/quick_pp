@@ -31,8 +31,65 @@
   let fluidContacts: Array<Record<string, any>> = [];
   let pressureTestsFull: Array<Record<string, any>> = [];
   let coreSamplesFull: Array<Record<string, any>> = [];
+  
+  // Data profiling
+  let dataProfile: Record<string, any> = {};
+  let showDataProfile = false;
 
   $: buildChartData();
+  $: if (fullRows.length > 0 && fullColumns.length > 0) {
+    profileData();
+  }
+
+  function profileData() {
+    const profile: Record<string, any> = {};
+    
+    for (const col of fullColumns) {
+      const values = fullRows.map(row => row[col]);
+      const nonNullValues = values.filter(v => v !== null && v !== undefined && v !== '');
+      const nullCount = values.length - nonNullValues.length;
+      
+      // Determine data type
+      const firstNonNull = nonNullValues.find(v => v !== null && v !== undefined);
+      let dataType: string = typeof firstNonNull;
+      if (dataType === 'string' && !isNaN(Number(firstNonNull))) {
+        dataType = 'numeric (string)';
+      }
+      
+      // Get unique values (limit to avoid performance issues)
+      const uniqueValues = new Set(nonNullValues);
+      const uniqueCount = uniqueValues.size;
+      
+      // Calculate statistics for numeric columns
+      let stats: any = null;
+      if (dataType === 'number' || dataType === 'numeric (string)') {
+        const numericValues = nonNullValues.map(v => Number(v)).filter(v => !isNaN(v));
+        if (numericValues.length > 0) {
+          const sorted = numericValues.slice().sort((a, b) => a - b);
+          const sum = numericValues.reduce((a, b) => a + b, 0);
+          const mean = sum / numericValues.length;
+          const min = sorted[0];
+          const max = sorted[sorted.length - 1];
+          const median = sorted[Math.floor(sorted.length / 2)];
+          
+          stats = { min, max, mean, median, count: numericValues.length };
+        }
+      }
+      
+      profile[col] = {
+        dataType,
+        totalCount: values.length,
+        nonNullCount: nonNullValues.length,
+        nullCount,
+        missingPercent: ((nullCount / values.length) * 100).toFixed(2),
+        uniqueCount,
+        uniqueValues: uniqueCount <= 20 ? Array.from(uniqueValues).slice(0, 20) : null,
+        stats
+      };
+    }
+    
+    dataProfile = profile;
+  }
 
   async function fetchCounts() {
     if (!projectId || !wellName) return;
@@ -83,23 +140,38 @@
       }
       // attempt to fetch full well data if endpoint present (non-blocking)
       try {
-        const fullRes = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data?include_ancillary=1`);
+        const fullRes = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data?include_ancillary=true`);
         if (fullRes.ok) {
           const fd = await fullRes.json();
-          // fd may be an envelope {data: [...], formation_tops: [...], ...} or a bare array
-          const payload = fd && fd.data ? fd : { data: fd };
-          if (Array.isArray(payload.data) && payload.data.length) {
-            fullRows = payload.data;
-            fullColumns = Object.keys(payload.data[0] ?? {});
-            selectedLog = selectedLog ?? fullColumns.find((c) => c !== 'depth') ?? null;
+          console.log('Full well data response:', fd);
+          
+          // Handle response format: {data: [...], formation_tops: [...]} or bare array [...]
+          let dataArray: any[] = [];
+          if (Array.isArray(fd)) {
+            // Bare array response
+            dataArray = fd;
+          } else if (fd && Array.isArray(fd.data)) {
+            // Envelope response with ancillary data
+            dataArray = fd.data;
+            if (fd.formation_tops) formationTops = fd.formation_tops;
+            if (fd.fluid_contacts) fluidContacts = fd.fluid_contacts;
+            if (fd.pressure_tests) pressureTestsFull = fd.pressure_tests;
+            if (fd.core_samples) coreSamplesFull = fd.core_samples;
           }
-          if (payload.formation_tops) formationTops = payload.formation_tops;
-          if (payload.fluid_contacts) fluidContacts = payload.fluid_contacts;
-          if (payload.pressure_tests) pressureTestsFull = payload.pressure_tests;
-          if (payload.core_samples) coreSamplesFull = payload.core_samples;
+          
+          if (dataArray.length > 0) {
+            fullRows = dataArray;
+            fullColumns = Object.keys(dataArray[0] ?? {});
+            selectedLog = selectedLog ?? fullColumns.find((c) => c !== 'depth') ?? null;
+            console.log(`Loaded ${fullRows.length} rows with ${fullColumns.length} columns`);
+          } else {
+            console.warn('No well data found in response');
+          }
+        } else {
+          console.error('Failed to fetch well data:', fullRes.status, fullRes.statusText);
         }
       } catch (e) {
-        // non-fatal
+        console.error('Error fetching well data:', e);
       }
     } catch (e: any) {
       console.warn('WsWellStats fetch error', e);
@@ -228,29 +300,50 @@
       <div class="mt-4">
         <div class="flex items-center justify-between">
           <div class="font-medium">Full Well Data</div>
-          <div>
+          <div class="flex gap-2">
+            <button class="btn btn-sm" on:click={() => { showDataProfile = !showDataProfile; }}>
+              {showDataProfile ? 'Hide' : 'Show'} Profile
+            </button>
             <button class="btn btn-sm" on:click={async () => {
               showFullData = !showFullData;
               if (showFullData && fullRows.length === 0) {
                 // try fetching now
+                loading = true;
                 try {
-                  const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data?include_ancillary=1`);
+                  const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data?include_ancillary=true`);
                   if (res.ok) {
                     const fd = await res.json();
-                    const payload = fd && fd.data ? fd : { data: fd };
-                    if (Array.isArray(payload.data)) {
-                      fullRows = payload.data;
-                      fullColumns = Object.keys(payload.data[0] ?? {});
-                      selectedLog = selectedLog ?? fullColumns.find((c) => c !== 'depth') ?? null;
-                      if (payload.formation_tops) formationTops = payload.formation_tops;
-                      if (payload.fluid_contacts) fluidContacts = payload.fluid_contacts;
-                      if (payload.pressure_tests) pressureTestsFull = payload.pressure_tests;
-                      if (payload.core_samples) coreSamplesFull = payload.core_samples;
-                      buildChartData();
+                    console.log('Well data fetched on demand:', fd);
+                    
+                    // Handle response format
+                    let dataArray: any[] = [];
+                    if (Array.isArray(fd)) {
+                      dataArray = fd;
+                    } else if (fd && Array.isArray(fd.data)) {
+                      dataArray = fd.data;
+                      if (fd.formation_tops) formationTops = fd.formation_tops;
+                      if (fd.fluid_contacts) fluidContacts = fd.fluid_contacts;
+                      if (fd.pressure_tests) pressureTestsFull = fd.pressure_tests;
+                      if (fd.core_samples) coreSamplesFull = fd.core_samples;
                     }
+                    
+                    if (dataArray.length > 0) {
+                      fullRows = dataArray;
+                      fullColumns = Object.keys(dataArray[0] ?? {});
+                      selectedLog = selectedLog ?? fullColumns.find((c) => c !== 'depth') ?? null;
+                      buildChartData();
+                      console.log(`Loaded ${fullRows.length} rows with ${fullColumns.length} columns`);
+                    } else {
+                      error = 'No well data available';
+                    }
+                  } else {
+                    error = `Failed to load well data: ${res.status}`;
                   }
-                } catch (e) {
-                  // ignore
+                } catch (e: any) {
+                  console.error('Error loading well data:', e);
+                  error = `Error: ${e.message}`;
+                } finally {
+                  loading = false;
                 }
               }
             }}>{showFullData ? 'Hide' : 'Show'}</button>
@@ -259,6 +352,70 @@
 
         {#if showFullData}
           <div class="mt-2 space-y-2">
+            {#if showDataProfile && Object.keys(dataProfile).length > 0}
+              <div class="bg-surface rounded p-3 space-y-3">
+                <div class="font-medium">Data Profile</div>
+                
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                  <div class="p-2 bg-panel rounded">
+                    <div class="text-muted">Total Columns</div>
+                    <div class="font-semibold">{fullColumns.length}</div>
+                  </div>
+                  <div class="p-2 bg-panel rounded">
+                    <div class="text-muted">Total Rows</div>
+                    <div class="font-semibold">{fullRows.length}</div>
+                  </div>
+                </div>
+
+                <div class="overflow-auto max-h-96">
+                  <table class="w-full text-xs">
+                    <thead class="sticky top-0 bg-surface">
+                      <tr class="border-b">
+                        <th class="p-2 text-left">Column</th>
+                        <th class="p-2 text-left">Type</th>
+                        <th class="p-2 text-right">Non-Null</th>
+                        <th class="p-2 text-right">Missing</th>
+                        <th class="p-2 text-right">Missing %</th>
+                        <th class="p-2 text-right">Unique</th>
+                        <th class="p-2 text-left">Stats / Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each fullColumns as col}
+                        {@const prof = dataProfile[col]}
+                        {#if prof}
+                          <tr class="border-b hover:bg-panel/50">
+                            <td class="p-2 font-medium">{col}</td>
+                            <td class="p-2 text-muted">{prof.dataType}</td>
+                            <td class="p-2 text-right">{prof.nonNullCount}</td>
+                            <td class="p-2 text-right">{prof.nullCount}</td>
+                            <td class="p-2 text-right">{prof.missingPercent}%</td>
+                            <td class="p-2 text-right">{prof.uniqueCount}</td>
+                            <td class="p-2">
+                              {#if prof.stats}
+                                <div class="text-xs">
+                                  <span class="text-muted">min:</span> {prof.stats.min.toFixed(2)}, 
+                                  <span class="text-muted">max:</span> {prof.stats.max.toFixed(2)}, 
+                                  <span class="text-muted">mean:</span> {prof.stats.mean.toFixed(2)}
+                                </div>
+                              {:else if prof.uniqueValues}
+                                <div class="text-xs truncate max-w-xs" title={prof.uniqueValues.join(', ')}>
+                                  {prof.uniqueValues.slice(0, 5).join(', ')}
+                                  {#if prof.uniqueValues.length > 5}...{/if}
+                                </div>
+                              {:else}
+                                <div class="text-xs text-muted">{prof.uniqueCount} unique values</div>
+                              {/if}
+                            </td>
+                          </tr>
+                        {/if}
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            {/if}
+
             <div class="flex items-center gap-2">
               <div class="text-sm text-muted">Plot log:</div>
               <select class="input" bind:value={selectedLog} on:change={() => buildChartData()}>

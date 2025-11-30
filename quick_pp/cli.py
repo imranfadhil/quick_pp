@@ -57,7 +57,7 @@ def cli():
 
 @click.command()
 @click.option("--debug", is_flag=True)
-def app(debug):
+def backend(debug):
     """Start the quick_pp web application.
 
     This launches a Uvicorn server to run the FastAPI backend and the associated qpp assistant module.
@@ -68,6 +68,34 @@ def app(debug):
         click.echo(f"App is not running. Starting it now... | {cmd}")
         process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
         process.wait()
+
+
+@click.command()
+def frontend():
+    """Start the quick_pp frontend development server.
+
+    This launches the SvelteKit development server for the frontend application."""
+    frontend_dir = Path(__file__).parent / "app" / "frontend"
+
+    if not frontend_dir.exists():
+        click.echo(f"Error: Frontend directory not found at {frontend_dir}")
+        return
+
+    # Check if node_modules exists, if not suggest installing dependencies
+    if not (frontend_dir / "node_modules").exists():
+        click.echo(
+            "Warning: node_modules not found. You may need to run 'npm install' first."
+        )
+        click.echo(f"Run: cd {frontend_dir} && npm install")
+        return
+
+    click.echo(f"Starting frontend development server from {frontend_dir}...")
+
+    # Change to frontend directory and run npm run dev
+    os.chdir(frontend_dir)
+    cmd = "npm run dev"
+    process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
+    process.wait()
 
 
 @click.command()
@@ -164,11 +192,12 @@ def predict(model_config, data_hash, output_file_name, env, plot):
 
 
 # Add commands to the CLI group
-cli.add_command(app)
+cli.add_command(backend)
 cli.add_command(mlflow_server)
 cli.add_command(model_deployment)
 cli.add_command(train)
 cli.add_command(predict)
+cli.add_command(frontend)
 
 
 if __name__ == "__main__":

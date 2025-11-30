@@ -148,7 +148,6 @@ async def create_well(project_id: int, payload: dict):
 
     try:
         with connector.get_session() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
             # check for existing well in this project by name
             existing = session.scalar(
                 select(db_models.Well).filter_by(project_id=project_id, name=name)

@@ -1,9 +1,8 @@
 from fastapi import APIRouter, HTTPException
-import pandas as pd
 from typing import List, Dict, Any
-import pandas as pd
+import json
 
-from .database import connector as db_connector
+from . import database
 from quick_pp.database import objects as db_objects
 from sqlalchemy import select
 from fastapi import Body, UploadFile, File
@@ -17,14 +16,14 @@ router = APIRouter(
 
 @router.get("/formation_tops", summary="List formation tops for a well")
 def list_formation_tops(project_id: int, well_name: str):
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
         )
 
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             tops_df = well.get_formation_tops()
@@ -43,7 +42,7 @@ def add_formation_tops(
     well_name: str,
     payload: Dict[str, List[Dict[str, Any]]] = Body(...),
 ):
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
@@ -56,7 +55,7 @@ def add_formation_tops(
 
     tops = payload.get("tops")
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             well.add_formation_tops(tops)
@@ -76,14 +75,14 @@ def add_formation_tops(
 
 @router.delete("/formation_tops/{top_name}", summary="Delete a formation top by name")
 def delete_formation_top(project_id: int, well_name: str, top_name: str):
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
         )
 
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             # find ORM FormationTop and delete
@@ -106,13 +105,13 @@ def delete_formation_top(project_id: int, well_name: str, top_name: str):
 
 @router.get("/fluid_contacts", summary="List fluid contacts for a well")
 def list_fluid_contacts(project_id: int, well_name: str):
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
         )
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             df = well.get_fluid_contacts()
@@ -131,7 +130,7 @@ def add_fluid_contacts(
     well_name: str,
     payload: Dict[str, List[Dict[str, Any]]] = Body(...),
 ):
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
@@ -142,7 +141,7 @@ def add_fluid_contacts(
         )
     contacts = payload.get("contacts")
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             well.add_fluid_contacts(contacts)
@@ -157,13 +156,13 @@ def add_fluid_contacts(
 
 @router.get("/pressure_tests", summary="List pressure tests for a well")
 def list_pressure_tests(project_id: int, well_name: str):
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
         )
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             df = well.get_pressure_tests()
@@ -182,7 +181,7 @@ def add_pressure_tests(
     well_name: str,
     payload: Dict[str, List[Dict[str, Any]]] = Body(...),
 ):
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
@@ -193,7 +192,7 @@ def add_pressure_tests(
         )
     tests = payload.get("tests")
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             well.add_pressure_tests(tests)
@@ -214,7 +213,7 @@ def formation_tops_preview(
     project_id: int, well_name: str, file: UploadFile = File(...)
 ):
     """Return a preview (first 50 rows) and detected columns from uploaded CSV file."""
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
@@ -260,13 +259,13 @@ def formation_tops_preview(
 
 @router.get("/core_samples", summary="List core samples for a well")
 def list_core_samples(project_id: int, well_name: str):
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
         )
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             core_data = well.get_core_data()
@@ -295,14 +294,14 @@ def get_well_top_to_bottom_data(
     column from the DataFrame is renamed to `depth` (lowercase) so clients can
     rely on a consistent key.
     """
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
         )
 
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             # get_well_data returns a pandas DataFrame with DEPTH and curve columns
             df = proj.get_well_data(well_name)
@@ -313,10 +312,9 @@ def get_well_top_to_bottom_data(
             df = df.reset_index(drop=True)
             df.columns = [c.lower() for c in df.columns]
 
-            # convert NaNs to None for JSON serialization
-            df = df.where(pd.notnull(df), None)
-
-            records = df.to_dict(orient="records")
+            # Convert DataFrame to records using json-safe method
+            # This handles NaN, inf, -inf by converting them to None
+            records = json.loads(df.to_json(orient="records"))
 
             if include_ancillary:
                 # collect ancillary data to return alongside rows
@@ -369,13 +367,13 @@ def get_well_top_to_bottom_data(
 @router.get("/rca", summary="List core point measurements (RCA) for a well")
 def list_rca(project_id: int, well_name: str):
     """Return consolidated point measurements across all core samples for a well."""
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
         )
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             core_data = well.get_core_data()
@@ -396,7 +394,7 @@ def list_rca(project_id: int, well_name: str):
 @router.post("/rca", summary="Add RCA (core point measurements) for a sample")
 def add_rca(project_id: int, well_name: str, payload: Dict[str, Any] = Body(...)):
     """Add or update point measurements for a core sample. Requires 'sample_name', 'depth', and 'measurements'."""
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
@@ -405,7 +403,7 @@ def add_rca(project_id: int, well_name: str, payload: Dict[str, Any] = Body(...)
     if not isinstance(payload, dict) or not all(k in payload for k in required):
         raise HTTPException(status_code=400, detail=f"Payload must include {required}")
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             well.add_core_sample_with_measurements(
@@ -428,13 +426,13 @@ def add_rca(project_id: int, well_name: str, payload: Dict[str, Any] = Body(...)
 @router.get("/scal", summary="List SCAL (relperm & capillary) data for a well")
 def list_scal(project_id: int, well_name: str):
     """Return consolidated SCAL data (relperm & capillary) across core samples."""
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
         )
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             core_data = well.get_core_data()
@@ -461,7 +459,7 @@ def list_scal(project_id: int, well_name: str):
 @router.post("/scal", summary="Add SCAL data for a sample (relperm and/or capillary)")
 def add_scal(project_id: int, well_name: str, payload: Dict[str, Any] = Body(...)):
     """Add relperm and/or capillary pressure data for a core sample. Requires 'sample_name' and 'depth'."""
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
@@ -470,7 +468,7 @@ def add_scal(project_id: int, well_name: str, payload: Dict[str, Any] = Body(...
     if not isinstance(payload, dict) or not all(k in payload for k in required):
         raise HTTPException(status_code=400, detail=f"Payload must include {required}")
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             well.add_core_sample_with_measurements(
@@ -490,13 +488,13 @@ def add_scal(project_id: int, well_name: str, payload: Dict[str, Any] = Body(...
 
 @router.get("/core_samples/{sample_name}", summary="Get core sample details by name")
 def get_core_sample(project_id: int, well_name: str, sample_name: str):
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
         )
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             core_data = well.get_core_data()
@@ -537,7 +535,7 @@ def add_core_sample(
       "pc_data": [{"saturation":0.1,"pressure":12.3}]
     }
     """
-    if db_connector is None:
+    if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
@@ -546,7 +544,7 @@ def add_core_sample(
     if not isinstance(payload, dict) or not all(k in payload for k in required):
         raise HTTPException(status_code=400, detail=f"Payload must include {required}")
     try:
-        with db_connector.get_session() as session:
+        with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(well_name)
             well.add_core_sample_with_measurements(
