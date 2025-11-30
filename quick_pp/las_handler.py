@@ -1,12 +1,24 @@
 import re
-import lasio
-import os
-import numpy as np
-import pandas as pd
-import mmap
-import welly
+import warnings
 
-from quick_pp import logger
+# Suppress the setuptools/pkg_resources deprecation warning originating
+# from older versions of downstream packages (e.g. `lasio`) that still
+# import `pkg_resources`. This is a targeted, temporary suppression
+# while the dependency is upgraded; it only matches the specific
+# deprecation UserWarning message.
+warnings.filterwarnings(
+    "ignore",
+    message=r"pkg_resources is deprecated as an API.*",
+    category=UserWarning,
+)
+import lasio  # noqa: E402  # pylint: disable=wrong-import-position
+import os  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import mmap  # noqa: E402
+import welly  # noqa: E402
+
+from quick_pp import logger  # noqa: E402
 
 
 def read_las_files(las_files, depth_uom=None):
