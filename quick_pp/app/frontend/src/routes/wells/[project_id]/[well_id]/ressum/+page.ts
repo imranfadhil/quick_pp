@@ -3,6 +3,6 @@ import type { PageLoad } from './$types';
 export const load: PageLoad = () => {
   return {
     title: 'Reservoir Summary',
-    subtitle: 'Summary & exports',
+    subtitle: 'Reservoir summary and exports for the selected well',
   };
 };

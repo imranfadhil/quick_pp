@@ -28,7 +28,7 @@
   onDestroy(() => unsubscribe());
 </script>
 
-<ProjectWorkspace {selectedProject} {selectedWell} project={selectedProject}>
+<ProjectWorkspace {selectedWell} project={selectedProject}>
   <div slot="left">
     {#if selectedWell}
       <div class="mb-3">
@@ -47,7 +47,7 @@
           </button>
           {#if showTops}
             <div transition:slide class="p-2">
-              <WsFormationTops projectId={selectedProject.project_id} wellName={selectedWell.name} />
+              <WsFormationTops projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
             </div>
           {/if}
         </div>
@@ -63,7 +63,7 @@
           </button>
           {#if showCore}
             <div transition:slide class="p-2">
-              <WsCoreSamples projectId={selectedProject.project_id} wellName={selectedWell.name} />
+              <WsCoreSamples projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
             </div>
           {/if}
         </div>
@@ -79,7 +79,7 @@
           </button>
           {#if showPressure}
             <div transition:slide class="p-2">
-              <WsPressureTests projectId={selectedProject.project_id} wellName={selectedWell.name} />
+              <WsPressureTests projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
             </div>
           {/if}
         </div>
@@ -95,7 +95,7 @@
           </button>
           {#if showContacts}
             <div transition:slide class="p-2">
-              <WsFluidContacts projectId={selectedProject.project_id} wellName={selectedWell.name} />
+              <WsFluidContacts projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
             </div>
           {/if}
         </div>
@@ -104,6 +104,6 @@
   </div>
 
   {#if selectedWell}
-    <WsWellStats projectId={selectedProject.project_id} wellName={selectedWell.name} />
+    <WsWellStats projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
   {/if}
 </ProjectWorkspace>

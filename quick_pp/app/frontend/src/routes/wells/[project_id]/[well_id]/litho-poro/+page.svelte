@@ -18,11 +18,11 @@
   onDestroy(() => unsubscribe());
 </script>
 
-<ProjectWorkspace {selectedProject} {selectedWell} project={selectedProject}>
+<ProjectWorkspace {selectedWell} project={selectedProject}>
   <div slot="left">
-    <WsLithoPoro projectId={selectedProject?.project_id} wellName={selectedWell?.name} />
+    <WsLithoPoro projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
   </div>
   {#if selectedWell}
-    <WsWellPlot projectId={selectedProject?.project_id} wellName={selectedWell.name} />
+    <WsWellPlot projectId={selectedProject?.project_id ?? ''} wellName={selectedWell.name ?? ''} />
   {/if}
 </ProjectWorkspace>
