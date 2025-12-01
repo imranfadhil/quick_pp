@@ -2,7 +2,9 @@
   import { onMount } from 'svelte';
   import * as Card from '$lib/components/ui/card/index.js';
   import * as Chart from '$lib/components/ui/chart/index.js';
+  import Button from '$lib/components/ui/Button.svelte';
   import { AreaChart, Area } from 'layerchart';
+  import { renameColumn, convertPercentToFraction, applyRenameInColumns } from '$lib/utils/topBottomEdits';
 
   export let projectId: string | number;
   export let wellName: string;
@@ -25,6 +27,7 @@
   let chartData: Array<Record<string, any>> = [];
   let showFullData = false;
   let fullRows: Array<Record<string, any>> = [];
+  let originalFullRows: Array<Record<string, any>> = [];
   let fullColumns: string[] = [];
   let selectedLog: string | null = null;
   let formationTops: Array<Record<string, any>> = [];
@@ -35,6 +38,18 @@
   // Data profiling
   let dataProfile: Record<string, any> = {};
   let showDataProfile = false;
+
+  // Simple edit UI state (modal-based)
+  let showEditModal = false;
+  let editColumn: string | null = null; // column selected
+  let editNewName = '';
+  let doConvertPercent = false;
+  let previewRows: Array<{ depth: any; oldValue: any; newValue: any }> = [];
+  let undoStack: Array<{ rows: Array<Record<string, any>>; columns: string[]; editedColumns?: string[]; renameMap?: Record<string,string> }> = [];
+  let editedColumns: Set<string> = new Set();
+  let renameMap: Record<string, string> = {}; // originalName -> newName
+  let hasUnsavedEdits = false;
+  let editMessage: string | null = null;
 
   $: buildChartData();
   $: if (fullRows.length > 0 && fullColumns.length > 0) {
@@ -219,6 +234,154 @@
     }
   }
 
+  async function saveEditsToServer() {
+    if (!projectId || !wellName) { editMessage = 'Missing project/well context'; return; }
+    if (!hasUnsavedEdits) { editMessage = 'No changes to save'; return; }
+    editMessage = 'Saving...';
+
+    const getMeasuredDepth = (row: any) => {
+      if (!row) return null;
+      return row.depth ?? row.DEPTH ?? row.depth_m ?? row.DEPTH_M ?? row['Depth'] ?? row['depth_m'] ?? null;
+    };
+
+    try {
+      // Build the exact payload the backend expects: an array of row objects under `data`.
+      const dataPayload: Array<Record<string, any>> = fullRows.map((r) => {
+        const out: Record<string, any> = {};
+        out['DEPTH'] = getMeasuredDepth(r);
+        out['WELL_NAME'] = String(wellName);
+        if (editColumn) {
+          out[editColumn] = r[editColumn];
+        }
+
+        return out;
+      });
+
+      const payload = { data: dataPayload };
+
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(await res.text());
+
+      // On success clear tracking and refresh snapshot
+      originalFullRows = fullRows.map(r => ({ ...r }));
+      editedColumns = new Set();
+      renameMap = {};
+      hasUnsavedEdits = false;
+      undoStack = [];
+      editMessage = 'Saved edits to server';
+    } catch (err:any) {
+      editMessage = `Save failed: ${String(err?.message ?? err)}`;
+    }
+  }
+
+  function openEditModal() {
+    editColumn = fullColumns[0] ?? null;
+    editNewName = '';
+    doConvertPercent = false;
+    previewRows = [];
+    editMessage = null;
+    showEditModal = true;
+  }
+
+  function closeEditModal() {
+    showEditModal = false;
+    previewRows = [];
+    editMessage = null;
+  }
+
+  function previewEdits() {
+    if (!editColumn) { editMessage = 'Choose column to preview'; return; }
+    // show preview only for rows that contain a value in the selected column
+    const getVal = (row: any, key: string) => {
+      if (row == null) return undefined;
+      if (key in row) return row[key];
+      const up = String(key).toUpperCase();
+      if (up in row) return row[up];
+      const low = String(key).toLowerCase();
+      if (low in row) return row[low];
+      return undefined;
+    };
+
+    const rowsWithData = fullRows.filter((r: any) => {
+      const v = getVal(r, editColumn as string);
+      if (v === null || v === undefined || v === '') return false;
+      if (typeof v === 'number' && isNaN(v)) return false;
+      return true;
+    }).slice(0, 12);
+
+    previewRows = rowsWithData.map((r: any) => {
+      const oldValue = getVal(r, editColumn as string);
+      let newValue = oldValue;
+      if (doConvertPercent) {
+        const num = typeof oldValue === 'number' ? oldValue : (oldValue === null || oldValue === undefined || oldValue === '' ? NaN : Number(String(oldValue).replace('%','')));
+        if (isNaN(num)) newValue = oldValue;
+        else newValue = num > 1 ? num / 100 : num;
+      }
+      const depth = getVal(r, 'depth') ?? getVal(r, 'DEPTH') ?? getVal(r, 'depth_m') ?? '';
+      return { depth, oldValue, newValue };
+    });
+
+    if (previewRows.length === 0) {
+      editMessage = 'No data available in that column for preview';
+    } else {
+      editMessage = `Previewing first ${previewRows.length} rows with data`;
+    }
+  }
+
+  function applyEditsInMemory() {
+    if (!editColumn) { editMessage = 'Choose column to apply'; return; }
+    // snapshot small undo copy (limit memory use)
+    undoStack.push({ rows: fullRows.slice(0, 50).map(r => ({ ...r })), columns: fullColumns.slice(), editedColumns: Array.from(editedColumns), renameMap: { ...renameMap } });
+    const originalEditColumn = editColumn;
+    // rename
+    if (editNewName && editNewName.trim()) {
+      const newName = editNewName.trim();
+      fullRows = renameColumn(fullRows, editColumn, newName);
+      fullColumns = applyRenameInColumns(fullColumns, editColumn, newName);
+      // adjust selectedLog if needed
+      if (selectedLog === editColumn) selectedLog = newName;
+      // record rename mapping
+      renameMap[originalEditColumn] = newName;
+      editColumn = newName;
+      // clear name input
+      editNewName = '';
+    }
+    // convert percent
+    if (doConvertPercent) {
+      fullRows = convertPercentToFraction(fullRows, editColumn);
+    }
+    // mark this column as edited (post-rename name)
+    editedColumns.add(editColumn);
+    hasUnsavedEdits = true;
+    editMessage = 'Applied edits in-memory';
+    previewRows = [];
+  }
+
+  function undoLast() {
+    const s = undoStack.pop();
+    if (!s) { editMessage = 'Nothing to undo'; return; }
+    // attempt to restore first N rows and columns — full restore may be expensive
+    // We only had stored a small snapshot; if stored rows length equals fullRows length, restore fully
+    if (s.rows.length === fullRows.length) {
+      fullRows = s.rows.map(r => ({ ...r }));
+    } else {
+      // best-effort: replace first N rows
+      for (let i = 0; i < s.rows.length; i++) {
+        fullRows[i] = { ...s.rows[i] } as any;
+      }
+    }
+    fullColumns = s.columns.slice();
+    // restore edit tracking if available
+    if (s.editedColumns) editedColumns = new Set(s.editedColumns);
+    if (s.renameMap) renameMap = { ...s.renameMap };
+    hasUnsavedEdits = true;
+    editMessage = 'Undid last action (partial restore)';
+  }
+
   $: if (projectId && wellName) {
     fetchCounts();
   }
@@ -232,6 +395,15 @@
   <Card.Header>
     <Card.Title>Well Statistics</Card.Title>
     <Card.Description>Summary for the selected well</Card.Description>
+    <div class="ml-auto flex items-center gap-2">
+      <Button variant="ghost" size="sm" onclick={openEditModal} title="Open edits modal" ariaLabel="Open edits modal">✏️ Edits</Button>
+      <Button variant={hasUnsavedEdits ? 'primary' : 'ghost'} size="sm" onclick={saveEditsToServer} disabled={!hasUnsavedEdits} title="Save edits to server" ariaLabel="Save edits to server">
+        Save Edits
+        {#if hasUnsavedEdits}
+          <span class="unsaved-dot" aria-hidden="true" style="background:#ef4444; margin-left:.5rem;"></span>
+        {/if}
+      </Button>
+    </div>
   </Card.Header>
   <Card.Content class="p-3">
     {#if loading}
@@ -242,112 +414,94 @@
       {/if}
       <div class="grid grid-cols-2 gap-2">
         <div class="p-3 bg-surface rounded">
-          <div class="text-sm text-muted">Formation Tops</div>
+          <div class="text-sm text-muted-foreground">Formation Tops</div>
           <div class="font-semibold">{counts.formation_tops}</div>
         </div>
         <div class="p-3 bg-surface rounded">
-          <div class="text-sm text-muted">Fluid Contacts</div>
+          <div class="text-sm text-muted-foreground">Fluid Contacts</div>
           <div class="font-semibold">{counts.fluid_contacts}</div>
         </div>
         <div class="p-3 bg-surface rounded">
-          <div class="text-sm text-muted">Pressure Tests</div>
+          <div class="text-sm text-muted-foreground">Pressure Tests</div>
           <div class="font-semibold">{counts.pressure_tests}</div>
         </div>
         <div class="p-3 bg-surface rounded">
-          <div class="text-sm text-muted">Core Samples</div>
+          <div class="text-sm text-muted-foreground">Core Samples</div>
           <div class="font-semibold">{counts.core_samples}</div>
         </div>
       </div>
 
       <div class="mt-4">
         <div class="flex items-center justify-between">
-          <div class="font-medium">Property vs Depth</div>
-          <div class="text-sm">
-            <select class="input" bind:value={selectedProp} on:change={() => buildChartData()}>
-              {#if propOptions.length}
-                {#each propOptions as p}
-                  <option value={p}>{p}</option>
-                {/each}
-              {:else}
-                <option value="">(no properties)</option>
-              {/if}
-            </select>
-          </div>
-        </div>
-
-        <div class="mt-2">
-          <Chart.Container class="h-[240px] w-full" config={{}}>
-            <AreaChart
-              data={chartData}
-              x="depth"
-              series={[{ key: 'value', label: selectedProp ?? 'value', color: 'var(--primary)' }]}
-              props={{
-                area: { 'fill-opacity': 0.3 },
-                xAxis: { format: (v: any) => String(v) },
-                yAxis: { format: (v: any) => String(v) },
-              }}
-            >
-              {#snippet marks({ series, getAreaProps })}
-                {#each series as s, i (s.key)}
-                  <Area {...getAreaProps(s, i)} />
-                {/each}
-              {/snippet}
-            </AreaChart>
-          </Chart.Container>
-        </div>
-      </div>
-
-      <div class="mt-4">
-        <div class="flex items-center justify-between">
-          <div class="font-medium">Full Well Data</div>
-          <div class="flex gap-2">
-            <button class="btn btn-sm" on:click={() => { showDataProfile = !showDataProfile; }}>
-              {showDataProfile ? 'Hide' : 'Show'} Profile
-            </button>
-            <button class="btn btn-sm" on:click={async () => {
-              showFullData = !showFullData;
-              if (showFullData && fullRows.length === 0) {
-                // try fetching now
-                loading = true;
-                try {
-                  const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data?include_ancillary=true`);
-                  if (res.ok) {
-                    const fd = await res.json();
-                    console.log('Well data fetched on demand:', fd);
-                    
-                    // Handle response format
-                    let dataArray: any[] = [];
-                    if (Array.isArray(fd)) {
-                      dataArray = fd;
-                    } else if (fd && Array.isArray(fd.data)) {
-                      dataArray = fd.data;
-                      if (fd.formation_tops) formationTops = fd.formation_tops;
-                      if (fd.fluid_contacts) fluidContacts = fd.fluid_contacts;
-                      if (fd.pressure_tests) pressureTestsFull = fd.pressure_tests;
-                      if (fd.core_samples) coreSamplesFull = fd.core_samples;
+          <div class="font-medium">Property vs Depth Data</div>
+            <div class="flex gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onclick={() => { showDataProfile = !showDataProfile; }}
+                title={showDataProfile ? 'Hide Profile' : 'Show Profile'}
+                ariaLabel={showDataProfile ? 'Hide Profile' : 'Show Profile'}
+              >
+                {showDataProfile ? 'Hide' : 'Show'} Profile
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                title={showFullData ? 'Hide full well data' : 'Show full well data'}
+                ariaLabel={showFullData ? 'Hide full well data' : 'Show full well data'}
+                onclick={async () => {
+                  showFullData = !showFullData;
+                  if (showFullData && fullRows.length === 0) {
+                    // try fetching now
+                    loading = true;
+                    try {
+                      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data?include_ancillary=true`);
+                      if (res.ok) {
+                        const fd = await res.json();
+                        console.log('Well data fetched on demand:', fd);
+                        
+                        // Handle response format
+                        let dataArray: any[] = [];
+                        if (Array.isArray(fd)) {
+                          dataArray = fd;
+                        } else if (fd && Array.isArray(fd.data)) {
+                          dataArray = fd.data;
+                          if (fd.formation_tops) formationTops = fd.formation_tops;
+                          if (fd.fluid_contacts) fluidContacts = fd.fluid_contacts;
+                          if (fd.pressure_tests) pressureTestsFull = fd.pressure_tests;
+                          if (fd.core_samples) coreSamplesFull = fd.core_samples;
+                        }
+                        
+                        if (dataArray.length > 0) {
+                            fullRows = dataArray;
+                            // snapshot for diffs
+                            originalFullRows = dataArray.map(r => ({ ...r }));
+                            fullColumns = Object.keys(dataArray[0] ?? {});
+                            selectedLog = selectedLog ?? fullColumns.find((c) => c !== 'depth') ?? null;
+                            // reset edit tracking
+                            editedColumns = new Set();
+                            renameMap = {};
+                            hasUnsavedEdits = false;
+                            buildChartData();
+                            console.log(`Loaded ${fullRows.length} rows with ${fullColumns.length} columns`);
+                        } else {
+                          error = 'No well data available';
+                        }
+                      } else {
+                        error = `Failed to load well data: ${res.status}`;
+                      }
+                    } catch (e: any) {
+                      console.error('Error loading well data:', e);
+                      error = `Error: ${e.message}`;
+                    } finally {
+                      loading = false;
                     }
-                    
-                    if (dataArray.length > 0) {
-                      fullRows = dataArray;
-                      fullColumns = Object.keys(dataArray[0] ?? {});
-                      selectedLog = selectedLog ?? fullColumns.find((c) => c !== 'depth') ?? null;
-                      buildChartData();
-                      console.log(`Loaded ${fullRows.length} rows with ${fullColumns.length} columns`);
-                    } else {
-                      error = 'No well data available';
-                    }
-                  } else {
-                    error = `Failed to load well data: ${res.status}`;
                   }
-                } catch (e: any) {
-                  console.error('Error loading well data:', e);
-                  error = `Error: ${e.message}`;
-                } finally {
-                  loading = false;
-                }
-              }
-            }}>{showFullData ? 'Hide' : 'Show'}</button>
-          </div>
+                }}
+              >
+                {showFullData ? 'Hide' : 'Show'}
+              </Button>
+            </div>
         </div>
 
         {#if showFullData}
@@ -358,11 +512,11 @@
                 
                 <div class="grid grid-cols-2 gap-2 text-sm">
                   <div class="p-2 bg-panel rounded">
-                    <div class="text-muted">Total Columns</div>
+                    <div class="text-muted-foreground">Total Columns</div>
                     <div class="font-semibold">{fullColumns.length}</div>
                   </div>
                   <div class="p-2 bg-panel rounded">
-                    <div class="text-muted">Total Rows</div>
+                    <div class="text-muted-foreground">Total Rows</div>
                     <div class="font-semibold">{fullRows.length}</div>
                   </div>
                 </div>
@@ -386,7 +540,7 @@
                         {#if prof}
                           <tr class="border-b hover:bg-panel/50">
                             <td class="p-2 font-medium">{col}</td>
-                            <td class="p-2 text-muted">{prof.dataType}</td>
+                            <td class="p-2 text-muted-foreground">{prof.dataType}</td>
                             <td class="p-2 text-right">{prof.nonNullCount}</td>
                             <td class="p-2 text-right">{prof.nullCount}</td>
                             <td class="p-2 text-right">{prof.missingPercent}%</td>
@@ -394,9 +548,9 @@
                             <td class="p-2">
                               {#if prof.stats}
                                 <div class="text-xs">
-                                  <span class="text-muted">min:</span> {prof.stats.min.toFixed(2)}, 
-                                  <span class="text-muted">max:</span> {prof.stats.max.toFixed(2)}, 
-                                  <span class="text-muted">mean:</span> {prof.stats.mean.toFixed(2)}
+                                  <span class="text-muted-foreground">min:</span> {prof.stats.min.toFixed(2)}, 
+                                  <span class="text-muted-foreground">max:</span> {prof.stats.max.toFixed(2)}, 
+                                  <span class="text-muted-foreground">mean:</span> {prof.stats.mean.toFixed(2)}
                                 </div>
                               {:else if prof.uniqueValues}
                                 <div class="text-xs truncate max-w-xs" title={prof.uniqueValues.join(', ')}>
@@ -404,7 +558,7 @@
                                   {#if prof.uniqueValues.length > 5}...{/if}
                                 </div>
                               {:else}
-                                <div class="text-xs text-muted">{prof.uniqueCount} unique values</div>
+                                <div class="text-xs text-muted-foreground">{prof.uniqueCount} unique values</div>
                               {/if}
                             </td>
                           </tr>
@@ -417,8 +571,8 @@
             {/if}
 
             <div class="flex items-center gap-2">
-              <div class="text-sm text-muted">Plot log:</div>
-              <select class="input" bind:value={selectedLog} on:change={() => buildChartData()}>
+              <div class="text-sm text-muted-foreground">Plot log:</div>
+              <select class="input" bind:value={selectedLog} onchange={() => buildChartData()}>
                 {#if fullColumns.length}
                   {#each fullColumns as c}
                     {#if c !== 'depth'}
@@ -448,6 +602,77 @@
                     <li>{c.name} — {c.depth}</li>
                   {/each}
                 </ul>
+              </div>
+            {/if}
+
+            <!-- Edits are now available via modal (open with Edits button in header) -->
+            {#if showEditModal}
+              <div class="fixed inset-0 z-50 flex items-start justify-center p-6">
+                <button type="button" class="absolute inset-0 bg-black/40" aria-label="Close modal" onclick={closeEditModal}></button>
+                <div class="relative bg-white dark:bg-surface rounded shadow-lg w-full max-w-md p-4 z-10">
+                  <div class="flex items-center justify-between mb-2">
+                    <div class="font-medium">Edit Columns</div>
+                    <div class="flex gap-2">
+                      <Button variant="ghost" size="sm" onclick={undoLast} title="Undo last" ariaLabel="Undo last">Undo</Button>
+                      <Button variant="ghost" size="sm" onclick={closeEditModal} title="Close modal" ariaLabel="Close modal">Close</Button>
+                    </div>
+                  </div>
+
+                  {#if editMessage}
+                    <div class="text-sm text-muted-foreground-foreground mb-2">{editMessage}</div>
+                  {/if}
+
+                  <div class="space-y-2">
+                    <div>
+                      <label for="editColumn" class="text-xs text-muted-foreground">Column</label>
+                      <select id="editColumn" class="input w-full" bind:value={editColumn}>
+                        {#if fullColumns.length}
+                          {#each fullColumns as c}
+                            <option value={c}>{c}</option>
+                          {/each}
+                        {:else}
+                          <option value="">(no columns)</option>
+                        {/if}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label for="editNewName" class="text-xs text-muted-foreground">Rename to (optional)</label>
+                      <input id="editNewName" class="input w-full" bind:value={editNewName} placeholder="e.g. NPHI" />
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                      <input id="conv" type="checkbox" bind:checked={doConvertPercent} />
+                      <label for="conv" class="text-sm">Convert % → fraction</label>
+                    </div>
+
+                            <div class="flex gap-2">
+                              <Button variant="ghost" size="sm" onclick={previewEdits} title="Preview changes">Preview</Button>
+                              <Button variant="primary" onclick={applyEditsInMemory} title="Apply edits in-memory">Apply</Button>
+                              <Button variant="primary" size="sm" onclick={saveEditsToServer} disabled={!hasUnsavedEdits} title="Save edits to server">Save</Button>
+                            </div>
+
+                    {#if previewRows.length}
+                      <div class="mt-2 bg-panel rounded p-2 max-h-40 overflow-auto">
+                        <div class="text-xs text-muted-foreground mb-1">Preview (first {previewRows.length} rows)</div>
+                        <table class="w-full text-xs">
+                          <thead>
+                            <tr><th class="p-1 text-left">Depth</th><th class="p-1 text-left">Old</th><th class="p-1 text-left">New</th></tr>
+                          </thead>
+                          <tbody>
+                            {#each previewRows as pr}
+                              <tr>
+                                <td class="p-1">{String(pr.depth)}</td>
+                                <td class="p-1">{String(pr.oldValue)}</td>
+                                <td class="p-1">{String(pr.newValue)}</td>
+                              </tr>
+                            {/each}
+                          </tbody>
+                        </table>
+                      </div>
+                    {/if}
+                  </div>
+                </div>
               </div>
             {/if}
 
@@ -488,7 +713,7 @@
                 </tbody>
               </table>
               {#if fullRows.length > 200}
-                <div class="text-xs text-muted mt-2">Showing first 200 rows of {fullRows.length}.</div>
+                <div class="text-xs text-muted-foreground mt-2">Showing first 200 rows of {fullRows.length}.</div>
               {/if}
             </div>
           </div>

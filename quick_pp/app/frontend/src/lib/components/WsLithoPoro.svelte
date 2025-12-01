@@ -13,11 +13,11 @@
   let error: string | null = null;
 
   // endpoint reference points (simple UI, defaults chosen)
-  let drySandNphi = 0.1;
+  let drySandNphi = -0.02;
   let drySandRhob = 2.65;
-  let fluidNphi = 0.0;
+  let fluidNphi = 1.0;
   let fluidRhob = 1.0;
-  let siltLineAngle = 35;
+  let siltLineAngle = 50;
 
   let fullRows: Array<Record<string, any>> = [];
   let lithoResults: Array<Record<string, any>> = [];

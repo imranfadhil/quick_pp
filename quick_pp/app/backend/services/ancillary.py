@@ -310,7 +310,6 @@ def get_well_top_to_bottom_data(
 
             # normalize column names to lowercase and ensure DEPTH -> depth
             df = df.reset_index(drop=True)
-            df.columns = [c.lower() for c in df.columns]
 
             # Convert DataFrame to records using json-safe method
             # This handles NaN, inf, -inf by converting them to None

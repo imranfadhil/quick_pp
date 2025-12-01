@@ -4,7 +4,6 @@
   import ProjectWorkspace from '$lib/components/ProjectWorkspace.svelte';
   import { onDestroy } from 'svelte';
   import { workspace } from '$lib/stores/workspace';
-  import { goto } from '$app/navigation';
   import type { Project, Well } from '$lib/types';
 
   let selectedProject: Project | null = null;

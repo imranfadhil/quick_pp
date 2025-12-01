@@ -8,7 +8,6 @@
   import { onDestroy } from 'svelte';
   import { slide } from 'svelte/transition';
   import { workspace } from '$lib/stores/workspace';
-  import { goto } from '$app/navigation';
   import type { Project, Well } from '$lib/types';
 
   let selectedProject: Project | null = null;

@@ -4,6 +4,7 @@ from typing import List, Optional
 from pathlib import Path
 import shutil
 
+import pandas as pd
 from quick_pp.database.db_connector import DBConnector
 from quick_pp.database import objects as db_objects
 from quick_pp.database import models as db_models
@@ -211,3 +212,87 @@ async def project_read_las(project_id: int, files: List[UploadFile] = File(...))
         raise HTTPException(
             status_code=500, detail=f"Failed to read LAS into project: {e}"
         )
+
+
+@router.put(
+    "/projects/{project_id}/wells/{well_name}/data",
+    summary="Save/overwrite well data from frontend",
+)
+async def save_well_data(project_id: int, well_name: str, payload: dict):
+    """Save edited well data sent from the frontend.
+
+    Expected payload: { "data": [ {"DEPTH": 1234.5, "WELL_NAME": "Well-1", "DPHI": 12.3, ...}, ... ] }
+
+    If `WELL_NAME` column is missing, it will be set to the path parameter `well_name`.
+    The endpoint will convert the list to a pandas DataFrame and call
+    `Project.update_data` which performs upserts on curve data.
+    """
+    global connector
+    if connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+
+    if not isinstance(payload, dict) or "data" not in payload:
+        raise HTTPException(
+            status_code=400, detail="Payload must be a dict with a 'data' key"
+        )
+
+    data = payload.get("data")
+    if not isinstance(data, list):
+        raise HTTPException(
+            status_code=400, detail="'data' must be a list of row objects"
+        )
+
+    try:
+        # Convert to DataFrame
+        df = pd.DataFrame(data)
+
+        # Accept case-insensitive depth and well name column names
+        # Find depth column (DEPTH, depth, Depth, etc.)
+        depth_col = next((c for c in df.columns if str(c).lower() == "depth"), None)
+        if not depth_col:
+            raise HTTPException(
+                status_code=400,
+                detail="Each row must include a 'DEPTH' (case-insensitive) field",
+            )
+
+        # Normalize to uppercase 'DEPTH' for internal processing
+        if depth_col != "DEPTH":
+            df = df.rename(columns={depth_col: "DEPTH"})
+
+        # Ensure WELL_NAME present for Project.update_data; accept case-insensitive and normalize
+        well_col = next((c for c in df.columns if str(c).lower() == "well_name"), None)
+        if well_col and well_col != "WELL_NAME":
+            df = df.rename(columns={well_col: "WELL_NAME"})
+        if "WELL_NAME" not in df.columns:
+            df["WELL_NAME"] = well_name
+
+        # Cast DEPTH to numeric
+        df["DEPTH"] = pd.to_numeric(df["DEPTH"], errors="coerce")
+        if df["DEPTH"].isna().any():
+            # return which rows failed (up to first 5) to help debugging
+            bad_idx = df[df["DEPTH"].isna()].index.tolist()[:5]
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Some DEPTH values could not be parsed as numbers. Failed row indices: {bad_idx}"
+                ),
+            )
+
+        with connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            # Use Project.update_data which groups by WELL_NAME and upserts per well
+            proj.update_data(df, group_by="WELL_NAME")
+            # Persist changes
+            proj.save()
+
+        return {"message": "Well data saved", "rows": len(df)}
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save well data: {e}")
