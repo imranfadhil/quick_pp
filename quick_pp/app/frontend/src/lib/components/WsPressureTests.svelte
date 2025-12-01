@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { Button } from '$lib/components/ui/button/index.js';
   export let projectId: string | number;
   export let wellName: string;
 
@@ -41,7 +42,7 @@
       <input placeholder="Depth" type="number" bind:value={newTest.depth} class="input mr-2 w-24" />
       <input placeholder="Pressure" type="number" bind:value={newTest.pressure} class="input mr-2 w-24" />
       <select bind:value={newTest.pressure_uom} class="input mr-2 w-24"><option>psi</option><option>bar</option></select>
-      <button class="btn btn-primary" on:click={addTest}>Add</button>
+      <Button class="btn btn-primary" onclick={addTest}>Add</Button>
     </div>
     {#if tests.length===0}
       <div class="text-sm text-muted">No pressure tests</div>
@@ -56,9 +57,3 @@
     {/if}
   {/if}
 </div>
-
-<style>
-  .input { padding: .35rem .5rem; border: 1px solid #ccc; border-radius: 4px }
-  .btn { padding: .35rem .6rem; border-radius: 4px }
-  .btn-primary { background:#2563eb; color:white }
-</style>

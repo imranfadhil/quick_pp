@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { Button } from '$lib/components/ui/button/index.js';
   export let projectId: string | number;
   export let wellName: string;
 
@@ -141,13 +142,13 @@
     {/if}
     <div class="mb-3">
       <input placeholder="Top name" bind:value={newTop.name} class="input mr-2" />
-      <input placeholder="Depth" type="number" bind:value={newTop.depth} class="input mr-2" />
-      <button class="btn btn-primary" on:click={addTop}>Add Top</button>
+      <input placeholder="Depth" type="number" bind:value={newTop.depth} class="input mr-2 w-24" />
+      <Button class="btn btn-primary" onclick={addTop}>Add Top</Button>
     </div>
 
       <div class="mb-3">
-        <label class="block text-sm">Bulk import CSV (columns: name, depth)</label>
-        <input type="file" accept=".csv" on:change={handleFileInput} />
+        <label class="block text-sm" for="csv-upload">Bulk import CSV (columns: name, depth)</label>
+        <input id="csv-upload" type="file" accept=".csv" on:change={handleFileInput} />
         {#if csvPreview.length}
           <div class="mt-2 text-sm">Preview (first {csvPreview.length} rows):</div>
           <ul class="text-sm mb-2">
@@ -156,13 +157,13 @@
             {/each}
           </ul>
           <div class="flex gap-2">
-            <button class="btn btn-primary" on:click={importCsvPreview}>Import (client parse)</button>
-            <button class="btn btn-primary" on:click={importCsvFromServer}>Import (server preview)</button>
+            <Button class="btn btn-primary" onclick={importCsvPreview}>Import (client parse)</Button>
+            <Button class="btn btn-primary" onclick={importCsvFromServer}>Import (server preview)</Button>
           </div>
         {/if}
         {#if csvFile}
           <div class="mt-2">
-            <button class="btn btn-ghost btn-sm mr-2" on:click={uploadCsvForPreview}>Use server preview</button>
+            <Button class="btn btn-ghost btn-sm mr-2" onclick={uploadCsvForPreview}>Use server preview</Button>
           </div>
         {/if}
       </div>
@@ -174,9 +175,9 @@
         {#each tops as t}
           <li class="flex justify-between items-center p-2 bg-white/5 rounded">
             <div>{t.name} — {t.depth}</div>
-            <div>
-              <button class="btn btn-ghost btn-sm mr-2" on:click={() => navigator.clipboard?.writeText(`${t.name}\t${t.depth}`)}>Copy</button>
-              <button class="btn btn-danger btn-sm" on:click={() => deleteTop(t.name)}>Delete</button>
+              <div>
+              <Button class="btn btn-ghost btn-sm mr-2" onclick={() => navigator.clipboard?.writeText(`${t.name}\t${t.depth}`)}>Copy</Button>
+              <Button class="btn btn-danger btn-sm" onclick={() => deleteTop(t.name)}>Delete</Button>
             </div>
           </li>
         {/each}
@@ -184,11 +185,3 @@
     {/if}
   {/if}
 </div>
-
-<style>
-  .input { padding: .35rem .5rem; border: 1px solid #ccc; border-radius: 4px }
-  .btn { padding: .35rem .6rem; border-radius: 4px }
-  .btn-primary { background:#2563eb; color:white }
-  .btn-danger { background:#dc2626; color:white }
-  .btn-ghost { background:transparent; color:#64748b }
-</style>

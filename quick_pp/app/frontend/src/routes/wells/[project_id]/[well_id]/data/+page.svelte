@@ -4,6 +4,7 @@
   import WsPressureTests from '$lib/components/WsPressureTests.svelte';
   import WsCoreSamples from '$lib/components/WsCoreSamples.svelte';
   import WsWellStats from '$lib/components/WsWellStats.svelte';
+  import { Button } from '$lib/components/ui/button/index.js';
   import ProjectWorkspace from '$lib/components/ProjectWorkspace.svelte';
   import { onDestroy } from 'svelte';
   import { slide } from 'svelte/transition';
@@ -36,14 +37,14 @@
       </div>
       <div class="space-y-4">
         <div class="accordion-item bg-surface rounded">
-          <button class="w-full flex justify-between items-center p-2" on:click={() => (showTops = !showTops)} aria-expanded={showTops}>
+          <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showTops = !showTops)} aria-expanded={showTops}>
             <div class="font-medium">Formation Tops</div>
             <div class="text-sm">
               <svg class="inline-block" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transform: rotate({showTops ? 90 : 0}deg); transition: transform .18s ease;">
                 <path d="M8 5l8 7-8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
               </svg>
             </div>
-          </button>
+          </Button>
           {#if showTops}
             <div transition:slide class="p-2">
               <WsFormationTops projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
@@ -52,14 +53,14 @@
         </div>
 
         <div class="accordion-item bg-surface rounded">
-          <button class="w-full flex justify-between items-center p-2" on:click={() => (showCore = !showCore)} aria-expanded={showCore}>
+          <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showCore = !showCore)} aria-expanded={showCore}>
             <div class="font-medium">Core Samples (RCA & SCAL)</div>
             <div class="text-sm">
               <svg class="inline-block" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transform: rotate({showCore ? 90 : 0}deg); transition: transform .18s ease;">
                 <path d="M8 5l8 7-8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
               </svg>
             </div>
-          </button>
+          </Button>
           {#if showCore}
             <div transition:slide class="p-2">
               <WsCoreSamples projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
@@ -68,14 +69,14 @@
         </div>
 
         <div class="accordion-item bg-surface rounded">
-          <button class="w-full flex justify-between items-center p-2" on:click={() => (showPressure = !showPressure)} aria-expanded={showPressure}>
+          <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showPressure = !showPressure)} aria-expanded={showPressure}>
             <div class="font-medium">Pressure Tests</div>
             <div class="text-sm">
               <svg class="inline-block" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transform: rotate({showPressure ? 90 : 0}deg); transition: transform .18s ease;">
                 <path d="M8 5l8 7-8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
               </svg>
             </div>
-          </button>
+          </Button>
           {#if showPressure}
             <div transition:slide class="p-2">
               <WsPressureTests projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
@@ -84,14 +85,14 @@
         </div>
 
         <div class="accordion-item bg-surface rounded">
-          <button class="w-full flex justify-between items-center p-2" on:click={() => (showContacts = !showContacts)} aria-expanded={showContacts}>
+          <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showContacts = !showContacts)} aria-expanded={showContacts}>
             <div class="font-medium">Fluid Contacts</div>
             <div class="text-sm">
               <svg class="inline-block" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transform: rotate({showContacts ? 90 : 0}deg); transition: transform .18s ease;">
                 <path d="M8 5l8 7-8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
               </svg>
             </div>
-          </button>
+          </Button>
           {#if showContacts}
             <div transition:slide class="p-2">
               <WsFluidContacts projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />

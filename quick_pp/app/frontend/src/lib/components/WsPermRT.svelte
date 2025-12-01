@@ -1,6 +1,7 @@
 <script lang="ts">
   export let projectId: number | string;
   export let wellName: string;
+  import { Button } from '$lib/components/ui/button/index.js';
   let kEstimate = '';
 </script>
 
@@ -14,12 +15,12 @@
     <div class="bg-panel rounded p-3">
       <div class="text-sm mb-2">Selected well: <strong>{wellName}</strong></div>
       <div class="mb-3">
-        <label class="text-sm">Quick k estimate</label>
-        <input class="input w-full" bind:value={kEstimate} placeholder="Computed permeability (mD)" />
+        <label class="text-sm" for="quick-k-estimate">Quick k estimate</label>
+        <input id="quick-k-estimate" class="input w-full" bind:value={kEstimate} placeholder="Computed permeability (mD)" />
       </div>
       <div class="flex gap-2">
-        <button class="btn btn-primary">Compute k</button>
-        <button class="btn">Classify Rock Type</button>
+        <Button class="btn btn-primary">Compute k</Button>
+        <Button class="btn">Classify Rock Type</Button>
       </div>
     </div>
   {:else}

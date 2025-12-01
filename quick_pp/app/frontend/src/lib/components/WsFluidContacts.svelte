@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { Button } from '$lib/components/ui/button/index.js';
   export let projectId: string | number;
   export let wellName: string;
 
@@ -40,8 +41,8 @@
     {#if error}<div class="text-sm text-red-600">{error}</div>{/if}
     <div class="mb-3">
       <input placeholder="Contact name" bind:value={newContact.name} class="input mr-2" />
-      <input placeholder="Depth" type="number" bind:value={newContact.depth} class="input mr-2" />
-      <button class="btn btn-primary" on:click={addContact}>Add</button>
+      <input placeholder="Depth" type="number" bind:value={newContact.depth} class="input mr-2 w-24" />
+      <Button class="btn btn-primary" onclick={addContact}>Add</Button>
     </div>
     {#if contacts.length===0}
       <div class="text-sm text-muted">No fluid contacts</div>
@@ -56,9 +57,3 @@
     {/if}
   {/if}
 </div>
-
-<style>
-  .input { padding: .35rem .5rem; border: 1px solid #ccc; border-radius: 4px }
-  .btn { padding: .35rem .6rem; border-radius: 4px }
-  .btn-primary { background:#2563eb; color:white }
-</style>

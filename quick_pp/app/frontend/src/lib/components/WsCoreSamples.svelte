@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { workspace } from '$lib/stores/workspace';
+  import { Button } from '$lib/components/ui/button/index.js';
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
@@ -134,8 +135,8 @@
       <input placeholder="Description" bind:value={form.description} class="input" />
       <div>
         <div class="flex items-center justify-between">
-          <label class="text-sm font-medium">Measurements (RCA)</label>
-          <button class="btn btn-sm" type="button" on:click={addMeasurement}>Add</button>
+          <span class="text-sm font-medium">Measurements (RCA)</span>
+          <Button class="btn btn-sm" type="button" onclick={addMeasurement}>Add</Button>
         </div>
         <div class="space-y-2 mt-2">
           {#each measurements as m, i}
@@ -143,7 +144,7 @@
               <input class="col-span-5 input" placeholder="Property" bind:value={m.property_name} />
               <input class="col-span-3 input" placeholder="Value" bind:value={m.value} />
               <input class="col-span-3 input" placeholder="Unit" bind:value={m.unit} />
-              <button class="col-span-1 btn btn-ghost" type="button" on:click={() => removeMeasurement(i)}>✕</button>
+              <Button class="col-span-1 btn btn-ghost" type="button" onclick={() => removeMeasurement(i)}>✕</Button>
             </div>
           {/each}
         </div>
@@ -151,8 +152,8 @@
 
       <div>
         <div class="flex items-center justify-between">
-          <label class="text-sm font-medium">Relative Permeability (relperm)</label>
-          <button class="btn btn-sm" type="button" on:click={addRelperm}>Add</button>
+          <span class="text-sm font-medium">Relative Permeability (relperm)</span>
+          <Button class="btn btn-sm" type="button" onclick={addRelperm}>Add</Button>
         </div>
         <div class="space-y-2 mt-2">
           {#each relperm as r, i}
@@ -160,7 +161,7 @@
               <input class="col-span-4 input" placeholder="Saturation" bind:value={r.saturation} />
               <input class="col-span-4 input" placeholder="kr" bind:value={r.kr} />
               <input class="col-span-3 input" placeholder="Phase" bind:value={r.phase} />
-              <button class="col-span-1 btn btn-ghost" type="button" on:click={() => removeRelperm(i)}>✕</button>
+              <Button class="col-span-1 btn btn-ghost" type="button" onclick={() => removeRelperm(i)}>✕</Button>
             </div>
           {/each}
         </div>
@@ -168,8 +169,8 @@
 
       <div>
         <div class="flex items-center justify-between">
-          <label class="text-sm font-medium">Capillary Pressure (pc)</label>
-          <button class="btn btn-sm" type="button" on:click={addPc}>Add</button>
+          <span class="text-sm font-medium">Capillary Pressure (pc)</span>
+          <Button class="btn btn-sm" type="button" onclick={addPc}>Add</Button>
         </div>
         <div class="space-y-2 mt-2">
           {#each pc as p, i}
@@ -178,13 +179,13 @@
               <input class="col-span-3 input" placeholder="Pressure" bind:value={p.pressure} />
               <input class="col-span-3 input" placeholder="Type" bind:value={p.experiment_type} />
               <input class="col-span-2 input" placeholder="Cycle" bind:value={p.cycle} />
-              <button class="col-span-1 btn btn-ghost" type="button" on:click={() => removePc(i)}>✕</button>
+              <Button class="col-span-1 btn btn-ghost" type="button" onclick={() => removePc(i)}>✕</Button>
             </div>
           {/each}
         </div>
       </div>
       <div class="mt-2">
-        <button class="btn btn-primary" on:click={submitSample}>Save Sample</button>
+        <Button class="btn btn-primary" onclick={submitSample}>Save Sample</Button>
       </div>
     </div>
   </div>

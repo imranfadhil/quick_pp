@@ -1,6 +1,7 @@
 <script lang="ts">
   export let projectId: number | string;
   export let wellName: string;
+  import { Button } from '$lib/components/ui/button/index.js';
   let summaryNotes = '';
 </script>
 
@@ -14,12 +15,12 @@
     <div class="bg-panel rounded p-3">
       <div class="text-sm mb-2">Selected well: <strong>{wellName}</strong></div>
       <div class="mb-3">
-        <label class="text-sm">Summary notes</label>
-        <textarea bind:value={summaryNotes} class="input w-full" rows="4" placeholder="Short summary or observation"></textarea>
+        <label class="text-sm" for="summary-notes">Summary notes</label>
+        <textarea id="summary-notes" bind:value={summaryNotes} class="input w-full" rows="4" placeholder="Short summary or observation"></textarea>
       </div>
       <div class="flex gap-2">
-        <button class="btn btn-primary">Generate Report</button>
-        <button class="btn">Export CSV</button>
+        <Button class="btn btn-primary">Generate Report</Button>
+        <Button class="btn">Export CSV</Button>
       </div>
     </div>
   {:else}

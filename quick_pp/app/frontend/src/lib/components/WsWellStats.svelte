@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import * as Card from '$lib/components/ui/card/index.js';
   import * as Chart from '$lib/components/ui/chart/index.js';
-  import Button from '$lib/components/ui/Button.svelte';
+  import { Button } from '$lib/components/ui/button/index.js';
   import { AreaChart, Area } from 'layerchart';
   import { renameColumn, convertPercentToFraction, applyRenameInColumns } from '$lib/utils/topBottomEdits';
 
@@ -396,8 +396,8 @@
     <Card.Title>Well Statistics</Card.Title>
     <Card.Description>Summary for the selected well</Card.Description>
     <div class="ml-auto flex items-center gap-2">
-      <Button variant="ghost" size="sm" onclick={openEditModal} title="Open edits modal" ariaLabel="Open edits modal">✏️ Edits</Button>
-      <Button variant={hasUnsavedEdits ? 'primary' : 'ghost'} size="sm" onclick={saveEditsToServer} disabled={!hasUnsavedEdits} title="Save edits to server" ariaLabel="Save edits to server">
+    <Button variant="ghost" size="sm" onclick={openEditModal} title="Open edits modal" aria-label="Open edits modal">✏️ Edits</Button>
+    <Button variant={hasUnsavedEdits ? 'default' : 'ghost'} size="sm" onclick={saveEditsToServer} disabled={!hasUnsavedEdits} title="Save edits to server" aria-label="Save edits to server">
         Save Edits
         {#if hasUnsavedEdits}
           <span class="unsaved-dot" aria-hidden="true" style="background:#ef4444; margin-left:.5rem;"></span>
@@ -440,7 +440,7 @@
                 size="sm"
                 onclick={() => { showDataProfile = !showDataProfile; }}
                 title={showDataProfile ? 'Hide Profile' : 'Show Profile'}
-                ariaLabel={showDataProfile ? 'Hide Profile' : 'Show Profile'}
+                aria-label={showDataProfile ? 'Hide Profile' : 'Show Profile'}
               >
                 {showDataProfile ? 'Hide' : 'Show'} Profile
               </Button>
@@ -448,7 +448,7 @@
                 variant="ghost"
                 size="sm"
                 title={showFullData ? 'Hide full well data' : 'Show full well data'}
-                ariaLabel={showFullData ? 'Hide full well data' : 'Show full well data'}
+                aria-label={showFullData ? 'Hide full well data' : 'Show full well data'}
                 onclick={async () => {
                   showFullData = !showFullData;
                   if (showFullData && fullRows.length === 0) {
@@ -613,8 +613,8 @@
                   <div class="flex items-center justify-between mb-2">
                     <div class="font-medium">Edit Columns</div>
                     <div class="flex gap-2">
-                      <Button variant="ghost" size="sm" onclick={undoLast} title="Undo last" ariaLabel="Undo last">Undo</Button>
-                      <Button variant="ghost" size="sm" onclick={closeEditModal} title="Close modal" ariaLabel="Close modal">Close</Button>
+                      <Button variant="ghost" size="sm" onclick={undoLast} title="Undo last" aria-label="Undo last">Undo</Button>
+                      <Button variant="ghost" size="sm" onclick={closeEditModal} title="Close modal" aria-label="Close modal">Close</Button>
                     </div>
                   </div>
 
@@ -648,8 +648,8 @@
 
                             <div class="flex gap-2">
                               <Button variant="ghost" size="sm" onclick={previewEdits} title="Preview changes">Preview</Button>
-                              <Button variant="primary" onclick={applyEditsInMemory} title="Apply edits in-memory">Apply</Button>
-                              <Button variant="primary" size="sm" onclick={saveEditsToServer} disabled={!hasUnsavedEdits} title="Save edits to server">Save</Button>
+                              <Button variant="default" onclick={applyEditsInMemory} title="Apply edits in-memory">Apply</Button>
+                              <Button variant="default" size="sm" onclick={saveEditsToServer} disabled={!hasUnsavedEdits} title="Save edits to server">Save</Button>
                             </div>
 
                     {#if previewRows.length}
