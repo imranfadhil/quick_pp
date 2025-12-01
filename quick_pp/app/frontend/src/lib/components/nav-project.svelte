@@ -31,6 +31,16 @@
 	let selectedProjectId = $state<string>('');
 	let _unsubWorkspace: any = null;
 
+	function handleProjectSelect(e: Event) {
+		const id = (e.target as HTMLSelectElement).value;
+		const p = $projects.find((pp) => String(pp.project_id) === String(id));
+		if (p) {
+			selectProject(p);
+			const target = `/projects/${p.project_id}`;
+			if ($page.url.pathname !== target) goto(target);
+		}
+	}
+
 	function openForm() {
 		showForm = true;
 		newName = "";
@@ -140,19 +150,10 @@
 		<Sidebar.Menu>
 			{#if $projects && $projects.length}
 				<div class="px-2 py-2">
-					<select id="project-select" class="input w-full text-sm h-9" bind:value={selectedProjectId} onchange={(e) => {
-						const id = (e.target as HTMLSelectElement).value;
-						const p = $projects.find((pp) => String(pp.project_id) === String(id));
-						if (p) {
-							selectProject(p);
-							const target = `/projects/${p.project_id}`;
-							// Only navigate if we're not already on the target path to avoid repeat navigations
-							if ($page.url.pathname !== target) goto(target);
-						}
-					}}>
+					<select id="project-select" class="input w-full text-sm h-9" bind:value={selectedProjectId} onchange={handleProjectSelect}>
 						<option value="">— select project —</option>
 						{#each $projects as p}
-							<option value={p.project_id} selected={String(p.project_id) === String(selectedProjectId)}>{p.name}</option>
+							<option value={String(p.project_id)}>{p.name}</option>
 						{/each}
 					</select>
 				</div>

@@ -55,6 +55,15 @@
 			return path === url || (url !== '/' && path.startsWith(url));
 		}
 
+		function handleSelect(e: Event) {
+			const name = (e.target as HTMLSelectElement).value;
+			if (!name || !project) return;
+			selectedWellName = name;
+			// update shared workspace and navigate
+			selectWell({ id: name, name });
+			goto(`/wells/${project.project_id}/${encodeURIComponent(String(name))}`);
+		}
+	
 		function computeHref(itemUrl: string) {
 			if (!project) return itemUrl;
 			try {
@@ -83,14 +92,7 @@
 				{:else}
 				{#if wells && wells.length}
 					<div class="mt-2">
-						<select id="well-select" class="input w-full mt-1 text-sm h-9" value={selectedWellName} onchange={(e) => {
-							const name = (e.target as HTMLSelectElement).value;
-							if (!name) return;
-							selectedWellName = name;
-							// update shared workspace and navigate
-							selectWell({ id: name, name });
-							goto(`/wells/${project.project_id}/${encodeURIComponent(String(name))}`);
-						}}>
+						<select id="well-select" class="input w-full mt-1 text-sm h-9" bind:value={selectedWellName} onchange={handleSelect}>
 							<option value="">— select well —</option>
 							{#each wells as w}
 								<option value={w}>{w}</option>
