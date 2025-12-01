@@ -5,6 +5,7 @@ from matplotlib.figure import Figure
 from quick_pp.utils import line_intersection
 from quick_pp import logger
 import quick_pp.plotter.well_log as plotter_wells
+import plotly.graph_objects as go
 
 plotly_log = plotter_wells.plotly_log
 
@@ -299,6 +300,7 @@ def neutron_density_xplot(
     fluid_point: tuple = (1.0, 1.0),
     wet_clay_point: tuple = (),
     dry_silt_point: tuple = (),
+    responsive: bool = True,
     **kwargs,
 ):
     """Neutron-Density crossplot with lithology lines based on specified end points.
@@ -316,71 +318,167 @@ def neutron_density_xplot(
     Returns:
         matplotlib.figure.Figure: The generated Neutron-Density crossplot figure.
     """
-    logger.info("Generating neutron-density crossplot.")
+    logger.info("Generating neutron-density crossplot (Plotly).")
     A = dry_min1_point
     C = dry_clay_point
     D = fluid_point
     E = list(zip(nphi, rhob))
-    # Plotting the NPHI-RHOB crossplot
+
+    # Compute projected points (intersection of mineral-clay line with fluid->point lines)
     projected_pt = []
     for i in range(len(nphi)):
-        projected_pt.append(line_intersection((A, C), (D, E[i])))
-    rockline_from_pt = (A, C)
-    min1line_from_pt = (D, A)
-    clayline_from_pt = (D, C)
+        pt = line_intersection((A, C), (D, E[i]))
+        if pt is not None:
+            projected_pt.append(pt)
 
-    fig = Figure(figsize=(5, 5))
-    ax = fig.add_subplot(111)
-    ax.set_title("NPHI-RHOB Crossplot")
-    ax.scatter(
-        nphi, rhob, c=np.arange(0, len(nphi)).tolist(), cmap="rainbow", marker="."
+    # Build Plotly figure
+    fig = go.Figure()
+
+    # Data points colored by index (for depth ordering or sequence)
+    fig.add_trace(
+        go.Scatter(
+            x=list(nphi),
+            y=list(rhob),
+            mode="markers",
+            marker=dict(
+                color=list(range(len(nphi))),
+                colorscale="Rainbow",
+                showscale=False,
+                size=6,
+            ),
+            name="Data",
+            hoverinfo="x+y+text",
+        )
     )
-    ax.plot(*zip(*min1line_from_pt), label="Mineral 1 Line", color="blue")
 
+    # Mineral 1 line (D -> A)
+    fig.add_trace(
+        go.Scatter(
+            x=[D[0], A[0]],
+            y=[D[1], A[1]],
+            mode="lines",
+            line=dict(color="blue"),
+            name="Mineral 1 Line",
+        )
+    )
+
+    # Clay line (D -> C)
+    fig.add_trace(
+        go.Scatter(
+            x=[D[0], C[0]],
+            y=[D[1], C[1]],
+            mode="lines",
+            line=dict(color="gray"),
+            name="Clay Line",
+        )
+    )
+
+    # Rock line (A -> C)
+    fig.add_trace(
+        go.Scatter(
+            x=[A[0], C[0]],
+            y=[A[1], C[1]],
+            mode="lines",
+            line=dict(color="black"),
+            name="Rock Line",
+        )
+    )
+
+    # Silt line and marker
     if dry_silt_point:
         B = dry_silt_point
-        siltline_from_pt = (D, B)
-        ax.plot(*zip(*siltline_from_pt), label="Silt Line", color="green")
-        ax.scatter(
-            dry_silt_point[0], dry_silt_point[1], label="Dry Silt Point", color="orange"
+        fig.add_trace(
+            go.Scatter(
+                x=[D[0], B[0]],
+                y=[D[1], B[1]],
+                mode="lines",
+                line=dict(color="green"),
+                name="Silt Line",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[B[0]],
+                y=[B[1]],
+                mode="markers",
+                marker=dict(color="orange", size=8),
+                name="Dry Silt Point",
+            )
         )
 
-    ax.plot(*zip(*clayline_from_pt), label="Clay Line", color="gray")
-    ax.plot(*zip(*rockline_from_pt), label="Rock Line", color="black")
-    ax.scatter(*zip(*projected_pt), label="Projected Line", color="purple", marker=".")
-    ax.scatter(
-        dry_min1_point[0],
-        dry_min1_point[1],
-        label=f"Mineral 1 Point: ({dry_min1_point[0]}, {dry_min1_point[1]})",
-        color="yellow",
-    )
-    ax.scatter(
-        dry_clay_point[0],
-        dry_clay_point[1],
-        label=f"Dry Clay Point: ({dry_clay_point[0]}, {dry_clay_point[1]})",
-        color="black",
-    )
+    # Projected points
+    if projected_pt:
+        xs, ys = zip(*projected_pt)
+        fig.add_trace(
+            go.Scatter(
+                x=list(xs),
+                y=list(ys),
+                mode="markers",
+                marker=dict(color="purple", size=4),
+                name="Projected Point",
+            )
+        )
 
+    # Key markers: mineral, clay, wet clay, fluid
+    fig.add_trace(
+        go.Scatter(
+            x=[A[0]],
+            y=[A[1]],
+            mode="markers",
+            marker=dict(color="yellow", size=9),
+            name=f"Mineral Point ({A[0]}, {A[1]})",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[C[0]],
+            y=[C[1]],
+            mode="markers",
+            marker=dict(color="black", size=9),
+            name=f"Dry Clay ({C[0]}, {C[1]})",
+        )
+    )
     if wet_clay_point:
-        ax.scatter(
-            wet_clay_point[0], wet_clay_point[1], label="Wet Clay Point", color="gray"
+        fig.add_trace(
+            go.Scatter(
+                x=[wet_clay_point[0]],
+                y=[wet_clay_point[1]],
+                mode="markers",
+                marker=dict(color="gray", size=8),
+                name="Wet Clay",
+            )
         )
-
-    ax.scatter(
-        fluid_point[0],
-        fluid_point[1],
-        label=f"Fluid Point: ({fluid_point[0]}, {fluid_point[1]})",
-        color="blue",
+    fig.add_trace(
+        go.Scatter(
+            x=[D[0]],
+            y=[D[1]],
+            mode="markers",
+            marker=dict(color="blue", size=9),
+            name=f"Fluid ({D[0]}, {D[1]})",
+        )
     )
 
-    ax.set_ylim(3, 0)
-    ax.set_ylabel("RHOB")
-    ax.set_xlim(-0.15, 1)
-    ax.set_xlabel("NPHI")
-    ax.legend(loc="upper left", prop={"size": 9})
-    ax.minorticks_on()
-    ax.grid(True, which="major", linestyle="--", linewidth="0.5", color="gray")
-    ax.grid(True, which="minor", linestyle=":", linewidth="0.4", color="gray")
-    fig.tight_layout()
+    # Layout: invert y-axis (depth-style), tidy ranges similar to previous implementation
+    # Build layout dict so we can toggle fixed pixel size vs responsive autosize
+    layout = dict(
+        title="NPHI-RHOB Crossplot",
+        xaxis=dict(title="NPHI", range=[-0.10, 1]),
+        yaxis=dict(title="RHOB", autorange=False, range=[3, 0]),
+        legend=dict(orientation="v", yanchor="top", y=0.99, xanchor="left", x=0.01),
+        template="plotly_white",
+        margin=dict(l=40, r=10, t=40, b=40),
+    )
+
+    if responsive:
+        # Let plotly.js adapt to container size. The frontend should pass
+        # `config = { responsive: true }` when calling `newPlot`/`react`.
+        layout["autosize"] = True
+        # Do not set `width`/`height` here; the container (CSS) controls width.
+    else:
+        # Fixed pixel size (square) when not responsive
+        layout["width"] = 600
+        layout["height"] = 600
+
+    fig.update_layout(**layout)
 
     return fig

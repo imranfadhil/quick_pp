@@ -15,6 +15,8 @@
   // endpoint reference points (simple UI, defaults chosen)
   let drySandNphi = -0.02;
   let drySandRhob = 2.65;
+  let dryClayNphi = 0.35;
+  let dryClayRhob = 2.7;
   let fluidNphi = 1.0;
   let fluidRhob = 1.0;
   let siltLineAngle = 50;
@@ -26,6 +28,57 @@
   // data for charts
   let lithoChartData: Array<Record<string, any>> = [];
   let poroChartData: Array<Record<string, any>> = [];
+
+  // Plotly container and reference
+  let plotDiv: HTMLDivElement | null = null;
+  let Plotly: any = null;
+
+  async function ensurePlotly() {
+    if (!Plotly) {
+      const mod = await import('plotly.js-dist-min');
+      Plotly = mod?.default ?? mod;
+    }
+    return Plotly;
+  }
+
+  async function renderNdPlot() {
+    if (!plotDiv) return;
+    const plt = await ensurePlotly();
+
+    // If projectId/wellName available, prefer server-generated Plotly JSON
+    if (projectId && wellName) {
+      try {
+        const payload = {
+          dry_min1_point: [Number(drySandNphi), Number(drySandRhob)],
+          dry_clay_point: [Number(dryClayNphi), Number(dryClayRhob)],
+          fluid_point: [Number(fluidNphi), Number(fluidRhob)],
+        };
+
+        const url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/ndx`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const fig = await res.json();
+
+        // fig should be a Plotly figure object with `data` and `layout` keys
+        if (fig && fig.data && fig.layout) {
+          try {
+            plt.react(plotDiv, fig.data, fig.layout, { responsive: true });
+            return;
+          } catch (e) {
+            plt.newPlot(plotDiv, fig.data, fig.layout, { responsive: true });
+            return;
+          }
+        }
+      } catch (err: any) {
+        console.warn('ND endpoint failed, falling back to client plot:', err);
+        // fall through to client-side render below
+      }
+    }
+  }
 
   async function loadWellData() {
     if (!projectId || !wellName) return;
@@ -71,10 +124,10 @@
     try {
       const payload = {
         dry_sand_point: [Number(drySandNphi), Number(drySandRhob)],
-        dry_silt_point: [null, null],
-        dry_clay_point: [null, null],
+        // dry_silt_point: [null, null],
+        // dry_clay_point: [null, null],
         fluid_point: [Number(fluidNphi), Number(fluidRhob)],
-        wet_clay_point: [null, null],
+        dry_clay_point: [Number(dryClayNphi), Number(dryClayRhob)],
         method: 'default',
         silt_line_angle: Number(siltLineAngle),
         data,
@@ -106,12 +159,12 @@
     try {
       const payload = {
         dry_sand_point: [Number(drySandNphi), Number(drySandRhob)],
-        dry_silt_point: [null, null],
-        dry_clay_point: [null, null],
+        // dry_silt_point: [null, null],
+        // dry_clay_point: [null, null],
         fluid_point: [Number(fluidNphi), Number(fluidRhob)],
-        wet_clay_point: [null, null],
+        dry_clay_point: [Number(dryClayNphi), Number(dryClayRhob)],
         silt_line_angle: Number(siltLineAngle),
-        method: 'default',
+        method: 'ssc',
         data,
       };
       const res = await fetch(`${API_BASE}/quick_pp/porosity/neu_den`, {
@@ -159,6 +212,17 @@
   $: if (projectId && wellName) {
     loadWellData();
   }
+
+  // re-render Plotly when data or key inputs change
+  $: if (fullRows && plotDiv) {
+    // call async render but don't await in reactive context
+    renderNdPlot();
+  }
+
+  // re-render when endpoint parameters change
+  $: if (plotDiv && (drySandNphi || drySandRhob || fluidNphi || fluidRhob)) {
+    renderNdPlot();
+  }
 </script>
 
 <div class="ws-lithology">
@@ -177,6 +241,14 @@
         <div>
           <label class="text-xs" for="dry-sand-rhob">Dry sand (RHOB)</label>
           <input id="dry-sand-rhob" class="input" type="number" step="any" bind:value={drySandRhob} />
+        </div>
+        <div>
+          <label class="text-xs" for="dry-clay-nphi">Dry clay (NPHI)</label>
+          <input id="dry-clay-nphi" class="input" type="number" step="any" bind:value={dryClayNphi} />
+        </div>
+        <div>
+          <label class="text-xs" for="dry-clay-rhob">Dry clay (RHOB)</label>
+          <input id="dry-clay-rhob" class="input" type="number" step="any" bind:value={dryClayRhob} />
         </div>
         <div>
           <label class="text-xs" for="fluid-nphi">Fluid (NPHI)</label>
@@ -221,6 +293,13 @@
 
       <div class="space-y-3">
         <div>
+          <div>
+            <div class="font-medium text-sm mb-1">NPHI - RHOB Crossplot</div>
+            <div class="bg-surface rounded p-2">
+              <div bind:this={plotDiv} class="w-full h-[360px]"></div>
+            </div>
+          </div>
+
           <div class="font-medium text-sm mb-1">Lithology (VSAND / VSILT / VCLAY)</div>
           <div class="bg-surface rounded p-2">
             <Chart.Container class="h-[220px] w-full" config={{}}>
@@ -268,6 +347,6 @@
 
     </div>
   {:else}
-    <div class="text-sm">Select a well to view lithology tools.</div>
+    <div class="text-sm">Select a well.</div>
   {/if}
 </div>
