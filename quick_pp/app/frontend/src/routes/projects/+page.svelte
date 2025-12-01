@@ -1,20 +1,64 @@
 <script lang="ts">
-  import * as Sidebar from "$lib/components/ui/sidebar/index.js";
-  import AppSidebar from "$lib/components/app-sidebar.svelte";
-  import SiteHeader from "$lib/components/site-header.svelte";
-  import ProjectWorkspace from "$lib/components/ws-project.svelte";
+  import { onMount, onDestroy } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { workspace } from '$lib/stores/workspace';
+  import { projects, loadProjects } from '$lib/stores/projects';
+
+  // When visiting /projects we want to automatically forward to the active project
+  // (workspace.project) or fall back to the first project in the projects list.
+  let _unsubWorkspace: (() => void) | null = null;
+  let _unsubProjects: (() => void) | null = null;
+  let redirected = false;
+  let hasProjects = false;
+  let hasWorkspaceProject = false;
+
+  onMount(async () => {
+    // Ensure projects are loaded so we can pick a sensible fallback.
+    await loadProjects();
+
+    _unsubWorkspace = workspace.subscribe((w) => {
+      hasWorkspaceProject = !!(w && w.project && w.project.project_id);
+      if (redirected) return;
+      const pid = w?.project?.project_id;
+      if (pid) {
+        redirected = true;
+        goto(`/projects/${pid}`);
+      }
+    });
+
+    _unsubProjects = projects.subscribe((list) => {
+      hasProjects = Array.isArray(list) && list.length > 0;
+      if (redirected) return;
+      if (hasProjects) {
+        redirected = true;
+        goto(`/projects/${list[0].project_id}`);
+      }
+    });
+  });
+
+  onDestroy(() => {
+    try { _unsubWorkspace && _unsubWorkspace(); } catch(e) {}
+    try { _unsubProjects && _unsubProjects(); } catch(e) {}
+  });
 </script>
 
-<Sidebar.Provider style="--sidebar-width: calc(var(--spacing) * 72); --header-height: calc(var(--spacing) * 12);">
-  <AppSidebar variant="inset" />
-  <Sidebar.Inset>
-    <SiteHeader />
-    <div class="flex flex-1 flex-col">
-      <div class="@container/main flex flex-1 flex-col gap-2">
-        <div class="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
-          <ProjectWorkspace />
-        </div>
+{#if redirected}
+  <!-- Navigation enacted, nothing to show locally -->
+{:else}
+  <div class="p-6">
+    <h2 class="text-lg font-semibold">Projects</h2>
+    {#if !hasProjects && !hasWorkspaceProject}
+      <div class="mt-4 text-sm">
+        <p>No projects found for your account or workspace.</p>
+        <p class="mt-2">How to proceed:</p>
+        <ul class="list-disc ml-6 mt-2 text-sm">
+          <li>Use the <strong>New Project</strong> button in the left sidebar to create a project.</li>
+          <li>If you already have projects, open the project selector in the sidebar and choose one to activate it.</li>
+        </ul>
+        <p class="mt-3 text-muted-foreground">After creating or selecting a project the workspace will open automatically.</p>
       </div>
-    </div>
-  </Sidebar.Inset>
-</Sidebar.Provider>
+    {:else}
+      <p class="mt-2 text-sm text-muted-foreground">Resolving project — redirecting to project workspace...</p>
+    {/if}
+  </div>
+{/if}

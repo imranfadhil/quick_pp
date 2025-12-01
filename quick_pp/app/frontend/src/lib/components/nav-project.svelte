@@ -4,8 +4,12 @@
 	import type { Icon } from "@tabler/icons-svelte";
 
 	let { items }: { items: { title: string; url: string; icon?: Icon }[] } = $props();
-	import { onMount } from "svelte";
+	import { onMount, onDestroy } from "svelte";
 	import { page } from '$app/stores';
+	import { projects, loadProjects } from '$lib/stores/projects';
+	import { selectProject } from '$lib/stores/workspace';
+	import { goto } from '$app/navigation';
+	import { workspace } from '$lib/stores/workspace';
 
 	function isActive(url: string) {
 		const path = $page.url.pathname;
@@ -21,9 +25,11 @@
 
 	// Projects overview state
 	let activeTab = $state<'list' | 'overview'>('list');
-	let projects = $state<Array<any>>([]);
 	let selectedProject: any = $state(null);
 	const API_BASE = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:6312";
+	// Use a reactive state so Svelte's `bind:value` updates correctly.
+	let selectedProjectId = $state<string>('');
+	let _unsubWorkspace: any = null;
 
 	function openForm() {
 		showForm = true;
@@ -31,23 +37,7 @@
 		newDescription = "";
 	}
 
-	async function fetchProjects() {
-		try {
-			const res = await fetch(`${API_BASE}/quick_pp/database/projects`);
-			if (!res.ok) {
-				console.warn('Failed to load projects list', res.statusText);
-				return;
-			}
-			const data = await res.json();
-			projects = Array.isArray(data) ? data : [];
-			// If items nav wasn't provided or is empty, map items from projects
-			if (!(items && items.length)) {
-				items = projects.map((p: any) => ({ title: p.name, url: `/projects/${p.project_id}` }));
-			}
-		} catch (err) {
-			console.error('Error fetching projects', err);
-		}
-	}
+	// projects are provided by the shared projects store; use loadProjects() to populate it
 
 	function cancelForm() {
 		showForm = false;
@@ -79,8 +69,8 @@
 			const data = await res.json();
 			const newItem = { title: data.name ?? newName, url: `/projects/${data.project_id}` };
 			items = [...(items || []), newItem];
-			// Refresh projects list so overview tab shows the new project
-			await fetchProjects();
+			// Refresh projects store so overview tab shows the new project
+			await loadProjects();
 			cancelForm();
 		} catch (err) {
 			console.error(err);
@@ -89,8 +79,17 @@
 			creating = false;
 		}
 	}
-    // ensure projects load when component mounts
-    onMount(() => { fetchProjects(); });
+	// ensure projects load when component mounts and subscribe to workspace
+	onMount(() => {
+		loadProjects();
+		_unsubWorkspace = workspace.subscribe((w) => {
+			selectedProjectId = w && w.project && w.project.project_id ? String(w.project.project_id) : '';
+		});
+	});
+
+	onDestroy(() => {
+		try { _unsubWorkspace && _unsubWorkspace(); } catch (e) {}
+	});
 
 </script>
 
@@ -139,6 +138,25 @@
 			</Sidebar.MenuItem>
 		</Sidebar.Menu>
 		<Sidebar.Menu>
+			{#if $projects && $projects.length}
+				<div class="px-2 py-2">
+					<select id="project-select" class="input w-full text-sm h-9" bind:value={selectedProjectId} onchange={(e) => {
+						const id = (e.target as HTMLSelectElement).value;
+						const p = $projects.find((pp) => String(pp.project_id) === String(id));
+						if (p) {
+							selectProject(p);
+							const target = `/projects/${p.project_id}`;
+							// Only navigate if we're not already on the target path to avoid repeat navigations
+							if ($page.url.pathname !== target) goto(target);
+						}
+					}}>
+						<option value="">— select project —</option>
+						{#each $projects as p}
+							<option value={p.project_id} selected={String(p.project_id) === String(selectedProjectId)}>{p.name}</option>
+						{/each}
+					</select>
+				</div>
+			{/if}
 			{#each items as item (item.title)}
 				<Sidebar.MenuItem>
 					<Sidebar.MenuButton tooltipContent={item.title}>

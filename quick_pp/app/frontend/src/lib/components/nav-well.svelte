@@ -12,7 +12,7 @@
 	let wells: string[] = $state([]);
 	let loadingWells = $state(false);
 	let selectedWell: any = $state(null);
-	let selectedWellName: string = '';
+	let selectedWellName: string = $state('');
 
 	async function fetchWells(projectId: string | number) {
 		loadingWells = true;
@@ -114,7 +114,7 @@
 								<a href={computeHref(item.url)} {...props}
 									class="{isActive(computeHref(item.url)) ? 'bg-panel-foreground/5 font-semibold' : ''} flex items-center gap-2 w-full"
 									aria-current={isActive(computeHref(item.url)) ? 'page' : undefined}
-									onclick={(e) => {
+											onclick={(e) => {
 										e.preventDefault();
 										const href = computeHref(item.url);
 										// If navigating to a per-well page, ensure workspace selectedWell is set

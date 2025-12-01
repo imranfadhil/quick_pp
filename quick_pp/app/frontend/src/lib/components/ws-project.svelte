@@ -1,15 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { selectProject, setWorkspaceTitleIfDifferent as setWorkspaceTitle } from '$lib/stores/workspace';
+  import { workspace, selectProject, setWorkspaceTitleIfDifferent as setWorkspaceTitle } from '$lib/stores/workspace';
+  import { projects, loadProjects, upsertProject } from '$lib/stores/projects';
   import { goto } from '$app/navigation';
+  import { onDestroy } from 'svelte';
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
-  let projects: any[] = [];
+  // `projects` store is used reactively in the template as `$projects`
   let selectedProject: any = null;
   let lasFiles: FileList | null = null;
   let uploading: boolean = false;
   let uploadError: string | null = null;
+  let _unsubWorkspace: any = null;
+  let _lastWorkspaceProjectId: string | null = null;
 
   // Upload selected LAS files to the project; backend will create/update wells from LAS
   async function uploadLas() {
@@ -34,6 +38,9 @@
 
       const data = await res.json();
       // refresh project details to show newly created/updated wells
+      // reload project list and upsert project details locally
+      await loadProjects();
+      // optimistic upsert of currently selected project so details refresh immediately
       await fetchProjectDetails(selectedProject.project_id);
       // clear file input
       lasFiles = null;
@@ -46,32 +53,23 @@
     }
   }
 
-  async function fetchProjects() {
-    try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects`);
-      if (!res.ok) return (projects = []);
-      const data = await res.json();
-      projects = Array.isArray(data) ? data : [];
-    } catch (err) {
-      console.error('fetchProjects error', err);
-      projects = [];
-    }
-  }
+  // loadProjects() from the shared store is used instead of local fetchProjects
 
   async function fetchProjectDetails(id: string | number) {
     try {
-      const proj = projects.find((p) => String(p.project_id) === String(id));
-      if (proj) {
-        // shallow copy so we can add fields
-        selectedProject = { ...proj };
-        selectProject(selectedProject);
-        setWorkspaceTitle(selectedProject.name || 'Project', `ID: ${selectedProject.project_id}`);
-      } else {
-        // fallback: create minimal selectedProject
-        selectedProject = { project_id: id, name: `Project ${id}` };
-        selectProject(selectedProject);
-        setWorkspaceTitle(selectedProject.name, `ID: ${selectedProject.project_id}`);
-      }
+      // read from the projects store (reactive via $projects in template)
+      const unsub = projects.subscribe((list) => {
+        const proj = list.find((p) => String(p.project_id) === String(id));
+        if (proj) {
+          selectedProject = { ...proj };
+        } else {
+          selectedProject = { project_id: id, name: `Project ${id}` };
+        }
+      });
+      unsub();
+      // update workspace title only; avoid re-selecting the project here to prevent
+      // emitting duplicate workspace updates that may trigger subscribers.
+      setWorkspaceTitle(selectedProject.name || 'Project', `ID: ${selectedProject.project_id}`);
 
       // Try to fetch wells for richer detail (optional endpoint)
       try {
@@ -80,6 +78,8 @@
           const data = await res.json();
           // merge wells or other returned fields
           selectedProject = { ...selectedProject, ...(data || {}) };
+          // update store with new details so list reflects it
+          upsertProject(selectedProject);
         }
       } catch (innerErr) {
         // non-fatal: show basic project info
@@ -93,33 +93,27 @@
 
   onMount(() => {
     setWorkspaceTitle('Projects', 'Manage your projects');
-    fetchProjects();
+    loadProjects();
+    // react to project selection from sidebar or elsewhere
+    _unsubWorkspace = workspace.subscribe((w) => {
+      const id = w && w.project && w.project.project_id ? String(w.project.project_id) : '';
+      if (!id) return;
+      // only fetch details when the selected project id changes
+      if (id === _lastWorkspaceProjectId) return;
+      _lastWorkspaceProjectId = id;
+      fetchProjectDetails(id);
+    });
+  });
+
+  onDestroy(() => {
+    try {
+      _unsubWorkspace && _unsubWorkspace();
+    } catch (e) {}
   });
 </script>
 
-<div class="project-workspace flex gap-4 p-4">
-  <div class="w-1/3 bg-panel rounded p-3 flex flex-col">
-
-    <div class="overflow-auto">
-      {#if projects.length}
-        {#each projects as p}
-          <div class="p-2 rounded hover:bg-panel-foreground/5 flex justify-between items-center">
-            <button class="text-left flex-1" type="button" on:click={() => fetchProjectDetails(p.project_id)}>
-              <div class="font-medium">{p.name}</div>
-              {#if p.description}
-                <div class="text-sm text-muted">{p.description}</div>
-              {/if}
-            </button>
-            <div class="text-xs text-muted">{p.project_id}</div>
-          </div>
-        {/each}
-      {:else}
-        <div class="text-sm text-muted">No projects found.</div>
-      {/if}
-    </div>
-  </div>
-
-  <div class="flex-1 bg-panel rounded p-4">
+<div class="project-workspace p-4">
+  <div class="bg-panel rounded p-4">
     {#if selectedProject}
       <div class="font-semibold text-xl">{selectedProject.name}</div>
       {#if selectedProject.description}
@@ -169,7 +163,7 @@
         </div>
       </div>
     {:else}
-      <div class="text-muted">Select a project from the left to view details.</div>
+      <div class="text-muted">Select a project from the sidebar to view details.</div>
     {/if}
   </div>
 </div>
