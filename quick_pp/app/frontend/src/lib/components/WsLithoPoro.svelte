@@ -1,6 +1,5 @@
 <script lang="ts">
-  import * as Chart from '$lib/components/ui/chart/index.js';
-  import { AreaChart, Area } from 'layerchart';
+  import { Plot, AreaY, Line, Dot } from 'svelteplot';
 
   export let projectId: number | string;
   export let wellName: string;
@@ -26,6 +25,7 @@
   // data for charts
   let lithoChartData: Array<Record<string, any>> = [];
   let poroChartData: Array<Record<string, any>> = [];
+  let cporeData: Array<Record<string, any>> = []; // Core porosity data
 
   // Plotly container and reference
   let plotDiv: HTMLDivElement | null = null;
@@ -109,6 +109,19 @@
       if (!isNaN(nphi) && !isNaN(rhob)) data.push({ nphi, rhob });
     }
     return data;
+  }
+
+  function extractCporeData() {
+    const data: Array<Record<string, any>> = [];
+    for (const r of fullRows) {
+      const depth = Number(r.depth ?? r.DEPTH ?? NaN);
+      const cpore = Number(r.cpore ?? r.CPORE ?? r.Cpore ?? r.KPORE ?? r.kpore ?? NaN);
+      
+      if (!isNaN(depth) && !isNaN(cpore) && cpore > 0) {
+        data.push({ depth, CPORE: cpore });
+      }
+    }
+    return data.sort((a, b) => a.depth - b.depth);
   }
 
   async function runSSC() {
@@ -228,6 +241,9 @@
     // Sort by depth to ensure proper chart rendering
     rows.sort((a, b) => a.depth - b.depth);
     poroChartData = rows;
+    
+    // Extract CPORE data for overlay
+    cporeData = extractCporeData();
   }
 
   // load data on mount or when well changes
@@ -324,49 +340,179 @@
 
           <div class="font-medium text-sm mb-1">Lithology (VSAND / VSILT / VCLAY)</div>
           <div class="bg-surface rounded p-2">
-            <Chart.Container class="h-[220px] w-full" config={{ y: { domain: [0, 1] } }}>
-              <AreaChart
-                data={lithoChartData}
-                x="depth"
-                series={[
-                  { key: 'VCLAY', label: 'Clay', color: '#949494' },
-                  { key: 'VSILT', label: 'Silt', color: '#FE9800' },
-                  { key: 'VSAND', label: 'Sand', color: '#F6F674' },
-                ]}
-                seriesLayout="stack"
-                props={{ 
-                  area: { 'fill-opacity': 0.8, 'stroke-width': 1, stroke: 'rgba(255,255,255,0.2)' },
-                  xAxis: { format: (v: any) => String(v) },
-                  yAxis: { format: (v: any) => Number(v).toFixed(1) }
-                }}
-              >
-                {#snippet marks({ series, getAreaProps })}
-                  {#each series as s, i (s.key)}
-                    <Area {...getAreaProps(s, i)} />
-                  {/each}
-                {/snippet}
-              </AreaChart>
-            </Chart.Container>
+            <div class="h-[220px] w-full overflow-hidden">
+              {#if lithoChartData.length > 0}
+                {@const lithoPoints = lithoChartData.map(d => ({
+                  x: d.depth,
+                  vclay: d.VCLAY,
+                  vsilt: d.VCLAY + d.VSILT,
+                  vsand: d.VCLAY + d.VSILT + d.VSAND
+                }))}
+                
+                <Plot
+                  width={500}
+                  height={220}
+                  marginLeft={10}
+                  marginRight={20}
+                  marginTop={20}
+                  marginBottom={40}
+                  x={{ 
+                    label: "Depth",
+                    tickFormat: (d) => Math.round(Number(d)).toString()
+                  }}
+                  y={{ 
+                    label: "Volume Fraction", 
+                    domain: [0, 1],
+                    tickFormat: (d) => Number(d).toFixed(1)
+                  }}
+                >
+                  <!-- Stacked areas for lithology using AreaY with proper boundaries -->
+                  <AreaY 
+                    data={lithoPoints}
+                    x="x"
+                    y1={0}
+                    y2="vclay"
+                    fill="#949494" 
+                    fillOpacity={0.8}
+                  />
+                  <AreaY 
+                    data={lithoPoints}
+                    x="x"
+                    y1="vclay"
+                    y2="vsilt"
+                    fill="#FE9800" 
+                    fillOpacity={0.8}
+                  />
+                  <AreaY 
+                    data={lithoPoints}
+                    x="x"
+                    y1="vsilt"
+                    y2="vsand"
+                    fill="#F6F674" 
+                    fillOpacity={0.8}
+                  />
+                  
+                  <!-- Overlay lines for better visibility -->
+                  <Line 
+                    data={lithoPoints}
+                    x="x"
+                    y="vclay"
+                    stroke="#949494" 
+                    strokeWidth={1}
+                  />
+                  <Line 
+                    data={lithoPoints}
+                    x="x"
+                    y="vsilt"
+                    stroke="#FE9800" 
+                    strokeWidth={1}
+                  />
+                  <Line 
+                    data={lithoPoints}
+                    x="x"
+                    y="vsand"
+                    stroke="#F6F674" 
+                    strokeWidth={1}
+                  />
+                </Plot>
+              {:else}
+                <div class="flex items-center justify-center h-full text-sm text-gray-500">
+                  No lithology data available. Click "Estimate Lithology" first.
+                </div>
+              {/if}
+            </div>
           </div>
         </div>
 
         <div>
           <div class="font-medium text-sm mb-1">Porosity (PHIT)</div>
           <div class="bg-surface rounded p-2">
-            <Chart.Container class="h-[220px] w-full" config={{ y: { domain: [0, 1] } }}>
-              <AreaChart
-                data={poroChartData}
-                x="depth"
-                series={[{ key: 'PHIT', label: 'PHIT', color: 'var(--primary)' }]}
-                props={{ area: { 'fill-opacity': 0.1 }, xAxis: { format: (v: any) => String(v) } }}
-              >
-                {#snippet marks({ series, getAreaProps })}
-                  {#each series as s, i (s.key)}
-                    <Area {...getAreaProps(s, i)} />
-                  {/each}
-                {/snippet}
-              </AreaChart>
-            </Chart.Container>
+            <div class="h-[220px] w-full overflow-hidden">
+              {#if poroChartData.length > 0 || cporeData.length > 0}
+                {@const poroPoints = poroChartData.map(d => ({ x: d.depth, y: d.PHIT }))}
+                {@const cporePoints = cporeData.map(d => ({ x: d.depth, y: d.CPORE }))}
+                
+                <Plot
+                  width={500}
+                  height={220}
+                  marginLeft={60}
+                  marginRight={20}
+                  marginTop={20}
+                  marginBottom={40}
+                  x={{ 
+                    label: "Depth",
+                    tickFormat: (d) => Math.round(d).toString()
+                  }}
+                  y={{ 
+                    label: "Porosity (fraction)", 
+                    domain: [0, 1],
+                    tickFormat: (d) => Number(d).toFixed(2)
+                  }}
+                >
+                  {#if poroPoints.length > 0}
+                    <AreaY 
+                      data={poroPoints}
+                      x="x"
+                      y="y"
+                      fill="#2563eb" 
+                      fillOpacity={0.3}
+                    />
+                    <Line 
+                      data={poroPoints}
+                      x="x"
+                      y="y"
+                      stroke="#2563eb" 
+                      strokeWidth={2}
+                    />
+                  {/if}
+                  
+                  {#if cporePoints.length > 0}
+                    <Dot 
+                      data={cporePoints}
+                      x="x"
+                      y="y"
+                      fill="#dc2626" 
+                      stroke="white" 
+                      strokeWidth={2}
+                      r={4}
+                    />
+                  {/if}
+                </Plot>
+              {:else}
+                <div class="flex items-center justify-center h-full text-sm text-gray-500">
+                  No porosity data available. Click "Estimate Porosity" first.
+                </div>
+              {/if}
+            </div>
+          </div>
+          
+          <div class="text-xs text-muted-foreground space-y-1 mt-2">
+            {#if poroChartData.length > 0}
+              {@const phits = poroChartData.map(d => d.PHIT)}
+              {@const avgPhit = phits.reduce((a, b) => a + b, 0) / phits.length}
+              {@const minPhit = Math.min(...phits)}
+              {@const maxPhit = Math.max(...phits)}
+              <div>
+                <strong>Calculated PHIT:</strong>
+                Avg: {avgPhit.toFixed(3)} | Min: {minPhit.toFixed(3)} | Max: {maxPhit.toFixed(3)} | Count: {phits.length}
+              </div>
+            {:else}
+              <div><strong>Calculated PHIT:</strong> No data</div>
+            {/if}
+            
+            {#if cporeData.length > 0}
+              {@const cpores = cporeData.map(d => d.CPORE)}
+              {@const avgCpore = cpores.reduce((a, b) => a + b, 0) / cpores.length}
+              {@const minCpore = Math.min(...cpores)}
+              {@const maxCpore = Math.max(...cpores)}
+              <div>
+                <strong>Core Porosity (CPORE):</strong>
+                <span class="inline-block w-2 h-2 bg-red-600 rounded-full"></span>
+                Avg: {avgCpore.toFixed(3)} | Min: {minCpore.toFixed(3)} | Max: {maxCpore.toFixed(3)} | Count: {cpores.length}
+              </div>
+            {:else}
+              <div class="text-gray-500">No core porosity data (CPORE) found</div>
+            {/if}
           </div>
         </div>
       </div>
