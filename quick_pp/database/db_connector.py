@@ -75,9 +75,9 @@ class DBConnector:
         with open(script_path, "r") as f:
             sql_script = f.read()
 
+        # Use SQLAlchemy's exec_driver_sql to run raw SQL.
         with DBConnector._engine.connect() as connection:
-            raw_connection = connection.connection
-            raw_connection.executescript(sql_script)
+            connection.exec_driver_sql(sql_script)
 
     def setup_db(self):
         """

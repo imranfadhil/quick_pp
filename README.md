@@ -53,7 +53,7 @@ To use the `qpp_assistant`, follow these steps after the development installatio
 2.  Run Docker Compose: `docker-compose up -d`.
 3.  Build your flow in Langflow at `http://localhost:7860`.
 4.  Run the main application: `python main.py app`.
-5.  Test your flow in the qpp Assistant at `http://localhost:8888/qpp_assistant`.
+5.  Test your flow in the qpp Assistant at `http://localhost:6312/qpp_assistant`.
 
 ## CLI
 
@@ -100,11 +100,11 @@ You can access the deployed model's Swagger UI at `http://localhost:5555/docs`.
 ```bash
 quick_pp app
 ```
--   **API Docs:** `http://localhost:8888/docs`
--   **qpp_assistant:** `http://localhost:8888/qpp_assistant` (you can log in with any username and password).
+-   **API Docs:** `http://localhost:6312/docs`
+-   **qpp_assistant:** `http://localhost:6312/qpp_assistant` (you can log in with any username and password).
 
 To use the mcp tools, you would need to first add the following SSE URLS through the interface;
-http://localhost:8888/mcp - quick_pp tools.
+http://localhost:6312/mcp - quick_pp tools.
 
 http://localhost:5555/mcp - quick_pp ML model prediction tools (need to run `quick_pp model-deployment` first).
 

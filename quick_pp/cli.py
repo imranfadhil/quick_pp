@@ -11,6 +11,7 @@ import os
 import shutil
 import socket
 import sys
+import webbrowser
 from importlib import metadata, resources
 from pathlib import Path
 from subprocess import Popen
@@ -20,6 +21,11 @@ try:
     quick_ppVersion = metadata.version("quick_pp")
 except metadata.PackageNotFoundError:
     quick_ppVersion = "0.0.0"
+
+# Global defaults for backend and frontend locations used across commands
+BACKEND_HOST = "localhost"
+BACKEND_PORT = 6312
+FRONTEND_DIR = Path(__file__).parent / "app" / "frontend"
 
 
 def is_server_running(host, port):
@@ -57,17 +63,158 @@ def cli():
 
 @click.command()
 @click.option("--debug", is_flag=True)
-def app(debug):
+@click.option(
+    "--no-open",
+    is_flag=True,
+    default=False,
+    help="Do not open browser after starting backend",
+)
+def backend(debug, no_open):
     """Start the quick_pp web application.
 
     This launches a Uvicorn server to run the FastAPI backend and the associated qpp assistant module.
     The --debug flag enables auto-reload for development."""
-    if not is_server_running("localhost", 8888):
+    if not is_server_running(BACKEND_HOST, BACKEND_PORT):
         reload_ = "--reload" if debug else ""
-        cmd = f"uvicorn quick_pp.api.main:app --host 0.0.0.0 --port 8888 {reload_}"
+        cmd = f"uvicorn quick_pp.app.backend.main:app --host 0.0.0.0 --port {BACKEND_PORT} {reload_}"
         click.echo(f"App is not running. Starting it now... | {cmd}")
         process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
+        # Open browser to backend URL after starting (default)
+        try:
+            if not no_open:
+                webbrowser.open(f"http://{BACKEND_HOST}:{BACKEND_PORT}")
+        except Exception:
+            pass
         process.wait()
+
+
+@click.command()
+@click.option(
+    "--no-open",
+    is_flag=True,
+    default=False,
+    help="Do not open browser after starting frontend",
+)
+def frontend(no_open):
+    """Start the quick_pp frontend development server.
+
+    This launches the SvelteKit development server for the frontend application."""
+    frontend_dir = FRONTEND_DIR
+
+    if not frontend_dir.exists():
+        click.echo(f"Error: Frontend directory not found at {frontend_dir}")
+        return
+
+    # Check if node_modules exists, if not suggest installing dependencies
+    if not (frontend_dir / "node_modules").exists():
+        click.echo(
+            "Warning: node_modules not found. You may need to run 'npm install' first."
+        )
+        click.echo(f"Run: cd {frontend_dir} && npm install")
+        return
+
+    click.echo(f"Starting frontend development server from {frontend_dir}...")
+
+    # Change to frontend directory and run npm run dev
+    cmd = "npm run dev"
+    process = Popen(
+        cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True, cwd=str(frontend_dir)
+    )
+    # Open browser to frontend dev URL (SvelteKit default 5173) unless disabled
+    try:
+        if not no_open:
+            webbrowser.open("http://localhost:5173")
+    except Exception:
+        pass
+    process.wait()
+
+
+@click.command()
+@click.option("--debug", is_flag=True)
+@click.option(
+    "--no-open",
+    is_flag=True,
+    default=False,
+    help="Do not open browser after starting services",
+)
+def app(debug, no_open):
+    """Start both backend and frontend development servers.
+
+    This command will start the backend (uvicorn) on port 6312 and the
+    frontend (`npm run dev`) from `quick_pp/app/frontend` if they are not
+    already running. Use `--debug` to enable uvicorn's reload mode.
+    """
+    processes = []
+    try:
+        # Start backend if not running
+        if not is_server_running(BACKEND_HOST, BACKEND_PORT):
+            reload_ = "--reload" if debug else ""
+            backend_cmd = f"uvicorn quick_pp.app.backend.main:app --host 0.0.0.0 --port {BACKEND_PORT} {reload_}"
+            click.echo(f"Starting backend... | {backend_cmd}")
+            p_backend = Popen(
+                backend_cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True
+            )
+            processes.append(p_backend)
+        else:
+            click.echo("Backend already running on localhost:6312")
+
+        # Start frontend if available and node modules installed
+        frontend_dir = FRONTEND_DIR
+        if not frontend_dir.exists():
+            click.echo(f"Frontend directory not found at {frontend_dir}")
+        else:
+            if not (frontend_dir / "node_modules").exists():
+                click.echo(
+                    "Warning: node_modules not found. You may need to run 'npm install' first."
+                )
+                click.echo(f"Run: cd {frontend_dir} && npm install")
+            else:
+                click.echo(
+                    f"Starting frontend development server from {frontend_dir}..."
+                )
+                cmd = "npm run dev"
+                p_front = Popen(
+                    cmd,
+                    stdout=sys.stdout,
+                    stderr=sys.stderr,
+                    shell=True,
+                    cwd=str(frontend_dir),
+                )
+                processes.append(p_front)
+
+        # Open browser(s) after launching processes (default behavior)
+        try:
+            if not no_open:
+                # backend
+                if any(p == p_backend for p in processes) or is_server_running(
+                    BACKEND_HOST, BACKEND_PORT
+                ):
+                    webbrowser.open(f"http://{BACKEND_HOST}:{BACKEND_PORT}")
+                # frontend (SvelteKit default dev port)
+                if any(p == p_front for p in processes) or frontend_dir.exists():
+                    webbrowser.open("http://localhost:5173")
+        except Exception:
+            pass
+
+        if not processes:
+            click.echo(
+                "Nothing to start: backend may be running and frontend missing or uninstalled."
+            )
+            return
+
+        # Wait for started processes; handle KeyboardInterrupt to terminate them.
+        try:
+            for p in processes:
+                p.wait()
+        except KeyboardInterrupt:
+            click.echo("Shutting down servers...")
+            for p in processes:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+    except Exception as e:
+        click.echo(f"Error while starting app components: {e}")
 
 
 @click.command()
@@ -93,7 +240,7 @@ def model_deployment(debug):
     The --debug flag enables auto-reload for development."""
     if not is_server_running("localhost", 5555):
         reload_ = "--reload" if debug else ""
-        cmd = f"uvicorn quick_pp.api.mlflow_model_deployment:app --host 0.0.0.0 --port 5555 {reload_}"
+        cmd = f"uvicorn quick_pp.app.backend.mlflow_model_deployment:app --host 0.0.0.0 --port 5555 {reload_}"
         click.echo(f"Model server is not running. Starting it now... | {cmd}")
         process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
         process.wait()
@@ -164,11 +311,13 @@ def predict(model_config, data_hash, output_file_name, env, plot):
 
 
 # Add commands to the CLI group
-cli.add_command(app)
+cli.add_command(backend)
 cli.add_command(mlflow_server)
 cli.add_command(model_deployment)
 cli.add_command(train)
 cli.add_command(predict)
+cli.add_command(frontend)
+cli.add_command(app)
 
 
 if __name__ == "__main__":

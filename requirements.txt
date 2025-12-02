@@ -12,7 +12,7 @@ imbalanced-learn==0.14.0
 ipykernel==6.29.5
 ipywidgets==8.1.2
 jinja2==3.1.2
-lasio==0.30
+lasio==0.32
 loguru==0.7.3
 matplotlib==3.8.0
 mcp==1.10.0

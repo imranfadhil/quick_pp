@@ -1,0 +1,62 @@
+# Exclude large and unnecessary files/directories from Docker build context
+# Keep required files like requirements.txt, quick_pp code and app/docker
+
+# VCS
+.git
+.git/**
+
+# Python caches
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+.venv/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+app/frontend/node_modules/
+app/frontend/.svelte-kit/
+app/frontend/.output/
+app/frontend/build/
+
+# Data, outputs, ML runs (very large)
+data/
+mlruns/
+uploads/
+output/
+outputs/
+notebooks/
+
+# postgres data
+app/docker/data/postgres/
+
+# Logs, temp
+*.log
+tmp/
+.cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Allow required files explicitly
+!requirements.txt
+!app/docker/Dockerfile
+!app/docker/backend-entrypoint.sh
+!app/docker/Dockerfile-psycopg
+!app/docker/docker-compose.yaml
+!app/docker/init_db.py
+!quick_pp/
