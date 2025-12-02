@@ -1,9 +1,10 @@
 import pandas as pd
 import os
 from typing import Optional, List, Dict, Any
+from functools import lru_cache
 
-from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import select, text
 
 import quick_pp.las_handler as las
 from quick_pp.config import Config
@@ -312,6 +313,29 @@ class Project(object):
         if orm_well:
             well_obj = Well(self.db_session, well_id=orm_well.well_id)
             return well_obj.get_data()
+        raise ValueError(f"Well '{well_name}' not found in project '{self.name}'.")
+
+    def get_well_data_optimized(self, well_name: str) -> pd.DataFrame:
+        """Optimized version of get_well_data using raw SQL for better performance.
+
+        Args:
+            well_name (str): The name of the well to retrieve data for.
+
+        Returns:
+            pd.DataFrame: A DataFrame containing the data for the specified well.
+
+        Raises:
+            ValueError: If the well is not found in the project.
+        """
+        logger.debug(
+            f"Retrieving data (optimized) for well: {well_name} in project '{self.name}'"
+        )
+        orm_well = self.db_session.scalar(
+            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
+        )
+        if orm_well:
+            well_obj = Well(self.db_session, well_id=orm_well.well_id)
+            return well_obj.get_data_optimized()
         raise ValueError(f"Well '{well_name}' not found in project '{self.name}'.")
 
     def get_well_ancillary_data(self, well_name: str) -> Dict[str, Any]:
@@ -760,6 +784,208 @@ class Well(object):
         df["WELL_NAME"] = self.name
         logger.debug(f"Retrieved {len(df)} records for well '{self.name}'.")
         return df
+
+    def get_data_optimized(self) -> pd.DataFrame:
+        """Optimized data retrieval using raw SQL for better performance.
+
+        This method bypasses the ORM and uses raw SQL to efficiently retrieve
+        all curve data for the well. It's significantly faster than the original
+        get_data() method for wells with large amounts of data.
+
+        Returns:
+            pd.DataFrame: A DataFrame with 'DEPTH' and 'WELL_NAME' columns,
+                         plus columns for each curve mnemonic.
+        """
+        sql = text("""
+        SELECT 
+            cd.depth,
+            c.mnemonic,
+            COALESCE(CAST(cd.value_numeric AS TEXT), cd.value_text) as value
+        FROM curve_data cd
+        JOIN curves c ON cd.curve_id = c.curve_id  
+        WHERE c.well_id = :well_id
+        ORDER BY cd.depth, c.mnemonic
+        """)
+
+        result = self.db_session.execute(sql, {"well_id": self.well_id})
+        rows = result.fetchall()
+
+        if not rows:
+            return pd.DataFrame()
+
+        # Convert to DataFrame and pivot
+        df = pd.DataFrame(rows, columns=["depth", "mnemonic", "value"])
+        pivoted = df.pivot(index="depth", columns="mnemonic", values="value")
+
+        # Convert numeric columns back to proper data types
+        for col in pivoted.columns:
+            pivoted[col] = pd.to_numeric(pivoted[col], errors="ignore")
+
+        # Add standard columns
+        pivoted.reset_index(inplace=True)
+        pivoted.rename(columns={"depth": "DEPTH"}, inplace=True)
+        pivoted["WELL_NAME"] = self.name
+
+        logger.debug(
+            f"Retrieved {len(pivoted)} records for well '{self.name}' (optimized)."
+        )
+        return pivoted
+
+    def get_data_with_eager_loading(self) -> pd.DataFrame:
+        """Optimized version of get_data using SQLAlchemy eager loading.
+
+        This method uses selectinload to avoid N+1 queries when loading
+        curve data through the ORM.
+
+        Returns:
+            pd.DataFrame: A DataFrame with 'DEPTH' and 'WELL_NAME' columns,
+                         plus columns for each curve mnemonic.
+        """
+        # Eager load curves and their data to avoid N+1 queries
+        stmt = (
+            select(ORMWell)
+            .options(selectinload(ORMWell.curves).selectinload(ORMCurve.data))
+            .where(ORMWell.well_id == self.well_id)
+        )
+        orm_well_with_data = self.db_session.execute(stmt).scalar_one()
+
+        if not orm_well_with_data.curves:
+            return pd.DataFrame()
+
+        all_curves_data = []
+        for curve in orm_well_with_data.curves:
+            if not curve.data:
+                continue
+            depth = [d.depth for d in curve.data]
+            if curve.data_type == "numeric":
+                values = [d.value_numeric for d in curve.data]
+            else:  # 'text'
+                values = [d.value_text for d in curve.data]
+            curve_df = pd.DataFrame({curve.mnemonic: values}, index=pd.Index(depth))
+            all_curves_data.append(curve_df)
+
+        if not all_curves_data:
+            return pd.DataFrame()
+
+        # Join all curve dataframes on their depth index.
+        df = pd.concat(all_curves_data, axis=1)
+        df.insert(0, "DEPTH", df.index)
+        df["WELL_NAME"] = self.name
+        logger.debug(
+            f"Retrieved {len(df)} records for well '{self.name}' (eager loaded)."
+        )
+        return df
+
+    def get_curve_data(self, mnemonics: List[str]) -> pd.DataFrame:
+        """Get data for specific curves only - much faster for plotting.
+
+        This method is optimized for cases where you only need a subset of curves,
+        such as for plotting operations that only require NPHI and RHOB.
+
+        Args:
+            mnemonics (List[str]): List of curve mnemonics to retrieve.
+
+        Returns:
+            pd.DataFrame: DataFrame with depth as index and requested curves as columns.
+        """
+        if not mnemonics:
+            return pd.DataFrame()
+
+        # Create placeholders for IN clause
+        mnemonic_params = {
+            f"mnemonic_{i}": mnemonic for i, mnemonic in enumerate(mnemonics)
+        }
+        placeholders = ", ".join([f":mnemonic_{i}" for i in range(len(mnemonics))])
+
+        sql = text(f"""
+        SELECT 
+            cd.depth,
+            c.mnemonic,
+            COALESCE(CAST(cd.value_numeric AS TEXT), cd.value_text) as value
+        FROM curve_data cd
+        JOIN curves c ON cd.curve_id = c.curve_id  
+        WHERE c.well_id = :well_id 
+        AND c.mnemonic IN ({placeholders})
+        ORDER BY cd.depth
+        """)
+
+        params = {"well_id": self.well_id, **mnemonic_params}
+        result = self.db_session.execute(sql, params)
+
+        rows = result.fetchall()
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows, columns=["depth", "mnemonic", "value"])
+        pivoted = df.pivot(index="depth", columns="mnemonic", values="value")
+
+        # Convert numeric columns back to proper data types
+        for col in pivoted.columns:
+            pivoted[col] = pd.to_numeric(pivoted[col], errors="ignore")
+
+        pivoted.reset_index(inplace=True)
+
+        logger.debug(
+            f"Retrieved {len(pivoted)} records for {len(mnemonics)} curves in well '{self.name}'."
+        )
+        return pivoted
+
+    def find_curve_mnemonics(self, search_terms: List[str]) -> Dict[str, str]:
+        """Find actual curve mnemonics that match search terms (case-insensitive).
+
+        This helper method searches for curve mnemonics that contain the search terms,
+        useful for finding NPHI, RHOB, etc. when you don't know the exact naming.
+
+        Args:
+            search_terms (List[str]): List of search terms (e.g., ['nphi', 'rhob']).
+
+        Returns:
+            Dict[str, str]: Dictionary mapping search terms to actual mnemonics found.
+        """
+        found_mnemonics = {}
+
+        for term in search_terms:
+            sql = text("""
+                SELECT mnemonic FROM curves 
+                WHERE well_id = :well_id 
+                AND LOWER(mnemonic) LIKE :pattern
+                LIMIT 1
+            """)
+
+            result = self.db_session.execute(
+                sql, {"well_id": self.well_id, "pattern": f"%{term.lower()}%"}
+            )
+
+            mnemonic = result.scalar()
+            if mnemonic:
+                found_mnemonics[term] = mnemonic
+
+        return found_mnemonics
+
+    def get_data_cached(self) -> pd.DataFrame:
+        """Cached version of get_data for repeated access.
+
+        This method implements a simple caching mechanism based on the well's
+        last update timestamp to avoid repeated expensive database queries.
+
+        Returns:
+            pd.DataFrame: Cached or fresh DataFrame with well data.
+        """
+        # Create cache key based on well and last update time
+        cache_key = f"{self.well_id}_{self._orm_well.updated_at}"
+        return self._get_data_internal(cache_key)
+
+    @lru_cache(maxsize=100)
+    def _get_data_internal(self, cache_key: str) -> pd.DataFrame:
+        """Internal cached method for get_data.
+
+        Args:
+            cache_key (str): Cache key including well ID and timestamp.
+
+        Returns:
+            pd.DataFrame: Well data from cache or fresh from database.
+        """
+        return self.get_data_optimized()
 
     def export_to_parquet(self, folder: Optional[str] = None):
         """Exports the well's data to a Parquet file.

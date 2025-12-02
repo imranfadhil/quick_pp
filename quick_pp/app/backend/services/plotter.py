@@ -35,8 +35,7 @@ async def get_well_log(project_id: int, well_name: str):
     try:
         with db_connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
-            # get_well_data expects the well name
-            df = proj.get_well_data(well_name)
+            df = proj.get_well_data_optimized(well_name)
 
             # If dataframe is empty, return 404
             if df.empty:
@@ -85,26 +84,34 @@ async def get_neuden_xplot(project_id: int, well_name: str, body: NdRequest):
     try:
         with db_connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
-            df = proj.get_well_data(well_name)
+            well = proj.get_well(well_name)
 
-            if df.empty:
-                raise HTTPException(
-                    status_code=404, detail=f"No data for well {well_name}"
-                )
+            # Find actual mnemonics for NPHI and RHOB using optimized search
+            found_mnemonics = well.find_curve_mnemonics(["nphi", "rhob"])
 
-            # find NPHI and RHOB columns case-insensitively
-            def find_col(df, key):
-                for c in df.columns:
-                    if key in str(c).lower():
-                        return c
-                return None
-
-            nphi_col = find_col(df, "nphi")
-            rhob_col = find_col(df, "rhob")
-            if not nphi_col or not rhob_col:
+            if len(found_mnemonics) < 2:
                 raise HTTPException(
                     status_code=400,
                     detail="NPHI or RHOB columns not found in well data",
+                )
+
+            # Get only the curves we need for better performance
+            needed_mnemonics = list(found_mnemonics.values())
+            df = well.get_curve_data(needed_mnemonics)
+
+            if df.empty:
+                raise HTTPException(
+                    status_code=400, detail="No valid NPHI/RHOB data in well"
+                )
+
+            # Get the actual column names
+            nphi_col = found_mnemonics.get("nphi")
+            rhob_col = found_mnemonics.get("rhob")
+
+            if nphi_col not in df.columns or rhob_col not in df.columns:
+                raise HTTPException(
+                    status_code=400,
+                    detail="NPHI or RHOB columns not found in retrieved data",
                 )
 
             tmp = df[[nphi_col, rhob_col]].copy()
