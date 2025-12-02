@@ -1,8 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import * as Chart from '$lib/components/ui/chart/index.js';
   import { AreaChart, Area } from 'layerchart';
-  import * as Card from '$lib/components/ui/card/index.js';
 
   export let projectId: number | string;
   export let wellName: string;
@@ -16,10 +14,10 @@
   let drySandNphi = -0.02;
   let drySandRhob = 2.65;
   let dryClayNphi = 0.35;
-  let dryClayRhob = 2.7;
+  let dryClayRhob = 2.71;
   let fluidNphi = 1.0;
   let fluidRhob = 1.0;
-  let siltLineAngle = 50;
+  let siltLineAngle = 119;
 
   let fullRows: Array<Record<string, any>> = [];
   let lithoResults: Array<Record<string, any>> = [];
@@ -124,8 +122,6 @@
     try {
       const payload = {
         dry_sand_point: [Number(drySandNphi), Number(drySandRhob)],
-        // dry_silt_point: [null, null],
-        // dry_clay_point: [null, null],
         fluid_point: [Number(fluidNphi), Number(fluidRhob)],
         dry_clay_point: [Number(dryClayNphi), Number(dryClayRhob)],
         method: 'default',
@@ -159,8 +155,6 @@
     try {
       const payload = {
         dry_sand_point: [Number(drySandNphi), Number(drySandRhob)],
-        // dry_silt_point: [null, null],
-        // dry_clay_point: [null, null],
         fluid_point: [Number(fluidNphi), Number(fluidRhob)],
         dry_clay_point: [Number(dryClayNphi), Number(dryClayRhob)],
         silt_line_angle: Number(siltLineAngle),
@@ -184,15 +178,30 @@
   }
 
   function buildLithoChart() {
-    // match lithoResults to depths from fullRows in order
+    // lithoResults only contains results for rows with valid NPHI/RHOB data
     const rows: Array<Record<string, any>> = [];
     let i = 0;
     for (const r of fullRows) {
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       if (isNaN(depth)) continue;
-      const l = lithoResults[i++] ?? { VSAND: null, VSILT: null, VCLAY: null };
-      rows.push({ depth, VSAND: Number(l.VSAND ?? 0), VSILT: Number(l.VSILT ?? 0), VCLAY: Number(l.VCLAY ?? 0) });
+      
+      // Check if this row has valid NPHI/RHOB data (same logic as extractNphiRhob)
+      const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
+      const rhob = Number(r.rhob ?? r.RHOB ?? r.Rhob ?? NaN);
+      const hasValidData = !isNaN(nphi) && !isNaN(rhob);
+      
+      // Only include rows that have valid NPHI/RHOB data
+      if (hasValidData) {
+        const l = lithoResults[i++] ?? { VSAND: null, VSILT: null, VCLAY: null };
+        // Clamp values between 0 and 1
+        const vsand = Math.min(Math.max(Number(l.VSAND ?? 0), 0), 1);
+        const vsilt = Math.min(Math.max(Number(l.VSILT ?? 0), 0), 1);
+        const vclay = Math.min(Math.max(Number(l.VCLAY ?? 0), 0), 1);
+        rows.push({ depth, VSAND: vsand, VSILT: vsilt, VCLAY: vclay });
+      }
     }
+    // Sort by depth to ensure proper chart rendering
+    rows.sort((a, b) => a.depth - b.depth);
     lithoChartData = rows;
   }
 
@@ -202,9 +211,22 @@
     for (const r of fullRows) {
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       if (isNaN(depth)) continue;
-      const p = poroResults[i++] ?? { PHIT: null };
-      rows.push({ depth, PHIT: Number(p.PHIT ?? NaN) });
+      
+      // Check if this row has valid NPHI/RHOB data (same logic as extractNphiRhob)
+      const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
+      const rhob = Number(r.rhob ?? r.RHOB ?? r.Rhob ?? NaN);
+      const hasValidData = !isNaN(nphi) && !isNaN(rhob);
+      
+      // Only include rows that have valid NPHI/RHOB data
+      if (hasValidData) {
+        const p = poroResults[i++] ?? { PHIT: null };
+        // Clamp PHIT values between 0 and 1
+        const phit = Math.min(Math.max(Number(p.PHIT ?? 0), 0), 1);
+        rows.push({ depth, PHIT: phit });
+      }
     }
+    // Sort by depth to ensure proper chart rendering
+    rows.sort((a, b) => a.depth - b.depth);
     poroChartData = rows;
   }
 
@@ -302,17 +324,21 @@
 
           <div class="font-medium text-sm mb-1">Lithology (VSAND / VSILT / VCLAY)</div>
           <div class="bg-surface rounded p-2">
-            <Chart.Container class="h-[220px] w-full" config={{}}>
+            <Chart.Container class="h-[220px] w-full" config={{ y: { domain: [0, 1] } }}>
               <AreaChart
                 data={lithoChartData}
                 x="depth"
                 series={[
-                  { key: 'VSAND', label: 'Sand', color: 'var(--primary)' },
-                  { key: 'VSILT', label: 'Silt', color: 'var(--accent)' },
-                  { key: 'VCLAY', label: 'Clay', color: 'var(--muted)' },
+                  { key: 'VCLAY', label: 'Clay', color: '#949494' },
+                  { key: 'VSILT', label: 'Silt', color: '#FE9800' },
+                  { key: 'VSAND', label: 'Sand', color: '#F6F674' },
                 ]}
                 seriesLayout="stack"
-                props={{ area: { 'fill-opacity': 0.6 } }}
+                props={{ 
+                  area: { 'fill-opacity': 0.8, 'stroke-width': 1, stroke: 'rgba(255,255,255,0.2)' },
+                  xAxis: { format: (v: any) => String(v) },
+                  yAxis: { format: (v: any) => Number(v).toFixed(1) }
+                }}
               >
                 {#snippet marks({ series, getAreaProps })}
                   {#each series as s, i (s.key)}
@@ -327,7 +353,7 @@
         <div>
           <div class="font-medium text-sm mb-1">Porosity (PHIT)</div>
           <div class="bg-surface rounded p-2">
-            <Chart.Container class="h-[160px] w-full" config={{}}>
+            <Chart.Container class="h-[220px] w-full" config={{ y: { domain: [0, 1] } }}>
               <AreaChart
                 data={poroChartData}
                 x="depth"
