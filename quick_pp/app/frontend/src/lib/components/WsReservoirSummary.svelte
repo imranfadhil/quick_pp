@@ -2,28 +2,266 @@
   export let projectId: number | string;
   export let wellName: string;
   import { Button } from '$lib/components/ui/button/index.js';
-  let summaryNotes = '';
+  import { onMount, onDestroy } from 'svelte';
+
+  // import DataTables & jQuery from node_modules (bundled by Vite)
+  import jQuery from 'jquery';
+  import 'datatables.net-dt';
+  import 'datatables.net-dt/css/jquery.dataTables.css';
+  // DataTables Buttons extension (native export and column visibility)
+  import 'datatables.net-buttons-dt';
+  import 'datatables.net-buttons-dt/css/buttons.dataTables.css';
+  import 'datatables.net-buttons/js/buttons.html5';
+  import 'datatables.net-buttons/js/buttons.colVis';
+
+  // expose jQuery to window for DataTables plugins which expect global jQuery
+  (window as any).jQuery = jQuery;
+  (window as any).$ = jQuery;
+
+  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
+
+  let loading = false;
+  let error: string | null = null;
+
+  // raw well data pulled from DB
+  let fullRows: Array<Record<string, any>> = [];
+
+  // ressum results from API
+  let ressumRows: Array<Record<string, any>> = [];
+
+  // UI controls (cutoffs are sent to server; client-side search/filter removed
+  // in favor of DataTables' built-in search/filter)
+  let minPhit: number = 0.01;
+  let maxSwt: number = 0.99;
+  let maxVclay: number = 0.4;
+
+  // filtered rows are the raw results from backend; DataTables will handle search/filtering
+  $: filtered = ressumRows ?? [];
+
+  // DataTables integration
+  let tableRef: HTMLTableElement | null = null;
+  let dtInstance: any = null;
+
+  function initDataTable() {
+    if (!tableRef) return;
+    try {
+      // use imported jQuery instance
+      // destroy existing instance
+      if (dtInstance) {
+        try { dtInstance.destroy(); } catch (e) {}
+        // clear markup
+        while (tableRef!.tBodies.length) tableRef!.removeChild(tableRef!.tBodies[0]);
+      }
+      const keys = filtered.length ? Object.keys(filtered[0]) : [];
+      const columns = keys.map(k => ({ title: k, data: k }));
+      dtInstance = jQuery(tableRef!).DataTable({
+        data: filtered,
+        columns,
+        destroy: true,
+        paging: true,
+        searching: true,
+        // show Buttons + DataTables' global search box and table controls
+        dom: 'Bfrtip',
+        buttons: [
+          { extend: 'csv', text: 'Export CSV' },
+          { extend: 'colvis', text: 'Columns' }
+        ],
+        info: true,
+        responsive: true,
+        autoWidth: false,
+      });
+
+      // Attach per-column filter handlers: inputs are rendered in the second header row
+      try {
+        jQuery(tableRef!).find('thead').off('input.dt-filter');
+        jQuery(tableRef!).find('thead .dt-filter-input').each(function(i: any, el: any) {
+          const $el = jQuery(el);
+          $el.off('keyup.dt-filter change.dt-filter');
+          $el.on('keyup.dt-filter change.dt-filter', function(this: any) {
+            const val = (this as HTMLInputElement).value || '';
+            dtInstance.column(i).search(val).draw();
+          });
+        });
+      } catch (e) {
+        // non-fatal
+      }
+    } catch (e) {
+      console.warn('DataTables init error', e);
+    }
+  }
+
+  // load DataTables when component mounts
+  onMount(() => {
+    // DataTables and jQuery are imported from node_modules; initialize table
+    initDataTable();
+  });
+
+  // destroy DataTable on unmount
+  onDestroy(() => {
+    try {
+      if (dtInstance) dtInstance.destroy();
+    } catch (e) {}
+    dtInstance = null;
+  });
+
+  // re-init table whenever `filtered` changes (runs on client)
+  $: if (filtered) {
+    // small timeout to allow DOM to settle
+    setTimeout(() => initDataTable(), 0);
+  }
+
+  async function loadWellData() {
+    if (!projectId || !wellName) return;
+    loading = true;
+    error = null;
+    try {
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`);
+      if (!res.ok) throw new Error(await res.text());
+      const fd = await res.json();
+      const rows = fd && fd.data ? fd.data : fd;
+      if (!Array.isArray(rows)) throw new Error('Unexpected data format from backend');
+      fullRows = rows;
+    } catch (e: any) {
+      console.warn('Failed to load well data', e);
+      error = String(e?.message ?? e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  // Build payload for ressum: map fullRows to required keys
+  function buildRessumPayload() {
+    const rows: Array<Record<string, any>> = [];
+    for (const r of fullRows) {
+      const depth = Number(r.depth ?? r.tvdss ?? r.TVD ?? r.TVDSS ?? r.DEPTH ?? NaN);
+      const vcld = Number(r.vcld ?? r.VCLD ?? r.vclay ?? r.VCLAY ?? NaN);
+      const phit = Number(r.phit ?? r.PHIT ?? NaN);
+      const swt = Number(r.swt ?? r.SWT ?? NaN);
+      const perm = Number(r.perm ?? r.PERM ?? r.permeability ?? NaN);
+      let zones = r.zones ?? r.ZONES ?? r.zone ?? r.ZONE ?? null;
+      if (zones == null) {
+        const anyZones = fullRows.some(rr => {
+          const z = rr.zones ?? rr.ZONES ?? rr.zone ?? rr.ZONE;
+          return z != null && String(z).trim() !== '';
+        });
+        if (!anyZones) {
+          // assign 'ALL' when no row has a zone value
+          zones = 'ALL';
+        }
+      }
+      // Only include rows where all required numeric fields are valid numbers (no nulls)
+      if (isNaN(depth) || isNaN(vcld) || isNaN(phit) || isNaN(swt) || isNaN(perm)) {
+        continue;
+      }
+      rows.push({ depth, vcld, phit, swt, perm, zones });
+    }
+    return rows;
+  }
+
+  async function generateReport() {
+    error = null;
+    if (!projectId || !wellName) {
+      error = 'Select a project and well before generating a report';
+      return;
+    }
+    const dataRows = buildRessumPayload();
+    const attempted = fullRows.length;
+    const valid = dataRows.length;
+    const skipped = attempted - valid;
+    if (!dataRows.length) {
+      error = 'No valid well rows available to compute reservoir summary (missing required numeric fields)';
+      return;
+    }
+    loading = true;
+    try {
+      const payload = { data: dataRows, cut_offs: {} } as any;
+      // Use uppercase keys expected by backend: VSHALE, PHIT, SWT
+      if (minPhit != null) payload.cut_offs.PHIT = Number(minPhit);
+      if (maxSwt != null) payload.cut_offs.SWT = Number(maxSwt);
+      if (maxVclay != null) payload.cut_offs.VSHALE = Number(maxVclay);
+
+      const res = await fetch(`${API_BASE}/quick_pp/ressum`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      const out = await res.json();
+      ressumRows = Array.isArray(out) ? out : [];
+      if (skipped > 0) {
+        console.warn(`Skipped ${skipped} / ${attempted} rows because they lacked required numeric values (depth, vcld, phit, swt, perm).`);
+        // show as non-blocking message in `error` variable so user sees it in UI
+        error = `Report generated. Note: skipped ${skipped} row(s) with missing numeric values.`;
+      }
+    } catch (e: any) {
+      console.warn('Ressum error', e);
+      error = String(e?.message ?? e);
+      ressumRows = [];
+    } finally {
+      loading = false;
+    }
+  }
+
+  $: if (projectId && wellName) loadWellData();
 </script>
 
 <div class="ws-reservoir-summary">
   <div class="mb-2">
     <div class="font-semibold">Reservoir Summary</div>
-    <div class="text-sm text-muted">High-level reservoir summary and exportable reports.</div>
+    <div class="text-sm text-muted-foreground">High-level reservoir summary and exportable reports.</div>
   </div>
 
   {#if wellName}
     <div class="bg-panel rounded p-3">
-      <div class="text-sm mb-2">Selected well: <strong>{wellName}</strong></div>
-      <div class="mb-3">
-        <label class="text-sm" for="summary-notes">Summary notes</label>
-        <textarea id="summary-notes" bind:value={summaryNotes} class="input w-full" rows="4" placeholder="Short summary or observation"></textarea>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div>
+          <label class="text-sm" for="minPhitInput">Min PHIT (cutoff)</label>
+          <input id="minPhitInput" type="number" class="input w-full" placeholder="min phit" bind:value={minPhit} />
+        </div>
+        <div>
+          <label class="text-sm" for="maxSwtInput">Max SWT (cutoff)</label>
+          <input id="maxSwtInput" type="number" class="input w-full" placeholder="max swt" bind:value={maxSwt} />
+        </div>
+        <div>
+          <label class="text-sm" for="maxVclayInput">Max VCLAY (cutoff)</label>
+          <input id="maxVclayInput" type="number" class="input w-full" placeholder="max vclay" bind:value={maxVclay} />
+        </div>
+        <div class="flex items-end gap-2">
+          <Button class="btn btn-primary" onclick={generateReport} disabled={loading} style={loading ? 'opacity:0.6; pointer-events:none;' : ''}>Generate Report</Button>
+        </div>
       </div>
-      <div class="flex gap-2">
-        <Button class="btn btn-primary">Generate Report</Button>
-        <Button class="btn">Export CSV</Button>
+
+      {#if error}
+        <div class="text-sm text-red-600 mb-2">Error: {error}</div>
+      {/if}
+
+      <div class="overflow-x-auto">
+        {#if filtered && filtered.length}
+          <table bind:this={tableRef} class="min-w-full table-auto border-collapse">
+            <thead>
+              <tr class="bg-muted text-left">
+                {#each Object.keys(filtered[0]) as col}
+                  <th class="px-2 py-1 text-xs font-medium">
+                    <div class="whitespace-nowrap font-medium">{col}</div>
+                    <div class="mt-1">
+                      <input class="dt-filter-input input w-full" type="text" placeholder="Filter {col}" data-col={col} />
+                    </div>
+                  </th>
+                {/each}
+              </tr>
+            </thead>
+            <tbody>
+              {#each filtered as row}
+                <tr class="border-t odd:bg-white even:bg-surface">
+                  {#each Object.keys(filtered[0]) as col}
+                    <td class="px-2 py-1 text-sm">{row[col]}</td>
+                  {/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {:else}
+          <div class="text-sm text-muted-foreground">No results. Click "Generate Report" to compute reservoir summary for the selected well.</div>
+        {/if}
       </div>
     </div>
   {:else}
-    <div class="text-sm">Select a well to view reservoir summary.</div>
+    <div class="text-sm text-muted-foreground">Select a well to view reservoir summary.</div>
   {/if}
 </div>

@@ -28,9 +28,9 @@ router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
             - perm: float (permeability, required)
             - zones: string or int (zone identifier, required)
         - cut_offs: dict with cutoff parameters for filtering, e.g.:
-            - min_phit: float (optional, minimum porosity)
-            - max_swt: float (optional, maximum water saturation)
-            - min_perm: float (optional, minimum permeability)
+            - PHIT: float (optional, minimum porosity)
+            - SWT: float (optional, maximum water saturation)
+            - VSHALE: float (optional, minimum volume of shale)
             - ... (other cutoffs as needed)
 
         Example:
@@ -41,8 +41,7 @@ router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
                 {"depth": 1020.0, "vcld": 0.30, "phit": 0.15, "swt": 0.40, "perm": 90.0, "zones": "B"}
             ],
             "cut_offs": {
-                "min_phit": 0.12,
-                "max_swt": 0.45
+                "VSHALE": 0.4, "PHIT": 0.01, "SWT": 0.9
             }
         }
         """
