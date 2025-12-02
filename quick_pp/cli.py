@@ -108,10 +108,29 @@ def frontend(no_open):
     # Check if node_modules exists, if not suggest installing dependencies
     if not (frontend_dir / "node_modules").exists():
         click.echo(
-            "Warning: node_modules not found. You may need to run 'npm install' first."
+            "Warning: node_modules not found. Attempting to run 'npm install' now..."
         )
-        click.echo(f"Run: cd {frontend_dir} && npm install")
-        return
+        try:
+            install_cmd = "npm install"
+            click.echo(f"Running: (in {frontend_dir}) {install_cmd}")
+            p_install = Popen(
+                install_cmd,
+                stdout=sys.stdout,
+                stderr=sys.stderr,
+                shell=True,
+                cwd=str(frontend_dir),
+            )
+            p_install.wait()
+            if p_install.returncode != 0:
+                click.echo(
+                    "npm install failed. Please run it manually and re-run this command."
+                )
+                return
+            click.echo("npm install completed successfully.")
+        except Exception as e:
+            click.echo(f"Failed to run npm install: {e}")
+            click.echo(f"Run manually: cd {frontend_dir} && npm install")
+            return
 
     click.echo(f"Starting frontend development server from {frontend_dir}...")
 
@@ -165,9 +184,40 @@ def app(debug, no_open):
         else:
             if not (frontend_dir / "node_modules").exists():
                 click.echo(
-                    "Warning: node_modules not found. You may need to run 'npm install' first."
+                    "Warning: node_modules not found. Attempting to run 'npm install' now..."
                 )
-                click.echo(f"Run: cd {frontend_dir} && npm install")
+                try:
+                    install_cmd = "npm install"
+                    click.echo(f"Running: (in {frontend_dir}) {install_cmd}")
+                    p_install = Popen(
+                        install_cmd,
+                        stdout=sys.stdout,
+                        stderr=sys.stderr,
+                        shell=True,
+                        cwd=str(frontend_dir),
+                    )
+                    p_install.wait()
+                    if p_install.returncode != 0:
+                        click.echo(
+                            "npm install failed. Please run it manually and re-run this command."
+                        )
+                    else:
+                        click.echo("npm install completed successfully.")
+                        click.echo(
+                            f"Starting frontend development server from {frontend_dir}..."
+                        )
+                        cmd = "npm run dev"
+                        p_front = Popen(
+                            cmd,
+                            stdout=sys.stdout,
+                            stderr=sys.stderr,
+                            shell=True,
+                            cwd=str(frontend_dir),
+                        )
+                        processes.append(p_front)
+                except Exception as e:
+                    click.echo(f"Failed to run npm install: {e}")
+                    click.echo(f"Run manually: cd {frontend_dir} && npm install")
             else:
                 click.echo(
                     f"Starting frontend development server from {frontend_dir}..."
