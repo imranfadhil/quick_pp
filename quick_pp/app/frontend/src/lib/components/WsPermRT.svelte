@@ -257,21 +257,6 @@
       saveLoadingRockType = false;
     }
   }
-  
-  function formatLogValue(value: any): string {
-    const numValue = Number(value);
-    if (numValue >= 1000) {
-      return (numValue / 1000).toFixed(0) + 'k';
-    } else if (numValue >= 100) {
-      return numValue.toFixed(0);
-    } else if (numValue >= 1) {
-      return numValue.toFixed(1);
-    } else if (numValue >= 0.01) {
-      return numValue.toFixed(2);
-    } else {
-      return numValue.toFixed(3);
-    }
-  }
 
   function getPermDomain(): [number, number] {
     const allPerms: number[] = [];

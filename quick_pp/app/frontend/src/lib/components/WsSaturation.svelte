@@ -276,10 +276,10 @@
     const plt = await ensurePlotly();
     const traces: any[] = [];
     if (archieChartData && archieChartData.length > 0) {
-      traces.push({ x: archieChartData.map(d => Number(d.depth)), y: archieChartData.map(d => d.SWT), name: 'Archie SWT', mode: 'lines+markers', line: { color: '#2563eb' } });
+      traces.push({ x: archieChartData.map(d => Number(d.depth)), y: archieChartData.map(d => d.SWT), name: 'Archie SWT', mode: 'lines', line: { color: '#2563eb' } });
     }
     if (waxmanChartData && waxmanChartData.length > 0) {
-      traces.push({ x: waxmanChartData.map(d => Number(d.depth)), y: waxmanChartData.map(d => d.SWT), name: 'Waxman-Smits SWT', mode: 'lines+markers', line: { color: '#dc2626' } });
+      traces.push({ x: waxmanChartData.map(d => Number(d.depth)), y: waxmanChartData.map(d => d.SWT), name: 'Waxman-Smits SWT', mode: 'lines', line: { color: '#dc2626' } });
     }
 
     if (traces.length === 0) {
@@ -291,10 +291,11 @@
     const legendCfg = { x: 1, y: 1, xanchor: 'right', yanchor: 'top' };
 
     const layout = {
-      height: 420,
+      height: 220,
       margin: { l: 60, r: 20, t: 20, b: 40 },
-      xaxis: { title: 'Depth', autorange: 'reversed' },
-      yaxis: { title: 'SWT (fraction)', range: [0, 1], tickformat: '.2f' },
+      dragmode: 'zoom',
+      xaxis: { title: 'Depth'},
+      yaxis: { title: 'SWT (fraction)', range: [0, 1], tickformat: '.2f', fixedrange: true },
       showlegend: true,
       legend: { ...(legendCfg), bgcolor: 'rgba(255,255,255,0.75)', borderwidth: 1 }
     };
@@ -385,12 +386,11 @@
 <div class="ws-saturation">
   <div class="mb-2">
     <div class="font-semibold">Water Saturation</div>
-    <div class="text-sm text-muted">Water saturation calculations and displays.</div>
+    <div class="text-sm text-muted-foreground">Water saturation calculations and displays.</div>
   </div>
 
   {#if wellName}
     <div class="bg-panel rounded p-3">
-      <div class="text-sm mb-2">Selected well: <strong>{wellName}</strong></div>
       <div class="grid grid-cols-2 gap-2 mb-3">
         <div>
           <label class="text-sm" for="meas-system">Measurement system</label>
@@ -465,39 +465,35 @@
         <div>
           <div class="font-medium text-sm mb-1">Saturation Plot (Archie vs Waxman-Smits)</div>
           <div class="bg-surface rounded p-2">
-            <div class="h-[420px] w-full">
-              <div bind:this={satPlotDiv} class="w-full h-[420px]"></div>
+            <div class="h-[220px] w-full overflow-hidden">
+              <div bind:this={satPlotDiv} class="w-full h-[220px]"></div>
             </div>
           </div>
-          <div class="text-xs text-muted-foreground space-y-1 mt-3">
-            <div>
-              {#if archieResults.length}
-                {@const aVals = archieResults}
-                {@const avgA = aVals.reduce((a,b)=>a+b,0) / aVals.length}
-                {@const minA = Math.min(...aVals)}
-                {@const maxA = Math.max(...aVals)}
-                <div>
-                  <strong>Archie SWT:</strong>
-                  Avg: {avgA.toFixed(2)} | Min: {minA.toFixed(2)} | Max: {maxA.toFixed(2)} | Count: {aVals.length}
-                </div>
-              {:else}
-                <div><strong>Archie SWT:</strong> No data</div>
-              {/if}
-            </div>
-            <div>
-              {#if waxmanResults.length}
-                {@const wVals = waxmanResults}
-                {@const avgW = wVals.reduce((a,b)=>a+b,0) / wVals.length}
-                {@const minW = Math.min(...wVals)}
-                {@const maxW = Math.max(...wVals)}
-                <div>
-                  <strong>Waxman-Smits SWT:</strong>
-                  Avg: {avgW.toFixed(2)} | Min: {minW.toFixed(2)} | Max: {maxW.toFixed(2)} | Count: {wVals.length}
-                </div>
-              {:else}
-                <div><strong>Waxman-Smits SWT:</strong> No data</div>
-              {/if}
-            </div>
+          <div class="text-xs text-muted-foreground-foreground space-y-1 mt-3">
+            {#if archieResults.length > 0}
+              {@const aVals = archieResults}
+              {@const avgA = aVals.reduce((a,b)=>a+b,0) / aVals.length}
+              {@const minA = Math.min(...aVals)}
+              {@const maxA = Math.max(...aVals)}
+              <div>
+                <strong>Archie SWT:</strong>
+                Avg: {avgA.toFixed(2)} | Min: {minA.toFixed(2)} | Max: {maxA.toFixed(2)} | Count: {aVals.length}
+              </div>
+            {:else}
+              <div><strong>Archie SWT:</strong> No data</div>
+            {/if}
+            {#if waxmanResults.length > 0}
+              {@const wVals = waxmanResults}
+              {@const avgW = wVals.reduce((a,b)=>a+b,0) / wVals.length}
+              {@const minW = Math.min(...wVals)}
+              {@const maxW = Math.max(...wVals)}
+              <div>
+                <strong>Waxman-Smits SWT:</strong>
+                Avg: {avgW.toFixed(2)} | Min: {minW.toFixed(2)} | Max: {maxW.toFixed(2)} | Count: {wVals.length}
+              </div>
+            {:else}
+              <div><strong>Waxman-Smits SWT:</strong> No data</div>
+            {/if}
           </div>
         </div>
       </div>
