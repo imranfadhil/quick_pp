@@ -64,7 +64,7 @@ async def estimate_perm_choo(inputs: PermChInputData) -> List[Dict[str, float]]:
     try:
         input_dict = inputs.model_dump()
         input_df = pd.DataFrame.from_records(input_dict["data"])
-        perm = choo_permeability(input_df["vcld"], input_df["vsilt"], input_df["phit"])
+        perm = choo_permeability(input_df["vclay"], input_df["vsilt"], input_df["phit"])
         df_result = pd.DataFrame({"PERM": perm.ravel()})
         # Ensure output is List[Dict[str, float]]
         return [
