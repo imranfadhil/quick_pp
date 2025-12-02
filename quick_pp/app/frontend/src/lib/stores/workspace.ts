@@ -1,5 +1,6 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import type { WorkspaceState, Project, Well } from '$lib/types';
+import { projects } from '$lib/stores/projects';
 
 export const workspace = writable<WorkspaceState>({
   title: 'QPP - Petrophysical Analysis',
@@ -26,9 +27,26 @@ export function selectProject(project: Project | null) {
     const curId = s.project && s.project.project_id != null ? String(s.project.project_id) : null;
     const newId = project && project.project_id != null ? String(project.project_id) : null;
     const curName = s.project && s.project.name ? s.project.name : null;
-    const newName = project && project.name ? project.name : null;
+
+    // If incoming project has no name, try to find it in the `projects` store
+    // so the workspace can show the real project name immediately.
+    let incomingName: string | null = null;
+    if (project && project.name) incomingName = project.name;
+    else if (project && project.project_id) {
+      try {
+        const list = get(projects) || [];
+        const found = list.find((p) => String(p.project_id) === String(project.project_id));
+        if (found && found.name) incomingName = found.name;
+      } catch (e) {
+        // safe fallback: ignore lookup errors
+      }
+    }
+
+    const newName = incomingName;
     if (curId === newId && curName === newName) return s;
-    return { ...s, project, title: project ? (project.name ?? 'QPP - Petrophysical Analysis') : 'QPP - Petrophysical Analysis' };
+
+    const projToSet = project ? { ...(project as any), ...(newName ? { name: newName } : {}) } : null;
+    return { ...s, project: projToSet, title: projToSet ? (projToSet.name ?? 'QPP - Petrophysical Analysis') : 'QPP - Petrophysical Analysis' };
   });
 }
 

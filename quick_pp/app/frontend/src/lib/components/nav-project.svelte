@@ -24,8 +24,6 @@
 	let newDescription = $state("");
 
 	// Projects overview state
-	let activeTab = $state<'list' | 'overview'>('list');
-	let selectedProject: any = $state(null);
 	const API_BASE = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:6312";
 	// Use a reactive state so Svelte's `bind:value` updates correctly.
 	let selectedProjectId = $state<string>('');

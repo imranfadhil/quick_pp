@@ -14,7 +14,9 @@
   onMount(() => {
     if (projectId) {
       // Select minimal project (ws-project will fetch details)
-      selectProject({ project_id: projectId, name: `Project ${projectId}` });
+      // Do not assign a generated default name here; leave name undefined
+      // so components and the workspace don't receive a temporary title.
+      selectProject({ project_id: projectId });
     }
   });
 </script>

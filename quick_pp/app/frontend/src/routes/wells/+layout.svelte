@@ -10,7 +10,9 @@
   onMount(() => {
     // Only run selection on the client — load() can run on server.
     if (data?.projectId) {
-      selectProject({ project_id: data.projectId, name: `Project ${data.projectId}` });
+      // Avoid inventing a project.name here; let components load and set the
+      // name when real data arrives.
+      selectProject({ project_id: data.projectId });
     }
     if (data?.wellId) {
       selectWell({ id: data.wellId, name: data.wellId });

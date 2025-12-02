@@ -30,8 +30,15 @@
       hasProjects = Array.isArray(list) && list.length > 0;
       if (redirected) return;
       if (hasProjects) {
-        redirected = true;
-        goto(`/projects/${list[0].project_id}`);
+        // Prefer a project that has a non-empty name so we don't trigger
+        // components to create a temporary default name like "Project 1".
+        const named = list.find((p) => p && p.project_id && p.name && String(p.name).trim().length > 0);
+        if (named) {
+          redirected = true;
+          goto(`/projects/${named.project_id}`);
+        }
+        // If no named project is present yet, wait for either the workspace
+        // to provide a selection or for projects to be updated with names.
       }
     });
   });

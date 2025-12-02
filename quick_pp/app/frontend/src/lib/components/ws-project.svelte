@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { workspace, selectProject, setWorkspaceTitleIfDifferent as setWorkspaceTitle } from '$lib/stores/workspace';
+  import { get } from 'svelte/store';
   import { projects, loadProjects, upsertProject } from '$lib/stores/projects';
   import { goto } from '$app/navigation';
   import { onDestroy } from 'svelte';
@@ -63,13 +64,20 @@
         if (proj) {
           selectedProject = { ...proj };
         } else {
-          selectedProject = { project_id: id, name: `Project ${id}` };
+          // Don't invent a default `name` here; leave it undefined so other
+          // components/store consumers don't see a temporary "Project N" name.
+          selectedProject = { project_id: id };
         }
       });
       unsub();
       // update workspace title only; avoid re-selecting the project here to prevent
       // emitting duplicate workspace updates that may trigger subscribers.
-      setWorkspaceTitle(selectedProject.name || 'Project', `ID: ${selectedProject.project_id}`);
+      // If the project has no name, preserve the current workspace title
+      // instead of forcing a generic default like 'Project' which can cause
+      // unexpected title changes elsewhere.
+      const currentTitle = (get(workspace) && get(workspace).title) || 'Projects';
+      const titleToSet = selectedProject.name ? selectedProject.name : currentTitle;
+      setWorkspaceTitle(titleToSet, `ID: ${selectedProject.project_id}`);
 
       // Try to fetch wells for richer detail (optional endpoint)
       try {

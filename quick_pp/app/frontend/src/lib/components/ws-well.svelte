@@ -13,9 +13,9 @@
   async function fetchProjectDetails(id: string | number) {
     loadingWells = true;
     try {
-      // keep existing name if available
+      // keep existing name if available; do not fabricate a default name
       if (!selectedProject || String(selectedProject.project_id) !== String(id)) {
-        selectedProject = { project_id: id, name: selectedProject?.name ?? `Project ${id}` };
+        selectedProject = { project_id: id, name: selectedProject?.name };
       }
 
       const res = await fetch(`${API_BASE}/quick_pp/database/projects/${id}/wells`);
