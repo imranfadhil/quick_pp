@@ -11,6 +11,9 @@
   export let minWidth: string = '480px';
   let loading = false;
   let error: string | null = null;
+  let autoRefresh = false;
+  let refreshInterval = 5000; // ms
+  let _refreshTimer: number | null = null;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
@@ -73,10 +76,26 @@
     }
   }
 
+  function scheduleAutoRefresh() {
+    try {
+      if (_refreshTimer) {
+        clearInterval(_refreshTimer as any);
+        _refreshTimer = null;
+      }
+      if (autoRefresh && typeof window !== 'undefined') {
+        _refreshTimer = window.setInterval(() => {
+          loadAndRender();
+        }, Number(refreshInterval) || 5000);
+      }
+    } catch (e) {}
+  }
+
   $: if (browser && projectId && wellName) {
     // reactive: when inputs change reload (client-only)
     loadAndRender();
   }
+
+  $: scheduleAutoRefresh();
 
   onMount(() => {
     // initial render handled by reactive statement above
@@ -88,13 +107,44 @@
         (container as any)._plotlyResizeObserver.disconnect();
         delete (container as any)._plotlyResizeObserver;
       }
+      if (_refreshTimer) {
+        clearInterval(_refreshTimer as any);
+        _refreshTimer = null;
+      }
     } catch (e) {
       // ignore
     }
   });
+
+  // Listen for updates dispatched from other components (e.g., save actions)
+  if (browser) {
+    const handler = (ev: Event) => {
+      try {
+        const detail = (ev as CustomEvent).detail;
+        if (!detail) return;
+        // Only refresh if the event refers to the same project/well
+        if (String(detail.projectId) === String(projectId) && String(detail.wellName) === String(wellName)) {
+          loadAndRender();
+        }
+      } catch (e) {}
+    };
+    window.addEventListener('qpp:data-updated', handler as EventListener);
+    // remove listener on destroy
+    onDestroy(() => window.removeEventListener('qpp:data-updated', handler as EventListener));
+  }
 </script>
 
 <div class="ws-well-plot">
+  <div class="mb-2 flex items-center gap-2">
+    <button class="btn px-3 py-1 text-sm bg-gray-800 text-white rounded" on:click={loadAndRender} aria-label="Refresh plot">Refresh</button>
+    <label class="text-sm flex items-center gap-1">
+      <input type="checkbox" bind:checked={autoRefresh} />
+      Auto-refresh
+    </label>
+    {#if autoRefresh}
+      <label class="text-sm">Interval (ms): <input type="number" bind:value={refreshInterval} class="input w-24 ml-2" /></label>
+    {/if}
+  </div>
   {#if loading}
     <div class="text-sm">Loading well log…</div>
   {:else if error}

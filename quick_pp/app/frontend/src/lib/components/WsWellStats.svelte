@@ -3,7 +3,6 @@
   import * as Card from '$lib/components/ui/card/index.js';
   import * as Chart from '$lib/components/ui/chart/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
-  import { AreaChart, Area } from 'layerchart';
   import { renameColumn, convertPercentToFraction, applyRenameInColumns } from '$lib/utils/topBottomEdits';
 
   export let projectId: string | number;
@@ -25,6 +24,8 @@
   let propOptions: string[] = [];
   let selectedProp: string | null = null;
   let chartData: Array<Record<string, any>> = [];
+  let Plotly: any = null;
+  let chartPlotDiv: HTMLDivElement | null = null;
   let showFullData = false;
   let fullRows: Array<Record<string, any>> = [];
   let originalFullRows: Array<Record<string, any>> = [];
@@ -234,6 +235,63 @@
     }
   }
 
+  async function ensurePlotly() {
+    if (!Plotly) {
+      const mod = await import('plotly.js-dist-min');
+      Plotly = mod?.default ?? mod;
+    }
+    return Plotly;
+  }
+
+  // derived points for plotly
+  $: chartPoints = chartData.map(d => ({ x: d.depth, y: d.value }));
+
+  async function renderChartPlot() {
+    if (!chartPlotDiv) return;
+    const plt = await ensurePlotly();
+    if (!chartPoints || chartPoints.length === 0) {
+      console.debug('renderChartPlot: no chartPoints to plot', { selectedLog, chartPointsLength: chartPoints?.length });
+      try { plt.purge(chartPlotDiv); } catch (e) {}
+      return;
+    }
+
+    const x = chartPoints.map(p => p.x);
+    const y = chartPoints.map(p => p.y);
+
+    // compute y range with small padding
+    let minY = Math.min(...y);
+    let maxY = Math.max(...y);
+    if (!isFinite(minY) || !isFinite(maxY)) {
+      minY = 0; maxY = 1;
+    }
+    const pad = (maxY - minY) * 0.05 || Math.abs(maxY) * 0.05 || 1;
+    const layout = {
+      height: 240,
+      margin: { l: 60, r: 20, t: 20, b: 40 },
+      dragmode: 'zoom',
+      // allow Plotly to compute x autorange so data is visible
+      xaxis: { title: 'Depth', fixedrange: false },
+      yaxis: { title: selectedLog ?? 'value', range: [minY - pad, maxY + pad], fixedrange: true },
+      showlegend: false
+    };
+
+    // use an explicit color (CSS variable may not resolve in all contexts)
+    const traces = [{ x, y, type: 'scatter', mode: 'lines', fill: 'tozeroy', fillcolor: 'rgba(37,99,235,0.2)', line: { color: '#2563eb' } }];
+
+    console.debug('renderChartPlot: plotting', { selectedLog, points: chartPoints.length, xSample: x.slice(0,3), ySample: y.slice(0,3) });
+
+    try {
+      plt.react(chartPlotDiv, traces, layout, { responsive: true });
+    } catch (e) {
+      plt.newPlot(chartPlotDiv, traces, layout, { responsive: true });
+    }
+  }
+
+  // re-render when chart data or plot div available
+  $: if (chartPlotDiv && chartData) {
+    renderChartPlot();
+  }
+
   async function saveEditsToServer() {
     if (!projectId || !wellName) { editMessage = 'Missing project/well context'; return; }
     if (!hasUnsavedEdits) { editMessage = 'No changes to save'; return; }
@@ -396,8 +454,8 @@
     <Card.Title>Well Statistics</Card.Title>
     <Card.Description>Summary for the selected well</Card.Description>
     <div class="ml-auto flex items-center gap-2">
-    <Button variant="ghost" size="sm" onclick={openEditModal} title="Open edits modal" aria-label="Open edits modal">✏️ Edits</Button>
-    <Button variant={hasUnsavedEdits ? 'default' : 'ghost'} size="sm" onclick={saveEditsToServer} disabled={!hasUnsavedEdits} title="Save edits to server" aria-label="Save edits to server">
+    <Button variant="ghost" size="sm" onclick={openEditModal} title="Open edits modal" aria-label="Open edits modal" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>✏️ Edits</Button>
+    <Button variant={hasUnsavedEdits ? 'default' : 'ghost'} size="sm" onclick={saveEditsToServer} disabled={loading || !hasUnsavedEdits} title="Save edits to server" aria-label="Save edits to server" style={(loading || !hasUnsavedEdits) ? 'opacity:0.5; pointer-events:none;' : ''}>
         Save Edits
         {#if hasUnsavedEdits}
           <span class="unsaved-dot" aria-hidden="true" style="background:#ef4444; margin-left:.5rem;"></span>
@@ -441,6 +499,8 @@
                 onclick={() => { showDataProfile = !showDataProfile; }}
                 title={showDataProfile ? 'Hide Profile' : 'Show Profile'}
                 aria-label={showDataProfile ? 'Hide Profile' : 'Show Profile'}
+                disabled={loading}
+                style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
               >
                 {showDataProfile ? 'Hide' : 'Show'} Profile
               </Button>
@@ -449,6 +509,8 @@
                 size="sm"
                 title={showFullData ? 'Hide full well data' : 'Show full well data'}
                 aria-label={showFullData ? 'Hide full well data' : 'Show full well data'}
+                disabled={loading}
+                style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
                 onclick={async () => {
                   showFullData = !showFullData;
                   if (showFullData && fullRows.length === 0) {
@@ -646,11 +708,11 @@
                       <label for="conv" class="text-sm">Convert % → fraction</label>
                     </div>
 
-                            <div class="flex gap-2">
-                              <Button variant="ghost" size="sm" onclick={previewEdits} title="Preview changes">Preview</Button>
-                              <Button variant="default" onclick={applyEditsInMemory} title="Apply edits in-memory">Apply</Button>
-                              <Button variant="default" size="sm" onclick={saveEditsToServer} disabled={!hasUnsavedEdits} title="Save edits to server">Save</Button>
-                            </div>
+                                  <div class="flex gap-2">
+                                    <Button variant="ghost" size="sm" onclick={previewEdits} title="Preview changes" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Preview</Button>
+                                    <Button variant="default" onclick={applyEditsInMemory} title="Apply edits in-memory" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Apply</Button>
+                                    <Button variant="default" size="sm" onclick={saveEditsToServer} disabled={loading || !hasUnsavedEdits} title="Save edits to server" style={(loading || !hasUnsavedEdits) ? 'opacity:0.5; pointer-events:none;' : ''}>Save</Button>
+                                  </div>
 
                     {#if previewRows.length}
                       <div class="mt-2 bg-panel rounded p-2 max-h-40 overflow-auto">
@@ -678,18 +740,7 @@
 
             <div class="bg-surface rounded p-2">
               <Chart.Container class="h-[240px] w-full" config={{}}>
-                <AreaChart
-                  data={chartData}
-                  x="depth"
-                  series={[{ key: 'value', label: selectedLog ?? 'value', color: 'var(--primary)' }]}
-                  props={{ area: { 'fill-opacity': 0.3 } }}
-                >
-                  {#snippet marks({ series, getAreaProps })}
-                    {#each series as s, i (s.key)}
-                      <Area {...getAreaProps(s, i)} />
-                    {/each}
-                  {/snippet}
-                </AreaChart>
+                <div bind:this={chartPlotDiv} class="w-full h-[240px]"></div>
               </Chart.Container>
             </div>
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Plot, AreaY, Line, Dot } from 'svelteplot';
+  // plotting will be handled via Plotly (dynamically imported)
 
   export let projectId: number | string;
   export let wellName: string;
@@ -8,6 +8,11 @@
   let notes = '';
   let loading = false;
   let error: string | null = null;
+  // save state
+  let saveLoadingLitho = false;
+  let saveLoadingPoro = false;
+  let saveMessageLitho: string | null = null;
+  let saveMessagePoro: string | null = null;
 
   // endpoint reference points (simple UI, defaults chosen)
   let drySandNphi = -0.02;
@@ -30,6 +35,9 @@
   // Plotly container and reference
   let plotDiv: HTMLDivElement | null = null;
   let Plotly: any = null;
+  // containers for Plotly rendered charts
+  let lithoPlotDiv: HTMLDivElement | null = null;
+  let poroPlotDiv: HTMLDivElement | null = null;
 
   async function ensurePlotly() {
     if (!Plotly) {
@@ -75,6 +83,81 @@
         console.warn('ND endpoint failed, falling back to client plot:', err);
         // fall through to client-side render below
       }
+    }
+  }
+
+  // derived plotting arrays for Plotly
+  $: lithoPoints = lithoChartData.map(d => ({ x: d.depth, vclay: d.VCLAY, vsilt: d.VCLAY + d.VSILT, vsand: d.VCLAY + d.VSILT + d.VSAND }));
+  $: poroPoints = poroChartData.map(d => ({ x: d.depth, y: d.PHIT }));
+  $: cporePoints = cporeData.map(d => ({ x: d.depth, y: d.CPORE }));
+
+  async function renderLithoPlot() {
+    if (!lithoPlotDiv) return;
+    const plt = await ensurePlotly();
+    if (!lithoPoints || lithoPoints.length === 0) {
+      // clear plot
+      plt.purge(lithoPlotDiv);
+      return;
+    }
+
+    const x = lithoPoints.map(p => p.x);
+    const clay = lithoPoints.map(p => p.vclay);
+    const silt = lithoPoints.map(p => p.vsilt);
+    const sand = lithoPoints.map(p => p.vsand);
+
+    const traces = [
+      { x, y: clay, name: 'VCLAY', mode: 'lines', line: {color: '#949494'}, fill: 'tozeroy' },
+      { x, y: silt, name: 'VSILT', mode: 'lines', line: {color: '#FE9800'}, fill: 'tonexty' },
+      { x, y: sand, name: 'VSAND', mode: 'lines', line: {color: '#F6F674'}, fill: 'tonexty' }
+    ];
+
+    const layout = {
+      height: 220,
+      margin: { l: 60, r: 20, t: 20, b: 40 },
+      dragmode: 'zoom',
+      xaxis: { title: 'Depth', tickformat: ',.0f', fixedrange: false },
+      yaxis: { title: 'Volume Fraction', range: [0,1], tickformat: '.1f', fixedrange: true },
+      showlegend: false
+    };
+
+    try {
+      plt.react(lithoPlotDiv, traces, layout, { responsive: true });
+    } catch (e) {
+      plt.newPlot(lithoPlotDiv, traces, layout, { responsive: true });
+    }
+  }
+
+  async function renderPoroPlot() {
+    if (!poroPlotDiv) return;
+    const plt = await ensurePlotly();
+    if ((!poroPoints || poroPoints.length === 0) && (!cporePoints || cporePoints.length === 0)) {
+      plt.purge(poroPlotDiv);
+      return;
+    }
+
+    const traces: any[] = [];
+    if (poroPoints && poroPoints.length > 0) {
+      const x = poroPoints.map(p => p.x);
+      const y = poroPoints.map(p => p.y);
+      traces.push({ x, y, name: 'PHIT', mode: 'lines', line: { color: '#2563eb', width: 2 }, fill: 'tozeroy', fillcolor: 'rgba(37,99,235,0.3)' });
+    }
+    if (cporePoints && cporePoints.length > 0) {
+      traces.push({ x: cporePoints.map(p => p.x), y: cporePoints.map(p => p.y), name: 'CPORE', mode: 'markers', marker: { color: '#dc2626', size: 8, line: { color: 'white', width: 1 } } });
+    }
+
+    const layout = {
+      height: 220,
+      margin: { l: 60, r: 20, t: 20, b: 40 },
+      dragmode: 'zoom',
+      xaxis: { title: 'Depth', tickformat: ',.0f', fixedrange: false },
+      yaxis: { title: 'Porosity (fraction)', range: [0,1], tickformat: '.2f', fixedrange: true },
+      showlegend: false
+    };
+
+    try {
+      plt.react(poroPlotDiv, traces, layout, { responsive: true });
+    } catch (e) {
+      plt.newPlot(poroPlotDiv, traces, layout, { responsive: true });
     }
   }
 
@@ -157,6 +240,67 @@
     }
   }
 
+  async function saveLitho() {
+    if (!projectId || !wellName) {
+      error = 'Project and well must be selected before saving';
+      return;
+    }
+    if (!lithoResults || lithoResults.length === 0) {
+      error = 'No lithology results to save';
+      return;
+    }
+    saveLoadingLitho = true;
+    saveMessageLitho = null;
+    error = null;
+    try {
+      // Build rows aligned to fullRows for upsert. Only include rows where
+      // NPHI/RHOB were valid (same logic used when building charts).
+      const rows: Array<Record<string, any>> = [];
+      let i = 0;
+      for (const r of fullRows) {
+        const depth = Number(r.depth ?? r.DEPTH ?? NaN);
+        if (isNaN(depth)) continue;
+        const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
+        const rhob = Number(r.rhob ?? r.RHOB ?? r.Rhob ?? NaN);
+        const hasValidData = !isNaN(nphi) && !isNaN(rhob);
+        if (hasValidData) {
+          const l = lithoResults[i++] ?? { VSAND: null, VSILT: null, VCLAY: null };
+          const vsand = Math.min(Math.max(Number(l.VSAND ?? 0), 0), 1);
+          const vsilt = Math.min(Math.max(Number(l.VSILT ?? 0), 0), 1);
+          const vclay = Math.min(Math.max(Number(l.VCLAY ?? 0), 0), 1);
+          rows.push({ DEPTH: depth, VSAND: vsand, VSILT: vsilt, VCLAY: vclay });
+        }
+      }
+
+      if (!rows.length) {
+        throw new Error('No rows prepared for save');
+      }
+
+      const payload = { data: rows };
+      const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`;
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const resp = await res.json().catch(() => null);
+      saveMessageLitho = resp && resp.message ? String(resp.message) : 'Lithology saved';
+      try {
+        // notify other components (plots) that data changed
+        window.dispatchEvent(new CustomEvent('qpp:data-updated', { detail: { projectId, wellName, kind: 'lithology' } }));
+      } catch (e) {
+        // ignore if environment doesn't support window dispatch (SSR)
+      }
+    } catch (e: any) {
+      console.warn('Save lithology error', e);
+      saveMessageLitho = null;
+      error = String(e?.message ?? e);
+    } finally {
+      saveLoadingLitho = false;
+    }
+  }
+
   async function runPoro() {
     const data = extractNphiRhob();
     if (!data.length) {
@@ -187,6 +331,73 @@
       error = String(e?.message ?? e);
     } finally {
       loading = false;
+    }
+  }
+
+  async function savePoro() {
+    if (!projectId || !wellName) {
+      error = 'Project and well must be selected before saving';
+      return;
+    }
+    if (!poroResults || poroResults.length === 0) {
+      error = 'No porosity results to save';
+      return;
+    }
+    saveLoadingPoro = true;
+    saveMessagePoro = null;
+    error = null;
+    try {
+      // Build a quick lookup for core porosity by depth
+      const cporeByDepth = new Map<number, number>();
+      for (const c of cporeData) {
+        const d = Number(c.depth);
+        if (!isNaN(d)) cporeByDepth.set(d, Number(c.CPORE));
+      }
+
+      const rows: Array<Record<string, any>> = [];
+      let i = 0;
+      for (const r of fullRows) {
+        const depth = Number(r.depth ?? r.DEPTH ?? NaN);
+        if (isNaN(depth)) continue;
+        const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
+        const rhob = Number(r.rhob ?? r.RHOB ?? r.Rhob ?? NaN);
+        const hasValidData = !isNaN(nphi) && !isNaN(rhob);
+        if (hasValidData) {
+          const p = poroResults[i++] ?? { PHIT: null };
+          const phit = Math.min(Math.max(Number(p.PHIT ?? 0), 0), 1);
+          const row: Record<string, any> = { DEPTH: depth, PHIT: phit };
+          const core = cporeByDepth.get(depth);
+          if (typeof core === 'number' && !isNaN(core)) row.CPORE = core;
+          rows.push(row);
+        }
+      }
+
+      if (!rows.length) {
+        throw new Error('No rows prepared for save');
+      }
+
+      const payload = { data: rows };
+      const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`;
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const resp = await res.json().catch(() => null);
+      saveMessagePoro = resp && resp.message ? String(resp.message) : 'Porosity saved';
+      try {
+        // notify other components (plots) that data changed
+        window.dispatchEvent(new CustomEvent('qpp:data-updated', { detail: { projectId, wellName, kind: 'porosity' } }));
+      } catch (e) {
+        // ignore if environment doesn't support window dispatch (SSR)
+      }
+    } catch (e: any) {
+      console.warn('Save porosity error', e);
+      saveMessagePoro = null;
+      error = String(e?.message ?? e);
+    } finally {
+      saveLoadingPoro = false;
     }
   }
 
@@ -261,6 +472,14 @@
   $: if (plotDiv && (drySandNphi || drySandRhob || fluidNphi || fluidRhob)) {
     renderNdPlot();
   }
+
+  // render Plotly lithology/porosity when data changes
+  $: if (lithoPlotDiv && lithoChartData) {
+    renderLithoPlot();
+  }
+  $: if (poroPlotDiv && (poroChartData || cporeData)) {
+    renderPoroPlot();
+  }
 </script>
 
 <div class="ws-lithology">
@@ -300,29 +519,6 @@
           <label class="text-xs" for="silt-line-angle">Silt line angle</label>
           <input id="silt-line-angle" class="input" type="number" step="1" bind:value={siltLineAngle} />
         </div>
-        <div>
-          <div class="text-xs">&nbsp;</div>
-          <div class="flex gap-2">
-            <button
-              class="btn px-3 py-1 text-sm font-semibold rounded-md bg-gray-900 text-white hover:bg-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-700"
-              on:click={runSSC}
-              disabled={loading}
-              aria-label="Run lithology classification"
-              title="Run lithology classification"
-            >
-              Estimate Lithology
-            </button>
-            <button
-              class="btn px-3 py-1 text-sm font-medium rounded-md bg-gray-800 text-gray-100 hover:bg-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-600"
-              on:click={runPoro}
-              disabled={loading}
-              aria-label="Estimate porosity"
-              title="Estimate porosity"
-            >
-              Estimate Porosity
-            </button>
-          </div>
-        </div>
       </div>
 
       {#if error}
@@ -340,150 +536,84 @@
 
           <div class="font-medium text-sm mb-1">Lithology (VSAND / VSILT / VCLAY)</div>
           <div class="bg-surface rounded p-2">
+            <button
+              class="btn px-3 py-1 text-sm font-semibold rounded-md bg-gray-900 text-white hover:bg-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-700"
+              on:click={runSSC}
+              disabled={loading}
+              style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
+              aria-label="Run lithology classification"
+              title="Run lithology classification"
+            >
+              Estimate Lithology
+            </button>
+            <button
+              class="btn px-3 py-1 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-500 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-green-600"
+              on:click={saveLitho}
+              disabled={loading || saveLoadingLitho}
+              style={(loading || saveLoadingLitho) ? 'opacity:0.5; pointer-events:none;' : ''}
+              aria-label="Save lithology"
+              title="Save lithology results to database"
+            >
+              {#if saveLoadingLitho}
+                Saving...
+              {:else}
+                Save Lithology
+              {/if}
+            </button>
             <div class="h-[220px] w-full overflow-hidden">
               {#if lithoChartData.length > 0}
-                {@const lithoPoints = lithoChartData.map(d => ({
-                  x: d.depth,
-                  vclay: d.VCLAY,
-                  vsilt: d.VCLAY + d.VSILT,
-                  vsand: d.VCLAY + d.VSILT + d.VSAND
-                }))}
-                
-                <Plot
-                  width={500}
-                  height={220}
-                  marginLeft={10}
-                  marginRight={20}
-                  marginTop={20}
-                  marginBottom={40}
-                  x={{ 
-                    label: "Depth",
-                    tickFormat: (d) => Math.round(Number(d)).toString()
-                  }}
-                  y={{ 
-                    label: "Volume Fraction", 
-                    domain: [0, 1],
-                    tickFormat: (d) => Number(d).toFixed(1)
-                  }}
-                >
-                  <!-- Stacked areas for lithology using AreaY with proper boundaries -->
-                  <AreaY 
-                    data={lithoPoints}
-                    x="x"
-                    y1={0}
-                    y2="vclay"
-                    fill="#949494" 
-                    fillOpacity={0.8}
-                  />
-                  <AreaY 
-                    data={lithoPoints}
-                    x="x"
-                    y1="vclay"
-                    y2="vsilt"
-                    fill="#FE9800" 
-                    fillOpacity={0.8}
-                  />
-                  <AreaY 
-                    data={lithoPoints}
-                    x="x"
-                    y1="vsilt"
-                    y2="vsand"
-                    fill="#F6F674" 
-                    fillOpacity={0.8}
-                  />
-                  
-                  <!-- Overlay lines for better visibility -->
-                  <Line 
-                    data={lithoPoints}
-                    x="x"
-                    y="vclay"
-                    stroke="#949494" 
-                    strokeWidth={1}
-                  />
-                  <Line 
-                    data={lithoPoints}
-                    x="x"
-                    y="vsilt"
-                    stroke="#FE9800" 
-                    strokeWidth={1}
-                  />
-                  <Line 
-                    data={lithoPoints}
-                    x="x"
-                    y="vsand"
-                    stroke="#F6F674" 
-                    strokeWidth={1}
-                  />
-                </Plot>
+                <div bind:this={lithoPlotDiv} class="w-full h-[220px]"></div>
               {:else}
                 <div class="flex items-center justify-center h-full text-sm text-gray-500">
                   No lithology data available. Click "Estimate Lithology" first.
                 </div>
               {/if}
             </div>
+            {#if saveMessageLitho}
+              <div class="text-xs text-green-600 mt-2">{saveMessageLitho}</div>
+            {/if}
           </div>
         </div>
 
         <div>
           <div class="font-medium text-sm mb-1">Porosity (PHIT)</div>
           <div class="bg-surface rounded p-2">
+            <button
+                class="btn px-3 py-1 text-sm font-medium rounded-md bg-gray-800 text-gray-100 hover:bg-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-600"
+                on:click={runPoro}
+                disabled={loading}
+                style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
+                aria-label="Estimate porosity"
+                title="Estimate porosity"
+              >
+                Estimate Porosity
+              </button>
+              <button
+                class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
+                on:click={savePoro}
+                disabled={loading || saveLoadingPoro}
+                style={(loading || saveLoadingPoro) ? 'opacity:0.5; pointer-events:none;' : ''}
+                aria-label="Save porosity"
+                title="Save porosity results to database"
+              >
+                {#if saveLoadingPoro}
+                  Saving...
+                {:else}
+                  Save Porosity
+                {/if}
+              </button>
             <div class="h-[220px] w-full overflow-hidden">
               {#if poroChartData.length > 0 || cporeData.length > 0}
-                {@const poroPoints = poroChartData.map(d => ({ x: d.depth, y: d.PHIT }))}
-                {@const cporePoints = cporeData.map(d => ({ x: d.depth, y: d.CPORE }))}
-                
-                <Plot
-                  width={500}
-                  height={220}
-                  marginLeft={60}
-                  marginRight={20}
-                  marginTop={20}
-                  marginBottom={40}
-                  x={{ 
-                    label: "Depth",
-                    tickFormat: (d) => Math.round(d).toString()
-                  }}
-                  y={{ 
-                    label: "Porosity (fraction)", 
-                    domain: [0, 1],
-                    tickFormat: (d) => Number(d).toFixed(2)
-                  }}
-                >
-                  {#if poroPoints.length > 0}
-                    <AreaY 
-                      data={poroPoints}
-                      x="x"
-                      y="y"
-                      fill="#2563eb" 
-                      fillOpacity={0.3}
-                    />
-                    <Line 
-                      data={poroPoints}
-                      x="x"
-                      y="y"
-                      stroke="#2563eb" 
-                      strokeWidth={2}
-                    />
-                  {/if}
-                  
-                  {#if cporePoints.length > 0}
-                    <Dot 
-                      data={cporePoints}
-                      x="x"
-                      y="y"
-                      fill="#dc2626" 
-                      stroke="white" 
-                      strokeWidth={2}
-                      r={4}
-                    />
-                  {/if}
-                </Plot>
+                <div bind:this={poroPlotDiv} class="w-full h-[220px]"></div>
               {:else}
                 <div class="flex items-center justify-center h-full text-sm text-gray-500">
                   No porosity data available. Click "Estimate Porosity" first.
                 </div>
               {/if}
             </div>
+            {#if saveMessagePoro}
+              <div class="text-xs text-green-600 mt-2">{saveMessagePoro}</div>
+            {/if}
           </div>
           
           <div class="text-xs text-muted-foreground space-y-1 mt-2">

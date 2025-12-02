@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Button } from '$lib/components/ui/button/index.js';
-  import { Plot, Line, Dot } from 'svelteplot';
   
   export let projectId: number | string;
   export let wellName: string;
@@ -10,6 +9,9 @@
   
   let loading = false;
   let error: string | null = null;
+  // save state
+  let saveLoadingPerm = false;
+  let saveMessagePerm: string | null = null;
   let selectedMethod = 'choo';
   let swirr = 0.05; // Default irreducible water saturation
   
@@ -18,6 +20,8 @@
   let permResults: Array<Record<string, any>> = [];
   let permChartData: Array<Record<string, any>> = [];
   let cpermData: Array<Record<string, any>> = []; // Core permeability data
+  let Plotly: any = null;
+  let permPlotDiv: HTMLDivElement | null = null;
   
   // Available permeability methods
   const permMethods = [
@@ -124,6 +128,58 @@
       loading = false;
     }
   }
+
+  async function savePerm() {
+    if (!projectId || !wellName) {
+      error = 'Project and well must be selected before saving';
+      return;
+    }
+    if (!permChartData || permChartData.length === 0) {
+      error = 'No permeability results to save';
+      return;
+    }
+    saveLoadingPerm = true;
+    saveMessagePerm = null;
+    error = null;
+    try {
+      // Build CPERM lookup by depth
+      const cpermByDepth = new Map<number, number>();
+      for (const c of cpermData) {
+        const d = Number(c.depth);
+        if (!isNaN(d)) cpermByDepth.set(d, Number(c.CPERM));
+      }
+
+      // Align rows to permChartData (already sorted by depth)
+      const rows: Array<Record<string, any>> = permChartData.map(r => {
+        const row: Record<string, any> = { DEPTH: r.depth, PERM: Number(r.PERM) };
+        const core = cpermByDepth.get(r.depth);
+        if (typeof core === 'number' && !isNaN(core)) row.CPERM = core;
+        return row;
+      });
+
+      if (!rows.length) throw new Error('No rows prepared for save');
+
+      const payload = { data: rows };
+      const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`;
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const resp = await res.json().catch(() => null);
+      saveMessagePerm = resp && resp.message ? String(resp.message) : 'Permeability saved';
+      try {
+        window.dispatchEvent(new CustomEvent('qpp:data-updated', { detail: { projectId, wellName, kind: 'permeability' } }));
+      } catch (e) {}
+    } catch (e: any) {
+      console.warn('Save permeability error', e);
+      saveMessagePerm = null;
+      error = String(e?.message ?? e);
+    } finally {
+      saveLoadingPerm = false;
+    }
+  }
   
   function formatLogValue(value: any): string {
     const numValue = Number(value);
@@ -176,6 +232,14 @@
     return [domainMin, domainMax];
   }
 
+  async function ensurePlotly() {
+    if (!Plotly) {
+      const mod = await import('plotly.js-dist-min');
+      Plotly = mod?.default ?? mod;
+    }
+    return Plotly;
+  }
+
   function buildPermChart() {
     const rows: Array<Record<string, any>> = [];
     let i = 0;
@@ -223,11 +287,59 @@
     
     // Extract CPERM data for overlay
     cpermData = extractCpermData();
+    // trigger Plotly render when chart data is built
+    // (reactive statement below will call renderPermPlot)
+  }
+
+  // derived arrays for plotting
+  $: permPoints = permChartData.map(d => ({ x: d.depth, y: d.PERM }));
+  $: cpermPoints = cpermData.map(d => ({ x: d.depth, y: d.CPERM }));
+
+  async function renderPermPlot() {
+    if (!permPlotDiv) return;
+    const plt = await ensurePlotly();
+
+    if ((!permPoints || permPoints.length === 0) && (!cpermPoints || cpermPoints.length === 0)) {
+      try { plt.purge(permPlotDiv); } catch (e) {}
+      return;
+    }
+
+    const traces: any[] = [];
+    if (permPoints && permPoints.length > 0) {
+      traces.push({ x: permPoints.map(p => p.x), y: permPoints.map(p => p.y), name: 'PERM', mode: 'lines', line: { color: '#2563eb', width: 2 } });
+    }
+    if (cpermPoints && cpermPoints.length > 0) {
+      traces.push({ x: cpermPoints.map(p => p.x), y: cpermPoints.map(p => p.y), name: 'CPERM', mode: 'markers', marker: { color: '#dc2626', size: 8, line: { color: 'white', width: 1 } } });
+    }
+
+    // Use getPermDomain to compute min/max and convert to log10 range for Plotly
+    const [minY, maxY] = getPermDomain();
+    const safeMin = Math.max(minY, 1e-12);
+    const safeMax = Math.max(maxY, safeMin * 10);
+    const layout: any = {
+      height: 220,
+      margin: { l: 60, r: 20, t: 20, b: 40 },
+      dragmode: 'zoom',
+      xaxis: { title: 'Depth', tickformat: ',.0f', fixedrange: false },
+      yaxis: { title: 'Permeability (mD)', type: 'log', autorange: false, range: [Math.log10(safeMin), Math.log10(safeMax)], fixedrange: true },
+      showlegend: false
+    };
+
+    try {
+      plt.react(permPlotDiv, traces, layout, { responsive: true });
+    } catch (e) {
+      plt.newPlot(permPlotDiv, traces, layout, { responsive: true });
+    }
   }
   
   // Load data when well changes
   $: if (projectId && wellName) {
     loadWellData();
+  }
+
+  // re-render Plotly when perm or core perm data changes
+  $: if (permPlotDiv && (permChartData || cpermData)) {
+    renderPermPlot();
   }
 </script>
 
@@ -270,10 +382,11 @@
           class="btn btn-primary" 
           onclick={computePermeability}
           disabled={loading}
+          style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
         >
-          {loading ? 'Computing...' : 'Compute Permeability'}
+          Compute Permeability
         </Button>
-        <Button class="btn ml-2">Classify Rock Type</Button>
+        <Button class="btn ml-2" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Classify Rock Type</Button>
       </div>
 
       {#if permChartData.length > 0}
@@ -281,52 +394,18 @@
           <div>
             <div class="font-medium text-sm mb-1">Permeability (mD) - {permMethods.find(m => m.value === selectedMethod)?.label}</div>
             <div class="bg-surface rounded p-2">
+              <Button class="btn ml-2 bg-emerald-700" onclick={savePerm} disabled={loading || saveLoadingPerm} style={(loading || saveLoadingPerm) ? 'opacity:0.5; pointer-events:none;' : ''}>
+                {#if saveLoadingPerm}
+                  Saving...
+                {:else}
+                  Save Permeability
+                {/if}
+              </Button>
               <div class="h-[220px] w-full overflow-hidden">
                 {#if permChartData.length > 0 || cpermData.length > 0}
-                  {@const [minY, maxY] = getPermDomain()}
-                  {@const permPoints = permChartData.map(d => ({ x: d.depth, y: d.PERM }))}
-                  {@const cpermPoints = cpermData.map(d => ({ x: d.depth, y: d.CPERM }))}
-                  
-                  <Plot
-                    width={500}
-                    height={220}
-                    marginLeft={20}
-                    marginRight={20}
-                    marginTop={20}
-                    marginBottom={40}
-                    x={{ 
-                      label: "Depth",
-                      tickFormat: (d) => Math.round(Number(d)).toString()
-                    }}
-                    y={{ 
-                      label: "Permeability (mD)", 
-                      type: "log", 
-                      domain: [minY, maxY],
-                      tickFormat: formatLogValue
-                    }}
-                  >
-                    {#if permPoints.length > 0}
-                      <Line 
-                        data={permPoints}
-                        x="x"
-                        y="y"
-                        stroke="#2563eb" 
-                        strokeWidth={2}
-                      />
-                    {/if}
-                    
-                    {#if cpermPoints.length > 0}
-                      <Dot 
-                        data={cpermPoints}
-                        x="x"
-                        y="y"
-                        fill="#dc2626" 
-                        stroke="white" 
-                        strokeWidth={1}
-                        r={4}
-                      />
-                    {/if}
-                  </Plot>
+                  <div bind:this={permPlotDiv} class="w-full h-[220px]"></div>
+                {:else}
+                  <div class="text-sm text-muted p-4">No permeability data to display.</div>
                 {/if}
               </div>
             </div>
