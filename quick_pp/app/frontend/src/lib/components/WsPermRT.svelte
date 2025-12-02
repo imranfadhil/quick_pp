@@ -22,6 +22,10 @@
   let cpermData: Array<Record<string, any>> = []; // Core permeability data
   let Plotly: any = null;
   let permPlotDiv: HTMLDivElement | null = null;
+  // rock typing state
+  let rockTypes: Array<Record<string, any>> = [];
+  let saveLoadingRockType = false;
+  let saveMessageRockType: string | null = null;
   
   // Available permeability methods
   const permMethods = [
@@ -178,6 +182,79 @@
       error = String(e?.message ?? e);
     } finally {
       saveLoadingPerm = false;
+    }
+  }
+
+  function classifyTypeFromRow(depth: number, perm: number, row?: Record<string, any>) {
+    // Try to extract supporting fields
+    const vsand = Number(row?.vsand ?? row?.VSAND ?? row?.VSAND ?? NaN);
+    const vclay = Number(row?.vclay ?? row?.VCLAY ?? row?.VCLAY ?? NaN);
+    const phit = Number(row?.phit ?? row?.PHIT ?? row?.PHIT ?? NaN);
+
+    // Rule-based classifier (simple, tweakable)
+    if (!isNaN(vclay) && vclay >= 0.6) return 'Shale/Clay';
+    if (!isNaN(vclay) && vclay >= 0.3) return 'Shaly Sand';
+    if (!isNaN(vsand) && vsand >= 0.6) {
+      if (perm > 100) return 'High-perm Sand';
+      if (perm > 1) return 'Sandstone';
+      return 'Tight Sand';
+    }
+    // Fallbacks using perm and porosity
+    if (!isNaN(phit) && phit >= 0.25 && perm > 1) return 'Reservoir Sand';
+    if (perm < 0.1) return 'Tight/Caprock';
+    if (perm > 10) return 'Sandstone';
+    return 'Mixed';
+  }
+
+  function computeRockType() {
+    if (!permChartData || permChartData.length === 0) {
+      error = 'No permeability data to classify — compute permeability first';
+      return;
+    }
+    const types: Array<Record<string, any>> = [];
+    for (const p of permChartData) {
+      const depth = Number(p.depth);
+      const perm = Number(p.PERM ?? p.perm ?? 0);
+      // try to find matching full row by depth
+      const row = fullRows.find(r => {
+        const d = Number(r.depth ?? r.DEPTH ?? NaN);
+        return !isNaN(d) && d === depth;
+      });
+      const t = classifyTypeFromRow(depth, perm, row);
+      types.push({ depth, ROCK_TYPE: t });
+    }
+    rockTypes = types;
+    saveMessageRockType = null;
+    error = null;
+  }
+
+  async function saveRockType() {
+    if (!projectId || !wellName) {
+      error = 'Project and well must be selected before saving';
+      return;
+    }
+    if (!rockTypes || rockTypes.length === 0) {
+      error = 'No rock type classifications to save — run Classify Rock Type first';
+      return;
+    }
+    saveLoadingRockType = true;
+    saveMessageRockType = null;
+    error = null;
+    try {
+      const rows = rockTypes.map(r => ({ DEPTH: r.depth, ROCK_TYPE: r.ROCK_TYPE }));
+      const payload = { data: rows };
+      const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`;
+      const res = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      const resp = await res.json().catch(() => null);
+      saveMessageRockType = resp && resp.message ? String(resp.message) : 'Rock types saved';
+      try { window.dispatchEvent(new CustomEvent('qpp:data-updated', { detail: { projectId, wellName, kind: 'rock_type' } })); } catch (e) {}
+    } catch (e: any) {
+      console.warn('Save rock type error', e);
+      saveMessageRockType = null;
+      error = String(e?.message ?? e);
+    } finally {
+      saveLoadingRockType = false;
     }
   }
   
@@ -377,70 +454,97 @@
         <div class="text-sm text-red-500 mb-2">Error: {error}</div>
       {/if}
 
-      <div class="mb-3">
-        <Button 
-          class="btn btn-primary" 
-          onclick={computePermeability}
-          disabled={loading}
-          style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
-        >
-          Compute Permeability
-        </Button>
-        <Button class="btn ml-2" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Classify Rock Type</Button>
-      </div>
-
-      {#if permChartData.length > 0}
-        <div class="space-y-3">
-          <div>
-            <div class="font-medium text-sm mb-1">Permeability (mD) - {permMethods.find(m => m.value === selectedMethod)?.label}</div>
-            <div class="bg-surface rounded p-2">
-              <Button class="btn ml-2 bg-emerald-700" onclick={savePerm} disabled={loading || saveLoadingPerm} style={(loading || saveLoadingPerm) ? 'opacity:0.5; pointer-events:none;' : ''}>
-                {#if saveLoadingPerm}
-                  Saving...
-                {:else}
-                  Save Permeability
-                {/if}
-              </Button>
-              <div class="h-[220px] w-full overflow-hidden">
-                {#if permChartData.length > 0 || cpermData.length > 0}
-                  <div bind:this={permPlotDiv} class="w-full h-[220px]"></div>
-                {:else}
-                  <div class="text-sm text-muted p-4">No permeability data to display.</div>
-                {/if}
-              </div>
+      <div class="space-y-3">
+        <div>
+          <div class="font-medium text-sm mb-1">Permeability (mD) - {permMethods.find(m => m.value === selectedMethod)?.label}</div>
+          <div class="bg-surface rounded p-2">
+          <Button 
+            class="btn btn-primary" 
+            onclick={computePermeability}
+            disabled={loading}
+            style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
+          >
+            Estimate Permeability
+          </Button>
+            <Button class="btn ml-2 bg-emerald-700" onclick={savePerm} disabled={loading || saveLoadingPerm} style={(loading || saveLoadingPerm) ? 'opacity:0.5; pointer-events:none;' : ''}>
+              {#if saveLoadingPerm}
+                Saving...
+              {:else}
+                Save Permeability
+              {/if}
+            </Button>
+            <div class="h-[220px] w-full overflow-hidden">
+              {#if permChartData.length > 0 || cpermData.length > 0}
+                <div bind:this={permPlotDiv} class="w-full h-[220px]"></div>
+              {:else}
+                <div class="flex items-center justify-center h-full text-sm text-gray-500">
+                  No permeability data to display. Compute permeability to see the plot.
+                </div>
+              {/if}
             </div>
           </div>
+        </div>
 
-          <div class="text-xs text-muted-foreground space-y-1">
-            {#if permChartData.length > 0}
-              {@const perms = permChartData.map(d => d.PERM)}
-              {@const avgPerm = perms.reduce((a, b) => a + b, 0) / perms.length}
-              {@const minPerm = Math.min(...perms)}
-              {@const maxPerm = Math.max(...perms)}
-              <div>
-                <strong>Calculated Perm:</strong>
-                Avg: {avgPerm.toFixed(2)} mD | Min: {minPerm.toFixed(3)} mD | Max: {maxPerm.toFixed(1)} mD | Count: {perms.length}
-              </div>
-            {:else}
-              <div><strong>Calculated Perm:</strong> No data</div>
-            {/if}
-            
-            {#if cpermData.length > 0}
-              {@const cperms = cpermData.map(d => d.CPERM)}
-              {@const avgCperm = cperms.reduce((a, b) => a + b, 0) / cperms.length}
-              {@const minCperm = Math.min(...cperms)}
-              {@const maxCperm = Math.max(...cperms)}
-              <div>
-                <strong>Core Perm (CPERM):</strong>
-                <span class="inline-block w-2 h-2 bg-red-600 rounded-full"></span>
-                Avg: {avgCperm.toFixed(2)} mD | Min: {minCperm.toFixed(3)} mD | Max: {maxCperm.toFixed(1)} mD | Count: {cperms.length}
-              </div>
-            {:else}
-              <div class="text-gray-500">No core permeability data (CPERM) found</div>
-            {/if}
+        <div class="text-xs text-muted-foreground space-y-1">
+          {#if permChartData.length > 0}
+            {@const perms = permChartData.map(d => d.PERM)}
+            {@const avgPerm = perms.reduce((a, b) => a + b, 0) / perms.length}
+            {@const minPerm = Math.min(...perms)}
+            {@const maxPerm = Math.max(...perms)}
+            <div>
+              <strong>Calculated Perm:</strong>
+              Avg: {avgPerm.toFixed(2)} mD | Min: {minPerm.toFixed(3)} mD | Max: {maxPerm.toFixed(1)} mD | Count: {perms.length}
+            </div>
+          {:else}
+            <div><strong>Calculated Perm:</strong> No data</div>
+          {/if}
+          
+          {#if cpermData.length > 0}
+            {@const cperms = cpermData.map(d => d.CPERM)}
+            {@const avgCperm = cperms.reduce((a, b) => a + b, 0) / cperms.length}
+            {@const minCperm = Math.min(...cperms)}
+            {@const maxCperm = Math.max(...cperms)}
+            <div>
+              <strong>Core Perm (CPERM):</strong>
+              <span class="inline-block w-2 h-2 bg-red-600 rounded-full"></span>
+              Avg: {avgCperm.toFixed(2)} mD | Min: {minCperm.toFixed(3)} mD | Max: {maxCperm.toFixed(1)} mD | Count: {cperms.length}
+            </div>
+          {:else}
+            <div class="text-gray-500">No core permeability data (CPERM) found</div>
+          {/if}
+        </div>
+
+        <div>
+          <div class="font-medium text-sm mb-1">Rock Typing</div>
+          <div class="bg-surface rounded p-2">
+            <Button class="btn ml-2" onclick={computeRockType} disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Classify Rock Type</Button>
+            <Button class="btn ml-2 bg-amber-600" onclick={saveRockType} disabled={loading || saveLoadingRockType} style={(loading || saveLoadingRockType) ? 'opacity:0.5; pointer-events:none;' : ''}>
+              {#if saveLoadingRockType}
+                Saving...
+              {:else}
+                Save Rock Types
+              {/if}
+            </Button>
+
+            <div class="mt-3">
+              {#if rockTypes.length > 0}
+                {@const counts = rockTypes.reduce((acc, r) => { acc[r.ROCK_TYPE] = (acc[r.ROCK_TYPE] || 0) + 1; return acc; }, {})}
+                <div class="text-sm mb-2">Classified rows: {rockTypes.length}</div>
+                <div class="flex gap-3 flex-wrap">
+                  {#each Object.keys(counts) as k}
+                    <div class="px-2 py-1 bg-gray-100 rounded text-sm">{k}: {counts[k]}</div>
+                  {/each}
+                </div>
+                {#if saveMessageRockType}
+                  <div class="text-xs text-green-600 mt-2">{saveMessageRockType}</div>
+                {/if}
+              {:else}
+                <div class="text-sm text-gray-500">No rock type classifications yet. Click "Classify Rock Type".</div>
+              {/if}
+            </div>
           </div>
         </div>
-      {/if}
+      </div>
     </div>
   {:else}
     <div class="text-sm">Select a well to view permeability tools.</div>
