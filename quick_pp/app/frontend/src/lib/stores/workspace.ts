@@ -6,6 +6,11 @@ export const workspace = writable<WorkspaceState>({
   title: 'QPP - Petrophysical Analysis',
   subtitle: undefined,
   project: null,
+  depthFilter: {
+    enabled: false,
+    minDepth: null,
+    maxDepth: null,
+  },
 });
 
 export function setWorkspaceTitle(title: string, subtitle?: string) {
@@ -52,4 +57,43 @@ export function selectProject(project: Project | null) {
 
 export function selectWell(well: Well | null) {
   workspace.update((s) => ({ ...s, selectedWell: well }));
+}
+
+export function setDepthFilter(enabled: boolean, minDepth?: number | null, maxDepth?: number | null) {
+  workspace.update((s) => ({
+    ...s,
+    depthFilter: {
+      enabled,
+      minDepth: minDepth ?? null,
+      maxDepth: maxDepth ?? null,
+    },
+  }));
+}
+
+export function clearDepthFilter() {
+  workspace.update((s) => ({
+    ...s,
+    depthFilter: {
+      enabled: false,
+      minDepth: null,
+      maxDepth: null,
+    },
+  }));
+}
+
+// Helper function to filter data rows based on current depth filter
+export function applyDepthFilter(rows: Array<Record<string, any>>, depthFilter?: { enabled: boolean; minDepth: number | null; maxDepth: number | null }) {
+  if (!depthFilter?.enabled || (!depthFilter.minDepth && !depthFilter.maxDepth)) {
+    return rows;
+  }
+
+  return rows.filter(row => {
+    const depth = Number(row.depth ?? row.DEPTH ?? row.Depth ?? NaN);
+    if (isNaN(depth)) return false;
+    
+    if (depthFilter.minDepth !== null && depth < depthFilter.minDepth) return false;
+    if (depthFilter.maxDepth !== null && depth > depthFilter.maxDepth) return false;
+    
+    return true;
+  });
 }

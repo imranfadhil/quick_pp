@@ -2,7 +2,7 @@
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import type { Icon } from "@tabler/icons-svelte";
 	import { page } from '$app/stores';
-	import { workspace, selectWell } from '$lib/stores/workspace';
+	import { workspace, selectWell, setDepthFilter, clearDepthFilter } from '$lib/stores/workspace';
 	import { goto } from '$app/navigation';
 	import { onDestroy } from 'svelte';
 
@@ -13,6 +13,11 @@
 	let loadingWells = $state(false);
 	let selectedWell: any = $state(null);
 	let selectedWellName: string = $state('');
+	
+	// Depth filter state
+	let depthFilterEnabled = $state(false);
+	let minDepth: number | null = $state(null);
+	let maxDepth: number | null = $state(null);
 
 	async function fetchWells(projectId: string | number) {
 		loadingWells = true;
@@ -42,6 +47,13 @@
 			wells = [];
 			selectedWell = null;
 			selectedWellName = '';
+		}
+		
+		// Update depth filter state
+		if (w?.depthFilter) {
+			depthFilterEnabled = w.depthFilter.enabled;
+			minDepth = w.depthFilter.minDepth;
+			maxDepth = w.depthFilter.maxDepth;
 		}
 	});
 
@@ -79,62 +91,131 @@
 			}
 			return itemUrl;
 		}
+	
+		function handleDepthFilterToggle() {
+			if (depthFilterEnabled) {
+				setDepthFilter(true, minDepth, maxDepth);
+			} else {
+				clearDepthFilter();
+			}
+		}
+	
+		function handleDepthChange() {
+			if (depthFilterEnabled) {
+				setDepthFilter(true, minDepth, maxDepth);
+			}
+		}
+	
+		function resetDepthFilter() {
+			minDepth = null;
+			maxDepth = null;
+			clearDepthFilter();
+		}
 </script>
 
-<Sidebar.Group>	
-	<Sidebar.GroupLabel>Well Analysis</Sidebar.GroupLabel>
-	<Sidebar.GroupContent class="flex flex-col gap-2">
-		{#if project}
-			<div class="px-2 py-2">
-				<div class="text-sm font-semibold">{project.name}</div>
-				{#if loadingWells}
-					<div class="text-sm">Loading wells…</div>
-				{:else}
-				{#if wells && wells.length}
-					<div class="mt-2">
-						<select id="well-select" class="input w-full mt-1 text-sm h-9" bind:value={selectedWellName} onchange={handleSelect}>
-							<option value="">— select well —</option>
-							{#each wells as w}
-								<option value={w}>{w}</option>
-							{/each}
-						</select>
+<Sidebar.Group>
+	<div class="px-2 py-2 border-t border-border/50 mt-2">
+		<Sidebar.GroupLabel>Well Analysis</Sidebar.GroupLabel>
+		<Sidebar.GroupContent class="flex flex-col gap-2">
+			{#if project}
+				<div class="px-2 py-2">
+					<div class="text-sm font-semibold">{project.name}</div>
+					{#if loadingWells}
+						<div class="text-sm">Loading wells…</div>
+					{:else}
+					{#if wells && wells.length}
+						<div class="mt-2">
+							<select id="well-select" class="input w-full mt-1 text-sm h-9" bind:value={selectedWellName} onchange={handleSelect}>
+								<option value="">— select well —</option>
+								{#each wells as w}
+									<option value={w}>{w}</option>
+								{/each}
+							</select>
+						</div>
+					{:else}
+						<div class="text-sm text-muted-foreground mt-2">No wells in this project.</div>
+					{/if}
+					{/if}
+				</div>
+				
+				<!-- Depth Filter Controls -->
+				{#if selectedWell}
+					<div class="flex items-center gap-2 mb-2">
+						<input 
+							type="checkbox" 
+							id="depth-filter" 
+							bind:checked={depthFilterEnabled} 
+							onchange={handleDepthFilterToggle}
+							class="rounded"
+						/>
+						<label for="depth-filter" class="text-sm font-medium cursor-pointer">Filter by Depth</label>
 					</div>
-				{:else}
-					<div class="text-sm text-muted-foreground mt-2">No wells in this project.</div>
+					
+					{#if depthFilterEnabled}
+						<div class="space-y-2">
+							<div>
+								<label class="text-xs text-muted-foreground" for="min-depth">Min Depth</label>
+								<input 
+									type="number" 
+									id="min-depth" 
+									bind:value={minDepth} 
+									onchange={handleDepthChange}
+									placeholder="e.g. 1000"
+									class="input w-full text-sm h-8"
+								/>
+							</div>
+							<div>
+								<label class="text-xs text-muted-foreground" for="max-depth">Max Depth</label>
+								<input 
+									type="number" 
+									id="max-depth" 
+									bind:value={maxDepth} 
+									onchange={handleDepthChange}
+									placeholder="e.g. 2000"
+									class="input w-full text-sm h-8"
+								/>
+							</div>
+							<button 
+								class="text-xs text-muted-foreground hover:text-foreground underline" 
+								onclick={resetDepthFilter}
+							>
+								Clear Filter
+							</button>
+						</div>
+					{/if}
 				{/if}
-				{/if}
-			</div>
-		{:else}
-			<div class="px-2 py-2 text-sm text-muted-foreground">No project selected <a href="/projects" class="ml-1">Open Projects</a></div>
-		{/if}
-		<Sidebar.Menu>
-			
-				{#each items as item (item.title)}
-					<Sidebar.MenuItem>
-						<Sidebar.MenuButton tooltipContent={item.title}>
-							{#snippet child({ props })}
-								<a href={computeHref(item.url)} {...props}
-									class="{isActive(computeHref(item.url)) ? 'bg-panel-foreground/5 font-semibold' : ''} flex items-center gap-2 w-full"
-									aria-current={isActive(computeHref(item.url)) ? 'page' : undefined}
-											onclick={(e) => {
-										e.preventDefault();
-										const href = computeHref(item.url);
-										// If navigating to a per-well page, ensure workspace selectedWell is set
-										if (project && selectedWell && item.url.startsWith('/wells')) {
-											selectWell({ id: selectedWell.id ?? selectedWell.name, name: selectedWell.name });
-										}
-										goto(href);
-									}}
-								>
-									{#if item.icon}
-										<item.icon />
-									{/if}
-									<span>{item.title}</span>
-								</a>
-							{/snippet}
-						</Sidebar.MenuButton>
-					</Sidebar.MenuItem>
-				{/each}
-		</Sidebar.Menu>
-	</Sidebar.GroupContent>
+			{:else}
+				<div class="px-2 py-2 text-sm text-muted-foreground">No project selected <a href="/projects" class="ml-1">Open Projects</a></div>
+			{/if}
+			<Sidebar.Menu>
+				
+					{#each items as item (item.title)}
+						<Sidebar.MenuItem>
+							<Sidebar.MenuButton tooltipContent={item.title}>
+								{#snippet child({ props })}
+									<a href={computeHref(item.url)} {...props}
+										class="{isActive(computeHref(item.url)) ? 'bg-panel-foreground/5 font-semibold' : ''} flex items-center gap-2 w-full"
+										aria-current={isActive(computeHref(item.url)) ? 'page' : undefined}
+												onclick={(e) => {
+											e.preventDefault();
+											const href = computeHref(item.url);
+											// If navigating to a per-well page, ensure workspace selectedWell is set
+											if (project && selectedWell && item.url.startsWith('/wells')) {
+												selectWell({ id: selectedWell.id ?? selectedWell.name, name: selectedWell.name });
+											}
+											goto(href);
+										}}
+									>
+										{#if item.icon}
+											<item.icon />
+										{/if}
+										<span>{item.title}</span>
+									</a>
+								{/snippet}
+							</Sidebar.MenuButton>
+						</Sidebar.MenuItem>
+					{/each}
+			</Sidebar.Menu>
+		</Sidebar.GroupContent>
+	</div>
 </Sidebar.Group>

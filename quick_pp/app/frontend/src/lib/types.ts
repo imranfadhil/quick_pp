@@ -14,4 +14,9 @@ export interface WorkspaceState {
   subtitle?: string;
   project?: Project | null;
   selectedWell?: Well | null;
+  depthFilter?: {
+    enabled: boolean;
+    minDepth: number | null;
+    maxDepth: number | null;
+  };
 }

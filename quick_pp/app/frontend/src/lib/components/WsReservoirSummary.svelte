@@ -3,6 +3,8 @@
   export let wellName: string;
   import { Button } from '$lib/components/ui/button/index.js';
   import { onMount, onDestroy } from 'svelte';
+  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
+  import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   // import DataTables & jQuery from node_modules (bundled by Vite)
   import jQuery from 'jquery';
@@ -35,6 +37,13 @@
   let maxSwt: number = 0.99;
   let maxVclay: number = 0.4;
 
+  // Depth filter state
+  let depthFilter: { enabled: boolean; minDepth: number | null; maxDepth: number | null } = {
+    enabled: false,
+    minDepth: null,
+    maxDepth: null,
+  };
+  
   // filtered rows are the raw results from backend; DataTables will handle search/filtering
   $: filtered = ressumRows ?? [];
 
@@ -131,8 +140,11 @@
 
   // Build payload for ressum: map fullRows to required keys
   function buildRessumPayload() {
-    const rows: Array<Record<string, any>> = [];
-    for (const r of fullRows) {
+    // Apply depth filter first
+    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    
+    const mappedRows: Array<Record<string, any>> = [];
+    for (const r of filteredRows) {
       const depth = Number(r.depth ?? r.tvdss ?? r.TVD ?? r.TVDSS ?? r.DEPTH ?? NaN);
       const vcld = Number(r.vcld ?? r.VCLD ?? r.vclay ?? r.VCLAY ?? NaN);
       const phit = Number(r.phit ?? r.PHIT ?? NaN);
@@ -153,9 +165,9 @@
       if (isNaN(depth) || isNaN(vcld) || isNaN(phit) || isNaN(swt) || isNaN(perm)) {
         continue;
       }
-      rows.push({ depth, vcld, phit, swt, perm, zones });
+      mappedRows.push({ depth, vcld, phit, swt, perm, zones });
     }
-    return rows;
+    return mappedRows;
   }
 
   async function generateReport() {
@@ -206,6 +218,8 @@
     <div class="font-semibold">Reservoir Summary</div>
     <div class="text-sm text-muted-foreground">High-level reservoir summary and exportable reports.</div>
   </div>
+
+  <DepthFilterStatus />
 
   {#if wellName}
     <div class="bg-panel rounded p-3">

@@ -1,9 +1,19 @@
 <script lang="ts">
   // plotting will be handled via Plotly (dynamically imported)
+  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
+  import { onDestroy } from 'svelte';
+  import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   export let projectId: number | string;
   export let wellName: string;
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
+  
+  // Depth filter state
+  let depthFilter: { enabled: boolean; minDepth: number | null; maxDepth: number | null } = {
+    enabled: false,
+    minDepth: null,
+    maxDepth: null,
+  };
 
   let loading = false;
   let error: string | null = null;
@@ -20,7 +30,7 @@
   let dryClayRhob = 2.71;
   let fluidNphi = 1.0;
   let fluidRhob = 1.0;
-  let siltLineAngle = 119;
+  let siltLineAngle = 117;
   
   // Calculate drySiltNphi based on siltLineAngle
   $: drySiltNphi = 1 - 1.68 * Math.tan((siltLineAngle - 90) * Math.PI / 180);
@@ -334,7 +344,7 @@
       margin: { l: 60, r: 20, t: 20, b: 40 },
       dragmode: 'zoom',
       xaxis: { title: 'Depth', tickformat: ',.0f' },
-      yaxis: { title: 'Porosity (fraction)', range: [0,1], tickformat: '.2f' },
+      yaxis: { title: 'Porosity (fraction)', range: [0,1], tickformat: '.2f', fixedrange: true },
       showlegend: false
     };
 
@@ -367,9 +377,12 @@
 
   function extractNphiRhob()
   {
+    // Apply depth filter first
+    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    
     // build payload data: list of {nphi, rhob}
     const data: Array<{nphi:number; rhob:number}> = [];
-    for (const r of fullRows) {
+    for (const r of filteredRows) {
       // support different casing
       const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
       const rhob = Number(r.rhob ?? r.RHOB ?? r.Rhob ?? NaN);
@@ -379,8 +392,11 @@
   }
 
   function extractCporeData() {
+    // Apply depth filter first
+    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    
     const data: Array<Record<string, any>> = [];
-    for (const r of fullRows) {
+    for (const r of filteredRows) {
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       const cpore = Number(r.cpore ?? r.CPORE ?? r.Cpore ?? r.KPORE ?? r.kpore ?? NaN);
       
@@ -437,24 +453,13 @@
     saveMessageLitho = null;
     error = null;
     try {
-      // Build rows aligned to fullRows for upsert. Only include rows where
-      // NPHI/RHOB were valid (same logic used when building charts).
-      const rows: Array<Record<string, any>> = [];
-      let i = 0;
-      for (const r of fullRows) {
-        const depth = Number(r.depth ?? r.DEPTH ?? NaN);
-        if (isNaN(depth)) continue;
-        const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
-        const rhob = Number(r.rhob ?? r.RHOB ?? r.Rhob ?? NaN);
-        const hasValidData = !isNaN(nphi) && !isNaN(rhob);
-        if (hasValidData) {
-          const l = lithoResults[i++] ?? { VSAND: null, VSILT: null, VCLAY: null };
-          const vsand = Math.min(Math.max(Number(l.VSAND ?? 0), 0), 1);
-          const vsilt = Math.min(Math.max(Number(l.VSILT ?? 0), 0), 1);
-          const vclay = Math.min(Math.max(Number(l.VCLAY ?? 0), 0), 1);
-          rows.push({ DEPTH: depth, VSAND: vsand, VSILT: vsilt, VCLAY: vclay });
-        }
-      }
+      // Build rows from lithoChartData which already contains the filtered and aligned results
+      const rows: Array<Record<string, any>> = lithoChartData.map(r => ({
+        DEPTH: r.depth,
+        VSAND: Math.min(Math.max(Number(r.VSAND ?? 0), 0), 1),
+        VSILT: Math.min(Math.max(Number(r.VSILT ?? 0), 0), 1),
+        VCLAY: Math.min(Math.max(Number(r.VCLAY ?? 0), 0), 1)
+      }));
 
       if (!rows.length) {
         throw new Error('No rows prepared for save');
@@ -538,23 +543,16 @@
         if (!isNaN(d)) cporeByDepth.set(d, Number(c.CPORE));
       }
 
-      const rows: Array<Record<string, any>> = [];
-      let i = 0;
-      for (const r of fullRows) {
-        const depth = Number(r.depth ?? r.DEPTH ?? NaN);
-        if (isNaN(depth)) continue;
-        const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
-        const rhob = Number(r.rhob ?? r.RHOB ?? r.Rhob ?? NaN);
-        const hasValidData = !isNaN(nphi) && !isNaN(rhob);
-        if (hasValidData) {
-          const p = poroResults[i++] ?? { PHIT: null };
-          const phit = Math.min(Math.max(Number(p.PHIT ?? 0), 0), 1);
-          const row: Record<string, any> = { DEPTH: depth, PHIT: phit };
-          const core = cporeByDepth.get(depth);
-          if (typeof core === 'number' && !isNaN(core)) row.CPORE = core;
-          rows.push(row);
-        }
-      }
+      // Build rows from poroChartData which already contains the filtered and aligned results
+      const rows: Array<Record<string, any>> = poroChartData.map(r => {
+        const row: Record<string, any> = { 
+          DEPTH: r.depth, 
+          PHIT: Math.min(Math.max(Number(r.PHIT ?? 0), 0), 1) 
+        };
+        const core = cporeByDepth.get(r.depth);
+        if (typeof core === 'number' && !isNaN(core)) row.CPORE = core;
+        return row;
+      });
 
       if (!rows.length) {
         throw new Error('No rows prepared for save');
@@ -586,10 +584,13 @@
   }
 
   function buildLithoChart() {
+    // Apply depth filter first
+    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    
     // lithoResults only contains results for rows with valid NPHI/RHOB data
     const rows: Array<Record<string, any>> = [];
     let i = 0;
-    for (const r of fullRows) {
+    for (const r of filteredRows) {
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       if (isNaN(depth)) continue;
       
@@ -614,9 +615,12 @@
   }
 
   function buildPoroChart() {
+    // Apply depth filter first
+    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    
     const rows: Array<Record<string, any>> = [];
     let i = 0;
-    for (const r of fullRows) {
+    for (const r of filteredRows) {
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       if (isNaN(depth)) continue;
       
@@ -641,25 +645,36 @@
     cporeData = extractCporeData();
   }
 
+  // Subscribe to workspace for depth filter changes
+  const unsubscribeWorkspace = workspace.subscribe((w) => {
+    if (w?.depthFilter) {
+      depthFilter = { ...w.depthFilter };
+    }
+  });
+  
+  onDestroy(() => {
+    unsubscribeWorkspace();
+  });
+
   // load data on mount or when well changes
   $: if (projectId && wellName) {
     loadWellData();
   }
 
-  // re-render Plotly when data or any input parameters change
+  // re-render Plotly when data or any input parameters change (including depth filter)
   $: if (plotDiv && (fullRows || drySandNphi !== undefined || drySandRhob !== undefined || 
                      dryClayNphi !== undefined || dryClayRhob !== undefined || 
                      drySiltNphi !== undefined || fluidNphi !== undefined || 
-                     fluidRhob !== undefined || siltLineAngle !== undefined)) {
+                     fluidRhob !== undefined || siltLineAngle !== undefined || depthFilter)) {
     // call async render but don't await in reactive context
     renderNdPlot();
   }
 
-  // render Plotly lithology/porosity when data changes
-  $: if (lithoPlotDiv && lithoChartData) {
+  // render Plotly lithology/porosity when data changes (including depth filter)
+  $: if (lithoPlotDiv && (lithoChartData || depthFilter)) {
     renderLithoPlot();
   }
-  $: if (poroPlotDiv && (poroChartData || cporeData)) {
+  $: if (poroPlotDiv && (poroChartData || cporeData || depthFilter)) {
     renderPoroPlot();
   }
 </script>
@@ -668,6 +683,8 @@
   <div class="mb-2">
     <div class="text-sm mb-2">Tools for lithology and porosity estimations.</div>
   </div>
+  
+  <DepthFilterStatus />
 
   {#if wellName}
     <div class="bg-panel rounded p-3">

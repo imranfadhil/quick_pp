@@ -5,6 +5,8 @@
 
   import { browser } from '$app/environment';
   import { onDestroy } from 'svelte';
+  import { workspace } from '$lib/stores/workspace';
+  import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   let Plotly: any = null;
   let container: HTMLDivElement | null = null;
@@ -14,6 +16,13 @@
   let autoRefresh = false;
   let refreshInterval = 5000; // ms
   let _refreshTimer: number | null = null;
+  
+  // Depth filter state
+  let depthFilter: { enabled: boolean; minDepth: number | null; maxDepth: number | null } = {
+    enabled: false,
+    minDepth: null,
+    maxDepth: null,
+  };
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
@@ -31,7 +40,22 @@
     loading = true;
     error = null;
     try {
-      const url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/log`;
+      // Build URL with depth filter parameters
+      let url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/log`;
+      
+      // Add depth filter query parameters if enabled
+      const params = new URLSearchParams();
+      if (depthFilter.enabled) {
+        if (depthFilter.minDepth !== null) {
+          params.append('min_depth', String(depthFilter.minDepth));
+        }
+        if (depthFilter.maxDepth !== null) {
+          params.append('max_depth', String(depthFilter.maxDepth));
+        }
+      }
+      if (params.toString()) {
+        url += '?' + params.toString();
+      }
       const res = await fetch(url);
       if (!res.ok) throw new Error(await res.text());
       const fig = await res.json();
@@ -96,6 +120,21 @@
   }
 
   $: scheduleAutoRefresh();
+  
+  // Subscribe to workspace for depth filter changes
+  const unsubscribeWorkspace = workspace.subscribe((w) => {
+    if (w?.depthFilter) {
+      const newFilter = { ...w.depthFilter };
+      // Check if filter actually changed to avoid unnecessary re-renders
+      if (JSON.stringify(newFilter) !== JSON.stringify(depthFilter)) {
+        depthFilter = newFilter;
+        // Trigger re-render when depth filter changes
+        if (browser && projectId && wellName) {
+          loadAndRender();
+        }
+      }
+    }
+  });
 
   onMount(() => {
     // initial render handled by reactive statement above
@@ -103,6 +142,7 @@
 
   onDestroy(() => {
     try {
+      unsubscribeWorkspace();
       if (container && (container as any)._plotlyResizeObserver) {
         (container as any)._plotlyResizeObserver.disconnect();
         delete (container as any)._plotlyResizeObserver;
@@ -135,6 +175,7 @@
 </script>
 
 <div class="ws-well-plot">
+  <DepthFilterStatus />
   <div class="mb-2 flex items-center gap-2">
     <button class="btn px-3 py-1 text-sm bg-gray-800 text-white rounded" on:click={loadAndRender} aria-label="Refresh plot">Refresh</button>
     <label class="text-sm flex items-center gap-1">

@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import * as Card from '$lib/components/ui/card/index.js';
   import * as Chart from '$lib/components/ui/chart/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { renameColumn, convertPercentToFraction, applyRenameInColumns } from '$lib/utils/topBottomEdits';
+  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
+  import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   export let projectId: string | number;
   export let wellName: string;
@@ -38,6 +40,24 @@
   
   // Data profiling
   let dataProfile: Record<string, any> = {};
+  
+  // Depth filter state
+  let depthFilter: { enabled: boolean; minDepth: number | null; maxDepth: number | null } = {
+    enabled: false,
+    minDepth: null,
+    maxDepth: null,
+  };
+  
+  // Subscribe to workspace for depth filter changes
+  const unsubscribeWorkspace = workspace.subscribe((w) => {
+    if (w?.depthFilter) {
+      depthFilter = { ...w.depthFilter };
+    }
+  });
+  
+  onDestroy(() => {
+    unsubscribeWorkspace();
+  });
   let showDataProfile = false;
 
   // Simple edit UI state (modal-based)
@@ -464,6 +484,7 @@
     </div>
   </Card.Header>
   <Card.Content class="p-3">
+    <DepthFilterStatus />
     {#if loading}
       <div class="text-sm">Loading…</div>
     {:else}

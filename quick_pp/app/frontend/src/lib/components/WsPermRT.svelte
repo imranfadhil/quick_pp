@@ -1,11 +1,20 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { Button } from '$lib/components/ui/button/index.js';
+  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
+  import DepthFilterStatus from './DepthFilterStatus.svelte';
   
   export let projectId: number | string;
   export let wellName: string;
   
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
+  
+  // Depth filter state
+  let depthFilter: { enabled: boolean; minDepth: number | null; maxDepth: number | null } = {
+    enabled: false,
+    minDepth: null,
+    maxDepth: null,
+  };
   
   let loading = false;
   let error: string | null = null;
@@ -59,8 +68,11 @@
     const method = permMethods.find(m => m.value === selectedMethod);
     if (!method) return [];
     
+    // Apply depth filter first
+    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    
     const data: Array<Record<string, number>> = [];
-    for (const r of fullRows) {
+    for (const r of filteredRows) {
       const row: Record<string, number> = {};
       let hasAllData = true;
       
@@ -95,8 +107,11 @@
   }
   
   function extractCpermData() {
+    // Apply depth filter first
+    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    
     const data: Array<Record<string, any>> = [];
-    for (const r of fullRows) {
+    for (const r of filteredRows) {
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       const cperm = Number(r.cperm ?? r.CPERM ?? r.Cperm ?? r.KPERM ?? r.kperm ?? NaN);
       
@@ -303,10 +318,13 @@
   }
 
   function buildPermChart() {
+    // Apply depth filter first
+    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    
     const rows: Array<Record<string, any>> = [];
     let i = 0;
     
-    for (const r of fullRows) {
+    for (const r of filteredRows) {
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       if (isNaN(depth)) continue;
       
@@ -394,13 +412,24 @@
     }
   }
   
+  // Subscribe to workspace for depth filter changes
+  const unsubscribeWorkspace = workspace.subscribe((w) => {
+    if (w?.depthFilter) {
+      depthFilter = { ...w.depthFilter };
+    }
+  });
+  
+  onDestroy(() => {
+    unsubscribeWorkspace();
+  });
+  
   // Load data when well changes
   $: if (projectId && wellName) {
     loadWellData();
   }
 
-  // re-render Plotly when perm or core perm data changes
-  $: if (permPlotDiv && (permChartData || cpermData)) {
+  // re-render Plotly when perm or core perm data changes (including depth filter)
+  $: if (permPlotDiv && (permChartData || cpermData || depthFilter)) {
     renderPermPlot();
   }
 </script>
@@ -408,8 +437,10 @@
 <div class="ws-permeability">
   <div class="mb-2">
     <div class="font-semibold">Permeability & Rock Type</div>
-    <div class="text-sm text-muted">Permeability estimation and rock typing tools.</div>
+    <div class="text-sm text-muted-foreground">Permeability estimation and rock typing tools.</div>
   </div>
+  
+  <DepthFilterStatus />
 
   {#if wellName}
     <div class="bg-panel rounded p-3">
@@ -430,7 +461,7 @@
           </div>
         {:else}
           <div class="flex items-end">
-            <div class="text-xs text-muted">Requires: VCLAY, VSILT, PHIT</div>
+            <div class="text-xs text-muted-foreground">Requires: VCLAY, VSILT, PHIT</div>
           </div>
         {/if}
       </div>
@@ -441,7 +472,7 @@
 
       <div class="space-y-3">
         <div>
-          <div class="font-medium text-sm mb-1">Permeability (mD) - {permMethods.find(m => m.value === selectedMethod)?.label}</div>
+          <div class="font-medium text-sm mb-1">Permeability</div>
           <div class="bg-surface rounded p-2">
           <Button 
             class="btn btn-primary" 

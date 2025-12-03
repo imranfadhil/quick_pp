@@ -15,11 +15,25 @@ router = APIRouter(prefix="/plotter", tags=["Plotter"])
 @router.get(
     "/projects/{project_id}/wells/{well_name}/log", summary="Get well log Plotly JSON"
 )
-async def get_well_log(project_id: int, well_name: str):
+async def get_well_log(
+    project_id: int,
+    well_name: str,
+    min_depth: Optional[float] = None,
+    max_depth: Optional[float] = None,
+):
     """Return a Plotly figure JSON for the given project well.
 
     This endpoint expects the DB connector to be initialized via
     `/database/init` beforehand.
+
+    Args:
+        project_id: Project ID
+        well_name: Name of the well
+        min_depth: Optional minimum depth filter
+        max_depth: Optional maximum depth filter
+
+    Returns:
+        Plotly figure JSON with optional depth filtering applied
     """
     # reference the connector on the `database` module so updates via /database/init
     # are visible here (importing the value directly would capture the initial None)
@@ -40,6 +54,29 @@ async def get_well_log(project_id: int, well_name: str):
                 raise HTTPException(
                     status_code=404, detail=f"No data for well {well_name}"
                 )
+
+            # Apply depth filtering if parameters provided
+            if min_depth is not None or max_depth is not None:
+                depth_col = None
+                # Find depth column (try common naming conventions)
+                for col in ["depth", "DEPTH", "Depth", "TVDSS", "tvdss", "TVD", "tvd"]:
+                    if col in df.columns:
+                        depth_col = col
+                        break
+
+                if depth_col is not None:
+                    # Apply depth filter
+                    if min_depth is not None:
+                        df = df[df[depth_col] >= min_depth]
+                    if max_depth is not None:
+                        df = df[df[depth_col] <= max_depth]
+
+                    # Check if any data remains after filtering
+                    if df.empty:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"No data for well {well_name} in specified depth range",
+                        )
 
             fig = wl.plotly_log(df, well_name=well_name)
             # plotly Figure to JSON string

@@ -1,10 +1,20 @@
 <script lang="ts">
   import { Button } from '$lib/components/ui/button/index.js';
+  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
+  import { onDestroy } from 'svelte';
+  import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   export let projectId: number | string;
   export let wellName: string;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
+  
+  // Depth filter state
+  let depthFilter: { enabled: boolean; minDepth: number | null; maxDepth: number | null } = {
+    enabled: false,
+    minDepth: null,
+    maxDepth: null,
+  };
 
   // local state
   let measSystem: string = 'metric';
@@ -50,8 +60,11 @@
 
   // helper to extract tvdss from rows
   function extractTVDSSRows() {
+    // Apply depth filter first
+    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    
     const rows: Array<Record<string, any>> = [];
-    for (const r of fullRows) {
+    for (const r of filteredRows) {
       const tvd = r.tvdss ?? r.TVDSS ?? r.tvd ?? r.TVD ?? r.depth ?? r.DEPTH ?? NaN;
       const tvdNum = Number(tvd);
       if (!isNaN(tvdNum)) rows.push({ tvdss: tvdNum });
@@ -129,11 +142,14 @@
       error = 'Please compute Rw first';
       return;
     }
+    // Apply depth filter first
+    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    
     const rows: Array<Record<string, any>> = [];
     const depths: number[] = [];
-    // align rows: iterate through fullRows and match available rt/phit and corresponding rw by index
+    // align rows: iterate through filteredRows and match available rt/phit and corresponding rw by index
     let idx = 0;
-    for (const r of fullRows) {
+    for (const r of filteredRows) {
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       const rt = Number(r.rt ?? r.RT ?? r.Rt ?? r.res ?? r.RES ?? NaN);
       const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
@@ -178,8 +194,11 @@
     const bRows: Array<Record<string, any>> = [];
     const finalRows: Array<Record<string, any>> = [];
 
+    // Apply depth filter first
+    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    
     // build vcld/phit rows for qv
-    for (const r of fullRows) {
+    for (const r of filteredRows) {
       const vcld = Number(r.vcld ?? r.VCLD ?? r.vclay ?? r.VCLAY ?? NaN);
       const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
       if (!isNaN(vcld) && !isNaN(phit)) qvRows.push({ vcld, phit });
@@ -221,12 +240,12 @@
     }
 
     // Now assemble final rows for waxman_smits: need rt, rw, phit, qv, b, m
-    // We'll iterate through fullRows and pick values where rt/phit exist and map qv/b by order
+    // We'll iterate through filteredRows and pick values where rt/phit exist and map qv/b by order
     let qi = 0; // index into qvList
     let bi = 0; // index into bList
     let ri = 0; // index into rwResults/tempGradResults
     const depthsFinal: number[] = [];
-    for (const r of fullRows) {
+    for (const r of filteredRows) {
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       const rt = Number(r.rt ?? r.RT ?? r.res ?? r.RES ?? NaN);
       const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
@@ -307,8 +326,8 @@
     }
   }
 
-  // render when chart data or container changes
-  $: if (satPlotDiv && (archieChartData?.length > 0 || waxmanChartData?.length > 0)) {
+  // render when chart data or container changes (including depth filter)
+  $: if (satPlotDiv && (archieChartData?.length > 0 || waxmanChartData?.length > 0 || depthFilter)) {
     // don't await in reactive context
     renderSatPlot();
   }
@@ -380,6 +399,17 @@
     return { count, mean, min, max, median, std };
   }
 
+  // Subscribe to workspace for depth filter changes
+  const unsubscribeWorkspace = workspace.subscribe((w) => {
+    if (w?.depthFilter) {
+      depthFilter = { ...w.depthFilter };
+    }
+  });
+  
+  onDestroy(() => {
+    unsubscribeWorkspace();
+  });
+
   $: if (projectId && wellName) loadWellData();
 </script>
 
@@ -388,6 +418,8 @@
     <div class="font-semibold">Water Saturation</div>
     <div class="text-sm text-muted-foreground">Water saturation calculations and displays.</div>
   </div>
+  
+  <DepthFilterStatus />
 
   {#if wellName}
     <div class="bg-panel rounded p-3">
