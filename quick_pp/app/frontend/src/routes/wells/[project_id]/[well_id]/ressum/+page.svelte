@@ -1,6 +1,5 @@
 <script lang="ts">
   import WsReservoirSummary from '$lib/components/WsReservoirSummary.svelte';
-  import WsWellPlot from '$lib/components/WsWellPlot.svelte';
   import ProjectWorkspace from '$lib/components/ProjectWorkspace.svelte';
   import { onDestroy } from 'svelte';
   import { workspace } from '$lib/stores/workspace';
@@ -22,7 +21,4 @@
   <div slot="left">
     <WsReservoirSummary projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
   </div>
-  {#if selectedWell}
-    <WsWellPlot projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
-  {/if}
 </ProjectWorkspace>

@@ -1,6 +1,5 @@
 <script lang="ts">
   import WsSaturation from '$lib/components/WsSaturation.svelte';
-  import WsWellPlot from '$lib/components/WsWellPlot.svelte';
   import ProjectWorkspace from '$lib/components/ProjectWorkspace.svelte';
   import { onDestroy } from 'svelte';
   import { workspace } from '$lib/stores/workspace';
@@ -22,7 +21,4 @@
   <div slot="left">
     <WsSaturation projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
   </div>
-  {#if selectedWell}
-    <WsWellPlot projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
-  {/if}
 </ProjectWorkspace>

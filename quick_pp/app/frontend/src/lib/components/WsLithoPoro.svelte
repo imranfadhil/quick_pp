@@ -149,8 +149,8 @@
       height: 220,
       margin: { l: 60, r: 20, t: 20, b: 40 },
       dragmode: 'zoom',
-      xaxis: { title: 'Depth', tickformat: ',.0f', fixedrange: false },
-      yaxis: { title: 'Porosity (fraction)', range: [0,1], tickformat: '.2f', fixedrange: true },
+      xaxis: { title: 'Depth', tickformat: ',.0f' },
+      yaxis: { title: 'Porosity (fraction)', range: [0,1], tickformat: '.2f' },
       showlegend: false
     };
 
@@ -530,7 +530,7 @@
           <div>
             <div class="font-medium text-sm mb-1">NPHI - RHOB Crossplot</div>
             <div class="bg-surface rounded p-2">
-              <div bind:this={plotDiv} class="w-full h-[360px]"></div>
+              <div bind:this={plotDiv} class="w-full max-w-[600px] h-[500px] mx-auto"></div>
             </div>
           </div>
 

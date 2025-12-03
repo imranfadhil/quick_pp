@@ -1,6 +1,5 @@
 <script lang="ts">
   import WsLithoPoro from '$lib/components/WsLithoPoro.svelte';
-  import WsWellPlot from '$lib/components/WsWellPlot.svelte';
   import ProjectWorkspace from '$lib/components/ProjectWorkspace.svelte';
   import { onDestroy } from 'svelte';
   import { workspace } from '$lib/stores/workspace';
@@ -21,7 +20,4 @@
   <div slot="left">
     <WsLithoPoro projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
   </div>
-  {#if selectedWell}
-    <WsWellPlot projectId={selectedProject?.project_id ?? ''} wellName={selectedWell.name ?? ''} />
-  {/if}
 </ProjectWorkspace>

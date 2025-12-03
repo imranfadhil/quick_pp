@@ -9,6 +9,7 @@
   import { onDestroy } from 'svelte';
   import { slide } from 'svelte/transition';
   import { workspace } from '$lib/stores/workspace';
+  import { goto } from '$app/navigation';
   import type { Project, Well } from '$lib/types';
 
   let selectedProject: Project | null = null;
@@ -28,14 +29,16 @@
   onDestroy(() => unsubscribe());
 </script>
 
-<ProjectWorkspace {selectedWell} project={selectedProject}>
-  <div slot="left">
-    {#if selectedWell}
-      <div class="mb-3">
-        <div class="font-semibold">{selectedWell.name}</div>
-        <div class="text-sm text-muted">UWI: {selectedWell.uwi}</div>
-      </div>
-      <div class="space-y-4">
+{#if selectedProject}
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="col-span-1">
+      <div class="bg-panel rounded p-4">
+        {#if selectedWell}
+          <div class="mb-3">
+            <div class="font-semibold">{selectedWell.name}</div>
+            <div class="text-sm text-muted">UWI: {selectedWell.uwi}</div>
+          </div>
+          <div class="space-y-4">
         <div class="accordion-item bg-surface rounded">
           <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showTops = !showTops)} aria-expanded={showTops}>
             <div class="font-medium">Formation Tops</div>
@@ -99,11 +102,36 @@
             </div>
           {/if}
         </div>
+          </div>
+        {:else}
+          <div class="text-center py-12">
+            <div class="font-semibold">No well selected</div>
+            <div class="text-sm text-muted mt-2">Select a well to view its data.</div>
+          </div>
+        {/if}
       </div>
-    {/if}
+    </div>
+    <div class="col-span-2">
+      {#if selectedWell}
+        <div class="bg-panel rounded p-4 min-h-[300px]">
+          <WsWellStats projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
+        </div>
+      {:else}
+        <div class="bg-panel rounded p-4 min-h-[300px]">
+          <div class="text-center py-12">
+            <div class="font-semibold">No well selected</div>
+            <div class="text-sm text-muted mt-2">Select a well to view its data.</div>
+          </div>
+        </div>
+      {/if}
+    </div>
   </div>
-
-  {#if selectedWell}
-    <WsWellStats projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
-  {/if}
-</ProjectWorkspace>
+{:else}
+  <div class="bg-panel rounded p-6 text-center">
+    <div class="font-semibold">No project selected</div>
+    <div class="text-sm text-muted mt-2">Select a project in the Projects workspace to begin.</div>
+    <div class="mt-4">
+      <button class="btn btn-primary" on:click={() => goto('/projects')}>Open Projects</button>
+    </div>
+  </div>
+{/if}
