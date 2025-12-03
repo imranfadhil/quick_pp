@@ -85,7 +85,7 @@ def _to_dataframe(data, columns=None):
             'fluid_point': [1.0, 1.0],
             'wet_clay_point': [0.5, 2.2],
             'method': 'default',
-            'silt_line_angle': 35.0,
+            'silt_line_angle': 119.0,
             'data': [{'nphi': 0.25, 'rhob': 2.45}, ... ]
         }
         """

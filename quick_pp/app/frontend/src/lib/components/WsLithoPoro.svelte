@@ -5,7 +5,6 @@
   export let wellName: string;
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
-  let notes = '';
   let loading = false;
   let error: string | null = null;
   // save state
@@ -22,6 +21,9 @@
   let fluidNphi = 1.0;
   let fluidRhob = 1.0;
   let siltLineAngle = 119;
+  
+  // Calculate drySiltNphi based on siltLineAngle
+  $: drySiltNphi = 1 - 1.68 * Math.tan((siltLineAngle - 90) * Math.PI / 180);
 
   let fullRows: Array<Record<string, any>> = [];
   let lithoResults: Array<Record<string, any>> = [];
@@ -47,42 +49,224 @@
     return Plotly;
   }
 
+  // Helper function to calculate line intersection (ported from Python utils)
+  function lineIntersection(line1: [number[], number[]], line2: [number[], number[]]): [number, number] | null {
+    const [[x1, y1], [x2, y2]] = line1;
+    const [[x3, y3], [x4, y4]] = line2;
+    
+    const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if (Math.abs(denom) < 1e-10) return null; // Lines are parallel
+    
+    const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+    const u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
+    
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+      return [x1 + t * (x2 - x1), y1 + t * (y2 - y1)];
+    }
+    
+    // Return intersection even if outside line segments (for infinite lines)
+    return [x1 + t * (x2 - x1), y1 + t * (y2 - y1)];
+  }
+
   async function renderNdPlot() {
     if (!plotDiv) return;
     const plt = await ensurePlotly();
 
-    // If projectId/wellName available, prefer server-generated Plotly JSON
-    if (projectId && wellName) {
-      try {
-        const payload = {
-          dry_min1_point: [Number(drySandNphi), Number(drySandRhob)],
-          dry_clay_point: [Number(dryClayNphi), Number(dryClayRhob)],
-          fluid_point: [Number(fluidNphi), Number(fluidRhob)],
-        };
+    // Define key points (matching Python variable names)
+    const A = [Number(drySandNphi), Number(drySandRhob)]; // dry_min1_point (mineral)
+    const C = [Number(dryClayNphi), Number(dryClayRhob)]; // dry_clay_point
+    const D = [Number(fluidNphi), Number(fluidRhob)]; // fluid_point
+    const B = [Number(drySiltNphi), 2.68]; // dry_silt_point
 
-        const url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/ndx`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const fig = await res.json();
+    const traces: any[] = [];
+    let wellData: Array<{nphi: number; rhob: number}> = [];
+    let projectedPoints: Array<[number, number]> = [];
 
-        // fig should be a Plotly figure object with `data` and `layout` keys
-        if (fig && fig.data && fig.layout) {
-          try {
-            plt.react(plotDiv, fig.data, fig.layout, { responsive: true });
-            return;
-          } catch (e) {
-            plt.newPlot(plotDiv, fig.data, fig.layout, { responsive: true });
-            return;
+    // Extract well data and compute projected points if available
+    if (fullRows && fullRows.length > 0) {
+      wellData = extractNphiRhob();
+      
+      // Compute projected points (intersection of mineral-clay line with fluid->point lines)
+      if (wellData.length > 0) {
+        for (let i = 0; i < wellData.length; i++) {
+          const E = [wellData[i].nphi, wellData[i].rhob];
+          const intersection = lineIntersection([A, C], [D, E]);
+          if (intersection) {
+            projectedPoints.push(intersection);
           }
         }
-      } catch (err: any) {
-        console.warn('ND endpoint failed, falling back to client plot:', err);
-        // fall through to client-side render below
       }
+    }
+
+    // Data points colored by index (for depth ordering or sequence) - matches Python implementation
+    if (wellData.length > 0) {
+      traces.push({
+        x: wellData.map(d => d.nphi),
+        y: wellData.map(d => d.rhob),
+        mode: 'markers',
+        type: 'scatter',
+        name: 'Data',
+        marker: {
+          color: Array.from({length: wellData.length}, (_, i) => i), // Rainbow color by index
+          colorscale: 'Rainbow',
+          showscale: false,
+          size: 6
+        },
+        hovertemplate: 'NPHI: %{x}<br>RHOB: %{y}<extra></extra>'
+      });
+    }
+
+    // Mineral 1 Line (D -> A) - blue line from fluid to mineral point
+    traces.push({
+      x: [D[0], A[0]],
+      y: [D[1], A[1]],
+      mode: 'lines',
+      type: 'scatter',
+      name: 'Mineral 1 Line',
+      line: { color: 'blue', width: 2 },
+      showlegend: true
+    });
+
+    // Clay Line (D -> C) - gray line from fluid to clay point
+    traces.push({
+      x: [D[0], C[0]],
+      y: [D[1], C[1]],
+      mode: 'lines',
+      type: 'scatter',
+      name: 'Clay Line',
+      line: { color: 'gray', width: 2 },
+      showlegend: true
+    });
+
+    // Rock Line (A -> C) - black line from mineral to clay (matrix line)
+    traces.push({
+      x: [A[0], C[0]],
+      y: [A[1], C[1]],
+      mode: 'lines',
+      type: 'scatter',
+      name: 'Rock Line',
+      line: { color: 'black', width: 2 },
+      showlegend: true
+    });
+
+    // Silt Line (D -> B) - green line from fluid to silt point
+    traces.push({
+      x: [D[0], B[0]],
+      y: [D[1], B[1]],
+      mode: 'lines',
+      type: 'scatter',
+      name: 'Silt Line',
+      line: { color: 'green', width: 2 },
+      showlegend: true
+    });
+
+    // Projected points - purple markers showing intersection points
+    if (projectedPoints.length > 0) {
+      traces.push({
+        x: projectedPoints.map(p => p[0]),
+        y: projectedPoints.map(p => p[1]),
+        mode: 'markers',
+        type: 'scatter',
+        name: 'Projected Point',
+        marker: {
+          color: 'purple',
+          size: 4
+        },
+        showlegend: true
+      });
+    }
+
+    // Key markers matching Python colors and sizes exactly
+    // Mineral Point (yellow, size 9)
+    traces.push({
+      x: [A[0]],
+      y: [A[1]],
+      mode: 'markers',
+      type: 'scatter',
+      name: `Mineral Point (${A[0]}, ${A[1]})`,
+      marker: {
+        color: 'yellow',
+        size: 9,
+        line: { color: 'black', width: 1 }
+      },
+      showlegend: true
+    });
+
+    // Dry Clay Point (black, size 9)
+    traces.push({
+      x: [C[0]],
+      y: [C[1]],
+      mode: 'markers',
+      type: 'scatter',
+      name: `Dry Clay (${C[0]}, ${C[1]})`,
+      marker: {
+        color: 'black',
+        size: 9
+      },
+      showlegend: true
+    });
+
+    // Dry Silt Point (orange, size 8)
+    traces.push({
+      x: [B[0]],
+      y: [B[1]],
+      mode: 'markers',
+      type: 'scatter',
+      name: 'Dry Silt Point',
+      marker: {
+        color: 'orange',
+        size: 8
+      },
+      showlegend: true
+    });
+
+    // Fluid Point (blue, size 9)
+    traces.push({
+      x: [D[0]],
+      y: [D[1]],
+      mode: 'markers',
+      type: 'scatter',
+      name: `Fluid (${D[0]}, ${D[1]})`,
+      marker: {
+        color: 'blue',
+        size: 9
+      },
+      showlegend: true
+    });
+
+    // Layout matching Python implementation exactly
+    const layout = {
+      title: 'NPHI-RHOB Crossplot',
+      xaxis: {
+        title: 'NPHI',
+        range: [-0.10, 1.0], // Matches Python range
+        tickformat: '.2f'
+      },
+      yaxis: {
+        title: 'RHOB',
+        autorange: false,
+        range: [3.0, 0.0], // Inverted Y-axis like Python (depth-style)
+        tickformat: '.2f'
+      },
+      legend: {
+        orientation: 'v',
+        yanchor: 'top',
+        y: 0.99,
+        xanchor: 'left',
+        x: 0.01,
+        bgcolor: 'rgba(255,255,255,0.8)'
+      },
+      template: 'plotly_white',
+      margin: { l: 40, r: 10, t: 40, b: 40 },
+      height: 500,
+      autosize: true, // Responsive
+      hovermode: 'closest'
+    };
+
+    try {
+      plt.react(plotDiv, traces, layout, { responsive: true });
+    } catch (e) {
+      plt.newPlot(plotDiv, traces, layout, { responsive: true });
     }
   }
 
@@ -462,14 +646,12 @@
     loadWellData();
   }
 
-  // re-render Plotly when data or key inputs change
-  $: if (fullRows && plotDiv) {
+  // re-render Plotly when data or any input parameters change
+  $: if (plotDiv && (fullRows || drySandNphi !== undefined || drySandRhob !== undefined || 
+                     dryClayNphi !== undefined || dryClayRhob !== undefined || 
+                     drySiltNphi !== undefined || fluidNphi !== undefined || 
+                     fluidRhob !== undefined || siltLineAngle !== undefined)) {
     // call async render but don't await in reactive context
-    renderNdPlot();
-  }
-
-  // re-render when endpoint parameters change
-  $: if (plotDiv && (drySandNphi || drySandRhob || fluidNphi || fluidRhob)) {
     renderNdPlot();
   }
 
