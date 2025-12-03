@@ -26,14 +26,14 @@ logger = logging.getLogger("api.services.permeability")
         """
         Estimate permeability using the Choo empirical model.
 
-        Requires volume of clay (vcld), volume of silt (vsilt), and total porosity (phit) measurements.
+        Requires volume of clay (vclay), volume of silt (vsilt), and total porosity (phit) measurements.
 
         Input model: PermChInputData (see quick_pp.app.backend.schemas.permeability_choo.InputData).
 
         Request body must be a JSON object with the following field:
-        - data: list of objects, each with keys 'vcld', 'vsilt', 'phit' (all float, required)
+        - data: list of objects, each with keys 'vclay', 'vsilt', 'phit' (all float, required)
         
-        Example (truncated): { 'data': [ {'vcld': 0.25, 'vsilt': 0.10, 'phit': 0.18}, ... ] }
+        Example (truncated): { 'data': [ {'vclay': 0.25, 'vsilt': 0.10, 'phit': 0.18}, ... ] }
         """
     ),
     operation_id="estimate_choo_permeability",
@@ -42,13 +42,13 @@ async def estimate_perm_choo(inputs: PermChInputData) -> List[Dict[str, float]]:
     """
     Estimate permeability using the Choo empirical model.
 
-    This endpoint receives input data for multiple samples, including volume of clay (vcld),
+    This endpoint receives input data for multiple samples, including volume of clay (vclay),
     volume of silt (vsilt), and total porosity (phit), and computes the permeability for each
     sample using the Choo permeability correlation.
 
     Args:
         inputs (PermChInputData): Pydantic model containing a list of input records under the
-            'data' key. Each record must include 'vcld', 'vsilt', and 'phit' fields.
+            'data' key. Each record must include 'vclay', 'vsilt', and 'phit' fields.
     Returns:
         List[Dict[str, float]]: A list of dictionaries, each containing the estimated permeability
         ('PERM') for the corresponding input sample.

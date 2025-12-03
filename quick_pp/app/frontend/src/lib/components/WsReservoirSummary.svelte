@@ -69,15 +69,35 @@
         destroy: true,
         paging: true,
         searching: true,
-        // show Buttons + DataTables' global search box and table controls
-        dom: 'Bfrtip',
+        // show Buttons + length menu + DataTables' global search box and table controls
+        dom: 'Blfrtip',
         buttons: [
           { extend: 'csv', text: 'Export CSV' },
           { extend: 'colvis', text: 'Columns' }
         ],
+        // Enable length menu for rows per page selection
+        lengthMenu: [
+          [10, 25, 50, -1],
+          [10, 25, 50, 'All']
+        ],
+        pageLength: 10, // Default rows per page
         info: true,
         responsive: true,
         autoWidth: false,
+        // Enable row striping for better visibility
+        stripeClasses: ['odd', 'even'],
+        // Add row callback for custom styling
+        rowCallback: function(row: any, data: any, index: number) {
+          // Add alternating row classes for better visual distinction
+          if (index % 2 === 0) {
+            jQuery(row).addClass('even-row');
+          } else {
+            jQuery(row).addClass('odd-row');
+          }
+          // Add hover effect class
+          jQuery(row).addClass('hoverable-row');
+          return row;
+        }
       });
 
       // Attach per-column filter handlers: inputs are rendered in the second header row
@@ -212,6 +232,46 @@
 
   $: if (projectId && wellName) loadWellData();
 </script>
+
+<style>
+  /* Enhanced DataTables row styling for better visibility */
+  :global(.ws-reservoir-summary table.dataTable) {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+  
+  /* Banded row styling */
+  :global(.ws-reservoir-summary table.dataTable tbody tr.even-row) {
+    background-color: #f8f9fa;
+  }
+  
+  :global(.ws-reservoir-summary table.dataTable tbody tr.odd-row) {
+    background-color: #ffffff;
+  }
+  
+  /* Hover effects for better interaction */
+  :global(.ws-reservoir-summary table.dataTable tbody tr.hoverable-row:hover) {
+    background-color: #e3f2fd !important;
+    cursor: pointer;
+  }
+  
+  /* Ensure header styling remains clean */
+  :global(.ws-reservoir-summary table.dataTable thead th) {
+    background-color: #f1f5f9;
+    border-bottom: 2px solid #e2e8f0;
+  }
+  
+  /* Cell padding for better readability */
+  :global(.ws-reservoir-summary table.dataTable tbody td) {
+    padding: 8px 12px;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  
+  /* Selected row styling (if using row selection) */
+  :global(.ws-reservoir-summary table.dataTable tbody tr.selected) {
+    background-color: #dbeafe !important;
+  }
+</style>
 
 <div class="ws-reservoir-summary">
   <div class="mb-2">
