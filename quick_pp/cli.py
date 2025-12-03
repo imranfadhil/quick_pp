@@ -26,6 +26,7 @@ except metadata.PackageNotFoundError:
 BACKEND_HOST = "localhost"
 BACKEND_PORT = 6312
 FRONTEND_DIR = Path(__file__).parent / "app" / "frontend"
+DOCKER_DIR = Path(__file__).parent / "app" / "docker"
 
 
 def is_server_running(host, port):
@@ -75,17 +76,41 @@ def backend(debug, no_open):
     This launches a Uvicorn server to run the FastAPI backend and the associated qpp assistant module.
     The --debug flag enables auto-reload for development."""
     if not is_server_running(BACKEND_HOST, BACKEND_PORT):
-        reload_ = "--reload" if debug else ""
-        cmd = f"uvicorn quick_pp.app.backend.main:app --host 0.0.0.0 --port {BACKEND_PORT} {reload_}"
+        reload_flag = "--reload" if debug else ""
+        cmd = f"uvicorn quick_pp.app.backend.main:app --host 0.0.0.0 --port {BACKEND_PORT} {reload_flag}"
         click.echo(f"App is not running. Starting it now... | {cmd}")
-        process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
-        # Open browser to backend URL after starting (default)
+
         try:
-            if not no_open:
+            process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
+            # Open browser to backend URL after starting (default)
+            try:
+                if not no_open:
+                    webbrowser.open(f"http://{BACKEND_HOST}:{BACKEND_PORT}")
+            except Exception as e:
+                click.echo(f"Failed to open browser: {e}")
+
+            # Wait for the process and handle exit codes
+            exit_code = process.wait()
+            if exit_code != 0:
+                click.echo(f"Backend process exited with code: {exit_code}")
+                sys.exit(exit_code)
+
+        except KeyboardInterrupt:
+            click.echo("Shutting down backend server...")
+            try:
+                process.terminate()
+            except Exception:
+                pass
+        except Exception as e:
+            click.echo(f"Failed to start backend server: {e}")
+            sys.exit(1)
+    else:
+        click.echo(f"Backend is already running on {BACKEND_HOST}:{BACKEND_PORT}")
+        if not no_open:
+            try:
                 webbrowser.open(f"http://{BACKEND_HOST}:{BACKEND_PORT}")
-        except Exception:
-            pass
-        process.wait()
+            except Exception as e:
+                click.echo(f"Failed to open browser: {e}")
 
 
 @click.command()
@@ -95,7 +120,13 @@ def backend(debug, no_open):
     default=False,
     help="Do not open browser after starting frontend",
 )
-def frontend(no_open):
+@click.option(
+    "--force-install",
+    is_flag=True,
+    default=False,
+    help="Force npm install to run even if node_modules exists",
+)
+def frontend(no_open, force_install):
     """Start the quick_pp frontend development server.
 
     This launches the SvelteKit development server for the frontend application."""
@@ -105,11 +136,16 @@ def frontend(no_open):
         click.echo(f"Error: Frontend directory not found at {frontend_dir}")
         return
 
-    # Check if node_modules exists, if not suggest installing dependencies
-    if not (frontend_dir / "node_modules").exists():
-        click.echo(
-            "Warning: node_modules not found. Attempting to run 'npm install' now..."
-        )
+    # Check if we need to run npm install
+    should_install = force_install or not (frontend_dir / "node_modules").exists()
+
+    if should_install:
+        if force_install:
+            click.echo("Force install requested. Running 'npm install'...")
+        else:
+            click.echo(
+                "Warning: node_modules not found. Attempting to run 'npm install' now..."
+            )
         try:
             install_cmd = "npm install"
             click.echo(f"Running: (in {frontend_dir}) {install_cmd}")
@@ -156,7 +192,13 @@ def frontend(no_open):
     default=False,
     help="Do not open browser after starting services",
 )
-def app(debug, no_open):
+@click.option(
+    "--force-install",
+    is_flag=True,
+    default=False,
+    help="Force npm install to run even if node_modules exists",
+)
+def app(debug, no_open, force_install):
     """Start both backend and frontend development servers.
 
     This command will start the backend (uvicorn) on port 6312 and the
@@ -182,10 +224,18 @@ def app(debug, no_open):
         if not frontend_dir.exists():
             click.echo(f"Frontend directory not found at {frontend_dir}")
         else:
-            if not (frontend_dir / "node_modules").exists():
-                click.echo(
-                    "Warning: node_modules not found. Attempting to run 'npm install' now..."
-                )
+            # Check if we need to run npm install
+            should_install = (
+                force_install or not (frontend_dir / "node_modules").exists()
+            )
+
+            if should_install:
+                if force_install:
+                    click.echo("Force install requested. Running 'npm install'...")
+                else:
+                    click.echo(
+                        "Warning: node_modules not found. Attempting to run 'npm install' now..."
+                    )
                 try:
                     install_cmd = "npm install"
                     click.echo(f"Running: (in {frontend_dir}) {install_cmd}")
@@ -360,6 +410,133 @@ def predict(model_config, data_hash, output_file_name, env, plot):
     predict_pipeline(model_config, data_hash, output_file_name, env, plot)
 
 
+@click.command()
+@click.argument(
+    "action", type=click.Choice(["up", "down", "build", "logs", "ps", "restart"])
+)
+@click.option(
+    "--detach",
+    "-d",
+    is_flag=True,
+    default=False,
+    help="Run in detached mode (background)",
+)
+@click.option(
+    "--build",
+    is_flag=True,
+    default=False,
+    help="Build images before starting containers",
+)
+@click.option(
+    "--profile",
+    multiple=True,
+    help="Enable specific profiles (e.g., --profile langflow)",
+)
+@click.option(
+    "--service",
+    help="Target specific service (postgres, qpp-backend, qpp-frontend, langflow)",
+)
+@click.option(
+    "--follow",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Follow log output (for logs command)",
+)
+def docker(action, detach, build, profile, service, follow):
+    """Manage Docker services using docker-compose.
+
+    ACTIONS:
+    \b
+    up      - Start services
+    down    - Stop and remove services
+    build   - Build or rebuild services
+    logs    - View service logs
+    ps      - List running services
+    restart - Restart services
+
+    EXAMPLES:
+    \b
+    quick-pp docker up -d                    # Start all services in background
+    quick-pp docker up --profile langflow    # Start with Langflow enabled
+    quick-pp docker logs --service postgres  # View postgres logs
+    quick-pp docker logs -f                  # Follow all logs
+    quick-pp docker down                     # Stop all services
+    """
+    docker_dir = DOCKER_DIR
+
+    if not docker_dir.exists():
+        click.echo(f"Error: Docker directory not found at {docker_dir}")
+        return
+
+    if not (docker_dir / "docker-compose.yaml").exists():
+        click.echo(f"Error: docker-compose.yaml not found in {docker_dir}")
+        return
+
+    # Build the docker-compose command
+    cmd_parts = ["docker-compose"]
+
+    # Add profile options
+    for prof in profile:
+        cmd_parts.extend(["--profile", prof])
+
+    # Add the action
+    cmd_parts.append(action)
+
+    # Add action-specific flags
+    if action == "up":
+        if detach:
+            cmd_parts.append("-d")
+        if build:
+            cmd_parts.append("--build")
+    elif action == "logs":
+        if follow:
+            cmd_parts.append("-f")
+
+    # Add service-specific targeting
+    if service and action in ["up", "down", "logs", "restart", "build"]:
+        cmd_parts.append(service)
+
+    # Join command parts
+    cmd = " ".join(cmd_parts)
+
+    click.echo(f"Running: (in {docker_dir}) {cmd}")
+
+    try:
+        process = Popen(
+            cmd,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+            shell=True,
+            cwd=str(docker_dir),
+        )
+
+        if action == "up" and not detach:
+            try:
+                process.wait()
+            except KeyboardInterrupt:
+                click.echo("\nShutting down services...")
+                # Run docker-compose down to gracefully stop services
+                down_cmd = "docker-compose down"
+                down_process = Popen(
+                    down_cmd,
+                    stdout=sys.stdout,
+                    stderr=sys.stderr,
+                    shell=True,
+                    cwd=str(docker_dir),
+                )
+                down_process.wait()
+        else:
+            exit_code = process.wait()
+            if exit_code != 0:
+                click.echo(f"Docker command exited with code: {exit_code}")
+                sys.exit(exit_code)
+
+    except Exception as e:
+        click.echo(f"Failed to run docker command: {e}")
+        sys.exit(1)
+
+
 # Add commands to the CLI group
 cli.add_command(backend)
 cli.add_command(mlflow_server)
@@ -368,6 +545,7 @@ cli.add_command(train)
 cli.add_command(predict)
 cli.add_command(frontend)
 cli.add_command(app)
+cli.add_command(docker)
 
 
 if __name__ == "__main__":
