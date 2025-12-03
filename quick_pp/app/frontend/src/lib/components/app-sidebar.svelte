@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Import icons from Tabler Icons Svelte
-	import { IconTextWrapDisabled, IconWall, IconWashTemperature6, IconTable, IconMapSearch, IconTrendingUp } from '@tabler/icons-svelte';
+	import { IconTextWrapDisabled, IconWall, IconWashTemperature6, IconTable, IconMapSearch } from '@tabler/icons-svelte';
 	import DatabaseIcon from "@tabler/icons-svelte/icons/database";
 	import FileWordIcon from "@tabler/icons-svelte/icons/file-word";
 	import HelpIcon from "@tabler/icons-svelte/icons/help";
@@ -8,6 +8,9 @@
 	import ReportIcon from "@tabler/icons-svelte/icons/report";
 	import SearchIcon from "@tabler/icons-svelte/icons/search";
 	import SettingsIcon from "@tabler/icons-svelte/icons/settings";
+
+	// Import logo
+	import logo from "$lib/assets/logo.png";
 
 	// Import custom navigation components
 	import NavProject from "./nav-project.svelte";
@@ -21,8 +24,8 @@
 	const data = {
 		user: {
 			name: "quick-pp",
-			email: "m@example.com",
-			avatar: "/avatars/shadcn.jpg",
+			email: "admin@quick-pp.com",
+			avatar: logo,
 		},
 		navProject: [
 			{
@@ -104,7 +107,7 @@
 				<Sidebar.MenuButton class="data-[slot=sidebar-menu-button]:!p-1.5">
 					{#snippet child({ props })}
 						<a href="##" {...props}>
-							<IconTrendingUp class="!size-5" />
+							<img src={logo} alt="quick-pp logo" class="!size-7" />
 							<span class="text-base font-semibold">quick-pp</span>
 						</a>
 					{/snippet}
@@ -113,9 +116,16 @@
 		</Sidebar.Menu>
 	</Sidebar.Header>
 	<Sidebar.Content>
-		<NavProject items={data.navProject} />
-		<NavWell items={data.navWell} />
-		<NavReporting items={data.navReporting} />
+		
+		<div class="px-2 py-2 border-t border-border/50 mt-2">
+			<NavProject items={data.navProject} />
+		</div>
+		<div class="px-2 py-2 border-t border-border/50 mt-2">
+			<NavWell items={data.navWell} />
+		</div>
+		<div class="px-2 py-2 border-t border-border/50 mt-2">
+			<NavReporting items={data.navReporting} />
+		</div>
 		<NavSecondary items={data.navSecondary} class="mt-auto" />
 	</Sidebar.Content>
 	<Sidebar.Footer>

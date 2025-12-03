@@ -31,6 +31,7 @@
   let fluidNphi = 1.0;
   let fluidRhob = 1.0;
   let siltLineAngle = 117;
+  let depthMatching = false; // Disable depth matching for CPORE by default (use same axis)
   
   // Calculate drySiltNphi based on siltLineAngle
   $: drySiltNphi = 1 - 1.68 * Math.tan((siltLineAngle - 90) * Math.PI / 180);
@@ -333,19 +334,35 @@
     if (poroPoints && poroPoints.length > 0) {
       const x = poroPoints.map(p => p.x);
       const y = poroPoints.map(p => p.y);
-      traces.push({ x, y, name: 'PHIT', mode: 'lines', line: { color: '#2563eb', width: 2 }, fill: 'tozeroy', fillcolor: 'rgba(37,99,235,0.3)' });
+      traces.push({ x, y, name: 'PHIT', mode: 'lines', line: { color: '#2563eb', width: 2 }, fill: 'tozeroy', fillcolor: 'rgba(37,99,235,0.3)', xaxis: 'x', yaxis: 'y' });
     }
     if (cporePoints && cporePoints.length > 0) {
-      traces.push({ x: cporePoints.map(p => p.x), y: cporePoints.map(p => p.y), name: 'CPORE', mode: 'markers', marker: { color: '#dc2626', size: 8, line: { color: 'white', width: 1 } } });
+      traces.push({ x: cporePoints.map(p => p.x), y: cporePoints.map(p => p.y), name: 'CPORE', mode: 'markers', marker: { color: '#dc2626', size: 8, line: { color: 'white', width: 1 } }, xaxis: depthMatching ? 'x2' : 'x', yaxis: 'y' });
     }
 
     const layout = {
       height: 220,
-      margin: { l: 60, r: 20, t: 20, b: 40 },
+      margin: { l: 60, r: 20, t: 50, b: 40 },
       dragmode: 'zoom',
-      xaxis: { title: 'Depth', tickformat: ',.0f' },
-      yaxis: { title: 'Porosity (fraction)', range: [0,1], tickformat: '.2f', fixedrange: true },
-      showlegend: false
+      xaxis: { 
+        title: 'Log Depth', 
+        titlefont: { color: '#2563eb' },
+        tickfont: { color: '#2563eb' },
+        tickformat: ',.0f',
+        side: 'bottom'
+      },
+      xaxis2: {
+        title: 'Core Depth',
+        titlefont: { color: '#dc2626' },
+        tickfont: { color: '#dc2626' },
+        tickformat: ',.0f',
+        overlaying: 'x',
+        side: 'top',
+        fixedrange: depthMatching
+      },
+      yaxis: { title: 'Porosity (fraction)', range: [0,.5], tickformat: '.2f', fixedrange: true },
+      showlegend: true,
+      legend: { x: 0, y: 1, bgcolor: 'rgba(255,255,255,0.8)', bordercolor: 'rgba(0,0,0,0.2)', borderwidth: 1 }
     };
 
     try {
@@ -674,7 +691,7 @@
   $: if (lithoPlotDiv && (lithoChartData || depthFilter)) {
     renderLithoPlot();
   }
-  $: if (poroPlotDiv && (poroChartData || cporeData || depthFilter)) {
+  $: if (poroPlotDiv && (poroChartData || cporeData || depthFilter || depthMatching !== undefined)) {
     renderPoroPlot();
   }
 </script>
@@ -801,6 +818,18 @@
                   Save Porosity
                 {/if}
               </button>
+            <div class="flex items-center ml-2">
+              <input 
+                type="checkbox" 
+                id="depth-matching-poro" 
+                class="mr-2" 
+                bind:checked={depthMatching}
+                disabled={loading}
+              />
+              <label for="depth-matching-poro" class="text-sm cursor-pointer {loading ? 'opacity-50' : ''}">
+                Depth Matching
+              </label>
+            </div>
             <div class="h-[220px] w-full overflow-hidden">
               {#if poroChartData.length > 0 || cporeData.length > 0}
                 <div bind:this={poroPlotDiv} class="w-full h-[220px]"></div>

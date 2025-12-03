@@ -23,6 +23,7 @@
   let saveMessagePerm: string | null = null;
   let selectedMethod = 'choo';
   let swirr = 0.05; // Default irreducible water saturation
+  let depthMatching = false; // Disable depth matching for CPERM by default (use same axis)
   
   // Well data
   let fullRows: Array<Record<string, any>> = [];
@@ -386,23 +387,60 @@
 
     const traces: any[] = [];
     if (permPoints && permPoints.length > 0) {
-      traces.push({ x: permPoints.map(p => p.x), y: permPoints.map(p => p.y), name: 'PERM', mode: 'lines', line: { color: '#2563eb', width: 2 } });
+      traces.push({ 
+        x: permPoints.map(p => p.x), 
+        y: permPoints.map(p => p.y), 
+        name: 'PERM (Log)', 
+        mode: 'lines', 
+        line: { color: '#2563eb', width: 2 },
+        xaxis: 'x',
+        yaxis: 'y'
+      });
     }
     if (cpermPoints && cpermPoints.length > 0) {
-      traces.push({ x: cpermPoints.map(p => p.x), y: cpermPoints.map(p => p.y), name: 'CPERM', mode: 'markers', marker: { color: '#dc2626', size: 8, line: { color: 'white', width: 1 } } });
-    }
+      traces.push({ 
+        x: cpermPoints.map(p => p.x), 
+        y: cpermPoints.map(p => p.y), 
+        name: 'CPERM (Core)', 
+        mode: 'markers', 
+        marker: { color: '#dc2626', size: 8, line: { color: 'white', width: 1 } },
+        xaxis: depthMatching ? 'x2' : 'x',
+        yaxis: 'y'
+      });
+    }    
 
     // Use getPermDomain to compute min/max and convert to log10 range for Plotly
     const [minY, maxY] = getPermDomain();
     const safeMin = Math.max(minY, 1e-12);
     const safeMax = Math.max(maxY, safeMin * 10);
+
     const layout: any = {
-      height: 220,
-      margin: { l: 60, r: 20, t: 20, b: 40 },
+      height: 260,
+      margin: { l: 60, r: 20, t: 50, b: 80 },
       dragmode: 'zoom',
-      xaxis: { title: 'Depth', tickformat: ',.0f', fixedrange: false },
-      yaxis: { title: 'Permeability (mD)', type: 'log', autorange: false, range: [Math.log10(safeMin), Math.log10(safeMax)], fixedrange: true },
-      showlegend: false
+      xaxis: { 
+        title: 'Log Depth', 
+        titlefont: { color: '#2563eb' },
+        tickfont: { color: '#2563eb' },
+        tickformat: ',.0f',
+        side: 'bottom'
+      },
+      xaxis2: {
+        title: 'Core Depth',
+        titlefont: { color: '#dc2626' },
+        tickfont: { color: '#dc2626' },
+        tickformat: ',.0f',
+        overlaying: 'x',
+        side: 'top',
+        fixedrange: depthMatching
+      },
+      yaxis: { 
+        title: 'Permeability (mD)', 
+        type: 'log', 
+        range: [Math.log10(safeMin), Math.log10(safeMax)]
+      },
+      showlegend: true,
+      legend: { x: 0, y: 1, bgcolor: 'rgba(255,255,255,0.8)', bordercolor: 'rgba(0,0,0,0.2)', borderwidth: 1 }
     };
 
     try {
@@ -428,8 +466,8 @@
     loadWellData();
   }
 
-  // re-render Plotly when perm or core perm data changes (including depth filter)
-  $: if (permPlotDiv && (permChartData || cpermData || depthFilter)) {
+  // re-render Plotly when perm or core perm data changes (including depth filter and depth matching)
+  $: if (permPlotDiv && (permChartData || cpermData || depthFilter || depthMatching !== undefined)) {
     renderPermPlot();
   }
 </script>
@@ -489,9 +527,21 @@
                 Save Permeability
               {/if}
             </Button>
-            <div class="h-[220px] w-full overflow-hidden">
+            <div class="flex items-center ml-2">
+              <input 
+                type="checkbox" 
+                id="depth-matching" 
+                class="mr-2" 
+                bind:checked={depthMatching}
+                disabled={loading}
+              />
+              <label for="depth-matching" class="text-sm cursor-pointer {loading ? 'opacity-50' : ''}">
+                Depth Matching
+              </label>
+            </div>
+            <div class="h-[260px] w-full overflow-hidden">
               {#if permChartData.length > 0 || cpermData.length > 0}
-                <div bind:this={permPlotDiv} class="w-full h-[220px]"></div>
+                <div bind:this={permPlotDiv} class="w-full h-[260px]"></div>
               {:else}
                 <div class="flex items-center justify-center h-full text-sm text-gray-500">
                   No permeability data to display. Compute permeability to see the plot.
