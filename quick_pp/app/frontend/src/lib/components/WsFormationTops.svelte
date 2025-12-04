@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Button } from '$lib/components/ui/button/index.js';
+  import BulkAncillaryImporter from '$lib/components/BulkAncillaryImporter.svelte';
   export let projectId: string | number;
   export let wellName: string;
 
@@ -12,12 +13,14 @@
   let newTop = { name: '', depth: null } as {name:string, depth:number|null};
   let csvFile: File | null = null;
   let csvPreview: Array<{name:string, depth:string}> = [];
+  let showImporter = false;
 
   async function loadTops() {
-    if (!projectId || !wellName) return;
+    if (!projectId) return;
     loading = true; error = null;
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/formation_tops`);
+      const qs = wellName ? `?well_name=${encodeURIComponent(String(wellName))}` : '';
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/formation_tops${qs}`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       tops = data.tops || [];
@@ -35,8 +38,9 @@
     }
     loading = true; error = null;
     try {
-      const payload = { tops: [{ name: newTop.name, depth: Number(newTop.depth) }] };
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/formation_tops`, {
+      const payload:any = { tops: [{ name: newTop.name, depth: Number(newTop.depth) }] };
+      if (wellName) payload.well_name = String(wellName);
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/formation_tops`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error(await res.text());
@@ -79,7 +83,8 @@
     try {
       const fd = new FormData();
       fd.append('file', csvFile);
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/formation_tops/preview`, { method: 'POST', body: fd });
+      const qs = wellName ? `?well_name=${encodeURIComponent(String(wellName))}` : '';
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/formation_tops/preview${qs}`, { method: 'POST', body: fd });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       csvPreview = (data.preview || []).map((r:any) => ({ name: r[ data.detected?.name || Object.keys(r)[0] ] ?? '', depth: r[ data.detected?.depth || Object.keys(r)[1] ] ?? '' }));
@@ -90,10 +95,12 @@
 
   async function importCsvFromServer() {
     if (!csvPreview.length) { error='No parsed rows to import'; return; }
-    const toSend = csvPreview.map(r=>({ name: r.name || 'unnamed', depth: Number(r.depth) }));
+    const toSend:any = csvPreview.map(r=>({ name: r.name || 'unnamed', depth: Number(r.depth) }));
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/formation_tops`, {
-        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ tops: toSend })
+      const payload:any = { tops: toSend };
+      if (wellName) payload.well_name = String(wellName);
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/formation_tops`, {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error(await res.text());
       await loadTops();
@@ -103,10 +110,12 @@
 
   async function importCsvPreview() {
     if (!csvPreview.length) { error='No parsed rows to import'; return; }
-    const toSend = csvPreview.map(r=>({ name: r.name || 'unnamed', depth: Number(r.depth) }));
+    const toSend:any = csvPreview.map(r=>({ name: r.name || 'unnamed', depth: Number(r.depth) }));
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/formation_tops`, {
-        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ tops: toSend })
+      const payload:any = { tops: toSend };
+      if (wellName) payload.well_name = String(wellName);
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/formation_tops`, {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error(await res.text());
       await loadTops();
@@ -118,7 +127,8 @@
     if (!confirm(`Delete top '${name}'?`)) return;
     loading = true; error = null;
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/formation_tops/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const qs = wellName ? `?well_name=${encodeURIComponent(String(wellName))}` : '';
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/formation_tops/${encodeURIComponent(name)}${qs}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
       await loadTops();
     } catch (err:any) {
@@ -126,11 +136,11 @@
     } finally { loading = false; }
   }
 
-  $: if (projectId && wellName) {
+  $: if (projectId) {
     loadTops();
   }
 
-  onMount(() => { if (projectId && wellName) loadTops(); });
+  onMount(() => { if (projectId) loadTops(); });
 </script>
 
 <div class="formation-tops">
@@ -143,48 +153,15 @@
     <div class="mb-3 flex items-center gap-2">
       <input placeholder="Top name" bind:value={newTop.name} class="input" />
       <input placeholder="Depth" type="number" bind:value={newTop.depth} class="input w-24" />
-      <Button variant="default" onclick={addTop}>Add Top</Button>
+        <Button variant="default" onclick={addTop}>Add Top</Button>
+        <Button variant="secondary" class="ml-2" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
     </div>
 
-      <div class="mb-3">
-        <label for="csv-upload" class="block text-sm mb-2">Bulk import CSV (columns: name, depth)</label>
-        <div class="flex items-center justify-between border rounded-md p-2 bg-white/5">
-          <div class="text-sm text-muted-foreground">
-            {#if csvFile}
-              {csvFile.name}
-            {:else}
-              No file chosen
-            {/if}
-          </div>
-          <div class="flex items-center gap-2">
-            <label class="inline-flex items-center px-3 py-1 rounded-md border cursor-pointer text-sm">
-              <input id="csv-upload" type="file" accept=".csv" on:change={handleFileInput} class="hidden" />
-              Choose
-            </label>
-            {#if csvFile}
-              <Button variant="ghost" class="btn-sm" onclick={uploadCsvForPreview}>Server preview</Button>
-            {/if}
-          </div>
-        </div>
-
-        {#if csvPreview.length}
-          <div class="mt-2 text-sm">Preview (first {csvPreview.length} rows):</div>
-          <ul class="text-sm mb-2">
-            {#each csvPreview as r}
-              <li>{r.name} — {r.depth}</li>
-            {/each}
-          </ul>
-          <div class="flex gap-2">
-            <Button variant="default" onclick={importCsvPreview}>Import (client parse)</Button>
-            <Button variant="default" onclick={importCsvFromServer}>Import (server preview)</Button>
-          </div>
-        {/if}
-        {#if csvFile}
-          <div class="mt-2">
-            <Button variant="ghost" class="btn-sm mr-2" onclick={uploadCsvForPreview}>Use server preview</Button>
-          </div>
-        {/if}
+    {#if showImporter}
+      <div class="mt-3 mb-3">
+        <BulkAncillaryImporter {projectId} type="formation_tops" />
       </div>
+    {/if}
 
     {#if tops.length === 0}
       <div class="text-sm text-muted">No tops defined for this well.</div>
