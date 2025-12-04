@@ -48,9 +48,9 @@
       <input placeholder="Depth" type="number" bind:value={newTest.depth} class="input w-24" />
       <input placeholder="Pressure" type="number" bind:value={newTest.pressure} class="input w-24" />
       <select bind:value={newTest.pressure_uom} class="input w-24"><option>psi</option><option>bar</option></select>
-      <Button class="btn btn-primary" onclick={addTest}>Add</Button>
-      <Button class="btn btn-secondary ml-2" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
     </div>
+    <Button variant="default" onclick={addTest}>Add</Button>
+    <Button variant="secondary" class="ml-2" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
 
     {#if showImporter}
       <div class="mb-3">

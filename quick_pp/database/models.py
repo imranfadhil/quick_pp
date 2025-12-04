@@ -101,7 +101,7 @@ class Well(Base):
         ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    uwi: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    uwi: Mapped[str] = mapped_column(String(100), nullable=False)
     depth_uom: Mapped[Optional[str]] = mapped_column(String(50))
 
     header_data: Mapped[Optional[Dict[str, Any]]] = mapped_column("header_data", JSON)
@@ -136,6 +136,8 @@ class Well(Base):
 
     def __repr__(self):
         return f"<Well(well_id={self.well_id}, name='{self.name}', uwi='{self.uwi}')>"
+
+    __table_args__ = (UniqueConstraint("project_id", "uwi", name="uq_project_id_uwi"),)
 
 
 # Interval and Point Data Models

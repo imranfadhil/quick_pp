@@ -44,11 +44,11 @@
     if (!selectedProject || !lasFiles || lasFiles.length === 0) return;
     uploading = true;
     uploadError = null;
-    try {
+
+    // Helper to upload a single file in the same backend contract (field name 'files')
+    async function uploadSingleFile(file: File) {
       const form = new FormData();
-      for (const f of Array.from(lasFiles)) {
-        form.append('files', f, f.name);
-      }
+      form.append('files', file, file.name);
 
       const res = await fetch(`${API_BASE}/quick_pp/database/projects/${selectedProject.project_id}/read_las`, {
         method: 'POST',
@@ -57,18 +57,43 @@
 
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(text || 'Failed to upload LAS files');
+        throw new Error(text || `Failed to upload ${file.name}`);
       }
 
-      const data = await res.json();
-      // refresh project details to show newly created/updated wells
-      // reload project list and upsert project details locally
+      return await res.json();
+    }
+
+    const files = Array.from(lasFiles);
+    const concurrency = 3; // tune this to backend capability (SQLite -> low)
+    const queue = files.slice();
+    const results: Array<any> = [];
+    const errors: Array<{ file: string; error: string }> = [];
+
+    async function worker() {
+      while (true) {
+        const file = queue.shift();
+        if (!file) break;
+        try {
+          const r = await uploadSingleFile(file);
+          results.push({ file: file.name, result: r });
+        } catch (e: any) {
+          errors.push({ file: file.name, error: String(e?.message ?? e) });
+        }
+      }
+    }
+
+    try {
+      await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, () => worker()));
+      // Refresh projects and selected project details once all uploads complete
       await loadProjects();
-      // optimistic upsert of currently selected project so details refresh immediately
       await fetchProjectDetails(selectedProject.project_id);
-      // clear file input
-      lasFiles = null;
-      // optionally, you could auto-open the Well Analysis view here
+
+      if (errors.length) {
+        uploadError = errors.map((e) => `${e.file}: ${e.error}`).join('; ');
+      } else {
+        // clear file input only when successful
+        lasFiles = null;
+      }
     } catch (err: any) {
       console.error('uploadLas error', err);
       uploadError = String(err?.message ?? err);

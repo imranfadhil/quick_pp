@@ -52,12 +52,13 @@ CREATE TABLE IF NOT EXISTS "wells" (
     "well_id" SERIAL PRIMARY KEY,
     "project_id" INTEGER NOT NULL REFERENCES "projects"("project_id") ON DELETE CASCADE,
     "name" VARCHAR(255) NOT NULL,
-    "uwi" VARCHAR(100) UNIQUE NOT NULL,
+    "uwi" VARCHAR(100) NOT NULL,
     "header_data" JSONB, -- Flexible JSONB for all messy LAS header info
     "config_data" JSONB, -- Use JSONB to store WellConfig
     "depth_uom" VARCHAR(50),
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "updated_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE("project_id", "uwi")
 );
 
 -- -----------------------------------------------------------------------------

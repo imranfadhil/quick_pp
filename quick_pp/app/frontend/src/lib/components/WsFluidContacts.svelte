@@ -48,9 +48,9 @@
       <input placeholder="Well name" bind:value={wellName} class="input w-32" />
       <input placeholder="Contact name" bind:value={newContact.name} class="input w-32" />
       <input placeholder="Depth" type="number" bind:value={newContact.depth} class="input w-24" />
-      <Button class="btn btn-primary" onclick={addContact}>Add</Button>
-      <Button class="btn btn-secondary ml-2" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
     </div>
+    <Button variant="default" onclick={addContact}>Add</Button>
+    <Button variant="secondary" class="ml-2" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
 
     {#if showImporter}
       <div class="mb-3">

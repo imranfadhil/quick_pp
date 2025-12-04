@@ -216,21 +216,37 @@
         }
         let totalSent = 0;
         const subResults: any[] = [];
-          for (const wn of Object.keys(groups)) {
+        for (const wn of Object.keys(groups)) {
           const subPayload: any = (type==='formation_tops') ? { tops: groups[wn].map((r:any)=>({name: r[preview.detected?.name] ?? r['name'], depth: Number(r[preview.detected?.depth] ?? r['depth']) })) } : (type==='fluid_contacts') ? { contacts: groups[wn].map((r:any)=>({name: r[preview.detected?.name] ?? r['name'], depth: Number(r[preview.detected?.depth] ?? r['depth']) })) } : { tests: groups[wn].map((r:any)=>({depth: Number(r[preview.detected?.depth] ?? r['depth']), pressure: Number(r[preview.detected?.pressure] ?? r['pressure']), pressure_uom: r[preview.detected?.uom] ?? r['pressure_uom'] ?? 'psi'})) };
           const subQs = `?well_name=${encodeURIComponent(String(wn))}`;
           const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${subQs}`;
           console.log('Bulk import: POST', url, subPayload);
           const res = await fetch(url, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(subPayload)});
           if (!res.ok) {
+            const errtxt = await res.text();
+            // if the error indicates the well is not found in the project, skip this well and continue
+            if (res.status === 404 || /not found in project/i.test(errtxt)) {
+              subResults.push({ well: wn, ok: false, skipped: true, error: errtxt, status: res.status });
+              // don't mark the entire file as error yet — continue with other wells
+              continue;
+            }
+            // any other error should be treated as a file-level failure
             fileStatuses[preview.fileName] = 'error';
-            const errtxt = await res.text(); fileErrors[preview.fileName] = errtxt;
+            fileErrors[preview.fileName] = errtxt;
             return {file: preview.fileName, ok:false, error: errtxt, status: res.status};
           }
           totalSent += (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? 0);
+          subResults.push({ well: wn, ok: true, sent: (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? 0) });
         }
-        fileStatuses[preview.fileName] = 'success';
-        return {file: preview.fileName, ok:true, sent: totalSent};
+        if (totalSent > 0) {
+          fileStatuses[preview.fileName] = 'success';
+          return {file: preview.fileName, ok:true, sent: totalSent, details: subResults};
+        }
+        // if we reached here, all well-groups were skipped/failing due to missing wells
+        fileStatuses[preview.fileName] = 'error';
+        const combined = subResults.map(r=>`${r.well}: ${r.error ?? 'skipped'}`).join('; ');
+        fileErrors[preview.fileName] = combined || 'No valid wells to import';
+        return {file: preview.fileName, ok:false, error: combined, status: 404};
       }
 
       // otherwise single request for whole file
@@ -240,6 +256,7 @@
         const samplesArr = payload.samples ?? payload.samples ?? [];
         if (!samplesArr.length) return { file: preview.fileName, ok: false, error: 'No samples parsed' };
         let sentCount = 0;
+        const sampleResults: any[] = [];
         for (const s of samplesArr) {
           const singleQs = sel ? `?well_name=${encodeURIComponent(String(sel))}` : '';
           const singleUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/core_samples${singleQs}`;
@@ -247,14 +264,27 @@
           console.log('Bulk import: POST', singleUrl, singlePayload);
           const res = await fetch(singleUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(singlePayload) });
           if (!res.ok) {
+            const errtxt = await res.text();
+            // if the error indicates the well is not in the project, skip this sample and continue
+            if (res.status === 404 || /not found in project/i.test(errtxt)) {
+              sampleResults.push({ sample: s.sample_name ?? s.sample_name, ok: false, skipped: true, error: errtxt });
+              continue;
+            }
             fileStatuses[preview.fileName] = 'error';
-            const errtxt = await res.text(); fileErrors[preview.fileName] = errtxt;
+            fileErrors[preview.fileName] = errtxt;
             return { file: preview.fileName, ok: false, error: errtxt, status: res.status };
           }
           sentCount += 1;
+          sampleResults.push({ sample: s.sample_name ?? s.sample_name, ok: true });
         }
-        fileStatuses[preview.fileName] = 'success';
-        return { file: preview.fileName, ok: true, sent: sentCount };
+        if (sentCount > 0) {
+          fileStatuses[preview.fileName] = 'success';
+          return { file: preview.fileName, ok: true, sent: sentCount, details: sampleResults };
+        }
+        fileStatuses[preview.fileName] = 'error';
+        const combinedSamples = sampleResults.map(r=>`${r.sample}: ${r.error ?? 'skipped'}`).join('; ');
+        fileErrors[preview.fileName] = combinedSamples || 'No samples imported';
+        return { file: preview.fileName, ok: false, error: combinedSamples, status: 404 };
       }
 
       const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${qs}`;

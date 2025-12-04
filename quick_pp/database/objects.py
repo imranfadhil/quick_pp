@@ -496,14 +496,35 @@ class Well(object):
             self._load_config_from_orm()
             logger.info(f"Well '{self.name}' loaded from DB.")
         elif project_id or name or uwi:
-            # Check if a well with this UWI already exists (UWI is unique globally)
-            existing_well = self.db_session.scalar(select(ORMWell).filter_by(uwi=uwi))
+            existing_well = None
+
+            # Prefer match by project + name when both provided
+            if project_id and name:
+                existing_well = self.db_session.scalar(
+                    select(ORMWell).filter_by(project_id=project_id, name=name)
+                )
+
+            # Next prefer match by project + uwi when provided
+            if not existing_well and project_id and uwi:
+                existing_well = self.db_session.scalar(
+                    select(ORMWell).filter_by(project_id=project_id, uwi=uwi)
+                )
+
+            # Lastly, check for global match by UWI only
+            if not existing_well and uwi:
+                global_match = self.db_session.scalar(
+                    select(ORMWell).filter_by(uwi=uwi)
+                )
+                if global_match:
+                    logger.warning(
+                        "Found existing well with same UWI in a different project; "
+                        "creating a separate well record for this project."
+                    )
+
             if existing_well:
                 self._orm_well = existing_well
                 self._load_config_from_orm()
-                logger.info(
-                    f"Well '{name}' (UWI: {uwi}) already exists, loaded from DB."
-                )
+                logger.info(f"Well '{name}' (UWI: {uwi}) loaded from DB.")
             else:
                 self._orm_well = ORMWell(
                     project_id=project_id,
@@ -623,6 +644,11 @@ class Well(object):
             logger.debug(
                 f"Deleting old curve '{curve.mnemonic}' from well '{self.name}'."
             )
+            try:
+                self._orm_well.curves.remove(curve)
+            except ValueError:
+                # If it's already removed from the collection, ignore
+                pass
             self.db_session.delete(curve)
 
         for mnemonic, values in parsed_data.items():

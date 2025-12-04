@@ -94,9 +94,9 @@
       <input placeholder="Well name" bind:value={wellName} class="input w-32" />
       <input placeholder="Top name" bind:value={newTop.name} class="input w-32" />
       <input placeholder="Depth" type="number" bind:value={newTop.depth} class="input w-24" />
-        <Button variant="default" onclick={addTop}>Add Top</Button>
-        <Button variant="secondary" class="ml-2" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
     </div>
+    <Button variant="default" onclick={addTop}>Add Top</Button>
+    <Button variant="secondary" class="ml-2" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
 
     {#if showImporter}
       <div class="mt-3 mb-3">
