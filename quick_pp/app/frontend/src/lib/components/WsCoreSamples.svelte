@@ -53,24 +53,24 @@
   }
 
   function addMeasurement() {
-    measurements.push({ property_name: '', value: '', unit: '' });
+    measurements = [...measurements, { property_name: '', value: '', unit: '' }];
   }
   function removeMeasurement(i: number) {
-    measurements.splice(i, 1);
+    measurements = [...measurements.slice(0, i), ...measurements.slice(i + 1)];
   }
 
   function addRelperm() {
-    relperm.push({ saturation: '', kr: '', phase: '' });
+    relperm = [...relperm, { saturation: '', kr: '', phase: '' }];
   }
   function removeRelperm(i: number) {
-    relperm.splice(i, 1);
+    relperm = [...relperm.slice(0, i), ...relperm.slice(i + 1)];
   }
 
   function addPc() {
-    pc.push({ saturation: '', pressure: '', experiment_type: '', cycle: '' });
+    pc = [...pc, { saturation: '', pressure: '', experiment_type: '', cycle: '' }];
   }
   function removePc(i: number) {
-    pc.splice(i, 1);
+    pc = [...pc.slice(0, i), ...pc.slice(i + 1)];
   }
 
   async function submitSample() {
@@ -134,8 +134,11 @@
   <div class="mt-4 bg-panel rounded p-3">
     <div class="font-semibold mb-2">Add / Update Sample</div>
     <div class="grid grid-cols-1 gap-2">
-      <input placeholder="Sample name" bind:value={form.sample_name} class="input" />
-      <input placeholder="Depth" bind:value={form.depth} class="input" />
+      <div class="flex items-center gap-2">
+        <input placeholder="Well name" bind:value={wellName} class="input w-32" />
+        <input placeholder="Sample name" bind:value={form.sample_name} class="input w-32" />
+        <input placeholder="Depth" bind:value={form.depth} class="input w-32" />
+      </div>
       <input placeholder="Description" bind:value={form.description} class="input" />
       <div>
         <div class="flex items-center justify-between">
@@ -181,8 +184,17 @@
             <div class="grid grid-cols-12 gap-2 items-center">
               <input class="col-span-3 input" placeholder="Saturation" bind:value={p.saturation} />
               <input class="col-span-3 input" placeholder="Pressure" bind:value={p.pressure} />
-              <input class="col-span-3 input" placeholder="Type" bind:value={p.experiment_type} />
-              <input class="col-span-2 input" placeholder="Cycle" bind:value={p.cycle} />
+              <select class="col-span-3 input" bind:value={p.experiment_type}>
+                <option value="" disabled hidden>Experiment Type</option>
+                <option value="Porous plate">Porous plate</option>
+                <option value="Centrifuge">Centrifuge</option>
+                <option value="Mercury Injection">Mercury Injection</option>
+              </select>
+              <select class="col-span-2 input" bind:value={p.cycle}>
+                <option value="" disabled hidden>Cycle</option>
+                <option value="Drainage">Drainage</option>
+                <option value="Imbibition">Imbibition</option>
+              </select>
               <Button variant='secondary' type="button" onclick={() => removePc(i)}>✕</Button>
             </div>
           {/each}
@@ -192,7 +204,7 @@
         <Button class="btn btn-primary" onclick={submitSample}>Save Sample</Button>
       </div>
       <div class="mb-3">
-        <Button variant="default" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
+        <Button variant="secondary" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
       </div>
       {#if showImporter}
         <div class="mb-3">

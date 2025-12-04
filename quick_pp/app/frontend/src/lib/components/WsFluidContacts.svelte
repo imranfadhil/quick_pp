@@ -6,7 +6,7 @@
   export let wellName: string;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
-  let contacts: Array<{name:string, depth:number}> = [];
+  let contacts: Array<{name:string, depth:number, well_name?:string}> = [];
   let loading = false; let error: string | null = null;
   let newContact = { name: '', depth: null } as {name:string, depth:number|null};
   let showImporter = false;
@@ -28,8 +28,8 @@
     loading=true; error=null;
     try{
       const payload:any = { contacts: [{ name: newContact.name, depth: Number(newContact.depth) }] };
-      if (wellName) payload.well_name = String(wellName);
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/fluid_contacts`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+      const qs = wellName ? `?well_name=${encodeURIComponent(String(wellName))}` : '';
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/fluid_contacts${qs}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
       if(!res.ok) throw new Error(await res.text());
       newContact = { name:'', depth:null };
       await loadContacts();
@@ -44,8 +44,9 @@
   {#if loading}<div class="text-sm">Loading…</div>{:else}
     {#if error}<div class="text-sm text-red-600">{error}</div>{/if}
     <div class="mb-3">
-      <input placeholder="Contact name" bind:value={newContact.name} class="input mr-2" />
-      <input placeholder="Depth" type="number" bind:value={newContact.depth} class="input mr-2 w-24" />
+      <input placeholder="Well name" bind:value={wellName} class="input w-32" />
+      <input placeholder="Contact name" bind:value={newContact.name} class="input w-32" />
+      <input placeholder="Depth" type="number" bind:value={newContact.depth} class="input w-24" />
       <Button class="btn btn-primary" onclick={addContact}>Add</Button>
       <Button class="btn btn-secondary ml-2" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
     </div>
@@ -61,7 +62,7 @@
       <ul class="space-y-1">
         {#each contacts as c}
           <li class="flex justify-between items-center p-2 bg-white/5 rounded">
-            <div>{c.name} — {c.depth}</div>
+            <div>{c.well_name ?? wellName}: {c.name} — {c.depth}</div>
           </li>
         {/each}
       </ul>
