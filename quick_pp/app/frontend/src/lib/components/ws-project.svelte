@@ -9,6 +9,7 @@
   import WsFluidContacts from '$lib/components/WsFluidContacts.svelte';
   import WsPressureTests from '$lib/components/WsPressureTests.svelte';
   import WsCoreSamples from '$lib/components/WsCoreSamples.svelte';
+  import DataSummary from '$lib/components/DataSummary.svelte';
   import { Button } from '$lib/components/ui/button/index.js';
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
@@ -28,6 +29,15 @@
   let showPressure = false;
   let showCore = false;
   let showUpload = false;
+  // Summary accordions state
+  let showSummaryTops = false;
+  let showSummaryCore = false;
+  let showSummaryPressure = false;
+  let showSummaryContacts = false;
+  // Well summaries
+  let wellSummaries: Array<any> = [];
+  let summariesLoading = false;
+  let summariesError: string | null = null;
 
   // Upload selected LAS files to the project; backend will create/update wells from LAS
   async function uploadLas() {
@@ -101,6 +111,8 @@
           selectedProject = { ...selectedProject, ...(data || {}) };
           // update store with new details so list reflects it
           upsertProject(selectedProject);
+          // load well summaries after wells are available
+          setTimeout(() => { if (selectedProject.wells) loadWellSummaries(); }, 0);
         }
       } catch (innerErr) {
         // non-fatal: show basic project info
@@ -125,6 +137,8 @@
       if (id === _lastWorkspaceProjectId) return;
       _lastWorkspaceProjectId = id;
       fetchProjectDetails(id);
+      // clear previous summaries when project changes
+      wellSummaries = [];
     });
   });
 
@@ -133,10 +147,92 @@
       _unsubWorkspace && _unsubWorkspace();
     } catch (e) {}
   });
+
+  // Fetch per-well data and compute lightweight summaries
+  async function loadWellSummaries() {
+    if (!selectedProject || !selectedProject.wells || !selectedProject.wells.length) {
+      wellSummaries = [];
+      return;
+    }
+    summariesLoading = true;
+    summariesError = null;
+    try {
+      const wells: string[] = selectedProject.wells.map((w: any) => String(w));
+      const promises = wells.map(async (w) => {
+        try {
+          const res = await fetch(`${API_BASE}/quick_pp/database/projects/${selectedProject.project_id}/wells/${encodeURIComponent(String(w))}/data`);
+          if (!res.ok) return { name: w, error: await res.text() };
+          const fd = await res.json();
+          const rows = fd && fd.data ? fd.data : fd;
+          if (!Array.isArray(rows)) return { name: w, error: 'Unexpected data format' };
+
+          // extract numeric depth values
+          const depthKeys = ['depth','tvdss','TVD','TVDSS','DEPTH'];
+          const zoneKeys = ['zones','ZONES','zone','ZONE'];
+          const coreFields = ['phit','PHIT','vcld','VCLD','swt','SWT','perm','PERM','permeability'];
+
+          const depths: number[] = [];
+          const zonesSet = new Set<string>();
+          let rowsWithCore = 0;
+          const fieldCounts: Record<string,number> = {};
+          for (const f of coreFields) fieldCounts[f] = 0;
+
+          for (const r of rows) {
+            // depth
+            let d: number | null = null;
+            for (const k of depthKeys) {
+              if (r[k] != null && r[k] !== '') { const n = Number(r[k]); if (!isNaN(n)) { d = n; break; } }
+            }
+            if (d != null) depths.push(d);
+
+            // zones
+            for (const zk of zoneKeys) {
+              const z = r[zk]; if (z != null && String(z).trim() !== '') zonesSet.add(String(z));
+            }
+
+            // core field availability
+            let hasCore = false;
+            for (const cf of coreFields) {
+              const v = r[cf];
+              if (v != null && v !== '' && !isNaN(Number(v))) { fieldCounts[cf] = (fieldCounts[cf] || 0) + 1; hasCore = true; }
+            }
+            if (hasCore) rowsWithCore++;
+          }
+
+          const minDepth = depths.length ? Math.min(...depths) : null;
+          const maxDepth = depths.length ? Math.max(...depths) : null;
+          const totalDepth = (minDepth != null && maxDepth != null) ? (maxDepth - minDepth) : null;
+          const numZones = zonesSet.size;
+          const rowsCount = rows.length;
+          const availabilityPerc = rowsCount ? Math.round((rowsWithCore / rowsCount) * 100) : 0;
+
+          // compute per-field availability for commonly used fields (normalized keys)
+          const availabilityByField: Record<string, number> = {};
+          const groupFields = { phit: ['phit','PHIT'], vcld: ['vcld','VCLD'], swt: ['swt','SWT'], perm: ['perm','PERM','permeability'] };
+          for (const [key, aliases] of Object.entries(groupFields)) {
+            let ct = 0;
+            for (const a of aliases) ct += (fieldCounts[a] || 0);
+            availabilityByField[key] = rowsCount ? Math.round((ct / rowsCount) * 100) : 0;
+          }
+
+          return { name: w, rows: rowsCount, minDepth, maxDepth, totalDepth, numZones, availabilityPerc, availabilityByField };
+        } catch (e:any) {
+          return { name: w, error: String(e?.message ?? e) };
+        }
+      });
+
+      const results = await Promise.all(promises);
+      wellSummaries = results;
+    } catch (e:any) {
+      summariesError = String(e?.message ?? e);
+    } finally {
+      summariesLoading = false;
+    }
+  }
 </script>
 
   <div class="project-workspace p-4">
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <!-- Left: Ancillary data inputs -->
       <div class="col-span-1">
         <div class="bg-panel rounded p-4 space-y-4">
@@ -204,7 +300,7 @@
             </Button>
             {#if showTops}
               <div class="p-2">
-                <WsFormationTops projectId={selectedProject?.project_id ?? ''} wellName={selectedWellName ?? ''} />
+                  <WsFormationTops projectId={selectedProject?.project_id ?? ''} wellName={selectedWellName ?? ''} showList={false} />
               </div>
             {/if}
           </div>
@@ -220,7 +316,7 @@
             </Button>
             {#if showCore}
               <div class="p-2">
-                <WsCoreSamples projectId={selectedProject?.project_id ?? ''} wellName={selectedWellName ?? ''} />
+                  <WsCoreSamples projectId={selectedProject?.project_id ?? ''} wellName={selectedWellName ?? ''} showList={false} />
               </div>
             {/if}
           </div>
@@ -236,7 +332,7 @@
             </Button>
             {#if showPressure}
               <div class="p-2">
-                <WsPressureTests projectId={selectedProject?.project_id ?? ''} wellName={selectedWellName ?? ''} />
+                  <WsPressureTests projectId={selectedProject?.project_id ?? ''} wellName={selectedWellName ?? ''} showList={false} />
               </div>
             {/if}
           </div>
@@ -252,7 +348,7 @@
             </Button>
             {#if showContacts}
               <div class="p-2">
-                <WsFluidContacts projectId={selectedProject?.project_id ?? ''} wellName={selectedWellName ?? ''} />
+                  <WsFluidContacts projectId={selectedProject?.project_id ?? ''} wellName={selectedWellName ?? ''} showList={false} />
               </div>
             {/if}
           </div>
@@ -260,7 +356,7 @@
       </div>
 
       <!-- Right: Project overview and controls -->
-      <div class="col-span-1">
+      <div class="col-span-2">
         <div class="bg-panel rounded p-4">
           {#if selectedProject}
             <div class="flex items-start justify-between">
@@ -276,24 +372,119 @@
               </div>
             </div>
 
-            <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
               <div class="bg-surface rounded p-3">
-                <div class="text-sm text-muted-foreground">Wells</div>
-                <div class="font-semibold text-lg mt-1">{selectedProject.wells ? selectedProject.wells.length : 0}</div>
-                {#if selectedProject.wells && selectedProject.wells.length}
-                  <ul class="mt-2 text-sm">
-                    {#each selectedProject.wells.slice(0,6) as w}
-                      <li class="truncate">{w}</li>
-                    {/each}
-                    {#if selectedProject.wells.length > 6}
-                      <li class="text-muted-foreground">and {selectedProject.wells.length - 6} more...</li>
-                    {/if}
-                  </ul>
-                {/if}
+                <div class="mt-2">
+                  {#if wellSummaries && wellSummaries.length}
+                    <div class="p-1">
+                      <!-- Use DataSummary to render interactive table for well summaries -->
+                      <DataSummary
+                        itemsProp={wellSummaries}
+                        label="Well Summaries"
+                        columnLabels={{
+                          name: 'Well',
+                          rows: 'Rows',
+                          minDepth: 'Start',
+                          maxDepth: 'End',
+                          totalDepth: 'Total',
+                          numZones: 'Zones',
+                          availabilityPerc: 'Availability %'
+                        }}
+                      />
+                    </div>
+                    <div class="flex items-center gap-2 mb-2">
+                    <Button variant="default" onclick={loadWellSummaries} disabled={summariesLoading}>Refresh</Button>
+                    {#if summariesLoading}<div class="text-sm">Loading summaries…</div>{/if}
+                    {#if summariesError}<div class="text-sm text-red-600">{summariesError}</div>{/if}
+                  </div>
+                  {:else}
+                    <div class="text-sm text-muted-foreground">No well summaries available.</div>
+                  {/if}
+                </div>
               </div>
+              <div class="mt-4">
+                <div class="font-semibold mb-2">Dataset Summaries</div>
+                <div class="space-y-2">
+                  <div class="accordion-item bg-surface rounded">
+                    <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showSummaryTops = !showSummaryTops)} aria-expanded={showSummaryTops}>
+                      <div class="font-medium">Formation Tops</div>
+                      <div class="text-sm">{showSummaryTops ? 'Hide' : 'Show'}</div>
+                    </Button>
+                    {#if showSummaryTops}
+                      <div class="p-2">
+                        <DataSummary
+                          projectId={selectedProject?.project_id ?? ''}
+                          wellName={selectedWellName ?? ''}
+                          type="formation_tops"
+                          label="Formation Tops"
+                          hideControls={true}
+                          columnOrder={['well_name', 'depth', 'name']}
+                          columnLabels={{ well_name: 'Well', depth: 'Depth', name: 'Top' }}
+                        />
+                      </div>
+                    {/if}
+                  </div>
 
+                  <div class="accordion-item bg-surface rounded">
+                    <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showSummaryCore = !showSummaryCore)} aria-expanded={showSummaryCore}>
+                      <div class="font-medium">Core Samples</div>
+                      <div class="text-sm">{showSummaryCore ? 'Hide' : 'Show'}</div>
+                    </Button>
+                    {#if showSummaryCore}
+                      <div class="p-2">
+                        <DataSummary
+                          projectId={selectedProject?.project_id ?? ''}
+                          wellName={selectedWellName ?? ''}
+                          type="core_samples"
+                          label="Core Samples"
+                          hideControls={true}
+                          columnOrder={['well_name', 'sample_name', 'depth', 'description']}
+                          columnLabels={{ well_name: 'Well', sample_name: 'Sample', depth: 'Depth', description: 'Description' }}
+                        />
+                      </div>
+                    {/if}
+                  </div>
 
-            </div>
+                  <div class="accordion-item bg-surface rounded">
+                    <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showSummaryPressure = !showSummaryPressure)} aria-expanded={showSummaryPressure}>
+                      <div class="font-medium">Pressure Tests</div>
+                      <div class="text-sm">{showSummaryPressure ? 'Hide' : 'Show'}</div>
+                    </Button>
+                    {#if showSummaryPressure}
+                      <div class="p-2">
+                        <DataSummary
+                          projectId={selectedProject?.project_id ?? ''}
+                          wellName={selectedWellName ?? ''}
+                          type="pressure_tests"
+                          label="Pressure Tests"
+                          hideControls={true}
+                          columnOrder={['well_name', 'depth', 'pressure', 'pressure_uom']}
+                          columnLabels={{ well_name: 'Well', depth: 'Depth', pressure: 'Pressure', pressure_uom: 'UOM' }}
+                        />
+                      </div>
+                    {/if}
+                  </div>
+
+                  <div class="accordion-item bg-surface rounded">
+                    <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showSummaryContacts = !showSummaryContacts)} aria-expanded={showSummaryContacts}>
+                      <div class="font-medium">Fluid Contacts</div>
+                      <div class="text-sm">{showSummaryContacts ? 'Hide' : 'Show'}</div>
+                    </Button>
+                    {#if showSummaryContacts}
+                      <div class="p-2">
+                        <DataSummary
+                          projectId={selectedProject?.project_id ?? ''}
+                          wellName={selectedWellName ?? ''}
+                          type="fluid_contacts"
+                          label="Fluid Contacts"
+                          hideControls={true}
+                          columnOrder={['well_name', 'depth', 'name']}
+                          columnLabels={{ name: 'Contact', depth: 'Depth', well_name: 'Well' }}
+                        />
+                      </div>
+                    {/if}
+                  </div>
+                </div>
+              </div>
           {:else}
             <div class="text-muted-foreground">Select a project from the sidebar to view details.</div>
           {/if}

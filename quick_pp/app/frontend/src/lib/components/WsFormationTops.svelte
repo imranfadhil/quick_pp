@@ -4,6 +4,7 @@
   import BulkAncillaryImporter from '$lib/components/BulkAncillaryImporter.svelte';
   export let projectId: string | number;
   export let wellName: string | string[] = '';
+  export let showList: boolean = true;
 
   function normalizeWellNames(): string[] | null {
     if (!wellName) return null;
@@ -19,7 +20,7 @@
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
-  let tops: Array<{name:string, depth:number}> = [];
+  let tops: Array<{name:string, depth:number, well_name?:string}> = [];
   let loading = false;
   let error: string | null = null;
   let newTop = { name: '', depth: null } as {name:string, depth:number|null};
@@ -103,19 +104,21 @@
       </div>
     {/if}
 
-    {#if tops.length === 0}
-      <div class="text-sm text-muted-foreground">No tops defined for this well.</div>
-    {:else}
-      <ul class="space-y-1">
-        {#each tops as t}
-          <li class="flex justify-between items-center p-2 bg-white/5 rounded">
-            <div>{t.well_name}: {t.name} — {t.depth}</div>
-              <div>
-              <Button variant='outline' onclick={() => deleteTop(t.name)}>Delete</Button>
-            </div>
-          </li>
-        {/each}
-      </ul>
+    {#if showList}
+      {#if tops.length === 0}
+        <div class="text-sm text-muted-foreground">No tops defined for this well.</div>
+      {:else}
+        <ul class="space-y-1">
+          {#each tops as t}
+            <li class="flex justify-between items-center p-2 bg-white/5 rounded">
+              <div>{t.well_name}: {t.name} — {t.depth}</div>
+                <div>
+                <Button variant='outline' onclick={() => deleteTop(t.name)}>Delete</Button>
+              </div>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     {/if}
   {/if}
 </div>

@@ -8,6 +8,7 @@
 
   export let projectId: number | string;
   export let wellName: string;
+  export let showList: boolean = true;
 
   let samples: any[] = [];
   let loading = false;
@@ -118,17 +119,19 @@
 </script>
 
 <div class="ws-core-samples">
-  {#if loading}
-    <div>Loading...</div>
-  {:else}
-    <ul class="space-y-2">
-      {#each samples as s}
-        <li class="p-2 bg-surface rounded">
-          <div class="font-medium">{s.sample_name}</div>
-          <div class="text-sm">Depth: {s.depth} {s.description ? `- ${s.description}` : ''}</div>
-        </li>
-      {/each}
-    </ul>
+  {#if showList}
+    {#if loading}
+      <div>Loading...</div>
+    {:else}
+      <ul class="space-y-2">
+        {#each samples as s}
+          <li class="p-2 bg-surface rounded">
+            <div class="font-medium">{s.sample_name}</div>
+            <div class="text-sm">Depth: {s.depth} {s.description ? `- ${s.description}` : ''}</div>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
 
   <div class="mt-4 bg-panel rounded p-3">

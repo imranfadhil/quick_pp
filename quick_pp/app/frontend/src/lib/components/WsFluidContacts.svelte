@@ -4,6 +4,7 @@
   import BulkAncillaryImporter from '$lib/components/BulkAncillaryImporter.svelte';
   export let projectId: string | number;
   export let wellName: string;
+  export let showList: boolean = true;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
   let contacts: Array<{name:string, depth:number, well_name?:string}> = [];
@@ -56,16 +57,18 @@
         <BulkAncillaryImporter {projectId} type="fluid_contacts" />
       </div>
     {/if}
-    {#if contacts.length===0}
-      <div class="text-sm text-muted">No fluid contacts</div>
-    {:else}
-      <ul class="space-y-1">
-        {#each contacts as c}
-          <li class="flex justify-between items-center p-2 bg-white/5 rounded">
-            <div>{c.well_name ?? wellName}: {c.name} — {c.depth}</div>
-          </li>
-        {/each}
-      </ul>
+    {#if showList}
+      {#if contacts.length===0}
+        <div class="text-sm text-muted">No fluid contacts</div>
+      {:else}
+        <ul class="space-y-1">
+          {#each contacts as c}
+            <li class="flex justify-between items-center p-2 bg-white/5 rounded">
+              <div>{c.well_name ?? wellName}: {c.name} — {c.depth}</div>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     {/if}
   {/if}
 </div>

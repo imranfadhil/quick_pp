@@ -8,7 +8,7 @@
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
   let files: File[] = [];
-  let previews: Array<{fileName:string, rows:any[], detected:any, suggestedWell?:string}> = [];
+  let previews: Array<{fileName:string, rows:any[], previewRows:any[], detected:any, suggestedWell?:string}> = [];
   let selectedWells: Record<string,string|null> = {};
   let wellsLoading = false;
   let globalError: string | null = null;
@@ -39,7 +39,7 @@
     const lines = text.split(/\r?\n/).filter(Boolean);
     if (!lines.length) return {headers:[], rows:[]};
     const headers = lines[0].split(',').map(h=>h.trim());
-    const rows = lines.slice(1,51).map(l => l.split(',').map(c=>c.trim()));
+    const rows = lines.slice(1).map(l => l.split(',').map(c=>c.trim()));
     const mapped = rows.map(r=>{
       const obj:any = {};
       for (let i=0;i<headers.length;i++) obj[headers[i]] = r[i] ?? '';
@@ -66,9 +66,10 @@
         detected.uom = headers[ lower.indexOf('pressure_uom') ] ?? null;
       }
       const previewRows = rows.slice(0,10);
-      previews.push({fileName:f.name, rows: previewRows, detected});
+      // store full rows for processing, previewRows for display
+      previews = [...previews, {fileName:f.name, rows: rows, previewRows, detected}];
     } catch (err:any) {
-      previews.push({fileName:f.name, rows: [], detected:{}, suggestedWell: undefined});
+      previews = [...previews, {fileName:f.name, rows: [], previewRows: [], detected:{}, suggestedWell: undefined}];
     }
   }
 
@@ -192,10 +193,14 @@
 
     processing = true;
     const tasks: (()=>Promise<any>)[] = previews.map(preview => async ()=>{
+      // initialize status for this file
+      fileStatuses[preview.fileName] = 'processing';
+      fileErrors[preview.fileName] = '';
       const payload = buildPayloadFromPreview(preview);
-      // attach well_name if selected
+      // attach well_name if selected (sent via query string, not in body)
       const sel = selectedWells[preview.fileName];
-      if (sel) (payload as any).well_name = sel;
+      const qs = sel ? `?well_name=${encodeURIComponent(String(sel))}` : '';
+      console.log('Bulk import: processing', preview.fileName, 'type', type);
       // if CSV contains well_name values, send multiple requests per distinct well
       const rows = preview.rows;
       const rowsHaveWell = rows.length && Object.keys(rows[0]).some(k=>k.toLowerCase()==='well_name');
@@ -209,15 +214,23 @@
           groups[wn] = groups[wn] || [];
           groups[wn].push(record);
         }
+        let totalSent = 0;
         const subResults: any[] = [];
-        for (const wn of Object.keys(groups)) {
+          for (const wn of Object.keys(groups)) {
           const subPayload: any = (type==='formation_tops') ? { tops: groups[wn].map((r:any)=>({name: r[preview.detected?.name] ?? r['name'], depth: Number(r[preview.detected?.depth] ?? r['depth']) })) } : (type==='fluid_contacts') ? { contacts: groups[wn].map((r:any)=>({name: r[preview.detected?.name] ?? r['name'], depth: Number(r[preview.detected?.depth] ?? r['depth']) })) } : { tests: groups[wn].map((r:any)=>({depth: Number(r[preview.detected?.depth] ?? r['depth']), pressure: Number(r[preview.detected?.pressure] ?? r['pressure']), pressure_uom: r[preview.detected?.uom] ?? r['pressure_uom'] ?? 'psi'})) };
-          subPayload.well_name = wn;
-          const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}`;
+          const subQs = `?well_name=${encodeURIComponent(String(wn))}`;
+          const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${subQs}`;
+          console.log('Bulk import: POST', url, subPayload);
           const res = await fetch(url, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(subPayload)});
-          if (!res.ok) return {file: preview.fileName, ok:false, error: await res.text(), status: res.status};
+          if (!res.ok) {
+            fileStatuses[preview.fileName] = 'error';
+            const errtxt = await res.text(); fileErrors[preview.fileName] = errtxt;
+            return {file: preview.fileName, ok:false, error: errtxt, status: res.status};
+          }
+          totalSent += (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? 0);
         }
-        return {file: preview.fileName, ok:true};
+        fileStatuses[preview.fileName] = 'success';
+        return {file: preview.fileName, ok:true, sent: totalSent};
       }
 
       // otherwise single request for whole file
@@ -226,21 +239,36 @@
         // payload may contain `samples` array
         const samplesArr = payload.samples ?? payload.samples ?? [];
         if (!samplesArr.length) return { file: preview.fileName, ok: false, error: 'No samples parsed' };
+        let sentCount = 0;
         for (const s of samplesArr) {
-          const singleUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/core_samples`;
+          const singleQs = sel ? `?well_name=${encodeURIComponent(String(sel))}` : '';
+          const singleUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/core_samples${singleQs}`;
           const singlePayload = { ...s };
-          // ensure well_name
-          if (sel) singlePayload.well_name = sel;
+          console.log('Bulk import: POST', singleUrl, singlePayload);
           const res = await fetch(singleUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(singlePayload) });
-          if (!res.ok) return { file: preview.fileName, ok: false, error: await res.text(), status: res.status };
+          if (!res.ok) {
+            fileStatuses[preview.fileName] = 'error';
+            const errtxt = await res.text(); fileErrors[preview.fileName] = errtxt;
+            return { file: preview.fileName, ok: false, error: errtxt, status: res.status };
+          }
+          sentCount += 1;
         }
-        return { file: preview.fileName, ok: true };
+        fileStatuses[preview.fileName] = 'success';
+        return { file: preview.fileName, ok: true, sent: sentCount };
       }
 
-      const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}`;
+      const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${qs}`;
+      console.log('Bulk import: POST', url, payload);
       const res = await fetch(url, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-      if (!res.ok) return {file: preview.fileName, ok:false, error: await res.text(), status: res.status};
-      return {file: preview.fileName, ok:true};
+      if (!res.ok) {
+        fileStatuses[preview.fileName] = 'error';
+        const errtxt = await res.text(); fileErrors[preview.fileName] = errtxt;
+        return {file: preview.fileName, ok:false, error: errtxt, status: res.status};
+      }
+      // compute number of rows sent
+      const sent = (payload.tops?.length ?? payload.contacts?.length ?? payload.tests?.length ?? 0) || (payload.samples ? payload.samples.length : 0);
+      fileStatuses[preview.fileName] = 'success';
+      return {file: preview.fileName, ok:true, sent};
     });
 
     try {
@@ -269,7 +297,7 @@
       </label>
       <input id="csv-input" type="file" accept=".csv" multiple on:change={handleFiles} class="hidden" />
     </div>
-    <div class="text-xs text-muted mt-1">You can select multiple CSVs. Each file can target a well or include a <code>well_name</code> column.</div>
+    <div class="text-xs text-muted-foreground mt-1">You can select multiple CSVs. Each file can target a well or include a <code>well_name</code> column.</div>
   </div>
 
   {#if previews.length}
@@ -280,7 +308,7 @@
           <div class="flex justify-between items-start mb-2">
             <div>
               <div class="font-medium">{p.fileName}</div>
-              <div class="text-xs text-muted">Detected: {JSON.stringify(p.detected)}</div>
+              <div class="text-xs text-muted-foreground">Detected: {JSON.stringify(p.detected)}</div>
             </div>
             <div class="flex items-center gap-2">
               {#if fileStatuses[p.fileName] === 'processing'}
@@ -300,10 +328,10 @@
           </div>
 
           <div class="text-sm overflow-auto">
-            <table class="text-sm w-full table-auto border-collapse">
-              <thead><tr>{#if p.rows.length}{#each Object.keys(p.rows[0]) as h}<th class="text-left pr-3">{h}</th>{/each}{/if}</tr></thead>
+              <table class="text-sm w-full table-auto border-collapse">
+              <thead><tr>{#if p.previewRows && p.previewRows.length}{#each Object.keys(p.previewRows[0]) as h}<th class="text-left pr-3">{h}</th>{/each}{/if}</tr></thead>
               <tbody>
-                {#each p.rows as r}
+                {#each (p.previewRows && p.previewRows.length ? p.previewRows : p.rows.slice(0,10)) as r}
                   <tr>{#each Object.keys(r) as k}<td class="pr-3">{r[k]}</td>{/each}</tr>
                 {/each}
               </tbody>

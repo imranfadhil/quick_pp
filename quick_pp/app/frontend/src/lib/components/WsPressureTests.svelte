@@ -4,6 +4,7 @@
   import BulkAncillaryImporter from '$lib/components/BulkAncillaryImporter.svelte';
   export let projectId: string | number;
   export let wellName: string;
+  export let showList: boolean = true;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
   let tests: Array<{depth:number, pressure:number, pressure_uom?:string, well_name?:string}> = [];
@@ -56,16 +57,18 @@
         <BulkAncillaryImporter {projectId} type="pressure_tests" />
       </div>
     {/if}
-    {#if tests.length===0}
-      <div class="text-sm text-muted">No pressure tests</div>
-    {:else}
-      <ul class="space-y-1">
-        {#each tests as t}
-          <li class="flex justify-between items-center p-2 bg-white/5 rounded">
-            <div>{t.well_name}: {t.depth} — {t.pressure} {t.pressure_uom}</div>
-          </li>
-        {/each}
-      </ul>
+    {#if showList}
+      {#if tests.length===0}
+        <div class="text-sm text-muted">No pressure tests</div>
+      {:else}
+        <ul class="space-y-1">
+          {#each tests as t}
+            <li class="flex justify-between items-center p-2 bg-white/5 rounded">
+              <div>{t.well_name}: {t.depth} — {t.pressure} {t.pressure_uom}</div>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     {/if}
   {/if}
 </div>
