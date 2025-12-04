@@ -104,7 +104,7 @@
         if (idx >= 0) columnDefs.push({ targets: idx, visible: false });
       }
 
-      const domSetting = 'Blfrtip';
+      const domSetting = hideControls ? 'lfrtip' : 'Bflrtip';
       const buttonsSetting = hideControls ? [] : [
         { extend: 'csv', text: 'Export CSV' },
         { extend: 'colvis', text: 'Columns' }

@@ -297,7 +297,23 @@
       </label>
       <input id="csv-input" type="file" accept=".csv" multiple on:change={handleFiles} class="hidden" />
     </div>
-    <div class="text-xs text-muted-foreground mt-1">You can select multiple CSVs. Each file can target a well or include a <code>well_name</code> column.</div>
+    <div class="text-xs text-muted-foreground mt-1">
+      <div>You can select multiple CSVs. Each file can target a well or include a <code>well_name</code> column.</div>
+      <div class="mt-1">Required columns for the selected import type:</div>
+      {#if type === 'formation_tops'}
+        <div class="text-xs"><code>name</code>, <code>depth</code></div>
+      {:else if type === 'fluid_contacts'}
+        <div class="text-xs"><code>name</code>, <code>depth</code></div>
+      {:else if type === 'pressure_tests'}
+        <div class="text-xs"><code>depth</code>, <code>pressure</code>, <code>pressure_uom</code> (optional)</div>
+      {:else if type === 'core_samples'}
+        <div class="text-xs"><code>sample_name</code> (or <code>sample</code>), <code>depth</code>, measurement columns: <code>property_name</code>, <code>value</code>, <code>unit</code></div>
+      {:else if type === 'rca'}
+        <div class="text-xs">Measurements: <code>sample_name</code>, <code>property_name</code>, <code>value</code>, <code>unit</code></div>
+      {:else if type === 'scal'}
+        <div class="text-xs">Relperm: <code>rp_sat</code>, <code>rp_kr</code>, <code>rp_phase</code>. Capillary pressure: <code>pc_sat</code>, <code>pc_pressure</code>, <code>pc_type</code>, <code>pc_cycle</code></div>
+      {/if}
+    </div>
   </div>
 
   {#if previews.length}
