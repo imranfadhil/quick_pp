@@ -754,7 +754,7 @@
           <div class="bg-surface rounded p-2">
             <button
               class="btn px-3 py-1 text-sm font-semibold rounded-md bg-gray-900 text-white hover:bg-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-700"
-              on:click={runSSC}
+              onclick={runSSC}
               disabled={loading}
               style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
               aria-label="Run lithology classification"
@@ -764,7 +764,7 @@
             </button>
             <button
               class="btn px-3 py-1 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-500 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-green-600"
-              on:click={saveLitho}
+              onclick={saveLitho}
               disabled={loading || saveLoadingLitho}
               style={(loading || saveLoadingLitho) ? 'opacity:0.5; pointer-events:none;' : ''}
               aria-label="Save lithology"
@@ -796,7 +796,7 @@
           <div class="bg-surface rounded p-2">
             <button
                 class="btn px-3 py-1 text-sm font-medium rounded-md bg-gray-800 text-gray-100 hover:bg-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-600"
-                on:click={runPoro}
+                onclick={runPoro}
                 disabled={loading}
                 style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
                 aria-label="Estimate porosity"
@@ -806,7 +806,7 @@
               </button>
               <button
                 class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
-                on:click={savePoro}
+                onclick={savePoro}
                 disabled={loading || saveLoadingPoro}
                 style={(loading || saveLoadingPoro) ? 'opacity:0.5; pointer-events:none;' : ''}
                 aria-label="Save porosity"

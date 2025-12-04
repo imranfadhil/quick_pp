@@ -33,7 +33,7 @@
     <div class="font-semibold">No project selected</div>
     <div class="text-sm text-muted mt-2">Select a project in the Projects workspace to begin.</div>
     <div class="mt-4">
-      <button class="btn btn-primary" on:click={() => goto('/projects')}>Open Projects</button>
+      <button class="btn btn-primary" onclick={() => goto('/projects')}>Open Projects</button>
     </div>
   </div>
 {/if}

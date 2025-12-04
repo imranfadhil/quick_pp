@@ -177,7 +177,7 @@
 <div class="ws-well-plot">
   <DepthFilterStatus />
   <div class="mb-2 flex items-center gap-2">
-    <button class="btn px-3 py-1 text-sm bg-gray-800 text-white rounded" on:click={loadAndRender} aria-label="Refresh plot">Refresh</button>
+    <button class="btn px-3 py-1 text-sm bg-gray-800 text-white rounded" onclick={loadAndRender} aria-label="Refresh plot">Refresh</button>
     <label class="text-sm flex items-center gap-1">
       <input type="checkbox" bind:checked={autoRefresh} />
       Auto-refresh

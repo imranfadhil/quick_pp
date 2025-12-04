@@ -140,15 +140,33 @@
     {#if error}
       <div class="text-sm text-red-600">{error}</div>
     {/if}
-    <div class="mb-3">
-      <input placeholder="Top name" bind:value={newTop.name} class="input mr-2" />
-      <input placeholder="Depth" type="number" bind:value={newTop.depth} class="input mr-2 w-24" />
-      <Button class="btn btn-primary" onclick={addTop}>Add Top</Button>
+    <div class="mb-3 flex items-center gap-2">
+      <input placeholder="Top name" bind:value={newTop.name} class="input" />
+      <input placeholder="Depth" type="number" bind:value={newTop.depth} class="input w-24" />
+      <Button variant="default" onclick={addTop}>Add Top</Button>
     </div>
 
       <div class="mb-3">
-        <label class="block text-sm" for="csv-upload">Bulk import CSV (columns: name, depth)</label>
-        <input id="csv-upload" type="file" accept=".csv" on:change={handleFileInput} />
+        <label for="csv-upload" class="block text-sm mb-2">Bulk import CSV (columns: name, depth)</label>
+        <div class="flex items-center justify-between border rounded-md p-2 bg-white/5">
+          <div class="text-sm text-muted-foreground">
+            {#if csvFile}
+              {csvFile.name}
+            {:else}
+              No file chosen
+            {/if}
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="inline-flex items-center px-3 py-1 rounded-md border cursor-pointer text-sm">
+              <input id="csv-upload" type="file" accept=".csv" on:change={handleFileInput} class="hidden" />
+              Choose
+            </label>
+            {#if csvFile}
+              <Button variant="ghost" class="btn-sm" onclick={uploadCsvForPreview}>Server preview</Button>
+            {/if}
+          </div>
+        </div>
+
         {#if csvPreview.length}
           <div class="mt-2 text-sm">Preview (first {csvPreview.length} rows):</div>
           <ul class="text-sm mb-2">
@@ -157,13 +175,13 @@
             {/each}
           </ul>
           <div class="flex gap-2">
-            <Button class="btn btn-primary" onclick={importCsvPreview}>Import (client parse)</Button>
-            <Button class="btn btn-primary" onclick={importCsvFromServer}>Import (server preview)</Button>
+            <Button variant="default" onclick={importCsvPreview}>Import (client parse)</Button>
+            <Button variant="default" onclick={importCsvFromServer}>Import (server preview)</Button>
           </div>
         {/if}
         {#if csvFile}
           <div class="mt-2">
-            <Button class="btn btn-ghost btn-sm mr-2" onclick={uploadCsvForPreview}>Use server preview</Button>
+            <Button variant="ghost" class="btn-sm mr-2" onclick={uploadCsvForPreview}>Use server preview</Button>
           </div>
         {/if}
       </div>
