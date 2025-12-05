@@ -1,6 +1,6 @@
 <script lang="ts">
   // plotting will be handled via Plotly (dynamically imported)
-  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
+  import { workspace, applyDepthFilter, applyZoneFilter } from '$lib/stores/workspace';
   import { onDestroy } from 'svelte';
   import DepthFilterStatus from './DepthFilterStatus.svelte';
 
@@ -14,6 +14,12 @@
     minDepth: null,
     maxDepth: null,
   };
+
+  // Zone filter state
+  let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
+
+  // Visible rows after applying depth + zone filters
+  let visibleRows: Array<Record<string, any>> = [];
 
   let loading = false;
   let error: string | null = null;
@@ -400,9 +406,9 @@
 
   function extractNphiRhob()
   {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
-    
+    // Use visibleRows which have depth and zone filters applied
+    const filteredRows = visibleRows;
+
     // build payload data: list of {nphi, rhob}
     const data: Array<{nphi:number; rhob:number}> = [];
     for (const r of filteredRows) {
@@ -415,8 +421,8 @@
   }
 
   function extractCporeData() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows which have depth and zone filters applied
+    const filteredRows = visibleRows;
     
     const data: Array<Record<string, any>> = [];
     for (const r of filteredRows) {
@@ -561,7 +567,7 @@
     try {
       // Build rows aligned with the filtered rows that were used to create poro results.
       // Only include the required columns: PHIT and PHIE (if available).
-      const filteredRows = applyDepthFilter(fullRows, depthFilter);
+      const filteredRows = visibleRows;
       const rows: Array<Record<string, any>> = [];
       let i = 0;
       for (const r of filteredRows) {
@@ -610,8 +616,8 @@
   }
 
   function buildLithoChart() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows which have depth and zone filters applied
+    const filteredRows = visibleRows;
     
     // lithoResults only contains results for rows with valid NPHI/RHOB data
     const rows: Array<Record<string, any>> = [];
@@ -641,8 +647,8 @@
   }
 
   function buildPoroChart() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows which have depth and zone filters applied
+    const filteredRows = visibleRows;
     
     const rows: Array<Record<string, any>> = [];
     let i = 0;
@@ -680,11 +686,22 @@
     if (w?.depthFilter) {
       depthFilter = { ...w.depthFilter };
     }
+    if (w?.zoneFilter) {
+      zoneFilter = { ...w.zoneFilter };
+    }
   });
   
   onDestroy(() => {
     unsubscribeWorkspace();
   });
+
+  // compute visibleRows whenever fullRows or filters change
+  $: visibleRows = (() => {
+    let rows = fullRows || [];
+    rows = applyDepthFilter(rows, depthFilter);
+    rows = applyZoneFilter(rows, zoneFilter);
+    return rows;
+  })();
 
   // load data on mount or when well changes
   $: if (projectId && wellName) {
@@ -692,10 +709,10 @@
   }
 
   // re-render Plotly when data or any input parameters change (including depth filter)
-  $: if (plotDiv && (fullRows || drySandNphi !== undefined || drySandRhob !== undefined || 
+  $: if (plotDiv && (visibleRows || drySandNphi !== undefined || drySandRhob !== undefined || 
                      dryClayNphi !== undefined || dryClayRhob !== undefined || 
                      drySiltNphi !== undefined || fluidNphi !== undefined || 
-                     fluidRhob !== undefined || siltLineAngle !== undefined || depthFilter)) {
+                     fluidRhob !== undefined || siltLineAngle !== undefined || depthFilter || zoneFilter)) {
     // call async render but don't await in reactive context
     renderNdPlot();
   }
@@ -776,7 +793,7 @@
               Estimate Lithology
             </button>
             <button
-              class="btn px-3 py-1 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-500 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-green-600"
+              class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
               onclick={saveLitho}
               disabled={loading || saveLoadingLitho}
               style={(loading || saveLoadingLitho) ? 'opacity:0.5; pointer-events:none;' : ''}

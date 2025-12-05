@@ -19,4 +19,8 @@ export interface WorkspaceState {
     minDepth: number | null;
     maxDepth: number | null;
   };
+  zoneFilter?: {
+    enabled: boolean;
+    zones: string[];
+  };
 }

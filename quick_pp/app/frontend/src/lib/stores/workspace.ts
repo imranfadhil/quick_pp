@@ -11,6 +11,10 @@ export const workspace = writable<WorkspaceState>({
     minDepth: null,
     maxDepth: null,
   },
+  zoneFilter: {
+    enabled: false,
+    zones: [],
+  },
 });
 
 export function setWorkspaceTitle(title: string, subtitle?: string) {
@@ -81,6 +85,26 @@ export function clearDepthFilter() {
   }));
 }
 
+export function setZoneFilter(enabled: boolean, zones?: string[]) {
+  workspace.update((s) => ({
+    ...s,
+    zoneFilter: {
+      enabled,
+      zones: zones && Array.isArray(zones) ? zones.map((z) => String(z)) : [],
+    },
+  }));
+}
+
+export function clearZoneFilter() {
+  workspace.update((s) => ({
+    ...s,
+    zoneFilter: {
+      enabled: false,
+      zones: [],
+    },
+  }));
+}
+
 // Helper function to filter data rows based on current depth filter
 export function applyDepthFilter(rows: Array<Record<string, any>>, depthFilter?: { enabled: boolean; minDepth: number | null; maxDepth: number | null }) {
   if (!depthFilter?.enabled || (!depthFilter.minDepth && !depthFilter.maxDepth)) {
@@ -95,5 +119,34 @@ export function applyDepthFilter(rows: Array<Record<string, any>>, depthFilter?:
     if (depthFilter.maxDepth !== null && depth > depthFilter.maxDepth) return false;
     
     return true;
+  });
+}
+
+// Helper to locate a zone/formation value on a row using common candidate keys
+function extractZoneValue(row: Record<string, any>) {
+  if (!row || typeof row !== 'object') return null;
+  const candidates = ['name', 'zone', 'Zone', 'ZONE', 'formation', 'formation_name', 'formationName', 'FORMATION', 'formation_top', 'formationTop'];
+  for (const k of candidates) {
+    if (k in row && row[k] !== null && row[k] !== undefined && String(row[k]).trim() !== '') {
+      return String(row[k]);
+    }
+  }
+  // fallback: try to find a key that contains 'zone' or 'formation'
+  for (const k of Object.keys(row)) {
+    if (/zone|formation/i.test(k) && row[k] !== null && row[k] !== undefined && String(row[k]).trim() !== '') {
+      return String(row[k]);
+    }
+  }
+  return null;
+}
+
+export function applyZoneFilter(rows: Array<Record<string, any>>, zoneFilter?: { enabled: boolean; zones: string[] }) {
+  if (!zoneFilter?.enabled || !zoneFilter.zones || zoneFilter.zones.length === 0) return rows;
+
+  const allowed = new Set(zoneFilter.zones.map((z) => String(z)));
+  return rows.filter((row) => {
+    const val = extractZoneValue(row);
+    if (val === null) return false;
+    return allowed.has(val);
   });
 }

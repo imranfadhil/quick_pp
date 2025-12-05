@@ -4,7 +4,7 @@
   import * as Chart from '$lib/components/ui/chart/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { renameColumn, convertPercentToFraction, applyRenameInColumns } from '$lib/utils/topBottomEdits';
-  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
+  import { workspace, applyDepthFilter, applyZoneFilter } from '$lib/stores/workspace';
   import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   export let projectId: string | number;
@@ -47,11 +47,20 @@
     minDepth: null,
     maxDepth: null,
   };
+
+  // Zone filter state
+  let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
+
+  // Visible rows after applying depth/zone filters
+  let visibleRows: Array<Record<string, any>> = [];
   
   // Subscribe to workspace for depth filter changes
   const unsubscribeWorkspace = workspace.subscribe((w) => {
     if (w?.depthFilter) {
       depthFilter = { ...w.depthFilter };
+    }
+    if (w?.zoneFilter) {
+      zoneFilter = { ...w.zoneFilter };
     }
   });
   
@@ -73,7 +82,14 @@
   let editMessage: string | null = null;
 
   $: buildChartData();
-  $: if (fullRows.length > 0 && fullColumns.length > 0) {
+  $: visibleRows = (() => {
+    let rows = fullRows || [];
+    rows = applyDepthFilter(rows, depthFilter);
+    rows = applyZoneFilter(rows, zoneFilter);
+    return rows;
+  })();
+
+  $: if (visibleRows.length > 0 && fullColumns.length > 0) {
     profileData();
   }
 
@@ -81,7 +97,7 @@
     const profile: Record<string, any> = {};
     
     for (const col of fullColumns) {
-      const values = fullRows.map(row => row[col]);
+      const values = visibleRows.map(row => row[col]);
       const nonNullValues = values.filter(v => v !== null && v !== undefined && v !== '');
       const nullCount = values.length - nonNullValues.length;
       
@@ -219,9 +235,9 @@
 
   function buildChartData() {
     // if fullRows exist and selectedLog is set, prefer to build from fullRows
-    if (fullRows && fullRows.length && selectedLog) {
+    if (visibleRows && visibleRows.length && selectedLog) {
       const logKey = selectedLog; // capture non-null value
-      const rows = fullRows
+      const rows = visibleRows
         .map((r) => ({ depth: Number(r.depth ?? r.depth_m ?? NaN), value: Number(r[logKey] ?? NaN) }))
         .filter((r) => !isNaN(r.depth) && !isNaN(r.value));
       rows.sort((a, b) => a.depth - b.depth);

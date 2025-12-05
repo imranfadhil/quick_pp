@@ -20,6 +20,7 @@ async def get_well_log(
     well_name: str,
     min_depth: Optional[float] = None,
     max_depth: Optional[float] = None,
+    zones: Optional[str] = None,
 ):
     """Return a Plotly figure JSON for the given project well.
 
@@ -122,6 +123,22 @@ async def get_well_log(
                 raise HTTPException(
                     status_code=404, detail=f"No data for well {well_name}"
                 )
+
+            # Apply zone filtering if zones provided
+            if zones:
+                zone_list = [z.strip() for z in zones.split(",") if z.strip()]
+                if "ZONES" in df.columns:
+                    df = df[df["ZONES"].isin(zone_list)]
+                    if df.empty:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"No data for well {well_name} in specified zones",
+                        )
+                else:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"No zone information available for well {well_name}",
+                    )
 
             # Apply depth filtering if parameters provided
             if min_depth is not None or max_depth is not None:

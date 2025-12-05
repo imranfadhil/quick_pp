@@ -2,9 +2,9 @@
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import type { Icon } from "@tabler/icons-svelte";
 	import { page } from '$app/stores';
-	import { workspace, selectWell, setDepthFilter, clearDepthFilter } from '$lib/stores/workspace';
+	import { workspace, selectWell, setDepthFilter, clearDepthFilter, setZoneFilter, clearZoneFilter } from '$lib/stores/workspace';
 	import { goto } from '$app/navigation';
-	import { onDestroy } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 
 	const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
@@ -18,6 +18,16 @@
 	let depthFilterEnabled = $state(false);
 	let minDepth: number | null = $state(null);
 	let maxDepth: number | null = $state(null);
+	
+	// Zone filter state
+	let zoneFilterEnabled = $state(false);
+	let zones: string[] = $state([]);
+	let selectedZones: string[] = $state([]);
+	let loadingZones = $state(false);
+	let zonesOpen = $state(false);
+	let _lastSelectedWellName: string | null = null;
+	let zonesWrapper: HTMLElement | null = null;
+
 
 	async function fetchWells(projectId: string | number) {
 		loadingWells = true;
@@ -37,12 +47,23 @@
 	}
 
 	const unsubscribe = workspace.subscribe((w) => {
-		if (w && w.project && w.project.project_id) {
+	    if (w && w.project && w.project.project_id) {
 			project = { ...w.project };
 			selectedWell = w.selectedWell ?? null;
 			selectedWellName = selectedWell?.name ?? '';
 			// fetch wells for this project
 			fetchWells(w.project.project_id);
+				// fetch available zones only when the selected well changed
+				const curWellName = w.selectedWell && w.selectedWell.name ? String(w.selectedWell.name) : null;
+				if (curWellName !== _lastSelectedWellName) {
+					_lastSelectedWellName = curWellName;
+					if (curWellName) {
+						fetchZones(w.project.project_id, curWellName);
+					} else {
+						zones = [];
+						// keep selectedZones as-is (do not clear on unrelated changes)
+					}
+				}
 		} else {
 			project = null;
 			wells = [];
@@ -56,9 +77,38 @@
 			minDepth = w.depthFilter.minDepth;
 			maxDepth = w.depthFilter.maxDepth;
 		}
+
+		// Update zone filter state
+		if (w?.zoneFilter) {
+			zoneFilterEnabled = w.zoneFilter.enabled;
+			selectedZones = Array.isArray(w.zoneFilter.zones) ? [...w.zoneFilter.zones] : [];
+		}
 	});
 
 	onDestroy(() => unsubscribe());
+
+	onMount(() => {
+		function onDocMouseDown(e: MouseEvent) {
+			if (!zonesOpen) return;
+			const el = zonesWrapper;
+			if (!el) return;
+			const target = e.target as Node | null;
+			if (target && !el.contains(target)) {
+				zonesOpen = false;
+			}
+		}
+
+		function onDocKey(e: KeyboardEvent) {
+			if (e.key === 'Escape' && zonesOpen) zonesOpen = false;
+		}
+
+		document.addEventListener('mousedown', onDocMouseDown);
+		document.addEventListener('keydown', onDocKey);
+		return () => {
+			document.removeEventListener('mousedown', onDocMouseDown);
+			document.removeEventListener('keydown', onDocKey);
+		};
+	});
 
 		let { items }: { items: { title: string; url: string; icon?: Icon }[] } = $props();
 
@@ -111,6 +161,67 @@
 			minDepth = null;
 			maxDepth = null;
 			clearDepthFilter();
+		}
+
+		// Zone helpers
+		function extractZoneValue(row: Record<string, any>) {
+			if (!row || typeof row !== 'object') return null;
+			const candidates = ['name', 'zone', 'Zone', 'ZONE', 'formation', 'formation_name', 'formationName', 'FORMATION', 'formation_top', 'formationTop'];
+			for (const k of candidates) {
+				if (k in row && row[k] !== null && row[k] !== undefined && String(row[k]).trim() !== '') {
+					return String(row[k]);
+				}
+			}
+			for (const k of Object.keys(row)) {
+				if (/zone|formation/i.test(k) && row[k] !== null && row[k] !== undefined && String(row[k]).trim() !== '') {
+					return String(row[k]);
+				}
+			}
+			return null;
+		}
+
+		async function fetchZones(projectId: string | number, wellName: string) {
+			loadingZones = true;
+			zones = [];
+			try {
+				const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/formation_tops`;
+				const res = await fetch(url);
+				if (!res.ok) return;
+				const fd = await res.json();
+				console.log('Fetched formation tops for zones:', fd);
+				let dataArray: any[] = [];
+				if (Array.isArray(fd)) dataArray = fd;
+				else if (fd && Array.isArray(fd.tops)) dataArray = fd.tops;
+				const setVals = new Set<string>();
+				for (const r of dataArray) {
+					const v = extractZoneValue(r);
+					if (v !== null) setVals.add(v);
+				}
+				zones = Array.from(setVals).sort((a, b) => a.localeCompare(b));
+			} catch (e) {
+				console.warn('Failed to fetch zones for sidebar', e);
+			} finally {
+				loadingZones = false;
+			}
+		}
+
+		function handleZoneFilterToggle() {
+			if (zoneFilterEnabled) {
+				setZoneFilter(true, selectedZones);
+			} else {
+				clearZoneFilter();
+			}
+		}
+
+		function handleZonesChange() {
+			if (zoneFilterEnabled) {
+				setZoneFilter(true, selectedZones);
+			}
+		}
+
+		function resetZoneFilter() {
+			selectedZones = [];
+			clearZoneFilter();
 		}
 </script>
 
@@ -182,6 +293,50 @@
 							Clear Filter
 						</button>
 					</div>
+				{/if}
+
+				<!-- Zone Filter Controls -->
+				<div class="flex items-center gap-2 mb-2">
+					<input
+						type="checkbox"
+						id="zone-filter"
+						bind:checked={zoneFilterEnabled}
+						onchange={handleZoneFilterToggle}
+						class="rounded"
+					/>
+					<label for="zone-filter" class="text-sm font-medium cursor-pointer">Filter by Zone</label>
+				</div>
+				{#if zoneFilterEnabled}
+					{#if loadingZones}
+						<div class="text-sm">Loading zones…</div>
+					{:else}
+						{#if zones && zones.length}
+							<div>
+								<div class="relative mt-1" bind:this={zonesWrapper}>
+									<button type="button" class="input w-full text-sm h-9 flex items-center justify-between" onclick={() => zonesOpen = !zonesOpen} aria-haspopup="listbox" aria-expanded={zonesOpen}>
+										<span>{selectedZones && selectedZones.length ? `${selectedZones.length} selected` : 'Choose zones'}</span>
+										<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 ml-2" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 011.08 1.04l-4.25 4.25a.75.75 0 01-1.06 0L5.21 8.27a.75.75 0 01.02-1.06z" clip-rule="evenodd" /></svg>
+									</button>
+									{#if zonesOpen}
+										<div class="absolute z-50 mt-1 bg-white dark:bg-slate-900 text-foreground border border-panel-foreground/10 p-2 rounded shadow w-full max-h-48 overflow-auto">
+											{#each zones as z}
+												<label class="flex items-center gap-2 text-sm py-1 text-foreground">
+													<input type="checkbox" value={z} bind:group={selectedZones} onchange={handleZonesChange} />
+													<span class="truncate">{z}</span>
+												</label>
+											{/each}
+											<div class="flex items-center justify-between mt-2">
+												<button class="text-xs text-muted-foreground hover:text-foreground underline" onclick={() => { zonesOpen = false; resetZoneFilter(); }}>Clear</button>
+												<button class="text-xs font-medium" onclick={() => { zonesOpen = false; handleZonesChange(); }}>Apply</button>
+											</div>
+										</div>
+									{/if}
+								</div>
+							</div>
+						{:else}
+							<div class="text-sm text-muted-foreground">No zones available for this well.</div>
+						{/if}
+					{/if}
 				{/if}
 			{/if}
 		{:else}

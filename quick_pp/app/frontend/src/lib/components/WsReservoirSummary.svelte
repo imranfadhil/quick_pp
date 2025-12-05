@@ -3,8 +3,6 @@
   export let wellName: string;
   import { Button } from '$lib/components/ui/button/index.js';
   import { onMount, onDestroy } from 'svelte';
-  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
-  import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   // import DataTables & jQuery from node_modules (bundled by Vite)
   import jQuery from 'jquery';
@@ -37,12 +35,7 @@
   let maxSwt: number = 0.99;
   let maxVclay: number = 0.4;
 
-  // Depth filter state
-  let depthFilter: { enabled: boolean; minDepth: number | null; maxDepth: number | null } = {
-    enabled: false,
-    minDepth: null,
-    maxDepth: null,
-  };
+  // Depth filter state (displayed by DepthFilterStatus); not applied to ressum payload
   
   // filtered rows are the raw results from backend; DataTables will handle search/filtering
   $: filtered = ressumRows ?? [];
@@ -160,8 +153,8 @@
 
   // Build payload for ressum: map fullRows to required keys
   function buildRessumPayload() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use raw fullRows (no client-side depth/zone filtering) as requested
+    const filteredRows = Array.isArray(fullRows) ? fullRows : [];
     
     const mappedRows: Array<Record<string, any>> = [];
     for (const r of filteredRows) {
@@ -278,8 +271,6 @@
     <div class="font-semibold">Reservoir Summary</div>
     <div class="text-sm text-muted-foreground">High-level reservoir summary and exportable reports.</div>
   </div>
-
-  <DepthFilterStatus />
 
   {#if wellName}
     <div class="bg-panel rounded p-3">

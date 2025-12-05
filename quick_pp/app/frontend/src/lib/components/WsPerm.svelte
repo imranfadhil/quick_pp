@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { Button } from '$lib/components/ui/button/index.js';
-  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
+  import { workspace, applyDepthFilter, applyZoneFilter } from '$lib/stores/workspace';
   import DepthFilterStatus from './DepthFilterStatus.svelte';
   
   export let projectId: number | string;
@@ -15,6 +15,11 @@
     minDepth: null,
     maxDepth: null,
   };
+  // Zone filter state
+  let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
+
+  // Visible rows after depth+zone filters
+  let visibleRows: Array<Record<string, any>> = [];
   
   let loading = false;
   let error: string | null = null;
@@ -65,8 +70,8 @@
     const method = permMethods.find(m => m.value === selectedMethod);
     if (!method) return [];
     
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows (depth + zone filters applied)
+    const filteredRows = visibleRows;
     
     const data: Array<Record<string, number>> = [];
     for (const r of filteredRows) {
@@ -104,8 +109,8 @@
   }
   
   function extractCpermData() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows (depth + zone filters applied)
+    const filteredRows = visibleRows;
     
     const data: Array<Record<string, any>> = [];
     for (const r of filteredRows) {
@@ -158,18 +163,9 @@
     saveMessagePerm = null;
     error = null;
     try {
-      // Build CPERM lookup by depth
-      const cpermByDepth = new Map<number, number>();
-      for (const c of cpermData) {
-        const d = Number(c.depth);
-        if (!isNaN(d)) cpermByDepth.set(d, Number(c.CPERM));
-      }
-
       // Align rows to permChartData (already sorted by depth)
       const rows: Array<Record<string, any>> = permChartData.map(r => {
         const row: Record<string, any> = { DEPTH: r.depth, PERM: Number(r.PERM) };
-        const core = cpermByDepth.get(r.depth);
-        if (typeof core === 'number' && !isNaN(core)) row.CPERM = core;
         return row;
       });
 
@@ -242,8 +238,8 @@
   }
 
   function buildPermChart() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows (depth + zone filters applied)
+    const filteredRows = visibleRows;
     
     const rows: Array<Record<string, any>> = [];
     let i = 0;
@@ -378,11 +374,27 @@
     if (w?.depthFilter) {
       depthFilter = { ...w.depthFilter };
     }
+    if (w?.zoneFilter) {
+      zoneFilter = { ...w.zoneFilter };
+    }
   });
   
   onDestroy(() => {
     unsubscribeWorkspace();
   });
+
+  // compute visibleRows whenever fullRows or filters change
+  $: visibleRows = (() => {
+    let rows = fullRows || [];
+    rows = applyDepthFilter(rows, depthFilter);
+    rows = applyZoneFilter(rows, zoneFilter);
+    return rows;
+  })();
+
+  // Rebuild permChart when results or visibleRows change
+  $: if (permResults && visibleRows) {
+    buildPermChart();
+  }
   
   // Load data when well changes
   $: if (projectId && wellName) {

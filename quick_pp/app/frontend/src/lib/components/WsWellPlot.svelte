@@ -24,6 +24,9 @@
     maxDepth: null,
   };
 
+  // Zone filter state
+  let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
+
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
   async function ensurePlotly() {
@@ -43,7 +46,7 @@
       // Build URL with depth filter parameters
       let url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/log`;
       
-      // Add depth filter query parameters if enabled
+      // Build query parameters for depth and zone filters
       const params = new URLSearchParams();
       if (depthFilter.enabled) {
         if (depthFilter.minDepth !== null) {
@@ -52,6 +55,12 @@
         if (depthFilter.maxDepth !== null) {
           params.append('max_depth', String(depthFilter.maxDepth));
         }
+      }
+      // Include zone filter if enabled - send as comma-separated `zones` param
+      if (zoneFilter?.enabled && Array.isArray(zoneFilter.zones) && zoneFilter.zones.length > 0) {
+        // encode individual zone values and join with comma
+        const encoded = zoneFilter.zones.map((z) => String(z)).join(',');
+        params.append('zones', encoded);
       }
       if (params.toString()) {
         url += '?' + params.toString();
@@ -129,6 +138,19 @@
       if (JSON.stringify(newFilter) !== JSON.stringify(depthFilter)) {
         depthFilter = newFilter;
         // Trigger re-render when depth filter changes
+        if (browser && projectId && wellName) {
+          loadAndRender();
+        }
+      }
+    }
+    // zone filter changes should also trigger a re-render
+    if (w?.zoneFilter) {
+      const newZone = { ...w.zoneFilter };
+      // compare by enabled + joined zones
+      const prev = (zoneFilter && Array.isArray(zoneFilter.zones)) ? zoneFilter.zones.join(',') : '';
+      const curr = (newZone && Array.isArray(newZone.zones)) ? newZone.zones.join(',') : '';
+      if (newZone.enabled !== zoneFilter.enabled || prev !== curr) {
+        zoneFilter = newZone;
         if (browser && projectId && wellName) {
           loadAndRender();
         }
