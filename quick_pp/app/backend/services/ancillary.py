@@ -1,6 +1,9 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Dict, Any, Optional
 import json
+import pandas as pd
+import numpy as np
+import math
 
 from . import database
 from quick_pp.database import objects as db_objects
@@ -1044,6 +1047,215 @@ def get_well_top_to_bottom_data(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get well data: {e}")
+
+
+@router.get(
+    "/merged",
+    summary="Get well data merged with ancillary datapoints by depth",
+)
+def get_well_data_merged(
+    project_id: int, well_name: str, tolerance: Optional[float] = 0.16
+):
+    """Return the well log rows with nearby ancillary datapoints merged by depth.
+
+    For each row in the well log the endpoint collects formation tops, fluid
+    contacts, pressure tests and nearby core samples (and their measurements)
+    that are within `tolerance` depth units and includes them as lists on the
+    returned row dict. This keeps the time-series log structure while making
+    nearby point data available to clients.
+    """
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+
+    def _to_py(val):
+        try:
+            if val is None:
+                return None
+            # unwrap numpy / pandas scalar
+            if hasattr(val, "item"):
+                val = val.item()
+
+            # pandas Timestamp or datetime-like -> isoformat
+            if hasattr(val, "isoformat") and not isinstance(val, str):
+                try:
+                    return val.isoformat()
+                except Exception:
+                    return None
+
+            # numeric NaN / +/-inf -> None
+            try:
+                if isinstance(val, (float, int)):
+                    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                        return None
+                    return val
+            except Exception:
+                pass
+
+            # pandas NA / numpy NaN catch-all
+            try:
+                if pd.isna(val):
+                    return None
+            except Exception:
+                pass
+
+            return val
+        except Exception:
+            return None
+
+    def _normalize_df_depth(dframe):
+        if dframe is None or dframe.empty:
+            return None
+        d = dframe.copy()
+        d.columns = [c.lower() for c in d.columns]
+        if "depth" not in d.columns:
+            candidate = next(
+                (c for c in d.columns if "depth" in c or c in ("md", "tvd")),
+                None,
+            )
+            if candidate:
+                d = d.rename(columns={candidate: "depth"})
+        d["depth"] = pd.to_numeric(d["depth"], errors="coerce")
+        d = d.dropna(subset=["depth"]) if not d.empty else d
+        return d
+
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            df = proj.get_well_data(well_name)
+            if df.empty:
+                return []
+
+            df = df.reset_index(drop=True)
+            df.columns = [c.lower() for c in df.columns]
+            if "depth" not in df.columns:
+                candidate = next(
+                    (c for c in df.columns if "depth" in c or c in ("md", "tvd")),
+                    None,
+                )
+                if candidate:
+                    df = df.rename(columns={candidate: "depth"})
+
+            if "depth" not in df.columns:
+                raise ValueError("No depth column found in well data")
+
+            df["depth"] = pd.to_numeric(df["depth"], errors="coerce")
+            df = df.dropna(subset=["depth"]) if not df.empty else df
+            df = df.sort_values("depth").reset_index(drop=True)
+
+            well = proj.get_well(well_name)
+            tops_df = _normalize_df_depth(well.get_formation_tops())
+            contacts_df = _normalize_df_depth(well.get_fluid_contacts())
+            pressure_df = _normalize_df_depth(well.get_pressure_tests())
+            core_raw = well.get_core_data() or {}
+
+            # Prepare prefixed ancillary DataFrames for merge_asof
+            def _prefixed(dframe, prefix):
+                if dframe is None or dframe.empty:
+                    return None
+                d2 = dframe.copy()
+                d2.columns = [c.lower() for c in d2.columns]
+                if "depth" not in d2.columns:
+                    return None
+                cols = [c for c in d2.columns if c != "depth"]
+                rename = {c: f"{prefix}{c}" for c in cols}
+                d2 = d2.rename(columns=rename)
+                d2["depth"] = pd.to_numeric(d2["depth"], errors="coerce")
+                d2 = d2.dropna(subset=["depth"]) if not d2.empty else d2
+                return d2.sort_values("depth").reset_index(drop=True)
+
+            tops_p = _prefixed(tops_df, "top_")
+            contacts_p = _prefixed(contacts_df, "contact_")
+            pressure_p = _prefixed(pressure_df, "pressure_")
+
+            merged = df.copy()
+            merged["depth"] = pd.to_numeric(merged["depth"], errors="coerce")
+            merged = merged.dropna(subset=["depth"]) if not merged.empty else merged
+            merged = merged.sort_values("depth").reset_index(drop=True)
+
+            # sequential merge_asof - each adds the nearest ancillary row within tolerance
+            if tops_p is not None and not tops_p.empty:
+                merged = pd.merge_asof(
+                    merged,
+                    tops_p,
+                    on="depth",
+                    direction="nearest",
+                    tolerance=tolerance,
+                    suffixes=("", "_top"),
+                )
+                merged["ZONES"] = merged["top_name"].ffill()
+            if contacts_p is not None and not contacts_p.empty:
+                merged = pd.merge_asof(
+                    merged,
+                    contacts_p,
+                    on="depth",
+                    direction="nearest",
+                    tolerance=tolerance,
+                    suffixes=("", "_contact"),
+                )
+            if pressure_p is not None and not pressure_p.empty:
+                merged = pd.merge_asof(
+                    merged,
+                    pressure_p,
+                    on="depth",
+                    direction="nearest",
+                    tolerance=tolerance,
+                    suffixes=("", "_pressure"),
+                )
+
+            # Build a core samples summary DataFrame (one row per sample)
+            core_rows = []
+            if isinstance(core_raw, dict):
+                for name, sd in core_raw.items():
+                    try:
+                        dval = sd.get("depth")
+                        if dval is None:
+                            continue
+                        measurements = sd.get("measurements")
+                        if measurements is None or measurements.empty:
+                            continue
+                        # measurements expected to have columns ['property','value']
+                        for _, m in measurements.iterrows():
+                            prop = m.get("property")
+                            val = m.get("value")
+                            if prop in ("cpore", "cperm") and pd.notna(val):
+                                core_rows.append(
+                                    {
+                                        "depth": float(dval),
+                                        "core_sample_name": name,
+                                        prop: val,
+                                    }
+                                )
+                    except Exception:
+                        continue
+            core_df = pd.DataFrame(core_rows) if core_rows else None
+            if core_df is not None and not core_df.empty:
+                core_df = core_df.sort_values("depth").reset_index(drop=True)
+                merged = pd.merge_asof(
+                    merged,
+                    core_df,
+                    on="depth",
+                    direction="nearest",
+                    tolerance=tolerance,
+                    suffixes=("", "_core"),
+                )
+
+            # Replace infinite values then convert to records and JSON-safe Python values
+            merged = merged.replace([np.inf, -np.inf], pd.NA)
+            merged.columns = [c.upper() for c in merged.columns]
+
+            records = []
+            for r in merged.to_dict(orient="records"):
+                records.append({k: _to_py(v) for k, v in r.items()})
+            return records
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to produce merged data: {e}"
+        )
 
 
 @router.get("/rca", summary="List core point measurements (RCA) for a well")

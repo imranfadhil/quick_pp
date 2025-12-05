@@ -76,6 +76,7 @@ async def get_well_log(
                         # find index of nearest depth
                         nearest_idx = (df["DEPTH"] - top_depth).abs().idxmin()
                         df.at[nearest_idx, "ZONES"] = top_name
+                    df["ZONES"] = df["ZONES"].ffill()
 
             # If core data exists, extract CPORE and CPERM measurements and insert into df
             if (

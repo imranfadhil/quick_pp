@@ -144,7 +144,7 @@
     loading = true;
     error = null;
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`);
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/merged`);
       if (!res.ok) throw new Error(await res.text());
       const fd = await res.json();
       const rows = fd && fd.data ? fd.data : fd;

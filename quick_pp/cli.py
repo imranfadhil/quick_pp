@@ -20,6 +20,31 @@ import signal
 import time
 
 
+def on_starting(server):
+    """Gunicorn hook: initialize DBConnector in master process before forking.
+
+    This performs application-level initialization (like running migrations or
+    creating a DB connector) in the master process. Use with caution: some DB
+    drivers are not fork-safe, so forking after opening DB connections may be
+    problematic. Consider disabling `preload_app` if you need per-worker DB
+    engines.
+    """
+    try:
+        server.log.info("gunicorn on_starting: initializing DBConnector")
+        from quick_pp.database.db_connector import DBConnector
+
+        db_url = os.environ.get("QPP_DATABASE_URL", "sqlite:///./data/quick_pp.db")
+        DBConnector(db_url=db_url)
+        server.log.info("DBConnector initialized in gunicorn master process")
+    except Exception as exc:  # pragma: no cover - environment-specific
+        try:
+            server.log.exception(
+                "Failed to initialize DBConnector in gunicorn master: %s", exc
+            )
+        except Exception:
+            pass
+
+
 try:
     quick_ppVersion = metadata.version("quick_pp")
 except metadata.PackageNotFoundError:
@@ -32,8 +57,8 @@ FRONTEND_DIR = Path(__file__).parent / "app" / "frontend"
 DOCKER_DIR = Path(__file__).parent / "app" / "docker"
 
 
-def get_uvicorn_worker_flag(debug: bool = False) -> str:
-    """Return a uvicorn workers flag based on available CPUs.
+def get_gunicorn_worker_flag(debug: bool = False) -> str:
+    """Return a gunicorn workers flag based on available CPUs.
 
     - If `debug`/reload is enabled, return an empty string (reload and
         multiple workers don't mix well for development).
@@ -46,7 +71,7 @@ def get_uvicorn_worker_flag(debug: bool = False) -> str:
     # Defensive: if using SQLite, prefer a single worker to avoid file locking
     db_url = os.environ.get("QPP_DATABASE_URL", "")
     if "sqlite" in (db_url or "").lower():
-        # Do not pass a workers flag; uvicorn defaults to single-process.
+        # Do not pass a workers flag; gunicorn defaults to single-process.
         return ""
 
     try:
@@ -180,23 +205,39 @@ def backend(debug, no_open):
     This launches a Uvicorn server to run the FastAPI backend and the associated qpp assistant module.
     The --debug flag enables auto-reload for development."""
     if not is_server_running(BACKEND_HOST, BACKEND_PORT):
-        # Build argv list for uvicorn to avoid shell and improve signal delivery
-        argv = [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "quick_pp.app.backend.main:app",
-            "--host",
-            "0.0.0.0",
-            "--port",
-            str(BACKEND_PORT),
-        ]
+        if os.name != "nt":
+            argv = [
+                sys.executable,
+                "-m",
+                "gunicorn",
+                "-k",
+                "uvicorn.workers.UvicornWorker",
+                "quick_pp.app.backend.main:app",
+                "--bind",
+                f"0.0.0.0:{BACKEND_PORT}",
+                "--preload",
+                "--config",
+                str(Path(__file__).resolve()),
+            ]
+            # worker_flag may be empty or like "--workers N"
+            worker_flag = get_gunicorn_worker_flag(debug)
+            if worker_flag:
+                argv.extend(worker_flag.split())
+        else:
+            # Build argv list for uvicorn to avoid shell and improve signal delivery
+            argv = [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "quick_pp.app.backend.main:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(BACKEND_PORT),
+            ]
+
         if debug:
             argv.append("--reload")
-        # worker_flag may be empty or like "--workers N"
-        worker_flag = get_uvicorn_worker_flag(debug)
-        if worker_flag:
-            argv.extend(worker_flag.split())
         click.echo(f"App is not running. Starting it now... | {argv}")
 
         try:
@@ -328,22 +369,37 @@ def app(debug, no_open, force_install):
     try:
         # Start backend if not running
         if not is_server_running(BACKEND_HOST, BACKEND_PORT):
-            # Build argv list for uvicorn to avoid shell and improve signal delivery
-            argv = [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "quick_pp.app.backend.main:app",
-                "--host",
-                "0.0.0.0",
-                "--port",
-                str(BACKEND_PORT),
-            ]
+            if os.name != "nt":
+                argv = [
+                    sys.executable,
+                    "-m",
+                    "gunicorn",
+                    "-k",
+                    "uvicorn.workers.UvicornWorker",
+                    "quick_pp.app.backend.main:app",
+                    "--bind",
+                    f"0.0.0.0:{BACKEND_PORT}",
+                    "--preload",
+                    "--config",
+                    str(Path(__file__).resolve()),
+                ]
+                worker_flag = get_gunicorn_worker_flag(debug)
+                if worker_flag:
+                    argv.extend(worker_flag.split())
+            else:
+                argv = [
+                    sys.executable,
+                    "-m",
+                    "uvicorn",
+                    "quick_pp.app.backend.main:app",
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    str(BACKEND_PORT),
+                ]
+
             if debug:
                 argv.append("--reload")
-            worker_flag = get_uvicorn_worker_flag(debug)
-            if worker_flag:
-                argv.extend(worker_flag.split())
             click.echo(f"Starting backend... | {' '.join(argv)}")
             p_backend = start_process(argv, shell=False)
             processes.append(p_backend)
@@ -470,19 +526,34 @@ def model_deployment(debug):
     This makes the trained models available for prediction over a REST API.
     The --debug flag enables auto-reload for development."""
     if not is_server_running("localhost", 5555):
-        argv = [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "quick_pp.app.backend.mlflow_model_deployment:app",
-            "--host",
-            "0.0.0.0",
-            "--port",
-            "5555",
-        ]
+        if os.name != "nt":
+            argv = [
+                sys.executable,
+                "-m",
+                "gunicorn",
+                "-k",
+                "uvicorn.workers.UvicornWorker",
+                "quick_pp.app.backend.mlflow_model_deployment:app",
+                "--bind",
+                "0.0.0.0:5555",
+                "--preload",
+                "--config",
+                str(Path(__file__).resolve()),
+            ]
+        else:
+            argv = [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "quick_pp.app.backend.mlflow_model_deployment:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "5555",
+            ]
         if debug:
             argv.append("--reload")
-        worker_flag = get_uvicorn_worker_flag(debug)
+        worker_flag = get_gunicorn_worker_flag(debug)
         if worker_flag:
             argv.extend(worker_flag.split())
         click.echo(

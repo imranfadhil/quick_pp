@@ -3,6 +3,7 @@ bokeh==3.7.3
 coverage==4.5.4
 dlisio==1.0.3
 dtw-python==1.5.3
+email-validator==2.3.0
 fastapi==0.123.7
 fastapi-mcp==0.3.4
 fastparquet==2024.2.0
@@ -49,3 +50,4 @@ wheel==0.38.1
 xlrd==2.0.2
 ydata-profiling==4.9.0
 python-dotenv==1.0.0
+gunicorn==21.0.0; sys_platform != 'win32'

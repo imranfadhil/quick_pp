@@ -27,7 +27,8 @@
 			if (res.ok) {
 				const data = await res.json();
 				wells = data?.wells || [];
-			}
+				wells.sort((a, b) => a.localeCompare(b));
+			}			
 		} catch (e) {
 			console.warn('Failed to fetch wells for sidebar', e);
 		} finally {

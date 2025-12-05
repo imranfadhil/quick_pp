@@ -284,6 +284,7 @@
   // derived plotting arrays for Plotly
   $: lithoPoints = lithoChartData.map(d => ({ x: d.depth, vclay: d.VCLAY, vsilt: d.VCLAY + d.VSILT, vsand: d.VCLAY + d.VSILT + d.VSAND }));
   $: poroPoints = poroChartData.map(d => ({ x: d.depth, y: d.PHIT }));
+  $: phiePoints = poroChartData.map(d => ({ x: d.depth, y: d.PHIE })).filter(p => p.y !== undefined && p.y !== null && !isNaN(Number(p.y)));
   $: cporePoints = cporeData.map(d => ({ x: d.depth, y: d.CPORE }));
 
   async function renderLithoPlot() {
@@ -334,7 +335,12 @@
     if (poroPoints && poroPoints.length > 0) {
       const x = poroPoints.map(p => p.x);
       const y = poroPoints.map(p => p.y);
-      traces.push({ x, y, name: 'PHIT', mode: 'lines', line: { color: '#2563eb', width: 2 }, fill: 'tozeroy', fillcolor: 'rgba(37,99,235,0.3)', xaxis: 'x', yaxis: 'y' });
+      traces.push({ x, y, name: 'PHIT', mode: 'lines', line: { color: '#000000', width: 2 }, xaxis: 'x', yaxis: 'y' });
+    }
+    if (phiePoints && phiePoints.length > 0) {
+      const x2 = phiePoints.map(p => p.x);
+      const y2 = phiePoints.map(p => p.y);
+      traces.push({ x: x2, y: y2, name: 'PHIE', mode: 'lines', line: { color: '#2563eb', width: 1, dash: 'dot' }, fill: 'tozeroy', fillcolor: 'rgba(37,99,235,0.3)', xaxis: 'x', yaxis: 'y' });
     }
     if (cporePoints && cporePoints.length > 0) {
       traces.push({ x: cporePoints.map(p => p.x), y: cporePoints.map(p => p.y), name: 'CPORE', mode: 'markers', marker: { color: '#dc2626', size: 8, line: { color: 'white', width: 1 } }, xaxis: depthMatching ? 'x2' : 'x', yaxis: 'y' });
@@ -377,7 +383,7 @@
     loading = true;
     error = null;
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`);
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/merged`);
       if (!res.ok) throw new Error(await res.text());
       const fd = await res.json();
       // payload may be an envelope {data: [...]} or a bare array
@@ -553,23 +559,26 @@
     saveMessagePoro = null;
     error = null;
     try {
-      // Build a quick lookup for core porosity by depth
-      const cporeByDepth = new Map<number, number>();
-      for (const c of cporeData) {
-        const d = Number(c.depth);
-        if (!isNaN(d)) cporeByDepth.set(d, Number(c.CPORE));
-      }
+      // Build rows aligned with the filtered rows that were used to create poro results.
+      // Only include the required columns: PHIT and PHIE (if available).
+      const filteredRows = applyDepthFilter(fullRows, depthFilter);
+      const rows: Array<Record<string, any>> = [];
+      let i = 0;
+      for (const r of filteredRows) {
+        const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
+        const rhob = Number(r.rhob ?? r.RHOB ?? r.Rhob ?? NaN);
+        const hasValidData = !isNaN(nphi) && !isNaN(rhob);
+        if (!hasValidData) continue;
 
-      // Build rows from poroChartData which already contains the filtered and aligned results
-      const rows: Array<Record<string, any>> = poroChartData.map(r => {
-        const row: Record<string, any> = { 
-          DEPTH: r.depth, 
-          PHIT: Math.min(Math.max(Number(r.PHIT ?? 0), 0), 1) 
-        };
-        const core = cporeByDepth.get(r.depth);
-        if (typeof core === 'number' && !isNaN(core)) row.CPORE = core;
-        return row;
-      });
+        const p = poroResults[i++] ?? {};
+        const phit = Math.min(Math.max(Number(p.PHIT ?? 0), 0), 1);
+        const phieVal = p.PHIE !== undefined ? Number(p.PHIE) : (p.PHIE ?? null);
+        const phie = phieVal !== null && !isNaN(Number(phieVal)) ? Math.min(Math.max(Number(phieVal), 0), 1) : null;
+
+        const row: Record<string, any> = { PHIT: phit };
+        if (phie !== null) row.PHIE = phie;
+        rows.push(row);
+      }
 
       if (!rows.length) {
         throw new Error('No rows prepared for save');
@@ -627,7 +636,7 @@
       }
     }
     // Sort by depth to ensure proper chart rendering
-    rows.sort((a, b) => a.depth - b.depth);
+    rows.sort((a: Record<string, any>, b: Record<string, any>) => a.depth - b.depth);
     lithoChartData = rows;
   }
 
@@ -648,14 +657,18 @@
       
       // Only include rows that have valid NPHI/RHOB data
       if (hasValidData) {
-        const p = poroResults[i++] ?? { PHIT: null };
+        const p = poroResults[i++] ?? { PHIT: null, PHIE: null };
         // Clamp PHIT values between 0 and 1
         const phit = Math.min(Math.max(Number(p.PHIT ?? 0), 0), 1);
-        rows.push({ depth, PHIT: phit });
+        const phieVal = p.PHIE !== undefined ? Number(p.PHIE) : (p.PHIE ?? null);
+        const phie = phieVal !== null && !isNaN(Number(phieVal)) ? Math.min(Math.max(Number(phieVal), 0), 1) : null;
+        const row: Record<string, any> = { depth, PHIT: phit };
+        if (phie !== null) row.PHIE = phie;
+        rows.push(row);
       }
     }
     // Sort by depth to ensure proper chart rendering
-    rows.sort((a, b) => a.depth - b.depth);
+    rows.sort((a: Record<string, any>, b: Record<string, any>) => a.depth - b.depth);
     poroChartData = rows;
     
     // Extract CPORE data for overlay
