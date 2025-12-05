@@ -95,3 +95,16 @@ class DBConnector:
             raise ValueError(f"Unsupported database type: {db_type}")
 
         self.run_sql_script(os.path.join(script_dir, sql_script))
+
+    def dispose(self):
+        """Dispose of the engine and clear stored sessionmaker.
+
+        This allows cleanup when an application process is shutting down.
+        """
+        if DBConnector._engine is not None:
+            try:
+                DBConnector._engine.dispose()
+            except Exception:
+                pass
+        DBConnector._engine = None
+        DBConnector._Session = None

@@ -177,6 +177,25 @@
     return {};
   }
 
+  // Helper: resolve a sensible value from a CSV row given a detected header
+  function getFieldValue(row: any, detectedHeader: string | null | undefined, fallbacks: string[] = []) {
+    if (!row || typeof row !== 'object') return undefined;
+    // direct lookup if detectedHeader provided
+    if (detectedHeader && row[detectedHeader] != null && row[detectedHeader] !== '') return row[detectedHeader];
+    // map lowercase keys to original keys for case-insensitive lookup
+    const keyMap: Record<string, string> = {};
+    for (const k of Object.keys(row)) keyMap[k.toLowerCase()] = k;
+    for (const fb of fallbacks) {
+      const k = keyMap[fb.toLowerCase()];
+      if (k && row[k] != null && row[k] !== '') return row[k];
+    }
+    // last resort: first non-empty column
+    for (const k of Object.keys(row)) {
+      if (row[k] != null && row[k] !== '') return row[k];
+    }
+    return undefined;
+  }
+
   async function processAll() {
     globalError = null;
     results = [];
@@ -217,7 +236,23 @@
         let totalSent = 0;
         const subResults: any[] = [];
         for (const wn of Object.keys(groups)) {
-          const subPayload: any = (type==='formation_tops') ? { tops: groups[wn].map((r:any)=>({name: r[preview.detected?.name] ?? r['name'], depth: Number(r[preview.detected?.depth] ?? r['depth']) })) } : (type==='fluid_contacts') ? { contacts: groups[wn].map((r:any)=>({name: r[preview.detected?.name] ?? r['name'], depth: Number(r[preview.detected?.depth] ?? r['depth']) })) } : { tests: groups[wn].map((r:any)=>({depth: Number(r[preview.detected?.depth] ?? r['depth']), pressure: Number(r[preview.detected?.pressure] ?? r['pressure']), pressure_uom: r[preview.detected?.uom] ?? r['pressure_uom'] ?? 'psi'})) };
+          // Use getFieldValue to be robust to header casing/aliases
+          const rowsForWell = groups[wn];
+          const subPayload: any = (type === 'formation_tops')
+            ? { tops: rowsForWell.map((r:any) => ({
+                name: String(getFieldValue(r, preview.detected?.name, ['name','top','top_name']) ?? ''),
+                depth: Number(getFieldValue(r, preview.detected?.depth, ['depth','md']) ?? '')
+              })) }
+            : (type === 'fluid_contacts')
+              ? { contacts: rowsForWell.map((r:any) => ({
+                  name: String(getFieldValue(r, preview.detected?.name, ['name']) ?? ''),
+                  depth: Number(getFieldValue(r, preview.detected?.depth, ['depth','md']) ?? '')
+                })) }
+              : { tests: rowsForWell.map((r:any) => ({
+                  depth: Number(getFieldValue(r, preview.detected?.depth, ['depth','md']) ?? ''),
+                  pressure: Number(getFieldValue(r, preview.detected?.pressure, ['pressure']) ?? ''),
+                  pressure_uom: String(getFieldValue(r, preview.detected?.uom, ['pressure_uom','uom']) ?? 'psi')
+                })) };
           const subQs = `?well_name=${encodeURIComponent(String(wn))}`;
           const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${subQs}`;
           console.log('Bulk import: POST', url, subPayload);

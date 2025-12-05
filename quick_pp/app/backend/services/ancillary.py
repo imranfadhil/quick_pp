@@ -10,7 +10,8 @@ import csv
 import io
 
 router = APIRouter(
-    prefix="/database/projects/{project_id}/wells/{well_name}", tags=["Ancillary"]
+    prefix="/database/projects/{project_id}/wells/{well_name}",
+    tags=["Ancillary - Well"],
 )
 
 # Project-level router: supports project-based endpoints and accepts optional
@@ -18,7 +19,7 @@ router = APIRouter(
 # provided the handlers delegate to the existing well-based behavior; when
 # absent GET endpoints aggregate across all wells in the project.
 project_router = APIRouter(
-    prefix="/database/projects/{project_id}", tags=["AncillaryProject"]
+    prefix="/database/projects/{project_id}", tags=["Ancillary - Project"]
 )
 
 

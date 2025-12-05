@@ -1,13 +1,4 @@
-from pathlib import Path
-
-# Prefer python-dotenv to load a repository .env automatically when the
-# application module is imported. This ensures running `uvicorn quick_pp.app.backend.main:app`
-# from the repo root picks up the .env file even if the working directory differs.
-try:
-    from dotenv import load_dotenv
-except Exception:
-    load_dotenv = None
-
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +15,8 @@ from importlib import resources
 import os
 
 from .router import api_router
+from quick_pp.database.db_connector import DBConnector
+import logging
 
 # Configuration
 LANGFLOW_HOST = os.getenv("LANGFLOW_HOST", "http://localhost:7860")
@@ -38,8 +31,41 @@ tags_metadata = [
         "name": "Reservoir Summary",
         "description": "Reservoir summary related endpoints.",
     },
+    {"name": "Database", "description": "Database related endpoints."},
+    {"name": "Ancillary - Well", "description": "Ancillary well-related endpoints."},
+    {
+        "name": "Ancillary - Project",
+        "description": "Ancillary project-related endpoints.",
+    },
     {"name": "Langflow", "description": "Langflow related endpoints."},
+    {"name": "Plotter", "description": "Plotter related endpoints."},
 ]
+
+
+@asynccontextmanager
+async def lifespan(app: "FastAPI"):
+    """Lifespan context manager replacing deprecated on_event handlers.
+
+    Initializes per-process DB engine on startup and disposes it on shutdown.
+    """
+    try:
+        db_url = os.environ.get("QPP_DATABASE_URL", "sqlite:///./data/quick_pp.db")
+        DBConnector(db_url=db_url)
+        logging.getLogger(__name__).info("DBConnector initialized on startup")
+    except Exception as e:
+        logging.getLogger(__name__).exception("Failed to initialize DBConnector: %s", e)
+
+    try:
+        yield
+    finally:
+        try:
+            DBConnector().dispose()
+            logging.getLogger(__name__).info("DBConnector disposed on shutdown")
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Failed to dispose DBConnector during shutdown"
+            )
+
 
 app = FastAPI(
     title="quick_pp API",
@@ -52,17 +78,8 @@ app = FastAPI(
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
     openapi_tags=tags_metadata,
     debug=True,
+    lifespan=lifespan,
 )
-
-# Load .env from a parent directory (repo root) if python-dotenv is available.
-# Walk upwards from this file and load the first `.env` file we find.
-if load_dotenv is not None:
-    current = Path(__file__).resolve()
-    for parent in current.parents:
-        candidate = parent / ".env"
-        if candidate.exists():
-            load_dotenv(dotenv_path=str(candidate))
-            break
 
 # Setup static files and templates
 with resources.files("quick_pp.app.backend") as api_folder:

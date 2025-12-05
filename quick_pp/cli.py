@@ -15,6 +15,9 @@ import webbrowser
 from importlib import metadata, resources
 from pathlib import Path
 from subprocess import Popen
+import subprocess
+import signal
+import time
 
 
 try:
@@ -27,6 +30,107 @@ BACKEND_HOST = "localhost"
 BACKEND_PORT = 6312
 FRONTEND_DIR = Path(__file__).parent / "app" / "frontend"
 DOCKER_DIR = Path(__file__).parent / "app" / "docker"
+
+
+def get_uvicorn_worker_flag(debug: bool = False) -> str:
+    """Return a uvicorn workers flag based on available CPUs.
+
+    - If `debug`/reload is enabled, return an empty string (reload and
+        multiple workers don't mix well for development).
+    - Otherwise return a string like `--workers N` where N is the number
+        of CPUs (at least 1).
+    """
+    if debug:
+        return ""
+
+    # Defensive: if using SQLite, prefer a single worker to avoid file locking
+    db_url = os.environ.get("QPP_DATABASE_URL", "")
+    if "sqlite" in (db_url or "").lower():
+        # Do not pass a workers flag; uvicorn defaults to single-process.
+        return ""
+
+    try:
+        cpus = os.cpu_count() or 1
+    except Exception:
+        cpus = 1
+    workers = max(1, int(cpus / 3))
+    return f"--workers {workers}"
+
+
+def start_process(cmd, cwd=None, shell=False):
+    """Start a subprocess in a new process group/session for graceful shutdown.
+
+    On Windows, use CREATE_NEW_PROCESS_GROUP and on POSIX use setsid so we can
+    signal the whole group (uvicorn master + workers).
+    """
+    # If cmd is a list, pass it directly (recommended for uvicorn to avoid shell)
+    if os.name == "nt":
+        return subprocess.Popen(
+            cmd, stdout=sys.stdout, stderr=sys.stderr, shell=shell, cwd=cwd
+        )
+    else:
+        return subprocess.Popen(
+            cmd,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+            shell=shell,
+            cwd=cwd,
+            preexec_fn=os.setsid if not shell else None,
+        )
+
+
+def stop_process_gracefully(proc, timeout: float = 5.0):
+    """Attempt graceful shutdown of a process started with `start_process`.
+
+    - On Windows: send CTRL_BREAK_EVENT to the process group.
+    - On POSIX: send SIGINT to the process group.
+    Falls back to terminate/kill if the process doesn't exit within `timeout` seconds.
+    """
+    try:
+        if proc.poll() is not None:
+            return
+
+        if os.name == "nt":
+            try:
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            except Exception:
+                pass
+        else:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            except Exception:
+                pass
+
+        # wait for graceful exit
+        start = time.time()
+        while True:
+            if proc.poll() is not None:
+                return
+            if time.time() - start > timeout:
+                break
+            time.sleep(0.1)
+
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+        try:
+            proc.wait(2)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.wait()
+            except Exception:
+                pass
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 def is_server_running(host, port):
@@ -76,12 +180,27 @@ def backend(debug, no_open):
     This launches a Uvicorn server to run the FastAPI backend and the associated qpp assistant module.
     The --debug flag enables auto-reload for development."""
     if not is_server_running(BACKEND_HOST, BACKEND_PORT):
-        reload_flag = "--reload" if debug else ""
-        cmd = f"uvicorn quick_pp.app.backend.main:app --host 0.0.0.0 --port {BACKEND_PORT} {reload_flag}"
-        click.echo(f"App is not running. Starting it now... | {cmd}")
+        # Build argv list for uvicorn to avoid shell and improve signal delivery
+        argv = [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "quick_pp.app.backend.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            str(BACKEND_PORT),
+        ]
+        if debug:
+            argv.append("--reload")
+        # worker_flag may be empty or like "--workers N"
+        worker_flag = get_uvicorn_worker_flag(debug)
+        if worker_flag:
+            argv.extend(worker_flag.split())
+        click.echo(f"App is not running. Starting it now... | {argv}")
 
         try:
-            process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
+            process = start_process(argv, shell=False)
             # Open browser to backend URL after starting (default)
             try:
                 if not no_open:
@@ -95,10 +214,10 @@ def backend(debug, no_open):
                 click.echo(f"Backend process exited with code: {exit_code}")
                 sys.exit(exit_code)
 
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, click.exceptions.Abort):
             click.echo("Shutting down backend server...")
             try:
-                process.terminate()
+                stop_process_gracefully(process)
             except Exception:
                 pass
         except Exception as e:
@@ -209,12 +328,24 @@ def app(debug, no_open, force_install):
     try:
         # Start backend if not running
         if not is_server_running(BACKEND_HOST, BACKEND_PORT):
-            reload_ = "--reload" if debug else ""
-            backend_cmd = f"uvicorn quick_pp.app.backend.main:app --host 0.0.0.0 --port {BACKEND_PORT} {reload_}"
-            click.echo(f"Starting backend... | {backend_cmd}")
-            p_backend = Popen(
-                backend_cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True
-            )
+            # Build argv list for uvicorn to avoid shell and improve signal delivery
+            argv = [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "quick_pp.app.backend.main:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(BACKEND_PORT),
+            ]
+            if debug:
+                argv.append("--reload")
+            worker_flag = get_uvicorn_worker_flag(debug)
+            if worker_flag:
+                argv.extend(worker_flag.split())
+            click.echo(f"Starting backend... | {' '.join(argv)}")
+            p_backend = start_process(argv, shell=False)
             processes.append(p_backend)
         else:
             click.echo("Backend already running on localhost:6312")
@@ -306,11 +437,11 @@ def app(debug, no_open, force_install):
         try:
             for p in processes:
                 p.wait()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, click.exceptions.Abort):
             click.echo("Shutting down servers...")
             for p in processes:
                 try:
-                    p.terminate()
+                    stop_process_gracefully(p)
                 except Exception:
                     pass
     except Exception as e:
@@ -339,11 +470,29 @@ def model_deployment(debug):
     This makes the trained models available for prediction over a REST API.
     The --debug flag enables auto-reload for development."""
     if not is_server_running("localhost", 5555):
-        reload_ = "--reload" if debug else ""
-        cmd = f"uvicorn quick_pp.app.backend.mlflow_model_deployment:app --host 0.0.0.0 --port 5555 {reload_}"
-        click.echo(f"Model server is not running. Starting it now... | {cmd}")
-        process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
-        process.wait()
+        argv = [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "quick_pp.app.backend.mlflow_model_deployment:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "5555",
+        ]
+        if debug:
+            argv.append("--reload")
+        worker_flag = get_uvicorn_worker_flag(debug)
+        if worker_flag:
+            argv.extend(worker_flag.split())
+        click.echo(
+            f"Model server is not running. Starting it now... | {' '.join(argv)}"
+        )
+        process = start_process(argv, shell=False)
+        try:
+            process.wait()
+        except (KeyboardInterrupt, click.exceptions.Abort):
+            stop_process_gracefully(process)
 
 
 @click.command()
@@ -514,7 +663,7 @@ def docker(action, detach, build, profile, service, follow):
         if action == "up" and not detach:
             try:
                 process.wait()
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, click.exceptions.Abort):
                 click.echo("\nShutting down services...")
                 # Run docker-compose down to gracefully stop services
                 down_cmd = "docker-compose down"

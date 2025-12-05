@@ -182,14 +182,26 @@
     summariesLoading = true;
     summariesError = null;
     try {
-      const wells: string[] = selectedProject.wells.map((w: any) => String(w));
-      const promises = wells.map(async (w) => {
+      // Normalize well identifiers: accept strings or objects with common name fields
+      const wells: string[] = selectedProject.wells.map((w: any) => {
+        if (typeof w === 'string') return w;
+        if (w == null) return String(w);
+        // common properties returned by backend: name, well_name, well
+        if (typeof w === 'object') return (w.name ?? w.well_name ?? w.well ?? String(w));
+        return String(w);
+      });
+
+      const promises = wells.map(async (wellName) => {
         try {
-          const res = await fetch(`${API_BASE}/quick_pp/database/projects/${selectedProject.project_id}/wells/${encodeURIComponent(String(w))}/data`);
-          if (!res.ok) return { name: w, error: await res.text() };
+          const url = `${API_BASE}/quick_pp/database/projects/${selectedProject.project_id}/wells/${encodeURIComponent(String(wellName))}/data`;
+          const res = await fetch(url);
+          if (!res.ok) {
+            const txt = await res.text().catch(() => '');
+            return { name: wellName, error: `${res.status} ${res.statusText}${txt ? `: ${txt}` : ''}` };
+          }
           const fd = await res.json();
           const rows = fd && fd.data ? fd.data : fd;
-          if (!Array.isArray(rows)) return { name: w, error: 'Unexpected data format' };
+          if (!Array.isArray(rows)) return { name: wellName, error: 'Unexpected data format' };
 
           // extract numeric depth values
           const depthKeys = ['depth','tvdss','TVD','TVDSS','DEPTH'];
@@ -240,9 +252,9 @@
             availabilityByField[key] = rowsCount ? Math.round((ct / rowsCount) * 100) : 0;
           }
 
-          return { name: w, rows: rowsCount, minDepth, maxDepth, totalDepth, numZones, availabilityPerc, availabilityByField };
+          return { name: wellName, rows: rowsCount, minDepth, maxDepth, totalDepth, numZones, availabilityPerc, availabilityByField };
         } catch (e:any) {
-          return { name: w, error: String(e?.message ?? e) };
+          return { name: wellName, error: String(e?.message ?? e) };
         }
       });
 

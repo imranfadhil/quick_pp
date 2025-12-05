@@ -1,6 +1,25 @@
+from pathlib import Path
 from loguru import logger
 import logging
 import sys
+
+# Load .env from the repository root (single place for the package).
+# This ensures any import of `quick_pp` picks up project-level environment
+# variables. If `python-dotenv` isn't installed, this is a no-op.
+try:
+    from dotenv import load_dotenv
+except Exception:
+    load_dotenv = None
+
+if load_dotenv is not None:
+    repo_root = Path(__file__).resolve().parent.parent
+    candidate = repo_root / ".env"
+    if candidate.exists():
+        try:
+            load_dotenv(dotenv_path=str(candidate))
+        except Exception:
+            # don't fail package import for dotenv parsing errors
+            pass
 
 # Remove default loguru handler
 logger.remove()
