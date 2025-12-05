@@ -151,8 +151,7 @@ CREATE TABLE IF NOT EXISTS "core_samples" (
     "depth" REAL NOT NULL,
     "description" TEXT,
     "remark" TEXT,
-    UNIQUE("well_id", "sample_name"),
-    UNIQUE("well_id", "depth")
+    UNIQUE("well_id", "sample_name", "depth")
 );
 
 -- -----------------------------------------------------------------------------

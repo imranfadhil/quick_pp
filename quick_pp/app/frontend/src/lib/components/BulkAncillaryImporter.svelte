@@ -36,16 +36,61 @@
   }
 
   function parseCsv(text:string) {
-    const lines = text.split(/\r?\n/).filter(Boolean);
-    if (!lines.length) return {headers:[], rows:[]};
-    const headers = lines[0].split(',').map(h=>h.trim());
-    const rows = lines.slice(1).map(l => l.split(',').map(c=>c.trim()));
-    const mapped = rows.map(r=>{
-      const obj:any = {};
-      for (let i=0;i<headers.length;i++) obj[headers[i]] = r[i] ?? '';
+    // Robust CSV parser supporting quoted fields with commas/newlines and "" escapes
+    const rows: string[][] = [];
+    let cur = '';
+    let row: string[] = [];
+    let inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          // double-quote inside quoted field -> check for escaped quote
+          if (text[i + 1] === '"') { cur += '"'; i++; }
+          else { inQuotes = false; }
+        } else {
+          cur += ch;
+        }
+      } else {
+        if (ch === '"') {
+          inQuotes = true;
+        } else if (ch === ',') {
+          row.push(cur);
+          cur = '';
+        } else if (ch === '\r') {
+          // ignore, handle on \n
+        } else if (ch === '\n') {
+          row.push(cur);
+          // only push non-empty rows (not all-empty cells)
+          const allEmpty = row.every(c => c == null || String(c).trim() === '');
+          if (!allEmpty) rows.push(row);
+          row = [];
+          cur = '';
+        } else {
+          cur += ch;
+        }
+      }
+    }
+    // push last field/row if any
+    if (inQuotes) {
+      // unterminated quote: treat the rest as field
+      // fallthrough - allow cur to be used
+    }
+    // push last cell
+    if (cur !== '' || row.length > 0) {
+      row.push(cur);
+      const allEmpty = row.every(c => c == null || String(c).trim() === '');
+      if (!allEmpty) rows.push(row);
+    }
+
+    if (!rows.length) return { headers: [], rows: [] };
+    const headers = (rows[0] || []).map(h => String(h).trim());
+    const dataRows = rows.slice(1).map(r => {
+      const obj: any = {};
+      for (let i = 0; i < headers.length; i++) obj[headers[i]] = r[i] ?? '';
       return obj;
     });
-    return {headers, rows: mapped};
+    return { headers, rows: dataRows };
   }
 
   async function parseFilePreview(f: File) {
@@ -110,9 +155,6 @@
       const lowerKeys = keys.map(k=>k.toLowerCase());
       const sampleCol = keys[ lowerKeys.indexOf('sample_name') ] ?? keys[ lowerKeys.indexOf('sample') ] ?? null;
       const depthCol = keys[ lowerKeys.indexOf('depth') ] ?? keys[ lowerKeys.indexOf('md') ] ?? null;
-      const propCol = keys[ lowerKeys.indexOf('property_name') ] ?? keys[ lowerKeys.indexOf('property') ] ?? null;
-      const valueCol = keys[ lowerKeys.indexOf('value') ] ?? keys[ lowerKeys.indexOf('val') ] ?? null;
-      const unitCol = keys[ lowerKeys.indexOf('unit') ] ?? null;
       const rpSat = keys[ lowerKeys.indexOf('rp_sat') ] ?? keys[ lowerKeys.indexOf('rp_sat') ] ?? null;
       const rpKr = keys[ lowerKeys.indexOf('rp_kr') ] ?? null;
       const rpPhase = keys[ lowerKeys.indexOf('rp_phase') ] ?? null;
@@ -137,14 +179,33 @@
         // description if available
         sampleObj.description = first['DESCRIPTION'] ?? first['Description'] ?? first['description'] ?? undefined;
 
-        // measurements (RCA)
-        const measurements: any[] = [];
-        for (const r of groupRows) {
-          const pn = propCol ? r[propCol] : (r['PROPERTY_NAME'] || r['Property'] || null);
-          const pv = valueCol ? r[valueCol] : (r['VALUE'] || r['Value'] || null);
-          const pu = unitCol ? r[unitCol] : (r['UNIT'] || null);
-          if (pn && pv != null && pv !== '') measurements.push({ property_name: pn, value: Number(pv), unit: pu });
+        // remarks (if present)
+        sampleObj.remarks = first['REMARKS'] ?? first['Remarks'] ?? first['remarks'] ?? undefined;
+
+        // measurements: only handle cpore and cperm (case-insensitive)
+        const cporeKey = keys[ lowerKeys.indexOf('cpore') ] ?? keys[ lowerKeys.indexOf('core_porosity') ] ?? keys[ lowerKeys.indexOf('porosity') ] ?? null;
+        const cpermKey = keys[ lowerKeys.indexOf('cperm') ] ?? keys[ lowerKeys.indexOf('core_perm') ] ?? keys[ lowerKeys.indexOf('perm') ] ?? null;
+        const cporeVal = cporeKey ? first[cporeKey] : (first['CPORE'] ?? first['cpore'] ?? null);
+        const cpermVal = cpermKey ? first[cpermKey] : (first['CPERM'] ?? first['cperm'] ?? null);
+
+        // helper: parse numeric-ish values robustly and treat common placeholders as missing
+        function parseNumeric(v: any) {
+          if (v == null) return null;
+          const s = String(v).trim();
+          if (s === '') return null;
+          // common non-values
+          if (/^(na|n\/a|null|undefined|--|-)$/i.test(s)) return null;
+          // remove percent signs and commas
+          const cleaned = s.replace(/[% ,]/g, '');
+          const n = Number(cleaned);
+          return Number.isFinite(n) ? n : null;
         }
+
+        const cporeNum = parseNumeric(cporeVal);
+        const cpermNum = parseNumeric(cpermVal);
+        const measurements: any[] = [];
+        if (cporeNum != null) measurements.push({ property_name: 'cpore', value: cporeNum, unit: 'frac' });
+        if (cpermNum != null) measurements.push({ property_name: 'cperm', value: cpermNum, unit: 'mD' });
         if (measurements.length) sampleObj.measurements = measurements;
 
         // relperm
@@ -168,7 +229,12 @@
         }
         if (pc.length) sampleObj.pc_data = pc;
 
-        samples.push(sampleObj);
+        // For core_samples/rca: if both cpore and cperm are missing, drop this sample
+        if ((type === 'core_samples' || type === 'rca') && cporeNum == null && cpermNum == null) {
+          // skip adding empty sample
+        } else {
+          samples.push(sampleObj);
+        }
       }
 
       return { samples };
@@ -253,25 +319,57 @@
                   pressure: Number(getFieldValue(r, preview.detected?.pressure, ['pressure']) ?? ''),
                   pressure_uom: String(getFieldValue(r, preview.detected?.uom, ['pressure_uom','uom']) ?? 'psi')
                 })) };
-          const subQs = `?well_name=${encodeURIComponent(String(wn))}`;
-          const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${subQs}`;
-          console.log('Bulk import: POST', url, subPayload);
-          const res = await fetch(url, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(subPayload)});
-          if (!res.ok) {
-            const errtxt = await res.text();
-            // if the error indicates the well is not found in the project, skip this well and continue
-            if (res.status === 404 || /not found in project/i.test(errtxt)) {
-              subResults.push({ well: wn, ok: false, skipped: true, error: errtxt, status: res.status });
-              // don't mark the entire file as error yet — continue with other wells
+            const subQs = `?well_name=${encodeURIComponent(String(wn))}`;
+            // If this is a core-like import, build samples for this well and POST per-sample to core_samples endpoint
+            if (type === 'core_samples' || type === 'rca' || type === 'scal') {
+              const subPreview = { rows: rowsForWell };
+              const subPayload = buildPayloadFromPreview(subPreview);
+              const samples = subPayload.samples ?? [];
+              let sentForWell = 0;
+              for (const s of samples) {
+                const singleUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/core_samples${subQs}`;
+                console.log('Bulk import: POST', singleUrl, s);
+                const res = await fetch(singleUrl, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(s) });
+                if (!res.ok) {
+                  const errtxt = await res.text();
+                  if (res.status === 404 || /not found in project/i.test(errtxt)) {
+                    subResults.push({ well: wn, sample: s.sample_name ?? s.sample_name, ok: false, skipped: true, error: errtxt, status: res.status });
+                    continue;
+                  }
+                  fileStatuses[preview.fileName] = 'error';
+                  fileErrors[preview.fileName] = errtxt;
+                  return { file: preview.fileName, ok:false, error: errtxt, status: res.status };
+                }
+                sentForWell += 1;
+                subResults.push({ well: wn, sample: s.sample_name ?? s.sample_name, ok: true });
+              }
+              totalSent += sentForWell;
+              // if no samples were sent for this well, record as skipped
+              if (sentForWell === 0 && !subResults.some(r=>r.well===wn && r.ok)) {
+                subResults.push({ well: wn, ok: false, skipped: true, error: 'No samples sent' });
+              }
               continue;
             }
-            // any other error should be treated as a file-level failure
-            fileStatuses[preview.fileName] = 'error';
-            fileErrors[preview.fileName] = errtxt;
-            return {file: preview.fileName, ok:false, error: errtxt, status: res.status};
-          }
-          totalSent += (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? 0);
-          subResults.push({ well: wn, ok: true, sent: (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? 0) });
+
+            // Non-core types: send grouped payloads (tops/contacts/tests)
+            const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${subQs}`;
+            console.log('Bulk import: POST', url, subPayload);
+            const res = await fetch(url, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(subPayload)});
+            if (!res.ok) {
+              const errtxt = await res.text();
+              // if the error indicates the well is not found in the project, skip this well and continue
+              if (res.status === 404 || /not found in project/i.test(errtxt)) {
+                subResults.push({ well: wn, ok: false, skipped: true, error: errtxt, status: res.status });
+                // don't mark the entire file as error yet — continue with other wells
+                continue;
+              }
+              // any other error should be treated as a file-level failure
+              fileStatuses[preview.fileName] = 'error';
+              fileErrors[preview.fileName] = errtxt;
+              return {file: preview.fileName, ok:false, error: errtxt, status: res.status};
+            }
+            totalSent += (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? 0);
+            subResults.push({ well: wn, ok: true, sent: (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? 0) });
         }
         if (totalSent > 0) {
           fileStatuses[preview.fileName] = 'success';
@@ -371,10 +469,8 @@
         <div class="text-xs"><code>name</code>, <code>depth</code></div>
       {:else if type === 'pressure_tests'}
         <div class="text-xs"><code>depth</code>, <code>pressure</code>, <code>pressure_uom</code> (optional)</div>
-      {:else if type === 'core_samples'}
-        <div class="text-xs"><code>sample_name</code> (or <code>sample</code>), <code>depth</code>, measurement columns: <code>property_name</code>, <code>value</code>, <code>unit</code></div>
-      {:else if type === 'rca'}
-        <div class="text-xs">Measurements: <code>sample_name</code>, <code>property_name</code>, <code>value</code>, <code>unit</code></div>
+      {:else if type === 'core_samples' || type === 'rca'}
+        <div class="text-xs">Required columns: <code>well_name</code>, <code>sample_name</code> (or <code>sample</code>), <code>depth</code>, <code>description</code>, <code>remarks</code>, and measurement columns: <code>cpore</code>, <code>cperm</code></div>
       {:else if type === 'scal'}
         <div class="text-xs">Relperm: <code>rp_sat</code>, <code>rp_kr</code>, <code>rp_phase</code>. Capillary pressure: <code>pc_sat</code>, <code>pc_pressure</code>, <code>pc_type</code>, <code>pc_cycle</code></div>
       {/if}
