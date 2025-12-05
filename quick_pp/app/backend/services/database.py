@@ -1,5 +1,5 @@
 import os
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from typing import List, Optional
 from pathlib import Path
 from uuid import uuid4
@@ -220,7 +220,11 @@ async def create_well(project_id: int, payload: dict):
 
 
 @router.post("/projects/{project_id}/read_las", summary="Upload LAS files into project")
-async def project_read_las(project_id: int, files: List[UploadFile] = File(...)):
+async def project_read_las(
+    project_id: int,
+    files: List[UploadFile] = File(...),
+    depth_uom: Optional[str] = Form("m"),
+):
     """Upload LAS files and add them into the project in the database."""
     global connector
     if connector is None:
@@ -248,7 +252,8 @@ async def project_read_las(project_id: int, files: List[UploadFile] = File(...))
 
         with connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
-            proj.read_las(saved_paths)
+            # Pass depth unit of measurement to Project.read_las (defaults to 'm')
+            proj.read_las(saved_paths, depth_uom=depth_uom)
 
         return {
             "message": "Files uploaded and processed",

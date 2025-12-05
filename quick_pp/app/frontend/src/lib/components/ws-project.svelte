@@ -22,6 +22,8 @@
   let _unsubWorkspace: any = null;
   let _lastWorkspaceProjectId: string | null = null;
   let selectedWellName: string | null = null;
+  let depthUom: string = 'm';
+  const depthUomId: string = `depth-uom-${Math.random().toString(36).slice(2,9)}`;
 
   // Ancillary accordion state
   let showTops = false;
@@ -49,6 +51,7 @@
     async function uploadSingleFile(file: File) {
       const form = new FormData();
       form.append('files', file, file.name);
+      form.append('depth_uom', depthUom);
 
       const res = await fetch(`${API_BASE}/quick_pp/database/projects/${selectedProject.project_id}/read_las`, {
         method: 'POST',
@@ -289,7 +292,13 @@
                 <div class="mt-1">
                   <div class="text-sm">Select one or more LAS files to add wells to this project.</div>
                   <div class="mt-2">
+                    <label for={depthUomId} class="text-sm text-muted-foreground">Depth units</label>
+                        <select id={depthUomId} bind:value={depthUom} class="rounded border bg-white/5 text-sm p-1 w-27">
+                          <option value="m">m (meters)</option>
+                          <option value="ft">ft (feet)</option>
+                        </select>
                     <div class="flex items-center justify-between border rounded-md p-2 bg-white/5">
+                        
                       <div class="text-sm text-muted-foreground">
                         {#if lasFiles && lasFiles.length}
                           {lasFiles.length} file{lasFiles.length > 1 ? 's' : ''} selected
