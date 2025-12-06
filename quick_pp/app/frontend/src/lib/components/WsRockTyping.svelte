@@ -3,33 +3,49 @@
   import DepthFilterStatus from './DepthFilterStatus.svelte';
   import { browser } from '$app/environment';
   import { onDestroy } from 'svelte';
+  import { workspace, applyZoneFilter } from '$lib/stores/workspace';
   export let projectId: string | number | null = null;
 
   let loading = false;
   let message: string | null = null;
   let fziLoading = false;
   let fziError: string | null = null;
-  let fziData: { phit: number[], perm: number[] } | null = null;
+  let fziData: { phit: number[], perm: number[], zones: string[] } | null = null;
+
+  let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
+
+  const unsubscribe = workspace.subscribe((w) => {
+    if (w?.zoneFilter) {
+      zoneFilter = { ...w.zoneFilter };
+    }
+  });
+
+  onDestroy(() => unsubscribe());
+
+  function getFilteredData() {
+    if (!fziData) return null;
+    // Convert arrays to rows for filtering
+    const rows = fziData.phit.map((phit, i) => ({
+      phit,
+      perm: fziData!.perm[i],
+      zone: fziData!.zones[i]
+    }));
+    // Apply zone filter
+    const visibleRows = applyZoneFilter(rows, zoneFilter);
+    console.log('Applying zone filter:', rows.length, zoneFilter, visibleRows.length);
+    // Convert back to arrays
+    return {
+      phit: visibleRows.map(r => r.phit),
+      perm: visibleRows.map(r => r.perm),
+      zones: visibleRows.map(r => r.zone)
+    };
+  }
   let cutoffsInput = "0.1, 1.0, 3.0, 6.0";
   let Plotly: any = null;
   let fziContainer: HTMLDivElement | null = null;
   let porePermContainer: HTMLDivElement | null = null;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
-
-  async function runRockTyping() {
-    loading = true;
-    message = null;
-    try {
-      // Placeholder: in future call backend endpoint to run clustering/rock-typing
-      await new Promise((r) => setTimeout(r, 700));
-      message = 'Rock-typing completed (preview).';
-    } catch (e) {
-      message = 'Failed to run rock-typing.';
-    } finally {
-      loading = false;
-    }
-  }
 
   async function ensurePlotly() {
     if (!browser) throw new Error('Plotly can only be loaded in the browser');
@@ -48,6 +64,7 @@
       const res = await fetch(url);
       if (!res.ok) throw new Error(await res.text());
       fziData = await res.json();
+      console.log('Loaded FZI data:', fziData);
     } catch (e: any) {
       fziError = e.message || 'Failed to load FZI data';
       fziData = null;
@@ -57,8 +74,9 @@
   }
 
   function plotFZI() {
-    if (!fziData || !fziContainer) return;
-    const { phit, perm } = fziData;
+    const data = getFilteredData();
+    if (!data || !fziContainer) return;
+    const { phit, perm } = data;
     
     // Calculate RQI and phi_z
     const rqi = phit.map((p, i) => 0.0314 * Math.sqrt(perm[i] / p));
@@ -157,8 +175,9 @@
   }
 
   function plotPorePerm() {
-    if (!fziData || !porePermContainer) return;
-    const { phit, perm } = fziData;
+    const data = getFilteredData();
+    if (!data || !porePermContainer) return;
+    const { phit, perm } = data;
     
     // Calculate FZI for each point
     const rqi = phit.map((p, i) => 0.0314 * Math.sqrt(perm[i] / p));
@@ -277,7 +296,7 @@
   });
 
   // Reactive plot update
-  $: if (fziData && cutoffsInput) {
+  $: if (fziData && cutoffsInput && zoneFilter) {
     plotFZI();
     plotPorePerm();
   }
@@ -317,14 +336,14 @@
     {/if}
 
     <div class="bg-surface rounded p-3 min-h-[400px]">
-      <div bind:this={fziContainer} class="w-full h-[350px]"></div>
+      <div bind:this={fziContainer} class="w-full max-w-[600px] h-[500px] mx-auto"></div>
     </div>
 
     <div class="font-semibold mb-2">Pore-Perm Crossplot</div>
     <div class="text-sm text-muted-foreground mb-3">Plot porosity vs permeability with FZI cutoff lines and rock type coloring.</div>
     
     <div class="bg-surface rounded p-3 min-h-[400px]">
-      <div bind:this={porePermContainer} class="w-full h-[350px]"></div>
+      <div bind:this={porePermContainer} class="w-full max-w-[600px] h-[500px] mx-auto"></div>
     </div>
   </div>
 </div>

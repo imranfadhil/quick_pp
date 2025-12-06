@@ -1,3 +1,4 @@
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Dict, Any, Optional
 
@@ -710,44 +711,103 @@ async def get_fzi_data(project_id: int):
     try:
         with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
-            all_data = proj.get_all_data()
 
-            if all_data.empty:
+            well_names = proj.get_well_names()
+            if not well_names:
                 raise HTTPException(
-                    status_code=404, detail=f"No data for project {project_id}"
+                    status_code=404, detail=f"No wells found for project {project_id}"
                 )
 
-            # Extract PHIT and PERM columns
-            phit_col = None
-            perm_col = None
-            for col in all_data.columns:
-                if col.upper() in ["PHIT", "POROSITY", "POR"]:
-                    phit_col = col
-                if col.upper() in ["PERM", "PERMEABILITY", "K"]:
-                    perm_col = col
+            cpore_list = []
+            cperm_list = []
+            zones_list = []
+            for well_name in well_names:
+                df = proj.get_well_data_optimized(well_name)
 
-            if not phit_col or not perm_col:
+                if df.empty:
+                    raise HTTPException(
+                        status_code=404, detail=f"No data for project {project_id}"
+                    )
+
+                # Load ancillary data (formation tops and core data)
+                try:
+                    ancillary = proj.get_well_ancillary_data(well_name)
+                except Exception:
+                    ancillary = {}
+
+                # If formation tops exist, mark their names in a 'ZONES' column
+                tops_df = None
+                if isinstance(ancillary, dict) and "formation_tops" in ancillary:
+                    tops_df = ancillary.get("formation_tops")
+                    if (
+                        isinstance(tops_df, pd.DataFrame)
+                        and not tops_df.empty
+                        and not df.empty
+                    ):
+                        # Ensure ZONES column exists
+                        df["ZONES"] = pd.NA
+                        # For each top, find the closest depth row in df and annotate
+                        for _, top in tops_df.iterrows():
+                            try:
+                                top_depth = float(top.get("depth"))
+                                top_name = str(top.get("name"))
+                            except Exception:
+                                continue
+                            # find index of nearest depth
+                            nearest_idx = (df["DEPTH"] - top_depth).abs().idxmin()
+                            df.at[nearest_idx, "ZONES"] = top_name
+                        df["ZONES"] = df["ZONES"].ffill()
+
+                # Extract PHIT and PERM columns
+                phit_col = None
+                perm_col = None
+                for col in df.columns:
+                    if col.upper() in ["PHIT", "POROSITY", "POR"]:
+                        phit_col = col
+                    if col.upper() in ["PERM", "PERMEABILITY", "K"]:
+                        perm_col = col
+
+                if not phit_col or not perm_col:
+                    continue  # skip this well if columns not found
+
+                cpore = df[phit_col].dropna()
+                cperm = df[perm_col].dropna()
+
+                # Align the data
+                common_index = cpore.index.intersection(cperm.index)
+                cpore = cpore.loc[common_index]
+                cperm = cperm.loc[common_index]
+
+                # Extract zones if available
+                zones = []
+                if "ZONES" in df.columns:
+                    zones = df.loc[common_index, "ZONES"].fillna("Unknown").tolist()
+                else:
+                    zones = ["Unknown"] * len(cpore)
+
+                if len(cpore) == 0:
+                    raise HTTPException(
+                        status_code=404, detail="No valid PHIT/PERM data found"
+                    )
+
+                cpore_list.append(cpore)
+                cperm_list.append(cperm)
+                zones_list.extend(zones)
+
+            if not cpore_list or not cperm_list:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"PHIT or PERM columns not found in project data. Available: {list(all_data.columns)}",
+                    detail=f"PHIT or PERM columns not found in project data. Available: {list(df.columns)}",
                 )
 
-            cpore = all_data[phit_col].dropna()
-            cperm = all_data[perm_col].dropna()
-
-            # Align the data
-            common_index = cpore.index.intersection(cperm.index)
-            cpore = cpore.loc[common_index]
-            cperm = cperm.loc[common_index]
-
-            if len(cpore) == 0:
-                raise HTTPException(
-                    status_code=404, detail="No valid PHIT/PERM data found"
-                )
+            # Concatenate all data
+            phit_all = pd.concat(cpore_list).tolist() if cpore_list else []
+            perm_all = pd.concat(cperm_list).tolist() if cperm_list else []
 
             return {
-                "phit": cpore.tolist(),
-                "perm": cperm.tolist(),
+                "phit": phit_all,
+                "perm": perm_all,
+                "zones": zones_list,
             }
 
     except ValueError as e:
