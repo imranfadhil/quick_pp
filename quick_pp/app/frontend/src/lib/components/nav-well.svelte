@@ -26,7 +26,7 @@
 	let loadingZones = $state(false);
 	let zonesOpen = $state(false);
 	let _lastSelectedWellName: string | null = null;
-	let zonesWrapper: HTMLElement | null = null;
+	let zonesWrapper: HTMLElement | null = $state(null);
 
 
 	async function fetchWells(projectId: string | number) {

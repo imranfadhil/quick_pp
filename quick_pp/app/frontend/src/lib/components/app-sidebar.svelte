@@ -10,6 +10,7 @@
 	import SettingsIcon from "@tabler/icons-svelte/icons/settings";
 	import ChartScatterIcon from "@tabler/icons-svelte/icons/chart-scatter"
 	import StackBackIcon from "@tabler/icons-svelte/icons/stack-back";
+	import EaseInOutControlPoints from '@tabler/icons-svelte/icons/ease-in-out-control-points';
 
 	// Import logo
 	import logo from "$lib/assets/logo.png";
@@ -69,6 +70,11 @@
 				title: "Rock Typing",
 				url: "/projects/rock-typing",
 				icon: StackBackIcon,
+			},
+			{
+				title: "Perm Transform",
+				url: "/projects/#",
+				icon: EaseInOutControlPoints,
 			},
 			{
 				title: "Saturation Height Function",
