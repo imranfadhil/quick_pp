@@ -19,7 +19,7 @@
 		"@dnd-kit/helpers": "^0.1.21",
 		"@internationalized/date": "^3.10.0",
 		"@lucide/svelte": "^0.544.0",
-		"@sveltejs/adapter-auto": "^7.0.0",
+		"@sveltejs/adapter-node": "^5.0.0",
 		"@sveltejs/kit": "^2.48.5",
 		"@sveltejs/vite-plugin-svelte": "^6.2.1",
 		"@tabler/icons-svelte": "^3.35.0",

@@ -58,3 +58,6 @@ Homepage = "https://github.com/imranfadhil/quick_pp"
 include = [
     "/quick_pp",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["quick_pp"]

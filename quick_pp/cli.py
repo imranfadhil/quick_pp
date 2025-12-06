@@ -286,16 +286,97 @@ def backend(debug, no_open):
     default=False,
     help="Force npm install to run even if node_modules exists",
 )
-def frontend(no_open, force_install):
-    """Start the quick_pp frontend development server.
+@click.option(
+    "--dev",
+    is_flag=True,
+    default=False,
+    help="Run `npm run dev`",
+)
+def frontend(no_open, force_install, dev):
+    """Start the quick_pp frontend server.
 
-    This launches the SvelteKit development server for the frontend application."""
+    By default, launches the SvelteKit development server (npm run dev).
+    Use --prod to run the production build (requires building first)."""
     frontend_dir = FRONTEND_DIR
 
     if not frontend_dir.exists():
         click.echo(f"Error: Frontend directory not found at {frontend_dir}")
         return
 
+    # Check if running production build
+    if not dev:
+        build_dir = frontend_dir / "build"
+        if not build_dir.exists():
+            click.echo(f"Build directory not found at {build_dir}")
+            click.echo("Building frontend for production...")
+
+            # Ensure node_modules exists first
+            if not (frontend_dir / "node_modules").exists():
+                click.echo("Installing dependencies...")
+                try:
+                    install_cmd = "npm install"
+                    p_install = Popen(
+                        install_cmd,
+                        stdout=sys.stdout,
+                        stderr=sys.stderr,
+                        shell=True,
+                        cwd=str(frontend_dir),
+                    )
+                    p_install.wait()
+                    if p_install.returncode != 0:
+                        click.echo("npm install failed. Cannot build frontend.")
+                        return
+                except Exception as e:
+                    click.echo(f"Failed to run npm install: {e}")
+                    return
+
+            # Run npm build
+            try:
+                build_cmd = "npm run build"
+                click.echo(f"Running: (in {frontend_dir}) {build_cmd}")
+                p_build = Popen(
+                    build_cmd,
+                    stdout=sys.stdout,
+                    stderr=sys.stderr,
+                    shell=True,
+                    cwd=str(frontend_dir),
+                )
+                p_build.wait()
+                if p_build.returncode != 0:
+                    click.echo("Frontend build failed.")
+                    return
+                click.echo("Frontend build completed successfully.")
+            except Exception as e:
+                click.echo(f"Failed to build frontend: {e}")
+                return
+
+        click.echo("Starting frontend production server on port 3000...")
+
+        # Set environment variables for the production server
+        env = os.environ.copy()
+        env["PORT"] = 3000
+        env["HOST"] = "0.0.0.0"
+
+        # Run the built Node.js server
+        cmd = ["node", "build"]
+        process = start_process(cmd, cwd=str(frontend_dir), shell=False)
+
+        # Open browser to production URL unless disabled
+        try:
+            if not no_open:
+                time.sleep(1)  # Give server a moment to start
+                webbrowser.open("http://localhost:3000")
+        except Exception:
+            pass
+
+        try:
+            process.wait()
+        except KeyboardInterrupt:
+            click.echo("\nShutting down frontend server...")
+            stop_process_gracefully(process)
+        return
+
+    # Development mode (default)
     # Check if we need to run npm install
     should_install = force_install or not (frontend_dir / "node_modules").exists()
 
