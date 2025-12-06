@@ -50,7 +50,7 @@
     loading = true;
     error = null;
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`);
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/merged`);
       if (!res.ok) throw new Error(await res.text());
       const fd = await res.json();
       const rows = fd && fd.data ? fd.data : fd;
@@ -301,12 +301,19 @@
     const plt = await ensurePlotly();
     const traces: any[] = [];
     if (archieChartData && archieChartData.length > 0) {
-      traces.push({ x: archieChartData.map(d => Number(d.depth)), y: archieChartData.map(d => d.SWT), name: 'Archie SWT', mode: 'lines', line: { color: '#2563eb' } });
+      traces.push({
+        x: archieChartData.map(d => Number(d.depth)), y: archieChartData.map(d => d.SWT),
+        name: 'Archie SWT', mode: 'lines', line: { color: '#2563eb' } });
+      traces.push({
+        x: [Math.min(...archieChartData.map(d => Number(d.depth))), Math.max(...archieChartData.map(d => Number(d.depth)))],
+        y: [1, 1], mode: 'lines', line: { color: 'black', width: 1, dash: 'dash' }, showlegend: false
+      });
     }
     if (waxmanChartData && waxmanChartData.length > 0) {
-      traces.push({ x: waxmanChartData.map(d => Number(d.depth)), y: waxmanChartData.map(d => d.SWT), name: 'Waxman-Smits SWT', mode: 'lines', line: { color: '#dc2626' } });
+      traces.push({
+        x: waxmanChartData.map(d => Number(d.depth)), y: waxmanChartData.map(d => d.SWT),
+        name: 'Waxman-Smits SWT', mode: 'lines', line: { color: '#dc2626' } });
     }
-
     if (traces.length === 0) {
       try { plt.purge(satPlotDiv); } catch (e) {}
       return;
@@ -320,7 +327,7 @@
       margin: { l: 60, r: 20, t: 20, b: 40 },
       dragmode: 'zoom',
       xaxis: { title: 'Depth'},
-      yaxis: { title: 'SWT (fraction)', range: [0, 1], tickformat: '.2f', fixedrange: true },
+      yaxis: { title: 'SWT (fraction)', range: [0, 1.5], tickformat: '.2f', fixedrange: true },
       showlegend: true,
       legend: { ...(legendCfg), bgcolor: 'rgba(255,255,255,0.75)', borderwidth: 1 }
     };

@@ -346,10 +346,15 @@
     if (phiePoints && phiePoints.length > 0) {
       const x2 = phiePoints.map(p => p.x);
       const y2 = phiePoints.map(p => p.y);
-      traces.push({ x: x2, y: y2, name: 'PHIE', mode: 'lines', line: { color: '#2563eb', width: 1, dash: 'dot' }, fill: 'tozeroy', fillcolor: 'rgba(37,99,235,0.3)', xaxis: 'x', yaxis: 'y' });
+      traces.push({
+        x: x2, y: y2, name: 'PHIE', mode: 'lines', line: { color: '#2563eb', width: 1, dash: 'dot' },
+        fill: 'tozeroy', fillcolor: 'rgba(37,99,235,0.3)', xaxis: 'x', yaxis: 'y' });
     }
     if (cporePoints && cporePoints.length > 0) {
-      traces.push({ x: cporePoints.map(p => p.x), y: cporePoints.map(p => p.y), name: 'CPORE', mode: 'markers', marker: { color: '#dc2626', size: 8, line: { color: 'white', width: 1 } }, xaxis: depthMatching ? 'x2' : 'x', yaxis: 'y' });
+      traces.push({
+        x: cporePoints.map(p => p.x), y: cporePoints.map(p => p.y), name: 'CPORE', mode: 'markers',
+        marker: { color: '#dc2626', size: 8, line: { color: 'white', width: 1 } },
+        xaxis: depthMatching ? 'x2' : 'x', yaxis: 'y' });
     }
 
     const layout = {
@@ -581,7 +586,7 @@
         const phieVal = p.PHIE !== undefined ? Number(p.PHIE) : (p.PHIE ?? null);
         const phie = phieVal !== null && !isNaN(Number(phieVal)) ? Math.min(Math.max(Number(phieVal), 0), 1) : null;
 
-        const row: Record<string, any> = { PHIT: phit };
+        const row: Record<string, any> = { DEPTH: Number(r.depth ?? r.DEPTH ?? NaN), PHIT: phit, PHIE: phie };
         if (phie !== null) row.PHIE = phie;
         rows.push(row);
       }
