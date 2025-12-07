@@ -82,7 +82,7 @@ def get_gunicorn_worker_flag(debug: bool = False) -> str:
     return f"--workers {workers}"
 
 
-def start_process(cmd, cwd=None, shell=False):
+def start_process(cmd, cwd=None, shell=False, env=None):
     """Start a subprocess in a new process group/session for graceful shutdown.
 
     On Windows, use CREATE_NEW_PROCESS_GROUP and on POSIX use setsid so we can
@@ -91,7 +91,7 @@ def start_process(cmd, cwd=None, shell=False):
     # If cmd is a list, pass it directly (recommended for uvicorn to avoid shell)
     if os.name == "nt":
         return subprocess.Popen(
-            cmd, stdout=sys.stdout, stderr=sys.stderr, shell=shell, cwd=cwd
+            cmd, stdout=sys.stdout, stderr=sys.stderr, shell=shell, cwd=cwd, env=env
         )
     else:
         return subprocess.Popen(
@@ -100,6 +100,7 @@ def start_process(cmd, cwd=None, shell=False):
             stderr=sys.stderr,
             shell=shell,
             cwd=cwd,
+            env=env,
             preexec_fn=os.setsid if not shell else None,
         )
 
@@ -275,10 +276,10 @@ def backend(debug, no_open):
 
 @click.command()
 @click.option(
-    "--no-open",
+    "--dev",
     is_flag=True,
     default=False,
-    help="Do not open browser after starting frontend",
+    help="Run `npm run dev`",
 )
 @click.option(
     "--force-install",
@@ -287,12 +288,12 @@ def backend(debug, no_open):
     help="Force npm install to run even if node_modules exists",
 )
 @click.option(
-    "--dev",
+    "--no-open",
     is_flag=True,
     default=False,
-    help="Run `npm run dev`",
+    help="Do not open browser after starting frontend",
 )
-def frontend(no_open, force_install, dev):
+def frontend(dev, force_install, no_open):
     """Start the quick_pp frontend server.
 
     By default, launches the SvelteKit development server (npm run dev).
@@ -306,7 +307,9 @@ def frontend(no_open, force_install, dev):
     # Check if running production build
     if not dev:
         build_dir = frontend_dir / "build"
-        if not build_dir.exists():
+        should_install = force_install or not build_dir.exists()
+
+        if should_install:
             click.echo(f"Build directory not found at {build_dir}")
             click.echo("Building frontend for production...")
 
@@ -354,12 +357,12 @@ def frontend(no_open, force_install, dev):
 
         # Set environment variables for the production server
         env = os.environ.copy()
-        env["PORT"] = 5469
+        env["PORT"] = "5469"
         env["HOST"] = "0.0.0.0"
 
         # Run the built Node.js server
         cmd = ["node", "build"]
-        process = start_process(cmd, cwd=str(frontend_dir), shell=False)
+        process = start_process(cmd, cwd=str(frontend_dir), shell=False, env=env)
 
         # Open browser to production URL unless disabled
         try:
@@ -382,7 +385,19 @@ def frontend(no_open, force_install, dev):
 
     if should_install:
         if force_install:
-            click.echo("Force install requested. Running 'npm install'...")
+            click.echo(
+                "Force install requested. Cleaning node_modules and package-lock.json..."
+            )
+            # Remove node_modules and package-lock.json for a clean install
+            node_modules = frontend_dir / "node_modules"
+            package_lock = frontend_dir / "package-lock.json"
+            if node_modules.exists():
+                shutil.rmtree(node_modules)
+                click.echo("Removed node_modules")
+            if package_lock.exists():
+                package_lock.unlink()
+                click.echo("Removed package-lock.json")
+            click.echo("Running 'npm install'...")
         else:
             click.echo(
                 "Warning: node_modules not found. Attempting to run 'npm install' now..."
@@ -432,7 +447,13 @@ def frontend(no_open, force_install, dev):
     default=False,
     help="Open browser after starting services",
 )
-def app(open):
+@click.option(
+    "--force-install",
+    is_flag=True,
+    default=False,
+    help="Force clean npm install for frontend before building",
+)
+def app(force_install, open):
     """Start both backend and frontend development servers.
 
     This command will start the backend (uvicorn) on port 6312 and the
@@ -487,9 +508,27 @@ def app(open):
                 click.echo(f"Build directory not found at {build_dir}")
                 click.echo("Building frontend for production...")
 
-                # Ensure node_modules exists first
-                if not (frontend_dir / "node_modules").exists():
-                    click.echo("Installing dependencies...")
+                # Ensure node_modules exists first, or force install
+                should_install = (
+                    force_install or not (frontend_dir / "node_modules").exists()
+                )
+                if should_install:
+                    if force_install:
+                        click.echo(
+                            "Force install requested. Cleaning node_modules and package-lock.json..."
+                        )
+                        # Remove node_modules and package-lock.json for a clean install
+                        node_modules = frontend_dir / "node_modules"
+                        package_lock = frontend_dir / "package-lock.json"
+                        if node_modules.exists():
+                            shutil.rmtree(node_modules)
+                            click.echo("Removed node_modules")
+                        if package_lock.exists():
+                            package_lock.unlink()
+                            click.echo("Removed package-lock.json")
+                        click.echo("Installing dependencies...")
+                    else:
+                        click.echo("Installing dependencies...")
                     try:
                         install_cmd = "npm install"
                         p_install = Popen(
@@ -536,7 +575,7 @@ def app(open):
 
             # Run the built Node.js server
             cmd = ["node", "build"]
-            p_front = start_process(cmd, cwd=str(frontend_dir), shell=False)
+            p_front = start_process(cmd, cwd=str(frontend_dir), shell=False, env=env)
             processes.append(p_front)
 
         # Open browser(s) after launching processes (default behavior)

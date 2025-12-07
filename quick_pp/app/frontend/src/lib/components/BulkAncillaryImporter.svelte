@@ -163,9 +163,35 @@
       const pcType = keys[ lowerKeys.indexOf('pc_type') ] ?? null;
       const pcCycle = keys[ lowerKeys.indexOf('pc_cycle') ] ?? null;
 
+      // Check for wide columns (Pc.1, Sw.1, etc.)
+      const pcCols = keys.filter(k => /^Pc\.\d+$/.test(k));
+      const swCols = keys.filter(k => /^Sw\.\d+$/.test(k));
+      const isWide = pcCols.length > 0 && swCols.length > 0;
+
+      let processedRows = rows;
+      if (isWide) {
+        // Restructure wide data to long format
+        processedRows = [];
+        for (const row of rows) {
+          const baseRow = { ...row };
+          // Remove wide columns
+          pcCols.forEach(c => delete baseRow[c]);
+          swCols.forEach(c => delete baseRow[c]);
+          // Get all indices
+          const indices = [...new Set([...pcCols.map(c => parseInt(c.split('.')[1])), ...swCols.map(c => parseInt(c.split('.')[1]))])];
+          for (const i of indices) {
+            const pcVal = row[`Pc.${i}`];
+            const swVal = row[`Sw.${i}`];
+            if (pcVal != null && swVal != null && pcVal !== '' && swVal !== '') {
+              processedRows.push({ ...baseRow, Pc: pcVal, Sw: swVal, Measurement_Index: i });
+            }
+          }
+        }
+      }
+
       // group by sample
       const groups: Record<string, any[]> = {};
-      for (const r of rows) {
+      for (const r of processedRows) {
         const sampleName = (sampleCol ? r[sampleCol] : null) || r['SAMPLE_NAME'] || r['sample_name'] || r['Sample'] || null;
         if (!sampleName) continue;
         groups[sampleName] = groups[sampleName] || [];
@@ -214,18 +240,32 @@
           const sat = r[rpSat] ?? r['RP_SAT'] ?? r['rp_sat'] ?? null;
           const kr = r[rpKr] ?? r['RP_KR'] ?? null;
           const phase = r[rpPhase] ?? r['RP_PHASE'] ?? null;
-          if (sat != null && kr != null && sat !== '' && kr !== '') relperm.push({ saturation: Number(sat), kr: Number(kr), phase: phase || 'water' });
+          if (sat != null && kr != null && sat !== '' && kr !== '') relperm.push({ saturation: parseNumeric(sat), kr: parseNumeric(kr), phase: phase || 'water' });
         }
         if (relperm.length) sampleObj.relperm_data = relperm;
 
         // pc
         const pc: any[] = [];
-        for (const r of groupRows) {
-          const sat = r[pcSat] ?? r['PC_SAT'] ?? null;
-          const pressure = r[pcPressure] ?? r['PC_PRESSURE'] ?? null;
-          const typev = r[pcType] ?? r['PC_TYPE'] ?? null;
-          const cycle = r[pcCycle] ?? r['PC_CYCLE'] ?? null;
-          if (sat != null && pressure != null && sat !== '' && pressure !== '') pc.push({ saturation: Number(sat), pressure: Number(pressure), experiment_type: typev, cycle });
+        if (isWide) {
+          // For wide data, Pc is pressure, Sw is saturation
+          for (const r of groupRows) {
+            if (r.Pc != null && r.Sw != null) {
+              pc.push({
+                saturation: parseNumeric(r.Sw),
+                pressure: parseNumeric(r.Pc),
+                cycle: 'drainage' // default
+              });
+            }
+          }
+        } else {
+          // existing logic
+          for (const r of groupRows) {
+            const sat = r[pcSat] ?? r['PC_SAT'] ?? null;
+            const pressure = r[pcPressure] ?? r['PC_PRESSURE'] ?? null;
+            const typev = r[pcType] ?? r['PC_TYPE'] ?? null;
+            const cycle = r[pcCycle] ?? r['PC_CYCLE'] ?? null;
+            if (sat != null && pressure != null && sat !== '' && pressure !== '') pc.push({ saturation: parseNumeric(sat), pressure: parseNumeric(pressure), experiment_type: typev, cycle: parseNumeric(cycle) });
+          }
         }
         if (pc.length) sampleObj.pc_data = pc;
 
@@ -327,7 +367,7 @@
               const samples = subPayload.samples ?? [];
               let sentForWell = 0;
               for (const s of samples) {
-                const singleUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/core_samples${subQs}`;
+                const singleUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${subQs}`;
                 console.log('Bulk import: POST', singleUrl, s);
                 const res = await fetch(singleUrl, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(s) });
                 if (!res.ok) {
@@ -392,7 +432,7 @@
         const sampleResults: any[] = [];
         for (const s of samplesArr) {
           const singleQs = sel ? `?well_name=${encodeURIComponent(String(sel))}` : '';
-          const singleUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/core_samples${singleQs}`;
+          const singleUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${singleQs}`;
           const singlePayload = { ...s };
           console.log('Bulk import: POST', singleUrl, singlePayload);
           const res = await fetch(singleUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(singlePayload) });
@@ -472,7 +512,7 @@
       {:else if type === 'core_samples' || type === 'rca'}
         <div class="text-xs">Required columns: <code>well_name</code>, <code>sample_name</code> (or <code>sample</code>), <code>depth</code>, <code>description</code>, <code>remarks</code>, and measurement columns: <code>cpore</code>, <code>cperm</code></div>
       {:else if type === 'scal'}
-        <div class="text-xs">Relperm: <code>rp_sat</code>, <code>rp_kr</code>, <code>rp_phase</code>. Capillary pressure: <code>pc_sat</code>, <code>pc_pressure</code>, <code>pc_type</code>, <code>pc_cycle</code></div>
+        <div class="text-xs">Relperm: <code>rp_sat</code>, <code>rp_kr</code>, <code>rp_phase</code>. Capillary pressure: <code>pc_sat</code>, <code>pc_pressure</code>, <code>pc_type</code>, <code>pc_cycle</code>. Wide format supported: <code>Pc.1</code>, <code>Pc.2</code>, <code>Sw.1</code>, <code>Sw.2</code>, etc.</div>
       {/if}
     </div>
   </div>

@@ -1,4 +1,4 @@
-import { writable, get } from 'svelte/store';
+import { writable, get, derived } from 'svelte/store';
 import type { WorkspaceState, Project, Well } from '$lib/types';
 import { projects } from '$lib/stores/projects';
 
@@ -16,6 +16,12 @@ export const workspace = writable<WorkspaceState>({
     zones: [],
   },
 });
+
+// Derived stores for specific parts to reduce unnecessary re-renders
+export const depthFilter = derived(workspace, $workspace => $workspace.depthFilter);
+export const zoneFilter = derived(workspace, $workspace => $workspace.zoneFilter);
+export const workspaceProject = derived(workspace, $workspace => $workspace.project);
+export const workspaceTitle = derived(workspace, $workspace => ({ title: $workspace.title, subtitle: $workspace.subtitle }));
 
 export function setWorkspaceTitle(title: string, subtitle?: string) {
   workspace.update((s) => ({ ...s, title, subtitle }));
@@ -93,14 +99,18 @@ export function selectWell(well: Well | null) {
 }
 
 export function setDepthFilter(enabled: boolean, minDepth?: number | null, maxDepth?: number | null) {
-  workspace.update((s) => ({
-    ...s,
-    depthFilter: {
+  workspace.update((s) => {
+    const newFilter = {
       enabled,
       minDepth: minDepth ?? null,
       maxDepth: maxDepth ?? null,
-    },
-  }));
+    };
+    if (JSON.stringify(s.depthFilter) === JSON.stringify(newFilter)) return s;
+    return {
+      ...s,
+      depthFilter: newFilter,
+    };
+  });
 }
 
 export function clearDepthFilter() {
@@ -115,13 +125,17 @@ export function clearDepthFilter() {
 }
 
 export function setZoneFilter(enabled: boolean, zones?: string[]) {
-  workspace.update((s) => ({
-    ...s,
-    zoneFilter: {
+  workspace.update((s) => {
+    const newFilter = {
       enabled,
       zones: zones && Array.isArray(zones) ? zones.map((z) => String(z)) : [],
-    },
-  }));
+    };
+    if (JSON.stringify(s.zoneFilter) === JSON.stringify(newFilter)) return s;
+    return {
+      ...s,
+      zoneFilter: newFilter,
+    };
+  });
 }
 
 export function clearZoneFilter() {

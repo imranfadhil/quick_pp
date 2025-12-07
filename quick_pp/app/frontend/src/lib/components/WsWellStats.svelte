@@ -4,7 +4,7 @@
   import * as Chart from '$lib/components/ui/chart/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { renameColumn, convertPercentToFraction, applyRenameInColumns } from '$lib/utils/topBottomEdits';
-  import { workspace, applyDepthFilter, applyZoneFilter } from '$lib/stores/workspace';
+  import { depthFilter, zoneFilter, applyDepthFilter, applyZoneFilter } from '$lib/stores/workspace';
   import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   export let projectId: string | number;
@@ -40,33 +40,10 @@
   
   // Data profiling
   let dataProfile: Record<string, any> = {};
-  
-  // Depth filter state
-  let depthFilter: { enabled: boolean; minDepth: number | null; maxDepth: number | null } = {
-    enabled: false,
-    minDepth: null,
-    maxDepth: null,
-  };
-
-  // Zone filter state
-  let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
 
   // Visible rows after applying depth/zone filters
   let visibleRows: Array<Record<string, any>> = [];
   
-  // Subscribe to workspace for depth filter changes
-  const unsubscribeWorkspace = workspace.subscribe((w) => {
-    if (w?.depthFilter) {
-      depthFilter = { ...w.depthFilter };
-    }
-    if (w?.zoneFilter) {
-      zoneFilter = { ...w.zoneFilter };
-    }
-  });
-  
-  onDestroy(() => {
-    unsubscribeWorkspace();
-  });
   let showDataProfile = false;
 
   // Simple edit UI state (modal-based)
@@ -81,11 +58,11 @@
   let hasUnsavedEdits = false;
   let editMessage: string | null = null;
 
-  $: buildChartData();
+  $: chartData = buildChartData(selectedLog, visibleRows, selectedProp, samples);
   $: visibleRows = (() => {
     let rows = fullRows || [];
-    rows = applyDepthFilter(rows, depthFilter);
-    rows = applyZoneFilter(rows, zoneFilter);
+    rows = applyDepthFilter(rows, $depthFilter);
+    rows = applyZoneFilter(rows, $zoneFilter);
     return rows;
   })();
 
@@ -233,7 +210,7 @@
     }
   }
 
-  function buildChartData() {
+  function buildChartData(selectedLog: string | null, visibleRows: any[], selectedProp: string | null, samples: any[]) {
     // if fullRows exist and selectedLog is set, prefer to build from fullRows
     if (visibleRows && visibleRows.length && selectedLog) {
       const logKey = selectedLog; // capture non-null value
@@ -242,15 +219,13 @@
         .filter((r) => !isNaN(r.depth) && !isNaN(r.value));
       rows.sort((a, b) => a.depth - b.depth);
       if (rows.length) {
-        chartData = rows;
-        return;
+        return rows;
       }
     }
 
     if (!selectedProp || !samples || samples.length === 0) {
       // fallback: generate mock depth distribution
-      chartData = Array.from({ length: 40 }, (_, i) => ({ depth: 1000 + i * 5, value: Math.random() * 100 }));
-      return;
+      return Array.from({ length: 40 }, (_, i) => ({ depth: 1000 + i * 5, value: Math.random() * 100 }));
     }
 
     const rows: Array<Record<string, any>> = [];
@@ -265,9 +240,9 @@
     // sort by depth
     rows.sort((a, b) => a.depth - b.depth);
     if (rows.length === 0) {
-      chartData = Array.from({ length: 30 }, (_, i) => ({ depth: 1000 + i * 5, value: Math.random() * 50 }));
+      return Array.from({ length: 30 }, (_, i) => ({ depth: 1000 + i * 5, value: Math.random() * 50 }));
     } else {
-      chartData = rows;
+      return rows;
     }
   }
 
@@ -581,7 +556,7 @@
                             editedColumns = new Set();
                             renameMap = {};
                             hasUnsavedEdits = false;
-                            buildChartData();
+                            buildChartData(selectedLog, visibleRows, selectedProp, samples);
                             console.log(`Loaded ${fullRows.length} rows with ${fullColumns.length} columns`);
                         } else {
                           error = 'No well data available';
@@ -671,7 +646,7 @@
 
             <div class="flex items-center gap-2">
               <div class="text-sm text-muted-foreground">Plot log:</div>
-              <select class="input" bind:value={selectedLog} onchange={() => buildChartData()}>
+              <select class="input" bind:value={selectedLog} onchange={() => buildChartData(selectedLog, visibleRows, selectedProp, samples)}>
                 {#if fullColumns.length}
                   {#each fullColumns as c}
                     {#if c !== 'depth'}

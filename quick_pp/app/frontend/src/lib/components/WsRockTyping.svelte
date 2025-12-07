@@ -34,7 +34,6 @@
     }));
     // Apply zone filter
     const visibleRows = applyZoneFilter(rows, zoneFilter);
-    console.log('Applying zone filter:', rows.length, zoneFilter, visibleRows.length);
     // Convert back to arrays
     return {
       phit: visibleRows.map(r => r.phit),
@@ -68,7 +67,6 @@
       const res = await fetch(url);
       if (!res.ok) throw new Error(await res.text());
       fziData = await res.json();
-      console.log('Loaded FZI data:', fziData);
     } catch (e: any) {
       fziError = e.message || 'Failed to load FZI data';
       fziData = null;
