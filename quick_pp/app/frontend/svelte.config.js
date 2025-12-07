@@ -1,4 +1,5 @@
-import adapter from '@sveltejs/adapter-node';
+import adapterNode from '@sveltejs/adapter-node';
+import adapterAuto from '@sveltejs/adapter-auto';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
 /** @type {import('@sveltejs/kit').Config} */
@@ -8,10 +9,10 @@ const config = {
 	preprocess: vitePreprocess(),
 
 	kit: {
-		// adapter-node for standalone Node.js server (used when pip installed)
-		adapter: adapter({
-			out: 'build'
-		})
+		// Use adapter-auto for dev (automatic detection), adapter-node for production builds
+		adapter: process.env.NODE_ENV === 'production' 
+			? adapterNode({ out: 'build' }) 
+			: adapterAuto()
 	}
 };
 

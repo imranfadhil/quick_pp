@@ -59,6 +59,35 @@ export function selectProject(project: Project | null) {
   });
 }
 
+export async function selectProjectAndLoadWells(project: Project | null) {
+  if (!project || !project.project_id) {
+    selectProject(null);
+    return;
+  }
+
+  // First set the project with basic info
+  selectProject(project);
+
+  // Then fetch wells
+  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
+  try {
+    const res = await fetch(`${API_BASE}/quick_pp/database/projects/${project.project_id}/wells`);
+    if (res.ok) {
+      const data = await res.json();
+      const wells = data.wells || [];
+      // Update the project with wells
+      workspace.update((s) => {
+        if (s.project && String(s.project.project_id) === String(project.project_id)) {
+          return { ...s, project: { ...s.project, wells } };
+        }
+        return s;
+      });
+    }
+  } catch (err) {
+    console.error('Failed to load wells for project', project.project_id, err);
+  }
+}
+
 export function selectWell(well: Well | null) {
   workspace.update((s) => ({ ...s, selectedWell: well }));
 }

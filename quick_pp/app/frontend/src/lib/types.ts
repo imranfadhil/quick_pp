@@ -1,6 +1,7 @@
 export interface Project {
   project_id: string | number;
   name?: string;
+  wells?: Well[];
 }
 
 export interface Well {
@@ -13,6 +14,7 @@ export interface WorkspaceState {
   title: string;
   subtitle?: string;
   project?: Project | null;
+  wells?: Well[];
   selectedWell?: Well | null;
   depthFilter?: {
     enabled: boolean;

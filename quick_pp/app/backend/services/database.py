@@ -163,7 +163,16 @@ async def list_wells(project_id: int):
     try:
         with connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
-            return {"project_id": proj.project_id, "wells": proj.get_well_names()}
+            wells = []
+            for well in proj._orm_project.wells:
+                wells.append(
+                    {
+                        "id": str(well.well_id),
+                        "name": well.name,
+                        "uwi": well.uwi,
+                    }
+                )
+            return {"project_id": proj.project_id, "wells": wells}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

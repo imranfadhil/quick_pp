@@ -7,7 +7,7 @@
 	import { onMount, onDestroy } from "svelte";
 	import { page } from '$app/stores';
 	import { projects, loadProjects } from '$lib/stores/projects';
-	import { selectProject } from '$lib/stores/workspace';
+	import { selectProjectAndLoadWells } from '$lib/stores/workspace';
 	import { goto } from '$app/navigation';
 	import { workspace } from '$lib/stores/workspace';
 
@@ -33,7 +33,7 @@
 		const id = (e.target as HTMLSelectElement).value;
 		const p = $projects.find((pp) => String(pp.project_id) === String(id));
 		if (p) {
-			selectProject(p);
+			selectProjectAndLoadWells(p);
 			const target = `/projects/${p.project_id}`;
 			if ($page.url.pathname !== target) goto(target);
 		}

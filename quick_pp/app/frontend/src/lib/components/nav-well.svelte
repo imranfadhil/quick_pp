@@ -9,7 +9,7 @@
 	const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
 	let project: any = $state(null);
-	let wells: string[] = $state([]);
+	let wells: any[] = $state([]);
 	let loadingWells = $state(false);
 	let selectedWell: any = $state(null);
 	let selectedWellName: string = $state('');
@@ -37,7 +37,7 @@
 			if (res.ok) {
 				const data = await res.json();
 				wells = data?.wells || [];
-				wells.sort((a, b) => a.localeCompare(b));
+				wells.sort((a, b) => a.name.localeCompare(b.name));
 			}			
 		} catch (e) {
 			console.warn('Failed to fetch wells for sidebar', e);
@@ -239,7 +239,7 @@
 						<select id="well-select" class="input w-full mt-1 text-sm h-9" bind:value={selectedWellName} onchange={handleSelect}>
 							<option value="">— select well —</option>
 							{#each wells as w}
-								<option value={w}>{w}</option>
+								<option value={w.name}>{w.name}</option>
 							{/each}
 						</select>
 					</div>

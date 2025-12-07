@@ -3,16 +3,20 @@
   import AppSidebar from "$lib/components/app-sidebar.svelte";
   import SiteHeader from "$lib/components/site-header.svelte";
   import { onMount } from 'svelte';
-  import { selectProject, selectWell, setWorkspaceTitleIfDifferent as setWorkspaceTitle } from '$lib/stores/workspace';
+  import { selectProjectAndLoadWells, selectWell, setWorkspaceTitleIfDifferent as setWorkspaceTitle } from '$lib/stores/workspace';
+  import { projects } from '$lib/stores/projects';
   import { page } from '$app/stores';
   export let data: { projectId?: string | null; wellId?: string | null };
 
   onMount(() => {
     // Only run selection on the client — load() can run on server.
     if (data?.projectId) {
-      // Avoid inventing a project.name here; let components load and set the
-      // name when real data arrives.
-      selectProject({ project_id: data.projectId });
+      const p = $projects.find((pp) => String(pp.project_id) === String(data.projectId));
+      if (p) {
+        selectProjectAndLoadWells(p);
+      } else {
+        selectProjectAndLoadWells({ project_id: data.projectId });
+      }
     }
     if (data?.wellId) {
       selectWell({ id: data.wellId, name: data.wellId });

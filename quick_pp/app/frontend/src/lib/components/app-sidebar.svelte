@@ -73,7 +73,7 @@
 			},
 			{
 				title: "Perm Transform",
-				url: "/projects/#",
+				url: "/projects/perm-transform",
 				icon: EaseInOutControlPoints,
 			},
 			{

@@ -3,7 +3,8 @@
   import AppSidebar from "$lib/components/app-sidebar.svelte";
   import SiteHeader from "$lib/components/site-header.svelte";
   import { onMount } from 'svelte';
-  import { selectProject } from '$lib/stores/workspace';
+  import { selectProjectAndLoadWells } from '$lib/stores/workspace';
+  import { projects } from '$lib/stores/projects';
   import { page } from '$app/stores';
 
   // read project_id from route params and seed selection for all children
@@ -12,7 +13,13 @@
 
   onMount(() => {
     if (projectId) {
-      selectProject({ project_id: projectId });
+      const p = $projects.find((pp) => String(pp.project_id) === String(projectId));
+      if (p) {
+        selectProjectAndLoadWells(p);
+      } else {
+        // If not in store, just set with ID
+        selectProjectAndLoadWells({ project_id: projectId });
+      }
     }
   });
 </script>
