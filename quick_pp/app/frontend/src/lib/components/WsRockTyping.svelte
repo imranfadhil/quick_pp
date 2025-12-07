@@ -11,8 +11,8 @@
   let fziLoading = false;
   let fziError: string | null = null;
   let fziData: { phit: number[], perm: number[], zones: string[], well_names: string[], depths: number[] } | null = null;
-
   let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
+  let lastProjectId: string | number | null = null;
 
   const unsubscribe = workspace.subscribe((w) => {
     if (w?.zoneFilter) {
@@ -296,13 +296,6 @@
       PlotlyLib.newPlot(porePermContainer, traces, layout, { responsive: true });
     });
   }
-  // Auto-load on mount if projectId is set
-  import { onMount } from 'svelte';
-  onMount(() => {
-    if (projectId) {
-      loadFZIData();
-    }
-  });
 
   async function saveRockFlags() {
     if (!fziData || !projectId) return;
@@ -367,12 +360,16 @@
     }
   }
 
+  // Load FZI data on component mount or when projectId changes
+  $: if (projectId && projectId !== lastProjectId) {
+    lastProjectId = projectId;
+    loadFZIData();
+  }
   // Reactive plot update
   $: if (fziData && cutoffsInput && zoneFilter) {
     plotFZI();
     plotPorePerm();
   }
-
 </script>
 
 <div class="ws-rock-typing">

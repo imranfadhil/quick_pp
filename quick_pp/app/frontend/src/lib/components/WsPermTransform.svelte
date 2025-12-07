@@ -4,6 +4,7 @@
   import { browser } from '$app/environment';
   import { onDestroy } from 'svelte';
   import { workspace, applyZoneFilter } from '$lib/stores/workspace';
+	import { number } from 'zod/v4';
   export let projectId: string | number | null = null;
 
   let loading = false;
@@ -14,9 +15,10 @@
   let fits: { [key: string]: { a: number, b: number } } | null = null;
 
   let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
+  let lastProjectId: string | number | null = null;
 
   const unsubscribe = workspace.subscribe((w) => {
-    if (w?.zoneFilter) {
+    if (w?.zoneFilter && (zoneFilter.enabled !== w.zoneFilter.enabled || JSON.stringify(zoneFilter.zones) !== JSON.stringify(w.zoneFilter.zones))) {
       zoneFilter = { ...w.zoneFilter };
     }
   });
@@ -99,7 +101,7 @@
     const rockFlagGroups: { [key: string]: { phit: number[]; perm: number[] } } = {};
     rock_flags.forEach((rf, i) => {
       if (rf === null) return;
-      const key = String(rf);
+      const key = rf.toFixed(1);
       if (!rockFlagGroups[key]) rockFlagGroups[key] = { phit: [], perm: [] };
       rockFlagGroups[key].phit.push(phit[i]);
       rockFlagGroups[key].perm.push(perm[i]);
@@ -175,10 +177,10 @@
     try {
       // Calculate perm_trans for all data points
       const permTransPairs = data.phit.map((phit, i) => {
-        const rockFlag = data!.rock_flags[i];
+        const rockFlag : number | null = data!.rock_flags[i];
         let permTrans = null;
-        if (rockFlag !== null && fits && fits[String(rockFlag)]) {
-          const { a, b } = fits[String(rockFlag)];
+        if (rockFlag !== null && fits && fits[rockFlag.toFixed(1)]) {
+          const { a, b } = fits[rockFlag.toFixed(1)];
           permTrans = a * Math.pow(phit, b);
         }
         
@@ -210,21 +212,15 @@
     }
   }
 
-
-
-  // Auto-load on mount if projectId is set
-  import { onMount } from 'svelte';
-  onMount(() => {
-    if (projectId) {
-      loadData();
-    }
-  });
-
+  // Load data on component mount or when projectId changes
+  $: if (projectId && projectId !== lastProjectId) {
+    lastProjectId = projectId;
+    loadData();
+  }
   // Reactive plot update
   $: if (data && fits && zoneFilter) {
     plotPorePerm();
   }
-
 </script>
 
 <div class="ws-perm-transform">
@@ -248,6 +244,12 @@
           {/if}
         </Button>
       </div>
+      {#if message}
+        <div class="text-sm {message.startsWith('Error') ? 'text-red-600' : 'text-green-600'}">
+          {message}
+        </div>
+      {/if}
+
       {#if fits}
         <div class="font-semibold mb-2">Fitted Parameters</div>
         <div class="text-sm text-muted-foreground mb-3">Edit a and b parameters to update the fitted curves.</div>
@@ -287,12 +289,6 @@
         </div>
       {/if}
     </div>
-
-    {#if message}
-      <div class="text-sm {message.startsWith('Error') ? 'text-red-600' : 'text-green-600'}">
-        {message}
-      </div>
-    {/if} 
 
     <div class="font-semibold mb-2">Poro-Perm Crossplot with Fitted Curves</div>
     <div class="text-sm text-muted-foreground mb-3">Plot porosity vs permeability with fitted curves per ROCK_FLAG.</div>

@@ -3,6 +3,9 @@
   import { goto } from '$app/navigation';
   import { workspace } from '$lib/stores/workspace';
   import { projects, loadProjects } from '$lib/stores/projects';
+  import * as Sidebar from "$lib/components/ui/sidebar/index.js";
+  import AppSidebar from "$lib/components/app-sidebar.svelte";
+  import SiteHeader from "$lib/components/site-header.svelte";
 
   // When visiting /projects we want to automatically forward to the active project
   // (workspace.project) or fall back to the first project in the projects list.
@@ -49,23 +52,29 @@
   });
 </script>
 
-{#if redirected}
-  <!-- Navigation enacted, nothing to show locally -->
-{:else}
-  <div class="p-6">
-    <h2 class="text-lg font-semibold">Projects</h2>
-    {#if !hasProjects && !hasWorkspaceProject}
-      <div class="mt-4 text-sm">
-        <p>No projects found for your account or workspace.</p>
-        <p class="mt-2">How to proceed:</p>
-        <ul class="list-disc ml-6 mt-2 text-sm">
-          <li>Use the <strong>New Project</strong> button in the left sidebar to create a project.</li>
-          <li>If you already have projects, open the project selector in the sidebar and choose one to activate it.</li>
-        </ul>
-        <p class="mt-3 text-muted-foreground">After creating or selecting a project the workspace will open automatically.</p>
-      </div>
-    {:else}
-      <p class="mt-2 text-sm text-muted-foreground">Resolving project — redirecting to project workspace...</p>
-    {/if}
-  </div>
-{/if}
+<Sidebar.Provider style="--sidebar-width: calc(var(--spacing) * 72); --header-height: calc(var(--spacing) * 12);">
+  <AppSidebar variant="inset" />
+  <Sidebar.Inset>
+    <SiteHeader />
+      {#if redirected}
+        <!-- Navigation enacted, nothing to show locally -->
+      {:else}
+        <div class="p-6">
+          <h2 class="text-lg font-semibold">Projects</h2>
+          {#if !hasProjects && !hasWorkspaceProject}
+            <div class="mt-4 text-sm">
+              <p>No projects found for your account or workspace.</p>
+              <p class="mt-2">How to proceed:</p>
+              <ul class="list-disc ml-6 mt-2 text-sm">
+                <li>Use the <strong>New Project</strong> button in the left sidebar to create a project.</li>
+                <li>If you already have projects, open the project selector in the sidebar and choose one to activate it.</li>
+              </ul>
+              <p class="mt-3 text-muted-foreground">After creating or selecting a project the workspace will open automatically.</p>
+            </div>
+          {:else}
+            <p class="mt-2 text-sm text-muted-foreground">Resolving project — redirecting to project workspace...</p>
+          {/if}
+        </div>
+      {/if}
+  </Sidebar.Inset>
+</Sidebar.Provider>
