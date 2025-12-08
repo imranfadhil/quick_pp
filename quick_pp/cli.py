@@ -53,6 +53,7 @@ except metadata.PackageNotFoundError:
 # Global defaults for backend and frontend locations used across commands
 BACKEND_HOST = "localhost"
 BACKEND_PORT = 6312
+FRONTEND_PORT = 5469
 FRONTEND_DIR = Path(__file__).parent / "app" / "frontend"
 DOCKER_DIR = Path(__file__).parent / "app" / "docker"
 
@@ -307,60 +308,16 @@ def frontend(dev, force_install, no_open):
     # Check if running production build
     if not dev:
         build_dir = frontend_dir / "build"
-        should_install = force_install or not build_dir.exists()
-
-        if should_install:
-            click.echo(f"Build directory not found at {build_dir}")
-            click.echo("Building frontend for production...")
-
-            # Ensure node_modules exists first
-            if not (frontend_dir / "node_modules").exists():
-                click.echo("Installing dependencies...")
-                try:
-                    install_cmd = "npm install"
-                    p_install = Popen(
-                        install_cmd,
-                        stdout=sys.stdout,
-                        stderr=sys.stderr,
-                        shell=True,
-                        cwd=str(frontend_dir),
-                    )
-                    p_install.wait()
-                    if p_install.returncode != 0:
-                        click.echo("npm install failed. Cannot build frontend.")
-                        return
-                except Exception as e:
-                    click.echo(f"Failed to run npm install: {e}")
-                    return
-
-            # Run npm build
-            try:
-                build_cmd = "npm run build"
-                click.echo(f"Running: (in {frontend_dir}) {build_cmd}")
-                env_build = os.environ.copy()
-                env_build["NODE_ENV"] = "production"
-                p_build = Popen(
-                    build_cmd,
-                    stdout=sys.stdout,
-                    stderr=sys.stderr,
-                    shell=True,
-                    cwd=str(frontend_dir),
-                    env=env_build,
-                )
-                p_build.wait()
-                if p_build.returncode != 0:
-                    click.echo("Frontend build failed.")
-                    return
-                click.echo("Frontend build completed successfully.")
-            except Exception as e:
-                click.echo(f"Failed to build frontend: {e}")
-                return
-
-        click.echo("Starting frontend production server on port 5469...")
+        if not build_dir.exists():
+            click.echo(
+                "Frontend build not found. Please ensure the frontend is pre-built and included in the package."
+            )
+            return
+        click.echo(f"Starting frontend production server on port {FRONTEND_PORT}...")
 
         # Set environment variables for the production server
         env = os.environ.copy()
-        env["PORT"] = "5469"
+        env["PORT"] = str(FRONTEND_PORT)
         env["HOST"] = "0.0.0.0"
 
         # Run the built Node.js server
@@ -371,7 +328,7 @@ def frontend(dev, force_install, no_open):
         try:
             if not no_open:
                 time.sleep(1)  # Give server a moment to start
-                webbrowser.open("http://localhost:5469")
+                webbrowser.open(f"http://localhost:{FRONTEND_PORT}")
         except Exception:
             pass
 
@@ -450,13 +407,7 @@ def frontend(dev, force_install, no_open):
     default=False,
     help="Open browser after starting services",
 )
-@click.option(
-    "--force-install",
-    is_flag=True,
-    default=False,
-    help="Force clean npm install for frontend before building",
-)
-def app(force_install, open):
+def app(open):
     """Start both backend and frontend development servers.
 
     This command will start the backend (uvicorn) on port 6312 and the
@@ -508,81 +459,25 @@ def app(force_install, open):
         else:
             build_dir = frontend_dir / "build"
             if not build_dir.exists():
-                click.echo(f"Build directory not found at {build_dir}")
-                click.echo("Building frontend for production...")
-
-                # Ensure node_modules exists first, or force install
-                should_install = (
-                    force_install or not (frontend_dir / "node_modules").exists()
+                click.echo(
+                    f"Frontend build not found at {build_dir}. Skipping frontend start."
                 )
-                if should_install:
-                    if force_install:
-                        click.echo(
-                            "Force install requested. Cleaning node_modules and package-lock.json..."
-                        )
-                        # Remove node_modules and package-lock.json for a clean install
-                        node_modules = frontend_dir / "node_modules"
-                        package_lock = frontend_dir / "package-lock.json"
-                        if node_modules.exists():
-                            shutil.rmtree(node_modules)
-                            click.echo("Removed node_modules")
-                        if package_lock.exists():
-                            package_lock.unlink()
-                            click.echo("Removed package-lock.json")
-                        click.echo("Installing dependencies...")
-                    else:
-                        click.echo("Installing dependencies...")
-                    try:
-                        install_cmd = "npm install"
-                        p_install = Popen(
-                            install_cmd,
-                            stdout=sys.stdout,
-                            stderr=sys.stderr,
-                            shell=True,
-                            cwd=str(frontend_dir),
-                        )
-                        p_install.wait()
-                        if p_install.returncode != 0:
-                            click.echo("npm install failed. Cannot build frontend.")
-                            return
-                    except Exception as e:
-                        click.echo(f"Failed to run npm install: {e}")
-                        return
+            else:
+                click.echo(
+                    f"Starting frontend production server on port {FRONTEND_PORT}..."
+                )
 
-                # Run npm build
-                try:
-                    build_cmd = "npm run build"
-                    click.echo(f"Running: (in {frontend_dir}) {build_cmd}")
-                    env_build = os.environ.copy()
-                    env_build["NODE_ENV"] = "production"
-                    p_build = Popen(
-                        build_cmd,
-                        stdout=sys.stdout,
-                        stderr=sys.stderr,
-                        shell=True,
-                        cwd=str(frontend_dir),
-                        env=env_build,
-                    )
-                    p_build.wait()
-                    if p_build.returncode != 0:
-                        click.echo("Frontend build failed.")
-                        return
-                    click.echo("Frontend build completed successfully.")
-                except Exception as e:
-                    click.echo(f"Failed to build frontend: {e}")
-                    return
+                # Set environment variables for the production server
+                env = os.environ.copy()
+                env["PORT"] = str(FRONTEND_PORT)
+                env["HOST"] = "0.0.0.0"
 
-            click.echo("Starting frontend production server on port 5469...")
-
-            # Set environment variables for the production server
-            env = os.environ.copy()
-            env["PORT"] = "5469"
-            env["HOST"] = "0.0.0.0"
-
-            # Run the built Node.js server
-            cmd = ["node", "build/index.js"]
-            p_front = start_process(cmd, cwd=str(frontend_dir), shell=False, env=env)
-            processes.append(p_front)
+                # Run the built Node.js server
+                cmd = ["node", "build/index.js"]
+                p_front = start_process(
+                    cmd, cwd=str(frontend_dir), shell=False, env=env
+                )
+                processes.append(p_front)
 
         # Open browser(s) after launching processes (default behavior)
         try:
@@ -596,7 +491,7 @@ def app(force_install, open):
                 if any(p == p_front for p in processes) or (
                     frontend_dir.exists() and (frontend_dir / "build").exists()
                 ):
-                    webbrowser.open("http://localhost:5469")
+                    webbrowser.open(f"http://localhost:{FRONTEND_PORT}")
         except Exception:
             pass
 

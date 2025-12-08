@@ -4,19 +4,9 @@
   import { Button } from '$lib/components/ui/button/index.js';
   import { onMount, onDestroy } from 'svelte';
 
-  // import DataTables & jQuery from node_modules (bundled by Vite)
-  import jQuery from 'jquery';
-  import 'datatables.net-dt';
+  // Import DataTables CSS statically (safe for SSR)
   import 'datatables.net-dt/css/jquery.dataTables.css';
-  // DataTables Buttons extension (native export and column visibility)
-  import 'datatables.net-buttons-dt';
   import 'datatables.net-buttons-dt/css/buttons.dataTables.css';
-  import 'datatables.net-buttons/js/buttons.html5';
-  import 'datatables.net-buttons/js/buttons.colVis';
-
-  // expose jQuery to window for DataTables plugins which expect global jQuery
-  (window as any).jQuery = jQuery;
-  (window as any).$ = jQuery;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
@@ -34,8 +24,6 @@
   let minPhit: number = 0.01;
   let maxSwt: number = 0.99;
   let maxVclay: number = 0.4;
-
-  // Depth filter state (displayed by DepthFilterStatus); not applied to ressum payload
   
   // filtered rows are the raw results from backend; DataTables will handle search/filtering
   $: filtered = ressumRows ?? [];
@@ -43,6 +31,7 @@
   // DataTables integration
   let tableRef: HTMLTableElement | null = null;
   let dtInstance: any = null;
+  let jQuery: any = null;
 
   function initDataTable() {
     if (!tableRef) return;
@@ -75,7 +64,6 @@
         ],
         pageLength: 10, // Default rows per page
         info: true,
-        responsive: true,
         autoWidth: false,
         // Enable row striping for better visibility
         stripeClasses: ['odd', 'even'],
@@ -113,7 +101,18 @@
   }
 
   // load DataTables when component mounts
-  onMount(() => {
+  onMount(async () => {
+    // Dynamically import jQuery and DataTables JS to avoid SSR issues
+    jQuery = (await import('jquery')).default;
+    await import('datatables.net-dt');
+    await import('datatables.net-buttons-dt');
+    await import('datatables.net-buttons/js/buttons.html5');
+    await import('datatables.net-buttons/js/buttons.colVis');
+
+    // expose jQuery to window for DataTables plugins which expect global jQuery
+    (window as any).jQuery = jQuery;
+    (window as any).$ = jQuery;
+
     // DataTables and jQuery are imported from node_modules; initialize table
     initDataTable();
   });
@@ -127,7 +126,7 @@
   });
 
   // re-init table whenever `filtered` changes (runs on client)
-  $: if (filtered) {
+  $: if (filtered && jQuery) {
     // small timeout to allow DOM to settle
     setTimeout(() => initDataTable(), 0);
   }

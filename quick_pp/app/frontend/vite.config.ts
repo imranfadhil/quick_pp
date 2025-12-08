@@ -16,7 +16,7 @@ export default defineConfig({
 						if (id.includes('bits-ui') || id.includes('@lucide') || id.includes('@tabler') || id.includes('vaul-svelte') || id.includes('svelte-sonner')) {
 							// return 'ui';
 						}
-						if (id.includes('plotly') || id.includes('layerchart') || id.includes('d3-')) {
+						if (id.includes('plotly') || id.includes('d3-')) {
 							return 'charts';
 						}
 						if (id.includes('datatables')) {

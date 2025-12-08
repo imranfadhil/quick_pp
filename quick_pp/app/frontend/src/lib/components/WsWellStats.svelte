@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { browser } from '$app/environment';
   import * as Card from '$lib/components/ui/card/index.js';
   import * as Chart from '$lib/components/ui/chart/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
@@ -299,7 +300,7 @@
   }
 
   // re-render when chart data or plot div available
-  $: if (chartPlotDiv && chartData) {
+  $: if (browser && chartPlotDiv && chartData) {
     renderChartPlot();
   }
 

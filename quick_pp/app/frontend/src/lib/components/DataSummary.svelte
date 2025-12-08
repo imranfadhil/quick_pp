@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
 
+  // Import DataTables CSS statically (safe for SSR)
+  import 'datatables.net-dt/css/jquery.dataTables.css';
+  import 'datatables.net-buttons-dt/css/buttons.dataTables.css';
+
   export let projectId: string | number = '';
   export let wellName: string | string[] = '';
   export let type: string = ''; // e.g. 'formation_tops', 'core_samples'
@@ -70,22 +74,28 @@
 
   onMount(() => { if (projectId && type) load(); });
 
-  // DataTables integration (use same pattern as WsReservoirSummary)
-  // import jQuery and DataTables resources lazily via static imports at top-level
-  import jQuery from 'jquery';
-  import 'datatables.net-dt';
-  import 'datatables.net-dt/css/jquery.dataTables.css';
-  import 'datatables.net-buttons-dt';
-  import 'datatables.net-buttons-dt/css/buttons.dataTables.css';
-  import 'datatables.net-buttons/js/buttons.html5';
-  import 'datatables.net-buttons/js/buttons.colVis';
+  // Load DataTables on mount
+  onMount(async () => {
+    // Dynamically import jQuery and DataTables JS to avoid SSR issues
+    jQuery = (await import('jquery')).default;
+    await import('datatables.net-dt');
+    await import('datatables.net-buttons-dt');
+    await import('datatables.net-buttons/js/buttons.html5');
+    await import('datatables.net-buttons/js/buttons.colVis');
 
-  // expose jQuery to window for DataTables plugins which expect global jQuery
-  (window as any).jQuery = jQuery;
-  (window as any).$ = jQuery;
+    // expose jQuery to window for DataTables plugins which expect global jQuery
+    (window as any).jQuery = jQuery;
+    (window as any).$ = jQuery;
+
+    // Initialize table if items are already loaded
+    if (items && tableRef) {
+      initDataTable();
+    }
+  });
 
   let tableRef: HTMLTableElement | null = null;
   let dtInstance: any = null;
+  let jQuery: any = null;
 
   function initDataTable() {
     if (!tableRef) return;
@@ -121,7 +131,6 @@
         lengthMenu: [[10,25,50,-1],[10,25,50,'All']],
         pageLength: 10,
         info: true,
-        responsive: true,
         autoWidth: false,
         stripeClasses: ['odd','even']
       });
@@ -145,7 +154,7 @@
     }
   }
 
-  $: if (items) {
+  $: if (items && jQuery) {
     // give DOM a moment then init
     setTimeout(() => initDataTable(), 0);
   }

@@ -7,7 +7,11 @@
 
 	let { versions, defaultVersion }: { versions: string[]; defaultVersion: string } = $props();
 
-	let selectedVersion = $state(defaultVersion);
+	let selectedVersion = $state("");
+
+	$effect(() => {
+		selectedVersion = defaultVersion;
+	});
 </script>
 
 <Sidebar.Menu>
