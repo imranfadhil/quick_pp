@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "quick-pp"
-version = "0.2.81"
+version = "0.2.86"
 description = "Python package to assist in providing quick-look preliminary petrophysical estimation."
 readme = "README.md"
 license = "MIT"
@@ -24,7 +24,6 @@ keywords = [
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Natural Language :: English",
     "Programming Language :: Python :: 3.11",
 ]
@@ -54,10 +53,21 @@ quick_pp = "quick_pp.cli:cli"
 [project.urls]
 Homepage = "https://github.com/imranfadhil/quick_pp"
 
-[tool.hatch.build.targets.sdist]
-include = [
-    "/quick_pp",
-]
-
-[tool.hatch.build.targets.wheel]
+[tool.setuptools]
 packages = ["quick_pp"]
+
+[tool.setuptools.package-data]
+quick_pp = [
+    "app/frontend/build/**/*",
+    "app/backend/**/*",
+    "app/docker/.env",
+    "app/docker/.env.example",
+    "app/docker/backend-entrypoint.sh",
+    "app/docker/docker-compose.yaml",
+    "app/docker/Dockerfile",
+    "app/docker/init_db.py",
+    "database/**/*",
+    "lithology/**/*",
+    "machine_learning/**/*",
+    "plotter/**/*", "rock_physics/**/*"
+]

@@ -19,6 +19,37 @@ from quick_pp.rock_type import calc_fzi, rock_typing
 import numpy as np
 import math
 
+
+# Sanitize lists for JSON serialization: convert numpy/pandas types
+# to native Python types and replace NaN/Inf with None.
+def _sanitize_list(lst):
+    out = []
+    for v in lst:
+        # pandas NA / NaN
+        try:
+            if pd.isna(v):
+                out.append(None)
+                continue
+        except Exception:
+            pass
+
+        # numeric types (numpy, python)
+        try:
+            if isinstance(v, (int, float, np.floating, np.integer)):
+                fv = float(v)
+                if math.isfinite(fv):
+                    out.append(fv)
+                else:
+                    out.append(None)
+                continue
+        except Exception:
+            pass
+
+        # fallback: keep as-is (strings, etc.)
+        out.append(v)
+    return out
+
+
 # Project-level router: supports project-based endpoints and accepts optional
 # `well_name` as a query parameter or in POST bodies. When a `well_name` is
 # provided the handlers delegate to the existing well-based behavior; when
@@ -829,6 +860,21 @@ async def get_fzi_data(project_id: int):
             phit_all = pd.concat(cpore_list).tolist() if cpore_list else []
             perm_all = pd.concat(cperm_list).tolist() if cperm_list else []
 
+            phit_all = _sanitize_list(phit_all)
+            perm_all = _sanitize_list(perm_all)
+            depths_list = _sanitize_list(depths_list)
+            # rock flags may be numeric or None; coerce ints where possible
+            rock_flags_list = [
+                (
+                    int(x)
+                    if (not pd.isna(x) and x is not None and str(x).strip() != "")
+                    else None
+                )
+                if (x is not None)
+                else None
+                for x in rock_flags_list
+            ]
+
             return {
                 "phit": phit_all,
                 "perm": perm_all,
@@ -840,6 +886,9 @@ async def get_fzi_data(project_id: int):
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        # Preserve explicit HTTPExceptions raised inside the handler (e.g., 404s)
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get FZI data: {e}")
 
@@ -943,6 +992,8 @@ async def get_poroperm_fits(project_id: int):
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get poroperm fits: {e}")
 
@@ -1208,6 +1259,13 @@ async def get_j_data(project_id: int, cutoffs: str = Query("0.1,1.0,3.0")):
                     detail="No RCA/SCAL data found with PC, SW, PERM, PHIT",
                 )
 
+            # Sanitize lists for JSON serialization
+            pc_list = _sanitize_list(pc_list)
+            sw_list = _sanitize_list(sw_list)
+            perm_list = _sanitize_list(perm_list)
+            phit_list = _sanitize_list(phit_list)
+            rock_flags_list = _sanitize_list(rock_flags_list)
+
             return {
                 "pc": pc_list,
                 "sw": sw_list,
@@ -1221,6 +1279,8 @@ async def get_j_data(project_id: int, cutoffs: str = Query("0.1,1.0,3.0")):
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get J data: {e}")
 
@@ -1296,6 +1356,8 @@ async def compute_j_fits(payload: dict):
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to compute J fits: {e}")
 
@@ -1359,6 +1421,8 @@ async def compute_shf(payload: dict):
 
         return {"shf_data": shf_data}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to compute SHF: {e}")
 
