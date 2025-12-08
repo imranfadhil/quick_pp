@@ -17,6 +17,7 @@ from quick_pp.core_analysis import (
 )
 from quick_pp.rock_type import calc_fzi, rock_typing
 import numpy as np
+import math
 
 # Project-level router: supports project-based endpoints and accepts optional
 # `well_name` as a query parameter or in POST bodies. When a `well_name` is
@@ -1224,70 +1225,8 @@ async def get_j_data(project_id: int, cutoffs: str = Query("0.1,1.0,3.0")):
         raise HTTPException(status_code=500, detail=f"Failed to get J data: {e}")
 
 
-@project_router.get("/j_fits", summary="Get J fits per rock flag")
-async def get_j_fits(project_id: int, cutoffs: str = Query("")):
-    """Return fitted a and b parameters for J curves per ROCK_FLAG.
-
-    Args:
-        project_id: Project ID
-        cutoffs: Comma-separated cutoffs for FZI values to define rock flags, e.g., "0.1,1.0,3.0"
-
-    Returns:
-        JSON with fits per rock_flag
-    """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
-    try:
-        # Get J data from ancillary
-        j_data_response = await get_j_data(project_id, cutoffs)
-        pc = j_data_response["pc"]
-        sw = j_data_response["sw"]
-        perm = j_data_response["perm"]
-        phit = j_data_response["phit"]
-        rock_flags = j_data_response["rock_flags"]
-
-        if not pc:
-            raise HTTPException(status_code=404, detail="No J data found")
-
-        # Normalize SW to SWN
-        swn_values = normalize_sw(pd.Series(sw))
-
-        # Use the rock_flags from get_j_data
-        all_data = []
-        for i in range(len(pc)):
-            j = leverett_j(pc[i], 30, 30, perm[i], phit[i])  # default ift=30, theta=30
-            all_data.append(
-                {
-                    "ROCK_FLAG": rock_flags[i],
-                    "SWN": swn_values[i],
-                    "J": j,
-                    "Well": f"Well_{i}",
-                    "Sample": f"Sample_{i}",
-                }
-            )
-
-        core_data = pd.DataFrame(all_data)
-        j_params = auto_j_params(core_data)
-
-        # Convert to dict
-        fits = {}
-        for param in j_params:
-            rf = str(param["ROCK_FLAG"])
-            fits[rf] = {"a": param["a"], "b": param["b"], "rmse": param["rmse"]}
-        return {"fits": fits}
-
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get J fits: {e}")
-
-
 @project_router.post("/compute_j_fits", summary="Compute J fits per rock flag")
-async def compute_j_fits(project_id: int, payload: dict):
+async def compute_j_fits(payload: dict):
     """Compute fitted a and b parameters for J curves per ROCK_FLAG.
 
     Expected payload: { "data": { "pc": [...], "sw": [...], "perm": [...], "phit": [...], "rock_flags": [...] }, "ift": 30, "theta": 30 }
@@ -1295,12 +1234,6 @@ async def compute_j_fits(project_id: int, payload: dict):
     Returns:
         JSON with fits per rock_flag
     """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     if not isinstance(payload, dict) or "data" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must include 'data' object"
@@ -1402,22 +1335,27 @@ async def compute_shf(payload: dict):
         rock_flags = data.get("rock_flags", [])
         well_names = data.get("well_names", [])
 
-        print(data.keys())
-        print(fits.get("fits"))
-        print(fits.keys())
-
         shf_data = []
         for i in range(len(phit)):
             rf = (
-                str(rock_flags[i]) if rock_flags and rock_flags[i] is not None else None
+                str(int(rock_flags[i]))
+                if rock_flags and rock_flags[i] is not None
+                else None
             )
-            if rf and rf in fits:
+            if rf and rf in fits.keys():
                 a = fits[rf]["a"]
                 b = fits[rf]["b"]
                 shf = sw_shf_leverett_j(
                     perm[i], phit[i], depths[i], fwl, ift, theta, gw, ghc, a, b
                 )
-                shf_data.append({"well": well_names[i], "depth": depths[i], "shf": shf})
+                if math.isfinite(shf):
+                    shf_data.append(
+                        {"well": well_names[i], "depth": depths[i], "shf": shf}
+                    )
+                else:
+                    shf_data.append(
+                        {"well": well_names[i], "depth": depths[i], "shf": None}
+                    )
 
         return {"shf_data": shf_data}
 

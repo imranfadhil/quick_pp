@@ -337,12 +337,15 @@ def frontend(dev, force_install, no_open):
             try:
                 build_cmd = "npm run build"
                 click.echo(f"Running: (in {frontend_dir}) {build_cmd}")
+                env_build = os.environ.copy()
+                env_build["NODE_ENV"] = "production"
                 p_build = Popen(
                     build_cmd,
                     stdout=sys.stdout,
                     stderr=sys.stderr,
                     shell=True,
                     cwd=str(frontend_dir),
+                    env=env_build,
                 )
                 p_build.wait()
                 if p_build.returncode != 0:
@@ -361,7 +364,7 @@ def frontend(dev, force_install, no_open):
         env["HOST"] = "0.0.0.0"
 
         # Run the built Node.js server
-        cmd = ["node", "build"]
+        cmd = ["node", "build/index.js"]
         process = start_process(cmd, cwd=str(frontend_dir), shell=False, env=env)
 
         # Open browser to production URL unless disabled
@@ -550,12 +553,15 @@ def app(force_install, open):
                 try:
                     build_cmd = "npm run build"
                     click.echo(f"Running: (in {frontend_dir}) {build_cmd}")
+                    env_build = os.environ.copy()
+                    env_build["NODE_ENV"] = "production"
                     p_build = Popen(
                         build_cmd,
                         stdout=sys.stdout,
                         stderr=sys.stderr,
                         shell=True,
                         cwd=str(frontend_dir),
+                        env=env_build,
                     )
                     p_build.wait()
                     if p_build.returncode != 0:
@@ -574,7 +580,7 @@ def app(force_install, open):
             env["HOST"] = "0.0.0.0"
 
             # Run the built Node.js server
-            cmd = ["node", "build"]
+            cmd = ["node", "build/index.js"]
             p_front = start_process(cmd, cwd=str(frontend_dir), shell=False, env=env)
             processes.append(p_front)
 

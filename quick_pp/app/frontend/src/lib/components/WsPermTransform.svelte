@@ -4,7 +4,6 @@
   import { browser } from '$app/environment';
   import { onDestroy } from 'svelte';
   import { workspace, applyZoneFilter } from '$lib/stores/workspace';
-	import { number } from 'zod/v4';
   export let projectId: string | number | null = null;
 
   let loading = false;

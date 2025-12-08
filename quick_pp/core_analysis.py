@@ -430,7 +430,7 @@ def sw_shf_leverett_j(perm, phit, depth, fwl, ift, theta, gw, ghc, a, b, phie=No
     Returns:
         float: Water saturation from saturation height function.
     """
-    h = (fwl - depth).clip(0)
+    h = np.maximum(fwl - depth, 0)
     pc = h * (gw - ghc) * 0.433  # Convert g/cc to psi/ft
     shf = (a / leverett_j(pc, ift, theta, perm, phit)) ** (1 / b)
     return shf if not phie else shf * (1 - (phie / phit)) + (phie / phit)

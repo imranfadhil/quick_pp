@@ -11,12 +11,12 @@
   let message: string | null = null;
   let dataLoading = false;
   let dataError: string | null = null;
-  let wellData: { phit: number[], perm: number[], zones: string[], well_names: string[], depths: number[] } | null = null;
+  let wellData: { phit: number[], perm: number[], zones: string[], well_names: string[], depths: number[], rock_flags: (number | null)[] } | null = null;
   let data: { pc: number[], sw: number[], perm: number[], phit: number[], depths: number[], rock_flags: (number | null)[], well_names: string[], zones: string[] } | null = null;
   let fits: { [key: string]: { a: number, b: number, rmse: number } } | null = null;
   let shfData: { well: string, depth: number, shf: number }[] | null = null;
 
-  let fwl = 1000;
+  let fwl = 10000;
   let ift = 30;
   let theta = 30;
   let gw = 1.05;
@@ -53,6 +53,7 @@
       phit,
       perm: wellData!.perm[i],
       zone: wellData!.zones[i],
+      rock_flag: wellData!.rock_flags[i],
       well_name: wellData!.well_names[i],
       depth: wellData!.depths[i]
     }));
@@ -61,6 +62,7 @@
       phit: visibleRows.map(r => r.phit),
       perm: visibleRows.map(r => r.perm),
       zones: visibleRows.map(r => r.zone),
+      rock_flags: visibleRows.map(r => r.rock_flag),
       well_names: visibleRows.map(r => r.well_name),
       depths: visibleRows.map(r => r.depth)
     };
@@ -80,13 +82,6 @@
       const res = await fetch(url);
       if (!res.ok) throw new Error(await res.text());
       data = await res.json();
-
-      // Load fits
-      const fitsUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/j_fits?cutoffs=${encodeURIComponent(cutoffsInput)}`;
-      const fitsRes = await fetch(fitsUrl);
-      if (fitsRes.ok) {
-        fits = await fitsRes.json();
-      }
     } catch (e: any) {
       dataError = e.message || 'Failed to load data';
       data = null;
@@ -97,7 +92,7 @@
   }
 
   function plotJ() {
-    if (!data || !jContainer || !fits) return;
+    if (!data || !jContainer) return;
     const { sw, pc, perm, phit, rock_flags } = data;
 
     // Calculate J
@@ -149,6 +144,7 @@
       title: 'J vs SW with Fitted Curves',
       xaxis: { title: 'SW (fraction)' },
       yaxis: { title: 'J', range: [0, 20] },
+      height: 450,
       showlegend: true,
       margin: { l: 60, r: 60, t: 60, b: 60 }
     };
@@ -172,19 +168,20 @@
     Object.keys(wellGroups).forEach((well, i) => {
       const group = wellGroups[well];
       traces.push({
-        x: group.shf,
-        y: group.depth,
-        mode: 'markers',
+        x: group.depth,
+        y: group.shf,
+        mode: 'lines',
         type: 'scatter',
         name: well,
-        marker: { color: colors[i % colors.length] }
+        line: { color: colors[i % colors.length] }
       });
     });
 
     const layout = {
       title: 'SHF vs Depth',
-      xaxis: { title: 'SHF (fraction)' },
-      yaxis: { title: 'Depth (ft)', autorange: 'reversed' },
+      xaxis: { title: 'Depth (ft)'},
+      yaxis: { title: 'SHF (fraction)', range: [0, 1.1] },
+      height: 200,
       showlegend: true,
       margin: { l: 60, r: 60, t: 60, b: 60 }
     };
@@ -265,7 +262,7 @@
     loadData();
   }
   // Reactive plot update
-  $: if (data && fits) {
+  $: if (data || fits) {
     plotJ();
   }
   $: if (shfData) {
