@@ -3,22 +3,10 @@
   export let wellName: string;
   import { Button } from '$lib/components/ui/button/index.js';
   import { onMount, onDestroy } from 'svelte';
-  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
-  import DepthFilterStatus from './DepthFilterStatus.svelte';
 
-  // import DataTables & jQuery from node_modules (bundled by Vite)
-  import jQuery from 'jquery';
-  import 'datatables.net-dt';
+  // Import DataTables CSS statically (safe for SSR)
   import 'datatables.net-dt/css/jquery.dataTables.css';
-  // DataTables Buttons extension (native export and column visibility)
-  import 'datatables.net-buttons-dt';
   import 'datatables.net-buttons-dt/css/buttons.dataTables.css';
-  import 'datatables.net-buttons/js/buttons.html5';
-  import 'datatables.net-buttons/js/buttons.colVis';
-
-  // expose jQuery to window for DataTables plugins which expect global jQuery
-  (window as any).jQuery = jQuery;
-  (window as any).$ = jQuery;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
@@ -36,13 +24,6 @@
   let minPhit: number = 0.01;
   let maxSwt: number = 0.99;
   let maxVclay: number = 0.4;
-
-  // Depth filter state
-  let depthFilter: { enabled: boolean; minDepth: number | null; maxDepth: number | null } = {
-    enabled: false,
-    minDepth: null,
-    maxDepth: null,
-  };
   
   // filtered rows are the raw results from backend; DataTables will handle search/filtering
   $: filtered = ressumRows ?? [];
@@ -50,6 +31,7 @@
   // DataTables integration
   let tableRef: HTMLTableElement | null = null;
   let dtInstance: any = null;
+  let jQuery: any = null;
 
   function initDataTable() {
     if (!tableRef) return;
@@ -82,7 +64,6 @@
         ],
         pageLength: 10, // Default rows per page
         info: true,
-        responsive: true,
         autoWidth: false,
         // Enable row striping for better visibility
         stripeClasses: ['odd', 'even'],
@@ -120,7 +101,18 @@
   }
 
   // load DataTables when component mounts
-  onMount(() => {
+  onMount(async () => {
+    // Dynamically import jQuery and DataTables JS to avoid SSR issues
+    jQuery = (await import('jquery')).default;
+    await import('datatables.net-dt');
+    await import('datatables.net-buttons-dt');
+    await import('datatables.net-buttons/js/buttons.html5');
+    await import('datatables.net-buttons/js/buttons.colVis');
+
+    // expose jQuery to window for DataTables plugins which expect global jQuery
+    (window as any).jQuery = jQuery;
+    (window as any).$ = jQuery;
+
     // DataTables and jQuery are imported from node_modules; initialize table
     initDataTable();
   });
@@ -134,7 +126,7 @@
   });
 
   // re-init table whenever `filtered` changes (runs on client)
-  $: if (filtered) {
+  $: if (filtered && jQuery) {
     // small timeout to allow DOM to settle
     setTimeout(() => initDataTable(), 0);
   }
@@ -144,7 +136,7 @@
     loading = true;
     error = null;
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`);
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/merged`);
       if (!res.ok) throw new Error(await res.text());
       const fd = await res.json();
       const rows = fd && fd.data ? fd.data : fd;
@@ -160,8 +152,8 @@
 
   // Build payload for ressum: map fullRows to required keys
   function buildRessumPayload() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use raw fullRows (no client-side depth/zone filtering) as requested
+    const filteredRows = Array.isArray(fullRows) ? fullRows : [];
     
     const mappedRows: Array<Record<string, any>> = [];
     for (const r of filteredRows) {
@@ -278,8 +270,6 @@
     <div class="font-semibold">Reservoir Summary</div>
     <div class="text-sm text-muted-foreground">High-level reservoir summary and exportable reports.</div>
   </div>
-
-  <DepthFilterStatus />
 
   {#if wellName}
     <div class="bg-panel rounded p-3">

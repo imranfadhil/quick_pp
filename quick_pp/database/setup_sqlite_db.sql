@@ -51,12 +51,13 @@ CREATE TABLE IF NOT EXISTS "wells" (
     "well_id" INTEGER PRIMARY KEY AUTOINCREMENT,
     "project_id" INTEGER NOT NULL REFERENCES "projects"("project_id") ON DELETE CASCADE,
     "name" TEXT NOT NULL,
-    "uwi" TEXT UNIQUE NOT NULL,
+    "uwi" TEXT NOT NULL,
     "header_data" JSON, -- Flexible JSON for all messy LAS header info
     "config_data" JSON, -- Use TEXT to store WellConfig as JSON
     "depth_uom" TEXT,
     "created_at" DATETIME DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" DATETIME DEFAULT CURRENT_TIMESTAMP
+    "updated_at" DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE("project_id", "uwi")
 );
 
 -- -----------------------------------------------------------------------------
@@ -150,8 +151,7 @@ CREATE TABLE IF NOT EXISTS "core_samples" (
     "depth" REAL NOT NULL,
     "description" TEXT,
     "remark" TEXT,
-    UNIQUE("well_id", "sample_name"),
-    UNIQUE("well_id", "depth")
+    UNIQUE("well_id", "sample_name", "depth")
 );
 
 -- -----------------------------------------------------------------------------

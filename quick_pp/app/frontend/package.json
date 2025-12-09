@@ -19,7 +19,7 @@
 		"@dnd-kit/helpers": "^0.1.21",
 		"@internationalized/date": "^3.10.0",
 		"@lucide/svelte": "^0.544.0",
-		"@sveltejs/adapter-auto": "^7.0.0",
+		"@sveltejs/adapter-auto": "^5.0.0",
 		"@sveltejs/kit": "^2.48.5",
 		"@sveltejs/vite-plugin-svelte": "^6.2.1",
 		"@tabler/icons-svelte": "^3.35.0",
@@ -29,6 +29,8 @@
 		"@tanstack/table-core": "^8.21.3",
 		"@types/d3-scale": "^4.0.9",
 		"@types/d3-shape": "^3.1.7",
+		"@types/jquery": "^3.5.33",
+		"@types/plotly.js-dist-min": "^2.3.4",
 		"bits-ui": "^2.14.4",
 		"clsx": "^2.1.1",
 		"d3-scale": "^4.0.2",
@@ -51,11 +53,11 @@
 		"zod": "^3.25.76"
 	},
 	"dependencies": {
-		"plotly.js-dist-min": "^2.25.1",
-		"jquery": "^3.6.0",
 		"datatables.net": "^1.13.6",
-		"datatables.net-dt": "^1.13.6",
 		"datatables.net-buttons": "^2.4.1",
-		"datatables.net-buttons-dt": "^2.4.1"
+		"datatables.net-buttons-dt": "^2.4.1",
+		"datatables.net-dt": "^1.13.6",
+		"jquery": "^3.6.0",
+		"plotly.js-dist-min": "^2.25.1"
 	}
 }

@@ -15,6 +15,34 @@ import webbrowser
 from importlib import metadata, resources
 from pathlib import Path
 from subprocess import Popen
+import subprocess
+import signal
+import time
+
+
+def on_starting(server):
+    """Gunicorn hook: initialize DBConnector in master process before forking.
+
+    This performs application-level initialization (like running migrations or
+    creating a DB connector) in the master process. Use with caution: some DB
+    drivers are not fork-safe, so forking after opening DB connections may be
+    problematic. Consider disabling `preload_app` if you need per-worker DB
+    engines.
+    """
+    try:
+        server.log.info("gunicorn on_starting: initializing DBConnector")
+        from quick_pp.database.db_connector import DBConnector
+
+        db_url = os.environ.get("QPP_DATABASE_URL", "sqlite:///./data/quick_pp.db")
+        DBConnector(db_url=db_url)
+        server.log.info("DBConnector initialized in gunicorn master process")
+    except Exception as exc:  # pragma: no cover - environment-specific
+        try:
+            server.log.exception(
+                "Failed to initialize DBConnector in gunicorn master: %s", exc
+            )
+        except Exception:
+            pass
 
 
 try:
@@ -25,8 +53,111 @@ except metadata.PackageNotFoundError:
 # Global defaults for backend and frontend locations used across commands
 BACKEND_HOST = "localhost"
 BACKEND_PORT = 6312
+FRONTEND_PORT = 5469
 FRONTEND_DIR = Path(__file__).parent / "app" / "frontend"
 DOCKER_DIR = Path(__file__).parent / "app" / "docker"
+
+
+def get_gunicorn_worker_flag(debug: bool = False) -> str:
+    """Return a gunicorn workers flag based on available CPUs.
+
+    - If `debug`/reload is enabled, return an empty string (reload and
+        multiple workers don't mix well for development).
+    - Otherwise return a string like `--workers N` where N is the number
+        of CPUs (at least 1).
+    """
+    if debug:
+        return ""
+
+    # Defensive: if using SQLite, prefer a single worker to avoid file locking
+    db_url = os.environ.get("QPP_DATABASE_URL", "")
+    if "sqlite" in (db_url or "").lower():
+        # Do not pass a workers flag; gunicorn defaults to single-process.
+        return ""
+
+    try:
+        cpus = os.cpu_count() or 1
+    except Exception:
+        cpus = 1
+    workers = max(1, int(cpus / 3))
+    return f"--workers {workers}"
+
+
+def start_process(cmd, cwd=None, shell=False, env=None):
+    """Start a subprocess in a new process group/session for graceful shutdown.
+
+    On Windows, use CREATE_NEW_PROCESS_GROUP and on POSIX use setsid so we can
+    signal the whole group (uvicorn master + workers).
+    """
+    # If cmd is a list, pass it directly (recommended for uvicorn to avoid shell)
+    if os.name == "nt":
+        return subprocess.Popen(
+            cmd, stdout=sys.stdout, stderr=sys.stderr, shell=shell, cwd=cwd, env=env
+        )
+    else:
+        return subprocess.Popen(
+            cmd,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+            shell=shell,
+            cwd=cwd,
+            env=env,
+            preexec_fn=os.setsid if not shell else None,
+        )
+
+
+def stop_process_gracefully(proc, timeout: float = 5.0):
+    """Attempt graceful shutdown of a process started with `start_process`.
+
+    - On Windows: send CTRL_BREAK_EVENT to the process group.
+    - On POSIX: send SIGINT to the process group.
+    Falls back to terminate/kill if the process doesn't exit within `timeout` seconds.
+    """
+    try:
+        if proc.poll() is not None:
+            return
+
+        if os.name == "nt":
+            try:
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            except Exception:
+                pass
+        else:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            except Exception:
+                pass
+
+        # wait for graceful exit
+        start = time.time()
+        while True:
+            if proc.poll() is not None:
+                return
+            if time.time() - start > timeout:
+                break
+            time.sleep(0.1)
+
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+        try:
+            proc.wait(2)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.wait()
+            except Exception:
+                pass
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 def is_server_running(host, port):
@@ -76,12 +207,43 @@ def backend(debug, no_open):
     This launches a Uvicorn server to run the FastAPI backend and the associated qpp assistant module.
     The --debug flag enables auto-reload for development."""
     if not is_server_running(BACKEND_HOST, BACKEND_PORT):
-        reload_flag = "--reload" if debug else ""
-        cmd = f"uvicorn quick_pp.app.backend.main:app --host 0.0.0.0 --port {BACKEND_PORT} {reload_flag}"
-        click.echo(f"App is not running. Starting it now... | {cmd}")
+        if os.name != "nt":
+            argv = [
+                sys.executable,
+                "-m",
+                "gunicorn",
+                "-k",
+                "uvicorn.workers.UvicornWorker",
+                "quick_pp.app.backend.main:app",
+                "--bind",
+                f"0.0.0.0:{BACKEND_PORT}",
+                "--preload",
+                "--config",
+                str(Path(__file__).resolve()),
+            ]
+            # worker_flag may be empty or like "--workers N"
+            worker_flag = get_gunicorn_worker_flag(debug)
+            if worker_flag:
+                argv.extend(worker_flag.split())
+        else:
+            # Build argv list for uvicorn to avoid shell and improve signal delivery
+            argv = [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "quick_pp.app.backend.main:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(BACKEND_PORT),
+            ]
+
+        if debug:
+            argv.append("--reload")
+        click.echo(f"App is not running. Starting it now... | {argv}")
 
         try:
-            process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
+            process = start_process(argv, shell=False)
             # Open browser to backend URL after starting (default)
             try:
                 if not no_open:
@@ -95,10 +257,10 @@ def backend(debug, no_open):
                 click.echo(f"Backend process exited with code: {exit_code}")
                 sys.exit(exit_code)
 
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, click.exceptions.Abort):
             click.echo("Shutting down backend server...")
             try:
-                process.terminate()
+                stop_process_gracefully(process)
             except Exception:
                 pass
         except Exception as e:
@@ -115,10 +277,10 @@ def backend(debug, no_open):
 
 @click.command()
 @click.option(
-    "--no-open",
+    "--dev",
     is_flag=True,
     default=False,
-    help="Do not open browser after starting frontend",
+    help="Run `npm run dev`",
 )
 @click.option(
     "--force-install",
@@ -126,22 +288,76 @@ def backend(debug, no_open):
     default=False,
     help="Force npm install to run even if node_modules exists",
 )
-def frontend(no_open, force_install):
-    """Start the quick_pp frontend development server.
+@click.option(
+    "--no-open",
+    is_flag=True,
+    default=False,
+    help="Do not open browser after starting frontend",
+)
+def frontend(dev, force_install, no_open):
+    """Start the quick_pp frontend server.
 
-    This launches the SvelteKit development server for the frontend application."""
+    By default, launches the SvelteKit development server (npm run dev).
+    Use --prod to run the production build (requires building first)."""
     frontend_dir = FRONTEND_DIR
 
     if not frontend_dir.exists():
         click.echo(f"Error: Frontend directory not found at {frontend_dir}")
         return
 
+    # Check if running production build
+    if not dev:
+        build_dir = frontend_dir / "build"
+        if not build_dir.exists():
+            click.echo(
+                "Frontend build not found. Please ensure the frontend is pre-built and included in the package."
+            )
+            return
+        click.echo(f"Starting frontend production server on port {FRONTEND_PORT}...")
+
+        # Set environment variables for the production server
+        env = os.environ.copy()
+        env["PORT"] = str(FRONTEND_PORT)
+        env["HOST"] = "0.0.0.0"
+
+        # Run the built Node.js server
+        cmd = ["node", "build/index.js"]
+        process = start_process(cmd, cwd=str(frontend_dir), shell=False, env=env)
+
+        # Open browser to production URL unless disabled
+        try:
+            if not no_open:
+                time.sleep(1)  # Give server a moment to start
+                webbrowser.open(f"http://localhost:{FRONTEND_PORT}")
+        except Exception:
+            pass
+
+        try:
+            process.wait()
+        except KeyboardInterrupt:
+            click.echo("\nShutting down frontend server...")
+            stop_process_gracefully(process)
+        return
+
+    # Development mode (default)
     # Check if we need to run npm install
     should_install = force_install or not (frontend_dir / "node_modules").exists()
 
     if should_install:
         if force_install:
-            click.echo("Force install requested. Running 'npm install'...")
+            click.echo(
+                "Force install requested. Cleaning node_modules and package-lock.json..."
+            )
+            # Remove node_modules and package-lock.json for a clean install
+            node_modules = frontend_dir / "node_modules"
+            package_lock = frontend_dir / "package-lock.json"
+            if node_modules.exists():
+                shutil.rmtree(node_modules)
+                click.echo("Removed node_modules")
+            if package_lock.exists():
+                package_lock.unlink()
+                click.echo("Removed package-lock.json")
+            click.echo("Running 'npm install'...")
         else:
             click.echo(
                 "Warning: node_modules not found. Attempting to run 'npm install' now..."
@@ -185,114 +401,97 @@ def frontend(no_open, force_install):
 
 
 @click.command()
-@click.option("--debug", is_flag=True)
 @click.option(
-    "--no-open",
+    "--open",
     is_flag=True,
     default=False,
-    help="Do not open browser after starting services",
+    help="Open browser after starting services",
 )
-@click.option(
-    "--force-install",
-    is_flag=True,
-    default=False,
-    help="Force npm install to run even if node_modules exists",
-)
-def app(debug, no_open, force_install):
+def app(open):
     """Start both backend and frontend development servers.
 
     This command will start the backend (uvicorn) on port 6312 and the
-    frontend (`npm run dev`) from `quick_pp/app/frontend` if they are not
-    already running. Use `--debug` to enable uvicorn's reload mode.
+    frontend production server from `quick_pp/app/frontend` if they are not
+    already running.
     """
     processes = []
     try:
         # Start backend if not running
         if not is_server_running(BACKEND_HOST, BACKEND_PORT):
-            reload_ = "--reload" if debug else ""
-            backend_cmd = f"uvicorn quick_pp.app.backend.main:app --host 0.0.0.0 --port {BACKEND_PORT} {reload_}"
-            click.echo(f"Starting backend... | {backend_cmd}")
-            p_backend = Popen(
-                backend_cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True
-            )
+            if os.name != "nt":
+                argv = [
+                    sys.executable,
+                    "-m",
+                    "gunicorn",
+                    "-k",
+                    "uvicorn.workers.UvicornWorker",
+                    "quick_pp.app.backend.main:app",
+                    "--bind",
+                    f"0.0.0.0:{BACKEND_PORT}",
+                    "--preload",
+                    "--config",
+                    str(Path(__file__).resolve()),
+                ]
+                worker_flag = get_gunicorn_worker_flag(False)  # No debug for production
+                if worker_flag:
+                    argv.extend(worker_flag.split())
+            else:
+                argv = [
+                    sys.executable,
+                    "-m",
+                    "uvicorn",
+                    "quick_pp.app.backend.main:app",
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    str(BACKEND_PORT),
+                ]
+            click.echo(f"Starting backend... | {' '.join(argv)}")
+            p_backend = start_process(argv, shell=False)
             processes.append(p_backend)
         else:
             click.echo("Backend already running on localhost:6312")
 
-        # Start frontend if available and node modules installed
+        # Start frontend if available
         frontend_dir = FRONTEND_DIR
         if not frontend_dir.exists():
             click.echo(f"Frontend directory not found at {frontend_dir}")
         else:
-            # Check if we need to run npm install
-            should_install = (
-                force_install or not (frontend_dir / "node_modules").exists()
-            )
-
-            if should_install:
-                if force_install:
-                    click.echo("Force install requested. Running 'npm install'...")
-                else:
-                    click.echo(
-                        "Warning: node_modules not found. Attempting to run 'npm install' now..."
-                    )
-                try:
-                    install_cmd = "npm install"
-                    click.echo(f"Running: (in {frontend_dir}) {install_cmd}")
-                    p_install = Popen(
-                        install_cmd,
-                        stdout=sys.stdout,
-                        stderr=sys.stderr,
-                        shell=True,
-                        cwd=str(frontend_dir),
-                    )
-                    p_install.wait()
-                    if p_install.returncode != 0:
-                        click.echo(
-                            "npm install failed. Please run it manually and re-run this command."
-                        )
-                    else:
-                        click.echo("npm install completed successfully.")
-                        click.echo(
-                            f"Starting frontend development server from {frontend_dir}..."
-                        )
-                        cmd = "npm run dev"
-                        p_front = Popen(
-                            cmd,
-                            stdout=sys.stdout,
-                            stderr=sys.stderr,
-                            shell=True,
-                            cwd=str(frontend_dir),
-                        )
-                        processes.append(p_front)
-                except Exception as e:
-                    click.echo(f"Failed to run npm install: {e}")
-                    click.echo(f"Run manually: cd {frontend_dir} && npm install")
+            build_dir = frontend_dir / "build"
+            if not build_dir.exists():
+                click.echo(
+                    f"Frontend build not found at {build_dir}. Skipping frontend start."
+                )
             else:
                 click.echo(
-                    f"Starting frontend development server from {frontend_dir}..."
+                    f"Starting frontend production server on port {FRONTEND_PORT}..."
                 )
-                cmd = "npm run dev"
-                p_front = Popen(
-                    cmd,
-                    stdout=sys.stdout,
-                    stderr=sys.stderr,
-                    shell=True,
-                    cwd=str(frontend_dir),
+
+                # Set environment variables for the production server
+                env = os.environ.copy()
+                env["PORT"] = str(FRONTEND_PORT)
+                env["HOST"] = "0.0.0.0"
+
+                # Run the built Node.js server
+                cmd = ["node", "build/index.js"]
+                p_front = start_process(
+                    cmd, cwd=str(frontend_dir), shell=False, env=env
                 )
                 processes.append(p_front)
 
         # Open browser(s) after launching processes (default behavior)
         try:
-            if not no_open:
+            if open:
                 # backend
                 if any(p == p_backend for p in processes) or is_server_running(
                     BACKEND_HOST, BACKEND_PORT
                 ):
                     webbrowser.open(f"http://{BACKEND_HOST}:{BACKEND_PORT}")
-                # frontend (SvelteKit default dev port)
-                if any(p == p_front for p in processes) or frontend_dir.exists():
-                    webbrowser.open("http://localhost:5173")
+                # frontend production port
+                if any(p == p_front for p in processes) or (
+                    frontend_dir.exists() and (frontend_dir / "build").exists()
+                ):
+                    webbrowser.open(f"http://localhost:{FRONTEND_PORT}")
         except Exception:
             pass
 
@@ -306,11 +505,11 @@ def app(debug, no_open, force_install):
         try:
             for p in processes:
                 p.wait()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, click.exceptions.Abort):
             click.echo("Shutting down servers...")
             for p in processes:
                 try:
-                    p.terminate()
+                    stop_process_gracefully(p)
                 except Exception:
                     pass
     except Exception as e:
@@ -339,11 +538,44 @@ def model_deployment(debug):
     This makes the trained models available for prediction over a REST API.
     The --debug flag enables auto-reload for development."""
     if not is_server_running("localhost", 5555):
-        reload_ = "--reload" if debug else ""
-        cmd = f"uvicorn quick_pp.app.backend.mlflow_model_deployment:app --host 0.0.0.0 --port 5555 {reload_}"
-        click.echo(f"Model server is not running. Starting it now... | {cmd}")
-        process = Popen(cmd, stdout=sys.stdout, stderr=sys.stderr, shell=True)
-        process.wait()
+        if os.name != "nt":
+            argv = [
+                sys.executable,
+                "-m",
+                "gunicorn",
+                "-k",
+                "uvicorn.workers.UvicornWorker",
+                "quick_pp.app.backend.mlflow_model_deployment:app",
+                "--bind",
+                "0.0.0.0:5555",
+                "--preload",
+                "--config",
+                str(Path(__file__).resolve()),
+            ]
+        else:
+            argv = [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "quick_pp.app.backend.mlflow_model_deployment:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "5555",
+            ]
+        if debug:
+            argv.append("--reload")
+        worker_flag = get_gunicorn_worker_flag(debug)
+        if worker_flag:
+            argv.extend(worker_flag.split())
+        click.echo(
+            f"Model server is not running. Starting it now... | {' '.join(argv)}"
+        )
+        process = start_process(argv, shell=False)
+        try:
+            process.wait()
+        except (KeyboardInterrupt, click.exceptions.Abort):
+            stop_process_gracefully(process)
 
 
 @click.command()
@@ -514,7 +746,7 @@ def docker(action, detach, build, profile, service, follow):
         if action == "up" and not detach:
             try:
                 process.wait()
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, click.exceptions.Abort):
                 click.echo("\nShutting down services...")
                 # Run docker-compose down to gracefully stop services
                 down_cmd = "docker-compose down"

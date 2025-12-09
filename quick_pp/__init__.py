@@ -1,6 +1,31 @@
+from pathlib import Path
 from loguru import logger
 import logging
 import sys
+import os
+
+# Load .env from the current working directory upwards (like Git).
+# This ensures any import of `quick_pp` picks up project-level environment
+# variables from the closest .env file. If `python-dotenv` isn't installed, this is a no-op.
+try:
+    from dotenv import load_dotenv
+except Exception:
+    load_dotenv = None
+
+if load_dotenv is not None:
+    current_dir = Path(os.getcwd())
+    env_file = None
+    for parent in [current_dir] + list(current_dir.parents):
+        candidate = parent / ".env"
+        if candidate.exists():
+            env_file = candidate
+            break
+    if env_file:
+        try:
+            load_dotenv(dotenv_path=str(env_file))
+        except Exception:
+            # don't fail package import for dotenv parsing errors
+            pass
 
 # Remove default loguru handler
 logger.remove()
@@ -20,4 +45,4 @@ logging.getLogger("mlflow").setLevel(logging.WARNING)
 
 __author__ = """Imran Fadhil"""
 __email__ = "imranfadhil@gmail.com"
-__version__ = "0.2.78"  # Need to be updated manually when releasing a new version/ change in pyproject.toml
+__version__ = "0.2.86"  # Need to be updated manually when releasing a new version/ change in pyproject.toml

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import WsPermRT from '$lib/components/WsPermRT.svelte';
+  import WsPerm from '$lib/components/WsPerm.svelte';
   import ProjectWorkspace from '$lib/components/ProjectWorkspace.svelte';
   import { onDestroy } from 'svelte';
   import { workspace } from '$lib/stores/workspace';
@@ -19,6 +19,6 @@
 
 <ProjectWorkspace {selectedWell} project={selectedProject}>
   <div slot="left">
-    <WsPermRT projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
+    <WsPerm projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
   </div>
 </ProjectWorkspace>

@@ -42,14 +42,15 @@ services:
       - ../frontend:/app:delegated
       - /app/node_modules
     ports:
-      - "5173:5173"
+      - "5469:5469"
     depends_on:
       - qpp-backend
     environment:
       - VITE_BACKEND_URL=http://localhost:6312
       - HOST=0.0.0.0
-    # Install deps and run the Vite/SvelteKit dev server listening on all interfaces
-    command: sh -c "npm install --silent && npm run dev -- --host 0.0.0.0"
+      - PORT=5469
+    # Install deps, build the app, and run the production server
+    command: sh -c "npm install --silent && npm run build && node build"
 
   langflow:
     profiles:

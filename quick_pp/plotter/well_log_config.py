@@ -26,6 +26,7 @@ COLOR_DICT = {
     "PEF": "#ba55d3",
     "PERFORATED": "#E20000",
     "PERM": "#262626",
+    "PERM_TRANS": "#618F63",
     "PHIE": "#0000FF",
     "PHIT": "#262626",
     "RHOB": "#FF0000",
@@ -480,6 +481,16 @@ TRACE_DEFS = dict(
             "line_color": COLOR_DICT["SHF"],
         },
     ),
+    PERM_TRANS=dict(
+        track=5,
+        secondary_y=True,
+        hide_xaxis=False,
+        style={
+            "line_dash": "dashdot",
+            "line_width": 1,
+            "line_color": COLOR_DICT["PERM_TRANS"],
+        },
+    ),
     BVW=dict(
         track=4,
         secondary_y=True,
@@ -839,6 +850,25 @@ XAXIS_DEFS = dict(
         type="linear",
         zeroline=False,
         showgrid=False,
+    ),
+    PERM_TRANS=dict(
+        title={
+            "text": "PERM (mD)",
+            "font": {"color": COLOR_DICT["PERM_TRANS"], "size": font_size},
+        },
+        tickfont={"color": COLOR_DICT["PERM_TRANS"], "size": font_size},
+        side="top",
+        anchor="free",
+        position=0.95,
+        title_standoff=0.1,
+        overlaying="x5",
+        dtick=0.1,
+        range=[np.log10(0.1), np.log10(1e5)],
+        type="log",
+        tickmode="array",
+        tickvals=np.geomspace(0.1, 1e5, 7),
+        tickangle=-90,
+        minor_showgrid=True,
     ),
     BVW=dict(
         title={

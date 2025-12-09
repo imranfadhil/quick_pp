@@ -8,6 +8,9 @@
 	import ReportIcon from "@tabler/icons-svelte/icons/report";
 	import SearchIcon from "@tabler/icons-svelte/icons/search";
 	import SettingsIcon from "@tabler/icons-svelte/icons/settings";
+	import ChartScatterIcon from "@tabler/icons-svelte/icons/chart-scatter"
+	import StackBackIcon from "@tabler/icons-svelte/icons/stack-back";
+	import EaseInOutControlPoints from '@tabler/icons-svelte/icons/ease-in-out-control-points';
 
 	// Import logo
 	import logo from "$lib/assets/logo.png";
@@ -15,6 +18,7 @@
 	// Import custom navigation components
 	import NavProject from "./nav-project.svelte";
 	import NavWell from "./nav-well.svelte";
+	import NavMultiWell from "./nav-multiWell.svelte";
 	import NavReporting from "./nav-reporting.svelte";
 	import NavSecondary from "./nav-secondary.svelte";
 	import NavUser from "./nav-user.svelte";
@@ -46,8 +50,8 @@
 				icon: IconWall,
 			},
 			{
-				title: "Permeability & Rock Type",
-				url: "/wells/perm-rt",
+				title: "Permeability",
+				url: "/wells/perm",
 				icon: IconTextWrapDisabled,
 			},
 			{
@@ -59,6 +63,23 @@
 				title: "Reservoir Summary",
 				url: "/wells/ressum",
 				icon: IconTable,
+			},
+		],
+		navMultiWell: [
+			{
+				title: "Rock Typing",
+				url: "/projects/rock-typing",
+				icon: StackBackIcon,
+			},
+			{
+				title: "Perm Transform",
+				url: "/projects/perm-transform",
+				icon: EaseInOutControlPoints,
+			},
+			{
+				title: "Saturation Height Function",
+				url: "/projects/shf",
+				icon: ChartScatterIcon,
 			},
 		],
 		navSecondary: [
@@ -122,6 +143,9 @@
 		</div>
 		<div class="px-2 py-2 border-t border-border/50 mt-2">
 			<NavWell items={data.navWell} />
+		</div>
+		<div class="px-2 py-2 border-t border-border/50 mt-2">
+			<NavMultiWell items={data.navMultiWell} />
 		</div>
 		<div class="px-2 py-2 border-t border-border/50 mt-2">
 			<NavReporting items={data.navReporting} />

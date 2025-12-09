@@ -1,4 +1,4 @@
-import { writable, get } from 'svelte/store';
+import { writable, get, derived } from 'svelte/store';
 import type { WorkspaceState, Project, Well } from '$lib/types';
 import { projects } from '$lib/stores/projects';
 
@@ -11,7 +11,17 @@ export const workspace = writable<WorkspaceState>({
     minDepth: null,
     maxDepth: null,
   },
+  zoneFilter: {
+    enabled: false,
+    zones: [],
+  },
 });
+
+// Derived stores for specific parts to reduce unnecessary re-renders
+export const depthFilter = derived(workspace, $workspace => $workspace.depthFilter);
+export const zoneFilter = derived(workspace, $workspace => $workspace.zoneFilter);
+export const workspaceProject = derived(workspace, $workspace => $workspace.project);
+export const workspaceTitle = derived(workspace, $workspace => ({ title: $workspace.title, subtitle: $workspace.subtitle }));
 
 export function setWorkspaceTitle(title: string, subtitle?: string) {
   workspace.update((s) => ({ ...s, title, subtitle }));
@@ -55,19 +65,52 @@ export function selectProject(project: Project | null) {
   });
 }
 
+export async function selectProjectAndLoadWells(project: Project | null) {
+  if (!project || !project.project_id) {
+    selectProject(null);
+    return;
+  }
+
+  // First set the project with basic info
+  selectProject(project);
+
+  // Then fetch wells
+  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
+  try {
+    const res = await fetch(`${API_BASE}/quick_pp/database/projects/${project.project_id}/wells`);
+    if (res.ok) {
+      const data = await res.json();
+      const wells = data.wells || [];
+      // Update the project with wells
+      workspace.update((s) => {
+        if (s.project && String(s.project.project_id) === String(project.project_id)) {
+          return { ...s, project: { ...s.project, wells } };
+        }
+        return s;
+      });
+    }
+  } catch (err) {
+    console.error('Failed to load wells for project', project.project_id, err);
+  }
+}
+
 export function selectWell(well: Well | null) {
   workspace.update((s) => ({ ...s, selectedWell: well }));
 }
 
 export function setDepthFilter(enabled: boolean, minDepth?: number | null, maxDepth?: number | null) {
-  workspace.update((s) => ({
-    ...s,
-    depthFilter: {
+  workspace.update((s) => {
+    const newFilter = {
       enabled,
       minDepth: minDepth ?? null,
       maxDepth: maxDepth ?? null,
-    },
-  }));
+    };
+    if (JSON.stringify(s.depthFilter) === JSON.stringify(newFilter)) return s;
+    return {
+      ...s,
+      depthFilter: newFilter,
+    };
+  });
 }
 
 export function clearDepthFilter() {
@@ -77,6 +120,30 @@ export function clearDepthFilter() {
       enabled: false,
       minDepth: null,
       maxDepth: null,
+    },
+  }));
+}
+
+export function setZoneFilter(enabled: boolean, zones?: string[]) {
+  workspace.update((s) => {
+    const newFilter = {
+      enabled,
+      zones: zones && Array.isArray(zones) ? zones.map((z) => String(z)) : [],
+    };
+    if (JSON.stringify(s.zoneFilter) === JSON.stringify(newFilter)) return s;
+    return {
+      ...s,
+      zoneFilter: newFilter,
+    };
+  });
+}
+
+export function clearZoneFilter() {
+  workspace.update((s) => ({
+    ...s,
+    zoneFilter: {
+      enabled: false,
+      zones: [],
     },
   }));
 }
@@ -95,5 +162,34 @@ export function applyDepthFilter(rows: Array<Record<string, any>>, depthFilter?:
     if (depthFilter.maxDepth !== null && depth > depthFilter.maxDepth) return false;
     
     return true;
+  });
+}
+
+// Helper to locate a zone/formation value on a row using common candidate keys
+function extractZoneValue(row: Record<string, any>) {
+  if (!row || typeof row !== 'object') return null;
+  const candidates = ['name', 'zone', 'Zone', 'ZONE', 'formation', 'formation_name', 'formationName', 'FORMATION', 'formation_top', 'formationTop'];
+  for (const k of candidates) {
+    if (k in row && row[k] !== null && row[k] !== undefined && String(row[k]).trim() !== '') {
+      return String(row[k]);
+    }
+  }
+  // fallback: try to find a key that contains 'zone' or 'formation'
+  for (const k of Object.keys(row)) {
+    if (/zone|formation/i.test(k) && row[k] !== null && row[k] !== undefined && String(row[k]).trim() !== '') {
+      return String(row[k]);
+    }
+  }
+  return null;
+}
+
+export function applyZoneFilter(rows: Array<Record<string, any>>, zoneFilter?: { enabled: boolean; zones: string[] }) {
+  if (!zoneFilter?.enabled || !zoneFilter.zones || zoneFilter.zones.length === 0) return rows;
+
+  const allowed = new Set(zoneFilter.zones.map((z) => String(z)));
+  return rows.filter((row) => {
+    const val = extractZoneValue(row);
+    if (val === null) return false;
+    return allowed.has(val);
   });
 }

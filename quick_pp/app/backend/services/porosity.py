@@ -1,7 +1,12 @@
 from fastapi import APIRouter
 from quick_pp.app.backend.schemas.porosity import InputData
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
-from quick_pp.porosity import neu_den_xplot_poro, density_porosity, rho_matrix
+from quick_pp.porosity import (
+    neu_den_xplot_poro,
+    density_porosity,
+    rho_matrix,
+    estimate_shale_porosity,
+)
 from typing import List, Dict
 import numpy as np
 
@@ -146,6 +151,15 @@ async def estimate_phit_neu_den(inputs: InputData) -> List[Dict[str, float]]:
     nphi = np.array([d.nphi for d in inputs.data])
     rhob = np.array([d.rhob for d in inputs.data])
 
+    ssc_model = SandSiltClay(
+        dry_sand_point=inputs.dry_sand_point,
+        dry_silt_point=inputs.dry_silt_point,
+        dry_clay_point=inputs.dry_clay_point,
+        fluid_point=inputs.fluid_point,
+        silt_line_angle=inputs.silt_line_angle,
+    )
+    vsand, vsilt, vclay, _ = ssc_model.estimate_lithology(nphi, rhob)
+
     phit = neu_den_xplot_poro(
         nphi,
         rhob,
@@ -155,4 +169,11 @@ async def estimate_phit_neu_den(inputs: InputData) -> List[Dict[str, float]]:
         dry_clay_point=inputs.dry_clay_point,
         fluid_point=inputs.fluid_point,
     )
-    return [{"PHIT": float(val)} for val in phit]
+
+    rho_ma = rho_matrix(vsand=vsand, vsilt=vsilt, vclay=vclay)
+    phid = density_porosity(rhob, rho_ma, inputs.fluid_point[1])
+    phit_shale = estimate_shale_porosity(nphi, phid)
+    vclb = vclay * phit_shale
+    phie = phit - vclb
+
+    return [{"PHIT": float(val), "PHIE": float(e)} for val, e in zip(phit, phie)]

@@ -8,4 +8,4 @@ echo "PostgreSQL is up - executing database initialization"
 python /code/quick_pp/app/docker/init_db.py
 
 echo "Starting application"
-exec python main.py app
+exec python /code/main.py backend --no-open

@@ -5,7 +5,7 @@
 
   import { browser } from '$app/environment';
   import { onDestroy } from 'svelte';
-  import { workspace } from '$lib/stores/workspace';
+  import { depthFilter, zoneFilter } from '$lib/stores/workspace';
   import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   let Plotly: any = null;
@@ -16,13 +16,8 @@
   let autoRefresh = false;
   let refreshInterval = 5000; // ms
   let _refreshTimer: number | null = null;
-  
-  // Depth filter state
-  let depthFilter: { enabled: boolean; minDepth: number | null; maxDepth: number | null } = {
-    enabled: false,
-    minDepth: null,
-    maxDepth: null,
-  };
+  let lastDepthFilter: any = null;
+  let lastZoneFilter: any = null;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
@@ -43,15 +38,21 @@
       // Build URL with depth filter parameters
       let url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/log`;
       
-      // Add depth filter query parameters if enabled
+      // Build query parameters for depth and zone filters
       const params = new URLSearchParams();
-      if (depthFilter.enabled) {
-        if (depthFilter.minDepth !== null) {
-          params.append('min_depth', String(depthFilter.minDepth));
+      if ($depthFilter?.enabled) {
+        if ($depthFilter.minDepth !== null) {
+          params.append('min_depth', String($depthFilter.minDepth));
         }
-        if (depthFilter.maxDepth !== null) {
-          params.append('max_depth', String(depthFilter.maxDepth));
+        if ($depthFilter.maxDepth !== null) {
+          params.append('max_depth', String($depthFilter.maxDepth));
         }
+      }
+      // Include zone filter if enabled - send as comma-separated `zones` param
+      if ($zoneFilter?.enabled && Array.isArray($zoneFilter.zones) && $zoneFilter.zones.length > 0) {
+        // encode individual zone values and join with comma
+        const encoded = $zoneFilter.zones.map((z) => String(z)).join(',');
+        params.append('zones', encoded);
       }
       if (params.toString()) {
         url += '?' + params.toString();
@@ -119,22 +120,16 @@
     loadAndRender();
   }
 
-  $: scheduleAutoRefresh();
-  
-  // Subscribe to workspace for depth filter changes
-  const unsubscribeWorkspace = workspace.subscribe((w) => {
-    if (w?.depthFilter) {
-      const newFilter = { ...w.depthFilter };
-      // Check if filter actually changed to avoid unnecessary re-renders
-      if (JSON.stringify(newFilter) !== JSON.stringify(depthFilter)) {
-        depthFilter = newFilter;
-        // Trigger re-render when depth filter changes
-        if (browser && projectId && wellName) {
-          loadAndRender();
-        }
-      }
-    }
-  });
+  // Reactive updates for filters
+  $: if ($depthFilter && JSON.stringify($depthFilter) !== JSON.stringify(lastDepthFilter)) {
+    lastDepthFilter = { ...$depthFilter };
+    if (browser && projectId && wellName) loadAndRender();
+  }
+
+  $: if ($zoneFilter && (JSON.stringify($zoneFilter) !== JSON.stringify(lastZoneFilter))) {
+    lastZoneFilter = { ...$zoneFilter };
+    if (browser && projectId && wellName) loadAndRender();
+  }
 
   onMount(() => {
     // initial render handled by reactive statement above
@@ -142,7 +137,6 @@
 
   onDestroy(() => {
     try {
-      unsubscribeWorkspace();
       if (container && (container as any)._plotlyResizeObserver) {
         (container as any)._plotlyResizeObserver.disconnect();
         delete (container as any)._plotlyResizeObserver;
@@ -177,7 +171,7 @@
 <div class="ws-well-plot">
   <DepthFilterStatus />
   <div class="mb-2 flex items-center gap-2">
-    <button class="btn px-3 py-1 text-sm bg-gray-800 text-white rounded" on:click={loadAndRender} aria-label="Refresh plot">Refresh</button>
+    <button class="btn px-3 py-1 text-sm bg-gray-800 text-white rounded" onclick={loadAndRender} aria-label="Refresh plot">Refresh</button>
     <label class="text-sm flex items-center gap-1">
       <input type="checkbox" bind:checked={autoRefresh} />
       Auto-refresh

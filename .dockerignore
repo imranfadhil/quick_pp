@@ -24,10 +24,10 @@ dist/
 
 # Node / frontend
 node_modules/
-app/frontend/node_modules/
-app/frontend/.svelte-kit/
-app/frontend/.output/
-app/frontend/build/
+quick_pp/app/frontend/node_modules/
+quick_pp/app/frontend/.svelte-kit/
+quick_pp/app/frontend/.output/
+quick_pp/app/frontend/build/
 
 # Data, outputs, ML runs (very large)
 data/
@@ -38,7 +38,7 @@ outputs/
 notebooks/
 
 # postgres data
-app/docker/data/postgres/
+quick_pp/app/docker/data/postgres/
 
 # Logs, temp
 *.log

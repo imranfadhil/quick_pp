@@ -1,6 +1,6 @@
 <script lang="ts">
   // plotting will be handled via Plotly (dynamically imported)
-  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
+  import { workspace, applyDepthFilter, applyZoneFilter } from '$lib/stores/workspace';
   import { onDestroy } from 'svelte';
   import DepthFilterStatus from './DepthFilterStatus.svelte';
 
@@ -14,6 +14,12 @@
     minDepth: null,
     maxDepth: null,
   };
+
+  // Zone filter state
+  let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
+
+  // Visible rows after applying depth + zone filters
+  let visibleRows: Array<Record<string, any>> = [];
 
   let loading = false;
   let error: string | null = null;
@@ -284,6 +290,7 @@
   // derived plotting arrays for Plotly
   $: lithoPoints = lithoChartData.map(d => ({ x: d.depth, vclay: d.VCLAY, vsilt: d.VCLAY + d.VSILT, vsand: d.VCLAY + d.VSILT + d.VSAND }));
   $: poroPoints = poroChartData.map(d => ({ x: d.depth, y: d.PHIT }));
+  $: phiePoints = poroChartData.map(d => ({ x: d.depth, y: d.PHIE })).filter(p => p.y !== undefined && p.y !== null && !isNaN(Number(p.y)));
   $: cporePoints = cporeData.map(d => ({ x: d.depth, y: d.CPORE }));
 
   async function renderLithoPlot() {
@@ -334,10 +341,20 @@
     if (poroPoints && poroPoints.length > 0) {
       const x = poroPoints.map(p => p.x);
       const y = poroPoints.map(p => p.y);
-      traces.push({ x, y, name: 'PHIT', mode: 'lines', line: { color: '#2563eb', width: 2 }, fill: 'tozeroy', fillcolor: 'rgba(37,99,235,0.3)', xaxis: 'x', yaxis: 'y' });
+      traces.push({ x, y, name: 'PHIT', mode: 'lines', line: { color: '#000000', width: 2 }, xaxis: 'x', yaxis: 'y' });
+    }
+    if (phiePoints && phiePoints.length > 0) {
+      const x2 = phiePoints.map(p => p.x);
+      const y2 = phiePoints.map(p => p.y);
+      traces.push({
+        x: x2, y: y2, name: 'PHIE', mode: 'lines', line: { color: '#2563eb', width: 1, dash: 'dot' },
+        fill: 'tozeroy', fillcolor: 'rgba(37,99,235,0.3)', xaxis: 'x', yaxis: 'y' });
     }
     if (cporePoints && cporePoints.length > 0) {
-      traces.push({ x: cporePoints.map(p => p.x), y: cporePoints.map(p => p.y), name: 'CPORE', mode: 'markers', marker: { color: '#dc2626', size: 8, line: { color: 'white', width: 1 } }, xaxis: depthMatching ? 'x2' : 'x', yaxis: 'y' });
+      traces.push({
+        x: cporePoints.map(p => p.x), y: cporePoints.map(p => p.y), name: 'CPORE', mode: 'markers',
+        marker: { color: '#dc2626', size: 8, line: { color: 'white', width: 1 } },
+        xaxis: depthMatching ? 'x2' : 'x', yaxis: 'y' });
     }
 
     const layout = {
@@ -377,7 +394,7 @@
     loading = true;
     error = null;
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`);
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/merged`);
       if (!res.ok) throw new Error(await res.text());
       const fd = await res.json();
       // payload may be an envelope {data: [...]} or a bare array
@@ -394,9 +411,9 @@
 
   function extractNphiRhob()
   {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
-    
+    // Use visibleRows which have depth and zone filters applied
+    const filteredRows = visibleRows;
+
     // build payload data: list of {nphi, rhob}
     const data: Array<{nphi:number; rhob:number}> = [];
     for (const r of filteredRows) {
@@ -409,8 +426,8 @@
   }
 
   function extractCporeData() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows which have depth and zone filters applied
+    const filteredRows = visibleRows;
     
     const data: Array<Record<string, any>> = [];
     for (const r of filteredRows) {
@@ -553,23 +570,26 @@
     saveMessagePoro = null;
     error = null;
     try {
-      // Build a quick lookup for core porosity by depth
-      const cporeByDepth = new Map<number, number>();
-      for (const c of cporeData) {
-        const d = Number(c.depth);
-        if (!isNaN(d)) cporeByDepth.set(d, Number(c.CPORE));
-      }
+      // Build rows aligned with the filtered rows that were used to create poro results.
+      // Only include the required columns: PHIT and PHIE (if available).
+      const filteredRows = visibleRows;
+      const rows: Array<Record<string, any>> = [];
+      let i = 0;
+      for (const r of filteredRows) {
+        const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
+        const rhob = Number(r.rhob ?? r.RHOB ?? r.Rhob ?? NaN);
+        const hasValidData = !isNaN(nphi) && !isNaN(rhob);
+        if (!hasValidData) continue;
 
-      // Build rows from poroChartData which already contains the filtered and aligned results
-      const rows: Array<Record<string, any>> = poroChartData.map(r => {
-        const row: Record<string, any> = { 
-          DEPTH: r.depth, 
-          PHIT: Math.min(Math.max(Number(r.PHIT ?? 0), 0), 1) 
-        };
-        const core = cporeByDepth.get(r.depth);
-        if (typeof core === 'number' && !isNaN(core)) row.CPORE = core;
-        return row;
-      });
+        const p = poroResults[i++] ?? {};
+        const phit = Math.min(Math.max(Number(p.PHIT ?? 0), 0), 1);
+        const phieVal = p.PHIE !== undefined ? Number(p.PHIE) : (p.PHIE ?? null);
+        const phie = phieVal !== null && !isNaN(Number(phieVal)) ? Math.min(Math.max(Number(phieVal), 0), 1) : null;
+
+        const row: Record<string, any> = { DEPTH: Number(r.depth ?? r.DEPTH ?? NaN), PHIT: phit, PHIE: phie };
+        if (phie !== null) row.PHIE = phie;
+        rows.push(row);
+      }
 
       if (!rows.length) {
         throw new Error('No rows prepared for save');
@@ -601,8 +621,8 @@
   }
 
   function buildLithoChart() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows which have depth and zone filters applied
+    const filteredRows = visibleRows;
     
     // lithoResults only contains results for rows with valid NPHI/RHOB data
     const rows: Array<Record<string, any>> = [];
@@ -627,13 +647,13 @@
       }
     }
     // Sort by depth to ensure proper chart rendering
-    rows.sort((a, b) => a.depth - b.depth);
+    rows.sort((a: Record<string, any>, b: Record<string, any>) => a.depth - b.depth);
     lithoChartData = rows;
   }
 
   function buildPoroChart() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows which have depth and zone filters applied
+    const filteredRows = visibleRows;
     
     const rows: Array<Record<string, any>> = [];
     let i = 0;
@@ -648,14 +668,18 @@
       
       // Only include rows that have valid NPHI/RHOB data
       if (hasValidData) {
-        const p = poroResults[i++] ?? { PHIT: null };
+        const p = poroResults[i++] ?? { PHIT: null, PHIE: null };
         // Clamp PHIT values between 0 and 1
         const phit = Math.min(Math.max(Number(p.PHIT ?? 0), 0), 1);
-        rows.push({ depth, PHIT: phit });
+        const phieVal = p.PHIE !== undefined ? Number(p.PHIE) : (p.PHIE ?? null);
+        const phie = phieVal !== null && !isNaN(Number(phieVal)) ? Math.min(Math.max(Number(phieVal), 0), 1) : null;
+        const row: Record<string, any> = { depth, PHIT: phit };
+        if (phie !== null) row.PHIE = phie;
+        rows.push(row);
       }
     }
     // Sort by depth to ensure proper chart rendering
-    rows.sort((a, b) => a.depth - b.depth);
+    rows.sort((a: Record<string, any>, b: Record<string, any>) => a.depth - b.depth);
     poroChartData = rows;
     
     // Extract CPORE data for overlay
@@ -667,11 +691,22 @@
     if (w?.depthFilter) {
       depthFilter = { ...w.depthFilter };
     }
+    if (w?.zoneFilter) {
+      zoneFilter = { ...w.zoneFilter };
+    }
   });
   
   onDestroy(() => {
     unsubscribeWorkspace();
   });
+
+  // compute visibleRows whenever fullRows or filters change
+  $: visibleRows = (() => {
+    let rows = fullRows || [];
+    rows = applyDepthFilter(rows, depthFilter);
+    rows = applyZoneFilter(rows, zoneFilter);
+    return rows;
+  })();
 
   // load data on mount or when well changes
   $: if (projectId && wellName) {
@@ -679,10 +714,10 @@
   }
 
   // re-render Plotly when data or any input parameters change (including depth filter)
-  $: if (plotDiv && (fullRows || drySandNphi !== undefined || drySandRhob !== undefined || 
+  $: if (plotDiv && (visibleRows || drySandNphi !== undefined || drySandRhob !== undefined || 
                      dryClayNphi !== undefined || dryClayRhob !== undefined || 
                      drySiltNphi !== undefined || fluidNphi !== undefined || 
-                     fluidRhob !== undefined || siltLineAngle !== undefined || depthFilter)) {
+                     fluidRhob !== undefined || siltLineAngle !== undefined || depthFilter || zoneFilter)) {
     // call async render but don't await in reactive context
     renderNdPlot();
   }
@@ -754,7 +789,7 @@
           <div class="bg-surface rounded p-2">
             <button
               class="btn px-3 py-1 text-sm font-semibold rounded-md bg-gray-900 text-white hover:bg-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-700"
-              on:click={runSSC}
+              onclick={runSSC}
               disabled={loading}
               style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
               aria-label="Run lithology classification"
@@ -763,8 +798,8 @@
               Estimate Lithology
             </button>
             <button
-              class="btn px-3 py-1 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-500 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-green-600"
-              on:click={saveLitho}
+              class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
+              onclick={saveLitho}
               disabled={loading || saveLoadingLitho}
               style={(loading || saveLoadingLitho) ? 'opacity:0.5; pointer-events:none;' : ''}
               aria-label="Save lithology"
@@ -796,7 +831,7 @@
           <div class="bg-surface rounded p-2">
             <button
                 class="btn px-3 py-1 text-sm font-medium rounded-md bg-gray-800 text-gray-100 hover:bg-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-600"
-                on:click={runPoro}
+                onclick={runPoro}
                 disabled={loading}
                 style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
                 aria-label="Estimate porosity"
@@ -806,7 +841,7 @@
               </button>
               <button
                 class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
-                on:click={savePoro}
+                onclick={savePoro}
                 disabled={loading || saveLoadingPoro}
                 style={(loading || saveLoadingPoro) ? 'opacity:0.5; pointer-events:none;' : ''}
                 aria-label="Save porosity"

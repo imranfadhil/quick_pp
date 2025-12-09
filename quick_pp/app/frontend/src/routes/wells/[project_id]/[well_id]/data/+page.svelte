@@ -1,25 +1,11 @@
 <script lang="ts">
-  import WsFormationTops from '$lib/components/WsFormationTops.svelte';
-  import WsFluidContacts from '$lib/components/WsFluidContacts.svelte';
-  import WsPressureTests from '$lib/components/WsPressureTests.svelte';
-  import WsCoreSamples from '$lib/components/WsCoreSamples.svelte';
   import WsWellStats from '$lib/components/WsWellStats.svelte';
-  import { Button } from '$lib/components/ui/button/index.js';
-  import ProjectWorkspace from '$lib/components/ProjectWorkspace.svelte';
-  import { onDestroy } from 'svelte';
-  import { slide } from 'svelte/transition';
   import { workspace } from '$lib/stores/workspace';
+  import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
-  import type { Project, Well } from '$lib/types';
 
-  let selectedProject: Project | null = null;
-  let selectedWell: Well | null = null;
-
-  // Accordion state for ancillary sections (collapsed by default)
-  let showTops = false;
-  let showContacts = false;
-  let showPressure = false;
-  let showCore = false;
+  let selectedProject: any = null;
+  let selectedWell: any = null;
 
   const unsubscribe = workspace.subscribe((w) => {
     selectedProject = w?.project ?? null;
@@ -30,108 +16,24 @@
 </script>
 
 {#if selectedProject}
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-    <div class="col-span-1">
-      <div class="bg-panel rounded p-4">
-        {#if selectedWell}
-          <div class="mb-3">
-            <div class="font-semibold">{selectedWell.name}</div>
-            <div class="text-sm text-muted">UWI: {selectedWell.uwi}</div>
-          </div>
-          <div class="space-y-4">
-        <div class="accordion-item bg-surface rounded">
-          <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showTops = !showTops)} aria-expanded={showTops}>
-            <div class="font-medium">Formation Tops</div>
-            <div class="text-sm">
-              <svg class="inline-block" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transform: rotate({showTops ? 90 : 0}deg); transition: transform .18s ease;">
-                <path d="M8 5l8 7-8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
-              </svg>
-            </div>
-          </Button>
-          {#if showTops}
-            <div transition:slide class="p-2">
-              <WsFormationTops projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
-            </div>
-          {/if}
-        </div>
-
-        <div class="accordion-item bg-surface rounded">
-          <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showCore = !showCore)} aria-expanded={showCore}>
-            <div class="font-medium">Core Samples (RCA & SCAL)</div>
-            <div class="text-sm">
-              <svg class="inline-block" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transform: rotate({showCore ? 90 : 0}deg); transition: transform .18s ease;">
-                <path d="M8 5l8 7-8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
-              </svg>
-            </div>
-          </Button>
-          {#if showCore}
-            <div transition:slide class="p-2">
-              <WsCoreSamples projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
-            </div>
-          {/if}
-        </div>
-
-        <div class="accordion-item bg-surface rounded">
-          <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showPressure = !showPressure)} aria-expanded={showPressure}>
-            <div class="font-medium">Pressure Tests</div>
-            <div class="text-sm">
-              <svg class="inline-block" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transform: rotate({showPressure ? 90 : 0}deg); transition: transform .18s ease;">
-                <path d="M8 5l8 7-8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
-              </svg>
-            </div>
-          </Button>
-          {#if showPressure}
-            <div transition:slide class="p-2">
-              <WsPressureTests projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
-            </div>
-          {/if}
-        </div>
-
-        <div class="accordion-item bg-surface rounded">
-          <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showContacts = !showContacts)} aria-expanded={showContacts}>
-            <div class="font-medium">Fluid Contacts</div>
-            <div class="text-sm">
-              <svg class="inline-block" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transform: rotate({showContacts ? 90 : 0}deg); transition: transform .18s ease;">
-                <path d="M8 5l8 7-8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
-              </svg>
-            </div>
-          </Button>
-          {#if showContacts}
-            <div transition:slide class="p-2">
-              <WsFluidContacts projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
-            </div>
-          {/if}
-        </div>
-          </div>
-        {:else}
-          <div class="text-center py-12">
-            <div class="font-semibold">No well selected</div>
-            <div class="text-sm text-muted mt-2">Select a well to view its data.</div>
-          </div>
-        {/if}
+  {#if selectedWell}
+    <div class="bg-panel rounded p-4 min-h-[300px]">
+      <WsWellStats projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
+    </div>
+  {:else}
+    <div class="bg-panel rounded p-4 min-h-[300px]">
+      <div class="text-center py-12">
+        <div class="font-semibold">No well selected</div>
+        <div class="text-sm text-muted mt-2">Select a well to view its data.</div>
       </div>
     </div>
-    <div class="col-span-2">
-      {#if selectedWell}
-        <div class="bg-panel rounded p-4 min-h-[300px]">
-          <WsWellStats projectId={selectedProject?.project_id ?? ''} wellName={selectedWell?.name ?? ''} />
-        </div>
-      {:else}
-        <div class="bg-panel rounded p-4 min-h-[300px]">
-          <div class="text-center py-12">
-            <div class="font-semibold">No well selected</div>
-            <div class="text-sm text-muted mt-2">Select a well to view its data.</div>
-          </div>
-        </div>
-      {/if}
-    </div>
-  </div>
+  {/if}
 {:else}
   <div class="bg-panel rounded p-6 text-center">
     <div class="font-semibold">No project selected</div>
     <div class="text-sm text-muted mt-2">Select a project in the Projects workspace to begin.</div>
     <div class="mt-4">
-      <button class="btn btn-primary" on:click={() => goto('/projects')}>Open Projects</button>
+      <button class="btn btn-primary" onclick={() => goto('/projects')}>Open Projects</button>
     </div>
   </div>
 {/if}

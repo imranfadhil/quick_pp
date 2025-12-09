@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { Button } from '$lib/components/ui/button/index.js';
-  import { workspace, applyDepthFilter } from '$lib/stores/workspace';
+  import { workspace, applyDepthFilter, applyZoneFilter } from '$lib/stores/workspace';
   import DepthFilterStatus from './DepthFilterStatus.svelte';
   
   export let projectId: number | string;
@@ -15,6 +15,11 @@
     minDepth: null,
     maxDepth: null,
   };
+  // Zone filter state
+  let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
+
+  // Visible rows after depth+zone filters
+  let visibleRows: Array<Record<string, any>> = [];
   
   let loading = false;
   let error: string | null = null;
@@ -32,10 +37,6 @@
   let cpermData: Array<Record<string, any>> = []; // Core permeability data
   let Plotly: any = null;
   let permPlotDiv: HTMLDivElement | null = null;
-  // rock typing state
-  let rockTypes: Array<Record<string, any>> = [];
-  let saveLoadingRockType = false;
-  let saveMessageRockType: string | null = null;
   
   // Available permeability methods
   const permMethods = [
@@ -51,7 +52,7 @@
     loading = true;
     error = null;
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`);
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/merged`);
       if (!res.ok) throw new Error(await res.text());
       const fd = await res.json();
       const rows = fd && fd.data ? fd.data : fd;
@@ -69,8 +70,8 @@
     const method = permMethods.find(m => m.value === selectedMethod);
     if (!method) return [];
     
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows (depth + zone filters applied)
+    const filteredRows = visibleRows;
     
     const data: Array<Record<string, number>> = [];
     for (const r of filteredRows) {
@@ -108,8 +109,8 @@
   }
   
   function extractCpermData() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows (depth + zone filters applied)
+    const filteredRows = visibleRows;
     
     const data: Array<Record<string, any>> = [];
     for (const r of filteredRows) {
@@ -162,18 +163,9 @@
     saveMessagePerm = null;
     error = null;
     try {
-      // Build CPERM lookup by depth
-      const cpermByDepth = new Map<number, number>();
-      for (const c of cpermData) {
-        const d = Number(c.depth);
-        if (!isNaN(d)) cpermByDepth.set(d, Number(c.CPERM));
-      }
-
       // Align rows to permChartData (already sorted by depth)
       const rows: Array<Record<string, any>> = permChartData.map(r => {
         const row: Record<string, any> = { DEPTH: r.depth, PERM: Number(r.PERM) };
-        const core = cpermByDepth.get(r.depth);
-        if (typeof core === 'number' && !isNaN(core)) row.CPERM = core;
         return row;
       });
 
@@ -198,79 +190,6 @@
       error = String(e?.message ?? e);
     } finally {
       saveLoadingPerm = false;
-    }
-  }
-
-  function classifyTypeFromRow(depth: number, perm: number, row?: Record<string, any>) {
-    // Try to extract supporting fields
-    const vsand = Number(row?.vsand ?? row?.VSAND ?? row?.VSAND ?? NaN);
-    const vclay = Number(row?.vclay ?? row?.VCLAY ?? row?.VCLAY ?? NaN);
-    const phit = Number(row?.phit ?? row?.PHIT ?? row?.PHIT ?? NaN);
-
-    // Rule-based classifier (simple, tweakable)
-    if (!isNaN(vclay) && vclay >= 0.6) return 'Shale/Clay';
-    if (!isNaN(vclay) && vclay >= 0.3) return 'Shaly Sand';
-    if (!isNaN(vsand) && vsand >= 0.6) {
-      if (perm > 100) return 'High-perm Sand';
-      if (perm > 1) return 'Sandstone';
-      return 'Tight Sand';
-    }
-    // Fallbacks using perm and porosity
-    if (!isNaN(phit) && phit >= 0.25 && perm > 1) return 'Reservoir Sand';
-    if (perm < 0.1) return 'Tight/Caprock';
-    if (perm > 10) return 'Sandstone';
-    return 'Mixed';
-  }
-
-  function computeRockType() {
-    if (!permChartData || permChartData.length === 0) {
-      error = 'No permeability data to classify — compute permeability first';
-      return;
-    }
-    const types: Array<Record<string, any>> = [];
-    for (const p of permChartData) {
-      const depth = Number(p.depth);
-      const perm = Number(p.PERM ?? p.perm ?? 0);
-      // try to find matching full row by depth
-      const row = fullRows.find(r => {
-        const d = Number(r.depth ?? r.DEPTH ?? NaN);
-        return !isNaN(d) && d === depth;
-      });
-      const t = classifyTypeFromRow(depth, perm, row);
-      types.push({ depth, ROCK_TYPE: t });
-    }
-    rockTypes = types;
-    saveMessageRockType = null;
-    error = null;
-  }
-
-  async function saveRockType() {
-    if (!projectId || !wellName) {
-      error = 'Project and well must be selected before saving';
-      return;
-    }
-    if (!rockTypes || rockTypes.length === 0) {
-      error = 'No rock type classifications to save — run Classify Rock Type first';
-      return;
-    }
-    saveLoadingRockType = true;
-    saveMessageRockType = null;
-    error = null;
-    try {
-      const rows = rockTypes.map(r => ({ DEPTH: r.depth, ROCK_TYPE: r.ROCK_TYPE }));
-      const payload = { data: rows };
-      const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`;
-      const res = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!res.ok) throw new Error(await res.text());
-      const resp = await res.json().catch(() => null);
-      saveMessageRockType = resp && resp.message ? String(resp.message) : 'Rock types saved';
-      try { window.dispatchEvent(new CustomEvent('qpp:data-updated', { detail: { projectId, wellName, kind: 'rock_type' } })); } catch (e) {}
-    } catch (e: any) {
-      console.warn('Save rock type error', e);
-      saveMessageRockType = null;
-      error = String(e?.message ?? e);
-    } finally {
-      saveLoadingRockType = false;
     }
   }
 
@@ -319,8 +238,8 @@
   }
 
   function buildPermChart() {
-    // Apply depth filter first
-    const filteredRows = applyDepthFilter(fullRows, depthFilter);
+    // Use visibleRows (depth + zone filters applied)
+    const filteredRows = visibleRows;
     
     const rows: Array<Record<string, any>> = [];
     let i = 0;
@@ -455,11 +374,27 @@
     if (w?.depthFilter) {
       depthFilter = { ...w.depthFilter };
     }
+    if (w?.zoneFilter) {
+      zoneFilter = { ...w.zoneFilter };
+    }
   });
   
   onDestroy(() => {
     unsubscribeWorkspace();
   });
+
+  // compute visibleRows whenever fullRows or filters change
+  $: visibleRows = (() => {
+    let rows = fullRows || [];
+    rows = applyDepthFilter(rows, depthFilter);
+    rows = applyZoneFilter(rows, zoneFilter);
+    return rows;
+  })();
+
+  // Rebuild permChart when results or visibleRows change
+  $: if (permResults && visibleRows) {
+    buildPermChart();
+  }
   
   // Load data when well changes
   $: if (projectId && wellName) {
@@ -474,8 +409,8 @@
 
 <div class="ws-permeability">
   <div class="mb-2">
-    <div class="font-semibold">Permeability & Rock Type</div>
-    <div class="text-sm text-muted-foreground">Permeability estimation and rock typing tools.</div>
+    <div class="font-semibold">Permeability</div>
+    <div class="text-sm text-muted-foreground">Permeability estimation tools.</div>
   </div>
   
   <DepthFilterStatus />
@@ -578,37 +513,6 @@
           {:else}
             <div class="text-gray-500">No core permeability data (CPERM) found</div>
           {/if}
-        </div>
-
-        <div>
-          <div class="font-medium text-sm mb-1">Rock Typing</div>
-          <div class="bg-surface rounded p-2">
-            <Button class="btn ml-2" onclick={computeRockType} disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Classify Rock Type</Button>
-            <Button class="btn ml-2 bg-amber-600" onclick={saveRockType} disabled={loading || saveLoadingRockType} style={(loading || saveLoadingRockType) ? 'opacity:0.5; pointer-events:none;' : ''}>
-              {#if saveLoadingRockType}
-                Saving...
-              {:else}
-                Save Rock Types
-              {/if}
-            </Button>
-
-            <div class="mt-3">
-              {#if rockTypes.length > 0}
-                {@const counts = rockTypes.reduce((acc, r) => { acc[r.ROCK_TYPE] = (acc[r.ROCK_TYPE] || 0) + 1; return acc; }, {})}
-                <div class="text-sm mb-2">Classified rows: {rockTypes.length}</div>
-                <div class="flex gap-3 flex-wrap">
-                  {#each Object.keys(counts) as k}
-                    <div class="px-2 py-1 bg-gray-100 rounded text-sm">{k}: {counts[k]}</div>
-                  {/each}
-                </div>
-                {#if saveMessageRockType}
-                  <div class="text-xs text-green-600 mt-2">{saveMessageRockType}</div>
-                {/if}
-              {:else}
-                <div class="text-sm text-gray-500">No rock type classifications yet. Click "Classify Rock Type".</div>
-              {/if}
-            </div>
-          </div>
         </div>
       </div>
     </div>

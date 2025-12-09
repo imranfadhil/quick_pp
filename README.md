@@ -21,6 +21,7 @@ Prerequisites
 - Python 3.11+ (for backend and CLI)
 - Node.js 18+ and npm or yarn (for frontend)
 - Docker & Docker Compose (optional, for the packaged backend + DB)
+- uv (optional, fast Python package installer from https://github.com/astral-sh/uv)
 
 .env & Database (SQLite vs PostgreSQL)
 - The application reads DB and other secrets from environment variables. For
@@ -56,7 +57,7 @@ Prerequisites
         secrets manager.
 
 Quick checklist
-- Ports: backend API `6312`, frontend dev `5173`, MLflow UI `5015`, model server `5555`.
+- Ports: backend API `6312`, frontend dev `5173`, frontend prod `5469`, MLflow UI `5015`, model server `5555`.
 - Backend CLI entrypoint: `python main.py` (or `quick_pp` if installed).
 
 Clone & Python setup
@@ -65,7 +66,7 @@ Clone & Python setup
 ```bash
 git clone https://github.com/imranfadhil/quick_pp.git
 cd quick_pp
-python -m venv .venv
+uv venv --python 3.11
 # mac/linux
 source .venv/bin/activate
 # windows (cmd.exe)
@@ -75,9 +76,9 @@ source .venv/bin/activate
 2. Install Python dependencies:
 
 ```bash
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 # (optional) install package editable for CLI convenience
-pip install -e .
+uv pip install -e .
 ```
 
 Using Docker (recommended for a complete local stack)
@@ -95,21 +96,34 @@ This will bring up services configured for development. Logs can be checked
 with `docker-compose logs -f` in the same folder.
 
 Frontend (SvelteKit)
-1. Install frontend dependencies and run the dev server:
+The frontend is a SvelteKit application. For the best onboarding experience, use the CLI to start the frontend (see CLI commands below). The CLI handles dependency installation, building, and running the server automatically.
+
+For manual setup or advanced development:
+1. Install dependencies:
 
 ```bash
 cd quick_pp/app/frontend
 npm install
 # Ensure Plotly is available for the UI components
 npm install plotly.js-dist-min --save
+```
+
+2. Run the dev server:
+
+```bash
 npm run dev
 ```
 
-2. Open the frontend at `http://localhost:5173` (SvelteKit default).
+3. Open the frontend at `http://localhost:5173` (SvelteKit default).
+
+For production build:
+- Run `npm run build` to build the app.
+- Run `npm run preview` to preview the production build locally.
+- The CLI can start the production server automatically (see CLI commands below).
 
 Start the app using the project CLI
 - From the repo root you can use the included CLI which orchestrates backend
-    and frontend processes. Example (starts backend and, if available, frontend):
+    and frontend processes. Example (starts backend and, if available, frontend production server):
 
 ```bash
 python main.py app
@@ -121,18 +135,31 @@ Start backend only (dev):
 
 ```bash
 python main.py backend --debug
+# or (if installed) the user-facing command
+quick_pp backend --debug
 ```
 
 Start frontend only (dev):
 
 ```bash
+python main.py frontend --dev
+# or (if installed) the user-facing command
+quick_pp frontend --dev
+```
+
+Start frontend only (prod):
+
+```bash
 python main.py frontend
+# or (if installed) the user-facing command
+quick_pp frontend
 ```
 
 Common commands
 - Run MLflow tracking UI (local): `python main.py mlflow_server`
 - Deploy model server: `python main.py model_deployment`
 - Train/predict via CLI: see `python main.py --help` or `quick_pp --help`
+- Manage Docker services: `python main.py docker up -d` (see `python main.py docker --help` for options)
 
 Testing
 - Run unit tests with `pytest` in the repo root:

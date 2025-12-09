@@ -28,9 +28,3 @@ RUN chmod +x /code/quick_pp/app/docker/backend-entrypoint.sh || true
 
 # Expose the backend API port (application listens on 6312)
 EXPOSE 6312
-
-# Entrypoint will wait for Postgres, run DB init, then start the app
-ENTRYPOINT ["/bin/sh", "/code/quick_pp/app/docker/backend-entrypoint.sh"]
-
-# Fallback command (kept for clarity)
-CMD ["python", "main.py", "app"]

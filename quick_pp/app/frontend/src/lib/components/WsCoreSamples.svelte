@@ -2,11 +2,13 @@
   import { onMount } from 'svelte';
   import { workspace } from '$lib/stores/workspace';
   import { Button } from '$lib/components/ui/button/index.js';
+  import BulkAncillaryImporter from '$lib/components/BulkAncillaryImporter.svelte';
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
   export let projectId: number | string;
   export let wellName: string;
+  export let showList: boolean = true;
 
   let samples: any[] = [];
   let loading = false;
@@ -27,15 +29,17 @@
   let pc: Array<{ saturation: number | string; pressure: number | string; experiment_type?: string; cycle?: string }> = [
     { saturation: '', pressure: '', experiment_type: '', cycle: '' },
   ];
+  let showImporter = false;
 
-  $: if (projectId && wellName) {
+  $: if (projectId) {
     fetchSamples();
   }
 
   async function fetchSamples() {
     loading = true;
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(wellName)}/core_samples`);
+      const qs = wellName ? `?well_name=${encodeURIComponent(String(wellName))}` : '';
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/core_samples${qs}`);
       if (res.ok) {
         const data = await res.json();
         samples = data.core_samples || [];
@@ -50,24 +54,24 @@
   }
 
   function addMeasurement() {
-    measurements.push({ property_name: '', value: '', unit: '' });
+    measurements = [...measurements, { property_name: '', value: '', unit: '' }];
   }
   function removeMeasurement(i: number) {
-    measurements.splice(i, 1);
+    measurements = [...measurements.slice(0, i), ...measurements.slice(i + 1)];
   }
 
   function addRelperm() {
-    relperm.push({ saturation: '', kr: '', phase: '' });
+    relperm = [...relperm, { saturation: '', kr: '', phase: '' }];
   }
   function removeRelperm(i: number) {
-    relperm.splice(i, 1);
+    relperm = [...relperm.slice(0, i), ...relperm.slice(i + 1)];
   }
 
   function addPc() {
-    pc.push({ saturation: '', pressure: '', experiment_type: '', cycle: '' });
+    pc = [...pc, { saturation: '', pressure: '', experiment_type: '', cycle: '' }];
   }
   function removePc(i: number) {
-    pc.splice(i, 1);
+    pc = [...pc.slice(0, i), ...pc.slice(i + 1)];
   }
 
   async function submitSample() {
@@ -91,7 +95,8 @@
     if (form.description) payload.description = form.description;
 
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(wellName)}/core_samples`, {
+      if (wellName) payload.well_name = String(wellName);
+      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/core_samples`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -114,24 +119,29 @@
 </script>
 
 <div class="ws-core-samples">
-  {#if loading}
-    <div>Loading...</div>
-  {:else}
-    <ul class="space-y-2">
-      {#each samples as s}
-        <li class="p-2 bg-surface rounded">
-          <div class="font-medium">{s.sample_name}</div>
-          <div class="text-sm">Depth: {s.depth} {s.description ? `- ${s.description}` : ''}</div>
-        </li>
-      {/each}
-    </ul>
+  {#if showList}
+    {#if loading}
+      <div>Loading...</div>
+    {:else}
+      <ul class="space-y-2">
+        {#each samples as s}
+          <li class="p-2 bg-surface rounded">
+            <div class="font-medium">{s.sample_name}</div>
+            <div class="text-sm">Depth: {s.depth} {s.description ? `- ${s.description}` : ''}</div>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
 
   <div class="mt-4 bg-panel rounded p-3">
     <div class="font-semibold mb-2">Add / Update Sample</div>
     <div class="grid grid-cols-1 gap-2">
-      <input placeholder="Sample name" bind:value={form.sample_name} class="input" />
-      <input placeholder="Depth" bind:value={form.depth} class="input" />
+      <div class="flex items-center gap-2">
+        <input placeholder="Well name" bind:value={wellName} class="input w-32" />
+        <input placeholder="Sample name" bind:value={form.sample_name} class="input w-32" />
+        <input placeholder="Depth" bind:value={form.depth} class="input w-32" />
+      </div>
       <input placeholder="Description" bind:value={form.description} class="input" />
       <div>
         <div class="flex items-center justify-between">
@@ -144,7 +154,7 @@
               <input class="col-span-5 input" placeholder="Property" bind:value={m.property_name} />
               <input class="col-span-3 input" placeholder="Value" bind:value={m.value} />
               <input class="col-span-3 input" placeholder="Unit" bind:value={m.unit} />
-              <Button class="col-span-1 btn btn-ghost" type="button" onclick={() => removeMeasurement(i)}>✕</Button>
+              <Button variant='secondary' type="button" onclick={() => removeMeasurement(i)}>✕</Button>
             </div>
           {/each}
         </div>
@@ -161,7 +171,7 @@
               <input class="col-span-4 input" placeholder="Saturation" bind:value={r.saturation} />
               <input class="col-span-4 input" placeholder="kr" bind:value={r.kr} />
               <input class="col-span-3 input" placeholder="Phase" bind:value={r.phase} />
-              <Button class="col-span-1 btn btn-ghost" type="button" onclick={() => removeRelperm(i)}>✕</Button>
+              <Button variant='secondary' type="button" onclick={() => removeRelperm(i)}>✕</Button>
             </div>
           {/each}
         </div>
@@ -177,9 +187,18 @@
             <div class="grid grid-cols-12 gap-2 items-center">
               <input class="col-span-3 input" placeholder="Saturation" bind:value={p.saturation} />
               <input class="col-span-3 input" placeholder="Pressure" bind:value={p.pressure} />
-              <input class="col-span-3 input" placeholder="Type" bind:value={p.experiment_type} />
-              <input class="col-span-2 input" placeholder="Cycle" bind:value={p.cycle} />
-              <Button class="col-span-1 btn btn-ghost" type="button" onclick={() => removePc(i)}>✕</Button>
+              <select class="col-span-3 input" bind:value={p.experiment_type}>
+                <option value="" disabled hidden>Experiment Type</option>
+                <option value="Porous plate">Porous plate</option>
+                <option value="Centrifuge">Centrifuge</option>
+                <option value="Mercury Injection">Mercury Injection</option>
+              </select>
+              <select class="col-span-2 input" bind:value={p.cycle}>
+                <option value="" disabled hidden>Cycle</option>
+                <option value="Drainage">Drainage</option>
+                <option value="Imbibition">Imbibition</option>
+              </select>
+              <Button variant='secondary' type="button" onclick={() => removePc(i)}>✕</Button>
             </div>
           {/each}
         </div>
@@ -187,6 +206,14 @@
       <div class="mt-2">
         <Button class="btn btn-primary" onclick={submitSample}>Save Sample</Button>
       </div>
+      <div class="mb-3">
+        <Button variant="secondary" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
+      </div>
+      {#if showImporter}
+        <div class="mb-3">
+          <BulkAncillaryImporter {projectId} type="core_samples" />
+        </div>
+      {/if}
     </div>
   </div>
 </div>

@@ -3,31 +3,24 @@
   import AppSidebar from "$lib/components/app-sidebar.svelte";
   import SiteHeader from "$lib/components/site-header.svelte";
   import { onMount } from 'svelte';
-  import { selectProjectAndLoadWells, selectWell, setWorkspaceTitleIfDifferent as setWorkspaceTitle } from '$lib/stores/workspace';
+  import { selectProjectAndLoadWells } from '$lib/stores/workspace';
   import { projects } from '$lib/stores/projects';
   import { page } from '$app/stores';
-  export let data: { projectId?: string | null; wellId?: string | null };
+
+  // read project_id from route params and seed selection for all children
+  let projectId: string | undefined;
+  $: projectId = $page.params.project_id;
 
   onMount(() => {
-    // Only run selection on the client — load() can run on server.
-    if (data?.projectId) {
-      const p = $projects.find((pp) => String(pp.project_id) === String(data.projectId));
+    if (projectId) {
+      const p = $projects.find((pp) => String(pp.project_id) === String(projectId));
       if (p) {
         selectProjectAndLoadWells(p);
       } else {
-        selectProjectAndLoadWells({ project_id: data.projectId });
+        // If not in store, just set with ID
+        selectProjectAndLoadWells({ project_id: projectId });
       }
     }
-    if (data?.wellId) {
-      selectWell({ id: data.wellId, name: data.wellId });
-    }
-
-    // Subscribe to page data and set workspace title centrally.
-    const unsub = page.subscribe((p) => {
-      const d = p.data as { title?: string; subtitle?: string } | undefined;
-      if (d?.title) setWorkspaceTitle(d.title, d.subtitle);
-    });
-    return unsub;
   });
 </script>
 

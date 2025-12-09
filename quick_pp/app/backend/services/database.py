@@ -1,7 +1,8 @@
 import os
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from typing import List, Optional
 from pathlib import Path
+from uuid import uuid4
 import shutil
 
 import pandas as pd
@@ -34,6 +35,24 @@ async def init_db(payload: dict):
         setup = True
 
     try:
+        # If the application startup already initialized the DB (per-worker), reuse it
+        if DBConnector._engine is not None:
+            connector = (
+                DBConnector()
+            )  # wrapper referencing existing class-level engine/session
+            if setup:
+                try:
+                    connector.setup_db()
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=500, detail=f"Failed to setup DB: {e}"
+                    )
+            return {
+                "message": "DB connector already initialized",
+                "db_url": str(connector._engine.url),
+            }
+
+        # Otherwise initialize a new connector instance for this process
         connector = DBConnector(db_url=db_url)
         if setup:
             connector.setup_db()
@@ -41,6 +60,33 @@ async def init_db(payload: dict):
         raise HTTPException(status_code=500, detail=f"Failed to init DB: {e}")
 
     return {"message": "DB connector initialized", "db_url": str(connector._engine.url)}
+
+
+@router.get("/health", summary="Database health check")
+async def health_check():
+    """Simple health endpoint that checks DB connectivity by running `SELECT 1`.
+
+    Returns 200 + {'status': 'ok'} when the DB responds, otherwise raises 500.
+    If the DB connector hasn't been initialized, returns 503.
+    """
+    global connector
+    # Prefer already-initialized class-level engine if present
+    engine = None
+    if DBConnector._engine is not None:
+        engine = DBConnector._engine
+    elif connector is not None and getattr(connector, "_engine", None) is not None:
+        engine = connector._engine
+
+    if engine is None:
+        raise HTTPException(status_code=503, detail="DB connector not initialized")
+
+    try:
+        with engine.connect() as conn:
+            # Use exec_driver_sql for a lightweight check that works across drivers
+            conn.exec_driver_sql("SELECT 1")
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB connection failed: {e}")
 
 
 @router.post("/projects", summary="Create or get project")
@@ -117,7 +163,16 @@ async def list_wells(project_id: int):
     try:
         with connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
-            return {"project_id": proj.project_id, "wells": proj.get_well_names()}
+            wells = []
+            for well in proj._orm_project.wells:
+                wells.append(
+                    {
+                        "id": str(well.well_id),
+                        "name": well.name,
+                        "uwi": well.uwi,
+                    }
+                )
+            return {"project_id": proj.project_id, "wells": wells}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -174,7 +229,11 @@ async def create_well(project_id: int, payload: dict):
 
 
 @router.post("/projects/{project_id}/read_las", summary="Upload LAS files into project")
-async def project_read_las(project_id: int, files: List[UploadFile] = File(...)):
+async def project_read_las(
+    project_id: int,
+    files: List[UploadFile] = File(...),
+    depth_uom: Optional[str] = Form("m"),
+):
     """Upload LAS files and add them into the project in the database."""
     global connector
     if connector is None:
@@ -189,7 +248,10 @@ async def project_read_las(project_id: int, files: List[UploadFile] = File(...))
 
     try:
         for f in files:
-            dest = upload_dir / f.filename
+            # Prefix uploaded filename with a UUID to avoid collisions when
+            # multiple uploads use the same original filename concurrently.
+            unique_name = f"{uuid4().hex}_{f.filename}"
+            dest = upload_dir / unique_name
             try:
                 with dest.open("wb") as buffer:
                     shutil.copyfileobj(f.file, buffer)
@@ -199,7 +261,8 @@ async def project_read_las(project_id: int, files: List[UploadFile] = File(...))
 
         with connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
-            proj.read_las(saved_paths)
+            # Pass depth unit of measurement to Project.read_las (defaults to 'm')
+            proj.read_las(saved_paths, depth_uom=depth_uom)
 
         return {
             "message": "Files uploaded and processed",
