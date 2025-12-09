@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS "formation_tops" (
     "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
     "name" TEXT NOT NULL,
     "depth" REAL NOT NULL,
-    UNIQUE("well_id", "name")
+    UNIQUE("well_id", "name", "depth")
 );
 
 -- -----------------------------------------------------------------------------

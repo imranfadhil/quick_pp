@@ -305,6 +305,20 @@ def frontend(dev, force_install, no_open):
         click.echo(f"Error: Frontend directory not found at {frontend_dir}")
         return
 
+    # Check if Node.js is installed
+    try:
+        node_check = subprocess.run(
+            ["node", "--version"], capture_output=True, text=True, timeout=5
+        )
+        if node_check.returncode != 0:
+            click.echo("Error: Node.js is not installed or not in PATH.")
+            click.echo("Please install Node.js from https://nodejs.org/")
+            return
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        click.echo("Error: Node.js is not installed or not in PATH.")
+        click.echo("Please install Node.js from https://nodejs.org/")
+        return
+
     # Check if running production build
     if not dev:
         build_dir = frontend_dir / "build"
@@ -453,31 +467,40 @@ def app(open):
             click.echo("Backend already running on localhost:6312")
 
         # Start frontend if available
+        # Check if Node.js is installed
+        try:
+            node_check = subprocess.run(
+                ["node", "--version"], capture_output=True, text=True, timeout=5
+            )
+            if node_check.returncode != 0:
+                click.echo("Error: Node.js is not installed or not in PATH.")
+                click.echo("Please install Node.js from https://nodejs.org/")
+                return
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            click.echo("Error: Node.js is not installed or not in PATH.")
+            click.echo("Please install Node.js from https://nodejs.org/")
+            return
+
         frontend_dir = FRONTEND_DIR
-        if not frontend_dir.exists():
-            click.echo(f"Frontend directory not found at {frontend_dir}")
+        build_dir = frontend_dir / "build"
+        if not build_dir.exists():
+            click.echo(
+                f"Frontend build not found at {build_dir}. Skipping frontend start."
+            )
         else:
-            build_dir = frontend_dir / "build"
-            if not build_dir.exists():
-                click.echo(
-                    f"Frontend build not found at {build_dir}. Skipping frontend start."
-                )
-            else:
-                click.echo(
-                    f"Starting frontend production server on port {FRONTEND_PORT}..."
-                )
+            click.echo(
+                f"Starting frontend production server on port {FRONTEND_PORT}..."
+            )
 
-                # Set environment variables for the production server
-                env = os.environ.copy()
-                env["PORT"] = str(FRONTEND_PORT)
-                env["HOST"] = "0.0.0.0"
+            # Set environment variables for the production server
+            env = os.environ.copy()
+            env["PORT"] = str(FRONTEND_PORT)
+            env["HOST"] = "0.0.0.0"
 
-                # Run the built Node.js server
-                cmd = ["node", "build/index.js"]
-                p_front = start_process(
-                    cmd, cwd=str(frontend_dir), shell=False, env=env
-                )
-                processes.append(p_front)
+            # Run the built Node.js server
+            cmd = ["node", "build/index.js"]
+            p_front = start_process(cmd, cwd=str(frontend_dir), shell=False, env=env)
+            processes.append(p_front)
 
         # Open browser(s) after launching processes (default behavior)
         try:

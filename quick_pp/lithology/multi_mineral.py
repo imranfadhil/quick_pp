@@ -1,12 +1,13 @@
-from scipy.optimize import minimize
-import numpy as np
-from typing import Dict, Optional, List, Tuple
-from tqdm import tqdm
-import pandas as pd
+from typing import Dict, List, Optional, Tuple
 
-from quick_pp.config import Config
+import numpy as np
+import pandas as pd
+from scipy.optimize import minimize
+from tqdm import tqdm
+
 from quick_pp import logger
-from quick_pp.porosity import neu_den_xplot_poro_pt, density_porosity
+from quick_pp.config import Config
+from quick_pp.porosity import density_porosity, neu_den_xplot_poro_pt
 
 
 class MultiMineral:
@@ -57,7 +58,7 @@ class MultiMineral:
         self.fluids = ["OIL", "GAS", "WATER"]
 
         # Define bounds for each mineral type
-        mineral_bounds = {mineral: (0, 1) for mineral in available_minerals}
+        mineral_bounds = dict.fromkeys(available_minerals, (0, 1))
 
         # Define bounds for fluid volumes (0 to 1 for each fluid)
         fluid_bounds = {"OIL": (0, 1), "GAS": (0, 1), "WATER": (0, 1)}

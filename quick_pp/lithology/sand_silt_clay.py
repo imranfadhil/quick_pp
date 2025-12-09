@@ -1,10 +1,11 @@
-import numpy as np
 import math
 from typing import Optional
 
-from quick_pp.utils import min_max_line, length_a_b, line_intersection, remove_outliers
-from quick_pp.config import Config
+import numpy as np
+
 from quick_pp import logger
+from quick_pp.config import Config
+from quick_pp.utils import length_a_b, line_intersection, min_max_line, remove_outliers
 
 
 class SandSiltClay:
@@ -127,7 +128,7 @@ class SandSiltClay:
         B = self.dry_silt_point
         C = self.dry_clay_point
         D = self.fluid_point
-        E = list(zip(nphi, rhob))
+        E = list(zip(nphi, rhob, strict=True))
 
         rock_len = length_a_b(A, C)
         res_len = length_a_b(A, B)
@@ -136,7 +137,7 @@ class SandSiltClay:
         vsand = np.empty(0)
         vsilt = np.empty(0)
         vcld = np.empty(0)
-        for i, point in enumerate(E):
+        for _, point in enumerate(E):
             var_pt = line_intersection((A, C), (D, point))
             proj_len = length_a_b(var_pt, A)
             vsand_pt, vsilt_pt, vcld_pt = self.lithology_chart(

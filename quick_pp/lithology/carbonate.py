@@ -1,10 +1,11 @@
-import numpy as np
-import pandas as pd
 from typing import Optional
 
-from quick_pp.utils import length_a_b, line_intersection
-from quick_pp.config import Config
+import numpy as np
+import pandas as pd
+
 from quick_pp import logger
+from quick_pp.config import Config
+from quick_pp.utils import length_a_b, line_intersection
 
 
 class Carbonate:
@@ -162,12 +163,12 @@ class Carbonate:
             A = self.dry_dolo_point
             C = self.dry_calc_point
         D = self.fluid_point
-        E = zip(nphi, rhob)
+        E = zip(nphi, rhob, strict=True)
         rocklithofrac = length_a_b(A, C)
 
         vlitho1 = np.empty(0)
         vlitho2 = np.empty(0)
-        for i, point in enumerate(E):
+        for _, point in enumerate(E):
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
             vfrac = projlithofrac / rocklithofrac
@@ -193,12 +194,12 @@ class Carbonate:
         A = (Config.MINERALS_LOG_VALUE["PEF_CALCITE"], self.dry_calc_point[1])
         C = (Config.MINERALS_LOG_VALUE["PEF_DOLOMITE"], self.dry_dolo_point[1])
         D = self.fluid_point
-        E = zip(pef, rhob)
+        E = zip(pef, rhob, strict=True)
         rocklithofrac = length_a_b(A, C)
 
         vcalc = np.empty(0)
         vdolo = np.empty(0)
-        for i, point in enumerate(E):
+        for _, point in enumerate(E):
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
             dolo_frac = projlithofrac / rocklithofrac

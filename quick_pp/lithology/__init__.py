@@ -1,5 +1,6 @@
-import numpy as np
 import statistics
+
+import numpy as np
 from scipy.signal import detrend
 from sklearn.preprocessing import MinMaxScaler
 
@@ -22,8 +23,10 @@ def shale_volume_larinov_tertiary(igr):
 
     """
     logger.debug("Calculating shale volume using Larinov's method for tertiary rocks")
-    vshale = 0.083 * (2**(3.7 * igr) - 1)
-    logger.debug(f"Tertiary shale volume range: {vshale.min():.3f} - {vshale.max():.3f}")
+    vshale = 0.083 * (2 ** (3.7 * igr) - 1)
+    logger.debug(
+        f"Tertiary shale volume range: {vshale.min():.3f} - {vshale.max():.3f}"
+    )
     return vshale
 
 
@@ -43,8 +46,10 @@ def shale_volume_larinov_older(igr):
 
     """
     logger.debug("Calculating shale volume using Larinov's method for older rocks")
-    vshale = 0.33 * (2**(2 * igr) - 1)
-    logger.debug(f"Older rocks shale volume range: {vshale.min():.3f} - {vshale.max():.3f}")
+    vshale = 0.33 * (2 ** (2 * igr) - 1)
+    logger.debug(
+        f"Older rocks shale volume range: {vshale.min():.3f} - {vshale.max():.3f}"
+    )
     return vshale
 
 

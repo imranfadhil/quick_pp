@@ -1,7 +1,7 @@
 from quick_pp import logger
 
 
-def choo_permeability(vclay, vsilt, phit, m=2, B=None, A=20e7, C=3):
+def choo_permeability(vclay, vsilt, phit, m=2, B=None, A=1.65e7, C=1.78):
     """Estimate permeability using Choo's equation. Suitable for shaly sand
     formations.
 
@@ -12,8 +12,8 @@ def choo_permeability(vclay, vsilt, phit, m=2, B=None, A=20e7, C=3):
         m (int, optional): Cementation exponent. Defaults to 2.
         B (float, optional): Constant derived from cementation and compaction factor.
                              If None, it is calculated as `m * ((2 / C) + 1) + 2`. Defaults to None.
-        A (float, optional): Constant based on `0.125 * rg**2 / 10`. Defaults to 20e7.
-        C (int, optional): Constant. Defaults to 3.
+        A (float, optional): Constant based on `0.125 * rg**2 / 10`. Defaults to 1.65e7.
+        C (float, optional): Constant. Defaults to 1.78.
 
     Returns:
         float: Choo's permeability in mD.

@@ -1,12 +1,13 @@
-import numpy as np
 import math
-import matplotlib.pyplot as plt
 from typing import Optional
 
-from quick_pp.utils import length_a_b, line_intersection, angle_between_lines
-from quick_pp.porosity import neu_den_xplot_poro
-from quick_pp.config import Config
+import matplotlib.pyplot as plt
+import numpy as np
+
 from quick_pp import logger
+from quick_pp.config import Config
+from quick_pp.porosity import neu_den_xplot_poro
+from quick_pp.utils import angle_between_lines, length_a_b, line_intersection
 
 
 class ThinBeds:
@@ -76,12 +77,12 @@ class ThinBeds:
         A = self.dry_sand_point
         C = self.dry_clay_point
         D = self.fluid_point
-        E = list(zip(nphi, rhob))
+        E = list(zip(nphi, rhob, strict=True))
         rocklithofrac = length_a_b(A, C)
 
         vsand = np.empty(0)
         vshale = np.empty(0)
-        for i, point in enumerate(E):
+        for _, point in enumerate(E):
             var_pt = line_intersection((A, C), (D, point))
             projlithofrac = length_a_b(var_pt, A)
             vsh_pt = projlithofrac / rocklithofrac
@@ -126,8 +127,8 @@ class ThinBeds:
         vsh_dis = np.empty(0)
         vsand_dis = np.empty(0)
         phit_sand = np.empty(0)
-        D = list(zip(vshale, phit))
-        for i, point in enumerate(D):
+        D = list(zip(vshale, phit, strict=True))
+        for _, point in enumerate(D):
             vsh_pt = point[0] + length_a_b(point, (point[0], 0)) * math.tan(
                 math.radians(theta_vsh_lam)
             )
@@ -273,10 +274,14 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
     ax.set_title("NPHI-RHOB Crossplot")
     ax.scatter(vsh, phit, c=np.arange(0, len(vsh)), cmap="rainbow", marker=".")
 
-    ax.plot(*zip(*vsh_lam_from_pt), label="Laminated", color="blue")
-    ax.plot(*zip(*vsh_dis_from_pt), label="Dispersed (pore filling)", color="green")
+    ax.plot(*zip(*vsh_lam_from_pt, strict=True), label="Laminated", color="blue")
     ax.plot(
-        *zip(*vsh_lower_envlope_from_pt),
+        *zip(*vsh_dis_from_pt, strict=True),
+        label="Dispersed (pore filling)",
+        color="green",
+    )
+    ax.plot(
+        *zip(*vsh_lower_envlope_from_pt, strict=True),
         label="Dispersed (grain replacing)",
         color="black",
     )
@@ -289,7 +294,12 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
             (A[0] + t * (B[0] - A[0]), A[1] + t * (B[1] - A[1])),
             (C[0] + t * (B[0] - C[0]), C[1] + t * (B[1] - C[1])),
         ]
-        ax.plot(*zip(*intermediate_line), linestyle="--", color="blue", alpha=0.75)
+        ax.plot(
+            *zip(*intermediate_line, strict=True),
+            linestyle="--",
+            color="blue",
+            alpha=0.75,
+        )
         ax.text(
             intermediate_line[0][0],
             intermediate_line[0][1] + 0.007,
@@ -308,7 +318,12 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
             (A[0] + t * (C[0] - A[0]), A[1] + t * (C[1] - A[1])),
             (B[0], B[1]),
         ]
-        ax.plot(*zip(*intermediate_line), linestyle="--", color="red", alpha=0.75)
+        ax.plot(
+            *zip(*intermediate_line, strict=True),
+            linestyle="--",
+            color="red",
+            alpha=0.75,
+        )
         ax.text(
             intermediate_line[0][0] - 0.03,
             intermediate_line[0][1],
