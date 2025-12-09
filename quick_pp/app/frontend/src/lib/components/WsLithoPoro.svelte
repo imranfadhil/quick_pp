@@ -39,6 +39,15 @@
   let siltLineAngle = 117;
   let depthMatching = false; // Disable depth matching for CPORE by default (use same axis)
   
+  // HC Correction state
+  let hcCorrAngle = 50;
+  let hcBuffer = 0.01;
+  let hcCorrected = false; // Whether HC correction has been applied
+  let hcCorrectionData: Array<{nphi: number; rhob: number}> = []; // Corrected NPHI/RHOB data
+  let useHCCorrected = false; // Whether to use corrected data for lithology/poro estimation
+  let saveLoadingHC = false;
+  let saveMessageHC: string | null = null;
+  
   // Calculate drySiltNphi based on siltLineAngle
   $: drySiltNphi = 1 - 1.68 * Math.tan((siltLineAngle - 90) * Math.PI / 180);
 
@@ -130,6 +139,24 @@
           size: 6
         },
         hovertemplate: 'NPHI: %{x}<br>RHOB: %{y}<extra></extra>'
+      });
+    }
+
+    // HC Corrected data points - show if correction has been applied
+    if (hcCorrected && hcCorrectionData && hcCorrectionData.length > 0) {
+      traces.push({
+        x: hcCorrectionData.map(d => d.nphi),
+        y: hcCorrectionData.map(d => d.rhob),
+        mode: 'markers',
+        type: 'scatter',
+        name: 'HC Corrected Data',
+        marker: {
+          color: 'red',
+          size: 6,
+          symbol: 'diamond',
+          opacity: 0.7
+        },
+        hovertemplate: 'NPHI (HC): %{x}<br>RHOB (HC): %{y}<extra></extra>'
       });
     }
 
@@ -416,6 +443,14 @@
 
     // build payload data: list of {nphi, rhob}
     const data: Array<{nphi:number; rhob:number}> = [];
+    
+    // If HC correction is available and enabled, use corrected data
+    if (useHCCorrected && hcCorrectionData && hcCorrectionData.length > 0) {
+      // Return corrected data
+      return hcCorrectionData;
+    }
+    
+    // Otherwise use original data
     for (const r of filteredRows) {
       // support different casing
       const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
@@ -439,6 +474,111 @@
       }
     }
     return data.sort((a, b) => a.depth - b.depth);
+  }
+
+  // Calculate HC correction angle based on fluid properties
+  function calcHCCorrectionAngle(rhoWater: number = 1.0, rhoHC: number = 0.8, HIHc: number = 0.9): number {
+    const corrAngle = Math.atan((rhoWater - rhoHC) / (1 - HIHc));
+    return 90 - (corrAngle * 180) / Math.PI;
+  }
+
+  // Apply HC correction via backend API
+  async function applyHCCorrection() {
+    const data = extractNphiRhob();
+    if (!data.length) {
+      error = 'No NPHI/RHOB data available in well rows';
+      return;
+    }
+    loading = true;
+    error = null;
+    try {
+      const payload = {
+        dry_sand_point: [Number(drySandNphi), Number(drySandRhob)],
+        dry_clay_point: [Number(dryClayNphi), Number(dryClayRhob)],
+        water_point: [Number(fluidNphi), Number(fluidRhob)],
+        corr_angle: Number(hcCorrAngle),
+        buffer: Number(hcBuffer),
+        data,
+      };
+      const res = await fetch(`${API_BASE}/quick_pp/qaqc/hc_correction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      hcCorrectionData = await res.json();
+      hcCorrected = true;
+      error = null;
+      // Re-render the ND plot to show corrected points
+      renderNdPlot();
+    } catch (e: any) {
+      console.warn('HC correction error', e);
+      error = String(e?.message ?? e);
+      hcCorrected = false;
+    } finally {
+      loading = false;
+    }
+  }
+
+  // Save corrected NPHI_HC and RHOB_HC to database
+  async function saveHCCorrected() {
+    if (!projectId || !wellName) {
+      error = 'Project and well must be selected before saving';
+      return;
+    }
+    if (!hcCorrectionData || hcCorrectionData.length === 0) {
+      error = 'No HC corrected data to save';
+      return;
+    }
+    saveLoadingHC = true;
+    saveMessageHC = null;
+    error = null;
+    try {
+      // Align corrected data with visibleRows depths
+      const filteredRows = visibleRows;
+      const rows: Array<Record<string, any>> = [];
+      let i = 0;
+      for (const r of filteredRows) {
+        const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
+        const rhob = Number(r.rhob ?? r.RHOB ?? r.Rhob ?? NaN);
+        const hasValidData = !isNaN(nphi) && !isNaN(rhob);
+        if (!hasValidData) continue;
+
+        const corrected = hcCorrectionData[i++] ?? { nphi, rhob };
+        const row: Record<string, any> = {
+          DEPTH: Number(r.depth ?? r.DEPTH ?? NaN),
+          NPHI_HC: Number(corrected.nphi ?? nphi),
+          RHOB_HC: Number(corrected.rhob ?? rhob)
+        };
+        rows.push(row);
+      }
+
+      if (!rows.length) {
+        throw new Error('No rows prepared for save');
+      }
+
+      const payload = { data: rows };
+      const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`;
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const resp = await res.json().catch(() => null);
+      saveMessageHC = resp && resp.message ? String(resp.message) : 'HC corrected data saved';
+      try {
+        window.dispatchEvent(new CustomEvent('qpp:data-updated', { detail: { projectId, wellName, kind: 'hc-correction' } }));
+      } catch (e) {
+        // ignore if environment doesn't support window dispatch (SSR)
+      }
+    } catch (e: any) {
+      console.warn('Save HC correction error', e);
+      saveMessageHC = null;
+      error = String(e?.message ?? e);
+    } finally {
+      saveLoadingHC = false;
+    }
   }
 
   async function runSSC() {
@@ -717,7 +857,7 @@
   $: if (plotDiv && (visibleRows || drySandNphi !== undefined || drySandRhob !== undefined || 
                      dryClayNphi !== undefined || dryClayRhob !== undefined || 
                      drySiltNphi !== undefined || fluidNphi !== undefined || 
-                     fluidRhob !== undefined || siltLineAngle !== undefined || depthFilter || zoneFilter)) {
+                     fluidRhob !== undefined || siltLineAngle !== undefined || depthFilter || zoneFilter || hcCorrected || hcCorrectionData)) {
     // call async render but don't await in reactive context
     renderNdPlot();
   }
@@ -785,131 +925,202 @@
             </div>
           </div>
 
-          <div class="font-medium text-sm mb-1">Lithology (VSAND / VSILT / VCLAY)</div>
-          <div class="bg-surface rounded p-2">
-            <button
-              class="btn px-3 py-1 text-sm font-semibold rounded-md bg-gray-900 text-white hover:bg-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-700"
-              onclick={runSSC}
-              disabled={loading}
-              style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
-              aria-label="Run lithology classification"
-              title="Run lithology classification"
-            >
-              Estimate Lithology
-            </button>
-            <button
-              class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
-              onclick={saveLitho}
-              disabled={loading || saveLoadingLitho}
-              style={(loading || saveLoadingLitho) ? 'opacity:0.5; pointer-events:none;' : ''}
-              aria-label="Save lithology"
-              title="Save lithology results to database"
-            >
-              {#if saveLoadingLitho}
-                Saving...
-              {:else}
-                Save Lithology
+		      <div class="px-2 py-2 border-t border-border/50 mt-2">
+            <div class="font-medium text-sm mb-3 mt-4">Hydrocarbon Correction</div>
+            <div class="bg-surface rounded p-2">
+              <div class="grid grid-cols-2 gap-2 mb-3">
+                <div>
+                  <label class="text-xs" for="hc-corr-angle">HC Correction Angle (°)</label>
+                  <input id="hc-corr-angle" class="input" type="number" step="0.1" bind:value={hcCorrAngle} />
+                </div>
+                <div>
+                  <label class="text-xs" for="hc-buffer">HC Buffer</label>
+                  <input id="hc-buffer" class="input" type="number" step="0.001" bind:value={hcBuffer} />
+                </div>
+              </div>
+
+              <div class="flex gap-2 mb-3">
+                <button
+                  class="btn px-3 py-1 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-500"
+                  onclick={applyHCCorrection}
+                  disabled={loading}
+                  style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
+                  aria-label="Apply HC correction"
+                  title="Apply hydrocarbon correction to NPHI/RHOB data"
+                >
+                  {#if loading}
+                    Applying...
+                  {:else}
+                    Apply HC Correction
+                  {/if}
+                </button>
+                <button
+                  class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
+                  onclick={saveHCCorrected}
+                  disabled={loading || saveLoadingHC || !hcCorrected}
+                  style={(loading || saveLoadingHC || !hcCorrected) ? 'opacity:0.5; pointer-events:none;' : ''}
+                  aria-label="Save HC corrected data"
+                  title="Save corrected NPHI_HC and RHOB_HC to database"
+                >
+                  {#if saveLoadingHC}
+                    Saving...
+                  {:else}
+                    Save HC Data
+                  {/if}
+                </button>
+              </div>
+
+              <div class="flex items-center">
+                <input 
+                  type="checkbox" 
+                  id="use-hc-corrected" 
+                  class="mr-2" 
+                  bind:checked={useHCCorrected}
+                  disabled={loading || !hcCorrected}
+                />
+                <label for="use-hc-corrected" class="text-sm cursor-pointer {loading || !hcCorrected ? 'opacity-50' : ''}">
+                  Use HC corrected NPHI/RHOB for lithology and porosity estimation
+                </label>
+              </div>
+
+              {#if saveMessageHC}
+                <div class="text-xs text-green-600 mt-2">{saveMessageHC}</div>
               {/if}
-            </button>
-            <div class="h-[220px] w-full overflow-hidden">
-              {#if lithoChartData.length > 0}
-                <div bind:this={lithoPlotDiv} class="w-full h-[220px]"></div>
-              {:else}
-                <div class="flex items-center justify-center h-full text-sm text-gray-500">
-                  No lithology data available. Click "Estimate Lithology" first.
+
+              {#if hcCorrected}
+                <div class="text-xs text-muted-foreground mt-2">
+                  HC correction applied. {hcCorrectionData.length} points corrected. Red diamond markers show corrected data in plot above.
                 </div>
               {/if}
             </div>
-            {#if saveMessageLitho}
-              <div class="text-xs text-green-600 mt-2">{saveMessageLitho}</div>
-            {/if}
           </div>
-        </div>
 
-        <div>
-          <div class="font-medium text-sm mb-1">Porosity (PHIT)</div>
-          <div class="bg-surface rounded p-2">
-            <button
-                class="btn px-3 py-1 text-sm font-medium rounded-md bg-gray-800 text-gray-100 hover:bg-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-600"
-                onclick={runPoro}
+		      <div class="px-2 py-2 border-t border-border/50 mt-2">
+            <div class="font-medium text-sm mb-1">Lithology (VSAND / VSILT / VCLAY)</div>
+            <div class="bg-surface rounded p-2">
+              <button
+                class="btn px-3 py-1 text-sm font-semibold rounded-md bg-gray-900 text-white hover:bg-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-700"
+                onclick={runSSC}
                 disabled={loading}
                 style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
-                aria-label="Estimate porosity"
-                title="Estimate porosity"
+                aria-label="Run lithology classification"
+                title="Run lithology classification"
               >
-                Estimate Porosity
+                Estimate Lithology
               </button>
               <button
                 class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
-                onclick={savePoro}
-                disabled={loading || saveLoadingPoro}
-                style={(loading || saveLoadingPoro) ? 'opacity:0.5; pointer-events:none;' : ''}
-                aria-label="Save porosity"
-                title="Save porosity results to database"
+                onclick={saveLitho}
+                disabled={loading || saveLoadingLitho}
+                style={(loading || saveLoadingLitho) ? 'opacity:0.5; pointer-events:none;' : ''}
+                aria-label="Save lithology"
+                title="Save lithology results to database"
               >
-                {#if saveLoadingPoro}
+                {#if saveLoadingLitho}
                   Saving...
                 {:else}
-                  Save Porosity
+                  Save Lithology
                 {/if}
               </button>
-            <div class="flex items-center ml-2">
-              <input 
-                type="checkbox" 
-                id="depth-matching-poro" 
-                class="mr-2" 
-                bind:checked={depthMatching}
-                disabled={loading}
-              />
-              <label for="depth-matching-poro" class="text-sm cursor-pointer {loading ? 'opacity-50' : ''}">
-                Depth Matching
-              </label>
-            </div>
-            <div class="h-[220px] w-full overflow-hidden">
-              {#if poroChartData.length > 0 || cporeData.length > 0}
-                <div bind:this={poroPlotDiv} class="w-full h-[220px]"></div>
-              {:else}
-                <div class="flex items-center justify-center h-full text-sm text-gray-500">
-                  No porosity data available. Click "Estimate Porosity" first.
-                </div>
+              <div class="h-[220px] w-full overflow-hidden">
+                {#if lithoChartData.length > 0}
+                  <div bind:this={lithoPlotDiv} class="w-full h-[220px]"></div>
+                {:else}
+                  <div class="flex items-center justify-center h-full text-sm text-gray-500">
+                    No lithology data available. Click "Estimate Lithology" first.
+                  </div>
+                {/if}
+              </div>
+              {#if saveMessageLitho}
+                <div class="text-xs text-green-600 mt-2">{saveMessageLitho}</div>
               {/if}
             </div>
-            {#if saveMessagePoro}
-              <div class="text-xs text-green-600 mt-2">{saveMessagePoro}</div>
-            {/if}
           </div>
-          
-          <div class="text-xs text-muted-foreground space-y-1 mt-2">
-            {#if poroChartData.length > 0}
-              {@const phits = poroChartData.map(d => d.PHIT)}
-              {@const avgPhit = phits.reduce((a, b) => a + b, 0) / phits.length}
-              {@const minPhit = Math.min(...phits)}
-              {@const maxPhit = Math.max(...phits)}
-              <div>
-                <strong>Calculated PHIT:</strong>
-                Avg: {avgPhit.toFixed(3)} | Min: {minPhit.toFixed(3)} | Max: {maxPhit.toFixed(3)} | Count: {phits.length}
+
+          <div>
+            <div class="font-medium text-sm mb-1">Porosity (PHIT)</div>
+            <div class="bg-surface rounded p-2">
+              <button
+                  class="btn px-3 py-1 text-sm font-medium rounded-md bg-gray-800 text-gray-100 hover:bg-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-600"
+                  onclick={runPoro}
+                  disabled={loading}
+                  style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
+                  aria-label="Estimate porosity"
+                  title="Estimate porosity"
+                >
+                  Estimate Porosity
+                </button>
+                <button
+                  class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
+                  onclick={savePoro}
+                  disabled={loading || saveLoadingPoro}
+                  style={(loading || saveLoadingPoro) ? 'opacity:0.5; pointer-events:none;' : ''}
+                  aria-label="Save porosity"
+                  title="Save porosity results to database"
+                >
+                  {#if saveLoadingPoro}
+                    Saving...
+                  {:else}
+                    Save Porosity
+                  {/if}
+                </button>
+              <div class="flex items-center ml-2">
+                <input 
+                  type="checkbox" 
+                  id="depth-matching-poro" 
+                  class="mr-2" 
+                  bind:checked={depthMatching}
+                  disabled={loading}
+                />
+                <label for="depth-matching-poro" class="text-sm cursor-pointer {loading ? 'opacity-50' : ''}">
+                  Depth Matching
+                </label>
               </div>
-            {:else}
-              <div><strong>Calculated PHIT:</strong> No data</div>
-            {/if}
+              <div class="h-[220px] w-full overflow-hidden">
+                {#if poroChartData.length > 0 || cporeData.length > 0}
+                  <div bind:this={poroPlotDiv} class="w-full h-[220px]"></div>
+                {:else}
+                  <div class="flex items-center justify-center h-full text-sm text-gray-500">
+                    No porosity data available. Click "Estimate Porosity" first.
+                  </div>
+                {/if}
+              </div>
+              {#if saveMessagePoro}
+                <div class="text-xs text-green-600 mt-2">{saveMessagePoro}</div>
+              {/if}
+            </div>
             
-            {#if cporeData.length > 0}
-              {@const cpores = cporeData.map(d => d.CPORE)}
-              {@const avgCpore = cpores.reduce((a, b) => a + b, 0) / cpores.length}
-              {@const minCpore = Math.min(...cpores)}
-              {@const maxCpore = Math.max(...cpores)}
-              <div>
-                <strong>Core Porosity (CPORE):</strong>
-                <span class="inline-block w-2 h-2 bg-red-600 rounded-full"></span>
-                Avg: {avgCpore.toFixed(3)} | Min: {minCpore.toFixed(3)} | Max: {maxCpore.toFixed(3)} | Count: {cpores.length}
-              </div>
-            {:else}
-              <div class="text-gray-500">No core porosity data (CPORE) found</div>
-            {/if}
+            <div class="text-xs text-muted-foreground space-y-1 mt-2">
+              {#if poroChartData.length > 0}
+                {@const phits = poroChartData.map(d => d.PHIT)}
+                {@const avgPhit = phits.reduce((a, b) => a + b, 0) / phits.length}
+                {@const minPhit = Math.min(...phits)}
+                {@const maxPhit = Math.max(...phits)}
+                <div>
+                  <strong>Calculated PHIT:</strong>
+                  Avg: {avgPhit.toFixed(3)} | Min: {minPhit.toFixed(3)} | Max: {maxPhit.toFixed(3)} | Count: {phits.length}
+                </div>
+              {:else}
+                <div><strong>Calculated PHIT:</strong> No data</div>
+              {/if}
+              
+              {#if cporeData.length > 0}
+                {@const cpores = cporeData.map(d => d.CPORE)}
+                {@const avgCpore = cpores.reduce((a, b) => a + b, 0) / cpores.length}
+                {@const minCpore = Math.min(...cpores)}
+                {@const maxCpore = Math.max(...cpores)}
+                <div>
+                  <strong>Core Porosity (CPORE):</strong>
+                  <span class="inline-block w-2 h-2 bg-red-600 rounded-full"></span>
+                  Avg: {avgCpore.toFixed(3)} | Min: {minCpore.toFixed(3)} | Max: {maxCpore.toFixed(3)} | Count: {cpores.length}
+                </div>
+              {:else}
+                <div class="text-gray-500">No core porosity data (CPORE) found</div>
+              {/if}
+            </div>
           </div>
         </div>
       </div>
-
     </div>
   {:else}
     <div class="text-sm">Select a well.</div>

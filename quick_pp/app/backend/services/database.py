@@ -1,15 +1,16 @@
 import os
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from typing import List, Optional
-from pathlib import Path
-from uuid import uuid4
 import shutil
+from pathlib import Path
+from typing import List, Optional
+from uuid import uuid4
 
 import pandas as pd
-from quick_pp.database.db_connector import DBConnector
-from quick_pp.database import objects as db_objects
-from quick_pp.database import models as db_models
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
+
+from quick_pp.database import models as db_models
+from quick_pp.database import objects as db_objects
+from quick_pp.database.db_connector import DBConnector
 
 router = APIRouter(prefix="/database", tags=["Database"])
 
@@ -46,7 +47,7 @@ async def init_db(payload: dict):
                 except Exception as e:
                     raise HTTPException(
                         status_code=500, detail=f"Failed to setup DB: {e}"
-                    )
+                    ) from e
             return {
                 "message": "DB connector already initialized",
                 "db_url": str(connector._engine.url),
@@ -57,7 +58,7 @@ async def init_db(payload: dict):
         if setup:
             connector.setup_db()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to init DB: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to init DB: {e}") from e
 
     return {"message": "DB connector initialized", "db_url": str(connector._engine.url)}
 
@@ -86,7 +87,7 @@ async def health_check():
             conn.exec_driver_sql("SELECT 1")
         return {"status": "ok"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB connection failed: {e}")
+        raise HTTPException(status_code=500, detail=f"DB connection failed: {e}") from e
 
 
 @router.post("/projects", summary="Create or get project")
@@ -123,7 +124,9 @@ async def create_project(payload: dict):
             # session.commit() handled by connector.get_session
             return {"project_id": proj.project_id, "name": proj.name}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create project: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create project: {e}"
+        ) from e
 
 
 @router.get("/projects", summary="List projects")
@@ -148,7 +151,9 @@ async def list_projects():
                 for r in rows
             ]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list projects: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list projects: {e}"
+        ) from e
 
 
 @router.get("/projects/{project_id}/wells", summary="List wells in project")
@@ -174,9 +179,9 @@ async def list_wells(project_id: int):
                 )
             return {"project_id": proj.project_id, "wells": wells}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list wells: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list wells: {e}") from e
 
 
 @router.post("/projects/{project_id}/wells", summary="Create a new well in a project")
@@ -223,9 +228,11 @@ async def create_well(project_id: int, payload: dict):
             well_obj.save()
             return {"well_name": well_obj.name, "well_id": well_obj.well_id}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create well: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create well: {e}"
+        ) from e
 
 
 @router.post("/projects/{project_id}/read_las", summary="Upload LAS files into project")
@@ -270,11 +277,11 @@ async def project_read_las(
         }
 
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to read LAS into project: {e}"
-        )
+        ) from e
 
 
 @router.put(
@@ -354,8 +361,10 @@ async def save_well_data(project_id: int, well_name: str, payload: dict):
         return {"message": "Well data saved", "rows": len(df)}
 
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save well data: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to save well data: {e}"
+        ) from e

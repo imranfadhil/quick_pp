@@ -1,23 +1,24 @@
-import pandas as pd
-from fastapi import APIRouter, HTTPException, Query
-from typing import List, Dict, Any, Optional
-
-from . import database
-from quick_pp.database import objects as db_objects
-from sqlalchemy import select
-from fastapi import Body, UploadFile, File
 import csv
 import io
+import math
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
+from sqlalchemy import select
+
 from quick_pp.core_analysis import (
-    fit_poroperm_curve,
     auto_j_params,
-    sw_shf_leverett_j,
+    fit_poroperm_curve,
     leverett_j,
     normalize_sw,
+    sw_shf_leverett_j,
 )
+from quick_pp.database import objects as db_objects
 from quick_pp.rock_type import calc_fzi, rock_typing
-import numpy as np
-import math
+
+from . import database
 
 
 # Sanitize lists for JSON serialization: convert numpy/pandas types
@@ -92,11 +93,11 @@ def list_formation_tops_project(
                     continue
             return {"tops": all_rows}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to list formation tops: {e}"
-        )
+        ) from e
 
 
 @project_router.post(
@@ -137,11 +138,11 @@ def add_formation_tops_project(
                 ]
             }
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to add formation tops: {e}"
-        )
+        ) from e
 
 
 @project_router.delete(
@@ -176,11 +177,11 @@ def delete_formation_top_project(
             session.delete(orm_top)
             return {"deleted": top_name}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to delete formation top: {e}"
-        )
+        ) from e
 
 
 @project_router.post(
@@ -196,7 +197,7 @@ def formation_tops_preview_project(
     try:
         content = file.file.read().decode(errors="ignore")
         reader = csv.reader(io.StringIO(content))
-        rows = [r for r in reader]
+        rows = list(reader)
         if not rows:
             return {"preview": [], "headers": []}
         headers = [h.strip() for h in rows[0]]
@@ -229,7 +230,9 @@ def formation_tops_preview_project(
         }
         return {"preview": preview, "headers": headers, "detected": detected}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse CSV preview: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to parse CSV preview: {e}"
+        ) from e
 
 
 @project_router.get(
@@ -262,11 +265,11 @@ def list_fluid_contacts_project(
                     continue
             return {"fluid_contacts": all_rows}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to list fluid contacts: {e}"
-        )
+        ) from e
 
 
 @project_router.post(
@@ -301,11 +304,11 @@ def add_fluid_contacts_project(
             well.add_fluid_contacts(contacts)
             return {"created": contacts}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to add fluid contacts: {e}"
-        )
+        ) from e
 
 
 @project_router.get(
@@ -338,11 +341,11 @@ def list_pressure_tests_project(
                     continue
             return {"pressure_tests": all_rows}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to list pressure tests: {e}"
-        )
+        ) from e
 
 
 @project_router.post(
@@ -377,11 +380,11 @@ def add_pressure_tests_project(
             well.add_pressure_tests(tests)
             return {"created": tests}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to add pressure tests: {e}"
-        )
+        ) from e
 
 
 @project_router.get(
@@ -426,9 +429,11 @@ def list_core_samples_project(project_id: int, well_name: Optional[str] = Query(
                     continue
             return {"core_samples": all_rows}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list core samples: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list core samples: {e}"
+        ) from e
 
 
 @project_router.post(
@@ -472,9 +477,11 @@ def add_core_sample_project(
                 "status": "created_or_updated",
             }
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add core sample: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to add core sample: {e}"
+        ) from e
 
 
 @project_router.get(
@@ -519,9 +526,11 @@ def get_core_sample_project(
             }
             return {"core_sample": sample_out}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get core sample: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get core sample: {e}"
+        ) from e
 
 
 @project_router.get(
@@ -571,9 +580,9 @@ def list_rca_project(project_id: int, well_name: Optional[str] = Query(None)):
                     continue
             return {"rca": rows}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list RCA: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list RCA: {e}") from e
 
 
 @project_router.post(
@@ -615,9 +624,9 @@ def add_rca_project(
                 "status": "measurements_added",
             }
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add RCA: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add RCA: {e}") from e
 
 
 @project_router.get(
@@ -686,9 +695,9 @@ def list_scal_project(project_id: int, well_name: Optional[str] = Query(None)):
                     continue
             return {"relperm": relperm_rows, "pc": pc_rows}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list SCAL: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list SCAL: {e}") from e
 
 
 @project_router.post(
@@ -728,9 +737,9 @@ def add_scal_project(
             )
             return {"sample_name": payload["sample_name"], "status": "scal_added"}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add SCAL: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add SCAL: {e}") from e
 
 
 @project_router.get("/fzi_data", summary="Get FZI data for plotting")
@@ -885,12 +894,14 @@ async def get_fzi_data(project_id: int):
             }
 
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except HTTPException:
         # Preserve explicit HTTPExceptions raised inside the handler (e.g., 404s)
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get FZI data: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get FZI data: {e}"
+        ) from e
 
 
 @project_router.get("/poroperm_fits", summary="Get poro-perm fits per rock flag")
@@ -973,7 +984,7 @@ async def get_poroperm_fits(project_id: int):
             from collections import defaultdict
 
             groups = defaultdict(list)
-            for phit, perm, rf in zip(all_phit, all_perm, all_rock_flags):
+            for phit, perm, rf in zip(all_phit, all_perm, all_rock_flags, strict=True):
                 groups[rf].append((phit, perm))
 
             # Fit for each group
@@ -991,11 +1002,13 @@ async def get_poroperm_fits(project_id: int):
             return {"fits": fits}
 
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get poroperm fits: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get poroperm fits: {e}"
+        ) from e
 
 
 @project_router.post("/save_rock_flags", summary="Save rock flags for project wells")
@@ -1061,11 +1074,13 @@ async def save_rock_flags(project_id: int, payload: dict):
         }
 
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save rock flags: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to save rock flags: {e}"
+        ) from e
 
 
 @project_router.post(
@@ -1130,13 +1145,13 @@ async def save_perm_trans(project_id: int, payload: dict):
         }
 
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to save perm transforms: {e}"
-        )
+        ) from e
 
 
 @project_router.get("/j_data", summary="Get J data for plotting")
@@ -1186,7 +1201,7 @@ async def get_j_data(project_id: int, cutoffs: str = Query("0.1,1.0,3.0")):
                 if not isinstance(core_data, dict):
                     continue
 
-                for sample_name, sample in core_data.items():
+                for _, sample in core_data.items():
                     depth = sample.get("depth")
                     if depth is None:
                         continue
@@ -1278,11 +1293,11 @@ async def get_j_data(project_id: int, cutoffs: str = Query("0.1,1.0,3.0")):
             }
 
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get J data: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get J data: {e}") from e
 
 
 @project_router.post("/compute_j_fits", summary="Compute J fits per rock flag")
@@ -1355,11 +1370,13 @@ async def compute_j_fits(payload: dict):
         return fits
 
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to compute J fits: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to compute J fits: {e}"
+        ) from e
 
 
 @project_router.post("/compute_shf", summary="Compute SHF for project data")
@@ -1424,7 +1441,9 @@ async def compute_shf(payload: dict):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to compute SHF: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to compute SHF: {e}"
+        ) from e
 
 
 @project_router.post("/save_shf", summary="Save SHF for project wells")
@@ -1487,8 +1506,8 @@ async def save_shf(project_id: int, payload: dict):
         }
 
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save SHF: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save SHF: {e}") from e

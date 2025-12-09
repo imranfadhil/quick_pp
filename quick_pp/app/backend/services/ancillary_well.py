@@ -1,16 +1,17 @@
-from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Any, Optional
-import json
-import pandas as pd
-import numpy as np
-import math
-
-from . import database
-from quick_pp.database import objects as db_objects
-from sqlalchemy import select
-from fastapi import Body, UploadFile, File
 import csv
 import io
+import json
+import math
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from sqlalchemy import select
+
+from quick_pp.database import objects as db_objects
+
+from . import database
 
 router = APIRouter(
     prefix="/database/projects/{project_id}/wells/{well_name}",
@@ -33,11 +34,11 @@ def list_formation_tops(project_id: int, well_name: str):
             tops_df = well.get_formation_tops()
             return {"tops": tops_df.to_dict(orient="records")}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to list formation tops: {e}"
-        )
+        ) from e
 
 
 @router.post("/formation_tops", summary="Add or update formation tops for a well")
@@ -70,11 +71,11 @@ def add_formation_tops(
                 ]
             }
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to add formation tops: {e}"
-        )
+        ) from e
 
 
 @router.delete("/formation_tops/{top_name}", summary="Delete a formation top by name")
@@ -100,11 +101,11 @@ def delete_formation_top(project_id: int, well_name: str, top_name: str):
             session.delete(orm_top)
             return {"deleted": top_name}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to delete formation top: {e}"
-        )
+        ) from e
 
 
 @router.get("/fluid_contacts", summary="List fluid contacts for a well")
@@ -121,11 +122,11 @@ def list_fluid_contacts(project_id: int, well_name: str):
             df = well.get_fluid_contacts()
             return {"fluid_contacts": df.to_dict(orient="records")}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to list fluid contacts: {e}"
-        )
+        ) from e
 
 
 @router.post("/fluid_contacts", summary="Add or update fluid contacts for a well")
@@ -151,11 +152,11 @@ def add_fluid_contacts(
             well.add_fluid_contacts(contacts)
             return {"created": contacts}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to add fluid contacts: {e}"
-        )
+        ) from e
 
 
 @router.get("/pressure_tests", summary="List pressure tests for a well")
@@ -172,11 +173,11 @@ def list_pressure_tests(project_id: int, well_name: str):
             df = well.get_pressure_tests()
             return {"pressure_tests": df.to_dict(orient="records")}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to list pressure tests: {e}"
-        )
+        ) from e
 
 
 @router.post("/pressure_tests", summary="Add or update pressure tests for a well")
@@ -202,11 +203,11 @@ def add_pressure_tests(
             well.add_pressure_tests(tests)
             return {"created": tests}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to add pressure tests: {e}"
-        )
+        ) from e
 
 
 @router.post(
@@ -225,7 +226,7 @@ def formation_tops_preview(
     try:
         content = file.file.read().decode(errors="ignore")
         reader = csv.reader(io.StringIO(content))
-        rows = [r for r in reader]
+        rows = list(reader)
         if not rows:
             return {"preview": [], "headers": []}
         headers = [h.strip() for h in rows[0]]
@@ -258,7 +259,9 @@ def formation_tops_preview(
         }
         return {"preview": preview, "headers": headers, "detected": detected}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse CSV preview: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to parse CSV preview: {e}"
+        ) from e
 
 
 @router.get("/core_samples", summary="List core samples for a well")
@@ -283,9 +286,11 @@ def list_core_samples(project_id: int, well_name: str):
             ]
             return {"core_samples": summaries}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list core samples: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list core samples: {e}"
+        ) from e
 
 
 @router.get("/data", summary="Get top-to-bottom well data (rows of logs)")
@@ -362,9 +367,11 @@ def get_well_top_to_bottom_data(
 
             return records
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get well data: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get well data: {e}"
+        ) from e
 
 
 @router.get(
@@ -569,11 +576,11 @@ def get_well_data_merged(
                 records.append({k: _to_py(v) for k, v in r.items()})
             return records
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to produce merged data: {e}"
-        )
+        ) from e
 
 
 @router.get("/rca", summary="List core point measurements (RCA) for a well")
@@ -598,9 +605,9 @@ def list_rca(project_id: int, well_name: str):
                         rows.append(r)
             return {"rca": rows}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list RCA: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list RCA: {e}") from e
 
 
 @router.post("/rca", summary="Add RCA (core point measurements) for a sample")
@@ -630,9 +637,9 @@ def add_rca(project_id: int, well_name: str, payload: Dict[str, Any] = Body(...)
                 "status": "measurements_added",
             }
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add RCA: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add RCA: {e}") from e
 
 
 @router.get("/scal", summary="List SCAL (relperm & capillary) data for a well")
@@ -663,9 +670,9 @@ def list_scal(project_id: int, well_name: str):
                         pc_rows.append(p)
             return {"relperm": relperm_rows, "pc": pc_rows}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list SCAL: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list SCAL: {e}") from e
 
 
 @router.post("/scal", summary="Add SCAL data for a sample (relperm and/or capillary)")
@@ -693,9 +700,9 @@ def add_scal(project_id: int, well_name: str, payload: Dict[str, Any] = Body(...
             )
             return {"sample_name": payload["sample_name"], "status": "scal_added"}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add SCAL: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add SCAL: {e}") from e
 
 
 @router.get("/core_samples/{sample_name}", summary="Get core sample details by name")
@@ -729,9 +736,11 @@ def get_core_sample(project_id: int, well_name: str, sample_name: str):
             }
             return {"core_sample": sample_out}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get core sample: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get core sample: {e}"
+        ) from e
 
 
 @router.post("/core_samples", summary="Add or update a core sample with measurements")
@@ -773,6 +782,8 @@ def add_core_sample(
                 "status": "created_or_updated",
             }
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add core sample: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to add core sample: {e}"
+        ) from e
