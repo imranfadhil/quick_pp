@@ -1,28 +1,27 @@
-import pandas as pd
 import os
-from typing import Optional, List, Dict, Any
-from functools import lru_cache
+from typing import Any, Dict, List, Optional
 
-from sqlalchemy.orm import Session, selectinload
+import pandas as pd
 from sqlalchemy import select, text
+from sqlalchemy.orm import Session, selectinload
 
-import quick_pp.las_handler as las
-from quick_pp.config import Config
 from quick_pp import logger
+from quick_pp.config import Config
 from quick_pp.database.models import (
-    Project as ORMProject,
-    Well as ORMWell,
-    Curve as ORMCurve,
-    CurveData as ORMCurveData,  # , User as ORMUser
-    FormationTop as ORMFormationTop,
-    FluidContact as ORMFluidContact,
-    PressureTest as ORMPressureTest,
-    CoreSample as ORMCoreSample,
-    CoreMeasurement as ORMCoreMeasurement,
-    RelativePermeability as ORMRelativePermeability,
-    WellSurvey as ORMWellSurvey,
     CapillaryPressure as ORMCapillaryPressure,
+    CoreMeasurement as ORMCoreMeasurement,
+    CoreSample as ORMCoreSample,
+    Curve as ORMCurve,
+    CurveData as ORMCurveData,
+    FluidContact as ORMFluidContact,
+    FormationTop as ORMFormationTop,
+    PressureTest as ORMPressureTest,
+    Project as ORMProject,
+    RelativePermeability as ORMRelativePermeability,
+    Well as ORMWell,
+    WellSurvey as ORMWellSurvey,
 )
+import quick_pp.las_handler as las
 
 
 class Project(object):
@@ -681,13 +680,13 @@ class Well(object):
             if is_numeric:
                 curve_data_points = [
                     ORMCurveData(depth=depth, value_numeric=value)
-                    for depth, value in zip(parsed_data.index, values)
+                    for depth, value in zip(parsed_data.index, values, strict=True)
                     if pd.notna(value)
                 ]
             else:
                 curve_data_points = [
                     ORMCurveData(depth=depth, value_text=value)
-                    for depth, value in zip(parsed_data.index, values)
+                    for depth, value in zip(parsed_data.index, values, strict=True)
                     if pd.notna(value)
                 ]
             orm_curve.data.extend(curve_data_points)
@@ -754,17 +753,96 @@ class Well(object):
             if is_numeric:
                 curve_data_points = [
                     ORMCurveData(depth=depth, value_numeric=value)
-                    for depth, value in zip(data.index, values)
+                    for depth, value in zip(data.index, values, strict=True)
                     if pd.notna(value)
                 ]
             else:
                 curve_data_points = [
                     ORMCurveData(depth=depth, value_text=value)
-                    for depth, value in zip(data.index, values)
+                    for depth, value in zip(data.index, values, strict=True)
                     if pd.notna(value)
                 ]
             orm_curve.data.extend(curve_data_points)
         logger.debug(f"Updated {len(data.columns)} curves for well '{self.name}'.")
+
+    def add_curve_data(
+        self,
+        mnemonic: str,
+        depth_value_map: Dict[float, Any],
+        unit: Optional[str] = None,
+    ):
+        """Adds or updates curve data from a dictionary mapping depths to values.
+
+        This is a convenience method for adding curve data when you have
+        a dictionary of depth-value pairs (e.g., {100.5: 2500.3, 101.0: 2501.2})
+        rather than a full DataFrame.
+
+        Args:
+            mnemonic (str): The curve mnemonic (e.g., 'TVD', 'RES_DEPTH')
+            depth_value_map (Dict[float, Any]): Dictionary mapping depths to values
+            unit (Optional[str]): The unit for this curve (e.g., 'm', 'ft')
+        """
+        if not depth_value_map:
+            logger.warning(f"No data provided for curve '{mnemonic}'")
+            return
+
+        logger.debug(
+            f"Adding curve data for '{mnemonic}' with {len(depth_value_map)} points"
+        )
+
+        # Determine data type
+        sample_value = next(iter(depth_value_map.values()))
+        is_numeric = isinstance(sample_value, (int, float)) and not isinstance(
+            sample_value, bool
+        )
+        data_type = "numeric" if is_numeric else "text"
+
+        # Find or create the curve
+        orm_curve = next(
+            (c for c in self._orm_well.curves if c.mnemonic == mnemonic), None
+        )
+        if not orm_curve:
+            logger.debug(f"Creating new curve '{mnemonic}' for well '{self.name}'")
+            orm_curve = ORMCurve(
+                well_id=self.well_id, mnemonic=mnemonic, unit=unit, data_type=data_type
+            )
+            self._orm_well.curves.append(orm_curve)
+        else:
+            # Update unit if provided
+            if unit:
+                orm_curve.unit = unit
+            orm_curve.data_type = data_type
+            # Delete existing data points for these depths
+            depths_to_update = list(depth_value_map.keys())
+            data_points_to_delete = (
+                self.db_session.query(ORMCurveData)
+                .filter(
+                    ORMCurveData.curve_id == orm_curve.curve_id,
+                    ORMCurveData.depth.in_(depths_to_update),
+                )
+                .all()
+            )
+            for data_point in data_points_to_delete:
+                self.db_session.delete(data_point)
+            self.db_session.flush()
+
+        # Add new data points
+        if is_numeric:
+            curve_data_points = [
+                ORMCurveData(depth=depth, value_numeric=value)
+                for depth, value in depth_value_map.items()
+                if value is not None
+            ]
+        else:
+            curve_data_points = [
+                ORMCurveData(depth=depth, value_text=str(value))
+                for depth, value in depth_value_map.items()
+                if value is not None
+            ]
+        orm_curve.data.extend(curve_data_points)
+        logger.debug(
+            f"Added {len(curve_data_points)} data points for curve '{mnemonic}'"
+        )
 
     def update_config(self, config: dict):
         """Updates the in-memory well configuration from a dictionary.
@@ -828,7 +906,7 @@ class Well(object):
             c.mnemonic,
             COALESCE(CAST(cd.value_numeric AS TEXT), cd.value_text) as value
         FROM curve_data cd
-        JOIN curves c ON cd.curve_id = c.curve_id  
+        JOIN curves c ON cd.curve_id = c.curve_id 
         WHERE c.well_id = :well_id
         ORDER BY cd.depth, c.mnemonic
         """)
@@ -929,7 +1007,7 @@ class Well(object):
             c.mnemonic,
             COALESCE(CAST(cd.value_numeric AS TEXT), cd.value_text) as value
         FROM curve_data cd
-        JOIN curves c ON cd.curve_id = c.curve_id  
+        JOIN curves c ON cd.curve_id = c.curve_id 
         WHERE c.well_id = :well_id 
         AND c.mnemonic IN ({placeholders})
         ORDER BY cd.depth
@@ -999,19 +1077,16 @@ class Well(object):
         """
         # Create cache key based on well and last update time
         cache_key = f"{self.well_id}_{self._orm_well.updated_at}"
-        return self._get_data_internal(cache_key)
 
-    @lru_cache(maxsize=100)
-    def _get_data_internal(self, cache_key: str) -> pd.DataFrame:
-        """Internal cached method for get_data.
+        # Initialize cache if not present
+        if not hasattr(self, "_data_cache"):
+            self._data_cache = {}
 
-        Args:
-            cache_key (str): Cache key including well ID and timestamp.
+        # Return cached data if available, otherwise fetch and cache
+        if cache_key not in self._data_cache:
+            self._data_cache[cache_key] = self.get_data_optimized()
 
-        Returns:
-            pd.DataFrame: Well data from cache or fresh from database.
-        """
-        return self.get_data_optimized()
+        return self._data_cache[cache_key]
 
     def export_to_parquet(self, folder: Optional[str] = None):
         """Exports the well's data to a Parquet file.

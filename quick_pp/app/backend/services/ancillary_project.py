@@ -1511,3 +1511,419 @@ async def save_shf(project_id: int, payload: dict):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save SHF: {e}") from e
+
+
+@project_router.get(
+    "/well_surveys",
+    summary="List well survey points for a project (optional well_name)",
+)
+def list_well_surveys_project(project_id: int, well_name: Optional[str] = Query(None)):
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            if well_name:
+                well = proj.get_well(well_name)
+                surveys_df = well.get_well_surveys()
+                if not surveys_df.empty:
+                    surveys_df["well_name"] = well_name
+                return {
+                    "well_surveys": surveys_df.to_dict(orient="records"),
+                    "well_name": well_name,
+                }
+
+            # aggregate across all wells
+            all_rows = []
+            for wn in proj.get_well_names():
+                well = proj.get_well(wn)
+                surveys_df = well.get_well_surveys()
+                if not surveys_df.empty:
+                    surveys_df["well_name"] = wn
+                    all_rows.extend(surveys_df.to_dict(orient="records"))
+            return {"well_surveys": all_rows}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list well surveys: {e}"
+        ) from e
+
+
+@project_router.post(
+    "/well_surveys",
+    summary="Add or update well survey points for a project (requires well_name)",
+)
+def add_well_surveys_project(
+    project_id: int,
+    well_name: Optional[str] = Query(None),
+    payload: Dict[str, List[Dict[str, Any]]] = Body(...),
+):
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    if not isinstance(payload, dict) or "surveys" not in payload:
+        raise HTTPException(
+            status_code=400, detail="Payload must be a dict with key 'surveys'."
+        )
+    surveys = payload.get("surveys")
+    target_well = well_name or payload.get("well_name")
+    if not target_well:
+        raise HTTPException(
+            status_code=400,
+            detail="well_name must be provided as query parameter or in payload",
+        )
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(target_well)
+            well.add_well_surveys(surveys)
+            return {
+                "created": [
+                    {
+                        "md": s.get("md"),
+                        "inc": s.get("inc"),
+                        "azim": s.get("azim"),
+                    }
+                    for s in surveys
+                ]
+            }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to add well surveys: {e}"
+        ) from e
+
+
+@project_router.delete(
+    "/well_surveys/{md}",
+    summary="Delete a well survey point by measured depth (requires well_name)",
+)
+def delete_well_survey_project(
+    project_id: int, md: float, well_name: Optional[str] = Query(None)
+):
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    target_well = well_name
+    if not target_well:
+        raise HTTPException(
+            status_code=400,
+            detail="well_name query parameter is required to delete a survey",
+        )
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(target_well)
+            orm_survey = session.scalar(
+                select(db_objects.ORMWellSurvey).filter_by(well_id=well.well_id, md=md)
+            )
+            if not orm_survey:
+                raise ValueError(f"Survey point at MD {md} not found")
+            session.delete(orm_survey)
+            return {"deleted": f"MD {md}"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete well survey: {e}"
+        ) from e
+
+
+@project_router.post(
+    "/well_surveys/preview",
+    summary="Upload CSV/Excel and return parsed preview for well surveys (optional well_name)",
+)
+def well_surveys_preview_project(
+    project_id: int,
+    well_name: Optional[str] = Query(None),
+    file: UploadFile = File(...),
+):
+    """Return a preview (first 50 rows) and detected columns from uploaded CSV/Excel file."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    try:
+        content = file.file.read().decode(errors="ignore")
+        reader = csv.reader(io.StringIO(content))
+        rows = list(reader)
+        if not rows:
+            return {"preview": [], "headers": []}
+        headers = [h.strip() for h in rows[0]]
+        preview = []
+        for r in rows[1:51]:
+            mapped = {
+                headers[i] if i < len(headers) else f"col_{i}": (
+                    r[i] if i < len(r) else ""
+                )
+                for i in range(len(headers))
+            }
+            preview.append(mapped)
+        detected = {
+            "md": next(
+                (
+                    h
+                    for h in headers
+                    if h.lower() in ("md", "measured depth", "md_m", "depth_m")
+                ),
+                None,
+            ),
+            "inc": next(
+                (
+                    h
+                    for h in headers
+                    if h.lower() in ("inc", "inclination", "incl", "inc_deg")
+                ),
+                None,
+            ),
+            "azim": next(
+                (
+                    h
+                    for h in headers
+                    if h.lower() in ("azim", "azimuth", "azi", "azim_deg")
+                ),
+                None,
+            ),
+        }
+        return {
+            "preview": preview,
+            "headers": headers,
+            "detected": detected,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to preview file: {e}"
+        ) from e
+
+
+@project_router.post(
+    "/well_surveys/upload",
+    summary="Upload and parse well survey data from CSV/Excel (requires well_name)",
+)
+def upload_well_surveys_project(
+    project_id: int,
+    well_name: Optional[str] = Query(None),
+    payload: Dict[str, Any] = Body(...),
+):
+    """
+    Upload deviation survey data and optionally calculate TVD.
+
+    Payload example:
+    {
+      "file_content": "base64_encoded_csv_or_excel",
+      "md_column": "MD",
+      "inc_column": "INC",
+      "azim_column": "AZIM",
+      "tvd_column": "TVD",  # optional, if present will store as TVD curve
+      "calculate_tvd": true  # optional, if true will calculate TVD from survey
+    }
+    """
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+
+    target_well = well_name
+    if not target_well:
+        raise HTTPException(
+            status_code=400,
+            detail="well_name query parameter is required to upload surveys",
+        )
+
+    required = ["file_content", "md_column", "inc_column", "azim_column"]
+    if not all(k in payload for k in required):
+        raise HTTPException(status_code=400, detail=f"Payload must include {required}")
+
+    try:
+        import base64
+
+        try:
+            import wellpathpy as wpp
+        except ImportError as e:
+            raise ImportError(
+                "wellpathpy required for TVD calculation. Install: pip install wellpathpy"
+            ) from e
+
+        # Decode and read CSV content
+        file_content = payload["file_content"]
+        if isinstance(file_content, str) and file_content.startswith("data:"):
+            # Remove data URL prefix
+            file_content = file_content.split(",", 1)[1]
+
+        decoded = base64.b64decode(file_content)
+        content_str = decoded.decode(errors="ignore")
+
+        # Parse CSV
+        reader = csv.reader(io.StringIO(content_str))
+        rows = list(reader)
+        if len(rows) < 2:
+            raise ValueError("No data rows in file")
+
+        headers = [h.strip() for h in rows[0]]
+        md_col = payload["md_column"]
+        inc_col = payload["inc_column"]
+        azim_col = payload["azim_column"]
+        tvd_col = payload.get("tvd_column")
+        calculate_tvd = payload.get("calculate_tvd", False)
+
+        if md_col not in headers:
+            raise ValueError(f"Column '{md_col}' not found in file")
+        if inc_col not in headers:
+            raise ValueError(f"Column '{inc_col}' not found in file")
+        if azim_col not in headers:
+            raise ValueError(f"Column '{azim_col}' not found in file")
+
+        # Extract column indices
+        md_idx = headers.index(md_col)
+        inc_idx = headers.index(inc_col)
+        azim_idx = headers.index(azim_col)
+        tvd_idx = headers.index(tvd_col) if tvd_col and tvd_col in headers else None
+
+        # Parse survey points
+        surveys = []
+        tvd_data = {}
+
+        for r in rows[1:]:
+            if len(r) <= max(md_idx, inc_idx, azim_idx):
+                continue
+            try:
+                md = float(r[md_idx].strip())
+                inc = float(r[inc_idx].strip())
+                azim = float(r[azim_idx].strip())
+                surveys.append({"md": md, "inc": inc, "azim": azim})
+
+                # Store TVD if column present
+                if tvd_idx is not None and len(r) > tvd_idx:
+                    try:
+                        tvd = float(r[tvd_idx].strip())
+                        tvd_data[md] = tvd
+                    except (ValueError, IndexError):
+                        pass
+            except (ValueError, IndexError):
+                continue
+
+        if not surveys:
+            raise ValueError("No valid survey points found in file")
+
+        # Save to database
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(target_well)
+            well.add_well_surveys(surveys)
+
+            # Add TVD curve data if available or to be calculated
+            if calculate_tvd:
+                # Calculate TVD using wellpathpy minimum curvature method
+                surveys_sorted = sorted(surveys, key=lambda x: x["md"])
+                mds = np.array([s["md"] for s in surveys_sorted])
+                incs = np.array([s["inc"] for s in surveys_sorted])
+                azims = np.array([s["azim"] for s in surveys_sorted])
+
+                # Use wellpathpy to calculate TVD
+                dev_survey = wpp.deviation(mds, incs, azims)
+                tvds = dev_survey.minimum_curvature().depth
+
+                tvd_data = dict(zip(mds, tvds, strict=True))
+
+            # Store TVD as curve data
+            if tvd_data:
+                well.add_curve_data("TVD", tvd_data, unit="m")
+
+            return {
+                "status": "success",
+                "surveys_added": len(surveys),
+                "tvd_calculated": calculate_tvd,
+                "tvd_points_stored": len(tvd_data),
+            }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to upload well surveys: {e}"
+        ) from e
+
+
+@project_router.post(
+    "/well_surveys/calculate_tvd",
+    summary="Calculate TVD from existing survey data and store as well curve",
+)
+def calculate_tvd_project(project_id: int):
+    """
+    Calculate TVD from existing well survey data using minimum curvature method.
+    If well_name is provided, calculates for that well only.
+    If well_name is not provided, calculates for all wells in the project.
+    Stores the calculated TVD as a well curve (mnemonic 'TVD').
+    """
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+
+    try:
+        try:
+            import wellpathpy as wpp
+        except ImportError as e:
+            raise ImportError(
+                "wellpathpy required for TVD calculation. Install: pip install wellpathpy"
+            ) from e
+
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+
+            # Calculate for all wells in project
+            total_tvd_points = 0
+            wells_processed = []
+
+            for wn in proj.get_well_names():
+                well = proj.get_well(wn)
+                surveys_df = well.get_well_surveys()
+
+                if surveys_df.empty:
+                    continue
+
+                surveys_df = surveys_df.sort_values("md")
+                mds = surveys_df["md"].values
+                incs = surveys_df["inc"].values
+                azims = surveys_df["azim"].values
+
+                try:
+                    deviation = wpp.deviation(mds, incs, azims)
+                    tvds = deviation.minimum_curvature().depth
+
+                    tvd_data = dict(zip(mds, tvds, strict=True))
+                    well.add_curve_data("TVD", tvd_data, unit="m")
+
+                    total_tvd_points += len(tvd_data)
+                    wells_processed.append(wn)
+                except Exception as e:
+                    # Log error but continue with other wells
+                    print(f"Warning: Failed to calculate TVD for well {wn}: {e}")
+                    continue
+
+            if not wells_processed:
+                raise ValueError("No wells with survey data found in project")
+
+            return {
+                "success": True,
+                "tvd_points_saved": total_tvd_points,
+                "wells_processed": len(wells_processed),
+                "wells": wells_processed,
+            }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to calculate TVD: {e}"
+        ) from e

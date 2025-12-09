@@ -9,6 +9,7 @@
   import WsFluidContacts from '$lib/components/WsFluidContacts.svelte';
   import WsPressureTests from '$lib/components/WsPressureTests.svelte';
   import WsCoreSamples from '$lib/components/WsCoreSamples.svelte';
+  import WsDeviationSurvey from '$lib/components/WsDeviationSurvey.svelte';
   import DataSummary from '$lib/components/DataSummary.svelte';
   import { Button } from '$lib/components/ui/button/index.js';
 
@@ -30,6 +31,7 @@
   let showContacts = false;
   let showPressure = false;
   let showCore = false;
+  let showDeviation = false;
   let showUpload = false;
   // Summary accordions state
   let showSummaryTops = false;
@@ -395,6 +397,22 @@
             {#if showContacts}
               <div class="p-2">
                   <WsFluidContacts projectId={selectedProject?.project_id ?? ''} wellName={selectedWellName ?? ''} showList={false} />
+              </div>
+            {/if}
+          </div>
+
+          <div class="accordion-item bg-surface rounded">
+            <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showDeviation = !showDeviation)} aria-expanded={showDeviation}>
+              <div class="font-medium">Deviation Survey (TVD)</div>
+              <div class="text-sm">
+                <svg class="inline-block" width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transform: rotate({showDeviation ? 90 : 0}deg); transition: transform .18s ease;">
+                  <path d="M8 5l8 7-8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+                </svg>
+              </div>
+            </Button>
+            {#if showDeviation}
+              <div class="p-2">
+                  <WsDeviationSurvey projectId={selectedProject?.project_id ?? ''} wellName={selectedWellName ?? ''} />
               </div>
             {/if}
           </div>

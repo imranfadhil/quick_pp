@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quick-pp"
-version = "0.2.86"
+version = "0.2.87"
 description = "Python package to assist in providing quick-look preliminary petrophysical estimation."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "MIT"
@@ -109,7 +109,6 @@ where = ["."]
 quick_pp = [
     "app/frontend/build/**/*",
     "app/backend/**/*",
-    "app/docker/.env",
     "app/docker/.env.example",
     "app/docker/backend-entrypoint.sh",
     "app/docker/docker-compose.yaml",

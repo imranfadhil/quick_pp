@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import WellSelector from './WellSelector.svelte';
   export let projectId: string|number;
-  export let type: 'formation_tops'|'fluid_contacts'|'pressure_tests'|'core_samples'|'rca'|'scal' = 'formation_tops';
+  export let type: 'formation_tops'|'fluid_contacts'|'pressure_tests'|'core_samples'|'rca'|'scal'|'well_surveys' = 'formation_tops';
   export let maxConcurrency = 4;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
@@ -109,6 +109,10 @@
         detected.depth = headers[ lower.indexOf('depth') ] ?? null;
         detected.pressure = headers[ lower.indexOf('pressure') ] ?? null;
         detected.uom = headers[ lower.indexOf('pressure_uom') ] ?? null;
+      } else if (type === 'well_surveys') {
+        detected.md = headers[ lower.indexOf('md') ] ?? headers[ lower.indexOf('measured_depth') ] ?? null;
+        detected.inc = headers[ lower.indexOf('inc') ] ?? headers[ lower.indexOf('inclination') ] ?? null;
+        detected.azim = headers[ lower.indexOf('azim') ] ?? headers[ lower.indexOf('azimuth') ] ?? null;
       }
       const previewRows = rows.slice(0,10);
       // store full rows for processing, previewRows for display
@@ -146,6 +150,10 @@
     if (type === 'pressure_tests') {
       const tests = preview.rows.map((r:any)=>({ depth: Number(r[preview.detected.depth] ?? r['depth'] ?? ''), pressure: Number(r[preview.detected.pressure] ?? r['pressure'] ?? ''), pressure_uom: r[preview.detected.uom] ?? r['pressure_uom'] ?? 'psi' }));
       return { tests };
+    }
+    if (type === 'well_surveys') {
+      const surveys = preview.rows.map((r:any)=>({ md: Number(r[preview.detected.md] ?? r['md'] ?? r['MD'] ?? ''), inc: Number(r[preview.detected.inc] ?? r['inc'] ?? r['INC'] ?? ''), azim: Number(r[preview.detected.azim] ?? r['azim'] ?? r['AZIM'] ?? '') }));
+      return { surveys };
     }
     // core_samples, rca, scal handled as per-sample payloads (returned as an array)
     if (type === 'core_samples' || type === 'rca' || type === 'scal') {
@@ -354,11 +362,19 @@
                   name: String(getFieldValue(r, preview.detected?.name, ['name']) ?? ''),
                   depth: Number(getFieldValue(r, preview.detected?.depth, ['depth','md']) ?? '')
                 })) }
-              : { tests: rowsForWell.map((r:any) => ({
-                  depth: Number(getFieldValue(r, preview.detected?.depth, ['depth','md']) ?? ''),
-                  pressure: Number(getFieldValue(r, preview.detected?.pressure, ['pressure']) ?? ''),
-                  pressure_uom: String(getFieldValue(r, preview.detected?.uom, ['pressure_uom','uom']) ?? 'psi')
-                })) };
+              : (type === 'pressure_tests')
+                ? { tests: rowsForWell.map((r:any) => ({
+                    depth: Number(getFieldValue(r, preview.detected?.depth, ['depth','md']) ?? ''),
+                    pressure: Number(getFieldValue(r, preview.detected?.pressure, ['pressure']) ?? ''),
+                    pressure_uom: String(getFieldValue(r, preview.detected?.uom, ['pressure_uom','uom']) ?? 'psi')
+                  })) }
+                : (type === 'well_surveys')
+                  ? { surveys: rowsForWell.map((r:any) => ({
+                      md: Number(getFieldValue(r, preview.detected?.md, ['md','MD']) ?? ''),
+                      inc: Number(getFieldValue(r, preview.detected?.inc, ['inc','INC']) ?? ''),
+                      azim: Number(getFieldValue(r, preview.detected?.azim, ['azim','AZIM']) ?? '')
+                    })) }
+                  : {};
             const subQs = `?well_name=${encodeURIComponent(String(wn))}`;
             // If this is a core-like import, build samples for this well and POST per-sample to core_samples endpoint
             if (type === 'core_samples' || type === 'rca' || type === 'scal') {
@@ -391,7 +407,7 @@
               continue;
             }
 
-            // Non-core types: send grouped payloads (tops/contacts/tests)
+            // Non-core types: send grouped payloads (tops/contacts/tests/well_surveys)
             const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${subQs}`;
             console.log('Bulk import: POST', url, subPayload);
             const res = await fetch(url, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(subPayload)});
@@ -408,8 +424,8 @@
               fileErrors[preview.fileName] = errtxt;
               return {file: preview.fileName, ok:false, error: errtxt, status: res.status};
             }
-            totalSent += (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? 0);
-            subResults.push({ well: wn, ok: true, sent: (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? 0) });
+            totalSent += (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? subPayload.surveys?.length ?? 0);
+            subResults.push({ well: wn, ok: true, sent: (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? subPayload.surveys?.length ?? 0) });
         }
         if (totalSent > 0) {
           fileStatuses[preview.fileName] = 'success';
@@ -469,7 +485,7 @@
         return {file: preview.fileName, ok:false, error: errtxt, status: res.status};
       }
       // compute number of rows sent
-      const sent = (payload.tops?.length ?? payload.contacts?.length ?? payload.tests?.length ?? 0) || (payload.samples ? payload.samples.length : 0);
+      const sent = (payload.tops?.length ?? payload.contacts?.length ?? payload.tests?.length ?? payload.surveys?.length ?? 0) || (payload.samples ? payload.samples.length : 0);
       fileStatuses[preview.fileName] = 'success';
       return {file: preview.fileName, ok:true, sent};
     });
@@ -494,6 +510,7 @@
         <option value="core_samples">Core samples</option>
         <option value="rca">RCA (measurements)</option>
         <option value="scal">SCAL (relperm/pc)</option>
+        <option value="well_surveys">Well surveys (deviation)</option>
       </select>
       <label for="csv-input" class="block text-sm mb-0">
         <div class="px-3 py-2 border rounded cursor-pointer bg-white/5">Choose CSV files</div>
@@ -513,6 +530,8 @@
         <div class="text-xs">Required columns: <code>well_name</code>, <code>sample_name</code> (or <code>sample</code>), <code>depth</code>, <code>description</code>, <code>remarks</code>, and measurement columns: <code>cpore</code>, <code>cperm</code></div>
       {:else if type === 'scal'}
         <div class="text-xs">Relperm: <code>rp_sat</code>, <code>rp_kr</code>, <code>rp_phase</code>. Capillary pressure: <code>pc_sat</code>, <code>pc_pressure</code>, <code>pc_type</code>, <code>pc_cycle</code>. Wide format supported: <code>Pc.1</code>, <code>Pc.2</code>, <code>Sw.1</code>, <code>Sw.2</code>, etc.</div>
+      {:else if type === 'well_surveys'}
+        <div class="text-xs">Required columns: <code>md</code> (measured depth), <code>inc</code> (inclination), <code>azim</code> (azimuth)</div>
       {/if}
     </div>
   </div>
