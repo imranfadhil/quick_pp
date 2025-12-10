@@ -1,22 +1,18 @@
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from fastapi.templating import Jinja2Templates
-from .exceptions import return_exception_message
-
-try:
-    from fastapi_mcp import FastApiMCP
-except ImportError:
-    FastApiMCP = None
-from importlib import resources
-import os
-
-from .router import api_router
-from quick_pp.database.db_connector import DBConnector
 import logging
+import os
+from contextlib import asynccontextmanager
+from importlib import resources
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi_mcp import FastApiMCP
+
+from quick_pp.database.db_connector import DBConnector
+from .exceptions import return_exception_message
+from .router import api_router
 
 # Configuration
 LANGFLOW_HOST = os.getenv("LANGFLOW_HOST", "http://localhost:7860")
@@ -32,11 +28,7 @@ tags_metadata = [
         "description": "Reservoir summary related endpoints.",
     },
     {"name": "Database", "description": "Database related endpoints."},
-    {"name": "Ancillary - Well", "description": "Ancillary well-related endpoints."},
-    {
-        "name": "Ancillary - Project",
-        "description": "Ancillary project-related endpoints.",
-    },
+    {"name": "Ancillary", "description": "Ancillary related endpoints."},
     {"name": "Langflow", "description": "Langflow related endpoints."},
     {"name": "Plotter", "description": "Plotter related endpoints."},
 ]

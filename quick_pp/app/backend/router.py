@@ -1,7 +1,6 @@
 from fastapi import APIRouter
 
-from .services.ancillary_project import project_router as ancillary_project_router
-from .services.ancillary_well import router as ancillary_well_router
+from .services.ancillary import project_router as ancillary_router
 from .services.chat import router as chat_router
 from .services.database import router as database_router
 from .services.las_handler import router as las_router
@@ -24,6 +23,5 @@ api_router.include_router(ressum_router)
 api_router.include_router(chat_router)
 api_router.include_router(database_router)
 api_router.include_router(plotter_router)
-api_router.include_router(ancillary_well_router)
-api_router.include_router(ancillary_project_router)
+api_router.include_router(ancillary_router)
 api_router.include_router(qaqc_router)

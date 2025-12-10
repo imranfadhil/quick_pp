@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import math
 from typing import Any, Dict, List, Optional
 
@@ -1927,3 +1928,716 @@ def calculate_tvd_project(project_id: int):
         raise HTTPException(
             status_code=500, detail=f"Failed to calculate TVD: {e}"
         ) from e
+
+
+# ============================================================================
+# Well-level endpoints (merged from ancillary_well.py)
+# These can be accessed with well_name as path parameter or work at project level
+# ============================================================================
+
+
+@project_router.get(
+    "/wells/{well_name}/formation_tops",
+    summary="List formation tops for a specific well",
+)
+def get_formation_tops_well(project_id: int, well_name: str):
+    """Get formation tops for a specific well."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            tops_df = well.get_formation_tops()
+            return {"tops": tops_df.to_dict(orient="records")}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list formation tops: {e}"
+        ) from e
+
+
+@project_router.post(
+    "/wells/{well_name}/formation_tops",
+    summary="Add or update formation tops for a well",
+)
+def add_formation_tops_well(
+    project_id: int,
+    well_name: str,
+    payload: Dict[str, List[Dict[str, Any]]] = Body(...),
+):
+    """Add or update formation tops for a specific well."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    if not isinstance(payload, dict) or "tops" not in payload:
+        raise HTTPException(
+            status_code=400, detail="Payload must be a dict with key 'tops'."
+        )
+
+    tops = payload.get("tops")
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            well.add_formation_tops(tops)
+            return {
+                "created": [
+                    {"name": t.get("name"), "depth": t.get("depth")} for t in tops
+                ]
+            }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to add formation tops: {e}"
+        ) from e
+
+
+@project_router.delete(
+    "/wells/{well_name}/formation_tops/{top_name}",
+    summary="Delete a formation top by name",
+)
+def delete_formation_top_well(project_id: int, well_name: str, top_name: str):
+    """Delete a formation top from a specific well."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            orm_top = session.scalar(
+                select(db_objects.ORMFormationTop).filter_by(
+                    well_id=well.well_id, name=top_name
+                )
+            )
+            if not orm_top:
+                raise ValueError(f"Top '{top_name}' not found")
+            session.delete(orm_top)
+            return {"deleted": top_name}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete formation top: {e}"
+        ) from e
+
+
+@project_router.get(
+    "/wells/{well_name}/fluid_contacts", summary="List fluid contacts for a well"
+)
+def get_fluid_contacts_well(project_id: int, well_name: str):
+    """Get fluid contacts for a specific well."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            df = well.get_fluid_contacts()
+            return {"fluid_contacts": df.to_dict(orient="records")}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list fluid contacts: {e}"
+        ) from e
+
+
+@project_router.post(
+    "/wells/{well_name}/fluid_contacts",
+    summary="Add or update fluid contacts for a well",
+)
+def add_fluid_contacts_well(
+    project_id: int,
+    well_name: str,
+    payload: Dict[str, List[Dict[str, Any]]] = Body(...),
+):
+    """Add or update fluid contacts for a specific well."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    if not isinstance(payload, dict) or "contacts" not in payload:
+        raise HTTPException(
+            status_code=400, detail="Payload must be a dict with key 'contacts'."
+        )
+    contacts = payload.get("contacts")
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            well.add_fluid_contacts(contacts)
+            return {"created": contacts}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to add fluid contacts: {e}"
+        ) from e
+
+
+@project_router.get(
+    "/wells/{well_name}/pressure_tests", summary="List pressure tests for a well"
+)
+def get_pressure_tests_well(project_id: int, well_name: str):
+    """Get pressure tests for a specific well."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            df = well.get_pressure_tests()
+            return {"pressure_tests": df.to_dict(orient="records")}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list pressure tests: {e}"
+        ) from e
+
+
+@project_router.post(
+    "/wells/{well_name}/pressure_tests",
+    summary="Add or update pressure tests for a well",
+)
+def add_pressure_tests_well(
+    project_id: int,
+    well_name: str,
+    payload: Dict[str, List[Dict[str, Any]]] = Body(...),
+):
+    """Add or update pressure tests for a specific well."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    if not isinstance(payload, dict) or "tests" not in payload:
+        raise HTTPException(
+            status_code=400, detail="Payload must be a dict with key 'tests'."
+        )
+    tests = payload.get("tests")
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            well.add_pressure_tests(tests)
+            return {"created": tests}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to add pressure tests: {e}"
+        ) from e
+
+
+@project_router.get(
+    "/wells/{well_name}/core_samples", summary="List core samples for a well"
+)
+def get_core_samples_well(project_id: int, well_name: str):
+    """Get core samples for a specific well."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            core_data = well.get_core_data()
+            summaries = [
+                {
+                    "sample_name": k,
+                    "depth": v["depth"],
+                    "description": v.get("description"),
+                }
+                for k, v in core_data.items()
+            ]
+            return {"core_samples": summaries}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list core samples: {e}"
+        ) from e
+
+
+@project_router.post(
+    "/wells/{well_name}/core_samples",
+    summary="Add or update a core sample with measurements",
+)
+def add_core_sample_well(
+    project_id: int, well_name: str, payload: Dict[str, Any] = Body(...)
+):
+    """Add or update a core sample with measurements for a specific well."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    required = ["sample_name", "depth", "measurements"]
+    if not isinstance(payload, dict) or not all(k in payload for k in required):
+        raise HTTPException(status_code=400, detail=f"Payload must include {required}")
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            well.add_core_sample_with_measurements(
+                sample_name=payload["sample_name"],
+                depth=payload["depth"],
+                measurements=payload.get("measurements", []),
+                description=payload.get("description"),
+                remark=payload.get("remark"),
+                relperm_data=payload.get("relperm_data"),
+                pc_data=payload.get("pc_data"),
+            )
+            return {
+                "sample_name": payload["sample_name"],
+                "status": "created_or_updated",
+            }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to add core sample: {e}"
+        ) from e
+
+
+@project_router.get(
+    "/wells/{well_name}/core_samples/{sample_name}",
+    summary="Get core sample details by name",
+)
+def get_core_sample_well(project_id: int, well_name: str, sample_name: str):
+    """Get details for a specific core sample."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            core_data = well.get_core_data()
+            if sample_name not in core_data:
+                raise ValueError(f"Sample '{sample_name}' not found")
+            sample = core_data[sample_name]
+            sample_out = {
+                "sample_name": sample_name,
+                "depth": sample.get("depth"),
+                "description": sample.get("description"),
+                "measurements": sample.get("measurements").to_dict(orient="records")
+                if hasattr(sample.get("measurements"), "to_dict")
+                else [],
+                "relperm": sample.get("relperm").to_dict(orient="records")
+                if hasattr(sample.get("relperm"), "to_dict")
+                else [],
+                "pc": sample.get("pc").to_dict(orient="records")
+                if hasattr(sample.get("pc"), "to_dict")
+                else [],
+            }
+            return {"core_sample": sample_out}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get core sample: {e}"
+        ) from e
+
+
+@project_router.get("/wells/{well_name}/data", summary="Get top-to-bottom well data")
+def get_well_data(project_id: int, well_name: str, include_ancillary: bool = False):
+    """Return the full well data (curve logs) as a JSON array of rows.
+
+    Each row is a dict mapping column names to values.
+    """
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            df = proj.get_well_data(well_name)
+            if df.empty:
+                return []
+
+            df = df.reset_index(drop=True)
+            records = json.loads(df.to_json(orient="records"))
+
+            if include_ancillary:
+                well = proj.get_well(well_name)
+                tops_df = well.get_formation_tops()
+                contacts_df = well.get_fluid_contacts()
+                pressure_df = well.get_pressure_tests()
+                core_raw = well.get_core_data()
+                tops = tops_df.to_dict(orient="records") if not tops_df.empty else []
+                contacts = (
+                    contacts_df.to_dict(orient="records")
+                    if not contacts_df.empty
+                    else []
+                )
+                pressure = (
+                    pressure_df.to_dict(orient="records")
+                    if not pressure_df.empty
+                    else []
+                )
+                core_samples = []
+                for name, s in core_raw.items():
+                    measurements = []
+                    if hasattr(s.get("measurements"), "to_dict"):
+                        measurements = s.get("measurements").to_dict(orient="records")
+                    core_samples.append(
+                        {
+                            "sample_name": name,
+                            "depth": s.get("depth"),
+                            "measurements": measurements,
+                        }
+                    )
+
+                return {
+                    "data": records,
+                    "formation_tops": tops,
+                    "fluid_contacts": contacts,
+                    "pressure_tests": pressure,
+                    "core_samples": core_samples,
+                }
+
+            return records
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get well data: {e}"
+        ) from e
+
+
+@project_router.get(
+    "/wells/{well_name}/merged",
+    summary="Get well data merged with ancillary datapoints by depth",
+)
+def get_well_data_merged(
+    project_id: int, well_name: str, tolerance: Optional[float] = 0.16
+):
+    """Return well log rows with nearby ancillary datapoints merged by depth."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+
+    def _to_py(val):
+        try:
+            if val is None:
+                return None
+            if hasattr(val, "item"):
+                val = val.item()
+            if hasattr(val, "isoformat") and not isinstance(val, str):
+                try:
+                    return val.isoformat()
+                except Exception:
+                    return None
+            try:
+                if isinstance(val, (float, int)):
+                    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                        return None
+                    return val
+            except Exception:
+                pass
+            try:
+                if pd.isna(val):
+                    return None
+            except Exception:
+                pass
+            return val
+        except Exception:
+            return None
+
+    def _normalize_df_depth(dframe):
+        if dframe is None or dframe.empty:
+            return None
+        d = dframe.copy()
+        d.columns = [c.lower() for c in d.columns]
+        if "depth" not in d.columns:
+            candidate = next(
+                (c for c in d.columns if "depth" in c or c in ("md", "tvd")),
+                None,
+            )
+            if candidate:
+                d = d.rename(columns={candidate: "depth"})
+        d["depth"] = pd.to_numeric(d["depth"], errors="coerce")
+        d = d.dropna(subset=["depth"]) if not d.empty else d
+        return d
+
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            df = proj.get_well_data(well_name)
+            if df.empty:
+                return []
+
+            df = df.reset_index(drop=True)
+            df.columns = [c.lower() for c in df.columns]
+            if "depth" not in df.columns:
+                candidate = next(
+                    (c for c in df.columns if "depth" in c or c in ("md", "tvd")),
+                    None,
+                )
+                if candidate:
+                    df = df.rename(columns={candidate: "depth"})
+
+            if "depth" not in df.columns:
+                raise ValueError("No depth column found in well data")
+
+            df["depth"] = pd.to_numeric(df["depth"], errors="coerce")
+            df = df.dropna(subset=["depth"]) if not df.empty else df
+            df = df.sort_values("depth").reset_index(drop=True)
+
+            well = proj.get_well(well_name)
+            tops_df = _normalize_df_depth(well.get_formation_tops())
+            contacts_df = _normalize_df_depth(well.get_fluid_contacts())
+            pressure_df = _normalize_df_depth(well.get_pressure_tests())
+            core_raw = well.get_core_data() or {}
+
+            def _prefixed(dframe, prefix):
+                if dframe is None or dframe.empty:
+                    return None
+                d2 = dframe.copy()
+                d2.columns = [c.lower() for c in d2.columns]
+                if "depth" not in d2.columns:
+                    return None
+                cols = [c for c in d2.columns if c != "depth"]
+                rename = {c: f"{prefix}{c}" for c in cols}
+                d2 = d2.rename(columns=rename)
+                d2["depth"] = pd.to_numeric(d2["depth"], errors="coerce")
+                d2 = d2.dropna(subset=["depth"]) if not d2.empty else d2
+                return d2.sort_values("depth").reset_index(drop=True)
+
+            tops_p = _prefixed(tops_df, "top_")
+            contacts_p = _prefixed(contacts_df, "contact_")
+            pressure_p = _prefixed(pressure_df, "pressure_")
+
+            merged = df.copy()
+            merged["depth"] = pd.to_numeric(merged["depth"], errors="coerce")
+            merged = merged.dropna(subset=["depth"]) if not merged.empty else merged
+            merged = merged.sort_values("depth").reset_index(drop=True)
+
+            if tops_p is not None and not tops_p.empty:
+                merged = pd.merge_asof(
+                    merged,
+                    tops_p,
+                    on="depth",
+                    direction="nearest",
+                    tolerance=tolerance,
+                    suffixes=("", "_top"),
+                )
+                merged["ZONES"] = merged["top_name"].ffill()
+            if contacts_p is not None and not contacts_p.empty:
+                merged = pd.merge_asof(
+                    merged,
+                    contacts_p,
+                    on="depth",
+                    direction="nearest",
+                    tolerance=tolerance,
+                    suffixes=("", "_contact"),
+                )
+            if pressure_p is not None and not pressure_p.empty:
+                merged = pd.merge_asof(
+                    merged,
+                    pressure_p,
+                    on="depth",
+                    direction="nearest",
+                    tolerance=tolerance,
+                    suffixes=("", "_pressure"),
+                )
+
+            core_rows = []
+            if isinstance(core_raw, dict):
+                for name, sd in core_raw.items():
+                    try:
+                        dval = sd.get("depth")
+                        if dval is None:
+                            continue
+                        measurements = sd.get("measurements")
+                        if measurements is None or measurements.empty:
+                            continue
+                        for _, m in measurements.iterrows():
+                            prop = m.get("property")
+                            val = m.get("value")
+                            if prop in ("cpore", "cperm") and pd.notna(val):
+                                core_rows.append(
+                                    {
+                                        "depth": float(dval),
+                                        "core_sample_name": name,
+                                        prop: val,
+                                    }
+                                )
+                    except Exception:
+                        continue
+            core_df = pd.DataFrame(core_rows) if core_rows else None
+            if core_df is not None and not core_df.empty:
+                core_df = core_df.sort_values("depth").reset_index(drop=True)
+                merged = pd.merge_asof(
+                    merged,
+                    core_df,
+                    on="depth",
+                    direction="nearest",
+                    tolerance=tolerance,
+                    suffixes=("", "_core"),
+                )
+
+            merged = merged.replace([np.inf, -np.inf], pd.NA)
+            merged.columns = [c.upper() for c in merged.columns]
+
+            records = []
+            for r in merged.to_dict(orient="records"):
+                records.append({k: _to_py(v) for k, v in r.items()})
+            return records
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to produce merged data: {e}"
+        ) from e
+
+
+@project_router.get("/wells/{well_name}/rca", summary="List RCA (core measurements)")
+def get_rca_well(project_id: int, well_name: str):
+    """Return consolidated point measurements across all core samples."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            core_data = well.get_core_data()
+            rows = []
+            for sample_name, sd in core_data.items():
+                measurements = sd.get("measurements")
+                if hasattr(measurements, "to_dict"):
+                    for r in measurements.to_dict(orient="records"):
+                        r.update({"sample_name": sample_name, "depth": sd.get("depth")})
+                        rows.append(r)
+            return {"rca": rows}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list RCA: {e}") from e
+
+
+@project_router.post("/wells/{well_name}/rca", summary="Add RCA (core measurements)")
+def add_rca_well(project_id: int, well_name: str, payload: Dict[str, Any] = Body(...)):
+    """Add or update point measurements for a core sample."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    required = ["sample_name", "depth", "measurements"]
+    if not isinstance(payload, dict) or not all(k in payload for k in required):
+        raise HTTPException(status_code=400, detail=f"Payload must include {required}")
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            well.add_core_sample_with_measurements(
+                sample_name=payload["sample_name"],
+                depth=payload["depth"],
+                measurements=payload.get("measurements", []),
+                description=payload.get("description"),
+                remark=payload.get("remark"),
+            )
+            return {
+                "sample_name": payload["sample_name"],
+                "status": "measurements_added",
+            }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add RCA: {e}") from e
+
+
+@project_router.get("/wells/{well_name}/scal", summary="List SCAL data")
+def get_scal_well(project_id: int, well_name: str):
+    """Return consolidated SCAL data (relperm & capillary) across core samples."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            core_data = well.get_core_data()
+            relperm_rows = []
+            pc_rows = []
+            for sample_name, sd in core_data.items():
+                relperm = sd.get("relperm")
+                if hasattr(relperm, "to_dict"):
+                    for r in relperm.to_dict(orient="records"):
+                        r.update({"sample_name": sample_name, "depth": sd.get("depth")})
+                        relperm_rows.append(r)
+                pc = sd.get("pc")
+                if hasattr(pc, "to_dict"):
+                    for p in pc.to_dict(orient="records"):
+                        p.update({"sample_name": sample_name, "depth": sd.get("depth")})
+                        pc_rows.append(p)
+            return {"relperm": relperm_rows, "pc": pc_rows}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list SCAL: {e}") from e
+
+
+@project_router.post("/wells/{well_name}/scal", summary="Add SCAL data")
+def add_scal_well(project_id: int, well_name: str, payload: Dict[str, Any] = Body(...)):
+    """Add relperm and/or capillary pressure data for a core sample."""
+    if database.connector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="DB connector not initialized. Call /database/init first.",
+        )
+    required = ["sample_name", "depth"]
+    if not isinstance(payload, dict) or not all(k in payload for k in required):
+        raise HTTPException(status_code=400, detail=f"Payload must include {required}")
+    try:
+        with database.connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(well_name)
+            well.add_core_sample_with_measurements(
+                sample_name=payload["sample_name"],
+                depth=payload["depth"],
+                measurements=payload.get("measurements", []),
+                relperm_data=payload.get("relperm_data"),
+                pc_data=payload.get("pc_data"),
+                description=payload.get("description"),
+            )
+            return {"sample_name": payload["sample_name"], "status": "scal_added"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add SCAL: {e}") from e
