@@ -390,7 +390,7 @@ def plotly_log(
                 zone_tops_idx = [0] + [
                     idx
                     for idx, (i, j) in enumerate(
-                        zip(tops_df["ZONES"], tops_df["ZONES"][1:], strict=True), 1
+                        zip(tops_df["ZONES"], tops_df["ZONES"][1:], strict=False), 1
                     )
                     if i != j
                 ]
