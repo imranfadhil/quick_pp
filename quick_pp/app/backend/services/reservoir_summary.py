@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from typing import Dict, List
+
 import pandas as pd
-from typing import List, Dict
+from fastapi import APIRouter, HTTPException
 
 from quick_pp.app.backend.schemas.ressum import InputData
 from quick_pp.ressum import calc_reservoir_summary
@@ -76,4 +77,4 @@ async def calculate_reservoir_summary_(inputs: InputData):
     except Exception as e:
         raise HTTPException(
             status_code=400, detail=f"Error calculating reservoir summary: {e}"
-        )
+        ) from e

@@ -1,23 +1,23 @@
-import numpy as np
-import pandas as pd
-from scipy.cluster.hierarchy import ward, dendrogram
-from scipy.spatial.distance import pdist
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
-from sklearn.model_selection import train_test_split, RandomizedSearchCV
+import numpy as np
+import pandas as pd
+from scipy.cluster.hierarchy import dendrogram, ward
+from scipy.spatial.distance import pdist
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import (
-    classification_report,
-    auc,
     ConfusionMatrixDisplay,
+    auc,
+    classification_report,
     confusion_matrix,
+    mean_absolute_error,
     r2_score,
     silhouette_score,
-    mean_absolute_error,
 )
+from sklearn.model_selection import RandomizedSearchCV, train_test_split
 
-from quick_pp.lithology import shale_volume_steiber
 from quick_pp import logger
+from quick_pp.lithology import shale_volume_steiber
 
 plt.style.use("seaborn-v0_8-paper")
 plt.rcParams.update(
@@ -289,7 +289,7 @@ def plot_winland(cpore, cperm, cut_offs=None, rock_type=None, title="Winland R35
 def plot_neuden_vsh(
     nphi,
     rhob,
-    vshale_lines=[0, 0.25, 0.5, 0.75, 1.0],
+    vshale_lines=None,
     shale_point=(0.45, 2.55),
     sand_point=(-0.035, 2.65),
     lime_point=(0.0, 2.71),
@@ -322,6 +322,9 @@ def plot_neuden_vsh(
         vshale_lines (list, optional): List of Vshale fractions (0 to 1) to plot as lines.
                                        Defaults to [0, 0.25, 0.5, 0.75, 1.0].
     """
+    if vshale_lines is None:
+        vshale_lines = [0, 0.25, 0.5, 0.75, 1.0]
+
     _, ax = plt.subplots(figsize=(10, 8))
     ax.set_title("Neutron-Density Crossplot with Vshale Lines")
 
@@ -540,7 +543,7 @@ def plot_ward_dendogram(X, p=10, title="Ward's Dendogram"):
 
 
 def plot_cumulative_probability(
-    cpore, cperm, cutoffs=[], title="Cumulative Probability Plot"
+    cpore, cperm, cutoffs=None, title="Cumulative Probability Plot"
 ):
     """Plot cumulative probability to identify possible flow units.
 
@@ -550,9 +553,11 @@ def plot_cumulative_probability(
     Args:
         cpore (np.ndarray or float): Core porosity in fraction.
         cperm (np.ndarray or float): Core permeability in mD.
-        cutoffs (list, optional): A list of cutoff values to display as vertical lines. Defaults to [].
+        cutoffs (list, optional): A list of cutoff values to display as vertical lines. Defaults to None.
         title (str, optional): The title of the plot. Defaults to "Cumulative Probability Plot".
     """
+    if cutoffs is None:
+        cutoffs = []
     fzi = calc_fzi(cpore, cperm)
     fzi = fzi[~np.isnan(fzi)]
     sorted_fzi = sorted(fzi)
@@ -588,7 +593,9 @@ def plot_lorenz_heterogeneity(cpore, cperm, title="Lorenz's Plot"):
         cperm (np.ndarray or float): Core permeability in mD.
         title (str, optional): The title of the plot. Defaults to "Lorenz's Plot".
     """
-    sorted_perm, sorted_phit = zip(*sorted(zip(cperm, cpore), reverse=True))
+    sorted_perm, sorted_phit = zip(
+        *sorted(zip(cperm, cpore, strict=True), reverse=True), strict=True
+    )
     perm_cdf = np.cumsum(sorted_perm) / np.sum(sorted_perm)
     phit_cdf = np.cumsum(sorted_phit) / np.sum(sorted_phit)
     lorenz_coeff = (auc(phit_cdf, perm_cdf) - 0.5) / 0.5
@@ -623,7 +630,7 @@ def plot_modified_lorenz(cpore, cperm, title="Modified Lorenz's Plot"):
     """
     fzi = calc_fzi(cpore, cperm)
     sorted_fzi, sorted_perm, sorted_pore = zip(
-        *sorted(zip(fzi, cperm, cpore), reverse=False)
+        *sorted(zip(fzi, cperm, cpore, strict=True), reverse=False), strict=True
     )
     perm_cdf = np.cumsum(sorted_perm) / np.sum(sorted_perm)
     pore_cdf = np.cumsum(sorted_pore) / np.sum(sorted_pore)
@@ -665,7 +672,7 @@ def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
     Returns:
         np.ndarray or float: Volume of shale from gamma ray (VSH_GR).
     """
-    from sklearn.preprocessing import robust_scale, minmax_scale
+    from sklearn.preprocessing import minmax_scale, robust_scale
 
     # Normalize gamma ray
     if not max_gr or (not min_gr and min_gr != 0):
@@ -707,7 +714,7 @@ def estimate_vsh_dn(phin, phid, phin_sh=0.35, phid_sh=0.05):
 def estimate_rock_flag_neuden(
     nphi,
     rhob,
-    vsh_cutoffs=[0.1, 0.25, 0.35, 0.5],
+    vsh_cutoffs=None,
     sand_point=(-0.035, 2.65),
     shale_point=(0.45, 2.55),
     fluid_point=(1.0, 1.0),
@@ -736,6 +743,8 @@ def estimate_rock_flag_neuden(
     """
     from quick_pp.utils import length_a_b, line_intersection
 
+    if vsh_cutoffs is None:
+        vsh_cutoffs = [0.1, 0.25, 0.35, 0.5]
     # Calculate Vshale from the crossplot geometry
     matrix_line = (sand_point, shale_point)
     data_point_line = (fluid_point, (nphi, rhob))
@@ -748,7 +757,7 @@ def estimate_rock_flag_neuden(
     return rock_typing(vsh_neuden, cut_offs=vsh_cutoffs, higher_is_better=False)
 
 
-def rock_typing(curve, cut_offs=[0.1, 0.2, 0.3, 0.4], higher_is_better=True):
+def rock_typing(curve, cut_offs=None, higher_is_better=True):
     """Rock typing based on cutoffs.
 
     Args:
@@ -759,6 +768,8 @@ def rock_typing(curve, cut_offs=[0.1, 0.2, 0.3, 0.4], higher_is_better=True):
     Returns:
         np.ndarray or float: An array of rock type classifications.
     """
+    if cut_offs is None:
+        cut_offs = [0.1, 0.2, 0.3, 0.4]
     # Set number of rock types
     rock_type = np.arange(1, len(cut_offs) + 2)
     rock_type = rock_type[::-1] if higher_is_better else rock_type
@@ -1009,7 +1020,7 @@ def cluster_fzi(cpore, cperm, n_clusters=None, max_clusters=10):
 
 def cluster_rock_types_from_logs(
     df,
-    features=["GR", "NPHI", "RHOB"],
+    features=None,
     n_clusters=None,
     max_clusters=10,
     random_state=42,
@@ -1036,6 +1047,9 @@ def cluster_rock_types_from_logs(
     """
     from sklearn.cluster import KMeans
     from sklearn.preprocessing import StandardScaler
+
+    if features is None:
+        features = ["GR", "NPHI", "RHOB"]
 
     # Combine logs into a DataFrame
     log_data = df.copy()[

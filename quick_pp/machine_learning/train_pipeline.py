@@ -1,17 +1,18 @@
-import pandas as pd
+import importlib.util
 import os
 from pathlib import Path
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import r2_score, mean_absolute_error, f1_score, accuracy_score
+
 import mlflow
 import mlflow.sklearn as mlflow_sklearn
+import pandas as pd
 from mlflow.models.signature import infer_signature
-import importlib.util
+from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, r2_score
+from sklearn.model_selection import train_test_split
 
+from quick_pp import logger
 from quick_pp.machine_learning.config import MODELLING_CONFIG
 from quick_pp.machine_learning.feature_engineering import generate_fe_features
 from quick_pp.machine_learning.utils import run_mlflow_server
-from quick_pp import logger
 
 # Check if config.py exists in the root directory and update MODELLING_CONFIG if found
 root_config_path = Path(os.getcwd(), "config.py")

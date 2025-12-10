@@ -1,8 +1,9 @@
-from pathlib import Path
-from loguru import logger
 import logging
-import sys
 import os
+import sys
+from pathlib import Path
+
+from loguru import logger
 
 # Load .env from the current working directory upwards (like Git).
 # This ensures any import of `quick_pp` picks up project-level environment

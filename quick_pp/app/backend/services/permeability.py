@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
-import pandas as pd
-from typing import List, Dict
 import logging
+from typing import Dict, List
+
+import pandas as pd
+from fastapi import APIRouter, HTTPException
 
 from quick_pp.app.backend.schemas.permeability_choo import InputData as PermChInputData
 from quick_pp.app.backend.schemas.permeability_others import (
@@ -9,9 +10,9 @@ from quick_pp.app.backend.schemas.permeability_others import (
 )
 from quick_pp.permeability import (
     choo_permeability,
-    timur_permeability,
     coates_permeability,
     kozeny_carman_permeability,
+    timur_permeability,
     tixier_permeability,
 )
 
@@ -32,7 +33,7 @@ logger = logging.getLogger("api.services.permeability")
 
         Request body must be a JSON object with the following field:
         - data: list of objects, each with keys 'vclay', 'vsilt', 'phit' (all float, required)
-        
+
         Example (truncated): { 'data': [ {'vclay': 0.25, 'vsilt': 0.10, 'phit': 0.18}, ... ] }
         """
     ),
@@ -73,7 +74,7 @@ async def estimate_perm_choo(inputs: PermChInputData) -> List[Dict[str, float]]:
         ]
     except Exception as e:
         logger.error(f"Error in estimate_perm_choo: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post(
@@ -89,7 +90,7 @@ async def estimate_perm_choo(inputs: PermChInputData) -> List[Dict[str, float]]:
 
         Request body must be a JSON object with the following field:
         - data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)
-        
+
         Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }
         """
     ),
@@ -128,7 +129,7 @@ async def estimate_perm_timur(inputs: PermOthersInputData) -> List[Dict[str, flo
         ]
     except Exception as e:
         logger.error(f"Error in estimate_perm_timur: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post(
@@ -144,7 +145,7 @@ async def estimate_perm_timur(inputs: PermOthersInputData) -> List[Dict[str, flo
 
         Request body must be a JSON object with the following field:
         - data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)
-        
+
         Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }
         """
     ),
@@ -179,7 +180,7 @@ async def estimate_perm_tixier(inputs: PermOthersInputData) -> List[Dict[str, fl
         ]
     except Exception as e:
         logger.error(f"Error in estimate_perm_tixier: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post(
@@ -194,7 +195,7 @@ async def estimate_perm_tixier(inputs: PermOthersInputData) -> List[Dict[str, fl
         Input model: PermOthersInputData (see quick_pp.app.backend.schemas.permeability_others.InputData).
         Request body must be a JSON object with the following field:
         - data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)
-        
+
         Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }
         """
     ),
@@ -230,7 +231,7 @@ async def estimate_perm_coates(inputs: PermOthersInputData) -> List[Dict[str, fl
         ]
     except Exception as e:
         logger.error(f"Error in estimate_perm_coates: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post(
@@ -245,7 +246,7 @@ async def estimate_perm_coates(inputs: PermOthersInputData) -> List[Dict[str, fl
         Input model: PermOthersInputData (see quick_pp.app.backend.schemas.permeability_others.InputData).
         Request body must be a JSON object with the following field:
         - data: list of objects, each with keys 'phit' (float, required) and 'swirr' (float, required)
-        
+
         Example (truncated): { 'data': [ {'phit': 0.18, 'swirr': 0.25}, ... ] }
         """
     ),
@@ -285,4 +286,4 @@ async def estimate_perm_kozeny_carman(
         ]
     except Exception as e:
         logger.error(f"Error in estimate_perm_kozeny_carman: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e

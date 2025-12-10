@@ -1,24 +1,24 @@
-from fastapi import APIRouter, HTTPException
-import pandas as pd
-from typing import List, Dict, Any, Optional
-import numpy as np
+from typing import Any, Dict, List, Optional
 
+import numpy as np
+import pandas as pd
+from fastapi import APIRouter, HTTPException
+
+from quick_pp.app.backend.schemas.saturation_archie import InputData as ArchieInput
+from quick_pp.app.backend.schemas.saturation_b import InputData as BInput
+from quick_pp.app.backend.schemas.saturation_qv import InputData as QvInput
+from quick_pp.app.backend.schemas.saturation_rw import InputData as RwInput
+from quick_pp.app.backend.schemas.saturation_temp_grad import InputData as TempGradInput
 from quick_pp.app.backend.schemas.saturation_waxman_smits import (
     InputData as WaxmanSmitsInput,
 )
-from quick_pp.app.backend.schemas.saturation_archie import InputData as ArchieInput
-from quick_pp.app.backend.schemas.saturation_temp_grad import InputData as TempGradInput
-from quick_pp.app.backend.schemas.saturation_rw import InputData as RwInput
-from quick_pp.app.backend.schemas.saturation_b import InputData as BInput
-from quick_pp.app.backend.schemas.saturation_qv import InputData as QvInput
-
 from quick_pp.saturation import (
-    waxman_smits_saturation,
     archie_saturation,
-    estimate_rw_temperature_salinity,
-    estimate_temperature_gradient,
     estimate_b_waxman_smits,
     estimate_qv,
+    estimate_rw_temperature_salinity,
+    estimate_temperature_gradient,
+    waxman_smits_saturation,
 )
 
 router = APIRouter(prefix="/saturation", tags=["Saturation"])
@@ -86,7 +86,9 @@ def _parse_and_respond(
             result_list = [_safe_float(val) for val in np.asarray(result).flatten()]
         return [{result_key: val} for val in result_list]
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing request: {e}")
+        raise HTTPException(
+            status_code=400, detail=f"Error processing request: {e}"
+        ) from e
 
 
 @router.post(
@@ -101,7 +103,7 @@ def _parse_and_respond(
         Request body must be a JSON object with the following fields:
         - meas_system: string (required, 'metric' or 'imperial')
         - data: list of objects, each with key 'tvdss' (float, required)
-        
+
         Example:
         {
         'meas_system': 'metric',
@@ -143,7 +145,9 @@ async def estimate_temperature_gradient_(
             result_list = [_safe_float(val) for val in np.asarray(temp_grad).flatten()]
         return [{"TEMP_GRAD": val} for val in result_list]
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing request: {e}")
+        raise HTTPException(
+            status_code=400, detail=f"Error processing request: {e}"
+        ) from e
 
 
 @router.post(
@@ -158,7 +162,7 @@ async def estimate_temperature_gradient_(
         Request body must be a JSON object with the following fields:
         - water_salinity: float (required)
         - data: list of objects, each with key 'temp_grad' (float, required)
-        
+
         Example:
         {
         'water_salinity': 35000.0,
@@ -197,7 +201,9 @@ async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
             result_list = [_safe_float(val) for val in np.asarray(rw).flatten()]
         return [{"RW": val} for val in result_list]
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing request: {e}")
+        raise HTTPException(
+            status_code=400, detail=f"Error processing request: {e}"
+        ) from e
 
 
 @router.post(
@@ -206,12 +212,12 @@ async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
     description=(
         """
         Estimate the B parameter using the Waxman-Smits model based on temperature gradient and formation water resistivity.
-    
+
         Input model: BInput (see quick_pp.app.backend.schemas.saturation_b.InputData).
-        
+
         Request body must be a JSON object with the following fields:
         - data: list of objects, each with keys 'temp_grad' (float, required) and 'rw' (float, required)
-        
+
         Example:
         {
         'data': [ {'temp_grad': 0.025, 'rw': 0.12},
@@ -259,7 +265,7 @@ async def estimate_b_waxman_smits_(inputs: BInput) -> List[Dict[str, float]]:
         - rho_clay: float (required)
         - cec_clay: float (required)
         - data: list of objects, each with keys 'vcld' (float, required) and 'phit' (float, required)
-        
+
         Example (truncated): { 'rho_clay': 2.58, 'cec_clay': 0.9, 'data': [ {'vcld': 0.35, 'phit': 0.22}, ... ] }
         """
     ),
@@ -298,7 +304,9 @@ async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
             result_list = [_safe_float(val) for val in np.asarray(qv).flatten()]
         return [{"QV": val} for val in result_list]
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing request: {e}")
+        raise HTTPException(
+            status_code=400, detail=f"Error processing request: {e}"
+        ) from e
 
 
 @router.post(
@@ -312,7 +320,7 @@ async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
 
         Request body must be a JSON object with the following field:
         - data: list of objects, each with keys 'rt', 'rw', 'phit', 'qv', 'b' (all float, required), and 'm' (int, required)
-        
+
         Example:
         {
             'data': [
@@ -365,7 +373,9 @@ async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, 
             result_list = [_safe_float(val) for val in np.asarray(swt).flatten()]
         return [{"SWT": val} for val in result_list]
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing request: {e}")
+        raise HTTPException(
+            status_code=400, detail=f"Error processing request: {e}"
+        ) from e
 
 
 @router.post(
@@ -379,7 +389,7 @@ async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, 
 
         Request body must be a JSON object with the following field:
         - data: list of objects, each with keys 'rt', 'rw', 'phit' (all float, required)
-        
+
         Example (truncated): { 'data': [ {'rt': 12.0, 'rw': 0.12, 'phit': 0.22}, ... ] }
         """
     ),
@@ -420,4 +430,6 @@ async def estimate_swt_archie(inputs: ArchieInput) -> List[Dict[str, float]]:
             result_list = [_safe_float(val) for val in np.asarray(swt).flatten()]
         return [{"SWT": val} for val in result_list]
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing request: {e}")
+        raise HTTPException(
+            status_code=400, detail=f"Error processing request: {e}"
+        ) from e

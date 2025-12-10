@@ -1,8 +1,8 @@
 import numpy as np
 
+from quick_pp import logger
 from quick_pp.config import Config
 from quick_pp.utils import length_a_b, line_intersection
-from quick_pp import logger
 
 
 def normalize_volumetric(phit, **volumetrics):

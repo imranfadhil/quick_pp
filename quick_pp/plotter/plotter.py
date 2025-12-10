@@ -1,11 +1,10 @@
-import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
-
-from quick_pp.utils import line_intersection
-from quick_pp import logger
-import quick_pp.plotter.well_log as plotter_wells
+import numpy as np
 import plotly.graph_objects as go
+
+import quick_pp.plotter.well_log as plotter_wells
+from quick_pp import logger
+from quick_pp.utils import line_intersection
 
 plotly_log = plotter_wells.plotly_log
 
@@ -71,7 +70,7 @@ def update_fluid_contacts(well_data, well_config: dict):
     return well_data
 
 
-def generate_zone_config(zones: list = ["ALL"]):
+def generate_zone_config(zones: list = None):
     """Generate zone configuration.
 
     Args:
@@ -80,6 +79,8 @@ def generate_zone_config(zones: list = ["ALL"]):
     Returns:
         dict: Zone configuration
     """
+    if zones is None:
+        zones = ["ALL"]
     logger.info(f"Generating zone config for zones: {zones}")
     zone_config = {}
     for zone in zones:
@@ -117,7 +118,7 @@ def update_zone_config(zone_config: dict, zone: str, fluid_contacts: dict):
     return zone_config
 
 
-def generate_well_config(well_names: list = ["X"]):
+def generate_well_config(well_names: list = None):
     """Generate well configuration.
 
     Args:
@@ -126,6 +127,8 @@ def generate_well_config(well_names: list = ["X"]):
     Returns:
         dict: Well configuration
     """
+    if well_names is None:
+        well_names = ["X"]
     logger.info(f"Generating well config for wells: {well_names}")
     well_config = {}
     for i, well in enumerate(well_names):
@@ -151,7 +154,7 @@ def update_well_config(
     well_config: dict,
     well_name: str,
     zone: str = "",
-    fluid_contacts: dict = {},
+    fluid_contacts: dict = None,
     sorting: int = 0,
 ):
     """Update well configuration with fluid contacts.
@@ -166,6 +169,8 @@ def update_well_config(
     Returns:
         dict: Updated well configuration
     """
+    if fluid_contacts is None:
+        fluid_contacts = {}
     logger.info(
         f"Updating well config for well: {well_name}, zone: {zone}, sorting: {sorting}"
     )
@@ -240,7 +245,7 @@ def stick_plot(data, well_config: dict, zone: str = "ALL"):
     )
 
     # Plot each well's data
-    for ax, well_name in zip(axes, well_names):
+    for ax, well_name in zip(axes, well_names, strict=True):
         logger.debug(f"Plotting well: {well_name}")
         well_data = data[
             (data["WELL_NAME"] == well_name) & (data["ZONES"] == zone)
@@ -322,7 +327,7 @@ def neutron_density_xplot(
     A = dry_min1_point
     C = dry_clay_point
     D = fluid_point
-    E = list(zip(nphi, rhob))
+    E = list(zip(nphi, rhob, strict=True))
 
     # Compute projected points (intersection of mineral-clay line with fluid->point lines)
     projected_pt = []
@@ -340,12 +345,12 @@ def neutron_density_xplot(
             x=list(nphi),
             y=list(rhob),
             mode="markers",
-            marker=dict(
-                color=list(range(len(nphi))),
-                colorscale="Rainbow",
-                showscale=False,
-                size=6,
-            ),
+            marker={
+                "color": list(range(len(nphi))),
+                "colorscale": "Rainbow",
+                "showscale": False,
+                "size": 6,
+            },
             name="Data",
             hoverinfo="x+y+text",
         )
@@ -357,7 +362,7 @@ def neutron_density_xplot(
             x=[D[0], A[0]],
             y=[D[1], A[1]],
             mode="lines",
-            line=dict(color="blue"),
+            line={"color": "blue"},
             name="Mineral 1 Line",
         )
     )
@@ -368,7 +373,7 @@ def neutron_density_xplot(
             x=[D[0], C[0]],
             y=[D[1], C[1]],
             mode="lines",
-            line=dict(color="gray"),
+            line={"color": "gray"},
             name="Clay Line",
         )
     )
@@ -379,7 +384,7 @@ def neutron_density_xplot(
             x=[A[0], C[0]],
             y=[A[1], C[1]],
             mode="lines",
-            line=dict(color="black"),
+            line={"color": "black"},
             name="Rock Line",
         )
     )
@@ -392,7 +397,7 @@ def neutron_density_xplot(
                 x=[D[0], B[0]],
                 y=[D[1], B[1]],
                 mode="lines",
-                line=dict(color="green"),
+                line={"color": "green"},
                 name="Silt Line",
             )
         )
@@ -401,20 +406,20 @@ def neutron_density_xplot(
                 x=[B[0]],
                 y=[B[1]],
                 mode="markers",
-                marker=dict(color="orange", size=8),
+                marker={"color": "orange", "size": 8},
                 name="Dry Silt Point",
             )
         )
 
     # Projected points
     if projected_pt:
-        xs, ys = zip(*projected_pt)
+        xs, ys = zip(*projected_pt, strict=True)
         fig.add_trace(
             go.Scatter(
                 x=list(xs),
                 y=list(ys),
                 mode="markers",
-                marker=dict(color="purple", size=4),
+                marker={"color": "purple", "size": 4},
                 name="Projected Point",
             )
         )
@@ -425,7 +430,7 @@ def neutron_density_xplot(
             x=[A[0]],
             y=[A[1]],
             mode="markers",
-            marker=dict(color="yellow", size=9),
+            marker={"color": "yellow", "size": 9},
             name=f"Mineral Point ({A[0]}, {A[1]})",
         )
     )
@@ -434,7 +439,7 @@ def neutron_density_xplot(
             x=[C[0]],
             y=[C[1]],
             mode="markers",
-            marker=dict(color="black", size=9),
+            marker={"color": "black", "size": 9},
             name=f"Dry Clay ({C[0]}, {C[1]})",
         )
     )
@@ -444,7 +449,7 @@ def neutron_density_xplot(
                 x=[wet_clay_point[0]],
                 y=[wet_clay_point[1]],
                 mode="markers",
-                marker=dict(color="gray", size=8),
+                marker={"color": "gray", "size": 8},
                 name="Wet Clay",
             )
         )
@@ -453,21 +458,27 @@ def neutron_density_xplot(
             x=[D[0]],
             y=[D[1]],
             mode="markers",
-            marker=dict(color="blue", size=9),
+            marker={"color": "blue", "size": 9},
             name=f"Fluid ({D[0]}, {D[1]})",
         )
     )
 
     # Layout: invert y-axis (depth-style), tidy ranges similar to previous implementation
     # Build layout dict so we can toggle fixed pixel size vs responsive autosize
-    layout = dict(
-        title="NPHI-RHOB Crossplot",
-        xaxis=dict(title="NPHI", range=[-0.10, 1]),
-        yaxis=dict(title="RHOB", autorange=False, range=[3, 0]),
-        legend=dict(orientation="v", yanchor="top", y=0.99, xanchor="left", x=0.01),
-        template="plotly_white",
-        margin=dict(l=40, r=10, t=40, b=40),
-    )
+    layout = {
+        "title": "NPHI-RHOB Crossplot",
+        "xaxis": {"title": "NPHI", "range": [-0.10, 1]},
+        "yaxis": {"title": "RHOB", "autorange": False, "range": [3, 0]},
+        "legend": {
+            "orientation": "v",
+            "yanchor": "top",
+            "y": 0.99,
+            "xanchor": "left",
+            "x": 0.01,
+        },
+        "template": "plotly_white",
+        "margin": {"l": 40, "r": 10, "t": 40, "b": 40},
+    }
 
     if responsive:
         # Let plotly.js adapt to container size. The frontend should pass

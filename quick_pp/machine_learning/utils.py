@@ -1,15 +1,16 @@
-import pandas as pd
-from pandas.util import hash_pandas_object
 import os
-import mlflow
-from mlflow.tracking import MlflowClient
 import socket
-from subprocess import Popen
 from hashlib import sha256
 from pathlib import Path
+from subprocess import Popen
 
-from quick_pp.machine_learning.config import MLFLOW_CONFIG
+import mlflow
+import pandas as pd
+from mlflow.tracking import MlflowClient
+from pandas.util import hash_pandas_object
+
 from quick_pp import logger
+from quick_pp.machine_learning.config import MLFLOW_CONFIG
 
 
 def unique_id(df: pd.DataFrame) -> str:

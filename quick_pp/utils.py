@@ -1,11 +1,11 @@
+import math
+
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
-from scipy.signal import detrend
-import math
 import ruptures.detection as rpt
 import scipy.stats as stats
-from scipy.signal import find_peaks
+from scipy.signal import detrend, find_peaks
+from sklearn.preprocessing import MinMaxScaler
 
 from quick_pp import logger
 
@@ -20,7 +20,7 @@ def length_a_b(A: tuple, B: tuple):
     Returns:
         float: The distance between points A and B.
     """
-    return np.sqrt(sum([(a - b) ** 2 for a, b in zip(A, B)]))
+    return np.sqrt(sum([(a - b) ** 2 for a, b in zip(A, B, strict=True)]))
 
 
 def line_intersection(line1: tuple, line2: tuple):

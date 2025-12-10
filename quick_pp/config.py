@@ -14,62 +14,67 @@ class Config:
     """A class to hold static configuration data for the quick_pp library."""
 
     # Default cutoffs for reservoir summary calculations
-    RESSUM_CUTOFFS = dict(VSHALE=0.4, PHIT=0.05, SWT=0.95)
+    RESSUM_CUTOFFS = {"VSHALE": 0.4, "PHIT": 0.05, "SWT": 0.95}
 
     # Defines properties for common well log variables, including names, units, and typical ranges.
-    VARS = dict(
-        GR=dict(name="Gamma Ray", unit="GAPI", min=0, max=200),
-        RT=dict(name="True Resistivity", unit="ohm.m", min=0, max=2000),
-        NPHI=dict(name="Neutron Porosity", unit="v/v", min=-0.05, max=1.0),
-        RHOB=dict(name="Bulk Density", unit="g/cc", min=1.0, max=3.0),
-        PEF=dict(name="Peak Frequency", unit="Hz", min=0, max=10),
-        DTC=dict(name="DTC", unit="us/ft", min=20, max=260),
-        DTS=dict(name="DTS", unit="us/ft", min=20, max=260),
-        VSAND=dict(name="Sand Volume", unit="v/v", min=0, max=1),
-        VSILT=dict(name="Silt Volume", unit="v/v", min=0, max=1),
-        VCLAY=dict(name="Clay Volume", unit="v/v", min=0, max=1),
-        VSHALE=dict(name="Shale Volume", unit="v/v", min=0, max=1),
-        PHIT=dict(name="Total Porosity", unit="v/v", min=0, max=0.5),
-        PHIE=dict(name="Effective Porosity", unit="v/v", min=0, max=0.5),
-        SWT=dict(vname="Total Water Saturation", unit="v/v", min=0, max=1),
-        SWE=dict(vname="Effective Water Saturation", unit="v/v", min=0, max=1),
-        PERM=dict(name="Permeability", unit="mD", min=0.01, max=100000),
-    )
+    VARS = {
+        "GR": {"name": "Gamma Ray", "unit": "GAPI", "min": 0, "max": 200},
+        "RT": {"name": "True Resistivity", "unit": "ohm.m", "min": 0, "max": 2000},
+        "NPHI": {"name": "Neutron Porosity", "unit": "v/v", "min": -0.05, "max": 1.0},
+        "RHOB": {"name": "Bulk Density", "unit": "g/cc", "min": 1.0, "max": 3.0},
+        "PEF": {"name": "Peak Frequency", "unit": "Hz", "min": 0, "max": 10},
+        "DTC": {"name": "DTC", "unit": "us/ft", "min": 20, "max": 260},
+        "DTS": {"name": "DTS", "unit": "us/ft", "min": 20, "max": 260},
+        "VSAND": {"name": "Sand Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VSILT": {"name": "Silt Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VCLAY": {"name": "Clay Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VSHALE": {"name": "Shale Volume", "unit": "v/v", "min": 0, "max": 1},
+        "PHIT": {"name": "Total Porosity", "unit": "v/v", "min": 0, "max": 0.5},
+        "PHIE": {"name": "Effective Porosity", "unit": "v/v", "min": 0, "max": 0.5},
+        "SWT": {"vname": "Total Water Saturation", "unit": "v/v", "min": 0, "max": 1},
+        "SWE": {
+            "vname": "Effective Water Saturation",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "PERM": {"name": "Permeability", "unit": "mD", "min": 0.01, "max": 100000},
+    }
 
     # Default endpoints for the Sand-Silt-Clay lithology model.
-    SSC_ENDPOINTS = dict(
-        FLUID_POINT=(1.0, 1.0),
-        DRY_SAND_POINT=(-0.02, 2.65),
-        DRY_SILT_POINT=(None, 2.68),  # None means it will be calculated
-        DRY_CLAY_POINT=(None, 2.71),  # None means it will be calculated
-        WET_CLAY_POINT=(None, None),  # None means it will be calculated
-        SILT_LINE_ANGLE=119,  # Deg angle from horizontal
-    )
+    SSC_ENDPOINTS = {
+        "FLUID_POINT": (1.0, 1.0),
+        "DRY_SAND_POINT": (-0.02, 2.65),
+        "DRY_SILT_POINT": (None, 2.68),  # None means it will be calculated
+        "DRY_CLAY_POINT": (None, 2.71),  # None means it will be calculated
+        "WET_CLAY_POINT": (None, None),  # None means it will be calculated
+        "SILT_LINE_ANGLE": 119,  # Deg angle from horizontal
+    }
 
     # Default endpoints for the Thin-Beds lithology model.
-    TS_ENDPOINTS = dict(
-        FLUID_POINT=(1.0, 1.0),
-        DRY_SAND_POINT=(-0.02, 2.65),
-        DRY_SHALE_POINT=(0.44, 2.71),
-        DRY_SAND_PORO=0.26,
-        DRY_SHALE_PORO=0.1,
-    )
+    TS_ENDPOINTS = {
+        "FLUID_POINT": (1.0, 1.0),
+        "DRY_SAND_POINT": (-0.02, 2.65),
+        "DRY_SHALE_POINT": (0.44, 2.71),
+        "DRY_SAND_PORO": 0.26,
+        "DRY_SHALE_PORO": 0.1,
+    }
 
     # Default endpoints for the Carbonate Neutron-Density crossplot model.
-    CARB_NEU_DEN_ENDPOINTS = dict(
-        FLUID_POINT=(1.0, 1.0),
-        DRY_CALC_POINT=(0.0, 2.71),
-        DRY_DOLO_POINT=(0.01, 2.87),
-        DRY_CLAY_POINT=(0.24, 2.78),
-    )
+    CARB_NEU_DEN_ENDPOINTS = {
+        "FLUID_POINT": (1.0, 1.0),
+        "DRY_CALC_POINT": (0.0, 2.71),
+        "DRY_DOLO_POINT": (0.01, 2.87),
+        "DRY_CLAY_POINT": (0.24, 2.78),
+    }
 
     # Default endpoints for the Carbonate Density-PEF crossplot model.
-    CARB_DEN_PEF_ENDPOINTS = dict(
-        FLUID_POINT=(1.0, 1.0),
-        DRY_CALC_POINT=(5.08, 2.71),
-        DRY_DOLO_POINT=(3.14, 2.87),
-        DRY_CLAY_POINT=(2.2, 2.78),
-    )
+    CARB_DEN_PEF_ENDPOINTS = {
+        "FLUID_POINT": (1.0, 1.0),
+        "DRY_CALC_POINT": (5.08, 2.71),
+        "DRY_DOLO_POINT": (3.14, 2.87),
+        "DRY_CLAY_POINT": (2.2, 2.78),
+    }
 
     # Typical log responses for various pure minerals.
     MINERALS_LOG_VALUE = {
@@ -102,37 +107,37 @@ class Config:
     }
 
     # Elastic and density properties for minerals and fluids used in geomechanics and rock physics.
-    GEOMECHANICS_VALUE = dict(
+    GEOMECHANICS_VALUE = {
         # Quartz
-        RHOB_QUARTZ=2.65,
-        K_QUARTZ=36.6,
-        G_QUARTZ=45.0,
+        "RHOB_QUARTZ": 2.65,
+        "K_QUARTZ": 36.6,
+        "G_QUARTZ": 45.0,
         # Shale
-        RHOB_SHALE=2.7,
-        K_SHALE=21.0,
-        G_SHALE=7.0,
+        "RHOB_SHALE": 2.7,
+        "K_SHALE": 21.0,
+        "G_SHALE": 7.0,
         # Calcite
-        RHOB_CALCITE=2.71,
-        K_CALCITE=75.0,
-        G_CALCITE=30.0,
+        "RHOB_CALCITE": 2.71,
+        "K_CALCITE": 75.0,
+        "G_CALCITE": 30.0,
         # Dolomite
-        RHOB_DOLOMITE=2.85,
-        K_DOLOMITE=100.0,
-        G_DOLOMITE=40.0,
+        "RHOB_DOLOMITE": 2.85,
+        "K_DOLOMITE": 100.0,
+        "G_DOLOMITE": 40.0,
         # Cement
-        RHOB_CEMENT=2.65,
-        K_CEMENT=37.0,
-        G_CEMENT=45.0,
+        "RHOB_CEMENT": 2.65,
+        "K_CEMENT": 37.0,
+        "G_CEMENT": 45.0,
         # Brine
-        RHOB_BRINE=1.0,
-        K_BRINE=2.5,
+        "RHOB_BRINE": 1.0,
+        "K_BRINE": 2.5,
         # Oil
-        RHOB_OIL=0.8,
-        K_OIL=1.5,
+        "RHOB_OIL": 0.8,
+        "K_OIL": 1.5,
         # Gas
-        RHOB_GAS=0.2,
-        K_GAS=0.06,
-    )
+        "RHOB_GAS": 0.2,
+        "K_GAS": 0.06,
+    }
 
     # A dictionary of common geological abbreviations and their expanded forms.
     # This can be expanded with more terms as needed.

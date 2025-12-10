@@ -1,9 +1,10 @@
-from fastapi import APIRouter, File, UploadFile, HTTPException
-from typing import List
-from pathlib import Path
 import os
 import shutil
 from hashlib import sha256
+from pathlib import Path
+from typing import List
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from quick_pp.las_handler import read_las_file_welly
 
@@ -18,7 +19,7 @@ def validate_file_extension(filename: str):
     if ext.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file extension. Allowed extensions: {', '.join(ALLOWED_EXTENSIONS)}"
+            detail=f"Invalid file extension. Allowed extensions: {', '.join(ALLOWED_EXTENSIONS)}",
         )
 
 
@@ -43,9 +44,11 @@ def read_las_file(input_path: Path, destination: Path):
         with open(input_path, "rb") as f:
             df, _ = read_las_file_welly(f)
             df.to_parquet(destination, index=False)
-        return {'message': f"File {destination.name} processed successfully"}
+        return {"message": f"File {destination.name} processed successfully"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading LAS file: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error reading LAS file: {str(e)}"
+        ) from e
 
 
 @router.post(
@@ -125,8 +128,8 @@ async def process_las_file(files: List[UploadFile] = File(...)):
             read_las_file(raw_file_path, processed_file_path)
             processed_file_paths.append(processed_file_path)
 
-        except Exception:
-            raise HTTPException(status_code=500, detail='Something went wrong')
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Something went wrong") from e
         finally:
             file.file.close()
 

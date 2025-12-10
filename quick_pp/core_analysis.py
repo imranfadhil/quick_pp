@@ -1,17 +1,18 @@
-from scipy.optimize import curve_fit
+import hashlib
+import re
+
 import matplotlib.pyplot as plt
 import numpy as np
-import plotly.graph_objects as go
-from tqdm import tqdm
-import re
 import pandas as pd
-import hashlib
+import plotly.graph_objects as go
+from scipy.optimize import curve_fit
 from sklearn.metrics import root_mean_squared_error
+from tqdm import tqdm
 
-from quick_pp.rock_type import estimate_pore_throat
-from quick_pp.utils import power_law_func, inv_power_law_func
-from quick_pp.config import Config
 from quick_pp import logger
+from quick_pp.config import Config
+from quick_pp.rock_type import estimate_pore_throat
+from quick_pp.utils import inv_power_law_func, power_law_func
 
 GEO_ABBREVIATIONS = Config.CORE_GEO_ABBREVIATIONS
 WORD_CATEGORIES = Config.CORE_WORD_CATEGORIES

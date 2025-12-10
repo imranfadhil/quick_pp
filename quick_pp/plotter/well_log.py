@@ -190,9 +190,9 @@ def plotly_log(
     well_data,
     well_name: str = "",
     depth_uom="",
-    trace_defs: dict = dict(),
-    xaxis_defs: dict = {},
-    column_widths: list = [],
+    trace_defs: dict = None,
+    xaxis_defs: dict = None,
+    column_widths: list = None,
 ):
     """Generate a multi-track well log plot using Plotly.
 
@@ -220,8 +220,7 @@ def plotly_log(
         >>> fig = plotly_log(well_df, well_name='MyWell', depth_uom='m')
         >>> fig.show()
     """
-    trace_defs = TRACE_DEFS if trace_defs == dict() else trace_defs
-
+    trace_defs = trace_defs or TRACE_DEFS
     xaxis_defs = xaxis_defs or XAXIS_DEFS
     no_of_track = max([trace["track"] for trace in trace_defs.values()])
     column_widths = column_widths or [1] * no_of_track
@@ -265,7 +264,7 @@ def plotly_log(
         # Remove 'ROCK_FLAG_0' if it already exists as a trace in fig.data
         if any(trace.name == "ROCK_FLAG_0" for trace in fig.data):
             rock_flag_columns.remove("ROCK_FLAG_0")
-        fig.update_traces(selector=dict(name="ROCK_FLAG_0"), visible=False)
+        fig.update_traces(selector={"name": "ROCK_FLAG_0"}, visible=False)
         for feature in rock_flag_columns:
             fig.add_trace(
                 go.Scatter(
@@ -391,17 +390,23 @@ def plotly_log(
                 zone_tops_idx = [0] + [
                     idx
                     for idx, (i, j) in enumerate(
-                        zip(tops_df["ZONES"], tops_df["ZONES"][1:]), 1
+                        zip(tops_df["ZONES"], tops_df["ZONES"][1:], strict=True), 1
                     )
                     if i != j
                 ]
                 zone_tops = tops_df.loc[zone_tops_idx, :]
                 for tops in zone_tops.values:
                     fig.add_shape(
-                        dict(type="line", x0=-5, y0=tops[1], x1=1e6, y1=tops[1]),
+                        {
+                            "type": "line",
+                            "x0": -5,
+                            "y0": tops[1],
+                            "x1": 1e6,
+                            "y1": tops[1],
+                        },
                         row=1,
                         col="all",
-                        line=dict(color="#763F98", dash="dot", width=1.5),
+                        line={"color": "#763F98", "dash": "dot", "width": 1.5},
                     )
                     fig.add_trace(
                         go.Scatter(
@@ -411,7 +416,7 @@ def plotly_log(
                             hoverinfo="skip",
                             text=tops[2],
                             mode="text",
-                            textfont=dict(color="#763F98", size=12),
+                            textfont={"color": "#763F98", "size": 12},
                             textposition="top right",
                         ),
                         row=1,
@@ -441,7 +446,7 @@ def plotly_log(
         newshape_line_color="cyan",
         newshape_line_width=3,
         template="none",
-        margin=dict(l=70, r=0, t=20, b=10),
+        margin={"l": 70, "r": 0, "t": 20, "b": 10},
         paper_bgcolor="#dadada",
     )
 

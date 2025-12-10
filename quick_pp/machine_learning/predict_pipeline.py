@@ -1,20 +1,21 @@
-import pandas as pd
 import os
 from pathlib import Path
-from mlflow.pyfunc import load_model
+
 import mlflow.tracking as mlflow_tracking
+import pandas as pd
+from mlflow.pyfunc import load_model
 from tqdm import tqdm
 
+from quick_pp import logger
+from quick_pp.fluid_type import fix_fluid_segregation
 from quick_pp.machine_learning.config import MODELLING_CONFIG, RAW_FEATURES
 from quick_pp.machine_learning.feature_engineering import generate_fe_features
 from quick_pp.machine_learning.utils import (
     get_latest_registered_models,
-    unique_id,
     run_mlflow_server,
+    unique_id,
 )
 from quick_pp.plotter.well_log import plotly_log
-from quick_pp.fluid_type import fix_fluid_segregation
-from quick_pp import logger
 
 
 def load_data(hash: str) -> pd.DataFrame:

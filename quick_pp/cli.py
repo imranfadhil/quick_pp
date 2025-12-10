@@ -6,18 +6,19 @@ of the quick_pp application, including running the web app, managing MLflow
 servers, and executing machine learning training and prediction pipelines.
 """
 
-import click
 import os
 import shutil
+import signal
 import socket
+import subprocess
 import sys
+import time
 import webbrowser
 from importlib import metadata, resources
 from pathlib import Path
 from subprocess import Popen
-import subprocess
-import signal
-import time
+
+import click
 
 
 def on_starting(server):

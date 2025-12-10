@@ -1,11 +1,11 @@
-import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
-from tqdm import tqdm
+import numpy as np
+import pandas as pd
 from scipy.optimize import curve_fit
+from tqdm import tqdm
 
-from quick_pp.utils import straight_line_func as func
 from quick_pp import logger
+from quick_pp.utils import straight_line_func as func
 
 plt.style.use("seaborn-v0_8-paper")
 plt.rcParams.update(

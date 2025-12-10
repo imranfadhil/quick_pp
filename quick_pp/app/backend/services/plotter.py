@@ -1,13 +1,14 @@
+import json
+from typing import Optional
+
+import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-import json
+
+from quick_pp.database import objects as db_objects
+from quick_pp.plotter import well_log as wl
 
 from . import database as database_service
-from quick_pp.database import objects as db_objects
-
-from quick_pp.plotter import well_log as wl
-from typing import Optional
-import pandas as pd
 
 router = APIRouter(prefix="/plotter", tags=["Plotter"])
 
@@ -92,7 +93,7 @@ async def get_well_log(
                 if "CPERM" not in df.columns:
                     df["CPERM"] = pd.NA
 
-                for sample_name, sample in (
+                for _, sample in (
                     core_dict.items() if isinstance(core_dict, dict) else []
                 ):
                     try:
@@ -171,6 +172,8 @@ async def get_well_log(
             return JSONResponse(content=parsed)
 
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to build well log: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to build well log: {e}"
+        ) from e

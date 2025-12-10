@@ -1,11 +1,11 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from imblearn.over_sampling import SMOTE
-import matplotlib.pyplot as plt
 import seaborn as sns
-
-from quick_pp.rock_type import estimate_vsh_gr, rock_typing, find_cutoffs
+from imblearn.over_sampling import SMOTE
 from tqdm import tqdm
+
+from quick_pp.rock_type import estimate_vsh_gr, find_cutoffs, rock_typing
 
 
 def rhob_integral(rhob, step=15):

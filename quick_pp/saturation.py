@@ -1,11 +1,11 @@
-import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import numpy as np
+import pandas as pd
 from tqdm import tqdm
 
-from quick_pp.utils import min_max_line, remove_outliers
 from quick_pp import logger
+from quick_pp.utils import min_max_line, remove_outliers
 
 plt.style.use("seaborn-v0_8-paper")
 plt.rcParams.update(
@@ -82,7 +82,7 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
     logger.debug("Starting iterative solution for Waxman-Smits")
 
     # Use tqdm for progress bar during iterations
-    for i in tqdm(range(50), desc="Waxman-Smits iteration"):
+    for _ in tqdm(range(50), desc="Waxman-Smits iteration"):
         fx = (
             swt**n + rw * B * Qv * swt ** (n - 1) - (phit**-m * rw / rt)
         )  # Ausburn, 1985
@@ -132,7 +132,7 @@ def normalized_waxman_smits_saturation(
     logger.debug("Starting iterative solution for Waxman-Smits")
 
     # Use tqdm for progress bar during iterations
-    for i in tqdm(range(50), desc="Normalized Waxman-Smits iteration"):
+    for _ in tqdm(range(50), desc="Normalized Waxman-Smits iteration"):
         fx = swt**n / rw + Qvn * B * swt ** (n - 1) - (phit**-m / rt)  # Juhasz, 1981
         delta_sat = abs(swt - swt_i) / 2
         swt_i = swt
@@ -176,7 +176,7 @@ def dual_water_saturation(rt, rw, phit, a, m, n, swb, rwb):
     logger.debug("Starting iterative solution for dual water model")
 
     # Use tqdm for progress bar during iterations
-    for i in tqdm(range(50), desc="Dual water iteration"):
+    for _ in tqdm(range(50), desc="Dual water iteration"):
         fx = phit**m * swt**n / a * (1 / rw * (swb / swt) * (1 / rwb - 1 / rw)) - 1 / rt
         delta_sat = abs(swt - swt_i) / 2
         swt_i = swt

@@ -1,6 +1,7 @@
-from fastapi import APIRouter
-import requests
 import os
+
+import requests
+from fastapi import APIRouter
 
 router = APIRouter(prefix="/langflow", tags=["Langflow"])
 
@@ -10,13 +11,10 @@ local_url = os.getenv("LANGFLOW_HOST", "http://localhost:7860")
 
 @router.get("/get_projects")
 async def get_projects():
-
     url = f"{local_url}/api/v1/projects/"
 
     payload = {}
-    headers = {
-        "Accept": "application/json"
-    }
+    headers = {"Accept": "application/json"}
 
     response = requests.request("GET", url, headers=headers, data=payload)
 
@@ -31,13 +29,10 @@ async def get_projects_id():
 
 @router.get("/get_flows")
 async def get_flows():
-
     url = f"{local_url}/api/v1/flows/?remove_example_flows=true&get_all=true&header_flows=true"
 
     payload = {}
-    headers = {
-        "Accept": "application/json"
-    }
+    headers = {"Accept": "application/json"}
 
     response = requests.request("GET", url, headers=headers, data=payload)
 
@@ -53,19 +48,18 @@ async def get_flows_id():
 @router.post("/chat")
 async def chat(flow_id: str, question: str):
     import requests
+
     url = f"{local_url}/api/v1/run/{flow_id}"  # The complete API endpoint URL for this flow
 
     # Request payload configuration
     payload = {
         "input_value": question,  # The input value to be processed by the flow
         "output_type": "chat",  # Specifies the expected output format
-        "input_type": "chat"  # Specifies the input format
+        "input_type": "chat",  # Specifies the input format
     }
 
     # Request headers
-    headers = {
-        "Content-Type": "application/json"
-    }
+    headers = {"Content-Type": "application/json"}
 
     try:
         # Send API request
@@ -79,7 +73,7 @@ async def chat(flow_id: str, question: str):
         if response_data and "outputs" in response_data:
             outputs = response_data["outputs"]
             if outputs and len(outputs) > 0:
-                response_data = outputs[0]['outputs'][0]['results']
+                response_data = outputs[0]["outputs"][0]["results"]
 
         # Fallback: return the full response if structure is different
         return response_data

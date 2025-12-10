@@ -1,14 +1,16 @@
+from typing import Dict, List
+
+import numpy as np
 from fastapi import APIRouter
+
 from quick_pp.app.backend.schemas.porosity import InputData
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.porosity import (
-    neu_den_xplot_poro,
     density_porosity,
-    rho_matrix,
     estimate_shale_porosity,
+    neu_den_xplot_poro,
+    rho_matrix,
 )
-from typing import List, Dict
-import numpy as np
 
 router = APIRouter(prefix="/porosity", tags=["Porosity"])
 
@@ -27,7 +29,7 @@ def _validate_points(input_dict: dict, required_points: List[str]):
     description=(
         """
         Estimate Density Porosity (PHID) using the density porosity method.
-        
+
         The `InputData` Pydantic model includes:
         - data: List of measurement objects, each with:
             - nphi (float): Neutron porosity value.
@@ -89,10 +91,12 @@ async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
         silt_line_angle=inputs.silt_line_angle,
     )
     vsand, vsilt, vcld, _ = ssc_model.estimate_lithology(nphi, rhob)
-    rho_ma = [rho_matrix(vs, vsi, vc) for vs, vsi, vc in zip(vsand, vsilt, vcld)]
+    rho_ma = [
+        rho_matrix(vs, vsi, vc) for vs, vsi, vc in zip(vsand, vsilt, vcld, strict=True)
+    ]
     phid = [
         density_porosity(rhb, rhma, inputs.fluid_point[1])
-        for rhb, rhma in zip(rhob, rho_ma)
+        for rhb, rhma in zip(rhob, rho_ma, strict=True)
     ]
     return [{"PHID": float(val)} for val in phid]
 
@@ -103,7 +107,7 @@ async def estimate_phit_den(inputs: InputData) -> List[Dict[str, float]]:
     description=(
         """
         Estimate Total Porosity (PHIT) using neutron-density crossplot analysis.
-        
+
         The `InputData` Pydantic model includes:
         - data: List of measurement objects, each with:
             - nphi (float): Neutron porosity value.
@@ -176,4 +180,7 @@ async def estimate_phit_neu_den(inputs: InputData) -> List[Dict[str, float]]:
     vclb = vclay * phit_shale
     phie = phit - vclb
 
-    return [{"PHIT": float(val), "PHIE": float(e)} for val, e in zip(phit, phie)]
+    return [
+        {"PHIT": float(val), "PHIE": float(e)}
+        for val, e in zip(phit, phie, strict=True)
+    ]

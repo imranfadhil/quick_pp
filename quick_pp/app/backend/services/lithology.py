@@ -13,17 +13,16 @@ Input Pydantic models:
 - `LithologyHCCorrectionInput` — see `quick_pp.app.backend.schemas.lithology_hc_correction.LithologyHCCorrectionInput`
 """
 
-from fastapi import APIRouter
 import pandas as pd
+from fastapi import APIRouter
 
-from quick_pp.app.backend.schemas.lithology_ssc import LithologySSCInput
-from quick_pp.app.backend.schemas.lithology_vsh_gr import LithologyVshGRInput
 from quick_pp.app.backend.schemas.lithology_hc_correction import (
     LithologyHCCorrectionInput,
 )
-
-from quick_pp.lithology.sand_silt_clay import SandSiltClay
+from quick_pp.app.backend.schemas.lithology_ssc import LithologySSCInput
+from quick_pp.app.backend.schemas.lithology_vsh_gr import LithologyVshGRInput
 from quick_pp.lithology import gr_index
+from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.qaqc import neu_den_xplot_hc_correction
 
 router = APIRouter(prefix="/lithology", tags=["Lithology"])
@@ -64,9 +63,9 @@ def _to_dataframe(data, columns=None):
     description=(
         """
         Estimate sand, silt, and clay (SSC) volume fractions based on a multi-endpoint lithology model.
-        
+
         Input model: LithologySSCInput (see quick_pp.app.backend.schemas.lithology_ssc.LithologySSCInput).
-        
+
         Request body must be a JSON object with the following fields:
         - dry_sand_point: [float, float] (required)
         - dry_silt_point: [float, float] or [null, null] (optional)
@@ -76,7 +75,7 @@ def _to_dataframe(data, columns=None):
         - method: string (optional)
         - silt_line_angle: float (required)
         - data: list of objects, each with keys 'nphi' (float) and 'rhob' (float) (required)
-        
+
         Example:
         {
             'dry_sand_point': [0.1, 2.65],
@@ -152,12 +151,12 @@ async def estimate_ssc(inputs: LithologySSCInput):
     description=(
         """
         Estimate volume of shale (Vsh) using gamma ray log data. Requires gamma ray (GR) measurements.
-        
+
         Input model: LithologyVshGRInput (see quick_pp.app.backend.schemas.lithology_vsh_gr.LithologyVshGRInput).
-        
+
         Request body must be a JSON object with the following field:
         - data: list of objects, each with key 'gr' (float) (required)
-        
+
         Example:
         {'data': [{'gr': 85.0}, {'gr': 110.0}, ... ]}
         """
@@ -205,13 +204,13 @@ async def estimate_vsh_gr(inputs: LithologyVshGRInput):
     description=(
         """
         Estimate hydrocarbon correction and lithology fractions from well log data.
-        
+
         Requires neutron porosity (NPHI) and bulk density (RHOB) measurements,
         along with reference points for dry sand, silt, clay, and fluid as well as correction angle.
-        
+
         Input model: LithologyHCCorrectionInput
         (see quick_pp.app.backend.schemas.lithology_hc_correction.LithologyHCCorrectionInput).
-        
+
         Request body must be a JSON object with the following fields:
         - dry_sand_point: [float, float] (required)
         - dry_silt_point: [float, float] or [null, null] (optional)
@@ -222,7 +221,7 @@ async def estimate_vsh_gr(inputs: LithologyVshGRInput):
         - silt_line_angle: float (required)
         - corr_angle: float (required)
         - data: list of objects, each with keys 'nphi' (float) and 'rhob' (float) (required)
-        
+
         Example:
         {
             'dry_sand_point': [0.1, 2.65],

@@ -1,13 +1,14 @@
-import pandas as pd
-import numpy as np
 import math
-import matplotlib.pyplot as plt
 
-from quick_pp.utils import length_a_b, line_intersection
-from quick_pp.rock_type import estimate_vsh_gr
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+from quick_pp import logger
 from quick_pp.config import Config
 from quick_pp.ressum import calc_reservoir_summary, flag_interval
-from quick_pp import logger
+from quick_pp.rock_type import estimate_vsh_gr
+from quick_pp.utils import length_a_b, line_intersection
 
 plt.style.use("seaborn-v0_8-paper")
 
