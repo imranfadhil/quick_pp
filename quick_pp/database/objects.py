@@ -923,7 +923,7 @@ class Well(object):
 
         # Convert numeric columns back to proper data types
         for col in pivoted.columns:
-            pivoted[col] = pd.to_numeric(pivoted[col], errors="ignore")
+            pivoted[col] = pd.to_numeric(pivoted[col], errors="coerce")
 
         # Add standard columns
         pivoted.reset_index(inplace=True)
@@ -1025,7 +1025,7 @@ class Well(object):
 
         # Convert numeric columns back to proper data types
         for col in pivoted.columns:
-            pivoted[col] = pd.to_numeric(pivoted[col], errors="ignore")
+            pivoted[col] = pd.to_numeric(pivoted[col], errors="coerce")
 
         pivoted.reset_index(inplace=True)
 
