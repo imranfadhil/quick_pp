@@ -28,7 +28,7 @@ tags_metadata = [
         "description": "Reservoir summary related endpoints.",
     },
     {"name": "Database", "description": "Database related endpoints."},
-    {"name": "Ancillary", "description": "Ancillary related endpoints."},
+    {"name": "Ancillary Data", "description": "Ancillary related endpoints."},
     {"name": "Langflow", "description": "Langflow related endpoints."},
     {"name": "Plotter", "description": "Plotter related endpoints."},
 ]
