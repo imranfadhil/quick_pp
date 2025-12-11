@@ -1,7 +1,8 @@
 import math
 
+import numpy as np
 import pandas as pd
-from fastapi import APIRouter, File, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from quick_pp.core_analysis import (
     auto_j_params,
@@ -9,10 +10,10 @@ from quick_pp.core_analysis import (
     normalize_sw,
     sw_shf_leverett_j,
 )
-from quick_pp.database import db_objects
+from quick_pp.database import objects as db_objects
 from quick_pp.rock_type import calc_fzi, rock_typing
 
-from . import database, ancillary
+from . import database, _sanitize_list
 
 
 router = APIRouter(
@@ -141,11 +142,11 @@ async def get_j_data(project_id: int, cutoffs: str = Query("0.1,1.0,3.0")):
                 )
 
             # Sanitize lists for JSON serialization
-            pc_list = ancillary._sanitize_list(pc_list)
-            sw_list = ancillary._sanitize_list(sw_list)
-            perm_list = ancillary._sanitize_list(perm_list)
-            phit_list = ancillary._sanitize_list(phit_list)
-            rock_flags_list = ancillary._sanitize_list(rock_flags_list)
+            pc_list = _sanitize_list(pc_list)
+            sw_list = _sanitize_list(sw_list)
+            perm_list = _sanitize_list(perm_list)
+            phit_list = _sanitize_list(phit_list)
+            rock_flags_list = _sanitize_list(rock_flags_list)
             return {
                 "pc": pc_list,
                 "sw": sw_list,

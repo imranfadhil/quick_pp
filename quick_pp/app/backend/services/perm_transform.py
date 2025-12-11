@@ -3,7 +3,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 
 from quick_pp.core_analysis import fit_poroperm_curve
-from quick_pp.database import db_objects
+from quick_pp.database import objects as db_objects
 
 from . import database
 

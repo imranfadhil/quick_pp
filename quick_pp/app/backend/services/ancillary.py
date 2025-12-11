@@ -1,46 +1,14 @@
 import csv
 import io
-import math
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import pandas as pd
 from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
 from sqlalchemy import select
 
 from quick_pp.database import objects as db_objects
 
 from . import database
-
-
-# Sanitize lists for JSON serialization: convert numpy/pandas types
-# to native Python types and replace NaN/Inf with None.
-def _sanitize_list(lst):
-    out = []
-    for v in lst:
-        # pandas NA / NaN
-        try:
-            if pd.isna(v):
-                out.append(None)
-                continue
-        except Exception:
-            pass
-
-        # numeric types (numpy, python)
-        try:
-            if isinstance(v, (int, float, np.floating, np.integer)):
-                fv = float(v)
-                if math.isfinite(fv):
-                    out.append(fv)
-                else:
-                    out.append(None)
-                continue
-        except Exception:
-            pass
-
-        # fallback: keep as-is (strings, etc.)
-        out.append(v)
-    return out
 
 
 # Project-level router: supports project-based endpoints and accepts optional
@@ -1099,10 +1067,10 @@ def upload_well_surveys_project(
 
 @router.post(
     "/well_surveys/calculate_tvd",
-    summary="Calculate TVD from existing survey data and store as well curve",
+    summary="Calculate TVD from existing survey data and store as well curve (optional well_name)",
     tags=["Well Surveys"],
 )
-def calculate_tvd_project(project_id: int):
+def calculate_tvd_project(project_id: int, well_name: Optional[str] = Query(None)):
     """
     Calculate TVD from existing well survey data using minimum curvature method.
     If well_name is provided, calculates for that well only.
@@ -1125,6 +1093,32 @@ def calculate_tvd_project(project_id: int):
 
         with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
+
+            # If well_name provided, calculate for that well only
+            if well_name:
+                well = proj.get_well(well_name)
+                surveys_df = well.get_well_surveys()
+
+                if surveys_df.empty:
+                    raise ValueError(f"No survey data found for well '{well_name}'")
+
+                surveys_df = surveys_df.sort_values("md")
+                mds = surveys_df["md"].values
+                incs = surveys_df["inc"].values
+                azims = surveys_df["azim"].values
+
+                deviation = wpp.deviation(mds, incs, azims)
+                tvds = deviation.minimum_curvature().depth
+
+                tvd_data = dict(zip(mds, tvds, strict=True))
+                well.add_curve_data("TVD", tvd_data, unit="m")
+
+                return {
+                    "success": True,
+                    "tvd_points_saved": len(tvd_data),
+                    "wells_processed": 1,
+                    "wells": [well_name],
+                }
 
             # Calculate for all wells in project
             total_tvd_points = 0

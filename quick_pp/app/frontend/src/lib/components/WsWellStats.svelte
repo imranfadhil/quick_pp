@@ -5,7 +5,7 @@
   import * as Chart from '$lib/components/ui/chart/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { renameColumn, convertPercentToFraction, applyRenameInColumns } from '$lib/utils/topBottomEdits';
-  import { depthFilter, zoneFilter, applyDepthFilter, applyZoneFilter } from '$lib/stores/workspace';
+  import { depthFilter, zoneFilter, applyDepthFilter, applyZoneFilter, getStatsCache, setStatsCache, clearStatsCache } from '$lib/stores/workspace';
   import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   export let projectId: string | number;
@@ -121,16 +121,37 @@
     dataProfile = profile;
   }
 
-  async function fetchCounts() {
+  async function fetchCounts(forceRefresh = false) {
     if (!projectId || !wellName) return;
+    
+    // Check cache first
+    const cached = getStatsCache(projectId, wellName);
+    if (!forceRefresh && cached) {
+      // Restore cached state
+      const c = cached.data;
+      counts = c.counts;
+      samples = c.samples;
+      propOptions = c.propOptions;
+      selectedProp = c.selectedProp;
+      fullRows = c.fullRows;
+      originalFullRows = c.originalFullRows;
+      fullColumns = c.fullColumns;
+      selectedLog = c.selectedLog;
+      formationTops = c.formationTops;
+      fluidContacts = c.fluidContacts;
+      pressureTestsFull = c.pressureTestsFull;
+      coreSamplesFull = c.coreSamplesFull;
+      return;
+    }
+    
     loading = true;
     error = null;
     try {
       const urls = {
-        formation_tops: `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/formation_tops`,
-        fluid_contacts: `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/fluid_contacts`,
-        pressure_tests: `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/pressure_tests`,
-        core_samples: `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/core_samples`,
+        formation_tops: `${API_BASE}/quick_pp/database/projects/${projectId}/formation_tops?well_name=${encodeURIComponent(String(wellName))}`,
+        fluid_contacts: `${API_BASE}/quick_pp/database/projects/${projectId}/fluid_contacts?well_name=${encodeURIComponent(String(wellName))}`,
+        pressure_tests: `${API_BASE}/quick_pp/database/projects/${projectId}/pressure_tests?well_name=${encodeURIComponent(String(wellName))}`,
+        core_samples: `${API_BASE}/quick_pp/database/projects/${projectId}/core_samples?well_name=${encodeURIComponent(String(wellName))}`,
       };
 
       const [topsRes, contactsRes, pressureRes, samplesRes] = await Promise.all([
@@ -203,6 +224,22 @@
       } catch (e) {
         console.error('Error fetching well data:', e);
       }
+      
+      // Cache the fetched data
+      setStatsCache(projectId, wellName, {
+        counts,
+        samples,
+        propOptions,
+        selectedProp,
+        fullRows,
+        originalFullRows,
+        fullColumns,
+        selectedLog,
+        formationTops,
+        fluidContacts,
+        pressureTestsFull,
+        coreSamplesFull,
+      });
     } catch (e: any) {
       console.warn('WsWellStats fetch error', e);
       error = String(e?.message ?? e);
@@ -212,39 +249,68 @@
   }
 
   function buildChartData(selectedLog: string | null, visibleRows: any[], selectedProp: string | null, samples: any[]) {
-    // if fullRows exist and selectedLog is set, prefer to build from fullRows
+    // Helper to get value with case-insensitive key lookup
+    const getValue = (row: any, key: string): number => {
+      if (!row || !key) return NaN;
+      // Try exact match first
+      if (key in row) return Number(row[key]);
+      // Try case-insensitive match
+      const lowerKey = key.toLowerCase();
+      for (const k of Object.keys(row)) {
+        if (k.toLowerCase() === lowerKey) return Number(row[k]);
+      }
+      return NaN;
+    };
+
+    const getDepth = (row: any): number => {
+      if (!row) return NaN;
+      // Try common depth column names
+      for (const key of ['depth', 'DEPTH', 'Depth', 'depth_m', 'DEPTH_M', 'MD', 'md']) {
+        if (key in row && row[key] !== null && row[key] !== undefined) {
+          return Number(row[key]);
+        }
+      }
+      return NaN;
+    };
+
+    // if visibleRows exist and selectedLog is set, build from visibleRows
     if (visibleRows && visibleRows.length && selectedLog) {
-      const logKey = selectedLog; // capture non-null value
       const rows = visibleRows
-        .map((r) => ({ depth: Number(r.depth ?? r.depth_m ?? NaN), value: Number(r[logKey] ?? NaN) }))
-        .filter((r) => !isNaN(r.depth) && !isNaN(r.value));
+        .map((r) => ({ depth: getDepth(r), value: getValue(r, selectedLog) }))
+        .filter((r) => !isNaN(r.depth) && !isNaN(r.value) && isFinite(r.value));
       rows.sort((a, b) => a.depth - b.depth);
+      
+      console.debug('buildChartData:', { 
+        selectedLog, 
+        visibleRowsCount: visibleRows.length, 
+        validRowsCount: rows.length,
+        sampleValues: rows.slice(0, 5).map(r => r.value)
+      });
+      
       if (rows.length) {
         return rows;
       }
     }
 
-    if (!selectedProp || !samples || samples.length === 0) {
-      // fallback: generate mock depth distribution
-      return Array.from({ length: 40 }, (_, i) => ({ depth: 1000 + i * 5, value: Math.random() * 100 }));
+    // Try samples if available and selectedProp is set
+    if (selectedProp && samples && samples.length > 0) {
+      const rows: Array<Record<string, any>> = [];
+      for (const s of samples) {
+        const depth = Number(s.depth ?? NaN);
+        if (isNaN(depth)) continue;
+        const m = (s.measurements || []).find((x: any) => String(x.property_name) === String(selectedProp));
+        const val = m ? Number(m.value) : NaN;
+        if (!isNaN(val) && isFinite(val)) rows.push({ depth, value: val });
+      }
+      rows.sort((a, b) => a.depth - b.depth);
+      if (rows.length > 0) {
+        return rows;
+      }
     }
 
-    const rows: Array<Record<string, any>> = [];
-    for (const s of samples) {
-      const depth = Number(s.depth ?? NaN);
-      if (isNaN(depth)) continue;
-      const m = (s.measurements || []).find((x: any) => String(x.property_name) === String(selectedProp));
-      const val = m ? Number(m.value) : NaN;
-      if (!isNaN(val)) rows.push({ depth, value: val });
-    }
-
-    // sort by depth
-    rows.sort((a, b) => a.depth - b.depth);
-    if (rows.length === 0) {
-      return Array.from({ length: 30 }, (_, i) => ({ depth: 1000 + i * 5, value: Math.random() * 50 }));
-    } else {
-      return rows;
-    }
+    // Return empty array instead of fake data - no data available
+    console.warn('buildChartData: No valid data found for', { selectedLog, selectedProp });
+    return [];
   }
 
   async function ensurePlotly() {
@@ -299,8 +365,8 @@
     }
   }
 
-  // re-render when chart data or plot div available
-  $: if (browser && chartPlotDiv && chartData) {
+  // re-render when chart points or plot div available
+  $: if (browser && chartPlotDiv && chartPoints && chartPoints.length > 0) {
     renderChartPlot();
   }
 
@@ -343,6 +409,8 @@
       hasUnsavedEdits = false;
       undoStack = [];
       editMessage = 'Saved edits to server';
+      // Invalidate cache so next load fetches fresh data
+      invalidateCache();
     } catch (err:any) {
       editMessage = `Save failed: ${String(err?.message ?? err)}`;
     }
@@ -459,6 +527,11 @@
   onMount(() => {
     if (projectId && wellName) fetchCounts();
   });
+
+  // Clear cache when data is saved to ensure fresh data on next load
+  function invalidateCache() {
+    clearStatsCache(projectId, wellName);
+  }
 </script>
 
 <Card.Root>
@@ -647,7 +720,7 @@
 
             <div class="flex items-center gap-2">
               <div class="text-sm text-muted-foreground">Plot log:</div>
-              <select class="input" bind:value={selectedLog} onchange={() => buildChartData(selectedLog, visibleRows, selectedProp, samples)}>
+              <select class="input" bind:value={selectedLog}>
                 {#if fullColumns.length}
                   {#each fullColumns as c}
                     {#if c !== 'depth'}
@@ -680,80 +753,14 @@
               </div>
             {/if}
 
-            <!-- Edits are now available via modal (open with Edits button in header) -->
-            {#if showEditModal}
-              <div class="fixed inset-0 z-50 flex items-start justify-center p-6">
-                <button type="button" class="absolute inset-0 bg-black/40" aria-label="Close modal" onclick={closeEditModal}></button>
-                <div class="relative bg-white dark:bg-surface rounded shadow-lg w-full max-w-md p-4 z-10">
-                  <div class="flex items-center justify-between mb-2">
-                    <div class="font-medium">Edit Columns</div>
-                    <div class="flex gap-2">
-                      <Button variant="ghost" size="sm" onclick={undoLast} title="Undo last" aria-label="Undo last">Undo</Button>
-                      <Button variant="ghost" size="sm" onclick={closeEditModal} title="Close modal" aria-label="Close modal">Close</Button>
-                    </div>
-                  </div>
-
-                  {#if editMessage}
-                    <div class="text-sm text-muted-foreground-foreground mb-2">{editMessage}</div>
-                  {/if}
-
-                  <div class="space-y-2">
-                    <div>
-                      <label for="editColumn" class="text-xs text-muted-foreground">Column</label>
-                      <select id="editColumn" class="input w-full" bind:value={editColumn}>
-                        {#if fullColumns.length}
-                          {#each fullColumns as c}
-                            <option value={c}>{c}</option>
-                          {/each}
-                        {:else}
-                          <option value="">(no columns)</option>
-                        {/if}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label for="editNewName" class="text-xs text-muted-foreground">Rename to (optional)</label>
-                      <input id="editNewName" class="input w-full" bind:value={editNewName} placeholder="e.g. NPHI" />
-                    </div>
-
-                    <div class="flex items-center gap-2">
-                      <input id="conv" type="checkbox" bind:checked={doConvertPercent} />
-                      <label for="conv" class="text-sm">Convert % → fraction</label>
-                    </div>
-
-                                  <div class="flex gap-2">
-                                    <Button variant="ghost" size="sm" onclick={previewEdits} title="Preview changes" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Preview</Button>
-                                    <Button variant="default" onclick={applyEditsInMemory} title="Apply edits in-memory" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Apply</Button>
-                                    <Button variant="default" size="sm" onclick={saveEditsToServer} disabled={loading || !hasUnsavedEdits} title="Save edits to server" style={(loading || !hasUnsavedEdits) ? 'opacity:0.5; pointer-events:none;' : ''}>Save</Button>
-                                  </div>
-
-                    {#if previewRows.length}
-                      <div class="mt-2 bg-panel rounded p-2 max-h-40 overflow-auto">
-                        <div class="text-xs text-muted-foreground mb-1">Preview (first {previewRows.length} rows)</div>
-                        <table class="w-full text-xs">
-                          <thead>
-                            <tr><th class="p-1 text-left">Depth</th><th class="p-1 text-left">Old</th><th class="p-1 text-left">New</th></tr>
-                          </thead>
-                          <tbody>
-                            {#each previewRows as pr}
-                              <tr>
-                                <td class="p-1">{String(pr.depth)}</td>
-                                <td class="p-1">{String(pr.oldValue)}</td>
-                                <td class="p-1">{String(pr.newValue)}</td>
-                              </tr>
-                            {/each}
-                          </tbody>
-                        </table>
-                      </div>
-                    {/if}
-                  </div>
-                </div>
-              </div>
-            {/if}
-
             <div class="bg-surface rounded p-2">
               <Chart.Container class="h-[240px] w-full" config={{}}>
                 <div bind:this={chartPlotDiv} class="w-full h-[240px]"></div>
+                {#if chartPoints.length === 0}
+                  <div class="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+                    No data available for {selectedLog ?? 'selected log'}
+                  </div>
+                {/if}
               </Chart.Container>
             </div>
 
@@ -786,3 +793,74 @@
     {/if}
   </Card.Content>
 </Card.Root>
+
+<!-- Edit Modal - outside conditional blocks so it always renders when showEditModal is true -->
+{#if showEditModal}
+  <div class="fixed inset-0 z-50 flex items-start justify-center p-6">
+    <button type="button" class="absolute inset-0 bg-black/40" aria-label="Close modal" onclick={closeEditModal}></button>
+    <div class="relative bg-white dark:bg-surface rounded shadow-lg w-full max-w-md p-4 z-10">
+      <div class="flex items-center justify-between mb-2">
+        <div class="font-medium">Edit Columns</div>
+        <div class="flex gap-2">
+          <Button variant="ghost" size="sm" onclick={undoLast} title="Undo last" aria-label="Undo last">Undo</Button>
+          <Button variant="ghost" size="sm" onclick={closeEditModal} title="Close modal" aria-label="Close modal">Close</Button>
+        </div>
+      </div>
+
+      {#if editMessage}
+        <div class="text-sm text-muted-foreground-foreground mb-2">{editMessage}</div>
+      {/if}
+
+      <div class="space-y-2">
+        <div>
+          <label for="editColumn" class="text-xs text-muted-foreground">Column</label>
+          <select id="editColumn" class="input w-full" bind:value={editColumn}>
+            {#if fullColumns.length}
+              {#each fullColumns as c}
+                <option value={c}>{c}</option>
+              {/each}
+            {:else}
+              <option value="">(no columns)</option>
+            {/if}
+          </select>
+        </div>
+
+        <div>
+          <label for="editNewName" class="text-xs text-muted-foreground">Rename to (optional)</label>
+          <input id="editNewName" class="input w-full" bind:value={editNewName} placeholder="e.g. NPHI" />
+        </div>
+
+        <div class="flex items-center gap-2">
+          <input id="conv" type="checkbox" bind:checked={doConvertPercent} />
+          <label for="conv" class="text-sm">Convert % → fraction</label>
+        </div>
+
+        <div class="flex gap-2">
+          <Button variant="ghost" size="sm" onclick={previewEdits} title="Preview changes" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Preview</Button>
+          <Button variant="default" onclick={applyEditsInMemory} title="Apply edits in-memory" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Apply</Button>
+          <Button variant="default" size="sm" onclick={saveEditsToServer} disabled={loading || !hasUnsavedEdits} title="Save edits to server" style={(loading || !hasUnsavedEdits) ? 'opacity:0.5; pointer-events:none;' : ''}>Save</Button>
+        </div>
+
+        {#if previewRows.length}
+          <div class="mt-2 bg-panel rounded p-2 max-h-40 overflow-auto">
+            <div class="text-xs text-muted-foreground mb-1">Preview (first {previewRows.length} rows)</div>
+            <table class="w-full text-xs">
+              <thead>
+                <tr><th class="p-1 text-left">Depth</th><th class="p-1 text-left">Old</th><th class="p-1 text-left">New</th></tr>
+              </thead>
+              <tbody>
+                {#each previewRows as pr}
+                  <tr>
+                    <td class="p-1">{String(pr.depth)}</td>
+                    <td class="p-1">{String(pr.oldValue)}</td>
+                    <td class="p-1">{String(pr.newValue)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}

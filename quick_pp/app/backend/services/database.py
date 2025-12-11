@@ -373,7 +373,10 @@ async def save_well_data(project_id: int, well_name: str, payload: dict):
         ) from e
 
 
-@router.get("/wells/{well_name}/data", summary="Get top-to-bottom well data")
+@router.get(
+    "/projects/{project_id}/wells/{well_name}/data",
+    summary="Get top-to-bottom well data",
+)
 def get_well_data(project_id: int, well_name: str, include_ancillary: bool = False):
     """Return the full well data (curve logs) as a JSON array of rows.
 
@@ -443,7 +446,7 @@ def get_well_data(project_id: int, well_name: str, include_ancillary: bool = Fal
 
 
 @router.get(
-    "/wells/{well_name}/merged",
+    "/projects/{project_id}/wells/{well_name}/merged",
     summary="Get well data merged with ancillary datapoints by depth",
 )
 def get_well_data_merged(
