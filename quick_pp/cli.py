@@ -699,7 +699,13 @@ def predict(model_config, data_hash, output_file_name, env, plot):
     default=False,
     help="Follow log output (for logs command)",
 )
-def docker(action, detach, build, profile, service, follow):
+@click.option(
+    "--env-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to .env file (defaults to .env in repo root if it exists)",
+)
+def docker(action, detach, build, profile, service, follow, env_file):
     """Manage Docker services using docker-compose.
 
     ACTIONS:
@@ -731,6 +737,17 @@ def docker(action, detach, build, profile, service, follow):
 
     # Build the docker-compose command
     cmd_parts = ["docker-compose"]
+
+    # Add env-file option (defaults to .env in repo root if it exists)
+    if env_file:
+        cmd_parts.extend(["--env-file", str(env_file)])
+    else:
+        # Try to find .env in repo root (parent of quick_pp package)
+        repo_root = Path(__file__).parent.parent
+        default_env_file = repo_root / ".env"
+        if default_env_file.exists():
+            cmd_parts.extend(["--env-file", str(default_env_file)])
+            click.echo(f"Using .env file: {default_env_file}")
 
     # Add profile options
     for prof in profile:
