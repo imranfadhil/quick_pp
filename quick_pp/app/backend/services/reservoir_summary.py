@@ -23,7 +23,7 @@ router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
         Request body must be a JSON object with the following fields:
         - data: list of objects, each with keys:
             - depth: float (required)
-            - vcld: float (volume of clay, required)
+            - vclay: float (volume of clay, required)
             - phit: float (total porosity, required)
             - swt: float (water saturation, required)
             - perm: float (permeability, required)
@@ -37,9 +37,9 @@ router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
         Example:
         {
             "data": [
-                {"depth": 1000.0, "vcld": 0.25, "phit": 0.18, "swt": 0.35, "perm": 120.0, "zones": "A"},
-                {"depth": 1001.0, "vcld": 0.22, "phit": 0.20, "swt": 0.30, "perm": 150.0, "zones": "A"},
-                {"depth": 1020.0, "vcld": 0.30, "phit": 0.15, "swt": 0.40, "perm": 90.0, "zones": "B"}
+                {"depth": 1000.0, "vclay": 0.25, "phit": 0.18, "swt": 0.35, "perm": 120.0, "zones": "A"},
+                {"depth": 1001.0, "vclay": 0.22, "phit": 0.20, "swt": 0.30, "perm": 150.0, "zones": "A"},
+                {"depth": 1020.0, "vclay": 0.30, "phit": 0.15, "swt": 0.40, "perm": 90.0, "zones": "B"}
             ],
             "cut_offs": {
                 "VSHALE": 0.4, "PHIT": 0.01, "SWT": 0.9
@@ -65,7 +65,7 @@ async def calculate_reservoir_summary_(inputs: InputData):
         input_df = pd.DataFrame.from_records(input_dict["data"])
         ressum_df = calc_reservoir_summary(
             depth=input_df["depth"],
-            vshale=input_df["vcld"],
+            vshale=input_df["vclay"],
             phit=input_df["phit"],
             swt=input_df["swt"],
             perm=input_df["perm"],

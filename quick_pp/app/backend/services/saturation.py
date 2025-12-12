@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from quick_pp.app.backend.schemas.saturation_archie import InputData as ArchieInput
 from quick_pp.app.backend.schemas.saturation_b import InputData as BInput
 from quick_pp.app.backend.schemas.saturation_qv import InputData as QvInput
+from quick_pp.app.backend.schemas.saturation_qvn import InputData as QvnInput
 from quick_pp.app.backend.schemas.saturation_rw import InputData as RwInput
 from quick_pp.app.backend.schemas.saturation_temp_grad import InputData as TempGradInput
 from quick_pp.app.backend.schemas.saturation_waxman_smits import (
@@ -16,6 +17,7 @@ from quick_pp.saturation import (
     archie_saturation,
     estimate_b_waxman_smits,
     estimate_qv,
+    estimate_qvn,
     estimate_rw_temperature_salinity,
     estimate_temperature_gradient,
     waxman_smits_saturation,
@@ -303,6 +305,68 @@ async def estimate_qv_(inputs: QvInput) -> List[Dict[str, float]]:
         else:
             result_list = [_safe_float(val) for val in np.asarray(qv).flatten()]
         return [{"QV": val} for val in result_list]
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Error processing request: {e}"
+        ) from e
+
+
+@router.post(
+    "/estimate_qvn",
+    summary="Estimate Normalized Qv (Qvn) for Juhasz (1981) Model",
+    description=(
+        """
+        Estimate normalized Qv (Qvn) for the Juhasz (1981) model based on volume of clay,
+        total porosity, and total porosity of the clay.
+
+        Input model: QvnInput (see quick_pp.app.backend.schemas.saturation_qvn.InputData).
+
+        Request body must be a JSON object with the following fields:
+        - data: list of objects, each with keys 'vclay' (float, required), 'phit' (float, required),
+                and 'phit_clay' (float, required)
+
+        Example:
+        {
+            'data': [
+                {'vclay': 0.35, 'phit': 0.22, 'phit_clay': 0.15},
+                {'vclay': 0.40, 'phit': 0.18, 'phit_clay': 0.15}
+            ]
+        }
+        """
+    ),
+    operation_id="estimate_normalized_qv",
+)
+async def estimate_qvn_(inputs: QvnInput) -> List[Dict[str, float]]:
+    """
+    Estimate the normalized Qv (Qvn) for the Juhasz (1981) model for each input record.
+
+    Args:
+        inputs (QvnInput): Input data containing well log measurements (vclay, phit, phit_clay).
+    Returns:
+        List[Dict[str, float]]: List of dictionaries with the estimated Qvn values under the key 'QVN'.
+    Technical Details:
+        - Converts input data to a pandas DataFrame and enforces float type for all columns.
+        - Calls estimate_qvn with vclay, phit, and phit_clay arrays.
+        - Handles both scalar and array results, always returning a list of dicts.
+        - Uses _safe_float to ensure all outputs are valid floats.
+        - Raises HTTPException with status 400 on any error.
+    """
+    input_dict = inputs.model_dump()
+    try:
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        input_df["vclay"] = input_df["vclay"].astype(np.float64)
+        input_df["phit"] = input_df["phit"].astype(np.float64)
+        input_df["phit_clay"] = input_df["phit_clay"].astype(np.float64)
+        qvn = estimate_qvn(
+            np.asarray(input_df["vclay"]),
+            np.asarray(input_df["phit"]),
+            np.asarray(input_df["phit_clay"]),
+        )
+        if np.isscalar(qvn):
+            result_list = [_safe_float(qvn)]
+        else:
+            result_list = [_safe_float(val) for val in np.asarray(qvn).flatten()]
+        return [{"QVN": val} for val in result_list]
     except Exception as e:
         raise HTTPException(
             status_code=400, detail=f"Error processing request: {e}"

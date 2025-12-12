@@ -196,18 +196,21 @@
       return;
     }
     // prepare arrays aligned with fullRows
-    const qvRows: Array<Record<string, any>> = [];
+    const qvnRows: Array<Record<string, any>> = [];
+    const shalePoroRows: Array<Record<string, any>> = [];
     const bRows: Array<Record<string, any>> = [];
     const finalRows: Array<Record<string, any>> = [];
 
     // Use visibleRows (depth + zone filters applied)
     const filteredRows = visibleRows;
     
-    // build vcld/phit rows for qv
+    // build nphi/phit rows for shale porosity estimation, and vclay/phit for qvn
     for (const r of filteredRows) {
-      const vcld = Number(r.vcld ?? r.VCLD ?? r.vclay ?? r.VCLAY ?? NaN);
+      const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
       const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
-      if (!isNaN(vcld) && !isNaN(phit)) qvRows.push({ vcld, phit });
+      const vclay = Number(r.vclay ?? r.VCLAY ?? r.vcld ?? r.VCLD ?? NaN);
+      if (!isNaN(nphi) && !isNaN(phit)) shalePoroRows.push({ nphi, phit });
+      if (!isNaN(vclay) && !isNaN(phit)) qvnRows.push({ vclay, phit });
     }
 
     // build temp_grad/rw pairs for b
@@ -217,17 +220,37 @@
       if (!isNaN(Number(tg)) && !isNaN(Number(rw))) bRows.push({ temp_grad: tg, rw: rw });
     }
 
-    // call estimate_qv if possible
-    let qvList: number[] = [];
-    if (qvRows.length) {
+    // Step 1: Estimate shale porosity first
+    let shalePoroList: number[] = [];
+    if (shalePoroRows.length) {
       try {
-        const payload = { rho_clay: Number(rhoClay), cec_clay: Number(cecClay), data: qvRows };
-        const res = await fetch(`${API_BASE}/quick_pp/saturation/estimate_qv`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const payload = { data: shalePoroRows };
+        const res = await fetch(`${API_BASE}/quick_pp/porosity/shale_porosity`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         if (!res.ok) throw new Error(await res.text());
         const out = await res.json();
-        qvList = Array.isArray(out) ? out.map((d:any) => Number(d.QV ?? d.qv ?? NaN)) : [];
+        shalePoroList = Array.isArray(out) ? out.map((d:any) => Number(d.PHIT_SH ?? d.phit_sh ?? NaN)) : [];
       } catch (e: any) {
-        console.warn('Qv error', e);
+        console.warn('Shale porosity error', e);
+      }
+    }
+
+    // Step 2: Call estimate_qvn using vclay, phit, and phit_clay (shale porosity)
+    let qvnList: number[] = [];
+    if (qvnRows.length && shalePoroList.length) {
+      try {
+        // Build qvn payload with phit_clay from shale porosity results
+        const qvnPayloadData = qvnRows.map((row, i) => ({
+          vclay: row.vclay,
+          phit: row.phit,
+          phit_clay: shalePoroList[i] ?? 0.15  // fallback to default if not available
+        }));
+        const payload = { data: qvnPayloadData };
+        const res = await fetch(`${API_BASE}/quick_pp/saturation/estimate_qvn`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (!res.ok) throw new Error(await res.text());
+        const out = await res.json();
+        qvnList = Array.isArray(out) ? out.map((d:any) => Number(d.QVN ?? d.qvn ?? NaN)) : [];
+      } catch (e: any) {
+        console.warn('Qvn error', e);
       }
     }
 
@@ -246,8 +269,8 @@
     }
 
     // Now assemble final rows for waxman_smits: need rt, rw, phit, qv, b, m
-    // We'll iterate through filteredRows and pick values where rt/phit exist and map qv/b by order
-    let qi = 0; // index into qvList
+    // We'll iterate through filteredRows and pick values where rt/phit exist and map qvn/b by order
+    let qi = 0; // index into qvnList
     let bi = 0; // index into bList
     let ri = 0; // index into rwResults/tempGradResults
     const depthsFinal: number[] = [];
@@ -257,7 +280,7 @@
       const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
       if (isNaN(rt) || isNaN(phit)) continue;
       const rw = rwResults[ri++] ?? NaN;
-      const qv = qvList[qi++] ?? NaN;
+      const qv = qvnList[qi++] ?? NaN;  // using Qvn (normalized Qv) instead of Qv
       const b = bList[bi++] ?? NaN;
       if (isNaN(rw) || isNaN(qv) || isNaN(b)) continue;
       finalRows.push({ rt, rw, phit, qv, b, m: Number(mParam) });
@@ -265,7 +288,7 @@
     }
 
     if (!finalRows.length) {
-      error = 'Insufficient data to run Waxman-Smits (need rt, phit, rw, qv, b)';
+      error = 'Insufficient data to run Waxman-Smits (need rt, phit, rw, qvn, b)';
       return;
     }
 
@@ -458,14 +481,6 @@
         <div>
           <label class="text-sm" for="water-salinity">Water salinity</label>
           <input id="water-salinity" type="number" class="input" bind:value={waterSalinity} />
-        </div>
-        <div>
-          <label class="text-sm" for="rho-clay">Clay density (rho_clay)</label>
-          <input id="rho-clay" type="number" class="input" bind:value={rhoClay} />
-        </div>
-        <div>
-          <label class="text-sm" for="cec-clay">Clay CEC (cec_clay)</label>
-          <input id="cec-clay" type="number" class="input" bind:value={cecClay} />
         </div>
         <div>
           <label class="text-sm" for="m-param">Archie/Waxman m parameter</label>
