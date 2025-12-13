@@ -1,10 +1,12 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
+import quick_pp.las_handler as las
 from quick_pp import logger
 from quick_pp.config import Config
 from quick_pp.database.models import (
@@ -21,7 +23,6 @@ from quick_pp.database.models import (
     Well as ORMWell,
     WellSurvey as ORMWellSurvey,
 )
-import quick_pp.las_handler as las
 
 
 class Project(object):
@@ -121,8 +122,18 @@ class Project(object):
         """
         return cls(db_session=db_session, project_id=project_id)
 
-    def read_las(self, file_paths: List[str], depth_uom: Optional[str] = None):
+    def read_las(
+        self,
+        file_paths: List[str],
+        depth_uom: Optional[str] = None,
+        max_workers: int = 4,
+    ):
         """Reads one or more LAS files and adds or updates wells in the project.
+
+        Optimized version that:
+        - Parses LAS files in parallel using thread pool
+        - Batches database lookups to avoid N+1 queries
+        - Single flush operation at the end
 
         For each file, it checks if a well with the same name already exists in the
         project. If it does, the existing well's data is updated using the
@@ -133,44 +144,107 @@ class Project(object):
             file_paths (List[str]): A list of file paths to the LAS files.
             depth_uom (Optional[str]): The unit of measurement for depth to be used if not
                                        specified in the LAS file.
+            max_workers (int): Maximum number of threads for parallel file parsing. Defaults to 4.
         """
         logger.info(
             f"Reading {len(file_paths)} LAS files for project '{self.name}' (ID: {self.project_id})"
         )
 
-        for file in file_paths:
-            logger.debug(f"Processing LAS file: {file}")
-            with open(file, "rb") as f:
-                well_data, header_data = las.read_las_files([f], depth_uom)
-            well_name = las.get_wellname_from_header(header_data)
-            uwi = las.get_uwi_from_header(header_data)
-            header_data_dict = header_data.to_dict()
+        # Optimization 1: Parse LAS files in parallel
+        def parse_las_file(file_path: str):
+            """Parse a single LAS file and return parsed data."""
+            try:
+                logger.debug(f"Parsing LAS file: {file_path}")
+                with open(file_path, "rb") as f:
+                    well_data, header_data = las.read_las_files([f], depth_uom)
+                well_name = las.get_wellname_from_header(header_data)
+                uwi = las.get_uwi_from_header(header_data)
+                header_data_dict = header_data.to_dict()
+                return {
+                    "file_path": file_path,
+                    "well_name": well_name,
+                    "uwi": uwi,
+                    "well_data": well_data,
+                    "header_data": header_data,
+                    "header_data_dict": header_data_dict,
+                    "success": True,
+                }
+            except Exception as e:
+                logger.error(f"Failed to parse LAS file {file_path}: {e}")
+                return {"file_path": file_path, "success": False, "error": str(e)}
 
-            # Check if well already exists in this project
-            existing_well = self.db_session.scalar(
-                select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
+        parsed_files = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(parse_las_file, fp): fp for fp in file_paths}
+            for future in as_completed(futures):
+                result = future.result()
+                if result["success"]:
+                    parsed_files.append(result)
+                else:
+                    logger.warning(
+                        f"Skipping file {result['file_path']} due to parse error: {result.get('error')}"
+                    )
+
+        if not parsed_files:
+            logger.warning("No LAS files were successfully parsed.")
+            return
+
+        # Optimization 2: Batch fetch all existing wells for this project
+        well_names = [pf["well_name"] for pf in parsed_files]
+        existing_wells = (
+            self.db_session.execute(
+                select(ORMWell).filter(
+                    ORMWell.project_id == self.project_id, ORMWell.name.in_(well_names)
+                )
             )
+            .scalars()
+            .all()
+        )
+
+        # Create lookup dictionary for O(1) access
+        wells_by_name = {well.name: well for well in existing_wells}
+
+        # Optimization 3: Process all files and batch database operations
+        new_wells = []
+        for parsed in parsed_files:
+            well_name = parsed["well_name"]
+            existing_well = wells_by_name.get(well_name)
+
             if existing_well:
                 logger.warning(
-                    f"Well '{well_name}' already exists in project '{self.name}'. Skipping or updating."
+                    f"Well '{well_name}' already exists in project '{self.name}'. Updating data."
                 )
-                # Optionally, load and update the existing well
                 well_obj = Well(self.db_session, well_id=existing_well.well_id)
-                well_obj.update_data_from_las_parse(well_data, header_data)
+                well_obj.update_data_from_las_parse(
+                    parsed["well_data"], parsed["header_data"]
+                )
             else:
+                logger.debug(
+                    f"Creating new well '{well_name}' in project '{self.name}'"
+                )
                 well_obj = Well(
                     self.db_session,
                     project_id=self.project_id,
                     name=well_name,
-                    uwi=uwi,
-                    header_data=header_data_dict,
+                    uwi=parsed["uwi"],
+                    header_data=parsed["header_data_dict"],
                     depth_uom=depth_uom,
                 )
-                well_obj.update_data_from_las_parse(well_data, header_data)
+                well_obj.update_data_from_las_parse(
+                    parsed["well_data"], parsed["header_data"]
+                )
                 self.db_session.add(well_obj._orm_well)
-                self.db_session.flush()
+                new_wells.append(well_name)
 
             logger.debug(f"Processed well '{well_obj.name}' for project '{self.name}'.")
+
+        # Optimization 4: Single flush for all wells at the end
+        if new_wells or parsed_files:
+            self.db_session.flush()
+            logger.info(
+                f"Successfully processed {len(parsed_files)} LAS files "
+                f"({len(new_wells)} new wells, {len(parsed_files) - len(new_wells)} updated)"
+            )
 
     def update_data(
         self,
@@ -954,12 +1028,12 @@ class Well(object):
                          plus columns for each curve mnemonic.
         """
         sql = text("""
-        SELECT 
+        SELECT
             cd.depth,
             c.mnemonic,
             COALESCE(CAST(cd.value_numeric AS TEXT), cd.value_text) as value
         FROM curve_data cd
-        JOIN curves c ON cd.curve_id = c.curve_id 
+        JOIN curves c ON cd.curve_id = c.curve_id
         WHERE c.well_id = :well_id
         ORDER BY cd.depth, c.mnemonic
         """)
@@ -1055,13 +1129,13 @@ class Well(object):
         placeholders = ", ".join([f":mnemonic_{i}" for i in range(len(mnemonics))])
 
         sql = text(f"""
-        SELECT 
+        SELECT
             cd.depth,
             c.mnemonic,
             COALESCE(CAST(cd.value_numeric AS TEXT), cd.value_text) as value
         FROM curve_data cd
-        JOIN curves c ON cd.curve_id = c.curve_id 
-        WHERE c.well_id = :well_id 
+        JOIN curves c ON cd.curve_id = c.curve_id
+        WHERE c.well_id = :well_id
         AND c.mnemonic IN ({placeholders})
         ORDER BY cd.depth
         """)
@@ -1103,8 +1177,8 @@ class Well(object):
 
         for term in search_terms:
             sql = text("""
-                SELECT mnemonic FROM curves 
-                WHERE well_id = :well_id 
+                SELECT mnemonic FROM curves
+                WHERE well_id = :well_id
                 AND LOWER(mnemonic) LIKE :pattern
                 LIMIT 1
             """)

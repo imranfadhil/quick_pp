@@ -409,7 +409,7 @@ def list_core_samples_project(project_id: int, well_name: Optional[str] = Query(
 
 @router.post(
     "/core_samples",
-    summary="Add or update a core sample with measurements (requires well_name)",
+    summary="Add or update a core sample with measurements, RCA, and SCAL data (requires well_name)",
     tags=["Core Samples"],
 )
 def add_core_sample_project(
@@ -417,20 +417,36 @@ def add_core_sample_project(
     well_name: Optional[str] = Query(None),
     payload: Dict[str, Any] = Body(...),
 ):
+    """
+    Add or update a core sample with optional measurements (RCA), relperm, and capillary pressure (SCAL) data.
+    This is the unified endpoint for all core sample data types.
+
+    Payload should include:
+    - sample_name: Unique identifier for the sample
+    - depth: Depth of the sample
+    - measurements: List of RCA measurements (optional)
+    - relperm_data: Relative permeability data (optional)
+    - pc_data: Capillary pressure data (optional)
+    - description: Sample description (optional)
+    - remark: Additional remarks (optional)
+    """
     if database.connector is None:
         raise HTTPException(
             status_code=400,
             detail="DB connector not initialized. Call /database/init first.",
         )
-    required = ["sample_name", "depth", "measurements"]
+
+    required = ["sample_name", "depth"]
     if not isinstance(payload, dict) or not all(k in payload for k in required):
         raise HTTPException(status_code=400, detail=f"Payload must include {required}")
+
     target_well = well_name or payload.get("well_name")
     if not target_well:
         raise HTTPException(
             status_code=400,
             detail="well_name must be provided as query parameter or in payload",
         )
+
     try:
         with database.connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
@@ -504,219 +520,6 @@ def get_core_sample_project(
         raise HTTPException(
             status_code=500, detail=f"Failed to get core sample: {e}"
         ) from e
-
-
-@router.get(
-    "/rca",
-    summary="List RCA (core point measurements) for a project (optional well_name)",
-    tags=["Core Samples"],
-)
-def list_rca_project(project_id: int, well_name: Optional[str] = Query(None)):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-    try:
-        with database.connector.get_session() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
-            rows = []
-            if well_name:
-                well = proj.get_well(well_name)
-                core_data = well.get_core_data()
-                for sample_name, sd in core_data.items():
-                    measurements = sd.get("measurements")
-                    if hasattr(measurements, "to_dict"):
-                        for r in measurements.to_dict(orient="records"):
-                            r.update(
-                                {"sample_name": sample_name, "depth": sd.get("depth")}
-                            )
-                            rows.append(r)
-                return {"rca": rows}
-
-            for wn in proj.get_well_names():
-                try:
-                    well = proj.get_well(wn)
-                    core_data = well.get_core_data()
-                    for sample_name, sd in core_data.items():
-                        measurements = sd.get("measurements")
-                        if hasattr(measurements, "to_dict"):
-                            for r in measurements.to_dict(orient="records"):
-                                r.update(
-                                    {
-                                        "sample_name": sample_name,
-                                        "depth": sd.get("depth"),
-                                        "well_name": wn,
-                                    }
-                                )
-                                rows.append(r)
-                except Exception:
-                    continue
-            return {"rca": rows}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list RCA: {e}") from e
-
-
-@router.post(
-    "/rca",
-    summary="Add RCA (core point measurements) for a project (requires well_name)",
-    tags=["Core Samples"],
-)
-def add_rca_project(
-    project_id: int,
-    well_name: Optional[str] = Query(None),
-    payload: Dict[str, Any] = Body(...),
-):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-    required = ["sample_name", "depth", "measurements"]
-    if not isinstance(payload, dict) or not all(k in payload for k in required):
-        raise HTTPException(status_code=400, detail=f"Payload must include {required}")
-    target_well = well_name or payload.get("well_name")
-    if not target_well:
-        raise HTTPException(
-            status_code=400,
-            detail="well_name must be provided as query parameter or in payload",
-        )
-    try:
-        with database.connector.get_session() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
-            well = proj.get_well(target_well)
-            well.add_core_sample_with_measurements(
-                sample_name=payload["sample_name"],
-                depth=payload["depth"],
-                measurements=payload.get("measurements", []),
-                description=payload.get("description"),
-                remark=payload.get("remark"),
-            )
-            return {
-                "sample_name": payload["sample_name"],
-                "status": "measurements_added",
-            }
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add RCA: {e}") from e
-
-
-@router.get(
-    "/scal",
-    summary="List SCAL (relperm & capillary) for a project (optional well_name)",
-    tags=["Core Samples"],
-)
-def list_scal_project(project_id: int, well_name: Optional[str] = Query(None)):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-    try:
-        with database.connector.get_session() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
-            relperm_rows = []
-            pc_rows = []
-            if well_name:
-                well = proj.get_well(well_name)
-                core_data = well.get_core_data()
-                for sample_name, sd in core_data.items():
-                    relperm = sd.get("relperm")
-                    if hasattr(relperm, "to_dict"):
-                        for r in relperm.to_dict(orient="records"):
-                            r.update(
-                                {"sample_name": sample_name, "depth": sd.get("depth")}
-                            )
-                            relperm_rows.append(r)
-                    pc = sd.get("pc")
-                    if hasattr(pc, "to_dict"):
-                        for p in pc.to_dict(orient="records"):
-                            p.update(
-                                {"sample_name": sample_name, "depth": sd.get("depth")}
-                            )
-                            pc_rows.append(p)
-                return {"relperm": relperm_rows, "pc": pc_rows}
-
-            for wn in proj.get_well_names():
-                try:
-                    well = proj.get_well(wn)
-                    core_data = well.get_core_data()
-                    for sample_name, sd in core_data.items():
-                        relperm = sd.get("relperm")
-                        if hasattr(relperm, "to_dict"):
-                            for r in relperm.to_dict(orient="records"):
-                                r.update(
-                                    {
-                                        "sample_name": sample_name,
-                                        "depth": sd.get("depth"),
-                                        "well_name": wn,
-                                    }
-                                )
-                                relperm_rows.append(r)
-                        pc = sd.get("pc")
-                        if hasattr(pc, "to_dict"):
-                            for p in pc.to_dict(orient="records"):
-                                p.update(
-                                    {
-                                        "sample_name": sample_name,
-                                        "depth": sd.get("depth"),
-                                        "well_name": wn,
-                                    }
-                                )
-                                pc_rows.append(p)
-                except Exception:
-                    continue
-            return {"relperm": relperm_rows, "pc": pc_rows}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list SCAL: {e}") from e
-
-
-@router.post(
-    "/scal",
-    summary="Add SCAL data for a sample (relperm and/or capillary) (requires well_name)",
-    tags=["Core Samples"],
-)
-def add_scal_project(
-    project_id: int,
-    well_name: Optional[str] = Query(None),
-    payload: Dict[str, Any] = Body(...),
-):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-    required = ["sample_name", "depth"]
-    if not isinstance(payload, dict) or not all(k in payload for k in required):
-        raise HTTPException(status_code=400, detail=f"Payload must include {required}")
-    target_well = well_name or payload.get("well_name")
-    if not target_well:
-        raise HTTPException(
-            status_code=400,
-            detail="well_name must be provided as query parameter or in payload",
-        )
-    try:
-        with database.connector.get_session() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
-            well = proj.get_well(target_well)
-            well.add_core_sample_with_measurements(
-                sample_name=payload["sample_name"],
-                depth=payload["depth"],
-                measurements=payload.get("measurements", []),
-                relperm_data=payload.get("relperm_data"),
-                pc_data=payload.get("pc_data"),
-                description=payload.get("description"),
-            )
-            return {"sample_name": payload["sample_name"], "status": "scal_added"}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add SCAL: {e}") from e
 
 
 @router.get(
