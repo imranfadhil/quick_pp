@@ -24,7 +24,7 @@
   let loading = false;
   let error: string | null = null;
   let newTop = { name: '', depth: null } as {name:string, depth:number|null};
-  let showImporter = false;
+  let manualMode = false;
 
   async function loadTops() {
     if (!projectId) return;
@@ -84,22 +84,43 @@
 </script>
 
 <div class="formation-tops">
+  {#if error}
+    <div class="text-sm text-red-600">{error}</div>
+  {/if}
+
+  <!-- Tabs for Manual vs Bulk -->
+  <div class="flex gap-2 border-b border-white/10 mb-4">
+    <button
+      class="px-3 py-2 text-sm {!manualMode ? 'border-b-2 border-blue-500' : 'text-muted-foreground'}"
+      onclick={() => manualMode = false}
+    >
+      Manual Entry
+    </button>
+    <button
+      class="px-3 py-2 text-sm {manualMode ? 'border-b-2 border-blue-500' : 'text-muted-foreground'}"
+      onclick={() => manualMode = true}
+    >
+      Bulk Import
+    </button>
+  </div>
+
   {#if loading}
     <div class="text-sm">Loading…</div>
   {:else}
-    {#if error}
-      <div class="text-sm text-red-600">{error}</div>
-    {/if}
-    <div class="mb-3 flex items-center gap-2">
-      <input placeholder="Well name" bind:value={wellName} class="input w-32" />
-      <input placeholder="Top name" bind:value={newTop.name} class="input w-32" />
-      <input placeholder="Depth" type="number" bind:value={newTop.depth} class="input w-24" />
-    </div>
-    <Button variant="default" onclick={addTop}>Add Top</Button>
-    <Button variant="secondary" class="ml-2" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
-
-    {#if showImporter}
-      <div class="mt-3 mb-3">
+    <!-- Manual Entry Mode -->
+    {#if !manualMode}
+      <div class="bg-surface rounded p-3 space-y-3 mb-4">
+        <div class="font-medium text-sm">Add Formation Top Manually</div>
+        <div class="flex items-center gap-2">
+          <input placeholder="Well name" bind:value={wellName} class="input w-32" />
+          <input placeholder="Top name" bind:value={newTop.name} class="input w-32" />
+          <input placeholder="Depth" type="number" bind:value={newTop.depth} class="input w-24" />
+        </div>
+        <Button variant="default" onclick={addTop}>Add Top</Button>
+      </div>
+    {:else}
+      <!-- Bulk Import Mode -->
+      <div class="mb-4">
         <BulkAncillaryImporter {projectId} type="formation_tops" />
       </div>
     {/if}

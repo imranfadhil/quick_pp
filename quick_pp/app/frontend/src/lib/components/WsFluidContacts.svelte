@@ -10,7 +10,7 @@
   let contacts: Array<{name:string, depth:number, well_name?:string}> = [];
   let loading = false; let error: string | null = null;
   let newContact = { name: '', depth: null } as {name:string, depth:number|null};
-  let showImporter = false;
+  let manualMode = false;
 
   async function loadContacts(){
     if (!projectId) return;
@@ -42,18 +42,39 @@
 </script>
 
 <div class="fluid-contacts">
-  {#if loading}<div class="text-sm">Loading…</div>{:else}
-    {#if error}<div class="text-sm text-red-600">{error}</div>{/if}
-    <div class="mb-3">
-      <input placeholder="Well name" bind:value={wellName} class="input w-32" />
-      <input placeholder="Contact name" bind:value={newContact.name} class="input w-32" />
-      <input placeholder="Depth" type="number" bind:value={newContact.depth} class="input w-24" />
-    </div>
-    <Button variant="default" onclick={addContact}>Add</Button>
-    <Button variant="secondary" class="ml-2" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
+  {#if error}<div class="text-sm text-red-600">{error}</div>{/if}
 
-    {#if showImporter}
-      <div class="mb-3">
+  <!-- Tabs for Manual vs Bulk -->
+  <div class="flex gap-2 border-b border-white/10 mb-4">
+    <button
+      class="px-3 py-2 text-sm {!manualMode ? 'border-b-2 border-blue-500' : 'text-muted-foreground'}"
+      onclick={() => manualMode = false}
+    >
+      Manual Entry
+    </button>
+    <button
+      class="px-3 py-2 text-sm {manualMode ? 'border-b-2 border-blue-500' : 'text-muted-foreground'}"
+      onclick={() => manualMode = true}
+    >
+      Bulk Import
+    </button>
+  </div>
+
+  {#if loading}<div class="text-sm">Loading…</div>{:else}
+    <!-- Manual Entry Mode -->
+    {#if !manualMode}
+      <div class="bg-surface rounded p-3 space-y-3 mb-4">
+        <div class="font-medium text-sm">Add Fluid Contact Manually</div>
+        <div class="flex items-center gap-2">
+          <input placeholder="Well name" bind:value={wellName} class="input w-32" />
+          <input placeholder="Contact name" bind:value={newContact.name} class="input w-32" />
+          <input placeholder="Depth" type="number" bind:value={newContact.depth} class="input w-24" />
+        </div>
+        <Button variant="default" onclick={addContact}>Add</Button>
+      </div>
+    {:else}
+      <!-- Bulk Import Mode -->
+      <div class="mb-4">
         <BulkAncillaryImporter {projectId} type="fluid_contacts" />
       </div>
     {/if}

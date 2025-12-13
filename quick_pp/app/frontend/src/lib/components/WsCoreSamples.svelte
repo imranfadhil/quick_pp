@@ -29,7 +29,7 @@
   let pc: Array<{ saturation: number | string; pressure: number | string; experiment_type?: string; cycle?: string }> = [
     { saturation: '', pressure: '', experiment_type: '', cycle: '' },
   ];
-  let showImporter = false;
+  let manualMode = false;
 
   $: if (projectId) {
     fetchSamples();
@@ -119,101 +119,120 @@
 </script>
 
 <div class="ws-core-samples">
-  {#if showList}
-    {#if loading}
-      <div>Loading...</div>
-    {:else}
-      <ul class="space-y-2">
-        {#each samples as s}
-          <li class="p-2 bg-surface rounded">
-            <div class="font-medium">{s.sample_name}</div>
-            <div class="text-sm">Depth: {s.depth} {s.description ? `- ${s.description}` : ''}</div>
-          </li>
-        {/each}
-      </ul>
-    {/if}
+  <!-- Tabs for Manual vs Bulk -->
+  <div class="flex gap-2 border-b border-white/10 mb-4">
+    <button
+      class="px-3 py-2 text-sm {!manualMode ? 'border-b-2 border-blue-500' : 'text-muted-foreground'}"
+      onclick={() => manualMode = false}
+    >
+      Manual Entry
+    </button>
+    <button
+      class="px-3 py-2 text-sm {manualMode ? 'border-b-2 border-blue-500' : 'text-muted-foreground'}"
+      onclick={() => manualMode = true}
+    >
+      Bulk Import
+    </button>
+  </div>
+
+  {#if !manualMode}
+    <!-- Manual Entry Mode -->
+    <div class="bg-surface rounded p-3">
+      <div class="font-semibold mb-2">Add / Update Sample</div>
+      <div class="grid grid-cols-1 gap-2">
+        <div class="flex items-center gap-2">
+          <input placeholder="Well name" bind:value={wellName} class="input w-32" />
+          <input placeholder="Sample name" bind:value={form.sample_name} class="input w-32" />
+          <input placeholder="Depth" bind:value={form.depth} class="input w-32" />
+        </div>
+        <input placeholder="Description" bind:value={form.description} class="input" />
+        <div>
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-medium">Measurements (RCA)</span>
+            <Button class="btn btn-sm" type="button" onclick={addMeasurement}>Add</Button>
+          </div>
+          <div class="space-y-2 mt-2">
+            {#each measurements as m, i}
+              <div class="grid grid-cols-12 gap-2 items-center">
+                <input class="col-span-5 input" placeholder="Property" bind:value={m.property_name} />
+                <input class="col-span-3 input" placeholder="Value" bind:value={m.value} />
+                <input class="col-span-3 input" placeholder="Unit" bind:value={m.unit} />
+                <Button variant='secondary' type="button" onclick={() => removeMeasurement(i)}>✕</Button>
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-medium">Relative Permeability (relperm)</span>
+            <Button class="btn btn-sm" type="button" onclick={addRelperm}>Add</Button>
+          </div>
+          <div class="space-y-2 mt-2">
+            {#each relperm as r, i}
+              <div class="grid grid-cols-12 gap-2 items-center">
+                <input class="col-span-4 input" placeholder="Saturation" bind:value={r.saturation} />
+                <input class="col-span-4 input" placeholder="kr" bind:value={r.kr} />
+                <input class="col-span-3 input" placeholder="Phase" bind:value={r.phase} />
+                <Button variant='secondary' type="button" onclick={() => removeRelperm(i)}>✕</Button>
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-medium">Capillary Pressure (pc)</span>
+            <Button class="btn btn-sm" type="button" onclick={addPc}>Add</Button>
+          </div>
+          <div class="space-y-2 mt-2">
+            {#each pc as p, i}
+              <div class="grid grid-cols-12 gap-2 items-center">
+                <input class="col-span-3 input" placeholder="Saturation" bind:value={p.saturation} />
+                <input class="col-span-3 input" placeholder="Pressure" bind:value={p.pressure} />
+                <select class="col-span-3 input" bind:value={p.experiment_type}>
+                  <option value="" disabled hidden>Experiment Type</option>
+                  <option value="Porous plate">Porous plate</option>
+                  <option value="Centrifuge">Centrifuge</option>
+                  <option value="Mercury Injection">Mercury Injection</option>
+                </select>
+                <select class="col-span-2 input" bind:value={p.cycle}>
+                  <option value="" disabled hidden>Cycle</option>
+                  <option value="Drainage">Drainage</option>
+                  <option value="Imbibition">Imbibition</option>
+                </select>
+                <Button variant='secondary' type="button" onclick={() => removePc(i)}>✕</Button>
+              </div>
+            {/each}
+          </div>
+        </div>
+        <div class="mt-2">
+          <Button class="btn btn-primary" onclick={submitSample}>Save Sample</Button>
+        </div>
+      </div>
+    </div>
+  {:else}
+    <!-- Bulk Import Mode -->
+    <div class="mb-4">
+      <BulkAncillaryImporter {projectId} type="core_samples" />
+    </div>
   {/if}
 
-  <div class="mt-4 bg-panel rounded p-3">
-    <div class="font-semibold mb-2">Add / Update Sample</div>
-    <div class="grid grid-cols-1 gap-2">
-      <div class="flex items-center gap-2">
-        <input placeholder="Well name" bind:value={wellName} class="input w-32" />
-        <input placeholder="Sample name" bind:value={form.sample_name} class="input w-32" />
-        <input placeholder="Depth" bind:value={form.depth} class="input w-32" />
-      </div>
-      <input placeholder="Description" bind:value={form.description} class="input" />
-      <div>
-        <div class="flex items-center justify-between">
-          <span class="text-sm font-medium">Measurements (RCA)</span>
-          <Button class="btn btn-sm" type="button" onclick={addMeasurement}>Add</Button>
-        </div>
-        <div class="space-y-2 mt-2">
-          {#each measurements as m, i}
-            <div class="grid grid-cols-12 gap-2 items-center">
-              <input class="col-span-5 input" placeholder="Property" bind:value={m.property_name} />
-              <input class="col-span-3 input" placeholder="Value" bind:value={m.value} />
-              <input class="col-span-3 input" placeholder="Unit" bind:value={m.unit} />
-              <Button variant='secondary' type="button" onclick={() => removeMeasurement(i)}>✕</Button>
-            </div>
+  {#if showList}
+    <div class="mt-4">
+      <div class="text-sm font-medium mb-2">Samples ({samples.length})</div>
+      {#if loading}
+        <div>Loading...</div>
+      {:else}
+        <ul class="space-y-2">
+          {#each samples as s}
+            <li class="p-2 bg-surface rounded">
+              <div class="font-medium">{s.sample_name}</div>
+              <div class="text-sm">Depth: {s.depth} {s.description ? `- ${s.description}` : ''}</div>
+            </li>
           {/each}
-        </div>
-      </div>
-
-      <div>
-        <div class="flex items-center justify-between">
-          <span class="text-sm font-medium">Relative Permeability (relperm)</span>
-          <Button class="btn btn-sm" type="button" onclick={addRelperm}>Add</Button>
-        </div>
-        <div class="space-y-2 mt-2">
-          {#each relperm as r, i}
-            <div class="grid grid-cols-12 gap-2 items-center">
-              <input class="col-span-4 input" placeholder="Saturation" bind:value={r.saturation} />
-              <input class="col-span-4 input" placeholder="kr" bind:value={r.kr} />
-              <input class="col-span-3 input" placeholder="Phase" bind:value={r.phase} />
-              <Button variant='secondary' type="button" onclick={() => removeRelperm(i)}>✕</Button>
-            </div>
-          {/each}
-        </div>
-      </div>
-
-      <div>
-        <div class="flex items-center justify-between">
-          <span class="text-sm font-medium">Capillary Pressure (pc)</span>
-          <Button class="btn btn-sm" type="button" onclick={addPc}>Add</Button>
-        </div>
-        <div class="space-y-2 mt-2">
-          {#each pc as p, i}
-            <div class="grid grid-cols-12 gap-2 items-center">
-              <input class="col-span-3 input" placeholder="Saturation" bind:value={p.saturation} />
-              <input class="col-span-3 input" placeholder="Pressure" bind:value={p.pressure} />
-              <select class="col-span-3 input" bind:value={p.experiment_type}>
-                <option value="" disabled hidden>Experiment Type</option>
-                <option value="Porous plate">Porous plate</option>
-                <option value="Centrifuge">Centrifuge</option>
-                <option value="Mercury Injection">Mercury Injection</option>
-              </select>
-              <select class="col-span-2 input" bind:value={p.cycle}>
-                <option value="" disabled hidden>Cycle</option>
-                <option value="Drainage">Drainage</option>
-                <option value="Imbibition">Imbibition</option>
-              </select>
-              <Button variant='secondary' type="button" onclick={() => removePc(i)}>✕</Button>
-            </div>
-          {/each}
-        </div>
-      </div>
-      <div class="mt-2">
-        <Button class="btn btn-primary" onclick={submitSample}>Save Sample</Button>
-      </div>
-      <div class="mb-3">
-        <Button variant="secondary" onclick={() => showImporter = !showImporter}>{showImporter ? 'Hide bulk importer' : 'Bulk import'}</Button>
-      </div>
-      {#if showImporter}
-        <div class="mb-3">
-          <BulkAncillaryImporter {projectId} type="core_samples" />
-        </div>
+        </ul>
       {/if}
     </div>
-  </div>
+  {/if}
 </div>
