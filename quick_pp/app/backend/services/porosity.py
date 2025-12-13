@@ -1,9 +1,10 @@
 from typing import Dict, List
 
 import numpy as np
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from quick_pp.app.backend.schemas.porosity import InputData
+from quick_pp.app.backend.schemas.porosity_shale import InputData as ShalePorosityInput
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.porosity import (
     density_porosity,
@@ -21,6 +22,20 @@ def _validate_points(input_dict: dict, required_points: List[str]):
             raise ValueError(
                 f"{k} must be a tuple of 2 elements: (neutron porosity, bulk density)"
             )
+
+
+def _safe_float(val):
+    """
+    Safely convert a value to float for API output.
+    If the value is complex, returns the real part as float.
+    If conversion fails, returns 0.0 to maintain API contract.
+    """
+    try:
+        if isinstance(val, complex):
+            return float(val.real)
+        return float(val)
+    except Exception:
+        return 0.0  # fallback to 0.0 for API contract
 
 
 @router.post(
@@ -184,3 +199,60 @@ async def estimate_phit_neu_den(inputs: InputData) -> List[Dict[str, float]]:
         {"PHIT": float(val), "PHIE": float(e)}
         for val, e in zip(phit, phie, strict=True)
     ]
+
+
+@router.post(
+    "/shale_porosity",
+    summary="Estimate Shale Porosity",
+    description=(
+        """
+        Estimate shale porosity from neutron porosity and total porosity.
+
+        Input model: ShalePorosityInput (see quick_pp.app.backend.schemas.porosity_shale.InputData).
+
+        Request body must be a JSON object with the following fields:
+        - data: list of objects, each with keys 'nphi' (float, required) and 'phit' (float, required)
+
+        Example:
+        {
+            'data': [
+                {'nphi': 0.35, 'phit': 0.22},
+                {'nphi': 0.40, 'phit': 0.18}
+            ]
+        }
+        """
+    ),
+    operation_id="estimate_shale_porosity",
+)
+async def estimate_shale_porosity_(
+    inputs: ShalePorosityInput,
+) -> List[Dict[str, float]]:
+    """
+    Estimate shale porosity for each input record.
+
+    Args:
+        inputs (ShalePorosityInput): Input data containing neutron porosity (nphi) and total porosity (phit).
+    Returns:
+        List[Dict[str, float]]: List of dictionaries with the estimated shale porosity under the key 'PHIT_SH'.
+    Technical Details:
+        - Converts input data to numpy arrays for vectorized calculation.
+        - Calls estimate_shale_porosity with nphi and phit arrays.
+        - The function computes shale porosity as nphi - phit, clipped between 0.01 and 1.0.
+        - Handles both scalar and array results, always returning a list of dicts.
+        - Uses _safe_float to ensure all outputs are valid floats.
+        - Raises HTTPException with status 400 on any error.
+    """
+    input_dict = inputs.model_dump()
+    try:
+        nphi = np.array([d["nphi"] for d in input_dict["data"]], dtype=np.float64)
+        phit = np.array([d["phit"] for d in input_dict["data"]], dtype=np.float64)
+        phit_sh = estimate_shale_porosity(nphi, phit)
+        if np.isscalar(phit_sh):
+            result_list = [_safe_float(phit_sh)]
+        else:
+            result_list = [_safe_float(val) for val in np.asarray(phit_sh).flatten()]
+        return [{"PHIT_SH": val} for val in result_list]
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Error processing request: {e}"
+        ) from e

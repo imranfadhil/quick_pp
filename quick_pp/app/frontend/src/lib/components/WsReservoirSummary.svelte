@@ -158,12 +158,12 @@
     const mappedRows: Array<Record<string, any>> = [];
     for (const r of filteredRows) {
       const depth = Number(r.depth ?? r.tvdss ?? r.TVD ?? r.TVDSS ?? r.DEPTH ?? NaN);
-      const vcld = Number(r.vcld ?? r.VCLD ?? r.vclay ?? r.VCLAY ?? NaN);
+      const vclay = Number(r.vclay ?? r.VCLAY ?? NaN);
       const phit = Number(r.phit ?? r.PHIT ?? NaN);
       const swt = Number(r.swt ?? r.SWT ?? NaN);
       const perm = Number(r.perm ?? r.PERM ?? r.permeability ?? NaN);
       let zones = r.zones ?? r.ZONES ?? r.zone ?? r.ZONE ?? null;
-      if (zones == null) {
+      if (zones == null || String(zones).trim() === '') {
         const anyZones = fullRows.some(rr => {
           const z = rr.zones ?? rr.ZONES ?? rr.zone ?? rr.ZONE;
           return z != null && String(z).trim() !== '';
@@ -171,13 +171,18 @@
         if (!anyZones) {
           // assign 'ALL' when no row has a zone value
           zones = 'ALL';
+        } else {
+          // assign 'UNKNOWN' for rows missing zone when other rows have zones
+          zones = 'UNKNOWN';
         }
+      } else {
+        zones = String(zones);
       }
       // Only include rows where all required numeric fields are valid numbers (no nulls)
-      if (isNaN(depth) || isNaN(vcld) || isNaN(phit) || isNaN(swt) || isNaN(perm)) {
+      if (isNaN(depth) || isNaN(vclay) || isNaN(phit) || isNaN(swt) || isNaN(perm)) {
         continue;
       }
-      mappedRows.push({ depth, vcld, phit, swt, perm, zones });
+      mappedRows.push({ depth, vclay, phit, swt, perm, zones });
     }
     return mappedRows;
   }
@@ -209,7 +214,7 @@
       const out = await res.json();
       ressumRows = Array.isArray(out) ? out : [];
       if (skipped > 0) {
-        console.warn(`Skipped ${skipped} / ${attempted} rows because they lacked required numeric values (depth, vcld, phit, swt, perm).`);
+        console.warn(`Skipped ${skipped} / ${attempted} rows because they lacked required numeric values (depth, vclay, phit, swt, perm).`);
         // show as non-blocking message in `error` variable so user sees it in UI
         error = `Report generated. Note: skipped ${skipped} row(s) with missing numeric values.`;
       }

@@ -2,6 +2,63 @@ import { writable, get, derived } from 'svelte/store';
 import type { WorkspaceState, Project, Well } from '$lib/types';
 import { projects } from '$lib/stores/projects';
 
+// Cache for well plot data to persist across page navigation
+// Key format: `${projectId}-${wellName}`
+export const wellPlotCache = writable<Map<string, { data: any; timestamp: number }>>(new Map());
+
+export function getPlotCacheKey(projectId: string | number, wellName: string): string {
+  return `${projectId}-${wellName}`;
+}
+
+export function getCachedPlot(projectId: string | number, wellName: string) {
+  const cache = get(wellPlotCache);
+  return cache.get(getPlotCacheKey(projectId, wellName));
+}
+
+export function setCachedPlot(projectId: string | number, wellName: string, data: any) {
+  wellPlotCache.update((cache) => {
+    cache.set(getPlotCacheKey(projectId, wellName), { data, timestamp: Date.now() });
+    return cache;
+  });
+}
+
+export function clearPlotCache(projectId?: string | number, wellName?: string) {
+  if (projectId && wellName) {
+    wellPlotCache.update((cache) => {
+      cache.delete(getPlotCacheKey(projectId, wellName));
+      return cache;
+    });
+  } else {
+    wellPlotCache.set(new Map());
+  }
+}
+
+// Cache for well stats data to persist across page navigation
+export const wellStatsCache = writable<Map<string, { data: any; timestamp: number }>>(new Map());
+
+export function getStatsCache(projectId: string | number, wellName: string) {
+  const cache = get(wellStatsCache);
+  return cache.get(`${projectId}-${wellName}`);
+}
+
+export function setStatsCache(projectId: string | number, wellName: string, data: any) {
+  wellStatsCache.update((cache) => {
+    cache.set(`${projectId}-${wellName}`, { data, timestamp: Date.now() });
+    return cache;
+  });
+}
+
+export function clearStatsCache(projectId?: string | number, wellName?: string) {
+  if (projectId && wellName) {
+    wellStatsCache.update((cache) => {
+      cache.delete(`${projectId}-${wellName}`);
+      return cache;
+    });
+  } else {
+    wellStatsCache.set(new Map());
+  }
+}
+
 export const workspace = writable<WorkspaceState>({
   title: 'QPP - Petrophysical Analysis',
   subtitle: undefined,

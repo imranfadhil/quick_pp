@@ -1,10 +1,12 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
+import quick_pp.las_handler as las
 from quick_pp import logger
 from quick_pp.config import Config
 from quick_pp.database.models import (
@@ -21,7 +23,6 @@ from quick_pp.database.models import (
     Well as ORMWell,
     WellSurvey as ORMWellSurvey,
 )
-import quick_pp.las_handler as las
 
 
 class Project(object):
@@ -121,8 +122,18 @@ class Project(object):
         """
         return cls(db_session=db_session, project_id=project_id)
 
-    def read_las(self, file_paths: List[str], depth_uom: Optional[str] = None):
+    def read_las(
+        self,
+        file_paths: List[str],
+        depth_uom: Optional[str] = None,
+        max_workers: int = 4,
+    ):
         """Reads one or more LAS files and adds or updates wells in the project.
+
+        Optimized version that:
+        - Parses LAS files in parallel using thread pool
+        - Batches database lookups to avoid N+1 queries
+        - Single flush operation at the end
 
         For each file, it checks if a well with the same name already exists in the
         project. If it does, the existing well's data is updated using the
@@ -133,44 +144,107 @@ class Project(object):
             file_paths (List[str]): A list of file paths to the LAS files.
             depth_uom (Optional[str]): The unit of measurement for depth to be used if not
                                        specified in the LAS file.
+            max_workers (int): Maximum number of threads for parallel file parsing. Defaults to 4.
         """
         logger.info(
             f"Reading {len(file_paths)} LAS files for project '{self.name}' (ID: {self.project_id})"
         )
 
-        for file in file_paths:
-            logger.debug(f"Processing LAS file: {file}")
-            with open(file, "rb") as f:
-                well_data, header_data = las.read_las_files([f], depth_uom)
-            well_name = las.get_wellname_from_header(header_data)
-            uwi = las.get_uwi_from_header(header_data)
-            header_data_dict = header_data.to_dict()
+        # Optimization 1: Parse LAS files in parallel
+        def parse_las_file(file_path: str):
+            """Parse a single LAS file and return parsed data."""
+            try:
+                logger.debug(f"Parsing LAS file: {file_path}")
+                with open(file_path, "rb") as f:
+                    well_data, header_data = las.read_las_files([f], depth_uom)
+                well_name = las.get_wellname_from_header(header_data)
+                uwi = las.get_uwi_from_header(header_data)
+                header_data_dict = header_data.to_dict()
+                return {
+                    "file_path": file_path,
+                    "well_name": well_name,
+                    "uwi": uwi,
+                    "well_data": well_data,
+                    "header_data": header_data,
+                    "header_data_dict": header_data_dict,
+                    "success": True,
+                }
+            except Exception as e:
+                logger.error(f"Failed to parse LAS file {file_path}: {e}")
+                return {"file_path": file_path, "success": False, "error": str(e)}
 
-            # Check if well already exists in this project
-            existing_well = self.db_session.scalar(
-                select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
+        parsed_files = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(parse_las_file, fp): fp for fp in file_paths}
+            for future in as_completed(futures):
+                result = future.result()
+                if result["success"]:
+                    parsed_files.append(result)
+                else:
+                    logger.warning(
+                        f"Skipping file {result['file_path']} due to parse error: {result.get('error')}"
+                    )
+
+        if not parsed_files:
+            logger.warning("No LAS files were successfully parsed.")
+            return
+
+        # Optimization 2: Batch fetch all existing wells for this project
+        well_names = [pf["well_name"] for pf in parsed_files]
+        existing_wells = (
+            self.db_session.execute(
+                select(ORMWell).filter(
+                    ORMWell.project_id == self.project_id, ORMWell.name.in_(well_names)
+                )
             )
+            .scalars()
+            .all()
+        )
+
+        # Create lookup dictionary for O(1) access
+        wells_by_name = {well.name: well for well in existing_wells}
+
+        # Optimization 3: Process all files and batch database operations
+        new_wells = []
+        for parsed in parsed_files:
+            well_name = parsed["well_name"]
+            existing_well = wells_by_name.get(well_name)
+
             if existing_well:
                 logger.warning(
-                    f"Well '{well_name}' already exists in project '{self.name}'. Skipping or updating."
+                    f"Well '{well_name}' already exists in project '{self.name}'. Updating data."
                 )
-                # Optionally, load and update the existing well
                 well_obj = Well(self.db_session, well_id=existing_well.well_id)
-                well_obj.update_data_from_las_parse(well_data, header_data)
+                well_obj.update_data_from_las_parse(
+                    parsed["well_data"], parsed["header_data"]
+                )
             else:
+                logger.debug(
+                    f"Creating new well '{well_name}' in project '{self.name}'"
+                )
                 well_obj = Well(
                     self.db_session,
                     project_id=self.project_id,
                     name=well_name,
-                    uwi=uwi,
-                    header_data=header_data_dict,
+                    uwi=parsed["uwi"],
+                    header_data=parsed["header_data_dict"],
                     depth_uom=depth_uom,
                 )
-                well_obj.update_data_from_las_parse(well_data, header_data)
+                well_obj.update_data_from_las_parse(
+                    parsed["well_data"], parsed["header_data"]
+                )
                 self.db_session.add(well_obj._orm_well)
-                self.db_session.flush()
+                new_wells.append(well_name)
 
             logger.debug(f"Processed well '{well_obj.name}' for project '{self.name}'.")
+
+        # Optimization 4: Single flush for all wells at the end
+        if new_wells or parsed_files:
+            self.db_session.flush()
+            logger.info(
+                f"Successfully processed {len(parsed_files)} LAS files "
+                f"({len(new_wells)} new wells, {len(parsed_files) - len(new_wells)} updated)"
+            )
 
     def update_data(
         self,
@@ -193,21 +267,42 @@ class Project(object):
         logger.info(
             f"Updating project data with {len(data)} records, grouped by {group_by}"
         )
+
+        # Optimization 1: Batch fetch all wells at once to avoid N+1 queries
+        well_names = data[group_by].unique().tolist()
+        orm_wells = (
+            self.db_session.execute(
+                select(ORMWell).filter(
+                    ORMWell.project_id == self.project_id, ORMWell.name.in_(well_names)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        # Create a lookup dictionary for O(1) access
+        wells_by_name = {well.name: well for well in orm_wells}
+
+        # Optimization 2: Process all wells, but only flush/commit once at the end
         for well_name, well_data in data.groupby(group_by):
             logger.debug(f"Processing well: {well_name} with {len(well_data)} records")
-            orm_well = self.db_session.scalar(
-                select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
-            )
+            orm_well = wells_by_name.get(well_name)
+
             if orm_well:
                 well_obj = Well(self.db_session, well_id=orm_well.well_id)
                 well_obj.update_data(well_data)
                 if well_configs is not None:
                     well_obj.update_config(well_configs.get(well_name, {}))
-                well_obj.save()  # Persist the updated data and config to the DB
+                # Don't call save() here - will flush once at the end
+                self.db_session.add(well_obj._orm_well)
             else:
                 logger.warning(
                     f"Well '{well_name}' not found in project '{self.name}'. Skipping update."
                 )
+
+        # Optimization 3: Single flush for all wells
+        self.db_session.flush()
+        logger.info(f"Successfully updated {len(wells_by_name)} wells")
 
     def update_ancillary_data(self, data: Dict[str, Dict[str, List[Dict[str, Any]]]]):
         """Updates ancillary data for multiple wells in the project.
@@ -713,15 +808,21 @@ class Well(object):
         logger.debug(f"Updating well data for '{self.name}': {len(data)} records")
         data = data.set_index("DEPTH")
 
+        # Optimization 1: Create a lookup dictionary for existing curves
+        curves_by_mnemonic = {c.mnemonic: c for c in self._orm_well.curves}
+
+        # Optimization 2: Batch collect all depths that need deletion across all curves
+        all_depths_to_delete = {}
+        new_curves = []
+
         for mnemonic, values in data.items():
             # Determine data type from pandas series
             is_numeric = pd.api.types.is_numeric_dtype(values)
             data_type = "numeric" if is_numeric else "text"
 
             # Find existing curve or create new one
-            orm_curve = next(
-                (c for c in self._orm_well.curves if c.mnemonic == mnemonic), None
-            )
+            orm_curve = curves_by_mnemonic.get(mnemonic)
+
             if not orm_curve:
                 logger.debug(
                     f"Creating new curve '{mnemonic}' for well '{self.name}' during data update."
@@ -730,40 +831,66 @@ class Well(object):
                     well_id=self.well_id, mnemonic=mnemonic, data_type=data_type
                 )
                 self._orm_well.curves.append(orm_curve)
+                self.db_session.flush()  # Flush to get curve_id
+                curves_by_mnemonic[mnemonic] = orm_curve
+                new_curves.append(mnemonic)
             else:
-                # Delete existing data points only for the depths being updated.
+                orm_curve.data_type = data_type
+                # Collect depths for this curve that need deletion
                 depths_to_update = data.index[data[mnemonic].notna()].tolist()
                 if depths_to_update:
-                    # Find existing data points for this curve at the specified depths
-                    data_points_to_delete = (
-                        self.db_session.query(ORMCurveData)
-                        .filter(
-                            ORMCurveData.curve_id == orm_curve.curve_id,
-                            ORMCurveData.depth.in_(depths_to_update),
-                        )
-                        .all()
-                    )
+                    all_depths_to_delete[orm_curve.curve_id] = depths_to_update
 
-                    for data_point in data_points_to_delete:
-                        self.db_session.delete(data_point)
-                    self.db_session.flush()
-                orm_curve.data_type = data_type
+        # Optimization 3: Bulk delete old data points using raw SQL for better performance
+        if all_depths_to_delete:
+            for curve_id, depths in all_depths_to_delete.items():
+                # Use bulk delete with raw SQL for much better performance
+                self.db_session.execute(
+                    text(
+                        "DELETE FROM curve_data WHERE curve_id = :curve_id AND depth IN :depths"
+                    ).bindparams(curve_id=curve_id),
+                    {"curve_id": curve_id, "depths": tuple(depths)},
+                )
 
-            # Create new data points, skipping NaNs
+        # Optimization 4: Batch insert new data points using bulk_insert_mappings
+        all_data_points = []
+        for mnemonic, values in data.items():
+            orm_curve = curves_by_mnemonic[mnemonic]
+            is_numeric = pd.api.types.is_numeric_dtype(values)
+
+            # Create data point mappings for bulk insert
             if is_numeric:
-                curve_data_points = [
-                    ORMCurveData(depth=depth, value_numeric=value)
+                data_points = [
+                    {
+                        "curve_id": orm_curve.curve_id,
+                        "depth": depth,
+                        "value_numeric": value,
+                        "value_text": None,
+                    }
                     for depth, value in zip(data.index, values, strict=True)
                     if pd.notna(value)
                 ]
             else:
-                curve_data_points = [
-                    ORMCurveData(depth=depth, value_text=value)
+                data_points = [
+                    {
+                        "curve_id": orm_curve.curve_id,
+                        "depth": depth,
+                        "value_numeric": None,
+                        "value_text": str(value),
+                    }
                     for depth, value in zip(data.index, values, strict=True)
                     if pd.notna(value)
                 ]
-            orm_curve.data.extend(curve_data_points)
-        logger.debug(f"Updated {len(data.columns)} curves for well '{self.name}'.")
+            all_data_points.extend(data_points)
+
+        # Optimization 5: Single bulk insert for all curves
+        if all_data_points:
+            self.db_session.bulk_insert_mappings(ORMCurveData, all_data_points)
+
+        logger.debug(
+            f"Updated {len(data.columns)} curves for well '{self.name}' "
+            f"with {len(all_data_points)} total data points."
+        )
 
     def add_curve_data(
         self,
@@ -901,12 +1028,12 @@ class Well(object):
                          plus columns for each curve mnemonic.
         """
         sql = text("""
-        SELECT 
+        SELECT
             cd.depth,
             c.mnemonic,
             COALESCE(CAST(cd.value_numeric AS TEXT), cd.value_text) as value
         FROM curve_data cd
-        JOIN curves c ON cd.curve_id = c.curve_id 
+        JOIN curves c ON cd.curve_id = c.curve_id
         WHERE c.well_id = :well_id
         ORDER BY cd.depth, c.mnemonic
         """)
@@ -1002,13 +1129,13 @@ class Well(object):
         placeholders = ", ".join([f":mnemonic_{i}" for i in range(len(mnemonics))])
 
         sql = text(f"""
-        SELECT 
+        SELECT
             cd.depth,
             c.mnemonic,
             COALESCE(CAST(cd.value_numeric AS TEXT), cd.value_text) as value
         FROM curve_data cd
-        JOIN curves c ON cd.curve_id = c.curve_id 
-        WHERE c.well_id = :well_id 
+        JOIN curves c ON cd.curve_id = c.curve_id
+        WHERE c.well_id = :well_id
         AND c.mnemonic IN ({placeholders})
         ORDER BY cd.depth
         """)
@@ -1050,8 +1177,8 @@ class Well(object):
 
         for term in search_terms:
             sql = text("""
-                SELECT mnemonic FROM curves 
-                WHERE well_id = :well_id 
+                SELECT mnemonic FROM curves
+                WHERE well_id = :well_id
                 AND LOWER(mnemonic) LIKE :pattern
                 LIMIT 1
             """)

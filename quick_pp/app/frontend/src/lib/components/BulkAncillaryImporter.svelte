@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import WellSelector from './WellSelector.svelte';
   export let projectId: string|number;
-  export let type: 'formation_tops'|'fluid_contacts'|'pressure_tests'|'core_samples'|'rca'|'scal'|'well_surveys' = 'formation_tops';
+  export let type: 'formation_tops'|'fluid_contacts'|'pressure_tests'|'core_samples'|'well_surveys' = 'formation_tops';
   export let maxConcurrency = 4;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
@@ -155,8 +155,8 @@
       const surveys = preview.rows.map((r:any)=>({ md: Number(r[preview.detected.md] ?? r['md'] ?? r['MD'] ?? ''), inc: Number(r[preview.detected.inc] ?? r['inc'] ?? r['INC'] ?? ''), azim: Number(r[preview.detected.azim] ?? r['azim'] ?? r['AZIM'] ?? '') }));
       return { surveys };
     }
-    // core_samples, rca, scal handled as per-sample payloads (returned as an array)
-    if (type === 'core_samples' || type === 'rca' || type === 'scal') {
+    // core_samples handled as per-sample payloads (returned as an array)
+    if (type === 'core_samples') {
       // Expect SAMPLE_NAME column (case-insensitive). We'll group rows by sample name.
       const rows = preview.rows;
       const keys = Object.keys(rows[0] ?? {});
@@ -277,8 +277,8 @@
         }
         if (pc.length) sampleObj.pc_data = pc;
 
-        // For core_samples/rca: if both cpore and cperm are missing, drop this sample
-        if ((type === 'core_samples' || type === 'rca') && cporeNum == null && cpermNum == null) {
+        // For core_samples: if both cpore and cperm are missing, drop this sample
+        if (type === 'core_samples' && cporeNum == null && cpermNum == null) {
           // skip adding empty sample
         } else {
           samples.push(sampleObj);
@@ -376,8 +376,8 @@
                     })) }
                   : {};
             const subQs = `?well_name=${encodeURIComponent(String(wn))}`;
-            // If this is a core-like import, build samples for this well and POST per-sample to core_samples endpoint
-            if (type === 'core_samples' || type === 'rca' || type === 'scal') {
+            // If this is a core samples import, build samples for this well and POST per-sample to core_samples endpoint
+            if (type === 'core_samples') {
               const subPreview = { rows: rowsForWell };
               const subPayload = buildPayloadFromPreview(subPreview);
               const samples = subPayload.samples ?? [];
@@ -439,8 +439,8 @@
       }
 
       // otherwise single request for whole file
-      // For core-like types we may need to POST per sample
-      if (type === 'core_samples' || type === 'rca' || type === 'scal') {
+      // For core samples we may need to POST per sample
+      if (type === 'core_samples') {
         // payload may contain `samples` array
         const samplesArr = payload.samples ?? payload.samples ?? [];
         if (!samplesArr.length) return { file: preview.fileName, ok: false, error: 'No samples parsed' };
@@ -507,9 +507,7 @@
         <option value="formation_tops">Formation tops</option>
         <option value="fluid_contacts">Fluid contacts</option>
         <option value="pressure_tests">Pressure tests</option>
-        <option value="core_samples">Core samples</option>
-        <option value="rca">RCA (measurements)</option>
-        <option value="scal">SCAL (relperm/pc)</option>
+        <option value="core_samples">Core samples (RCA/SCAL)</option>
         <option value="well_surveys">Well surveys (deviation)</option>
       </select>
       <label for="csv-input" class="block text-sm mb-0">
@@ -526,10 +524,8 @@
         <div class="text-xs"><code>name</code>, <code>depth</code></div>
       {:else if type === 'pressure_tests'}
         <div class="text-xs"><code>depth</code>, <code>pressure</code>, <code>pressure_uom</code> (optional)</div>
-      {:else if type === 'core_samples' || type === 'rca'}
-        <div class="text-xs">Required columns: <code>well_name</code>, <code>sample_name</code> (or <code>sample</code>), <code>depth</code>, <code>description</code>, <code>remarks</code>, and measurement columns: <code>cpore</code>, <code>cperm</code></div>
-      {:else if type === 'scal'}
-        <div class="text-xs">Relperm: <code>rp_sat</code>, <code>rp_kr</code>, <code>rp_phase</code>. Capillary pressure: <code>pc_sat</code>, <code>pc_pressure</code>, <code>pc_type</code>, <code>pc_cycle</code>. Wide format supported: <code>Pc.1</code>, <code>Pc.2</code>, <code>Sw.1</code>, <code>Sw.2</code>, etc.</div>
+      {:else if type === 'core_samples'}
+        <div class="text-xs">Required: <code>well_name</code>, <code>sample_name</code>, <code>depth</code>. Optional: <code>description</code>, <code>remarks</code>. Measurements: <code>cpore</code>, <code>cperm</code>. Relperm: <code>rp_sat</code>, <code>rp_kr</code>, <code>rp_phase</code>. Capillary pressure: <code>pc_sat</code>, <code>pc_pressure</code>, <code>pc_type</code>, <code>pc_cycle</code> (or wide format: <code>Pc.1</code>, <code>Sw.1</code>, etc.)</div>
       {:else if type === 'well_surveys'}
         <div class="text-xs">Required columns: <code>md</code> (measured depth), <code>inc</code> (inclination), <code>azim</code> (azimuth)</div>
       {/if}

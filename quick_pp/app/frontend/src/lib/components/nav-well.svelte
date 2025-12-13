@@ -184,7 +184,7 @@
 			loadingZones = true;
 			zones = [];
 			try {
-				const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/formation_tops`;
+				const url = `${API_BASE}/quick_pp/database/projects/${projectId}/formation_tops?well_name=${encodeURIComponent(wellName)}`;
 				const res = await fetch(url);
 				if (!res.ok) return;
 				const fd = await res.json();

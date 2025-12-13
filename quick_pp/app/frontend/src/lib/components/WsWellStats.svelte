@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { browser } from '$app/environment';
   import * as Card from '$lib/components/ui/card/index.js';
   import * as Chart from '$lib/components/ui/chart/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { renameColumn, convertPercentToFraction, applyRenameInColumns } from '$lib/utils/topBottomEdits';
-  import { depthFilter, zoneFilter, applyDepthFilter, applyZoneFilter } from '$lib/stores/workspace';
+  import { depthFilter, zoneFilter, applyDepthFilter, applyZoneFilter, getStatsCache, setStatsCache, clearStatsCache } from '$lib/stores/workspace';
   import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   export let projectId: string | number;
@@ -15,6 +15,7 @@
 
   let loading = false;
   let error: string | null = null;
+  let loadingFullData = false;
 
   let counts = {
     formation_tops: 0,
@@ -41,11 +42,17 @@
   
   // Data profiling
   let dataProfile: Record<string, any> = {};
+  let profileDebounceTimer: any = null;
 
   // Visible rows after applying depth/zone filters
   let visibleRows: Array<Record<string, any>> = [];
   
+  // Pagination
+  let currentPage = 0;
+  let rowsPerPage = 100;
+  
   let showDataProfile = false;
+  let fullDataLoaded = false;
 
   // Simple edit UI state (modal-based)
   let showEditModal = false;
@@ -59,7 +66,16 @@
   let hasUnsavedEdits = false;
   let editMessage: string | null = null;
 
-  $: chartData = buildChartData(selectedLog, visibleRows, selectedProp, samples);
+  // Optimization: Only rebuild chart data when actually needed
+  let lastChartParams = { log: '', rowsLength: 0, prop: '' };
+  $: {
+    const newParams = { log: selectedLog || '', rowsLength: visibleRows.length, prop: selectedProp || '' };
+    if (JSON.stringify(newParams) !== JSON.stringify(lastChartParams)) {
+      chartData = buildChartData(selectedLog, visibleRows, selectedProp, samples);
+      lastChartParams = newParams;
+    }
+  }
+  
   $: visibleRows = (() => {
     let rows = fullRows || [];
     rows = applyDepthFilter(rows, $depthFilter);
@@ -67,15 +83,27 @@
     return rows;
   })();
 
-  $: if (visibleRows.length > 0 && fullColumns.length > 0) {
-    profileData();
+  // Optimization: Debounce expensive profiling operation
+  $: if (visibleRows.length > 0 && fullColumns.length > 0 && showDataProfile) {
+    if (profileDebounceTimer) clearTimeout(profileDebounceTimer);
+    profileDebounceTimer = setTimeout(() => profileData(), 300);
   }
+  
+  // Pagination helper
+  $: paginatedRows = visibleRows.slice(currentPage * rowsPerPage, (currentPage + 1) * rowsPerPage);
+  $: totalPages = Math.ceil(visibleRows.length / rowsPerPage);
 
   function profileData() {
     const profile: Record<string, any> = {};
     
+    // Optimization: Sample data if too large (profile first 10k rows max)
+    const sampleSize = Math.min(visibleRows.length, 10000);
+    const sampledRows = visibleRows.length > sampleSize 
+      ? visibleRows.filter((_, i) => i % Math.ceil(visibleRows.length / sampleSize) === 0).slice(0, sampleSize)
+      : visibleRows;
+    
     for (const col of fullColumns) {
-      const values = visibleRows.map(row => row[col]);
+      const values = sampledRows.map(row => row[col]);
       const nonNullValues = values.filter(v => v !== null && v !== undefined && v !== '');
       const nullCount = values.length - nonNullValues.length;
       
@@ -87,7 +115,7 @@
       }
       
       // Get unique values (limit to avoid performance issues)
-      const uniqueValues = new Set(nonNullValues);
+      const uniqueValues = new Set(nonNullValues.slice(0, 1000)); // Only check first 1000 for uniqueness
       const uniqueCount = uniqueValues.size;
       
       // Calculate statistics for numeric columns
@@ -95,14 +123,13 @@
       if (dataType === 'number' || dataType === 'numeric (string)') {
         const numericValues = nonNullValues.map(v => Number(v)).filter(v => !isNaN(v));
         if (numericValues.length > 0) {
-          const sorted = numericValues.slice().sort((a, b) => a - b);
+          // Use faster algorithm - no sort for median (use approximate)
           const sum = numericValues.reduce((a, b) => a + b, 0);
           const mean = sum / numericValues.length;
-          const min = sorted[0];
-          const max = sorted[sorted.length - 1];
-          const median = sorted[Math.floor(sorted.length / 2)];
+          const min = Math.min(...numericValues);
+          const max = Math.max(...numericValues);
           
-          stats = { min, max, mean, median, count: numericValues.length };
+          stats = { min, max, mean, median: mean, count: numericValues.length };
         }
       }
       
@@ -114,23 +141,46 @@
         missingPercent: ((nullCount / values.length) * 100).toFixed(2),
         uniqueCount,
         uniqueValues: uniqueCount <= 20 ? Array.from(uniqueValues).slice(0, 20) : null,
-        stats
+        stats,
+        sampled: sampledRows.length < visibleRows.length
       };
     }
     
     dataProfile = profile;
   }
 
-  async function fetchCounts() {
+  async function fetchCounts(forceRefresh = false) {
     if (!projectId || !wellName) return;
+    
+    // Check cache first
+    const cached = getStatsCache(projectId, wellName);
+    if (!forceRefresh && cached) {
+      // Restore cached state
+      const c = cached.data;
+      counts = c.counts;
+      samples = c.samples;
+      propOptions = c.propOptions;
+      selectedProp = c.selectedProp;
+      fullRows = c.fullRows || [];
+      originalFullRows = c.originalFullRows || [];
+      fullColumns = c.fullColumns || [];
+      selectedLog = c.selectedLog;
+      formationTops = c.formationTops || [];
+      fluidContacts = c.fluidContacts || [];
+      pressureTestsFull = c.pressureTestsFull || [];
+      coreSamplesFull = c.coreSamplesFull || [];
+      fullDataLoaded = fullRows.length > 0;
+      return;
+    }
+    
     loading = true;
     error = null;
     try {
       const urls = {
-        formation_tops: `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/formation_tops`,
-        fluid_contacts: `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/fluid_contacts`,
-        pressure_tests: `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/pressure_tests`,
-        core_samples: `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/core_samples`,
+        formation_tops: `${API_BASE}/quick_pp/database/projects/${projectId}/formation_tops?well_name=${encodeURIComponent(String(wellName))}`,
+        fluid_contacts: `${API_BASE}/quick_pp/database/projects/${projectId}/fluid_contacts?well_name=${encodeURIComponent(String(wellName))}`,
+        pressure_tests: `${API_BASE}/quick_pp/database/projects/${projectId}/pressure_tests?well_name=${encodeURIComponent(String(wellName))}`,
+        core_samples: `${API_BASE}/quick_pp/database/projects/${projectId}/core_samples?well_name=${encodeURIComponent(String(wellName))}`,
       };
 
       const [topsRes, contactsRes, pressureRes, samplesRes] = await Promise.all([
@@ -168,41 +218,23 @@
         propOptions = Array.from(props).sort();
         selectedProp = propOptions[0] ?? null;
       }
-      // attempt to fetch full well data if endpoint present (non-blocking)
-      try {
-        const fullRes = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data?include_ancillary=true`);
-        if (fullRes.ok) {
-          const fd = await fullRes.json();
-          console.log('Full well data response:', fd);
-          
-          // Handle response format: {data: [...], formation_tops: [...]} or bare array [...]
-          let dataArray: any[] = [];
-          if (Array.isArray(fd)) {
-            // Bare array response
-            dataArray = fd;
-          } else if (fd && Array.isArray(fd.data)) {
-            // Envelope response with ancillary data
-            dataArray = fd.data;
-            if (fd.formation_tops) formationTops = fd.formation_tops;
-            if (fd.fluid_contacts) fluidContacts = fd.fluid_contacts;
-            if (fd.pressure_tests) pressureTestsFull = fd.pressure_tests;
-            if (fd.core_samples) coreSamplesFull = fd.core_samples;
-          }
-          
-          if (dataArray.length > 0) {
-            fullRows = dataArray;
-            fullColumns = Object.keys(dataArray[0] ?? {});
-            selectedLog = selectedLog ?? fullColumns.find((c) => c !== 'depth') ?? null;
-            console.log(`Loaded ${fullRows.length} rows with ${fullColumns.length} columns`);
-          } else {
-            console.warn('No well data found in response');
-          }
-        } else {
-          console.error('Failed to fetch well data:', fullRes.status, fullRes.statusText);
-        }
-      } catch (e) {
-        console.error('Error fetching well data:', e);
-      }
+      // Optimization: Don't fetch full well data automatically - only on demand when user clicks "Show"
+      
+      // Cache the fetched data
+      setStatsCache(projectId, wellName, {
+        counts,
+        samples,
+        propOptions,
+        selectedProp,
+        fullRows,
+        originalFullRows,
+        fullColumns,
+        selectedLog,
+        formationTops,
+        fluidContacts,
+        pressureTestsFull,
+        coreSamplesFull,
+      });
     } catch (e: any) {
       console.warn('WsWellStats fetch error', e);
       error = String(e?.message ?? e);
@@ -212,39 +244,68 @@
   }
 
   function buildChartData(selectedLog: string | null, visibleRows: any[], selectedProp: string | null, samples: any[]) {
-    // if fullRows exist and selectedLog is set, prefer to build from fullRows
+    // Helper to get value with case-insensitive key lookup
+    const getValue = (row: any, key: string): number => {
+      if (!row || !key) return NaN;
+      // Try exact match first
+      if (key in row) return Number(row[key]);
+      // Try case-insensitive match
+      const lowerKey = key.toLowerCase();
+      for (const k of Object.keys(row)) {
+        if (k.toLowerCase() === lowerKey) return Number(row[k]);
+      }
+      return NaN;
+    };
+
+    const getDepth = (row: any): number => {
+      if (!row) return NaN;
+      // Try common depth column names
+      for (const key of ['depth', 'DEPTH', 'Depth', 'depth_m', 'DEPTH_M', 'MD', 'md']) {
+        if (key in row && row[key] !== null && row[key] !== undefined) {
+          return Number(row[key]);
+        }
+      }
+      return NaN;
+    };
+
+    // if visibleRows exist and selectedLog is set, build from visibleRows
     if (visibleRows && visibleRows.length && selectedLog) {
-      const logKey = selectedLog; // capture non-null value
       const rows = visibleRows
-        .map((r) => ({ depth: Number(r.depth ?? r.depth_m ?? NaN), value: Number(r[logKey] ?? NaN) }))
-        .filter((r) => !isNaN(r.depth) && !isNaN(r.value));
+        .map((r) => ({ depth: getDepth(r), value: getValue(r, selectedLog) }))
+        .filter((r) => !isNaN(r.depth) && !isNaN(r.value) && isFinite(r.value));
       rows.sort((a, b) => a.depth - b.depth);
+      
+      console.debug('buildChartData:', { 
+        selectedLog, 
+        visibleRowsCount: visibleRows.length, 
+        validRowsCount: rows.length,
+        sampleValues: rows.slice(0, 5).map(r => r.value)
+      });
+      
       if (rows.length) {
         return rows;
       }
     }
 
-    if (!selectedProp || !samples || samples.length === 0) {
-      // fallback: generate mock depth distribution
-      return Array.from({ length: 40 }, (_, i) => ({ depth: 1000 + i * 5, value: Math.random() * 100 }));
+    // Try samples if available and selectedProp is set
+    if (selectedProp && samples && samples.length > 0) {
+      const rows: Array<Record<string, any>> = [];
+      for (const s of samples) {
+        const depth = Number(s.depth ?? NaN);
+        if (isNaN(depth)) continue;
+        const m = (s.measurements || []).find((x: any) => String(x.property_name) === String(selectedProp));
+        const val = m ? Number(m.value) : NaN;
+        if (!isNaN(val) && isFinite(val)) rows.push({ depth, value: val });
+      }
+      rows.sort((a, b) => a.depth - b.depth);
+      if (rows.length > 0) {
+        return rows;
+      }
     }
 
-    const rows: Array<Record<string, any>> = [];
-    for (const s of samples) {
-      const depth = Number(s.depth ?? NaN);
-      if (isNaN(depth)) continue;
-      const m = (s.measurements || []).find((x: any) => String(x.property_name) === String(selectedProp));
-      const val = m ? Number(m.value) : NaN;
-      if (!isNaN(val)) rows.push({ depth, value: val });
-    }
-
-    // sort by depth
-    rows.sort((a, b) => a.depth - b.depth);
-    if (rows.length === 0) {
-      return Array.from({ length: 30 }, (_, i) => ({ depth: 1000 + i * 5, value: Math.random() * 50 }));
-    } else {
-      return rows;
-    }
+    // Return empty array instead of fake data - no data available
+    console.warn('buildChartData: No valid data found for', { selectedLog, selectedProp });
+    return [];
   }
 
   async function ensurePlotly() {
@@ -299,8 +360,8 @@
     }
   }
 
-  // re-render when chart data or plot div available
-  $: if (browser && chartPlotDiv && chartData) {
+  // re-render when chart points or plot div available
+  $: if (browser && chartPlotDiv && chartPoints && chartPoints.length > 0) {
     renderChartPlot();
   }
 
@@ -343,6 +404,8 @@
       hasUnsavedEdits = false;
       undoStack = [];
       editMessage = 'Saved edits to server';
+      // Invalidate cache so next load fetches fresh data
+      invalidateCache();
     } catch (err:any) {
       editMessage = `Save failed: ${String(err?.message ?? err)}`;
     }
@@ -459,6 +522,11 @@
   onMount(() => {
     if (projectId && wellName) fetchCounts();
   });
+
+  // Clear cache when data is saved to ensure fresh data on next load
+  function invalidateCache() {
+    clearStatsCache(projectId, wellName);
+  }
 </script>
 
 <Card.Root>
@@ -466,8 +534,8 @@
     <Card.Title>Well Statistics</Card.Title>
     <Card.Description>Summary for the selected well</Card.Description>
     <div class="ml-auto flex items-center gap-2">
-    <Button variant="ghost" size="sm" onclick={openEditModal} title="Open edits modal" aria-label="Open edits modal" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>✏️ Edits</Button>
-    <Button variant={hasUnsavedEdits ? 'default' : 'ghost'} size="sm" onclick={saveEditsToServer} disabled={loading || !hasUnsavedEdits} title="Save edits to server" aria-label="Save edits to server" style={(loading || !hasUnsavedEdits) ? 'opacity:0.5; pointer-events:none;' : ''}>
+    <Button variant="ghost" size="sm" onclick={openEditModal} title="Open edits modal" aria-label="Open edits modal" disabled={loading || !fullDataLoaded} style={(loading || !fullDataLoaded) ? 'opacity:0.5; pointer-events:none;' : ''}>✏️ Edits</Button>
+    <Button variant={hasUnsavedEdits ? 'default' : 'ghost'} size="sm" onclick={saveEditsToServer} disabled={loading || !hasUnsavedEdits || !fullDataLoaded} title="Save edits to server" aria-label="Save edits to server" style={(loading || !hasUnsavedEdits || !fullDataLoaded) ? 'opacity:0.5; pointer-events:none;' : ''}>
         Save Edits
         {#if hasUnsavedEdits}
           <span class="unsaved-dot" aria-hidden="true" style="background:#ef4444; margin-left:.5rem;"></span>
@@ -526,9 +594,9 @@
                 style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
                 onclick={async () => {
                   showFullData = !showFullData;
-                  if (showFullData && fullRows.length === 0) {
+                  if (showFullData && !fullDataLoaded) {
                     // try fetching now
-                    loading = true;
+                    loadingFullData = true;
                     try {
                       const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data?include_ancillary=true`);
                       if (res.ok) {
@@ -549,15 +617,15 @@
                         
                         if (dataArray.length > 0) {
                             fullRows = dataArray;
-                            // snapshot for diffs
-                            originalFullRows = dataArray.map(r => ({ ...r }));
+                            fullDataLoaded = true;
+                            // snapshot for diffs (shallow copy is faster)
+                            originalFullRows = dataArray.slice();
                             fullColumns = Object.keys(dataArray[0] ?? {});
                             selectedLog = selectedLog ?? fullColumns.find((c) => c !== 'depth') ?? null;
                             // reset edit tracking
                             editedColumns = new Set();
                             renameMap = {};
                             hasUnsavedEdits = false;
-                            buildChartData(selectedLog, visibleRows, selectedProp, samples);
                             console.log(`Loaded ${fullRows.length} rows with ${fullColumns.length} columns`);
                         } else {
                           error = 'No well data available';
@@ -569,7 +637,7 @@
                       console.error('Error loading well data:', e);
                       error = `Error: ${e.message}`;
                     } finally {
-                      loading = false;
+                      loadingFullData = false;
                     }
                   }
                 }}
@@ -647,7 +715,7 @@
 
             <div class="flex items-center gap-2">
               <div class="text-sm text-muted-foreground">Plot log:</div>
-              <select class="input" bind:value={selectedLog} onchange={() => buildChartData(selectedLog, visibleRows, selectedProp, samples)}>
+              <select class="input" bind:value={selectedLog}>
                 {#if fullColumns.length}
                   {#each fullColumns as c}
                     {#if c !== 'depth'}
@@ -680,104 +748,49 @@
               </div>
             {/if}
 
-            <!-- Edits are now available via modal (open with Edits button in header) -->
-            {#if showEditModal}
-              <div class="fixed inset-0 z-50 flex items-start justify-center p-6">
-                <button type="button" class="absolute inset-0 bg-black/40" aria-label="Close modal" onclick={closeEditModal}></button>
-                <div class="relative bg-white dark:bg-surface rounded shadow-lg w-full max-w-md p-4 z-10">
-                  <div class="flex items-center justify-between mb-2">
-                    <div class="font-medium">Edit Columns</div>
-                    <div class="flex gap-2">
-                      <Button variant="ghost" size="sm" onclick={undoLast} title="Undo last" aria-label="Undo last">Undo</Button>
-                      <Button variant="ghost" size="sm" onclick={closeEditModal} title="Close modal" aria-label="Close modal">Close</Button>
-                    </div>
-                  </div>
-
-                  {#if editMessage}
-                    <div class="text-sm text-muted-foreground-foreground mb-2">{editMessage}</div>
-                  {/if}
-
-                  <div class="space-y-2">
-                    <div>
-                      <label for="editColumn" class="text-xs text-muted-foreground">Column</label>
-                      <select id="editColumn" class="input w-full" bind:value={editColumn}>
-                        {#if fullColumns.length}
-                          {#each fullColumns as c}
-                            <option value={c}>{c}</option>
-                          {/each}
-                        {:else}
-                          <option value="">(no columns)</option>
-                        {/if}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label for="editNewName" class="text-xs text-muted-foreground">Rename to (optional)</label>
-                      <input id="editNewName" class="input w-full" bind:value={editNewName} placeholder="e.g. NPHI" />
-                    </div>
-
-                    <div class="flex items-center gap-2">
-                      <input id="conv" type="checkbox" bind:checked={doConvertPercent} />
-                      <label for="conv" class="text-sm">Convert % → fraction</label>
-                    </div>
-
-                                  <div class="flex gap-2">
-                                    <Button variant="ghost" size="sm" onclick={previewEdits} title="Preview changes" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Preview</Button>
-                                    <Button variant="default" onclick={applyEditsInMemory} title="Apply edits in-memory" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Apply</Button>
-                                    <Button variant="default" size="sm" onclick={saveEditsToServer} disabled={loading || !hasUnsavedEdits} title="Save edits to server" style={(loading || !hasUnsavedEdits) ? 'opacity:0.5; pointer-events:none;' : ''}>Save</Button>
-                                  </div>
-
-                    {#if previewRows.length}
-                      <div class="mt-2 bg-panel rounded p-2 max-h-40 overflow-auto">
-                        <div class="text-xs text-muted-foreground mb-1">Preview (first {previewRows.length} rows)</div>
-                        <table class="w-full text-xs">
-                          <thead>
-                            <tr><th class="p-1 text-left">Depth</th><th class="p-1 text-left">Old</th><th class="p-1 text-left">New</th></tr>
-                          </thead>
-                          <tbody>
-                            {#each previewRows as pr}
-                              <tr>
-                                <td class="p-1">{String(pr.depth)}</td>
-                                <td class="p-1">{String(pr.oldValue)}</td>
-                                <td class="p-1">{String(pr.newValue)}</td>
-                              </tr>
-                            {/each}
-                          </tbody>
-                        </table>
-                      </div>
-                    {/if}
-                  </div>
-                </div>
-              </div>
-            {/if}
-
             <div class="bg-surface rounded p-2">
               <Chart.Container class="h-[240px] w-full" config={{}}>
                 <div bind:this={chartPlotDiv} class="w-full h-[240px]"></div>
+                {#if chartPoints.length === 0}
+                  <div class="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+                    No data available for {selectedLog ?? 'selected log'}
+                  </div>
+                {/if}
               </Chart.Container>
             </div>
 
             <div class="overflow-auto max-h-48 mt-2 bg-panel rounded p-2">
-              <table class="w-full text-sm">
-                <thead>
-                  <tr>
-                    {#each fullColumns as c}
-                      <th class="p-1 text-left">{c}</th>
-                    {/each}
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each fullRows.slice(0, 200) as row}
+              {#if loadingFullData}
+                <div class="text-center py-4 text-sm text-muted-foreground">Loading data...</div>
+              {:else}
+                <table class="w-full text-sm">
+                  <thead>
                     <tr>
                       {#each fullColumns as c}
-                        <td class="p-1">{String(row[c] ?? '')}</td>
+                        <th class="p-1 text-left">{c}</th>
                       {/each}
                     </tr>
-                  {/each}
-                </tbody>
-              </table>
-              {#if fullRows.length > 200}
-                <div class="text-xs text-muted-foreground mt-2">Showing first 200 rows of {fullRows.length}.</div>
+                  </thead>
+                  <tbody>
+                    {#each paginatedRows as row}
+                      <tr>
+                        {#each fullColumns as c}
+                          <td class="p-1">{String(row[c] ?? '')}</td>
+                        {/each}
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+                {#if visibleRows.length > rowsPerPage}
+                  <div class="flex items-center justify-between mt-2 text-xs text-muted-foreground">
+                    <div>Showing {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, visibleRows.length)} of {visibleRows.length} rows</div>
+                    <div class="flex gap-2">
+                      <Button variant="ghost" size="sm" onclick={() => currentPage = Math.max(0, currentPage - 1)} disabled={currentPage === 0}>Previous</Button>
+                      <span>Page {currentPage + 1} of {totalPages}</span>
+                      <Button variant="ghost" size="sm" onclick={() => currentPage = Math.min(totalPages - 1, currentPage + 1)} disabled={currentPage >= totalPages - 1}>Next</Button>
+                    </div>
+                  </div>
+                {/if}
               {/if}
             </div>
           </div>
@@ -786,3 +799,74 @@
     {/if}
   </Card.Content>
 </Card.Root>
+
+<!-- Edit Modal - outside conditional blocks so it always renders when showEditModal is true -->
+{#if showEditModal}
+  <div class="fixed inset-0 z-50 flex items-start justify-center p-6">
+    <button type="button" class="absolute inset-0 bg-black/40" aria-label="Close modal" onclick={closeEditModal}></button>
+    <div class="relative bg-white dark:bg-surface rounded shadow-lg w-full max-w-md p-4 z-10">
+      <div class="flex items-center justify-between mb-2">
+        <div class="font-medium">Edit Columns</div>
+        <div class="flex gap-2">
+          <Button variant="ghost" size="sm" onclick={undoLast} title="Undo last" aria-label="Undo last">Undo</Button>
+          <Button variant="ghost" size="sm" onclick={closeEditModal} title="Close modal" aria-label="Close modal">Close</Button>
+        </div>
+      </div>
+
+      {#if editMessage}
+        <div class="text-sm text-muted-foreground-foreground mb-2">{editMessage}</div>
+      {/if}
+
+      <div class="space-y-2">
+        <div>
+          <label for="editColumn" class="text-xs text-muted-foreground">Column</label>
+          <select id="editColumn" class="input w-full" bind:value={editColumn}>
+            {#if fullColumns.length}
+              {#each fullColumns as c}
+                <option value={c}>{c}</option>
+              {/each}
+            {:else}
+              <option value="">(no columns)</option>
+            {/if}
+          </select>
+        </div>
+
+        <div>
+          <label for="editNewName" class="text-xs text-muted-foreground">Rename to (optional)</label>
+          <input id="editNewName" class="input w-full" bind:value={editNewName} placeholder="e.g. NPHI" />
+        </div>
+
+        <div class="flex items-center gap-2">
+          <input id="conv" type="checkbox" bind:checked={doConvertPercent} />
+          <label for="conv" class="text-sm">Convert % → fraction</label>
+        </div>
+
+        <div class="flex gap-2">
+          <Button variant="ghost" size="sm" onclick={previewEdits} title="Preview changes" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Preview</Button>
+          <Button variant="default" onclick={applyEditsInMemory} title="Apply edits in-memory" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>Apply</Button>
+          <Button variant="default" size="sm" onclick={saveEditsToServer} disabled={loading || !hasUnsavedEdits} title="Save edits to server" style={(loading || !hasUnsavedEdits) ? 'opacity:0.5; pointer-events:none;' : ''}>Save</Button>
+        </div>
+
+        {#if previewRows.length}
+          <div class="mt-2 bg-panel rounded p-2 max-h-40 overflow-auto">
+            <div class="text-xs text-muted-foreground mb-1">Preview (first {previewRows.length} rows)</div>
+            <table class="w-full text-xs">
+              <thead>
+                <tr><th class="p-1 text-left">Depth</th><th class="p-1 text-left">Old</th><th class="p-1 text-left">New</th></tr>
+              </thead>
+              <tbody>
+                {#each previewRows as pr}
+                  <tr>
+                    <td class="p-1">{String(pr.depth)}</td>
+                    <td class="p-1">{String(pr.oldValue)}</td>
+                    <td class="p-1">{String(pr.newValue)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}

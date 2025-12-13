@@ -23,6 +23,10 @@
 
   let loading = false;
   let error: string | null = null;
+  let dataLoaded = false;
+  let dataCache: Map<string, Array<Record<string, any>>> = new Map();
+  let renderDebounceTimer: any = null;
+  
   // save state
   let saveLoadingLitho = false;
   let saveLoadingPoro = false;
@@ -848,26 +852,35 @@
     return rows;
   })();
 
-  // load data on mount or when well changes
-  $: if (projectId && wellName) {
-    loadWellData();
+  // Optimization: Only load data when needed, track previous to avoid redundant loads
+  let previousWellKey = '';
+  $: {
+    const currentKey = `${projectId}_${wellName}`;
+    if (projectId && wellName && currentKey !== previousWellKey) {
+      previousWellKey = currentKey;
+      if (!dataLoaded || !dataCache.has(currentKey)) {
+        loadWellData();
+      }
+    }
   }
 
-  // re-render Plotly when data or any input parameters change (including depth filter)
+  // Debounced render operations for better performance
   $: if (plotDiv && (visibleRows || drySandNphi !== undefined || drySandRhob !== undefined || 
                      dryClayNphi !== undefined || dryClayRhob !== undefined || 
                      drySiltNphi !== undefined || fluidNphi !== undefined || 
                      fluidRhob !== undefined || siltLineAngle !== undefined || depthFilter || zoneFilter || hcCorrected || hcCorrectionData)) {
-    // call async render but don't await in reactive context
-    renderNdPlot();
+    if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
+    renderDebounceTimer = setTimeout(() => renderNdPlot(), 150);
   }
 
-  // render Plotly lithology/porosity when data changes (including depth filter)
+  // Debounced render Plotly lithology/porosity when data changes
   $: if (lithoPlotDiv && (lithoChartData || depthFilter)) {
-    renderLithoPlot();
+    if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
+    renderDebounceTimer = setTimeout(() => renderLithoPlot(), 150);
   }
   $: if (poroPlotDiv && (poroChartData || cporeData || depthFilter || depthMatching !== undefined)) {
-    renderPoroPlot();
+    if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
+    renderDebounceTimer = setTimeout(() => renderPoroPlot(), 150);
   }
 </script>
 

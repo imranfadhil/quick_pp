@@ -5,7 +5,7 @@
 
   import { browser } from '$app/environment';
   import { onDestroy } from 'svelte';
-  import { depthFilter, zoneFilter } from '$lib/stores/workspace';
+  import { depthFilter, zoneFilter, getCachedPlot, setCachedPlot, clearPlotCache } from '$lib/stores/workspace';
   import DepthFilterStatus from './DepthFilterStatus.svelte';
 
   let Plotly: any = null;
@@ -18,6 +18,7 @@
   let _refreshTimer: number | null = null;
   let lastDepthFilter: any = null;
   let lastZoneFilter: any = null;
+  let mounted = false;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
@@ -30,37 +31,52 @@
     return Plotly;
   }
 
-  async function loadAndRender() {
-    if (!projectId || !wellName) return;
+  async function loadAndRender(forceRefresh = false) {
+    if (!projectId || !wellName || !mounted || !container) return;
     loading = true;
     error = null;
     try {
-      // Build URL with depth filter parameters
-      let url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/log`;
+      // Build cache key including filter state
+      const filterKey = JSON.stringify({ depth: $depthFilter, zone: $zoneFilter });
+      const cacheKey = `${projectId}-${wellName}-${filterKey}`;
       
-      // Build query parameters for depth and zone filters
-      const params = new URLSearchParams();
-      if ($depthFilter?.enabled) {
-        if ($depthFilter.minDepth !== null) {
-          params.append('min_depth', String($depthFilter.minDepth));
+      let fig;
+      const cached = getCachedPlot(projectId, cacheKey);
+      
+      // Use cache if available and not forcing refresh
+      if (!forceRefresh && cached) {
+        fig = cached.data;
+      } else {
+        // Build URL with depth filter parameters
+        let url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/log`;
+        
+        // Build query parameters for depth and zone filters
+        const params = new URLSearchParams();
+        if ($depthFilter?.enabled) {
+          if ($depthFilter.minDepth !== null) {
+            params.append('min_depth', String($depthFilter.minDepth));
+          }
+          if ($depthFilter.maxDepth !== null) {
+            params.append('max_depth', String($depthFilter.maxDepth));
+          }
         }
-        if ($depthFilter.maxDepth !== null) {
-          params.append('max_depth', String($depthFilter.maxDepth));
+        // Include zone filter if enabled - send as comma-separated `zones` param
+        if ($zoneFilter?.enabled && Array.isArray($zoneFilter.zones) && $zoneFilter.zones.length > 0) {
+          // encode individual zone values and join with comma
+          const encoded = $zoneFilter.zones.map((z) => String(z)).join(',');
+          params.append('zones', encoded);
         }
+        if (params.toString()) {
+          url += '?' + params.toString();
+        }
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(await res.text());
+        fig = await res.json();
+        
+        // Cache the result
+        setCachedPlot(projectId, cacheKey, fig);
       }
-      // Include zone filter if enabled - send as comma-separated `zones` param
-      if ($zoneFilter?.enabled && Array.isArray($zoneFilter.zones) && $zoneFilter.zones.length > 0) {
-        // encode individual zone values and join with comma
-        const encoded = $zoneFilter.zones.map((z) => String(z)).join(',');
-        params.append('zones', encoded);
-      }
-      if (params.toString()) {
-        url += '?' + params.toString();
-      }
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(await res.text());
-      const fig = await res.json();
-      if (!container) throw new Error('Missing plot container');
+      // container is guaranteed to exist due to early return check
       // ensure Plotly library is loaded in the browser
       const PlotlyLib = await ensurePlotly();
       if (!PlotlyLib) throw new Error('Failed to load Plotly library');
@@ -132,7 +148,9 @@
   }
 
   onMount(() => {
-    // initial render handled by reactive statement above
+    mounted = true;
+    // Trigger initial render now that the DOM is ready
+    loadAndRender();
   });
 
   onDestroy(() => {
@@ -158,7 +176,7 @@
         if (!detail) return;
         // Only refresh if the event refers to the same project/well
         if (String(detail.projectId) === String(projectId) && String(detail.wellName) === String(wellName)) {
-          loadAndRender();
+          loadAndRender(true); // Force refresh when data is updated
         }
       } catch (e) {}
     };
@@ -171,7 +189,7 @@
 <div class="ws-well-plot">
   <DepthFilterStatus />
   <div class="mb-2 flex items-center gap-2">
-    <button class="btn px-3 py-1 text-sm bg-gray-800 text-white rounded" onclick={loadAndRender} aria-label="Refresh plot">Refresh</button>
+    <button class="btn px-3 py-1 text-sm bg-gray-800 text-white rounded" onclick={() => loadAndRender(true)} aria-label="Refresh plot">Refresh</button>
     <label class="text-sm flex items-center gap-1">
       <input type="checkbox" bind:checked={autoRefresh} />
       Auto-refresh

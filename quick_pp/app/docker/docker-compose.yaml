@@ -26,7 +26,6 @@ services:
     # Mount project files into the container for live development
     volumes:
       - ../../..:/code:delegated
-      - ./.env:/code/.env
     # Use entrypoint script that waits for Postgres, runs DB init, then starts app
     command: sh -c "/code/quick_pp/app/docker/backend-entrypoint.sh"
     # Expose the python API so other services (and host) can reach it
