@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { workspace, setWorkspaceTitle, selectWell } from '$lib/stores/workspace';
-  import WsWellPlot from '$lib/components/WsWellPlot.svelte';
   import { goto } from '$app/navigation';
   // Reuse sidebar icons for visual consistency
   import { IconTextWrapDisabled, IconWall, IconWashTemperature6, IconTable, IconMapSearch } from '@tabler/icons-svelte';
@@ -12,8 +11,28 @@
   let selectedProject: any = null;
   let loadingWells = false;
   let selectedWell: any = null;
+  
+  // Optimization 1: Cache to prevent redundant fetches
+  let lastFetchedProjectId: string | number | null = null;
+  let projectCache: Map<string | number, any> = new Map();
+  
+  // Optimization 2: Lazy load the heavy plot component
+  let WsWellPlot: any = null;
+  let plotComponentLoaded = false;
 
   async function fetchProjectDetails(id: string | number) {
+    // Optimization 3: Skip if already fetched
+    if (String(lastFetchedProjectId) === String(id) && selectedProject?.wells) {
+      return;
+    }
+    
+    // Optimization 4: Check cache first
+    if (projectCache.has(id)) {
+      selectedProject = projectCache.get(id);
+      lastFetchedProjectId = id;
+      return;
+    }
+    
     loadingWells = true;
     try {
       // keep existing name if available; do not fabricate a default name
@@ -25,6 +44,9 @@
       if (res.ok) {
         const data = await res.json();
         selectedProject = { ...selectedProject, ...(data || {}) };
+        // Cache the result
+        projectCache.set(id, selectedProject);
+        lastFetchedProjectId = id;
       }
     } catch (err) {
       console.warn('Failed to fetch project wells', err);
@@ -37,13 +59,32 @@
     setWorkspaceTitle('Well Analysis', 'Wells and analysis');
   });
 
+  // Optimization 5: Track previous project ID to avoid unnecessary refetches
+  let previousProjectId: string | number | null = null;
+
   const unsubscribe = workspace.subscribe((w) => {
     if (w && w.project && w.project.project_id) {
-      selectedProject = { ...w.project };
-      fetchProjectDetails(w.project.project_id);
+      const currentProjectId = w.project.project_id;
+      
+      // Only fetch if project actually changed
+      if (String(previousProjectId) !== String(currentProjectId)) {
+        selectedProject = { ...w.project };
+        fetchProjectDetails(currentProjectId);
+        previousProjectId = currentProjectId;
+      }
     } else {
       selectedProject = null;
+      previousProjectId = null;
     }
+    
+    // Optimization 6: Only load plot component when a well is selected
+    if (w?.selectedWell && !plotComponentLoaded) {
+      import('$lib/components/WsWellPlot.svelte').then(module => {
+        WsWellPlot = module.default;
+        plotComponentLoaded = true;
+      });
+    }
+    
     // keep local selectedWell in sync with workspace store
     selectedWell = w?.selectedWell ?? null;
   });
@@ -116,7 +157,13 @@
         <div class="bg-panel rounded p-4 min-h-[300px]">
           {#if selectedWell}
             <div class="mt-3">
-              <WsWellPlot projectId={selectedProject.project_id} wellName={selectedWell.name} />
+              {#if plotComponentLoaded && WsWellPlot}
+                <svelte:component this={WsWellPlot} projectId={selectedProject.project_id} wellName={selectedWell.name} />
+              {:else}
+                <div class="text-center py-8">
+                  <div class="text-sm text-muted-foreground">Loading plot...</div>
+                </div>
+              {/if}
             </div>
           {:else}
             <div class="text-center py-12">

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy } from 'svelte';
   import { Button } from '$lib/components/ui/button/index.js';
   import { workspace, applyDepthFilter, applyZoneFilter } from '$lib/stores/workspace';
   import DepthFilterStatus from './DepthFilterStatus.svelte';
@@ -23,6 +23,10 @@
   
   let loading = false;
   let error: string | null = null;
+  let dataLoaded = false;
+  let dataCache: Map<string, Array<Record<string, any>>> = new Map();
+  let renderDebounceTimer: any = null;
+  
   // save state
   let saveLoadingPerm = false;
   let saveMessagePerm: string | null = null;
@@ -49,6 +53,15 @@
   
   async function loadWellData() {
     if (!projectId || !wellName) return;
+    
+    // Check cache first
+    const cacheKey = `${projectId}_${wellName}`;
+    if (dataCache.has(cacheKey)) {
+      fullRows = dataCache.get(cacheKey)!;
+      dataLoaded = true;
+      return;
+    }
+    
     loading = true;
     error = null;
     try {
@@ -58,6 +71,8 @@
       const rows = fd && fd.data ? fd.data : fd;
       if (!Array.isArray(rows)) throw new Error('Unexpected data format from backend');
       fullRows = rows;
+      dataCache.set(cacheKey, rows);
+      dataLoaded = true;
     } catch (e: any) {
       console.warn('Failed to load well data', e);
       error = String(e?.message ?? e);
@@ -396,14 +411,22 @@
     buildPermChart();
   }
   
-  // Load data when well changes
-  $: if (projectId && wellName) {
-    loadWellData();
+  // Optimization: Only load data when needed, track previous to avoid redundant loads
+  let previousWellKey = '';
+  $: {
+    const currentKey = `${projectId}_${wellName}`;
+    if (projectId && wellName && currentKey !== previousWellKey) {
+      previousWellKey = currentKey;
+      if (!dataLoaded || !dataCache.has(currentKey)) {
+        loadWellData();
+      }
+    }
   }
 
-  // re-render Plotly when perm or core perm data changes (including depth filter and depth matching)
+  // Debounced render for better performance
   $: if (permPlotDiv && (permChartData || cpermData || depthFilter || depthMatching !== undefined)) {
-    renderPermPlot();
+    if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
+    renderDebounceTimer = setTimeout(() => renderPermPlot(), 150);
   }
 </script>
 

@@ -25,12 +25,13 @@
   // local state
   let measSystem: string = 'metric';
   let waterSalinity: number = 35000;
-  let rhoClay: number = 2.58;
-  let cecClay: number = 0.9;
   let mParam: number = 2;
 
   let loading = false;
   let error: string | null = null;
+  let dataLoaded = false;
+  let dataCache: Map<string, Array<Record<string, any>>> = new Map();
+  let renderDebounceTimer: any = null;
 
   let fullRows: Array<Record<string, any>> = [];
   let tempGradResults: Array<number> = [];
@@ -47,6 +48,15 @@
 
   async function loadWellData() {
     if (!projectId || !wellName) return;
+    
+    // Check cache first
+    const cacheKey = `${projectId}_${wellName}`;
+    if (dataCache.has(cacheKey)) {
+      fullRows = dataCache.get(cacheKey)!;
+      dataLoaded = true;
+      return;
+    }
+    
     loading = true;
     error = null;
     try {
@@ -56,6 +66,8 @@
       const rows = fd && fd.data ? fd.data : fd;
       if (!Array.isArray(rows)) throw new Error('Unexpected data format from backend');
       fullRows = rows;
+      dataCache.set(cacheKey, rows);
+      dataLoaded = true;
     } catch (e: any) {
       console.warn('Failed to load well data', e);
       error = String(e?.message ?? e);
@@ -362,10 +374,10 @@
     }
   }
 
-  // render when chart data or container changes (including depth filter)
+  // Debounced render when chart data or container changes
   $: if (satPlotDiv && (archieChartData?.length > 0 || waxmanChartData?.length > 0 || depthFilter)) {
-    // don't await in reactive context
-    renderSatPlot();
+    if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
+    renderDebounceTimer = setTimeout(() => renderSatPlot(), 150);
   }
 
   async function saveSaturationResults() {
@@ -457,7 +469,17 @@
     return rows;
   })();
 
-  $: if (projectId && wellName) loadWellData();
+  // Optimization: Only load data when needed, track previous to avoid redundant loads
+  let previousWellKey = '';
+  $: {
+    const currentKey = `${projectId}_${wellName}`;
+    if (projectId && wellName && currentKey !== previousWellKey) {
+      previousWellKey = currentKey;
+      if (!dataLoaded || !dataCache.has(currentKey)) {
+        loadWellData();
+      }
+    }
+  }
 </script>
 
 <div class="ws-saturation">

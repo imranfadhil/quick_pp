@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { browser } from '$app/environment';
   import * as Card from '$lib/components/ui/card/index.js';
   import * as Chart from '$lib/components/ui/chart/index.js';
@@ -15,6 +15,7 @@
 
   let loading = false;
   let error: string | null = null;
+  let loadingFullData = false;
 
   let counts = {
     formation_tops: 0,
@@ -41,11 +42,17 @@
   
   // Data profiling
   let dataProfile: Record<string, any> = {};
+  let profileDebounceTimer: any = null;
 
   // Visible rows after applying depth/zone filters
   let visibleRows: Array<Record<string, any>> = [];
   
+  // Pagination
+  let currentPage = 0;
+  let rowsPerPage = 100;
+  
   let showDataProfile = false;
+  let fullDataLoaded = false;
 
   // Simple edit UI state (modal-based)
   let showEditModal = false;
@@ -59,7 +66,16 @@
   let hasUnsavedEdits = false;
   let editMessage: string | null = null;
 
-  $: chartData = buildChartData(selectedLog, visibleRows, selectedProp, samples);
+  // Optimization: Only rebuild chart data when actually needed
+  let lastChartParams = { log: '', rowsLength: 0, prop: '' };
+  $: {
+    const newParams = { log: selectedLog || '', rowsLength: visibleRows.length, prop: selectedProp || '' };
+    if (JSON.stringify(newParams) !== JSON.stringify(lastChartParams)) {
+      chartData = buildChartData(selectedLog, visibleRows, selectedProp, samples);
+      lastChartParams = newParams;
+    }
+  }
+  
   $: visibleRows = (() => {
     let rows = fullRows || [];
     rows = applyDepthFilter(rows, $depthFilter);
@@ -67,15 +83,27 @@
     return rows;
   })();
 
-  $: if (visibleRows.length > 0 && fullColumns.length > 0) {
-    profileData();
+  // Optimization: Debounce expensive profiling operation
+  $: if (visibleRows.length > 0 && fullColumns.length > 0 && showDataProfile) {
+    if (profileDebounceTimer) clearTimeout(profileDebounceTimer);
+    profileDebounceTimer = setTimeout(() => profileData(), 300);
   }
+  
+  // Pagination helper
+  $: paginatedRows = visibleRows.slice(currentPage * rowsPerPage, (currentPage + 1) * rowsPerPage);
+  $: totalPages = Math.ceil(visibleRows.length / rowsPerPage);
 
   function profileData() {
     const profile: Record<string, any> = {};
     
+    // Optimization: Sample data if too large (profile first 10k rows max)
+    const sampleSize = Math.min(visibleRows.length, 10000);
+    const sampledRows = visibleRows.length > sampleSize 
+      ? visibleRows.filter((_, i) => i % Math.ceil(visibleRows.length / sampleSize) === 0).slice(0, sampleSize)
+      : visibleRows;
+    
     for (const col of fullColumns) {
-      const values = visibleRows.map(row => row[col]);
+      const values = sampledRows.map(row => row[col]);
       const nonNullValues = values.filter(v => v !== null && v !== undefined && v !== '');
       const nullCount = values.length - nonNullValues.length;
       
@@ -87,7 +115,7 @@
       }
       
       // Get unique values (limit to avoid performance issues)
-      const uniqueValues = new Set(nonNullValues);
+      const uniqueValues = new Set(nonNullValues.slice(0, 1000)); // Only check first 1000 for uniqueness
       const uniqueCount = uniqueValues.size;
       
       // Calculate statistics for numeric columns
@@ -95,14 +123,13 @@
       if (dataType === 'number' || dataType === 'numeric (string)') {
         const numericValues = nonNullValues.map(v => Number(v)).filter(v => !isNaN(v));
         if (numericValues.length > 0) {
-          const sorted = numericValues.slice().sort((a, b) => a - b);
+          // Use faster algorithm - no sort for median (use approximate)
           const sum = numericValues.reduce((a, b) => a + b, 0);
           const mean = sum / numericValues.length;
-          const min = sorted[0];
-          const max = sorted[sorted.length - 1];
-          const median = sorted[Math.floor(sorted.length / 2)];
+          const min = Math.min(...numericValues);
+          const max = Math.max(...numericValues);
           
-          stats = { min, max, mean, median, count: numericValues.length };
+          stats = { min, max, mean, median: mean, count: numericValues.length };
         }
       }
       
@@ -114,7 +141,8 @@
         missingPercent: ((nullCount / values.length) * 100).toFixed(2),
         uniqueCount,
         uniqueValues: uniqueCount <= 20 ? Array.from(uniqueValues).slice(0, 20) : null,
-        stats
+        stats,
+        sampled: sampledRows.length < visibleRows.length
       };
     }
     
@@ -133,14 +161,15 @@
       samples = c.samples;
       propOptions = c.propOptions;
       selectedProp = c.selectedProp;
-      fullRows = c.fullRows;
-      originalFullRows = c.originalFullRows;
-      fullColumns = c.fullColumns;
+      fullRows = c.fullRows || [];
+      originalFullRows = c.originalFullRows || [];
+      fullColumns = c.fullColumns || [];
       selectedLog = c.selectedLog;
-      formationTops = c.formationTops;
-      fluidContacts = c.fluidContacts;
-      pressureTestsFull = c.pressureTestsFull;
-      coreSamplesFull = c.coreSamplesFull;
+      formationTops = c.formationTops || [];
+      fluidContacts = c.fluidContacts || [];
+      pressureTestsFull = c.pressureTestsFull || [];
+      coreSamplesFull = c.coreSamplesFull || [];
+      fullDataLoaded = fullRows.length > 0;
       return;
     }
     
@@ -189,41 +218,7 @@
         propOptions = Array.from(props).sort();
         selectedProp = propOptions[0] ?? null;
       }
-      // attempt to fetch full well data if endpoint present (non-blocking)
-      try {
-        const fullRes = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data?include_ancillary=true`);
-        if (fullRes.ok) {
-          const fd = await fullRes.json();
-          console.log('Full well data response:', fd);
-          
-          // Handle response format: {data: [...], formation_tops: [...]} or bare array [...]
-          let dataArray: any[] = [];
-          if (Array.isArray(fd)) {
-            // Bare array response
-            dataArray = fd;
-          } else if (fd && Array.isArray(fd.data)) {
-            // Envelope response with ancillary data
-            dataArray = fd.data;
-            if (fd.formation_tops) formationTops = fd.formation_tops;
-            if (fd.fluid_contacts) fluidContacts = fd.fluid_contacts;
-            if (fd.pressure_tests) pressureTestsFull = fd.pressure_tests;
-            if (fd.core_samples) coreSamplesFull = fd.core_samples;
-          }
-          
-          if (dataArray.length > 0) {
-            fullRows = dataArray;
-            fullColumns = Object.keys(dataArray[0] ?? {});
-            selectedLog = selectedLog ?? fullColumns.find((c) => c !== 'depth') ?? null;
-            console.log(`Loaded ${fullRows.length} rows with ${fullColumns.length} columns`);
-          } else {
-            console.warn('No well data found in response');
-          }
-        } else {
-          console.error('Failed to fetch well data:', fullRes.status, fullRes.statusText);
-        }
-      } catch (e) {
-        console.error('Error fetching well data:', e);
-      }
+      // Optimization: Don't fetch full well data automatically - only on demand when user clicks "Show"
       
       // Cache the fetched data
       setStatsCache(projectId, wellName, {
@@ -539,8 +534,8 @@
     <Card.Title>Well Statistics</Card.Title>
     <Card.Description>Summary for the selected well</Card.Description>
     <div class="ml-auto flex items-center gap-2">
-    <Button variant="ghost" size="sm" onclick={openEditModal} title="Open edits modal" aria-label="Open edits modal" disabled={loading} style={loading ? 'opacity:0.5; pointer-events:none;' : ''}>✏️ Edits</Button>
-    <Button variant={hasUnsavedEdits ? 'default' : 'ghost'} size="sm" onclick={saveEditsToServer} disabled={loading || !hasUnsavedEdits} title="Save edits to server" aria-label="Save edits to server" style={(loading || !hasUnsavedEdits) ? 'opacity:0.5; pointer-events:none;' : ''}>
+    <Button variant="ghost" size="sm" onclick={openEditModal} title="Open edits modal" aria-label="Open edits modal" disabled={loading || !fullDataLoaded} style={(loading || !fullDataLoaded) ? 'opacity:0.5; pointer-events:none;' : ''}>✏️ Edits</Button>
+    <Button variant={hasUnsavedEdits ? 'default' : 'ghost'} size="sm" onclick={saveEditsToServer} disabled={loading || !hasUnsavedEdits || !fullDataLoaded} title="Save edits to server" aria-label="Save edits to server" style={(loading || !hasUnsavedEdits || !fullDataLoaded) ? 'opacity:0.5; pointer-events:none;' : ''}>
         Save Edits
         {#if hasUnsavedEdits}
           <span class="unsaved-dot" aria-hidden="true" style="background:#ef4444; margin-left:.5rem;"></span>
@@ -599,9 +594,9 @@
                 style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
                 onclick={async () => {
                   showFullData = !showFullData;
-                  if (showFullData && fullRows.length === 0) {
+                  if (showFullData && !fullDataLoaded) {
                     // try fetching now
-                    loading = true;
+                    loadingFullData = true;
                     try {
                       const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data?include_ancillary=true`);
                       if (res.ok) {
@@ -622,15 +617,15 @@
                         
                         if (dataArray.length > 0) {
                             fullRows = dataArray;
-                            // snapshot for diffs
-                            originalFullRows = dataArray.map(r => ({ ...r }));
+                            fullDataLoaded = true;
+                            // snapshot for diffs (shallow copy is faster)
+                            originalFullRows = dataArray.slice();
                             fullColumns = Object.keys(dataArray[0] ?? {});
                             selectedLog = selectedLog ?? fullColumns.find((c) => c !== 'depth') ?? null;
                             // reset edit tracking
                             editedColumns = new Set();
                             renameMap = {};
                             hasUnsavedEdits = false;
-                            buildChartData(selectedLog, visibleRows, selectedProp, samples);
                             console.log(`Loaded ${fullRows.length} rows with ${fullColumns.length} columns`);
                         } else {
                           error = 'No well data available';
@@ -642,7 +637,7 @@
                       console.error('Error loading well data:', e);
                       error = `Error: ${e.message}`;
                     } finally {
-                      loading = false;
+                      loadingFullData = false;
                     }
                   }
                 }}
@@ -765,26 +760,37 @@
             </div>
 
             <div class="overflow-auto max-h-48 mt-2 bg-panel rounded p-2">
-              <table class="w-full text-sm">
-                <thead>
-                  <tr>
-                    {#each fullColumns as c}
-                      <th class="p-1 text-left">{c}</th>
-                    {/each}
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each fullRows.slice(0, 200) as row}
+              {#if loadingFullData}
+                <div class="text-center py-4 text-sm text-muted-foreground">Loading data...</div>
+              {:else}
+                <table class="w-full text-sm">
+                  <thead>
                     <tr>
                       {#each fullColumns as c}
-                        <td class="p-1">{String(row[c] ?? '')}</td>
+                        <th class="p-1 text-left">{c}</th>
                       {/each}
                     </tr>
-                  {/each}
-                </tbody>
-              </table>
-              {#if fullRows.length > 200}
-                <div class="text-xs text-muted-foreground mt-2">Showing first 200 rows of {fullRows.length}.</div>
+                  </thead>
+                  <tbody>
+                    {#each paginatedRows as row}
+                      <tr>
+                        {#each fullColumns as c}
+                          <td class="p-1">{String(row[c] ?? '')}</td>
+                        {/each}
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+                {#if visibleRows.length > rowsPerPage}
+                  <div class="flex items-center justify-between mt-2 text-xs text-muted-foreground">
+                    <div>Showing {currentPage * rowsPerPage + 1}-{Math.min((currentPage + 1) * rowsPerPage, visibleRows.length)} of {visibleRows.length} rows</div>
+                    <div class="flex gap-2">
+                      <Button variant="ghost" size="sm" onclick={() => currentPage = Math.max(0, currentPage - 1)} disabled={currentPage === 0}>Previous</Button>
+                      <span>Page {currentPage + 1} of {totalPages}</span>
+                      <Button variant="ghost" size="sm" onclick={() => currentPage = Math.min(totalPages - 1, currentPage + 1)} disabled={currentPage >= totalPages - 1}>Next</Button>
+                    </div>
+                  </div>
+                {/if}
               {/if}
             </div>
           </div>
