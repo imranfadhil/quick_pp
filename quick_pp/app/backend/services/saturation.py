@@ -213,7 +213,8 @@ async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
     summary="Estimate B Parameter using Waxman-Smits Model",
     description=(
         """
-        Estimate the B parameter using the Waxman-Smits model based on temperature gradient and formation water resistivity.
+        Estimate the B parameter using the Waxman-Smits model based on temperature gradient and
+        formation water resistivity.
 
         Input model: BInput (see quick_pp.app.backend.schemas.saturation_b.InputData).
 
@@ -383,7 +384,8 @@ async def estimate_qvn_(inputs: QvnInput) -> List[Dict[str, float]]:
         Input model: WaxmanSmitsInput (see quick_pp.app.backend.schemas.saturation_waxman_smits.InputData).
 
         Request body must be a JSON object with the following field:
-        - data: list of objects, each with keys 'rt', 'rw', 'phit', 'qv', 'b' (all float, required), and 'm' (int, required)
+        - data: list of objects, each with keys 'rt', 'rw', 'phit', 'qv', 'b' (all float, required),
+                and 'm' (int, required)
 
         Example:
         {

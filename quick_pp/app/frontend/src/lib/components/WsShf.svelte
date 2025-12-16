@@ -16,7 +16,7 @@
   let fits: { [key: string]: { a: number, b: number, rmse: number } } | null = null;
   let shfData: { well: string, depth: number, shf: number }[] | null = null;
 
-  let fwl = 10000;
+  let fwl = 5000;
   let ift = 30;
   let theta = 30;
   let gw = 1.05;
@@ -285,7 +285,7 @@
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
       <div>
-        <label for="fwl" class="text-sm">FWL (ft)</label>
+        <label for="fwl" class="text-sm">FWL (m)</label>
         <input id="fwl" type="number" step="0.1" bind:value={fwl} class="input mt-1" />
       </div>
       <div>

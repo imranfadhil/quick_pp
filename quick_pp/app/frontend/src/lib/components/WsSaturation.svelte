@@ -254,7 +254,7 @@
         const qvnPayloadData = qvnRows.map((row, i) => ({
           vclay: row.vclay,
           phit: row.phit,
-          phit_clay: shalePoroList[i] ?? 0.15  // fallback to default if not available
+          phit_clay: shalePoroList[i]
         }));
         const payload = { data: qvnPayloadData };
         const res = await fetch(`${API_BASE}/quick_pp/saturation/estimate_qvn`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
