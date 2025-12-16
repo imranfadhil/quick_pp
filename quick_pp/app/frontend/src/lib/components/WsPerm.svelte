@@ -32,6 +32,10 @@
   let saveMessagePerm: string | null = null;
   let selectedMethod = 'choo';
   let swirr = 0.05; // Default irreducible water saturation
+  // Choo permeability parameters (user-editable)
+  let choo_A = 1.65e7;
+  let choo_B = 6.0;
+  let choo_C = 1.78;
   let depthMatching = false; // Disable depth matching for CPERM by default (use same axis)
   
   // Well data
@@ -44,7 +48,7 @@
   
   // Available permeability methods
   const permMethods = [
-    { value: 'choo', label: 'Choo', requires: ['vclay', 'vsilt', 'phit'] },
+    { value: 'choo', label: 'Choo', requires: ['vclay', 'vsilt', 'phit'], params: ['m', 'A', 'B', 'C'] },
     { value: 'timur', label: 'Timur', requires: ['phit', 'swirr'] },
     { value: 'tixier', label: 'Tixier', requires: ['phit', 'swirr'] },
     { value: 'coates', label: 'Coates', requires: ['phit', 'swirr'] },
@@ -145,14 +149,22 @@
       error = `No valid data available for ${selectedMethod} permeability calculation`;
       return;
     }
-    
     loading = true;
     error = null;
     try {
+      let body: any = { data };
+      if (selectedMethod === 'choo') {
+        body = {
+          ...body,
+          A: choo_A,
+          B: choo_B,
+          C: choo_C
+        };
+      }
       const res = await fetch(`${API_BASE}/quick_pp/permeability/${selectedMethod}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(await res.text());
       permResults = await res.json();
@@ -440,26 +452,40 @@
 
   {#if wellName}
     <div class="bg-panel rounded p-3">
-      <div class="grid grid-cols-2 gap-2 mb-3">
-        <div>
+      <div class="grid grid-cols-3 gap-2 mb-3">
+        <div class="col-span-1 min-w-0">
           <label class="text-xs" for="perm-method">Permeability method</label>
-          <select id="perm-method" class="input" bind:value={selectedMethod}>
+          <select id="perm-method" class="input w-full" bind:value={selectedMethod}>
             {#each permMethods as method}
               <option value={method.value}>{method.label}</option>
             {/each}
           </select>
         </div>
-        
-        {#if selectedMethod !== 'choo'}
-          <div>
-            <label class="text-xs" for="swirr-input">Swirr (irreducible water saturation)</label>
-            <input id="swirr-input" class="input" type="number" step="0.01" min="0" max="1" bind:value={swirr} />
-          </div>
-        {:else}
-          <div class="flex items-end">
-            <div class="text-xs text-muted-foreground">Requires: VCLAY, VSILT, PHIT</div>
-          </div>
-        {/if}
+        <div class="col-span-2 min-w-0">
+          {#if selectedMethod !== 'choo'}
+            <div>
+              <label class="text-xs" for="swirr-input">Swirr (irreducible water saturation)</label>
+              <input id="swirr-input" class="input w-full" type="number" step="0.01" min="0" max="1" bind:value={swirr} />
+            </div>
+          {:else}
+            <div class="grid grid-cols-4 gap-2 w-full min-w-0">
+              <div class="flex flex-col col-span-4" style="min-width: 120px; max-width: 180px;">
+                <label class="text-xs" for="choo-A">Choo A</label>
+                <input id="choo-A" class="input font-mono text-right" style="width:100%; min-width:120px; max-width:180px;" type="number" step="any" bind:value={choo_A} />
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2 w-full min-w-0 mt-2">
+              <div class="min-w-0 flex flex-col">
+                <label class="text-xs" for="choo-B">Choo B</label>
+                <input id="choo-B" class="input w-full min-w-0 max-w-full" style="min-width:0;" type="number" step="any" bind:value={choo_B} />
+              </div>
+              <div class="min-w-0 flex flex-col">
+                <label class="text-xs" for="choo-C">Choo C</label>
+                <input id="choo-C" class="input w-full min-w-0 max-w-full" style="min-width:0;" type="number" step="any" bind:value={choo_C} />
+              </div>
+            </div>
+          {/if}
+        </div>
       </div>
 
       {#if error}

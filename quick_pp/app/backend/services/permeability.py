@@ -65,7 +65,14 @@ async def estimate_perm_choo(inputs: PermChInputData) -> List[Dict[str, float]]:
     try:
         input_dict = inputs.model_dump()
         input_df = pd.DataFrame.from_records(input_dict["data"])
-        perm = choo_permeability(input_df["vclay"], input_df["vsilt"], input_df["phit"])
+        # Accept optional parameters from request body (FastAPI will merge extra fields)
+        m = input_dict.get("m", 2.0)
+        A = input_dict.get("A")
+        B = input_dict.get("B")
+        C = input_dict.get("C")
+        perm = choo_permeability(
+            input_df["vclay"], input_df["vsilt"], input_df["phit"], m=m, A=A, B=B, C=C
+        )
         df_result = pd.DataFrame({"PERM": perm.ravel()})
         # Ensure output is List[Dict[str, float]]
         return [

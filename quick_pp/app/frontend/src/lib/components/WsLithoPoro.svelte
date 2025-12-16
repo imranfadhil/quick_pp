@@ -26,6 +26,8 @@
   let dataLoaded = false;
   let dataCache: Map<string, Array<Record<string, any>>> = new Map();
   let renderDebounceTimer: any = null;
+  let lithoRenderTimer: any = null;
+  let poroRenderTimer: any = null;
   
   // save state
   let saveLoadingLitho = false;
@@ -328,7 +330,6 @@
     if (!lithoPlotDiv) return;
     const plt = await ensurePlotly();
     if (!lithoPoints || lithoPoints.length === 0) {
-      // clear plot
       plt.purge(lithoPlotDiv);
       return;
     }
@@ -354,9 +355,9 @@
     };
 
     try {
-      plt.react(lithoPlotDiv, traces, layout, { responsive: true });
+      await plt.react(lithoPlotDiv, traces, layout, { responsive: true });
     } catch (e) {
-      plt.newPlot(lithoPlotDiv, traces, layout, { responsive: true });
+      await plt.newPlot(lithoPlotDiv, traces, layout, { responsive: true });
     }
   }
 
@@ -875,12 +876,12 @@
 
   // Debounced render Plotly lithology/porosity when data changes
   $: if (lithoPlotDiv && (lithoChartData || depthFilter)) {
-    if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
-    renderDebounceTimer = setTimeout(() => renderLithoPlot(), 150);
+    if (lithoRenderTimer) clearTimeout(lithoRenderTimer);
+    lithoRenderTimer = setTimeout(() => renderLithoPlot(), 150);
   }
   $: if (poroPlotDiv && (poroChartData || cporeData || depthFilter || depthMatching !== undefined)) {
-    if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
-    renderDebounceTimer = setTimeout(() => renderPoroPlot(), 150);
+    if (poroRenderTimer) clearTimeout(poroRenderTimer);
+    poroRenderTimer = setTimeout(() => renderPoroPlot(), 150);
   }
 </script>
 
