@@ -11,7 +11,7 @@
   let message: string | null = null;
   let dataLoading = false;
   let dataError: string | null = null;
-  let wellData: { phit: number[], perm: number[], zones: string[], well_names: string[], depths: number[], rock_flags: (number | null)[] } | null = null;
+  let wellData: { phit: number[], perm: number[], zones: string[], well_names: string[], depths: number[], rock_flags: (number | null)[], tvdss?: number[], tvd?: number[] } | null = null;
   let data: { pc: number[], sw: number[], perm: number[], phit: number[], depths: number[], rock_flags: (number | null)[], well_names: string[], zones: string[] } | null = null;
   let fits: { [key: string]: { a: number, b: number, rmse: number } } | null = null;
   let shfData: { well: string, depth: number, shf: number }[] | null = null;
@@ -55,7 +55,7 @@
       zone: wellData!.zones[i],
       rock_flag: wellData!.rock_flags[i],
       well_name: wellData!.well_names[i],
-      depth: wellData!.depths[i]
+      depth: wellData!.tvdss?.[i] ?? wellData!.tvd?.[i] ?? wellData!.depths[i]
     }));
     const visibleRows = applyZoneFilter(rows, zoneFilter);
     return {

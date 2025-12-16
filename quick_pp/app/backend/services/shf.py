@@ -1,6 +1,5 @@
 import math
 
-import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
@@ -13,7 +12,7 @@ from quick_pp.core_analysis import (
 from quick_pp.database import objects as db_objects
 from quick_pp.rock_type import calc_fzi, rock_typing
 
-from . import database, _sanitize_list
+from . import _sanitize_list, database
 
 
 router = APIRouter(
@@ -174,7 +173,9 @@ async def get_j_data(project_id: int, cutoffs: str = Query("0.1,1.0,3.0")):
 async def compute_j_fits(payload: dict):
     """Compute fitted a and b parameters for J curves per ROCK_FLAG.
 
-    Expected payload: { "data": { "pc": [...], "sw": [...], "perm": [...], "phit": [...], "rock_flags": [...] }, "ift": 30, "theta": 30 }
+    Expected payload: {
+        "data": { "pc": [...], "sw": [...], "perm": [...], "phit": [...], "rock_flags": [...] }, "ift": 30, "theta": 30
+    }
 
     Returns:
         JSON with fits per rock_flag
@@ -253,7 +254,23 @@ async def compute_j_fits(payload: dict):
 async def compute_shf(payload: dict):
     """Compute SHF values using Leverett J function.
 
-    Expected payload: { "data": { "pc": [...], "sw": [...], "perm": [...], "phit": [...], "depths": [...], "rock_flags": [...], "well_names": [...] }, "fits": {...}, "fwl": 1000, "ift": 30, "theta": 30, "gw": 1.05, "ghc": 0.8 }
+    Expected payload: {
+        "data": {
+            "pc": [...],
+            "sw": [...],
+            "perm": [...],
+            "phit": [...],
+            "depths": [...],
+            "rock_flags": [...],
+            "well_names": [...]
+        },
+        "fits": {...},
+        "fwl": 1000,
+        "ift": 30,
+        "theta": 30,
+        "gw": 1.05,
+        "ghc": 0.8
+    }
 
     Returns:
         JSON with shf_data
