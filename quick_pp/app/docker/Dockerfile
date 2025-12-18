@@ -11,12 +11,7 @@ RUN apt-get update && \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only requirements first to leverage Docker layer caching and ensure
-# the file is present for pip install even if the full context copy has issues.
-COPY requirements.txt /code/requirements.txt
-
-# Install any needed packages specified in requirements.txt
-RUN uv pip install --system --no-cache-dir -r /code/requirements.txt
+RUN uv pip install --system --no-cache-dir quick_pp gunicorn
 
 # Copy the rest of the repository into the image
 COPY . /code

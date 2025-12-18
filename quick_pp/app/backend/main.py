@@ -8,11 +8,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi_mcp import FastApiMCP
 
-from quick_pp.database.db_connector import DBConnector
+try:
+    from fastapi_mcp import FastApiMCP
+except Exception:
+    FastApiMCP = None
+
 from .exceptions import return_exception_message
 from .router import api_router
+from quick_pp.database.db_connector import DBConnector
 
 # Configuration
 LANGFLOW_HOST = os.getenv("LANGFLOW_HOST", "http://localhost:7860")
