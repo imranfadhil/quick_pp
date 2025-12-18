@@ -48,6 +48,7 @@ services:
       - VITE_BACKEND_URL=http://localhost:6312
       - HOST=0.0.0.0
       - PORT=5469
+      - NODE_OPTIONS=--max-old-space-size=4096
     # Install deps, build the app, and run the production server
     command: sh -c "npm install --silent && npm run build && node build"
 

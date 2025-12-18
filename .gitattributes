@@ -2,3 +2,4 @@
 *.py linguist-vendored=false
 *.ipynb linguist-vendored=false
 *.ipynb -linguist-detectable
+* text=auto
