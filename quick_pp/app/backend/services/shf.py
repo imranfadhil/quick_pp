@@ -302,13 +302,32 @@ async def compute_shf(payload: dict):
         well_names = data.get("well_names", [])
 
         shf_data = []
+        # Find the highest rock_flag value (non-reservoir)
+        valid_flags = [rf for rf in rock_flags if rf is not None]
+        if valid_flags:
+            try:
+                highest_flag = max(valid_flags)
+            except Exception:
+                highest_flag = None
+        else:
+            highest_flag = None
+
         for i in range(len(phit)):
             rf = (
                 str(int(rock_flags[i]))
                 if rock_flags and rock_flags[i] is not None
                 else None
             )
-            if rf and rf in fits.keys():
+            # Assign shf=1 for non-reservoir (highest rock_flag) or if rf not in fits.keys()
+            is_non_reservoir = False
+            if rock_flags and rock_flags[i] is not None and highest_flag is not None:
+                try:
+                    is_non_reservoir = int(rock_flags[i]) == int(highest_flag)
+                except Exception:
+                    is_non_reservoir = False
+            if is_non_reservoir or (rf is None or rf not in fits.keys()):
+                shf_data.append({"well": well_names[i], "depth": depths[i], "shf": 1})
+            else:
                 a = fits[rf]["a"]
                 b = fits[rf]["b"]
                 shf = sw_shf_leverett_j(

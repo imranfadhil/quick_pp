@@ -261,9 +261,16 @@
       // Add PRT annotation
       const prtNum = cutoffs.length - index;
       const midIndex = Math.floor(porePoints.length * 0.7);
+      // For log scale, multiply by a small factor to move text above the line
+      let yAnn = permPoints[midIndex];
+      if (yAnn !== null && yAnn > 0) {
+        yAnn = yAnn * 2.5;
+      } else {
+        yAnn = 1;
+      }
       traces.push({
         x: [porePoints[midIndex]],
-        y: [permPoints[midIndex]],
+        y: [yAnn],
         mode: 'text',
         type: 'scatter',
         name: `PRT ${prtNum}`,
