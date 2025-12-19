@@ -14,9 +14,23 @@ try:
 except Exception:
     FastApiMCP = None
 
+from quick_pp.database.db_connector import DBConnector
+
 from .exceptions import return_exception_message
 from .router import api_router
-from quick_pp.database.db_connector import DBConnector
+
+# Robust per-process DBConnector singleton
+_db_connector_instance = None
+
+
+def get_db_connector():
+    global _db_connector_instance
+    if _db_connector_instance is None:
+        db_url = os.environ.get("QPP_DATABASE_URL", "sqlite:///./data/quick_pp.db")
+        _db_connector_instance = DBConnector(db_url=db_url)
+        logging.getLogger(__name__).info("DBConnector initialized (singleton)")
+    return _db_connector_instance
+
 
 # Configuration
 LANGFLOW_HOST = os.getenv("LANGFLOW_HOST", "http://localhost:7860")
@@ -45,18 +59,19 @@ async def lifespan(app: "FastAPI"):
     Initializes per-process DB engine on startup and disposes it on shutdown.
     """
     try:
-        db_url = os.environ.get("QPP_DATABASE_URL", "sqlite:///./data/quick_pp.db")
-        DBConnector(db_url=db_url)
-        logging.getLogger(__name__).info("DBConnector initialized on startup")
+        get_db_connector()
     except Exception as e:
         logging.getLogger(__name__).exception("Failed to initialize DBConnector: %s", e)
 
     try:
         yield
     finally:
+        global _db_connector_instance
         try:
-            DBConnector().dispose()
-            logging.getLogger(__name__).info("DBConnector disposed on shutdown")
+            if _db_connector_instance is not None:
+                _db_connector_instance.dispose()
+                logging.getLogger(__name__).info("DBConnector disposed on shutdown")
+                _db_connector_instance = None
         except Exception:
             logging.getLogger(__name__).exception(
                 "Failed to dispose DBConnector during shutdown"
