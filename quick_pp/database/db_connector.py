@@ -81,7 +81,7 @@ class DBConnector:
 
     def setup_db(self):
         """
-        Setup quick_pp database.
+        Setup quick_pp database and (if PostgreSQL) langflow DB/user.
         """
         script_dir = os.path.dirname(__file__)
         db_type = (
@@ -89,12 +89,15 @@ class DBConnector:
         )
         if db_type == "sqlite":
             sql_script = "setup_sqlite_db.sql"
+            self.run_sql_script(os.path.join(script_dir, sql_script))
         elif db_type == "postgresql":
             sql_script = "setup_postgresql_db.sql"
+            self.run_sql_script(os.path.join(script_dir, sql_script))
+            # Also initialize langflow DB/user
+            langflow_sql = "setup_langflow_db.sql"
+            self.run_sql_script(os.path.join(script_dir, langflow_sql))
         else:
             raise ValueError(f"Unsupported database type: {db_type}")
-
-        self.run_sql_script(os.path.join(script_dir, sql_script))
 
     def dispose(self):
         """Dispose of the engine and clear stored sessionmaker.

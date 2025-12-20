@@ -684,6 +684,12 @@ def predict(model_config, data_hash, output_file_name, env, plot):
     help="Build images before starting containers",
 )
 @click.option(
+    "--no-cache",
+    is_flag=True,
+    default=False,
+    help="Do not use cache when building images (for up/build)",
+)
+@click.option(
     "--profile",
     multiple=True,
     help="Enable specific profiles (e.g., --profile langflow)",
@@ -705,7 +711,7 @@ def predict(model_config, data_hash, output_file_name, env, plot):
     default=None,
     help="Path to .env file (defaults to .env in repo root if it exists)",
 )
-def docker(action, detach, build, profile, service, follow, env_file):
+def docker(action, detach, build, no_cache, profile, service, follow, env_file):
     """Manage Docker services using docker-compose.
 
     ACTIONS:
@@ -736,7 +742,7 @@ def docker(action, detach, build, profile, service, follow, env_file):
         return
 
     # Build the docker-compose command
-    cmd_parts = ["docker-compose"]
+    cmd_parts = ["docker", "compose"]
 
     # Add env-file option (defaults to .env in repo root if it exists)
     if env_file:
@@ -756,19 +762,25 @@ def docker(action, detach, build, profile, service, follow, env_file):
     # Add the action
     cmd_parts.append(action)
 
-    # Add action-specific flags
+    # For build, --no-cache must come after --build and before service name
     if action == "up":
         if detach:
             cmd_parts.append("-d")
         if build:
             cmd_parts.append("--build")
+    elif action == "build":
+        if no_cache:
+            cmd_parts.append("--no-cache")
+        if service:
+            cmd_parts.append(service)
     elif action == "logs":
         if follow:
             cmd_parts.append("-f")
-
-    # Add service-specific targeting
-    if service and action in ["up", "down", "logs", "restart", "build"]:
-        cmd_parts.append(service)
+        if service:
+            cmd_parts.append(service)
+    elif action in ["down", "restart", "ps"]:
+        if service:
+            cmd_parts.append(service)
 
     # Join command parts
     cmd = " ".join(cmd_parts)

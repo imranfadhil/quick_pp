@@ -15,7 +15,6 @@
 venv/
 .venv/
 env/
-.venv/
 
 # Build artifacts
 build/
@@ -54,9 +53,10 @@ Thumbs.db
 
 # Allow required files explicitly
 !requirements.txt
-!app/docker/Dockerfile
-!app/docker/backend-entrypoint.sh
-!app/docker/Dockerfile-psycopg
-!app/docker/docker-compose.yaml
-!app/docker/init_db.py
+!main.py
+!quick_pp/app/docker/Dockerfile
+!quick_pp/app/docker/backend-entrypoint.sh
+!quick_pp/app/docker/Dockerfile-psycopg
+!quick_pp/app/docker/docker-compose.yaml
+!quick_pp/app/docker/init_db.py
 !quick_pp/
