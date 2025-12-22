@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from scipy.optimize import curve_fit
-from sklearn.metrics import root_mean_squared_error
 from tqdm import tqdm
 
 from quick_pp import logger
@@ -1369,6 +1368,8 @@ def auto_j_params(core_data, excluded_samples=None, cluster_by=None):
         list: A list of dictionaries, where each dictionary contains the
               group identifiers (e.g., 'ROCK_FLAG') and the J-parameters ('a', 'b', 'rmse').
     """
+    from sklearn.metrics import root_mean_squared_error
+
     excluded_samples = excluded_samples or []
     core_data = core_data[~core_data["Sample"].isin(excluded_samples)].copy()
 
