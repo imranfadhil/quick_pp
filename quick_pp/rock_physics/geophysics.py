@@ -1,10 +1,9 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from scipy.optimize import minimize
-from scipy.signal import convolve, hilbert
 import wellpathpy as wpp
-from scipy import signal
+from scipy.optimize import minimize
+from scipy.signal import convolve, find_peaks, hilbert
 
 
 def calculate_acoustic_impedance(rhob, dtc):
@@ -47,8 +46,8 @@ def auto_identify_layers_from_seismic_trace(
     depth = df["DEPTH"]
 
     if method == "peaks_troughs":
-        peaks = signal.find_peaks(seismic_trace, distance=min_distance)[0]
-        troughs = signal.find_peaks(-seismic_trace, distance=min_distance)[0]
+        peaks = find_peaks(seismic_trace, distance=min_distance)[0]
+        troughs = find_peaks(-seismic_trace, distance=min_distance)[0]
         all_boundaries = np.sort(np.concatenate([peaks, troughs]))
     elif method == "zero_crossings":
         # Find indices where the sign changes (zero crossings)
@@ -290,10 +289,10 @@ def convert_well_trajectory_to_ilxl(seismic_cube, well_trajectory):
 
     affine = seismic_cube.segysak.get_affine_transform().inverted()
     ilxl = affine.transform(np.dstack([well_dev_pos.easting, well_dev_pos.northing])[0])
-    well_ilxl = dict(
-        iline=xr.DataArray(ilxl[:, 0], dims="well", coords={"well": md_depths}),
-        xline=xr.DataArray(ilxl[:, 1], dims="well", coords={"well": md_depths}),
-    )
+    well_ilxl = {
+        "iline": xr.DataArray(ilxl[:, 0], dims="well", coords={"well": md_depths}),
+        "xline": xr.DataArray(ilxl[:, 1], dims="well", coords={"well": md_depths}),
+    }
     z = xr.DataArray(
         1.0 * well_dev_pos.depth,
         dims="well",

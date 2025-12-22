@@ -2,9 +2,9 @@ import statistics
 
 import numpy as np
 from scipy.signal import detrend
-from sklearn.preprocessing import MinMaxScaler
 
 from quick_pp import logger
+from quick_pp.utils import minmax_scale
 
 
 def shale_volume_larinov_tertiary(igr):
@@ -92,7 +92,6 @@ def gr_index(gr):
     logger.debug("Computing gamma ray index with detrending and normalization")
     gr = np.where(np.isnan(gr), np.min(gr), gr)
     dtr_gr = detrend(gr, axis=0) + statistics.mean(gr)
-    scaler = MinMaxScaler()
-    igr = scaler.fit_transform(dtr_gr.reshape(-1, 1))
+    igr = minmax_scale(dtr_gr.reshape(-1, 1))
     logger.debug(f"Gamma ray index range: {igr.min():.3f} - {igr.max():.3f}")
     return igr

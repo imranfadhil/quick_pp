@@ -822,6 +822,56 @@ def docker(action, detach, build, no_cache, profile, service, follow, env_file):
         sys.exit(1)
 
 
+@click.command()
+def docker_publish():
+    """Build and push the qpp-backend Docker image to Docker Hub as 'latest'."""
+    docker_dir = DOCKER_DIR
+    dockerfile_path = docker_dir / "Dockerfile"
+    image_tag = "imranfadhil86/quick_pp-backend:latest"
+    click.echo(f"Building Docker image: {image_tag}")
+    build_cmd = [
+        "docker",
+        "build",
+        "-f",
+        str(dockerfile_path),
+        "-t",
+        image_tag,
+        str(docker_dir.parent.parent.parent),  # repo root
+    ]
+    try:
+        subprocess.check_call(build_cmd)
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Docker build failed: {e}")
+        sys.exit(1)
+    click.echo(f"Pushing Docker image: {image_tag}")
+    docker_username = os.environ.get("DOCKER_USERNAME")
+    docker_password = os.environ.get("DOCKER_PASSWORD")
+    if not docker_username or not docker_password:
+        click.echo(
+            "DOCKER_USERNAME and DOCKER_PASSWORD environment variables are required for docker login."
+        )
+        sys.exit(1)
+    login_cmd = ["docker", "login", "--username", docker_username, "--password-stdin"]
+    try:
+        login_proc = subprocess.Popen(
+            login_cmd, stdin=subprocess.PIPE, stdout=sys.stdout, stderr=sys.stderr
+        )
+        login_proc.communicate(input=docker_password.encode())
+        if login_proc.returncode != 0:
+            click.echo("Docker login failed.")
+            sys.exit(1)
+    except Exception as e:
+        click.echo(f"Docker login error: {e}")
+        sys.exit(1)
+    push_cmd = ["docker", "push", image_tag]
+    try:
+        subprocess.check_call(push_cmd)
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Docker push failed: {e}")
+        sys.exit(1)
+    click.echo(f"Successfully built and pushed {image_tag}")
+
+
 # Add commands to the CLI group
 cli.add_command(backend)
 cli.add_command(mlflow_server)
@@ -831,6 +881,7 @@ cli.add_command(predict)
 cli.add_command(frontend)
 cli.add_command(app)
 cli.add_command(docker)
+cli.add_command(docker_publish)
 
 
 if __name__ == "__main__":

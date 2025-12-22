@@ -119,7 +119,7 @@ def badhole_flagging(data, thold=4):
 
                 # Determine the bit sizes based on break points
                 indices = [0] + my_bkps
-                bins = list(zip(indices, indices[1:]))
+                bins = list(zip(indices, indices[1:], strict=True))
                 ii = pd.IntervalIndex.from_tuples(bins, closed="left")
                 well_data["BIN"] = pd.cut(well_data.reset_index().index, bins=ii)
                 bits_percentiles = well_data.groupby("BIN")["CALI"].describe(
@@ -138,7 +138,9 @@ def badhole_flagging(data, thold=4):
                     bits_diff_1 == bits_diff_neg1, bits_diff_1, estimated_bits
                 )
 
-                categories = dict(zip(well_data.BIN.unique(), estimated_bits))
+                categories = dict(
+                    zip(well_data.BIN.unique(), estimated_bits, strict=True)
+                )
                 well_data["ESTIMATED_BITSIZE"] = well_data["BIN"].map(categories)
             except Exception as e:
                 logger.error(f"[badhole_flagging] Error processing well {well}: {e}.")
@@ -223,7 +225,7 @@ def neu_den_xplot_hc_correction(
 
     # Iteratively correct points
     # Using a max iteration count to prevent infinite loops
-    for i in range(100):
+    for _ in range(100):
         # Only work on points that still need correction
         active_mask = correction_mask & (vsh_dn <= frac_vsh_gr) & ~np.isnan(frac_vsh_gr)
         if not np.any(active_mask):
@@ -317,7 +319,7 @@ def quick_qc(well_data, return_fig=False):
     return_df["QC_FLAG"] = 0
     return_df["PERM"] = return_df["PERM"].clip(lower=1e-3, upper=1e5)
 
-    cutoffs = dict(VSHALE=0.4, PHIT=0.01, SWT=0.9)
+    cutoffs = {"VSHALE": 0.4, "PHIT": 0.01, "SWT": 0.9}
     _, return_df["RES_FLAG"], _ = flag_interval(
         return_df["VCLAY"], return_df["PHIT"], return_df["SWT"], cutoffs
     )
@@ -551,7 +553,7 @@ def extract_quick_stats(compare_df, flag="all"):
     reqs = ["PHIT", "SWT"]
     stats_df = pd.DataFrame()
     for col in compare_df.columns:
-        if any([req in col for req in reqs]) or col in ["NET", "NTG"]:
+        if any(req in col for req in reqs) or col in ["NET", "NTG"]:
             stats = compare_df[col].describe(percentiles=[0.1, 0.5, 0.9])
             stats_df[col] = stats
 

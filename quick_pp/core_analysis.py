@@ -42,7 +42,7 @@ def poroperm_xplot(
     """
     sc = plt.scatter(poro, perm, marker=".", c=core_group, cmap="Set1")
     if core_group is not None:
-        for i, row in enumerate(zip(poro, perm, core_group)):
+        for _, row in enumerate(zip(poro, perm, core_group, strict=False)):
             plt.annotate(row[2], (row[0], row[1]), fontsize=8, alpha=0.7)
     if a and b:
         line_color = sc.get_facecolors()[0]
@@ -129,7 +129,7 @@ def pc_xplot_plotly(sw, pc, label=None, ylim=None, fig=go.Figure()):
         yaxis_title="Pc (psi)",
         xaxis_range=[0, 1],
         yaxis_range=[0, 50] if ylim is None else [ylim[0], ylim[1]],
-        legend=dict(x=1.04, y=1, traceorder="normal"),
+        legend={"x": 1.04, "y": 1, "traceorder": "normal"},
         height=500,
         width=800,
     )
@@ -532,12 +532,12 @@ def autocorrelate_core_depth(df, replace_ori=False):
             - A summary DataFrame detailing the depth shifts for each core sample.
     """
     from dtw import dtw
-    from sklearn.preprocessing import minmax_scale
+    from scipy.interpolate import interp1d
+    from scipy.signal import find_peaks
+    from sklearn.cluster import DBSCAN
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.isotonic import IsotonicRegression
-    from sklearn.cluster import DBSCAN
-    from scipy.signal import find_peaks
-    from scipy.interpolate import interp1d
+    from sklearn.preprocessing import minmax_scale
 
     required_cols = ["WELL_NAME", "DEPTH", "PHIT", "CPORE", "CPERM", "CORE_ID"]
     for col in required_cols:
@@ -1012,8 +1012,8 @@ def _plot_autocorrelation_results(
         corrected_core (pd.DataFrame): DataFrame with depth-corrected core data.
         alignment_df (pd.DataFrame): DataFrame containing the DTW alignment path.
     """
-    from plotly.subplots import make_subplots
     import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
 
     fig = make_subplots(
         rows=1,
@@ -1029,7 +1029,7 @@ def _plot_autocorrelation_results(
             y=log_data["DEPTH"],
             name="Log PHIT",
             mode="lines",
-            line=dict(color="black", width=1),
+            line={"color": "black", "width": 1},
         ),
         row=1,
         col=1,
@@ -1040,8 +1040,8 @@ def _plot_autocorrelation_results(
             y=original_core["DEPTH"],
             name="Original CPORE",
             mode="lines+markers",
-            line=dict(color="red"),
-            marker=dict(symbol="circle-open"),
+            line={"color": "red"},
+            marker={"symbol": "circle-open"},
             text=[f"Core ID: {c}" for c in original_core["CORE_ID"]],
             hoverinfo="x+y+text",
         ),
@@ -1054,7 +1054,7 @@ def _plot_autocorrelation_results(
             y=corrected_core["DEPTH_CORRECTED"],
             name="Corrected CPORE",
             mode="lines+markers",
-            line=dict(color="blue"),
+            line={"color": "blue"},
             text=[f"Core ID: {c}" for c in corrected_core["CORE_ID"]],
             hoverinfo="x+y+text",
         ),
@@ -1073,7 +1073,7 @@ def _plot_autocorrelation_results(
             y=y_lines,
             name="Depth Shift",
             mode="lines",
-            line=dict(color="gray", dash="dot", width=1),
+            line={"color": "gray", "dash": "dot", "width": 1},
             showlegend=False,
         ),
         row=1,
@@ -1087,7 +1087,7 @@ def _plot_autocorrelation_results(
             y=alignment_df["aligned_depth"],
             name="DTW Path",
             mode="lines",
-            line=dict(color="lightgray"),
+            line={"color": "lightgray"},
         ),
         row=1,
         col=2,
@@ -1099,16 +1099,16 @@ def _plot_autocorrelation_results(
             y=alignment_df["aligned_depth"],
             name="Clusters",
             mode="markers",
-            marker=dict(
-                color=alignment_df["cluster"],
-                colorscale="Viridis",
-                showscale=False,
-                colorbar=dict(title="Cluster ID"),
-                cmin=0,
-                cmid=alignment_df["cluster"].max() / 2
+            marker={
+                "color": alignment_df["cluster"],
+                "colorscale": "Viridis",
+                "showscale": False,
+                "colorbar": {"title": "Cluster ID"},
+                "cmin": 0,
+                "cmid": alignment_df["cluster"].max() / 2
                 if alignment_df["cluster"].max() > 0
                 else 0.5,
-            ),
+            },
             text=[f"Cluster: {c}" for c in alignment_df["cluster"].values],
             hoverinfo="x+y+text",
         ),
@@ -1129,7 +1129,7 @@ def _plot_autocorrelation_results(
         y0=lim_min,
         x1=lim_max,
         y1=lim_max,
-        line=dict(color="black", width=2, dash="dash"),
+        line={"color": "black", "width": 2, "dash": "dash"},
         row=1,
         col=2,
     )
@@ -1349,7 +1349,7 @@ def auto_cluster_scal_data(core_data):
     )
 
 
-def auto_j_params(core_data, excluded_samples=[], cluster_by=None):
+def auto_j_params(core_data, excluded_samples=None, cluster_by=None):
     """Automatically calculates J-function parameters (a, b) for each rock type.
 
     This function groups the data by 'ROCK_FLAG', fits a J-curve for each group,
@@ -1369,6 +1369,7 @@ def auto_j_params(core_data, excluded_samples=[], cluster_by=None):
         list: A list of dictionaries, where each dictionary contains the
               group identifiers (e.g., 'ROCK_FLAG') and the J-parameters ('a', 'b', 'rmse').
     """
+    excluded_samples = excluded_samples or []
     core_data = core_data[~core_data["Sample"].isin(excluded_samples)].copy()
 
     grouping_cols = ["ROCK_FLAG"]
@@ -1400,6 +1401,7 @@ def auto_j_params(core_data, excluded_samples=[], cluster_by=None):
             for col, val in zip(
                 grouping_cols,
                 group_key if isinstance(group_key, tuple) else [group_key],
+                strict=True,
             )
         }
 
@@ -1446,8 +1448,8 @@ def auto_group_core_description(
         pd.DataFrame: The input DataFrame with an added 'CORE_DESC_GRP' column
                       containing the generated group names.
     """
-    from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.cluster import DBSCAN
+    from sklearn.feature_extraction.text import TfidfVectorizer
 
     geo_abbrv = geo_abbrv or GEO_ABBREVIATIONS
     word_cat = word_cat or WORD_CATEGORIES
@@ -1549,7 +1551,7 @@ def auto_group_core_description(
     # 5. Create a mapping from unique description to its named group
     desc_to_group_map = {
         desc: cluster_names[cluster_id]
-        for desc, cluster_id in zip(unique_descriptions, clusters)
+        for desc, cluster_id in zip(unique_descriptions, clusters, strict=True)
     }
 
     # 6. Assign the descriptive group names to the remaining part of the DataFrame
@@ -1581,7 +1583,7 @@ def plot_ptsd_by_prt(core_data, ift, theta, no_of_rocks=5):
     core_data = core_data.copy()
 
     temp_dfs = []
-    for sample, data in core_data.groupby(["Well", "Sample"]):
+    for _, data in core_data.groupby(["Well", "Sample"]):
         # Sort by PC to ensure monotonic change in R and LOG_R
         data = data.sort_values("PC_RES", ascending=True).copy()
         data["R"] = estimate_pore_throat(data["PC_RES"], ift, theta)

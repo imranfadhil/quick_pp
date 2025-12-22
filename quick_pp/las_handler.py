@@ -372,7 +372,7 @@ def extract_dataset(section_dict):
 
 
 def concat_datasets(
-    file_object, header_line_numbers, parameter_line_numbers, required_sets=["PEP"]
+    file_object, header_line_numbers, parameter_line_numbers, required_sets=None
 ):
     """Extract and concatenate specified datasets from a multi-set LAS file.
 
@@ -393,12 +393,11 @@ def concat_datasets(
     Returns:
         tuple[pd.DataFrame, pd.DataFrame, welly.well.Well]: A tuple containing the concatenated curve data, the last header data, and the last `welly` object.
     """
+    required_sets = required_sets or ["PEP"]
     well_df = pd.DataFrame()
     header_df = pd.DataFrame()
     welly_object = welly.Well()
-    for i, (param_count, param_set, pointer, line_number) in enumerate(
-        parameter_line_numbers
-    ):
+    for i, (_, param_set, pointer, _) in enumerate(parameter_line_numbers):
         # Currently only extracting one dataset: PEP
         if param_set in required_sets:
             well_info = file_object[

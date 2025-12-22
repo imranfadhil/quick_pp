@@ -132,16 +132,16 @@ def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.DataFrame) -> dict:
     # Check model type
     if hasattr(model, "predict_proba"):
         logger.debug("Classification metrics calculated")
-        return dict(
-            f1_score=f1_score(y_test, y_pred),
-            accuracy=accuracy_score(y_test, y_pred),
-        )
+        return {
+            "f1_score": f1_score(y_test, y_pred),
+            "accuracy": accuracy_score(y_test, y_pred),
+        }
     else:
         logger.debug("Regression metrics calculated")
-        return dict(
-            r2_score=r2_score(y_test, y_pred),
-            mean_absolute_error=mean_absolute_error(y_test, y_pred),
-        )
+        return {
+            "r2_score": r2_score(y_test, y_pred),
+            "mean_absolute_error": mean_absolute_error(y_test, y_pred),
+        }
 
 
 # 6. Train pipeline

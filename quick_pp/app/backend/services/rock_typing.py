@@ -1,9 +1,10 @@
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 
-from quick_pp.database import objects as db_objects
+import quick_pp.database.objects as db_objects
 
-from . import database, _sanitize_list
+from . import database, utils
+
 
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Rock Typing"])
 
@@ -135,9 +136,9 @@ async def get_fzi_data(project_id: int):
             phit_all = pd.concat(cpore_list).tolist() if cpore_list else []
             perm_all = pd.concat(cperm_list).tolist() if cperm_list else []
 
-            phit_all = _sanitize_list(phit_all)
-            perm_all = _sanitize_list(perm_all)
-            depths_list = _sanitize_list(depths_list)
+            phit_all = utils._sanitize_list(phit_all)
+            perm_all = utils._sanitize_list(perm_all)
+            depths_list = utils._sanitize_list(depths_list)
             # rock flags may be numeric or None; coerce ints where possible
             rock_flags_list = [
                 (

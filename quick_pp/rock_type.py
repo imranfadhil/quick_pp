@@ -2,19 +2,6 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
-from scipy.cluster.hierarchy import dendrogram, ward
-from scipy.spatial.distance import pdist
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import (
-    ConfusionMatrixDisplay,
-    auc,
-    classification_report,
-    confusion_matrix,
-    mean_absolute_error,
-    r2_score,
-    silhouette_score,
-)
-from sklearn.model_selection import RandomizedSearchCV, train_test_split
 
 from quick_pp import logger
 from quick_pp.lithology import shale_volume_steiber
@@ -525,6 +512,9 @@ def plot_ward_dendogram(X, p=10, title="Ward's Dendogram"):
         p (int, optional): The number of clusters to display in the truncated dendrogram. Defaults to 10.
         title (str, optional): The title of the plot. Defaults to "Ward's Dendogram".
     """
+    from scipy.cluster.hierarchy import dendrogram, ward
+    from scipy.spatial.distance import pdist
+
     # Calculate the pairwise distance matrix
     input_df = X.dropna().sort_values().reset_index(drop=True).values.reshape(-1, 1)
     distance_matrix = pdist(input_df)
@@ -593,6 +583,13 @@ def plot_lorenz_heterogeneity(cpore, cperm, title="Lorenz's Plot"):
         cperm (np.ndarray or float): Core permeability in mD.
         title (str, optional): The title of the plot. Defaults to "Lorenz's Plot".
     """
+    try:
+        from sklearn.metrics import auc
+    except Exception as e:
+        raise ImportError(
+            "scikit-learn is required for `plot_lorenz_heterogeneity` (auc). Install scikit-learn."
+        ) from e
+
     sorted_perm, sorted_phit = zip(
         *sorted(zip(cperm, cpore, strict=True), reverse=True), strict=True
     )
@@ -672,7 +669,7 @@ def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
     Returns:
         np.ndarray or float: Volume of shale from gamma ray (VSH_GR).
     """
-    from sklearn.preprocessing import minmax_scale, robust_scale
+    from quick_pp.utils import minmax_scale, robust_scale
 
     # Normalize gamma ray
     if not max_gr or (not min_gr and min_gr != 0):
@@ -818,6 +815,19 @@ def train_classification_model(
     Returns:
         RandomForestClassifier: Trained model.
     """
+    try:
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.metrics import (
+            ConfusionMatrixDisplay,
+            classification_report,
+            confusion_matrix,
+        )
+        from sklearn.model_selection import RandomizedSearchCV, train_test_split
+    except Exception as e:
+        raise ImportError(
+            "scikit-learn is required to train classification models. Install scikit-learn."
+        ) from e
+
     random_seed = 123
     X = data[input_features]
     y = data[target_feature]
@@ -890,6 +900,15 @@ def train_regression_model(
     Returns:
         RandomForestRegressor: Trained model.
     """
+    try:
+        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.metrics import mean_absolute_error, r2_score
+        from sklearn.model_selection import RandomizedSearchCV, train_test_split
+    except Exception as e:
+        raise ImportError(
+            "scikit-learn is required to train regression models. Install scikit-learn."
+        ) from e
+
     random_seed = 123
     X = data[input_features]
     y = data[target_feature]
@@ -972,7 +991,13 @@ def cluster_fzi(cpore, cperm, n_clusters=None, max_clusters=10):
             - pd.Series: Cluster assignment for each data point.
             - pd.DataFrame: Mean and standard deviation of Log(FZI) for each cluster.
     """
-    from sklearn.cluster import KMeans
+    try:
+        from sklearn.cluster import KMeans
+        from sklearn.metrics import silhouette_score
+    except Exception as e:
+        raise ImportError(
+            "scikit-learn is required for `cluster_fzi` (KMeans, silhouette_score). Install scikit-learn."
+        ) from e
 
     # Calculate Log(FZI) and prepare data for clustering
     fzi = calc_fzi(cpore, cperm)
@@ -1045,8 +1070,14 @@ def cluster_rock_types_from_logs(
         pd.Series: A Series containing the cluster assignment (rock type) for each data point.
                    NaN values are preserved where input logs had NaNs.
     """
-    from sklearn.cluster import KMeans
-    from sklearn.preprocessing import StandardScaler
+    try:
+        from sklearn.cluster import KMeans
+        from sklearn.metrics import silhouette_score
+        from sklearn.preprocessing import StandardScaler
+    except Exception as e:
+        raise ImportError(
+            "scikit-learn is required for `cluster_rock_types_from_logs` (KMeans, StandardScaler, silhouette_score). Install scikit-learn."
+        ) from e
 
     if features is None:
         features = ["GR", "NPHI", "RHOB"]

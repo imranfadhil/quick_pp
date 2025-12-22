@@ -394,10 +394,10 @@ def neu_den_xplot_poro(
     B = dry_silt_point
     C = dry_clay_point
     D = fluid_point
-    E = list(zip(nphi, rhob))
+    E = list(zip(nphi, rhob, strict=True))
 
     phit = np.empty(0)
-    for i, point in enumerate(E):
+    for _, point in enumerate(E):
         if model == "ssc":
             phit = np.append(
                 phit, neu_den_xplot_poro_pt(point[0], point[1], "ssc", A, B, C, D)

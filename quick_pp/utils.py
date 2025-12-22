@@ -2,12 +2,53 @@ import math
 
 import numpy as np
 import pandas as pd
-import ruptures.detection as rpt
 import scipy.stats as stats
 from scipy.signal import detrend, find_peaks
-from sklearn.preprocessing import MinMaxScaler
 
 from quick_pp import logger
+
+
+def robust_scale(series: pd.Series, quantile_range=(25.0, 75.0)):
+    """Scales a pandas Series using robust scaling (median and IQR).
+
+    Mirrors sklearn.preprocessing.RobustScaler behaviour for a single series:
+    - uses the median and the IQR defined by `quantile_range` (defaults 25-75)
+    - preserves NaNs when computing statistics
+    - if IQR is zero or NaN, centering is applied but scaling is skipped
+
+    Args:
+        series (pd.Series): The input pandas Series to be scaled.
+        quantile_range (tuple): pair of percentiles (low, high) used to compute IQR.
+
+    Returns:
+        pd.Series: The scaled pandas Series (dtype float).
+    """
+    q_min, q_max = quantile_range
+    median = series.median()
+    q1 = series.quantile(q_min / 100.0)
+    q3 = series.quantile(q_max / 100.0)
+    iqr = q3 - q1
+
+    # Follow sklearn behaviour: if scale is zero or undefined, do not divide
+    if iqr == 0 or pd.isna(iqr):
+        return (series - median).astype(float)
+
+    return ((series - median) / iqr).astype(float)
+
+
+def minmax_scale(series: pd.Series):
+    """Scales a pandas Series to the range [0, 1] using min-max scaling.
+
+    Args:
+        series (pd.Series): The input pandas Series to be scaled.
+
+    Returns:
+        pd.Series: The scaled pandas Series with values between 0 and 1.
+    """
+    min_val = series.min()
+    max_val = series.max()
+    scaled_series = (series - min_val) / (max_val - min_val)
+    return scaled_series
 
 
 def length_a_b(A: tuple, B: tuple):
@@ -130,7 +171,7 @@ def zone_flagging(data: pd.DataFrame, min_zone_thickness: int = 150):
                 detrend(well_data[["GR"]].fillna(well_data["GR"].median()), axis=0)
                 + well_data["GR"].mean()
             )
-            well_data["vsh_curve"] = MinMaxScaler().fit_transform(dtr_gr)
+            well_data["vsh_curve"] = minmax_scale(pd.Series(dtr_gr.flatten()))
         threshold = np.nanquantile(
             well_data["vsh_curve"], 0.7, method="median_unbiased"
         )
@@ -224,6 +265,8 @@ def min_max_line(feature, alpha: float = 0.05, auto_bin=False):
     Returns:
         tuple[np.ndarray, np.ndarray]: A tuple containing the minimum and maximum trend lines.
     """
+    import ruptures.detection as rpt
+
     # Ensure feature is a numpy array and handle NaNs
     if isinstance(feature, pd.Series):
         feature_np = feature.to_numpy()

@@ -1,21 +1,16 @@
+import random
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import gmean, hmean
-from scipy.stats import truncnorm
-import random
-import matplotlib.pyplot as plt
-import ptitprince as pt
-from SALib.analyze.sobol import analyze
-from SALib.sample.sobol import sample
+from scipy.stats import gmean, hmean, truncnorm
 from tqdm import tqdm
-from sklearn.preprocessing import MinMaxScaler
 
 from quick_pp import logger
+from quick_pp.utils import minmax_scale
 
 
-def calc_reservoir_summary(
-    depth, vshale, phit, swt, perm, zones, cutoffs=dict(VSHALE=0.4, PHIT=0.01, SWT=0.9)
-):
+def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None):
     """Calculate reservoir summary based on cutoffs on vshale, phit, and swt.
 
     This function aggregates petrophysical properties over specified zones and flags
@@ -37,6 +32,7 @@ def calc_reservoir_summary(
     logger.debug(
         f"Starting reservoir summary calculation with {len(depth)} data points"
     )
+    cutoffs = cutoffs or {"VSHALE": 0.4, "PHIT": 0.01, "SWT": 0.9}
 
     df = pd.DataFrame(
         {
@@ -309,7 +305,7 @@ def mc_volumetric_method(
     water_saturation_bound: tuple,
     volume_factor_bound: tuple,
     n_try=10000,
-    percentile=[10, 50, 90],
+    percentile=None,
 ):
     """Monte Carlo simulation for volumetric method.
     This function performs a Monte Carlo simulation to estimate the distribution of
@@ -327,7 +323,11 @@ def mc_volumetric_method(
     Returns:
         tuple: A tuple containing arrays of the generated volumes and input parameters.
     """
+    import ptitprince as pt
+
     logger.info(f"Starting Monte Carlo simulation with {n_try} trials")
+
+    percentile = percentile or [10, 50, 90]
 
     area = np.empty(0)
     thickness = np.empty(0)
@@ -336,7 +336,7 @@ def mc_volumetric_method(
     volume_factor = np.empty(0)
     volumes = np.empty(0)
 
-    for i in tqdm(range(n_try), desc="Monte Carlo simulation", unit="trials"):
+    for _ in tqdm(range(n_try), desc="Monte Carlo simulation", unit="trials"):
         a, h, poro, sw, bo, _ = volumetric_method(
             area_bound=area_bound,
             thickness_bound=thickness_bound,
@@ -496,6 +496,9 @@ def sensitivity_analysis(
         water_saturation_bound (tuple): (min, max) for water saturation.
         volume_factor_bound (tuple): (min, max) for the volume factor.
     """
+    from SALib.analyze.sobol import analyze
+    from SALib.sample.saltelli import sample
+
     logger.info("Starting sensitivity analysis for volumetric method")
 
     # Define the model inputs
@@ -598,7 +601,7 @@ def cutoffs_analysis(df, percentile=95):
     phi = 0
     sw = 1
     for vsh in tqdm(vsh_range, desc="Analyzing cutoffs"):
-        cutoffs = dict(VSHALE=vsh, PHIT=phi, SWT=sw)
+        cutoffs = {"VSHALE": vsh, "PHIT": phi, "SWT": sw}
         rock_flag, _, _ = flag_interval(df["VSHALE"], df["PHIT"], df["SWT"], cutoffs)
         # Calculate total hydrocarbon pore volume
         hcpv = np.sum(df.loc[rock_flag == 1, "HCPV"])
@@ -612,7 +615,7 @@ def cutoffs_analysis(df, percentile=95):
             }
         )
     temp_df = pd.DataFrame(results).reset_index(drop=True)
-    temp_df["HCPV"] = MinMaxScaler().fit_transform(temp_df[["HCPV"]])
+    temp_df["HCPV"] = minmax_scale(temp_df["HCPV"])
     optimal_vsh_cut = find_percentile_point(
         temp_df["vshale_cut"], temp_df["HCPV"], percentile
     )
@@ -621,7 +624,7 @@ def cutoffs_analysis(df, percentile=95):
     vsh = optimal_vsh_cut
     sw = 1
     for phi in phit_range:
-        cutoffs = dict(VSHALE=vsh, PHIT=phi, SWT=sw)
+        cutoffs = {"VSHALE": vsh, "PHIT": phi, "SWT": sw}
         _, res_flag, _ = flag_interval(df["VSHALE"], df["PHIT"], df["SWT"], cutoffs)
         # Calculate total hydrocarbon pore volume
         hcpv = np.sum(df.loc[res_flag == 1, "HCPV"])
@@ -636,7 +639,7 @@ def cutoffs_analysis(df, percentile=95):
         )
     temp_df = pd.DataFrame(results)
     temp_df = temp_df[temp_df["flag"] == "res"].reset_index(drop=True)
-    temp_df["HCPV"] = MinMaxScaler().fit_transform(temp_df[["HCPV"]])
+    temp_df["HCPV"] = minmax_scale(temp_df["HCPV"])
     optimal_phit_cut = find_percentile_point(
         temp_df["phit_cut"], temp_df["HCPV"], percentile
     )
@@ -645,7 +648,7 @@ def cutoffs_analysis(df, percentile=95):
     vsh = optimal_vsh_cut
     phi = optimal_phit_cut
     for sw in swt_range:
-        cutoffs = dict(VSHALE=vsh, PHIT=phi, SWT=sw)
+        cutoffs = {"VSHALE": vsh, "PHIT": phi, "SWT": sw}
         _, _, pay_flag = flag_interval(df["VSHALE"], df["PHIT"], df["SWT"], cutoffs)
         # Calculate total hydrocarbon pore volume
         hcpv = np.sum(df.loc[pay_flag == 1, "HCPV"])
@@ -662,7 +665,7 @@ def cutoffs_analysis(df, percentile=95):
     # Convert results to DataFrame
     results_df = pd.DataFrame(results)
     temp_df = results_df[results_df["flag"] == "pay"].reset_index(drop=True)
-    temp_df["HCPV"] = MinMaxScaler().fit_transform(temp_df[["HCPV"]])
+    temp_df["HCPV"] = minmax_scale(temp_df["HCPV"])
     optimal_sw_cut = find_percentile_point(
         temp_df["swt_cut"], temp_df["HCPV"], percentile
     )
@@ -674,7 +677,7 @@ def cutoffs_analysis(df, percentile=95):
 
     # Plot sensitivity crossplots
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    for ax, (flag, data) in zip(axes, results_df.groupby("flag")):
+    for ax, (flag, data) in zip(axes, results_df.groupby("flag"), strict=True):
         param = (
             "vshale_cut"
             if flag == "rock"
@@ -682,7 +685,7 @@ def cutoffs_analysis(df, percentile=95):
             if flag == "res"
             else "swt_cut"
         )
-        data["HCPV"] = MinMaxScaler().fit_transform(data[["HCPV"]])
+        data["HCPV"] = minmax_scale(data["HCPV"])
         ax.plot(data[param], data["HCPV"], "b-", label="HCPV")
         cut_off = (
             optimal_vsh_cut

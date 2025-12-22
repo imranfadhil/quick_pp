@@ -62,12 +62,12 @@ def fluid_contact_plot(
     logger.debug(
         f"Creating fluid contact plot for {fluid_type} with gradient {m} psi/ft"
     )
-    color_dict = dict(
-        OIL=("green", "o"),
-        GAS=("red", "x"),
-        WATER=("blue", "^"),
-        HYDROSTATIC=("brown", "s"),
-    )
+    color_dict = {
+        "OIL": ("green", "o"),
+        "GAS": ("red", "x"),
+        "WATER": ("blue", "^"),
+        "HYDROSTATIC": ("brown", "s"),
+    }
     marker = color_dict.get(fluid_type.upper(), ("black", "o"))
     label = f"{fluid_type} gradient: {round(m, 3)} psi/ft"
     sc = plt.scatter(

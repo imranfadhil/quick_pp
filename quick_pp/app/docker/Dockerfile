@@ -10,8 +10,13 @@ RUN apt-get update && \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Install quick_pp and gunicorn, then verify installation
-RUN python -m pip install --upgrade pip && python -m pip install --no-cache-dir --upgrade quick_pp gunicorn
+COPY pyproject.toml .
+
+# Copy the rest of the repository into the image
+COPY . /code
+
+# Install the package itself
+RUN pip install --no-cache-dir . gunicorn
 
 # Set the default command to run the backend
 CMD ["quick_pp", "backend", "--no-open"]
