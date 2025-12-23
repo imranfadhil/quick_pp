@@ -34,7 +34,7 @@ def on_starting(server):
         server.log.info("gunicorn on_starting: initializing DBConnector")
         from quick_pp.database.db_connector import DBConnector
 
-        db_url = os.environ.get("QPP_DATABASE_URL", "sqlite:///./data/quick_pp.db")
+        db_url = os.environ.get("QPP_DATABASE_URL")
         DBConnector(db_url=db_url)
         server.log.info("DBConnector initialized in gunicorn master process")
     except Exception as exc:  # pragma: no cover - environment-specific
@@ -71,7 +71,7 @@ def get_gunicorn_worker_flag(debug: bool = False) -> str:
         return ""
 
     # Defensive: if using SQLite, prefer a single worker to avoid file locking
-    db_url = os.environ.get("QPP_DATABASE_URL", "")
+    db_url = os.environ.get("QPP_DATABASE_URL")
     if "sqlite" in (db_url or "").lower():
         # Do not pass a workers flag; gunicorn defaults to single-process.
         return ""

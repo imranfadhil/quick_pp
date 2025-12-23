@@ -8,6 +8,35 @@ from scipy.signal import detrend, find_peaks
 from quick_pp import logger
 
 
+def r2_score(y_true: np.ndarray, y_pred: np.ndarray):
+    """Calculates the R-squared (coefficient of determination) between true and predicted values.
+
+    Args:
+        y_true (np.ndarray): The ground truth values.
+        y_pred (np.ndarray): The predicted values.
+    Returns:
+        float: The R-squared value.
+    """
+    ss_res = np.nansum((y_true - y_pred) ** 2)
+    ss_tot = np.nansum((y_true - np.nanmean(y_true)) ** 2)
+    r2 = 1 - (ss_res / ss_tot)
+    return r2
+
+
+def root_mean_squared_error(y_true: np.ndarray, y_pred: np.ndarray):
+    """Calculates the Root Mean Squared Error (RMSE) between true and predicted values.
+
+    Args:
+        y_true (np.ndarray): The ground truth values.
+        y_pred (np.ndarray): The predicted values.
+    Returns:
+        float: The RMSE value.
+    """
+    mse = np.nanmean((y_true - y_pred) ** 2)
+    rmse = np.sqrt(mse)
+    return rmse
+
+
 def robust_scale(series: pd.Series, quantile_range=(25.0, 75.0)):
     """Scales a pandas Series using robust scaling (median and IQR).
 

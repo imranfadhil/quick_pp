@@ -16,6 +16,7 @@ services:
     depends_on:
       - postgres
     environment:
+      - QPP_DATABASE_URL=${QPP_DATABASE_URL}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}

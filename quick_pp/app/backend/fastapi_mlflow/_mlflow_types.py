@@ -36,8 +36,8 @@ def get_field(type_name: str, nullable: bool):
     """
     try:
         type_ = MLFLOW_SIGNATURE_TO_PYTHON_TYPE_MAP[type_name]
-    except KeyError:
-        raise UnsupportedFieldTypeError(f"Field type not supported: {type_name}")
+    except KeyError as exc:
+        raise UnsupportedFieldTypeError(f"Field type not supported: {type_name}") from exc
 
     if nullable:
         type_ = Optional[type_]

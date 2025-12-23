@@ -1,18 +1,23 @@
-from fastapi import FastAPI, Request
-from fastapi_mcp import FastApiMCP
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from starlette.types import Message
 from datetime import datetime
-import mlflow
-from mlflow.pyfunc import load_model
-import mlflow.tracking as mlflow_tracking
 from importlib import resources
 
+import mlflow
+import mlflow.tracking as mlflow_tracking
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from mlflow.pyfunc import load_model
+from starlette.types import Message
+
+try:
+    from fastapi_mcp import FastApiMCP
+except Exception:
+    FastApiMCP = None
+
+from quick_pp import logger
 from quick_pp.app.backend.fastapi_mlflow.applications import build_app
 from quick_pp.machine_learning.utils import get_model_info, run_mlflow_server
-from quick_pp import logger
 
 
 app = FastAPI(
@@ -86,10 +91,11 @@ try:
         allow_headers=origins,
     )
 
-    # Mount the model using FastApiMCP
-    mcp = FastApiMCP(app)
-    mcp.mount()
-    logger.info("FastApiMCP mounted successfully.")
+    if FastApiMCP is not None:
+        # Mount the model using FastApiMCP
+        mcp = FastApiMCP(app)
+        mcp.mount()
+        logger.info("FastApiMCP mounted successfully.")
 
 except Exception as e:
     logger.error(

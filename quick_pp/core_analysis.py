@@ -11,7 +11,12 @@ from tqdm import tqdm
 from quick_pp import logger
 from quick_pp.config import Config
 from quick_pp.rock_type import estimate_pore_throat
-from quick_pp.utils import inv_power_law_func, power_law_func
+from quick_pp.utils import (
+    inv_power_law_func,
+    power_law_func,
+    r2_score,
+    root_mean_squared_error,
+)
 
 GEO_ABBREVIATIONS = Config.CORE_GEO_ABBREVIATIONS
 WORD_CATEGORIES = Config.CORE_WORD_CATEGORIES
@@ -922,8 +927,6 @@ def _plot_correction_xplot(df):
     Args:
         df (pd.DataFrame): DataFrame containing 'PHIT', 'CPORE', 'CPORE_ORI', and 'CORE_ID'.
     """
-    from sklearn.metrics import r2_score, root_mean_squared_error
-
     # Prepare data by dropping NaNs
     plot_df = df[["PHIT", "CPORE_ORI", "CPORE", "CORE_ID"]].dropna().copy()
 
@@ -1368,8 +1371,6 @@ def auto_j_params(core_data, excluded_samples=None, cluster_by=None):
         list: A list of dictionaries, where each dictionary contains the
               group identifiers (e.g., 'ROCK_FLAG') and the J-parameters ('a', 'b', 'rmse').
     """
-    from sklearn.metrics import root_mean_squared_error
-
     excluded_samples = excluded_samples or []
     core_data = core_data[~core_data["Sample"].isin(excluded_samples)].copy()
 

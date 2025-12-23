@@ -41,6 +41,7 @@ classifiers = [
 dependencies = [
     "Click>=7.0",
     "fastapi",
+    "jinja2",
     "lasio",
     "loguru",
     "matplotlib==3.8.0",
@@ -66,6 +67,7 @@ dev = [
     "black>=23.0",
     "build>=0.10",
     "dtw-python",
+    "fastapi-mcp",
     "mlflow",
     "mypy>=1.5",
     "pre-commit>=3.0",
@@ -116,7 +118,6 @@ where = ["."]
 quick_pp = [
     "app/frontend/build/**/*",
     "app/backend/**/*",
-    "app/docker/.env.example",
     "app/docker/backend-entrypoint.sh",
     "app/docker/docker-compose.yaml",
     "app/docker/Dockerfile",

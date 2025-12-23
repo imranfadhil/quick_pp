@@ -26,7 +26,7 @@ _db_connector_instance = None
 def get_db_connector():
     global _db_connector_instance
     if _db_connector_instance is None:
-        db_url = os.environ.get("QPP_DATABASE_URL", "sqlite:///./data/quick_pp.db")
+        db_url = os.environ.get("QPP_DATABASE_URL")
         _db_connector_instance = DBConnector(db_url=db_url)
         logging.getLogger(__name__).info("DBConnector initialized (singleton)")
     return _db_connector_instance

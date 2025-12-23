@@ -1,12 +1,14 @@
 """Exception definition"""
-from sqlalchemy.exc import IntegrityError
+
 from psycopg2.errors import UniqueViolation
+from sqlalchemy.exc import IntegrityError
 
 
 class BadRequestException(Exception):
     """
     This exception could be raise when receiving unexpected input from user
     """
+
     def __init__(self, name: str) -> None:
         self.name = name
 
@@ -15,6 +17,7 @@ class DataNotFoundException(Exception):
     """
     This exception could be raise when receiving unexpected input from user
     """
+
     def __init__(self, name: str) -> None:
         self.name = name
 
@@ -23,6 +26,7 @@ class MethodNotAllowedException(Exception):
     """
     This exception could be raise when receiving unexpected input from user
     """
+
     def __init__(self, name: str) -> None:
         self.name = name
 
@@ -31,6 +35,7 @@ class NotAuthorizedException(Exception):
     """
     This exception could be raise when receiving unexpected input from user
     """
+
     def __init__(self, name: str) -> None:
         self.name = name
 
@@ -39,6 +44,7 @@ class UnknownException(Exception):
     """
     This exception could be raise when receiving unexpected input from user
     """
+
     def __init__(self, name: str) -> None:
         self.name = name
 
