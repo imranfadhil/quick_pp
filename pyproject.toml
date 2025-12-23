@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quick-pp"
-version = "0.2.97"
+version = "0.2.99"
 description = "Python package to assist in providing quick-look preliminary petrophysical estimation."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "MIT"
@@ -116,17 +116,23 @@ where = ["."]
 
 [tool.setuptools.package-data]
 quick_pp = [
-    "app/frontend/build/**/*",
+    "app/frontend/**/*",
     "app/backend/**/*",
-    "app/docker/backend-entrypoint.sh",
     "app/docker/docker-compose.yaml",
     "app/docker/Dockerfile",
-    "app/docker/init_db.py",
     "database/**/*",
     "lithology/**/*",
     "machine_learning/**/*",
     "plotter/**/*",
     "rock_physics/**/*"
+]
+
+[tool.setuptools.exclude-package-data]
+quick_pp = [
+    "app/frontend/node_modules",
+    "app/frontend/node_modules/**/*",
+    "app/frontend/.svelte-kit",
+    "app/frontend/.svelte-kit/**/*"
 ]
 
 # Development tools configuration
