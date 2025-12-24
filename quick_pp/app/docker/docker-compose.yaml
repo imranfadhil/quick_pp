@@ -41,11 +41,11 @@ services:
       - PORT=5469
       - NODE_OPTIONS=--max-old-space-size=4096
     # Install deps, build the app, and run the production server
-    command: sh -c "npm install --silent && npm run build && node build"
+    command: sh -c "npm install && npm run build && node build"
 
   langflow:
     profiles:
-      - disabled  # enable with `--profile langflow` on docker-compose command line
+      - langflow  # enable with `--profile langflow` on docker-compose command line
     image: langflowai/langflow:latest  # or another version tag on https://hub.docker.com/r/langflowai/langflow
     restart: unless-stopped
     pull_policy: always  # set to 'always' when using 'latest' image
@@ -54,7 +54,9 @@ services:
     depends_on:
       - qpp-backend
     environment:
-      - LANGFLOW_DATABASE_URL=postgresql://langflow:langflow@postgres:5432/langflow
+      - LANGFLOW_DATABASE_URL=${QPP_DATABASE_URL}
+      - LANGFLOW_SUPERUSER=${LANGFLOW_SUPERUSER}
+      - LANGFLOW_SUPERUSER_PASSWORD=${LANGFLOW_SUPERUSER_PASSWORD}
       # This variable defines where the logs, file storage, monitor data and secret keys are stored.
       - LANGFLOW_CONFIG_DIR=app/langflow
     volumes:

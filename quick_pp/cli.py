@@ -667,27 +667,13 @@ def predict(model_config, data_hash, output_file_name, env, plot):
 
 
 @click.command()
-@click.argument(
-    "action", type=click.Choice(["up", "down", "build", "logs", "ps", "restart"])
-)
+@click.argument("action", type=click.Choice(["up", "down", "logs", "ps", "restart"]))
 @click.option(
     "--detach",
     "-d",
     is_flag=True,
     default=False,
     help="Run in detached mode (background)",
-)
-@click.option(
-    "--build",
-    is_flag=True,
-    default=False,
-    help="Build images before starting containers",
-)
-@click.option(
-    "--no-cache",
-    is_flag=True,
-    default=False,
-    help="Do not use cache when building images (for up/build)",
 )
 @click.option(
     "--profile",
@@ -711,14 +697,13 @@ def predict(model_config, data_hash, output_file_name, env, plot):
     default=None,
     help="Path to .env file (defaults to .env in repo root if it exists)",
 )
-def docker(action, detach, build, no_cache, profile, service, follow, env_file):
+def docker(action, detach, profile, service, follow, env_file):
     """Manage Docker services using docker-compose.
 
     ACTIONS:
     \b
     up      - Start services
     down    - Stop and remove services
-    build   - Build or rebuild services
     logs    - View service logs
     ps      - List running services
     restart - Restart services
@@ -762,17 +747,9 @@ def docker(action, detach, build, no_cache, profile, service, follow, env_file):
     # Add the action
     cmd_parts.append(action)
 
-    # For build, --no-cache must come after --build and before service name
     if action == "up":
         if detach:
             cmd_parts.append("-d")
-        if build:
-            cmd_parts.append("--build")
-    elif action == "build":
-        if no_cache:
-            cmd_parts.append("--no-cache")
-        if service:
-            cmd_parts.append(service)
     elif action == "logs":
         if follow:
             cmd_parts.append("-f")

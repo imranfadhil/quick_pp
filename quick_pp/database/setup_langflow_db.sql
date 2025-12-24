@@ -3,40 +3,17 @@
 -- This script creates the langflow user, database, and grants privileges.
 -- =============================================================================
 
--- Run as a superuser or a user with sufficient privileges.
+-- Use a transaction to ensure atomicity
+BEGIN;
 
--- Create langflow role if it does not exist
+-- Enable pgcrypto extension (for gen_random_uuid)
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'langflow') THEN
-        CREATE ROLE langflow LOGIN PASSWORD 'langflow';
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto') THEN
+        EXECUTE 'CREATE EXTENSION pgcrypto';
     END IF;
 END
 $$;
-
--- Create langflow database if it does not exist, owned by langflow
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_database WHERE datname = 'langflow') THEN
-        PERFORM dblink_exec('dbname=postgres', 'CREATE DATABASE langflow OWNER langflow');
-    END IF;
-END
-$$ LANGUAGE plpgsql;
-
--- If dblink is not available, fallback to direct CREATE DATABASE (will error if run inside a transaction)
--- CREATE DATABASE langflow OWNER langflow;
-
--- Optionally, grant privileges (if needed)
--- GRANT ALL PRIVILEGES ON DATABASE langflow TO langflow;
-
-
--- ============================================================================
--- Connect to the langflow database for the following commands
--- (In psql: \c langflow)
--- ============================================================================
-
--- Enable pgcrypto extension (for gen_random_uuid)
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- Create StepType enum if not exists
 DO $$
@@ -142,3 +119,5 @@ CREATE INDEX IF NOT EXISTS "Step_name_idx" ON "Step"(name);
 CREATE INDEX IF NOT EXISTS "Step_threadId_startTime_endTime_idx" ON "Step"("threadId", "startTime", "endTime");
 CREATE INDEX IF NOT EXISTS "Thread_createdAt_idx" ON "Thread"("createdAt");
 CREATE INDEX IF NOT EXISTS "Thread_name_idx" ON "Thread"(name);
+
+COMMIT;
