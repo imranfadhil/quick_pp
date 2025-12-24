@@ -32,9 +32,6 @@ def get_db_connector():
     return _db_connector_instance
 
 
-# Configuration
-LANGFLOW_HOST = os.getenv("LANGFLOW_HOST", "http://localhost:7860")
-
 tags_metadata = [
     {"name": "File Handler", "description": "File handler related endpoints."},
     {"name": "Lithology", "description": "Lithology related endpoints."},
@@ -137,7 +134,6 @@ async def qpp_assistant(request: Request):
     context = {
         "request": request,
         "api_base_url": base_url + "/quick_pp",
-        "langflow_host": LANGFLOW_HOST,
     }
 
     return templates.TemplateResponse("chat.html", context)

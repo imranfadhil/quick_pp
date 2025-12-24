@@ -10,6 +10,8 @@ services:
       - POSTGRES_DB=${POSTGRES_DB}
     ports:
       - ${POSTGRES_PORT:-5432}:5432
+    networks:
+      - qpp-network
     
   qpp-backend:
     image: imranfadhil86/quick_pp-backend:latest
@@ -22,6 +24,8 @@ services:
       - POSTGRES_DB=${POSTGRES_DB}
     ports:
       - "6312:6312"
+    networks:
+      - qpp-network
 
   qpp-frontend:
     image: node:20-alpine
@@ -42,6 +46,8 @@ services:
       - NODE_OPTIONS=--max-old-space-size=4096
     # Install deps, build the app, and run the production server
     command: sh -c "npm install && npm run build && node build"
+    networks:
+      - qpp-network
 
   langflow:
     profiles:
@@ -61,3 +67,9 @@ services:
       - LANGFLOW_CONFIG_DIR=app/langflow
     volumes:
       - ./data/langflow:/app/langflow
+    networks:
+      - qpp-network
+
+networks:
+  qpp-network:
+    driver: bridge

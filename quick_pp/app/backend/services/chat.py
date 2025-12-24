@@ -6,7 +6,7 @@ from fastapi import APIRouter
 router = APIRouter(prefix="/langflow", tags=["Langflow"])
 
 # Configuration
-local_url = os.getenv("LANGFLOW_HOST", "http://localhost:7860")
+local_url = os.getenv("LANGFLOW_HOST", "http://langflow:7860")
 
 
 @router.get("/get_projects")
