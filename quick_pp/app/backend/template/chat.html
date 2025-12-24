@@ -85,7 +85,7 @@
             margin-top: 10px;
         }
         .chat-container {
-            height: calc(100vh - 300px);
+            height: calc(120vh - 300px);
             position: relative;
             background-color: #eeeeee;
         }
@@ -139,7 +139,13 @@
         <div class="chat-container">
             <div id="chatPlaceholder" class="chat-placeholder" style="text-align: center;">
                 Please select a project and flow to start chatting. <br>
-                The project and flow need to be created and saved in Langflow first.
+                <b>How to create a new project/flow in Langflow:</b><br>
+                1. Open <a href="http://localhost:7860" target="_blank">Langflow</a> in your browser.<br>
+                2. Click <b>New Project</b> to create a project.<br>
+                3. Inside your project, click <b>New Flow</b> to create a flow.<br>
+                4. Build and save your flow.<br>
+                5. Return here and select your project and flow from the dropdowns.<br>
+                <i>Note: Projects and flows must be created and saved in Langflow before they appear here.</i>
             </div>
             <div id="chatInterface" class="hidden"></div>
         </div>

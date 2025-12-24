@@ -61,6 +61,8 @@ services:
       - qpp-backend
     environment:
       - LANGFLOW_DATABASE_URL=${QPP_DATABASE_URL}
+      - LANGFLOW_SECRET_KEY=${LANGFLOW_SECRET_KEY}
+      - LANGFLOW_SKIP_AUTH_AUTO_LOGIN=${LANGFLOW_SKIP_AUTH_AUTO_LOGIN}
       - LANGFLOW_SUPERUSER=${LANGFLOW_SUPERUSER}
       - LANGFLOW_SUPERUSER_PASSWORD=${LANGFLOW_SUPERUSER_PASSWORD}
       # This variable defines where the logs, file storage, monitor data and secret keys are stored.
