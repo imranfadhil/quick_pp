@@ -80,7 +80,8 @@ def get_gunicorn_worker_flag(debug: bool = False) -> str:
         cpus = os.cpu_count() or 1
     except Exception:
         cpus = 1
-    workers = max(1, int(cpus / 3))
+    cpus = max(1, int(cpus / 3))
+    workers = min(3, cpus)  # Limit to max 4 workers for typical usage
     return f"--workers {workers}"
 
 
@@ -218,9 +219,6 @@ def backend(debug, no_open):
                 "quick_pp.app.backend.main:app",
                 "--bind",
                 f"0.0.0.0:{BACKEND_PORT}",
-                "--preload",
-                "--config",
-                str(Path(__file__).resolve()),
             ]
             # worker_flag may be empty or like "--workers N"
             worker_flag = get_gunicorn_worker_flag(debug)
@@ -443,9 +441,6 @@ def app(open):
                     "quick_pp.app.backend.main:app",
                     "--bind",
                     f"0.0.0.0:{BACKEND_PORT}",
-                    "--preload",
-                    "--config",
-                    str(Path(__file__).resolve()),
                 ]
                 worker_flag = get_gunicorn_worker_flag(False)  # No debug for production
                 if worker_flag:
