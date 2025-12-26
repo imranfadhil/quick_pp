@@ -187,7 +187,11 @@ class Project(object):
 
         if not parsed_files:
             logger.warning("No LAS files were successfully parsed.")
-            return
+            return {
+                "processed_files": 0,
+                "new_wells": [],
+                "updated_wells": [],
+            }
 
         # Optimization 2: Batch fetch all existing wells for this project
         well_names = [pf["well_name"] for pf in parsed_files]
@@ -239,12 +243,19 @@ class Project(object):
             logger.debug(f"Processed well '{well_obj.name}' for project '{self.name}'.")
 
         # Optimization 4: Single flush for all wells at the end
+        processed_count = len(parsed_files)
         if new_wells or parsed_files:
             self.db_session.flush()
             logger.info(
-                f"Successfully processed {len(parsed_files)} LAS files "
-                f"({len(new_wells)} new wells, {len(parsed_files) - len(new_wells)} updated)"
+                f"Successfully processed {processed_count} LAS files "
+                f"({len(new_wells)} new wells, {processed_count - len(new_wells)} updated)"
             )
+
+        return {
+            "processed_files": processed_count,
+            "new_wells": new_wells,
+            "updated_wells": processed_count - len(new_wells),
+        }
 
     def update_data(
         self,

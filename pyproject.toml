@@ -39,6 +39,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
+    "celery",
     "Click>=7.0",
     "fastapi",
     "jinja2",
@@ -53,6 +54,7 @@ dependencies = [
     "pydantic_core",
     "python-dotenv",
     "python-multipart",
+    "redis",
     "requests",
     "ruptures",
     "setuptools<81",

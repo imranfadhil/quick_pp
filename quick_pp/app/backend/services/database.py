@@ -1,4 +1,6 @@
+import logging
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -7,15 +9,41 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import ORJSONResponse
+from celery.result import AsyncResult
+from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
+from fastapi.responses import JSONResponse, ORJSONResponse
 from sqlalchemy import select
 
+from quick_pp.app.backend.task_queue.celery_app import celery_app
+from quick_pp.app.backend.task_queue.tasks import process_las
 from quick_pp.database import models as db_models
 from quick_pp.database import objects as db_objects
 from quick_pp.database.db_connector import DBConnector
 
+
 router = APIRouter(prefix="/database", tags=["Database"])
+
+
+def sanitize_filename(name: str) -> str:
+    """Return a filesystem-safe filename derived from the provided name.
+
+    Keeps only alphanumeric characters, dots, dashes and underscores and
+    replaces spaces with underscores. Falls back to a UUID if resulting
+    name is empty.
+    """
+    # Strip any path components
+    name = Path(name).name
+    # Replace spaces with underscore
+    name = name.replace(" ", "_")
+    # Remove characters other than alnum, dot, dash, underscore
+    name = re.sub(r"[^A-Za-z0-9._-]", "", name)
+    # Limit length to avoid extremely long filenames
+    if len(name) > 200:
+        name = name[:200]
+    if not name:
+        name = uuid4().hex
+    return name
+
 
 # Module-level connector instance (initialized via endpoint)
 connector: Optional[DBConnector] = None
@@ -95,6 +123,30 @@ async def health_check():
         return {"status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB connection failed: {e}") from e
+
+
+@router.get("/tasks/{task_id}", summary="Get Celery task status")
+async def get_task_status(task_id: str):
+    """Return Celery task state/result for a given task id."""
+    try:
+        res: AsyncResult = AsyncResult(task_id, app=celery_app)
+        result = None
+        try:
+            # Accessing res.result may raise if task failed; protect it
+            if res.ready():
+                result = res.result
+        except Exception:
+            result = None
+
+        return {
+            "task_id": task_id,
+            "state": res.state,
+            "result": result,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get task status: {e}"
+        ) from e
 
 
 @router.post("/projects", summary="Create or get project")
@@ -264,7 +316,8 @@ async def project_read_las(
         for f in files:
             # Prefix uploaded filename with a UUID to avoid collisions when
             # multiple uploads use the same original filename concurrently.
-            unique_name = f"{uuid4().hex}_{f.filename}"
+            safe_name = sanitize_filename(f.filename)
+            unique_name = f"{uuid4().hex}_{safe_name}"
             dest = upload_dir / unique_name
             try:
                 with dest.open("wb") as buffer:
@@ -273,15 +326,31 @@ async def project_read_las(
                 f.file.close()
             saved_paths.append(str(dest))
 
-        with connector.get_session() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
-            # Pass depth unit of measurement to Project.read_las (defaults to 'm')
-            proj.read_las(saved_paths, depth_uom=depth_uom)
+        try:
+            async_result = process_las.apply_async(
+                args=[saved_paths, project_id, depth_uom]
+            )
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "message": "Files uploaded. Processing enqueued.",
+                    "task_id": async_result.id,
+                    "files": [Path(p).name for p in saved_paths],
+                },
+            )
+        except Exception:
+            # Fall back to synchronous processing if Celery enqueue fails
+            logging.getLogger(__name__).exception(
+                "Failed to enqueue Celery task, falling back to sync processing"
+            )
+            with connector.get_session() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                proj.read_las(saved_paths, depth_uom=depth_uom)
 
-        return {
-            "message": "Files uploaded and processed",
-            "files": [Path(p).name for p in saved_paths],
-        }
+            return {
+                "message": "Files uploaded and processed (sync fallback)",
+                "files": [Path(p).name for p in saved_paths],
+            }
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

@@ -1,11 +1,3 @@
-"""
-Command-Line Interface for the quick_pp library.
-
-This script provides a set of commands to interact with the various components
-of the quick_pp application, including running the web app, managing MLflow
-servers, and executing machine learning training and prediction pipelines.
-"""
-
 import os
 import shutil
 import signal
@@ -20,30 +12,13 @@ from subprocess import Popen
 
 import click
 
+"""
+Command-Line Interface for the quick_pp library.
 
-def on_starting(server):
-    """Gunicorn hook: initialize DBConnector in master process before forking.
-
-    This performs application-level initialization (like running migrations or
-    creating a DB connector) in the master process. Use with caution: some DB
-    drivers are not fork-safe, so forking after opening DB connections may be
-    problematic. Consider disabling `preload_app` if you need per-worker DB
-    engines.
-    """
-    try:
-        server.log.info("gunicorn on_starting: initializing DBConnector")
-        from quick_pp.database.db_connector import DBConnector
-
-        db_url = os.environ.get("QPP_DATABASE_URL")
-        DBConnector(db_url=db_url)
-        server.log.info("DBConnector initialized in gunicorn master process")
-    except Exception as exc:  # pragma: no cover - environment-specific
-        try:
-            server.log.exception(
-                "Failed to initialize DBConnector in gunicorn master: %s", exc
-            )
-        except Exception:
-            pass
+This script provides a set of commands to interact with the various components
+of the quick_pp application, including running the web app, managing MLflow
+servers, and executing machine learning training and prediction pipelines.
+"""
 
 
 try:
@@ -567,9 +542,6 @@ def model_deployment(debug):
                 "quick_pp.app.backend.mlflow_model_deployment:app",
                 "--bind",
                 "0.0.0.0:5555",
-                "--preload",
-                "--config",
-                str(Path(__file__).resolve()),
             ]
         else:
             argv = [
@@ -745,6 +717,8 @@ def docker(action, detach, profile, service, follow, env_file):
     if action == "up":
         if detach:
             cmd_parts.append("-d")
+        if service:
+            cmd_parts.append(service)
     elif action == "logs":
         if follow:
             cmd_parts.append("-f")

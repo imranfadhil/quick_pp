@@ -18,6 +18,7 @@ class DBConnector:
 
     _engine: Engine | None = None
     _Session: sessionmaker[Session] | None = None
+    _engine_pid: int | None = None
 
     def __init__(self, db_url: str | None = None):
         """
@@ -29,8 +30,18 @@ class DBConnector:
                                  variable. Defaults to a local SQLite database
                                  if the environment variable is not set.
         """
+        current_pid = os.getpid()
         if DBConnector._engine is not None:
-            return
+            if DBConnector._engine_pid == current_pid:
+                return
+            else:
+                try:
+                    DBConnector._engine.dispose()
+                except Exception:
+                    pass
+                DBConnector._engine = None
+                DBConnector._Session = None
+                DBConnector._engine_pid = None
 
         if db_url is None:
             # Default to a local SQLite DB if no URL is provided.
@@ -40,6 +51,7 @@ class DBConnector:
         DBConnector._Session = sessionmaker(
             autocommit=False, autoflush=False, bind=DBConnector._engine
         )
+        DBConnector._engine_pid = current_pid
 
     @contextmanager
     def get_session(self) -> Generator[Session, None, None]:
@@ -49,6 +61,9 @@ class DBConnector:
         This context manager ensures that the session is properly closed.
         It will also roll back the transaction if an exception occurs.
         """
+        if DBConnector._Session is None or DBConnector._engine_pid != os.getpid():
+            DBConnector(os.environ.get("QPP_DATABASE_URL"))
+
         if DBConnector._Session is None:
             raise RuntimeError("DBConnector not initialized. Call __init__ first.")
 
@@ -107,3 +122,4 @@ class DBConnector:
                 pass
         DBConnector._engine = None
         DBConnector._Session = None
+        DBConnector._engine_pid = None

@@ -12,18 +12,65 @@ services:
       - ${POSTGRES_PORT:-5432}:5432
     networks:
       - qpp-network
-    
+  
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    profiles:
+      - celery
+    ports:
+      - "6379:6379"
+    networks:
+      - qpp-network
+
+  celery-worker:
+    image: imranfadhil86/quick_pp-backend:latest
+    depends_on:
+      - redis
+      - postgres
+    profiles:
+      - celery
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - QPP_DATABASE_URL=${QPP_DATABASE_URL}
+    command: celery -A quick_pp.app.backend.task_queue.celery_app.celery_app worker --loglevel=info --concurrency=1
+    restart: unless-stopped
+    volumes:
+      - ../../../uploads:/code/uploads
+    networks:
+      - qpp-network
+
+  flower:
+    image: mher/flower:latest
+    depends_on:
+      - redis
+    profiles:
+      - celery
+    environment:
+      - BROKER_URL=redis://redis:6379/0
+    command: celery flower --broker=redis://redis:6379/0 --port=5555 --address=0.0.0.0
+    ports:
+      - "5555:5555"
+    restart: unless-stopped
+    networks:
+      - qpp-network
+
   qpp-backend:
     image: imranfadhil86/quick_pp-backend:latest
     depends_on:
       - postgres
     environment:
       - QPP_DATABASE_URL=${QPP_DATABASE_URL}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
     ports:
       - "6312:6312"
+    volumes:
+      - ../../../uploads:/code/uploads
     networks:
       - qpp-network
 
