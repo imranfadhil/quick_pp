@@ -55,8 +55,7 @@ def get_gunicorn_worker_flag(debug: bool = False) -> str:
         cpus = os.cpu_count() or 1
     except Exception:
         cpus = 1
-    cpus = max(1, int(cpus / 3))
-    workers = min(3, cpus)  # Limit to max 4 workers for typical usage
+    workers = max(1, int(cpus / 3))
     return f"--workers {workers}"
 
 

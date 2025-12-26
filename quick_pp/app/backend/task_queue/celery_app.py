@@ -27,3 +27,18 @@ except Exception:
         import quick_pp.app.backend.task_queue.tasks  # noqa: F401
     except Exception:
         pass
+
+
+def is_broker_available(timeout: float = 1.0) -> bool:
+    """Quick check whether the Celery broker is reachable.
+
+    Uses the underlying kombu connection context to attempt a connection.
+    Returns True when a connection can be established, False otherwise.
+    """
+    try:
+        with celery_app.connection_for_read() as conn:
+            # Accessing default_channel triggers a real connection
+            _ = conn.default_channel
+        return True
+    except Exception:
+        return False

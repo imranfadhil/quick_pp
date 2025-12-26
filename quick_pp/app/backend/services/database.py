@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, ORJSONResponse
 from sqlalchemy import select
 
 from quick_pp.app.backend.task_queue.celery_app import celery_app
-from quick_pp.app.backend.task_queue.tasks import process_las
+from quick_pp.app.backend.task_queue.tasks import process_las, process_merged_data
 from quick_pp.database import models as db_models
 from quick_pp.database import objects as db_objects
 from quick_pp.database.db_connector import DBConnector
@@ -326,31 +326,36 @@ async def project_read_las(
                 f.file.close()
             saved_paths.append(str(dest))
 
-        try:
-            async_result = process_las.apply_async(
-                args=[saved_paths, project_id, depth_uom]
-            )
-            return JSONResponse(
-                status_code=status.HTTP_202_ACCEPTED,
-                content={
-                    "message": "Files uploaded. Processing enqueued.",
-                    "task_id": async_result.id,
-                    "files": [Path(p).name for p in saved_paths],
-                },
-            )
-        except Exception:
-            # Fall back to synchronous processing if Celery enqueue fails
-            logging.getLogger(__name__).exception(
-                "Failed to enqueue Celery task, falling back to sync processing"
-            )
-            with connector.get_session() as session:
-                proj = db_objects.Project.load(session, project_id=project_id)
-                proj.read_las(saved_paths, depth_uom=depth_uom)
+        # Try to enqueue the Celery task if broker is available; otherwise fall back
+        from quick_pp.app.backend.task_queue.celery_app import is_broker_available
 
-            return {
-                "message": "Files uploaded and processed (sync fallback)",
-                "files": [Path(p).name for p in saved_paths],
-            }
+        if is_broker_available():
+            try:
+                async_result = process_las.apply_async(
+                    args=[saved_paths, project_id, depth_uom]
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_202_ACCEPTED,
+                    content={
+                        "message": "Files uploaded. Processing enqueued.",
+                        "task_id": async_result.id,
+                        "files": [Path(p).name for p in saved_paths],
+                    },
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Failed to enqueue Celery task, falling back to sync processing"
+                )
+
+        # Broker not available or enqueue failed -> do synchronous processing as fallback
+        with connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            proj.read_las(saved_paths, depth_uom=depth_uom)
+
+        return {
+            "message": "Files uploaded and processed (sync fallback)",
+            "files": [Path(p).name for p in saved_paths],
+        }
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -570,6 +575,35 @@ def get_well_data_merged(
         cached_data, cached_time = _merged_data_cache[cache_key]
         if time.time() - cached_time < _cache_ttl:
             return cached_data
+
+    # Try to enqueue merged-data task; if broker unavailable or enqueue fails, compute synchronously
+    try:
+        from quick_pp.app.backend.task_queue.celery_app import is_broker_available
+
+        if is_broker_available():
+            try:
+                task = process_merged_data.apply_async(
+                    args=(project_id, well_name),
+                    kwargs={
+                        "tolerance": float(tolerance),
+                        "use_cache": bool(use_cache),
+                    },
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_202_ACCEPTED, content={"task_id": task.id}
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Failed to enqueue merged-data task; will compute synchronously"
+                )
+        else:
+            logging.getLogger(__name__).warning(
+                "Celery broker unavailable; computing merged data synchronously"
+            )
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Error checking Celery broker; computing merged data synchronously"
+        )
 
     # Optimized vectorized type conversion
     def _to_py_vectorized(series):

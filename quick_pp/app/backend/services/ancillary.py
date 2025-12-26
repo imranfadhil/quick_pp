@@ -3,7 +3,7 @@ import io
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, HTTPException, UploadFile, Body, File, Query
 from sqlalchemy import select
 
 from quick_pp.database import objects as db_objects

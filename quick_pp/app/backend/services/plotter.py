@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Optional
 
 import pandas as pd
@@ -7,8 +8,11 @@ from fastapi.responses import JSONResponse
 
 from quick_pp.database import objects as db_objects
 from quick_pp.plotter import well_log as wl
+from quick_pp.app.backend.task_queue.tasks import generate_well_plot
+from quick_pp.app.backend.task_queue.celery_app import is_broker_available
 
 from . import database as database_service
+
 
 router = APIRouter(prefix="/plotter", tags=["Plotter"])
 
@@ -47,6 +51,32 @@ async def get_well_log(
         )
 
     try:
+        # Try enqueueing a Celery task; if broker unavailable or enqueue fails, fall back to synchronous processing
+        try:
+            if is_broker_available():
+                try:
+                    task = generate_well_plot.apply_async(
+                        args=(project_id, well_name),
+                        kwargs={
+                            "min_depth": min_depth,
+                            "max_depth": max_depth,
+                            "zones": zones,
+                        },
+                    )
+                    return JSONResponse(status_code=202, content={"task_id": task.id})
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "Failed to enqueue plot task, falling back to sync"
+                    )
+            else:
+                logging.getLogger(__name__).warning(
+                    "Celery broker unavailable, generating plot synchronously"
+                )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Unexpected error checking broker; proceeding synchronously"
+            )
+
         with db_connector.get_session() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             df = proj.get_well_data_optimized(well_name)
