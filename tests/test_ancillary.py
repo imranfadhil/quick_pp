@@ -10,15 +10,7 @@ app.include_router(api_router)
 client = TestClient(app)
 
 
-def test_formation_tops_lifecycle(tmp_path):
-    # Initialize DB connector to SQLite in tmp path
-    db_file = tmp_path / "test_qpp.db"
-    res = client.post(
-        "/quick_pp/database/init",
-        json={"db_url": f"sqlite:///{db_file}", "setup": True},
-    )
-    assert res.status_code == 200
-
+def test_formation_tops_lifecycle():
     # Create a project
     res = client.post("/quick_pp/database/projects", json={"name": "TestProj"})
     assert res.status_code == 200
@@ -59,15 +51,7 @@ def test_formation_tops_lifecycle(tmp_path):
     assert not any(t["name"] == "Top-A" for t in tops_after)
 
 
-def test_preview_and_core_samples(tmp_path):
-    # reuse same test app; create project and well
-    db_file = tmp_path / "test_qpp2.db"
-    res = client.post(
-        "/quick_pp/database/init",
-        json={"db_url": f"sqlite:///{db_file}", "setup": True},
-    )
-    assert res.status_code == 200
-
+def test_preview_and_core_samples():
     res = client.post("/quick_pp/database/projects", json={"name": "Proj2"})
     assert res.status_code == 200
     pid = res.json()["project_id"]

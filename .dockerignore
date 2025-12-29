@@ -55,8 +55,6 @@ Thumbs.db
 !requirements.txt
 !main.py
 !quick_pp/app/docker/Dockerfile
-!quick_pp/app/docker/backend-entrypoint.sh
 !quick_pp/app/docker/Dockerfile-psycopg
 !quick_pp/app/docker/docker-compose.yaml
-!quick_pp/app/docker/init_db.py
 !quick_pp/

@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from quick_pp.core_analysis import fit_poroperm_curve
 from quick_pp.database import objects as db_objects
 
-from . import database
+from quick_pp.app.backend.utils.db import get_db
 
 
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Perm Transform"])
@@ -21,14 +21,8 @@ async def get_poroperm_fits(project_id: int):
     Returns:
         JSON with fits per rock_flag
     """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
 
             all_well_names = proj.get_well_names()
@@ -126,12 +120,6 @@ async def save_perm_trans(project_id: int, payload: dict):
 
     Each pair contains the well name, depth, and calculated perm_trans.
     """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     if not isinstance(payload, dict) or "perm_trans_pairs" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must include 'perm_trans_pairs' array"
@@ -142,7 +130,7 @@ async def save_perm_trans(project_id: int, payload: dict):
         raise HTTPException(status_code=400, detail="'perm_trans_pairs' must be a list")
 
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
 
             # Group by well

@@ -1,6 +1,5 @@
 import logging
 import os
-import re
 import shutil
 import time
 from pathlib import Path
@@ -12,114 +11,30 @@ import pandas as pd
 from celery.result import AsyncResult
 from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
 from fastapi.responses import JSONResponse, ORJSONResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from quick_pp.app.backend.task_queue.celery_app import celery_app
 from quick_pp.app.backend.task_queue.tasks import process_las, process_merged_data
 from quick_pp.database import models as db_models
 from quick_pp.database import objects as db_objects
-from quick_pp.database.db_connector import DBConnector
+from quick_pp.app.backend.utils.db import get_db
+from quick_pp.app.backend.utils.utils import sanitize_filename
 
 
 router = APIRouter(prefix="/database", tags=["Database"])
 
-
-def sanitize_filename(name: str) -> str:
-    """Return a filesystem-safe filename derived from the provided name.
-
-    Keeps only alphanumeric characters, dots, dashes and underscores and
-    replaces spaces with underscores. Falls back to a UUID if resulting
-    name is empty.
-    """
-    # Strip any path components
-    name = Path(name).name
-    # Replace spaces with underscore
-    name = name.replace(" ", "_")
-    # Remove characters other than alnum, dot, dash, underscore
-    name = re.sub(r"[^A-Za-z0-9._-]", "", name)
-    # Limit length to avoid extremely long filenames
-    if len(name) > 200:
-        name = name[:200]
-    if not name:
-        name = uuid4().hex
-    return name
-
-
-# Module-level connector instance (initialized via endpoint)
-connector: Optional[DBConnector] = None
 
 # Simple in-memory cache for merged data (stores up to 50 wells, ~5 minutes TTL)
 _merged_data_cache = {}
 _cache_ttl = 300  # 5 minutes
 
 
-@router.post("/init", summary="Initialize database connector")
-async def init_db(payload: dict):
-    """Initialize the DB connector. Payload optionally contains `db_url` and `setup`.
-
-    Example: {"db_url": "sqlite:///./data/quick_pp.db", "setup": true}
-    """
-    global connector
-    # Prefer explicit `db_url` from payload; fall back to the environment variable
-    # `QPP_DATABASE_URL` so the service can initialize using container config.
-    db_url = None
-    if isinstance(payload, dict):
-        db_url = payload.get("db_url")
-        setup = bool(payload.get("setup")) if isinstance(payload, dict) else False
-    if not db_url:
-        db_url = os.environ.get("QPP_DATABASE_URL")
-        setup = True
-
-    try:
-        # If the application startup already initialized the DB (per-worker), reuse it
-        if DBConnector._engine is not None:
-            connector = (
-                DBConnector()
-            )  # wrapper referencing existing class-level engine/session
-            if setup:
-                try:
-                    connector.setup_db()
-                except Exception as e:
-                    raise HTTPException(
-                        status_code=500, detail=f"Failed to setup DB: {e}"
-                    ) from e
-            return {
-                "message": "DB connector already initialized",
-                "db_url": str(connector._engine.url),
-            }
-
-        # Otherwise initialize a new connector instance for this process
-        connector = DBConnector(db_url=db_url)
-        if setup:
-            connector.setup_db()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to init DB: {e}") from e
-
-    return {"message": "DB connector initialized", "db_url": str(connector._engine.url)}
-
-
 @router.get("/health", summary="Database health check")
 async def health_check():
-    """Simple health endpoint that checks DB connectivity by running `SELECT 1`.
-
-    Returns 200 + {'status': 'ok'} when the DB responds, otherwise raises 500.
-    If the DB connector hasn't been initialized, returns 503.
-    """
-    global connector
-    # Prefer already-initialized class-level engine if present
-    engine = None
-    if DBConnector._engine is not None:
-        engine = DBConnector._engine
-    elif connector is not None and getattr(connector, "_engine", None) is not None:
-        engine = connector._engine
-
-    if engine is None:
-        raise HTTPException(status_code=503, detail="DB connector not initialized")
-
+    """Simple health endpoint that checks DB connectivity by running `SELECT 1`."""
     try:
-        with engine.connect() as conn:
-            # Use exec_driver_sql for a lightweight check that works across drivers
-            conn.exec_driver_sql("SELECT 1")
+        with get_db() as session:
+            session.execute(text("SELECT 1"))
         return {"status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB connection failed: {e}") from e
@@ -155,13 +70,6 @@ async def create_project(payload: dict):
 
     Payload: {"name": "Project A", "description": "...", "created_by_user_id": 1}
     """
-    global connector
-    if connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     name = payload.get("name") if isinstance(payload, dict) else None
     if not name:
         raise HTTPException(status_code=400, detail="Project name is required")
@@ -172,7 +80,7 @@ async def create_project(payload: dict):
     )
 
     try:
-        with connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project(
                 db_session=session,
                 name=name,
@@ -180,7 +88,6 @@ async def create_project(payload: dict):
                 created_by_user_id=created_by,
             )
             proj.save()
-            # session.commit() handled by connector.get_session
             return {"project_id": proj.project_id, "name": proj.name}
     except Exception as e:
         raise HTTPException(
@@ -190,15 +97,8 @@ async def create_project(payload: dict):
 
 @router.get("/projects", summary="List projects")
 async def list_projects():
-    global connector
-    if connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     try:
-        with connector.get_session() as session:
+        with get_db() as session:
             stmt = select(db_models.Project)
             rows = session.execute(stmt).scalars().all()
             return [
@@ -217,15 +117,8 @@ async def list_projects():
 
 @router.get("/projects/{project_id}/wells", summary="List wells in project")
 async def list_wells(project_id: int):
-    global connector
-    if connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     try:
-        with connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             wells = []
             for well in proj._orm_project.wells:
@@ -249,13 +142,6 @@ async def create_well(project_id: int, payload: dict):
 
     Payload example: {"name": "Well-1", "uwi": "UWI-123", "depth_uom": "m"}
     """
-    global connector
-    if connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid payload")
 
@@ -267,7 +153,7 @@ async def create_well(project_id: int, payload: dict):
     depth_uom = payload.get("depth_uom")
 
     try:
-        with connector.get_session() as session:
+        with get_db() as session:
             # check for existing well in this project by name
             existing = session.scalar(
                 select(db_models.Well).filter_by(project_id=project_id, name=name)
@@ -301,13 +187,6 @@ async def project_read_las(
     depth_uom: Optional[str] = Form("m"),
 ):
     """Upload LAS files and add them into the project in the database."""
-    global connector
-    if connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     upload_dir = Path("uploads/las_db/")
     upload_dir.mkdir(parents=True, exist_ok=True)
     saved_paths = []
@@ -348,7 +227,7 @@ async def project_read_las(
                 )
 
         # Broker not available or enqueue failed -> do synchronous processing as fallback
-        with connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             proj.read_las(saved_paths, depth_uom=depth_uom)
 
@@ -378,13 +257,6 @@ async def save_well_data(project_id: int, well_name: str, payload: dict):
     The endpoint will convert the list to a pandas DataFrame and call
     `Project.update_data` which performs upserts on curve data.
     """
-    global connector
-    if connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     if not isinstance(payload, dict) or "data" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must be a dict with a 'data' key"
@@ -432,7 +304,7 @@ async def save_well_data(project_id: int, well_name: str, payload: dict):
                 ),
             )
 
-        with connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             # Use Project.update_data which groups by WELL_NAME and upserts per well
             proj.update_data(df, group_by="WELL_NAME")
@@ -477,14 +349,8 @@ def get_well_data(project_id: int, well_name: str, include_ancillary: bool = Fal
     Each row is a dict mapping column names to values.
     Uses optimized data retrieval and faster JSON serialization.
     """
-    if connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     try:
-        with connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
 
             # Use optimized method if available
@@ -563,12 +429,6 @@ def get_well_data_merged(
     Uses in-memory caching for performance (5 minute TTL).
     Set use_cache=false to bypass cache.
     """
-    if connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     # Check cache first
     cache_key = f"{project_id}_{well_name}_{tolerance}"
     if use_cache and cache_key in _merged_data_cache:
@@ -650,7 +510,7 @@ def get_well_data_merged(
         return d
 
     try:
-        with connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
 
             # Use optimized method if available

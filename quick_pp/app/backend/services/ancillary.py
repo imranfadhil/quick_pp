@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from quick_pp.database import objects as db_objects
 
-from . import database
+from quick_pp.app.backend.utils.db import get_db
 
 
 # Project-level router: supports project-based endpoints and accepts optional
@@ -26,13 +26,8 @@ router = APIRouter(prefix="/database/projects/{project_id}", tags=["Ancillary Da
 def list_formation_tops_project(
     project_id: int, well_name: Optional[str] = Query(None)
 ):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             if well_name:
                 well = proj.get_well(well_name)
@@ -70,11 +65,6 @@ def add_formation_tops_project(
     well_name: Optional[str] = Query(None),
     payload: Dict[str, List[Dict[str, Any]]] = Body(...),
 ):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     if not isinstance(payload, dict) or "tops" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must be a dict with key 'tops'."
@@ -89,7 +79,7 @@ def add_formation_tops_project(
         )
 
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             well.add_formation_tops(tops)
@@ -114,11 +104,6 @@ def add_formation_tops_project(
 def delete_formation_top_project(
     project_id: int, top_name: str, well_name: Optional[str] = Query(None)
 ):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     target_well = well_name
     if not target_well:
         raise HTTPException(
@@ -126,7 +111,7 @@ def delete_formation_top_project(
             detail="well_name query parameter is required to delete a top",
         )
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             orm_top = session.scalar(
@@ -206,13 +191,8 @@ def formation_tops_preview_project(
 def list_fluid_contacts_project(
     project_id: int, well_name: Optional[str] = Query(None)
 ):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             if well_name:
                 well = proj.get_well(well_name)
@@ -247,11 +227,6 @@ def add_fluid_contacts_project(
     well_name: Optional[str] = Query(None),
     payload: Dict[str, List[Dict[str, Any]]] = Body(...),
 ):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     if not isinstance(payload, dict) or "contacts" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must be a dict with key 'contacts'."
@@ -264,7 +239,7 @@ def add_fluid_contacts_project(
             detail="well_name must be provided as query parameter or in payload",
         )
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             well.add_fluid_contacts(contacts)
@@ -285,13 +260,8 @@ def add_fluid_contacts_project(
 def list_pressure_tests_project(
     project_id: int, well_name: Optional[str] = Query(None)
 ):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             if well_name:
                 well = proj.get_well(well_name)
@@ -326,11 +296,6 @@ def add_pressure_tests_project(
     well_name: Optional[str] = Query(None),
     payload: Dict[str, List[Dict[str, Any]]] = Body(...),
 ):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     if not isinstance(payload, dict) or "tests" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must be a dict with key 'tests'."
@@ -343,7 +308,7 @@ def add_pressure_tests_project(
             detail="well_name must be provided as query parameter or in payload",
         )
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             well.add_pressure_tests(tests)
@@ -362,13 +327,8 @@ def add_pressure_tests_project(
     tags=["Core Samples"],
 )
 def list_core_samples_project(project_id: int, well_name: Optional[str] = Query(None)):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             if well_name:
                 well = proj.get_well(well_name)
@@ -430,11 +390,6 @@ def add_core_sample_project(
     - description: Sample description (optional)
     - remark: Additional remarks (optional)
     """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
 
     required = ["sample_name", "depth"]
     if not isinstance(payload, dict) or not all(k in payload for k in required):
@@ -448,7 +403,7 @@ def add_core_sample_project(
         )
 
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             well.add_core_sample_with_measurements(
@@ -480,11 +435,6 @@ def add_core_sample_project(
 def get_core_sample_project(
     project_id: int, sample_name: str, well_name: Optional[str] = Query(None)
 ):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     target_well = well_name
     if not target_well:
         raise HTTPException(
@@ -492,7 +442,7 @@ def get_core_sample_project(
             detail="well_name query parameter is required to get a core sample",
         )
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             core_data = well.get_core_data()
@@ -528,13 +478,8 @@ def get_core_sample_project(
     tags=["Well Surveys"],
 )
 def list_well_surveys_project(project_id: int, well_name: Optional[str] = Query(None)):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             if well_name:
                 well = proj.get_well(well_name)
@@ -573,11 +518,6 @@ def add_well_surveys_project(
     well_name: Optional[str] = Query(None),
     payload: Dict[str, List[Dict[str, Any]]] = Body(...),
 ):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     if not isinstance(payload, dict) or "surveys" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must be a dict with key 'surveys'."
@@ -590,7 +530,7 @@ def add_well_surveys_project(
             detail="well_name must be provided as query parameter or in payload",
         )
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             well.add_well_surveys(surveys)
@@ -620,11 +560,6 @@ def add_well_surveys_project(
 def delete_well_survey_project(
     project_id: int, md: float, well_name: Optional[str] = Query(None)
 ):
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     target_well = well_name
     if not target_well:
         raise HTTPException(
@@ -632,7 +567,7 @@ def delete_well_survey_project(
             detail="well_name query parameter is required to delete a survey",
         )
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             orm_survey = session.scalar(
@@ -661,11 +596,6 @@ def well_surveys_preview_project(
     file: UploadFile = File(...),
 ):
     """Return a preview (first 50 rows) and detected columns from uploaded CSV/Excel file."""
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
     try:
         content = file.file.read().decode(errors="ignore")
         reader = csv.reader(io.StringIO(content))
@@ -742,11 +672,6 @@ def upload_well_surveys_project(
       "calculate_tvd": true  # optional, if true will calculate TVD from survey
     }
     """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
 
     target_well = well_name
     if not target_well:
@@ -831,7 +756,7 @@ def upload_well_surveys_project(
             raise ValueError("No valid survey points found in file")
 
         # Save to database
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             well.add_well_surveys(surveys)
@@ -880,11 +805,6 @@ def calculate_tvd_project(project_id: int, well_name: Optional[str] = Query(None
     If well_name is not provided, calculates for all wells in the project.
     Stores the calculated TVD as a well curve (mnemonic 'TVD').
     """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
 
     try:
         try:
@@ -894,7 +814,7 @@ def calculate_tvd_project(project_id: int, well_name: Optional[str] = Query(None
                 "wellpathpy required for TVD calculation. Install: pip install wellpathpy"
             ) from e
 
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
 
             # If well_name provided, calculate for that well only

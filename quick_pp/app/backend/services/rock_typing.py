@@ -3,7 +3,8 @@ from fastapi import APIRouter, HTTPException
 
 import quick_pp.database.objects as db_objects
 
-from . import database, utils
+from quick_pp.app.backend.utils.db import get_db
+from quick_pp.app.backend.utils.utils import sanitize_list
 
 
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Rock Typing"])
@@ -19,14 +20,8 @@ async def get_fzi_data(project_id: int):
     Returns:
         JSON with phit and perm arrays
     """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
 
             all_well_names = proj.get_well_names()
@@ -136,9 +131,9 @@ async def get_fzi_data(project_id: int):
             phit_all = pd.concat(cpore_list).tolist() if cpore_list else []
             perm_all = pd.concat(cperm_list).tolist() if cperm_list else []
 
-            phit_all = utils._sanitize_list(phit_all)
-            perm_all = utils._sanitize_list(perm_all)
-            depths_list = utils._sanitize_list(depths_list)
+            phit_all = sanitize_list(phit_all)
+            perm_all = sanitize_list(perm_all)
+            depths_list = sanitize_list(depths_list)
             # rock flags may be numeric or None; coerce ints where possible
             rock_flags_list = [
                 (
@@ -179,12 +174,6 @@ async def save_rock_flags(project_id: int, payload: dict):
 
     Each pair contains the well name, depth, and assigned rock flag.
     """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     if not isinstance(payload, dict) or "rock_flag_pairs" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must include 'rock_flag_pairs' array"
@@ -197,7 +186,7 @@ async def save_rock_flags(project_id: int, payload: dict):
     cutoffs_str = payload.get("cutoffs", "")
 
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
 
             # Group by well

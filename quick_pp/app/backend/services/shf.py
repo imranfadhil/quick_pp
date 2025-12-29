@@ -12,7 +12,8 @@ from quick_pp.core_analysis import (
 )
 from quick_pp.rock_type import calc_fzi, rock_typing
 
-from . import database, utils
+from quick_pp.app.backend.utils.db import get_db
+from quick_pp.app.backend.utils.utils import sanitize_list
 
 
 router = APIRouter(
@@ -31,14 +32,8 @@ async def get_j_data(project_id: int, cutoffs: str = Query("0.1,1.0,3.0")):
     Returns:
         JSON with pc, sw, perm, phit arrays
     """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
 
             all_well_names = proj.get_well_names()
@@ -141,11 +136,11 @@ async def get_j_data(project_id: int, cutoffs: str = Query("0.1,1.0,3.0")):
                 )
 
             # Sanitize lists for JSON serialization
-            pc_list = utils._sanitize_list(pc_list)
-            sw_list = utils._sanitize_list(sw_list)
-            perm_list = utils._sanitize_list(perm_list)
-            phit_list = utils._sanitize_list(phit_list)
-            rock_flags_list = utils._sanitize_list(rock_flags_list)
+            pc_list = sanitize_list(pc_list)
+            sw_list = sanitize_list(sw_list)
+            perm_list = sanitize_list(perm_list)
+            phit_list = sanitize_list(phit_list)
+            rock_flags_list = sanitize_list(rock_flags_list)
             return {
                 "pc": pc_list,
                 "sw": sw_list,
@@ -275,12 +270,6 @@ async def compute_shf(payload: dict):
     Returns:
         JSON with shf_data
     """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     if not isinstance(payload, dict) or "data" not in payload or "fits" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must include 'data' and 'fits' objects"
@@ -364,12 +353,6 @@ async def save_shf(project_id: int, payload: dict):
 
     Each item contains the well name, depth, and SHF value.
     """
-    if database.connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     if not isinstance(payload, dict) or "shf_data" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must include 'shf_data' array"
@@ -380,7 +363,7 @@ async def save_shf(project_id: int, payload: dict):
         raise HTTPException(status_code=400, detail="'shf_data' must be a list")
 
     try:
-        with database.connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
 
             # Group by well

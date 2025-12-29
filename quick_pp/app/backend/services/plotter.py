@@ -11,7 +11,7 @@ from quick_pp.plotter import well_log as wl
 from quick_pp.app.backend.task_queue.tasks import generate_well_plot
 from quick_pp.app.backend.task_queue.celery_app import is_broker_available
 
-from . import database as database_service
+from quick_pp.app.backend.utils.db import get_db
 
 
 router = APIRouter(prefix="/plotter", tags=["Plotter"])
@@ -29,9 +29,6 @@ async def get_well_log(
 ):
     """Return a Plotly figure JSON for the given project well.
 
-    This endpoint expects the DB connector to be initialized via
-    `/database/init` beforehand.
-
     Args:
         project_id: Project ID
         well_name: Name of the well
@@ -41,15 +38,6 @@ async def get_well_log(
     Returns:
         Plotly figure JSON with optional depth filtering applied
     """
-    # reference the connector on the `database` module so updates via /database/init
-    # are visible here (importing the value directly would capture the initial None)
-    db_connector = getattr(database_service, "connector", None)
-    if db_connector is None:
-        raise HTTPException(
-            status_code=400,
-            detail="DB connector not initialized. Call /database/init first.",
-        )
-
     try:
         # Try enqueueing a Celery task; if broker unavailable or enqueue fails, fall back to synchronous processing
         try:
@@ -77,7 +65,7 @@ async def get_well_log(
                 "Unexpected error checking broker; proceeding synchronously"
             )
 
-        with db_connector.get_session() as session:
+        with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             df = proj.get_well_data_optimized(well_name)
 
