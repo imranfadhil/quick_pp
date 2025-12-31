@@ -4,6 +4,8 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
 import quick_pp.database.objects as db_objects
+from quick_pp.app.backend.utils.db import get_db
+from quick_pp.app.backend.utils.utils import sanitize_list
 from quick_pp.core_analysis import (
     auto_j_params,
     leverett_j,
@@ -11,9 +13,6 @@ from quick_pp.core_analysis import (
     sw_shf_leverett_j,
 )
 from quick_pp.rock_type import calc_fzi, rock_typing
-
-from quick_pp.app.backend.utils.db import get_db
-from quick_pp.app.backend.utils.utils import sanitize_list
 
 
 router = APIRouter(

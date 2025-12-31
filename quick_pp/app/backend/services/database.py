@@ -1,5 +1,4 @@
 import logging
-import os
 import shutil
 import time
 from pathlib import Path
@@ -15,10 +14,10 @@ from sqlalchemy import select, text
 
 from quick_pp.app.backend.task_queue.celery_app import celery_app
 from quick_pp.app.backend.task_queue.tasks import process_las, process_merged_data
-from quick_pp.database import models as db_models
-from quick_pp.database import objects as db_objects
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_filename
+from quick_pp.database import models as db_models
+from quick_pp.database import objects as db_objects
 
 
 router = APIRouter(prefix="/database", tags=["Database"])
@@ -34,7 +33,7 @@ async def health_check():
     """Simple health endpoint that checks DB connectivity by running `SELECT 1`."""
     try:
         with get_db() as session:
-            session.execute(text("SELECT 1"))
+            session.execute(text("SELECT 1")).all()
         return {"status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB connection failed: {e}") from e
