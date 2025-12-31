@@ -145,12 +145,63 @@ def process_merged_data(
                     tolerance=tolerance,
                 )
 
+            # Core data processing with vectorization
+            core_raw = well.get_core_data() or {}
+            core_rows = []
+            if isinstance(core_raw, dict):
+                for name, sd in core_raw.items():
+                    try:
+                        dval = sd.get("depth")
+                        if dval is None:
+                            continue
+                        measurements = sd.get("measurements")
+                        if measurements is None or measurements.empty:
+                            continue
+
+                        # Vectorized filtering instead of row-by-row iteration
+                        cpore_mask = (
+                            measurements["property"] == "cpore"
+                        ) & measurements["value"].notna()
+                        cperm_mask = (
+                            measurements["property"] == "cperm"
+                        ) & measurements["value"].notna()
+
+                        for prop, mask in [
+                            ("cpore", cpore_mask),
+                            ("cperm", cperm_mask),
+                        ]:
+                            filtered = measurements[mask]
+                            if not filtered.empty:
+                                core_rows.extend(
+                                    [
+                                        {
+                                            "depth": float(dval),
+                                            "core_sample_name": name,
+                                            prop: row["value"],
+                                        }
+                                        for _, row in filtered.iterrows()
+                                    ]
+                                )
+                    except Exception:
+                        continue
+
+            if core_rows:
+                core_df = (
+                    pd.DataFrame(core_rows).sort_values("depth").reset_index(drop=True)
+                )
+                merged = pd.merge_asof(
+                    merged,
+                    core_df,
+                    on="depth",
+                    direction="nearest",
+                    tolerance=tolerance,
+                    suffixes=("", "_core"),
+                )
+
             merged = merged.replace([np.inf, -np.inf], np.nan)
             merged.columns = [c.upper() for c in merged.columns]
 
-            # serialize
-            records = []
-
+            # Optimized vectorized type conversion
             def _to_py(series):
                 if pd.api.types.is_numeric_dtype(series):
                     return (
@@ -167,6 +218,7 @@ def process_merged_data(
                 else:
                     return series.where(pd.notna(series), None).tolist()
 
+            records = []
             for col in merged.columns:
                 if len(records) == 0:
                     records = [{} for _ in range(len(merged))]
@@ -220,6 +272,45 @@ def generate_well_plot(
                         nearest_idx = (df["DEPTH"] - top_depth).abs().idxmin()
                         df.at[nearest_idx, "ZONES"] = top_name
                     df["ZONES"] = df["ZONES"].ffill()
+
+            # Process core data if it exists
+            if (
+                isinstance(ancillary, dict)
+                and "core_data" in ancillary
+                and not df.empty
+            ):
+                core_dict = ancillary.get("core_data") or {}
+                # Ensure columns exist
+                if "CPORE" not in df.columns:
+                    df["CPORE"] = pd.NA
+                if "CPERM" not in df.columns:
+                    df["CPERM"] = pd.NA
+
+                for _, sample in (
+                    core_dict.items() if isinstance(core_dict, dict) else []
+                ):
+                    try:
+                        sample_depth = sample.get("depth")
+                        measurements = sample.get("measurements")
+                        if measurements is None or measurements.empty:
+                            continue
+                        # measurements expected to have columns ['property','value']
+                        for _, m in measurements.iterrows():
+                            prop = str(m.get("property") or "").upper()
+                            val = m.get("value")
+                            if prop in ("CPORE", "CPERM") and pd.notna(val):
+                                # find nearest depth and set value
+                                try:
+                                    nearest_idx = (
+                                        (df["DEPTH"] - float(sample_depth))
+                                        .abs()
+                                        .idxmin()
+                                    )
+                                    df.at[nearest_idx, prop] = val
+                                except Exception:
+                                    continue
+                    except Exception:
+                        continue
 
             # apply filters
             if zones:

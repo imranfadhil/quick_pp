@@ -6,12 +6,11 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from quick_pp.database import objects as db_objects
-from quick_pp.plotter import well_log as wl
 from quick_pp.app.backend.task_queue.tasks import generate_well_plot
 from quick_pp.app.backend.task_queue.celery_app import is_broker_available
-
 from quick_pp.app.backend.utils.db import get_db
+from quick_pp.database import objects as db_objects
+from quick_pp.plotter import well_log as wl
 
 
 router = APIRouter(prefix="/plotter", tags=["Plotter"])

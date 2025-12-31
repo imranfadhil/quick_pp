@@ -516,11 +516,12 @@
   }
 
   $: if (projectId && wellName) {
-    fetchCounts();
+    // Force refresh when wellName or projectId changes to ensure fresh data
+    fetchCounts(true);
   }
 
   onMount(() => {
-    if (projectId && wellName) fetchCounts();
+    if (projectId && wellName) fetchCounts(true);
   });
 
   // Clear cache when data is saved to ensure fresh data on next load
