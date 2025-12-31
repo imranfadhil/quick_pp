@@ -45,17 +45,25 @@ async def get_task_status(task_id: str):
     try:
         res: AsyncResult = AsyncResult(task_id, app=celery_app)
         result = None
+        error = None
         try:
-            # Accessing res.result may raise if task failed; protect it
+            # If task is ready, retrieve result or exception
             if res.ready():
-                result = res.result
-        except Exception:
-            result = None
+                if res.successful():
+                    result = res.result
+                else:
+                    # Task failed; get the exception
+                    error = str(res.info)
+            elif res.failed():
+                error = str(res.info)
+        except Exception as exc:
+            error = str(exc)
 
         return {
             "task_id": task_id,
             "state": res.state,
             "result": result,
+            "error": error,
         }
     except Exception as e:
         raise HTTPException(
@@ -443,17 +451,16 @@ def get_well_data_merged(
             try:
                 task = process_merged_data.apply_async(
                     args=(project_id, well_name),
-                    kwargs={
-                        "tolerance": float(tolerance),
-                        "use_cache": bool(use_cache),
-                    },
+                    kwargs={"tolerance": float(tolerance)},
                 )
-                return JSONResponse(
-                    status_code=status.HTTP_202_ACCEPTED, content={"task_id": task.id}
-                )
+                # Wait for task to complete and return result directly
+                result = task.get(timeout=30)  # 30-second timeout
+                if use_cache:
+                    _merged_data_cache[cache_key] = (result, time.time())
+                return ORJSONResponse(content=result)
             except Exception:
                 logging.getLogger(__name__).exception(
-                    "Failed to enqueue merged-data task; will compute synchronously"
+                    "Failed to execute merged-data task asynchronously; will compute synchronously"
                 )
         else:
             logging.getLogger(__name__).warning(

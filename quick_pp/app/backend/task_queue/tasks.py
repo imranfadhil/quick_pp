@@ -1,9 +1,9 @@
+import json
 import logging
 import os
 
-import json
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 from quick_pp.app.backend.task_queue.celery_app import celery_app
 from quick_pp.database import objects as db_objects
@@ -49,7 +49,6 @@ def process_merged_data(
     project_id: int,
     well_name: str,
     tolerance: float = 0.16,
-    use_cache: bool = True,
 ):
     """Produce merged well data (same as /database/.../merged) in a worker.
 

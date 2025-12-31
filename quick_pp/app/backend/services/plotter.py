@@ -51,10 +51,17 @@ async def get_well_log(
                             "zones": zones,
                         },
                     )
-                    return JSONResponse(status_code=202, content={"task_id": task.id})
+                    # Wait for task to complete and return result directly
+                    result = task.get(timeout=30)  # 30-second timeout
+                    parsed = (
+                        json.loads(json.dumps(result))
+                        if isinstance(result, dict)
+                        else result
+                    )
+                    return JSONResponse(content=parsed)
                 except Exception:
                     logging.getLogger(__name__).exception(
-                        "Failed to enqueue plot task, falling back to sync"
+                        "Failed to execute plot task asynchronously, falling back to sync"
                     )
             else:
                 logging.getLogger(__name__).warning(
