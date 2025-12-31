@@ -395,18 +395,30 @@ class MultiMineral:
             all_logs = {"GR": gr, "NPHI": nphi, "RHOB": rhob, "PEF": pef, "DTC": dtc}
             for log_type, log_data in all_logs.items():
                 if log_data is not None:
-                    # Use 5th and 95th percentiles to calculate a robust range, ignoring NaNs
-                    valid_data = log_data[~np.isnan(log_data)]
-                    if len(valid_data) > 1:
-                        p05 = np.percentile(valid_data, 5)
-                        p95 = np.percentile(valid_data, 95)
-                        log_range = p95 - p05
-                        if log_range > 1e-6:  # Avoid division by zero for flat logs
-                            self.scaling_factors[log_type] = round(1.0 / log_range, 4)
-                        else:
-                            self.scaling_factors[log_type] = (
-                                1.0  # Default if range is zero
-                            )
+                    # Convert to float array and handle None/NaN values
+                    try:
+                        # Convert to float, replacing None with NaN
+                        log_array = np.array(
+                            [np.nan if v is None else float(v) for v in log_data],
+                            dtype=float,
+                        )
+                        # Use 5th and 95th percentiles to calculate a robust range, ignoring NaNs
+                        valid_data = log_array[~np.isnan(log_array)]
+                        if len(valid_data) > 1:
+                            p05 = np.percentile(valid_data, 5)
+                            p95 = np.percentile(valid_data, 95)
+                            log_range = p95 - p05
+                            if log_range > 1e-6:  # Avoid division by zero for flat logs
+                                self.scaling_factors[log_type] = round(
+                                    1.0 / log_range, 4
+                                )
+                            else:
+                                self.scaling_factors[log_type] = (
+                                    1.0  # Default if range is zero
+                                )
+                    except (ValueError, TypeError):
+                        # Skip if conversion fails
+                        self.scaling_factors[log_type] = 1.0
 
         logger.info(f"Scaling factors: {self.scaling_factors}")
         # Process each depth point

@@ -99,22 +99,21 @@ app.mount("/static", StaticFiles(directory=static_folder), name="static")
 # Initialize Jinja2 templates
 templates = Jinja2Templates(directory=str(template_folder))
 
+# Add CORS middleware BEFORE including routes
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(api_router)
 
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return FileResponse(str(static_folder / "favicon.ico"))
-
-
-origins = ["*"]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 @app.get("/", include_in_schema=False)

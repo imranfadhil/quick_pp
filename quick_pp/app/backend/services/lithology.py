@@ -5,23 +5,30 @@ Endpoints for lithology-related calculations:
 - Estimate Sand / Silt / Clay (SSC)
 - Estimate volume of shale (Vsh) from Gamma Ray (GR)
 - Hydrocarbon correction for NPHI/RHOB crossplots
+- Multi-mineral lithology estimation with fluid volumes
 
 Input Pydantic models:
 
 - `LithologySSCInput` — see `quick_pp.app.backend.schemas.lithology_ssc.LithologySSCInput`
 - `LithologyVshGRInput` — see `quick_pp.app.backend.schemas.lithology_vsh_gr.LithologyVshGRInput`
 - `LithologyHCCorrectionInput` — see `quick_pp.app.backend.schemas.lithology_hc_correction.LithologyHCCorrectionInput`
+- `LithologyMultiMineralInput` — see `quick_pp.app.backend.schemas.lithology_multi_mineral.LithologyMultiMineralInput`
 """
 
+import numpy as np
 import pandas as pd
 from fastapi import APIRouter
 
 from quick_pp.app.backend.schemas.lithology_hc_correction import (
     LithologyHCCorrectionInput,
 )
+from quick_pp.app.backend.schemas.lithology_multi_mineral import (
+    LithologyMultiMineralInput,
+)
 from quick_pp.app.backend.schemas.lithology_ssc import LithologySSCInput
 from quick_pp.app.backend.schemas.lithology_vsh_gr import LithologyVshGRInput
 from quick_pp.lithology import gr_index
+from quick_pp.lithology.multi_mineral import MultiMineral
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.qaqc import neu_den_xplot_hc_correction
 
@@ -42,6 +49,14 @@ def _validate_points(input_dict, required_points):
     for k in required_points:
         if not all(input_dict.get(k, ())):
             raise ValueError(f"'{k}' point must not be None or contain None values.")
+
+
+def _clean_for_json(value):
+    """Convert NaN and Inf values to None for JSON serialization."""
+    if isinstance(value, float):
+        if np.isnan(value) or np.isinf(value):
+            return None
+    return value
 
 
 def _to_dataframe(data, columns=None):
@@ -305,3 +320,128 @@ async def estimate_hc_correction(inputs: LithologyHCCorrectionInput):
     return pd.DataFrame(
         {"VSAND": vsand, "VSILT": vsilt, "VCLAY": vcld}, index=df.index
     ).to_dict(orient="records")
+
+
+@router.post(
+    "/multi_mineral",
+    summary="Estimate Multi-Mineral Lithology and Fluid Volumes",
+    description=(
+        """
+        Estimate mineral volumes and fluid fractions using an optimization-based multi-mineral model.
+
+        Input model: LithologyMultiMineralInput
+        (see quick_pp.app.backend.schemas.lithology_multi_mineral.LithologyMultiMineralInput).
+
+        Request body must be a JSON object with the following fields:
+        - minerals: list of strings (optional, defaults to ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'])
+        - porosity_method: string (optional, defaults to 'density', options: 'density', 'neutron_density', 'sonic')
+        - auto_scale: boolean (optional, defaults to True)
+        - data: list of objects with keys 'gr', 'nphi', 'rhob', and optionally 'pef', 'dtc' (required)
+
+        Example:
+        {
+            'minerals': ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'],
+            'porosity_method': 'density',
+            'auto_scale': True,
+            'data': [
+                {'gr': 85.0, 'nphi': 0.25, 'rhob': 2.45, 'pef': 2.5, 'dtc': 65.0},
+                {'gr': 110.0, 'nphi': 0.35, 'rhob': 2.35, 'pef': 3.0, 'dtc': 80.0}
+            ]
+        }
+        """
+    ),
+    operation_id="estimate_multi_mineral_lithology",
+)
+async def estimate_multi_mineral(inputs: LithologyMultiMineralInput):
+    """
+    Estimate mineral volumes and fluid fractions using an optimization-based multi-mineral model.
+
+    Parameters
+    ----------
+    inputs : LithologyMultiMineralInput
+        Pydantic model containing:
+            - minerals: List[str] of mineral names
+            - porosity_method: str ('density', 'neutron_density', or 'sonic')
+            - auto_scale: bool whether to apply automatic scaling
+            - data: List[dict] with 'gr', 'nphi', 'rhob' keys and optional 'pef', 'dtc'
+
+    Returns
+    -------
+    List[dict]
+        List of dictionaries, each containing the estimated volume fractions:
+            - Mineral volumes (e.g., 'VQTZ', 'VCAL', 'VDOL', 'VSHA')
+            - Fluid volumes: 'VOIL', 'VGAS', 'VWATER'
+            - Total porosity: 'PHIT_CONSTRUCTED'
+            - Error metrics: 'AVG_ERROR', 'OPTIMIZER_SUCCESS'
+            - Reconstructed logs: 'GR_RECONSTRUCTED', 'NPHI_RECONSTRUCTED', 'RHOB_RECONSTRUCTED',
+                                  'PEF_RECONSTRUCTED', 'DTC_RECONSTRUCTED'
+
+    Raises
+    ------
+    ValueError
+        If required data columns are missing.
+
+    Technical Details
+    ----------------
+    - Initializes a MultiMineral model with specified minerals and porosity calculation method.
+    - Extracts log arrays from input data, replacing None with np.nan for optional logs.
+    - Estimates lithology for each depth point using scipy.optimize.minimize with SLSQP method.
+    - Returns results as a list of dictionaries, preserving input order.
+    """
+    input_dict = inputs.model_dump()
+    df = _to_dataframe(input_dict["data"], columns=["gr", "nphi", "rhob"])
+
+    # Initialize the MultiMineral model
+    mm_model = MultiMineral(
+        minerals=input_dict["minerals"],
+        porosity_method=input_dict["porosity_method"],
+    )
+
+    # Prepare log arrays, handling optional columns and None values
+    gr = np.array(
+        [np.nan if v is None else float(v) for v in df["gr"].values], dtype=float
+    )
+    nphi = np.array(
+        [np.nan if v is None else float(v) for v in df["nphi"].values], dtype=float
+    )
+    rhob = np.array(
+        [np.nan if v is None else float(v) for v in df["rhob"].values], dtype=float
+    )
+
+    # Handle optional columns
+    if "pef" in df.columns:
+        pef = np.array(
+            [np.nan if v is None else float(v) for v in df["pef"].values],
+            dtype=float,
+        )
+    else:
+        pef = np.full_like(gr, np.nan, dtype=float)
+
+    if "dtc" in df.columns:
+        dtc = np.array(
+            [np.nan if v is None else float(v) for v in df["dtc"].values],
+            dtype=float,
+        )
+    else:
+        dtc = np.full_like(gr, np.nan, dtype=float)
+
+    # Estimate lithology
+    results_df = mm_model.estimate_lithology(
+        gr=gr,
+        nphi=nphi,
+        rhob=rhob,
+        pef=pef,
+        dtc=dtc,
+        auto_scale=input_dict["auto_scale"],
+    )
+
+    # Convert DataFrame to list of dicts and clean NaN/Inf values
+    results_list = results_df.to_dict(orient="records")
+
+    # Clean each record for JSON serialization
+    cleaned_results = []
+    for record in results_list:
+        cleaned_record = {k: _clean_for_json(v) for k, v in record.items()}
+        cleaned_results.append(cleaned_record)
+
+    return cleaned_results

@@ -54,6 +54,15 @@
   let saveLoadingHC = false;
   let saveMessageHC: string | null = null;
   
+  // Lithology model selection
+  let lithoModel: 'ssc' | 'multi_mineral' = 'ssc'; // Selected lithology model
+  
+  // Multi-mineral model state
+  let minerals: string[] = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'];
+  let porosityMethod: 'density' | 'neutron_density' | 'sonic' = 'density';
+  let autoScale: boolean = true;
+  let mineralInput: string = 'QUARTZ, CALCITE, DOLOMITE, SHALE'; // User-friendly input
+  
   // Calculate drySiltNphi based on siltLineAngle
   $: drySiltNphi = 1 - 1.68 * Math.tan((siltLineAngle - 90) * Math.PI / 180);
 
@@ -321,7 +330,14 @@
   }
 
   // derived plotting arrays for Plotly
-  $: lithoPoints = lithoChartData.map(d => ({ x: d.depth, vclay: d.VCLAY, vsilt: d.VCLAY + d.VSILT, vsand: d.VCLAY + d.VSILT + d.VSAND }));
+  $: lithoPoints = lithoChartData.map(d => ({
+    x: d.depth,
+    vclay: d.VCLAY,
+    vsilt: d.VCLAY + d.VSILT,
+    vdolo: d.VCLAY + d.VSILT + d.VDOLO,
+    vcalc: d.VCLAY + d.VSILT + d.VDOLO + d.VCALC,
+    vsand: d.VCLAY + d.VSILT + d.VDOLO + d.VCALC + d.VSAND
+  }));
   $: poroPoints = poroChartData.map(d => ({ x: d.depth, y: d.PHIT }));
   $: phiePoints = poroChartData.map(d => ({ x: d.depth, y: d.PHIE })).filter(p => p.y !== undefined && p.y !== null && !isNaN(Number(p.y)));
   $: cporePoints = cporeData.map(d => ({ x: d.depth, y: d.CPORE }));
@@ -337,12 +353,16 @@
     const x = lithoPoints.map(p => p.x);
     const clay = lithoPoints.map(p => p.vclay);
     const silt = lithoPoints.map(p => p.vsilt);
+    const dolo = lithoPoints.map(p => p.vdolo);
+    const calc = lithoPoints.map(p => p.vcalc);
     const sand = lithoPoints.map(p => p.vsand);
 
     const traces = [
-      { x, y: clay, name: 'VCLAY', mode: 'lines', line: {color: '#949494'}, fill: 'tozeroy' },
-      { x, y: silt, name: 'VSILT', mode: 'lines', line: {color: '#FE9800'}, fill: 'tonexty' },
-      { x, y: sand, name: 'VSAND', mode: 'lines', line: {color: '#F6F674'}, fill: 'tonexty' }
+      { x, y: clay, name: 'VCLAY', mode: 'lines', line: {color: '#949494', width: 1}, fill: 'tozeroy' },
+      { x, y: silt, name: 'VSILT', mode: 'lines', line: {color: '#FE9800', width: 1}, fill: 'tonexty' },
+      { x, y: dolo, name: 'VDOLO', mode: 'lines', line: {color: '#BA55D3', width: 1}, fill: 'tonexty' },
+      { x, y: calc, name: 'VCALC', mode: 'lines', line: {color: '#B0E0E6', width: 1}, fill: 'tonexty' },
+      { x, y: sand, name: 'VSAND', mode: 'lines', line: {color: '#F6F674', width: 1}, fill: 'tonexty' },
     ];
 
     const layout = {
@@ -586,7 +606,7 @@
     }
   }
 
-  async function runSSC() {
+  async function runLitho() {
     const data = extractNphiRhob();
     if (!data.length) {
       error = 'No NPHI/RHOB data available in well rows';
@@ -595,27 +615,90 @@
     loading = true;
     error = null;
     try {
-      const payload = {
-        dry_sand_point: [Number(drySandNphi), Number(drySandRhob)],
-        fluid_point: [Number(fluidNphi), Number(fluidRhob)],
-        dry_clay_point: [Number(dryClayNphi), Number(dryClayRhob)],
-        method: 'default',
-        silt_line_angle: Number(siltLineAngle),
-        data,
-      };
-      const res = await fetch(`${API_BASE}/quick_pp/lithology/ssc`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      lithoResults = await res.json();
+      if (lithoModel === 'ssc') {
+        await runSSCModel(data);
+      } else if (lithoModel === 'multi_mineral') {
+        await runMultiMineralModel(data);
+      }
       buildLithoChart();
     } catch (e: any) {
-      console.warn('SSC error', e);
+      console.warn('Lithology estimation error', e);
       error = String(e?.message ?? e);
     } finally {
       loading = false;
+    }
+  }
+
+  async function runSSCModel(data: Array<{nphi: number; rhob: number}>) {
+    const payload = {
+      dry_sand_point: [Number(drySandNphi), Number(drySandRhob)],
+      fluid_point: [Number(fluidNphi), Number(fluidRhob)],
+      dry_clay_point: [Number(dryClayNphi), Number(dryClayRhob)],
+      method: 'default',
+      silt_line_angle: Number(siltLineAngle),
+      data,
+    };
+    const res = await fetch(`${API_BASE}/quick_pp/lithology/ssc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    lithoResults = await res.json();
+  }
+
+  async function runMultiMineralModel(data: Array<{nphi: number; rhob: number}>) {
+    // Extract full log data including gr, pef, dtc
+    const fullData: Array<Record<string, any>> = [];
+    const filteredRows = visibleRows;
+    
+    for (const r of filteredRows) {
+      const nphi = Number(r.nphi ?? r.NPHI ?? r.Nphi ?? NaN);
+      const rhob = Number(r.rhob ?? r.RHOB ?? r.Rhob ?? NaN);
+      
+      if (!isNaN(nphi) && !isNaN(rhob)) {
+        const gr = Number(r.gr ?? r.GR ?? r.Gr ?? NaN);
+        const pef = Number(r.pef ?? r.PEF ?? r.Pef ?? NaN);
+        const dtc = Number(r.dtc ?? r.DTC ?? r.Dtc ?? NaN);
+        
+        fullData.push({
+          gr: isNaN(gr) ? null : gr,
+          nphi,
+          rhob,
+          pef: isNaN(pef) ? null : pef,
+          dtc: isNaN(dtc) ? null : dtc,
+        });
+      }
+    }
+
+    if (!fullData.length) {
+      throw new Error('No valid GR/NPHI/RHOB data available');
+    }
+
+    const payload = {
+      minerals,
+      porosity_method: porosityMethod,
+      auto_scale: autoScale,
+      data: fullData,
+    };
+    
+    const res = await fetch(`${API_BASE}/quick_pp/lithology/multi_mineral`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    lithoResults = await res.json();
+  }
+
+  // Parse mineral input string and update minerals array
+  function updateMinerals() {
+    const parsed = mineralInput
+      .split(',')
+      .map(m => m.trim().toUpperCase())
+      .filter(m => m.length > 0);
+    if (parsed.length > 0) {
+      minerals = parsed;
     }
   }
 
@@ -633,12 +716,34 @@
     error = null;
     try {
       // Build rows from lithoChartData which already contains the filtered and aligned results
-      const rows: Array<Record<string, any>> = lithoChartData.map(r => ({
-        DEPTH: r.depth,
-        VSAND: Math.min(Math.max(Number(r.VSAND ?? 0), 0), 1),
-        VSILT: Math.min(Math.max(Number(r.VSILT ?? 0), 0), 1),
-        VCLAY: Math.min(Math.max(Number(r.VCLAY ?? 0), 0), 1)
-      }));
+      const rows: Array<Record<string, any>> = lithoChartData.map(r => {
+        const row: Record<string, any> = {
+          DEPTH: r.depth,
+        };
+        
+        if (lithoModel === 'ssc') {
+          // SSC model columns
+          row.VSAND = Math.min(Math.max(Number(r.VSAND ?? 0), 0), 1);
+          row.VSILT = Math.min(Math.max(Number(r.VSILT ?? 0), 0), 1);
+          row.VCLAY = Math.min(Math.max(Number(r.VCLAY ?? 0), 0), 1);
+        } else if (lithoModel === 'multi_mineral' && r.fullResult) {
+          // Multi-mineral model columns - save all mineral volumes
+          for (const mineral of minerals) {
+            const colName = getMineralColumnName(mineral);
+            const val = r.fullResult[colName];
+            if (val !== undefined && val !== null) {
+              row[colName] = Math.min(Math.max(Number(val), 0), 1);
+            }
+          }
+          // Also save fluid volumes if available
+          if (r.fullResult.VOIL !== undefined) row.VOIL = Math.min(Math.max(Number(r.fullResult.VOIL ?? 0), 0), 1);
+          if (r.fullResult.VGAS !== undefined) row.VGAS = Math.min(Math.max(Number(r.fullResult.VGAS ?? 0), 0), 1);
+          if (r.fullResult.VWATER !== undefined) row.VWATER = Math.min(Math.max(Number(r.fullResult.VWATER ?? 0), 0), 1);
+          if (r.fullResult.PHIT_CONSTRUCTED !== undefined) row.PHIT_CONSTRUCTED = Math.min(Math.max(Number(r.fullResult.PHIT_CONSTRUCTED ?? 0), 0), 1);
+        }
+        
+        return row;
+      });
 
       if (!rows.length) {
         throw new Error('No rows prepared for save');
@@ -769,7 +874,7 @@
     // Use visibleRows which have depth and zone filters applied
     const filteredRows = visibleRows;
     
-    // lithoResults only contains results for rows with valid NPHI/RHOB data
+    // lithoResults contains results for rows with valid NPHI/RHOB data
     const rows: Array<Record<string, any>> = [];
     let i = 0;
     for (const r of filteredRows) {
@@ -783,17 +888,40 @@
       
       // Only include rows that have valid NPHI/RHOB data
       if (hasValidData) {
-        const l = lithoResults[i++] ?? { VSAND: null, VSILT: null, VCLAY: null };
-        // Clamp values between 0 and 1
+        const l = lithoResults[i++] ?? {};
         const vsand = Math.min(Math.max(Number(l.VSAND ?? 0), 0), 1);
         const vsilt = Math.min(Math.max(Number(l.VSILT ?? 0), 0), 1);
         const vclay = Math.min(Math.max(Number(l.VCLAY ?? 0), 0), 1);
-        rows.push({ depth, VSAND: vsand, VSILT: vsilt, VCLAY: vclay });
+        const vcalc = Math.min(Math.max(Number(l.VCALC ?? 0), 0), 1);
+        const vdolo = Math.min(Math.max(Number(l.VDOLO ?? 0), 0), 1);
+        rows.push({ 
+          depth, 
+          VSAND: vsand,
+          VSILT: vsilt,
+          VCALC: vcalc, 
+          VDOLO: vdolo, 
+          VCLAY: vclay,
+          // Store full result for reference
+          fullResult: l
+        });        
       }
     }
     // Sort by depth to ensure proper chart rendering
     rows.sort((a: Record<string, any>, b: Record<string, any>) => a.depth - b.depth);
     lithoChartData = rows;
+  }
+
+  // Helper to get standard mineral column name mapping
+  function getMineralColumnName(mineral: string): string {
+    const mapping: Record<string, string> = {
+      'QUARTZ': 'VSAND',
+      'CALCITE': 'VCALC',
+      'DOLOMITE': 'VDOLO',
+      'SHALE': 'VCLAY',
+      'FELDSPAR': 'VFSP',
+      'PYRITE': 'VPYR',
+    };
+    return mapping[mineral] ?? `V${mineral.substring(0, 3).toUpperCase()}`;
   }
 
   function buildPoroChart() {
@@ -894,51 +1022,12 @@
 
   {#if wellName}
     <div class="bg-panel rounded p-3">
-
-      <div class="grid grid-cols-2 gap-2 mb-3">
-        <div>
-          <label class="text-xs" for="dry-sand-nphi">Dry sand (NPHI)</label>
-          <input id="dry-sand-nphi" class="input" type="number" step="any" bind:value={drySandNphi} />
-        </div>
-        <div>
-          <label class="text-xs" for="dry-sand-rhob">Dry sand (RHOB)</label>
-          <input id="dry-sand-rhob" class="input" type="number" step="any" bind:value={drySandRhob} />
-        </div>
-        <div>
-          <label class="text-xs" for="dry-clay-nphi">Dry clay (NPHI)</label>
-          <input id="dry-clay-nphi" class="input" type="number" step="any" bind:value={dryClayNphi} />
-        </div>
-        <div>
-          <label class="text-xs" for="dry-clay-rhob">Dry clay (RHOB)</label>
-          <input id="dry-clay-rhob" class="input" type="number" step="any" bind:value={dryClayRhob} />
-        </div>
-        <div>
-          <label class="text-xs" for="fluid-nphi">Fluid (NPHI)</label>
-          <input id="fluid-nphi" class="input" type="number" step="any" bind:value={fluidNphi} />
-        </div>
-        <div>
-          <label class="text-xs" for="fluid-rhob">Fluid (RHOB)</label>
-          <input id="fluid-rhob" class="input" type="number" step="any" bind:value={fluidRhob} />
-        </div>
-        <div>
-          <label class="text-xs" for="silt-line-angle">Silt line angle</label>
-          <input id="silt-line-angle" class="input" type="number" step="1" bind:value={siltLineAngle} />
-        </div>
-      </div>
-
       {#if error}
         <div class="text-sm text-red-500 mb-2">Error: {error}</div>
       {/if}
 
       <div class="space-y-3">
         <div>
-          <div>
-            <div class="font-medium text-sm mb-1">NPHI - RHOB Crossplot</div>
-            <div class="bg-surface rounded p-2">
-              <div bind:this={plotDiv} class="w-full max-w-[600px] h-[500px] mx-auto"></div>
-            </div>
-          </div>
-
 		      <div class="px-2 py-2 border-t border-border/50 mt-2">
             <div class="font-medium text-sm mb-3 mt-4">Hydrocarbon Correction</div>
             <div class="bg-surface rounded p-2">
@@ -962,11 +1051,7 @@
                   aria-label="Apply HC correction"
                   title="Apply hydrocarbon correction to NPHI/RHOB data"
                 >
-                  {#if loading}
-                    Applying...
-                  {:else}
-                    Apply HC Correction
-                  {/if}
+                  Apply HC Correction
                 </button>
                 <button
                   class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
@@ -1010,32 +1095,146 @@
           </div>
 
 		      <div class="px-2 py-2 border-t border-border/50 mt-2">
-            <div class="font-medium text-sm mb-1">Lithology (VSAND / VSILT / VCLAY)</div>
+            <div class="font-medium text-sm mb-3">Lithology Estimation</div>
             <div class="bg-surface rounded p-2">
-              <button
-                class="btn px-3 py-1 text-sm font-semibold rounded-md bg-gray-900 text-white hover:bg-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-700"
-                onclick={runSSC}
-                disabled={loading}
-                style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
-                aria-label="Run lithology classification"
-                title="Run lithology classification"
-              >
-                Estimate Lithology
-              </button>
-              <button
-                class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
-                onclick={saveLitho}
-                disabled={loading || saveLoadingLitho}
-                style={(loading || saveLoadingLitho) ? 'opacity:0.5; pointer-events:none;' : ''}
-                aria-label="Save lithology"
-                title="Save lithology results to database"
-              >
-                {#if saveLoadingLitho}
-                  Saving...
-                {:else}
-                  Save Lithology
+              <div class="mb-3 p-2 border border-border/50 rounded">
+                <div class="text-xs font-medium mb-2">Select Model:</div>
+                <div class="flex gap-4">
+                  <label class="flex items-center text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      name="litho-model"
+                      value="ssc"
+                      bind:group={lithoModel}
+                      disabled={loading}
+                      class="mr-2"
+                    />
+                    Sand / Silt / Clay (SSC)
+                  </label>
+                  <label class="flex items-center text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      name="litho-model"
+                      value="multi_mineral"
+                      bind:group={lithoModel}
+                      disabled={loading}
+                      class="mr-2"
+                    />
+                    Multi-Mineral Model
+                  </label>
+                </div>
+
+                {#if lithoModel === 'ssc'}
+                  <div class="mt-3">
+                    <div class="text-xs font-medium mb-2">SSC Endpoint Parameters:</div>
+                    <div class="grid grid-cols-2 gap-2">
+                      <div>
+                        <label class="text-xs" for="dry-sand-nphi-lith">Dry sand (NPHI)</label>
+                        <input id="dry-sand-nphi-lith" class="input" type="number" step="any" bind:value={drySandNphi} />
+                      </div>
+                      <div>
+                        <label class="text-xs" for="dry-sand-rhob-lith">Dry sand (RHOB)</label>
+                        <input id="dry-sand-rhob-lith" class="input" type="number" step="any" bind:value={drySandRhob} />
+                      </div>
+                      <div>
+                        <label class="text-xs" for="dry-clay-nphi-lith">Dry clay (NPHI)</label>
+                        <input id="dry-clay-nphi-lith" class="input" type="number" step="any" bind:value={dryClayNphi} />
+                      </div>
+                      <div>
+                        <label class="text-xs" for="dry-clay-rhob-lith">Dry clay (RHOB)</label>
+                        <input id="dry-clay-rhob-lith" class="input" type="number" step="any" bind:value={dryClayRhob} />
+                      </div>
+                      <div>
+                        <label class="text-xs" for="fluid-nphi-lith">Fluid (NPHI)</label>
+                        <input id="fluid-nphi-lith" class="input" type="number" step="any" bind:value={fluidNphi} />
+                      </div>
+                      <div>
+                        <label class="text-xs" for="fluid-rhob-lith">Fluid (RHOB)</label>
+                        <input id="fluid-rhob-lith" class="input" type="number" step="any" bind:value={fluidRhob} />
+                      </div>
+                      <div class="col-span-2">
+                        <label class="text-xs" for="silt-line-angle-lith">Silt line angle</label>
+                        <input id="silt-line-angle-lith" class="input" type="number" step="1" bind:value={siltLineAngle} />
+                      </div>
+                    </div>
+                    <div class="mt-3">
+                      <div class="font-medium text-sm mb-1">NPHI - RHOB Crossplot</div>
+                      <div class="bg-surface rounded p-2">
+                        <div bind:this={plotDiv} class="w-full max-w-[600px] h-[500px] mx-auto"></div>
+                      </div>
+                    </div>
+                  </div>
                 {/if}
-              </button>
+
+                {#if lithoModel === 'multi_mineral'}
+                  <div class="mt-3">
+                    <div class="text-xs font-medium mb-2">Multi-Mineral Configuration:</div>
+                    <div class="space-y-2">
+                      <div>
+                        <label class="text-xs" for="minerals-input">Minerals (comma-separated):</label>
+                        <input
+                          id="minerals-input"
+                          class="input"
+                          type="text"
+                          bind:value={mineralInput}
+                          placeholder="e.g., QUARTZ, CALCITE, DOLOMITE, SHALE"
+                          onblur={updateMinerals}
+                        />
+                        <div class="text-xs text-muted-foreground mt-1">
+                          Current: {minerals.join(', ')}
+                        </div>
+                      </div>
+                      <div>
+                        <label class="text-xs" for="porosity-method">Porosity Method:</label>
+                        <select id="porosity-method" class="input" bind:value={porosityMethod}>
+                          <option value="density">Density</option>
+                          <option value="neutron_density">Neutron-Density</option>
+                          <option value="sonic">Sonic</option>
+                        </select>
+                      </div>
+                      <div class="flex items-center">
+                        <input
+                          type="checkbox"
+                          id="auto-scale"
+                          class="mr-2"
+                          bind:checked={autoScale}
+                        />
+                        <label for="auto-scale" class="text-xs cursor-pointer">
+                          Auto-scale (recommended for robustness)
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+
+              <div class="flex gap-2 mb-3">
+                <button
+                  class="btn px-3 py-1 text-sm font-semibold rounded-md bg-gray-900 text-white hover:bg-gray-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-700"
+                  onclick={runLitho}
+                  disabled={loading}
+                  style={loading ? 'opacity:0.5; pointer-events:none;' : ''}
+                  aria-label="Run lithology classification"
+                  title="Run lithology estimation"
+                >
+                  Estimate Lithology
+                </button>
+                <button
+                  class="btn px-3 py-1 text-sm font-medium rounded-md bg-emerald-700 text-white hover:bg-emerald-600 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-emerald-600"
+                  onclick={saveLitho}
+                  disabled={loading || saveLoadingLitho}
+                  style={(loading || saveLoadingLitho) ? 'opacity:0.5; pointer-events:none;' : ''}
+                  aria-label="Save lithology"
+                  title="Save lithology results to database"
+                >
+                  {#if saveLoadingLitho}
+                    Saving...
+                  {:else}
+                    Save Lithology
+                  {/if}
+                </button>
+              </div>
+
               <div class="h-[220px] w-full overflow-hidden">
                 {#if lithoChartData.length > 0}
                   <div bind:this={lithoPlotDiv} class="w-full h-[220px]"></div>
@@ -1045,13 +1244,14 @@
                   </div>
                 {/if}
               </div>
+              
               {#if saveMessageLitho}
                 <div class="text-xs text-green-600 mt-2">{saveMessageLitho}</div>
               {/if}
             </div>
           </div>
 
-          <div>
+		      <div class="px-2 py-2 border-t border-border/50 mt-2">
             <div class="font-medium text-sm mb-1">Porosity (PHIT)</div>
             <div class="bg-surface rounded p-2">
               <button
