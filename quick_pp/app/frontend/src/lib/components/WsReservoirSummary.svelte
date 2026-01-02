@@ -33,6 +33,14 @@
   let dtInstance: any = null;
   let jQuery: any = null;
 
+  // Polling state for merged data
+  let _pollTimer: number | null = null;
+  let _pollAttempts = 0;
+  let _maxPollAttempts = 120; // max 2 minutes with 1s polls
+  let pollStatus: string | null = null;
+
+  const POLL_INTERVAL = 1000; // 1 second between polls
+
   function initDataTable() {
     if (!tableRef) return;
     try {
@@ -121,6 +129,7 @@
   onDestroy(() => {
     try {
       if (dtInstance) dtInstance.destroy();
+      clearMergedDataPollTimer();
     } catch (e) {}
     dtInstance = null;
   });
@@ -135,11 +144,25 @@
     if (!projectId || !wellName) return;
     loading = true;
     error = null;
+    pollStatus = null;
+    
     try {
-      const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/merged`);
-      if (!res.ok) throw new Error(await res.text());
-      const fd = await res.json();
-      const rows = fd && fd.data ? fd.data : fd;
+      // Initiate async merged data task
+      pollStatus = 'Initiating well data loading...';
+      const initResponse = await initiateMergedDataGeneration();
+      const { task_id, result } = initResponse;
+      
+      // Check if result was returned immediately (sync fallback)
+      let data: any;
+      if (result) {
+        data = result;
+      } else {
+        // Poll for result
+        pollStatus = 'Waiting for well data...';
+        data = await pollForMergedDataResult(task_id);
+      }
+      
+      const rows = data && data.data ? data.data : data;
       if (!Array.isArray(rows)) throw new Error('Unexpected data format from backend');
       fullRows = rows;
     } catch (e: any) {
@@ -147,7 +170,77 @@
       error = String(e?.message ?? e);
     } finally {
       loading = false;
+      pollStatus = null;
     }
+  }
+
+  async function initiateMergedDataGeneration(): Promise<{task_id: string, result?: any}> {
+    const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/merged/generate`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    if (!data.task_id) throw new Error('No task_id returned from server');
+    return {
+      task_id: data.task_id,
+      result: data.result
+    };
+  }
+
+  function clearMergedDataPollTimer() {
+    if (_pollTimer) {
+      clearInterval(_pollTimer);
+      _pollTimer = null;
+    }
+    pollStatus = null;
+  }
+
+  async function pollForMergedDataResult(taskId: string): Promise<any> {
+    const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/merged/result/${taskId}`;
+    
+    return new Promise((resolve, reject) => {
+      _pollAttempts = 0;
+      
+      const poll = async () => {
+        if (_pollAttempts >= _maxPollAttempts) {
+          const msg = 'Well data loading timed out after 2 minutes';
+          console.error(msg);
+          clearMergedDataPollTimer();
+          reject(new Error(msg));
+          return;
+        }
+
+        try {
+          const res = await fetch(url);
+          if (!res.ok) {
+            throw new Error(`Poll failed with status ${res.status}`);
+          }
+          const data = await res.json();
+
+          if (data.status === 'success') {
+            clearMergedDataPollTimer();
+            resolve(data.result);
+          } else if (data.status === 'error') {
+            clearMergedDataPollTimer();
+            reject(new Error(data.error || 'Task failed with unknown error'));
+          } else if (data.status === 'pending') {
+            pollStatus = `Loading well data... (${_pollAttempts}s)`;
+            _pollAttempts++;
+          } else {
+            clearMergedDataPollTimer();
+            reject(new Error(`Unknown task status: ${data.status}`));
+          }
+        } catch (err: any) {
+          console.error('Poll request failed:', err);
+          pollStatus = `Retrying... (attempt ${_pollAttempts})`;
+          _pollAttempts++;
+        }
+      };
+
+      // Start immediate poll, then set interval
+      poll();
+      _pollTimer = window.setInterval(poll, POLL_INTERVAL);
+    });
   }
 
   // Build payload for ressum: map fullRows to required keys

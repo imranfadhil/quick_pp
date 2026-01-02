@@ -1,6 +1,5 @@
 import logging
 import shutil
-import time
 from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4
@@ -12,7 +11,7 @@ from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
 from fastapi.responses import JSONResponse, ORJSONResponse
 from sqlalchemy import select, text
 
-from quick_pp.app.backend.task_queue.celery_app import celery_app
+from quick_pp.app.backend.task_queue.celery_app import celery_app, is_broker_available
 from quick_pp.app.backend.task_queue.tasks import process_las, process_merged_data
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_filename
@@ -420,56 +419,42 @@ def get_well_data(project_id: int, well_name: str, include_ancillary: bool = Fal
         ) from e
 
 
-@router.get(
-    "/projects/{project_id}/wells/{well_name}/merged",
-    summary="Get well data merged with ancillary datapoints by depth",
-    response_class=ORJSONResponse,
-)
-def get_well_data_merged(
+def _sanitize_for_json(obj):
+    """Recursively sanitize an object to be JSON serializable.
+
+    Converts NaN, Inf, -Inf to None and handles nested structures.
+    """
+    if isinstance(obj, float):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return obj
+    elif isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(item) for item in obj]
+    elif isinstance(obj, (np.floating, np.integer)):
+        # Handle numpy types
+        if isinstance(obj, np.floating) and (np.isnan(obj) or np.isinf(obj)):
+            return None
+        return obj.item() if hasattr(obj, "item") else obj
+    return obj
+
+
+def _compute_merged_data_sync(
     project_id: int,
     well_name: str,
     tolerance: Optional[float] = 0.16,
-    use_cache: bool = True,
-):
-    """Return well log rows with nearby ancillary datapoints merged by depth.
+) -> list:
+    """Compute merged well data synchronously (helper function).
 
-    Uses in-memory caching for performance (5 minute TTL).
-    Set use_cache=false to bypass cache.
+    Args:
+        project_id: Project ID
+        well_name: Name of the well
+        tolerance: Merge tolerance for depth-based merging
+
+    Returns:
+        List of merged data records
     """
-    # Check cache first
-    cache_key = f"{project_id}_{well_name}_{tolerance}"
-    if use_cache and cache_key in _merged_data_cache:
-        cached_data, cached_time = _merged_data_cache[cache_key]
-        if time.time() - cached_time < _cache_ttl:
-            return cached_data
-
-    # Try to enqueue merged-data task; if broker unavailable or enqueue fails, compute synchronously
-    try:
-        from quick_pp.app.backend.task_queue.celery_app import is_broker_available
-
-        if is_broker_available():
-            try:
-                task = process_merged_data.apply_async(
-                    args=(project_id, well_name),
-                    kwargs={"tolerance": float(tolerance)},
-                )
-                # Wait for task to complete and return result directly
-                result = task.get(timeout=30)  # 30-second timeout
-                if use_cache:
-                    _merged_data_cache[cache_key] = (result, time.time())
-                return ORJSONResponse(content=result)
-            except Exception:
-                logging.getLogger(__name__).exception(
-                    "Failed to execute merged-data task asynchronously; will compute synchronously"
-                )
-        else:
-            logging.getLogger(__name__).warning(
-                "Celery broker unavailable; computing merged data synchronously"
-            )
-    except Exception:
-        logging.getLogger(__name__).exception(
-            "Error checking Celery broker; computing merged data synchronously"
-        )
 
     # Optimized vectorized type conversion
     def _to_py_vectorized(series):
@@ -525,10 +510,7 @@ def get_well_data_merged(
             except AttributeError:
                 df = proj.get_well_data(well_name)
             if df.empty:
-                result = []
-                if use_cache:
-                    _merged_data_cache[cache_key] = (result, time.time())
-                return result
+                return []
 
             # Normalize main dataframe depth column
             df = df.reset_index(drop=True)
@@ -673,26 +655,122 @@ def get_well_data_merged(
                     records = [{} for _ in range(len(merged))]
                 values = _to_py_vectorized(merged[col])
                 for i, val in enumerate(values):
-                    records[i][col] = val
-
-            # Cache the result
-            if use_cache:
-                _merged_data_cache[cache_key] = (records, time.time())
-                # Simple cache size management: keep only last 50 entries
-                if len(_merged_data_cache) > 50:
-                    oldest_key = min(
-                        _merged_data_cache.keys(),
-                        key=lambda k: _merged_data_cache[k][1],
-                    )
-                    del _merged_data_cache[oldest_key]
+                    records[i][col] = _sanitize_for_json(val)
 
             return records
     except ValueError as e:
+        raise ValueError(str(e)) from e
+    except Exception as e:
+        raise Exception(f"Failed to produce merged data: {e}") from e
+
+
+@router.post(
+    "/projects/{project_id}/wells/{well_name}/merged/generate",
+    summary="Initiate async merged data generation",
+)
+async def initiate_merged_data_generation(
+    project_id: int,
+    well_name: str,
+    tolerance: Optional[float] = 0.16,
+):
+    """Initiate an async merged data task and return the task ID.
+
+    If Celery broker is unavailable, falls back to synchronous generation
+    and returns the result immediately.
+
+    Args:
+        project_id: Project ID
+        well_name: Name of the well
+        tolerance: Merge tolerance for depth-based merging
+
+    Returns:
+        JSON with task_id for async polling, or result directly if sync fallback
+    """
+    try:
+        if is_broker_available():
+            logging.getLogger(__name__).info(
+                "Celery broker available, enqueueing async merged data task"
+            )
+            task = process_merged_data.apply_async(
+                args=(project_id, well_name),
+                kwargs={"tolerance": float(tolerance)},
+            )
+            return JSONResponse(content={"task_id": task.id})
+        else:
+            logging.getLogger(__name__).warning(
+                "Celery broker unavailable, computing merged data synchronously"
+            )
+            result = _compute_merged_data_sync(project_id, well_name, tolerance)
+            # Return result directly with a synthetic task_id that will resolve immediately
+            return JSONResponse(
+                content={"task_id": "sync", "status": "success", "result": result}
+            )
+    except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
+        logging.getLogger(__name__).exception(
+            "Failed to initiate merged data generation: %s", e
+        )
         raise HTTPException(
-            status_code=500, detail=f"Failed to produce merged data: {e}"
+            status_code=500,
+            detail=f"Failed to initiate merged data generation: {e}",
         ) from e
+
+
+@router.get(
+    "/projects/{project_id}/wells/{well_name}/merged/result/{task_id}",
+    summary="Poll for merged data generation result",
+)
+async def get_merged_data_result(task_id: str):
+    """Poll for the result of a merged data generation task.
+
+    Args:
+        project_id: Project ID (for validation)
+        well_name: Well name (for validation)
+        task_id: Task ID returned from initiate endpoint
+
+    Returns:
+        JSON with status and result (when ready)
+    """
+    try:
+        # Handle synthetic "sync" task ID (synchronous fallback result)
+        if task_id == "sync":
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "result": {},  # Result should have been included in initiate response
+                }
+            )
+
+        from quick_pp.app.backend.task_queue.celery_app import celery_app as app
+
+        task = app.AsyncResult(task_id)
+
+        if task.state == "PENDING":
+            return JSONResponse(content={"status": "pending"})
+        elif task.state == "SUCCESS":
+            result = task.result
+            # Ensure result is JSON serializable
+            if not isinstance(result, list):
+                result = list(result) if hasattr(result, "__iter__") else []
+            # Sanitize NaN/Inf values before JSON serialization
+            result = _sanitize_for_json(result)
+            return JSONResponse(content={"status": "success", "result": result})
+        elif task.state == "FAILURE":
+            error_msg = str(task.info) if task.info else "Unknown error"
+            return JSONResponse(
+                content={"status": "error", "error": error_msg},
+                status_code=200,  # Still 200 to allow client to handle gracefully
+            )
+        else:
+            # RETRY, REVOKED, etc.
+            return JSONResponse(content={"status": "pending", "state": task.state})
+    except Exception as e:
+        logging.getLogger(__name__).exception("Failed to check task result: %s", e)
+        return JSONResponse(
+            content={"status": "error", "error": str(e)},
+            status_code=500,
+        )
 
 
 @router.post("/cache/clear", summary="Clear merged data cache")
