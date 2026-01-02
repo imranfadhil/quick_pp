@@ -25,13 +25,31 @@
 
   let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
 
+  // Polling state for FZI task
+  let _pollTimer: number | null = null;
+  let _pollAttempts = 0;
+  let _maxPollAttempts = 120;
+  let pollStatus: string | null = null;
+  const POLL_INTERVAL = 1000;
+
   const unsubscribe = workspace.subscribe((w) => {
     if (w?.zoneFilter && (zoneFilter.enabled !== w.zoneFilter.enabled || JSON.stringify(zoneFilter.zones) !== JSON.stringify(w.zoneFilter.zones))) {
       zoneFilter = { ...w.zoneFilter };
     }
   });
 
-  onDestroy(() => unsubscribe());
+  onDestroy(() => {
+    unsubscribe();
+    if (_pollTimer) clearInterval(_pollTimer);
+  });
+
+  function clearFziPollTimer() {
+    if (_pollTimer) {
+      clearInterval(_pollTimer);
+      _pollTimer = null;
+    }
+    pollStatus = null;
+  }
 
   let Plotly: any = null;
   let jContainer: HTMLDivElement | null = null;
@@ -73,17 +91,88 @@
     if (!projectId) return;
     dataLoading = true;
     dataError = null;
+    clearFziPollTimer();
     try {
-      const wellUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/fzi_data`;
-      const wellRes = await fetch(wellUrl);
-      if (!wellRes.ok) throw new Error(await wellRes.text());
-      wellData = await wellRes.json();
+      pollStatus = 'Initiating FZI data generation...';
+      const init = await initiateFZIDataGeneration();
+      const { task_id, result } = init;
+
+      let payload: any;
+      if (result) {
+        payload = result;
+      } else {
+        pollStatus = 'Waiting for FZI data...';
+        payload = await pollForFZIDataResult(task_id);
+      }
+
+      if (!payload || typeof payload !== 'object') throw new Error('Unexpected data format from backend');
+      wellData = payload;
     } catch (e: any) {
       dataError = e.message || 'Failed to load well data';
       wellData = null;
     } finally {
       dataLoading = false;
+      pollStatus = null;
+      clearFziPollTimer();
     }
+  }
+
+  async function initiateFZIDataGeneration(): Promise<{ task_id: string; result?: any }> {
+    const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/fzi_data/generate`, {
+      method: 'POST',
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    if (!data.task_id) throw new Error('No task_id returned from server');
+    return { task_id: data.task_id, result: data.result };
+  }
+
+  async function pollForFZIDataResult(taskId: string): Promise<any> {
+    const url = `${API_BASE}/quick_pp/database/projects/${projectId}/fzi_data/result/${taskId}`;
+
+    return new Promise((resolve, reject) => {
+      _pollAttempts = 0;
+
+      const poll = async () => {
+        if (_pollAttempts >= _maxPollAttempts) {
+          const msg = 'FZI generation timed out after 2 minutes';
+          console.error(msg);
+          clearFziPollTimer();
+          reject(new Error(msg));
+          return;
+        }
+
+        try {
+          const res = await fetch(url);
+          if (!res.ok) {
+            throw new Error(`Poll failed with status ${res.status}`);
+          }
+          const data = await res.json();
+
+          if (data.status === 'success') {
+            clearFziPollTimer();
+            resolve(data.result);
+          } else if (data.status === 'error') {
+            clearFziPollTimer();
+            reject(new Error(data.error || 'Task failed with unknown error'));
+          } else if (data.status === 'pending') {
+            pollStatus = `Loading FZI data... (${_pollAttempts}s)`;
+            _pollAttempts++;
+          } else {
+            clearFziPollTimer();
+            reject(new Error(`Unknown task status: ${data.status}`));
+          }
+        } catch (err: any) {
+          console.error('Poll request failed:', err);
+          pollStatus = `Retrying... (attempt ${_pollAttempts})`;
+          _pollAttempts++;
+        }
+      };
+
+      // Start immediate poll, then set interval
+      poll();
+      _pollTimer = window.setInterval(poll, POLL_INTERVAL);
+    });
   }
 
   async function loadJData() {
@@ -432,6 +521,13 @@
   <DepthFilterStatus />
 
   <div class="bg-panel rounded p-3">
+    {#if dataLoading}
+      <div class="text-sm text-blue-600">
+        {pollStatus ? pollStatus : 'Loading data...'}
+      </div>
+    {:else if dataError}
+      <div class="text-sm text-red-600 mb-3">{dataError}</div>
+    {/if}
     <div>
       <label for="cutoffs" class="text-sm">FZI Cutoffs</label>
       <input id="cutoffs" type="text" bind:value={cutoffsInput} class="input mt-1" placeholder="0.1, 1.0, 3.0, 6.0" />
@@ -510,11 +606,6 @@
       <div class="bg-surface rounded p-3 min-h-[400px]">
         <div class="font-medium mb-2">J Plot</div>
         <div class="text-sm text-muted-foreground">J vs SW with fitted curves per rock flag.</div>
-        {#if dataLoading}
-          <div class="text-sm text-blue-600 mb-3">Loading data...</div>
-        {:else if dataError}
-          <div class="text-sm text-red-600 mb-3">{dataError}</div>
-        {/if}
         <div bind:this={jContainer} class="mt-4 min-h-[300px] bg-white/5 rounded border border-border/30"></div>
       </div>
       <div class="bg-surface rounded p-3 min-h-[220px]">

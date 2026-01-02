@@ -16,13 +16,31 @@
   let zoneFilter: { enabled: boolean; zones: string[] } = { enabled: false, zones: [] };
   let lastProjectId: string | number | null = null;
 
+  // Polling state for FZI task
+  let _pollTimer: number | null = null;
+  let _pollAttempts = 0;
+  let _maxPollAttempts = 120;
+  let pollStatus: string | null = null;
+  const POLL_INTERVAL = 1000;
+
   const unsubscribe = workspace.subscribe((w) => {
     if (w?.zoneFilter && (zoneFilter.enabled !== w.zoneFilter.enabled || JSON.stringify(zoneFilter.zones) !== JSON.stringify(w.zoneFilter.zones))) {
       zoneFilter = { ...w.zoneFilter };
     }
   });
 
-  onDestroy(() => unsubscribe());
+  onDestroy(() => {
+    unsubscribe();
+    if (_pollTimer) clearInterval(_pollTimer);
+  });
+
+  function clearFziPollTimer() {
+    if (_pollTimer) {
+      clearInterval(_pollTimer);
+      _pollTimer = null;
+    }
+    pollStatus = null;
+  }
 
   function getFilteredData() {
     if (!data) return null;
@@ -66,11 +84,22 @@
     if (!projectId) return;
     dataLoading = true;
     dataError = null;
+    clearFziPollTimer();
     try {
-      const url = `${API_BASE}/quick_pp/database/projects/${projectId}/fzi_data`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(await res.text());
-      data = await res.json();
+      pollStatus = 'Initiating FZI data generation...';
+      const init = await initiateFZIDataGeneration();
+      const { task_id, result } = init;
+
+      let payload: any;
+      if (result) {
+        payload = result;
+      } else {
+        pollStatus = 'Waiting for FZI data...';
+        payload = await pollForFZIDataResult(task_id);
+      }
+
+      if (!payload || typeof payload !== 'object') throw new Error('Unexpected data format from backend');
+      data = payload;
       console.log('Loaded data:', data);
 
       // Load fits
@@ -86,7 +115,67 @@
       fits = null;
     } finally {
       dataLoading = false;
+      pollStatus = null;
+      clearFziPollTimer();
     }
+  }
+
+  async function initiateFZIDataGeneration(): Promise<{ task_id: string; result?: any }> {
+    const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/fzi_data/generate`, {
+      method: 'POST',
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    if (!data.task_id) throw new Error('No task_id returned from server');
+    return { task_id: data.task_id, result: data.result };
+  }
+
+  async function pollForFZIDataResult(taskId: string): Promise<any> {
+    const url = `${API_BASE}/quick_pp/database/projects/${projectId}/fzi_data/result/${taskId}`;
+
+    return new Promise((resolve, reject) => {
+      _pollAttempts = 0;
+
+      const poll = async () => {
+        if (_pollAttempts >= _maxPollAttempts) {
+          const msg = 'FZI generation timed out after 2 minutes';
+          console.error(msg);
+          clearFziPollTimer();
+          reject(new Error(msg));
+          return;
+        }
+
+        try {
+          const res = await fetch(url);
+          if (!res.ok) {
+            throw new Error(`Poll failed with status ${res.status}`);
+          }
+          const data = await res.json();
+
+          if (data.status === 'success') {
+            clearFziPollTimer();
+            resolve(data.result);
+          } else if (data.status === 'error') {
+            clearFziPollTimer();
+            reject(new Error(data.error || 'Task failed with unknown error'));
+          } else if (data.status === 'pending') {
+            pollStatus = `Loading FZI data... (${_pollAttempts}s)`;
+            _pollAttempts++;
+          } else {
+            clearFziPollTimer();
+            reject(new Error(`Unknown task status: ${data.status}`));
+          }
+        } catch (err: any) {
+          console.error('Poll request failed:', err);
+          pollStatus = `Retrying... (attempt ${_pollAttempts})`;
+          _pollAttempts++;
+        }
+      };
+
+      // Start immediate poll, then set interval
+      poll();
+      _pollTimer = window.setInterval(poll, POLL_INTERVAL);
+    });
   }
 
   function plotPorePerm() {
@@ -232,6 +321,13 @@
 
   <!-- Save Button Section -->
   <div class="bg-panel rounded p-3 mb-3">
+    {#if dataLoading}
+      <div class="text-sm text-blue-600">
+        {pollStatus ? pollStatus : 'Loading data...'}
+      </div>
+    {:else if dataError}
+      <div class="text-sm text-red-600 mb-3">{dataError}</div>
+    {/if}
     <div class="flex-1">
       <div class="flex gap-2 items-end">
 
@@ -291,12 +387,6 @@
 
     <div class="font-semibold mb-2">Poro-Perm Crossplot with Fitted Curves</div>
     <div class="text-sm text-muted-foreground mb-3">Plot porosity vs permeability with fitted curves per ROCK_FLAG.</div>
-    
-    {#if dataLoading}
-      <div class="text-sm text-blue-600 mb-3">Loading data...</div>
-    {:else if dataError}
-      <div class="text-sm text-red-600 mb-3">{dataError}</div>
-    {/if}
 
     <div class="bg-surface rounded p-3 min-h-[400px]">
       <div bind:this={porePermContainer} class="w-full h-[500px] mx-auto"></div>

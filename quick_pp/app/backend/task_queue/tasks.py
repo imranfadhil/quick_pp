@@ -232,6 +232,170 @@ def process_merged_data(
         raise
 
 
+@celery_app.task(bind=True, name="quick_pp.tasks.process_fzi_data", acks_late=True)
+def process_fzi_data(self, project_id: int):
+    """Compute FZI input arrays (PHIT, PERM, zones, depths, well_names, rock_flags) for a project.
+
+    Returns a dict with keys: phit, perm, zones, well_names, depths, rock_flags
+    """
+    try:
+        connector = DBConnector(db_url=os.environ.get("QPP_DATABASE_URL"))
+        with connector.get_session() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+
+            all_well_names = proj.get_well_names()
+            if not all_well_names:
+                return {
+                    "phit": [],
+                    "perm": [],
+                    "zones": [],
+                    "well_names": [],
+                    "depths": [],
+                    "rock_flags": [],
+                }
+
+            well_names = []
+            depths_list = []
+            cpore_list = []
+            cperm_list = []
+            zones_list = []
+            rock_flags_list = []
+
+            for well_name in all_well_names:
+                try:
+                    df = proj.get_well_data_optimized(well_name)
+                except Exception:
+                    try:
+                        df = proj.get_well_data(well_name)
+                    except Exception:
+                        continue
+
+                if df.empty:
+                    # no data for this well
+                    continue
+
+                # Load ancillary (formation tops) to annotate ZONES
+                try:
+                    ancillary = proj.get_well_ancillary_data(well_name)
+                except Exception:
+                    ancillary = {}
+
+                if isinstance(ancillary, dict) and "formation_tops" in ancillary:
+                    tops_df = ancillary.get("formation_tops")
+                    if (
+                        isinstance(tops_df, pd.DataFrame)
+                        and not tops_df.empty
+                        and not df.empty
+                    ):
+                        df = df.copy()
+                        df["ZONES"] = pd.NA
+                        for _, top in tops_df.iterrows():
+                            try:
+                                top_depth = float(top.get("depth"))
+                                top_name = str(top.get("name"))
+                            except Exception:
+                                continue
+                            nearest_idx = (df["DEPTH"] - top_depth).abs().idxmin()
+                            df.at[nearest_idx, "ZONES"] = top_name
+                        df["ZONES"] = df["ZONES"].ffill()
+
+                # Find PHIT and PERM columns
+                phit_col = None
+                perm_col = None
+                rock_flag_col = None
+                for col in df.columns:
+                    if col.upper() in ["PHIT", "POROSITY", "POR"]:
+                        phit_col = col
+                    if col.upper() in ["PERM", "PERMEABILITY", "K"]:
+                        perm_col = col
+                    if col.upper() == "ROCK_FLAG":
+                        rock_flag_col = col
+
+                if not phit_col or not perm_col:
+                    continue
+
+                cpore = df[phit_col].dropna()
+                cperm = df[perm_col].dropna()
+
+                common_index = cpore.index.intersection(cperm.index)
+                cpore = cpore.loc[common_index]
+                cperm = cperm.loc[common_index]
+                depths = df.loc[common_index, "DEPTH"]
+
+                if "ZONES" in df.columns:
+                    zones = df.loc[common_index, "ZONES"].fillna("Unknown").tolist()
+                else:
+                    zones = ["Unknown"] * len(cpore)
+
+                if rock_flag_col:
+                    rock_flags = df.loc[common_index, rock_flag_col]
+                    rock_flags = rock_flags.where(pd.notna(rock_flags), None).tolist()
+                else:
+                    rock_flags = [None] * len(cpore)
+
+                if len(cpore) == 0:
+                    continue
+
+                well_names.extend([well_name] * len(cpore))
+                depths_list.extend(depths.tolist())
+                cpore_list.append(cpore)
+                cperm_list.append(cperm)
+                zones_list.extend(zones)
+                rock_flags_list.extend(rock_flags)
+
+            phit_all = pd.concat(cpore_list).tolist() if cpore_list else []
+            perm_all = pd.concat(cperm_list).tolist() if cperm_list else []
+
+            # sanitize lists to built-in types
+            phit_all = [
+                None
+                if (
+                    isinstance(x, float)
+                    and (pd.isna(x) or x == float("inf") or x == float("-inf"))
+                )
+                else (x.item() if hasattr(x, "item") else x)
+                for x in phit_all
+            ]
+            perm_all = [
+                None
+                if (
+                    isinstance(x, float)
+                    and (pd.isna(x) or x == float("inf") or x == float("-inf"))
+                )
+                else (x.item() if hasattr(x, "item") else x)
+                for x in perm_all
+            ]
+            depths_list = [
+                None
+                if (
+                    isinstance(x, float)
+                    and (pd.isna(x) or x == float("inf") or x == float("-inf"))
+                )
+                else (x.item() if hasattr(x, "item") else x)
+                for x in depths_list
+            ]
+
+            # coerce rock flags to ints when possible
+            rock_flags_list = [
+                int(x)
+                if (x is not None and not pd.isna(x) and str(x).strip() != "")
+                else None
+                for x in rock_flags_list
+            ]
+
+            return {
+                "phit": phit_all,
+                "perm": perm_all,
+                "zones": zones_list,
+                "well_names": well_names,
+                "depths": depths_list,
+                "rock_flags": rock_flags_list,
+            }
+    except Exception as exc:
+        logging.getLogger(__name__).exception("process_fzi_data failed: %s", exc)
+        raise
+
+
 @celery_app.task(bind=True, name="quick_pp.tasks.generate_well_plot", acks_late=True)
 def generate_well_plot(
     self,

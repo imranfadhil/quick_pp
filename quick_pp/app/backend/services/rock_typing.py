@@ -1,10 +1,33 @@
 import pandas as pd
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 import quick_pp.database.objects as db_objects
-
+from quick_pp.app.backend.task_queue.celery_app import celery_app, is_broker_available
+from quick_pp.app.backend.task_queue.tasks import process_fzi_data
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_list
+
+
+# Simple local sanitizer for JSON compatibility
+def _sanitize_for_json(obj):
+    import numpy as _np
+
+    if isinstance(obj, float):
+        if pd.isna(obj) or obj == float("inf") or obj == float("-inf"):
+            return None
+        return obj
+    elif isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(item) for item in obj]
+    elif isinstance(obj, (_np.floating, _np.integer)):
+        if isinstance(obj, _np.floating) and (
+            pd.isna(obj) or obj == float("inf") or obj == float("-inf")
+        ):
+            return None
+        return obj.item() if hasattr(obj, "item") else obj
+    return obj
 
 
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Rock Typing"])
@@ -164,6 +187,177 @@ async def get_fzi_data(project_id: int):
         raise HTTPException(
             status_code=500, detail=f"Failed to get FZI data: {e}"
         ) from e
+
+
+def _compute_fzi_data_sync(project_id: int) -> dict:
+    """Helper to compute FZI data synchronously (used by both the GET endpoint and sync fallback)."""
+    with get_db() as session:
+        proj = db_objects.Project.load(session, project_id=project_id)
+
+        all_well_names = proj.get_well_names()
+        if not all_well_names:
+            raise ValueError(f"No wells found for project {project_id}")
+
+        well_names = []
+        depths_list = []
+        cpore_list = []
+        cperm_list = []
+        zones_list = []
+        rock_flags_list = []
+
+        for well_name in all_well_names:
+            df = proj.get_well_data_optimized(well_name)
+            if df.empty:
+                raise ValueError(f"No data for project {project_id}")
+
+            # Load ancillary data (formation tops)
+            try:
+                ancillary = proj.get_well_ancillary_data(well_name)
+            except Exception:
+                ancillary = {}
+
+            tops_df = None
+            if isinstance(ancillary, dict) and "formation_tops" in ancillary:
+                tops_df = ancillary.get("formation_tops")
+                if (
+                    isinstance(tops_df, pd.DataFrame)
+                    and not tops_df.empty
+                    and not df.empty
+                ):
+                    df = df.copy()
+                    df["ZONES"] = pd.NA
+                    for _, top in tops_df.iterrows():
+                        try:
+                            top_depth = float(top.get("depth"))
+                            top_name = str(top.get("name"))
+                        except Exception:
+                            continue
+                        nearest_idx = (df["DEPTH"] - top_depth).abs().idxmin()
+                        df.at[nearest_idx, "ZONES"] = top_name
+                    df["ZONES"] = df["ZONES"].ffill()
+
+            phit_col = None
+            perm_col = None
+            rock_flag_col = None
+            for col in df.columns:
+                if col.upper() in ["PHIT", "POROSITY", "POR"]:
+                    phit_col = col
+                if col.upper() in ["PERM", "PERMEABILITY", "K"]:
+                    perm_col = col
+                if col.upper() == "ROCK_FLAG":
+                    rock_flag_col = col
+
+            if not phit_col or not perm_col:
+                continue
+
+            cpore = df[phit_col].dropna()
+            cperm = df[perm_col].dropna()
+
+            common_index = cpore.index.intersection(cperm.index)
+            cpore = cpore.loc[common_index]
+            cperm = cperm.loc[common_index]
+            depths = df.loc[common_index, "DEPTH"]
+
+            if "ZONES" in df.columns:
+                zones = df.loc[common_index, "ZONES"].fillna("Unknown").tolist()
+            else:
+                zones = ["Unknown"] * len(cpore)
+
+            if rock_flag_col:
+                rock_flags = df.loc[common_index, rock_flag_col]
+                rock_flags = rock_flags.where(pd.notna(rock_flags), None).tolist()
+            else:
+                rock_flags = [None] * len(cpore)
+
+            if len(cpore) == 0:
+                continue
+
+            well_names.extend([well_name] * len(cpore))
+            depths_list.extend(depths.tolist())
+            cpore_list.append(cpore)
+            cperm_list.append(cperm)
+            zones_list.extend(zones)
+            rock_flags_list.extend(rock_flags)
+
+        if not cpore_list or not cperm_list:
+            raise ValueError(
+                f"PHIT or PERM columns not found in project data. Available: {list(df.columns)}",
+            )
+
+        phit_all = pd.concat(cpore_list).tolist() if cpore_list else []
+        perm_all = pd.concat(cperm_list).tolist() if cperm_list else []
+
+        phit_all = sanitize_list(phit_all)
+        perm_all = sanitize_list(perm_all)
+        depths_list = sanitize_list(depths_list)
+        rock_flags_list = [
+            (
+                int(x)
+                if (not pd.isna(x) and x is not None and str(x).strip() != "")
+                else None
+            )
+            if (x is not None)
+            else None
+            for x in rock_flags_list
+        ]
+
+        return {
+            "phit": phit_all,
+            "perm": perm_all,
+            "zones": zones_list,
+            "well_names": well_names,
+            "depths": depths_list,
+            "rock_flags": rock_flags_list,
+        }
+
+
+@router.post("/fzi_data/generate", summary="Initiate async FZI data generation")
+async def initiate_fzi_data_generation(project_id: int):
+    """Start an async task to compute FZI arrays or compute synchronously if broker unavailable."""
+    try:
+        if is_broker_available():
+            task = process_fzi_data.apply_async(args=(project_id,))
+            return JSONResponse(content={"task_id": task.id})
+        else:
+            # synchronous fallback
+            result = _compute_fzi_data_sync(project_id)
+            return JSONResponse(
+                content={"task_id": "sync", "status": "success", "result": result}
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to initiate FZI generation: {e}"
+        ) from e
+
+
+@router.get("/fzi_data/result/{task_id}", summary="Poll for FZI generation result")
+async def get_fzi_data_result(task_id: str):
+    try:
+        if task_id == "sync":
+            return JSONResponse(content={"status": "success", "result": {}})
+
+        app = celery_app
+        task = app.AsyncResult(task_id)
+
+        if task.state == "PENDING":
+            return JSONResponse(content={"status": "pending"})
+        elif task.state == "SUCCESS":
+            result = task.result
+            result = _sanitize_for_json(result)
+            return JSONResponse(content={"status": "success", "result": result})
+        elif task.state == "FAILURE":
+            error_msg = str(task.info) if task.info else "Unknown error"
+            return JSONResponse(
+                content={"status": "error", "error": error_msg}, status_code=200
+            )
+        else:
+            return JSONResponse(content={"status": "pending", "state": task.state})
+    except Exception as e:
+        return JSONResponse(
+            content={"status": "error", "error": str(e)}, status_code=500
+        )
 
 
 @router.post("/save_rock_flags", summary="Save rock flags for project wells")
