@@ -26,6 +26,7 @@
   let measSystem: string = 'metric';
   let waterSalinity: number = 35000;
   let mParam: number = 2;
+  let rwParam: number = 0.1;
 
   let loading = false;
   let error: string | null = null;
@@ -43,6 +44,7 @@
   let waxmanChartData: Array<Record<string, any>> = [];
   let Plotly: any = null;
   let satPlotDiv: HTMLDivElement | null = null;
+  let pickettPlotDiv: HTMLDivElement | null = null;
   let saveLoadingSat = false;
   let saveMessageSat: string | null = null;
 
@@ -465,10 +467,73 @@
     }
   }
 
+  async function renderPickettPlot() {
+    if (!pickettPlotDiv) return;
+    const plt = await ensurePlotly();
+
+    // Extract Rt and PHIT from visible rows
+    const pts: {rt: number, phit: number}[] = [];
+    for (const r of visibleRows) {
+      const rt = Number(r.rt ?? r.RT ?? r.res ?? r.RES ?? NaN);
+      const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
+      if (rt > 0 && phit > 0) {
+        pts.push({rt, phit});
+      }
+    }
+
+    if (pts.length === 0) {
+      try { plt.purge(pickettPlotDiv); } catch (e) {}
+      return;
+    }
+
+    const traces: any[] = [];
+    
+    // Scatter plot of data
+    traces.push({
+      x: pts.map(p => p.rt),
+      y: pts.map(p => p.phit),
+      mode: 'markers',
+      type: 'scatter',
+      name: 'Data',
+      marker: { size: 4, color: 'blue', opacity: 0.5 }
+    });
+
+    // Generate Iso-saturation lines
+    const m = -mParam;
+    const phiLine = [0.001, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0];
+
+    for (let i = 1; i <=5; i++) {
+      const c = rwParam + (i - 1) * 0.2;
+      const sw = Number(rwParam / c * 100).toFixed(0);
+      const rtLine = phiLine.map(phi => (Math.pow(phi, m) * c));
+      traces.push({ x: rtLine, y: phiLine, mode: 'lines', name: `Sw=${sw}%`, line: { dash: 'dash', width: 1 } });
+    }
+
+    const layout = {
+      title: `Pickett Plot (m=${m}, Rw=${rwParam.toFixed(3)})`,
+      height: 300,
+      width: 600,
+      margin: { l: 50, r: 20, t: 30, b: 40 },
+      xaxis: { type: 'log', title: 'Rt (ohm.m)', range: [Math.log10(0.01), Math.log10(100)], dtick: 1 },
+      yaxis: { type: 'log', title: 'PHIT (v/v)', range: [Math.log10(0.001), Math.log10(1)], dtick: 1 },
+      showlegend: true,
+      legend: { x: 1, y: 1 },
+    };
+
+    try {
+      plt.react(pickettPlotDiv, traces, layout, { responsive: true });
+    } catch (e) {
+      plt.newPlot(pickettPlotDiv, traces, layout, { responsive: true });
+    }
+  }
+
   // Debounced render when chart data or container changes
-  $: if (satPlotDiv && (archieChartData?.length > 0 || waxmanChartData?.length > 0 || depthFilter)) {
+  $: if ((satPlotDiv || pickettPlotDiv) && (mParam || rwParam) && (archieChartData?.length > 0 || waxmanChartData?.length > 0 || depthFilter || visibleRows.length > 0)) {
     if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
-    renderDebounceTimer = setTimeout(() => renderSatPlot(), 150);
+    renderDebounceTimer = setTimeout(() => {
+      renderSatPlot();
+      renderPickettPlot();
+    }, 150);
   }
 
   async function saveSaturationResults() {
@@ -593,6 +658,21 @@
       {/if}
       <div class="grid grid-cols-2 gap-2 mb-3">
         <div>
+          <label class="text-sm" for="m-param">Cementation exponent, m</label>
+          <input id="m-param" type="number" class="input" bind:value={mParam} />
+        </div>
+        <div>
+          <label class="text-sm" for="rw-param">Formation water resistivity, Rw</label>
+          <input id="rw-param" type="number" class="input" bind:value={rwParam} />
+        </div>
+      </div>
+      <div class="font-medium text-sm mb-1">Pickett Plot</div>
+      <div class="bg-surface rounded p-2">
+        <div bind:this={pickettPlotDiv} class="w-full h-[300px]"></div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2 mb-3">
+        <div>
           <label class="text-sm" for="meas-system">Measurement system</label>
           <select id="meas-system" bind:value={measSystem} class="input">
             <option value="metric">Metric</option>
@@ -602,10 +682,6 @@
         <div>
           <label class="text-sm" for="water-salinity">Water salinity</label>
           <input id="water-salinity" type="number" class="input" bind:value={waterSalinity} />
-        </div>
-        <div>
-          <label class="text-sm" for="m-param">Archie/Waxman m parameter</label>
-          <input id="m-param" type="number" class="input" bind:value={mParam} />
         </div>
       </div>
 
