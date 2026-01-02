@@ -19,8 +19,15 @@
   let lastDepthFilter: any = null;
   let lastZoneFilter: any = null;
   let mounted = false;
+  let _pollTimer: number | null = null;
+  let _pollAttempts = 0;
+  let _maxPollAttempts = 120; // max 2 minutes with 1s polls
+  let pollStatus: string | null = null; // Track polling status for UI
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
+  const POLL_INTERVAL = 1000; // 1 second between polls
+  const MAX_RETRIES = 3;
+  const RETRY_DELAY = 2000; // 2 seconds before retry
 
   async function ensurePlotly() {
     if (!browser) throw new Error('Plotly can only be loaded in the browser');
@@ -31,10 +38,155 @@
     return Plotly;
   }
 
+  /**
+   * Initiate an async plot generation task and return the task ID
+   * Returns {task_id, result?} - result is only present if sync fallback was used
+   */
+  async function initiatePlotGeneration(retryCount = 0): Promise<{task_id: string, result?: any}> {
+    // Build URL with depth filter parameters
+    let url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/log/generate`;
+    
+    const params = new URLSearchParams();
+    if ($depthFilter?.enabled) {
+      if ($depthFilter.minDepth !== null) {
+        params.append('min_depth', String($depthFilter.minDepth));
+      }
+      if ($depthFilter.maxDepth !== null) {
+        params.append('max_depth', String($depthFilter.maxDepth));
+      }
+    }
+    if ($zoneFilter?.enabled && Array.isArray($zoneFilter.zones) && $zoneFilter.zones.length > 0) {
+      const encoded = $zoneFilter.zones.map((z) => String(z)).join(',');
+      params.append('zones', encoded);
+    }
+    if (params.toString()) {
+      url += '?' + params.toString();
+    }
+
+    try {
+      const res = await fetch(url, { method: 'POST' });
+      if (!res.ok) {
+        throw new Error(`Failed to initiate plot generation: ${res.statusText}`);
+      }
+      const data = await res.json();
+      if (!data.task_id) {
+        throw new Error('No task_id returned from server');
+      }
+      return {
+        task_id: data.task_id,
+        result: data.result // May be undefined if async task
+      };
+    } catch (err: any) {
+      if (retryCount < MAX_RETRIES) {
+        console.warn(`Initiation attempt ${retryCount + 1} failed, retrying...`, err);
+        await new Promise(r => setTimeout(r, RETRY_DELAY));
+        return initiatePlotGeneration(retryCount + 1);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Poll for the result of a plot generation task
+   */
+  async function pollForResult(taskId: string): Promise<any> {
+    const url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/log/result/${taskId}`;
+    
+    return new Promise((resolve, reject) => {
+      _pollAttempts = 0;
+      
+      const poll = async () => {
+        if (_pollAttempts >= _maxPollAttempts) {
+          const msg = 'Plot generation timed out after 2 minutes';
+          console.error(msg);
+          clearPollTimer();
+          reject(new Error(msg));
+          return;
+        }
+
+        try {
+          const res = await fetch(url);
+          if (!res.ok) {
+            throw new Error(`Poll failed with status ${res.status}`);
+          }
+          const data = await res.json();
+
+          if (data.status === 'success') {
+            clearPollTimer();
+            resolve(data.result);
+          } else if (data.status === 'error') {
+            clearPollTimer();
+            reject(new Error(data.error || 'Task failed with unknown error'));
+          } else if (data.status === 'pending') {
+            pollStatus = `Generating plot... (${_pollAttempts}s)`;
+            _pollAttempts++;
+            // Continue polling
+          } else {
+            clearPollTimer();
+            reject(new Error(`Unknown task status: ${data.status}`));
+          }
+        } catch (err: any) {
+          console.error('Poll request failed:', err);
+          // Continue polling on network errors
+          pollStatus = `Retrying... (attempt ${_pollAttempts})`;
+          _pollAttempts++;
+        }
+      };
+
+      // Start immediate poll, then set interval
+      poll();
+      _pollTimer = window.setInterval(poll, POLL_INTERVAL);
+    });
+  }
+
+  function clearPollTimer() {
+    if (_pollTimer) {
+      clearInterval(_pollTimer);
+      _pollTimer = null;
+    }
+    pollStatus = null;
+  }
+
+  /**
+   * Render the Plotly figure
+   */
+  function renderPlot(fig: any) {
+    if (!container) return;
+    
+    const config = { ...(fig.config || {}), responsive: true, scrollZoom: true };
+    const layout = { ...(fig.layout || {}), dragmode: fig.layout?.dragmode ?? 'zoom' };
+    
+    if ((Plotly as any).react) {
+      (Plotly as any).react(container, fig.data, layout, config);
+    } else {
+      (Plotly as any).newPlot(container, fig.data, layout, config);
+    }
+
+    // Setup ResizeObserver to call Plotly resize when container changes size
+    if (browser && typeof ResizeObserver !== 'undefined') {
+      if ((container as any)?._plotlyResizeObserver) {
+        try { (container as any)._plotlyResizeObserver.disconnect(); } catch (e) {}
+      }
+      const ro = new ResizeObserver(() => {
+        try {
+          if ((Plotly as any).Plots && (Plotly as any).Plots.resize) {
+            (Plotly as any).Plots.resize(container);
+          }
+        } catch (e) {
+          // ignore
+        }
+      });
+      ro.observe(container);
+      (container as any)._plotlyResizeObserver = ro;
+    }
+  }
+
   async function loadAndRender(forceRefresh = false) {
     if (!projectId || !wellName || !mounted || !container) return;
     loading = true;
     error = null;
+    pollStatus = null;
+    
     try {
       // Build cache key including filter state
       const filterKey = JSON.stringify({ depth: $depthFilter, zone: $zoneFilter });
@@ -46,74 +198,41 @@
       // Use cache if available and not forcing refresh
       if (!forceRefresh && cached) {
         fig = cached.data;
+        await ensurePlotly();
+        renderPlot(fig);
       } else {
-        // Build URL with depth filter parameters
-        let url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/log`;
+        // Ensure Plotly library is loaded in the browser
+        await ensurePlotly();
+        if (!Plotly) throw new Error('Failed to load Plotly library');
         
-        // Build query parameters for depth and zone filters
-        const params = new URLSearchParams();
-        if ($depthFilter?.enabled) {
-          if ($depthFilter.minDepth !== null) {
-            params.append('min_depth', String($depthFilter.minDepth));
-          }
-          if ($depthFilter.maxDepth !== null) {
-            params.append('max_depth', String($depthFilter.maxDepth));
-          }
+        // Initiate async task
+        pollStatus = 'Initiating plot generation...';
+        const initResponse = await initiatePlotGeneration();
+        const { task_id, result } = initResponse;
+        console.log('Plot generation task initiated with ID:', task_id);
+        
+        // Check if result was returned immediately (sync fallback)
+        if (result) {
+          console.log('Sync fallback: result received immediately');
+          fig = result;
+        } else {
+          // Poll for result
+          pollStatus = 'Waiting for plot generation...';
+          fig = await pollForResult(task_id);
         }
-        // Include zone filter if enabled - send as comma-separated `zones` param
-        if ($zoneFilter?.enabled && Array.isArray($zoneFilter.zones) && $zoneFilter.zones.length > 0) {
-          // encode individual zone values and join with comma
-          const encoded = $zoneFilter.zones.map((z) => String(z)).join(',');
-          params.append('zones', encoded);
-        }
-        if (params.toString()) {
-          url += '?' + params.toString();
-        }
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(await res.text());
-        fig = await res.json();
         
         // Cache the result
         setCachedPlot(projectId, cacheKey, fig);
-      }
-      // container is guaranteed to exist due to early return check
-      // ensure Plotly library is loaded in the browser
-      const PlotlyLib = await ensurePlotly();
-      if (!PlotlyLib) throw new Error('Failed to load Plotly library');
-      // Use Plotly.react if available for smoother updates; ensure responsive
-      // Enable scroll zoom and set a sensible default dragmode for the layout.
-      const config = { ...(fig.config || {}), responsive: true, scrollZoom: true };
-      const layout = { ...(fig.layout || {}), dragmode: fig.layout?.dragmode ?? 'zoom' };
-      if ((PlotlyLib as any).react) {
-        (PlotlyLib as any).react(container, fig.data, layout, config);
-      } else {
-        (PlotlyLib as any).newPlot(container, fig.data, layout, config);
-      }
-
-      // Setup ResizeObserver to call Plotly resize when container changes size
-      if (browser && typeof ResizeObserver !== 'undefined') {
-        // disconnect previous observer if any
-        if ((container as any)?._plotlyResizeObserver) {
-          try { (container as any)._plotlyResizeObserver.disconnect(); } catch (e) {}
-        }
-        const ro = new ResizeObserver(() => {
-          try {
-            if ((PlotlyLib as any).Plots && (PlotlyLib as any).Plots.resize) {
-              (PlotlyLib as any).Plots.resize(container);
-            }
-          } catch (e) {
-            // ignore
-          }
-        });
-        ro.observe(container);
-        // attach to container for later cleanup
-        (container as any)._plotlyResizeObserver = ro;
+        
+        // Render the plot
+        renderPlot(fig);
       }
     } catch (err: any) {
       console.error('Failed to render well plot', err);
       error = String(err?.message ?? err);
     } finally {
       loading = false;
+      pollStatus = null;
     }
   }
 
@@ -163,6 +282,7 @@
         clearInterval(_refreshTimer as any);
         _refreshTimer = null;
       }
+      clearPollTimer();
     } catch (e) {
       // ignore
     }
@@ -189,7 +309,7 @@
 <div class="ws-well-plot">
   <DepthFilterStatus />
   <div class="mb-2 flex items-center gap-2">
-    <button class="btn px-3 py-1 text-sm bg-gray-800 text-white rounded" onclick={() => loadAndRender(true)} aria-label="Refresh plot">Refresh</button>
+    <button class="btn px-3 py-1 text-sm bg-gray-800 text-white rounded" onclick={() => loadAndRender(true)} aria-label="Refresh plot" disabled={loading}>Refresh</button>
     <label class="text-sm flex items-center gap-1">
       <input type="checkbox" bind:checked={autoRefresh} />
       Auto-refresh
@@ -199,7 +319,9 @@
     {/if}
   </div>
   {#if loading}
-    <div class="text-sm">Loading well log…</div>
+    <div class="text-sm text-blue-600">
+      {pollStatus ? pollStatus : 'Loading well log…'}
+    </div>
   {:else if error}
     <div class="text-sm text-red-500">Error: {error}</div>
   {/if}
