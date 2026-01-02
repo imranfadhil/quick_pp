@@ -584,6 +584,13 @@
 
   {#if wellName}
     <div class="bg-panel rounded p-3">
+      {#if loading}
+        <div class="text-sm text-blue-600">
+          {pollStatus ? pollStatus : 'Loading well log…'}
+        </div>
+      {:else if error}
+        <div class="text-sm text-red-500 mb-2">Error: {error}</div>
+      {/if}
       <div class="grid grid-cols-2 gap-2 mb-3">
         <div>
           <label class="text-sm" for="meas-system">Measurement system</label>
@@ -616,10 +623,6 @@
           <div class="text-xs text-green-600 ml-3">{saveMessageSat}</div>
         {/if}
       </div>
-
-      {#if error}
-        <div class="text-sm text-red-500 mb-2">Error: {error}</div>
-      {/if}
 
       <div class="space-y-3">
         <div>

@@ -544,6 +544,13 @@
 
   {#if wellName}
     <div class="bg-panel rounded p-3">
+      {#if loading}
+        <div class="text-sm text-blue-600">
+          {pollStatus ? pollStatus : 'Loading well log…'}
+        </div>
+      {:else if error}
+        <div class="text-sm text-red-500 mb-2">Error: {error}</div>
+      {/if}
       <div class="grid grid-cols-3 gap-2 mb-3">
         <div class="col-span-1 min-w-0">
           <label class="text-xs" for="perm-method">Permeability method</label>
@@ -579,10 +586,6 @@
           {/if}
         </div>
       </div>
-
-      {#if error}
-        <div class="text-sm text-red-500 mb-2">Error: {error}</div>
-      {/if}
 
       <div class="space-y-3">
         <div>

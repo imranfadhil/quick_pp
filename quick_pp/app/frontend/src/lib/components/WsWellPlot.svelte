@@ -20,9 +20,11 @@
   let lastZoneFilter: any = null;
   let mounted = false;
   let _pollTimer: number | null = null;
-  let _pollAttempts = 0;
   let _maxPollAttempts = 120; // max 2 minutes with 1s polls
   let pollStatus: string | null = null; // Track polling status for UI
+  // Session counter to tie polling timers/status to a specific load/render call.
+  // Incrementing this ensures stale polling loops can't clear/override the UI state
+  let _currentSession = 0;
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
   const POLL_INTERVAL = 1000; // 1 second between polls
@@ -87,19 +89,21 @@
   }
 
   /**
-   * Poll for the result of a plot generation task
+   * Poll for the result of a plot generation task (session-aware)
+   * @param taskId task id returned from the server
+   * @param session numeric session id captured when the load was requested
    */
-  async function pollForResult(taskId: string): Promise<any> {
+  async function pollForResult(taskId: string, session: number): Promise<any> {
     const url = `${API_BASE}/quick_pp/plotter/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/log/result/${taskId}`;
-    
+
     return new Promise((resolve, reject) => {
-      _pollAttempts = 0;
-      
+      let attempts = 0;
+
       const poll = async () => {
-        if (_pollAttempts >= _maxPollAttempts) {
+        if (attempts >= _maxPollAttempts) {
           const msg = 'Plot generation timed out after 2 minutes';
           console.error(msg);
-          clearPollTimer();
+          if (session === _currentSession) clearPollTimer(session);
           reject(new Error(msg));
           return;
         }
@@ -112,39 +116,62 @@
           const data = await res.json();
 
           if (data.status === 'success') {
-            clearPollTimer();
-            resolve(data.result);
+            if (session === _currentSession) {
+              clearPollTimer(session);
+              resolve(data.result);
+            } else {
+              // stale session result - ignore
+              console.debug('Stale poll result ignored for session', session);
+            }
           } else if (data.status === 'error') {
-            clearPollTimer();
-            reject(new Error(data.error || 'Task failed with unknown error'));
+            if (session === _currentSession) {
+              clearPollTimer(session);
+              reject(new Error(data.error || 'Task failed with unknown error'));
+            } else {
+              console.debug('Stale poll error ignored for session', session);
+            }
           } else if (data.status === 'pending') {
-            pollStatus = `Generating plot... (${_pollAttempts}s)`;
-            _pollAttempts++;
+            if (session === _currentSession) {
+              pollStatus = `Generating plot... (${attempts}s)`;
+            }
+            attempts++;
             // Continue polling
           } else {
-            clearPollTimer();
-            reject(new Error(`Unknown task status: ${data.status}`));
+            if (session === _currentSession) {
+              clearPollTimer(session);
+              reject(new Error(`Unknown task status: ${data.status}`));
+            } else {
+              console.debug('Stale poll unknown status ignored for session', session);
+            }
           }
         } catch (err: any) {
           console.error('Poll request failed:', err);
           // Continue polling on network errors
-          pollStatus = `Retrying... (attempt ${_pollAttempts})`;
-          _pollAttempts++;
+          if (session === _currentSession) {
+            pollStatus = `Retrying... (attempt ${attempts})`;
+          }
+          attempts++;
         }
       };
 
-      // Start immediate poll, then set interval
+      // Start immediate poll, then set interval. Ensure previous interval is cleared first.
       poll();
+      if (_pollTimer) {
+        clearInterval(_pollTimer);
+      }
       _pollTimer = window.setInterval(poll, POLL_INTERVAL);
     });
   }
 
-  function clearPollTimer() {
+  function clearPollTimer(session?: number) {
     if (_pollTimer) {
       clearInterval(_pollTimer);
       _pollTimer = null;
     }
-    pollStatus = null;
+    // Only clear the visible poll status if this session is the active one
+    if (typeof session === 'undefined' || session === _currentSession) {
+      pollStatus = null;
+    }
   }
 
   /**
@@ -183,6 +210,9 @@
 
   async function loadAndRender(forceRefresh = false) {
     if (!projectId || !wellName || !mounted || !container) return;
+    const session = ++_currentSession;
+    // Clear any previous poll timers/state to prevent stale timers from mutating current UI
+    clearPollTimer();
     loading = true;
     error = null;
     pollStatus = null;
@@ -218,7 +248,7 @@
         } else {
           // Poll for result
           pollStatus = 'Waiting for plot generation...';
-          fig = await pollForResult(task_id);
+          fig = await pollForResult(task_id, session);
         }
         
         // Cache the result
@@ -231,8 +261,11 @@
       console.error('Failed to render well plot', err);
       error = String(err?.message ?? err);
     } finally {
-      loading = false;
-      pollStatus = null;
+      // Only clear loading/pollStatus if this is still the active session
+      if (session === _currentSession) {
+        loading = false;
+        pollStatus = null;
+      }
     }
   }
 
@@ -253,6 +286,16 @@
   $: if (browser && projectId && wellName) {
     // reactive: when inputs change reload (client-only)
     loadAndRender();
+  }
+
+  // Start/stop the auto-refresh timer when component is mounted or when autoRefresh/refreshInterval changes.
+  // Also trigger an immediate load when auto-refresh is enabled.
+  $: if (browser && mounted) {
+    scheduleAutoRefresh();
+    if (autoRefresh) {
+      // Kick off an immediate refresh if user enabled auto-refresh
+      loadAndRender();
+    }
   }
 
   // Reactive updates for filters

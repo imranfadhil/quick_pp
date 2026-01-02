@@ -1113,7 +1113,11 @@
 
   {#if wellName}
     <div class="bg-panel rounded p-3">
-      {#if error}
+      {#if loading}
+        <div class="text-sm text-blue-600">
+          {pollStatus ? pollStatus : 'Loading well log…'}
+        </div>
+      {:else if error}
         <div class="text-sm text-red-500 mb-2">Error: {error}</div>
       {/if}
 

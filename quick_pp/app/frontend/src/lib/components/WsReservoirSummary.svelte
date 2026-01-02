@@ -371,6 +371,13 @@
 
   {#if wellName}
     <div class="bg-panel rounded p-3">
+      {#if loading}
+        <div class="text-sm text-blue-600">
+          {pollStatus ? pollStatus : 'Loading well log…'}
+        </div>
+      {:else if error}
+        <div class="text-sm text-red-500 mb-2">Error: {error}</div>
+      {/if}
       <div class="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label class="text-sm" for="minPhitInput">Min PHIT (cutoff)</label>
@@ -388,10 +395,6 @@
           <Button class="btn btn-primary" onclick={generateReport} disabled={loading} style={loading ? 'opacity:0.6; pointer-events:none;' : ''}>Generate Report</Button>
         </div>
       </div>
-
-      {#if error}
-        <div class="text-sm text-red-600 mb-2">Error: {error}</div>
-      {/if}
 
       <div class="overflow-x-auto">
         {#if filtered && filtered.length}
