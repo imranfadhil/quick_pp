@@ -83,9 +83,10 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
 
     # Use tqdm for progress bar during iterations
     for _ in tqdm(range(50), desc="Waxman-Smits iteration"):
-        fx = (
-            swt**n + rw * B * Qv * swt ** (n - 1) - (phit**-m * rw / rt)
-        )  # Ausburn, 1985
+        # fx = (
+        #     swt**n + rw * B * Qv * swt ** (n - 1) - (phit**-m * rw / rt)
+        # )  # Ausburn, 1985
+        fx = swt**n - (phit**-m * rw / rt) * (1 / (1 + rw * B * Qv * swt ** (n - 1)))
         delta_sat = abs(swt - swt_i) / 2
         swt_i = swt
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
@@ -765,6 +766,48 @@ def cwa_qvn_xplot(rt, phit, qvn, m=2.0, rw=0.2, slope=250):
     fig.tight_layout()
     ax.legend()
     return fig
+
+
+def cwa_vclay_phit_xplot(rt, phit, vclay, m=2.0, rw=0.2, slope=250):
+    """Generate a Cwa vs Vclay/PHIT ratio plot for shaly sand analysis.
+
+    This plot is used to graphically solve for water saturation in shaly sand models
+    where the clay volume to porosity ratio is a key parameter.
+
+    Args:
+        rt (np.ndarray or float): True resistivity of the formation [ohm.m].
+        phit (np.ndarray or float): Total porosity [fraction].
+        vclay (np.ndarray or float): Volume of clay [fraction].
+        m (float, optional): Cementation exponent. Defaults to 2.0.
+        rw (float, optional): Formation water resistivity [ohm.m]. Used for the trend line. Defaults to 0.2.
+        slope (float, optional): Slope of the interpretation line. Defaults to 250.0.
+    """
+    logger.debug("Creating Cwa vs Vclay/PHIT ratio plot")
+
+    # Calculate Cwa (Conductivity of water-saturated rock)
+    cwa = 1 / (rt * phit**m)
+
+    # Calculate Vclay/PHIT ratio
+    vclay_phit_ratio = vclay / phit
+
+    fig, ax = plt.subplots()
+    ax.set_title("Cwa vs Vclay/PHIT Ratio")
+    ax.scatter(vclay_phit_ratio, cwa, marker=".")
+
+    # Add a trend line for interpretation
+    x_line = np.linspace(
+        0, np.nanmax(vclay_phit_ratio[np.isfinite(vclay_phit_ratio)]), 100
+    )
+    y_line = 1 / rw + x_line * slope
+    ax.plot(x_line, y_line, "r--", label=f"m= {m} \nrw= {rw} \nslope= {slope}")
+
+    ax.set_xlabel("Vclay / PHIT Ratio")
+    ax.set_ylabel("Cwa (1 / ohm.m)")
+    ax.minorticks_on()
+    ax.grid(True)
+    fig.tight_layout()
+    ax.legend()
+    logger.debug("Cwa vs Vclay/PHIT ratio plot created")
 
 
 def swirr_xplot(swt, phit, c=0.0125, label="", log_log=False, title=""):
