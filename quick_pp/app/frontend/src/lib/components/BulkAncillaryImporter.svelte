@@ -153,7 +153,7 @@
     }
     if (type === 'well_surveys') {
       const surveys = preview.rows.map((r:any)=>({ md: Number(r[preview.detected.md] ?? r['md'] ?? r['MD'] ?? ''), inc: Number(r[preview.detected.inc] ?? r['inc'] ?? r['INC'] ?? ''), azim: Number(r[preview.detected.azim] ?? r['azim'] ?? r['AZIM'] ?? '') }));
-      return { surveys };
+      return { surveys, calculate_tvd: true };
     }
     // core_samples handled as per-sample payloads (returned as an array)
     if (type === 'core_samples') {
@@ -373,7 +373,7 @@
                       md: Number(getFieldValue(r, preview.detected?.md, ['md','MD']) ?? ''),
                       inc: Number(getFieldValue(r, preview.detected?.inc, ['inc','INC']) ?? ''),
                       azim: Number(getFieldValue(r, preview.detected?.azim, ['azim','AZIM']) ?? '')
-                    })) }
+                    })), calculate_tvd: true }
                   : {};
             const subQs = `?well_name=${encodeURIComponent(String(wn))}`;
             // If this is a core samples import, build samples for this well and POST per-sample to core_samples endpoint

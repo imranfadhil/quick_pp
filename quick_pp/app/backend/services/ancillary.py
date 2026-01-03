@@ -515,7 +515,7 @@ def list_well_surveys_project(project_id: int, well_name: Optional[str] = Query(
 def add_well_surveys_project(
     project_id: int,
     well_name: Optional[str] = Query(None),
-    payload: Dict[str, List[Dict[str, Any]]] = Body(...),
+    payload: Dict[str, Any] = Body(...),
 ):
     if not isinstance(payload, dict) or "surveys" not in payload:
         raise HTTPException(
@@ -523,16 +523,47 @@ def add_well_surveys_project(
         )
     surveys = payload.get("surveys")
     target_well = well_name or payload.get("well_name")
+    calculate_tvd = payload.get("calculate_tvd", False)
+
     if not target_well:
         raise HTTPException(
             status_code=400,
             detail="well_name must be provided as query parameter or in payload",
         )
     try:
+        try:
+            import wellpathpy as wpp
+        except ImportError as e:
+            raise ImportError(
+                "wellpathpy required for TVD calculation. Install: pip install wellpathpy"
+            ) from e
+
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             well.add_well_surveys(surveys)
+
+            # Add TVD curve data if available or to be calculated
+            if calculate_tvd:
+                # Calculate TVD using wellpathpy minimum curvature method
+                surveys_sorted = sorted(surveys, key=lambda x: x["md"])
+                mds = np.array([s["md"] for s in surveys_sorted])
+                incs = np.array([s["inc"] for s in surveys_sorted])
+                azims = np.array([s["azim"] for s in surveys_sorted])
+
+                # Use wellpathpy to calculate TVD
+                dev_survey = wpp.deviation(mds, incs, azims)
+                well_depth = well.get_curve_data(["WELL_NAME"])["depth"]
+                well_depth = well_depth[
+                    (well_depth >= mds.min()) & (well_depth <= mds.max())
+                ]
+                tvds = dev_survey.minimum_curvature().resample(well_depth).depth
+                tvd_data = dict(zip(well_depth, tvds, strict=True))
+
+            # Store TVD as curve data
+            if tvd_data:
+                well.add_curve_data("TVD", tvd_data, unit="m")
+
             return {
                 "created": [
                     {
@@ -589,11 +620,7 @@ def delete_well_survey_project(
     summary="Upload CSV/Excel and return parsed preview for well surveys (optional well_name)",
     tags=["Well Surveys"],
 )
-def well_surveys_preview_project(
-    project_id: int,
-    well_name: Optional[str] = Query(None),
-    file: UploadFile = File(...),
-):
+def well_surveys_preview_project(file: UploadFile = File(...)):
     """Return a preview (first 50 rows) and detected columns from uploaded CSV/Excel file."""
     try:
         content = file.file.read().decode(errors="ignore")
@@ -770,9 +797,12 @@ def upload_well_surveys_project(
 
                 # Use wellpathpy to calculate TVD
                 dev_survey = wpp.deviation(mds, incs, azims)
-                tvds = dev_survey.minimum_curvature().depth
-
-                tvd_data = dict(zip(mds, tvds, strict=True))
+                well_depth = well.get_curve_data(["WELL_NAME"])["depth"]
+                well_depth = well_depth[
+                    (well_depth >= mds.min()) & (well_depth <= mds.max())
+                ]
+                tvds = dev_survey.minimum_curvature().resample(well_depth).depth
+                tvd_data = dict(zip(well_depth, tvds, strict=True))
 
             # Store TVD as curve data
             if tvd_data:

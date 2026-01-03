@@ -1402,24 +1402,21 @@ class Well(object):
                                             'md', 'inc', and 'azim'.
         """
         logger.info(
-            f"Adding/updating {len(surveys)} well survey points for well '{self.name}'."
+            f"Replacing all survey points for well '{self.name}' with {len(surveys)} new points."
         )
+
+        # Delete all existing surveys for this well to ensure a full replacement
+        self.db_session.query(ORMWellSurvey).filter_by(well_id=self.well_id).delete()
+        self.db_session.flush()
+
         for survey_data in surveys:
             if not all(k in survey_data for k in ["md", "inc", "azim"]):
                 logger.warning(f"Skipping invalid well survey data: {survey_data}")
                 continue
 
-            orm_survey = self.db_session.scalar(
-                select(ORMWellSurvey).filter_by(
-                    well_id=self.well_id, md=survey_data["md"]
-                )
-            )
-            if orm_survey:
-                orm_survey.inc = survey_data["inc"]
-                orm_survey.azim = survey_data["azim"]
-            else:
-                orm_survey = ORMWellSurvey(well_id=self.well_id, **survey_data)
-                self.db_session.add(orm_survey)
+            # Create and add new survey point
+            orm_survey = ORMWellSurvey(well_id=self.well_id, **survey_data)
+            self.db_session.add(orm_survey)
 
     def get_well_surveys(self) -> pd.DataFrame:
         """Retrieves all well survey points for the well as a DataFrame."""

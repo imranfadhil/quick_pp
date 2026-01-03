@@ -1,22 +1,20 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { Button } from '$lib/components/ui/button/index.js';
   import BulkAncillaryImporter from './BulkAncillaryImporter.svelte';
   
   export let projectId: string | number;
   export let wellName: string | string[] = '';
 
-  function buildWellNameQs(): string {
-    if (!wellName) return '';
-    const names = Array.isArray(wellName) ? wellName.map(String) : [String(wellName)];
+  function buildWellQs(w?: string | string[]): string {
+    const target = w !== undefined && w !== null ? w : wellName;
+    if (!target) return '';
+    const names = Array.isArray(target) ? target.map(String) : [String(target)];
     if (names.length === 0) return '';
     return '?' + names.map(n => `well_name=${encodeURIComponent(String(n))}`).join('&');
   }
 
   const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
-  let surveys: Array<{md:number, inc:number, azim:number}> = [];
-  let loading = false;
   let uploading = false;
   let error: string | null = null;
 
@@ -28,41 +26,8 @@
   let manualError: string | null = null;
   let manualSelectedWell: string | null = null;
 
-  async function loadSurveys() {
-    if (!projectId) return;
-    loading = true;
-    error = null;
-    try {
-      const res = await fetch(
-        `${API_BASE}/quick_pp/database/projects/${projectId}/well_surveys`
-      );
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      surveys = data.well_surveys || [];
-    } catch (err: any) {
-      error = String(err?.message ?? err);
-    } finally {
-      loading = false;
-    }
-  }
-
-  async function deleteSurvey(md: number) {
-    if (!confirm(`Delete survey point at MD ${md}?`)) return;
-    loading = true;
-    error = null;
-    try {
-      const qs = buildWellNameQs();
-      const res = await fetch(
-        `${API_BASE}/quick_pp/database/projects/${projectId}/well_surveys/${md}${qs}`,
-        { method: 'DELETE' }
-      );
-      if (!res.ok) throw new Error(await res.text());
-      await loadSurveys();
-    } catch (err: any) {
-      error = String(err?.message ?? err);
-    } finally {
-      loading = false;
-    }
+  $: if (wellName && manualSelectedWell == null) {
+    manualSelectedWell = Array.isArray(wellName) ? String(wellName[0]) : String(wellName);
   }
 
   async function addManualSurvey() {
@@ -85,13 +50,13 @@
 
     uploading = true;
     try {
-      const qs = `?well_name=${encodeURIComponent(String(manualSelectedWell))}`;
+      const qs = buildWellQs(String(manualSelectedWell));
       const payload = {
         file_content: btoa(`MD,Inc,Azim\n${md},${inc},${azim}`),
         md_column: 'MD',
         inc_column: 'Inc',
         azim_column: 'Azim',
-        calculate_tvd: false
+        calculate_tvd: true
       };
 
       const res = await fetch(
@@ -110,7 +75,6 @@
       manualInc = '';
       manualAzim = '';
       manualMode = false;
-      await loadSurveys();
       error = 'Survey point added successfully';
     } catch (err: any) {
       manualError = String(err?.message ?? err);
@@ -118,38 +82,6 @@
       uploading = false;
     }
   }
-
-  async function calculateTvd() {
-    if (!surveys.length) {
-      error = 'No survey points available to calculate TVD';
-      return;
-    }
-
-    loading = true;
-    error = null;
-    try {
-      const res = await fetch(
-        `${API_BASE}/quick_pp/database/projects/${projectId}/well_surveys/calculate_tvd`,
-        { method: 'POST' }
-      );
-      if (!res.ok) throw new Error(await res.text());
-      const result = await res.json();
-      error = `TVD calculated for ${result.wells_processed} well(s): ${result.tvd_points_saved || 0} total points saved`;
-      await loadSurveys();
-    } catch (err: any) {
-      error = String(err?.message ?? err);
-    } finally {
-      loading = false;
-    }
-  }
-
-  $: if (projectId) {
-    loadSurveys();
-  }
-
-  onMount(() => {
-    if (projectId) loadSurveys();
-  });
 </script>
 
 <div class="deviation-survey space-y-4">
@@ -247,56 +179,4 @@
     <!-- Bulk Import Mode -->
     <BulkAncillaryImporter {projectId} type="well_surveys" />
   {/if}
-
-  <!-- Survey List Section -->
-  <div class="space-y-2">
-    <div class="flex justify-between items-center">
-      <div class="text-sm font-medium">Survey Points ({surveys.length})</div>
-      <Button
-        variant="outline"
-        size="sm"
-        onclick={calculateTvd}
-        disabled={loading || surveys.length === 0}
-      >
-        {loading ? 'Calculating...' : 'Calculate TVD'}
-      </Button>
-    </div>
-    {#if loading && surveys.length === 0}
-      <div class="text-sm text-muted-foreground">Loading...</div>
-    {:else if surveys.length === 0}
-      <div class="text-sm text-muted-foreground">No survey points loaded</div>
-    {:else}
-      <div class="bg-black/20 rounded p-2 max-h-60 overflow-y-auto text-xs">
-        <table class="w-full">
-          <thead>
-            <tr class="border-b border-white/10">
-              <th class="px-2 py-1 text-left">MD</th>
-              <th class="px-2 py-1 text-left">Inc</th>
-              <th class="px-2 py-1 text-left">Azim</th>
-              <th class="px-2 py-1 text-left">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each surveys as s}
-              <tr class="border-b border-white/10">
-                <td class="px-2 py-1">{s.md.toFixed(2)}</td>
-                <td class="px-2 py-1">{s.inc.toFixed(2)}</td>
-                <td class="px-2 py-1">{s.azim.toFixed(2)}</td>
-                <td class="px-2 py-1">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onclick={() => deleteSurvey(s.md)}
-                    disabled={loading}
-                  >
-                    Delete
-                  </Button>
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
-    {/if}
-  </div>
 </div>

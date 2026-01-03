@@ -38,6 +38,7 @@
   let showSummaryCore = false;
   let showSummaryPressure = false;
   let showSummaryContacts = false;
+  let showSummaryDeviation = false;
   // Well summaries
   let wellSummaries: Array<any> = [];
   let summariesLoading = false;
@@ -543,6 +544,26 @@
                           hideControls={true}
                           columnOrder={['well_name', 'depth', 'name']}
                           columnLabels={{ name: 'Contact', depth: 'Depth', well_name: 'Well' }}
+                        />
+                      </div>
+                    {/if}
+                  </div>
+
+                  <div class="accordion-item bg-surface rounded">
+                    <Button variant="ghost" class="w-full flex justify-between items-center p-2" onclick={() => (showSummaryDeviation = !showSummaryDeviation)} aria-expanded={showSummaryDeviation}>
+                      <div class="font-medium">Deviation Survey</div>
+                      <div class="text-sm">{showSummaryDeviation ? 'Hide' : 'Show'}</div>
+                    </Button>
+                    {#if showSummaryDeviation}
+                      <div class="p-2">
+                        <DataSummary
+                          projectId={selectedProject?.project_id ?? ''}
+                          wellName={selectedWellName ?? ''}
+                          type="well_surveys"
+                          label="Deviation Survey"
+                          hideControls={true}
+                          columnOrder={['well_name', 'md', 'inc', 'azim']}
+                          columnLabels={{ well_name: 'Well', md: 'MD', inc: 'Inc', azim: 'Azim' }}
                         />
                       </div>
                     {/if}
