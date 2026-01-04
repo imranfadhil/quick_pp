@@ -422,16 +422,14 @@ async def estimate_swt_waxman_smits(inputs: WaxmanSmitsInput) -> List[Dict[str, 
         input_df["phit"] = input_df["phit"].astype(np.float64)
         input_df["qv"] = input_df["qv"].astype(np.float64)
         input_df["b"] = input_df["b"].astype(np.float64)
-        input_df["m"] = input_df["m"].astype(np.int_)
-        # Use the first value of m for all records if function expects a scalar
-        m_value = int(input_df["m"].iloc[0])
+        input_df["m"] = input_df["m"].astype(np.float64)
         swt = waxman_smits_saturation(
             np.asarray(input_df["rt"]),
             np.asarray(input_df["rw"]),
             np.asarray(input_df["phit"]),
             np.asarray(input_df["qv"]),
             np.asarray(input_df["b"]),
-            m_value,
+            np.asarray(input_df["m"]),
         )
         if np.isscalar(swt):
             result_list = [_safe_float(swt)]
@@ -482,12 +480,13 @@ async def estimate_swt_archie(inputs: ArchieInput) -> List[Dict[str, float]]:
         input_df["rt"] = input_df["rt"].astype(np.float64)
         input_df["rw"] = input_df["rw"].astype(np.float64)
         input_df["phit"] = input_df["phit"].astype(np.float64)
+        input_df["m"] = input_df["m"].astype(np.float64)
         swt = archie_saturation(
             np.asarray(input_df["rt"]),
             np.asarray(input_df["rw"]),
             np.asarray(input_df["phit"]),
             1,
-            2,
+            np.asarray(input_df["m"]),
             2,
         )
         if np.isscalar(swt):

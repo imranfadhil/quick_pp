@@ -5,12 +5,14 @@ from typing import Any, Generator
 
 from quick_pp.database.db_connector import DBConnector
 
+
 log = logging.getLogger(__name__)
 
 
 # Initialize application-wide DBConnector singleton
 _DB_URL = os.environ.get("QPP_DATABASE_URL", None)
 _connector = DBConnector(_DB_URL)
+_connector.setup_db()
 
 
 @contextmanager

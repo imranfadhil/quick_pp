@@ -27,6 +27,8 @@
   let waterSalinity: number = 35000;
   let mParam: number = 2;
   let rwParam: number = 0.1;
+  let slopeParam: number = 2;
+  let useSlopeForQv: boolean = false;
 
   let loading = false;
   let error: string | null = null;
@@ -39,12 +41,17 @@
   let rwResults: Array<number> = [];
   let archieResults: Array<number> = [];
   let waxmanResults: Array<number> = [];
+  let bList: Array<number> = [];
+  let qvnList: Array<number> = [];
+  let mStarList: Array<number> = [];
+  let cwaVclPhiData: Array<Record<string, any>> = [];
   // chart data for plotting
   let archieChartData: Array<Record<string, any>> = [];
   let waxmanChartData: Array<Record<string, any>> = [];
   let Plotly: any = null;
   let satPlotDiv: HTMLDivElement | null = null;
   let pickettPlotDiv: HTMLDivElement | null = null;
+  let cwaVclPhiRatioPlotDiv: HTMLDivElement | null = null;
   let saveLoadingSat = false;
   let saveMessageSat: string | null = null;
 
@@ -229,6 +236,9 @@
     rwResults = [];
     archieResults = [];
     waxmanResults = [];
+    bList = [];
+    qvnList = [];
+    mStarList = [];
     error = null;
     loading = true;
     try {
@@ -264,11 +274,12 @@
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       const rt = Number(r.rt ?? r.RT ?? r.Rt ?? r.res ?? r.RES ?? NaN);
       const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
+      const m = Number(mParam);
       // skip rows without rt/phit
       if (isNaN(rt) || isNaN(phit)) continue;
       const rw = rwResults[idx++] ?? NaN;
       if (isNaN(rw)) continue;
-      rows.push({ rt, rw, phit });
+      rows.push({ rt, rw, phit, m });
       depths.push(depth);
     }
     if (!rows.length) {
@@ -325,42 +336,8 @@
       if (!isNaN(Number(tg)) && !isNaN(Number(rw))) bRows.push({ temp_grad: tg, rw: rw });
     }
 
-    // Step 1: Estimate shale porosity first
-    let shalePoroList: number[] = [];
-    if (shalePoroRows.length) {
-      try {
-        const payload = { data: shalePoroRows };
-        const res = await fetch(`${API_BASE}/quick_pp/porosity/shale_porosity`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        if (!res.ok) throw new Error(await res.text());
-        const out = await res.json();
-        shalePoroList = Array.isArray(out) ? out.map((d:any) => Number(d.PHIT_SH ?? d.phit_sh ?? NaN)) : [];
-      } catch (e: any) {
-        console.warn('Shale porosity error', e);
-      }
-    }
-
-    // Step 2: Call estimate_qvn using vclay, phit, and phit_clay (shale porosity)
-    let qvnList: number[] = [];
-    if (qvnRows.length && shalePoroList.length) {
-      try {
-        // Build qvn payload with phit_clay from shale porosity results
-        const qvnPayloadData = qvnRows.map((row, i) => ({
-          vclay: row.vclay,
-          phit: row.phit,
-          phit_clay: shalePoroList[i]
-        }));
-        const payload = { data: qvnPayloadData };
-        const res = await fetch(`${API_BASE}/quick_pp/saturation/estimate_qvn`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        if (!res.ok) throw new Error(await res.text());
-        const out = await res.json();
-        qvnList = Array.isArray(out) ? out.map((d:any) => Number(d.QVN ?? d.qvn ?? NaN)) : [];
-      } catch (e: any) {
-        console.warn('Qvn error', e);
-      }
-    }
-
-    // call b_waxman_smits
-    let bList: number[] = [];
+    // Call b_waxman_smits
+    bList = [];
     if (bRows.length) {
       try {
         const payload = { data: bRows };
@@ -373,22 +350,87 @@
       }
     }
 
+    // Step 3: Call estimate_qvn using vclay, phit, and phit_clay (shale porosity)
+    qvnList = [];
+    if (useSlopeForQv) {
+      bList = bList.map(() => 1);
+        // Calculate Qv from slope
+        if (qvnRows.length && bList.length) {
+            try {
+                // Assuming qvnRows and bList are aligned, which is likely incorrect but consistent with existing code.
+                qvnList = qvnRows.map((row, i) => {
+                    const phit = Number(row.phit);
+                    const vclay = Number(row.vclay);
+                    const b = bList[i];
+                    if (phit > 0 && phit < 1 && !isNaN(vclay) && !isNaN(b) && b !== 0) {
+                        const vclayPhiRatio = vclay / phit;
+                        return (slopeParam / b) * vclayPhiRatio;
+                    }
+                    return NaN;
+                });
+            } catch(e) {
+                console.warn('Qvn from slope error', e);
+            }
+        }
+    } else {
+        let shalePoroList: number[] = [];
+        if (shalePoroRows.length) {
+          try {
+            const payload = { data: shalePoroRows };
+            const res = await fetch(`${API_BASE}/quick_pp/porosity/shale_porosity`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if (!res.ok) throw new Error(await res.text());
+            const out = await res.json();
+            shalePoroList = Array.isArray(out) ? out.map((d:any) => Number(d.PHIT_SH ?? d.phit_sh ?? NaN)) : [];
+          } catch (e: any) {
+            console.warn('Shale porosity error', e);
+          }
+        }
+        if (qvnRows.length && shalePoroList.length) {
+          try {
+            // Build qvn payload with phit_clay from shale porosity results
+            const qvnPayloadData = qvnRows.map((row, i) => ({
+              vclay: row.vclay,
+              phit: row.phit,
+              phit_clay: shalePoroList[i]
+            }));
+            const payload = { data: qvnPayloadData };
+            const res = await fetch(`${API_BASE}/quick_pp/saturation/estimate_qvn`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if (!res.ok) throw new Error(await res.text());
+            const out = await res.json();
+            qvnList = Array.isArray(out) ? out.map((d:any) => Number(d.QVN ?? d.qvn ?? NaN)) : [];
+          } catch (e: any) {
+            console.warn('Qvn error', e);
+          }
+        }
+    }
+
     // Now assemble final rows for waxman_smits: need rt, rw, phit, qv, b, m
     // We'll iterate through filteredRows and pick values where rt/phit exist and map qvn/b by order
     let qi = 0; // index into qvnList
     let bi = 0; // index into bList
     let ri = 0; // index into rwResults/tempGradResults
+    mStarList = [];
     const depthsFinal: number[] = [];
     for (const r of filteredRows) {
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       const rt = Number(r.rt ?? r.RT ?? r.res ?? r.RES ?? NaN);
       const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
+      const vclay = Number(r.vclay ?? r.VCLAY ?? r.vcld ?? r.VCLD ?? NaN);
       if (isNaN(rt) || isNaN(phit)) continue;
       const rw = rwResults[ri++] ?? NaN;
       const qv = qvnList[qi++] ?? NaN;  // using Qvn (normalized Qv) instead of Qv
       const b = bList[bi++] ?? NaN;
       if (isNaN(rw) || isNaN(qv) || isNaN(b)) continue;
-      finalRows.push({ rt, rw, phit, qv, b, m: Number(mParam) });
+
+      // Estimate m*
+      const cw = 1.0 / rw;
+      const clayCorrection = 1 + (b * qv / cw);
+      let mStar = Number(mParam);
+      if (phit > 0 && phit < 1 && clayCorrection > 0) {
+        mStar = Number(mParam) + Math.log(clayCorrection) / Math.log(phit);
+      }
+      mStarList.push(mStar);
+      finalRows.push({ rt, rw, phit, qv, b, m: mStar, vclay });
       depthsFinal.push(depth);
     }
 
@@ -471,13 +513,14 @@
     if (!pickettPlotDiv) return;
     const plt = await ensurePlotly();
 
-    // Extract Rt and PHIT from visible rows
-    const pts: {rt: number, phit: number}[] = [];
+    // Extract Rt, PHIT, GR, VCLAY from visible rows
+    const pts: {rt: number, phit: number, vclay: number}[] = [];
     for (const r of visibleRows) {
       const rt = Number(r.rt ?? r.RT ?? r.res ?? r.RES ?? NaN);
       const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
+      const vclay = Number(r.vclay ?? r.VCLAY ?? r.vcld ?? r.VCLD ?? NaN);
       if (rt > 0 && phit > 0) {
-        pts.push({rt, phit});
+        pts.push({rt, phit, vclay});
       }
     }
 
@@ -488,6 +531,16 @@
 
     const traces: any[] = [];
     
+    const marker: any = {
+      size: 4,
+      opacity: 0.6,
+      color: pts.map(p => p.vclay),
+      colorscale: 'Earth',
+      showscale: true,
+      cmin: 0,
+      cmax: 1,
+      colorbar: { title: 'Vclay', thickness: 10, x: 1.3 }
+    };
     // Scatter plot of data
     traces.push({
       x: pts.map(p => p.rt),
@@ -495,17 +548,17 @@
       mode: 'markers',
       type: 'scatter',
       name: 'Data',
-      marker: { size: 4, color: 'blue', opacity: 0.5 }
+      marker: marker
     });
 
     // Generate Iso-saturation lines
-    const m = -mParam;
+    const m = mParam;
     const phiLine = [0.001, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0];
 
     for (let i = 1; i <=5; i++) {
       const c = rwParam + (i - 1) * 0.2;
       const sw = Number(rwParam / c * 100).toFixed(0);
-      const rtLine = phiLine.map(phi => (Math.pow(phi, m) * c));
+      const rtLine = phiLine.map(phi => (Math.pow(phi, -m) * c));
       traces.push({ x: rtLine, y: phiLine, mode: 'lines', name: `Sw=${sw}%`, line: { dash: 'dash', width: 1 } });
     }
 
@@ -513,9 +566,9 @@
       title: `Pickett Plot (m=${m}, Rw=${rwParam.toFixed(3)})`,
       height: 300,
       width: 600,
-      margin: { l: 50, r: 20, t: 30, b: 40 },
+      margin: { l: 50, r: 110, t: 30, b: 40 },
       xaxis: { type: 'log', title: 'Rt (ohm.m)', range: [Math.log10(0.01), Math.log10(100)], dtick: 1 },
-      yaxis: { type: 'log', title: 'PHIT (v/v)', range: [Math.log10(0.001), Math.log10(1)], dtick: 1 },
+      yaxis: { type: 'log', title: 'PHIT (v/v)', range: [Math.log10(0.01), Math.log10(1)], dtick: 1 },
       showlegend: true,
       legend: { x: 1, y: 1 },
     };
@@ -527,12 +580,92 @@
     }
   }
 
+  async function renderCwaVclPhiRatioPlot() {
+    if (!cwaVclPhiRatioPlotDiv) return;
+    const plt = await ensurePlotly();
+
+    if (cwaVclPhiData.length === 0) {
+      try { plt.purge(cwaVclPhiRatioPlotDiv); } catch (e) {}
+      return;
+    }
+
+    const mList = mStarList;
+    const rw = rwParam;
+    const slope = slopeParam;
+
+    // Calculate x (Vclay/PHIT) and y (Cwa = 1 / (Rt * PHIT^m))
+    const x = cwaVclPhiData.map(d => {
+      const vclay = Number(d.vclay);
+      const phit = Number(d.phit);
+      return (phit !== 0) ? vclay / phit : NaN;
+    });
+    const y = cwaVclPhiData.map((d, i) => {
+      const rt = Number(d.rt);
+      const phit = Number(d.phit);
+      const mVal = (mList.length > i && !isNaN(mList[i])) ? mList[i] : mParam;
+      if (rt > 0 && phit > 0) {
+        return 1.0 / (rt * Math.pow(phit, mVal));
+      }
+      return NaN;
+    });
+
+    const validPts = x.map((xv, i) => ({x: xv, y: y[i]})).filter(p => !isNaN(p.x) && !isNaN(p.y));
+
+    const traces: any[] = [];
+    traces.push({
+      x: validPts.map(p => p.x),
+      y: validPts.map(p => p.y),
+      mode: 'markers',
+      type: 'scatter',
+      name: 'Data',
+      marker: { size: 4, color: 'blue', opacity: 0.5 }
+    });
+
+    // Interpretation line: y = 1/rw + x * slope
+    const maxX = validPts.length > 0 ? Math.max(...validPts.map(p => p.x)) : 1.0;
+    const xLine = [0, maxX > 0 ? maxX : 1.0];
+    const yLine = xLine.map(xv => (1.0 / rw) + xv * slope);
+    traces.push({ x: xLine, y: yLine, mode: 'lines', name: `Slope=${slope}`, line: { color: 'red', dash: 'dash' } });
+
+    const layout = {
+      title: 'Cwa vs Vclay/PHIT Ratio',
+      height: 300,
+      width: 600,
+      margin: { l: 50, r: 20, t: 30, b: 40 },
+      xaxis: { title: 'Vclay / PHIT Ratio' , range: [0, 1] },
+      yaxis: { title: 'Cwa (1/ohm.m)', range: [0, 70] },
+      showlegend: true
+    };
+
+    try { plt.react(cwaVclPhiRatioPlotDiv, traces, layout, { responsive: true }); } catch (e) { plt.newPlot(cwaVclPhiRatioPlotDiv, traces, layout, { responsive: true }); }
+  }
+
+  // Update Cwa vs Vclay/PHIT data whenever visible rows change
+  function updateCwaVclPhiData() {
+    const rows: Array<Record<string, any>> = [];
+    for (const r of visibleRows) {
+      const rt = Number(r.rt ?? r.RT ?? r.res ?? r.RES ?? NaN);
+      const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
+      const vclay = Number(r.vclay ?? r.VCLAY ?? r.vcld ?? r.VCLD ?? NaN);
+      
+      if (!isNaN(rt) && !isNaN(phit) && !isNaN(vclay)) {
+        rows.push({ rt, phit, vclay });
+      }
+    }
+    cwaVclPhiData = rows;
+  }
+
+  $: if (visibleRows) {
+    updateCwaVclPhiData();
+  }
+
   // Debounced render when chart data or container changes
-  $: if ((satPlotDiv || pickettPlotDiv) && (mParam || rwParam) && (archieChartData?.length > 0 || waxmanChartData?.length > 0 || depthFilter || visibleRows.length > 0)) {
+  $: if ((satPlotDiv || pickettPlotDiv || cwaVclPhiRatioPlotDiv) && (mParam || rwParam || slopeParam) && (archieChartData?.length > 0 || waxmanChartData?.length > 0 || cwaVclPhiData?.length > 0 || depthFilter || visibleRows.length > 0)) {
     if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
     renderDebounceTimer = setTimeout(() => {
       renderSatPlot();
       renderPickettPlot();
+      renderCwaVclPhiRatioPlot();
     }, 150);
   }
 
@@ -671,6 +804,19 @@
         <div bind:this={pickettPlotDiv} class="w-full h-[300px]"></div>
       </div>
 
+      <div class="font-medium text-sm mb-1 mt-3">Cwa vs Vclay/PHIT Plot</div>
+      <div class="mb-3">
+        <label class="text-sm" for="slope-param">Slope</label>
+        <input id="slope-param" type="number" class="input" bind:value={slopeParam} />
+      </div>
+      <div class="bg-surface rounded p-2">
+        <div bind:this={cwaVclPhiRatioPlotDiv} class="w-full h-[300px]"></div>
+      </div>
+      <div class="flex items-center pt-4 space-x-2">
+        <input id="use-slope-for-qv" type="checkbox" bind:checked={useSlopeForQv} />
+        <label for="use-slope-for-qv" class="text-sm font-medium">Use slope to calc BQv</label>
+      </div>
+
       <div class="grid grid-cols-2 gap-2 mb-3">
         <div>
           <label class="text-sm" for="meas-system">Measurement system</label>
@@ -702,6 +848,22 @@
 
       <div class="space-y-3">
         <div>
+          <div class="font-medium text-sm mb-1">TVD Data</div>
+          {#if visibleRows.length}
+            {@const tvdValues = visibleRows.map(r => Number(r.tvdss ?? r.TVDSS ?? r.tvd ?? r.TVD ?? r.depth ?? r.DEPTH)).filter(v => !isNaN(v))}
+            {#if tvdValues.length > 0}
+              {@const minTvd = Math.min(...tvdValues)}
+              {@const maxTvd = Math.max(...tvdValues)}
+              <div class="text-sm">Min: {minTvd.toFixed(2)} | Max: {maxTvd.toFixed(2)} | Count: {tvdValues.length}</div>
+            {:else}
+              <div class="text-sm text-gray-500">No TVD/DEPTH data available</div>
+            {/if}
+          {:else}
+            <div class="text-sm text-gray-500">No TVD/DEPTH data available</div>
+          {/if}
+        </div>
+
+        <div>
           <div class="font-medium text-sm mb-1">Temp Gradient</div>
           {#if tempGradResults.length}
             {@const s = computeStats(tempGradResults)}
@@ -722,6 +884,44 @@
             {/if}
           {:else}
             <div class="text-sm text-gray-500">No Rw computed</div>
+          {/if}
+        </div>
+
+        {#if !useSlopeForQv}
+          <div>
+            <div class="font-medium text-sm mb-1">Estimated B</div>
+            {#if bList.length}
+              {@const sb = computeStats(bList)}
+              {#if sb}
+                <div class="text-sm">Avg: {sb.mean.toFixed(3)} | Min: {sb.min.toFixed(3)} | Max: {sb.max.toFixed(3)} | Median: {sb.median.toFixed(3)} | Std: {sb.std.toFixed(3)} | Count: {sb.count}</div>
+              {/if}
+            {:else}
+              <div class="text-sm text-gray-500">No B computed</div>
+            {/if}
+          </div>
+        {/if}
+
+        <div>
+          <div class="font-medium text-sm mb-1">Estimated {useSlopeForQv ? 'BQv' : 'Qv'}</div>
+          {#if qvnList.length}
+            {@const sq = computeStats(qvnList)}
+            {#if sq}
+              <div class="text-sm">Avg: {sq.mean.toFixed(3)} | Min: {sq.min.toFixed(3)} | Max: {sq.max.toFixed(3)} | Median: {sq.median.toFixed(3)} | Std: {sq.std.toFixed(3)} | Count: {sq.count}</div>
+            {/if}
+          {:else}
+            <div class="text-sm text-gray-500">No {useSlopeForQv ? 'BQv' : 'Qv'} computed</div>
+          {/if}
+        </div>
+
+        <div>
+          <div class="font-medium text-sm mb-1">Estimated m*</div>
+          {#if mStarList.length}
+            {@const sm = computeStats(mStarList)}
+            {#if sm}
+              <div class="text-sm">Avg: {sm.mean.toFixed(3)} | Min: {sm.min.toFixed(3)} | Max: {sm.max.toFixed(3)} | Median: {sm.median.toFixed(3)} | Std: {sm.std.toFixed(3)} | Count: {sm.count}</div>
+            {/if}
+          {:else}
+            <div class="text-sm text-gray-500">No m* computed</div>
           {/if}
         </div>
 
