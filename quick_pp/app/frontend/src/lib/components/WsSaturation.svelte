@@ -41,6 +41,9 @@
   let rwResults: Array<number> = [];
   let archieResults: Array<number> = [];
   let waxmanResults: Array<number> = [];
+  let bList: Array<number> = [];
+  let qvnList: Array<number> = [];
+  let mStarList: Array<number> = [];
   let cwaVclPhiData: Array<Record<string, any>> = [];
   // chart data for plotting
   let archieChartData: Array<Record<string, any>> = [];
@@ -233,6 +236,9 @@
     rwResults = [];
     archieResults = [];
     waxmanResults = [];
+    bList = [];
+    qvnList = [];
+    mStarList = [];
     error = null;
     loading = true;
     try {
@@ -268,11 +274,12 @@
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
       const rt = Number(r.rt ?? r.RT ?? r.Rt ?? r.res ?? r.RES ?? NaN);
       const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
+      const m = Number(mParam);
       // skip rows without rt/phit
       if (isNaN(rt) || isNaN(phit)) continue;
       const rw = rwResults[idx++] ?? NaN;
       if (isNaN(rw)) continue;
-      rows.push({ rt, rw, phit });
+      rows.push({ rt, rw, phit, m });
       depths.push(depth);
     }
     if (!rows.length) {
@@ -330,7 +337,7 @@
     }
 
     // Call b_waxman_smits
-    let bList: number[] = [];
+    bList = [];
     if (bRows.length) {
       try {
         const payload = { data: bRows };
@@ -344,8 +351,9 @@
     }
 
     // Step 3: Call estimate_qvn using vclay, phit, and phit_clay (shale porosity)
-    let qvnList: number[] = [];
+    qvnList = [];
     if (useSlopeForQv) {
+      bList = bList.map(() => 1);
         // Calculate Qv from slope
         if (qvnRows.length && bList.length) {
             try {
@@ -401,6 +409,7 @@
     let qi = 0; // index into qvnList
     let bi = 0; // index into bList
     let ri = 0; // index into rwResults/tempGradResults
+    mStarList = [];
     const depthsFinal: number[] = [];
     for (const r of filteredRows) {
       const depth = Number(r.depth ?? r.DEPTH ?? NaN);
@@ -412,7 +421,16 @@
       const qv = qvnList[qi++] ?? NaN;  // using Qvn (normalized Qv) instead of Qv
       const b = bList[bi++] ?? NaN;
       if (isNaN(rw) || isNaN(qv) || isNaN(b)) continue;
-      finalRows.push({ rt, rw, phit, qv, b, m: Number(mParam), vclay });
+
+      // Estimate m*
+      const cw = 1.0 / rw;
+      const clayCorrection = 1 + (b * qv / cw);
+      let mStar = Number(mParam);
+      if (phit > 0 && phit < 1 && clayCorrection > 0) {
+        mStar = Number(mParam) + Math.log(clayCorrection) / Math.log(phit);
+      }
+      mStarList.push(mStar);
+      finalRows.push({ rt, rw, phit, qv, b, m: mStar, vclay });
       depthsFinal.push(depth);
     }
 
@@ -560,7 +578,7 @@
       return;
     }
 
-    const m = mParam;
+    const mList = mStarList;
     const rw = rwParam;
     const slope = slopeParam;
 
@@ -570,11 +588,12 @@
       const phit = Number(d.phit);
       return (phit !== 0) ? vclay / phit : NaN;
     });
-    const y = cwaVclPhiData.map(d => {
+    const y = cwaVclPhiData.map((d, i) => {
       const rt = Number(d.rt);
       const phit = Number(d.phit);
+      const mVal = (mList.length > i && !isNaN(mList[i])) ? mList[i] : mParam;
       if (rt > 0 && phit > 0) {
-        return 1.0 / (rt * Math.pow(phit, m));
+        return 1.0 / (rt * Math.pow(phit, mVal));
       }
       return NaN;
     });
@@ -774,17 +793,17 @@
         <div bind:this={pickettPlotDiv} class="w-full h-[300px]"></div>
       </div>
 
-      <div>
-        <label class="text-sm" for="slope-param">Qvn Slope</label>
+      <div class="font-medium text-sm mb-1 mt-3">Cwa vs Vclay/PHIT Plot</div>
+      <div class="mb-3">
+        <label class="text-sm" for="slope-param">Slope</label>
         <input id="slope-param" type="number" class="input" bind:value={slopeParam} />
       </div>
-      <div class="font-medium text-sm mb-1 mt-3">Cwa vs Vclay/PHIT Plot</div>
       <div class="bg-surface rounded p-2">
         <div bind:this={cwaVclPhiRatioPlotDiv} class="w-full h-[300px]"></div>
       </div>
       <div class="flex items-center pt-4 space-x-2">
         <input id="use-slope-for-qv" type="checkbox" bind:checked={useSlopeForQv} />
-        <label for="use-slope-for-qv" class="text-sm font-medium">Use slope to calc Qv</label>
+        <label for="use-slope-for-qv" class="text-sm font-medium">Use slope to calc BQv</label>
       </div>
 
       <div class="grid grid-cols-2 gap-2 mb-3">
@@ -818,6 +837,22 @@
 
       <div class="space-y-3">
         <div>
+          <div class="font-medium text-sm mb-1">TVD Data</div>
+          {#if visibleRows.length}
+            {@const tvdValues = visibleRows.map(r => Number(r.tvdss ?? r.TVDSS ?? r.tvd ?? r.TVD ?? r.depth ?? r.DEPTH)).filter(v => !isNaN(v))}
+            {#if tvdValues.length > 0}
+              {@const minTvd = Math.min(...tvdValues)}
+              {@const maxTvd = Math.max(...tvdValues)}
+              <div class="text-sm">Min: {minTvd.toFixed(2)} | Max: {maxTvd.toFixed(2)} | Count: {tvdValues.length}</div>
+            {:else}
+              <div class="text-sm text-gray-500">No TVD/DEPTH data available</div>
+            {/if}
+          {:else}
+            <div class="text-sm text-gray-500">No TVD/DEPTH data available</div>
+          {/if}
+        </div>
+
+        <div>
           <div class="font-medium text-sm mb-1">Temp Gradient</div>
           {#if tempGradResults.length}
             {@const s = computeStats(tempGradResults)}
@@ -838,6 +873,42 @@
             {/if}
           {:else}
             <div class="text-sm text-gray-500">No Rw computed</div>
+          {/if}
+        </div>
+
+        <div>
+          <div class="font-medium text-sm mb-1">Estimated B</div>
+          {#if bList.length}
+            {@const sb = computeStats(bList)}
+            {#if sb}
+              <div class="text-sm">Avg: {sb.mean.toFixed(3)} | Min: {sb.min.toFixed(3)} | Max: {sb.max.toFixed(3)} | Median: {sb.median.toFixed(3)} | Std: {sb.std.toFixed(3)} | Count: {sb.count}</div>
+            {/if}
+          {:else}
+            <div class="text-sm text-gray-500">No B computed</div>
+          {/if}
+        </div>
+
+        <div>
+          <div class="font-medium text-sm mb-1">Estimated Qv</div>
+          {#if qvnList.length}
+            {@const sq = computeStats(qvnList)}
+            {#if sq}
+              <div class="text-sm">Avg: {sq.mean.toFixed(3)} | Min: {sq.min.toFixed(3)} | Max: {sq.max.toFixed(3)} | Median: {sq.median.toFixed(3)} | Std: {sq.std.toFixed(3)} | Count: {sq.count}</div>
+            {/if}
+          {:else}
+            <div class="text-sm text-gray-500">No Qv computed</div>
+          {/if}
+        </div>
+
+        <div>
+          <div class="font-medium text-sm mb-1">Estimated m*</div>
+          {#if mStarList.length}
+            {@const sm = computeStats(mStarList)}
+            {#if sm}
+              <div class="text-sm">Avg: {sm.mean.toFixed(3)} | Min: {sm.min.toFixed(3)} | Max: {sm.max.toFixed(3)} | Median: {sm.median.toFixed(3)} | Std: {sm.std.toFixed(3)} | Count: {sm.count}</div>
+            {/if}
+          {:else}
+            <div class="text-sm text-gray-500">No m* computed</div>
           {/if}
         </div>
 

@@ -83,10 +83,9 @@ def waxman_smits_saturation(rt, rw, phit, Qv=None, B=None, m=2, n=2):
 
     # Use tqdm for progress bar during iterations
     for _ in tqdm(range(50), desc="Waxman-Smits iteration"):
-        # fx = (
-        #     swt**n + rw * B * Qv * swt ** (n - 1) - (phit**-m * rw / rt)
-        # )  # Ausburn, 1985
-        fx = swt**n - (phit**-m * rw / rt) * (1 / (1 + rw * B * Qv * swt ** (n - 1)))
+        fx = (
+            swt**n + rw * B * Qv * swt ** (n - 1) - (phit**-m * rw / rt)
+        )  # Ausburn, 1985
         delta_sat = abs(swt - swt_i) / 2
         swt_i = swt
         swt = np.where(fx < 0, swt + delta_sat, swt - delta_sat)
@@ -685,6 +684,25 @@ def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
     )
     logger.debug(f"Indonesian apparent m range: {m.min():.3f} - {m.max():.3f}")
     return m
+
+
+def estimate_m_star(m_apparent, b_parameter, qv, rw, phi):
+    """
+    Estimates m* from an apparent Archie m in a shaly sand.
+    Note: This is a simplified approximation.
+    """
+    # Conductivity of water
+    cw = 1.0 / rw
+
+    # The factor by which clay increases conductivity
+    clay_correction_factor = 1 + (b_parameter * qv / cw)
+
+    # Since F = F* / clay_correction_factor
+    # and F = phi**-m, F* = phi**-m*
+    # We can derive:
+    m_star = m_apparent + np.log(clay_correction_factor) / np.log(phi)
+
+    return m_star
 
 
 def qv_phit_xplot(phit, qv):
