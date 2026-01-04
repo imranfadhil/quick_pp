@@ -513,13 +513,14 @@
     if (!pickettPlotDiv) return;
     const plt = await ensurePlotly();
 
-    // Extract Rt and PHIT from visible rows
-    const pts: {rt: number, phit: number}[] = [];
+    // Extract Rt, PHIT, GR, VCLAY from visible rows
+    const pts: {rt: number, phit: number, vclay: number}[] = [];
     for (const r of visibleRows) {
       const rt = Number(r.rt ?? r.RT ?? r.res ?? r.RES ?? NaN);
       const phit = Number(r.phit ?? r.PHIT ?? r.Phit ?? NaN);
+      const vclay = Number(r.vclay ?? r.VCLAY ?? r.vcld ?? r.VCLD ?? NaN);
       if (rt > 0 && phit > 0) {
-        pts.push({rt, phit});
+        pts.push({rt, phit, vclay});
       }
     }
 
@@ -530,6 +531,16 @@
 
     const traces: any[] = [];
     
+    const marker: any = {
+      size: 4,
+      opacity: 0.6,
+      color: pts.map(p => p.vclay),
+      colorscale: 'Earth',
+      showscale: true,
+      cmin: 0,
+      cmax: 1,
+      colorbar: { title: 'Vclay', thickness: 10, x: 1.3 }
+    };
     // Scatter plot of data
     traces.push({
       x: pts.map(p => p.rt),
@@ -537,7 +548,7 @@
       mode: 'markers',
       type: 'scatter',
       name: 'Data',
-      marker: { size: 4, color: 'blue', opacity: 0.5 }
+      marker: marker
     });
 
     // Generate Iso-saturation lines
@@ -555,7 +566,7 @@
       title: `Pickett Plot (m=${m}, Rw=${rwParam.toFixed(3)})`,
       height: 300,
       width: 600,
-      margin: { l: 50, r: 20, t: 30, b: 40 },
+      margin: { l: 50, r: 110, t: 30, b: 40 },
       xaxis: { type: 'log', title: 'Rt (ohm.m)', range: [Math.log10(0.01), Math.log10(100)], dtick: 1 },
       yaxis: { type: 'log', title: 'PHIT (v/v)', range: [Math.log10(0.01), Math.log10(1)], dtick: 1 },
       showlegend: true,
@@ -876,27 +887,29 @@
           {/if}
         </div>
 
-        <div>
-          <div class="font-medium text-sm mb-1">Estimated B</div>
-          {#if bList.length}
-            {@const sb = computeStats(bList)}
-            {#if sb}
-              <div class="text-sm">Avg: {sb.mean.toFixed(3)} | Min: {sb.min.toFixed(3)} | Max: {sb.max.toFixed(3)} | Median: {sb.median.toFixed(3)} | Std: {sb.std.toFixed(3)} | Count: {sb.count}</div>
+        {#if !useSlopeForQv}
+          <div>
+            <div class="font-medium text-sm mb-1">Estimated B</div>
+            {#if bList.length}
+              {@const sb = computeStats(bList)}
+              {#if sb}
+                <div class="text-sm">Avg: {sb.mean.toFixed(3)} | Min: {sb.min.toFixed(3)} | Max: {sb.max.toFixed(3)} | Median: {sb.median.toFixed(3)} | Std: {sb.std.toFixed(3)} | Count: {sb.count}</div>
+              {/if}
+            {:else}
+              <div class="text-sm text-gray-500">No B computed</div>
             {/if}
-          {:else}
-            <div class="text-sm text-gray-500">No B computed</div>
-          {/if}
-        </div>
+          </div>
+        {/if}
 
         <div>
-          <div class="font-medium text-sm mb-1">Estimated Qv</div>
+          <div class="font-medium text-sm mb-1">Estimated {useSlopeForQv ? 'BQv' : 'Qv'}</div>
           {#if qvnList.length}
             {@const sq = computeStats(qvnList)}
             {#if sq}
               <div class="text-sm">Avg: {sq.mean.toFixed(3)} | Min: {sq.min.toFixed(3)} | Max: {sq.max.toFixed(3)} | Median: {sq.median.toFixed(3)} | Std: {sq.std.toFixed(3)} | Count: {sq.count}</div>
             {/if}
           {:else}
-            <div class="text-sm text-gray-500">No Qv computed</div>
+            <div class="text-sm text-gray-500">No {useSlopeForQv ? 'BQv' : 'Qv'} computed</div>
           {/if}
         </div>
 
