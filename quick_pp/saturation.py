@@ -355,33 +355,35 @@ def estimate_b_waxman_smits(T, rw):
     return B
 
 
-def estimate_rw_temperature_salinity(temperature_gradient, water_salinity):
+def estimate_rw_temperature_salinity(temp_formation, water_salinity):
     """Estimate formation water resistivity (Rw) from temperature and salinity.
+    Based on Crain’s Petrophysical Handbook, which attributes the algorithm to the Bateman and Konen (1977) method.
 
     This function uses a common empirical formula to approximate Rw.
 
     Args:
-        temperature_gradient (np.ndarray or float): Formation temperature [degrees Celsius].
+        temp_formation (np.ndarray or float): Formation temperature [degrees Celsius].
         water_salinity (np.ndarray or float): Water salinity [parts per million (ppm)].
 
     Returns:
         np.ndarray or float: Estimated formation water resistivity [ohm.m].
     """
     logger.debug("Estimating Rw from temperature and salinity")
-    rw = (400000 / water_salinity) ** 0.88 / temperature_gradient
+    temp_formation = temp_formation * 9 / 5 + 32
+    rw = (400000 / (water_salinity * temp_formation)) ** 0.88
     logger.debug(
         f"Formation water resistivity range: {rw.min():.3f} - {rw.max():.3f} ohm.m"
     )
     return rw
 
 
-def estimate_rw_surface(temperature_gradient, rw_surface, temp_surface=20):
+def estimate_rw_surface(temp_formation, rw_surface, temp_surface=20):
     """Estimate downhole formation water resistivity (Rw) from surface measurements.
 
     This uses Arps' formula to adjust resistivity for temperature.
 
     Args:
-        temperature_gradient (np.ndarray or float): Formation temperature [degrees Celsius].
+        temp_formation (np.ndarray or float): Formation temperature [degrees Celsius].
         rw_surface (float): Water resistivity measured at surface temperature [ohm.m].
         temp_surface (float, optional): Surface temperature [degrees Celsius]. Defaults to 20.
 
@@ -391,7 +393,7 @@ def estimate_rw_surface(temperature_gradient, rw_surface, temp_surface=20):
     logger.debug(
         "Estimating Rw from surface temperature and resistivity using Arps' formula"
     )
-    rw = rw_surface * (temp_surface + 21.5) / (temperature_gradient + 21.5)
+    rw = rw_surface * (temp_surface + 21.5) / (temp_formation + 21.5)
     logger.debug(
         f"Formation water resistivity range: {rw.min():.3f} - {rw.max():.3f} ohm.m"
     )
