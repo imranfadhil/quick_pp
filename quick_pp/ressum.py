@@ -487,7 +487,7 @@ def sensitivity_analysis(
     """Sensitivity analysis for volumetric method.
     This function performs a Sobol sensitivity analysis to determine the influence
     of each input parameter on the final volume calculation and displays the
-    results as a tornado chart.
+    results as tornado charts (both volume-based and sensitivity indices).
 
     Args:
         area_bound (tuple): (min, max) for area.
@@ -519,32 +519,166 @@ def sensitivity_analysis(
     )
 
     # Generate samples
-    param_values = sample(problem, 2**10)
+    param_values = sample(problem, 2**10, calc_second_order=False)
 
-    # evaluate
+    # Evaluate model at each sample point
     x = np.linspace(-1, 1, 100)
     y = np.array([calculate_volume(x, *params) for params in param_values])
 
-    # analyse
-    Si = [analyze(problem, Y) for Y in y.T][0]
+    # Perform Sobol analysis
+    Si = analyze(problem, y[:, 0], calc_second_order=False)
 
     # Extract the sensitivity indices
     S1 = Si["S1"]
     S1_conf = Si["S1_conf"]
     names = problem["names"]
 
-    # Sort the indices for better visualization
+    logger.info(
+        f"Sensitivity analysis completed. Top parameter: {names[np.argmax(S1)]} "
+        f"(S1={S1[np.argmax(S1)]:.3f})"
+    )
+
+    # ===== VOLUME-BASED TORNADO CHART (PRIMARY - MORE INTUITIVE) =====
+    # Calculate baseline volume at mean parameter values
+    baseline_params = {
+        name: (bound[0] + bound[1]) / 2
+        for name, bound in zip(problem["names"], problem["bounds"], strict=True)
+    }
+    baseline_volume = calculate_volume(1, **baseline_params)
+
+    # Calculate volume impacts for each parameter
+    volume_impacts = []
+    for param_name, (min_val, max_val) in zip(
+        problem["names"], problem["bounds"], strict=True
+    ):
+        params_at_min = baseline_params.copy()
+        params_at_min[param_name] = min_val
+        vol_min = calculate_volume(1, **params_at_min)
+
+        params_at_max = baseline_params.copy()
+        params_at_max[param_name] = max_val
+        vol_max = calculate_volume(1, **params_at_max)
+
+        volume_impacts.append(
+            {
+                "name": param_name,
+                "vol_min": vol_min,
+                "vol_max": vol_max,
+                "low_impact": vol_min - baseline_volume,
+                "high_impact": vol_max - baseline_volume,
+                "range": abs(vol_max - vol_min),
+            }
+        )
+
+    # Sort by impact range for visualization
+    volume_impacts_sorted = sorted(volume_impacts, key=lambda x: x["range"])
+
+    # Create volume-based tornado chart
+    plt.figure(figsize=(12, 7))
+    y_pos = np.arange(len(volume_impacts_sorted))
+    param_names_sorted = [imp["name"] for imp in volume_impacts_sorted]
+    low_impacts = np.array([imp["low_impact"] for imp in volume_impacts_sorted])
+    high_impacts = np.array([imp["high_impact"] for imp in volume_impacts_sorted])
+
+    plt.barh(
+        y_pos,
+        low_impacts,
+        height=0.6,
+        align="center",
+        alpha=0.8,
+        color="steelblue",
+        edgecolor="black",
+        linewidth=1.5,
+        label="At Minimum",
+    )
+    plt.barh(
+        y_pos,
+        high_impacts,
+        height=0.6,
+        align="center",
+        alpha=0.8,
+        color="steelblue",
+        edgecolor="black",
+        linewidth=1.5,
+        label="At Maximum",
+    )
+
+    # Add baseline reference line
+    plt.axvline(x=0, color="red", linestyle="--", linewidth=2.5, alpha=0.8)
+    plt.text(
+        0,
+        len(volume_impacts_sorted) - 0.5,
+        f"Baseline: {baseline_volume:.1f} MMbbl",
+        ha="center",
+        fontsize=10,
+        fontweight="bold",
+        color="red",
+        bbox={"boxstyle": "round", "facecolor": "yellow", "alpha": 0.3},
+    )
+
+    # Add value labels on bars
+    for i, (low, high) in enumerate(zip(low_impacts, high_impacts, strict=True)):
+        if low < 0:
+            plt.text(
+                low - 5,
+                i,
+                f"{low:.0f}",
+                ha="right",
+                va="center",
+                fontweight="bold",
+                fontsize=9,
+            )
+        else:
+            plt.text(
+                low + 5,
+                i,
+                f"{low:.0f}",
+                ha="left",
+                va="center",
+                fontweight="bold",
+                fontsize=9,
+            )
+
+        if high > 0:
+            plt.text(
+                high + 5,
+                i,
+                f"{high:+.0f}",
+                ha="left",
+                va="center",
+                fontweight="bold",
+                fontsize=9,
+            )
+        else:
+            plt.text(
+                high - 5,
+                i,
+                f"{high:.0f}",
+                ha="right",
+                va="center",
+                fontweight="bold",
+                fontsize=9,
+            )
+
+    plt.yticks(y_pos, [p.replace("_", " ").title() for p in param_names_sorted])
+    plt.xlabel("Volume Change from Baseline (MMbbl)", fontsize=12, fontweight="bold")
+    plt.title(
+        "Tornado Chart - STOIIP Volume Impacts\n(Practical View: Shows Actual Volume Ranges)",
+        fontsize=13,
+        fontweight="bold",
+    )
+    plt.grid(True, alpha=0.3, axis="x")
+    plt.legend(loc="lower right")
+    plt.tight_layout()
+    plt.show()
+
+    # ===== SENSITIVITY INDEX TORNADO CHART (SECONDARY - TECHNICAL REFERENCE) =====
+    # Sort by sensitivity index for comparison
     sorted_indices = np.argsort(S1)
     sorted_S1 = S1[sorted_indices]
     sorted_S1_conf = S1_conf[sorted_indices]
     sorted_names = [names[i] for i in sorted_indices]
 
-    logger.info(
-        f"Sensitivity analysis completed. Top parameter: {sorted_names[-1]} "
-        f"(S1={sorted_S1[-1]:.3f})"
-    )
-
-    # Plot the tornado chart
     plt.figure(figsize=(10, 6))
     plt.barh(
         range(len(sorted_S1)),
@@ -552,13 +686,21 @@ def sensitivity_analysis(
         xerr=sorted_S1_conf,
         align="center",
         alpha=0.7,
-        color="blue",
+        color="darkorange",
         ecolor="black",
+        capsize=5,
     )
-    plt.yticks(range(len(sorted_S1)), sorted_names)
-    plt.xlabel("First-order Sensitivity Index")
-    plt.title("Tornado Chart of Sensitivity Indices")
-    plt.grid(True)
+    plt.yticks(
+        range(len(sorted_S1)), [n.replace("_", " ").title() for n in sorted_names]
+    )
+    plt.xlabel("First-order Sensitivity Index (S1)", fontsize=12, fontweight="bold")
+    plt.title(
+        "Tornado Chart - Sensitivity Indices\n(Technical Reference: Normalized Importance)",
+        fontsize=13,
+        fontweight="bold",
+    )
+    plt.grid(True, alpha=0.3, axis="x")
+    plt.tight_layout()
     plt.show()
 
 
