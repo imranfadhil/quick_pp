@@ -1,6 +1,6 @@
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 from sqlalchemy import select, text
@@ -255,6 +255,142 @@ class Project(object):
             "processed_files": processed_count,
             "new_wells": new_wells,
             "updated_wells": processed_count - len(new_wells),
+        }
+
+    def read_dataframe(
+        self,
+        dataframes: Union[pd.DataFrame, List[pd.DataFrame]],
+        well_name_column: str = "WELL_NAME",
+        depth_column: str = "DEPTH",
+        depth_uom: Optional[str] = None,
+    ):
+        """Reads one or more pandas DataFrames and adds or updates wells in the project.
+
+        This method processes DataFrames similar to `read_las`, with the following behavior:
+        - For each well found in the DataFrame(s), it checks if a well with that name
+          already exists in the project.
+        - If a well exists, its data is updated using the `Well.update_data` method
+          (upsert logic - partial replacement).
+        - If a well doesn't exist, a new well is created and the data is added.
+
+        Args:
+            dataframes (Union[pd.DataFrame, List[pd.DataFrame]]): A single DataFrame or
+                list of DataFrames to read.
+            well_name_column (str): The column name in the DataFrame(s) that identifies
+                the well. Defaults to "WELL_NAME".
+            depth_column (str): The column name that represents depth. Defaults to "DEPTH".
+            depth_uom (Optional[str]): The unit of measurement for depth to be used if not
+                already in the data.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing:
+                - 'processed_dataframes': Number of DataFrames processed
+                - 'new_wells': List of newly created well names
+                - 'updated_wells': Number of wells that were updated
+        """
+        # Normalize input to a list of DataFrames
+        if isinstance(dataframes, pd.DataFrame):
+            dataframes = [dataframes]
+
+        logger.info(
+            f"Reading {len(dataframes)} DataFrame(s) for project '{self.name}' (ID: {self.project_id})"
+        )
+
+        # Collect all wells from all dataframes
+        all_well_data = {}
+        for df_idx, df in enumerate(dataframes):
+            logger.debug(f"Processing DataFrame {df_idx + 1}/{len(dataframes)}")
+
+            # Validate required columns
+            if well_name_column not in df.columns:
+                logger.error(
+                    f"DataFrame {df_idx} missing required column '{well_name_column}'"
+                )
+                continue
+            if depth_column not in df.columns:
+                logger.error(
+                    f"DataFrame {df_idx} missing required column '{depth_column}'"
+                )
+                continue
+
+            # Group by well name and accumulate data
+            for well_name, well_data in df.groupby(well_name_column):
+                if well_name not in all_well_data:
+                    all_well_data[well_name] = []
+                all_well_data[well_name].append(well_data)
+
+        if not all_well_data:
+            logger.warning("No valid well data found in provided DataFrames.")
+            return {
+                "processed_dataframes": len(dataframes),
+                "new_wells": [],
+                "updated_wells": 0,
+            }
+
+        # Batch fetch all existing wells for this project
+        well_names = list(all_well_data.keys())
+        existing_wells = (
+            self.db_session.execute(
+                select(ORMWell).filter(
+                    ORMWell.project_id == self.project_id, ORMWell.name.in_(well_names)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        # Create lookup dictionary for O(1) access
+        wells_by_name = {well.name: well for well in existing_wells}
+
+        # Process all wells
+        new_wells = []
+        for well_name, well_dataframes in all_well_data.items():
+            logger.debug(
+                f"Processing well '{well_name}' with {len(well_dataframes)} DataFrame(s)"
+            )
+
+            # Concatenate multiple dataframes for the same well
+            combined_well_data = pd.concat(
+                well_dataframes, ignore_index=True
+            ).drop_duplicates(subset=[depth_column], keep="last")
+
+            existing_well = wells_by_name.get(well_name)
+
+            if existing_well:
+                logger.debug(
+                    f"Updating existing well '{well_name}' in project '{self.name}'"
+                )
+                well_obj = Well(self.db_session, well_id=existing_well.well_id)
+                well_obj.update_data(combined_well_data)
+            else:
+                logger.debug(
+                    f"Creating new well '{well_name}' in project '{self.name}'"
+                )
+                well_obj = Well(
+                    self.db_session,
+                    project_id=self.project_id,
+                    name=well_name,
+                    uwi="",  # UWI not available from dataframe
+                    depth_uom=depth_uom,
+                )
+                well_obj.update_data(combined_well_data)
+                self.db_session.add(well_obj._orm_well)
+                new_wells.append(well_name)
+
+            logger.debug(f"Processed well '{well_name}' for project '{self.name}'.")
+
+        # Single flush for all wells at the end
+        if new_wells or all_well_data:
+            self.db_session.flush()
+            logger.info(
+                f"Successfully processed {len(dataframes)} DataFrame(s) "
+                f"({len(new_wells)} new wells, {len(all_well_data) - len(new_wells)} updated)"
+            )
+
+        return {
+            "processed_dataframes": len(dataframes),
+            "new_wells": new_wells,
+            "updated_wells": len(all_well_data) - len(new_wells),
         }
 
     def update_data(
