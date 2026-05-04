@@ -370,7 +370,7 @@ class Project(object):
                     self.db_session,
                     project_id=self.project_id,
                     name=well_name,
-                    uwi="",  # UWI not available from dataframe
+                    uwi=well_name,
                     depth_uom=depth_uom,
                 )
                 well_obj.update_data(combined_well_data)
