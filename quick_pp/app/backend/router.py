@@ -13,7 +13,10 @@ from .services.qaqc import router as qaqc_router
 from .services.reservoir_summary import router as ressum_router
 from .services.rock_typing import router as rock_typing_router
 from .services.saturation import router as saturation_router
+from .services.scal import router as scal_router
 from .services.shf import router as shf_router
+from .services.uncertainty import router as uncertainty_router
+from .services.upscaling import router as upscaling_router
 from .services.workspace import router as workspace_router
 
 api_router = APIRouter(prefix="/quick_pp")
@@ -24,6 +27,9 @@ api_router.include_router(porosity_router)
 api_router.include_router(saturation_router)
 api_router.include_router(permeability_router)
 api_router.include_router(ressum_router)
+api_router.include_router(uncertainty_router)
+api_router.include_router(upscaling_router)
+api_router.include_router(scal_router)
 api_router.include_router(chat_router)
 api_router.include_router(database_router)
 api_router.include_router(plotter_router)
@@ -33,3 +39,4 @@ api_router.include_router(rock_typing_router)
 api_router.include_router(perm_transform_router)
 api_router.include_router(shf_router)
 api_router.include_router(workspace_router)
+

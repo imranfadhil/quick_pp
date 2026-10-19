@@ -20,6 +20,7 @@ from quick_pp.qaqc import (
     apply_environmental_corrections,
     neu_den_xplot_hc_correction,
     normalize_by_zone,
+    stratigraphic_normalization,
 )
 
 router = APIRouter(prefix="/qaqc", tags=["QAQC"])
@@ -108,10 +109,11 @@ async def apply_hc_correction(inputs: HCCorrectionInput):
 
 
 @router.post("/normalize_by_zone", tags=["Normalization"])
+@router.post("/stratigraphic_normalization", tags=["Normalization"])
 async def apply_stratigraphic_normalization(inputs: StratigraphicNormalizationInput):
     """Apply stratigraphic (zone-by-zone) multi-well quantile or histogram normalization."""
     df = pd.DataFrame(inputs.data)
-    norm_df, report_df = normalize_by_zone(
+    norm_df, report_df = stratigraphic_normalization(
         df,
         key_well=inputs.key_well,
         zone_col=inputs.zone_col,

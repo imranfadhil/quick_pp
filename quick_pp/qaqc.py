@@ -854,6 +854,10 @@ def normalize_by_zone(
     return out_df
 
 
+stratigraphic_normalization = normalize_by_zone
+
+
+
 def gr_borehole_correction(
     gr: np.ndarray | pd.Series | float,
     cali: np.ndarray | pd.Series | float,

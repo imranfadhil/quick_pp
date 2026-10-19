@@ -349,12 +349,18 @@ def fit_poroperm_curve(poro, perm):
 
 
 from quick_pp.scal import (  # noqa: E402
+    brooks_corey_relperm,
+    corey_relperm,
     correct_core_data,
     dean_stark_cbw_correction,
     dean_stark_saturation_correction,
     estimate_cbw_from_qv,
+    fit_relperm,
+    generate_swof_table,
     humidity_to_total_porosity,
     klinkenberg_permeability_correction,
+    let_relperm,
+    normalize_water_saturation,
     overburden_permeability_correction,
     overburden_poroperm_correction,
     overburden_porosity_correction,

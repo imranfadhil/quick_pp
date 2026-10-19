@@ -26,25 +26,39 @@ Provides petrophysically rigorous core-to-log and lab-to-reservoir reconciliatio
   5. DataFrame Pipeline Helper:
      - `correct_core_data`: Applies overburden porosity/permeability, clay-bound water,
        Dean-Stark saturation, Klinkenberg permeability, and $P_c$ corrections to a core DataFrame.
+  6. Two-Phase Relative Permeability ($k_{rw}, k_{ro}$) & Simulator Handover (`SWOF`):
+     - `normalize_water_saturation`: Normalizes water saturation $S_w$ between $S_{wirr}$ and $1 - S_{or}$.
+     - `corey_relperm`: Modified Corey (1954) power-law water-oil relative permeability model.
+     - `brooks_corey_relperm`: Brooks-Corey (1964) pore-size distribution ($\lambda$) relative permeability model.
+     - `let_relperm`: Lomeland-Ebeltoft-Thomas (LET, 2005) 3-parameter flexible SCAL relative permeability model.
+     - `fit_relperm`: Non-linear least-squares fitting of Corey or LET parameters to lab SCAL $(S_w, k_{rw}, k_{ro})$ data.
+     - `generate_swof_table`: Generates dynamic reservoir simulator `SWOF` tables (`SW`, `KRW`, `KROW`, `PCOW`).
 """
 
-from typing import Optional, Tuple, Union
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
 __all__ = [
+    "brooks_corey_relperm",
+    "corey_relperm",
     "correct_core_data",
     "dean_stark_cbw_correction",
     "dean_stark_saturation_correction",
     "estimate_cbw_from_qv",
+    "fit_relperm",
+    "generate_swof_table",
     "humidity_to_total_porosity",
     "klinkenberg_permeability_correction",
+    "let_relperm",
+    "normalize_water_saturation",
     "overburden_permeability_correction",
     "overburden_poroperm_correction",
     "overburden_porosity_correction",
     "pc_lab_to_reservoir",
 ]
+
 
 
 def overburden_porosity_correction(
@@ -628,4 +642,455 @@ def correct_core_data(
         )
 
     return df
+
+
+def normalize_water_saturation(
+    sw: Union[float, np.ndarray, pd.Series, Sequence[float]],
+    swirr: float = 0.15,
+    sor: float = 0.20,
+) -> Union[float, np.ndarray, pd.Series]:
+    """Compute normalized mobile water saturation $S_{wn} \\in [0, 1]$ between $S_{wirr}$ and $1 - S_{or}$.
+
+    $$S_{wn} = \\text{clip}\\left(\\frac{S_w - S_{wirr}}{1 - S_{wirr} - S_{or}}, 0.0, 1.0\\right)$$
+
+    Args:
+        sw: Water saturation (fraction).
+        swirr: Irreducible water saturation $S_{wirr}$ (fraction). Defaults to 0.15.
+        sor: Residual oil/hydrocarbon saturation $S_{or}$ (fraction). Defaults to 0.20.
+
+    Returns:
+        Normalized water saturation $S_{wn} \\in [0.0, 1.0]$.
+    """
+    denom = max(1.0 - float(swirr) - float(sor), 1e-6)
+    is_scalar = np.isscalar(sw)
+    is_series = isinstance(sw, pd.Series)
+    sw_arr = np.asarray(sw, dtype=float)
+    swn = np.clip((sw_arr - float(swirr)) / denom, 0.0, 1.0)
+    if is_scalar:
+        return float(swn)
+    if is_series:
+        return pd.Series(swn, index=sw.index, name="SWN")
+    return swn
+
+
+def corey_relperm(
+    sw: Union[float, np.ndarray, pd.Series, Sequence[float]],
+    swirr: float = 0.15,
+    sor: float = 0.20,
+    krw_max: float = 0.30,
+    kro_max: float = 0.90,
+    nw: float = 3.0,
+    no: float = 2.5,
+    mu_w: float = 0.5,
+    mu_o: float = 1.5,
+) -> Dict[str, np.ndarray]:
+    """Compute water-oil relative permeability ($k_{rw}, k_{ro}$) using the modified Corey (1954) power-law model.
+
+    $$k_{rw}(S_w) = k_{rw,\\max} \\cdot (S_{wn})^{n_w}, \\quad k_{ro}(S_w) = k_{ro,\\max} \\cdot (1 - S_{wn})^{n_o}$$
+
+    Args:
+        sw: Water saturation array or scalar (fraction).
+        swirr: Irreducible water saturation $S_{wirr}$. Defaults to 0.15.
+        sor: Residual hydrocarbon saturation $S_{or}$. Defaults to 0.20.
+        krw_max: Endpoint water relative permeability at $1 - S_{or}$. Defaults to 0.30.
+        kro_max: Endpoint oil relative permeability at $S_{wirr}$. Defaults to 0.90.
+        nw: Corey water exponent $n_w > 0$. Defaults to 3.0.
+        no: Corey oil exponent $n_o > 0$. Defaults to 2.5.
+        mu_w: Water viscosity (cP) for fractional flow calculation. Defaults to 0.5.
+        mu_o: Oil viscosity (cP) for fractional flow calculation. Defaults to 1.5.
+
+    Returns:
+        dict: Dictionary containing `sw`, `swn`, `krw`, `kro`, and `fw` (fractional water cut).
+    """
+    sw_arr = np.atleast_1d(np.asarray(sw, dtype=float))
+    swn = np.asarray(normalize_water_saturation(sw_arr, swirr=swirr, sor=sor), dtype=float)
+    krw = np.clip(float(krw_max) * np.power(swn, max(float(nw), 1e-4)), 0.0, 1.0)
+    kro = np.clip(float(kro_max) * np.power(1.0 - swn, max(float(no), 1e-4)), 0.0, 1.0)
+
+    mob_w = krw / max(float(mu_w), 1e-6)
+    mob_o = kro / max(float(mu_o), 1e-6)
+    tot_mob = mob_w + mob_o
+    fw = np.where(tot_mob > 1e-12, mob_w / tot_mob, np.where(swn >= 1.0, 1.0, 0.0))
+
+    return {
+        "sw": sw_arr,
+        "swn": swn,
+        "krw": krw,
+        "kro": kro,
+        "fw": fw,
+    }
+
+
+def brooks_corey_relperm(
+    sw: Union[float, np.ndarray, pd.Series, Sequence[float]],
+    swirr: float = 0.15,
+    sor: float = 0.20,
+    krw_max: float = 0.30,
+    kro_max: float = 0.90,
+    lam: float = 2.0,
+    mu_w: float = 0.5,
+    mu_o: float = 1.5,
+) -> Dict[str, np.ndarray]:
+    """Compute relative permeability ($k_{rw}, k_{ro}$) using the Brooks-Corey (1964) pore-size distribution model.
+
+    $$k_{rw}(S_w) = k_{rw,\\max} \\cdot (S_{wn})^{\\frac{2 + 3\\lambda}{\\lambda}}, \\quad k_{ro}(S_w) = k_{ro,\\max} \\cdot (1 - S_{wn})^2 \\left(1 - S_{wn}^{\\frac{2 + \\lambda}{\\lambda}}\\right)$$
+
+    Args:
+        sw: Water saturation array or scalar (fraction).
+        swirr: Irreducible water saturation $S_{wirr}$. Defaults to 0.15.
+        sor: Residual hydrocarbon saturation $S_{or}$. Defaults to 0.20.
+        krw_max: Endpoint water relative permeability at $1 - S_{or}$. Defaults to 0.30.
+        kro_max: Endpoint oil relative permeability at $S_{wirr}$. Defaults to 0.90.
+        lam: Pore-size distribution index $\\lambda > 0$. Defaults to 2.0.
+        mu_w: Water viscosity (cP). Defaults to 0.5.
+        mu_o: Oil viscosity (cP). Defaults to 1.5.
+
+    Returns:
+        dict: Dictionary containing `sw`, `swn`, `krw`, `kro`, and `fw`.
+    """
+    lam_safe = max(float(lam), 1e-3)
+    sw_arr = np.atleast_1d(np.asarray(sw, dtype=float))
+    swn = np.asarray(normalize_water_saturation(sw_arr, swirr=swirr, sor=sor), dtype=float)
+    exp_w = (2.0 + 3.0 * lam_safe) / lam_safe
+    exp_o = (2.0 + lam_safe) / lam_safe
+
+    krw = np.clip(float(krw_max) * np.power(swn, exp_w), 0.0, 1.0)
+    kro = np.clip(
+        float(kro_max) * np.power(1.0 - swn, 2.0) * (1.0 - np.power(swn, exp_o)),
+        0.0,
+        1.0,
+    )
+
+    mob_w = krw / max(float(mu_w), 1e-6)
+    mob_o = kro / max(float(mu_o), 1e-6)
+    tot_mob = mob_w + mob_o
+    fw = np.where(tot_mob > 1e-12, mob_w / tot_mob, np.where(swn >= 1.0, 1.0, 0.0))
+
+    return {
+        "sw": sw_arr,
+        "swn": swn,
+        "krw": krw,
+        "kro": kro,
+        "fw": fw,
+    }
+
+
+def let_relperm(
+    sw: Union[float, np.ndarray, pd.Series, Sequence[float]],
+    swirr: float = 0.15,
+    sor: float = 0.20,
+    krw_max: float = 0.30,
+    kro_max: float = 0.90,
+    lw: float = 2.0,
+    ew: float = 1.5,
+    tw: float = 2.0,
+    lo: float = 2.0,
+    eo: float = 1.5,
+    to: float = 2.0,
+    mu_w: float = 0.5,
+    mu_o: float = 1.5,
+) -> Dict[str, np.ndarray]:
+    """Compute relative permeability ($k_{rw}, k_{ro}$) using the Lomeland-Ebeltoft-Thomas (LET, 2005) correlation.
+
+    $$k_{rw}(S_w) = k_{rw,\\max} \\frac{S_{wn}^{L_w}}{S_{wn}^{L_w} + E_w (1 - S_{wn})^{T_w}}, \\quad k_{ro}(S_w) = k_{ro,\\max} \\frac{(1 - S_{wn})^{L_o}}{(1 - S_{wn})^{L_o} + E_o S_{wn}^{T_o}}$$
+
+    Args:
+        sw: Water saturation array or scalar (fraction).
+        swirr: Irreducible water saturation $S_{wirr}$. Defaults to 0.15.
+        sor: Residual hydrocarbon saturation $S_{or}$. Defaults to 0.20.
+        krw_max: Endpoint water relative permeability at $1 - S_{or}$. Defaults to 0.30.
+        kro_max: Endpoint oil relative permeability at $S_{wirr}$. Defaults to 0.90.
+        lw, ew, tw: LET parameters for water phase ($L_w, E_w, T_w > 0$).
+        lo, eo, to: LET parameters for oil/hydrocarbon phase ($L_o, E_o, T_o > 0$).
+        mu_w: Water viscosity (cP). Defaults to 0.5.
+        mu_o: Oil viscosity (cP). Defaults to 1.5.
+
+    Returns:
+        dict: Dictionary containing `sw`, `swn`, `krw`, `kro`, and `fw`.
+    """
+    sw_arr = np.atleast_1d(np.asarray(sw, dtype=float))
+    swn = np.asarray(normalize_water_saturation(sw_arr, swirr=swirr, sor=sor), dtype=float)
+    s_o = 1.0 - swn
+
+    num_w = np.power(swn, max(float(lw), 1e-4))
+    den_w = num_w + max(float(ew), 1e-6) * np.power(s_o, max(float(tw), 1e-4))
+    krw = np.where(den_w > 1e-12, float(krw_max) * (num_w / den_w), 0.0)
+
+    num_o = np.power(s_o, max(float(lo), 1e-4))
+    den_o = num_o + max(float(eo), 1e-6) * np.power(swn, max(float(to), 1e-4))
+    kro = np.where(den_o > 1e-12, float(kro_max) * (num_o / den_o), 0.0)
+
+    krw = np.clip(krw, 0.0, 1.0)
+    kro = np.clip(kro, 0.0, 1.0)
+
+    mob_w = krw / max(float(mu_w), 1e-6)
+    mob_o = kro / max(float(mu_o), 1e-6)
+    tot_mob = mob_w + mob_o
+    fw = np.where(tot_mob > 1e-12, mob_w / tot_mob, np.where(swn >= 1.0, 1.0, 0.0))
+
+    return {
+        "sw": sw_arr,
+        "swn": swn,
+        "krw": krw,
+        "kro": kro,
+        "fw": fw,
+    }
+
+
+def fit_relperm(
+    sw: Sequence[float],
+    krw: Optional[Sequence[float]] = None,
+    kro: Optional[Sequence[float]] = None,
+    model: str = "corey",
+    swirr: Optional[float] = None,
+    sor: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Fit Corey or LET relative permeability parameters to laboratory SCAL $(S_w, k_{rw}, k_{ro})$ measurements.
+
+    Args:
+        sw: Measured water saturation values (fraction).
+        krw: Measured water relative permeability values (optional if only fitting oil phase).
+        kro: Measured oil/hydrocarbon relative permeability values (optional if only fitting water phase).
+        model: `'corey'` or `'let'`. Defaults to `'corey'`.
+        swirr: Irreducible water saturation. Inferred from `min(sw)` if None.
+        sor: Residual oil saturation. Inferred from `1 - max(sw)` if None.
+
+    Returns:
+        dict: Fitted parameters (`model`, `swirr`, `sor`, `krw_max`, `kro_max`, exponents, and `rmse`).
+    """
+    from scipy.optimize import curve_fit
+
+    sw_arr = np.asarray(sw, dtype=float)
+    valid_sw = sw_arr[np.isfinite(sw_arr)]
+    if len(valid_sw) < 2:
+        raise ValueError("At least 2 valid saturation points are required for fit_relperm.")
+
+    swirr_val = float(swirr) if swirr is not None else float(np.clip(np.min(valid_sw), 0.0, 0.6))
+    sor_val = float(sor) if sor is not None else float(np.clip(1.0 - np.max(valid_sw), 0.0, 0.6))
+    if swirr_val + sor_val >= 0.95:
+        sor_val = max(0.0, 0.90 - swirr_val)
+
+    swn_all = np.asarray(normalize_water_saturation(sw_arr, swirr=swirr_val, sor=sor_val), dtype=float)
+    model_clean = model.strip().lower()
+
+    out: Dict[str, Any] = {
+        "model": model_clean,
+        "swirr": round(swirr_val, 4),
+        "sor": round(sor_val, 4),
+    }
+
+    if krw is not None:
+        krw_arr = np.asarray(krw, dtype=float)
+        mask_w = np.isfinite(swn_all) & np.isfinite(krw_arr)
+        swn_w = swn_all[mask_w]
+        y_w = np.clip(krw_arr[mask_w], 0.0, 1.0)
+        krw_max_init = float(np.clip(np.max(y_w) if len(y_w) > 0 else 0.3, 0.01, 1.0))
+
+        if model_clean == "let" and len(swn_w) >= 3:
+            def _let_w(s, k_max, l_p, e_p, t_p):
+                n = np.power(s, l_p)
+                d = n + e_p * np.power(1.0 - s, t_p)
+                return np.where(d > 1e-12, k_max * n / d, 0.0)
+
+            popt_w, _ = curve_fit(
+                _let_w,
+                swn_w,
+                y_w,
+                p0=[krw_max_init, 2.0, 1.5, 2.0],
+                bounds=([0.01, 0.2, 0.05, 0.2], [1.0, 10.0, 20.0, 10.0]),
+                maxfev=5000,
+            )
+            pred_w = _let_w(swn_w, *popt_w)
+            out.update(
+                {
+                    "krw_max": round(float(popt_w[0]), 4),
+                    "lw": round(float(popt_w[1]), 4),
+                    "ew": round(float(popt_w[2]), 4),
+                    "tw": round(float(popt_w[3]), 4),
+                    "rmse_krw": round(float(np.sqrt(np.mean((y_w - pred_w) ** 2))), 5),
+                }
+            )
+        else:
+            def _corey_w(s, k_max, n_p):
+                return k_max * np.power(s, n_p)
+
+            popt_w, _ = curve_fit(
+                _corey_w,
+                swn_w,
+                y_w,
+                p0=[krw_max_init, 3.0],
+                bounds=([0.01, 0.5], [1.0, 10.0]),
+                maxfev=3000,
+            )
+            pred_w = _corey_w(swn_w, *popt_w)
+            out.update(
+                {
+                    "krw_max": round(float(popt_w[0]), 4),
+                    "nw": round(float(popt_w[1]), 4),
+                    "rmse_krw": round(float(np.sqrt(np.mean((y_w - pred_w) ** 2))), 5),
+                }
+            )
+
+    if kro is not None:
+        kro_arr = np.asarray(kro, dtype=float)
+        mask_o = np.isfinite(swn_all) & np.isfinite(kro_arr)
+        swn_o = swn_all[mask_o]
+        y_o = np.clip(kro_arr[mask_o], 0.0, 1.0)
+        kro_max_init = float(np.clip(np.max(y_o) if len(y_o) > 0 else 0.9, 0.01, 1.0))
+
+        if model_clean == "let" and len(swn_o) >= 3:
+            def _let_o(s, k_max, l_p, e_p, t_p):
+                so = 1.0 - s
+                n = np.power(so, l_p)
+                d = n + e_p * np.power(s, t_p)
+                return np.where(d > 1e-12, k_max * n / d, 0.0)
+
+            popt_o, _ = curve_fit(
+                _let_o,
+                swn_o,
+                y_o,
+                p0=[kro_max_init, 2.0, 1.5, 2.0],
+                bounds=([0.01, 0.2, 0.05, 0.2], [1.0, 10.0, 20.0, 10.0]),
+                maxfev=5000,
+            )
+            pred_o = _let_o(swn_o, *popt_o)
+            out.update(
+                {
+                    "kro_max": round(float(popt_o[0]), 4),
+                    "lo": round(float(popt_o[1]), 4),
+                    "eo": round(float(popt_o[2]), 4),
+                    "to": round(float(popt_o[3]), 4),
+                    "rmse_kro": round(float(np.sqrt(np.mean((y_o - pred_o) ** 2))), 5),
+                }
+            )
+        else:
+            def _corey_o(s, k_max, n_p):
+                return k_max * np.power(1.0 - s, n_p)
+
+            popt_o, _ = curve_fit(
+                _corey_o,
+                swn_o,
+                y_o,
+                p0=[kro_max_init, 2.5],
+                bounds=([0.01, 0.5], [1.0, 10.0]),
+                maxfev=3000,
+            )
+            pred_o = _corey_o(swn_o, *popt_o)
+            out.update(
+                {
+                    "kro_max": round(float(popt_o[0]), 4),
+                    "no": round(float(popt_o[1]), 4),
+                    "rmse_kro": round(float(np.sqrt(np.mean((y_o - pred_o) ** 2))), 5),
+                }
+            )
+
+    return out
+
+
+def generate_swof_table(
+    n_points: int = 21,
+    model: str = "corey",
+    swirr: float = 0.15,
+    sor: float = 0.20,
+    krw_max: float = 0.30,
+    kro_max: float = 0.90,
+    nw: float = 3.0,
+    no: float = 2.5,
+    lam: float = 2.0,
+    lw: float = 2.0,
+    ew: float = 1.5,
+    tw: float = 2.0,
+    lo: float = 2.0,
+    eo: float = 1.5,
+    to: float = 2.0,
+    pc_entry: float = 1.5,
+    pc_exponent: float = 1.5,
+    pc_max: float = 50.0,
+) -> Dict[str, Any]:
+    """Generate a simulator-ready Water-Oil Relative Permeability & Capillary Pressure (`SWOF`) table.
+
+    Produces a strictly monotonic saturation table (`SW`, `KRW`, `KROW`, `PCOW`) from $S_{wirr}$
+    to $1.0$ (including the critical residual oil point $1 - S_{or}$) along with an Eclipse / Intersect
+    `SWOF` keyword string for dynamic reservoir simulation handover.
+
+    Args:
+        n_points: Number of saturation increments across mobile range $[S_{wirr}, 1 - S_{or}]$. Defaults to 21.
+        model: `'corey'`, `'brooks_corey'`, or `'let'`. Defaults to `'corey'`.
+        swirr: Irreducible water saturation $S_{wirr}$. Defaults to 0.15.
+        sor: Residual oil saturation $S_{or}$. Defaults to 0.20.
+        krw_max: Endpoint water relative permeability at $1 - S_{or}$. Defaults to 0.30.
+        kro_max: Endpoint oil relative permeability at $S_{wirr}$. Defaults to 0.90.
+        nw, no: Corey exponents.
+        lam: Brooks-Corey $\\lambda$ exponent.
+        lw, ew, tw, lo, eo, to: LET parameters.
+        pc_entry: Capillary entry pressure $P_{ce}$ (psi). Defaults to 1.5.
+        pc_exponent: Capillary pressure pore-throat exponent. Defaults to 1.5.
+        pc_max: Maximum clipped capillary pressure at $S_{wirr}$ (psi). Defaults to 50.0.
+
+    Returns:
+        dict: `{"table": pd.DataFrame, "swof_keyword": str}`
+    """
+    sw_max_mobile = max(1.0 - float(sor), float(swirr) + 0.05)
+    sw_grid = np.linspace(float(swirr), sw_max_mobile, max(int(n_points), 5))
+    if sw_max_mobile < 1.0:
+        sw_grid = np.append(sw_grid, 1.0)
+
+    m = model.strip().lower()
+    if m == "brooks_corey":
+        rp = brooks_corey_relperm(
+            sw_grid, swirr=swirr, sor=sor, krw_max=krw_max, kro_max=kro_max, lam=lam
+        )
+    elif m == "let":
+        rp = let_relperm(
+            sw_grid,
+            swirr=swirr,
+            sor=sor,
+            krw_max=krw_max,
+            kro_max=kro_max,
+            lw=lw,
+            ew=ew,
+            tw=tw,
+            lo=lo,
+            eo=eo,
+            to=to,
+        )
+    else:
+        rp = corey_relperm(
+            sw_grid, swirr=swirr, sor=sor, krw_max=krw_max, kro_max=kro_max, nw=nw, no=no
+        )
+
+    krw = rp["krw"].copy()
+    kro = rp["kro"].copy()
+    if sw_max_mobile < 1.0:
+        krw[-1] = 1.0
+        kro[-1] = 0.0
+
+    swn_pc = np.clip((sw_grid - float(swirr)) / max(1.0 - float(swirr), 1e-6), 1e-3, 1.0)
+    pcow = np.where(
+        sw_grid >= sw_max_mobile,
+        0.0,
+        np.clip(float(pc_entry) * np.power(swn_pc, -1.0 / max(float(pc_exponent), 0.1)), 0.0, float(pc_max)),
+    )
+
+    table_df = pd.DataFrame(
+        {
+            "SW": np.round(sw_grid, 4),
+            "KRW": np.round(krw, 5),
+            "KROW": np.round(kro, 5),
+            "PCOW": np.round(pcow, 4),
+        }
+    )
+
+    lines = ["SWOF", "--   SW       KRW      KROW      PCOW"]
+    for _, row in table_df.iterrows():
+        lines.append(
+            f"  {row['SW']:7.4f}  {row['KRW']:8.5f}  {row['KROW']:8.5f}  {row['PCOW']:8.4f}"
+        )
+    lines.append("/")
+
+    return {
+        "table": table_df,
+        "swof_keyword": "\n".join(lines),
+    }
+
 

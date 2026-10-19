@@ -1,21 +1,36 @@
 # quick_pp
 
-Lightweight toolkit for quick-look petrophysical estimation and exploration.
+Comprehensive Python library and full-stack web platform for deterministic and probabilistic petrophysical evaluation, Special Core Analysis (SCAL) & relative permeability modeling, multi-well Free Water Level (FWL) contact optimization, stratigraphic log normalization, rock physics, and static-to-dynamic geomodeling upscaling.
 
-This repository contains the Python backend and SvelteKit frontend used by the
-quick_pp application, plus utilities for running ML training and simple
-petrophysical workflows.
+This repository contains the core `quick_pp` scientific Python package, the FastAPI backend (`quick_pp/app/backend`), and the SvelteKit interactive workstation frontend (`quick_pp/app/frontend`), plus MLflow-integrated machine learning pipelines (`quick_pp/machine_learning`).
 
-Goals of this README
-- Give developers and users the minimal, practical steps to get the app
-    running locally (backend, frontend and optional Docker services).
+## Core Capabilities
 
-Project components
-- Backend: FastAPI application, data services, model endpoints and plotting APIs (in `quick_pp/app/backend`).
-- Frontend: SvelteKit UI (in `quick_pp/app/frontend`) providing data visualisations and tools.
-- Docker: Compose assets to run backend + Postgres for development (`quick_pp/app/docker`).
-- CLI: `quick_pp` CLI wrapper that starts services, runs training, prediction and deployment tasks (`quick_pp/cli.py`).
-- Machine learning: training/prediction pipelines and MLflow integration (`quick_pp/machine_learning`).
+- **Multi-Mineral & Deterministic Petrophysics** (`quick_pp.lithology`, `quick_pp.porosity`, `quick_pp.saturation`, `quick_pp.permeability`):
+  Sand-Silt-Clay (modified Kuttan), Carbonate, and multi-mineral inversion solver with Simandoux, Indonesian, Dual-Water, Waxman-Smits, Juhasz, and Archie saturation models.
+- **Multi-Well Contact & Transition Zone Optimization** (`quick_pp.saturation.optimize_fwl`, `ContactOptimizer`):
+  Simultaneous multi-well Free Water Level (FWL), Oil-Water Contact (OWC), and Top of Transition Zone (TTZ) solver reconciling resistivity-derived $S_w$, capillary pressure Saturation-Height Models ($S_{w,\text{SHM}}$ via Leverett-$J$, Skelt-Harrison, and Cuddy), and wireline formation tester (MDT/RFT) pressure gradients.
+- **Special Core Analysis (SCAL) & Relative Permeability** (`quick_pp.scal`, `quick_pp.core_analysis`):
+  Laboratory-to-reservoir core plug corrections (hydrostatic/uniaxial overburden compaction, Klinkenberg gas slippage, and Dean-Stark clay-bound water reconciliation), capillary pressure scaling, two-phase relative permeability models (**Corey**, **Brooks-Corey**, and **LET**), automated SCAL curve fitting (`fit_relperm`), and Eclipse/Intersect `SWOF` table generation (`generate_swof_table`).
+- **Probabilistic Uncertainty & Monte Carlo Engine** (`quick_pp.uncertainty`):
+  Vectorized Latin Hypercube Sampling (`scipy.stats.qmc.LatinHypercube`) for volumetric hydrocarbon in-place uncertainty (`mc_volumetric_uncertainty`), log-level CPI uncertainty propagation (`run_log_uncertainty` producing `P10`/`P50`/`P90` curves), and stochastic reservoir summaries (`calc_stochastic_reservoir_summary`).
+- **Log Blocking & Static-to-Dynamic Upscaling** (`quick_pp.upscaling`):
+  Petrophysically rigorous blocking (`upscale_logs`, `block_logs`) onto cellular geomodel grids with thickness-weighted arithmetic porosity/shale averaging, pore-volume weighted saturation averaging (preserving `BVHC`), directional & Cardwell-Parsons (1945) power-law permeability bounds ($k_h, k_{\text{eff}}, k_v, k_v/k_h$), and majority-vote facies upscaling.
+- **Multi-Well QA/QC & Stratigraphic Normalization** (`quick_pp.qaqc`):
+  Zone-by-zone multi-well quantile and histogram log normalization (`stratigraphic_normalization` / `normalize_by_zone`), borehole environmental and invasion corrections (`apply_environmental_corrections`), neutron-density hydrocarbon corrections, and bad-hole flagging.
+- **Rock Physics & Gassmann Fluid Substitution** (`quick_pp.rock_physics`):
+  Elastic moduli, shear-wave velocity ($V_s$) prediction, Gassmann fluid substitution, and seismic rock physics templates.
+
+## Goals of this README
+- Give developers and users the practical steps to run the package and web application locally (backend, frontend, and optional Docker services).
+
+## Project Components
+- **Core Package (`quick_pp/`)**: Petrophysics, SCAL, uncertainty, upscaling, rock typing, QA/QC, and rock physics modules exported directly in `quick_pp`.
+- **Backend (`quick_pp/app/backend`)**: FastAPI application exposing REST endpoints for LAS handling, QA/QC & stratigraphic normalization, lithology, porosity, saturation & FWL optimization, rock typing, SCAL & relative permeability, permeability transforms, SHF, probabilistic uncertainty, log blocking/upscaling, and interactive plotting.
+- **Frontend (`quick_pp/app/frontend`)**: SvelteKit UI providing interactive multi-step petrophysical workflows and Plotly visualisations.
+- **Docker (`quick_pp/app/docker`)**: Compose assets to run backend + Postgres for development.
+- **CLI (`quick_pp/cli.py`)**: `quick_pp` CLI wrapper that starts services, runs training, prediction, and deployment tasks.
+- **Machine Learning (`quick_pp/machine_learning`)**: Training/prediction pipelines and MLflow integration.
 
 Prerequisites
 - Python 3.11+ (for backend and CLI)

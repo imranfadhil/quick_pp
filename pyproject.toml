@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "quick-pp"
 version = "0.2.106"
-description = "Python package to assist in providing quick-look preliminary petrophysical estimation."
+description = "Comprehensive Python package and web platform for deterministic and probabilistic petrophysical evaluation, SCAL & relative permeability modeling, multi-well FWL optimization, stratigraphic normalization, and geomodel log upscaling."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "MIT"
 requires-python = ">=3.11"
@@ -23,6 +23,9 @@ keywords = [
     "multi mineral",
     "rock typing",
     "saturation height function", "shf",
+    "scal", "relative permeability",
+    "uncertainty", "monte carlo",
+    "upscaling", "log blocking",
 ]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",

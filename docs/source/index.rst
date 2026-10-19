@@ -1,5 +1,5 @@
-quick_pp: Petrophysics quick interpretation in Python
-===========================================================
+quick_pp: Integrated Petrophysical Evaluation & Subsurface Modeling in Python
+=============================================================================
 
 .. image:: https://img.shields.io/pypi/v/quick_pp.svg
         :target: https://pypi.python.org/pypi/quick_pp
@@ -8,9 +8,9 @@ quick_pp: Petrophysics quick interpretation in Python
         :target: https://quick-pp.readthedocs.io/en/latest/?version=latest
         :alt: Documentation Status
 
-quick_pp is a Python package for petrophysical quick-look interpretation. It is designed to be a simple and easy-to-use
-tool for petrophysicists and geoscientists to perform quick-look interpretation of well log data. It is built on top of
-the popular scientific computing libraries in Python, such as NumPy, SciPy, and Matplotlib.
+``quick_pp`` is a comprehensive Python package and full-stack web platform for deterministic and probabilistic
+petrophysical evaluation, Special Core Analysis (SCAL) & relative permeability modeling, multi-well Free Water Level (FWL)
+contact optimization, stratigraphic log normalization, rock physics, and static-to-dynamic geomodeling log upscaling.
 
 .. toctree::
    :maxdepth: 2

@@ -57,6 +57,30 @@ Core Calibration module
    :undoc-members:
    :show-inheritance:
 
+SCAL & Relative Permeability module
+--------------------------------------------
+
+.. automodule:: quick_pp.scal
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Uncertainty Analysis module
+------------------------------------
+
+.. automodule:: quick_pp.uncertainty
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Log Blocking & Upscaling module
+----------------------------------------
+
+.. automodule:: quick_pp.upscaling
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Fluid Type module
 ----------------------------
 
