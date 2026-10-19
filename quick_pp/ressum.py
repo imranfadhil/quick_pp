@@ -3,11 +3,29 @@ import random
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import gmean, hmean, truncnorm
+from scipy.stats import truncnorm
 from tqdm import tqdm
 
 from quick_pp import logger
+from quick_pp.uncertainty import (
+    calc_stochastic_reservoir_summary,
+    mc_volumetric_uncertainty,
+    run_log_uncertainty,
+)
 from quick_pp.utils import minmax_scale
+
+__all__ = [
+    "calc_reservoir_summary",
+    "calc_stochastic_reservoir_summary",
+    "calculate_volume",
+    "cutoffs_analysis",
+    "flag_interval",
+    "mc_volumetric_method",
+    "mc_volumetric_uncertainty",
+    "run_log_uncertainty",
+    "sensitivity_analysis",
+    "volumetric_method",
+]
 
 
 def _weighted_zone_metrics(group: pd.DataFrame) -> pd.Series:
@@ -421,10 +439,12 @@ def mc_volumetric_method(
     volume_factor_bound: tuple,
     n_try=10000,
     percentile=None,
+    seed: int = 42,
+    plot: bool = True,
 ):
-    """Monte Carlo simulation for volumetric method.
-    This function performs a Monte Carlo simulation to estimate the distribution of
-    in-place hydrocarbon volumes and generates diagnostic plots.
+    """Monte Carlo simulation for volumetric method using Latin Hypercube Sampling.
+    This function delegates to `mc_volumetric_uncertainty` in `quick_pp.uncertainty`
+    to estimate the distribution of in-place hydrocarbon volumes and generates diagnostic plots.
 
     Args:
         area_bound (tuple): (min, max, mean, std) for area in acres.
@@ -434,127 +454,119 @@ def mc_volumetric_method(
         volume_factor_bound (tuple): (min, max) for the volume factor (unitless).
         n_try (int, optional): Number of trials. Defaults to 10000.
         percentile (list, optional): Percentiles to calculate and display. Defaults to [10, 50, 90].
+        seed (int, optional): Random seed for LatinHypercube sampler. Defaults to 42.
+        plot (bool, optional): Whether to render RainCloud and histogram plots. Defaults to True.
 
     Returns:
-        tuple: A tuple containing arrays of the generated volumes and input parameters.
+        tuple: A tuple containing arrays of `(volumes, area, thickness, porosity, water_saturation, volume_factor)`.
     """
-    import ptitprince as pt
-
-    logger.info(f"Starting Monte Carlo simulation with {n_try} trials")
+    logger.info(f"Starting LHS Monte Carlo simulation with {n_try} trials")
 
     percentile = percentile or [10, 50, 90]
+    res = mc_volumetric_uncertainty(
+        area_bound=area_bound,
+        thickness_bound=thickness_bound,
+        porosity_bound=porosity_bound,
+        water_saturation_bound=water_saturation_bound,
+        volume_factor_bound=volume_factor_bound,
+        n_try=n_try,
+        percentile=percentile,
+        seed=seed,
+        plot=False,
+    )
 
-    area = np.empty(0)
-    thickness = np.empty(0)
-    porosity = np.empty(0)
-    water_saturation = np.empty(0)
-    volume_factor = np.empty(0)
-    volumes = np.empty(0)
+    volumes = res["volumes"]
+    area = res["area"]
+    thickness = res["thickness"]
+    porosity = res["porosity"]
+    water_saturation = res["water_saturation"]
+    volume_factor = res["volume_factor"]
 
-    for _ in tqdm(range(n_try), desc="Monte Carlo simulation", unit="trials"):
-        a, h, poro, sw, bo, _ = volumetric_method(
-            area_bound=area_bound,
-            thickness_bound=thickness_bound,
-            porosity_bound=porosity_bound,
-            water_saturation_bound=water_saturation_bound,
-            volume_factor_bound=volume_factor_bound,
+    if plot:
+        import ptitprince as pt
+
+        data = pd.DataFrame(
+            {
+                "Area": area,
+                "Thickness": thickness,
+                "Porosity": porosity,
+                "Water Saturation": water_saturation,
+                "Volume Factor": volume_factor,
+                "Volume": volumes,
+            }
         )
-        area = np.append(area, a)
-        thickness = np.append(thickness, h)
-        porosity = np.append(porosity, poro)
-        water_saturation = np.append(water_saturation, sw)
-        volume_factor = np.append(volume_factor, bo)
-        result = (43560 * 0.1781) * a * h * poro * (1 - sw) / bo
-        volumes = np.append(volumes, result * 1e-6)
-
-    logger.info(
-        f"Monte Carlo simulation completed. Volume statistics - "
-        f"Mean: {np.mean(volumes):.2f} MM bbl, Std: {np.std(volumes):.2f} MM bbl"
-    )
-
-    # Plot tornado chart
-    data = pd.DataFrame(
-        {
-            "Area": area,
-            "Thickness": thickness,
-            "Porosity": porosity,
-            "Water Saturation": water_saturation,
-            "Volume Factor": volume_factor,
-            "Volume": volumes,
-        }
-    )
-    fig, axs = plt.subplots(5, 1, figsize=(7, 11), constrained_layout=True)
-    pt.RainCloud(
-        data=data,
-        y="Area",
-        ax=axs[0],
-        orient="h",
-        bw=0.1,
-        width_viol=0.5,
-        alpha=0.6,
-        dodge=True,
-    )
-    axs[0].set_ylabel("Area (acre)")
-    pt.RainCloud(
-        data=data,
-        y="Thickness",
-        ax=axs[1],
-        orient="h",
-        bw=0.1,
-        width_viol=0.5,
-        alpha=0.6,
-        dodge=True,
-    )
-    axs[1].set_ylabel("Thickness (ft)")
-    pt.RainCloud(
-        data=data,
-        y="Porosity",
-        ax=axs[2],
-        orient="h",
-        bw=0.1,
-        width_viol=0.5,
-        alpha=0.6,
-        dodge=True,
-    )
-    axs[2].set_ylabel("Porosity (frac)")
-    pt.RainCloud(
-        data=data,
-        y="Water Saturation",
-        ax=axs[3],
-        orient="h",
-        bw=0.1,
-        width_viol=0.5,
-        alpha=0.6,
-        dodge=True,
-    )
-    axs[3].set_ylabel("Water Saturation (frac)")
-    pt.RainCloud(
-        data=data,
-        y="Volume Factor",
-        ax=axs[4],
-        orient="h",
-        bw=0.1,
-        width_viol=0.5,
-        alpha=0.6,
-        dodge=True,
-    )
-    axs[4].set_ylabel("Volume Factor")
-    fig.set_facecolor("aliceblue")
-    fig.show()
-
-    plt.figure(figsize=(12, 6))
-    a = np.hstack(volumes.tolist())
-    _ = plt.hist(a, density=True, bins="auto")  # arguments are passed to np.histogram
-    plt.title(f"Volume Estimation ({n_try} samples)")
-    plt.xlabel("Volume (MM bbl)")
-    for i, pct in enumerate(np.percentile(volumes, percentile)):
-        plt.axvline(
-            x=pct,
-            color="r",
-            linestyle="dashed",
-            label=f"P{percentile[i]}: {round(pct)} MM bbl",
+        fig, axs = plt.subplots(5, 1, figsize=(7, 11), constrained_layout=True)
+        pt.RainCloud(
+            data=data,
+            y="Area",
+            ax=axs[0],
+            orient="h",
+            bw=0.1,
+            width_viol=0.5,
+            alpha=0.6,
+            dodge=True,
         )
-    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+        axs[0].set_ylabel("Area (acre)")
+        pt.RainCloud(
+            data=data,
+            y="Thickness",
+            ax=axs[1],
+            orient="h",
+            bw=0.1,
+            width_viol=0.5,
+            alpha=0.6,
+            dodge=True,
+        )
+        axs[1].set_ylabel("Thickness (ft)")
+        pt.RainCloud(
+            data=data,
+            y="Porosity",
+            ax=axs[2],
+            orient="h",
+            bw=0.1,
+            width_viol=0.5,
+            alpha=0.6,
+            dodge=True,
+        )
+        axs[2].set_ylabel("Porosity (frac)")
+        pt.RainCloud(
+            data=data,
+            y="Water Saturation",
+            ax=axs[3],
+            orient="h",
+            bw=0.1,
+            width_viol=0.5,
+            alpha=0.6,
+            dodge=True,
+        )
+        axs[3].set_ylabel("Water Saturation (frac)")
+        pt.RainCloud(
+            data=data,
+            y="Volume Factor",
+            ax=axs[4],
+            orient="h",
+            bw=0.1,
+            width_viol=0.5,
+            alpha=0.6,
+            dodge=True,
+        )
+        axs[4].set_ylabel("Volume Factor")
+        fig.set_facecolor("aliceblue")
+        fig.show()
+
+        plt.figure(figsize=(12, 6))
+        a = np.hstack(volumes.tolist())
+        _ = plt.hist(a, density=True, bins="auto")
+        plt.title(f"Volume Estimation ({n_try} samples)")
+        plt.xlabel("Volume (MM bbl)")
+        for i, pct in enumerate(np.percentile(volumes, percentile)):
+            plt.axvline(
+                x=pct,
+                color="r",
+                linestyle="dashed",
+                label=f"P{percentile[i]}: {round(pct)} MM bbl",
+            )
+        plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
 
     return volumes, area, thickness, porosity, water_saturation, volume_factor
 

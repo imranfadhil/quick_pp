@@ -320,6 +320,242 @@
     }
   }
 
+  // LHS Uncertainty controls (log-level petrophysical & volumetric uncertainty)
+  let uncModel: 'ssc' | 'carbonate' = 'ssc';
+  let uncSatMethod: 'waxman_smits' | 'archie' = 'waxman_smits';
+  let uncRealizations: number = 100;
+  let aMean = 1.0, aStd = 0.1, aMin = 0.8, aMax = 1.2;
+  let mMean = 2.0, mStd = 0.1, mMin = 1.8, mMax = 2.2;
+  let nMean = 2.0, nStd = 0.1, nMin = 1.8, nMax = 2.2;
+  let rwMean = 0.08, rwStd = 0.03, rwMin = 0.02, rwMax = 0.15;
+  let rhoMaMean = 2.68, rhoMaStd = 0.03, rhoMaMin = 2.63, rhoMaMax = 2.75;
+  let rhoShMean = 2.68, rhoShStd = 0.05, rhoShMin = 2.55, rhoShMax = 2.78;
+  let areaMin = 500, areaMax = 2500, areaMean = 1500, areaStd = 400;
+  let boMin = 1.1, boMax = 1.4;
+
+  let cpiCurves: Array<Record<string, any>> = [];
+  let volumetricsByZone: Record<string, any> = {};
+  let saveLoadingCpi = false;
+  let saveMessageCpi: string | null = null;
+  let Plotly: any = null;
+  let cpiPlotDiv: HTMLDivElement | null = null;
+
+  async function ensurePlotly() {
+    if (!Plotly) {
+      const mod = await import('plotly.js-dist-min');
+      Plotly = mod?.default ?? mod;
+    }
+    return Plotly;
+  }
+
+  function buildUncertaintyPayloadRows() {
+    const filteredRows = Array.isArray(fullRows) ? fullRows : [];
+    const anyZones = filteredRows.some(rr => {
+      const z = rr.zones ?? rr.ZONES ?? rr.zone ?? rr.ZONE;
+      return z != null && String(z).trim() !== '';
+    });
+    const outRows: Array<Record<string, any>> = [];
+    for (const r of filteredRows) {
+      const depth = Number(r.depth ?? r.tvdss ?? r.TVD ?? r.TVDSS ?? r.DEPTH ?? NaN);
+      if (isNaN(depth)) continue;
+      const nphi = Number(r.nphi ?? r.NPHI ?? NaN);
+      const rhob = Number(r.rhob ?? r.RHOB ?? NaN);
+      const rt = Number(r.rt ?? r.RT ?? r.res ?? r.RES ?? NaN);
+      const gr = Number(r.gr ?? r.GR ?? NaN);
+      const vclay = Number(r.vclay ?? r.VCLAY ?? NaN);
+      const phit = Number(r.phit ?? r.PHIT ?? NaN);
+      const swt = Number(r.swt ?? r.SWT ?? NaN);
+      const perm = Number(r.perm ?? r.PERM ?? r.permeability ?? 10.0);
+      let zones = r.zones ?? r.ZONES ?? r.zone ?? r.ZONE ?? null;
+      if (zones == null || String(zones).trim() === '') {
+        zones = anyZones ? 'UNKNOWN' : 'ALL';
+      } else {
+        zones = String(zones);
+      }
+      outRows.push({
+        depth,
+        nphi: isNaN(nphi) ? null : nphi,
+        rhob: isNaN(rhob) ? null : rhob,
+        rt: isNaN(rt) ? null : rt,
+        gr: isNaN(gr) ? null : gr,
+        vclay: isNaN(vclay) ? null : vclay,
+        phit: isNaN(phit) ? null : phit,
+        swt: isNaN(swt) ? null : swt,
+        perm: isNaN(perm) ? 10.0 : perm,
+        zones
+      });
+    }
+    return outRows;
+  }
+
+  async function renderCpiUncertaintyPlot() {
+    if (!cpiPlotDiv || !cpiCurves || !cpiCurves.length) return;
+    const plt = await ensurePlotly();
+    const depths = cpiCurves.map(r => Number(r.DEPTH ?? r.depth));
+    const swP10 = cpiCurves.map(r => Number(r.SW_P10));
+    const swP50 = cpiCurves.map(r => Number(r.SW_P50));
+    const swP90 = cpiCurves.map(r => Number(r.SW_P90));
+    const phitP10 = cpiCurves.map(r => Number(r.PHIT_P10));
+    const phitP50 = cpiCurves.map(r => Number(r.PHIT_P50));
+    const phitP90 = cpiCurves.map(r => Number(r.PHIT_P90));
+
+    const traces: any[] = [
+      {
+        x: depths,
+        y: swP10,
+        name: 'SW_P10',
+        mode: 'lines',
+        line: { width: 1, dash: 'dot', color: '#2563eb' }
+      },
+      {
+        x: depths,
+        y: swP90,
+        name: 'SW_P90',
+        mode: 'lines',
+        fill: 'tonexty',
+        fillcolor: 'rgba(37, 99, 235, 0.2)',
+        line: { width: 1, dash: 'dot', color: '#2563eb' }
+      },
+      {
+        x: depths,
+        y: swP50,
+        name: 'SW_P50',
+        mode: 'lines',
+        line: { width: 2, color: '#1d4ed8' }
+      },
+      {
+        x: depths,
+        y: phitP10,
+        name: 'PHIT_P10',
+        mode: 'lines',
+        yaxis: 'y2',
+        line: { width: 1, dash: 'dot', color: '#059669' }
+      },
+      {
+        x: depths,
+        y: phitP90,
+        name: 'PHIT_P90',
+        mode: 'lines',
+        yaxis: 'y2',
+        fill: 'tonexty',
+        fillcolor: 'rgba(5, 150, 105, 0.2)',
+        line: { width: 1, dash: 'dot', color: '#059669' }
+      },
+      {
+        x: depths,
+        y: phitP50,
+        name: 'PHIT_P50',
+        mode: 'lines',
+        yaxis: 'y2',
+        line: { width: 2, color: '#047857' }
+      }
+    ];
+
+    const layout = {
+      title: `CPI Log Uncertainty Band (${uncRealizations} LHS Realizations: ${uncModel.toUpperCase()} + ${uncSatMethod})`,
+      height: 280,
+      margin: { l: 55, r: 55, t: 35, b: 40 },
+      xaxis: { title: 'Depth' },
+      yaxis: { title: 'Water Saturation (SW_P10 / SW_P50 / SW_P90)', range: [0, 1.05] },
+      yaxis2: {
+        title: 'Porosity (PHIT_P10 / P50 / P90)',
+        overlaying: 'y',
+        side: 'right',
+        range: [0, 0.5]
+      },
+      legend: { orientation: 'h', y: -0.22 }
+    };
+
+    try {
+      await plt.react(cpiPlotDiv, traces, layout, { responsive: true });
+    } catch (e) {
+      await plt.newPlot(cpiPlotDiv, traces, layout, { responsive: true });
+    }
+  }
+
+  async function runUncertaintyReport() {
+    error = null;
+    saveMessageCpi = null;
+    if (!projectId || !wellName) {
+      error = 'Select a project and well before running LHS uncertainty';
+      return;
+    }
+    const dataRows = buildUncertaintyPayloadRows();
+    if (!dataRows.length) {
+      error = 'No valid well log rows found for LHS uncertainty propagation';
+      return;
+    }
+    loading = true;
+    try {
+      const payload = {
+        model: uncModel,
+        saturation_method: uncSatMethod,
+        n_samples: Number(uncRealizations) || 100,
+        param_bounds: {
+          a: [Number(aMin), Number(aMax), Number(aMean), Number(aStd)],
+          m: [Number(mMin), Number(mMax), Number(mMean), Number(mStd)],
+          n: [Number(nMin), Number(nMax), Number(nMean), Number(nStd)],
+          rw: [Number(rwMin), Number(rwMax), Number(rwMean), Number(rwStd)],
+          rho_ma: [Number(rhoMaMin), Number(rhoMaMax), Number(rhoMaMean), Number(rhoMaStd)],
+          rho_sh: [Number(rhoShMin), Number(rhoShMax), Number(rhoShMean), Number(rhoShStd)]
+        },
+        area_bound: [Number(areaMin), Number(areaMax), Number(areaMean), Number(areaStd)],
+        volume_factor_bound: [Number(boMin), Number(boMax)],
+        cut_offs: {
+          PHIT: Number(minPhit ?? 0.01),
+          SWT: Number(maxSwt ?? 0.9),
+          VSHALE: Number(maxVclay ?? 0.4)
+        },
+        data: dataRows
+      };
+      const res = await fetch(`${API_BASE}/quick_pp/ressum/uncertainty`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const out = await res.json();
+      ressumRows = Array.isArray(out?.summary) ? out.summary : [];
+      cpiCurves = Array.isArray(out?.cpi_curves) ? out.cpi_curves : [];
+      volumetricsByZone = out?.volumetrics ?? {};
+      setTimeout(() => renderCpiUncertaintyPlot(), 50);
+    } catch (e: any) {
+      console.warn('LHS Uncertainty error', e);
+      error = String(e?.message ?? e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function saveCpiUncertaintyCurves() {
+    if (!projectId || !wellName || !cpiCurves.length) {
+      error = 'Run LHS Uncertainty first to generate SW_P10 / SW_P50 / SW_P90 CPI curves';
+      return;
+    }
+    saveLoadingCpi = true;
+    saveMessageCpi = null;
+    error = null;
+    try {
+      const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(String(wellName))}/data`;
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: cpiCurves })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      saveMessageCpi = 'Saved SW_P10, SW_P50, SW_P90 & PHIT P10/P50/P90 curves to well plot!';
+      try {
+        window.dispatchEvent(
+          new CustomEvent('qpp:data-updated', { detail: { projectId, wellName, kind: 'uncertainty' } })
+        );
+      } catch (e) {}
+    } catch (e: any) {
+      error = String(e?.message ?? e);
+    } finally {
+      saveLoadingCpi = false;
+    }
+  }
+
   $: if (projectId && wellName) loadWellData();
 </script>
 
@@ -365,35 +601,123 @@
 
 <div class="ws-reservoir-summary">
   <div class="mb-2">
-    <div class="font-semibold">Reservoir Summary</div>
-    <div class="text-sm text-muted-foreground">High-level reservoir summary and exportable reports.</div>
+    <div class="font-semibold">Reservoir Summary & LHS Volume Uncertainty</div>
+    <div class="text-sm text-muted-foreground">High-level reservoir summary, Latin Hypercube log uncertainty (SW_P10 / SW_P50 / SW_P90), and volumetric STOIIP reports.</div>
   </div>
 
   {#if wellName}
     <div class="bg-panel rounded p-3">
       {#if loading}
         <div class="text-sm text-blue-600">
-          {pollStatus ? pollStatus : 'Loading well log…'}
+          {pollStatus ? pollStatus : 'Running calculation…'}
         </div>
       {:else if error}
         <div class="text-sm text-red-500 mb-2">Error: {error}</div>
       {/if}
+      {#if saveMessageCpi}
+        <div class="text-sm text-green-600 mb-2">{saveMessageCpi}</div>
+      {/if}
       <div class="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label class="text-sm" for="minPhitInput">Min PHIT (cutoff)</label>
-          <input id="minPhitInput" type="number" class="input w-full" placeholder="min phit" bind:value={minPhit} />
+          <input id="minPhitInput" type="number" step="0.01" class="input w-full" placeholder="min phit" bind:value={minPhit} />
         </div>
         <div>
           <label class="text-sm" for="maxSwtInput">Max SWT (cutoff)</label>
-          <input id="maxSwtInput" type="number" class="input w-full" placeholder="max swt" bind:value={maxSwt} />
+          <input id="maxSwtInput" type="number" step="0.01" class="input w-full" placeholder="max swt" bind:value={maxSwt} />
         </div>
         <div>
           <label class="text-sm" for="maxVclayInput">Max VCLAY (cutoff)</label>
-          <input id="maxVclayInput" type="number" class="input w-full" placeholder="max vclay" bind:value={maxVclay} />
+          <input id="maxVclayInput" type="number" step="0.01" class="input w-full" placeholder="max vclay" bind:value={maxVclay} />
         </div>
         <div class="flex items-end gap-2">
           <Button class="btn btn-primary" onclick={generateReport} disabled={loading} style={loading ? 'opacity:0.6; pointer-events:none;' : ''}>Generate Report</Button>
         </div>
+      </div>
+
+      <!-- Latin Hypercube Petrophysical & Volumetric Uncertainty Engine -->
+      <div class="border rounded p-3 mb-4 bg-slate-50/60">
+        <div class="font-medium text-sm mb-2">Latin Hypercube Log & Volumetric Uncertainty (P10 / P50 / P90)</div>
+        <div class="grid grid-cols-3 gap-2 mb-2 text-xs">
+          <div>
+            <label for="uncModelSelect" class="block mb-1">Lithology Model</label>
+            <select id="uncModelSelect" class="input w-full" bind:value={uncModel}>
+              <option value="ssc">SandSiltClay (SSC)</option>
+              <option value="carbonate">Carbonate</option>
+            </select>
+          </div>
+          <div>
+            <label for="uncSatSelect" class="block mb-1">Saturation Model</label>
+            <select id="uncSatSelect" class="input w-full" bind:value={uncSatMethod}>
+              <option value="waxman_smits">Waxman-Smits</option>
+              <option value="archie">Archie</option>
+            </select>
+          </div>
+          <div>
+            <label for="uncRealizationsInput" class="block mb-1">LHS Realizations</label>
+            <input id="uncRealizationsInput" type="number" min="10" max="1000" class="input w-full" bind:value={uncRealizations} />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2 mb-3 text-xs">
+          <div>
+            <label class="block mb-1" for="aMeanInput">a (mean ± std)</label>
+            <div class="flex gap-1">
+              <input id="aMeanInput" type="number" step="0.05" class="input w-full" bind:value={aMean} title="a mean" />
+              <input type="number" step="0.02" class="input w-full" bind:value={aStd} title="a std" />
+            </div>
+          </div>
+          <div>
+            <label class="block mb-1" for="mMeanInput">m (mean ± std)</label>
+            <div class="flex gap-1">
+              <input id="mMeanInput" type="number" step="0.05" class="input w-full" bind:value={mMean} title="m mean" />
+              <input type="number" step="0.02" class="input w-full" bind:value={mStd} title="m std" />
+            </div>
+          </div>
+          <div>
+            <label class="block mb-1" for="nMeanInput">n (mean ± std)</label>
+            <div class="flex gap-1">
+              <input id="nMeanInput" type="number" step="0.05" class="input w-full" bind:value={nMean} title="n mean" />
+              <input type="number" step="0.02" class="input w-full" bind:value={nStd} title="n std" />
+            </div>
+          </div>
+          <div>
+            <label class="block mb-1" for="rwMeanInput">Rw (mean ± std)</label>
+            <div class="flex gap-1">
+              <input id="rwMeanInput" type="number" step="0.01" class="input w-full" bind:value={rwMean} title="Rw mean" />
+              <input type="number" step="0.01" class="input w-full" bind:value={rwStd} title="Rw std" />
+            </div>
+          </div>
+          <div>
+            <label class="block mb-1" for="rhoMaMeanInput">ρ_ma (mean ± std)</label>
+            <div class="flex gap-1">
+              <input id="rhoMaMeanInput" type="number" step="0.01" class="input w-full" bind:value={rhoMaMean} title="rho_ma mean" />
+              <input type="number" step="0.01" class="input w-full" bind:value={rhoMaStd} title="rho_ma std" />
+            </div>
+          </div>
+          <div>
+            <label class="block mb-1" for="rhoShMeanInput">ρ_sh (mean ± std)</label>
+            <div class="flex gap-1">
+              <input id="rhoShMeanInput" type="number" step="0.01" class="input w-full" bind:value={rhoShMean} title="rho_sh mean" />
+              <input type="number" step="0.01" class="input w-full" bind:value={rhoShStd} title="rho_sh std" />
+            </div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap gap-2">
+          <Button class="btn btn-primary" onclick={runUncertaintyReport} disabled={loading}>
+            Run LHS Uncertainty ({uncRealizations} Realizations)
+          </Button>
+          {#if cpiCurves && cpiCurves.length > 0}
+            <Button class="btn" onclick={saveCpiUncertaintyCurves} disabled={saveLoadingCpi}>
+              {saveLoadingCpi ? 'Saving CPI Curves…' : 'Save SW_P10 / SW_P50 / SW_P90 to Well Log'}
+            </Button>
+          {/if}
+        </div>
+
+        {#if cpiCurves && cpiCurves.length > 0}
+          <div class="mt-3" bind:this={cpiPlotDiv} style="width:100%; min-height:280px;"></div>
+        {/if}
       </div>
 
       <div class="overflow-x-auto">
@@ -422,7 +746,7 @@
             </tbody>
           </table>
         {:else}
-          <div class="text-sm text-muted-foreground">No results. Click "Generate Report" to compute reservoir summary for the selected well.</div>
+          <div class="text-sm text-muted-foreground">No results. Click "Generate Report" or "Run LHS Uncertainty" to compute reservoir summary for the selected well.</div>
         {/if}
       </div>
     </div>
@@ -430,3 +754,4 @@
     <div class="text-sm text-muted-foreground">Select a well to view reservoir summary.</div>
   {/if}
 </div>
+

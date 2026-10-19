@@ -91,6 +91,7 @@ def add_uncertainty_traces(fig, df, index, trace_defs):
             continue
 
         p10_col = f"{col}_P10"
+        p50_col = f"{col}_P50"
         p90_col = f"{col}_P90"
         if p10_col not in df.columns or p90_col not in df.columns:
             continue
@@ -143,6 +144,47 @@ def add_uncertainty_traces(fig, df, index, trace_defs):
         if parent_xaxis:
             fig.data[-2].update(xaxis=parent_xaxis)
             fig.data[-1].update(xaxis=parent_xaxis)
+
+        if p50_col in df.columns and df[p50_col].notna().any():
+            x_p50 = round(df[p50_col], 3) if df[p50_col].dtype == "float64" else df[p50_col]
+            fig.add_trace(
+                go.Scatter(
+                    x=x_p50,
+                    y=index,
+                    name=p50_col,
+                    mode="lines",
+                    line={"width": 1, "dash": "dash", "color": COLOR_DICT.get(col, "#262626")},
+                    showlegend=False,
+                    hovertemplate=f"<b>{p50_col}</b>: %{{x}}<extra></extra>",
+                ),
+                row=1,
+                col=track,
+                secondary_y=sec_y,
+            )
+            if parent_xaxis:
+                fig.data[-1].update(xaxis=parent_xaxis)
+
+        # Also expose SW_P10 / SW_P50 / SW_P90 on Track 6 alongside SWT_P10 / SWT_P50 / SWT_P90
+        if col == "SWT":
+            for sw_pct in ("SW_P10", "SW_P50", "SW_P90"):
+                if sw_pct in df.columns and df[sw_pct].notna().any():
+                    x_sw = round(df[sw_pct], 3) if df[sw_pct].dtype == "float64" else df[sw_pct]
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_sw,
+                            y=index,
+                            name=sw_pct,
+                            mode="lines",
+                            line={"width": 0, "color": "rgba(0,0,0,0)"},
+                            showlegend=False,
+                            hovertemplate=f"<b>{sw_pct}</b>: %{{x}}<extra></extra>",
+                        ),
+                        row=1,
+                        col=track,
+                        secondary_y=sec_y,
+                    )
+                    if parent_xaxis:
+                        fig.data[-1].update(xaxis=parent_xaxis)
 
     return fig
 
@@ -331,13 +373,21 @@ def plotly_log(
     # Add yellow shaded crossover if NPHI RHOB present in df
     df = add_crossover_traces(df)
 
-    # Alias SW -> SWT if SWT is absent so Track 6 displays saturation and its P10-P90 band
-    if "SW" in df.columns and ("SWT" not in df.columns or df["SWT"].isna().all()):
-        df["SWT"] = df["SW"]
-        if "SW_P10" in df.columns and "SWT_P10" not in df.columns:
-            df["SWT_P10"] = df["SW_P10"]
-        if "SW_P90" in df.columns and "SWT_P90" not in df.columns:
-            df["SWT_P90"] = df["SW_P90"]
+    # Alias SW -> SWT if SWT is absent so Track 6 displays saturation and its P10-P50-P90 band
+    if ("SWT" not in df.columns or df["SWT"].isna().all()):
+        if "SW" in df.columns and df["SW"].notna().any():
+            df["SWT"] = df["SW"]
+        elif "SW_P50" in df.columns and df["SW_P50"].notna().any():
+            df["SWT"] = df["SW_P50"]
+        elif "SWT_P50" in df.columns and df["SWT_P50"].notna().any():
+            df["SWT"] = df["SWT_P50"]
+    for pct in ("P10", "P50", "P90"):
+        sw_col = f"SW_{pct}"
+        swt_col = f"SWT_{pct}"
+        if sw_col in df.columns and (swt_col not in df.columns or df[swt_col].isna().all()):
+            df[swt_col] = df[sw_col]
+        elif swt_col in df.columns and (sw_col not in df.columns or df[sw_col].isna().all()):
+            df[sw_col] = df[swt_col]
 
     # Ensure all required columns exist (fill with NaN if missing)
     for k in trace_defs.keys():

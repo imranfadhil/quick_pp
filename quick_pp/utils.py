@@ -77,9 +77,14 @@ def minmax_scale(series: pd.Series):
         pd.Series: The scaled pandas Series with values between 0 and 1.
     """
     if not isinstance(series, pd.Series):
-        series = pd.Series(series)
+        arr = np.asarray(series)
+        if arr.ndim > 1:
+            arr = arr.ravel()
+        series = pd.Series(arr)
     min_val = series.min()
     max_val = series.max()
+    if max_val == min_val:
+        return pd.Series(np.zeros(len(series), dtype=float), index=series.index)
     scaled_series = (series - min_val) / (max_val - min_val)
     return scaled_series
 

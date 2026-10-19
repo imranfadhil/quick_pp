@@ -89,9 +89,11 @@ def effective_porosity(phit, phi_shale, vshale):
         Effective porosity [fraction].
 
     """
-    logger.debug(f"Calculating effective porosity with shale porosity: {phi_shale:.3f}")
+    logger.debug(
+        f"Calculating effective porosity with mean shale porosity: {float(np.nanmean(phi_shale)):.3f}"
+    )
     phie = phit - (vshale * phi_shale)
-    logger.debug(f"Effective porosity range: {phie.min():.3f} - {phie.max():.3f}")
+    logger.debug(f"Effective porosity range: {np.nanmin(phie):.3f} - {np.nanmax(phie):.3f}")
     return phie
 
 
