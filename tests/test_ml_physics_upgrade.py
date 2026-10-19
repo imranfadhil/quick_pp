@@ -247,3 +247,50 @@ def test_group_split_data():
     assert len(X_tr_s) + len(X_te_s) == len(single_df)
     assert set(X_tr_s.index).isdisjoint(set(X_te_s.index))
 
+
+def test_calc_reservoir_summary_pore_volume_weighting_and_perm_upscaling():
+    """Verify PRMS/SEC pore-volume weighted Sw and kh/kv permeability upscaling proxies in calc_reservoir_summary."""
+    from quick_pp.ressum import calc_reservoir_summary
+
+    # Two pay layers in Zone A with equal thickness (h = 1.0 m):
+    # Layer 1 (high quality sand): phit = 0.30, swt = 0.20, perm = 1000.0 mD
+    # Layer 2 (poor quality sand): phit = 0.10, swt = 0.80, perm = 10.0 mD
+    # Arithmetic Sw = (0.20 + 0.80) / 2 = 0.50 (WRONG for reserves!)
+    # Pore-Volume Weighted Sw = (0.30*0.20*1 + 0.10*0.80*1) / (0.30*1 + 0.10*1) = 0.14 / 0.40 = 0.35
+    # Thickness-weighted phit = (0.30 + 0.10) / 2 = 0.20
+    # BVHC = phit_avg * (1 - sw_pv) = 0.20 * (1 - 0.35) = 0.13
+    # Perm Arith (k_h) = (1000 + 10) / 2 = 505.0 mD
+    # Perm Geom (k_eff) = sqrt(1000 * 10) = 100.0 mD
+    # Perm Harm (k_v) = 2 / (1/1000 + 1/10) = 19.802 mD
+    depth = np.array([1000.0, 1001.0])
+    vshale = np.array([0.10, 0.20])
+    phit = np.array([0.30, 0.10])
+    swt = np.array([0.20, 0.80])
+    perm = np.array([1000.0, 10.0])
+    zones = np.array(["ZONE_A", "ZONE_A"])
+
+    cutoffs = {"VSHALE": 0.40, "PHIT": 0.05, "SWT": 0.90}
+    summary = calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=cutoffs)
+
+    pay_row = summary[(summary["zones"] == "ZONE_A") & (summary["flag"] == "pay")].iloc[0]
+
+    # Verify pore-volume weighted Sw (0.35), NOT arithmetic mean (0.50)
+    np.testing.assert_allclose(pay_row["av_swt"], 0.35, atol=1e-3)
+    np.testing.assert_allclose(pay_row["av_sw_pay"], 0.35, atol=1e-3)
+    np.testing.assert_allclose(pay_row["av_phit"], 0.20, atol=1e-3)
+    np.testing.assert_allclose(pay_row["av_phit_pay"], 0.20, atol=1e-3)
+
+    # Volumetric identity: av_bvhc == av_phit * (1 - av_swt)
+    np.testing.assert_allclose(
+        pay_row["av_bvhc"],
+        pay_row["av_phit"] * (1.0 - pay_row["av_swt"]),
+        atol=1e-3,
+    )
+
+    # Verify permeability upscaling proxies (k_harm <= k_geom <= k_arith)
+    np.testing.assert_allclose(pay_row["av_perm_arith_pay"], 505.0, atol=1e-3)
+    np.testing.assert_allclose(pay_row["av_perm_geom_pay"], 100.0, atol=1e-3)
+    np.testing.assert_allclose(pay_row["av_perm_harm_pay"], 19.802, atol=1e-3)
+    assert pay_row["av_perm_harm_pay"] <= pay_row["av_perm_geom_pay"] <= pay_row["av_perm_arith_pay"]
+
+
