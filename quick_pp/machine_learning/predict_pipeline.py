@@ -16,6 +16,8 @@ from quick_pp.machine_learning.config import (
 )
 from quick_pp.machine_learning.feature_engineering import generate_fe_features
 from quick_pp.machine_learning.utils import (
+    POST_PROCESSING,
+    EnforceMineralSum,
     enforce_physical_constraints,
     get_latest_registered_models,
     predict_with_uncertainty,
@@ -64,8 +66,9 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def postprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Postprocess the DataFrame by enforcing physical constraints, inverting LOG_PERM to PERM
-    (including P10–P90 bands), enforcing sum(V_mineral) + PHIT = 1.0, and computing fluid volumes.
+    """Postprocess the DataFrame by enforcing single-column physical bounds, jointly normalizing
+    ``['VCLAY', 'VSAND', 'VSILT', 'PHIT']`` via ``EnforceMineralSum``, inverting ``LOG_PERM`` to
+    ``PERM`` (including P10–P90 bands), and computing fluid volumes.
 
     Args:
         df (pd.DataFrame): The DataFrame containing model predictions.
@@ -75,6 +78,23 @@ def postprocess_data(df: pd.DataFrame) -> pd.DataFrame:
                       'PERM', 'PERM_P10', 'PERM_P90', 'VHC', 'VWATER', 'VOIL', and 'VGAS' columns.
     """
     logger.info("Enforcing petrophysical bounds and volumetric closure constraints")
+    df = df.copy()
+
+    # 1. Single-column bound post-processing
+    for k, fn in POST_PROCESSING.items():
+        if k in df.columns:
+            df[k] = fn(df[k])
+
+    # 2. Multi-column joint post-processing for mineral volumes + porosity closure
+    joint_mineral_poro_cols = [
+        c for c in ["VCLAY", "VSAND", "VSILT", "PHIT"] if c in df.columns
+    ]
+    if len(joint_mineral_poro_cols) >= 2:
+        df[joint_mineral_poro_cols] = EnforceMineralSum(
+            mineral_cols=["VCLAY", "VSAND", "VSILT"], porosity_col="PHIT"
+        )(df[joint_mineral_poro_cols])
+
+    # 3. Full petrophysical constraints (tight-rock Sw, coal intervals, PERM inversion, P10-P90 ordering)
     df = enforce_physical_constraints(df)
 
     # Generate fluid volume fractions if porosity and water saturation exist

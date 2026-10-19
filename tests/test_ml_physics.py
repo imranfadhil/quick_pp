@@ -248,6 +248,90 @@ def test_group_split_data():
     assert set(X_tr_s.index).isdisjoint(set(X_te_s.index))
 
 
+def test_conformal_regressor_small_ncal_monotonicity_and_local_weighting():
+    """Verify ConformalRegressor preserves strict quantile monotonicity when n_cal < 10
+    (P90 wider than P80) and produces locally weighted (heteroscedastic) bands via tree std.
+    """
+    from quick_pp.machine_learning.utils import ConformalRegressor
+
+    rng = np.random.default_rng(7)
+    # Clean sand interval (low noise) vs tight/washout interval (high noise)
+    X_clean = rng.uniform(0.0, 0.3, size=(40, 4))
+    y_clean = 0.25 - 0.10 * X_clean[:, 0] + rng.normal(0.0, 0.003, size=40)
+
+    X_washout = rng.uniform(0.7, 1.0, size=(40, 4))
+    y_washout = 0.08 - 0.05 * X_washout[:, 0] + rng.normal(0.0, 0.06, size=40)
+
+    X_train = np.vstack([X_clean[:35], X_washout[:35]])
+    y_train = np.concatenate([y_clean[:35], y_washout[:35]])
+
+    # Small calibration fold with n_cal = 6 (< 10) where (1 - alpha) * (1 + 1 / n_cal) > 1.0
+    X_cal = np.vstack([X_clean[35:38], X_washout[35:38]])
+    y_cal = np.concatenate([y_clean[35:38], y_washout[35:38]])
+
+    rf = RandomForestRegressor(n_estimators=50, random_state=42).fit(X_train, y_train)
+
+    cr_p90 = ConformalRegressor(estimator=rf, alpha=0.10).fit(X_cal, y_cal)
+    cr_p80 = ConformalRegressor(estimator=rf, alpha=0.20).fit(X_cal, y_cal)
+
+    assert cr_p90.q_hat > cr_p80.q_hat, (
+        f"Expected q_hat(alpha=0.10) > q_hat(alpha=0.20) for small n_cal=6, "
+        f"got {cr_p90.q_hat} vs {cr_p80.q_hat}"
+    )
+
+    X_eval = np.vstack([X_clean[:10], X_washout[:10]])
+    _, low_90, high_90 = cr_p90.predict_interval(X_eval)
+    _, low_80, high_80 = cr_p80.predict_interval(X_eval)
+
+    width_90 = high_90 - low_90
+    width_80 = high_80 - low_80
+    assert np.all(width_90 > width_80), "P90 interval must be strictly wider than P80 interval"
+
+    # Locally weighted check: washout/tight samples must have wider uncertainty bands than clean sands
+    mean_clean_width = float(np.mean(width_80[:10]))
+    mean_washout_width = float(np.mean(width_80[10:]))
+    assert mean_washout_width > mean_clean_width
+
+
+def test_enforce_mineral_sum_zero_division_and_porosity_coupling():
+    """Verify EnforceMineralSum handles zero-sum rows without division-by-zero,
+    supports 1D Series gracefully, and normalizes ['VCLAY', 'VSAND', 'VSILT', 'PHIT'] jointly.
+    """
+    from quick_pp.machine_learning.utils import EnforceMineralSum
+
+    enforcer = EnforceMineralSum(mineral_cols=["VCLAY", "VSAND", "VSILT"], porosity_col="PHIT")
+
+    # 1. 1D Series passed (e.g. single-column call) -> clips safely without error
+    s_in = pd.Series([-0.2, 0.4, 1.5, 0.0], name="VCLAY")
+    s_out = enforcer(s_in)
+    assert isinstance(s_out, pd.Series)
+    np.testing.assert_allclose(s_out.to_numpy(), np.array([0.0, 0.4, 1.0, 0.0]))
+
+    # 2. 2D array with an all-zero row -> no NaN or ZeroDivisionError
+    arr_2d = np.array([[0.0, 0.0, 0.0], [0.6, 0.6, 0.3]])
+    norm_2d = enforcer(arr_2d)
+    assert np.all(np.isfinite(norm_2d))
+    np.testing.assert_allclose(np.sum(norm_2d, axis=1), np.ones(2), atol=1e-6)
+
+    # 3. Multi-column DataFrame with ['VCLAY', 'VSAND', 'VSILT', 'PHIT'] including zero-mineral row
+    df_multi = pd.DataFrame(
+        {
+            "VCLAY": [0.50, 0.00, -0.10],
+            "VSAND": [0.50, 0.00, 0.80],
+            "VSILT": [0.20, 0.00, 0.40],
+            "PHIT": [0.20, 0.15, 0.10],
+        }
+    )
+    res_df = enforcer(df_multi)
+    assert np.all(np.isfinite(res_df.to_numpy()))
+    np.testing.assert_allclose(
+        res_df[["VCLAY", "VSAND", "VSILT", "PHIT"]].sum(axis=1).to_numpy(),
+        np.ones(3),
+        atol=1e-6,
+    )
+
+
+
 
 
 

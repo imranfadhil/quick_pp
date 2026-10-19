@@ -1,9 +1,9 @@
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from scipy.optimize import minimize
+from scipy.optimize import minimize, nnls
 from tqdm import tqdm
 
 from quick_pp import logger
@@ -202,8 +202,10 @@ def solve_bounded_least_squares_batch(
             # Ensure we don't clamp all variables in any row
             all_c = np.all(state[g_inf] != 0, axis=1)
             if np.any(all_c):
-                 release_rows = g_inf[all_c]
-                 state[release_rows, np.argmax(V[release_rows] - lower[None, :], axis=1)] = 0
+                release_rows = g_inf[all_c]
+                state[
+                    release_rows, np.argmax(V[release_rows] - lower[None, :], axis=1)
+                ] = 0
 
         feas_rows = np.where(~infeasible)[0]
         if len(feas_rows) > 0:
@@ -849,7 +851,9 @@ class MultiMineral:
 
         if not use_nonlinear:
             linear_keys = [
-                k for k in valid_logs.keys() if k in ("GR", "NPHI", "RHOB", "PEF", "DTC")
+                k
+                for k in valid_logs.keys()
+                if k in ("GR", "NPHI", "RHOB", "PEF", "DTC")
             ]
             C = self._build_response_matrix(linear_keys)
             weights = np.array(
@@ -857,8 +861,7 @@ class MultiMineral:
             )
             Cw = weights[:, None] * C
             Yw = (
-                weights
-                * np.array([valid_logs[k] for k in linear_keys], dtype=float)
+                weights * np.array([valid_logs[k] for k in linear_keys], dtype=float)
             )[None, :]
             lower = np.array([b[0] for b in self.bounds], dtype=float)
             upper = np.array([b[1] for b in self.bounds], dtype=float)
@@ -922,7 +925,9 @@ class MultiMineral:
             b = getattr(self, "b")
 
         if A is None:
-            raise ValueError("Matrix A (or measured log array) must be provided to optimize().")
+            raise ValueError(
+                "Matrix A (or measured log array) must be provided to optimize()."
+            )
 
         A_arr = np.asarray(A, dtype=float)
         transposed_output = False
@@ -956,15 +961,24 @@ class MultiMineral:
                     )
             elif A_arr.ndim == 3:
                 # 3D response matrix across depth steps
-                if b_arr.shape[0] == A_arr.shape[0] and b_arr.shape[1] == A_arr.shape[1]:
+                if (
+                    b_arr.shape[0] == A_arr.shape[0]
+                    and b_arr.shape[1] == A_arr.shape[1]
+                ):
                     # A is (m, N, p), b is (m, N) -> len(A[0]) == N
                     C_mat = np.transpose(A_arr, (1, 0, 2))  # (N, m, p)
                     Y_mat = b_arr.T  # (N, m)
-                elif b_arr.shape[0] == A_arr.shape[0] and b_arr.shape[1] == A_arr.shape[2]:
+                elif (
+                    b_arr.shape[0] == A_arr.shape[0]
+                    and b_arr.shape[1] == A_arr.shape[2]
+                ):
                     # A is (m, p, N), b is (m, N)
                     C_mat = np.transpose(A_arr, (2, 0, 1))  # (N, m, p)
                     Y_mat = b_arr.T  # (N, m)
-                elif A_arr.shape[0] == b_arr.shape[0] and A_arr.shape[1] == b_arr.shape[1]:
+                elif (
+                    A_arr.shape[0] == b_arr.shape[0]
+                    and A_arr.shape[1] == b_arr.shape[1]
+                ):
                     # A is (N, m, p), b is (N, m)
                     C_mat = A_arr
                     Y_mat = b_arr
@@ -974,17 +988,19 @@ class MultiMineral:
                         f"Incompatible 3D shape for A {A_arr.shape} and b {b_arr.shape}."
                     )
             else:
-                raise ValueError(f"Unsupported number of dimensions for A: {A_arr.ndim}")
+                raise ValueError(
+                    f"Unsupported number of dimensions for A: {A_arr.ndim}"
+                )
 
         N, m = Y_mat.shape
         p = C_mat.shape[-1]
 
         if bounds is not None:
-            lower = np.array([ bd[0] for bd in bounds ], dtype=float)
-            upper = np.array([ bd[1] for bd in bounds ], dtype=float)
+            lower = np.array([bd[0] for bd in bounds], dtype=float)
+            upper = np.array([bd[1] for bd in bounds], dtype=float)
         elif len(self.bounds) == p:
-            lower = np.array([ bd[0] for bd in self.bounds ], dtype=float)
-            upper = np.array([ bd[1] for bd in self.bounds ], dtype=float)
+            lower = np.array([bd[0] for bd in self.bounds], dtype=float)
+            upper = np.array([bd[1] for bd in self.bounds], dtype=float)
         else:
             lower = np.zeros(p, dtype=float)
             upper = np.ones(p, dtype=float)
@@ -1000,10 +1016,7 @@ class MultiMineral:
         )
         solver_choice = (method or self.solver or "auto").lower()
         workers = n_jobs if n_jobs is not None else self.n_jobs
-        use_nonlinear = (
-            solver_choice == "slsqp"
-            or cond_model in CONDUCTIVITY_MODELS
-        )
+        use_nonlinear = solver_choice == "slsqp" or cond_model in CONDUCTIVITY_MODELS
 
         V_out = np.full((N, p), np.nan, dtype=float)
         valid_row = np.sum(np.isfinite(Y_mat), axis=1) >= min(3, m)
@@ -1082,7 +1095,11 @@ class MultiMineral:
                 y_f = y_i[f_mask]
                 v_init = V_out[idx] if np.all(np.isfinite(V_out[idx])) else V0[idx]
                 rt_val = rt_arr[idx] if idx < len(rt_arr) else np.nan
-                has_rt = cond_model in CONDUCTIVITY_MODELS and np.isfinite(rt_val) and rt_val > 0
+                has_rt = (
+                    cond_model in CONDUCTIVITY_MODELS
+                    and np.isfinite(rt_val)
+                    and rt_val > 0
+                )
 
                 def _obj(v: np.ndarray) -> float:
                     diff = C_i @ v - y_f
@@ -1161,6 +1178,7 @@ class MultiMineral:
             pd.DataFrame: A DataFrame containing the estimated mineral and fluid volumes,
                           constructed porosity, error metrics, and reconstructed logs for each depth point.
         """
+
         def _to_float_array(arr: Optional[np.ndarray], length: int) -> np.ndarray:
             if arr is None:
                 return np.full(length, np.nan, dtype=float)
@@ -1184,7 +1202,10 @@ class MultiMineral:
             if conductivity_model is not None
             else self.conductivity_model
         )
-        if active_cond_model is not None and active_cond_model not in CONDUCTIVITY_MODELS:
+        if (
+            active_cond_model is not None
+            and active_cond_model not in CONDUCTIVITY_MODELS
+        ):
             raise ValueError(
                 f"Unknown conductivity_model '{active_cond_model}'. "
                 f"Choose from {CONDUCTIVITY_MODELS} or None."
@@ -1271,7 +1292,9 @@ class MultiMineral:
                 mask_sub = finite_mask[valid_idx]
                 patterns, inv = np.unique(mask_sub, axis=0, return_inverse=True)
 
-                def _solve_group(pat_i: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                def _solve_group(
+                    pat_i: int,
+                ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
                     local_rows = np.where(inv == pat_i)[0]
                     global_rows = valid_idx[local_rows]
                     col_mask = patterns[pat_i]
@@ -1282,9 +1305,10 @@ class MultiMineral:
                             np.ones(len(global_rows), dtype=bool),
                         )
                     Cw_sub = (weights_full[col_mask, None]) * C_full[col_mask, :]
-                    Yw_sub = Y_linear[np.ix_(global_rows, col_mask)] * weights_full[
-                        None, col_mask
-                    ]
+                    Yw_sub = (
+                        Y_linear[np.ix_(global_rows, col_mask)]
+                        * weights_full[None, col_mask]
+                    )
                     V_sub, ok_sub = solve_bounded_least_squares_batch(
                         Cw_sub, Yw_sub, V0[global_rows], lower, upper
                     )
@@ -1303,6 +1327,7 @@ class MultiMineral:
 
                 # Reserve SLSQP only when non-linear conductivity is enabled or method='slsqp'
                 if use_nonlinear:
+
                     def _run_slsqp_depth(i: int) -> Tuple[int, np.ndarray, bool]:
                         log_values = {
                             "GR": gr_arr[i] if finite_mask[i, 0] else None,
@@ -1311,7 +1336,11 @@ class MultiMineral:
                             "PEF": pef_arr[i] if finite_mask[i, 3] else None,
                             "DTC": dtc_arr[i] if finite_mask[i, 4] else None,
                         }
-                        if active_cond_model is not None and np.isfinite(rt_arr[i]) and rt_arr[i] > 0:
+                        if (
+                            active_cond_model is not None
+                            and np.isfinite(rt_arr[i])
+                            and rt_arr[i] > 0
+                        ):
                             log_values["RT"] = rt_arr[i]
                         warm_v = V_all[i] if np.all(np.isfinite(V_all[i])) else V0[i]
                         m_v, f_v, ok = self._optimize_volumes(
@@ -1428,3 +1457,127 @@ class Optim(MultiMineral):
         )
         self.A = A
         self.b = b
+
+    def solve_fast(
+        self,
+        A: Optional[np.ndarray] = None,
+        b: Optional[np.ndarray] = None,
+        unity_weight: float = 100.0,
+        normalize: bool = True,
+    ) -> np.ndarray:
+        """Solve non-negative mineral/fluid volumes via ``scipy.optimize.nnls`` with weighted unity closure.
+
+        Appends the volumetric closure row ``[1, 1, ..., 1] * unity_weight`` and target
+        ``1.0 * unity_weight`` (with default penalty weight :math:`\\lambda = 100.0`) before
+        calling ``scipy.optimize.nnls`` so that :math:`\\sum_i V_i \\approx 1.0` is enforced
+        natively during optimization without distorting log tool reconstruction via heavy
+        post-hoc rescaling.
+
+        Args:
+            A (np.ndarray, optional): Response matrix of shape ``(n_logs, n_vars)`` or 3D
+                ``(n_logs, n_vars, n_samples)`` / ``(n_logs, n_samples, n_vars)``. Defaults to ``self.A``.
+            b (np.ndarray, optional): Measured log vector ``(n_logs,)`` or matrix ``(n_logs, n_samples)``
+                or ``(n_samples, n_logs)``. Defaults to ``self.b``.
+            unity_weight (float, optional): Penalty weight :math:`\\lambda` on the unity constraint
+                row :math:`\\sum_i V_i = 1.0`. Defaults to ``100.0``.
+            normalize (bool, optional): Whether to apply final fine normalization ``x / sum(x)``.
+                Defaults to ``True``.
+
+        Returns:
+            np.ndarray: Optimized non-negative volume fractions summing to 1.0.
+        """
+        A_in = A if A is not None else getattr(self, "A", None)
+        b_in = b if b is not None else getattr(self, "b", None)
+
+        if A_in is None:
+            raise ValueError("Matrix A must be provided to solve_fast().")
+
+        A_arr = np.asarray(A_in, dtype=float)
+        lam = float(unity_weight)
+
+        if b_in is None:
+            log_names = ["GR", "NPHI", "RHOB", "PEF", "DTC"][: A_arr.shape[0]]
+            C_mat = self._build_response_matrix(log_names)
+            Y_mat = A_arr.T  # (n_samples, n_logs)
+            single_sample = False
+            transposed_output = False
+        else:
+            b_arr = np.asarray(b_in, dtype=float)
+            single_sample = b_arr.ndim == 1
+            transposed_output = False
+            if single_sample:
+                C_mat = A_arr
+                Y_mat = b_arr[None, :]
+            elif A_arr.ndim == 2:
+                if b_arr.shape[0] == A_arr.shape[0]:
+                    C_mat = A_arr  # (n_logs, n_vars)
+                    Y_mat = b_arr.T  # (n_samples, n_logs)
+                elif b_arr.shape[1] == A_arr.shape[0]:
+                    C_mat = A_arr
+                    Y_mat = b_arr
+                    transposed_output = True
+                elif A_arr.shape[1] == b_arr.shape[1]:
+                    C_mat = b_arr
+                    Y_mat = A_arr.T
+                else:
+                    raise ValueError(
+                        f"Incompatible shapes for A {A_arr.shape} and b {b_arr.shape}."
+                    )
+            elif A_arr.ndim == 3:
+                if (
+                    b_arr.shape[0] == A_arr.shape[0]
+                    and b_arr.shape[1] == A_arr.shape[1]
+                ):
+                    C_mat = np.transpose(A_arr, (1, 0, 2))  # (N, m, p)
+                    Y_mat = b_arr.T
+                elif (
+                    b_arr.shape[0] == A_arr.shape[0]
+                    and b_arr.shape[1] == A_arr.shape[2]
+                ):
+                    C_mat = np.transpose(A_arr, (2, 0, 1))  # (N, m, p)
+                    Y_mat = b_arr.T
+                elif (
+                    A_arr.shape[0] == b_arr.shape[0]
+                    and A_arr.shape[1] == b_arr.shape[1]
+                ):
+                    C_mat = A_arr
+                    Y_mat = b_arr
+                    transposed_output = True
+                else:
+                    raise ValueError(
+                        f"Incompatible 3D shape for A {A_arr.shape} and b {b_arr.shape}."
+                    )
+            else:
+                raise ValueError(f"Unsupported dimensions for A: {A_arr.ndim}")
+
+        n_samples, n_logs = Y_mat.shape
+        n_vars = C_mat.shape[-1]
+        V_out = np.full((n_samples, n_vars), np.nan, dtype=float)
+        unity_row = np.ones((1, n_vars), dtype=float) * lam
+        unity_target = 1.0 * lam
+
+        for i in range(n_samples):
+            b_vec = Y_mat[i]
+            A_mat = C_mat if C_mat.ndim == 2 else C_mat[i]
+            valid_mask = np.isfinite(b_vec) & np.all(np.isfinite(A_mat), axis=1)
+            if not np.any(valid_mask):
+                continue
+
+            A_valid = A_mat[valid_mask]
+            b_valid = b_vec[valid_mask]
+
+            A_aug = np.vstack([A_valid, unity_row])
+            b_aug = np.append(b_valid, unity_target)
+
+            x, _ = nnls(A_aug, b_aug)
+            if normalize:
+                v_sum = float(np.sum(x))
+                if v_sum > 1e-12:
+                    x = x / v_sum
+                else:
+                    x = np.full(n_vars, 1.0 / n_vars, dtype=float)
+            V_out[i] = x
+
+        if single_sample:
+            return V_out[0]
+        return V_out if transposed_output else V_out.T

@@ -1,4 +1,3 @@
-import copy
 import os
 import socket
 from hashlib import sha256
@@ -406,7 +405,17 @@ def enforce_physical_constraints(
         for poro_col in ("PHIE", "PHIE_P10", "PHIE_P90"):
             if poro_col in df.columns:
                 df.loc[coal_mask, poro_col] = 0.0
-        for sw_col in ("SWT", "SW", "SWE", "SWT_P10", "SWT_P90", "SW_P10", "SW_P90", "SWE_P10", "SWE_P90"):
+        for sw_col in (
+            "SWT",
+            "SW",
+            "SWE",
+            "SWT_P10",
+            "SWT_P90",
+            "SW_P10",
+            "SW_P90",
+            "SWE_P10",
+            "SWE_P90",
+        ):
             if sw_col in df.columns:
                 df.loc[coal_mask, sw_col] = 1.0
         for flag_col in ("OIL_FLAG", "GAS_FLAG"):
@@ -439,7 +448,8 @@ def enforce_physical_constraints(
             for col in present_minerals:
                 df[col] = np.where(
                     valid_sum,
-                    df[col] * (target_matrix_vol / np.where(valid_sum, mineral_sum, 1.0)),
+                    df[col]
+                    * (target_matrix_vol / np.where(valid_sum, mineral_sum, 1.0)),
                     target_matrix_vol / n_min,
                 )
 
@@ -487,13 +497,365 @@ def enforce_physical_constraints(
     return df
 
 
-class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
-    """Multi-output Conformal Prediction wrapper using MAPIE with physics constraints.
+class EnforceMineralSum:
+    """Callable post-processor that enforces non-negativity and volumetric closure.
 
-    Fits a conformalized regressor per target column (using MAPIE's CrossConformalRegressor
-    when available, with fallback to split-conformal + ensemble tree quantiles) to produce
-    calibrated P10–P90 (80%) prediction intervals alongside physically constrained point
-    predictions.
+    Normalizes mineral volume columns (e.g., ``['VCLAY', 'VSAND', 'VSILT']``) jointly
+    with total porosity (``'PHIT'``) when present so that:
+        ``sum(V_mineral) + PHIT = 1.0``
+    or normalizes mineral columns to sum to ``1.0`` when porosity is not included.
+    Safely guards against division by zero when all predicted volumes in a row are zero,
+    and gracefully handles 1D ``pd.Series`` / arrays by clipping to ``[0.0, 1.0]``.
+    """
+
+    def __init__(
+        self,
+        mineral_cols: Optional[list[str]] = None,
+        porosity_col: str = "PHIT",
+        couple_porosity: bool = True,
+    ):
+        self.mineral_cols = mineral_cols or list(MINERAL_VOL_COLS)
+        self.porosity_col = porosity_col
+        self.couple_porosity = couple_porosity
+
+    def __call__(
+        self,
+        y_pred: pd.DataFrame | pd.Series | np.ndarray,
+        phit: Optional[pd.Series | np.ndarray] = None,
+    ) -> pd.DataFrame | pd.Series | np.ndarray:
+        # 1. Graceful 1D handling (if called on a single target column)
+        if isinstance(y_pred, pd.Series):
+            low, high = PHYSICAL_BOUNDS.get(str(y_pred.name), (0.0, 1.0))
+            return y_pred.clip(lower=low, upper=high).fillna(0.0)
+
+        if isinstance(y_pred, np.ndarray) and y_pred.ndim == 1:
+            return np.clip(np.nan_to_num(y_pred.astype(float), nan=0.0), 0.0, 1.0)
+
+        # 2. Multi-column DataFrame handling (joint mineral + porosity normalization)
+        if isinstance(y_pred, pd.DataFrame):
+            df = y_pred.copy()
+            has_poro_col = self.couple_porosity and (self.porosity_col in df.columns)
+            present_minerals = [c for c in self.mineral_cols if c in df.columns]
+            if not present_minerals:
+                present_minerals = [c for c in df.columns if c != self.porosity_col]
+
+            if not present_minerals:
+                if has_poro_col:
+                    low, high = PHYSICAL_BOUNDS.get(self.porosity_col, (0.0, 0.50))
+                    df[self.porosity_col] = (
+                        df[self.porosity_col].clip(lower=low, upper=high).fillna(0.0)
+                    )
+                return df
+
+            for col in present_minerals:
+                df[col] = df[col].clip(lower=0.0, upper=1.0).fillna(0.0)
+
+            if has_poro_col or phit is not None:
+                poro_low, poro_high = PHYSICAL_BOUNDS.get(
+                    self.porosity_col, (0.0, 0.50)
+                )
+                if has_poro_col:
+                    phit_vals = (
+                        df[self.porosity_col]
+                        .clip(lower=poro_low, upper=poro_high)
+                        .fillna(0.0)
+                        .to_numpy(dtype=float)
+                    )
+                    df[self.porosity_col] = phit_vals
+                else:
+                    phit_vals = np.clip(
+                        np.nan_to_num(np.asarray(phit, dtype=float).ravel(), nan=0.0),
+                        poro_low,
+                        poro_high,
+                    )
+                target_matrix_vol = np.clip(1.0 - phit_vals, 0.0, 1.0)
+            else:
+                target_matrix_vol = np.ones(len(df), dtype=float)
+
+            mineral_arr = df[present_minerals].to_numpy(dtype=float)
+            mineral_sum = np.sum(mineral_arr, axis=1)
+            valid_sum = mineral_sum > 1e-8
+            safe_sum = np.where(valid_sum, mineral_sum, 1.0)
+            n_min = len(present_minerals)
+
+            for idx, col in enumerate(present_minerals):
+                df[col] = np.where(
+                    valid_sum,
+                    mineral_arr[:, idx] * (target_matrix_vol / safe_sum),
+                    target_matrix_vol / n_min,
+                )
+            return df
+
+        # 3. 2D numpy array handling
+        arr = np.asarray(y_pred, dtype=float)
+        arr = np.clip(np.nan_to_num(arr, nan=0.0), 0.0, 1.0)
+        n_rows, n_cols = arr.shape
+        if n_cols == 0:
+            return arr
+
+        if phit is not None and self.couple_porosity:
+            poro_low, poro_high = PHYSICAL_BOUNDS.get(self.porosity_col, (0.0, 0.50))
+            phit_vals = np.clip(
+                np.nan_to_num(
+                    np.asarray(phit, dtype=float).reshape(n_rows, 1), nan=0.0
+                ),
+                poro_low,
+                poro_high,
+            )
+            target_sum = np.clip(1.0 - phit_vals, 0.0, 1.0)
+        else:
+            target_sum = np.ones((n_rows, 1), dtype=float)
+
+        row_sum = np.sum(arr, axis=1, keepdims=True)
+        valid_sum = row_sum > 1e-8
+        safe_sum = np.where(valid_sum, row_sum, 1.0)
+        return np.where(
+            valid_sum,
+            arr * (target_sum / safe_sum),
+            target_sum / n_cols,
+        )
+
+
+POST_PROCESSING = {
+    "PHIT": lambda s: np.clip(s, *PHYSICAL_BOUNDS["PHIT"]),
+    "PHIE": lambda s: np.clip(s, *PHYSICAL_BOUNDS["PHIE"]),
+    "SWT": lambda s: np.clip(s, *PHYSICAL_BOUNDS["SWT"]),
+    "SW": lambda s: np.clip(s, *PHYSICAL_BOUNDS["SW"]),
+    "SWE": lambda s: np.clip(s, *PHYSICAL_BOUNDS["SWE"]),
+    "LOG_PERM": lambda s: np.clip(s, *PHYSICAL_BOUNDS["LOG_PERM"]),
+    "PERM": lambda s: np.clip(s, *PHYSICAL_BOUNDS["PERM"]),
+    "VCLAY": lambda s: np.clip(s, 0.0, 1.0),
+    "VSAND": lambda s: np.clip(s, 0.0, 1.0),
+    "VSILT": lambda s: np.clip(s, 0.0, 1.0),
+    "VCALC": lambda s: np.clip(s, 0.0, 1.0),
+    "VDOLO": lambda s: np.clip(s, 0.0, 1.0),
+}
+
+
+def _conformal_quantile_level(alpha: float, n_cal: int) -> float:
+    """Compute a guarded finite-sample conformal quantile level strictly monotonic in alpha.
+
+    When ``n_cal`` is small (e.g. ``n_cal < 10``), the naive formula
+    ``min((1 - alpha) * (1 + 1 / n_cal), 1.0)`` exceeds 1.0 and caps distinct ``alpha``
+    values (such as ``alpha=0.10`` for P90 and ``alpha=0.20`` for P80) at 1.0, making their
+    prediction intervals identical. Using the order-statistic finite-sample mapping
+    ``1 - alpha * (n_cal / (n_cal + 1))`` when the naive level would saturate (or for all
+    small ``n_cal``) guarantees:
+        1. ``1 - alpha < q_level < 1.0`` for all ``alpha in (0, 1)`` and ``n_cal >= 1``
+        2. Strict monotonicity: ``alpha_1 < alpha_2 => q_level(alpha_1) > q_level(alpha_2)``
+    """
+    alpha_clipped = float(np.clip(alpha, 1e-6, 1.0 - 1e-6))
+    n_eff = max(int(n_cal), 1)
+    # Order-statistic finite-sample conservative quantile level:
+    # (n_eff + 1 - alpha * n_eff) / (n_eff + 1) == 1 - alpha * (n_eff / (n_eff + 1))
+    return float(1.0 - alpha_clipped * (n_eff / (n_eff + 1.0)))
+
+
+def _estimate_ensemble_sigma(
+    estimator, X_arr: np.ndarray, min_sigma: float = 1e-4
+) -> np.ndarray:
+    """Estimate local uncertainty standard deviation sigma(x) across ensemble trees.
+
+    For tree ensembles (e.g. ``RandomForestRegressor``, ``ExtraTreesRegressor``), computes the
+    per-sample standard deviation across constituent trees so heterogeneous/washout/tight
+    zones receive wider uncertainty bands than clean homogeneous intervals.
+    """
+    n_samples = X_arr.shape[0]
+    if hasattr(estimator, "estimators_") and len(estimator.estimators_) > 1:
+        sub_estimators = estimator.estimators_
+        # Check if estimator is a MultiOutputRegressor wrapping tree ensembles
+        if (
+            hasattr(sub_estimators[0], "estimators_")
+            and len(sub_estimators[0].estimators_) > 1
+        ):
+            sigmas = []
+            for sub_est in sub_estimators:
+                tree_preds = np.stack(
+                    [t.predict(X_arr) for t in sub_est.estimators_], axis=0
+                )
+                s_col = np.std(tree_preds, axis=0)
+                floor_val = max(float(min_sigma), 0.05 * float(np.mean(s_col)))
+                sigmas.append(np.maximum(s_col, floor_val))
+            return np.column_stack(sigmas)
+
+        tree_preds = np.stack([t.predict(X_arr) for t in sub_estimators], axis=0)
+        sigma = np.std(tree_preds, axis=0)
+        floor_val = max(float(min_sigma), 0.05 * float(np.mean(sigma)))
+        return np.maximum(sigma, floor_val)
+
+    return np.ones(n_samples, dtype=float)
+
+
+def _is_estimator_fitted(estimator) -> bool:
+    """Return True if the scikit-learn estimator has already been fitted."""
+    if estimator is None or isinstance(estimator, type):
+        return False
+    return any(
+        hasattr(estimator, attr)
+        for attr in ("estimators_", "coef_", "tree_", "n_features_in_")
+    )
+
+
+class ConformalRegressor(BaseEstimator, RegressorMixin):
+    """Locally Weighted Split Conformal Regressor with small-sample quantile guard.
+
+    Normalizes calibration residuals by the ensemble standard deviation :math:`\\sigma(x)`
+    across trees in ``RandomForestRegressor`` (Locally Weighted Conformal Prediction):
+        :math:`s_i = |y_i - \\hat{y}(x_i)| / \\hat{\\sigma}(x_i)`
+    so that tight/washout intervals with high tree disagreement obtain wider uncertainty
+    bands than clean homogeneous sands, while guarding ``n_cal`` so ``q_hat`` remains
+    strictly monotonic across ``alpha`` values (e.g. P90 vs P80) even when ``n_cal < 10``.
+    """
+
+    def __init__(
+        self,
+        estimator=None,
+        alpha: float = CONFORMAL_ALPHA,
+        min_sigma: float = 1e-4,
+        base_estimator=None,
+        random_state: int = 42,
+    ):
+        self.estimator = estimator if estimator is not None else base_estimator
+        self.base_estimator = base_estimator
+        self.alpha = alpha
+        self.min_sigma = min_sigma
+        self.random_state = random_state
+
+    def _get_or_fit_estimator(
+        self, X_arr: np.ndarray, y_arr: np.ndarray, sample_weight=None
+    ):
+        est = self.estimator if self.estimator is not None else self.base_estimator
+        if est is None:
+            from sklearn.ensemble import RandomForestRegressor
+
+            est = RandomForestRegressor(random_state=self.random_state)
+        elif isinstance(est, type):
+            est = est(random_state=self.random_state)
+
+        if _is_estimator_fitted(est):
+            return est, False
+
+        fitted_est = clone(est)
+        y_fit = y_arr.ravel() if (y_arr.ndim == 2 and y_arr.shape[1] == 1) else y_arr
+        try:
+            fitted_est.fit(X_arr, y_fit, sample_weight=sample_weight)
+        except TypeError:
+            fitted_est.fit(X_arr, y_fit)
+        return fitted_est, True
+
+    def _estimate_sigma(self, X_arr: np.ndarray) -> np.ndarray:
+        est = getattr(self, "estimator_", self.estimator)
+        return _estimate_ensemble_sigma(est, X_arr, min_sigma=self.min_sigma)
+
+    def fit(self, X_cal, y_cal, sample_weight=None):
+        """Calibrate locally weighted conformal quantile ``q_hat`` on ``(X_cal, y_cal)``."""
+        X_arr = (
+            X_cal.to_numpy(dtype=float)
+            if isinstance(X_cal, pd.DataFrame)
+            else np.asarray(X_cal, dtype=float)
+        )
+        if X_arr.ndim == 1:
+            X_arr = X_arr.reshape(-1, 1)
+
+        y_arr = (
+            y_cal.to_numpy(dtype=float)
+            if isinstance(y_cal, (pd.DataFrame, pd.Series))
+            else np.asarray(y_cal, dtype=float)
+        )
+        self.is_1d_ = y_arr.ndim == 1 or (y_arr.ndim == 2 and y_arr.shape[1] == 1)
+        if self.is_1d_:
+            y_arr = y_arr.ravel()
+
+        n_cal = len(y_arr)
+        if n_cal == 0:
+            raise ValueError(
+                "Calibration set (X_cal, y_cal) must contain at least 1 sample."
+            )
+
+        self.estimator_, was_fit_on_cal = self._get_or_fit_estimator(
+            X_arr, y_arr, sample_weight=sample_weight
+        )
+
+        y_hat = np.asarray(self.estimator_.predict(X_arr), dtype=float)
+        if self.is_1d_:
+            y_hat = y_hat.ravel()
+
+        sigma_cal = self._estimate_sigma(X_arr)
+        if self.is_1d_:
+            sigma_cal = sigma_cal.ravel()
+        elif sigma_cal.ndim == 1 and y_arr.ndim == 2:
+            sigma_cal = sigma_cal[:, None]
+
+        abs_res = np.abs(y_arr - y_hat)
+        # If the estimator was fit directly on the calibration data, blend with tree dispersion
+        # so in-sample residuals do not under-estimate out-of-sample error.
+        if was_fit_on_cal and hasattr(self.estimator_, "estimators_"):
+            abs_res = np.maximum(abs_res, 0.5 * sigma_cal)
+
+        scores = abs_res / np.maximum(sigma_cal, self.min_sigma)
+        # Ensure non-degenerate score spread if all calibration residuals are identical
+        if n_cal == 1 or np.allclose(scores, np.mean(scores, axis=0, keepdims=True)):
+            base_s = np.maximum(scores, self.min_sigma)
+            ramp = np.linspace(0.85, 1.15, n_cal).reshape(
+                (-1,) + (1,) * (scores.ndim - 1)
+            )
+            scores = base_s * ramp
+
+        self.n_cal_ = n_cal
+        self.scores_ = scores
+        q_level = _conformal_quantile_level(self.alpha, n_cal)
+        self.q_level_ = q_level
+        q_val = np.quantile(scores, q_level, axis=0)
+        self.q_hat = float(q_val) if self.is_1d_ else np.asarray(q_val, dtype=float)
+        return self
+
+    def _q_hat_for_alpha(self, alpha: Optional[float] = None):
+        if alpha is None or np.isclose(alpha, self.alpha):
+            return self.q_hat
+        q_level = _conformal_quantile_level(alpha, self.n_cal_)
+        q_val = np.quantile(self.scores_, q_level, axis=0)
+        return float(q_val) if self.is_1d_ else np.asarray(q_val, dtype=float)
+
+    def predict_interval(self, X, alpha: Optional[float] = None):
+        """Return ``(y_pred, y_lower, y_upper)`` using locally weighted conformal bands."""
+        X_arr = (
+            X.to_numpy(dtype=float)
+            if isinstance(X, pd.DataFrame)
+            else np.asarray(X, dtype=float)
+        )
+        if X_arr.ndim == 1:
+            X_arr = X_arr.reshape(-1, 1)
+
+        y_pred = np.asarray(self.estimator_.predict(X_arr), dtype=float)
+        sigma = self._estimate_sigma(X_arr)
+        q_hat = self._q_hat_for_alpha(alpha=alpha)
+
+        if self.is_1d_:
+            y_pred = y_pred.ravel()
+            sigma = sigma.ravel()
+            half_width = float(q_hat) * sigma
+        else:
+            if sigma.ndim == 1 and y_pred.ndim == 2:
+                sigma = sigma[:, None]
+            half_width = np.asarray(q_hat, dtype=float)[None, :] * sigma
+
+        return y_pred, y_pred - half_width, y_pred + half_width
+
+    def predict(self, X, return_interval: bool = False, alpha: Optional[float] = None):
+        """Return point predictions, or ``(y_pred, y_lower, y_upper)`` if ``return_interval=True``."""
+        if return_interval:
+            return self.predict_interval(X, alpha=alpha)
+        y_pred, _, _ = self.predict_interval(X, alpha=alpha)
+        return y_pred
+
+
+class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
+    """Multi-output Locally Weighted Conformal Prediction wrapper with physics constraints.
+
+    Fits a locally weighted conformalized regressor per target column (normalizing residuals
+    by ensemble tree standard deviation :math:`\\sigma(x)` and guarding small ``n_cal`` sizes)
+    to produce calibrated, heteroscedastic P10–P90 prediction intervals alongside physically
+    constrained point predictions.
     """
 
     def __init__(
@@ -504,6 +866,7 @@ class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
         random_state: int = 42,
         enforce_physics: bool = True,
         target_names: Optional[list[str]] = None,
+        min_sigma: float = 1e-4,
     ):
         self.base_estimator = base_estimator
         self.alpha = alpha
@@ -511,6 +874,7 @@ class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
         self.random_state = random_state
         self.enforce_physics = enforce_physics
         self.target_names = target_names
+        self.min_sigma = min_sigma
 
     def _make_base_estimator(self):
         if self.base_estimator is None:
@@ -522,7 +886,7 @@ class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
         return clone(self.base_estimator)
 
     def fit(self, X, y, sample_weight=None):
-        """Fit conformal regressors for each output target."""
+        """Fit locally weighted conformal regressors for each output target."""
         if isinstance(y, pd.DataFrame):
             self.target_names_ = list(y.columns)
             y_arr = y.to_numpy(dtype=float)
@@ -555,11 +919,15 @@ class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
             )
 
         n_samples, self.n_outputs_ = y_arr.shape
+        self.n_cal_ = n_samples
         effective_cv = max(2, min(self.cv, n_samples // 2)) if n_samples >= 6 else 2
 
         self.estimators_ = []
         self.mapie_models_ = []
         self.conformal_q_ = []
+        self.norm_scores_ = []
+
+        q_level = _conformal_quantile_level(self.alpha, n_samples)
 
         for j in range(self.n_outputs_):
             y_col = y_arr[:, j]
@@ -572,7 +940,6 @@ class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
 
             # Fit MAPIE conformal regressor if enough samples
             mapie_j = None
-            q_val = 0.0
             if n_samples >= 10 and _MapieCrossRegressor is not None:
                 try:
                     mapie_j = _MapieCrossRegressor(
@@ -583,7 +950,9 @@ class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
                     )
                     mapie_j.fit_conformalize(X_arr, y_col)
                 except Exception as e:
-                    logger.debug(f"MAPIE CrossConformalRegressor fallback for target {j}: {e}")
+                    logger.debug(
+                        f"MAPIE CrossConformalRegressor fallback for target {j}: {e}"
+                    )
                     mapie_j = None
             elif n_samples >= 10 and _LegacyMapieRegressor is not None:
                 try:
@@ -598,41 +967,41 @@ class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
                     logger.debug(f"Legacy MapieRegressor fallback for target {j}: {e}")
                     mapie_j = None
 
-            # Also compute empirical split/OOB residual quantile as fallback / local scaler
+            # Compute locally weighted normalized conformal scores: |y - y_hat| / sigma(x)
             preds_j = est_j.predict(X_arr)
             abs_res = np.abs(y_col - preds_j)
-            # If tree ensemble, use tree dispersion to calibrate normalized conformal score
-            if hasattr(est_j, "estimators_") and len(est_j.estimators_) > 1:
-                tree_preds = np.column_stack(
-                    [t.predict(X_arr) for t in est_j.estimators_]
+            sigma_cal = _estimate_ensemble_sigma(
+                est_j, X_arr, min_sigma=self.min_sigma
+            ).ravel()
+            eff_res = np.maximum(abs_res, 0.5 * sigma_cal)
+            norm_scores_j = eff_res / np.maximum(sigma_cal, self.min_sigma)
+            if n_samples == 1 or np.allclose(norm_scores_j, np.mean(norm_scores_j)):
+                norm_scores_j = np.maximum(norm_scores_j, self.min_sigma) * np.linspace(
+                    0.85, 1.15, n_samples
                 )
-                tree_half_width = 0.5 * (
-                    np.percentile(tree_preds, 100 * (1 - self.alpha / 2), axis=1)
-                    - np.percentile(tree_preds, 100 * (self.alpha / 2), axis=1)
-                )
-                q_val = float(
-                    np.quantile(
-                        np.maximum(abs_res, tree_half_width),
-                        min(1.0, (1.0 - self.alpha) * (1.0 + 1.0 / max(n_samples, 1))),
-                    )
-                )
-            else:
-                q_val = float(
-                    np.quantile(
-                        abs_res,
-                        min(1.0, (1.0 - self.alpha) * (1.0 + 1.0 / max(n_samples, 1))),
-                    )
-                )
+            q_val = float(np.quantile(norm_scores_j, q_level))
 
             self.mapie_models_.append(mapie_j)
             self.conformal_q_.append(q_val)
+            self.norm_scores_.append(norm_scores_j)
 
+        self.q_hat = (
+            self.conformal_q_[0]
+            if self.is_1d_
+            else np.array(self.conformal_q_, dtype=float)
+        )
         return self
 
     def _raw_predict_and_intervals(self, X, alpha: Optional[float] = None):
         alpha_eff = alpha if alpha is not None else self.alpha
-        X_arr = X.to_numpy(dtype=float) if isinstance(X, pd.DataFrame) else np.asarray(X, dtype=float)
+        X_arr = (
+            X.to_numpy(dtype=float)
+            if isinstance(X, pd.DataFrame)
+            else np.asarray(X, dtype=float)
+        )
         n_samples = X_arr.shape[0]
+        n_cal = getattr(self, "n_cal_", max(n_samples, 1))
+        q_level_eff = _conformal_quantile_level(alpha_eff, n_cal)
 
         y_pred = np.zeros((n_samples, self.n_outputs_), dtype=float)
         y_low = np.zeros((n_samples, self.n_outputs_), dtype=float)
@@ -641,38 +1010,51 @@ class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
         for j in range(self.n_outputs_):
             est_j = self.estimators_[j]
             mapie_j = self.mapie_models_[j]
-            q_j = self.conformal_q_[j]
+            if (
+                alpha is not None
+                and not np.isclose(alpha_eff, self.alpha)
+                and hasattr(self, "norm_scores_")
+                and j < len(self.norm_scores_)
+            ):
+                q_j = float(np.quantile(self.norm_scores_[j], q_level_eff))
+            else:
+                q_j = self.conformal_q_[j]
 
-            # Local heteroscedastic dispersion from tree ensemble if available
-            local_scale = np.ones(n_samples, dtype=float)
-            if hasattr(est_j, "estimators_") and len(est_j.estimators_) > 1:
-                tree_preds = np.column_stack(
-                    [t.predict(X_arr) for t in est_j.estimators_]
-                )
-                tree_std = np.std(tree_preds, axis=1)
-                mean_std = float(np.mean(tree_std))
-                if mean_std > 1e-8:
-                    # Blend constant conformal width (0.5) with normalized local tree std (0.5)
-                    local_scale = 0.5 + 0.5 * np.clip(tree_std / mean_std, 0.3, 2.5)
+            # Local heteroscedastic standard deviation sigma(x) across ensemble trees
+            sigma_test = _estimate_ensemble_sigma(
+                est_j, X_arr, min_sigma=self.min_sigma
+            ).ravel()
+            local_half_width = q_j * sigma_test
 
-            if mapie_j is not None and hasattr(mapie_j, "predict_interval"):
+            if (
+                mapie_j is not None
+                and hasattr(mapie_j, "predict_interval")
+                and np.isclose(alpha_eff, self.alpha)
+            ):
                 pred_j, pis_j = mapie_j.predict_interval(X_arr)
-                half_width = 0.5 * (pis_j[:, 1, 0] - pis_j[:, 0, 0]) * local_scale
+                mapie_hw = 0.5 * (pis_j[:, 1, 0] - pis_j[:, 0, 0])
+                mean_sigma = max(float(np.mean(sigma_test)), self.min_sigma)
+                half_width = 0.5 * local_half_width + 0.5 * mapie_hw * (
+                    sigma_test / mean_sigma
+                )
                 y_pred[:, j] = pred_j
                 y_low[:, j] = pred_j - half_width
                 y_high[:, j] = pred_j + half_width
             elif mapie_j is not None and hasattr(mapie_j, "predict"):
                 pred_j, pis_j = mapie_j.predict(X_arr, alpha=alpha_eff)
-                half_width = 0.5 * (pis_j[:, 1, 0] - pis_j[:, 0, 0]) * local_scale
+                mapie_hw = 0.5 * (pis_j[:, 1, 0] - pis_j[:, 0, 0])
+                mean_sigma = max(float(np.mean(sigma_test)), self.min_sigma)
+                half_width = 0.5 * local_half_width + 0.5 * mapie_hw * (
+                    sigma_test / mean_sigma
+                )
                 y_pred[:, j] = pred_j
                 y_low[:, j] = pred_j - half_width
                 y_high[:, j] = pred_j + half_width
             else:
                 pred_j = est_j.predict(X_arr)
-                half_width = q_j * local_scale
                 y_pred[:, j] = pred_j
-                y_low[:, j] = pred_j - half_width
-                y_high[:, j] = pred_j + half_width
+                y_low[:, j] = pred_j - local_half_width
+                y_high[:, j] = pred_j + local_half_width
 
         return y_pred, y_low, y_high
 
@@ -768,7 +1150,11 @@ def predict_with_uncertainty(
         preds = preds.reshape(-1, 1)
 
     if hasattr(raw_model, "estimators_") and len(raw_model.estimators_) > 1:
-        X_arr = X.to_numpy(dtype=float) if isinstance(X, pd.DataFrame) else np.asarray(X, dtype=float)
+        X_arr = (
+            X.to_numpy(dtype=float)
+            if isinstance(X, pd.DataFrame)
+            else np.asarray(X, dtype=float)
+        )
         tree_preds = np.stack([t.predict(X_arr) for t in raw_model.estimators_], axis=0)
         if tree_preds.ndim == 2:
             tree_preds = tree_preds[:, :, np.newaxis]
@@ -781,4 +1167,3 @@ def predict_with_uncertainty(
     # Generic fallback if no ensemble/conformal metadata is present
     spread = np.maximum(np.abs(preds) * 0.10, 0.02)
     return preds, preds - spread, preds + spread
-

@@ -92,3 +92,41 @@ def test_vectorized_multimineral_and_optim_active_set_and_nonlinear_conductivity
     V_dw = res_dw[vol_cols].to_numpy()
     np.testing.assert_allclose(np.sum(V_dw, axis=1), np.ones(n_nl), atol=1e-4)
 
+
+def test_optim_solve_fast_unity_constraint_weighting():
+    """Verify Optim.solve_fast() weights the unity constraint row by lambda=100.0
+    so that raw nnls solutions natively satisfy sum(V_i) ~= 1.0 without distorting
+    tool reconstruction.
+    """
+    rng = np.random.default_rng(99)
+    mm = MultiMineral(minerals=["QUARTZ", "CALCITE", "DOLOMITE", "SHALE"])
+    log_names = ["GR", "NPHI", "RHOB", "PEF", "DTC"]
+    C = mm._build_response_matrix(log_names)  # (5, 7)
+
+    # Normalize rows of A_mat and perturb b_vec so an unweighted nnls sum would drift from 1.0
+    row_scales = np.max(np.abs(C), axis=1, keepdims=True)
+    A_norm = C / np.where(row_scales > 0, row_scales, 1.0)
+
+    v_true = rng.dirichlet(np.ones(7), size=25)  # (25, 7)
+    b_clean = A_norm @ v_true.T  # (5, 25)
+    # Add multiplicative and additive measurement bias so unconstrained NNLS sum != 1.0
+    b_noisy = b_clean * 1.15 + rng.normal(0.0, 0.02, size=b_clean.shape)
+
+    optim = Optim(A=A_norm, b=b_noisy)
+
+    # Raw NNLS with weak weight=1.0 vs strong penalty weight=100.0 (before post-hoc division)
+    v_raw_weak = optim.solve_fast(unity_weight=1.0, normalize=False)
+    v_raw_strong = optim.solve_fast(unity_weight=100.0, normalize=False)
+
+    weak_sum_err = np.max(np.abs(np.sum(v_raw_weak, axis=0) - 1.0))
+    strong_sum_err = np.max(np.abs(np.sum(v_raw_strong, axis=0) - 1.0))
+    assert strong_sum_err < 1e-3, f"Expected native NNLS sum within 1e-3 of 1.0, got max diff {strong_sum_err}"
+    assert strong_sum_err < weak_sum_err
+
+    # Normalized output from default solve_fast()
+    v_fast = optim.solve_fast()
+    assert v_fast.shape == (7, 25)
+    assert np.all(v_fast >= 0.0)
+    np.testing.assert_allclose(np.sum(v_fast, axis=0), np.ones(25), atol=1e-6)
+
+
