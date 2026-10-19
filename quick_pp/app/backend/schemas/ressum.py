@@ -91,3 +91,67 @@ class UncertaintyInputData(BaseModel):
     seed: int | None = Field(42, description="Random seed for LHS reproducibility")
     data: List[UncertaintyData] = Field(..., description="List of well log rows")
 
+
+class UpscaleData(BaseModel):
+    """Schema for a single fine-scale CPI log row to be upscaled (blocked)."""
+
+    depth: float = Field(..., description="Depth of the sample (MD or TVD)")
+    vclay: float | None = Field(None, description="Volume of clay / shale [v/v]")
+    vshale: float | None = Field(None, description="Volume of shale [v/v]")
+    phit: float | None = Field(None, description="Total porosity [v/v]")
+    phie: float | None = Field(None, description="Effective porosity [v/v]")
+    swt: float | None = Field(None, description="Total water saturation [v/v]")
+    swe: float | None = Field(None, description="Effective water saturation [v/v]")
+    perm: float | None = Field(None, description="Permeability [mD]")
+    zones: str | None = Field("ALL", description="Geological zone identifier")
+    rock_type: str | int | None = Field(None, description="Discrete rock type or facies code")
+
+
+class UpscaleInputData(BaseModel):
+    """Input schema for Static Geomodeling Handover Log Blocking & Upscaling."""
+
+    cell_size: float | None = Field(
+        1.0,
+        description="Target cellular grid block thickness (in depth units, e.g. m or ft). Set None when by_zone=True for full-zone blocking.",
+    )
+    grid_edges: List[float] | None = Field(
+        None,
+        description="Optional explicit grid cell depth boundaries [z_0, z_1, ..., z_M]. Overrides cell_size if provided.",
+    )
+    by_zone: bool = Field(
+        False,
+        description="If True, grid blocks respect geological zone boundaries so blocks never straddle zones.",
+    )
+    perm_method: str = Field(
+        "geometric",
+        description="Primary permeability averaging method: 'geometric', 'arithmetic', 'harmonic', or 'power_law' (Cardwell-Parsons).",
+    )
+    omega: float = Field(
+        0.33,
+        ge=-1.0,
+        le=1.0,
+        description="Cardwell-Parsons power-law exponent omega in [-1, 1] (1=arithmetic k_h, 0=geometric k_eff, -1=harmonic k_v).",
+    )
+    min_perm: float | None = Field(
+        None,
+        description="Optional positive permeability floor [mD] for harmonic/geometric/power-law averaging.",
+    )
+    cut_offs: dict = Field(
+        default_factory=lambda: {"VSHALE": 0.4, "PHIT": 0.01, "SWT": 0.9},
+        description="Cut-off values for rock, reservoir, and pay flags.",
+    )
+    net_only: bool = Field(
+        False,
+        description="If True, upscale reservoir properties (phi, Sw, k) strictly over net flagged samples within each cell.",
+    )
+    net_flag_type: str = Field(
+        "reservoir",
+        description="Net flag used when net_only=True: 'reservoir', 'pay', or 'rock'.",
+    )
+    return_step_log: bool = Field(
+        False,
+        description="If True, also return fine-scale step-profile curves mapped onto original sample depths.",
+    )
+    data: List[UpscaleData] = Field(..., description="List of fine-scale CPI log rows.")
+
+

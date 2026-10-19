@@ -4,9 +4,14 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 
-from quick_pp.app.backend.schemas.ressum import InputData, UncertaintyInputData
+from quick_pp.app.backend.schemas.ressum import (
+    InputData,
+    UncertaintyInputData,
+    UpscaleInputData,
+)
 from quick_pp.ressum import calc_reservoir_summary
 from quick_pp.uncertainty import calc_stochastic_reservoir_summary
+from quick_pp.upscaling import expand_blocked_logs, upscale_logs
 
 router = APIRouter(prefix="/ressum", tags=["Reservoir Summary"])
 
@@ -165,4 +170,57 @@ async def calculate_stochastic_reservoir_summary_(inputs: UncertaintyInputData):
             status_code=400,
             detail=f"Error calculating stochastic reservoir summary: {e}",
         ) from e
+
+
+@router.post(
+    "/upscale",
+    summary="Upscale (Block) Fine-Scale CPI Logs to Cellular Grid Resolution for Static Geomodeling Handover",
+    operation_id="upscale_cpi_logs",
+)
+async def upscale_cpi_logs_(inputs: UpscaleInputData):
+    """Upscale fine-scale CPI well logs onto cellular grid resolutions using petrophysically rigorous
+    averaging schemes:
+      - Thickness-weighted arithmetic average for porosity ($\\phi$) and shale volume ($V_{sh}$)
+      - Saturation-weighted (pore-volume weighted) arithmetic average for water saturation ($S_w$)
+      - Harmonic ($k_v$), Geometric ($k_{eff}$), Arithmetic ($k_h$), and Power-Law (Cardwell-Parsons $\\omega$)
+        averaging for permeability ($k$).
+    """
+    try:
+        input_dict = inputs.model_dump()
+        input_df = pd.DataFrame.from_records(input_dict["data"])
+        if input_df.empty:
+            raise ValueError("No log data provided for upscaling.")
+
+        # Drop columns that are completely None
+        input_df = input_df.dropna( axis=1, how="all")
+
+        blocked_df = upscale_logs(
+            df=input_df,
+            cell_size=input_dict.get("cell_size", 1.0),
+            grid_edges=input_dict.get("grid_edges"),
+            by_zone=bool(input_dict.get("by_zone", False)),
+            perm_method=input_dict.get("perm_method", "geometric"),
+            omega=float(input_dict.get("omega", 0.33)),
+            min_perm=input_dict.get("min_perm"),
+            cutoffs=input_dict.get("cut_offs"),
+            net_only=bool(input_dict.get("net_only", False)),
+            net_flag_type=input_dict.get("net_flag_type", "reservoir"),
+            return_step_log=False,
+        )
+
+        response: Dict[str, Any] = {
+            "cells": _clean_json_records(blocked_df.round(4)),
+            "n_cells": int(len(blocked_df)),
+        }
+        if input_dict.get("return_step_log"):
+            step_df = expand_blocked_logs(input_df, blocked_df, depth_col="depth")
+            response["step_log"] = _clean_json_records(step_df.round(4))
+
+        return response
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Error upscaling CPI logs: {e}",
+        ) from e
+
 

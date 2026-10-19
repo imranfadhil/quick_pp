@@ -15,30 +15,44 @@ from quick_pp.uncertainty import (
 from quick_pp.utils import minmax_scale
 
 __all__ = [
+    "arith_upscale",
+    "block_logs",
     "calc_reservoir_summary",
     "calc_stochastic_reservoir_summary",
     "calculate_volume",
+    "cardwell_parsons_bounds",
     "cutoffs_analysis",
+    "expand_blocked_logs",
     "flag_interval",
+    "geom_upscale",
+    "harm_upscale",
+    "majority_upscale",
     "mc_volumetric_method",
     "mc_volumetric_uncertainty",
+    "plot_upscaled_logs",
+    "pore_volume_upscale",
+    "power_law_upscale",
     "run_log_uncertainty",
     "sensitivity_analysis",
+    "upscale_logs",
+    "upscale_permeability",
     "volumetric_method",
 ]
 
 
-def _weighted_zone_metrics(group: pd.DataFrame) -> pd.Series:
+def _weighted_zone_metrics(group: pd.DataFrame, omega: float = 0.33) -> pd.Series:
     """Compute thickness-weighted and pore-volume-weighted petrophysical averages for a zone.
 
-    Follows PRMS/SEC reserves audit standards:
+    Follows PRMS/SEC reserves audit and Static Geomodeling Handover standards:
       - Vshale & Porosity: thickness-weighted average (sum(x * h) / sum(h))
       - Water Saturation: pore-volume weighted average (sum(phit * swt * h) / sum(phit * h))
       - BVHC: thickness-weighted hydrocarbon pore volume (sum(phit * (1 - swt) * h) / sum(h))
-      - Permeability upscaling proxies:
-          * Arithmetic mean (k_h parallel flow proxy): sum(k * h) / sum(h)
-          * Geometric mean (k_eff heterogeneous flow proxy): exp(sum(h * ln(k)) / sum(h)) for k > 0
-          * Harmonic mean (k_v vertical/series flow proxy): sum(h) / sum(h / k) for k > 0
+      - Permeability upscaling proxies (Cardwell-Parsons, 1945):
+          * Arithmetic mean (k_h parallel flow proxy, omega=1): sum(k * h) / sum(h)
+          * Geometric mean (k_eff heterogeneous flow proxy, omega->0): exp(sum(h * ln(k)) / sum(h)) for k > 0
+          * Harmonic mean (k_v vertical/series flow proxy, omega=-1): sum(h) / sum(h / k) for k > 0
+          * Power-law mean (Cardwell-Parsons, omega in [-1, 1]): (sum(h * k^omega) / sum(h))^(1/omega) for k > 0
+          * Anisotropy ratio (k_v / k_h): av_perm_hm / av_perm_am
     """
     h = group["h"].to_numpy(dtype=float)
     vsh = group["vshale"].to_numpy(dtype=float)
@@ -80,13 +94,26 @@ def _weighted_zone_metrics(group: pd.DataFrame) -> pd.Series:
             h_pos_sum = float(np.sum(h_pos))
             av_perm_gm = float(np.exp(np.sum(h_pos * np.log(k_pos)) / h_pos_sum))
             av_perm_hm = float(h_pos_sum / np.sum(h_pos / k_pos))
+            omega_val = float(omega)
+            if abs(omega_val) < 1e-6:
+                av_perm_pw = av_perm_gm
+            elif np.isclose(omega_val, 1.0, atol=1e-6):
+                av_perm_pw = float(np.sum(k_pos * h_pos) / h_pos_sum)
+            elif np.isclose(omega_val, -1.0, atol=1e-6):
+                av_perm_pw = av_perm_hm
+            else:
+                av_perm_pw = float(np.power(np.sum(h_pos * np.power(k_pos, omega_val)) / h_pos_sum, 1.0 / omega_val))
         else:
             av_perm_gm = 0.0
             av_perm_hm = 0.0
+            av_perm_pw = 0.0
+        kv_kh_ratio = float(av_perm_hm / av_perm_am) if av_perm_am > 0 else np.nan
     else:
         av_perm_am = np.nan
         av_perm_gm = np.nan
         av_perm_hm = np.nan
+        av_perm_pw = np.nan
+        kv_kh_ratio = np.nan
 
     return pd.Series(
         {
@@ -97,11 +124,13 @@ def _weighted_zone_metrics(group: pd.DataFrame) -> pd.Series:
             "av_perm_am": av_perm_am,
             "av_perm_gm": av_perm_gm,
             "av_perm_hm": av_perm_hm,
+            "av_perm_pw": av_perm_pw,
+            "kv_kh_ratio": kv_kh_ratio,
         }
     )
 
 
-def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, h=None):
+def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, h=None, omega: float = 0.33):
     """Calculate reservoir summary based on cutoffs on vshale, phit, and swt.
 
     This function aggregates petrophysical properties over specified zones and flags
@@ -109,10 +138,12 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
       - Porosity (`av_phit`, `av_phit_pay`) and Vshale (`av_vshale`): thickness-weighted
       - Water saturation (`av_swt`, `av_sw_pay`): pore-volume weighted
         (sum(phit * swt * h) / sum(phit * h))
-      - Permeability upscaling proxies:
+      - Permeability upscaling proxies (Cardwell-Parsons):
         * Arithmetic (`av_perm_am`, `av_perm_arith_pay`) — k_h parallel flow proxy
         * Geometric (`av_perm_gm`, `av_perm_geom_pay`) — effective heterogeneous flow proxy
         * Harmonic (`av_perm_hm`, `av_perm_harm_pay`) — k_v vertical series flow proxy
+        * Power-Law (`av_perm_pw`, `av_perm_power_pay`) — Cardwell-Parsons power-law proxy with exponent `omega`
+        * Anisotropy (`kv_kh_ratio`) — vertical-to-horizontal permeability ratio (`k_harm / k_arith`)
 
     Args:
         depth (np.ndarray or float): Depth, either MD or TVD.
@@ -124,6 +155,7 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
         cutoffs (dict, optional): A dictionary with 'VSHALE', 'PHIT', and 'SWT' cutoffs.
                                   Defaults to `dict(VSHALE=0.4, PHIT=0.01, SWT=0.9)`.
         h (np.ndarray or float, optional): Sample interval thickness. If None, inferred from `depth`.
+        omega (float, optional): Cardwell-Parsons power-law exponent in `[-1, 1]`. Defaults to `0.33`.
 
     Returns:
         pd.DataFrame: A DataFrame containing the reservoir summary in tabular format.
@@ -176,6 +208,8 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
         "av_perm_am",
         "av_perm_gm",
         "av_perm_hm",
+        "av_perm_pw",
+        "kv_kh_ratio",
     ]
 
     ressum_df = pd.DataFrame()
@@ -197,7 +231,7 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
         if not flag_df.empty:
             avg_records = []
             for zone_name, zgroup in flag_df.groupby("zones"):
-                metrics = _weighted_zone_metrics(zgroup)
+                metrics = _weighted_zone_metrics(zgroup, omega=omega)
                 metrics["zones"] = zone_name
                 avg_records.append(metrics)
             avg_df = pd.DataFrame(avg_records)
@@ -212,6 +246,7 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
                     "av_perm_arith_pay": row["av_perm_am"],
                     "av_perm_geom_pay": row["av_perm_gm"],
                     "av_perm_harm_pay": row["av_perm_hm"],
+                    "av_perm_power_pay": row["av_perm_pw"],
                 }
 
         temp_df = temp_df.merge(avg_df, on=["zones"], how="left", validate="1:1")
@@ -257,6 +292,7 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
         "av_perm_arith_pay",
         "av_perm_geom_pay",
         "av_perm_harm_pay",
+        "av_perm_power_pay",
     ]
     for col in pay_cols:
         ressum_df[col] = ressum_df["zones"].map(
@@ -265,6 +301,8 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
         # For valid non-pay flag rows in zones without pay, default to 0.0 so row-wise dropna preserves them
         valid_non_pay = ressum_df["av_phit"].notna() & (ressum_df["flag"] != "pay") & ressum_df[col].isna()
         ressum_df.loc[valid_non_pay, col] = 0.0
+    valid_non_pay_kvkh = ressum_df["av_phit"].notna() & ressum_df["kv_kh_ratio"].isna()
+    ressum_df.loc[valid_non_pay_kvkh, "kv_kh_ratio"] = 0.0
 
     ressum_df = ressum_df.round(3)
     ressum_df = ressum_df.sort_values(by=["top"], ignore_index=True)
@@ -285,11 +323,14 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
         "av_perm_am",
         "av_perm_gm",
         "av_perm_hm",
+        "av_perm_pw",
+        "kv_kh_ratio",
         "av_phit_pay",
         "av_sw_pay",
         "av_perm_arith_pay",
         "av_perm_geom_pay",
         "av_perm_harm_pay",
+        "av_perm_power_pay",
     ]
 
     logger.debug(
@@ -979,3 +1020,20 @@ def cutoffs_analysis(df, percentile=95):
     plt.show()
 
     return optimal_vsh_cut, optimal_phit_cut, optimal_sw_cut
+
+
+from quick_pp.upscaling import (  # noqa: E402
+    arith_upscale,
+    block_logs,
+    cardwell_parsons_bounds,
+    expand_blocked_logs,
+    geom_upscale,
+    harm_upscale,
+    majority_upscale,
+    plot_upscaled_logs,
+    pore_volume_upscale,
+    power_law_upscale,
+    upscale_logs,
+    upscale_permeability,
+)
+

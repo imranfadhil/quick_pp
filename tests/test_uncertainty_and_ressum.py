@@ -209,3 +209,145 @@ def test_lhs_volumetric_and_log_uncertainty_module():
     assert "stoiip_p50_mmbbl" in summary_df.columns
     assert "ZONE_A" in stoch_res["volumetrics"]
 
+
+def test_log_blocking_and_upscaling_static_geomodeling_handover():
+    """Verify Log Blocking & Upscaling utility (`quick_pp.upscaling` & `quick_pp.ressum`):
+    - Arithmetic averaging for porosity ($\\phi$) and shale volume ($V_{sh}$)
+    - Saturation-weighted (pore-volume weighted) arithmetic averaging for $S_w$
+    - Harmonic / Geometric / Power-Law (Cardwell-Parsons) / Arithmetic averaging for permeability $k$
+    - Zone-bounded blocking (`by_zone=True`), `net_only` filtering, step-log expansion, and FastAPI endpoint.
+    """
+    import asyncio
+    import matplotlib.pyplot as plt
+    from quick_pp.app.backend.schemas.ressum import UpscaleData, UpscaleInputData
+    from quick_pp.app.backend.services.reservoir_summary import upscale_cpi_logs_
+    from quick_pp.ressum import (
+        arith_upscale,
+        block_logs,
+        cardwell_parsons_bounds,
+        expand_blocked_logs,
+        geom_upscale,
+        harm_upscale,
+        plot_upscaled_logs,
+        pore_volume_upscale,
+        power_law_upscale,
+        upscale_logs,
+        upscale_permeability,
+    )
+
+    # 1. Construct a 2-cell synthetic fine-scale CPI log (4 samples, 0.5 m spacing -> 2 cells of 1.0 m)
+    # Cell 1 (1000.0, 1000.5):
+    #   Sample 0: vsh=0.10, phit=0.30, swt=0.20, perm=1000.0 mD, rock_type=1
+    #   Sample 1: vsh=0.20, phit=0.10, swt=0.80, perm=10.0 mD,   rock_type=1
+    #   Expected Cell 1:
+    #     VSHALE = (0.10 + 0.20)/2 = 0.15
+    #     PHIT   = (0.30 + 0.10)/2 = 0.20
+    #     SWT    = (0.30*0.20 + 0.10*0.80) / (0.30 + 0.10) = 0.14 / 0.40 = 0.35 (NOT arithmetic 0.50!)
+    #     BVHC   = 0.20 * (1 - 0.35) = 0.13
+    #     PERM_ARITH = 505.0, PERM_GEOM = 100.0, PERM_HARM = 19.80198
+    #     PERM_POWER (omega=0.5) = ((sqrt(1000) + sqrt(10)) / 2)^2 = ((31.6227766 + 3.16227766)/2)^2 = 302.5
+    fine_df = pd.DataFrame(
+        {
+            "DEPTH": [1000.0, 1000.5, 1001.0, 1001.5],
+            "ZONES": ["ZONE_A", "ZONE_A", "ZONE_B", "ZONE_B"],
+            "VSHALE": [0.10, 0.20, 0.60, 0.10],
+            "PHIT": [0.30, 0.10, 0.05, 0.25],
+            "SWT": [0.20, 0.80, 0.95, 0.30],
+            "PERM": [1000.0, 10.0, 0.1, 400.0],
+            "ROCK_TYPE": ["PRT1", "PRT1", "NON_RES", "PRT2"],
+        }
+    )
+
+    blocked = upscale_logs(
+        fine_df,
+        cell_size=1.0,
+        perm_method="power_law",
+        omega=0.5,
+        cutoffs={"VSHALE": 0.4, "PHIT": 0.08, "SWT": 0.85},
+    )
+    assert len(blocked) == 2
+
+    c1 = blocked.iloc[0]
+    np.testing.assert_allclose(c1["VSHALE"], 0.15, atol=1e-4)
+    np.testing.assert_allclose(c1["PHIT"], 0.20, atol=1e-4)
+    np.testing.assert_allclose(c1["SWT"], 0.35, atol=1e-4)
+    np.testing.assert_allclose(c1["BVHC"], 0.13, atol=1e-4)
+    np.testing.assert_allclose(c1["PERM_ARITH"], 505.0, atol=1e-3)
+    np.testing.assert_allclose(c1["PERM_GEOM"], 100.0, atol=1e-3)
+    np.testing.assert_allclose(c1["PERM_HARM"], 19.80198, atol=1e-3)
+    np.testing.assert_allclose(c1["PERM_POWER"], 302.5, atol=1e-3)
+    np.testing.assert_allclose(c1["PERM"], 302.5, atol=1e-3)
+    np.testing.assert_allclose(c1["KV_KH_RATIO"], 19.80198 / 505.0, atol=1e-4)
+    assert c1["ROCK_TYPE"] == "PRT1"
+
+    # Verify Cardwell-Parsons monotonic inequality: k_harm <= k_geom <= k_power(0.5) <= k_arith
+    assert c1["PERM_HARM"] <= c1["PERM_GEOM"] <= c1["PERM_POWER"] <= c1["PERM_ARITH"]
+
+    # 2. Verify Cardwell-Parsons special limits (omega = -1, 0, +1)
+    k_arr = np.array([1000.0, 10.0])
+    np.testing.assert_allclose(power_law_upscale(k_arr, omega=1.0), arith_upscale(k_arr), rtol=1e-6)
+    np.testing.assert_allclose(power_law_upscale(k_arr, omega=0.0), geom_upscale(k_arr), rtol=1e-6)
+    np.testing.assert_allclose(power_law_upscale(k_arr, omega=-1.0), harm_upscale(k_arr), rtol=1e-6)
+    cp_bounds = cardwell_parsons_bounds(k_arr, omega=0.33)
+    assert cp_bounds["k_harm"] < cp_bounds["k_geom"] < cp_bounds["k_power"] < cp_bounds["k_arith"]
+    assert upscale_permeability(k_arr, method="harmonic") == harm_upscale(k_arr)
+
+    # 3. Verify net_only=True filtering (Cell 2 has 1 non-reservoir shale sample at 1001.0 and 1 pay sand at 1001.5)
+    blocked_net = block_logs(
+        fine_df,
+        cell_size=1.0,
+        net_only=True,
+        net_flag_type="pay",
+        cutoffs={"VSHALE": 0.4, "PHIT": 0.08, "SWT": 0.85},
+    )
+    c2_net = blocked_net.iloc[1]
+    assert c2_net["NTG"] == 0.5
+    np.testing.assert_allclose(c2_net["PHIT"], 0.25, atol=1e-4)
+    np.testing.assert_allclose(c2_net["SWT"], 0.30, atol=1e-4)
+    np.testing.assert_allclose(c2_net["PERM_GEOM"], 400.0, atol=1e-4)
+
+    # 4. Verify step-log expansion (`expand_blocked_logs` & `return_step_log=True`) and plotting
+    step_df = expand_blocked_logs(fine_df, blocked, depth_col="DEPTH")
+    assert "PHIT_BLK" in step_df.columns
+    assert "SWT_BLK" in step_df.columns
+    assert "PERM_POWER_BLK" in step_df.columns
+    np.testing.assert_allclose(step_df["SWT_BLK"].iloc[:2], [0.35, 0.35], atol=1e-4)
+
+    fig = plot_upscaled_logs(fine_df, blocked, depth_col="DEPTH")
+    assert fig is not None
+    plt.close(fig)
+
+    # 5. Verify calc_reservoir_summary also includes Cardwell-Parsons power-law permeability (`av_perm_pw`, `av_perm_power_pay`)
+    summary = calc_reservoir_summary(
+        fine_df["DEPTH"].to_numpy(),
+        fine_df["VSHALE"].to_numpy(),
+        fine_df["PHIT"].to_numpy(),
+        fine_df["SWT"].to_numpy(),
+        fine_df["PERM"].to_numpy(),
+        fine_df["ZONES"].to_numpy(),
+        cutoffs={"VSHALE": 0.4, "PHIT": 0.08, "SWT": 0.85},
+        omega=0.5,
+    )
+    pay_za = summary[(summary["zones"] == "ZONE_A") & (summary["flag"] == "pay")].iloc[0]
+    np.testing.assert_allclose(pay_za["av_perm_pw"], 302.5, atol=1e-3)
+    np.testing.assert_allclose(pay_za["av_perm_power_pay"], 302.5, atol=1e-3)
+    assert "kv_kh_ratio" in summary.columns
+
+    # 6. Verify FastAPI `/ressum/upscale` endpoint handler
+    payload = UpscaleInputData(
+        cell_size=1.0,
+        perm_method="power_law",
+        omega=0.5,
+        return_step_log=True,
+        data=[
+            UpscaleData(depth=1000.0, vshale=0.10, phit=0.30, swt=0.20, perm=1000.0, zones="ZONE_A"),
+            UpscaleData(depth=1000.5, vshale=0.20, phit=0.10, swt=0.80, perm=10.0, zones="ZONE_A"),
+        ],
+    )
+    api_res = asyncio.run(upscale_cpi_logs_(payload))
+    assert api_res["n_cells"] == 1
+    assert len(api_res["step_log"]) == 2
+    np.testing.assert_allclose(api_res["cells"][0]["swt"], 0.35, atol=1e-3)
+    np.testing.assert_allclose(api_res["cells"][0]["perm"], 302.5, atol=1e-3)
+
+
