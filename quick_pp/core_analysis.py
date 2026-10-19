@@ -348,6 +348,180 @@ def fit_poroperm_curve(poro, perm):
         return 1, 1
 
 
+def overburden_porosity_correction(
+    core_poro,
+    net_confining_stress,
+    compaction_coeff=4e-6,
+    ambient_stress=0.0,
+    method="exponential",
+):
+    """Correct ambient core porosity to reservoir net confining stress (NCS).
+
+    Applies either an exponential pore-volume compressibility decay or a power-law
+    stress compaction model to account for pore volume reduction under overburden stress.
+
+    Args:
+        core_poro (float or np.ndarray): Ambient/lab core porosity (frac).
+        net_confining_stress (float or np.ndarray): Reservoir net confining stress (psi).
+        compaction_coeff (float, optional): Pore compaction coefficient (1/psi for
+            'exponential', or dimensionless exponent for 'power_law'). Defaults to 4e-6.
+        ambient_stress (float, optional): Laboratory measurement confining stress (psi).
+            Defaults to 0.0 (or 400.0 psi reference for 'power_law' if <= 0).
+        method (str, optional): Compaction model, either 'exponential' or 'power_law'.
+            Defaults to 'exponential'.
+
+    Returns:
+        float or np.ndarray: Stress-corrected core porosity at reservoir conditions (frac).
+    """
+    delta_stress = np.maximum(net_confining_stress - ambient_stress, 0.0)
+    if method == "power_law":
+        ref_stress = ambient_stress if ambient_stress > 0 else 400.0
+        stress_ratio = np.maximum(net_confining_stress / ref_stress, 1.0)
+        return core_poro * (stress_ratio ** (-compaction_coeff))
+    return core_poro * np.exp(-compaction_coeff * delta_stress)
+
+
+def klinkenberg_permeability_correction(k_air, mean_pore_pressure, b_factor=None):
+    """Correct laboratory gas/air permeability for gas slippage (Klinkenberg effect).
+
+    Converts measured gas permeability (k_air) at a given mean flowing pore pressure
+    to equivalent liquid permeability (k_liquid) using Klinkenberg (1941). If the
+    slippage factor `b_factor` is not provided, it is estimated via the Jones & Owens
+    (1980) empirical correlation: b = 12.64 * k_air^(-0.33) (in psi).
+
+    Args:
+        k_air (float or np.ndarray): Measured gas/air permeability (mD).
+        mean_pore_pressure (float or np.ndarray): Mean flowing pore pressure (psi).
+        b_factor (float or np.ndarray, optional): Klinkenberg gas slippage factor (psi).
+            If None, estimated from `k_air` using Jones & Owens (1980). Defaults to None.
+
+    Returns:
+        float or np.ndarray: Equivalent liquid permeability (mD).
+    """
+    k_safe = np.maximum(k_air, 1e-6)
+    p_safe = np.maximum(mean_pore_pressure, 1e-6)
+    if b_factor is None:
+        b_factor = 12.64 * (k_safe ** (-0.33))
+    return np.where(k_air > 0, k_air / (1.0 + (b_factor / p_safe)), 0.0)
+
+
+def humidity_to_total_porosity(core_poro, cbw, oven_dried=False):
+    """Reconcile humidity-dried vs. oven-dried core plug porosity against PHIT and PHIE.
+
+    Humidity-dried core plugs (e.g., 60°C at 40% RH) retain clay-bound water (CBW) and
+    therefore measure effective porosity (PHIE). Oven-dried core plugs (e.g., 105-115°C)
+    drive off CBW and measure total porosity (PHIT).
+
+    - When `oven_dried=False` (default): converts humidity-dried core porosity (PHIE)
+      to total porosity (PHIT = core_poro + cbw).
+    - When `oven_dried=True`: converts oven-dried core porosity (PHIT) to effective
+      porosity (PHIE = core_poro - cbw).
+
+    Args:
+        core_poro (float or np.ndarray): Measured core porosity (frac).
+        cbw (float or np.ndarray): Bulk volume of clay-bound water (frac, v/v),
+            i.e., Vsh * Phi_shale (or PHIT - PHIE).
+        oven_dried (bool, optional): If True, treats input `core_poro` as oven-dried
+            (PHIT) and subtracts `cbw` to return PHIE. If False, treats input as
+            humidity-dried (PHIE) and adds `cbw` to return PHIT. Defaults to False.
+
+    Returns:
+        float or np.ndarray: Reconciled total porosity (or effective porosity if
+            `oven_dried=True`), clipped to [0.0, 1.0] (frac).
+    """
+    reconciled_poro = core_poro - cbw if oven_dried else core_poro + cbw
+    return np.clip(reconciled_poro, 0.0, 1.0)
+
+
+def correct_core_data(
+    df,
+    net_confining_stress=None,
+    mean_pore_pressure=None,
+    cbw=None,
+    compaction_coeff=4e-6,
+    ambient_stress=0.0,
+    compaction_method="exponential",
+    b_factor=None,
+    oven_dried=False,
+    poro_col="CPORE",
+    perm_col="CPERM",
+    replace_ori=False,
+):
+    """Apply SCAL overburden, clay-bound water, and Klinkenberg corrections to a DataFrame.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing core data (`poro_col` and/or `perm_col`).
+        net_confining_stress (float, str, or np.ndarray, optional): Net confining stress (psi)
+            or column name in `df`. If provided, applies `overburden_porosity_correction`.
+        mean_pore_pressure (float, str, or np.ndarray, optional): Mean flowing pore pressure (psi)
+            or column name in `df`. If provided, applies `klinkenberg_permeability_correction`.
+        cbw (bool, float, str, or np.ndarray, optional): Clay-bound water volume fraction (v/v),
+            column name in `df`, or True to infer `PHIT - PHIE` from `df`. If provided,
+            applies `humidity_to_total_porosity`.
+        compaction_coeff (float, optional): Pore compaction coefficient for overburden
+            correction. Defaults to 4e-6.
+        ambient_stress (float, optional): Lab confining stress (psi). Defaults to 0.0.
+        compaction_method (str, optional): 'exponential' or 'power_law'. Defaults to 'exponential'.
+        b_factor (float or np.ndarray, optional): Klinkenberg slippage factor (psi). Defaults to None.
+        oven_dried (bool, optional): Passed to `humidity_to_total_porosity`. Defaults to False.
+        poro_col (str, optional): Core porosity column name. Defaults to 'CPORE'.
+        perm_col (str, optional): Core permeability column name. Defaults to 'CPERM'.
+        replace_ori (bool, optional): If False, preserves uncorrected columns with `_AMB`
+            and `_AIR` suffixes. Defaults to False.
+
+    Returns:
+        pd.DataFrame: DataFrame with corrected core porosity and/or permeability.
+    """
+    df = df.copy()
+
+    def _resolve_arg(val):
+        if isinstance(val, str) and val in df.columns:
+            return df[val]
+        return val
+
+    if poro_col in df.columns and (net_confining_stress is not None or cbw is not None):
+        if not replace_ori and f"{poro_col}_AMB" not in df.columns:
+            df[f"{poro_col}_AMB"] = df[poro_col]
+
+        poro = pd.to_numeric(df[poro_col], errors="coerce")
+        if net_confining_stress is not None:
+            ncs = _resolve_arg(net_confining_stress)
+            poro = overburden_porosity_correction(
+                poro,
+                ncs,
+                compaction_coeff=compaction_coeff,
+                ambient_stress=ambient_stress,
+                method=compaction_method,
+            )
+        if cbw is not None:
+            if cbw is True:
+                if "PHIT" in df.columns and "PHIE" in df.columns:
+                    cbw_val = (df["PHIT"] - df["PHIE"]).clip(lower=0.0)
+                else:
+                    raise ValueError(
+                        "Cannot infer CBW when cbw=True: 'PHIT' and 'PHIE' columns are required."
+                    )
+            else:
+                cbw_val = _resolve_arg(cbw)
+            poro = humidity_to_total_porosity(poro, cbw_val, oven_dried=oven_dried)
+        df[poro_col] = poro
+
+    if perm_col in df.columns and mean_pore_pressure is not None:
+        if not replace_ori and f"{perm_col}_AIR" not in df.columns:
+            df[f"{perm_col}_AIR"] = df[perm_col]
+
+        perm = pd.to_numeric(df[perm_col], errors="coerce")
+        mpp = _resolve_arg(mean_pore_pressure)
+        b_val = _resolve_arg(b_factor) if b_factor is not None else None
+        df[perm_col] = np.where(
+            perm.notna(),
+            klinkenberg_permeability_correction(perm, mpp, b_factor=b_val),
+            np.nan,
+        )
+
+    return df
+
+
 def leverett_j(pc, ift, theta, perm, phit):
     """Estimate Leverett J.
 
@@ -493,7 +667,15 @@ def sw_shf_choo(perm, phit, phie, depth, fwl, ift, theta, gw, ghc, b0=0.4):
     return shf
 
 
-def autocorrelate_core_depth(df, replace_ori=False):
+def autocorrelate_core_depth(
+    df,
+    replace_ori=False,
+    net_confining_stress=None,
+    mean_pore_pressure=None,
+    cbw=None,
+    compaction_coeff=4e-6,
+    oven_dried=False,
+):
     """
     Automatically shift core depths to match log depths.
 
@@ -529,6 +711,17 @@ def autocorrelate_core_depth(df, replace_ori=False):
                                       the corrected ones. If False, the original
                                       columns will be preserved with an '_ORI' suffix.
                                       Defaults to False.
+        net_confining_stress (float, str, or np.ndarray, optional): Net confining stress (psi)
+                                      or column name in `df` for overburden porosity correction
+                                      prior to depth alignment. Defaults to None.
+        mean_pore_pressure (float, str, or np.ndarray, optional): Mean flowing pore pressure (psi)
+                                      or column name in `df` for Klinkenberg permeability correction.
+                                      Defaults to None.
+        cbw (bool, float, str, or np.ndarray, optional): Clay-bound water volume (frac), column
+                                      name, or True to infer `PHIT - PHIE` to reconcile humidity-dried
+                                      core porosity before aligning with `PHIT`. Defaults to None.
+        compaction_coeff (float, optional): Pore compaction coefficient (1/psi). Defaults to 4e-6.
+        oven_dried (bool, optional): Whether core plugs are oven-dried. Defaults to False.
 
     Returns:
         tuple[pd.DataFrame, pd.DataFrame]:
@@ -549,6 +742,16 @@ def autocorrelate_core_depth(df, replace_ori=False):
             raise AssertionError(f"Missing required column: {col}")
 
     df = df.copy()
+    if any(x is not None for x in (net_confining_stress, mean_pore_pressure, cbw)):
+        df = correct_core_data(
+            df,
+            net_confining_stress=net_confining_stress,
+            mean_pore_pressure=mean_pore_pressure,
+            cbw=cbw,
+            compaction_coeff=compaction_coeff,
+            oven_dried=oven_dried,
+            replace_ori=replace_ori,
+        )
     # Ensure porosity and permeability columns are numeric, coercing errors.
     df["CPERM"] = pd.to_numeric(df["CPERM"], errors="coerce")
     df["PHIT"] = pd.to_numeric(df["PHIT"], errors="coerce")
