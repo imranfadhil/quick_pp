@@ -348,40 +348,70 @@ def fit_poroperm_curve(poro, perm):
         return 1, 1
 
 
+from quick_pp.scal import (  # noqa: E402
+    brooks_corey_relperm,
+    corey_relperm,
+    correct_core_data,
+    dean_stark_cbw_correction,
+    dean_stark_saturation_correction,
+    estimate_cbw_from_qv,
+    fit_relperm,
+    generate_swof_table,
+    humidity_to_total_porosity,
+    klinkenberg_permeability_correction,
+    let_relperm,
+    normalize_water_saturation,
+    overburden_permeability_correction,
+    overburden_poroperm_correction,
+    overburden_porosity_correction,
+    pc_lab_to_reservoir,
+)
+
+
 def leverett_j(pc, ift, theta, perm, phit):
     """Estimate Leverett J.
 
     Args:
-        pc (float): Capillary pressure (psi).
+        pc (float or np.ndarray): Capillary pressure (psi).
         ift (float): Interfacial tension (dynes/cm).
         theta (float): Wetting angle (degree).
-        perm (float): Permeability (mD).
-        phit (float): Total porosity (frac).
+        perm (float or np.ndarray): Permeability (mD).
+        phit (float or np.ndarray): Total porosity (frac).
 
     Returns:
-        float: Leverett J value.
+        float or np.ndarray: Leverett J value.
     """
     return (
-        0.21665 * pc / (ift * abs(np.cos(np.radians(theta)))) * (perm / phit) ** (0.5)
+        0.21665
+        * pc
+        / (ift * abs(np.cos(np.radians(theta))))
+        * (np.maximum(perm, 0.0) / np.maximum(phit, 1e-6)) ** (0.5)
     )
 
 
-def sw_skelt_harrison(depth, fwl, a, b, c, d):
+def sw_skelt_harrison(depth, fwl, a, b, c, d, clip=True):
     """Estimate water saturation based on Skelt-Harrison.
 
     Args:
-        depth (float): True vertical depth.
+        depth (float or np.ndarray): True vertical depth.
         fwl (float): Free water level in true vertical depth.
         a (float): a constant from the best-fit curve.
         b (float): b constant from the best-fit curve.
         c (float): c constant from the best-fit curve.
         d (float): d constant from the best-fit curve.
+        clip (bool, optional): Clip resulting Sw to [0, 1] and enforce Sw=1 at/below FWL.
+            Defaults to True.
 
     Returns:
-        float: Water saturation.
+        float or np.ndarray: Water saturation.
     """
-    h = (fwl - depth).clip(0)
-    return skelt_harrison_func(h, a, b, c, d)
+    is_scalar = np.isscalar(depth) and np.isscalar(fwl)
+    h = np.maximum(fwl - depth, 0.0)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        sw = skelt_harrison_func(h, a, b, c, d)
+    if clip:
+        sw = np.where(fwl - depth <= 0, 1.0, np.clip(sw, 0.0, 1.0))
+    return float(sw) if is_scalar else sw
 
 
 def sw_lambda(phit, h, a, b, lamda):
@@ -404,9 +434,8 @@ def sw_cuddy(phit, h, a, b):
     """Estimate water saturation based on Cuddy's.
 
     Args:
-        sw (float): Water saturation (frac).
         phit (float): Total porosity (frac).
-        h (float): True vertical depth.
+        h (float): Height above free water level.
         a (float): Fitting parameter.
         b (float): Fitting parameter (negative value).
 
@@ -416,84 +445,159 @@ def sw_cuddy(phit, h, a, b):
     return a / (h**b * phit)
 
 
-def sw_shf_leverett_j(perm, phit, depth, fwl, ift, theta, gw, ghc, a, b, phie=None):
+def sw_shf_leverett_j(
+    perm,
+    phit,
+    depth,
+    fwl,
+    ift,
+    theta,
+    gw,
+    ghc,
+    a,
+    b,
+    phie=None,
+    swirr=0.0,
+    unit="imperial",
+    clip=True,
+):
     """Estimate water saturation based on Leverett J function.
 
     Args:
-        perm (float): Permeability (mD).
-        phit (float): Total porosity (frac).
-        depth (float): True vertical depth (ft).
-        fwl (float): Free water level in true vertical depth (ft).
+        perm (float or np.ndarray): Permeability (mD).
+        phit (float or np.ndarray): Total porosity (frac).
+        depth (float or np.ndarray): True vertical depth (ft or m).
+        fwl (float): Free water level in true vertical depth (ft or m).
         ift (float): Interfacial tension (dynes/cm).
         theta (float): Wetting angle (degree).
         gw (float): Water density (g/cc).
         ghc (float): Hydrocarbon density (g/cc).
-        a (float): A constant from J function.
-        b (float): B constant from J function.
-        phie (float): Effective porosity (frac), required for clay bound water calculation. Defaults to None.
+        a (float or np.ndarray): A constant from J function ($J = a \\cdot S_{wn}^{-b}$).
+        b (float or np.ndarray): B constant from J function.
+        phie (float or np.ndarray, optional): Effective porosity (frac), required for clay bound
+            water conversion to total water saturation. Defaults to None.
+        swirr (float or np.ndarray, optional): Irreducible water saturation fraction to un-normalize
+            $S_{wn}$ ($S_w = S_{wirr} + (1 - S_{wirr}) S_{wn}$). Defaults to 0.0.
+        unit (str, optional): Depth unit system, `'imperial'`/`'ft'` (0.433 psi/ft per g/cc) or
+            `'metric'`/`'m'` (1.4206 psi/m per g/cc). Defaults to `'imperial'`.
+        clip (bool, optional): Clip resulting saturation to [0.0, 1.0] and set 1.0 at/below FWL.
+            Defaults to True.
 
     Returns:
-        float: Water saturation from saturation height function.
+        float or np.ndarray: Water saturation from saturation height function.
     """
-    h = np.maximum(fwl - depth, 0)
-    pc = h * (gw - ghc) * 0.433  # Convert g/cc to psi/ft
-    shf = (a / leverett_j(pc, ift, theta, perm, phit)) ** (1 / b)
-    return shf if not phie else shf * (1 - (phie / phit)) + (phie / phit)
+    is_scalar = (
+        np.isscalar(perm)
+        and np.isscalar(phit)
+        and np.isscalar(depth)
+        and np.isscalar(fwl)
+        and np.isscalar(a)
+        and np.isscalar(b)
+    )
+    conv = 0.433 * 3.28084 if str(unit).strip().lower() in ("metric", "m") else 0.433
+    h = np.maximum(fwl - depth, 0.0)
+    pc = h * (gw - ghc) * conv
+    j_val = leverett_j(pc, ift, theta, perm, phit)
+    b_abs = np.abs(b)
+
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        shf = np.where(
+            (h > 0) & (j_val > 0) & (a > 0) & (b_abs > 0),
+            (a / j_val) ** (1.0 / b_abs),
+            1.0,
+        )
+
+    if swirr is not None:
+        shf = swirr + (1.0 - swirr) * shf
+
+    if phie is not None:
+        swb = np.clip(1.0 - (phie / np.maximum(phit, 1e-6)), 0.0, 1.0)
+        shf = shf * (1.0 - swb) + swb
+
+    if clip:
+        shf = np.where(fwl - depth <= 0, 1.0, np.clip(shf, 0.0, 1.0))
+
+    if is_scalar:
+        return float(shf)
+    if isinstance(depth, pd.Series):
+        return pd.Series(shf, index=depth.index)
+    return shf
 
 
-def sw_shf_cuddy(phit, depth, fwl, gw, ghc, a, b):
+def sw_shf_cuddy(phit, depth, fwl, gw, ghc, a, b, unit="imperial", clip=True):
     """Estimate water saturation based on Cuddy's saturation height function.
 
     Args:
-        phit (float): Porosity (frac).
-        depth (float): True vertical depth (ft).
-        fwl (float): Free water level in true vertical depth (ft).
+        phit (float or np.ndarray): Porosity (frac).
+        depth (float or np.ndarray): True vertical depth (ft or m).
+        fwl (float): Free water level in true vertical depth (ft or m).
         gw (float): Water density (g/cc).
         ghc (float): Hydrocarbon density (g/cc).
         a (float): Fitting parameter.
-        b (float): Fitting parameter (negative value).
+        b (float): Fitting parameter.
+        unit (str, optional): `'imperial'`/`'ft'` or `'metric'`/`'m'`. Defaults to `'imperial'`.
+        clip (bool, optional): Clip resulting saturation to [0.0, 1.0]. Defaults to True.
 
     Returns:
-        float: Water saturation from saturation height function.
+        float or np.ndarray: Water saturation from saturation height function.
     """
-    h = (fwl - depth).clip(0)
-    shf = a / ((h * (gw - ghc) * 0.433) ** b * phit)
-    return shf
+    is_scalar = np.isscalar(phit) and np.isscalar(depth) and np.isscalar(fwl)
+    conv = 0.433 * 3.28084 if str(unit).strip().lower() in ("metric", "m") else 0.433
+    h = np.maximum(fwl - depth, 0.0)
+    b_abs = np.abs(b)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        shf = np.where(
+            (h > 0) & (phit > 0),
+            a / (((h * (gw - ghc) * conv) ** b_abs) * phit),
+            1.0,
+        )
+    if clip:
+        shf = np.where(fwl - depth <= 0, 1.0, np.clip(shf, 0.0, 1.0))
+    return float(shf) if is_scalar else shf
 
 
 def sw_shf_choo(perm, phit, phie, depth, fwl, ift, theta, gw, ghc, b0=0.4):
     """Estimate water saturation based on Choo's saturation height function.
 
     Args:
-        perm (float): Permeability (mD).
-        phit (float): Total porosity (frac).
-        phie (float): Effective porosity (frac).
-        depth (float): True vertical depth (ft).
+        perm (float or np.ndarray): Permeability (mD).
+        phit (float or np.ndarray): Total porosity (frac).
+        phie (float or np.ndarray): Effective porosity (frac).
+        depth (float or np.ndarray): True vertical depth (ft).
         fwl (float): Free water level in true vertical depth (ft).
         ift (float): Interfacial tension (dynes/cm).
         theta (float): Wetting angle (degree).
         gw (float): Water density (g/cc).
         ghc (float): Hydrocarbon density (g/cc).
-        b0 (float): _description_. Defaults to 0.4.
+        b0 (float): Exponent constant. Defaults to 0.4.
 
     Returns:
-        float: Water saturation from saturation height function.
+        float or np.ndarray: Water saturation from saturation height function.
     """
-    swb = 1 - (phie / phit)
-    h = (fwl - depth).clip(0)
+    swb = np.clip(1.0 - (phie / np.maximum(phit, 1e-6)), 1e-6, 1.0 - 1e-6)
+    h = np.maximum(fwl - depth, 0.0)
     pc = h * (gw - ghc) * 0.433
-    shf = 10 ** ((2 * b0 - 1) * np.log10(1 + swb**-1) + np.log10(1 + swb)) / (
-        (
-            0.2166
-            * (pc / (ift * abs(np.cos(np.radians(theta)))))
-            * (perm / phit) ** (0.5)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        shf = 10 ** ((2 * b0 - 1) * np.log10(1 + swb**-1) + np.log10(1 + swb)) / (
+            (
+                0.2166
+                * (pc / (ift * abs(np.cos(np.radians(theta)))))
+                * (perm / phit) ** (0.5)
+            )
+            ** (b0 * np.log10(1 + swb**-1) / 3)
         )
-        ** (b0 * np.log10(1 + swb**-1) / 3)
-    )
-    return shf
+    return np.where(h <= 0, 1.0, np.clip(shf, 0.0, 1.0))
 
 
-def autocorrelate_core_depth(df, replace_ori=False):
+def autocorrelate_core_depth(
+    df,
+    replace_ori=False,
+    net_confining_stress=None,
+    mean_pore_pressure=None,
+    cbw=None,
+    compaction_coeff=4e-6,
+    oven_dried=False,
+):
     """
     Automatically shift core depths to match log depths.
 
@@ -529,6 +633,17 @@ def autocorrelate_core_depth(df, replace_ori=False):
                                       the corrected ones. If False, the original
                                       columns will be preserved with an '_ORI' suffix.
                                       Defaults to False.
+        net_confining_stress (float, str, or np.ndarray, optional): Net confining stress (psi)
+                                      or column name in `df` for overburden porosity correction
+                                      prior to depth alignment. Defaults to None.
+        mean_pore_pressure (float, str, or np.ndarray, optional): Mean flowing pore pressure (psi)
+                                      or column name in `df` for Klinkenberg permeability correction.
+                                      Defaults to None.
+        cbw (bool, float, str, or np.ndarray, optional): Clay-bound water volume (frac), column
+                                      name, or True to infer `PHIT - PHIE` to reconcile humidity-dried
+                                      core porosity before aligning with `PHIT`. Defaults to None.
+        compaction_coeff (float, optional): Pore compaction coefficient (1/psi). Defaults to 4e-6.
+        oven_dried (bool, optional): Whether core plugs are oven-dried. Defaults to False.
 
     Returns:
         tuple[pd.DataFrame, pd.DataFrame]:
@@ -549,6 +664,16 @@ def autocorrelate_core_depth(df, replace_ori=False):
             raise AssertionError(f"Missing required column: {col}")
 
     df = df.copy()
+    if any(x is not None for x in (net_confining_stress, mean_pore_pressure, cbw)):
+        df = correct_core_data(
+            df,
+            net_confining_stress=net_confining_stress,
+            mean_pore_pressure=mean_pore_pressure,
+            cbw=cbw,
+            compaction_coeff=compaction_coeff,
+            oven_dried=oven_dried,
+            replace_ori=replace_ori,
+        )
     # Ensure porosity and permeability columns are numeric, coercing errors.
     df["CPERM"] = pd.to_numeric(df["CPERM"], errors="coerce")
     df["PHIT"] = pd.to_numeric(df["PHIT"], errors="coerce")
@@ -1390,7 +1515,9 @@ def auto_j_params(core_data, excluded_samples=None, cluster_by=None):
 
         a, b = fit_j_curve(clean_data["SWN"], clean_data["J"])
         rmse = round(
-            root_mean_squared_error(clean_data["J"], a * clean_data["SWN"] ** b),
+            root_mean_squared_error(
+                clean_data["J"], inv_power_law_func(clean_data["SWN"], a, b)
+            ),
             4,
         )
 

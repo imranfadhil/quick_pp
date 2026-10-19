@@ -118,7 +118,7 @@ async def favicon():
 
 @app.get("/", include_in_schema=False)
 async def root(request: Request):
-    return templates.TemplateResponse("home.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="home.html")
 
 
 @app.get("/qpp_assistant", include_in_schema=False)
@@ -131,11 +131,10 @@ async def qpp_assistant(request: Request):
 
     # Configuration for the template
     context = {
-        "request": request,
         "api_base_url": base_url + "/quick_pp",
     }
 
-    return templates.TemplateResponse("chat.html", context)
+    return templates.TemplateResponse(request=request, name="chat.html", context=context)
 
 
 @app.exception_handler(Exception)

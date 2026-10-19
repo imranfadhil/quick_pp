@@ -558,3 +558,731 @@ def extract_quick_stats(compare_df, flag="all"):
             stats_df[col] = stats
 
     return round(stats_df, 3)
+
+
+def log_normalization(
+    df: pd.DataFrame,
+    logs: list[str] | tuple[str, ...] = ("GR", "NPHI"),
+    method: str = "minmax",
+    quantiles: tuple[float, float] = (0.05, 0.95),
+    inplace: bool = False,
+    suffix: str = "_NORM",
+) -> pd.DataFrame:
+    """Perform global log normalization (min-max, quantile, or z-score) across a DataFrame.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame containing well log curves.
+        logs (list[str] | tuple[str, ...], optional): Log columns to normalize. Defaults to ("GR", "NPHI").
+        method (str, optional): Normalization method: 'minmax', 'quantile', or 'zscore'. Defaults to 'minmax'.
+        quantiles (tuple[float, float], optional): Low and high quantiles when `method='quantile'`. Defaults to (0.05, 0.95).
+        inplace (bool, optional): If True, overwrites the original log columns. If False, writes to `<log><suffix>`. Defaults to False.
+        suffix (str, optional): Suffix for normalized columns when `inplace=False`. Defaults to '_NORM'.
+
+    Returns:
+        pd.DataFrame: DataFrame with normalized log curves.
+    """
+    method_lower = method.lower()
+    if method_lower not in ("minmax", "quantile", "zscore", "z-score"):
+        raise ValueError(
+            f"Unsupported normalization method '{method}'. Choose from 'minmax', 'quantile', or 'zscore'."
+        )
+
+    out_df = df.copy()
+    if isinstance(logs, str):
+        logs = [logs]
+
+    q_low, q_high = quantiles
+    if not (0.0 <= q_low < q_high <= 1.0):
+        raise ValueError(
+            f"quantiles must satisfy 0.0 <= q_low < q_high <= 1.0, got {quantiles}."
+        )
+
+    for col in logs:
+        if col not in out_df.columns:
+            continue
+        series = pd.to_numeric(out_df[col], errors="coerce")
+        target_col = col if inplace else f"{col}{suffix}"
+
+        if method_lower == "minmax":
+            vmin = series.min()
+            vmax = series.max()
+            denom = vmax - vmin
+            if pd.isna(denom) or abs(denom) < 1e-12:
+                out_df[target_col] = np.where(series.notna(), 0.0, np.nan)
+            else:
+                out_df[target_col] = (series - vmin) / denom
+        elif method_lower == "quantile":
+            vmin = series.quantile(q_low)
+            vmax = series.quantile(q_high)
+            denom = vmax - vmin
+            if pd.isna(denom) or abs(denom) < 1e-12:
+                out_df[target_col] = np.where(series.notna(), 0.0, np.nan)
+            else:
+                out_df[target_col] = (series - vmin) / denom
+        else:  # zscore / z-score
+            mean_val = series.mean()
+            std_val = series.std()
+            if pd.isna(std_val) or abs(std_val) < 1e-12:
+                out_df[target_col] = np.where(series.notna(), 0.0, np.nan)
+            else:
+                out_df[target_col] = (series - mean_val) / std_val
+
+    return out_df
+
+
+def normalize_by_zone(
+    df: pd.DataFrame,
+    key_well: str | None = None,
+    zone_col: str = "ZONES",
+    quantiles: tuple[float, float] = (0.05, 0.95),
+    logs: list[str] | tuple[str, ...] = ("GR", "NPHI"),
+    well_col: str = "WELL_NAME",
+    method: str = "quantile",
+    n_quantiles: int = 101,
+    inplace: bool = False,
+    suffix: str = "_NORM",
+    return_report: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+    """Perform stratigraphic (zone-by-zone) multi-well quantile or histogram log normalization.
+
+    Normalizes log curves (e.g., GR, NPHI, RHOB, DT) across 50+ multi-vintage wells
+    within each stratigraphic formation/zone independently, calibrating each target
+    well's distribution to match a reference `key_well` (or the multi-well field
+    median per zone if `key_well` is None or absent in a zone). This removes vintage
+    tool calibration drift and borehole environmental shifts between wells without
+    smearing true geological/lithological differences across zones.
+
+    Supports two stratigraphic normalization modes via `method`:
+    1. `'quantile'` (default): Linear shift-and-stretch matching low and high quantile
+       anchors `(P_low, P_high)` (e.g., clean sand line and shale baseline):
+       $$X_{\\text{norm}} = P_{\\text{low, ref}}^{(z)} + \\frac{X - P_{\\text{low, well}}^{(z)}}{P_{\\text{high, well}}^{(z)} - P_{\\text{low, well}}^{(z)}} \\left(P_{\\text{high, ref}}^{(z)} - P_{\\text{low, ref}}^{(z)}\\right)$$
+    2. `'histogram'` (or `'cdf'`): Non-linear empirical CDF / multi-quantile histogram
+       matching across `n_quantiles` evaluation points within each zone, aligning the
+       full distribution shape of each well to the reference key well or field median CDF.
+
+    Args:
+        df (pd.DataFrame): Input multi-well DataFrame.
+        key_well (str | None, optional): Name of the reference key well in `well_col`.
+            If None or if `key_well` has no valid data in a given zone, the zone-level
+            field median of well quantiles is used as the reference anchor. Defaults to None.
+        zone_col (str, optional): Column name identifying stratigraphic zones/formations.
+            Defaults to 'ZONES'.
+        quantiles (tuple[float, float], optional): Tuple of `(q_low, q_high)` quantiles
+            in `(0, 1)` used as low and high anchors. Defaults to (0.05, 0.95).
+        logs (list[str] | tuple[str, ...], optional): Log curves to normalize.
+            Defaults to ('GR', 'NPHI').
+        well_col (str, optional): Column name identifying wells. Defaults to 'WELL_NAME'.
+        method (str, optional): Normalization method: `'quantile'` (linear two-point
+            percentile scaling) or `'histogram'` / `'cdf'` (piecewise empirical CDF
+            histogram matching). Defaults to `'quantile'`.
+        n_quantiles (int, optional): Number of quantile grid points for `'histogram'`
+            matching. Defaults to 101.
+        inplace (bool, optional): If True, overwrites the input log columns in the returned
+            DataFrame in addition to writing `<log><suffix>`. Defaults to False.
+        suffix (str, optional): Suffix appended to normalized log column names.
+            Defaults to '_NORM'.
+        return_report (bool, optional): If True, returns `(normalized_df, report_df)`
+            containing per-well, per-zone, per-log shift, scale, and quantile diagnostics.
+            Defaults to False.
+
+    Returns:
+        pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]: A copy of `df` with normalized
+        curves (and `report_df` if `return_report=True`).
+    """
+    q_low, q_high = quantiles
+    if not (0.0 <= q_low < q_high <= 1.0):
+        raise ValueError(
+            f"quantiles must satisfy 0.0 <= q_low < q_high <= 1.0, got {quantiles}."
+        )
+
+    method_lower = method.lower()
+    if method_lower not in ("quantile", "histogram", "cdf"):
+        raise ValueError(
+            f"Unsupported method '{method}'. Choose from 'quantile' or 'histogram'."
+        )
+
+    if zone_col not in df.columns:
+        raise ValueError(f"Zone column '{zone_col}' not found in DataFrame.")
+    if well_col not in df.columns:
+        raise ValueError(f"Well column '{well_col}' not found in DataFrame.")
+
+    if isinstance(logs, str):
+        logs = [logs]
+
+    present_logs = [col for col in logs if col in df.columns]
+    if not present_logs:
+        raise ValueError(f"None of the specified logs {logs} were found in DataFrame.")
+
+    out_df = df.copy()
+    report_rows: list[dict] = []
+
+    # Initialize output columns as float copies of original curves
+    for col in present_logs:
+        out_df[col] = pd.to_numeric(out_df[col], errors="coerce").astype(float)
+        if not inplace and suffix:
+            out_df[f"{col}{suffix}"] = out_df[col].copy()
+
+    q_grid = np.linspace(0.0, 1.0, max(int(n_quantiles), 11))
+
+    # Group by stratigraphic zone
+    for zone_name, zone_df in out_df.groupby(zone_col, dropna=False):
+        if pd.isna(zone_name):
+            continue
+
+        for col in present_logs:
+            target_col = col if (inplace or not suffix) else f"{col}{suffix}"
+
+            # Compute (p_low, p_high) and full quantile grid for every well in this zone
+            well_stats: dict[str, tuple[float, float]] = {}
+            well_cdfs: dict[str, np.ndarray] = {}
+            for well_name, well_zone_df in zone_df.groupby(well_col, dropna=False):
+                valid_vals = well_zone_df[col].dropna().to_numpy(dtype=float)
+                if len(valid_vals) < 2:
+                    continue
+                p_low = float(np.nanquantile(valid_vals, q_low))
+                p_high = float(np.nanquantile(valid_vals, q_high))
+                well_stats[well_name] = (p_low, p_high)
+                if method_lower in ("histogram", "cdf"):
+                    well_cdfs[well_name] = np.nanquantile(valid_vals, q_grid)
+
+            if not well_stats:
+                continue
+
+            # Determine reference (p_low_ref, p_high_ref) and reference CDF from key_well or field median
+            if (
+                key_well is not None
+                and key_well in well_stats
+                and (well_stats[key_well][1] - well_stats[key_well][0]) > 1e-12
+            ):
+                p_low_ref, p_high_ref = well_stats[key_well]
+                ref_cdf = well_cdfs.get(key_well)
+                ref_source = str(key_well)
+            else:
+                if key_well is not None and key_well not in well_stats:
+                    logger.warning(
+                        f"[normalize_by_zone] key_well '{key_well}' missing or insufficient data "
+                        f"in zone '{zone_name}' for '{col}'. Falling back to field median quantiles."
+                    )
+                p_low_ref = float(np.median([v[0] for v in well_stats.values()]))
+                p_high_ref = float(np.median([v[1] for v in well_stats.values()]))
+                ref_cdf = (
+                    np.median(np.vstack(list(well_cdfs.values())), axis=0)
+                    if well_cdfs
+                    else None
+                )
+                ref_source = "FIELD_MEDIAN"
+
+            ref_span = p_high_ref - p_low_ref
+            if abs(ref_span) < 1e-12:
+                continue
+
+            # Normalize each well in this zone toward the reference
+            for well_name, well_zone_df in zone_df.groupby(well_col, dropna=False):
+                if well_name not in well_stats:
+                    continue
+                p_low_w, p_high_w = well_stats[well_name]
+                well_span = p_high_w - p_low_w
+                idx = well_zone_df.index
+                raw_series = out_df.loc[idx, col]
+
+                if abs(well_span) < 1e-12:
+                    scale = 1.0
+                    shift = p_low_ref - p_low_w
+                    norm_vals = raw_series + shift
+                elif method_lower in ("histogram", "cdf") and ref_cdf is not None:
+                    scale = ref_span / well_span
+                    shift = p_low_ref - p_low_w * scale
+                    w_cdf = well_cdfs[well_name]
+                    # Deduplicate knot points for monotonic piecewise linear interpolation
+                    unique_w_cdf, unique_idx = np.unique(w_cdf, return_index=True)
+                    unique_ref_cdf = ref_cdf[unique_idx]
+                    raw_np = raw_series.to_numpy(dtype=float)
+                    valid_mask = ~np.isnan(raw_np)
+                    norm_np = np.full_like(raw_np, np.nan, dtype=float)
+                    if len(unique_w_cdf) >= 2:
+                        # Interpolate within empirical range and linearly extrapolate tails using (p_low, p_high) slope
+                        interp_vals = np.interp(
+                            raw_np[valid_mask], unique_w_cdf, unique_ref_cdf
+                        )
+                        low_tail = raw_np[valid_mask] < unique_w_cdf[0]
+                        high_tail = raw_np[valid_mask] > unique_w_cdf[-1]
+                        if np.any(low_tail):
+                            interp_vals[low_tail] = (
+                                unique_ref_cdf[0]
+                                + (raw_np[valid_mask][low_tail] - unique_w_cdf[0])
+                                * scale
+                            )
+                        if np.any(high_tail):
+                            interp_vals[high_tail] = (
+                                unique_ref_cdf[-1]
+                                + (raw_np[valid_mask][high_tail] - unique_w_cdf[-1])
+                                * scale
+                            )
+                        norm_np[valid_mask] = interp_vals
+                    else:
+                        norm_np[valid_mask] = (
+                            p_low_ref + (raw_np[valid_mask] - p_low_w) * scale
+                        )
+                    norm_vals = pd.Series(norm_np, index=idx)
+                else:
+                    scale = ref_span / well_span
+                    shift = p_low_ref - p_low_w * scale
+                    norm_vals = p_low_ref + (raw_series - p_low_w) * scale
+
+                out_df.loc[idx, target_col] = norm_vals
+                if inplace and suffix:
+                    out_df.loc[idx, f"{col}{suffix}"] = norm_vals
+
+                report_rows.append(
+                    {
+                        "WELL_NAME": well_name,
+                        "ZONE": zone_name,
+                        "LOG": col,
+                        "METHOD": method_lower,
+                        "REFERENCE": ref_source,
+                        "P_LOW_ORIG": p_low_w,
+                        "P_HIGH_ORIG": p_high_w,
+                        "P_LOW_REF": p_low_ref,
+                        "P_HIGH_REF": p_high_ref,
+                        "SCALE_FACTOR": float(scale),
+                        "DRIFT_SHIFT": float(p_low_ref - p_low_w),
+                    }
+                )
+
+    if return_report:
+        return out_df, pd.DataFrame(report_rows)
+    return out_df
+
+
+stratigraphic_normalization = normalize_by_zone
+
+
+
+def gr_borehole_correction(
+    gr: np.ndarray | pd.Series | float,
+    cali: np.ndarray | pd.Series | float,
+    bitsize: np.ndarray | pd.Series | float = 8.5,
+    mud_weight: np.ndarray | pd.Series | float = 9.0,
+    tool_diameter: float = 3.625,
+    tool_position: str = "eccentered",
+) -> np.ndarray | pd.Series | float:
+    """Correct Gamma Ray (GR) log for borehole size and mud weight attenuation.
+
+    Applies the standard Schlumberger/API exponential borehole absorption model
+    where drilling fluid between the gamma-ray detector and the borehole wall
+    attenuates natural formation gamma radiation:
+    $$\\text{CF}_{\\text{GR}} = \\exp\\left(\\mu \\cdot \\rho_{\\text{mud}} \\cdot \\frac{2.54}{2} \\cdot (d_{\\text{hole}} - d_{\\text{ref}}) \\cdot f_{\\text{geom}}\\right)$$
+
+    Args:
+        gr (np.ndarray | pd.Series | float): Measured Gamma Ray log (GAPI).
+        cali (np.ndarray | pd.Series | float): Caliper / borehole diameter (inches).
+        bitsize (np.ndarray | pd.Series | float, optional): Reference nominal bit size
+            (inches) at which the tool is calibrated (typically 8.5 in). Defaults to 8.5.
+        mud_weight (np.ndarray | pd.Series | float, optional): Drilling fluid density
+            in ppg (pounds per gallon, where 8.345 ppg = 1.0 g/cc) or g/cc (auto-detected
+            if values <= 3.0). Defaults to 9.0 ppg.
+        tool_diameter (float, optional): Logging tool outer diameter (inches). Defaults to 3.625.
+        tool_position (str, optional): Tool geometry in borehole: `'eccentered'`
+            (sidewall-pressed, lower mud attenuation) or `'centered'` (stronger mud
+            attenuation). Defaults to `'eccentered'`.
+
+    Returns:
+        np.ndarray | pd.Series | float: Borehole-corrected Gamma Ray log (GAPI).
+    """
+    is_series = isinstance(gr, pd.Series)
+    gr_idx = gr.index if is_series else None
+    gr_arr = np.asarray(gr, dtype=float)
+    cali_arr = np.asarray(cali, dtype=float)
+    bs_arr = np.asarray(bitsize, dtype=float)
+    mw_arr = np.asarray(mud_weight, dtype=float)
+
+    # Convert mud weight to g/cc if provided in ppg (> 3.0)
+    rho_mud = np.where(mw_arr > 3.0, mw_arr / 8.3454, mw_arr)
+    rho_mud_ref = 9.0 / 8.3454  # 9.0 ppg reference calibration mud weight (~1.08 g/cc)
+
+    # Effective fluid annulus thickness change relative to reference 8.5" borehole & 9 ppg mud
+    d_hole = np.clip(np.where(np.isnan(cali_arr), bs_arr, cali_arr), tool_diameter, 36.0)
+    d_ref = np.clip(bs_arr, tool_diameter, 36.0)
+
+    geom_factor = 0.65 if tool_position.lower().startswith("ecc") else 1.0
+    # Mass attenuation coefficient for ~1.5 MeV gamma rays in drilling mud (~0.055 cm^2/g)
+    mu = 0.055
+    half_inch_to_cm = 1.27
+
+    exponent = (
+        mu
+        * half_inch_to_cm
+        * geom_factor
+        * (
+            rho_mud * (d_hole - tool_diameter)
+            - rho_mud_ref * (d_ref - tool_diameter)
+        )
+    )
+    cf = np.clip(np.exp(exponent), 0.5, 2.5)
+    gr_corr = np.maximum(0.0, gr_arr * cf)
+
+    if is_series:
+        return pd.Series(gr_corr, index=gr_idx, name=gr.name)
+    if np.ndim(gr) == 0:
+        return float(gr_corr)
+    return gr_corr
+
+
+def nphi_environmental_correction(
+    nphi: np.ndarray | pd.Series | float,
+    cali: np.ndarray | pd.Series | float = 8.5,
+    bitsize: np.ndarray | pd.Series | float = 8.5,
+    temp: np.ndarray | pd.Series | float = 75.0,
+    pressure: np.ndarray | pd.Series | float = 0.0,
+    mud_weight: np.ndarray | pd.Series | float = 9.0,
+    salinity_ppm: np.ndarray | pd.Series | float = 0.0,
+    standoff: float = 0.0,
+) -> np.ndarray | pd.Series | float:
+    """Apply environmental corrections to thermal Neutron Porosity (NPHI).
+
+    Corrects raw thermal neutron porosity (fraction v/v) for departures from standard
+    API calibration conditions (8.5 in borehole, 75 °F, atmospheric pressure, fresh mud):
+    - **Borehole size (washout)**: Larger boreholes add hydrogen-rich mud between tool
+      and formation, artificially increasing apparent NPHI (~ +0.012 v/v per inch above bit size).
+    - **Formation temperature**: Higher temperature reduces fluid density/hydrogen index,
+      requiring a positive correction (~ +0.004 v/v per 100 °F above 75 °F).
+    - **Hydrostatic pressure**: Higher pressure compresses borehole/pore fluid, slightly
+      increasing apparent hydrogen density (~ -0.0015 v/v per 1000 psi).
+    - **Mud weight / barite**: High-density mud displaces water with solids, reducing
+      borehole hydrogen (~ +0.002 v/v per ppg above 9 ppg).
+    - **Salinity**: Chlorine has a high thermal neutron capture cross-section
+      (~ +0.001 v/v per 50,000 ppm NaCl).
+    - **Tool standoff**: Mud layer between pad and wall increases apparent porosity
+      (~ -0.015 v/v per 0.5 in standoff).
+
+    Args:
+        nphi (np.ndarray | pd.Series | float): Measured Neutron Porosity (fraction v/v).
+        cali (np.ndarray | pd.Series | float, optional): Caliper hole diameter (inches). Defaults to 8.5.
+        bitsize (np.ndarray | pd.Series | float, optional): Reference bit size (inches). Defaults to 8.5.
+        temp (np.ndarray | pd.Series | float, optional): Formation temperature (°F). Defaults to 75.0.
+        pressure (np.ndarray | pd.Series | float, optional): Hydrostatic mud pressure (psi). Defaults to 0.0.
+        mud_weight (np.ndarray | pd.Series | float, optional): Mud weight (ppg). Defaults to 9.0.
+        salinity_ppm (np.ndarray | pd.Series | float, optional): Formation/mud salinity (ppm NaCl). Defaults to 0.0.
+        standoff (float, optional): Tool standoff from borehole wall (inches). Defaults to 0.0.
+
+    Returns:
+        np.ndarray | pd.Series | float: Environmentally corrected NPHI (fraction v/v).
+    """
+    is_series = isinstance(nphi, pd.Series)
+    nphi_idx = nphi.index if is_series else None
+    nphi_arr = np.asarray(nphi, dtype=float)
+    cali_arr = np.asarray(cali, dtype=float)
+    bs_arr = np.asarray(bitsize, dtype=float)
+    temp_arr = np.asarray(temp, dtype=float)
+    pres_arr = np.asarray(pressure, dtype=float)
+    mw_arr = np.asarray(mud_weight, dtype=float)
+    sal_arr = np.asarray(salinity_ppm, dtype=float)
+
+    d_hole = np.where(np.isnan(cali_arr), bs_arr, cali_arr)
+    delta_hole = np.clip(d_hole - bs_arr, -4.0, 16.0)
+
+    # Additive chartbook approximations (in porosity units v/v)
+    corr_hole = -0.012 * delta_hole
+    corr_temp = 0.004 * (( np.where(np.isnan(temp_arr), 75.0, temp_arr) - 75.0) / 100.0)
+    corr_pres = -0.0015 * (np.where(np.isnan(pres_arr), 0.0, pres_arr) / 1000.0)
+    mw_ppg = np.where(mw_arr <= 3.0, mw_arr * 8.3454, mw_arr)
+    corr_mw = 0.002 * (np.where(np.isnan(mw_ppg), 9.0, mw_ppg) - 9.0)
+    corr_sal = 0.001 * (np.where(np.isnan(sal_arr), 0.0, sal_arr) / 50000.0)
+    corr_so = -0.030 * max(float(standoff), 0.0)
+
+    nphi_corr = np.clip(
+        nphi_arr + corr_hole + corr_temp + corr_pres + corr_mw + corr_sal + corr_so,
+        -0.05,
+        1.0,
+    )
+
+    if is_series:
+        return pd.Series(nphi_corr, index=nphi_idx, name=nphi.name)
+    if np.ndim(nphi) == 0:
+        return float(nphi_corr)
+    return nphi_corr
+
+
+def density_mudcake_correction(
+    rhob: np.ndarray | pd.Series | float,
+    cali: np.ndarray | pd.Series | float,
+    bitsize: np.ndarray | pd.Series | float = 8.5,
+    rho_mudcake: float = 1.5,
+    drho: np.ndarray | pd.Series | float | None = None,
+) -> np.ndarray | pd.Series | float:
+    """Correct Bulk Density (RHOB) for borehole rugosity, washout, and mudcake thickness.
+
+    When the caliper indicates washout (`CALI > BS`) or when an uncompensated mudcake/rugosity
+    effect is present, a dual-spacing density pad reads a weighted combination of mud/mudcake
+    density and true formation bulk density:
+    $$\\rho_{b,\\text{corr}} = \\rho_b + f_{\\text{pad}} \\cdot h_{\\text{mc}} \\cdot (\\rho_b - \\rho_{\\text{mc}})$$
+
+    Args:
+        rhob (np.ndarray | pd.Series | float): Measured Bulk Density log (g/cc).
+        cali (np.ndarray | pd.Series | float): Caliper log (inches).
+        bitsize (np.ndarray | pd.Series | float, optional): Bit size (inches). Defaults to 8.5.
+        rho_mudcake (float, optional): Density of mudcake / borehole fluid in washout (g/cc).
+            Defaults to 1.5.
+        drho (np.ndarray | pd.Series | float | None, optional): Density correction curve
+            (g/cc). If provided and excessive (`|DRHO| > 0.15`), adds residual washout
+            compensation. Defaults to None.
+
+    Returns:
+        np.ndarray | pd.Series | float: Corrected Bulk Density (g/cc), clipped to `[1.0, 3.2]`.
+    """
+    is_series = isinstance(rhob, pd.Series)
+    rhob_idx = rhob.index if is_series else None
+    rhob_arr = np.asarray(rhob, dtype=float)
+    cali_arr = np.asarray(cali, dtype=float)
+    bs_arr = np.asarray(bitsize, dtype=float)
+
+    # Effective standoff / washout wall gap (inches)
+    gap_in = np.clip((np.where(np.isnan(cali_arr), bs_arr, cali_arr) - bs_arr) / 2.0, 0.0, 6.0)
+    # Pad sensitivity factor per inch of wall gap beyond compensation
+    pad_factor = 0.06
+    delta_rhob = pad_factor * gap_in * np.maximum(rhob_arr - rho_mudcake, 0.0)
+
+    if drho is not None:
+        drho_arr = np.asarray(drho, dtype=float)
+        excess_drho = np.where(
+            np.abs(drho_arr) > 0.15,
+            0.25 * (np.abs(drho_arr) - 0.15) * np.sign(drho_arr),
+            0.0,
+        )
+        delta_rhob = delta_rhob + np.where(np.isnan(excess_drho), 0.0, excess_drho)
+
+    rhob_corr = np.clip(rhob_arr + delta_rhob, 1.0, 3.2)
+
+    if is_series:
+        return pd.Series(rhob_corr, index=rhob_idx, name=rhob.name)
+    if np.ndim(rhob) == 0:
+        return float(rhob_corr)
+    return rhob_corr
+
+
+def resistivity_invasion_correction(
+    rt: np.ndarray | pd.Series | float,
+    rm: np.ndarray | pd.Series | float | None = None,
+    rxo: np.ndarray | pd.Series | float | None = None,
+) -> tuple[np.ndarray | pd.Series | float, np.ndarray | pd.Series | float]:
+    """Correct deep resistivity (`RT`) for mud-filtrate invasion using a 3-curve tornado-chart approximation.
+
+    Uses shallow (`RXO` / `MSFL` / `RS`), medium (`RM` / `ILM` / `RLA3`), and deep (`RT` / `ILD` / `RDEP`)
+    resistivity measurements to reconstruct true uninvaded formation resistivity ($R_{t,\\text{corr}}$)
+    and produce an invasion profile flag:
+    - When both `RM` and `RXO` are available and conductive or resistive invasion is detected
+      ($R_m \\neq R_t$ and $(R_t - R_m)(R_m - R_{xo}) > 0$):
+      $$\\log_{10}(R_{t,\\text{corr}}) = \\log_{10}(R_t) + c_1 \\left(\\log_{10} R_t - \\log_{10} R_m\\right) + c_2 \\frac{(\\log_{10} R_t - \\log_{10} R_m)^2}{|\\log_{10} R_t - \\log_{10} R_{xo}| + 0.05}$$
+    - Invasion flag (`INVASION_FLAG`):
+      - `1`: Resistive hydrocarbon zone with conductive mud-filtrate invasion ($R_t > R_m > R_{xo}$)
+      - `2`: Conductive water zone with fresh/resistive mud-filtrate invasion ($R_t < R_m < R_{xo}$)
+      - `0`: Negligible invasion or single-curve input.
+
+    Args:
+        rt (np.ndarray | pd.Series | float): Deep resistivity log (ohm.m).
+        rm (np.ndarray | pd.Series | float | None, optional): Medium resistivity log (ohm.m).
+            Defaults to None.
+        rxo (np.ndarray | pd.Series | float | None, optional): Shallow / flushed-zone
+            resistivity log (ohm.m). Defaults to None.
+
+    Returns:
+        tuple: `(rt_corrected, invasion_flag)`
+    """
+    is_series = isinstance(rt, pd.Series)
+    rt_idx = rt.index if is_series else None
+    rt_arr = np.asarray(rt, dtype=float)
+    rt_safe = np.clip(rt_arr, 1e-3, 1e5)
+
+    inv_flag = np.zeros_like(rt_arr, dtype=int)
+    log_rt = np.log10(rt_safe)
+    log_rt_corr = log_rt.copy()
+
+    if rm is not None and rxo is not None:
+        rm_arr = np.clip(np.asarray(rm, dtype=float), 1e-3, 1e5)
+        rxo_arr = np.clip(np.asarray(rxo, dtype=float), 1e-3, 1e5)
+        log_rm = np.log10(rm_arr)
+        log_rxo = np.log10(rxo_arr)
+
+        valid = (~np.isnan(rt_arr)) & (~np.isnan(rm_arr)) & (~np.isnan(rxo_arr))
+        # Monotonic separation profiles: Rt > Rm > Rxo (conductive invasion) or Rt < Rm < Rxo (resistive invasion)
+        cond_inv = valid & (log_rt > log_rm + 0.03) & (log_rm > log_rxo + 0.03)
+        res_inv = valid & (log_rt < log_rm - 0.03) & (log_rm < log_rxo - 0.03)
+        active = cond_inv | res_inv
+
+        inv_flag[cond_inv] = 1
+        inv_flag[res_inv] = 2
+
+        diff_dm = log_rt - log_rm
+        diff_ds = np.abs(log_rt - log_rxo) + 0.05
+        # Standard tornado-chart butterfly correction shift in log10 space (bounded to +/- 0.45 decades)
+        delta_log = np.clip(
+            0.35 * diff_dm + 0.25 * np.sign(diff_dm) * (diff_dm**2) / diff_ds,
+            -0.45,
+            0.45,
+        )
+        log_rt_corr = np.where(active, log_rt + delta_log, log_rt)
+    elif rm is not None:
+        rm_arr = np.clip(np.asarray(rm, dtype=float), 1e-3, 1e5)
+        log_rm = np.log10(rm_arr)
+        valid = (~np.isnan(rt_arr)) & (~np.isnan(rm_arr))
+        cond_inv = valid & (log_rt > log_rm + 0.05)
+        res_inv = valid & (log_rt < log_rm - 0.05)
+        inv_flag[cond_inv] = 1
+        inv_flag[res_inv] = 2
+        delta_log = np.clip(0.30 * (log_rt - log_rm), -0.35, 0.35)
+        log_rt_corr = np.where(cond_inv | res_inv, log_rt + delta_log, log_rt)
+
+    rt_corr = np.where(np.isnan(rt_arr), np.nan, 10.0**log_rt_corr)
+
+    if is_series:
+        return (
+            pd.Series(rt_corr, index=rt_idx, name=rt.name),
+            pd.Series(inv_flag, index=rt_idx, name="INVASION_FLAG"),
+        )
+    if np.ndim(rt) == 0:
+        return float(rt_corr), int(inv_flag)
+    return rt_corr, inv_flag
+
+
+def apply_environmental_corrections(
+    df: pd.DataFrame,
+    bitsize_default: float = 8.5,
+    mud_weight: float | str = 9.0,
+    surface_temp: float = 75.0,
+    temp_grad: float = 1.5,
+    salinity_ppm: float | str = 0.0,
+    rho_mudcake: float = 1.5,
+    inplace: bool = False,
+    suffix: str = "_CORR",
+) -> pd.DataFrame:
+    """Apply automated borehole environmental and invasion corrections to a well log DataFrame.
+
+    Orchestrates borehole/washout, temperature/pressure, mudcake, and filtrate invasion
+    corrections across standard petrophysical curves (`GR`, `NPHI`, `RHOB`, and `RT`):
+    1. Estimates bit size (`BS`) and `BADHOLE` flags via `badhole_flagging` if `CALI` is
+       present and `BS` is missing.
+    2. Computes formation temperature (`TEMP`) and hydrostatic pressure (`PRESSURE`) from
+       `DEPTH` (or `TVD`) when not explicitly present in `df`.
+    3. Applies `gr_borehole_correction` to `GR`.
+    4. Applies `nphi_environmental_correction` to `NPHI`.
+    5. Applies `density_mudcake_correction` to `RHOB` (using `DRHO` if available).
+    6. Applies `resistivity_invasion_correction` to `RT` when medium (`RM` / `ILM` / `RMED`)
+       and/or shallow (`RXO` / `MSFL` / `RSHAL`) resistivity curves are present.
+
+    Args:
+        df (pd.DataFrame): Input well log DataFrame.
+        bitsize_default (float, optional): Default bit size (inches) if `BS` and `CALI`
+            are absent. Defaults to 8.5.
+        mud_weight (float | str, optional): Mud weight in ppg or column name in `df`.
+            Defaults to 9.0.
+        surface_temp (float, optional): Surface temperature (°F) for geothermal gradient
+            estimation when `TEMP` is absent. Defaults to 75.0.
+        temp_grad (float, optional): Geothermal gradient (°F per 100 ft or equivalent)
+            when `TEMP` is absent. Defaults to 1.5.
+        salinity_ppm (float | str, optional): Mud/formation salinity (ppm NaCl) or column
+            name in `df`. Defaults to 0.0.
+        rho_mudcake (float, optional): Mudcake density (g/cc). Defaults to 1.5.
+        inplace (bool, optional): If True, overwrites `GR`, `NPHI`, `RHOB`, `RT` in place
+            in addition to writing `<LOG><suffix>`. Defaults to False.
+        suffix (str, optional): Suffix for corrected log columns. Defaults to `'_CORR'`.
+
+    Returns:
+        pd.DataFrame: DataFrame with environmentally corrected curves and `INVASION_FLAG`.
+    """
+    out_df = df.copy()
+
+    # Resolve BS and CALI
+    if "BS" in out_df.columns and out_df["BS"].notna().any():
+        bs = out_df["BS"].fillna(bitsize_default)
+    else:
+        bs = pd.Series(bitsize_default, index=out_df.index, dtype=float)
+    cali = out_df["CALI"].fillna(bs) if "CALI" in out_df.columns else bs
+
+    # Resolve mud weight and salinity
+    mw = (
+        out_df[mud_weight]
+        if isinstance(mud_weight, str) and mud_weight in out_df.columns
+        else mud_weight
+    )
+    sal = (
+        out_df[salinity_ppm]
+        if isinstance(salinity_ppm, str) and salinity_ppm in out_df.columns
+        else salinity_ppm
+    )
+
+    # Resolve temperature (°F) and hydrostatic pressure (psi)
+    depth_col = "TVD" if "TVD" in out_df.columns else ("DEPTH" if "DEPTH" in out_df.columns else None)
+    if "TEMP" in out_df.columns:
+        temp = out_df["TEMP"]
+    elif depth_col is not None:
+        # Assume depth in meters if max depth < 6000, convert to 100 ft units for °F gradient
+        d_vals = pd.to_numeric(out_df[depth_col], errors="coerce").fillna(0.0)
+        depth_ft = d_vals * 3.28084 if d_vals.max() < 6000 else d_vals
+        temp = surface_temp + temp_grad * (depth_ft / 100.0)
+    else:
+        temp = surface_temp
+
+    if "PRESSURE" in out_df.columns:
+        pressure = out_df["PRESSURE"]
+    elif depth_col is not None:
+        d_vals = pd.to_numeric(out_df[depth_col], errors="coerce").fillna(0.0)
+        depth_ft = d_vals * 3.28084 if d_vals.max() < 6000 else d_vals
+        mw_val = mw if not isinstance(mw, pd.Series) else mw.fillna(9.0)
+        mw_ppg = np.where(np.asarray(mw_val) <= 3.0, np.asarray(mw_val) * 8.3454, np.asarray(mw_val))
+        pressure = 0.052 * mw_ppg * depth_ft
+    else:
+        pressure = 0.0
+
+    # 1. Gamma Ray borehole correction
+    if "GR" in out_df.columns:
+        gr_corr = gr_borehole_correction(out_df["GR"], cali=cali, bitsize=bs, mud_weight=mw)
+        if suffix:
+            out_df[f"GR{suffix}"] = gr_corr
+        if inplace:
+            out_df["GR"] = gr_corr
+
+    # 2. Neutron Porosity environmental correction
+    if "NPHI" in out_df.columns:
+        nphi_corr = nphi_environmental_correction(
+            out_df["NPHI"],
+            cali=cali,
+            bitsize=bs,
+            temp=temp,
+            pressure=pressure,
+            mud_weight=mw,
+            salinity_ppm=sal,
+        )
+        if suffix:
+            out_df[f"NPHI{suffix}"] = nphi_corr
+        if inplace:
+            out_df["NPHI"] = nphi_corr
+
+    # 3. Bulk Density mudcake / washout correction
+    if "RHOB" in out_df.columns:
+        drho = out_df["DRHO"] if "DRHO" in out_df.columns else None
+        rhob_corr = density_mudcake_correction(
+            out_df["RHOB"], cali=cali, bitsize=bs, rho_mudcake=rho_mudcake, drho=drho
+        )
+        if suffix:
+            out_df[f"RHOB{suffix}"] = rhob_corr
+        if inplace:
+            out_df["RHOB"] = rhob_corr
+
+    # 4. Deep Resistivity invasion correction
+    if "RT" in out_df.columns:
+        rm_col = next((c for c in ("RM", "ILM", "RMED", "RLA3") if c in out_df.columns), None)
+        rxo_col = next((c for c in ("RXO", "MSFL", "RSHAL", "RS", "RLA1") if c in out_df.columns), None)
+        rt_corr, inv_flag = resistivity_invasion_correction(
+            out_df["RT"],
+            rm=out_df[rm_col] if rm_col else None,
+            rxo=out_df[rxo_col] if rxo_col else None,
+        )
+        if suffix:
+            out_df[f"RT{suffix}"] = rt_corr
+        if inplace:
+            out_df["RT"] = rt_corr
+        out_df["INVASION_FLAG"] = inv_flag
+
+    return out_df
+
+

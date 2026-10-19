@@ -1046,3 +1046,1547 @@ def FF_plot(phit, ro, rw):
     ax.grid(True)
     fig.tight_layout()
     logger.debug("Formation factor plot created")
+
+
+# ==============================================================================
+# Multi-Well Contact & Transition Zone Optimizer (SHM vs. Resistivity & MDT/RFT)
+# ==============================================================================
+
+
+def _gravity_conversion_factor(unit: str = "imperial") -> float:
+    """Return hydrostatic pressure gradient conversion factor from g/cc to psi/depth_unit."""
+    return 0.433 * 3.28084 if str(unit).strip().lower() in ("metric", "m") else 0.433
+
+
+def estimate_mdt_fwl(
+    pressure_df: pd.DataFrame = None,
+    tvdss=None,
+    pressure=None,
+    fluid_type=None,
+    depth_col: str = "TVDSS",
+    pressure_col: str = "FORMATION_PRESSURE",
+    fluid_col: str = "FLUID_TYPE",
+    water_label: str = "WATER",
+    hc_label: str = "OIL",
+    unit: str = "imperial",
+) -> dict:
+    """Estimate Free Water Level (FWL) and fluid densities from MDT/RFT formation pressure data.
+
+    Fits linear pressure-depth trends $P(z) = m_w z + c_w$ (aquifer water leg) and
+    $P(z) = m_{hc} z + c_{hc}$ (hydrocarbon leg) and solves for their intersection depth
+    ($P_c = P_{hc} - P_w = 0$):
+      $$\\text{FWL}_{MDT} = \\frac{c_{hc} - c_w}{m_w - m_{hc}}$$
+
+    Args:
+        pressure_df (pd.DataFrame, optional): DataFrame containing depth, formation pressure,
+            and fluid type columns.
+        tvdss (array-like, optional): True vertical depth subsea if `pressure_df` is not provided.
+        pressure (array-like, optional): Formation pressure (psi) if `pressure_df` is not provided.
+        fluid_type (array-like, optional): Fluid label per pressure point (e.g., `'WATER'`, `'OIL'`, `'GAS'`).
+        depth_col (str, optional): Depth column name in `pressure_df`. Defaults to `'TVDSS'`.
+        pressure_col (str, optional): Pressure column name in `pressure_df`. Defaults to `'FORMATION_PRESSURE'`.
+        fluid_col (str, optional): Fluid type column name in `pressure_df`. Defaults to `'FLUID_TYPE'`.
+        water_label (str, optional): Label identifying aquifer water points. Defaults to `'WATER'`.
+        hc_label (str, optional): Label identifying hydrocarbon points (e.g., `'OIL'` or `'GAS'`).
+            If not found, uses any non-water hydrocarbon points (`'OIL'` or `'GAS'`). Defaults to `'OIL'`.
+        unit (str, optional): Depth unit (`'imperial'`/`'ft'` or `'metric'`/`'m'`). Defaults to `'imperial'`.
+
+    Returns:
+        dict: Dictionary with keys `'fwl'`, `'pressure_at_fwl'`, `'water_gradient'`, `'hc_gradient'`,
+              `'water_intercept'`, `'hc_intercept'`, `'gw'`, and `'ghc'`.
+    """
+    if pressure_df is not None:
+        d_col = depth_col if depth_col in pressure_df.columns else "DEPTH"
+        z = np.asarray(pressure_df[d_col], dtype=float)
+        p = np.asarray(pressure_df[pressure_col], dtype=float)
+        fl = pressure_df[fluid_col].astype(str).str.upper().to_numpy()
+    else:
+        if tvdss is None or pressure is None or fluid_type is None:
+            raise ValueError(
+                "Provide either `pressure_df` or (`tvdss`, `pressure`, `fluid_type`)."
+            )
+        z = np.asarray(tvdss, dtype=float)
+        p = np.asarray(pressure, dtype=float)
+        fl = pd.Series(fluid_type).astype(str).str.upper().to_numpy()
+
+    valid = np.isfinite(z) & np.isfinite(p)
+    w_mask = valid & (fl == water_label.upper())
+    hc_mask = valid & (fl == hc_label.upper())
+    if np.sum(hc_mask) < 2:
+        hc_mask = valid & np.isin(fl, ["OIL", "GAS", "HC", "CONDENSATE"])
+
+    if np.sum(w_mask) < 2 or np.sum(hc_mask) < 2:
+        raise ValueError(
+            "At least 2 valid pressure points in both water and hydrocarbon legs are required to fit MDT FWL."
+        )
+
+    m_w, c_w = np.polyfit(z[w_mask], p[w_mask], 1)
+    m_hc, c_hc = np.polyfit(z[hc_mask], p[hc_mask], 1)
+
+    if np.isclose(m_w, m_hc, atol=1e-6):
+        raise ValueError(
+            f"Water gradient ({m_w:.4f}) and hydrocarbon gradient ({m_hc:.4f}) are nearly parallel."
+        )
+
+    fwl_mdt = float((c_hc - c_w) / (m_w - m_hc))
+    p_fwl = float(m_w * fwl_mdt + c_w)
+    conv = _gravity_conversion_factor(unit)
+
+    return {
+        "fwl": fwl_mdt,
+        "pressure_at_fwl": p_fwl,
+        "water_gradient": float(m_w),
+        "hc_gradient": float(m_hc),
+        "water_intercept": float(c_w),
+        "hc_intercept": float(c_hc),
+        "gw": float(m_w / conv),
+        "ghc": float(m_hc / conv),
+    }
+
+
+def _normalize_shm_params_map(shm_params, model: str = "leverett_j") -> dict:
+    """Normalize `shm_params` into a lookup dict `{rock_flag_key: param_dict}` and `'default'` fallback."""
+    model_clean = model.strip().lower()
+    is_skelt = model_clean in ("skelt_harrison", "skelt")
+
+    if shm_params is None:
+        default_p = (
+            {"a": 0.85, "b": 35.0, "c": 1.5, "d": 2.0, "swirr": 0.0}
+            if is_skelt
+            else {"a": 0.15, "b": 1.5, "swirr": 0.0}
+        )
+        return {"default": default_p, "by_rock": {}}
+
+    # Case 1: List of dicts (e.g., output of core_analysis.auto_j_params)
+    if isinstance(shm_params, list):
+        by_rock = {}
+        for item in shm_params:
+            if isinstance(item, dict) and "ROCK_FLAG" in item:
+                rf_val = item["ROCK_FLAG"]
+                by_rock[str(rf_val)] = item
+                try:
+                    by_rock[int(float(rf_val))] = item
+                    by_rock[float(rf_val)] = item
+                except Exception:
+                    pass
+        default_item = shm_params[0] if shm_params else {"a": 0.15, "b": 1.5}
+        return {"default": default_item, "by_rock": by_rock}
+
+    # Case 2: Dict
+    if isinstance(shm_params, dict):
+        # Single global parameter dict: e.g. {"a": 0.15, "b": 1.5}
+        if "a" in shm_params and "b" in shm_params:
+            return {"default": shm_params, "by_rock": {}}
+
+        # Mapping of rock_flag -> dict or tuple
+        by_rock = {}
+        default_item = None
+        for k, v in shm_params.items():
+            if isinstance(v, (tuple, list)):
+                if is_skelt and len(v) >= 4:
+                    p_dict = {
+                        "a": float(v[0]),
+                        "b": float(v[1]),
+                        "c": float(v[2]),
+                        "d": float(v[3]),
+                        "swirr": float(v[4]) if len(v) > 4 else 0.0,
+                    }
+                else:
+                    p_dict = {
+                        "a": float(v[0]),
+                        "b": float(v[1]),
+                        "swirr": float(v[2]) if len(v) > 2 else 0.0,
+                    }
+            elif isinstance(v, dict):
+                p_dict = v
+            else:
+                continue
+
+            if default_item is None:
+                default_item = p_dict
+            by_rock[str(k)] = p_dict
+            try:
+                by_rock[int(float(k))] = p_dict
+                by_rock[float(k)] = p_dict
+            except Exception:
+                pass
+
+        return {
+            "default": default_item or {"a": 0.15, "b": 1.5},
+            "by_rock": by_rock,
+        }
+
+    # Case 3: Tuple/sequence of parameters (a, b) or (a, b, c, d)
+    if isinstance(shm_params, (tuple, list)):
+        if is_skelt and len(shm_params) >= 4:
+            return {
+                "default": {
+                    "a": float(shm_params[0]),
+                    "b": float(shm_params[1]),
+                    "c": float(shm_params[2]),
+                    "d": float(shm_params[3]),
+                },
+                "by_rock": {},
+            }
+        return {
+            "default": {"a": float(shm_params[0]), "b": float(shm_params[1])},
+            "by_rock": {},
+        }
+
+    raise ValueError(f"Unsupported shm_params format: {type(shm_params)}")
+
+
+def _extract_rock_param_arrays(
+    n: int,
+    rock_flag_arr: np.ndarray = None,
+    shm_params=None,
+    model: str = "leverett_j",
+    non_reservoir_flags=None,
+):
+    """Map per-sample rock flags to parameter arrays (`a`, `b`, `c`, `d`, `swirr`, `is_non_res`)."""
+    norm_map = _normalize_shm_params_map(shm_params, model=model)
+    default_p = norm_map["default"]
+    by_rock = norm_map["by_rock"]
+
+    a_arr = np.full(n, float(default_p.get("a", 0.15)), dtype=float)
+    b_arr = np.full(n, float(default_p.get("b", 1.5)), dtype=float)
+    c_arr = np.full(n, float(default_p.get("c", 1.5)), dtype=float)
+    d_arr = np.full(n, float(default_p.get("d", 1.5)), dtype=float)
+    swirr_arr = np.full(n, float(default_p.get("swirr", 0.0)), dtype=float)
+    is_non_res = np.zeros(n, dtype=bool)
+
+    non_res_set = set()
+    if non_reservoir_flags is not None:
+        if np.isscalar(non_reservoir_flags):
+            non_res_set.add(non_reservoir_flags)
+        else:
+            non_res_set.update(non_reservoir_flags)
+
+    if rock_flag_arr is not None and len(by_rock) > 0:
+        for i in range(n):
+            rf = rock_flag_arr[i]
+            if pd.isna(rf) or rf in non_res_set:
+                is_non_res[i] = True
+                continue
+            p = by_rock.get(rf)
+            if p is None:
+                p = by_rock.get(str(rf))
+            if p is None:
+                try:
+                    p = by_rock.get(int(float(rf)))
+                except Exception:
+                    p = None
+            if p is None:
+                is_non_res[i] = True
+                continue
+            a_arr[i] = float(p.get("a", a_arr[i]))
+            b_arr[i] = float(p.get("b", b_arr[i]))
+            c_arr[i] = float(p.get("c", c_arr[i]))
+            d_arr[i] = float(p.get("d", d_arr[i]))
+            if "swirr" in p:
+                swirr_arr[i] = float(p["swirr"])
+    elif rock_flag_arr is not None and len(non_res_set) > 0:
+        for i in range(n):
+            if pd.isna(rock_flag_arr[i]) or rock_flag_arr[i] in non_res_set:
+                is_non_res[i] = True
+
+    return a_arr, b_arr, c_arr, d_arr, swirr_arr, is_non_res
+
+
+def predict_sw_shm(
+    df: pd.DataFrame = None,
+    fwl: float | dict = None,
+    model: str = "leverett_j",
+    shm_params=None,
+    depth=None,
+    phit=None,
+    perm=None,
+    phie=None,
+    rock_flag=None,
+    swirr=None,
+    ift: float = 30.0,
+    theta: float = 30.0,
+    gw: float = 1.05,
+    ghc: float = 0.80,
+    depth_col: str = "DEPTH",
+    phit_col: str = "PHIT",
+    perm_col: str = "PERM",
+    phie_col: str = None,
+    rock_flag_col: str = "ROCK_FLAG",
+    well_col: str = "WELL_NAME",
+    non_reservoir_flags=None,
+    unit: str = "imperial",
+    clip: bool = True,
+) -> np.ndarray | pd.Series:
+    """Predict Saturation-Height Model water saturation ($S_{w,SHM}$) using Leverett-$J$, Skelt-Harrison, or Cuddy.
+
+    Supports single-well and multi-well evaluation, global or per-well `fwl` dictionaries,
+    and rock-type (`ROCK_FLAG` / FZI) specific capillary parameters.
+
+    Args:
+        df (pd.DataFrame, optional): Input well log DataFrame. If None, arrays (`depth`, `phit`,
+            `perm`, etc.) must be provided directly.
+        fwl (float or dict): Free Water Level in true vertical depth (scalar float, or dict mapping
+            well name to well FWL).
+        model (str, optional): Saturation-height formulation:
+            - `'leverett_j'` (or `'j'`): Leverett $J$-function $J = a \\cdot S_{wn}^{-b}$
+            - `'skelt_harrison'` (or `'skelt'`): Skelt-Harrison $S_w = 1 - a \\exp(-(b / (h + d))^c)$
+            - `'cuddy'`: Cuddy's FOIL function $S_w = a / (P_c^b \\cdot \\phi_t)$
+            Defaults to `'leverett_j'`.
+        shm_params (dict, list[dict], or tuple, optional): Model parameters:
+            - For `'leverett_j'`: `{'a': 0.15, 'b': 1.5}` or list of per-rock-type dicts from `auto_j_params`.
+            - For `'skelt_harrison'`: `{'a': 0.85, 'b': 35.0, 'c': 1.5, 'd': 2.0}` or per-rock-type mapping.
+            - For `'cuddy'`: `{'a': 0.12, 'b': 0.65}`.
+        depth (array-like, optional): TVD / TVDSS array if `df` is None.
+        phit (array-like, optional): Total porosity (frac) array if `df` is None.
+        perm (array-like, optional): Permeability (mD) array if `df` is None.
+        phie (array-like, optional): Effective porosity (frac) array for CBW conversion to $S_{wt}$.
+        rock_flag (array-like, optional): Discrete rock type flag array if `df` is None.
+        swirr (float or array-like, optional): Irreducible water saturation fraction to un-normalize
+            $S_{wn} \\to S_w = S_{wirr} + (1 - S_{wirr}) S_{wn}$. Defaults to None.
+        ift (float, optional): Reservoir interfacial tension (dynes/cm). Defaults to 30.0.
+        theta (float, optional): Reservoir contact angle (degrees). Defaults to 30.0.
+        gw (float, optional): Formation water density (g/cc). Defaults to 1.05.
+        ghc (float, optional): Hydrocarbon density (g/cc). Defaults to 0.80.
+        depth_col (str, optional): Depth column in `df` (tries `'TVDSS'`, `'TVD'`, `'DEPTH'`).
+            Defaults to `'DEPTH'`.
+        phit_col (str, optional): Porosity column in `df`. Defaults to `'PHIT'`.
+        perm_col (str, optional): Permeability column in `df` (falls back to `'CPERM'`).
+            Defaults to `'PERM'`.
+        phie_col (str, optional): Optional effective porosity column in `df`. Defaults to None.
+        rock_flag_col (str, optional): Rock type column in `df`. Defaults to `'ROCK_FLAG'`.
+        well_col (str, optional): Well name column in `df` when `fwl` is a dict. Defaults to `'WELL_NAME'`.
+        non_reservoir_flags (list or int, optional): Rock flag values representing non-reservoir
+            shale/tight intervals where $S_{w,SHM}$ is forced to 1.0. Defaults to None.
+        unit (str, optional): `'imperial'`/`'ft'` or `'metric'`/`'m'`. Defaults to `'imperial'`.
+        clip (bool, optional): Clip $S_{w,SHM}$ to $[0.0, 1.0]$ and enforce 1.0 at/below FWL.
+            Defaults to True.
+
+    Returns:
+        pd.Series or np.ndarray: Predicted water saturation $S_{w,SHM}$ (frac).
+    """
+    if fwl is None:
+        raise ValueError("`fwl` (Free Water Level) must be provided to predict_sw_shm.")
+
+    return_series = False
+    series_index = None
+
+    if df is not None:
+        return_series = True
+        series_index = df.index
+        d_col = depth_col
+        if d_col not in df.columns:
+            for cand in ("TVDSS", "TVD", "DEPTH", "depth", "tvdss"):
+                if cand in df.columns:
+                    d_col = cand
+                    break
+        depth_arr = np.asarray(df[d_col], dtype=float)
+        phit_arr = (
+            np.asarray(df[phit_col], dtype=float)
+            if phit_col in df.columns
+            else np.full(len(df), 0.15, dtype=float)
+        )
+        p_col = (
+            perm_col
+            if perm_col in df.columns
+            else ("CPERM" if "CPERM" in df.columns else None)
+        )
+        perm_arr = (
+            np.asarray(df[p_col], dtype=float)
+            if p_col is not None
+            else np.full(len(df), 10.0, dtype=float)
+        )
+        phie_arr = (
+            np.asarray(df[phie_col], dtype=float)
+            if (phie_col and phie_col in df.columns)
+            else None
+        )
+        rf_arr = (
+            df[rock_flag_col].to_numpy()
+            if rock_flag_col in df.columns
+            else (np.asarray(rock_flag) if rock_flag is not None else None)
+        )
+        if isinstance(fwl, dict) and well_col in df.columns:
+            default_fwl = float(next(iter(fwl.values())))
+            fwl_arr = (
+                df[well_col].map(lambda w: float(fwl.get(w, default_fwl))).to_numpy(dtype=float)
+            )
+        else:
+            fwl_arr = np.full(
+                len(df),
+                float(next(iter(fwl.values())) if isinstance(fwl, dict) else fwl),
+                dtype=float,
+            )
+    else:
+        if depth is None:
+            raise ValueError("Either `df` or `depth` must be provided to predict_sw_shm.")
+        if isinstance(depth, pd.Series):
+            return_series = True
+            series_index = depth.index
+        depth_arr = np.asarray(depth, dtype=float)
+        n_pts = len(depth_arr)
+        phit_arr = (
+            np.broadcast_to(np.asarray(phit, dtype=float), (n_pts,))
+            if phit is not None
+            else np.full(n_pts, 0.15, dtype=float)
+        )
+        perm_arr = (
+            np.broadcast_to(np.asarray(perm, dtype=float), (n_pts,))
+            if perm is not None
+            else np.full(n_pts, 10.0, dtype=float)
+        )
+        phie_arr = (
+            np.broadcast_to(np.asarray(phie, dtype=float), (n_pts,))
+            if phie is not None
+            else None
+        )
+        rf_arr = np.asarray(rock_flag) if rock_flag is not None else None
+        fwl_arr = np.broadcast_to(np.asarray(fwl, dtype=float), (n_pts,))
+
+    n = len(depth_arr)
+    a_arr, b_arr, c_arr, d_arr, swirr_map_arr, is_non_res = _extract_rock_param_arrays(
+        n,
+        rock_flag_arr=rf_arr,
+        shm_params=shm_params,
+        model=model,
+        non_reservoir_flags=non_reservoir_flags,
+    )
+
+    if swirr is not None:
+        if isinstance(swirr, str) and df is not None and swirr in df.columns:
+            swirr_use = np.asarray(df[swirr], dtype=float)
+        else:
+            swirr_use = np.broadcast_to(np.asarray(swirr, dtype=float), (n,))
+    else:
+        swirr_use = swirr_map_arr
+
+    model_clean = model.strip().lower()
+    conv = _gravity_conversion_factor(unit)
+    h = np.maximum(fwl_arr - depth_arr, 0.0)
+
+    if model_clean in ("leverett_j", "j"):
+        pc = h * (gw - ghc) * conv
+        denom = max(float(ift) * abs(np.cos(np.radians(theta))), 1e-9)
+        j_val = (
+            0.21665
+            * (pc / denom)
+            * np.sqrt(np.maximum(perm_arr, 0.0) / np.maximum(phit_arr, 1e-6))
+        )
+        b_abs = np.maximum(np.abs(b_arr), 1e-6)
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            swn = np.where(
+                (h > 0) & (j_val > 0) & (a_arr > 0) & (perm_arr > 0) & (phit_arr > 0),
+                (a_arr / j_val) ** (1.0 / b_abs),
+                1.0,
+            )
+        sw_pred = swirr_use + (1.0 - swirr_use) * swn
+    elif model_clean in ("skelt_harrison", "skelt"):
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            sw_pred = 1.0 - a_arr * np.exp(-((b_arr / np.maximum(h + d_arr, 1e-6)) ** c_arr))
+        if np.any(swirr_use > 0):
+            sw_pred = np.maximum(sw_pred, swirr_use)
+    elif model_clean == "cuddy":
+        b_abs = np.maximum(np.abs(b_arr), 1e-6)
+        pc = h * (gw - ghc) * conv
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            sw_pred = np.where(
+                (h > 0) & (pc > 0) & (phit_arr > 0),
+                a_arr / ((pc ** b_abs) * np.maximum(phit_arr, 1e-6)),
+                1.0,
+            )
+        sw_pred = swirr_use + (1.0 - swirr_use) * sw_pred
+    else:
+        raise ValueError(
+            f"Unsupported SHM model '{model}'. Choose from 'leverett_j', 'skelt_harrison', or 'cuddy'."
+        )
+
+    if phie_arr is not None:
+        swb = np.clip(1.0 - (phie_arr / np.maximum(phit_arr, 1e-6)), 0.0, 1.0)
+        sw_pred = sw_pred * (1.0 - swb) + swb
+
+    sw_pred = np.where(is_non_res | (fwl_arr - depth_arr <= 0), 1.0, sw_pred)
+    if clip:
+        sw_pred = np.clip(sw_pred, 0.0, 1.0)
+
+    if return_series:
+        return pd.Series(sw_pred, index=series_index, name="SW_SHM")
+    return sw_pred
+
+
+calc_sw_shm = predict_sw_shm
+
+
+def analyze_transition_zone(
+    fwl: float,
+    model: str = "leverett_j",
+    shm_params=None,
+    phit: float | np.ndarray = 0.18,
+    perm: float | np.ndarray = 50.0,
+    ift: float = 30.0,
+    theta: float = 30.0,
+    gw: float = 1.05,
+    ghc: float = 0.80,
+    swirr: float = 0.0,
+    sw_owc_threshold: float = 0.95,
+    sw_ttz_tol: float = 0.05,
+    unit: str = "imperial",
+) -> dict:
+    """Compute theoretical capillary entry height (OWC), Top of Transition Zone (TTZ), and thickness.
+
+    For a given Free Water Level (`fwl`), rock quality ($\\phi_t, k$), and fluid properties:
+      - **Free Water Level (`fwl`)**: Depth where capillary pressure $P_c = 0$.
+      - **Oil-Water / Hydrocarbon-Water Contact (`owc`)**: Depth where capillary pressure equals
+        the pore-throat displacement / entry pressure $P_{ce}$ (for Leverett-$J$, $J_{entry} = a$ at
+        $S_{wn} = 1.0$; for Skelt-Harrison, depth where $S_{w,SHM} = S_{w,owc}$).
+      - **Top of Transition Zone (`ttz`)**: Depth above which water saturation reaches within
+        `sw_ttz_tol` of irreducible water saturation ($S_{wn} \\le \\text{sw\\_ttz\\_tol}$).
+      - **Transition Zone Thickness (`transition_zone_thickness`)**: $\\text{OWC} - \\text{TTZ}$.
+      - **Capillary Fringe / Threshold Height (`capillary_entry_height`)**: $\\text{FWL} - \\text{OWC}$.
+
+    Args:
+        fwl (float): Free Water Level in true vertical depth (ft or m).
+        model (str, optional): `'leverett_j'` or `'skelt_harrison'`. Defaults to `'leverett_j'`.
+        shm_params (dict, list, or tuple, optional): SHM parameters.
+        phit (float or array-like, optional): Representative reservoir porosity (frac). Defaults to 0.18.
+        perm (float or array-like, optional): Representative reservoir permeability (mD). Defaults to 50.0.
+        ift (float, optional): Interfacial tension (dynes/cm). Defaults to 30.0.
+        theta (float, optional): Contact angle (degrees). Defaults to 30.0.
+        gw (float, optional): Water density (g/cc). Defaults to 1.05.
+        ghc (float, optional): Hydrocarbon density (g/cc). Defaults to 0.80.
+        swirr (float, optional): Irreducible water saturation fraction. Defaults to 0.0.
+        sw_owc_threshold (float, optional): Saturation threshold defining OWC for Skelt-Harrison.
+            Defaults to 0.95.
+        sw_ttz_tol (float, optional): Normalized saturation tolerance above $S_{wirr}$ defining
+            the Top of Transition Zone (TTZ). Defaults to 0.05.
+        unit (str, optional): `'imperial'`/`'ft'` or `'metric'`/`'m'`. Defaults to `'imperial'`.
+
+    Returns:
+        dict: Dictionary containing `'fwl'`, `'owc'`, `'ttz'`, `'capillary_entry_height'`,
+              `'transition_zone_thickness'`, and `'total_height_to_ttz'`.
+    """
+    norm_map = _normalize_shm_params_map(shm_params, model=model)
+    p = norm_map["default"]
+    model_clean = model.strip().lower()
+    conv = _gravity_conversion_factor(unit)
+    delta_rho_grad = max((gw - ghc) * conv, 1e-6)
+
+    phi_rep = float(np.nanmedian(phit)) if not np.isscalar(phit) else float(phit)
+    perm_rep = float(np.nanmedian(perm)) if not np.isscalar(perm) else float(perm)
+    phi_rep = max(phi_rep, 1e-4)
+    perm_rep = max(perm_rep, 1e-4)
+
+    if model_clean in ("leverett_j", "j"):
+        a = max(float(p.get("a", 0.15)), 1e-6)
+        b = max(abs(float(p.get("b", 1.5))), 1e-3)
+        denom = float(ift) * abs(np.cos(np.radians(theta)))
+        rqi_term = 0.21665 * np.sqrt(perm_rep / phi_rep)
+
+        # Entry capillary pressure at Swn = 1.0 -> J_entry = a
+        pce = (a * denom) / max(rqi_term, 1e-9)
+        h_entry = float(pce / delta_rho_grad)
+
+        # Top of transition zone at Swn_top = clip(sw_ttz_tol, 0.01, 0.5)
+        swn_top = float(np.clip(sw_ttz_tol, 0.02, 0.50))
+        j_top = a * (swn_top ** (-b))
+        pc_top = (j_top * denom) / max(rqi_term, 1e-9)
+        h_top = float(pc_top / delta_rho_grad)
+    else:
+        a = float(np.clip(p.get("a", 0.85), 0.05, 0.999))
+        b = max(float(p.get("b", 35.0)), 1e-3)
+        c = max(float(p.get("c", 1.5)), 1e-3)
+        d = float(p.get("d", 2.0))
+
+        # Solve 1 - a * exp(-((b / (h + d)) ^ c)) = sw_target
+        def _solve_h_skelt(sw_target: float) -> float:
+            ratio = np.clip((1.0 - sw_target) / a, 1e-6, 1.0 - 1e-6)
+            neg_ln = max(-np.log(ratio), 1e-9)
+            h_val = (b / (neg_ln ** (1.0 / c))) - d
+            return float(max(h_val, 0.0))
+
+        sw_irr_model = 1.0 - a
+        sw_owc_eff = float(np.clip(sw_owc_threshold, sw_irr_model + 0.05, 0.99))
+        sw_top_eff = float(np.clip(sw_irr_model + sw_ttz_tol * a, sw_irr_model + 0.01, 0.90))
+        h_entry = _solve_h_skelt(sw_owc_eff)
+        h_top = max(_solve_h_skelt(sw_top_eff), h_entry)
+
+    owc = float(fwl - h_entry)
+    ttz = float(fwl - h_top)
+    tz_thickness = float(max(owc - ttz, 0.0))
+
+    return {
+        "fwl": float(fwl),
+        "owc": owc,
+        "ttz": ttz,
+        "capillary_entry_height": h_entry,
+        "transition_zone_thickness": tz_thickness,
+        "total_height_to_ttz": h_top,
+    }
+
+
+def optimize_fwl(
+    df: pd.DataFrame | dict,
+    model: str = "leverett_j",
+    shm_params=None,
+    fwl_bounds: tuple = None,
+    ift: float = 30.0,
+    theta: float = 30.0,
+    gw: float = 1.05,
+    ghc: float = 0.80,
+    swirr=None,
+    depth_col: str = "DEPTH",
+    sw_col: str = "SWT",
+    phit_col: str = "PHIT",
+    perm_col: str = "PERM",
+    phie_col: str = None,
+    rock_flag_col: str = "ROCK_FLAG",
+    well_col: str = "WELL_NAME",
+    vshale_col: str = "VSHALE",
+    phit_cutoff: float = 0.03,
+    perm_cutoff: float = 0.01,
+    vshale_cutoff: float = 0.50,
+    non_reservoir_flags=None,
+    loss: str = "rmse",
+    pore_volume_weighted: bool = False,
+    equal_well_weights: bool = False,
+    mdt_fwl: float = None,
+    pressure_df: pd.DataFrame = None,
+    mdt_tolerance: float = None,
+    mdt_penalty_weight: float = 0.0,
+    solve_per_well: bool = True,
+    optimize_shm_params: bool = False,
+    saturation_method: str = "archie",
+    archie_params: dict = None,
+    unit: str = "imperial",
+) -> dict:
+    """Solve for Free Water Level (FWL) across multiple wells simultaneously by minimizing
+    the error between resistivity-derived $S_w$ and $J$-function / Skelt-Harrison $S_{w,SHM}$.
+
+    This function reconciles log-derived water saturation ($S_{w,log}$), Special Core Analysis
+    capillary pressure Saturation-Height Models ($S_{w,SHM}$), and wireline formation tester
+    (MDT/RFT) Free Water Levels across one or more wells simultaneously.
+
+    Key features:
+      1. **Multi-Well Simultaneous Optimization**: Solves for a field-wide (or fault-block) FWL
+         using a two-stage global grid bracket + bounded Brent local refinement so it never gets
+         trapped in flat aquifer/caprock objective plateaus.
+      2. **Per-Well FWL Diagnostics**: Optionally solves for each well's individual FWL
+         (`well_metrics['fwl_well']`) to diagnose hydrodynamic tilt or fault compartmentalization.
+      3. **MDT/RFT Pressure Reconciliation**: Accepts an explicit `mdt_fwl` or raw `pressure_df`
+         (via `estimate_mdt_fwl`), supporting hard search bounds (`mdt_tolerance`) and/or soft
+         regularization (`mdt_penalty_weight`), and reports `fwl_reconciliation_diff`.
+      4. **Transition Zone Delineation**: Computes `owc` (capillary entry depth), `ttz` (top of
+         transition zone), `transition_zone_thickness`, and per-sample `TRANSITION_ZONE_FLAG`
+         (`'FREE_WATER'`, `'CAPILLARY_FRINGE'`, `'TRANSITION_ZONE'`, `'IRREDUCIBLE_HC'`).
+
+    Args:
+        df (pd.DataFrame or dict[str, pd.DataFrame]): Multi-well DataFrame (or dict of per-well
+            DataFrames) containing depth, porosity, permeability, and resistivity-derived $S_w$
+            (or `RT` and `RW` to compute $S_w$ automatically).
+        model (str, optional): SHM formulation, `'leverett_j'` (or `'j'`), `'skelt_harrison'`
+            (or `'skelt'`), or `'cuddy'`. Defaults to `'leverett_j'`.
+        shm_params (dict, list[dict], or tuple, optional): Capillary parameters for the SHM
+            (either global or keyed by `ROCK_FLAG`).
+        fwl_bounds (tuple[float, float], optional): `(fwl_min, fwl_max)` search range in TVD/TVDSS.
+            If None, inferred automatically from the reservoir depth range (or `mdt_fwl ± mdt_tolerance`).
+        ift (float, optional): Reservoir interfacial tension (dynes/cm). Defaults to 30.0.
+        theta (float, optional): Reservoir contact angle (degrees). Defaults to 30.0.
+        gw (float, optional): Formation water density (g/cc). Defaults to 1.05.
+        ghc (float, optional): Hydrocarbon density (g/cc). Defaults to 0.80.
+        swirr (float, str, or array-like, optional): Irreducible water saturation fraction.
+            Defaults to None.
+        depth_col (str, optional): Depth column name (`'DEPTH'`, `'TVDSS'`, or `'TVD'`).
+            Defaults to `'DEPTH'`.
+        sw_col (str, optional): Resistivity-derived water saturation column name (falls back to
+            `'SW'` or computes from `'RT'`/`'RW'`). Defaults to `'SWT'`.
+        phit_col (str, optional): Total porosity column name. Defaults to `'PHIT'`.
+        perm_col (str, optional): Permeability column name (falls back to `'CPERM'`).
+            Defaults to `'PERM'`.
+        phie_col (str, optional): Optional effective porosity column name. Defaults to None.
+        rock_flag_col (str, optional): Rock type flag column name. Defaults to `'ROCK_FLAG'`.
+        well_col (str, optional): Well identifier column name. Defaults to `'WELL_NAME'`.
+        vshale_col (str, optional): Shale volume column name for reservoir filtering.
+            Defaults to `'VSHALE'`.
+        phit_cutoff (float, optional): Minimum porosity cutoff for reservoir optimization mask.
+            Defaults to 0.03.
+        perm_cutoff (float, optional): Minimum permeability cutoff (mD) for optimization mask.
+            Defaults to 0.01.
+        vshale_cutoff (float, optional): Maximum shale volume cutoff for optimization mask.
+            Defaults to 0.50.
+        non_reservoir_flags (list or int, optional): Rock flag values excluded from reservoir
+            optimization mask. Defaults to None.
+        loss (str, optional): Objective loss function: `'rmse'`, `'mae'`, `'huber'`, or `'bvw'`
+            (Bulk Volume Water error). Defaults to `'rmse'`.
+        pore_volume_weighted (bool, optional): Weight sample residuals by $\\phi_t \\cdot h_i$.
+            Defaults to False.
+        equal_well_weights (bool, optional): Weight each well equally in the multi-well objective
+            regardless of sample count. Defaults to False.
+        mdt_fwl (float, optional): Prior Free Water Level from MDT/RFT pressure gradients.
+            Defaults to None.
+        pressure_df (pd.DataFrame, optional): Raw MDT/RFT pressure DataFrame; if provided,
+            `mdt_fwl` (and fluid densities if not overridden) is estimated via `estimate_mdt_fwl`.
+        mdt_tolerance (float, optional): Maximum allowed deviation $|\\text{FWL} - \\text{FWL}_{MDT}|$
+            used to bound the optimizer when `mdt_fwl` is present. Defaults to None.
+        mdt_penalty_weight (float, optional): Soft regularization weight $\\lambda_{MDT} \\ge 0$
+            penalizing normalized distance from `mdt_fwl`. Defaults to 0.0.
+        solve_per_well (bool, optional): Also compute individual per-well optimal FWLs in
+            `well_metrics` to diagnose contact tilt or compartmentalization. Defaults to True.
+        optimize_shm_params (bool, optional): Jointly refine global SHM parameters alongside
+            `fwl` using L-BFGS-B / Nelder-Mead. Defaults to False.
+        saturation_method (str, optional): Method to compute resistivity $S_w$ if `sw_col` is
+            absent (`'archie'` or `'waxman_smits'`). Defaults to `'archie'`.
+        archie_params (dict, optional): Parameters `{'a': 1.0, 'm': 2.0, 'n': 2.0, 'rw': 0.05}`
+            used if resistivity $S_w$ is computed on the fly. Defaults to None.
+        unit (str, optional): `'imperial'`/`'ft'` or `'metric'`/`'m'`. Defaults to `'imperial'`.
+
+    Returns:
+        dict: Optimization and reconciliation summary containing:
+            - `'fwl'`: Optimal multi-well Free Water Level (float)
+            - `'owc'`: Representative Oil-Water / Hydrocarbon-Water Contact (float)
+            - `'ttz'`: Representative Top of Transition Zone (float)
+            - `'capillary_entry_height'`: Capillary fringe height $\\text{FWL} - \\text{OWC}$ (float)
+            - `'transition_zone_thickness'`: Transition zone thickness $\\text{OWC} - \\text{TTZ}$ (float)
+            - `'rmse'`: Global $S_w$ RMSE across reservoir intervals (float)
+            - `'mae'`: Global $S_w$ MAE across reservoir intervals (float)
+            - `'r2'`: Global $S_w$ $R^2$ score across reservoir intervals (float)
+            - `'bvw_rmse'`: Global Bulk Volume Water ($\\phi_t S_w$) RMSE (float)
+            - `'mdt_fwl'`: MDT/RFT Free Water Level if supplied/estimated, else None
+            - `'mdt_details'`: Full dict from `estimate_mdt_fwl` if `pressure_df` supplied
+            - `'fwl_reconciliation_diff'`: $\\text{FWL}_{opt} - \\text{FWL}_{MDT}$ if `mdt_fwl` available
+            - `'shm_params'`: Active or optimized SHM parameter dictionary/list
+            - `'well_metrics'`: Per-well reconciliation `pd.DataFrame`
+            - `'grid_profile'`: `pd.DataFrame` of candidate `fwl` vs. `objective_loss`
+            - `'df'`: Augmented `pd.DataFrame` with `'SW_SHM'`, `'BVW_LOG'`, `'BVW_SHM'`,
+              `'HAFWL'`, `'PC_RES'`, and `'TRANSITION_ZONE_FLAG'`
+    """
+    from scipy.optimize import minimize, minimize_scalar
+
+    # 1. Consolidate input DataFrame (multi-well df or dict of well dfs)
+    if isinstance(df, dict):
+        parts = []
+        for w_name, w_df in df.items():
+            tmp = w_df.copy()
+            if well_col not in tmp.columns:
+                tmp[well_col] = str(w_name)
+            parts.append(tmp)
+        work_df = pd.concat(parts, ignore_index=True)
+    elif isinstance(df, pd.DataFrame):
+        work_df = df.copy()
+        if well_col not in work_df.columns:
+            work_df[well_col] = "WELL_1"
+    else:
+        raise ValueError("`df` must be a pandas DataFrame or a dict of {well_name: DataFrame}.")
+
+    # Resolve depth column
+    d_col = depth_col
+    if d_col not in work_df.columns:
+        for cand in ("TVDSS", "TVD", "DEPTH", "depth", "tvdss"):
+            if cand in work_df.columns:
+                d_col = cand
+                break
+    if d_col not in work_df.columns:
+        raise ValueError(f"Depth column '{depth_col}' not found in DataFrame.")
+
+    # Resolve porosity & permeability columns
+    if phit_col not in work_df.columns:
+        for cand in ("PHIT", "PHIE", "CPORE", "phit"):
+            if cand in work_df.columns:
+                phit_col = cand
+                break
+    if perm_col not in work_df.columns:
+        for cand in ("PERM", "CPERM", "CORE_PERM", "perm"):
+            if cand in work_df.columns:
+                perm_col = cand
+                break
+
+    # Resolve or compute resistivity-derived Sw column
+    if sw_col not in work_df.columns:
+        if "SW" in work_df.columns:
+            sw_col = "SW"
+        elif "SWT" in work_df.columns:
+            sw_col = "SWT"
+        elif "RT" in work_df.columns and phit_col in work_df.columns:
+            ap = archie_params or {}
+            rw_val = (
+                work_df["RW"].to_numpy(dtype=float)
+                if "RW" in work_df.columns
+                else float(ap.get("rw", 0.05))
+            )
+            a_arch = float(ap.get("a", 1.0))
+            m_arch = float(ap.get("m", 2.0))
+            n_arch = float(ap.get("n", 2.0))
+            if saturation_method.strip().lower() == "waxman_smits":
+                qv_val = work_df["QV"].to_numpy(dtype=float) if "QV" in work_df.columns else 0.3
+                b_val = work_df["B"].to_numpy(dtype=float) if "B" in work_df.columns else None
+                work_df[sw_col] = np.clip(
+                    waxman_smits_saturation(
+                        work_df["RT"].to_numpy(dtype=float),
+                        rw_val,
+                        work_df[phit_col].to_numpy(dtype=float),
+                        Qv=qv_val,
+                        B=b_val,
+                        m=m_arch,
+                        n=n_arch,
+                    ),
+                    0.0,
+                    1.0,
+                )
+            else:
+                work_df[sw_col] = np.clip(
+                    archie_saturation(
+                        work_df["RT"].to_numpy(dtype=float),
+                        rw_val,
+                        work_df[phit_col].to_numpy(dtype=float),
+                        a=a_arch,
+                        m=m_arch,
+                        n=n_arch,
+                    ),
+                    0.0,
+                    1.0,
+                )
+        else:
+            raise ValueError(
+                f"Water saturation column '{sw_col}' not found and could not be computed from 'RT'."
+            )
+
+    # 2. Estimate MDT FWL if pressure_df is provided
+    mdt_details = None
+    if pressure_df is not None:
+        mdt_details = estimate_mdt_fwl(pressure_df, unit=unit)
+        if mdt_fwl is None:
+            mdt_fwl = mdt_details["fwl"]
+
+    depth_arr = np.asarray(work_df[d_col], dtype=float)
+    sw_log_arr = np.clip(np.asarray(work_df[sw_col], dtype=float), 0.0, 1.0)
+    phit_arr = (
+        np.asarray(work_df[phit_col], dtype=float)
+        if phit_col in work_df.columns
+        else np.full(len(work_df), 0.15, dtype=float)
+    )
+    perm_arr = (
+        np.asarray(work_df[perm_col], dtype=float)
+        if perm_col in work_df.columns
+        else np.full(len(work_df), 50.0, dtype=float)
+    )
+    phie_arr = (
+        np.asarray(work_df[phie_col], dtype=float)
+        if (phie_col and phie_col in work_df.columns)
+        else None
+    )
+    rf_arr = (
+        work_df[rock_flag_col].to_numpy()
+        if rock_flag_col in work_df.columns
+        else None
+    )
+    wells_arr = work_df[well_col].astype(str).to_numpy()
+
+    # 3. Build valid reservoir mask for optimization
+    model_clean = model.strip().lower()
+    is_leverett = model_clean in ("leverett_j", "j")
+    _, _, _, _, _, is_non_res = _extract_rock_param_arrays(
+        len(work_df),
+        rock_flag_arr=rf_arr,
+        shm_params=shm_params,
+        model=model,
+        non_reservoir_flags=non_reservoir_flags,
+    )
+
+    res_mask = (
+        np.isfinite(depth_arr)
+        & np.isfinite(sw_log_arr)
+        & np.isfinite(phit_arr)
+        & (phit_arr >= phit_cutoff)
+        & (~is_non_res)
+    )
+    if is_leverett:
+        res_mask = res_mask & np.isfinite(perm_arr) & (perm_arr >= perm_cutoff)
+
+    for vcol in (vshale_col, "VCLAY", "VSH"):
+        if vcol in work_df.columns:
+            vsh_vals = np.asarray(work_df[vcol], dtype=float)
+            res_mask = res_mask & (np.isnan(vsh_vals) | (vsh_vals <= vshale_cutoff))
+            break
+
+    if not np.any(res_mask):
+        res_mask = np.isfinite(depth_arr) & np.isfinite(sw_log_arr)
+
+    # Compute sample weights (pore-volume weighting & equal well weighting)
+    weights = np.ones(len(work_df), dtype=float)
+    if pore_volume_weighted:
+        weights = weights * np.maximum(phit_arr, 1e-4)
+    if equal_well_weights:
+        for w in np.unique(wells_arr[res_mask]):
+            w_m = res_mask & (wells_arr == w)
+            n_w = np.sum(w_m)
+            if n_w > 0:
+                weights[w_m] = weights[w_m] / float(n_w)
+    w_res = weights[res_mask]
+    w_res = w_res / np.maximum(np.sum(w_res), 1e-12)
+
+    # 4. Determine FWL search bounds
+    d_min = float(np.nanmin(depth_arr[res_mask]))
+    d_max = float(np.nanmax(depth_arr[res_mask]))
+    d_span = max(d_max - d_min, 50.0)
+
+    if fwl_bounds is not None:
+        fwl_low, fwl_high = float(fwl_bounds[0]), float(fwl_bounds[1])
+    elif mdt_fwl is not None and mdt_tolerance is not None:
+        fwl_low = float(mdt_fwl - abs(mdt_tolerance))
+        fwl_high = float(mdt_fwl + abs(mdt_tolerance))
+    else:
+        fwl_low = d_min - 0.10 * d_span
+        fwl_high = d_max + 0.50 * d_span
+        if mdt_fwl is not None:
+            fwl_low = min(fwl_low, float(mdt_fwl) - 0.25 * d_span)
+            fwl_high = max(fwl_high, float(mdt_fwl) + 0.25 * d_span)
+
+    if fwl_high <= fwl_low:
+        fwl_high = fwl_low + 100.0
+
+    loss_clean = loss.strip().lower()
+
+    def _compute_loss(
+        cand_fwl: float,
+        cand_params=shm_params,
+        subset_mask: np.ndarray = res_mask,
+        subset_weights: np.ndarray = w_res,
+    ) -> float:
+        sw_pred = predict_sw_shm(
+            df=None,
+            fwl=cand_fwl,
+            model=model,
+            shm_params=cand_params,
+            depth=depth_arr[subset_mask],
+            phit=phit_arr[subset_mask],
+            perm=perm_arr[subset_mask],
+            phie=phie_arr[subset_mask] if phie_arr is not None else None,
+            rock_flag=rf_arr[subset_mask] if rf_arr is not None else None,
+            swirr=swirr[subset_mask]
+            if isinstance(swirr, np.ndarray)
+            else (
+                np.asarray(work_df[swirr], dtype=float)[subset_mask]
+                if isinstance(swirr, str) and swirr in work_df.columns
+                else swirr
+            ),
+            ift=ift,
+            theta=theta,
+            gw=gw,
+            ghc=ghc,
+            non_reservoir_flags=non_reservoir_flags,
+            unit=unit,
+            clip=True,
+        )
+        sw_obs = sw_log_arr[subset_mask]
+        if loss_clean == "bvw":
+            phi_sub = phit_arr[subset_mask]
+            resid = phi_sub * (sw_obs - sw_pred)
+            base_err = float(np.sqrt(np.sum(subset_weights * (resid**2))))
+        elif loss_clean == "mae":
+            resid = np.abs(sw_obs - sw_pred)
+            base_err = float(np.sum(subset_weights * resid))
+        elif loss_clean == "huber":
+            delta = 0.10
+            abs_r = np.abs(sw_obs - sw_pred)
+            huber = np.where(
+                abs_r <= delta, 0.5 * (abs_r**2), delta * (abs_r - 0.5 * delta)
+            )
+            base_err = float(np.sqrt(2.0 * np.sum(subset_weights * huber)))
+        else:
+            resid = sw_obs - sw_pred
+            base_err = float(np.sqrt(np.sum(subset_weights * (resid**2))))
+
+        if mdt_fwl is not None and mdt_penalty_weight > 0:
+            norm_dist = (cand_fwl - float(mdt_fwl)) / max(d_span, 1.0)
+            base_err += float(mdt_penalty_weight) * (norm_dist**2)
+
+        return base_err
+
+    # 5. Two-stage global grid search + local bounded refinement for FWL
+    n_grid = 250
+    grid_fwls = np.linspace(fwl_low, fwl_high, n_grid)
+    grid_losses = np.array([_compute_loss(float(f)) for f in grid_fwls], dtype=float)
+    best_idx = int(np.argmin(grid_losses))
+
+    left_idx = max(0, best_idx - 2)
+    right_idx = min(n_grid - 1, best_idx + 2)
+    local_low = float(grid_fwls[left_idx])
+    local_high = float(grid_fwls[right_idx])
+    if local_high <= local_low:
+        local_low, local_high = fwl_low, fwl_high
+
+    opt_res = minimize_scalar(
+        _compute_loss,
+        bounds=(local_low, local_high),
+        method="bounded",
+        options={"xatol": 1e-4, "maxiter": 200},
+    )
+    opt_fwl = (
+        float(opt_res.x)
+        if opt_res.fun <= grid_losses[best_idx]
+        else float(grid_fwls[best_idx])
+    )
+    active_shm_params = shm_params
+
+    # Optional joint refinement of global SHM parameters + FWL
+    if optimize_shm_params:
+        norm_p = _normalize_shm_params_map(shm_params, model=model)["default"]
+        if is_leverett:
+            x0 = np.array(
+                [opt_fwl, float(norm_p.get("a", 0.15)), abs(float(norm_p.get("b", 1.5)))],
+                dtype=float,
+            )
+            bounds_joint = [(fwl_low, fwl_high), (1e-4, 5.0), (0.1, 10.0)]
+
+            def _joint_obj_j(x):
+                return _compute_loss(float(x[0]), cand_params={"a": float(x[1]), "b": float(x[2])})
+
+            res_j = minimize(_joint_obj_j, x0, method="L-BFGS-B", bounds=bounds_joint)
+            if res_j.fun <= _compute_loss(opt_fwl, shm_params):
+                opt_fwl = float(res_j.x[0])
+                active_shm_params = {"a": round(float(res_j.x[1]), 4), "b": round(float(res_j.x[2]), 4)}
+        elif model_clean in ("skelt_harrison", "skelt"):
+            x0 = np.array(
+                [
+                    opt_fwl,
+                    float(norm_p.get("a", 0.85)),
+                    float(norm_p.get("b", 35.0)),
+                    float(norm_p.get("c", 1.5)),
+                    float(norm_p.get("d", 2.0)),
+                ],
+                dtype=float,
+            )
+            bounds_joint = [
+                (fwl_low, fwl_high),
+                (0.1, 0.999),
+                (0.1, 5000.0),
+                (0.2, 5.0),
+                (0.0, 200.0),
+            ]
+
+            def _joint_obj_sh(x):
+                return _compute_loss(
+                    float(x[0]),
+                    cand_params={
+                        "a": float(x[1]),
+                        "b": float(x[2]),
+                        "c": float(x[3]),
+                        "d": float(x[4]),
+                    },
+                )
+
+            res_sh = minimize(_joint_obj_sh, x0, method="L-BFGS-B", bounds=bounds_joint)
+            if res_sh.fun <= _compute_loss(opt_fwl, shm_params):
+                opt_fwl = float(res_sh.x[0])
+                active_shm_params = {
+                    "a": round(float(res_sh.x[1]), 4),
+                    "b": round(float(res_sh.x[2]), 4),
+                    "c": round(float(res_sh.x[3]), 4),
+                    "d": round(float(res_sh.x[4]), 4),
+                }
+
+    # 6. Evaluate final SW_SHM and transition zone profile across all samples
+    sw_shm_full = np.asarray(
+        predict_sw_shm(
+            df=work_df,
+            fwl=opt_fwl,
+            model=model,
+            shm_params=active_shm_params,
+            swirr=swirr,
+            ift=ift,
+            theta=theta,
+            gw=gw,
+            ghc=ghc,
+            depth_col=d_col,
+            phit_col=phit_col,
+            perm_col=perm_col,
+            phie_col=phie_col,
+            rock_flag_col=rock_flag_col,
+            well_col=well_col,
+            non_reservoir_flags=non_reservoir_flags,
+            unit=unit,
+            clip=True,
+        ),
+        dtype=float,
+    )
+
+    tz_info = analyze_transition_zone(
+        fwl=opt_fwl,
+        model=model,
+        shm_params=active_shm_params,
+        phit=phit_arr[res_mask],
+        perm=perm_arr[res_mask],
+        ift=ift,
+        theta=theta,
+        gw=gw,
+        ghc=ghc,
+        unit=unit,
+    )
+
+    conv = _gravity_conversion_factor(unit)
+    hafwl = np.maximum(opt_fwl - depth_arr, 0.0)
+    pc_res = hafwl * (gw - ghc) * conv
+
+    tz_flag = np.where(
+        depth_arr >= opt_fwl,
+        "FREE_WATER",
+        np.where(
+            depth_arr > tz_info["owc"],
+            "CAPILLARY_FRINGE",
+            np.where(depth_arr > tz_info["ttz"], "TRANSITION_ZONE", "IRREDUCIBLE_HC"),
+        ),
+    )
+
+    work_df["SW_SHM"] = sw_shm_full
+    work_df["BVW_LOG"] = phit_arr * sw_log_arr
+    work_df["BVW_SHM"] = phit_arr * sw_shm_full
+    work_df["HAFWL"] = hafwl
+    work_df["PC_RES"] = pc_res
+    work_df["TRANSITION_ZONE_FLAG"] = tz_flag
+
+    # 7. Global error metrics on reservoir intervals
+    sw_obs_res = sw_log_arr[res_mask]
+    sw_pred_res = sw_shm_full[res_mask]
+    phi_res = phit_arr[res_mask]
+
+    global_rmse = float(np.sqrt(np.mean((sw_obs_res - sw_pred_res) ** 2)))
+    global_mae = float(np.mean(np.abs(sw_obs_res - sw_pred_res)))
+    global_bvw_rmse = float(
+        np.sqrt(np.mean((phi_res * (sw_obs_res - sw_pred_res)) ** 2))
+    )
+    ss_res = float(np.sum((sw_obs_res - sw_pred_res) ** 2))
+    ss_tot = float(np.sum((sw_obs_res - np.mean(sw_obs_res)) ** 2))
+    global_r2 = float(1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else 0.0
+
+    # 8. Per-well metrics & per-well FWL tilt / compartmentalization diagnostics
+    well_rows = []
+    for w_name in pd.unique(wells_arr):
+        w_mask = res_mask & (wells_arr == w_name)
+        if not np.any(w_mask):
+            w_mask = (wells_arr == w_name) & np.isfinite(depth_arr) & np.isfinite(sw_log_arr)
+        n_w = int(np.sum(w_mask))
+        if n_w == 0:
+            continue
+
+        w_obs = sw_log_arr[w_mask]
+        w_pred = sw_shm_full[w_mask]
+        w_phi = phit_arr[w_mask]
+        w_perm = perm_arr[w_mask]
+
+        w_rmse = float(np.sqrt(np.mean((w_obs - w_pred) ** 2)))
+        w_mae = float(np.mean(np.abs(w_obs - w_pred)))
+        w_bvw_rmse = float(np.sqrt(np.mean((w_phi * (w_obs - w_pred)) ** 2)))
+
+        w_tz = analyze_transition_zone(
+            fwl=opt_fwl,
+            model=model,
+            shm_params=active_shm_params,
+            phit=w_phi,
+            perm=w_perm,
+            ift=ift,
+            theta=theta,
+            gw=gw,
+            ghc=ghc,
+            unit=unit,
+        )
+
+        fwl_well_opt = opt_fwl
+        if solve_per_well and n_w >= 3:
+            w_weights = np.ones(n_w, dtype=float) / float(n_w)
+            w_grid_losses = np.array(
+                [
+                    _compute_loss(
+                        float(f),
+                        cand_params=active_shm_params,
+                        subset_mask=w_mask,
+                        subset_weights=w_weights,
+                    )
+                    for f in grid_fwls
+                ],
+                dtype=float,
+            )
+            w_best_i = int(np.argmin(w_grid_losses))
+            w_l = float(grid_fwls[max(0, w_best_i - 2)])
+            w_r = float(grid_fwls[min(n_grid - 1, w_best_i + 2)])
+            if w_r > w_l:
+                w_opt = minimize_scalar(
+                    lambda f: _compute_loss(
+                        float(f),
+                        cand_params=active_shm_params,
+                        subset_mask=w_mask,
+                        subset_weights=w_weights,
+                    ),
+                    bounds=(w_l, w_r),
+                    method="bounded",
+                )
+                fwl_well_opt = (
+                    float(w_opt.x)
+                    if w_opt.fun <= w_grid_losses[w_best_i]
+                    else float(grid_fwls[w_best_i])
+                )
+            else:
+                fwl_well_opt = float(grid_fwls[w_best_i])
+
+        well_rows.append(
+            {
+                well_col: w_name,
+                "n_samples": n_w,
+                "rmse": w_rmse,
+                "mae": w_mae,
+                "bvw_rmse": w_bvw_rmse,
+                "fwl_global": opt_fwl,
+                "fwl_well": fwl_well_opt,
+                "fwl_offset_from_global": float(fwl_well_opt - opt_fwl),
+                "owc": w_tz["owc"],
+                "ttz": w_tz["ttz"],
+                "transition_zone_thickness": w_tz["transition_zone_thickness"],
+            }
+        )
+
+    well_metrics_df = pd.DataFrame(well_rows)
+    grid_profile_df = pd.DataFrame(
+        {"fwl": grid_fwls, "objective_loss": grid_losses}
+    )
+
+    fwl_reconciliation_diff = (
+        float(opt_fwl - float(mdt_fwl)) if mdt_fwl is not None else None
+    )
+
+    return {
+        "fwl": opt_fwl,
+        "owc": tz_info["owc"],
+        "ttz": tz_info["ttz"],
+        "capillary_entry_height": tz_info["capillary_entry_height"],
+        "transition_zone_thickness": tz_info["transition_zone_thickness"],
+        "rmse": global_rmse,
+        "mae": global_mae,
+        "r2": global_r2,
+        "bvw_rmse": global_bvw_rmse,
+        "mdt_fwl": float(mdt_fwl) if mdt_fwl is not None else None,
+        "mdt_details": mdt_details,
+        "fwl_reconciliation_diff": fwl_reconciliation_diff,
+        "shm_params": active_shm_params,
+        "well_metrics": well_metrics_df,
+        "grid_profile": grid_profile_df,
+        "df": work_df,
+    }
+
+
+def plot_fwl_reconciliation(
+    opt_result: dict,
+    depth_col: str = "DEPTH",
+    sw_col: str = "SWT",
+    well_col: str = "WELL_NAME",
+    title: str = "Multi-Well Contact & Transition Zone Reconciliation",
+):
+    """Plot a 3-panel diagnostic figure for Multi-Well FWL Optimization & SHM Reconciliation.
+
+    Panels:
+      1. Objective Function Profile (Error vs. Candidate FWL) with optimal FWL, OWC, TTZ, and MDT FWL.
+      2. Multi-Well Saturation vs. Depth Profile ($S_{w,log}$ vs. $S_{w,SHM}$) with contact horizons.
+      3. $S_{w,log}$ vs. $S_{w,SHM}$ 1:1 Reconciliation Crossplot colored by well.
+
+    Args:
+        opt_result (dict): Dictionary returned by `optimize_fwl` (or `ContactOptimizer.result_`).
+        depth_col (str, optional): Depth column name. Defaults to `'DEPTH'`.
+        sw_col (str, optional): Log water saturation column name. Defaults to `'SWT'`.
+        well_col (str, optional): Well column name. Defaults to `'WELL_NAME'`.
+        title (str, optional): Figure title.
+
+    Returns:
+        matplotlib.figure.Figure: Diagnostic matplotlib Figure.
+    """
+    df = opt_result["df"]
+    grid_df = opt_result["grid_profile"]
+    fwl = opt_result["fwl"]
+    owc = opt_result["owc"]
+    ttz = opt_result["ttz"]
+    mdt_fwl = opt_result.get("mdt_fwl")
+
+    d_col = depth_col if depth_col in df.columns else (
+        "TVDSS" if "TVDSS" in df.columns else df.columns[0]
+    )
+    s_col = sw_col if sw_col in df.columns else ("SW" if "SW" in df.columns else "SW_SHM")
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5.5))
+    fig.suptitle(title, fontsize=11, fontweight="bold")
+
+    # Panel 1: Objective Loss vs. Candidate FWL
+    ax0 = axes[0]
+    ax0.plot(grid_df["objective_loss"], grid_df["fwl"], color="navy", lw=1.8, label="Objective Loss")
+    ax0.axhline(fwl, color="dodgerblue", ls="-", lw=1.8, label=f"Opt FWL = {fwl:.1f}")
+    ax0.axhline(owc, color="forestgreen", ls="--", lw=1.4, label=f"OWC = {owc:.1f}")
+    ax0.axhline(ttz, color="darkorange", ls=":", lw=1.4, label=f"TTZ = {ttz:.1f}")
+    if mdt_fwl is not None:
+        ax0.axhline(mdt_fwl, color="crimson", ls="-.", lw=1.5, label=f"MDT FWL = {mdt_fwl:.1f}")
+    ax0.invert_yaxis()
+    ax0.set_xlabel("Objective Error (Sw / BVW)")
+    ax0.set_ylabel("Depth (TVD / TVDSS)")
+    ax0.set_title("FWL Objective Profile")
+    ax0.grid(True, ls="--", alpha=0.5)
+    ax0.legend(loc="best", fontsize=8)
+
+    # Panel 2: Multi-Well Depth vs. Sw & Sw_SHM
+    ax1 = axes[1]
+    wells = df[well_col].unique() if well_col in df.columns else ["WELL"]
+    cmap = plt.get_cmap("tab10")
+    for idx, w in enumerate(wells):
+        sub = df[df[well_col] == w].sort_values(d_col) if well_col in df.columns else df.sort_values(d_col)
+        color = cmap(idx % 10)
+        ax1.scatter(sub[s_col], sub[d_col], s=10, alpha=0.45, color=color, label=f"{w} Sw_log")
+        ax1.plot(sub["SW_SHM"], sub[d_col], lw=1.5, color=color, label=f"{w} Sw_SHM")
+    ax1.axhline(fwl, color="dodgerblue", ls="-", lw=1.6, label="FWL")
+    ax1.axhline(owc, color="forestgreen", ls="--", lw=1.3, label="OWC")
+    ax1.axhline(ttz, color="darkorange", ls=":", lw=1.3, label="TTZ")
+    ax1.invert_yaxis()
+    ax1.set_xlim(0.0, 1.05)
+    ax1.set_xlabel("Water Saturation (frac)")
+    ax1.set_ylabel("Depth (TVD / TVDSS)")
+    ax1.set_title("Multi-Well Transition Zone Profile")
+    ax1.grid(True, ls="--", alpha=0.5)
+    ax1.legend(loc="best", fontsize=7)
+
+    # Panel 3: 1:1 Reconciliation Crossplot
+    ax2 = axes[2]
+    for idx, w in enumerate(wells):
+        sub = df[df[well_col] == w] if well_col in df.columns else df
+        ax2.scatter(sub[s_col], sub["SW_SHM"], s=14, alpha=0.6, color=cmap(idx % 10), label=str(w))
+    ax2.plot([0, 1], [0, 1], "k--", lw=1.2, label="1:1 Line")
+    ax2.set_xlim(0.0, 1.0)
+    ax2.set_ylim(0.0, 1.0)
+    ax2.set_xlabel("Resistivity Sw (frac)")
+    ax2.set_ylabel("SHM Sw (frac)")
+    ax2.set_title(
+        f"Sw Reconciliation (RMSE={opt_result['rmse']:.3f}, R²={opt_result['r2']:.2f})"
+    )
+    ax2.grid(True, ls="--", alpha=0.5)
+    ax2.legend(loc="best", fontsize=8)
+
+    fig.tight_layout()
+    return fig
+
+
+class ContactOptimizer:
+    """Multi-Well Free Water Level (FWL) & Capillary Transition Zone Optimizer.
+
+    Object-oriented estimator that solves for the field-wide (and per-well) Free Water Level
+    by minimizing the discrepancy between resistivity-derived water saturation ($S_w$) and
+    capillary pressure Saturation-Height Modeling ($S_{w,SHM}$ via Leverett-$J$, Skelt-Harrison,
+    or Cuddy) across multiple wells simultaneously, with optional MDT/RFT pressure reconciliation.
+    """
+
+    def __init__(
+        self,
+        model: str = "leverett_j",
+        shm_params=None,
+        ift: float = 30.0,
+        theta: float = 30.0,
+        gw: float = 1.05,
+        ghc: float = 0.80,
+        swirr=None,
+        loss: str = "rmse",
+        pore_volume_weighted: bool = False,
+        equal_well_weights: bool = False,
+        phit_cutoff: float = 0.03,
+        perm_cutoff: float = 0.01,
+        vshale_cutoff: float = 0.50,
+        non_reservoir_flags=None,
+        solve_per_well: bool = True,
+        optimize_shm_params: bool = False,
+        unit: str = "imperial",
+    ):
+        self.model = model
+        self.shm_params = shm_params
+        self.ift = ift
+        self.theta = theta
+        self.gw = gw
+        self.ghc = ghc
+        self.swirr = swirr
+        self.loss = loss
+        self.pore_volume_weighted = pore_volume_weighted
+        self.equal_well_weights = equal_well_weights
+        self.phit_cutoff = phit_cutoff
+        self.perm_cutoff = perm_cutoff
+        self.vshale_cutoff = vshale_cutoff
+        self.non_reservoir_flags = non_reservoir_flags
+        self.solve_per_well = solve_per_well
+        self.optimize_shm_params = optimize_shm_params
+        self.unit = unit
+
+        self.result_: dict = None
+        self.fwl_: float = None
+        self.owc_: float = None
+        self.ttz_: float = None
+        self.shm_params_ = None
+        self.well_metrics_: pd.DataFrame = None
+
+    def fit(
+        self,
+        df: pd.DataFrame | dict,
+        fwl_bounds: tuple = None,
+        mdt_fwl: float = None,
+        pressure_df: pd.DataFrame = None,
+        mdt_tolerance: float = None,
+        mdt_penalty_weight: float = 0.0,
+        depth_col: str = "DEPTH",
+        sw_col: str = "SWT",
+        phit_col: str = "PHIT",
+        perm_col: str = "PERM",
+        phie_col: str = None,
+        rock_flag_col: str = "ROCK_FLAG",
+        well_col: str = "WELL_NAME",
+        vshale_col: str = "VSHALE",
+        saturation_method: str = "archie",
+        archie_params: dict = None,
+    ) -> "ContactOptimizer":
+        """Fit the optimizer across single or multiple wells to solve for FWL and transition zone contacts."""
+        self.result_ = optimize_fwl(
+            df=df,
+            model=self.model,
+            shm_params=self.shm_params,
+            fwl_bounds=fwl_bounds,
+            ift=self.ift,
+            theta=self.theta,
+            gw=self.gw,
+            ghc=self.ghc,
+            swirr=self.swirr,
+            depth_col=depth_col,
+            sw_col=sw_col,
+            phit_col=phit_col,
+            perm_col=perm_col,
+            phie_col=phie_col,
+            rock_flag_col=rock_flag_col,
+            well_col=well_col,
+            vshale_col=vshale_col,
+            phit_cutoff=self.phit_cutoff,
+            perm_cutoff=self.perm_cutoff,
+            vshale_cutoff=self.vshale_cutoff,
+            non_reservoir_flags=self.non_reservoir_flags,
+            loss=self.loss,
+            pore_volume_weighted=self.pore_volume_weighted,
+            equal_well_weights=self.equal_well_weights,
+            mdt_fwl=mdt_fwl,
+            pressure_df=pressure_df,
+            mdt_tolerance=mdt_tolerance,
+            mdt_penalty_weight=mdt_penalty_weight,
+            solve_per_well=self.solve_per_well,
+            optimize_shm_params=self.optimize_shm_params,
+            saturation_method=saturation_method,
+            archie_params=archie_params,
+            unit=self.unit,
+        )
+        self.fwl_ = self.result_["fwl"]
+        self.owc_ = self.result_["owc"]
+        self.ttz_ = self.result_["ttz"]
+        self.shm_params_ = self.result_["shm_params"]
+        self.well_metrics_ = self.result_["well_metrics"]
+        return self
+
+    def predict(
+        self,
+        df: pd.DataFrame,
+        use_per_well_fwl: bool = False,
+        depth_col: str = "DEPTH",
+        phit_col: str = "PHIT",
+        perm_col: str = "PERM",
+        phie_col: str = None,
+        rock_flag_col: str = "ROCK_FLAG",
+        well_col: str = "WELL_NAME",
+    ) -> pd.Series:
+        """Predict $S_{w,SHM}$ on a DataFrame using the fitted FWL and SHM parameters."""
+        if self.fwl_ is None:
+            raise RuntimeError("ContactOptimizer must be fitted with .fit() before calling .predict().")
+
+        fwl_arg = self.fwl_
+        if (
+            use_per_well_fwl
+            and self.well_metrics_ is not None
+            and not self.well_metrics_.empty
+            and well_col in self.well_metrics_.columns
+        ):
+            fwl_arg = dict(
+                zip(
+                    self.well_metrics_[well_col],
+                    self.well_metrics_["fwl_well"],
+                    strict=False,
+                )
+            )
+
+        return predict_sw_shm(
+            df=df,
+            fwl=fwl_arg,
+            model=self.model,
+            shm_params=self.shm_params_,
+            swirr=self.swirr,
+            ift=self.ift,
+            theta=self.theta,
+            gw=self.gw,
+            ghc=self.ghc,
+            depth_col=depth_col,
+            phit_col=phit_col,
+            perm_col=perm_col,
+            phie_col=phie_col,
+            rock_flag_col=rock_flag_col,
+            well_col=well_col,
+            non_reservoir_flags=self.non_reservoir_flags,
+            unit=self.unit,
+            clip=True,
+        )
+
+    def transform(
+        self,
+        df: pd.DataFrame,
+        use_per_well_fwl: bool = False,
+        depth_col: str = "DEPTH",
+        phit_col: str = "PHIT",
+        perm_col: str = "PERM",
+        phie_col: str = None,
+        rock_flag_col: str = "ROCK_FLAG",
+        well_col: str = "WELL_NAME",
+    ) -> pd.DataFrame:
+        """Return a copy of `df` augmented with `SW_SHM`, `HAFWL`, `PC_RES`, and `TRANSITION_ZONE_FLAG`."""
+        if self.fwl_ is None:
+            raise RuntimeError(
+                "ContactOptimizer must be fitted with .fit() before calling .transform()."
+            )
+        out_df = df.copy()
+        out_df["SW_SHM"] = self.predict(
+            out_df,
+            use_per_well_fwl=use_per_well_fwl,
+            depth_col=depth_col,
+            phit_col=phit_col,
+            perm_col=perm_col,
+            phie_col=phie_col,
+            rock_flag_col=rock_flag_col,
+            well_col=well_col,
+        )
+        d_col = depth_col if depth_col in out_df.columns else (
+            "TVDSS" if "TVDSS" in out_df.columns else out_df.columns[0]
+        )
+        z = np.asarray(out_df[d_col], dtype=float)
+        conv = _gravity_conversion_factor(self.unit)
+        hafwl = np.maximum(self.fwl_ - z, 0.0)
+        out_df["HAFWL"] = hafwl
+        out_df["PC_RES"] = hafwl * (self.gw - self.ghc) * conv
+        out_df["TRANSITION_ZONE_FLAG"] = np.where(
+            z >= self.fwl_,
+            "FREE_WATER",
+            np.where(
+                z > self.owc_,
+                "CAPILLARY_FRINGE",
+                np.where(z > self.ttz_, "TRANSITION_ZONE", "IRREDUCIBLE_HC"),
+            ),
+        )
+        return out_df
+
+    def summary(self) -> dict:
+        """Return a dictionary of fitted contacts, transition zone thickness, and error metrics."""
+        if self.result_ is None:
+            raise RuntimeError("ContactOptimizer has not been fitted yet.")
+        return {k: v for k, v in self.result_.items() if k not in ("df", "grid_profile")}
+
+    def plot(self, **kwargs):
+        """Plot the 3-panel Multi-Well FWL & SHM Reconciliation diagnostic figure."""
+        if self.result_ is None:
+            raise RuntimeError("ContactOptimizer has not been fitted yet.")
+        return plot_fwl_reconciliation(self.result_, **kwargs)
+
+

@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import 'tailwindcss';
 
 @import 'tw-animate-css';
@@ -7,79 +8,90 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-	--radius: 0.625rem;
-	--background: oklch(1 0 0);
-	--foreground: oklch(0.129 0.042 264.695);
-	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.129 0.042 264.695);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.129 0.042 264.695);
-	--primary: oklch(0.208 0.042 265.755);
-	--primary-foreground: oklch(0.984 0.003 247.858);
-	--secondary: oklch(0.968 0.007 247.896);
-	--secondary-foreground: oklch(0.208 0.042 265.755);
-	--muted: oklch(0.968 0.007 247.896);
-	--muted-foreground: oklch(0.554 0.046 257.417);
-	--accent: oklch(0.968 0.007 247.896);
-	--accent-foreground: oklch(0.208 0.042 265.755);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.929 0.013 255.508);
-	--input: oklch(0.929 0.013 255.508);
-	--ring: oklch(0.704 0.04 256.788);
-	--chart-1: oklch(0.646 0.222 41.116);
-	--chart-2: oklch(0.6 0.118 184.704);
-	--chart-3: oklch(0.398 0.07 227.392);
-	--chart-4: oklch(0.828 0.189 84.429);
-	--chart-5: oklch(0.769 0.188 70.08);
-	--sidebar: oklch(0.984 0.003 247.858);
-	--sidebar-foreground: oklch(0.129 0.042 264.695);
-	--sidebar-primary: oklch(0.208 0.042 265.755);
-	--sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-	--sidebar-accent: oklch(0.968 0.007 247.896);
-	--sidebar-accent-foreground: oklch(0.208 0.042 265.755);
-	--sidebar-border: oklch(0.929 0.013 255.508);
-	--sidebar-ring: oklch(0.704 0.04 256.788);
-}
+	/* Precision Daylight Surface & Semantic Tokens */
+	--bg-app: #F8FAFC;
+	--bg-surface: #FFFFFF;
+	--bg-subtle: #F1F5F9;
+	--border-hairline: #E2E8F0;
+	--border-focus: #2563EB;
+	--text-primary: #0F172A;
+	--text-secondary: #334155;
+	--text-muted: #64748B;
+	--accent-primary: #2563EB;
+	--status-ok: #16A34A;
+	--status-warn: #D97706;
+	--status-error: #DC2626;
 
-.dark {
-	--background: oklch(0.129 0.042 264.695);
-	--foreground: oklch(0.984 0.003 247.858);
-	--card: oklch(0.208 0.042 265.755);
-	--card-foreground: oklch(0.984 0.003 247.858);
-	--popover: oklch(0.208 0.042 265.755);
-	--popover-foreground: oklch(0.984 0.003 247.858);
-	--primary: oklch(0.929 0.013 255.508);
-	--primary-foreground: oklch(0.208 0.042 265.755);
-	--secondary: oklch(0.279 0.041 260.031);
-	--secondary-foreground: oklch(0.984 0.003 247.858);
-	--muted: oklch(0.279 0.041 260.031);
-	--muted-foreground: oklch(0.704 0.04 256.788);
-	--accent: oklch(0.279 0.041 260.031);
-	--accent-foreground: oklch(0.984 0.003 247.858);
-	--destructive: oklch(0.704 0.191 22.216);
-	--border: oklch(1 0 0 / 10%);
-	--input: oklch(1 0 0 / 15%);
-	--ring: oklch(0.551 0.027 264.364);
-	--chart-1: oklch(0.488 0.243 264.376);
-	--chart-2: oklch(0.696 0.17 162.48);
-	--chart-3: oklch(0.769 0.188 70.08);
-	--chart-4: oklch(0.627 0.265 303.9);
-	--chart-5: oklch(0.645 0.246 16.439);
-	--sidebar: oklch(0.208 0.042 265.755);
-	--sidebar-foreground: oklch(0.984 0.003 247.858);
-	--sidebar-primary: oklch(0.488 0.243 264.376);
-	--sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-	--sidebar-accent: oklch(0.279 0.041 260.031);
-	--sidebar-accent-foreground: oklch(0.984 0.003 247.858);
-	--sidebar-border: oklch(1 0 0 / 10%);
-	--sidebar-ring: oklch(0.551 0.027 264.364);
+	/* Subsurface Petrophysical Color Tokens */
+	/* Lithology Fills & Strokes */
+	--petro-sand-fill: #FDE047;
+	--petro-sand-stroke: #CA8A04;
+	--petro-shale-fill: #94A3B8;
+	--petro-shale-stroke: #475569;
+	--petro-silt-fill: #FDBA74;
+	--petro-silt-stroke: #EA580C;
+	--petro-calc-fill: #38BDF8;
+	--petro-calc-stroke: #0284C7;
+	--petro-dolo-fill: #C084FC;
+	--petro-dolo-stroke: #7E22CE;
+
+	/* Fluids & Saturation */
+	--petro-oil: #16A34A;
+	--petro-gas: #DC2626;
+	--petro-water: #2563EB;
+
+	/* Standard Log Curves */
+	--curve-gr: #15803D;
+	--curve-rt: #DC2626;
+	--curve-rhob: #DC2626;
+	--curve-nphi: #2563EB;
+	--curve-dt: #9333EA;
+	--curve-cali: #475569;
+	--curve-core: #0F172A;
+
+	/* shadcn-svelte mapped to Precision Daylight */
+	--radius: 0.25rem;
+	--background: #F8FAFC;
+	--foreground: #0F172A;
+	--card: #FFFFFF;
+	--card-foreground: #0F172A;
+	--popover: #FFFFFF;
+	--popover-foreground: #0F172A;
+	--primary: #2563EB;
+	--primary-foreground: #FFFFFF;
+	--secondary: #F1F5F9;
+	--secondary-foreground: #0F172A;
+	--muted: #F1F5F9;
+	--muted-foreground: #64748B;
+	--accent: #F1F5F9;
+	--accent-foreground: #0F172A;
+	--destructive: #DC2626;
+	--border: #E2E8F0;
+	--input: #E2E8F0;
+	--ring: #2563EB;
+	--chart-1: #2563EB;
+	--chart-2: #16A34A;
+	--chart-3: #D97706;
+	--chart-4: #9333EA;
+	--chart-5: #DC2626;
+	--sidebar: #F8FAFC;
+	--sidebar-foreground: #0F172A;
+	--sidebar-primary: #2563EB;
+	--sidebar-primary-foreground: #FFFFFF;
+	--sidebar-accent: #F1F5F9;
+	--sidebar-accent-foreground: #0F172A;
+	--sidebar-border: #E2E8F0;
+	--sidebar-ring: #2563EB;
+
+	--font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+	--font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 @theme inline {
-	--radius-sm: calc(var(--radius) - 4px);
-	--radius-md: calc(var(--radius) - 2px);
-	--radius-lg: var(--radius);
-	--radius-xl: calc(var(--radius) + 4px);
+	--radius-sm: 2px;
+	--radius-md: 4px;
+	--radius-lg: 6px;
+	--radius-xl: 8px;
 	--color-background: var(--background);
 	--color-foreground: var(--foreground);
 	--color-card: var(--card);
@@ -111,13 +123,44 @@
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-ring: var(--sidebar-ring);
+	--font-sans: var(--font-sans);
+	--font-mono: var(--font-mono);
 }
 
 @layer base {
 	* {
 		@apply border-border outline-ring/50;
 	}
+	html,
 	body {
-		@apply bg-background text-foreground;
+		font-family: var(--font-sans);
+		font-size: 12px;
+		line-height: 1.35;
+		color: var(--text-primary);
+		background-color: var(--bg-app);
+		margin: 0;
+		padding: 0;
+		-webkit-font-smoothing: antialiased;
 	}
+	input[type='number'],
+	.mono-num {
+		font-family: var(--font-mono);
+		font-variant-numeric: tabular-nums;
+	}
+}
+
+/* High-density engineering scrollbar styling */
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+::-webkit-scrollbar-track {
+	background: var(--bg-app);
+}
+::-webkit-scrollbar-thumb {
+	background: #CBD5E1;
+	border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: #94A3B8;
 }

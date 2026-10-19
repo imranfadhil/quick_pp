@@ -1,8 +1,9 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from quick_pp.app.backend.schemas.saturation_archie import InputData as ArchieInput
 from quick_pp.app.backend.schemas.saturation_b import InputData as BInput
@@ -20,6 +21,8 @@ from quick_pp.saturation import (
     estimate_qvn,
     estimate_rw_temperature_salinity,
     estimate_temperature_gradient,
+    optimize_fwl,
+    predict_sw_shm,
     waxman_smits_saturation,
 )
 
@@ -498,3 +501,137 @@ async def estimate_swt_archie(inputs: ArchieInput) -> List[Dict[str, float]]:
         raise HTTPException(
             status_code=400, detail=f"Error processing request: {e}"
         ) from e
+
+
+class OptimizeFWLInput(BaseModel):
+    model: str = Field(
+        "leverett_j",
+        description="Saturation-height formulation ('leverett_j', 'skelt_harrison', or 'cuddy')",
+    )
+    shm_params: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = Field(
+        default=None,
+        description="Capillary SHM parameters (global dict or per-rock-type list/dict)",
+    )
+    fwl_bounds: Optional[Tuple[float, float]] = Field(
+        default=None,
+        description="Optional (fwl_min, fwl_max) search range in TVD/TVDSS",
+    )
+    ift: float = Field(30.0, gt=0.0, description="Reservoir interfacial tension (dynes/cm)")
+    theta: float = Field(30.0, ge=0.0, le=180.0, description="Reservoir contact angle (deg)")
+    gw: float = Field(1.05, gt=0.0, description="Formation water density (g/cc)")
+    ghc: float = Field(0.80, gt=0.0, description="Hydrocarbon density (g/cc)")
+    swirr: Optional[Union[float, str]] = Field(
+        default=None, description="Irreducible water saturation fraction or column name"
+    )
+    depth_col: str = Field("DEPTH", description="Depth column name")
+    sw_col: str = Field("SWT", description="Resistivity water saturation column name")
+    phit_col: str = Field("PHIT", description="Total porosity column name")
+    perm_col: str = Field("PERM", description="Permeability column name")
+    rock_flag_col: str = Field("ROCK_FLAG", description="Rock flag column name")
+    well_col: str = Field("WELL_NAME", description="Well name column name")
+    vshale_col: str = Field("VSHALE", description="Shale volume column name")
+    phit_cutoff: float = Field(0.03, ge=0.0, description="Minimum porosity cutoff")
+    perm_cutoff: float = Field(0.01, ge=0.0, description="Minimum permeability cutoff (mD)")
+    vshale_cutoff: float = Field(0.50, ge=0.0, le=1.0, description="Maximum shale volume cutoff")
+    loss: str = Field("rmse", description="Objective loss ('rmse', 'mae', 'huber', or 'bvw')")
+    pore_volume_weighted: bool = Field(
+        False, description="Weight residuals by pore volume (PHIT)"
+    )
+    equal_well_weights: bool = Field(
+        False, description="Weight each well equally in multi-well objective"
+    )
+    mdt_fwl: Optional[float] = Field(
+        default=None, description="Prior FWL from MDT/RFT pressure gradients"
+    )
+    pressure_data: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Optional MDT/RFT pressure points (TVDSS, FORMATION_PRESSURE, FLUID_TYPE)",
+    )
+    mdt_tolerance: Optional[float] = Field(
+        default=None, description="Maximum allowed deviation from mdt_fwl"
+    )
+    mdt_penalty_weight: float = Field(
+        0.0, ge=0.0, description="Soft regularization weight toward mdt_fwl"
+    )
+    solve_per_well: bool = Field(
+        True, description="Also solve individual per-well optimal FWLs"
+    )
+    optimize_shm_params: bool = Field(
+        False, description="Jointly refine global SHM parameters alongside FWL"
+    )
+    unit: str = Field("imperial", description="Depth unit ('imperial' or 'metric')")
+    data: List[Dict[str, Any]] = Field(..., description="Multi-well log records")
+
+
+@router.post(
+    "/optimize_fwl",
+    summary="Optimize Multi-Well Free Water Level (FWL) & Reconcile Transition Zone",
+    operation_id="optimize_multiwell_fwl",
+)
+async def optimize_fwl_endpoint(inputs: OptimizeFWLInput):
+    """Solve for optimal Free Water Level (FWL) across wells by reconciling Sw_log, Sw_SHM, and MDT/RFT."""
+    try:
+        df = pd.DataFrame(inputs.data)
+        pressure_df = (
+            pd.DataFrame(inputs.pressure_data)
+            if inputs.pressure_data is not None
+            else None
+        )
+        res = optimize_fwl(
+            df=df,
+            model=inputs.model,
+            shm_params=inputs.shm_params,
+            fwl_bounds=inputs.fwl_bounds,
+            ift=inputs.ift,
+            theta=inputs.theta,
+            gw=inputs.gw,
+            ghc=inputs.ghc,
+            swirr=inputs.swirr,
+            depth_col=inputs.depth_col,
+            sw_col=inputs.sw_col,
+            phit_col=inputs.phit_col,
+            perm_col=inputs.perm_col,
+            rock_flag_col=inputs.rock_flag_col,
+            well_col=inputs.well_col,
+            vshale_col=inputs.vshale_col,
+            phit_cutoff=inputs.phit_cutoff,
+            perm_cutoff=inputs.perm_cutoff,
+            vshale_cutoff=inputs.vshale_cutoff,
+            loss=inputs.loss,
+            pore_volume_weighted=inputs.pore_volume_weighted,
+            equal_well_weights=inputs.equal_well_weights,
+            mdt_fwl=inputs.mdt_fwl,
+            pressure_df=pressure_df,
+            mdt_tolerance=inputs.mdt_tolerance,
+            mdt_penalty_weight=inputs.mdt_penalty_weight,
+            solve_per_well=inputs.solve_per_well,
+            optimize_shm_params=inputs.optimize_shm_params,
+            unit=inputs.unit,
+        )
+        return {
+            "fwl": res["fwl"],
+            "owc": res["owc"],
+            "ttz": res["ttz"],
+            "capillary_entry_height": res["capillary_entry_height"],
+            "transition_zone_thickness": res["transition_zone_thickness"],
+            "rmse": res["rmse"],
+            "mae": res["mae"],
+            "r2": res["r2"],
+            "bvw_rmse": res["bvw_rmse"],
+            "mdt_fwl": res["mdt_fwl"],
+            "mdt_details": res["mdt_details"],
+            "fwl_reconciliation_diff": res["fwl_reconciliation_diff"],
+            "shm_params": res["shm_params"],
+            "well_metrics": res["well_metrics"]
+            .replace({np.nan: None})
+            .to_dict(orient="records"),
+            "grid_profile": res["grid_profile"]
+            .replace({np.nan: None})
+            .to_dict(orient="records"),
+            "data": res["df"].replace({np.nan: None}).to_dict(orient="records"),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Error optimizing FWL: {e}"
+        ) from e
+

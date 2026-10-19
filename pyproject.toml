@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "quick-pp"
 version = "0.2.106"
-description = "Python package to assist in providing quick-look preliminary petrophysical estimation."
+description = "Comprehensive Python package and web platform for deterministic and probabilistic petrophysical evaluation, SCAL & relative permeability modeling, multi-well FWL optimization, stratigraphic normalization, and geomodel log upscaling."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "MIT"
 requires-python = ">=3.11"
@@ -23,6 +23,9 @@ keywords = [
     "multi mineral",
     "rock typing",
     "saturation height function", "shf",
+    "scal", "relative permeability",
+    "uncertainty", "monte carlo",
+    "upscaling", "log blocking",
 ]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
@@ -43,6 +46,7 @@ dependencies = [
     "Click>=7.0",
     "fastapi",
     "jinja2",
+    "joblib>=1.6.0",
     "lasio",
     "loguru",
     "matplotlib==3.8.0",
@@ -52,6 +56,7 @@ dependencies = [
     "psycopg2-binary",
     "pydantic",
     "pydantic_core",
+    "pytest>=9.1.1",
     "python-dotenv",
     "python-multipart",
     "redis",
@@ -70,6 +75,7 @@ dev = [
     "build>=0.10",
     "dtw-python",
     "fastapi-mcp",
+    "mapie",
     "mlflow",
     "mypy>=1.5",
     "pre-commit>=3.0",
@@ -122,6 +128,7 @@ quick_pp = [
     "app/backend/**/*",
     "app/docker/docker-compose.yaml",
     "app/docker/Dockerfile",
+    "app/docker/nginx.conf",
     "database/**/*",
     "lithology/**/*",
     "machine_learning/**/*",

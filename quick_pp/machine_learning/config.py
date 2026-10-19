@@ -32,7 +32,39 @@ MLFLOW_CONFIG = {
 }
 
 RAW_FEATURES = ["GR", "RT", "NPHI", "RHOB"]
-FE_FEATURES = ["RHOB_INT", "DPHI", "GAS_XOVER"]
+PHYSICS_FE_FEATURES = ["RHOMA_APP", "AI", "M_LITH", "N_LITH"]
+FE_FEATURES = ["RHOB_INT", "DPHI", "GAS_XOVER"] + PHYSICS_FE_FEATURES
+
+# Default significance level alpha=0.20 corresponds to an 80% prediction interval (P10 to P90)
+CONFORMAL_ALPHA = 0.20
+
+# Standard bulk-volume mineral columns subject to closure: sum(V_mineral) + PHIT = 1.0
+MINERAL_VOL_COLS = [
+    "VSAND",
+    "VSILT",
+    "VCLAY",
+    "VCALC",
+    "VDOLO",
+    "VKAOL",
+    "VFELD",
+    "VANHY",
+    "VGYPS",
+    "VHALI",
+    "VPYRI",
+    "VCOAL",
+]
+
+# Physical bounds for petrophysical properties
+PHYSICAL_BOUNDS = {
+    "PHIT": (0.0, 0.50),
+    "PHIE": (0.0, 0.50),
+    "SWT": (0.0, 1.0),
+    "SW": (0.0, 1.0),
+    "SWE": (0.0, 1.0),
+    "LOG_PERM": (-3.0, 5.0),
+    "PERM": (1e-3, 1e5),
+}
+
 MODELLING_CONFIG = {
     "mock": {
         "POROSAT": {
@@ -71,19 +103,19 @@ MODELLING_CONFIG = {
         "OIL": {
             "alg": RandomForestClassifier,
             "targets": ["OIL_FLAG"],
-            "features": RAW_FEATURES,
+            "features": RAW_FEATURES + FE_FEATURES,
             "description": "Oil flag classification",
         },
         "GAS": {
             "alg": RandomForestClassifier,
             "targets": ["GAS_FLAG"],
-            "features": RAW_FEATURES + ["OIL_FLAG"],
+            "features": RAW_FEATURES + FE_FEATURES + ["OIL_FLAG"],
             "description": "Gas flag classification",
         },
         "CARBONATE": {
             "alg": RandomForestRegressor,
             "targets": ["PHIT", "SWT", "LOG_PERM", "VCALC", "VCLAY", "VDOLO"],
-            "features": RAW_FEATURES,
+            "features": RAW_FEATURES + FE_FEATURES,
             "description": (
                 "Carbonate properties prediction consisting of total porosity, total water saturation, "
                 "log permeability, calcite volume, clay volume, and dolomite volume"

@@ -18,7 +18,7 @@ def rhob_integral(rhob, step=15):
     Returns:
         np.ndarray: An array representing the cumulative sum of the stepped difference of RHOB.
     """
-    return np.cumsum(rhob.clip(2, 3).diff(step).cumsum())
+    return np.cumsum(rhob.clip(2, 3).diff(int(step)).fillna(0.0).cumsum())
 
 
 def density_porosity(rhob):
@@ -114,37 +114,180 @@ def coal_flagging(
     return (trend_condition & threshold_condition).astype(float)
 
 
-def tight_streak_flagging(rhob, rhob_threshold=2.3, window_size=15, trend_factor=0.03):
-    """Flag tight streak intervals based on high RHOB.
+def tight_streak_flagging(
+    rhob, rt=None, rhob_threshold=2.3, window_size=15, trend_factor=0.03
+):
+    """Flag tight streak intervals based on high RHOB (and optional resistivity).
 
     Tight streaks (e.g., carbonate-cemented layers) are characterized by high
-    bulk density. This function flags these zones by identifying points where
-    RHOB deviates significantly from its local trend and also crosses an
+    bulk density and low porosity. This function flags these zones by identifying
+    points where RHOB deviates significantly from its local trend and crosses an
     absolute threshold.
 
     Args:
         rhob (pd.Series): Bulk density log [g/cm³].
+        rt (pd.Series or float, optional): True resistivity log [ohm.m] or rhob_threshold
+                                           for backward compatibility. Defaults to None.
         rhob_threshold (float, optional): Absolute RHOB threshold for a tight streak. Defaults to 2.3.
-        window_size (int, optional): The size of the rolling window for trend calculation. Defaults to 21.
+        window_size (int, optional): The size of the rolling window for trend calculation. Defaults to 15.
         trend_factor (float, optional): A factor to control sensitivity to trend deviation. Defaults to 0.03.
 
     Returns:
         pd.Series: A series of floats (0.0 or 1.0), 1.0 where a tight streak is flagged.
     """
+    if isinstance(rt, (int, float, np.floating)):
+        rhob_threshold = float(rt)
+        rt = None
+
+    rhob_series = pd.Series(rhob)
     # Calculate rolling averages to establish local trends
-    rhob_trend = rhob.rolling(window=window_size, center=True, min_periods=1).mean()
+    rhob_trend = rhob_series.rolling(
+        window=window_size, center=True, min_periods=1
+    ).mean()
 
     # Flag where RHOB are significantly above trend
-    trend_condition = rhob > rhob_trend * (1 + trend_factor)
+    trend_condition = rhob_series > rhob_trend * (1 + trend_factor)
 
     # Flag where values cross absolute thresholds
-    threshold_condition = rhob > rhob_threshold
+    threshold_condition = rhob_series > rhob_threshold
 
     return (trend_condition & threshold_condition).astype(float)
 
 
+def apparent_matrix_density(
+    rhob, nphi, rho_fluid: float = 1.0, min_rho: float = 2.0, max_rho: float = 3.2
+):
+    """Calculate apparent matrix density (rho_ma,app) from bulk density and neutron porosity.
+
+    Physics relation:
+        rho_b = (1 - phi_app) * rho_ma,app + phi_app * rho_fluid
+        => rho_ma,app = (rho_b - phi_app * rho_fluid) / (1 - phi_app)
+
+    Helps distinguish quartz (~2.65 g/cc), calcite (~2.71 g/cc), dolomite (~2.87 g/cc),
+    and heavy minerals/gas effects before ML regression.
+
+    Args:
+        rhob (pd.Series or np.ndarray): Bulk density log [g/cm³].
+        nphi (pd.Series or np.ndarray): Neutron porosity log [v/v].
+        rho_fluid (float, optional): Pore fluid density [g/cm³]. Defaults to 1.0.
+        min_rho (float, optional): Lower physical clip bound [g/cm³]. Defaults to 2.0.
+        max_rho (float, optional): Upper physical clip bound [g/cm³]. Defaults to 3.2.
+
+    Returns:
+        pd.Series or np.ndarray: Apparent matrix density [g/cm³].
+    """
+    phi_app = np.clip(nphi, 0.0, 0.60)
+    denom = np.clip(1.0 - phi_app, 0.40, None)
+    rhoma_app = (rhob - phi_app * rho_fluid) / denom
+    return np.clip(rhoma_app, min_rho, max_rho)
+
+
+def _estimate_dtc_from_rhob_gardner(rhob):
+    """Estimate synthetic compressional slowness [us/ft] from bulk density using Gardner's relation.
+
+    Gardner's equation:
+        rho_b = 0.23 * Vp_ft_s ** 0.25  =>  Vp_ft_s = (rho_b / 0.23) ** 4
+        DTC [us/ft] = 1e6 / Vp_ft_s
+    """
+    rhob_safe = np.clip(rhob, 1.5, 3.1)
+    vp_ft_s = (rhob_safe / 0.23) ** 4
+    dtc_syn = 1e6 / np.clip(vp_ft_s, 3500.0, 25000.0)
+    return np.clip(dtc_syn, 40.0, 220.0)
+
+
+def acoustic_impedance_feature(rhob, dtc=None):
+    """Calculate Acoustic Impedance (AI = rho_b * Vp) in [(g/cm³)*(m/s)].
+
+    Uses measured sonic slowness (DTC/DT in us/ft) when available, and falls back
+    to Gardner-derived synthetic slowness where sonic data is absent or NaN.
+
+    Args:
+        rhob (pd.Series or np.ndarray): Bulk density log [g/cm³].
+        dtc (pd.Series or np.ndarray, optional): Compressional slowness log [us/ft]. Defaults to None.
+
+    Returns:
+        pd.Series or np.ndarray: Acoustic impedance [(g/cm³)*(m/s)].
+    """
+    from quick_pp.rock_physics.geophysics import calculate_acoustic_impedance
+
+    dtc_fallback = _estimate_dtc_from_rhob_gardner(rhob)
+    if dtc is None:
+        dtc_eff = dtc_fallback
+    else:
+        dtc_series = pd.Series(dtc, index= getattr(rhob, "index", None))
+        dtc_eff = np.where(
+            dtc_series.notna() & (dtc_series > 20.0), dtc_series, dtc_fallback
+        )
+        if isinstance(rhob, pd.Series):
+            dtc_eff = pd.Series(dtc_eff, index=rhob.index)
+
+    return calculate_acoustic_impedance(rhob, dtc_eff)
+
+
+def mn_lithology_parameters(
+    rhob,
+    nphi,
+    dtc=None,
+    dt_fluid: float = 189.0,
+    rho_fluid: float = 1.0,
+    nphi_fluid: float = 1.0,
+):
+    """Calculate Burke's M-N lithology crossplot parameters.
+
+    The M and N parameters remove primary porosity dependence by taking the slopes
+    of the sonic-density and neutron-density lines relative to the fluid point:
+        M = ((dt_fluid - dtc) / (rhob - rho_fluid)) * 0.01
+        N = (nphi_fluid - nphi) / (rhob - rho_fluid)
+
+    Args:
+        rhob (pd.Series or np.ndarray): Bulk density log [g/cm³].
+        nphi (pd.Series or np.ndarray): Neutron porosity log [v/v].
+        dtc (pd.Series or np.ndarray, optional): Compressional slowness [us/ft]. Defaults to None.
+        dt_fluid (float, optional): Fluid slowness [us/ft]. Defaults to 189.0.
+        rho_fluid (float, optional): Fluid density [g/cm³]. Defaults to 1.0.
+        nphi_fluid (float, optional): Fluid neutron porosity [v/v]. Defaults to 1.0.
+
+    Returns:
+        tuple: (M_LITH, N_LITH) lithology parameters.
+    """
+    dtc_fallback = _estimate_dtc_from_rhob_gardner(rhob)
+    if dtc is None:
+        dtc_eff = dtc_fallback
+    else:
+        dtc_series = pd.Series(dtc, index=getattr(rhob, "index", None))
+        dtc_eff = np.where(
+            dtc_series.notna() & (dtc_series > 20.0), dtc_series, dtc_fallback
+        )
+        if isinstance(rhob, pd.Series):
+            dtc_eff = pd.Series(dtc_eff, index=rhob.index)
+
+    denom = rhob - rho_fluid
+    # Avoid division by zero where rhob approaches rho_fluid
+    safe_denom = np.where(np.abs(denom) < 0.1, np.where(denom >= 0, 0.1, -0.1), denom)
+
+    m_lith = ((dt_fluid - dtc_eff) / safe_denom) * 0.01
+    n_lith = (nphi_fluid - nphi) / safe_denom
+
+    m_lith = np.clip(m_lith, -0.5, 2.0)
+    n_lith = np.clip(n_lith, -0.5, 2.0)
+
+    if isinstance(rhob, pd.Series):
+        m_lith = pd.Series(m_lith, index=rhob.index)
+        n_lith = pd.Series(n_lith, index=rhob.index)
+
+    return m_lith, n_lith
+
+
 def generate_fe_features(df):
-    """Generate a suite of engineered features from raw well log data.
+    """Generate a suite of engineered and physics-derived features from raw well log data.
+
+    Includes:
+        - Well-based context features: TIGHT_FLAG, COAL_FLAG, RHOB_INT, ROCK_FLAG
+        - Point-based petrophysical features: DPHI, GAS_XOVER, LOG_PERM
+        - Domain physics features:
+            * RHOMA_APP: Apparent matrix density (g/cm³)
+            * AI: Acoustic impedance ((g/cm³)*(m/s))
+            * M_LITH, N_LITH: Burke's M-N lithology parameters
 
     Args:
         df (pd.DataFrame): DataFrame containing raw log data, including 'WELL_NAME' and 'DEPTH'.
@@ -162,7 +305,7 @@ def generate_fe_features(df):
         well_df = well_df.sort_values("DEPTH").copy()
 
         df.loc[well_df.index, "TIGHT_FLAG"] = tight_streak_flagging(
-            well_df["RHOB"], well_df["RT"]
+            well_df["RHOB"], well_df.get("RT")
         )
 
         df.loc[well_df.index, "COAL_FLAG"] = coal_flagging(
@@ -170,23 +313,46 @@ def generate_fe_features(df):
         )
 
         rhob_mask = well_df["RHOB"].notna()
-        step = np.ceil(well_df["DEPTH"].diff().mean())
+        depth_diff_mean = well_df["DEPTH"].diff().mean()
+        step = (
+            int(np.ceil(depth_diff_mean))
+            if pd.notna(depth_diff_mean) and depth_diff_mean > 0
+            else 1
+        )
         rhob_int_values = rhob_integral(well_df.loc[rhob_mask, "RHOB"], step=step)
         df.loc[well_df.index, "RHOB_INT"] = pd.Series(
-            rhob_int_values, index=well_df.index
+            rhob_int_values, index=well_df.loc[rhob_mask].index
         )
 
         gr_mask = well_df["GR"].notna()
-        rock_flag_values = rock_flag_gr(well_df.loc[gr_mask, "GR"])
-        df.loc[well_df.index, "ROCK_FLAG"] = pd.Series(
-            rock_flag_values, index=well_df.index
-        )
+        if gr_mask.sum() >= 5:
+            rock_flag_values = rock_flag_gr(well_df.loc[gr_mask, "GR"])
+            df.loc[well_df.loc[gr_mask].index, "ROCK_FLAG"] = pd.Series(
+                rock_flag_values, index=well_df.loc[gr_mask].index
+            )
+        else:
+            df.loc[well_df.index, "ROCK_FLAG"] = 1
 
     # Point based features
     df["DPHI"] = density_porosity(df["RHOB"])
     df["GAS_XOVER"] = gas_xover(df["RHOB"], df["NPHI"])
+
+    # Physics-derived domain features
+    sonic_col = (
+        df["DTC"]
+        if "DTC" in df.columns
+        else (df["DT"] if "DT" in df.columns else None)
+    )
+    df["RHOMA_APP"] = apparent_matrix_density(df["RHOB"], df["NPHI"])
+    df["AI"] = acoustic_impedance_feature(df["RHOB"], sonic_col)
+    m_lith, n_lith = mn_lithology_parameters(df["RHOB"], df["NPHI"], sonic_col)
+    df["M_LITH"] = m_lith
+    df["N_LITH"] = n_lith
+
     if "PERM" in df.columns and "LOG_PERM" not in df.columns:
         df["LOG_PERM"] = log_perm(df["PERM"])
+    elif "CORE_PERM" in df.columns and "LOG_PERM" not in df.columns:
+        df["LOG_PERM"] = log_perm(df["CORE_PERM"])
     return df
 
 

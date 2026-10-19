@@ -43,9 +43,19 @@ class DBConnector:
                 DBConnector._Session = None
                 DBConnector._engine_pid = None
 
-        if db_url is None:
-            # Default to a local SQLite DB if no URL is provided.
-            db_url = os.environ.get("QPP_DATABASE_URL", "sqlite:///./data/quick_pp.db")
+        if not db_url:
+            # Default to a local SQLite DB if no URL is provided or empty.
+            db_url = os.environ.get("QPP_DATABASE_URL") or "sqlite:///./data/quick_pp.db"
+
+        # SQLAlchemy 2.1+ defaults 'postgresql://' to the psycopg (v3) dialect.
+        # Fall back to psycopg2 (installed via psycopg2-binary) when psycopg is absent.
+        if db_url.startswith("postgres://"):
+            db_url = "postgresql://" + db_url[len("postgres://") :]
+        if db_url.startswith("postgresql://"):
+            try:
+                import psycopg  # noqa: F401
+            except ImportError:
+                db_url = "postgresql+psycopg2://" + db_url[len("postgresql://") :]
 
         DBConnector._engine = create_engine(db_url, pool_pre_ping=True)
         DBConnector._Session = sessionmaker(
@@ -90,9 +100,16 @@ class DBConnector:
         with open(script_path, "r") as f:
             sql_script = f.read()
 
-        # Use SQLAlchemy's exec_driver_sql to run raw SQL.
+        # Use executescript for SQLite (which disallows multiple statements in exec_driver_sql)
         with DBConnector._engine.connect() as connection:
-            connection.exec_driver_sql(sql_script)
+            if "sqlite" in DBConnector._engine.url.drivername:
+                raw_conn = connection.connection
+                if hasattr(raw_conn, "executescript"):
+                    raw_conn.executescript(sql_script)
+                else:
+                    connection.exec_driver_sql(sql_script)
+            else:
+                connection.exec_driver_sql(sql_script)
 
     def setup_db(self):
         """

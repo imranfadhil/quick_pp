@@ -1,0 +1,248 @@
+import numpy as np
+import pandas as pd
+import pytest
+from fastapi.testclient import TestClient
+
+from quick_pp.app.backend.main import app
+from quick_pp.app.backend.services import database as db_service
+from quick_pp.app.backend.services import rock_typing as rt_service
+from quick_pp.app.backend.services import workspace as ws_service
+from quick_pp.database.models import Base
+from quick_pp.database.objects import Project, Well
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+
+@pytest.fixture
+def client_and_project(monkeypatch):
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+    session = SessionLocal()
+
+    proj = Project(db_session=session, name="workspace_test_proj")
+    proj.save()
+
+    depths = np.linspace(1000.0, 1009.0, 10)
+    df = pd.DataFrame(
+        {
+            "DEPTH": depths,
+            "WELL_NAME": ["Well-A"] * 10,
+            "GR": np.linspace(30.0, 110.0, 10),
+            "NPHI": np.linspace(0.12, 0.28, 10),
+            "RHOB": np.linspace(2.25, 2.55, 10),
+            "RT": np.linspace(25.0, 4.0, 10),
+            "ZONES": ["Zone-1"] * 5 + ["Zone-2"] * 5,
+            "CPORE": [0.22, np.nan, 0.19, np.nan, 0.17, np.nan, 0.15, np.nan, 0.13, np.nan],
+            "CPERM": [150.0, np.nan, 80.0, np.nan, 40.0, np.nan, 15.0, np.nan, 5.0, np.nan],
+        }
+    )
+    well_a = Well(db_session=session, project_id=proj.project_id, name="Well-A", uwi="WELL-A-1")
+    well_a.save()
+    proj.update_data(df)
+    proj.save()
+
+    well_a.add_formation_tops(
+        [{"name": "Zone-1", "depth": 1000.0}, {"name": "Zone-2", "depth": 1005.0}]
+    )
+    session.commit()
+
+    # Also add an empty well to verify multi-well endpoints skip empty wells gracefully
+    well_empty = Well(db_session=session, project_id=proj.project_id, name="Well-Empty", uwi="EMPTY-1")
+    well_empty.save()
+    session.commit()
+
+    class DummyCtx:
+        def __init__(self, s):
+            self._s = s
+
+        def __enter__(self):
+            return self._s
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(db_service, "get_db", lambda: DummyCtx(session))
+    monkeypatch.setattr(ws_service, "get_db", lambda: DummyCtx(session))
+    monkeypatch.setattr(rt_service, "get_db", lambda: DummyCtx(session))
+    db_service.invalidate_well_cache()
+
+    client = TestClient(app)
+    yield client, proj.project_id
+    session.close()
+
+
+def test_project_summary_endpoint(client_and_project):
+    client, pid = client_and_project
+    r = client.get(f"/quick_pp/database/projects/{pid}/summary")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["project_id"] == pid
+    assert body["well_count"] == 2
+    assert "Zone-1" in body["all_zones"]
+    assert "NPHI" in body["all_curves"]
+    well_a = next(w for w in body["wells"] if w["name"] == "Well-A")
+    assert well_a["min_depth"] == 1000.0
+    assert well_a["max_depth"] == 1009.0
+    assert well_a["total_depth"] == 9.0
+    assert well_a["row_count"] == 10
+    assert well_a["core_sample_count"] == 5
+    assert well_a["core_availability_pct"] == 50.0
+
+
+def test_merged_well_data_columnar_and_cache(client_and_project):
+    client, pid = client_and_project
+    # Columnar request
+    r = client.get(
+        f"/quick_pp/database/projects/{pid}/wells/Well-A/merged?format=columnar&min_depth=1002&max_depth=1006"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["row_count"] == 5
+    assert "DEPTH" in body["columns"]
+    assert len(body["data"]["DEPTH"]) == 5
+
+    # Verify cache was populated
+    stats = client.get("/quick_pp/database/cache/stats").json()
+    assert stats["cache_size"] == 1
+
+    # Verify /merged/generate returns synchronously by default
+    r_gen = client.post(
+        f"/quick_pp/database/projects/{pid}/wells/Well-A/merged/generate"
+    )
+    assert r_gen.status_code == 200
+    gen_body = r_gen.json()
+    assert gen_body["task_id"] == "sync"
+    assert gen_body["status"] == "success"
+    assert len(gen_body["result"]) == 10
+
+    # Verify /workspace/projects/{pid}/wells/Well-A/bundle single-request bundle endpoint
+    r_bundle = client.get(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/bundle"
+    )
+    assert r_bundle.status_code == 200
+    bundle = r_bundle.json()
+    assert bundle["row_count"] == 10
+    assert "DEPT" in bundle["curves"]
+    assert "GR" in bundle["curves"]
+    assert "GR" in bundle["stats"]
+    assert len(bundle["tops"]) == 2
+
+
+def test_end_to_end_workspace_compute_workflow(client_and_project):
+    client, pid = client_and_project
+
+    # 1. HC Correction (save=True)
+    r_hc = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/hc_correction",
+        json={"rho_water": 1.0, "rho_hc": 0.8, "hi_hc": 0.9, "save": True},
+    )
+    assert r_hc.status_code == 200
+    hc_body = r_hc.json()
+    assert hc_body["saved"] is True
+    assert hc_body["saved_rows"] == 10
+    assert len(hc_body["data"]["NPHI_HC"]) == 10
+
+    # 2. Lithology SSC (save=True, using HC corrected logs)
+    r_lith = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/lithology",
+        json={"model": "ssc", "use_hc_corrected": True, "save": True},
+    )
+    assert r_lith.status_code == 200
+    lith_body = r_lith.json()
+    assert lith_body["saved_rows"] == 10
+    assert "VSAND" in lith_body["data"]
+    assert "VCLAY" in lith_body["data"]
+
+    # 3. Porosity (save=True)
+    r_poro = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/porosity",
+        json={"method": "neu_den", "use_hc_corrected": True, "save": True},
+    )
+    assert r_poro.status_code == 200
+    poro_body = r_poro.json()
+    assert poro_body["saved_rows"] == 10
+    assert poro_body["core_metrics"]["count"] == 5
+    assert poro_body["core_metrics"]["rmse"] is not None
+
+    # 4. Permeability Choo (save=True)
+    r_perm = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/permeability",
+        json={"method": "choo", "save": True},
+    )
+    assert r_perm.status_code == 200
+    perm_body = r_perm.json()
+    assert perm_body["saved_rows"] == 10
+    assert perm_body["core_metrics"]["count"] == 5
+
+    # 5. Saturation (single-pass Archie + Waxman-Smits, save=True)
+    r_sat = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/saturation",
+        json={"method": "waxman_smits", "water_salinity": 35000.0, "save": True},
+    )
+    assert r_sat.status_code == 200
+    sat_body = r_sat.json()
+    assert sat_body["saved_rows"] == 10
+    assert len(sat_body["data"]["SWT"]) == 10
+    assert len(sat_body["data"]["SWT_ARCHIE"]) == 10
+    assert len(sat_body["data"]["SWT_WAXMAN"]) == 10
+
+    # 6. Rock Typing across project (including empty well) & Perm Transform
+    r_rt = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={"cutoffs": [0.5, 1.5, 3.0], "save": True},
+    )
+    assert r_rt.status_code == 200
+    assert r_rt.json()["saved_wells"] == 1
+
+    r_pt = client.post(
+        f"/quick_pp/workspace/projects/{pid}/perm_transform/compute",
+        json={"save": True},
+    )
+    assert r_pt.status_code == 200
+    assert r_pt.json()["saved_wells"] == 1
+
+    # 7. Reservoir Summary + Upscaling
+    r_res = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/reservoir_summary",
+        json={
+            "cut_offs": {"VSHALE": 0.6, "PHIT": 0.01, "SWT": 0.99},
+            "include_upscaling": True,
+            "cell_size": 2.0,
+        },
+    )
+    assert r_res.status_code == 200
+    res_body = r_res.json()
+    assert len(res_body["summary"]) >= 1
+    assert "upscaling" in res_body
+    assert res_body["upscaling"]["n_cells"] >= 1
+
+    # 8. Saturation Height Function (Leverett-J / Skelt-Harrison)
+    r_shf = client.post(
+        f"/quick_pp/workspace/projects/{pid}/shf/compute",
+        json={
+            "fwl": 1020.0,
+            "model": "leverett_j",
+            "leverett_a": 0.2,
+            "leverett_b": -0.5,
+            "save": True,
+        },
+    )
+    assert r_shf.status_code == 200
+    shf_body = r_shf.json()
+    assert shf_body["saved_wells"] == 1
+    assert len(shf_body["data"]["shf"]) == 10
+
+    # 9. Columnar PUT well data
+    r_put = client.put(
+        f"/quick_pp/database/projects/{pid}/wells/Well-A/data",
+        json={"data": {"DEPTH": [1000.0, 1001.0], "CUSTOM_CURVE": [1.5, 2.5]}},
+    )
+    assert r_put.status_code == 200
+    assert r_put.json()["rows"] == 2
+

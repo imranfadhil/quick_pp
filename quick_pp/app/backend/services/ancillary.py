@@ -6,6 +6,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, UploadFile, Body, File, Query
 from sqlalchemy import select
 
+from quick_pp.app.backend.services.database import invalidate_well_cache
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.database import objects as db_objects
 
@@ -22,8 +23,12 @@ router = APIRouter(prefix="/database/projects/{project_id}", tags=["Ancillary Da
     summary="List formation tops for a project (optional well_name)",
     tags=["Formation Tops"],
 )
+@router.get(
+    "/wells/{well_name}/formation_tops",
+    include_in_schema=False,
+)
 def list_formation_tops_project(
-    project_id: int, well_name: Optional[str] = Query(None)
+    project_id: int, well_name: Optional[str] = None
 ):
     try:
         with get_db() as session:
@@ -59,9 +64,13 @@ def list_formation_tops_project(
     summary="Add or update formation tops for a project (requires well_name)",
     tags=["Formation Tops"],
 )
+@router.post(
+    "/wells/{well_name}/formation_tops",
+    include_in_schema=False,
+)
 def add_formation_tops_project(
     project_id: int,
-    well_name: Optional[str] = Query(None),
+    well_name: Optional[str] = None,
     payload: Dict[str, List[Dict[str, Any]]] = Body(...),
 ):
     if not isinstance(payload, dict) or "tops" not in payload:
@@ -82,11 +91,12 @@ def add_formation_tops_project(
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             well.add_formation_tops(tops)
-            return {
-                "created": [
-                    {"name": t.get("name"), "depth": t.get("depth")} for t in tops
-                ]
-            }
+        invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+        return {
+            "created": [
+                {"name": t.get("name"), "depth": t.get("depth")} for t in tops
+            ]
+        }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
@@ -100,8 +110,12 @@ def add_formation_tops_project(
     summary="Delete a formation top by name (requires well_name)",
     tags=["Formation Tops"],
 )
+@router.delete(
+    "/wells/{well_name}/formation_tops/{top_name}",
+    include_in_schema=False,
+)
 def delete_formation_top_project(
-    project_id: int, top_name: str, well_name: Optional[str] = Query(None)
+    project_id: int, top_name: str, well_name: Optional[str] = None
 ):
     target_well = well_name
     if not target_well:
@@ -121,7 +135,8 @@ def delete_formation_top_project(
             if not orm_top:
                 raise ValueError(f"Top '{top_name}' not found")
             session.delete(orm_top)
-            return {"deleted": top_name}
+        invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+        return {"deleted": top_name}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
@@ -135,9 +150,13 @@ def delete_formation_top_project(
     summary="Upload CSV and return parsed preview for formation tops (optional well_name)",
     tags=["Formation Tops"],
 )
+@router.post(
+    "/wells/{well_name}/formation_tops/preview",
+    include_in_schema=False,
+)
 def formation_tops_preview_project(
     project_id: int,
-    well_name: Optional[str] = Query(None),
+    well_name: Optional[str] = None,
     file: UploadFile = File(...),
 ):
     # this preview is independent of well/project, but we keep the same signature
@@ -187,8 +206,12 @@ def formation_tops_preview_project(
     summary="List fluid contacts for a project (optional well_name)",
     tags=["Fluid Contacts"],
 )
+@router.get(
+    "/wells/{well_name}/fluid_contacts",
+    include_in_schema=False,
+)
 def list_fluid_contacts_project(
-    project_id: int, well_name: Optional[str] = Query(None)
+    project_id: int, well_name: Optional[str] = None
 ):
     try:
         with get_db() as session:
@@ -221,9 +244,13 @@ def list_fluid_contacts_project(
     summary="Add or update fluid contacts for a project (requires well_name)",
     tags=["Fluid Contacts"],
 )
+@router.post(
+    "/wells/{well_name}/fluid_contacts",
+    include_in_schema=False,
+)
 def add_fluid_contacts_project(
     project_id: int,
-    well_name: Optional[str] = Query(None),
+    well_name: Optional[str] = None,
     payload: Dict[str, List[Dict[str, Any]]] = Body(...),
 ):
     if not isinstance(payload, dict) or "contacts" not in payload:
@@ -242,7 +269,8 @@ def add_fluid_contacts_project(
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             well.add_fluid_contacts(contacts)
-            return {"created": contacts}
+        invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+        return {"created": contacts}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
@@ -256,8 +284,12 @@ def add_fluid_contacts_project(
     summary="List pressure tests for a project (optional well_name)",
     tags=["Pressure Tests"],
 )
+@router.get(
+    "/wells/{well_name}/pressure_tests",
+    include_in_schema=False,
+)
 def list_pressure_tests_project(
-    project_id: int, well_name: Optional[str] = Query(None)
+    project_id: int, well_name: Optional[str] = None
 ):
     try:
         with get_db() as session:
@@ -290,9 +322,13 @@ def list_pressure_tests_project(
     summary="Add or update pressure tests for a project (requires well_name)",
     tags=["Pressure Tests"],
 )
+@router.post(
+    "/wells/{well_name}/pressure_tests",
+    include_in_schema=False,
+)
 def add_pressure_tests_project(
     project_id: int,
-    well_name: Optional[str] = Query(None),
+    well_name: Optional[str] = None,
     payload: Dict[str, List[Dict[str, Any]]] = Body(...),
 ):
     if not isinstance(payload, dict) or "tests" not in payload:
@@ -311,7 +347,8 @@ def add_pressure_tests_project(
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             well.add_pressure_tests(tests)
-            return {"created": tests}
+        invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+        return {"created": tests}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
@@ -325,7 +362,11 @@ def add_pressure_tests_project(
     summary="List core samples for a project (optional well_name)",
     tags=["Core Samples"],
 )
-def list_core_samples_project(project_id: int, well_name: Optional[str] = Query(None)):
+@router.get(
+    "/wells/{well_name}/core_samples",
+    include_in_schema=False,
+)
+def list_core_samples_project(project_id: int, well_name: Optional[str] = None):
     try:
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
@@ -371,9 +412,13 @@ def list_core_samples_project(project_id: int, well_name: Optional[str] = Query(
     summary="Add or update a core sample with measurements, RCA, and SCAL data (requires well_name)",
     tags=["Core Samples"],
 )
+@router.post(
+    "/wells/{well_name}/core_samples",
+    include_in_schema=False,
+)
 def add_core_sample_project(
     project_id: int,
-    well_name: Optional[str] = Query(None),
+    well_name: Optional[str] = None,
     payload: Dict[str, Any] = Body(...),
 ):
     """
@@ -414,10 +459,11 @@ def add_core_sample_project(
                 relperm_data=payload.get("relperm_data"),
                 pc_data=payload.get("pc_data"),
             )
-            return {
-                "sample_name": payload["sample_name"],
-                "status": "created_or_updated",
-            }
+        invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+        return {
+            "sample_name": payload["sample_name"],
+            "status": "created_or_updated",
+        }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
@@ -431,8 +477,12 @@ def add_core_sample_project(
     summary="Get core sample details by name (requires well_name)",
     tags=["Core Samples"],
 )
+@router.get(
+    "/wells/{well_name}/core_samples/{sample_name}",
+    include_in_schema=False,
+)
 def get_core_sample_project(
-    project_id: int, sample_name: str, well_name: Optional[str] = Query(None)
+    project_id: int, sample_name: str, well_name: Optional[str] = None
 ):
     target_well = well_name
     if not target_well:

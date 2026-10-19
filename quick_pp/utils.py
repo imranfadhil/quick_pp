@@ -52,6 +52,8 @@ def robust_scale(series: pd.Series, quantile_range=(25.0, 75.0)):
     Returns:
         pd.Series: The scaled pandas Series (dtype float).
     """
+    if not isinstance(series, pd.Series):
+        series = pd.Series(series)
     q_min, q_max = quantile_range
     median = series.median()
     q1 = series.quantile(q_min / 100.0)
@@ -74,8 +76,15 @@ def minmax_scale(series: pd.Series):
     Returns:
         pd.Series: The scaled pandas Series with values between 0 and 1.
     """
+    if not isinstance(series, pd.Series):
+        arr = np.asarray(series)
+        if arr.ndim > 1:
+            arr = arr.ravel()
+        series = pd.Series(arr)
     min_val = series.min()
     max_val = series.max()
+    if max_val == min_val:
+        return pd.Series(np.zeros(len(series), dtype=float), index=series.index)
     scaled_series = (series - min_val) / (max_val - min_val)
     return scaled_series
 

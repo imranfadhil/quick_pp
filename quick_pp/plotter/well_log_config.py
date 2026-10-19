@@ -54,6 +54,16 @@ COLOR_DICT = {
     "VWATER": "#B7EDFF",
 }
 
+UNCERTAINTY_FILL_DICT = {
+    "PHIT": "rgba(38, 38, 38, 0.22)",
+    "PHIE": "rgba(0, 0, 255, 0.18)",
+    "PERM": "rgba(38, 38, 38, 0.22)",
+    "PERM_TRANS": "rgba(97, 143, 99, 0.22)",
+    "SWT": "rgba(38, 38, 38, 0.22)",
+    "SWE": "rgba(0, 0, 255, 0.18)",
+    "SHF": "rgba(97, 143, 99, 0.22)",
+}
+
 # Define the trace definitions for the well log plot
 # Each trace is defined with its properties such as track number, secondary y-axis, and style
 TRACE_DEFS = {
