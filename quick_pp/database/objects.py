@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
-from sqlalchemy import select, text
+from sqlalchemy import bindparam, select, text
 from sqlalchemy.orm import Session, selectinload
 
 import quick_pp.las_handler as las
@@ -988,16 +988,19 @@ class Well(object):
                 if depths_to_update:
                     all_depths_to_delete[orm_curve.curve_id] = depths_to_update
 
-        # Optimization 3: Bulk delete old data points using raw SQL for better performance
+        # Optimization 3: Bulk delete old data points using expanding bindparam in safe chunks
         if all_depths_to_delete:
+            delete_stmt = text(
+                "DELETE FROM curve_data WHERE curve_id = :curve_id AND depth IN :depths"
+            ).bindparams(bindparam("depths", expanding=True))
+            chunk_size = 900
             for curve_id, depths in all_depths_to_delete.items():
-                # Use bulk delete with raw SQL for much better performance
-                self.db_session.execute(
-                    text(
-                        "DELETE FROM curve_data WHERE curve_id = :curve_id AND depth IN :depths"
-                    ).bindparams(curve_id=curve_id),
-                    {"curve_id": curve_id, "depths": tuple(depths)},
-                )
+                for i in range(0, len(depths), chunk_size):
+                    depth_chunk = depths[i : i + chunk_size]
+                    self.db_session.execute(
+                        delete_stmt,
+                        {"curve_id": curve_id, "depths": depth_chunk},
+                    )
 
         # Optimization 4: Batch insert new data points using bulk_insert_mappings
         all_data_points = []
@@ -1011,7 +1014,7 @@ class Well(object):
                     {
                         "curve_id": orm_curve.curve_id,
                         "depth": depth,
-                        "value_numeric": value,
+                        "value_numeric": float(value),
                         "value_text": None,
                     }
                     for depth, value in zip(data.index, values, strict=True)
@@ -1178,7 +1181,9 @@ class Well(object):
         SELECT
             cd.depth,
             c.mnemonic,
-            COALESCE(CAST(cd.value_numeric AS TEXT), cd.value_text) as value
+            cd.value_numeric,
+            cd.value_text,
+            c.data_type
         FROM curve_data cd
         JOIN curves c ON cd.curve_id = c.curve_id
         WHERE c.well_id = :well_id
@@ -1191,13 +1196,36 @@ class Well(object):
         if not rows:
             return pd.DataFrame()
 
-        # Convert to DataFrame and pivot
-        df = pd.DataFrame(rows, columns=["depth", "mnemonic", "value"])
-        pivoted = df.pivot(index="depth", columns="mnemonic", values="value")
+        df = pd.DataFrame(
+            rows,
+            columns=["depth", "mnemonic", "value_numeric", "value_text", "data_type"],
+        )
 
-        # Convert numeric columns back to proper data types
-        for col in pivoted.columns:
-            pivoted[col] = pd.to_numeric(pivoted[col], errors="coerce")
+        num_mask = df["data_type"] == "numeric"
+        pivoted_parts = []
+
+        if num_mask.any():
+            num_df = df.loc[num_mask, ["depth", "mnemonic", "value_numeric"]]
+            pivoted_num = num_df.pivot(
+                index="depth", columns="mnemonic", values="value_numeric"
+            )
+            pivoted_parts.append(pivoted_num)
+
+        if (~num_mask).any():
+            txt_df = df.loc[~num_mask, ["depth", "mnemonic", "value_text"]]
+            pivoted_txt = txt_df.pivot(
+                index="depth", columns="mnemonic", values="value_text"
+            )
+            pivoted_parts.append(pivoted_txt)
+
+        if not pivoted_parts:
+            return pd.DataFrame()
+
+        pivoted = (
+            pivoted_parts[0]
+            if len(pivoted_parts) == 1
+            else pd.concat(pivoted_parts, axis=1)
+        )
 
         # Add standard columns
         pivoted.reset_index(inplace=True)

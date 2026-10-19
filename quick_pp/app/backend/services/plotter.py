@@ -139,9 +139,35 @@ def _generate_well_plot_sync(
         return parsed
 
 
+@router.get(
+    "/projects/{project_id}/wells/{well_name}/log",
+    summary="Generate well log plot directly",
+)
+async def get_well_log_plot(
+    project_id: int,
+    well_name: str,
+    min_depth: Optional[float] = None,
+    max_depth: Optional[float] = None,
+    zones: Optional[str] = None,
+):
+    """Generate and return the Plotly well log JSON directly."""
+    try:
+        result = _generate_well_plot_sync(
+            project_id, well_name, min_depth, max_depth, zones
+        )
+        return JSONResponse(content=result)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        logging.getLogger(__name__).exception("Failed to generate well plot: %s", e)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to generate well plot: {e}"
+        ) from e
+
+
 @router.post(
     "/projects/{project_id}/wells/{well_name}/log/generate",
-    summary="Initiate async well log plot generation",
+    summary="Initiate well log plot generation (sync by default, optional async)",
 )
 async def initiate_well_log_generation(
     project_id: int,
@@ -149,11 +175,9 @@ async def initiate_well_log_generation(
     min_depth: Optional[float] = None,
     max_depth: Optional[float] = None,
     zones: Optional[str] = None,
+    async_task: bool = False,
 ):
-    """Initiate an async plot generation task and return the task ID.
-
-    If Celery broker is unavailable, falls back to synchronous generation
-    and returns the result immediately.
+    """Generate well log plot synchronously by default, or enqueue an async Celery task if async_task=True.
 
     Args:
         project_id: Project ID
@@ -161,12 +185,13 @@ async def initiate_well_log_generation(
         min_depth: Optional minimum depth filter
         max_depth: Optional maximum depth filter
         zones: Optional comma-separated zone names
+        async_task: If True and Celery broker is available, enqueue background task
 
     Returns:
-        JSON with task_id for async polling, or result directly if sync fallback
+        JSON with task_id="sync" and result immediately, or task_id for async polling
     """
     try:
-        if is_broker_available():
+        if async_task and is_broker_available():
             logging.getLogger(__name__).info(
                 "Celery broker available, enqueueing async plot task"
             )
@@ -179,17 +204,13 @@ async def initiate_well_log_generation(
                 },
             )
             return JSONResponse(content={"task_id": task.id})
-        else:
-            logging.getLogger(__name__).warning(
-                "Celery broker unavailable, generating plot synchronously"
-            )
-            result = _generate_well_plot_sync(
-                project_id, well_name, min_depth, max_depth, zones
-            )
-            # Return result directly with a synthetic task_id that will resolve immediately
-            return JSONResponse(
-                content={"task_id": "sync", "status": "success", "result": result}
-            )
+
+        result = _generate_well_plot_sync(
+            project_id, well_name, min_depth, max_depth, zones
+        )
+        return JSONResponse(
+            content={"task_id": "sync", "status": "success", "result": result}
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:

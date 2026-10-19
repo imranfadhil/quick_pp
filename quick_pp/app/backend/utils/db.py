@@ -11,8 +11,21 @@ log = logging.getLogger(__name__)
 
 # Initialize application-wide DBConnector singleton
 _DB_URL = os.environ.get("QPP_DATABASE_URL") or None
+if not _DB_URL or _DB_URL.startswith("sqlite:///./data"):
+    os.makedirs("./data", exist_ok=True)
 _connector = DBConnector(_DB_URL)
-_connector.setup_db()
+try:
+    _connector.setup_db()
+except Exception as exc:
+    log.warning(
+        "Primary database (%s) unreachable (%s); falling back to local SQLite database.",
+        _DB_URL,
+        exc,
+    )
+    os.makedirs("./data", exist_ok=True)
+    _connector.dispose()
+    _connector = DBConnector("sqlite:///./data/quick_pp.db")
+    _connector.setup_db()
 
 
 @contextmanager

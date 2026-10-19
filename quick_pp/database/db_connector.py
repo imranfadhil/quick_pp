@@ -100,9 +100,16 @@ class DBConnector:
         with open(script_path, "r") as f:
             sql_script = f.read()
 
-        # Use SQLAlchemy's exec_driver_sql to run raw SQL.
+        # Use executescript for SQLite (which disallows multiple statements in exec_driver_sql)
         with DBConnector._engine.connect() as connection:
-            connection.exec_driver_sql(sql_script)
+            if "sqlite" in DBConnector._engine.url.drivername:
+                raw_conn = connection.connection
+                if hasattr(raw_conn, "executescript"):
+                    raw_conn.executescript(sql_script)
+                else:
+                    connection.exec_driver_sql(sql_script)
+            else:
+                connection.exec_driver_sql(sql_script)
 
     def setup_db(self):
         """

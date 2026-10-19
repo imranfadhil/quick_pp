@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from quick_pp.core_analysis import fit_poroperm_curve
 from quick_pp.database import objects as db_objects
 
+from quick_pp.app.backend.services.database import invalidate_well_cache
 from quick_pp.app.backend.utils.db import get_db
 
 
@@ -158,6 +159,7 @@ async def save_perm_trans(project_id: int, payload: dict):
                 well_obj = proj.get_well(well_name)
                 well_obj.update_data(df)
                 well_obj.save()
+                invalidate_well_cache(project_id=project_id, well_name=well_name)
 
             proj.save()
 

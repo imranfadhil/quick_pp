@@ -4,6 +4,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
 import quick_pp.database.objects as db_objects
+from quick_pp.app.backend.services.database import invalidate_well_cache
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_list
 from quick_pp.core_analysis import (
@@ -390,6 +391,7 @@ async def save_shf(project_id: int, payload: dict):
                 well_obj = proj.get_well(well_name)
                 well_obj.update_data(df)
                 well_obj.save()
+                invalidate_well_cache(project_id=project_id, well_name=well_name)
 
             proj.save()
 
