@@ -350,6 +350,136 @@ def workspace_well_data(
         ) from e
 
 
+@router.get(
+    "/wells/{well_name}/bundle",
+    summary="Get complete well bundle (columnar curves, stats, tops, contacts, core, pressures, survey) in one request",
+    response_class=ORJSONResponse,
+)
+def workspace_well_bundle(
+    project_id: int,
+    well_name: str,
+    min_depth: Optional[float] = Query(None),
+    max_depth: Optional[float] = Query(None),
+    zones: Optional[str] = Query(None, description="Comma-separated zone names"),
+):
+    """Return a single combined payload containing columnar curves, stats, and all ancillary data for a well."""
+    try:
+        zone_list = [z.strip() for z in zones.split(",") if z.strip()] if zones else None
+        df = _get_filtered_well_df(
+            project_id, well_name, min_depth=min_depth, max_depth=max_depth, zones=zone_list
+        )
+        col_payload = dataframe_to_columnar(df)
+        curves_map = col_payload.get("data", {})
+        if "DEPTH" in curves_map and "DEPT" not in curves_map:
+            curves_map["DEPT"] = curves_map["DEPTH"]
+
+        stats: Dict[str, Any] = {}
+        for col in df.columns:
+            if col in ("WELL_NAME", "ZONES"):
+                continue
+            s = pd.to_numeric(df[col], errors="coerce")
+            if s.notna().any():
+                clean = s.dropna()
+                stats[col] = {
+                    "count": int(len(clean)),
+                    "min": round(float(clean.min()), 4),
+                    "max": round(float(clean.max()), 4),
+                    "mean": round(float(clean.mean()), 4),
+                    "std": round(float(clean.std()), 4) if len(clean) > 1 else 0.0,
+                    "p10": round(float(np.percentile(clean, 10)), 4),
+                    "p50": round(float(np.percentile(clean, 50)), 4),
+                    "p90": round(float(np.percentile(clean, 90)), 4),
+                }
+
+        ancillary: Dict[str, Any] = {}
+        well_config: Dict[str, Any] = {}
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well_obj = proj.get_well(well_name)
+            ancillary = well_obj.get_ancillary_data() or {}
+            well_config = getattr(well_obj, "config", None).__dict__ if getattr(well_obj, "config", None) else {}
+
+        def _df_or_list(val: Any) -> List[Dict[str, Any]]:
+            if val is None:
+                return []
+            if isinstance(val, pd.DataFrame):
+                return val.to_dict(orient="records") if not val.empty else []
+            if isinstance(val, list):
+                return val
+            return []
+
+        tops_raw = _df_or_list(ancillary.get("formation_tops"))
+        tops = [
+            {
+                "id": f"top-{i}-{t.get('name', i)}",
+                "name": str(t.get("name", "")),
+                "depth": float(t.get("depth", 0.0)),
+            }
+            for i, t in enumerate(tops_raw)
+            if t.get("depth") is not None
+        ]
+
+        contacts_raw = _df_or_list(ancillary.get("fluid_contacts"))
+        contacts = [
+            {
+                "id": f"contact-{i}-{c.get('name', i)}",
+                "type": str(c.get("name", "OWC")).upper(),
+                "name": str(c.get("name", "OWC")),
+                "depth": float(c.get("depth", 0.0)),
+            }
+            for i, c in enumerate(contacts_raw)
+            if c.get("depth") is not None
+        ]
+
+        core_samples_list: List[Dict[str, Any]] = []
+        core_data_raw = ancillary.get("core_data")
+        if isinstance(core_data_raw, dict):
+            for sname, sdict in core_data_raw.items():
+                meas_df = sdict.get("measurements")
+                poro_val = None
+                perm_val = None
+                if isinstance(meas_df, pd.DataFrame) and not meas_df.empty:
+                    for _, mrow in meas_df.iterrows():
+                        prop = str(mrow.get("property", "")).upper()
+                        if prop in ("POR", "CPORE", "POROSITY"):
+                            poro_val = float(mrow["value"])
+                        elif prop in ("PERM", "CPERM", "PERMEABILITY"):
+                            perm_val = float(mrow["value"])
+                core_samples_list.append(
+                    {
+                        "sample_name": str(sname),
+                        "depth": float(sdict.get("depth", 0.0)),
+                        "porosity": poro_val,
+                        "permeability": perm_val,
+                    }
+                )
+
+        return {
+            "project_id": project_id,
+            "well_name": well_name,
+            "row_count": col_payload.get("row_count", 0),
+            "columns": col_payload.get("columns", []),
+            "curves": curves_map,
+            "stats": stats,
+            "tops": tops,
+            "contacts": contacts,
+            "core_samples": core_samples_list,
+            "pressure_tests": _df_or_list(ancillary.get("pressure_tests")),
+            "survey": _df_or_list(
+                ancillary.get("well_surveys")
+                if "well_surveys" in ancillary
+                else ancillary.get("directional_surveys")
+            ),
+            "config": {k: v for k, v in well_config.items() if not k.startswith("_")},
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to retrieve well bundle: {e}"
+        ) from e
+
+
 @router.post(
     "/wells/{well_name}/hc_correction",
     summary="Compute depth-aligned hydrocarbon correction for NPHI/RHOB on server",

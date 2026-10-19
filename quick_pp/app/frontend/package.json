@@ -11,7 +11,8 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"format": "prettier --write .",
-		"lint": "prettier --check ."
+		"lint": "prettier --check .",
+		"gen:api": "openapi-typescript http://localhost:8000/openapi.json -o src/lib/api/schema.d.ts"
 	},
 	"devDependencies": {
 		"@dnd-kit-svelte/svelte": "^0.1.5",
@@ -36,6 +37,7 @@
 		"d3-scale": "^4.0.2",
 		"d3-shape": "^3.2.0",
 		"layerchart": "^2.0.0-next.27",
+		"openapi-typescript": "^7.13.0",
 		"prettier": "^3.6.2",
 		"prettier-plugin-svelte": "^3.4.0",
 		"prettier-plugin-tailwindcss": "^0.7.1",
@@ -58,6 +60,8 @@
 		"datatables.net-buttons-dt": "^2.4.1",
 		"datatables.net-dt": "^1.13.6",
 		"jquery": "^3.6.0",
+		"openapi-fetch": "^0.17.0",
+		"paneforge": "^1.0.2",
 		"plotly.js-dist-min": "^2.25.1"
 	}
 }

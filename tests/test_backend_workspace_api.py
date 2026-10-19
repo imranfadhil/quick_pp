@@ -121,6 +121,18 @@ def test_merged_well_data_columnar_and_cache(client_and_project):
     assert gen_body["status"] == "success"
     assert len(gen_body["result"]) == 10
 
+    # Verify /workspace/projects/{pid}/wells/Well-A/bundle single-request bundle endpoint
+    r_bundle = client.get(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/bundle"
+    )
+    assert r_bundle.status_code == 200
+    bundle = r_bundle.json()
+    assert bundle["row_count"] == 10
+    assert "DEPT" in bundle["curves"]
+    assert "GR" in bundle["curves"]
+    assert "GR" in bundle["stats"]
+    assert len(bundle["tops"]) == 2
+
 
 def test_end_to_end_workspace_compute_workflow(client_and_project):
     client, pid = client_and_project
