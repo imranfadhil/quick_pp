@@ -52,7 +52,7 @@ fi
 
 # Read the effective password from .env so QPP_DATABASE_URL always matches
 CURRENT_PASS=$(grep '^POSTGRES_PASSWORD=' .env | head -1 | cut -d= -f2-)
-set_kv QPP_DATABASE_URL "postgresql://${PG_USER}:${CURRENT_PASS}@postgres:5432/${PG_DB}"
+set_kv QPP_DATABASE_URL "postgresql+psycopg2://${PG_USER}:${CURRENT_PASS}@postgres:5432/${PG_DB}"
 
 # Generate LANGFLOW_SECRET_KEY and LANGFLOW_SUPERUSER_PASSWORD if still placeholders
 if grep -q '^LANGFLOW_SECRET_KEY=\("your_langflow_secret_key"\|your_langflow_secret_key\|change_this\)' .env; then

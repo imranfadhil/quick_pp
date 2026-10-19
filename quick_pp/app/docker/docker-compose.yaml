@@ -35,7 +35,7 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      - QPP_DATABASE_URL=${QPP_DATABASE_URL}
+      - QPP_DATABASE_URL=${QPP_DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-qpp_user}:${POSTGRES_PASSWORD:-change_this_strong_password}@postgres:5432/${POSTGRES_DB:-quick_pp}}
     command: celery -A quick_pp.app.backend.task_queue.celery_app.celery_app worker --loglevel=info --concurrency=1
     restart: unless-stopped
     volumes:
@@ -67,7 +67,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      - QPP_DATABASE_URL=${QPP_DATABASE_URL}
+      - QPP_DATABASE_URL=${QPP_DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-qpp_user}:${POSTGRES_PASSWORD:-change_this_strong_password}@postgres:5432/${POSTGRES_DB:-quick_pp}}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - POSTGRES_USER=${POSTGRES_USER:-qpp_user}
@@ -92,7 +92,7 @@ services:
       - VITE_BACKEND_URL=${VITE_BACKEND_URL:-}
       - HOST=0.0.0.0
       - PORT=5469
-      - NODE_OPTIONS=--max-old-space-size=${FRONTEND_MAX_OLD_SPACE:-2048}
+      - NODE_OPTIONS=--max-old-space-size=${FRONTEND_MAX_OLD_SPACE:-4096}
     # Install deps, build the app, and run the production server
     command: sh -c "npm install && npm run build && node build"
     networks:
@@ -136,11 +136,11 @@ services:
     depends_on:
       - qpp-backend
     environment:
-      - LANGFLOW_DATABASE_URL=${QPP_DATABASE_URL}
-      - LANGFLOW_SECRET_KEY=${LANGFLOW_SECRET_KEY}
-      - LANGFLOW_SKIP_AUTH_AUTO_LOGIN=${LANGFLOW_SKIP_AUTH_AUTO_LOGIN}
-      - LANGFLOW_SUPERUSER=${LANGFLOW_SUPERUSER}
-      - LANGFLOW_SUPERUSER_PASSWORD=${LANGFLOW_SUPERUSER_PASSWORD}
+      - LANGFLOW_DATABASE_URL=${QPP_DATABASE_URL:-postgresql://${POSTGRES_USER:-qpp_user}:${POSTGRES_PASSWORD:-change_this_strong_password}@postgres:5432/${POSTGRES_DB:-quick_pp}}
+      - LANGFLOW_SECRET_KEY=${LANGFLOW_SECRET_KEY:-}
+      - LANGFLOW_SKIP_AUTH_AUTO_LOGIN=${LANGFLOW_SKIP_AUTH_AUTO_LOGIN:-true}
+      - LANGFLOW_SUPERUSER=${LANGFLOW_SUPERUSER:-admin}
+      - LANGFLOW_SUPERUSER_PASSWORD=${LANGFLOW_SUPERUSER_PASSWORD:-}
       # This variable defines where the logs, file storage, monitor data and secret keys are stored.
       - LANGFLOW_CONFIG_DIR=app/langflow
     volumes:

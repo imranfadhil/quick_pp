@@ -5,8 +5,9 @@
 -- for a multi-project, multi-well application.
 -- =============================================================================
 
--- Use a transaction to ensure atomicity
+-- Use a transaction to ensure atomicity and serialize concurrent Gunicorn worker init
 BEGIN;
+SELECT pg_advisory_xact_lock(718293);
 
 -- -----------------------------------------------------------------------------
 -- TABLE: users

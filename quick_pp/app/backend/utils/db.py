@@ -1,5 +1,5 @@
-import os
 import logging
+import os
 from contextlib import contextmanager
 from typing import Any, Generator
 
@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 
 
 # Initialize application-wide DBConnector singleton
-_DB_URL = os.environ.get("QPP_DATABASE_URL", None)
+_DB_URL = os.environ.get("QPP_DATABASE_URL") or None
 _connector = DBConnector(_DB_URL)
 _connector.setup_db()
 
