@@ -3,7 +3,28 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from quick_pp.plotter.well_log_config import COLOR_DICT, TRACE_DEFS, XAXIS_DEFS
+from quick_pp.plotter.well_log_config import (
+    COLOR_DICT,
+    TRACE_DEFS,
+    UNCERTAINTY_FILL_DICT,
+    XAXIS_DEFS,
+)
+
+
+def _color_to_rgba(color_str: str, alpha: float = 0.20) -> str:
+    """Convert a hex color string (e.g., '#0000FF') to an rgba(...) string."""
+    if not isinstance(color_str, str):
+        return f"rgba(38, 38, 38, {alpha})"
+    c = color_str.strip()
+    if c.startswith("#") and len(c) == 7:
+        try:
+            r = int(c[1:3], 16)
+            g = int(c[3:5], 16)
+            b = int(c[5:7], 16)
+            return f"rgba({r}, {g}, {b}, {alpha})"
+        except ValueError:
+            pass
+    return f"rgba(38, 38, 38, {alpha})"
 
 
 # --- Helper to add traces from trace_defs ---
@@ -45,6 +66,83 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
         if not trace_def.get("hide_xaxis", True) and trace_ix >= no_of_track:
             fig.data[trace_ix].update(xaxis=f"x{trace_ix + 1}")
         trace_ix += 1
+
+    return fig
+
+
+def add_uncertainty_traces(fig, df, index, trace_defs):
+    """Add P10–P90 shaded uncertainty band traces around ML-predicted log curves.
+
+    For any defined curve `<COL>` where `<COL>_P10` and `<COL>_P90` exist and contain
+    valid data in `df`, this function adds a pair of invisible boundary traces filled
+    with `fill='tonextx'` on the exact same track and x-axis as `<COL>`.
+
+    Args:
+        fig (plotly.graph_objects.Figure): The Plotly figure with defined traces already added.
+        df (pd.DataFrame): The DataFrame containing log curves and `<COL>_P10`/`<COL>_P90` columns.
+        index (pd.Series): The depth index for the y-axis.
+        trace_defs (dict): Dictionary defining the traces and their tracks.
+
+    Returns:
+        plotly.graph_objects.Figure: The figure with P10–P90 shaded uncertainty bands added.
+    """
+    for col, trace_def in trace_defs.items():
+        if col in ["COAL_FLAG", "ZONES"] or trace_def.get("style", {}).get("stackgroup"):
+            continue
+
+        p10_col = f"{col}_P10"
+        p90_col = f"{col}_P90"
+        if p10_col not in df.columns or p90_col not in df.columns:
+            continue
+        if not (df[p10_col].notna().any() and df[p90_col].notna().any()):
+            continue
+
+        parent_trace = next((t for t in fig.data if t.name == col), None)
+        parent_xaxis = getattr(parent_trace, "xaxis", None) if parent_trace is not None else None
+        track = trace_def["track"]
+        sec_y = trace_def.get("secondary_y", False)
+
+        fill_rgba = UNCERTAINTY_FILL_DICT.get(
+            col, _color_to_rgba(COLOR_DICT.get(col, "#262626"), alpha=0.20)
+        )
+
+        x_p10 = round(df[p10_col], 3) if df[p10_col].dtype == "float64" else df[p10_col]
+        x_p90 = round(df[p90_col], 3) if df[p90_col].dtype == "float64" else df[p90_col]
+
+        fig.add_trace(
+            go.Scatter(
+                x=x_p10,
+                y=index,
+                name=p10_col,
+                mode="lines",
+                line={"width": 0, "color": "rgba(0,0,0,0)"},
+                showlegend=False,
+                hovertemplate=f"<b>{p10_col}</b>: %{{x}}<extra></extra>",
+            ),
+            row=1,
+            col=track,
+            secondary_y=sec_y,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x_p90,
+                y=index,
+                name=p90_col,
+                mode="lines",
+                line={"width": 0, "color": "rgba(0,0,0,0)"},
+                fill="tonextx",
+                fillcolor=fill_rgba,
+                showlegend=False,
+                hovertemplate=f"<b>{p90_col}</b>: %{{x}}<extra></extra>",
+            ),
+            row=1,
+            col=track,
+            secondary_y=sec_y,
+        )
+
+        if parent_xaxis:
+            fig.data[-2].update(xaxis=parent_xaxis)
+            fig.data[-1].update(xaxis=parent_xaxis)
 
     return fig
 
@@ -233,6 +331,14 @@ def plotly_log(
     # Add yellow shaded crossover if NPHI RHOB present in df
     df = add_crossover_traces(df)
 
+    # Alias SW -> SWT if SWT is absent so Track 6 displays saturation and its P10-P90 band
+    if "SW" in df.columns and ("SWT" not in df.columns or df["SWT"].isna().all()):
+        df["SWT"] = df["SW"]
+        if "SW_P10" in df.columns and "SWT_P10" not in df.columns:
+            df["SWT_P10"] = df["SW_P10"]
+        if "SW_P90" in df.columns and "SWT_P90" not in df.columns:
+            df["SWT_P90"] = df["SW_P90"]
+
     # Ensure all required columns exist (fill with NaN if missing)
     for k in trace_defs.keys():
         if k not in df.columns:
@@ -253,6 +359,7 @@ def plotly_log(
         specs=[list([{"secondary_y": True}] * no_of_track)],
     )
     fig = add_defined_traces(fig, df, index, no_of_track, trace_defs)
+    fig = add_uncertainty_traces(fig, df, index, trace_defs)
 
     # --- ROCK_FLAG_X traces (special style, always on track 7, secondary_y=False) ---
     if (

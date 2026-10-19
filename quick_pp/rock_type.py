@@ -679,18 +679,19 @@ def estimate_vsh_gr(gr, min_gr=None, max_gr=None, alpha=0.1):
         iqr = q3 - q1
         upper_bound = q3 + 1.5 * iqr
         lower_bound = (q1 - 1.5 * iqr).clip(0)
-        # Replace outliers with NaN and then forward fill
+        # Replace outliers with NaN and then forward/backward fill
         gr_series = pd.Series(gr)
         gr = (
             gr_series.where((gr_series >= lower_bound) & (gr_series <= upper_bound))
             .ffill()
+            .bfill()
             .to_numpy()
         )
-        gri = minmax_scale(robust_scale(gr))
+        gri = minmax_scale(robust_scale(gr)).to_numpy()
     else:
         gri = (gr - min_gr) / (max_gr - min_gr)
         gri = np.where(gri < 1, gri, 1)
-    return shale_volume_steiber(gri).flatten()
+    return np.asarray(shale_volume_steiber(gri)).flatten()
 
 
 def estimate_vsh_dn(phin, phid, phin_sh=0.35, phid_sh=0.05):

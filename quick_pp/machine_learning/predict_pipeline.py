@@ -8,10 +8,17 @@ from tqdm import tqdm
 
 from quick_pp import logger
 from quick_pp.fluid_type import fix_fluid_segregation
-from quick_pp.machine_learning.config import MODELLING_CONFIG, RAW_FEATURES
+from quick_pp.machine_learning.config import (
+    CONFORMAL_ALPHA,
+    FE_FEATURES,
+    MODELLING_CONFIG,
+    RAW_FEATURES,
+)
 from quick_pp.machine_learning.feature_engineering import generate_fe_features
 from quick_pp.machine_learning.utils import (
+    enforce_physical_constraints,
     get_latest_registered_models,
+    predict_with_uncertainty,
     run_mlflow_server,
     unique_id,
 )
@@ -57,24 +64,29 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def postprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Postprocess the DataFrame by inverting LOG_PERM to PERM if needed.
-    This function also calculates hydrocarbon volumes and corrects for fluid segregation.
+    """Postprocess the DataFrame by enforcing physical constraints, inverting LOG_PERM to PERM
+    (including P10–P90 bands), enforcing sum(V_mineral) + PHIT = 1.0, and computing fluid volumes.
 
     Args:
         df (pd.DataFrame): The DataFrame containing model predictions.
 
     Returns:
-        pd.DataFrame: The postprocessed DataFrame with added 'PERM', 'VHC', 'VOIL',
-                      and 'VGAS' columns.
+        pd.DataFrame: The postprocessed DataFrame with physical bounds enforced and added
+                      'PERM', 'PERM_P10', 'PERM_P90', 'VHC', 'VWATER', 'VOIL', and 'VGAS' columns.
     """
-    # TODO: Clear predictions at COAL_FLAG interval
-    # Invert LOG_PERM to PERM if exists
-    if "LOG_PERM" in df.columns and "PERM" not in df.columns:
-        logger.info("Inverting LOG_PERM to PERM")
-        df["PERM"] = 10 ** df["LOG_PERM"]
+    logger.info("Enforcing petrophysical bounds and volumetric closure constraints")
+    df = enforce_physical_constraints(df)
 
-    # Generate fluid volume fractions if OIL_FLAG and GAS_FLAG exist
-    df["VHC"] = (1 - df.get("SWT", 1)) * df.get("PHIT", 0)
+    # Generate fluid volume fractions if porosity and water saturation exist
+    poro_col = "PHIT" if "PHIT" in df.columns else ("PHIE" if "PHIE" in df.columns else None)
+    sw_col = "SWT" if "SWT" in df.columns else ("SW" if "SW" in df.columns else None)
+
+    if poro_col is not None and sw_col is not None:
+        df["VHC"] = ((1.0 - df[sw_col]) * df[poro_col]).clip(lower=0.0, upper=1.0)
+        df["VWATER"] = (df[sw_col] * df[poro_col]).clip(lower=0.0, upper=1.0)
+    else:
+        df["VHC"] = (1.0 - df.get("SWT", 1.0)) * df.get("PHIT", 0.0)
+
     if "OIL_FLAG" in df.columns and "GAS_FLAG" in df.columns:
         df = fix_fluid_segregation(df)
 
@@ -120,11 +132,13 @@ def predict_pipeline(
     output_file_name: str,
     env: str = "local",
     plot_predictions: bool = False,
+    alpha: float = CONFORMAL_ALPHA,
 ) -> None:
-    """Execute the end-to-end prediction pipeline.
+    """Execute the end-to-end prediction pipeline with P10–P90 conformal intervals and physics constraints.
 
     This function orchestrates loading data, preprocessing, loading the latest registered
-    MLflow models, making predictions, postprocessing the results, and saving the output.
+    MLflow models, making point and P10–P90 interval predictions, postprocessing the results,
+    and saving the output.
 
     Args:
         model_config (str): The key for the model configuration (e.g., 'clastic', 'carbonate').
@@ -132,6 +146,8 @@ def predict_pipeline(
         output_file_name (str): The base name for the output predictions file.
         env (str, optional): Environment for MLflow server. Defaults to 'local'.
         plot_predictions (bool, optional): If True, generate plots for each well. Defaults to False.
+        alpha (float, optional): Significance level for conformal intervals (0.20 -> P10–P90).
+                                 Defaults to CONFORMAL_ALPHA.
     """
     logger.info("Starting prediction pipeline")
     # Run MLflow server
@@ -145,7 +161,12 @@ def predict_pipeline(
     data = load_data(data_hash)
     data = preprocess_data(data)
 
-    pred_df = data[["DEPTH", "WELL_NAME"] + RAW_FEATURES].copy()
+    base_cols = ["DEPTH", "WELL_NAME"] + [
+        c for c in RAW_FEATURES + FE_FEATURES if c in data.columns
+    ]
+    pred_df = data[base_cols].copy()
+    pred_df = pred_df.loc[:, ~pred_df.columns.duplicated()]
+
     for model_key, model_values in MODELLING_CONFIG[model_config].items():
         targets = model_values["targets"]
         features = model_values["features"]
@@ -155,19 +176,36 @@ def predict_pipeline(
         # Load the model
         model = load_model(latest_rms[reg_model_name]["model_uri"])
 
-        # Run predictions and concat to pred_df
-        preds = model.predict(data[features].astype("float"))
-        temp_df = pd.DataFrame(preds, columns=targets)
-        pred_df = pd.concat([pred_df, temp_df], axis=1)
+        # Run predictions + P10/P90 uncertainty bands and concat to pred_df
+        X_feat = data[features].astype("float")
+        preds, preds_p10, preds_p90 = predict_with_uncertainty(
+            model, X_feat, targets=targets, alpha=alpha
+        )
+        temp_df = pd.DataFrame(preds, columns=targets, index=pred_df.index)
+        if preds_p10 is not None and preds_p90 is not None:
+            for idx, target_name in enumerate(targets):
+                temp_df[f"{target_name}_P10"] = preds_p10[:, idx]
+                temp_df[f"{target_name}_P90"] = preds_p90[:, idx]
 
-    # Merge specific columns from original data missing from pred_df
+        pred_df = pd.concat([pred_df, temp_df], axis=1)
+        # Keep data updated with intermediate predictions (e.g. OIL_FLAG used by GAS model)
+        for col in targets:
+            data[col] = temp_df[col]
+
+    # Merge specific flag columns from original data missing from pred_df
     merge_cols = ["WELL_NAME", "DEPTH"]
-    missing_cols = ["ROCK_FLAG", "COAL_FLAG", "TIGHT_FLAG"]
-    pred_df = pd.merge(
-        pred_df, data[merge_cols + missing_cols], on=merge_cols, how="left"
-    )
+    missing_cols = [
+        c
+        for c in ["ROCK_FLAG", "COAL_FLAG", "TIGHT_FLAG"]
+        if c in data.columns and c not in pred_df.columns
+    ]
+    if missing_cols:
+        pred_df = pd.merge(
+            pred_df, data[merge_cols + missing_cols], on=merge_cols, how="left"
+        )
 
     # Postprocess the predictions and save
     pred_df = postprocess_data(pred_df)
     save_predictions(pred_df, output_file_name, plot=plot_predictions)
     logger.info("Prediction pipeline completed successfully")
+

@@ -70,6 +70,7 @@ dev = [
     "build>=0.10",
     "dtw-python",
     "fastapi-mcp",
+    "mapie",
     "mlflow",
     "mypy>=1.5",
     "pre-commit>=3.0",

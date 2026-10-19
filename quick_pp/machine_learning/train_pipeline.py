@@ -4,15 +4,20 @@ from pathlib import Path
 
 import mlflow
 import mlflow.sklearn as mlflow_sklearn
+import numpy as np
 import pandas as pd
 from mlflow.models.signature import infer_signature
 from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, r2_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit, train_test_split
 
 from quick_pp import logger
-from quick_pp.machine_learning.config import MODELLING_CONFIG
+from quick_pp.machine_learning.config import CONFORMAL_ALPHA, MODELLING_CONFIG
 from quick_pp.machine_learning.feature_engineering import generate_fe_features
-from quick_pp.machine_learning.utils import run_mlflow_server
+from quick_pp.machine_learning.utils import (
+    ConformalMultiOutputRegressor,
+    physics_informed_loss,
+    run_mlflow_server,
+)
 
 # Check if config.py exists in the root directory and update MODELLING_CONFIG if found
 root_config_path = Path(os.getcwd(), "config.py")
@@ -75,48 +80,130 @@ def split_data(
     df: pd.DataFrame,
     target_column: list[str],
     features: list[str],
-    test_size=0.2,
-    random_state=42,
+    test_size: float = 0.2,
+    random_state: int = 42,
+    group_col: str = "WELL_NAME",
+    splitter: str = "group_shuffle",
+    n_splits: int = 5,
 ) -> list:
-    """Split the data into training and testing sets.
+    """Split the data into training and testing sets using group-aware splitting.
+
+    Uses `GroupShuffleSplit` (or `GroupKFold`) grouped by `group_col` (default `'WELL_NAME'`)
+    so entire wells are held out together, preventing depth-adjacent spatial autocorrelation
+    leakage between train and test sets. If fewer than 2 unique wells exist in `df`,
+    automatically falls back to grouping by `'ZONES'` or contiguous depth blocks.
 
     Args:
         df (pd.DataFrame): The DataFrame to be split.
         target_column (list[str]): List of target column names.
         features (list[str]): List of feature column names.
-        test_size (float, optional): Proportion of the dataset to include in the test split. Defaults to 0.2.
+        test_size (float, optional): Proportion of groups/data to include in the test split. Defaults to 0.2.
         random_state (int, optional): Random seed for reproducibility. Defaults to 42.
+        group_col (str, optional): Column name used to define groups. Defaults to 'WELL_NAME'.
+        splitter (str, optional): Splitting strategy: 'group_shuffle' (`GroupShuffleSplit`) or
+                                  'group_kfold' (`GroupKFold`). Defaults to 'group_shuffle'.
+        n_splits (int, optional): Number of folds when using `GroupKFold` or constructing
+                                  contiguous depth blocks. Defaults to 5.
 
     Returns:
         list: A list containing `[X_train, X_test, y_train, y_test]`.
     """
     # Drop rows with NaN in target or features
-    return_df = df.dropna(subset=target_column + features)
+    return_df = df.dropna(subset=target_column + features).copy()
     X = return_df[features].astype("float")
     y = return_df[target_column].astype("float")
-    return train_test_split(X, y, test_size=test_size, random_state=random_state)
+
+    # Determine group labels to prevent spatial / well leakage
+    if group_col in return_df.columns and return_df[group_col].nunique(dropna=True) >= 2:
+        groups = return_df[group_col].astype(str).to_numpy()
+        logger.info(
+            f"Splitting data by '{group_col}' ({return_df[group_col].nunique()} unique groups) using {splitter}"
+        )
+    elif "ZONES" in return_df.columns and return_df["ZONES"].nunique(dropna=True) >= 2:
+        groups = return_df["ZONES"].astype(str).to_numpy()
+        logger.info(
+            f"Single well detected; splitting data by 'ZONES' ({return_df['ZONES'].nunique()} zones) using {splitter}"
+        )
+    else:
+        # Construct contiguous depth-interval blocks so adjacent samples do not leak across train/test
+        n_blocks = max(2, min(max(n_splits, int(round(1.0 / max(test_size, 0.05)))), len(return_df) // 2))
+        if len(return_df) >= 4 and n_blocks >= 2:
+            groups = np.floor(np.linspace(0, n_blocks, len(return_df), endpoint=False)).astype(int)
+            logger.info(
+                f"Single well without multiple zones; splitting by {n_blocks} contiguous depth blocks using {splitter}"
+            )
+        else:
+            return train_test_split(X, y, test_size=test_size, random_state=random_state)
+
+    n_unique_groups = len(np.unique(groups))
+    splitter_key = splitter.lower().strip()
+
+    if splitter_key in ("group_kfold", "groupkfold", "gkf") and n_unique_groups >= 2:
+        eff_splits = min(max(2, n_splits), n_unique_groups)
+        gkf = GroupKFold(n_splits=eff_splits)
+        train_idx, test_idx = next(gkf.split(X, y, groups=groups))
+    else:
+        gss = GroupShuffleSplit(
+            n_splits=1, test_size=test_size, random_state=random_state
+        )
+        train_idx, test_idx = next(gss.split(X, y, groups=groups))
+
+    return [
+        X.iloc[train_idx],
+        X.iloc[test_idx],
+        y.iloc[train_idx],
+        y.iloc[test_idx],
+    ]
 
 
-def train_model(alg, X_train: pd.DataFrame, y_train: pd.DataFrame):
-    """Train the model using the specified algorithm.
+def train_model(
+    alg,
+    X_train: pd.DataFrame,
+    y_train: pd.DataFrame,
+    use_conformal: bool = True,
+    alpha: float = CONFORMAL_ALPHA,
+):
+    """Train the model using the specified algorithm, wrapping regressors in Conformal Prediction.
 
     Args:
         alg (callable): The scikit-learn model class to instantiate.
         X_train (pd.DataFrame): The training feature DataFrame.
         y_train (pd.DataFrame): The training target DataFrame.
+        use_conformal (bool, optional): Whether to wrap regression models in
+            `ConformalMultiOutputRegressor` for calibrated P10–P90 intervals. Defaults to True.
+        alpha (float, optional): Significance level (0.20 -> P10 to P90). Defaults to CONFORMAL_ALPHA.
 
     Returns:
         object: The trained model instance.
     """
     logger.info(f"Training model: {getattr(alg, '__name__', str(alg))}")
-    model = alg(random_state=42)
+    base_model = alg(random_state=42)
+
+    if hasattr(base_model, "predict_proba") or not use_conformal:
+        y_fit = (
+            y_train.iloc[:, 0]
+            if isinstance(y_train, pd.DataFrame) and y_train.shape[1] == 1
+            else y_train
+        )
+        base_model.fit(X_train, y_fit)
+        logger.debug("Classifier / standard model training complete")
+        return base_model
+
+    target_names = list(y_train.columns) if isinstance(y_train, pd.DataFrame) else None
+    model = ConformalMultiOutputRegressor(
+        base_estimator=base_model,
+        alpha=alpha,
+        random_state=42,
+        enforce_physics=True,
+        target_names=target_names,
+    )
     model.fit(X_train, y_train)
-    logger.debug("Model training complete")
+    logger.debug("Conformal regression model training complete")
     return model
 
 
 def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.DataFrame) -> dict:
-    """Evaluate the model using the test data.
+    """Evaluate the model using the test data, including physics loss and interval coverage.
 
     Args:
         model (object): The trained model to evaluate.
@@ -124,7 +211,8 @@ def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.DataFrame) -> dict:
         y_test (pd.DataFrame): The testing target DataFrame.
 
     Returns:
-        dict: A dictionary of evaluation metrics (e.g., 'f1_score', 'r2_score').
+        dict: A dictionary of evaluation metrics (e.g., 'f1_score', 'r2_score',
+              'physics_loss', 'p10_p90_coverage').
     """
     logger.info(f"Evaluating model: {type(model).__name__}")
     y_pred = model.predict(X_test)
@@ -138,10 +226,25 @@ def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.DataFrame) -> dict:
         }
     else:
         logger.debug("Regression metrics calculated")
-        return {
+        metrics = {
             "r2_score": r2_score(y_test, y_pred),
             "mean_absolute_error": mean_absolute_error(y_test, y_pred),
+            "physics_loss": physics_informed_loss(y_test, y_pred, X=X_test),
         }
+        if hasattr(model, "predict_interval"):
+            _, y_p10, y_p90 = model.predict_interval(X_test)
+            y_true_arr = (
+                y_test.to_numpy(dtype=float)
+                if isinstance(y_test, pd.DataFrame)
+                else np.asarray(y_test, dtype=float)
+            )
+            if y_true_arr.ndim == 1:
+                y_true_arr = y_true_arr.reshape(-1, 1)
+            y_p10_arr = np.asarray(y_p10, dtype=float).reshape(y_true_arr.shape)
+            y_p90_arr = np.asarray(y_p90, dtype=float).reshape(y_true_arr.shape)
+            in_bounds = (y_true_arr >= y_p10_arr) & (y_true_arr <= y_p90_arr)
+            metrics["p10_p90_coverage"] = float(np.nanmean(in_bounds))
+        return metrics
 
 
 # 6. Train pipeline
