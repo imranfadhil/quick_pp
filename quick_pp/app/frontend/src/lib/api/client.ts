@@ -44,3 +44,26 @@ export async function deleteAncillaryItem(
 	return res.json();
 }
 
+/**
+ * Generic typed POST helper for endpoints added after OpenAPI schema generation.
+ */
+export async function postJson<T = any>(path: string, body: Record<string, any>): Promise<T> {
+	const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
+	const res = await fetch(url, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+	if (!res.ok) {
+		let errText = '';
+		try {
+			const jsonErr = await res.json();
+			errText = jsonErr?.detail ? String(jsonErr.detail) : JSON.stringify(jsonErr);
+		} catch {
+			errText = await res.text();
+		}
+		throw new Error(errText || `Request failed (${res.status})`);
+	}
+	return res.json();
+}
+

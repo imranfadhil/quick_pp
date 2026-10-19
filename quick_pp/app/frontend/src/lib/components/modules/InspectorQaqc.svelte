@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { postJson } from '$lib/api/client';
+	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
@@ -6,9 +8,69 @@
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 
 	const REQUIRED_STANDARD = ['GR', 'RT', 'NPHI', 'RHOB', 'CALI', 'DTC', 'PEF'];
-	const EVALUATED_CURVES = ['VCLAY', 'VSAND', 'VSILT', 'PHIT', 'PHIE', 'PERM', 'SWT', 'SWE', 'SHF'];
+	const EVALUATED_CURVES = [
+		'GR_CORR',
+		'NPHI_CORR',
+		'RHOB_CORR',
+		'RT_CORR',
+		'GR_NORM',
+		'NPHI_NORM',
+		'VCLAY',
+		'VSAND',
+		'VSILT',
+		'PHIT',
+		'PHIE',
+		'PERM',
+		'SWT',
+		'SWE',
+		'SHF',
+		'PHIT_BLK',
+		'PERM_BLK',
+		'SWT_BLK',
+		'SW_P10',
+		'SW_P90'
+	];
 
 	let curveList = $derived(wellData.availableCurves);
+
+	// Borehole Environmental Correction parameters
+	let bitsizeDefault = $state(8.5);
+	let mudWeight = $state(9.5);
+	let surfaceTemp = $state(75.0);
+	let tempGrad = $state(1.5);
+	let salinityPpm = $state(30000.0);
+
+	async function runEnvCorrections(persist: boolean = false) {
+		if (!workbench.projectId || !workbench.wellId) return;
+		wellData.isCalculating = true;
+		wellData.lastError = null;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/environmental_corrections`,
+				{
+					bitsize_default: bitsizeDefault,
+					mud_weight: mudWeight,
+					surface_temp: surfaceTemp,
+					temp_grad: tempGrad,
+					salinity_ppm: salinityPpm,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					save: persist
+				}
+			);
+			if (res.data) {
+				wellData.mergeComputedCurves(res.data, res.stats);
+			}
+			if (persist) {
+				wellData.lastSavedMessage = 'Env Corrections Saved ✓';
+			}
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Environmental corrections error';
+		} finally {
+			wellData.isCalculating = false;
+		}
+	}
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
@@ -72,6 +134,74 @@
 			</div>
 		</ParameterSection>
 
+		<ParameterSection title="Borehole Environmental Corrections" badge="GR / NPHI / RHOB / RT">
+			<div class="grid grid-cols-2 gap-x-2">
+				<NumericScrubber
+					label="Bit Size"
+					bind:value={bitsizeDefault}
+					unit="in"
+					min={4.5}
+					max={17.5}
+					step={0.25}
+					onrun={() => runEnvCorrections(false)}
+				/>
+				<NumericScrubber
+					label="Mud Weight"
+					bind:value={mudWeight}
+					unit="ppg"
+					min={8.0}
+					max={18.0}
+					step={0.2}
+					onrun={() => runEnvCorrections(false)}
+				/>
+				<NumericScrubber
+					label="Surface Temp"
+					bind:value={surfaceTemp}
+					unit="°F"
+					min={40}
+					max={120}
+					step={2}
+					onrun={() => runEnvCorrections(false)}
+				/>
+				<NumericScrubber
+					label="Temp Gradient"
+					bind:value={tempGrad}
+					unit="°F/100ft"
+					min={0.5}
+					max={3.5}
+					step={0.1}
+					onrun={() => runEnvCorrections(false)}
+				/>
+			</div>
+			<NumericScrubber
+				label="Mud Filtrate Salinity"
+				bind:value={salinityPpm}
+				unit="ppm"
+				min={1000}
+				max={250000}
+				step={2000}
+				onrun={() => runEnvCorrections(false)}
+			/>
+			<div class="mt-1 flex gap-1.5">
+				<button
+					type="button"
+					disabled={wellData.isCalculating}
+					onclick={() => runEnvCorrections(false)}
+					class="h-6 flex-1 rounded-sm bg-[var(--accent-primary)] px-2 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+				>
+					Apply Env Corrections
+				</button>
+				<button
+					type="button"
+					disabled={wellData.isCalculating}
+					onclick={() => runEnvCorrections(true)}
+					class="h-6 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[11px] font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+				>
+					Save
+				</button>
+			</div>
+		</ParameterSection>
+
 		<ParameterSection title="Curve Statistical Distributions (Click to Plot)">
 			<div class="overflow-x-auto border border-[var(--border-hairline)]">
 				<table class="w-full border-collapse text-left text-[11px]">
@@ -116,6 +246,12 @@
 				</table>
 			</div>
 		</ParameterSection>
+
+		{#if wellData.lastError}
+			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
+				{wellData.lastError}
+			</div>
+		{/if}
 	</div>
 
 	<div
@@ -137,4 +273,5 @@
 		</button>
 	</div>
 </div>
+
 

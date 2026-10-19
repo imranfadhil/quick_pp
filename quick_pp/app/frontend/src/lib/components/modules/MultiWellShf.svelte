@@ -1,11 +1,21 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
+
+	// Multi-well FWL & Contact Optimizer state
+	let optModel = $state<'leverett_j' | 'skelt_harrison' | 'cuddy'>('leverett_j');
+	let optLoss = $state<'rmse' | 'mae' | 'huber' | 'bvw'>('rmse');
+	let useMdtPrior = $state(false);
+	let mdtFwl = $state(2500.0);
+	let mdtWeight = $state(1.0);
+	let poreVolumeWeighted = $state(true);
+	let equalWellWeights = $state(true);
+	let fwlOptResult = $state<any>(null);
 
 	async function executeShf(persist: boolean = false) {
 		if (!workbench.projectId) return;
@@ -47,10 +57,183 @@
 			projectData.isComputingMultiWell = false;
 		}
 	}
+
+	async function runOptimizeFwl() {
+		if (!workbench.projectId) return;
+		projectData.isComputingMultiWell = true;
+		projectData.error = null;
+		try {
+			const sp = projectData.shfParams;
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/optimize_fwl`,
+				{
+					well_names: projectData.selectedWellNames.length ? projectData.selectedWellNames : null,
+					model: optModel,
+					loss: optLoss,
+					ift: sp.ift,
+					theta: sp.theta,
+					gw: sp.gw,
+					ghc: sp.ghc,
+					mdt_fwl: useMdtPrior ? mdtFwl : null,
+					mdt_weight: mdtWeight,
+					pore_volume_weighted: poreVolumeWeighted,
+					equal_well_weights: equalWellWeights
+				}
+			);
+			fwlOptResult = res;
+			if (typeof res?.fwl === 'number' && Number.isFinite(res.fwl)) {
+				projectData.shfParams.fwl = Number(res.fwl.toFixed(2));
+			}
+		} catch (e: any) {
+			projectData.error = e?.message || 'FWL optimization error';
+		} finally {
+			projectData.isComputingMultiWell = false;
+		}
+	}
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<ParameterSection
+			title="Multi-Well FWL & Contact Optimizer"
+			badge={fwlOptResult ? `FWL=${fmtNum(fwlOptResult.fwl, 1)}m` : 'Global Fit'}
+		>
+			<div class="grid grid-cols-3 gap-1">
+				{#each [['leverett_j', 'Leverett-J'], ['skelt_harrison', 'Skelt-Harrison'], ['cuddy', 'Cuddy Bvw']] as [m, lbl]}
+					<button
+						type="button"
+						onclick={() => (optModel = m as any)}
+						class="h-6 rounded-sm border text-[10px] font-medium {optModel === m
+							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
+					>
+						{lbl}
+					</button>
+				{/each}
+			</div>
+
+			<div class="mt-1.5 flex items-center justify-between text-[11px]">
+				<span class="text-[var(--text-secondary)]">Loss Objective:</span>
+				<select
+					bind:value={optLoss}
+					class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px] font-medium"
+				>
+					<option value="rmse">RMSE (L2)</option>
+					<option value="huber">Huber Robust</option>
+					<option value="mae">MAE (L1)</option>
+					<option value="bvw">Bulk Volume Water (BVW)</option>
+				</select>
+			</div>
+
+			<div class="mt-1 flex items-center justify-between text-[11px]">
+				<label class="flex items-center gap-1.5 cursor-pointer">
+					<input
+						type="checkbox"
+						bind:checked={poreVolumeWeighted}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+					/>
+					<span>Φ-Weighted</span>
+				</label>
+				<label class="flex items-center gap-1.5 cursor-pointer">
+					<input
+						type="checkbox"
+						bind:checked={equalWellWeights}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+					/>
+					<span>Equal Well Weights</span>
+				</label>
+				<label class="flex items-center gap-1.5 cursor-pointer">
+					<input
+						type="checkbox"
+						bind:checked={useMdtPrior}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+					/>
+					<span>MDT Prior</span>
+				</label>
+			</div>
+
+			{#if useMdtPrior}
+				<div class="grid grid-cols-2 gap-x-2">
+					<NumericScrubber
+						label="MDT FWL Depth"
+						bind:value={mdtFwl}
+						unit="m"
+						min={0}
+						max={10000}
+						step={5.0}
+					/>
+					<NumericScrubber
+						label="Prior Weight"
+						bind:value={mdtWeight}
+						min={0.1}
+						max={10.0}
+						step={0.2}
+					/>
+				</div>
+			{/if}
+
+			<button
+				type="button"
+				disabled={projectData.isComputingMultiWell}
+				onclick={runOptimizeFwl}
+				class="mt-1.5 h-7 w-full rounded-sm border border-blue-600 bg-blue-50 px-2 text-xs font-semibold text-blue-800 hover:bg-blue-100 disabled:opacity-50"
+			>
+				Optimize Field FWL & Fluid Contacts
+			</button>
+
+			{#if fwlOptResult}
+				<div class="mt-1.5 grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]">
+					<div>
+						<span class="text-[var(--text-muted)]">Optimal FWL:</span>
+						<div class="mono-num font-bold text-blue-700">{fmtNum(fwlOptResult.fwl, 2)} m</div>
+					</div>
+					<div>
+						<span class="text-[var(--text-muted)]">OWC / TTZ:</span>
+						<div class="mono-num font-semibold">
+							{fmtNum(fwlOptResult.owc, 1)} / {fmtNum(fwlOptResult.ttz, 1)} m
+						</div>
+					</div>
+					<div>
+						<span class="text-[var(--text-muted)]">Transition Zone:</span>
+						<div class="mono-num font-semibold">
+							{fmtNum(fwlOptResult.transition_zone_thickness, 1)} m
+						</div>
+					</div>
+					<div>
+						<span class="text-[var(--text-muted)]">Fit RMSE / R²:</span>
+						<div class="mono-num font-semibold">
+							{fmtNum(fwlOptResult.rmse, 3)} / {fmtNum(fwlOptResult.r_squared, 3)}
+						</div>
+					</div>
+				</div>
+
+				{#if fwlOptResult.well_diagnostics?.per_well_fwl}
+					<div class="mt-1 overflow-x-auto border border-[var(--border-hairline)]">
+						<table class="w-full border-collapse text-left text-[10px]">
+							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+								<tr class="h-5 border-b border-[var(--border-hairline)]">
+									<th class="px-1 font-semibold">Well</th>
+									<th class="px-1 text-right font-semibold">Apparent FWL (m)</th>
+									<th class="px-1 text-right font-semibold">RMSE</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-[var(--border-hairline)]">
+								{#each Object.entries(fwlOptResult.well_diagnostics.per_well_fwl) as [wn, wfwl]}
+									<tr class="h-5">
+										<td class="mono-num px-1 font-medium">{wn}</td>
+										<td class="mono-num px-1 text-right font-semibold">{fmtNum(wfwl as number, 1)}</td>
+										<td class="mono-num px-1 text-right">
+											{fmtNum(fwlOptResult.well_diagnostics.per_well_rmse?.[wn], 3)}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+			{/if}
+		</ParameterSection>
+
 		<ParameterSection title="Capillary Pressure & Fluid Parameters" badge="Leverett J">
 			<NumericScrubber
 				label="Free Water Level (FWL)"
@@ -154,4 +337,5 @@
 		</button>
 	</div>
 </div>
+
 

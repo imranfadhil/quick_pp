@@ -1,4 +1,11 @@
-export type SingleWellStep = 'qaqc' | 'ancillary' | 'litho-poro' | 'perm' | 'saturation' | 'ressum';
+export type SingleWellStep =
+	| 'qaqc'
+	| 'ancillary'
+	| 'litho-poro'
+	| 'perm'
+	| 'saturation'
+	| 'scal'
+	| 'ressum';
 export type MultiWellStep = 'inventory' | 'rock-typing' | 'perm-transform' | 'shf';
 
 export interface LithoEndpointParams {
@@ -38,6 +45,39 @@ export interface SaturationModelParams {
 	qvMethod: string;
 	cecClay: number;
 	rhoDryClay: number;
+}
+
+export interface ScalModelParams {
+	model: 'let' | 'corey' | 'brooks_corey';
+	swirr: number;
+	sor: number;
+	krw_max: number;
+	kro_max: number;
+	nw: number;
+	no: number;
+	lam: number;
+	lw: number;
+	ew: number;
+	tw: number;
+	lo: number;
+	eo: number;
+	to: number;
+	mu_w: number;
+	mu_o: number;
+	pc_entry: number;
+	pc_exponent: number;
+	pc_max: number;
+	n_points: number;
+}
+
+export interface ScalComputedResult {
+	sw: number[];
+	se: number[];
+	krw: number[];
+	kro: number[];
+	fw: number[];
+	swofTable: Array<{ SW: number; KRW: number; KROW: number; PCOW: number }>;
+	swofKeyword: string;
 }
 
 class WorkbenchState {
@@ -106,6 +146,31 @@ class WorkbenchState {
 		rhoDryClay: 2.71
 	});
 
+	scalParams = $state<ScalModelParams>({
+		model: 'let',
+		swirr: 0.15,
+		sor: 0.2,
+		krw_max: 0.45,
+		kro_max: 0.9,
+		nw: 2.5,
+		no: 2.5,
+		lam: 2.0,
+		lw: 2.0,
+		ew: 1.5,
+		tw: 2.0,
+		lo: 2.0,
+		eo: 1.5,
+		to: 2.0,
+		mu_w: 0.5,
+		mu_o: 1.5,
+		pc_entry: 1.5,
+		pc_exponent: 2.0,
+		pc_max: 50.0,
+		n_points: 25
+	});
+
+	scalResult = $state<ScalComputedResult | null>(null);
+
 	clearFilters() {
 		this.depthFilter = null;
 		this.selectedZones = [];
@@ -123,4 +188,5 @@ class WorkbenchState {
 }
 
 export const workbench = new WorkbenchState();
+
 

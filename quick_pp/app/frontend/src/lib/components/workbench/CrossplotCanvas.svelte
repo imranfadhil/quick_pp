@@ -12,9 +12,9 @@
 	let eventsBound = $state(false);
 
 	// Optional manual override of template; defaults to 'auto' (follows active workflow step)
-	let templateOverride = $state<'auto' | 'nphi-rhob' | 'phi-k' | 'pickett' | 'histogram' | 'shf'>(
-		'auto'
-	);
+	let templateOverride = $state<
+		'auto' | 'nphi-rhob' | 'phi-k' | 'pickett' | 'histogram' | 'shf' | 'relperm'
+	>('auto');
 
 	// Active draggable endpoint on NPHI-RHOB plot
 	let activeEndpointKey = $state<'sand' | 'silt' | 'clay' | null>(null);
@@ -32,6 +32,8 @@
 				return 'phi-k';
 			case 'saturation':
 				return 'pickett';
+			case 'scal':
+				return 'relperm';
 			default:
 				return 'nphi-rhob';
 		}
@@ -429,6 +431,67 @@
 			return { traces, layout: baseLayout };
 		}
 
+		if (effectiveMode === 'relperm') {
+			const sr = workbench.scalResult;
+			const sp = workbench.scalParams;
+			const sw =
+				sr?.sw ?? Array.from({ length: 41 }, (_, i) => Number((i / 40).toFixed(3)));
+			const krw =
+				sr?.krw ??
+				sw.map((s) => {
+					const se = Math.min(1, Math.max(0, (s - sp.swirr) / Math.max(1e-6, 1 - sp.swirr - sp.sor)));
+					return sp.krw_max * Math.pow(se, sp.nw);
+				});
+			const kro =
+				sr?.kro ??
+				sw.map((s) => {
+					const se = Math.min(1, Math.max(0, (s - sp.swirr) / Math.max(1e-6, 1 - sp.swirr - sp.sor)));
+					return sp.kro_max * Math.pow(1 - se, sp.no);
+				});
+			const fw =
+				sr?.fw ??
+				sw.map((_, i) => {
+					const kw = krw[i] / Math.max(1e-6, sp.mu_w);
+					const ko = kro[i] / Math.max(1e-6, sp.mu_o);
+					return kw + ko > 0 ? kw / (kw + ko) : 0;
+				});
+
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'krw (Water)',
+				x: sw,
+				y: krw,
+				line: { color: '#2563EB', width: 2.2 },
+				hovertemplate: 'Sw: %{x:.3f}<br>krw: %{y:.4f}<extra></extra>'
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'kro (Oil)',
+				x: sw,
+				y: kro,
+				line: { color: '#16A34A', width: 2.2 },
+				hovertemplate: 'Sw: %{x:.3f}<br>kro: %{y:.4f}<extra></extra>'
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'fw (Fractional Flow)',
+				x: sw,
+				y: fw,
+				line: { color: '#D97706', width: 1.5, dash: 'dash' },
+				hovertemplate: 'Sw: %{x:.3f}<br>fw: %{y:.4f}<extra></extra>'
+			});
+
+			baseLayout.dragmode = 'zoom';
+			baseLayout.xaxis.title = { text: 'Water Saturation Sw (v/v)' };
+			baseLayout.xaxis.range = [0, 1];
+			baseLayout.yaxis.title = { text: 'Relative Permeability / Fractional Flow (frac)' };
+			baseLayout.yaxis.range = [0, 1.05];
+			return { traces, layout: baseLayout };
+		}
+
 		return { traces, layout: baseLayout };
 	}
 
@@ -447,6 +510,7 @@
 		void workbench.saturationParams.rwPickett;
 		void workbench.saturationParams.m;
 		void workbench.saturationParams.n;
+		void workbench.scalResult;
 		void projectData.fziCutoffs;
 		void projectData.rockTypingResult;
 		void projectData.shfResult;
@@ -535,6 +599,7 @@
 				<option value="nphi-rhob">NPHI vs. RHOB (SSC)</option>
 				<option value="phi-k">Porosity vs. Perm (FZI)</option>
 				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
+				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>
 				<option value="shf">Sw vs. Height (SHF)</option>
 				<option value="histogram">Curve Histogram</option>
 			</select>

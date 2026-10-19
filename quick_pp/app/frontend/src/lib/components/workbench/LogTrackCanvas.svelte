@@ -300,6 +300,48 @@
 			});
 		}
 
+		// Upscaled blocked porosity & P10/P90 uncertainty on Track 4
+		const phitBlk = pick('PHIT_BLK');
+		if (phitBlk.some((v) => v !== null)) {
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'PHIT_BLK',
+				x: phitBlk,
+				y: depth,
+				xaxis: 'x4',
+				yaxis: 'y',
+				line: { color: '#0F172A', width: 1.5, shape: 'hv' },
+				hovertemplate: 'PHIT_BLK: %{x:.3f} v/v<extra></extra>'
+			});
+		}
+		const phitP10 = pick('PHIT_P10');
+		const phitP90 = pick('PHIT_P90');
+		if (phitP10.some((v) => v !== null) && phitP90.some((v) => v !== null)) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'PHIT_P10',
+				x: phitP10,
+				y: depth,
+				xaxis: 'x4',
+				yaxis: 'y',
+				line: { color: '#6366F1', width: 1.0, dash: 'dot' },
+				hovertemplate: 'PHIT P10: %{x:.3f}<extra></extra>'
+			});
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'PHIT_P90',
+				x: phitP90,
+				y: depth,
+				xaxis: 'x4',
+				yaxis: 'y',
+				line: { color: '#6366F1', width: 1.0, dash: 'dot' },
+				hovertemplate: 'PHIT P90: %{x:.3f}<extra></extra>'
+			});
+		}
+
 		// Core Porosity black dots (from CPORE curve or coreSamples)
 		const cpore = pick('CPORE').length ? pick('CPORE') : pick('CORE_PORO');
 		if (cpore.some((v) => v !== null)) {
@@ -336,7 +378,7 @@
 			}
 		}
 
-		// Track 5 (xaxis5): Permeability (Log 0.01 - 10000 mD) + CPERM points
+		// Track 5 (xaxis5): Permeability (Log 0.01 - 10000 mD) + PERM_BLK + CPERM points
 		const perm = pick('PERM');
 		if (perm.some((v) => v !== null && v > 0)) {
 			traces.push({
@@ -349,6 +391,20 @@
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.perm, width: 1.5 },
 				hovertemplate: 'PERM: %{x:.2f} mD<extra></extra>'
+			});
+		}
+		const permBlk = pick('PERM_BLK');
+		if (permBlk.some((v) => v !== null && v > 0)) {
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'PERM_BLK',
+				x: permBlk.map((v) => (v !== null && v > 0 ? v : null)),
+				y: depth,
+				xaxis: 'x5',
+				yaxis: 'y',
+				line: { color: '#0F172A', width: 1.5, shape: 'hv' },
+				hovertemplate: 'PERM_BLK: %{x:.2f} mD<extra></extra>'
 			});
 		}
 		const cperm = pick('CPERM').length ? pick('CPERM') : pick('CORE_PERM');
@@ -366,7 +422,7 @@
 			});
 		}
 
-		// Track 6 (xaxis6): Fluid Saturation (SWT/SWE 1.0 -> 0.0) & Pay Flag
+		// Track 6 (xaxis6): Fluid Saturation (SWT/SWE 1.0 -> 0.0), SWT_BLK, SW_P10/P90 & Pay Flag
 		const swt = pick('SWT').length ? pick('SWT') : pick('SWE');
 		if (swt.some((v) => v !== null)) {
 			traces.push({
@@ -381,6 +437,46 @@
 				fillcolor: 'rgba(22, 163, 74, 0.22)',
 				line: { color: PETRO_COLORS.water, width: 1.5 },
 				hovertemplate: 'Sw: %{x:.3f} v/v<extra></extra>'
+			});
+		}
+		const swtBlk = pick('SWT_BLK');
+		if (swtBlk.some((v) => v !== null)) {
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'SWT_BLK',
+				x: swtBlk,
+				y: depth,
+				xaxis: 'x6',
+				yaxis: 'y',
+				line: { color: '#0F172A', width: 1.5, shape: 'hv' },
+				hovertemplate: 'SWT_BLK: %{x:.3f} v/v<extra></extra>'
+			});
+		}
+		const swP10 = pick('SW_P10');
+		const swP90 = pick('SW_P90');
+		if (swP10.some((v) => v !== null) && swP90.some((v) => v !== null)) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'SW_P10',
+				x: swP10,
+				y: depth,
+				xaxis: 'x6',
+				yaxis: 'y',
+				line: { color: '#7C3AED', width: 1.0, dash: 'dot' },
+				hovertemplate: 'Sw P10: %{x:.3f}<extra></extra>'
+			});
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'SW_P90',
+				x: swP90,
+				y: depth,
+				xaxis: 'x6',
+				yaxis: 'y',
+				line: { color: '#7C3AED', width: 1.0, dash: 'dot' },
+				hovertemplate: 'Sw P90: %{x:.3f}<extra></extra>'
 			});
 		}
 		const shf = pick('SHF');

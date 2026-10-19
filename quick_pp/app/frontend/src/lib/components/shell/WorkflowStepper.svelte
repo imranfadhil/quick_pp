@@ -44,8 +44,14 @@
 			readyCheck: () => Boolean(wellData.curves['SWT'] || wellData.curves['SWE'])
 		},
 		{
-			id: 'ressum',
+			id: 'scal',
 			num: 6,
+			label: 'SCAL & Rel-Perm',
+			readyCheck: () => workbench.scalResult !== null
+		},
+		{
+			id: 'ressum',
+			num: 7,
 			label: 'Reservoir Summary',
 			readyCheck: () => wellData.zonalSummary.length > 0
 		}

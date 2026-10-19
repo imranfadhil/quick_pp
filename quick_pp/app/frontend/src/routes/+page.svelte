@@ -13,6 +13,7 @@
 	import InspectorLithoPoro from '$lib/components/modules/InspectorLithoPoro.svelte';
 	import InspectorPerm from '$lib/components/modules/InspectorPerm.svelte';
 	import InspectorSaturation from '$lib/components/modules/InspectorSaturation.svelte';
+	import InspectorScal from '$lib/components/modules/InspectorScal.svelte';
 	import InspectorResSum from '$lib/components/modules/InspectorResSum.svelte';
 
 	import MultiWellInventory from '$lib/components/modules/MultiWellInventory.svelte';
@@ -72,6 +73,23 @@
 
 	// Dynamic columns & rows for the Bottom-Right Quick Zonal / Context Data Grid
 	let rightGridConfig = $derived.by((): { title: string; columns: GridColumn[]; rows: Record<string, any>[] } => {
+		if (
+			workbench.scope === 'single-well' &&
+			workbench.singleWellStep === 'scal' &&
+			workbench.scalResult?.swofTable?.length
+		) {
+			return {
+				title: 'Eclipse SWOF Simulation Deck Table',
+				columns: [
+					{ key: 'SW', label: 'Sw', unit: 'v/v', numeric: true, decimals: 4 },
+					{ key: 'KRW', label: 'krw', unit: 'frac', numeric: true, decimals: 5 },
+					{ key: 'KROW', label: 'krow', unit: 'frac', numeric: true, decimals: 5 },
+					{ key: 'PCOW', label: 'Pcow', unit: 'psi', numeric: true, decimals: 3 }
+				],
+				rows: workbench.scalResult.swofTable
+			};
+		}
+
 		if (wellData.zonalSummary.length > 0) {
 			const sample = wellData.zonalSummary[0];
 			const cols: GridColumn[] = Object.keys(sample).map((k) => ({
@@ -187,6 +205,8 @@
 					<InspectorPerm />
 				{:else if workbench.singleWellStep === 'saturation'}
 					<InspectorSaturation />
+				{:else if workbench.singleWellStep === 'scal'}
+					<InspectorScal />
 				{:else}
 					<InspectorResSum />
 				{/if}

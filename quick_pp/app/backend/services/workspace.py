@@ -48,7 +48,11 @@ from quick_pp.porosity import (
     neu_den_xplot_poro,
     rho_matrix,
 )
-from quick_pp.qaqc import neu_den_xplot_hc_correction
+from quick_pp.qaqc import (
+    apply_environmental_corrections,
+    neu_den_xplot_hc_correction,
+    stratigraphic_normalization,
+)
 from quick_pp.ressum import calc_reservoir_summary
 from quick_pp.rock_type import calc_fzi, find_cutoffs, rock_typing
 from quick_pp.saturation import (
@@ -57,6 +61,7 @@ from quick_pp.saturation import (
     estimate_qvn,
     estimate_rw_temperature_salinity,
     estimate_temperature_gradient,
+    optimize_fwl,
     waxman_smits_saturation,
 )
 from quick_pp.uncertainty import calc_stochastic_reservoir_summary
@@ -1234,12 +1239,12 @@ def workspace_reservoir_summary(
         if req.include_upscaling:
             up_input = pd.DataFrame(
                 {
-                    "depth": depth,
-                    "vclay": vclay,
-                    "phit": phit,
-                    "swt": swt,
-                    "perm": perm,
-                    "zones": zones,
+                    "DEPTH": depth,
+                    "VCLAY": vclay,
+                    "PHIT": phit,
+                    "SWT": swt,
+                    "PERM": perm,
+                    "ZONES": zones,
                 }
             )
             blocked_df = upscale_logs(
@@ -1251,7 +1256,7 @@ def workspace_reservoir_summary(
                 cutoffs=req.cut_offs,
                 return_step_log=False,
             )
-            step_df = expand_blocked_logs(up_input, blocked_df, depth_col="depth")
+            step_df = expand_blocked_logs(up_input, blocked_df, depth_col="DEPTH")
             response["upscaling"] = {
                 "n_cells": int(len(blocked_df)),
                 "cells": dataframe_to_records(blocked_df.round(4)),
@@ -1264,9 +1269,32 @@ def workspace_reservoir_summary(
                 cutoffs=req.cut_offs,
                 n_samples=req.n_samples,
             )
+            cpi_cols = [
+                c
+                for c in [
+                    "DEPTH",
+                    "SW_P10",
+                    "SW_P50",
+                    "SW_P90",
+                    "PHIT_P10",
+                    "PHIT_P50",
+                    "PHIT_P90",
+                    "PHIE_P10",
+                    "PHIE_P50",
+                    "PHIE_P90",
+                    "VCLAY_P10",
+                    "VCLAY_P50",
+                    "VCLAY_P90",
+                    "BVHC_P10",
+                    "BVHC_P50",
+                    "BVHC_P90",
+                ]
+                if c in unc_res["cpi_df"].columns
+            ]
             response["uncertainty"] = {
                 "summary": dataframe_to_records(unc_res["summary_df"]),
                 "volumetrics": unc_res["volumetrics"],
+                "cpi": dataframe_to_columnar(unc_res["cpi_df"][cpi_cols].round(4)),
             }
 
         return response
@@ -1629,3 +1657,235 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest):
         raise HTTPException(
             status_code=500, detail=f"SHF computation failed: {e}"
         ) from e
+
+
+class WorkspaceEnvCorrectionRequest(WorkspaceFilterBase):
+    bitsize_default: float = Field(8.5)
+    mud_weight: float = Field(9.0)
+    surface_temp: float = Field(75.0)
+    temp_grad: float = Field(1.5)
+    salinity_ppm: float = Field(35000.0)
+    rho_mudcake: float = Field(1.5)
+
+
+class WorkspaceStratNormalizationRequest(BaseModel):
+    key_well: Optional[str] = Field(None)
+    logs: List[str] = Field(default_factory=lambda: ["GR", "NPHI"])
+    method: str = Field("quantile")
+    quantiles: Tuple[float, float] = Field((0.05, 0.95))
+    save: bool = Field(False)
+
+
+class WorkspaceOptimizeFwlRequest(BaseModel):
+    model: str = Field("leverett_j")
+    shm_params: Optional[Dict[str, Any]] = Field(None)
+    ift: float = Field(30.0)
+    theta: float = Field(30.0)
+    gw: float = Field(1.05)
+    ghc: float = Field(0.80)
+    loss: str = Field("rmse")
+    pore_volume_weighted: bool = Field(False)
+    equal_well_weights: bool = Field(False)
+    mdt_fwl: Optional[float] = Field(None)
+    mdt_tolerance: Optional[float] = Field(None)
+    mdt_penalty_weight: float = Field(0.0)
+    solve_per_well: bool = Field(True)
+    optimize_shm_params: bool = Field(False)
+    unit: str = Field("metric")
+    save: bool = Field(False)
+
+
+@router.post(
+    "/wells/{well_name}/environmental_corrections",
+    summary="Apply borehole environmental and invasion corrections to well logs",
+    response_class=ORJSONResponse,
+)
+def workspace_environmental_corrections(
+    project_id: int, well_name: str, req: WorkspaceEnvCorrectionRequest
+):
+    """Apply environmental corrections (GR_CORR, NPHI_CORR, RHOB_CORR, RT_CORR) to a well."""
+    try:
+        df = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        corr_df = apply_environmental_corrections(
+            df,
+            bitsize_default=req.bitsize_default,
+            mud_weight=req.mud_weight,
+            surface_temp=req.surface_temp,
+            temp_grad=req.temp_grad,
+            salinity_ppm=req.salinity_ppm,
+            rho_mudcake=req.rho_mudcake,
+        )
+        corr_cols = [
+            c
+            for c in ("GR_CORR", "NPHI_CORR", "RHOB_CORR", "RT_CORR", "BAD_HOLE_FLAG")
+            if c in corr_df.columns
+        ]
+        out_df = corr_df[["DEPTH"] + corr_cols].copy()
+        saved_rows = 0
+        if req.save and corr_cols:
+            saved_rows = _save_curves_to_well(project_id, well_name, out_df)
+        stats = {col: _curve_summary_stats(out_df[col]) for col in corr_cols}
+        return {
+            "well_name": well_name,
+            "saved": req.save,
+            "saved_rows": saved_rows,
+            "stats": stats,
+            **dataframe_to_columnar(out_df),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Environmental correction failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/stratigraphic_normalization",
+    summary="Run multi-well stratigraphic (zone-by-zone) log normalization across project wells",
+    response_class=ORJSONResponse,
+)
+def workspace_stratigraphic_normalization(
+    project_id: int, req: WorkspaceStratNormalizationRequest
+):
+    """Normalize log curves across all project wells per geological zone."""
+    try:
+        proj_summary = get_project_summary(project_id)
+        well_names = [w["name"] for w in proj_summary.get("wells", [])]
+        if not well_names:
+            raise ValueError("No wells found in project.")
+
+        dfs = []
+        for wn in well_names:
+            wdf = _get_merged_dataframe_sync(project_id, wn)
+            if not wdf.empty:
+                wdf = wdf.copy()
+                wdf["WELL_NAME"] = wn
+                if "ZONES" not in wdf.columns:
+                    wdf["ZONES"] = "ALL"
+                dfs.append(wdf)
+        if not dfs:
+            raise ValueError("No log data available across project wells.")
+
+        combined = pd.concat(dfs, ignore_index=True)
+        norm_df, report_df = stratigraphic_normalization(
+            combined,
+            key_well=req.key_well,
+            zone_col="ZONES",
+            quantiles=req.quantiles,
+            logs=req.logs,
+            well_col="WELL_NAME",
+            method=req.method,
+            return_report=True,
+        )
+
+        norm_cols = [f"{lg}_NORM" for lg in req.logs if f"{lg}_NORM" in norm_df.columns]
+        saved_wells = 0
+        if req.save and norm_cols:
+            with get_db() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                for wn, grp in norm_df.groupby("WELL_NAME"):
+                    well_obj = proj.get_well(str(wn))
+                    well_obj.update_data(grp[["DEPTH"] + norm_cols])
+                    well_obj.save()
+                    invalidate_well_cache(project_id=project_id, well_name=str(wn))
+                    saved_wells += 1
+                proj.save()
+
+        return {
+            "project_id": project_id,
+            "method": req.method,
+            "normalized_curves": norm_cols,
+            "saved": req.save,
+            "saved_wells": saved_wells,
+            "report": dataframe_to_records(report_df.round(4)),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Stratigraphic normalization failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/optimize_fwl",
+    summary="Optimize Multi-Well Free Water Level (FWL) & Transition Zone across project wells",
+    response_class=ORJSONResponse,
+)
+def workspace_optimize_fwl(project_id: int, req: WorkspaceOptimizeFwlRequest):
+    """Simultaneously optimize Free Water Level across all project wells and reconcile Sw_log vs Sw_SHM."""
+    try:
+        proj_summary = get_project_summary(project_id)
+        well_names = [w["name"] for w in proj_summary.get("wells", [])]
+        if not well_names:
+            raise ValueError("No wells found in project.")
+
+        dfs = []
+        for wn in well_names:
+            wdf = _get_merged_dataframe_sync(project_id, wn)
+            if not wdf.empty:
+                wdf = wdf.copy()
+                wdf["WELL_NAME"] = wn
+                dfs.append(wdf)
+        if not dfs:
+            raise ValueError("No log data available across project wells.")
+
+        combined = pd.concat(dfs, ignore_index=True)
+        res = optimize_fwl(
+            df=combined,
+            model=req.model,
+            shm_params=req.shm_params,
+            ift=req.ift,
+            theta=req.theta,
+            gw=req.gw,
+            ghc=req.ghc,
+            loss=req.loss,
+            pore_volume_weighted=req.pore_volume_weighted,
+            equal_well_weights=req.equal_well_weights,
+            mdt_fwl=req.mdt_fwl,
+            mdt_tolerance=req.mdt_tolerance,
+            mdt_penalty_weight=req.mdt_penalty_weight,
+            solve_per_well=req.solve_per_well,
+            optimize_shm_params=req.optimize_shm_params,
+            unit=req.unit,
+        )
+
+        saved_wells = 0
+        if req.save and "SW_SHM" in res["df"].columns:
+            with get_db() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                for wn, grp in res["df"].groupby("WELL_NAME"):
+                    well_obj = proj.get_well(str(wn))
+                    well_obj.update_data(
+                        grp[["DEPTH", "SW_SHM"]].rename(columns={"SW_SHM": "SHF"})
+                    )
+                    well_obj.save()
+                    invalidate_well_cache(project_id=project_id, well_name=str(wn))
+                    saved_wells += 1
+                proj.save()
+
+        return {
+            "project_id": project_id,
+            "fwl": round(float(res["fwl"]), 2),
+            "owc": round(float(res["owc"]), 2),
+            "ttz": round(float(res["ttz"]), 2),
+            "capillary_entry_height": round(float(res["capillary_entry_height"]), 2),
+            "transition_zone_thickness": round(
+                float(res["transition_zone_thickness"]), 2
+            ),
+            "rmse": round(float(res["rmse"]), 4),
+            "mae": round(float(res["mae"]), 4),
+            "r2": round(float(res["r2"]), 4),
+            "bvw_rmse": round(float(res["bvw_rmse"]), 4),
+            "mdt_fwl": res["mdt_fwl"],
+            "fwl_reconciliation_diff": res["fwl_reconciliation_diff"],
+            "shm_params": res["shm_params"],
+            "well_metrics": dataframe_to_records(res["well_metrics"].round(4)),
+            "grid_profile": dataframe_to_records(res["grid_profile"].round(4)),
+            "saved": req.save,
+            "saved_wells": saved_wells,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"FWL optimization failed: {e}"
+        ) from e
+
