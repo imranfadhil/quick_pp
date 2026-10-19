@@ -123,6 +123,7 @@ quick_pp = [
     "app/backend/**/*",
     "app/docker/docker-compose.yaml",
     "app/docker/Dockerfile",
+    "app/docker/nginx.conf",
     "database/**/*",
     "lithology/**/*",
     "machine_learning/**/*",

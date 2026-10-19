@@ -5,27 +5,33 @@ services:
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-    ports:
-      - ${POSTGRES_PORT:-5432}:5432
+      - POSTGRES_USER=${POSTGRES_USER:-qpp_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change_this_strong_password}
+      - POSTGRES_DB=${POSTGRES_DB:-quick_pp}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qpp_user} -d ${POSTGRES_DB:-quick_pp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - qpp-network
-  
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     networks:
       - qpp-network
 
   celery-worker:
     image: imranfadhil86/quick_pp-backend:latest
+    build:
+      context: ../../..
+      dockerfile: quick_pp/app/docker/Dockerfile
     depends_on:
-      - redis
-      - postgres
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
@@ -44,25 +50,29 @@ services:
     environment:
       - BROKER_URL=redis://redis:6379/0
     command: celery flower --broker=redis://redis:6379/0 --port=5555 --address=0.0.0.0
+    # Bound to localhost only: access remotely via SSH tunnel (-L 5555:localhost:5555)
     ports:
-      - "5555:5555"
+      - "${FLOWER_BIND:-127.0.0.1}:5555:5555"
     restart: unless-stopped
     networks:
       - qpp-network
 
   qpp-backend:
     image: imranfadhil86/quick_pp-backend:latest
+    build:
+      context: ../../..
+      dockerfile: quick_pp/app/docker/Dockerfile
+    restart: unless-stopped
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       - QPP_DATABASE_URL=${QPP_DATABASE_URL}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-    ports:
-      - "6312:6312"
+      - POSTGRES_USER=${POSTGRES_USER:-qpp_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change_this_strong_password}
+      - POSTGRES_DB=${POSTGRES_DB:-quick_pp}
     volumes:
       - ../../../uploads:/code/uploads
     networks:
@@ -76,17 +86,41 @@ services:
     volumes:
       - ../frontend:/app:delegated
       - /app/node_modules
-    ports:
-      - "5469:5469"
     depends_on:
       - qpp-backend
     environment:
-      - VITE_BACKEND_URL=http://localhost:6312
+      - VITE_BACKEND_URL=${VITE_BACKEND_URL:-}
       - HOST=0.0.0.0
       - PORT=5469
-      - NODE_OPTIONS=--max-old-space-size=4096
+      - NODE_OPTIONS=--max-old-space-size=${FRONTEND_MAX_OLD_SPACE:-2048}
     # Install deps, build the app, and run the production server
     command: sh -c "npm install && npm run build && node build"
+    networks:
+      - qpp-network
+
+  web:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - qpp-frontend
+      - qpp-backend
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    # Bound to localhost only: public access goes through the Cloudflare Tunnel.
+    # Set WEB_BIND=0.0.0.0 to expose directly (not recommended).
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"
+    networks:
+      - qpp-network
+
+  # Cloudflare Quick Tunnel — free random *.trycloudflare.com HTTPS URL.
+  # No Cloudflare account or token required. The URL changes on every restart.
+  quicktunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      - web
+    command: tunnel --no-autoupdate --url http://web:80
     networks:
       - qpp-network
 
@@ -96,8 +130,9 @@ services:
     image: langflowai/langflow:latest  # or another version tag on https://hub.docker.com/r/langflowai/langflow
     restart: unless-stopped
     pull_policy: always  # set to 'always' when using 'latest' image
+    # Bound to localhost only: access remotely via SSH tunnel (-L 7860:localhost:7860)
     ports:
-      - "7860:7860"
+      - "${LANGFLOW_BIND:-127.0.0.1}:7860:7860"
     depends_on:
       - qpp-backend
     environment:
