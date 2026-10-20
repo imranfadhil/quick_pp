@@ -323,6 +323,7 @@ def serialize_user(user: db_models.User, session: Optional[Session] = None) -> D
         "last_login_at": user.last_login_at,
         "created_at": created_str,
         "project_memberships": memberships,
+        "demo_mode": is_demo_mode(),
     }
 
 

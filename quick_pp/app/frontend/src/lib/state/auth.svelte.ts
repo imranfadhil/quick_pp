@@ -28,6 +28,7 @@ export interface AuthUser {
 	last_login_at?: string | null;
 	created_at?: string;
 	project_memberships: UserProjectMembership[];
+	demo_mode?: boolean;
 }
 
 export interface MfaSetupPayload {
@@ -70,6 +71,7 @@ class AuthState {
 
 	isAuthenticated = $derived<boolean>(Boolean(this.user && this.token));
 	isAdmin = $derived<boolean>(this.user?.role === 'admin');
+	isDemoMode = $derived<boolean>(Boolean(this.user?.demo_mode));
 
 	userInitials = $derived.by(() => {
 		if (!this.user) return 'QP';

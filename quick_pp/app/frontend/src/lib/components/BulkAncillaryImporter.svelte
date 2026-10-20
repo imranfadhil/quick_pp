@@ -6,6 +6,7 @@
   export let maxConcurrency = 4;
 
   import { API_BASE } from '$lib/api/client';
+  import { authState } from '$lib/state/auth.svelte';
   const MAX_DEMO_FILE_BYTES = 5 * 1024 * 1024; // 5 MB cap in live demo
 
   let files: File[] = [];
@@ -21,11 +22,11 @@
   function handleFiles(e: Event) {
     const input = e.target as HTMLInputElement;
     const rawFiles = input.files ? Array.from(input.files) : [];
-    const oversized = rawFiles.filter((f) => f.size > MAX_DEMO_FILE_BYTES);
+    const oversized = authState.isDemoMode ? rawFiles.filter((f) => f.size > MAX_DEMO_FILE_BYTES) : [];
     if (oversized.length > 0) {
       globalError = `File exceeds 5 MB Live Demo limit: ${oversized.map((f) => f.name).join(', ')}`;
     }
-    files = rawFiles.filter((f) => f.size <= MAX_DEMO_FILE_BYTES);
+    files = authState.isDemoMode ? rawFiles.filter((f) => f.size <= MAX_DEMO_FILE_BYTES) : rawFiles;
     previews = [];
     selectedWells = {};
     results = [];

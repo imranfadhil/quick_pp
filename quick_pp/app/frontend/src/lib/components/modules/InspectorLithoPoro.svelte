@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api, postJson } from '$lib/api/client';
+	import { authState } from '$lib/state/auth.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -352,7 +353,7 @@
 			<div class="mb-1.5 flex items-center justify-between rounded-xs border border-indigo-200 bg-indigo-50/70 px-2 py-1 text-[10px] text-indigo-900">
 				<span class="font-semibold">predict_pipeline.py Active</span>
 				<span class="rounded-xs bg-indigo-100 px-1 py-0.5 font-mono text-[9px] font-bold text-indigo-800">
-					Read-Only Training
+					{authState.isDemoMode ? 'Read-Only Training' : 'Conformal P10–P90'}
 				</span>
 			</div>
 

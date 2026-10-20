@@ -122,12 +122,14 @@
 				QP
 			</div>
 			<span class="text-xs font-bold tracking-tight text-[var(--text-primary)]">quick_pp</span>
-			<span
-				title="Ephemeral Demo Session — Pre-seeded Volve & Costa SQLite DB is read-only"
-				class="rounded-xs border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold tracking-wider text-emerald-800 uppercase"
-			>
-				LIVE DEMO
-			</span>
+			{#if authState.isDemoMode}
+				<span
+					title="Ephemeral Demo Session — Pre-seeded Volve & Costa SQLite DB is read-only"
+					class="rounded-xs border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold tracking-wider text-emerald-800 uppercase"
+				>
+					LIVE DEMO
+				</span>
+			{/if}
 		</div>
 
 		<span class="text-[var(--border-hairline)]">/</span>
@@ -372,15 +374,17 @@
 
 	<!-- Right Group: Import Data, Export Dropdown, AI Assistant -->
 	<div class="flex items-center gap-1.5">
-		<button
-			type="button"
-			disabled={isResettingDemo}
-			onclick={resetDemoSession}
-			title="Reset ephemeral session edits back to pre-seeded Volve & Costa state"
-			class="h-7 rounded-sm border border-amber-300 bg-amber-50 px-2 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-		>
-			{isResettingDemo ? 'Resetting…' : 'Reset Demo'}
-		</button>
+		{#if authState.isDemoMode}
+			<button
+				type="button"
+				disabled={isResettingDemo}
+				onclick={resetDemoSession}
+				title="Reset ephemeral session edits back to pre-seeded Volve & Costa state"
+				class="h-7 rounded-sm border border-amber-300 bg-amber-50 px-2 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+			>
+				{isResettingDemo ? 'Resetting…' : 'Reset Demo'}
+			</button>
+		{/if}
 		<button
 			type="button"
 			onclick={() => (workbench.importerOpen = true)}

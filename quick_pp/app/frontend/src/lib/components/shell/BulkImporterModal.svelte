@@ -1,5 +1,6 @@
 <script lang="ts">
 	import BulkAncillaryImporter from '$lib/components/BulkAncillaryImporter.svelte';
+	import { authState } from '$lib/state/auth.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 
@@ -9,21 +10,25 @@
 	let lasFiles = $state<FileList | null>(null);
 	let uploadingLas = $state(false);
 	let uploadStatus = $state<string | null>(null);
-	const MAX_DEMO_LAS_BYTES = 5 * 1024 * 1024; // 5 MB in-memory cap per file
+	const MAX_DEMO_LAS_BYTES = 5 * 1024 * 1024; // 5 MB in-memory cap per file in demo mode
 
 	async function handleLasUpload() {
 		if (!lasFiles || lasFiles.length === 0) return;
-		const fileArr = Array.from(lasFiles);
-		const oversized = fileArr.filter((f) => f.size > MAX_DEMO_LAS_BYTES);
-		if (oversized.length > 0) {
-			uploadStatus = `Error: File exceeds 5 MB Live Demo in-memory cap (${oversized.map((f) => f.name).join(', ')}).`;
-			return;
+		if (authState.isDemoMode) {
+			const fileArr = Array.from(lasFiles);
+			const oversized = fileArr.filter((f) => f.size > MAX_DEMO_LAS_BYTES);
+			if (oversized.length > 0) {
+				uploadStatus = `Error: File exceeds 5 MB Live Demo in-memory cap (${oversized.map((f) => f.name).join(', ')}).`;
+				return;
+			}
 		}
 		uploadingLas = true;
 		uploadStatus = null;
 		try {
 			await projectData.uploadProjectFiles(lasFiles);
-			uploadStatus = `Loaded ${lasFiles.length} file(s) into ephemeral session (max 5 MB cap; pre-seeded Volve/Costa DB remains read-only).`;
+			uploadStatus = authState.isDemoMode
+				? `Loaded ${lasFiles.length} file(s) into ephemeral session (max 5 MB cap; pre-seeded Volve/Costa DB remains read-only).`
+				: `Uploaded and saved ${lasFiles.length} file(s) to project.`;
 			lasFiles = null;
 		} catch (e: any) {
 			uploadStatus = `Error: ${e?.message || 'Failed to upload files'}`;
@@ -57,9 +62,11 @@
 							Project: {projectData.summary.name}
 						</span>
 					{/if}
-					<span class="rounded-xs border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-						Ephemeral Demo • Max 5 MB / Read-Only Seed DB
-					</span>
+					{#if authState.isDemoMode}
+						<span class="rounded-xs border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+							Ephemeral Demo • Max 5 MB / Read-Only Seed DB
+						</span>
+					{/if}
 				</div>
 				<button
 					type="button"
@@ -96,14 +103,20 @@
 
 			<!-- Modal Body -->
 			<div class="flex-1 overflow-y-auto p-4">
-				<div class="mb-3 rounded-sm border border-blue-200 bg-blue-50/70 px-3 py-2 text-[11px] text-blue-900">
-					<strong>Ephemeral Session Guardrail:</strong> Uploads are capped at <strong>5 MB</strong> in memory so visitors can test custom <code>.las</code>/<code>.csv</code> files without overwriting the pre-seeded Volve &amp; Costa multi-well projects.
-				</div>
+				{#if authState.isDemoMode}
+					<div class="mb-3 rounded-sm border border-blue-200 bg-blue-50/70 px-3 py-2 text-[11px] text-blue-900">
+						<strong>Ephemeral Session Guardrail:</strong> Uploads are capped at <strong>5 MB</strong> in memory so visitors can test custom <code>.las</code>/<code>.csv</code> files without overwriting the pre-seeded Volve &amp; Costa multi-well projects.
+					</div>
+				{/if}
 
 				{#if activeTab === 'las'}
 					<div class="space-y-3">
 						<p class="text-xs text-[var(--text-secondary)]">
-							Upload one or more <code>.las</code>, <code>.csv</code>, or <code>.parquet</code> well log files (max 5 MB per file) into the ephemeral session.
+							{#if authState.isDemoMode}
+								Upload one or more <code>.las</code>, <code>.csv</code>, or <code>.parquet</code> well log files (max 5 MB per file) into the ephemeral session.
+							{:else}
+								Upload one or more <code>.las</code>, <code>.csv</code>, or <code>.parquet</code> well log files into the selected project.
+							{/if}
 						</p>
 						<input
 							type="file"
@@ -119,7 +132,11 @@
 								onclick={handleLasUpload}
 								class="h-7 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white disabled:opacity-50"
 							>
-								{uploadingLas ? 'Loading in Memory...' : 'Upload Log Files (Max 5 MB)'}
+								{#if uploadingLas}
+									{authState.isDemoMode ? 'Loading in Memory...' : 'Uploading & Processing...'}
+								{:else}
+									{authState.isDemoMode ? 'Upload Log Files (Max 5 MB)' : 'Upload Log Files'}
+								{/if}
 							</button>
 							{#if uploadStatus}
 								<span class="text-xs font-medium text-[var(--text-secondary)]">
