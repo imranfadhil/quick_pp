@@ -3,12 +3,17 @@ import socket
 from hashlib import sha256
 from pathlib import Path
 from subprocess import Popen
-from typing import Optional
+from typing import Any, Optional
 
-import mlflow
 import numpy as np
 import pandas as pd
-from mlflow.tracking import MlflowClient
+
+try:
+    import mlflow
+    from mlflow.tracking import MlflowClient
+except ImportError:
+    mlflow = None  # type: ignore[assignment]
+    MlflowClient = Any  # type: ignore[assignment,misc]
 from pandas.util import hash_pandas_object
 from sklearn.base import BaseEstimator, RegressorMixin, clone
 

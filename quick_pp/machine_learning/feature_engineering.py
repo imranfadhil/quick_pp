@@ -1,9 +1,17 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
-from imblearn.over_sampling import SMOTE
 from tqdm import tqdm
+
+try:
+    import seaborn as sns
+except ImportError:
+    sns = None  # type: ignore[assignment]
+
+try:
+    from imblearn.over_sampling import SMOTE
+except ImportError:
+    SMOTE = None  # type: ignore[assignment,misc]
 
 from quick_pp.rock_type import estimate_vsh_gr, find_cutoffs, rock_typing
 
@@ -214,7 +222,7 @@ def acoustic_impedance_feature(rhob, dtc=None):
     if dtc is None:
         dtc_eff = dtc_fallback
     else:
-        dtc_series = pd.Series(dtc, index= getattr(rhob, "index", None))
+        dtc_series = pd.Series(dtc, index=getattr(rhob, "index", None))
         dtc_eff = np.where(
             dtc_series.notna() & (dtc_series > 20.0), dtc_series, dtc_fallback
         )
@@ -372,6 +380,10 @@ def perform_rrt_smote(core_data, input_features: list, plot_distribution: bool =
     Returns:
         pd.DataFrame: A new DataFrame with a balanced class distribution for 'ROCK_FLAG'.
     """
+    if SMOTE is None:
+        raise ImportError(
+            "imbalanced-learn is required for perform_rrt_smote. Install with: uv pip install 'quick-pp[ml]'"
+        )
     if "ROCK_FLAG" not in core_data.columns:
         raise ValueError(
             "Input DataFrame must contain a 'ROCK_FLAG' column as the target variable."
@@ -406,6 +418,10 @@ def perform_rrt_smote(core_data, input_features: list, plot_distribution: bool =
     X_smote, y_smote = smote.fit_resample(X_res, y_res)
 
     if plot_distribution:
+        if sns is None:
+            raise ImportError(
+                "seaborn is required to plot SMOTE distribution. Install with: uv pip install 'quick-pp[ml]'"
+            )
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
         # Before SMOTE

@@ -36,7 +36,7 @@ Prerequisites
 - Python 3.11+ (for backend and CLI)
 - Node.js 18+ and npm or yarn (for frontend)
 - Docker & Docker Compose (optional, for the packaged backend + DB)
-- uv (optional, fast Python package installer from https://github.com/astral-sh/uv)
+- uv (recommended, fast Python package and environment manager from https://github.com/astral-sh/uv)
 
 .env & Database (SQLite vs PostgreSQL)
 - The application reads DB and other secrets from environment variables. For
@@ -88,12 +88,29 @@ source .venv/bin/activate
 .venv\Scripts\activate
 ```
 
-2. Install Python dependencies:
+2. Install Python dependencies via modular `pyproject.toml` extras (`uv` or `pip`):
 
 ```bash
-uv pip install -r requirements.txt
-# (optional) install package editable for CLI convenience
-uv pip install -e .
+# Core petrophysics, SCAL, uncertainty & upscaling only
+uv pip install -e ".[core]"
+
+# Add machine learning & conformal prediction (MLflow, MAPIE, imbalanced-learn)
+uv pip install -e ".[ml]"
+
+# Add FastAPI web backend, Celery worker & database layer
+uv pip install -e ".[app]"
+
+# Everything (core + ml + app + Jupyter notebooks)
+uv pip install -e ".[all]"
+```
+
+Or install directly from PyPI using modular extras:
+
+```bash
+pip install quick-pp[core]
+pip install quick-pp[ml]
+pip install quick-pp[app]
+pip install quick-pp[all]
 ```
 
 Using Docker (recommended for a complete local stack)

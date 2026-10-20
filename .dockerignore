@@ -1,5 +1,5 @@
 # Exclude large and unnecessary files/directories from Docker build context
-# Keep required files like requirements.txt, quick_pp code and app/docker
+# Keep required files like pyproject.toml, quick_pp code and app/docker
 
 # VCS
 .git
@@ -52,7 +52,7 @@ tmp/
 Thumbs.db
 
 # Allow required files explicitly
-!requirements.txt
+!pyproject.toml
 !main.py
 !quick_pp/app/docker/Dockerfile
 !quick_pp/app/docker/Dockerfile-psycopg

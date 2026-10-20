@@ -19,7 +19,7 @@ COPY . /code
 # Create a virtual environment using uv and install dependencies inside it
 RUN uv venv --python 3.11 /venv \
     && . /venv/bin/activate \
-    && uv pip install --no-cache-dir . gunicorn
+    && uv pip install --no-cache-dir ".[app,ml]"
 
 # Ensure the venv is used for all subsequent commands and at runtime
 ENV PATH="/venv/bin:$PATH"
