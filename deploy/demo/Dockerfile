@@ -36,8 +36,12 @@ WORKDIR /code
 COPY pyproject.toml README.md ./
 COPY quick_pp ./quick_pp
 COPY deploy/demo/seed_demo.py ./deploy/demo/seed_demo.py
-COPY notebooks/data/01_raw/VOLVE ./notebooks/data/01_raw/VOLVE
-COPY notebooks/data/01_raw/COSTA ./notebooks/data/01_raw/COSTA
+COPY notebooks/data/01_raw/VOLVE/15-9-19-A.las ./notebooks/data/01_raw/VOLVE/15-9-19-A.las
+COPY notebooks/data/01_raw/VOLVE/VOLVE_15-9_Surveys.csv ./notebooks/data/01_raw/VOLVE/VOLVE_15-9_Surveys.csv
+COPY notebooks/data/01_raw/COSTA/HW-3.las ./notebooks/data/01_raw/COSTA/HW-3.las
+COPY notebooks/data/01_raw/COSTA/HW-4.las ./notebooks/data/01_raw/COSTA/HW-4.las
+COPY notebooks/data/01_raw/COSTA/HW-5.las ./notebooks/data/01_raw/COSTA/HW-5.las
+COPY notebooks/data/01_raw/COSTA/HW_core_data_all.csv ./notebooks/data/01_raw/COSTA/HW_core_data_all.csv
 COPY notebooks/data/01_raw/36_7-3.las ./notebooks/data/01_raw/36_7-3.las
 COPY notebooks/data/01_raw/formation_pressure_data.csv ./notebooks/data/01_raw/formation_pressure_data.csv
 
@@ -75,4 +79,3 @@ ENV HOME=/home/user \
 EXPOSE 7860
 
 CMD ["/usr/local/bin/start_demo.sh"]
-

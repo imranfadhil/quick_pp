@@ -58,3 +58,12 @@ Thumbs.db
 !quick_pp/app/docker/Dockerfile-psycopg
 !quick_pp/app/docker/docker-compose.yaml
 !quick_pp/
+!deploy/demo/
+!notebooks/data/01_raw/36_7-3.las
+!notebooks/data/01_raw/formation_pressure_data.csv
+!notebooks/data/01_raw/VOLVE/15-9-19-A.las
+!notebooks/data/01_raw/VOLVE/VOLVE_15-9_Surveys.csv
+!notebooks/data/01_raw/COSTA/HW-3.las
+!notebooks/data/01_raw/COSTA/HW-4.las
+!notebooks/data/01_raw/COSTA/HW-5.las
+!notebooks/data/01_raw/COSTA/HW_core_data_all.csv

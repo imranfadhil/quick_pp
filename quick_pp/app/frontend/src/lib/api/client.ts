@@ -189,3 +189,9 @@ export async function deleteJson<T = any>(path: string): Promise<T> {
 	}
 	return res.json();
 }
+
+
+export const apiGet = getJson;
+export const apiPost = postJson;
+export const apiPatch = patchJson;
+export const apiDelete = deleteJson;
