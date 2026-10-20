@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, createEventDispatcher } from 'svelte';
+  import { API_BASE } from '$lib/api/client';
   export let projectId: string | number;
   export let selected: string | null = null;
   export let placeholder = 'Select well...';
-  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
 
   let wells: Array<{name:string, uwi?:string}> = [];
   let loading = false;

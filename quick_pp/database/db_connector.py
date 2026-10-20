@@ -125,8 +125,14 @@ class DBConnector:
             sql_script = "setup_postgresql_db.sql"
         else:
             raise ValueError(f"Unsupported database type: {db_type}")
-        self.run_sql_script(os.path.join(script_dir, sql_script))
-        self._migrate_uam_columns()
+        try:
+            self.run_sql_script(os.path.join(script_dir, sql_script))
+            self._migrate_uam_columns()
+        except Exception as exc:
+            if "readonly" in str(exc).lower() or os.environ.get("QPP_DEMO_MODE", "").lower() in ("1", "true", "yes"):
+                pass
+            else:
+                raise
 
     def _migrate_uam_columns(self):
         """Ensure existing `users` tables have all Cognito-style UAM columns."""

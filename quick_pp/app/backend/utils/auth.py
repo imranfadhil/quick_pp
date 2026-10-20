@@ -335,6 +335,8 @@ def record_audit_event(
     changes: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Write a UAM or data action to the `audit_log` table."""
+    if is_demo_mode():
+        return
     try:
         entry = db_models.AuditLog(
             user_id=user_id,
@@ -366,10 +368,45 @@ def extract_token_from_request(request: Request) -> Optional[str]:
     return None
 
 
+def is_demo_mode() -> bool:
+    """Return True when running in the public interactive demo (`QPP_DEMO_MODE=true`)."""
+    return os.environ.get("QPP_DEMO_MODE", "false").lower() in ("1", "true", "yes")
+
+
 def get_current_user_optional(request: Request) -> Optional[Dict[str, Any]]:
     """Return the authenticated user dict if a valid access token is present, else None."""
     token = extract_token_from_request(request)
     if not token:
+        if is_demo_mode():
+            try:
+                with get_db() as session:
+                    user = session.scalar(
+                        select(db_models.User).where(db_models.User.role == "admin").limit(1)
+                    )
+                    if user:
+                        u_dict = serialize_user(user, session=session)
+                        u_dict["status"] = "CONFIRMED"
+                        u_dict["mfa_enabled"] = True
+                        u_dict["demo_mode"] = True
+                        return u_dict
+            except Exception:
+                pass
+            return {
+                "user_id": 1,
+                "username": "demo_visitor",
+                "email": "demo@quickpp.local",
+                "full_name": "Interactive Demo Visitor",
+                "role": "admin",
+                "status": "CONFIRMED",
+                "is_active": True,
+                "mfa_enabled": True,
+                "has_invite_token": False,
+                "invited_by": None,
+                "last_login_at": None,
+                "created_at": "",
+                "project_memberships": [],
+                "demo_mode": True,
+            }
         return None
     try:
         payload = decode_jwt_token(token, expected_type="access")

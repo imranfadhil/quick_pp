@@ -14,6 +14,7 @@ from sqlalchemy import bindparam, select, text
 from quick_pp.app.backend.utils.auth import (
     check_project_permission,
     get_current_user_optional,
+    is_demo_mode,
 )
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_filename
@@ -29,6 +30,8 @@ router = APIRouter(prefix="/database", tags=["Database"])
 _merged_data_cache: Dict[str, tuple[float, pd.DataFrame]] = {}
 _cache_ttl = 300  # 5 minutes
 _cache_max_entries = 50
+MAX_DEMO_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB cap per file in demo mode
+_ephemeral_wells: Dict[int, Dict[str, pd.DataFrame]] = {}
 
 
 def invalidate_well_cache(
@@ -162,6 +165,10 @@ async def list_wells(project_id: int):
                         "uwi": well.uwi,
                     }
                 )
+            existing_names = {w["name"] for w in wells}
+            for eph_name in _ephemeral_wells.get(project_id, {}):
+                if eph_name not in existing_names:
+                    wells.append({"id": f"eph_{eph_name}", "name": eph_name, "uwi": eph_name})
             return {"project_id": proj.project_id, "wells": wells}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -443,6 +450,16 @@ def project_read_las(
             # Prefix uploaded filename with a UUID to avoid collisions when
             # multiple uploads use the same original filename concurrently.
             safe_name = sanitize_filename(f.filename)
+            if is_demo_mode():
+                f.file.seek(0, 2)
+                file_size = f.file.tell()
+                f.file.seek(0)
+                if file_size > MAX_DEMO_UPLOAD_BYTES:
+                    f.file.close()
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File '{safe_name}' ({file_size / (1024 * 1024):.2f} MB) exceeds the 5.0 MB demo upload limit.",
+                    )
             unique_name = f"{uuid4().hex}_{safe_name}"
             dest = upload_dir / unique_name
             try:
@@ -456,7 +473,22 @@ def project_read_las(
 
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
-            proj.read_las(saved_paths, depth_uom=depth_uom)
+            if is_demo_mode():
+                import lasio
+
+                proj_eph = _ephemeral_wells.setdefault(project_id, {})
+                for p in saved_paths:
+                    las = lasio.read(p)
+                    ldf = las.df().reset_index()
+                    ldf.columns = [str(c).upper() for c in ldf.columns]
+                    if "DEPT" in ldf.columns and "DEPTH" not in ldf.columns:
+                        ldf = ldf.rename(columns={"DEPT": "DEPTH"})
+                    w_name = str(getattr(las.well, "WELL", None).value if hasattr(las.well, "WELL") else Path(p).stem.split("_", 1)[-1]).strip() or Path(p).stem
+                    ldf["WELL_NAME"] = w_name
+                    proj_eph[w_name] = ldf
+                    _merged_data_cache[f"{project_id}_{w_name}_0.16"] = (time.time(), ldf.copy())
+            else:
+                proj.read_las(saved_paths, depth_uom=depth_uom)
 
         invalidate_well_cache(project_id=project_id)
 
@@ -469,7 +501,7 @@ def project_read_las(
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to read LAS into project: {e}"
+            status_code=(413 if getattr(e, "status_code", 500) == 413 else 500), detail=getattr(e, "detail", f"Failed to read LAS into project: {e}")
         ) from e
 
 
@@ -535,6 +567,17 @@ async def save_well_data(project_id: int, well_name: str, payload: dict):
                     f"Some DEPTH values could not be parsed as numbers. Failed row indices: {bad_idx}"
                 ),
             )
+
+        if is_demo_mode():
+            for wn, wdf in df.groupby("WELL_NAME"):
+                _ephemeral_wells.setdefault(project_id, {})[str(wn)] = wdf.copy()
+                _merged_data_cache[f"{project_id}_{wn}_0.16"] = (time.time(), wdf.copy())
+            return {
+                "message": "Well data saved to ephemeral demo session",
+                "rows": len(df),
+                "wells_updated": int(df["WELL_NAME"].nunique()),
+                "ephemeral": True,
+            }
 
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
@@ -728,10 +771,15 @@ def _get_merged_dataframe_sync(
     cached_entry = _merged_data_cache.get(cache_key)
     if cached_entry is not None:
         cached_ts, cached_df = cached_entry
-        if now - cached_ts < _cache_ttl:
+        if is_demo_mode() or (now - cached_ts < _cache_ttl):
             return cached_df.copy()
         else:
             _merged_data_cache.pop(cache_key, None)
+
+    eph_df = _ephemeral_wells.get(project_id, {}).get(well_name)
+    if eph_df is not None:
+        _merged_data_cache[cache_key] = (now, eph_df.copy())
+        return eph_df.copy()
 
     def _normalize_df_depth(dframe):
         """Optimize depth normalization with minimal copying."""

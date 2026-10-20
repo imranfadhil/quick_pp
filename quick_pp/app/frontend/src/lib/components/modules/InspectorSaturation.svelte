@@ -22,6 +22,7 @@
 						method: sp.method,
 						meas_system: sp.measSystem,
 						water_salinity: sp.waterSalinity,
+						rw: sp.rwPickett,
 						a: sp.a,
 						m: sp.m,
 						n: sp.n,
@@ -35,7 +36,7 @@
 						max_depth: workbench.depthFilter?.max ?? null,
 						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
 						save: persist
-					}
+					} as any
 				}
 			);
 			if (error || !data) {
@@ -63,6 +64,7 @@
 				<span class="text-xs font-medium text-[var(--text-primary)]">Primary Solver</span>
 				<select
 					bind:value={workbench.saturationParams.method}
+					onchange={() => executeSaturation(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="waxman_smits">Waxman-Smits</option>
@@ -74,6 +76,7 @@
 				<span class="text-xs font-medium text-[var(--text-primary)]">Temp Units</span>
 				<select
 					bind:value={workbench.saturationParams.measSystem}
+					onchange={() => executeSaturation(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="metric">Metric (°C / km)</option>
@@ -115,6 +118,7 @@
 				max={2.0}
 				step={0.005}
 				decimals={3}
+				onrun={() => executeSaturation(false)}
 			/>
 		</ParameterSection>
 
@@ -200,4 +204,3 @@
 		</button>
 	</div>
 </div>
-

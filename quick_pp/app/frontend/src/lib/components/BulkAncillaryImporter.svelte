@@ -5,7 +5,8 @@
   export let type: 'formation_tops'|'fluid_contacts'|'pressure_tests'|'core_samples'|'well_surveys' = 'formation_tops';
   export let maxConcurrency = 4;
 
-  const API_BASE = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:6312';
+  import { API_BASE } from '$lib/api/client';
+  const MAX_DEMO_FILE_BYTES = 5 * 1024 * 1024; // 5 MB cap in live demo
 
   let files: File[] = [];
   let previews: Array<{fileName:string, rows:any[], previewRows:any[], detected:any, suggestedWell?:string}> = [];
@@ -19,7 +20,12 @@
 
   function handleFiles(e: Event) {
     const input = e.target as HTMLInputElement;
-    files = input.files ? Array.from(input.files) : [];
+    const rawFiles = input.files ? Array.from(input.files) : [];
+    const oversized = rawFiles.filter((f) => f.size > MAX_DEMO_FILE_BYTES);
+    if (oversized.length > 0) {
+      globalError = `File exceeds 5 MB Live Demo limit: ${oversized.map((f) => f.name).join(', ')}`;
+    }
+    files = rawFiles.filter((f) => f.size <= MAX_DEMO_FILE_BYTES);
     previews = [];
     selectedWells = {};
     results = [];

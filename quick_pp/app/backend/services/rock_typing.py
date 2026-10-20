@@ -3,7 +3,10 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import ORJSONResponse
 
 import quick_pp.database.objects as db_objects
-from quick_pp.app.backend.services.database import invalidate_well_cache
+from quick_pp.app.backend.services.database import (
+    _get_merged_dataframe_sync,
+    invalidate_well_cache,
+)
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_list
 
@@ -30,7 +33,7 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
         available_cols = set()
 
         for well_name in all_well_names:
-            df = proj.get_well_data_optimized(well_name)
+            df = _get_merged_dataframe_sync(project_id, well_name)
             if df.empty:
                 continue
             any_non_empty_well = True
@@ -65,13 +68,16 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
             phit_col = None
             perm_col = None
             rock_flag_col = None
-            for col in df.columns:
-                if col.upper() in ["PHIT", "POROSITY", "POR"]:
+            for col in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR"):
+                if col in df.columns and df[col].notna().any():
                     phit_col = col
-                if col.upper() in ["PERM", "PERMEABILITY", "K"]:
+                    break
+            for col in ("PERM", "CPERM", "KLOGH", "PERMEABILITY", "K"):
+                if col in df.columns and df[col].notna().any():
                     perm_col = col
-                if col.upper() == "ROCK_FLAG":
-                    rock_flag_col = col
+                    break
+            if "ROCK_FLAG" in df.columns:
+                rock_flag_col = "ROCK_FLAG"
 
             if not phit_col or not perm_col:
                 continue

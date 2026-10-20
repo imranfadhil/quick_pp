@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
@@ -7,14 +8,22 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
 
+	onMount(() => {
+		if (!projectData.rockTypingResult && workbench.projectId) {
+			executeRockTyping(false);
+		}
+	});
+
 	function addCutoff() {
 		const last = projectData.fziCutoffs[projectData.fziCutoffs.length - 1] ?? 1.0;
 		projectData.fziCutoffs = [...projectData.fziCutoffs, Number((last * 1.8).toFixed(2))];
+		executeRockTyping(false);
 	}
 
 	function removeCutoff(idx: number) {
 		if (projectData.fziCutoffs.length <= 1) return;
 		projectData.fziCutoffs = projectData.fziCutoffs.filter((_, i) => i !== idx);
+		executeRockTyping(false);
 	}
 
 	async function executeRockTyping(persist: boolean = false) {
@@ -36,10 +45,37 @@
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Rock typing calculation failed'));
 			}
+			const counts = (data as any).rock_type_counts ?? (data as any).flag_counts ?? {};
 			projectData.rockTypingResult = {
-				...data.data,
-				rock_type_counts: data.rock_type_counts
+				...(data.data as any),
+				rock_type_counts: counts
 			};
+
+			// Also update active well's ROCK_FLAG & FZI in wellData so LogTrackCanvas updates in real time
+			if (workbench.wellId && data.data?.well_names) {
+				const wnArr = data.data.well_names;
+				const dArr = data.data.depths;
+				const rfArr = data.data.rock_flags;
+				const fziArr = data.data.fzi;
+				const wDepths: number[] = [];
+				const wRf: (number | null)[] = [];
+				const wFzi: (number | null)[] = [];
+				for (let i = 0; i < wnArr.length; i++) {
+					if (wnArr[i] === workbench.wellId) {
+						wDepths.push(dArr[i]);
+						wRf.push(rfArr[i]);
+						wFzi.push(fziArr?.[i] ?? null);
+					}
+				}
+				if (wDepths.length > 0) {
+					wellData.mergeComputedCurves({
+						DEPTH: wDepths,
+						ROCK_FLAG: wRf,
+						FZI: wFzi
+					});
+				}
+			}
+
 			if (persist) {
 				wellData.lastSavedMessage = `Saved ROCK_FLAG (${data.saved_wells} wells) ✓`;
 				if (workbench.wellId) {
@@ -94,7 +130,7 @@
 			</button>
 		</ParameterSection>
 
-		{#if projectData.rockTypingResult}
+		{#if projectData.rockTypingResult?.rock_type_counts}
 			<ParameterSection title="Discrete Rock Type (DRT) Counts">
 				<div class="space-y-1">
 					{#each Object.entries(projectData.rockTypingResult.rock_type_counts) as [drt, count]}
@@ -143,4 +179,3 @@
 		</button>
 	</div>
 </div>
-

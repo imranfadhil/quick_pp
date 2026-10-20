@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { api, postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
@@ -11,11 +12,24 @@
 	let optModel = $state<'leverett_j' | 'skelt_harrison' | 'cuddy'>('leverett_j');
 	let optLoss = $state<'rmse' | 'mae' | 'huber' | 'bvw'>('rmse');
 	let useMdtPrior = $state(false);
-	let mdtFwl = $state(2500.0);
+	let mdtFwl = $state(3925.0);
 	let mdtWeight = $state(1.0);
 	let poreVolumeWeighted = $state(true);
 	let equalWellWeights = $state(true);
 	let fwlOptResult = $state<any>(null);
+
+	onMount(() => {
+		// Initialize sensible default FWL based on current well depth range if still at default 2500m
+		if (wellData.depthRange.max > 0 && projectData.shfParams.fwl === 2500.0) {
+			const contactFwl = wellData.contacts.find((c) => c.type === 'FWL' || c.type === 'OWC');
+			projectData.shfParams.fwl = contactFwl
+				? contactFwl.depth
+				: Number((wellData.depthRange.min + 0.72 * (wellData.depthRange.max - wellData.depthRange.min)).toFixed(1));
+		}
+		if (!projectData.shfResult && workbench.projectId) {
+			executeShf(false);
+		}
+	});
 
 	async function executeShf(persist: boolean = false) {
 		if (!workbench.projectId) return;
@@ -45,6 +59,28 @@
 				fits: data.fits,
 				...data.data
 			};
+
+			// Live-merge SHF curve into active well so LogTrackCanvas Track 6 updates in real time!
+			if (workbench.wellId && data.data?.well_names) {
+				const wnArr = data.data.well_names;
+				const dArr = data.data.depths;
+				const shfArr = data.data.shf;
+				const wDepths: number[] = [];
+				const wShf: (number | null)[] = [];
+				for (let i = 0; i < wnArr.length; i++) {
+					if (wnArr[i] === workbench.wellId) {
+						wDepths.push(dArr[i]);
+						wShf.push(shfArr[i] ?? null);
+					}
+				}
+				if (wDepths.length > 0) {
+					wellData.mergeComputedCurves({
+						DEPTH: wDepths,
+						SHF: wShf
+					});
+				}
+			}
+
 			if (persist) {
 				wellData.lastSavedMessage = `Saved SHF (${data.saved_wells} wells) ✓`;
 				if (workbench.wellId) {
@@ -83,6 +119,7 @@
 			fwlOptResult = res;
 			if (typeof res?.fwl === 'number' && Number.isFinite(res.fwl)) {
 				projectData.shfParams.fwl = Number(res.fwl.toFixed(2));
+				await executeShf(false);
 			}
 		} catch (e: any) {
 			projectData.error = e?.message || 'FWL optimization error';
@@ -202,35 +239,10 @@
 					<div>
 						<span class="text-[var(--text-muted)]">Fit RMSE / R²:</span>
 						<div class="mono-num font-semibold">
-							{fmtNum(fwlOptResult.rmse, 3)} / {fmtNum(fwlOptResult.r_squared, 3)}
+							{fmtNum(fwlOptResult.rmse, 3)} / {fmtNum(fwlOptResult.r2 ?? fwlOptResult.r_squared, 3)}
 						</div>
 					</div>
 				</div>
-
-				{#if fwlOptResult.well_diagnostics?.per_well_fwl}
-					<div class="mt-1 overflow-x-auto border border-[var(--border-hairline)]">
-						<table class="w-full border-collapse text-left text-[10px]">
-							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
-								<tr class="h-5 border-b border-[var(--border-hairline)]">
-									<th class="px-1 font-semibold">Well</th>
-									<th class="px-1 text-right font-semibold">Apparent FWL (m)</th>
-									<th class="px-1 text-right font-semibold">RMSE</th>
-								</tr>
-							</thead>
-							<tbody class="divide-y divide-[var(--border-hairline)]">
-								{#each Object.entries(fwlOptResult.well_diagnostics.per_well_fwl) as [wn, wfwl]}
-									<tr class="h-5">
-										<td class="mono-num px-1 font-medium">{wn}</td>
-										<td class="mono-num px-1 text-right font-semibold">{fmtNum(wfwl as number, 1)}</td>
-										<td class="mono-num px-1 text-right">
-											{fmtNum(fwlOptResult.well_diagnostics.per_well_rmse?.[wn], 3)}
-										</td>
-									</tr>
-								{/each}
-							</tbody>
-						</table>
-					</div>
-				{/if}
 			{/if}
 		</ParameterSection>
 
@@ -337,5 +349,3 @@
 		</button>
 	</div>
 </div>
-
-

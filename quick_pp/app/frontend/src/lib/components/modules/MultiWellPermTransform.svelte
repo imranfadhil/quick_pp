@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
@@ -6,6 +7,12 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
+
+	onMount(() => {
+		if (!projectData.permTransformResult && workbench.projectId) {
+			executePermTransform(false);
+		}
+	});
 
 	async function executePermTransform(persist: boolean = false) {
 		if (!workbench.projectId) return;
@@ -19,16 +26,38 @@
 					body: {
 						cutoffs: [...projectData.fziCutoffs].sort((a, b) => a - b),
 						save: persist
-					}
+					} as any
 				}
 			);
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Perm transform failed'));
 			}
 			projectData.permTransformResult = {
-				fits: data.fits,
-				...data.data
+				fits: data.fits as any,
+				...(data.data as any),
+				perm_pred: (data.data as any).perm_pred ?? (data.data as any).perm_trans ?? []
 			};
+
+			if (workbench.wellId && data.data?.well_names) {
+				const wnArr = data.data.well_names;
+				const dArr = data.data.depths;
+				const ptArr = (data.data as any).perm_trans ?? (data.data as any).perm_pred ?? [];
+				const wDepths: number[] = [];
+				const wPt: (number | null)[] = [];
+				for (let i = 0; i < wnArr.length; i++) {
+					if (wnArr[i] === workbench.wellId) {
+						wDepths.push(dArr[i]);
+						wPt.push(ptArr[i] ?? null);
+					}
+				}
+				if (wDepths.length > 0) {
+					wellData.mergeComputedCurves({
+						DEPTH: wDepths,
+						PERM_TRANS: wPt
+					});
+				}
+			}
+
 			if (persist) {
 				wellData.lastSavedMessage = `Saved PERM (${data.saved_wells} wells) ✓`;
 				if (workbench.wellId) {
@@ -79,7 +108,7 @@
 									<td class="mono-num px-1.5 text-right font-semibold text-[var(--status-ok)]">
 										{fmtNum(fit.r2, 3)}
 									</td>
-									<td class="mono-num px-1.5 text-right">{fit.count}</td>
+									<td class="mono-num px-1.5 text-right">{fit.count ?? '-'}</td>
 								</tr>
 							{/each}
 						</tbody>
@@ -116,4 +145,3 @@
 		</button>
 	</div>
 </div>
-

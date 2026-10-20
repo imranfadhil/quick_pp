@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -7,6 +7,17 @@
 	import { fmtNum } from '$lib/utils/formatters';
 
 	const AVAILABLE_MINERALS = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'HALITE'];
+
+	// Pre-Trained PIML & Conformal Prediction state
+	let mlModelConfig = $state<'clastic' | 'carbonate'>('clastic');
+	let conformalAlpha = $state<number>(0.2);
+	let mlSummary = $state<{
+		confidence_level_pct: number;
+		model_source: string;
+		phit_mean_width_vv: number;
+		sw_mean_width_vv: number;
+		perm_median_p90_p10_factor: number;
+	} | null>(null);
 
 	function toggleMineral(m: string) {
 		if (workbench.lithoParams.minerals.includes(m)) {
@@ -70,9 +81,11 @@
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
 						fluid_point: [lp.fluidNphi, lp.fluidRhob],
 						silt_line_angle: lp.siltLineAngle,
+						gr_clean: lp.grClean,
+						gr_clay: lp.grClay,
 						minerals: lp.minerals,
 						...filterArgs
-					}
+					} as any
 				}
 			);
 			if (lithErr) throw new Error(String((lithErr as any)?.detail ?? 'Lithology failed'));
@@ -114,6 +127,45 @@
 			wellData.isCalculating = false;
 		}
 	}
+
+	async function executePretrainedMlInference(persist: boolean = false) {
+		if (!workbench.projectId || !workbench.wellId) return;
+		wellData.isCalculating = true;
+		wellData.lastError = null;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/ml_inference`,
+				{
+					model_config: mlModelConfig,
+					alpha: conformalAlpha,
+					water_salinity: workbench.saturationParams.waterSalinity,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					save: persist
+				}
+			);
+			if (res.data) {
+				wellData.mergeComputedCurves(res.data, res.stats);
+			} else if (res.computed_curves) {
+				wellData.mergeComputedCurves(res.computed_curves, res.stats);
+			}
+			mlSummary = {
+				confidence_level_pct: res.confidence_level_pct ?? Math.round((1 - conformalAlpha) * 100),
+				model_source: res.model_source ?? 'Pre-Trained PIML Ensemble',
+				phit_mean_width_vv: res.interval_width_summary?.phit_mean_width_vv ?? 0,
+				sw_mean_width_vv: res.interval_width_summary?.sw_mean_width_vv ?? 0,
+				perm_median_p90_p10_factor: res.interval_width_summary?.perm_median_p90_p10_factor ?? 1
+			};
+			if (persist) {
+				wellData.lastSavedMessage = 'Pre-Trained Conformal Bounds Applied ✓';
+			}
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Pre-trained ML inference failed';
+		} finally {
+			wellData.isCalculating = false;
+		}
+	}
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
@@ -123,6 +175,7 @@
 				<span class="text-xs font-medium text-[var(--text-primary)]">Lithology Model</span>
 				<select
 					bind:value={workbench.lithoParams.model}
+					onchange={() => executeLithoPoro(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="ssc">Sand-Silt-Clay</option>
@@ -135,6 +188,7 @@
 				<span class="text-xs font-medium text-[var(--text-primary)]">Porosity Method</span>
 				<select
 					bind:value={workbench.lithoParams.porosityMethod}
+					onchange={() => executeLithoPoro(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="neu_den">NPHI-RHOB Xplot</option>
@@ -143,7 +197,7 @@
 			</div>
 		</ParameterSection>
 
-		<ParameterSection title="Endpoint Parameters (NPHI / RHOB)" badge="Linked to Crossplot">
+		<ParameterSection title="Endpoint Parameters (NPHI / RHOB / Vsh)" badge="Live Crossplot & Tracks">
 			{#if workbench.lithoParams.model === 'multi_mineral'}
 				<div class="mb-1.5 text-[11px] font-medium text-[var(--text-secondary)]">
 					Active Minerals:
@@ -154,7 +208,10 @@
 							<input
 								type="checkbox"
 								checked={workbench.lithoParams.minerals.includes(minName)}
-								onchange={() => toggleMineral(minName)}
+								onchange={() => {
+									toggleMineral(minName);
+									executeLithoPoro(false);
+								}}
 								class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 							/>
 							<span>{minName}</span>
@@ -163,6 +220,24 @@
 				</div>
 			{/if}
 
+			<NumericScrubber
+				label="GR Clean (Vsh=0)"
+				bind:value={workbench.lithoParams.grClean}
+				unit="gAPI"
+				min={0}
+				max={80}
+				step={1.0}
+				onrun={() => executeLithoPoro(false)}
+			/>
+			<NumericScrubber
+				label="GR Shale (Vsh=1)"
+				bind:value={workbench.lithoParams.grClay}
+				unit="gAPI"
+				min={50}
+				max={250}
+				step={2.0}
+				onrun={() => executeLithoPoro(false)}
+			/>
 			<NumericScrubber
 				label="NPHI Clean Sand"
 				bind:value={workbench.lithoParams.drySandNphi}
@@ -233,6 +308,7 @@
 				<input
 					type="checkbox"
 					bind:checked={workbench.lithoParams.enableHcCorrection}
+					onchange={() => executeLithoPoro(false)}
 					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 				/>
 				<span>Enable NPHI/RHOB HC Correction</span>
@@ -266,6 +342,72 @@
 					step={0.02}
 					onrun={() => executeLithoPoro(false)}
 				/>
+			{/if}
+		</ParameterSection>
+
+		<ParameterSection
+			title="Pre-Trained PIML & Conformal Prediction"
+			badge={`CI=${Math.round((1 - conformalAlpha) * 100)}%`}
+		>
+			<div class="mb-1.5 flex items-center justify-between rounded-xs border border-indigo-200 bg-indigo-50/70 px-2 py-1 text-[10px] text-indigo-900">
+				<span class="font-semibold">predict_pipeline.py Active</span>
+				<span class="rounded-xs bg-indigo-100 px-1 py-0.5 font-mono text-[9px] font-bold text-indigo-800">
+					Read-Only Training
+				</span>
+			</div>
+
+			<div class="grid grid-cols-[1fr_118px] items-center gap-x-2 py-0.5">
+				<span class="text-xs font-medium text-[var(--text-primary)]">Pre-Trained Suite</span>
+				<select
+					bind:value={mlModelConfig}
+					onchange={() => executePretrainedMlInference(false)}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+				>
+					<option value="clastic">Clastic (Volve PIML)</option>
+					<option value="carbonate">Carbonate (Costa PIML)</option>
+				</select>
+			</div>
+
+			<NumericScrubber
+				label="Conformal Alpha (α)"
+				bind:value={conformalAlpha}
+				min={0.05}
+				max={0.4}
+				step={0.02}
+				decimals={2}
+				onrun={() => executePretrainedMlInference(false)}
+			/>
+
+			<button
+				type="button"
+				disabled={wellData.isCalculating}
+				onclick={() => executePretrainedMlInference(false)}
+				class="mt-1.5 h-7 w-full rounded-sm border border-indigo-600 bg-indigo-600 px-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+			>
+				{wellData.isCalculating ? 'Running PIML Inference...' : 'Run Pre-Trained Conformal Inference'}
+			</button>
+
+			{#if mlSummary}
+				<div class="mt-1.5 grid grid-cols-3 gap-1 rounded-sm border border-indigo-200 bg-indigo-50/50 p-1.5 text-center text-[10px]">
+					<div>
+						<div class="text-[var(--text-muted)]">Φ Band Width</div>
+						<div class="mono-num font-bold text-indigo-900">
+							±{fmtNum(mlSummary.phit_mean_width_vv / 2, 3)} v/v
+						</div>
+					</div>
+					<div>
+						<div class="text-[var(--text-muted)]">Sw Band Width</div>
+						<div class="mono-num font-bold text-purple-900">
+							±{fmtNum(mlSummary.sw_mean_width_vv / 2, 3)} v/v
+						</div>
+					</div>
+					<div>
+						<div class="text-[var(--text-muted)]">K P90/P10</div>
+						<div class="mono-num font-bold text-amber-900">
+							{fmtNum(mlSummary.perm_median_p90_p10_factor, 1)}×
+						</div>
+					</div>
+				</div>
 			{/if}
 		</ParameterSection>
 
@@ -323,4 +465,3 @@
 		</button>
 	</div>
 </div>
-

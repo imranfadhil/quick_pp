@@ -158,11 +158,3 @@ if FastApiMCP is not None:
         mcp.mount()
     except Exception as _mcp_err:
         logging.getLogger(__name__).warning("FastApiMCP setup skipped: %s", _mcp_err)
-if False:
-    mcp = FastApiMCP(
-        app,
-        name="quick_pp API MCP",
-        describe_all_responses=True,  # Include all possible response schemas
-        describe_full_response_schema=True,  # Include full JSON schema in descriptions
-    )
-    mcp.mount()

@@ -23,6 +23,8 @@ from quick_pp.app.backend.services.database import (
     invalidate_well_cache,
 )
 from quick_pp.app.backend.services.rock_typing import _compute_fzi_data_sync
+from quick_pp.app.backend.services.database import _merged_data_cache, _ephemeral_wells
+from quick_pp.app.backend.utils.auth import is_demo_mode
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.core_analysis import (
     auto_j_params,
@@ -85,6 +87,28 @@ def _save_curves_to_well(project_id: int, well_name: str, curves_df: pd.DataFram
     df_to_save = curves_df.copy()
     if "WELL_NAME" not in df_to_save.columns:
         df_to_save["WELL_NAME"] = well_name
+
+    try:
+        import time
+
+        base_df = _get_merged_dataframe_sync(project_id, well_name)
+        if not base_df.empty and "DEPTH" in base_df.columns:
+            upd = df_to_save.drop(columns=["WELL_NAME"], errors="ignore").copy()
+            upd.columns = [str(c).upper() for c in upd.columns]
+            upd = upd.drop_duplicates(subset=["DEPTH"], keep="last")
+            overlap_cols = [c for c in upd.columns if c != "DEPTH" and c in base_df.columns]
+            merged_mem = base_df.drop(columns=overlap_cols, errors="ignore").merge(
+                upd, on="DEPTH", how="left"
+            )
+            for c in overlap_cols:
+                if c in base_df.columns:
+                    merged_mem[c] = merged_mem[c].combine_first(base_df[c])
+            _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (time.time(), merged_mem)
+    except Exception:
+        pass
+
+    if is_demo_mode():
+        return len(df_to_save)
 
     with get_db() as session:
         proj = db_objects.Project.load(session, project_id=project_id)
@@ -209,6 +233,8 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase):
         default_factory=lambda: ["QUARTZ", "CALCITE", "DOLOMITE", "SHALE"]
     )
     porosity_method: str = Field("density")
+    gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
+    gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
     auto_scale: bool = Field(True)
 
 
@@ -254,6 +280,7 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     a: float = Field(1.0, description="Archie tortuosity factor a")
     n: float = Field(2.0, description="Archie saturation exponent n")
     m_slope: float = Field(0.1, description="Waxman-Smits m* slope vs VCLAY/PHIT")
+    rw: Optional[float] = Field(None, description="Explicit Rw override (ohm.m)")
     b_intercept: float = Field(1.8, description="Waxman-Smits m* intercept")
 
 
@@ -631,6 +658,17 @@ def workspace_lithology(
             out_df["VCLAY"] = vclay_s
             out_df["PROJ_NPHI"] = px_s
             out_df["PROJ_RHOB"] = py_s
+            if req.gr_clean is not None and req.gr_clay is not None and "GR" in df.columns:
+                gr_s = pd.to_numeric(df["GR"], errors="coerce")
+                span = float(req.gr_clay) - float(req.gr_clean)
+                if abs(span) > 1e-6 and gr_s.notna().any():
+                    vsh_gr_s = ((gr_s - float(req.gr_clean)) / span).clip(0.0, 1.0)
+                    out_df["VSH_GR"] = vsh_gr_s
+                    out_df["VCLAY"] = (0.65 * vclay_s + 0.35 * vsh_gr_s).clip(0.0, 1.0)
+                    rem_m = (1.0 - out_df["VCLAY"]).clip(0.0, 1.0)
+                    sand_silt_sum = (vsand_s + vsilt_s).replace(0.0, np.nan)
+                    out_df["VSAND"] = np.where(sand_silt_sum.notna(), vsand_s * rem_m / sand_silt_sum, rem_m * 0.7)
+                    out_df["VSILT"] = np.where(sand_silt_sum.notna(), vsilt_s * rem_m / sand_silt_sum, rem_m * 0.3)
             save_cols = ["VSAND", "VSILT", "VCLAY"]
 
             crossplot_meta = {
@@ -696,7 +734,10 @@ def workspace_lithology(
             valid_mask = gr.notna()
             if not valid_mask.any():
                 raise ValueError("No valid GR values found in selected interval")
-            vsh = gr_index(gr[valid_mask].reset_index(drop=True))
+            if req.gr_clean is not None and req.gr_clay is not None and abs(float(req.gr_clay) - float(req.gr_clean)) > 1e-6:
+                vsh = ((gr[valid_mask] - float(req.gr_clean)) / (float(req.gr_clay) - float(req.gr_clean))).to_numpy(dtype=float)
+            else:
+                vsh = gr_index(gr[valid_mask].reset_index(drop=True))
             vclay_s = pd.Series(np.nan, index=df.index, dtype=float)
             vclay_s.loc[valid_mask] = np.clip(
                 np.asarray(vsh, dtype=float).ravel(), 0.0, 1.0
@@ -1039,6 +1080,9 @@ def workspace_saturation(
         ).ravel()
 
         temp_grad_s = pd.Series(temp_grad_arr, index=df.index, dtype=float)
+        if req.rw is not None and float(req.rw) > 0:
+            rw_arr = np.full(len(df), float(req.rw), dtype=float)
+            b_arr = np.asarray(estimate_b_waxman_smits(temp_grad_arr, rw_arr), dtype=float).ravel()
         rw_s = pd.Series(rw_arr, index=df.index, dtype=float)
         b_s = pd.Series(b_arr, index=df.index, dtype=float)
 
@@ -1232,11 +1276,15 @@ def workspace_reservoir_summary(
             cutoffs=req.cut_offs,
         )
         ressum_df = ressum_df.dropna(how="all").reset_index(drop=True)
+        res_flag = ((vclay < float(req.cut_offs.get("VSHALE", 0.4))) & (phit > float(req.cut_offs.get("PHIT", 0.05)))).astype(int)
+        pay_flag = ((res_flag == 1) & (swt < float(req.cut_offs.get("SWT", 0.8)))).astype(int)
+        flags_df = pd.DataFrame({"DEPTH": depth, "RES_FLAG": res_flag, "PAY_FLAG": pay_flag, "PAY_FLAGS": pay_flag})
 
         response: Dict[str, Any] = {
             "well_name": well_name,
             "cut_offs": req.cut_offs,
             "summary": dataframe_to_records(ressum_df),
+            "flags": dataframe_to_columnar(flags_df),
         }
 
         if req.include_upscaling:
@@ -1263,6 +1311,7 @@ def workspace_reservoir_summary(
             response["upscaling"] = {
                 "n_cells": int(len(blocked_df)),
                 "cells": dataframe_to_records(blocked_df.round(4)),
+                "blocked_cells": dataframe_to_records(blocked_df.round(4)),
                 "step_log": dataframe_to_columnar(step_df.round(4)),
             }
 
@@ -1355,15 +1404,8 @@ def workspace_rock_typing_compute(
             for wn, d, rf in zip(well_names, depths, rock_flags):
                 if rf is not None and d is not None:
                     by_well.setdefault(wn, []).append({"DEPTH": d, "ROCK_FLAG": rf})
-
-            with get_db() as session:
-                proj = db_objects.Project.load(session, project_id=project_id)
-                for wn, rows in by_well.items():
-                    well_obj = proj.get_well(wn)
-                    well_obj.update_data(pd.DataFrame(rows))
-                    well_obj.save()
-                    invalidate_well_cache(project_id=project_id, well_name=wn)
-                proj.save()
+            for wn, rows in by_well.items():
+                _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
             saved_wells = len(by_well)
 
         # Counts per rock flag
@@ -1377,6 +1419,7 @@ def workspace_rock_typing_compute(
             "project_id": project_id,
             "cutoffs": cutoffs,
             "flag_counts": flag_counts,
+            "rock_type_counts": flag_counts,
             "saved": req.save,
             "saved_wells": saved_wells,
             "data": {
@@ -1437,7 +1480,12 @@ def workspace_perm_transform_compute(
                 if mask.sum() >= 2:
                     try:
                         a, b = fit_poroperm_curve(phit_arr[mask], perm_arr[mask])
-                        fits[str(rf)] = {"a": float(a), "b": float(b)}
+                        log_k_true = np.log10(np.clip(perm_arr[mask], 1e-6, None))
+                        log_k_pred = np.log10(np.clip(float(a) * (phit_arr[mask] ** float(b)), 1e-6, None))
+                        ss_res = float(np.sum((log_k_true - log_k_pred) ** 2))
+                        ss_tot = float(np.sum((log_k_true - np.mean(log_k_true)) ** 2))
+                        r2_val = round(1.0 - ss_res / ss_tot, 4) if ss_tot > 1e-12 else 0.0
+                        fits[str(rf)] = {"a": float(a), "b": float(b), "r2": r2_val, "count": int(mask.sum())}
                     except Exception:
                         fits[str(rf)] = {"a": 1.0, "b": 1.0}
                 else:
@@ -1458,15 +1506,8 @@ def workspace_perm_transform_compute(
             for wn, d, pt in zip(well_names, depths, perm_trans):
                 if pt is not None and d is not None:
                     by_well.setdefault(wn, []).append({"DEPTH": d, "PERM_TRANS": pt})
-
-            with get_db() as session:
-                proj = db_objects.Project.load(session, project_id=project_id)
-                for wn, rows in by_well.items():
-                    well_obj = proj.get_well(wn)
-                    well_obj.update_data(pd.DataFrame(rows))
-                    well_obj.save()
-                    invalidate_well_cache(project_id=project_id, well_name=wn)
-                proj.save()
+            for wn, rows in by_well.items():
+                _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
             saved_wells = len(by_well)
 
         return {
@@ -1481,6 +1522,7 @@ def workspace_perm_transform_compute(
                 "perm": fzi_data["perm"],
                 "rock_flags": rock_flags,
                 "perm_trans": perm_trans,
+                "perm_pred": perm_trans,
             },
         }
     except ValueError as e:
@@ -1629,15 +1671,8 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest):
             for wn, d, shf_v in zip(well_names, depths, shf_values):
                 if shf_v is not None and d is not None:
                     by_well.setdefault(wn, []).append({"DEPTH": d, "SHF": shf_v})
-
-            with get_db() as session:
-                proj = db_objects.Project.load(session, project_id=project_id)
-                for wn, rows in by_well.items():
-                    well_obj = proj.get_well(wn)
-                    well_obj.update_data(pd.DataFrame(rows))
-                    well_obj.save()
-                    invalidate_well_cache(project_id=project_id, well_name=wn)
-                proj.save()
+            for wn, rows in by_well.items():
+                _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
             saved_wells = len(by_well)
 
         return {
@@ -1785,20 +1820,15 @@ def workspace_stratigraphic_normalization(
         norm_cols = [f"{lg}_NORM" for lg in req.logs if f"{lg}_NORM" in norm_df.columns]
         saved_wells = 0
         if req.save and norm_cols:
-            with get_db() as session:
-                proj = db_objects.Project.load(session, project_id=project_id)
-                for wn, grp in norm_df.groupby("WELL_NAME"):
-                    well_obj = proj.get_well(str(wn))
-                    well_obj.update_data(grp[["DEPTH"] + norm_cols])
-                    well_obj.save()
-                    invalidate_well_cache(project_id=project_id, well_name=str(wn))
-                    saved_wells += 1
-                proj.save()
+            for wn, grp in norm_df.groupby("WELL_NAME"):
+                _save_curves_to_well(project_id, str(wn), grp[["DEPTH"] + norm_cols])
+                saved_wells += 1
 
         return {
             "project_id": project_id,
             "method": req.method,
             "normalized_curves": norm_cols,
+            "normalized_columns": norm_cols,
             "saved": req.save,
             "saved_wells": saved_wells,
             "report": dataframe_to_records(report_df.round(4)),
@@ -1854,17 +1884,13 @@ def workspace_optimize_fwl(project_id: int, req: WorkspaceOptimizeFwlRequest):
 
         saved_wells = 0
         if req.save and "SW_SHM" in res["df"].columns:
-            with get_db() as session:
-                proj = db_objects.Project.load(session, project_id=project_id)
-                for wn, grp in res["df"].groupby("WELL_NAME"):
-                    well_obj = proj.get_well(str(wn))
-                    well_obj.update_data(
-                        grp[["DEPTH", "SW_SHM"]].rename(columns={"SW_SHM": "SHF"})
-                    )
-                    well_obj.save()
-                    invalidate_well_cache(project_id=project_id, well_name=str(wn))
-                    saved_wells += 1
-                proj.save()
+            for wn, grp in res["df"].groupby("WELL_NAME"):
+                _save_curves_to_well(
+                    project_id,
+                    str(wn),
+                    grp[["DEPTH", "SW_SHM"]].rename(columns={"SW_SHM": "SHF"}),
+                )
+                saved_wells += 1
 
         return {
             "project_id": project_id,
@@ -1891,4 +1917,117 @@ def workspace_optimize_fwl(project_id: int, req: WorkspaceOptimizeFwlRequest):
         raise HTTPException(
             status_code=400, detail=f"FWL optimization failed: {e}"
         ) from e
+
+
+class WorkspaceMlInferenceRequest(WorkspaceFilterBase):
+    model_config_key: str = Field(
+        "clastic",
+        alias="model_config",
+        description="Pre-trained model suite: 'clastic' or 'carbonate'",
+    )
+    alpha: float = Field(
+        0.20,
+        description="Conformal significance level (0.20 -> P10 to P90 interval)",
+    )
+
+
+@router.post(
+    "/wells/{well_name}/ml_inference",
+    summary="Run Pre-Trained PIML & Conformal Prediction inference (Read-Only Training)",
+    response_class=ORJSONResponse,
+)
+def workspace_ml_inference(
+    project_id: int, well_name: str, req: WorkspaceMlInferenceRequest
+):
+    """Trigger pre-trained PIML & Conformal Prediction inference with P10–P90 uncertainty bands."""
+    try:
+        from quick_pp.machine_learning.predict_pipeline import predict_well_dataframe
+
+        df = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        pred_df = predict_well_dataframe(
+            df,
+            model_config=req.model_config_key,
+            alpha=float(req.alpha),
+        )
+
+        out_cols = [
+            c
+            for c in [
+                "DEPTH",
+                "PHIT",
+                "PHIT_P10",
+                "PHIT_P90",
+                "PHIE",
+                "PHIE_P10",
+                "PHIE_P90",
+                "SW",
+                "SW_P10",
+                "SW_P90",
+                "SWT",
+                "SWT_P10",
+                "SWT_P90",
+                "PERM",
+                "PERM_P10",
+                "PERM_P90",
+                "LOG_PERM",
+                "LOG_PERM_P10",
+                "LOG_PERM_P90",
+                "BVW",
+                "BVHC",
+                "BVHC_P10",
+                "BVHC_P90",
+                "VCLAY",
+                "VSAND",
+                "VSILT",
+                "VCALC",
+                "VDOLO",
+                "OIL_FLAG",
+                "GAS_FLAG",
+            ]
+            if c in pred_df.columns
+        ]
+        out_df = pred_df[out_cols].copy()
+
+        saved_rows = 0
+        if req.save:
+            saved_rows = _save_curves_to_well(project_id, well_name, out_df)
+
+        stats = {
+            col: _curve_summary_stats(out_df[col])
+            for col in out_cols
+            if col != "DEPTH"
+        }
+        return {
+            "well_name": well_name,
+            "model_config": req.model_config_key,
+            "alpha": float(req.alpha),
+            "read_only_training": True,
+            "saved": req.save,
+            "saved_rows": saved_rows,
+            "stats": stats,
+            **dataframe_to_columnar(out_df),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Pre-trained ML inference failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/demo/reset",
+    summary="Reset ephemeral demo session edits back to pre-seeded Volve/Costa state",
+    response_class=ORJSONResponse,
+)
+def workspace_demo_reset(project_id: int):
+    """Clear in-memory ephemeral session curves and uploaded LAS wells for the project."""
+    _ephemeral_wells.pop(project_id, None)
+    cleared = invalidate_well_cache(project_id=project_id)
+    return {
+        "project_id": project_id,
+        "status": "reset",
+        "entries_cleared": cleared,
+        "message": "Ephemeral session reset to pre-seeded Volve & Costa state.",
+    }
 
