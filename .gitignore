@@ -122,3 +122,5 @@ chainlit*
 **_info**
 **/quick_pp.db*
 **/docker/data/postgres/
+
+docs/tutorials/*.ipynb
