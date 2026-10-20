@@ -4,7 +4,11 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
-	import { getRockTypeColor, PETRO_COLORS } from '$lib/utils/petrophysicsColors';
+	import {
+		getRockTypeColor,
+		LITHOLOGY_TRACK_SPECS,
+		PETRO_COLORS
+	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 
 	let plotEl = $state<HTMLDivElement | null>(null);
@@ -177,23 +181,51 @@
 
 			// Ternary SSC triangle & mineral endpoints
 			const lp = workbench.lithoParams;
-			traces.push({
-				type: 'scatter',
-				mode: 'lines+markers+text',
-				name: 'SSC Endpoints',
-				x: [lp.drySandNphi, lp.drySiltNphi, lp.dryClayNphi, lp.fluidNphi, lp.drySandNphi],
-				y: [lp.drySandRhob, lp.drySiltRhob, lp.dryClayRhob, lp.fluidRhob, lp.drySandRhob],
-				text: ['Sand', 'Silt', 'Clay', 'Fluid', ''],
-				textposition: 'top center',
-				textfont: { family: 'Inter', size: 10, color: '#0F172A' },
-				line: { color: '#2563EB', width: 1.5, dash: 'dot' },
-				marker: {
-					size: 9,
-					color: ['#CA8A04', '#EA580C', '#475569', '#2563EB', '#CA8A04'],
-					symbol: 'diamond',
-					line: { color: '#FFFFFF', width: 1.5 }
-				}
-			});
+			if (lp.model === 'multi_mineral') {
+				const activeSet = new Set(lp.minerals.map((m) => m.toUpperCase()));
+				const activeSpecs = LITHOLOGY_TRACK_SPECS.filter((s) =>
+					activeSet.has(s.mineralName)
+				);
+				const mx = [...activeSpecs.map((s) => s.nphiEndpoint), lp.fluidNphi];
+				const my = [...activeSpecs.map((s) => s.rhobEndpoint), lp.fluidRhob];
+				const mLabels = [...activeSpecs.map((s) => s.shortLabel), 'Fluid'];
+				const mColors = [...activeSpecs.map((s) => s.strokeHex), '#2563EB'];
+
+				traces.push({
+					type: 'scatter',
+					mode: 'markers+text',
+					name: 'Mineral Endpoints',
+					x: mx,
+					y: my,
+					text: mLabels,
+					textposition: 'top center',
+					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+					marker: {
+						size: 9.5,
+						color: mColors,
+						symbol: 'diamond',
+						line: { color: '#FFFFFF', width: 1.5 }
+					}
+				});
+			} else {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines+markers+text',
+					name: 'SSC Endpoints',
+					x: [lp.drySandNphi, lp.drySiltNphi, lp.dryClayNphi, lp.fluidNphi, lp.drySandNphi],
+					y: [lp.drySandRhob, lp.drySiltRhob, lp.dryClayRhob, lp.fluidRhob, lp.drySandRhob],
+					text: ['Sand', 'Silt', 'Clay', 'Fluid', ''],
+					textposition: 'top center',
+					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+					line: { color: '#2563EB', width: 1.5, dash: 'dot' },
+					marker: {
+						size: 9,
+						color: ['#CA8A04', '#EA580C', '#475569', '#2563EB', '#CA8A04'],
+						symbol: 'diamond',
+						line: { color: '#FFFFFF', width: 1.5 }
+					}
+				});
+			}
 
 			baseLayout.xaxis.title = { text: 'NPHI (v/v)' };
 			baseLayout.xaxis.range = [-0.08, 0.65];
@@ -501,6 +533,8 @@
 		void wellData.curves;
 		void wellData.visibleIndices;
 		void workbench.selectedQaqcCurve;
+		void workbench.lithoParams.model;
+		void workbench.lithoParams.minerals;
 		void workbench.lithoParams.drySandNphi;
 		void workbench.lithoParams.drySandRhob;
 		void workbench.lithoParams.drySiltNphi;

@@ -198,6 +198,54 @@ class WellDataState {
 				origCopy['DEPT'] = [...numericCurves['DEPTH']];
 			}
 
+			// Detect carbonate / multi-mineral curves on well load and clean up legacy duplicate VSAND==VCALC / VSILT==VDOLO
+			const hasPositiveCurve = (col: string) =>
+				Array.isArray(numericCurves[col]) &&
+				numericCurves[col].some((v) => Number.isFinite(v) && v > 1e-3);
+			const isDuplicateArray = (a?: number[], b?: number[]) => {
+				if (!a || !b || a.length === 0 || a.length !== b.length) return false;
+				let compared = 0;
+				for (let i = 0; i < a.length; i += Math.max(1, Math.floor(a.length / 25))) {
+					if (Number.isFinite(a[i]) && Number.isFinite(b[i])) {
+						compared++;
+						if (Math.abs(a[i] - b[i]) > 1e-4) return false;
+					}
+				}
+				return compared > 0;
+			};
+
+			const hasCarbonateMinerals =
+				hasPositiveCurve('VCALC') ||
+				hasPositiveCurve('VDOLO') ||
+				hasPositiveCurve('VANHY') ||
+				hasPositiveCurve('VHALI');
+			if (hasCarbonateMinerals) {
+				if (isDuplicateArray(numericCurves['VSAND'], numericCurves['VCALC'])) {
+					numericCurves['VSAND'] = new Array(numericCurves['VSAND'].length).fill(0);
+					origCopy['VSAND'] = [...numericCurves['VSAND']];
+				}
+				if (isDuplicateArray(numericCurves['VSILT'], numericCurves['VDOLO'])) {
+					numericCurves['VSILT'] = new Array(numericCurves['VSILT'].length).fill(0);
+					origCopy['VSILT'] = [...numericCurves['VSILT']];
+				}
+				const detectedMinerals: string[] = [];
+				if (hasPositiveCurve('VSAND')) detectedMinerals.push('QUARTZ');
+				if (hasPositiveCurve('VCALC')) detectedMinerals.push('CALCITE');
+				if (hasPositiveCurve('VDOLO')) detectedMinerals.push('DOLOMITE');
+				if (hasPositiveCurve('VCLAY') || hasPositiveCurve('VSHALE'))
+					detectedMinerals.push('SHALE');
+				if (hasPositiveCurve('VANHY')) detectedMinerals.push('ANHYDRITE');
+				if (hasPositiveCurve('VHALI')) detectedMinerals.push('HALITE');
+				if (detectedMinerals.length > 0) {
+					workbench.lithoParams.model = 'multi_mineral';
+					workbench.lithoParams.minerals = detectedMinerals;
+				}
+			} else if (hasPositiveCurve('VSAND') || hasPositiveCurve('VSILT')) {
+				if (workbench.lithoParams.model === 'multi_mineral') {
+					workbench.lithoParams.model = 'ssc';
+				}
+			}
+
 			this.curves = numericCurves;
 			this.originalCurves = origCopy;
 			this.zonesColumn = zCol;
@@ -792,7 +840,22 @@ class WellDataState {
 		}
 
 		const out: Record<string, number | null> = { DEPT: dept[lo] };
-		for (const k of ['GR', 'RT', 'NPHI', 'RHOB', 'VCLAY', 'PHIT', 'PHIE', 'PERM', 'SWT', 'SWE']) {
+		for (const k of [
+			'GR',
+			'RT',
+			'NPHI',
+			'RHOB',
+			'VCLAY',
+			'VCALC',
+			'VDOLO',
+			'VSAND',
+			'VSILT',
+			'PHIT',
+			'PHIE',
+			'PERM',
+			'SWT',
+			'SWE'
+		]) {
 			if (this.curves[k]) {
 				const v = this.curves[k][lo];
 				out[k] = Number.isFinite(v) ? v : null;

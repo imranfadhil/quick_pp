@@ -300,8 +300,8 @@ def _load_costa_well(well_name: str) -> pd.DataFrame:
     rem_matrix = (1.0 - phit - df["VCLAY"]).clip(0.0, 1.0)
     df["VCALC"] = (rem_matrix * 0.72).clip(0.0, 1.0)
     df["VDOLO"] = (rem_matrix * 0.28).clip(0.0, 1.0)
-    df["VSAND"] = df["VCALC"]
-    df["VSILT"] = df["VDOLO"]
+    df["VSAND"] = 0.0
+    df["VSILT"] = 0.0
     df["PHIT"] = phit
     df["PHIE"] = (phit * (1.0 - 0.30 * vsh)).clip(0.005, phit)
     df["SWT"] = sw

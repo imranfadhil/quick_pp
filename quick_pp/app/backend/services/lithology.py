@@ -27,6 +27,7 @@ from quick_pp.app.backend.schemas.lithology_multi_mineral import (
 )
 from quick_pp.app.backend.schemas.lithology_ssc import LithologySSCInput
 from quick_pp.app.backend.schemas.lithology_vsh_gr import LithologyVshGRInput
+from quick_pp.config import Config
 from quick_pp.lithology import gr_index
 from quick_pp.lithology.multi_mineral import MultiMineral
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
@@ -434,6 +435,12 @@ async def estimate_multi_mineral(inputs: LithologyMultiMineralInput):
         dtc=dtc,
         auto_scale=input_dict["auto_scale"],
     )
+
+    # Ensure unselected mineral volume columns are explicitly zeroed (0.0) on valid rows
+    valid_rows = results_df["PHIT_CONSTRUCTED"].notna()
+    for min_col in Config.MINERALS_NAME_MAPPING.values():
+        if min_col not in results_df.columns:
+            results_df[min_col] = np.where(valid_rows, 0.0, np.nan)
 
     # Convert DataFrame to list of dicts and clean NaN/Inf values
     results_list = results_df.to_dict(orient="records")

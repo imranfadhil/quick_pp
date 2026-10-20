@@ -89,13 +89,20 @@ from quick_pp.uncertainty import (  # noqa: E402
     run_log_uncertainty,
     sample_lhs_parameters,
 )
-from quick_pp.machine_learning.utils import (  # noqa: E402
-    ConformalMultiOutputRegressor,
-    ConformalRegressor,
-    EnforceMineralSum,
-    enforce_physical_constraints,
-    physics_informed_loss,
-)
+try:
+    from quick_pp.machine_learning.utils import (  # noqa: E402
+        ConformalMultiOutputRegressor,
+        ConformalRegressor,
+        EnforceMineralSum,
+        enforce_physical_constraints,
+        physics_informed_loss,
+    )
+except ImportError:
+    ConformalMultiOutputRegressor = None  # type: ignore[assignment]
+    ConformalRegressor = None  # type: ignore[assignment]
+    EnforceMineralSum = None  # type: ignore[assignment]
+    enforce_physical_constraints = None  # type: ignore[assignment]
+    physics_informed_loss = None  # type: ignore[assignment]
 from quick_pp.upscaling import (  # noqa: E402
     arith_upscale,
     block_logs,

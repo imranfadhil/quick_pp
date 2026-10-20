@@ -6,8 +6,20 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
+	import {
+		ALL_LITHOLOGY_CURVES,
+		LITHOLOGY_TRACK_SPECS,
+		MINERAL_TO_CURVE_MNEMONIC
+	} from '$lib/utils/petrophysicsColors';
 
 	const AVAILABLE_MINERALS = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'HALITE'];
+	const MINERAL_COLOR_MAP: Record<string, { fill: string; stroke: string; label: string }> =
+		Object.fromEntries(
+			LITHOLOGY_TRACK_SPECS.map((s) => [
+				s.mineralName,
+				{ fill: s.fillHex, stroke: s.strokeHex, label: s.shortLabel }
+			])
+		);
 
 	// Pre-Trained PIML & Conformal Prediction state
 	let mlModelConfig = $state<'clastic' | 'carbonate'>('clastic');
@@ -22,9 +34,38 @@
 
 	function toggleMineral(m: string) {
 		if (workbench.lithoParams.minerals.includes(m)) {
+			if (workbench.lithoParams.minerals.length <= 1) return;
 			workbench.lithoParams.minerals = workbench.lithoParams.minerals.filter((x) => x !== m);
 		} else {
 			workbench.lithoParams.minerals = [...workbench.lithoParams.minerals, m];
+		}
+	}
+
+	function zeroUnselectedMineralCurvesInMemory() {
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		if (dept.length === 0) return;
+
+		const lp = workbench.lithoParams;
+		let activeMnemonics: Set<string>;
+		if (lp.model === 'multi_mineral') {
+			activeMnemonics = new Set(
+				lp.minerals.map((m) => MINERAL_TO_CURVE_MNEMONIC[m.toUpperCase()]).filter(Boolean)
+			);
+		} else if (lp.model === 'ssc') {
+			activeMnemonics = new Set(['VSAND', 'VSILT', 'VCLAY']);
+		} else {
+			activeMnemonics = new Set(['VCLAY']);
+		}
+
+		const zeroedUpdates: Record<string, number[]> = {};
+		const zeroArr = new Array(dept.length).fill(0);
+		for (const curveName of ALL_LITHOLOGY_CURVES) {
+			if (!activeMnemonics.has(curveName) && wellData.curves[curveName]) {
+				zeroedUpdates[curveName] = [...zeroArr];
+			}
+		}
+		if (Object.keys(zeroedUpdates).length > 0) {
+			wellData.curves = { ...wellData.curves, ...zeroedUpdates };
 		}
 	}
 
@@ -33,6 +74,7 @@
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const lp = workbench.lithoParams;
+		zeroUnselectedMineralCurvesInMemory();
 		const filterArgs = {
 			min_depth: workbench.depthFilter?.min ?? null,
 			max_depth: workbench.depthFilter?.max ?? null,
@@ -85,6 +127,7 @@
 						gr_clean: lp.grClean,
 						gr_clay: lp.grClay,
 						minerals: lp.minerals,
+						porosity_method: lp.porosityMethod === 'den' ? 'density' : 'neutron_density',
 						...filterArgs
 					} as any
 				}
@@ -103,6 +146,7 @@
 					},
 					body: {
 						method: lp.porosityMethod,
+						lithology_model: lp.model,
 						use_hc_corrected: lp.enableHcCorrection && lp.useHcCorrected,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
@@ -110,7 +154,7 @@
 						fluid_point: [lp.fluidNphi, lp.fluidRhob],
 						silt_line_angle: lp.siltLineAngle,
 						...filterArgs
-					}
+					} as any
 				}
 			);
 			if (poroErr) throw new Error(String((poroErr as any)?.detail ?? 'Porosity failed'));
@@ -200,22 +244,38 @@
 
 		<ParameterSection title="Endpoint Parameters (NPHI / RHOB / Vsh)" badge="Live Crossplot & Tracks">
 			{#if workbench.lithoParams.model === 'multi_mineral'}
-				<div class="mb-1.5 text-[11px] font-medium text-[var(--text-secondary)]">
-					Active Minerals:
+				<div class="mb-1.5 flex items-center justify-between text-[11px] font-medium text-[var(--text-secondary)]">
+					<span>Active Minerals:</span>
+					<span class="mono-num text-[10px] text-[var(--text-muted)]">
+						{workbench.lithoParams.minerals.length} selected
+					</span>
 				</div>
 				<div class="mb-2 grid grid-cols-2 gap-1">
 					{#each AVAILABLE_MINERALS as minName}
-						<label class="flex items-center gap-1.5 text-xs cursor-pointer">
+						{@const isSelected = workbench.lithoParams.minerals.includes(minName)}
+						{@const swatch = MINERAL_COLOR_MAP[minName]}
+						<label
+							class="flex items-center gap-1.5 rounded-xs border px-1.5 py-1 text-xs cursor-pointer transition-colors {isSelected
+								? 'border-[var(--border-hairline)] bg-[var(--bg-app)] font-medium text-[var(--text-primary)]'
+								: 'border-transparent text-[var(--text-muted)] opacity-75 hover:opacity-100'}"
+						>
 							<input
 								type="checkbox"
-								checked={workbench.lithoParams.minerals.includes(minName)}
+								checked={isSelected}
+								disabled={isSelected && workbench.lithoParams.minerals.length <= 1}
 								onchange={() => {
 									toggleMineral(minName);
 									executeLithoPoro(false);
 								}}
 								class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 							/>
-							<span>{minName}</span>
+							{#if swatch}
+								<span
+									class="inline-block h-2.5 w-2.5 shrink-0 rounded-[2px]"
+									style="background:{swatch.fill}; border:1px solid {swatch.stroke};"
+								></span>
+							{/if}
+							<span class="truncate">{minName}</span>
 						</label>
 					{/each}
 				</div>
