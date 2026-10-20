@@ -533,7 +533,11 @@ def uam_list_users(admin: Dict[str, Any] = Depends(require_admin)):
             .scalars()
             .all()
         )
-        return {"users": [serialize_user(u, session=session) for u in users]}
+        return {
+            "users": [serialize_user(u, session=session) for u in users],
+            "smtp_configured": bool(os.environ.get("SMTP_HOST", "").strip()),
+            "smtp_host": os.environ.get("SMTP_HOST", "").strip() or None,
+        }
 
 
 @router.post("/uam/users/invite", summary="Invite a new user with temporary password & invite link (Admin only)")

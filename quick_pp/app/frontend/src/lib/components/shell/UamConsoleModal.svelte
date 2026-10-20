@@ -281,6 +281,21 @@
 				</div>
 
 				<div class="flex items-center gap-2">
+					{#if authState.smtpConfigured}
+						<span
+							title="Outbound invitation emails are sent via {authState.smtpHost}"
+							class="rounded-xs border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-800"
+						>
+							✓ SMTP Connected ({authState.smtpHost})
+						</span>
+					{:else}
+						<span
+							title="Set SMTP_HOST in .env to enable automatic invitation emails"
+							class="rounded-xs border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
+						>
+							⚠ No SMTP Configured (Manual Credential Share)
+						</span>
+					{/if}
 					<button
 						type="button"
 						onclick={refreshUamData}
@@ -438,7 +453,13 @@
 						</div>
 
 						<div class="mt-2.5 flex items-center justify-between text-[11px] text-slate-600">
-							<span>{latestInvitation.email_message}</span>
+							{#if latestInvitation.email_sent}
+								<span class="font-medium text-emerald-700">✓ {latestInvitation.email_message}</span>
+							{:else}
+								<span class="rounded-xs border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900">
+									⚠ <strong>No email sent automatically</strong> ({latestInvitation.email_message}) — Please copy and share the Invite Link or Temporary Password manually with the user.
+								</span>
+							{/if}
 							<button
 								type="button"
 								onclick={() =>
@@ -503,6 +524,13 @@
 									Creates user in <span class="mono-num font-semibold">FORCE_CHANGE_PASSWORD</span> state
 								</span>
 							</div>
+
+							{#if !authState.smtpConfigured}
+								<div class="rounded-sm border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+									<strong>⚠ Automatic Email Delivery Not Configured (<code class="mono-num">SMTP_HOST</code> is empty):</strong>
+									The user account will be created immediately and can sign in using either their <strong>Username</strong> or <strong>Email</strong>, but you will need to manually copy and send them the generated <strong>Direct Invite Link</strong> or <strong>Temporary Password</strong>.
+								</div>
+							{/if}
 
 							<div class="grid grid-cols-1 gap-3 md:grid-cols-4">
 								<label class="block">

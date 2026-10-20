@@ -65,6 +65,8 @@ class AuthState {
 	isInitializing = $state<boolean>(true);
 	uamModalOpen = $state<boolean>(false);
 	accountModalOpen = $state<boolean>(false);
+	smtpConfigured = $state<boolean>(false);
+	smtpHost = $state<string | null>(null);
 
 	isAuthenticated = $derived<boolean>(Boolean(this.user && this.token));
 	isAdmin = $derived<boolean>(this.user?.role === 'admin');
@@ -143,7 +145,13 @@ class AuthState {
 	// --- Admin UAM API Helpers ---
 
 	async listUsers(): Promise<AuthUser[]> {
-		const res = await getJson<{ users: AuthUser[] }>('/quick_pp/uam/users');
+		const res = await getJson<{
+			users: AuthUser[];
+			smtp_configured?: boolean;
+			smtp_host?: string | null;
+		}>('/quick_pp/uam/users');
+		this.smtpConfigured = Boolean(res.smtp_configured);
+		this.smtpHost = res.smtp_host ?? null;
 		return res.users || [];
 	}
 
