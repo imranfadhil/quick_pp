@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field
 
 from quick_pp.app.backend.services.database import (
@@ -23,7 +22,12 @@ from quick_pp.app.backend.services.database import (
     invalidate_well_cache,
 )
 from quick_pp.app.backend.services.rock_typing import _compute_fzi_data_sync
-from quick_pp.app.backend.services.database import _merged_data_cache, _ephemeral_wells
+from quick_pp.app.backend.services.database import (
+    _ephemeral_wells,
+    _merged_data_cache,
+    reset_demo_project_state,
+    resolve_db_well_name,
+)
 from quick_pp.app.backend.utils.auth import is_demo_mode
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.core_analysis import (
@@ -73,6 +77,8 @@ router = APIRouter(
     prefix="/workspace/projects/{project_id}",
     tags=["Workspace Compute"],
 )
+
+_ephemeral_well_configs: Dict[Tuple[int, str], Dict[str, Any]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -335,9 +341,8 @@ class WorkspaceShfRequest(BaseModel):
 @router.get(
     "/summary",
     summary="Get project-wide well metadata and summary statistics",
-    response_class=ORJSONResponse,
 )
-def workspace_project_summary(project_id: int):
+def workspace_project_summary(project_id: int) -> Dict[str, Any]:
     """Return lightweight project and per-well summary statistics."""
     return get_project_summary(project_id)
 
@@ -345,7 +350,6 @@ def workspace_project_summary(project_id: int):
 @router.get(
     "/wells/{well_name}/data",
     summary="Get filtered well data in columnar or records format",
-    response_class=ORJSONResponse,
 )
 def workspace_well_data(
     project_id: int,
@@ -385,7 +389,6 @@ def workspace_well_data(
 @router.get(
     "/wells/{well_name}/bundle",
     summary="Get complete well bundle (columnar curves, stats, tops, contacts, core, pressures, survey) in one request",
-    response_class=ORJSONResponse,
 )
 def workspace_well_bundle(
     project_id: int,
@@ -425,11 +428,25 @@ def workspace_well_bundle(
 
         ancillary: Dict[str, Any] = {}
         well_config: Dict[str, Any] = {}
-        with get_db() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
-            well_obj = proj.get_well(well_name)
-            ancillary = well_obj.get_ancillary_data() or {}
-            well_config = getattr(well_obj, "config", None).__dict__ if getattr(well_obj, "config", None) else {}
+        try:
+            with get_db() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                well_obj = proj.get_well(resolve_db_well_name(project_id, well_name))
+                ancillary = well_obj.get_ancillary_data() or {}
+                well_config = (
+                    getattr(well_obj, "config", None).__dict__
+                    if getattr(well_obj, "config", None)
+                    else {}
+                )
+                if well_obj._orm_well and isinstance(well_obj._orm_well.config_data, dict):
+                    well_config = {**well_config, **well_obj._orm_well.config_data}
+        except Exception:
+            pass
+        eph_cfg = _ephemeral_well_configs.get((project_id, well_name)) or _ephemeral_well_configs.get(
+            (project_id, resolve_db_well_name(project_id, well_name))
+        )
+        if eph_cfg:
+            well_config = {**well_config, **eph_cfg}
 
         def _df_or_list(val: Any) -> List[Dict[str, Any]]:
             if val is None:
@@ -515,11 +532,10 @@ def workspace_well_bundle(
 @router.post(
     "/wells/{well_name}/hc_correction",
     summary="Compute depth-aligned hydrocarbon correction for NPHI/RHOB on server",
-    response_class=ORJSONResponse,
 )
 def workspace_hc_correction(
     project_id: int, well_name: str, req: WorkspaceHCCorrectionRequest
-):
+) -> Dict[str, Any]:
     """Compute NPHI_HC and RHOB_HC aligned with DEPTH and optionally save to the database."""
     try:
         df = _get_filtered_well_df(
@@ -596,11 +612,10 @@ def workspace_hc_correction(
 @router.post(
     "/wells/{well_name}/lithology",
     summary="Compute depth-aligned lithology volumes (SSC, Multi-Mineral, or Vsh-GR) on server",
-    response_class=ORJSONResponse,
 )
 def workspace_lithology(
     project_id: int, well_name: str, req: WorkspaceLithologyRequest
-):
+) -> Dict[str, Any]:
     """Compute lithology fractions aligned on DEPTH and optionally save to the database."""
     try:
         df = _get_filtered_well_df(
@@ -775,11 +790,10 @@ def workspace_lithology(
 @router.post(
     "/wells/{well_name}/porosity",
     summary="Compute depth-aligned porosity curves (PHIT, PHIE, PHID) on server",
-    response_class=ORJSONResponse,
 )
 def workspace_porosity(
     project_id: int, well_name: str, req: WorkspacePorosityRequest
-):
+) -> Dict[str, Any]:
     """Compute PHIT, PHIE, PHID, and PHIT_SH aligned on DEPTH and compare against core CPORE."""
     try:
         df = _get_filtered_well_df(
@@ -898,11 +912,10 @@ def workspace_porosity(
 @router.post(
     "/wells/{well_name}/permeability",
     summary="Compute depth-aligned permeability (Choo, Timur, Tixier, Coates, Kozeny-Carman) on server",
-    response_class=ORJSONResponse,
 )
 def workspace_permeability(
     project_id: int, well_name: str, req: WorkspacePermeabilityRequest
-):
+) -> Dict[str, Any]:
     """Compute PERM aligned on DEPTH and compare against core CPERM."""
     try:
         df = _get_filtered_well_df(
@@ -1018,11 +1031,10 @@ def workspace_permeability(
 @router.post(
     "/wells/{well_name}/saturation",
     summary="Compute single-pass depth-aligned water saturation (Archie + Waxman-Smits) on server",
-    response_class=ORJSONResponse,
 )
 def workspace_saturation(
     project_id: int, well_name: str, req: WorkspaceSaturationRequest
-):
+) -> Dict[str, Any]:
     """Compute TEMP_GRAD, RW, B, QVN, M_STAR, SWT_ARCHIE, SWT_WAXMAN, and crossplot data in one pass."""
     try:
         df = _get_filtered_well_df(
@@ -1218,11 +1230,10 @@ def workspace_saturation(
 @router.post(
     "/wells/{well_name}/reservoir_summary",
     summary="Compute zone-level reservoir summary, optional upscaling, and optional uncertainty directly from DB well data",
-    response_class=ORJSONResponse,
 )
 def workspace_reservoir_summary(
     project_id: int, well_name: str, req: WorkspaceReservoirSummaryRequest
-):
+) -> Dict[str, Any]:
     """Calculate reservoir summary table (and optional upscaled blocked logs / Monte Carlo uncertainty) on server."""
     try:
         df = _get_filtered_well_df(
@@ -1361,11 +1372,10 @@ def workspace_reservoir_summary(
 @router.post(
     "/rock_typing/compute",
     summary="Compute FZI rock typing across project wells and optionally save ROCK_FLAG",
-    response_class=ORJSONResponse,
 )
 def workspace_rock_typing_compute(
     project_id: int, req: WorkspaceRockTypingRequest
-):
+) -> Dict[str, Any]:
     """Compute FZI and ROCK_FLAG across all wells in the project on the server."""
     try:
         fzi_data = _compute_fzi_data_sync(project_id)
@@ -1443,11 +1453,10 @@ def workspace_rock_typing_compute(
 @router.post(
     "/perm_transform/compute",
     summary="Fit poro-perm curves per ROCK_FLAG and compute/save PERM_TRANS across project wells",
-    response_class=ORJSONResponse,
 )
 def workspace_perm_transform_compute(
     project_id: int, req: WorkspacePermTransformRequest
-):
+) -> Dict[str, Any]:
     """Fit power-law permeability transforms (a * PHIT^b) per ROCK_FLAG and optionally save PERM_TRANS."""
     try:
         fzi_data = _compute_fzi_data_sync(project_id)
@@ -1536,9 +1545,8 @@ def workspace_perm_transform_compute(
 @router.post(
     "/shf/compute",
     summary="Compute Leverett-J Saturation Height Function across project wells and optionally save SHF",
-    response_class=ORJSONResponse,
 )
-def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest):
+def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str, Any]:
     """Compute Leverett-J SHF curves across all project wells and optionally save SHF to database."""
     try:
         fzi_data = _compute_fzi_data_sync(project_id)
@@ -1736,11 +1744,10 @@ class WorkspaceOptimizeFwlRequest(BaseModel):
 @router.post(
     "/wells/{well_name}/environmental_corrections",
     summary="Apply borehole environmental and invasion corrections to well logs",
-    response_class=ORJSONResponse,
 )
 def workspace_environmental_corrections(
     project_id: int, well_name: str, req: WorkspaceEnvCorrectionRequest
-):
+) -> Dict[str, Any]:
     """Apply environmental corrections (GR_CORR, NPHI_CORR, RHOB_CORR, RT_CORR) to a well."""
     try:
         df = _get_filtered_well_df(
@@ -1781,11 +1788,10 @@ def workspace_environmental_corrections(
 @router.post(
     "/stratigraphic_normalization",
     summary="Run multi-well stratigraphic (zone-by-zone) log normalization across project wells",
-    response_class=ORJSONResponse,
 )
 def workspace_stratigraphic_normalization(
     project_id: int, req: WorkspaceStratNormalizationRequest
-):
+) -> Dict[str, Any]:
     """Normalize log curves across all project wells per geological zone."""
     try:
         proj_summary = get_project_summary(project_id)
@@ -1842,9 +1848,8 @@ def workspace_stratigraphic_normalization(
 @router.post(
     "/optimize_fwl",
     summary="Optimize Multi-Well Free Water Level (FWL) & Transition Zone across project wells",
-    response_class=ORJSONResponse,
 )
-def workspace_optimize_fwl(project_id: int, req: WorkspaceOptimizeFwlRequest):
+def workspace_optimize_fwl(project_id: int, req: WorkspaceOptimizeFwlRequest) -> Dict[str, Any]:
     """Simultaneously optimize Free Water Level across all project wells and reconcile Sw_log vs Sw_SHM."""
     try:
         proj_summary = get_project_summary(project_id)
@@ -1934,11 +1939,10 @@ class WorkspaceMlInferenceRequest(WorkspaceFilterBase):
 @router.post(
     "/wells/{well_name}/ml_inference",
     summary="Run Pre-Trained PIML & Conformal Prediction inference (Read-Only Training)",
-    response_class=ORJSONResponse,
 )
 def workspace_ml_inference(
     project_id: int, well_name: str, req: WorkspaceMlInferenceRequest
-):
+) -> Dict[str, Any]:
     """Trigger pre-trained PIML & Conformal Prediction inference with P10–P90 uncertainty bands."""
     try:
         from quick_pp.machine_learning.predict_pipeline import predict_well_dataframe
@@ -2015,14 +2019,96 @@ def workspace_ml_inference(
         ) from e
 
 
+class WorkspaceWellConfigRequest(BaseModel):
+    focus_min_depth: Optional[float] = Field(
+        None, description="Persistent working top depth for this well"
+    )
+    focus_max_depth: Optional[float] = Field(
+        None, description="Persistent working bottom depth for this well"
+    )
+    clear_focus_depth: bool = Field(
+        False, description="Clear persistent working depth range back to full well"
+    )
+    extra: Optional[Dict[str, Any]] = Field(
+        None, description="Additional per-well configuration parameters"
+    )
+
+
+@router.post(
+    "/wells/{well_name}/config",
+    summary="Save per-well persistent configuration such as working top/bottom depth interval",
+)
+@router.patch(
+    "/wells/{well_name}/config",
+    include_in_schema=False,
+)
+def workspace_update_well_config(
+    project_id: int, well_name: str, req: WorkspaceWellConfigRequest
+) -> Dict[str, Any]:
+    """Persist working top and bottom focus depth (and optional well config keys) for a specific well."""
+    try:
+        from quick_pp.database import models as db_models
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        eph = dict(_ephemeral_well_configs.get((project_id, well_name), {}))
+        if req.clear_focus_depth:
+            eph["focus_min_depth"] = None
+            eph["focus_max_depth"] = None
+        else:
+            if req.focus_min_depth is not None or req.focus_max_depth is not None:
+                eph["focus_min_depth"] = req.focus_min_depth
+                eph["focus_max_depth"] = req.focus_max_depth
+        if req.extra:
+            eph.update(req.extra)
+        _ephemeral_well_configs[(project_id, well_name)] = eph
+
+        saved_cfg = dict(eph)
+        if not is_demo_mode():
+            with get_db() as session:
+                well_orm = session.scalar(
+                    select(db_models.Well).filter_by(
+                        project_id=project_id, name=well_name
+                    )
+                )
+                if well_orm:
+                    current_cfg = (
+                        dict(well_orm.config_data)
+                        if isinstance(well_orm.config_data, dict)
+                        else {}
+                    )
+                    current_cfg.update(eph)
+                    if req.clear_focus_depth:
+                        current_cfg.pop("focus_min_depth", None)
+                        current_cfg.pop("focus_max_depth", None)
+                    well_orm.config_data = current_cfg
+                    flag_modified(well_orm, "config_data")
+                    session.add(well_orm)
+                    session.flush()
+                    saved_cfg = current_cfg
+
+        return {
+            "project_id": project_id,
+            "well_name": well_name,
+            "config": saved_cfg,
+            "saved": True,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update well configuration: {e}"
+        ) from e
+
+
 @router.post(
     "/demo/reset",
     summary="Reset ephemeral demo session edits back to pre-seeded Volve/Costa state",
-    response_class=ORJSONResponse,
 )
-def workspace_demo_reset(project_id: int):
+def workspace_demo_reset(project_id: int) -> Dict[str, Any]:
     """Clear in-memory ephemeral session curves and uploaded LAS wells for the project."""
     _ephemeral_wells.pop(project_id, None)
+    reset_demo_project_state(project_id)
+    for k in [k for k in _ephemeral_well_configs if k[0] == project_id]:
+        _ephemeral_well_configs.pop(k, None)
     cleared = invalidate_well_cache(project_id=project_id)
     return {
         "project_id": project_id,
@@ -2030,4 +2116,265 @@ def workspace_demo_reset(project_id: int):
         "entries_cleared": cleared,
         "message": "Ephemeral session reset to pre-seeded Volve & Costa state.",
     }
+
+
+class WorkspaceCurveEditRequest(WorkspaceFilterBase):
+    action: str = Field(
+        "transform",
+        description="Action: 'transform', 'duplicate', 'rename', 'delete', or 'save_values'",
+    )
+    curve: str = Field(..., description="Source curve mnemonic")
+    target_curve: Optional[str] = Field(
+        None, description="Target curve mnemonic (defaults to source curve for in-place transform)"
+    )
+    operation: Optional[str] = Field(
+        None,
+        description="Transform operation: 'shift', 'scale', 'linear', 'clip', 'null_outside', 'depth_shift', 'smooth'",
+    )
+    value: float = Field(0.0, description="Shift offset, scale factor, or depth shift (m)")
+    scale: float = Field(1.0, description="Multiplier for 'linear' (Y = scale * X + offset)")
+    offset: float = Field(0.0, description="Offset for 'linear' (Y = scale * X + offset)")
+    min_val: Optional[float] = Field(None, description="Minimum bound for 'clip' or 'null_outside'")
+    max_val: Optional[float] = Field(None, description="Maximum bound for 'clip' or 'null_outside'")
+    window: int = Field(5, description="Window size (samples) for 'smooth' median/moving average")
+    depths: Optional[List[float]] = Field(
+        None, description="Optional explicit depth array when action='save_values'"
+    )
+    values: Optional[List[Optional[float]]] = Field(
+        None, description="Optional explicit curve values array when action='save_values'"
+    )
+
+
+def _update_cached_well_column(
+    project_id: int,
+    well_name: str,
+    action: str,
+    curve: str,
+    target_curve: Optional[str] = None,
+) -> None:
+    """Apply rename or delete directly to in-memory cached / ephemeral DataFrames."""
+    import time
+    from quick_pp.database import models as db_models
+    from sqlalchemy import select
+
+    src = curve.strip().upper()
+    dst = target_curve.strip().upper() if target_curve else None
+
+    for key, (ts, cdf) in list(_merged_data_cache.items()):
+        if key.startswith(f"{project_id}_{well_name}_"):
+            updated = cdf.copy()
+            if action == "delete" and src in updated.columns:
+                updated = updated.drop(columns=[src], errors="ignore")
+            elif action == "rename" and dst and src in updated.columns:
+                if dst in updated.columns and dst != src:
+                    updated = updated.drop(columns=[dst], errors="ignore")
+                updated = updated.rename(columns={src: dst})
+            _merged_data_cache[key] = (time.time(), updated)
+
+    eph_proj = _ephemeral_wells.get(project_id, {})
+    if well_name in eph_proj:
+        updated_eph = eph_proj[well_name].copy()
+        if action == "delete" and src in updated_eph.columns:
+            updated_eph = updated_eph.drop(columns=[src], errors="ignore")
+        elif action == "rename" and dst and src in updated_eph.columns:
+            if dst in updated_eph.columns and dst != src:
+                updated_eph = updated_eph.drop(columns=[dst], errors="ignore")
+            updated_eph = updated_eph.rename(columns={src: dst})
+        eph_proj[well_name] = updated_eph
+
+    if not is_demo_mode():
+        with get_db() as session:
+            well_orm = session.scalar(
+                select(db_models.Well).filter_by(project_id=project_id, name=well_name)
+            )
+            if well_orm:
+                src_curve = session.scalar(
+                    select(db_models.Curve).filter_by(
+                        well_id=well_orm.well_id, mnemonic=src
+                    )
+                )
+                if action == "delete" and src_curve:
+                    session.delete(src_curve)
+                    session.flush()
+                elif action == "rename" and dst and src_curve:
+                    existing_dst = session.scalar(
+                        select(db_models.Curve).filter_by(
+                            well_id=well_orm.well_id, mnemonic=dst
+                        )
+                    )
+                    if existing_dst and existing_dst.curve_id != src_curve.curve_id:
+                        session.delete(existing_dst)
+                        session.flush()
+                    src_curve.mnemonic = dst
+                    session.flush()
+        invalidate_well_cache(project_id=project_id, well_name=well_name)
+
+
+@router.post(
+    "/wells/{well_name}/curve_edit",
+    summary="Edit, transform, duplicate, rename, or delete a well curve",
+)
+def workspace_curve_edit(
+    project_id: int, well_name: str, req: WorkspaceCurveEditRequest
+) -> Dict[str, Any]:
+    """Perform curve arithmetic/conditioning (shift, scale, clip, depth-shift, smooth) or curve management (duplicate, rename, delete)."""
+    try:
+        act = req.action.strip().lower()
+        src = req.curve.strip().upper()
+        dst = (req.target_curve.strip().upper() if req.target_curve else src)
+
+        protected = {"DEPTH", "DEPT", "WELL_NAME", "ZONES"}
+        if act == "delete":
+            if src in protected:
+                raise ValueError(f"Cannot delete protected index column '{src}'")
+            _update_cached_well_column(project_id, well_name, "delete", src)
+            return {
+                "well_name": well_name,
+                "action": "delete",
+                "deleted_curve": src,
+                "saved": True,
+            }
+
+        if act == "rename":
+            if src in protected or dst in protected:
+                raise ValueError("Cannot rename to or from a protected index column")
+            if not dst:
+                raise ValueError("Target curve name is required for rename")
+            _update_cached_well_column(project_id, well_name, "rename", src, dst)
+            full_df = _get_merged_dataframe_sync(project_id, well_name)
+            stats = (
+                {dst: _curve_summary_stats(full_df[dst])}
+                if dst in full_df.columns
+                else {}
+            )
+            return {
+                "well_name": well_name,
+                "action": "rename",
+                "curve": src,
+                "target_curve": dst,
+                "saved": True,
+                "stats": stats,
+            }
+
+        if act == "save_values" and req.depths is not None and req.values is not None:
+            if dst in protected:
+                raise ValueError(f"Cannot overwrite protected column '{dst}'")
+            out_df = pd.DataFrame(
+                {
+                    "DEPTH": pd.to_numeric(pd.Series(req.depths), errors="coerce"),
+                    dst: pd.to_numeric(pd.Series(req.values), errors="coerce"),
+                }
+            ).dropna(subset=["DEPTH"])
+            saved_rows = 0
+            if req.save:
+                saved_rows = _save_curves_to_well(project_id, well_name, out_df)
+            return {
+                "well_name": well_name,
+                "action": "save_values",
+                "target_curve": dst,
+                "saved": req.save,
+                "saved_rows": saved_rows,
+                "stats": {dst: _curve_summary_stats(out_df[dst])},
+                **dataframe_to_columnar(out_df),
+            }
+
+        full_df = _get_merged_dataframe_sync(project_id, well_name)
+        if full_df.empty or src not in full_df.columns:
+            raise ValueError(f"Curve '{src}' not found in well '{well_name}'")
+
+        if act == "duplicate":
+            if not dst or dst in protected:
+                raise ValueError("Valid target curve mnemonic is required for duplicate")
+            out_df = pd.DataFrame(
+                {
+                    "DEPTH": full_df["DEPTH"],
+                    dst: pd.to_numeric(full_df[src], errors="coerce"),
+                }
+            )
+            saved_rows = 0
+            if req.save:
+                saved_rows = _save_curves_to_well(project_id, well_name, out_df)
+            return {
+                "well_name": well_name,
+                "action": "duplicate",
+                "curve": src,
+                "target_curve": dst,
+                "saved": req.save,
+                "saved_rows": saved_rows,
+                "stats": {dst: _curve_summary_stats(out_df[dst])},
+                **dataframe_to_columnar(out_df),
+            }
+
+        # Transform operation on full or filtered interval
+        df = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        s = pd.to_numeric(df[src], errors="coerce").copy()
+        op = (req.operation or "shift").strip().lower()
+
+        if op in ("shift", "add"):
+            s = s + float(req.value)
+        elif op == "subtract":
+            s = s - float(req.value)
+        elif op in ("scale", "multiply"):
+            s = s * float(req.value)
+        elif op == "divide":
+            if abs(float(req.value)) < 1e-12:
+                raise ValueError("Cannot divide by zero")
+            s = s / float(req.value)
+        elif op == "linear":
+            s = s * float(req.scale) + float(req.offset)
+        elif op == "clip":
+            lo = float(req.min_val) if req.min_val is not None else None
+            hi = float(req.max_val) if req.max_val is not None else None
+            s = s.clip(lower=lo, upper=hi)
+        elif op == "null_outside":
+            if req.min_val is not None:
+                s = s.where(s >= float(req.min_val), np.nan)
+            if req.max_val is not None:
+                s = s.where(s <= float(req.max_val), np.nan)
+        elif op == "depth_shift":
+            depth_arr = pd.to_numeric(df["DEPTH"], errors="coerce").to_numpy(dtype=float)
+            val_arr = s.to_numpy(dtype=float)
+            valid = np.isfinite(depth_arr) & np.isfinite(val_arr)
+            if valid.sum() >= 2:
+                shifted_depths = depth_arr[valid] + float(req.value)
+                order = np.argsort(shifted_depths)
+                interp_vals = np.interp(
+                    depth_arr,
+                    shifted_depths[order],
+                    val_arr[valid][order],
+                    left=np.nan,
+                    right=np.nan,
+                )
+                s = pd.Series(interp_vals, index=df.index, dtype=float)
+        elif op == "smooth":
+            win = max(3, int(req.window))
+            s = s.rolling(window=win, center=True, min_periods=1).mean()
+        else:
+            raise ValueError(f"Unsupported curve transform operation: {op}")
+
+        out_df = pd.DataFrame({"DEPTH": df["DEPTH"], dst: s})
+        saved_rows = 0
+        if req.save:
+            saved_rows = _save_curves_to_well(project_id, well_name, out_df)
+
+        return {
+            "well_name": well_name,
+            "action": "transform",
+            "operation": op,
+            "curve": src,
+            "target_curve": dst,
+            "saved": req.save,
+            "saved_rows": saved_rows,
+            "stats": {dst: _curve_summary_stats(s)},
+            **dataframe_to_columnar(out_df),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Curve edit failed: {e}"
+        ) from e
+
 

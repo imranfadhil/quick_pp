@@ -9,7 +9,7 @@ import logging
 from inspect import signature
 
 from fastapi import FastAPI, Request
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import JSONResponse
 from mlflow.pyfunc import PyFuncModel  # type: ignore
 
 from quick_pp.app.backend.fastapi_mlflow.exceptions import DictSerialisableException
@@ -35,7 +35,6 @@ def build_app(app, pyfunc_model: PyFuncModel, route: str) -> FastAPI:
         f"{route}",
         predictor,
         response_model=response_model,
-        response_class=ORJSONResponse,
         methods=["POST"],
         description=(
             f"Predict using the '{model_name}' MLflow model.\n\n"
@@ -53,18 +52,18 @@ def build_app(app, pyfunc_model: PyFuncModel, route: str) -> FastAPI:
     @app.exception_handler(DictSerialisableException)
     def handle_serialisable_exception(
         req: Request, exc: DictSerialisableException
-    ) -> ORJSONResponse:
+    ) -> JSONResponse:
         nonlocal logger
         req_id = req.headers.get("x-request-id")
         extra = {"x-request-id": req_id} if req_id is not None else {}
         logger.exception(exc.message, extra=extra)
-        return ORJSONResponse(
+        return JSONResponse(
             status_code=500,
             content=exc.to_dict(),
         )
 
     @app.exception_handler(Exception)
-    def handle_exception(req: Request, exc: Exception) -> ORJSONResponse:
+    def handle_exception(req: Request, exc: Exception) -> JSONResponse:
         return handle_serialisable_exception(
             req, DictSerialisableException.from_exception(exc)
         )

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import logo from '$lib/assets/logo.png';
 	import { getJson, postJson } from '$lib/api/client';
 	import { authState, type AuthUser, type MfaSetupPayload } from '$lib/state/auth.svelte';
 
@@ -265,9 +266,13 @@
 		<div class="mb-4 flex items-center justify-between">
 			<div class="flex items-center gap-2.5">
 				<div
-					class="flex h-8 w-8 items-center justify-center rounded-sm bg-[var(--accent-primary)] text-xs font-bold tracking-wider text-white shadow-xs"
+					class="flex h-8 w-8 items-center justify-center"
 				>
-					QP
+				<img
+					src={logo}
+					alt="quick_pp logo"
+					class="h-8 w-8 shrink-0 object-contain"
+				/>
 				</div>
 				<div>
 					<div class="flex items-center gap-2">

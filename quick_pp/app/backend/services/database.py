@@ -8,7 +8,6 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import ORJSONResponse
 from sqlalchemy import bindparam, select, text
 
 from quick_pp.app.backend.utils.auth import (
@@ -32,6 +31,35 @@ _cache_ttl = 300  # 5 minutes
 _cache_max_entries = 50
 MAX_DEMO_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB cap per file in demo mode
 _ephemeral_wells: Dict[int, Dict[str, pd.DataFrame]] = {}
+_demo_project_overrides: Dict[int, Dict[str, Any]] = {}
+_demo_deleted_projects: set[int] = set()
+_demo_well_renames: Dict[int, Dict[str, str]] = {}
+_demo_deleted_wells: Dict[int, set[str]] = {}
+
+
+def resolve_db_well_name(project_id: int, well_name: str) -> str:
+    """Resolve the underlying database well name if the well was renamed in an ephemeral demo session."""
+    if well_name in _demo_deleted_wells.get(project_id, set()):
+        raise ValueError(f"Well '{well_name}' was deleted from project {project_id}")
+    renames = _demo_well_renames.get(project_id, {})
+    for orig_name, curr_name in renames.items():
+        if curr_name == well_name:
+            return orig_name
+    return well_name
+
+
+def reset_demo_project_state(project_id: Optional[int] = None) -> None:
+    """Reset in-memory demo project/well renames and deletions."""
+    if project_id is not None:
+        _demo_project_overrides.pop(project_id, None)
+        _demo_deleted_projects.discard(project_id)
+        _demo_well_renames.pop(project_id, None)
+        _demo_deleted_wells.pop(project_id, None)
+    else:
+        _demo_project_overrides.clear()
+        _demo_deleted_projects.clear()
+        _demo_well_renames.clear()
+        _demo_deleted_wells.clear()
 
 
 def invalidate_well_cache(
@@ -112,7 +140,19 @@ async def list_projects(request: Request):
     try:
         with get_db() as session:
             stmt = select(db_models.Project)
-            rows = session.execute(stmt).scalars().all()
+            raw_rows = session.execute(stmt).scalars().all()
+            rows = []
+            for r in raw_rows:
+                if r.project_id in _demo_deleted_projects:
+                    continue
+                if r.project_id in _demo_project_overrides:
+                    session.expunge(r)
+                    ovr = _demo_project_overrides[r.project_id]
+                    if "name" in ovr:
+                        r.name = ovr["name"]
+                    if "description" in ovr:
+                        r.description = ovr["description"]
+                rows.append(r)
             current_user = get_current_user_optional(request)
             if current_user and current_user.get("role") != "admin":
                 uid = int(current_user["user_id"])
@@ -151,6 +191,303 @@ async def list_projects(request: Request):
         ) from e
 
 
+@router.patch("/projects/{project_id}", summary="Rename or update a project")
+async def update_project(project_id: int, payload: dict, request: Request):
+    """Rename a project and/or update its description.
+
+    Payload example: {"name": "Volve Field Phase 2", "description": "Updated description"}
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+    new_name = (payload.get("name") or "").strip()
+    new_desc = payload.get("description")
+    if not new_name and new_desc is None:
+        raise HTTPException(
+            status_code=400, detail="Project name or description is required"
+        )
+
+    try:
+        with get_db() as session:
+            if project_id in _demo_deleted_projects:
+                raise HTTPException(status_code=404, detail="Project not found")
+            orm_proj = session.get(db_models.Project, project_id)
+            if not orm_proj:
+                raise HTTPException(status_code=404, detail="Project not found")
+
+            effective_name = new_name or _demo_project_overrides.get(
+                project_id, {}
+            ).get("name", orm_proj.name)
+            effective_desc = (
+                str(new_desc)
+                if new_desc is not None
+                else _demo_project_overrides.get(project_id, {}).get(
+                    "description", orm_proj.description or ""
+                )
+            )
+
+            if new_name:
+                all_projs = session.execute(select(db_models.Project)).scalars().all()
+                for p in all_projs:
+                    if p.project_id == project_id or p.project_id in _demo_deleted_projects:
+                        continue
+                    p_name = _demo_project_overrides.get(p.project_id, {}).get(
+                        "name", p.name
+                    )
+                    if p_name.strip().lower() == new_name.lower():
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"A project named '{new_name}' already exists",
+                        )
+
+            if is_demo_mode():
+                _demo_project_overrides[project_id] = {
+                    "name": effective_name,
+                    "description": effective_desc,
+                }
+            else:
+                orm_proj.name = effective_name
+                if new_desc is not None:
+                    orm_proj.description = effective_desc
+                session.add(orm_proj)
+                session.flush()
+
+            return {
+                "project_id": project_id,
+                "name": effective_name,
+                "description": effective_desc,
+                "updated": True,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update project: {e}"
+        ) from e
+
+
+@router.delete("/projects/{project_id}", summary="Delete a project and all its wells")
+async def delete_project(project_id: int, request: Request):
+    """Delete a project and all associated wells, curves, and cache entries."""
+    try:
+        with get_db() as session:
+            orm_proj = session.get(db_models.Project, project_id)
+            if not orm_proj or project_id in _demo_deleted_projects:
+                raise HTTPException(status_code=404, detail="Project not found")
+
+            proj_name = _demo_project_overrides.get(project_id, {}).get(
+                "name", orm_proj.name
+            )
+            if is_demo_mode():
+                _demo_deleted_projects.add(project_id)
+                _demo_project_overrides.pop(project_id, None)
+                _demo_well_renames.pop(project_id, None)
+                _demo_deleted_wells.pop(project_id, None)
+            else:
+                session.delete(orm_proj)
+                session.flush()
+
+            _ephemeral_wells.pop(project_id, None)
+            invalidate_well_cache(project_id=project_id)
+
+            return {
+                "project_id": project_id,
+                "name": proj_name,
+                "deleted": True,
+                "message": f"Project '{proj_name}' deleted",
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete project: {e}"
+        ) from e
+
+
+@router.patch(
+    "/projects/{project_id}/wells/{well_name}",
+    summary="Rename a well within a project",
+)
+async def rename_well(
+    project_id: int, well_name: str, payload: dict, request: Request
+):
+    """Rename a well in the project and update cached data references.
+
+    Payload example: {"name": "15_9-F-11B", "uwi": "15_9-F-11B"}
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+    new_name = (payload.get("name") or payload.get("new_name") or "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="New well name is required")
+    if new_name == well_name:
+        return {
+            "project_id": project_id,
+            "old_name": well_name,
+            "well_name": new_name,
+            "name": new_name,
+            "updated": False,
+        }
+
+    try:
+        with get_db() as session:
+            if project_id in _demo_deleted_projects:
+                raise HTTPException(status_code=404, detail="Project not found")
+            proj = db_objects.Project.load(session, project_id=project_id)
+            deleted_set = _demo_deleted_wells.get(project_id, set())
+            renames_map = _demo_well_renames.setdefault(project_id, {})
+
+            # Gather current active well names to prevent collisions
+            active_names = set()
+            target_orm_well = None
+            orig_db_name = None
+            for w in proj._orm_project.wells:
+                curr_w_name = renames_map.get(w.name, w.name)
+                if w.name in deleted_set or curr_w_name in deleted_set:
+                    continue
+                active_names.add(curr_w_name)
+                if curr_w_name == well_name or w.name == well_name:
+                    target_orm_well = w
+                    orig_db_name = w.name
+
+            eph_proj = _ephemeral_wells.get(project_id, {})
+            for eph_n in eph_proj:
+                if eph_n not in deleted_set:
+                    active_names.add(eph_n)
+
+            if well_name not in active_names and target_orm_well is None and well_name not in eph_proj:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Well '{well_name}' not found in project {project_id}",
+                )
+
+            if any(
+                n.lower() == new_name.lower() and n != well_name
+                for n in active_names
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"A well named '{new_name}' already exists in this project",
+                )
+
+            # Update in-memory merged cache keys and WELL_NAME column
+            old_prefix = f"{project_id}_{well_name}_"
+            for key, (ts, cdf) in list(_merged_data_cache.items()):
+                if key.startswith(old_prefix):
+                    suffix = key[len(old_prefix) :]
+                    updated_df = cdf.copy()
+                    if "WELL_NAME" in updated_df.columns:
+                        updated_df["WELL_NAME"] = new_name
+                    _merged_data_cache.pop(key, None)
+                    _merged_data_cache[f"{project_id}_{new_name}_{suffix}"] = (
+                        time.time(),
+                        updated_df,
+                    )
+
+            # Update ephemeral wells if present
+            if well_name in eph_proj:
+                eph_df = eph_proj.pop(well_name).copy()
+                if "WELL_NAME" in eph_df.columns:
+                    eph_df["WELL_NAME"] = new_name
+                eph_proj[new_name] = eph_df
+
+            if is_demo_mode():
+                if orig_db_name:
+                    renames_map[orig_db_name] = new_name
+                deleted_set.discard(new_name)
+            else:
+                if target_orm_well is not None:
+                    new_uwi = payload.get("uwi")
+                    if new_uwi is not None:
+                        target_orm_well.uwi = str(new_uwi).strip()
+                    elif not target_orm_well.uwi or target_orm_well.uwi == target_orm_well.name:
+                        target_orm_well.uwi = new_name
+                    target_orm_well.name = new_name
+                    session.add(target_orm_well)
+                    session.flush()
+
+            return {
+                "project_id": project_id,
+                "old_name": well_name,
+                "well_name": new_name,
+                "name": new_name,
+                "updated": True,
+            }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to rename well: {e}"
+        ) from e
+
+
+@router.delete(
+    "/projects/{project_id}/wells/{well_name}",
+    summary="Delete a well from a project",
+)
+async def delete_well(project_id: int, well_name: str, request: Request):
+    """Delete a well and all its curve/ancillary data from a project."""
+    try:
+        with get_db() as session:
+            if project_id in _demo_deleted_projects:
+                raise HTTPException(status_code=404, detail="Project not found")
+            proj = db_objects.Project.load(session, project_id=project_id)
+            deleted_set = _demo_deleted_wells.setdefault(project_id, set())
+            renames_map = _demo_well_renames.get(project_id, {})
+
+            target_orm_well = None
+            orig_db_name = None
+            for w in proj._orm_project.wells:
+                curr_w_name = renames_map.get(w.name, w.name)
+                if curr_w_name == well_name or w.name == well_name:
+                    target_orm_well = w
+                    orig_db_name = w.name
+                    break
+
+            eph_proj = _ephemeral_wells.get(project_id, {})
+            in_eph = well_name in eph_proj
+
+            if target_orm_well is None and not in_eph:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Well '{well_name}' not found in project {project_id}",
+                )
+
+            if in_eph:
+                eph_proj.pop(well_name, None)
+
+            if is_demo_mode():
+                deleted_set.add(well_name)
+                if orig_db_name:
+                    deleted_set.add(orig_db_name)
+            else:
+                if target_orm_well is not None:
+                    session.delete(target_orm_well)
+                    session.flush()
+
+            invalidate_well_cache(project_id=project_id, well_name=well_name)
+            if orig_db_name and orig_db_name != well_name:
+                invalidate_well_cache(project_id=project_id, well_name=orig_db_name)
+
+            return {
+                "project_id": project_id,
+                "well_name": well_name,
+                "deleted": True,
+                "message": f"Well '{well_name}' deleted",
+            }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete well: {e}"
+        ) from e
+
+
 @router.get("/projects/{project_id}/wells", summary="List wells in project")
 async def list_wells(project_id: int):
     try:
@@ -179,14 +516,33 @@ async def list_wells(project_id: int):
 @router.get(
     "/projects/{project_id}/summary",
     summary="Get lightweight project and per-well summary statistics",
-    response_class=ORJSONResponse,
+
 )
-def get_project_summary(project_id: int):
+def get_project_summary(project_id: int) -> Dict[str, Any]:
     """Return aggregated metadata and statistics for all wells in a project without loading full curve arrays."""
     try:
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
-            orm_wells = proj._orm_project.wells
+            if project_id in _demo_deleted_projects:
+                raise ValueError(f"Project {project_id} not found")
+            if project_id in _demo_project_overrides:
+                session.expunge(proj._orm_project)
+                ovr = _demo_project_overrides[project_id]
+                if "name" in ovr:
+                    proj._orm_project.name = ovr["name"]
+                if "description" in ovr:
+                    proj._orm_project.description = ovr["description"]
+            deleted_w_set = _demo_deleted_wells.get(project_id, set())
+            renamed_w_map = _demo_well_renames.get(project_id, {})
+            orm_wells = []
+            for w in proj._orm_project.wells:
+                curr_name = renamed_w_map.get(w.name, w.name)
+                if w.name in deleted_w_set or curr_name in deleted_w_set:
+                    continue
+                if curr_name != w.name:
+                    session.expunge(w)
+                    w.name = curr_name
+                orm_wells.append(w)
             if not orm_wells:
                 return {
                     "project_id": proj.project_id,
@@ -360,6 +716,9 @@ def get_project_summary(project_id: int):
                         "max_depth": max_d,
                         "total_depth": td,
                         "row_count": row_count,
+                        "depth_count": row_count,
+                        "available_curves": curves_by_well.get(wid, []),
+                        "curves": curves_by_well.get(wid, []),
                         "available_curves": curves_by_well.get(wid, []),
                         "zones": zones_by_well.get(wid, []),
                         "core_sample_count": effective_core_pts,
@@ -376,6 +735,14 @@ def get_project_summary(project_id: int):
                 "name": proj.name,
                 "description": proj.description,
                 "well_count": len(wells_summary),
+                "min_depth": min(
+                    (w["min_depth"] for w in wells_summary if w.get("min_depth") is not None),
+                    default=None,
+                ),
+                "max_depth": max(
+                    (w["max_depth"] for w in wells_summary if w.get("max_depth") is not None),
+                    default=None,
+                ),
                 "total_depth_sum": round(total_depth_sum, 2),
                 "all_zones": sorted(all_zones_set),
                 "all_curves": sorted(all_curves_set),
@@ -610,9 +977,11 @@ async def save_well_data(project_id: int, well_name: str, payload: dict):
 @router.get(
     "/projects/{project_id}/wells/{well_name}/data",
     summary="Get top-to-bottom well data",
-    response_class=ORJSONResponse,
+
 )
-def get_well_data(project_id: int, well_name: str, include_ancillary: bool = False):
+def get_well_data(
+    project_id: int, well_name: str, include_ancillary: bool = False
+) -> Any:
     """Return the full well data (curve logs) as a JSON array of rows.
 
     Each row is a dict mapping column names to values.
@@ -624,19 +993,19 @@ def get_well_data(project_id: int, well_name: str, include_ancillary: bool = Fal
 
             # Use optimized method if available
             try:
-                df = proj.get_well_data_optimized(well_name)
+                df = proj.get_well_data_optimized(resolve_db_well_name(project_id, well_name))
             except AttributeError:
-                df = proj.get_well_data(well_name)
+                df = proj.get_well_data(resolve_db_well_name(project_id, well_name))
 
             if df.empty:
                 return []
 
             df = df.reset_index(drop=True)
-            # Use orjson for faster serialization (via ORJSONResponse)
+            # Fast JSON serialization via Pydantic return annotation
             records = dataframe_to_records(df)
 
             if include_ancillary:
-                well = proj.get_well(well_name)
+                well = proj.get_well(resolve_db_well_name(project_id, well_name))
                 tops_df = well.get_formation_tops()
                 contacts_df = well.get_fluid_contacts()
                 pressure_df = well.get_pressure_tests()
@@ -810,9 +1179,9 @@ def _get_merged_dataframe_sync(
             proj = db_objects.Project.load(session, project_id=project_id)
 
             try:
-                df = proj.get_well_data_optimized(well_name)
+                df = proj.get_well_data_optimized(resolve_db_well_name(project_id, well_name))
             except AttributeError:
-                df = proj.get_well_data(well_name)
+                df = proj.get_well_data(resolve_db_well_name(project_id, well_name))
             if df.empty:
                 return pd.DataFrame()
 
@@ -834,7 +1203,7 @@ def _get_merged_dataframe_sync(
             df = df.dropna(subset=["depth"])
             df = df.sort_values("depth").reset_index(drop=True)
 
-            well = proj.get_well(well_name)
+            well = proj.get_well(resolve_db_well_name(project_id, well_name))
 
             tops_df = _normalize_df_depth(well.get_formation_tops())
             contacts_df = _normalize_df_depth(well.get_fluid_contacts())
@@ -962,7 +1331,6 @@ def _compute_merged_data_sync(
 @router.get(
     "/projects/{project_id}/wells/{well_name}/merged",
     summary="Get merged well data directly in columnar or records format",
-    response_class=ORJSONResponse,
 )
 def get_merged_well_data(
     project_id: int,
@@ -976,7 +1344,7 @@ def get_merged_well_data(
     zones: Optional[str] = Query(
         None, description="Comma-separated zone names to filter"
     ),
-):
+) -> Any:
     """Return merged well curve and ancillary data directly with in-memory caching and optional depth/zone filtering."""
     try:
         merged = _get_merged_dataframe_sync(project_id, well_name, tolerance=tolerance)
@@ -998,20 +1366,17 @@ def get_merged_well_data(
 @router.post(
     "/projects/{project_id}/wells/{well_name}/merged/generate",
     summary="Compute merged data synchronously",
-    response_class=ORJSONResponse,
 )
 async def initiate_merged_data_generation(
     project_id: int,
     well_name: str,
     tolerance: Optional[float] = 0.16,
     async_task: bool = False,
-):
+) -> Dict[str, Any]:
     """Compute merged well data and return immediately."""
     try:
         result = _compute_merged_data_sync(project_id, well_name, tolerance)
-        return ORJSONResponse(
-            content={"task_id": "sync", "status": "success", "result": result}
-        )
+        return {"task_id": "sync", "status": "success", "result": result}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:

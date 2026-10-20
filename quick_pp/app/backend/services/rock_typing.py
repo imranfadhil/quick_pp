@@ -1,6 +1,5 @@
 import pandas as pd
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import ORJSONResponse
 
 import quick_pp.database.objects as db_objects
 from quick_pp.app.backend.services.database import (
@@ -146,8 +145,8 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
         }
 
 
-@router.get("/fzi_data", summary="Get FZI data for plotting", response_class=ORJSONResponse)
-async def get_fzi_data(project_id: int):
+@router.get("/fzi_data", summary="Get FZI data for plotting")
+async def get_fzi_data(project_id: int) -> dict:
     """Return PHIT and PERM data for FZI plotting from all wells in the project."""
     try:
         return _compute_fzi_data_sync(project_id)
@@ -164,15 +163,14 @@ async def get_fzi_data(project_id: int):
 @router.post(
     "/fzi_data/generate",
     summary="Compute FZI data synchronously",
-    response_class=ORJSONResponse,
 )
-async def initiate_fzi_data_generation(project_id: int, async_task: bool = False):
+async def initiate_fzi_data_generation(
+    project_id: int, async_task: bool = False
+) -> dict:
     """Compute FZI arrays synchronously."""
     try:
         result = _compute_fzi_data_sync(project_id)
-        return ORJSONResponse(
-            content={"task_id": "sync", "status": "success", "result": result}
-        )
+        return {"task_id": "sync", "status": "success", "result": result}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:

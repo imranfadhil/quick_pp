@@ -84,8 +84,8 @@ class WorkbenchState {
 	projectId = $state<string | null>(null);
 	wellId = $state<string | null>(null);
 	scope = $state<'single-well' | 'multi-well'>('single-well');
-	singleWellStep = $state<SingleWellStep>('litho-poro');
-	multiWellStep = $state<MultiWellStep>('rock-typing');
+	singleWellStep = $state<SingleWellStep>('qaqc');
+	multiWellStep = $state<MultiWellStep>('inventory');
 
 	// Global depth & zone filter
 	depthFilter = $state<{ min: number; max: number } | null>(null);

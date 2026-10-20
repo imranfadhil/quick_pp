@@ -90,6 +90,27 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 	if (path.endsWith('/database/projects') && m === 'POST') {
 		return { active: 'Creating new project...', done: 'New project created' };
 	}
+	if (/\/database\/projects\/[^/]+$/.test(path) && m === 'PATCH') {
+		return { active: 'Updating project details...', done: 'Project updated' };
+	}
+	if (/\/database\/projects\/[^/]+$/.test(path) && m === 'DELETE') {
+		return { active: 'Deleting project...', done: 'Project deleted' };
+	}
+	const dbWellMgmtMatch = path.match(/\/database\/projects\/[^/]+\/wells\/([^/]+)$/);
+	if (dbWellMgmtMatch && m === 'PATCH') {
+		return {
+			active: `Renaming well (${dbWellMgmtMatch[1]})...`,
+			done: `Well renamed (${dbWellMgmtMatch[1]})`,
+			detail: dbWellMgmtMatch[1]
+		};
+	}
+	if (dbWellMgmtMatch && m === 'DELETE') {
+		return {
+			active: `Deleting well (${dbWellMgmtMatch[1]})...`,
+			done: `Well deleted (${dbWellMgmtMatch[1]})`,
+			detail: dbWellMgmtMatch[1]
+		};
+	}
 	if (path.endsWith('/summary') && m === 'GET') {
 		return { active: 'Loading project inventory & wells...', done: 'Project summary loaded' };
 	}
@@ -159,6 +180,18 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 				return {
 					active: `Applying borehole environmental corrections (${wellName})...`,
 					done: `Environmental corrections applied (${wellName})`,
+					detail: wellName
+				};
+			case 'curve_edit':
+				return {
+					active: `Updating well log curve (${wellName})...`,
+					done: `Well log curve updated (${wellName})`,
+					detail: wellName
+				};
+			case 'config':
+				return {
+					active: `Saving working depth interval (${wellName})...`,
+					done: `Working depth interval saved (${wellName})`,
 					detail: wellName
 				};
 			case 'formation_tops':

@@ -49,10 +49,9 @@
 			}
 		}
 
-		const list = await projectData.loadProjects();
-		const targetProj = urlProj || (list[0]?.project_id ? String(list[0].project_id) : null);
-		if (targetProj) {
-			await projectData.selectProject(targetProj, urlWell);
+		await projectData.loadProjects();
+		if (urlProj) {
+			await projectData.selectProject(urlProj, urlWell);
 		}
 		initialized = true;
 	});
@@ -61,8 +60,16 @@
 	$effect(() => {
 		if (!browser || !initialized) return;
 		const url = new URL(window.location.href);
-		if (workbench.projectId) url.searchParams.set('project', workbench.projectId);
-		if (workbench.wellId) url.searchParams.set('well', workbench.wellId);
+		if (workbench.projectId) {
+			url.searchParams.set('project', workbench.projectId);
+		} else {
+			url.searchParams.delete('project');
+		}
+		if (workbench.wellId) {
+			url.searchParams.set('well', workbench.wellId);
+		} else {
+			url.searchParams.delete('well');
+		}
 		url.searchParams.set('scope', workbench.scope);
 		url.searchParams.set(
 			'step',

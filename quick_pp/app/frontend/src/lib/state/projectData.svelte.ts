@@ -1,4 +1,4 @@
-import { API_BASE, api, authHeaders } from '$lib/api/client';
+import { API_BASE, api, authHeaders, deleteJson, patchJson } from '$lib/api/client';
 import type { ProjectSummaryResponse, WellSummaryItem } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { wellData } from './wellData.svelte';
@@ -78,6 +78,17 @@ class ProjectDataState {
 		}
 	}
 
+	clearProject() {
+		workbench.projectId = null;
+		workbench.wellId = null;
+		this.summary = null;
+		this.selectedWellNames = [];
+		wellData.curves = {};
+		wellData.tops = [];
+		wellData.contacts = [];
+		wellData.coreSamples = [];
+	}
+
 	async selectProject(projectId: string | number, preferredWell?: string | null) {
 		if (!projectId) return;
 		const pidStr = String(projectId);
@@ -146,6 +157,93 @@ class ProjectDataState {
 		await this.loadProjects();
 		await this.selectProject(data.project_id);
 		return data;
+	}
+
+	async renameProject(projectId: string | number, name: string, description?: string) {
+		const trimmed = name.trim();
+		if (!trimmed) throw new Error('Project name is required');
+		const payload: Record<string, any> = { name: trimmed };
+		if (description !== undefined) payload.description = description;
+		const res = await patchJson<{ project_id: number; name: string; description?: string }>(
+			`/quick_pp/database/projects/${encodeURIComponent(String(projectId))}`,
+			payload
+		);
+		await this.loadProjects();
+		if (String(workbench.projectId) === String(projectId)) {
+			if (this.summary) {
+				this.summary = {
+					...this.summary,
+					name: res.name,
+					description: res.description ?? this.summary.description
+				};
+			} else {
+				await this.selectProject(projectId, workbench.wellId);
+			}
+		}
+		appStatus.success(`Renamed project to "${res.name}"`);
+		return res;
+	}
+
+	async deleteProject(projectId: string | number) {
+		const pidStr = String(projectId);
+		const res = await deleteJson<{ project_id: number; name: string; deleted: boolean }>(
+			`/quick_pp/database/projects/${encodeURIComponent(pidStr)}`
+		);
+		const remaining = await this.loadProjects();
+		appStatus.success(`Deleted project "${res.name || pidStr}"`);
+		if (String(workbench.projectId) === pidStr) {
+			if (remaining.length > 0) {
+				await this.selectProject(remaining[0].project_id);
+			} else {
+				workbench.projectId = null;
+				workbench.wellId = null;
+				this.summary = null;
+				this.selectedWellNames = [];
+				wellData.curves = {};
+				wellData.tops = [];
+				wellData.contacts = [];
+				wellData.coreSamples = [];
+			}
+		}
+		return res;
+	}
+
+	async renameWell(wellName: string, newWellName: string) {
+		if (!workbench.projectId) throw new Error('No active project selected');
+		const trimmed = newWellName.trim();
+		if (!trimmed) throw new Error('New well name is required');
+		if (trimmed === wellName) return;
+
+		const pid = workbench.projectId;
+		const res = await patchJson<{ well_name: string; old_name: string }>(
+			`/quick_pp/database/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wellName)}`,
+			{ name: trimmed }
+		);
+		const targetName = res.well_name || trimmed;
+		const wasActive = workbench.wellId === wellName;
+		await this.selectProject(pid, wasActive ? targetName : workbench.wellId);
+		appStatus.success(`Renamed well "${wellName}" → "${targetName}"`, targetName);
+		return res;
+	}
+
+	async deleteWell(wellName: string) {
+		if (!workbench.projectId) throw new Error('No active project selected');
+		const pid = workbench.projectId;
+		const currentWells = this.wells.map((w) => w.name);
+		const idx = currentWells.indexOf(wellName);
+		let nextPreferred: string | null = workbench.wellId;
+		if (workbench.wellId === wellName) {
+			const remaining = currentWells.filter((n) => n !== wellName);
+			nextPreferred =
+				remaining.length > 0
+					? remaining[Math.min(Math.max(0, idx), remaining.length - 1)]
+					: null;
+		}
+		await deleteJson(
+			`/quick_pp/database/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wellName)}`
+		);
+		await this.selectProject(pid, nextPreferred);
+		appStatus.success(`Deleted well "${wellName}"`);
 	}
 
 	async uploadProjectFiles(files: FileList | File[]) {

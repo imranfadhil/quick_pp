@@ -1,4 +1,5 @@
 <script lang="ts">
+	import logo from '$lib/assets/logo.png';
 	import { authState } from '$lib/state/auth.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -20,17 +21,95 @@
 
 	let showFilterPopover = $state(false);
 	let showNewProjectPopover = $state(false);
+	let showManageProjectPopover = $state(false);
+	let showManageWellPopover = $state(false);
 	let showExportMenu = $state(false);
 	let showUserMenu = $state(false);
 	let newProjName = $state('');
 	let newProjDesc = $state('');
+	let editProjName = $state('');
+	let editProjDesc = $state('');
+	let confirmDeleteProject = $state(false);
+	let editWellName = $state('');
+	let confirmDeleteWell = $state(false);
+	let mgmtError = $state<string | null>(null);
 	let minDepthInput = $state<string>('');
 	let maxDepthInput = $state<string>('');
+
+	function openManageProjectPopover() {
+		showNewProjectPopover = false;
+		showManageWellPopover = false;
+		confirmDeleteProject = false;
+		mgmtError = null;
+		const activeProj = projectData.projects.find(
+			(p) => String(p.project_id) === String(workbench.projectId)
+		);
+		editProjName = activeProj?.name ?? projectData.summary?.name ?? '';
+		editProjDesc = activeProj?.description ?? projectData.summary?.description ?? '';
+		showManageProjectPopover = !showManageProjectPopover;
+	}
+
+	async function handleSaveProjectEdit() {
+		if (!workbench.projectId || !editProjName.trim()) return;
+		mgmtError = null;
+		try {
+			await projectData.renameProject(workbench.projectId, editProjName, editProjDesc);
+			showManageProjectPopover = false;
+		} catch (e: any) {
+			mgmtError = e?.message || 'Failed to rename project';
+		}
+	}
+
+	async function handleDeleteActiveProject() {
+		if (!workbench.projectId) return;
+		mgmtError = null;
+		try {
+			await projectData.deleteProject(workbench.projectId);
+			confirmDeleteProject = false;
+			showManageProjectPopover = false;
+		} catch (e: any) {
+			mgmtError = e?.message || 'Failed to delete project';
+		}
+	}
+
+	function openManageWellPopover() {
+		showNewProjectPopover = false;
+		showManageProjectPopover = false;
+		confirmDeleteWell = false;
+		mgmtError = null;
+		editWellName = workbench.wellId ?? '';
+		showManageWellPopover = !showManageWellPopover;
+	}
+
+	async function handleSaveWellRename() {
+		if (!workbench.wellId || !editWellName.trim()) return;
+		mgmtError = null;
+		try {
+			await projectData.renameWell(workbench.wellId, editWellName);
+			showManageWellPopover = false;
+		} catch (e: any) {
+			mgmtError = e?.message || 'Failed to rename well';
+		}
+	}
+
+	async function handleDeleteActiveWell() {
+		if (!workbench.wellId) return;
+		mgmtError = null;
+		try {
+			await projectData.deleteWell(workbench.wellId);
+			confirmDeleteWell = false;
+			showManageWellPopover = false;
+		} catch (e: any) {
+			mgmtError = e?.message || 'Failed to delete well';
+		}
+	}
 
 	function handleProjectChange(e: Event) {
 		const target = e.currentTarget as HTMLSelectElement;
 		if (target.value) {
 			projectData.selectProject(target.value);
+		} else {
+			projectData.clearProject();
 		}
 	}
 
@@ -49,17 +128,18 @@
 		showNewProjectPopover = false;
 	}
 
-	function applyFilterInput() {
+	async function applyFilterInput() {
 		const minV = parseFloat(minDepthInput);
 		const maxV = parseFloat(maxDepthInput);
 		if (Number.isFinite(minV) || Number.isFinite(maxV)) {
 			const dr = wellData.depthRange;
-			workbench.depthFilter = {
-				min: Number.isFinite(minV) ? minV : dr.min,
-				max: Number.isFinite(maxV) ? maxV : dr.max
-			};
+			await wellData.saveWellFocusDepth(
+				Number.isFinite(minV) ? minV : dr.min,
+				Number.isFinite(maxV) ? maxV : dr.max,
+				true
+			);
 		} else {
-			workbench.depthFilter = null;
+			await wellData.saveWellFocusDepth(null, null, true);
 		}
 		showFilterPopover = false;
 	}
@@ -116,11 +196,11 @@
 	<!-- Left Group: Brand, Project Combobox, Scope Toggle, Well Switcher -->
 	<div class="flex items-center gap-2">
 		<div class="flex items-center gap-1.5 pr-1">
-			<div
-				class="flex h-6 w-6 items-center justify-center rounded-sm bg-[var(--accent-primary)] text-[11px] font-bold text-white"
-			>
-				QP
-			</div>
+			<img
+				src={logo}
+				alt="quick_pp logo"
+				class="h-6 w-6 shrink-0 object-contain"
+			/>
 			<span class="text-xs font-bold tracking-tight text-[var(--text-primary)]">quick_pp</span>
 			{#if authState.isDemoMode}
 				<span
@@ -144,6 +224,8 @@
 			>
 				{#if projectData.projects.length === 0}
 					<option value="">No Projects</option>
+				{:else}
+					<option value="">— Select Project —</option>
 				{/if}
 				{#each projectData.projects as proj (proj.project_id)}
 					<option value={String(proj.project_id)}>{proj.name}</option>
@@ -152,11 +234,26 @@
 			<button
 				type="button"
 				title="Create New Project"
-				onclick={() => (showNewProjectPopover = !showNewProjectPopover)}
+				onclick={() => {
+					showManageProjectPopover = false;
+					showNewProjectPopover = !showNewProjectPopover;
+				}}
 				class="flex h-7 w-7 items-center justify-center rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
 			>
 				+
 			</button>
+			{#if workbench.projectId}
+				<button
+					type="button"
+					title="Manage Project (Rename / Delete)"
+					onclick={openManageProjectPopover}
+					class="flex h-7 w-7 items-center justify-center rounded-sm border text-xs transition-colors {showManageProjectPopover
+						? 'border-[var(--accent-primary)] bg-blue-50 text-[var(--accent-primary)]'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+				>
+					✎
+				</button>
+			{/if}
 
 			{#if showNewProjectPopover}
 				<div
@@ -195,6 +292,95 @@
 					</div>
 				</div>
 			{/if}
+
+			{#if showManageProjectPopover && workbench.projectId}
+				<div
+					class="absolute top-8 left-0 z-50 w-72 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2.5 shadow-lg"
+				>
+					<div class="mb-1.5 flex items-center justify-between">
+						<span class="text-xs font-semibold text-[var(--text-primary)]">
+							Manage Project
+						</span>
+						<span class="mono-num text-[10px] text-[var(--text-muted)]">
+							ID #{workbench.projectId}
+						</span>
+					</div>
+
+					<label class="mb-1.5 block">
+						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Project Name</span>
+						<input
+							type="text"
+							bind:value={editProjName}
+							onkeydown={(e) => e.key === 'Enter' && handleSaveProjectEdit()}
+							class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium"
+						/>
+					</label>
+
+					<label class="mb-2 block">
+						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Description</span>
+						<input
+							type="text"
+							placeholder="Field / asset description"
+							bind:value={editProjDesc}
+							onkeydown={(e) => e.key === 'Enter' && handleSaveProjectEdit()}
+							class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs"
+						/>
+					</label>
+
+					{#if mgmtError}
+						<div class="mb-2 rounded-xs border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-700">
+							{mgmtError}
+						</div>
+					{/if}
+
+					<div class="flex items-center justify-between border-t border-[var(--border-hairline)] pt-2">
+						{#if !confirmDeleteProject}
+							<button
+								type="button"
+								onclick={() => (confirmDeleteProject = true)}
+								class="h-6 rounded-sm border border-red-200 bg-red-50 px-2 text-[10px] font-semibold text-red-700 hover:bg-red-100"
+							>
+								Delete Project...
+							</button>
+						{:else}
+							<div class="flex items-center gap-1">
+								<button
+									type="button"
+									onclick={handleDeleteActiveProject}
+									class="h-6 rounded-sm bg-red-600 px-2 text-[10px] font-bold text-white hover:bg-red-700"
+								>
+									Confirm Delete
+								</button>
+								<button
+									type="button"
+									onclick={() => (confirmDeleteProject = false)}
+									class="h-6 rounded-sm border border-[var(--border-hairline)] px-1.5 text-[10px]"
+								>
+									×
+								</button>
+							</div>
+						{/if}
+
+						<div class="flex items-center gap-1">
+							<button
+								type="button"
+								onclick={() => (showManageProjectPopover = false)}
+								class="h-6 rounded-sm border border-[var(--border-hairline)] px-2 text-[11px]"
+							>
+								Close
+							</button>
+							<button
+								type="button"
+								disabled={!editProjName.trim()}
+								onclick={handleSaveProjectEdit}
+								class="h-6 rounded-sm bg-[var(--accent-primary)] px-2.5 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+							>
+								Save
+							</button>
+						</div>
+					</div>
+				</div>
+			{/if}
 		</div>
 
 		<span class="text-[var(--border-hairline)]">/</span>
@@ -228,7 +414,7 @@
 		<!-- Well Switcher (< Well Dropdown >) -->
 		{#if projectData.wells.length > 0}
 			<span class="text-[var(--border-hairline)]">/</span>
-			<div class="flex items-center gap-0.5">
+			<div class="relative flex items-center gap-0.5">
 				<button
 					type="button"
 					title="Previous Well"
@@ -254,6 +440,96 @@
 				>
 					►
 				</button>
+				{#if workbench.wellId}
+					<button
+						type="button"
+						title="Manage Active Well (Rename / Delete)"
+						onclick={openManageWellPopover}
+						class="ml-0.5 flex h-7 w-7 items-center justify-center rounded-sm border text-xs transition-colors {showManageWellPopover
+							? 'border-[var(--accent-primary)] bg-blue-50 text-[var(--accent-primary)]'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+					>
+						✎
+					</button>
+				{/if}
+
+				{#if showManageWellPopover && workbench.wellId}
+					<div
+						class="absolute top-8 left-0 z-50 w-68 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2.5 shadow-lg"
+					>
+						<div class="mb-1.5 flex items-center justify-between">
+							<span class="text-xs font-semibold text-[var(--text-primary)]">
+								Manage Well
+							</span>
+							<span class="mono-num text-[10px] font-semibold text-[var(--accent-primary)]">
+								{workbench.wellId}
+							</span>
+						</div>
+
+						<label class="mb-2 block">
+							<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Well Name / UWI</span>
+							<input
+								type="text"
+								bind:value={editWellName}
+								onkeydown={(e) => e.key === 'Enter' && handleSaveWellRename()}
+								class="mono-num h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-semibold"
+							/>
+						</label>
+
+						{#if mgmtError}
+							<div class="mb-2 rounded-xs border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-700">
+								{mgmtError}
+							</div>
+						{/if}
+
+						<div class="flex items-center justify-between border-t border-[var(--border-hairline)] pt-2">
+							{#if !confirmDeleteWell}
+								<button
+									type="button"
+									onclick={() => (confirmDeleteWell = true)}
+									class="h-6 rounded-sm border border-red-200 bg-red-50 px-2 text-[10px] font-semibold text-red-700 hover:bg-red-100"
+								>
+									Delete Well...
+								</button>
+							{:else}
+								<div class="flex items-center gap-1">
+									<button
+										type="button"
+										onclick={handleDeleteActiveWell}
+										class="h-6 rounded-sm bg-red-600 px-2 text-[10px] font-bold text-white hover:bg-red-700"
+									>
+										Confirm Delete
+									</button>
+									<button
+										type="button"
+										onclick={() => (confirmDeleteWell = false)}
+										class="h-6 rounded-sm border border-[var(--border-hairline)] px-1.5 text-[10px]"
+									>
+										×
+									</button>
+								</div>
+							{/if}
+
+							<div class="flex items-center gap-1">
+								<button
+									type="button"
+									onclick={() => (showManageWellPopover = false)}
+									class="h-6 rounded-sm border border-[var(--border-hairline)] px-2 text-[11px]"
+								>
+									Close
+								</button>
+								<button
+									type="button"
+									disabled={!editWellName.trim() || editWellName.trim() === workbench.wellId}
+									onclick={handleSaveWellRename}
+									class="h-6 rounded-sm bg-[var(--accent-primary)] px-2.5 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+								>
+									Rename
+								</button>
+							</div>
+						</div>
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</div>
@@ -278,8 +554,11 @@
 		{#if hasActiveFilter}
 			<button
 				type="button"
-				title="Clear Depth & Zone Filters"
-				onclick={() => workbench.clearFilters()}
+				title="Clear Working Depth & Zone Filters for this well"
+				onclick={() => {
+					workbench.clearFilters();
+					wellData.saveWellFocusDepth(null, null, true);
+				}}
 				class="flex h-7 w-6 items-center justify-center rounded-sm border border-blue-200 bg-blue-50 text-xs font-bold text-blue-700 hover:bg-blue-100"
 			>
 				×
@@ -292,12 +571,13 @@
 			>
 				<div class="mb-2 flex items-center justify-between">
 					<span class="text-xs font-semibold text-[var(--text-primary)]">
-						Depth & Zone Filter
+						Well Working Depth & Zone Filter
 					</span>
 					<button
 						type="button"
 						onclick={() => {
 							workbench.clearFilters();
+							wellData.saveWellFocusDepth(null, null, true);
 							minDepthInput = '';
 							maxDepthInput = '';
 							showFilterPopover = false;
