@@ -817,6 +817,14 @@ def docker_publish():
     click.echo(f"Successfully built and pushed {image_tag}")
 
 
+@click.command()
+def mcp():
+    """Start the Petrophysical MCP Server over stdio for Claude Desktop, Cursor, or VS Code."""
+    from quick_pp.app.backend.mcp_server import petro_mcp_server
+
+    petro_mcp_server.run_stdio()
+
+
 # Add commands to the CLI group
 cli.add_command(backend)
 cli.add_command(mlflow_server)
@@ -827,6 +835,7 @@ cli.add_command(frontend)
 cli.add_command(app)
 cli.add_command(docker)
 cli.add_command(docker_publish)
+cli.add_command(mcp)
 
 
 if __name__ == "__main__":

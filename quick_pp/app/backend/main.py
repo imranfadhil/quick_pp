@@ -44,7 +44,7 @@ tags_metadata = [
     },
     {"name": "Database", "description": "Database related endpoints."},
     {"name": "Ancillary Data", "description": "Ancillary related endpoints."},
-    {"name": "Langflow", "description": "Langflow related endpoints."},
+    {"name": "Agentic Assistant & MCP", "description": "Petrophysical MCP Server and Agentic Assistant endpoints."},
     {"name": "Plotter", "description": "Plotter related endpoints."},
 ]
 

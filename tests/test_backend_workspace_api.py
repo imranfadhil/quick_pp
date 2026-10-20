@@ -246,3 +246,103 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert r_put.status_code == 200
     assert r_put.json()["rows"] == 2
 
+
+def test_petrophysical_mcp_server_and_agent_assistant(client_and_project):
+    client, pid = client_and_project
+
+    # 1. Provider catalog & MCP tools listing
+    r_prov = client.get("/quick_pp/assistant/providers")
+    assert r_prov.status_code == 200
+    prov_body = r_prov.json()
+    provider_ids = [p["id"] for p in prov_body["providers"]]
+    assert "native_mcp" in provider_ids
+    assert "openai" in provider_ids
+    assert "ollama" in provider_ids
+    tool_names = [t["name"] for t in prov_body["mcp_tools"]]
+    assert "inspect_well" in tool_names
+    assert "run_well_qaqc" in tool_names
+    assert "run_multi_mineral" in tool_names
+    assert "run_shf_evaluation" in tool_names
+    assert "evaluate_with_conformal_bounds" in tool_names
+    assert "control_workbench_ui" in tool_names
+
+    # 2. Standard MCP JSON-RPC 2.0 protocol (initialize + tools/list + tools/call)
+    r_init = client.post(
+        "/quick_pp/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+    )
+    assert r_init.status_code == 200
+    assert r_init.json()["result"]["serverInfo"]["name"] == "quick_pp-petrophysics-mcp"
+
+    r_list = client.post(
+        "/quick_pp/mcp",
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+    )
+    assert r_list.status_code == 200
+    assert len(r_list.json()["result"]["tools"]) == 6
+
+    r_call = client.post(
+        "/quick_pp/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_well",
+                "arguments": {"project_id": pid, "well_name": "Well-A"},
+            },
+        },
+    )
+    assert r_call.status_code == 200
+    structured = r_call.json()["result"]["structuredContent"]
+    assert structured["well_name"] == "Well-A"
+    assert structured["row_count"] == 10
+    assert len(structured["zonal_breakdown"]) == 2
+
+    # 3. Agentic Assistant end-to-end evaluation (QAQC + Multi-Mineral + SHF + On-the-fly Conformal Bounds)
+    r_chat = client.post(
+        "/quick_pp/assistant/chat",
+        json={
+            "message": "Run a full evaluation (qaqc, multi-mineral, shf, and conformal prediction bounds) and explain.",
+            "project_id": pid,
+            "well_name": "Well-A",
+            "alpha": 0.20,
+            "provider": "native_mcp",
+        },
+    )
+    assert r_chat.status_code == 200
+    chat_body = r_chat.json()
+    executed_names = [tc["name"] for tc in chat_body["tool_calls"]]
+    assert "inspect_well" in executed_names
+    assert "run_well_qaqc" in executed_names
+    assert "run_multi_mineral" in executed_names
+    assert "run_shf_evaluation" in executed_names
+    assert "evaluate_with_conformal_bounds" in executed_names
+
+    # Verify live computed curves include P10/P90 conformal bounds and QAQC / SHF curves
+    curves = chat_body["computed_curves"]
+    for expected_col in (
+        "NPHI_HC",
+        "RHOB_HC",
+        "PHIT",
+        "PHIT_P10",
+        "PHIT_P90",
+        "SWT",
+        "SW_P10",
+        "SW_P90",
+        "PERM",
+        "PERM_P10",
+        "PERM_P90",
+        "SHF",
+    ):
+        assert expected_col in curves
+        assert len(curves[expected_col]) == 10
+
+    # Verify P10 <= Prediction <= P90 monotonicity across all samples
+    for p10, pred, p90 in zip(curves["PHIT_P10"], curves["PHIT"], curves["PHIT_P90"]):
+        assert p10 <= pred + 1e-6
+        assert pred <= p90 + 1e-6
+
+    assert "Conformal Prediction Bounds" in chat_body["reply"]
+
+

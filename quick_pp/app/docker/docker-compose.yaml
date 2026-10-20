@@ -124,30 +124,6 @@ services:
     networks:
       - qpp-network
 
-  langflow:
-    profiles:
-      - langflow  # enable with `--profile langflow` on docker-compose command line
-    image: langflowai/langflow:latest  # or another version tag on https://hub.docker.com/r/langflowai/langflow
-    restart: unless-stopped
-    pull_policy: always  # set to 'always' when using 'latest' image
-    # Bound to localhost only: access remotely via SSH tunnel (-L 7860:localhost:7860)
-    ports:
-      - "${LANGFLOW_BIND:-127.0.0.1}:7860:7860"
-    depends_on:
-      - qpp-backend
-    environment:
-      - LANGFLOW_DATABASE_URL=${QPP_DATABASE_URL:-postgresql://${POSTGRES_USER:-qpp_user}:${POSTGRES_PASSWORD:-change_this_strong_password}@postgres:5432/${POSTGRES_DB:-quick_pp}}
-      - LANGFLOW_SECRET_KEY=${LANGFLOW_SECRET_KEY:-}
-      - LANGFLOW_SKIP_AUTH_AUTO_LOGIN=${LANGFLOW_SKIP_AUTH_AUTO_LOGIN:-true}
-      - LANGFLOW_SUPERUSER=${LANGFLOW_SUPERUSER:-admin}
-      - LANGFLOW_SUPERUSER_PASSWORD=${LANGFLOW_SUPERUSER_PASSWORD:-}
-      # This variable defines where the logs, file storage, monitor data and secret keys are stored.
-      - LANGFLOW_CONFIG_DIR=app/langflow
-    volumes:
-      - ./data/langflow:/app/langflow
-    networks:
-      - qpp-network
-
 networks:
   qpp-network:
     driver: bridge

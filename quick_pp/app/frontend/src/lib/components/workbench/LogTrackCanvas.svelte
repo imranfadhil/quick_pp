@@ -393,6 +393,32 @@
 				hovertemplate: 'PERM: %{x:.2f} mD<extra></extra>'
 			});
 		}
+		const permP10 = pick('PERM_P10');
+		const permP90 = pick('PERM_P90');
+		if (permP10.some((v) => v !== null && v > 0) && permP90.some((v) => v !== null && v > 0)) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'PERM_P10',
+				x: permP10.map((v) => (v !== null && v > 0 ? v : null)),
+				y: depth,
+				xaxis: 'x5',
+				yaxis: 'y',
+				line: { color: '#D97706', width: 1.0, dash: 'dot' },
+				hovertemplate: 'PERM P10: %{x:.2f} mD<extra></extra>'
+			});
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'PERM_P90',
+				x: permP90.map((v) => (v !== null && v > 0 ? v : null)),
+				y: depth,
+				xaxis: 'x5',
+				yaxis: 'y',
+				line: { color: '#D97706', width: 1.0, dash: 'dot' },
+				hovertemplate: 'PERM P90: %{x:.2f} mD<extra></extra>'
+			});
+		}
 		const permBlk = pick('PERM_BLK');
 		if (permBlk.some((v) => v !== null && v > 0)) {
 			traces.push({

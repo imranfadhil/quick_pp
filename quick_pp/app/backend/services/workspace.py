@@ -679,9 +679,12 @@ def workspace_lithology(
 
             for col in res_df.columns:
                 col_series = pd.Series(np.nan, index=df.index, dtype=float)
+                col_vals = res_df[col]
+                if pd.api.types.is_bool_dtype(col_vals):
+                    col_vals = col_vals.astype(float)
                 col_series.loc[valid_mask] = pd.to_numeric(
-                    res_df[col], errors="coerce"
-                ).to_numpy()
+                    col_vals, errors="coerce"
+                ).to_numpy(dtype=float)
                 out_df[col] = col_series
                 if col.startswith("V") or col == "PHIT_CONSTRUCTED":
                     save_cols.append(col)
