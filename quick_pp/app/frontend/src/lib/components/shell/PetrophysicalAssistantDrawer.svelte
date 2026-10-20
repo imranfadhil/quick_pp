@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { API_BASE } from '$lib/api/client';
+	import { API_BASE, postJson } from '$lib/api/client';
+	import { appStatus } from '$lib/state/status.svelte';
 	import {
 		workbench,
 		type MultiWellStep,
@@ -211,16 +212,7 @@
 				}))
 			};
 
-			const res = await fetch(`${API_BASE}/quick_pp/assistant/chat`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(payload)
-			});
-			const data = await res.json();
-
-			if (!res.ok) {
-				throw new Error(data?.detail || data?.message || 'Assistant request failed');
-			}
+			const data = await postJson<any>('/quick_pp/assistant/chat', payload);
 
 			// 1. Live-merge any newly computed depth-aligned curves into wellData!
 			if (data.computed_curves && Object.keys(data.computed_curves).length > 0) {
@@ -230,6 +222,14 @@
 			// 2. Apply any workbench UI navigation / depth scroll actions
 			if (Array.isArray(data.ui_actions) && data.ui_actions.length > 0) {
 				applyUiActions(data.ui_actions);
+			}
+
+			if (Array.isArray(data.tool_calls) && data.tool_calls.length > 0) {
+				const toolNames = data.tool_calls.map((t: any) => t.name).join(', ');
+				appStatus.success(
+					`MCP Assistant executed: ${toolNames}`,
+					workbench.wellId ?? undefined
+				);
 			}
 
 			chatMessages = [

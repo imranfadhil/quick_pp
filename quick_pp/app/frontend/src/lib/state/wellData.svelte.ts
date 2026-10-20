@@ -1,5 +1,6 @@
 import { api, saveAncillaryItems } from '$lib/api/client';
 import type { CoreComparisonMetrics, CurveSummaryStats } from '$lib/api/schema';
+import { appStatus } from './status.svelte';
 import { workbench } from './workbench.svelte';
 
 export interface FormationTop {
@@ -90,6 +91,11 @@ class WellDataState {
 		);
 	});
 
+	totalDepthRows = $derived.by(() => {
+		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		return dept.length;
+	});
+
 	async loadWellBundle(projectId: string | number, wellName: string) {
 		if (!projectId || !wellName) return;
 		this.isLoading = true;
@@ -139,8 +145,19 @@ class WellDataState {
 			this.survey = data.survey || [];
 			this.config = data.config || {};
 			workbench.brushedDepthIndices = new Set();
+
+			const nRows = (numericCurves['DEPT'] ?? numericCurves['DEPTH'] ?? []).length;
+			const nCurves = Object.keys(numericCurves).filter(
+				(k) => k !== 'DEPT' && k !== 'DEPTH'
+			).length;
+			appStatus.success(
+				`Loaded well ${wellName}`,
+				`${nRows.toLocaleString()} depth rows • ${nCurves} curves • ${this.tops.length} tops`
+			);
 		} catch (e: any) {
-			this.lastError = e?.message || 'Error loading well data';
+			const errMsg = e?.message || 'Error loading well data';
+			this.lastError = errMsg;
+			appStatus.error(errMsg, wellName);
 		} finally {
 			this.isLoading = false;
 		}
@@ -200,6 +217,7 @@ class WellDataState {
 
 	async updateTopDepth(topId: string, newDepth: number, persist: boolean = true) {
 		const rounded = Number(newDepth.toFixed(1));
+		const movedTop = this.tops.find((t) => t.id === topId);
 		this.tops = this.tops
 			.map((t) => (t.id === topId ? { ...t, depth: rounded } : t))
 			.sort((a, b) => a.depth - b.depth);
@@ -213,6 +231,12 @@ class WellDataState {
 					'tops',
 					this.tops.map((t) => ({ name: t.name, depth: t.depth }))
 				);
+				if (movedTop) {
+					appStatus.success(
+						`Updated formation top ${movedTop.name} → ${rounded.toFixed(1)} m`,
+						workbench.wellId
+					);
+				}
 			} catch (e: any) {
 				this.lastError = e?.message || 'Failed to persist formation top';
 			}
@@ -221,6 +245,7 @@ class WellDataState {
 
 	async updateContactDepth(contactId: string, newDepth: number, persist: boolean = true) {
 		const rounded = Number(newDepth.toFixed(1));
+		const movedContact = this.contacts.find((c) => c.id === contactId);
 		this.contacts = this.contacts.map((c) =>
 			c.id === contactId ? { ...c, depth: rounded } : c
 		);
@@ -234,6 +259,12 @@ class WellDataState {
 					'contacts',
 					this.contacts.map((c) => ({ name: c.type, depth: c.depth }))
 				);
+				if (movedContact) {
+					appStatus.success(
+						`Updated fluid contact ${movedContact.type} → ${rounded.toFixed(1)} m`,
+						workbench.wellId
+					);
+				}
 			} catch (e: any) {
 				this.lastError = e?.message || 'Failed to persist fluid contact';
 			}
@@ -272,4 +303,3 @@ class WellDataState {
 }
 
 export const wellData = new WellDataState();
-

@@ -6,6 +6,7 @@
 	import favicon from '$lib/assets/favicon.ico';
 	import TopContextBar from '$lib/components/shell/TopContextBar.svelte';
 	import WorkflowStepper from '$lib/components/shell/WorkflowStepper.svelte';
+	import StatusBar from '$lib/components/shell/StatusBar.svelte';
 	import BulkImporterModal from '$lib/components/shell/BulkImporterModal.svelte';
 	import PetrophysicalAssistantDrawer from '$lib/components/shell/PetrophysicalAssistantDrawer.svelte';
 	import UamConsoleModal from '$lib/components/shell/UamConsoleModal.svelte';
@@ -55,6 +56,8 @@
 				<PetrophysicalAssistantDrawer />
 			{/if}
 		</main>
+
+		<StatusBar />
 
 		<BulkImporterModal />
 		<UamConsoleModal />

@@ -1,5 +1,6 @@
 import { API_BASE, api, authHeaders } from '$lib/api/client';
 import type { ProjectSummaryResponse, WellSummaryItem } from '$lib/api/schema';
+import { appStatus } from './status.svelte';
 import { wellData } from './wellData.svelte';
 import { workbench } from './workbench.svelte';
 
@@ -109,9 +110,12 @@ class ProjectDataState {
 				wellData.tops = [];
 				wellData.contacts = [];
 				wellData.coreSamples = [];
+				appStatus.info(`Loaded project ${data.name} (0 wells)`);
 			}
 		} catch (e: any) {
-			this.error = e?.message || 'Failed to load project summary';
+			const errMsg = e?.message || 'Failed to load project summary';
+			this.error = errMsg;
+			appStatus.error(errMsg);
 		} finally {
 			this.isLoading = false;
 		}
@@ -146,24 +150,42 @@ class ProjectDataState {
 
 	async uploadProjectFiles(files: FileList | File[]) {
 		if (!workbench.projectId || !files || files.length === 0) return;
+		const fileList = Array.from(files);
+		const taskId = appStatus.startTask(
+			`Uploading & parsing ${fileList.length} log file(s)...`,
+			fileList.map((f) => f.name).join(', ')
+		);
 		const fd = new FormData();
-		for (const f of Array.from(files)) {
+		for (const f of fileList) {
 			fd.append('files', f);
 		}
-		const res = await fetch(
-			`${API_BASE}/quick_pp/database/projects/${workbench.projectId}/read_las`,
-			{
-				method: 'POST',
-				credentials: 'include',
-				headers: authHeaders(),
-				body: fd
+		try {
+			const res = await fetch(
+				`${API_BASE}/quick_pp/database/projects/${workbench.projectId}/read_las`,
+				{
+					method: 'POST',
+					credentials: 'include',
+					headers: authHeaders(),
+					body: fd
+				}
+			);
+			if (!res.ok) {
+				const msg = await res.text();
+				throw new Error(msg || 'Upload failed');
 			}
-		);
-		if (!res.ok) {
-			const msg = await res.text();
-			throw new Error(msg || 'Upload failed');
+			appStatus.endTask(taskId, {
+				level: 'success',
+				message: `Imported ${fileList.length} well log file(s)`,
+				detail: fileList.map((f) => f.name).join(', ')
+			});
+			await this.selectProject(workbench.projectId, workbench.wellId);
+		} catch (e: any) {
+			appStatus.endTask(taskId, {
+				level: 'error',
+				message: e?.message || 'Well log upload failed'
+			});
+			throw e;
 		}
-		await this.selectProject(workbench.projectId, workbench.wellId);
 	}
 }
 

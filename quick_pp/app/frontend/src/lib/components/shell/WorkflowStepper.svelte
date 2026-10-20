@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
+	import { appStatus } from '$lib/state/status.svelte';
 	import {
 		workbench,
 		type MultiWellStep,
@@ -148,17 +149,26 @@
 		{/if}
 	</div>
 
-	<!-- Right Pane Mode Switcher & Status -->
+	<!-- Right Pane Mode Switcher & Live Status Pill -->
 	<div class="flex items-center gap-2">
-		{#if wellData.isCalculating || projectData.isComputingMultiWell}
-			<span class="mono-num flex items-center gap-1 text-[11px] font-medium text-blue-600">
-				<span class="inline-block h-2 w-2 animate-ping rounded-full bg-blue-600"></span>
-				Computing...
-			</span>
+		{#if appStatus.isBusy || wellData.isCalculating || projectData.isComputingMultiWell}
+			<button
+				type="button"
+				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
+				class="mono-num flex max-w-[260px] items-center gap-1.5 truncate rounded-xs border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700"
+				title={appStatus.displayMessage}
+			>
+				<span class="inline-block h-2 w-2 shrink-0 animate-ping rounded-full bg-blue-600"></span>
+				<span class="truncate">{appStatus.displayMessage}</span>
+			</button>
 		{:else if wellData.lastSavedMessage}
-			<span class="mono-num text-[11px] font-medium text-[var(--status-ok)]">
+			<button
+				type="button"
+				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
+				class="mono-num text-[11px] font-medium text-[var(--status-ok)] hover:underline"
+			>
 				{wellData.lastSavedMessage}
-			</span>
+			</button>
 		{/if}
 
 		<div
@@ -179,4 +189,3 @@
 		</div>
 	</div>
 </nav>
-

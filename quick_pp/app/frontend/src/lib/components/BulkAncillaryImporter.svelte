@@ -7,6 +7,7 @@
 
   import { API_BASE } from '$lib/api/client';
   import { authState } from '$lib/state/auth.svelte';
+  import { appStatus } from '$lib/state/status.svelte';
   const MAX_DEMO_FILE_BYTES = 5 * 1024 * 1024; // 5 MB cap in live demo
 
   let files: File[] = [];
@@ -497,11 +498,30 @@
       return {file: preview.fileName, ok:true, sent};
     });
 
+    const taskId = appStatus.startTask(
+      `Importing ${type.replace(/_/g, ' ')} (${previews.length} file(s))...`
+    );
     try {
       const out = await runConcurrent(tasks, maxConcurrency);
       results = out;
+      const okCount = out.filter((r: any) => r?.ok).length;
+      if (okCount === out.length) {
+        appStatus.endTask(taskId, {
+          level: 'success',
+          message: `Imported ${type.replace(/_/g, ' ')} (${okCount} file(s))`
+        });
+      } else {
+        appStatus.endTask(taskId, {
+          level: okCount > 0 ? 'warning' : 'error',
+          message: `Imported ${okCount}/${out.length} ${type.replace(/_/g, ' ')} file(s)`
+        });
+      }
     } catch (err:any) {
       globalError = String(err?.message ?? err);
+      appStatus.endTask(taskId, {
+        level: 'error',
+        message: globalError
+      });
     } finally { processing = false; }
   }
 </script>
