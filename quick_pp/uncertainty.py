@@ -676,6 +676,10 @@ def run_log_uncertainty(
     return out_df
 
 
+# Alias for CPI uncertainty propagation
+run_cpi_uncertainty = run_log_uncertainty
+
+
 def calc_stochastic_reservoir_summary(
     df: pd.DataFrame,
     cutoffs: Optional[Dict[str, float]] = None,

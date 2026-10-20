@@ -41,6 +41,7 @@ import numpy as np
 import pandas as pd
 
 __all__ = [
+    "CoreyRelPerm",
     "brooks_corey_relperm",
     "corey_relperm",
     "correct_core_data",
@@ -1094,3 +1095,103 @@ def generate_swof_table(
     }
 
 
+class CoreyRelPerm:
+    """Object-oriented modified Corey (1954) water-oil relative permeability model & SCAL fitter.
+
+    Provides an estimator-style interface wrapping `corey_relperm`, `fit_relperm`, and
+    `generate_swof_table` for SCAL calibration and Eclipse / Intersect `SWOF` table generation.
+    """
+
+    def __init__(
+        self,
+        swirr: float = 0.15,
+        sor: float = 0.20,
+        krw_max: float = 0.30,
+        kro_max: float = 0.90,
+        nw: float = 3.0,
+        no: float = 2.5,
+        mu_w: float = 0.5,
+        mu_o: float = 1.5,
+    ):
+        self.swirr = float(swirr)
+        self.sor = float(sor)
+        self.krw_max = float(krw_max)
+        self.kro_max = float(kro_max)
+        self.nw = float(nw)
+        self.no = float(no)
+        self.mu_w = float(mu_w)
+        self.mu_o = float(mu_o)
+        self.fit_result_: Optional[Dict[str, Any]] = None
+
+    def evaluate(
+        self, sw: Union[float, np.ndarray, pd.Series, Sequence[float]]
+    ) -> Dict[str, np.ndarray]:
+        """Evaluate `sw`, `swn`, `krw`, `kro`, and `fw` for the given water saturation array."""
+        return corey_relperm(
+            sw=sw,
+            swirr=self.swirr,
+            sor=self.sor,
+            krw_max=self.krw_max,
+            kro_max=self.kro_max,
+            nw=self.nw,
+            no=self.no,
+            mu_w=self.mu_w,
+            mu_o=self.mu_o,
+        )
+
+    def __call__(
+        self, sw: Union[float, np.ndarray, pd.Series, Sequence[float]]
+    ) -> Dict[str, np.ndarray]:
+        return self.evaluate(sw)
+
+    def fit(
+        self,
+        sw: Sequence[float],
+        krw: Optional[Sequence[float]] = None,
+        kro: Optional[Sequence[float]] = None,
+        swirr: Optional[float] = None,
+        sor: Optional[float] = None,
+    ) -> "CoreyRelPerm":
+        """Fit Corey parameters (`krw_max`, `kro_max`, `nw`, `no`) to lab SCAL data."""
+        res = fit_relperm(
+            sw=sw,
+            krw=krw,
+            kro=kro,
+            model="corey",
+            swirr=swirr if swirr is not None else self.swirr,
+            sor=sor if sor is not None else self.sor,
+        )
+        self.swirr = float(res.get("swirr", self.swirr))
+        self.sor = float(res.get("sor", self.sor))
+        if "krw_max" in res:
+            self.krw_max = float(res["krw_max"])
+        if "nw" in res:
+            self.nw = float(res["nw"])
+        if "kro_max" in res:
+            self.kro_max = float(res["kro_max"])
+        if "no" in res:
+            self.no = float(res["no"])
+        self.fit_result_ = res
+        return self
+
+    def to_swof(
+        self,
+        n_points: int = 21,
+        pc_entry: float = 1.5,
+        pc_exponent: float = 1.5,
+        pc_max: float = 50.0,
+    ) -> Dict[str, Any]:
+        """Generate an Eclipse / Intersect `SWOF` table using the current Corey parameters."""
+        return generate_swof_table(
+            n_points=n_points,
+            model="corey",
+            swirr=self.swirr,
+            sor=self.sor,
+            krw_max=self.krw_max,
+            kro_max=self.kro_max,
+            nw=self.nw,
+            no=self.no,
+            pc_entry=pc_entry,
+            pc_exponent=pc_exponent,
+            pc_max=pc_max,
+        )

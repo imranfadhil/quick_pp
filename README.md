@@ -213,7 +213,11 @@ workflow for exploring the project locally:
 Key notebooks:
 - `01_data_handler.ipynb` — create and inspect a mock `qppp` project file.
 - `02_EDA.ipynb` — quick exploratory data analysis patterns used in demos.
-- `03_*` series — interpretation examples (porosity, saturation, rock typing).
+- `03_*` series — deterministic interpretation examples (porosity, saturation, rock typing).
+- `04_fdp_and_piml_showcase.ipynb` — **End-to-End FDP & PIML Master Showcase** demonstrating `run_cpi_uncertainty` (`run_log_uncertainty`), `optimize_fwl` (`ContactOptimizer`), `CoreyRelPerm` & `SWOF` generation, `block_logs` (`upscale_logs`), and `ConformalRegressor` / `ConformalMultiOutputRegressor`.
+- `04_1_probabilistic_cpi_and_fwl_optimization.ipynb` — Latin Hypercube CPI uncertainty propagation, stochastic STOIIP volumetrics, and multi-well FWL/OWC/TTZ optimization.
+- `04_2_scal_relperm_and_log_blocking.ipynb` — SCAL lab-to-reservoir core corrections, `CoreyRelPerm` curve fitting, Eclipse `SWOF` export, and static-to-dynamic log blocking (`block_logs`).
+- `04_3_piml_and_conformal_prediction.ipynb` — Physics-Informed Machine Learning (PIML) feature engineering, locally weighted conformal prediction (`ConformalRegressor`), and volumetric closure (`EnforceMineralSum`).
 
 Machine learning (Train / Predict / Deploy)
 -----------------------------------------

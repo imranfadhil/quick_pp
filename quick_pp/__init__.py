@@ -64,6 +64,7 @@ from quick_pp.saturation import (  # noqa: E402
     predict_sw_shm,
 )
 from quick_pp.scal import (  # noqa: E402
+    CoreyRelPerm,
     brooks_corey_relperm,
     corey_relperm,
     correct_core_data,
@@ -84,8 +85,16 @@ from quick_pp.scal import (  # noqa: E402
 from quick_pp.uncertainty import (  # noqa: E402
     calc_stochastic_reservoir_summary,
     mc_volumetric_uncertainty,
+    run_cpi_uncertainty,
     run_log_uncertainty,
     sample_lhs_parameters,
+)
+from quick_pp.machine_learning.utils import (  # noqa: E402
+    ConformalMultiOutputRegressor,
+    ConformalRegressor,
+    EnforceMineralSum,
+    enforce_physical_constraints,
+    physics_informed_loss,
 )
 from quick_pp.upscaling import (  # noqa: E402
     arith_upscale,
@@ -103,7 +112,11 @@ from quick_pp.upscaling import (  # noqa: E402
 )
 
 __all__ = [
+    "ConformalMultiOutputRegressor",
+    "ConformalRegressor",
     "ContactOptimizer",
+    "CoreyRelPerm",
+    "EnforceMineralSum",
     "__author__",
     "__email__",
     "__version__",
@@ -118,6 +131,7 @@ __all__ = [
     "correct_core_data",
     "dean_stark_cbw_correction",
     "dean_stark_saturation_correction",
+    "enforce_physical_constraints",
     "estimate_cbw_from_qv",
     "estimate_mdt_fwl",
     "expand_blocked_logs",
@@ -138,12 +152,14 @@ __all__ = [
     "overburden_poroperm_correction",
     "overburden_porosity_correction",
     "pc_lab_to_reservoir",
+    "physics_informed_loss",
     "plot_fwl_reconciliation",
     "plot_upscaled_logs",
     "pore_volume_upscale",
     "power_law_upscale",
     "predict_sw_shm",
     "qaqc",
+    "run_cpi_uncertainty",
     "run_log_uncertainty",
     "sample_lhs_parameters",
     "saturation",
