@@ -1,4 +1,4 @@
-import { API_BASE, api } from '$lib/api/client';
+import { API_BASE, api, authHeaders } from '$lib/api/client';
 import type { ProjectSummaryResponse, WellSummaryItem } from '$lib/api/schema';
 import { wellData } from './wellData.svelte';
 import { workbench } from './workbench.svelte';
@@ -7,6 +7,7 @@ export interface ProjectListItem {
 	project_id: number;
 	name: string;
 	description?: string;
+	user_role?: 'admin' | 'editor' | 'viewer';
 	created_at?: string;
 }
 
@@ -153,6 +154,8 @@ class ProjectDataState {
 			`${API_BASE}/quick_pp/database/projects/${workbench.projectId}/read_las`,
 			{
 				method: 'POST',
+				credentials: 'include',
+				headers: authHeaders(),
 				body: fd
 			}
 		);

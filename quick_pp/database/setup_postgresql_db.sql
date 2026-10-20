@@ -18,6 +18,15 @@ CREATE TABLE IF NOT EXISTS "users" (
     "username" VARCHAR(50) UNIQUE NOT NULL,
     "email" VARCHAR(255) UNIQUE NOT NULL,
     "hashed_password" VARCHAR(255) NOT NULL,
+    "full_name" VARCHAR(255) DEFAULT '',
+    "role" VARCHAR(50) NOT NULL DEFAULT 'user',
+    "status" VARCHAR(50) NOT NULL DEFAULT 'FORCE_CHANGE_PASSWORD',
+    "is_active" INTEGER NOT NULL DEFAULT 1,
+    "mfa_enabled" INTEGER NOT NULL DEFAULT 0,
+    "mfa_secret" VARCHAR(255),
+    "invite_token" VARCHAR(255),
+    "invited_by" INTEGER,
+    "last_login_at" TEXT,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

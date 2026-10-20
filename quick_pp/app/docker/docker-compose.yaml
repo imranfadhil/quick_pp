@@ -3,7 +3,7 @@ services:
     image: pgvector/pgvector:pg17
     restart: unless-stopped
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-qpp_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change_this_strong_password}
@@ -30,8 +30,23 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-qpp_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change_this_strong_password}
       - POSTGRES_DB=${POSTGRES_DB:-quick_pp}
+      - PUBLIC_URL=${PUBLIC_URL:-}
+      - QPP_AUTH_SECRET_KEY=${QPP_AUTH_SECRET_KEY:-}
+      - QPP_ADMIN_USERNAME=${QPP_ADMIN_USERNAME:-admin}
+      - QPP_ADMIN_EMAIL=${QPP_ADMIN_EMAIL:-admin@quickpp.local}
+      - QPP_ADMIN_PASSWORD=${QPP_ADMIN_PASSWORD:-QuickPP@Admin2026!}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_TLS=${SMTP_TLS:-true}
     volumes:
       - ../../../uploads:/code/uploads
+      - ../../../quick_pp/app/backend:/venv/lib/python3.11/site-packages/quick_pp/app/backend
+      - ../../../quick_pp/database:/venv/lib/python3.11/site-packages/quick_pp/database
+      - ../../../quick_pp/app/backend:/code/quick_pp/app/backend
+      - ../../../quick_pp/database:/code/quick_pp/database
     networks:
       - qpp-network
 
@@ -80,6 +95,9 @@ services:
     command: tunnel --no-autoupdate --url http://web:80
     networks:
       - qpp-network
+
+volumes:
+  postgres_data:
 
 networks:
   qpp-network:

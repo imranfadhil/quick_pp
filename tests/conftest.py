@@ -161,6 +161,9 @@ class _ASGITestClient:
     def delete(self, url: str, **kwargs) -> _ASGIMockResponse:
         return self.request("DELETE", url, **kwargs)
 
+    def patch(self, url: str, **kwargs) -> _ASGIMockResponse:
+        return self.request("PATCH", url, **kwargs)
+
 
 try:
     from fastapi.testclient import TestClient  # noqa: F401

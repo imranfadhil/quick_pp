@@ -7,10 +7,14 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import ORJSONResponse
 from sqlalchemy import bindparam, select, text
 
+from quick_pp.app.backend.utils.auth import (
+    check_project_permission,
+    get_current_user_optional,
+)
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_filename
 from quick_pp.database import models as db_models
@@ -59,7 +63,7 @@ async def health_check():
 
 
 @router.post("/projects", summary="Create or get project")
-async def create_project(payload: dict):
+async def create_project(payload: dict, request: Request):
     """Create a new project (or return existing by name).
 
     Payload: {"name": "Project A", "description": "...", "created_by_user_id": 1}
@@ -69,8 +73,9 @@ async def create_project(payload: dict):
         raise HTTPException(status_code=400, detail="Project name is required")
 
     description = payload.get("description") if isinstance(payload, dict) else ""
+    current_user = get_current_user_optional(request)
     created_by = (
-        payload.get("created_by_user_id") if isinstance(payload, dict) else None
+        (payload.get("created_by_user_id") if isinstance(payload, dict) else None) or (int(current_user["user_id"]) if current_user else None)
     )
 
     try:
@@ -82,6 +87,16 @@ async def create_project(payload: dict):
                 created_by_user_id=created_by,
             )
             proj.save()
+            if created_by is not None:
+                if not session.get(db_models.ProjectMember, (proj.project_id, int(created_by))):
+                    session.add(
+                        db_models.ProjectMember(
+                            project_id=proj.project_id,
+                            user_id=int(created_by),
+                            role="admin",
+                        )
+                    )
+                    session.flush()
             return {"project_id": proj.project_id, "name": proj.name}
     except Exception as e:
         raise HTTPException(
@@ -90,16 +105,40 @@ async def create_project(payload: dict):
 
 
 @router.get("/projects", summary="List projects")
-async def list_projects():
+async def list_projects(request: Request):
     try:
         with get_db() as session:
             stmt = select(db_models.Project)
             rows = session.execute(stmt).scalars().all()
+            current_user = get_current_user_optional(request)
+            if current_user and current_user.get("role") != "admin":
+                uid = int(current_user["user_id"])
+                pms = {
+                    pm.project_id: pm.role
+                    for pm in session.execute(
+                        select(db_models.ProjectMember).where(
+                            db_models.ProjectMember.user_id == uid
+                        )
+                    )
+                    .scalars()
+                    .all()
+                }
+                return [
+                    {
+                        "project_id": r.project_id,
+                        "name": r.name,
+                        "description": r.description,
+                        "user_role": "admin" if r.created_by == uid else pms[r.project_id],
+                    }
+                    for r in rows
+                    if r.created_by == uid or r.project_id in pms
+                ]
             return [
                 {
                     "project_id": r.project_id,
                     "name": r.name,
                     "description": r.description,
+                    "user_role": "admin",
                 }
                 for r in rows
             ]

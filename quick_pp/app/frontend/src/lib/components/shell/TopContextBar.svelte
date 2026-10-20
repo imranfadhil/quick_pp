@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { authState } from '$lib/state/auth.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
@@ -7,6 +8,7 @@
 	let showFilterPopover = $state(false);
 	let showNewProjectPopover = $state(false);
 	let showExportMenu = $state(false);
+	let showUserMenu = $state(false);
 	let newProjName = $state('');
 	let newProjDesc = $state('');
 	let minDepthInput = $state<string>('');
@@ -399,5 +401,92 @@
 		>
 			AI Assistant
 		</button>
+
+		{#if authState.isAdmin}
+			<button
+				type="button"
+				onclick={() => (authState.uamModalOpen = true)}
+				class="h-7 rounded-sm border border-blue-200 bg-blue-50 px-2.5 text-xs font-semibold text-blue-800 hover:bg-blue-100"
+			>
+				UAM Console
+			</button>
+		{/if}
+
+		{#if authState.user}
+			<div class="relative">
+				<button
+					type="button"
+					onclick={() => (showUserMenu = !showUserMenu)}
+					class="flex h-7 items-center gap-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]"
+				>
+					<span
+						class="flex h-4 w-4 items-center justify-center rounded-xs bg-[var(--accent-primary)] text-[9px] font-bold text-white"
+					>
+						{authState.userInitials}
+					</span>
+					<span class="max-w-[96px] truncate font-semibold">{authState.user.username}</span>
+					<span class="text-[10px] text-[var(--text-muted)]">▾</span>
+				</button>
+
+				{#if showUserMenu}
+					<div
+						class="absolute top-8 right-0 z-50 w-56 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-1 shadow-lg"
+					>
+						<div class="border-b border-[var(--border-hairline)] px-3 py-2">
+							<div class="flex items-center justify-between">
+								<span class="text-xs font-bold text-[var(--text-primary)]">
+									{authState.user.full_name || authState.user.username}
+								</span>
+								<span
+									class="rounded-xs bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold text-blue-800 uppercase"
+								>
+									{authState.user.role}
+								</span>
+							</div>
+							<div class="truncate text-[11px] text-[var(--text-muted)]">
+								{authState.user.email}
+							</div>
+						</div>
+
+						{#if authState.isAdmin}
+							<button
+								type="button"
+								onclick={() => {
+									showUserMenu = false;
+									authState.uamModalOpen = true;
+								}}
+								class="block w-full px-3 py-1.5 text-left text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]"
+							>
+								User Access Management (UAM)
+							</button>
+						{/if}
+
+						<button
+							type="button"
+							onclick={() => {
+								showUserMenu = false;
+								authState.accountModalOpen = true;
+							}}
+							class="block w-full px-3 py-1.5 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]"
+						>
+							Account Security & Password
+						</button>
+
+						<div class="my-1 border-t border-[var(--border-hairline)]"></div>
+
+						<button
+							type="button"
+							onclick={() => {
+								showUserMenu = false;
+								authState.logout();
+							}}
+							class="block w-full px-3 py-1.5 text-left text-xs font-semibold text-red-600 hover:bg-red-50"
+						>
+							Sign Out
+						</button>
+					</div>
+				{/if}
+			</div>
+		{/if}
 	</div>
 </header>

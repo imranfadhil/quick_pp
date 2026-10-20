@@ -57,6 +57,8 @@ async def lifespan(app: "FastAPI"):
     """
     try:
         get_db_connector()
+        from quick_pp.app.backend.utils.auth import bootstrap_default_admin
+        bootstrap_default_admin()
     except Exception as e:
         logging.getLogger(__name__).exception("Failed to initialize DBConnector: %s", e)
 
@@ -146,6 +148,17 @@ async def internal_server_exception_handler(exc: Exception):
 
 
 if FastApiMCP is not None:
+    try:
+        mcp = FastApiMCP(
+            app,
+            name="quick_pp API MCP",
+            describe_all_responses=True,
+            describe_full_response_schema=True,
+        )
+        mcp.mount()
+    except Exception as _mcp_err:
+        logging.getLogger(__name__).warning("FastApiMCP setup skipped: %s", _mcp_err)
+if False:
     mcp = FastApiMCP(
         app,
         name="quick_pp API MCP",

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from .services.ancillary import router as ancillary_router
+from .services.auth import router as auth_router
 from .services.chat import router as chat_router
 from .services.database import router as database_router
 from .services.las_handler import router as las_router
@@ -21,6 +22,7 @@ from .services.workspace import router as workspace_router
 
 api_router = APIRouter(prefix="/quick_pp")
 
+api_router.include_router(auth_router)
 api_router.include_router(las_router)
 api_router.include_router(lithology_router)
 api_router.include_router(porosity_router)
