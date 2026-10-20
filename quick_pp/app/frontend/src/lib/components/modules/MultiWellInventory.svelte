@@ -163,7 +163,7 @@
 				<span class="text-[var(--text-secondary)]">Reference Key Well:</span>
 				<select
 					bind:value={normKeyWell}
-					class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px] font-medium"
+					class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
 				>
 					<option value="">Pooled Field Distribution</option>
 					{#each projectData.wells as w}

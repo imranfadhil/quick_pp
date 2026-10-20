@@ -147,6 +147,12 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 	}
+	select {
+		padding-top: 0;
+		padding-bottom: 0;
+		background-position: right 0.35rem center;
+	}
+	}
 }
 
 /* High-density engineering scrollbar styling */

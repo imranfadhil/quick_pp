@@ -116,7 +116,7 @@
 				<span class="text-[var(--text-secondary)]">Loss Objective:</span>
 				<select
 					bind:value={optLoss}
-					class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px] font-medium"
+					class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
 				>
 					<option value="rmse">RMSE (L2)</option>
 					<option value="huber">Huber Robust</option>

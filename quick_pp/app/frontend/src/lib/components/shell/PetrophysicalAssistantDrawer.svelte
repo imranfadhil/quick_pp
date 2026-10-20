@@ -373,12 +373,12 @@
 			</div>
 
 			<div class="grid grid-cols-2 gap-1.5">
-				<label class="block">
+				<label class="block min-w-0">
 					<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Provider</span>
 					<select
 						value={selectedProvider}
 						onchange={handleProviderChange}
-						class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px] font-medium text-[var(--text-primary)]"
+						class="h-7 w-full truncate rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-2 text-[11px] leading-tight font-medium text-[var(--text-primary)]"
 					>
 						{#each providers as p (p.id)}
 							<option value={p.id}>{p.name}</option>
@@ -386,11 +386,11 @@
 					</select>
 				</label>
 
-				<label class="block">
+				<label class="block min-w-0">
 					<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Model</span>
 					<select
 						bind:value={selectedModel}
-						class="mono-num h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px] text-[var(--text-primary)]"
+						class="mono-num h-7 w-full truncate rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-2 text-[11px] leading-tight text-[var(--text-primary)]"
 					>
 						{#each activeProviderObj.models as m}
 							<option value={m}>{m}</option>
@@ -411,7 +411,7 @@
 							type="password"
 							placeholder="sk-... / AIza..."
 							bind:value={apiKey}
-							class="mono-num h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[11px]"
+							class="mono-num h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0 text-[11px] text-[var(--text-primary)]"
 						/>
 					</label>
 				</div>
@@ -426,7 +426,7 @@
 						type="text"
 						placeholder={activeProviderObj.default_base_url || 'https://api.openai.com/v1'}
 						bind:value={customBaseUrl}
-						class="mono-num h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[11px]"
+						class="mono-num h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0 text-[11px] text-[var(--text-primary)]"
 					/>
 				</label>
 			{/if}
@@ -577,7 +577,7 @@
 			type="text"
 			placeholder="Inspect well, run qaqc / multi_mineral / shf, or explain conformal bounds..."
 			bind:value={chatInput}
-			class="h-8 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 text-xs text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:outline-none"
+			class="h-8 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 py-0 text-xs text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:outline-none"
 		/>
 		<button
 			type="submit"

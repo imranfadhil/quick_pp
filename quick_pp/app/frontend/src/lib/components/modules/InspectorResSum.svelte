@@ -260,7 +260,7 @@
 					<select
 						bind:value={permMethod}
 						onchange={() => executeResSum(false)}
-						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px] font-medium"
+						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
 					>
 						<option value="geometric">Geometric (2D Iso)</option>
 						<option value="arithmetic">Arithmetic (kH Max)</option>

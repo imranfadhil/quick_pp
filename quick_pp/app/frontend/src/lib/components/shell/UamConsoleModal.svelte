@@ -549,7 +549,7 @@
 									</span>
 									<select
 										bind:value={invRole}
-										class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-white px-2 text-xs"
+										class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-white py-0 pr-6 pl-2 text-xs"
 									>
 										<option value="user">Standard User (Project-scoped)</option>
 										<option value="admin">Global Administrator</option>
