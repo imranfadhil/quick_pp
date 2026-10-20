@@ -7,13 +7,10 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
-from celery.result import AsyncResult
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import JSONResponse, ORJSONResponse
-from sqlalchemy import bindparam, func, select, text
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import ORJSONResponse
+from sqlalchemy import bindparam, select, text
 
-from quick_pp.app.backend.task_queue.celery_app import celery_app, is_broker_available
-from quick_pp.app.backend.task_queue.tasks import process_las, process_merged_data
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_filename
 from quick_pp.database import models as db_models
@@ -59,38 +56,6 @@ async def health_check():
         return {"status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB connection failed: {e}") from e
-
-
-@router.get("/tasks/{task_id}", summary="Get Celery task status")
-async def get_task_status(task_id: str):
-    """Return Celery task state/result for a given task id."""
-    try:
-        res: AsyncResult = AsyncResult(task_id, app=celery_app)
-        result = None
-        error = None
-        try:
-            # If task is ready, retrieve result or exception
-            if res.ready():
-                if res.successful():
-                    result = res.result
-                else:
-                    # Task failed; get the exception
-                    error = str(res.info)
-            elif res.failed():
-                error = str(res.info)
-        except Exception as exc:
-            error = str(exc)
-
-        return {
-            "task_id": task_id,
-            "state": res.state,
-            "result": result,
-            "error": error,
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to get task status: {e}"
-        ) from e
 
 
 @router.post("/projects", summary="Create or get project")
@@ -423,12 +388,13 @@ async def create_well(project_id: int, payload: dict):
 
 
 @router.post("/projects/{project_id}/read_las", summary="Upload LAS files into project")
-async def project_read_las(
+@router.post("/projects/{project_id}/upload", include_in_schema=False)
+def project_read_las(
     project_id: int,
     files: List[UploadFile] = File(...),
     depth_uom: Optional[str] = Form("m"),
 ):
-    """Upload LAS files and add them into the project in the database."""
+    """Upload LAS files and add them into the project in the database synchronously."""
     upload_dir = Path("uploads/las_db/")
     upload_dir.mkdir(parents=True, exist_ok=True)
     saved_paths = []
@@ -449,28 +415,6 @@ async def project_read_las(
 
         invalidate_well_cache(project_id=project_id)
 
-        # Try to enqueue the Celery task if broker is available; otherwise fall back
-        from quick_pp.app.backend.task_queue.celery_app import is_broker_available
-
-        if is_broker_available():
-            try:
-                async_result = process_las.apply_async(
-                    args=[saved_paths, project_id, depth_uom]
-                )
-                return JSONResponse(
-                    status_code=status.HTTP_202_ACCEPTED,
-                    content={
-                        "message": "Files uploaded. Processing enqueued.",
-                        "task_id": async_result.id,
-                        "files": [Path(p).name for p in saved_paths],
-                    },
-                )
-            except Exception:
-                logging.getLogger(__name__).exception(
-                    "Failed to enqueue Celery task, falling back to sync processing"
-                )
-
-        # Broker not available or enqueue failed -> do synchronous processing as fallback
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             proj.read_las(saved_paths, depth_uom=depth_uom)
@@ -478,7 +422,7 @@ async def project_read_las(
         invalidate_well_cache(project_id=project_id)
 
         return {
-            "message": "Files uploaded and processed (sync fallback)",
+            "message": "Files uploaded and processed successfully",
             "files": [Path(p).name for p in saved_paths],
         }
 
@@ -923,16 +867,7 @@ def _compute_merged_data_sync(
     well_name: str,
     tolerance: Optional[float] = 0.16,
 ) -> list:
-    """Compute merged well data synchronously (helper function).
-
-    Args:
-        project_id: Project ID
-        well_name: Name of the well
-        tolerance: Merge tolerance for depth-based merging
-
-    Returns:
-        List of merged data records
-    """
+    """Compute merged well data synchronously (helper function)."""
     merged = _get_merged_dataframe_sync(project_id, well_name, tolerance=tolerance)
     return dataframe_to_records(merged)
 
@@ -975,7 +910,7 @@ def get_merged_well_data(
 
 @router.post(
     "/projects/{project_id}/wells/{well_name}/merged/generate",
-    summary="Initiate merged data generation (sync by default, optional async)",
+    summary="Compute merged data synchronously",
     response_class=ORJSONResponse,
 )
 async def initiate_merged_data_generation(
@@ -984,28 +919,8 @@ async def initiate_merged_data_generation(
     tolerance: Optional[float] = 0.16,
     async_task: bool = False,
 ):
-    """Compute merged well data and return immediately (or enqueue a Celery task if async_task=True).
-
-    Args:
-        project_id: Project ID
-        well_name: Name of the well
-        tolerance: Merge tolerance for depth-based merging
-        async_task: If True and Celery broker is available, enqueue background task
-
-    Returns:
-        JSON with task_id="sync" and result immediately, or task_id for async polling
-    """
+    """Compute merged well data and return immediately."""
     try:
-        if async_task and is_broker_available():
-            logging.getLogger(__name__).info(
-                "Celery broker available, enqueueing async merged data task"
-            )
-            task = process_merged_data.apply_async(
-                args=(project_id, well_name),
-                kwargs={"tolerance": float(tolerance)},
-            )
-            return ORJSONResponse(content={"task_id": task.id})
-
         result = _compute_merged_data_sync(project_id, well_name, tolerance)
         return ORJSONResponse(
             content={"task_id": "sync", "status": "success", "result": result}
@@ -1020,62 +935,6 @@ async def initiate_merged_data_generation(
             status_code=500,
             detail=f"Failed to initiate merged data generation: {e}",
         ) from e
-
-
-@router.get(
-    "/projects/{project_id}/wells/{well_name}/merged/result/{task_id}",
-    summary="Poll for merged data generation result",
-)
-async def get_merged_data_result(task_id: str):
-    """Poll for the result of a merged data generation task.
-
-    Args:
-        project_id: Project ID (for validation)
-        well_name: Well name (for validation)
-        task_id: Task ID returned from initiate endpoint
-
-    Returns:
-        JSON with status and result (when ready)
-    """
-    try:
-        # Handle synthetic "sync" task ID (synchronous fallback result)
-        if task_id == "sync":
-            return JSONResponse(
-                content={
-                    "status": "success",
-                    "result": {},  # Result should have been included in initiate response
-                }
-            )
-
-        from quick_pp.app.backend.task_queue.celery_app import celery_app as app
-
-        task = app.AsyncResult(task_id)
-
-        if task.state == "PENDING":
-            return JSONResponse(content={"status": "pending"})
-        elif task.state == "SUCCESS":
-            result = task.result
-            # Ensure result is JSON serializable
-            if not isinstance(result, list):
-                result = list(result) if hasattr(result, "__iter__") else []
-            # Sanitize NaN/Inf values before JSON serialization
-            result = _sanitize_for_json(result)
-            return JSONResponse(content={"status": "success", "result": result})
-        elif task.state == "FAILURE":
-            error_msg = str(task.info) if task.info else "Unknown error"
-            return JSONResponse(
-                content={"status": "error", "error": error_msg},
-                status_code=200,  # Still 200 to allow client to handle gracefully
-            )
-        else:
-            # RETRY, REVOKED, etc.
-            return JSONResponse(content={"status": "pending", "state": task.state})
-    except Exception as e:
-        logging.getLogger(__name__).exception("Failed to check task result: %s", e)
-        return JSONResponse(
-            content={"status": "error", "error": str(e)},
-            status_code=500,
-        )
 
 
 @router.post("/cache/clear", summary="Clear merged data cache")

@@ -8,9 +8,7 @@ The Docker Compose stack ([`quick_pp/app/docker/docker-compose.yaml`](../quick_p
 - **`web` (Nginx)**: Unified reverse proxy on port `8080` (and internal `:80`). Routes `/quick_pp/*` to `qpp-backend:6312` and `/` to `qpp-frontend:5469` with a `100 MB` upload limit for LAS files.
 - **`quicktunnel` (Cloudflare)**: Runs `cloudflared tunnel --url http://web:80` and prints a free `https://<words>.trycloudflare.com` URL at the end of `sync.bat`.
 - **`qpp-frontend` (SvelteKit / Node 20)**: Builds and serves the SvelteKit UI on `:5469` using relative API paths (`VITE_BACKEND_URL=""`).
-- **`qpp-backend` (FastAPI / Gunicorn)**: Serves the petrophysical API on `:6312`.
-- **`celery-worker` & `redis`**: Background worker queue for LAS parsing and merged well log computations.
-- **`flower`**: Celery monitoring dashboard bound to `127.0.0.1:5555` on the droplet (accessible via SSH tunnel).
+- **`qpp-backend` (FastAPI / Gunicorn)**: Serves the petrophysical API on `:6312` with in-memory caching for merged well logs.
 - **`postgres` (pgvector/pg17)**: PostgreSQL 17 database.
 
 ## Prerequisites
@@ -50,12 +48,3 @@ The Docker Compose stack ([`quick_pp/app/docker/docker-compose.yaml`](../quick_p
    REM Tear everything down when done
    destroy.bat
    ```
-
-## Accessing Flower (Celery Monitor)
-
-`flower` is bound to `127.0.0.1:5555` on the droplet for security. To view it locally, open an SSH tunnel using the command printed by `deploy.bat`:
-```bat
-ssh -i "%USERPROFILE%\.ssh\quick-pp-do-key" -L 5555:localhost:5555 root@<DROPLET_IP>
-```
-Then open `http://localhost:5555` in your browser.
-

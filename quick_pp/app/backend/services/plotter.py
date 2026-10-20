@@ -1,13 +1,11 @@
-import json
 import logging
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from quick_pp.app.backend.task_queue.tasks import generate_well_plot
-from quick_pp.app.backend.task_queue.celery_app import is_broker_available
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.database import objects as db_objects
 from quick_pp.plotter import well_log as wl
@@ -35,6 +33,8 @@ def _generate_well_plot_sync(
     Returns:
         Plotly figure JSON parsed as dict
     """
+    import json
+
     with get_db() as session:
         proj = db_objects.Project.load(session, project_id=project_id)
         df = proj.get_well_data_optimized(well_name)
@@ -167,7 +167,7 @@ async def get_well_log_plot(
 
 @router.post(
     "/projects/{project_id}/wells/{well_name}/log/generate",
-    summary="Initiate well log plot generation (sync by default, optional async)",
+    summary="Generate well log plot synchronously",
 )
 async def initiate_well_log_generation(
     project_id: int,
@@ -177,34 +177,8 @@ async def initiate_well_log_generation(
     zones: Optional[str] = None,
     async_task: bool = False,
 ):
-    """Generate well log plot synchronously by default, or enqueue an async Celery task if async_task=True.
-
-    Args:
-        project_id: Project ID
-        well_name: Name of the well
-        min_depth: Optional minimum depth filter
-        max_depth: Optional maximum depth filter
-        zones: Optional comma-separated zone names
-        async_task: If True and Celery broker is available, enqueue background task
-
-    Returns:
-        JSON with task_id="sync" and result immediately, or task_id for async polling
-    """
+    """Generate well log plot synchronously and return immediately."""
     try:
-        if async_task and is_broker_available():
-            logging.getLogger(__name__).info(
-                "Celery broker available, enqueueing async plot task"
-            )
-            task = generate_well_plot.apply_async(
-                args=(project_id, well_name),
-                kwargs={
-                    "min_depth": min_depth,
-                    "max_depth": max_depth,
-                    "zones": zones,
-                },
-            )
-            return JSONResponse(content={"task_id": task.id})
-
         result = _generate_well_plot_sync(
             project_id, well_name, min_depth, max_depth, zones
         )
@@ -221,57 +195,3 @@ async def initiate_well_log_generation(
             status_code=500,
             detail=f"Failed to initiate plot generation: {e}",
         ) from e
-
-
-@router.get(
-    "/projects/{project_id}/wells/{well_name}/log/result/{task_id}",
-    summary="Poll for plot generation result",
-)
-async def get_plot_result(task_id: str):
-    """Poll for the result of a plot generation task.
-
-    Args:
-        project_id: Project ID (for validation)
-        well_name: Well name (for validation)
-        task_id: Task ID returned from initiate endpoint
-
-    Returns:
-        JSON with status and result (when ready)
-    """
-    try:
-        # Handle synthetic "sync" task ID (synchronous fallback result)
-        if task_id == "sync":
-            return JSONResponse(
-                content={
-                    "status": "success",
-                    "result": {},  # Result should have been included in initiate response
-                }
-            )
-
-        from quick_pp.app.backend.task_queue.celery_app import celery_app as app
-
-        task = app.AsyncResult(task_id)
-
-        if task.state == "PENDING":
-            return JSONResponse(content={"status": "pending"})
-        elif task.state == "SUCCESS":
-            result = task.result
-            parsed = (
-                json.loads(json.dumps(result)) if isinstance(result, dict) else result
-            )
-            return JSONResponse(content={"status": "success", "result": parsed})
-        elif task.state == "FAILURE":
-            error_msg = str(task.info) if task.info else "Unknown error"
-            return JSONResponse(
-                content={"status": "error", "error": error_msg},
-                status_code=200,  # Still 200 to allow client to handle gracefully
-            )
-        else:
-            # RETRY, REVOKED, etc.
-            return JSONResponse(content={"status": "pending", "state": task.state})
-    except Exception as e:
-        logging.getLogger(__name__).exception("Failed to check task result: %s", e)
-        return JSONResponse(
-            content={"status": "error", "error": str(e)},
-            status_code=500,
-        )

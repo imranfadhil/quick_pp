@@ -150,7 +150,7 @@ class ProjectDataState {
 			fd.append('files', f);
 		}
 		const res = await fetch(
-			`${API_BASE}/quick_pp/database/projects/${workbench.projectId}/upload`,
+			`${API_BASE}/quick_pp/database/projects/${workbench.projectId}/read_las`,
 			{
 				method: 'POST',
 				body: fd
@@ -165,4 +165,3 @@ class ProjectDataState {
 }
 
 export const projectData = new ProjectDataState();
-

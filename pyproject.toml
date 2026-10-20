@@ -89,7 +89,6 @@ ml = [
     "seaborn>=0.12",
 ]
 app = [
-    "celery",
     "email-validator",
     "fastapi",
     "fastapi-mcp",
@@ -101,7 +100,6 @@ app = [
     "pydantic",
     "pydantic_core",
     "python-multipart",
-    "redis",
     "requests",
     "sqlalchemy",
     "uvicorn",

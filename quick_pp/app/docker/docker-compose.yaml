@@ -16,47 +16,6 @@ services:
     networks:
       - qpp-network
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    networks:
-      - qpp-network
-
-  celery-worker:
-    image: imranfadhil86/quick_pp-backend:latest
-    build:
-      context: ../../..
-      dockerfile: quick_pp/app/docker/Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      - QPP_DATABASE_URL=${QPP_DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-qpp_user}:${POSTGRES_PASSWORD:-change_this_strong_password}@postgres:5432/${POSTGRES_DB:-quick_pp}}
-    command: celery -A quick_pp.app.backend.task_queue.celery_app.celery_app worker --loglevel=info --concurrency=1
-    restart: unless-stopped
-    volumes:
-      - ../../../uploads:/code/uploads
-    networks:
-      - qpp-network
-
-  flower:
-    image: mher/flower:latest
-    depends_on:
-      - redis
-    environment:
-      - BROKER_URL=redis://redis:6379/0
-    command: celery flower --broker=redis://redis:6379/0 --port=5555 --address=0.0.0.0
-    # Bound to localhost only: access remotely via SSH tunnel (-L 5555:localhost:5555)
-    ports:
-      - "${FLOWER_BIND:-127.0.0.1}:5555:5555"
-    restart: unless-stopped
-    networks:
-      - qpp-network
-
   qpp-backend:
     image: imranfadhil86/quick_pp-backend:latest
     build:
@@ -68,8 +27,6 @@ services:
         condition: service_healthy
     environment:
       - QPP_DATABASE_URL=${QPP_DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-qpp_user}:${POSTGRES_PASSWORD:-change_this_strong_password}@postgres:5432/${POSTGRES_DB:-quick_pp}}
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - POSTGRES_USER=${POSTGRES_USER:-qpp_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change_this_strong_password}
       - POSTGRES_DB=${POSTGRES_DB:-quick_pp}

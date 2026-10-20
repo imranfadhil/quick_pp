@@ -17,7 +17,7 @@ set DROPLET_NAME=%PROJECT_NAME%-server
 REM Region: sgp1 = Singapore (lowest DO latency to Malaysia).
 set REGION=sgp1
 REM Size: s-2vcpu-4gb (~$24/mo, hourly-billed). 4 GB RAM + 2 GB swap gives
-REM smooth headroom for Postgres + Redis + Celery + FastAPI + SvelteKit build.
+REM smooth headroom for Postgres + FastAPI + SvelteKit build.
 REM Use s-1vcpu-2gb (~$12/mo) for light single-well usage (relies on 2 GB swap).
 set SIZE=s-2vcpu-4gb
 REM Docker 1-click marketplace image on Ubuntu (Docker + Compose preinstalled).
@@ -45,4 +45,3 @@ REM Optional: set to 1 to also start Langflow container (--profile langflow)
 REM Note: Langflow requires at least s-2vcpu-4gb (8 GB recommended).
 set ENABLE_LANGFLOW=0
 set TAVILY_API_KEY=
-

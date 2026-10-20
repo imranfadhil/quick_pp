@@ -8,7 +8,7 @@
 | :--- | :--- | :--- |
 | **`core`** *(default)* | `uv pip install "quick-pp[core]"` | Core petrophysics, SCAL, uncertainty, upscaling, LAS handling, and plotting (`numpy`, `pandas`, `scipy`, `scikit-learn`, `matplotlib`, `plotly`, `lasio`, `welly`, `wellpathpy`). |
 | **`ml`** | `uv pip install "quick-pp[ml]"` | Physics-Informed Machine Learning, MLflow tracking, SMOTE, and MAPIE conformal prediction (`mlflow`, `mapie`, `imbalanced-learn`, `seaborn`, `pyarrow`, `fastparquet`). |
-| **`app`** | `uv pip install "quick-pp[app]"` | FastAPI web backend, Celery worker queue, Redis, MCP server, and SQLAlchemy/PostgreSQL (`fastapi`, `uvicorn`, `celery`, `redis`, `sqlalchemy`, `psycopg2-binary`). |
+| **`app`** | `uv pip install "quick-pp[app]"` | FastAPI web backend, MCP server, and SQLAlchemy/PostgreSQL (`fastapi`, `uvicorn`, `orjson`, `sqlalchemy`, `psycopg2-binary`). |
 | **`all`** | `uv pip install "quick-pp[all]"` | Installs `core`, `ml`, `app`, plus Jupyter notebook dependencies (`jupyter`, `ipykernel`, `ipywidgets`, `bokeh`, `openpyxl`). |
 
 ---

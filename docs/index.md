@@ -37,7 +37,7 @@
     # Machine learning & conformal prediction
     uv pip install "quick-pp[ml]"
 
-    # Full-stack FastAPI backend & Celery worker
+    # Full-stack FastAPI backend, MCP server & database layer
     uv pip install "quick-pp[app]"
 
     # Everything (core + ml + app + Jupyter notebooks)
