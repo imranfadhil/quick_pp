@@ -1,32 +1,32 @@
 # ==============================================================================
 #  quick_pp Interactive Live Demo — Self-Contained Full-Stack Dockerfile
 # ==============================================================================
-FROM node:20-slim AS frontend-builder
+FROM node:20-bookworm-slim AS frontend-builder
 
 WORKDIR /app/frontend
+
 COPY quick_pp/app/frontend/package*.json ./
 RUN npm install --no-audit --no-fund
 
 COPY quick_pp/app/frontend/ ./
+
 ENV VITE_BACKEND_URL=""
 ENV NODE_OPTIONS="--max-old-space-size=4096"
+
 RUN npm run build
 
-FROM python:3.11-slim
+
+FROM python:3.11-slim-bookworm
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+# Reuse the Node 20 runtime we already have
+COPY --from=frontend-builder /usr/local/bin/node /usr/local/bin/node
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        curl \
-        ca-certificates \
-        gnupg \
         nginx \
-    && mkdir -p /etc/apt/keyrings \
-    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 user
