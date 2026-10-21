@@ -41,7 +41,4 @@ set POSTGRES_USER=qpp_user
 set POSTGRES_DB=quick_pp
 set POSTGRES_PASSWORD=
 
-REM Optional: set to 1 to also start Langflow container (--profile langflow)
-REM Note: Langflow requires at least s-2vcpu-4gb (8 GB recommended).
-set ENABLE_LANGFLOW=0
 set TAVILY_API_KEY=

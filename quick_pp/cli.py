@@ -656,11 +656,11 @@ def predict(model_config, data_hash, output_file_name, env, plot):
 @click.option(
     "--profile",
     multiple=True,
-    help="Enable specific profiles (e.g., --profile langflow)",
+    help="Enable specific Docker Compose profiles",
 )
 @click.option(
     "--service",
-    help="Target specific service (postgres, qpp-backend, qpp-frontend, langflow)",
+    help="Target specific service (postgres, qpp-backend, qpp-frontend)",
 )
 @click.option(
     "--follow",
@@ -689,7 +689,6 @@ def docker(action, detach, profile, service, follow, env_file):
     EXAMPLES:
     \b
     quick-pp docker up -d                    # Start all services in background
-    quick-pp docker up --profile langflow    # Start with Langflow enabled
     quick-pp docker logs --service postgres  # View postgres logs
     quick-pp docker logs -f                  # Follow all logs
     quick-pp docker down                     # Stop all services

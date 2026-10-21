@@ -50,7 +50,6 @@ def _get_secret_key() -> bytes:
     """Return the signing secret key for JWT tokens."""
     secret = (
         os.environ.get("QPP_AUTH_SECRET_KEY")
-        or os.environ.get("LANGFLOW_SECRET_KEY")
         or os.environ.get("POSTGRES_PASSWORD")
         or "quick-pp-default-cognito-uam-secret-key-change-in-prod"
     )

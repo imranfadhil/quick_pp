@@ -24,7 +24,6 @@ The Docker Compose stack ([`quick_pp/app/docker/docker-compose.yaml`](../quick_p
 | :--- | :--- | :--- | :--- | :--- |
 | **Recommended** | `s-2vcpu-4gb` | 2 vCPU, 4 GB RAM, 80 GB SSD | ~\$24/mo | **Smooth & responsive UI** for multi-well projects, concurrent LAS parsing, and fast Vite builds. |
 | **Minimum / Budget** | `s-1vcpu-2gb` | 1 vCPU, 2 GB RAM, 50 GB SSD | ~\$12/mo | Works for single-user / light well evaluation (relies on the 2 GB swap file created by `userdata.sh`). |
-| **With Langflow** | `s-4vcpu-8gb` | 4 vCPU, 8 GB RAM, 160 GB SSD | ~\$48/mo | Recommended if you set `ENABLE_LANGFLOW=1`. |
 
 ## Setup & Typical Workflow
 

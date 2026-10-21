@@ -1,6 +1,6 @@
 """Petrophysical Agentic Assistant & Multi-Provider LLM + MCP Service for quick_pp.
 
-Replaces the legacy Langflow proxy with a clean, self-contained agentic assistant that:
+Self-contained agentic assistant that:
 1. Supports a live UI provider/model switcher (`native_mcp`, `openai`, `anthropic`, `gemini`, `ollama`)
 2. Executes MCP tools in-process (`inspect_well`, `run_well_qaqc`, `run_multi_mineral`, `run_shf_evaluation`,
    `evaluate_with_conformal_bounds`, `control_workbench_ui`)
@@ -867,22 +867,3 @@ async def mcp_jsonrpc_endpoint(payload: Dict[str, Any]):
     """Standard Model Context Protocol JSON-RPC 2.0 endpoint (`initialize`, `tools/list`, `tools/call`)."""
     resp = petro_mcp_server.handle_jsonrpc(payload)
     return resp or {"jsonrpc": "2.0", "result": {}}
-
-
-# Backward-compatible `/langflow/chat` alias so any legacy callers continue to work
-@router.post("/langflow/chat", include_in_schema=False)
-async def legacy_langflow_chat(
-    flow_id: str = Query("default"),
-    question: str = Query(...),
-    project_id: Optional[int] = Query(None),
-    well_name: Optional[str] = Query(None),
-):
-    res = await assistant_chat(
-        AgentChatRequest(
-            message=question,
-            project_id=project_id,
-            well_name=well_name,
-            provider="native_mcp",
-        )
-    )
-    return {"text": res["reply"], "tool_calls": res["tool_calls"]}

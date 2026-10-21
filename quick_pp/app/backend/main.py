@@ -126,7 +126,7 @@ async def root(request: Request):
 @app.get("/qpp_assistant", include_in_schema=False)
 async def qpp_assistant(request: Request):
     """
-    Serve the Langflow chat interface with dynamic project/flow selection.
+    Serve the Petrophysical AI Assistant & MCP chat interface.
     """
     # Get the base URL for API calls
     base_url = str(request.base_url).rstrip("/")

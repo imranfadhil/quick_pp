@@ -54,13 +54,6 @@ fi
 CURRENT_PASS=$(grep '^POSTGRES_PASSWORD=' .env | head -1 | cut -d= -f2-)
 set_kv QPP_DATABASE_URL "postgresql+psycopg2://${PG_USER}:${CURRENT_PASS}@postgres:5432/${PG_DB}"
 
-# Generate LANGFLOW_SECRET_KEY and LANGFLOW_SUPERUSER_PASSWORD if still placeholders
-if grep -q '^LANGFLOW_SECRET_KEY=\("your_langflow_secret_key"\|your_langflow_secret_key\|change_this\)' .env; then
-  set_kv LANGFLOW_SECRET_KEY "$(openssl rand -hex 32)"
-fi
-if grep -q '^LANGFLOW_SUPERUSER_PASSWORD=change_this' .env; then
-  set_kv LANGFLOW_SUPERUSER_PASSWORD "$(openssl rand -hex 12)"
-fi
 if grep -q '^QPP_AUTH_SECRET_KEY=change_this' .env || ! grep -q '^QPP_AUTH_SECRET_KEY=' .env; then
   set_kv QPP_AUTH_SECRET_KEY "$(openssl rand -hex 32)"
 fi

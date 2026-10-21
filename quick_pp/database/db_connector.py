@@ -113,7 +113,7 @@ class DBConnector:
 
     def setup_db(self):
         """
-        Setup quick_pp database and (if PostgreSQL) langflow DB/user.
+        Setup quick_pp database tables and schema.
         """
         script_dir = os.path.dirname(__file__)
         db_type = (
