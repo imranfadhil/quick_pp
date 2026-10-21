@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
@@ -7,12 +6,6 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
-
-	onMount(() => {
-		if (!projectData.rockTypingResult && workbench.projectId) {
-			executeRockTyping(false);
-		}
-	});
 
 	function addCutoff() {
 		const last = projectData.fziCutoffs[projectData.fziCutoffs.length - 1] ?? 1.0;

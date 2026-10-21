@@ -30,10 +30,6 @@
 
 	let copiedSwof = $state(false);
 
-	onMount(() => {
-		computeScal();
-	});
-
 	async function computeScal() {
 		wellData.isCalculating = true;
 		wellData.lastError = null;

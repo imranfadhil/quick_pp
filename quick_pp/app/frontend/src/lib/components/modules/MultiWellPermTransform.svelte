@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
@@ -7,12 +6,6 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
-
-	onMount(() => {
-		if (!projectData.permTransformResult && workbench.projectId) {
-			executePermTransform(false);
-		}
-	});
 
 	async function executePermTransform(persist: boolean = false) {
 		if (!workbench.projectId) return;

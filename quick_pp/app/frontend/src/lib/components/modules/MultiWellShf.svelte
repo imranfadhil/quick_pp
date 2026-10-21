@@ -26,9 +26,6 @@
 				? contactFwl.depth
 				: Number((wellData.depthRange.min + 0.72 * (wellData.depthRange.max - wellData.depthRange.min)).toFixed(1));
 		}
-		if (!projectData.shfResult && workbench.projectId) {
-			executeShf(false);
-		}
 	});
 
 	async function executeShf(persist: boolean = false) {
