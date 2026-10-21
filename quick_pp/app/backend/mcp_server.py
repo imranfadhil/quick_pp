@@ -551,7 +551,7 @@ def tool_inspect_well(
     return {
         "tool": "inspect_well",
         "project_id": project_id,
-        "project_name": proj_summary.get("project_name"),
+        "project_name": proj_summary.get("project_name") or proj_summary.get("name"),
         "project_well_names": [w["name"] for w in wells],
         "well_name": target_well,
         "row_count": int(len(df)),

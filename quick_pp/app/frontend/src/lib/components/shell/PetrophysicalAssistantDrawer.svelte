@@ -34,6 +34,44 @@
 		timestamp: string;
 	}
 
+	type InlineToken =
+		| { type: 'text'; value: string }
+		| { type: 'bold'; value: string; tokens: InlineToken[] }
+		| { type: 'italic'; value: string }
+		| { type: 'code'; value: string; depthTarget?: number };
+
+	type BulletItem = {
+		indent: number;
+		label?: string;
+		bodyTokens: InlineToken[];
+		allCodePills?: string[];
+	};
+
+	type MarkdownBlock =
+		| { type: 'heading'; level: number; tokens: InlineToken[] }
+		| { type: 'list'; items: BulletItem[] }
+		| { type: 'table'; headers: string[]; rows: InlineToken[][][] }
+		| { type: 'blockquote'; tokens: InlineToken[] }
+		| { type: 'codeblock'; lang: string; code: string }
+		| { type: 'paragraph'; tokens: InlineToken[] };
+
+	const TOOL_LABELS: Record<string, string> = {
+		inspect_well: 'Well & Curve Inventory',
+		run_well_qaqc: 'Log QAQC & Badhole Check',
+		run_multi_mineral: 'Multi-Mineral & Porosity Solver',
+		run_shf_evaluation: 'Saturation Height Function (SHF)',
+		evaluate_with_conformal_bounds: 'Conformal Uncertainty (P10–P90)',
+		control_workbench_ui: 'Workbench View Updated'
+	};
+
+	const PROVIDER_BADGES: Record<string, string> = {
+		native_mcp: 'Built-in Agent',
+		openai: 'OpenAI',
+		gemini: 'Gemini',
+		anthropic: 'Claude',
+		ollama: 'Ollama'
+	};
+
 	// Provider / Model Switcher State
 	let providers = $state<ProviderInfo[]>([
 		{
@@ -88,7 +126,7 @@
 	let chatMessages = $state<ChatMessage[]>([
 		{
 			role: 'assistant',
-			text: 'Petrophysical MCP Assistant online. I can inspect the active well, run `qaqc.py`, execute `multi_mineral.py` or `shf.py`, and calibrate P10–P90 conformal prediction bounds on the fly.',
+			text: 'Petrophysical Assistant ready. Use the quick actions above or ask me to inspect the active well, run **Log QAQC**, solve **Multi-Mineral Lithology**, compute **Saturation Height Functions**, or calibrate **P10–P90 Conformal Bounds**.',
 			provider: 'native_mcp',
 			timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 		}
@@ -225,9 +263,11 @@
 			}
 
 			if (Array.isArray(data.tool_calls) && data.tool_calls.length > 0) {
-				const toolNames = data.tool_calls.map((t: any) => t.name).join(', ');
+				const toolNames = data.tool_calls
+					.map((t: any) => TOOL_LABELS[t.name] || t.name)
+					.join(', ');
 				appStatus.success(
-					`MCP Assistant executed: ${toolNames}`,
+					`Assistant completed: ${toolNames}`,
 					workbench.wellId ?? undefined
 				);
 			}
@@ -275,6 +315,227 @@
 		workbench.scrollToDepth(depthVal);
 	}
 
+	function extractDepthTarget(codeStr: string): number | undefined {
+		const m = codeStr.match(/^(\d+(?:\.\d+)?)\s*(?:[–-]\s*\d+(?:\.\d+)?)?\s*m$/i);
+		if (!m) return undefined;
+		const val = Number(m[1]);
+		return Number.isFinite(val) ? val : undefined;
+	}
+
+	function normalizeMathAndCleanup(raw: string): string {
+		return raw
+			.replace(/\s*\(Project\s+`?None`?\)/gi, '')
+			.replace(/\$\\hat\{q\}_\{1-\\alpha\}\$/g, 'q̂₁₋ₐ')
+			.replace(/\$\\hat\{\\sigma\}\(x\)\$/g, 'σ̂(x)')
+			.replace(/\$\\sum\s*V_\{\\text\{mineral\}\}\s*\+\s*\\text\{PHIT\}\s*=\s*1\.0\$/g, '∑ V_mineral + PHIT = 1.0')
+			.replace(/\$([^$]+)\$/g, '$1');
+	}
+
+	function parseInlineTokens(text: string): InlineToken[] {
+		const cleaned = normalizeMathAndCleanup(text);
+		const tokens: InlineToken[] = [];
+		const regex = /(\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*)/g;
+		let lastIndex = 0;
+		let match: RegExpExecArray | null;
+
+		while ((match = regex.exec(cleaned)) !== null) {
+			if (match.index > lastIndex) {
+				tokens.push({ type: 'text', value: cleaned.slice(lastIndex, match.index) });
+			}
+			if (match[2] !== undefined) {
+				// Bold content may itself contain inline `code`
+				const inner = match[2];
+				const subTokens: InlineToken[] = [];
+				const codeRegex = /`([^`]+)`/g;
+				let subLast = 0;
+				let subMatch: RegExpExecArray | null;
+				while ((subMatch = codeRegex.exec(inner)) !== null) {
+					if (subMatch.index > subLast) {
+						subTokens.push({ type: 'text', value: inner.slice(subLast, subMatch.index) });
+					}
+					subTokens.push({
+						type: 'code',
+						value: subMatch[1],
+						depthTarget: extractDepthTarget(subMatch[1])
+					});
+					subLast = codeRegex.lastIndex;
+				}
+				if (subLast < inner.length) {
+					subTokens.push({ type: 'text', value: inner.slice(subLast) });
+				}
+				tokens.push({ type: 'bold', value: inner, tokens: subTokens });
+			} else if (match[3] !== undefined) {
+				tokens.push({
+					type: 'code',
+					value: match[3],
+					depthTarget: extractDepthTarget(match[3])
+				});
+			} else if (match[4] !== undefined) {
+				tokens.push({ type: 'italic', value: match[4] });
+			}
+			lastIndex = regex.lastIndex;
+		}
+
+		if (lastIndex < cleaned.length) {
+			tokens.push({ type: 'text', value: cleaned.slice(lastIndex) });
+		}
+		return tokens;
+	}
+
+	function parseBulletLine(rawContent: string, indent: number): BulletItem {
+		// Match `- **Label**: Value` or `- **Label (`CODE`)**: Value`
+		const kvMatch = rawContent.match(/^\*\*(.+?)\*\*\s*:\s*(.*)$/);
+		if (kvMatch) {
+			const cleanLabel = kvMatch[1].replace(/`([^`]+)`/g, '$1').trim();
+			const rest = kvMatch[2].trim();
+
+			// Check if the value is purely a comma-separated list of `CODE` pills (like Available Curves)
+			const pillParts = rest.split(',').map((s) => s.trim()).filter(Boolean);
+			const allAreCode =
+				pillParts.length > 1 &&
+				pillParts.every((p) => /^`[^`]+`$/.test(p));
+
+			if (allAreCode) {
+				return {
+					indent,
+					label: cleanLabel,
+					bodyTokens: [],
+					allCodePills: pillParts.map((p) => p.slice(1, -1))
+				};
+			}
+
+			return {
+				indent,
+				label: cleanLabel,
+				bodyTokens: parseInlineTokens(rest)
+			};
+		}
+
+		return {
+			indent,
+			bodyTokens: parseInlineTokens(rawContent)
+		};
+	}
+
+	function parseMarkdownBlocks(rawText: string): MarkdownBlock[] {
+		const lines = normalizeMathAndCleanup(rawText).split(/\r?\n/);
+		const blocks: MarkdownBlock[] = [];
+		let i = 0;
+
+		while (i < lines.length) {
+			const line = lines[i];
+			const trimmed = line.trim();
+
+			if (!trimmed) {
+				i++;
+				continue;
+			}
+
+			// 1. Fenced code block
+			if (trimmed.startsWith('```')) {
+				const lang = trimmed.slice(3).trim();
+				const codeLines: string[] = [];
+				i++;
+				while (i < lines.length && !lines[i].trim().startsWith('```')) {
+					codeLines.push(lines[i]);
+					i++;
+				}
+				if (i < lines.length) i++;
+				blocks.push({ type: 'codeblock', lang, code: codeLines.join('\n') });
+				continue;
+			}
+
+			// 2. Heading (#, ##, ###)
+			const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+			if (headingMatch) {
+				blocks.push({
+					type: 'heading',
+					level: headingMatch[1].length,
+					tokens: parseInlineTokens(headingMatch[2])
+				});
+				i++;
+				continue;
+			}
+
+			// 3. Markdown Table
+			if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+				const tableLines: string[] = [];
+				while (
+					i < lines.length &&
+					lines[i].trim().startsWith('|') &&
+					lines[i].trim().endsWith('|')
+				) {
+					tableLines.push(lines[i].trim());
+					i++;
+				}
+				if (tableLines.length >= 2) {
+					const parseRow = (r: string) =>
+						r
+							.slice(1, -1)
+							.split('|')
+							.map((c) => c.trim());
+					const headers = parseRow(tableLines[0]).map((h) => h.replace(/`([^`]+)`/g, '$1'));
+					const dataStartIndex = /^[\s|:-]+$/.test(tableLines[1]) ? 2 : 1;
+					const rows = tableLines
+						.slice(dataStartIndex)
+						.map((r) => parseRow(r).map((cell) => parseInlineTokens(cell)));
+					blocks.push({ type: 'table', headers, rows });
+					continue;
+				}
+			}
+
+			// 4. Bullet list (- or *)
+			const bulletMatch = line.match(/^(\s*)[-*]\s+(.+)$/);
+			if (bulletMatch) {
+				const items: BulletItem[] = [];
+				while (i < lines.length) {
+					const bm = lines[i].match(/^(\s*)[-*]\s+(.+)$/);
+					if (!bm) break;
+					const indentLevel = bm[1].length >= 2 ? 1 : 0;
+					items.push(parseBulletLine(bm[2].trim(), indentLevel));
+					i++;
+				}
+				blocks.push({ type: 'list', items });
+				continue;
+			}
+
+			// 5. Blockquote (> ...)
+			if (trimmed.startsWith('>')) {
+				const quoteParts: string[] = [];
+				while (i < lines.length && lines[i].trim().startsWith('>')) {
+					quoteParts.push(lines[i].trim().replace(/^>\s*/, ''));
+					i++;
+				}
+				blocks.push({
+					type: 'blockquote',
+					tokens: parseInlineTokens(quoteParts.join(' '))
+				});
+				continue;
+			}
+
+			// 6. Regular paragraph
+			const paraLines: string[] = [];
+			while (
+				i < lines.length &&
+				lines[i].trim() !== '' &&
+				!lines[i].trim().startsWith('#') &&
+				!lines[i].trim().startsWith('```') &&
+				!lines[i].trim().startsWith('>') &&
+				!(lines[i].trim().startsWith('|') && lines[i].trim().endsWith('|')) &&
+				!/^(\s*)[-*]\s+/.test(lines[i])
+			) {
+				paraLines.push(lines[i].trim());
+				i++;
+			}
+			blocks.push({
+				type: 'paragraph',
+				tokens: parseInlineTokens(paraLines.join(' '))
+			});
+		}
+
+		return blocks;
+	}
+
 	const quickActions = [
 		{
 			label: 'Inspect Well',
@@ -303,8 +564,39 @@
 	];
 </script>
 
+{#snippet renderInline(tokens: InlineToken[])}
+	{#each tokens as tok}
+		{#if tok.type === 'text'}
+			<span>{tok.value}</span>
+		{:else if tok.type === 'bold'}
+			<strong class="font-semibold text-[var(--text-primary)]">
+				{@render renderInline(tok.tokens)}
+			</strong>
+		{:else if tok.type === 'italic'}
+			<em class="italic text-[var(--text-secondary)]">{tok.value}</em>
+		{:else if tok.type === 'code'}
+			{#if tok.depthTarget !== undefined}
+				<button
+					type="button"
+					onclick={() => handleDepthPillClick(tok.depthTarget!)}
+					title="Click to jump log viewer to {tok.value}"
+					class="mono-num mx-0.5 inline-flex items-center gap-0.5 rounded-xs border border-blue-200 bg-blue-50/90 px-1.5 py-0.2 text-[10.5px] font-semibold text-blue-800 transition-colors hover:border-blue-400 hover:bg-blue-100"
+				>
+					↦ {tok.value}
+				</button>
+			{:else}
+				<span
+					class="mono-num mx-0.5 inline-block rounded-xs border border-slate-200/90 bg-[var(--bg-surface)] px-1.5 py-0.2 text-[10.5px] font-medium text-slate-800 shadow-2xs"
+				>
+					{tok.value}
+				</span>
+			{/if}
+		{/if}
+	{/each}
+{/snippet}
+
 <aside
-	class="absolute top-0 right-0 bottom-0 z-40 flex w-[410px] max-w-full flex-col border-l border-[var(--border-hairline)] bg-[var(--bg-surface)] shadow-2xl"
+	class="absolute top-0 right-0 bottom-0 z-40 flex w-[420px] max-w-full flex-col border-l border-[var(--border-hairline)] bg-[var(--bg-surface)] shadow-2xl"
 >
 	<!-- Header Bar -->
 	<div
@@ -316,7 +608,7 @@
 				title="Petrophysical MCP Server Active"
 			></span>
 			<span class="text-xs font-bold tracking-tight text-[var(--text-primary)]">
-				Petrophysical MCP Assistant
+				Petrophysical Assistant
 			</span>
 			{#if workbench.wellId}
 				<span
@@ -481,63 +773,79 @@
 	>
 		{#each chatMessages as msg}
 			<div
-				class="rounded-sm border p-2.5 {msg.role === 'user'
+				class="rounded-sm border p-3 shadow-2xs {msg.role === 'user'
 					? 'ml-6 border-blue-200 bg-blue-50/80 text-blue-950'
-					: 'mr-2 border-[var(--border-hairline)] bg-[var(--bg-app)] text-[var(--text-primary)]'}"
+					: 'mr-1 border-[var(--border-hairline)] bg-[var(--bg-app)] text-[var(--text-primary)]'}"
 			>
-				<div class="mb-1 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
-					<span class="font-semibold uppercase">
-						{msg.role === 'user' ? 'Petrophysicist' : `MCP Agent (${msg.provider || 'native_mcp'})`}
-					</span>
+				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
+					<div class="flex items-center gap-1.5">
+						<span class="font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+							{msg.role === 'user' ? 'You' : 'Assistant'}
+						</span>
+						{#if msg.role === 'assistant'}
+							<span
+								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0.2 text-[9px] font-medium text-[var(--text-muted)]"
+							>
+								{PROVIDER_BADGES[msg.provider || 'native_mcp'] || msg.provider}
+							</span>
+						{/if}
+					</div>
 					<span class="mono-num">{msg.timestamp}</span>
 				</div>
 
 				<!-- Executed MCP Tool Call Badges & Interactive UI Jump Buttons -->
 				{#if msg.toolCalls && msg.toolCalls.length > 0}
-					<div class="mb-2 space-y-1">
+					<div class="mb-2.5 space-y-1.5">
 						{#each msg.toolCalls as tc}
 							<div
-								class="rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px]"
+								class="rounded-xs border border-emerald-200/90 bg-emerald-50/70 px-2.5 py-1.5 text-[10.5px]"
 							>
-								<div class="flex items-center justify-between">
-									<span class="mono-num font-semibold text-emerald-900">
-										✓ MCP Tool: {tc.name}()
-									</span>
+								<div class="flex items-center justify-between gap-2">
+									<div class="flex items-center gap-1.5 font-semibold text-emerald-900">
+										<span
+											class="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-600 text-[9px] text-white"
+										>
+											✓
+										</span>
+										<span>{TOOL_LABELS[tc.name] || tc.name}</span>
+									</div>
 									{#if tc.summary?.saved_rows}
-										<span class="mono-num text-emerald-700">
-											Synced {tc.summary.saved_rows} pts
+										<span
+											class="mono-num rounded-xs bg-emerald-100/90 px-1.5 py-0.2 text-[9.5px] font-medium text-emerald-800"
+										>
+											Synced {tc.summary.saved_rows.toLocaleString()} pts
 										</span>
 									{/if}
 								</div>
 
 								<!-- Interactive Depth Interval Jump Pills for Badhole / HC / Uncertainty -->
 								{#if tc.summary?.badhole?.intervals?.length}
-									<div class="mt-1 flex flex-wrap items-center gap-1">
-										<span class="text-[9px] text-amber-800 font-medium">Washouts:</span>
+									<div class="mt-1.5 flex flex-wrap items-center gap-1">
+										<span class="text-[9.5px] font-medium text-amber-800">Washouts:</span>
 										{#each tc.summary.badhole.intervals.slice(0, 3) as iv}
 											<button
 												type="button"
 												onclick={() => handleDepthPillClick(iv.top)}
-												class="mono-num rounded-xs border border-amber-300 bg-amber-100 px-1 py-0.2 text-[9px] font-semibold text-amber-900 hover:bg-amber-200"
+												class="mono-num rounded-xs border border-amber-300 bg-amber-100 px-1.5 py-0.2 text-[9.5px] font-semibold text-amber-900 hover:bg-amber-200"
 												title="Click to center LogTrackCanvas on this washout interval"
 											>
-												↦ {iv.top}–{iv.bottom}m
+												↦ {iv.top}–{iv.bottom} m
 											</button>
 										{/each}
 									</div>
 								{/if}
 
 								{#if tc.summary?.zonal_conformal_summary?.length}
-									<div class="mt-1 flex flex-wrap items-center gap-1">
-										<span class="text-[9px] text-indigo-800 font-medium">Jump to Zone:</span>
+									<div class="mt-1.5 flex flex-wrap items-center gap-1">
+										<span class="text-[9.5px] font-medium text-indigo-800">Jump to Zone:</span>
 										{#each tc.summary.zonal_conformal_summary as zc}
 											<button
 												type="button"
 												onclick={() => handleDepthPillClick(zc.top)}
-												class="mono-num rounded-xs border border-indigo-200 bg-indigo-100/80 px-1.5 py-0.2 text-[9px] font-semibold text-indigo-900 hover:bg-indigo-200"
+												class="mono-num rounded-xs border border-indigo-200 bg-indigo-100/80 px-1.5 py-0.2 text-[9.5px] font-semibold text-indigo-900 hover:bg-indigo-200"
 												title="Center log canvas at {zc.zone} ({zc.top} m)"
 											>
-												{zc.zone} ({zc.top}m)
+												{zc.zone} ({zc.top} m)
 											</button>
 										{/each}
 									</div>
@@ -547,10 +855,107 @@
 					</div>
 				{/if}
 
-				<!-- Formatted Message Content -->
-				<div class="whitespace-pre-wrap leading-relaxed text-[11.5px]">
-					{msg.text}
-				</div>
+				<!-- Human-Friendly Structured Message Content -->
+				{#if msg.role === 'user'}
+					<div class="leading-relaxed text-[12px]">
+						{msg.text}
+					</div>
+				{:else}
+					{@const blocks = parseMarkdownBlocks(msg.text)}
+					<div class="space-y-2.5 leading-relaxed text-[11.5px]">
+						{#each blocks as block}
+							{#if block.type === 'heading'}
+								<div
+									class="flex flex-wrap items-center gap-1 border-b border-[var(--border-hairline)] pb-1.5 pt-1 first:pt-0 text-[12.5px] font-bold tracking-tight text-[var(--text-primary)]"
+								>
+									{@render renderInline(block.tokens)}
+								</div>
+							{:else if block.type === 'list'}
+								<div class="space-y-1.5">
+									{#each block.items as item}
+										<div
+											class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 py-1.5 {item.indent >
+											0
+												? 'ml-3 border-l-2 border-l-blue-400'
+												: ''}"
+										>
+											{#if item.label}
+												<div
+													class="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]"
+												>
+													{item.label}
+												</div>
+												{#if item.allCodePills}
+													<div class="mt-1 flex flex-wrap gap-1">
+														{#each item.allCodePills as pill}
+															<span
+																class="mono-num inline-flex items-center rounded-xs border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10.5px] font-semibold text-slate-800"
+															>
+																{pill}
+															</span>
+														{/each}
+													</div>
+												{:else}
+													<div class="text-[11.5px] text-[var(--text-primary)]">
+														{@render renderInline(item.bodyTokens)}
+													</div>
+												{/if}
+											{:else}
+												<div class="flex items-start gap-1.5 text-[11.5px] text-[var(--text-primary)]">
+													<span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"></span>
+													<div>{@render renderInline(item.bodyTokens)}</div>
+												</div>
+											{/if}
+										</div>
+									{/each}
+								</div>
+							{:else if block.type === 'table'}
+								<div
+									class="my-1.5 overflow-x-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+								>
+									<table class="w-full border-collapse text-left text-[10.5px]">
+										<thead>
+											<tr class="border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)]">
+												{#each block.headers as hdr}
+													<th
+														class="px-2 py-1.5 font-semibold uppercase tracking-wider text-[9.5px] text-[var(--text-secondary)]"
+													>
+														{hdr}
+													</th>
+												{/each}
+											</tr>
+										</thead>
+										<tbody class="divide-y divide-[var(--border-hairline)]">
+											{#each block.rows as row}
+												<tr class="hover:bg-[var(--bg-subtle)]/50">
+													{#each row as cell}
+														<td class="px-2 py-1 whitespace-nowrap">
+															{@render renderInline(cell)}
+														</td>
+													{/each}
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							{:else if block.type === 'blockquote'}
+								<div
+									class="rounded-xs border-l-3 border-indigo-500 bg-indigo-50/60 px-2.5 py-2 text-[11px] leading-snug text-slate-800"
+								>
+									{@render renderInline(block.tokens)}
+								</div>
+							{:else if block.type === 'codeblock'}
+								<pre
+									class="mono-num overflow-x-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2 text-[10.5px] text-slate-800"
+								><code>{block.code}</code></pre>
+							{:else if block.type === 'paragraph'}
+								<p class="leading-relaxed text-[var(--text-primary)]">
+									{@render renderInline(block.tokens)}
+								</p>
+							{/if}
+						{/each}
+					</div>
+				{/if}
 			</div>
 		{/each}
 
@@ -559,7 +964,7 @@
 				class="mr-4 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2.5 text-xs text-[var(--text-secondary)]"
 			>
 				<span class="animate-pulse font-medium">
-					Executing Petrophysical MCP tools & calibrating conformal bounds...
+					Running petrophysical evaluation & calibrating uncertainty bounds...
 				</span>
 			</div>
 		{/if}
@@ -575,7 +980,7 @@
 	>
 		<input
 			type="text"
-			placeholder="Inspect well, run qaqc / multi_mineral / shf, or explain conformal bounds..."
+			placeholder="Ask about well logs, QAQC, multi-mineral, SHF, or P10–P90 bounds..."
 			bind:value={chatInput}
 			class="h-8 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 py-0 text-xs text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:outline-none"
 		/>
@@ -588,4 +993,3 @@
 		</button>
 	</form>
 </aside>
-

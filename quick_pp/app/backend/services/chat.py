@@ -380,7 +380,7 @@ def _synthesize_petrophysical_explanation(
             dr = res.get("depth_range") or {}
             curves = ", ".join(f"`{c}`" for c in res.get("available_curves", [])[:14])
             sections.append(
-                f"### 🔍 Well Inspection: `{res.get('well_name')}` (Project `{res.get('project_name')}`)\n"
+                f"### 🔍 Well Inspection: `{res.get('well_name')}`" + (f" (Project `{res.get('project_name')}`)\n" if res.get("project_name") else "\n") +
                 f"- **Depth Interval**: `{dr.get('min')} – {dr.get('max')} m` (`{res.get('row_count')}` samples)\n"
                 f"- **Core Calibration Points**: `{res.get('core_sample_count', 0)}` samples\n"
                 f"- **Available Curves**: {curves}"
@@ -467,7 +467,7 @@ def _synthesize_petrophysical_explanation(
                 f"- **On-the-Fly Calibration**: Locally Weighted Split Conformal (`ConformalMultiOutputRegressor`) "
                 f"calibrated across `{res.get('calibration_samples')}` depth samples "
                 f"(`{anchors.get('core_porosity_samples', 0)}` `CPORE` & `{anchors.get('core_permeability_samples', 0)}` `CPERM` core anchors).\n"
-                f"- **Normalized Conformal Quantiles ($\\hat{{q}}_{{1-\\alpha}}$)**: "
+                f"- **Normalized Conformal Quantiles (q̂₁₋ₐ)**: "
                 f"`PHIT = {q_hats.get('PHIT', '—')}`, `SWT = {q_hats.get('SWT', '—')}`, `LOG_PERM = {q_hats.get('LOG_PERM', '—')}`\n"
                 f"- **Mean P10–P90 Interval Widths**:\n"
                 f"  - Porosity (`PHIT_P10` to `PHIT_P90`): **`±{round(iw.get('phit_mean_width_vv', 0) / 2, 4)} v/v`** (total width `{iw.get('phit_mean_width_vv')} v/v`)\n"
@@ -501,9 +501,9 @@ def _synthesize_petrophysical_explanation(
                 )
                 sections.append(
                     f"> **Physical Interpretation of Conformal Widths**: Uncertainty bands widen most in "
-                    f"{hi_str} due to higher ensemble tree dispersion $\\hat{{\\sigma}}(x)$ across heterogeneous/tight "
+                    f"{hi_str} due to higher ensemble tree dispersion σ̂(x) across heterogeneous/tight "
                     f"transitions, while remaining tight in clean reservoir intervals where volumetric closure "
-                    f"($\\sum V_{{\\text{{mineral}}}} + \\text{{PHIT}} = 1.0$) constrains the solution."
+                    f"(∑ V_mineral + PHIT = 1.0) constrains the solution."
                 )
 
     return "\n\n".join(sections)
