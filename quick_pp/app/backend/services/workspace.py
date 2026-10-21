@@ -2817,6 +2817,12 @@ class WorkspaceCurveEditRequest(WorkspaceFilterBase):
     values: Optional[List[Optional[float]]] = Field(
         None, description="Optional explicit curve values array when action='save_values'"
     )
+    ori_curve: Optional[str] = Field(
+        None, description="Optional backup original curve mnemonic (e.g. GR_ORI)"
+    )
+    ori_values: Optional[List[Optional[float]]] = Field(
+        None, description="Optional backup original curve values array"
+    )
 
 
 def _update_cached_well_column(
@@ -2933,22 +2939,42 @@ def workspace_curve_edit(
         if act == "save_values" and req.depths is not None and req.values is not None:
             if dst in protected:
                 raise ValueError(f"Cannot overwrite protected column '{dst}'")
-            out_df = pd.DataFrame(
-                {
-                    "DEPTH": pd.to_numeric(pd.Series(req.depths), errors="coerce"),
-                    dst: pd.to_numeric(pd.Series(req.values), errors="coerce"),
-                }
-            ).dropna(subset=["DEPTH"])
+            cols_dict: Dict[str, Any] = {
+                "DEPTH": pd.to_numeric(pd.Series(req.depths), errors="coerce"),
+                dst: pd.to_numeric(pd.Series(req.values), errors="coerce"),
+            }
+            ori_name = (
+                req.ori_curve.strip().upper()
+                if req.ori_curve and req.ori_curve.strip()
+                else None
+            )
+            if (
+                ori_name
+                and ori_name not in protected
+                and ori_name != dst
+                and req.ori_values is not None
+                and len(req.ori_values) == len(req.depths)
+            ):
+                cols_dict[ori_name] = pd.to_numeric(
+                    pd.Series(req.ori_values), errors="coerce"
+                )
+            out_df = pd.DataFrame(cols_dict).dropna(subset=["DEPTH"])
             saved_rows = 0
             if req.save:
                 saved_rows = _save_curves_to_well(project_id, well_name, out_df)
+            else:
+                _update_in_memory_well_cache(project_id, well_name, out_df)
+            stats_out = {dst: _curve_summary_stats(out_df[dst])}
+            if ori_name and ori_name in out_df.columns:
+                stats_out[ori_name] = _curve_summary_stats(out_df[ori_name])
             return {
                 "well_name": well_name,
                 "action": "save_values",
                 "target_curve": dst,
+                "ori_curve": ori_name if (ori_name and ori_name in out_df.columns) else None,
                 "saved": req.save,
                 "saved_rows": saved_rows,
-                "stats": {dst: _curve_summary_stats(out_df[dst])},
+                "stats": stats_out,
                 **dataframe_to_columnar(out_df),
             }
 

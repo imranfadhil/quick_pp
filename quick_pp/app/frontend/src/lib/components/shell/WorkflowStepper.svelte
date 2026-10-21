@@ -45,14 +45,8 @@
 			readyCheck: () => Boolean(wellData.curves['SWT'] || wellData.curves['SWE'])
 		},
 		{
-			id: 'scal',
-			num: 6,
-			label: 'SCAL & Rel-Perm',
-			readyCheck: () => workbench.scalResult !== null
-		},
-		{
 			id: 'ressum',
-			num: 7,
+			num: 6,
 			label: 'Reservoir Summary',
 			readyCheck: () => wellData.zonalSummary.length > 0
 		}
@@ -123,6 +117,33 @@
 					<span>{step.label}</span>
 				</button>
 			{/each}
+
+			<!-- Standalone Module Divider + SCAL & Rel-Perm -->
+			<div class="mx-1.5 h-4 w-[1px] shrink-0 bg-[var(--border-hairline)]"></div>
+			<span class="mr-0.5 text-[9.5px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
+				Standalone:
+			</span>
+			{@const isScalActive = workbench.singleWellStep === 'scal'}
+			{@const isScalDone = workbench.scalResult !== null}
+			<button
+				type="button"
+				onclick={() => (workbench.singleWellStep = 'scal')}
+				title="Standalone SCAL, Relative Permeability & Eclipse SWOF Deck Generator"
+				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isScalActive
+					? 'border-[var(--accent-primary)] bg-blue-50/90 text-[var(--accent-primary)] font-semibold'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
+			>
+				<span
+					class="mono-num flex h-4 items-center justify-center rounded-xs px-1 text-[9px] font-bold {isScalActive
+						? 'bg-[var(--accent-primary)] text-white'
+						: isScalDone
+							? 'bg-emerald-100 text-emerald-700'
+							: 'bg-slate-200 text-slate-600'}"
+				>
+					{isScalDone && !isScalActive ? '✓' : 'LAB'}
+				</span>
+				<span>SCAL & Rel-Perm</span>
+			</button>
 		{:else}
 			{#each MULTI_WELL_STEPS as step (step.id)}
 				{@const isActive = workbench.multiWellStep === step.id}

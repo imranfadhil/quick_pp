@@ -4,8 +4,8 @@ export type SingleWellStep =
 	| 'litho-poro'
 	| 'perm'
 	| 'saturation'
-	| 'scal'
-	| 'ressum';
+	| 'ressum'
+	| 'scal';
 export type MultiWellStep = 'inventory' | 'rock-typing' | 'perm-transform' | 'shf';
 
 export interface LithoEndpointParams {

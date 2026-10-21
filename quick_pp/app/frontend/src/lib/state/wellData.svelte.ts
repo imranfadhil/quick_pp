@@ -71,6 +71,7 @@ class WellDataState {
 	// Columnar log data keyed by mnemonic: { DEPT: [...], DEPTH: [...], GR: [...], PHIE: [...] }
 	curves = $state<Record<string, number[]>>({});
 	originalCurves = $state<Record<string, number[]>>({});
+	committedBaseCurves = $state<Record<string, number[]>>({});
 	zonesColumn = $state<(string | null)[]>([]);
 	stats = $state<Record<string, CurveSummaryStats>>({});
 
@@ -179,6 +180,7 @@ class WellDataState {
 
 			const numericCurves: Record<string, number[]> = {};
 			const origCopy: Record<string, number[]> = {};
+			const committedCopy: Record<string, number[]> = {};
 			let zCol: (string | null)[] = [];
 
 			for (const [col, arr] of Object.entries(data.curves || {})) {
@@ -192,10 +194,17 @@ class WellDataState {
 				);
 				numericCurves[col] = mapped;
 				origCopy[col] = [...mapped];
+				committedCopy[col] = [...mapped];
+			}
+			for (const col of Object.keys(numericCurves)) {
+				if (!col.endsWith('_ORI') && numericCurves[`${col}_ORI`]) {
+					origCopy[col] = [...numericCurves[`${col}_ORI`]];
+				}
 			}
 			if (numericCurves['DEPTH'] && !numericCurves['DEPT']) {
 				numericCurves['DEPT'] = numericCurves['DEPTH'];
 				origCopy['DEPT'] = [...numericCurves['DEPTH']];
+				committedCopy['DEPT'] = [...numericCurves['DEPTH']];
 			}
 
 			// Detect carbonate / multi-mineral curves on well load and clean up legacy duplicate VSAND==VCALC / VSILT==VDOLO
@@ -248,6 +257,7 @@ class WellDataState {
 
 			this.curves = numericCurves;
 			this.originalCurves = origCopy;
+			this.committedBaseCurves = committedCopy;
 			this.zonesColumn = zCol;
 			this.stats = data.stats || {};
 			this.tops = (data.tops || []).sort((a, b) => a.depth - b.depth);
@@ -397,15 +407,27 @@ class WellDataState {
 	}) {
 		const src = opts.sourceCurve.trim().toUpperCase();
 		const dst = (opts.targetCurve?.trim() || src).toUpperCase();
-		const srcArr = this.curves[src];
+		const currentArr = this.curves[src];
 		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
-		if (!srcArr || deptArr.length === 0) {
+		if (!currentArr || deptArr.length === 0) {
 			throw new Error(`Curve ${src} not found in active well.`);
 		}
 
+		const oriName = src.endsWith('_ORI') ? null : `${src}_ORI`;
+		const origArr =
+			(oriName ? this.curves[oriName] : undefined) ??
+			this.originalCurves[src] ??
+			[...currentArr];
+
 		if (!this.originalCurves[src]) {
-			this.originalCurves = { ...this.originalCurves, [src]: [...srcArr] };
+			this.originalCurves = { ...this.originalCurves, [src]: [...origArr] };
 		}
+		if (!this.committedBaseCurves[src]) {
+			this.committedBaseCurves = { ...this.committedBaseCurves, [src]: [...currentArr] };
+		}
+
+		// Use committedBaseCurves when editing in-place so Apply Edit followed by Apply & Save does not double-edit
+		const srcArr = dst === src ? (this.committedBaseCurves[src] ?? origArr) : currentArr;
 
 		const scope = opts.scope ?? 'full';
 		let targetIdxSet: Set<number>;
@@ -417,9 +439,11 @@ class WellDataState {
 			targetIdxSet = new Set(deptArr.map((_, i) => i));
 		}
 
-		// Start from existing destination curve if editing a sub-interval, or copy of source
+		// Start from committed base curve so repeated previews/saves on the same interval are idempotent
 		const baseTarget =
-			scope !== 'full' && this.curves[dst] ? [...this.curves[dst]] : [...srcArr];
+			scope !== 'full' && dst !== src && this.curves[dst]
+				? [...this.curves[dst]]
+				: [...srcArr];
 		const result = [...baseTarget];
 
 		const op = opts.operation;
@@ -511,13 +535,24 @@ class WellDataState {
 		}
 
 		const newStats = computeSummaryStats(result);
-		this.curves = { ...this.curves, [dst]: result };
-		this.stats = { ...this.stats, [dst]: newStats };
+		const nextCurves: Record<string, number[]> = { ...this.curves, [dst]: result };
+		const nextStats: Record<string, CurveSummaryStats> = { ...this.stats, [dst]: newStats };
+
+		// Preserve original curve as <CURVE>_ORI when editing in-place
+		if (dst === src && oriName && !nextCurves[oriName]) {
+			const oriCopy = [...origArr];
+			nextCurves[oriName] = oriCopy;
+			nextStats[oriName] = computeSummaryStats(oriCopy);
+		}
+
+		this.curves = nextCurves;
+		this.stats = nextStats;
 		workbench.selectedQaqcCurve = dst;
 
 		if (opts.persist && workbench.projectId && workbench.wellId) {
 			this.isCalculating = true;
 			try {
+				const oriToSave = dst === src && oriName ? nextCurves[oriName] : null;
 				await postJson(
 					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/curve_edit`,
 					{
@@ -526,12 +561,19 @@ class WellDataState {
 						target_curve: dst,
 						depths: deptArr,
 						values: result.map((v) => (Number.isFinite(v) ? v : null)),
+						ori_curve: dst === src && oriName ? oriName : null,
+						ori_values: oriToSave
+							? oriToSave.map((v) => (Number.isFinite(v) ? v : null))
+							: null,
 						save: true
 					}
 				);
-				this.lastSavedMessage = `Saved ${dst} ✓`;
+				this.lastSavedMessage =
+					dst === src && oriName ? `Saved ${dst} (kept ${oriName}) ✓` : `Saved ${dst} ✓`;
 				appStatus.success(
-					`Saved curve ${dst} (${targetIdxSet.size.toLocaleString()} pts edited)`,
+					dst === src && oriName
+						? `Saved ${dst} & preserved ${oriName} (${targetIdxSet.size.toLocaleString()} pts)`
+						: `Saved curve ${dst} (${targetIdxSet.size.toLocaleString()} pts edited)`,
 					workbench.wellId
 				);
 			} finally {
@@ -539,7 +581,9 @@ class WellDataState {
 			}
 		} else {
 			appStatus.success(
-				`Updated ${dst} in memory (${op}, ${targetIdxSet.size.toLocaleString()} pts)`,
+				dst === src && oriName
+					? `Previewed ${dst} (${op}, ${oriName} preserved)`
+					: `Updated ${dst} in memory (${op}, ${targetIdxSet.size.toLocaleString()} pts)`,
 				workbench.wellId ?? undefined
 			);
 		}
@@ -667,12 +711,20 @@ class WellDataState {
 		}
 	}
 
+	commitCurveEditBase(curveName: string) {
+		const src = curveName.trim().toUpperCase();
+		if (!src || !this.curves[src]) return;
+		this.committedBaseCurves = { ...this.committedBaseCurves, [src]: [...this.curves[src]] };
+	}
+
 	async restoreCurveSnapshot(curveName: string, persist: boolean = false) {
 		const src = curveName.trim().toUpperCase();
-		const orig = this.originalCurves[src];
+		const oriName = src.endsWith('_ORI') ? null : `${src}_ORI`;
+		const orig = (oriName ? this.curves[oriName] : undefined) ?? this.originalCurves[src];
 		if (!orig) return;
 		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		this.curves = { ...this.curves, [src]: [...orig] };
+		this.committedBaseCurves = { ...this.committedBaseCurves, [src]: [...orig] };
 		this.stats = { ...this.stats, [src]: computeSummaryStats(orig) };
 
 		if (persist && workbench.projectId && workbench.wellId) {

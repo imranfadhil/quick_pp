@@ -71,8 +71,11 @@
 		confirmDeleteCurve = false;
 	});
 
-	// Set sensible default editValue when switching operation type
+	// Set sensible default editValue when switching operation type and commit current curve state as base
 	function handleOpChange(newOp: CurveEditOperation) {
+		if (workbench.selectedQaqcCurve && newOp !== editOp) {
+			wellData.commitCurveEditBase(workbench.selectedQaqcCurve);
+		}
 		editOp = newOp;
 		if (newOp === 'add' || newOp === 'subtract' || newOp === 'depth_shift') {
 			editValue = 0;
@@ -91,9 +94,15 @@
 		)
 	);
 
+	let activeOriCurveName = $derived.by(() => {
+		const c = workbench.selectedQaqcCurve;
+		if (!c || c.endsWith('_ORI')) return null;
+		return wellData.curves[`${c}_ORI`] ? `${c}_ORI` : null;
+	});
+
 	let canRevertActiveCurve = $derived.by(() => {
 		const c = workbench.selectedQaqcCurve;
-		const orig = wellData.originalCurves[c];
+		const orig = (c && !c.endsWith('_ORI') ? wellData.curves[`${c}_ORI`] : undefined) ?? wellData.originalCurves[c];
 		const cur = wellData.curves[c];
 		if (!orig || !cur || orig.length !== cur.length) return false;
 		for (let i = 0; i < orig.length; i += Math.max(1, Math.floor(orig.length / 50))) {
@@ -129,9 +138,14 @@
 				scope: editScope,
 				persist
 			});
+			const hasOri = target === src && !src.endsWith('_ORI');
 			editStatusMsg = persist
-				? `Saved ${target} to well ✓`
-				: `Applied ${editOp} to ${target} (preview)`;
+				? hasOri
+					? `Saved ${target} (original kept as ${src}_ORI) ✓`
+					: `Saved ${target} to well ✓`
+				: hasOri
+					? `Previewed ${editOp} on ${target} (${src}_ORI preserved)`
+					: `Applied ${editOp} to ${target} (preview)`;
 			if (outputCurveName.trim()) {
 				outputCurveName = '';
 			}
@@ -145,9 +159,16 @@
 		val: number,
 		persist: boolean = false
 	) {
-		editOp = op;
-		editValue = val;
-		await applyCurveTransform(persist, val);
+		if (op !== editOp && workbench.selectedQaqcCurve) {
+			wellData.commitCurveEditBase(workbench.selectedQaqcCurve);
+			editOp = op;
+			editValue = val;
+		} else if (op === 'add') {
+			editValue = Number(((Number(editValue) || 0) + val).toFixed(4));
+		} else {
+			editValue = val;
+		}
+		await applyCurveTransform(persist, editValue);
 	}
 
 	async function handleDuplicateCurve() {
@@ -197,7 +218,12 @@
 		if (!src) return;
 		try {
 			await wellData.restoreCurveSnapshot(src, true);
-			editStatusMsg = `Restored ${src} to original ✓`;
+			if (editOp === 'add' || editOp === 'subtract' || editOp === 'depth_shift') {
+				editValue = 0;
+			} else if (editOp === 'multiply' || editOp === 'divide') {
+				editValue = 1;
+			}
+			editStatusMsg = `Restored ${src} from ${src}_ORI ✓`;
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Failed to restore curve';
 		}
@@ -424,13 +450,25 @@
 					<button
 						type="button"
 						onclick={handleRestoreCurve}
-						title="Restore curve to original loaded values"
+						title="Restore curve from original backup ({activeOriCurveName || 'original'})"
 						class="h-7 shrink-0 rounded-sm border border-amber-300 bg-amber-50 px-2 text-[10px] font-semibold text-amber-800 hover:bg-amber-100"
 					>
 						↺ Revert
 					</button>
 				{/if}
 			</div>
+			{#if activeOriCurveName}
+				<div class="mt-1 flex items-center justify-between rounded-xs border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600">
+					<span>Original backup preserved as <strong class="mono-num text-slate-800">{activeOriCurveName}</strong></span>
+					<button
+						type="button"
+						onclick={() => { if (activeOriCurveName) workbench.selectedQaqcCurve = activeOriCurveName; }}
+						class="font-semibold text-blue-700 hover:underline"
+					>
+						View {activeOriCurveName}
+					</button>
+				</div>
+			{/if}
 
 			<!-- Mode Switcher: Math / Conditioning vs. Rename / Duplicate / Delete -->
 			<div

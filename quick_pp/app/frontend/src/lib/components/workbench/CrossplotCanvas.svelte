@@ -90,6 +90,25 @@
 			const raw = wellData.curves[curveName] ?? [];
 			const vals = indices.map((i) => raw[i]).filter((v) => Number.isFinite(v));
 			const st = wellData.stats[curveName];
+			const oriName = !curveName.endsWith('_ORI') ? `${curveName}_ORI` : null;
+			const oriRaw = oriName ? wellData.curves[oriName] : undefined;
+
+			if (oriRaw && oriRaw.length > 0) {
+				const oriVals = indices.map((i) => oriRaw[i]).filter((v) => Number.isFinite(v));
+				if (oriVals.length > 0) {
+					traces.push({
+						type: 'histogram',
+						name: `${oriName} (Original)`,
+						x: oriVals,
+						nbinsx: 40,
+						marker: {
+							color: 'rgba(148, 163, 184, 0.45)',
+							line: { color: '#64748B', width: 1 }
+						}
+					});
+					baseLayout.barmode = 'overlay';
+				}
+			}
 
 			traces.push({
 				type: 'histogram',
