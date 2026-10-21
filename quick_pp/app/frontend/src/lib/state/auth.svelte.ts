@@ -63,6 +63,7 @@ export interface AuditLogItem {
 class AuthState {
 	user = $state<AuthUser | null>(null);
 	token = $state<string | null>(null);
+	appVersion = $state<string>('0.2.106');
 	isInitializing = $state<boolean>(true);
 	uamModalOpen = $state<boolean>(false);
 	accountModalOpen = $state<boolean>(false);
@@ -88,7 +89,10 @@ class AuthState {
 		try {
 			const stored = getStoredToken();
 			this.token = stored;
-			const res = await getJson<{ user: AuthUser }>('/quick_pp/auth/me');
+			const res = await getJson<{ user: AuthUser; version?: string }>('/quick_pp/auth/me');
+			if (res?.version) {
+				this.appVersion = res.version;
+			}
 			if (res?.user) {
 				this.user = res.user;
 				if (res.user.demo_mode) {

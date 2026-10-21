@@ -86,7 +86,11 @@
 			const boot = await getJson<{
 				is_first_run: boolean;
 				admin_username: string | null;
+				version?: string;
 			}>('/quick_pp/auth/bootstrap-status');
+			if (boot?.version) {
+				authState.appVersion = boot.version;
+			}
 			if (boot?.is_first_run) {
 				isFirstRun = true;
 				bootstrapUsername = boot.admin_username || 'admin';
@@ -273,10 +277,17 @@
 				/>
 				</div>
 				<div>
-					<div class="flex items-center gap-2">
+					<div class="flex items-center gap-1.5">
 						<span class="text-sm font-bold tracking-tight text-[var(--text-primary)]">
 							quick_pp
 						</span>
+						{#if authState.appVersion}
+							<span
+								class="mono-num rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1 py-0.5 text-[9.5px] font-medium text-[var(--text-muted)]"
+							>
+								v{authState.appVersion}
+							</span>
+						{/if}
 						<span
 							class="rounded-xs border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-blue-700 uppercase"
 						>

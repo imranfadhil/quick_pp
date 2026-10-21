@@ -224,6 +224,14 @@
 				class="h-6 w-6 shrink-0 object-contain"
 			/>
 			<span class="text-xs font-bold tracking-tight text-[var(--text-primary)]">quick_pp</span>
+			{#if authState.appVersion}
+				<span
+					title="quick_pp v{authState.appVersion}"
+					class="mono-num rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1 py-0.5 text-[9px] font-medium text-[var(--text-muted)]"
+				>
+					v{authState.appVersion}
+				</span>
+			{/if}
 			{#if authState.isDemoMode}
 				<span
 					title="Ephemeral Demo Session — Pre-seeded Volve & Costa SQLite DB is read-only"
@@ -655,7 +663,7 @@
 										<span class="mono-num truncate font-medium text-[var(--text-primary)]">{w.name}</span>
 									</span>
 									<span class="mono-num shrink-0 text-[10px] text-[var(--text-muted)]">
-										{w.row_count?.toLocaleString() ?? ''}
+										{(w.depth_count ?? (w as any).row_count)?.toLocaleString() ?? ''}
 									</span>
 								</label>
 							{/each}

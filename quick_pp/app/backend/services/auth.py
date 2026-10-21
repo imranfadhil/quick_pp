@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 
+from quick_pp import __version__
 from quick_pp.app.backend.utils.auth import (
     AUTH_COOKIE_NAME,
     bootstrap_default_admin,
@@ -178,6 +179,7 @@ def auth_bootstrap_status():
             "admin_username": None,
             "default_password_hint": None,
             "demo_mode": True,
+            "version": __version__,
         }
     bootstrap_default_admin()
     with get_db() as session:
@@ -200,6 +202,7 @@ def auth_bootstrap_status():
                 else None
             ),
             "demo_mode": False,
+            "version": __version__,
         }
 
 
@@ -212,6 +215,7 @@ def auth_login(req: LoginRequest):
             "access_token": "demo-session",
             "token_type": "bearer",
             "user": get_demo_visitor_user(),
+            "version": __version__,
         }
     bootstrap_default_admin()
     ident = req.username.strip()
@@ -491,8 +495,8 @@ def auth_challenge_mfa_verify(req: MfaVerifyChallengeRequest, response: Response
 
 @router.get("/auth/me", summary="Get current authenticated user profile")
 def auth_me(current_user: Dict[str, Any] = Depends(get_current_user)):
-    """Return the authenticated user's profile and project memberships."""
-    return {"user": current_user}
+    """Return the authenticated user's profile, project memberships, and quick_pp version."""
+    return {"user": current_user, "version": __version__}
 
 
 @router.post("/auth/logout", summary="Sign out and clear session cookie")

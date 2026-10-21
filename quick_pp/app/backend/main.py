@@ -14,6 +14,7 @@ try:
 except Exception:
     FastApiMCP = None
 
+from quick_pp import __version__
 from quick_pp.database.db_connector import DBConnector
 
 from .exceptions import return_exception_message
@@ -79,6 +80,7 @@ async def lifespan(app: "FastAPI"):
 
 app = FastAPI(
     title="quick_pp API",
+    version=__version__,
     description="API for quick_pp library.",
     contact={
         "name": "Imran Fadhil",
