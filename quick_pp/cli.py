@@ -21,10 +21,7 @@ servers, and executing machine learning training and prediction pipelines.
 """
 
 
-try:
-    quick_ppVersion = metadata.version("quick_pp")
-except metadata.PackageNotFoundError:
-    quick_ppVersion = "0.0.0"
+from quick_pp import __version__ as quick_ppVersion
 
 # Global defaults for backend and frontend locations used across commands
 BACKEND_HOST = "localhost"
@@ -190,6 +187,10 @@ def backend(debug, no_open):
                 "gunicorn",
                 "-k",
                 "uvicorn.workers.UvicornWorker",
+                "--timeout",
+                "180",
+                "--graceful-timeout",
+                "30",
                 "quick_pp.app.backend.main:app",
                 "--bind",
                 f"0.0.0.0:{BACKEND_PORT}",
@@ -412,6 +413,10 @@ def app(open):
                     "gunicorn",
                     "-k",
                     "uvicorn.workers.UvicornWorker",
+                "--timeout",
+                "180",
+                "--graceful-timeout",
+                "30",
                     "quick_pp.app.backend.main:app",
                     "--bind",
                     f"0.0.0.0:{BACKEND_PORT}",
@@ -538,6 +543,10 @@ def model_deployment(debug):
                 "gunicorn",
                 "-k",
                 "uvicorn.workers.UvicornWorker",
+                "--timeout",
+                "180",
+                "--graceful-timeout",
+                "30",
                 "quick_pp.app.backend.mlflow_model_deployment:app",
                 "--bind",
                 "0.0.0.0:5555",
@@ -644,11 +653,11 @@ def predict(model_config, data_hash, output_file_name, env, plot):
 @click.option(
     "--profile",
     multiple=True,
-    help="Enable specific profiles (e.g., --profile langflow)",
+    help="Enable specific Docker Compose profiles",
 )
 @click.option(
     "--service",
-    help="Target specific service (postgres, qpp-backend, qpp-frontend, langflow)",
+    help="Target specific service (postgres, qpp-backend, qpp-frontend)",
 )
 @click.option(
     "--follow",
@@ -677,7 +686,6 @@ def docker(action, detach, profile, service, follow, env_file):
     EXAMPLES:
     \b
     quick-pp docker up -d                    # Start all services in background
-    quick-pp docker up --profile langflow    # Start with Langflow enabled
     quick-pp docker logs --service postgres  # View postgres logs
     quick-pp docker logs -f                  # Follow all logs
     quick-pp docker down                     # Stop all services
@@ -817,6 +825,72 @@ def docker_publish():
     click.echo(f"Successfully built and pushed {image_tag}")
 
 
+@click.command()
+def mcp():
+    """Start the Petrophysical MCP Server over stdio for Claude Desktop, Cursor, or VS Code."""
+    from quick_pp.app.backend.mcp_server import petro_mcp_server
+
+    petro_mcp_server.run_stdio()
+
+
+@click.command("create-admin")
+@click.option("--username", default="admin", help="Administrator username")
+@click.option("--email", default="admin@quickpp.local", help="Administrator email")
+@click.option("--password", default=None, help="Temporary password (auto-generated if omitted)")
+@click.option("--reset-mfa", is_flag=True, help="Reset MFA if admin user already exists")
+def create_admin(username, email, password, reset_mfa):
+    """Create or reset a global Administrator account for quick_pp UAM."""
+    import secrets
+    from datetime import datetime, timezone
+    from sqlalchemy import func, select
+    from quick_pp.app.backend.utils.auth import generate_temp_password, hash_password
+    from quick_pp.app.backend.utils.db import get_db
+    from quick_pp.database import models as db_models
+
+    temp_pwd = password or generate_temp_password()
+    invite_token = secrets.token_urlsafe(24)
+
+    with get_db() as session:
+        user = session.scalar(
+            select(db_models.User).where(
+                func.lower(db_models.User.username) == username.strip().lower()
+            )
+        )
+        if user:
+            user.hashed_password = hash_password(temp_pwd)
+            user.role = "admin"
+            user.is_active = 1
+            user.status = "FORCE_CHANGE_PASSWORD"
+            user.invite_token = invite_token
+            if reset_mfa:
+                user.mfa_secret = None
+                user.mfa_enabled = 0
+            session.add(user)
+            action_desc = "Updated existing administrator"
+        else:
+            user = db_models.User(
+                username=username.strip(),
+                email=email.strip().lower(),
+                full_name="System Administrator",
+                hashed_password=hash_password(temp_pwd),
+                role="admin",
+                status="FORCE_CHANGE_PASSWORD",
+                is_active=1,
+                mfa_enabled=0,
+                invite_token=invite_token,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            session.add(user)
+            action_desc = "Created new administrator"
+
+    click.echo(f"\n{action_desc}:")
+    click.echo(f"  Username          : {username}")
+    click.echo(f"  Email             : {email}")
+    click.echo(f"  Temporary Password: {temp_pwd}")
+    click.echo(f"  Invite Token      : {invite_token}")
+    click.echo(f"  Invite Path       : /login?username={username}&invite={invite_token}\n")
+
+
 # Add commands to the CLI group
 cli.add_command(backend)
 cli.add_command(mlflow_server)
@@ -827,6 +901,8 @@ cli.add_command(frontend)
 cli.add_command(app)
 cli.add_command(docker)
 cli.add_command(docker_publish)
+cli.add_command(mcp)
+cli.add_command(create_admin)
 
 
 if __name__ == "__main__":

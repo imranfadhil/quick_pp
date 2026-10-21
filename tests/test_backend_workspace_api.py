@@ -207,13 +207,15 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert r_pt.status_code == 200
     assert r_pt.json()["saved_wells"] == 1
 
-    # 7. Reservoir Summary + Upscaling
+    # 7. Reservoir Summary + Upscaling + Uncertainty
     r_res = client.post(
         f"/quick_pp/workspace/projects/{pid}/wells/Well-A/reservoir_summary",
         json={
             "cut_offs": {"VSHALE": 0.6, "PHIT": 0.01, "SWT": 0.99},
             "include_upscaling": True,
             "cell_size": 2.0,
+            "include_uncertainty": True,
+            "n_samples": 40,
         },
     )
     assert r_res.status_code == 200
@@ -221,8 +223,13 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert len(res_body["summary"]) >= 1
     assert "upscaling" in res_body
     assert res_body["upscaling"]["n_cells"] >= 1
+    assert "uncertainty" in res_body
+    assert len(res_body["uncertainty"]["zone_summary"]) >= 1
+    z0 = res_body["uncertainty"]["zone_summary"][0]
+    assert z0.get("ZONE") is not None
+    assert z0.get("STOIIP_MMBBL_P50") is not None
 
-    # 8. Saturation Height Function (Leverett-J / Skelt-Harrison)
+    # 8. Saturation Height Function (Leverett-J / Skelt-Harrison / Cuddy)
     r_shf = client.post(
         f"/quick_pp/workspace/projects/{pid}/shf/compute",
         json={
@@ -237,6 +244,25 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     shf_body = r_shf.json()
     assert shf_body["saved_wells"] == 1
     assert len(shf_body["data"]["shf"]) == 10
+    assert "scal_data" in shf_body
+    assert len(shf_body["scal_data"]["pc"]) > 0
+
+    for shf_model in ("skelt_harrison", "cuddy"):
+        r_m = client.post(
+            f"/quick_pp/workspace/projects/{pid}/shf/compute",
+            json={
+                "fwl": 1020.0,
+                "fwl_by_zone": {"Unknown": 1015.0},
+                "model": shf_model,
+                "save": False,
+            },
+        )
+        assert r_m.status_code == 200
+        m_body = r_m.json()
+        assert m_body["model"] == shf_model
+        assert m_body["fwl_by_zone"].get("Unknown") == 1015.0
+        assert len(m_body["fits"]) >= 1
+        assert len(m_body["data"]["shf"]) == 10
 
     # 9. Columnar PUT well data
     r_put = client.put(
@@ -245,4 +271,104 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     )
     assert r_put.status_code == 200
     assert r_put.json()["rows"] == 2
+
+
+def test_petrophysical_mcp_server_and_agent_assistant(client_and_project):
+    client, pid = client_and_project
+
+    # 1. Provider catalog & MCP tools listing
+    r_prov = client.get("/quick_pp/assistant/providers")
+    assert r_prov.status_code == 200
+    prov_body = r_prov.json()
+    provider_ids = [p["id"] for p in prov_body["providers"]]
+    assert "native_mcp" in provider_ids
+    assert "openai" in provider_ids
+    assert "ollama" in provider_ids
+    tool_names = [t["name"] for t in prov_body["mcp_tools"]]
+    assert "inspect_well" in tool_names
+    assert "run_well_qaqc" in tool_names
+    assert "run_multi_mineral" in tool_names
+    assert "run_shf_evaluation" in tool_names
+    assert "evaluate_with_conformal_bounds" in tool_names
+    assert "control_workbench_ui" in tool_names
+
+    # 2. Standard MCP JSON-RPC 2.0 protocol (initialize + tools/list + tools/call)
+    r_init = client.post(
+        "/quick_pp/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+    )
+    assert r_init.status_code == 200
+    assert r_init.json()["result"]["serverInfo"]["name"] == "quick_pp-petrophysics-mcp"
+
+    r_list = client.post(
+        "/quick_pp/mcp",
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+    )
+    assert r_list.status_code == 200
+    assert len(r_list.json()["result"]["tools"]) == 6
+
+    r_call = client.post(
+        "/quick_pp/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_well",
+                "arguments": {"project_id": pid, "well_name": "Well-A"},
+            },
+        },
+    )
+    assert r_call.status_code == 200
+    structured = r_call.json()["result"]["structuredContent"]
+    assert structured["well_name"] == "Well-A"
+    assert structured["row_count"] == 10
+    assert len(structured["zonal_breakdown"]) == 2
+
+    # 3. Agentic Assistant end-to-end evaluation (QAQC + Multi-Mineral + SHF + On-the-fly Conformal Bounds)
+    r_chat = client.post(
+        "/quick_pp/assistant/chat",
+        json={
+            "message": "Run a full evaluation (qaqc, multi-mineral, shf, and conformal prediction bounds) and explain.",
+            "project_id": pid,
+            "well_name": "Well-A",
+            "alpha": 0.20,
+            "provider": "native_mcp",
+        },
+    )
+    assert r_chat.status_code == 200
+    chat_body = r_chat.json()
+    executed_names = [tc["name"] for tc in chat_body["tool_calls"]]
+    assert "inspect_well" in executed_names
+    assert "run_well_qaqc" in executed_names
+    assert "run_multi_mineral" in executed_names
+    assert "run_shf_evaluation" in executed_names
+    assert "evaluate_with_conformal_bounds" in executed_names
+
+    # Verify live computed curves include P10/P90 conformal bounds and QAQC / SHF curves
+    curves = chat_body["computed_curves"]
+    for expected_col in (
+        "NPHI_HC",
+        "RHOB_HC",
+        "PHIT",
+        "PHIT_P10",
+        "PHIT_P90",
+        "SWT",
+        "SW_P10",
+        "SW_P90",
+        "PERM",
+        "PERM_P10",
+        "PERM_P90",
+        "SHF",
+    ):
+        assert expected_col in curves
+        assert len(curves[expected_col]) == 10
+
+    # Verify P10 <= Prediction <= P90 monotonicity across all samples
+    for p10, pred, p90 in zip(curves["PHIT_P10"], curves["PHIT"], curves["PHIT_P90"]):
+        assert p10 <= pred + 1e-6
+        assert pred <= p90 + 1e-6
+
+    assert "Conformal Prediction Bounds" in chat_body["reply"]
+
 

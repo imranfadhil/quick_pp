@@ -42,7 +42,7 @@ set_kv WEB_PORT "$WEB_PORT"
 # Rotate or set the DB password ONLY before the postgres data directory exists.
 # Postgres applies POSTGRES_PASSWORD on first init only, so changing it after
 # ./data/postgres is populated would leave the DB expecting the old password.
-if [ ! -d "$REMOTE_DIR/quick_pp/app/docker/data/postgres" ] || [ -z "$(ls -A "$REMOTE_DIR/quick_pp/app/docker/data/postgres" 2>/dev/null)" ]; then
+if grep -q '^POSTGRES_PASSWORD=\(xxx\|change_this\)' .env || ! grep -q '^POSTGRES_PASSWORD=' .env; then
   if [ -n "$PG_PASS" ] && [ "$PG_PASS" != "xxx" ] && ! echo "$PG_PASS" | grep -q '^change_this'; then
     set_kv POSTGRES_PASSWORD "$PG_PASS"
   elif grep -q '^POSTGRES_PASSWORD=\(xxx\|change_this\)' .env || ! grep -q '^POSTGRES_PASSWORD=' .env; then
@@ -54,12 +54,8 @@ fi
 CURRENT_PASS=$(grep '^POSTGRES_PASSWORD=' .env | head -1 | cut -d= -f2-)
 set_kv QPP_DATABASE_URL "postgresql+psycopg2://${PG_USER}:${CURRENT_PASS}@postgres:5432/${PG_DB}"
 
-# Generate LANGFLOW_SECRET_KEY and LANGFLOW_SUPERUSER_PASSWORD if still placeholders
-if grep -q '^LANGFLOW_SECRET_KEY=\("your_langflow_secret_key"\|your_langflow_secret_key\|change_this\)' .env; then
-  set_kv LANGFLOW_SECRET_KEY "$(openssl rand -hex 32)"
-fi
-if grep -q '^LANGFLOW_SUPERUSER_PASSWORD=change_this' .env; then
-  set_kv LANGFLOW_SUPERUSER_PASSWORD "$(openssl rand -hex 12)"
+if grep -q '^QPP_AUTH_SECRET_KEY=change_this' .env || ! grep -q '^QPP_AUTH_SECRET_KEY=' .env; then
+  set_kv QPP_AUTH_SECRET_KEY "$(openssl rand -hex 32)"
 fi
 
 # Set VITE_BACKEND_URL to empty string so browser requests use relative paths

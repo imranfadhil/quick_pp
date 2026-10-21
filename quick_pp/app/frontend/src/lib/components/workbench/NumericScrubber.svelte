@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
+
 	interface Props {
 		label: string;
 		value: number;
@@ -28,6 +30,8 @@
 	}: Props = $props();
 
 	let isDragging = $state(false);
+	let isFocused = $state(false);
+	let draftText = $state('');
 	let startX = 0;
 	let startVal = 0;
 	let baseline = $state<number | undefined>(undefined);
@@ -38,9 +42,22 @@
 		}
 	});
 
+	$effect(() => {
+		if (!isFocused) {
+			draftText = Number.isFinite(value) ? String(value) : '';
+		}
+	});
+
 	let isDirty = $derived(
 		baseline !== undefined && Math.abs((value ?? 0) - baseline) > 1e-6
 	);
+
+	let hasFiniteBounds = $derived(Number.isFinite(min) && Number.isFinite(max) && max > min);
+
+	let fillPercent = $derived.by(() => {
+		if (!hasFiniteBounds || !Number.isFinite(value)) return 0;
+		return Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100));
+	});
 
 	function clampAndRound(raw: number): number {
 		const clamped = Math.min(max, Math.max(min, raw));
@@ -73,6 +90,7 @@
 			const next = clampAndRound(startVal + delta);
 			if (next !== value) {
 				value = next;
+				draftText = String(value);
 				onchange?.(value);
 			}
 		};
@@ -87,19 +105,38 @@
 		window.addEventListener('pointerup', onUp);
 	}
 
+	function handleFocus() {
+		isFocused = true;
+		draftText = Number.isFinite(value) ? String(value) : '';
+	}
+
 	function handleInput(e: Event) {
 		const target = e.currentTarget as HTMLInputElement;
-		const parsed = parseFloat(target.value);
+		draftText = target.value;
+		const parsed = parseFloat(draftText);
+		if (!Number.isNaN(parsed)) {
+			value = parsed;
+			onchange?.(value);
+		}
+	}
+
+	function commitDraft() {
+		isFocused = false;
+		const parsed = parseFloat(draftText);
 		if (!Number.isNaN(parsed)) {
 			value = clampAndRound(parsed);
 			onchange?.(value);
 		}
+		draftText = Number.isFinite(value) ? String(value) : '';
 	}
 
 	function handleKeyDown(e: KeyboardEvent) {
 		if (e.key === 'Enter') {
 			e.preventDefault();
-			onrun?.();
+			commitDraft();
+			if (e.metaKey || e.ctrlKey) {
+				onrun?.();
+			}
 		}
 	}
 </script>
@@ -109,12 +146,22 @@
 	<!-- svelte-ignore a11y_label_has_associated_control -->
 	<label
 		onpointerdown={handlePointerDown}
-		title="Drag horizontally to scrub (Shift = 10×, Alt = 0.1×)"
-		class="truncate text-xs font-medium text-[var(--text-primary)] cursor-ew-resize hover:text-[var(--accent-primary)] transition-colors {isDragging
+		title="Drag horizontally to scrub in real time (Shift = 10×, Alt = 0.1×)"
+		class="group relative flex flex-col justify-center truncate text-xs font-medium text-[var(--text-primary)] cursor-ew-resize hover:text-[var(--accent-primary)] transition-colors {isDragging
 			? 'text-[var(--accent-primary)] font-semibold'
 			: ''}"
 	>
-		{label}
+		<span class="truncate">{label}</span>
+		{#if hasFiniteBounds}
+			<span class="mt-0.5 block h-1 w-full overflow-hidden rounded-full bg-slate-200/80">
+				<span
+					style="width: {fillPercent}%"
+					class="block h-full rounded-full transition-all duration-75 {isDragging
+						? 'bg-[var(--accent-primary)]'
+						: 'bg-blue-500/60 group-hover:bg-[var(--accent-primary)]'}"
+				></span>
+			</span>
+		{/if}
 	</label>
 
 	<div
@@ -128,8 +175,10 @@
 			{min}
 			{max}
 			{disabled}
-			value={value}
+			value={isFocused ? draftText : value}
+			onfocus={handleFocus}
 			oninput={handleInput}
+			onblur={commitDraft}
 			onkeydown={handleKeyDown}
 			class="mono-num h-full w-full min-w-0 border-0 bg-transparent px-1.5 py-0 text-right text-xs text-[var(--text-primary)] focus:ring-0 focus:outline-none disabled:opacity-50"
 		/>

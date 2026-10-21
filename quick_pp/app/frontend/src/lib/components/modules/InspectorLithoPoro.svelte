@@ -1,18 +1,74 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, postJson } from '$lib/api/client';
+	import { authState } from '$lib/state/auth.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
+	import {
+		ALL_LITHOLOGY_CURVES,
+		LITHOLOGY_TRACK_SPECS,
+		MINERAL_TO_CURVE_MNEMONIC
+	} from '$lib/utils/petrophysicsColors';
 
-	const AVAILABLE_MINERALS = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'HALITE'];
+	const AVAILABLE_MINERALS = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'HALITE', 'COAL'];
+	const MINERAL_COLOR_MAP: Record<string, { fill: string; stroke: string; label: string }> =
+		Object.fromEntries(
+			LITHOLOGY_TRACK_SPECS.map((s) => [
+				s.mineralName,
+				{ fill: s.fillHex, stroke: s.strokeHex, label: s.shortLabel }
+			])
+		);
+
+	// Pre-Trained PIML & Conformal Prediction state
+	let mlModelConfig = $state<'clastic' | 'carbonate'>('clastic');
+	let conformalAlpha = $state<number>(0.2);
+	let mlSummary = $state<{
+		confidence_level_pct: number;
+		model_source: string;
+		phit_mean_width_vv: number;
+		sw_mean_width_vv: number;
+		perm_median_p90_p10_factor: number;
+	} | null>(null);
 
 	function toggleMineral(m: string) {
 		if (workbench.lithoParams.minerals.includes(m)) {
+			if (workbench.lithoParams.minerals.length <= 1) return;
 			workbench.lithoParams.minerals = workbench.lithoParams.minerals.filter((x) => x !== m);
 		} else {
 			workbench.lithoParams.minerals = [...workbench.lithoParams.minerals, m];
+		}
+	}
+
+	function zeroUnselectedMineralCurvesInMemory() {
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		if (dept.length === 0) return;
+
+		const lp = workbench.lithoParams;
+		let activeMnemonics: Set<string>;
+		if (lp.model === 'multi_mineral') {
+			activeMnemonics = new Set(
+				lp.minerals.map((m) => MINERAL_TO_CURVE_MNEMONIC[m.toUpperCase()]).filter(Boolean)
+			);
+		} else if (lp.model === 'ssc') {
+			activeMnemonics = new Set(['VSAND', 'VSILT', 'VCLAY']);
+		} else {
+			activeMnemonics = new Set(['VCLAY']);
+		}
+		if (lp.enableCoalFlagging) {
+			activeMnemonics.add('VCOAL');
+		}
+
+		const zeroedUpdates: Record<string, number[]> = {};
+		const zeroArr = new Array(dept.length).fill(0);
+		for (const curveName of ALL_LITHOLOGY_CURVES) {
+			if (!activeMnemonics.has(curveName) && wellData.curves[curveName]) {
+				zeroedUpdates[curveName] = [...zeroArr];
+			}
+		}
+		if (Object.keys(zeroedUpdates).length > 0) {
+			wellData.curves = { ...wellData.curves, ...zeroedUpdates };
 		}
 	}
 
@@ -21,11 +77,21 @@
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const lp = workbench.lithoParams;
+		lp.useHcCorrected = lp.enableHcCorrection;
+		zeroUnselectedMineralCurvesInMemory();
 		const filterArgs = {
 			min_depth: workbench.depthFilter?.min ?? null,
 			max_depth: workbench.depthFilter?.max ?? null,
 			zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
 			save: persist
+		};
+
+		const coalArgs = {
+			enable_coal_flagging: lp.enableCoalFlagging,
+			coal_rhob_max: lp.coalRhobMax,
+			coal_nphi_min: lp.coalNphiMin,
+			coal_window_size: Math.round(lp.coalWindowSize),
+			coal_trend_factor: lp.coalTrendFactor
 		};
 
 		try {
@@ -45,8 +111,11 @@
 							rho_hc: lp.rhoHc,
 							hi_hc: lp.hiHc,
 							buffer: lp.hcBuffer,
+							gr_clean: lp.grClean,
+							gr_clay: lp.grClay,
+							...coalArgs,
 							...filterArgs
-						}
+						} as any
 					}
 				);
 				if (hcErr) throw new Error(String((hcErr as any)?.detail ?? 'HC Correction failed'));
@@ -64,15 +133,19 @@
 					},
 					body: {
 						model: lp.model,
-						use_hc_corrected: lp.enableHcCorrection && lp.useHcCorrected,
+						use_hc_corrected: lp.enableHcCorrection,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
 						fluid_point: [lp.fluidNphi, lp.fluidRhob],
 						silt_line_angle: lp.siltLineAngle,
+						gr_clean: lp.grClean,
+						gr_clay: lp.grClay,
 						minerals: lp.minerals,
+						porosity_method: lp.porosityMethod === 'den' ? 'density' : 'neutron_density',
+						...coalArgs,
 						...filterArgs
-					}
+					} as any
 				}
 			);
 			if (lithErr) throw new Error(String((lithErr as any)?.detail ?? 'Lithology failed'));
@@ -89,14 +162,16 @@
 					},
 					body: {
 						method: lp.porosityMethod,
-						use_hc_corrected: lp.enableHcCorrection && lp.useHcCorrected,
+						lithology_model: lp.model,
+						use_hc_corrected: lp.enableHcCorrection,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
 						fluid_point: [lp.fluidNphi, lp.fluidRhob],
 						silt_line_angle: lp.siltLineAngle,
+						...coalArgs,
 						...filterArgs
-					}
+					} as any
 				}
 			);
 			if (poroErr) throw new Error(String((poroErr as any)?.detail ?? 'Porosity failed'));
@@ -110,6 +185,45 @@
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Lithology/Porosity error';
+		} finally {
+			wellData.isCalculating = false;
+		}
+	}
+
+	async function executePretrainedMlInference(persist: boolean = false) {
+		if (!workbench.projectId || !workbench.wellId) return;
+		wellData.isCalculating = true;
+		wellData.lastError = null;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/ml_inference`,
+				{
+					model_config: mlModelConfig,
+					alpha: conformalAlpha,
+					water_salinity: workbench.saturationParams.waterSalinity,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					save: persist
+				}
+			);
+			if (res.data) {
+				wellData.mergeComputedCurves(res.data, res.stats);
+			} else if (res.computed_curves) {
+				wellData.mergeComputedCurves(res.computed_curves, res.stats);
+			}
+			mlSummary = {
+				confidence_level_pct: res.confidence_level_pct ?? Math.round((1 - conformalAlpha) * 100),
+				model_source: res.model_source ?? 'Pre-Trained PIML Ensemble',
+				phit_mean_width_vv: res.interval_width_summary?.phit_mean_width_vv ?? 0,
+				sw_mean_width_vv: res.interval_width_summary?.sw_mean_width_vv ?? 0,
+				perm_median_p90_p10_factor: res.interval_width_summary?.perm_median_p90_p10_factor ?? 1
+			};
+			if (persist) {
+				wellData.lastSavedMessage = 'Pre-Trained Conformal Bounds Applied ✓';
+			}
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Pre-trained ML inference failed';
 		} finally {
 			wellData.isCalculating = false;
 		}
@@ -143,26 +257,62 @@
 			</div>
 		</ParameterSection>
 
-		<ParameterSection title="Endpoint Parameters (NPHI / RHOB)" badge="Linked to Crossplot">
+		<ParameterSection title="Endpoint Parameters (NPHI / RHOB / Vsh)" badge="Live Crossplot & Tracks">
 			{#if workbench.lithoParams.model === 'multi_mineral'}
-				<div class="mb-1.5 text-[11px] font-medium text-[var(--text-secondary)]">
-					Active Minerals:
+				<div class="mb-1.5 flex items-center justify-between text-[11px] font-medium text-[var(--text-secondary)]">
+					<span>Active Minerals:</span>
+					<span class="mono-num text-[10px] text-[var(--text-muted)]">
+						{workbench.lithoParams.minerals.length} selected
+					</span>
 				</div>
 				<div class="mb-2 grid grid-cols-2 gap-1">
 					{#each AVAILABLE_MINERALS as minName}
-						<label class="flex items-center gap-1.5 text-xs cursor-pointer">
+						{@const isSelected = workbench.lithoParams.minerals.includes(minName)}
+						{@const swatch = MINERAL_COLOR_MAP[minName]}
+						<label
+							class="flex items-center gap-1.5 rounded-xs border px-1.5 py-1 text-xs cursor-pointer transition-colors {isSelected
+								? 'border-[var(--border-hairline)] bg-[var(--bg-app)] font-medium text-[var(--text-primary)]'
+								: 'border-transparent text-[var(--text-muted)] opacity-75 hover:opacity-100'}"
+						>
 							<input
 								type="checkbox"
-								checked={workbench.lithoParams.minerals.includes(minName)}
-								onchange={() => toggleMineral(minName)}
+								checked={isSelected}
+								disabled={isSelected && workbench.lithoParams.minerals.length <= 1}
+								onchange={() => {
+									toggleMineral(minName);
+								}}
 								class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 							/>
-							<span>{minName}</span>
+							{#if swatch}
+								<span
+									class="inline-block h-2.5 w-2.5 shrink-0 rounded-[2px]"
+									style="background:{swatch.fill}; border:1px solid {swatch.stroke};"
+								></span>
+							{/if}
+							<span class="truncate">{minName}</span>
 						</label>
 					{/each}
 				</div>
 			{/if}
 
+			<NumericScrubber
+				label="GR Clean (Vsh=0)"
+				bind:value={workbench.lithoParams.grClean}
+				unit="gAPI"
+				min={0}
+				max={80}
+				step={1.0}
+				onrun={() => executeLithoPoro(false)}
+			/>
+			<NumericScrubber
+				label="GR Shale (Vsh=1)"
+				bind:value={workbench.lithoParams.grClay}
+				unit="gAPI"
+				min={50}
+				max={250}
+				step={2.0}
+				onrun={() => executeLithoPoro(false)}
+			/>
 			<NumericScrubber
 				label="NPHI Clean Sand"
 				bind:value={workbench.lithoParams.drySandNphi}
@@ -233,6 +383,9 @@
 				<input
 					type="checkbox"
 					bind:checked={workbench.lithoParams.enableHcCorrection}
+					onchange={() => {
+						workbench.lithoParams.useHcCorrected = workbench.lithoParams.enableHcCorrection;
+					}}
 					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 				/>
 				<span>Enable NPHI/RHOB HC Correction</span>
@@ -266,6 +419,125 @@
 					step={0.02}
 					onrun={() => executeLithoPoro(false)}
 				/>
+			{/if}
+		</ParameterSection>
+
+		<ParameterSection
+			title="Coal Flagging"
+			badge={workbench.lithoParams.enableCoalFlagging ? 'Active' : 'Off'}
+		>
+			<label class="flex items-center gap-2 py-0.5 text-xs font-medium cursor-pointer">
+				<input
+					type="checkbox"
+					bind:checked={workbench.lithoParams.enableCoalFlagging}
+					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+				/>
+				<span>Enable Coal Flagging (VCOAL / Φ=0)</span>
+			</label>
+
+			{#if workbench.lithoParams.enableCoalFlagging}
+				<NumericScrubber
+					label="Max Bulk Density (RHOB)"
+					bind:value={workbench.lithoParams.coalRhobMax}
+					unit="g/cc"
+					min={1.2}
+					max={2.3}
+					step={0.02}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<NumericScrubber
+					label="Min Neutron (NPHI)"
+					bind:value={workbench.lithoParams.coalNphiMin}
+					unit="v/v"
+					min={0.15}
+					max={0.65}
+					step={0.01}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<NumericScrubber
+					label="Trend Deviation Factor"
+					bind:value={workbench.lithoParams.coalTrendFactor}
+					min={0.0}
+					max={0.25}
+					step={0.01}
+					decimals={2}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<NumericScrubber
+					label="Rolling Window"
+					bind:value={workbench.lithoParams.coalWindowSize}
+					unit="pts"
+					min={5}
+					max={101}
+					step={2}
+					decimals={0}
+					onrun={() => executeLithoPoro(false)}
+				/>
+			{/if}
+		</ParameterSection>
+
+		<ParameterSection
+			title="Pre-Trained PIML & Conformal Prediction"
+			badge={`CI=${Math.round((1 - conformalAlpha) * 100)}%`}
+		>
+			<div class="mb-1.5 flex items-center justify-between rounded-xs border border-indigo-200 bg-indigo-50/70 px-2 py-1 text-[10px] text-indigo-900">
+				<span class="font-semibold">predict_pipeline.py Active</span>
+				<span class="rounded-xs bg-indigo-100 px-1 py-0.5 font-mono text-[9px] font-bold text-indigo-800">
+					{authState.isDemoMode ? 'Read-Only Training' : 'Conformal P10–P90'}
+				</span>
+			</div>
+
+			<div class="grid grid-cols-[1fr_118px] items-center gap-x-2 py-0.5">
+				<span class="text-xs font-medium text-[var(--text-primary)]">Pre-Trained Suite</span>
+				<select
+					bind:value={mlModelConfig}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+				>
+					<option value="clastic">Clastic (Volve PIML)</option>
+					<option value="carbonate">Carbonate (Costa PIML)</option>
+				</select>
+			</div>
+
+			<NumericScrubber
+				label="Conformal Alpha (α)"
+				bind:value={conformalAlpha}
+				min={0.05}
+				max={0.4}
+				step={0.02}
+				decimals={2}
+				onrun={() => executePretrainedMlInference(false)}
+			/>
+
+			<button
+				type="button"
+				disabled={wellData.isCalculating}
+				onclick={() => executePretrainedMlInference(false)}
+				class="mt-1.5 h-7 w-full rounded-sm border border-indigo-600 bg-indigo-600 px-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+			>
+				{wellData.isCalculating ? 'Running PIML Inference...' : 'Run Pre-Trained Conformal Inference'}
+			</button>
+
+			{#if mlSummary}
+				<div class="mt-1.5 grid grid-cols-3 gap-1 rounded-sm border border-indigo-200 bg-indigo-50/50 p-1.5 text-center text-[10px]">
+					<div>
+						<div class="text-[var(--text-muted)]">Φ Band Width</div>
+						<div class="mono-num font-bold text-indigo-900">
+							±{fmtNum(mlSummary.phit_mean_width_vv / 2, 3)} v/v
+						</div>
+					</div>
+					<div>
+						<div class="text-[var(--text-muted)]">Sw Band Width</div>
+						<div class="mono-num font-bold text-purple-900">
+							±{fmtNum(mlSummary.sw_mean_width_vv / 2, 3)} v/v
+						</div>
+					</div>
+					<div>
+						<div class="text-[var(--text-muted)]">K P90/P10</div>
+						<div class="mono-num font-bold text-amber-900">
+							{fmtNum(mlSummary.perm_median_p90_p10_factor, 1)}×
+						</div>
+					</div>
+				</div>
 			{/if}
 		</ParameterSection>
 
@@ -323,4 +595,3 @@
 		</button>
 	</div>
 </div>
-

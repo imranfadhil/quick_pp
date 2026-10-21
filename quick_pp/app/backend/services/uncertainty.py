@@ -175,7 +175,7 @@ async def run_log_uncertainty_endpoint(inputs: LogUncertaintyInput):
 @router.post(
     "/reservoir_summary",
     summary="Calculate Stochastic P10/P50/P90 Reservoir Summary and Volumetrics",
-    operation_id="calculate_stochastic_reservoir_summary",
+    operation_id="calculate_stochastic_reservoir_summary_uncertainty",
 )
 async def calculate_stochastic_reservoir_summary_endpoint(
     inputs: StochasticReservoirSummaryInput,

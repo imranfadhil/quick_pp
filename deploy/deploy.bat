@@ -157,12 +157,9 @@ echo    Key File:   %KEY_FILE%
 echo.
 if not "%DOMAIN%"=="" (
     echo    App:        https://%DOMAIN%/
+    echo.
 )
-echo    Flower:     ssh -i "%KEY_FILE%" -L 5555:localhost:5555 root@%PUBLIC_IP%
-echo                ^(then open http://localhost:5555^)
-echo.
 echo    SSH:        ssh -i "%KEY_FILE%" root@%PUBLIC_IP%
 echo ===============================================================
 
 endlocal
-

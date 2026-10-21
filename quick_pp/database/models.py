@@ -23,6 +23,17 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    full_name: Mapped[Optional[str]] = mapped_column(String(255), default="")
+    role: Mapped[str] = mapped_column(String(50), nullable=False, default="user")
+    status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="FORCE_CHANGE_PASSWORD"
+    )
+    is_active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    mfa_enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mfa_secret: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    invite_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    invited_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_login_at: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         Text, default=datetime.now, nullable=False
     )

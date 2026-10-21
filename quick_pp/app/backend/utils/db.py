@@ -36,6 +36,16 @@ def get_db() -> Generator[Any, None, None]:
         with get_db() as db:
             ...
     """
+    global _DB_URL, _connector
+    env_url = os.environ.get("QPP_DATABASE_URL") or None
+    if env_url and env_url != _DB_URL:
+        try:
+            _connector.dispose()
+        except Exception:
+            pass
+        _DB_URL = env_url
+        _connector = DBConnector(_DB_URL)
+        _connector.setup_db()
     with _connector.get_session() as session:
         yield session
 

@@ -1,41 +1,20 @@
 import pandas as pd
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse, ORJSONResponse
 
 import quick_pp.database.objects as db_objects
-from quick_pp.app.backend.services.database import invalidate_well_cache
-from quick_pp.app.backend.task_queue.celery_app import celery_app, is_broker_available
-from quick_pp.app.backend.task_queue.tasks import process_fzi_data
+from quick_pp.app.backend.services.database import (
+    _get_merged_dataframe_sync,
+    invalidate_well_cache,
+)
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_list
-
-
-# Simple local sanitizer for JSON compatibility
-def _sanitize_for_json(obj):
-    import numpy as _np
-
-    if isinstance(obj, float):
-        if pd.isna(obj) or obj == float("inf") or obj == float("-inf"):
-            return None
-        return obj
-    elif isinstance(obj, dict):
-        return {k: _sanitize_for_json(v) for k, v in obj.items()}
-    elif isinstance(obj, (list, tuple)):
-        return [_sanitize_for_json(item) for item in obj]
-    elif isinstance(obj, (_np.floating, _np.integer)):
-        if isinstance(obj, _np.floating) and (
-            pd.isna(obj) or obj == float("inf") or obj == float("-inf")
-        ):
-            return None
-        return obj.item() if hasattr(obj, "item") else obj
-    return obj
 
 
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Rock Typing"])
 
 
 def _compute_fzi_data_sync(project_id: int) -> dict:
-    """Helper to compute FZI data synchronously (used by both the GET endpoint and sync fallback)."""
+    """Helper to compute FZI data synchronously."""
     with get_db() as session:
         proj = db_objects.Project.load(session, project_id=project_id)
 
@@ -53,7 +32,7 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
         available_cols = set()
 
         for well_name in all_well_names:
-            df = proj.get_well_data_optimized(well_name)
+            df = _get_merged_dataframe_sync(project_id, well_name)
             if df.empty:
                 continue
             any_non_empty_well = True
@@ -88,13 +67,38 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
             phit_col = None
             perm_col = None
             rock_flag_col = None
-            for col in df.columns:
-                if col.upper() in ["PHIT", "POROSITY", "POR"]:
+            for col in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR", "CORE_POR"):
+                if col in df.columns and df[col].notna().any():
                     phit_col = col
-                if col.upper() in ["PERM", "PERMEABILITY", "K"]:
+                    break
+            for col in ("PERM", "CPERM", "KLOGH", "PERMEABILITY", "K", "CORE_PERM"):
+                if col in df.columns and df[col].notna().any():
                     perm_col = col
-                if col.upper() == "ROCK_FLAG":
-                    rock_flag_col = col
+                    break
+            if "ROCK_FLAG" in df.columns:
+                rock_flag_col = "ROCK_FLAG"
+
+            # Fallback estimation for raw project logs when PHIT or PERM are not yet saved
+            if not phit_col:
+                if "RHOB" in df.columns and df["RHOB"].notna().any():
+                    rhob_s = pd.to_numeric(df["RHOB"], errors="coerce")
+                    est_phit = ((2.65 - rhob_s) / (2.65 - 1.0)).clip(0.001, 0.45)
+                    if "NPHI" in df.columns and df["NPHI"].notna().any():
+                        nphi_s = pd.to_numeric(df["NPHI"], errors="coerce").clip(0.001, 0.6)
+                        est_phit = ((est_phit + nphi_s) / 2.0).clip(0.001, 0.45)
+                    df = df.copy()
+                    df["_EST_PHIT"] = est_phit
+                    phit_col = "_EST_PHIT"
+                elif "NPHI" in df.columns and df["NPHI"].notna().any():
+                    df = df.copy()
+                    df["_EST_PHIT"] = pd.to_numeric(df["NPHI"], errors="coerce").clip(0.001, 0.45)
+                    phit_col = "_EST_PHIT"
+
+            if phit_col and not perm_col:
+                phit_s = pd.to_numeric(df[phit_col], errors="coerce").clip(0.001, 0.45)
+                df = df.copy()
+                df["_EST_PERM"] = (10.0 ** (14.0 * phit_s - 1.5)).clip(0.001, 10000.0)
+                perm_col = "_EST_PERM"
 
             if not phit_col or not perm_col:
                 continue
@@ -163,8 +167,8 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
         }
 
 
-@router.get("/fzi_data", summary="Get FZI data for plotting", response_class=ORJSONResponse)
-async def get_fzi_data(project_id: int):
+@router.get("/fzi_data", summary="Get FZI data for plotting")
+async def get_fzi_data(project_id: int) -> dict:
     """Return PHIT and PERM data for FZI plotting from all wells in the project."""
     try:
         return _compute_fzi_data_sync(project_id)
@@ -180,54 +184,21 @@ async def get_fzi_data(project_id: int):
 
 @router.post(
     "/fzi_data/generate",
-    summary="Initiate FZI data generation (sync by default, optional async)",
-    response_class=ORJSONResponse,
+    summary="Compute FZI data synchronously",
 )
-async def initiate_fzi_data_generation(project_id: int, async_task: bool = False):
-    """Compute FZI arrays synchronously by default, or start an async task if async_task=True."""
+async def initiate_fzi_data_generation(
+    project_id: int, async_task: bool = False
+) -> dict:
+    """Compute FZI arrays synchronously."""
     try:
-        if async_task and is_broker_available():
-            task = process_fzi_data.apply_async(args=(project_id,))
-            return ORJSONResponse(content={"task_id": task.id})
-
         result = _compute_fzi_data_sync(project_id)
-        return ORJSONResponse(
-            content={"task_id": "sync", "status": "success", "result": result}
-        )
+        return {"task_id": "sync", "status": "success", "result": result}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to initiate FZI generation: {e}"
         ) from e
-
-
-@router.get("/fzi_data/result/{task_id}", summary="Poll for FZI generation result")
-async def get_fzi_data_result(task_id: str):
-    try:
-        if task_id == "sync":
-            return JSONResponse(content={"status": "success", "result": {}})
-
-        app = celery_app
-        task = app.AsyncResult(task_id)
-
-        if task.state == "PENDING":
-            return JSONResponse(content={"status": "pending"})
-        elif task.state == "SUCCESS":
-            result = task.result
-            result = _sanitize_for_json(result)
-            return JSONResponse(content={"status": "success", "result": result})
-        elif task.state == "FAILURE":
-            error_msg = str(task.info) if task.info else "Unknown error"
-            return JSONResponse(
-                content={"status": "error", "error": error_msg}, status_code=200
-            )
-        else:
-            return JSONResponse(content={"status": "pending", "state": task.state})
-    except Exception as e:
-        return JSONResponse(
-            content={"status": "error", "error": str(e)}, status_code=500
-        )
 
 
 @router.post("/save_rock_flags", summary="Save rock flags for project wells")

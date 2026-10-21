@@ -97,7 +97,7 @@ uv pip install -e ".[core]"
 # Add machine learning & conformal prediction (MLflow, MAPIE, imbalanced-learn)
 uv pip install -e ".[ml]"
 
-# Add FastAPI web backend, Celery worker & database layer
+# Add FastAPI web backend, MCP server & database layer
 uv pip install -e ".[app]"
 
 # Everything (core + ml + app + Jupyter notebooks)

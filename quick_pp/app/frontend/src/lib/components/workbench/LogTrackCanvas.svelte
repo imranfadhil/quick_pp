@@ -3,12 +3,53 @@
 	import { browser } from '$app/environment';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
-	import { PETRO_COLORS, ZONE_BAND_COLORS } from '$lib/utils/petrophysicsColors';
+	import {
+		GR_EARTH_SHADE_BANDS,
+		LITHOLOGY_TRACK_SPECS,
+		MINERAL_TO_CURVE_MNEMONIC,
+		PETRO_COLORS,
+		ZONE_BAND_COLORS,
+		type LithologyTrackSpec
+	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum, fmtPerm } from '$lib/utils/formatters';
 
 	let plotContainer = $state<HTMLDivElement | null>(null);
 	let PlotlyLib: any = $state(null);
 	let plotReady = $state(false);
+	// Track actual Plotly plot area left/right insets for pixel-accurate header & overlay alignment
+	let plotAreaLeft = $state(54);
+	let plotAreaRight = $state(8);
+
+	function syncPlotBounds() {
+		if (!plotContainer) return;
+		const fullLayout = (plotContainer as any)._fullLayout;
+		const size = fullLayout?._size;
+		if (size && typeof size.l === 'number' && typeof size.w === 'number') {
+			plotAreaLeft = size.l;
+			plotAreaRight = Math.max(0, plotContainer.clientWidth - (size.l + size.w));
+		}
+	}
+
+	$effect(() => {
+		if (!browser || !plotContainer) return;
+		let rafId = 0;
+		const ro = new ResizeObserver(() => {
+			cancelAnimationFrame(rafId);
+			rafId = requestAnimationFrame(() => {
+				if (!plotContainer) return;
+				if (PlotlyLib && (plotContainer as any)._fullLayout) {
+					PlotlyLib.Plots.resize(plotContainer).then(syncPlotBounds).catch(syncPlotBounds);
+				} else {
+					syncPlotBounds();
+				}
+			});
+		});
+		ro.observe(plotContainer);
+		return () => {
+			cancelAnimationFrame(rafId);
+			ro.disconnect();
+		};
+	});
 
 	// Track visibility toggles
 	let showHcCorrected = $state(true);
@@ -91,6 +132,106 @@
 		return intervals;
 	});
 
+	function isDuplicateOf(a: (number | null)[], b: (number | null)[]): boolean {
+		if (a.length === 0 || a.length !== b.length) return false;
+		let validPairs = 0;
+		for (let i = 0; i < a.length; i++) {
+			const va = a[i];
+			const vb = b[i];
+			if (va !== null && vb !== null) {
+				validPairs++;
+				if (Math.abs(va - vb) > 1e-4) return false;
+			}
+		}
+		return validPairs > 0;
+	}
+
+	function resolveActiveLithoSpecs(indices: number[]): Array<{
+		spec: LithologyTrackSpec;
+		arr: (number | null)[];
+	}> {
+		const pick = (mnemonic: string): (number | null)[] => {
+			const arr = wellData.curves[mnemonic];
+			if (!arr) return [];
+			return indices.map((i) => (Number.isFinite(arr[i]) ? arr[i] : null));
+		};
+
+		const vcalcCheck = pick('VCALC');
+		const vdoloCheck = pick('VDOLO');
+		const hasCarbonateCols =
+			vcalcCheck.some((v) => v !== null && v > 1e-4) ||
+			vdoloCheck.some((v) => v !== null && v > 1e-4);
+
+		const activeModel = workbench.lithoParams.model;
+		const coalEnabled = workbench.lithoParams.enableCoalFlagging;
+		const allowedMultiMinSet = new Set(
+			workbench.lithoParams.minerals.map(
+				(m) => MINERAL_TO_CURVE_MNEMONIC[m.toUpperCase()] ?? `V${m.toUpperCase()}`
+			)
+		);
+		if (coalEnabled) {
+			allowedMultiMinSet.add('VCOAL');
+		}
+
+		const out: Array<{ spec: LithologyTrackSpec; arr: (number | null)[] }> = [];
+
+		for (const spec of LITHOLOGY_TRACK_SPECS) {
+			if (activeModel === 'multi_mineral' && !allowedMultiMinSet.has(spec.mnemonic)) {
+				continue;
+			}
+			if (
+				activeModel === 'ssc' &&
+				!hasCarbonateCols &&
+				!['VCLAY', 'VSILT', 'VSAND', ...(coalEnabled ? ['VCOAL'] : [])].includes(spec.mnemonic)
+			) {
+				continue;
+			}
+			if (
+				activeModel === 'vsh_gr' &&
+				!hasCarbonateCols &&
+				!['VCLAY', 'VSAND', ...(coalEnabled ? ['VCOAL'] : [])].includes(spec.mnemonic)
+			) {
+				continue;
+			}
+
+			let arr = pick(spec.mnemonic);
+			if (!arr.some((v) => v !== null && v > 1e-4) && spec.altMnemonic) {
+				arr = pick(spec.altMnemonic);
+			}
+			if (!arr.some((v) => v !== null && v > 1e-4)) continue;
+
+			// Guard against legacy seeded duplicate VSAND==VCALC or VSILT==VDOLO on carbonate wells
+			if (
+				spec.mnemonic === 'VSAND' &&
+				activeModel !== 'ssc' &&
+				vcalcCheck.some((v) => v !== null && v > 1e-4) &&
+				isDuplicateOf(arr, vcalcCheck)
+			) {
+				continue;
+			}
+			if (
+				spec.mnemonic === 'VSILT' &&
+				activeModel !== 'ssc' &&
+				vdoloCheck.some((v) => v !== null && v > 1e-4) &&
+				isDuplicateOf(arr, vdoloCheck)
+			) {
+				continue;
+			}
+
+			out.push({ spec, arr });
+		}
+		return out;
+	}
+
+	let activeLithoSpecs = $derived.by(() => {
+		void wellData.curves;
+		void wellData.visibleIndices;
+		void workbench.lithoParams.model;
+		void workbench.lithoParams.minerals;
+		void workbench.lithoParams.enableCoalFlagging;
+		return resolveActiveLithoSpecs(wellData.visibleIndices);
+	});
+
 	function buildTracesAndLayout() {
 		const indices = wellData.visibleIndices;
 		const deptAll = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
@@ -105,9 +246,30 @@
 
 		const traces: any[] = [];
 
-		// Track 1 (xaxis): GR (0-150), CALI (6-16), SP
+		// Track 1 (xaxis): GR (0-200) with Earth-Shade bands (light low GR -> dark high GR), CALI (6-16), SP
 		const gr = pick('GR');
 		if (gr.length) {
+			for (let b = 0; b < GR_EARTH_SHADE_BANDS.length; b++) {
+				const band = GR_EARTH_SHADE_BANDS[b];
+				const clampedGr = gr.map((v) =>
+					v !== null && Number.isFinite(v) ? Math.max(0, Math.min(v, band.maxGr)) : null
+				);
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: `GR_BAND_${band.maxGr}`,
+					x: clampedGr,
+					y: depth,
+					xaxis: 'x',
+					yaxis: 'y',
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					fill: b === 0 ? 'tozerox' : 'tonextx',
+					fillcolor: band.fillRgba,
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+			}
+
 			traces.push({
 				type: 'scattergl',
 				mode: 'lines',
@@ -117,8 +279,6 @@
 				xaxis: 'x',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.gr, width: 1.4 },
-				fill: 'tozerox',
-				fillcolor: 'rgba(21, 128, 61, 0.12)',
 				hovertemplate: 'GR: %{x:.1f} gAPI<extra></extra>'
 			});
 		}
@@ -128,7 +288,7 @@
 				type: 'scattergl',
 				mode: 'lines',
 				name: 'CALI',
-				x: cali.map((v) => (v !== null ? (v - 6) * 15 : null)), // normalized onto 0-150 track
+				x: cali.map((v) => (v !== null ? (v - 6) * 20 : null)), // normalized onto 0-200 track
 				y: depth,
 				xaxis: 'x',
 				yaxis: 'y',
@@ -160,15 +320,51 @@
 			}
 		}
 
-		// Track 3 (xaxis3 & xaxis30 overlay): NPHI (0.45 to -0.15) & RHOB (1.95 to 2.95)
-		// Normalize RHOB onto NPHI scale [0.45 -> -0.15] using standard limestone matrix: NPHI_eq = (2.71 - RHOB) / 1.71
+		// Track 3 (xaxis3): NPHI (0.45 -> -0.15, right-to-left) & RHOB (1.95 -> 2.95, left-to-right)
+		// Normalize RHOB onto NPHI scale [0.45 -> -0.15]: NPHI_eq = 0.45 - ((RHOB - 1.95) / 1.0) * 0.6
 		const nphi = pick('NPHI');
 		const rhob = pick('RHOB');
 		const rhobAsNphi = rhob.map((r) => (r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null));
 
+		if (nphi.length && rhob.length) {
+			// Gas Crossover Shading: fill yellow ONLY where NPHI crosses to the right of RHOB (nphi < rhobAsNphi)
+			const gasXoverTop = depth.map((_, i) => {
+				const n = nphi[i];
+				const rEq = rhobAsNphi[i];
+				if (n === null || rEq === null) return null;
+				return n < rEq ? rEq : n;
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'GAS_XOVER_BASE',
+				x: nphi,
+				y: depth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { width: 0, color: 'rgba(0,0,0,0)' },
+				hoverinfo: 'skip',
+				showlegend: false
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'GAS_XOVER',
+				x: gasXoverTop,
+				y: depth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				fill: 'tonextx',
+				fillcolor: 'rgba(250, 204, 21, 0.52)',
+				line: { width: 0, color: 'rgba(0,0,0,0)' },
+				hoverinfo: 'skip',
+				showlegend: false
+			});
+		}
+
 		if (nphi.length) {
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'NPHI',
 				x: nphi,
@@ -181,7 +377,7 @@
 		}
 		if (rhob.length) {
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'RHOB',
 				x: rhobAsNphi,
@@ -189,13 +385,11 @@
 				y: depth,
 				xaxis: 'x3',
 				yaxis: 'y',
-				fill: nphi.length ? 'tonextx' : undefined,
-				fillcolor: 'rgba(253, 224, 71, 0.22)',
 				line: { color: PETRO_COLORS.rhob, width: 1.4 },
 				hovertemplate: 'RHOB: %{customdata:.3f} g/cc<extra></extra>'
 			});
 		}
-		if (showHcCorrected) {
+		if (showHcCorrected && workbench.lithoParams.enableHcCorrection) {
 			const nphiHc = pick('NPHI_HC');
 			const rhobHc = pick('RHOB_HC');
 			if (nphiHc.some((v) => v !== null)) {
@@ -227,76 +421,49 @@
 			}
 		}
 
-		// Track 4 (xaxis4): Evaluated Lithology & Porosity (VCLAY, VSILT, VSAND stacked + PHIE + CPORE)
-		const vclay = pick('VCLAY').length ? pick('VCLAY') : pick('VSHALE');
-		const vsilt = pick('VSILT');
-		const vsand = pick('VSAND');
-		const phie = pick('PHIE').length ? pick('PHIE') : pick('PHIT');
+		// Track 4 (xaxis4): Evaluated Lithology & Porosity (stacked mineral volumes + PHIT + CPORE)
+		const phit = pick('PHIT').length ? pick('PHIT') : pick('PHIE');
+		const lithoToPlot = resolveActiveLithoSpecs(indices);
+		let cumVol = new Array(depth.length).fill(0);
+		let hasPrevLithTrace = false;
 
-		if (vclay.some((v) => v !== null)) {
+		for (const { spec, arr } of lithoToPlot) {
+			const rawVals = depth.map((_, i) => {
+				const v = arr[i];
+				return v !== null && Number.isFinite(v) && v > 0 ? v : 0;
+			});
+			const nextCum = depth.map((_, i) => Math.min(1, cumVol[i] + rawVals[i]));
+
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
-				name: 'VCLAY',
-				x: vclay,
+				name: spec.mnemonic,
+				x: nextCum,
+				customdata: rawVals,
 				y: depth,
 				xaxis: 'x4',
 				yaxis: 'y',
-				fill: 'tozerox',
-				fillcolor: 'rgba(148, 163, 184, 0.55)',
-				line: { color: PETRO_COLORS.shaleStroke, width: 1 }
+				fill: hasPrevLithTrace ? 'tonextx' : 'tozerox',
+				fillcolor: spec.fillRgba,
+				line: { color: spec.strokeHex, width: 0.9 },
+				hovertemplate: `${spec.mnemonic} (${spec.shortLabel}): %{customdata:.3f} v/v<extra></extra>`
 			});
+
+			cumVol = nextCum;
+			hasPrevLithTrace = true;
 		}
-		if (vsilt.some((v) => v !== null) && vclay.some((v) => v !== null)) {
-			const vClaySilt = depth.map((_, i) => {
-				const c = vclay[i] ?? 0;
-				const s = vsilt[i] ?? 0;
-				return Math.min(1, c + s);
-			});
-			traces.push({
-				type: 'scatter',
-				mode: 'lines',
-				name: 'VSILT',
-				x: vClaySilt,
-				y: depth,
-				xaxis: 'x4',
-				yaxis: 'y',
-				fill: 'tonextx',
-				fillcolor: 'rgba(253, 186, 116, 0.55)',
-				line: { color: PETRO_COLORS.siltStroke, width: 1 }
-			});
-		}
-		if (vsand.some((v) => v !== null)) {
-			const vTotalMatrix = depth.map((_, i) => {
-				const c = vclay[i] ?? 0;
-				const s = vsilt[i] ?? 0;
-				const sd = vsand[i] ?? 0;
-				return Math.min(1, c + s + sd);
-			});
-			traces.push({
-				type: 'scatter',
-				mode: 'lines',
-				name: 'VSAND',
-				x: vTotalMatrix,
-				y: depth,
-				xaxis: 'x4',
-				yaxis: 'y',
-				fill: 'tonextx',
-				fillcolor: 'rgba(253, 224, 71, 0.55)',
-				line: { color: PETRO_COLORS.sandStroke, width: 1 }
-			});
-		}
-		if (phie.some((v) => v !== null)) {
+
+		if (phit.some((v) => v !== null)) {
 			traces.push({
 				type: 'scattergl',
 				mode: 'lines',
-				name: 'PHIE',
-				x: phie,
+				name: 'PHIT',
+				x: phit,
 				y: depth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.phie, width: 1.6 },
-				hovertemplate: 'PHIE: %{x:.3f} v/v<extra></extra>'
+				hovertemplate: 'PHIT: %{x:.3f} v/v<extra></extra>'
 			});
 		}
 
@@ -378,7 +545,7 @@
 			}
 		}
 
-		// Track 5 (xaxis5): Permeability (Log 0.01 - 10000 mD) + PERM_BLK + CPERM points
+		// Track 5 (xaxis5): Permeability (Log 0.01 - 10000 mD) + PERM_TRANS + PERM_BLK + CPERM points
 		const perm = pick('PERM');
 		if (perm.some((v) => v !== null && v > 0)) {
 			traces.push({
@@ -391,6 +558,46 @@
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.perm, width: 1.5 },
 				hovertemplate: 'PERM: %{x:.2f} mD<extra></extra>'
+			});
+		}
+		const permTrans = pick('PERM_TRANS');
+		if (permTrans.some((v) => v !== null && v > 0)) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'PERM_TRANS',
+				x: permTrans.map((v) => (v !== null && v > 0 ? v : null)),
+				y: depth,
+				xaxis: 'x5',
+				yaxis: 'y',
+				line: { color: '#7C3AED', width: 1.6, dash: 'dash' },
+				hovertemplate: 'PERM_TRANS: %{x:.2f} mD<extra></extra>'
+			});
+		}
+		const permP10 = pick('PERM_P10');
+		const permP90 = pick('PERM_P90');
+		if (permP10.some((v) => v !== null && v > 0) && permP90.some((v) => v !== null && v > 0)) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'PERM_P10',
+				x: permP10.map((v) => (v !== null && v > 0 ? v : null)),
+				y: depth,
+				xaxis: 'x5',
+				yaxis: 'y',
+				line: { color: '#D97706', width: 1.0, dash: 'dot' },
+				hovertemplate: 'PERM P10: %{x:.2f} mD<extra></extra>'
+			});
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'PERM_P90',
+				x: permP90.map((v) => (v !== null && v > 0 ? v : null)),
+				y: depth,
+				xaxis: 'x5',
+				yaxis: 'y',
+				line: { color: '#D97706', width: 1.0, dash: 'dot' },
+				hovertemplate: 'PERM P90: %{x:.2f} mD<extra></extra>'
 			});
 		}
 		const permBlk = pick('PERM_BLK');
@@ -434,7 +641,7 @@
 				xaxis: 'x6',
 				yaxis: 'y',
 				fill: 'tozerox',
-				fillcolor: 'rgba(22, 163, 74, 0.22)',
+				fillcolor: PETRO_COLORS.waterFill,
 				line: { color: PETRO_COLORS.water, width: 1.5 },
 				hovertemplate: 'Sw: %{x:.3f} v/v<extra></extra>'
 			});
@@ -551,13 +758,13 @@
 			gridcolor: gridColor,
 			zeroline: false,
 			side: 'top',
-			tickfont: { family: 'JetBrains Mono', size: 9, color: '#64748B' },
-			titlefont: { family: 'Inter', size: 10, color: '#0F172A' },
+			showticklabels: false,
 			fixedrange: true
 		};
 
 		const layout: any = {
-			margin: { l: 54, r: 8, t: 38, b: 8 },
+			autosize: true,
+			margin: { l: 54, r: 8, t: 6, b: 8, autoexpand: false },
 			paper_bgcolor: '#FFFFFF',
 			plot_bgcolor: '#FFFFFF',
 			showlegend: false,
@@ -568,46 +775,63 @@
 				range: yRange,
 				showgrid: true,
 				gridcolor: gridColor,
+				automargin: false,
 				tickfont: { family: 'JetBrains Mono', size: 10, color: '#0F172A' },
 				title: { text: 'DEPTH (m)', font: { family: 'Inter', size: 10, color: '#64748B' } }
 			},
 			xaxis: {
 				...axisCommon,
 				domain: [0.0, 0.155],
-				range: [0, 150],
-				title: { text: 'GR (0–150)', font: { size: 10, color: PETRO_COLORS.gr } }
+				range: [0, 200],
+				dtick: 50
 			},
 			xaxis2: {
 				...axisCommon,
 				domain: [0.168, 0.323],
 				type: 'log',
 				range: [Math.log10(0.2), Math.log10(2000)],
-				title: { text: 'RT (0.2–2k)', font: { size: 10, color: PETRO_COLORS.rt } }
+				dtick: 1,
+				gridcolor: '#CBD5E1',
+				gridwidth: 1.2,
+				minor: {
+					dtick: 'D1',
+					showgrid: true,
+					gridcolor: '#F1F5F9',
+					gridwidth: 1
+				}
 			},
 			xaxis3: {
 				...axisCommon,
 				domain: [0.336, 0.491],
 				range: [0.45, -0.15],
-				title: { text: 'NPHI / RHOB', font: { size: 10, color: PETRO_COLORS.nphi } }
+				dtick: 0.15
 			},
 			xaxis4: {
 				...axisCommon,
 				domain: [0.504, 0.659],
 				range: [0, 1],
-				title: { text: 'LITH / PHIE', font: { size: 10, color: '#0F172A' } }
+				dtick: 0.25
 			},
 			xaxis5: {
 				...axisCommon,
 				domain: [0.672, 0.827],
 				type: 'log',
 				range: [Math.log10(0.01), Math.log10(10000)],
-				title: { text: 'PERM (mD)', font: { size: 10, color: PETRO_COLORS.perm } }
+				dtick: 1,
+				gridcolor: '#CBD5E1',
+				gridwidth: 1.2,
+				minor: {
+					dtick: 'D1',
+					showgrid: true,
+					gridcolor: '#F1F5F9',
+					gridwidth: 1
+				}
 			},
 			xaxis6: {
 				...axisCommon,
 				domain: [0.84, 1.0],
 				range: [1, 0],
-				title: { text: 'SW / PAY', font: { size: 10, color: PETRO_COLORS.water } }
+				dtick: 0.25
 			}
 		};
 
@@ -624,6 +848,9 @@
 		void wellData.coreSamples;
 		void brushedIntervals;
 		void showHcCorrected;
+		void workbench.lithoParams.enableHcCorrection;
+		void workbench.lithoParams.model;
+		void workbench.lithoParams.minerals;
 
 		const { traces, layout } = buildTracesAndLayout();
 		PlotlyLib.react(plotContainer, traces, layout, {
@@ -632,6 +859,7 @@
 			scrollZoom: true,
 			modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d']
 		}).then(() => {
+			syncPlotBounds();
 			if (!plotReady && plotContainer) {
 				plotReady = true;
 				(plotContainer as any).on('plotly_hover', (ev: any) => {
@@ -641,6 +869,7 @@
 					}
 				});
 				(plotContainer as any).on('plotly_relayout', (ev: any) => {
+					syncPlotBounds();
 					if (ev['yaxis.range[0]'] !== undefined && ev['yaxis.range[1]'] !== undefined) {
 						yRange = [Number(ev['yaxis.range[0]']), Number(ev['yaxis.range[1]'])];
 					} else if (Array.isArray(ev['yaxis.range'])) {
@@ -651,7 +880,7 @@
 		});
 	});
 
-	// Convert a depth value to CSS top percentage inside the plot area (margin top=38px, bottom=8px)
+	// Convert a depth value to CSS top percentage inside the plot area (margin top=6px, bottom=8px)
 	function depthToPercent(depth: number): number | null {
 		const [maxD, minD] = yRange;
 		if (!Number.isFinite(maxD) || !Number.isFinite(minD) || maxD === minD) return null;
@@ -673,8 +902,8 @@
 
 		draggingMarker = { kind, id, name, depth: initialDepth };
 		const rect = plotContainer.getBoundingClientRect();
-		const plotTop = rect.top + 38;
-		const plotHeight = Math.max(1, rect.height - 46);
+		const plotTop = rect.top + 6;
+		const plotHeight = Math.max(1, rect.height - 14);
 		const [maxD, minD] = yRange;
 
 		const onMove = (moveEvent: PointerEvent) => {
@@ -724,21 +953,32 @@
 	<div
 		class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 text-[11px]"
 	>
-		<div class="flex items-center gap-2">
+		<div class="flex items-center gap-2 overflow-hidden">
 			<span class="font-semibold text-[var(--text-primary)]">
 				{workbench.wellId ?? 'No Well Selected'}
 			</span>
 			<span class="mono-num text-[var(--text-muted)]">
-				[{fmtDepth( Math.min(yRange[0], yRange[1]) )} – {fmtDepth( Math.max(yRange[0], yRange[1]) )}]
+				[{fmtDepth(Math.min(yRange[0], yRange[1]))} – {fmtDepth(Math.max(yRange[0], yRange[1]))}]
 			</span>
-			{#if wellData.tops.length > 0}
-				<span class="text-[10px] text-[var(--text-muted)]">
-					• {wellData.tops.length} Tops (drag dashed lines to adjust)
-				</span>
+			{#if activeLithoSpecs.length > 0}
+				<div class="hidden xl:flex items-center gap-1 border-l border-[var(--border-hairline)] pl-2">
+					{#each activeLithoSpecs as item (item.spec.mnemonic)}
+						<span
+							class="inline-flex items-center gap-1 rounded-xs border border-slate-200 bg-white px-1 py-0 text-[9px] font-medium text-slate-700"
+							title="{item.spec.mnemonic} ({item.spec.shortLabel})"
+						>
+							<span
+								class="inline-block h-2 w-2 rounded-2xs border"
+								style="background-color: {item.spec.fillHex}; border-color: {item.spec.strokeHex};"
+							></span>
+							<span>{item.spec.mnemonic}</span>
+						</span>
+					{/each}
+				</div>
 			{/if}
 		</div>
 
-		<div class="flex items-center gap-2">
+		<div class="flex shrink-0 items-center gap-2">
 			<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer">
 				<input
 					type="checkbox"
@@ -757,12 +997,186 @@
 		</div>
 	</div>
 
+	<!-- Vertically Stacked Petrophysical Track Scale Headers (aligned with Plotly track domains) -->
+	<div
+		style="padding-left: {plotAreaLeft}px; padding-right: {plotAreaRight}px;"
+		class="flex shrink-0 items-stretch border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[9px] leading-tight"
+	>
+		<div class="relative flex h-[40px] w-full">
+			<!-- Track 1: GR (0 - 200 gAPI) -->
+			<div
+				style="left: 0%; width: 15.5%;"
+				class="absolute inset-y-0 flex flex-col justify-end border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+			>
+				<div
+					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+					style="color: {PETRO_COLORS.gr}"
+				>
+					<span>0</span>
+					<span class="font-sans text-[9.5px] font-bold">GR (gAPI) ►</span>
+					<span>200</span>
+				</div>
+				<div class="h-0.5 w-full rounded-full" style="background: {PETRO_COLORS.gr}"></div>
+			</div>
+
+			<!-- Track 2: RT (0.2 - 2000 ohm.m, 4-decade log scale) -->
+			<div
+				style="left: 16.8%; width: 15.5%;"
+				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+			>
+				<div
+					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+					style="color: {PETRO_COLORS.rt}"
+				>
+					<span>0.2</span>
+					<span class="font-sans text-[9px] font-bold">RT (Ω·m) ►</span>
+					<span>2000</span>
+				</div>
+				<div class="flex flex-col">
+					<div class="relative h-3 w-full text-[7.5px] font-medium text-slate-500 mono-num">
+						{#each [[1, '1'], [10, '10'], [100, '100'], [1000, '1k']] as [val, lbl]}
+							{@const pct = ((Math.log10(Number(val)) - Math.log10(0.2)) / (Math.log10(2000) - Math.log10(0.2))) * 100}
+							<span
+								style="left: {pct}%;"
+								class="absolute bottom-0.5 -translate-x-1/2 leading-none"
+							>
+								{lbl}
+							</span>
+							<span
+								style="left: {pct}%; background: {PETRO_COLORS.rt};"
+								class="absolute bottom-0 h-1 w-[1px] -translate-x-1/2 opacity-70"
+							></span>
+						{/each}
+					</div>
+					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.rt}"></div>
+				</div>
+			</div>
+
+			<!-- Track 3: Vertically Stacked NPHI (0.45 -> -0.15) & RHOB (1.95 -> 2.95) -->
+			<div
+				style="left: 33.6%; width: 15.5%;"
+				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+			>
+				<!-- Top row: RHOB (1.95 -> 2.95 g/cc, increases left to right) -->
+				<div class="flex flex-col">
+					<div
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+						style="color: {PETRO_COLORS.rhob}"
+					>
+						<span>1.95</span>
+						<span class="font-sans text-[8.5px] font-bold">RHOB (g/cc) ►</span>
+						<span>2.95</span>
+					</div>
+					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.rhob}"></div>
+				</div>
+
+				<!-- Bottom row: NPHI (0.45 <- -0.15 v/v, increases right to left) -->
+				<div class="flex flex-col">
+					<div
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+						style="color: {PETRO_COLORS.nphi}"
+					>
+						<span>0.45</span>
+						<span class="font-sans text-[8.5px] font-bold">◄ NPHI (v/v)</span>
+						<span>-0.15</span>
+					</div>
+					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.nphi}"></div>
+				</div>
+			</div>
+
+			<!-- Track 4: LITH (0 -> 1 v/v) & PHIT / CPORE -->
+			<div
+				style="left: 50.4%; width: 15.5%;"
+				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+			>
+				<div class="flex flex-col">
+					<div class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-slate-700">
+						<span>0</span>
+						<span class="font-sans text-[9px] font-bold">LITHOLOGY ►</span>
+						<span>1.0</span>
+					</div>
+					<div class="h-[1.5px] w-full bg-slate-400"></div>
+				</div>
+				<div class="flex flex-col">
+					<div
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+						style="color: {PETRO_COLORS.phie}"
+					>
+						<span>0</span>
+						<span class="font-sans text-[9px] font-bold">PHIT / CORE ►</span>
+						<span>1.0</span>
+					</div>
+					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.phie}"></div>
+				</div>
+			</div>
+
+			<!-- Track 5: PERM & PERM_TRANS (0.01 - 10000 mD, 6-decade log scale) -->
+			<div
+				style="left: 67.2%; width: 15.5%;"
+				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+			>
+				<div
+					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+					style="color: {PETRO_COLORS.perm}"
+				>
+					<span>0.01</span>
+					<span class="font-sans text-[8.5px] font-bold">
+						PERM{#if wellData.curves['PERM_TRANS']}<span style="color: #7C3AED"> / P_TR</span>{/if} (mD) ►
+					</span>
+					<span>10k</span>
+				</div>
+				<div class="flex flex-col">
+					<div class="relative h-3 w-full text-[7.5px] font-medium text-slate-500 mono-num">
+						{#each [[0.1, '.1'], [1, '1'], [10, '10'], [100, '100'], [1000, '1k']] as [val, lbl]}
+							{@const pct = ((Math.log10(Number(val)) - Math.log10(0.01)) / (Math.log10(10000) - Math.log10(0.01))) * 100}
+							<span
+								style="left: {pct}%;"
+								class="absolute bottom-0.5 -translate-x-1/2 leading-none"
+							>
+								{lbl}
+							</span>
+							<span
+								style="left: {pct}%; background: {PETRO_COLORS.perm};"
+								class="absolute bottom-0 h-1 w-[1px] -translate-x-1/2 opacity-70"
+							></span>
+						{/each}
+					</div>
+					<div class="flex w-full items-center gap-0.5">
+						<div class="h-[1.5px] flex-1" style="background: {PETRO_COLORS.perm}"></div>
+						{#if wellData.curves['PERM_TRANS']}
+							<div class="h-[1.5px] flex-1 border-t border-dashed border-[#7C3AED]"></div>
+						{/if}
+					</div>
+				</div>
+			</div>
+
+			<!-- Track 6: SW (1.0 <- 0.0 v/v) & PAY -->
+			<div
+				style="left: 84.0%; width: 16.0%;"
+				class="absolute inset-y-0 flex flex-col justify-end border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+			>
+				<div
+					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+					style="color: {PETRO_COLORS.water}"
+				>
+					<span>1.0</span>
+					<span class="font-sans text-[9.5px] font-bold">◄ SW / PAY</span>
+					<span>0.0</span>
+				</div>
+				<div class="h-0.5 w-full rounded-full" style="background: {PETRO_COLORS.water}"></div>
+			</div>
+		</div>
+	</div>
+
 	<!-- Multi-Track Plot Canvas + Interactive Draggable Formation Tops & Fluid Contacts -->
 	<div class="relative min-h-0 flex-1 overflow-hidden">
 		<div bind:this={plotContainer} class="h-full w-full"></div>
 
-		<!-- Overlay container aligned with Plotly's plot area (top: 38px, bottom: 8px, left: 54px, right: 8px) -->
-		<div class="pointer-events-none absolute top-[38px] right-[8px] bottom-[8px] left-[54px] overflow-hidden">
+		<!-- Overlay container aligned with Plotly's plot area -->
+		<div
+			style="left: {plotAreaLeft}px; right: {plotAreaRight}px;"
+			class="pointer-events-none absolute top-[6px] bottom-[8px] overflow-hidden"
+		>
 			{#each wellData.tops as top (top.id)}
 				{@const activeDepth =
 					draggingMarker?.kind === 'top' && draggingMarker.id === top.id
@@ -847,14 +1261,32 @@
 				<strong>VCLAY:</strong>
 				{fmtNum(readout.VCLAY, 3)}
 			</span>
+			{#if readout.VCALC !== null && readout.VCALC !== undefined && readout.VCALC > 1e-4}
+				<span>
+					<strong style="color: {PETRO_COLORS.calcStroke}">VCALC:</strong>
+					{fmtNum(readout.VCALC, 3)}
+				</span>
+			{/if}
+			{#if readout.VDOLO !== null && readout.VDOLO !== undefined && readout.VDOLO > 1e-4}
+				<span>
+					<strong style="color: {PETRO_COLORS.doloStroke}">VDOLO:</strong>
+					{fmtNum(readout.VDOLO, 3)}
+				</span>
+			{/if}
 			<span>
-				<strong style="color: {PETRO_COLORS.phie}">PHIE:</strong>
-				{fmtNum(readout.PHIE ?? readout.PHIT, 3)}
+				<strong style="color: {PETRO_COLORS.phie}">PHIT:</strong>
+				{fmtNum(readout.PHIT ?? readout.PHIE, 3)}
 			</span>
 			<span>
 				<strong style="color: {PETRO_COLORS.perm}">PERM:</strong>
 				{fmtPerm(readout.PERM)}
 			</span>
+			{#if readout.PERM_TRANS !== null && readout.PERM_TRANS !== undefined}
+				<span>
+					<strong style="color: #7C3AED">PERM_TRANS:</strong>
+					{fmtPerm(readout.PERM_TRANS)}
+				</span>
+			{/if}
 			<span>
 				<strong style="color: {PETRO_COLORS.water}">SW:</strong>
 				{fmtNum(readout.SWT ?? readout.SWE, 3)}
@@ -872,4 +1304,3 @@
 		{/if}
 	</div>
 </div>
-

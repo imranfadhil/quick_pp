@@ -248,6 +248,15 @@ def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.DataFrame) -> dict:
 
 
 # 6. Train pipeline
+# 6. Train pipeline
+def is_training_disabled() -> bool:
+    """Return True if heavy model training is disabled (e.g. in the public Hugging Face Spaces demo)."""
+    return (
+        os.getenv("QPP_DEMO_MODE", "false").lower() in ("1", "true", "yes")
+        or os.getenv("QPP_DISABLE_TRAINING", "false").lower() in ("1", "true", "yes")
+    )
+
+
 def train_pipeline(model_config: str, data_hash: str, env: str = "local"):
     """Execute the end-to-end model training pipeline.
 
@@ -265,6 +274,14 @@ def train_pipeline(model_config: str, data_hash: str, env: str = "local"):
     logger.info(
         f"Starting train_pipeline with model_config={model_config}, data_hash={data_hash}, env={env}"
     )
+
+    if is_training_disabled():
+        msg = (
+            "Model training (train_pipeline.py) is disabled in the public interactive demo "
+            "(QPP_DEMO_MODE=true). Please use pre-trained PIML & Conformal Prediction inference instead."
+        )
+        logger.warning(msg)
+        raise PermissionError(msg)
 
     # Check if the model_config exists in MODELLING_CONFIG
     if model_config not in MODELLING_CONFIG:

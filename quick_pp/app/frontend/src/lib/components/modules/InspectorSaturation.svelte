@@ -5,11 +5,42 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 
+	// Live preview of formation temperature and Rw at median depth from Salinity & Temp Gradient
+	let medianDepth = $derived.by(() => {
+		const dr = wellData.depthRange;
+		return 0.5 * (dr.min + dr.max);
+	});
+
+	let estimatedRwAtMedianDepth = $derived.by(() => {
+		const sp = workbench.saturationParams;
+		const d = medianDepth;
+		let tempC: number;
+		if (sp.measSystem === 'imperial') {
+			const tvdKft = (d * 3.28084) / 1000.0;
+			const tempF = sp.surfaceTemp + sp.tempGradient * tvdKft;
+			tempC = Math.max(5, Math.min(250, ((tempF - 32.0) * 5.0) / 9.0));
+		} else {
+			tempC = Math.max(5, Math.min(250, sp.surfaceTemp + sp.tempGradient * (d / 1000.0)));
+		}
+		const tempF = (tempC * 9.0) / 5.0 + 32.0;
+		const sal = Math.max(100, sp.waterSalinity);
+		const rw = Math.pow(400000.0 / (sal * tempF), 0.88);
+		return {
+			tempC: Number(tempC.toFixed(1)),
+			rw: Number(rw.toFixed(4))
+		};
+	});
+
 	async function executeSaturation(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const sp = workbench.saturationParams;
+		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+		const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
+		const cleanArr = (arr: number[]) =>
+			arr.length > 0 ? arr.map((v) => (Number.isFinite(v) ? v : null)) : undefined;
 
 		try {
 			const { data, error } = await api.POST(
@@ -20,8 +51,10 @@
 					},
 					body: {
 						method: sp.method,
+						rw_mode: sp.rwMode,
 						meas_system: sp.measSystem,
 						water_salinity: sp.waterSalinity,
+						rw: sp.rwPickett,
 						a: sp.a,
 						m: sp.m,
 						n: sp.n,
@@ -31,17 +64,28 @@
 						qv_method: sp.qvMethod,
 						cec_clay: sp.cecClay,
 						rho_dry_clay: sp.rhoDryClay,
+						depths: cleanArr(deptArr) as number[] | undefined,
+						phit: cleanArr(phitArr),
+						vclay: cleanArr(vclayArr),
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,
 						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
 						save: persist
-					}
+					} as any
 				}
 			);
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Saturation calculation failed'));
 			}
 			wellData.mergeComputedCurves(data.data, data.stats);
+			// If using Salinity & Temp Gradient mode, sync the median computed Rw to rwPickett for the Pickett Plot line
+			if (sp.rwMode === 'salinity_temp') {
+				const rwStat = (data.stats as any)?.RW;
+				const medRw = rwStat?.p50 ?? rwStat?.mean;
+				if (typeof medRw === 'number' && Number.isFinite(medRw) && medRw > 0) {
+					workbench.saturationParams.rwPickett = Number(medRw.toFixed(4));
+				}
+			}
 			if (persist) {
 				wellData.lastSavedMessage = 'Saturation Saved ✓';
 			}
@@ -59,7 +103,7 @@
 			title="Water Saturation Model"
 			badge={workbench.saturationParams.method === 'waxman_smits' ? 'WAXMAN-SMITS' : 'ARCHIE'}
 		>
-			<div class="grid grid-cols-[1fr_118px] items-center gap-x-2 py-0.5">
+			<div class="grid grid-cols-[1fr_130px] items-center gap-x-2 py-0.5">
 				<span class="text-xs font-medium text-[var(--text-primary)]">Primary Solver</span>
 				<select
 					bind:value={workbench.saturationParams.method}
@@ -70,7 +114,18 @@
 				</select>
 			</div>
 
-			<div class="grid grid-cols-[1fr_118px] items-center gap-x-2 py-0.5">
+			<div class="grid grid-cols-[1fr_130px] items-center gap-x-2 py-0.5">
+				<span class="text-xs font-medium text-[var(--text-primary)]">Rw Source Mode</span>
+				<select
+					bind:value={workbench.saturationParams.rwMode}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+				>
+					<option value="salinity_temp">Salinity & Temp Rw(z)</option>
+					<option value="pickett">Pickett Constant Rw</option>
+				</select>
+			</div>
+
+			<div class="grid grid-cols-[1fr_130px] items-center gap-x-2 py-0.5">
 				<span class="text-xs font-medium text-[var(--text-primary)]">Temp Units</span>
 				<select
 					bind:value={workbench.saturationParams.measSystem}
@@ -89,7 +144,6 @@
 				min={0.4}
 				max={2.5}
 				step={0.05}
-				onrun={() => executeSaturation(false)}
 			/>
 			<NumericScrubber
 				label="Cementation Exp (m)"
@@ -97,7 +151,6 @@
 				min={1.1}
 				max={3.5}
 				step={0.02}
-				onrun={() => executeSaturation(false)}
 			/>
 			<NumericScrubber
 				label="Saturation Exp (n)"
@@ -105,10 +158,11 @@
 				min={1.1}
 				max={3.5}
 				step={0.02}
-				onrun={() => executeSaturation(false)}
 			/>
 			<NumericScrubber
-				label="Pickett Rw Intercept"
+				label={workbench.saturationParams.rwMode === 'pickett'
+					? 'Pickett Rw (Active)'
+					: 'Pickett Line Rw'}
 				bind:value={workbench.saturationParams.rwPickett}
 				unit="ohm.m"
 				min={0.005}
@@ -118,7 +172,12 @@
 			/>
 		</ParameterSection>
 
-		<ParameterSection title="Salinity & Geothermal Gradient">
+		<ParameterSection
+			title="Salinity & Geothermal Gradient"
+			badge={workbench.saturationParams.rwMode === 'salinity_temp'
+				? `Rw ≈ ${estimatedRwAtMedianDepth.rw} Ω·m`
+				: 'Temp B(T) Only'}
+		>
 			<NumericScrubber
 				label="Water Salinity"
 				bind:value={workbench.saturationParams.waterSalinity}
@@ -127,48 +186,80 @@
 				max={250000}
 				step={500}
 				decimals={0}
-				onrun={() => executeSaturation(false)}
 			/>
 			<NumericScrubber
 				label="Temp Gradient"
 				bind:value={workbench.saturationParams.tempGradient}
-				unit="°/km"
-				min={10}
+				unit={workbench.saturationParams.measSystem === 'imperial' ? '°F/kft' : '°C/km'}
+				min={5}
 				max={80}
 				step={1.0}
-				onrun={() => executeSaturation(false)}
 			/>
 			<NumericScrubber
 				label="Surface Temp"
 				bind:value={workbench.saturationParams.surfaceTemp}
-				unit="°C"
+				unit={workbench.saturationParams.measSystem === 'imperial' ? '°F' : '°C'}
 				min={0}
-				max={50}
+				max={120}
 				step={1.0}
-				onrun={() => executeSaturation(false)}
 			/>
+			<div class="mt-1 flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px] text-[var(--text-secondary)]">
+				<span>
+					At {medianDepth.toFixed(0)} m: <strong class="mono-num">{estimatedRwAtMedianDepth.tempC}°C</strong> →
+					<strong class="mono-num text-[var(--accent-primary)]">Rw = {estimatedRwAtMedianDepth.rw} ohm.m</strong>
+				</span>
+				{#if workbench.saturationParams.rwMode === 'pickett'}
+					<button
+						type="button"
+						onclick={() => {
+							workbench.saturationParams.rwPickett = estimatedRwAtMedianDepth.rw;
+						}}
+						class="font-semibold text-blue-700 hover:underline"
+					>
+						Copy to Rw
+					</button>
+				{/if}
+			</div>
 		</ParameterSection>
 
 		{#if workbench.saturationParams.method === 'waxman_smits'}
-			<ParameterSection title="Shale Conductivity (B & Qv)">
-				<NumericScrubber
-					label="Clay CEC"
-					bind:value={workbench.saturationParams.cecClay}
-					unit="meq/g"
-					min={0.01}
-					max={1.5}
-					step={0.01}
-					onrun={() => executeSaturation(false)}
-				/>
-				<NumericScrubber
-					label="Dry Clay Density"
-					bind:value={workbench.saturationParams.rhoDryClay}
-					unit="g/cc"
-					min={2.4}
-					max={2.95}
-					step={0.01}
-					onrun={() => executeSaturation(false)}
-				/>
+			<ParameterSection
+				title="Shale Conductivity (B & Qv)"
+				badge={workbench.saturationParams.qvMethod === 'qvn' ? 'JUHASZ Qvn' : 'CLAY CEC Qv'}
+			>
+				<div class="mb-1 grid grid-cols-[1fr_130px] items-center gap-x-2 py-0.5">
+					<span class="text-xs font-medium text-[var(--text-primary)]">Qv Method</span>
+					<select
+						bind:value={workbench.saturationParams.qvMethod}
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+					>
+						<option value="cec">Clay CEC & Density</option>
+						<option value="qvn">Juhasz Normalized Qvn</option>
+					</select>
+				</div>
+
+				{#if workbench.saturationParams.qvMethod !== 'qvn'}
+					<NumericScrubber
+						label="Clay CEC"
+						bind:value={workbench.saturationParams.cecClay}
+						unit="meq/g"
+						min={0.01}
+						max={1.5}
+						step={0.01}
+					/>
+					<NumericScrubber
+						label="Dry Clay Density"
+						bind:value={workbench.saturationParams.rhoDryClay}
+						unit="g/cc"
+						min={2.4}
+						max={2.95}
+						step={0.01}
+					/>
+				{:else}
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px] text-[var(--text-secondary)]">
+						Computes normalized <strong class="mono-num">Qvn = VCLAY × PHIT_SH / PHIT</strong> from log-derived shale porosity (Juhasz, 1981).
+					</div>
+				{/if}
 			</ParameterSection>
 		{/if}
 
@@ -200,4 +291,3 @@
 		</button>
 	</div>
 </div>
-

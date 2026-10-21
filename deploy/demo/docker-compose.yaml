@@ -1,0 +1,36 @@
+services:
+  qpp-demo:
+    image: quick_pp-demo:latest
+    container_name: qpp-demo-app
+    build:
+      context: ../..
+      dockerfile: deploy/demo/Dockerfile
+    restart: unless-stopped
+    environment:
+      - QPP_DEMO_MODE=true
+      - QPP_DISABLE_TRAINING=true
+      - QPP_DATABASE_URL=sqlite:////code/data/quick_pp.db
+      - QPP_PRETRAINED_MODELS_PATH=/code/data/seed/pretrained_models.joblib
+      - PUBLIC_URL=${PUBLIC_URL:-}
+    # Bound to localhost by default so public access goes through Cloudflare Quick Tunnel
+    # or an existing host Nginx/Caddy reverse proxy. Set DEMO_BIND=0.0.0.0 to expose directly.
+    ports:
+      - "${DEMO_BIND:-127.0.0.1}:${DEMO_PORT:-7860}:7860"
+    networks:
+      - qpp-demo-network
+
+  # Cloudflare Quick Tunnel — free random *.trycloudflare.com HTTPS URL for the demo.
+  demo-quicktunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: qpp-demo-tunnel
+    restart: unless-stopped
+    depends_on:
+      - qpp-demo
+    command: tunnel --no-autoupdate --url http://qpp-demo:7860
+    networks:
+      - qpp-demo-network
+
+networks:
+  qpp-demo-network:
+    driver: bridge
+

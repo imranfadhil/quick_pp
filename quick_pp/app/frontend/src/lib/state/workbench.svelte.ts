@@ -4,8 +4,8 @@ export type SingleWellStep =
 	| 'litho-poro'
 	| 'perm'
 	| 'saturation'
-	| 'scal'
-	| 'ressum';
+	| 'ressum'
+	| 'scal';
 export type MultiWellStep = 'inventory' | 'rock-typing' | 'perm-transform' | 'shf';
 
 export interface LithoEndpointParams {
@@ -29,10 +29,16 @@ export interface LithoEndpointParams {
 	grClean: number;
 	grClay: number;
 	minerals: string[];
+	enableCoalFlagging: boolean;
+	coalRhobMax: number;
+	coalNphiMin: number;
+	coalWindowSize: number;
+	coalTrendFactor: number;
 }
 
 export interface SaturationModelParams {
 	method: 'waxman_smits' | 'archie';
+	rwMode: 'salinity_temp' | 'pickett';
 	measSystem: 'metric' | 'imperial';
 	waterSalinity: number;
 	rwPickett: number;
@@ -84,8 +90,8 @@ class WorkbenchState {
 	projectId = $state<string | null>(null);
 	wellId = $state<string | null>(null);
 	scope = $state<'single-well' | 'multi-well'>('single-well');
-	singleWellStep = $state<SingleWellStep>('litho-poro');
-	multiWellStep = $state<MultiWellStep>('rock-typing');
+	singleWellStep = $state<SingleWellStep>('qaqc');
+	multiWellStep = $state<MultiWellStep>('inventory');
 
 	// Global depth & zone filter
 	depthFilter = $state<{ min: number; max: number } | null>(null);
@@ -127,11 +133,17 @@ class WorkbenchState {
 		siltLineAngle: 119.0,
 		grClean: 15.0,
 		grClay: 115.0,
-		minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE']
+		minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'],
+		enableCoalFlagging: true,
+		coalRhobMax: 2.0,
+		coalNphiMin: 0.30,
+		coalWindowSize: 41,
+		coalTrendFactor: 0.05
 	});
 
 	saturationParams = $state<SaturationModelParams>({
 		method: 'waxman_smits',
+		rwMode: 'salinity_temp',
 		measSystem: 'metric',
 		waterSalinity: 35000,
 		rwPickett: 0.08,
@@ -141,7 +153,7 @@ class WorkbenchState {
 		tempGradient: 30.0,
 		surfaceTemp: 25.0,
 		bMethod: 'waxman_smits',
-		qvMethod: 'hill',
+		qvMethod: 'cec',
 		cecClay: 0.1,
 		rhoDryClay: 2.71
 	});

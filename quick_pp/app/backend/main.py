@@ -14,6 +14,7 @@ try:
 except Exception:
     FastApiMCP = None
 
+from quick_pp import __version__
 from quick_pp.database.db_connector import DBConnector
 
 from .exceptions import return_exception_message
@@ -44,7 +45,7 @@ tags_metadata = [
     },
     {"name": "Database", "description": "Database related endpoints."},
     {"name": "Ancillary Data", "description": "Ancillary related endpoints."},
-    {"name": "Langflow", "description": "Langflow related endpoints."},
+    {"name": "Agentic Assistant & MCP", "description": "Petrophysical MCP Server and Agentic Assistant endpoints."},
     {"name": "Plotter", "description": "Plotter related endpoints."},
 ]
 
@@ -57,6 +58,8 @@ async def lifespan(app: "FastAPI"):
     """
     try:
         get_db_connector()
+        from quick_pp.app.backend.utils.auth import bootstrap_default_admin
+        bootstrap_default_admin()
     except Exception as e:
         logging.getLogger(__name__).exception("Failed to initialize DBConnector: %s", e)
 
@@ -77,6 +80,7 @@ async def lifespan(app: "FastAPI"):
 
 app = FastAPI(
     title="quick_pp API",
+    version=__version__,
     description="API for quick_pp library.",
     contact={
         "name": "Imran Fadhil",
@@ -124,7 +128,7 @@ async def root(request: Request):
 @app.get("/qpp_assistant", include_in_schema=False)
 async def qpp_assistant(request: Request):
     """
-    Serve the Langflow chat interface with dynamic project/flow selection.
+    Serve the Petrophysical AI Assistant & MCP chat interface.
     """
     # Get the base URL for API calls
     base_url = str(request.base_url).rstrip("/")
@@ -146,10 +150,13 @@ async def internal_server_exception_handler(exc: Exception):
 
 
 if FastApiMCP is not None:
-    mcp = FastApiMCP(
-        app,
-        name="quick_pp API MCP",
-        describe_all_responses=True,  # Include all possible response schemas
-        describe_full_response_schema=True,  # Include full JSON schema in descriptions
-    )
-    mcp.mount()
+    try:
+        mcp = FastApiMCP(
+            app,
+            name="quick_pp API MCP",
+            describe_all_responses=True,
+            describe_full_response_schema=True,
+        )
+        mcp.mount()
+    except Exception as _mcp_err:
+        logging.getLogger(__name__).debug("FastApiMCP setup skipped: %s", _mcp_err)

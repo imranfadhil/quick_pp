@@ -119,7 +119,7 @@ def badhole_flagging(data, thold=4):
 
                 # Determine the bit sizes based on break points
                 indices = [0] + my_bkps
-                bins = list(zip(indices, indices[1:], strict=True))
+                bins = list(zip(indices[:-1], indices[1:], strict=True))
                 ii = pd.IntervalIndex.from_tuples(bins, closed="left")
                 well_data["BIN"] = pd.cut(well_data.reset_index().index, bins=ii)
                 bits_percentiles = well_data.groupby("BIN")["CALI"].describe(

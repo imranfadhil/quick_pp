@@ -846,6 +846,10 @@ def calc_stochastic_reservoir_summary(
     summary_df["stoiip_p90_mmbbl"] = summary_df["zones"].map(
         lambda z: volumetrics_by_zone.get(str(z), {}).get("stoiip_p90_mmbbl", 0.0)
     )
+    summary_df["ZONE"] = summary_df["zones"]
+    summary_df["STOIIP_MMBBL_P90"] = summary_df["stoiip_p10_mmbbl"]
+    summary_df["STOIIP_MMBBL_P50"] = summary_df["stoiip_p50_mmbbl"]
+    summary_df["STOIIP_MMBBL_P10"] = summary_df["stoiip_p90_mmbbl"]
     summary_df = summary_df.round(3)
 
     return {

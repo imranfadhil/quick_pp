@@ -29,7 +29,16 @@
 	// Log-level & Zonal Monte Carlo Uncertainty state
 	let includeUncertainty = $state(false);
 	let nSamples = $state(300);
+	let uncMetric = $state<'stoiip' | 'net' | 'phit' | 'swt' | 'bvhc'>('stoiip');
 	let zoneUncertaintySummary = $state<Record<string, any>[]>([]);
+
+	let uniqueZoneCount = $derived(
+		new Set(
+			wellData.zonalSummary
+				.map((r) => String(r.zones ?? r.ZONE ?? '').trim())
+				.filter(Boolean)
+		).size
+	);
 
 	// Volumetric LHS STOIIP Monte Carlo state
 	let areaMean = $state(640.0);
@@ -87,7 +96,20 @@
 			wellData.zonalSummary = data.summary || [];
 			upscaledCellCount = data.upscaling?.n_cells ?? null;
 			blockedCells = data.upscaling?.blocked_cells ?? [];
-			zoneUncertaintySummary = data.uncertainty?.summary ?? [];
+			const rawUncRows: Record<string, any>[] =
+				data.uncertainty?.zone_summary ?? data.uncertainty?.summary ?? [];
+			// Keep one row per zone (preferring 'pay' flag rows)
+			const payRows = rawUncRows.filter((r) => !r.flag || r.flag === 'pay');
+			const seenZones = new Set<string>();
+			const dedupedUnc: Record<string, any>[] = [];
+			for (const r of payRows.length > 0 ? payRows : rawUncRows) {
+				const zn = String(r.zones ?? r.ZONE ?? 'ALL');
+				if (!seenZones.has(zn)) {
+					seenZones.add(zn);
+					dedupedUnc.push(r);
+				}
+			}
+			zoneUncertaintySummary = dedupedUnc;
 
 			// Also compute Cardwell-Parsons permeability bounds if PERM curve exists
 			const permArr = (wellData.curves['PERM'] ?? []).filter(
@@ -224,6 +246,7 @@
 					<input
 						type="checkbox"
 						bind:checked={includeUpscaling}
+						onchange={() => executeResSum(false)}
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span>Block Logs to Grid</span>
@@ -260,7 +283,7 @@
 					<select
 						bind:value={permMethod}
 						onchange={() => executeResSum(false)}
-						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px] font-medium"
+						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
 					>
 						<option value="geometric">Geometric (2D Iso)</option>
 						<option value="arithmetic">Arithmetic (kH Max)</option>
@@ -335,6 +358,19 @@
 					onrun={() => executeResSum(false)}
 				/>
 				{#if zoneUncertaintySummary.length > 0}
+					<div class="mt-1 flex items-center justify-between text-[10px]">
+						<span class="font-medium text-[var(--text-secondary)]">Zonal P90/P50/P10:</span>
+						<select
+							bind:value={uncMetric}
+							class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-5 pl-1 text-[10px] font-medium"
+						>
+							<option value="stoiip">STOIIP (MMbbl)</option>
+							<option value="net">Net Pay (m)</option>
+							<option value="phit">Porosity Φ (v/v)</option>
+							<option value="swt">Water Sat Sw (v/v)</option>
+							<option value="bvhc">BVHC (v/v)</option>
+						</select>
+					</div>
 					<div class="mt-1 overflow-x-auto border border-[var(--border-hairline)]">
 						<table class="w-full border-collapse text-left text-[10px]">
 							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
@@ -347,11 +383,45 @@
 							</thead>
 							<tbody class="divide-y divide-[var(--border-hairline)]">
 								{#each zoneUncertaintySummary as z}
+									{@const zoneName = z.zones ?? z.ZONE ?? 'ALL'}
+									{@const p90Val =
+										uncMetric === 'stoiip'
+											? (z.stoiip_p10_mmbbl ?? z.STOIIP_MMBBL_P90)
+											: uncMetric === 'net'
+												? z.net_p10
+												: uncMetric === 'phit'
+													? z.av_phit_p10
+													: uncMetric === 'swt'
+														? z.av_swt_p90
+														: z.av_bvhc_p10}
+									{@const p50Val =
+										uncMetric === 'stoiip'
+											? (z.stoiip_p50_mmbbl ?? z.STOIIP_MMBBL_P50)
+											: uncMetric === 'net'
+												? z.net
+												: uncMetric === 'phit'
+													? (z.av_phit_p50 ?? z.av_phit)
+													: uncMetric === 'swt'
+														? (z.av_swt_p50 ?? z.av_swt)
+														: (z.av_bvhc_p50 ?? z.av_bvhc)}
+									{@const p10Val =
+										uncMetric === 'stoiip'
+											? (z.stoiip_p90_mmbbl ?? z.STOIIP_MMBBL_P10)
+											: uncMetric === 'net'
+												? z.net_p90
+												: uncMetric === 'phit'
+													? z.av_phit_p90
+													: uncMetric === 'swt'
+														? z.av_swt_p10
+														: z.av_bvhc_p90}
+									{@const dec = uncMetric === 'stoiip' || uncMetric === 'net' ? 2 : 3}
 									<tr class="h-5">
-										<td class="px-1 font-medium">{z.ZONE}</td>
-										<td class="mono-num px-1 text-right">{fmtNum(z.STOIIP_MMBBL_P90, 2)}</td>
-										<td class="mono-num px-1 text-right font-semibold">{fmtNum(z.STOIIP_MMBBL_P50, 2)}</td>
-										<td class="mono-num px-1 text-right">{fmtNum(z.STOIIP_MMBBL_P10, 2)}</td>
+										<td class="px-1 font-medium">{zoneName}</td>
+										<td class="mono-num px-1 text-right">{fmtNum(p90Val, dec)}</td>
+										<td class="mono-num px-1 text-right font-semibold text-blue-700">
+											{fmtNum(p50Val, dec)}
+										</td>
+										<td class="mono-num px-1 text-right">{fmtNum(p10Val, dec)}</td>
 									</tr>
 								{/each}
 							</tbody>
@@ -446,7 +516,10 @@
 			</div>
 		</ParameterSection>
 
-		<ParameterSection title="Zonal Summary Export" badge={`${wellData.zonalSummary.length} zones`}>
+		<ParameterSection
+			title="Zonal Summary Export"
+			badge={`${uniqueZoneCount} zones (${wellData.zonalSummary.length} rows)`}
+		>
 			<p class="text-[11px] text-[var(--text-secondary)]">
 				Zonal Net-to-Gross, PHIE, PERM, and Hydrocarbon Pore Volume (HPV) are displayed in the Right Pane Data Grid.
 			</p>

@@ -220,7 +220,25 @@ def fit_j_curve(sw, j):
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        popt, _ = curve_fit(inv_power_law_func, sw, j, p0=[0.01, 1])
+        sw_arr = np.asarray(sw, dtype=float)
+        j_arr = np.asarray(j, dtype=float)
+        mask = np.isfinite(sw_arr) & np.isfinite(j_arr) & (sw_arr > 0) & (j_arr > 0)
+        sw_arr = sw_arr[mask]
+        j_arr = j_arr[mask]
+        if len(sw_arr) < 2:
+            return 0.2, 0.3
+        # Log-linear initial guess: ln(J) = ln(a) - b * ln(Sw)
+        slope, intercept = np.polyfit(np.log(sw_arr), np.log(j_arr), 1)
+        a0 = float(np.clip(np.exp(intercept), 1e-4, 20.0))
+        b0 = float(np.clip(-slope, 0.02, 5.0))
+        popt, _ = curve_fit(
+            inv_power_law_func,
+            sw_arr,
+            j_arr,
+            p0=[a0, b0],
+            bounds=([1e-5, 0.01], [50.0, 10.0]),
+            maxfev=5000,
+        )
         a = [round(c, 3) for c in popt][0]
         b = [round(c, 3) for c in popt][1]
         return a, b
@@ -278,7 +296,10 @@ def skelt_harrison_func(h, a, b, c, d):
     Returns:
         float or np.array: The calculated water saturation (fraction).
     """
-    return 1 - a * np.exp(-((b / (h + d)) ** c))
+    h_arr = np.maximum(np.asarray(h, dtype=float) + d, 1e-6)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        res = 1 - a * np.exp(-((np.maximum(b, 1e-6) / h_arr) ** c))
+    return float(res) if np.isscalar(h) else res
 
 
 def fit_skelt_harrison_curve(sw, h):
@@ -292,7 +313,38 @@ def fit_skelt_harrison_curve(sw, h):
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        popt, _ = curve_fit(skelt_harrison_func, h, sw, p0=[0.9, 100, 1.5, 1.5])
+        sw_arr = np.asarray(sw, dtype=float)
+        h_arr = np.asarray(h, dtype=float)
+        mask = (
+            np.isfinite(sw_arr)
+            & np.isfinite(h_arr)
+            & (h_arr >= 0)
+            & (sw_arr >= 0)
+            & (sw_arr <= 1.0)
+        )
+        sw_arr = sw_arr[mask]
+        h_arr = h_arr[mask]
+        if len(sw_arr) < 4:
+            a_est = round(
+                float(np.clip(1.0 - np.nanmin(sw_arr) if len(sw_arr) else 0.85, 0.1, 0.98)),
+                3,
+            )
+            b_est = round(
+                float(np.clip(np.nanmedian(h_arr) if len(h_arr) else 25.0, 1.0, 500.0)),
+                3,
+            )
+            return a_est, b_est, 1.5, 1.0
+        a0 = float(np.clip(1.0 - np.min(sw_arr), 0.2, 0.98))
+        pos_h = h_arr[h_arr > 0]
+        b0 = float(np.clip(np.median(pos_h) if len(pos_h) else 25.0, 0.5, 2000.0))
+        popt, _ = curve_fit(
+            skelt_harrison_func,
+            h_arr,
+            sw_arr,
+            p0=[a0, b0, 1.5, 1.5],
+            bounds=([0.05, 0.01, 0.1, 0.0], [1.0, 10000.0, 8.0, 500.0]),
+            maxfev=8000,
+        )
         a = [round(c, 3) for c in popt][0]
         b = [round(c, 3) for c in popt][1]
         c = [round(c, 3) for c in popt][2]
@@ -301,6 +353,61 @@ def fit_skelt_harrison_curve(sw, h):
     except Exception as e:
         logger.error(e)
         return 1, 1, 1, 1
+
+
+def cuddy_func(pc, a, b):
+    """Calculate Bulk Volume Water (BVW = PHIT * Sw) using Cuddy's power-law function.
+
+    Args:
+        pc (float or np.ndarray): Capillary pressure (psi) or height above FWL.
+        a (float): Cuddy multiplier constant.
+        b (float): Cuddy exponent constant (evaluated as a * pc ** (-|b|)).
+
+    Returns:
+        float or np.ndarray: Bulk volume water (BVW, fraction).
+    """
+    pc_arr = np.maximum(np.asarray(pc, dtype=float), 1e-6)
+    b_abs = np.abs(b)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        res = a * (pc_arr ** (-b_abs))
+    return float(res) if np.isscalar(pc) else res
+
+
+def fit_cuddy_curve(bvw, pc):
+    """Estimate Cuddy constants (a, b) from core Bulk Volume Water (BVW = PHIT * Sw) and capillary pressure.
+
+    Fits BVW = a * Pc^(-b) where b > 0.
+
+    Args:
+        bvw (float or array-like): Bulk volume water (PHIT * Sw, frac).
+        pc (float or array-like): Capillary pressure (psi).
+
+    Returns:
+        tuple: (a, b) constants from the best-fit curve.
+    """
+    try:
+        bvw_arr = np.asarray(bvw, dtype=float)
+        pc_arr = np.asarray(pc, dtype=float)
+        mask = np.isfinite(bvw_arr) & np.isfinite(pc_arr) & (bvw_arr > 0) & (pc_arr > 0)
+        bvw_arr = bvw_arr[mask]
+        pc_arr = pc_arr[mask]
+        if len(bvw_arr) < 2:
+            return 0.12, 0.35
+        slope, intercept = np.polyfit(np.log(pc_arr), np.log(bvw_arr), 1)
+        a0 = float(np.clip(np.exp(intercept), 1e-4, 2.0))
+        b0 = float(np.clip(-slope, 0.02, 3.0))
+        popt, _ = curve_fit(
+            cuddy_func,
+            pc_arr,
+            bvw_arr,
+            p0=[a0, b0],
+            bounds=([1e-5, 0.01], [5.0, 5.0]),
+            maxfev=5000,
+        )
+        return round(float(popt[0]), 4), round(float(popt[1]), 4)
+    except Exception as e:
+        logger.error(e)
+        return 0.12, 0.35
 
 
 def perm_transform(poro, a, b):
@@ -1514,12 +1621,14 @@ def auto_j_params(core_data, excluded_samples=None, cluster_by=None):
             continue  # Skip groups with insufficient data after filtering
 
         a, b = fit_j_curve(clean_data["SWN"], clean_data["J"])
+        j_pred = inv_power_law_func(clean_data["SWN"], a, b)
         rmse = round(
-            root_mean_squared_error(
-                clean_data["J"], inv_power_law_func(clean_data["SWN"], a, b)
-            ),
+            root_mean_squared_error(clean_data["J"], j_pred),
             4,
         )
+        ss_res = float(np.sum((clean_data["J"] - j_pred) ** 2))
+        ss_tot = float(np.sum((clean_data["J"] - np.mean(clean_data["J"])) ** 2))
+        r2 = round(max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else 0.0, 4)
 
         # Create a dictionary for the group identifiers
         params = {
@@ -1535,7 +1644,15 @@ def auto_j_params(core_data, excluded_samples=None, cluster_by=None):
         }
 
         # Add the calculated J-parameters
-        params.update({"a": round(a, 4), "b": round(b, 4), "rmse": rmse})
+        params.update(
+            {
+                "a": round(a, 4),
+                "b": round(b, 4),
+                "rmse": rmse,
+                "r2": r2,
+                "count": int(len(clean_data)),
+            }
+        )
         j_params_list.append(params)
 
     # Sort the list to ensure the best rock quality for each ROCK_FLAG is first.
@@ -1545,6 +1662,138 @@ def auto_j_params(core_data, excluded_samples=None, cluster_by=None):
         key=lambda x: (x.get("ROCK_FLAG", 0), x.get("a", 0), x.get("b", 0))
     )
     return j_params_list
+
+
+def auto_skelt_harrison_params(core_data, excluded_samples=None, cluster_by=None):
+    """Automatically calculates Skelt-Harrison parameters (a, b, c, d) for each rock type.
+
+    Args:
+        core_data (pd.DataFrame): DataFrame containing 'ROCK_FLAG', 'SW' (or 'SWN'), and 'H' columns.
+        excluded_samples (list, optional): A list of 'Sample' names to exclude.
+        cluster_by (list, optional): Additional columns to group by within each 'ROCK_FLAG'.
+
+    Returns:
+        list: List of dictionaries with group identifiers and ('a', 'b', 'c', 'd', 'rmse', 'r2', 'count').
+    """
+    excluded_samples = excluded_samples or []
+    if "Sample" in core_data.columns:
+        core_data = core_data[~core_data["Sample"].isin(excluded_samples)].copy()
+    else:
+        core_data = core_data.copy()
+
+    sw_col = "SW" if "SW" in core_data.columns else "SWN"
+    grouping_cols = ["ROCK_FLAG"]
+    if cluster_by:
+        if not isinstance(cluster_by, list):
+            cluster_by = [cluster_by]
+        grouping_cols.extend(cluster_by)
+
+    params_list = []
+    for group_key, data in core_data.groupby(grouping_cols):
+        clean_data = data.dropna(subset=[sw_col, "H"]).query(f"{sw_col} >= 0 and H >= 0")
+        if len(clean_data) < 2:
+            continue
+
+        a, b, c, d = fit_skelt_harrison_curve(clean_data[sw_col], clean_data["H"])
+        sw_pred = skelt_harrison_func(clean_data["H"], a, b, c, d)
+        rmse = round(root_mean_squared_error(clean_data[sw_col], sw_pred), 4)
+        ss_res = float(np.sum((clean_data[sw_col] - sw_pred) ** 2))
+        ss_tot = float(np.sum((clean_data[sw_col] - np.mean(clean_data[sw_col])) ** 2))
+        r2 = round(max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else 0.0, 4)
+
+        params = {
+            col: (
+                int(val) if isinstance(val, (np.integer, np.int32, np.int64)) else val
+            )
+            for col, val in zip(
+                grouping_cols,
+                group_key if isinstance(group_key, tuple) else [group_key],
+                strict=True,
+            )
+        }
+        params.update(
+            {
+                "a": round(float(a), 4),
+                "b": round(float(b), 4),
+                "c": round(float(c), 4),
+                "d": round(float(d), 4),
+                "rmse": rmse,
+                "r2": r2,
+                "count": int(len(clean_data)),
+            }
+        )
+        params_list.append(params)
+
+    params_list.sort(key=lambda x: (x.get("ROCK_FLAG", 0), x.get("b", 0)))
+    return params_list
+
+
+def auto_cuddy_params(core_data, excluded_samples=None, cluster_by=None):
+    """Automatically calculates Cuddy BVW parameters (a, b) for each rock type or globally.
+
+    Args:
+        core_data (pd.DataFrame): DataFrame containing 'BVW' and 'PC' columns (and optionally 'ROCK_FLAG').
+        excluded_samples (list, optional): A list of 'Sample' names to exclude.
+        cluster_by (list, optional): Additional columns to group by.
+
+    Returns:
+        list: List of dictionaries with group identifiers and ('a', 'b', 'rmse', 'r2', 'count').
+    """
+    excluded_samples = excluded_samples or []
+    if "Sample" in core_data.columns:
+        core_data = core_data[~core_data["Sample"].isin(excluded_samples)].copy()
+    else:
+        core_data = core_data.copy()
+
+    grouping_cols = ["ROCK_FLAG"] if "ROCK_FLAG" in core_data.columns else []
+    if cluster_by:
+        if not isinstance(cluster_by, list):
+            cluster_by = [cluster_by]
+        grouping_cols.extend(cluster_by)
+
+    params_list = []
+    groups = core_data.groupby(grouping_cols) if grouping_cols else [(0, core_data)]
+    for group_key, data in groups:
+        clean_data = data.dropna(subset=["BVW", "PC"]).query("BVW > 0 and PC > 0")
+        if len(clean_data) < 2:
+            continue
+
+        a, b = fit_cuddy_curve(clean_data["BVW"], clean_data["PC"])
+        bvw_pred = cuddy_func(clean_data["PC"], a, b)
+        rmse = round(root_mean_squared_error(clean_data["BVW"], bvw_pred), 4)
+        ss_res = float(np.sum((clean_data["BVW"] - bvw_pred) ** 2))
+        ss_tot = float(np.sum((clean_data["BVW"] - np.mean(clean_data["BVW"])) ** 2))
+        r2 = round(max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else 0.0, 4)
+
+        params = (
+            {
+                col: (
+                    int(val)
+                    if isinstance(val, (np.integer, np.int32, np.int64))
+                    else val
+                )
+                for col, val in zip(
+                    grouping_cols,
+                    group_key if isinstance(group_key, tuple) else [group_key],
+                    strict=True,
+                )
+            }
+            if grouping_cols
+            else {"ROCK_FLAG": 0}
+        )
+        params.update(
+            {
+                "a": round(float(a), 4),
+                "b": round(float(b), 4),
+                "rmse": rmse,
+                "r2": r2,
+                "count": int(len(clean_data)),
+            }
+        )
+        params_list.append(params)
+
+    params_list.sort(key=lambda x: (x.get("ROCK_FLAG", 0), x.get("a", 0)))
+    return params_list
 
 
 def auto_group_core_description(

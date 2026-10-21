@@ -136,7 +136,6 @@ echo [OK] Environment ready.
 REM -- Start containers -----------------------------------------------
 echo [5/5] Starting containers...
 set "COMPOSE_CMD=docker compose --env-file %REMOTE_DIR%/.env -f %REMOTE_DIR%/quick_pp/app/docker/docker-compose.yaml"
-if "%ENABLE_LANGFLOW%"=="1" set "COMPOSE_CMD=!COMPOSE_CMD! --profile langflow"
 
 set "REMOTE_CMD=!COMPOSE_CMD! up -d"
 if %BUILD% equ 1 set "REMOTE_CMD=!REMOTE_CMD! --build"

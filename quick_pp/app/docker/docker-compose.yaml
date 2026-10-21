@@ -3,7 +3,7 @@ services:
     image: pgvector/pgvector:pg17
     restart: unless-stopped
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-qpp_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change_this_strong_password}
@@ -13,47 +13,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - qpp-network
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    networks:
-      - qpp-network
-
-  celery-worker:
-    image: imranfadhil86/quick_pp-backend:latest
-    build:
-      context: ../../..
-      dockerfile: quick_pp/app/docker/Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      - QPP_DATABASE_URL=${QPP_DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-qpp_user}:${POSTGRES_PASSWORD:-change_this_strong_password}@postgres:5432/${POSTGRES_DB:-quick_pp}}
-    command: celery -A quick_pp.app.backend.task_queue.celery_app.celery_app worker --loglevel=info --concurrency=1
-    restart: unless-stopped
-    volumes:
-      - ../../../uploads:/code/uploads
-    networks:
-      - qpp-network
-
-  flower:
-    image: mher/flower:latest
-    depends_on:
-      - redis
-    environment:
-      - BROKER_URL=redis://redis:6379/0
-    command: celery flower --broker=redis://redis:6379/0 --port=5555 --address=0.0.0.0
-    # Bound to localhost only: access remotely via SSH tunnel (-L 5555:localhost:5555)
-    ports:
-      - "${FLOWER_BIND:-127.0.0.1}:5555:5555"
-    restart: unless-stopped
     networks:
       - qpp-network
 
@@ -68,13 +27,26 @@ services:
         condition: service_healthy
     environment:
       - QPP_DATABASE_URL=${QPP_DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-qpp_user}:${POSTGRES_PASSWORD:-change_this_strong_password}@postgres:5432/${POSTGRES_DB:-quick_pp}}
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - POSTGRES_USER=${POSTGRES_USER:-qpp_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change_this_strong_password}
       - POSTGRES_DB=${POSTGRES_DB:-quick_pp}
+      - PUBLIC_URL=${PUBLIC_URL:-}
+      - QPP_AUTH_SECRET_KEY=${QPP_AUTH_SECRET_KEY:-}
+      - QPP_ADMIN_USERNAME=${QPP_ADMIN_USERNAME:-admin}
+      - QPP_ADMIN_EMAIL=${QPP_ADMIN_EMAIL:-admin@quickpp.local}
+      - QPP_ADMIN_PASSWORD=${QPP_ADMIN_PASSWORD:-QuickPP@Admin2026!}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_TLS=${SMTP_TLS:-true}
     volumes:
       - ../../../uploads:/code/uploads
+      - ../../../quick_pp/app/backend:/venv/lib/python3.11/site-packages/quick_pp/app/backend
+      - ../../../quick_pp/database:/venv/lib/python3.11/site-packages/quick_pp/database
+      - ../../../quick_pp/app/backend:/code/quick_pp/app/backend
+      - ../../../quick_pp/database:/code/quick_pp/database
     networks:
       - qpp-network
 
@@ -124,29 +96,8 @@ services:
     networks:
       - qpp-network
 
-  langflow:
-    profiles:
-      - langflow  # enable with `--profile langflow` on docker-compose command line
-    image: langflowai/langflow:latest  # or another version tag on https://hub.docker.com/r/langflowai/langflow
-    restart: unless-stopped
-    pull_policy: always  # set to 'always' when using 'latest' image
-    # Bound to localhost only: access remotely via SSH tunnel (-L 7860:localhost:7860)
-    ports:
-      - "${LANGFLOW_BIND:-127.0.0.1}:7860:7860"
-    depends_on:
-      - qpp-backend
-    environment:
-      - LANGFLOW_DATABASE_URL=${QPP_DATABASE_URL:-postgresql://${POSTGRES_USER:-qpp_user}:${POSTGRES_PASSWORD:-change_this_strong_password}@postgres:5432/${POSTGRES_DB:-quick_pp}}
-      - LANGFLOW_SECRET_KEY=${LANGFLOW_SECRET_KEY:-}
-      - LANGFLOW_SKIP_AUTH_AUTO_LOGIN=${LANGFLOW_SKIP_AUTH_AUTO_LOGIN:-true}
-      - LANGFLOW_SUPERUSER=${LANGFLOW_SUPERUSER:-admin}
-      - LANGFLOW_SUPERUSER_PASSWORD=${LANGFLOW_SUPERUSER_PASSWORD:-}
-      # This variable defines where the logs, file storage, monitor data and secret keys are stored.
-      - LANGFLOW_CONFIG_DIR=app/langflow
-    volumes:
-      - ./data/langflow:/app/langflow
-    networks:
-      - qpp-network
+volumes:
+  postgres_data:
 
 networks:
   qpp-network:

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
+	import { appStatus } from '$lib/state/status.svelte';
 	import {
 		workbench,
 		type MultiWellStep,
@@ -44,14 +45,8 @@
 			readyCheck: () => Boolean(wellData.curves['SWT'] || wellData.curves['SWE'])
 		},
 		{
-			id: 'scal',
-			num: 6,
-			label: 'SCAL & Rel-Perm',
-			readyCheck: () => workbench.scalResult !== null
-		},
-		{
 			id: 'ressum',
-			num: 7,
+			num: 6,
 			label: 'Reservoir Summary',
 			readyCheck: () => wellData.zonalSummary.length > 0
 		}
@@ -122,6 +117,33 @@
 					<span>{step.label}</span>
 				</button>
 			{/each}
+
+			<!-- Standalone Module Divider + SCAL & Rel-Perm -->
+			<div class="mx-1.5 h-4 w-[1px] shrink-0 bg-[var(--border-hairline)]"></div>
+			<span class="mr-0.5 text-[9.5px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
+				Standalone:
+			</span>
+			{@const isScalActive = workbench.singleWellStep === 'scal'}
+			{@const isScalDone = workbench.scalResult !== null}
+			<button
+				type="button"
+				onclick={() => (workbench.singleWellStep = 'scal')}
+				title="Standalone SCAL, Relative Permeability & Eclipse SWOF Deck Generator"
+				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isScalActive
+					? 'border-[var(--accent-primary)] bg-blue-50/90 text-[var(--accent-primary)] font-semibold'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
+			>
+				<span
+					class="mono-num flex h-4 items-center justify-center rounded-xs px-1 text-[9px] font-bold {isScalActive
+						? 'bg-[var(--accent-primary)] text-white'
+						: isScalDone
+							? 'bg-emerald-100 text-emerald-700'
+							: 'bg-slate-200 text-slate-600'}"
+				>
+					{isScalDone && !isScalActive ? '✓' : 'LAB'}
+				</span>
+				<span>SCAL & Rel-Perm</span>
+			</button>
 		{:else}
 			{#each MULTI_WELL_STEPS as step (step.id)}
 				{@const isActive = workbench.multiWellStep === step.id}
@@ -148,17 +170,26 @@
 		{/if}
 	</div>
 
-	<!-- Right Pane Mode Switcher & Status -->
+	<!-- Right Pane Mode Switcher & Live Status Pill -->
 	<div class="flex items-center gap-2">
-		{#if wellData.isCalculating || projectData.isComputingMultiWell}
-			<span class="mono-num flex items-center gap-1 text-[11px] font-medium text-blue-600">
-				<span class="inline-block h-2 w-2 animate-ping rounded-full bg-blue-600"></span>
-				Computing...
-			</span>
+		{#if appStatus.isBusy || wellData.isCalculating || projectData.isComputingMultiWell}
+			<button
+				type="button"
+				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
+				class="mono-num flex max-w-[260px] items-center gap-1.5 truncate rounded-xs border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700"
+				title={appStatus.displayMessage}
+			>
+				<span class="inline-block h-2 w-2 shrink-0 animate-ping rounded-full bg-blue-600"></span>
+				<span class="truncate">{appStatus.displayMessage}</span>
+			</button>
 		{:else if wellData.lastSavedMessage}
-			<span class="mono-num text-[11px] font-medium text-[var(--status-ok)]">
+			<button
+				type="button"
+				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
+				class="mono-num text-[11px] font-medium text-[var(--status-ok)] hover:underline"
+			>
 				{wellData.lastSavedMessage}
-			</span>
+			</button>
 		{/if}
 
 		<div
@@ -179,4 +210,3 @@
 		</div>
 	</div>
 </nav>
-

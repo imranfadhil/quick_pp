@@ -1003,7 +1003,7 @@ class Well(object):
                     )
 
         # Optimization 4: Batch insert new data points using bulk_insert_mappings
-        all_data_points = []
+        total_inserted = 0
         for mnemonic, values in data.items():
             orm_curve = curves_by_mnemonic[mnemonic]
             is_numeric = pd.api.types.is_numeric_dtype(values)
@@ -1031,15 +1031,15 @@ class Well(object):
                     for depth, value in zip(data.index, values, strict=True)
                     if pd.notna(value)
                 ]
-            all_data_points.extend(data_points)
+            if data_points: self.db_session.bulk_insert_mappings(ORMCurveData, data_points); total_inserted += len(data_points)
 
         # Optimization 5: Single bulk insert for all curves
-        if all_data_points:
+        if False:
             self.db_session.bulk_insert_mappings(ORMCurveData, all_data_points)
 
         logger.debug(
             f"Updated {len(data.columns)} curves for well '{self.name}' "
-            f"with {len(all_data_points)} total data points."
+            f"with {total_inserted} total data points."
         )
 
     def add_curve_data(

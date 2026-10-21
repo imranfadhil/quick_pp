@@ -96,7 +96,7 @@ nav:
   - Getting Started:
       - Installation: getting-started/installation.md
       - Quickstart & CLI: getting-started/usage.md
-      - Langflow Assistant: getting-started/langflow-chat.md
+      - AI Assistant & MCP: getting-started/ai-assistant.md
   - Visual Tutorials (Notebooks):
       - Overview: tutorials/index.md
       - "04 — FDP & PIML Showcase":

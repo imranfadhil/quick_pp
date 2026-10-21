@@ -46,7 +46,7 @@ logging.getLogger("mlflow").setLevel(logging.WARNING)
 
 __author__ = """Imran Fadhil"""
 __email__ = "imranfadhil@gmail.com"
-__version__ = "0.2.106"  # Need to be updated manually when releasing a new version/ change in pyproject.toml
+__version__ = "0.3.0"  # Need to be updated manually when releasing a new version/ change in pyproject.toml
 
 # Expose core petrophysical submodules and key public functions at top-level package namespace
 from quick_pp import qaqc, saturation, scal, uncertainty, upscaling  # noqa: E402
@@ -89,13 +89,20 @@ from quick_pp.uncertainty import (  # noqa: E402
     run_log_uncertainty,
     sample_lhs_parameters,
 )
-from quick_pp.machine_learning.utils import (  # noqa: E402
-    ConformalMultiOutputRegressor,
-    ConformalRegressor,
-    EnforceMineralSum,
-    enforce_physical_constraints,
-    physics_informed_loss,
-)
+try:
+    from quick_pp.machine_learning.utils import (  # noqa: E402
+        ConformalMultiOutputRegressor,
+        ConformalRegressor,
+        EnforceMineralSum,
+        enforce_physical_constraints,
+        physics_informed_loss,
+    )
+except ImportError:
+    ConformalMultiOutputRegressor = None  # type: ignore[assignment]
+    ConformalRegressor = None  # type: ignore[assignment]
+    EnforceMineralSum = None  # type: ignore[assignment]
+    enforce_physical_constraints = None  # type: ignore[assignment]
+    physics_informed_loss = None  # type: ignore[assignment]
 from quick_pp.upscaling import (  # noqa: E402
     arith_upscale,
     block_logs,
