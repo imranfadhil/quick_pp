@@ -392,24 +392,44 @@ def neu_den_xplot_poro(
         "Please specify either 'ssc', 'ss' or 'carb' model."
     )
 
+    nphi_arr = np.asarray(nphi, dtype=float)
+    rhob_arr = np.asarray(rhob, dtype=float)
+    if nphi_arr.shape != rhob_arr.shape:
+        raise ValueError("nphi and rhob must have the same shape")
+
     A = dry_min1_point
     B = dry_silt_point
     C = dry_clay_point
     D = fluid_point
-    E = list(zip(nphi, rhob, strict=True))
 
-    phit = np.empty(0)
-    for _, point in enumerate(E):
-        if model == "ssc":
-            phit = np.append(
-                phit, neu_den_xplot_poro_pt(point[0], point[1], "ssc", A, B, C, D)
-            )
-        else:
-            phit = np.append(
-                phit, neu_den_xplot_poro_pt(point[0], point[1], "ss", A, (0, 0), C, D)
-            )
+    if model == "ssc":
+        thold_pt = line_intersection((A, C), (D, B))
+        thold_line = length_a_b(thold_pt, A)
+        proj_pt = line_intersection((A, C), (D, (nphi_arr, rhob_arr)))
+        proj_line = length_a_b(proj_pt, A)
+        m_res = (A[1] - B[1]) / (A[0] - B[0])
+        m_nonres = (C[1] - B[1]) / (C[0] - B[0])
+        m = np.where(proj_line < thold_line, m_res, m_nonres)
+        c = rhob_arr - m * nphi_arr
+        iso_poro_pt = line_intersection(
+            ((np.zeros_like(c), c), (nphi_arr, rhob_arr)), (D, B)
+        )
+        iso_poro_line = length_a_b(iso_poro_pt, B)
+        poro_line = length_a_b(D, B)
+        phit = iso_poro_line / poro_line
+    else:
+        m = (A[1] - C[1]) / (A[0] - C[0])
+        c = rhob_arr - m * nphi_arr
+        iso_poro_pt = line_intersection(
+            ((np.zeros_like(c), c), (nphi_arr, rhob_arr)), (D, A)
+        )
+        iso_poro_line = length_a_b(iso_poro_pt, A)
+        poro_line = length_a_b(D, A)
+        phit = iso_poro_line / poro_line
 
-    logger.debug(f"Crossplot porosity range: {phit.min():.3f} - {phit.max():.3f}")
+    logger.debug(
+        f"Crossplot porosity range: {np.nanmin(phit):.3f} - {np.nanmax(phit):.3f}"
+    )
     return phit
 
 

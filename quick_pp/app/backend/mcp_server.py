@@ -1158,8 +1158,8 @@ def tool_evaluate_with_conformal_bounds(
     from sklearn.ensemble import ExtraTreesRegressor
 
     base_rf = ExtraTreesRegressor(
-        n_estimators=32,
-        min_samples_leaf=2,
+        n_estimators=16, max_depth=10,
+        min_samples_leaf=5,
         max_features=0.85,
         bootstrap=True,
         random_state=42,
@@ -1168,12 +1168,20 @@ def tool_evaluate_with_conformal_bounds(
     conformal_model = ConformalMultiOutputRegressor(
         base_estimator=base_rf,
         alpha=alpha,
-        cv=3,
+        cv=0,
         random_state=42,
         enforce_physics=True,
         target_names=target_cols,
     )
-    conformal_model.fit(feat_df, y_ref_df)
+    max_cal = 1200
+    if len(feat_df) > max_cal:
+        cal_idx = np.linspace(0, len(feat_df) - 1, max_cal, dtype=int)
+        conformal_model.fit(
+            feat_df.iloc[cal_idx].reset_index(drop=True),
+            y_ref_df.iloc[cal_idx].reset_index(drop=True),
+        )
+    else:
+        conformal_model.fit(feat_df, y_ref_df)
     y_pred, y_p10, y_p90 = conformal_model.predict_interval(feat_df, alpha=alpha)
 
     # Assemble full depth-aligned output DataFrame

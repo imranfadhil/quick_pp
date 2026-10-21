@@ -945,7 +945,7 @@ class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
 
             # Fit MAPIE conformal regressor if enough samples
             mapie_j = None
-            if n_samples >= 10 and _MapieCrossRegressor is not None:
+            if self.cv >= 2 and 10 <= n_samples <= 500 and _MapieCrossRegressor is not None:
                 try:
                     mapie_j = _MapieCrossRegressor(
                         estimator=self._make_base_estimator(),
@@ -959,7 +959,7 @@ class ConformalMultiOutputRegressor(BaseEstimator, RegressorMixin):
                         f"MAPIE CrossConformalRegressor fallback for target {j}: {e}"
                     )
                     mapie_j = None
-            elif n_samples >= 10 and _LegacyMapieRegressor is not None:
+            elif self.cv >= 2 and 10 <= n_samples <= 500 and _LegacyMapieRegressor is not None:
                 try:
                     mapie_j = _LegacyMapieRegressor(
                         estimator=self._make_base_estimator(),

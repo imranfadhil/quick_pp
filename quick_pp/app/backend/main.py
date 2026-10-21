@@ -157,4 +157,4 @@ if FastApiMCP is not None:
         )
         mcp.mount()
     except Exception as _mcp_err:
-        logging.getLogger(__name__).warning("FastApiMCP setup skipped: %s", _mcp_err)
+        logging.getLogger(__name__).debug("FastApiMCP setup skipped: %s", _mcp_err)

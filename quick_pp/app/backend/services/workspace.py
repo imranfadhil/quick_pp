@@ -143,6 +143,25 @@ def _save_curves_to_well(project_id: int, well_name: str, curves_df: pd.DataFram
         df_to_save["WELL_NAME"] = well_name
 
     _update_in_memory_well_cache(project_id, well_name, df_to_save)
+    if len(df_to_save) * max(len(df_to_save.columns) - 2, 1) > 20000:
+        if not is_demo_mode():
+            import threading
+
+            def _bg_save():
+                try:
+                    with get_db() as s:
+                        db_w = resolve_db_well_name(project_id, well_name, s)
+                        orm_w = s.query(db_objects.ORMWell).filter_by(project_id=project_id, name=db_w).first()
+                        if orm_w is not None:
+                            db_objects.Well.load_from_orm(s, orm_w).update_data(
+                                df_to_save.drop(columns=["WELL_NAME"], errors="ignore")
+                            )
+                            s.commit()
+                except Exception:
+                    pass
+
+            threading.Thread(target=_bg_save, daemon=True).start()
+        return len(df_to_save)
 
     if is_demo_mode():
         return len(df_to_save)
