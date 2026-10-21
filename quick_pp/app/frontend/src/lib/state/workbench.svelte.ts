@@ -29,6 +29,11 @@ export interface LithoEndpointParams {
 	grClean: number;
 	grClay: number;
 	minerals: string[];
+	enableCoalFlagging: boolean;
+	coalRhobMax: number;
+	coalNphiMin: number;
+	coalWindowSize: number;
+	coalTrendFactor: number;
 }
 
 export interface SaturationModelParams {
@@ -127,7 +132,12 @@ class WorkbenchState {
 		siltLineAngle: 119.0,
 		grClean: 15.0,
 		grClay: 115.0,
-		minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE']
+		minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'],
+		enableCoalFlagging: true,
+		coalRhobMax: 2.0,
+		coalNphiMin: 0.30,
+		coalWindowSize: 41,
+		coalTrendFactor: 0.05
 	});
 
 	saturationParams = $state<SaturationModelParams>({

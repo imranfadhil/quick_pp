@@ -12,7 +12,7 @@
 		MINERAL_TO_CURVE_MNEMONIC
 	} from '$lib/utils/petrophysicsColors';
 
-	const AVAILABLE_MINERALS = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'HALITE'];
+	const AVAILABLE_MINERALS = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'HALITE', 'COAL'];
 	const MINERAL_COLOR_MAP: Record<string, { fill: string; stroke: string; label: string }> =
 		Object.fromEntries(
 			LITHOLOGY_TRACK_SPECS.map((s) => [
@@ -56,6 +56,9 @@
 		} else {
 			activeMnemonics = new Set(['VCLAY']);
 		}
+		if (lp.enableCoalFlagging) {
+			activeMnemonics.add('VCOAL');
+		}
 
 		const zeroedUpdates: Record<string, number[]> = {};
 		const zeroArr = new Array(dept.length).fill(0);
@@ -83,6 +86,14 @@
 			save: persist
 		};
 
+		const coalArgs = {
+			enable_coal_flagging: lp.enableCoalFlagging,
+			coal_rhob_max: lp.coalRhobMax,
+			coal_nphi_min: lp.coalNphiMin,
+			coal_window_size: Math.round(lp.coalWindowSize),
+			coal_trend_factor: lp.coalTrendFactor
+		};
+
 		try {
 			// 1. Optional Hydrocarbon Correction
 			if (lp.enableHcCorrection) {
@@ -102,6 +113,7 @@
 							buffer: lp.hcBuffer,
 							gr_clean: lp.grClean,
 							gr_clay: lp.grClay,
+							...coalArgs,
 							...filterArgs
 						} as any
 					}
@@ -131,6 +143,7 @@
 						gr_clay: lp.grClay,
 						minerals: lp.minerals,
 						porosity_method: lp.porosityMethod === 'den' ? 'density' : 'neutron_density',
+						...coalArgs,
 						...filterArgs
 					} as any
 				}
@@ -156,6 +169,7 @@
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
 						fluid_point: [lp.fluidNphi, lp.fluidRhob],
 						silt_line_angle: lp.siltLineAngle,
+						...coalArgs,
 						...filterArgs
 					} as any
 				}
@@ -403,6 +417,60 @@
 					min={0.1}
 					max={1.1}
 					step={0.02}
+					onrun={() => executeLithoPoro(false)}
+				/>
+			{/if}
+		</ParameterSection>
+
+		<ParameterSection
+			title="Coal Flagging"
+			badge={workbench.lithoParams.enableCoalFlagging ? 'Active' : 'Off'}
+		>
+			<label class="flex items-center gap-2 py-0.5 text-xs font-medium cursor-pointer">
+				<input
+					type="checkbox"
+					bind:checked={workbench.lithoParams.enableCoalFlagging}
+					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+				/>
+				<span>Enable Coal Flagging (VCOAL / Φ=0)</span>
+			</label>
+
+			{#if workbench.lithoParams.enableCoalFlagging}
+				<NumericScrubber
+					label="Max Bulk Density (RHOB)"
+					bind:value={workbench.lithoParams.coalRhobMax}
+					unit="g/cc"
+					min={1.2}
+					max={2.3}
+					step={0.02}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<NumericScrubber
+					label="Min Neutron (NPHI)"
+					bind:value={workbench.lithoParams.coalNphiMin}
+					unit="v/v"
+					min={0.15}
+					max={0.65}
+					step={0.01}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<NumericScrubber
+					label="Trend Deviation Factor"
+					bind:value={workbench.lithoParams.coalTrendFactor}
+					min={0.0}
+					max={0.25}
+					step={0.01}
+					decimals={2}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<NumericScrubber
+					label="Rolling Window"
+					bind:value={workbench.lithoParams.coalWindowSize}
+					unit="pts"
+					min={5}
+					max={101}
+					step={2}
+					decimals={0}
 					onrun={() => executeLithoPoro(false)}
 				/>
 			{/if}

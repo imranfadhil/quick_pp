@@ -142,20 +142,36 @@
 					? wellData.curves['RHOB_HC']
 					: (wellData.curves['RHOB'] ?? []);
 			const grArr = wellData.curves['GR'] ?? [];
+			const coalFlagArr = wellData.curves['COAL_FLAG'] ?? wellData.curves['VCOAL'] ?? [];
 
 			const xs: number[] = [];
 			const ys: number[] = [];
 			const colors: number[] = [];
 			const customIdx: number[] = [];
+			const coalXs: number[] = [];
+			const coalYs: number[] = [];
+			const coalIdx: number[] = [];
+			let minRhob = 1.85;
 
 			for (const idx of indices) {
 				const x = nphiArr[idx];
 				const y = rhobArr[idx];
 				if (Number.isFinite(x) && Number.isFinite(y)) {
-					xs.push(x);
-					ys.push(y);
-					colors.push(Number.isFinite(grArr[idx]) ? grArr[idx] : 50);
-					customIdx.push(idx);
+					if (y < minRhob && y > 0.8) minRhob = y;
+					const isCoal =
+						workbench.lithoParams.enableCoalFlagging &&
+						Number.isFinite(coalFlagArr[idx]) &&
+						coalFlagArr[idx] >= 0.5;
+					if (isCoal) {
+						coalXs.push(x);
+						coalYs.push(y);
+						coalIdx.push(idx);
+					} else {
+						xs.push(x);
+						ys.push(y);
+						colors.push(Number.isFinite(grArr[idx]) ? grArr[idx] : 50);
+						customIdx.push(idx);
+					}
 				}
 			}
 
@@ -181,8 +197,40 @@
 				hovertemplate: 'NPHI: %{x:.3f}<br>RHOB: %{y:.3f}<extra></extra>'
 			});
 
+			if (coalXs.length > 0) {
+				traces.push({
+					type: 'scattergl',
+					mode: 'markers',
+					name: `Coal Flagged (${coalXs.length})`,
+					x: coalXs,
+					y: coalYs,
+					customdata: coalIdx,
+					marker: {
+						size: 6.5,
+						color: '#1E293B',
+						symbol: 'square',
+						opacity: 0.9,
+						line: { color: '#0F172A', width: 1 }
+					},
+					hovertemplate: 'COAL<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f}<extra></extra>'
+				});
+			}
+
 			// Ternary SSC triangle & mineral endpoints
 			const lp = workbench.lithoParams;
+			if (lp.enableCoalFlagging) {
+				shapes.push({
+					type: 'rect',
+					xref: 'x',
+					yref: 'y',
+					x0: lp.coalNphiMin,
+					x1: 0.65,
+					y0: Math.min(minRhob - 0.05, 1.2),
+					y1: lp.coalRhobMax,
+					fillcolor: 'rgba(30, 41, 59, 0.08)',
+					line: { color: '#1E293B', width: 1.2, dash: 'dash' }
+				});
+			}
 			if (lp.model === 'multi_mineral') {
 				const activeSet = new Set(lp.minerals.map((m) => m.toUpperCase()));
 				const activeSpecs = LITHOLOGY_TRACK_SPECS.filter((s) =>
@@ -232,7 +280,8 @@
 			baseLayout.xaxis.title = { text: 'NPHI (v/v)' };
 			baseLayout.xaxis.range = [-0.08, 0.65];
 			baseLayout.yaxis.title = { text: 'RHOB (g/cc)' };
-			baseLayout.yaxis.range = [2.95, 1.85]; // Standard petrophysical inverted density axis
+			baseLayout.yaxis.range = [2.95, Math.min(1.85, Math.max(1.1, minRhob - 0.05))]; // Standard petrophysical inverted density axis
+			baseLayout.shapes = shapes;
 			return { traces, layout: baseLayout };
 		}
 
@@ -543,6 +592,9 @@
 		void workbench.lithoParams.drySiltRhob;
 		void workbench.lithoParams.dryClayNphi;
 		void workbench.lithoParams.dryClayRhob;
+		void workbench.lithoParams.enableCoalFlagging;
+		void workbench.lithoParams.coalRhobMax;
+		void workbench.lithoParams.coalNphiMin;
 		void workbench.saturationParams.rwPickett;
 		void workbench.saturationParams.m;
 		void workbench.saturationParams.n;

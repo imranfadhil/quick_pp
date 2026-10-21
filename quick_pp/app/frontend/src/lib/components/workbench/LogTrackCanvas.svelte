@@ -163,11 +163,15 @@
 			vdoloCheck.some((v) => v !== null && v > 1e-4);
 
 		const activeModel = workbench.lithoParams.model;
+		const coalEnabled = workbench.lithoParams.enableCoalFlagging;
 		const allowedMultiMinSet = new Set(
 			workbench.lithoParams.minerals.map(
 				(m) => MINERAL_TO_CURVE_MNEMONIC[m.toUpperCase()] ?? `V${m.toUpperCase()}`
 			)
 		);
+		if (coalEnabled) {
+			allowedMultiMinSet.add('VCOAL');
+		}
 
 		const out: Array<{ spec: LithologyTrackSpec; arr: (number | null)[] }> = [];
 
@@ -178,14 +182,14 @@
 			if (
 				activeModel === 'ssc' &&
 				!hasCarbonateCols &&
-				!['VCLAY', 'VSILT', 'VSAND'].includes(spec.mnemonic)
+				!['VCLAY', 'VSILT', 'VSAND', ...(coalEnabled ? ['VCOAL'] : [])].includes(spec.mnemonic)
 			) {
 				continue;
 			}
 			if (
 				activeModel === 'vsh_gr' &&
 				!hasCarbonateCols &&
-				!['VCLAY', 'VSAND'].includes(spec.mnemonic)
+				!['VCLAY', 'VSAND', ...(coalEnabled ? ['VCOAL'] : [])].includes(spec.mnemonic)
 			) {
 				continue;
 			}
@@ -224,6 +228,7 @@
 		void wellData.visibleIndices;
 		void workbench.lithoParams.model;
 		void workbench.lithoParams.minerals;
+		void workbench.lithoParams.enableCoalFlagging;
 		return resolveActiveLithoSpecs(wellData.visibleIndices);
 	});
 

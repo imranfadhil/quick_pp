@@ -42,6 +42,7 @@ from quick_pp.database import objects as db_objects
 from quick_pp.lithology import gr_index
 from quick_pp.lithology.multi_mineral import MultiMineral
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
+from quick_pp.machine_learning.feature_engineering import coal_flagging
 from quick_pp.permeability import (
     choo_permeability,
     coates_permeability,
@@ -231,6 +232,47 @@ def _select_nphi_rhob(
     )
 
 
+def _compute_coal_mask(
+    df: pd.DataFrame,
+    enable_coal_flagging: bool = False,
+    coal_rhob_max: float = 2.0,
+    coal_nphi_min: float = 0.30,
+    coal_window_size: int = 41,
+    coal_trend_factor: float = 0.05,
+) -> pd.Series:
+    """Compute boolean mask for coal intervals using raw NPHI and RHOB logs."""
+    if not enable_coal_flagging:
+        return pd.Series(False, index=df.index, dtype=bool)
+    if "NPHI" not in df.columns or "RHOB" not in df.columns:
+        return pd.Series(False, index=df.index, dtype=bool)
+    nphi_raw = pd.to_numeric(df["NPHI"], errors="coerce")
+    rhob_raw = pd.to_numeric(df["RHOB"], errors="coerce")
+    valid = nphi_raw.notna() & rhob_raw.notna()
+    if not valid.any():
+        return pd.Series(False, index=df.index, dtype=bool)
+
+    tf = max(float(coal_trend_factor), 0.0)
+    win = max(int(coal_window_size), 3)
+    if tf > 1e-6:
+        flagged = coal_flagging(
+            nphi_raw,
+            rhob_raw,
+            rhob_threshold=float(coal_rhob_max),
+            nphi_threshold=float(coal_nphi_min),
+            window_size=win,
+            trend_factor=tf,
+        )
+        # Also include unequivocal thick coal beds that may exceed the rolling window width
+        extreme_coal = (rhob_raw < min(float(coal_rhob_max) - 0.12, 1.85)) & (
+            nphi_raw > max(float(coal_nphi_min) + 0.05, 0.38)
+        )
+        return ((flagged >= 0.5) | extreme_coal).fillna(False)
+    else:
+        return (
+            (rhob_raw < float(coal_rhob_max)) & (nphi_raw > float(coal_nphi_min))
+        ).fillna(False)
+
+
 # ---------------------------------------------------------------------------
 # Request Schemas
 # ---------------------------------------------------------------------------
@@ -259,6 +301,15 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
     buffer: float = Field(0.0, description="Buffer for HC flag detection")
     gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
     gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
+    enable_coal_flagging: bool = Field(
+        False, description="Flag coal beds and exclude them from HC shift"
+    )
+    coal_rhob_max: float = Field(2.0, description="Max bulk density for coal (g/cc)")
+    coal_nphi_min: float = Field(0.30, description="Min neutron porosity for coal (v/v)")
+    coal_window_size: int = Field(41, description="Rolling window size for coal trend")
+    coal_trend_factor: float = Field(
+        0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
+    )
 
 
 class WorkspaceLithologyRequest(WorkspaceFilterBase):
@@ -281,6 +332,15 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase):
     gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
     gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
     auto_scale: bool = Field(True)
+    enable_coal_flagging: bool = Field(
+        False, description="Flag coal intervals and assign VCOAL=1, other minerals=0"
+    )
+    coal_rhob_max: float = Field(2.0, description="Max bulk density for coal (g/cc)")
+    coal_nphi_min: float = Field(0.30, description="Min neutron porosity for coal (v/v)")
+    coal_window_size: int = Field(41, description="Rolling window size for coal trend")
+    coal_trend_factor: float = Field(
+        0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
+    )
 
 
 class WorkspacePorosityRequest(WorkspaceFilterBase):
@@ -301,6 +361,15 @@ class WorkspacePorosityRequest(WorkspaceFilterBase):
     fluid_point: Tuple[float, float] = Field((1.0, 1.0))
     wet_clay_point: Tuple[Optional[float], Optional[float]] = Field((None, None))
     silt_line_angle: float = Field(119.0)
+    enable_coal_flagging: bool = Field(
+        False, description="Zero out PHIT and PHIE in flagged coal intervals"
+    )
+    coal_rhob_max: float = Field(2.0, description="Max bulk density for coal (g/cc)")
+    coal_nphi_min: float = Field(0.30, description="Min neutron porosity for coal (v/v)")
+    coal_window_size: int = Field(41, description="Rolling window size for coal trend")
+    coal_trend_factor: float = Field(
+        0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
+    )
 
 
 class WorkspacePermeabilityRequest(WorkspaceFilterBase):
@@ -660,6 +729,20 @@ def workspace_hc_correction(
         rhob_hc_full.loc[valid_mask] = np.asarray(rhob_c, dtype=float)
         hc_flag_full.loc[valid_mask] = np.asarray(hc_flag, dtype=float)
 
+        if req.enable_coal_flagging:
+            coal_mask = _compute_coal_mask(
+                df,
+                enable_coal_flagging=True,
+                coal_rhob_max=req.coal_rhob_max,
+                coal_nphi_min=req.coal_nphi_min,
+                coal_window_size=req.coal_window_size,
+                coal_trend_factor=req.coal_trend_factor,
+            )
+            if coal_mask.any():
+                nphi_hc_full.loc[coal_mask] = nphi.loc[coal_mask]
+                rhob_hc_full.loc[coal_mask] = rhob.loc[coal_mask]
+                hc_flag_full.loc[coal_mask] = 0.0
+
         out_df = pd.DataFrame(
             {
                 "DEPTH": df["DEPTH"],
@@ -940,6 +1023,44 @@ def workspace_lithology(
         else:
             raise ValueError(f"Unsupported lithology model: {req.model}")
 
+        if req.enable_coal_flagging:
+            coal_mask = _compute_coal_mask(
+                df,
+                enable_coal_flagging=True,
+                coal_rhob_max=req.coal_rhob_max,
+                coal_nphi_min=req.coal_nphi_min,
+                coal_window_size=req.coal_window_size,
+                coal_trend_factor=req.coal_trend_factor,
+            )
+            coal_flag_s = pd.Series(np.nan, index=df.index, dtype=float)
+            coal_flag_s.loc[valid_mask] = np.where(
+                coal_mask.loc[valid_mask], 1.0, 0.0
+            )
+            out_df["COAL_FLAG"] = coal_flag_s
+            active_coal = valid_mask & coal_mask
+            if active_coal.any():
+                if "VCOAL" not in out_df.columns:
+                    vcoal_s = pd.Series(np.nan, index=df.index, dtype=float)
+                    vcoal_s.loc[valid_mask] = 0.0
+                    out_df["VCOAL"] = vcoal_s
+                for mcol in ALL_LITHOLOGY_VOL_COLS:
+                    if mcol in out_df.columns:
+                        out_df.loc[active_coal, mcol] = (
+                            1.0 if mcol == "VCOAL" else 0.0
+                        )
+                if "PHIT_CONSTRUCTED" in out_df.columns:
+                    out_df.loc[active_coal, "PHIT_CONSTRUCTED"] = 0.0
+            if "COAL_FLAG" not in save_cols:
+                save_cols.append("COAL_FLAG")
+            if "VCOAL" not in save_cols and "VCOAL" in out_df.columns:
+                save_cols.append("VCOAL")
+        else:
+            coal_flag_s = pd.Series(np.nan, index=df.index, dtype=float)
+            coal_flag_s.loc[valid_mask] = 0.0
+            out_df["COAL_FLAG"] = coal_flag_s
+            if "COAL_FLAG" not in save_cols:
+                save_cols.append("COAL_FLAG")
+
         saved_rows = 0
         if save_cols:
             valid_save_mask = out_df[save_cols].notna().any(axis=1)
@@ -1142,6 +1263,28 @@ def workspace_porosity(
         phid_s.loc[valid_mask] = np.clip(np.asarray(phid_v, dtype=float), 0.0, 1.0)
         phit_sh_s.loc[valid_mask] = np.clip(phit_sh_v, 0.0, 1.0)
 
+        if req.enable_coal_flagging:
+            coal_mask = _compute_coal_mask(
+                df,
+                enable_coal_flagging=True,
+                coal_rhob_max=req.coal_rhob_max,
+                coal_nphi_min=req.coal_nphi_min,
+                coal_window_size=req.coal_window_size,
+                coal_trend_factor=req.coal_trend_factor,
+            )
+        elif "COAL_FLAG" in df.columns:
+            coal_mask = (
+                pd.to_numeric(df["COAL_FLAG"], errors="coerce").fillna(0.0) >= 0.5
+            )
+        else:
+            coal_mask = pd.Series(False, index=df.index, dtype=bool)
+
+        active_coal = valid_mask & coal_mask
+        if active_coal.any():
+            phit_s.loc[active_coal] = 0.0
+            phie_s.loc[active_coal] = 0.0
+            phid_s.loc[active_coal] = 0.0
+
         cpore_col = next(
             (c for c in ("CPORE", "KPORE") if c in df.columns), None
         )
@@ -1186,8 +1329,19 @@ def workspace_porosity(
                     )
                     out_df[c] = scaled_col
 
-        # Core comparison metrics
-        core_mask = phit_s.notna() & cpore_s.notna() & (cpore_s > 0)
+        if active_coal.any():
+            if "VCOAL" not in out_df.columns:
+                vcoal_s = pd.Series(np.nan, index=df.index, dtype=float)
+                vcoal_s.loc[valid_mask] = 0.0
+                out_df["VCOAL"] = vcoal_s
+                if "VCOAL" not in active_min_cols:
+                    active_min_cols.append("VCOAL")
+            for mcol in active_min_cols:
+                if mcol in out_df.columns:
+                    out_df.loc[active_coal, mcol] = 1.0 if mcol == "VCOAL" else 0.0
+
+        # Core comparison metrics (exclude coal intervals)
+        core_mask = phit_s.notna() & cpore_s.notna() & (cpore_s > 0) & (~coal_mask)
         core_metrics: Dict[str, Optional[float]] = {
             "count": int(core_mask.sum()),
             "rmse": None,
@@ -1404,6 +1558,18 @@ def workspace_permeability(
         else:
             raise ValueError(f"Unsupported permeability method: {req.method}")
 
+        coal_or_zero_phi = phit.notna() & (phit <= 0.0)
+        if "COAL_FLAG" in df.columns:
+            coal_or_zero_phi = coal_or_zero_phi | (
+                pd.to_numeric(df["COAL_FLAG"], errors="coerce").fillna(0.0) >= 0.5
+            )
+        if "VCOAL" in df.columns:
+            coal_or_zero_phi = coal_or_zero_phi | (
+                pd.to_numeric(df["VCOAL"], errors="coerce").fillna(0.0) >= 0.5
+            )
+        if coal_or_zero_phi.any():
+            perm_s.loc[coal_or_zero_phi] = 0.001
+
         cperm_col = next(
             (c for c in ("CPERM", "KPERM") if c in df.columns), None
         )
@@ -1612,6 +1778,19 @@ def workspace_saturation(
             swt_ws_s.loc[ws_mask] = np.clip(
                 np.asarray(swt_w, dtype=float).ravel(), 0.0, 1.0
             )
+
+        coal_or_zero_phi = rt.notna() & phit.notna() & (phit <= 0.0)
+        if "COAL_FLAG" in df.columns:
+            coal_or_zero_phi = coal_or_zero_phi | (
+                pd.to_numeric(df["COAL_FLAG"], errors="coerce").fillna(0.0) >= 0.5
+            )
+        if "VCOAL" in df.columns:
+            coal_or_zero_phi = coal_or_zero_phi | (
+                pd.to_numeric(df["VCOAL"], errors="coerce").fillna(0.0) >= 0.5
+            )
+        if coal_or_zero_phi.any():
+            swt_archie_s.loc[coal_or_zero_phi] = 1.0
+            swt_ws_s.loc[coal_or_zero_phi] = 1.0
 
         primary_swt = (
             swt_ws_s if req.method.lower() == "waxman_smits" else swt_archie_s
