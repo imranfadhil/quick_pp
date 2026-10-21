@@ -38,6 +38,7 @@ export interface LithoEndpointParams {
 
 export interface SaturationModelParams {
 	method: 'waxman_smits' | 'archie';
+	rwMode: 'salinity_temp' | 'pickett';
 	measSystem: 'metric' | 'imperial';
 	waterSalinity: number;
 	rwPickett: number;
@@ -142,6 +143,7 @@ class WorkbenchState {
 
 	saturationParams = $state<SaturationModelParams>({
 		method: 'waxman_smits',
+		rwMode: 'salinity_temp',
 		measSystem: 'metric',
 		waterSalinity: 35000,
 		rwPickett: 0.08,
@@ -151,7 +153,7 @@ class WorkbenchState {
 		tempGradient: 30.0,
 		surfaceTemp: 25.0,
 		bMethod: 'waxman_smits',
-		qvMethod: 'hill',
+		qvMethod: 'cec',
 		cecClay: 0.1,
 		rhoDryClay: 2.71
 	});

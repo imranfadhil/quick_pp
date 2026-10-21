@@ -66,6 +66,7 @@ from quick_pp.rock_type import calc_fzi, find_cutoffs, rock_typing
 from quick_pp.saturation import (
     archie_saturation,
     estimate_b_waxman_smits,
+    estimate_qv,
     estimate_qvn,
     estimate_rw_temperature_salinity,
     estimate_temperature_gradient,
@@ -404,14 +405,30 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
         "waxman_smits",
         description="Primary saturation curve to save/highlight: 'waxman_smits' or 'archie'",
     )
+    rw_mode: str = Field(
+        "salinity_temp",
+        description="Rw source mode: 'salinity_temp' (from salinity & geothermal gradient) or 'pickett' (constant Rw override)",
+    )
     meas_system: str = Field("metric", description="'metric' or 'imperial'")
     water_salinity: float = Field(35000.0, description="Formation water salinity (ppm)")
-    m: float = Field(2.0, description="Archie cementation exponent m")
-    a: float = Field(1.0, description="Archie tortuosity factor a")
-    n: float = Field(2.0, description="Archie saturation exponent n")
-    m_slope: float = Field(0.1, description="Waxman-Smits m* slope vs VCLAY/PHIT")
+    temp_gradient: float = Field(
+        30.0, description="Geothermal temperature gradient (°C/km or °F/kft)"
+    )
+    surface_temp: float = Field(25.0, description="Surface temperature (°C or °F)")
+    m: float = Field(2.0, description="Archie/Waxman-Smits cementation exponent m")
+    a: float = Field(1.0, description="Tortuosity factor a")
+    n: float = Field(2.0, description="Saturation exponent n")
+    m_slope: float = Field(0.0, description="Optional Waxman-Smits m* slope vs VCLAY/PHIT")
     rw: Optional[float] = Field(None, description="Explicit Rw override (ohm.m)")
-    b_intercept: float = Field(1.8, description="Waxman-Smits m* intercept")
+    b_intercept: Optional[float] = Field(
+        None, description="Optional Waxman-Smits m* intercept override (defaults to m)"
+    )
+    qv_method: str = Field(
+        "cec",
+        description="Qv estimation method: 'cec' (from cec_clay & rho_dry_clay) or 'qvn' (Juhasz normalized Qvn)",
+    )
+    cec_clay: float = Field(0.1, description="Clay cation exchange capacity (meq/g)")
+    rho_dry_clay: float = Field(2.71, description="Dry clay bulk density (g/cc)")
     depths: Optional[List[float]] = Field(
         None, description="Optional client-side depth array fallback"
     )
@@ -1694,26 +1711,44 @@ def workspace_saturation(
         )
 
         # 1. Temperature gradient & Rw (aligned on every depth row)
-        temp_grad_arr = np.asarray(
-            estimate_temperature_gradient(tvdss.to_numpy(dtype=float), req.meas_system),
+        tvd_arr = tvdss.to_numpy(dtype=float)
+        if req.meas_system.lower() == "imperial":
+            # Convert TVD (m) to kft, compute T in °F, then convert to °C for Crain/Juhasz formulas
+            tvd_kft = tvd_arr * 3.28084 / 1000.0
+            temp_f = float(req.surface_temp) + float(req.temp_gradient) * tvd_kft
+            temp_grad_arr = np.clip((temp_f - 32.0) * 5.0 / 9.0, 5.0, 250.0)
+        else:
+            temp_grad_arr = np.clip(
+                float(req.surface_temp) + float(req.temp_gradient) * (tvd_arr / 1000.0),
+                5.0,
+                250.0,
+            )
+
+        salinity_ppm = max(float(req.water_salinity), 100.0)
+        rw_salinity_arr = np.asarray(
+            estimate_rw_temperature_salinity(temp_grad_arr, salinity_ppm),
             dtype=float,
         ).ravel()
-        rw_arr = np.asarray(
-            estimate_rw_temperature_salinity(temp_grad_arr, req.water_salinity),
-            dtype=float,
-        ).ravel()
+
+        use_pickett_rw = (
+            req.rw_mode.lower() == "pickett"
+            and req.rw is not None
+            and float(req.rw) > 0
+        )
+        if use_pickett_rw:
+            rw_arr = np.full(len(df), float(req.rw), dtype=float)
+        else:
+            rw_arr = rw_salinity_arr
+
         b_arr = np.asarray(
             estimate_b_waxman_smits(temp_grad_arr, rw_arr), dtype=float
         ).ravel()
 
         temp_grad_s = pd.Series(temp_grad_arr, index=df.index, dtype=float)
-        if req.rw is not None and float(req.rw) > 0:
-            rw_arr = np.full(len(df), float(req.rw), dtype=float)
-            b_arr = np.asarray(estimate_b_waxman_smits(temp_grad_arr, rw_arr), dtype=float).ravel()
         rw_s = pd.Series(rw_arr, index=df.index, dtype=float)
         b_s = pd.Series(b_arr, index=df.index, dtype=float)
 
-        # 2. Shale porosity & Qvn (strictly depth-aligned)
+        # 2. Shale porosity & Qv / Qvn (strictly depth-aligned)
         if "PHIT_SH" in df.columns and df["PHIT_SH"].notna().any():
             phit_sh_s = pd.to_numeric(df["PHIT_SH"], errors="coerce")
         else:
@@ -1730,16 +1765,36 @@ def workspace_saturation(
                 ).ravel()
 
         qvn_s = pd.Series(np.nan, index=df.index, dtype=float)
-        qvn_mask = vclay.notna() & phit.notna() & phit_sh_s.notna() & (phit > 0) & (phit_sh_s > 0)
-        if qvn_mask.any():
-            qvn_s.loc[qvn_mask] = np.asarray(
-                estimate_qvn(
-                    vclay[qvn_mask].to_numpy(dtype=float),
-                    phit[qvn_mask].to_numpy(dtype=float),
-                    phit_sh_s[qvn_mask].to_numpy(dtype=float),
-                ),
-                dtype=float,
-            ).ravel()
+        if req.qv_method.lower() == "qvn":
+            qvn_mask = (
+                vclay.notna()
+                & phit.notna()
+                & phit_sh_s.notna()
+                & (phit > 0)
+                & (phit_sh_s > 0)
+            )
+            if qvn_mask.any():
+                qvn_s.loc[qvn_mask] = np.asarray(
+                    estimate_qvn(
+                        vclay[qvn_mask].to_numpy(dtype=float),
+                        phit[qvn_mask].to_numpy(dtype=float),
+                        phit_sh_s[qvn_mask].to_numpy(dtype=float),
+                    ),
+                    dtype=float,
+                ).ravel()
+        else:
+            # Default 'cec': compute Qv (meq/cm3) from VCLAY, dry clay density, and clay CEC
+            qv_mask = vclay.notna() & phit.notna() & (phit > 0)
+            if qv_mask.any():
+                qvn_s.loc[qv_mask] = np.asarray(
+                    estimate_qv(
+                        vclay[qv_mask].to_numpy(dtype=float),
+                        phit[qv_mask].to_numpy(dtype=float),
+                        rho_clay=float(req.rho_dry_clay),
+                        cec_clay=float(req.cec_clay),
+                    ),
+                    dtype=float,
+                ).ravel()
 
         # 3. Archie SWT (strictly depth-aligned)
         swt_archie_s = pd.Series(np.nan, index=df.index, dtype=float)
@@ -1765,15 +1820,18 @@ def workspace_saturation(
             vcl_over_phi = vclay[ws_mask].to_numpy(dtype=float) / phit[
                 ws_mask
             ].to_numpy(dtype=float)
-            m_star_arr = req.m_slope * vcl_over_phi + req.b_intercept
+            base_m = float(req.b_intercept) if req.b_intercept is not None else float(req.m)
+            m_star_arr = float(req.m_slope) * vcl_over_phi + base_m
             m_star_s.loc[ws_mask] = m_star_arr
+            a_factor = max(float(req.a), 1e-4)
             swt_w = waxman_smits_saturation(
-                rt[ws_mask].to_numpy(dtype=float),
+                rt[ws_mask].to_numpy(dtype=float) / a_factor,
                 rw_s[ws_mask].to_numpy(dtype=float),
                 phit[ws_mask].to_numpy(dtype=float),
                 qvn_s[ws_mask].to_numpy(dtype=float),
                 b_s[ws_mask].to_numpy(dtype=float),
-                m_star_arr,
+                m=m_star_arr,
+                n=float(req.n),
             )
             swt_ws_s.loc[ws_mask] = np.clip(
                 np.asarray(swt_w, dtype=float).ravel(), 0.0, 1.0
