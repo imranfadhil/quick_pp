@@ -350,7 +350,7 @@
 				hovertemplate: 'RHOB: %{customdata:.3f} g/cc<extra></extra>'
 			});
 		}
-		if (showHcCorrected) {
+		if (showHcCorrected && workbench.lithoParams.enableHcCorrection) {
 			const nphiHc = pick('NPHI_HC');
 			const rhobHc = pick('RHOB_HC');
 			if (nphiHc.some((v) => v !== null)) {
@@ -793,6 +793,7 @@
 		void wellData.coreSamples;
 		void brushedIntervals;
 		void showHcCorrected;
+		void workbench.lithoParams.enableHcCorrection;
 		void workbench.lithoParams.model;
 		void workbench.lithoParams.minerals;
 

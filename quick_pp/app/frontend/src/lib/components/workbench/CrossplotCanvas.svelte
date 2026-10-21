@@ -131,12 +131,14 @@
 		}
 
 		if (effectiveMode === 'nphi-rhob') {
+			const useHc =
+				workbench.lithoParams.enableHcCorrection && workbench.lithoParams.useHcCorrected;
 			const nphiArr =
-				workbench.lithoParams.useHcCorrected && wellData.curves['NPHI_HC']
+				useHc && wellData.curves['NPHI_HC']
 					? wellData.curves['NPHI_HC']
 					: (wellData.curves['NPHI'] ?? []);
 			const rhobArr =
-				workbench.lithoParams.useHcCorrected && wellData.curves['RHOB_HC']
+				useHc && wellData.curves['RHOB_HC']
 					? wellData.curves['RHOB_HC']
 					: (wellData.curves['RHOB'] ?? []);
 			const grArr = wellData.curves['GR'] ?? [];

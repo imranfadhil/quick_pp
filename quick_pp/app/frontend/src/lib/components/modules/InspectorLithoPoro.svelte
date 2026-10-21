@@ -74,6 +74,7 @@
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const lp = workbench.lithoParams;
+		lp.useHcCorrected = lp.enableHcCorrection;
 		zeroUnselectedMineralCurvesInMemory();
 		const filterArgs = {
 			min_depth: workbench.depthFilter?.min ?? null,
@@ -99,8 +100,10 @@
 							rho_hc: lp.rhoHc,
 							hi_hc: lp.hiHc,
 							buffer: lp.hcBuffer,
+							gr_clean: lp.grClean,
+							gr_clay: lp.grClay,
 							...filterArgs
-						}
+						} as any
 					}
 				);
 				if (hcErr) throw new Error(String((hcErr as any)?.detail ?? 'HC Correction failed'));
@@ -118,7 +121,7 @@
 					},
 					body: {
 						model: lp.model,
-						use_hc_corrected: lp.enableHcCorrection && lp.useHcCorrected,
+						use_hc_corrected: lp.enableHcCorrection,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
@@ -147,7 +150,7 @@
 					body: {
 						method: lp.porosityMethod,
 						lithology_model: lp.model,
-						use_hc_corrected: lp.enableHcCorrection && lp.useHcCorrected,
+						use_hc_corrected: lp.enableHcCorrection,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
@@ -369,7 +372,10 @@
 				<input
 					type="checkbox"
 					bind:checked={workbench.lithoParams.enableHcCorrection}
-					onchange={() => executeLithoPoro(false)}
+					onchange={() => {
+						workbench.lithoParams.useHcCorrected = workbench.lithoParams.enableHcCorrection;
+						executeLithoPoro(false);
+					}}
 					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 				/>
 				<span>Enable NPHI/RHOB HC Correction</span>

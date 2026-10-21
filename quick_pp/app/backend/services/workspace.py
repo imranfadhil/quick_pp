@@ -130,6 +130,11 @@ def _update_in_memory_well_cache(
                 time.time(),
                 merged_mem,
             )
+            if (
+                project_id in _ephemeral_wells
+                and well_name in _ephemeral_wells[project_id]
+            ):
+                _ephemeral_wells[project_id][well_name]["data"] = merged_mem
     except Exception:
         pass
 
@@ -150,7 +155,7 @@ def _save_curves_to_well(project_id: int, well_name: str, curves_df: pd.DataFram
             def _bg_save():
                 try:
                     with get_db() as s:
-                        db_w = resolve_db_well_name(project_id, well_name, s)
+                        db_w = resolve_db_well_name(project_id, well_name)
                         orm_w = s.query(db_objects.ORMWell).filter_by(project_id=project_id, name=db_w).first()
                         if orm_w is not None:
                             db_objects.Well.load_from_orm(s, orm_w).update_data(
@@ -172,6 +177,7 @@ def _save_curves_to_well(project_id: int, well_name: str, curves_df: pd.DataFram
         proj.save()
 
     invalidate_well_cache(project_id=project_id, well_name=well_name)
+    _update_in_memory_well_cache(project_id, well_name, df_to_save)
     return len(df_to_save)
 
 
@@ -270,6 +276,8 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
     rho_hc: float = Field(0.8, description="Hydrocarbon density (g/cc)")
     hi_hc: float = Field(0.9, description="Hydrocarbon hydrogen index")
     buffer: float = Field(0.0, description="Buffer for HC flag detection")
+    gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
+    gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
 
 
 class WorkspaceLithologyRequest(WorkspaceFilterBase):
@@ -614,9 +622,31 @@ def workspace_hc_correction(
         rhob_hc_full = pd.Series(np.nan, index=df.index, dtype=float)
         hc_flag_full = pd.Series(np.nan, index=df.index, dtype=float)
 
+        vsh_gr_arr: Optional[np.ndarray] = None
+        if "GR" in df.columns:
+            gr_s = pd.to_numeric(df["GR"], errors="coerce")
+            if gr_s.notna().any():
+                if (
+                    req.gr_clean is not None
+                    and req.gr_clay is not None
+                    and abs(float(req.gr_clay) - float(req.gr_clean)) > 1e-6
+                ):
+                    vsh_gr_s = (
+                        (gr_s - float(req.gr_clean))
+                        / (float(req.gr_clay) - float(req.gr_clean))
+                    ).clip(0.0, 1.0)
+                else:
+                    vsh_gr_s = pd.Series(
+                        np.asarray(gr_index(gr_s.reset_index(drop=True)), dtype=float),
+                        index=df.index,
+                        dtype=float,
+                    ).clip(0.0, 1.0)
+                vsh_gr_arr = vsh_gr_s.loc[valid_mask].fillna(0.0).to_numpy(dtype=float)
+
         nphi_c, rhob_c, hc_flag = neu_den_xplot_hc_correction(
             nphi[valid_mask].to_numpy(dtype=float),
             rhob[valid_mask].to_numpy(dtype=float),
+            vsh_gr=vsh_gr_arr,
             dry_min1_point=req.dry_sand_point,
             dry_clay_point=req.dry_clay_point,
             water_point=req.water_point,
@@ -631,8 +661,6 @@ def workspace_hc_correction(
         out_df = pd.DataFrame(
             {
                 "DEPTH": df["DEPTH"],
-                "NPHI": nphi,
-                "RHOB": rhob,
                 "NPHI_HC": nphi_hc_full,
                 "RHOB_HC": rhob_hc_full,
                 "HC_FLAG": hc_flag_full,
@@ -724,8 +752,6 @@ def workspace_lithology(
             if proj_y is not None:
                 py_s.loc[valid_mask] = np.asarray(proj_y, dtype=float)
 
-            out_df["NPHI"] = nphi
-            out_df["RHOB"] = rhob
             out_df["VSAND"] = vsand_s
             out_df["VSILT"] = vsilt_s
             out_df["VCLAY"] = vclay_s
@@ -762,13 +788,16 @@ def workspace_lithology(
                 index=df.index,
                 dtype=float,
             )
-            phit_ref = (
-                pd.to_numeric(df["PHIT"], errors="coerce")
-                .where(lambda s: s.notna() & (s >= 0.0) & (s <= 0.6), phid_ssc)
-                .fillna(phid_ssc)
-                .fillna(0.0)
-                .clip(0.0, 0.6)
-            )
+            if "PHIT" in df.columns:
+                phit_ref = (
+                    pd.to_numeric(df["PHIT"], errors="coerce")
+                    .where(lambda s: s.notna() & (s >= 0.0) & (s <= 0.6), phid_ssc)
+                    .fillna(phid_ssc)
+                    .fillna(0.0)
+                    .clip(0.0, 0.6)
+                )
+            else:
+                phit_ref = phid_ssc.fillna(0.0).clip(0.0, 0.6)
             vmatrix_s = (1.0 - phit_ref).clip(0.0, 1.0)
             for mcol in ("VSAND", "VSILT", "VCLAY"):
                 out_df[mcol] = (out_df[mcol] * vmatrix_s).clip(0.0, 1.0)
@@ -898,7 +927,6 @@ def workspace_lithology(
                 else pd.Series(0.0, index=df.index, dtype=float)
             ).fillna(0.0).clip(0.0, 0.6)
             vmatrix_s = (1.0 - phit_ref).clip(0.0, 1.0)
-            out_df["GR"] = gr
             out_df["VCLAY"] = (vclay_s * vmatrix_s).clip(0.0, 1.0)
             out_df["VSAND"] = ((1.0 - vclay_s).clip(0.0, 1.0) * vmatrix_s).clip(0.0, 1.0)
             for mcol in ALL_LITHOLOGY_VOL_COLS:
@@ -1051,7 +1079,35 @@ def workspace_porosity(
             vclay_eff = np.where(total_min_vol < 0.98, vclay_bulk, vclay_mat)
             phie_v = np.clip(phit_v - (vclay_eff * phit_sh_v), 0.0, phit_v)
         else:
-            vsand, vsilt, vclay, _ = ssc_model.estimate_lithology(nphi_s, rhob_s)
+            vsand_m, vsilt_m, vclay_m, _ = ssc_model.estimate_lithology(nphi_s, rhob_s)
+            vsand = np.asarray(vsand_m, dtype=float)
+            vsilt = np.asarray(vsilt_m, dtype=float)
+            vclay = np.asarray(vclay_m, dtype=float)
+            if all(c in df.columns for c in ("VSAND", "VSILT", "VCLAY")):
+                vs_df = (
+                    pd.to_numeric(df.loc[valid_mask, "VSAND"], errors="coerce")
+                    .fillna(0.0)
+                    .clip(0.0, 1.0)
+                    .to_numpy(dtype=float)
+                )
+                vsi_df = (
+                    pd.to_numeric(df.loc[valid_mask, "VSILT"], errors="coerce")
+                    .fillna(0.0)
+                    .clip(0.0, 1.0)
+                    .to_numpy(dtype=float)
+                )
+                vcl_df = (
+                    pd.to_numeric(df.loc[valid_mask, "VCLAY"], errors="coerce")
+                    .fillna(0.0)
+                    .clip(0.0, 1.0)
+                    .to_numpy(dtype=float)
+                )
+                tot_ssc = vs_df + vsi_df + vcl_df
+                has_ssc = tot_ssc > 1e-6
+                if np.any(has_ssc):
+                    vsand = np.where(has_ssc, vs_df / tot_ssc, vsand)
+                    vsilt = np.where(has_ssc, vsi_df / tot_ssc, vsilt)
+                    vclay = np.where(has_ssc, vcl_df / tot_ssc, vclay)
             rho_ma = rho_matrix(vsand=vsand, vsilt=vsilt, vclay=vclay)
             phid_v = density_porosity(rhob_v, rho_ma, req.fluid_point[1])
 
@@ -2277,6 +2333,34 @@ def workspace_ml_inference(
         saved_rows = 0
         if req.save:
             saved_rows = _save_curves_to_well(project_id, well_name, out_df)
+        else:
+            _update_in_memory_well_cache(project_id, well_name, out_df)
+
+        phit_mean_width = 0.0
+        if "PHIT_P10" in out_df.columns and "PHIT_P90" in out_df.columns:
+            w = (
+                pd.to_numeric(out_df["PHIT_P90"], errors="coerce")
+                - pd.to_numeric(out_df["PHIT_P10"], errors="coerce")
+            ).dropna()
+            if not w.empty:
+                phit_mean_width = round(float(w.mean()), 4)
+
+        sw_mean_width = 0.0
+        if "SW_P10" in out_df.columns and "SW_P90" in out_df.columns:
+            w = (
+                pd.to_numeric(out_df["SW_P90"], errors="coerce")
+                - pd.to_numeric(out_df["SW_P10"], errors="coerce")
+            ).dropna()
+            if not w.empty:
+                sw_mean_width = round(float(w.mean()), 4)
+
+        perm_factor = 1.0
+        if "PERM_P10" in out_df.columns and "PERM_P90" in out_df.columns:
+            p10_s = pd.to_numeric(out_df["PERM_P10"], errors="coerce").clip(lower=1e-3)
+            p90_s = pd.to_numeric(out_df["PERM_P90"], errors="coerce").clip(lower=1e-3)
+            ratio = (p90_s / p10_s).replace([np.inf, -np.inf], np.nan).dropna()
+            if not ratio.empty:
+                perm_factor = round(float(np.median(ratio)), 2)
 
         stats = {
             col: _curve_summary_stats(out_df[col])
@@ -2287,6 +2371,13 @@ def workspace_ml_inference(
             "well_name": well_name,
             "model_config": req.model_config_key,
             "alpha": float(req.alpha),
+            "confidence_level_pct": round((1.0 - float(req.alpha)) * 100.0, 1),
+            "model_source": f"Pre-Trained PIML ({req.model_config_key.title()})",
+            "interval_width_summary": {
+                "phit_mean_width_vv": phit_mean_width,
+                "sw_mean_width_vv": sw_mean_width,
+                "perm_median_p90_p10_factor": perm_factor,
+            },
             "read_only_training": True,
             "saved": req.save,
             "saved_rows": saved_rows,
