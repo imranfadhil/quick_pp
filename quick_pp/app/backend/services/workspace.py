@@ -2014,11 +2014,36 @@ def workspace_reservoir_summary(
             if perm_col in df.columns
             else pd.Series(0.0, index=df.index, dtype=float)
         )
+        if "ZONES" not in df.columns or not df["ZONES"].notna().any():
+            try:
+                with get_db() as session:
+                    proj = db_objects.Project.load(session, project_id=project_id)
+                    anc = proj.get_well_ancillary_data(well_name)
+                    tops_df = (
+                        anc.get("formation_tops") if isinstance(anc, dict) else None
+                    )
+                    if isinstance(tops_df, pd.DataFrame) and not tops_df.empty:
+                        df = df.copy()
+                        df["ZONES"] = pd.NA
+                        for _, top in tops_df.iterrows():
+                            try:
+                                top_depth = float(top.get("depth"))
+                                top_name = str(top.get("name"))
+                            except Exception:
+                                continue
+                            nearest_idx = (df["DEPTH"] - top_depth).abs().idxmin()
+                            df.at[nearest_idx, "ZONES"] = top_name
+                        df["ZONES"] = df["ZONES"].ffill().bfill()
+            except Exception:
+                pass
+
         zones = (
             df["ZONES"].fillna("ALL").astype(str)
             if "ZONES" in df.columns
             else pd.Series("ALL", index=df.index, dtype=str)
         )
+        df = df.copy()
+        df["ZONES"] = zones
 
         if phit.isna().all() or swt.isna().all():
             raise ValueError(
@@ -2102,8 +2127,17 @@ def workspace_reservoir_summary(
                 ]
                 if c in unc_res["cpi_df"].columns
             ]
+            unc_sum_df = unc_res["summary_df"]
+            pay_sum_df = (
+                unc_sum_df[unc_sum_df["flag"] == "pay"]
+                if "flag" in unc_sum_df.columns
+                else unc_sum_df
+            )
+            if pay_sum_df.empty:
+                pay_sum_df = unc_sum_df
             response["uncertainty"] = {
-                "summary": dataframe_to_records(unc_res["summary_df"]),
+                "summary": dataframe_to_records(unc_sum_df),
+                "zone_summary": dataframe_to_records(pay_sum_df),
                 "volumetrics": unc_res["volumetrics"],
                 "cpi": dataframe_to_columnar(unc_res["cpi_df"][cpi_cols].round(4)),
             }

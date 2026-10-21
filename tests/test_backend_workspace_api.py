@@ -207,13 +207,15 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert r_pt.status_code == 200
     assert r_pt.json()["saved_wells"] == 1
 
-    # 7. Reservoir Summary + Upscaling
+    # 7. Reservoir Summary + Upscaling + Uncertainty
     r_res = client.post(
         f"/quick_pp/workspace/projects/{pid}/wells/Well-A/reservoir_summary",
         json={
             "cut_offs": {"VSHALE": 0.6, "PHIT": 0.01, "SWT": 0.99},
             "include_upscaling": True,
             "cell_size": 2.0,
+            "include_uncertainty": True,
+            "n_samples": 40,
         },
     )
     assert r_res.status_code == 200
@@ -221,6 +223,11 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert len(res_body["summary"]) >= 1
     assert "upscaling" in res_body
     assert res_body["upscaling"]["n_cells"] >= 1
+    assert "uncertainty" in res_body
+    assert len(res_body["uncertainty"]["zone_summary"]) >= 1
+    z0 = res_body["uncertainty"]["zone_summary"][0]
+    assert z0.get("ZONE") is not None
+    assert z0.get("STOIIP_MMBBL_P50") is not None
 
     # 8. Saturation Height Function (Leverett-J / Skelt-Harrison / Cuddy)
     r_shf = client.post(
