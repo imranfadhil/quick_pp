@@ -7,14 +7,57 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
+from quick_pp.app.backend import main as backend_main
 from quick_pp.app.backend.main import app
 from quick_pp.machine_learning.train_pipeline import train_pipeline
 
 
+@pytest.fixture(scope="module")
+def seeded_demo_paths(tmp_path_factory):
+    """Seed an isolated SQLite demo database once (cached in .pytest_cache) and copy per test module."""
+    import shutil
+    from pathlib import Path
+    from deploy.demo.seed_demo import seed_demo_database
+
+    cache_dir = Path(__file__).resolve().parent.parent / ".pytest_cache" / "demo_seed_v1"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached_db = cache_dir / "quick_pp_seed.db"
+    cached_model = cache_dir / "pretrained_models.joblib"
+
+    prev_conn = backend_main._db_connector_instance
+    backend_main._db_connector_instance = None
+
+    if not cached_db.exists() or not cached_model.exists():
+        if cached_db.exists():
+            cached_db.unlink()
+        seed_demo_database(
+            db_url=f"sqlite:///{cached_db.as_posix()}",
+            model_path=cached_model,
+            max_rows_per_well=80,
+        )
+
+    demo_dir = tmp_path_factory.mktemp("live_demo")
+    db_file = demo_dir / "quick_pp_demo.db"
+    shutil.copy2(cached_db, db_file)
+    db_url = f"sqlite:///{db_file.as_posix()}"
+
+    yield db_url, str(cached_model)
+    if backend_main._db_connector_instance is not None:
+        try:
+            backend_main._db_connector_instance.dispose()
+        except Exception:
+            pass
+    backend_main._db_connector_instance = prev_conn
+
+
 @pytest.fixture(autouse=True)
-def enable_demo_mode(monkeypatch):
+def enable_demo_mode(monkeypatch, seeded_demo_paths):
+    db_url, model_path = seeded_demo_paths
     monkeypatch.setenv("QPP_DEMO_MODE", "true")
     monkeypatch.setenv("QPP_DISABLE_TRAINING", "true")
+    monkeypatch.setenv("QPP_DATABASE_URL", db_url)
+    monkeypatch.setenv("QPP_PRETRAINED_MODELS_PATH", model_path)
+    backend_main._db_connector_instance = None
 
 
 def test_zero_cold_start_auth_and_preseeded_projects():

@@ -183,7 +183,9 @@ def density_porosity(rhob, rho_matrix, rho_fluid: float = 1.0):
     """
     logger.debug("Calculating density porosity with fluid density")
     phi_d = (rho_matrix - rhob) / (rho_matrix - rho_fluid)
-    logger.debug(f"Density porosity range: {phi_d.min():.3f} - {phi_d.max():.3f}")
+    logger.debug(
+        f"Density porosity range: {np.nanmin(phi_d):.3f} - {np.nanmax(phi_d):.3f}"
+    )
     return phi_d
 
 

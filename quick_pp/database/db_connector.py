@@ -19,6 +19,7 @@ class DBConnector:
     _engine: Engine | None = None
     _Session: sessionmaker[Session] | None = None
     _engine_pid: int | None = None
+    _engine_url: str | None = None
 
     def __init__(self, db_url: str | None = None):
         """
@@ -32,7 +33,9 @@ class DBConnector:
         """
         current_pid = os.getpid()
         if DBConnector._engine is not None:
-            if DBConnector._engine_pid == current_pid:
+            if DBConnector._engine_pid == current_pid and (
+                not db_url or db_url == DBConnector._engine_url
+            ):
                 return
             else:
                 try:
@@ -42,6 +45,7 @@ class DBConnector:
                 DBConnector._engine = None
                 DBConnector._Session = None
                 DBConnector._engine_pid = None
+                DBConnector._engine_url = None
 
         if not db_url:
             # Default to a local SQLite DB if no URL is provided or empty.
@@ -62,6 +66,7 @@ class DBConnector:
             autocommit=False, autoflush=False, bind=DBConnector._engine
         )
         DBConnector._engine_pid = current_pid
+        DBConnector._engine_url = db_url
 
     @contextmanager
     def get_session(self) -> Generator[Session, None, None]:

@@ -21,10 +21,7 @@ servers, and executing machine learning training and prediction pipelines.
 """
 
 
-try:
-    quick_ppVersion = metadata.version("quick_pp")
-except metadata.PackageNotFoundError:
-    quick_ppVersion = "0.0.0"
+from quick_pp import __version__ as quick_ppVersion
 
 # Global defaults for backend and frontend locations used across commands
 BACKEND_HOST = "localhost"

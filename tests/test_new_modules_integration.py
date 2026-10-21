@@ -39,13 +39,15 @@ def test_quick_pp_init_exports():
         assert name in quick_pp.__all__, f"{name} not listed in quick_pp.__all__"
 
 
-def test_sphinx_docs_list_new_modules():
-    """Verify docs/source/quick_pp.rst lists quick_pp.uncertainty, quick_pp.upscaling, and quick_pp.scal."""
-    rst_path = Path(__file__).resolve().parents[1] / "docs" / "source" / "quick_pp.rst"
-    content = rst_path.read_text(encoding="utf-8")
-    assert ".. automodule:: quick_pp.uncertainty" in content
-    assert ".. automodule:: quick_pp.upscaling" in content
-    assert ".. automodule:: quick_pp.scal" in content
+def test_mkdocs_docs_list_new_modules():
+    """Verify MkDocs API docs exist for uncertainty, upscaling, and scal."""
+    root = Path(__file__).resolve().parents[1]
+    mkdocs_content = (root / "mkdocs.yml").read_text(encoding="utf-8")
+    assert "api/uncertainty.md" in mkdocs_content
+    assert "api/upscaling.md" in mkdocs_content
+    assert "api/scal.md" in mkdocs_content
+    for doc_name in ("uncertainty.md", "upscaling.md", "scal.md"):
+        assert (root / "docs" / "api" / doc_name).exists()
 
 
 def test_scal_relperm_and_swof():

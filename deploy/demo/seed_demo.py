@@ -594,6 +594,7 @@ def seed_demo_database(
     db_url: str | None = None,
     model_path: Path | None = None,
     force_retrain: bool = False,
+    max_rows_per_well: int | None = None,
 ) -> dict:
     """Create and populate the pre-seeded Volve + Costa SQLite database and pre-trained ML bundle."""
     db_url = db_url or os.environ.get("QPP_DATABASE_URL") or "sqlite:///./data/quick_pp.db"
@@ -642,6 +643,18 @@ def seed_demo_database(
     costa_hw3 = _load_costa_well("HW-3")
     costa_hw4 = _load_costa_well("HW-4")
     costa_hw5 = _load_costa_well("HW-5")
+    if max_rows_per_well and max_rows_per_well > 0:
+        def _thin(df: pd.DataFrame) -> pd.DataFrame:
+            if len(df) <= max_rows_per_well:
+                return df
+            idx = np.linspace(0, len(df) - 1, max_rows_per_well, dtype=int)
+            return df.iloc[idx].reset_index(drop=True)
+
+        volve_19a = _thin(volve_19a)
+        volve_36 = _thin(volve_36)
+        costa_hw3 = _thin(costa_hw3)
+        costa_hw4 = _thin(costa_hw4)
+        costa_hw5 = _thin(costa_hw5)
 
     # Train and save pre-trained Conformal PIML models if needed
     if force_retrain or not model_path.exists():
@@ -733,7 +746,7 @@ def seed_demo_database(
                     session,
                     project_id=proj.project_id,
                     name=wname,
-                    uwi=wname,
+                    uwi=f"{proj.project_id}-{wname}",
                     header_data={},
                     depth_uom="m",
                 )

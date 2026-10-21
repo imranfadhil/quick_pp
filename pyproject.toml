@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quick-pp"
-version = "0.2.106"
+version = "0.3.0"
 description = "Comprehensive Python package and web platform for deterministic and probabilistic petrophysical evaluation, SCAL & relative permeability modeling, multi-well FWL optimization, stratigraphic normalization, and geomodel log upscaling."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "MIT"
@@ -28,7 +28,7 @@ keywords = [
     "upscaling", "log blocking",
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Education",
@@ -157,6 +157,7 @@ Changelog = "https://github.com/imranfadhil/quick_pp/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["quick_pp*"]
 
 [tool.setuptools.package-data]
 quick_pp = [

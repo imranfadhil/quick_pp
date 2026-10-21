@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 (2026)
+- Added full-stack **SvelteKit 5 Subsurface Petrophysical Workbench** (`quick_pp/app/frontend`) with Single-Well and Multi-Well Field evaluation scopes, synchronized multi-track log canvas, interactive crossplots, and in-place curve editing.
+- Added **Multi-Well Saturation-Height Function (SHF)** SCAL capillary pressure curve fitting for **Leverett-$J$** (`auto_j_params`), **Skelt-Harrison** (`auto_skelt_harrison_params`), and **Cuddy $BVW$** (`auto_cuddy_params`), alongside FZI rock typing and core-log permeability transforms.
+- Added **Per-Zone Free Water Level (`FWL`) Optimization** (`solve_per_zone=True`, `fwl_by_zone`, `zone_metrics`) for reconciling compartmentalized contacts across reservoir zones.
+- Added **Log-Level CPI Uncertainty Propagation (`P10`/`P50`/`P90`)** and stochastic reservoir summary tables directly in the Single-Well Reservoir Summary inspector.
+- Added **Cognito-style User Access Management (UAM)** with invite-only onboarding, mandatory TOTP Multi-Factor Authentication (`MFA`), role-based project access control (`admin`/`editor`/`viewer`), and isolated **Live Demo Mode**.
+- Added native **Petrophysical AI Assistant & FastAPI MCP Server** (`quick_pp mcp`, `/api/v1/assistant/chat`), removing legacy Langflow dependencies.
+- Vectorized multi-mineral lithology optimization, added automated coal flagging, and improved neutron-density hydrocarbon corrections.
+
 ## 0.2.106 (2026)
 - Added probabilistic uncertainty & Monte Carlo engine (`quick_pp.uncertainty`) with vectorized Latin Hypercube Sampling (`run_cpi_uncertainty`, `mc_volumetric_uncertainty`).
 - Added Special Core Analysis & Relative Permeability module (`quick_pp.scal`) with lab-to-reservoir overburden, Klinkenberg, and Dean-Stark corrections, Corey/Brooks-Corey/LET models, and Eclipse `SWOF` table export.

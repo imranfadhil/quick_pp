@@ -46,7 +46,7 @@ logging.getLogger("mlflow").setLevel(logging.WARNING)
 
 __author__ = """Imran Fadhil"""
 __email__ = "imranfadhil@gmail.com"
-__version__ = "0.2.106"  # Need to be updated manually when releasing a new version/ change in pyproject.toml
+__version__ = "0.3.0"  # Need to be updated manually when releasing a new version/ change in pyproject.toml
 
 # Expose core petrophysical submodules and key public functions at top-level package namespace
 from quick_pp import qaqc, saturation, scal, uncertainty, upscaling  # noqa: E402
