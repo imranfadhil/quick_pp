@@ -223,7 +223,6 @@
 				<span class="text-xs font-medium text-[var(--text-primary)]">Lithology Model</span>
 				<select
 					bind:value={workbench.lithoParams.model}
-					onchange={() => executeLithoPoro(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="ssc">Sand-Silt-Clay</option>
@@ -236,7 +235,6 @@
 				<span class="text-xs font-medium text-[var(--text-primary)]">Porosity Method</span>
 				<select
 					bind:value={workbench.lithoParams.porosityMethod}
-					onchange={() => executeLithoPoro(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="neu_den">NPHI-RHOB Xplot</option>
@@ -268,7 +266,6 @@
 								disabled={isSelected && workbench.lithoParams.minerals.length <= 1}
 								onchange={() => {
 									toggleMineral(minName);
-									executeLithoPoro(false);
 								}}
 								class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 							/>
@@ -374,7 +371,6 @@
 					bind:checked={workbench.lithoParams.enableHcCorrection}
 					onchange={() => {
 						workbench.lithoParams.useHcCorrected = workbench.lithoParams.enableHcCorrection;
-						executeLithoPoro(false);
 					}}
 					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 				/>
@@ -427,7 +423,6 @@
 				<span class="text-xs font-medium text-[var(--text-primary)]">Pre-Trained Suite</span>
 				<select
 					bind:value={mlModelConfig}
-					onchange={() => executePretrainedMlInference(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="clastic">Clastic (Volve PIML)</option>

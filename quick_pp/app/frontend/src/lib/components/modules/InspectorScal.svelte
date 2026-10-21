@@ -239,7 +239,6 @@
 						type="button"
 						onclick={() => {
 							workbench.scalParams.model = m as any;
-							computeScal();
 						}}
 						class="h-6 rounded-sm border text-[11px] font-medium {workbench.scalParams.model ===
 						m

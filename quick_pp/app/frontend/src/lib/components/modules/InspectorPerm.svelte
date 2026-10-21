@@ -18,6 +18,12 @@
 		if (!workbench.projectId || !workbench.wellId) return;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
+		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+		const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
+		const vsiltArr = wellData.curves['VSILT'] ?? [];
+		const cleanArr = (arr: number[]) =>
+			arr.length > 0 ? arr.map((v) => (Number.isFinite(v) ? v : null)) : undefined;
 		try {
 			const { data, error } = await api.POST(
 				'/quick_pp/workspace/projects/{project_id}/wells/{well_name}/permeability',
@@ -33,11 +39,15 @@
 						C,
 						s,
 						swirr,
+						depths: cleanArr(deptArr) as number[] | undefined,
+						phit: cleanArr(phitArr),
+						vclay: cleanArr(vclayArr),
+						vsilt: cleanArr(vsiltArr),
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,
 						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
 						save: persist
-					}
+					} as any
 				}
 			);
 			if (error || !data) {

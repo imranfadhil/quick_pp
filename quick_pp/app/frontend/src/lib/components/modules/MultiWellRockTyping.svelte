@@ -17,13 +17,11 @@
 	function addCutoff() {
 		const last = projectData.fziCutoffs[projectData.fziCutoffs.length - 1] ?? 1.0;
 		projectData.fziCutoffs = [...projectData.fziCutoffs, Number((last * 1.8).toFixed(2))];
-		executeRockTyping(false);
 	}
 
 	function removeCutoff(idx: number) {
 		if (projectData.fziCutoffs.length <= 1) return;
 		projectData.fziCutoffs = projectData.fziCutoffs.filter((_, i) => i !== idx);
-		executeRockTyping(false);
 	}
 
 	async function executeRockTyping(persist: boolean = false) {

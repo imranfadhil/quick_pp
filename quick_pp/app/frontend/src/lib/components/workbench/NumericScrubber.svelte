@@ -30,11 +30,11 @@
 	}: Props = $props();
 
 	let isDragging = $state(false);
+	let isFocused = $state(false);
+	let draftText = $state('');
 	let startX = 0;
 	let startVal = 0;
 	let baseline = $state<number | undefined>(undefined);
-	let runTimer: ReturnType<typeof setTimeout> | null = null;
-	let lastRunTs = 0;
 
 	$effect(() => {
 		if (baseline === undefined) {
@@ -42,8 +42,10 @@
 		}
 	});
 
-	onDestroy(() => {
-		if (runTimer) clearTimeout(runTimer);
+	$effect(() => {
+		if (!isFocused) {
+			draftText = Number.isFinite(value) ? String(value) : '';
+		}
 	});
 
 	let isDirty = $derived(
@@ -56,25 +58,6 @@
 		if (!hasFiniteBounds || !Number.isFinite(value)) return 0;
 		return Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100));
 	});
-
-	function scheduleRealtimeRun(immediate: boolean = false) {
-		if (!onrun) return;
-		if (runTimer) {
-			clearTimeout(runTimer);
-			runTimer = null;
-		}
-		const now = performance.now();
-		if (immediate || now - lastRunTs >= 90) {
-			lastRunTs = now;
-			onrun();
-		} else {
-			runTimer = setTimeout(() => {
-				lastRunTs = performance.now();
-				runTimer = null;
-				onrun?.();
-			}, 90);
-		}
-	}
 
 	function clampAndRound(raw: number): number {
 		const clamped = Math.min(max, Math.max(min, raw));
@@ -107,8 +90,8 @@
 			const next = clampAndRound(startVal + delta);
 			if (next !== value) {
 				value = next;
+				draftText = String(value);
 				onchange?.(value);
-				scheduleRealtimeRun(false);
 			}
 		};
 
@@ -116,27 +99,44 @@
 			isDragging = false;
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
-			scheduleRealtimeRun(true);
 		};
 
 		window.addEventListener('pointermove', onMove);
 		window.addEventListener('pointerup', onUp);
 	}
 
+	function handleFocus() {
+		isFocused = true;
+		draftText = Number.isFinite(value) ? String(value) : '';
+	}
+
 	function handleInput(e: Event) {
 		const target = e.currentTarget as HTMLInputElement;
-		const parsed = parseFloat(target.value);
+		draftText = target.value;
+		const parsed = parseFloat(draftText);
+		if (!Number.isNaN(parsed)) {
+			value = parsed;
+			onchange?.(value);
+		}
+	}
+
+	function commitDraft() {
+		isFocused = false;
+		const parsed = parseFloat(draftText);
 		if (!Number.isNaN(parsed)) {
 			value = clampAndRound(parsed);
 			onchange?.(value);
-			scheduleRealtimeRun(false);
 		}
+		draftText = Number.isFinite(value) ? String(value) : '';
 	}
 
 	function handleKeyDown(e: KeyboardEvent) {
 		if (e.key === 'Enter') {
 			e.preventDefault();
-			scheduleRealtimeRun(true);
+			commitDraft();
+			if (e.metaKey || e.ctrlKey) {
+				onrun?.();
+			}
 		}
 	}
 </script>
@@ -175,8 +175,10 @@
 			{min}
 			{max}
 			{disabled}
-			value={value}
+			value={isFocused ? draftText : value}
+			onfocus={handleFocus}
 			oninput={handleInput}
+			onblur={commitDraft}
 			onkeydown={handleKeyDown}
 			class="mono-num h-full w-full min-w-0 border-0 bg-transparent px-1.5 py-0 text-right text-xs text-[var(--text-primary)] focus:ring-0 focus:outline-none disabled:opacity-50"
 		/>

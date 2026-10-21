@@ -234,7 +234,6 @@
 						<input
 							type="checkbox"
 							bind:checked={byZone}
-							onchange={() => executeResSum(false)}
 							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 						/>
 						<span>By Zone</span>
@@ -259,7 +258,6 @@
 					<span class="text-[var(--text-secondary)]">Perm Averaging:</span>
 					<select
 						bind:value={permMethod}
-						onchange={() => executeResSum(false)}
 						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
 					>
 						<option value="geometric">Geometric (2D Iso)</option>
@@ -319,7 +317,6 @@
 				<input
 					type="checkbox"
 					bind:checked={includeUncertainty}
-					onchange={() => executeResSum(false)}
 					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 				/>
 				<span>Propagate Log CPI Uncertainty (P10/P50/P90)</span>

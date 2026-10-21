@@ -10,6 +10,11 @@
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const sp = workbench.saturationParams;
+		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+		const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
+		const cleanArr = (arr: number[]) =>
+			arr.length > 0 ? arr.map((v) => (Number.isFinite(v) ? v : null)) : undefined;
 
 		try {
 			const { data, error } = await api.POST(
@@ -32,6 +37,9 @@
 						qv_method: sp.qvMethod,
 						cec_clay: sp.cecClay,
 						rho_dry_clay: sp.rhoDryClay,
+						depths: cleanArr(deptArr) as number[] | undefined,
+						phit: cleanArr(phitArr),
+						vclay: cleanArr(vclayArr),
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,
 						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
@@ -64,7 +72,6 @@
 				<span class="text-xs font-medium text-[var(--text-primary)]">Primary Solver</span>
 				<select
 					bind:value={workbench.saturationParams.method}
-					onchange={() => executeSaturation(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="waxman_smits">Waxman-Smits</option>
@@ -76,7 +83,6 @@
 				<span class="text-xs font-medium text-[var(--text-primary)]">Temp Units</span>
 				<select
 					bind:value={workbench.saturationParams.measSystem}
-					onchange={() => executeSaturation(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="metric">Metric (°C / km)</option>

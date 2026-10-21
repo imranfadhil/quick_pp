@@ -309,7 +309,6 @@
 						min={wellData.depthRange.min}
 						max={wellData.depthRange.max}
 						bind:value={workingTopDepth}
-						onchange={() => applyWorkingDepthInterval(true)}
 						class="mono-num h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs font-semibold text-[var(--text-primary)]"
 					/>
 				</label>
@@ -323,7 +322,6 @@
 						min={wellData.depthRange.min}
 						max={wellData.depthRange.max}
 						bind:value={workingBottomDepth}
-						onchange={() => applyWorkingDepthInterval(true)}
 						class="mono-num h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs font-semibold text-[var(--text-primary)]"
 					/>
 				</label>

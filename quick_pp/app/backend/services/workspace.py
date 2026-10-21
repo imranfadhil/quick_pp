@@ -144,29 +144,10 @@ def _save_curves_to_well(project_id: int, well_name: str, curves_df: pd.DataFram
     if curves_df is None or curves_df.empty or "DEPTH" not in curves_df.columns:
         return 0
     df_to_save = curves_df.copy()
-    if "WELL_NAME" not in df_to_save.columns:
-        df_to_save["WELL_NAME"] = well_name
+    db_well_name = resolve_db_well_name(project_id, well_name)
+    df_to_save["WELL_NAME"] = db_well_name
 
     _update_in_memory_well_cache(project_id, well_name, df_to_save)
-    if len(df_to_save) * max(len(df_to_save.columns) - 2, 1) > 20000:
-        if not is_demo_mode():
-            import threading
-
-            def _bg_save():
-                try:
-                    with get_db() as s:
-                        db_w = resolve_db_well_name(project_id, well_name)
-                        orm_w = s.query(db_objects.ORMWell).filter_by(project_id=project_id, name=db_w).first()
-                        if orm_w is not None:
-                            db_objects.Well.load_from_orm(s, orm_w).update_data(
-                                df_to_save.drop(columns=["WELL_NAME"], errors="ignore")
-                            )
-                            s.commit()
-                except Exception:
-                    pass
-
-            threading.Thread(target=_bg_save, daemon=True).start()
-        return len(df_to_save)
 
     if is_demo_mode():
         return len(df_to_save)
@@ -335,6 +316,18 @@ class WorkspacePermeabilityRequest(WorkspaceFilterBase):
     swirr: float = Field(
         0.2, description="Irreducible water saturation for Timur/Tixier/Coates"
     )
+    depths: Optional[List[float]] = Field(
+        None, description="Optional client-side depth array fallback"
+    )
+    phit: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side PHIT array fallback"
+    )
+    vclay: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side VCLAY array fallback"
+    )
+    vsilt: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side VSILT array fallback"
+    )
 
 
 class WorkspaceSaturationRequest(WorkspaceFilterBase):
@@ -350,6 +343,15 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     m_slope: float = Field(0.1, description="Waxman-Smits m* slope vs VCLAY/PHIT")
     rw: Optional[float] = Field(None, description="Explicit Rw override (ohm.m)")
     b_intercept: float = Field(1.8, description="Waxman-Smits m* intercept")
+    depths: Optional[List[float]] = Field(
+        None, description="Optional client-side depth array fallback"
+    )
+    phit: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side PHIT array fallback"
+    )
+    vclay: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side VCLAY array fallback"
+    )
 
 
 class WorkspaceReservoirSummaryRequest(WorkspaceFilterBase):
@@ -1237,6 +1239,90 @@ def workspace_porosity(
         ) from e
 
 
+def _merge_request_fallback_curves(
+    df: pd.DataFrame,
+    depths: Optional[List[float]] = None,
+    curve_arrays: Optional[Dict[str, Optional[List[Optional[float]]]]] = None,
+) -> pd.DataFrame:
+    """Populate missing or all-NaN columns in df using optional client-sent curve arrays or on-the-fly SSC/porosity fallback."""
+    out = df.copy()
+    if depths and curve_arrays:
+        valid_cols = {
+            k: v
+            for k, v in curve_arrays.items()
+            if v is not None and len(v) == len(depths)
+        }
+        if valid_cols:
+            client_df = pd.DataFrame({"DEPTH": pd.to_numeric(depths, errors="coerce")})
+            for k, v in valid_cols.items():
+                client_df[k] = pd.to_numeric(v, errors="coerce")
+            client_df = client_df.dropna(subset=["DEPTH"]).drop_duplicates(
+                subset=["DEPTH"], keep="last"
+            )
+            if not client_df.empty:
+                merged_client = pd.merge_asof(
+                    out[["DEPTH"]].sort_values("DEPTH"),
+                    client_df.sort_values("DEPTH"),
+                    on="DEPTH",
+                    direction="nearest",
+                    tolerance=0.16,
+                ).set_index(out.sort_values("DEPTH").index)
+                for k in valid_cols:
+                    if k not in out.columns or out[k].isna().all():
+                        out[k] = merged_client[k].reindex(out.index)
+
+    # If PHIT, VCLAY, or VSILT are still missing/empty and NPHI + RHOB exist, compute on-the-fly SSC + porosity
+    need_phit = "PHIT" not in out.columns or pd.to_numeric(out["PHIT"], errors="coerce").isna().all()
+    need_ssc = (
+        "VCLAY" not in out.columns
+        or pd.to_numeric(out["VCLAY"], errors="coerce").isna().all()
+        or "VSILT" not in out.columns
+        or pd.to_numeric(out["VSILT"], errors="coerce").isna().all()
+    )
+    if (need_phit or need_ssc) and "NPHI" in out.columns and "RHOB" in out.columns:
+        try:
+            nphi_s = pd.to_numeric(out["NPHI"], errors="coerce")
+            rhob_s = pd.to_numeric(out["RHOB"], errors="coerce")
+            vmask = nphi_s.notna() & rhob_s.notna()
+            if vmask.any():
+                ssc = SandSiltClay()
+                vsand_v, vsilt_v, vclay_v, _ = ssc.estimate_lithology(
+                    nphi_s[vmask].reset_index(drop=True),
+                    rhob_s[vmask].reset_index(drop=True),
+                )
+                phit_v = np.asarray(
+                    neu_den_xplot_poro(
+                        nphi_s[vmask].reset_index(drop=True),
+                        rhob_s[vmask].reset_index(drop=True),
+                        model="ssc",
+                    ),
+                    dtype=float,
+                )
+                phit_clip = np.clip(phit_v, 0.0, 0.6)
+                vmat = np.clip(1.0 - phit_clip, 0.0, 1.0)
+                if need_phit:
+                    phit_col = pd.Series(np.nan, index=out.index, dtype=float)
+                    phit_col.loc[vmask] = phit_clip
+                    out["PHIT"] = phit_col
+                if need_ssc:
+                    for col_name, raw_arr in (
+                        ("VSAND", vsand_v),
+                        ("VSILT", vsilt_v),
+                        ("VCLAY", vclay_v),
+                    ):
+                        if col_name not in out.columns or pd.to_numeric(out[col_name], errors="coerce").isna().all():
+                            s_col = pd.Series(np.nan, index=out.index, dtype=float)
+                            s_col.loc[vmask] = np.clip(np.asarray(raw_arr, dtype=float) * vmat, 0.0, 1.0)
+                            out[col_name] = s_col
+        except Exception:
+            pass
+
+    if ("PHIT" not in out.columns or pd.to_numeric(out["PHIT"], errors="coerce").isna().all()) and "PHIE" in out.columns:
+        out["PHIT"] = pd.to_numeric(out["PHIE"], errors="coerce")
+
+    return out
+
+
 @router.post(
     "/wells/{well_name}/permeability",
     summary="Compute depth-aligned permeability (Choo, Timur, Tixier, Coates, Kozeny-Carman) on server",
@@ -1249,6 +1335,15 @@ def workspace_permeability(
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
+        df = _merge_request_fallback_curves(
+            df,
+            depths=req.depths,
+            curve_arrays={
+                "PHIT": req.phit,
+                "VCLAY": req.vclay,
+                "VSILT": req.vsilt,
+            },
+        )
         if "PHIT" not in df.columns:
             raise ValueError(
                 "PHIT curve not found in well data. Compute and save porosity first."
@@ -1259,6 +1354,10 @@ def workspace_permeability(
         perm_s = pd.Series(np.nan, index=df.index, dtype=float)
 
         if method == "choo":
+            if "VCLAY" not in df.columns and "VSHALE" in df.columns:
+                df["VCLAY"] = df["VSHALE"]
+            if "VSILT" not in df.columns and "VCLAY" in df.columns:
+                df["VSILT"] = 0.0
             if "VCLAY" not in df.columns or "VSILT" not in df.columns:
                 raise ValueError(
                     "VCLAY and VSILT curves are required for Choo permeability. Compute and save lithology first."
@@ -1334,13 +1433,23 @@ def workspace_permeability(
                 float(np.sqrt(np.mean(log_diff**2))), 4
             )
 
+        save_cols = ["DEPTH", "PERM"]
+        if req.phit is not None:
+            save_cols.append("PHIT")
+        if req.vclay is not None and "VCLAY" in df.columns:
+            out_df["VCLAY"] = pd.to_numeric(df["VCLAY"], errors="coerce")
+            save_cols.append("VCLAY")
+        if req.vsilt is not None and "VSILT" in df.columns:
+            out_df["VSILT"] = pd.to_numeric(df["VSILT"], errors="coerce")
+            save_cols.append("VSILT")
+
         saved_rows = 0
         if req.save:
-            save_df = out_df.loc[perm_s.notna(), ["DEPTH", "PERM"]]
+            save_df = out_df.loc[perm_s.notna(), save_cols]
             saved_rows = _save_curves_to_well(project_id, well_name, save_df)
         else:
             _update_in_memory_well_cache(
-                project_id, well_name, out_df.loc[perm_s.notna(), ["DEPTH", "PERM"]]
+                project_id, well_name, out_df.loc[perm_s.notna(), save_cols]
             )
 
         return {
@@ -1371,6 +1480,14 @@ def workspace_saturation(
     try:
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        df = _merge_request_fallback_curves(
+            df,
+            depths=req.depths,
+            curve_arrays={
+                "PHIT": req.phit,
+                "VCLAY": req.vclay,
+            },
         )
 
         # Resolve RT and PHIT
@@ -1533,13 +1650,19 @@ def workspace_saturation(
             }
         )
 
+        save_sat_cols = ["DEPTH", "SWT", "BVW"]
+        if req.phit is not None:
+            save_sat_cols.append("PHIT")
+        if req.vclay is not None:
+            save_sat_cols.append("VCLAY")
+
         saved_rows = 0
         if req.save:
-            save_df = out_df.loc[primary_swt.notna(), ["DEPTH", "SWT", "BVW"]]
+            save_df = out_df.loc[primary_swt.notna(), save_sat_cols]
             saved_rows = _save_curves_to_well(project_id, well_name, save_df)
         else:
             _update_in_memory_well_cache(
-                project_id, well_name, out_df.loc[primary_swt.notna(), ["DEPTH", "SWT", "BVW"]]
+                project_id, well_name, out_df.loc[primary_swt.notna(), save_sat_cols]
             )
 
         return {
@@ -1575,6 +1698,7 @@ def workspace_reservoir_summary(
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
+        df = _merge_request_fallback_curves(df)
 
         depth = pd.to_numeric(df["DEPTH"], errors="coerce")
         vclay = (
