@@ -23,6 +23,10 @@
 	// Active draggable endpoint on NPHI-RHOB plot
 	let activeEndpointKey = $state<'sand' | 'silt' | 'clay' | null>(null);
 
+	// SHF crossplot sub-view ('scal_fit' shows SCAL J / Pc / BVW curve fits; 'height_profile' shows Sw vs HAFWL)
+	let shfView = $state<'scal_fit' | 'height_profile'>('scal_fit');
+	let shfLogScale = $state<boolean>(false);
+
 	let effectiveMode = $derived.by(() => {
 		if (templateOverride !== 'auto') return templateOverride;
 		if (workbench.scope === 'multi-well') {
@@ -548,11 +552,206 @@
 			return { traces, layout: baseLayout };
 		}
 
-		// SHF mode: Sw vs Height Above FWL colored by Rock Type
+		// SHF mode: SCAL Curve Fit (Leverett-J / Skelt-Harrison / Cuddy BVW) or Sw vs Height Above FWL
 		if (effectiveMode === 'shf') {
-			const fwl = projectData.shfParams.fwl;
-			if (workbench.scope === 'multi-well' && projectData.shfResult) {
-				const sr = projectData.shfResult;
+			const sp = projectData.shfParams;
+			const fwl = sp.fwl;
+			const sr = projectData.shfResult;
+			const activeModel = sr?.model ?? sp.model ?? 'leverett_j';
+			const scal = sr?.scal_data;
+
+			if (
+				workbench.scope === 'multi-well' &&
+				shfView === 'scal_fit' &&
+				scal &&
+				Array.isArray(scal.pc) &&
+				scal.pc.length > 0
+			) {
+				const byRt = new Map<
+					number,
+					{
+						swn: number[];
+						sw: number[];
+						j: number[];
+						pc: number[];
+						bvw: number[];
+						h: number[];
+						labels: string[];
+					}
+				>();
+				for (let i = 0; i < scal.pc.length; i++) {
+					const rf = scal.rock_flags?.[i] ?? 1;
+					if (!byRt.has(rf)) {
+						byRt.set(rf, { swn: [], sw: [], j: [], pc: [], bvw: [], h: [], labels: [] });
+					}
+					const grp = byRt.get(rf)!;
+					grp.swn.push(scal.swn[i]);
+					grp.sw.push(scal.sw[i]);
+					grp.j.push(scal.j[i]);
+					grp.pc.push(scal.pc[i]);
+					grp.bvw.push(scal.bvw[i]);
+					grp.h.push(scal.h[i]);
+					grp.labels.push(
+						`${scal.samples?.[i] ?? 'Plug'} (${scal.well_names?.[i] ?? ''}) | Pc=${fmtNum(scal.pc[i], 2)} psi`
+					);
+				}
+
+				const sortedRts = [...byRt.keys()].sort((a, b) => a - b);
+				const maxJ = Math.max(2.0, ...scal.j.filter(Number.isFinite));
+				const maxPc = Math.max(15.0, ...scal.pc.filter(Number.isFinite));
+				const maxH = Math.max(30.0, ...scal.h.filter(Number.isFinite));
+				const maxBvw = Math.max(0.25, ...scal.bvw.filter(Number.isFinite));
+				const conv = (sp.unit ?? 'metric') === 'metric' ? 0.433 * 3.28084 : 0.433;
+				const gradPsi = Math.max((sp.gw - sp.ghc) * conv, 1e-4);
+
+				for (const rf of sortedRts) {
+					const g = byRt.get(rf)!;
+					const color = getRockTypeColor(rf);
+					if (activeModel === 'leverett_j') {
+						traces.push({
+							type: 'scattergl',
+							mode: 'markers',
+							name: `SCAL RT ${rf}`,
+							x: g.swn,
+							y: g.j,
+							text: g.labels,
+							hovertemplate: '%{text}<br>Swn=%{x:.3f}, J=%{y:.3f}<extra>RT ' + rf + '</extra>',
+							marker: { size: 6.5, color, opacity: 0.85, line: { width: 0.5, color: '#fff' } }
+						});
+					} else if (activeModel === 'skelt_harrison') {
+						traces.push({
+							type: 'scattergl',
+							mode: 'markers',
+							name: `SCAL RT ${rf}`,
+							x: g.sw,
+							y: g.pc,
+							text: g.labels,
+							hovertemplate: '%{text}<br>Sw=%{x:.3f}, Pc=%{y:.2f} psi<extra>RT ' + rf + '</extra>',
+							marker: { size: 6.5, color, opacity: 0.85, line: { width: 0.5, color: '#fff' } }
+						});
+					} else {
+						traces.push({
+							type: 'scattergl',
+							mode: 'markers',
+							name: `SCAL RT ${rf}`,
+							x: g.bvw,
+							y: g.pc,
+							text: g.labels,
+							hovertemplate: '%{text}<br>BVW=%{x:.3f}, Pc=%{y:.2f} psi<extra>RT ' + rf + '</extra>',
+							marker: { size: 6.5, color, opacity: 0.85, line: { width: 0.5, color: '#fff' } }
+						});
+					}
+				}
+
+				// Overlay fitted curves per Rock Type
+				if (sr?.fits) {
+					for (const [rfKey, fit] of Object.entries(sr.fits)) {
+						const rfNum = Number(rfKey);
+						const color = getRockTypeColor(rfNum);
+						const a = Number(fit.a ?? 0.2);
+						const b = Math.abs(Number(fit.b ?? 0.3));
+						if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) continue;
+
+						if (activeModel === 'leverett_j') {
+							const xs: number[] = [];
+							const ys: number[] = [];
+							for (let k = 0; k <= 60; k++) {
+								const swn = 0.03 * Math.pow(1.0 / 0.03, k / 60);
+								const jVal = a * Math.pow(swn, -b);
+								if (jVal <= maxJ * 1.35) {
+									xs.push(swn);
+									ys.push(jVal);
+								}
+							}
+							traces.push({
+								type: 'scatter',
+								mode: 'lines',
+								name: `Fit RT ${rfKey} (${a.toFixed(2)}·Swn^-${b.toFixed(2)})`,
+								x: xs,
+								y: ys,
+								line: { color, width: 2.2 }
+							});
+						} else if (activeModel === 'skelt_harrison') {
+							const c = Number(fit.c ?? 1.5);
+							const d = Number(fit.d ?? 1.5);
+							const xs: number[] = [];
+							const ys: number[] = [];
+							for (let k = 0; k <= 75; k++) {
+								const hVal = 0.05 * Math.pow((maxH * 1.25) / 0.05, k / 75);
+								const pcVal = hVal * gradPsi;
+								const swVal =
+									1.0 - a * Math.exp(-Math.pow(Math.max(b, 1e-4) / Math.max(hVal + d, 1e-4), c));
+								if (swVal >= 0 && swVal <= 1.0 && pcVal <= maxPc * 1.25) {
+									xs.push(swVal);
+									ys.push(pcVal);
+								}
+							}
+							traces.push({
+								type: 'scatter',
+								mode: 'lines',
+								name: `Fit RT ${rfKey} (a=${a.toFixed(2)}, b=${b.toFixed(1)})`,
+								x: xs,
+								y: ys,
+								line: { color, width: 2.2 }
+							});
+						} else {
+							const xs: number[] = [];
+							const ys: number[] = [];
+							for (let k = 0; k <= 60; k++) {
+								const pcVal = 0.1 * Math.pow((maxPc * 1.25) / 0.1, k / 60);
+								const bvwVal = a * Math.pow(pcVal, -b);
+								if (bvwVal > 0 && bvwVal <= Math.max(maxBvw * 1.35, 0.45)) {
+									xs.push(bvwVal);
+									ys.push(pcVal);
+								}
+							}
+							traces.push({
+								type: 'scatter',
+								mode: 'lines',
+								name: `Fit RT ${rfKey} (${a.toFixed(3)}·Pc^-${b.toFixed(2)})`,
+								x: xs,
+								y: ys,
+								line: { color, width: 2.2 }
+							});
+						}
+					}
+				}
+
+				if (activeModel === 'leverett_j') {
+					baseLayout.xaxis.title = { text: 'Normalized Water Saturation Swn (v/v)' };
+					baseLayout.yaxis.title = { text: 'Leverett J-Function (unitless)' };
+					if (shfLogScale) {
+						baseLayout.xaxis.type = 'log';
+						baseLayout.yaxis.type = 'log';
+					} else {
+						baseLayout.xaxis.range = [0, 1.02];
+						baseLayout.yaxis.range = [0, Number((maxJ * 1.15).toFixed(2))];
+					}
+				} else if (activeModel === 'skelt_harrison') {
+					baseLayout.xaxis.title = { text: 'Water Saturation Sw (v/v)' };
+					baseLayout.yaxis.title = { text: 'Capillary Pressure Pc (psi)' };
+					if (shfLogScale) {
+						baseLayout.xaxis.type = 'log';
+						baseLayout.yaxis.type = 'log';
+					} else {
+						baseLayout.xaxis.range = [0, 1.02];
+						baseLayout.yaxis.range = [0, Number((maxPc * 1.15).toFixed(2))];
+					}
+				} else {
+					baseLayout.xaxis.title = { text: 'Bulk Volume Water BVW = Φ·Sw (v/v)' };
+					baseLayout.yaxis.title = { text: 'Capillary Pressure Pc (psi)' };
+					if (shfLogScale) {
+						baseLayout.xaxis.type = 'log';
+						baseLayout.yaxis.type = 'log';
+					} else {
+						baseLayout.xaxis.range = [0, Number((maxBvw * 1.2).toFixed(3))];
+						baseLayout.yaxis.range = [0, Number((maxPc * 1.15).toFixed(2))];
+					}
+				}
+				return { traces, layout: baseLayout };
+			}
+
+			if (workbench.scope === 'multi-well' && sr) {
 				const allowedWells =
 					projectData.wells.length > 0 &&
 					projectData.selectedWellNames.length < projectData.wells.length
@@ -561,14 +760,22 @@
 				const minD = workbench.depthFilter?.min ?? -Infinity;
 				const maxD = workbench.depthFilter?.max ?? Infinity;
 
+				const allowedZones =
+					workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
 				const grouped = new Map<number, { sw: number[]; hafwl: number[] }>();
 				sr.depths.forEach((d, i) => {
 					const wn = sr.well_names?.[i];
 					if (allowedWells && wn && !allowedWells.has(wn)) return;
+					const zn = sr.zones?.[i];
+					if (allowedZones && zn && !allowedZones.has(zn)) return;
 					if (typeof d === 'number' && (d < minD || d > maxD)) return;
 					const s = sr.shf[i];
 					const rf = sr.rock_flags[i] ?? 1;
-					const h = fwl - d;
+					const effFwl =
+						zn && (sp.fwlByZone?.[zn] ?? sr.fwl_by_zone?.[zn]) !== undefined
+							? Number(sp.fwlByZone?.[zn] ?? sr.fwl_by_zone?.[zn])
+							: fwl;
+					const h = effFwl - d;
 					if (Number.isFinite(s) && Number.isFinite(h) && h >= 0) {
 						if (!grouped.has(rf)) grouped.set(rf, { sw: [], hafwl: [] });
 						grouped.get(rf)!.sw.push(s as number);
@@ -813,6 +1020,32 @@
 						{lbl}
 					</button>
 				{/each}
+			</div>
+		{:else if effectiveMode === 'shf'}
+			<div class="flex items-center gap-1">
+				{#each [['scal_fit', 'SCAL Curve Fit'], ['height_profile', 'Sw vs. Height']] as [vKey, vLbl]}
+					<button
+						type="button"
+						onclick={() => (shfView = vKey as any)}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {shfView ===
+						vKey
+							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{vLbl}
+					</button>
+				{/each}
+				{#if shfView === 'scal_fit'}
+					<button
+						type="button"
+						onclick={() => (shfLogScale = !shfLogScale)}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {shfLogScale
+							? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						Log-Log
+					</button>
+				{/if}
 			</div>
 		{/if}
 	</div>

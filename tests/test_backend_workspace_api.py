@@ -222,7 +222,7 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert "upscaling" in res_body
     assert res_body["upscaling"]["n_cells"] >= 1
 
-    # 8. Saturation Height Function (Leverett-J / Skelt-Harrison)
+    # 8. Saturation Height Function (Leverett-J / Skelt-Harrison / Cuddy)
     r_shf = client.post(
         f"/quick_pp/workspace/projects/{pid}/shf/compute",
         json={
@@ -237,6 +237,25 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     shf_body = r_shf.json()
     assert shf_body["saved_wells"] == 1
     assert len(shf_body["data"]["shf"]) == 10
+    assert "scal_data" in shf_body
+    assert len(shf_body["scal_data"]["pc"]) > 0
+
+    for shf_model in ("skelt_harrison", "cuddy"):
+        r_m = client.post(
+            f"/quick_pp/workspace/projects/{pid}/shf/compute",
+            json={
+                "fwl": 1020.0,
+                "fwl_by_zone": {"Unknown": 1015.0},
+                "model": shf_model,
+                "save": False,
+            },
+        )
+        assert r_m.status_code == 200
+        m_body = r_m.json()
+        assert m_body["model"] == shf_model
+        assert m_body["fwl_by_zone"].get("Unknown") == 1015.0
+        assert len(m_body["fits"]) >= 1
+        assert len(m_body["data"]["shf"]) == 10
 
     # 9. Columnar PUT well data
     r_put = client.put(

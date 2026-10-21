@@ -67,16 +67,38 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
             phit_col = None
             perm_col = None
             rock_flag_col = None
-            for col in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR"):
+            for col in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR", "CORE_POR"):
                 if col in df.columns and df[col].notna().any():
                     phit_col = col
                     break
-            for col in ("PERM", "CPERM", "KLOGH", "PERMEABILITY", "K"):
+            for col in ("PERM", "CPERM", "KLOGH", "PERMEABILITY", "K", "CORE_PERM"):
                 if col in df.columns and df[col].notna().any():
                     perm_col = col
                     break
             if "ROCK_FLAG" in df.columns:
                 rock_flag_col = "ROCK_FLAG"
+
+            # Fallback estimation for raw project logs when PHIT or PERM are not yet saved
+            if not phit_col:
+                if "RHOB" in df.columns and df["RHOB"].notna().any():
+                    rhob_s = pd.to_numeric(df["RHOB"], errors="coerce")
+                    est_phit = ((2.65 - rhob_s) / (2.65 - 1.0)).clip(0.001, 0.45)
+                    if "NPHI" in df.columns and df["NPHI"].notna().any():
+                        nphi_s = pd.to_numeric(df["NPHI"], errors="coerce").clip(0.001, 0.6)
+                        est_phit = ((est_phit + nphi_s) / 2.0).clip(0.001, 0.45)
+                    df = df.copy()
+                    df["_EST_PHIT"] = est_phit
+                    phit_col = "_EST_PHIT"
+                elif "NPHI" in df.columns and df["NPHI"].notna().any():
+                    df = df.copy()
+                    df["_EST_PHIT"] = pd.to_numeric(df["NPHI"], errors="coerce").clip(0.001, 0.45)
+                    phit_col = "_EST_PHIT"
+
+            if phit_col and not perm_col:
+                phit_s = pd.to_numeric(df[phit_col], errors="coerce").clip(0.001, 0.45)
+                df = df.copy()
+                df["_EST_PERM"] = (10.0 ** (14.0 * phit_s - 1.5)).clip(0.001, 10000.0)
+                perm_col = "_EST_PERM"
 
             if not phit_col or not perm_col:
                 continue

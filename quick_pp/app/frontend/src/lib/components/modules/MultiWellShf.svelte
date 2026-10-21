@@ -9,8 +9,8 @@
 	import { fmtNum } from '$lib/utils/formatters';
 
 	// Multi-well FWL & Contact Optimizer state
-	let optModel = $state<'leverett_j' | 'skelt_harrison' | 'cuddy'>('leverett_j');
 	let optLoss = $state<'rmse' | 'mae' | 'huber' | 'bvw'>('rmse');
+	let solvePerZone = $state(true);
 	let useMdtPrior = $state(false);
 	let mdtFwl = $state(3925.0);
 	let mdtWeight = $state(1.0);
@@ -18,47 +18,137 @@
 	let equalWellWeights = $state(true);
 	let fwlOptResult = $state<any>(null);
 
+	const MODEL_META: Record<
+		'leverett_j' | 'skelt_harrison' | 'cuddy',
+		{ label: string; badge: string; fitTitle: string; formula: string }
+	> = {
+		leverett_j: {
+			label: 'Leverett-J',
+			badge: 'J-Curve Fit',
+			fitTitle: 'SCAL Leverett-J Curve Fit',
+			formula: 'J = a · Swn^(-b)'
+		},
+		skelt_harrison: {
+			label: 'Skelt-Harrison',
+			badge: 'Pc Curve Fit',
+			fitTitle: 'SCAL Skelt-Harrison Pc Fit',
+			formula: 'Sw = 1 - a·exp(-(b/(h+d))^c)'
+		},
+		cuddy: {
+			label: 'Cuddy Bvw',
+			badge: 'BVW Fit',
+			fitTitle: 'SCAL Cuddy BVW Fit',
+			formula: 'BVW = φ·Sw = a · Pc^(-b)'
+		}
+	};
+
+	const ROCK_COLORS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#9333ea', '#0891b2'];
+
 	onMount(() => {
 		// Initialize sensible default FWL based on current well depth range if still at default 2500m
 		if (wellData.depthRange.max > 0 && projectData.shfParams.fwl === 2500.0) {
 			const contactFwl = wellData.contacts.find((c) => c.type === 'FWL' || c.type === 'OWC');
 			projectData.shfParams.fwl = contactFwl
 				? contactFwl.depth
-				: Number((wellData.depthRange.min + 0.72 * (wellData.depthRange.max - wellData.depthRange.min)).toFixed(1));
+				: Number(
+						(
+							wellData.depthRange.min +
+							0.72 * (wellData.depthRange.max - wellData.depthRange.min)
+						).toFixed(1)
+					);
+		}
+		if (
+			workbench.projectId &&
+			(!projectData.shfResult ||
+				projectData.shfResult.model !== projectData.shfParams.model ||
+				!projectData.shfResult.scal_data)
+		) {
+			executeShf(false, true);
 		}
 	});
 
-	async function executeShf(persist: boolean = false) {
+	async function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
+		if (projectData.shfParams.model === m && projectData.shfResult?.model === m) return;
+		projectData.shfParams.model = m;
+		await executeShf(false, true);
+	}
+
+	async function updateFitParam(
+		rf: string,
+		paramKey: 'a' | 'b' | 'c' | 'd',
+		rawVal: string
+	) {
+		const num = Number(rawVal);
+		if (!Number.isFinite(num) || !projectData.shfResult?.fits?.[rf]) return;
+		projectData.shfResult = {
+			...projectData.shfResult,
+			fits: {
+				...projectData.shfResult.fits,
+				[rf]: {
+					...projectData.shfResult.fits[rf],
+					[paramKey]: num
+				}
+			}
+		};
+		await executeShf(false, false);
+	}
+
+	async function updateZoneFwl(zone: string, rawVal: string) {
+		const num = Number(rawVal);
+		if (!Number.isFinite(num)) return;
+		projectData.shfParams.fwlByZone = {
+			...projectData.shfParams.fwlByZone,
+			[zone]: Number(num.toFixed(2))
+		};
+		await executeShf(false, false);
+	}
+
+	async function clearZoneFwls() {
+		projectData.shfParams.fwlByZone = {};
+		await executeShf(false, false);
+	}
+
+	async function executeShf(persist: boolean = false, resetFits: boolean = false) {
 		if (!workbench.projectId) return;
 		projectData.isComputingMultiWell = true;
 		projectData.error = null;
 		try {
 			const sp = projectData.shfParams;
-			const { data, error } = await api.POST(
-				'/quick_pp/workspace/projects/{project_id}/shf/compute',
+			const customFits =
+				!resetFits &&
+				projectData.shfResult?.model === sp.model &&
+				projectData.shfResult?.fits &&
+				Object.keys(projectData.shfResult.fits).length > 0
+					? projectData.shfResult.fits
+					: null;
+			const fwlByZonePayload =
+				sp.fwlByZone && Object.keys(sp.fwlByZone).length > 0 ? sp.fwlByZone : null;
+			const data = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/shf/compute`,
 				{
-					params: { path: { project_id: workbench.projectId } },
-					body: {
-						well_names:
-							projectData.selectedWellNames.length > 0 &&
-							projectData.selectedWellNames.length < projectData.wells.length
-								? projectData.selectedWellNames
-								: null,
-						cutoffs: [...projectData.fziCutoffs].sort((a, b) => a - b),
-						fwl: sp.fwl,
-						ift: sp.ift,
-						theta: sp.theta,
-						gw: sp.gw,
-						ghc: sp.ghc,
-						save: persist
-					}
+					well_names:
+						projectData.selectedWellNames.length > 0 &&
+						projectData.selectedWellNames.length < projectData.wells.length
+							? projectData.selectedWellNames
+							: null,
+					model: sp.model,
+					unit: sp.unit ?? 'metric',
+					cutoffs: [...projectData.fziCutoffs].sort((a, b) => a - b),
+					fwl: sp.fwl,
+					fwl_by_zone: fwlByZonePayload,
+					ift: sp.ift,
+					theta: sp.theta,
+					gw: sp.gw,
+					ghc: sp.ghc,
+					fits: customFits,
+					save: persist
 				}
 			);
-			if (error || !data) {
-				throw new Error(String((error as any)?.detail ?? 'SHF calculation failed'));
-			}
 			projectData.shfResult = {
-				fits: data.fits,
+				model: data.model ?? sp.model,
+				fits: data.fits ?? {},
+				fwl_by_zone: data.fwl_by_zone ?? sp.fwlByZone,
+				scal_data: data.scal_data,
 				...data.data
 			};
 
@@ -106,8 +196,11 @@
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/optimize_fwl`,
 				{
 					well_names: projectData.selectedWellNames.length ? projectData.selectedWellNames : null,
-					model: optModel,
+					zones: workbench.selectedZones.length ? workbench.selectedZones : null,
+					model: sp.model,
+					shm_params: projectData.shfResult?.fits ?? null,
 					loss: optLoss,
+					solve_per_zone: solvePerZone,
 					ift: sp.ift,
 					theta: sp.theta,
 					gw: sp.gw,
@@ -121,8 +214,18 @@
 			fwlOptResult = res;
 			if (typeof res?.fwl === 'number' && Number.isFinite(res.fwl)) {
 				projectData.shfParams.fwl = Number(res.fwl.toFixed(2));
-				await executeShf(false);
 			}
+			if (
+				solvePerZone &&
+				res?.fwl_by_zone &&
+				typeof res.fwl_by_zone === 'object' &&
+				Object.keys(res.fwl_by_zone).length > 0
+			) {
+				projectData.shfParams.fwlByZone = { ...res.fwl_by_zone };
+			} else {
+				projectData.shfParams.fwlByZone = {};
+			}
+			await executeShf(false, false);
 		} catch (e: any) {
 			projectData.error = e?.message || 'FWL optimization error';
 		} finally {
@@ -134,15 +237,15 @@
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
 		<ParameterSection
-			title="Multi-Well FWL & Contact Optimizer"
-			badge={fwlOptResult ? `FWL=${fmtNum(fwlOptResult.fwl, 1)}m` : 'Global Fit'}
+			title="SHF Method & Multi-Well FWL Optimizer"
+			badge={fwlOptResult ? `FWL=${fmtNum(fwlOptResult.fwl, 1)}m` : MODEL_META[projectData.shfParams.model].badge}
 		>
 			<div class="grid grid-cols-3 gap-1">
 				{#each [['leverett_j', 'Leverett-J'], ['skelt_harrison', 'Skelt-Harrison'], ['cuddy', 'Cuddy Bvw']] as [m, lbl]}
 					<button
 						type="button"
-						onclick={() => (optModel = m as any)}
-						class="h-6 rounded-sm border text-[10px] font-medium {optModel === m
+						onclick={() => selectShfModel(m as any)}
+						class="h-6 rounded-sm border text-[10px] font-medium {projectData.shfParams.model === m
 							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 					>
@@ -164,8 +267,16 @@
 				</select>
 			</div>
 
-			<div class="mt-1 flex items-center justify-between text-[11px]">
-				<label class="flex items-center gap-1.5 cursor-pointer">
+			<div class="mt-1 flex flex-wrap items-center justify-between gap-y-1 text-[11px]">
+				<label class="flex items-center gap-1 cursor-pointer">
+					<input
+						type="checkbox"
+						bind:checked={solvePerZone}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+					/>
+					<span class="font-semibold text-[var(--text-primary)]">Per-Zone FWL</span>
+				</label>
+				<label class="flex items-center gap-1 cursor-pointer">
 					<input
 						type="checkbox"
 						bind:checked={poreVolumeWeighted}
@@ -173,15 +284,15 @@
 					/>
 					<span>Φ-Weighted</span>
 				</label>
-				<label class="flex items-center gap-1.5 cursor-pointer">
+				<label class="flex items-center gap-1 cursor-pointer">
 					<input
 						type="checkbox"
 						bind:checked={equalWellWeights}
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
-					<span>Equal Well Weights</span>
+					<span>Equal Well Wt</span>
 				</label>
-				<label class="flex items-center gap-1.5 cursor-pointer">
+				<label class="flex items-center gap-1 cursor-pointer">
 					<input
 						type="checkbox"
 						bind:checked={useMdtPrior}
@@ -217,13 +328,13 @@
 				onclick={runOptimizeFwl}
 				class="mt-1.5 h-7 w-full rounded-sm border border-blue-600 bg-blue-50 px-2 text-xs font-semibold text-blue-800 hover:bg-blue-100 disabled:opacity-50"
 			>
-				Optimize Field FWL & Fluid Contacts
+				{solvePerZone ? 'Optimize Per-Zone FWL & Contacts' : 'Optimize Field FWL & Contacts'}
 			</button>
 
 			{#if fwlOptResult}
 				<div class="mt-1.5 grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]">
 					<div>
-						<span class="text-[var(--text-muted)]">Optimal FWL:</span>
+						<span class="text-[var(--text-muted)]">Field Fallback FWL:</span>
 						<div class="mono-num font-bold text-blue-700">{fmtNum(fwlOptResult.fwl, 2)} m</div>
 					</div>
 					<div>
@@ -246,9 +357,80 @@
 					</div>
 				</div>
 			{/if}
+
+			{#if (fwlOptResult?.zone_metrics && fwlOptResult.zone_metrics.length > 0) || Object.keys(projectData.shfParams.fwlByZone).length > 0 || projectData.allZones.length > 1}
+				{@const zoneRows =
+					fwlOptResult?.zone_metrics && fwlOptResult.zone_metrics.length > 0
+						? fwlOptResult.zone_metrics
+						: projectData.allZones.map((zn) => ({
+								zone: zn,
+								fwl: projectData.shfParams.fwlByZone[zn] ?? projectData.shfParams.fwl,
+								owc: null,
+								ttz: null,
+								rmse: null
+							}))}
+				<div class="mt-2">
+					<div class="mb-1 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
+						<span class="font-semibold text-[var(--text-primary)]">Per-Zone FWL & Contacts</span>
+						{#if Object.keys(projectData.shfParams.fwlByZone).length > 0}
+							<button
+								type="button"
+								onclick={clearZoneFwls}
+								class="text-[10px] font-medium text-blue-700 hover:underline"
+							>
+								Use Single Global FWL
+							</button>
+						{/if}
+					</div>
+					<div class="overflow-x-auto border border-[var(--border-hairline)]">
+						<table class="w-full border-collapse text-left text-[10px]">
+							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+								<tr class="h-5 border-b border-[var(--border-hairline)]">
+									<th class="px-1.5 font-semibold">Zone</th>
+									<th class="px-1 text-right font-semibold">FWL (m)</th>
+									<th class="px-1 text-right font-semibold">OWC / TTZ</th>
+									<th class="px-1.5 text-right font-semibold">RMSE</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-[var(--border-hairline)]">
+								{#each zoneRows as zRow}
+									{@const activeZfwl =
+										projectData.shfParams.fwlByZone[zRow.zone] ??
+										zRow.fwl ??
+										projectData.shfParams.fwl}
+									<tr class="h-6">
+										<td class="px-1.5 font-semibold truncate max-w-[90px]" title={zRow.zone}>
+											{zRow.zone}
+										</td>
+										<td class="px-1 text-right">
+											<input
+												type="number"
+												step="1.0"
+												value={activeZfwl}
+												onchange={(e) =>
+													updateZoneFwl(zRow.zone, (e.currentTarget as HTMLInputElement).value)}
+												class="mono-num h-5 w-16 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px] font-semibold text-blue-700"
+											/>
+										</td>
+										<td class="mono-num px-1 text-right text-[var(--text-secondary)]">
+											{zRow.owc != null ? `${fmtNum(zRow.owc, 0)} / ${fmtNum(zRow.ttz, 0)}` : '—'}
+										</td>
+										<td class="mono-num px-1.5 text-right">
+											{zRow.rmse != null ? fmtNum(zRow.rmse, 3) : '—'}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			{/if}
 		</ParameterSection>
 
-		<ParameterSection title="Capillary Pressure & Fluid Parameters" badge="Leverett J">
+		<ParameterSection
+			title="Capillary Pressure & Fluid Parameters"
+			badge={MODEL_META[projectData.shfParams.model].label}
+		>
 			<NumericScrubber
 				label="Free Water Level (FWL)"
 				bind:value={projectData.shfParams.fwl}
@@ -256,7 +438,7 @@
 				min={0}
 				max={10000}
 				step={1.0}
-				onrun={() => executeShf(false)}
+				onrun={() => executeShf(false, false)}
 			/>
 			<NumericScrubber
 				label="Interfacial Tension (IFT)"
@@ -265,7 +447,7 @@
 				min={1.0}
 				max={80.0}
 				step={0.5}
-				onrun={() => executeShf(false)}
+				onrun={() => executeShf(false, false)}
 			/>
 			<NumericScrubber
 				label="Contact Angle (θ)"
@@ -274,7 +456,7 @@
 				min={0}
 				max={90}
 				step={1.0}
-				onrun={() => executeShf(false)}
+				onrun={() => executeShf(false, false)}
 			/>
 			<NumericScrubber
 				label="Water Gradient (gw)"
@@ -283,7 +465,7 @@
 				min={0.9}
 				max={1.3}
 				step={0.01}
-				onrun={() => executeShf(false)}
+				onrun={() => executeShf(false, false)}
 			/>
 			<NumericScrubber
 				label="HC Gradient (ghc)"
@@ -292,29 +474,103 @@
 				min={0.1}
 				max={0.98}
 				step={0.01}
-				onrun={() => executeShf(false)}
+				onrun={() => executeShf(false, false)}
 			/>
 		</ParameterSection>
 
 		{#if projectData.shfResult}
-			<ParameterSection title="Leverett J-Function Parameters (Sw = a · J^b)">
+			{@const activeModel = projectData.shfResult.model ?? projectData.shfParams.model}
+			{@const meta = MODEL_META[activeModel]}
+			<ParameterSection title={meta.fitTitle} badge={meta.formula}>
+				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
+					<span>
+						SCAL points:
+						<strong class="mono-num text-[var(--text-primary)]">
+							{projectData.shfResult.scal_data?.pc?.length ?? 0}
+						</strong>
+					</span>
+					<button
+						type="button"
+						onclick={() => executeShf(false, true)}
+						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)]"
+					>
+						Reset Auto-Fit
+					</button>
+				</div>
+
 				<div class="overflow-x-auto border border-[var(--border-hairline)]">
 					<table class="w-full border-collapse text-left text-[11px]">
 						<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 							<tr class="h-6 border-b border-[var(--border-hairline)]">
-								<th class="px-1.5 font-semibold">Rock Type</th>
-								<th class="px-1.5 text-right font-semibold">a</th>
-								<th class="px-1.5 text-right font-semibold">b</th>
+								<th class="px-1.5 font-semibold">RT</th>
+								<th class="px-1 text-right font-semibold">a</th>
+								<th class="px-1 text-right font-semibold">b</th>
+								{#if activeModel === 'skelt_harrison'}
+									<th class="px-1 text-right font-semibold">c</th>
+									<th class="px-1 text-right font-semibold">d</th>
+								{/if}
 								<th class="px-1.5 text-right font-semibold">RMSE</th>
+								{#if activeModel !== 'skelt_harrison'}
+									<th class="px-1.5 text-right font-semibold">R²</th>
+								{/if}
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-[var(--border-hairline)]">
-							{#each Object.entries(projectData.shfResult.fits) as [rf, fit]}
+							{#each Object.entries(projectData.shfResult.fits) as [rf, fit], idx}
+								{@const rtColor = ROCK_COLORS[(Number(rf) - 1) % ROCK_COLORS.length] ?? '#2563eb'}
 								<tr class="h-6">
-									<td class="px-1.5 font-semibold">RT {rf}</td>
-									<td class="mono-num px-1.5 text-right">{fmtNum(fit.a, 4)}</td>
-									<td class="mono-num px-1.5 text-right">{fmtNum(fit.b, 4)}</td>
-									<td class="mono-num px-1.5 text-right">{fmtNum(fit.rmse, 4)}</td>
+									<td class="px-1.5 font-semibold whitespace-nowrap">
+										<span
+											class="mr-1 inline-block h-2 w-2 rounded-full"
+											style="background:{rtColor}"
+										></span>RT {rf}
+									</td>
+									<td class="px-1 text-right">
+										<input
+											type="number"
+											step="0.005"
+											value={fit.a}
+											onchange={(e) =>
+												updateFitParam(rf, 'a', (e.currentTarget as HTMLInputElement).value)}
+											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+										/>
+									</td>
+									<td class="px-1 text-right">
+										<input
+											type="number"
+											step="0.01"
+											value={fit.b}
+											onchange={(e) =>
+												updateFitParam(rf, 'b', (e.currentTarget as HTMLInputElement).value)}
+											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+										/>
+									</td>
+									{#if activeModel === 'skelt_harrison'}
+										<td class="px-1 text-right">
+											<input
+												type="number"
+												step="0.05"
+												value={fit.c ?? 1.5}
+												onchange={(e) =>
+													updateFitParam(rf, 'c', (e.currentTarget as HTMLInputElement).value)}
+												class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+											/>
+										</td>
+										<td class="px-1 text-right">
+											<input
+												type="number"
+												step="0.1"
+												value={fit.d ?? 1.5}
+												onchange={(e) =>
+													updateFitParam(rf, 'd', (e.currentTarget as HTMLInputElement).value)}
+												class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+											/>
+										</td>
+									{/if}
+									<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.rmse, 3)}</td>
+									{#if activeModel !== 'skelt_harrison'}
+										<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.r2, 3)}</td>
+									{/if}
 								</tr>
 							{/each}
 						</tbody>

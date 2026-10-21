@@ -1653,6 +1653,8 @@ def optimize_fwl(
     mdt_tolerance: float = None,
     mdt_penalty_weight: float = 0.0,
     solve_per_well: bool = True,
+    solve_per_zone: bool = True,
+    zone_col: str = "ZONES",
     optimize_shm_params: bool = False,
     saturation_method: str = "archie",
     archie_params: dict = None,
@@ -2246,12 +2248,192 @@ def optimize_fwl(
         {"fwl": grid_fwls, "objective_loss": grid_losses}
     )
 
+    # 9. Per-zone FWL optimization & transition zone contacts
+    zone_rows = []
+    fwl_by_zone: dict[str, float] = {}
+    resolved_zone_col = zone_col if zone_col in work_df.columns else (
+        "ZONE" if "ZONE" in work_df.columns else None
+    )
+    if solve_per_zone and resolved_zone_col is not None:
+        zones_raw = work_df[resolved_zone_col].fillna("Unknown").astype(str).to_numpy()
+        sw_shm_full = sw_shm_full.copy()
+        hafwl = hafwl.copy()
+        pc_res = pc_res.copy()
+        # Sort unique zones by median depth so zone table is ordered stratigraphically
+        unique_zones = [
+            z
+            for z in pd.unique(zones_raw)
+            if z.strip() and z.strip().upper() not in ("NAN", "NONE", "<NA>")
+        ]
+        unique_zones.sort(
+            key=lambda zn: float(
+                np.nanmedian(depth_arr[zones_raw == zn])
+                if np.any(zones_raw == zn)
+                else 0.0
+            )
+        )
+        for z_name in unique_zones:
+            z_mask = res_mask & (zones_raw == z_name)
+            if int(np.sum(z_mask)) < 3:
+                z_mask = (
+                    (zones_raw == z_name)
+                    & np.isfinite(depth_arr)
+                    & np.isfinite(sw_log_arr)
+                )
+            n_z = int(np.sum(z_mask))
+            if n_z < 3:
+                continue
+
+            z_depths = depth_arr[z_mask]
+            z_d_min = float(np.nanmin(z_depths))
+            z_d_max = float(np.nanmax(z_depths))
+            z_span = max(z_d_max - z_d_min, 25.0)
+            z_low = z_d_min - 0.15 * z_span
+            z_high = z_d_max + 0.60 * z_span
+            if z_high <= z_low:
+                z_high = z_low + 50.0
+
+            z_w = weights[z_mask]
+            z_w = z_w / np.maximum(np.sum(z_w), 1e-12)
+            z_grid = np.linspace(z_low, z_high, 120)
+            z_losses = np.array(
+                [
+                    _compute_loss(
+                        float(f),
+                        cand_params=active_shm_params,
+                        subset_mask=z_mask,
+                        subset_weights=z_w,
+                    )
+                    for f in z_grid
+                ],
+                dtype=float,
+            )
+            z_best_i = int(np.argmin(z_losses))
+            z_l = float(z_grid[max(0, z_best_i - 2)])
+            z_r = float(z_grid[min(len(z_grid) - 1, z_best_i + 2)])
+            if z_r > z_l:
+                z_opt = minimize_scalar(
+                    lambda f: _compute_loss(
+                        float(f),
+                        cand_params=active_shm_params,
+                        subset_mask=z_mask,
+                        subset_weights=z_w,
+                    ),
+                    bounds=(z_l, z_r),
+                    method="bounded",
+                )
+                fwl_zone_opt = (
+                    float(z_opt.x)
+                    if z_opt.fun <= z_losses[z_best_i]
+                    else float(z_grid[z_best_i])
+                )
+            else:
+                fwl_zone_opt = float(z_grid[z_best_i])
+
+            z_phi = phit_arr[z_mask]
+            z_perm = perm_arr[z_mask]
+            z_tz = analyze_transition_zone(
+                fwl=fwl_zone_opt,
+                model=model,
+                shm_params=active_shm_params,
+                phit=z_phi,
+                perm=z_perm,
+                ift=ift,
+                theta=theta,
+                gw=gw,
+                ghc=ghc,
+                unit=unit,
+            )
+
+            z_all_mask = zones_raw == z_name
+            z_sw_pred_all = np.asarray(
+                predict_sw_shm(
+                    df=work_df.loc[z_all_mask],
+                    fwl=fwl_zone_opt,
+                    model=model,
+                    shm_params=active_shm_params,
+                    swirr=swirr[z_all_mask]
+                    if isinstance(swirr, np.ndarray)
+                    else swirr,
+                    ift=ift,
+                    theta=theta,
+                    gw=gw,
+                    ghc=ghc,
+                    depth_col=d_col,
+                    phit_col=phit_col,
+                    perm_col=perm_col,
+                    phie_col=phie_col,
+                    rock_flag_col=rock_flag_col,
+                    well_col=well_col,
+                    non_reservoir_flags=non_reservoir_flags,
+                    unit=unit,
+                    clip=True,
+                ),
+                dtype=float,
+            )
+            # Update SW_SHM, HAFWL, PC_RES, and BVW_SHM for this zone using its zone-specific FWL
+            sw_shm_full[z_all_mask] = z_sw_pred_all
+            z_hafwl = np.maximum(fwl_zone_opt - depth_arr[z_all_mask], 0.0)
+            hafwl[z_all_mask] = z_hafwl
+            pc_res[z_all_mask] = z_hafwl * (gw - ghc) * conv
+
+            z_obs = sw_log_arr[z_mask]
+            z_pred = sw_shm_full[z_mask]
+            z_rmse = float(np.sqrt(np.mean((z_obs - z_pred) ** 2)))
+            z_mae = float(np.mean(np.abs(z_obs - z_pred)))
+            z_bvw_rmse = float(np.sqrt(np.mean((z_phi * (z_obs - z_pred)) ** 2)))
+            z_ss_res = float(np.sum((z_obs - z_pred) ** 2))
+            z_ss_tot = float(np.sum((z_obs - np.mean(z_obs)) ** 2))
+            z_r2 = float(max(0.0, 1.0 - z_ss_res / z_ss_tot)) if z_ss_tot > 1e-12 else 0.0
+
+            fwl_by_zone[str(z_name)] = round(float(fwl_zone_opt), 2)
+            zone_rows.append(
+                {
+                    "zone": str(z_name),
+                    "n_samples": n_z,
+                    "d_min": round(z_d_min, 2),
+                    "d_max": round(z_d_max, 2),
+                    "fwl": round(float(fwl_zone_opt), 2),
+                    "owc": round(float(z_tz["owc"]), 2),
+                    "ttz": round(float(z_tz["ttz"]), 2),
+                    "capillary_entry_height": round(
+                        float(z_tz["capillary_entry_height"]), 2
+                    ),
+                    "transition_zone_thickness": round(
+                        float(z_tz["transition_zone_thickness"]), 2
+                    ),
+                    "rmse": round(z_rmse, 4),
+                    "mae": round(z_mae, 4),
+                    "bvw_rmse": round(z_bvw_rmse, 4),
+                    "r2": round(z_r2, 4),
+                }
+            )
+
+        if fwl_by_zone:
+            work_df["SW_SHM"] = sw_shm_full
+            work_df["BVW_SHM"] = phit_arr * sw_shm_full
+            work_df["HAFWL"] = hafwl
+            work_df["PC_RES"] = pc_res
+            sw_obs_res = sw_log_arr[res_mask]
+            sw_pred_res = sw_shm_full[res_mask]
+            global_rmse = float(np.sqrt(np.mean((sw_obs_res - sw_pred_res) ** 2)))
+            global_mae = float(np.mean(np.abs(sw_obs_res - sw_pred_res)))
+            global_bvw_rmse = float(
+                np.sqrt(np.mean((phi_res * (sw_obs_res - sw_pred_res)) ** 2))
+            )
+            ss_res = float(np.sum((sw_obs_res - sw_pred_res) ** 2))
+            ss_tot = float(np.sum((sw_obs_res - np.mean(sw_obs_res)) ** 2))
+            global_r2 = float(max(0.0, 1.0 - ss_res / ss_tot)) if ss_tot > 1e-12 else 0.0
+
+    zone_metrics_df = pd.DataFrame(zone_rows)
+
     fwl_reconciliation_diff = (
         float(opt_fwl - float(mdt_fwl)) if mdt_fwl is not None else None
     )
 
     return {
         "fwl": opt_fwl,
+        "fwl_by_zone": fwl_by_zone,
         "owc": tz_info["owc"],
         "ttz": tz_info["ttz"],
         "capillary_entry_height": tz_info["capillary_entry_height"],
@@ -2265,6 +2447,7 @@ def optimize_fwl(
         "fwl_reconciliation_diff": fwl_reconciliation_diff,
         "shm_params": active_shm_params,
         "well_metrics": well_metrics_df,
+        "zone_metrics": zone_metrics_df,
         "grid_profile": grid_profile_df,
         "df": work_df,
     }

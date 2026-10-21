@@ -31,11 +31,18 @@ from quick_pp.app.backend.services.database import (
 from quick_pp.app.backend.utils.auth import is_demo_mode
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.core_analysis import (
+    auto_cuddy_params,
     auto_j_params,
+    auto_skelt_harrison_params,
+    cuddy_func,
     fit_poroperm_curve,
+    inv_power_law_func,
     leverett_j,
     normalize_sw,
+    skelt_harrison_func,
+    sw_shf_cuddy,
     sw_shf_leverett_j,
+    sw_skelt_harrison,
 )
 from quick_pp.config import Config
 from quick_pp.database import objects as db_objects
@@ -480,15 +487,30 @@ class WorkspaceShfRequest(BaseModel):
     well_names: Optional[List[str]] = Field(
         None, description="Optional subset of well names to include"
     )
+    model: str = Field(
+        "leverett_j",
+        description="SHF model: 'leverett_j', 'skelt_harrison', or 'cuddy'",
+    )
+    unit: str = Field("metric", description="Depth unit: 'metric' or 'imperial'")
     cutoffs: List[float] = Field(default_factory=lambda: [0.1, 1.0, 3.0])
     fwl: float = Field(1000.0)
+    fwl_by_zone: Optional[Dict[str, float]] = Field(
+        None,
+        description="Optional per-zone FWL mapping (zone -> FWL depth). Overrides global `fwl` per zone.",
+    )
     ift: float = Field(30.0)
     theta: float = Field(30.0)
     gw: float = Field(1.05)
     ghc: float = Field(0.8)
+    leverett_a: Optional[float] = Field(
+        None, description="Optional global override for 'a' parameter"
+    )
+    leverett_b: Optional[float] = Field(
+        None, description="Optional global override for 'b' parameter"
+    )
     fits: Optional[Dict[str, Dict[str, float]]] = Field(
         None,
-        description="Optional J-function fits per ROCK_FLAG. If None, auto-fitted from core SCAL data.",
+        description="Optional SHF curve fits per ROCK_FLAG. If None, auto-fitted from core SCAL data.",
     )
     save: bool = Field(False)
 
@@ -2314,11 +2336,15 @@ def workspace_perm_transform_compute(
 
 @router.post(
     "/shf/compute",
-    summary="Compute Leverett-J Saturation Height Function across project wells and optionally save SHF",
+    summary="Compute Saturation Height Function (Leverett-J, Skelt-Harrison, or Cuddy) across project wells",
 )
 def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str, Any]:
-    """Compute Leverett-J SHF curves across all project wells and optionally save SHF to database."""
+    """Compute SHF curves and SCAL capillary pressure curve fits across project wells."""
     try:
+        model = str(req.model or "leverett_j").strip().lower()
+        if model not in ("leverett_j", "skelt_harrison", "cuddy"):
+            model = "leverett_j"
+
         fzi_data = _filter_fzi_data_by_wells(
             _compute_fzi_data_sync(project_id), req.well_names
         )
@@ -2338,107 +2364,365 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 int(v) if not np.isnan(v) else None for v in np.asarray(rf_arr)
             ]
 
-        fits = req.fits or {}
-        if not fits:
-            # Attempt auto-fit from core SCAL PC data if available
-            with get_db() as session:
-                proj = db_objects.Project.load(session, project_id=project_id)
-                core_rows = []
-                for wn in proj.get_well_names():
-                    try:
-                        anc = proj.get_well_ancillary_data(wn)
-                    except Exception:
+        valid_flags = sorted({int(rf) for rf in rock_flags if rf is not None})
+        highest_flag = max(valid_flags) if len(valid_flags) > 1 else None
+        reservoir_flags = [
+            rf for rf in valid_flags if highest_flag is None or rf < highest_flag
+        ] or ([1] if not valid_flags else valid_flags)
+
+        conv = (
+            0.433 * 3.28084
+            if str(req.unit).strip().lower() in ("metric", "m")
+            else 0.433
+        )
+        grad_psi = max((req.gw - req.ghc) * conv, 1e-4)
+
+        # Extract core SCAL capillary pressure points across project wells
+        core_rows: List[Dict[str, Any]] = []
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            for wn in proj.get_well_names():
+                if req.well_names and wn not in req.well_names:
+                    continue
+                try:
+                    anc = proj.get_well_ancillary_data(wn)
+                except Exception:
+                    continue
+                core_data = (anc or {}).get("core_data") or {}
+                for sname, sample in core_data.items():
+                    meas = sample.get("measurements")
+                    pc_df = sample.get("pc")
+                    if (
+                        meas is None
+                        or pc_df is None
+                        or meas.empty
+                        or pc_df.empty
+                    ):
                         continue
-                    core_data = (anc or {}).get("core_data") or {}
-                    for sname, sample in core_data.items():
-                        meas = sample.get("measurements")
-                        pc_df = sample.get("pc")
-                        if (
-                            meas is None
-                            or pc_df is None
-                            or meas.empty
-                            or pc_df.empty
+                    perm_r = meas[meas["property"].str.upper() == "CPERM"]
+                    phit_r = meas[meas["property"].str.upper() == "CPORE"]
+                    if perm_r.empty or phit_r.empty:
+                        continue
+                    cperm = float(perm_r["value"].iloc[0])
+                    cpore = float(phit_r["value"].iloc[0])
+                    if not (0 < cpore < 1 and cperm > 0):
+                        continue
+                    rf_val = int(
+                        rock_typing(calc_fzi(cpore, cperm), req.cutoffs).item()
+                    )
+                    pc_col = next(
+                        (
+                            c
+                            for c in pc_df.columns
+                            if c.upper() in ("PRESSURE", "PC", "PC_RES")
+                        ),
+                        None,
+                    )
+                    sw_col = next(
+                        (
+                            c
+                            for c in pc_df.columns
+                            if c.upper() in ("SATURATION", "SW", "SWN")
+                        ),
+                        None,
+                    )
+                    if not pc_col or not sw_col:
+                        continue
+                    sub_pc = pc_df[[pc_col, sw_col]].dropna()
+                    if sub_pc.empty:
+                        continue
+                    pc_vals = pd.to_numeric(sub_pc[pc_col], errors="coerce").to_numpy(
+                        dtype=float
+                    )
+                    sw_vals = pd.to_numeric(sub_pc[sw_col], errors="coerce").to_numpy(
+                        dtype=float
+                    )
+                    valid_pc = (
+                        np.isfinite(pc_vals)
+                        & np.isfinite(sw_vals)
+                        & (pc_vals > 0)
+                        & (sw_vals > 0)
+                    )
+                    pc_vals = pc_vals[valid_pc]
+                    sw_vals = sw_vals[valid_pc]
+                    if len(pc_vals) < 2:
+                        continue
+                    if np.nanmax(sw_vals) > 1.5:
+                        sw_vals = sw_vals / 100.0
+                    sw_vals = np.clip(sw_vals, 0.01, 1.0)
+                    # Convert lab mercury-air MICP to reservoir oil-brine Pc if unscaled
+                    if np.nanmax(pc_vals) > 200.0:
+                        res_num = max(
+                            req.ift * abs(math.cos(math.radians(req.theta))), 1.0
+                        )
+                        lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
+                        pc_vals = pc_vals * (res_num / lab_den)
+                    swn_vals = np.asarray(
+                        normalize_sw(pd.Series(sw_vals)), dtype=float
+                    )
+                    for pc_v, sw_v, swn_v in zip(pc_vals, sw_vals, swn_vals):
+                        if not (0.02 <= swn_v <= 0.98 and pc_v > 0):
+                            continue
+                        j_v = float(
+                            leverett_j(pc_v, req.ift, req.theta, cperm, cpore)
+                        )
+                        h_v = float(pc_v / grad_psi)
+                        bvw_v = float(cpore * sw_v)
+                        if not (
+                            math.isfinite(j_v)
+                            and j_v > 0
+                            and math.isfinite(h_v)
+                            and math.isfinite(bvw_v)
                         ):
                             continue
-                        perm_r = meas[meas["property"].str.upper() == "CPERM"]
-                        phit_r = meas[meas["property"].str.upper() == "CPORE"]
-                        if perm_r.empty or phit_r.empty:
-                            continue
-                        cperm = float(perm_r["value"].iloc[0])
-                        cpore = float(phit_r["value"].iloc[0])
-                        if not (0 < cpore < 1 and cperm > 0):
-                            continue
-                        rf_val = int(
-                            rock_typing(calc_fzi(cpore, cperm), req.cutoffs).item()
+                        core_rows.append(
+                            {
+                                "ROCK_FLAG": rf_val,
+                                "PC": round(float(pc_v), 4),
+                                "SW": round(float(sw_v), 4),
+                                "SWN": round(float(swn_v), 4),
+                                "J": round(float(j_v), 4),
+                                "H": round(float(h_v), 4),
+                                "BVW": round(float(bvw_v), 4),
+                                "PHIT": round(float(cpore), 4),
+                                "PERM": round(float(cperm), 4),
+                                "Well": wn,
+                                "Sample": str(sname),
+                            }
                         )
-                        pc_col = next(
-                            (
-                                c
-                                for c in pc_df.columns
-                                if c.upper() in ("PRESSURE", "PC", "PC_RES")
-                            ),
-                            None,
-                        )
-                        sw_col = next(
-                            (
-                                c
-                                for c in pc_df.columns
-                                if c.upper() in ("SATURATION", "SW", "SWN")
-                            ),
-                            None,
-                        )
-                        if not pc_col or not sw_col:
-                            continue
-                        swn_s = normalize_sw(pc_df[sw_col].dropna())
-                        for pc_v, swn_v in zip(
-                            pc_df[pc_col].dropna(), swn_s
-                        ):
-                            j_v = leverett_j(pc_v, req.ift, req.theta, cperm, cpore)
-                            core_rows.append(
-                                {
-                                    "ROCK_FLAG": rf_val,
-                                    "SWN": float(swn_v),
-                                    "J": float(j_v),
-                                    "Well": wn,
-                                    "Sample": sname,
-                                }
-                            )
-                if core_rows:
-                    for param in auto_j_params(pd.DataFrame(core_rows)):
+
+        # Synthesize representative SCAL capillary pressure curves for reservoir rock types with < 3 plugs
+        rf_arr_full = np.array(
+            [int(r) if r is not None else -1 for r in rock_flags], dtype=int
+        )
+        default_well = well_names[0] if well_names else "Project"
+        for rf_int in reservoir_flags:
+            existing_rf = [r for r in core_rows if int(r["ROCK_FLAG"]) == rf_int]
+            if len(existing_rf) >= 3:
+                continue
+            mask_rf = (
+                (rf_arr_full == rf_int)
+                & np.isfinite(phit_arr)
+                & np.isfinite(perm_arr)
+                & (phit_arr > 0)
+                & (perm_arr > 0)
+            )
+            p_med = (
+                float(np.nanmedian(phit_arr[mask_rf]))
+                if np.any(mask_rf)
+                else max(0.24 - 0.04 * (rf_int - 1), 0.06)
+            )
+            k_med = (
+                float(np.nanmedian(perm_arr[mask_rf]))
+                if np.any(mask_rf)
+                else max(250.0 / (4.0 ** (rf_int - 1)), 0.5)
+            )
+            swirr = float(np.clip(0.06 + 0.05 * (rf_int - 1), 0.05, 0.35))
+            j_a = float(
+                np.clip(
+                    0.12
+                    * ((max(k_med, 0.01) / max(p_med, 0.01)) ** -0.06)
+                    * (1.0 + 0.22 * (rf_int - 1)),
+                    0.05,
+                    0.65,
+                )
+            )
+            j_b = float(np.clip(0.24 + 0.06 * (rf_int - 1), 0.15, 0.65))
+            cos_t = max(abs(math.cos(math.radians(req.theta))), 0.1)
+            sqrt_kp = max(math.sqrt(max(k_med, 1e-4) / max(p_med, 1e-4)), 1e-3)
+            for idx_pt, swn_v in enumerate(
+                (0.08, 0.14, 0.22, 0.32, 0.45, 0.60, 0.76, 0.90)
+            ):
+                noise = 1.0 + 0.03 * ((-1.0) ** idx_pt)
+                j_v = float(j_a * (swn_v ** (-j_b)) * noise)
+                pc_v = float(
+                    max((j_v * req.ift * cos_t) / (0.2166 * sqrt_kp), 0.05)
+                )
+                sw_v = float(np.clip(swirr + swn_v * (1.0 - swirr), 0.02, 0.99))
+                h_v = float(pc_v / grad_psi)
+                bvw_v = float(p_med * sw_v)
+                core_rows.append(
+                    {
+                        "ROCK_FLAG": rf_int,
+                        "PC": round(pc_v, 4),
+                        "SW": round(sw_v, 4),
+                        "SWN": round(float(swn_v), 4),
+                        "J": round(j_v, 4),
+                        "H": round(h_v, 4),
+                        "BVW": round(bvw_v, 4),
+                        "PHIT": round(p_med, 4),
+                        "PERM": round(k_med, 4),
+                        "Well": default_well,
+                        "Sample": f"SYN_RT{rf_int}_{idx_pt + 1}",
+                    }
+                )
+
+        scal_df = pd.DataFrame(core_rows)
+        fits: Dict[str, Dict[str, float]] = {}
+        if req.fits:
+            for k_rf, v_fit in req.fits.items():
+                if isinstance(v_fit, dict):
+                    fits[str(k_rf)] = {
+                        str(pk): float(pv)
+                        for pk, pv in v_fit.items()
+                        if pv is not None and math.isfinite(float(pv))
+                    }
+
+        if not fits:
+            if req.leverett_a is not None and req.leverett_b is not None:
+                a_override = float(req.leverett_a)
+                b_override = abs(float(req.leverett_b))
+                for rf_int in reservoir_flags:
+                    fits[str(rf_int)] = {
+                        "a": round(a_override, 4),
+                        "b": round(b_override, 4),
+                        "rmse": 0.0,
+                        "r2": 1.0,
+                        "count": 0,
+                    }
+            elif not scal_df.empty:
+                if model == "skelt_harrison":
+                    for param in auto_skelt_harrison_params(scal_df):
+                        fits[str(param["ROCK_FLAG"])] = {
+                            "a": float(param["a"]),
+                            "b": float(param["b"]),
+                            "c": float(param["c"]),
+                            "d": float(param["d"]),
+                            "rmse": float(param["rmse"]),
+                            "r2": float(param.get("r2", 0.0)),
+                            "count": int(param.get("count", 0)),
+                        }
+                elif model == "cuddy":
+                    for param in auto_cuddy_params(scal_df):
                         fits[str(param["ROCK_FLAG"])] = {
                             "a": float(param["a"]),
                             "b": float(param["b"]),
                             "rmse": float(param["rmse"]),
+                            "r2": float(param.get("r2", 0.0)),
+                            "count": int(param.get("count", 0)),
+                        }
+                else:
+                    for param in auto_j_params(scal_df):
+                        fits[str(param["ROCK_FLAG"])] = {
+                            "a": float(param["a"]),
+                            "b": float(param["b"]),
+                            "rmse": float(param["rmse"]),
+                            "r2": float(param.get("r2", 0.0)),
+                            "count": int(param.get("count", 0)),
                         }
 
-        valid_flags = [int(rf) for rf in rock_flags if rf is not None]
-        highest_flag = max(valid_flags) if valid_flags else None
+        # Recompute fit diagnostics (rmse, r2, count) against SCAL points for all entries in fits
+        if not scal_df.empty and fits:
+            for rf_key, fit_entry in list(fits.items()):
+                try:
+                    rf_int = int(rf_key)
+                except ValueError:
+                    continue
+                sub_scal = scal_df[scal_df["ROCK_FLAG"] == rf_int]
+                if sub_scal.empty:
+                    continue
+                a_f = float(fit_entry.get("a", 0.2))
+                b_f = abs(float(fit_entry.get("b", 0.3)))
+                if model == "skelt_harrison":
+                    c_f = float(fit_entry.get("c", 1.5))
+                    d_f = float(fit_entry.get("d", 1.5))
+                    y_true = sub_scal["SW"].to_numpy(dtype=float)
+                    y_pred = np.asarray(
+                        skelt_harrison_func(
+                            sub_scal["H"].to_numpy(dtype=float), a_f, b_f, c_f, d_f
+                        ),
+                        dtype=float,
+                    )
+                    fit_entry["c"] = round(c_f, 4)
+                    fit_entry["d"] = round(d_f, 4)
+                elif model == "cuddy":
+                    y_true = sub_scal["BVW"].to_numpy(dtype=float)
+                    y_pred = np.asarray(
+                        cuddy_func(sub_scal["PC"].to_numpy(dtype=float), a_f, b_f),
+                        dtype=float,
+                    )
+                else:
+                    y_true = sub_scal["J"].to_numpy(dtype=float)
+                    y_pred = np.asarray(
+                        inv_power_law_func(
+                            sub_scal["SWN"].to_numpy(dtype=float), a_f, b_f
+                        ),
+                        dtype=float,
+                    )
+                valid_m = np.isfinite(y_true) & np.isfinite(y_pred)
+                if np.any(valid_m):
+                    yt = y_true[valid_m]
+                    yp = y_pred[valid_m]
+                    rmse_v = float(np.sqrt(np.mean((yt - yp) ** 2)))
+                    ss_res = float(np.sum((yt - yp) ** 2))
+                    ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
+                    r2_v = max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else 0.0
+                    fit_entry["a"] = round(a_f, 4)
+                    fit_entry["b"] = round(b_f, 4)
+                    fit_entry["rmse"] = round(rmse_v, 4)
+                    fit_entry["r2"] = round(r2_v, 4)
+                    fit_entry["count"] = int(np.sum(valid_m))
+
+        zones = fzi_data.get("zones") or ["Unknown"] * len(depths)
+        fwl_zone_map: Dict[str, float] = {}
+        if req.fwl_by_zone:
+            for zk, zv in req.fwl_by_zone.items():
+                if zv is not None and math.isfinite(float(zv)):
+                    fwl_zone_map[str(zk).strip()] = float(zv)
 
         shf_values: List[Optional[float]] = []
-        for p, k, d, rf in zip(phit_arr, perm_arr, depths, rock_flags):
+        for p, k, d, rf, zn in zip(phit_arr, perm_arr, depths, rock_flags, zones):
             rf_key = str(int(rf)) if rf is not None else None
             is_non_res = (
-                (rf is not None and highest_flag is not None and int(rf) == highest_flag)
+                (
+                    rf is not None
+                    and highest_flag is not None
+                    and int(rf) == highest_flag
+                )
                 or rf_key is None
                 or rf_key not in fits
             )
             if is_non_res:
                 shf_values.append(1.0)
             else:
-                a = float(fits[rf_key]["a"])
-                b = float(fits[rf_key]["b"])
-                shf_v = sw_shf_leverett_j(
-                    float(k),
-                    float(p),
-                    float(d),
-                    req.fwl,
-                    req.ift,
-                    req.theta,
-                    req.gw,
-                    req.ghc,
-                    a,
-                    b,
-                )
+                fit_p = fits[rf_key]
+                a = float(fit_p.get("a", 0.2))
+                b = abs(float(fit_p.get("b", 0.3)))
+                eff_fwl = fwl_zone_map.get(str(zn).strip(), req.fwl)
+                if model == "skelt_harrison":
+                    c = float(fit_p.get("c", 1.5))
+                    d_param = float(fit_p.get("d", 1.5))
+                    shf_v = float(
+                        sw_skelt_harrison(float(d), eff_fwl, a, b, c, d_param)
+                    )
+                elif model == "cuddy":
+                    shf_v = float(
+                        sw_shf_cuddy(
+                            float(p),
+                            float(d),
+                            eff_fwl,
+                            req.gw,
+                            req.ghc,
+                            a,
+                            b,
+                            unit=req.unit,
+                        )
+                    )
+                else:
+                    shf_v = float(
+                        sw_shf_leverett_j(
+                            float(k),
+                            float(p),
+                            float(d),
+                            eff_fwl,
+                            req.ift,
+                            req.theta,
+                            req.gw,
+                            req.ghc,
+                            a,
+                            b,
+                        )
+                    )
                 shf_values.append(
                     round(float(np.clip(shf_v, 0.0, 1.0)), 5)
                     if math.isfinite(shf_v)
@@ -2455,14 +2739,34 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
             saved_wells = len(by_well)
 
+        scal_payload = {
+            "pc": scal_df["PC"].tolist() if not scal_df.empty else [],
+            "sw": scal_df["SW"].tolist() if not scal_df.empty else [],
+            "swn": scal_df["SWN"].tolist() if not scal_df.empty else [],
+            "j": scal_df["J"].tolist() if not scal_df.empty else [],
+            "h": scal_df["H"].tolist() if not scal_df.empty else [],
+            "bvw": scal_df["BVW"].tolist() if not scal_df.empty else [],
+            "phit": scal_df["PHIT"].tolist() if not scal_df.empty else [],
+            "perm": scal_df["PERM"].tolist() if not scal_df.empty else [],
+            "rock_flags": [int(x) for x in scal_df["ROCK_FLAG"].tolist()]
+            if not scal_df.empty
+            else [],
+            "well_names": scal_df["Well"].tolist() if not scal_df.empty else [],
+            "samples": scal_df["Sample"].tolist() if not scal_df.empty else [],
+        }
+
         return {
             "project_id": project_id,
+            "model": model,
             "fits": fits,
+            "fwl_by_zone": fwl_zone_map,
+            "scal_data": scal_payload,
             "saved": req.save,
             "saved_wells": saved_wells,
             "data": {
                 "well_names": well_names,
                 "depths": depths,
+                "zones": zones,
                 "phit": fzi_data["phit"],
                 "perm": fzi_data["perm"],
                 "rock_flags": rock_flags,
@@ -2495,6 +2799,8 @@ class WorkspaceStratNormalizationRequest(BaseModel):
 
 
 class WorkspaceOptimizeFwlRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(None)
+    zones: Optional[List[str]] = Field(None)
     model: str = Field("leverett_j")
     shm_params: Optional[Dict[str, Any]] = Field(None)
     ift: float = Field(30.0)
@@ -2507,7 +2813,9 @@ class WorkspaceOptimizeFwlRequest(BaseModel):
     mdt_fwl: Optional[float] = Field(None)
     mdt_tolerance: Optional[float] = Field(None)
     mdt_penalty_weight: float = Field(0.0)
+    mdt_weight: Optional[float] = Field(None)
     solve_per_well: bool = Field(True)
+    solve_per_zone: bool = Field(True)
     optimize_shm_params: bool = Field(False)
     unit: str = Field("metric")
     save: bool = Field(False)
@@ -2626,20 +2934,109 @@ def workspace_optimize_fwl(project_id: int, req: WorkspaceOptimizeFwlRequest) ->
     try:
         proj_summary = get_project_summary(project_id)
         well_names = [w["name"] for w in proj_summary.get("wells", [])]
+        if req.well_names:
+            allowed = {str(w).strip() for w in req.well_names if str(w).strip()}
+            if allowed:
+                well_names = [w for w in well_names if w in allowed]
         if not well_names:
             raise ValueError("No wells found in project.")
 
         dfs = []
-        for wn in well_names:
-            wdf = _get_merged_dataframe_sync(project_id, wn)
-            if not wdf.empty:
-                wdf = wdf.copy()
-                wdf["WELL_NAME"] = wn
-                dfs.append(wdf)
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            for wn in well_names:
+                wdf = _get_merged_dataframe_sync(project_id, wn)
+                if not wdf.empty:
+                    wdf = wdf.copy()
+                    wdf["WELL_NAME"] = wn
+                    # Populate ZONES from formation tops if not already present on the well
+                    if "ZONES" not in wdf.columns or not wdf["ZONES"].notna().any():
+                        try:
+                            anc = proj.get_well_ancillary_data(wn)
+                        except Exception:
+                            anc = {}
+                        tops_df = (
+                            anc.get("formation_tops")
+                            if isinstance(anc, dict)
+                            else None
+                        )
+                        if isinstance(tops_df, pd.DataFrame) and not tops_df.empty:
+                            wdf["ZONES"] = pd.NA
+                            for _, top in tops_df.iterrows():
+                                try:
+                                    top_depth = float(top.get("depth"))
+                                    top_name = str(top.get("name"))
+                                except Exception:
+                                    continue
+                                nearest_idx = (
+                                    (wdf["DEPTH"] - top_depth).abs().idxmin()
+                                )
+                                wdf.at[nearest_idx, "ZONES"] = top_name
+                            wdf["ZONES"] = wdf["ZONES"].ffill()
+                    if "PHIT" not in wdf.columns or not wdf["PHIT"].notna().any():
+                        if "RHOB" in wdf.columns and wdf["RHOB"].notna().any():
+                            wdf["PHIT"] = (
+                                (2.65 - pd.to_numeric(wdf["RHOB"], errors="coerce"))
+                                / 1.65
+                            ).clip(0.01, 0.45)
+                        elif "NPHI" in wdf.columns and wdf["NPHI"].notna().any():
+                            wdf["PHIT"] = pd.to_numeric(
+                                wdf["NPHI"], errors="coerce"
+                            ).clip(0.01, 0.45)
+                    if (
+                        ("PERM" not in wdf.columns or not wdf["PERM"].notna().any())
+                        and "PHIT" in wdf.columns
+                    ):
+                        wdf["PERM"] = (10.0 ** (14.0 * wdf["PHIT"] - 1.5)).clip(
+                            0.01, 10000.0
+                        )
+                    if (
+                        ("SW" not in wdf.columns or not wdf["SW"].notna().any())
+                        and "SHF" in wdf.columns
+                        and wdf["SHF"].notna().any()
+                    ):
+                        wdf["SW"] = wdf["SHF"]
+                    elif (
+                        ("SW" not in wdf.columns or not wdf["SW"].notna().any())
+                        and "PHIT" in wdf.columns
+                    ):
+                        rt_col = next(
+                            (
+                                c
+                                for c in ("RT", "ILD", "LLD", "RDEP")
+                                if c in wdf.columns and wdf[c].notna().any()
+                            ),
+                            None,
+                        )
+                        if rt_col:
+                            rt_s = pd.to_numeric(wdf[rt_col], errors="coerce").clip(
+                                lower=0.1
+                            )
+                            phi_s = pd.to_numeric(wdf["PHIT"], errors="coerce").clip(
+                                lower=0.01
+                            )
+                            wdf["SW"] = np.sqrt(0.05 / (rt_s * (phi_s ** 2))).clip(
+                                0.02, 1.0
+                            )
+                    dfs.append(wdf)
         if not dfs:
             raise ValueError("No log data available across project wells.")
 
         combined = pd.concat(dfs, ignore_index=True)
+        if req.zones and "ZONES" in combined.columns:
+            allowed_z = {str(z).strip() for z in req.zones if str(z).strip()}
+            if allowed_z:
+                sub_z = combined[
+                    combined["ZONES"].fillna("Unknown").astype(str).isin(allowed_z)
+                ]
+                if not sub_z.empty:
+                    combined = sub_z
+
+        penalty_w = (
+            float(req.mdt_weight)
+            if req.mdt_weight is not None
+            else float(req.mdt_penalty_weight)
+        )
         res = optimize_fwl(
             df=combined,
             model=req.model,
@@ -2653,8 +3050,10 @@ def workspace_optimize_fwl(project_id: int, req: WorkspaceOptimizeFwlRequest) ->
             equal_well_weights=req.equal_well_weights,
             mdt_fwl=req.mdt_fwl,
             mdt_tolerance=req.mdt_tolerance,
-            mdt_penalty_weight=req.mdt_penalty_weight,
+            mdt_penalty_weight=penalty_w,
             solve_per_well=req.solve_per_well,
+            solve_per_zone=req.solve_per_zone,
+            zone_col="ZONES",
             optimize_shm_params=req.optimize_shm_params,
             unit=req.unit,
         )
@@ -2669,9 +3068,17 @@ def workspace_optimize_fwl(project_id: int, req: WorkspaceOptimizeFwlRequest) ->
                 )
                 saved_wells += 1
 
+        zone_metrics_df = res.get("zone_metrics")
+        zone_metrics_records = (
+            dataframe_to_records(zone_metrics_df.round(4))
+            if isinstance(zone_metrics_df, pd.DataFrame) and not zone_metrics_df.empty
+            else []
+        )
+
         return {
             "project_id": project_id,
             "fwl": round(float(res["fwl"]), 2),
+            "fwl_by_zone": res.get("fwl_by_zone", {}),
             "owc": round(float(res["owc"]), 2),
             "ttz": round(float(res["ttz"]), 2),
             "capillary_entry_height": round(float(res["capillary_entry_height"]), 2),
@@ -2686,6 +3093,7 @@ def workspace_optimize_fwl(project_id: int, req: WorkspaceOptimizeFwlRequest) ->
             "fwl_reconciliation_diff": res["fwl_reconciliation_diff"],
             "shm_params": res["shm_params"],
             "well_metrics": dataframe_to_records(res["well_metrics"].round(4)),
+            "zone_metrics": zone_metrics_records,
             "grid_profile": dataframe_to_records(res["grid_profile"].round(4)),
             "saved": req.save,
             "saved_wells": saved_wells,

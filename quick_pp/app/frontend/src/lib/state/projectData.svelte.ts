@@ -46,7 +46,10 @@ class ProjectDataState {
 	} | null>(null);
 
 	shfParams = $state({
+		model: 'leverett_j' as 'leverett_j' | 'skelt_harrison' | 'cuddy',
+		unit: 'metric' as 'metric' | 'imperial',
 		fwl: 2500.0,
+		fwlByZone: {} as Record<string, number>,
 		ift: 30.0,
 		theta: 30.0,
 		gw: 1.05,
@@ -54,9 +57,36 @@ class ProjectDataState {
 	});
 
 	shfResult = $state<{
-		fits: Record<string, { a: number; b: number; rmse?: number }>;
+		model?: 'leverett_j' | 'skelt_harrison' | 'cuddy';
+		fits: Record<
+			string,
+			{
+				a: number;
+				b: number;
+				c?: number;
+				d?: number;
+				rmse?: number;
+				r2?: number;
+				count?: number;
+			}
+		>;
+		fwl_by_zone?: Record<string, number>;
+		scal_data?: {
+			pc: number[];
+			sw: number[];
+			swn: number[];
+			j: number[];
+			h: number[];
+			bvw: number[];
+			phit: number[];
+			perm: number[];
+			rock_flags: number[];
+			well_names: string[];
+			samples: string[];
+		};
 		well_names: string[];
 		depths: number[];
+		zones?: string[];
 		phit: number[];
 		perm: number[];
 		rock_flags: (number | null)[];

@@ -12,13 +12,18 @@ matplotlib.use("Agg")
 
 from quick_pp import scal
 from quick_pp.core_analysis import (
+    auto_cuddy_params,
     auto_j_params,
+    auto_skelt_harrison_params,
     correct_core_data,
+    cuddy_func,
     dean_stark_cbw_correction,
     dean_stark_saturation_correction,
     estimate_cbw_from_qv,
+    fit_cuddy_curve,
     fit_j_curve,
     fit_poroperm_curve,
+    fit_skelt_harrison_curve,
     humidity_to_total_porosity,
     klinkenberg_permeability_correction,
     leverett_j,
@@ -275,6 +280,39 @@ def test_core_fitting_and_transforms():
     assert sw_shf_leverett_j(100.0, 0.20, 8600.0, 8550.0, 30.0, 30.0, 1.05, 0.80, 0.15, 1.5) == 1.0
     assert sw_skelt_harrison(8600.0, 8550.0, 0.85, 35.0, 1.5, 2.0) == 1.0
 
+    # Verify Skelt-Harrison and Cuddy curve fitting & auto-params per Rock Type
+    h_grid = np.array([2.0, 5.0, 10.0, 20.0, 40.0, 80.0, 150.0])
+    sw_sh_true = skelt_harrison_func(h_grid, 0.85, 25.0, 1.5, 2.0)
+    sa, sb, sc, sd = fit_skelt_harrison_curve(sw_sh_true, h_grid)
+    np.testing.assert_allclose(
+        skelt_harrison_func(h_grid, sa, sb, sc, sd), sw_sh_true, atol=0.02
+    )
+
+    pc_grid = np.array([0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0])
+    bvw_true = cuddy_func(pc_grid, 0.14, 0.38)
+    ca, cb = fit_cuddy_curve(bvw_true, pc_grid)
+    np.testing.assert_allclose(ca, 0.14, atol=0.01)
+    np.testing.assert_allclose(cb, 0.38, atol=0.01)
+
+    scal_df = pd.DataFrame(
+        {
+            "ROCK_FLAG": [1] * len(h_grid),
+            "Well": ["W1"] * len(h_grid),
+            "Sample": ["S1"] * len(h_grid),
+            "SW": sw_sh_true,
+            "H": h_grid,
+            "PC": pc_grid,
+            "BVW": bvw_true,
+        }
+    )
+    sh_params_auto = auto_skelt_harrison_params(scal_df)
+    assert len(sh_params_auto) == 1
+    assert sh_params_auto[0]["rmse"] < 0.02
+
+    cuddy_params_auto = auto_cuddy_params(scal_df)
+    assert len(cuddy_params_auto) == 1
+    assert cuddy_params_auto[0]["rmse"] < 0.01
+
 
 def _make_multi_well_contact_dataset(
     true_fwl: float = 8550.0, model: str = "leverett_j"
@@ -458,3 +496,32 @@ def test_contact_optimizer_class_and_skelt_harrison_multi_well():
         ghc=0.82,
     )
     assert tz_dict["ttz"] < tz_dict["owc"] <= tz_dict["fwl"]
+
+    # Verify per-zone FWL optimization on stacked reservoir zones with distinct FWLs
+    z1_df, j_params, _ = _make_multi_well_contact_dataset(
+        true_fwl=8450.0, model="leverett_j"
+    )
+    z1_df["ZONES"] = "UPPER_SAND"
+    z2_df, _, _ = _make_multi_well_contact_dataset(
+        true_fwl=8580.0, model="leverett_j"
+    )
+    z2_df["ZONES"] = "LOWER_SAND"
+    stacked_df = pd.concat([z1_df, z2_df], ignore_index=True)
+
+    opt_z = optimize_fwl(
+        df=stacked_df,
+        model="leverett_j",
+        shm_params=j_params,
+        ift=32.0,
+        theta=30.0,
+        gw=1.10,
+        ghc=0.82,
+        solve_per_zone=True,
+        zone_col="ZONES",
+    )
+    assert "fwl_by_zone" in opt_z
+    assert "UPPER_SAND" in opt_z["fwl_by_zone"]
+    assert "LOWER_SAND" in opt_z["fwl_by_zone"]
+    np.testing.assert_allclose(opt_z["fwl_by_zone"]["UPPER_SAND"], 8450.0, atol=5.0)
+    np.testing.assert_allclose(opt_z["fwl_by_zone"]["LOWER_SAND"], 8580.0, atol=5.0)
+    assert len(opt_z["zone_metrics"]) == 2
