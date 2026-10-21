@@ -28,9 +28,14 @@
 				{
 					params: { path: { project_id: workbench.projectId } },
 					body: {
+						well_names:
+							projectData.selectedWellNames.length > 0 &&
+							projectData.selectedWellNames.length < projectData.wells.length
+								? projectData.selectedWellNames
+								: null,
 						cutoffs: sortedCutoffs,
 						save: persist
-					}
+					} as any
 				}
 			);
 			if (error || !data) {

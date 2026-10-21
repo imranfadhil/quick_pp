@@ -39,6 +39,11 @@
 				{
 					params: { path: { project_id: workbench.projectId } },
 					body: {
+						well_names:
+							projectData.selectedWellNames.length > 0 &&
+							projectData.selectedWellNames.length < projectData.wells.length
+								? projectData.selectedWellNames
+								: null,
 						cutoffs: [...projectData.fziCutoffs].sort((a, b) => a - b),
 						fwl: sp.fwl,
 						ift: sp.ift,

@@ -152,6 +152,14 @@
 		}
 	}
 
+	function toggleWellFilter(wellName: string) {
+		if (projectData.selectedWellNames.includes(wellName)) {
+			projectData.selectedWellNames = projectData.selectedWellNames.filter((w) => w !== wellName);
+		} else {
+			projectData.selectedWellNames = [...projectData.selectedWellNames, wellName];
+		}
+	}
+
 	function exportWellCurvesCsv() {
 		const cols = Object.keys(wellData.curves);
 		const indices = wellData.visibleIndices;
@@ -174,19 +182,33 @@
 		showExportMenu = false;
 	}
 
+	let hasWellFilter = $derived(
+		projectData.wells.length > 0 &&
+			projectData.selectedWellNames.length < projectData.wells.length
+	);
+
 	let filterSummaryText = $derived.by(() => {
 		const parts: string[] = [];
+		if (hasWellFilter) {
+			const sel = projectData.selectedWellNames;
+			parts.push(
+				sel.length > 0 && sel.length <= 2
+					? `Wells: ${sel.join(', ')}`
+					: `Wells: ${sel.length}/${projectData.wells.length}`
+			);
+		}
 		if (workbench.selectedZones.length > 0) {
 			parts.push(`Zones: ${workbench.selectedZones.join(', ')}`);
 		}
 		if (workbench.depthFilter) {
 			parts.push(`${fmtDepth(workbench.depthFilter.min)}–${fmtDepth(workbench.depthFilter.max)}`);
 		}
-		return parts.length > 0 ? parts.join(' | ') : 'All Zones & Depths';
+		if (parts.length > 0) return parts.join(' | ');
+		return workbench.scope === 'multi-well' ? 'All Wells, Zones & Depths' : 'All Zones & Depths';
 	});
 
 	let hasActiveFilter = $derived(
-		workbench.selectedZones.length > 0 || workbench.depthFilter !== null
+		hasWellFilter || workbench.selectedZones.length > 0 || workbench.depthFilter !== null
 	);
 </script>
 
@@ -554,9 +576,10 @@
 		{#if hasActiveFilter}
 			<button
 				type="button"
-				title="Clear Working Depth & Zone Filters for this well"
+				title="Clear Well, Zone & Depth Filters"
 				onclick={() => {
 					workbench.clearFilters();
+					projectData.selectedWellNames = projectData.wells.map((w) => w.name);
 					wellData.saveWellFocusDepth(null, null, true);
 				}}
 				class="flex h-7 w-6 items-center justify-center rounded-sm border border-blue-200 bg-blue-50 text-xs font-bold text-blue-700 hover:bg-blue-100"
@@ -567,16 +590,19 @@
 
 		{#if showFilterPopover}
 			<div
-				class="absolute top-8 left-0 z-50 w-72 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-lg"
+				class="absolute top-8 left-0 z-50 w-76 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-lg"
 			>
 				<div class="mb-2 flex items-center justify-between">
 					<span class="text-xs font-semibold text-[var(--text-primary)]">
-						Well Working Depth & Zone Filter
+						{workbench.scope === 'multi-well'
+							? 'Multi-Well, Zone & Depth Filter'
+							: 'Well Working Depth & Zone Filter'}
 					</span>
 					<button
 						type="button"
 						onclick={() => {
 							workbench.clearFilters();
+							projectData.selectedWellNames = projectData.wells.map((w) => w.name);
 							wellData.saveWellFocusDepth(null, null, true);
 							minDepthInput = '';
 							maxDepthInput = '';
@@ -587,6 +613,55 @@
 						Reset All
 					</button>
 				</div>
+
+				{#if (workbench.scope === 'multi-well' || hasWellFilter) && projectData.wells.length > 0}
+					<div class="mb-2.5">
+						<div class="mb-1 flex items-center justify-between">
+							<span class="text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+								Wells ({projectData.selectedWellNames.length}/{projectData.wells.length})
+							</span>
+							<div class="flex items-center gap-1.5 text-[10px]">
+								<button
+									type="button"
+									onclick={() => {
+										projectData.selectedWellNames = projectData.wells.map((w) => w.name);
+									}}
+									class="font-medium text-blue-600 hover:underline"
+								>
+									All
+								</button>
+								<span class="text-[var(--text-muted)]">·</span>
+								<button
+									type="button"
+									onclick={() => {
+										projectData.selectedWellNames = [];
+									}}
+									class="font-medium text-slate-600 hover:underline"
+								>
+									None
+								</button>
+							</div>
+						</div>
+						<div class="max-h-32 space-y-1 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+							{#each projectData.wells as w (w.name)}
+								<label class="flex cursor-pointer items-center justify-between gap-1.5 text-xs hover:bg-[var(--bg-subtle)] px-1 py-0.5 rounded-xs">
+									<span class="flex items-center gap-1.5 min-w-0">
+										<input
+											type="checkbox"
+											checked={projectData.selectedWellNames.includes(w.name)}
+											onchange={() => toggleWellFilter(w.name)}
+											class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+										/>
+										<span class="mono-num truncate font-medium text-[var(--text-primary)]">{w.name}</span>
+									</span>
+									<span class="mono-num shrink-0 text-[10px] text-[var(--text-muted)]">
+										{w.row_count?.toLocaleString() ?? ''}
+									</span>
+								</label>
+							{/each}
+						</div>
+					</div>
+				{/if}
 
 				<div class="mb-2.5 grid grid-cols-2 gap-2">
 					<label class="block">

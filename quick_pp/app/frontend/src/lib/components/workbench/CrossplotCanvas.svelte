@@ -308,8 +308,24 @@
 			// Check if multi-well rock typing data is present when in multi-well scope
 			if (workbench.scope === 'multi-well' && projectData.rockTypingResult) {
 				const rt = projectData.rockTypingResult;
+				const allowedWells =
+					projectData.wells.length > 0 &&
+					projectData.selectedWellNames.length < projectData.wells.length
+						? new Set(projectData.selectedWellNames)
+						: null;
+				const allowedZones =
+					workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
+				const minD = workbench.depthFilter?.min ?? -Infinity;
+				const maxD = workbench.depthFilter?.max ?? Infinity;
+				const rtZones = (rt as any).zones as (string | null)[] | undefined;
+
 				const grouped = new Map<number, { x: number[]; y: number[]; wells: string[] }>();
 				rt.phit.forEach((p, i) => {
+					const wn = rt.well_names[i];
+					if (allowedWells && !allowedWells.has(wn)) return;
+					const d = rt.depths?.[i];
+					if (typeof d === 'number' && (d < minD || d > maxD)) return;
+					if (allowedZones && rtZones && (!rtZones[i] || !allowedZones.has(String(rtZones[i])))) return;
 					const k = rt.perm[i];
 					const rf = rt.rock_flags[i] ?? 1;
 					if (Number.isFinite(p) && Number.isFinite(k) && k > 0) {
@@ -317,7 +333,7 @@
 						const g = grouped.get(rf)!;
 						g.x.push(p);
 						g.y.push(k);
-						g.wells.push(rt.well_names[i]);
+						g.wells.push(wn);
 					}
 				});
 
@@ -484,8 +500,19 @@
 			const fwl = projectData.shfParams.fwl;
 			if (workbench.scope === 'multi-well' && projectData.shfResult) {
 				const sr = projectData.shfResult;
+				const allowedWells =
+					projectData.wells.length > 0 &&
+					projectData.selectedWellNames.length < projectData.wells.length
+						? new Set(projectData.selectedWellNames)
+						: null;
+				const minD = workbench.depthFilter?.min ?? -Infinity;
+				const maxD = workbench.depthFilter?.max ?? Infinity;
+
 				const grouped = new Map<number, { sw: number[]; hafwl: number[] }>();
 				sr.depths.forEach((d, i) => {
+					const wn = sr.well_names?.[i];
+					if (allowedWells && wn && !allowedWells.has(wn)) return;
+					if (typeof d === 'number' && (d < minD || d > maxD)) return;
 					const s = sr.shf[i];
 					const rf = sr.rock_flags[i] ?? 1;
 					const h = fwl - d;
@@ -618,6 +645,9 @@
 		void workbench.saturationParams.m;
 		void workbench.saturationParams.n;
 		void workbench.scalResult;
+		void projectData.selectedWellNames;
+		void workbench.selectedZones;
+		void workbench.depthFilter;
 		void projectData.fziCutoffs;
 		void projectData.rockTypingResult;
 		void projectData.shfResult;

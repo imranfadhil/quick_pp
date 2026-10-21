@@ -454,6 +454,9 @@ class WorkspaceReservoirSummaryRequest(WorkspaceFilterBase):
 
 
 class WorkspaceRockTypingRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(
+        None, description="Optional subset of well names to include"
+    )
     cutoffs: List[float] = Field(default_factory=lambda: [0.5, 1.0, 2.5])
     higher_is_better: bool = Field(True)
     auto_find_cutoffs: bool = Field(False)
@@ -462,6 +465,9 @@ class WorkspaceRockTypingRequest(BaseModel):
 
 
 class WorkspacePermTransformRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(
+        None, description="Optional subset of well names to include"
+    )
     fits: Optional[Dict[str, Dict[str, float]]] = Field(
         None,
         description="Optional manual (a, b) fits per ROCK_FLAG. If None, auto-fitted from well data.",
@@ -470,6 +476,9 @@ class WorkspacePermTransformRequest(BaseModel):
 
 
 class WorkspaceShfRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(
+        None, description="Optional subset of well names to include"
+    )
     cutoffs: List[float] = Field(default_factory=lambda: [0.1, 1.0, 3.0])
     fwl: float = Field(1000.0)
     ift: float = Field(30.0)
@@ -481,6 +490,25 @@ class WorkspaceShfRequest(BaseModel):
         description="Optional J-function fits per ROCK_FLAG. If None, auto-fitted from core SCAL data.",
     )
     save: bool = Field(False)
+
+
+def _filter_fzi_data_by_wells(
+    fzi_data: Dict[str, List[Any]], well_names: Optional[List[str]]
+) -> Dict[str, List[Any]]:
+    if not well_names:
+        return fzi_data
+    allowed = {str(w).strip() for w in well_names if str(w).strip()}
+    if not allowed:
+        return fzi_data
+    w_arr = fzi_data.get("well_names") or []
+    keep_idx = [i for i, wn in enumerate(w_arr) if str(wn) in allowed]
+    out: Dict[str, List[Any]] = {}
+    for k, arr in fzi_data.items():
+        if isinstance(arr, list) and len(arr) == len(w_arr):
+            out[k] = [arr[i] for i in keep_idx]
+        else:
+            out[k] = arr
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -2075,7 +2103,9 @@ def workspace_rock_typing_compute(
 ) -> Dict[str, Any]:
     """Compute FZI and ROCK_FLAG across all wells in the project on the server."""
     try:
-        fzi_data = _compute_fzi_data_sync(project_id)
+        fzi_data = _filter_fzi_data_by_wells(
+            _compute_fzi_data_sync(project_id), req.well_names
+        )
         phit_arr = np.asarray(fzi_data["phit"], dtype=float)
         perm_arr = np.asarray(fzi_data["perm"], dtype=float)
         well_names = fzi_data["well_names"]
@@ -2156,7 +2186,9 @@ def workspace_perm_transform_compute(
 ) -> Dict[str, Any]:
     """Fit power-law permeability transforms (a * PHIT^b) per ROCK_FLAG and optionally save PERM_TRANS."""
     try:
-        fzi_data = _compute_fzi_data_sync(project_id)
+        fzi_data = _filter_fzi_data_by_wells(
+            _compute_fzi_data_sync(project_id), req.well_names
+        )
         phit_arr = np.asarray(fzi_data["phit"], dtype=float)
         perm_arr = np.asarray(fzi_data["perm"], dtype=float)
         rock_flags = fzi_data["rock_flags"]
@@ -2246,7 +2278,9 @@ def workspace_perm_transform_compute(
 def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str, Any]:
     """Compute Leverett-J SHF curves across all project wells and optionally save SHF to database."""
     try:
-        fzi_data = _compute_fzi_data_sync(project_id)
+        fzi_data = _filter_fzi_data_by_wells(
+            _compute_fzi_data_sync(project_id), req.well_names
+        )
         phit_arr = np.asarray(fzi_data["phit"], dtype=float)
         perm_arr = np.asarray(fzi_data["perm"], dtype=float)
         rock_flags = fzi_data["rock_flags"]
