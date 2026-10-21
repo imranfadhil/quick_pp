@@ -305,9 +305,15 @@
 		}
 
 		if (effectiveMode === 'phi-k') {
-			// Check if multi-well rock typing data is present when in multi-well scope
-			if (workbench.scope === 'multi-well' && projectData.rockTypingResult) {
-				const rt = projectData.rockTypingResult;
+			// Check if multi-well rock typing or perm transform data is present when in multi-well scope
+			const mwSource =
+				workbench.scope === 'multi-well'
+					? workbench.multiWellStep === 'perm-transform' && projectData.permTransformResult
+						? projectData.permTransformResult
+						: (projectData.rockTypingResult ?? projectData.permTransformResult)
+					: null;
+			if (workbench.scope === 'multi-well' && mwSource) {
+				const rt = mwSource;
 				const allowedWells =
 					projectData.wells.length > 0 &&
 					projectData.selectedWellNames.length < projectData.wells.length
@@ -337,6 +343,7 @@
 					}
 				});
 
+				const hasPermFits = Boolean(projectData.permTransformResult?.fits);
 				for (const [rf, g] of grouped.entries()) {
 					traces.push({
 						type: 'scattergl',
@@ -345,7 +352,11 @@
 						x: g.x,
 						y: g.y,
 						text: g.wells,
-						marker: { size: 6, color: getRockTypeColor(rf), opacity: 0.85 },
+						marker: {
+							size: hasPermFits ? 5 : 6,
+							color: getRockTypeColor(rf),
+							opacity: hasPermFits ? 0.38 : 0.82
+						},
 						hovertemplate: 'Well: %{text}<br>PHIT: %{x:.3f}<br>PERM: %{y:.2f} mD<extra></extra>'
 					});
 				}
@@ -418,6 +429,48 @@
 					line: { color: '#94A3B8', width: 1, dash: 'dash' },
 					hoverinfo: 'skip'
 				});
+			}
+
+			// Fitted power-law Perm Transform lines per Rock Type: K = a * phi^b
+			if (workbench.scope === 'multi-well' && projectData.permTransformResult?.fits) {
+				for (const [rf, fit] of Object.entries(projectData.permTransformResult.fits)) {
+					if (!fit || !Number.isFinite(fit.a) || !Number.isFinite(fit.b)) continue;
+					const kFit = phiGrid.map((phi) => fit.a * Math.pow(phi, fit.b));
+					const rtCol = getRockTypeColor(rf);
+					// High-contrast dark casing halo behind the fitted line so it stands out over same-color points
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Fit RT ${rf} halo`,
+						x: phiGrid,
+						y: kFit,
+						showlegend: false,
+						hoverinfo: 'skip',
+						line: {
+							color: '#0F172A',
+							width: 5.5,
+							dash: 'solid'
+						}
+					});
+					traces.push({
+						type: 'scatter',
+						mode: 'lines+markers',
+						name: `Fit RT ${rf}`,
+						x: phiGrid,
+						y: kFit,
+						line: {
+							color: rtCol,
+							width: 2.8,
+							dash: 'solid'
+						},
+						marker: {
+							size: phiGrid.map((_, idx) => (idx % 6 === 0 ? 5.5 : 0)),
+							color: '#FFFFFF',
+							line: { color: rtCol, width: 1.8 }
+						},
+						hovertemplate: `RT ${rf} Fit (a=${fmtNum(fit.a, 1)}, b=${fmtNum(fit.b, 3)})<br>Φ: %{x:.3f}<br>K: %{y:.2f} mD<extra></extra>`
+					});
+				}
 			}
 
 			baseLayout.xaxis.title = { text: 'Porosity (v/v)' };
@@ -650,6 +703,8 @@
 		void workbench.depthFilter;
 		void projectData.fziCutoffs;
 		void projectData.rockTypingResult;
+		void projectData.permTransformResult;
+		void projectData.permTransformResult?.fits;
 		void projectData.shfResult;
 
 		const { traces, layout } = buildCrossplot();

@@ -7,11 +7,107 @@
 	import { fmtNum } from '$lib/utils/formatters';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
 
-	async function executePermTransform(persist: boolean = false) {
+	let hasManualEdits = $state(false);
+
+	function recomputeR2AndActiveWellPreview(rfKey: string, aVal: number, bVal: number) {
+		const res = projectData.permTransformResult;
+		if (!res) return;
+
+		const rfNum = Number(rfKey);
+		const logTrue: number[] = [];
+		const logPred: number[] = [];
+
+		for (let i = 0; i < res.phit.length; i++) {
+			const r = res.rock_flags[i];
+			const p = res.phit[i];
+			const k = res.perm[i];
+			if (r === rfNum && Number.isFinite(p) && p > 0 && Number.isFinite(k) && k > 0) {
+				const pred = Math.max(1e-6, aVal * Math.pow(p, bVal));
+				logTrue.push(Math.log10(Math.max(1e-6, k)));
+				logPred.push(Math.log10(pred));
+			}
+		}
+
+		let r2Val: number | null = res.fits[rfKey]?.r2 ?? null;
+		if (logTrue.length >= 2) {
+			const meanTrue = logTrue.reduce((acc, v) => acc + v, 0) / logTrue.length;
+			let ssRes = 0;
+			let ssTot = 0;
+			for (let i = 0; i < logTrue.length; i++) {
+				ssRes += Math.pow(logTrue[i] - logPred[i], 2);
+				ssTot += Math.pow(logTrue[i] - meanTrue, 2);
+			}
+			r2Val = ssTot > 1e-12 ? Number((1.0 - ssRes / ssTot).toFixed(4)) : 0.0;
+		}
+
+		const nextFits = {
+			...res.fits,
+			[rfKey]: {
+				...res.fits[rfKey],
+				a: aVal,
+				b: bVal,
+				r2: r2Val
+			}
+		};
+
+		projectData.permTransformResult = {
+			...res,
+			fits: nextFits
+		};
+
+		// Also update active well PERM_TRANS curve on Track 5 in real time
+		if (workbench.wellId && res.well_names) {
+			const wDepths: number[] = [];
+			const wPt: (number | null)[] = [];
+			for (let i = 0; i < res.well_names.length; i++) {
+				if (res.well_names[i] === workbench.wellId) {
+					wDepths.push(res.depths[i]);
+					const p = res.phit[i];
+					const r = res.rock_flags[i];
+					const f = r !== null && r !== undefined ? nextFits[String(r)] : undefined;
+					if (f && Number.isFinite(p) && p > 0) {
+						const kPred = f.a * Math.pow(p, f.b);
+						wPt.push(Number.isFinite(kPred) ? kPred : null);
+					} else {
+						wPt.push(null);
+					}
+				}
+			}
+			if (wDepths.length > 0) {
+				wellData.mergeComputedCurves({
+					DEPTH: wDepths,
+					PERM_TRANS: wPt
+				});
+			}
+		}
+	}
+
+	function handleFitParamInput(rfKey: string, field: 'a' | 'b', rawValue: string) {
+		const res = projectData.permTransformResult;
+		if (!res || !res.fits[rfKey]) return;
+		const parsed = parseFloat(rawValue);
+		if (!Number.isFinite(parsed)) return;
+		hasManualEdits = true;
+		const nextA = field === 'a' ? Math.max(1e-6, parsed) : res.fits[rfKey].a;
+		const nextB = field === 'b' ? parsed : res.fits[rfKey].b;
+		recomputeR2AndActiveWellPreview(rfKey, nextA, nextB);
+	}
+
+	async function executePermTransform(persist: boolean = false, useCurrentFits: boolean = false) {
 		if (!workbench.projectId) return;
 		projectData.isComputingMultiWell = true;
 		projectData.error = null;
 		try {
+			const customFits =
+				useCurrentFits && projectData.permTransformResult?.fits
+					? Object.fromEntries(
+							Object.entries(projectData.permTransformResult.fits).map(([k, v]) => [
+								k,
+								{ a: Number(v.a), b: Number(v.b) }
+							])
+						)
+					: null;
+
 			const { data, error } = await api.POST(
 				'/quick_pp/workspace/projects/{project_id}/perm_transform/compute',
 				{
@@ -23,12 +119,16 @@
 								? projectData.selectedWellNames
 								: null,
 						cutoffs: [...projectData.fziCutoffs].sort((a, b) => a - b),
+						fits: customFits,
 						save: persist
 					} as any
 				}
 			);
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Perm transform failed'));
+			}
+			if (!useCurrentFits) {
+				hasManualEdits = false;
 			}
 			projectData.permTransformResult = {
 				fits: data.fits as any,
@@ -74,12 +174,28 @@
 	<div class="flex-1 overflow-y-auto">
 		<ParameterSection title="Power-Law Regression per Rock Type" badge="K = a · Φ^b">
 			<p class="text-[11px] text-[var(--text-secondary)]">
-				Fits log-linear porosity-permeability transforms per Discrete Rock Type (DRT) across all project wells and predicts continuous <code>PERM</code> logs.
+				Fits log-linear porosity-permeability transforms per Discrete Rock Type (DRT) across project wells and predicts continuous <code>PERM</code> logs. Edit <code>a</code> or <code>b</code> below to adjust the lines on the crossplot in real time.
 			</p>
 		</ParameterSection>
 
 		{#if projectData.permTransformResult}
-			<ParameterSection title="Fitted Equations by Rock Type">
+			<ParameterSection
+				title="Fitted Equations by Rock Type"
+				badge={hasManualEdits ? 'Custom Edited' : 'Auto-Fitted'}
+			>
+				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
+					<span>Edit <strong>Coeff a</strong> or <strong>Exp b</strong> to update crossplot lines</span>
+					{#if hasManualEdits}
+						<button
+							type="button"
+							onclick={() => executePermTransform(false, false)}
+							class="font-semibold text-blue-600 hover:underline"
+						>
+							↺ Reset Auto-Fit
+						</button>
+					{/if}
+				</div>
+
 				<div class="overflow-x-auto border border-[var(--border-hairline)]">
 					<table class="w-full border-collapse text-left text-[11px]">
 						<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
@@ -92,17 +208,35 @@
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-[var(--border-hairline)]">
-							{#each Object.entries(projectData.permTransformResult.fits) as [rf, fit]}
-								<tr class="h-6">
-									<td class="px-1.5 font-semibold">
+							{#each Object.entries(projectData.permTransformResult.fits) as [rf, fit] (rf)}
+								<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+									<td class="px-1.5 font-semibold whitespace-nowrap">
 										<span
 											style="background-color: {getRockTypeColor(rf)}"
 											class="mr-1 inline-block h-2 w-2 rounded-full"
 										></span>
 										RT {rf}
 									</td>
-									<td class="mono-num px-1.5 text-right">{fmtNum(fit.a, 1)}</td>
-									<td class="mono-num px-1.5 text-right">{fmtNum(fit.b, 3)}</td>
+									<td class="px-1 py-0.5 text-right">
+										<input
+											type="number"
+											step="100"
+											value={Number(fit.a.toFixed(1))}
+											oninput={(e) =>
+												handleFitParamInput(rf, 'a', (e.currentTarget as HTMLInputElement).value)}
+											class="mono-num h-5.5 w-23 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-right text-[11px] font-medium focus:border-[var(--accent-primary)] focus:outline-none"
+										/>
+									</td>
+									<td class="px-1 py-0.5 text-right">
+										<input
+											type="number"
+											step="0.05"
+											value={Number(fit.b.toFixed(3))}
+											oninput={(e) =>
+												handleFitParamInput(rf, 'b', (e.currentTarget as HTMLInputElement).value)}
+											class="mono-num h-5.5 w-16 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-right text-[11px] font-medium focus:border-[var(--accent-primary)] focus:outline-none"
+										/>
+									</td>
 									<td class="mono-num px-1.5 text-right font-semibold text-[var(--status-ok)]">
 										{fmtNum(fit.r2, 3)}
 									</td>
@@ -123,21 +257,42 @@
 	</div>
 
 	<div
-		class="flex h-9 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5"
+		class="flex h-9 shrink-0 items-center justify-between gap-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5"
 	>
+		{#if !projectData.permTransformResult}
+			<button
+				type="button"
+				disabled={projectData.isComputingMultiWell}
+				onclick={() => executePermTransform(false, false)}
+				class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+			>
+				{projectData.isComputingMultiWell ? 'Fitting...' : 'Fit Transforms (⌘+Enter)'}
+			</button>
+		{:else}
+			<button
+				type="button"
+				disabled={projectData.isComputingMultiWell}
+				onclick={() => executePermTransform(false, true)}
+				title="Recompute PERM_TRANS logs using current a and b equations"
+				class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+			>
+				{projectData.isComputingMultiWell ? 'Applying...' : 'Apply Fits'}
+			</button>
+			<button
+				type="button"
+				disabled={projectData.isComputingMultiWell}
+				onclick={() => executePermTransform(false, false)}
+				title="Re-run automatic regression per rock type"
+				class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+			>
+				Auto-Fit
+			</button>
+		{/if}
 		<button
 			type="button"
 			disabled={projectData.isComputingMultiWell}
-			onclick={() => executePermTransform(false)}
-			class="h-7 flex-1 mr-1.5 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-		>
-			{projectData.isComputingMultiWell ? 'Fitting...' : 'Fit Transforms (⌘+Enter)'}
-		</button>
-		<button
-			type="button"
-			disabled={projectData.isComputingMultiWell}
-			onclick={() => executePermTransform(true)}
-			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+			onclick={() => executePermTransform(true, Boolean(projectData.permTransformResult))}
+			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
 		>
 			Save All Wells
 		</button>

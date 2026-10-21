@@ -468,6 +468,7 @@ class WorkspacePermTransformRequest(BaseModel):
     well_names: Optional[List[str]] = Field(
         None, description="Optional subset of well names to include"
     )
+    cutoffs: List[float] = Field(default_factory=lambda: [0.5, 1.2, 2.5, 5.0])
     fits: Optional[Dict[str, Dict[str, float]]] = Field(
         None,
         description="Optional manual (a, b) fits per ROCK_FLAG. If None, auto-fitted from well data.",
@@ -2194,40 +2195,79 @@ def workspace_perm_transform_compute(
         rock_flags = fzi_data["rock_flags"]
         well_names = fzi_data["well_names"]
         depths = fzi_data["depths"]
+        zones = fzi_data.get("zones") or [None] * len(depths)
 
-        if req.fits:
-            fits = {
-                str(k): {"a": float(v["a"]), "b": float(v["b"])}
-                for k, v in req.fits.items()
-            }
-        else:
-            fits = {}
-            unique_flags = sorted({rf for rf in rock_flags if rf is not None})
-            if not unique_flags:
-                raise ValueError(
-                    "No ROCK_FLAG values found in project wells. Run and save Rock Typing first."
-                )
-            for rf in unique_flags:
-                mask = np.array(
-                    [
-                        (r == rf) and (p > 0) and (k > 0)
-                        for r, p, k in zip(rock_flags, phit_arr, perm_arr)
-                    ],
-                    dtype=bool,
-                )
-                if mask.sum() >= 2:
+        if not any(rf is not None for rf in rock_flags):
+            valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
+            fzi_arr = np.full_like(phit_arr, np.nan, dtype=float)
+            fzi_arr[valid_mask] = calc_fzi(phit_arr[valid_mask], perm_arr[valid_mask])
+            rf_arr = rock_typing(
+                fzi_arr,
+                cut_offs=sorted(float(c) for c in req.cutoffs),
+                higher_is_better=True,
+            )
+            rock_flags = [
+                int(v) if not np.isnan(v) else None for v in np.asarray(rf_arr)
+            ]
+
+        unique_flags = sorted({rf for rf in rock_flags if rf is not None})
+        if not unique_flags and not req.fits:
+            raise ValueError(
+                "No ROCK_FLAG values found in project wells. Run Rock Typing first."
+            )
+
+        fits: Dict[str, Dict[str, Any]] = {}
+        target_flags = (
+            sorted({int(k) for k in req.fits.keys() if str(k).isdigit()} | set(unique_flags))
+            if req.fits
+            else unique_flags
+        )
+        for rf in target_flags:
+            rf_key = str(rf)
+            mask = np.array(
+                [
+                    (r == rf) and (p > 0) and (k > 0)
+                    for r, p, k in zip(rock_flags, phit_arr, perm_arr)
+                ],
+                dtype=bool,
+            )
+            count_n = int(mask.sum())
+            if req.fits and rf_key in req.fits:
+                a_val = float(req.fits[rf_key]["a"])
+                b_val = float(req.fits[rf_key]["b"])
+            elif count_n >= 2:
+                try:
+                    log_p = np.log10(np.clip(phit_arr[mask], 1e-6, None))
+                    log_k = np.log10(np.clip(perm_arr[mask], 1e-6, None))
+                    b_log, log10_a = np.polyfit(log_p, log_k, 1)
+                    a_val = round(float(10.0 ** log10_a), 2)
+                    b_val = round(float(b_log), 3)
+                except Exception:
                     try:
-                        a, b = fit_poroperm_curve(phit_arr[mask], perm_arr[mask])
-                        log_k_true = np.log10(np.clip(perm_arr[mask], 1e-6, None))
-                        log_k_pred = np.log10(np.clip(float(a) * (phit_arr[mask] ** float(b)), 1e-6, None))
-                        ss_res = float(np.sum((log_k_true - log_k_pred) ** 2))
-                        ss_tot = float(np.sum((log_k_true - np.mean(log_k_true)) ** 2))
-                        r2_val = round(1.0 - ss_res / ss_tot, 4) if ss_tot > 1e-12 else 0.0
-                        fits[str(rf)] = {"a": float(a), "b": float(b), "r2": r2_val, "count": int(mask.sum())}
+                        a_fit, b_fit = fit_poroperm_curve(phit_arr[mask], perm_arr[mask])
+                        a_val = float(a_fit)
+                        b_val = float(b_fit)
                     except Exception:
-                        fits[str(rf)] = {"a": 1.0, "b": 1.0}
-                else:
-                    fits[str(rf)] = {"a": 1.0, "b": 1.0}
+                        a_val, b_val = 1.0, 1.0
+            else:
+                a_val, b_val = 1.0, 1.0
+
+            r2_val: Optional[float] = None
+            if count_n >= 2:
+                log_k_true = np.log10(np.clip(perm_arr[mask], 1e-6, None))
+                log_k_pred = np.log10(
+                    np.clip(a_val * (phit_arr[mask] ** b_val), 1e-6, None)
+                )
+                ss_res = float(np.sum((log_k_true - log_k_pred) ** 2))
+                ss_tot = float(np.sum((log_k_true - np.mean(log_k_true)) ** 2))
+                r2_val = round(1.0 - ss_res / ss_tot, 4) if ss_tot > 1e-12 else 0.0
+
+            fits[rf_key] = {
+                "a": a_val,
+                "b": b_val,
+                "r2": r2_val,
+                "count": count_n,
+            }
 
         perm_trans: List[Optional[float]] = []
         for p, rf in zip(phit_arr, rock_flags):
@@ -2256,6 +2296,7 @@ def workspace_perm_transform_compute(
             "data": {
                 "well_names": well_names,
                 "depths": depths,
+                "zones": zones,
                 "phit": fzi_data["phit"],
                 "perm": fzi_data["perm"],
                 "rock_flags": rock_flags,

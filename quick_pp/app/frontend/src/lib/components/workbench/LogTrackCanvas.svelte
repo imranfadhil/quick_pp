@@ -545,7 +545,7 @@
 			}
 		}
 
-		// Track 5 (xaxis5): Permeability (Log 0.01 - 10000 mD) + PERM_BLK + CPERM points
+		// Track 5 (xaxis5): Permeability (Log 0.01 - 10000 mD) + PERM_TRANS + PERM_BLK + CPERM points
 		const perm = pick('PERM');
 		if (perm.some((v) => v !== null && v > 0)) {
 			traces.push({
@@ -558,6 +558,20 @@
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.perm, width: 1.5 },
 				hovertemplate: 'PERM: %{x:.2f} mD<extra></extra>'
+			});
+		}
+		const permTrans = pick('PERM_TRANS');
+		if (permTrans.some((v) => v !== null && v > 0)) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'PERM_TRANS',
+				x: permTrans.map((v) => (v !== null && v > 0 ? v : null)),
+				y: depth,
+				xaxis: 'x5',
+				yaxis: 'y',
+				line: { color: '#7C3AED', width: 1.6, dash: 'dash' },
+				hovertemplate: 'PERM_TRANS: %{x:.2f} mD<extra></extra>'
 			});
 		}
 		const permP10 = pick('PERM_P10');
@@ -1096,7 +1110,7 @@
 				</div>
 			</div>
 
-			<!-- Track 5: PERM (0.01 - 10000 mD, 6-decade log scale) -->
+			<!-- Track 5: PERM & PERM_TRANS (0.01 - 10000 mD, 6-decade log scale) -->
 			<div
 				style="left: 67.2%; width: 15.5%;"
 				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
@@ -1106,7 +1120,9 @@
 					style="color: {PETRO_COLORS.perm}"
 				>
 					<span>0.01</span>
-					<span class="font-sans text-[9px] font-bold">PERM (mD) ►</span>
+					<span class="font-sans text-[8.5px] font-bold">
+						PERM{#if wellData.curves['PERM_TRANS']}<span style="color: #7C3AED"> / P_TR</span>{/if} (mD) ►
+					</span>
 					<span>10k</span>
 				</div>
 				<div class="flex flex-col">
@@ -1125,7 +1141,12 @@
 							></span>
 						{/each}
 					</div>
-					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.perm}"></div>
+					<div class="flex w-full items-center gap-0.5">
+						<div class="h-[1.5px] flex-1" style="background: {PETRO_COLORS.perm}"></div>
+						{#if wellData.curves['PERM_TRANS']}
+							<div class="h-[1.5px] flex-1 border-t border-dashed border-[#7C3AED]"></div>
+						{/if}
+					</div>
 				</div>
 			</div>
 
@@ -1260,6 +1281,12 @@
 				<strong style="color: {PETRO_COLORS.perm}">PERM:</strong>
 				{fmtPerm(readout.PERM)}
 			</span>
+			{#if readout.PERM_TRANS !== null && readout.PERM_TRANS !== undefined}
+				<span>
+					<strong style="color: #7C3AED">PERM_TRANS:</strong>
+					{fmtPerm(readout.PERM_TRANS)}
+				</span>
+			{/if}
 			<span>
 				<strong style="color: {PETRO_COLORS.water}">SW:</strong>
 				{fmtNum(readout.SWT ?? readout.SWE, 3)}
