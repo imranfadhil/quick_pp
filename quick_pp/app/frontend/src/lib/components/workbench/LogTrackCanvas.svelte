@@ -16,6 +16,40 @@
 	let plotContainer = $state<HTMLDivElement | null>(null);
 	let PlotlyLib: any = $state(null);
 	let plotReady = $state(false);
+	// Track actual Plotly plot area left/right insets for pixel-accurate header & overlay alignment
+	let plotAreaLeft = $state(54);
+	let plotAreaRight = $state(8);
+
+	function syncPlotBounds() {
+		if (!plotContainer) return;
+		const fullLayout = (plotContainer as any)._fullLayout;
+		const size = fullLayout?._size;
+		if (size && typeof size.l === 'number' && typeof size.w === 'number') {
+			plotAreaLeft = size.l;
+			plotAreaRight = Math.max(0, plotContainer.clientWidth - (size.l + size.w));
+		}
+	}
+
+	$effect(() => {
+		if (!browser || !plotContainer) return;
+		let rafId = 0;
+		const ro = new ResizeObserver(() => {
+			cancelAnimationFrame(rafId);
+			rafId = requestAnimationFrame(() => {
+				if (!plotContainer) return;
+				if (PlotlyLib && (plotContainer as any)._fullLayout) {
+					PlotlyLib.Plots.resize(plotContainer).then(syncPlotBounds).catch(syncPlotBounds);
+				} else {
+					syncPlotBounds();
+				}
+			});
+		});
+		ro.observe(plotContainer);
+		return () => {
+			cancelAnimationFrame(rafId);
+			ro.disconnect();
+		};
+	});
 
 	// Track visibility toggles
 	let showHcCorrected = $state(true);
@@ -382,8 +416,8 @@
 			}
 		}
 
-		// Track 4 (xaxis4): Evaluated Lithology & Porosity (stacked mineral volumes + PHIE + CPORE)
-		const phie = pick('PHIE').length ? pick('PHIE') : pick('PHIT');
+		// Track 4 (xaxis4): Evaluated Lithology & Porosity (stacked mineral volumes + PHIT + CPORE)
+		const phit = pick('PHIT').length ? pick('PHIT') : pick('PHIE');
 		const lithoToPlot = resolveActiveLithoSpecs(indices);
 		let cumVol = new Array(depth.length).fill(0);
 		let hasPrevLithTrace = false;
@@ -414,17 +448,17 @@
 			hasPrevLithTrace = true;
 		}
 
-		if (phie.some((v) => v !== null)) {
+		if (phit.some((v) => v !== null)) {
 			traces.push({
 				type: 'scattergl',
 				mode: 'lines',
-				name: 'PHIE',
-				x: phie,
+				name: 'PHIT',
+				x: phit,
 				y: depth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.phie, width: 1.6 },
-				hovertemplate: 'PHIE: %{x:.3f} v/v<extra></extra>'
+				hovertemplate: 'PHIT: %{x:.3f} v/v<extra></extra>'
 			});
 		}
 
@@ -710,7 +744,8 @@
 		};
 
 		const layout: any = {
-			margin: { l: 54, r: 8, t: 6, b: 8 },
+			autosize: true,
+			margin: { l: 54, r: 8, t: 6, b: 8, autoexpand: false },
 			paper_bgcolor: '#FFFFFF',
 			plot_bgcolor: '#FFFFFF',
 			showlegend: false,
@@ -721,6 +756,7 @@
 				range: yRange,
 				showgrid: true,
 				gridcolor: gridColor,
+				automargin: false,
 				tickfont: { family: 'JetBrains Mono', size: 10, color: '#0F172A' },
 				title: { text: 'DEPTH (m)', font: { family: 'Inter', size: 10, color: '#64748B' } }
 			},
@@ -804,6 +840,7 @@
 			scrollZoom: true,
 			modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d']
 		}).then(() => {
+			syncPlotBounds();
 			if (!plotReady && plotContainer) {
 				plotReady = true;
 				(plotContainer as any).on('plotly_hover', (ev: any) => {
@@ -813,6 +850,7 @@
 					}
 				});
 				(plotContainer as any).on('plotly_relayout', (ev: any) => {
+					syncPlotBounds();
 					if (ev['yaxis.range[0]'] !== undefined && ev['yaxis.range[1]'] !== undefined) {
 						yRange = [Number(ev['yaxis.range[0]']), Number(ev['yaxis.range[1]'])];
 					} else if (Array.isArray(ev['yaxis.range'])) {
@@ -942,16 +980,17 @@
 
 	<!-- Vertically Stacked Petrophysical Track Scale Headers (aligned with Plotly track domains) -->
 	<div
-		class="flex shrink-0 items-stretch border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] pr-[8px] pl-[54px] text-[9px] leading-tight"
+		style="padding-left: {plotAreaLeft}px; padding-right: {plotAreaRight}px;"
+		class="flex shrink-0 items-stretch border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[9px] leading-tight"
 	>
 		<div class="relative flex h-[40px] w-full">
 			<!-- Track 1: GR (0 - 200 gAPI) -->
 			<div
 				style="left: 0%; width: 15.5%;"
-				class="absolute inset-y-0 flex flex-col justify-end border-x border-slate-200/70 px-1 py-0.5"
+				class="absolute inset-y-0 flex flex-col justify-end border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<div
-					class="mono-num flex items-center justify-between font-semibold"
+					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
 					style="color: {PETRO_COLORS.gr}"
 				>
 					<span>0</span>
@@ -964,10 +1003,10 @@
 			<!-- Track 2: RT (0.2 - 2000 ohm.m, 4-decade log scale) -->
 			<div
 				style="left: 16.8%; width: 15.5%;"
-				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5"
+				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<div
-					class="mono-num flex items-center justify-between font-semibold"
+					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
 					style="color: {PETRO_COLORS.rt}"
 				>
 					<span>0.2</span>
@@ -997,16 +1036,16 @@
 			<!-- Track 3: Vertically Stacked NPHI (0.45 -> -0.15) & RHOB (1.95 -> 2.95) -->
 			<div
 				style="left: 33.6%; width: 15.5%;"
-				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5"
+				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<!-- Top row: RHOB (1.95 -> 2.95 g/cc, increases left to right) -->
 				<div class="flex flex-col">
 					<div
-						class="mono-num flex items-center justify-between font-semibold"
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
 						style="color: {PETRO_COLORS.rhob}"
 					>
 						<span>1.95</span>
-						<span class="font-sans text-[9px] font-bold">RHOB (g/cc) ►</span>
+						<span class="font-sans text-[8.5px] font-bold">RHOB (g/cc) ►</span>
 						<span>2.95</span>
 					</div>
 					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.rhob}"></div>
@@ -1015,24 +1054,24 @@
 				<!-- Bottom row: NPHI (0.45 <- -0.15 v/v, increases right to left) -->
 				<div class="flex flex-col">
 					<div
-						class="mono-num flex items-center justify-between font-semibold"
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
 						style="color: {PETRO_COLORS.nphi}"
 					>
 						<span>0.45</span>
-						<span class="font-sans text-[9px] font-bold">◄ NPHI (v/v)</span>
+						<span class="font-sans text-[8.5px] font-bold">◄ NPHI (v/v)</span>
 						<span>-0.15</span>
 					</div>
 					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.nphi}"></div>
 				</div>
 			</div>
 
-			<!-- Track 4: LITH (0 -> 1 v/v) & PHIE / CPORE -->
+			<!-- Track 4: LITH (0 -> 1 v/v) & PHIT / CPORE -->
 			<div
 				style="left: 50.4%; width: 15.5%;"
-				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5"
+				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<div class="flex flex-col">
-					<div class="mono-num flex items-center justify-between font-semibold text-slate-700">
+					<div class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-slate-700">
 						<span>0</span>
 						<span class="font-sans text-[9px] font-bold">LITHOLOGY ►</span>
 						<span>1.0</span>
@@ -1041,11 +1080,11 @@
 				</div>
 				<div class="flex flex-col">
 					<div
-						class="mono-num flex items-center justify-between font-semibold"
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
 						style="color: {PETRO_COLORS.phie}"
 					>
 						<span>0</span>
-						<span class="font-sans text-[9px] font-bold">PHIE / CORE ►</span>
+						<span class="font-sans text-[9px] font-bold">PHIT / CORE ►</span>
 						<span>1.0</span>
 					</div>
 					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.phie}"></div>
@@ -1055,10 +1094,10 @@
 			<!-- Track 5: PERM (0.01 - 10000 mD, 6-decade log scale) -->
 			<div
 				style="left: 67.2%; width: 15.5%;"
-				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5"
+				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<div
-					class="mono-num flex items-center justify-between font-semibold"
+					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
 					style="color: {PETRO_COLORS.perm}"
 				>
 					<span>0.01</span>
@@ -1088,10 +1127,10 @@
 			<!-- Track 6: SW (1.0 <- 0.0 v/v) & PAY -->
 			<div
 				style="left: 84.0%; width: 16.0%;"
-				class="absolute inset-y-0 flex flex-col justify-end border-x border-slate-200/70 px-1 py-0.5"
+				class="absolute inset-y-0 flex flex-col justify-end border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<div
-					class="mono-num flex items-center justify-between font-semibold"
+					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
 					style="color: {PETRO_COLORS.water}"
 				>
 					<span>1.0</span>
@@ -1107,8 +1146,11 @@
 	<div class="relative min-h-0 flex-1 overflow-hidden">
 		<div bind:this={plotContainer} class="h-full w-full"></div>
 
-		<!-- Overlay container aligned with Plotly's plot area (top: 6px, bottom: 8px, left: 54px, right: 8px) -->
-		<div class="pointer-events-none absolute top-[6px] right-[8px] bottom-[8px] left-[54px] overflow-hidden">
+		<!-- Overlay container aligned with Plotly's plot area -->
+		<div
+			style="left: {plotAreaLeft}px; right: {plotAreaRight}px;"
+			class="pointer-events-none absolute top-[6px] bottom-[8px] overflow-hidden"
+		>
 			{#each wellData.tops as top (top.id)}
 				{@const activeDepth =
 					draggingMarker?.kind === 'top' && draggingMarker.id === top.id
@@ -1206,8 +1248,8 @@
 				</span>
 			{/if}
 			<span>
-				<strong style="color: {PETRO_COLORS.phie}">PHIE:</strong>
-				{fmtNum(readout.PHIE ?? readout.PHIT, 3)}
+				<strong style="color: {PETRO_COLORS.phie}">PHIT:</strong>
+				{fmtNum(readout.PHIT ?? readout.PHIE, 3)}
 			</span>
 			<span>
 				<strong style="color: {PETRO_COLORS.perm}">PERM:</strong>
