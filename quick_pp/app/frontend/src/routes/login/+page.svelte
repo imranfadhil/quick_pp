@@ -75,13 +75,11 @@
 			infoMsg = 'Administrator invitation link detected. Click continue to set up your account.';
 		}
 
-		// If already authenticated and no invite link is being claimed, redirect to workbench
-		if (!urlInvite) {
-			const ok = await authState.initialize();
-			if (ok) {
-				goto('/');
-				return;
-			}
+		// If already authenticated (or running in public demo mode) and no invite link is being claimed, redirect to workbench
+		const ok = await authState.initialize();
+		if (ok && (authState.isDemoMode || !urlInvite)) {
+			goto('/');
+			return;
 		}
 
 		try {

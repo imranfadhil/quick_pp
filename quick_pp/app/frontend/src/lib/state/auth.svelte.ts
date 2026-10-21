@@ -91,7 +91,10 @@ class AuthState {
 			const res = await getJson<{ user: AuthUser }>('/quick_pp/auth/me');
 			if (res?.user) {
 				this.user = res.user;
-				if (!this.token) {
+				if (res.user.demo_mode) {
+					setStoredToken(null);
+					this.token = 'demo-session';
+				} else if (!this.token) {
 					this.token = 'cookie-session';
 				}
 				return true;
@@ -107,8 +110,13 @@ class AuthState {
 	}
 
 	setAuthenticated(accessToken: string, user: AuthUser) {
-		setStoredToken(accessToken);
-		this.token = accessToken;
+		if (user.demo_mode) {
+			setStoredToken(null);
+			this.token = 'demo-session';
+		} else {
+			setStoredToken(accessToken);
+			this.token = accessToken;
+		}
 		this.user = user;
 	}
 
@@ -121,6 +129,10 @@ class AuthState {
 	}
 
 	async logout() {
+		if (this.isDemoMode) {
+			await goto('/');
+			return;
+		}
 		try {
 			await postJson('/quick_pp/auth/logout', {});
 		} catch {

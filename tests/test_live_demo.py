@@ -26,6 +26,26 @@ def test_zero_cold_start_auth_and_preseeded_projects():
     user = me_res.json()["user"]
     assert user["role"] == "admin"
     assert user["status"] == "CONFIRMED"
+    assert user["demo_mode"] is True
+
+    # Even with a stale/invalid Bearer token or cookie (e.g. non-Incognito browser), demo mode bypasses auth
+    stale_res = client.get(
+        "/quick_pp/auth/me",
+        headers={
+            "Authorization": "Bearer expired.or.invalid.jwt.token",
+            "Cookie": "qpp_access_token=stale_cookie_token",
+        },
+    )
+    assert stale_res.status_code == 200
+    assert stale_res.json()["user"]["demo_mode"] is True
+
+    login_res = client.post(
+        "/quick_pp/auth/login",
+        json={"username": "admin", "password": "any"},
+    )
+    assert login_res.status_code == 200
+    assert login_res.json()["status"] == "AUTHENTICATED"
+    assert login_res.json()["user"]["demo_mode"] is True
 
     proj_res = client.get("/quick_pp/database/projects")
     assert proj_res.status_code == 200

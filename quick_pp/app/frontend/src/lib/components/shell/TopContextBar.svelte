@@ -714,7 +714,7 @@
 			AI Assistant
 		</button>
 
-		{#if authState.isAdmin}
+		{#if authState.isAdmin && !authState.isDemoMode}
 			<button
 				type="button"
 				onclick={() => (authState.uamModalOpen = true)}
@@ -724,7 +724,7 @@
 			</button>
 		{/if}
 
-		{#if authState.user}
+		{#if authState.user && !authState.isDemoMode}
 			<div class="relative">
 				<button
 					type="button"

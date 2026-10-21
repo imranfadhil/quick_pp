@@ -29,7 +29,9 @@ from quick_pp.app.backend.utils.auth import (
     generate_temp_password,
     generate_totp_secret,
     get_current_user,
+    get_demo_visitor_user,
     hash_password,
+    is_demo_mode,
     record_audit_event,
     require_admin,
     send_invitation_email,
@@ -170,6 +172,13 @@ def _build_invite_url(request: Request, base_url: Optional[str], username: str, 
 @router.get("/auth/bootstrap-status", summary="Check initial bootstrap admin status")
 def auth_bootstrap_status():
     """Ensure default admin is bootstrapped if DB is empty and report whether first-time setup is pending."""
+    if is_demo_mode():
+        return {
+            "is_first_run": False,
+            "admin_username": None,
+            "default_password_hint": None,
+            "demo_mode": True,
+        }
     bootstrap_default_admin()
     with get_db() as session:
         total_users = session.scalar(select(func.count(db_models.User.user_id))) or 0
@@ -190,12 +199,20 @@ def auth_bootstrap_status():
                 if is_first_run
                 else None
             ),
+            "demo_mode": False,
         }
 
 
 @router.post("/auth/login", summary="Initiate Cognito-style authentication")
 def auth_login(req: LoginRequest):
     """Step 1 of Cognito-style login: verify password (or invite token) and issue next challenge."""
+    if is_demo_mode():
+        return {
+            "status": "AUTHENTICATED",
+            "access_token": "demo-session",
+            "token_type": "bearer",
+            "user": get_demo_visitor_user(),
+        }
     bootstrap_default_admin()
     ident = req.username.strip()
     if not ident:
