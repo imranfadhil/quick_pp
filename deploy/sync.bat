@@ -104,7 +104,7 @@ echo [OK] Uploaded.
 
 REM -- Extract + configure .env ---------------------------------------
 echo [4/5] Extracting and configuring environment...
-call :ssh_run "cd %REMOTE_DIR% && tar -xf app.tar && rm -f app.tar"
+call :ssh_run "cd %REMOTE_DIR% && rm -rf quick_pp/app/frontend/build && tar -xf app.tar && rm -f app.tar"
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Extraction failed.
     exit /b 1
@@ -137,6 +137,12 @@ REM -- Start containers -----------------------------------------------
 echo [5/5] Starting containers...
 set "COMPOSE_CMD=docker compose --env-file %REMOTE_DIR%/.env -f %REMOTE_DIR%/quick_pp/app/docker/docker-compose.yaml"
 
+REM Stop qpp-frontend before `up -d` (rather than restarting it right after `up -d`)
+REM so an in-progress `npm install` is never killed mid-extraction (which causes SIGBUS / exit 135).
+if not "%1"=="--from-deploy" (
+    call :ssh_run "!COMPOSE_CMD! stop qpp-frontend" >nul 2>&1
+)
+
 set "REMOTE_CMD=!COMPOSE_CMD! up -d"
 if %BUILD% equ 1 set "REMOTE_CMD=!REMOTE_CMD! --build"
 
@@ -147,12 +153,29 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-REM Always restart qpp-frontend on sync so SvelteKit rebuilds with latest uploaded files
-call :ssh_run "!COMPOSE_CMD! restart qpp-frontend" >nul 2>&1
-
 echo.
 echo [OK] Sync complete.
 if %BUILD% equ 1 echo [OK] Containers rebuilt.
+
+echo.
+echo [INFO] Waiting for frontend build to complete ^(takes ~1-2 min on first deploy^)...
+set FE_READY=0
+for /l %%n in (1,1,40) do (
+    if !FE_READY! equ 0 (
+        ssh %SSH_OPTS% root@%PUBLIC_IP% "curl -sf -o /dev/null http://127.0.0.1:%WEB_PORT%/" <nul >nul 2>&1
+        if !ERRORLEVEL! equ 0 (
+            set FE_READY=1
+        ) else (
+            ping -n 5 127.0.0.1 >nul 2>&1
+        )
+    )
+)
+if !FE_READY! equ 1 (
+    echo [OK] Frontend is built and serving HTTP 200.
+) else (
+    echo [WARN] Frontend build is still running in the background. Check logs with:
+    echo        ssh -i "%KEY_FILE%" root@%PUBLIC_IP% "!COMPOSE_CMD! logs -f qpp-frontend"
+)
 
 echo.
 echo [INFO] Container status:
@@ -174,8 +197,6 @@ del "%TEMP%\%PROJECT_NAME%-quick-url.txt" 2>nul
 echo.
 if not "!QUICK_URL!"=="" (
     echo [OK] App ^(HTTPS Tunnel^): !QUICK_URL!
-    echo [INFO] Note: First frontend build takes ~30-60s inside qpp-frontend.
-    echo        If you see 502 Bad Gateway initially, refresh after ~30 seconds.
 ) else (
     echo [WARN] Quick tunnel URL not ready yet. Check:
     echo        ssh -i "%KEY_FILE%" root@%PUBLIC_IP% "!COMPOSE_CMD! logs quicktunnel"
