@@ -4559,3 +4559,83 @@ def workspace_save_computed_curves(
         raise HTTPException(
             status_code=500, detail=f"Failed to save computed curves: {e}"
         ) from e
+
+
+class WorkspaceSaveMultiWellComputedRequest(BaseModel):
+    """Persist already-computed in-memory curves across multiple wells without re-running calculations."""
+
+    module: Optional[str] = Field(
+        default=None,
+        description="Multi-well module identifier (e.g. rock-typing, perm-transform, shf)",
+    )
+    well_names: List[str] = Field(
+        default_factory=list,
+        description="Well names array aligned with depths and curves",
+    )
+    depths: List[Optional[float]] = Field(
+        default_factory=list,
+        description="Depth array aligned with well_names and curves",
+    )
+    curves: Dict[str, List[Optional[float]]] = Field(
+        default_factory=dict,
+        description="Map of curve mnemonic -> values array aligned with well_names and depths",
+    )
+
+
+@router.post(
+    "/save_multi_well_computed",
+    summary="Save already-computed multi-well curves across project wells without recalculating",
+)
+def workspace_save_multi_well_computed_curves(
+    project_id: int,
+    req: WorkspaceSaveMultiWellComputedRequest,
+) -> Dict[str, Any]:
+    """Directly persist already-computed multi-well curves to each well without re-running calculations."""
+    try:
+        n_rows = len(req.depths)
+        if n_rows == 0 or len(req.well_names) != n_rows or not req.curves:
+            raise ValueError("No valid multi-well computed curve values provided to save.")
+
+        cols: Dict[str, Any] = {
+            "WELL_NAME": [str(w).strip() for w in req.well_names],
+            "DEPTH": pd.to_numeric(pd.Series(req.depths), errors="coerce"),
+        }
+        saved_curve_names: List[str] = []
+
+        for raw_col, vals in req.curves.items():
+            col = str(raw_col or "").strip().upper()
+            if not col or col in ("DEPTH", "DEPT", "WELL_NAME", "ZONES"):
+                continue
+            if len(vals) != n_rows:
+                raise ValueError(
+                    f"Curve '{col}' length ({len(vals)}) does not match depths length ({n_rows})"
+                )
+            cols[col] = pd.to_numeric(pd.Series(vals), errors="coerce")
+            saved_curve_names.append(col)
+
+        if not saved_curve_names:
+            raise ValueError("No valid curve columns found to save.")
+
+        full_df = pd.DataFrame(cols).dropna(subset=["WELL_NAME", "DEPTH"])
+        saved_wells = 0
+        for wn, group_df in full_df.groupby("WELL_NAME", sort=False):
+            well_df = group_df.drop(columns=["WELL_NAME"]).dropna(
+                how="all", subset=saved_curve_names
+            )
+            if not well_df.empty:
+                _save_curves_to_well(project_id, str(wn), well_df.reset_index(drop=True))
+                saved_wells += 1
+
+        return {
+            "project_id": project_id,
+            "module": req.module,
+            "saved": True,
+            "saved_wells": saved_wells,
+            "saved_curves": saved_curve_names,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to save multi-well computed curves: {e}"
+        ) from e

@@ -50,10 +50,22 @@
 			}
 		};
 
+		const nextPermPred = res.phit.map((p, idx) => {
+			const r = res.rock_flags[idx];
+			const f = r !== null && r !== undefined ? nextFits[String(r)] : undefined;
+			if (f && Number.isFinite(p) && p > 0) {
+				const kPred = f.a * Math.pow(p, f.b);
+				return Number.isFinite(kPred) ? Number(kPred.toFixed(6)) : null;
+			}
+			return null;
+		});
+
 		projectData.permTransformResult = {
 			...res,
-			fits: nextFits
+			fits: nextFits,
+			perm_pred: nextPermPred
 		};
+		projectData.markMultiWellComputed('perm-transform');
 
 		// Also update active well PERM_TRANS curve on Track 5 in real time
 		if (workbench.wellId && res.well_names) {
@@ -62,15 +74,7 @@
 			for (let i = 0; i < res.well_names.length; i++) {
 				if (res.well_names[i] === workbench.wellId) {
 					wDepths.push(res.depths[i]);
-					const p = res.phit[i];
-					const r = res.rock_flags[i];
-					const f = r !== null && r !== undefined ? nextFits[String(r)] : undefined;
-					if (f && Number.isFinite(p) && p > 0) {
-						const kPred = f.a * Math.pow(p, f.b);
-						wPt.push(Number.isFinite(kPred) ? kPred : null);
-					} else {
-						wPt.push(null);
-					}
+					wPt.push(nextPermPred[i] ?? null);
 				}
 			}
 			if (wDepths.length > 0) {
@@ -93,7 +97,7 @@
 		recomputeR2AndActiveWellPreview(rfKey, nextA, nextB);
 	}
 
-	async function executePermTransform(persist: boolean = false, useCurrentFits: boolean = false) {
+	async function executePermTransform(useCurrentFits: boolean = false) {
 		if (!workbench.projectId) return;
 		projectData.isComputingMultiWell = true;
 		projectData.error = null;
@@ -120,7 +124,7 @@
 								: null,
 						cutoffs: [...projectData.fziCutoffs].sort((a, b) => a - b),
 						fits: customFits,
-						save: persist
+						save: false
 					} as any
 				}
 			);
@@ -135,6 +139,7 @@
 				...(data.data as any),
 				perm_pred: (data.data as any).perm_pred ?? (data.data as any).perm_trans ?? []
 			};
+			projectData.markMultiWellComputed('perm-transform');
 
 			if (workbench.wellId && data.data?.well_names) {
 				const wnArr = data.data.well_names;
@@ -155,18 +160,15 @@
 					});
 				}
 			}
-
-			if (persist) {
-				wellData.lastSavedMessage = `Saved PERM (${data.saved_wells} wells) ✓`;
-				if (workbench.wellId) {
-					await wellData.loadWellBundle(workbench.projectId, workbench.wellId);
-				}
-			}
 		} catch (e: any) {
 			projectData.error = e?.message || 'Perm transform error';
 		} finally {
 			projectData.isComputingMultiWell = false;
 		}
+	}
+
+	async function savePermTransform() {
+		await projectData.saveMultiWellComputed('perm-transform');
 	}
 </script>
 
@@ -188,7 +190,7 @@
 					{#if hasManualEdits}
 						<button
 							type="button"
-							onclick={() => executePermTransform(false, false)}
+							onclick={() => executePermTransform(false)}
 							class="font-semibold text-blue-600 hover:underline"
 						>
 							↺ Reset Auto-Fit
@@ -263,7 +265,7 @@
 			<button
 				type="button"
 				disabled={projectData.isComputingMultiWell}
-				onclick={() => executePermTransform(false, false)}
+				onclick={() => executePermTransform(false)}
 				class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 			>
 				{projectData.isComputingMultiWell ? 'Fitting...' : 'Fit Transforms (⌘+Enter)'}
@@ -272,7 +274,7 @@
 			<button
 				type="button"
 				disabled={projectData.isComputingMultiWell}
-				onclick={() => executePermTransform(false, true)}
+				onclick={() => executePermTransform(true)}
 				title="Recompute PERM_TRANS logs using current a and b equations"
 				class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 			>
@@ -281,7 +283,7 @@
 			<button
 				type="button"
 				disabled={projectData.isComputingMultiWell}
-				onclick={() => executePermTransform(false, false)}
+				onclick={() => executePermTransform(false)}
 				title="Re-run automatic regression per rock type"
 				class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
 			>
@@ -290,9 +292,15 @@
 		{/if}
 		<button
 			type="button"
-			disabled={projectData.isComputingMultiWell}
-			onclick={() => executePermTransform(true, Boolean(projectData.permTransformResult))}
-			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+			disabled={
+				projectData.isComputingMultiWell ||
+				!projectData.hasPendingMultiWell('perm-transform')
+			}
+			onclick={savePermTransform}
+			title={projectData.hasPendingMultiWell('perm-transform')
+				? 'Save computed PERM_TRANS curves across all project wells'
+				: 'Fit or edit permeability transforms first to enable saving'}
+			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>
 			Save All Wells
 		</button>

@@ -1,4 +1,4 @@
-import { API_BASE, api, authHeaders, deleteJson, patchJson } from '$lib/api/client';
+import { API_BASE, api, authHeaders, deleteJson, patchJson, postJson } from '$lib/api/client';
 import type { ProjectSummaryResponse, WellSummaryItem } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { wellData } from './wellData.svelte';
@@ -12,12 +12,17 @@ export interface ProjectListItem {
 	created_at?: string;
 }
 
+export type MultiWellSaveModule = 'rock-typing' | 'perm-transform' | 'shf';
+
 class ProjectDataState {
 	projects = $state<ProjectListItem[]>([]);
 	summary = $state<ProjectSummaryResponse | null>(null);
 	isLoading = $state<boolean>(false);
 	isComputingMultiWell = $state<boolean>(false);
 	error = $state<string | null>(null);
+
+	// Track which multi-well modules have unsaved computed results / parameter edits
+	pendingMultiWellModules = $state<Record<string, boolean>>({});
 
 	// Field-level Multi-Well Parameters & Results
 	fziCutoffs = $state<number[]>([0.5, 1.2, 2.5, 5.0]);
@@ -135,6 +140,92 @@ class ProjectDataState {
 	allZones = $derived<string[]>(this.summary?.all_zones ?? []);
 	allCurves = $derived<string[]>(this.summary?.all_curves ?? []);
 
+	markMultiWellComputed(moduleKey: MultiWellSaveModule) {
+		this.pendingMultiWellModules = {
+			...this.pendingMultiWellModules,
+			[moduleKey]: true
+		};
+	}
+
+	hasPendingMultiWell(moduleKey: MultiWellSaveModule): boolean {
+		return Boolean(this.pendingMultiWellModules[moduleKey]);
+	}
+
+	async saveMultiWellComputed(moduleKey: MultiWellSaveModule): Promise<boolean> {
+		const pid = workbench.projectId;
+		if (!pid || !this.hasPendingMultiWell(moduleKey)) return false;
+
+		let wellNames: string[] = [];
+		let depths: (number | null)[] = [];
+		let curves: Record<string, (number | null)[]> = {};
+		let curveLabel = '';
+
+		if (moduleKey === 'rock-typing' && this.rockTypingResult) {
+			wellNames = this.rockTypingResult.well_names;
+			depths = this.rockTypingResult.depths;
+			curves = {
+				ROCK_FLAG: this.rockTypingResult.rock_flags.map((v) =>
+					v !== null && v !== undefined && Number.isFinite(v) ? v : null
+				)
+			};
+			if (this.rockTypingResult.fzi?.length === depths.length) {
+				curves['FZI'] = this.rockTypingResult.fzi.map((v) =>
+					v !== null && v !== undefined && Number.isFinite(v) ? v : null
+				);
+			}
+			curveLabel = 'ROCK_FLAG';
+		} else if (moduleKey === 'perm-transform' && this.permTransformResult) {
+			wellNames = this.permTransformResult.well_names;
+			depths = this.permTransformResult.depths;
+			curves = {
+				PERM_TRANS: (this.permTransformResult.perm_pred || []).map((v) =>
+					v !== null && v !== undefined && Number.isFinite(v) ? v : null
+				)
+			};
+			curveLabel = 'PERM_TRANS';
+		} else if (moduleKey === 'shf' && this.shfResult) {
+			wellNames = this.shfResult.well_names;
+			depths = this.shfResult.depths;
+			curves = {
+				SHF: (this.shfResult.shf || []).map((v) =>
+					v !== null && v !== undefined && Number.isFinite(v) ? v : null
+				)
+			};
+			curveLabel = 'SHF';
+		} else {
+			return false;
+		}
+
+		if (wellNames.length === 0 || depths.length === 0) return false;
+
+		this.isComputingMultiWell = true;
+		this.error = null;
+		try {
+			const res = await postJson<{ saved_wells: number }>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/save_multi_well_computed`,
+				{
+					module: moduleKey,
+					well_names: wellNames,
+					depths,
+					curves
+				}
+			);
+			this.pendingMultiWellModules = {
+				...this.pendingMultiWellModules,
+				[moduleKey]: false
+			};
+			const msg = `Saved ${curveLabel} (${res.saved_wells} wells) ✓`;
+			wellData.lastSavedMessage = msg;
+			appStatus.success(msg);
+			return true;
+		} catch (e: any) {
+			this.error = e?.message || `Failed to save ${curveLabel} across wells`;
+			return false;
+		} finally {
+			this.isComputingMultiWell = false;
+		}
+	}
+
 	async loadProjects(): Promise<ProjectListItem[]> {
 		try {
 			const { data } = await api.GET('/quick_pp/database/projects');
@@ -151,6 +242,10 @@ class ProjectDataState {
 		workbench.wellId = null;
 		this.summary = null;
 		this.selectedWellNames = [];
+		this.pendingMultiWellModules = {};
+		this.rockTypingResult = null;
+		this.permTransformResult = null;
+		this.shfResult = null;
 		wellData.curves = {};
 		wellData.tops = [];
 		wellData.contacts = [];
@@ -160,7 +255,14 @@ class ProjectDataState {
 	async selectProject(projectId: string | number, preferredWell?: string | null) {
 		if (!projectId) return;
 		const pidStr = String(projectId);
+		const projectChanged = workbench.projectId !== pidStr;
 		workbench.projectId = pidStr;
+		if (projectChanged) {
+			this.pendingMultiWellModules = {};
+			this.rockTypingResult = null;
+			this.permTransformResult = null;
+			this.shfResult = null;
+		}
 		this.isLoading = true;
 		this.error = null;
 		try {

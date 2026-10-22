@@ -9,13 +9,17 @@
 		children: Snippet;
 	}
 
-	let { title, badge, defaultOpen, children }: Props = $props();
-	let open = $state(defaultOpen ?? workbench.scope !== 'single-well');
+	let { title, badge, defaultOpen = false, children }: Props = $props();
+	let open = $state(false);
 	let lastSeenSeq = workbench.sectionBulkAction.seq;
 
 	$effect(() => {
+		open = defaultOpen;
+	});
+
+	$effect(() => {
 		const action = workbench.sectionBulkAction;
-		if (workbench.scope === 'single-well' && action.seq !== lastSeenSeq) {
+		if (action.seq !== lastSeenSeq) {
 			lastSeenSeq = action.seq;
 			if (action.type === 'expand-all') {
 				open = true;
@@ -30,15 +34,13 @@
 	function handleToggle() {
 		const nextOpen = !open;
 		open = nextOpen;
-		if (workbench.scope === 'single-well') {
-			if (nextOpen) {
-				workbench.focusedSectionTitle = title;
-				if (workbench.sectionFocusMode) {
-					workbench.triggerSectionFocus(title);
-				}
-			} else if (workbench.focusedSectionTitle === title) {
-				workbench.focusedSectionTitle = null;
+		if (nextOpen) {
+			workbench.focusedSectionTitle = title;
+			if (workbench.sectionFocusMode) {
+				workbench.triggerSectionFocus(title);
 			}
+		} else if (workbench.focusedSectionTitle === title) {
+			workbench.focusedSectionTitle = null;
 		}
 	}
 </script>
@@ -68,14 +70,10 @@
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			onpointerdown={() => {
-				if (workbench.scope === 'single-well') {
-					workbench.focusedSectionTitle = title;
-				}
+				workbench.focusedSectionTitle = title;
 			}}
 			onfocusin={() => {
-				if (workbench.scope === 'single-well') {
-					workbench.focusedSectionTitle = title;
-				}
+				workbench.focusedSectionTitle = title;
 			}}
 			class="space-y-1 px-2.5 py-2"
 		>

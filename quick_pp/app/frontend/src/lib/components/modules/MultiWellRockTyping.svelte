@@ -17,7 +17,7 @@
 		projectData.fziCutoffs = projectData.fziCutoffs.filter((_, i) => i !== idx);
 	}
 
-	async function executeRockTyping(persist: boolean = false) {
+	async function executeRockTyping() {
 		if (!workbench.projectId) return;
 		projectData.isComputingMultiWell = true;
 		projectData.error = null;
@@ -34,7 +34,7 @@
 								? projectData.selectedWellNames
 								: null,
 						cutoffs: sortedCutoffs,
-						save: persist
+						save: false
 					} as any
 				}
 			);
@@ -46,6 +46,7 @@
 				...(data.data as any),
 				rock_type_counts: counts
 			};
+			projectData.markMultiWellComputed('rock-typing');
 
 			// Also update active well's ROCK_FLAG & FZI in wellData so LogTrackCanvas updates in real time
 			if (workbench.wellId && data.data?.well_names) {
@@ -71,18 +72,15 @@
 					});
 				}
 			}
-
-			if (persist) {
-				wellData.lastSavedMessage = `Saved ROCK_FLAG (${data.saved_wells} wells) ✓`;
-				if (workbench.wellId) {
-					await wellData.loadWellBundle(workbench.projectId, workbench.wellId);
-				}
-			}
 		} catch (e: any) {
 			projectData.error = e?.message || 'Rock typing error';
 		} finally {
 			projectData.isComputingMultiWell = false;
 		}
+	}
+
+	async function saveRockTyping() {
+		await projectData.saveMultiWellComputed('rock-typing');
 	}
 </script>
 
@@ -102,7 +100,7 @@
 								min={0.01}
 								max={50.0}
 								step={0.05}
-								onrun={() => executeRockTyping(false)}
+								onrun={() => executeRockTyping()}
 							/>
 						</div>
 						<button
@@ -160,16 +158,19 @@
 		<button
 			type="button"
 			disabled={projectData.isComputingMultiWell}
-			onclick={() => executeRockTyping(false)}
+			onclick={() => executeRockTyping()}
 			class="h-7 flex-1 mr-1.5 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 		>
 			{projectData.isComputingMultiWell ? 'Clustering...' : 'Compute FZI (⌘+Enter)'}
 		</button>
 		<button
 			type="button"
-			disabled={projectData.isComputingMultiWell}
-			onclick={() => executeRockTyping(true)}
-			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+			disabled={projectData.isComputingMultiWell || !projectData.hasPendingMultiWell('rock-typing')}
+			onclick={saveRockTyping}
+			title={projectData.hasPendingMultiWell('rock-typing')
+				? 'Save computed ROCK_FLAG and FZI curves across all project wells'
+				: 'Compute FZI rock typing first to enable saving'}
+			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>
 			Save All Wells
 		</button>

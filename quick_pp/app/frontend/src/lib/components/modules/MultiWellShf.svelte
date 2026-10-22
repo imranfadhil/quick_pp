@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, postJson } from '$lib/api/client';
+	import { postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
@@ -63,14 +63,14 @@
 				projectData.shfResult.model !== projectData.shfParams.model ||
 				!projectData.shfResult.scal_data)
 		) {
-			executeShf(false, true);
+			executeShf(true, false);
 		}
 	});
 
 	async function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
 		if (projectData.shfParams.model === m && projectData.shfResult?.model === m) return;
 		projectData.shfParams.model = m;
-		await executeShf(false, true);
+		await executeShf(true, true);
 	}
 
 	async function updateFitParam(
@@ -90,7 +90,7 @@
 				}
 			}
 		};
-		await executeShf(false, false);
+		await executeShf(false, true);
 	}
 
 	async function updateZoneFwl(zone: string, rawVal: string) {
@@ -100,15 +100,15 @@
 			...projectData.shfParams.fwlByZone,
 			[zone]: Number(num.toFixed(2))
 		};
-		await executeShf(false, false);
+		await executeShf(false, true);
 	}
 
 	async function clearZoneFwls() {
 		projectData.shfParams.fwlByZone = {};
-		await executeShf(false, false);
+		await executeShf(false, true);
 	}
 
-	async function executeShf(persist: boolean = false, resetFits: boolean = false) {
+	async function executeShf(resetFits: boolean = false, markDirty: boolean = true) {
 		if (!workbench.projectId) return;
 		projectData.isComputingMultiWell = true;
 		projectData.error = null;
@@ -141,7 +141,7 @@
 					gw: sp.gw,
 					ghc: sp.ghc,
 					fits: customFits,
-					save: persist
+					save: false
 				}
 			);
 			projectData.shfResult = {
@@ -151,6 +151,9 @@
 				scal_data: data.scal_data,
 				...data.data
 			};
+			if (markDirty) {
+				projectData.markMultiWellComputed('shf');
+			}
 
 			// Live-merge SHF curve into active well so LogTrackCanvas Track 6 updates in real time!
 			if (workbench.wellId && data.data?.well_names) {
@@ -172,18 +175,15 @@
 					});
 				}
 			}
-
-			if (persist) {
-				wellData.lastSavedMessage = `Saved SHF (${data.saved_wells} wells) ✓`;
-				if (workbench.wellId) {
-					await wellData.loadWellBundle(workbench.projectId, workbench.wellId);
-				}
-			}
 		} catch (e: any) {
 			projectData.error = e?.message || 'SHF error';
 		} finally {
 			projectData.isComputingMultiWell = false;
 		}
+	}
+
+	async function saveShf() {
+		await projectData.saveMultiWellComputed('shf');
 	}
 
 	async function runOptimizeFwl() {
@@ -225,7 +225,7 @@
 			} else {
 				projectData.shfParams.fwlByZone = {};
 			}
-			await executeShf(false, false);
+			await executeShf(false, true);
 		} catch (e: any) {
 			projectData.error = e?.message || 'FWL optimization error';
 		} finally {
@@ -438,7 +438,7 @@
 				min={0}
 				max={10000}
 				step={1.0}
-				onrun={() => executeShf(false, false)}
+				onrun={() => executeShf(false, true)}
 			/>
 			<NumericScrubber
 				label="Interfacial Tension (IFT)"
@@ -447,7 +447,7 @@
 				min={1.0}
 				max={80.0}
 				step={0.5}
-				onrun={() => executeShf(false, false)}
+				onrun={() => executeShf(false, true)}
 			/>
 			<NumericScrubber
 				label="Contact Angle (θ)"
@@ -456,7 +456,7 @@
 				min={0}
 				max={90}
 				step={1.0}
-				onrun={() => executeShf(false, false)}
+				onrun={() => executeShf(false, true)}
 			/>
 			<NumericScrubber
 				label="Water Gradient (gw)"
@@ -465,7 +465,7 @@
 				min={0.9}
 				max={1.3}
 				step={0.01}
-				onrun={() => executeShf(false, false)}
+				onrun={() => executeShf(false, true)}
 			/>
 			<NumericScrubber
 				label="HC Gradient (ghc)"
@@ -474,7 +474,7 @@
 				min={0.1}
 				max={0.98}
 				step={0.01}
-				onrun={() => executeShf(false, false)}
+				onrun={() => executeShf(false, true)}
 			/>
 		</ParameterSection>
 
@@ -491,7 +491,7 @@
 					</span>
 					<button
 						type="button"
-						onclick={() => executeShf(false, true)}
+						onclick={() => executeShf(true, true)}
 						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)]"
 					>
 						Reset Auto-Fit
@@ -592,16 +592,19 @@
 		<button
 			type="button"
 			disabled={projectData.isComputingMultiWell}
-			onclick={() => executeShf(false)}
+			onclick={() => executeShf(false, true)}
 			class="h-7 flex-1 mr-1.5 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 		>
 			{projectData.isComputingMultiWell ? 'Computing...' : 'Compute SHF (⌘+Enter)'}
 		</button>
 		<button
 			type="button"
-			disabled={projectData.isComputingMultiWell}
-			onclick={() => executeShf(true)}
-			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+			disabled={projectData.isComputingMultiWell || !projectData.hasPendingMultiWell('shf')}
+			onclick={saveShf}
+			title={projectData.hasPendingMultiWell('shf')
+				? 'Save computed SHF curves across all project wells'
+				: 'Compute or adjust SHF parameters first to enable saving'}
+			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>
 			Save All Wells
 		</button>
