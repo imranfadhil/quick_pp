@@ -154,6 +154,18 @@
 		}
 	}
 
+	async function saveCurveEdit() {
+		const pendingCols = wellData.pendingModuleCurves['qaqc-edit'] ?? [];
+		const label =
+			pendingCols.length > 0
+				? `Saved ${pendingCols.join(', ')} ✓`
+				: `Saved ${workbench.selectedQaqcCurve} ✓`;
+		const ok = await wellData.saveModuleComputed('qaqc-edit', label);
+		if (ok) {
+			editStatusMsg = label;
+		}
+	}
+
 	async function applyQuickPreset(
 		op: CurveEditOperation,
 		val: number,
@@ -292,6 +304,7 @@
 			);
 			if (res.data) {
 				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.markModuleComputed('qaqc-env', res.data);
 			}
 			if (persist) {
 				wellData.lastSavedMessage = 'Env Corrections Saved ✓';
@@ -301,6 +314,10 @@
 		} finally {
 			wellData.isCalculating = false;
 		}
+	}
+
+	async function saveEnvCorrections() {
+		await wellData.saveModuleComputed('qaqc-env', 'Env Corrections Saved ✓');
 	}
 </script>
 
@@ -693,7 +710,7 @@
 					/>
 				</div>
 
-				<!-- Apply Preview vs Apply & Save Buttons -->
+				<!-- Apply Edit vs Save Buttons -->
 				<div class="mt-1.5 flex gap-1.5">
 					<button
 						type="button"
@@ -705,11 +722,14 @@
 					</button>
 					<button
 						type="button"
-						disabled={wellData.isCalculating || !workbench.selectedQaqcCurve}
-						onclick={() => applyCurveTransform(true)}
-						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+						disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-edit')}
+						onclick={saveCurveEdit}
+						title={wellData.hasPendingComputed('qaqc-edit')
+							? 'Save edited curve directly to the well without re-applying transform'
+							: 'Click Apply Edit first to preview changes before saving'}
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 					>
-						Apply & Save
+						Save
 					</button>
 				</div>
 			{:else}
@@ -885,9 +905,12 @@
 				</button>
 				<button
 					type="button"
-					disabled={wellData.isCalculating}
-					onclick={() => runEnvCorrections(true)}
-					class="h-6 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[11px] font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+					disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-env')}
+					onclick={saveEnvCorrections}
+					title={wellData.hasPendingComputed('qaqc-env')
+						? 'Save corrected environmental curves directly to the well'
+						: 'Apply Env Corrections first to enable saving'}
+					class="h-6 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[11px] font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 				>
 					Save
 				</button>

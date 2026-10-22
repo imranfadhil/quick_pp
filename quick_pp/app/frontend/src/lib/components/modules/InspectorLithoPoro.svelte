@@ -116,6 +116,7 @@
 		}
 		if (Object.keys(zeroedUpdates).length > 0) {
 			wellData.curves = { ...wellData.curves, ...zeroedUpdates };
+			wellData.markModuleComputed('litho-poro', Object.keys(zeroedUpdates));
 		}
 	}
 
@@ -168,6 +169,7 @@
 				if (hcErr) throw new Error(String((hcErr as any)?.detail ?? 'HC Correction failed'));
 				if (hcData) {
 					wellData.mergeComputedCurves(hcData.data, hcData.stats);
+					wellData.markModuleComputed('litho-poro', hcData.data);
 				}
 			}
 
@@ -198,6 +200,7 @@
 			if (lithErr) throw new Error(String((lithErr as any)?.detail ?? 'Lithology failed'));
 			if (lithData) {
 				wellData.mergeComputedCurves(lithData.data, lithData.stats);
+				wellData.markModuleComputed('litho-poro', lithData.data);
 			}
 
 			// 3. Porosity Estimation
@@ -224,6 +227,7 @@
 			if (poroErr) throw new Error(String((poroErr as any)?.detail ?? 'Porosity failed'));
 			if (poroData) {
 				wellData.mergeComputedCurves(poroData.data, poroData.stats);
+				wellData.markModuleComputed('litho-poro', poroData.data);
 				wellData.poroCoreMetrics = poroData.core_metrics;
 			}
 
@@ -235,6 +239,10 @@
 		} finally {
 			wellData.isCalculating = false;
 		}
+	}
+
+	async function saveLithoPoro() {
+		await wellData.saveModuleComputed('litho-poro', 'Litho & Poro Saved ✓');
 	}
 
 	async function executePretrainedMlInference(persist: boolean = false) {
@@ -256,8 +264,10 @@
 			);
 			if (res.data) {
 				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.markModuleComputed('litho-poro', res.data);
 			} else if (res.computed_curves) {
 				wellData.mergeComputedCurves(res.computed_curves, res.stats);
+				wellData.markModuleComputed('litho-poro', res.computed_curves);
 			}
 			mlSummary = {
 				confidence_level_pct: res.confidence_level_pct ?? Math.round((1 - conformalAlpha) * 100),
@@ -676,9 +686,12 @@
 		</button>
 		<button
 			type="button"
-			disabled={wellData.isCalculating}
-			onclick={() => executeLithoPoro(true)}
-			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+			disabled={wellData.isCalculating || !wellData.hasPendingComputed('litho-poro')}
+			onclick={saveLithoPoro}
+			title={wellData.hasPendingComputed('litho-poro')
+				? 'Save computed Lithology & Porosity curves directly to the well'
+				: 'Run the calculation first to enable saving'}
+			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>
 			Save
 		</button>

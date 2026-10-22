@@ -54,6 +54,7 @@
 				throw new Error(String((error as any)?.detail ?? 'Permeability calculation failed'));
 			}
 			wellData.mergeComputedCurves(data.data, data.stats);
+			wellData.markModuleComputed('perm', data.data);
 			wellData.permCoreMetrics = data.core_metrics;
 			if (persist) {
 				wellData.lastSavedMessage = 'Permeability Saved ✓';
@@ -63,6 +64,10 @@
 		} finally {
 			wellData.isCalculating = false;
 		}
+	}
+
+	async function savePerm() {
+		await wellData.saveModuleComputed('perm', 'Permeability Saved ✓');
 	}
 </script>
 
@@ -204,9 +209,12 @@
 		</button>
 		<button
 			type="button"
-			disabled={wellData.isCalculating}
-			onclick={() => executePerm(true)}
-			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+			disabled={wellData.isCalculating || !wellData.hasPendingComputed('perm')}
+			onclick={savePerm}
+			title={wellData.hasPendingComputed('perm')
+				? 'Save computed Permeability curve directly to the well'
+				: 'Run the calculation first to enable saving'}
+			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>
 			Save
 		</button>

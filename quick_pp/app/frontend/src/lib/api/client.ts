@@ -188,6 +188,12 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 					done: `Well log curve updated (${wellName})`,
 					detail: wellName
 				};
+			case 'save_computed':
+				return {
+					active: `Saving computed curves (${wellName})...`,
+					done: `Saved computed curves (${wellName})`,
+					detail: wellName
+				};
 			case 'config':
 				return {
 					active: `Saving working depth interval (${wellName})...`,

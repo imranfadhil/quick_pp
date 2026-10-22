@@ -740,9 +740,26 @@ def train_multi_well_conformal_model(
         "p10_p90_coverage_pct": overall_cov_pct,
     }
 
-    # Cache the trained suite in memory so "Save Model" can persist it directly without re-training
-    _LAST_TRAINED_MODELS_CACHE[str(source_project or "default")] = suite_models
+    # Cache the trained suite in memory AND on disk staging file so "Save Model" works across Gunicorn workers / restarts
+    proj_key = str(source_project or "default")
+    _LAST_TRAINED_MODELS_CACHE[proj_key] = suite_models
     _LAST_TRAINED_MODELS_CACHE["latest"] = suite_models
+    try:
+        staging_path = _resolve_staging_cache_path(model_path)
+        staging_path.parent.mkdir(parents=True, exist_ok=True)
+        staging_bundle: dict = {}
+        if staging_path.exists():
+            try:
+                loaded_staging = joblib.load(staging_path)
+                if isinstance(loaded_staging, dict):
+                    staging_bundle = loaded_staging
+            except Exception:
+                staging_bundle = {}
+        staging_bundle[proj_key] = suite_models
+        staging_bundle["latest"] = suite_models
+        joblib.dump(staging_bundle, staging_path)
+    except Exception as e:
+        logger.warning(f"Could not write staging model cache: {e}")
 
     saved_path: str | None = None
     if save_model:
@@ -789,6 +806,16 @@ def train_multi_well_conformal_model(
 _LAST_TRAINED_MODELS_CACHE: dict[str, dict] = {}
 
 
+def _resolve_staging_cache_path(model_path: str | Path | None = None) -> Path:
+    """Return a shared disk staging path next to `pretrained_models.joblib` so multi-worker servers share evaluated models."""
+    from quick_pp.machine_learning.predict_pipeline import (
+        resolve_pretrained_models_path,
+    )
+
+    target = resolve_pretrained_models_path(model_path)
+    return target.parent / ".pretrained_models_staging.joblib"
+
+
 def save_cached_trained_model(
     suite_key: str,
     suite_label: str | None = None,
@@ -803,15 +830,26 @@ def save_cached_trained_model(
             "Saving custom models is disabled in read-only demo mode (QPP_DEMO_MODE=true)."
         )
 
+    proj_key = str(source_project) if source_project else None
     suite_models = (
-        _LAST_TRAINED_MODELS_CACHE.get(str(source_project))
-        if source_project
-        else None
+        _LAST_TRAINED_MODELS_CACHE.get(proj_key) if proj_key else None
     ) or _LAST_TRAINED_MODELS_CACHE.get("latest")
 
     if not suite_models or not isinstance(suite_models, dict):
+        staging_path = _resolve_staging_cache_path(model_path)
+        if staging_path.exists():
+            try:
+                staging_bundle = joblib.load(staging_path)
+                if isinstance(staging_bundle, dict):
+                    suite_models = (
+                        staging_bundle.get(proj_key) if proj_key else None
+                    ) or staging_bundle.get("latest")
+            except Exception as e:
+                logger.warning(f"Failed to read staging model cache from {staging_path}: {e}")
+
+    if not suite_models or not isinstance(suite_models, dict):
         raise ValueError(
-            "No trained model in memory to save. Please click 'Train & Evaluate' first."
+            "No trained model in memory to save. Please click 'Evaluate Model' first."
         )
 
     meta = dict(suite_models.get("_meta", {}))

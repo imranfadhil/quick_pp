@@ -86,12 +86,15 @@
 
 			if (data.flags?.data) {
 				wellData.mergeComputedCurves(data.flags.data);
+				wellData.markModuleComputed('ressum', data.flags.data);
 			}
 			if (data.upscaling?.step_log?.data) {
 				wellData.mergeComputedCurves(data.upscaling.step_log.data);
+				wellData.markModuleComputed('ressum', data.upscaling.step_log.data);
 			}
 			if (data.uncertainty?.cpi?.data) {
 				wellData.mergeComputedCurves(data.uncertainty.cpi.data);
+				wellData.markModuleComputed('ressum', data.uncertainty.cpi.data);
 			}
 			wellData.zonalSummary = data.summary || [];
 			upscaledCellCount = data.upscaling?.n_cells ?? null;
@@ -131,6 +134,10 @@
 		} finally {
 			wellData.isCalculating = false;
 		}
+	}
+
+	async function saveResSumFlags() {
+		await wellData.saveModuleComputed('ressum', 'Pay Flags Saved ✓');
 	}
 
 	async function runVolumetricMc() {
@@ -553,9 +560,12 @@
 		</button>
 		<button
 			type="button"
-			disabled={wellData.isCalculating}
-			onclick={() => executeResSum(true)}
-			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+			disabled={wellData.isCalculating || !wellData.hasPendingComputed('ressum')}
+			onclick={saveResSumFlags}
+			title={wellData.hasPendingComputed('ressum')
+				? 'Save computed Pay Flags & blocked curves directly to the well'
+				: 'Run Summary first to enable saving'}
+			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>
 			Save Flags
 		</button>

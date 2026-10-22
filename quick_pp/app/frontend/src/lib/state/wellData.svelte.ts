@@ -87,6 +87,9 @@ class WellDataState {
 	poroCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 	permCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 
+	// Unsaved computed curve mnemonics per single-well module (cleared on well load or after saving that module)
+	pendingModuleCurves = $state<Record<string, string[]>>({});
+
 	// Derived filtered indices based on workbench.depthFilter and workbench.selectedZones
 	visibleIndices = $derived.by(() => {
 		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
@@ -271,6 +274,7 @@ class WellDataState {
 			this.pressureTests = data.pressure_tests || [];
 			this.survey = data.survey || [];
 			this.config = data.config || {};
+			this.pendingModuleCurves = {};
 			workbench.brushedDepthIndices = new Set();
 
 			// Restore persistent working Top/Bottom depth interval for this specific well (if configured)
@@ -385,6 +389,88 @@ class WellDataState {
 		this.curves = updated;
 		if (newStats) {
 			this.stats = { ...this.stats, ...newStats };
+		}
+	}
+
+	/**
+	 * Record curve mnemonics produced by a module's `Run` action so the module's `Save` button
+	 * becomes enabled and can persist them directly without re-running the calculation.
+	 */
+	markModuleComputed(
+		moduleKey: string,
+		computedDataOrCols: Record<string, unknown> | string[]
+	) {
+		const rawCols = Array.isArray(computedDataOrCols)
+			? computedDataOrCols
+			: Object.keys(computedDataOrCols || {});
+		const validCols = rawCols
+			.map((c) => String(c).trim().toUpperCase())
+			.filter(
+				(c) =>
+					Boolean(c) &&
+					c !== 'DEPTH' &&
+					c !== 'DEPT' &&
+					c !== 'WELL_NAME' &&
+					c !== 'ZONES' &&
+					Boolean(this.curves[c])
+			);
+		if (validCols.length === 0) return;
+		const existing = new Set(this.pendingModuleCurves[moduleKey] ?? []);
+		for (const c of validCols) existing.add(c);
+		this.pendingModuleCurves = {
+			...this.pendingModuleCurves,
+			[moduleKey]: Array.from(existing)
+		};
+	}
+
+	hasPendingComputed(moduleKey: string): boolean {
+		return (this.pendingModuleCurves[moduleKey]?.length ?? 0) > 0;
+	}
+
+	/**
+	 * Directly persist the already-computed in-memory curves for `moduleKey` to the backend
+	 * without re-executing the petrophysical calculation.
+	 */
+	async saveModuleComputed(moduleKey: string, successLabel: string): Promise<boolean> {
+		const pid = workbench.projectId;
+		const wid = workbench.wellId;
+		const cols = this.pendingModuleCurves[moduleKey] ?? [];
+		if (!pid || !wid || cols.length === 0) return false;
+
+		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		if (deptArr.length === 0) return false;
+
+		const curvesPayload: Record<string, (number | null)[]> = {};
+		for (const col of cols) {
+			const arr = this.curves[col];
+			if (arr && arr.length === deptArr.length) {
+				curvesPayload[col] = arr.map((v) => (Number.isFinite(v) ? v : null));
+			}
+		}
+		if (Object.keys(curvesPayload).length === 0) return false;
+
+		this.isCalculating = true;
+		this.lastError = null;
+		try {
+			await postJson(
+				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wid)}/save_computed`,
+				{
+					module: moduleKey,
+					depths: deptArr.map((d) => (Number.isFinite(d) ? d : null)),
+					curves: curvesPayload
+				}
+			);
+			const nextPending = { ...this.pendingModuleCurves };
+			delete nextPending[moduleKey];
+			this.pendingModuleCurves = nextPending;
+			this.lastSavedMessage = successLabel;
+			appStatus.success(successLabel, wid);
+			return true;
+		} catch (e: any) {
+			this.lastError = e?.message || 'Failed to save computed curves';
+			return false;
+		} finally {
+			this.isCalculating = false;
 		}
 	}
 
@@ -568,6 +654,9 @@ class WellDataState {
 						save: true
 					}
 				);
+				const nextPending = { ...this.pendingModuleCurves };
+				delete nextPending['qaqc-edit'];
+				this.pendingModuleCurves = nextPending;
 				this.lastSavedMessage =
 					dst === src && oriName ? `Saved ${dst} (kept ${oriName}) ✓` : `Saved ${dst} ✓`;
 				appStatus.success(
@@ -580,6 +669,11 @@ class WellDataState {
 				this.isCalculating = false;
 			}
 		} else {
+			const editedCols = [dst];
+			if (dst === src && oriName && nextCurves[oriName]) {
+				editedCols.push(oriName);
+			}
+			this.markModuleComputed('qaqc-edit', editedCols);
 			appStatus.success(
 				dst === src && oriName
 					? `Previewed ${dst} (${op}, ${oriName} preserved)`

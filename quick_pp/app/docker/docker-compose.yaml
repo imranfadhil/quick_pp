@@ -43,10 +43,13 @@ services:
       - SMTP_TLS=${SMTP_TLS:-true}
     volumes:
       - ../../../uploads:/code/uploads
+      - ../../../data:/code/data
       - ../../../quick_pp/app/backend:/venv/lib/python3.11/site-packages/quick_pp/app/backend
       - ../../../quick_pp/database:/venv/lib/python3.11/site-packages/quick_pp/database
+      - ../../../quick_pp/machine_learning:/venv/lib/python3.11/site-packages/quick_pp/machine_learning
       - ../../../quick_pp/app/backend:/code/quick_pp/app/backend
       - ../../../quick_pp/database:/code/quick_pp/database
+      - ../../../quick_pp/machine_learning:/code/quick_pp/machine_learning
     networks:
       - qpp-network
 

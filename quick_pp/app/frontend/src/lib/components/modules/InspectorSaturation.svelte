@@ -78,6 +78,7 @@
 				throw new Error(String((error as any)?.detail ?? 'Saturation calculation failed'));
 			}
 			wellData.mergeComputedCurves(data.data, data.stats);
+			wellData.markModuleComputed('saturation', data.data);
 			// If using Salinity & Temp Gradient mode, sync the median computed Rw to rwPickett for the Pickett Plot line
 			if (sp.rwMode === 'salinity_temp') {
 				const rwStat = (data.stats as any)?.RW;
@@ -94,6 +95,10 @@
 		} finally {
 			wellData.isCalculating = false;
 		}
+	}
+
+	async function saveSaturation() {
+		await wellData.saveModuleComputed('saturation', 'Saturation Saved ✓');
 	}
 </script>
 
@@ -283,9 +288,12 @@
 		</button>
 		<button
 			type="button"
-			disabled={wellData.isCalculating}
-			onclick={() => executeSaturation(true)}
-			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+			disabled={wellData.isCalculating || !wellData.hasPendingComputed('saturation')}
+			onclick={saveSaturation}
+			title={wellData.hasPendingComputed('saturation')
+				? 'Save computed Water Saturation curves directly to the well'
+				: 'Run the calculation first to enable saving'}
+			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>
 			Save
 		</button>
