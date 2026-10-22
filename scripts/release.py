@@ -149,6 +149,15 @@ def audit_wheel(wheel_path: Path, expected_version: str) -> None:
                 f"Wheel quick_pp/__init__.py does not contain __version__ = \"{expected_version}\""
             )
 
+        frontend_entry = [
+            n for n in names if n.endswith("quick_pp/app/frontend/build/index.js")
+        ]
+        if not frontend_entry:
+            raise RuntimeError(
+                "quick_pp/app/frontend/build/index.js missing from wheel! "
+                "Ensure `npm run build` succeeded before building the wheel."
+            )
+
     size_mb = wheel_path.stat().st_size / (1024 * 1024)
     print(f"  Total files in wheel : {len(names)}")
     print(f"  Wheel archive size   : {size_mb:.2f} MB")
@@ -199,6 +208,9 @@ def main() -> None:
     # 2. Frontend type-check & production build
     if not args.skip_frontend and FRONTEND_DIR.exists():
         step("Running Frontend svelte-check & production build")
+        frontend_build_dir = FRONTEND_DIR / "build"
+        if frontend_build_dir.exists():
+            shutil.rmtree(frontend_build_dir)
         npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
         run_cmd([npm_cmd, "run", "check"], cwd=FRONTEND_DIR)
         run_cmd([npm_cmd, "run", "build"], cwd=FRONTEND_DIR)
