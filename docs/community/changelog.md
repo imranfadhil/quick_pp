@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 (2026)
+- Added **Multi-Well Conformal ML Model Training** (`MultiWellMlTrainer.svelte`, `train_multi_well_conformal_model`) to train, evaluate, and persist custom Physics-Informed Machine Learning (PIML) conformal prediction suites across project wells for Single-Well Lithology & Porosity inference.
+- Added **Automated Badhole Flagging & Lithology Mitigation** (`badhole_flagging` in `quick_pp.qaqc`, `InspectorQaqc.svelte`, `InspectorLithoPoro.svelte`) with caliper, density correction (`DRHO`), and density/neutron washout detection, log track shading, and badhole mitigation in Single-Well Lithology & Porosity evaluation.
+- Separated **Compute (Preview) and Save (Persist)** workflows across Single-Well and Multi-Well workbench modules (`MultiWellRockTyping`, `MultiWellPermTransform`, `MultiWellShf`, `MultiWellMlTrainer`, and Single-Well inspectors) to allow in-memory parameter tuning and visual inspection before committing curves or project parameters to the database.
+- Improved workbench **ParameterSection Accordion UI** for a cleaner layout and streamlined section toggling across Single-Well and Multi-Well views.
+- Fixed packaged frontend production build configuration and added wheel entrypoint verification (`quick_pp/app/frontend/build/index.js`) to `scripts/release.py`.
+
 ## 0.3.0 (2026)
 - Added full-stack **SvelteKit 5 Subsurface Petrophysical Workbench** (`quick_pp/app/frontend`) with Single-Well and Multi-Well Field evaluation scopes, synchronized multi-track log canvas, interactive crossplots, and in-place curve editing.
 - Added **Multi-Well Saturation-Height Function (SHF)** SCAL capillary pressure curve fitting for **Leverett-$J$** (`auto_j_params`), **Skelt-Harrison** (`auto_skelt_harrison_params`), and **Cuddy $BVW$** (`auto_cuddy_params`), alongside FZI rock typing and core-log permeability transforms.
@@ -49,4 +56,3 @@
 
 ## 0.1.0 (2023-10-08)
 - First release on PyPI.
-

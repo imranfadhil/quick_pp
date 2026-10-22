@@ -318,7 +318,7 @@ def badhole_flagging(
                 & (rhob_s < rhob_trend * (1.0 - float(rhob_trend_factor)))
             ).to_numpy()
             if exclude_coal:
-                rhob_drop &= ~coal_mask
+                rhob_drop = rhob_drop & ~coal_mask
             rugosity_flag |= rhob_drop
         if "CALI" in return_df.columns and float(cali_spike_threshold) > 0:
             cali_s = pd.to_numeric(return_df["CALI"], errors="coerce")
