@@ -20,6 +20,7 @@
 	import MultiWellRockTyping from '$lib/components/modules/MultiWellRockTyping.svelte';
 	import MultiWellPermTransform from '$lib/components/modules/MultiWellPermTransform.svelte';
 	import MultiWellShf from '$lib/components/modules/MultiWellShf.svelte';
+	import MultiWellMlTrainer from '$lib/components/modules/MultiWellMlTrainer.svelte';
 
 	import {
 		workbench,
@@ -94,6 +95,29 @@
 					{ key: 'PCOW', label: 'Pcow', unit: 'psi', numeric: true, decimals: 3 }
 				],
 				rows: workbench.scalResult.swofTable
+			};
+		}
+
+		if (
+			workbench.scope === 'multi-well' &&
+			workbench.multiWellStep === 'ml-training' &&
+			projectData.mlTrainingResult?.parity_rows?.length
+		) {
+			return {
+				title: 'Held-Out Validation Parity & Conformal P10–P90 Bounds',
+				columns: [
+					{ key: 'WELL_NAME', label: 'Well' },
+					{ key: 'DEPTH', label: 'Depth', unit: 'm', numeric: true, decimals: 1 },
+					{ key: 'PHIT_TRUE', label: 'Φ True', unit: 'v/v', numeric: true, decimals: 3 },
+					{ key: 'PHIT_PRED', label: 'Φ Pred', unit: 'v/v', numeric: true, decimals: 3 },
+					{ key: 'PHIT_P10', label: 'Φ P10', unit: 'v/v', numeric: true, decimals: 3 },
+					{ key: 'PHIT_P90', label: 'Φ P90', unit: 'v/v', numeric: true, decimals: 3 },
+					{ key: 'SWT_TRUE', label: 'Sw True', unit: 'v/v', numeric: true, decimals: 3 },
+					{ key: 'SWT_PRED', label: 'Sw Pred', unit: 'v/v', numeric: true, decimals: 3 },
+					{ key: 'LOG_PERM_TRUE', label: 'logK True', numeric: true, decimals: 2 },
+					{ key: 'LOG_PERM_PRED', label: 'logK Pred', numeric: true, decimals: 2 }
+				],
+				rows: projectData.mlTrainingResult.parity_rows
 			};
 		}
 
@@ -224,6 +248,8 @@
 					<MultiWellRockTyping />
 				{:else if workbench.multiWellStep === 'perm-transform'}
 					<MultiWellPermTransform />
+				{:else if workbench.multiWellStep === 'ml-training'}
+					<MultiWellMlTrainer />
 				{:else}
 					<MultiWellShf />
 				{/if}

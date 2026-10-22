@@ -93,6 +93,44 @@ class ProjectDataState {
 		shf: (number | null)[];
 	} | null>(null);
 
+	mlTrainingResult = $state<{
+		suite_key: string;
+		suite_label: string;
+		architecture: string;
+		saved: boolean;
+		model_path: string | null;
+		trained_at: string;
+		inputs: { raw_features: string[]; fe_features: string[] };
+		outputs: { regression_targets: string[]; classification_targets: string[] };
+		data_summary: {
+			total_rows_raw: number;
+			filtered_rows: number;
+			train_rows: number;
+			test_rows: number;
+			wells_used: string[];
+			zones_used: string[];
+		};
+		overall_metrics: {
+			r2_score: number;
+			mae: number;
+			rmse: number;
+			physics_loss: number;
+			p10_p90_coverage_pct: number;
+			confidence_level_pct: number;
+		};
+		target_metrics: Array<{
+			Target: string;
+			R2: number;
+			MAE: number;
+			RMSE: number;
+			CoveragePct: number;
+			MeanWidth: number;
+		}>;
+		classifier_metrics: Record<string, { target: string; accuracy: number; f1_score: number }>;
+		parity_rows: Array<Record<string, any>>;
+		models_status?: any;
+	} | null>(null);
+
 	wells = $derived<WellSummaryItem[]>(this.summary?.wells ?? []);
 	allZones = $derived<string[]>(this.summary?.all_zones ?? []);
 	allCurves = $derived<string[]>(this.summary?.all_curves ?? []);

@@ -1,3 +1,5 @@
+import { untrack } from 'svelte';
+
 export type StatusLevel = 'idle' | 'busy' | 'success' | 'warning' | 'error';
 
 export interface ActiveTask {
@@ -53,16 +55,18 @@ class AppStatusState {
 	startTask(label: string, detail?: string, progress: number | null = null): string {
 		const id = `task-${++this.taskCounter}-${Date.now()}`;
 		const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-		this.activeTasks = [
-			...this.activeTasks,
-			{
-				id,
-				label,
-				detail,
-				progress,
-				startedAt: now
-			}
-		];
+		untrack(() => {
+			this.activeTasks = [
+				...this.activeTasks,
+				{
+					id,
+					label,
+					detail,
+					progress,
+					startedAt: now
+				}
+			];
+		});
 		return id;
 	}
 
@@ -70,16 +74,18 @@ class AppStatusState {
 		id: string,
 		updates: { label?: string; detail?: string; progress?: number | null }
 	): void {
-		this.activeTasks = this.activeTasks.map((t) =>
-			t.id === id
-				? {
-						...t,
-						label: updates.label !== undefined ? updates.label : t.label,
-						detail: updates.detail !== undefined ? updates.detail : t.detail,
-						progress: updates.progress !== undefined ? updates.progress : t.progress
-					}
-				: t
-		);
+		untrack(() => {
+			this.activeTasks = this.activeTasks.map((t) =>
+				t.id === id
+					? {
+							...t,
+							label: updates.label !== undefined ? updates.label : t.label,
+							detail: updates.detail !== undefined ? updates.detail : t.detail,
+							progress: updates.progress !== undefined ? updates.progress : t.progress
+						}
+					: t
+			);
+		});
 	}
 
 	endTask(
@@ -91,44 +97,46 @@ class AppStatusState {
 			silent?: boolean;
 		}
 	): number {
-		const task = this.activeTasks.find((t) => t.id === id);
-		const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-		const durationMs = task ? Math.max(1, Math.round(now - task.startedAt)) : 0;
+		return untrack(() => {
+			const task = this.activeTasks.find((t) => t.id === id);
+			const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+			const durationMs = task ? Math.max(1, Math.round(now - task.startedAt)) : 0;
 
-		this.activeTasks = this.activeTasks.filter((t) => t.id !== id);
+			this.activeTasks = this.activeTasks.filter((t) => t.id !== id);
 
-		if (outcome?.silent) {
+			if (outcome?.silent) {
+				return durationMs;
+			}
+
+			const nextLevel = outcome?.level ?? 'success';
+			const nextMsg =
+				outcome?.message ??
+				(task ? task.label.replace(/\.{2,}$/, '') : this.message);
+			const nextDetail = outcome?.detail !== undefined ? outcome.detail : (task?.detail ?? null);
+
+			this.level = nextLevel;
+			this.message = nextMsg;
+			this.detail = nextDetail;
+			this.lastDurationMs = durationMs;
+
+			if (nextLevel !== 'idle') {
+				this.pushHistory({
+					level:
+						nextLevel === 'error'
+							? 'error'
+							: nextLevel === 'warning'
+								? 'warning'
+								: nextLevel === 'success'
+									? 'success'
+									: 'info',
+					message: nextMsg,
+					detail: nextDetail ?? undefined,
+					durationMs
+				});
+			}
+
 			return durationMs;
-		}
-
-		const nextLevel = outcome?.level ?? 'success';
-		const nextMsg =
-			outcome?.message ??
-			(task ? task.label.replace(/\.{2,}$/, '') : this.message);
-		const nextDetail = outcome?.detail !== undefined ? outcome.detail : (task?.detail ?? null);
-
-		this.level = nextLevel;
-		this.message = nextMsg;
-		this.detail = nextDetail;
-		this.lastDurationMs = durationMs;
-
-		if (nextLevel !== 'idle') {
-			this.pushHistory({
-				level:
-					nextLevel === 'error'
-						? 'error'
-						: nextLevel === 'warning'
-							? 'warning'
-							: nextLevel === 'success'
-								? 'success'
-								: 'info',
-				message: nextMsg,
-				detail: nextDetail ?? undefined,
-				durationMs
-			});
-		}
-
-		return durationMs;
+		});
 	}
 
 	setStatus(

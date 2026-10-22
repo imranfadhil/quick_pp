@@ -3142,12 +3142,219 @@ class WorkspaceMlInferenceRequest(WorkspaceFilterBase):
     model_config_key: str = Field(
         "clastic",
         alias="model_config",
-        description="Pre-trained model suite: 'clastic' or 'carbonate'",
+        description="Pre-trained model suite key from the loaded `.joblib` bundle (e.g. 'clastic', 'carbonate')",
     )
     alpha: float = Field(
         0.20,
         description="Conformal significance level (0.20 -> P10 to P90 interval)",
     )
+
+
+@router.get(
+    "/ml_models",
+    summary="Get available Pre-Trained PIML & Conformal Prediction model suites and file status",
+)
+def workspace_ml_models_status(project_id: int) -> Dict[str, Any]:
+    """Return available pre-trained `.joblib` model suites or fallback notification if the file is missing."""
+    from quick_pp.machine_learning.predict_pipeline import get_pretrained_models_status
+
+    return get_pretrained_models_status()
+
+
+class WorkspaceMlTrainRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(
+        None, description="Selected well names to include in training (None = all project wells)"
+    )
+    zones: Optional[List[str]] = Field(
+        None, description="Optional list of ZONES to include"
+    )
+    architecture: str = Field(
+        "clastic",
+        description="Restricted target preset architecture: 'clastic' or 'carbonate'",
+    )
+    suite_key: str = Field(
+        "clastic",
+        description="Model suite identifier in the global `.joblib` bundle (e.g., 'clastic', 'carbonate', 'volve_v2')",
+    )
+    suite_label: Optional[str] = Field(
+        None, description="Human-readable display name for the model suite"
+    )
+    exclude_coal: bool = Field(
+        True, description="Exclude intervals flagged as coal (COAL_FLAG=1 or VCOAL>0.5)"
+    )
+    exclude_tight: bool = Field(
+        False, description="Exclude intervals flagged as tight rock (TIGHT_FLAG=1)"
+    )
+    exclude_bad_hole: bool = Field(
+        True, description="Exclude intervals flagged as bad hole (BAD_HOLE=1)"
+    )
+    rock_flags: Optional[List[int]] = Field(
+        None, description="Optional list of discrete ROCK_FLAG values to keep"
+    )
+    test_size: float = Field(0.20, ge=0.10, le=0.45, description="Validation holdout fraction")
+    alpha: float = Field(
+        0.20, ge=0.05, le=0.45, description="Conformal significance level (0.20 -> P10 to P90)"
+    )
+    n_estimators: int = Field(50, ge=10, le=300, description="Number of Random Forest trees")
+    max_depth: int = Field(10, ge=3, le=30, description="Max tree depth")
+    save: bool = Field(
+        False,
+        description="Save the trained model suite to the global `.joblib` bundle for use across all projects",
+    )
+
+
+@router.post(
+    "/ml_models/train",
+    summary="Train and evaluate a multi-well Conformal PIML model and optionally save to global bundle",
+)
+def workspace_ml_train(project_id: int, req: WorkspaceMlTrainRequest) -> Dict[str, Any]:
+    """Train a multi-well Conformal PIML model with well/zone/flag filtering and return evaluation metrics."""
+    try:
+        from quick_pp.machine_learning.predict_pipeline import get_pretrained_models_status
+        from quick_pp.machine_learning.train_pipeline import (
+            train_multi_well_conformal_model,
+        )
+
+        proj_summary = get_project_summary(project_id)
+        proj_name = str(proj_summary.get("name") or f"Project_{project_id}")
+        well_names = [w["name"] for w in proj_summary.get("wells", [])]
+        if req.well_names:
+            allowed = {str(w).strip() for w in req.well_names if str(w).strip()}
+            if allowed:
+                well_names = [w for w in well_names if w in allowed]
+        if not well_names:
+            raise ValueError("No wells selected or available in project.")
+
+        dfs: List[pd.DataFrame] = []
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            for wn in well_names:
+                wdf = _get_merged_dataframe_sync(project_id, wn)
+                if wdf.empty:
+                    continue
+                wdf = wdf.copy()
+                wdf["WELL_NAME"] = wn
+                if "ZONES" not in wdf.columns or not wdf["ZONES"].notna().any():
+                    try:
+                        anc = proj.get_well_ancillary_data(wn) if proj else {}
+                    except Exception:
+                        anc = {}
+                    tops_df = (
+                        anc.get("formation_tops") if isinstance(anc, dict) else None
+                    )
+                    if isinstance(tops_df, pd.DataFrame) and not tops_df.empty:
+                        wdf["ZONES"] = pd.NA
+                        for _, top in tops_df.iterrows():
+                            try:
+                                top_depth = float(top.get("depth"))
+                                top_name = str(top.get("name"))
+                            except Exception:
+                                continue
+                            nearest_idx = (wdf["DEPTH"] - top_depth).abs().idxmin()
+                            wdf.at[nearest_idx, "ZONES"] = top_name
+                        wdf["ZONES"] = wdf["ZONES"].ffill()
+                dfs.append(wdf)
+
+        if not dfs:
+            raise ValueError("No log data found for the selected wells.")
+
+        combined_df = pd.concat(dfs, ignore_index=True)
+        res = train_multi_well_conformal_model(
+            df=combined_df,
+            architecture=req.architecture,
+            suite_key=req.suite_key,
+            suite_label=req.suite_label,
+            zones=req.zones,
+            exclude_coal=req.exclude_coal,
+            exclude_tight=req.exclude_tight,
+            exclude_bad_hole=req.exclude_bad_hole,
+            rock_flags=req.rock_flags,
+            test_size=req.test_size,
+            alpha=req.alpha,
+            n_estimators=req.n_estimators,
+            max_depth=req.max_depth,
+            save_model=req.save,
+            source_project=proj_name,
+        )
+        res["models_status"] = get_pretrained_models_status()
+        return res
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Multi-well ML training failed: {e}"
+        ) from e
+
+
+class WorkspaceMlSaveRequest(BaseModel):
+    suite_key: str = Field(
+        "clastic",
+        description="Model suite identifier in the global `.joblib` bundle (e.g., 'clastic', 'carbonate', 'volve_v2')",
+    )
+    suite_label: Optional[str] = Field(
+        None, description="Human-readable display name for the model suite"
+    )
+
+
+@router.post(
+    "/ml_models/save",
+    summary="Save the already-evaluated multi-well Conformal PIML model directly to the global `.joblib` bundle",
+)
+def workspace_ml_save_model(project_id: int, req: WorkspaceMlSaveRequest) -> Dict[str, Any]:
+    """Save the cached trained model suite directly to disk without re-running training."""
+    try:
+        from quick_pp.machine_learning.predict_pipeline import get_pretrained_models_status
+        from quick_pp.machine_learning.train_pipeline import save_cached_trained_model
+
+        proj_summary = get_project_summary(project_id)
+        proj_name = str(proj_summary.get("name") or f"Project_{project_id}")
+        res = save_cached_trained_model(
+            suite_key=req.suite_key,
+            suite_label=req.suite_label,
+            source_project=proj_name,
+        )
+        res["models_status"] = get_pretrained_models_status()
+        return res
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to save trained model: {e}"
+        ) from e
+
+
+@router.delete(
+    "/ml_models/{suite_key}",
+    summary="Delete a saved model suite from the global `.joblib` bundle",
+)
+def workspace_ml_delete_model(project_id: int, suite_key: str) -> Dict[str, Any]:
+    """Remove a saved model suite from the global `.joblib` bundle and return updated status."""
+    from quick_pp.machine_learning.predict_pipeline import (
+        delete_pretrained_model_suite,
+        get_pretrained_models_status,
+    )
+    from quick_pp.machine_learning.train_pipeline import is_training_disabled
+
+    if is_training_disabled():
+        raise HTTPException(
+            status_code=403,
+            detail="Modifying pre-trained models is disabled in read-only demo mode.",
+        )
+    deleted = delete_pretrained_model_suite(suite_key)
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model suite '{suite_key}' not found in pre-trained bundle.",
+        )
+    return {
+        "deleted": True,
+        "suite_key": suite_key,
+        "models_status": get_pretrained_models_status(),
+    }
 
 
 @router.post(
@@ -3159,8 +3366,12 @@ def workspace_ml_inference(
 ) -> Dict[str, Any]:
     """Trigger pre-trained PIML & Conformal Prediction inference with P10–P90 uncertainty bands."""
     try:
-        from quick_pp.machine_learning.predict_pipeline import predict_well_dataframe
+        from quick_pp.machine_learning.predict_pipeline import (
+            get_pretrained_models_status,
+            predict_well_dataframe,
+        )
 
+        status_info = get_pretrained_models_status()
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
@@ -3169,6 +3380,11 @@ def workspace_ml_inference(
             model_config=req.model_config_key,
             alpha=float(req.alpha),
         )
+        pretrained_used = bool(
+            pred_df.attrs.get("pretrained_used", status_info["pretrained_available"])
+        )
+        model_path_used = pred_df.attrs.get("model_path", status_info["model_path"])
+        expected_path = pred_df.attrs.get("expected_path", status_info["expected_path"])
 
         out_cols = [
             c
@@ -3245,12 +3461,30 @@ def workspace_ml_inference(
             for col in out_cols
             if col != "DEPTH"
         }
+        model_source = (
+            f"Pre-Trained PIML ({req.model_config_key.title()})"
+            if pretrained_used
+            else f"On-the-Fly Synthetic Conformal Fallback ({req.model_config_key.title()})"
+        )
+        notice = (
+            f"Inference executed using pre-trained bundle '{model_path_used}'."
+            if pretrained_used
+            else (
+                f"Pre-trained model file not found at '{expected_path}'. "
+                "Used on-the-fly physics-guided synthetic conformal fallback on current well logs."
+            )
+        )
         return {
             "well_name": well_name,
             "model_config": req.model_config_key,
             "alpha": float(req.alpha),
             "confidence_level_pct": round((1.0 - float(req.alpha)) * 100.0, 1),
-            "model_source": f"Pre-Trained PIML ({req.model_config_key.title()})",
+            "model_source": model_source,
+            "pretrained_used": pretrained_used,
+            "fallback_used": not pretrained_used,
+            "model_path": model_path_used,
+            "expected_path": expected_path,
+            "notice": notice,
             "interval_width_summary": {
                 "phit_mean_width_vv": phit_mean_width,
                 "sw_mean_width_vv": sw_mean_width,

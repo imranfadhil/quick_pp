@@ -6,7 +6,7 @@ export type SingleWellStep =
 	| 'saturation'
 	| 'ressum'
 	| 'scal';
-export type MultiWellStep = 'inventory' | 'rock-typing' | 'perm-transform' | 'shf';
+export type MultiWellStep = 'inventory' | 'rock-typing' | 'perm-transform' | 'shf' | 'ml-training';
 
 export interface LithoEndpointParams {
 	model: 'ssc' | 'multi_mineral' | 'vsh_gr';

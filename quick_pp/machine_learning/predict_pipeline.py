@@ -231,37 +231,239 @@ def predict_pipeline(
 
 
 _PRETRAINED_MODELS_CACHE: dict | None = None
+_PRETRAINED_MODELS_CACHE_KEY: tuple[str, float] | None = None
+
+
+def resolve_pretrained_models_path(
+    model_path: str | Path | None = None,
+) -> tuple[Path | None, Path]:
+    """Resolve the existing pre-trained `.joblib` model path and the primary expected path."""
+    env_default = Path(
+        os.getenv("QPP_PRETRAINED_MODELS_PATH", "data/pretrained_models.joblib")
+    )
+    candidates = (
+        [Path(model_path)]
+        if model_path is not None
+        else [
+            env_default,
+            Path("data/pretrained_models.joblib"),
+            Path("/code/data/seed/pretrained_models.joblib"),
+        ]
+    )
+    expected = candidates[0]
+    for cand in candidates:
+        if cand.exists() and cand.is_file():
+            return cand, expected
+    return None, expected
 
 
 def load_pretrained_demo_models(model_path: str | Path | None = None) -> dict:
     """Load pre-trained Conformal PIML models from disk (`data/pretrained_models.joblib`)."""
-    global _PRETRAINED_MODELS_CACHE
-    if _PRETRAINED_MODELS_CACHE is not None and model_path is None:
+    global _PRETRAINED_MODELS_CACHE, _PRETRAINED_MODELS_CACHE_KEY
+
+    resolved_path, _ = resolve_pretrained_models_path(model_path)
+    if resolved_path is None:
+        return {}
+
+    cache_key = (str(resolved_path.resolve()), resolved_path.stat().st_mtime)
+    if (
+        model_path is None
+        and _PRETRAINED_MODELS_CACHE is not None
+        and _PRETRAINED_MODELS_CACHE_KEY == cache_key
+    ):
         return _PRETRAINED_MODELS_CACHE
 
     import joblib
 
-    candidates = (
-        [Path(model_path)]
-        if model_path is None and False
-        else (
-            [Path(model_path)]
-            if model_path is not None
-            else [
-                Path(os.getenv("QPP_PRETRAINED_MODELS_PATH", "data/pretrained_models.joblib")),
-                Path("data/pretrained_models.joblib"),
-                Path("/code/data/seed/pretrained_models.joblib"),
-            ]
+    logger.info(f"Loading pre-trained conformal models from {resolved_path}")
+    bundle = joblib.load(resolved_path)
+    if not isinstance(bundle, dict):
+        return {}
+    if model_path is None:
+        _PRETRAINED_MODELS_CACHE = bundle
+        _PRETRAINED_MODELS_CACHE_KEY = cache_key
+    return bundle
+
+
+def _format_suite_label(suite_key: str, pretrained: bool, meta: dict | None = None) -> str:
+    if meta and meta.get("label"):
+        return str(meta["label"])
+    key_lower = suite_key.lower().strip()
+    if pretrained:
+        if key_lower == "clastic":
+            return "Clastic (Pre-Trained PIML)"
+        if key_lower == "carbonate":
+            return "Carbonate (Pre-Trained PIML)"
+        arch = (meta or {}).get("architecture", "")
+        suffix = f" ({str(arch).title()} PIML)" if arch else " (Pre-Trained)"
+        return f"{suite_key.replace('_', ' ').title()}{suffix}"
+    return f"{suite_key.replace('_', ' ').title()} (Synthetic Fallback)"
+
+
+def save_pretrained_model_suite(
+    suite_key: str,
+    suite_entry: dict,
+    model_path: str | Path | None = None,
+) -> Path:
+    """Save or update a trained model suite inside the global `.joblib` bundle on disk."""
+    global _PRETRAINED_MODELS_CACHE, _PRETRAINED_MODELS_CACHE_KEY
+    import joblib
+
+    resolved_path, expected_path = resolve_pretrained_models_path(model_path)
+    target_path = resolved_path if resolved_path is not None else expected_path
+
+    bundle: dict = {}
+    if resolved_path is not None and resolved_path.exists():
+        try:
+            existing = joblib.load(resolved_path)
+            if isinstance(existing, dict):
+                bundle = dict(existing)
+        except Exception as e:
+            logger.warning(f"Could not read existing bundle at {resolved_path}: {e}")
+
+    # Ensure writable target path (if /code/data/seed is read-only, write to expected_path)
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        bundle[suite_key] = suite_entry
+        joblib.dump(bundle, target_path, compress=3)
+    except PermissionError:
+        target_path = expected_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        bundle[suite_key] = suite_entry
+        joblib.dump(bundle, target_path, compress=3)
+
+    if model_path is None:
+        _PRETRAINED_MODELS_CACHE = bundle
+        _PRETRAINED_MODELS_CACHE_KEY = (
+            str(target_path.resolve()),
+            target_path.stat().st_mtime,
         )
-    )
-    for cand in candidates:
-        if cand.exists():
-            logger.info(f"Loading pre-trained conformal models from {cand}")
-            bundle = joblib.load(cand)
-            if model_path is None:
-                _PRETRAINED_MODELS_CACHE = bundle
-            return bundle
-    return {}
+    logger.info(f"Saved pre-trained model suite '{suite_key}' to {target_path}")
+    return target_path
+
+
+def delete_pretrained_model_suite(
+    suite_key: str,
+    model_path: str | Path | None = None,
+) -> bool:
+    """Remove a model suite from the global `.joblib` bundle on disk."""
+    global _PRETRAINED_MODELS_CACHE, _PRETRAINED_MODELS_CACHE_KEY
+    import joblib
+
+    resolved_path, _ = resolve_pretrained_models_path(model_path)
+    if resolved_path is None or not resolved_path.exists():
+        return False
+
+    bundle = joblib.load(resolved_path)
+    if not isinstance(bundle, dict) or suite_key not in bundle:
+        return False
+
+    del bundle[suite_key]
+    joblib.dump(bundle, resolved_path, compress=3)
+    if model_path is None:
+        _PRETRAINED_MODELS_CACHE = bundle
+        _PRETRAINED_MODELS_CACHE_KEY = (
+            str(resolved_path.resolve()),
+            resolved_path.stat().st_mtime,
+        )
+    return True
+
+
+def get_pretrained_models_status(model_path: str | Path | None = None) -> dict:
+    """Inspect disk for the pre-trained `.joblib` model bundle and return available suites + status."""
+    resolved_path, expected_path = resolve_pretrained_models_path(model_path)
+    bundle = load_pretrained_demo_models(model_path) if resolved_path is not None else {}
+
+    suites: list[dict] = []
+    if isinstance(bundle, dict) and bundle:
+        for suite_key, suite_val in bundle.items():
+            meta = (
+                suite_val.get("_meta", {})
+                if isinstance(suite_val, dict) and isinstance(suite_val.get("_meta"), dict)
+                else {}
+            )
+            arch = str(meta.get("architecture") or suite_key).lower().strip()
+            if arch not in MODELLING_CONFIG:
+                arch = "carbonate" if "CARB" in (suite_val.keys() if isinstance(suite_val, dict) else []) else "clastic"
+
+            sub_models = (
+                [k for k in suite_val.keys() if not str(k).startswith("_")]
+                if isinstance(suite_val, dict)
+                else [str(suite_key).upper()]
+            )
+            targets: list[str] = []
+            if isinstance(suite_val, dict):
+                for mk, mobj in suite_val.items():
+                    if str(mk).startswith("_"):
+                        continue
+                    t_names = getattr(mobj, "target_names", None)
+                    if not t_names and arch in MODELLING_CONFIG:
+                        t_names = MODELLING_CONFIG[arch].get(mk, {}).get("targets", [])
+                    if t_names:
+                        for t in t_names:
+                            if t not in targets:
+                                targets.append(str(t))
+            else:
+                t_names = getattr(suite_val, "target_names", None) or []
+                targets.extend(str(t) for t in t_names)
+
+            suites.append(
+                {
+                    "key": str(suite_key),
+                    "label": _format_suite_label(str(suite_key), pretrained=True, meta=meta),
+                    "architecture": arch,
+                    "pretrained": True,
+                    "sub_models": sub_models,
+                    "targets": targets,
+                    "meta": meta,
+                }
+            )
+
+    if suites and resolved_path is not None:
+        return {
+            "pretrained_available": True,
+            "fallback_active": False,
+            "model_path": str(resolved_path),
+            "expected_path": str(expected_path),
+            "suites": suites,
+            "notice": (
+                f"Loaded pre-trained model bundle from '{resolved_path.as_posix()}' "
+                f"({len(suites)} suite{'s' if len(suites) != 1 else ''}: "
+                f"{', '.join(s['key'] for s in suites)})."
+            ),
+        }
+
+    fallback_suites: list[dict] = []
+    for suite_key, suite_cfg in MODELLING_CONFIG.items():
+        if suite_key == "mock" or not isinstance(suite_cfg, dict):
+            continue
+        targets = []
+        for mk, mcfg in suite_cfg.items():
+            for t in mcfg.get("targets", []):
+                if t not in targets:
+                    targets.append(str(t))
+        fallback_suites.append(
+            {
+                "key": str(suite_key),
+                "label": _format_suite_label(str(suite_key), pretrained=False),
+                "pretrained": False,
+                "sub_models": list(suite_cfg.keys()),
+                "targets": targets,
+            }
+        )
+
+    return {
+        "pretrained_available": False,
+        "fallback_active": True,
+        "model_path": None,
+        "expected_path": str(expected_path.as_posix()),
+        "suites": fallback_suites,
+        "notice": (
+            f"Pre-trained model file not found at '{expected_path.as_posix()}'. "
+            "Running inference will use the on-the-fly physics-guided synthetic conformal "
+            "fallback calibrated on the current well's logs (GR, RHOB, NPHI, RT)."
+        ),
+    }
 
 
 def predict_well_dataframe(
@@ -278,8 +480,21 @@ def predict_well_dataframe(
     """
     import numpy as np
 
-    suite = model_config.lower().strip()
-    if suite not in ("clastic", "carbonate"):
+    resolved_path, expected_path = resolve_pretrained_models_path(model_path)
+    bundle = load_pretrained_demo_models(model_path=model_path)
+
+    requested_suite = model_config.strip()
+    suite = requested_suite.lower()
+
+    # Match requested suite against loaded bundle keys first, then MODELLING_CONFIG
+    matched_bundle_key = None
+    if isinstance(bundle, dict):
+        for k in bundle.keys():
+            if str(k).lower().strip() == suite:
+                matched_bundle_key = k
+                break
+
+    if matched_bundle_key is None and suite not in MODELLING_CONFIG:
         suite = "clastic"
 
     work = df.copy()
@@ -307,18 +522,48 @@ def predict_well_dataframe(
                 .fillna(0.0)
             )
 
-    bundle = load_pretrained_demo_models(model_path=model_path)
-    suite_models = bundle.get(suite, {}) if isinstance(bundle, dict) else {}
+    raw_suite_entry = (
+        bundle.get(matched_bundle_key)
+        if (isinstance(bundle, dict) and matched_bundle_key is not None)
+        else {}
+    )
+    if raw_suite_entry and not isinstance(raw_suite_entry, dict):
+        suite_models = {str(matched_bundle_key).upper(): raw_suite_entry}
+    elif isinstance(raw_suite_entry, dict):
+        suite_models = raw_suite_entry
+    else:
+        suite_models = {}
 
     pred_df = fe_df.copy()
+    active_sub_models = {
+        k: v for k, v in suite_models.items() if not str(k).startswith("_")
+    }
+    pretrained_used = bool(active_sub_models)
 
-    if suite_models:
-        for model_key, model_values in MODELLING_CONFIG[suite].items():
-            if model_key not in suite_models:
+    if active_sub_models:
+        meta = (
+            suite_models.get("_meta", {})
+            if isinstance(suite_models.get("_meta"), dict)
+            else {}
+        )
+        arch = str(meta.get("architecture") or suite).lower().strip()
+        if arch not in MODELLING_CONFIG:
+            arch = "carbonate" if "CARBONATE" in active_sub_models else "clastic"
+        cfg_for_suite = MODELLING_CONFIG.get(arch, {})
+        ordered_keys = list(cfg_for_suite.keys()) + [
+            k for k in active_sub_models.keys() if k not in cfg_for_suite
+        ]
+        for model_key in ordered_keys:
+            if model_key not in active_sub_models:
                 continue
-            targets = model_values["targets"]
-            features = model_values["features"]
-            model = suite_models[model_key]
+            model = active_sub_models[model_key]
+            model_values = cfg_for_suite.get(model_key, {})
+            targets = model_values.get("targets") or getattr(model, "target_names", None) or ["PHIT"]
+            features = (
+                model_values.get("features")
+                or list(getattr(model, "feature_names_in_", []))
+                or (RAW_FEATURES + FE_FEATURES)
+            )
             for fcol in features:
                 if fcol not in pred_df.columns:
                     pred_df[fcol] = 0.0
@@ -407,5 +652,8 @@ def predict_well_dataframe(
                 (pred_df["PHIT_P90"] * (1.0 - pred_df["SW_P10"])).clip(0.0, 0.50),
             )
 
+    pred_df.attrs["pretrained_used"] = pretrained_used
+    pred_df.attrs["model_path"] = str(resolved_path.as_posix()) if resolved_path else None
+    pred_df.attrs["expected_path"] = str(expected_path.as_posix())
     return pred_df
 

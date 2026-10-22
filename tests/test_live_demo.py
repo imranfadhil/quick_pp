@@ -202,17 +202,29 @@ def test_deterministic_and_probabilistic_inspector_loop():
     assert "shf" in shf_res.json()["data"]
 
 
-def test_pretrained_ml_inference_and_readonly_training_guardrail():
+def test_pretrained_ml_inference_and_readonly_training_guardrail(monkeypatch):
     """Verify pre-trained conformal inference works while heavy model training is blocked."""
     client = TestClient(app)
     proj_id = client.get("/quick_pp/database/projects").json()[0]["project_id"]
+
+    models_res = client.get(f"/quick_pp/workspace/projects/{proj_id}/ml_models")
+    assert models_res.status_code == 200
+    models_info = models_res.json()
+    assert models_info["pretrained_available"] is True
+    assert models_info["fallback_active"] is False
+    suite_keys = [s["key"] for s in models_info["suites"]]
+    assert "clastic" in suite_keys
+    assert "carbonate" in suite_keys
 
     ml_res = client.post(
         f"/quick_pp/workspace/projects/{proj_id}/wells/15-9-19-A/ml_inference",
         json={"model_config": "clastic", "alpha": 0.20, "save": True},
     )
     assert ml_res.status_code == 200
-    ml_data = ml_res.json()["data"]
+    ml_json = ml_res.json()
+    assert ml_json["pretrained_used"] is True
+    assert ml_json["fallback_used"] is False
+    ml_data = ml_json["data"]
     for col in ("PHIT", "PHIT_P10", "PHIT_P90", "SW", "SW_P10", "SW_P90", "PERM", "PERM_P10", "PERM_P90"):
         assert col in ml_data
 

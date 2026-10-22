@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { api, postJson } from '$lib/api/client';
+	import { api, getJson, postJson } from '$lib/api/client';
 	import { authState } from '$lib/state/auth.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
@@ -21,16 +21,63 @@
 			])
 		);
 
+	interface MlModelSuiteOption {
+		key: string;
+		label: string;
+		pretrained: boolean;
+		sub_models?: string[];
+		targets?: string[];
+	}
+
 	// Pre-Trained PIML & Conformal Prediction state
-	let mlModelConfig = $state<'clastic' | 'carbonate'>('clastic');
+	let mlModelConfig = $state<string>('clastic');
 	let conformalAlpha = $state<number>(0.2);
+	let mlModelsStatus = $state<{
+		pretrained_available: boolean;
+		fallback_active: boolean;
+		model_path: string | null;
+		expected_path: string;
+		suites: MlModelSuiteOption[];
+		notice: string;
+	} | null>(null);
 	let mlSummary = $state<{
 		confidence_level_pct: number;
 		model_source: string;
+		fallback_used: boolean;
+		notice?: string;
 		phit_mean_width_vv: number;
 		sw_mean_width_vv: number;
 		perm_median_p90_p10_factor: number;
 	} | null>(null);
+
+	async function loadMlModelsStatus(projectId: string | number) {
+		try {
+			const status = await getJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(projectId)}/ml_models`
+			);
+			if (status && Array.isArray(status.suites)) {
+				mlModelsStatus = status;
+				if (
+					status.suites.length > 0 &&
+					!status.suites.some((s: MlModelSuiteOption) => s.key === mlModelConfig)
+				) {
+					mlModelConfig = status.suites[0].key;
+				}
+			}
+		} catch {
+			// Ignore status probe error; will surface on run if needed
+		}
+	}
+
+	let lastLoadedModelsProjectId = '';
+
+	$effect(() => {
+		const pid = workbench.projectId ? String(workbench.projectId) : '';
+		if (pid && pid !== lastLoadedModelsProjectId) {
+			lastLoadedModelsProjectId = pid;
+			loadMlModelsStatus(pid);
+		}
+	});
 
 	function toggleMineral(m: string) {
 		if (workbench.lithoParams.minerals.includes(m)) {
@@ -215,6 +262,8 @@
 			mlSummary = {
 				confidence_level_pct: res.confidence_level_pct ?? Math.round((1 - conformalAlpha) * 100),
 				model_source: res.model_source ?? 'Pre-Trained PIML Ensemble',
+				fallback_used: Boolean(res.fallback_used),
+				notice: res.notice,
 				phit_mean_width_vv: res.interval_width_summary?.phit_mean_width_vv ?? 0,
 				sw_mean_width_vv: res.interval_width_summary?.sw_mean_width_vv ?? 0,
 				perm_median_p90_p10_factor: res.interval_width_summary?.perm_median_p90_p10_factor ?? 1
@@ -481,20 +530,47 @@
 			badge={`CI=${Math.round((1 - conformalAlpha) * 100)}%`}
 		>
 			<div class="mb-1.5 flex items-center justify-between rounded-xs border border-indigo-200 bg-indigo-50/70 px-2 py-1 text-[10px] text-indigo-900">
-				<span class="font-semibold">predict_pipeline.py Active</span>
+				<span class="font-semibold">
+					{mlModelsStatus?.pretrained_available
+						? 'Pre-Trained Bundle Loaded'
+						: mlModelsStatus
+							? 'Synthetic Fallback Mode'
+							: 'predict_pipeline.py Active'}
+				</span>
 				<span class="rounded-xs bg-indigo-100 px-1 py-0.5 font-mono text-[9px] font-bold text-indigo-800">
 					{authState.isDemoMode ? 'Read-Only Training' : 'Conformal P10–P90'}
 				</span>
 			</div>
 
-			<div class="grid grid-cols-[1fr_118px] items-center gap-x-2 py-0.5">
-				<span class="text-xs font-medium text-[var(--text-primary)]">Pre-Trained Suite</span>
+			{#if mlModelsStatus && !mlModelsStatus.pretrained_available}
+				<div class="mb-2 rounded-xs border border-amber-300 bg-amber-50/80 px-2 py-1.5 text-[10px] leading-snug text-amber-950">
+					<div class="font-semibold text-amber-900">No pre-trained model file found</div>
+					<div class="mt-0.5 text-amber-800">
+						Expected <span class="font-mono">{mlModelsStatus.expected_path}</span>. Running inference will fit an on-the-fly physics-guided synthetic conformal model on the current well's logs (<span class="font-mono">GR, RHOB, NPHI, RT</span>).
+					</div>
+				</div>
+			{:else if mlModelsStatus?.pretrained_available && mlModelsStatus.model_path}
+				<div class="mb-1.5 truncate rounded-xs border border-emerald-200 bg-emerald-50/60 px-2 py-1 text-[10px] text-emerald-900" title={mlModelsStatus.model_path}>
+					Source: <span class="font-mono">{mlModelsStatus.model_path}</span>
+				</div>
+			{/if}
+
+			<div class="grid grid-cols-[1fr_140px] items-center gap-x-2 py-0.5">
+				<span class="text-xs font-medium text-[var(--text-primary)]">
+					{mlModelsStatus && !mlModelsStatus.pretrained_available ? 'Fallback Suite' : 'Pre-Trained Suite'}
+				</span>
 				<select
 					bind:value={mlModelConfig}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
-					<option value="clastic">Clastic (Volve PIML)</option>
-					<option value="carbonate">Carbonate (Costa PIML)</option>
+					{#if mlModelsStatus && mlModelsStatus.suites.length > 0}
+						{#each mlModelsStatus.suites as suite (suite.key)}
+							<option value={suite.key}>{suite.label}</option>
+						{/each}
+					{:else}
+						<option value="clastic">Clastic</option>
+						<option value="carbonate">Carbonate</option>
+					{/if}
 				</select>
 			</div>
 
@@ -505,7 +581,6 @@
 				max={0.4}
 				step={0.02}
 				decimals={2}
-				onrun={() => executePretrainedMlInference(false)}
 			/>
 
 			<button
@@ -514,27 +589,41 @@
 				onclick={() => executePretrainedMlInference(false)}
 				class="mt-1.5 h-7 w-full rounded-sm border border-indigo-600 bg-indigo-600 px-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
 			>
-				{wellData.isCalculating ? 'Running PIML Inference...' : 'Run Pre-Trained Conformal Inference'}
+				{#if wellData.isCalculating}
+					Running Conformal Inference...
+				{:else if mlModelsStatus && !mlModelsStatus.pretrained_available}
+					Run On-the-Fly Synthetic Conformal Inference
+				{:else}
+					Run Pre-Trained Conformal Inference
+				{/if}
 			</button>
 
 			{#if mlSummary}
-				<div class="mt-1.5 grid grid-cols-3 gap-1 rounded-sm border border-indigo-200 bg-indigo-50/50 p-1.5 text-center text-[10px]">
-					<div>
-						<div class="text-[var(--text-muted)]">Φ Band Width</div>
-						<div class="mono-num font-bold text-indigo-900">
-							±{fmtNum(mlSummary.phit_mean_width_vv / 2, 3)} v/v
-						</div>
+				<div class="mt-1.5 rounded-sm border border-indigo-200 bg-indigo-50/50 p-1.5 text-[10px]">
+					<div class="mb-1 flex items-center justify-between border-b border-indigo-100 pb-1 text-[9px] text-indigo-900">
+						<span class="font-semibold truncate" title={mlSummary.model_source}>{mlSummary.model_source}</span>
+						{#if mlSummary.fallback_used}
+							<span class="rounded-xs bg-amber-100 px-1 py-0.2 font-mono text-[8px] font-bold text-amber-900">Fallback</span>
+						{/if}
 					</div>
-					<div>
-						<div class="text-[var(--text-muted)]">Sw Band Width</div>
-						<div class="mono-num font-bold text-purple-900">
-							±{fmtNum(mlSummary.sw_mean_width_vv / 2, 3)} v/v
+					<div class="grid grid-cols-3 gap-1 text-center">
+						<div>
+							<div class="text-[var(--text-muted)]">Φ Band Width</div>
+							<div class="mono-num font-bold text-indigo-900">
+								±{fmtNum(mlSummary.phit_mean_width_vv / 2, 3)} v/v
+							</div>
 						</div>
-					</div>
-					<div>
-						<div class="text-[var(--text-muted)]">K P90/P10</div>
-						<div class="mono-num font-bold text-amber-900">
-							{fmtNum(mlSummary.perm_median_p90_p10_factor, 1)}×
+						<div>
+							<div class="text-[var(--text-muted)]">Sw Band Width</div>
+							<div class="mono-num font-bold text-purple-900">
+								±{fmtNum(mlSummary.sw_mean_width_vv / 2, 3)} v/v
+							</div>
+						</div>
+						<div>
+							<div class="text-[var(--text-muted)]">K P90/P10</div>
+							<div class="mono-num font-bold text-amber-900">
+								{fmtNum(mlSummary.perm_median_p90_p10_factor, 1)}×
+							</div>
 						</div>
 					</div>
 				</div>

@@ -282,6 +282,25 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 			done: 'Multi-well SHF updated'
 		};
 	}
+	if (path.endsWith('/ml_models/train')) {
+		return {
+			active: 'Training & evaluating multi-well Conformal PIML model...',
+			done: 'Conformal PIML model trained & evaluated'
+		};
+	}
+	if (path.endsWith('/ml_models/save')) {
+		return {
+			active: 'Saving trained model to global bundle...',
+			done: 'Model suite saved to global bundle'
+		};
+	}
+	if (path.endsWith('/ml_models') && m === 'GET') {
+		return {
+			active: 'Checking pre-trained ML model bundle...',
+			done: 'Pre-trained ML model status loaded',
+			silent: true
+		};
+	}
 	if (path.endsWith('/optimize_fwl')) {
 		return {
 			active: 'Optimizing field Free Water Level (FWL) & fluid contacts...',
@@ -394,28 +413,34 @@ async function trackedFetch(
 	fallbackErrorMsg: string
 ): Promise<Response> {
 	const desc = describeApiEndpoint(init.method || 'GET', url);
-	const taskId = appStatus.startTask(desc.active, desc.detail);
+	const taskId = desc.silent ? null : appStatus.startTask(desc.active, desc.detail);
 	try {
 		const res = await fetch(url, init);
 		if (!res.ok) {
 			const err = await parseErrorResponse(res, fallbackErrorMsg);
-			appStatus.endTask(taskId, {
-				level: 'error',
-				message: err.message,
-				detail: desc.detail ?? null
-			});
+			if (taskId) {
+				appStatus.endTask(taskId, {
+					level: 'error',
+					message: err.message,
+					detail: desc.detail ?? null
+				});
+			} else if (!desc.silent) {
+				appStatus.error(err.message, desc.detail);
+			}
 			throw err;
 		}
-		appStatus.endTask(taskId, {
-			level: 'success',
-			message: desc.done,
-			detail: desc.detail ?? null,
-			silent: desc.silent
-		});
+		if (taskId) {
+			appStatus.endTask(taskId, {
+				level: 'success',
+				message: desc.done,
+				detail: desc.detail ?? null,
+				silent: desc.silent
+			});
+		}
 		return res;
 	} catch (e: any) {
 		// If task is still active (e.g., network failure before response), close it with error
-		if (appStatus.activeTasks.some((t) => t.id === taskId)) {
+		if (taskId && appStatus.activeTasks.some((t) => t.id === taskId)) {
 			appStatus.endTask(taskId, {
 				level: 'error',
 				message: e?.message || fallbackErrorMsg,
