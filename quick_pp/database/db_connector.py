@@ -51,6 +51,13 @@ class DBConnector:
             # Default to a local SQLite DB if no URL is provided or empty.
             db_url = os.environ.get("QPP_DATABASE_URL") or "sqlite:///./data/quick_pp.db"
 
+        if db_url.startswith("sqlite:///") and ":memory:" not in db_url:
+            sqlite_path = db_url[len("sqlite:///") :].split("?")[0]
+            if sqlite_path:
+                parent_dir = os.path.dirname(os.path.abspath(sqlite_path))
+                if parent_dir:
+                    os.makedirs(parent_dir, exist_ok=True)
+
         # SQLAlchemy 2.1+ defaults 'postgresql://' to the psycopg (v3) dialect.
         # Fall back to psycopg2 (installed via psycopg2-binary) when psycopg is absent.
         if db_url.startswith("postgres://"):

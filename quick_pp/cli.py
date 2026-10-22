@@ -271,8 +271,8 @@ def backend(debug, no_open):
 def frontend(dev, force_install, no_open):
     """Start the quick_pp frontend server.
 
-    By default, launches the SvelteKit development server (npm run dev).
-    Use --prod to run the production build (requires building first)."""
+    By default, launches the pre-built production server on port 5469.
+    Use --dev to run the SvelteKit development server (npm run dev)."""
     frontend_dir = FRONTEND_DIR
 
     if not frontend_dir.exists():
@@ -307,6 +307,7 @@ def frontend(dev, force_install, no_open):
         env = os.environ.copy()
         env["PORT"] = str(FRONTEND_PORT)
         env["HOST"] = "0.0.0.0"
+        env.setdefault("ORIGIN", f"http://localhost:{FRONTEND_PORT}")
 
         # Run the built Node.js server
         cmd = ["node", "build/index.js"]
@@ -403,6 +404,8 @@ def app(open):
     already running.
     """
     processes = []
+    p_backend = None
+    p_front = None
     try:
         # Start backend if not running
         if not is_server_running(BACKEND_HOST, BACKEND_PORT):
@@ -462,6 +465,8 @@ def app(open):
             click.echo(
                 f"Frontend build not found at {build_dir}. Skipping frontend start."
             )
+        elif is_server_running(BACKEND_HOST, FRONTEND_PORT):
+            click.echo(f"Frontend already running on localhost:{FRONTEND_PORT}")
         else:
             click.echo(
                 f"Starting frontend production server on port {FRONTEND_PORT}..."
@@ -471,6 +476,7 @@ def app(open):
             env = os.environ.copy()
             env["PORT"] = str(FRONTEND_PORT)
             env["HOST"] = "0.0.0.0"
+            env.setdefault("ORIGIN", f"http://localhost:{FRONTEND_PORT}")
 
             # Run the built Node.js server
             cmd = ["node", "build/index.js"]
@@ -481,12 +487,12 @@ def app(open):
         try:
             if open:
                 # backend
-                if any(p == p_backend for p in processes) or is_server_running(
+                if (p_backend is not None and p_backend in processes) or is_server_running(
                     BACKEND_HOST, BACKEND_PORT
                 ):
                     webbrowser.open(f"http://{BACKEND_HOST}:{BACKEND_PORT}")
                 # frontend production port
-                if any(p == p_front for p in processes) or (
+                if (p_front is not None and p_front in processes) or (
                     frontend_dir.exists() and (frontend_dir / "build").exists()
                 ):
                     webbrowser.open(f"http://localhost:{FRONTEND_PORT}")
@@ -551,6 +557,9 @@ def model_deployment(debug):
                 "--bind",
                 "0.0.0.0:5555",
             ]
+            worker_flag = get_gunicorn_worker_flag(debug)
+            if worker_flag:
+                argv.extend(worker_flag.split())
         else:
             argv = [
                 sys.executable,
@@ -564,9 +573,6 @@ def model_deployment(debug):
             ]
         if debug:
             argv.append("--reload")
-        worker_flag = get_gunicorn_worker_flag(debug)
-        if worker_flag:
-            argv.extend(worker_flag.split())
         click.echo(
             f"Model server is not running. Starting it now... | {' '.join(argv)}"
         )
@@ -703,16 +709,16 @@ def docker(action, detach, profile, service, follow, env_file):
     # Build the docker-compose command
     cmd_parts = ["docker", "compose"]
 
-    # Add env-file option (defaults to .env in repo root if it exists)
+    # Add env-file option (defaults to .env in current working directory, then package parent)
     if env_file:
-        cmd_parts.extend(["--env-file", str(env_file)])
+        cmd_parts.extend(["--env-file", str(Path(env_file).resolve())])
     else:
-        # Try to find .env in repo root (parent of quick_pp package)
-        repo_root = Path(__file__).parent.parent
-        default_env_file = repo_root / ".env"
-        if default_env_file.exists():
-            cmd_parts.extend(["--env-file", str(default_env_file)])
-            click.echo(f"Using .env file: {default_env_file}")
+        cwd_env = Path.cwd() / ".env"
+        repo_env = Path(__file__).parent.parent / ".env"
+        chosen_env = cwd_env if cwd_env.exists() else (repo_env if repo_env.exists() else None)
+        if chosen_env is not None:
+            cmd_parts.extend(["--env-file", str(chosen_env.resolve())])
+            click.echo(f"Using .env file: {chosen_env.resolve()}")
 
     # Add profile options
     for prof in profile:
@@ -740,13 +746,22 @@ def docker(action, detach, profile, service, follow, env_file):
 
     click.echo(f"Running: (in {docker_dir}) {cmd}")
 
+    host_data_dir = (Path.cwd() / "data").resolve()
+    host_uploads_dir = (Path.cwd() / "uploads").resolve()
+    host_data_dir.mkdir(parents=True, exist_ok=True)
+    host_uploads_dir.mkdir(parents=True, exist_ok=True)
+    docker_env = os.environ.copy()
+    docker_env.setdefault("QPP_HOST_DATA_DIR", str(host_data_dir))
+    docker_env.setdefault("QPP_HOST_UPLOADS_DIR", str(host_uploads_dir))
+
     try:
         process = Popen(
-            cmd,
+            cmd_parts,
             stdout=sys.stdout,
             stderr=sys.stderr,
-            shell=True,
+            shell=False,
             cwd=str(docker_dir),
+            env=docker_env,
         )
 
         if action == "up" and not detach:
@@ -754,14 +769,15 @@ def docker(action, detach, profile, service, follow, env_file):
                 process.wait()
             except (KeyboardInterrupt, click.exceptions.Abort):
                 click.echo("\nShutting down services...")
-                # Run docker-compose down to gracefully stop services
-                down_cmd = "docker-compose down"
+                # Run docker compose down to gracefully stop services
+                down_cmd = ["docker", "compose", "down"]
                 down_process = Popen(
                     down_cmd,
                     stdout=sys.stdout,
                     stderr=sys.stderr,
-                    shell=True,
+                    shell=False,
                     cwd=str(docker_dir),
+                    env=docker_env,
                 )
                 down_process.wait()
         else:

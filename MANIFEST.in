@@ -7,3 +7,8 @@ recursive-include docs *.md *.png *.jpg *.gif
 recursive-exclude * __pycache__
 recursive-exclude * *.py[co]
 recursive-exclude docs/_build *
+
+prune scripts
+prune deploy
+prune data
+prune notebooks

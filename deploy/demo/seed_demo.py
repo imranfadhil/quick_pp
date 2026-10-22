@@ -711,12 +711,12 @@ def seed_demo_database(
                 full_name="Interactive Demo Visitor",
                 hashed_password=hash_password("QuickPP@Admin2026!"),
                 role="admin",
-                status="CONFIRMED",
+                status="FORCE_CHANGE_PASSWORD",
                 is_active=1,
-                mfa_enabled=1,
-                mfa_secret=generate_totp_secret(),
+                mfa_enabled=0,
+                mfa_secret=None,
                 invite_token=None,
-                last_login_at=datetime.now(timezone.utc).isoformat(),
+                last_login_at=None,
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
             session.add(admin_user)

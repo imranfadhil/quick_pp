@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2 (2026)
+- Fixed frontend API base URL resolution (`resolveApiBase` in `client.ts`) when running the standalone production server on port `5469` (`quick_pp app` and `quick_pp frontend`), routing requests directly to the FastAPI backend on port `6312`.
+- Fixed `quick_pp docker up` container volume mounts (`docker-compose.yaml`) to mount the complete `quick_pp` package (`core_analysis.py`, `saturation.py`, `scal.py`, `uncertainty.py`, `upscaling.py`, etc.) and use the pre-built frontend bundle (`build/index.js`).
+- Improved `DBConnector` and FastAPI startup (`main.py`) to automatically create parent directories for any file-backed `sqlite:///` database URL and ensure schema initialization completes before bootstrapping the default administrator.
+- Updated `seed_demo.py` so non-demo logins (`QPP_DEMO_MODE=false`) prompt for initial password and QR code MFA setup instead of using an un-scanned random TOTP secret.
+- Fixed CLI edge cases across `quick_pp app --open`, `quick_pp model-deployment`, and `quick_pp docker`, added automated Docker Hub image publishing to `scripts/release.py`, and added a comprehensive CLI unit test suite (`tests/test_cli.py`).
+
 ## 0.3.1 (2026)
 - Added **Multi-Well Conformal ML Model Training** (`MultiWellMlTrainer.svelte`, `train_multi_well_conformal_model`) to train, evaluate, and persist custom Physics-Informed Machine Learning (PIML) conformal prediction suites across project wells for Single-Well Lithology & Porosity inference.
 - Added **Automated Badhole Flagging & Lithology Mitigation** (`badhole_flagging` in `quick_pp.qaqc`, `InspectorQaqc.svelte`, `InspectorLithoPoro.svelte`) with caliper, density correction (`DRHO`), and density/neutron washout detection, log track shading, and badhole mitigation in Single-Well Lithology & Porosity evaluation.

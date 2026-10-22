@@ -42,16 +42,10 @@ services:
       - SMTP_FROM=${SMTP_FROM:-}
       - SMTP_TLS=${SMTP_TLS:-true}
     volumes:
-      - ../../../uploads:/code/uploads
-      - ../../../data:/code/data
-      - ../../../quick_pp/qaqc.py:/venv/lib/python3.11/site-packages/quick_pp/qaqc.py
-      - ../../../quick_pp/app/backend:/venv/lib/python3.11/site-packages/quick_pp/app/backend
-      - ../../../quick_pp/database:/venv/lib/python3.11/site-packages/quick_pp/database
-      - ../../../quick_pp/machine_learning:/venv/lib/python3.11/site-packages/quick_pp/machine_learning
-      - ../../../quick_pp/qaqc.py:/code/quick_pp/qaqc.py
-      - ../../../quick_pp/app/backend:/code/quick_pp/app/backend
-      - ../../../quick_pp/database:/code/quick_pp/database
-      - ../../../quick_pp/machine_learning:/code/quick_pp/machine_learning
+      - ${QPP_HOST_UPLOADS_DIR:-../../../uploads}:/code/uploads
+      - ${QPP_HOST_DATA_DIR:-../../../data}:/code/data
+      - ../..:/venv/lib/python3.11/site-packages/quick_pp
+      - ../..:/code/quick_pp
     networks:
       - qpp-network
 
@@ -71,7 +65,7 @@ services:
       - PORT=5469
       - NODE_OPTIONS=--max-old-space-size=${FRONTEND_MAX_OLD_SPACE:-4096}
     # Install deps, build the app, and run the production server
-    command: sh -c "npm install && npm run build && node build"
+    command: sh -c "if [ -f build/index.js ]; then node build/index.js; else npm install && npm run build && node build/index.js; fi"
     networks:
       - qpp-network
 

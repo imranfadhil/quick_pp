@@ -8,10 +8,12 @@ function resolveApiBase(): string {
 		return envUrl.trim().replace(/\/+$/, '');
 	}
 	if (typeof window !== 'undefined') {
-		// When running Vite dev server locally on port 5173, connect directly to FastAPI on 6312.
+		// When running Vite dev server locally on port 5173 or standalone production server on port 5469
+		// (`quick_pp app` / `quick_pp frontend`), connect directly to FastAPI on port 6312.
 		// When running behind the unified Nginx reverse proxy (port 8080 / Cloudflare Tunnel), use relative paths.
-		if (window.location.port === '5173') {
-			return 'http://localhost:6312';
+		if (window.location.port === '5173' || window.location.port === '5469') {
+			const host = window.location.hostname || 'localhost';
+			return `${window.location.protocol}//${host}:6312`;
 		}
 		return '';
 	}
@@ -402,9 +404,14 @@ async function parseErrorResponse(res: Response, fallbackMsg: string): Promise<E
 					? String(jsonErr.message)
 					: rawText;
 		} catch {
-			// If Nginx returned a 502 Bad Gateway HTML page while backend is starting
+			// If Nginx or frontend server returned an HTML error page
 			if (res.status === 502 || res.status === 503 || res.status === 504) {
 				errText = `Backend server is unreachable or starting up (HTTP ${res.status}).`;
+			} else if (
+				rawText.trimStart().toLowerCase().startsWith('<!doctype html') ||
+				rawText.trimStart().toLowerCase().startsWith('<html')
+			) {
+				errText = `Backend API endpoint returned HTTP ${res.status}. Ensure the quick_pp backend server is running on port 6312.`;
 			} else {
 				errText = rawText.slice(0, 200);
 			}

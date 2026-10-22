@@ -31,14 +31,14 @@ app = FastAPI(
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
     debug=True,
 )
-with resources.files("quick_pp.app.backend") as api_folder:
-    static_folder = api_folder / "public"
-app.mount("/static", StaticFiles(directory=static_folder), name="static")
+api_folder = resources.files("quick_pp.app.backend")
+static_folder = api_folder / "static"
+app.mount("/static", StaticFiles(directory=str(static_folder)), name="static")
 
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    return FileResponse("static/favicon.ico")
+    return FileResponse(str(static_folder / "favicon.ico"))
 
 
 # set_body and get_body required to extract request body in middleware

@@ -27,8 +27,10 @@ _db_connector_instance = None
 def get_db_connector():
     global _db_connector_instance
     if _db_connector_instance is None:
-        db_url = os.environ.get("QPP_DATABASE_URL")
-        _db_connector_instance = DBConnector(db_url=db_url)
+        from quick_pp.app.backend.utils.db import _connector
+
+        _db_connector_instance = _connector
+        _db_connector_instance.setup_db()
         logging.getLogger(__name__).info("DBConnector initialized (singleton)")
     return _db_connector_instance
 
@@ -94,9 +96,9 @@ app = FastAPI(
 )
 
 # Setup static files and templates
-with resources.files("quick_pp.app.backend") as api_folder:
-    static_folder = api_folder / "static"
-    template_folder = api_folder / "template"
+api_folder = resources.files("quick_pp.app.backend")
+static_folder = api_folder / "static"
+template_folder = api_folder / "template"
 
 app.mount("/static", StaticFiles(directory=static_folder), name="static")
 
