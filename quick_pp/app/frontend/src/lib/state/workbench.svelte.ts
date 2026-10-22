@@ -133,6 +133,14 @@ class WorkbenchState {
 	importerOpen = $state<boolean>(false);
 	aiDrawerOpen = $state<boolean>(false);
 
+	// Single-well left pane section collapse / expand / focus controls
+	sectionFocusMode = $state<boolean>(false);
+	focusedSectionTitle = $state<string | null>(null);
+	sectionBulkAction = $state<{
+		type: 'expand-all' | 'collapse-all' | 'focus';
+		seq: number;
+	}>({ type: 'collapse-all', seq: 0 });
+
 	// Shared interactive parameters between Left Pane Inspectors & Right Pane Crossplot
 	lithoParams = $state<LithoEndpointParams>({
 		model: 'ssc',
@@ -237,8 +245,40 @@ class WorkbenchState {
 		this.targetScrollDepth = depth;
 		this.cursorDepth = depth;
 	}
+
+	expandAllSections() {
+		this.sectionFocusMode = false;
+		this.sectionBulkAction = {
+			type: 'expand-all',
+			seq: this.sectionBulkAction.seq + 1
+		};
+	}
+
+	collapseAllSections() {
+		this.focusedSectionTitle = null;
+		this.sectionBulkAction = {
+			type: 'collapse-all',
+			seq: this.sectionBulkAction.seq + 1
+		};
+	}
+
+	toggleFocusMode() {
+		this.sectionFocusMode = !this.sectionFocusMode;
+		if (this.sectionFocusMode) {
+			this.sectionBulkAction = {
+				type: 'focus',
+				seq: this.sectionBulkAction.seq + 1
+			};
+		}
+	}
+
+	triggerSectionFocus(title: string) {
+		this.focusedSectionTitle = title;
+		this.sectionBulkAction = {
+			type: 'focus',
+			seq: this.sectionBulkAction.seq + 1
+		};
+	}
 }
 
 export const workbench = new WorkbenchState();
-
-

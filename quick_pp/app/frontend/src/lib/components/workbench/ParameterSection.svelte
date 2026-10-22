@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { workbench } from '$lib/state/workbench.svelte';
 
 	interface Props {
 		title: string;
@@ -8,18 +9,44 @@
 		children: Snippet;
 	}
 
-	let { title, badge, defaultOpen = true, children }: Props = $props();
-	let open = $state(true);
+	let { title, badge, defaultOpen, children }: Props = $props();
+	let open = $state(defaultOpen ?? workbench.scope !== 'single-well');
+	let lastSeenSeq = workbench.sectionBulkAction.seq;
 
 	$effect(() => {
-		open = defaultOpen;
+		const action = workbench.sectionBulkAction;
+		if (workbench.scope === 'single-well' && action.seq !== lastSeenSeq) {
+			lastSeenSeq = action.seq;
+			if (action.type === 'expand-all') {
+				open = true;
+			} else if (action.type === 'collapse-all') {
+				open = false;
+			} else if (action.type === 'focus') {
+				open = workbench.focusedSectionTitle === title;
+			}
+		}
 	});
+
+	function handleToggle() {
+		const nextOpen = !open;
+		open = nextOpen;
+		if (workbench.scope === 'single-well') {
+			if (nextOpen) {
+				workbench.focusedSectionTitle = title;
+				if (workbench.sectionFocusMode) {
+					workbench.triggerSectionFocus(title);
+				}
+			} else if (workbench.focusedSectionTitle === title) {
+				workbench.focusedSectionTitle = null;
+			}
+		}
+	}
 </script>
 
 <div class="border-b border-[var(--border-hairline)] bg-[var(--bg-surface)]">
 	<button
 		type="button"
-		onclick={() => (open = !open)}
+		onclick={handleToggle}
 		class="flex h-7 w-full items-center justify-between bg-[var(--bg-subtle)] px-2.5 text-left text-[11px] font-semibold tracking-wide text-[var(--text-primary)] uppercase hover:bg-slate-200/70 transition-colors"
 	>
 		<span class="flex items-center gap-1.5 truncate">
@@ -38,9 +65,21 @@
 	</button>
 
 	{#if open}
-		<div class="space-y-1 px-2.5 py-2">
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div
+			onpointerdown={() => {
+				if (workbench.scope === 'single-well') {
+					workbench.focusedSectionTitle = title;
+				}
+			}}
+			onfocusin={() => {
+				if (workbench.scope === 'single-well') {
+					workbench.focusedSectionTitle = title;
+				}
+			}}
+			class="space-y-1 px-2.5 py-2"
+		>
 			{@render children()}
 		</div>
 	{/if}
 </div>
-

@@ -226,21 +226,62 @@
 		<!-- LEFT PANE (25% default width): Parameter Inspector -->
 		<Pane defaultSize={25} minSize={18} maxSize={42} class="h-full overflow-hidden">
 			{#if workbench.scope === 'single-well'}
-				{#if workbench.singleWellStep === 'qaqc'}
-					<InspectorQaqc />
-				{:else if workbench.singleWellStep === 'ancillary'}
-					<InspectorAncillary />
-				{:else if workbench.singleWellStep === 'litho-poro'}
-					<InspectorLithoPoro />
-				{:else if workbench.singleWellStep === 'perm'}
-					<InspectorPerm />
-				{:else if workbench.singleWellStep === 'saturation'}
-					<InspectorSaturation />
-				{:else if workbench.singleWellStep === 'scal'}
-					<InspectorScal />
-				{:else}
-					<InspectorResSum />
-				{/if}
+				<div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
+					{#if workbench.singleWellStep !== 'ancillary'}
+						<div
+							class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 text-[10px] select-none"
+						>
+							<span class="font-bold tracking-wider text-[var(--text-muted)] uppercase">
+								Sections
+							</span>
+							<div class="flex items-center gap-1">
+								<button
+									type="button"
+									onclick={() => workbench.expandAllSections()}
+									title="Expand all parameter sections"
+									class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 font-medium text-[var(--text-secondary)] transition-colors hover:bg-slate-100 hover:text-[var(--text-primary)]"
+								>
+									Show All
+								</button>
+								<button
+									type="button"
+									onclick={() => workbench.collapseAllSections()}
+									title="Collapse all parameter sections"
+									class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 font-medium text-[var(--text-secondary)] transition-colors hover:bg-slate-100 hover:text-[var(--text-primary)]"
+								>
+									Collapse All
+								</button>
+								<button
+									type="button"
+									onclick={() => workbench.toggleFocusMode()}
+									title="Focus mode: only open the selected section and automatically close others"
+									class="h-5 rounded-xs border px-1.5 font-medium transition-colors {workbench.sectionFocusMode
+										? 'border-[var(--accent-primary)] bg-blue-600 font-semibold text-white'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100 hover:text-[var(--text-primary)]'}"
+								>
+									Focus
+								</button>
+							</div>
+						</div>
+					{/if}
+					<div class="min-h-0 flex-1 overflow-hidden">
+						{#if workbench.singleWellStep === 'qaqc'}
+							<InspectorQaqc />
+						{:else if workbench.singleWellStep === 'ancillary'}
+							<InspectorAncillary />
+						{:else if workbench.singleWellStep === 'litho-poro'}
+							<InspectorLithoPoro />
+						{:else if workbench.singleWellStep === 'perm'}
+							<InspectorPerm />
+						{:else if workbench.singleWellStep === 'saturation'}
+							<InspectorSaturation />
+						{:else if workbench.singleWellStep === 'scal'}
+							<InspectorScal />
+						{:else}
+							<InspectorResSum />
+						{/if}
+					</div>
+				</div>
 			{:else}
 				{#if workbench.multiWellStep === 'inventory'}
 					<MultiWellInventory />
