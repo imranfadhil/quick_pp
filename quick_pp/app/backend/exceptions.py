@@ -1,6 +1,11 @@
 """Exception definition"""
 
-from psycopg2.errors import UniqueViolation
+try:
+    from psycopg2.errors import UniqueViolation
+except ImportError:  # pragma: no cover - optional Postgres driver
+    class UniqueViolation(Exception):  # type: ignore[no-redef]
+        pass
+
 from sqlalchemy.exc import IntegrityError
 
 

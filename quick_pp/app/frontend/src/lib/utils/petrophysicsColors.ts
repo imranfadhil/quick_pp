@@ -341,16 +341,22 @@ export const STANDARD_CURVE_META: Record<string, CurveMeta> = {
 		logScale: true
 	},
 	SWT: { mnemonic: 'SWT', label: 'Total Water Saturation', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.water, reversed: true },
-	SWE: { mnemonic: 'SWE', label: 'Effective Water Saturation', unit: 'v/v', min: 0, max: 1, color: '#0284C7', reversed: true }
+	SWE: { mnemonic: 'SWE', label: 'Effective Water Saturation', unit: 'v/v', min: 0, max: 1, color: '#0284C7', reversed: true },
+	BS: { mnemonic: 'BS', label: 'Bit Size', unit: 'in', min: 6, max: 16, color: '#64748B' },
+	DCALI: { mnemonic: 'DCALI', label: 'Differential Caliper', unit: 'in', min: -2, max: 8, color: '#DC2626' },
+	DRHO: { mnemonic: 'DRHO', label: 'Density Correction', unit: 'g/cc', min: -0.25, max: 0.25, color: '#D97706' },
+	BADHOLE: { mnemonic: 'BADHOLE', label: 'Badhole Flag', unit: 'flag', min: 0, max: 1, color: '#DC2626' }
 };
 
 export function getCurveUnit(mnemonic: string): string {
 	const upper = mnemonic.toUpperCase();
 	if (STANDARD_CURVE_META[upper]) return STANDARD_CURVE_META[upper].unit;
+	if (upper.includes('CALI') || upper === 'BS' || upper === 'BITSIZE') return 'in';
+	if (upper === 'BADHOLE' || upper === 'BAD_HOLE' || upper.endsWith('_FLAG')) return 'flag';
 	if (upper.includes('NPHI') || upper.includes('PHI') || upper.startsWith('V') || upper.startsWith('SW') || upper === 'BVW') {
 		return 'v/v';
 	}
-	if (upper.includes('RHOB') || upper.includes('DEN')) return 'g/cc';
+	if (upper.includes('RHOB') || upper.includes('DEN') || upper === 'DRHO') return 'g/cc';
 	if (upper.includes('PERM')) return 'mD';
 	if (upper.startsWith('R') && upper.length <= 5) return 'ohm.m';
 	if (upper.includes('DEPTH') || upper.includes('DEPT') || upper === 'TVD') return 'm';

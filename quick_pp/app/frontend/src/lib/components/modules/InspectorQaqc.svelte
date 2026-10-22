@@ -9,6 +9,9 @@
 
 	const REQUIRED_STANDARD = ['GR', 'RT', 'NPHI', 'RHOB', 'CALI', 'DTC', 'PEF'];
 	const EVALUATED_CURVES = [
+		'BADHOLE',
+		'BS',
+		'DCALI',
 		'GR_CORR',
 		'NPHI_CORR',
 		'RHOB_CORR',
@@ -282,6 +285,104 @@
 	let surfaceTemp = $state(75.0);
 	let tempGrad = $state(1.5);
 	let salinityPpm = $state(30000.0);
+
+	// Badhole Flagging diagnostics summary
+	let badholeSummary = $state<{
+		total_samples: number;
+		flagged_count: number;
+		flagged_pct: number;
+		cali_flagged: number;
+		drho_flagged: number;
+		rhob_nphi_flagged: number;
+		rugosity_flagged: number;
+	} | null>(null);
+
+	let activeBadholeStats = $derived.by(() => {
+		const bh =
+			wellData.curves['BADHOLE'] ??
+			wellData.curves['BAD_HOLE'] ??
+			wellData.curves['BAD_HOLE_FLAG'];
+		const indices = wellData.visibleIndices;
+		if (!bh || indices.length === 0) {
+			return { present: false, count: 0, total: indices.length, pct: 0 };
+		}
+		let count = 0;
+		for (const idx of indices) {
+			if (Number.isFinite(bh[idx]) && bh[idx] >= 0.5) count++;
+		}
+		return {
+			present: true,
+			count,
+			total: indices.length,
+			pct: indices.length > 0 ? (count / indices.length) * 100 : 0
+		};
+	});
+
+	async function runBadholeFlagging(persist: boolean = false) {
+		if (!workbench.projectId || !workbench.wellId) return;
+		wellData.isCalculating = true;
+		wellData.lastError = null;
+		const bp = workbench.badholeParams;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/badhole_flagging`,
+				{
+					use_cali: bp.useCali,
+					cali_threshold: bp.caliThreshold,
+					auto_bitsize: bp.autoBitsize,
+					bitsize_default: bp.bitsizeDefault,
+					use_drho: bp.useDrho,
+					drho_threshold: bp.drhoThreshold,
+					use_rhob_nphi: bp.useRhobNphi,
+					rhob_min: bp.rhobMin,
+					rhob_max: bp.rhobMax,
+					nphi_max: bp.nphiMax,
+					exclude_coal: bp.excludeCoal,
+					use_rugosity: bp.useRugosity,
+					rugosity_window: Math.round(bp.rugosityWindow),
+					rhob_trend_factor: bp.rhobTrendFactor,
+					cali_spike_threshold: bp.caliSpikeThreshold,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					save: persist
+				}
+			);
+			if (res.data) {
+				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.markModuleComputed('qaqc-badhole', res.data);
+			}
+			if (res.badhole_summary) {
+				badholeSummary = res.badhole_summary;
+			}
+			if (persist) {
+				wellData.lastSavedMessage = 'Badhole Flags Saved ✓';
+			}
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Badhole flagging error';
+		} finally {
+			wellData.isCalculating = false;
+		}
+	}
+
+	async function saveBadholeFlagging() {
+		await wellData.saveModuleComputed('qaqc-badhole', 'Badhole Flags Saved ✓');
+	}
+
+	function selectFlaggedBadholeInLasso() {
+		const bh =
+			wellData.curves['BADHOLE'] ??
+			wellData.curves['BAD_HOLE'] ??
+			wellData.curves['BAD_HOLE_FLAG'];
+		if (!bh) return;
+		const flaggedIndices: number[] = [];
+		for (const idx of wellData.visibleIndices) {
+			if (Number.isFinite(bh[idx]) && bh[idx] >= 0.5) {
+				flaggedIndices.push(idx);
+			}
+		}
+		workbench.setBrushedIndices(flaggedIndices);
+	}
 
 	async function runEnvCorrections(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
@@ -840,6 +941,279 @@
 					{editStatusMsg}
 				</div>
 			{/if}
+		</ParameterSection>
+
+		<ParameterSection
+			title="Badhole Flagging"
+			badge={activeBadholeStats.present
+				? `${activeBadholeStats.count} pts (${fmtNum(activeBadholeStats.pct, 1)}%)`
+				: 'CALI / DRHO / RHOB'}
+		>
+			<!-- Status Banner & Quick Actions -->
+			<div class="mb-2 flex items-center justify-between rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1.5 text-[10.5px]">
+				<div class="flex items-center gap-1.5">
+					<span
+						class="inline-block h-2 w-2 rounded-full {activeBadholeStats.count > 0
+							? 'bg-red-600'
+							: activeBadholeStats.present
+								? 'bg-emerald-500'
+								: 'bg-slate-300'}"
+					></span>
+					{#if activeBadholeStats.present}
+						<span class="font-medium text-[var(--text-primary)]">
+							Flagged: <strong class="mono-num text-red-700">{activeBadholeStats.count}</strong> / {activeBadholeStats.total} ({fmtNum(activeBadholeStats.pct, 1)}%)
+						</span>
+					{:else}
+						<span class="text-[var(--text-muted)]">No BADHOLE curve computed yet</span>
+					{/if}
+				</div>
+				{#if activeBadholeStats.count > 0}
+					<button
+						type="button"
+						onclick={selectFlaggedBadholeInLasso}
+						class="rounded-xs border border-red-200 bg-red-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-red-800 hover:bg-red-100"
+						title="Highlight all flagged badhole depths across log tracks and crossplot"
+					>
+						Brush Flagged ({activeBadholeStats.count})
+					</button>
+				{/if}
+			</div>
+
+			<!-- 1. Differential Caliper Criterion -->
+			<div class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<div class="flex items-center justify-between">
+					<label class="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)] cursor-pointer">
+						<input
+							type="checkbox"
+							bind:checked={workbench.badholeParams.useCali}
+							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+						/>
+						<span>1. Differential Caliper (|CALI − BS|)</span>
+					</label>
+					<span class="mono-num text-[9.5px] {curveList.includes('CALI') ? 'text-emerald-700 font-semibold' : 'text-slate-400'}">
+						{curveList.includes('CALI') ? 'CALI ✓' : 'No CALI'}
+					</span>
+				</div>
+
+				{#if workbench.badholeParams.useCali}
+					<div class="mt-1 space-y-1 pl-1">
+						<label class="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)] cursor-pointer">
+							<input
+								type="checkbox"
+								bind:checked={workbench.badholeParams.autoBitsize}
+								class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+							/>
+							<span>Auto-Detect Casing Sections & Bit Size (BS)</span>
+						</label>
+						<div class="grid grid-cols-2 gap-x-2">
+							<NumericScrubber
+								label="Washout ΔCALI"
+								bind:value={workbench.badholeParams.caliThreshold}
+								unit="in"
+								min={0.5}
+								max={8.0}
+								step={0.25}
+								decimals={2}
+								onrun={() => runBadholeFlagging(false)}
+							/>
+							<NumericScrubber
+								label={workbench.badholeParams.autoBitsize ? 'Fallback BS' : 'Bit Size (BS)'}
+								bind:value={workbench.badholeParams.bitsizeDefault}
+								unit="in"
+								min={4.5}
+								max={26.0}
+								step={0.25}
+								decimals={2}
+								onrun={() => runBadholeFlagging(false)}
+							/>
+						</div>
+					</div>
+				{/if}
+			</div>
+
+			<!-- 2. Density Correction (DRHO) Criterion -->
+			<div class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<div class="flex items-center justify-between">
+					<label class="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)] cursor-pointer">
+						<input
+							type="checkbox"
+							bind:checked={workbench.badholeParams.useDrho}
+							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+						/>
+						<span>2. Density Correction (|DRHO|)</span>
+					</label>
+					<span class="mono-num text-[9.5px] {curveList.includes('DRHO') || curveList.includes('HDRA') || curveList.includes('DCOR') ? 'text-emerald-700 font-semibold' : 'text-slate-400'}">
+						{curveList.includes('DRHO') || curveList.includes('HDRA') || curveList.includes('DCOR') ? 'DRHO ✓' : 'No DRHO'}
+					</span>
+				</div>
+
+				{#if workbench.badholeParams.useDrho}
+					<div class="mt-1 pl-1">
+						<NumericScrubber
+							label="Max |DRHO| Cutoff"
+							bind:value={workbench.badholeParams.drhoThreshold}
+							unit="g/cc"
+							min={0.05}
+							max={0.5}
+							step={0.01}
+							decimals={2}
+							onrun={() => runBadholeFlagging(false)}
+						/>
+					</div>
+				{/if}
+			</div>
+
+			<!-- 3. RHOB / NPHI Pad Standoff Cutoffs -->
+			<div class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<div class="flex items-center justify-between">
+					<label class="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)] cursor-pointer">
+						<input
+							type="checkbox"
+							bind:checked={workbench.badholeParams.useRhobNphi}
+							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+						/>
+						<span>3. RHOB / NPHI Standoff Cutoffs</span>
+					</label>
+					<span class="mono-num text-[9.5px] text-[var(--text-muted)]">Pad Standoff</span>
+				</div>
+
+				{#if workbench.badholeParams.useRhobNphi}
+					<div class="mt-1 space-y-1 pl-1">
+						<div class="grid grid-cols-3 gap-x-1.5">
+							<NumericScrubber
+								label="Min RHOB"
+								bind:value={workbench.badholeParams.rhobMin}
+								unit="g/cc"
+								min={1.2}
+								max={2.4}
+								step={0.05}
+								decimals={2}
+								onrun={() => runBadholeFlagging(false)}
+							/>
+							<NumericScrubber
+								label="Max RHOB"
+								bind:value={workbench.badholeParams.rhobMax}
+								unit="g/cc"
+								min={2.6}
+								max={3.2}
+								step={0.05}
+								decimals={2}
+								onrun={() => runBadholeFlagging(false)}
+							/>
+							<NumericScrubber
+								label="Max NPHI"
+								bind:value={workbench.badholeParams.nphiMax}
+								unit="v/v"
+								min={0.3}
+								max={0.8}
+								step={0.02}
+								decimals={2}
+								onrun={() => runBadholeFlagging(false)}
+							/>
+						</div>
+						<label class="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)] cursor-pointer">
+							<input
+								type="checkbox"
+								bind:checked={workbench.badholeParams.excludeCoal}
+								class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+							/>
+							<span>Protect Coal Beds from Low-RHOB Badhole Flag</span>
+						</label>
+					</div>
+				{/if}
+			</div>
+
+			<!-- 4. Rolling Trend & Rugosity Spike Detection -->
+			<div class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<div class="flex items-center justify-between">
+					<label class="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)] cursor-pointer">
+						<input
+							type="checkbox"
+							bind:checked={workbench.badholeParams.useRugosity}
+							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+						/>
+						<span>4. Rolling Rugosity & RHOB Drop</span>
+					</label>
+					<span class="mono-num text-[9.5px] text-[var(--text-muted)]">Spike Filter</span>
+				</div>
+
+				{#if workbench.badholeParams.useRugosity}
+					<div class="mt-1 grid grid-cols-3 gap-x-1.5 pl-1">
+						<NumericScrubber
+							label="RHOB Drop"
+							bind:value={workbench.badholeParams.rhobTrendFactor}
+							min={0.02}
+							max={0.25}
+							step={0.01}
+							decimals={2}
+							onrun={() => runBadholeFlagging(false)}
+						/>
+						<NumericScrubber
+							label="CALI Spike"
+							bind:value={workbench.badholeParams.caliSpikeThreshold}
+							unit="in"
+							min={0.2}
+							max={4.0}
+							step={0.1}
+							decimals={2}
+							onrun={() => runBadholeFlagging(false)}
+						/>
+						<NumericScrubber
+							label="Window"
+							bind:value={workbench.badholeParams.rugosityWindow}
+							unit="pts"
+							min={5}
+							max={61}
+							step={2}
+							decimals={0}
+							onrun={() => runBadholeFlagging(false)}
+						/>
+					</div>
+				{/if}
+			</div>
+
+			{#if badholeSummary}
+				<div class="mb-1.5 grid grid-cols-4 gap-1 rounded-sm border border-red-200/80 bg-red-50/40 p-1 text-center text-[9.5px]">
+					<div>
+						<div class="text-[var(--text-muted)]">CALI</div>
+						<div class="mono-num font-bold text-slate-800">{badholeSummary.cali_flagged}</div>
+					</div>
+					<div>
+						<div class="text-[var(--text-muted)]">DRHO</div>
+						<div class="mono-num font-bold text-slate-800">{badholeSummary.drho_flagged}</div>
+					</div>
+					<div>
+						<div class="text-[var(--text-muted)]">RHOB/NPHI</div>
+						<div class="mono-num font-bold text-slate-800">{badholeSummary.rhob_nphi_flagged}</div>
+					</div>
+					<div>
+						<div class="text-[var(--text-muted)]">Rugosity</div>
+						<div class="mono-num font-bold text-slate-800">{badholeSummary.rugosity_flagged}</div>
+					</div>
+				</div>
+			{/if}
+
+			<div class="mt-1 flex gap-1.5">
+				<button
+					type="button"
+					disabled={wellData.isCalculating}
+					onclick={() => runBadholeFlagging(false)}
+					class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+				>
+					{wellData.isCalculating ? 'Flagging...' : 'Flag Badhole'}
+				</button>
+				<button
+					type="button"
+					disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-badhole')}
+					onclick={saveBadholeFlagging}
+					title={wellData.hasPendingComputed('qaqc-badhole')
+						? 'Save BADHOLE, BS, and DCALI curves directly to the well'
+						: 'Click Flag Badhole first to preview flags before saving'}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
+				>
+					Save
+				</button>
+			</div>
 		</ParameterSection>
 
 		<ParameterSection

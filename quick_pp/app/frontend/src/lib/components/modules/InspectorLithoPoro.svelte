@@ -71,6 +71,34 @@
 
 	let lastLoadedModelsProjectId = '';
 
+	let badholeStats = $derived.by(() => {
+		const bh =
+			wellData.curves['BADHOLE'] ??
+			wellData.curves['BAD_HOLE'] ??
+			wellData.curves['BAD_HOLE_FLAG'];
+		const indices = wellData.visibleIndices;
+		if (!bh || indices.length === 0) {
+			return { present: false, count: 0, total: indices.length, pct: 0 };
+		}
+		let count = 0;
+		for (const idx of indices) {
+			if (Number.isFinite(bh[idx]) && bh[idx] >= 0.5) count++;
+		}
+		return {
+			present: true,
+			count,
+			total: indices.length,
+			pct: indices.length > 0 ? (count / indices.length) * 100 : 0
+		};
+	});
+
+	const BADHOLE_TREATMENT_LABELS: Record<string, string> = {
+		vsh_gr: 'Litho from GR',
+		interpolate: 'Interpolate',
+		ignore: 'Ignore (NaN)',
+		none: 'Use Normally'
+	};
+
 	$effect(() => {
 		const pid = workbench.projectId ? String(workbench.projectId) : '';
 		if (pid && pid !== lastLoadedModelsProjectId) {
@@ -139,7 +167,8 @@
 			coal_rhob_max: lp.coalRhobMax,
 			coal_nphi_min: lp.coalNphiMin,
 			coal_window_size: Math.round(lp.coalWindowSize),
-			coal_trend_factor: lp.coalTrendFactor
+			coal_trend_factor: lp.coalTrendFactor,
+			badhole_treatment: lp.badholeTreatment
 		};
 
 		try {
@@ -219,6 +248,8 @@
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
 						fluid_point: [lp.fluidNphi, lp.fluidRhob],
 						silt_line_angle: lp.siltLineAngle,
+						gr_clean: lp.grClean,
+						gr_clay: lp.grClay,
 						...coalArgs,
 						...filterArgs
 					} as any
@@ -533,6 +564,65 @@
 					onrun={() => executeLithoPoro(false)}
 				/>
 			{/if}
+		</ParameterSection>
+
+		<ParameterSection
+			title="Badhole Interval Treatment"
+			badge={badholeStats.present && badholeStats.count > 0
+				? `${badholeStats.count} pts · ${BADHOLE_TREATMENT_LABELS[workbench.lithoParams.badholeTreatment] ?? 'Active'}`
+				: BADHOLE_TREATMENT_LABELS[workbench.lithoParams.badholeTreatment] ?? 'GR Fallback'}
+		>
+			<div class="mb-1.5 flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10.5px]">
+				<div class="flex items-center gap-1.5">
+					<span
+						class="inline-block h-2 w-2 rounded-full {badholeStats.count > 0
+							? 'bg-red-600'
+							: badholeStats.present
+								? 'bg-emerald-500'
+								: 'bg-slate-300'}"
+					></span>
+					{#if badholeStats.present}
+						<span class="text-[var(--text-primary)]">
+							BADHOLE: <strong class="mono-num text-red-700">{badholeStats.count}</strong> / {badholeStats.total} ({fmtNum(badholeStats.pct, 1)}%)
+						</span>
+					{:else}
+						<span class="text-[var(--text-muted)]">No BADHOLE flag curve yet</span>
+					{/if}
+				</div>
+				<button
+					type="button"
+					onclick={() => (workbench.singleWellStep = 'qaqc')}
+					class="text-[10px] font-semibold text-blue-700 hover:underline"
+				>
+					Configure in QAQC →
+				</button>
+			</div>
+
+			<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
+				<span class="text-xs font-medium text-[var(--text-primary)]">Badhole Action</span>
+				<select
+					bind:value={workbench.lithoParams.badholeTreatment}
+					onchange={() => executeLithoPoro(false)}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+				>
+					<option value="vsh_gr">Lithology from GR</option>
+					<option value="interpolate">Interpolate Intervals</option>
+					<option value="ignore">Ignore / Nullify (NaN)</option>
+					<option value="none">Use Normally</option>
+				</select>
+			</div>
+
+			<div class="mt-1 rounded-xs bg-[var(--bg-subtle)] px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]">
+				{#if workbench.lithoParams.badholeTreatment === 'vsh_gr'}
+					Uses <strong>Vsh from GR</strong> (<span class="mono-num">VCLAY</span>, <span class="mono-num">VSAND = 1 − VCLAY</span>) and reconstructs washout-affected <span class="mono-num">RHOB</span> / <span class="mono-num">PHIT</span> from GR &amp; NPHI in flagged badhole intervals.
+				{:else if workbench.lithoParams.badholeTreatment === 'interpolate'}
+					Linearly interpolates mineral volumes and porosity (<span class="mono-num">PHIT</span>, <span class="mono-num">PHIE</span>) across flagged washout intervals from adjacent good-hole depths.
+				{:else if workbench.lithoParams.badholeTreatment === 'ignore'}
+					Nullifies (<span class="mono-num">NaN</span>) lithology volumes and porosity curves in flagged badhole intervals and excludes them from Core QC.
+				{:else}
+					Evaluates NPHI/RHOB normally without overriding washout intervals.
+				{/if}
+			</div>
 		</ParameterSection>
 
 		<ParameterSection

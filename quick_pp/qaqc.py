@@ -49,121 +49,308 @@ def handle_outer_limit(data, fill=False):
     return data
 
 
-def badhole_flagging(data, thold=4):
-    """Generate a BADHOLE flag based on caliper and bit size information.
+def badhole_flagging(
+    data: pd.DataFrame,
+    thold: float = 4.0,
+    use_cali: bool = True,
+    auto_bitsize: bool = True,
+    bitsize_default: float = 8.5,
+    use_drho: bool = False,
+    drho_threshold: float = 0.15,
+    use_rhob_nphi: bool = False,
+    rhob_min: float = 1.95,
+    rhob_max: float = 2.95,
+    nphi_max: float = 0.45,
+    exclude_coal: bool = True,
+    use_rugosity: bool = False,
+    rugosity_window: int = 21,
+    rhob_trend_factor: float = 0.05,
+    cali_spike_threshold: float = 0.5,
+) -> pd.DataFrame:
+    """Generate a BADHOLE flag based on caliper, DRHO, density/neutron pad standoff bounds, and rugosity spikes.
 
-    This function first estimates the bit size for different depth intervals if not
-    already provided, using a change-point detection algorithm on the caliper log.
-    It then flags sections as 'badhole' where the absolute difference between the
-    caliper reading and the bit size exceeds a specified threshold.
-
-    The bit size estimation is a modified approach based on the method described at
-    https://hallau.world/post/bitsize-from-caliper/
+    Supports four complementary petrophysical badhole detection criteria:
+    1. **Differential Caliper (`use_cali=True`)**: Estimates bit size (`BS`) from `CALI`
+       change-point detection (when `auto_bitsize=True` and `BS` is absent) or uses
+       `bitsize_default`, and flags intervals where `|CALI - BS| >= thold`.
+    2. **Density Correction (`use_drho=True`)**: Flags intervals where `|DRHO| > drho_threshold`
+       (e.g., excessive mudcake or washout pad standoff > 0.15 g/cc).
+    3. **Bulk Density / Neutron Pad Standoff Bounds (`use_rhob_nphi=True`)**: Flags extreme washout
+       readings where `RHOB < rhob_min`, `RHOB > rhob_max`, or `NPHI > nphi_max` (optionally
+       excluding flagged coal seams when `exclude_coal=True`).
+    4. **Rolling Trend / Rugosity Spike Detection (`use_rugosity=True`)**: Flags sharp borehole
+       rugosity washout spikes where `RHOB` drops below its local rolling mean by more than
+       `rhob_trend_factor` or where `|CALI - rolling_median(CALI)| > cali_spike_threshold`.
 
     Args:
-        data (pd.DataFrame): The input DataFrame, which must contain 'DEPTH' and 'CALI' columns.
-        thold (int, optional): The threshold for the difference between caliper and bit size to flag a badhole. Defaults to 4.
+        data (pd.DataFrame): Input DataFrame containing well log curves.
+        thold (float, optional): Differential caliper threshold `|CALI - BS|` (inches). Defaults to 4.0.
+        use_cali (bool, optional): Flag badhole using caliper vs bit size. Defaults to True.
+        auto_bitsize (bool, optional): Automatically estimate bit size per hole section from `CALI`
+            when `BS` is not provided. Defaults to True.
+        bitsize_default (float, optional): Nominal/fallback bit size (inches). Defaults to 8.5.
+        use_drho (bool, optional): Flag badhole where `|DRHO| > drho_threshold`. Defaults to False.
+        drho_threshold (float, optional): Maximum allowable `|DRHO|` (g/cc). Defaults to 0.15.
+        use_rhob_nphi (bool, optional): Flag badhole using RHOB/NPHI washout bounds. Defaults to False.
+        rhob_min (float, optional): Minimum valid bulk density before washout flag (g/cc). Defaults to 1.95.
+        rhob_max (float, optional): Maximum valid bulk density before flag (g/cc). Defaults to 2.95.
+        nphi_max (float, optional): Maximum valid neutron porosity before washout flag (v/v). Defaults to 0.45.
+        exclude_coal (bool, optional): Exclude coal intervals from RHOB/NPHI bound & rugosity flags. Defaults to True.
+        use_rugosity (bool, optional): Flag local rugosity spikes from rolling RHOB/CALI trends. Defaults to False.
+        rugosity_window (int, optional): Rolling window size (samples) for rugosity trend. Defaults to 21.
+        rhob_trend_factor (float, optional): Fractional drop below rolling RHOB mean to flag spike. Defaults to 0.05.
+        cali_spike_threshold (float, optional): Local caliper deviation from rolling median (inches). Defaults to 0.5.
 
     Returns:
-        pd.DataFrame: The DataFrame with an added 'BADHOLE' flag column.
+        pd.DataFrame: DataFrame with added `'BADHOLE'` (0 or 1), `'BS'`, and `'DCALI'` columns.
     """
-    import ruptures as rpt
     import scipy.stats
     from scipy.signal import find_peaks
 
+    try:
+        import ruptures as rpt
+    except ImportError:
+        rpt = None  # type: ignore[assignment]
+
     df = data.copy()
-    if "CALI" not in df.columns:
-        df["BADHOLE"] = 0
+    if df.empty:
+        df["BADHOLE"] = pd.Series(dtype=int)
         return df
 
-    def reject_outliers(series, m=3):
-        # Works on a pandas Series
-        series = series.where((series > 6.0) & (series < 21.5))  # Widened range
-        d = np.abs(series - series.median())
+    has_well_col = "WELL_NAME" in df.columns
+    if not has_well_col:
+        df["WELL_NAME"] = "WELL_1"
+
+    has_depth_col = "DEPTH" in df.columns
+    if not has_depth_col and "DEPT" in df.columns:
+        df["DEPTH"] = df["DEPT"]
+
+    def reject_outliers(series: pd.Series, m: float = 3.0) -> pd.Series:
+        s_clean = series.where((series > 4.5) & (series < 24.0))
+        med = s_clean.median()
+        d = np.abs(s_clean - med)
         mdev = np.nanmedian(d)
-        s = d / mdev if mdev else 0.0
-        return series.where(s < m, series.median())
+        s = d / mdev if (mdev and not np.isnan(mdev) and mdev > 1e-6) else 0.0
+        return s_clean.where(s < m, med)
 
     bit_sizes = {6.0: 6.0, 8.5: 8.5, 12.25: 12.25, 17.5: 17.5}
+    default_bs = float(bitsize_default) if bitsize_default and bitsize_default > 0 else 8.5
 
-    model = "rbf"
+    if "BS" not in df.columns:
+        df["BS"] = np.nan
+    else:
+        df["BS"] = pd.to_numeric(df["BS"], errors="coerce")
+
     processed_wells = []
+    for well, well_data in df.groupby("WELL_NAME", sort=False):
+        if "DEPTH" in well_data.columns:
+            well_data = well_data.sort_values(by="DEPTH").copy()
+        else:
+            well_data = well_data.copy()
 
-    df["BS"] = np.nan if "BS" not in df.columns else df["BS"]
+        well_data["ESTIMATED_BITSIZE"] = default_bs
+        cali_s = (
+            pd.to_numeric(well_data["CALI"], errors="coerce")
+            if "CALI" in well_data.columns
+            else pd.Series(np.nan, index=well_data.index, dtype=float)
+        )
 
-    for well, well_data in df.groupby("WELL_NAME"):
-        well_data = well_data.sort_values(by="DEPTH").copy()
-        well_data["BIN"] = 0
-        well_data["ESTIMATED_BITSIZE"] = 8.5
-        if not well_data[well_data["CALI"].notna()].empty:
+        if auto_bitsize and cali_s.notna().any():
             logger.info(f"[feature_transformer `badhole_flag`] Processing {well}.")
-
-            signal_data = well_data["CALI"]
-            signal_data = reject_outliers(signal_data)
+            signal_data = reject_outliers(cali_s)
             clean_signal = signal_data.dropna()
 
-            try:
-                # Identifying number of clusters/breakpoints from Kernel Density Estimation
-                if clean_signal.nunique() > 1:
-                    kde = scipy.stats.gaussian_kde(clean_signal)
-                    evaluated = kde.evaluate(
-                        np.linspace(clean_signal.min(), clean_signal.max(), 100)
+            estimated_ok = False
+            if rpt is not None and len(clean_signal) >= 60:
+                try:
+                    if clean_signal.nunique() > 1:
+                        kde = scipy.stats.gaussian_kde(clean_signal)
+                        evaluated = kde.evaluate(
+                            np.linspace(clean_signal.min(), clean_signal.max(), 100)
+                        )
+                        peaks, _ = find_peaks(evaluated, height=0.1)
+                    else:
+                        peaks = []
+
+                    jump = min(60, max(5, len(signal_data) // 4))
+                    algo = rpt.BottomUp(model="rbf", jump=jump).fit(
+                        signal_data.ffill().bfill().to_numpy()
                     )
-                    peaks, _ = find_peaks(evaluated, height=0.1)
-                else:
-                    peaks = []
+                    n_bkps = min(len(peaks), max(0, (len(signal_data) // jump) - 1))
+                    my_bkps = algo.predict(n_bkps=n_bkps) if n_bkps > 0 else [len(signal_data)]
 
-                jump = 60
-                algo = rpt.BottomUp(model=model, jump=jump).fit(signal_data.to_numpy())
-                my_bkps = algo.predict(n_bkps=len(peaks))
+                    indices = [0] + my_bkps
+                    bins = list(zip(indices[:-1], indices[1:], strict=True))
+                    cali_np = cali_s.to_numpy(dtype=float)
+                    fallback_q05 = float(np.nanpercentile(clean_signal, 5))
 
-                # Determine the bit sizes based on break points
-                indices = [0] + my_bkps
-                bins = list(zip(indices[:-1], indices[1:], strict=True))
-                ii = pd.IntervalIndex.from_tuples(bins, closed="left")
-                well_data["BIN"] = pd.cut(well_data.reset_index().index, bins=ii)
-                bits_percentiles = well_data.groupby("BIN")["CALI"].describe(
-                    percentiles=[0.01]
-                )
+                    estimated_bits = []
+                    for start_idx, end_idx in bins:
+                        seg = cali_np[start_idx:end_idx]
+                        valid_seg = seg[np.isfinite(seg)]
+                        val = (
+                            float(np.nanpercentile(valid_seg, 5))
+                            if len(valid_seg) > 0
+                            else fallback_q05
+                        )
+                        bit_ = bit_sizes[min(bit_sizes.keys(), key=lambda k: abs(k - val))]
+                        estimated_bits.append(bit_)
 
-                estimated_bits = []
-                for i in bits_percentiles["1%"].values:
-                    bit_ = bit_sizes[min(bit_sizes.keys(), key=lambda k: abs(k - i))]
-                    estimated_bits.append(bit_)
+                    if len(estimated_bits) >= 2:
+                        bits_diff_1 = np.array(estimated_bits[1:] + [estimated_bits[-1]])
+                        bits_diff_neg1 = np.array([estimated_bits[0]] + estimated_bits[:-1])
+                        estimated_bits_arr = np.array(estimated_bits, dtype=float)
+                        estimated_bits_arr = np.where(
+                            bits_diff_1 == bits_diff_neg1, bits_diff_1, estimated_bits_arr
+                        )
+                    else:
+                        estimated_bits_arr = np.array(estimated_bits, dtype=float)
 
-                bits_diff_1 = np.array(estimated_bits[1:] + [estimated_bits[-1]])
-                bits_diff_neg1 = np.array([estimated_bits[0]] + estimated_bits[:-1])
-                estimated_bits = np.array(estimated_bits)
-                estimated_bits = np.where(
-                    bits_diff_1 == bits_diff_neg1, bits_diff_1, estimated_bits
-                )
+                    est_bs_arr = np.full(len(well_data), default_bs, dtype=float)
+                    for (start_idx, end_idx), b_val in zip(
+                        bins, estimated_bits_arr, strict=True
+                    ):
+                        est_bs_arr[start_idx:end_idx] = float(b_val)
+                    well_data["ESTIMATED_BITSIZE"] = est_bs_arr
+                    estimated_ok = True
+                except Exception as e:
+                    logger.debug(f"[badhole_flagging] Change-point fallback on well {well}: {e}")
 
-                categories = dict(
-                    zip(well_data.BIN.unique(), estimated_bits, strict=True)
-                )
-                well_data["ESTIMATED_BITSIZE"] = well_data["BIN"].map(categories)
-            except Exception as e:
-                logger.error(f"[badhole_flagging] Error processing well {well}: {e}.")
-                continue
+            if not estimated_ok and not clean_signal.empty:
+                # Fallback for short intervals or when ruptures breakpoints are not applicable:
+                # snap 5th percentile of caliper to nearest standard bit size
+                p05 = float(np.nanpercentile(clean_signal, 5))
+                nearest_bs = bit_sizes[min(bit_sizes.keys(), key=lambda k: abs(k - p05))]
+                well_data["ESTIMATED_BITSIZE"] = float(nearest_bs)
 
         processed_wells.append(well_data)
 
-    if processed_wells:
-        return_df = pd.concat(processed_wells, ignore_index=True)
+    return_df = pd.concat(processed_wells, ignore_index=True) if processed_wells else df.copy()
 
-        bitsize = np.where(
-            return_df.BS.notna(), return_df.BS, return_df.ESTIMATED_BITSIZE
+    if auto_bitsize:
+        bitsize_arr = np.where(
+            return_df["BS"].notna() & (return_df["BS"] > 0),
+            return_df["BS"],
+            return_df["ESTIMATED_BITSIZE"],
         )
-        return_df["BS"] = bitsize
-        absdiff = np.where(return_df.CALI.notna(), abs(return_df.CALI - bitsize), 0)
-        return_df["BADHOLE"] = np.where(absdiff < thold, 0, 1)
-
-        # Drop BIN and ESTIMATED_BITSIZE
-        return_df.drop(["BIN", "ESTIMATED_BITSIZE"], axis=1, inplace=True)
-
-        return return_df
     else:
-        return df
+        bitsize_arr = np.where(
+            return_df["BS"].notna() & (return_df["BS"] > 0),
+            return_df["BS"],
+            default_bs,
+        )
+    return_df["BS"] = pd.Series(bitsize_arr, index=return_df.index, dtype=float)
+    return_df.drop(columns=["ESTIMATED_BITSIZE"], errors="ignore", inplace=True)
+
+    n_rows = len(return_df)
+    cali_flag = np.zeros(n_rows, dtype=bool)
+    drho_flag = np.zeros(n_rows, dtype=bool)
+    bounds_flag = np.zeros(n_rows, dtype=bool)
+    rugosity_flag = np.zeros(n_rows, dtype=bool)
+
+    # 1. Differential Caliper criterion
+    if "CALI" in return_df.columns:
+        cali_num = pd.to_numeric(return_df["CALI"], errors="coerce")
+        dcali = cali_num - return_df["BS"]
+        return_df["DCALI"] = dcali
+        if use_cali:
+            absdiff = np.where(cali_num.notna(), np.abs(dcali), 0.0)
+            cali_flag = absdiff >= float(thold)
+
+    # Identify coal mask if exclude_coal is enabled so coal seams aren't falsely flagged by low RHOB / high NPHI
+    coal_mask = np.zeros(n_rows, dtype=bool)
+    if exclude_coal:
+        if "COAL_FLAG" in return_df.columns:
+            coal_mask |= (
+                pd.to_numeric(return_df["COAL_FLAG"], errors="coerce").fillna(0.0).to_numpy()
+                >= 0.5
+            )
+        if "VCOAL" in return_df.columns:
+            coal_mask |= (
+                pd.to_numeric(return_df["VCOAL"], errors="coerce").fillna(0.0).to_numpy()
+                >= 0.5
+            )
+        if (
+            not np.any(coal_mask)
+            and "RHOB" in return_df.columns
+            and "NPHI" in return_df.columns
+        ):
+            rhob_c = pd.to_numeric(return_df["RHOB"], errors="coerce").to_numpy()
+            nphi_c = pd.to_numeric(return_df["NPHI"], errors="coerce").to_numpy()
+            coal_mask = (
+                np.isfinite(rhob_c)
+                & np.isfinite(nphi_c)
+                & (rhob_c < 1.90)
+                & (nphi_c > 0.35)
+            )
+
+    # 2. Density Correction (DRHO) criterion
+    if use_drho:
+        drho_col = next(
+            (c for c in ("DRHO", "HDRA", "DCOR") if c in return_df.columns), None
+        )
+        if drho_col is not None:
+            drho_num = pd.to_numeric(return_df[drho_col], errors="coerce").to_numpy()
+            drho_flag = np.isfinite(drho_num) & (np.abs(drho_num) > float(drho_threshold))
+
+    # 3. Bulk Density / Neutron Pad Standoff Bounds criterion
+    if use_rhob_nphi:
+        if "RHOB" in return_df.columns:
+            rhob_num = pd.to_numeric(return_df["RHOB"], errors="coerce").to_numpy()
+            bounds_flag |= np.isfinite(rhob_num) & (
+                (rhob_num < float(rhob_min)) | (rhob_num > float(rhob_max))
+            )
+        if "NPHI" in return_df.columns:
+            nphi_num = pd.to_numeric(return_df["NPHI"], errors="coerce").to_numpy()
+            bounds_flag |= np.isfinite(nphi_num) & (nphi_num > float(nphi_max))
+        if exclude_coal:
+            bounds_flag &= ~coal_mask
+
+    # 4. Rolling Trend / Rugosity Spike criterion
+    if use_rugosity:
+        win = max(3, int(rugosity_window))
+        if "RHOB" in return_df.columns and float(rhob_trend_factor) > 0:
+            rhob_s = pd.to_numeric(return_df["RHOB"], errors="coerce")
+            rhob_trend = rhob_s.rolling(window=win, center=True, min_periods=1).median()
+            rhob_drop = (
+                rhob_s.notna()
+                & rhob_trend.notna()
+                & (rhob_s < rhob_trend * (1.0 - float(rhob_trend_factor)))
+            ).to_numpy()
+            if exclude_coal:
+                rhob_drop &= ~coal_mask
+            rugosity_flag |= rhob_drop
+        if "CALI" in return_df.columns and float(cali_spike_threshold) > 0:
+            cali_s = pd.to_numeric(return_df["CALI"], errors="coerce")
+            cali_trend = cali_s.rolling(window=win, center=True, min_periods=1).median()
+            cali_spike = (
+                cali_s.notna()
+                & cali_trend.notna()
+                & (np.abs(cali_s - cali_trend) > float(cali_spike_threshold))
+            ).to_numpy()
+            rugosity_flag |= cali_spike
+
+    combined_flag = cali_flag | drho_flag | bounds_flag | rugosity_flag
+    return_df["BADHOLE"] = np.where(combined_flag, 1, 0)
+
+    if not has_well_col:
+        return_df.drop(columns=["WELL_NAME"], errors="ignore", inplace=True)
+
+    return_df.attrs["badhole_summary"] = {
+        "total_rows": int(n_rows),
+        "total_samples": int(n_rows),
+        "flagged_count": int(np.sum(combined_flag)),
+        "flagged_pct": round(float(np.mean(combined_flag) * 100.0), 2) if n_rows > 0 else 0.0,
+        "cali_count": int(np.sum(cali_flag)),
+        "cali_flagged": int(np.sum(cali_flag)),
+        "drho_count": int(np.sum(drho_flag)),
+        "drho_flagged": int(np.sum(drho_flag)),
+        "bounds_count": int(np.sum(bounds_flag)),
+        "rhob_nphi_flagged": int(np.sum(bounds_flag)),
+        "rugosity_count": int(np.sum(rugosity_flag)),
+        "rugosity_flagged": int(np.sum(rugosity_flag)),
+    }
+    return return_df
 
 
 def neu_den_xplot_hc_correction(

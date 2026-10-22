@@ -372,3 +372,132 @@ def test_petrophysical_mcp_server_and_agent_assistant(client_and_project):
     assert "Conformal Prediction Bounds" in chat_body["reply"]
 
 
+def test_badhole_flagging_and_litho_poro_badhole_treatments(client_and_project):
+    """Verify /badhole_flagging endpoint and all 4 badhole_treatment modes in /lithology and /porosity."""
+    client, pid = client_and_project
+
+    # Inject CALI, DRHO, and a washout spike at depth index 2 (1002.0 m) on Well-A
+    cali_vals = [8.5, 8.5, 13.0, 8.5, 8.5, 8.5, 8.5, 8.5, 8.5, 8.5]
+    drho_vals = [0.01, 0.01, 0.25, 0.02, 0.01, 0.01, 0.02, 0.01, 0.01, 0.01]
+    rhob_vals = [2.25, 2.28, 1.65, 2.34, 2.38, 2.41, 2.45, 2.48, 2.52, 2.55]
+    r_put = client.put(
+        f"/quick_pp/database/projects/{pid}/wells/Well-A/data",
+        json={
+            "data": {
+                "DEPTH": list(np.linspace(1000.0, 1009.0, 10)),
+                "CALI": cali_vals,
+                "DRHO": drho_vals,
+                "RHOB": rhob_vals,
+            }
+        },
+    )
+    assert r_put.status_code == 200
+
+    # 1. Run /badhole_flagging
+    r_bh = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/badhole_flagging",
+        json={
+            "use_cali": True,
+            "cali_threshold": 2.5,
+            "auto_bitsize": False,
+            "bitsize_default": 8.5,
+            "use_drho": True,
+            "drho_threshold": 0.15,
+            "use_rhob_nphi": True,
+            "rhob_min": 1.95,
+            "rhob_max": 2.95,
+            "nphi_max": 0.45,
+            "exclude_coal": True,
+            "use_rugosity": False,
+            "save": True,
+        },
+    )
+    assert r_bh.status_code == 200
+    bh_body = r_bh.json()
+    assert bh_body["badhole_summary"]["flagged_count"] == 1
+    assert bh_body["data"]["BADHOLE"][2] == 1.0
+    assert bh_body["data"]["BADHOLE"][0] == 0.0
+    assert np.isclose(bh_body["data"]["DCALI"][2], 4.5)
+
+    # 2. Treatment = 'ignore': index 2 should be None (NaN) in lithology and porosity outputs
+    r_lith_ign = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/lithology",
+        json={"model": "ssc", "badhole_treatment": "ignore", "save": False},
+    )
+    assert r_lith_ign.status_code == 200
+    lith_ign = r_lith_ign.json()["data"]
+    assert lith_ign["VCLAY"][2] is None
+    assert lith_ign["VSAND"][2] is None
+    assert lith_ign["VCLAY"][1] is not None
+
+    r_poro_ign = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/porosity",
+        json={"method": "neu_den", "badhole_treatment": "ignore", "save": False},
+    )
+    assert r_poro_ign.status_code == 200
+    poro_ign = r_poro_ign.json()
+    assert poro_ign["data"]["PHIT"][2] is None
+    assert poro_ign["data"]["PHIE"][2] is None
+    # Index 2 had a core sample (CPORE=0.19), so excluding badhole leaves 4 core comparison points
+    assert poro_ign["core_metrics"]["count"] == 4
+
+    # 3. Treatment = 'interpolate': index 2 is linearly interpolated between index 1 and index 3
+    r_lith_interp = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/lithology",
+        json={"model": "ssc", "badhole_treatment": "interpolate", "save": False},
+    )
+    assert r_lith_interp.status_code == 200
+    lith_interp = r_lith_interp.json()["data"]
+    assert np.isclose(
+        lith_interp["VCLAY"][2],
+        0.5 * (lith_interp["VCLAY"][1] + lith_interp["VCLAY"][3]),
+        atol=1e-4,
+    )
+
+    r_poro_interp = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/porosity",
+        json={"method": "neu_den", "badhole_treatment": "interpolate", "save": False},
+    )
+    assert r_poro_interp.status_code == 200
+    poro_interp = r_poro_interp.json()["data"]
+    assert np.isclose(
+        poro_interp["PHIT"][2],
+        0.5 * (poro_interp["PHIT"][1] + poro_interp["PHIT"][3]),
+        atol=1e-4,
+    )
+
+    # 4. Treatment = 'vsh_gr': index 2 uses GR-based VCLAY, VSILT=0, and reconstructed porosity
+    r_lith_gr = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/lithology",
+        json={
+            "model": "ssc",
+            "gr_clean": 30.0,
+            "gr_clay": 110.0,
+            "badhole_treatment": "vsh_gr",
+            "save": True,
+        },
+    )
+    assert r_lith_gr.status_code == 200
+    lith_gr = r_lith_gr.json()["data"]
+    assert lith_gr["VSILT"][2] == 0.0
+    assert lith_gr["VCLAY"][2] is not None and 0.0 <= lith_gr["VCLAY"][2] <= 1.0
+
+    r_poro_gr = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/porosity",
+        json={
+            "method": "neu_den",
+            "gr_clean": 30.0,
+            "gr_clay": 110.0,
+            "badhole_treatment": "vsh_gr",
+            "save": True,
+        },
+    )
+    assert r_poro_gr.status_code == 200
+    poro_gr = r_poro_gr.json()["data"]
+    # Without vsh_gr reconstruction, RHOB=1.65 at index 2 would yield anomalously high porosity (>0.40)
+    # With vsh_gr reconstruction via den_correction, PHIT[2] is realistic (~0.10 - 0.30)
+    assert poro_gr["PHIT"][2] is not None
+    assert 0.05 < poro_gr["PHIT"][2] < 0.35
+
+
+

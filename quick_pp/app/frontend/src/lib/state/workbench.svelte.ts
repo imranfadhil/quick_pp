@@ -8,6 +8,26 @@ export type SingleWellStep =
 	| 'scal';
 export type MultiWellStep = 'inventory' | 'rock-typing' | 'perm-transform' | 'shf' | 'ml-training';
 
+export type BadholeTreatmentMode = 'none' | 'vsh_gr' | 'interpolate' | 'ignore';
+
+export interface BadholeFlaggingParams {
+	useCali: boolean;
+	caliThreshold: number;
+	autoBitsize: boolean;
+	bitsizeDefault: number;
+	useDrho: boolean;
+	drhoThreshold: number;
+	useRhobNphi: boolean;
+	rhobMin: number;
+	rhobMax: number;
+	nphiMax: number;
+	excludeCoal: boolean;
+	useRugosity: boolean;
+	rugosityWindow: number;
+	rhobTrendFactor: number;
+	caliSpikeThreshold: number;
+}
+
 export interface LithoEndpointParams {
 	model: 'ssc' | 'multi_mineral' | 'vsh_gr';
 	porosityMethod: 'neu_den' | 'den';
@@ -34,6 +54,7 @@ export interface LithoEndpointParams {
 	coalNphiMin: number;
 	coalWindowSize: number;
 	coalTrendFactor: number;
+	badholeTreatment: BadholeTreatmentMode;
 }
 
 export interface SaturationModelParams {
@@ -138,7 +159,26 @@ class WorkbenchState {
 		coalRhobMax: 2.0,
 		coalNphiMin: 0.30,
 		coalWindowSize: 41,
-		coalTrendFactor: 0.05
+		coalTrendFactor: 0.05,
+		badholeTreatment: 'vsh_gr'
+	});
+
+	badholeParams = $state<BadholeFlaggingParams>({
+		useCali: true,
+		caliThreshold: 2.0,
+		autoBitsize: true,
+		bitsizeDefault: 8.5,
+		useDrho: true,
+		drhoThreshold: 0.15,
+		useRhobNphi: false,
+		rhobMin: 1.95,
+		rhobMax: 2.95,
+		nphiMax: 0.45,
+		excludeCoal: true,
+		useRugosity: false,
+		rugosityWindow: 21,
+		rhobTrendFactor: 0.05,
+		caliSpikeThreshold: 0.5
 	});
 
 	saturationParams = $state<SaturationModelParams>({

@@ -540,8 +540,10 @@ def train_multi_well_conformal_model(
     if exclude_tight and "TIGHT_FLAG" in work.columns:
         work = work[pd.to_numeric(work["TIGHT_FLAG"], errors="coerce").fillna(0) == 0]
 
-    if exclude_bad_hole and "BAD_HOLE" in work.columns:
-        work = work[pd.to_numeric(work["BAD_HOLE"], errors="coerce").fillna(0) == 0]
+    if exclude_bad_hole:
+        for bh_col in ("BADHOLE", "BAD_HOLE", "BAD_HOLE_FLAG"):
+            if bh_col in work.columns:
+                work = work[pd.to_numeric(work[bh_col], errors="coerce").fillna(0) == 0]
 
     if rock_flags:
         if "ROCK_FLAG" not in work.columns:

@@ -283,17 +283,74 @@
 			});
 		}
 		const cali = pick('CALI');
+		const bs = pick('BS');
+		if (bs.some((v) => v !== null)) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'BS',
+				x: bs.map((v) => (v !== null ? (v - 6) * 20 : null)),
+				customdata: bs,
+				y: depth,
+				xaxis: 'x',
+				yaxis: 'y',
+				line: { color: '#64748B', width: 1.0, dash: 'dash' },
+				hovertemplate: 'BS: %{customdata:.2f} in<extra></extra>'
+			});
+		}
 		if (cali.length) {
 			traces.push({
 				type: 'scattergl',
 				mode: 'lines',
 				name: 'CALI',
-				x: cali.map((v) => (v !== null ? (v - 6) * 20 : null)), // normalized onto 0-200 track
+				x: cali.map((v) => (v !== null ? (v - 6) * 20 : null)), // normalized onto 0-200 track (6-16 in)
+				customdata: cali,
 				y: depth,
 				xaxis: 'x',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.cali, width: 1.1, dash: 'dot' },
-				hovertemplate: 'CALI<extra></extra>'
+				hovertemplate: 'CALI: %{customdata:.2f} in<extra></extra>'
+			});
+		}
+		const badholeArr =
+			pick('BADHOLE').length > 0
+				? pick('BADHOLE')
+				: pick('BAD_HOLE').length > 0
+					? pick('BAD_HOLE')
+					: pick('BAD_HOLE_FLAG');
+		if (badholeArr.some((v) => v !== null && v >= 0.5)) {
+			// Use continuous 200 baseline and step to 186 only where BADHOLE >= 0.5
+			// so Plotly 'tonextx' never bridges across unflagged (null) intervals.
+			const bhBase = depth.map(() => 200);
+			const bhTop = depth.map((_, i) => {
+				const v = badholeArr[i];
+				return v !== null && v >= 0.5 ? 186 : 200;
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'BADHOLE_BASE',
+				x: bhBase,
+				y: depth,
+				xaxis: 'x',
+				yaxis: 'y',
+				line: { width: 0, color: 'rgba(0,0,0,0)', shape: 'hv' },
+				hoverinfo: 'skip',
+				showlegend: false
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'BADHOLE',
+				x: bhTop,
+				y: depth,
+				xaxis: 'x',
+				yaxis: 'y',
+				fill: 'tonextx',
+				fillcolor: 'rgba(220, 38, 38, 0.78)',
+				line: { width: 0, color: 'rgba(0,0,0,0)', shape: 'hv' },
+				hoverinfo: 'skip',
+				showlegend: false
 			});
 		}
 
@@ -1003,20 +1060,35 @@
 		class="flex shrink-0 items-stretch border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[9px] leading-tight"
 	>
 		<div class="relative flex h-[40px] w-full">
-			<!-- Track 1: GR (0 - 200 gAPI) -->
+			<!-- Track 1: GR (0 - 200 gAPI) & CALI / BS (6 - 16 in) -->
 			<div
 				style="left: 0%; width: 15.5%;"
-				class="absolute inset-y-0 flex flex-col justify-end border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<div
-					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
-					style="color: {PETRO_COLORS.gr}"
+					class="mono-num flex items-center justify-between font-medium whitespace-nowrap text-[8px]"
+					style="color: {PETRO_COLORS.cali}"
 				>
-					<span>0</span>
-					<span class="font-sans text-[9.5px] font-bold">GR (gAPI) ►</span>
-					<span>200</span>
+					<span>6</span>
+					<span class="font-sans text-[8px] font-semibold">
+						CALI{#if wellData.curves['BS']} / BS{/if} (in)
+						{#if wellData.curves['BADHOLE']}
+							<span class="ml-0.5 rounded-2xs bg-red-100 px-0.5 text-[7.5px] font-bold text-red-700">BH</span>
+						{/if}
+					</span>
+					<span>16</span>
 				</div>
-				<div class="h-0.5 w-full rounded-full" style="background: {PETRO_COLORS.gr}"></div>
+				<div class="flex flex-col">
+					<div
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+						style="color: {PETRO_COLORS.gr}"
+					>
+						<span>0</span>
+						<span class="font-sans text-[9.5px] font-bold">GR (gAPI) ►</span>
+						<span>200</span>
+					</div>
+					<div class="h-0.5 w-full rounded-full" style="background: {PETRO_COLORS.gr}"></div>
+				</div>
 			</div>
 
 			<!-- Track 2: RT (0.2 - 2000 ohm.m, 4-decade log scale) -->
@@ -1291,6 +1363,11 @@
 				<strong style="color: {PETRO_COLORS.water}">SW:</strong>
 				{fmtNum(readout.SWT ?? readout.SWE, 3)}
 			</span>
+			{#if readout.BADHOLE !== null && readout.BADHOLE !== undefined && readout.BADHOLE >= 0.5}
+				<span class="rounded-xs bg-red-100 px-1.5 py-0.2 text-[10px] font-bold text-red-800">
+					BADHOLE
+				</span>
+			{/if}
 		</div>
 
 		{#if workbench.brushedDepthIndices.size > 0}

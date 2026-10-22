@@ -166,6 +166,11 @@
 					: (wellData.curves['RHOB'] ?? []);
 			const grArr = wellData.curves['GR'] ?? [];
 			const coalFlagArr = wellData.curves['COAL_FLAG'] ?? wellData.curves['VCOAL'] ?? [];
+			const badholeFlagArr =
+				wellData.curves['BADHOLE'] ??
+				wellData.curves['BAD_HOLE'] ??
+				wellData.curves['BAD_HOLE_FLAG'] ??
+				[];
 
 			const xs: number[] = [];
 			const ys: number[] = [];
@@ -174,6 +179,9 @@
 			const coalXs: number[] = [];
 			const coalYs: number[] = [];
 			const coalIdx: number[] = [];
+			const badholeXs: number[] = [];
+			const badholeYs: number[] = [];
+			const badholeIdx: number[] = [];
 			let minRhob = 1.85;
 
 			for (const idx of indices) {
@@ -185,10 +193,16 @@
 						workbench.lithoParams.enableCoalFlagging &&
 						Number.isFinite(coalFlagArr[idx]) &&
 						coalFlagArr[idx] >= 0.5;
+					const isBadhole =
+						Number.isFinite(badholeFlagArr[idx]) && badholeFlagArr[idx] >= 0.5;
 					if (isCoal) {
 						coalXs.push(x);
 						coalYs.push(y);
 						coalIdx.push(idx);
+					} else if (isBadhole) {
+						badholeXs.push(x);
+						badholeYs.push(y);
+						badholeIdx.push(idx);
 					} else {
 						xs.push(x);
 						ys.push(y);
@@ -236,6 +250,25 @@
 						line: { color: '#0F172A', width: 1 }
 					},
 					hovertemplate: 'COAL<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f}<extra></extra>'
+				});
+			}
+
+			if (badholeXs.length > 0) {
+				traces.push({
+					type: 'scattergl',
+					mode: 'markers',
+					name: `Badhole Flagged (${badholeXs.length})`,
+					x: badholeXs,
+					y: badholeYs,
+					customdata: badholeIdx,
+					marker: {
+						size: 6.5,
+						color: 'rgba(220, 38, 38, 0.25)',
+						symbol: 'circle',
+						opacity: 0.9,
+						line: { color: '#DC2626', width: 1.5 }
+					},
+					hovertemplate: 'BADHOLE<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f}<extra></extra>'
 				});
 			}
 

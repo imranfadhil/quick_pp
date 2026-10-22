@@ -8,6 +8,7 @@ import pytest
 
 from quick_pp.qaqc import (
     apply_environmental_corrections,
+    badhole_flagging,
     density_mudcake_correction,
     gr_borehole_correction,
     log_normalization,
@@ -367,3 +368,70 @@ def test_environmental_and_invasion_corrections():
     assert corr_df.loc[0, "RT_CORR"] > corr_df.loc[0, "RT"]
     assert corr_df.loc[0, "INVASION_FLAG"] == 1
     assert corr_df.loc[1, "INVASION_FLAG"] == 2
+
+
+def test_badhole_flagging_multi_criteria_and_coal_protection():
+    """Verify all 4 badhole flagging criteria (CALI-BS, DRHO, RHOB/NPHI bounds, rugosity) and coal protection."""
+    n = 30
+    df = pd.DataFrame(
+        {
+            "DEPTH": np.linspace(1000.0, 1014.5, n),
+            "CALI": np.full(n, 8.5),
+            "DRHO": np.full(n, 0.02),
+            "RHOB": np.full(n, 2.35),
+            "NPHI": np.full(n, 0.20),
+            "COAL_FLAG": np.zeros(n, dtype=int),
+        }
+    )
+    # Row 5: Differential caliper washout (|12.0 - 8.5| = 3.5 >= 2.5)
+    df.loc[5, "CALI"] = 12.0
+    # Row 10: High DRHO pad standoff (0.24 > 0.15)
+    df.loc[10, "DRHO"] = 0.24
+    # Row 15: Low RHOB pad standoff (1.70 < 1.95), not coal
+    df.loc[15, "RHOB"] = 1.70
+    # Row 18: Coal bed with low RHOB (1.45) and high NPHI (0.50) -> protected when exclude_coal=True
+    df.loc[18, "RHOB"] = 1.45
+    df.loc[18, "NPHI"] = 0.50
+    df.loc[18, "COAL_FLAG"] = 1
+    # Row 24: Local rugosity spike on RHOB drop (2.05 vs 2.35 rolling median -> >8% drop)
+    df.loc[24, "RHOB"] = 2.05
+
+    res = badhole_flagging(
+        df,
+        thold=2.5,
+        use_cali=True,
+        auto_bitsize=False,
+        bitsize_default=8.5,
+        use_drho=True,
+        drho_threshold=0.15,
+        use_rhob_nphi=True,
+        rhob_min=1.95,
+        rhob_max=2.95,
+        nphi_max=0.45,
+        exclude_coal=True,
+        use_rugosity=True,
+        rugosity_window=9,
+        rhob_trend_factor=0.08,
+        cali_spike_threshold=1.0,
+    )
+
+    assert "BADHOLE" in res.columns
+    assert "BS" in res.columns
+    assert "DCALI" in res.columns
+    assert res.loc[5, "BADHOLE"] == 1
+    assert np.isclose(res.loc[5, "DCALI"], 3.5)
+    assert res.loc[10, "BADHOLE"] == 1
+    assert res.loc[15, "BADHOLE"] == 1
+    # Row 18 is coal, so exclude_coal=True protects it from RHOB/NPHI and rugosity badhole flagging
+    assert res.loc[18, "BADHOLE"] == 0
+    assert res.loc[24, "BADHOLE"] == 1
+    assert res.loc[0, "BADHOLE"] == 0
+
+    summary = res.attrs.get("badhole_summary")
+    assert summary is not None
+    assert summary["flagged_count"] == 4
+    assert summary["cali_flagged"] == 1
+    assert summary["drho_flagged"] == 1
+    assert summary["rhob_nphi_flagged"] == 1
+    assert summary["rugosity_flagged"] >= 1
+

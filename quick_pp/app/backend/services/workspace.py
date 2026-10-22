@@ -65,6 +65,8 @@ from quick_pp.porosity import (
 )
 from quick_pp.qaqc import (
     apply_environmental_corrections,
+    badhole_flagging,
+    den_correction,
     neu_den_xplot_hc_correction,
     stratigraphic_normalization,
 )
@@ -129,12 +131,15 @@ def _update_in_memory_well_cache(
             overlap_cols = [
                 c for c in upd.columns if c != "DEPTH" and c in base_df.columns
             ]
+            upd["_IN_UPD"] = True
             merged_mem = base_df.drop(columns=overlap_cols, errors="ignore").merge(
                 upd, on="DEPTH", how="left"
             )
+            in_upd_mask = merged_mem["_IN_UPD"].fillna(False).to_numpy(dtype=bool)
+            merged_mem.drop(columns=["_IN_UPD"], errors="ignore", inplace=True)
             for c in overlap_cols:
                 if c in base_df.columns:
-                    merged_mem[c] = merged_mem[c].combine_first(base_df[c])
+                    merged_mem[c] = np.where(in_upd_mask, merged_mem[c], base_df[c])
             _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (
                 time.time(),
                 merged_mem,
@@ -293,6 +298,67 @@ def _compute_coal_mask(
         ).fillna(False)
 
 
+def _resolve_badhole_mask(
+    df: pd.DataFrame, auto_detect_if_missing: bool = False
+) -> pd.Series:
+    """Resolve boolean mask for badhole intervals from BADHOLE/BAD_HOLE/BAD_HOLE_FLAG or on-the-fly detection."""
+    for col in ("BADHOLE", "BAD_HOLE", "BAD_HOLE_FLAG"):
+        if col in df.columns:
+            s = pd.to_numeric(df[col], errors="coerce")
+            if s.notna().any():
+                return (s.fillna(0.0) >= 0.5).astype(bool)
+    if auto_detect_if_missing:
+        try:
+            bh_df = badhole_flagging(
+                df,
+                thold=2.0,
+                use_cali=True,
+                auto_bitsize=True,
+                use_drho=True,
+                drho_threshold=0.15,
+            )
+            if "BADHOLE" in bh_df.columns:
+                return (
+                    pd.to_numeric(bh_df["BADHOLE"], errors="coerce")
+                    .reindex(df.index)
+                    .fillna(0.0)
+                    >= 0.5
+                ).astype(bool)
+        except Exception:
+            pass
+    return pd.Series(False, index=df.index, dtype=bool)
+
+
+def _compute_vsh_gr_series(
+    df: pd.DataFrame,
+    gr_clean: Optional[float] = None,
+    gr_clay: Optional[float] = None,
+) -> pd.Series:
+    """Compute VSH_GR series in [0, 1] from GR curve using endpoints or auto-normalized gr_index."""
+    if "GR" not in df.columns:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    gr_s = pd.to_numeric(df["GR"], errors="coerce")
+    valid_gr = gr_s.notna()
+    if not valid_gr.any():
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    out = pd.Series(np.nan, index=df.index, dtype=float)
+    if (
+        gr_clean is not None
+        and gr_clay is not None
+        and abs(float(gr_clay) - float(gr_clean)) > 1e-6
+    ):
+        out.loc[valid_gr] = (
+            (gr_s.loc[valid_gr] - float(gr_clean))
+            / (float(gr_clay) - float(gr_clean))
+        ).clip(0.0, 1.0)
+    else:
+        vsh_arr = np.asarray(
+            gr_index(gr_s.loc[valid_gr].reset_index(drop=True)), dtype=float
+        ).ravel()
+        out.loc[valid_gr] = np.clip(vsh_arr, 0.0, 1.0)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Request Schemas
 # ---------------------------------------------------------------------------
@@ -304,6 +370,48 @@ class WorkspaceFilterBase(BaseModel):
     zones: Optional[List[str]] = Field(None, description="List of zone names to filter")
     save: bool = Field(
         False, description="Persist computed curves to the database immediately"
+    )
+
+
+class WorkspaceBadholeRequest(WorkspaceFilterBase):
+    use_cali: bool = Field(
+        True, description="Flag badhole using Differential Caliper |CALI - BS|"
+    )
+    cali_threshold: float = Field(
+        2.0, description="Max allowable |CALI - BS| before flagging badhole (inches)"
+    )
+    auto_bitsize: bool = Field(
+        True, description="Auto-estimate bit size per hole section from CALI when BS is absent"
+    )
+    bitsize_default: float = Field(
+        8.5, description="Nominal/fallback bit size (inches)"
+    )
+    use_drho: bool = Field(
+        True, description="Flag badhole using Density Correction |DRHO|"
+    )
+    drho_threshold: float = Field(
+        0.15, description="Max allowable |DRHO| before flagging badhole (g/cc)"
+    )
+    use_rhob_nphi: bool = Field(
+        False, description="Flag badhole using RHOB/NPHI pad standoff bounds"
+    )
+    rhob_min: float = Field(1.95, description="Min valid bulk density (g/cc)")
+    rhob_max: float = Field(2.95, description="Max valid bulk density (g/cc)")
+    nphi_max: float = Field(0.45, description="Max valid neutron porosity (v/v)")
+    exclude_coal: bool = Field(
+        True, description="Exclude coal seams from RHOB/NPHI bound and rugosity flags"
+    )
+    use_rugosity: bool = Field(
+        False, description="Flag local borehole rugosity spikes from rolling RHOB/CALI trends"
+    )
+    rugosity_window: int = Field(
+        21, description="Rolling window size (samples) for rugosity spike detection"
+    )
+    rhob_trend_factor: float = Field(
+        0.05, description="Fractional drop below rolling RHOB median to flag washout spike"
+    )
+    cali_spike_threshold: float = Field(
+        0.5, description="Local caliper spike deviation from rolling median (inches)"
     )
 
 
@@ -331,6 +439,10 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
     coal_window_size: int = Field(41, description="Rolling window size for coal trend")
     coal_trend_factor: float = Field(
         0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
+    )
+    badhole_treatment: str = Field(
+        "none",
+        description="How to treat BADHOLE intervals: 'none', 'vsh_gr', 'interpolate', or 'ignore'",
     )
 
 
@@ -365,6 +477,10 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase):
     coal_trend_factor: float = Field(
         0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
     )
+    badhole_treatment: str = Field(
+        "none",
+        description="How to treat BADHOLE intervals: 'none', 'vsh_gr', 'interpolate', or 'ignore'",
+    )
 
 
 class WorkspacePorosityRequest(WorkspaceFilterBase):
@@ -385,6 +501,8 @@ class WorkspacePorosityRequest(WorkspaceFilterBase):
     fluid_point: Tuple[float, float] = Field((1.0, 1.0))
     wet_clay_point: Tuple[Optional[float], Optional[float]] = Field((None, None))
     silt_line_angle: float = Field(119.0)
+    gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
+    gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
     enable_coal_flagging: bool = Field(
         False, description="Zero out PHIT and PHIE in flagged coal intervals"
     )
@@ -395,6 +513,10 @@ class WorkspacePorosityRequest(WorkspaceFilterBase):
     coal_window_size: int = Field(41, description="Rolling window size for coal trend")
     coal_trend_factor: float = Field(
         0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
+    )
+    badhole_treatment: str = Field(
+        "none",
+        description="How to treat BADHOLE intervals: 'none', 'vsh_gr', 'interpolate', or 'ignore'",
     )
 
 
@@ -848,6 +970,63 @@ def workspace_hc_correction(
                 nphi_hc_full.loc[coal_mask] = nphi.loc[coal_mask]
                 rhob_hc_full.loc[coal_mask] = rhob.loc[coal_mask]
                 hc_flag_full.loc[coal_mask] = 0.0
+        else:
+            coal_mask = pd.Series(False, index=df.index, dtype=bool)
+
+        bh_mode = (req.badhole_treatment or "none").strip().lower()
+        if bh_mode != "none":
+            badhole_mask = _resolve_badhole_mask(df, auto_detect_if_missing=True) & (
+                ~coal_mask
+            )
+            if badhole_mask.any():
+                nphi_hc_full.loc[badhole_mask] = nphi.loc[badhole_mask]
+                rhob_hc_full.loc[badhole_mask] = rhob.loc[badhole_mask]
+                hc_flag_full.loc[badhole_mask] = 0.0
+                if bh_mode in ("vsh_gr", "gr") and "GR" in df.columns:
+                    vsh_bh_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+                    bh_gr = badhole_mask & vsh_bh_s.notna()
+                    if bh_gr.any():
+                        vsh_v = vsh_bh_s.loc[bh_gr].to_numpy(dtype=float)
+                        phin_sh = (
+                            float(req.dry_clay_point[0])
+                            if (req.dry_clay_point and req.dry_clay_point[0] is not None)
+                            else 0.33
+                        )
+                        rho_ma_sand = (
+                            float(req.dry_sand_point[1])
+                            if (req.dry_sand_point and req.dry_sand_point[1] is not None)
+                            else 2.65
+                        )
+                        nphi_bh = (
+                            nphi.loc[bh_gr]
+                            .clip(0.0, 0.42)
+                            .fillna(
+                                pd.Series(
+                                    0.18 * (1.0 - vsh_v) + phin_sh * vsh_v,
+                                    index=df.index[bh_gr],
+                                )
+                            )
+                            .to_numpy(dtype=float)
+                        )
+                        gr_bh = (
+                            pd.to_numeric(df.loc[bh_gr, "GR"], errors="coerce")
+                            .fillna(50.0)
+                            .to_numpy(dtype=float)
+                        )
+                        rhob_rec = np.asarray(
+                            den_correction(
+                                nphi_bh,
+                                gr_bh,
+                                vsh_gr=vsh_v,
+                                phin_sh=phin_sh,
+                                phid_sh=0.05,
+                                rho_ma=rho_ma_sand,
+                                rho_water=float(req.rho_water),
+                            ),
+                            dtype=float,
+                        )
+                        rhob_hc_full.loc[bh_gr] = np.clip(rhob_rec, 1.8, 2.95)
+                        nphi_hc_full.loc[bh_gr] = nphi_bh
 
         out_df = pd.DataFrame(
             {
@@ -884,6 +1063,74 @@ def workspace_hc_correction(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"HC correction failed: {e}") from e
+
+
+@router.post(
+    "/wells/{well_name}/badhole_flagging",
+    summary="Compute depth-aligned BADHOLE flag (Caliper, DRHO, RHOB/NPHI bounds, and Rugosity) on server",
+)
+def workspace_badhole_flagging(
+    project_id: int, well_name: str, req: WorkspaceBadholeRequest
+) -> Dict[str, Any]:
+    """Compute BADHOLE, BS, and DCALI aligned on DEPTH and optionally save to the database."""
+    try:
+        df = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        # Drop any previously generated BS column so re-running with updated
+        # auto_bitsize / bitsize_default parameters always recomputes BS fresh.
+        df_bh_input = df.drop(columns=["BS"], errors="ignore")
+        bh_df = badhole_flagging(
+            df_bh_input,
+            thold=float(req.cali_threshold),
+            use_cali=bool(req.use_cali),
+            auto_bitsize=bool(req.auto_bitsize),
+            bitsize_default=float(req.bitsize_default),
+            use_drho=bool(req.use_drho),
+            drho_threshold=float(req.drho_threshold),
+            use_rhob_nphi=bool(req.use_rhob_nphi),
+            rhob_min=float(req.rhob_min),
+            rhob_max=float(req.rhob_max),
+            nphi_max=float(req.nphi_max),
+            exclude_coal=bool(req.exclude_coal),
+            use_rugosity=bool(req.use_rugosity),
+            rugosity_window=int(req.rugosity_window),
+            rhob_trend_factor=float(req.rhob_trend_factor),
+            cali_spike_threshold=float(req.cali_spike_threshold),
+        )
+        out_cols = ["DEPTH", "BADHOLE"]
+        if "BS" in bh_df.columns and bh_df["BS"].notna().any():
+            out_cols.append("BS")
+        if "DCALI" in bh_df.columns and bh_df["DCALI"].notna().any():
+            out_cols.append("DCALI")
+
+        out_df = bh_df[out_cols].copy()
+        out_df["BADHOLE"] = pd.to_numeric(out_df["BADHOLE"], errors="coerce").fillna(0.0)
+
+        saved_rows = 0
+        if req.save:
+            saved_rows = _save_curves_to_well(project_id, well_name, out_df)
+        else:
+            _update_in_memory_well_cache(project_id, well_name, out_df)
+
+        summary = dict(bh_df.attrs.get("badhole_summary") or {})
+        save_stat_cols = [c for c in out_cols if c != "DEPTH"]
+        stats = {col: _curve_summary_stats(out_df[col]) for col in save_stat_cols}
+        return {
+            "well_name": well_name,
+            "saved": req.save,
+            "saved_rows": saved_rows,
+            "summary": summary,
+            "badhole_summary": summary,
+            "stats": stats,
+            **dataframe_to_columnar(out_df),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Badhole flagging failed: {e}"
+        ) from e
 
 
 @router.post(
@@ -1184,15 +1431,122 @@ def workspace_lithology(
             if "VCOAL" not in save_cols and "VCOAL" in out_df.columns:
                 save_cols.append("VCOAL")
         else:
+            coal_mask = pd.Series(False, index=df.index, dtype=bool)
             coal_flag_s = pd.Series(np.nan, index=df.index, dtype=float)
             coal_flag_s.loc[valid_mask] = 0.0
             out_df["COAL_FLAG"] = coal_flag_s
             if "COAL_FLAG" not in save_cols:
                 save_cols.append("COAL_FLAG")
 
+        # Badhole interval treatment for lithology volumes
+        bh_mode = (req.badhole_treatment or "none").strip().lower()
+        badhole_mask = _resolve_badhole_mask(
+            df, auto_detect_if_missing=(bh_mode != "none")
+        )
+        active_badhole = badhole_mask & (~coal_mask)
+        if badhole_mask.any() or "BADHOLE" in df.columns:
+            out_df["BADHOLE"] = np.where(badhole_mask, 1.0, 0.0)
+            if "BADHOLE" not in save_cols:
+                save_cols.append("BADHOLE")
+
+        if bh_mode != "none" and active_badhole.any():
+            if bh_mode in ("vsh_gr", "gr"):
+                vsh_bh_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+                bh_gr = active_badhole & vsh_bh_s.notna()
+                if bh_gr.any():
+                    vsh_v = vsh_bh_s.loc[bh_gr].to_numpy(dtype=float)
+                    phin_sh = (
+                        float(req.dry_clay_point[0])
+                        if (req.dry_clay_point and req.dry_clay_point[0] is not None)
+                        else 0.33
+                    )
+                    rho_ma_sand = (
+                        float(req.dry_sand_point[1])
+                        if (req.dry_sand_point and req.dry_sand_point[1] is not None)
+                        else 2.65
+                    )
+                    rho_fl = (
+                        float(req.fluid_point[1])
+                        if (req.fluid_point and len(req.fluid_point) > 1)
+                        else 1.0
+                    )
+                    nphi_raw_s = (
+                        pd.to_numeric(df["NPHI"], errors="coerce")
+                        if "NPHI" in df.columns
+                        else pd.Series(np.nan, index=df.index, dtype=float)
+                    )
+                    nphi_bh = (
+                        nphi_raw_s.loc[bh_gr]
+                        .clip(0.0, 0.42)
+                        .fillna(
+                            pd.Series(
+                                0.18 * (1.0 - vsh_v) + phin_sh * vsh_v,
+                                index=df.index[bh_gr],
+                            )
+                        )
+                        .to_numpy(dtype=float)
+                    )
+                    gr_bh = (
+                        pd.to_numeric(df.loc[bh_gr, "GR"], errors="coerce")
+                        .fillna(50.0)
+                        .to_numpy(dtype=float)
+                    )
+                    rhob_rec = np.asarray(
+                        den_correction(
+                            nphi_bh,
+                            gr_bh,
+                            vsh_gr=vsh_v,
+                            phin_sh=phin_sh,
+                            phid_sh=0.05,
+                            rho_ma=rho_ma_sand,
+                            rho_water=rho_fl,
+                        ),
+                        dtype=float,
+                    )
+                    phit_bh = np.clip(
+                        np.asarray(
+                            density_porosity(rhob_rec, rho_ma_sand, rho_fl), dtype=float
+                        ),
+                        0.0,
+                        0.45,
+                    )
+                    vmat_bh = np.clip(1.0 - phit_bh, 0.0, 1.0)
+                    out_df.loc[bh_gr, "VCLAY"] = np.clip(vsh_v * vmat_bh, 0.0, 1.0)
+                    out_df.loc[bh_gr, "VSAND"] = np.clip(
+                        (1.0 - vsh_v) * vmat_bh, 0.0, 1.0
+                    )
+                    for mcol in ALL_LITHOLOGY_VOL_COLS:
+                        if mcol not in ("VCLAY", "VSAND") and mcol in out_df.columns:
+                            out_df.loc[bh_gr, mcol] = 0.0
+                    if "PHIT_CONSTRUCTED" in out_df.columns:
+                        out_df.loc[bh_gr, "PHIT_CONSTRUCTED"] = phit_bh
+            elif bh_mode == "interpolate":
+                for mcol in ALL_LITHOLOGY_VOL_COLS:
+                    if mcol in out_df.columns:
+                        out_df.loc[active_badhole, mcol] = np.nan
+                        out_df[mcol] = (
+                            out_df[mcol]
+                            .interpolate(method="linear", limit_direction="both")
+                            .clip(0.0, 1.0)
+                        )
+                if "PHIT_CONSTRUCTED" in out_df.columns:
+                    out_df.loc[active_badhole, "PHIT_CONSTRUCTED"] = np.nan
+                    out_df["PHIT_CONSTRUCTED"] = (
+                        out_df["PHIT_CONSTRUCTED"]
+                        .interpolate(method="linear", limit_direction="both")
+                        .clip(0.0, 0.6)
+                    )
+            elif bh_mode in ("ignore", "null", "nan"):
+                for mcol in ALL_LITHOLOGY_VOL_COLS:
+                    if mcol in out_df.columns:
+                        out_df.loc[active_badhole, mcol] = np.nan
+                for extra_c in ("PHIT_CONSTRUCTED", "PROJ_NPHI", "PROJ_RHOB"):
+                    if extra_c in out_df.columns:
+                        out_df.loc[active_badhole, extra_c] = np.nan
+
         saved_rows = 0
         if save_cols:
-            valid_save_mask = out_df[save_cols].notna().any(axis=1)
+            valid_save_mask = out_df[save_cols].notna().any(axis=1) | active_badhole
             save_df = out_df.loc[valid_save_mask, ["DEPTH"] + save_cols]
             if req.save:
                 saved_rows = _save_curves_to_well(project_id, well_name, save_df)
@@ -1203,6 +1557,8 @@ def workspace_lithology(
         return {
             "well_name": well_name,
             "model": model,
+            "badhole_treatment": bh_mode,
+            "badhole_count": int(active_badhole.sum()),
             "saved": req.save,
             "saved_rows": saved_rows,
             "crossplot": crossplot_meta,
@@ -1428,6 +1784,103 @@ def workspace_porosity(
             phie_s.loc[active_coal] = 0.0
             phid_s.loc[active_coal] = 0.0
 
+        bh_mode = (req.badhole_treatment or "none").strip().lower()
+        badhole_mask = _resolve_badhole_mask(
+            df, auto_detect_if_missing=(bh_mode != "none")
+        )
+        active_badhole = badhole_mask & (~coal_mask)
+
+        if bh_mode != "none" and active_badhole.any():
+            if bh_mode in ("vsh_gr", "gr"):
+                vsh_bh_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+                if vsh_bh_s.isna().all() and "VCLAY" in df.columns:
+                    vcl_f = pd.to_numeric(df["VCLAY"], errors="coerce").fillna(0.0)
+                    vsa_f = (
+                        pd.to_numeric(df["VSAND"], errors="coerce").fillna(0.0)
+                        if "VSAND" in df.columns
+                        else (1.0 - vcl_f).clip(0.0, 1.0)
+                    )
+                    denom_f = (vcl_f + vsa_f).replace(0.0, np.nan)
+                    vsh_bh_s = (vcl_f / denom_f).clip(0.0, 1.0)
+                bh_gr = active_badhole & vsh_bh_s.notna()
+                if bh_gr.any():
+                    vsh_v = vsh_bh_s.loc[bh_gr].to_numpy(dtype=float)
+                    phin_sh = (
+                        float(req.dry_clay_point[0])
+                        if (req.dry_clay_point and req.dry_clay_point[0] is not None)
+                        else 0.33
+                    )
+                    rho_ma_sand = (
+                        float(req.dry_sand_point[1])
+                        if (req.dry_sand_point and req.dry_sand_point[1] is not None)
+                        else 2.65
+                    )
+                    rho_fl = (
+                        float(req.fluid_point[1])
+                        if (req.fluid_point and len(req.fluid_point) > 1)
+                        else 1.0
+                    )
+                    nphi_bh = (
+                        nphi.loc[bh_gr]
+                        .clip(0.0, 0.42)
+                        .fillna(
+                            pd.Series(
+                                0.18 * (1.0 - vsh_v) + phin_sh * vsh_v,
+                                index=df.index[bh_gr],
+                            )
+                        )
+                        .to_numpy(dtype=float)
+                    )
+                    gr_bh = (
+                        pd.to_numeric(df.loc[bh_gr, "GR"], errors="coerce")
+                        .fillna(50.0)
+                        .to_numpy(dtype=float)
+                        if "GR" in df.columns
+                        else np.full(len(vsh_v), 50.0)
+                    )
+                    rhob_rec = np.asarray(
+                        den_correction(
+                            nphi_bh,
+                            gr_bh,
+                            vsh_gr=vsh_v,
+                            phin_sh=phin_sh,
+                            phid_sh=0.05,
+                            rho_ma=rho_ma_sand,
+                            rho_water=rho_fl,
+                        ),
+                        dtype=float,
+                    )
+                    phid_bh = np.clip(
+                        np.asarray(
+                            density_porosity(rhob_rec, rho_ma_sand, rho_fl), dtype=float
+                        ),
+                        0.0,
+                        0.45,
+                    )
+                    phit_sh_bh = np.clip(
+                        np.asarray(estimate_shale_porosity(nphi_bh, phid_bh), dtype=float),
+                        0.0,
+                        0.45,
+                    )
+                    phie_bh = np.clip(phid_bh - vsh_v * phit_sh_bh, 0.0, phid_bh)
+                    phit_s.loc[bh_gr] = phid_bh
+                    phid_s.loc[bh_gr] = phid_bh
+                    phit_sh_s.loc[bh_gr] = phit_sh_bh
+                    phie_s.loc[bh_gr] = phie_bh
+            elif bh_mode == "interpolate":
+                for s_ref in (phit_s, phie_s, phid_s, phit_sh_s):
+                    s_ref.loc[active_badhole] = np.nan
+                    s_ref[:] = (
+                        s_ref.interpolate(method="linear", limit_direction="both").clip(
+                            0.0, 1.0
+                        )
+                    )
+            elif bh_mode in ("ignore", "null", "nan"):
+                phit_s.loc[active_badhole] = np.nan
+                phie_s.loc[active_badhole] = np.nan
+                phid_s.loc[active_badhole] = np.nan
+                phit_sh_s.loc[active_badhole] = np.nan
+
         cpore_col = next((c for c in ("CPORE", "KPORE") if c in df.columns), None)
         cpore_s = (
             pd.to_numeric(df[cpore_col], errors="coerce")
@@ -1458,8 +1911,18 @@ def workspace_porosity(
                 },
                 index=df.index,
             )
+            if bh_mode == "interpolate" and active_badhole.any():
+                for c in active_min_cols:
+                    min_mat.loc[active_badhole, c] = np.nan
+                    min_mat[c] = (
+                        min_mat[c]
+                        .interpolate(method="linear", limit_direction="both")
+                        .fillna(0.0)
+                        .clip(0.0, 1.0)
+                    )
             min_sum = min_mat.sum(axis=1)
-            has_pos_min = valid_mask & (min_sum > 1e-6)
+            eff_valid = (valid_mask | active_badhole) & phit_s.notna()
+            has_pos_min = eff_valid & (min_sum > 1e-6)
             if has_pos_min.any():
                 target_vmatrix = (1.0 - phit_s).clip(0.0, 1.0)
                 scale_factor = (target_vmatrix / min_sum.replace(0.0, np.nan)).fillna(
@@ -1467,14 +1930,21 @@ def workspace_porosity(
                 )
                 for c in active_min_cols:
                     scaled_col = pd.Series(np.nan, index=df.index, dtype=float)
-                    scaled_col.loc[valid_mask] = np.where(
-                        has_pos_min.loc[valid_mask],
+                    scaled_col.loc[eff_valid] = np.where(
+                        has_pos_min.loc[eff_valid],
                         (
-                            min_mat.loc[valid_mask, c] * scale_factor.loc[valid_mask]
+                            min_mat.loc[eff_valid, c] * scale_factor.loc[eff_valid]
                         ).clip(0.0, 1.0),
                         0.0,
                     )
+                    if bh_mode in ("ignore", "null", "nan") and active_badhole.any():
+                        scaled_col.loc[active_badhole] = np.nan
                     out_df[c] = scaled_col
+            elif bh_mode in ("ignore", "null", "nan") and active_badhole.any():
+                for c in active_min_cols:
+                    col_s = pd.to_numeric(df[c], errors="coerce").copy()
+                    col_s.loc[active_badhole] = np.nan
+                    out_df[c] = col_s
 
         if active_coal.any():
             if "VCOAL" not in out_df.columns:
@@ -1487,8 +1957,14 @@ def workspace_porosity(
                 if mcol in out_df.columns:
                     out_df.loc[active_coal, mcol] = 1.0 if mcol == "VCOAL" else 0.0
 
-        # Core comparison metrics (exclude coal intervals)
-        core_mask = phit_s.notna() & cpore_s.notna() & (cpore_s > 0) & (~coal_mask)
+        # Core comparison metrics (exclude coal and badhole intervals)
+        core_mask = (
+            phit_s.notna()
+            & cpore_s.notna()
+            & (cpore_s > 0)
+            & (~coal_mask)
+            & (~active_badhole)
+        )
         core_metrics: Dict[str, Optional[float]] = {
             "count": int(core_mask.sum()),
             "rmse": None,
@@ -1510,18 +1986,21 @@ def workspace_porosity(
         save_poro_cols = ["DEPTH", "PHIT", "PHIE", "PHID"] + [
             c for c in active_min_cols if c in out_df.columns
         ]
+        save_row_mask = valid_mask | active_badhole
         saved_rows = 0
         if req.save:
-            save_df = out_df.loc[valid_mask, save_poro_cols]
+            save_df = out_df.loc[save_row_mask, save_poro_cols]
             saved_rows = _save_curves_to_well(project_id, well_name, save_df)
         else:
             _update_in_memory_well_cache(
-                project_id, well_name, out_df.loc[valid_mask, save_poro_cols]
+                project_id, well_name, out_df.loc[save_row_mask, save_poro_cols]
             )
 
         return {
             "well_name": well_name,
             "method": req.method,
+            "badhole_treatment": bh_mode,
+            "badhole_count": int(active_badhole.sum()),
             "saved": req.save,
             "saved_rows": saved_rows,
             "core_metrics": core_metrics,
