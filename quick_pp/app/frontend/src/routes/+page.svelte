@@ -103,12 +103,12 @@
 			workbench.multiWellStep === 'shf' &&
 			projectData.shfResult?.scal_data?.pc?.length
 		) {
+			const scal = projectData.shfResult.scal_data;
 			return {
 				title: 'Multi-Well SCAL Capillary Pressure & Leverett-J Table',
 				columns: [
 					{ key: 'Well', label: 'Well' },
 					{ key: 'Sample', label: 'Sample' },
-					{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 2 },
 					{ key: 'ROCK_FLAG', label: 'RT', numeric: true, decimals: 0 },
 					{ key: 'PC', label: 'Pc', unit: 'psi', numeric: true, decimals: 2 },
 					{ key: 'SW', label: 'Sw', unit: 'v/v', numeric: true, decimals: 3 },
@@ -118,9 +118,17 @@
 					{ key: 'PHIT', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3 },
 					{ key: 'PERM', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2 }
 				],
-				rows: projectData.shfResult.scal_data.pc.map((r: Record<string, any>) => ({
-					...r,
-					depth: r.DEPTH ?? r.depth ?? null
+				rows: scal.pc.map((pcVal, i) => ({
+					Well: scal.well_names?.[i] ?? '',
+					Sample: scal.samples?.[i] ?? '',
+					ROCK_FLAG: scal.rock_flags?.[i] ?? null,
+					PC: pcVal,
+					SW: scal.sw?.[i] ?? null,
+					SWN: scal.swn?.[i] ?? null,
+					J: scal.j?.[i] ?? null,
+					H: scal.h?.[i] ?? null,
+					PHIT: scal.phit?.[i] ?? null,
+					PERM: scal.perm?.[i] ?? null
 				}))
 			};
 		}

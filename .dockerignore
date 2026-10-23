@@ -67,3 +67,7 @@ Thumbs.db
 !notebooks/data/01_raw/COSTA/HW-4.las
 !notebooks/data/01_raw/COSTA/HW-5.las
 !notebooks/data/01_raw/COSTA/HW_core_data_all.csv
+
+# Always exclude frontend from backend Docker image build context
+quick_pp/app/frontend/
+quick_pp/app/frontend/**

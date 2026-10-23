@@ -45,7 +45,7 @@ export const PETRO_COLORS = {
 	rshal: '#0D9488',
 	rhob: '#DC2626',
 	nphi: '#2563EB',
-	pef: '#9333EA',
+	pef: '#A855F7',
 	drho: '#D97706',
 	dt: '#9333EA',
 	cali: '#475569',

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { browser } from '$app/environment';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
@@ -233,6 +233,7 @@
 	});
 
 	function buildTracesAndLayout() {
+		const currentYRange = untrack(() => yRange);
 		const indices = wellData.visibleIndices;
 		const deptAll = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 		const depth = indices.map((i) => deptAll[i]);
@@ -244,22 +245,41 @@
 			return indices.map((i) => (Number.isFinite(arr[i]) ? arr[i] : null));
 		};
 
+		// Decimate SVG-only polygon fill traces on ultra-dense wells (>3500 rows) to prevent
+		// 350k+ SVG <path> vertices from lagging browser pan/zoom, while keeping all WebGL
+		// (scattergl) curve lines at 100% full native depth resolution.
+		const svgStride = depth.length > 3500 ? Math.ceil(depth.length / 3500) : 1;
+		const svgSampleIndices: number[] = [];
+		if (svgStride > 1) {
+			for (let i = 0; i < depth.length; i += svgStride) {
+				svgSampleIndices.push(i);
+			}
+			if (svgSampleIndices[svgSampleIndices.length - 1] !== depth.length - 1) {
+				svgSampleIndices.push(depth.length - 1);
+			}
+		}
+		const svgDepth = svgStride > 1 ? svgSampleIndices.map((i) => depth[i]) : depth;
+		const decimateSvg = <T,>(arr: T[]): T[] =>
+			svgStride > 1 ? svgSampleIndices.map((i) => arr[i]) : arr;
+
 		const traces: any[] = [];
 
 		// Track 1 (xaxis): GR (0-200) with Earth-Shade bands (light low GR -> dark high GR), CALI (6-16), SP
 		const gr = pick('GR');
 		if (gr.length) {
+			const grForFill = decimateSvg(gr);
 			for (let b = 0; b < GR_EARTH_SHADE_BANDS.length; b++) {
 				const band = GR_EARTH_SHADE_BANDS[b];
-				const clampedGr = gr.map((v) =>
-					v !== null && Number.isFinite(v) ? Math.max(0, Math.min(v, band.maxGr)) : null
+				// Map null to 0 so Plotly SVG 'tozerox'/'tonextx' never splits subpaths or bridges across null gaps
+				const clampedGr = grForFill.map((v) =>
+					v !== null && Number.isFinite(v) ? Math.max(0, Math.min(v, band.maxGr)) : 0
 				);
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
 					name: `GR_BAND_${band.maxGr}`,
 					x: clampedGr,
-					y: depth,
+					y: svgDepth,
 					xaxis: 'x',
 					yaxis: 'y',
 					line: { width: 0, color: 'rgba(0,0,0,0)' },
@@ -444,19 +464,40 @@
 		const drhoAsNphi = drho.map((d) => (d !== null ? 0.45 - ((d - -0.25) / (0.25 - -0.25)) * 0.6 : null));
 
 		if (nphi.length && rhob.length) {
-			// Gas Crossover Shading: fill yellow ONLY where NPHI crosses to the right of RHOB (nphi < rhobAsNphi)
-			const gasXoverTop = depth.map((_, i) => {
-				const n = nphi[i];
-				const rEq = rhobAsNphi[i];
-				if (n === null || rEq === null) return null;
-				return n < rEq ? rEq : n;
-			});
+			// Gas Crossover Shading: fill yellow ONLY where NPHI crosses to the right of RHOB (nphi < rhobAsNphi).
+			// Never emit null in GAS_XOVER_BASE / GAS_XOVER because Plotly SVG 'tonextx' closes subpaths across nulls
+			// with a straight chord; instead pinch base === top when either curve is null so fill width is 0.
+			const nphiFill = decimateSvg(nphi);
+			const rhobEqFill = decimateSvg(rhobAsNphi);
+			const gasXoverBase: number[] = new Array(svgDepth.length);
+			const gasXoverTop: number[] = new Array(svgDepth.length);
+			let lastNeutral = 0.45;
+			for (let i = 0; i < svgDepth.length; i++) {
+				const n = nphiFill[i];
+				if (n !== null && Number.isFinite(n)) {
+					lastNeutral = n;
+					break;
+				}
+			}
+			for (let i = 0; i < svgDepth.length; i++) {
+				const n = nphiFill[i];
+				const rEq = rhobEqFill[i];
+				if (n !== null && Number.isFinite(n) && rEq !== null && Number.isFinite(rEq)) {
+					lastNeutral = n;
+					gasXoverBase[i] = n;
+					gasXoverTop[i] = n < rEq ? rEq : n;
+				} else {
+					if (n !== null && Number.isFinite(n)) lastNeutral = n;
+					gasXoverBase[i] = lastNeutral;
+					gasXoverTop[i] = lastNeutral;
+				}
+			}
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
 				name: 'GAS_XOVER_BASE',
-				x: nphi,
-				y: depth,
+				x: gasXoverBase,
+				y: svgDepth,
 				xaxis: 'x3',
 				yaxis: 'y',
 				line: { width: 0, color: 'rgba(0,0,0,0)' },
@@ -468,7 +509,7 @@
 				mode: 'lines',
 				name: 'GAS_XOVER',
 				x: gasXoverTop,
-				y: depth,
+				y: svgDepth,
 				xaxis: 'x3',
 				yaxis: 'y',
 				fill: 'tonextx',
@@ -479,33 +520,40 @@
 			});
 		}
 
-		if (nphi.length) {
+		// Light fill from DRHO = 0 (which maps to 0.15 on Track 3's [0.45 -> -0.15] scale) to DRHO curve
+		if (drho.some((v) => v !== null)) {
+			const drhoZeroEq = 0.15;
+			const drhoFillX = decimateSvg(drhoAsNphi).map((v) =>
+				v !== null && Number.isFinite(v) ? v : drhoZeroEq
+			);
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
-				name: 'NPHI',
-				x: nphi,
-				y: depth,
+				name: 'DRHO_ZERO_BASE',
+				x: svgDepth.map(() => drhoZeroEq),
+				y: svgDepth,
 				xaxis: 'x3',
 				yaxis: 'y',
-				line: { color: PETRO_COLORS.nphi, width: 1.4 },
-				hovertemplate: 'NPHI: %{x:.3f} v/v<extra></extra>'
+				line: { width: 0, color: 'rgba(0,0,0,0)' },
+				hoverinfo: 'skip',
+				showlegend: false
 			});
-		}
-		if (rhob.length) {
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
-				name: 'RHOB',
-				x: rhobAsNphi,
-				customdata: rhob,
-				y: depth,
+				name: 'DRHO_FILL',
+				x: drhoFillX,
+				y: svgDepth,
 				xaxis: 'x3',
 				yaxis: 'y',
-				line: { color: PETRO_COLORS.rhob, width: 1.4 },
-				hovertemplate: 'RHOB: %{customdata:.3f} g/cc<extra></extra>'
+				fill: 'tonextx',
+				fillcolor: 'rgba(245, 158, 11, 0.16)',
+				line: { width: 0, color: 'rgba(0,0,0,0)' },
+				hoverinfo: 'skip',
+				showlegend: false
 			});
 		}
+
 		if (pef.some((v) => v !== null && v >= 0)) {
 			traces.push({
 				type: 'scattergl',
@@ -516,7 +564,7 @@
 				y: depth,
 				xaxis: 'x3',
 				yaxis: 'y',
-				line: { color: PETRO_COLORS.pef, width: 1.3, dash: 'dashdot' },
+				line: { color: 'rgba(168, 85, 247, 0.55)', width: 1.0, dash: 'dot' },
 				hovertemplate: 'PEF: %{customdata:.2f} b/e<extra></extra>'
 			});
 		}
@@ -530,8 +578,35 @@
 				y: depth,
 				xaxis: 'x3',
 				yaxis: 'y',
-				line: { color: PETRO_COLORS.drho, width: 1.2, dash: 'dash' },
+				line: { color: 'rgba(217, 119, 6, 0.6)', width: 1.0, dash: 'dot' },
 				hovertemplate: 'DRHO: %{customdata:.3f} g/cc<extra></extra>'
+			});
+		}
+		if (nphi.length) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'NPHI',
+				x: nphi,
+				y: depth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { color: PETRO_COLORS.nphi, width: 1.45, dash: 'dash' },
+				hovertemplate: 'NPHI: %{x:.3f} v/v<extra></extra>'
+			});
+		}
+		if (rhob.length) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'RHOB',
+				x: rhobAsNphi,
+				customdata: rhob,
+				y: depth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { color: PETRO_COLORS.rhob, width: 1.45 },
+				hovertemplate: 'RHOB: %{customdata:.3f} g/cc<extra></extra>'
 			});
 		}
 		if (showHcCorrected && workbench.lithoParams.enableHcCorrection) {
@@ -569,15 +644,16 @@
 		// Track 4 (xaxis4): Evaluated Lithology & Porosity (stacked mineral volumes + PHIT + CPORE)
 		const phit = pick('PHIT').length ? pick('PHIT') : pick('PHIE');
 		const lithoToPlot = resolveActiveLithoSpecs(indices);
-		let cumVol = new Array(depth.length).fill(0);
+		let cumVol = new Array(svgDepth.length).fill(0);
 		let hasPrevLithTrace = false;
 
 		for (const { spec, arr } of lithoToPlot) {
-			const rawVals = depth.map((_, i) => {
-				const v = arr[i];
+			const decArr = decimateSvg(arr);
+			const rawVals = svgDepth.map((_, i) => {
+				const v = decArr[i];
 				return v !== null && Number.isFinite(v) && v > 0 ? v : 0;
 			});
-			const nextCum = depth.map((_, i) => Math.min(1, cumVol[i] + rawVals[i]));
+			const nextCum = svgDepth.map((_, i) => Math.min(1, cumVol[i] + rawVals[i]));
 
 			traces.push({
 				type: 'scatter',
@@ -585,7 +661,7 @@
 				name: spec.mnemonic,
 				x: nextCum,
 				customdata: rawVals,
-				y: depth,
+				y: svgDepth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				fill: hasPrevLithTrace ? 'tonextx' : 'tozerox',
@@ -780,13 +856,27 @@
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
+				name: 'SWT_FILL',
+				x: decimateSvg(swt).map((v) =>
+					v !== null && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0
+				),
+				y: svgDepth,
+				xaxis: 'x6',
+				yaxis: 'y',
+				fill: 'tozerox',
+				fillcolor: PETRO_COLORS.waterFill,
+				line: { width: 0, color: 'rgba(0,0,0,0)' },
+				hoverinfo: 'skip',
+				showlegend: false
+			});
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
 				name: 'SWT',
 				x: swt,
 				y: depth,
 				xaxis: 'x6',
 				yaxis: 'y',
-				fill: 'tozerox',
-				fillcolor: PETRO_COLORS.waterFill,
 				line: { color: PETRO_COLORS.water, width: 1.5 },
 				hovertemplate: 'Sw: %{x:.3f} v/v<extra></extra>'
 			});
@@ -851,8 +941,8 @@
 				type: 'scatter',
 				mode: 'lines',
 				name: 'PAY',
-				x: payFlags.map((v) => (v && v > 0 ? 0.12 : 0)),
-				y: depth,
+				x: decimateSvg(payFlags.map((v) => (v && v > 0 ? 0.12 : 0))),
+				y: svgDepth,
 				xaxis: 'x6',
 				yaxis: 'y',
 				fill: 'tozerox',
@@ -862,12 +952,22 @@
 			});
 		}
 
-		// Background shapes for Formation Top intervals & Crossplot Lasso Brushing
+		// Background shapes & native annotations for Formation Top intervals & Crossplot Lasso Brushing
 		const shapes: any[] = [];
-		const sortedTops = [...wellData.tops].sort((a, b) => a.depth - b.depth);
+		const annotations: any[] = [];
+		const seenTopKeys = new Set<string>();
+		const sortedTops = [...wellData.tops]
+			.sort((a, b) => a.depth - b.depth)
+			.filter((t) => {
+				const key = `${t.name.trim().toUpperCase()}@${t.depth.toFixed(1)}`;
+				if (seenTopKeys.has(key)) return false;
+				seenTopKeys.add(key);
+				return true;
+			});
+		const wellMaxDepth = wellData.depthRange.max;
 		for (let i = 0; i < sortedTops.length; i++) {
 			const topD = sortedTops[i].depth;
-			const botD = i + 1 < sortedTops.length ? sortedTops[i + 1].depth : yRange[0];
+			const botD = i + 1 < sortedTops.length ? sortedTops[i + 1].depth : wellMaxDepth;
 			shapes.push({
 				type: 'rect',
 				xref: 'paper',
@@ -879,6 +979,33 @@
 				fillcolor: ZONE_BAND_COLORS[i % ZONE_BAND_COLORS.length],
 				line: { width: 0 },
 				layer: 'below'
+			});
+			shapes.push({
+				type: 'line',
+				xref: 'paper',
+				yref: 'y',
+				x0: 0,
+				x1: 1,
+				y0: topD,
+				y1: topD,
+				line: { color: 'rgba(37, 99, 235, 0.8)', width: 1, dash: 'dash' },
+				layer: 'above'
+			});
+			annotations.push({
+				xref: 'paper',
+				yref: 'y',
+				x: 0.003,
+				y: topD,
+				xanchor: 'left',
+				yanchor: 'bottom',
+				text: `▲ ${sortedTops[i].name} (${topD.toFixed(1)}m)`,
+				showarrow: false,
+				captureevents: false,
+				font: { family: 'JetBrains Mono, monospace', size: 9, color: '#1E40AF' },
+				bgcolor: 'rgba(239, 246, 255, 0.94)',
+				bordercolor: '#BFDBFE',
+				borderwidth: 1,
+				borderpad: 1.5
 			});
 		}
 
@@ -913,11 +1040,12 @@
 			paper_bgcolor: '#FFFFFF',
 			plot_bgcolor: '#FFFFFF',
 			showlegend: false,
-			hovermode: 'y unified',
+			hovermode: 'closest',
 			dragmode: 'pan',
 			shapes,
+			annotations,
 			yaxis: {
-				range: yRange,
+				range: currentYRange,
 				showgrid: true,
 				gridcolor: gridColor,
 				automargin: false,
@@ -1007,19 +1135,37 @@
 			syncPlotBounds();
 			if (!plotReady && plotContainer) {
 				plotReady = true;
+				let hoverRaf = 0;
 				(plotContainer as any).on('plotly_hover', (ev: any) => {
 					const pt = ev?.points?.[0];
 					if (pt && typeof pt.y === 'number') {
-						workbench.cursorDepth = pt.y;
+						const nextY = pt.y;
+						cancelAnimationFrame(hoverRaf);
+						hoverRaf = requestAnimationFrame(() => {
+							workbench.cursorDepth = nextY;
+						});
 					}
 				});
+				let relayoutRaf = 0;
 				(plotContainer as any).on('plotly_relayout', (ev: any) => {
-					syncPlotBounds();
+					let nextRange: [number, number] | null = null;
 					if (ev['yaxis.range[0]'] !== undefined && ev['yaxis.range[1]'] !== undefined) {
-						yRange = [Number(ev['yaxis.range[0]']), Number(ev['yaxis.range[1]'])];
+						nextRange = [Number(ev['yaxis.range[0]']), Number(ev['yaxis.range[1]'])];
 					} else if (Array.isArray(ev['yaxis.range'])) {
-						yRange = [Number(ev['yaxis.range'][0]), Number(ev['yaxis.range'][1])];
+						nextRange = [Number(ev['yaxis.range'][0]), Number(ev['yaxis.range'][1])];
+					} else {
+						const fullRange = (plotContainer as any)?._fullLayout?.yaxis?.range;
+						if (Array.isArray(fullRange) && fullRange.length === 2) {
+							nextRange = [Number(fullRange[0]), Number(fullRange[1])];
+						}
 					}
+					cancelAnimationFrame(relayoutRaf);
+					relayoutRaf = requestAnimationFrame(() => {
+						syncPlotBounds();
+						if (nextRange && Number.isFinite(nextRange[0]) && Number.isFinite(nextRange[1])) {
+							yRange = nextRange;
+						}
+					});
 				});
 			}
 		});
@@ -1259,7 +1405,7 @@
 					<div class="mt-[1px] h-[1.5px] w-full" style="background: {PETRO_COLORS.rhob}"></div>
 				</div>
 
-				<!-- Row 2: NPHI (0.45 <- -0.15 v/v, increases right to left, solid blue) -->
+				<!-- Row 2: NPHI (0.45 <- -0.15 v/v, increases right to left, dashed blue) -->
 				<div class="flex flex-col">
 					<div
 						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
@@ -1269,37 +1415,40 @@
 						<span class="font-sans text-[8px] font-bold">◄ NPHI (v/v)</span>
 						<span>-0.15</span>
 					</div>
-					<div class="mt-[1px] h-[1.5px] w-full" style="background: {PETRO_COLORS.nphi}"></div>
-				</div>
-
-				<!-- Row 3: PEF (0 -> 10 b/e, increases left to right, dash-dot purple) -->
-				<div class="flex flex-col">
 					<div
-						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
-						style="color: {PETRO_COLORS.pef}"
-					>
-						<span>0</span>
-						<span class="font-sans text-[8px] font-bold">PEF (b/e) ►</span>
-						<span>10</span>
-					</div>
-					<div
-						class="mt-[1px] h-[1.5px] w-full"
-						style="background: repeating-linear-gradient(to right, {PETRO_COLORS.pef} 0 5px, transparent 5px 7px, {PETRO_COLORS.pef} 7px 9px, transparent 9px 11px);"
+						class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed"
+						style="border-color: {PETRO_COLORS.nphi}"
 					></div>
 				</div>
 
-				<!-- Row 4: DRHO (-0.25 -> 0.25 g/cc, increases left to right, dashed amber) -->
-				<div class="flex flex-col">
+				<!-- Row 3: PEF (0 -> 10 b/e, increases left to right, light dotted purple) -->
+				<div class="flex flex-col opacity-75">
 					<div
-						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+						class="mono-num flex items-center justify-between font-medium whitespace-nowrap text-[8px] leading-none"
+						style="color: {PETRO_COLORS.pef}"
+					>
+						<span>0</span>
+						<span class="font-sans text-[8px] font-semibold">PEF (b/e) ►</span>
+						<span>10</span>
+					</div>
+					<div
+						class="mt-[1px] h-0 w-full border-t border-dotted"
+						style="border-color: {PETRO_COLORS.pef}"
+					></div>
+				</div>
+
+				<!-- Row 4: DRHO (-0.25 -> 0.25 g/cc, increases left to right, light dotted amber with zero-fill) -->
+				<div class="flex flex-col opacity-80">
+					<div
+						class="mono-num flex items-center justify-between font-medium whitespace-nowrap text-[8px] leading-none"
 						style="color: {PETRO_COLORS.drho}"
 					>
 						<span>-0.25</span>
-						<span class="font-sans text-[8px] font-bold">DRHO (g/cc) ►</span>
+						<span class="font-sans text-[8px] font-semibold">DRHO (g/cc) ►</span>
 						<span>0.25</span>
 					</div>
 					<div
-						class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed"
+						class="mt-[1px] h-0 w-full border-t border-dotted"
 						style="border-color: {PETRO_COLORS.drho}"
 					></div>
 				</div>
@@ -1393,37 +1542,11 @@
 	<div class="relative min-h-0 flex-1 overflow-hidden">
 		<div bind:this={plotContainer} class="h-full w-full"></div>
 
-		<!-- Overlay container aligned with Plotly's plot area -->
+		<!-- Overlay container aligned with Plotly's plot area (for Fluid Contacts) -->
 		<div
 			style="left: {plotAreaLeft}px; right: {plotAreaRight}px;"
 			class="pointer-events-none absolute top-[6px] bottom-[8px] overflow-hidden"
 		>
-			{#each wellData.tops as top (top.id)}
-				{@const activeDepth =
-					draggingMarker?.kind === 'top' && draggingMarker.id === top.id
-						? draggingMarker.depth
-						: top.depth}
-				{@const pct = depthToPercent(activeDepth)}
-				{#if pct !== null}
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<div
-						onpointerdown={(e) => startMarkerDrag(e, 'top', top.id, top.name, activeDepth)}
-						style="top: {pct}%;"
-						title="Drag vertically to adjust Formation Top ({top.name})"
-						class="pointer-events-auto group absolute right-0 left-0 -translate-y-1/2 cursor-ns-resize py-1"
-					>
-						<div
-							class="w-full border-t border-dashed border-blue-600/80 group-hover:border-solid group-hover:border-blue-600"
-						></div>
-						<span
-							class="mono-num absolute -top-2.5 left-1 rounded-xs border border-blue-200 bg-blue-50/95 px-1 py-0 text-[9px] font-semibold text-blue-800 shadow-2xs"
-						>
-							▲ {top.name} ({activeDepth.toFixed(1)}m)
-						</span>
-					</div>
-				{/if}
-			{/each}
-
 			{#each wellData.contacts as contact (contact.id)}
 				{@const activeDepth =
 					draggingMarker?.kind === 'contact' && draggingMarker.id === contact.id
