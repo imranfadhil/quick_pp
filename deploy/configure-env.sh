@@ -38,7 +38,6 @@ set_kv() {
 set_kv POSTGRES_USER "$PG_USER"
 set_kv POSTGRES_DB "$PG_DB"
 set_kv WEB_PORT "$WEB_PORT"
-set_kv FRONTEND_MODE "prod"
 
 # Rotate or set the DB password ONLY before the postgres data directory exists.
 # Postgres applies POSTGRES_PASSWORD on first init only, so changing it after

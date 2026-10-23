@@ -60,13 +60,12 @@ services:
     depends_on:
       - qpp-backend
     environment:
-      - FRONTEND_MODE=${FRONTEND_MODE:-prod}
       - VITE_BACKEND_URL=${VITE_BACKEND_URL:-}
       - HOST=0.0.0.0
       - PORT=5469
       - NODE_OPTIONS=--max-old-space-size=${FRONTEND_MAX_OLD_SPACE:-4096}
-    # FRONTEND_MODE=dev -> live Vite HMR server; FRONTEND_MODE=prod (default) -> always rebuild & run hardened Node server
-    command: sh -c "if [ ! -d node_modules/@sveltejs/kit ]; then npm install; fi && if [ \"$$FRONTEND_MODE\" = \"dev\" ]; then exec npm run dev -- --host 0.0.0.0 --port 5469; else npm run build && exec node build/index.js; fi"
+    # Build only if build/index.js is missing OR if any file in src/ is newer than build/index.js, then run fast production Node server
+    command: sh -c "if [ ! -d node_modules/@sveltejs/kit ]; then npm install; fi && if [ ! -f build/index.js ] || [ -n \"$$(find src -newer build/index.js -print -quit 2>/dev/null)\" ]; then npm run build; fi && exec node build/index.js"
     networks:
       - qpp-network
 
