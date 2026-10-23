@@ -53,6 +53,18 @@
 
 	// Track visibility toggles
 	let showHcCorrected = $state(true);
+	let showTsOverlay = $state(true);
+
+	let hasTsComputed = $derived.by(() => {
+		const vlam = wellData.curves['VSH_LAM'];
+		const psand = wellData.curves['PHIT_SAND'];
+		return Boolean(
+			(vlam && vlam.some((v) => Number.isFinite(v))) ||
+				(psand && psand.some((v) => Number.isFinite(v)))
+		);
+	});
+
+	let tsOverlayActive = $derived(workbench.tsParams.enabled && showTsOverlay && hasTsComputed);
 
 	// Interactive dragging state for Formation Tops & Fluid Contacts
 	let draggingMarker = $state<{
@@ -218,6 +230,44 @@
 				continue;
 			}
 
+			// When Thomas-Stieber is estimated and active, split VCLAY fill into VSH_LAM + VSH_DIS
+			if (spec.mnemonic === 'VCLAY' && tsOverlayActive) {
+				const vlam = pick('VSH_LAM');
+				const vdis = pick('VSH_DIS');
+				if (
+					vlam.some((v) => v !== null && v > 1e-4) ||
+					vdis.some((v) => v !== null && v > 1e-4)
+				) {
+					out.push({
+						spec: {
+							mnemonic: 'VSH_LAM',
+							mineralName: 'SHALE_LAM',
+							shortLabel: 'Laminated Shale',
+							fillRgba: 'rgba(71, 85, 105, 0.72)',
+							fillHex: PETRO_COLORS.vshLamFill,
+							strokeHex: PETRO_COLORS.vshLamStroke,
+							nphiEndpoint: 0.3,
+							rhobEndpoint: 2.55
+						},
+						arr: vlam
+					});
+					out.push({
+						spec: {
+							mnemonic: 'VSH_DIS',
+							mineralName: 'SHALE_DIS',
+							shortLabel: 'Dispersed Clay',
+							fillRgba: 'rgba(203, 213, 225, 0.65)',
+							fillHex: PETRO_COLORS.vshDisFill,
+							strokeHex: PETRO_COLORS.vshDisStroke,
+							nphiEndpoint: 0.3,
+							rhobEndpoint: 2.55
+						},
+						arr: vdis
+					});
+					continue;
+				}
+			}
+
 			out.push({ spec, arr });
 		}
 		return out;
@@ -229,6 +279,7 @@
 		void workbench.lithoParams.model;
 		void workbench.lithoParams.minerals;
 		void workbench.lithoParams.enableCoalFlagging;
+		void tsOverlayActive;
 		return resolveActiveLithoSpecs(wellData.visibleIndices);
 	});
 
@@ -420,6 +471,7 @@
 				}
 			}
 			if (arr.some((v) => v !== null && v > 0)) {
+				const dimForTs = tsOverlayActive && spec.primary !== 'RT';
 				traces.push({
 					type: 'scattergl',
 					mode: 'lines',
@@ -428,8 +480,26 @@
 					y: depth,
 					xaxis: 'x2',
 					yaxis: 'y',
+					opacity: dimForTs ? 0.22 : 1.0,
 					line: { color: spec.color, width: spec.width, dash: spec.dash },
 					hovertemplate: `${activeMnem}: %{x:.2f} ohm.m<extra></extra>`
+				});
+			}
+		}
+
+		if (tsOverlayActive) {
+			const rtMod = pick('RT_MOD');
+			if (rtMod.some((v) => v !== null && v > 0)) {
+				traces.push({
+					type: 'scattergl',
+					mode: 'lines',
+					name: 'RT_MOD',
+					x: rtMod.map((v) => (v !== null && v > 0 ? v : null)),
+					y: depth,
+					xaxis: 'x2',
+					yaxis: 'y',
+					line: { color: PETRO_COLORS.rtMod, width: 1.65, dash: 'dash' },
+					hovertemplate: 'RT_MOD (Hagiwara TS): %{x:.2f} ohm.m<extra></extra>'
 				});
 			}
 		}
@@ -686,6 +756,69 @@
 				line: { color: PETRO_COLORS.phie, width: 1.6 },
 				hovertemplate: 'PHIT: %{x:.3f} v/v<extra></extra>'
 			});
+		}
+
+		if (tsOverlayActive) {
+			const phitSand = pick('PHIT_SAND');
+			if (phitSand.some((v) => v !== null)) {
+				if (phit.some((v) => v !== null)) {
+					const phitFill = decimateSvg(phit);
+					const psandFill = decimateSvg(phitSand);
+					const upliftBase: number[] = new Array(svgDepth.length);
+					const upliftTop: number[] = new Array(svgDepth.length);
+					let lastP = 0;
+					for (let i = 0; i < svgDepth.length; i++) {
+						const p = phitFill[i];
+						const ps = psandFill[i];
+						if (p !== null && Number.isFinite(p) && ps !== null && Number.isFinite(ps)) {
+							lastP = p;
+							upliftBase[i] = p;
+							upliftTop[i] = Math.max(p, ps);
+						} else {
+							if (p !== null && Number.isFinite(p)) lastP = p;
+							upliftBase[i] = lastP;
+							upliftTop[i] = lastP;
+						}
+					}
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'PHIT_SAND_BASE',
+						x: upliftBase,
+						y: svgDepth,
+						xaxis: 'x4',
+						yaxis: 'y',
+						line: { width: 0, color: 'rgba(0,0,0,0)' },
+						hoverinfo: 'skip',
+						showlegend: false
+					});
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'PHIT_SAND_UPLIFT',
+						x: upliftTop,
+						y: svgDepth,
+						xaxis: 'x4',
+						yaxis: 'y',
+						fill: 'tonextx',
+						fillcolor: 'rgba(13, 148, 136, 0.16)',
+						line: { width: 0, color: 'rgba(0,0,0,0)' },
+						hoverinfo: 'skip',
+						showlegend: false
+					});
+				}
+				traces.push({
+					type: 'scattergl',
+					mode: 'lines',
+					name: 'PHIT_SAND',
+					x: phitSand,
+					y: depth,
+					xaxis: 'x4',
+					yaxis: 'y',
+					line: { color: PETRO_COLORS.phitSand, width: 1.65, dash: 'dash' },
+					hovertemplate: 'PHIT_SAND (TS): %{x:.3f} v/v<extra></extra>'
+				});
+			}
 		}
 
 		// Upscaled blocked porosity & P10/P90 uncertainty on Track 4
@@ -1121,6 +1254,7 @@
 		void wellData.coreSamples;
 		void brushedIntervals;
 		void showHcCorrected;
+		void tsOverlayActive;
 		void workbench.lithoParams.enableHcCorrection;
 		void workbench.lithoParams.model;
 		void workbench.lithoParams.minerals;
@@ -1270,6 +1404,18 @@
 		</div>
 
 		<div class="flex shrink-0 items-center gap-2">
+			{#if workbench.tsParams.enabled && hasTsComputed}
+				<label
+					class="flex items-center gap-1 rounded-xs border border-teal-200 bg-teal-50/70 px-1.5 py-0.5 text-[10.5px] font-medium text-teal-900 cursor-pointer"
+				>
+					<input
+						type="checkbox"
+						bind:checked={showTsOverlay}
+						class="h-3 w-3 rounded-xs border-teal-300 text-teal-700 focus:ring-0"
+					/>
+					<span>TS Overlay</span>
+				</label>
+			{/if}
 			<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer">
 				<input
 					type="checkbox"
@@ -1343,48 +1489,88 @@
 					<div class="mt-[1px] h-[1.5px] w-full" style="background: {PETRO_COLORS.rt}"></div>
 				</div>
 
-				<!-- Medium Resistivity: RM (dashed blue) -->
-				<div class="flex flex-col">
-					<div
-						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
-						style="color: {PETRO_COLORS.rm}"
-					>
-						<span>0.2</span>
-						<span class="font-sans text-[8px] font-bold">RM (Ω·m) ►</span>
-						<span>2000</span>
+				{#if tsOverlayActive && wellData.curves['RT_MOD']}
+					<!-- Hagiwara Modeled Resistivity: RT_MOD (dashed purple) -->
+					<div class="flex flex-col">
+						<div
+							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							style="color: {PETRO_COLORS.rtMod}"
+						>
+							<span>0.2</span>
+							<span class="font-sans text-[8px] font-bold">RT_MOD (TS) ►</span>
+							<span>2000</span>
+						</div>
+						<div
+							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed"
+							style="border-color: {PETRO_COLORS.rtMod}"
+						></div>
 					</div>
-					<div
-						class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed"
-						style="border-color: {PETRO_COLORS.rm}"
-					></div>
-				</div>
 
-				<!-- Shallow Resistivity: RS (dotted teal) + Log Decade Ticks -->
-				<div class="flex flex-col">
-					<div
-						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
-						style="color: {PETRO_COLORS.rs}"
-					>
-						<span>0.2</span>
-						<span class="font-sans text-[8px] font-bold">RS (Ω·m) ►</span>
-						<span>2000</span>
+					<!-- Dimmed RM / RS & Log Decade Ticks -->
+					<div class="flex flex-col">
+						<div
+							class="mono-num flex items-center justify-between font-medium whitespace-nowrap text-[7.5px] leading-none opacity-45"
+						>
+							<span style="color: {PETRO_COLORS.rm}">RM</span>
+							<span class="font-sans text-[7.5px] text-slate-500">RM / RS (dimmed)</span>
+							<span style="color: {PETRO_COLORS.rs}">RS</span>
+						</div>
+						<div class="relative h-2.5 w-full text-[7px] font-medium text-slate-500 mono-num">
+							{#each [[1, '1'], [10, '10'], [100, '100'], [1000, '1k']] as [val, lbl]}
+								{@const pct = ((Math.log10(Number(val)) - Math.log10(0.2)) / (Math.log10(2000) - Math.log10(0.2))) * 100}
+								<span
+									style="left: {pct}%;"
+									class="absolute bottom-0 -translate-x-1/2 leading-none"
+								>
+									{lbl}
+								</span>
+							{/each}
+						</div>
 					</div>
-					<div
-						class="mt-[1px] h-0 w-full border-t-[1.5px] border-dotted"
-						style="border-color: {PETRO_COLORS.rs}"
-					></div>
-					<div class="relative h-2.5 w-full text-[7px] font-medium text-slate-500 mono-num">
-						{#each [[1, '1'], [10, '10'], [100, '100'], [1000, '1k']] as [val, lbl]}
-							{@const pct = ((Math.log10(Number(val)) - Math.log10(0.2)) / (Math.log10(2000) - Math.log10(0.2))) * 100}
-							<span
-								style="left: {pct}%;"
-								class="absolute bottom-0 -translate-x-1/2 leading-none"
-							>
-								{lbl}
-							</span>
-						{/each}
+				{:else}
+					<!-- Medium Resistivity: RM (dashed blue) -->
+					<div class="flex flex-col">
+						<div
+							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							style="color: {PETRO_COLORS.rm}"
+						>
+							<span>0.2</span>
+							<span class="font-sans text-[8px] font-bold">RM (Ω·m) ►</span>
+							<span>2000</span>
+						</div>
+						<div
+							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed"
+							style="border-color: {PETRO_COLORS.rm}"
+						></div>
 					</div>
-				</div>
+
+					<!-- Shallow Resistivity: RS (dotted teal) + Log Decade Ticks -->
+					<div class="flex flex-col">
+						<div
+							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							style="color: {PETRO_COLORS.rs}"
+						>
+							<span>0.2</span>
+							<span class="font-sans text-[8px] font-bold">RS (Ω·m) ►</span>
+							<span>2000</span>
+						</div>
+						<div
+							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dotted"
+							style="border-color: {PETRO_COLORS.rs}"
+						></div>
+						<div class="relative h-2.5 w-full text-[7px] font-medium text-slate-500 mono-num">
+							{#each [[1, '1'], [10, '10'], [100, '100'], [1000, '1k']] as [val, lbl]}
+								{@const pct = ((Math.log10(Number(val)) - Math.log10(0.2)) / (Math.log10(2000) - Math.log10(0.2))) * 100}
+								<span
+									style="left: {pct}%;"
+									class="absolute bottom-0 -translate-x-1/2 leading-none"
+								>
+									{lbl}
+								</span>
+							{/each}
+						</div>
+					</div>
+				{/if}
 			</div>
 
 			<!-- Track 3: Vertically Stacked RHOB (1.95 -> 2.95), NPHI (0.45 -> -0.15), PEF (0 -> 10), DRHO (-0.25 -> 0.25) -->
@@ -1459,25 +1645,65 @@
 				style="left: 50.4%; width: 15.5%;"
 				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
-				<div class="flex flex-col">
-					<div class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-slate-700">
-						<span>0</span>
-						<span class="font-sans text-[9px] font-bold">LITHOLOGY ►</span>
-						<span>1.0</span>
+				{#if tsOverlayActive}
+					<div class="flex flex-col">
+						<div class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none text-slate-700">
+							<span>0</span>
+							<span class="font-sans text-[8px] font-bold">LITH (LAM / DIS) ►</span>
+							<span>1.0</span>
+						</div>
+						<div class="mt-[1px] flex h-[2px] w-full overflow-hidden rounded-full">
+							<div class="h-full w-1/3" style="background: {PETRO_COLORS.vshLamFill}"></div>
+							<div class="h-full w-1/3" style="background: {PETRO_COLORS.vshDisFill}"></div>
+							<div class="h-full w-1/3" style="background: {PETRO_COLORS.sandFill}"></div>
+						</div>
 					</div>
-					<div class="h-[1.5px] w-full bg-slate-400"></div>
-				</div>
-				<div class="flex flex-col">
-					<div
-						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
-						style="color: {PETRO_COLORS.phie}"
-					>
-						<span>0</span>
-						<span class="font-sans text-[9px] font-bold">PHIT / CORE ►</span>
-						<span>1.0</span>
+					<div class="flex flex-col">
+						<div
+							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							style="color: {PETRO_COLORS.phie}"
+						>
+							<span>0</span>
+							<span class="font-sans text-[8px] font-bold">PHIT / CORE ►</span>
+							<span>1.0</span>
+						</div>
+						<div class="mt-[1px] h-[1.5px] w-full" style="background: {PETRO_COLORS.phie}"></div>
 					</div>
-					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.phie}"></div>
-				</div>
+					<div class="flex flex-col">
+						<div
+							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							style="color: {PETRO_COLORS.phitSand}"
+						>
+							<span>0</span>
+							<span class="font-sans text-[8px] font-bold">PHIT_SAND (TS) ►</span>
+							<span>1.0</span>
+						</div>
+						<div
+							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed"
+							style="border-color: {PETRO_COLORS.phitSand}"
+						></div>
+					</div>
+				{:else}
+					<div class="flex flex-col">
+						<div class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-slate-700">
+							<span>0</span>
+							<span class="font-sans text-[9px] font-bold">LITHOLOGY ►</span>
+							<span>1.0</span>
+						</div>
+						<div class="h-[1.5px] w-full bg-slate-400"></div>
+					</div>
+					<div class="flex flex-col">
+						<div
+							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+							style="color: {PETRO_COLORS.phie}"
+						>
+							<span>0</span>
+							<span class="font-sans text-[9px] font-bold">PHIT / CORE ►</span>
+							<span>1.0</span>
+						</div>
+						<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.phie}"></div>
+					</div>
+				{/if}
 			</div>
 
 			<!-- Track 5: PERM & PERM_TRANS (0.01 - 10000 mD, 6-decade log scale) -->
@@ -1593,6 +1819,12 @@
 				<strong style="color: {PETRO_COLORS.rt}">RT:</strong>
 				{fmtNum(readout.RT ?? readout.RD ?? readout.RDEP, 2)}
 			</span>
+			{#if tsOverlayActive && readout.RT_MOD !== null && readout.RT_MOD !== undefined}
+				<span>
+					<strong style="color: {PETRO_COLORS.rtMod}">RT_MOD:</strong>
+					{fmtNum(readout.RT_MOD, 2)}
+				</span>
+			{/if}
 			{#if (readout.RM ?? readout.RMED) !== null && (readout.RM ?? readout.RMED) !== undefined}
 				<span>
 					<strong style="color: {PETRO_COLORS.rm}">RM:</strong>
@@ -1625,10 +1857,21 @@
 					{fmtNum(readout.DRHO, 3)}
 				</span>
 			{/if}
-			<span>
-				<strong>VCLAY:</strong>
-				{fmtNum(readout.VCLAY, 3)}
-			</span>
+			{#if tsOverlayActive && readout.VSH_LAM !== null && readout.VSH_LAM !== undefined}
+				<span>
+					<strong style="color: {PETRO_COLORS.vshLamStroke}">VSH_LAM:</strong>
+					{fmtNum(readout.VSH_LAM, 3)}
+				</span>
+				<span>
+					<strong style="color: {PETRO_COLORS.vshDisStroke}">VSH_DIS:</strong>
+					{fmtNum(readout.VSH_DIS, 3)}
+				</span>
+			{:else}
+				<span>
+					<strong>VCLAY:</strong>
+					{fmtNum(readout.VCLAY, 3)}
+				</span>
+			{/if}
 			{#if readout.VCALC !== null && readout.VCALC !== undefined && readout.VCALC > 1e-4}
 				<span>
 					<strong style="color: {PETRO_COLORS.calcStroke}">VCALC:</strong>
@@ -1645,6 +1888,12 @@
 				<strong style="color: {PETRO_COLORS.phie}">PHIT:</strong>
 				{fmtNum(readout.PHIT ?? readout.PHIE, 3)}
 			</span>
+			{#if tsOverlayActive && readout.PHIT_SAND !== null && readout.PHIT_SAND !== undefined}
+				<span>
+					<strong style="color: {PETRO_COLORS.phitSand}">PHIT_SAND:</strong>
+					{fmtNum(readout.PHIT_SAND, 3)}
+				</span>
+			{/if}
 			<span>
 				<strong style="color: {PETRO_COLORS.perm}">PERM:</strong>
 				{fmtPerm(readout.PERM)}

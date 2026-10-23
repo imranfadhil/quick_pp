@@ -57,6 +57,18 @@ export interface LithoEndpointParams {
 	badholeTreatment: BadholeTreatmentMode;
 }
 
+export interface ThomasStieberParams {
+	enabled: boolean;
+	useInPerm: boolean;
+	useInSaturation: boolean;
+	drySandPoro: number;
+	dryShalePoro: number;
+	rsand: number;
+	rvShale: number;
+	rhShale: number;
+	theta: number;
+}
+
 export interface SaturationModelParams {
 	method: 'waxman_smits' | 'archie';
 	rwMode: 'salinity_temp' | 'pickett';
@@ -125,6 +137,9 @@ class WorkbenchState {
 
 	// Right pane view mode
 	rightPaneTab = $state<'crossplot' | 'grid' | 'split'>('split');
+	crossplotTemplateOverride = $state<
+		'auto' | 'nphi-rhob' | 'thomas-stieber' | 'phi-k' | 'pickett' | 'histogram' | 'shf' | 'relperm'
+	>('auto');
 
 	// Active curve selected in QAQC for histogram inspection
 	selectedQaqcCurve = $state<string>('GR');
@@ -169,6 +184,18 @@ class WorkbenchState {
 		coalWindowSize: 41,
 		coalTrendFactor: 0.05,
 		badholeTreatment: 'vsh_gr'
+	});
+
+	tsParams = $state<ThomasStieberParams>({
+		enabled: false,
+		useInPerm: true,
+		useInSaturation: true,
+		drySandPoro: 0.28,
+		dryShalePoro: 0.10,
+		rsand: 20.0,
+		rvShale: 4.0,
+		rhShale: 1.5,
+		theta: 0.0
 	});
 
 	badholeParams = $state<BadholeFlaggingParams>({

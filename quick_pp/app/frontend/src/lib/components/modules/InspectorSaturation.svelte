@@ -31,6 +31,13 @@
 		};
 	});
 
+	let hasTsAvailable = $derived.by(() => {
+		const ps = wellData.curves['PHIT_SAND'];
+		return Boolean(
+			workbench.tsParams.enabled || (ps && ps.some((v) => Number.isFinite(v)))
+		);
+	});
+
 	async function executeSaturation(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
 		wellData.isCalculating = true;
@@ -39,6 +46,11 @@
 		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 		const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
 		const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
+		const phitSandArr = wellData.curves['PHIT_SAND'] ?? [];
+		const vshLamArr = wellData.curves['VSH_LAM'] ?? [];
+		const vshDisArr = wellData.curves['VSH_DIS'] ?? [];
+		const rsandTsArr = wellData.curves['RSAND_TS'] ?? [];
+		const useTs = hasTsAvailable && workbench.tsParams.useInSaturation;
 		const cleanArr = (arr: number[]) =>
 			arr.length > 0 ? arr.map((v) => (Number.isFinite(v) ? v : null)) : undefined;
 
@@ -64,9 +76,14 @@
 						qv_method: sp.qvMethod,
 						cec_clay: sp.cecClay,
 						rho_dry_clay: sp.rhoDryClay,
+						use_thomas_stieber: useTs,
 						depths: cleanArr(deptArr) as number[] | undefined,
 						phit: cleanArr(phitArr),
 						vclay: cleanArr(vclayArr),
+						phit_sand: useTs ? cleanArr(phitSandArr) : undefined,
+						vsh_lam: useTs ? cleanArr(vshLamArr) : undefined,
+						vsh_dis: useTs ? cleanArr(vshDisArr) : undefined,
+						rsand_ts: useTs ? cleanArr(rsandTsArr) : undefined,
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,
 						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
@@ -140,6 +157,32 @@
 					<option value="imperial">Imperial (°F / kft)</option>
 				</select>
 			</div>
+
+			{#if hasTsAvailable}
+				<div class="my-1.5 rounded-xs border border-teal-200 bg-teal-50/70 px-2 py-1.5 text-[10.5px]">
+					<label class="flex items-center justify-between gap-2 font-medium text-teal-950 cursor-pointer">
+						<span class="flex items-center gap-1.5">
+							<input
+								type="checkbox"
+								bind:checked={workbench.tsParams.useInSaturation}
+								onchange={() => executeSaturation(false)}
+								class="h-3.5 w-3.5 rounded-xs border-teal-400 text-teal-700"
+							/>
+							<span>Use Thomas-Stieber Thin-Bed Inputs</span>
+						</span>
+						<span class="rounded-2xs bg-teal-100 px-1 py-0.5 font-mono text-[9px] font-bold text-teal-800">
+							{workbench.tsParams.useInSaturation ? 'TS Active' : 'Bulk'}
+						</span>
+					</label>
+					<div class="mt-0.5 text-[9.5px] leading-snug text-teal-800">
+						{#if workbench.tsParams.useInSaturation}
+							Solves sand-lamina <span class="mono-num">Sw</span> from <span class="mono-num">PHIT_SAND</span>, dispersed <span class="mono-num">VSH_DIS</span>, and de-shaled <span class="mono-num">RSAND_TS</span>, then maps back to bulk <span class="mono-num">SWT</span> conserving HCPV.
+						{:else}
+							Using standard bulk <span class="mono-num">RT</span>, <span class="mono-num">PHIT</span>, and total <span class="mono-num">VCLAY</span>.
+						{/if}
+					</div>
+				</div>
+			{/if}
 		</ParameterSection>
 
 		<ParameterSection title="Electrical Constants & Pickett Plot" badge="Live Pickett Line">

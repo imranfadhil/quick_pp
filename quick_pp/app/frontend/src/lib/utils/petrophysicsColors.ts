@@ -29,6 +29,10 @@ export const PETRO_COLORS = {
 	pyriStroke: '#854D0E',
 	coalFill: '#1E293B',
 	coalStroke: '#0F172A',
+	vshLamFill: '#475569',
+	vshLamStroke: '#1E293B',
+	vshDisFill: '#CBD5E1',
+	vshDisStroke: '#64748B',
 
 	// Fluids & saturation
 	oil: '#16A34A',
@@ -43,6 +47,7 @@ export const PETRO_COLORS = {
 	rs: '#0D9488',
 	rmed: '#2563EB',
 	rshal: '#0D9488',
+	rtMod: '#9333EA',
 	rhob: '#DC2626',
 	nphi: '#2563EB',
 	pef: '#A855F7',
@@ -53,7 +58,8 @@ export const PETRO_COLORS = {
 	core: '#0F172A',
 	perm: '#0284C7',
 	phie: '#2563EB',
-	phit: '#0F172A'
+	phit: '#0F172A',
+	phitSand: '#0D9488'
 } as const;
 
 export interface GrEarthShadeBand {
@@ -385,7 +391,11 @@ export const STANDARD_CURVE_META: Record<string, CurveMeta> = {
 	BS: { mnemonic: 'BS', label: 'Bit Size', unit: 'in', min: 6, max: 16, color: '#64748B' },
 	DCALI: { mnemonic: 'DCALI', label: 'Differential Caliper', unit: 'in', min: -2, max: 8, color: '#DC2626' },
 	DRHO: { mnemonic: 'DRHO', label: 'Density Correction', unit: 'g/cc', min: -0.25, max: 0.25, color: '#D97706' },
-	BADHOLE: { mnemonic: 'BADHOLE', label: 'Badhole Flag', unit: 'flag', min: 0, max: 1, color: '#DC2626' }
+	BADHOLE: { mnemonic: 'BADHOLE', label: 'Badhole Flag', unit: 'flag', min: 0, max: 1, color: '#DC2626' },
+	VSH_LAM: { mnemonic: 'VSH_LAM', label: 'Laminated Shale Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.vshLamStroke },
+	VSH_DIS: { mnemonic: 'VSH_DIS', label: 'Dispersed Shale Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.vshDisStroke },
+	PHIT_SAND: { mnemonic: 'PHIT_SAND', label: 'Sand Lamina Porosity', unit: 'v/v', min: 0, max: 0.45, color: PETRO_COLORS.phitSand },
+	RT_MOD: { mnemonic: 'RT_MOD', label: 'Hagiwara Modeled Resistivity', unit: 'ohm.m', min: 0.2, max: 2000, color: PETRO_COLORS.rtMod, logScale: true }
 };
 
 export function getCurveUnit(mnemonic: string): string {

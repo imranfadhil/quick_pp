@@ -14,6 +14,13 @@
 	let s = $state(0.01);
 	let swirr = $state(0.2);
 
+	let hasTsAvailable = $derived.by(() => {
+		const ps = wellData.curves['PHIT_SAND'];
+		return Boolean(
+			workbench.tsParams.enabled || (ps && ps.some((v) => Number.isFinite(v)))
+		);
+	});
+
 	async function executePerm(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
 		wellData.isCalculating = true;
@@ -22,6 +29,10 @@
 		const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
 		const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
 		const vsiltArr = wellData.curves['VSILT'] ?? [];
+		const phitSandArr = wellData.curves['PHIT_SAND'] ?? [];
+		const vshLamArr = wellData.curves['VSH_LAM'] ?? [];
+		const vshDisArr = wellData.curves['VSH_DIS'] ?? [];
+		const useTs = hasTsAvailable && workbench.tsParams.useInPerm;
 		const cleanArr = (arr: number[]) =>
 			arr.length > 0 ? arr.map((v) => (Number.isFinite(v) ? v : null)) : undefined;
 		try {
@@ -39,10 +50,14 @@
 						C,
 						s,
 						swirr,
+						use_thomas_stieber: useTs,
 						depths: cleanArr(deptArr) as number[] | undefined,
 						phit: cleanArr(phitArr),
 						vclay: cleanArr(vclayArr),
 						vsilt: cleanArr(vsiltArr),
+						phit_sand: useTs ? cleanArr(phitSandArr) : undefined,
+						vsh_lam: useTs ? cleanArr(vshLamArr) : undefined,
+						vsh_dis: useTs ? cleanArr(vshDisArr) : undefined,
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,
 						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
@@ -87,6 +102,32 @@
 					<option value="coates">Coates-Dumanoir</option>
 				</select>
 			</div>
+
+			{#if hasTsAvailable}
+				<div class="my-1.5 rounded-xs border border-teal-200 bg-teal-50/70 px-2 py-1.5 text-[10.5px]">
+					<label class="flex items-center justify-between gap-2 font-medium text-teal-950 cursor-pointer">
+						<span class="flex items-center gap-1.5">
+							<input
+								type="checkbox"
+								bind:checked={workbench.tsParams.useInPerm}
+								onchange={() => executePerm(false)}
+								class="h-3.5 w-3.5 rounded-xs border-teal-400 text-teal-700"
+							/>
+							<span>Use Thomas-Stieber Thin-Bed Inputs</span>
+						</span>
+						<span class="rounded-2xs bg-teal-100 px-1 py-0.5 font-mono text-[9px] font-bold text-teal-800">
+							{workbench.tsParams.useInPerm ? 'TS Active' : 'Bulk'}
+						</span>
+					</label>
+					<div class="mt-0.5 text-[9.5px] leading-snug text-teal-800">
+						{#if workbench.tsParams.useInPerm}
+							Evaluates sand lamina <span class="mono-num">k_sand(PHIT_SAND, VSH_DIS)</span> and weights horizontal permeability by <span class="mono-num">(1 − VSH_LAM)</span> while keeping bulk <span class="mono-num">PHIT</span> &amp; <span class="mono-num">VCLAY</span> intact.
+						{:else}
+							Using standard bulk <span class="mono-num">PHIT</span> and total <span class="mono-num">VCLAY</span>.
+						{/if}
+					</div>
+				</div>
+			{/if}
 
 			{#if method === 'choo'}
 				<NumericScrubber
@@ -220,4 +261,3 @@
 		</button>
 	</div>
 </div>
-

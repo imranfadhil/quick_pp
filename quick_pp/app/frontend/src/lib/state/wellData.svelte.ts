@@ -278,6 +278,7 @@ class WellDataState {
 			this.config = data.config || {};
 			this.pendingModuleCurves = {};
 			workbench.brushedDepthIndices = new Set();
+			workbench.tsParams.enabled = false;
 
 			// Restore persistent working Top/Bottom depth interval for this specific well (if configured)
 			let focusMin: number | null =

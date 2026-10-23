@@ -15,20 +15,17 @@
 	let PlotlyLib: any = $state(null);
 	let eventsBound = $state(false);
 
-	// Optional manual override of template; defaults to 'auto' (follows active workflow step)
-	let templateOverride = $state<
-		'auto' | 'nphi-rhob' | 'phi-k' | 'pickett' | 'histogram' | 'shf' | 'relperm'
-	>('auto');
-
-	// Active draggable endpoint on NPHI-RHOB plot
-	let activeEndpointKey = $state<'sand' | 'silt' | 'clay' | null>(null);
+	// Active draggable endpoint on NPHI-RHOB or Thomas-Stieber plot
+	let activeEndpointKey = $state<'sand' | 'silt' | 'clay' | 'ts-sand' | 'ts-shale' | null>(null);
 
 	// SHF crossplot sub-view ('scal_fit' shows SCAL J / Pc / BVW curve fits; 'height_profile' shows Sw vs HAFWL)
 	let shfView = $state<'scal_fit' | 'height_profile'>('scal_fit');
 	let shfLogScale = $state<boolean>(false);
 
 	let effectiveMode = $derived.by(() => {
-		if (templateOverride !== 'auto') return templateOverride;
+		if (workbench.crossplotTemplateOverride !== 'auto') {
+			return workbench.crossplotTemplateOverride;
+		}
 		if (workbench.scope === 'multi-well') {
 			if (workbench.multiWellStep === 'shf') return 'shf';
 			return 'phi-k';
@@ -337,6 +334,159 @@
 			baseLayout.xaxis.range = [-0.08, 0.65];
 			baseLayout.yaxis.title = { text: 'RHOB (g/cc)' };
 			baseLayout.yaxis.range = [2.95, Math.min(1.85, Math.max(1.1, minRhob - 0.05))]; // Standard petrophysical inverted density axis
+			baseLayout.shapes = shapes;
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'thomas-stieber') {
+			const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+			const vshTsArr = wellData.curves['VSH_TS'];
+			const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
+			const grArr = wellData.curves['GR'] ?? [];
+
+			const xs: number[] = [];
+			const ys: number[] = [];
+			const colors: number[] = [];
+			const customIdx: number[] = [];
+
+			let maxBulkVclay = 0;
+			for (const idx of indices) {
+				const vc = vclayArr[idx];
+				if (Number.isFinite(vc) && vc > maxBulkVclay) maxBulkVclay = vc;
+			}
+
+			for (const idx of indices) {
+				const phi = phitArr[idx];
+				let vsh = vshTsArr ? vshTsArr[idx] : Number.NaN;
+				if (!Number.isFinite(vsh)) {
+					const vc = vclayArr[idx];
+					if (Number.isFinite(vc) && Number.isFinite(phi)) {
+						vsh =
+							maxBulkVclay > 0.88
+								? Math.min(1, Math.max(0, vc))
+								: Math.min(1, Math.max(0, vc / Math.max(1 - phi, 0.15)));
+					}
+				}
+				if (Number.isFinite(vsh) && Number.isFinite(phi)) {
+					xs.push(vsh);
+					ys.push(phi);
+					colors.push(Number.isFinite(grArr[idx]) ? grArr[idx] : vsh * 150);
+					customIdx.push(idx);
+				}
+			}
+
+			traces.push({
+				type: 'scattergl',
+				mode: 'markers',
+				name: 'Log Data (Color: GR)',
+				x: xs,
+				y: ys,
+				customdata: customIdx,
+				marker: {
+					size: 5.5,
+					color: colors,
+					colorscale: 'Viridis',
+					opacity: 0.82,
+					colorbar: {
+						title: { text: 'GR', font: { size: 9 } },
+						thickness: 10,
+						len: 0.75,
+						tickfont: { family: 'JetBrains Mono', size: 8 }
+					}
+				},
+				hovertemplate: 'Vsh: %{x:.3f} v/v<br>PHIT: %{y:.3f} v/v<extra></extra>'
+			});
+
+			const phiSand = workbench.tsParams.drySandPoro;
+			const phiShale = workbench.tsParams.dryShalePoro;
+			const A: [number, number] = [0, phiSand];
+			const B: [number, number] = [1, phiShale];
+			const C: [number, number] = [phiSand, Number((phiSand * phiShale).toFixed(4))];
+
+			// Laminated & Φsand isolines inside the A-B-C triangle
+			for (const t of [0.2, 0.4, 0.6, 0.8]) {
+				// Vsh,lam isoline (parallel to A-C)
+				const lamX0 = A[0] + t * (B[0] - A[0]);
+				const lamY0 = A[1] + t * (B[1] - A[1]);
+				const lamX1 = C[0] + t * (B[0] - C[0]);
+				const lamY1 = C[1] + t * (B[1] - C[1]);
+				shapes.push({
+					type: 'line',
+					xref: 'x',
+					yref: 'y',
+					x0: lamX0,
+					y0: lamY0,
+					x1: lamX1,
+					y1: lamY1,
+					line: { color: 'rgba(37, 99, 235, 0.35)', width: 1, dash: 'dot' }
+				});
+				// Φsand isoline (radiating from B to A-C)
+				const disX0 = A[0] + t * (C[0] - A[0]);
+				const disY0 = A[1] + t * (C[1] - A[1]);
+				shapes.push({
+					type: 'line',
+					xref: 'x',
+					yref: 'y',
+					x0: disX0,
+					y0: disY0,
+					x1: B[0],
+					y1: B[1],
+					line: { color: 'rgba(13, 148, 136, 0.35)', width: 1, dash: 'dot' }
+				});
+			}
+
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Laminated Shale',
+				x: [A[0], B[0]],
+				y: [A[1], B[1]],
+				line: { color: '#2563EB', width: 2.0 },
+				hoverinfo: 'skip'
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Dispersed (Pore-Filling)',
+				x: [A[0], C[0]],
+				y: [A[1], C[1]],
+				line: { color: '#0D9488', width: 2.0 },
+				hoverinfo: 'skip'
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Grain-Replacing Envelope',
+				x: [C[0], B[0], 0],
+				y: [C[1], B[1], 0],
+				line: { color: '#475569', width: 1.4, dash: 'dash' },
+				hoverinfo: 'skip'
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'markers+text',
+				name: 'TS Endpoints',
+				x: [A[0], B[0], C[0]],
+				y: [A[1], B[1], C[1]],
+				text: [
+					`Clean Sand (${phiSand.toFixed(2)})`,
+					`Pure Shale (${phiShale.toFixed(2)})`,
+					`Dispersed (${C[0].toFixed(2)}, ${C[1].toFixed(3)})`
+				],
+				textposition: ['top right', 'top left', 'bottom right'],
+				textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+				marker: {
+					size: 9.5,
+					color: ['#CA8A04', '#475569', '#0D9488'],
+					symbol: 'diamond',
+					line: { color: '#FFFFFF', width: 1.5 }
+				}
+			});
+
+			baseLayout.xaxis.title = { text: 'Vshale (v/v)' };
+			baseLayout.xaxis.range = [-0.04, 1.05];
+			baseLayout.yaxis.title = { text: 'Total Porosity PHIT (v/v)' };
+			baseLayout.yaxis.range = [0, Math.max(0.42, phiSand + 0.08)];
 			baseLayout.shapes = shapes;
 			return { traces, layout: baseLayout };
 		}
@@ -934,6 +1084,8 @@
 		void workbench.lithoParams.enableCoalFlagging;
 		void workbench.lithoParams.coalRhobMax;
 		void workbench.lithoParams.coalNphiMin;
+		void workbench.tsParams.drySandPoro;
+		void workbench.tsParams.dryShalePoro;
 		void workbench.saturationParams.rwPickett;
 		void workbench.saturationParams.m;
 		void workbench.saturationParams.n;
@@ -971,22 +1123,30 @@
 				(plotEl as any).on('plotly_deselect', () => {
 					workbench.setBrushedIndices([]);
 				});
-				// Click-to-place endpoint on NPHI-RHOB crossplot when an endpoint is armed
+				// Click-to-place endpoint on NPHI-RHOB or Thomas-Stieber crossplot when an endpoint is armed
 				(plotEl as any).on('plotly_click', (ev: any) => {
-					if (effectiveMode !== 'nphi-rhob' || !activeEndpointKey) return;
+					if (!activeEndpointKey) return;
 					const pt = ev?.points?.[0];
 					if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number') return;
 					const x = Number(pt.x.toFixed(3));
 					const y = Number(pt.y.toFixed(3));
-					if (activeEndpointKey === 'sand') {
-						workbench.lithoParams.drySandNphi = x;
-						workbench.lithoParams.drySandRhob = y;
-					} else if (activeEndpointKey === 'silt') {
-						workbench.lithoParams.drySiltNphi = x;
-						workbench.lithoParams.drySiltRhob = y;
-					} else if (activeEndpointKey === 'clay') {
-						workbench.lithoParams.dryClayNphi = x;
-						workbench.lithoParams.dryClayRhob = y;
+					if (effectiveMode === 'nphi-rhob') {
+						if (activeEndpointKey === 'sand') {
+							workbench.lithoParams.drySandNphi = x;
+							workbench.lithoParams.drySandRhob = y;
+						} else if (activeEndpointKey === 'silt') {
+							workbench.lithoParams.drySiltNphi = x;
+							workbench.lithoParams.drySiltRhob = y;
+						} else if (activeEndpointKey === 'clay') {
+							workbench.lithoParams.dryClayNphi = x;
+							workbench.lithoParams.dryClayRhob = y;
+						}
+					} else if (effectiveMode === 'thomas-stieber') {
+						if (activeEndpointKey === 'ts-sand') {
+							workbench.tsParams.drySandPoro = Math.max(0.12, Math.min(0.45, y));
+						} else if (activeEndpointKey === 'ts-shale') {
+							workbench.tsParams.dryShalePoro = Math.max(0.02, Math.min(0.35, y));
+						}
 					}
 					activeEndpointKey = null;
 				});
@@ -1024,11 +1184,12 @@
 		<div class="flex items-center gap-1.5">
 			<span class="font-semibold text-[var(--text-primary)]">Crossplot:</span>
 			<select
-				bind:value={templateOverride}
+				bind:value={workbench.crossplotTemplateOverride}
 				class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
 			>
 				<option value="auto">Auto ({effectiveMode.toUpperCase()})</option>
 				<option value="nphi-rhob">NPHI vs. RHOB (SSC)</option>
+				<option value="thomas-stieber">Thomas-Stieber (Vsh vs. Φ)</option>
 				<option value="phi-k">Porosity vs. Perm (FZI)</option>
 				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
 				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>
@@ -1048,6 +1209,23 @@
 						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {activeEndpointKey ===
 						key
 							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{lbl}
+					</button>
+				{/each}
+			</div>
+		{:else if effectiveMode === 'thomas-stieber'}
+			<div class="flex items-center gap-1">
+				<span class="text-[10px] text-[var(--text-muted)]">Pick Φ Endpoint:</span>
+				{#each [['ts-sand', 'Sand Φmax'], ['ts-shale', 'Shale Φsh']] as [key, lbl]}
+					<button
+						type="button"
+						onclick={() =>
+							(activeEndpointKey = activeEndpointKey === key ? null : (key as any))}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {activeEndpointKey ===
+						key
+							? 'border-teal-700 bg-teal-700 text-white'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
 					>
 						{lbl}

@@ -50,6 +50,14 @@
 		perm_median_p90_p10_factor: number;
 	} | null>(null);
 
+	let tsSummary = $state<{
+		mean_vsh_lam: number;
+		mean_vsh_dis: number;
+		mean_phit_sand: number;
+		mean_porosity_uplift_vv: number;
+		rt_rmse_decade: number | null;
+	} | null>(null);
+
 	async function loadMlModelsStatus(projectId: string | number) {
 		try {
 			const status = await getJson<any>(
@@ -262,6 +270,10 @@
 				wellData.poroCoreMetrics = poroData.core_metrics;
 			}
 
+			if (workbench.tsParams.enabled) {
+				await executeThomasStieber(persist, true);
+			}
+
 			if (persist) {
 				wellData.lastSavedMessage = 'Litho & Poro Saved ✓';
 			}
@@ -269,6 +281,63 @@
 			wellData.lastError = e?.message || 'Lithology/Porosity error';
 		} finally {
 			wellData.isCalculating = false;
+		}
+	}
+
+	async function executeThomasStieber(persist: boolean = false, chained: boolean = false) {
+		if (!workbench.projectId || !workbench.wellId) return;
+		if (!chained) {
+			wellData.isCalculating = true;
+			wellData.lastError = null;
+		}
+		const lp = workbench.lithoParams;
+		const ts = workbench.tsParams;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/thomas_stieber`,
+				{
+					use_hc_corrected: lp.enableHcCorrection,
+					use_existing_phit_vsh: true,
+					dry_sand_poro: ts.drySandPoro,
+					dry_shale_poro: ts.dryShalePoro,
+					dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
+					dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
+					fluid_point: [lp.fluidNphi, lp.fluidRhob],
+					rsand: ts.rsand,
+					rv_shale: ts.rvShale,
+					rh_shale: ts.rhShale,
+					theta: ts.theta,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					save: persist
+				}
+			);
+			if (res.data) {
+				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.markModuleComputed('litho-poro', res.data);
+			}
+			workbench.tsParams.enabled = true;
+			if (res.summary) {
+				tsSummary = res.summary;
+			}
+			if (persist && !chained) {
+				wellData.lastSavedMessage = 'Thomas-Stieber Saved ✓';
+			}
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Thomas-Stieber estimation failed';
+		} finally {
+			if (!chained) {
+				wellData.isCalculating = false;
+			}
+		}
+	}
+
+	function clearThomasStieber() {
+		workbench.tsParams.enabled = false;
+		tsSummary = null;
+		if (workbench.crossplotTemplateOverride === 'thomas-stieber') {
+			workbench.crossplotTemplateOverride = 'auto';
 		}
 	}
 
@@ -623,6 +692,172 @@
 					Evaluates NPHI/RHOB normally without overriding washout intervals.
 				{/if}
 			</div>
+		</ParameterSection>
+
+		<ParameterSection
+			title="Thomas-Stieber Thin-Bed & Resistivity"
+			badge={workbench.tsParams.enabled ? 'TS Active' : 'On-Demand'}
+		>
+			<div class="mb-1.5 flex items-center justify-between rounded-xs border border-teal-200 bg-teal-50/70 px-2 py-1 text-[10px] text-teal-950">
+				<span class="font-medium">
+					Partitions <span class="mono-num font-semibold">VCLAY</span> into <span class="mono-num font-semibold">VSH_LAM + VSH_DIS</span> &amp; models <span class="mono-num font-semibold">RT_MOD</span>
+				</span>
+				<button
+					type="button"
+					onclick={() => {
+						workbench.crossplotTemplateOverride =
+							workbench.crossplotTemplateOverride === 'thomas-stieber'
+								? 'auto'
+								: 'thomas-stieber';
+					}}
+					class="ml-1 shrink-0 rounded-xs border px-1.5 py-0.5 text-[9.5px] font-semibold transition-colors {workbench.crossplotTemplateOverride ===
+					'thomas-stieber'
+						? 'border-teal-700 bg-teal-700 text-white'
+						: 'border-teal-300 bg-white text-teal-800 hover:bg-teal-100'}"
+				>
+					{workbench.crossplotTemplateOverride === 'thomas-stieber'
+						? 'TS Xplot Active'
+						: 'TS Xplot →'}
+				</button>
+			</div>
+
+			<div class="mb-1 text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+				Shale &amp; Sand Porosity Endpoints
+			</div>
+			<NumericScrubber
+				label="Clean Sand Porosity (Φmax)"
+				bind:value={workbench.tsParams.drySandPoro}
+				unit="v/v"
+				min={0.12}
+				max={0.45}
+				step={0.005}
+				decimals={3}
+				onrun={() => {
+					if (workbench.tsParams.enabled) executeThomasStieber(false);
+				}}
+			/>
+			<NumericScrubber
+				label="Pure Shale Porosity (Φsh)"
+				bind:value={workbench.tsParams.dryShalePoro}
+				unit="v/v"
+				min={0.02}
+				max={0.30}
+				step={0.005}
+				decimals={3}
+				onrun={() => {
+					if (workbench.tsParams.enabled) executeThomasStieber(false);
+				}}
+			/>
+
+			<div class="mt-2 mb-1 text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+				Hagiwara (1995) Resistivity Modelling (Track 2)
+			</div>
+			<NumericScrubber
+				label="Sand Lamina Rt (Rsand)"
+				bind:value={workbench.tsParams.rsand}
+				unit="Ω·m"
+				min={0.5}
+				max={500}
+				step={1.0}
+				decimals={1}
+				onrun={() => {
+					if (workbench.tsParams.enabled) executeThomasStieber(false);
+				}}
+			/>
+			<NumericScrubber
+				label="Shale Vertical Rt (Rv,sh)"
+				bind:value={workbench.tsParams.rvShale}
+				unit="Ω·m"
+				min={0.2}
+				max={50}
+				step={0.2}
+				decimals={2}
+				onrun={() => {
+					if (workbench.tsParams.enabled) executeThomasStieber(false);
+				}}
+			/>
+			<NumericScrubber
+				label="Shale Horizontal Rt (Rh,sh)"
+				bind:value={workbench.tsParams.rhShale}
+				unit="Ω·m"
+				min={0.2}
+				max={50}
+				step={0.2}
+				decimals={2}
+				onrun={() => {
+					if (workbench.tsParams.enabled) executeThomasStieber(false);
+				}}
+			/>
+			<NumericScrubber
+				label="Relative Dip Angle (θ)"
+				bind:value={workbench.tsParams.theta}
+				unit="deg"
+				min={0}
+				max={85}
+				step={1.0}
+				decimals={1}
+				onrun={() => {
+					if (workbench.tsParams.enabled) executeThomasStieber(false);
+				}}
+			/>
+
+			<div class="mt-1.5 flex items-center gap-1.5">
+				<button
+					type="button"
+					disabled={wellData.isCalculating}
+					onclick={() => executeThomasStieber(false)}
+					class="h-7 flex-1 rounded-sm border border-teal-700 bg-teal-700 px-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+				>
+					{wellData.isCalculating
+						? 'Estimating TS...'
+						: workbench.tsParams.enabled
+							? 'Update Thomas-Stieber'
+							: 'Estimate Thomas-Stieber'}
+				</button>
+				{#if workbench.tsParams.enabled}
+					<button
+						type="button"
+						onclick={clearThomasStieber}
+						title="Hide Thomas-Stieber curves and headers from well tracks"
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100"
+					>
+						Hide TS
+					</button>
+				{/if}
+			</div>
+
+			{#if workbench.tsParams.enabled && tsSummary}
+				<div class="mt-1.5 rounded-sm border border-teal-200 bg-teal-50/50 p-1.5 text-[10px]">
+					<div class="grid grid-cols-4 gap-1 text-center">
+						<div>
+							<div class="text-[var(--text-muted)]">Vsh,lam</div>
+							<div class="mono-num font-bold text-slate-800">
+								{fmtNum(tsSummary.mean_vsh_lam, 3)}
+							</div>
+						</div>
+						<div>
+							<div class="text-[var(--text-muted)]">Vsh,dis</div>
+							<div class="mono-num font-bold text-slate-600">
+								{fmtNum(tsSummary.mean_vsh_dis, 3)}
+							</div>
+						</div>
+						<div>
+							<div class="text-[var(--text-muted)]">Φsand Uplift</div>
+							<div class="mono-num font-bold text-teal-800">
+								+{fmtNum(tsSummary.mean_porosity_uplift_vv, 3)}
+							</div>
+						</div>
+						<div>
+							<div class="text-[var(--text-muted)]">Rt Log RMSE</div>
+							<div class="mono-num font-bold text-purple-900">
+								{tsSummary.rt_rmse_decade !== null
+									? `${fmtNum(tsSummary.rt_rmse_decade, 2)} dec`
+									: '—'}
+							</div>
+						</div>
+					</div>
+				</div>
+			{/if}
 		</ParameterSection>
 
 		<ParameterSection
