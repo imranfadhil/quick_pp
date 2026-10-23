@@ -840,27 +840,54 @@ def workspace_well_bundle(
         ]
 
         core_samples_list: List[Dict[str, Any]] = []
+        scal_pc_list: List[Dict[str, Any]] = []
         core_data_raw = ancillary.get("core_data")
         if isinstance(core_data_raw, dict):
             for sname, sdict in core_data_raw.items():
+                s_depth = float(sdict.get("depth", 0.0))
                 meas_df = sdict.get("measurements")
                 poro_val = None
                 perm_val = None
                 if isinstance(meas_df, pd.DataFrame) and not meas_df.empty:
                     for _, mrow in meas_df.iterrows():
                         prop = str(mrow.get("property", "")).upper()
-                        if prop in ("POR", "CPORE", "POROSITY"):
+                        if prop in ("POR", "CPORE", "POROSITY") and mrow.get("value") is not None:
                             poro_val = float(mrow["value"])
-                        elif prop in ("PERM", "CPERM", "PERMEABILITY"):
+                        elif prop in ("PERM", "CPERM", "PERMEABILITY") and mrow.get("value") is not None:
                             perm_val = float(mrow["value"])
-                core_samples_list.append(
-                    {
-                        "sample_name": str(sname),
-                        "depth": float(sdict.get("depth", 0.0)),
-                        "porosity": poro_val,
-                        "permeability": perm_val,
-                    }
-                )
+
+                pc_df = sdict.get("pc")
+                has_pc = isinstance(pc_df, pd.DataFrame) and not pc_df.empty
+                if has_pc:
+                    for _, prow in pc_df.iterrows():
+                        pc_v = prow.get("pressure", prow.get("pc"))
+                        sw_v = prow.get("saturation", prow.get("sw"))
+                        if pc_v is None or sw_v is None or pd.isna(pc_v) or pd.isna(sw_v):
+                            continue
+                        scal_pc_list.append(
+                            {
+                                "sample_name": str(sname),
+                                "depth": s_depth,
+                                "pc": float(pc_v),
+                                "sw": float(sw_v),
+                                "experiment_type": str(prow.get("type") or prow.get("experiment_type") or "micp"),
+                                "cycle": str(prow.get("cycle") or "drainage"),
+                            }
+                        )
+
+                # Include in RCA list if it has RCA measurements or if it's an empty sample stub without SCAL Pc
+                if poro_val is not None or perm_val is not None or not has_pc:
+                    core_samples_list.append(
+                        {
+                            "sample_name": str(sname),
+                            "depth": s_depth,
+                            "porosity": poro_val,
+                            "permeability": perm_val,
+                        }
+                    )
+
+        core_samples_list.sort(key=lambda r: (r["depth"], r["sample_name"]))
+        scal_pc_list.sort(key=lambda r: (r["depth"], r["sample_name"], r["pc"]))
 
         return {
             "project_id": project_id,
@@ -872,6 +899,7 @@ def workspace_well_bundle(
             "tops": tops,
             "contacts": contacts,
             "core_samples": core_samples_list,
+            "scal_pc": scal_pc_list,
             "pressure_tests": _df_or_list(ancillary.get("pressure_tests")),
             "survey": _df_or_list(
                 ancillary.get("well_surveys")
@@ -3015,17 +3043,66 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 except Exception:
                     continue
                 core_data = (anc or {}).get("core_data") or {}
+                well_df_cache: Optional[pd.DataFrame] = None
                 for sname, sample in core_data.items():
-                    meas = sample.get("measurements")
                     pc_df = sample.get("pc")
-                    if meas is None or pc_df is None or meas.empty or pc_df.empty:
+                    if pc_df is None or pc_df.empty:
                         continue
-                    perm_r = meas[meas["property"].str.upper() == "CPERM"]
-                    phit_r = meas[meas["property"].str.upper() == "CPORE"]
-                    if perm_r.empty or phit_r.empty:
-                        continue
-                    cperm = float(perm_r["value"].iloc[0])
-                    cpore = float(phit_r["value"].iloc[0])
+                    s_depth = float(sample.get("depth") or 0.0)
+                    meas = sample.get("measurements")
+                    cperm = None
+                    cpore = None
+                    if isinstance(meas, pd.DataFrame) and not meas.empty and "property" in meas.columns:
+                        perm_r = meas[meas["property"].astype(str).str.upper().isin(["CPERM", "PERM", "PERMEABILITY"])]
+                        phit_r = meas[meas["property"].astype(str).str.upper().isin(["CPORE", "POR", "POROSITY"])]
+                        if not perm_r.empty and pd.notna(perm_r["value"].iloc[0]):
+                            cperm = float(perm_r["value"].iloc[0])
+                        if not phit_r.empty and pd.notna(phit_r["value"].iloc[0]):
+                            cpore = float(phit_r["value"].iloc[0])
+
+                    # Fallback 1: check if another core sample at the same depth in this well has RCA CPORE/CPERM
+                    if (cpore is None or cperm is None) and s_depth > 0:
+                        for other_s in core_data.values():
+                            if abs(float(other_s.get("depth") or 0.0) - s_depth) < 0.05:
+                                o_meas = other_s.get("measurements")
+                                if isinstance(o_meas, pd.DataFrame) and not o_meas.empty and "property" in o_meas.columns:
+                                    if cperm is None:
+                                        pr = o_meas[o_meas["property"].astype(str).str.upper().isin(["CPERM", "PERM", "PERMEABILITY"])]
+                                        if not pr.empty and pd.notna(pr["value"].iloc[0]):
+                                            cperm = float(pr["value"].iloc[0])
+                                    if cpore is None:
+                                        phr = o_meas[o_meas["property"].astype(str).str.upper().isin(["CPORE", "POR", "POROSITY"])]
+                                        if not phr.empty and pd.notna(phr["value"].iloc[0]):
+                                            cpore = float(phr["value"].iloc[0])
+
+                    # Fallback 2: interpolate / lookup well's log PHIT & PERM at nearest depth
+                    if (cpore is None or cperm is None) and s_depth > 0:
+                        try:
+                            if well_df_cache is None:
+                                well_df_cache = _get_filtered_well_df(project_id, wn)
+                            if well_df_cache is not None and not well_df_cache.empty and "DEPTH" in well_df_cache.columns:
+                                idx_near = (well_df_cache["DEPTH"] - s_depth).abs().idxmin()
+                                near_row = well_df_cache.loc[idx_near]
+                                if cpore is None:
+                                    for pcol in ("CPORE", "PHIT", "PHIE"):
+                                        if pcol in near_row and pd.notna(near_row[pcol]) and float(near_row[pcol]) > 0:
+                                            cpore = float(near_row[pcol])
+                                            break
+                                if cperm is None:
+                                    for kcol in ("CPERM", "PERM", "K"):
+                                        if kcol in near_row and pd.notna(near_row[kcol]) and float(near_row[kcol]) > 0:
+                                            cperm = float(near_row[kcol])
+                                            break
+                        except Exception:
+                            pass
+
+                    # Final sensible defaults if neither RCA nor log curve is present
+                    if cpore is None:
+                        cpore = 0.18
+                    elif cpore > 1.0:
+                        cpore = cpore / 100.0
+                    if cperm is None:
+                        cperm = 50.0
                     if not (0 < cpore < 1 and cperm > 0):
                         continue
                     rf_val = int(
@@ -3066,7 +3143,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     )
                     pc_vals = pc_vals[valid_pc]
                     sw_vals = sw_vals[valid_pc]
-                    if len(pc_vals) < 2:
+                    if len(pc_vals) < 1:
                         continue
                     if np.nanmax(sw_vals) > 1.5:
                         sw_vals = sw_vals / 100.0
@@ -3078,9 +3155,13 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         )
                         lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
                         pc_vals = pc_vals * (res_num / lab_den)
-                    swn_vals = np.asarray(normalize_sw(pd.Series(sw_vals)), dtype=float)
+                    if len(sw_vals) >= 4 and (np.nanmax(sw_vals) - np.nanmin(sw_vals)) > 0.25:
+                        raw_swn = np.asarray(normalize_sw(pd.Series(sw_vals)), dtype=float)
+                        swn_vals = np.clip(0.03 + 0.94 * raw_swn, 0.02, 0.98)
+                    else:
+                        swn_vals = np.clip(sw_vals, 0.02, 0.98)
                     for pc_v, sw_v, swn_v in zip(pc_vals, sw_vals, swn_vals):
-                        if not (0.02 <= swn_v <= 0.98 and pc_v > 0):
+                        if not (0.01 <= swn_v <= 0.99 and pc_v > 0):
                             continue
                         j_v = float(leverett_j(pc_v, req.ift, req.theta, cperm, cpore))
                         h_v = float(pc_v / grad_psi)
@@ -3105,6 +3186,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                                 "PERM": round(float(cperm), 4),
                                 "Well": wn,
                                 "Sample": str(sname),
+                                "DEPTH": round(float(s_depth), 2),
                             }
                         )
 

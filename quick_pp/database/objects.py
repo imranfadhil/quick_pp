@@ -1031,11 +1031,9 @@ class Well(object):
                     for depth, value in zip(data.index, values, strict=True)
                     if pd.notna(value)
                 ]
-            if data_points: self.db_session.bulk_insert_mappings(ORMCurveData, data_points); total_inserted += len(data_points)
-
-        # Optimization 5: Single bulk insert for all curves
-        if False:
-            self.db_session.bulk_insert_mappings(ORMCurveData, all_data_points)
+            if data_points:
+                self.db_session.bulk_insert_mappings(ORMCurveData, data_points)
+                total_inserted += len(data_points)
 
         logger.debug(
             f"Updated {len(data.columns)} curves for well '{self.name}' "
@@ -1597,7 +1595,7 @@ class Well(object):
         self,
         sample_name: str,
         depth: float,
-        measurements: List[Dict[str, Any]],
+        measurements: Optional[List[Dict[str, Any]]] = None,
         description: Optional[str] = None,
         remark: Optional[str] = None,
         relperm_data: Optional[List[Dict[str, Any]]] = None,
@@ -1607,13 +1605,16 @@ class Well(object):
 
         This is a comprehensive method to add a core plug and all its related
         SCAL data (point measurements, rel-perm, and pc curves) in one go.
+        Child collections (measurements, relperm_data, pc_data) are only replaced
+        when explicitly provided (not None), allowing RCA and SCAL updates to
+        coexist on the same core sample without wiping each other.
 
         Args:
             sample_name (str): The unique name or ID of the core sample.
             depth (float): The depth from which the sample was taken.
             description (Optional[str]): A geological description of the core sample.
             remark (Optional[str]): A remark about data quality, depth shifts, etc.
-            measurements (List[Dict[str, Any]]): List of point measurements.
+            measurements (Optional[List[Dict[str, Any]]]): List of point measurements.
                 Each dict must contain 'property_name', 'value', and optionally 'unit'.
                 Example: [{'property_name': 'POR', 'value': 0.21, 'unit': 'v/v'}]
             relperm_data (Optional[List[Dict[str, Any]]]): List of relative permeability points.
@@ -1625,12 +1626,16 @@ class Well(object):
             f"Adding core sample '{sample_name}' at depth {depth} for well '{self.name}'."
         )
 
-        # Create or get the core sample
+        # Create or get the core sample by sample_name first, then fallback to depth
         orm_sample = self.db_session.scalar(
             select(ORMCoreSample).filter_by(
                 well_id=self.well_id, sample_name=sample_name
             )
         )
+        if not orm_sample:
+            orm_sample = self.db_session.scalar(
+                select(ORMCoreSample).filter_by(well_id=self.well_id, depth=depth)
+            )
         if not orm_sample:
             orm_sample = ORMCoreSample(
                 well_id=self.well_id,
@@ -1642,23 +1647,51 @@ class Well(object):
             self.db_session.add(orm_sample)
             self.db_session.flush()  # Ensure we get the sample_id
         else:
-            orm_sample.description = description
-            orm_sample.remark = remark
-            # Clear existing child data for a full replacement
-            for m in orm_sample.measurements:
-                self.db_session.delete(m)
-            for rp in orm_sample.relperm_data:
-                self.db_session.delete(rp)
-            for pc in orm_sample.capillary_pressure_data:
-                self.db_session.delete(pc)
+            # Update depth if no other sample already occupies that depth
+            if orm_sample.depth != depth:
+                conflict_depth = self.db_session.scalar(
+                    select(ORMCoreSample).filter(
+                        ORMCoreSample.well_id == self.well_id,
+                        ORMCoreSample.depth == depth,
+                        ORMCoreSample.sample_id != orm_sample.sample_id,
+                    )
+                )
+                if not conflict_depth:
+                    orm_sample.depth = depth
+            if description is not None:
+                orm_sample.description = description
+            if remark is not None:
+                orm_sample.remark = remark
+            # Only clear child collections that are explicitly provided
+            if measurements is not None:
+                for m in list(orm_sample.measurements):
+                    self.db_session.delete(m)
+            if relperm_data is not None:
+                for rp in list(orm_sample.relperm_data):
+                    self.db_session.delete(rp)
+            if pc_data is not None:
+                for pc in list(orm_sample.capillary_pressure_data):
+                    self.db_session.delete(pc)
             self.db_session.flush()
 
-        # Add point measurements
-        for m_data in measurements:
-            orm_measurement = ORMCoreMeasurement(
-                sample_id=orm_sample.sample_id, **m_data
-            )
-            orm_sample.measurements.append(orm_measurement)
+        # Add point measurements (deduplicate by property_name)
+        if measurements:
+            dedup_meas: Dict[str, Dict[str, Any]] = {}
+            for m_data in measurements:
+                prop_name = str(m_data.get("property_name", "")).strip()
+                val = m_data.get("value")
+                if not prop_name or val is None:
+                    continue
+                dedup_meas[prop_name.upper()] = {
+                    "property_name": prop_name,
+                    "value": float(val),
+                    "unit": m_data.get("unit"),
+                }
+            for m_clean in dedup_meas.values():
+                orm_measurement = ORMCoreMeasurement(
+                    sample_id=orm_sample.sample_id, **m_clean
+                )
+                orm_sample.measurements.append(orm_measurement)
 
         # Add relative permeability data
         if relperm_data:
@@ -1668,17 +1701,216 @@ class Well(object):
                 )
                 orm_sample.relperm_data.append(orm_relperm)
 
-        # Add capillary pressure data
+        # Add capillary pressure data (normalize cycle & deduplicate by (saturation, experiment_type, cycle))
         if pc_data:
+            dedup_pc: Dict[tuple, Dict[str, Any]] = {}
             for pc_point in pc_data:
+                sat_raw = pc_point.get("saturation", pc_point.get("sw"))
+                pres_raw = pc_point.get("pressure", pc_point.get("pc"))
+                if sat_raw is None or pres_raw is None:
+                    continue
+                try:
+                    sat_val = float(sat_raw)
+                    pres_val = float(pres_raw)
+                except (TypeError, ValueError):
+                    continue
+                exp_type = (
+                    pc_point.get("experiment_type") or pc_point.get("type") or "micp"
+                )
+                raw_cycle = str(pc_point.get("cycle") or "drainage").strip().lower()
+                cycle_val = "imbibition" if raw_cycle.startswith("imb") else "drainage"
+                dedup_pc[(round(sat_val, 6), str(exp_type), cycle_val)] = {
+                    "saturation": sat_val,
+                    "pressure": pres_val,
+                    "experiment_type": str(exp_type),
+                    "cycle": cycle_val,
+                }
+            for pc_clean in dedup_pc.values():
                 orm_pc = ORMCapillaryPressure(
-                    sample_id=orm_sample.sample_id, **pc_point
+                    sample_id=orm_sample.sample_id, **pc_clean
                 )
                 orm_sample.capillary_pressure_data.append(orm_pc)
 
         logger.debug(
             f"Successfully added/updated data for core sample '{sample_name}'."
         )
+
+    def replace_rca_samples(self, samples: List[Dict[str, Any]]):
+        """Replaces all RCA point measurements across the well's core samples while preserving SCAL data."""
+        incoming_names = set()
+        parsed_samples: List[Dict[str, Any]] = []
+        for idx, s in enumerate(samples or []):
+            if not isinstance(s, dict):
+                continue
+            depth_raw = s.get("depth")
+            if depth_raw is None or str(depth_raw).strip() == "":
+                continue
+            try:
+                depth_val = float(depth_raw)
+            except (TypeError, ValueError):
+                continue
+            sname = str(s.get("sample_name") or f"RCA-{idx + 1}").strip()
+            if not sname:
+                sname = f"RCA-{idx + 1}"
+            incoming_names.add(sname)
+
+            meas_list: List[Dict[str, Any]] = list(s.get("measurements") or [])
+            poro = s.get("porosity", s.get("cpore"))
+            perm = s.get("permeability", s.get("cperm"))
+            if poro is not None and str(poro).strip() != "":
+                try:
+                    meas_list.append(
+                        {"property_name": "CPORE", "value": float(poro), "unit": "v/v"}
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if perm is not None and str(perm).strip() != "":
+                try:
+                    meas_list.append(
+                        {"property_name": "CPERM", "value": float(perm), "unit": "mD"}
+                    )
+                except (TypeError, ValueError):
+                    pass
+            parsed_samples.append(
+                {
+                    "sample_name": sname,
+                    "depth": depth_val,
+                    "measurements": meas_list,
+                    "description": s.get("description"),
+                    "remark": s.get("remark"),
+                }
+            )
+
+        # Remove RCA measurements from existing samples that are no longer in the RCA list
+        for orm_sample in list(self._orm_well.core_samples):
+            if orm_sample.sample_name not in incoming_names:
+                for m in list(orm_sample.measurements):
+                    self.db_session.delete(m)
+                self.db_session.flush()
+                if (
+                    not orm_sample.capillary_pressure_data
+                    and not orm_sample.relperm_data
+                ):
+                    self.db_session.delete(orm_sample)
+        self.db_session.flush()
+
+        for item in parsed_samples:
+            self.add_core_sample_with_measurements(
+                sample_name=item["sample_name"],
+                depth=item["depth"],
+                measurements=item["measurements"],
+                description=item["description"],
+                remark=item["remark"],
+                relperm_data=None,
+                pc_data=None,
+            )
+        self.db_session.flush()
+
+    def replace_scal_pc_data(self, pc_rows: List[Dict[str, Any]], append: bool = False):
+        """Replaces (or appends) SCAL capillary pressure pairs across the well's core samples while preserving RCA measurements."""
+        grouped: Dict[str, Dict[str, Any]] = {}
+        for idx, row in enumerate(pc_rows or []):
+            if not isinstance(row, dict):
+                continue
+            depth_raw = row.get("depth")
+            if depth_raw is None or str(depth_raw).strip() == "":
+                continue
+            try:
+                depth_val = float(depth_raw)
+            except (TypeError, ValueError):
+                continue
+            sname = str(row.get("sample_name") or f"SCAL-{idx + 1}").strip()
+            if not sname:
+                sname = f"SCAL-{idx + 1}"
+
+            entry = grouped.setdefault(
+                sname,
+                {
+                    "depth": depth_val,
+                    "pc_data": [],
+                    "description": row.get("description"),
+                },
+            )
+            # Support both nested `pc_data` and flat `(pc, sw)` row formats
+            if isinstance(row.get("pc_data"), list):
+                entry["pc_data"].extend(row["pc_data"])
+            else:
+                pc_val = row.get("pc", row.get("pressure"))
+                sw_val = row.get("sw", row.get("saturation"))
+                if (
+                    pc_val is not None
+                    and sw_val is not None
+                    and str(pc_val).strip() != ""
+                    and str(sw_val).strip() != ""
+                ):
+                    entry["pc_data"].append(
+                        {
+                            "pressure": pc_val,
+                            "saturation": sw_val,
+                            "experiment_type": row.get("experiment_type")
+                            or row.get("type")
+                            or "micp",
+                            "cycle": row.get("cycle") or "drainage",
+                        }
+                    )
+
+        if not append:
+            incoming_names = set(grouped.keys())
+            for orm_sample in list(self._orm_well.core_samples):
+                if orm_sample.sample_name not in incoming_names:
+                    for pc in list(orm_sample.capillary_pressure_data):
+                        self.db_session.delete(pc)
+                    self.db_session.flush()
+                    if not orm_sample.measurements and not orm_sample.relperm_data:
+                        self.db_session.delete(orm_sample)
+            self.db_session.flush()
+
+        for sname, sdata in grouped.items():
+            pc_points = sdata["pc_data"]
+            if append:
+                orm_existing = self.db_session.scalar(
+                    select(ORMCoreSample).filter_by(
+                        well_id=self.well_id, sample_name=sname
+                    )
+                )
+                if orm_existing and orm_existing.capillary_pressure_data:
+                    existing_pts = [
+                        {
+                            "saturation": p.saturation,
+                            "pressure": p.pressure,
+                            "experiment_type": p.experiment_type,
+                            "cycle": p.cycle,
+                        }
+                        for p in orm_existing.capillary_pressure_data
+                    ]
+                    pc_points = existing_pts + pc_points
+            self.add_core_sample_with_measurements(
+                sample_name=sname,
+                depth=sdata["depth"],
+                measurements=None,
+                description=sdata.get("description"),
+                relperm_data=None,
+                pc_data=pc_points,
+            )
+        self.db_session.flush()
+
+    def get_scal_pc_data(self) -> List[Dict[str, Any]]:
+        """Retrieves all SCAL capillary pressure pairs for the well as a flat list of dicts."""
+        rows: List[Dict[str, Any]] = []
+        for sample in self._orm_well.core_samples:
+            for p in sample.capillary_pressure_data:
+                rows.append(
+                    {
+                        "sample_name": sample.sample_name,
+                        "depth": float(sample.depth),
+                        "pc": float(p.pressure),
+                        "sw": float(p.saturation),
+                        "experiment_type": p.experiment_type or "micp",
+                        "cycle": p.cycle or "drainage",
+                    }
+                )
+        rows.sort(key=lambda r: (r["depth"], r["sample_name"], r["pc"]))
+        return rows
 
     @staticmethod
     def transform_wide_core_df_to_long(

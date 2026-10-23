@@ -2,12 +2,14 @@
   import { onMount } from 'svelte';
   import WellSelector from './WellSelector.svelte';
   export let projectId: string|number;
-  export let type: 'formation_tops'|'fluid_contacts'|'pressure_tests'|'core_samples'|'well_surveys' = 'formation_tops';
+  export let type: 'formation_tops'|'fluid_contacts'|'pressure_tests'|'core_samples'|'scal_pc'|'well_surveys' = 'formation_tops';
   export let maxConcurrency = 4;
 
   import { API_BASE } from '$lib/api/client';
   import { authState } from '$lib/state/auth.svelte';
   import { appStatus } from '$lib/state/status.svelte';
+  import { wellData } from '$lib/state/wellData.svelte';
+  import { workbench } from '$lib/state/workbench.svelte';
   const MAX_DEMO_FILE_BYTES = 5 * 1024 * 1024; // 5 MB cap in live demo
 
   let files: File[] = [];
@@ -121,6 +123,11 @@
         detected.md = headers[ lower.indexOf('md') ] ?? headers[ lower.indexOf('measured_depth') ] ?? null;
         detected.inc = headers[ lower.indexOf('inc') ] ?? headers[ lower.indexOf('inclination') ] ?? null;
         detected.azim = headers[ lower.indexOf('azim') ] ?? headers[ lower.indexOf('azimuth') ] ?? null;
+      } else if (type === 'scal_pc') {
+        detected.sample_name = headers[ lower.indexOf('sample_name') ] ?? headers[ lower.indexOf('sample') ] ?? null;
+        detected.depth = headers[ lower.indexOf('depth') ] ?? headers[ lower.indexOf('md') ] ?? null;
+        detected.pc = headers[ lower.indexOf('pc') ] ?? headers[ lower.indexOf('pc_pressure') ] ?? headers[ lower.indexOf('pressure') ] ?? null;
+        detected.sw = headers[ lower.indexOf('sw') ] ?? headers[ lower.indexOf('pc_sat') ] ?? headers[ lower.indexOf('saturation') ] ?? null;
       }
       const previewRows = rows.slice(0,10);
       // store full rows for processing, previewRows for display
@@ -296,6 +303,90 @@
       return { samples };
     }
 
+    if (type === 'scal_pc') {
+      const rows = preview.rows;
+      const keys = Object.keys(rows[0] ?? {});
+      const lowerKeys = keys.map((k) => k.toLowerCase());
+      const sampleCol = keys[lowerKeys.indexOf('sample_name')] ?? keys[lowerKeys.indexOf('sample')] ?? null;
+      const depthCol = keys[lowerKeys.indexOf('depth')] ?? keys[lowerKeys.indexOf('md')] ?? null;
+      const pcCol =
+        keys[lowerKeys.indexOf('pc')] ??
+        keys[lowerKeys.indexOf('pc_pressure')] ??
+        keys[lowerKeys.indexOf('pressure')] ??
+        null;
+      const swCol =
+        keys[lowerKeys.indexOf('sw')] ??
+        keys[lowerKeys.indexOf('pc_sat')] ??
+        keys[lowerKeys.indexOf('saturation')] ??
+        null;
+      const pcTypeCol = keys[lowerKeys.indexOf('pc_type')] ?? keys[lowerKeys.indexOf('experiment_type')] ?? null;
+      const pcCycleCol = keys[lowerKeys.indexOf('pc_cycle')] ?? keys[lowerKeys.indexOf('cycle')] ?? null;
+
+      function parseNum(v: any) {
+        if (v == null) return null;
+        const s = String(v).trim();
+        if (s === '' || /^(na|n\/a|null|undefined|--|-)$/i.test(s)) return null;
+        const n = Number(s.replace(/[% ,]/g, ''));
+        return Number.isFinite(n) ? n : null;
+      }
+
+      // Support wide format (Pc.1, Sw.1, Pc.2, Sw.2, ...) as well as long format (sample_name, depth, pc, sw)
+      const pcWideCols = keys.filter((k) => /^Pc\.\d+$/i.test(k));
+      const swWideCols = keys.filter((k) => /^Sw\.\d+$/i.test(k));
+      const isWide = pcWideCols.length > 0 && swWideCols.length > 0;
+
+      const pc_data: any[] = [];
+      rows.forEach((row: any, rowIdx: number) => {
+        const sname = String(
+          (sampleCol ? row[sampleCol] : null) ??
+            row['SAMPLE_NAME'] ??
+            row['sample_name'] ??
+            row['Sample'] ??
+            `SCAL-${rowIdx + 1}`
+        ).trim();
+        const depthVal = parseNum(depthCol ? row[depthCol] : (row['depth'] ?? row['DEPTH']));
+        if (depthVal == null) return;
+
+        if (isWide) {
+          const indices = [
+            ...new Set([
+              ...pcWideCols.map((c) => parseInt(c.split('.')[1])),
+              ...swWideCols.map((c) => parseInt(c.split('.')[1]))
+            ])
+          ];
+          for (const i of indices) {
+            const pVal = parseNum(row[`Pc.${i}`] ?? row[`pc.${i}`]);
+            const sVal = parseNum(row[`Sw.${i}`] ?? row[`sw.${i}`]);
+            if (pVal != null && sVal != null) {
+              pc_data.push({
+                sample_name: sname,
+                depth: depthVal,
+                pc: pVal,
+                sw: sVal,
+                experiment_type: 'micp',
+                cycle: 'drainage'
+              });
+            }
+          }
+        } else {
+          const pVal = parseNum(pcCol ? row[pcCol] : (row['pc'] ?? row['PC'] ?? row['pc_pressure'] ?? row['PC_PRESSURE'] ?? row['pressure']));
+          const sVal = parseNum(swCol ? row[swCol] : (row['sw'] ?? row['SW'] ?? row['pc_sat'] ?? row['PC_SAT'] ?? row['saturation']));
+          if (pVal != null && sVal != null) {
+            pc_data.push({
+              sample_name: sname,
+              depth: depthVal,
+              pc: pVal,
+              sw: sVal,
+              experiment_type: (pcTypeCol ? row[pcTypeCol] : row['PC_TYPE']) || 'micp',
+              cycle: (pcCycleCol ? row[pcCycleCol] : row['PC_CYCLE']) || 'drainage'
+            });
+          }
+        }
+      });
+
+      return { pc_data, append: true };
+    }
+
     return {};
   }
 
@@ -382,7 +473,9 @@
                       inc: Number(getFieldValue(r, preview.detected?.inc, ['inc','INC']) ?? ''),
                       azim: Number(getFieldValue(r, preview.detected?.azim, ['azim','AZIM']) ?? '')
                     })), calculate_tvd: true }
-                  : {};
+                  : (type === 'scal_pc')
+                    ? buildPayloadFromPreview({ rows: rowsForWell })
+                    : {};
             const subQs = `?well_name=${encodeURIComponent(String(wn))}`;
             // If this is a core samples import, build samples for this well and POST per-sample to core_samples endpoint
             if (type === 'core_samples') {
@@ -432,8 +525,9 @@
               fileErrors[preview.fileName] = errtxt;
               return {file: preview.fileName, ok:false, error: errtxt, status: res.status};
             }
-            totalSent += (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? subPayload.surveys?.length ?? 0);
-            subResults.push({ well: wn, ok: true, sent: (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? subPayload.surveys?.length ?? 0) });
+            const sentCountForWell = (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? subPayload.surveys?.length ?? subPayload.pc_data?.length ?? 0);
+            totalSent += sentCountForWell;
+            subResults.push({ well: wn, ok: true, sent: sentCountForWell });
         }
         if (totalSent > 0) {
           fileStatuses[preview.fileName] = 'success';
@@ -493,7 +587,7 @@
         return {file: preview.fileName, ok:false, error: errtxt, status: res.status};
       }
       // compute number of rows sent
-      const sent = (payload.tops?.length ?? payload.contacts?.length ?? payload.tests?.length ?? payload.surveys?.length ?? 0) || (payload.samples ? payload.samples.length : 0);
+      const sent = (payload.tops?.length ?? payload.contacts?.length ?? payload.tests?.length ?? payload.surveys?.length ?? payload.pc_data?.length ?? 0) || (payload.samples ? payload.samples.length : 0);
       fileStatuses[preview.fileName] = 'success';
       return {file: preview.fileName, ok:true, sent};
     });
@@ -505,6 +599,9 @@
       const out = await runConcurrent(tasks, maxConcurrency);
       results = out;
       const okCount = out.filter((r: any) => r?.ok).length;
+      if (okCount > 0 && workbench.projectId && workbench.wellId) {
+        await wellData.loadWellBundle(workbench.projectId, workbench.wellId);
+      }
       if (okCount === out.length) {
         appStatus.endTask(taskId, {
           level: 'success',
@@ -534,7 +631,8 @@
         <option value="formation_tops">Formation tops</option>
         <option value="fluid_contacts">Fluid contacts</option>
         <option value="pressure_tests">Pressure tests</option>
-        <option value="core_samples">Core samples (RCA/SCAL)</option>
+        <option value="core_samples">RCA Core Plugs (CPORE/CPERM)</option>
+        <option value="scal_pc">SCAL Capillary Pressure (Pc/Sw)</option>
         <option value="well_surveys">Well surveys (deviation)</option>
       </select>
       <label for="csv-input" class="block text-sm mb-0">
@@ -552,7 +650,9 @@
       {:else if type === 'pressure_tests'}
         <div class="text-xs"><code>depth</code>, <code>pressure</code>, <code>pressure_uom</code> (optional)</div>
       {:else if type === 'core_samples'}
-        <div class="text-xs">Required: <code>well_name</code>, <code>sample_name</code>, <code>depth</code>. Optional: <code>description</code>, <code>remarks</code>. Measurements: <code>cpore</code>, <code>cperm</code>. Relperm: <code>rp_sat</code>, <code>rp_kr</code>, <code>rp_phase</code>. Capillary pressure: <code>pc_sat</code>, <code>pc_pressure</code>, <code>pc_type</code>, <code>pc_cycle</code> (or wide format: <code>Pc.1</code>, <code>Sw.1</code>, etc.)</div>
+        <div class="text-xs">Required: <code>sample_name</code>, <code>depth</code>, and RCA measurements: <code>cpore</code> (or <code>porosity</code>), <code>cperm</code> (or <code>perm</code>). Optional: <code>well_name</code>, <code>description</code>, <code>remarks</code>.</div>
+      {:else if type === 'scal_pc'}
+        <div class="text-xs">Multiple (Pc, Sw) pairs per sample &amp; depth. Required: <code>sample_name</code>, <code>depth</code>, and either long columns (<code>pc</code> / <code>pc_pressure</code>, <code>sw</code> / <code>pc_sat</code>) or wide columns (<code>Pc.1</code>, <code>Sw.1</code>, <code>Pc.2</code>, <code>Sw.2</code>, ...). Optional: <code>well_name</code>, <code>pc_type</code>, <code>pc_cycle</code>.</div>
       {:else if type === 'well_surveys'}
         <div class="text-xs">Required columns: <code>md</code> (measured depth), <code>inc</code> (inclination), <code>azim</code> (azimuth)</div>
       {/if}

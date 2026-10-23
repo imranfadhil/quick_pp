@@ -466,7 +466,7 @@ async function trackedFetch(
 
 /**
  * Helper to save ancillary entities (formation_tops, fluid_contacts, core_samples,
- * pressure_tests, well_surveys) via the FastAPI ancillary routes.
+ * scal_pc, pressure_tests, well_surveys) via the FastAPI ancillary routes.
  */
 export async function saveAncillaryItems(
 	projectId: string | number,
@@ -475,9 +475,10 @@ export async function saveAncillaryItems(
 		| 'formation_tops'
 		| 'fluid_contacts'
 		| 'core_samples'
+		| 'scal_pc'
 		| 'pressure_tests'
 		| 'well_surveys',
-	payloadKey: 'tops' | 'contacts' | 'samples' | 'tests' | 'surveys',
+	payloadKey: 'tops' | 'contacts' | 'samples' | 'pc_data' | 'tests' | 'surveys',
 	items: Record<string, any>[]
 ) {
 	const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(wellName)}/${entityType}`;
@@ -497,7 +498,7 @@ export async function saveAncillaryItems(
 export async function deleteAncillaryItem(
 	projectId: string | number,
 	wellName: string,
-	entityType: 'formation_tops' | 'fluid_contacts' | 'core_samples' | 'pressure_tests',
+	entityType: 'formation_tops' | 'fluid_contacts' | 'core_samples' | 'scal_pc' | 'pressure_tests',
 	identifier: string | number
 ) {
 	const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(wellName)}/${entityType}/${encodeURIComponent(String(identifier))}`;

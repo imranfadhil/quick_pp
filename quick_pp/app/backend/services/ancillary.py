@@ -409,7 +409,7 @@ def list_core_samples_project(project_id: int, well_name: Optional[str] = None):
 
 @router.post(
     "/core_samples",
-    summary="Add or update a core sample with measurements, RCA, and SCAL data (requires well_name)",
+    summary="Add or update core sample(s) with RCA measurements and/or SCAL data (requires well_name)",
     tags=["Core Samples"],
 )
 @router.post(
@@ -422,22 +422,22 @@ def add_core_sample_project(
     payload: Dict[str, Any] = Body(...),
 ):
     """
-    Add or update a core sample with optional measurements (RCA), relperm, and capillary pressure (SCAL) data.
-    This is the unified endpoint for all core sample data types.
+    Add or update one or more core samples with optional measurements (RCA), relperm, and capillary pressure (SCAL) data.
 
-    Payload should include:
-    - sample_name: Unique identifier for the sample
-    - depth: Depth of the sample
-    - measurements: List of RCA measurements (optional)
-    - relperm_data: Relative permeability data (optional)
-    - pc_data: Capillary pressure data (optional)
-    - description: Sample description (optional)
-    - remark: Additional remarks (optional)
+    Supports either:
+    1) Batch RCA payload: {"samples": [{"sample_name": "S-1", "depth": 2500.0, "porosity": 0.18, "permeability": 45.0}, ...]}
+    2) Single sample payload:
+       - sample_name: Unique identifier for the sample
+       - depth: Depth of the sample
+       - measurements: List of RCA measurements (optional)
+       - porosity / permeability: Direct RCA values (optional)
+       - relperm_data: Relative permeability data (optional)
+       - pc_data: Capillary pressure data (optional)
+       - description: Sample description (optional)
+       - remark: Additional remarks (optional)
     """
-
-    required = ["sample_name", "depth"]
-    if not isinstance(payload, dict) or not all(k in payload for k in required):
-        raise HTTPException(status_code=400, detail=f"Payload must include {required}")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object")
 
     target_well = well_name or payload.get("well_name")
     if not target_well:
@@ -446,14 +446,47 @@ def add_core_sample_project(
             detail="well_name must be provided as query parameter or in payload",
         )
 
+    # Batch RCA update mode (from InspectorAncillary RCA tab)
+    if "samples" in payload and isinstance(payload["samples"], list):
+        try:
+            with get_db() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                well = proj.get_well(target_well)
+                well.replace_rca_samples(payload["samples"])
+            invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+            return {
+                "samples_updated": len(payload["samples"]),
+                "status": "replaced_rca",
+            }
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to update RCA core samples: {e}"
+            ) from e
+
+    required = ["sample_name", "depth"]
+    if not all(k in payload for k in required):
+        raise HTTPException(status_code=400, detail=f"Payload must include {required} or 'samples'")
+
     try:
+        meas_list = payload.get("measurements")
+        poro = payload.get("porosity", payload.get("cpore"))
+        perm = payload.get("permeability", payload.get("cperm"))
+        if poro is not None or perm is not None:
+            meas_list = list(meas_list or [])
+            if poro is not None and str(poro).strip() != "":
+                meas_list.append({"property_name": "CPORE", "value": float(poro), "unit": "v/v"})
+            if perm is not None and str(perm).strip() != "":
+                meas_list.append({"property_name": "CPERM", "value": float(perm), "unit": "mD"})
+
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
             well.add_core_sample_with_measurements(
                 sample_name=payload["sample_name"],
-                depth=payload["depth"],
-                measurements=payload.get("measurements", []),
+                depth=float(payload["depth"]),
+                measurements=meas_list,
                 description=payload.get("description"),
                 remark=payload.get("remark"),
                 relperm_data=payload.get("relperm_data"),
@@ -469,6 +502,112 @@ def add_core_sample_project(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to add core sample: {e}"
+        ) from e
+
+
+@router.get(
+    "/scal_pc",
+    summary="List SCAL capillary pressure pairs for a project or well",
+    tags=["SCAL Capillary Pressure"],
+)
+@router.get(
+    "/wells/{well_name}/scal_pc",
+    include_in_schema=False,
+)
+def list_scal_pc_project(project_id: int, well_name: Optional[str] = None):
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            if well_name:
+                well = proj.get_well(well_name)
+                return {
+                    "scal_pc": well.get_scal_pc_data(),
+                    "well_name": well_name,
+                }
+            all_rows = []
+            for wn in proj.get_well_names():
+                try:
+                    well = proj.get_well(wn)
+                    for row in well.get_scal_pc_data():
+                        all_rows.append({"well_name": wn, **row})
+                except Exception:
+                    continue
+            return {"scal_pc": all_rows}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list SCAL capillary pressure data: {e}"
+        ) from e
+
+
+@router.post(
+    "/scal_pc",
+    summary="Add or replace SCAL capillary pressure (Pc, Sw) pairs for a well",
+    tags=["SCAL Capillary Pressure"],
+)
+@router.post(
+    "/wells/{well_name}/scal_pc",
+    include_in_schema=False,
+)
+def add_scal_pc_project(
+    project_id: int,
+    well_name: Optional[str] = None,
+    payload: Dict[str, Any] = Body(...),
+):
+    """
+    Save SCAL capillary pressure (Pc, Sw) pairs for core samples in a well without wiping RCA measurements.
+    Accepts:
+    - {"pc_data": [{"sample_name": "S-1", "depth": 2500.0, "pc": 12.5, "sw": 0.35, "experiment_type": "micp", "cycle": "drainage"}, ...]}
+    - or {"samples": [{"sample_name": "S-1", "depth": 2500.0, "pc_data": [{"pressure": 12.5, "saturation": 0.35}, ...]}]}
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+
+    target_well = well_name or payload.get("well_name")
+    if not target_well:
+        raise HTTPException(
+            status_code=400,
+            detail="well_name must be provided as query parameter or in payload",
+        )
+
+    rows = (
+        payload.get("pc_data")
+        if "pc_data" in payload
+        else payload.get("scal_pc")
+        if "scal_pc" in payload
+        else payload.get("samples")
+    )
+    if rows is None or not isinstance(rows, list):
+        # Single sample with pc_data
+        if "sample_name" in payload and "depth" in payload:
+            rows = [payload]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Payload must include 'pc_data', 'scal_pc', or 'samples' list",
+            )
+
+    append_mode = bool(payload.get("append", False))
+
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(target_well)
+            well.replace_scal_pc_data(rows, append=append_mode)
+            updated_rows = well.get_scal_pc_data()
+        invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+        return {
+            "status": "success",
+            "well_name": str(target_well),
+            "count": len(updated_rows),
+            "scal_pc": updated_rows,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to save SCAL capillary pressure data: {e}"
         ) from e
 
 
@@ -562,9 +701,13 @@ def list_well_surveys_project(project_id: int, well_name: Optional[str] = Query(
     summary="Add or update well survey points for a project (requires well_name)",
     tags=["Well Surveys"],
 )
+@router.post(
+    "/wells/{well_name}/well_surveys",
+    include_in_schema=False,
+)
 def add_well_surveys_project(
     project_id: int,
-    well_name: Optional[str] = Query(None),
+    well_name: Optional[str] = None,
     payload: Dict[str, Any] = Body(...),
 ):
     if not isinstance(payload, dict) or "surveys" not in payload:

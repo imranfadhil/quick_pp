@@ -78,6 +78,7 @@ class WellDataState {
 	tops = $state<FormationTop[]>([]);
 	contacts = $state<FluidContact[]>([]);
 	coreSamples = $state<Record<string, any>[]>([]);
+	scalPc = $state<Record<string, any>[]>([]);
 	pressureTests = $state<Record<string, any>[]>([]);
 	survey = $state<Record<string, any>[]>([]);
 	config = $state<Record<string, any>>({});
@@ -271,6 +272,7 @@ class WellDataState {
 				depth: c.depth
 			}));
 			this.coreSamples = data.core_samples || [];
+			this.scalPc = (data as any).scal_pc || [];
 			this.pressureTests = data.pressure_tests || [];
 			this.survey = data.survey || [];
 			this.config = data.config || {};

@@ -5,7 +5,13 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 
 	let activeTab = $state<
-		'las' | 'formation_tops' | 'fluid_contacts' | 'core_samples' | 'pressure_tests' | 'well_surveys'
+		| 'las'
+		| 'formation_tops'
+		| 'fluid_contacts'
+		| 'core_samples'
+		| 'scal_pc'
+		| 'pressure_tests'
+		| 'well_surveys'
 	>('las');
 	let lasFiles = $state<FileList | null>(null);
 	let uploadingLas = $state(false);
@@ -85,7 +91,8 @@
 					['las', 'LAS / Parquet Logs'],
 					['formation_tops', 'Formation Tops'],
 					['fluid_contacts', 'Fluid Contacts'],
-					['core_samples', 'Core Samples'],
+					['core_samples', 'RCA Core Plugs'],
+					['scal_pc', 'SCAL (Pc)'],
 					['pressure_tests', 'Pressure Tests'],
 					['well_surveys', 'Deviation Survey']
 				] as [tabKey, label]}

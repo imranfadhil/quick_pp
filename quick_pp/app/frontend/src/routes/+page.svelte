@@ -100,6 +100,33 @@
 
 		if (
 			workbench.scope === 'multi-well' &&
+			workbench.multiWellStep === 'shf' &&
+			projectData.shfResult?.scal_data?.pc?.length
+		) {
+			return {
+				title: 'Multi-Well SCAL Capillary Pressure & Leverett-J Table',
+				columns: [
+					{ key: 'Well', label: 'Well' },
+					{ key: 'Sample', label: 'Sample' },
+					{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 2 },
+					{ key: 'ROCK_FLAG', label: 'RT', numeric: true, decimals: 0 },
+					{ key: 'PC', label: 'Pc', unit: 'psi', numeric: true, decimals: 2 },
+					{ key: 'SW', label: 'Sw', unit: 'v/v', numeric: true, decimals: 3 },
+					{ key: 'SWN', label: 'Swn', unit: 'v/v', numeric: true, decimals: 3 },
+					{ key: 'J', label: 'J', numeric: true, decimals: 3 },
+					{ key: 'H', label: 'Height', unit: 'm', numeric: true, decimals: 1 },
+					{ key: 'PHIT', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3 },
+					{ key: 'PERM', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2 }
+				],
+				rows: projectData.shfResult.scal_data.pc.map((r: Record<string, any>) => ({
+					...r,
+					depth: r.DEPTH ?? r.depth ?? null
+				}))
+			};
+		}
+
+		if (
+			workbench.scope === 'multi-well' &&
 			workbench.multiWellStep === 'ml-training' &&
 			projectData.mlTrainingResult?.parity_rows?.length
 		) {

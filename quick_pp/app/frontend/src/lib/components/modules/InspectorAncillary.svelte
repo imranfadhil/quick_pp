@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { deleteAncillaryItem, saveAncillaryItems } from '$lib/api/client';
 	import CompactDataGrid, { type GridColumn } from '$lib/components/workbench/CompactDataGrid.svelte';
+	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 
-	type AncillaryTab = 'tops' | 'contacts' | 'core' | 'pressure' | 'survey';
+	type AncillaryTab = 'tops' | 'contacts' | 'core' | 'scal' | 'pressure' | 'survey';
 	let activeTab = $state<AncillaryTab>('tops');
 	let isSaving = $state(false);
 	let statusMsg = $state<string | null>(null);
@@ -14,6 +15,32 @@
 	let newDepth = $state<number>(1000);
 	let newVal1 = $state<number>(0.2);
 	let newVal2 = $state<number>(100);
+	let newScalPc = $state<number>(15);
+	let newScalSw = $state<number>(0.35);
+
+	// Known sample names & depths from RCA and SCAL for quick auto-fill when adding multiple Pc-Sw pairs
+	let knownSamples = $derived.by(() => {
+		const map = new Map<string, number>();
+		for (const s of wellData.coreSamples) {
+			if (s.sample_name && Number.isFinite(Number(s.depth))) {
+				map.set(String(s.sample_name), Number(s.depth));
+			}
+		}
+		for (const s of wellData.scalPc) {
+			if (s.sample_name && Number.isFinite(Number(s.depth)) && !map.has(String(s.sample_name))) {
+				map.set(String(s.sample_name), Number(s.depth));
+			}
+		}
+		return Array.from(map.entries()).map(([sample_name, depth]) => ({ sample_name, depth }));
+	});
+
+	function handleScalSampleChange(val: string) {
+		newName = val;
+		const match = knownSamples.find((s) => s.sample_name.toLowerCase() === val.trim().toLowerCase());
+		if (match) {
+			newDepth = match.depth;
+		}
+	}
 
 	const TOP_COLS: GridColumn[] = [
 		{ key: 'name', label: 'Formation / Zone', editable: true },
@@ -30,6 +57,13 @@
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 2, editable: true },
 		{ key: 'porosity', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3, editable: true },
 		{ key: 'permeability', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2, editable: true }
+	];
+
+	const SCAL_PC_COLS: GridColumn[] = [
+		{ key: 'sample_name', label: 'Sample', editable: true },
+		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 2, editable: true },
+		{ key: 'pc', label: 'Pc', unit: 'psi', numeric: true, decimals: 2, editable: true },
+		{ key: 'sw', label: 'Sw', unit: 'v/v', numeric: true, decimals: 3, editable: true }
 	];
 
 	const PRESSURE_COLS: GridColumn[] = [
@@ -70,6 +104,25 @@
 				}
 			];
 			newName = '';
+		} else if (activeTab === 'scal') {
+			// Keep sample_name & depth sticky so user can enter multiple (Pc, Sw) pairs for the same plug
+			const sampleName =
+				newName.trim() ||
+				(wellData.scalPc.length > 0
+					? String(wellData.scalPc[wellData.scalPc.length - 1].sample_name)
+					: knownSamples[0]?.sample_name || 'S-1');
+			newName = sampleName;
+			wellData.scalPc = [
+				...wellData.scalPc,
+				{
+					sample_name: sampleName,
+					depth: Number(newDepth),
+					pc: Number(newScalPc),
+					sw: Number(newScalSw),
+					experiment_type: 'micp',
+					cycle: 'drainage'
+				}
+			];
 		} else if (activeTab === 'pressure') {
 			wellData.pressureTests = [
 				...wellData.pressureTests,
@@ -104,10 +157,16 @@
 				wellData.contacts = wellData.contacts.filter((_, i) => i !== idx);
 			} else if (activeTab === 'core') {
 				wellData.coreSamples = wellData.coreSamples.filter((_, i) => i !== idx);
+				await saveCurrentTab();
+			} else if (activeTab === 'scal') {
+				wellData.scalPc = wellData.scalPc.filter((_, i) => i !== idx);
+				await saveCurrentTab();
 			} else if (activeTab === 'pressure') {
 				wellData.pressureTests = wellData.pressureTests.filter((_, i) => i !== idx);
+				await saveCurrentTab();
 			} else if (activeTab === 'survey') {
 				wellData.survey = wellData.survey.filter((_, i) => i !== idx);
+				await saveCurrentTab();
 			}
 		} catch (e: any) {
 			statusMsg = e?.message || 'Delete failed';
@@ -143,6 +202,33 @@
 					'samples',
 					wellData.coreSamples
 				);
+			} else if (activeTab === 'scal') {
+				// Propagate shared depth for same sample_name if user edited depth on one row
+				const depthBySample = new Map<string, number>();
+				for (const r of wellData.scalPc) {
+					if (r.sample_name && Number.isFinite(Number(r.depth))) {
+						depthBySample.set(String(r.sample_name), Number(r.depth));
+					}
+				}
+				const normalizedScal = wellData.scalPc.map((r, i) => {
+					const sname = String(r.sample_name || `S-${i + 1}`).trim();
+					return {
+						sample_name: sname,
+						depth: Number(r.depth ?? depthBySample.get(sname) ?? 0),
+						pc: Number(r.pc ?? 0),
+						sw: Number(r.sw ?? 0),
+						experiment_type: r.experiment_type || 'micp',
+						cycle: r.cycle || 'drainage'
+					};
+				});
+				wellData.scalPc = normalizedScal;
+				await saveAncillaryItems(
+					workbench.projectId,
+					workbench.wellId,
+					'scal_pc',
+					'pc_data',
+					normalizedScal
+				);
 			} else if (activeTab === 'pressure') {
 				await saveAncillaryItems(
 					workbench.projectId,
@@ -161,7 +247,10 @@
 				);
 			}
 			statusMsg = 'Saved ✓';
-			wellData.lastSavedMessage = 'Ancillary Saved';
+			if (activeTab === 'scal' || activeTab === 'core') {
+				projectData.shfResult = null;
+			}
+			wellData.lastSavedMessage = activeTab === 'scal' ? 'SCAL Pc Saved' : 'Ancillary Saved';
 		} catch (e: any) {
 			statusMsg = `Error: ${e?.message || 'Save failed'}`;
 		} finally {
@@ -173,12 +262,13 @@
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<!-- Sub-navigation Tabs -->
 	<div
-		class="grid grid-cols-5 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[10px] font-semibold"
+		class="grid grid-cols-6 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[10px] font-semibold"
 	>
 		{#each [
 			['tops', `Tops (${wellData.tops.length})`],
 			['contacts', `Contacts (${wellData.contacts.length})`],
-			['core', `Core (${wellData.coreSamples.length})`],
+			['core', `RCA (${wellData.coreSamples.length})`],
+			['scal', `SCAL (${wellData.scalPc.length})`],
 			['pressure', `Press (${wellData.pressureTests.length})`],
 			['survey', `Survey (${wellData.survey.length})`]
 		] as [key, lbl]}
@@ -189,6 +279,11 @@
 				key
 					? 'bg-[var(--bg-surface)] text-[var(--accent-primary)] border-b-2 border-b-[var(--accent-primary)]'
 					: 'text-[var(--text-secondary)] hover:bg-slate-200/60'}"
+				title={key === 'core'
+					? 'Routine Core Analysis (CPORE, CPERM)'
+					: key === 'scal'
+						? 'SCAL Capillary Pressure (Multiple Pc & Sw pairs per sample/depth)'
+						: lbl}
 			>
 				{lbl}
 			</button>
@@ -215,6 +310,12 @@
 			/>
 		{:else if activeTab === 'core'}
 			<input
+				type="text"
+				placeholder="Sample"
+				bind:value={newName}
+				class="h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
+			/>
+			<input
 				type="number"
 				step="0.5"
 				placeholder="Depth"
@@ -224,16 +325,57 @@
 			<input
 				type="number"
 				step="0.01"
-				placeholder="Poro"
+				placeholder="CPORE"
 				bind:value={newVal1}
-				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="number"
 				step="1"
-				placeholder="Perm"
+				placeholder="CPERM"
 				bind:value={newVal2}
+				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+		{:else if activeTab === 'scal'}
+			<input
+				type="text"
+				list="scal-known-samples"
+				placeholder="Sample"
+				value={newName}
+				 oninput={(e) => handleScalSampleChange((e.currentTarget as HTMLInputElement).value)}
+				title="Core Sample Name (select existing RCA sample or type new name; stays sticky for multiple Pc-Sw pairs)"
+				class="h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
+			/>
+			<datalist id="scal-known-samples">
+				{#each knownSamples as ks}
+					<option value={ks.sample_name}>{ks.sample_name} ({ks.depth} m)</option>
+				{/each}
+			</datalist>
+			<input
+				type="number"
+				step="0.5"
+				placeholder="Depth"
+				bind:value={newDepth}
+				title="Sample Depth (m)"
 				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="0.5"
+				placeholder="Pc (psi)"
+				bind:value={newScalPc}
+				title="Capillary Pressure Pc (psi)"
+				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="0.01"
+				min="0"
+				max="1"
+				placeholder="Sw (v/v)"
+				bind:value={newScalSw}
+				title="Water Saturation Sw (v/v)"
+				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 		{:else}
 			<input
@@ -285,7 +427,16 @@
 				columns={CORE_COLS}
 				bind:rows={wellData.coreSamples}
 				editable={true}
-				emptyMessage="No core plugs loaded."
+				emptyMessage="No RCA core plugs (CPORE, CPERM). Add above or paste from Excel."
+				oncellchange={() => saveCurrentTab()}
+				ondeleteRow={handleDeleteRow}
+			/>
+		{:else if activeTab === 'scal'}
+			<CompactDataGrid
+				columns={SCAL_PC_COLS}
+				bind:rows={wellData.scalPc}
+				editable={true}
+				emptyMessage="No SCAL capillary pressure (Pc, Sw) pairs. Add multiple pairs per sample/depth above or paste from Excel."
 				oncellchange={() => saveCurrentTab()}
 				ondeleteRow={handleDeleteRow}
 			/>
