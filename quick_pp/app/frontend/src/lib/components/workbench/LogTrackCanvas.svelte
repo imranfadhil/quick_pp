@@ -355,33 +355,75 @@
 		}
 
 		// Track 2 (xaxis2): Resistivity (Log 0.2 - 2000 ohm.m)
-		for (const [mnem, col, dash] of [
-			['RT', PETRO_COLORS.rt, 'solid'],
-			['RD', PETRO_COLORS.rt, 'solid'],
-			['RMED', PETRO_COLORS.rmed, 'dash'],
-			['RSHAL', PETRO_COLORS.rshal, 'dot']
-		] as const) {
-			const arr = pick(mnem);
+		// Industry standard: Deep (RT, solid red), Medium (RM, dashed blue), Shallow (RS, dotted teal)
+		const resistivitySpecs: Array<{
+			primary: string;
+			aliases: string[];
+			color: string;
+			dash: 'solid' | 'dash' | 'dot';
+			width: number;
+		}> = [
+			{
+				primary: 'RT',
+				aliases: ['RD', 'RDEP', 'RDEEP', 'LLD', 'RILD'],
+				color: PETRO_COLORS.rt,
+				dash: 'solid',
+				width: 1.4
+			},
+			{
+				primary: 'RM',
+				aliases: ['RMED', 'RILM', 'ILM', 'LLM'],
+				color: PETRO_COLORS.rm,
+				dash: 'dash',
+				width: 1.3
+			},
+			{
+				primary: 'RS',
+				aliases: ['RSHAL', 'RXO', 'MSFL', 'RMLL', 'LLS'],
+				color: PETRO_COLORS.rs,
+				dash: 'dot',
+				width: 1.25
+			}
+		];
+
+		for (const spec of resistivitySpecs) {
+			let activeMnem = spec.primary;
+			let arr = pick(spec.primary);
+			if (!arr.some((v) => v !== null && v > 0)) {
+				for (const alias of spec.aliases) {
+					const altArr = pick(alias);
+					if (altArr.some((v) => v !== null && v > 0)) {
+						activeMnem = alias;
+						arr = altArr;
+						break;
+					}
+				}
+			}
 			if (arr.some((v) => v !== null && v > 0)) {
 				traces.push({
 					type: 'scattergl',
 					mode: 'lines',
-					name: mnem,
+					name: activeMnem,
 					x: arr.map((v) => (v !== null && v > 0 ? v : null)),
 					y: depth,
 					xaxis: 'x2',
 					yaxis: 'y',
-					line: { color: col, width: 1.4, dash },
-					hovertemplate: `${mnem}: %{x:.2f} ohm.m<extra></extra>`
+					line: { color: spec.color, width: spec.width, dash: spec.dash },
+					hovertemplate: `${activeMnem}: %{x:.2f} ohm.m<extra></extra>`
 				});
 			}
 		}
 
-		// Track 3 (xaxis3): NPHI (0.45 -> -0.15, right-to-left) & RHOB (1.95 -> 2.95, left-to-right)
-		// Normalize RHOB onto NPHI scale [0.45 -> -0.15]: NPHI_eq = 0.45 - ((RHOB - 1.95) / 1.0) * 0.6
+		// Track 3 (xaxis3): NPHI (0.45 -> -0.15, right-to-left), RHOB (1.95 -> 2.95, left-to-right),
+		// PEF (0 -> 10 b/e, left-to-right), and DRHO (-0.25 -> 0.25 g/cc, left-to-right)
+		// Normalize onto NPHI scale [0.45 -> -0.15]: x_eq = 0.45 - ((val - min) / (max - min)) * 0.6
 		const nphi = pick('NPHI');
 		const rhob = pick('RHOB');
+		const pef = pick('PEF');
+		const drho = pick('DRHO');
 		const rhobAsNphi = rhob.map((r) => (r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null));
+		const pefAsNphi = pef.map((p) => (p !== null && p >= 0 ? 0.45 - (p / 10.0) * 0.6 : null));
+		const drhoAsNphi = drho.map((d) => (d !== null ? 0.45 - ((d - -0.25) / (0.25 - -0.25)) * 0.6 : null));
 
 		if (nphi.length && rhob.length) {
 			// Gas Crossover Shading: fill yellow ONLY where NPHI crosses to the right of RHOB (nphi < rhobAsNphi)
@@ -444,6 +486,34 @@
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.rhob, width: 1.4 },
 				hovertemplate: 'RHOB: %{customdata:.3f} g/cc<extra></extra>'
+			});
+		}
+		if (pef.some((v) => v !== null && v >= 0)) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'PEF',
+				x: pefAsNphi,
+				customdata: pef,
+				y: depth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { color: PETRO_COLORS.pef, width: 1.3, dash: 'dashdot' },
+				hovertemplate: 'PEF: %{customdata:.2f} b/e<extra></extra>'
+			});
+		}
+		if (drho.some((v) => v !== null)) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: 'DRHO',
+				x: drhoAsNphi,
+				customdata: drho,
+				y: depth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { color: PETRO_COLORS.drho, width: 1.2, dash: 'dash' },
+				hovertemplate: 'DRHO: %{customdata:.3f} g/cc<extra></extra>'
 			});
 		}
 		if (showHcCorrected && workbench.lithoParams.enableHcCorrection) {
@@ -1059,7 +1129,7 @@
 		style="padding-left: {plotAreaLeft}px; padding-right: {plotAreaRight}px;"
 		class="flex shrink-0 items-stretch border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[9px] leading-tight"
 	>
-		<div class="relative flex h-[40px] w-full">
+		<div class="relative flex h-[62px] w-full">
 			<!-- Track 1: GR (0 - 200 gAPI) & CALI / BS (6 - 16 in) -->
 			<div
 				style="left: 0%; width: 15.5%;"
@@ -1091,68 +1161,129 @@
 				</div>
 			</div>
 
-			<!-- Track 2: RT (0.2 - 2000 ohm.m, 4-decade log scale) -->
+			<!-- Track 2: RT, RM, RS (0.2 - 2000 ohm.m, 4-decade log scale) -->
 			<div
 				style="left: 16.8%; width: 15.5%;"
 				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
-				<div
-					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
-					style="color: {PETRO_COLORS.rt}"
-				>
-					<span>0.2</span>
-					<span class="font-sans text-[9px] font-bold">RT (Ω·m) ►</span>
-					<span>2000</span>
-				</div>
+				<!-- Deep Resistivity: RT (solid red) -->
 				<div class="flex flex-col">
-					<div class="relative h-3 w-full text-[7.5px] font-medium text-slate-500 mono-num">
+					<div
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+						style="color: {PETRO_COLORS.rt}"
+					>
+						<span>0.2</span>
+						<span class="font-sans text-[8px] font-bold">RT (Ω·m) ►</span>
+						<span>2000</span>
+					</div>
+					<div class="mt-[1px] h-[1.5px] w-full" style="background: {PETRO_COLORS.rt}"></div>
+				</div>
+
+				<!-- Medium Resistivity: RM (dashed blue) -->
+				<div class="flex flex-col">
+					<div
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+						style="color: {PETRO_COLORS.rm}"
+					>
+						<span>0.2</span>
+						<span class="font-sans text-[8px] font-bold">RM (Ω·m) ►</span>
+						<span>2000</span>
+					</div>
+					<div
+						class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed"
+						style="border-color: {PETRO_COLORS.rm}"
+					></div>
+				</div>
+
+				<!-- Shallow Resistivity: RS (dotted teal) + Log Decade Ticks -->
+				<div class="flex flex-col">
+					<div
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+						style="color: {PETRO_COLORS.rs}"
+					>
+						<span>0.2</span>
+						<span class="font-sans text-[8px] font-bold">RS (Ω·m) ►</span>
+						<span>2000</span>
+					</div>
+					<div
+						class="mt-[1px] h-0 w-full border-t-[1.5px] border-dotted"
+						style="border-color: {PETRO_COLORS.rs}"
+					></div>
+					<div class="relative h-2.5 w-full text-[7px] font-medium text-slate-500 mono-num">
 						{#each [[1, '1'], [10, '10'], [100, '100'], [1000, '1k']] as [val, lbl]}
 							{@const pct = ((Math.log10(Number(val)) - Math.log10(0.2)) / (Math.log10(2000) - Math.log10(0.2))) * 100}
 							<span
 								style="left: {pct}%;"
-								class="absolute bottom-0.5 -translate-x-1/2 leading-none"
+								class="absolute bottom-0 -translate-x-1/2 leading-none"
 							>
 								{lbl}
 							</span>
-							<span
-								style="left: {pct}%; background: {PETRO_COLORS.rt};"
-								class="absolute bottom-0 h-1 w-[1px] -translate-x-1/2 opacity-70"
-							></span>
 						{/each}
 					</div>
-					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.rt}"></div>
 				</div>
 			</div>
 
-			<!-- Track 3: Vertically Stacked NPHI (0.45 -> -0.15) & RHOB (1.95 -> 2.95) -->
+			<!-- Track 3: Vertically Stacked RHOB (1.95 -> 2.95), NPHI (0.45 -> -0.15), PEF (0 -> 10), DRHO (-0.25 -> 0.25) -->
 			<div
 				style="left: 33.6%; width: 15.5%;"
 				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
-				<!-- Top row: RHOB (1.95 -> 2.95 g/cc, increases left to right) -->
+				<!-- Row 1: RHOB (1.95 -> 2.95 g/cc, increases left to right, solid red) -->
 				<div class="flex flex-col">
 					<div
-						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
 						style="color: {PETRO_COLORS.rhob}"
 					>
 						<span>1.95</span>
-						<span class="font-sans text-[8.5px] font-bold">RHOB (g/cc) ►</span>
+						<span class="font-sans text-[8px] font-bold">RHOB (g/cc) ►</span>
 						<span>2.95</span>
 					</div>
-					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.rhob}"></div>
+					<div class="mt-[1px] h-[1.5px] w-full" style="background: {PETRO_COLORS.rhob}"></div>
 				</div>
 
-				<!-- Bottom row: NPHI (0.45 <- -0.15 v/v, increases right to left) -->
+				<!-- Row 2: NPHI (0.45 <- -0.15 v/v, increases right to left, solid blue) -->
 				<div class="flex flex-col">
 					<div
-						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
 						style="color: {PETRO_COLORS.nphi}"
 					>
 						<span>0.45</span>
-						<span class="font-sans text-[8.5px] font-bold">◄ NPHI (v/v)</span>
+						<span class="font-sans text-[8px] font-bold">◄ NPHI (v/v)</span>
 						<span>-0.15</span>
 					</div>
-					<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.nphi}"></div>
+					<div class="mt-[1px] h-[1.5px] w-full" style="background: {PETRO_COLORS.nphi}"></div>
+				</div>
+
+				<!-- Row 3: PEF (0 -> 10 b/e, increases left to right, dash-dot purple) -->
+				<div class="flex flex-col">
+					<div
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+						style="color: {PETRO_COLORS.pef}"
+					>
+						<span>0</span>
+						<span class="font-sans text-[8px] font-bold">PEF (b/e) ►</span>
+						<span>10</span>
+					</div>
+					<div
+						class="mt-[1px] h-[1.5px] w-full"
+						style="background: repeating-linear-gradient(to right, {PETRO_COLORS.pef} 0 5px, transparent 5px 7px, {PETRO_COLORS.pef} 7px 9px, transparent 9px 11px);"
+					></div>
+				</div>
+
+				<!-- Row 4: DRHO (-0.25 -> 0.25 g/cc, increases left to right, dashed amber) -->
+				<div class="flex flex-col">
+					<div
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+						style="color: {PETRO_COLORS.drho}"
+					>
+						<span>-0.25</span>
+						<span class="font-sans text-[8px] font-bold">DRHO (g/cc) ►</span>
+						<span>0.25</span>
+					</div>
+					<div
+						class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed"
+						style="border-color: {PETRO_COLORS.drho}"
+					></div>
 				</div>
 			</div>
 
@@ -1319,8 +1450,20 @@
 			</span>
 			<span>
 				<strong style="color: {PETRO_COLORS.rt}">RT:</strong>
-				{fmtNum(readout.RT, 2)}
+				{fmtNum(readout.RT ?? readout.RD ?? readout.RDEP, 2)}
 			</span>
+			{#if (readout.RM ?? readout.RMED) !== null && (readout.RM ?? readout.RMED) !== undefined}
+				<span>
+					<strong style="color: {PETRO_COLORS.rm}">RM:</strong>
+					{fmtNum(readout.RM ?? readout.RMED, 2)}
+				</span>
+			{/if}
+			{#if (readout.RS ?? readout.RSHAL) !== null && (readout.RS ?? readout.RSHAL) !== undefined}
+				<span>
+					<strong style="color: {PETRO_COLORS.rs}">RS:</strong>
+					{fmtNum(readout.RS ?? readout.RSHAL, 2)}
+				</span>
+			{/if}
 			<span>
 				<strong style="color: {PETRO_COLORS.nphi}">NPHI:</strong>
 				{fmtNum(readout.NPHI, 3)}
@@ -1329,6 +1472,18 @@
 				<strong style="color: {PETRO_COLORS.rhob}">RHOB:</strong>
 				{fmtNum(readout.RHOB, 3)}
 			</span>
+			{#if readout.PEF !== null && readout.PEF !== undefined}
+				<span>
+					<strong style="color: {PETRO_COLORS.pef}">PEF:</strong>
+					{fmtNum(readout.PEF, 2)}
+				</span>
+			{/if}
+			{#if readout.DRHO !== null && readout.DRHO !== undefined}
+				<span>
+					<strong style="color: {PETRO_COLORS.drho}">DRHO:</strong>
+					{fmtNum(readout.DRHO, 3)}
+				</span>
+			{/if}
 			<span>
 				<strong>VCLAY:</strong>
 				{fmtNum(readout.VCLAY, 3)}

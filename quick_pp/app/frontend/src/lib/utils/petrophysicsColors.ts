@@ -39,10 +39,14 @@ export const PETRO_COLORS = {
 	// Standard log curves
 	gr: '#78350F',
 	rt: '#DC2626',
+	rm: '#2563EB',
+	rs: '#0D9488',
 	rmed: '#2563EB',
 	rshal: '#0D9488',
 	rhob: '#DC2626',
 	nphi: '#2563EB',
+	pef: '#9333EA',
+	drho: '#D97706',
 	dt: '#9333EA',
 	cali: '#475569',
 	sp: '#7C3AED',
@@ -298,6 +302,42 @@ export const STANDARD_CURVE_META: Record<string, CurveMeta> = {
 		color: PETRO_COLORS.rt,
 		logScale: true
 	},
+	RM: {
+		mnemonic: 'RM',
+		label: 'Medium Resistivity',
+		unit: 'ohm.m',
+		min: 0.2,
+		max: 2000,
+		color: PETRO_COLORS.rm,
+		logScale: true
+	},
+	RS: {
+		mnemonic: 'RS',
+		label: 'Shallow Resistivity',
+		unit: 'ohm.m',
+		min: 0.2,
+		max: 2000,
+		color: PETRO_COLORS.rs,
+		logScale: true
+	},
+	RMED: {
+		mnemonic: 'RMED',
+		label: 'Medium Resistivity',
+		unit: 'ohm.m',
+		min: 0.2,
+		max: 2000,
+		color: PETRO_COLORS.rmed,
+		logScale: true
+	},
+	RSHAL: {
+		mnemonic: 'RSHAL',
+		label: 'Shallow Resistivity',
+		unit: 'ohm.m',
+		min: 0.2,
+		max: 2000,
+		color: PETRO_COLORS.rshal,
+		logScale: true
+	},
 	NPHI: {
 		mnemonic: 'NPHI',
 		label: 'Neutron Porosity',
@@ -316,7 +356,7 @@ export const STANDARD_CURVE_META: Record<string, CurveMeta> = {
 		color: PETRO_COLORS.rhob
 	},
 	DTC: { mnemonic: 'DTC', label: 'Compressional Sonic', unit: 'us/ft', min: 40, max: 140, color: PETRO_COLORS.dt, reversed: true },
-	PEF: { mnemonic: 'PEF', label: 'Photoelectric Factor', unit: 'b/e', min: 0, max: 10, color: '#0284C7' },
+	PEF: { mnemonic: 'PEF', label: 'Photoelectric Factor', unit: 'b/e', min: 0, max: 10, color: PETRO_COLORS.pef },
 	VSAND: { mnemonic: 'VSAND', label: 'Quartz/Sand Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.sandStroke },
 	VSILT: { mnemonic: 'VSILT', label: 'Silt Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.siltStroke },
 	VCLAY: { mnemonic: 'VCLAY', label: 'Clay/Shale Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.shaleStroke },
