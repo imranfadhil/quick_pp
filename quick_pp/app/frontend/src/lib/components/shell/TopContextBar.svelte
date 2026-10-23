@@ -5,7 +5,7 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { downloadCsv, fmtDepth } from '$lib/utils/formatters';
-	import { apiPost } from '$lib/api/client';
+	import { apiPost, downloadHandoverPackage, downloadWellLas } from '$lib/api/client';
 
 	let isResettingDemo = $state(false);
 	async function resetDemoSession() {
@@ -180,6 +180,28 @@
 		const headers = Object.keys(wellData.zonalSummary[0]);
 		downloadCsv(`${workbench.wellId || 'well'}_reservoir_summary.csv`, headers, wellData.zonalSummary);
 		showExportMenu = false;
+	}
+
+	async function exportProjectHandoverZip() {
+		if (!workbench.projectId) return;
+		showExportMenu = false;
+		const wellsFilter =
+			hasWellFilter && projectData.selectedWellNames.length > 0
+				? projectData.selectedWellNames
+				: undefined;
+		await downloadHandoverPackage(workbench.projectId, { wells: wellsFilter });
+	}
+
+	async function exportActiveWellHandoverZip() {
+		if (!workbench.projectId || !workbench.wellId) return;
+		showExportMenu = false;
+		await downloadHandoverPackage(workbench.projectId, { wellName: workbench.wellId });
+	}
+
+	async function exportActiveWellLasFile() {
+		if (!workbench.projectId || !workbench.wellId) return;
+		showExportMenu = false;
+		await downloadWellLas(workbench.projectId, workbench.wellId);
 	}
 
 	let hasWellFilter = $derived(
@@ -766,8 +788,39 @@
 			</button>
 			{#if showExportMenu}
 				<div
-					class="absolute top-8 right-0 z-50 w-48 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-1 shadow-lg"
+					class="absolute top-8 right-0 z-50 w-64 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-1 shadow-lg"
 				>
+					<div class="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+						Handover Bundles & LAS
+					</div>
+					<button
+						type="button"
+						disabled={!workbench.projectId || projectData.wells.length === 0}
+						onclick={exportProjectHandoverZip}
+						class="block w-full px-3 py-1.5 text-left text-xs font-medium text-[var(--accent-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
+					>
+						Project Handover Package (.zip)
+					</button>
+					<button
+						type="button"
+						disabled={!workbench.projectId || !workbench.wellId}
+						onclick={exportActiveWellHandoverZip}
+						class="block w-full px-3 py-1.5 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
+					>
+						Active Well Handover ({workbench.wellId || 'Well'} .zip)
+					</button>
+					<button
+						type="button"
+						disabled={!workbench.projectId || !workbench.wellId}
+						onclick={exportActiveWellLasFile}
+						class="block w-full px-3 py-1.5 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
+					>
+						Active Well Logs + Params (.las)
+					</button>
+					<div class="my-1 border-t border-[var(--border-hairline)]"></div>
+					<div class="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+						Quick Flat Tables
+					</div>
 					<button
 						type="button"
 						onclick={exportWellCurvesCsv}

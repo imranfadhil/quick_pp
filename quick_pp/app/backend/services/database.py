@@ -7,11 +7,19 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from sqlalchemy import bindparam, select, text
 
 from quick_pp.app.backend.utils.auth import (
-    check_project_permission,
     get_current_user_optional,
     is_demo_mode,
 )
@@ -1415,3 +1423,204 @@ async def get_cache_stats():
         "cache_ttl_seconds": _cache_ttl,
         "cached_wells": list({k.rsplit("_", 1)[0] for k in _merged_data_cache.keys()}),
     }
+
+
+def _collect_project_handover_bundles(
+    project_id: int,
+    well_names_filter: Optional[List[str]] = None,
+) -> tuple[str, str, List[Dict[str, Any]]]:
+    """Gather project metadata and per-well handover dictionaries (including ephemeral/cached live edits)."""
+    from quick_pp.handover import collect_well_handover_dict
+
+    if project_id in _demo_deleted_projects:
+        raise ValueError(f"Project {project_id} not found")
+
+    allowed = (
+        {str(w).strip() for w in well_names_filter if str(w).strip()}
+        if well_names_filter
+        else None
+    )
+    deleted_w_set = _demo_deleted_wells.get(project_id, set())
+    renamed_w_map = _demo_well_renames.get(project_id, {})
+
+    with get_db() as session:
+        proj = db_objects.Project.load(session, project_id=project_id)
+        ovr = _demo_project_overrides.get(project_id, {})
+        proj_name = ovr.get("name", proj.name)
+        proj_desc = ovr.get("description", proj.description or "")
+
+        wells_bundle: List[Dict[str, Any]] = []
+        seen_names = set()
+
+        for orm_well in proj._orm_project.wells:
+            curr_name = renamed_w_map.get(orm_well.name, orm_well.name)
+            if orm_well.name in deleted_w_set or curr_name in deleted_w_set:
+                continue
+            if allowed and curr_name not in allowed and orm_well.name not in allowed:
+                continue
+
+            seen_names.add(curr_name)
+            well_obj = db_objects.Well(session, well_id=orm_well.well_id)
+            # Check if there is an updated merged/ephemeral dataframe in memory
+            live_df = None
+            eph_entry = _ephemeral_wells.get(project_id, {}).get(curr_name)
+            if isinstance(eph_entry, pd.DataFrame):
+                live_df = eph_entry
+            elif isinstance(eph_entry, dict) and isinstance(
+                eph_entry.get("data"), pd.DataFrame
+            ):
+                live_df = eph_entry["data"]
+            else:
+                cached = _merged_data_cache.get(f"{project_id}_{curr_name}_0.16")
+                if cached is not None:
+                    live_df = cached[1]
+
+            b_dict = collect_well_handover_dict(well_obj, override_df=live_df)
+            b_dict["name"] = curr_name
+            wells_bundle.append(b_dict)
+
+        # Include any purely ephemeral uploaded wells in demo mode
+        for eph_name, eph_val in _ephemeral_wells.get(project_id, {}).items():
+            if eph_name in seen_names or eph_name in deleted_w_set:
+                continue
+            if allowed and eph_name not in allowed:
+                continue
+            eph_df = (
+                eph_val
+                if isinstance(eph_val, pd.DataFrame)
+                else eph_val.get("data", pd.DataFrame())
+                if isinstance(eph_val, dict)
+                else pd.DataFrame()
+            )
+            wells_bundle.append(
+                {
+                    "name": eph_name,
+                    "uwi": eph_name,
+                    "depth_uom": "m",
+                    "config": {},
+                    "data": eph_df,
+                    "formation_tops": pd.DataFrame(columns=["name", "depth"]),
+                    "fluid_contacts": pd.DataFrame(columns=["name", "depth"]),
+                    "well_surveys": pd.DataFrame(columns=["md", "inc", "azim"]),
+                    "pressure_tests": pd.DataFrame(
+                        columns=["depth", "pressure", "pressure_uom"]
+                    ),
+                    "core_data": {},
+                    "scal_pc": [],
+                }
+            )
+
+    return proj_name, proj_desc, wells_bundle
+
+
+@router.get(
+    "/projects/{project_id}/export",
+    summary="Export Petrophysical Handover Package (.zip) for Techlog / Geolog / IP / Petrel",
+)
+def export_project_handover(
+    project_id: int,
+    well_name: Optional[str] = Query(
+        None, description="Optional single well name to export"
+    ),
+    wells: Optional[str] = Query(
+        None, description="Optional comma-separated list of well names to export"
+    ),
+    include_las: bool = Query(True, description="Include LAS 2.0 files"),
+    include_excel: bool = Query(
+        True, description="Include multi-tab Master Excel Workbook (.xlsx)"
+    ),
+):
+    """Build and stream a standardized Petrophysical Handover Package (.zip)."""
+    from quick_pp.handover import _sanitize_name, build_handover_archive_bytes
+
+    try:
+        filter_list: Optional[List[str]] = None
+        if well_name:
+            filter_list = [well_name]
+        elif wells:
+            filter_list = [w.strip() for w in wells.split(",") if w.strip()]
+
+        proj_name, proj_desc, wells_bundle = _collect_project_handover_bundles(
+            project_id=project_id, well_names_filter=filter_list
+        )
+        if not wells_bundle:
+            raise ValueError("No matching wells found to export.")
+
+        bundle_title = (
+            f"{proj_name}_{well_name}"
+            if well_name and len(wells_bundle) == 1
+            else proj_name
+        )
+        zip_bytes = build_handover_archive_bytes(
+            project_name=bundle_title,
+            project_description=proj_desc,
+            wells_bundle=wells_bundle,
+            include_las=include_las,
+            include_excel=include_excel,
+        )
+        filename = f"{_sanitize_name(bundle_title)}_Handover.zip"
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to export handover package: {e}"
+        ) from e
+
+
+@router.get(
+    "/projects/{project_id}/wells/{well_name}/export_las",
+    summary="Export evaluated well logs and CPI parameters as a LAS 2.0 file",
+)
+def export_well_las_endpoint(project_id: int, well_name: str):
+    """Stream a single well's continuous curves and CPI parameters as a LAS 2.0 file."""
+    from quick_pp.handover import _assign_zones_from_tops, _sanitize_name
+    from quick_pp.las_handler import export_to_las_string
+
+    try:
+        _, _, wells_bundle = _collect_project_handover_bundles(
+            project_id=project_id, well_names_filter=[well_name]
+        )
+        if not wells_bundle:
+            raise ValueError(f"Well '{well_name}' not found in project {project_id}")
+
+        w = wells_bundle[0]
+        w_df: pd.DataFrame = w["data"]
+        if w_df is None or w_df.empty:
+            raise ValueError(f"Well '{well_name}' has no log data to export")
+
+        tops_df: pd.DataFrame = w["formation_tops"]
+        if not tops_df.empty and ("ZONES" not in w_df.columns or w_df["ZONES"].isna().all()):
+            w_df = w_df.copy()
+            w_df["ZONES"] = _assign_zones_from_tops(
+                pd.to_numeric(w_df["DEPTH"], errors="coerce").to_numpy(dtype=float),
+                tops_df,
+            )
+
+        las_content = export_to_las_string(
+            well_data=w_df,
+            well_name=w["name"],
+            uwi=w["uwi"],
+            depth_uom=w["depth_uom"],
+            parameters=w["config"],
+        )
+        filename = f"{_sanitize_name(w['name'])}.las"
+        return Response(
+            content=las_content.encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to export LAS file: {e}"
+        ) from e

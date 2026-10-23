@@ -128,6 +128,19 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 			done: 'Well log files imported'
 		};
 	}
+	if (path.endsWith('/export')) {
+		return {
+			active: 'Building Handover Package (.zip)...',
+			done: 'Handover Package (.zip) downloaded'
+		};
+	}
+	if (path.endsWith('/export_las')) {
+		return {
+			active: `Exporting LAS 2.0 file (${wellName ?? 'well'})...`,
+			done: `LAS 2.0 exported (${wellName ?? 'well'})`,
+			detail: wellName
+		};
+	}
 	if (wellName && action) {
 		switch (action) {
 			case 'bundle':
@@ -610,3 +623,77 @@ export const apiGet = getJson;
 export const apiPost = postJson;
 export const apiPatch = patchJson;
 export const apiDelete = deleteJson;
+
+/**
+ * Download the complete Petrophysical Handover Package (.zip) for a project or well.
+ */
+export async function downloadHandoverPackage(
+	projectId: string | number,
+	options?: { wellName?: string; wells?: string[]; fallbackFilename?: string }
+): Promise<void> {
+	const params = new URLSearchParams();
+	if (options?.wellName) {
+		params.set('well_name', options.wellName);
+	} else if (options?.wells && options.wells.length > 0) {
+		params.set('wells', options.wells.join(','));
+	}
+	const qs = params.toString();
+	const url = `${API_BASE}/quick_pp/database/projects/${encodeURIComponent(String(projectId))}/export${qs ? `?${qs}` : ''}`;
+	const res = await trackedFetch(
+		url,
+		{
+			method: 'GET',
+			credentials: 'include',
+			headers: authHeaders()
+		},
+		'Failed to export handover package'
+	);
+	const blob = await res.blob();
+	const cd = res.headers.get('Content-Disposition') || '';
+	const match = cd.match(/filename="?([^"]+)"?/i);
+	const filename =
+		match?.[1] ||
+		options?.fallbackFilename ||
+		`${options?.wellName || `project_${projectId}`}_Handover.zip`;
+
+	const a = document.createElement('a');
+	const objUrl = URL.createObjectURL(blob);
+	a.href = objUrl;
+	a.download = filename;
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
+	URL.revokeObjectURL(objUrl);
+}
+
+/**
+ * Download an evaluated LAS 2.0 file (including ~Parameter CPI metadata) for a single well.
+ */
+export async function downloadWellLas(
+	projectId: string | number,
+	wellName: string
+): Promise<void> {
+	const url = `${API_BASE}/quick_pp/database/projects/${encodeURIComponent(String(projectId))}/wells/${encodeURIComponent(wellName)}/export_las`;
+	const res = await trackedFetch(
+		url,
+		{
+			method: 'GET',
+			credentials: 'include',
+			headers: authHeaders()
+		},
+		`Failed to export LAS 2.0 for ${wellName}`
+	);
+	const blob = await res.blob();
+	const cd = res.headers.get('Content-Disposition') || '';
+	const match = cd.match(/filename="?([^"]+)"?/i);
+	const filename = match?.[1] || `${wellName}.las`;
+
+	const a = document.createElement('a');
+	const objUrl = URL.createObjectURL(blob);
+	a.href = objUrl;
+	a.download = filename;
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
+	URL.revokeObjectURL(objUrl);
+}

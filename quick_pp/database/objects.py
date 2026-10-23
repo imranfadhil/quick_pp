@@ -645,11 +645,74 @@ class Project(object):
                                     project's output path.
         """
         folder = folder or self.output_path
+        os.makedirs(folder, exist_ok=True)
         logger.info("Exporting all project data to LAS files")
-        data = self.get_all_data()
-        for well_name, well_data in data.groupby("WELL_NAME"):
-            logger.debug(f"Exporting well {well_name} to LAS format")
-            las.export_to_las(well_data=well_data, well_name=well_name, folder=folder)
+        for orm_well in self._orm_project.wells:
+            well_obj = Well(self.db_session, well_id=orm_well.well_id)
+            well_obj.export_to_las(folder=folder)
+
+    def export_handover_package(
+        self,
+        output_zip_path: Optional[str] = None,
+        well_names: Optional[List[str]] = None,
+        include_las: bool = True,
+        include_excel: bool = True,
+    ) -> str:
+        """Exports a complete Techlog/Geolog/IP/Petrel Petrophysical Handover Package (.zip).
+
+        Includes evaluated LAS 2.0 logs (with `~Parameter` CPI settings), multi-well
+        formation tops, fluid contacts, deviation surveys, discrete core RCA point
+        tables & LAS point-sets, pressure tests, SCAL capillary pressure & relative
+        permeability tables, Eclipse SWOF deck, PRMS/SEC zonal reservoir summary,
+        master Excel workbook, and Techlog/Geolog auto-import scripts.
+
+        Args:
+            output_zip_path (Optional[str]): Path to write the `.zip` archive.
+                Defaults to `<project.output_path>/<project.name>_Handover.zip`.
+            well_names (Optional[List[str]]): Optional subset of well names to include.
+            include_las (bool): Whether to include LAS 2.0 files. Defaults to True.
+            include_excel (bool): Whether to include the Master `.xlsx` workbook. Defaults to True.
+
+        Returns:
+            str: Path to the generated `.zip` handover package.
+        """
+        from quick_pp.handover import (
+            _sanitize_name,
+            build_handover_archive_bytes,
+            collect_well_handover_dict,
+        )
+
+        allowed = {str(w).strip() for w in well_names} if well_names else None
+        wells_bundle = []
+        for orm_well in self._orm_project.wells:
+            if allowed and orm_well.name not in allowed:
+                continue
+            well_obj = Well(self.db_session, well_id=orm_well.well_id)
+            wells_bundle.append(collect_well_handover_dict(well_obj))
+
+        zip_bytes = build_handover_archive_bytes(
+            project_name=self.name,
+            project_description=self.description or "",
+            wells_bundle=wells_bundle,
+            include_las=include_las,
+            include_excel=include_excel,
+        )
+        if not output_zip_path:
+            os.makedirs(self.output_path, exist_ok=True)
+            output_zip_path = os.path.join(
+                self.output_path, f"{_sanitize_name(self.name)}_Handover.zip"
+            )
+        else:
+            parent_dir = os.path.dirname(os.path.abspath(output_zip_path))
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+
+        with open(output_zip_path, "wb") as f:
+            f.write(zip_bytes)
+        logger.info(
+            f"Exported project handover package ({len(wells_bundle)} wells) to {output_zip_path}"
+        )
+        return output_zip_path
 
     def __str__(self):
         return f"Project: {self.name} (ID: {self.project_id}) - {self.description}"
@@ -1402,17 +1465,77 @@ class Well(object):
         data_df.to_parquet(path)
         logger.debug(f"Exported {len(data_df)} records to parquet")
 
-    def export_to_las(self, folder: Optional[str] = None):
-        """Exports the well's data to a LAS file.
+    def export_to_las(self, folder: Optional[str] = None) -> str:
+        """Exports the well's data and CPI parameters to a LAS 2.0 file.
 
         Args:
             folder (Optional[str]): The directory to save the file in. Defaults to the
                                     well's output path.
+
+        Returns:
+            str: Path to the written LAS file.
         """
         folder = folder or self.output_path
         logger.info(f"Exporting well data to LAS format in folder: {folder}")
         data_df = self.get_data()
-        las.export_to_las(well_data=data_df, well_name=self.name, folder=folder)
+        return las.export_to_las(
+            well_data=data_df,
+            well_name=self.name,
+            folder=folder,
+            uwi=self.uwi or self.name,
+            depth_uom=getattr(self._orm_well, "depth_uom", None) or "m",
+            parameters=getattr(self.config, "__dict__", {}),
+        )
+
+    def export_handover_package(
+        self,
+        output_zip_path: Optional[str] = None,
+        include_las: bool = True,
+        include_excel: bool = True,
+    ) -> str:
+        """Exports a complete Techlog/Geolog/IP/Petrel Handover Package (.zip) for this well.
+
+        Args:
+            output_zip_path (Optional[str]): Path to write the `.zip` archive.
+                Defaults to `<well.output_path>/<well.name>_Handover.zip`.
+            include_las (bool): Whether to include LAS 2.0 files. Defaults to True.
+            include_excel (bool): Whether to include the Master `.xlsx` workbook. Defaults to True.
+
+        Returns:
+            str: Path to the generated `.zip` handover package.
+        """
+        from quick_pp.handover import (
+            _sanitize_name,
+            build_handover_archive_bytes,
+            collect_well_handover_dict,
+        )
+
+        proj_name = (
+            self._orm_well.project.name
+            if self._orm_well and self._orm_well.project
+            else self.name
+        )
+        zip_bytes = build_handover_archive_bytes(
+            project_name=f"{proj_name}_{self.name}",
+            project_description=f"Single-well handover package for {self.name}",
+            wells_bundle=[collect_well_handover_dict(self)],
+            include_las=include_las,
+            include_excel=include_excel,
+        )
+        if not output_zip_path:
+            os.makedirs(self.output_path, exist_ok=True)
+            output_zip_path = os.path.join(
+                self.output_path, f"{_sanitize_name(self.name)}_Handover.zip"
+            )
+        else:
+            parent_dir = os.path.dirname(os.path.abspath(output_zip_path))
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+
+        with open(output_zip_path, "wb") as f:
+            f.write(zip_bytes)
+        logger.info(f"Exported well handover package for '{self.name}' to {output_zip_path}")
+        return output_zip_path
 
     def __str__(self):
         return f"Well: {self.name} (ID: {self.well_id}, UWI: {self.uwi})"

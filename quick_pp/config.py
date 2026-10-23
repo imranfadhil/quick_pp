@@ -18,10 +18,29 @@ class Config:
 
     # Defines properties for common well log variables, including names, units, and typical ranges.
     VARS = {
+        "DEPTH": {"name": "Measured Depth", "unit": "m", "min": 0, "max": 10000},
+        "TVD": {"name": "True Vertical Depth", "unit": "m", "min": 0, "max": 10000},
+        "CALI": {"name": "Caliper", "unit": "in", "min": 4, "max": 24},
+        "BS": {"name": "Bit Size", "unit": "in", "min": 4, "max": 24},
+        "DRHO": {"name": "Density Correction", "unit": "g/cc", "min": -0.5, "max": 0.5},
+        "BADHOLE": {"name": "Badhole Flag", "unit": "unitless", "min": 0, "max": 1},
         "GR": {"name": "Gamma Ray", "unit": "GAPI", "min": 0, "max": 200},
         "RT": {"name": "True Resistivity", "unit": "ohm.m", "min": 0, "max": 2000},
         "NPHI": {"name": "Neutron Porosity", "unit": "v/v", "min": -0.05, "max": 1.0},
         "RHOB": {"name": "Bulk Density", "unit": "g/cc", "min": 1.0, "max": 3.0},
+        "NPHI_HC": {
+            "name": "HC-Corrected Neutron Porosity",
+            "unit": "v/v",
+            "min": -0.05,
+            "max": 1.0,
+        },
+        "RHOB_HC": {
+            "name": "HC-Corrected Bulk Density",
+            "unit": "g/cc",
+            "min": 1.0,
+            "max": 3.0,
+        },
+        "HC_FLAG": {"name": "Hydrocarbon Flag", "unit": "unitless", "min": 0, "max": 1},
         "PEF": {"name": "Peak Frequency", "unit": "Hz", "min": 0, "max": 10},
         "DTC": {"name": "DTC", "unit": "us/ft", "min": 20, "max": 260},
         "DTS": {"name": "DTS", "unit": "us/ft", "min": 20, "max": 260},
@@ -29,16 +48,123 @@ class Config:
         "VSILT": {"name": "Silt Volume", "unit": "v/v", "min": 0, "max": 1},
         "VCLAY": {"name": "Clay Volume", "unit": "v/v", "min": 0, "max": 1},
         "VSHALE": {"name": "Shale Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VSH_GR": {"name": "Gamma Ray Shale Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VCALC": {"name": "Calcite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VDOLO": {"name": "Dolomite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VKAOL": {"name": "Kaolinite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VFELD": {"name": "Feldspar Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VANHY": {"name": "Anhydrite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VGYPS": {"name": "Gypsum Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VHALI": {"name": "Halite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VPYRI": {"name": "Pyrite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VCOAL": {"name": "Coal Volume", "unit": "v/v", "min": 0, "max": 1},
+        "RHOM": {"name": "Matrix Density", "unit": "g/cc", "min": 2.0, "max": 3.1},
         "PHIT": {"name": "Total Porosity", "unit": "v/v", "min": 0, "max": 0.5},
         "PHIE": {"name": "Effective Porosity", "unit": "v/v", "min": 0, "max": 0.5},
-        "SWT": {"vname": "Total Water Saturation", "unit": "v/v", "min": 0, "max": 1},
+        "SWT": {
+            "name": "Total Water Saturation",
+            "vname": "Total Water Saturation",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
         "SWE": {
+            "name": "Effective Water Saturation",
             "vname": "Effective Water Saturation",
             "unit": "v/v",
             "min": 0,
             "max": 1,
         },
+        "SW_ARCHIE": {
+            "name": "Archie Water Saturation",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "SW_WS": {
+            "name": "Waxman-Smits Water Saturation",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "SHF": {
+            "name": "Saturation Height Function Sw",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "SW_SHF": {
+            "name": "Saturation Height Function Sw",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "BVW": {"name": "Bulk Volume Water", "unit": "v/v", "min": 0, "max": 0.5},
+        "BVHC": {"name": "Bulk Volume Hydrocarbon", "unit": "v/v", "min": 0, "max": 0.5},
         "PERM": {"name": "Permeability", "unit": "mD", "min": 0.01, "max": 100000},
+        "PERM_TRANS": {
+            "name": "Rock-Typed Transform Permeability",
+            "unit": "mD",
+            "min": 0.01,
+            "max": 100000,
+        },
+        "CPORE": {"name": "Core Plug Porosity", "unit": "v/v", "min": 0, "max": 0.5},
+        "CPERM": {
+            "name": "Core Plug Permeability",
+            "unit": "mD",
+            "min": 0.01,
+            "max": 100000,
+        },
+        "FZI": {"name": "Flow Zone Indicator", "unit": "um", "min": 0.01, "max": 100},
+        "RQI": {
+            "name": "Reservoir Quality Index",
+            "unit": "um",
+            "min": 0.01,
+            "max": 100,
+        },
+        "ROCK_FLAG": {
+            "name": "Rock Type / Facies Flag",
+            "unit": "unitless",
+            "min": 0,
+            "max": 10,
+        },
+        "RES_FLAG": {
+            "name": "Net Reservoir Flag",
+            "unit": "unitless",
+            "min": 0,
+            "max": 1,
+        },
+        "PAY_FLAG": {"name": "Net Pay Flag", "unit": "unitless", "min": 0, "max": 1},
+        "VSH_LAM": {
+            "name": "Thomas-Stieber Laminated Shale",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "VSH_DIS": {
+            "name": "Thomas-Stieber Dispersed Clay",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "PHIT_SAND": {
+            "name": "Thomas-Stieber Sand Lamina Porosity",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "RSAND_TS": {
+            "name": "Hagiwara Sand Lamina Resistivity",
+            "unit": "ohm.m",
+            "min": 0.1,
+            "max": 2000,
+        },
+        "ZONE_ID": {
+            "name": "Numeric Formation Zone Index",
+            "unit": "unitless",
+            "min": 0,
+            "max": 100,
+        },
     }
 
     # Default endpoints for the Sand-Silt-Clay lithology model.
@@ -235,4 +361,13 @@ class Config:
             k: v["unit"]
             for k, v in Config.VARS.items()
             if k in data.columns and "unit" in v.keys()
+        }
+
+    @staticmethod
+    def vars_descriptions(data):
+        """Return a dictionary of descriptions for variables present in the DataFrame."""
+        return {
+            k: v.get("name") or v.get("vname") or k
+            for k, v in Config.VARS.items()
+            if k in data.columns
         }

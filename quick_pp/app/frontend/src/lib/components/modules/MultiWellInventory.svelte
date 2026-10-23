@@ -1,8 +1,28 @@
 <script lang="ts">
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import { downloadHandoverPackage } from '$lib/api/client';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtDepth } from '$lib/utils/formatters';
+
+	let isExportingHandover = $state(false);
+	async function handleExportHandover() {
+		if (!workbench.projectId || projectData.wells.length === 0) return;
+		isExportingHandover = true;
+		projectData.error = null;
+		try {
+			const subset =
+				projectData.selectedWellNames.length > 0 &&
+				projectData.selectedWellNames.length < projectData.wells.length
+					? projectData.selectedWellNames
+					: undefined;
+			await downloadHandoverPackage(workbench.projectId, { wells: subset });
+		} catch (e: any) {
+			projectData.error = e?.message || 'Failed to export handover package';
+		} finally {
+			isExportingHandover = false;
+		}
+	}
 
 	const KEY_CURVES = ['GR', 'RT', 'NPHI', 'RHOB', 'PHIE', 'PERM', 'SWT', 'ROCK_FLAG', 'SHF'];
 
@@ -194,13 +214,24 @@
 				</div>
 			</div>
 
-			<button
-				type="button"
-				onclick={() => (workbench.importerOpen = true)}
-				class="mt-2 h-7 w-full rounded-sm bg-[var(--accent-primary)] px-2.5 text-xs font-semibold text-white hover:bg-blue-700"
-			>
-				+ Batch Import LAS / Ancillary Files
-			</button>
+			<div class="mt-2 flex flex-col gap-1.5">
+				<button
+					type="button"
+					onclick={() => (workbench.importerOpen = true)}
+					class="h-7 w-full rounded-sm bg-[var(--accent-primary)] px-2.5 text-xs font-semibold text-white hover:bg-blue-700"
+				>
+					+ Batch Import LAS / Ancillary Files
+				</button>
+				<button
+					type="button"
+					disabled={!workbench.projectId || projectData.wells.length === 0 || isExportingHandover}
+					onclick={handleExportHandover}
+					title="Export Handover Package (.zip) with LAS 2.0, Tops, Surveys, Core RCA, SCAL, Excel Workbook & Loader Scripts"
+					class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-45"
+				>
+					{isExportingHandover ? 'Building Handover (.zip)...' : '⬇ Export Handover Package (.zip)'}
+				</button>
+			</div>
 		</ParameterSection>
 
 		<ParameterSection title="Well & Curve Availability Matrix">

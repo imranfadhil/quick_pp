@@ -14,20 +14,18 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from quick_pp.app.backend.services.database import (
+    _ephemeral_wells,
     _get_merged_dataframe_sync,
+    _merged_data_cache,
     dataframe_to_columnar,
     dataframe_to_records,
     filter_merged_dataframe,
     get_project_summary,
     invalidate_well_cache,
-)
-from quick_pp.app.backend.services.rock_typing import _compute_fzi_data_sync
-from quick_pp.app.backend.services.database import (
-    _ephemeral_wells,
-    _merged_data_cache,
     reset_demo_project_state,
     resolve_db_well_name,
 )
+from quick_pp.app.backend.services.rock_typing import _compute_fzi_data_sync
 from quick_pp.app.backend.utils.auth import is_demo_mode
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.core_analysis import (
@@ -80,7 +78,6 @@ from quick_pp.saturation import (
     estimate_qv,
     estimate_qvn,
     estimate_rw_temperature_salinity,
-    estimate_temperature_gradient,
     optimize_fwl,
     waxman_smits_saturation,
 )

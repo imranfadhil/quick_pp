@@ -1,6 +1,8 @@
+import io
 import mmap
 import os
 import re
+from typing import Any, Dict, Optional
 
 import lasio
 import numpy as np
@@ -447,11 +449,204 @@ def check_index_consistent(welly_object):
         return False
 
 
-def export_to_las(well_data, well_name, folder="", vars_units=None):
-    """Export a DataFrame of well data to a LAS file.
+def build_las_object(
+    well_data: pd.DataFrame,
+    well_name: str,
+    vars_units: Optional[Dict[str, str]] = None,
+    vars_descr: Optional[Dict[str, str]] = None,
+    uwi: Optional[str] = None,
+    depth_uom: str = "m",
+    parameters: Optional[Dict[str, Any]] = None,
+) -> lasio.LASFile:
+    """Build a LAS 2.0 `lasio.LASFile` object from a DataFrame of well data.
+
+    Preserves only numeric curves for LAS 2.0 compatibility, converts any
+    categorical `ZONES` column into a numeric `ZONE_ID` curve (recording the
+    zone index table in `~Parameter`), and populates `~Well`, `~Curve`, and
+    `~Parameter` metadata for seamless import into Techlog, Geolog, IP, and Petrel.
+    """
+    from .config import Config
+
+    df = well_data.copy()
+    # Normalize depth column name
+    if "DEPTH" not in df.columns:
+        depth_col = next((c for c in df.columns if str(c).upper() == "DEPTH"), None)
+        if depth_col:
+            df.rename(columns={depth_col: "DEPTH"}, inplace=True)
+        elif df.index.name and str(df.index.name).upper() == "DEPTH":
+            df = df.reset_index()
+            df.rename(columns={df.columns[0]: "DEPTH"}, inplace=True)
+        else:
+            raise ValueError("well_data must contain a 'DEPTH' column or index.")
+
+    df["DEPTH"] = pd.to_numeric(df["DEPTH"], errors="coerce")
+    df = df.dropna(subset=["DEPTH"]).sort_values("DEPTH").reset_index(drop=True)
+
+    extra_params: Dict[str, Any] = dict(parameters or {})
+
+    # Extract UWI from column if not explicitly passed
+    if not uwi and "UWI" in df.columns:
+        valid_uwi = df["UWI"].dropna()
+        if not valid_uwi.empty:
+            uwi = str(valid_uwi.iloc[0])
+
+    # If ZONES column is present as text, create a numeric ZONE_ID curve and record zone names in ~Parameter
+    zone_col = next(
+        (c for c in df.columns if str(c).upper() in ("ZONES", "ZONE")), None
+    )
+    if zone_col and "ZONE_ID" not in df.columns:
+        zone_series = df[zone_col].dropna().astype(str).str.strip()
+        unique_zones = [
+            z for z in zone_series.unique() if z and z.lower() not in ("nan", "none")
+        ]
+        if unique_zones:
+            zone_map = {z: idx + 1 for idx, z in enumerate(unique_zones)}
+            df["ZONE_ID"] = (
+                df[zone_col].astype(str).str.strip().map(zone_map).astype(float)
+            )
+            for z_name, z_id in zone_map.items():
+                extra_params[f"ZONE_{z_id}"] = z_name
+
+    # Drop non-curve identifier/string metadata columns
+    drop_cols = {
+        "WELL_NAME",
+        "UWI",
+        "ZONES",
+        "ZONE",
+        "TOP_NAME",
+        "CONTACT_NAME",
+        "CORE_SAMPLE_NAME",
+        "SAMPLE_NAME",
+        "DESCRIPTION",
+        "REMARK",
+    }
+    keep_cols = ["DEPTH"]
+    for c in df.columns:
+        c_up = str(c).upper()
+        if c == "DEPTH" or c_up in drop_cols:
+            continue
+        # Attempt numeric conversion; keep if at least one non-null numeric value exists or column is numeric dtype
+        num_s = pd.to_numeric(df[c], errors="coerce")
+        if pd.api.types.is_numeric_dtype(df[c]) or num_s.notna().any():
+            df[c] = num_s
+            keep_cols.append(c)
+
+    df = df[keep_cols]
+    units_map = {**Config.vars_units(df), **(vars_units or {})}
+    descr_map = {**Config.vars_descriptions(df), **(vars_descr or {})}
+
+    las_file = lasio.LASFile()
+    las_file.well.WELL = str(well_name)
+    las_file.well.UWI = str(uwi or well_name)
+    las_file.well.NULL = -999.25
+
+    depths = df["DEPTH"].to_numpy(dtype=float)
+    if len(depths) > 0:
+        las_file.well.STRT = lasio.HeaderItem(
+            "STRT", unit=depth_uom, value=round(float(depths[0]), 4), descr="START DEPTH"
+        )
+        las_file.well.STOP = lasio.HeaderItem(
+            "STOP", unit=depth_uom, value=round(float(depths[-1]), 4), descr="STOP DEPTH"
+        )
+        if len(depths) > 1:
+            diffs = np.diff(depths)
+            step_val = (
+                round(float(diffs[0]), 4)
+                if np.allclose(diffs, diffs[0], atol=1e-3)
+                else 0.0
+            )
+        else:
+            step_val = 0.0
+        las_file.well.STEP = lasio.HeaderItem(
+            "STEP", unit=depth_uom, value=step_val, descr="STEP"
+        )
+
+    # Add curves
+    las_file.append_curve(
+        "DEPTH",
+        depths,
+        unit=depth_uom,
+        descr=descr_map.get("DEPTH", "Measured Depth"),
+    )
+    for col in keep_cols:
+        if col == "DEPTH":
+            continue
+        col_up = str(col).upper()
+        arr = df[col].to_numpy(dtype=float)
+        unit_str = units_map.get(col) or units_map.get(col_up) or ""
+        descr_str = descr_map.get(col) or descr_map.get(col_up) or col_up
+        las_file.append_curve(col_up, arr, unit=unit_str, descr=descr_str)
+
+    # Populate ~Parameter section with CPI parameters & metadata
+    for p_key, p_val in extra_params.items():
+        if p_val is None:
+            continue
+        mnemonic = re.sub(r"[^A-Z0-9_]", "_", str(p_key).upper()).strip("_")
+        if not mnemonic:
+            continue
+        if isinstance(p_val, (list, tuple)):
+            val_str = ", ".join(str(x) for x in p_val if x is not None)
+            las_file.params[mnemonic] = lasio.HeaderItem(
+                mnemonic, value=val_str, descr=f"quick_pp parameter {p_key}"
+            )
+        elif isinstance(p_val, dict):
+            for sub_k, sub_v in p_val.items():
+                if sub_v is not None:
+                    sub_mnem = re.sub(
+                        r"[^A-Z0-9_]", "_", f"{mnemonic}_{sub_k}".upper()
+                    ).strip("_")
+                    las_file.params[sub_mnem] = lasio.HeaderItem(
+                        sub_mnem,
+                        value=sub_v,
+                        descr=f"quick_pp {p_key}.{sub_k}",
+                    )
+        else:
+            las_file.params[mnemonic] = lasio.HeaderItem(
+                mnemonic, value=p_val, descr=f"quick_pp parameter {p_key}"
+            )
+
+    return las_file
+
+
+def export_to_las_string(
+    well_data: pd.DataFrame,
+    well_name: str,
+    vars_units: Optional[Dict[str, str]] = None,
+    vars_descr: Optional[Dict[str, str]] = None,
+    uwi: Optional[str] = None,
+    depth_uom: str = "m",
+    parameters: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Serialize a DataFrame of well data to a LAS 2.0 formatted string."""
+    las_file = build_las_object(
+        well_data=well_data,
+        well_name=well_name,
+        vars_units=vars_units,
+        vars_descr=vars_descr,
+        uwi=uwi,
+        depth_uom=depth_uom,
+        parameters=parameters,
+    )
+    buf = io.StringIO()
+    las_file.write(buf, version=2.0)
+    return buf.getvalue()
+
+
+def export_to_las(
+    well_data: pd.DataFrame,
+    well_name: str,
+    folder: str = "",
+    vars_units: Optional[Dict[str, str]] = None,
+    vars_descr: Optional[Dict[str, str]] = None,
+    uwi: Optional[str] = None,
+    depth_uom: str = "m",
+    parameters: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Export a DataFrame of well data to a LAS 2.0 file.
 
     This function takes a pandas DataFrame containing well log data, sets the
-    'DEPTH' column as the index, and writes the data to a LAS 2.0 file.
+    'DEPTH' column as the first curve, and writes the data and optional
+    petrophysical parameters to a LAS 2.0 file without mutating `well_data`.
 
     Args:
         well_data (pd.DataFrame): The DataFrame containing the well log data.
@@ -460,17 +655,25 @@ def export_to_las(well_data, well_name, folder="", vars_units=None):
         folder (str, optional): The directory to save the LAS file in. Defaults to ''.
         vars_units (dict, optional): A dictionary mapping curve mnemonics to their units.
                                      If not provided, units are inferred from the configuration.
+        vars_descr (dict, optional): Optional dictionary mapping curve mnemonics to descriptions.
+        uwi (str, optional): Optional Unique Well Identifier.
+        depth_uom (str, optional): Depth unit of measurement ('m' or 'ft'). Defaults to 'm'.
+        parameters (dict, optional): Optional dictionary of well evaluation parameters to write to `~Parameter`.
+
+    Returns:
+        str: Path to the written LAS file.
     """
-    from .config import Config
-
-    units = vars_units if vars_units else Config.vars_units(well_data)
-    well_data.set_index("DEPTH", inplace=True, drop=True)
-    w = welly.Well().from_df(well_data, units=units, name=well_name)
-
-    w = w.from_df(well_data, units=units, name=well_name)
-    # Convert to lasio to handle index name
-    las = w.to_lasio()
-    las.curves[0].mnemonic = "DEPTH"
-    # Write to LAS format
-    well_path = os.path.join(folder, f"{well_name}.las")
-    las.write(well_path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    las_file = build_las_object(
+        well_data=well_data,
+        well_name=well_name,
+        vars_units=vars_units,
+        vars_descr=vars_descr,
+        uwi=uwi,
+        depth_uom=depth_uom,
+        parameters=parameters,
+    )
+    well_path = os.path.join(folder, f"{well_name}.las") if folder else f"{well_name}.las"
+    las_file.write(well_path, version=2.0)
+    return well_path
