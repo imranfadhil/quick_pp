@@ -372,14 +372,14 @@
 			},
 			{
 				primary: 'RM',
-				aliases: ['RMED', 'RILM', 'ILM', 'LLM'],
+				aliases: ['RMED', 'RILM', 'ILM', 'LLM', 'LL8', 'M2R6'],
 				color: PETRO_COLORS.rm,
 				dash: 'dash',
 				width: 1.3
 			},
 			{
 				primary: 'RS',
-				aliases: ['RSHAL', 'RXO', 'MSFL', 'RMLL', 'LLS'],
+				aliases: ['RSHAL', 'RSHA', 'RXO', 'RXOZ', 'MSFL', 'RMLL', 'RFOC', 'SFL', 'LLS'],
 				color: PETRO_COLORS.rs,
 				dash: 'dot',
 				width: 1.25
@@ -419,8 +419,26 @@
 		// Normalize onto NPHI scale [0.45 -> -0.15]: x_eq = 0.45 - ((val - min) / (max - min)) * 0.6
 		const nphi = pick('NPHI');
 		const rhob = pick('RHOB');
-		const pef = pick('PEF');
-		const drho = pick('DRHO');
+		let pef = pick('PEF');
+		if (!pef.some((v) => v !== null && v >= 0)) {
+			for (const alias of ['PE', 'PEFZ', 'PEFA']) {
+				const alt = pick(alias);
+				if (alt.some((v) => v !== null && v >= 0)) {
+					pef = alt;
+					break;
+				}
+			}
+		}
+		let drho = pick('DRHO');
+		if (!drho.some((v) => v !== null)) {
+			for (const alias of ['HDRA', 'DCOR', 'RHOC']) {
+				const alt = pick(alias);
+				if (alt.some((v) => v !== null)) {
+					drho = alt;
+					break;
+				}
+			}
+		}
 		const rhobAsNphi = rhob.map((r) => (r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null));
 		const pefAsNphi = pef.map((p) => (p !== null && p >= 0 ? 0.45 - (p / 10.0) * 0.6 : null));
 		const drhoAsNphi = drho.map((d) => (d !== null ? 0.45 - ((d - -0.25) / (0.25 - -0.25)) * 0.6 : null));

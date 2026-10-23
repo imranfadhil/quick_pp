@@ -763,6 +763,21 @@ def workspace_well_bundle(
         if "DEPTH" in curves_map and "DEPT" not in curves_map:
             curves_map["DEPT"] = curves_map["DEPTH"]
 
+        # Map standard aliases onto canonical display mnemonics (RT, RM, RS, PEF, DRHO) if canonical key is absent
+        alias_groups = {
+            "RT": ("RD", "RDEP", "RDEEP", "LLD", "RILD"),
+            "RM": ("RMED", "RILM", "ILM", "LLM", "LL8", "M2R6"),
+            "RS": ("RSHAL", "RSHA", "RXO", "RXOZ", "MSFL", "RMLL", "RFOC", "SFL", "LLS"),
+            "PEF": ("PE", "PEFZ", "PEFA"),
+            "DRHO": ("HDRA", "DCOR", "RHOC"),
+        }
+        for canonical, aliases in alias_groups.items():
+            if canonical not in curves_map or not any(v is not None for v in curves_map.get(canonical, [])):
+                for alias in aliases:
+                    if alias in curves_map and any(v is not None for v in curves_map[alias]):
+                        curves_map[canonical] = curves_map[alias]
+                        break
+
         stats: Dict[str, Any] = {}
         for col in df.columns:
             if col in ("WELL_NAME", "ZONES"):
