@@ -68,6 +68,7 @@ from quick_pp.qaqc import (
     apply_environmental_corrections,
     badhole_flagging,
     den_correction,
+    handle_outer_limit,
     neu_den_xplot_hc_correction,
     stratigraphic_normalization,
 )
@@ -3981,11 +3982,172 @@ class WorkspaceEnvCorrectionRequest(WorkspaceFilterBase):
 
 
 class WorkspaceStratNormalizationRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(None)
+    zones: Optional[List[str]] = Field(None)
+    min_depth: Optional[float] = Field(None)
+    max_depth: Optional[float] = Field(None)
     key_well: Optional[str] = Field(None)
     logs: List[str] = Field(default_factory=lambda: ["GR", "NPHI"])
     method: str = Field("quantile")
     quantiles: Tuple[float, float] = Field((0.05, 0.95))
+    by_zone: bool = Field(True)
+    exclude_badhole: bool = Field(True)
     save: bool = Field(False)
+
+
+class WorkspaceMultiWellDistributionsRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(None)
+    zones: Optional[List[str]] = Field(None)
+    min_depth: Optional[float] = Field(None)
+    max_depth: Optional[float] = Field(None)
+    active_curve: str = Field("GR")
+    curves: List[str] = Field(
+        default_factory=lambda: ["GR", "RT", "NPHI", "RHOB", "DTC", "CALI", "PEF"]
+    )
+    group_by: str = Field(
+        "well", description="Grouping mode: 'well', 'zone', or 'well_zone'"
+    )
+    exclude_badhole: bool = Field(False)
+    max_points_per_well: int = Field(800, ge=100, le=5000)
+
+
+class WorkspaceMultiWellBadholeRequest(WorkspaceBadholeRequest):
+    well_names: Optional[List[str]] = Field(None)
+
+
+class WorkspaceMultiWellEnvCorrectionRequest(WorkspaceEnvCorrectionRequest):
+    well_names: Optional[List[str]] = Field(None)
+
+
+class WorkspaceMultiWellConditioningRequest(BaseModel):
+    action: str = Field(
+        ...,
+        description="Conditioning action: 'harmonize_aliases', 'outer_limits', or 'unit_scale'",
+    )
+    well_names: Optional[List[str]] = Field(None)
+    zones: Optional[List[str]] = Field(None)
+    min_depth: Optional[float] = Field(None)
+    max_depth: Optional[float] = Field(None)
+    fill: bool = Field(
+        False,
+        description="For 'outer_limits': True clamps to min/max, False replaces out-of-range with NaN",
+    )
+    curves: Optional[List[str]] = Field(
+        None, description="Target curves for 'outer_limits'"
+    )
+    alias_map: Optional[Dict[str, List[str]]] = Field(
+        None,
+        description="Optional custom target -> [alias1, alias2] map for 'harmonize_aliases'",
+    )
+    source_curve: Optional[str] = Field(
+        None, description="Explicit source curve for single-alias or unit_scale"
+    )
+    target_curve: Optional[str] = Field(
+        None, description="Explicit target curve for single-alias or unit_scale"
+    )
+    scale: float = Field(1.0, description="Multiplier for 'unit_scale'")
+    offset: float = Field(0.0, description="Additive offset for 'unit_scale'")
+    save: bool = Field(False)
+
+
+STANDARD_ALIAS_MAP: Dict[str, List[str]] = {
+    "GR": ["GR_EDTC", "SGR", "CGR", "GAMMA", "GRC", "GR_RAW", "GRD"],
+    "RT": ["ILD", "LLD", "RDEP", "RT_HRLT", "RESD", "RLLD", "RTRUE", "RD", "AT90", "HDRS"],
+    "NPHI": ["TNPH", "NPOR", "CNC", "CNL", "PHIN", "NPHI_LS", "NPSS"],
+    "RHOB": ["RHOZ", "ZDEN", "DEN", "BDEL", "RHOB_COMP"],
+    "DTC": ["DT", "AC", "DTCO", "DT4P", "DT24", "SONIC"],
+    "CALI": ["CAL", "HCAL", "CALIPER", "CALS", "DCAL"],
+    "PEF": ["PE", "PEFZ", "PEFL"],
+}
+
+
+def _load_multi_well_dfs(
+    project_id: int,
+    well_names: Optional[List[str]] = None,
+    min_depth: Optional[float] = None,
+    max_depth: Optional[float] = None,
+    zones: Optional[List[str]] = None,
+) -> List[pd.DataFrame]:
+    """Load merged DataFrames across project wells with ZONES populated from formation_tops if needed."""
+    proj_summary = get_project_summary(project_id)
+    all_wells = [w["name"] for w in proj_summary.get("wells", [])]
+    if well_names:
+        allowed = {str(w).strip() for w in well_names if str(w).strip()}
+        if allowed:
+            all_wells = [w for w in all_wells if w in allowed]
+    if not all_wells:
+        raise ValueError("No wells found or selected in project.")
+
+    allowed_zones = (
+        {str(z).strip() for z in zones if str(z).strip()} if zones else None
+    )
+
+    dfs: List[pd.DataFrame] = []
+    with get_db() as session:
+        try:
+            proj = db_objects.Project.load(session, project_id=project_id)
+        except Exception:
+            proj = None
+
+        for wn in all_wells:
+            wdf = _get_merged_dataframe_sync(project_id, wn)
+            if wdf.empty:
+                continue
+            wdf = wdf.copy()
+            wdf["WELL_NAME"] = wn
+
+            # Populate ZONES from formation tops if not already present or all null
+            if "ZONES" not in wdf.columns or not wdf["ZONES"].notna().any():
+                tops_df = None
+                if proj is not None:
+                    try:
+                        anc = proj.get_well_ancillary_data(
+                            resolve_db_well_name(project_id, wn)
+                        )
+                        tops_df = (
+                            anc.get("formation_tops")
+                            if isinstance(anc, dict)
+                            else None
+                        )
+                    except Exception:
+                        tops_df = None
+                if isinstance(tops_df, pd.DataFrame) and not tops_df.empty and "DEPTH" in wdf.columns:
+                    wdf["ZONES"] = pd.NA
+                    for _, top in tops_df.iterrows():
+                        try:
+                            top_depth = float(top.get("depth"))
+                            top_name = str(top.get("name")).strip()
+                        except Exception:
+                            continue
+                        if not top_name:
+                            continue
+                        nearest_idx = (wdf["DEPTH"] - top_depth).abs().idxmin()
+                        wdf.at[nearest_idx, "ZONES"] = top_name
+                    wdf["ZONES"] = wdf["ZONES"].ffill().bfill()
+
+            if "ZONES" not in wdf.columns:
+                wdf["ZONES"] = "ALL"
+            else:
+                wdf["ZONES"] = (
+                    wdf["ZONES"]
+                    .replace({"": np.nan, "nan": np.nan, "None": np.nan})
+                    .fillna("ALL")
+                    .astype(str)
+                )
+
+            if "DEPTH" in wdf.columns:
+                if min_depth is not None:
+                    wdf = wdf[wdf["DEPTH"] >= float(min_depth)]
+                if max_depth is not None:
+                    wdf = wdf[wdf["DEPTH"] <= float(max_depth)]
+
+            if allowed_zones:
+                wdf = wdf[wdf["ZONES"].isin(allowed_zones)]
+
+            if not wdf.empty:
+                dfs.append(wdf)
+
+    return dfs
 
 
 class WorkspaceOptimizeFwlRequest(BaseModel):
@@ -4064,45 +4226,51 @@ def workspace_stratigraphic_normalization(
 ) -> Dict[str, Any]:
     """Normalize log curves across all project wells per geological zone."""
     try:
-        proj_summary = get_project_summary(project_id)
-        well_names = [w["name"] for w in proj_summary.get("wells", [])]
-        if not well_names:
-            raise ValueError("No wells found in project.")
-
-        dfs = []
-        for wn in well_names:
-            wdf = _get_merged_dataframe_sync(project_id, wn)
-            if not wdf.empty:
-                wdf = wdf.copy()
-                wdf["WELL_NAME"] = wn
-                if "ZONES" not in wdf.columns:
-                    wdf["ZONES"] = "ALL"
-                dfs.append(wdf)
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
         if not dfs:
-            raise ValueError("No log data available across project wells.")
+            raise ValueError("No log data available across selected project wells.")
 
         combined = pd.concat(dfs, ignore_index=True)
+        zone_col_used = "ZONES"
+        if not req.by_zone:
+            combined["_GLOBAL_ZONE"] = "ALL"
+            zone_col_used = "_GLOBAL_ZONE"
+
         norm_df, report_df = stratigraphic_normalization(
             combined,
             key_well=req.key_well,
-            zone_col="ZONES",
+            zone_col=zone_col_used,
             quantiles=req.quantiles,
             logs=req.logs,
             well_col="WELL_NAME",
             method=req.method,
+            exclude_badhole=req.exclude_badhole,
             return_report=True,
         )
 
         norm_cols = [f"{lg}_NORM" for lg in req.logs if f"{lg}_NORM" in norm_df.columns]
         saved_wells = 0
-        if req.save and norm_cols:
+        if norm_cols:
             for wn, grp in norm_df.groupby("WELL_NAME"):
-                _save_curves_to_well(project_id, str(wn), grp[["DEPTH"] + norm_cols])
-                saved_wells += 1
+                sub_df = grp[["DEPTH"] + norm_cols]
+                if req.save:
+                    _save_curves_to_well(project_id, str(wn), sub_df)
+                    saved_wells += 1
+                else:
+                    _update_in_memory_well_cache(project_id, str(wn), sub_df)
 
         return {
             "project_id": project_id,
             "method": req.method,
+            "by_zone": req.by_zone,
+            "exclude_badhole": req.exclude_badhole,
+            "quantiles": list(req.quantiles),
             "normalized_curves": norm_cols,
             "normalized_columns": norm_cols,
             "saved": req.save,
@@ -4112,6 +4280,717 @@ def workspace_stratigraphic_normalization(
     except Exception as e:
         raise HTTPException(
             status_code=400, detail=f"Stratigraphic normalization failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/multi_well_qaqc/distributions",
+    summary="Compute multi-well and per-zone curve statistical distributions, anomaly flags, and plot data",
+)
+def workspace_multi_well_distributions(
+    project_id: int, req: WorkspaceMultiWellDistributionsRequest
+) -> Dict[str, Any]:
+    """Return multi-well/zone distributions, quantile statistics, outlier/unit diagnostics, and sampled plot points."""
+    try:
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not dfs:
+            raise ValueError("No well data available for the selected filters.")
+
+        combined = pd.concat(dfs, ignore_index=True)
+        active_curve = req.active_curve.strip().upper() or "GR"
+        norm_curve = (
+            f"{active_curve}_NORM"
+            if not active_curve.endswith("_NORM")
+            else active_curve
+        )
+        corr_curve = (
+            f"{active_curve}_CORR"
+            if not active_curve.endswith("_CORR")
+            else active_curve
+        )
+
+        # Resolve BADHOLE column across combined dataframe
+        bh_series = pd.Series(0, index=combined.index, dtype=int)
+        for bh_col in ("BADHOLE", "BAD_HOLE", "BAD_HOLE_FLAG"):
+            if bh_col in combined.columns:
+                s_bh = pd.to_numeric(combined[bh_col], errors="coerce").fillna(0.0)
+                bh_series = bh_series | (s_bh >= 0.5).astype(int)
+        combined["_BADHOLE_INT"] = bh_series
+
+        # Filter out badhole for statistical calculations if requested
+        stat_df = (
+            combined[combined["_BADHOLE_INT"] == 0]
+            if req.exclude_badhole and (combined["_BADHOLE_INT"] == 0).any()
+            else combined
+        )
+
+        target_curves = list(
+            dict.fromkeys(
+                [c.strip().upper() for c in req.curves if c.strip()]
+                + [active_curve, norm_curve, corr_curve]
+            )
+        )
+        present_curves = [c for c in target_curves if c in combined.columns]
+
+        # 1. Field-wide reference stats per curve
+        field_stats: Dict[str, Dict[str, Optional[float]]] = {}
+        for c in present_curves:
+            s = (
+                pd.to_numeric(stat_df[c], errors="coerce")
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+            )
+            if s.empty:
+                field_stats[c] = {
+                    "count": 0,
+                    "min": None,
+                    "p05": None,
+                    "p10": None,
+                    "p25": None,
+                    "p50": None,
+                    "mean": None,
+                    "std": None,
+                    "p75": None,
+                    "p90": None,
+                    "p95": None,
+                    "max": None,
+                }
+            else:
+                arr = s.to_numpy(dtype=float)
+                qs = np.percentile(arr, [5, 10, 25, 50, 75, 90, 95])
+                field_stats[c] = {
+                    "count": int(len(arr)),
+                    "min": round(float(np.min(arr)), 4),
+                    "p05": round(float(qs[0]), 4),
+                    "p10": round(float(qs[1]), 4),
+                    "p25": round(float(qs[2]), 4),
+                    "p50": round(float(qs[3]), 4),
+                    "mean": round(float(np.mean(arr)), 4),
+                    "std": round(float(np.std(arr)), 4),
+                    "p75": round(float(qs[4]), 4),
+                    "p90": round(float(qs[5]), 4),
+                    "p95": round(float(qs[6]), 4),
+                    "max": round(float(np.max(arr)), 4),
+                }
+
+        # 2. Group statistics for active_curve (and optional norm_curve)
+        group_mode = req.group_by.strip().lower()
+        if group_mode == "zone":
+            group_cols = ["ZONES"]
+        elif group_mode == "well_zone":
+            group_cols = ["WELL_NAME", "ZONES"]
+        else:
+            group_cols = ["WELL_NAME"]
+
+        f_st = field_stats.get(active_curve, {})
+        f_p50 = f_st.get("p50")
+        f_iqr = (
+            (f_st["p75"] - f_st["p25"])
+            if (f_st.get("p75") is not None and f_st.get("p25") is not None)
+            else None
+        )
+        var_bounds = Config.VARS.get(active_curve, {})
+
+        group_stats: List[Dict[str, Any]] = []
+        for grp_key, grp_df in combined.groupby(group_cols, sort=False, dropna=False):
+            if not isinstance(grp_key, tuple):
+                grp_key = (grp_key,)
+            well_label = str(grp_key[0]) if group_mode != "zone" else "ALL_WELLS"
+            zone_label = (
+                str(grp_key[0])
+                if group_mode == "zone"
+                else (str(grp_key[1]) if len(grp_key) > 1 else "ALL")
+            )
+
+            total_n = len(grp_df)
+            bh_n = int(grp_df["_BADHOLE_INT"].sum())
+            bh_pct = round((bh_n / total_n) * 100.0, 2) if total_n > 0 else 0.0
+
+            eval_grp = (
+                grp_df[grp_df["_BADHOLE_INT"] == 0]
+                if req.exclude_badhole and (grp_df["_BADHOLE_INT"] == 0).any()
+                else grp_df
+            )
+            s = (
+                pd.to_numeric(eval_grp[active_curve], errors="coerce")
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+                if active_curve in eval_grp.columns
+                else pd.Series(dtype=float)
+            )
+
+            if s.empty:
+                group_stats.append(
+                    {
+                        "WELL_NAME": well_label,
+                        "ZONE": zone_label,
+                        "CURVE": active_curve,
+                        "COUNT": 0,
+                        "BADHOLE_PCT": bh_pct,
+                        "MIN": None,
+                        "P10": None,
+                        "P25": None,
+                        "P50": None,
+                        "MEAN": None,
+                        "STD": None,
+                        "P75": None,
+                        "P90": None,
+                        "MAX": None,
+                        "NORM_P50": None,
+                        "DRIFT": None,
+                        "STATUS": "MISSING",
+                    }
+                )
+                continue
+
+            arr = s.to_numpy(dtype=float)
+            qs = np.percentile(arr, [10, 25, 50, 75, 90])
+            w_min = float(np.min(arr))
+            w_max = float(np.max(arr))
+            w_p50 = float(qs[2])
+            drift = round(w_p50 - f_p50, 4) if f_p50 is not None else 0.0
+
+            norm_p50 = None
+            if norm_curve in eval_grp.columns and norm_curve != active_curve:
+                s_norm = (
+                    pd.to_numeric(eval_grp[norm_curve], errors="coerce")
+                    .replace([np.inf, -np.inf], np.nan)
+                    .dropna()
+                )
+                if not s_norm.empty:
+                    norm_p50 = round(float(np.median(s_norm)), 4)
+
+            status = "OK"
+            if active_curve in ("NPHI", "PHIT", "PHIE", "SWT") and w_p50 > 1.2:
+                status = "UNIT_MISMATCH (%)"
+            elif (
+                "min" in var_bounds and w_min < var_bounds["min"]
+            ) or ("max" in var_bounds and w_max > var_bounds["max"]):
+                status = "OUT_OF_BOUNDS"
+            elif (
+                f_iqr is not None
+                and f_iqr > 1e-6
+                and abs(drift) > 1.25 * f_iqr
+            ):
+                status = "HIGH_DRIFT"
+
+            group_stats.append(
+                {
+                    "WELL_NAME": well_label,
+                    "ZONE": zone_label,
+                    "CURVE": active_curve,
+                    "COUNT": int(len(arr)),
+                    "BADHOLE_PCT": bh_pct,
+                    "MIN": round(w_min, 4),
+                    "P10": round(float(qs[0]), 4),
+                    "P25": round(float(qs[1]), 4),
+                    "P50": round(w_p50, 4),
+                    "MEAN": round(float(np.mean(arr)), 4),
+                    "STD": round(float(np.std(arr)), 4),
+                    "P75": round(float(qs[3]), 4),
+                    "P90": round(float(qs[4]), 4),
+                    "MAX": round(w_max, 4),
+                    "NORM_P50": norm_p50,
+                    "DRIFT": drift,
+                    "STATUS": status,
+                }
+            )
+
+        # 3. Scan across all loaded wells for actionable anomalies (aliases, unit mismatches, outer limits)
+        anomalies: List[Dict[str, Any]] = []
+        for wdf in dfs:
+            wn = str(wdf["WELL_NAME"].iloc[0])
+            w_cols = set(wdf.columns)
+            # Check missing standard curves that have aliases present
+            for std_col, aliases in STANDARD_ALIAS_MAP.items():
+                if std_col not in w_cols or not wdf[std_col].notna().any():
+                    found_alias = next(
+                        (a for a in aliases if a in w_cols and wdf[a].notna().any()),
+                        None,
+                    )
+                    if found_alias:
+                        anomalies.append(
+                            {
+                                "well_name": wn,
+                                "curve": std_col,
+                                "type": "alias",
+                                "source_curve": found_alias,
+                                "target_curve": std_col,
+                                "message": f"{wn}: Missing '{std_col}', found alias '{found_alias}'",
+                            }
+                        )
+            # Check unit mismatch on NPHI (percent vs v/v)
+            if "NPHI" in w_cols:
+                s_nphi = pd.to_numeric(wdf["NPHI"], errors="coerce").dropna()
+                if not s_nphi.empty and float(s_nphi.median()) > 1.2:
+                    anomalies.append(
+                        {
+                            "well_name": wn,
+                            "curve": "NPHI",
+                            "type": "unit_scale",
+                            "scale": 0.01,
+                            "message": f"{wn}: NPHI median is {float(s_nphi.median()):.1f} (looks like % instead of v/v)",
+                        }
+                    )
+            # Check outer limits from Config.VARS
+            for var_name, v_dict in Config.VARS.items():
+                if var_name in w_cols and ("min" in v_dict or "max" in v_dict):
+                    s_v = pd.to_numeric(wdf[var_name], errors="coerce").dropna()
+                    if s_v.empty:
+                        continue
+                    n_out = int(
+                        ((s_v < v_dict.get("min", -np.inf)) | (s_v > v_dict.get("max", np.inf))).sum()
+                    )
+                    if n_out > 0:
+                        anomalies.append(
+                            {
+                                "well_name": wn,
+                                "curve": var_name,
+                                "type": "outer_limits",
+                                "count": n_out,
+                                "message": f"{wn}: {var_name} has {n_out} pts outside [{v_dict.get('min')}, {v_dict.get('max')}]",
+                            }
+                        )
+
+        # 4. Downsample plot points per well for fast Plotly rendering
+        sampled_parts: List[pd.DataFrame] = []
+        max_pts = max(100, int(req.max_points_per_well))
+        for wdf in dfs:
+            sub = (
+                wdf[wdf.get("BADHOLE", 0) == 0]
+                if req.exclude_badhole and "BADHOLE" in wdf.columns
+                else wdf
+            )
+            if len(sub) > max_pts:
+                stride = max(1, len(sub) // max_pts)
+                sub = sub.iloc[::stride]
+            sampled_parts.append(sub)
+
+        sampled_df = (
+            pd.concat(sampled_parts, ignore_index=True)
+            if sampled_parts
+            else pd.DataFrame()
+        )
+
+        def _col_list(df_in: pd.DataFrame, col_name: str) -> list:
+            if df_in.empty or col_name not in df_in.columns:
+                return []
+            s = pd.to_numeric(df_in[col_name], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            )
+            return [round(float(x), 6) if pd.notna(x) else None for x in s.tolist()]
+
+        bh_sampled = pd.Series(0, index=sampled_df.index, dtype=int)
+        for bh_col in ("BADHOLE", "BAD_HOLE", "BAD_HOLE_FLAG"):
+            if bh_col in sampled_df.columns:
+                s_bh = pd.to_numeric(sampled_df[bh_col], errors="coerce").fillna(0.0)
+                bh_sampled = bh_sampled | (s_bh >= 0.5).astype(int)
+
+        available_zones = sorted(
+            {
+                str(z)
+                for z in combined["ZONES"].dropna().unique()
+                if str(z).strip()
+            }
+        )
+        available_curves = sorted(
+            [
+                str(c)
+                for c in combined.columns
+                if str(c) not in ("DEPTH", "DEPT", "WELL_NAME", "ZONES", "_BADHOLE_INT")
+                and not str(c).startswith("TOP_")
+                and not str(c).startswith("CONTACT_")
+                and not str(c).startswith("PRESSURE_")
+            ]
+        )
+
+        return {
+            "project_id": project_id,
+            "active_curve": active_curve,
+            "norm_curve": norm_curve if norm_curve in combined.columns else None,
+            "corr_curve": corr_curve if corr_curve in combined.columns else None,
+            "group_by": group_mode,
+            "exclude_badhole": req.exclude_badhole,
+            "available_curves": available_curves,
+            "available_zones": available_zones,
+            "field_stats": field_stats,
+            "group_stats": group_stats,
+            "anomalies": anomalies,
+            "plot_data": {
+                "well_names": (
+                    sampled_df["WELL_NAME"].astype(str).tolist()
+                    if not sampled_df.empty
+                    else []
+                ),
+                "zones": (
+                    sampled_df["ZONES"].astype(str).tolist()
+                    if not sampled_df.empty
+                    else []
+                ),
+                "depths": _col_list(sampled_df, "DEPTH"),
+                "badhole": bh_sampled.tolist() if not sampled_df.empty else [],
+                "values": _col_list(sampled_df, active_curve),
+                "norm_values": (
+                    _col_list(sampled_df, norm_curve)
+                    if norm_curve in sampled_df.columns and norm_curve != active_curve
+                    else []
+                ),
+                "corr_values": (
+                    _col_list(sampled_df, corr_curve)
+                    if corr_curve in sampled_df.columns and corr_curve != active_curve
+                    else []
+                ),
+                "nphi": _col_list(sampled_df, "NPHI"),
+                "rhob": _col_list(sampled_df, "RHOB"),
+                "gr": _col_list(sampled_df, "GR"),
+            },
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Multi-well distribution computation failed: {e}",
+        ) from e
+
+
+@router.post(
+    "/multi_well_qaqc/badhole_flagging",
+    summary="Run batch badhole flagging across selected project wells",
+)
+def workspace_multi_well_badhole_flagging(
+    project_id: int, req: WorkspaceMultiWellBadholeRequest
+) -> Dict[str, Any]:
+    """Execute badhole_flagging across multiple wells and optionally save BADHOLE, BS, and DCALI."""
+    try:
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not dfs:
+            raise ValueError("No wells available for batch badhole flagging.")
+
+        well_summaries: List[Dict[str, Any]] = []
+        total_samples = 0
+        total_flagged = 0
+        saved_wells = 0
+
+        for wdf in dfs:
+            wn = str(wdf["WELL_NAME"].iloc[0])
+            bh_df = badhole_flagging(
+                wdf,
+                thold=req.cali_threshold,
+                use_cali=req.use_cali,
+                auto_bitsize=req.auto_bitsize,
+                bitsize_default=req.bitsize_default,
+                use_drho=req.use_drho,
+                drho_threshold=req.drho_threshold,
+                use_rhob_nphi=req.use_rhob_nphi,
+                rhob_min=req.rhob_min,
+                rhob_max=req.rhob_max,
+                nphi_max=req.nphi_max,
+                exclude_coal=req.exclude_coal,
+                use_rugosity=req.use_rugosity,
+                rugosity_window=req.rugosity_window,
+                rhob_trend_factor=req.rhob_trend_factor,
+                cali_spike_threshold=req.cali_spike_threshold,
+            )
+            summary = dict(bh_df.attrs.get("badhole_summary", {}))
+            out_cols = [
+                c for c in ("BADHOLE", "BS", "DCALI") if c in bh_df.columns
+            ]
+            if out_cols and "DEPTH" in bh_df.columns:
+                sub_df = bh_df[["DEPTH"] + out_cols].copy()
+                if req.save:
+                    _save_curves_to_well(project_id, wn, sub_df)
+                    saved_wells += 1
+                else:
+                    _update_in_memory_well_cache(project_id, wn, sub_df)
+
+            n_s = int(summary.get("total_samples", len(bh_df)))
+            n_f = int(summary.get("flagged_count", 0))
+            total_samples += n_s
+            total_flagged += n_f
+            well_summaries.append(
+                {
+                    "WELL_NAME": wn,
+                    "TOTAL": n_s,
+                    "FLAGGED": n_f,
+                    "FLAGGED_PCT": summary.get("flagged_pct", 0.0),
+                    "CALI": summary.get("cali_flagged", 0),
+                    "DRHO": summary.get("drho_flagged", 0),
+                    "RHOB_NPHI": summary.get("rhob_nphi_flagged", 0),
+                    "RUGOSITY": summary.get("rugosity_flagged", 0),
+                }
+            )
+
+        return {
+            "project_id": project_id,
+            "saved": req.save,
+            "saved_wells": saved_wells,
+            "total_samples": total_samples,
+            "total_flagged": total_flagged,
+            "total_flagged_pct": (
+                round((total_flagged / total_samples) * 100.0, 2)
+                if total_samples > 0
+                else 0.0
+            ),
+            "well_summaries": well_summaries,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Batch badhole flagging failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/multi_well_qaqc/environmental_corrections",
+    summary="Apply borehole environmental and invasion corrections across multiple wells",
+)
+def workspace_multi_well_environmental_corrections(
+    project_id: int, req: WorkspaceMultiWellEnvCorrectionRequest
+) -> Dict[str, Any]:
+    """Run apply_environmental_corrections across selected project wells."""
+    try:
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not dfs:
+            raise ValueError("No wells available for batch environmental corrections.")
+
+        well_summaries: List[Dict[str, Any]] = []
+        all_corr_cols: set[str] = set()
+        saved_wells = 0
+
+        for wdf in dfs:
+            wn = str(wdf["WELL_NAME"].iloc[0])
+            corr_df = apply_environmental_corrections(
+                wdf,
+                bitsize_default=req.bitsize_default,
+                mud_weight=req.mud_weight,
+                surface_temp=req.surface_temp,
+                temp_grad=req.temp_grad,
+                salinity_ppm=req.salinity_ppm,
+                rho_mudcake=req.rho_mudcake,
+            )
+            corr_cols = [
+                c
+                for c in (
+                    "GR_CORR",
+                    "NPHI_CORR",
+                    "RHOB_CORR",
+                    "RT_CORR",
+                    "INVASION_FLAG",
+                )
+                if c in corr_df.columns
+            ]
+            all_corr_cols.update(corr_cols)
+            if corr_cols and "DEPTH" in corr_df.columns:
+                sub_df = corr_df[["DEPTH"] + corr_cols].copy()
+                if req.save:
+                    _save_curves_to_well(project_id, wn, sub_df)
+                    saved_wells += 1
+                else:
+                    _update_in_memory_well_cache(project_id, wn, sub_df)
+
+            well_summaries.append(
+                {
+                    "WELL_NAME": wn,
+                    "ROWS": len(corr_df),
+                    "CURVES_CORRECTED": ", ".join(corr_cols),
+                }
+            )
+
+        return {
+            "project_id": project_id,
+            "saved": req.save,
+            "saved_wells": saved_wells,
+            "corrected_curves": sorted(all_corr_cols),
+            "well_summaries": well_summaries,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Batch environmental corrections failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/multi_well_qaqc/conditioning",
+    summary="Run batch curve alias harmonization, outer-limit clipping, or unit scaling across wells",
+)
+def workspace_multi_well_conditioning(
+    project_id: int, req: WorkspaceMultiWellConditioningRequest
+) -> Dict[str, Any]:
+    """Execute batch curve conditioning (harmonize_aliases, outer_limits, or unit_scale) across project wells."""
+    try:
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not dfs:
+            raise ValueError("No wells available for batch conditioning.")
+
+        act = req.action.strip().lower()
+        changes: List[Dict[str, Any]] = []
+        updated_wells = 0
+
+        if act == "harmonize_aliases":
+            alias_dict = dict(STANDARD_ALIAS_MAP)
+            if req.alias_map:
+                for k, v in req.alias_map.items():
+                    alias_dict[k.strip().upper()] = [
+                        str(x).strip().upper() for x in v if str(x).strip()
+                    ]
+            if req.source_curve and req.target_curve:
+                alias_dict = {
+                    req.target_curve.strip().upper(): [req.source_curve.strip().upper()]
+                }
+
+            for wdf in dfs:
+                wn = str(wdf["WELL_NAME"].iloc[0])
+                mapped_cols: Dict[str, pd.Series] = {}
+                for target_col, aliases in alias_dict.items():
+                    if target_col in wdf.columns and wdf[target_col].notna().any():
+                        continue
+                    found = next(
+                        (
+                            a
+                            for a in aliases
+                            if a in wdf.columns and wdf[a].notna().any()
+                        ),
+                        None,
+                    )
+                    if found:
+                        mapped_cols[target_col] = pd.to_numeric(
+                            wdf[found], errors="coerce"
+                        )
+                        changes.append(
+                            {
+                                "WELL_NAME": wn,
+                                "ACTION": "ALIAS_MAP",
+                                "SOURCE": found,
+                                "TARGET": target_col,
+                                "COUNT": int(mapped_cols[target_col].notna().sum()),
+                            }
+                        )
+                if mapped_cols and "DEPTH" in wdf.columns:
+                    sub_df = pd.DataFrame({"DEPTH": wdf["DEPTH"], **mapped_cols})
+                    if req.save:
+                        _save_curves_to_well(project_id, wn, sub_df)
+                    else:
+                        _update_in_memory_well_cache(project_id, wn, sub_df)
+                    updated_wells += 1
+
+        elif act == "outer_limits":
+            target_vars = (
+                [c.strip().upper() for c in req.curves if c.strip()]
+                if req.curves
+                else list(Config.VARS.keys())
+            )
+            for wdf in dfs:
+                wn = str(wdf["WELL_NAME"].iloc[0])
+                cols_present = [
+                    c
+                    for c in target_vars
+                    if c in wdf.columns
+                    and c in Config.VARS
+                    and ("min" in Config.VARS[c] or "max" in Config.VARS[c])
+                ]
+                if not cols_present or "DEPTH" not in wdf.columns:
+                    continue
+                cleaned = handle_outer_limit(
+                    wdf[["DEPTH"] + cols_present], fill=req.fill
+                )
+                modified_cols = []
+                for c in cols_present:
+                    s_before = pd.to_numeric(wdf[c], errors="coerce")
+                    s_after = pd.to_numeric(cleaned[c], errors="coerce")
+                    n_diff = int(
+                        (
+                            (s_before.notna() != s_after.notna())
+                            | (
+                                s_before.notna()
+                                & s_after.notna()
+                                & ((s_before - s_after).abs() > 1e-9)
+                            )
+                        ).sum()
+                    )
+                    if n_diff > 0:
+                        modified_cols.append(c)
+                        changes.append(
+                            {
+                                "WELL_NAME": wn,
+                                "ACTION": "CLAMP" if req.fill else "NULL_OUTLIERS",
+                                "SOURCE": c,
+                                "TARGET": c,
+                                "COUNT": n_diff,
+                            }
+                        )
+                if modified_cols:
+                    sub_df = cleaned[["DEPTH"] + modified_cols]
+                    if req.save:
+                        _save_curves_to_well(project_id, wn, sub_df)
+                    else:
+                        _update_in_memory_well_cache(project_id, wn, sub_df)
+                    updated_wells += 1
+
+        elif act == "unit_scale":
+            src = (req.source_curve or req.target_curve or "NPHI").strip().upper()
+            dst = (req.target_curve or src).strip().upper()
+            for wdf in dfs:
+                wn = str(wdf["WELL_NAME"].iloc[0])
+                if src not in wdf.columns or "DEPTH" not in wdf.columns:
+                    continue
+                s = pd.to_numeric(wdf[src], errors="coerce")
+                if not s.notna().any():
+                    continue
+                s_scaled = s * float(req.scale) + float(req.offset)
+                sub_df = pd.DataFrame({"DEPTH": wdf["DEPTH"], dst: s_scaled})
+                if req.save:
+                    _save_curves_to_well(project_id, wn, sub_df)
+                else:
+                    _update_in_memory_well_cache(project_id, wn, sub_df)
+                updated_wells += 1
+                changes.append(
+                    {
+                        "WELL_NAME": wn,
+                        "ACTION": f"SCALE (×{req.scale:g}{f' +{req.offset:g}' if req.offset else ''})",
+                        "SOURCE": src,
+                        "TARGET": dst,
+                        "COUNT": int(s_scaled.notna().sum()),
+                    }
+                )
+        else:
+            raise ValueError(f"Unsupported conditioning action: {act}")
+
+        return {
+            "project_id": project_id,
+            "action": act,
+            "saved": req.save,
+            "updated_wells": updated_wells,
+            "changes": changes,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Batch conditioning failed: {e}"
         ) from e
 
 

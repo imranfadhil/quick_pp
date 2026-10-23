@@ -130,7 +130,11 @@ def badhole_flagging(
         med = s_clean.median()
         d = np.abs(s_clean - med)
         mdev = np.nanmedian(d)
-        s = d / mdev if (mdev and not np.isnan(mdev) and mdev > 1e-6) else 0.0
+        s = (
+            d / mdev
+            if (mdev and not np.isnan(mdev) and mdev > 1e-6)
+            else pd.Series(0.0, index=s_clean.index, dtype=float)
+        )
         return s_clean.where(s < m, med)
 
     bit_sizes = {6.0: 6.0, 8.5: 8.5, 12.25: 12.25, 17.5: 17.5}
@@ -829,6 +833,7 @@ def normalize_by_zone(
     inplace: bool = False,
     suffix: str = "_NORM",
     return_report: bool = False,
+    exclude_badhole: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """Perform stratigraphic (zone-by-zone) multi-well quantile or histogram log normalization.
 
@@ -923,7 +928,19 @@ def normalize_by_zone(
             well_stats: dict[str, tuple[float, float]] = {}
             well_cdfs: dict[str, np.ndarray] = {}
             for well_name, well_zone_df in zone_df.groupby(well_col, dropna=False):
-                valid_vals = well_zone_df[col].dropna().to_numpy(dtype=float)
+                val_series = well_zone_df[col]
+                if exclude_badhole:
+                    for bh_col in ("BADHOLE", "BAD_HOLE", "BAD_HOLE_FLAG"):
+                        if bh_col in well_zone_df.columns:
+                            bh_mask = (
+                                pd.to_numeric(well_zone_df[bh_col], errors="coerce")
+                                .fillna(0.0)
+                                >= 0.5
+                            )
+                            if (~bh_mask & val_series.notna()).sum() >= 5:
+                                val_series = val_series.where(~bh_mask)
+                            break
+                valid_vals = val_series.dropna().to_numpy(dtype=float)
                 if len(valid_vals) < 2:
                     continue
                 p_low = float(np.nanquantile(valid_vals, q_low))
@@ -1033,6 +1050,8 @@ def normalize_by_zone(
                         "P_HIGH_REF": p_high_ref,
                         "SCALE_FACTOR": float(scale),
                         "DRIFT_SHIFT": float(p_low_ref - p_low_w),
+                        "SCALE": float(scale),
+                        "SHIFT": float(p_low_ref - p_low_w),
                     }
                 )
 

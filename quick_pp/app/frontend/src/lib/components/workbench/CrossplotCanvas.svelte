@@ -27,6 +27,7 @@
 			return workbench.crossplotTemplateOverride;
 		}
 		if (workbench.scope === 'multi-well') {
+			if (workbench.multiWellStep === 'qaqc') return 'mw-distribution';
 			if (workbench.multiWellStep === 'shf') return 'shf';
 			return 'phi-k';
 		}
@@ -44,11 +45,42 @@
 		}
 	});
 
+	const MW_PALETTE = [
+		'#2563EB',
+		'#0D9488',
+		'#D97706',
+		'#DC2626',
+		'#7C3AED',
+		'#DB2777',
+		'#059669',
+		'#4F46E5',
+		'#EA580C',
+		'#0284C7'
+	];
+
 	$effect(() => {
 		if (!browser) return;
 		import('plotly.js-dist-min').then((mod) => {
 			PlotlyLib = mod.default || mod;
 		});
+	});
+
+	$effect(() => {
+		if (!browser || !plotEl) return;
+		let rafId = 0;
+		const ro = new ResizeObserver(() => {
+			cancelAnimationFrame(rafId);
+			rafId = requestAnimationFrame(() => {
+				if (PlotlyLib && plotEl && (plotEl as any)._fullLayout) {
+					PlotlyLib.Plots.resize(plotEl);
+				}
+			});
+		});
+		ro.observe(plotEl);
+		return () => {
+			cancelAnimationFrame(rafId);
+			ro.disconnect();
+		};
 	});
 
 	function buildCrossplot() {
@@ -58,7 +90,8 @@
 		const shapes: any[] = [];
 
 		const baseLayout: any = {
-			margin: { l: 48, r: 16, t: 28, b: 38 },
+			autosize: true,
+			margin: { l: 52, r: 18, t: 32, b: 44 },
 			paper_bgcolor: '#FFFFFF',
 			plot_bgcolor: '#FFFFFF',
 			dragmode: 'lasso',
@@ -67,13 +100,16 @@
 			legend: {
 				orientation: 'h',
 				x: 0,
-				y: 1.12,
+				y: 1.02,
+				xanchor: 'left',
+				yanchor: 'bottom',
 				font: { family: 'Inter', size: 10, color: '#334155' }
 			},
 			xaxis: {
 				showgrid: true,
 				gridcolor: '#E2E8F0',
 				zeroline: false,
+				automargin: true,
 				tickfont: { family: 'JetBrains Mono', size: 10, color: '#64748B' },
 				titlefont: { family: 'Inter', size: 11, color: '#0F172A' }
 			},
@@ -81,6 +117,7 @@
 				showgrid: true,
 				gridcolor: '#E2E8F0',
 				zeroline: false,
+				automargin: true,
 				tickfont: { family: 'JetBrains Mono', size: 10, color: '#64748B' },
 				titlefont: { family: 'Inter', size: 11, color: '#0F172A' }
 			}
@@ -146,6 +183,350 @@
 			baseLayout.dragmode = 'zoom';
 			baseLayout.xaxis.title = { text: `${curveName} Distribution` };
 			baseLayout.yaxis.title = { text: 'Frequency (Count)' };
+			baseLayout.shapes = shapes;
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'mw-distribution') {
+			const qaqc = projectData.multiWellQaqcResult;
+			const curveName = qaqc?.active_curve || workbench.selectedQaqcCurve || 'GR';
+			const plotType = workbench.mwQaqcPlotType;
+			const groupBy = workbench.mwQaqcGroupBy;
+			const useLog = workbench.mwQaqcLogScale;
+			const cmpMode = workbench.mwQaqcCompareMode;
+			const pd = qaqc?.plot_data;
+
+			if (!pd || !pd.well_names || pd.well_names.length === 0) {
+				baseLayout.xaxis.title = { text: `${curveName} (Loading Multi-Well Data...)` };
+				return { traces, layout: baseLayout };
+			}
+
+			// Multi-Well NPHI vs RHOB Crossplot colored by Well or Zone
+			if (plotType === 'nphi-rhob') {
+				const grouped = new Map<string, { x: number[]; y: number[]; labels: string[] }>();
+				for (let i = 0; i < pd.well_names.length; i++) {
+					const x = pd.nphi?.[i];
+					const y = pd.rhob?.[i];
+					if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+						continue;
+					}
+					const wn = pd.well_names[i];
+					const zn = pd.zones?.[i] || 'ALL';
+					const key =
+						groupBy === 'zone' ? zn : groupBy === 'well_zone' ? `${wn} · ${zn}` : wn;
+					if (!grouped.has(key)) grouped.set(key, { x: [], y: [], labels: [] });
+					const g = grouped.get(key)!;
+					g.x.push(x);
+					g.y.push(y);
+					g.labels.push(`${wn} (${zn}) @ ${fmtNum(pd.depths?.[i], 1)}m`);
+				}
+
+				let colorIdx = 0;
+				for (const [grpName, g] of grouped.entries()) {
+					const col = MW_PALETTE[colorIdx % MW_PALETTE.length];
+					colorIdx++;
+					traces.push({
+						type: 'scattergl',
+						mode: 'markers',
+						name: grpName,
+						x: g.x,
+						y: g.y,
+						text: g.labels,
+						marker: { size: 5, color: col, opacity: 0.78 },
+						hovertemplate: '%{text}<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f}<extra></extra>'
+					});
+				}
+
+				const lp = workbench.lithoParams;
+				traces.push({
+					type: 'scatter',
+					mode: 'lines+markers+text',
+					name: 'SSC Endpoints',
+					x: [lp.drySandNphi, lp.drySiltNphi, lp.dryClayNphi, lp.fluidNphi, lp.drySandNphi],
+					y: [lp.drySandRhob, lp.drySiltRhob, lp.dryClayRhob, lp.fluidRhob, lp.drySandRhob],
+					text: ['Sand', 'Silt', 'Clay', 'Fluid', ''],
+					textposition: 'top center',
+					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+					line: { color: '#0F172A', width: 1.5, dash: 'dot' },
+					marker: { size: 8, color: '#0F172A', symbol: 'diamond' }
+				});
+
+				baseLayout.dragmode = 'zoom';
+				baseLayout.xaxis.title = { text: 'NPHI (v/v)' };
+				baseLayout.xaxis.range = [-0.08, 0.65];
+				baseLayout.yaxis.title = { text: 'RHOB (g/cc)' };
+				baseLayout.yaxis.range = [2.95, 1.85];
+				return { traces, layout: baseLayout };
+			}
+
+			const overlayArr =
+				cmpMode === 'norm' && pd.norm_values?.length === pd.values.length
+					? pd.norm_values
+					: cmpMode === 'corr' && pd.corr_values?.length === pd.values.length
+						? pd.corr_values
+						: null;
+			const overlayName =
+				cmpMode === 'norm'
+					? qaqc?.norm_curve || `${curveName}_NORM`
+					: cmpMode === 'corr'
+						? qaqc?.corr_curve || `${curveName}_CORR`
+						: null;
+
+			const fSt = qaqc?.field_stats?.[curveName];
+
+			if (plotType === 'box' || plotType === 'violin') {
+				if (groupBy === 'well_zone' && !overlayArr) {
+					// Group by Zone across Wells on X-axis
+					const byZone = new Map<string, { x: string[]; y: number[] }>();
+					for (let i = 0; i < pd.values.length; i++) {
+						const v = pd.values[i];
+						if (typeof v !== 'number' || !Number.isFinite(v) || (useLog && v <= 0)) continue;
+						const wn = pd.well_names[i];
+						const zn = pd.zones?.[i] || 'ALL';
+						if (!byZone.has(zn)) byZone.set(zn, { x: [], y: [] });
+						const g = byZone.get(zn)!;
+						g.x.push(wn);
+						g.y.push(v);
+					}
+					let zIdx = 0;
+					for (const [zn, g] of byZone.entries()) {
+						const col = MW_PALETTE[zIdx % MW_PALETTE.length];
+						zIdx++;
+						traces.push({
+							type: plotType,
+							name: zn,
+							x: g.x,
+							y: g.y,
+							box: plotType === 'violin' ? { visible: true } : undefined,
+							meanline: { visible: true },
+							boxpoints: false,
+							marker: { color: col },
+							line: { color: col, width: 1.5 }
+						});
+					}
+					baseLayout.boxmode = 'group';
+					baseLayout.violinmode = 'group';
+				} else if (overlayArr && overlayName) {
+					// Side-by-side Raw vs Normalized/Corrected per Well or Zone
+					const rawX: string[] = [];
+					const rawY: number[] = [];
+					const ovrX: string[] = [];
+					const ovrY: number[] = [];
+					for (let i = 0; i < pd.values.length; i++) {
+						const lbl =
+							groupBy === 'zone'
+								? pd.zones?.[i] || 'ALL'
+								: groupBy === 'well_zone'
+									? `${pd.well_names[i]} (${pd.zones?.[i] || 'ALL'})`
+									: pd.well_names[i];
+						const vRaw = pd.values[i];
+						if (typeof vRaw === 'number' && Number.isFinite(vRaw) && (!useLog || vRaw > 0)) {
+							rawX.push(lbl);
+							rawY.push(vRaw);
+						}
+						const vOvr = overlayArr[i];
+						if (typeof vOvr === 'number' && Number.isFinite(vOvr) && (!useLog || vOvr > 0)) {
+							ovrX.push(lbl);
+							ovrY.push(vOvr);
+						}
+					}
+					traces.push({
+						type: plotType,
+						name: `${curveName} (Raw)`,
+						x: rawX,
+						y: rawY,
+						box: plotType === 'violin' ? { visible: true } : undefined,
+						meanline: { visible: true },
+						boxpoints: false,
+						marker: { color: 'rgba(100, 116, 139, 0.65)' },
+						line: { color: '#475569', width: 1.5 }
+					});
+					traces.push({
+						type: plotType,
+						name: overlayName,
+						x: ovrX,
+						y: ovrY,
+						box: plotType === 'violin' ? { visible: true } : undefined,
+						meanline: { visible: true },
+						boxpoints: false,
+						marker: { color: 'rgba(37, 99, 235, 0.75)' },
+						line: { color: '#1D4ED8', width: 1.5 }
+					});
+					baseLayout.boxmode = 'group';
+					baseLayout.violinmode = 'group';
+				} else {
+					// Distinct colored box/violin per Well or Zone
+					const groups = new Map<string, number[]>();
+					for (let i = 0; i < pd.values.length; i++) {
+						const v = pd.values[i];
+						if (typeof v !== 'number' || !Number.isFinite(v) || (useLog && v <= 0)) continue;
+						const lbl = groupBy === 'zone' ? pd.zones?.[i] || 'ALL' : pd.well_names[i];
+						if (!groups.has(lbl)) groups.set(lbl, []);
+						groups.get(lbl)!.push(v);
+					}
+					let cIdx = 0;
+					for (const [lbl, vals] of groups.entries()) {
+						const col = MW_PALETTE[cIdx % MW_PALETTE.length];
+						cIdx++;
+						traces.push({
+							type: plotType,
+							name: lbl,
+							x: vals.map(() => lbl),
+							y: vals,
+							box: plotType === 'violin' ? { visible: true } : undefined,
+							meanline: { visible: true },
+							boxpoints: false,
+							marker: { color: col },
+							line: { color: col, width: 1.5 }
+						});
+					}
+				}
+
+				// Field P10 / P50 / P90 horizontal reference lines
+				if (fSt) {
+					for (const [val, col] of [
+						[fSt.p10, '#D97706'],
+						[fSt.p50, '#16A34A'],
+						[fSt.p90, '#DC2626']
+					] as const) {
+						if (val !== null && val !== undefined && (!useLog || val > 0)) {
+							shapes.push({
+								type: 'line',
+								xref: 'paper',
+								yref: 'y',
+								x0: 0,
+								x1: 1,
+								y0: val,
+								y1: val,
+								line: { color: col, width: 1.3, dash: 'dash' }
+							});
+						}
+					}
+				}
+
+				baseLayout.dragmode = 'zoom';
+				baseLayout.xaxis.tickangle = -28;
+				baseLayout.xaxis.title = {
+					text: groupBy === 'zone' ? 'Formation Zone' : 'Well',
+					standoff: 12
+				};
+				baseLayout.yaxis.title = { text: `${curveName} Value` };
+				if (useLog) baseLayout.yaxis.type = 'log';
+				baseLayout.shapes = shapes;
+				return { traces, layout: baseLayout };
+			}
+
+			// Histogram or Empirical CDF mode across groups
+			const groups = new Map<string, { raw: number[]; ovr: number[] }>();
+			for (let i = 0; i < pd.values.length; i++) {
+				const lbl =
+					groupBy === 'zone'
+						? pd.zones?.[i] || 'ALL'
+						: groupBy === 'well_zone'
+							? `${pd.well_names[i]} · ${pd.zones?.[i] || 'ALL'}`
+							: pd.well_names[i];
+				if (!groups.has(lbl)) groups.set(lbl, { raw: [], ovr: [] });
+				const g = groups.get(lbl)!;
+				const vRaw = pd.values[i];
+				if (typeof vRaw === 'number' && Number.isFinite(vRaw) && (!useLog || vRaw > 0)) {
+					g.raw.push(vRaw);
+				}
+				if (overlayArr) {
+					const vOvr = overlayArr[i];
+					if (typeof vOvr === 'number' && Number.isFinite(vOvr) && (!useLog || vOvr > 0)) {
+						g.ovr.push(vOvr);
+					}
+				}
+			}
+
+			let cIdx = 0;
+			for (const [lbl, g] of groups.entries()) {
+				const col = MW_PALETTE[cIdx % MW_PALETTE.length];
+				cIdx++;
+				if (plotType === 'histogram') {
+					if (g.raw.length > 0) {
+						traces.push({
+							type: 'histogram',
+							name: overlayArr && overlayName ? `${lbl} (Raw)` : lbl,
+							x: g.raw,
+							nbinsx: 45,
+							opacity: overlayArr ? 0.35 : 0.55,
+							marker: { color: col, line: { color: col, width: 1 } }
+						});
+					}
+					if (overlayArr && overlayName && g.ovr.length > 0) {
+						traces.push({
+							type: 'histogram',
+							name: `${lbl} (${overlayName})`,
+							x: g.ovr,
+							nbinsx: 45,
+							opacity: 0.65,
+							marker: { color: col, line: { color: '#0F172A', width: 1.2 } }
+						});
+					}
+				} else {
+					// Empirical CDF
+					if (g.raw.length > 1) {
+						const sorted = [...g.raw].sort((a, b) => a - b);
+						const n = sorted.length;
+						const ys = sorted.map((_, idx) => (idx / (n - 1)) * 100);
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: overlayArr && overlayName ? `${lbl} (Raw)` : lbl,
+							x: sorted,
+							y: ys,
+							line: {
+								color: col,
+								width: overlayArr ? 1.4 : 2.0,
+								dash: overlayArr ? 'dot' : 'solid'
+							}
+						});
+					}
+					if (overlayArr && overlayName && g.ovr.length > 1) {
+						const sortedOvr = [...g.ovr].sort((a, b) => a - b);
+						const n = sortedOvr.length;
+						const ys = sortedOvr.map((_, idx) => (idx / (n - 1)) * 100);
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `${lbl} (${overlayName})`,
+							x: sortedOvr,
+							y: ys,
+							line: { color: col, width: 2.2, dash: 'solid' }
+						});
+					}
+				}
+			}
+
+			if (fSt) {
+				for (const [val, col] of [
+					[fSt.p10, '#D97706'],
+					[fSt.p50, '#16A34A'],
+					[fSt.p90, '#DC2626']
+				] as const) {
+					if (val !== null && val !== undefined && (!useLog || val > 0)) {
+						shapes.push({
+							type: 'line',
+							xref: 'x',
+							yref: 'paper',
+							x0: val,
+							x1: val,
+							y0: 0,
+							y1: 1,
+							line: { color: col, width: 1.3, dash: 'dash' }
+						});
+					}
+				}
+			}
+
+			baseLayout.dragmode = 'zoom';
+			baseLayout.barmode = 'overlay';
+			baseLayout.xaxis.title = { text: `${curveName} Value` };
+			if (useLog) baseLayout.xaxis.type = 'log';
+			baseLayout.yaxis.title = {
+				text: plotType === 'cdf' ? 'Cumulative Probability (%)' : 'Frequency (Count)'
+			};
 			baseLayout.shapes = shapes;
 			return { traces, layout: baseLayout };
 		}
@@ -1098,13 +1479,34 @@
 		void projectData.permTransformResult;
 		void projectData.permTransformResult?.fits;
 		void projectData.shfResult;
+		void projectData.multiWellQaqcResult;
+		void workbench.mwQaqcGroupBy;
+		void workbench.mwQaqcPlotType;
+		void workbench.mwQaqcCompareMode;
+		void workbench.mwQaqcExcludeBadhole;
+		void workbench.mwQaqcLogScale;
 
 		const { traces, layout } = buildCrossplot();
+		layout.autosize = true;
+		const visibleLegendTraces = traces.filter((t: any) => t.showlegend !== false && t.name).length;
+		if (visibleLegendTraces > 5) {
+			layout.legend = {
+				orientation: 'v',
+				x: 1.01,
+				y: 1,
+				xanchor: 'left',
+				yanchor: 'top',
+				font: { family: 'Inter', size: 10, color: '#334155' }
+			};
+		}
 		PlotlyLib.react(plotEl, traces, layout, {
 			responsive: true,
 			displaylogo: false,
 			modeBarButtonsToAdd: ['lasso2d', 'select2d']
 		}).then(() => {
+			if (plotEl && (plotEl as any)._fullLayout) {
+				PlotlyLib.Plots.resize(plotEl);
+			}
 			if (!eventsBound && plotEl) {
 				eventsBound = true;
 				(plotEl as any).on('plotly_selected', (ev: any) => {
@@ -1188,17 +1590,33 @@
 				class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
 			>
 				<option value="auto">Auto ({effectiveMode.toUpperCase()})</option>
+				<option value="mw-distribution">Multi-Well Distribution (QAQC)</option>
 				<option value="nphi-rhob">NPHI vs. RHOB (SSC)</option>
 				<option value="thomas-stieber">Thomas-Stieber (Vsh vs. Φ)</option>
 				<option value="phi-k">Porosity vs. Perm (FZI)</option>
 				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
 				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>
 				<option value="shf">Sw vs. Height (SHF)</option>
-				<option value="histogram">Curve Histogram</option>
+				<option value="histogram">Single-Well Histogram</option>
 			</select>
 		</div>
 
-		{#if effectiveMode === 'nphi-rhob'}
+		{#if effectiveMode === 'mw-distribution'}
+			<div class="flex items-center gap-1">
+				{#each [['box', 'Box'], ['violin', 'Violin'], ['histogram', 'Hist'], ['cdf', 'CDF'], ['nphi-rhob', 'ΦN–ρb']] as [pKey, pLbl]}
+					<button
+						type="button"
+						onclick={() => (workbench.mwQaqcPlotType = pKey as any)}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {workbench.mwQaqcPlotType ===
+						pKey
+							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{pLbl}
+					</button>
+				{/each}
+			</div>
+		{:else if effectiveMode === 'nphi-rhob'}
 			<div class="flex items-center gap-1">
 				<span class="text-[10px] text-[var(--text-muted)]">Pick Endpoint:</span>
 				{#each [['sand', 'Sand'], ['silt', 'Silt'], ['clay', 'Clay']] as [key, lbl]}
@@ -1261,8 +1679,8 @@
 		{/if}
 	</div>
 
-	<div class="relative min-h-0 flex-1">
-		<div bind:this={plotEl} class="h-full w-full"></div>
+	<div class="relative min-h-0 flex-1 overflow-hidden">
+		<div bind:this={plotEl} class="absolute inset-0 h-full w-full"></div>
 	</div>
 
 	{#if brushedSummary}

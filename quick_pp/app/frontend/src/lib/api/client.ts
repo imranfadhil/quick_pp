@@ -321,6 +321,31 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 			done: 'Multi-well stratigraphic normalization complete'
 		};
 	}
+	if (path.endsWith('/multi_well_qaqc/distributions')) {
+		return {
+			active: 'Computing multi-well curve distributions & QAQC stats...',
+			done: 'Multi-well distributions updated',
+			silent: true
+		};
+	}
+	if (path.endsWith('/multi_well_qaqc/badhole_flagging')) {
+		return {
+			active: 'Running batch badhole flagging across wells...',
+			done: 'Batch badhole flagging complete'
+		};
+	}
+	if (path.endsWith('/multi_well_qaqc/environmental_corrections')) {
+		return {
+			active: 'Applying batch borehole environmental corrections...',
+			done: 'Batch environmental corrections complete'
+		};
+	}
+	if (path.endsWith('/multi_well_qaqc/conditioning')) {
+		return {
+			active: 'Running multi-well curve conditioning & harmonization...',
+			done: 'Multi-well curve conditioning complete'
+		};
+	}
 	if (path.includes('/uam/audit-logs')) {
 		return { active: 'Loading audit logs...', done: 'Audit logs loaded', silent: true };
 	}

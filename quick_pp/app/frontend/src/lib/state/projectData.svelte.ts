@@ -28,6 +28,78 @@ class ProjectDataState {
 	fziCutoffs = $state<number[]>([0.5, 1.2, 2.5, 5.0]);
 	selectedWellNames = $state<string[]>([]);
 
+	multiWellQaqcResult = $state<{
+		active_curve: string;
+		norm_curve: string | null;
+		corr_curve: string | null;
+		group_by: 'well' | 'zone' | 'well_zone';
+		exclude_badhole: boolean;
+		available_curves: string[];
+		available_zones: string[];
+		field_stats: Record<
+			string,
+			{
+				count: number;
+				min: number | null;
+				p05: number | null;
+				p10: number | null;
+				p25: number | null;
+				p50: number | null;
+				mean: number | null;
+				std: number | null;
+				p75: number | null;
+				p90: number | null;
+				p95: number | null;
+				max: number | null;
+			}
+		>;
+		group_stats: Array<{
+			WELL_NAME: string;
+			ZONE: string;
+			CURVE: string;
+			COUNT: number;
+			BADHOLE_PCT: number;
+			MIN: number | null;
+			P10: number | null;
+			P25: number | null;
+			P50: number | null;
+			MEAN: number | null;
+			STD: number | null;
+			P75: number | null;
+			P90: number | null;
+			MAX: number | null;
+			NORM_P50: number | null;
+			DRIFT: number | null;
+			STATUS: string;
+		}>;
+		anomalies: Array<{
+			well_name: string;
+			curve: string;
+			type: 'alias' | 'unit_scale' | 'outer_limits';
+			source_curve?: string;
+			target_curve?: string;
+			scale?: number;
+			count?: number;
+			message: string;
+		}>;
+		plot_data: {
+			well_names: string[];
+			zones: string[];
+			depths: (number | null)[];
+			badhole: number[];
+			values: (number | null)[];
+			norm_values: (number | null)[];
+			corr_values: (number | null)[];
+			nphi: (number | null)[];
+			rhob: (number | null)[];
+			gr: (number | null)[];
+		};
+	} | null>(null);
+
+	stratNormReport = $state<Record<string, any>[]>([]);
+	mwBadholeSummaries = $state<Record<string, any>[]>([]);
+	mwConditioningChanges = $state<Record<string, any>[]>([]);
+
 	rockTypingResult = $state<{
 		well_names: string[];
 		depths: number[];
@@ -243,6 +315,10 @@ class ProjectDataState {
 		this.summary = null;
 		this.selectedWellNames = [];
 		this.pendingMultiWellModules = {};
+		this.multiWellQaqcResult = null;
+		this.stratNormReport = [];
+		this.mwBadholeSummaries = [];
+		this.mwConditioningChanges = [];
 		this.rockTypingResult = null;
 		this.permTransformResult = null;
 		this.shfResult = null;
@@ -259,6 +335,10 @@ class ProjectDataState {
 		workbench.projectId = pidStr;
 		if (projectChanged) {
 			this.pendingMultiWellModules = {};
+			this.multiWellQaqcResult = null;
+			this.stratNormReport = [];
+			this.mwBadholeSummaries = [];
+			this.mwConditioningChanges = [];
 			this.rockTypingResult = null;
 			this.permTransformResult = null;
 			this.shfResult = null;

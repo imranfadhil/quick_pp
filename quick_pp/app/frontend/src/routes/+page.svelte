@@ -17,6 +17,7 @@
 	import InspectorResSum from '$lib/components/modules/InspectorResSum.svelte';
 
 	import MultiWellInventory from '$lib/components/modules/MultiWellInventory.svelte';
+	import MultiWellQaqc from '$lib/components/modules/MultiWellQaqc.svelte';
 	import MultiWellRockTyping from '$lib/components/modules/MultiWellRockTyping.svelte';
 	import MultiWellPermTransform from '$lib/components/modules/MultiWellPermTransform.svelte';
 	import MultiWellShf from '$lib/components/modules/MultiWellShf.svelte';
@@ -95,6 +96,36 @@
 					{ key: 'PCOW', label: 'Pcow', unit: 'psi', numeric: true, decimals: 3 }
 				],
 				rows: workbench.scalResult.swofTable
+			};
+		}
+
+		if (
+			workbench.scope === 'multi-well' &&
+			workbench.multiWellStep === 'qaqc' &&
+			projectData.multiWellQaqcResult?.group_stats?.length
+		) {
+			const qaqc = projectData.multiWellQaqcResult;
+			const cols: GridColumn[] = [
+				{ key: 'WELL_NAME', label: 'Well' },
+				{ key: 'ZONE', label: 'Zone' },
+				{ key: 'COUNT', label: 'Count', numeric: true, decimals: 0 },
+				{ key: 'BADHOLE_PCT', label: 'Bad %', unit: '%', numeric: true, decimals: 1 },
+				{ key: 'MIN', label: 'Min', numeric: true, decimals: 2 },
+				{ key: 'P10', label: 'P10', numeric: true, decimals: 2 },
+				{ key: 'P50', label: 'P50', numeric: true, decimals: 2 },
+				{ key: 'MEAN', label: 'Mean', numeric: true, decimals: 2 },
+				{ key: 'P90', label: 'P90', numeric: true, decimals: 2 },
+				{ key: 'MAX', label: 'Max', numeric: true, decimals: 2 },
+				...(qaqc.norm_curve
+					? [{ key: 'NORM_P50', label: 'Norm P50', numeric: true, decimals: 2 }]
+					: []),
+				{ key: 'DRIFT', label: 'Drift Δ', numeric: true, decimals: 2 },
+				{ key: 'STATUS', label: 'Status' }
+			];
+			return {
+				title: `Multi-Well ${qaqc.active_curve} Distribution Summary (${qaqc.group_by.toUpperCase()})`,
+				columns: cols,
+				rows: qaqc.group_stats
 			};
 		}
 
@@ -318,6 +349,8 @@
 					{:else}
 						{#if workbench.multiWellStep === 'inventory'}
 							<MultiWellInventory />
+						{:else if workbench.multiWellStep === 'qaqc'}
+							<MultiWellQaqc />
 						{:else if workbench.multiWellStep === 'rock-typing'}
 							<MultiWellRockTyping />
 						{:else if workbench.multiWellStep === 'perm-transform'}

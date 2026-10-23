@@ -6,7 +6,13 @@ export type SingleWellStep =
 	| 'saturation'
 	| 'ressum'
 	| 'scal';
-export type MultiWellStep = 'inventory' | 'rock-typing' | 'perm-transform' | 'shf' | 'ml-training';
+export type MultiWellStep =
+	| 'inventory'
+	| 'qaqc'
+	| 'rock-typing'
+	| 'perm-transform'
+	| 'shf'
+	| 'ml-training';
 
 export type BadholeTreatmentMode = 'none' | 'vsh_gr' | 'interpolate' | 'ignore';
 
@@ -138,11 +144,26 @@ class WorkbenchState {
 	// Right pane view mode
 	rightPaneTab = $state<'crossplot' | 'grid' | 'split'>('split');
 	crossplotTemplateOverride = $state<
-		'auto' | 'nphi-rhob' | 'thomas-stieber' | 'phi-k' | 'pickett' | 'histogram' | 'shf' | 'relperm'
+		| 'auto'
+		| 'nphi-rhob'
+		| 'thomas-stieber'
+		| 'phi-k'
+		| 'pickett'
+		| 'histogram'
+		| 'mw-distribution'
+		| 'shf'
+		| 'relperm'
 	>('auto');
 
-	// Active curve selected in QAQC for histogram inspection
+	// Active curve selected in QAQC for histogram / multi-well distribution inspection
 	selectedQaqcCurve = $state<string>('GR');
+
+	// Multi-well QAQC distribution & visualization controls
+	mwQaqcGroupBy = $state<'well' | 'zone' | 'well_zone'>('well');
+	mwQaqcPlotType = $state<'box' | 'violin' | 'histogram' | 'cdf' | 'nphi-rhob'>('box');
+	mwQaqcCompareMode = $state<'none' | 'norm' | 'corr'>('norm');
+	mwQaqcExcludeBadhole = $state<boolean>(false);
+	mwQaqcLogScale = $state<boolean>(false);
 
 	// Global modal / drawer flags
 	importerOpen = $state<boolean>(false);

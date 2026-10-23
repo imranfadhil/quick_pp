@@ -65,20 +65,27 @@
 			readyCheck: () => projectData.wells.length > 0
 		},
 		{
-			id: 'rock-typing',
+			id: 'qaqc',
 			num: 2,
+			label: 'Data & QAQC',
+			readyCheck: () =>
+				projectData.multiWellQaqcResult !== null || projectData.stratNormReport.length > 0
+		},
+		{
+			id: 'rock-typing',
+			num: 3,
 			label: 'Rock Typing (FZI)',
 			readyCheck: () => projectData.rockTypingResult !== null
 		},
 		{
 			id: 'perm-transform',
-			num: 3,
+			num: 4,
 			label: 'Perm Transform',
 			readyCheck: () => projectData.permTransformResult !== null
 		},
 		{
 			id: 'shf',
-			num: 4,
+			num: 5,
 			label: 'Saturation Height (SHF)',
 			readyCheck: () => projectData.shfResult !== null
 		}
