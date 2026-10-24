@@ -2,7 +2,7 @@ import os
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -69,6 +69,13 @@ class DBConnector:
                 db_url = "postgresql+psycopg2://" + db_url[len("postgresql://") :]
 
         DBConnector._engine = create_engine(db_url, pool_pre_ping=True)
+        if db_url.startswith("sqlite"):
+
+            @event.listens_for(DBConnector._engine, "connect")
+            def _set_sqlite_pragma(dbapi_connection, _connection_record):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
         DBConnector._Session = sessionmaker(
             autocommit=False, autoflush=False, bind=DBConnector._engine
         )

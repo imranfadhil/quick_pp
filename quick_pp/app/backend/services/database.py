@@ -282,7 +282,7 @@ async def update_project(project_id: int, payload: dict, request: Request):
 
 
 @router.delete("/projects/{project_id}", summary="Delete a project and all its wells")
-async def delete_project(project_id: int, request: Request):
+def delete_project(project_id: int, request: Request):
     """Delete a project and all associated wells, curves, and cache entries."""
     try:
         with get_db() as session:
@@ -299,7 +299,20 @@ async def delete_project(project_id: int, request: Request):
                 _demo_well_renames.pop(project_id, None)
                 _demo_deleted_wells.pop(project_id, None)
             else:
-                session.delete(orm_proj)
+                session.expunge(orm_proj)
+                session.execute(
+                    text(
+                        "DELETE FROM curve_data WHERE curve_id IN ("
+                        "SELECT c.curve_id FROM curves c "
+                        "JOIN wells w ON c.well_id = w.well_id "
+                        "WHERE w.project_id = :pid)"
+                    ),
+                    {"pid": project_id},
+                )
+                session.execute(
+                    text("DELETE FROM projects WHERE project_id = :pid"),
+                    {"pid": project_id},
+                )
                 session.flush()
 
             _ephemeral_wells.pop(project_id, None)
@@ -447,7 +460,7 @@ async def rename_well(project_id: int, well_name: str, payload: dict, request: R
     "/projects/{project_id}/wells/{well_name}",
     summary="Delete a well from a project",
 )
-async def delete_well(project_id: int, well_name: str, request: Request):
+def delete_well(project_id: int, well_name: str, request: Request):
     """Delete a well and all its curve/ancillary data from a project."""
     try:
         with get_db() as session:
@@ -484,7 +497,19 @@ async def delete_well(project_id: int, well_name: str, request: Request):
                     deleted_set.add(orig_db_name)
             else:
                 if target_orm_well is not None:
-                    session.delete(target_orm_well)
+                    wid = target_orm_well.well_id
+                    session.expunge_all()
+                    session.execute(
+                        text(
+                            "DELETE FROM curve_data WHERE curve_id IN ("
+                            "SELECT curve_id FROM curves WHERE well_id = :wid)"
+                        ),
+                        {"wid": wid},
+                    )
+                    session.execute(
+                        text("DELETE FROM wells WHERE well_id = :wid"),
+                        {"wid": wid},
+                    )
                     session.flush()
 
             invalidate_well_cache(project_id=project_id, well_name=well_name)

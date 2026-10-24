@@ -42,7 +42,10 @@ class User(Base):
         "Project", back_populates="creator"
     )
     project_memberships: Mapped[List["ProjectMember"]] = relationship(
-        "ProjectMember", back_populates="user"
+        "ProjectMember",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     audit_logs: Mapped[List["AuditLog"]] = relationship(
         "AuditLog", back_populates="user"
@@ -72,10 +75,16 @@ class Project(Base):
 
     creator: Mapped[Optional["User"]] = relationship("User", back_populates="projects")
     members: Mapped[List["ProjectMember"]] = relationship(
-        "ProjectMember", back_populates="project"
+        "ProjectMember",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     wells: Mapped[List["Well"]] = relationship(
-        "Well", back_populates="project", cascade="all, delete-orphan"
+        "Well",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     def __repr__(self):
@@ -127,22 +136,40 @@ class Well(Base):
 
     project: Mapped["Project"] = relationship("Project", back_populates="wells")
     curves: Mapped[List["Curve"]] = relationship(
-        "Curve", back_populates="well", cascade="all, delete-orphan"
+        "Curve",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     formation_tops: Mapped[List["FormationTop"]] = relationship(
-        "FormationTop", back_populates="well", cascade="all, delete-orphan"
+        "FormationTop",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     fluid_contacts: Mapped[List["FluidContact"]] = relationship(
-        "FluidContact", back_populates="well", cascade="all, delete-orphan"
+        "FluidContact",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     pressure_tests: Mapped[List["PressureTest"]] = relationship(
-        "PressureTest", back_populates="well", cascade="all, delete-orphan"
+        "PressureTest",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     core_samples: Mapped[List["CoreSample"]] = relationship(
-        "CoreSample", back_populates="well", cascade="all, delete-orphan"
+        "CoreSample",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     survey_points: Mapped[List["WellSurvey"]] = relationship(
-        "WellSurvey", back_populates="well", cascade="all, delete-orphan"
+        "WellSurvey",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     def __repr__(self):
@@ -234,7 +261,10 @@ class Curve(Base):
 
     well: Mapped["Well"] = relationship("Well", back_populates="curves")
     data: Mapped[List["CurveData"]] = relationship(
-        "CurveData", back_populates="curve", cascade="all, delete-orphan"
+        "CurveData",
+        back_populates="curve",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     def __repr__(self):
@@ -289,13 +319,22 @@ class CoreSample(Base):
 
     well: Mapped["Well"] = relationship("Well", back_populates="core_samples")
     measurements: Mapped[List["CoreMeasurement"]] = relationship(
-        "CoreMeasurement", back_populates="sample", cascade="all, delete-orphan"
+        "CoreMeasurement",
+        back_populates="sample",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     relperm_data: Mapped[List["RelativePermeability"]] = relationship(
-        "RelativePermeability", back_populates="sample", cascade="all, delete-orphan"
+        "RelativePermeability",
+        back_populates="sample",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     capillary_pressure_data: Mapped[List["CapillaryPressure"]] = relationship(
-        "CapillaryPressure", back_populates="sample", cascade="all, delete-orphan"
+        "CapillaryPressure",
+        back_populates="sample",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     __table_args__ = (
