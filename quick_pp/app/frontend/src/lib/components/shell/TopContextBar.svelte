@@ -795,6 +795,24 @@
 					</div>
 					<button
 						type="button"
+						disabled={!workbench.projectId}
+						onclick={() => {
+							showExportMenu = false;
+							if (workbench.scope === 'multi-well') {
+								workbench.multiWellStep = 'report';
+							} else {
+								workbench.singleWellStep = 'report';
+							}
+						}}
+						class="block w-full px-3 py-1.5 text-left text-xs font-semibold text-indigo-700 hover:bg-indigo-50/70 disabled:opacity-40"
+					>
+						📄 {workbench.scope === 'multi-well'
+							? 'Generate FDP Field Report (MD / PDF)'
+							: 'Generate Well CPI Dossier (MD / PDF)'}
+					</button>
+					<div class="my-1 border-t border-[var(--border-hairline)]"></div>
+					<button
+						type="button"
 						disabled={!workbench.projectId || projectData.wells.length === 0}
 						onclick={exportProjectHandoverZip}
 						class="block w-full px-3 py-1.5 text-left text-xs font-medium text-[var(--accent-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"

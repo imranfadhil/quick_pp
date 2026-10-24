@@ -49,6 +49,12 @@
 			num: 6,
 			label: 'Reservoir Summary',
 			readyCheck: () => wellData.zonalSummary.length > 0
+		},
+		{
+			id: 'report',
+			num: 7,
+			label: 'Well CPI Report',
+			readyCheck: () => workbench.singleWellReport !== null
 		}
 	];
 
@@ -88,6 +94,12 @@
 			num: 5,
 			label: 'Saturation Height (SHF)',
 			readyCheck: () => projectData.shfResult !== null
+		},
+		{
+			id: 'report',
+			num: 6,
+			label: 'FDP Report',
+			readyCheck: () => workbench.multiWellReport !== null
 		}
 	];
 </script>
@@ -109,7 +121,7 @@
 					type="button"
 					onclick={() => (workbench.singleWellStep = step.id)}
 					class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isActive
-						? 'border-[var(--accent-primary)] bg-blue-50/90 text-[var(--accent-primary)] font-semibold'
+						? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
 						: 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
 				>
 					<span
@@ -127,7 +139,9 @@
 
 			<!-- Standalone Module Divider + SCAL & Rel-Perm -->
 			<div class="mx-1.5 h-4 w-[1px] shrink-0 bg-[var(--border-hairline)]"></div>
-			<span class="mr-0.5 text-[9.5px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
+			<span
+				class="mr-0.5 text-[9.5px] font-bold tracking-wider text-[var(--text-muted)] uppercase"
+			>
 				Standalone:
 			</span>
 			{@const isScalActive = workbench.singleWellStep === 'scal'}
@@ -137,7 +151,7 @@
 				onclick={() => (workbench.singleWellStep = 'scal')}
 				title="Standalone SCAL, Relative Permeability & Eclipse SWOF Deck Generator"
 				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isScalActive
-					? 'border-[var(--accent-primary)] bg-blue-50/90 text-[var(--accent-primary)] font-semibold'
+					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
 					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
 			>
 				<span
@@ -159,7 +173,7 @@
 					type="button"
 					onclick={() => (workbench.multiWellStep = step.id)}
 					class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isActive
-						? 'border-[var(--accent-primary)] bg-blue-50/90 text-[var(--accent-primary)] font-semibold'
+						? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
 						: 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
 				>
 					<span
@@ -177,7 +191,9 @@
 
 			<!-- Standalone Module Divider + Multi-Well Conformal ML Trainer -->
 			<div class="mx-1.5 h-4 w-[1px] shrink-0 bg-[var(--border-hairline)]"></div>
-			<span class="mr-0.5 text-[9.5px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
+			<span
+				class="mr-0.5 text-[9.5px] font-bold tracking-wider text-[var(--text-muted)] uppercase"
+			>
 				Standalone:
 			</span>
 			{@const isMlTrainActive = workbench.multiWellStep === 'ml-training'}
@@ -187,7 +203,7 @@
 				onclick={() => (workbench.multiWellStep = 'ml-training')}
 				title="Standalone Multi-Well Conformal PIML Model Trainer & Global Bundle Exporter"
 				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isMlTrainActive
-					? 'border-[var(--accent-primary)] bg-blue-50/90 text-[var(--accent-primary)] font-semibold'
+					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
 					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
 			>
 				<span
@@ -213,7 +229,8 @@
 				class="mono-num flex max-w-[260px] items-center gap-1.5 truncate rounded-xs border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700"
 				title={appStatus.displayMessage}
 			>
-				<span class="inline-block h-2 w-2 shrink-0 animate-ping rounded-full bg-blue-600"></span>
+				<span class="inline-block h-2 w-2 shrink-0 animate-ping rounded-full bg-blue-600"
+				></span>
 				<span class="truncate">{appStatus.displayMessage}</span>
 			</button>
 		{:else if wellData.lastSavedMessage}
@@ -235,7 +252,7 @@
 					onclick={() => (workbench.rightPaneTab = mode as any)}
 					class="h-5 rounded-xs px-1.5 font-medium transition-colors {workbench.rightPaneTab ===
 					mode
-						? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-2xs font-semibold'
+						? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
 						: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
 				>
 					{lbl}

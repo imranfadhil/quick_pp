@@ -1,0 +1,55 @@
+{% set is_single_well = (report_type == 'SINGLE_WELL_CPI') %}
+{% set focal_well = (well_names[0] if well_names else 'Active Well') %}
+{% if is_single_well %}
+# 1. Well Petrophysical Evaluation Summary — `{{ focal_well }}`
+
+{% if include_ai_commentary and ai_commentary.executive_summary %}
+{{ ai_commentary.executive_summary }}
+{% else %}
+This Single-Well Computer-Processed Interpretation (CPI) & Formation Evaluation Dossier documents the borehole quality control, shale/mineralogy volume ($V_{sh}$), total and effective porosity ($\phi_t, \phi_e$), water saturation ($S_w$), fluid contacts, and zonal Net Pay summation for well **`{{ focal_well }}`** in **{{ project_name }}**.
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+### Zonal Net Pay Summary — Well `{{ focal_well }}`
+| Zone | Interval (m) | Gross (m) | Net Pay (m) | $NTG$ (v/v) | $\bar{V}_{sh}$ (v/v) | $\bar{\phi}_e$ (v/v) | $\bar{S}_w$ (v/v) | $K_{geom}$ (mD) | $HCPT$ (m) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% if well_zonal_summary %}
+{% for r in well_zonal_summary %}
+| **{{ r.zone }}** | `{{ "%.1f"|format(r.top) }}–{{ "%.1f"|format(r.bottom) }}` | {{ "%.1f"|format(r.gross) }} | {{ "%.1f"|format(r.net_pay) }} | {{ "%.2f"|format(r.ntg) }} | {{ "%.3f"|format(r.vsh) }} | {{ "%.3f"|format(r.phie) }} | {{ "%.3f"|format(r.sw) }} | {{ "%.1f"|format(r.perm_geom) }} | **{{ "%.2f"|format(r.hcpt) }}** |
+{% endfor %}
+{% else %}
+{% for z in zonal_summary %}
+| **{{ z.zone }}** | Full Interval | {{ "%.1f"|format(z.gross) }} | {{ "%.1f"|format(z.net_pay) }} | {{ "%.2f"|format(z.ntg) }} | {{ "%.3f"|format(z.vsh) }} | {{ "%.3f"|format(z.phie) }} | {{ "%.3f"|format(z.sw) }} | {{ "%.1f"|format(z.perm_geom) }} | **{{ "%.2f"|format(z.hcpt) }}** |
+{% endfor %}
+{% endif %}
+
+{% else %}
+# 1. Executive Summary
+
+{% if include_ai_commentary and ai_commentary.executive_summary %}
+{{ ai_commentary.executive_summary }}
+{% else %}
+This technical petrophysical evaluation report documents the deterministic and probabilistic log, core, and special core analysis (SCAL) interpretation for **{{ project_name }}** across **{{ wells|length }}** evaluated well(s) (`{{ well_names|join(', ') }}`), prepared for Static Geological Modeling (Petrel/RMS) and Dynamic Reservoir Simulation (Eclipse/Intersect) handover.
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+### Key Field Petrophysical Summary (Net Pay)
+| Zone | Wells Penetrated | Mean Gross (m) | Mean Net Pay (m) | Mean $NTG$ (v/v) | Mean $\phi_e$ (v/v) | Mean $S_w$ (v/v) | Mean $K_{geom}$ (mD) | Mean $HCPT$ (m) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for z in zonal_summary %}
+| **{{ z.zone }}** | {{ z.well_count }} | {{ "%.1f"|format(z.gross) }} | {{ "%.1f"|format(z.net_pay) }} | {{ "%.2f"|format(z.ntg) }} | {{ "%.3f"|format(z.phie) }} | {{ "%.3f"|format(z.sw) }} | {{ "%.1f"|format(z.perm_geom) }} | {{ "%.2f"|format(z.hcpt) }} |
+{% endfor %}
+{% endif %}
+
+{% if anomaly_flags %}
+### Audit & Quality Assurance Highlights
+{% for flag in anomaly_flags %}
+- **{{ flag.category }} (`{{ flag.target }}`)**: {{ flag.message }} — *Mitigation:* {{ flag.mitigation }}
+{% endfor %}
+{% endif %}

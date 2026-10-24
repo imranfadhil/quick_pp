@@ -1,0 +1,31 @@
+{% set is_single_well = (report_type == 'SINGLE_WELL_CPI') %}
+{% set sec_num = '4' if is_single_well else '6' %}
+# {{ sec_num }}. {% if is_single_well %}Water Saturation ($S_w$), Pickett Plot & Fluid Contacts{% else %}Fluid Contacts & Water Saturation ($S_w$){% endif %}
+
+### {{ sec_num }}.1 Electrical Properties, Formation Water Resistivity & Saturation Equation
+* **Saturation Model:** `{{ sw_params.model_name }}`
+* **Free Water Level ($FWL$):** ${{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$
+* **Formation Water Salinity & Resistivity:** ${{ sw_params.salinity|int }}\text{ ppm NaCl equivalent}$, $R_w = {{ "%.3f"|format(sw_params.rw) }}\text{ }\Omega\cdot\text{m} \text{ @ } {{ "%.1f"|format(sw_params.temp) }}^\circ\text{C}$ (Arps temperature scaling).
+* **Electrical Tortuosity, Cementation & Saturation Exponents:** $a = {{ sw_params.a }}$, $m = {{ sw_params.m }}$, $n = {{ sw_params.n }}$
+
+$$S_w^n + R_w \cdot B \cdot Q_v \cdot S_w^{n-1} = \frac{a \cdot R_w}{\phi_t^m \cdot R_t} \quad \text{(Waxman-Smits Shaly-Sand)} \qquad S_w = \left(\frac{a \cdot R_w}{\phi_t^m \cdot R_t}\right)^{1/n} \quad \text{(Archie)}$$
+
+| Parameter | Symbol | Value | Unit | Basis / Calibration |
+| :--- | :---: | :---: | :---: | :--- |
+| Tortuosity Factor | $a$ | {{ sw_params.a }} | unitless | Electrical Tortuosity / Pickett Plot |
+| Cementation Exponent | $m$ | {{ sw_params.m }} | unitless | Formation Factor ($F = a / \phi^m$) |
+| Saturation Exponent | $n$ | {{ sw_params.n }} | unitless | Resistivity Index ($RI = S_w^{-n}$) |
+| Formation Water Resistivity | $R_w$ | {{ "%.3f"|format(sw_params.rw) }} | $\Omega\cdot\text{m}$ | Water Zone Pickett $S_w = 100\%$ Ro Trend |
+| Free Water Level | $FWL$ | {{ "%.1f"|format(sw_params.fwl) }} | $\text{m TVDss}$ | Resistivity-Porosity Fluid Contact Interpretation |
+
+{% if include_ai_commentary and ai_commentary.saturation_narrative %}
+{{ ai_commentary.saturation_narrative }}
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+{% if assets.pickett_shf_plot %}
+![Figure {{ sec_num }}.1: Pickett Plot & Water Saturation Profile vs. Free Water Level]({{ assets.pickett_shf_plot }})
+{% endif %}

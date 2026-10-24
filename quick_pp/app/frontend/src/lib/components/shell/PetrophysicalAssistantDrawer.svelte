@@ -61,7 +61,11 @@
 		run_multi_mineral: 'Multi-Mineral & Porosity Solver',
 		run_shf_evaluation: 'Saturation Height Function (SHF)',
 		evaluate_with_conformal_bounds: 'Conformal Uncertainty (P10–P90)',
-		control_workbench_ui: 'Workbench View Updated'
+		control_workbench_ui: 'Workbench View Updated',
+		get_project_report_context: 'Project Report Context',
+		generate_petrophysical_report: 'FDP Petrophysical Report Generated',
+		update_report_section: 'Report Section Updated',
+		export_report_to_pdf: 'PDF Export Compiled'
 	};
 
 	const PROVIDER_BADGES: Record<string, string> = {
@@ -169,7 +173,13 @@
 				workbench.scope = act.scope;
 			}
 			if (act.step) {
-				if (
+				if (act.step === 'report') {
+					if (workbench.scope === 'multi-well') {
+						workbench.multiWellStep = 'report';
+					} else {
+						workbench.singleWellStep = 'report';
+					}
+				} else if (
 					['inventory', 'rock-typing', 'perm-transform', 'shf'].includes(act.step) &&
 					workbench.scope === 'multi-well'
 				) {
@@ -219,10 +229,7 @@
 		if (!promptText) chatInput = '';
 
 		const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-		chatMessages = [
-			...chatMessages,
-			{ role: 'user', text: q, timestamp: nowStr }
-		];
+		chatMessages = [...chatMessages, { role: 'user', text: q, timestamp: nowStr }];
 		chatLoading = true;
 
 		try {
@@ -237,8 +244,7 @@
 						: workbench.multiWellStep,
 				min_depth: workbench.depthFilter?.min ?? null,
 				max_depth: workbench.depthFilter?.max ?? null,
-				selected_zones:
-					workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+				selected_zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
 				alpha: conformalAlpha,
 				provider: selectedProvider,
 				model: selectedModel,
@@ -247,7 +253,8 @@
 				history: chatMessages.slice(-6).map((m) => ({
 					role: m.role,
 					content: m.text
-				}))
+				})),
+				active_report_id: workbench.activeReport?.report_id ?? null
 			};
 
 			const data = await postJson<any>('/quick_pp/assistant/chat', payload);
@@ -255,6 +262,11 @@
 			// 1. Live-merge any newly computed depth-aligned curves into wellData!
 			if (data.computed_curves && Object.keys(data.computed_curves).length > 0) {
 				wellData.mergeComputedCurves(data.computed_curves, data.stats);
+			}
+
+			// 1b. Live-update active FDP Report if report_data was returned!
+			if (data.report_data && data.report_data.report_id) {
+				workbench.activeReport = data.report_data;
 			}
 
 			// 2. Apply any workbench UI navigation / depth scroll actions
@@ -327,7 +339,10 @@
 			.replace(/\s*\(Project\s+`?None`?\)/gi, '')
 			.replace(/\$\\hat\{q\}_\{1-\\alpha\}\$/g, 'q̂₁₋ₐ')
 			.replace(/\$\\hat\{\\sigma\}\(x\)\$/g, 'σ̂(x)')
-			.replace(/\$\\sum\s*V_\{\\text\{mineral\}\}\s*\+\s*\\text\{PHIT\}\s*=\s*1\.0\$/g, '∑ V_mineral + PHIT = 1.0')
+			.replace(
+				/\$\\sum\s*V_\{\\text\{mineral\}\}\s*\+\s*\\text\{PHIT\}\s*=\s*1\.0\$/g,
+				'∑ V_mineral + PHIT = 1.0'
+			)
 			.replace(/\$([^$]+)\$/g, '$1');
 	}
 
@@ -351,7 +366,10 @@
 				let subMatch: RegExpExecArray | null;
 				while ((subMatch = codeRegex.exec(inner)) !== null) {
 					if (subMatch.index > subLast) {
-						subTokens.push({ type: 'text', value: inner.slice(subLast, subMatch.index) });
+						subTokens.push({
+							type: 'text',
+							value: inner.slice(subLast, subMatch.index)
+						});
 					}
 					subTokens.push({
 						type: 'code',
@@ -390,10 +408,11 @@
 			const rest = kvMatch[2].trim();
 
 			// Check if the value is purely a comma-separated list of `CODE` pills (like Available Curves)
-			const pillParts = rest.split(',').map((s) => s.trim()).filter(Boolean);
-			const allAreCode =
-				pillParts.length > 1 &&
-				pillParts.every((p) => /^`[^`]+`$/.test(p));
+			const pillParts = rest
+				.split(',')
+				.map((s) => s.trim())
+				.filter(Boolean);
+			const allAreCode = pillParts.length > 1 && pillParts.every((p) => /^`[^`]+`$/.test(p));
 
 			if (allAreCode) {
 				return {
@@ -474,7 +493,9 @@
 							.slice(1, -1)
 							.split('|')
 							.map((c) => c.trim());
-					const headers = parseRow(tableLines[0]).map((h) => h.replace(/`([^`]+)`/g, '$1'));
+					const headers = parseRow(tableLines[0]).map((h) =>
+						h.replace(/`([^`]+)`/g, '$1')
+					);
 					const dataStartIndex = /^[\s|:-]+$/.test(tableLines[1]) ? 2 : 1;
 					const rows = tableLines
 						.slice(dataStartIndex)
@@ -560,6 +581,10 @@
 		{
 			label: 'Full Evaluation',
 			prompt: 'Run a full petrophysical evaluation (QAQC, multi-mineral, SHF, and conformal prediction bounds) and explain the results.'
+		},
+		{
+			label: 'FDP Report',
+			prompt: 'Generate a full FDP Petrophysical Evaluation Report for this project with AI executive summary and figures.'
 		}
 	];
 </script>
@@ -573,20 +598,20 @@
 				{@render renderInline(tok.tokens)}
 			</strong>
 		{:else if tok.type === 'italic'}
-			<em class="italic text-[var(--text-secondary)]">{tok.value}</em>
+			<em class="text-[var(--text-secondary)] italic">{tok.value}</em>
 		{:else if tok.type === 'code'}
 			{#if tok.depthTarget !== undefined}
 				<button
 					type="button"
 					onclick={() => handleDepthPillClick(tok.depthTarget!)}
 					title="Click to jump log viewer to {tok.value}"
-					class="mono-num mx-0.5 inline-flex items-center gap-0.5 rounded-xs border border-blue-200 bg-blue-50/90 px-1.5 py-0.2 text-[10.5px] font-semibold text-blue-800 transition-colors hover:border-blue-400 hover:bg-blue-100"
+					class="mono-num py-0.2 mx-0.5 inline-flex items-center gap-0.5 rounded-xs border border-blue-200 bg-blue-50/90 px-1.5 text-[10.5px] font-semibold text-blue-800 transition-colors hover:border-blue-400 hover:bg-blue-100"
 				>
 					↦ {tok.value}
 				</button>
 			{:else}
 				<span
-					class="mono-num mx-0.5 inline-block rounded-xs border border-slate-200/90 bg-[var(--bg-surface)] px-1.5 py-0.2 text-[10.5px] font-medium text-slate-800 shadow-2xs"
+					class="mono-num py-0.2 mx-0.5 inline-block rounded-xs border border-slate-200/90 bg-[var(--bg-surface)] px-1.5 text-[10.5px] font-medium text-slate-800 shadow-2xs"
 				>
 					{tok.value}
 				</span>
@@ -656,11 +681,13 @@
 			class="shrink-0 space-y-2 border-b border-[var(--border-hairline)] bg-[var(--bg-app)] p-2.5 text-[11px]"
 		>
 			<div class="flex items-center justify-between">
-				<span class="font-semibold uppercase tracking-wider text-[10px] text-[var(--text-muted)]">
+				<span
+					class="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+				>
 					Agent Stack & Conformal Config
 				</span>
-				<span class="mono-num text-[10px] text-emerald-700 font-medium">
-					MCP Tools: 6 Active
+				<span class="mono-num text-[10px] font-medium text-emerald-700">
+					MCP Tools: 10 Active
 				</span>
 			</div>
 
@@ -716,7 +743,8 @@
 					</span>
 					<input
 						type="text"
-						placeholder={activeProviderObj.default_base_url || 'https://api.openai.com/v1'}
+						placeholder={activeProviderObj.default_base_url ||
+							'https://api.openai.com/v1'}
 						bind:value={customBaseUrl}
 						class="mono-num h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0 text-[11px] text-[var(--text-primary)]"
 					/>
@@ -728,11 +756,7 @@
 					Conformal Interval Coverage (1 − α):
 				</span>
 				<div class="flex items-center gap-1">
-					{#each [
-						{ alpha: 0.2, label: '80% (P10–P90)' },
-						{ alpha: 0.1, label: '90% (P05–P95)' },
-						{ alpha: 0.3, label: '70% (P15–P85)' }
-					] as opt}
+					{#each [{ alpha: 0.2, label: '80% (P10–P90)' }, { alpha: 0.1, label: '90% (P05–P95)' }, { alpha: 0.3, label: '70% (P15–P85)' }] as opt}
 						<button
 							type="button"
 							onclick={() => (conformalAlpha = opt.alpha)}
@@ -767,24 +791,25 @@
 	</div>
 
 	<!-- Messages & Tool Execution Stream -->
-	<div
-		bind:this={messagesContainer}
-		class="flex-1 space-y-2.5 overflow-y-auto p-2.5 text-xs"
-	>
+	<div bind:this={messagesContainer} class="flex-1 space-y-2.5 overflow-y-auto p-2.5 text-xs">
 		{#each chatMessages as msg}
 			<div
 				class="rounded-sm border p-3 shadow-2xs {msg.role === 'user'
 					? 'ml-6 border-blue-200 bg-blue-50/80 text-blue-950'
 					: 'mr-1 border-[var(--border-hairline)] bg-[var(--bg-app)] text-[var(--text-primary)]'}"
 			>
-				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
+				<div
+					class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]"
+				>
 					<div class="flex items-center gap-1.5">
-						<span class="font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+						<span
+							class="font-semibold tracking-wide text-[var(--text-secondary)] uppercase"
+						>
 							{msg.role === 'user' ? 'You' : 'Assistant'}
 						</span>
 						{#if msg.role === 'assistant'}
 							<span
-								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0.2 text-[9px] font-medium text-[var(--text-muted)]"
+								class="py-0.2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[9px] font-medium text-[var(--text-muted)]"
 							>
 								{PROVIDER_BADGES[msg.provider || 'native_mcp'] || msg.provider}
 							</span>
@@ -801,7 +826,9 @@
 								class="rounded-xs border border-emerald-200/90 bg-emerald-50/70 px-2.5 py-1.5 text-[10.5px]"
 							>
 								<div class="flex items-center justify-between gap-2">
-									<div class="flex items-center gap-1.5 font-semibold text-emerald-900">
+									<div
+										class="flex items-center gap-1.5 font-semibold text-emerald-900"
+									>
 										<span
 											class="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-600 text-[9px] text-white"
 										>
@@ -811,7 +838,7 @@
 									</div>
 									{#if tc.summary?.saved_rows}
 										<span
-											class="mono-num rounded-xs bg-emerald-100/90 px-1.5 py-0.2 text-[9.5px] font-medium text-emerald-800"
+											class="mono-num py-0.2 rounded-xs bg-emerald-100/90 px-1.5 text-[9.5px] font-medium text-emerald-800"
 										>
 											Synced {tc.summary.saved_rows.toLocaleString()} pts
 										</span>
@@ -821,12 +848,14 @@
 								<!-- Interactive Depth Interval Jump Pills for Badhole / HC / Uncertainty -->
 								{#if tc.summary?.badhole?.intervals?.length}
 									<div class="mt-1.5 flex flex-wrap items-center gap-1">
-										<span class="text-[9.5px] font-medium text-amber-800">Washouts:</span>
+										<span class="text-[9.5px] font-medium text-amber-800"
+											>Washouts:</span
+										>
 										{#each tc.summary.badhole.intervals.slice(0, 3) as iv}
 											<button
 												type="button"
 												onclick={() => handleDepthPillClick(iv.top)}
-												class="mono-num rounded-xs border border-amber-300 bg-amber-100 px-1.5 py-0.2 text-[9.5px] font-semibold text-amber-900 hover:bg-amber-200"
+												class="mono-num py-0.2 rounded-xs border border-amber-300 bg-amber-100 px-1.5 text-[9.5px] font-semibold text-amber-900 hover:bg-amber-200"
 												title="Click to center LogTrackCanvas on this washout interval"
 											>
 												↦ {iv.top}–{iv.bottom} m
@@ -837,12 +866,14 @@
 
 								{#if tc.summary?.zonal_conformal_summary?.length}
 									<div class="mt-1.5 flex flex-wrap items-center gap-1">
-										<span class="text-[9.5px] font-medium text-indigo-800">Jump to Zone:</span>
+										<span class="text-[9.5px] font-medium text-indigo-800"
+											>Jump to Zone:</span
+										>
 										{#each tc.summary.zonal_conformal_summary as zc}
 											<button
 												type="button"
 												onclick={() => handleDepthPillClick(zc.top)}
-												class="mono-num rounded-xs border border-indigo-200 bg-indigo-100/80 px-1.5 py-0.2 text-[9.5px] font-semibold text-indigo-900 hover:bg-indigo-200"
+												class="mono-num py-0.2 rounded-xs border border-indigo-200 bg-indigo-100/80 px-1.5 text-[9.5px] font-semibold text-indigo-900 hover:bg-indigo-200"
 												title="Center log canvas at {zc.zone} ({zc.top} m)"
 											>
 												{zc.zone} ({zc.top} m)
@@ -857,16 +888,16 @@
 
 				<!-- Human-Friendly Structured Message Content -->
 				{#if msg.role === 'user'}
-					<div class="leading-relaxed text-[12px]">
+					<div class="text-[12px] leading-relaxed">
 						{msg.text}
 					</div>
 				{:else}
 					{@const blocks = parseMarkdownBlocks(msg.text)}
-					<div class="space-y-2.5 leading-relaxed text-[11.5px]">
+					<div class="space-y-2.5 text-[11.5px] leading-relaxed">
 						{#each blocks as block}
 							{#if block.type === 'heading'}
 								<div
-									class="flex flex-wrap items-center gap-1 border-b border-[var(--border-hairline)] pb-1.5 pt-1 first:pt-0 text-[12.5px] font-bold tracking-tight text-[var(--text-primary)]"
+									class="flex flex-wrap items-center gap-1 border-b border-[var(--border-hairline)] pt-1 pb-1.5 text-[12.5px] font-bold tracking-tight text-[var(--text-primary)] first:pt-0"
 								>
 									{@render renderInline(block.tokens)}
 								</div>
@@ -881,7 +912,7 @@
 										>
 											{#if item.label}
 												<div
-													class="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]"
+													class="mb-0.5 text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
 												>
 													{item.label}
 												</div>
@@ -896,14 +927,22 @@
 														{/each}
 													</div>
 												{:else}
-													<div class="text-[11.5px] text-[var(--text-primary)]">
+													<div
+														class="text-[11.5px] text-[var(--text-primary)]"
+													>
 														{@render renderInline(item.bodyTokens)}
 													</div>
 												{/if}
 											{:else}
-												<div class="flex items-start gap-1.5 text-[11.5px] text-[var(--text-primary)]">
-													<span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"></span>
-													<div>{@render renderInline(item.bodyTokens)}</div>
+												<div
+													class="flex items-start gap-1.5 text-[11.5px] text-[var(--text-primary)]"
+												>
+													<span
+														class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"
+													></span>
+													<div>
+														{@render renderInline(item.bodyTokens)}
+													</div>
 												</div>
 											{/if}
 										</div>
@@ -915,10 +954,12 @@
 								>
 									<table class="w-full border-collapse text-left text-[10.5px]">
 										<thead>
-											<tr class="border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)]">
+											<tr
+												class="border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)]"
+											>
 												{#each block.headers as hdr}
 													<th
-														class="px-2 py-1.5 font-semibold uppercase tracking-wider text-[9.5px] text-[var(--text-secondary)]"
+														class="px-2 py-1.5 text-[9.5px] font-semibold tracking-wider text-[var(--text-secondary)] uppercase"
 													>
 														{hdr}
 													</th>
@@ -946,8 +987,9 @@
 								</div>
 							{:else if block.type === 'codeblock'}
 								<pre
-									class="mono-num overflow-x-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2 text-[10.5px] text-slate-800"
-								><code>{block.code}</code></pre>
+									class="mono-num overflow-x-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2 text-[10.5px] text-slate-800"><code
+										>{block.code}</code
+									></pre>
 							{:else if block.type === 'paragraph'}
 								<p class="leading-relaxed text-[var(--text-primary)]">
 									{@render renderInline(block.tokens)}

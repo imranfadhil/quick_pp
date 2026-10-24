@@ -81,6 +81,10 @@ You have direct access to the Petrophysical MCP Server tools:
 - `run_shf_evaluation`: Run `shf.py` FZI rock typing, Leverett-J saturation height function (`SHF`), and Free Water Level (`FWL`) reconciliation.
 - `evaluate_with_conformal_bounds`: Calibrate `ConformalMultiOutputRegressor` on the fly and generate P10–P90 conformal prediction intervals (`PHIT_P10`/`P90`, `SW_P10`/`P90`, `PERM_P10`/`P90`) with volumetric closure and zonal pay confidence diagnostics.
 - `control_workbench_ui`: Switch workbench tabs, filter zones/depths, or scroll the well log canvas to a target depth.
+- `get_project_report_context`: Retrieve compact project wells, zones, QAQC flags, rock types, FWL, and P10/P50/P90 sums for report drafting.
+- `generate_petrophysical_report`: Generate a complete FDP Petrophysical Evaluation Report (`FDP_FULL`, `SINGLE_WELL_CPI`, `QAQC_SUMMARY`, `RESSUM_ONLY`) with high-DPI plots and open the Report Workbench.
+- `update_report_section`: Rewrite or refine a specific section (`exec_summary`, `data_inventory`, `qaqc`, `litho_poro`, `rock_perm`, `saturation`, `shf_scal`, `ressum_uncert`, `upscaling`, `appendix_cpi`) in the active report.
+- `export_report_to_pdf`: Compile the active report into a downloadable A4 PDF document.
 
 Always ground your interpretation in the quantitative tool outputs: cite depth intervals, zonal means, P10–P90 conformal interval widths, and physical constraints (volumetric closure, washout impact, FWL transition zones).
 """
@@ -98,22 +102,36 @@ class ChatHistoryItem(BaseModel):
 
 class AgentChatRequest(BaseModel):
     message: str = Field(..., description="User prompt or petrophysical instruction")
-    project_id: Optional[int] = Field(None, description="Active project ID in workbench")
+    project_id: Optional[int] = Field(
+        None, description="Active project ID in workbench"
+    )
     well_name: Optional[str] = Field(None, description="Active well name in workbench")
     scope: Optional[str] = Field("single-well", description="Active workbench scope")
     step: Optional[str] = Field("litho-poro", description="Active workflow step")
     min_depth: Optional[float] = Field(None, description="Active minimum depth filter")
     max_depth: Optional[float] = Field(None, description="Active maximum depth filter")
     selected_zones: Optional[List[str]] = Field(None, description="Active zone filter")
-    alpha: float = Field(0.20, ge=0.02, le=0.50, description="Conformal significance level alpha (0.20 = P10-P90)")
+    alpha: float = Field(
+        0.20,
+        ge=0.02,
+        le=0.50,
+        description="Conformal significance level alpha (0.20 = P10-P90)",
+    )
     provider: str = Field(
         "native_mcp",
         description="LLM provider: 'native_mcp', 'openai', 'gemini', 'anthropic', or 'ollama'",
     )
-    model: Optional[str] = Field(None, description="Model identifier for selected provider")
+    model: Optional[str] = Field(
+        None, description="Model identifier for selected provider"
+    )
     api_key: Optional[str] = Field(None, description="Optional API key from UI drawer")
-    base_url: Optional[str] = Field(None, description="Optional custom base URL (e.g., Ollama / vLLM)")
+    base_url: Optional[str] = Field(
+        None, description="Optional custom base URL (e.g., Ollama / vLLM)"
+    )
     history: List[ChatHistoryItem] = Field(default_factory=list)
+    active_report_id: Optional[str] = Field(
+        None, description="Active report ID in workbench if any"
+    )
 
 
 class DirectToolCallRequest(BaseModel):
@@ -337,6 +355,151 @@ def _plan_native_tool_calls(req: AgentChatRequest) -> List[Dict[str, Any]]:
             }
         )
 
+    # Report Generation & PDF Export Intents
+    wants_pdf_export = any(
+        kw in q
+        for kw in (
+            "export pdf",
+            "export report to pdf",
+            "compile pdf",
+            "download pdf",
+            "export to pdf",
+            "generate pdf",
+        )
+    )
+    wants_section_rewrite = any(
+        kw in q
+        for kw in (
+            "rewrite section",
+            "update section",
+            "refine section",
+            "rewrite the executive summary",
+            "rewrite executive summary",
+            "update executive summary",
+            "rewrite qaqc section",
+            "rewrite saturation section",
+        )
+    )
+    wants_report = any(
+        kw in q
+        for kw in (
+            "fdp report",
+            "petrophysical report",
+            "generate report",
+            "build report",
+            "create report",
+            "draft report",
+            "write report",
+            "single well cpi report",
+            "qaqc summary report",
+            "ressum report",
+        )
+    )
+
+    if wants_pdf_export:
+        calls.append(
+            {
+                "name": "export_report_to_pdf",
+                "arguments": {
+                    "project_id": int(pid),
+                    "report_id": req.active_report_id or "latest",
+                },
+            }
+        )
+        return calls
+
+    if wants_section_rewrite:
+        sec_map = {
+            "exec": "exec_summary",
+            "executive": "exec_summary",
+            "inventory": "data_inventory",
+            "qaqc": "qaqc",
+            "litho": "litho_poro",
+            "porosity": "litho_poro",
+            "rock": "rock_perm",
+            "perm": "rock_perm",
+            "saturation": "saturation",
+            "fwl": "saturation",
+            "shf": "shf_scal",
+            "scal": "shf_scal",
+            "ressum": "ressum_uncert",
+            "uncertainty": "ressum_uncert",
+            "upscal": "upscaling",
+            "appendix": "appendix_cpi",
+            "cpi": "appendix_cpi",
+        }
+        target_sec = "exec_summary"
+        for key_sub, sid in sec_map.items():
+            if key_sub in q:
+                target_sec = sid
+                break
+        from quick_pp.app.backend.services.report import (
+            build_report_context,
+            synthesize_domain_ai_commentary,
+        )
+
+        ctx = build_report_context(
+            project_id=str(pid),
+            well_names=[well] if well else None,
+        )
+        ai_comm = synthesize_domain_ai_commentary(ctx)
+        comm_text = ai_comm.get("executive_summary", "")
+        if target_sec == "qaqc":
+            comm_text = ai_comm.get("qaqc_commentary", comm_text)
+        elif target_sec == "litho_poro":
+            comm_text = ai_comm.get("litho_poro_commentary", comm_text)
+        elif target_sec == "rock_perm":
+            comm_text = ai_comm.get("rock_typing_commentary", comm_text)
+        elif target_sec == "saturation":
+            comm_text = ai_comm.get("saturation_commentary", comm_text)
+        elif target_sec == "shf_scal":
+            comm_text = ai_comm.get("shf_commentary", comm_text)
+        elif target_sec == "ressum_uncert":
+            comm_text = ai_comm.get("uncertainty_commentary", comm_text)
+        elif target_sec == "upscaling":
+            comm_text = ai_comm.get("upscaling_commentary", comm_text)
+
+        custom_md = (
+            f"## AI-Refined Section (`{target_sec}`)\n\n"
+            f"> **Prompt Note**: {req.message}\n\n"
+            f"{comm_text}\n"
+        )
+        calls.append(
+            {
+                "name": "update_report_section",
+                "arguments": {
+                    "project_id": int(pid),
+                    "report_id": req.active_report_id or "latest",
+                    "section_id": target_sec,
+                    "markdown_content": custom_md,
+                },
+            }
+        )
+        return calls
+
+    if wants_report:
+        rep_type = "FDP_FULL"
+        if "single_well" in q or "single-well" in q or "cpi" in q:
+            rep_type = "SINGLE_WELL_CPI"
+        elif "qaqc" in q and "summary" in q:
+            rep_type = "QAQC_SUMMARY"
+        elif "ressum" in q and "only" in q:
+            rep_type = "RESSUM_ONLY"
+        calls.append(
+            {
+                "name": "generate_petrophysical_report",
+                "arguments": {
+                    "project_id": int(pid),
+                    "report_type": rep_type,
+                    "well_names": [well]
+                    if (well and rep_type == "SINGLE_WELL_CPI")
+                    else None,
+                    "include_ai_summary": True,
+                },
+            }
+        )
+        return calls
+
     # Default fallback if user asks a general question on an active well: inspect + conformal bounds
     if not calls and well:
         calls.append({"name": "inspect_well", "arguments": common_filter})
@@ -380,8 +543,13 @@ def _synthesize_petrophysical_explanation(
             dr = res.get("depth_range") or {}
             curves = ", ".join(f"`{c}`" for c in res.get("available_curves", [])[:14])
             sections.append(
-                f"### 🔍 Well Inspection: `{res.get('well_name')}`" + (f" (Project `{res.get('project_name')}`)\n" if res.get("project_name") else "\n") +
-                f"- **Depth Interval**: `{dr.get('min')} – {dr.get('max')} m` (`{res.get('row_count')}` samples)\n"
+                f"### 🔍 Well Inspection: `{res.get('well_name')}`"
+                + (
+                    f" (Project `{res.get('project_name')}`)\n"
+                    if res.get("project_name")
+                    else "\n"
+                )
+                + f"- **Depth Interval**: `{dr.get('min')} – {dr.get('max')} m` (`{res.get('row_count')}` samples)\n"
                 f"- **Core Calibration Points**: `{res.get('core_sample_count', 0)}` samples\n"
                 f"- **Available Curves**: {curves}"
             )
@@ -506,6 +674,41 @@ def _synthesize_petrophysical_explanation(
                     f"(∑ V_mineral + PHIT = 1.0) constrains the solution."
                 )
 
+        elif t_name == "get_project_report_context":
+            sections.append(
+                f"### 📋 Project Report Context (`{res.get('project_name')}`)\n"
+                f"- **Evaluated Wells**: `{res.get('well_count', 0)}` (`{', '.join(res.get('well_names', []))}`)\n"
+                f"- **Fluid Contacts**: FWL = `{res.get('fluid_contacts', {}).get('fwl')} m`, "
+                f"OWC = `{res.get('fluid_contacts', {}).get('owc')} m`"
+            )
+
+        elif t_name == "generate_petrophysical_report":
+            st_sum = res.get("stats_summary") or {}
+            assets = res.get("assets") or []
+            sections.append(
+                f"### 📄 FDP Petrophysical Evaluation Report Generated (`{res.get('report_id')}`)\n"
+                f"- **Report Template**: `{res.get('report_type', 'FDP_FULL')}`\n"
+                f"- **Wells Included**: `{st_sum.get('well_count', 0)}` wells | **Zonal Pay Rows**: `{st_sum.get('ressum_row_count', 0)}`\n"
+                f"- **Mean Pay Metrics**: Net Pay = `{st_sum.get('mean_net_pay_m', '—')} m`, "
+                f"`PHIE = {st_sum.get('mean_phie_pay', '—')} v/v`, `Sw = {st_sum.get('mean_sw_pay', '—')} v/v`\n"
+                f"- **High-DPI Figures Exported**: `{len(assets)}` PNG assets rendered and embedded in the Report Workbench."
+            )
+
+        elif t_name == "update_report_section":
+            sections.append(
+                f"### ✏️ Report Section Updated (`{res.get('section_id')}`)\n"
+                f"- **Report ID**: `{res.get('report_id')}`\n"
+                f"- **Updated Timestamp**: `{res.get('updated_at')}`\n"
+                f"- The live preview in the Report Workbench has been refreshed with the updated Markdown."
+            )
+
+        elif t_name == "export_report_to_pdf":
+            sections.append(
+                f"### 🖨️ PDF Export Compiled (`{res.get('report_id')}`)\n"
+                f"- **Download PDF**: `{res.get('pdf_url')}`\n"
+                f"- **A4 Print View**: `{res.get('print_url')}`"
+            )
+
     return "\n\n".join(sections)
 
 
@@ -521,11 +724,15 @@ def _run_openai_compatible_agent(
     """Run tool-calling loop against OpenAI or Ollama (`/v1/chat/completions`)."""
     provider = req.provider.lower()
     if provider == "ollama":
-        base_url = (req.base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")).rstrip("/")
+        base_url = (
+            req.base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        ).rstrip("/")
         api_key = req.api_key or "ollama"
         model = req.model or "qwen2.5:7b"
     else:
-        base_url = (req.base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
+        base_url = (
+            req.base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        ).rstrip("/")
         api_key = req.api_key or os.getenv("OPENAI_API_KEY", "")
         model = req.model or "gpt-4o-mini"
         if not api_key:
@@ -608,7 +815,10 @@ def _run_anthropic_agent(
         "content-type": "application/json",
     }
     messages: List[Dict[str, Any]] = [
-        {"role": "user", "content": f"[Workbench Context: {context_summary}]\n\n{req.message}"}
+        {
+            "role": "user",
+            "content": f"[Workbench Context: {context_summary}]\n\n{req.message}",
+        }
     ]
     tools = petro_mcp_server.get_anthropic_tools()
     executed_tools: List[Dict[str, Any]] = []
@@ -634,7 +844,9 @@ def _run_anthropic_agent(
 
         tool_uses = [b for b in content_blocks if b.get("type") == "tool_use"]
         if not tool_uses:
-            text_parts = [b.get("text", "") for b in content_blocks if b.get("type") == "text"]
+            text_parts = [
+                b.get("text", "") for b in content_blocks if b.get("type") == "text"
+            ]
             return "\n".join(text_parts), executed_tools
 
         tool_results_blocks = []
@@ -678,7 +890,9 @@ def _run_gemini_agent(
     executed_tools: List[Dict[str, Any]] = []
     for call_spec in _plan_native_tool_calls(req):
         try:
-            t_out = petro_mcp_server.call_tool(call_spec["name"], call_spec["arguments"])
+            t_out = petro_mcp_server.call_tool(
+                call_spec["name"], call_spec["arguments"]
+            )
         except Exception as e:
             t_out = {"error": str(e)}
         executed_tools.append(
@@ -715,7 +929,9 @@ def _run_gemini_agent(
         if text.strip():
             return text, executed_tools
 
-    return _synthesize_petrophysical_explanation(req.message, executed_tools), executed_tools
+    return _synthesize_petrophysical_explanation(
+        req.message, executed_tools
+    ), executed_tools
 
 
 # ---------------------------------------------------------------------------
@@ -723,7 +939,9 @@ def _run_gemini_agent(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/assistant/providers", summary="List supported LLM & MCP providers for UI switcher")
+@router.get(
+    "/assistant/providers", summary="List supported LLM & MCP providers for UI switcher"
+)
 async def list_assistant_providers():
     """Return available agent providers, models, and MCP tool definitions for the Svelte UI drawer."""
     providers_out = []
@@ -737,7 +955,9 @@ async def list_assistant_providers():
     }
 
 
-@router.post("/assistant/chat", summary="Run Petrophysical Agentic Assistant with MCP tools")
+@router.post(
+    "/assistant/chat", summary="Run Petrophysical Agentic Assistant with MCP tools"
+)
 async def assistant_chat(req: AgentChatRequest):
     """Execute petrophysical MCP tools and return explanation, conformal bounds, computed curves, and UI actions."""
     context_summary = (
@@ -753,7 +973,9 @@ async def assistant_chat(req: AgentChatRequest):
 
     try:
         if provider in ("openai", "ollama"):
-            reply_text, executed_tools = _run_openai_compatible_agent(req, context_summary)
+            reply_text, executed_tools = _run_openai_compatible_agent(
+                req, context_summary
+            )
         elif provider == "anthropic":
             reply_text, executed_tools = _run_anthropic_agent(req, context_summary)
         elif provider == "gemini":
@@ -776,9 +998,13 @@ async def assistant_chat(req: AgentChatRequest):
                         "result": t_out,
                     }
                 )
-            reply_text = _synthesize_petrophysical_explanation(req.message, executed_tools)
+            reply_text = _synthesize_petrophysical_explanation(
+                req.message, executed_tools
+            )
     except Exception as exc:
-        logger.warning(f"External provider '{provider}' failed ({exc}); falling back to native_mcp agent.")
+        logger.warning(
+            f"External provider '{provider}' failed ({exc}); falling back to native_mcp agent."
+        )
         used_fallback = True
         if not executed_tools:
             for call_spec in _plan_native_tool_calls(req):
@@ -801,17 +1027,20 @@ async def assistant_chat(req: AgentChatRequest):
                             "result": {"error": str(tool_err)},
                         }
                     )
-        fallback_body = _synthesize_petrophysical_explanation(req.message, executed_tools)
+        fallback_body = _synthesize_petrophysical_explanation(
+            req.message, executed_tools
+        )
         reply_text = (
             f"*(Note: Provider `{provider}` returned `{exc}`; executed built-in Petrophysical MCP Agent)*\n\n"
             + fallback_body
         )
 
-    # Aggregate computed curves, stats, and UI actions across all executed tools for live Svelte sync
+    # Aggregate computed curves, stats, report_data, and UI actions across all executed tools for live Svelte sync
     merged_curves: Dict[str, List[Any]] = {}
     merged_stats: Dict[str, Any] = {}
     ui_actions: List[Dict[str, Any]] = []
     compact_tool_calls: List[Dict[str, Any]] = []
+    latest_report_data: Optional[Dict[str, Any]] = None
 
     for rec in executed_tools:
         res = rec.get("result") or {}
@@ -820,9 +1049,15 @@ async def assistant_chat(req: AgentChatRequest):
                 merged_curves.update(res["computed_curves"])
             if "stats" in res and isinstance(res["stats"], dict):
                 merged_stats.update(res["stats"])
+            if "report_data" in res and isinstance(res["report_data"], dict):
+                latest_report_data = res["report_data"]
             if "ui_action" in res and isinstance(res["ui_action"], dict):
                 ui_actions.append(res["ui_action"])
-            compact_res = {k: v for k, v in res.items() if k != "computed_curves"}
+            compact_res = {
+                k: v
+                for k, v in res.items()
+                if k not in ("computed_curves", "report_data")
+            }
         else:
             compact_res = res
 
@@ -841,6 +1076,7 @@ async def assistant_chat(req: AgentChatRequest):
         "tool_calls": compact_tool_calls,
         "computed_curves": merged_curves,
         "stats": merged_stats,
+        "report_data": latest_report_data,
         "ui_actions": ui_actions,
     }
 
@@ -859,7 +1095,9 @@ async def call_mcp_tool_endpoint(req: DirectToolCallRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"MCP tool execution failed: {e}") from e
+        raise HTTPException(
+            status_code=500, detail=f"MCP tool execution failed: {e}"
+        ) from e
 
 
 @router.post("/mcp", summary="Standard MCP JSON-RPC 2.0 Streamable HTTP Endpoint")

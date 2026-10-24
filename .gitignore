@@ -124,3 +124,4 @@ chainlit*
 **/docker/data/postgres/
 
 docs/tutorials/*.ipynb
+quick_pp/app/backend/static/reports/*

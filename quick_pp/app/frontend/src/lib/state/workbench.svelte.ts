@@ -5,14 +5,64 @@ export type SingleWellStep =
 	| 'perm'
 	| 'saturation'
 	| 'ressum'
-	| 'scal';
+	| 'scal'
+	| 'report';
 export type MultiWellStep =
 	| 'inventory'
 	| 'qaqc'
 	| 'rock-typing'
 	| 'perm-transform'
 	| 'shf'
-	| 'ml-training';
+	| 'ml-training'
+	| 'report';
+
+export type ReportType = 'FDP_FULL' | 'SINGLE_WELL_CPI' | 'QAQC_SUMMARY' | 'RESSUM_ONLY';
+
+export interface ReportSectionConfig {
+	section_id: string;
+	title: string;
+	enabled: boolean;
+	include_plots: boolean;
+	include_tables: boolean;
+	custom_notes: string;
+}
+
+export interface ReportConfigParams {
+	reportType: ReportType;
+	reportTitle: string;
+	author: string;
+	company: string;
+	fieldName: string;
+	includeAiSummary: boolean;
+	cutoffs: { vsh: number; phie: number; sw: number };
+	sections: ReportSectionConfig[];
+}
+
+export interface ActiveReportState {
+	report_id: string;
+	project_id: string;
+	project_name?: string;
+	title: string;
+	author: string;
+	report_type: string;
+	well_names: string[];
+	sections: Array<{
+		section_id: string;
+		title: string;
+		enabled: boolean;
+		include_ai_commentary?: boolean;
+		custom_notes?: string | null;
+	}>;
+	section_contents: Record<string, string>;
+	markdown_content: string;
+	html_content: string;
+	asset_urls: Record<string, any>;
+	pdf_download_url?: string | null;
+	print_html_url?: string | null;
+	context_summary: Record<string, any>;
+	created_at: string;
+	updated_at?: string | null;
+}
 
 export type BadholeTreatmentMode = 'none' | 'vsh_gr' | 'interpolate' | 'ignore';
 
@@ -278,6 +328,179 @@ class WorkbenchState {
 	});
 
 	scalResult = $state<ScalComputedResult | null>(null);
+
+	// FDP Petrophysical Report Generation Workbench State
+	reportConfig = $state<ReportConfigParams>({
+		reportType: 'FDP_FULL',
+		reportTitle: 'Field Development Plan (FDP) Petrophysical Evaluation Report',
+		author: 'Petrophysics Team',
+		company: 'Subsurface Asset Team',
+		fieldName: '',
+		includeAiSummary: true,
+		cutoffs: { vsh: 0.4, phie: 0.08, sw: 0.65 },
+		sections: [
+			{
+				section_id: 'exec_summary',
+				title: '1. Executive Summary',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'data_inventory',
+				title: '2. Well & Data Inventory',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'qaqc',
+				title: '3. Log QAQC & Conditioning',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'litho_poro',
+				title: '4. Lithology & Porosity Evaluation',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'rock_perm',
+				title: '5. Rock Typing & Permeability Modeling',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'saturation',
+				title: '6. Water Saturation & Fluid Contacts',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'shf_scal',
+				title: '7. Saturation Height Function (SHF) & SCAL',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'ressum_uncert',
+				title: '8. Reservoir Summary (Net Pay) & Uncertainty',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'upscaling',
+				title: '9. Geocellular Model Handover & Upscaling',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'appendix_cpi',
+				title: '10. Appendices (Well CPI Plots & Audit Trail)',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			}
+		]
+	});
+
+	// Single-Well CPI Dossier Configuration (streamlined 6 chapters)
+	singleWellReportConfig = $state<ReportConfigParams>({
+		reportType: 'SINGLE_WELL_CPI',
+		reportTitle: 'Single-Well Petrophysical CPI & Evaluation Dossier',
+		author: 'Petrophysics Team',
+		company: 'Subsurface Asset Team',
+		fieldName: '',
+		includeAiSummary: true,
+		cutoffs: { vsh: 0.4, phie: 0.08, sw: 0.65 },
+		sections: [
+			{
+				section_id: 'exec_summary',
+				title: '1. Well Evaluation Summary',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'qaqc',
+				title: '2. Borehole QA/QC & Log Conditioning',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'litho_poro',
+				title: '3. Lithology, Porosity & Core Parity',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'saturation',
+				title: '4. Water Saturation & Fluid Contacts',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'ressum_uncert',
+				title: '5. Zonal Net Pay Summary & Cutoffs',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'appendix_cpi',
+				title: '6. 6-Track Composite CPI Log',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			}
+		]
+	});
+
+	singleWellReport = $state<ActiveReportState | null>(null);
+	multiWellReport = $state<ActiveReportState | null>(null);
+
+	get activeReport(): ActiveReportState | null {
+		return this.scope === 'single-well' ? this.singleWellReport : this.multiWellReport;
+	}
+
+	set activeReport(val: ActiveReportState | null) {
+		if (this.scope === 'single-well') {
+			this.singleWellReport = val;
+		} else {
+			this.multiWellReport = val;
+		}
+	}
+
+	reportViewMode = $state<'preview' | 'markdown' | 'split'>('preview');
+	selectedReportSectionId = $state<string>('exec_summary');
+	isGeneratingReport = $state<boolean>(false);
 
 	clearFilters() {
 		this.depthFilter = null;

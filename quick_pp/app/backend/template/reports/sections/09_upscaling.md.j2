@@ -1,0 +1,37 @@
+# 9. Upscaling, Log Blocking & Deliverables Handover
+
+### 9.1 Static Geomodel Cellular Blocking & Cardwell-Parsons Averaging
+Fine-scale evaluated CPI logs ($0.1524\text{ m}$ sampling) were upscaled onto cellular grid blocks ($h_{cell} = {{ "%.1f"|format(upscaling_params.cell_size) }}\text{ m}$, zone-constrained) using PRMS/SEC and static geomodeling best practices:
+* **Shale Volume ($V_{sh}$) & Porosity ($\phi_t, \phi_e$) & $NTG$:** Thickness-weighted arithmetic average: $\bar{\phi}_{cell} = \frac{\sum h_i \phi_i}{\sum h_i}$.
+* **Water Saturation ($S_w$):** Pore-volume weighted average: $\bar{S}_{w,cell} = \frac{\sum h_i \phi_i S_{w,i}}{\sum h_i \phi_i}$.
+* **Horizontal Permeability Proxy ($K_h$):** Arithmetic mean: $K_{arith} = \frac{\sum h_i K_i}{\sum h_i}$.
+* **Effective Heterogeneous Permeability ($K_{eff}$):** Geometric mean ($\omega \to 0$): $K_{geom} = \exp\left(\frac{\sum h_i \ln K_i}{\sum h_i}\right)$.
+* **Vertical Permeability Proxy ($K_v$):** Harmonic mean ($\omega = -1$): $K_{harm} = \frac{\sum h_i}{\sum (h_i / K_i)}$, yielding vertical anisotropy ratio $K_v / K_h = K_{harm} / K_{arith}$.
+
+| Well Name | Fine-Scale Samples | Blocked Grid Cells ({{ "%.1f"|format(upscaling_params.cell_size) }}m) | Mean $\phi_{blocked}$ (v/v) | Mean $S_{w,blocked}$ (v/v) | $K_{arith}$ ($K_h$, mD) | $K_{geom}$ ($K_{eff}$, mD) | $K_{harm}$ ($K_v$, mD) | Mean $K_v / K_h$ |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for up in upscaling_table %}
+| **{{ up.well_name }}** | {{ up.fine_samples }} | {{ up.n_cells }} | {{ "%.3f"|format(up.phit_up) }} | {{ "%.3f"|format(up.swt_up) }} | {{ "%.1f"|format(up.k_arith) }} | {{ "%.1f"|format(up.k_geom) }} | {{ "%.2f"|format(up.k_harm) }} | {{ "%.3f"|format(up.kv_kh) }} |
+{% endfor %}
+
+{% if include_ai_commentary and ai_commentary.upscaling_narrative %}
+{{ ai_commentary.upscaling_narrative }}
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+{% if assets.upscaling_plot %}
+![Figure 9.1: Fine-Scale CPI vs. Upscaled Blocked Logs Comparison Track]({{ assets.upscaling_plot }})
+{% endif %}
+
+### 9.2 FDP Subsurface Deliverables Handover Manifest
+| Deliverable Artifact | Format | Target Consumer | QA/QC Verification Status |
+| :--- | :---: | :--- | :---: |
+| **Evaluated CPI Composite Well Logs** | `.las` / `.csv` | Petrel / RMS Static Modeling | ✓ Verified ({{ wells|length }} Wells) |
+| **Zonal Sums & Averages Master Table** | `.csv` / `.md` | Reserves Audit & Volumetric STOIIP | ✓ Verified ({{ all_zones|length }} Zones) |
+| **Upscaled Cellular Blocked Logs** | `.csv` | 3D Property Population (`K_h`, `K_v`, `PHIE`, `SW`) | ✓ Verified ({{ "%.1f"|format(upscaling_params.cell_size) }}m Grid) |
+| **SCAL & Saturation Height Function Deck** | `SWOF` / `.inc` | Eclipse / Intersect Dynamic Simulation | ✓ Verified (Leverett-J & Corey/LET) |
+| **FDP Petrophysical Evaluation Report** | `.md` / `.pdf` | Subsurface Peer Review & Gate Approval | ✓ Complete |
+

@@ -1,0 +1,32 @@
+{% set is_single_well = (report_type == 'SINGLE_WELL_CPI') %}
+{% set sec_num = '5' if is_single_well else '8' %}
+# {{ sec_num }}. {% if is_single_well %}Zonal Net Pay Summary & Cut-off Sensitivity{% else %}Cut-offs, Sums & Averages (Reservoir Summary) & Uncertainty{% endif %}
+
+### {{ sec_num }}.1 Applied Net Rock, Net Reservoir & Net Pay Cut-offs
+* **Shale Volume Cut-off ($V_{sh,cutoff}$):** $\le {{ "%.2f"|format(cutoffs.vsh) }}\text{ v/v}$ (Defines **Net Rock** flag)
+* **Effective Porosity Cut-off ($\phi_{e,cutoff}$):** $\ge {{ "%.2f"|format(cutoffs.phie) }}\text{ v/v}$ (Defines **Net Reservoir** flag where $V_{sh} \le V_{sh,cutoff}$)
+* **Water Saturation Cut-off ($S_{w,cutoff}$):** $\le {{ "%.2f"|format(cutoffs.sw) }}\text{ v/v}$ (Defines **Net Pay** flag where Net Reservoir $= 1$)
+
+$$\text{NTG} = \frac{\sum h_{net}}{\sum h_{gross}}, \quad \bar{\phi}_e = \frac{\sum h_i \cdot \phi_{e,i}}{\sum h_i}, \quad \bar{S}_w = \frac{\sum h_i \cdot \phi_{e,i} \cdot S_{w,i}}{\sum h_i \cdot \phi_{e,i}}, \quad HCPT = \sum h_i \cdot \phi_{e,i} \cdot (1 - S_{w,i})$$
+
+### {{ sec_num }}.2 {% if is_single_well %}Zonal Net Pay & Reservoir Summary{% else %}Well-by-Well Zonal Reservoir Summary (Net Pay){% endif %}
+{{ ressum_markdown_table }}
+
+### {{ sec_num }}.3 Probabilistic Petrophysical Uncertainty Ranges (P90 / P50 / P10)
+| Zone | Metric | P90 (Conservative / Low) | P50 (Base Case) | P10 (Optimistic / High) | Uncertainty Spread (P10/P90) |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+{% for u in uncertainty_summary %}
+| **{{ u.zone }}** | {{ u.metric }} | {{ u.p90 }} | **{{ u.p50 }}** | {{ u.p10 }} | {{ u.spread }} |
+{% endfor %}
+
+{% if include_ai_commentary and ai_commentary.uncertainty_narrative %}
+{{ ai_commentary.uncertainty_narrative }}
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+{% if assets.uncertainty_plot %}
+![Figure {{ sec_num }}.1: Cut-off Sensitivity & Probabilistic HCPT Distribution]({{ assets.uncertainty_plot }})
+{% endif %}

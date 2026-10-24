@@ -1,0 +1,34 @@
+# 7. Capillary Pressure, Saturation Height Modeling (SHF) & SCAL
+
+### 7.1 Leverett $J$-Function & 3D Static Model Initialization
+To initialize continuous 3D water saturation in the static geological cellular model above the Free Water Level ($FWL = {{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$), log-derived $S_w$ was reconciled with capillary pressure ($P_c$) curves via the Leverett $J$-Function:
+
+$$h = TVD_{ss}(FWL) - TVD_{ss}, \quad P_c = \Delta\rho \cdot g \cdot h \cdot C, \quad J(S_w) = \frac{0.2166 \cdot P_c}{\sigma \cos\theta} \sqrt{\frac{K}{\phi}}, \quad S_{w,SHF} = a_J \cdot J^{b_J}$$
+
+* **Interfacial Tension & Wettability:** $\sigma \cos\theta = {{ "%.1f"|format(shf_params.ift_cos_theta) }}\text{ dynes/cm}$ ($\sigma = {{ shf_params.ift }}\text{ dynes/cm}$, $\theta = {{ shf_params.theta }}^\circ$).
+* **Fluid Density Gradient:** $\rho_w = {{ shf_params.gw }}\text{ g/cc}$, $\rho_{hc} = {{ shf_params.ghc }}\text{ g/cc}$ ($\Delta\rho = {{ "%.2f"|format(shf_params.gw - shf_params.ghc) }}\text{ g/cc}$).
+* **Log $S_w$ vs. $SHF$ Reconciliation:** Mean RMSE $= {{ "%.3f"|format(shf_params.reconciliation_rmse) }}\text{ v/v}$, Mean Bias ($S_w - SHF$) $= {{ "%+.3f"|format(shf_params.reconciliation_bias) }}\text{ v/v}$.
+
+### 7.2 Dynamic Simulation Relative Permeability ($K_{rw}, K_{ro}$) Parameterization
+$$S_e = \frac{S_w - S_{wc}}{1 - S_{wc} - S_{or}}, \quad K_{rw}(S_w) = K_{rw}^0 \cdot (S_e)^{N_w}, \quad K_{ro}(S_w) = K_{ro}^0 \cdot (1 - S_e)^{N_o}$$
+
+| Parameter | Symbol | Value | Unit | Dynamic Simulation Role |
+| :--- | :---: | :---: | :---: | :--- |
+| Connate Water Saturation | $S_{wc}$ | {{ "%.2f"|format(scal_params.swirr) }} | $\text{v/v}$ | Immobile Water Endpoint |
+| Residual Oil Saturation | $S_{or}$ | {{ "%.2f"|format(scal_params.sor) }} | $\text{v/v}$ | Waterflood Residual Hydrocarbon |
+| Max Water RelPerm | $K_{rw}^0$ | {{ "%.2f"|format(scal_params.krw_max) }} | $\text{frac}$ | Endpoint @ $S_w = 1 - S_{or}$ |
+| Max Oil RelPerm | $K_{ro}^0$ | {{ "%.2f"|format(scal_params.kro_max) }} | $\text{frac}$ | Endpoint @ $S_w = S_{wc}$ |
+| Corey Water / Oil Exponents | $N_w$ / $N_o$ | {{ "%.1f"|format(scal_params.nw) }} / {{ "%.1f"|format(scal_params.no) }} | unitless | Relative Permeability Curvature |
+
+{% if include_ai_commentary and ai_commentary.shf_scal_narrative %}
+{{ ai_commentary.shf_scal_narrative }}
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+{% if assets.shf_scal_plot %}
+![Figure 7.1: Capillary Pressure Leverett J-Function by Rock Type & SCAL Relative Permeability Curves]({{ assets.shf_scal_plot }})
+{% endif %}
+
