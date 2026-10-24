@@ -237,6 +237,29 @@
 			}
 
 			if (
+				workbench.crossplotTemplateOverride === 'vsh-qc' &&
+				wellData.vshComparison.rows.length > 0
+			) {
+				const vc = wellData.vshComparison;
+				return {
+					title: `Vshale Calibration (VSH_GR × VSH_DN) Depth Error Comparison (n=${vc.active.count} | RMSE=${vc.active.rmse ?? '—'}, Bias=${vc.active.bias !== null ? `${vc.active.bias >= 0 ? '+' : ''}${vc.active.bias}` : '—'}, R²=${vc.active.r2 ?? '—'})`,
+					columns: [
+						{ key: 'DEPTH', label: 'Depth', unit: 'm', numeric: true, decimals: 2 },
+						{ key: 'ZONE', label: 'Zone' },
+						{ key: 'REGIME_LABEL', label: 'Regime' },
+						{ key: 'GR', label: 'GR', unit: 'gAPI', numeric: true, decimals: 1 },
+						{ key: 'VSH_DN', label: 'VSH_DN', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'VSH_GR', label: 'VSH_GR', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'ERR_VSH', label: 'ΔVsh (GR−DN)', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'ABS_ERR_VSH', label: '|ΔVsh|', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'NPHI', label: 'NPHI', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'RHOB', label: 'RHOB', unit: 'g/cc', numeric: true, decimals: 3 }
+					],
+					rows: vc.rows
+				};
+			}
+
+			if (
 				wellData.coreComparison.rows.length > 0 &&
 				(workbench.crossplotTemplateOverride === 'core-qc' ||
 					(workbench.scope === 'single-well' &&

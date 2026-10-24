@@ -11,6 +11,7 @@
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
+	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 
 	let plotEl = $state<HTMLDivElement | null>(null);
 	let PlotlyLib: any = $state(null);
@@ -23,6 +24,7 @@
 	let shfView = $state<'scal_fit' | 'height_profile'>('scal_fit');
 	let shfLogScale = $state<boolean>(false);
 	let showCoreShiftDrawer = $state<boolean>(false);
+	let showVshCalibDrawer = $state<boolean>(false);
 
 	let effectiveMode = $derived.by(() => {
 		if (workbench.crossplotTemplateOverride !== 'auto') {
@@ -1869,6 +1871,364 @@
 			return { traces, layout: baseLayout };
 		}
 
+		if (effectiveMode === 'vsh-qc') {
+			const vc = wellData.vshComparison;
+			const subView = workbench.vshQcView;
+			const lp = workbench.lithoParams;
+			const allRows = vc.rows;
+			const sandRows = allRows.filter((r) => r.REGIME === 'clean_sand');
+			const shaleRows = allRows.filter((r) => r.REGIME === 'clean_shale');
+			const transRows = allRows.filter((r) => r.REGIME === 'transition');
+			const exclRows = allRows.filter((r) => r.REGIME === 'excluded');
+
+			const buildVshParityTraces = (xAxis: string, yAxis: string) => {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '1:1 Parity',
+					x: [0, 1],
+					y: [0, 1],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#0F172A', width: 1.6 }
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '±0.10 v/v',
+					x: [0, 0.9, null, 0.1, 1.0],
+					y: [0.1, 1.0, null, 0.0, 0.9],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#94A348', width: 1.1, dash: 'dash' },
+					hoverinfo: 'skip'
+				});
+
+				if (vc.activeRows.length > 1) {
+					const y0 = vc.active.intercept;
+					const y1 = vc.active.slope + vc.active.intercept;
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Fit (${vc.active.slope.toFixed(2)}x${vc.active.intercept >= 0 ? '+' : ''}${vc.active.intercept.toFixed(2)})`,
+						x: [0, 1],
+						y: [y0, y1],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						line: { color: '#2563EB', width: 1.8, dash: 'dot' }
+					});
+				}
+
+				const groups: Array<{
+					name: string;
+					rows: typeof allRows;
+					color: string;
+					symbol: string;
+					size: number;
+					opacity: number;
+				}> = [
+					{
+						name: 'Silty / Transition',
+						rows: transRows,
+						color: '#64748B',
+						symbol: 'circle',
+						size: 5,
+						opacity: 0.45
+					},
+					{
+						name: 'Excluded (HC/Badhole)',
+						rows: exclRows,
+						color: '#CBD5E1',
+						symbol: 'x',
+						size: 4.5,
+						opacity: 0.45
+					},
+					{
+						name: 'Clean Water Sand',
+						rows: sandRows,
+						color: '#D97706',
+						symbol: 'diamond',
+						size: 6.5,
+						opacity: 0.88
+					},
+					{
+						name: 'Clean Shale',
+						rows: shaleRows,
+						color: '#059669',
+						symbol: 'circle',
+						size: 6.5,
+						opacity: 0.88
+					}
+				];
+
+				for (const g of groups) {
+					if (g.rows.length === 0) continue;
+					traces.push({
+						type: 'scattergl',
+						mode: 'markers',
+						name: g.name,
+						x: g.rows.map((r) => r.VSH_DN),
+						y: g.rows.map((r) => r.VSH_GR),
+						xaxis: xAxis,
+						yaxis: yAxis,
+						customdata: g.rows.map((r) => r.logIndex),
+						text: g.rows.map(
+							(r) =>
+								`Depth: ${fmtNum(r.DEPTH, 2)}m (${r.ZONE}) · ${r.REGIME_LABEL}<br>` +
+								`GR: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}<br>` +
+								`ΔVsh (GR−DN): ${r.ERR_VSH >= 0 ? '+' : ''}${fmtNum(r.ERR_VSH, 3)} v/v`
+						),
+						hovertemplate: '%{text}<extra></extra>',
+						marker: {
+							size: g.size,
+							symbol: g.symbol,
+							color: g.color,
+							opacity: g.opacity
+						}
+					});
+				}
+			};
+
+			const buildGrCalibrationTraces = (xAxis: string, yAxis: string) => {
+				const maxGr = Math.max(
+					180,
+					lp.grClay + 25,
+					...(allRows.length > 0 ? allRows.map((r) => r.GR) : [150])
+				);
+
+				for (const [name, subset, col, sym, sz, op] of [
+					['Silty / Transition', transRows, '#64748B', 'circle', 5, 0.45],
+					['Excluded (HC/Badhole)', exclRows, '#CBD5E1', 'x', 4.5, 0.4],
+					['Clean Water Sand', sandRows, '#D97706', 'diamond', 6.5, 0.88],
+					['Clean Shale', shaleRows, '#059669', 'circle', 6.5, 0.88]
+				] as const) {
+					if (subset.length === 0) continue;
+					traces.push({
+						type: 'scattergl',
+						mode: 'markers',
+						name,
+						x: subset.map((r) => r.GR),
+						y: subset.map((r) => r.VSH_DN),
+						xaxis: xAxis,
+						yaxis: yAxis,
+						customdata: subset.map((r) => r.logIndex),
+						text: subset.map(
+							(r) =>
+								`Depth: ${fmtNum(r.DEPTH, 2)}m (${r.ZONE}) · ${r.REGIME_LABEL}<br>` +
+								`GR: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}`
+						),
+						hovertemplate: '%{text}<extra></extra>',
+						marker: { size: sz, symbol: sym, color: col, opacity: op }
+					});
+				}
+
+				// Interactive Linear Calibration Line: (0,0) -> (grClean,0) -> (grClay,1) -> (maxGr,1)
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'VSH_GR Calibration Line',
+					x: [0, lp.grClean, lp.grClay, maxGr],
+					y: [0, 0, 1, 1],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#2563EB', width: 2.4 }
+				});
+
+				traces.push({
+					type: 'scatter',
+					mode: 'markers+text',
+					name: 'GR Endpoints',
+					x: [lp.grClean, lp.grClay],
+					y: [0, 1],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					text: [`GR Clean (${lp.grClean.toFixed(0)})`, `GR Shale (${lp.grClay.toFixed(0)})`],
+					textposition: ['top right', 'bottom left'],
+					textfont: { family: 'Inter', size: 10, color: '#1E3A8A' },
+					marker: {
+						size: 9.5,
+						symbol: 'diamond',
+						color: ['#D97706', '#059669'],
+						line: { color: '#FFFFFF', width: 1.5 }
+					}
+				});
+
+				return maxGr;
+			};
+
+			const buildVshDepthOverlayTraces = (xAxis: string, yAxis: string) => {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'VSH_DN (Neutron-Density)',
+					x: allRows.map((r) => r.VSH_DN),
+					y: allRows.map((r) => r.DEPTH),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#0F172A', width: 1.5 },
+					hovertemplate: 'Depth: %{y:.1f}m<br>VSH_DN: %{x:.3f}<extra></extra>'
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'VSH_GR (Calibrated GR)',
+					x: allRows.map((r) => r.VSH_GR),
+					y: allRows.map((r) => r.DEPTH),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					fill: 'tonextx',
+					fillcolor: 'rgba(37, 99, 235, 0.14)',
+					line: { color: '#16A34A', width: 1.5 },
+					hovertemplate: 'Depth: %{y:.1f}m<br>VSH_GR: %{x:.3f}<extra></extra>'
+				});
+			};
+
+			const buildVshDepthResidualTraces = (xAxis: string, yAxis: string) => {
+				const activePts = vc.activeRows;
+				if (allRows.length > 0) {
+					const minD = Math.min(...allRows.map((r) => r.DEPTH));
+					const maxD = Math.max(...allRows.map((r) => r.DEPTH));
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Zero Error',
+						showlegend: false,
+						x: [0, 0],
+						y: [minD, maxD],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						hoverinfo: 'skip',
+						line: { color: '#0F172A', width: 1.3 }
+					});
+					if (vc.active.rmse !== null) {
+						const rm = vc.active.rmse;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `±RMSE (±${fmtNum(rm, 3)})`,
+							x: [rm, rm, null, -rm, -rm],
+							y: [minD, maxD, null, minD, maxD],
+							xaxis: xAxis,
+							yaxis: yAxis,
+							hoverinfo: 'skip',
+							line: { color: '#DC2626', width: 1.1, dash: 'dash' }
+						});
+					}
+				}
+				traces.push({
+					type: 'scattergl',
+					mode: 'lines',
+					name: 'ΔVsh Profile',
+					showlegend: false,
+					x: allRows.map((r) => r.ERR_VSH),
+					y: allRows.map((r) => r.DEPTH),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					hoverinfo: 'skip',
+					line: { color: 'rgba(100, 116, 139, 0.45)', width: 1.1 }
+				});
+				traces.push({
+					type: 'scattergl',
+					mode: 'markers',
+					name: 'ΔVsh (VSH_GR − VSH_DN)',
+					x: activePts.map((r) => r.ERR_VSH),
+					y: activePts.map((r) => r.DEPTH),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: activePts.map((r) => r.logIndex),
+					text: activePts.map(
+						(r) =>
+							`Depth: ${fmtNum(r.DEPTH, 2)}m (${r.ZONE}) · ${r.REGIME_LABEL}<br>` +
+							`VSH_GR: ${fmtNum(r.VSH_GR, 3)} | VSH_DN: ${fmtNum(r.VSH_DN, 3)}<br>` +
+							`ΔVsh: ${r.ERR_VSH >= 0 ? '+' : ''}${fmtNum(r.ERR_VSH, 3)} v/v`
+					),
+					hovertemplate: '%{text}<extra></extra>',
+					marker: {
+						size: 5.5,
+						color: activePts.map((r) =>
+							r.ABS_ERR_VSH <= 0.05 ? '#16A34A' : r.ABS_ERR_VSH <= 0.1 ? '#D97706' : '#DC2626'
+						)
+					}
+				});
+			};
+
+			if (subView === 'dual') {
+				buildVshParityTraces('x', 'y');
+				buildVshDepthOverlayTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.47];
+				baseLayout.xaxis.range = [-0.03, 1.03];
+				baseLayout.xaxis.title = { text: 'VSH_DN (Density-Neutron, v/v)' };
+				baseLayout.yaxis.range = [-0.03, 1.03];
+				baseLayout.yaxis.title = { text: 'VSH_GR (Gamma Ray, v/v)' };
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.57, 1.0],
+					anchor: 'y2',
+					range: [0, 1],
+					title: { text: 'VSH_DN vs. VSH_GR (v/v)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					range: undefined,
+					autorange: 'reversed',
+					title: { text: 'Depth (m)' }
+				};
+			} else if (subView === 'gr-fit') {
+				const maxGr = buildGrCalibrationTraces('x', 'y');
+				buildVshParityTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.47];
+				baseLayout.xaxis.range = [0, Number((maxGr * 1.05).toFixed(0))];
+				baseLayout.xaxis.title = { text: 'Gamma Ray GR (gAPI)' };
+				baseLayout.yaxis.range = [-0.03, 1.05];
+				baseLayout.yaxis.title = { text: 'VSH_DN & Calibration Curve (v/v)' };
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.57, 1.0],
+					anchor: 'y2',
+					range: [-0.03, 1.03],
+					title: { text: 'VSH_DN (v/v)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					range: [-0.03, 1.03],
+					title: { text: 'VSH_GR (v/v)' }
+				};
+			} else {
+				buildVshDepthOverlayTraces('x', 'y');
+				buildVshDepthResidualTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.46];
+				baseLayout.xaxis.range = [0, 1];
+				baseLayout.xaxis.title = { text: 'VSH_DN vs. VSH_GR (v/v)' };
+				baseLayout.yaxis.autorange = 'reversed';
+				baseLayout.yaxis.title = { text: 'Depth (m)' };
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.56, 1.0],
+					anchor: 'y2',
+					range: [-0.45, 0.45],
+					zeroline: true,
+					zerolinecolor: '#0F172A',
+					title: { text: 'ΔVsh = VSH_GR − VSH_DN (v/v)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					autorange: 'reversed',
+					title: { text: 'Depth (m)' }
+				};
+			}
+
+			return { traces, layout: baseLayout };
+		}
+
 		if (effectiveMode === 'relperm') {
 			const sr = workbench.scalResult;
 			const sp = workbench.scalParams;
@@ -1941,6 +2301,13 @@
 		void workbench.selectedQaqcCurve;
 		void wellData.coreComparison;
 		void workbench.coreQcView;
+		void wellData.vshComparison;
+		void workbench.vshQcView;
+		void workbench.vshCalibScope;
+		void workbench.vshShaleCutoff;
+		void workbench.vshSandCutoff;
+		void workbench.lithoParams.grClean;
+		void workbench.lithoParams.grClay;
 		void workbench.lithoParams.model;
 		void workbench.lithoParams.minerals;
 		void workbench.lithoParams.drySandNphi;
@@ -2016,7 +2383,10 @@
 				(plotEl as any).on('plotly_click', (ev: any) => {
 					if (!activeEndpointKey) {
 						const pt = ev?.points?.[0];
-						if (effectiveMode === 'core-qc' && typeof pt?.customdata === 'number') {
+						if (
+							(effectiveMode === 'core-qc' || effectiveMode === 'vsh-qc') &&
+							typeof pt?.customdata === 'number'
+						) {
 							const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 							const d = dept[pt.customdata];
 							if (Number.isFinite(d)) workbench.scrollToDepth(d);
@@ -2087,6 +2457,7 @@
 				<option value="auto">Auto ({effectiveMode.toUpperCase()})</option>
 				<option value="mw-distribution">Multi-Well Distribution (QAQC)</option>
 				<option value="nphi-rhob">NPHI vs. RHOB (SSC)</option>
+				<option value="vsh-qc">Vsh Calibration (VSH_GR × VSH_DN)</option>
 				<option value="thomas-stieber">Thomas-Stieber (Vsh vs. Φ)</option>
 				<option value="phi-k">Porosity vs. Perm (FZI)</option>
 				<option value="core-qc">Core Parity &amp; Error (Φ &amp; K)</option>
@@ -2159,6 +2530,36 @@
 					</button>
 				{/each}
 			</div>
+		{:else if effectiveMode === 'vsh-qc'}
+			<div class="flex items-center gap-1">
+				{#each [
+					['dual', 'Dual', 'VSH_GR × VSH_DN Parity Crossplot + GR Calibration Curve Fit'],
+					['gr-fit', 'GR Fit', 'GR vs. VSH_DN Calibration Curve + ΔVsh vs. Depth'],
+					['depth-error', 'Depth Err', 'VSH_GR vs. VSH_DN Overlay + ΔVsh Residual Track']
+				] as [vKey, vLbl, vTip]}
+					<button
+						type="button"
+						title={vTip}
+						onclick={() => (workbench.vshQcView = vKey as any)}
+						class="h-5 shrink-0 whitespace-nowrap rounded-xs border px-1.5 text-[10px] font-medium transition-colors {workbench.vshQcView ===
+						vKey
+							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{vLbl}
+					</button>
+				{/each}
+				<button
+					type="button"
+					title="Open GRClean / GRClay Calibration Drawer"
+					onclick={() => (showVshCalibDrawer = !showVshCalibDrawer)}
+					class="h-5 shrink-0 whitespace-nowrap rounded-xs border px-1.5 text-[10px] font-semibold transition-colors {showVshCalibDrawer
+						? 'border-emerald-600 bg-emerald-50 text-emerald-900'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-slate-100'}"
+				>
+					Calibrate GR ({fmtNum(workbench.lithoParams.grClean, 0)}–{fmtNum(workbench.lithoParams.grClay, 0)})
+				</button>
+			</div>
 		{:else if effectiveMode === 'nphi-rhob'}
 			<div class="flex items-center gap-1">
 				<span class="text-[10px] text-[var(--text-muted)]">Pick Endpoint:</span>
@@ -2175,6 +2576,17 @@
 						{lbl}
 					</button>
 				{/each}
+				<button
+					type="button"
+					title="Open VSH_GR vs. VSH_DN Calibration & Error Plot"
+					onclick={() => {
+						workbench.crossplotTemplateOverride = 'vsh-qc';
+						workbench.vshQcView = 'dual';
+					}}
+					class="h-5 rounded-xs border border-emerald-300 bg-emerald-50 px-1.5 text-[10px] font-semibold text-emerald-800 hover:bg-emerald-100"
+				>
+					Vsh Calib →
+				</button>
 			</div>
 		{:else if effectiveMode === 'thomas-stieber'}
 			<div class="flex items-center gap-1">
@@ -2261,6 +2673,49 @@
 	{#if effectiveMode === 'core-qc' && showCoreShiftDrawer}
 		<div class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2.5 py-1.5">
 			<CoreDepthShiftPanel compact={true} />
+		</div>
+	{/if}
+
+	{#if effectiveMode === 'vsh-qc'}
+		{@const vc = wellData.vshComparison}
+		<div
+			class="grid shrink-0 grid-cols-2 gap-2 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
+		>
+			<div class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5">
+				<span class="font-semibold text-slate-800">
+					VSH_GR × VSH_DN <span class="mono-num text-[var(--text-muted)]">(n={vc.active.count})</span>
+				</span>
+				<div class="mono-num flex items-center gap-2 text-[10px]">
+					<span>RMSE: <strong>{fmtNum(vc.active.rmse, 3)}</strong></span>
+					<span>MAE: <strong>{fmtNum(vc.active.mae, 3)}</strong></span>
+					<span>
+						Bias: <strong class={vc.active.bias !== null && Math.abs(vc.active.bias) > 0.03 ? 'text-amber-700' : 'text-slate-900'}>
+							{vc.active.bias !== null && vc.active.bias >= 0 ? '+' : ''}{fmtNum(vc.active.bias, 3)}
+						</strong>
+					</span>
+					<span>±0.10: <strong>{fmtNum(vc.active.within_10pu_pct, 0)}%</strong></span>
+					<span>R²: <strong class="text-emerald-700">{fmtNum(vc.active.r2, 3)}</strong></span>
+				</div>
+			</div>
+			<div class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5">
+				<span class="font-semibold text-slate-800">
+					Calibration Regimes
+				</span>
+				<div class="mono-num flex items-center gap-2.5 text-[10px]">
+					<span class="text-amber-900">
+						Water Sand (n={vc.sand.count}): <strong>{vc.sand.bias !== null ? `${vc.sand.bias >= 0 ? '+' : ''}${fmtNum(vc.sand.bias, 3)}` : '—'}</strong>
+					</span>
+					<span class="text-emerald-900">
+						Clean Shale (n={vc.shale.count}): <strong>{vc.shale.bias !== null ? `${vc.shale.bias >= 0 ? '+' : ''}${fmtNum(vc.shale.bias, 3)}` : '—'}</strong>
+					</span>
+				</div>
+			</div>
+		</div>
+	{/if}
+
+	{#if effectiveMode === 'vsh-qc' && showVshCalibDrawer}
+		<div class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2.5 py-1.5">
+			<VshCalibrationPanel compact={true} />
 		</div>
 	{/if}
 

@@ -4,6 +4,7 @@
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
+	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
@@ -537,6 +538,54 @@
 				onrun={() => executeLithoPoro(false)}
 			/>
 		</ParameterSection>
+
+		{#if wellData.vshComparison.allGood.count > 0}
+			{@const vStat = wellData.vshComparison.active}
+			<ParameterSection
+				title="Vshale Calibration (VSH_GR × VSH_DN)"
+				badge={vStat.rmse !== null ? `RMSE=${fmtNum(vStat.rmse, 3)} · n=${vStat.count}` : `n=${vStat.count}`}
+			>
+				<div class="grid grid-cols-4 gap-1 text-center">
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">RMSE</div>
+						<div class="mono-num text-[11px] font-bold text-[var(--text-primary)]">
+							{fmtNum(vStat.rmse, 3)}
+						</div>
+					</div>
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">MAE</div>
+						<div class="mono-num text-[11px] font-bold text-[var(--text-primary)]">
+							{fmtNum(vStat.mae, 3)}
+						</div>
+					</div>
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Bias</div>
+						<div class="mono-num text-[11px] font-bold {vStat.bias !== null && Math.abs(vStat.bias) > 0.03 ? 'text-amber-700' : 'text-[var(--text-primary)]'}">
+							{vStat.bias !== null && vStat.bias >= 0 ? '+' : ''}{fmtNum(vStat.bias, 3)}
+						</div>
+					</div>
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">R²</div>
+						<div class="mono-num text-[11px] font-bold text-[var(--status-ok)]">
+							{fmtNum(vStat.r2, 3)}
+						</div>
+					</div>
+				</div>
+				<button
+					type="button"
+					onclick={() => {
+						workbench.crossplotTemplateOverride = 'vsh-qc';
+						workbench.vshQcView = 'dual';
+					}}
+					class="mt-1.5 h-6 w-full rounded-xs border border-emerald-200 bg-emerald-50/80 px-2 text-[10.5px] font-semibold text-emerald-800 hover:bg-emerald-100"
+				>
+					Open VSH_GR × VSH_DN Calibration &amp; Error Plot →
+				</button>
+				<div class="mt-2">
+					<VshCalibrationPanel onapply={() => executeLithoPoro(false)} />
+				</div>
+			</ParameterSection>
+		{/if}
 
 		<ParameterSection title="Hydrocarbon Correction">
 			<label class="flex items-center gap-2 py-0.5 text-xs font-medium cursor-pointer">

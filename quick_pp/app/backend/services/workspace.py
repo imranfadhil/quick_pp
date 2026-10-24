@@ -1331,6 +1331,7 @@ def workspace_lithology(
             out_df["VSAND"] = vsand_s
             out_df["VSILT"] = vsilt_s
             out_df["VCLAY"] = vclay_s
+            out_df["VSH_DN"] = vclay_s
             out_df["PROJ_NPHI"] = px_s
             out_df["PROJ_RHOB"] = py_s
             if (
@@ -1396,7 +1397,9 @@ def workspace_lithology(
                     zero_s = pd.Series(np.nan, index=df.index, dtype=float)
                     zero_s.loc[valid_mask] = 0.0
                     out_df[mcol] = zero_s
-            save_cols = list(ALL_LITHOLOGY_VOL_COLS)
+            save_cols = list(ALL_LITHOLOGY_VOL_COLS) + [
+                c for c in ("VSH_GR", "VSH_DN") if c in out_df.columns
+            ]
 
             crossplot_meta = {
                 "dry_sand_point": list(ssc_model.dry_sand_point),

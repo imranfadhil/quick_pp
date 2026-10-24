@@ -461,6 +461,270 @@ class WellDataState {
 		};
 	});
 
+	vshComparison = $derived.by(() => {
+		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		const grArr = this.curves['GR'] ?? [];
+		const lp = workbench.lithoParams;
+		const useHc = lp.enableHcCorrection || lp.useHcCorrected;
+		const nphiArr =
+			useHc && this.curves['NPHI_HC'] && this.curves['NPHI_HC'].some((v) => Number.isFinite(v))
+				? this.curves['NPHI_HC']
+				: (this.curves['NPHI'] ?? []);
+		const rhobArr =
+			useHc && this.curves['RHOB_HC'] && this.curves['RHOB_HC'].some((v) => Number.isFinite(v))
+				? this.curves['RHOB_HC']
+				: (this.curves['RHOB'] ?? []);
+		const badholeArr =
+			this.curves['BADHOLE'] ?? this.curves['BAD_HOLE'] ?? this.curves['BAD_HOLE_FLAG'] ?? [];
+		const coalArr = this.curves['VCOAL'] ?? this.curves['COAL_FLAG'] ?? [];
+		const hcFlagArr = this.curves['HC_FLAG'] ?? [];
+		const swArr = this.curves['SWT'] ?? this.curves['SWE'] ?? [];
+		const sortedTops = [...this.tops].sort((a, b) => a.depth - b.depth);
+		const indices = this.visibleIndices;
+		const brushed = workbench.brushedDepthIndices;
+
+		const resolveZone = (idx: number, d: number): string => {
+			const zCol = this.zonesColumn[idx];
+			if (zCol) return zCol;
+			for (let t = sortedTops.length - 1; t >= 0; t--) {
+				if (d >= sortedTops[t].depth) return sortedTops[t].name;
+			}
+			return 'ALL';
+		};
+
+		const A: [number, number] = [lp.drySandNphi, lp.drySandRhob];
+		const B: [number, number] = [lp.drySiltNphi, lp.drySiltRhob];
+		const C: [number, number] = [lp.dryClayNphi, lp.dryClayRhob];
+		const D: [number, number] = [lp.fluidNphi, lp.fluidRhob];
+
+		const rockLen = Math.max(1e-6, Math.hypot(A[0] - C[0], A[1] - C[1]));
+		const resLen = Math.max(1e-6, Math.hypot(A[0] - B[0], A[1] - B[1]));
+		const resRatio = Math.max(0.05, Math.min(0.95, resLen / rockLen));
+		const nonResLen = Math.max(1e-6, rockLen * (1 - resRatio));
+		const siltClayRatio = 0.25;
+
+		const grClean = lp.grClean;
+		const grClay = lp.grClay;
+		const grSpan = Math.abs(grClay - grClean) > 1e-4 ? grClay - grClean : 100.0;
+		const shaleCut = workbench.vshShaleCutoff;
+		const sandCut = workbench.vshSandCutoff;
+		const hasHcCorrectedCurves = Boolean(
+			useHc &&
+				this.curves['NPHI_HC'] &&
+				this.curves['NPHI_HC'].some((v) => Number.isFinite(v)) &&
+				this.curves['RHOB_HC'] &&
+				this.curves['RHOB_HC'].some((v) => Number.isFinite(v))
+		);
+
+		const rows: Array<{
+			DEPTH: number;
+			ZONE: string;
+			GR: number;
+			NPHI: number;
+			RHOB: number;
+			VSH_DN: number;
+			VSH_GR: number;
+			ERR_VSH: number;
+			ABS_ERR_VSH: number;
+			REGIME: 'clean_shale' | 'clean_sand' | 'transition' | 'excluded';
+			REGIME_LABEL: string;
+			logIndex: number;
+		}> = [];
+
+		for (const idx of indices) {
+			const d = dept[idx];
+			const gr = grArr[idx];
+			const nphi = nphiArr[idx];
+			const rhob = rhobArr[idx];
+			if (
+				!Number.isFinite(d) ||
+				!Number.isFinite(gr) ||
+				!Number.isFinite(nphi) ||
+				!Number.isFinite(rhob)
+			) {
+				continue;
+			}
+
+			// Compute VSH_DN anchored at C (dry clay point) along rock line C -> B -> A
+			const xdiff0 = A[0] - C[0];
+			const xdiff1 = D[0] - nphi;
+			const ydiff0 = A[1] - C[1];
+			const ydiff1 = D[1] - rhob;
+			const div = xdiff0 * ydiff1 - xdiff1 * ydiff0;
+			if (Math.abs(div) < 1e-12) continue;
+
+			const d0 = A[0] * C[1] - A[1] * C[0];
+			const d1 = D[0] * rhob - D[1] * nphi;
+			const varX = (d0 * xdiff1 - d1 * xdiff0) / div;
+			const varY = (d0 * ydiff1 - d1 * ydiff0) / div;
+			const sign = varY > C[1] ? -1.0 : 1.0;
+			const projLen = sign * Math.hypot(varX - C[0], varY - C[1]);
+			const projClamped = Math.max(0.0, Math.min(rockLen, projLen));
+			const ptRatio = projClamped / rockLen;
+
+			const vshDnRaw =
+				ptRatio >= 1.0 - resRatio
+					? (-(1.0 - siltClayRatio) / resLen) * projClamped +
+						(rockLen * (1.0 - siltClayRatio)) / resLen
+					: (-siltClayRatio / nonResLen) * projClamped + 1.0;
+			const vshDn = Number(Math.max(0.0, Math.min(1.0, vshDnRaw)).toFixed(4));
+			const vshGr = Number(
+				Math.max(0.0, Math.min(1.0, (gr - grClean) / grSpan)).toFixed(4)
+			);
+			const errVsh = Number((vshGr - vshDn).toFixed(4));
+			const absErr = Number(Math.abs(errVsh).toFixed(4));
+
+			const isBadhole = Number.isFinite(badholeArr[idx]) && badholeArr[idx] >= 0.5;
+			const isCoal =
+				(Number.isFinite(coalArr[idx]) && coalArr[idx] >= 0.5) ||
+				(lp.enableCoalFlagging && rhob <= lp.coalRhobMax && nphi >= lp.coalNphiMin);
+			const isHcUncompensated =
+				!hasHcCorrectedCurves &&
+				((Number.isFinite(hcFlagArr[idx]) && hcFlagArr[idx] >= 0.5) ||
+					(Number.isFinite(swArr[idx]) && swArr[idx] < 0.65) ||
+					(nphi < 0.02 && rhob < 2.3));
+
+			let regime: 'clean_shale' | 'clean_sand' | 'transition' | 'excluded';
+			let regimeLabel: string;
+			if (isBadhole || isCoal) {
+				regime = 'excluded';
+				regimeLabel = isCoal ? 'Coal (Excluded)' : 'Badhole (Excluded)';
+			} else if (vshDn >= shaleCut) {
+				regime = 'clean_shale';
+				regimeLabel = 'Clean Shale';
+			} else if (vshDn <= sandCut) {
+				if (isHcUncompensated) {
+					regime = 'excluded';
+					regimeLabel = 'HC Sand (Excluded)';
+				} else {
+					regime = 'clean_sand';
+					regimeLabel = 'Clean Water Sand';
+				}
+			} else {
+				regime = 'transition';
+				regimeLabel = 'Silty / Transition';
+			}
+
+			rows.push({
+				DEPTH: Number(d.toFixed(2)),
+				ZONE: resolveZone(idx, d),
+				GR: Number(gr.toFixed(2)),
+				NPHI: Number(nphi.toFixed(4)),
+				RHOB: Number(rhob.toFixed(4)),
+				VSH_DN: vshDn,
+				VSH_GR: vshGr,
+				ERR_VSH: errVsh,
+				ABS_ERR_VSH: absErr,
+				REGIME: regime,
+				REGIME_LABEL: regimeLabel,
+				logIndex: idx
+			});
+		}
+
+		const computeRegimeStats = (subset: typeof rows) => {
+			const n = subset.length;
+			const st = {
+				count: n,
+				mean_gr: null as number | null,
+				mean_vsh_dn: null as number | null,
+				mean_vsh_gr: null as number | null,
+				rmse: null as number | null,
+				mae: null as number | null,
+				bias: null as number | null,
+				r2: null as number | null,
+				pearson_r: null as number | null,
+				within_10pu_pct: null as number | null,
+				slope: 1.0,
+				intercept: 0.0
+			};
+			if (n === 0) return st;
+
+			let sumGr = 0;
+			let sumDn = 0;
+			let sumGrVsh = 0;
+			let sqSum = 0;
+			let absSum = 0;
+			let biasSum = 0;
+			let within10 = 0;
+
+			for (const r of subset) {
+				sumGr += r.GR;
+				sumDn += r.VSH_DN;
+				sumGrVsh += r.VSH_GR;
+				sqSum += r.ERR_VSH * r.ERR_VSH;
+				absSum += r.ABS_ERR_VSH;
+				biasSum += r.ERR_VSH;
+				if (r.ABS_ERR_VSH <= 0.1) within10++;
+			}
+
+			const meanDn = sumDn / n;
+			const meanGrVsh = sumGrVsh / n;
+			st.mean_gr = Number((sumGr / n).toFixed(1));
+			st.mean_vsh_dn = Number(meanDn.toFixed(3));
+			st.mean_vsh_gr = Number(meanGrVsh.toFixed(3));
+			st.rmse = Number(Math.sqrt(sqSum / n).toFixed(4));
+			st.mae = Number((absSum / n).toFixed(4));
+			st.bias = Number((biasSum / n).toFixed(4));
+			st.within_10pu_pct = Number(((within10 / n) * 100).toFixed(1));
+
+			if (n > 1) {
+				let ssTot = 0;
+				let cov = 0;
+				let varX = 0;
+				let varY = 0;
+				for (const r of subset) {
+					const dx = r.VSH_DN - meanDn;
+					const dy = r.VSH_GR - meanGrVsh;
+					ssTot += dx * dx;
+					cov += dx * dy;
+					varX += dx * dx;
+					varY += dy * dy;
+				}
+				if (ssTot > 1e-12) {
+					st.r2 = Number((1 - sqSum / ssTot).toFixed(3));
+				}
+				if (varX > 1e-12) {
+					st.slope = Number((cov / varX).toFixed(3));
+					st.intercept = Number((meanGrVsh - (cov / varX) * meanDn).toFixed(3));
+				}
+				if (varX > 1e-12 && varY > 1e-12) {
+					st.pearson_r = Number((cov / Math.sqrt(varX * varY)).toFixed(3));
+				}
+			}
+			return st;
+		};
+
+		const shaleRows = rows.filter((r) => r.REGIME === 'clean_shale');
+		const sandRows = rows.filter((r) => r.REGIME === 'clean_sand');
+		const goodHoleRows = rows.filter((r) => r.REGIME !== 'excluded');
+		const brushedRows =
+			brushed.size > 0 ? rows.filter((r) => brushed.has(r.logIndex)) : [];
+
+		let activeRows: typeof rows;
+		const scope = workbench.vshCalibScope;
+		if (scope === 'brushed' && brushedRows.length > 0) {
+			activeRows = brushedRows;
+		} else if (scope === 'shale_only') {
+			activeRows = shaleRows.length > 0 ? shaleRows : goodHoleRows;
+		} else if (scope === 'shale_sand') {
+			const combined = rows.filter(
+				(r) => r.REGIME === 'clean_shale' || r.REGIME === 'clean_sand'
+			);
+			activeRows = combined.length > 0 ? combined : goodHoleRows;
+		} else {
+			activeRows = goodHoleRows;
+		}
+
+		return {
+			rows,
+			activeRows,
+			active: computeRegimeStats(activeRows),
+			shale: computeRegimeStats(shaleRows),
+			sand: computeRegimeStats(sandRows),
+			allGood: computeRegimeStats(goodHoleRows)
+		};
+	});
+
 	private getLocalStorageFocusKey(projectId: string | number, wellName: string): string {
 		return `qpp_well_focus_${projectId}_${wellName}`;
 	}
@@ -1762,6 +2026,187 @@ class WellDataState {
 		} finally {
 			this.isCalculating = false;
 		}
+	}
+
+	/**
+	 * Immediately update VSH_GR and VSH_DN in `this.curves` in-memory as the user scrubs
+	 * `grClean` / `grClay` so LogTrackCanvas and CrossplotCanvas update at 60fps.
+	 */
+	applyLiveVshGr() {
+		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		const grArr = this.curves['GR'] ?? [];
+		if (dept.length === 0 || grArr.length === 0) return;
+
+		const lp = workbench.lithoParams;
+		const span = Math.abs(lp.grClay - lp.grClean) > 1e-4 ? lp.grClay - lp.grClean : 100.0;
+		const vshGrArr = grArr.map((g) =>
+			Number.isFinite(g) ? Math.max(0.0, Math.min(1.0, (g - lp.grClean) / span)) : Number.NaN
+		);
+
+		const vshDnArr = this.curves['VSH_DN']
+			? [...this.curves['VSH_DN']]
+			: new Array(dept.length).fill(Number.NaN);
+		for (const r of this.vshComparison.rows) {
+			vshDnArr[r.logIndex] = r.VSH_DN;
+		}
+
+		this.curves = {
+			...this.curves,
+			VSH_GR: vshGrArr,
+			VSH_DN: vshDnArr
+		};
+		this.markModuleComputed('litho-poro', ['VSH_GR', 'VSH_DN']);
+	}
+
+	/**
+	 * Auto-calibrate `grClean` (GR_min) and `grClay` (GR_max) so `VSH_GR` matches `VSH_DN`
+	 * in the clean shale interval and (if available & selected) the clean water-bearing sand interval.
+	 */
+	autoCalibrateVshGr(overrideScope?: 'shale_sand' | 'shale_only' | 'all' | 'brushed') {
+		const scope = overrideScope ?? workbench.vshCalibScope;
+		const vc = this.vshComparison;
+		const shaleRows = vc.rows.filter((r) => r.REGIME === 'clean_shale');
+		const sandRows = vc.rows.filter((r) => r.REGIME === 'clean_sand');
+		const goodRows = vc.rows.filter((r) => r.REGIME !== 'excluded');
+		const brushed = workbench.brushedDepthIndices;
+		const brushedRows = brushed.size > 0 ? vc.rows.filter((r) => brushed.has(r.logIndex)) : [];
+
+		if (goodRows.length < 3) {
+			appStatus.info('Not enough valid GR & NPHI-RHOB points to calibrate', workbench.wellId ?? undefined);
+			return;
+		}
+
+		const evalSubsetMse = (
+			pts: typeof vc.rows,
+			candClean: number,
+			candClay: number
+		): number => {
+			if (pts.length === 0) return 0;
+			const span = candClay - candClean;
+			if (span <= 10.0) return Infinity;
+			let sq = 0;
+			for (const p of pts) {
+				const vgr = Math.max(0.0, Math.min(1.0, (p.GR - candClean) / span));
+				const diff = vgr - p.VSH_DN;
+				sq += diff * diff;
+			}
+			return sq / pts.length;
+		};
+
+		let bestClean = workbench.lithoParams.grClean;
+		let bestClay = workbench.lithoParams.grClay;
+
+		if (scope === 'shale_only' || (scope === 'shale_sand' && sandRows.length < 3)) {
+			// Calibrate GR_clay on Clean Shale while holding GR_clean anchored
+			const targetShale = shaleRows.length >= 3 ? shaleRows : goodRows;
+			const meanGrSh = targetShale.reduce((a, r) => a + r.GR, 0) / targetShale.length;
+			const meanDnSh = Math.max(
+				0.25,
+				targetShale.reduce((a, r) => a + r.VSH_DN, 0) / targetShale.length
+			);
+			const seedClay = bestClean + (meanGrSh - bestClean) / meanDnSh;
+			let bestScore = Infinity;
+
+			const minClay = Math.max(bestClean + 20, Math.min(240, seedClay - 45));
+			const maxClay = Math.max(minClay + 10, Math.min(250, seedClay + 45));
+			for (let cClay = minClay; cClay <= maxClay + 1e-6; cClay += 0.25) {
+				const mse = evalSubsetMse(targetShale, bestClean, cClay);
+				if (mse < bestScore) {
+					bestScore = mse;
+					bestClay = cClay;
+				}
+			}
+			bestClay = Math.round(bestClay * 2) / 2;
+		} else if (scope === 'shale_sand' && shaleRows.length >= 3 && sandRows.length >= 3) {
+			// Simultaneous 2-anchor calibration on Clean Water-Bearing Sand + Clean Shale
+			const meanGrSd = sandRows.reduce((a, r) => a + r.GR, 0) / sandRows.length;
+			const meanDnSd = sandRows.reduce((a, r) => a + r.VSH_DN, 0) / sandRows.length;
+			const meanGrSh = shaleRows.reduce((a, r) => a + r.GR, 0) / shaleRows.length;
+			const meanDnSh = shaleRows.reduce((a, r) => a + r.VSH_DN, 0) / shaleRows.length;
+
+			const dVsh = Math.max(0.2, meanDnSh - meanDnSd);
+			const slope = Math.max(25.0, (meanGrSh - meanGrSd) / dVsh);
+			const seedClean = Math.max(0.0, Math.min(80.0, meanGrSd - slope * meanDnSd));
+			const seedClay = Math.max(seedClean + 25.0, Math.min(250.0, seedClean + slope));
+
+			let bestScore = Infinity;
+			for (let cClean = Math.max(0, seedClean - 25); cClean <= Math.min(90, seedClean + 25); cClean += 1.0) {
+				for (
+					let cClay = Math.max(cClean + 25, seedClay - 35);
+					cClay <= Math.min(250, seedClay + 35);
+					cClay += 1.0
+				) {
+					const mseShale = evalSubsetMse(shaleRows, cClean, cClay);
+					const mseSand = evalSubsetMse(sandRows, cClean, cClay);
+					// Equal weight between Clean Shale anchor and Clean Water Sand anchor
+					const score = 0.5 * mseShale + 0.5 * mseSand;
+					if (score < bestScore) {
+						bestScore = score;
+						bestClean = cClean;
+						bestClay = cClay;
+					}
+				}
+			}
+			// Fine 0.5 gAPI local refinement
+			const baseClean = bestClean;
+			const baseClay = bestClay;
+			for (let cClean = Math.max(0, baseClean - 2); cClean <= Math.min(90, baseClean + 2); cClean += 0.5) {
+				for (
+					let cClay = Math.max(cClean + 25, baseClay - 2);
+					cClay <= Math.min(250, baseClay + 2);
+					cClay += 0.5
+				) {
+					const score =
+						0.5 * evalSubsetMse(shaleRows, cClean, cClay) +
+						0.5 * evalSubsetMse(sandRows, cClean, cClay);
+					if (score < bestScore) {
+						bestScore = score;
+						bestClean = cClean;
+						bestClay = cClay;
+					}
+				}
+			}
+		} else {
+			// Fit across all good-hole points or brushed selection
+			const targetPts =
+				scope === 'brushed' && brushedRows.length >= 3 ? brushedRows : goodRows;
+			let bestScore = Infinity;
+			for (let cClean = 0; cClean <= 80; cClean += 2.0) {
+				for (let cClay = Math.max(50, cClean + 25); cClay <= 240; cClay += 2.5) {
+					const score = evalSubsetMse(targetPts, cClean, cClay);
+					if (score < bestScore) {
+						bestScore = score;
+						bestClean = cClean;
+						bestClay = cClay;
+					}
+				}
+			}
+			const baseClean = bestClean;
+			const baseClay = bestClay;
+			for (let cClean = Math.max(0, baseClean - 3); cClean <= Math.min(90, baseClean + 3); cClean += 0.5) {
+				for (
+					let cClay = Math.max(cClean + 25, baseClay - 4);
+					cClay <= Math.min(250, baseClay + 4);
+					cClay += 0.5
+				) {
+					const score = evalSubsetMse(targetPts, cClean, cClay);
+					if (score < bestScore) {
+						bestScore = score;
+						bestClean = cClean;
+						bestClay = cClay;
+					}
+				}
+			}
+		}
+
+		workbench.lithoParams.grClean = Number(bestClean.toFixed(1));
+		workbench.lithoParams.grClay = Number(bestClay.toFixed(1));
+		this.applyLiveVshGr();
+
+		appStatus.success(
+			`Calibrated VSH_GR → VSH_DN: GR Clean = ${workbench.lithoParams.grClean.toFixed(1)} gAPI, GR Shale = ${workbench.lithoParams.grClay.toFixed(1)} gAPI (RMSE = ${this.vshComparison.active.rmse ?? '—'})`,
+			workbench.wellId ?? undefined
+		);
 	}
 
 	getReadoutAtDepth(depth: number | null): Record<string, number | null> {

@@ -204,11 +204,16 @@ class WorkbenchState {
 		| 'shf'
 		| 'relperm'
 		| 'core-qc'
+		| 'vsh-qc'
 	>('auto');
 
 	// Active curve selected in QAQC for histogram / multi-well distribution inspection
 	selectedQaqcCurve = $state<string>('GR');
 	coreQcView = $state<'dual' | 'poro' | 'perm' | 'depth-error'>('dual');
+	vshQcView = $state<'dual' | 'gr-fit' | 'depth-error'>('dual');
+	vshCalibScope = $state<'shale_sand' | 'shale_only' | 'all' | 'brushed'>('shale_sand');
+	vshShaleCutoff = $state<number>(0.6);
+	vshSandCutoff = $state<number>(0.2);
 
 	// Multi-well QAQC distribution & visualization controls
 	mwQaqcGroupBy = $state<'well' | 'zone' | 'well_zone'>('well');
@@ -262,7 +267,7 @@ class WorkbenchState {
 		minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'],
 		enableCoalFlagging: true,
 		coalRhobMax: 2.0,
-		coalNphiMin: 0.30,
+		coalNphiMin: 0.3,
 		coalWindowSize: 41,
 		coalTrendFactor: 0.05,
 		badholeTreatment: 'vsh_gr'
@@ -273,7 +278,7 @@ class WorkbenchState {
 		useInPerm: true,
 		useInSaturation: true,
 		drySandPoro: 0.28,
-		dryShalePoro: 0.10,
+		dryShalePoro: 0.1,
 		rsand: 20.0,
 		rvShale: 4.0,
 		rhShale: 1.5,
