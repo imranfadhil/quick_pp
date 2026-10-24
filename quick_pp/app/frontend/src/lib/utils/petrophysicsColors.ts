@@ -52,7 +52,7 @@ export const PETRO_COLORS = {
 	nphi: '#2563EB',
 	pef: '#A855F7',
 	drho: '#D97706',
-	dt: '#9333EA',
+	dt: '#059669',
 	cali: '#475569',
 	sp: '#7C3AED',
 	core: '#0F172A',
@@ -407,6 +407,7 @@ export function getCurveUnit(mnemonic: string): string {
 		return 'v/v';
 	}
 	if (upper.includes('RHOB') || upper.includes('DEN') || upper === 'DRHO') return 'g/cc';
+	if (upper.startsWith('DT') || upper === 'AC') return 'us/ft';
 	if (upper.includes('PERM')) return 'mD';
 	if (upper.startsWith('R') && upper.length <= 5) return 'ohm.m';
 	if (upper.includes('DEPTH') || upper.includes('DEPT') || upper === 'TVD') return 'm';

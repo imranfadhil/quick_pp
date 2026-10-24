@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { browser } from '$app/environment';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -560,7 +560,8 @@
 			maxTvd = projectData.stickPlotResult?.max_tvd ?? 2500;
 		}
 		const pad = Math.max(5, (maxTvd - minTvd) * 0.04);
-		const computedRange: [number, number] = yRange ?? [
+		const currentYRange = untrack(() => (yRange ? ([yRange[0], yRange[1]] as [number, number]) : null));
+		const computedRange: [number, number] = currentYRange ?? [
 			Number((maxTvd + pad).toFixed(1)),
 			Number((minTvd - pad).toFixed(1))
 		];
@@ -621,11 +622,13 @@
 		void workbench.depthFilter;
 
 		const { traces, layout } = buildStickPlot();
-		PlotlyLib.react(plotContainer, traces, layout, {
-			responsive: true,
-			displaylogo: false,
-			modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d']
-		}).then(() => {
+		untrack(() =>
+			PlotlyLib.react(plotContainer, traces, layout, {
+				responsive: true,
+				displaylogo: false,
+				modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d']
+			})
+		).then(() => {
 			syncPlotBounds();
 			if (!eventsBound && plotContainer) {
 				eventsBound = true;

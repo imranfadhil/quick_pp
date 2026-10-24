@@ -1786,7 +1786,7 @@ class WellDataState {
 			'GR',
 			'RT',
 			'NPHI',
-			'RHOB',
+			'RHOB', 'DTC', 'DT', 'DTCO', 'AC', 'DT4P', 'PEF', 'DRHO',
 			'VCLAY',
 			'VCALC',
 			'VDOLO',

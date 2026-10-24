@@ -5,15 +5,35 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 
-	// Live preview of formation temperature and Rw at median depth from Salinity & Temp Gradient
-	let medianDepth = $derived.by(() => {
-		const dr = wellData.depthRange;
-		return 0.5 * (dr.min + dr.max);
+	// Default reference depth is the bottom of the active filtered interval (or well max depth)
+	let defaultRefDepth = $derived.by(() => {
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const indices = wellData.visibleIndices;
+		if (indices.length > 0 && dept.length > 0) {
+			let maxD = -Infinity;
+			for (const i of indices) {
+				const d = dept[i];
+				if (typeof d === 'number' && Number.isFinite(d) && d > maxD) {
+					maxD = d;
+				}
+			}
+			if (Number.isFinite(maxD)) return Number(maxD.toFixed(1));
+		}
+		if (workbench.depthFilter && Number.isFinite(workbench.depthFilter.max)) {
+			return Number(workbench.depthFilter.max.toFixed(1));
+		}
+		return Number(wellData.depthRange.max.toFixed(1));
 	});
 
-	let estimatedRwAtMedianDepth = $derived.by(() => {
+	let refDepth = $state<number>(0);
+
+	$effect(() => {
+		refDepth = defaultRefDepth;
+	});
+
+	function estimateTempAndRwAtDepth(depthM: number) {
 		const sp = workbench.saturationParams;
-		const d = medianDepth;
+		const d = Number.isFinite(depthM) ? Math.max(0, depthM) : 0;
 		let tempC: number;
 		if (sp.measSystem === 'imperial') {
 			const tvdKft = (d * 3.28084) / 1000.0;
@@ -29,7 +49,10 @@
 			tempC: Number(tempC.toFixed(1)),
 			rw: Number(rw.toFixed(4))
 		};
-	});
+	}
+
+	let estimatedRwAtSurface = $derived.by(() => estimateTempAndRwAtDepth(0));
+	let estimatedRwAtRefDepth = $derived.by(() => estimateTempAndRwAtDepth(refDepth));
 
 	let hasTsAvailable = $derived.by(() => {
 		const ps = wellData.curves['PHIT_SAND'];
@@ -223,7 +246,7 @@
 		<ParameterSection
 			title="Salinity & Geothermal Gradient"
 			badge={workbench.saturationParams.rwMode === 'salinity_temp'
-				? `Rw ≈ ${estimatedRwAtMedianDepth.rw} Ω·m`
+				? `Rw ≈ ${estimatedRwAtRefDepth.rw} Ω·m`
 				: 'Temp B(T) Only'}
 		>
 			<NumericScrubber
@@ -251,22 +274,64 @@
 				max={120}
 				step={1.0}
 			/>
-			<div class="mt-1 flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px] text-[var(--text-secondary)]">
-				<span>
-					At {medianDepth.toFixed(0)} m: <strong class="mono-num">{estimatedRwAtMedianDepth.tempC}°C</strong> →
-					<strong class="mono-num text-[var(--accent-primary)]">Rw = {estimatedRwAtMedianDepth.rw} ohm.m</strong>
-				</span>
-				{#if workbench.saturationParams.rwMode === 'pickett'}
-					<button
-						type="button"
-						onclick={() => {
-							workbench.saturationParams.rwPickett = estimatedRwAtMedianDepth.rw;
-						}}
-						class="font-semibold text-blue-700 hover:underline"
-					>
-						Copy to Rw
-					</button>
-				{/if}
+			<div class="mt-1 space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1.5 text-[10px] text-[var(--text-secondary)]">
+				<div class="flex items-center justify-between gap-1.5">
+					<span>
+						At Surface: <strong class="mono-num">{estimatedRwAtSurface.tempC}°C</strong> →
+						<strong class="mono-num text-[var(--accent-primary)]">Rw = {estimatedRwAtSurface.rw} ohm.m</strong>
+					</span>
+					{#if workbench.saturationParams.rwMode === 'pickett'}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.saturationParams.rwPickett = estimatedRwAtSurface.rw;
+							}}
+							class="shrink-0 font-semibold text-blue-700 hover:underline"
+						>
+							Copy to Rw
+						</button>
+					{/if}
+				</div>
+				<div class="flex items-center justify-between gap-1.5 border-t border-[var(--border-hairline)] pt-1">
+					<span class="flex flex-wrap items-center gap-1">
+						<span>At</span>
+						<input
+							type="number"
+							step="1"
+							min="0"
+							bind:value={refDepth}
+							title="Reference depth for Rw calculation (defaults to bottom of filtered interval)"
+							class="mono-num h-5 w-16 rounded-2xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0 text-right text-[10px] font-semibold text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:ring-1 focus:ring-[var(--border-focus)] focus:outline-none"
+						/>
+						<span>m:</span>
+						<strong class="mono-num">{estimatedRwAtRefDepth.tempC}°C</strong>
+						<span>→</span>
+						<strong class="mono-num text-[var(--accent-primary)]">Rw = {estimatedRwAtRefDepth.rw} ohm.m</strong>
+						{#if Math.abs((refDepth ?? 0) - defaultRefDepth) > 0.1}
+							<button
+								type="button"
+								onclick={() => {
+									refDepth = defaultRefDepth;
+								}}
+								title="Reset to bottom of filtered interval ({defaultRefDepth} m)"
+								class="ml-0.5 text-[9.5px] font-medium text-[var(--text-muted)] hover:text-[var(--accent-primary)]"
+							>
+								↺
+							</button>
+						{/if}
+					</span>
+					{#if workbench.saturationParams.rwMode === 'pickett'}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.saturationParams.rwPickett = estimatedRwAtRefDepth.rw;
+							}}
+							class="shrink-0 font-semibold text-blue-700 hover:underline"
+						>
+							Copy to Rw
+						</button>
+					{/if}
+				</div>
 			</div>
 		</ParameterSection>
 

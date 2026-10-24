@@ -54,6 +54,19 @@
 	// Track visibility toggles
 	let showHcCorrected = $state(true);
 	let showTsOverlay = $state(true);
+	let showDtc = $state(true);
+
+	const DTC_ALIASES = ['DTC', 'DT', 'DTCO', 'AC', 'DT4P'] as const;
+
+	let hasDtc = $derived.by(() => {
+		for (const mnem of DTC_ALIASES) {
+			const arr = wellData.curves[mnem];
+			if (arr && arr.some((v) => typeof v === 'number' && Number.isFinite(v) && v > 0)) {
+				return true;
+			}
+		}
+		return false;
+	});
 
 	let hasTsComputed = $derived.by(() => {
 		const vlam = wellData.curves['VSH_LAM'];
@@ -76,6 +89,38 @@
 
 	// Current visible Y (depth) range on the plot
 	let yRange = $state<[number, number]>([1000, 1100]);
+	let lastFilterKey = '';
+
+	function getDefaultDepthRange(): [number, number] {
+		const indices = wellData.visibleIndices;
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		if (indices.length > 0 && dept.length > 0) {
+			const minD = dept[indices[0]];
+			const maxD = dept[indices[indices.length - 1]];
+			if (Number.isFinite(minD) && Number.isFinite(maxD) && maxD >= minD) {
+				return [maxD, minD]; // Reversed depth axis (top = shallow, bottom = deep)
+			}
+		}
+		const dr = wellData.depthRange;
+		return [dr.max, dr.min];
+	}
+
+	function syncYRangeIfFilterChanged(): [number, number] {
+		const indices = wellData.visibleIndices;
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const minD = indices.length > 0 && dept.length > 0 ? dept[indices[0]] : wellData.depthRange.min;
+		const maxD =
+			indices.length > 0 && dept.length > 0
+				? dept[indices[indices.length - 1]]
+				: wellData.depthRange.max;
+		const key = `${workbench.wellId ?? ''}:${indices.length}:${minD}:${maxD}`;
+		const defaultRange = getDefaultDepthRange();
+		if (key !== lastFilterKey) {
+			lastFilterKey = key;
+			yRange = [defaultRange[0], defaultRange[1]];
+		}
+		return defaultRange;
+	}
 
 	$effect(() => {
 		if (!browser) return;
@@ -84,20 +129,9 @@
 		});
 	});
 
-	// Sync initial or filtered depth range when well changes
+	// Sync initial or filtered depth range when well or filter changes
 	$effect(() => {
-		const indices = wellData.visibleIndices;
-		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-		if (indices.length > 0 && dept.length > 0) {
-			const minD = dept[indices[0]];
-			const maxD = dept[indices[indices.length - 1]];
-			if (Number.isFinite(minD) && Number.isFinite(maxD) && maxD >= minD) {
-				yRange = [maxD, minD]; // Reversed depth axis (top = shallow, bottom = deep)
-			}
-		} else {
-			const dr = wellData.depthRange;
-			yRange = [dr.max, dr.min];
-		}
+		syncYRangeIfFilterChanged();
 	});
 
 	// Pan to targetScrollDepth when user clicks a row in CompactDataGrid
@@ -284,7 +318,8 @@
 	});
 
 	function buildTracesAndLayout() {
-		const currentYRange = untrack(() => yRange);
+		// Clone into a plain (non-Proxy) array inside untrack so Plotly never mutates or tracks Svelte's $state Proxy
+		const currentYRange: [number, number] = untrack(() => [yRange[0], yRange[1]]);
 		const indices = wellData.visibleIndices;
 		const deptAll = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 		const depth = indices.map((i) => deptAll[i]);
@@ -505,10 +540,22 @@
 		}
 
 		// Track 3 (xaxis3): NPHI (0.45 -> -0.15, right-to-left), RHOB (1.95 -> 2.95, left-to-right),
-		// PEF (0 -> 10 b/e, left-to-right), and DRHO (-0.25 -> 0.25 g/cc, left-to-right)
+		// DTC (140 -> 40 us/ft, right-to-left), PEF (0 -> 10 b/e, left-to-right), and DRHO (-0.25 -> 0.25 g/cc, left-to-right)
 		// Normalize onto NPHI scale [0.45 -> -0.15]: x_eq = 0.45 - ((val - min) / (max - min)) * 0.6
 		const nphi = pick('NPHI');
 		const rhob = pick('RHOB');
+		let activeDtcMnem = 'DTC';
+		let dtc = pick('DTC');
+		if (!dtc.some((v) => v !== null && v > 0)) {
+			for (const alias of DTC_ALIASES) {
+				const alt = pick(alias);
+				if (alt.some((v) => v !== null && v > 0)) {
+					activeDtcMnem = alias;
+					dtc = alt;
+					break;
+				}
+			}
+		}
 		let pef = pick('PEF');
 		if (!pef.some((v) => v !== null && v >= 0)) {
 			for (const alias of ['PE', 'PEFZ', 'PEFA']) {
@@ -530,6 +577,7 @@
 			}
 		}
 		const rhobAsNphi = rhob.map((r) => (r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null));
+		const dtcAsNphi = dtc.map((v) => (v !== null && v > 0 ? 0.45 - ((140 - v) / (140 - 40)) * 0.6 : null));
 		const pefAsNphi = pef.map((p) => (p !== null && p >= 0 ? 0.45 - (p / 10.0) * 0.6 : null));
 		const drhoAsNphi = drho.map((d) => (d !== null ? 0.45 - ((d - -0.25) / (0.25 - -0.25)) * 0.6 : null));
 
@@ -677,6 +725,20 @@
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.rhob, width: 1.45 },
 				hovertemplate: 'RHOB: %{customdata:.3f} g/cc<extra></extra>'
+			});
+		}
+		if (showDtc && dtc.some((v) => v !== null && v > 0)) {
+			traces.push({
+				type: 'scattergl',
+				mode: 'lines',
+				name: activeDtcMnem,
+				x: dtcAsNphi,
+				customdata: dtc,
+				y: depth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { color: PETRO_COLORS.dt, width: 1.35, dash: 'dashdot' },
+				hovertemplate: `${activeDtcMnem}: %{customdata:.1f} µs/ft<extra></extra>`
 			});
 		}
 		if (showHcCorrected && workbench.lithoParams.enableHcCorrection) {
@@ -1282,19 +1344,28 @@
 		void wellData.coreSamples;
 		void brushedIntervals;
 		void showHcCorrected;
+		void showDtc;
 		void tsOverlayActive;
 		void workbench.lithoParams.enableHcCorrection;
 		void workbench.lithoParams.model;
 		void workbench.lithoParams.minerals;
 
+		const defaultDepthRange = syncYRangeIfFilterChanged();
 		const { traces, layout } = buildTracesAndLayout();
-		PlotlyLib.react(plotContainer, traces, layout, {
-			responsive: true,
-			displaylogo: false,
-			scrollZoom: true,
-			modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d']
-		}).then(() => {
+		untrack(() =>
+			PlotlyLib.react(plotContainer, traces, layout, {
+				responsive: true,
+				displaylogo: false,
+				scrollZoom: true,
+				modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d']
+			})
+		).then(() => {
 			syncPlotBounds();
+			const fullYAxis = (plotContainer as any)?._fullLayout?.yaxis;
+			if (fullYAxis) {
+				fullYAxis._rangeInitial0 = defaultDepthRange[0];
+				fullYAxis._rangeInitial1 = defaultDepthRange[1];
+			}
 			if (!plotReady && plotContainer) {
 				plotReady = true;
 				let hoverRaf = 0;
@@ -1308,25 +1379,37 @@
 						});
 					}
 				});
-				let relayoutRaf = 0;
-				(plotContainer as any).on('plotly_relayout', (ev: any) => {
-					let nextRange: [number, number] | null = null;
-					if (ev['yaxis.range[0]'] !== undefined && ev['yaxis.range[1]'] !== undefined) {
-						nextRange = [Number(ev['yaxis.range[0]']), Number(ev['yaxis.range[1]'])];
-					} else if (Array.isArray(ev['yaxis.range'])) {
-						nextRange = [Number(ev['yaxis.range'][0]), Number(ev['yaxis.range'][1])];
-					} else {
-						const fullRange = (plotContainer as any)?._fullLayout?.yaxis?.range;
-						if (Array.isArray(fullRange) && fullRange.length === 2) {
-							nextRange = [Number(fullRange[0]), Number(fullRange[1])];
-						}
+				const extractRelayoutRange = (ev: any): [number, number] | null => {
+					if (ev?.['yaxis.range[0]'] !== undefined && ev?.['yaxis.range[1]'] !== undefined) {
+						return [Number(ev['yaxis.range[0]']), Number(ev['yaxis.range[1]'])];
 					}
+					if (Array.isArray(ev?.['yaxis.range'])) {
+						return [Number(ev['yaxis.range'][0]), Number(ev['yaxis.range'][1])];
+					}
+					const fullRange = (plotContainer as any)?._fullLayout?.yaxis?.range;
+					if (Array.isArray(fullRange) && fullRange.length === 2) {
+						return [Number(fullRange[0]), Number(fullRange[1])];
+					}
+					return null;
+				};
+				let relayoutRaf = 0;
+				(plotContainer as any).on('plotly_relayouting', (ev: any) => {
+					const nextRange = extractRelayoutRange(ev);
 					cancelAnimationFrame(relayoutRaf);
 					relayoutRaf = requestAnimationFrame(() => {
-						syncPlotBounds();
 						if (nextRange && Number.isFinite(nextRange[0]) && Number.isFinite(nextRange[1])) {
-							yRange = nextRange;
+							yRange = [nextRange[0], nextRange[1]];
 						}
+					});
+				});
+				(plotContainer as any).on('plotly_relayout', (ev: any) => {
+					cancelAnimationFrame(relayoutRaf);
+					const nextRange = extractRelayoutRange(ev);
+					if (nextRange && Number.isFinite(nextRange[0]) && Number.isFinite(nextRange[1])) {
+						yRange = [nextRange[0], nextRange[1]];
+					}
+					relayoutRaf = requestAnimationFrame(() => {
+						syncPlotBounds();
 					});
 				});
 			}
@@ -1385,10 +1468,10 @@
 	}
 
 	function resetZoom() {
-		const dr = wellData.depthRange;
-		yRange = [dr.max, dr.min];
+		const [maxD, minD] = getDefaultDepthRange();
+		yRange = [maxD, minD];
 		if (PlotlyLib && plotContainer) {
-			PlotlyLib.relayout(plotContainer, { 'yaxis.range': [dr.max, dr.min] });
+			PlotlyLib.relayout(plotContainer, { 'yaxis.range': [maxD, minD] });
 		}
 	}
 
@@ -1468,6 +1551,16 @@
 						class="h-3 w-3 rounded-xs border-teal-300 text-teal-700 focus:ring-0"
 					/>
 					<span>TS Overlay</span>
+				</label>
+			{/if}
+			{#if hasDtc}
+				<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer">
+					<input
+						type="checkbox"
+						bind:checked={showDtc}
+						class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-emerald-600 focus:ring-0"
+					/>
+					<span style="color: {PETRO_COLORS.dt}" class="font-medium">DTC</span>
 				</label>
 			{/if}
 			<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer">
@@ -1660,6 +1753,24 @@
 						style="border-color: {PETRO_COLORS.nphi}"
 					></div>
 				</div>
+
+				{#if hasDtc && showDtc}
+					<!-- Row 2b: DTC (140 <- 40 us/ft, increases right to left, dash-dot emerald) -->
+					<div class="flex flex-col">
+						<div
+							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							style="color: {PETRO_COLORS.dt}"
+						>
+							<span>140</span>
+							<span class="font-sans text-[8px] font-bold">◄ DTC (µs/ft)</span>
+							<span>40</span>
+						</div>
+						<div
+							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed"
+							style="border-color: {PETRO_COLORS.dt}"
+						></div>
+					</div>
+				{/if}
 
 				<!-- Row 3: PEF (0 -> 10 b/e, increases left to right, light dotted purple) -->
 				<div class="flex flex-col opacity-75">
@@ -1899,6 +2010,12 @@
 				<strong style="color: {PETRO_COLORS.rhob}">RHOB:</strong>
 				{fmtNum(readout.RHOB, 3)}
 			</span>
+			{#if hasDtc && showDtc && (readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P) !== null && (readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P) !== undefined}
+				<span>
+					<strong style="color: {PETRO_COLORS.dt}">DTC:</strong>
+					{fmtNum(readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P, 1)}
+				</span>
+			{/if}
 			{#if readout.PEF !== null && readout.PEF !== undefined}
 				<span>
 					<strong style="color: {PETRO_COLORS.pef}">PEF:</strong>
