@@ -139,7 +139,7 @@ class SandSiltClay:
         res_ratio = res_len / rock_len
 
         var_pt = line_intersection((A, C), (D, (nphi_arr, rhob_arr)))
-        proj_len = length_a_b(var_pt, A)
+        proj_len = np.where(var_pt[1] > C[1], -1.0, 1.0) * length_a_b(var_pt, C)
         vsand, vsilt, vcld = self.lithology_chart(proj_len, rock_len, res_ratio)
 
         logger.debug(f"Kuttan modified calculation completed for {len(vsand)} points")
@@ -149,7 +149,7 @@ class SandSiltClay:
         """Estimate lithology fraction based on Kuttan's modified chart.
 
         Args:
-            proj_len (float or np.ndarray): The length of the projected point from the dry sand point along the rock line.
+            proj_len (float or np.ndarray): The signed length of the projected point from the dry clay point along the rock line.
             rock_len (float): The total length of the rock line (sand to clay).
             res_ratio (float): The ratio of the reservoir section length (sand to silt) to the total rock line length.
 
@@ -159,34 +159,35 @@ class SandSiltClay:
         siltclayratio = 0.25  # empirical value
         res_len = rock_len * res_ratio
         non_res_len = rock_len * (1 - res_ratio)
-        pt_ratio = proj_len / rock_len
+        proj_len_clamped = np.clip(proj_len, 0.0, rock_len)
+        pt_ratio = proj_len_clamped / rock_len
         if np.ndim(proj_len) == 0:
-            if pt_ratio <= res_ratio:
-                vsand = (-proj_len / res_len) + 1
-                vsilt = siltclayratio / res_len * proj_len
-                vcld = (1 - siltclayratio) / res_len * proj_len
+            if pt_ratio >= (1 - res_ratio):
+                vsand = (proj_len_clamped - non_res_len) / res_len
+                vsilt = (-siltclayratio / res_len) * proj_len_clamped + (
+                    rock_len * siltclayratio / res_len
+                )
+                vcld = (-(1 - siltclayratio) / res_len) * proj_len_clamped + (
+                    rock_len * (1 - siltclayratio) / res_len
+                )
             else:
-                vsand = 0
-                vsilt = -siltclayratio / non_res_len * proj_len + (
-                    rock_len * siltclayratio / non_res_len
-                )
-                vcld = siltclayratio / non_res_len * proj_len + (
-                    1 - (siltclayratio * rock_len / non_res_len)
-                )
+                vsand = 0.0
+                vsilt = (siltclayratio / non_res_len) * proj_len_clamped
+                vcld = (-siltclayratio / non_res_len) * proj_len_clamped + 1.0
             return vsand, vsilt, vcld
 
-        in_res = pt_ratio <= res_ratio
-        vsand = np.where(in_res, (-proj_len / res_len) + 1.0, 0.0)
+        in_res = pt_ratio >= (1 - res_ratio)
+        vsand = np.where(in_res, (proj_len_clamped - non_res_len) / res_len, 0.0)
         vsilt = np.where(
             in_res,
-            (siltclayratio / res_len) * proj_len,
-            (-siltclayratio / non_res_len) * proj_len
-            + (rock_len * siltclayratio / non_res_len),
+            (-siltclayratio / res_len) * proj_len_clamped
+            + (rock_len * siltclayratio / res_len),
+            (siltclayratio / non_res_len) * proj_len_clamped,
         )
         vcld = np.where(
             in_res,
-            ((1.0 - siltclayratio) / res_len) * proj_len,
-            (siltclayratio / non_res_len) * proj_len
-            + (1.0 - (siltclayratio * rock_len / non_res_len)),
+            (-(1.0 - siltclayratio) / res_len) * proj_len_clamped
+            + (rock_len * (1.0 - siltclayratio) / res_len),
+            (-siltclayratio / non_res_len) * proj_len_clamped + 1.0,
         )
         return vsand, vsilt, vcld
