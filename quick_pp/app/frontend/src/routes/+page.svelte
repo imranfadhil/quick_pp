@@ -247,6 +247,7 @@
 					title: `Core vs. Estimated Depth Error Comparison (n=${cc.rows.length} | Φ RMSE=${cc.poro.rmse ?? '—'}, K log₁₀RMSE=${cc.perm.log10_rmse ?? '—'})`,
 					columns: [
 						{ key: 'DEPTH', label: 'Depth', unit: 'm', numeric: true, decimals: 2 },
+						{ key: 'SHIFT_M', label: 'ΔDepth', unit: 'm', numeric: true, decimals: 2 },
 						{ key: 'SAMPLE', label: 'Sample' },
 						{ key: 'ZONE', label: 'Zone' },
 						{ key: 'CPORE', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3 },

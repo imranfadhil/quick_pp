@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { deleteAncillaryItem, saveAncillaryItems } from '$lib/api/client';
 	import CompactDataGrid, { type GridColumn } from '$lib/components/workbench/CompactDataGrid.svelte';
+	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
@@ -401,6 +402,12 @@
 			+ Add
 		</button>
 	</div>
+
+	{#if activeTab === 'core'}
+		<div class="shrink-0 border-b border-[var(--border-hairline)] p-1.5">
+			<CoreDepthShiftPanel defaultTarget="combined" />
+		</div>
+	{/if}
 
 	<!-- Editable High-Density Grid (Supports Double-Click Edit & Excel Paste) -->
 	<div class="min-h-0 flex-1">

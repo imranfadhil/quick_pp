@@ -78,6 +78,14 @@ class WellDataState {
 	tops = $state<FormationTop[]>([]);
 	contacts = $state<FluidContact[]>([]);
 	coreSamples = $state<Record<string, any>[]>([]);
+	originalCoreSamples = $state<Record<string, any>[]>([]);
+	originalScalPc = $state<Record<string, any>[]>([]);
+	coreShiftMode = $state<'affine' | 'tie-points'>('affine');
+	coreShiftDelta = $state<number>(0);
+	coreStretchFactor = $state<number>(1.0);
+	corePivotDepth = $state<number | null>(null);
+	coreTiePoints = $state<Array<{ coreDepth: number; logDepth: number }>>([]);
+	coreShiftDirty = $state<boolean>(false);
 	scalPc = $state<Record<string, any>[]>([]);
 	pressureTests = $state<Record<string, any>[]>([]);
 	survey = $state<Record<string, any>[]>([]);
@@ -194,13 +202,20 @@ class WellDataState {
 		// Map core samples to their closest log depth index (within 0.5m)
 		const sampleByIdx = new Map<
 			number,
-			{ sample_name: string; cpore: number | null; cperm: number | null; plug_depth: number }
+			{
+				sample_name: string;
+				cpore: number | null;
+				cperm: number | null;
+				plug_depth: number;
+				raw_depth: number;
+			}
 		>();
 		if (this.coreSamples.length > 0 && dept.length > 0) {
 			for (let sIdx = 0; sIdx < this.coreSamples.length; sIdx++) {
 				const s = this.coreSamples[sIdx];
 				const sd = Number(s.depth ?? s.DEPTH);
 				if (!Number.isFinite(sd)) continue;
+				const rawD = Number.isFinite(Number(s.raw_depth)) ? Number(s.raw_depth) : sd;
 				const sp = normPoro(Number(s.porosity ?? s.CPORE ?? s.poro));
 				const sk = normPerm(Number(s.permeability ?? s.CPERM ?? s.perm));
 				if (sp === null && sk === null) continue;
@@ -222,7 +237,8 @@ class WellDataState {
 							sample_name: String(s.sample_name ?? s.Sample ?? `Plug-${sIdx + 1}`),
 							cpore: sp,
 							cperm: sk,
-							plug_depth: sd
+							plug_depth: sd,
+							raw_depth: rawD
 						});
 					}
 				}
@@ -231,6 +247,8 @@ class WellDataState {
 
 		const rows: Array<{
 			DEPTH: number;
+			RAW_DEPTH: number;
+			SHIFT_M: number;
 			SAMPLE: string;
 			ZONE: string;
 			CPORE: number | null;
@@ -274,8 +292,15 @@ class WellDataState {
 			const absLog10ErrPerm = log10ErrPerm !== null ? Math.abs(log10ErrPerm) : null;
 			const factorPerm = ck !== null && permVal !== null ? permVal / ck : null;
 
+			const rawD = matchedPlug?.raw_depth ?? d;
+			const shiftM = matchedPlug
+				? Number((matchedPlug.plug_depth - matchedPlug.raw_depth).toFixed(3))
+				: 0;
+
 			rows.push({
 				DEPTH: Number(d.toFixed(2)),
+				RAW_DEPTH: Number(rawD.toFixed(2)),
+				SHIFT_M: shiftM,
 				SAMPLE: matchedPlug?.sample_name ?? `C-${autoSampleCounter++}`,
 				ZONE: resolveZone(idx, d),
 				CPORE: cp,
@@ -534,6 +559,69 @@ class WellDataState {
 				}
 			}
 
+			const rawCoreList = (data.core_samples || []).map((s: any) => ({
+				...s,
+				raw_depth: Number(s.raw_depth ?? s.depth ?? s.DEPTH)
+			}));
+
+			// Ensure CPORE and CPERM curves are populated on the log depth grid from core_samples on initial load
+			const baseDeptGrid = numericCurves['DEPT'] ?? numericCurves['DEPTH'] ?? [];
+			if (rawCoreList.length > 0 && baseDeptGrid.length > 0) {
+				const cporeGrid = numericCurves['CPORE']
+					? [...numericCurves['CPORE']]
+					: new Array(baseDeptGrid.length).fill(Number.NaN);
+				const cpermGrid = numericCurves['CPERM']
+					? [...numericCurves['CPERM']]
+					: new Array(baseDeptGrid.length).fill(Number.NaN);
+				let updatedCpore = !numericCurves['CPORE'];
+				let updatedCperm = !numericCurves['CPERM'];
+
+				for (const s of rawCoreList) {
+					const sd = Number(s.depth ?? s.DEPTH ?? s.raw_depth);
+					if (!Number.isFinite(sd)) continue;
+					const rawP = Number(s.porosity ?? s.CPORE ?? s.poro);
+					const pVal =
+						Number.isFinite(rawP) && rawP > 0 ? (rawP > 1.0 ? rawP / 100.0 : rawP) : null;
+					const rawK = Number(s.permeability ?? s.CPERM ?? s.perm);
+					const kVal = Number.isFinite(rawK) && rawK > 0 ? rawK : null;
+					if (pVal === null && kVal === null) continue;
+
+					let lo = 0;
+					let hi = baseDeptGrid.length - 1;
+					while (lo < hi) {
+						const mid = (lo + hi) >> 1;
+						if (baseDeptGrid[mid] < sd) lo = mid + 1;
+						else hi = mid;
+					}
+					if (
+						lo > 0 &&
+						Math.abs(baseDeptGrid[lo - 1] - sd) < Math.abs(baseDeptGrid[lo] - sd)
+					) {
+						lo = lo - 1;
+					}
+					if (Math.abs(baseDeptGrid[lo] - sd) <= 0.5) {
+						if (pVal !== null && !Number.isFinite(cporeGrid[lo])) {
+							cporeGrid[lo] = pVal;
+							updatedCpore = true;
+						}
+						if (kVal !== null && !Number.isFinite(cpermGrid[lo])) {
+							cpermGrid[lo] = kVal;
+							updatedCperm = true;
+						}
+					}
+				}
+				if (updatedCpore && cporeGrid.some((v) => Number.isFinite(v))) {
+					numericCurves['CPORE'] = cporeGrid;
+					origCopy['CPORE'] = [...cporeGrid];
+					committedCopy['CPORE'] = [...cporeGrid];
+				}
+				if (updatedCperm && cpermGrid.some((v) => Number.isFinite(v))) {
+					numericCurves['CPERM'] = cpermGrid;
+					origCopy['CPERM'] = [...cpermGrid];
+					committedCopy['CPERM'] = [...cpermGrid];
+				}
+			}
+
 			this.curves = numericCurves;
 			this.originalCurves = origCopy;
 			this.committedBaseCurves = committedCopy;
@@ -546,7 +634,18 @@ class WellDataState {
 				name: c.name || c.type || 'OWC',
 				depth: c.depth
 			}));
-			this.coreSamples = data.core_samples || [];
+			this.coreSamples = rawCoreList;
+			this.originalCoreSamples = rawCoreList.map((s: any) => ({ ...s }));
+			this.originalScalPc = ((data as any).scal_pc || []).map((s: any) => ({
+				...s,
+				raw_depth: Number(s.raw_depth ?? s.depth ?? s.DEPTH)
+			}));
+			this.coreShiftMode = 'affine';
+			this.coreShiftDelta = 0;
+			this.coreStretchFactor = 1.0;
+			this.corePivotDepth = null;
+			this.coreTiePoints = [];
+			this.coreShiftDirty = false;
 			this.scalPc = (data as any).scal_pc || [];
 			this.pressureTests = data.pressure_tests || [];
 			this.survey = data.survey || [];
@@ -1246,6 +1345,425 @@ class WellDataState {
 	/**
 	 * Read curve values at the current cursorDepth for the status bar readout.
 	 */
+	/**
+	 * Extract baseline discrete core plugs from `originalCoreSamples` (or synthesize from
+	 * `originalCurves['CPORE']` / `originalCurves['CPERM']` if `originalCoreSamples` is empty).
+	 */
+	getBaseCorePlugs(): Array<{
+		sample_name: string;
+		raw_depth: number;
+		porosity: number | null;
+		permeability: number | null;
+		extra: Record<string, any>;
+	}> {
+		if (this.originalCoreSamples.length > 0) {
+			return this.originalCoreSamples
+				.map((s, i) => {
+					const rd = Number(s.raw_depth ?? s.depth ?? s.DEPTH);
+					if (!Number.isFinite(rd)) return null;
+					const pRaw = Number(s.porosity ?? s.CPORE ?? s.poro);
+					const kRaw = Number(s.permeability ?? s.CPERM ?? s.perm);
+					return {
+						sample_name: String(s.sample_name ?? s.Sample ?? `Plug-${i + 1}`),
+						raw_depth: rd,
+						porosity: Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1 ? pRaw / 100 : pRaw) : null,
+						permeability: Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null,
+						extra: { ...s }
+					};
+				})
+				.filter((x): x is NonNullable<typeof x> => x !== null);
+		}
+		const dept = this.originalCurves['DEPT'] ?? this.originalCurves['DEPTH'] ?? this.curves['DEPT'] ?? [];
+		const cpArr = this.originalCurves['CPORE'] ?? this.originalCurves['CORE_PORO'] ?? [];
+		const ckArr = this.originalCurves['CPERM'] ?? this.originalCurves['CORE_PERM'] ?? [];
+		const out: Array<{
+			sample_name: string;
+			raw_depth: number;
+			porosity: number | null;
+			permeability: number | null;
+			extra: Record<string, any>;
+		}> = [];
+		let n = 1;
+		for (let i = 0; i < dept.length; i++) {
+			const d = dept[i];
+			if (!Number.isFinite(d)) continue;
+			const pRaw = cpArr[i];
+			const kRaw = ckArr[i];
+			const p = Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1 ? pRaw / 100 : pRaw) : null;
+			const k = Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null;
+			if (p !== null || k !== null) {
+				out.push({
+					sample_name: `C-${n++}`,
+					raw_depth: d,
+					porosity: p,
+					permeability: k,
+					extra: {}
+				});
+			}
+		}
+		return out;
+	}
+
+	effectiveCorePivotDepth = $derived.by(() => {
+		if (this.corePivotDepth !== null && Number.isFinite(this.corePivotDepth)) {
+			return this.corePivotDepth;
+		}
+		const plugs = this.getBaseCorePlugs();
+		if (plugs.length === 0) return this.depthRange.min;
+		const minFilter = workbench.depthFilter?.min ?? -Infinity;
+		const maxFilter = workbench.depthFilter?.max ?? Infinity;
+		const inWindow = plugs.filter((p) => p.raw_depth >= minFilter && p.raw_depth <= maxFilter);
+		const pool = inWindow.length > 0 ? inWindow : plugs;
+		return Number(Math.min(...pool.map((p) => p.raw_depth)).toFixed(2));
+	});
+
+	computeShiftedCoreDepth(
+		rawDepth: number,
+		overrideDelta?: number,
+		overrideStretch?: number
+	): number {
+		if (this.coreShiftMode === 'tie-points' && overrideDelta === undefined && overrideStretch === undefined) {
+			const validPts = this.coreTiePoints
+				.filter((p) => Number.isFinite(p.coreDepth) && Number.isFinite(p.logDepth))
+				.sort((a, b) => a.coreDepth - b.coreDepth);
+			if (validPts.length === 0) return rawDepth;
+			if (validPts.length === 1) {
+				return rawDepth + (validPts[0].logDepth - validPts[0].coreDepth);
+			}
+			if (rawDepth <= validPts[0].coreDepth) {
+				return rawDepth + (validPts[0].logDepth - validPts[0].coreDepth);
+			}
+			const last = validPts[validPts.length - 1];
+			if (rawDepth >= last.coreDepth) {
+				return rawDepth + (last.logDepth - last.coreDepth);
+			}
+			for (let i = 0; i < validPts.length - 1; i++) {
+				const p0 = validPts[i];
+				const p1 = validPts[i + 1];
+				if (rawDepth >= p0.coreDepth && rawDepth <= p1.coreDepth) {
+					const span = p1.coreDepth - p0.coreDepth;
+					if (Math.abs(span) < 1e-9) return p0.logDepth;
+					return p0.logDepth + ((rawDepth - p0.coreDepth) / span) * (p1.logDepth - p0.logDepth);
+				}
+			}
+			return rawDepth;
+		}
+
+		const pivot = this.effectiveCorePivotDepth;
+		const delta = overrideDelta ?? this.coreShiftDelta;
+		const stretch = overrideStretch ?? this.coreStretchFactor;
+		return pivot + (rawDepth - pivot) * stretch + delta;
+	}
+
+	applyCoreDepthTransform() {
+		const plugs = this.getBaseCorePlugs();
+		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		if (plugs.length === 0 || dept.length === 0) return;
+
+		const updatedSamples = plugs.map((p) => {
+			const shifted = Number(this.computeShiftedCoreDepth(p.raw_depth).toFixed(3));
+			return {
+				...p.extra,
+				sample_name: p.sample_name,
+				raw_depth: p.raw_depth,
+				depth: shifted,
+				shift_m: Number((shifted - p.raw_depth).toFixed(3)),
+				porosity: p.porosity,
+				permeability: p.permeability
+			};
+		});
+
+		const newCpore = new Array(dept.length).fill(Number.NaN);
+		const newCperm = new Array(dept.length).fill(Number.NaN);
+
+		for (const s of updatedSamples) {
+			const sd = s.depth;
+			// Binary search closest log depth index within 0.5m
+			let lo = 0;
+			let hi = dept.length - 1;
+			while (lo < hi) {
+				const mid = (lo + hi) >> 1;
+				if (dept[mid] < sd) lo = mid + 1;
+				else hi = mid;
+			}
+			if (lo > 0 && Math.abs(dept[lo - 1] - sd) < Math.abs(dept[lo] - sd)) {
+				lo = lo - 1;
+			}
+			if (Math.abs(dept[lo] - sd) <= 0.5) {
+				if (s.porosity !== null && Number.isFinite(s.porosity)) {
+					newCpore[lo] = s.porosity;
+				}
+				if (s.permeability !== null && Number.isFinite(s.permeability)) {
+					newCperm[lo] = s.permeability;
+				}
+			}
+		}
+
+		this.coreSamples = updatedSamples;
+		if (this.originalScalPc.length > 0) {
+			this.scalPc = this.originalScalPc.map((r) => {
+				const rd = Number(r.raw_depth ?? r.depth ?? 0);
+				return {
+					...r,
+					raw_depth: rd,
+					depth: Number(this.computeShiftedCoreDepth(rd).toFixed(3))
+				};
+			});
+		}
+
+		const nextCurves: Record<string, number[]> = {
+			...this.curves,
+			CPORE: newCpore,
+			CPERM: newCperm
+		};
+		if (this.curves['CORE_PORO']) nextCurves['CORE_PORO'] = [...newCpore];
+		if (this.curves['CORE_PERM']) nextCurves['CORE_PERM'] = [...newCperm];
+		this.curves = nextCurves;
+		this.coreShiftDirty = true;
+	}
+
+	/**
+	 * Grid-search + local refinement to find the optimal Shift Δd (and optional Stretch factor s)
+	 * that minimizes error / maximizes correlation against log PHIT and/or PERM.
+	 */
+	autoOptimizeCoreDepthShift(opts?: {
+		allowStretch?: boolean;
+		target?: 'poro' | 'perm' | 'combined';
+		maxShiftM?: number;
+	}) {
+		const allowStretch = opts?.allowStretch ?? false;
+		const target = opts?.target ?? 'poro';
+		const maxShift = opts?.maxShiftM ?? 5.0;
+
+		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		const phitArr = this.curves['PHIT'] ?? this.curves['PHIE'] ?? [];
+		const permArr = this.curves['PERM'] ?? this.curves['PERM_TRANS'] ?? [];
+		const minFilter = workbench.depthFilter?.min ?? -Infinity;
+		const maxFilter = workbench.depthFilter?.max ?? Infinity;
+
+		const allPlugs = this.getBaseCorePlugs();
+		const activePlugs = allPlugs.filter(
+			(p) => p.raw_depth >= minFilter && p.raw_depth <= maxFilter
+		);
+		const plugs = activePlugs.length >= 2 ? activePlugs : allPlugs;
+		if (plugs.length === 0 || dept.length < 2) return;
+
+		// Fast linear interpolation helper on log depth grid
+		const sampleLogAt = (arr: number[], d: number, isLog10: boolean): number | null => {
+			if (d < dept[0] || d > dept[dept.length - 1]) return null;
+			let lo = 0;
+			let hi = dept.length - 1;
+			while (lo < hi - 1) {
+				const mid = (lo + hi) >> 1;
+				if (dept[mid] <= d) lo = mid;
+				else hi = mid;
+			}
+			const v0 = arr[lo];
+			const v1 = arr[hi];
+			if (!Number.isFinite(v0) || !Number.isFinite(v1)) return null;
+			if (isLog10 && (v0 <= 0 || v1 <= 0)) return null;
+			const span = dept[hi] - dept[lo];
+			const t = Math.abs(span) < 1e-9 ? 0 : (d - dept[lo]) / span;
+			if (isLog10) {
+				return Math.log10(v0) + t * (Math.log10(v1) - Math.log10(v0));
+			}
+			return v0 + t * (v1 - v0);
+		};
+
+		const pivot = this.effectiveCorePivotDepth;
+
+		const evaluateCandidate = (delta: number, stretch: number): number => {
+			let poroSqErr = 0;
+			let poroN = 0;
+			let permSqErr = 0;
+			let permN = 0;
+
+			for (const p of plugs) {
+				const sd = pivot + (p.raw_depth - pivot) * stretch + delta;
+				if (p.porosity !== null && phitArr.length === dept.length) {
+					const logPhi = sampleLogAt(phitArr, sd, false);
+					if (logPhi !== null) {
+						const diff = logPhi - p.porosity;
+						poroSqErr += diff * diff;
+						poroN++;
+					}
+				}
+				if (p.permeability !== null && permArr.length === dept.length) {
+					const logK = sampleLogAt(permArr, sd, true);
+					if (logK !== null) {
+						const diff = logK - Math.log10(p.permeability);
+						permSqErr += diff * diff;
+						permN++;
+					}
+				}
+			}
+
+			// Regularize stretch slightly around 1.0 to avoid spurious extreme compression/stretching
+			const stretchPenalty = Math.pow((stretch - 1.0) / 0.05, 2) * 0.02;
+
+			if (target === 'poro') {
+				if (poroN < Math.max(1, Math.floor(plugs.length * 0.4))) return Infinity;
+				return Math.sqrt(poroSqErr / poroN) / 0.05 + stretchPenalty;
+			}
+			if (target === 'perm') {
+				if (permN < Math.max(1, Math.floor(plugs.length * 0.4))) return Infinity;
+				return Math.sqrt(permSqErr / permN) / 0.5 + stretchPenalty;
+			}
+			// combined
+			let score = stretchPenalty;
+			let terms = 0;
+			if (poroN > 0) {
+				score += Math.sqrt(poroSqErr / poroN) / 0.05;
+				terms++;
+			}
+			if (permN > 0) {
+				score += Math.sqrt(permSqErr / permN) / 0.5;
+				terms++;
+			}
+			return terms > 0 ? score / terms : Infinity;
+		};
+
+		let bestDelta = 0;
+		let bestStretch = 1.0;
+		let bestScore = evaluateCandidate(0, 1.0);
+
+		const stretchCandidates = allowStretch
+			? Array.from({ length: 25 }, (_, i) => Number((0.94 + i * 0.005).toFixed(4)))
+			: [1.0];
+
+		// Coarse search
+		for (const s of stretchCandidates) {
+			for (let d = -maxShift; d <= maxShift + 1e-6; d += 0.1) {
+				const score = evaluateCandidate(d, s);
+				if (score < bestScore) {
+					bestScore = score;
+					bestDelta = d;
+					bestStretch = s;
+				}
+			}
+		}
+
+		// Fine local refinement around best coarse candidate
+		const fineStretches = allowStretch
+			? Array.from({ length: 13 }, (_, i) =>
+					Number(Math.max(0.85, Math.min(1.15, bestStretch - 0.006 + i * 0.001)).toFixed(4))
+				)
+			: [1.0];
+		const baseD = bestDelta;
+		for (const s of fineStretches) {
+			for (let d = baseD - 0.15; d <= baseD + 0.15 + 1e-6; d += 0.02) {
+				const score = evaluateCandidate(d, s);
+				if (score < bestScore) {
+					bestScore = score;
+					bestDelta = d;
+					bestStretch = s;
+				}
+			}
+		}
+
+		this.coreShiftMode = 'affine';
+		this.coreShiftDelta = Number(bestDelta.toFixed(2));
+		this.coreStretchFactor = Number(bestStretch.toFixed(4));
+		this.applyCoreDepthTransform();
+
+		appStatus.success(
+			`Auto-matched core depth: Δd = ${this.coreShiftDelta >= 0 ? '+' : ''}${this.coreShiftDelta.toFixed(2)}m` +
+				(allowStretch ? `, stretch = ${this.coreStretchFactor.toFixed(3)}×` : ''),
+			workbench.wellId ?? undefined
+		);
+	}
+
+	resetCoreDepthShift() {
+		this.coreShiftMode = 'affine';
+		this.coreShiftDelta = 0;
+		this.coreStretchFactor = 1.0;
+		this.corePivotDepth = null;
+		this.coreTiePoints = [];
+		this.coreShiftDirty = false;
+		this.coreSamples = this.originalCoreSamples.map((s) => ({ ...s, depth: s.raw_depth ?? s.depth }));
+		if (this.originalScalPc.length > 0) {
+			this.scalPc = this.originalScalPc.map((s) => ({ ...s, depth: s.raw_depth ?? s.depth }));
+		}
+		const nextCurves: Record<string, number[]> = { ...this.curves };
+		if (this.originalCurves['CPORE']) nextCurves['CPORE'] = [...this.originalCurves['CPORE']];
+		if (this.originalCurves['CPERM']) nextCurves['CPERM'] = [...this.originalCurves['CPERM']];
+		if (this.originalCurves['CORE_PORO']) nextCurves['CORE_PORO'] = [...this.originalCurves['CORE_PORO']];
+		if (this.originalCurves['CORE_PERM']) nextCurves['CORE_PERM'] = [...this.originalCurves['CORE_PERM']];
+		this.curves = nextCurves;
+		appStatus.info('Reset core depths to original unshifted values', workbench.wellId ?? undefined);
+	}
+
+	async saveCoreDepthShift() {
+		const pid = workbench.projectId;
+		const wid = workbench.wellId;
+		if (!pid || !wid) return;
+
+		this.isCalculating = true;
+		this.lastError = null;
+		try {
+			if (this.coreSamples.length > 0) {
+				await saveAncillaryItems(pid, wid, 'core_samples', 'samples', this.coreSamples);
+			}
+			if (this.scalPc.length > 0) {
+				await saveAncillaryItems(pid, wid, 'scal_pc', 'pc_data', this.scalPc);
+			}
+
+			const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+			if (deptArr.length > 0) {
+				const curvesPayload: Record<string, (number | null)[]> = {};
+				if (this.curves['CPORE']) {
+					curvesPayload['CPORE'] = this.curves['CPORE'].map((v) =>
+						Number.isFinite(v) ? v : null
+					);
+				}
+				if (this.curves['CPERM']) {
+					curvesPayload['CPERM'] = this.curves['CPERM'].map((v) =>
+						Number.isFinite(v) ? v : null
+					);
+				}
+				if (Object.keys(curvesPayload).length > 0) {
+					await postJson(
+						`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wid)}/save_computed`,
+						{
+							module: 'core-shift',
+							depths: deptArr.map((d) => (Number.isFinite(d) ? d : null)),
+							curves: curvesPayload
+						}
+					);
+				}
+			}
+
+			// Update baselines to the newly saved depths
+			this.originalCoreSamples = this.coreSamples.map((s) => ({
+				...s,
+				raw_depth: Number(s.depth)
+			}));
+			this.coreSamples = this.originalCoreSamples.map((s) => ({ ...s }));
+			if (this.scalPc.length > 0) {
+				this.originalScalPc = this.scalPc.map((s) => ({
+					...s,
+					raw_depth: Number(s.depth)
+				}));
+			}
+			if (this.curves['CPORE']) {
+				this.originalCurves = { ...this.originalCurves, CPORE: [...this.curves['CPORE']] };
+			}
+			if (this.curves['CPERM']) {
+				this.originalCurves = { ...this.originalCurves, CPERM: [...this.curves['CPERM']] };
+			}
+			this.coreShiftDelta = 0;
+			this.coreStretchFactor = 1.0;
+			this.coreTiePoints = [];
+			this.coreShiftDirty = false;
+			this.lastSavedMessage = 'Core Depth Shift Saved ✓';
+			appStatus.success('Saved shifted core depths & CPORE/CPERM curves', wid);
+		} catch (e: any) {
+			this.lastError = e?.message || 'Failed to save core depth shift';
+		} finally {
+			this.isCalculating = false;
+		}
+	}
+
 	getReadoutAtDepth(depth: number | null): Record<string, number | null> {
 		if (depth === null || !Number.isFinite(depth)) return {};
 		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];

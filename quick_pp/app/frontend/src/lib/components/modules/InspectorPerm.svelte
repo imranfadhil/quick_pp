@@ -2,6 +2,7 @@
 	import { api } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
@@ -240,6 +241,9 @@
 					>
 						Dual Φ &amp; K Parity →
 					</button>
+				</div>
+				<div class="mt-2">
+					<CoreDepthShiftPanel defaultTarget="perm" />
 				</div>
 			</ParameterSection>
 		{/if}

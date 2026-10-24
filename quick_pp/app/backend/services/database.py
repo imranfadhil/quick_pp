@@ -1354,13 +1354,18 @@ def _get_merged_dataframe_sync(
                             d_float,
                             {"depth": d_float, "core_sample_name": name},
                         )
-                        for prop in ("cpore", "cperm"):
-                            mask = (measurements["property"] == prop) & measurements[
-                                "value"
-                            ].notna()
+                        prop_upper = measurements["property"].astype(str).str.upper()
+                        for target_col, aliases in (
+                            ("cpore", ("POR", "CPORE", "POROSITY")),
+                            ("cperm", ("PERM", "CPERM", "PERMEABILITY")),
+                        ):
+                            mask = prop_upper.isin(aliases) & measurements["value"].notna()
                             filtered = measurements[mask]
                             if not filtered.empty:
-                                row_entry[prop] = float(filtered.iloc[0]["value"])
+                                val = float(filtered.iloc[0]["value"])
+                                if target_col == "cpore" and val > 1.0:
+                                    val = val / 100.0
+                                row_entry[target_col] = val
                     except Exception:
                         continue
 
@@ -1378,6 +1383,14 @@ def _get_merged_dataframe_sync(
                     tolerance=tol,
                     suffixes=("", "_core"),
                 )
+                for c_col in ("cpore", "cperm"):
+                    c_core = f"{c_col}_core"
+                    if c_core in merged.columns:
+                        if c_col in merged.columns:
+                            merged[c_col] = merged[c_core].combine_first(merged[c_col])
+                        else:
+                            merged[c_col] = merged[c_core]
+                        merged.drop(columns=[c_core], inplace=True)
 
             merged = merged.replace([np.inf, -np.inf], np.nan)
             merged.columns = [c.upper() for c in merged.columns]

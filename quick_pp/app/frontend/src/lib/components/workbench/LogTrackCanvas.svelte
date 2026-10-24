@@ -975,11 +975,39 @@
 				mode: 'markers',
 				name: 'CPERM',
 				x: cperm.map((v) => (v !== null && v > 0 ? v : null)),
+
 				y: depth,
 				xaxis: 'x5',
 				yaxis: 'y',
 				marker: { color: PETRO_COLORS.core, size: 5.5, symbol: 'diamond' },
 				hovertemplate: 'Core Perm: %{x:.2f} mD<extra></extra>'
+			});
+		} else if (wellData.coreSamples.length > 0) {
+			const cDepths: number[] = [];
+			const cPerms: number[] = [];
+			for (const s of wellData.coreSamples) {
+				const d = Number(s.depth ?? s.DEPTH);
+				const k = Number(s.permeability ?? s.CPERM ?? s.perm);
+				if (Number.isFinite(d) && Number.isFinite(k) && k > 0) {
+					cDepths.push(d);
+					cPerms.push(k);
+				}
+			}
+			if (cPerms.length > 0) {
+				traces.push({
+					type: 'scattergl',
+					mode: 'markers',
+					name: 'CPERM',
+					x: cPerms,
+					y: cDepths,
+					xaxis: 'x5',
+					yaxis: 'y',
+					marker: { color: PETRO_COLORS.core, size: 5.5, symbol: 'diamond' },
+					hovertemplate: 'Core Perm: %{x:.2f} mD<extra></extra>'
+				});
+			}
+		}
+		if (false) { void ({
 			});
 		}
 
@@ -1743,7 +1771,7 @@
 				>
 					<span>0.01</span>
 					<span class="font-sans text-[8.5px] font-bold">
-						PERM{#if wellData.curves['PERM_TRANS']}<span style="color: #7C3AED"> / P_TR</span>{/if} (mD) ►
+						PERM / CORE{#if wellData.curves['PERM_TRANS']}<span style="color: #7C3AED"> / P_TR</span>{/if} (mD) ►
 					</span>
 					<span>10k</span>
 				</div>

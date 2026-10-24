@@ -10,6 +10,7 @@
 		PETRO_COLORS
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
+	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 
 	let plotEl = $state<HTMLDivElement | null>(null);
 	let PlotlyLib: any = $state(null);
@@ -21,6 +22,7 @@
 	// SHF crossplot sub-view ('scal_fit' shows SCAL J / Pc / BVW curve fits; 'height_profile' shows Sw vs HAFWL)
 	let shfView = $state<'scal_fit' | 'height_profile'>('scal_fit');
 	let shfLogScale = $state<boolean>(false);
+	let showCoreShiftDrawer = $state<boolean>(false);
 
 	let effectiveMode = $derived.by(() => {
 		if (workbench.crossplotTemplateOverride !== 'auto') {
@@ -2074,20 +2076,20 @@
 <div class="flex h-full w-full flex-col bg-[var(--bg-surface)] select-none">
 	<!-- Crossplot Header Bar -->
 	<div
-		class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[11px]"
+		class="flex min-h-7 shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[11px]"
 	>
 		<div class="flex items-center gap-1.5">
 			<span class="font-semibold text-[var(--text-primary)]">Crossplot:</span>
 			<select
 				bind:value={workbench.crossplotTemplateOverride}
-				class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
+				class="h-5 max-w-[195px] truncate rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
 			>
 				<option value="auto">Auto ({effectiveMode.toUpperCase()})</option>
 				<option value="mw-distribution">Multi-Well Distribution (QAQC)</option>
 				<option value="nphi-rhob">NPHI vs. RHOB (SSC)</option>
 				<option value="thomas-stieber">Thomas-Stieber (Vsh vs. Φ)</option>
 				<option value="phi-k">Porosity vs. Perm (FZI)</option>
-				<option value="core-qc">Core Parity & Error (PHIT×CPORE / PERM×CPERM)</option>
+				<option value="core-qc">Core Parity &amp; Error (Φ &amp; K)</option>
 				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
 				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>
 				<option value="shf">Sw vs. Height (SHF)</option>
@@ -2097,11 +2099,17 @@
 
 		{#if effectiveMode === 'core-qc'}
 			<div class="flex items-center gap-1">
-				{#each [['dual', 'Dual Parity'], ['poro', 'PHIT×CPORE + Depth'], ['perm', 'PERM×CPERM + Depth'], ['depth-error', 'Error vs. Depth']] as [vKey, vLbl]}
+				{#each [
+					['dual', 'Dual', 'Side-by-side PHIT×CPORE and PERM×CPERM parity crossplots'],
+					['poro', 'Φ + Depth', 'PHIT×CPORE parity crossplot + ΔPHIT vs. Depth'],
+					['perm', 'K + Depth', 'PERM×CPERM parity crossplot + Δlog10(K) vs. Depth'],
+					['depth-error', 'Depth Err', 'ΔPHIT and Δlog10(K) residuals vs. Depth']
+				] as [vKey, vLbl, vTip]}
 					<button
 						type="button"
+						title={vTip}
 						onclick={() => (workbench.coreQcView = vKey as any)}
-						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {workbench.coreQcView ===
+						class="h-5 shrink-0 whitespace-nowrap rounded-xs border px-1.5 text-[10px] font-medium transition-colors {workbench.coreQcView ===
 						vKey
 							? 'border-blue-600 bg-blue-600 text-white'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
@@ -2109,6 +2117,19 @@
 						{vLbl}
 					</button>
 				{/each}
+				<button
+					type="button"
+					title="Open Core Depth Shift, Stretch/Compress & Tie-Point matcher"
+					onclick={() => (showCoreShiftDrawer = !showCoreShiftDrawer)}
+					class="h-5 shrink-0 whitespace-nowrap rounded-xs border px-1.5 text-[10px] font-semibold transition-colors {showCoreShiftDrawer ||
+					wellData.coreShiftDirty
+						? 'border-amber-500 bg-amber-50 text-amber-900'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-slate-100'}"
+				>
+					{wellData.coreShiftDirty
+						? `Shift (${wellData.coreShiftDelta >= 0 ? '+' : ''}${fmtNum(wellData.coreShiftDelta, 1)}m)`
+						: 'Depth Shift'}
+				</button>
 			</div>
 		{:else if effectiveMode === 'phi-k' && workbench.scope === 'single-well'}
 			<div class="flex items-center gap-1">
@@ -2234,6 +2255,12 @@
 					<span>R²: <strong class="text-emerald-700">{fmtNum(cc.perm.r2, 3)}</strong></span>
 				</div>
 			</div>
+		</div>
+	{/if}
+
+	{#if effectiveMode === 'core-qc' && showCoreShiftDrawer}
+		<div class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2.5 py-1.5">
+			<CoreDepthShiftPanel compact={true} />
 		</div>
 	{/if}
 

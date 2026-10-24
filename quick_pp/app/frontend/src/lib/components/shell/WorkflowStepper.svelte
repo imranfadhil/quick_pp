@@ -242,7 +242,7 @@
 			<button
 				type="button"
 				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
-				class="mono-num text-[11px] font-medium text-[var(--status-ok)] hover:underline"
+				class="mono-num shrink-0 whitespace-nowrap text-[11px] font-medium text-[var(--status-ok)] hover:underline"
 			>
 				{wellData.lastSavedMessage}
 			</button>
@@ -255,7 +255,7 @@
 				<button
 					type="button"
 					onclick={() => (workbench.rightPaneTab = mode as any)}
-					class="h-5 rounded-xs px-1.5 font-medium transition-colors {workbench.rightPaneTab ===
+					class="h-5 shrink-0 whitespace-nowrap rounded-xs px-1.5 font-medium transition-colors {workbench.rightPaneTab ===
 					mode
 						? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
 						: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
