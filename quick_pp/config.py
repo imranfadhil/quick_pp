@@ -347,6 +347,81 @@ class Config:
         "rubble": "RUBBLE",
     }
 
+    # Standard curve mnemonic aliasing dictionary mapping target quick_pp mnemonics
+    # to common vendor / service company mnemonics (SLB, Halliburton, Baker Hughes, Weatherford).
+    MNEMONIC_ALIASES = {
+        "DEPTH": ["DEPT", "DEPTH", "MD", "TDEP", "DEPT:1", "DEPT_M", "DEPT_FT"],
+        "GR": ["GR", "GAMMA", "CGR", "SGR", "GR_EDTC", "GR_ARC", "HCGR", "GRC", "GRD"],
+        "RT": [
+            "RT",
+            "RDEP",
+            "RILD",
+            "LLD",
+            "AT90",
+            "AF90",
+            "HRLT",
+            "RESD",
+            "ILD",
+            "RD",
+            "RTRUE",
+        ],
+        "RMED": ["RMED", "RILM", "LLM", "AT60", "AT30", "ILM", "RM"],
+        "RSHA": [
+            "RSHA",
+            "MSFL",
+            "RXO",
+            "RLL3",
+            "AT10",
+            "SFL",
+            "RXOZ",
+            "RS",
+            "RSHAL",
+        ],
+        "NPHI": [
+            "NPHI",
+            "TNPH",
+            "NPOR",
+            "CNCF",
+            "CNL",
+            "PHIN",
+            "NPHI_LS",
+            "NPUC",
+        ],
+        "RHOB": ["RHOB", "RHOZ", "DEN", "ZDEN", "BDEL", "RHO"],
+        "DRHO": ["DRHO", "HDRA", "DCOR", "ZCOR"],
+        "DTC": ["DTC", "DT", "DTCO", "AC", "DT4P", "DTCOMP"],
+        "DTS": ["DTS", "DTSM", "DT4S", "DTSH"],
+        "PEF": ["PEF", "PEFZ", "PE", "PEDN"],
+        "CALI": ["CALI", "HCAL", "CAL", "C1", "CALX"],
+        "BS": ["BS", "BIT", "BITSIZE"],
+        "SP": ["SP", "SSP"],
+        "CPORE": ["CPORE", "CPOR", "CORE_POR", "CORE_POROSITY", "POR_CORE"],
+        "CPERM": [
+            "CPERM",
+            "CKHG",
+            "CORE_PERM",
+            "CORE_PERMEABILITY",
+            "KLOGH",
+            "PERM_CORE",
+        ],
+    }
+
+    @staticmethod
+    def resolve_mnemonic_alias(mnemonic: str) -> str:
+        """Resolve a vendor curve mnemonic to its standard quick_pp mnemonic if known."""
+        if not mnemonic:
+            return ""
+        clean = str(mnemonic).strip().upper()
+        # Strip LAS duplicate suffix like :1 or _1 when checking aliases if exact doesn't match
+        for target, aliases in Config.MNEMONIC_ALIASES.items():
+            if clean == target or clean in aliases:
+                return target
+        base_clean = clean.split(":")[0].strip()
+        for target, aliases in Config.MNEMONIC_ALIASES.items():
+            if base_clean == target or base_clean in aliases:
+                return target
+        return clean
+
     @staticmethod
     def vars_units(data):
         """Return a dictionary of units for variables present in the DataFrame.

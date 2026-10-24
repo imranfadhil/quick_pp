@@ -58,6 +58,9 @@ dependencies = [
     "tqdm",
     "wellpathpy",
     "welly",
+    "dlisio",
+    "openpyxl",
+    "xlrd",
 ]
 
 [project.optional-dependencies]
@@ -78,6 +81,9 @@ core = [
     "tqdm",
     "wellpathpy",
     "welly",
+    "dlisio",
+    "openpyxl",
+    "xlrd",
 ]
 ml = [
     "fastparquet",

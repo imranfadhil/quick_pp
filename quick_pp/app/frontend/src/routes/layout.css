@@ -154,6 +154,15 @@
 	}
 }
 
+/* Override @tailwindcss/forms default 0.5rem vertical padding so compact h-6 / h-7 selects never clip text */
+select {
+	padding-top: 0 !important;
+	padding-bottom: 0 !important;
+	padding-right: 1.75rem !important;
+	line-height: 1.2 !important;
+	background-position: right 0.35rem center !important;
+}
+
 /* High-density engineering scrollbar styling */
 ::-webkit-scrollbar {
 	width: 6px;

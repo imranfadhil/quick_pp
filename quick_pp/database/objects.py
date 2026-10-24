@@ -1,5 +1,7 @@
+import numpy as np
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
@@ -159,7 +161,7 @@ class Project(object):
                     well_data, header_data = las.read_las_files([f], depth_uom)
                 well_name = las.get_wellname_from_header(header_data)
                 uwi = las.get_uwi_from_header(header_data)
-                header_data_dict = header_data.to_dict()
+                header_data_dict = las._sanitize_json_value(header_data.to_dict())
                 return {
                     "file_path": file_path,
                     "well_name": well_name,
@@ -913,30 +915,130 @@ class Well(object):
         return cls(db_session=db_session, well_id=well_id)
 
     def update_data_from_las_parse(
-        self, parsed_data: pd.DataFrame, parsed_header: pd.DataFrame
+        self,
+        parsed_data: pd.DataFrame,
+        parsed_header: Union[pd.DataFrame, Dict[str, Any]],
+        metadata_override: Optional[Dict[str, Any]] = None,
     ):
-        """Updates the well's data and metadata from a parsed LAS file.
+        """Updates the well's data and metadata from a parsed LAS/DLIS file.
 
         This method performs a complete replacement of the well's data based on the
-        provided LAS file content. It will:
-        1.  Replace the well's header with the new header information.
-        2.  Delete any existing curves in the well that are not present in the new LAS data.
-        3.  For curves present in both the well and the new LAS data, it deletes all
-            existing data points and replaces them with the new data.
-        4.  Create new curves for any mnemonics in the LAS data that do not already
-            exist in the well.
+        provided LAS/DLIS file content. It will:
+        1.  Extract and persist rich `WellHeaderMetadata` (`~Well` and `~Parameter`) into `header_data`
+            and auto-populate environmental parameters on `WellConfig`.
+        2.  Delete any existing curves in the well that are not present in the new data.
+        3.  Bulk-replace curve data points and write columnar Parquet (`wells/{uwi}.parquet`).
 
         Args:
-            parsed_data (pd.DataFrame): DataFrame where the index is 'DEPTH' and columns are curve mnemonics.
-            parsed_header (pd.DataFrame): DataFrame containing the header information from the LAS file.
+            parsed_data (pd.DataFrame): DataFrame containing 'DEPTH' and curve mnemonics.
+            parsed_header (Union[pd.DataFrame, Dict[str, Any]]): Header DataFrame or metadata dict.
+            metadata_override (Optional[Dict[str, Any]]): Optional user-reviewed metadata overrides.
         """
-        logger.info(f"Updating well '{self.name}' from LAS parse.")
-        self.header_data = parsed_header.to_dict()
+        logger.info(f"Updating well '{self.name}' from LAS/DLIS parse.")
+        rich_meta = las.extract_las_metadata(
+            parsed_header, fallback_well_name=self.name
+        )
+        if metadata_override:
+            for k, v in metadata_override.items():
+                if v is not None:
+                    rich_meta[k] = v
+
+        raw_header_dict = las._sanitize_json_value(
+            parsed_header.to_dict()
+            if isinstance(parsed_header, pd.DataFrame)
+            else dict(parsed_header or {})
+        )
+        rich_meta_clean = dict(las._sanitize_json_value(dict(rich_meta)))
+        self.header_data = las._sanitize_json_value(
+            {
+                **raw_header_dict,
+                "well_metadata": rich_meta_clean,
+                **{
+                    k: v
+                    for k, v in rich_meta_clean.items()
+                    if k not in ("raw_well_header", "raw_parameters") and v is not None
+                },
+            }
+        )
+
+        # Auto-populate environmental parameters on WellConfig for downstream modules (saturation, shf, qaqc)
+        env_updates = {}
+        for env_key in (
+            "bht",
+            "bht_unit",
+            "surface_temp",
+            "bit_size",
+            "rmf",
+            "rmf_temp",
+            "rmc",
+            "mud_density",
+            "kb_elev",
+            "df_elev",
+            "gl_elev",
+            "latitude",
+            "longitude",
+            "field",
+            "company",
+        ):
+            if rich_meta.get(env_key) is not None:
+                env_updates[env_key] = rich_meta[env_key]
+        if env_updates:
+            clean_env = las._sanitize_json_value(env_updates)
+            self._config_instance.update(clean_env)
+            self._orm_well.config_data = las._sanitize_json_value(
+                dict(self._config_instance.__dict__)
+            )
+
+        df_work = parsed_data.copy()
+        if "DEPTH" in df_work.columns:
+            df_work = (
+                df_work.dropna(subset=["DEPTH"])
+                .drop_duplicates(subset=["DEPTH"], keep="last")
+                .sort_values("DEPTH")
+            )
+            df_work = df_work.set_index("DEPTH")
+
+        # Save zstd-compressed Parquet to project wells directory for fast columnar access
+        try:
+            proj_name = (
+                self._orm_well.project.name
+                if self._orm_well and self._orm_well.project
+                else "default"
+            )
+            wells_parquet_dir = os.path.join("data", "04_project", proj_name, "wells")
+            os.makedirs(wells_parquet_dir, exist_ok=True)
+            safe_uwi = re.sub(r'[<>:"/\\|?*]+', "_", str(self.uwi or self.name))
+            parquet_path = os.path.join(wells_parquet_dir, f"{safe_uwi}.parquet")
+            df_work.reset_index().to_parquet(
+                parquet_path, compression="zstd", index=False
+            )
+        except Exception as e:
+            logger.debug(f"Could not write well Parquet cache for '{self.name}': {e}")
+
+        # Drop identifier metadata columns before persisting curves to DB
+        drop_meta_cols = [
+            c for c in df_work.columns if str(c).upper() in ("WELL_NAME", "UWI")
+        ]
+        if drop_meta_cols:
+            df_work = df_work.drop(columns=drop_meta_cols, errors="ignore")
 
         # Get existing curve mnemonics for this well
-        existing_mnemonics = {c.mnemonic for c in self._orm_well.curves}
-        new_mnemonics = set(parsed_data.columns)
-        parsed_data = parsed_data.set_index("DEPTH")
+        existing_curves_by_mnem = {c.mnemonic: c for c in self._orm_well.curves}
+        existing_mnemonics = set(existing_curves_by_mnem.keys())
+        new_mnemonics = set(df_work.columns)
+
+        # Bulk delete ALL existing curve_data for this well in a single SQL statement
+        # (avoids lazy-loading hundreds of thousands of ORMCurveData objects into RAM)
+        existing_curve_ids = [
+            c.curve_id for c in self._orm_well.curves if c.curve_id is not None
+        ]
+        if existing_curve_ids:
+            self.db_session.execute(
+                text("DELETE FROM curve_data WHERE curve_id IN :cids").bindparams(
+                    bindparam("cids", expanding=True)
+                ),
+                {"cids": existing_curve_ids},
+            )
 
         # Delete curves that are no longer in the new data
         curves_to_delete = [
@@ -951,53 +1053,105 @@ class Well(object):
             try:
                 self._orm_well.curves.remove(curve)
             except ValueError:
-                # If it's already removed from the collection, ignore
                 pass
-            self.db_session.delete(curve)
+            if curve.curve_id is not None:
+                self.db_session.execute(
+                    text("DELETE FROM curves WHERE curve_id = :cid"),
+                    {"cid": curve.curve_id},
+                )
+            else:
+                self.db_session.delete(curve)
 
-        for mnemonic, values in parsed_data.items():
-            orm_curve = next(
-                (c for c in self._orm_well.curves if c.mnemonic == mnemonic), None
-            )
-
-            # Determine data type from pandas series
+        # Ensure all ORMCurve records exist and flush once to obtain curve_ids
+        curves_map: Dict[str, ORMCurve] = {}
+        for mnemonic, values in df_work.items():
+            orm_curve = existing_curves_by_mnem.get(mnemonic)
             is_numeric = pd.api.types.is_numeric_dtype(values)
             data_type = "numeric" if is_numeric else "text"
-
+            unit_str = (
+                las.get_unit_from_header(parsed_header, mnemonic)
+                if isinstance(parsed_header, pd.DataFrame)
+                else None
+            )
+            descr_str = (
+                las.get_descr_from_header(parsed_header, mnemonic)
+                if isinstance(parsed_header, pd.DataFrame)
+                else None
+            )
             if not orm_curve:
-                logger.debug(f"Creating new curve '{mnemonic}' for well '{self.name}'.")
                 orm_curve = ORMCurve(
                     well_id=self.well_id,
                     mnemonic=mnemonic,
-                    unit=las.get_unit_from_header(parsed_header, mnemonic),
-                    description=las.get_descr_from_header(parsed_header, mnemonic),
+                    unit=unit_str,
+                    description=descr_str,
                     data_type=data_type,
                 )
                 self._orm_well.curves.append(orm_curve)
             else:
-                # Delete existing data points for this curve to replace them.
-                for data_point in orm_curve.data:
-                    self.db_session.delete(data_point)
-                self.db_session.flush()
                 orm_curve.data_type = data_type
+                if unit_str:
+                    orm_curve.unit = unit_str
+            curves_map[mnemonic] = orm_curve
 
-            # Create new data points
+        self.db_session.flush()
+
+        # Vectorized chunked bulk_insert_mappings for curve_data (avoids OOM and Gunicorn worker timeouts)
+        depths_arr = np.asarray(df_work.index, dtype=np.float64)
+        batch_buffer: List[Dict[str, Any]] = []
+        BATCH_FLUSH_SIZE = 25000
+
+        for mnemonic, values in df_work.items():
+            orm_curve = curves_map[mnemonic]
+            cid = orm_curve.curve_id
+            is_numeric = pd.api.types.is_numeric_dtype(values)
+
             if is_numeric:
-                curve_data_points = [
-                    ORMCurveData(depth=depth, value_numeric=value)
-                    for depth, value in zip(parsed_data.index, values, strict=True)
-                    if pd.notna(value)
-                ]
+                vals_arr = pd.to_numeric(values, errors="coerce").to_numpy(
+                    dtype=np.float64
+                )
+                valid_mask = np.isfinite(depths_arr) & np.isfinite(vals_arr)
+                if not valid_mask.any():
+                    continue
+                v_depths = depths_arr[valid_mask].tolist()
+                v_vals = vals_arr[valid_mask].tolist()
+                batch_buffer.extend(
+                    {
+                        "curve_id": cid,
+                        "depth": d,
+                        "value_numeric": v,
+                        "value_text": None,
+                    }
+                    for d, v in zip(v_depths, v_vals)
+                )
             else:
-                curve_data_points = [
-                    ORMCurveData(depth=depth, value_text=value)
-                    for depth, value in zip(parsed_data.index, values, strict=True)
-                    if pd.notna(value)
-                ]
-            orm_curve.data.extend(curve_data_points)
+                valid_mask = values.notna().to_numpy() & np.isfinite(depths_arr)
+                if not valid_mask.any():
+                    continue
+                v_depths = depths_arr[valid_mask].tolist()
+                v_vals = values.iloc[np.flatnonzero(valid_mask)].astype(str).tolist()
+                batch_buffer.extend(
+                    {
+                        "curve_id": cid,
+                        "depth": d,
+                        "value_numeric": None,
+                        "value_text": v,
+                    }
+                    for d, v in zip(v_depths, v_vals)
+                )
 
+            while len(batch_buffer) >= BATCH_FLUSH_SIZE:
+                self.db_session.bulk_insert_mappings(
+                    ORMCurveData, batch_buffer[:BATCH_FLUSH_SIZE]
+                )
+                del batch_buffer[:BATCH_FLUSH_SIZE]
+
+        if batch_buffer:
+            self.db_session.bulk_insert_mappings(ORMCurveData, batch_buffer)
+            batch_buffer.clear()
+
+        self.db_session.flush()
         logger.info(
-            f"Well '{self.name}' data updated from LAS parse. {len(parsed_data.columns)} curves processed."
+            f"Well '{self.name}' data updated from LAS parse. {len(df_work.columns)} curves processed."
         )
 
     def update_data(self, data: pd.DataFrame):
@@ -1534,50 +1688,65 @@ class Well(object):
 
         with open(output_zip_path, "wb") as f:
             f.write(zip_bytes)
-        logger.info(f"Exported well handover package for '{self.name}' to {output_zip_path}")
+        logger.info(
+            f"Exported well handover package for '{self.name}' to {output_zip_path}"
+        )
         return output_zip_path
 
     def __str__(self):
         return f"Well: {self.name} (ID: {self.well_id}, UWI: {self.uwi})"
 
-    def add_formation_tops(self, tops: List[Dict[str, Any]]):
+    def add_formation_tops(
+        self, tops: List[Dict[str, Any]], replace: bool = False
+    ):
         """Adds or updates a list of formation tops for the well.
 
         Args:
             tops (List[Dict[str, Any]]): A list of dictionaries, where each dictionary
                                          represents a top and must contain 'name' and 'depth'.
+            replace (bool): If True, deletes all existing formation tops for this well before inserting.
         """
         logger.info(
-            f"Adding/updating {len(tops)} formation tops for well '{self.name}'."
+            f"Adding/updating {len(tops)} formation tops for well '{self.name}' (replace={replace})."
         )
-        for top_data in tops:
-            if not all(k in top_data for k in ["name", "depth"]):
+        dedup_tops: Dict[str, float] = {}
+        for top_data in tops or []:
+            if not isinstance(top_data, dict) or not all(
+                k in top_data for k in ["name", "depth"]
+            ):
                 logger.warning(f"Skipping invalid formation top data: {top_data}")
                 continue
+            t_name = str(top_data["name"]).strip()
+            if not t_name:
+                continue
+            try:
+                d_val = float(top_data["depth"])
+            except (TypeError, ValueError):
+                continue
+            dedup_tops[t_name] = d_val
 
-            # Check if a top with the same name already exists for this well
-            orm_top = self.db_session.scalar(
-                select(ORMFormationTop).filter_by(
-                    well_id=self.well_id, name=top_data["name"]
-                )
+        if not dedup_tops and not replace:
+            return
+
+        if replace:
+            self.db_session.query(ORMFormationTop).filter_by(
+                well_id=self.well_id
+            ).delete(synchronize_session="fetch")
+        else:
+            self.db_session.query(ORMFormationTop).filter(
+                ORMFormationTop.well_id == self.well_id,
+                ORMFormationTop.name.in_(list(dedup_tops.keys())),
+            ).delete(synchronize_session="fetch")
+        self.db_session.flush()
+
+        for t_name, d_val in dedup_tops.items():
+            orm_top = ORMFormationTop(
+                well_id=self.well_id,
+                name=t_name,
+                depth=d_val,
             )
-            if orm_top:
-                # Update existing top
-                orm_top.depth = top_data["depth"]
-                logger.debug(
-                    f"Updated formation top '{top_data['name']}' to depth {top_data['depth']}."
-                )
-            else:
-                # Create new top
-                orm_top = ORMFormationTop(
-                    well_id=self.well_id,
-                    name=top_data["name"],
-                    depth=top_data["depth"],
-                )
-                self.db_session.add(orm_top)
-                logger.debug(
-                    f"Added new formation top '{top_data['name']}' at depth {top_data['depth']}."
-                )
+            self.db_session.add(orm_top)
+        self.db_session.flush()
 
     def get_formation_tops(self) -> pd.DataFrame:
         """Retrieves all formation tops for the well as a DataFrame."""
@@ -1590,38 +1759,57 @@ class Well(object):
         logger.debug(f"Retrieved {len(df)} formation tops for well '{self.name}'.")
         return df
 
-    def add_fluid_contacts(self, contacts: List[Dict[str, Any]]):
+    def add_fluid_contacts(
+        self, contacts: List[Dict[str, Any]], replace: bool = False
+    ):
         """Adds or updates a list of fluid contacts for the well.
 
         Args:
             contacts (List[Dict[str, Any]]): A list of dictionaries, where each
                                               dictionary represents a contact and must
-                                              contain 'name' and 'depth'.
+                                              contain 'name' (or 'contact_type') and 'depth'.
+            replace (bool): If True, deletes all existing fluid contacts for this well before inserting.
         """
         logger.info(
-            f"Adding/updating {len(contacts)} fluid contacts for well '{self.name}'."
+            f"Adding/updating {len(contacts)} fluid contacts for well '{self.name}' (replace={replace})."
         )
-        for contact_data in contacts:
-            if not all(k in contact_data for k in ["name", "depth"]):
+        dedup_contacts: Dict[str, float] = {}
+        for contact_data in contacts or []:
+            if not isinstance(contact_data, dict):
+                continue
+            c_name = str(
+                contact_data.get("name") or contact_data.get("contact_type") or ""
+            ).strip()
+            d_raw = contact_data.get("depth")
+            if not c_name or d_raw is None:
                 logger.warning(f"Skipping invalid fluid contact data: {contact_data}")
                 continue
+            try:
+                d_val = float(d_raw)
+            except (TypeError, ValueError):
+                continue
+            dedup_contacts[c_name] = d_val
 
-            orm_contact = self.db_session.scalar(
-                select(ORMFluidContact).filter_by(
-                    well_id=self.well_id, name=contact_data["name"]
-                )
+        if not dedup_contacts and not replace:
+            return
+
+        if replace:
+            self.db_session.query(ORMFluidContact).filter_by(
+                well_id=self.well_id
+            ).delete(synchronize_session="fetch")
+        else:
+            self.db_session.query(ORMFluidContact).filter(
+                ORMFluidContact.well_id == self.well_id,
+                ORMFluidContact.name.in_(list(dedup_contacts.keys())),
+            ).delete(synchronize_session="fetch")
+        self.db_session.flush()
+
+        for c_name, d_val in dedup_contacts.items():
+            orm_contact = ORMFluidContact(
+                well_id=self.well_id, name=c_name, depth=d_val
             )
-            if orm_contact:
-                orm_contact.depth = contact_data["depth"]
-                logger.debug(
-                    f"Updated fluid contact '{contact_data['name']}' to depth {contact_data['depth']}."
-                )
-            else:
-                orm_contact = ORMFluidContact(well_id=self.well_id, **contact_data)
-                self.db_session.add(orm_contact)
-                logger.debug(
-                    f"Added new fluid contact '{contact_data['name']}' at depth {contact_data['depth']}."
-                )
+            self.db_session.add(orm_contact)
+        self.db_session.flush()
 
     def get_fluid_contacts(self) -> pd.DataFrame:
         """Retrieves all fluid contacts for the well as a DataFrame."""
@@ -1634,35 +1822,65 @@ class Well(object):
         logger.debug(f"Retrieved {len(df)} fluid contacts for well '{self.name}'.")
         return df
 
-    def add_pressure_tests(self, tests: List[Dict[str, Any]]):
+    def add_pressure_tests(
+        self, tests: List[Dict[str, Any]], replace: bool = False
+    ):
         """Adds or updates a list of pressure tests for the well.
 
         Args:
             tests (List[Dict[str, Any]]): A list of dictionaries, where each
                                           dictionary represents a test and must contain
                                           'depth' and 'pressure'. 'pressure_uom' is optional.
+            replace (bool): If True, deletes all existing pressure tests for this well before inserting.
         """
         logger.info(
-            f"Adding/updating {len(tests)} pressure tests for well '{self.name}'."
+            f"Adding/updating {len(tests)} pressure tests for well '{self.name}' (replace={replace})."
         )
-        for test_data in tests:
-            if not all(k in test_data for k in ["depth", "pressure"]):
+        dedup_tests: Dict[float, Dict[str, Any]] = {}
+        for test_data in tests or []:
+            if not isinstance(test_data, dict) or not all(
+                k in test_data for k in ["depth", "pressure"]
+            ):
                 logger.warning(f"Skipping invalid pressure test data: {test_data}")
                 continue
+            try:
+                d_val = round(float(test_data["depth"]), 4)
+                p_val = float(test_data["pressure"])
+            except (TypeError, ValueError):
+                continue
+            uom = str(
+                test_data.get("pressure_uom")
+                or test_data.get("pressure_unit")
+                or "psi"
+            ).strip()
+            dedup_tests[d_val] = {
+                "depth": d_val,
+                "pressure": p_val,
+                "pressure_uom": uom or "psi",
+            }
 
-            orm_test = self.db_session.scalar(
-                select(ORMPressureTest).filter_by(
-                    well_id=self.well_id, depth=test_data["depth"]
-                )
+        if not dedup_tests and not replace:
+            return
+
+        if replace:
+            self.db_session.query(ORMPressureTest).filter_by(
+                well_id=self.well_id
+            ).delete(synchronize_session="fetch")
+        else:
+            existing_tests = list(
+                self.db_session.scalars(
+                    select(ORMPressureTest).filter_by(well_id=self.well_id)
+                ).all()
             )
-            if orm_test:
-                orm_test.pressure = test_data["pressure"]
-                orm_test.pressure_uom = test_data.get(
-                    "pressure_uom", orm_test.pressure_uom
-                )
-            else:
-                orm_test = ORMPressureTest(well_id=self.well_id, **test_data)
-                self.db_session.add(orm_test)
+            for et in existing_tests:
+                if round(float(et.depth), 4) in dedup_tests:
+                    self.db_session.delete(et)
+        self.db_session.flush()
+
+        for t_clean in dedup_tests.values():
+            orm_test = ORMPressureTest(well_id=self.well_id, **t_clean)
+            self.db_session.add(orm_test)
+        self.db_session.flush()
 
     def get_pressure_tests(self) -> pd.DataFrame:
         """Retrieves all pressure tests for the well as a DataFrame."""
@@ -1691,17 +1909,30 @@ class Well(object):
         )
 
         # Delete all existing surveys for this well to ensure a full replacement
-        self.db_session.query(ORMWellSurvey).filter_by(well_id=self.well_id).delete()
+        self.db_session.query(ORMWellSurvey).filter_by(well_id=self.well_id).delete(
+            synchronize_session="fetch"
+        )
         self.db_session.flush()
 
-        for survey_data in surveys:
-            if not all(k in survey_data for k in ["md", "inc", "azim"]):
+        dedup_surveys: Dict[float, Dict[str, float]] = {}
+        for survey_data in surveys or []:
+            if not isinstance(survey_data, dict) or not all(
+                k in survey_data for k in ["md", "inc", "azim"]
+            ):
                 logger.warning(f"Skipping invalid well survey data: {survey_data}")
                 continue
+            try:
+                md_v = round(float(survey_data["md"]), 4)
+                inc_v = float(survey_data["inc"])
+                azim_v = float(survey_data["azim"])
+            except (TypeError, ValueError):
+                continue
+            dedup_surveys[md_v] = {"md": md_v, "inc": inc_v, "azim": azim_v}
 
-            # Create and add new survey point
-            orm_survey = ORMWellSurvey(well_id=self.well_id, **survey_data)
+        for s_clean in dedup_surveys.values():
+            orm_survey = ORMWellSurvey(well_id=self.well_id, **s_clean)
             self.db_session.add(orm_survey)
+        self.db_session.flush()
 
     def get_well_surveys(self) -> pd.DataFrame:
         """Retrieves all well survey points for the well as a DataFrame."""
@@ -1749,52 +1980,76 @@ class Well(object):
             f"Adding core sample '{sample_name}' at depth {depth} for well '{self.name}'."
         )
 
-        # Create or get the core sample by sample_name first, then fallback to depth
-        orm_sample = self.db_session.scalar(
-            select(ORMCoreSample).filter_by(
-                well_id=self.well_id, sample_name=sample_name
-            )
+        # Create or get the core sample by sample_name first, then fallback to approximate depth (handles float32 REAL rounding)
+        depth_val = round(float(depth), 4)
+        existing_samples = list(
+            self.db_session.scalars(
+                select(ORMCoreSample).filter_by(well_id=self.well_id)
+            ).all()
         )
-        if not orm_sample:
-            orm_sample = self.db_session.scalar(
-                select(ORMCoreSample).filter_by(well_id=self.well_id, depth=depth)
+        orm_sample = next(
+            (s for s in existing_samples if s.sample_name == sample_name),
+            None,
+        )
+        # If a sample with the same name exists at a completely different depth (> 1.0m away),
+        # disambiguate sample_name so we don't overwrite a different core's plug with the same number
+        if orm_sample and abs(float(orm_sample.depth) - depth_val) > 1.0:
+            sample_name = f"{sample_name}@{depth_val:.2f}m"
+            orm_sample = next(
+                (s for s in existing_samples if s.sample_name == sample_name),
+                None,
             )
+
         if not orm_sample:
+            orm_sample = next(
+                (
+                    s
+                    for s in existing_samples
+                    if abs(float(s.depth) - depth_val) < 1e-3
+                    and (not sample_name or s.sample_name == sample_name)
+                ),
+                None,
+            )
+
+        if not orm_sample:
+            # Ensure depth_val is unique in 32-bit REAL precision across existing_samples
+            existing_f32_depths = {
+                float(np.float32(s.depth)) for s in existing_samples
+            }
+            while float(np.float32(depth_val)) in existing_f32_depths:
+                depth_val = round(depth_val + 0.002, 4)
+
             orm_sample = ORMCoreSample(
                 well_id=self.well_id,
                 sample_name=sample_name,
-                depth=depth,
+                depth=depth_val,
                 description=description,
                 remark=remark,
             )
             self.db_session.add(orm_sample)
             self.db_session.flush()  # Ensure we get the sample_id
         else:
-            # Update depth if no other sample already occupies that depth
-            if orm_sample.depth != depth:
-                conflict_depth = self.db_session.scalar(
-                    select(ORMCoreSample).filter(
-                        ORMCoreSample.well_id == self.well_id,
-                        ORMCoreSample.depth == depth,
-                        ORMCoreSample.sample_id != orm_sample.sample_id,
-                    )
+            # Update depth if no other sample already occupies that 32-bit REAL depth
+            if abs(float(orm_sample.depth) - depth_val) >= 1e-4:
+                target_f32 = float(np.float32(depth_val))
+                conflict_depth = any(
+                    s.sample_id != orm_sample.sample_id
+                    and float(np.float32(s.depth)) == target_f32
+                    for s in existing_samples
                 )
                 if not conflict_depth:
-                    orm_sample.depth = depth
+                    orm_sample.depth = depth_val
             if description is not None:
                 orm_sample.description = description
             if remark is not None:
                 orm_sample.remark = remark
-            # Only clear child collections that are explicitly provided
+            # Clear child collections via delete-orphan cascade (safe for both persistent and pending items)
             if measurements is not None:
-                for m in list(orm_sample.measurements):
-                    self.db_session.delete(m)
+                orm_sample.measurements.clear()
             if relperm_data is not None:
-                for rp in list(orm_sample.relperm_data):
-                    self.db_session.delete(rp)
+                orm_sample.relperm_data.clear()
             if pc_data is not None:
-                for pc in list(orm_sample.capillary_pressure_data):
-                    self.db_session.delete(pc)
+                orm_sample.capillary_pressure_data.clear()
             self.db_session.flush()
 
         # Add point measurements (deduplicate by property_name)
@@ -1854,14 +2109,16 @@ class Well(object):
                 )
                 orm_sample.capillary_pressure_data.append(orm_pc)
 
+        self.db_session.flush()
         logger.debug(
             f"Successfully added/updated data for core sample '{sample_name}'."
         )
 
     def replace_rca_samples(self, samples: List[Dict[str, Any]]):
         """Replaces all RCA point measurements across the well's core samples while preserving SCAL data."""
-        incoming_names = set()
-        parsed_samples: List[Dict[str, Any]] = []
+        dedup_by_name: Dict[str, Dict[str, Any]] = {}
+        used_f32_depths: set[float] = set()
+
         for idx, s in enumerate(samples or []):
             if not isinstance(s, dict):
                 continue
@@ -1869,13 +2126,27 @@ class Well(object):
             if depth_raw is None or str(depth_raw).strip() == "":
                 continue
             try:
-                depth_val = float(depth_raw)
+                depth_val = round(float(depth_raw), 4)
             except (TypeError, ValueError):
                 continue
             sname = str(s.get("sample_name") or f"RCA-{idx + 1}").strip()
             if not sname:
                 sname = f"RCA-{idx + 1}"
-            incoming_names.add(sname)
+
+            # If another plug in a different core interval shares the same plug number (e.g. "1"),
+            # disambiguate by depth so distinct plugs are never overwritten
+            if sname in dedup_by_name and abs(dedup_by_name[sname]["depth"] - depth_val) >= 1e-2:
+                sname = f"{sname}@{depth_val:.2f}m"
+                if sname in dedup_by_name and abs(dedup_by_name[sname]["depth"] - depth_val) >= 1e-2:
+                    sname = f"{sname}_{idx + 1}"
+
+            # Avoid uq_well_id_sample_depth collision in 32-bit REAL precision when multiple plugs snap to the same log depth
+            if sname not in dedup_by_name:
+                while float(np.float32(depth_val)) in used_f32_depths:
+                    depth_val = round(depth_val + 0.002, 4)
+                used_f32_depths.add(float(np.float32(depth_val)))
+            else:
+                depth_val = dedup_by_name[sname]["depth"]
 
             meas_list: List[Dict[str, Any]] = list(s.get("measurements") or [])
             poro = s.get("porosity", s.get("cpore"))
@@ -1894,27 +2165,24 @@ class Well(object):
                     )
                 except (TypeError, ValueError):
                     pass
-            parsed_samples.append(
-                {
-                    "sample_name": sname,
-                    "depth": depth_val,
-                    "measurements": meas_list,
-                    "description": s.get("description"),
-                    "remark": s.get("remark"),
-                }
-            )
+            dedup_by_name[sname] = {
+                "sample_name": sname,
+                "depth": depth_val,
+                "measurements": meas_list,
+                "description": s.get("description"),
+                "remark": s.get("remark"),
+            }
 
-        # Remove RCA measurements from existing samples that are no longer in the RCA list
+        parsed_samples = list(dedup_by_name.values())
+
+        # Clear all existing RCA measurements for this well, and remove any core sample that has no SCAL data
         for orm_sample in list(self._orm_well.core_samples):
-            if orm_sample.sample_name not in incoming_names:
-                for m in list(orm_sample.measurements):
-                    self.db_session.delete(m)
-                self.db_session.flush()
-                if (
-                    not orm_sample.capillary_pressure_data
-                    and not orm_sample.relperm_data
-                ):
-                    self.db_session.delete(orm_sample)
+            orm_sample.measurements.clear()
+            if (
+                not orm_sample.capillary_pressure_data
+                and not orm_sample.relperm_data
+            ):
+                self.db_session.delete(orm_sample)
         self.db_session.flush()
 
         for item in parsed_samples:
@@ -1937,14 +2205,19 @@ class Well(object):
                 continue
             depth_raw = row.get("depth")
             if depth_raw is None or str(depth_raw).strip() == "":
-                continue
-            try:
-                depth_val = float(depth_raw)
-            except (TypeError, ValueError):
-                continue
+                depth_val = 0.0
+            else:
+                try:
+                    depth_val = round(float(depth_raw), 4)
+                except (TypeError, ValueError):
+                    depth_val = 0.0
             sname = str(row.get("sample_name") or f"SCAL-{idx + 1}").strip()
             if not sname:
                 sname = f"SCAL-{idx + 1}"
+
+            # If a sample with the same name was already grouped at a different depth (> 1cm), disambiguate
+            if sname in grouped and abs(grouped[sname]["depth"] - depth_val) >= 1e-2:
+                sname = f"{sname}@{depth_val:.2f}m"
 
             entry = grouped.setdefault(
                 sname,
@@ -1978,14 +2251,10 @@ class Well(object):
                     )
 
         if not append:
-            incoming_names = set(grouped.keys())
             for orm_sample in list(self._orm_well.core_samples):
-                if orm_sample.sample_name not in incoming_names:
-                    for pc in list(orm_sample.capillary_pressure_data):
-                        self.db_session.delete(pc)
-                    self.db_session.flush()
-                    if not orm_sample.measurements and not orm_sample.relperm_data:
-                        self.db_session.delete(orm_sample)
+                orm_sample.capillary_pressure_data.clear()
+                if not orm_sample.measurements and not orm_sample.relperm_data:
+                    self.db_session.delete(orm_sample)
             self.db_session.flush()
 
         for sname, sdata in grouped.items():

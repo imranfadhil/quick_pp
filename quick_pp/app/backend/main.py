@@ -19,6 +19,8 @@ from quick_pp.database.db_connector import DBConnector
 
 from .exceptions import return_exception_message
 from .router import api_router
+from .services.ancillary import import_ancillary_router
+from .services.las_handler import import_logs_router
 from .services.report import router as report_v1_router
 
 # Robust per-process DBConnector singleton
@@ -121,6 +123,8 @@ app.add_middleware(
 
 app.include_router(api_router)
 app.include_router(report_v1_router, prefix="/api/v1", include_in_schema=False)
+app.include_router(import_logs_router, prefix="/api/v1", include_in_schema=False)
+app.include_router(import_ancillary_router, prefix="/api/v1", include_in_schema=False)
 
 
 @app.get("/favicon.ico", include_in_schema=False)

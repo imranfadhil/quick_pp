@@ -1,28 +1,245 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import WellSelector from './WellSelector.svelte';
-  export let projectId: string|number;
-  export let type: 'formation_tops'|'fluid_contacts'|'pressure_tests'|'core_samples'|'scal_pc'|'well_surveys' = 'formation_tops';
+  export let projectId: string | number;
+  export let type:
+    | 'formation_tops'
+    | 'fluid_contacts'
+    | 'pressure_tests'
+    | 'core_samples'
+    | 'scal_pc'
+    | 'well_surveys' = 'formation_tops';
   export let maxConcurrency = 4;
+  export let showTypeSelector = false;
 
   import { API_BASE } from '$lib/api/client';
   import { authState } from '$lib/state/auth.svelte';
+  import { projectData } from '$lib/state/projectData.svelte';
   import { appStatus } from '$lib/state/status.svelte';
   import { wellData } from '$lib/state/wellData.svelte';
   import { workbench } from '$lib/state/workbench.svelte';
+
   const MAX_DEMO_FILE_BYTES = 5 * 1024 * 1024; // 5 MB cap in live demo
 
+  type ColumnMappingItem = {
+    source_column: string;
+    target_column: string | null;
+    source_unit: string | null;
+    confidence: number;
+    match_stage: string;
+  };
+
+  type FilePreviewEntry = {
+    file: File;
+    fileName: string;
+    sheetNames: string[];
+    activeSheet: string | null;
+    headerRow: number;
+    detectedUnitRow: number | null;
+    headers: string[];
+    columnMappings: ColumnMappingItem[];
+    detected: Record<string, any>;
+    previewRows: any[];
+    totalRows: number;
+  };
+
   let files: File[] = [];
-  let previews: Array<{fileName:string, rows:any[], previewRows:any[], detected:any, suggestedWell?:string}> = [];
-  let selectedWells: Record<string,string|null> = {};
-  let wellsLoading = false;
+  let previews: FilePreviewEntry[] = [];
+  let selectedWells: Record<string, string | null> = {};
   let globalError: string | null = null;
   let processing = false;
-  let results: Array<{file:string, ok:boolean, status?:number, error?:string}> = [];
-  let fileStatuses: Record<string, 'idle'|'processing'|'success'|'error'> = {};
+  let results: Array<{ file: string; ok: boolean; status?: number; error?: string; sent?: number }> = [];
+  let fileStatuses: Record<string, 'idle' | 'processing' | 'success' | 'error'> = {};
   let fileErrors: Record<string, string> = {};
+  let lastType: string = type;
 
-  function handleFiles(e: Event) {
+  // Core-to-Log Depth Shift & Snap Tolerance controls (for RCA / SCAL)
+  let coreSnapToleranceM = 0.08;
+  let coreDepthShiftRows: Array<{ coreDepth: string; logDepth: string }> = [];
+  let calculateSurveyTvd = true;
+
+  const BACKEND_DATA_TYPE_MAP: Record<string, string> = {
+    formation_tops: 'tops',
+    fluid_contacts: 'contacts',
+    pressure_tests: 'pressures',
+    core_samples: 'rca',
+    scal_pc: 'scal',
+    well_surveys: 'surveys'
+  };
+
+  const DATA_TYPE_DESCRIPTIONS: Record<string, string> = {
+    formation_tops: 'Map columns for Well Name (or select Target Well), Formation/Marker Name, and Measured Depth (MD).',
+    fluid_contacts: 'Map columns for Well Name (or select Target Well), Contact Type (OWC/GOC/GWC/FWL), and Depth.',
+    pressure_tests: 'Map columns for Well Name (or select Target Well), Test Depth, and Formation Pressure.',
+    core_samples: 'Map columns for Well Name (or select Target Well), Plug Depth, Core Porosity (CPORE), and Permeability (CPERM).',
+    scal_pc: 'Map columns for Well Name (or select Target Well), Capillary Pressure (PC), and Water Saturation (SW).',
+    well_surveys: 'Map columns for Well Name (or select Target Well), Measured Depth (MD), Inclination (INC), and Azimuth (AZIM).'
+  };
+
+  const TARGET_COLUMN_OPTIONS: Record<string, Array<{ key: string; label: string; required?: boolean }>> = {
+    formation_tops: [
+      { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
+      { key: 'TOP_NAME', label: 'TOP_NAME — Formation / Marker Name *', required: true },
+      { key: 'MD', label: 'MD — Measured Depth *', required: true },
+      { key: 'TVD', label: 'TVD — True Vertical Depth' }
+    ],
+    fluid_contacts: [
+      { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
+      { key: 'CONTACT_TYPE', label: 'CONTACT_TYPE — Fluid Contact (OWC/GOC/FWL) *', required: true },
+      { key: 'DEPTH', label: 'DEPTH — Contact Depth *', required: true }
+    ],
+    pressure_tests: [
+      { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
+      { key: 'DEPTH', label: 'DEPTH — Test Depth *', required: true },
+      { key: 'PRESSURE', label: 'PRESSURE — Formation Pressure *', required: true },
+      { key: 'PRESSURE_GRADIENT', label: 'PRESSURE_GRADIENT — Fluid Gradient' },
+      { key: 'MOBILITY', label: 'MOBILITY — Drawdown Mobility (mD/cP)' },
+      { key: 'TEST_TYPE', label: 'TEST_TYPE — Tool / Test Type (MDT/RFT)' },
+      { key: 'REMARK', label: 'REMARK — Quality / Comment' }
+    ],
+    core_samples: [
+      { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
+      { key: 'SAMPLE_NAME', label: 'SAMPLE_NAME — Plug / Sample ID' },
+      { key: 'DEPTH', label: 'DEPTH — Core Plug Depth *', required: true },
+      { key: 'CPORE', label: 'CPORE — Core Porosity (v/v or %)' },
+      { key: 'CPERM', label: 'CPERM — Horizontal Permeability (mD)' },
+      { key: 'CPERMV', label: 'CPERMV — Vertical Permeability (mD)' },
+      { key: 'CGRAIN_DENSITY', label: 'CGRAIN_DENSITY — Grain Density (g/cc)' },
+      { key: 'CSAT_WATER', label: 'CSAT_WATER — Core Water Saturation (Sw)' },
+      { key: 'CSAT_OIL', label: 'CSAT_OIL — Core Oil Saturation (So)' },
+      { key: 'DESCRIPTION', label: 'DESCRIPTION — Lithology / Facies Description' },
+      { key: 'REMARK', label: 'REMARK — Remarks / Rock Type / Quality' }
+    ],
+    scal_pc: [
+      { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
+      { key: 'SAMPLE_NAME', label: 'SAMPLE_NAME — Plug / Sample ID' },
+      { key: 'DEPTH', label: 'DEPTH — Sample Depth' },
+      { key: 'PC', label: 'PC — Capillary Pressure (single or Pc.1..N) *', required: true },
+      { key: 'SW', label: 'SW — Water Saturation (single or Sw.1..N) *', required: true },
+      { key: 'EXPERIMENT_TYPE', label: 'EXPERIMENT_TYPE — Method (MICP/Centrifuge)' },
+      { key: 'CYCLE', label: 'CYCLE — Drainage / Imbibition' },
+      { key: 'DESCRIPTION', label: 'DESCRIPTION — Lithological Description' }
+    ],
+    well_surveys: [
+      { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
+      { key: 'MD', label: 'MD — Measured Depth *', required: true },
+      { key: 'INC', label: 'INC — Inclination (deg) *', required: true },
+      { key: 'AZIM', label: 'AZIM — Azimuth (deg) *', required: true },
+      { key: 'TVD', label: 'TVD — True Vertical Depth (optional)' }
+    ]
+  };
+
+  $: targetOptions = TARGET_COLUMN_OPTIONS[type] || [
+    { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
+    { key: 'DEPTH', label: 'DEPTH — Depth' }
+  ];
+
+  // Re-preview loaded files automatically if the parent tab `type` changes
+  $: if (type !== lastType) {
+    lastType = type;
+    globalError = null;
+    results = [];
+    fileStatuses = {};
+    fileErrors = {};
+    if (files.length > 0) {
+      repreviewAllForCurrentType();
+    }
+  }
+
+  async function repreviewAllForCurrentType() {
+    previews = [];
+    for (const f of files) {
+      await fetchFilePreview(f);
+    }
+  }
+
+  function handleTargetColumnChange(previewIdx: number, colIdx: number, rawValue: string) {
+    const p = previews[previewIdx];
+    if (!p) return;
+    const newTarget = rawValue ? rawValue : null;
+    const allowMulti = type === 'scal_pc' && (newTarget === 'PC' || newTarget === 'SW');
+
+    p.columnMappings = p.columnMappings.map((m, idx) => {
+      if (idx === colIdx) {
+        return {
+          ...m,
+          target_column: newTarget,
+          match_stage: newTarget ? 'manual' : 'unmatched',
+          confidence: newTarget ? 1.0 : 0.0
+        };
+      }
+      // Unmap any other column that previously claimed the same single-column target_column
+      if (newTarget && !allowMulti && m.target_column === newTarget) {
+        return {
+          ...m,
+          target_column: null,
+          match_stage: 'unmatched',
+          confidence: 0.0
+        };
+      }
+      return m;
+    });
+    previews[previewIdx] = { ...p };
+    previews = [...previews];
+  }
+
+  function getMappedTargetForHeader(p: FilePreviewEntry, headerName: string): string | null {
+    const found = p.columnMappings.find((m) => m.source_column === headerName && m.target_column);
+    return found ? found.target_column : null;
+  }
+
+  function getPresetStorageKey() {
+    return `qpp_ancillary_preset_${type}`;
+  }
+
+  function saveMappingPreset(preview: FilePreviewEntry) {
+    try {
+      const presetMap: Record<string, { target_column: string | null; source_unit: string | null }> = {};
+      for (const m of preview.columnMappings) {
+        presetMap[m.source_column] = {
+          target_column: m.target_column,
+          source_unit: m.source_unit
+        };
+      }
+      localStorage.setItem(getPresetStorageKey(), JSON.stringify(presetMap));
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  function applySavedPreset(previewIdx: number) {
+    try {
+      const raw = localStorage.getItem(getPresetStorageKey());
+      if (!raw) return;
+      const presetMap = JSON.parse(raw);
+      const p = previews[previewIdx];
+      if (!p) return;
+      p.columnMappings = p.columnMappings.map((m) => {
+        if (presetMap[m.source_column]) {
+          return {
+            ...m,
+            target_column: presetMap[m.source_column].target_column,
+            source_unit: presetMap[m.source_column].source_unit ?? m.source_unit,
+            match_stage: presetMap[m.source_column].target_column ? 'preset' : 'unmatched',
+            confidence: presetMap[m.source_column].target_column ? 1.0 : 0.0
+          };
+        }
+        return m;
+      });
+      previews = [...previews];
+    } catch {
+      // ignore
+    }
+  }
+
+  function addShiftPoint() {
+    coreDepthShiftRows = [...coreDepthShiftRows, { coreDepth: '', logDepth: '' }];
+  }
+
+  function removeShiftPoint(idx: number) {
+    coreDepthShiftRows = coreDepthShiftRows.filter((_, i) => i !== idx);
+  }
+
+  async function handleFiles(e: Event) {
     const input = e.target as HTMLInputElement;
     const rawFiles = input.files ? Array.from(input.files) : [];
     const oversized = authState.isDemoMode ? rawFiles.filter((f) => f.size > MAX_DEMO_FILE_BYTES) : [];
@@ -35,572 +252,178 @@
     results = [];
     fileStatuses = {};
     fileErrors = {};
-    for (const f of files) parseFilePreview(f);
+    for (const f of files) {
+      await fetchFilePreview(f);
+    }
   }
 
-  function removeFile(fname:string){
-    previews = previews.filter(p=>p.fileName!==fname);
+  async function fetchFilePreview(
+    f: File,
+    sheetName?: string | null,
+    headerRow?: number | null,
+    existingIndex?: number
+  ) {
+    try {
+      const formData = new FormData();
+      formData.append('file', f);
+      formData.append('data_type', BACKEND_DATA_TYPE_MAP[type] || 'tops');
+      if (sheetName) formData.append('sheet_name', sheetName);
+      if (headerRow != null && Number.isFinite(headerRow)) {
+        formData.append('header_row', String(headerRow));
+      }
+
+      const res = await fetch(`${API_BASE}/quick_pp/import/ancillary/preview`, {
+        method: 'POST',
+        body: formData
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const data = await res.json();
+      const entry: FilePreviewEntry = {
+        file: f,
+        fileName: f.name,
+        sheetNames: data.sheet_names || [],
+        activeSheet: data.active_sheet || null,
+        headerRow: data.detected_header_row ?? 0,
+        detectedUnitRow: data.detected_unit_row ?? null,
+        headers: data.headers || [],
+        columnMappings: (data.column_mappings || []).map((m: any) => ({
+          source_column: m.source_column,
+          target_column: m.target_column ?? null,
+          source_unit: m.source_unit ?? null,
+          confidence: m.confidence ?? 0,
+          match_stage: m.match_stage ?? 'unmatched'
+        })),
+        detected: data.detected || {},
+        previewRows: (data.preview || []).slice(0, 15),
+        totalRows: data.total_rows ?? 0
+      };
+
+      if (existingIndex != null && existingIndex >= 0 && existingIndex < previews.length) {
+        previews[existingIndex] = entry;
+        previews = [...previews];
+      } else {
+        previews = [...previews, entry];
+      }
+    } catch (err: any) {
+      globalError = `Preview failed for ${f.name}: ${err?.message || err}`;
+    }
+  }
+
+  function removeFile(fname: string) {
+    files = files.filter((f) => f.name !== fname);
+    previews = previews.filter((p) => p.fileName !== fname);
     delete selectedWells[fname];
     delete fileStatuses[fname];
     delete fileErrors[fname];
   }
 
-  function parseCsv(text:string) {
-    // Robust CSV parser supporting quoted fields with commas/newlines and "" escapes
-    const rows: string[][] = [];
-    let cur = '';
-    let row: string[] = [];
-    let inQuotes = false;
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      if (inQuotes) {
-        if (ch === '"') {
-          // double-quote inside quoted field -> check for escaped quote
-          if (text[i + 1] === '"') { cur += '"'; i++; }
-          else { inQuotes = false; }
-        } else {
-          cur += ch;
-        }
-      } else {
-        if (ch === '"') {
-          inQuotes = true;
-        } else if (ch === ',') {
-          row.push(cur);
-          cur = '';
-        } else if (ch === '\r') {
-          // ignore, handle on \n
-        } else if (ch === '\n') {
-          row.push(cur);
-          // only push non-empty rows (not all-empty cells)
-          const allEmpty = row.every(c => c == null || String(c).trim() === '');
-          if (!allEmpty) rows.push(row);
-          row = [];
-          cur = '';
-        } else {
-          cur += ch;
-        }
-      }
-    }
-    // push last field/row if any
-    if (inQuotes) {
-      // unterminated quote: treat the rest as field
-      // fallthrough - allow cur to be used
-    }
-    // push last cell
-    if (cur !== '' || row.length > 0) {
-      row.push(cur);
-      const allEmpty = row.every(c => c == null || String(c).trim() === '');
-      if (!allEmpty) rows.push(row);
-    }
-
-    if (!rows.length) return { headers: [], rows: [] };
-    const headers = (rows[0] || []).map(h => String(h).trim());
-    const dataRows = rows.slice(1).map(r => {
-      const obj: any = {};
-      for (let i = 0; i < headers.length; i++) obj[headers[i]] = r[i] ?? '';
-      return obj;
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || '');
+        const base64 = result.includes(',') ? result.split(',', 2)[1] : result;
+        resolve(base64);
+      };
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
     });
-    return { headers, rows: dataRows };
   }
 
-  async function parseFilePreview(f: File) {
+  function formatErrorMessage(rawErr: string): string {
     try {
-      const text = await f.text();
-      const {headers, rows} = parseCsv(text);
-      const lower = headers.map(h=>h.toLowerCase());
-      const detected: any = {};
-      if (type === 'formation_tops') {
-        detected.name = headers[ lower.indexOf('name') ] ?? headers[ lower.indexOf('top') ] ?? headers[ lower.indexOf('top_name') ] ?? null;
-        detected.depth = headers[ lower.indexOf('depth') ] ?? headers[ lower.indexOf('md') ] ?? null;
-      } else if (type === 'fluid_contacts') {
-        detected.name = headers[ lower.indexOf('name') ] ?? null;
-        detected.depth = headers[ lower.indexOf('depth') ] ?? null;
-      } else if (type === 'pressure_tests') {
-        detected.depth = headers[ lower.indexOf('depth') ] ?? null;
-        detected.pressure = headers[ lower.indexOf('pressure') ] ?? null;
-        detected.uom = headers[ lower.indexOf('pressure_uom') ] ?? null;
-      } else if (type === 'well_surveys') {
-        detected.md = headers[ lower.indexOf('md') ] ?? headers[ lower.indexOf('measured_depth') ] ?? null;
-        detected.inc = headers[ lower.indexOf('inc') ] ?? headers[ lower.indexOf('inclination') ] ?? null;
-        detected.azim = headers[ lower.indexOf('azim') ] ?? headers[ lower.indexOf('azimuth') ] ?? null;
-      } else if (type === 'scal_pc') {
-        detected.sample_name = headers[ lower.indexOf('sample_name') ] ?? headers[ lower.indexOf('sample') ] ?? null;
-        detected.depth = headers[ lower.indexOf('depth') ] ?? headers[ lower.indexOf('md') ] ?? null;
-        detected.pc = headers[ lower.indexOf('pc') ] ?? headers[ lower.indexOf('pc_pressure') ] ?? headers[ lower.indexOf('pressure') ] ?? null;
-        detected.sw = headers[ lower.indexOf('sw') ] ?? headers[ lower.indexOf('pc_sat') ] ?? headers[ lower.indexOf('saturation') ] ?? null;
+      const parsed = JSON.parse(rawErr);
+      if (parsed && typeof parsed.detail === 'string') {
+        return parsed.detail;
       }
-      const previewRows = rows.slice(0,10);
-      // store full rows for processing, previewRows for display
-      previews = [...previews, {fileName:f.name, rows: rows, previewRows, detected}];
-    } catch (err:any) {
-      previews = [...previews, {fileName:f.name, rows: [], previewRows: [], detected:{}, suggestedWell: undefined}];
+    } catch {
+      // not JSON
     }
-  }
-
-  // simple concurrency runner
-  async function runConcurrent(tasks: (()=>Promise<any>)[], concurrency:number) {
-    const out:Array<any> = [];
-    let i = 0;
-    const workers = Array.from({length: Math.min(concurrency, tasks.length)}, async ()=>{
-      while (true) {
-        const idx = i++;
-        if (idx >= tasks.length) return;
-        try { const r = await tasks[idx](); out.push(r); } catch(e){ out.push(e); }
-      }
-    });
-    await Promise.all(workers);
-    return out;
-  }
-
-  function buildPayloadFromPreview(preview:any) {
-    // Caller must ensure suggestedWell exists or user selected one
-    if (type === 'formation_tops') {
-      const tops = preview.rows.map((r:any)=>({ name: r[preview.detected.name] ?? r['name'] ?? r[Object.keys(r)[0]], depth: Number(r[preview.detected.depth] ?? r['depth'] ?? '') }));
-      return { tops };
-    }
-    if (type === 'fluid_contacts') {
-      const contacts = preview.rows.map((r:any)=>({ name: r[preview.detected.name] ?? r['name'] ?? r[Object.keys(r)[0]], depth: Number(r[preview.detected.depth] ?? r['depth'] ?? '') }));
-      return { contacts };
-    }
-    if (type === 'pressure_tests') {
-      const tests = preview.rows.map((r:any)=>({ depth: Number(r[preview.detected.depth] ?? r['depth'] ?? ''), pressure: Number(r[preview.detected.pressure] ?? r['pressure'] ?? ''), pressure_uom: r[preview.detected.uom] ?? r['pressure_uom'] ?? 'psi' }));
-      return { tests };
-    }
-    if (type === 'well_surveys') {
-      const surveys = preview.rows.map((r:any)=>({ md: Number(r[preview.detected.md] ?? r['md'] ?? r['MD'] ?? ''), inc: Number(r[preview.detected.inc] ?? r['inc'] ?? r['INC'] ?? ''), azim: Number(r[preview.detected.azim] ?? r['azim'] ?? r['AZIM'] ?? '') }));
-      return { surveys, calculate_tvd: true };
-    }
-    // core_samples handled as per-sample payloads (returned as an array)
-    if (type === 'core_samples') {
-      // Expect SAMPLE_NAME column (case-insensitive). We'll group rows by sample name.
-      const rows = preview.rows;
-      const keys = Object.keys(rows[0] ?? {});
-      const lowerKeys = keys.map(k=>k.toLowerCase());
-      const sampleCol = keys[ lowerKeys.indexOf('sample_name') ] ?? keys[ lowerKeys.indexOf('sample') ] ?? null;
-      const depthCol = keys[ lowerKeys.indexOf('depth') ] ?? keys[ lowerKeys.indexOf('md') ] ?? null;
-      const rpSat = keys[ lowerKeys.indexOf('rp_sat') ] ?? keys[ lowerKeys.indexOf('rp_sat') ] ?? null;
-      const rpKr = keys[ lowerKeys.indexOf('rp_kr') ] ?? null;
-      const rpPhase = keys[ lowerKeys.indexOf('rp_phase') ] ?? null;
-      const pcSat = keys[ lowerKeys.indexOf('pc_sat') ] ?? null;
-      const pcPressure = keys[ lowerKeys.indexOf('pc_pressure') ] ?? null;
-      const pcType = keys[ lowerKeys.indexOf('pc_type') ] ?? null;
-      const pcCycle = keys[ lowerKeys.indexOf('pc_cycle') ] ?? null;
-
-      // Check for wide columns (Pc.1, Sw.1, etc.)
-      const pcCols = keys.filter(k => /^Pc\.\d+$/.test(k));
-      const swCols = keys.filter(k => /^Sw\.\d+$/.test(k));
-      const isWide = pcCols.length > 0 && swCols.length > 0;
-
-      let processedRows = rows;
-      if (isWide) {
-        // Restructure wide data to long format
-        processedRows = [];
-        for (const row of rows) {
-          const baseRow = { ...row };
-          // Remove wide columns
-          pcCols.forEach(c => delete baseRow[c]);
-          swCols.forEach(c => delete baseRow[c]);
-          // Get all indices
-          const indices = [...new Set([...pcCols.map(c => parseInt(c.split('.')[1])), ...swCols.map(c => parseInt(c.split('.')[1]))])];
-          for (const i of indices) {
-            const pcVal = row[`Pc.${i}`];
-            const swVal = row[`Sw.${i}`];
-            if (pcVal != null && swVal != null && pcVal !== '' && swVal !== '') {
-              processedRows.push({ ...baseRow, Pc: pcVal, Sw: swVal, Measurement_Index: i });
-            }
-          }
-        }
-      }
-
-      // group by sample
-      const groups: Record<string, any[]> = {};
-      for (const r of processedRows) {
-        const sampleName = (sampleCol ? r[sampleCol] : null) || r['SAMPLE_NAME'] || r['sample_name'] || r['Sample'] || null;
-        if (!sampleName) continue;
-        groups[sampleName] = groups[sampleName] || [];
-        groups[sampleName].push(r);
-      }
-
-      const samples: any[] = [];
-      for (const [sname, groupRows] of Object.entries(groups)) {
-        const first = groupRows[0];
-        const sampleObj: any = { sample_name: sname, depth: depthCol ? Number(first[depthCol]) : Number(first['depth'] ?? 0) };
-        // description if available
-        sampleObj.description = first['DESCRIPTION'] ?? first['Description'] ?? first['description'] ?? undefined;
-
-        // remarks (if present)
-        sampleObj.remarks = first['REMARKS'] ?? first['Remarks'] ?? first['remarks'] ?? undefined;
-
-        // measurements: only handle cpore and cperm (case-insensitive)
-        const cporeKey = keys[ lowerKeys.indexOf('cpore') ] ?? keys[ lowerKeys.indexOf('core_porosity') ] ?? keys[ lowerKeys.indexOf('porosity') ] ?? null;
-        const cpermKey = keys[ lowerKeys.indexOf('cperm') ] ?? keys[ lowerKeys.indexOf('core_perm') ] ?? keys[ lowerKeys.indexOf('perm') ] ?? null;
-        const cporeVal = cporeKey ? first[cporeKey] : (first['CPORE'] ?? first['cpore'] ?? null);
-        const cpermVal = cpermKey ? first[cpermKey] : (first['CPERM'] ?? first['cperm'] ?? null);
-
-        // helper: parse numeric-ish values robustly and treat common placeholders as missing
-        function parseNumeric(v: any) {
-          if (v == null) return null;
-          const s = String(v).trim();
-          if (s === '') return null;
-          // common non-values
-          if (/^(na|n\/a|null|undefined|--|-)$/i.test(s)) return null;
-          // remove percent signs and commas
-          const cleaned = s.replace(/[% ,]/g, '');
-          const n = Number(cleaned);
-          return Number.isFinite(n) ? n : null;
-        }
-
-        const cporeNum = parseNumeric(cporeVal);
-        const cpermNum = parseNumeric(cpermVal);
-        const measurements: any[] = [];
-        if (cporeNum != null) measurements.push({ property_name: 'cpore', value: cporeNum, unit: 'frac' });
-        if (cpermNum != null) measurements.push({ property_name: 'cperm', value: cpermNum, unit: 'mD' });
-        if (measurements.length) sampleObj.measurements = measurements;
-
-        // relperm
-        const relperm: any[] = [];
-        for (const r of groupRows) {
-          const sat = r[rpSat] ?? r['RP_SAT'] ?? r['rp_sat'] ?? null;
-          const kr = r[rpKr] ?? r['RP_KR'] ?? null;
-          const phase = r[rpPhase] ?? r['RP_PHASE'] ?? null;
-          if (sat != null && kr != null && sat !== '' && kr !== '') relperm.push({ saturation: parseNumeric(sat), kr: parseNumeric(kr), phase: phase || 'water' });
-        }
-        if (relperm.length) sampleObj.relperm_data = relperm;
-
-        // pc
-        const pc: any[] = [];
-        if (isWide) {
-          // For wide data, Pc is pressure, Sw is saturation
-          for (const r of groupRows) {
-            if (r.Pc != null && r.Sw != null) {
-              pc.push({
-                saturation: parseNumeric(r.Sw),
-                pressure: parseNumeric(r.Pc),
-                cycle: 'drainage' // default
-              });
-            }
-          }
-        } else {
-          // existing logic
-          for (const r of groupRows) {
-            const sat = r[pcSat] ?? r['PC_SAT'] ?? null;
-            const pressure = r[pcPressure] ?? r['PC_PRESSURE'] ?? null;
-            const typev = r[pcType] ?? r['PC_TYPE'] ?? null;
-            const cycle = r[pcCycle] ?? r['PC_CYCLE'] ?? null;
-            if (sat != null && pressure != null && sat !== '' && pressure !== '') pc.push({ saturation: parseNumeric(sat), pressure: parseNumeric(pressure), experiment_type: typev, cycle: parseNumeric(cycle) });
-          }
-        }
-        if (pc.length) sampleObj.pc_data = pc;
-
-        // For core_samples: if both cpore and cperm are missing, drop this sample
-        if (type === 'core_samples' && cporeNum == null && cpermNum == null) {
-          // skip adding empty sample
-        } else {
-          samples.push(sampleObj);
-        }
-      }
-
-      return { samples };
-    }
-
-    if (type === 'scal_pc') {
-      const rows = preview.rows;
-      const keys = Object.keys(rows[0] ?? {});
-      const lowerKeys = keys.map((k) => k.toLowerCase());
-      const sampleCol = keys[lowerKeys.indexOf('sample_name')] ?? keys[lowerKeys.indexOf('sample')] ?? null;
-      const depthCol = keys[lowerKeys.indexOf('depth')] ?? keys[lowerKeys.indexOf('md')] ?? null;
-      const pcCol =
-        keys[lowerKeys.indexOf('pc')] ??
-        keys[lowerKeys.indexOf('pc_pressure')] ??
-        keys[lowerKeys.indexOf('pressure')] ??
-        null;
-      const swCol =
-        keys[lowerKeys.indexOf('sw')] ??
-        keys[lowerKeys.indexOf('pc_sat')] ??
-        keys[lowerKeys.indexOf('saturation')] ??
-        null;
-      const pcTypeCol = keys[lowerKeys.indexOf('pc_type')] ?? keys[lowerKeys.indexOf('experiment_type')] ?? null;
-      const pcCycleCol = keys[lowerKeys.indexOf('pc_cycle')] ?? keys[lowerKeys.indexOf('cycle')] ?? null;
-
-      function parseNum(v: any) {
-        if (v == null) return null;
-        const s = String(v).trim();
-        if (s === '' || /^(na|n\/a|null|undefined|--|-)$/i.test(s)) return null;
-        const n = Number(s.replace(/[% ,]/g, ''));
-        return Number.isFinite(n) ? n : null;
-      }
-
-      // Support wide format (Pc.1, Sw.1, Pc.2, Sw.2, ...) as well as long format (sample_name, depth, pc, sw)
-      const pcWideCols = keys.filter((k) => /^Pc\.\d+$/i.test(k));
-      const swWideCols = keys.filter((k) => /^Sw\.\d+$/i.test(k));
-      const isWide = pcWideCols.length > 0 && swWideCols.length > 0;
-
-      const pc_data: any[] = [];
-      rows.forEach((row: any, rowIdx: number) => {
-        const sname = String(
-          (sampleCol ? row[sampleCol] : null) ??
-            row['SAMPLE_NAME'] ??
-            row['sample_name'] ??
-            row['Sample'] ??
-            `SCAL-${rowIdx + 1}`
-        ).trim();
-        const depthVal = parseNum(depthCol ? row[depthCol] : (row['depth'] ?? row['DEPTH']));
-        if (depthVal == null) return;
-
-        if (isWide) {
-          const indices = [
-            ...new Set([
-              ...pcWideCols.map((c) => parseInt(c.split('.')[1])),
-              ...swWideCols.map((c) => parseInt(c.split('.')[1]))
-            ])
-          ];
-          for (const i of indices) {
-            const pVal = parseNum(row[`Pc.${i}`] ?? row[`pc.${i}`]);
-            const sVal = parseNum(row[`Sw.${i}`] ?? row[`sw.${i}`]);
-            if (pVal != null && sVal != null) {
-              pc_data.push({
-                sample_name: sname,
-                depth: depthVal,
-                pc: pVal,
-                sw: sVal,
-                experiment_type: 'micp',
-                cycle: 'drainage'
-              });
-            }
-          }
-        } else {
-          const pVal = parseNum(pcCol ? row[pcCol] : (row['pc'] ?? row['PC'] ?? row['pc_pressure'] ?? row['PC_PRESSURE'] ?? row['pressure']));
-          const sVal = parseNum(swCol ? row[swCol] : (row['sw'] ?? row['SW'] ?? row['pc_sat'] ?? row['PC_SAT'] ?? row['saturation']));
-          if (pVal != null && sVal != null) {
-            pc_data.push({
-              sample_name: sname,
-              depth: depthVal,
-              pc: pVal,
-              sw: sVal,
-              experiment_type: (pcTypeCol ? row[pcTypeCol] : row['PC_TYPE']) || 'micp',
-              cycle: (pcCycleCol ? row[pcCycleCol] : row['PC_CYCLE']) || 'drainage'
-            });
-          }
-        }
-      });
-
-      return { pc_data, append: true };
-    }
-
-    return {};
-  }
-
-  // Helper: resolve a sensible value from a CSV row given a detected header
-  function getFieldValue(row: any, detectedHeader: string | null | undefined, fallbacks: string[] = []) {
-    if (!row || typeof row !== 'object') return undefined;
-    // direct lookup if detectedHeader provided
-    if (detectedHeader && row[detectedHeader] != null && row[detectedHeader] !== '') return row[detectedHeader];
-    // map lowercase keys to original keys for case-insensitive lookup
-    const keyMap: Record<string, string> = {};
-    for (const k of Object.keys(row)) keyMap[k.toLowerCase()] = k;
-    for (const fb of fallbacks) {
-      const k = keyMap[fb.toLowerCase()];
-      if (k && row[k] != null && row[k] !== '') return row[k];
-    }
-    // last resort: first non-empty column
-    for (const k of Object.keys(row)) {
-      if (row[k] != null && row[k] !== '') return row[k];
-    }
-    return undefined;
+    return rawErr;
   }
 
   async function processAll() {
     globalError = null;
     results = [];
-    // ensure user selected wells for each file OR file has well_name column
+
     for (const p of previews) {
-      const key = p.fileName;
-      const sel = selectedWells[key];
-      const hasWellCol = Object.keys(p.rows[0] ?? {}).some(h => h.toLowerCase() === 'well_name');
-      if (!sel && !hasWellCol) {
-        globalError = `Please select a target well for file ${key} or include a 'well_name' column in the CSV`;
+      const sel = selectedWells[p.fileName];
+      const hasMappedWellCol = p.columnMappings.some((m) => m.target_column === 'WELL_NAME');
+      if (!sel && !hasMappedWellCol) {
+        globalError = `Please select a Target Well for "${p.fileName}" or map one of its columns to WELL_NAME.`;
         return;
       }
     }
 
     processing = true;
-    const tasks: (()=>Promise<any>)[] = previews.map(preview => async ()=>{
-      // initialize status for this file
-      fileStatuses[preview.fileName] = 'processing';
-      fileErrors[preview.fileName] = '';
-      const payload = buildPayloadFromPreview(preview);
-      // attach well_name if selected (sent via query string, not in body)
-      const sel = selectedWells[preview.fileName];
-      const qs = sel ? `?well_name=${encodeURIComponent(String(sel))}` : '';
-      console.log('Bulk import: processing', preview.fileName, 'type', type);
-      // if CSV contains well_name values, send multiple requests per distinct well
-      const rows = preview.rows;
-      const rowsHaveWell = rows.length && Object.keys(rows[0]).some(k=>k.toLowerCase()==='well_name');
-      if (rowsHaveWell) {
-        // group by well_name
-        const groups:Record<string, any[]> = {};
-        for (const r of rows) {
-          const wn = r['well_name'] ?? r['Well_Name'] ?? r['WELL_NAME'] ?? r[Object.keys(r).find(k=>k.toLowerCase()==='well_name') ?? ''] ?? null;
-          const record = r;
-          if (!wn) continue;
-          groups[wn] = groups[wn] || [];
-          groups[wn].push(record);
-        }
-        let totalSent = 0;
-        const subResults: any[] = [];
-        for (const wn of Object.keys(groups)) {
-          // Use getFieldValue to be robust to header casing/aliases
-          const rowsForWell = groups[wn];
-          const subPayload: any = (type === 'formation_tops')
-            ? { tops: rowsForWell.map((r:any) => ({
-                name: String(getFieldValue(r, preview.detected?.name, ['name','top','top_name']) ?? ''),
-                depth: Number(getFieldValue(r, preview.detected?.depth, ['depth','md']) ?? '')
-              })) }
-            : (type === 'fluid_contacts')
-              ? { contacts: rowsForWell.map((r:any) => ({
-                  name: String(getFieldValue(r, preview.detected?.name, ['name']) ?? ''),
-                  depth: Number(getFieldValue(r, preview.detected?.depth, ['depth','md']) ?? '')
-                })) }
-              : (type === 'pressure_tests')
-                ? { tests: rowsForWell.map((r:any) => ({
-                    depth: Number(getFieldValue(r, preview.detected?.depth, ['depth','md']) ?? ''),
-                    pressure: Number(getFieldValue(r, preview.detected?.pressure, ['pressure']) ?? ''),
-                    pressure_uom: String(getFieldValue(r, preview.detected?.uom, ['pressure_uom','uom']) ?? 'psi')
-                  })) }
-                : (type === 'well_surveys')
-                  ? { surveys: rowsForWell.map((r:any) => ({
-                      md: Number(getFieldValue(r, preview.detected?.md, ['md','MD']) ?? ''),
-                      inc: Number(getFieldValue(r, preview.detected?.inc, ['inc','INC']) ?? ''),
-                      azim: Number(getFieldValue(r, preview.detected?.azim, ['azim','AZIM']) ?? '')
-                    })), calculate_tvd: true }
-                  : (type === 'scal_pc')
-                    ? buildPayloadFromPreview({ rows: rowsForWell })
-                    : {};
-            const subQs = `?well_name=${encodeURIComponent(String(wn))}`;
-            // If this is a core samples import, build samples for this well and POST per-sample to core_samples endpoint
-            if (type === 'core_samples') {
-              const subPreview = { rows: rowsForWell };
-              const subPayload = buildPayloadFromPreview(subPreview);
-              const samples = subPayload.samples ?? [];
-              let sentForWell = 0;
-              for (const s of samples) {
-                const singleUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${subQs}`;
-                console.log('Bulk import: POST', singleUrl, s);
-                const res = await fetch(singleUrl, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(s) });
-                if (!res.ok) {
-                  const errtxt = await res.text();
-                  if (res.status === 404 || /not found in project/i.test(errtxt)) {
-                    subResults.push({ well: wn, sample: s.sample_name ?? s.sample_name, ok: false, skipped: true, error: errtxt, status: res.status });
-                    continue;
-                  }
-                  fileStatuses[preview.fileName] = 'error';
-                  fileErrors[preview.fileName] = errtxt;
-                  return { file: preview.fileName, ok:false, error: errtxt, status: res.status };
-                }
-                sentForWell += 1;
-                subResults.push({ well: wn, sample: s.sample_name ?? s.sample_name, ok: true });
-              }
-              totalSent += sentForWell;
-              // if no samples were sent for this well, record as skipped
-              if (sentForWell === 0 && !subResults.some(r=>r.well===wn && r.ok)) {
-                subResults.push({ well: wn, ok: false, skipped: true, error: 'No samples sent' });
-              }
-              continue;
-            }
-
-            // Non-core types: send grouped payloads (tops/contacts/tests/well_surveys)
-            const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${subQs}`;
-            console.log('Bulk import: POST', url, subPayload);
-            const res = await fetch(url, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(subPayload)});
-            if (!res.ok) {
-              const errtxt = await res.text();
-              // if the error indicates the well is not found in the project, skip this well and continue
-              if (res.status === 404 || /not found in project/i.test(errtxt)) {
-                subResults.push({ well: wn, ok: false, skipped: true, error: errtxt, status: res.status });
-                // don't mark the entire file as error yet — continue with other wells
-                continue;
-              }
-              // any other error should be treated as a file-level failure
-              fileStatuses[preview.fileName] = 'error';
-              fileErrors[preview.fileName] = errtxt;
-              return {file: preview.fileName, ok:false, error: errtxt, status: res.status};
-            }
-            const sentCountForWell = (subPayload.tops?.length ?? subPayload.contacts?.length ?? subPayload.tests?.length ?? subPayload.surveys?.length ?? subPayload.pc_data?.length ?? 0);
-            totalSent += sentCountForWell;
-            subResults.push({ well: wn, ok: true, sent: sentCountForWell });
-        }
-        if (totalSent > 0) {
-          fileStatuses[preview.fileName] = 'success';
-          return {file: preview.fileName, ok:true, sent: totalSent, details: subResults};
-        }
-        // if we reached here, all well-groups were skipped/failing due to missing wells
-        fileStatuses[preview.fileName] = 'error';
-        const combined = subResults.map(r=>`${r.well}: ${r.error ?? 'skipped'}`).join('; ');
-        fileErrors[preview.fileName] = combined || 'No valid wells to import';
-        return {file: preview.fileName, ok:false, error: combined, status: 404};
-      }
-
-      // otherwise single request for whole file
-      // For core samples we may need to POST per sample
-      if (type === 'core_samples') {
-        // payload may contain `samples` array
-        const samplesArr = payload.samples ?? payload.samples ?? [];
-        if (!samplesArr.length) return { file: preview.fileName, ok: false, error: 'No samples parsed' };
-        let sentCount = 0;
-        const sampleResults: any[] = [];
-        for (const s of samplesArr) {
-          const singleQs = sel ? `?well_name=${encodeURIComponent(String(sel))}` : '';
-          const singleUrl = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${singleQs}`;
-          const singlePayload = { ...s };
-          console.log('Bulk import: POST', singleUrl, singlePayload);
-          const res = await fetch(singleUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(singlePayload) });
-          if (!res.ok) {
-            const errtxt = await res.text();
-            // if the error indicates the well is not in the project, skip this sample and continue
-            if (res.status === 404 || /not found in project/i.test(errtxt)) {
-              sampleResults.push({ sample: s.sample_name ?? s.sample_name, ok: false, skipped: true, error: errtxt });
-              continue;
-            }
-            fileStatuses[preview.fileName] = 'error';
-            fileErrors[preview.fileName] = errtxt;
-            return { file: preview.fileName, ok: false, error: errtxt, status: res.status };
-          }
-          sentCount += 1;
-          sampleResults.push({ sample: s.sample_name ?? s.sample_name, ok: true });
-        }
-        if (sentCount > 0) {
-          fileStatuses[preview.fileName] = 'success';
-          return { file: preview.fileName, ok: true, sent: sentCount, details: sampleResults };
-        }
-        fileStatuses[preview.fileName] = 'error';
-        const combinedSamples = sampleResults.map(r=>`${r.sample}: ${r.error ?? 'skipped'}`).join('; ');
-        fileErrors[preview.fileName] = combinedSamples || 'No samples imported';
-        return { file: preview.fileName, ok: false, error: combinedSamples, status: 404 };
-      }
-
-      const url = `${API_BASE}/quick_pp/database/projects/${projectId}/${type}${qs}`;
-      console.log('Bulk import: POST', url, payload);
-      const res = await fetch(url, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-      if (!res.ok) {
-        fileStatuses[preview.fileName] = 'error';
-        const errtxt = await res.text(); fileErrors[preview.fileName] = errtxt;
-        return {file: preview.fileName, ok:false, error: errtxt, status: res.status};
-      }
-      // compute number of rows sent
-      const sent = (payload.tops?.length ?? payload.contacts?.length ?? payload.tests?.length ?? payload.surveys?.length ?? payload.pc_data?.length ?? 0) || (payload.samples ? payload.samples.length : 0);
-      fileStatuses[preview.fileName] = 'success';
-      return {file: preview.fileName, ok:true, sent};
-    });
+    const shiftPairs: Array<[number, number]> = coreDepthShiftRows
+      .map((r) => [Number(r.coreDepth), Number(r.logDepth)] as [number, number])
+      .filter(([c, l]) => Number.isFinite(c) && Number.isFinite(l));
 
     const taskId = appStatus.startTask(
       `Importing ${type.replace(/_/g, ' ')} (${previews.length} file(s))...`
     );
+
     try {
-      const out = await runConcurrent(tasks, maxConcurrency);
+      const out: Array<{ file: string; ok: boolean; status?: number; error?: string; sent?: number }> = [];
+      let cursor = 0;
+      const workerCount = Math.max(1, Math.min(maxConcurrency, previews.length));
+      const workers = Array.from({ length: workerCount }, async () => {
+        while (cursor < previews.length) {
+          const p = previews[cursor++];
+          fileStatuses[p.fileName] = 'processing';
+          fileErrors[p.fileName] = '';
+          try {
+            const b64 = await fileToBase64(p.file);
+            const commitBody = {
+              project_id: Number(projectId),
+              well_name: selectedWells[p.fileName] || null,
+              data_type: BACKEND_DATA_TYPE_MAP[type] || 'tops',
+              column_mappings: p.columnMappings,
+              file_content_base64: b64,
+              filename: p.fileName,
+              sheet_name: p.activeSheet,
+              header_row: p.headerRow,
+              calculate_tvd: calculateSurveyTvd,
+              core_snap_tolerance_m: Number(coreSnapToleranceM) || 0.08,
+              core_depth_shifts: shiftPairs.length > 0 ? shiftPairs : null
+            };
+
+            const res = await fetch(`${API_BASE}/quick_pp/import/ancillary/commit`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(commitBody)
+            });
+
+            if (!res.ok) {
+              const errTxt = formatErrorMessage(await res.text());
+              fileStatuses[p.fileName] = 'error';
+              fileErrors[p.fileName] = errTxt;
+              out.push({ file: p.fileName, ok: false, status: res.status, error: errTxt });
+            } else {
+              const data = await res.json();
+              fileStatuses[p.fileName] = 'success';
+              out.push({ file: p.fileName, ok: true, sent: data.total_committed ?? 0 });
+            }
+          } catch (err: any) {
+            const msg = formatErrorMessage(String(err?.message ?? err));
+            fileStatuses[p.fileName] = 'error';
+            fileErrors[p.fileName] = msg;
+            out.push({ file: p.fileName, ok: false, error: msg });
+          }
+        }
+      });
+      await Promise.all(workers);
+
       results = out;
-      const okCount = out.filter((r: any) => r?.ok).length;
-      if (okCount > 0 && workbench.projectId && workbench.wellId) {
-        await wellData.loadWellBundle(workbench.projectId, workbench.wellId);
+      const okCount = out.filter((r) => r.ok).length;
+      if (okCount > 0 && workbench.projectId) {
+        await projectData.selectProject(workbench.projectId, workbench.wellId);
+        if (workbench.wellId) {
+          await wellData.loadWellBundle(workbench.projectId, workbench.wellId);
+        }
       }
       if (okCount === out.length) {
         appStatus.endTask(taskId, {
@@ -613,110 +436,363 @@
           message: `Imported ${okCount}/${out.length} ${type.replace(/_/g, ' ')} file(s)`
         });
       }
-    } catch (err:any) {
-      globalError = String(err?.message ?? err);
+    } catch (err: any) {
+      globalError = formatErrorMessage(String(err?.message ?? err));
       appStatus.endTask(taskId, {
         level: 'error',
         message: globalError
       });
-    } finally { processing = false; }
+    } finally {
+      processing = false;
+    }
   }
 </script>
 
-<div class="bulk-importer">
-  <div class="mb-2">
-    <div class="flex items-center gap-3">
-      <label for="import-type-select" class="block text-sm">Import type</label>
-      <select id="import-type-select" bind:value={type} class="input w-48">
-        <option value="formation_tops">Formation tops</option>
-        <option value="fluid_contacts">Fluid contacts</option>
-        <option value="pressure_tests">Pressure tests</option>
-        <option value="core_samples">RCA Core Plugs (CPORE/CPERM)</option>
-        <option value="scal_pc">SCAL Capillary Pressure (Pc/Sw)</option>
-        <option value="well_surveys">Well surveys (deviation)</option>
-      </select>
-      <label for="csv-input" class="block text-sm mb-0">
-        <div class="px-3 py-2 border rounded cursor-pointer bg-white/5">Choose CSV files</div>
-      </label>
-      <input id="csv-input" type="file" accept=".csv" multiple on:change={handleFiles} class="hidden" />
-    </div>
-    <div class="text-xs text-muted-foreground mt-1">
-      <div>You can select multiple CSVs. Each file can target a well or include a <code>well_name</code> column.</div>
-      <div class="mt-1">Required columns for the selected import type:</div>
-      {#if type === 'formation_tops'}
-        <div class="text-xs"><code>name</code>, <code>depth</code></div>
-      {:else if type === 'fluid_contacts'}
-        <div class="text-xs"><code>name</code>, <code>depth</code></div>
-      {:else if type === 'pressure_tests'}
-        <div class="text-xs"><code>depth</code>, <code>pressure</code>, <code>pressure_uom</code> (optional)</div>
-      {:else if type === 'core_samples'}
-        <div class="text-xs">Required: <code>sample_name</code>, <code>depth</code>, and RCA measurements: <code>cpore</code> (or <code>porosity</code>), <code>cperm</code> (or <code>perm</code>). Optional: <code>well_name</code>, <code>description</code>, <code>remarks</code>.</div>
-      {:else if type === 'scal_pc'}
-        <div class="text-xs">Multiple (Pc, Sw) pairs per sample &amp; depth. Required: <code>sample_name</code>, <code>depth</code>, and either long columns (<code>pc</code> / <code>pc_pressure</code>, <code>sw</code> / <code>pc_sat</code>) or wide columns (<code>Pc.1</code>, <code>Sw.1</code>, <code>Pc.2</code>, <code>Sw.2</code>, ...). Optional: <code>well_name</code>, <code>pc_type</code>, <code>pc_cycle</code>.</div>
-      {:else if type === 'well_surveys'}
-        <div class="text-xs">Required columns: <code>md</code> (measured depth), <code>inc</code> (inclination), <code>azim</code> (azimuth)</div>
+<div class="bulk-importer space-y-3">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div class="flex flex-wrap items-center gap-2.5">
+      {#if showTypeSelector}
+        <label for="import-type-select" class="text-xs font-semibold text-[var(--text-secondary)]">
+          Data Type:
+        </label>
+        <select
+          id="import-type-select"
+          bind:value={type}
+          class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 pr-7 py-0 text-xs font-medium text-[var(--text-primary)]"
+        >
+          <option value="formation_tops">Formation Tops</option>
+          <option value="fluid_contacts">Fluid Contacts</option>
+          <option value="pressure_tests">Pressure Tests (RFT/MDT)</option>
+          <option value="core_samples">RCA Core Plugs (CPORE/CPERM)</option>
+          <option value="scal_pc">SCAL Capillary Pressure (Pc/Sw)</option>
+          <option value="well_surveys">Well Surveys (Deviation)</option>
+        </select>
       {/if}
+
+      <label
+        for="ancillary-file-input"
+        class="flex h-7 cursor-pointer items-center rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:opacity-90"
+      >
+        Choose CSV / Excel Files (.csv, .tsv, .xls, .xlsx)
+      </label>
+      <input
+        id="ancillary-file-input"
+        type="file"
+        accept=".csv,.tsv,.txt,.xls,.xlsx"
+        multiple
+        on:change={handleFiles}
+        class="hidden"
+      />
+      <span class="text-xs text-[var(--text-secondary)]">
+        {DATA_TYPE_DESCRIPTIONS[type] || ''}
+      </span>
     </div>
+
+    {#if type === 'well_surveys'}
+      <label class="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
+        <input type="checkbox" bind:checked={calculateSurveyTvd} />
+        <span>Auto-compute Minimum Curvature (TVD, TVDSS, DX, DY, DLS)</span>
+      </label>
+    {/if}
   </div>
 
+  <!-- Core Depth Alignment & Shift Controls for RCA / SCAL -->
+  {#if type === 'core_samples' || type === 'scal_pc'}
+    <div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2.5 text-xs space-y-2">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <span class="font-semibold text-[var(--text-primary)]">
+          Core-to-Log Depth Alignment &amp; Shift Table
+        </span>
+        <div class="flex items-center gap-3">
+          <label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)]">
+            <span>Snap Tolerance (m):</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              max="1"
+              bind:value={coreSnapToleranceM}
+              class="h-6 w-16 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px]"
+            />
+          </label>
+          <button
+            type="button"
+            on:click={addShiftPoint}
+            class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[11px] font-medium hover:bg-slate-100"
+          >
+            + Add Core Shift Tie-Point
+          </button>
+        </div>
+      </div>
+
+      {#if coreDepthShiftRows.length > 0}
+        <div class="space-y-1">
+          {#each coreDepthShiftRows as row, sIdx}
+            <div class="flex items-center gap-2 text-[11px]">
+              <span>Core Depth (m):</span>
+              <input
+                type="number"
+                step="0.01"
+                bind:value={row.coreDepth}
+                placeholder="e.g. 3850.0"
+                class="h-6 w-28 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 py-0"
+              />
+              <span>→ Log Depth (m):</span>
+              <input
+                type="number"
+                step="0.01"
+                bind:value={row.logDepth}
+                placeholder="e.g. 3851.4"
+                class="h-6 w-28 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 py-0"
+              />
+              <button
+                type="button"
+                on:click={() => removeShiftPoint(sIdx)}
+                class="text-red-600 hover:underline"
+              >
+                Remove
+              </button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   {#if previews.length}
-    <div class="mb-2">
-      <div class="font-semibold">Files preview</div>
-      {#each previews as p}
-        <div class="border rounded p-3 my-2 bg-panel">
-          <div class="flex justify-between items-start mb-2">
-            <div>
-              <div class="font-medium">{p.fileName}</div>
-              <div class="text-xs text-muted-foreground">Detected: {JSON.stringify(p.detected)}</div>
-            </div>
-            <div class="flex items-center gap-2">
-              {#if fileStatuses[p.fileName] === 'processing'}
-                <div class="text-sm">Processing…</div>
-              {:else if fileStatuses[p.fileName] === 'success'}
-                <div class="text-sm text-green-600">✓ Imported</div>
-              {:else if fileStatuses[p.fileName] === 'error'}
-                <div class="text-sm text-red-600">✕ {fileErrors[p.fileName]}</div>
+    <div class="space-y-3">
+      {#each previews as p, pIdx}
+        <div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 space-y-2.5">
+          <!-- File Header & Sheet / Header Row Controls -->
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-hairline)] pb-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-xs font-bold text-[var(--text-primary)]">{p.fileName}</span>
+              <span class="rounded-xs bg-slate-100 px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)]">
+                {p.totalRows} data rows
+              </span>
+              {#if p.detectedUnitRow != null}
+                <span class="rounded-xs bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                  Sub-header unit row auto-detected (row #{p.detectedUnitRow + 1})
+                </span>
               {/if}
-              <button class="btn btn-ghost btn-sm" on:click={() => removeFile(p.fileName)}>Remove</button>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2 text-[11px]">
+              {#if p.sheetNames && p.sheetNames.length > 1}
+                <label class="flex items-center gap-1">
+                  <span>Sheet:</span>
+                  <select
+                    bind:value={p.activeSheet}
+                    on:change={() => fetchFilePreview(p.file, p.activeSheet, p.headerRow, pIdx)}
+                    class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-2 pr-6 py-0 text-[11px]"
+                  >
+                    {#each p.sheetNames as sName}
+                      <option value={sName}>{sName}</option>
+                    {/each}
+                  </select>
+                </label>
+              {/if}
+
+              <label class="flex items-center gap-1">
+                <span>Header Row (0-idx):</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="30"
+                  bind:value={p.headerRow}
+                  on:change={() => fetchFilePreview(p.file, p.activeSheet, p.headerRow, pIdx)}
+                  class="h-6 w-14 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 py-0 text-[11px]"
+                />
+              </label>
+
+              <button
+                type="button"
+                on:click={() => saveMappingPreset(p)}
+                class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[10px] font-medium hover:bg-slate-200"
+              >
+                Save Mapping Preset
+              </button>
+              <button
+                type="button"
+                on:click={() => applySavedPreset(pIdx)}
+                class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[10px] font-medium hover:bg-slate-200"
+              >
+                Apply Preset
+              </button>
+
+              {#if fileStatuses[p.fileName] === 'processing'}
+                <span class="text-xs font-medium text-blue-600">Processing…</span>
+              {:else if fileStatuses[p.fileName] === 'success'}
+                <span class="text-xs font-semibold text-emerald-600">✓ Imported</span>
+              {:else if fileStatuses[p.fileName] === 'error'}
+                <span class="text-xs font-semibold text-red-600">✕ {fileErrors[p.fileName]}</span>
+              {/if}
+
+              <button
+                type="button"
+                class="h-6 rounded-xs px-2 text-[11px] text-red-600 hover:bg-red-50"
+                on:click={() => removeFile(p.fileName)}
+              >
+                Remove
+              </button>
             </div>
           </div>
 
-          <div class="mb-2 flex items-center gap-2">
-            <div class="text-sm">Target well:</div>
-            <WellSelector {projectId} bind:selected={selectedWells[p.fileName]} />
+          <!-- Target Well Selector & Active Mapping Summary -->
+          <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div class="flex items-center gap-2">
+              <span class="font-medium text-[var(--text-secondary)]">
+                Target Well (optional override or filter):
+              </span>
+              <WellSelector {projectId} bind:selected={selectedWells[p.fileName]} />
+            </div>
+
+            <div class="flex flex-wrap items-center gap-1.5 text-[10px]">
+              {#each targetOptions as tOpt}
+                {@const mappedCols = p.columnMappings.filter((m) => m.target_column === tOpt.key)}
+                <span
+                  class="rounded-xs border px-1.5 py-0.5 font-mono {mappedCols.length > 0
+                    ? 'border-emerald-300 bg-emerald-50 font-semibold text-emerald-800'
+                    : tOpt.required
+                      ? 'border-amber-300 bg-amber-50 text-amber-800'
+                      : 'border-slate-200 bg-slate-50 text-slate-500'}"
+                >
+                  {tOpt.key}: {mappedCols.length === 0
+                    ? 'unmapped'
+                    : mappedCols.length === 1
+                      ? mappedCols[0].source_column
+                      : `${mappedCols[0].source_column}..${mappedCols[mappedCols.length - 1].source_column} (${mappedCols.length} cols)`}
+                </span>
+              {/each}
+            </div>
           </div>
 
-          <div class="text-sm overflow-auto">
-              <table class="text-sm w-full table-auto border-collapse">
-              <thead><tr>{#if p.previewRows && p.previewRows.length}{#each Object.keys(p.previewRows[0]) as h}<th class="text-left pr-3">{h}</th>{/each}{/if}</tr></thead>
-              <tbody>
-                {#each (p.previewRows && p.previewRows.length ? p.previewRows : p.rows.slice(0,10)) as r}
-                  <tr>{#each Object.keys(r) as k}<td class="pr-3">{r[k]}</td>{/each}</tr>
+          <!-- Interactive Column Mapper Table -->
+          <div class="max-h-52 overflow-y-auto rounded-xs border border-[var(--border-hairline)]">
+            <table class="w-full border-collapse text-left text-[11px]">
+              <thead class="sticky top-0 z-10 bg-[var(--bg-subtle)] text-[10px] font-semibold text-[var(--text-secondary)]">
+                <tr>
+                  <th class="px-2.5 py-1.5">Source Column (CSV / Excel)</th>
+                  <th class="px-2.5 py-1.5">Target quick_pp Property</th>
+                  <th class="px-2.5 py-1.5">Source Unit</th>
+                  <th class="px-2.5 py-1.5">Match Stage / Confidence</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-[var(--border-hairline)]">
+                {#each p.columnMappings as cm, colIdx}
+                  <tr class={cm.target_column ? 'bg-blue-50/40 hover:bg-blue-50/70' : 'hover:bg-slate-50'}>
+                    <td class="px-2.5 py-1 font-mono font-semibold text-[var(--text-primary)]">
+                      {cm.source_column}
+                    </td>
+                    <td class="px-2.5 py-1">
+                      <select
+                        value={cm.target_column ?? ''}
+                        on:change={(e) => handleTargetColumnChange(pIdx, colIdx, e.currentTarget.value)}
+                        class="h-7 w-72 rounded-xs border px-2 pr-7 py-0 text-[11px] font-medium {cm.target_column
+                          ? 'border-blue-400 bg-white text-[var(--text-primary)] font-semibold'
+                          : 'border-[var(--border-hairline)] bg-slate-50 text-[var(--text-muted)]'}"
+                      >
+                        <option value="">— Ignore Column —</option>
+                        {#each targetOptions as opt}
+                          <option value={opt.key}>{opt.label}</option>
+                        {/each}
+                      </select>
+                    </td>
+                    <td class="px-2.5 py-1">
+                      <input
+                        type="text"
+                        placeholder="e.g. m, ft, %, mD, psi"
+                        bind:value={cm.source_unit}
+                        class="h-7 w-32 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0 font-mono text-[11px]"
+                      />
+                    </td>
+                    <td class="px-2.5 py-1">
+                      {#if cm.target_column}
+                        <span
+                          class="rounded-xs px-1.5 py-0.5 text-[10px] font-semibold {cm.match_stage === 'exact' || cm.match_stage === 'alias' || cm.match_stage === 'wide_series'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-blue-100 text-blue-800'}"
+                        >
+                          {cm.match_stage} ({Math.round((cm.confidence || 1) * 100)}%) → {cm.target_column}
+                        </span>
+                      {:else}
+                        <span class="text-[10px] text-[var(--text-muted)]">Ignored</span>
+                      {/if}
+                    </td>
+                  </tr>
                 {/each}
               </tbody>
             </table>
           </div>
+
+          <!-- Data Preview Table (First 8 rows) with mapped column badges -->
+          {#if p.previewRows && p.previewRows.length > 0}
+            <div class="max-h-44 overflow-auto rounded-xs border border-[var(--border-hairline)]">
+              <table class="w-full border-collapse text-left text-[11px]">
+                <thead class="sticky top-0 z-10 bg-[var(--bg-subtle)] text-[10px] font-semibold">
+                  <tr>
+                    {#each p.headers as h}
+                      {@const mappedTarget = getMappedTargetForHeader(p, h)}
+                      <th class="px-2 py-1 whitespace-nowrap {mappedTarget ? 'bg-emerald-50 text-emerald-900' : ''}">
+                        <div>{h}</div>
+                        {#if mappedTarget}
+                          <div class="mt-0.5 inline-block rounded-xs bg-emerald-600 px-1 py-0.2 text-[9px] font-bold text-white">
+                            → {mappedTarget}
+                          </div>
+                        {/if}
+                      </th>
+                    {/each}
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-[var(--border-hairline)]">
+                  {#each p.previewRows.slice(0, 8) as r}
+                    <tr>
+                      {#each p.headers as h}
+                        {@const mappedTarget = getMappedTargetForHeader(p, h)}
+                        <td
+                          class="px-2 py-0.5 whitespace-nowrap font-mono text-[10px] {mappedTarget
+                            ? 'bg-emerald-50/30 font-medium text-[var(--text-primary)]'
+                            : 'text-[var(--text-secondary)]'}"
+                        >
+                          {r[h] ?? ''}
+                        </td>
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
         </div>
       {/each}
     </div>
 
     {#if globalError}
-      <div class="text-red-600 text-sm mb-2">{globalError}</div>
-    {/if}
-
-    <div class="mb-3">
-      <button class="btn btn-primary" on:click={processAll} disabled={processing}>{processing ? 'Processing…' : 'Process all'}</button>
-    </div>
-
-    {#if results.length}
-      <div class="mt-2">
-        <div class="font-semibold">Results</div>
-        <ul>
-          {#each results as r}
-            <li>{r.file}: {r.ok ? 'OK' : `FAILED (${r.status || ''}) - ${r.error ?? ''}`}</li>
-          {/each}
-        </ul>
+      <div class="rounded-xs border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700">
+        {globalError}
       </div>
     {/if}
+
+    <div class="flex flex-wrap items-center gap-3">
+      <button
+        type="button"
+        class="h-7 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white disabled:opacity-50"
+        on:click={processAll}
+        disabled={processing}
+      >
+        {processing ? 'Committing & Aligning Data…' : `Commit & Import All (${previews.length} file${previews.length > 1 ? 's' : ''})`}
+      </button>
+
+      {#if results.length > 0}
+        <div class="text-xs text-[var(--text-secondary)]">
+          {#each results as r}
+            <span class="mr-3">
+              <strong>{r.file}:</strong>
+              {r.ok ? `OK (${r.sent ?? 0} records)` : `FAILED — ${r.error ?? ''}`}
+            </span>
+          {/each}
+        </div>
+      {/if}
+    </div>
   {/if}
 </div>

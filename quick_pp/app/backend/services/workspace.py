@@ -17,6 +17,7 @@ from quick_pp.app.backend.services.database import (
     _ephemeral_wells,
     _get_merged_dataframe_sync,
     _merged_data_cache,
+    _sanitize_for_json,
     dataframe_to_columnar,
     dataframe_to_records,
     filter_merged_dataframe,
@@ -992,7 +993,7 @@ def workspace_well_bundle(
         core_samples_list.sort(key=lambda r: (r["depth"], r["sample_name"]))
         scal_pc_list.sort(key=lambda r: (r["depth"], r["sample_name"], r["pc"]))
 
-        return {
+        return _sanitize_for_json({
             "project_id": project_id,
             "well_name": well_name,
             "row_count": col_payload.get("row_count", 0),
@@ -1010,7 +1011,7 @@ def workspace_well_bundle(
                 else ancillary.get("directional_surveys")
             ),
             "config": {k: v for k, v in well_config.items() if not k.startswith("_")},
-        }
+        })
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:

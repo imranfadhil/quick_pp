@@ -114,8 +114,8 @@ async def create_project(payload: dict, request: Request):
     description = payload.get("description") if isinstance(payload, dict) else ""
     current_user = get_current_user_optional(request)
     created_by = (
-        (payload.get("created_by_user_id") if isinstance(payload, dict) else None) or (int(current_user["user_id"]) if current_user else None)
-    )
+        payload.get("created_by_user_id") if isinstance(payload, dict) else None
+    ) or (int(current_user["user_id"]) if current_user else None)
 
     try:
         with get_db() as session:
@@ -127,7 +127,9 @@ async def create_project(payload: dict, request: Request):
             )
             proj.save()
             if created_by is not None:
-                if not session.get(db_models.ProjectMember, (proj.project_id, int(created_by))):
+                if not session.get(
+                    db_models.ProjectMember, (proj.project_id, int(created_by))
+                ):
                     session.add(
                         db_models.ProjectMember(
                             project_id=proj.project_id,
@@ -179,7 +181,9 @@ async def list_projects(request: Request):
                         "project_id": r.project_id,
                         "name": r.name,
                         "description": r.description,
-                        "user_role": "admin" if r.created_by == uid else pms[r.project_id],
+                        "user_role": "admin"
+                        if r.created_by == uid
+                        else pms[r.project_id],
                     }
                     for r in rows
                     if r.created_by == uid or r.project_id in pms
@@ -237,7 +241,10 @@ async def update_project(project_id: int, payload: dict, request: Request):
             if new_name:
                 all_projs = session.execute(select(db_models.Project)).scalars().all()
                 for p in all_projs:
-                    if p.project_id == project_id or p.project_id in _demo_deleted_projects:
+                    if (
+                        p.project_id == project_id
+                        or p.project_id in _demo_deleted_projects
+                    ):
                         continue
                     p_name = _demo_project_overrides.get(p.project_id, {}).get(
                         "name", p.name
@@ -316,9 +323,7 @@ async def delete_project(project_id: int, request: Request):
     "/projects/{project_id}/wells/{well_name}",
     summary="Rename a well within a project",
 )
-async def rename_well(
-    project_id: int, well_name: str, payload: dict, request: Request
-):
+async def rename_well(project_id: int, well_name: str, payload: dict, request: Request):
     """Rename a well in the project and update cached data references.
 
     Payload example: {"name": "15_9-F-11B", "uwi": "15_9-F-11B"}
@@ -364,15 +369,18 @@ async def rename_well(
                 if eph_n not in deleted_set:
                     active_names.add(eph_n)
 
-            if well_name not in active_names and target_orm_well is None and well_name not in eph_proj:
+            if (
+                well_name not in active_names
+                and target_orm_well is None
+                and well_name not in eph_proj
+            ):
                 raise HTTPException(
                     status_code=404,
                     detail=f"Well '{well_name}' not found in project {project_id}",
                 )
 
             if any(
-                n.lower() == new_name.lower() and n != well_name
-                for n in active_names
+                n.lower() == new_name.lower() and n != well_name for n in active_names
             ):
                 raise HTTPException(
                     status_code=400,
@@ -381,7 +389,7 @@ async def rename_well(
 
             # Update in-memory merged cache keys and WELL_NAME column
             old_prefix = f"{project_id}_{well_name}_"
-            for key, (ts, cdf) in list(_merged_data_cache.items()):
+            for key, (_, cdf) in list(_merged_data_cache.items()):
                 if key.startswith(old_prefix):
                     suffix = key[len(old_prefix) :]
                     updated_df = cdf.copy()
@@ -409,7 +417,10 @@ async def rename_well(
                     new_uwi = payload.get("uwi")
                     if new_uwi is not None:
                         target_orm_well.uwi = str(new_uwi).strip()
-                    elif not target_orm_well.uwi or target_orm_well.uwi == target_orm_well.name:
+                    elif (
+                        not target_orm_well.uwi
+                        or target_orm_well.uwi == target_orm_well.name
+                    ):
                         target_orm_well.uwi = new_name
                     target_orm_well.name = new_name
                     session.add(target_orm_well)
@@ -513,7 +524,9 @@ async def list_wells(project_id: int):
             existing_names = {w["name"] for w in wells}
             for eph_name in _ephemeral_wells.get(project_id, {}):
                 if eph_name not in existing_names:
-                    wells.append({"id": f"eph_{eph_name}", "name": eph_name, "uwi": eph_name})
+                    wells.append(
+                        {"id": f"eph_{eph_name}", "name": eph_name, "uwi": eph_name}
+                    )
             return {"project_id": proj.project_id, "wells": wells}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -524,7 +537,6 @@ async def list_wells(project_id: int):
 @router.get(
     "/projects/{project_id}/summary",
     summary="Get lightweight project and per-well summary statistics",
-
 )
 def get_project_summary(project_id: int) -> Dict[str, Any]:
     """Return aggregated metadata and statistics for all wells in a project without loading full curve arrays."""
@@ -727,7 +739,6 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         "depth_count": row_count,
                         "available_curves": curves_by_well.get(wid, []),
                         "curves": curves_by_well.get(wid, []),
-                        "available_curves": curves_by_well.get(wid, []),
                         "zones": zones_by_well.get(wid, []),
                         "core_sample_count": effective_core_pts,
                         "core_availability_pct": core_pct,
@@ -738,24 +749,34 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                     }
                 )
 
-            return {
-                "project_id": proj.project_id,
-                "name": proj.name,
-                "description": proj.description,
-                "well_count": len(wells_summary),
-                "min_depth": min(
-                    (w["min_depth"] for w in wells_summary if w.get("min_depth") is not None),
-                    default=None,
-                ),
-                "max_depth": max(
-                    (w["max_depth"] for w in wells_summary if w.get("max_depth") is not None),
-                    default=None,
-                ),
-                "total_depth_sum": round(total_depth_sum, 2),
-                "all_zones": sorted(all_zones_set),
-                "all_curves": sorted(all_curves_set),
-                "wells": wells_summary,
-            }
+            return _sanitize_for_json(
+                {
+                    "project_id": int(proj.project_id),
+                    "name": proj.name,
+                    "description": proj.description,
+                    "well_count": len(wells_summary),
+                    "min_depth": min(
+                        (
+                            w["min_depth"]
+                            for w in wells_summary
+                            if w.get("min_depth") is not None
+                        ),
+                        default=None,
+                    ),
+                    "max_depth": max(
+                        (
+                            w["max_depth"]
+                            for w in wells_summary
+                            if w.get("max_depth") is not None
+                        ),
+                        default=None,
+                    ),
+                    "total_depth_sum": round(float(total_depth_sum), 2),
+                    "all_zones": sorted(all_zones_set),
+                    "all_curves": sorted(all_curves_set),
+                    "wells": wells_summary,
+                }
+            )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
@@ -858,10 +879,20 @@ def project_read_las(
                     ldf.columns = [str(c).upper() for c in ldf.columns]
                     if "DEPT" in ldf.columns and "DEPTH" not in ldf.columns:
                         ldf = ldf.rename(columns={"DEPT": "DEPTH"})
-                    w_name = str(getattr(las.well, "WELL", None).value if hasattr(las.well, "WELL") else Path(p).stem.split("_", 1)[-1]).strip() or Path(p).stem
+                    w_name = (
+                        str(
+                            getattr(las.well, "WELL", None).value
+                            if hasattr(las.well, "WELL")
+                            else Path(p).stem.split("_", 1)[-1]
+                        ).strip()
+                        or Path(p).stem
+                    )
                     ldf["WELL_NAME"] = w_name
                     proj_eph[w_name] = ldf
-                    _merged_data_cache[f"{project_id}_{w_name}_0.16"] = (time.time(), ldf.copy())
+                    _merged_data_cache[f"{project_id}_{w_name}_0.16"] = (
+                        time.time(),
+                        ldf.copy(),
+                    )
             else:
                 proj.read_las(saved_paths, depth_uom=depth_uom)
 
@@ -876,7 +907,8 @@ def project_read_las(
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
-            status_code=(413 if getattr(e, "status_code", 500) == 413 else 500), detail=getattr(e, "detail", f"Failed to read LAS into project: {e}")
+            status_code=(413 if getattr(e, "status_code", 500) == 413 else 500),
+            detail=getattr(e, "detail", f"Failed to read LAS into project: {e}"),
         ) from e
 
 
@@ -946,7 +978,10 @@ async def save_well_data(project_id: int, well_name: str, payload: dict):
         if is_demo_mode():
             for wn, wdf in df.groupby("WELL_NAME"):
                 _ephemeral_wells.setdefault(project_id, {})[str(wn)] = wdf.copy()
-                _merged_data_cache[f"{project_id}_{wn}_0.16"] = (time.time(), wdf.copy())
+                _merged_data_cache[f"{project_id}_{wn}_0.16"] = (
+                    time.time(),
+                    wdf.copy(),
+                )
             return {
                 "message": "Well data saved to ephemeral demo session",
                 "rows": len(df),
@@ -985,7 +1020,6 @@ async def save_well_data(project_id: int, well_name: str, payload: dict):
 @router.get(
     "/projects/{project_id}/wells/{well_name}/data",
     summary="Get top-to-bottom well data",
-
 )
 def get_well_data(
     project_id: int, well_name: str, include_ancillary: bool = False
@@ -1001,7 +1035,9 @@ def get_well_data(
 
             # Use optimized method if available
             try:
-                df = proj.get_well_data_optimized(resolve_db_well_name(project_id, well_name))
+                df = proj.get_well_data_optimized(
+                    resolve_db_well_name(project_id, well_name)
+                )
             except AttributeError:
                 df = proj.get_well_data(resolve_db_well_name(project_id, well_name))
 
@@ -1083,13 +1119,20 @@ def _sanitize_for_json(obj):
 def _series_to_py_list(series: pd.Series) -> list:
     """Convert a pandas Series to a native Python list with NaN/Inf mapped to None."""
     if pd.api.types.is_numeric_dtype(series):
-        s = series.replace([np.inf, -np.inf], np.nan)
-        return s.astype(object).where(pd.notna(s), None).tolist()
+        arr = pd.to_numeric(series, errors="coerce").to_numpy(dtype=np.float64)
+        finite = np.isfinite(arr)
+        py_vals = arr.tolist()
+        return [py_vals[i] if finite[i] else None for i in range(len(py_vals))]
     elif pd.api.types.is_datetime64_any_dtype(series):
         s = series.dt.strftime("%Y-%m-%dT%H:%M:%S")
-        return s.astype(object).where(pd.notna(series), None).tolist()
+        return [None if pd.isna(x) else str(x) for x in s.tolist()]
     else:
-        return series.astype(object).where(pd.notna(series), None).tolist()
+        return [
+            None
+            if pd.isna(x)
+            else (_sanitize_for_json(x) if isinstance(x, np.generic) else x)
+            for x in series.tolist()
+        ]
 
 
 def dataframe_to_columnar(df: pd.DataFrame) -> Dict[str, Any]:
@@ -1187,7 +1230,9 @@ def _get_merged_dataframe_sync(
             proj = db_objects.Project.load(session, project_id=project_id)
 
             try:
-                df = proj.get_well_data_optimized(resolve_db_well_name(project_id, well_name))
+                df = proj.get_well_data_optimized(
+                    resolve_db_well_name(project_id, well_name)
+                )
             except AttributeError:
                 df = proj.get_well_data(resolve_db_well_name(project_id, well_name))
             if df.empty:
@@ -1356,7 +1401,9 @@ def get_merged_well_data(
     """Return merged well curve and ancillary data directly with in-memory caching and optional depth/zone filtering."""
     try:
         merged = _get_merged_dataframe_sync(project_id, well_name, tolerance=tolerance)
-        zone_list = [z.strip() for z in zones.split(",") if z.strip()] if zones else None
+        zone_list = (
+            [z.strip() for z in zones.split(",") if z.strip()] if zones else None
+        )
         filtered = filter_merged_dataframe(
             merged, min_depth=min_depth, max_depth=max_depth, zones=zone_list
         )
@@ -1596,7 +1643,9 @@ def export_well_las_endpoint(project_id: int, well_name: str):
             raise ValueError(f"Well '{well_name}' has no log data to export")
 
         tops_df: pd.DataFrame = w["formation_tops"]
-        if not tops_df.empty and ("ZONES" not in w_df.columns or w_df["ZONES"].isna().all()):
+        if not tops_df.empty and (
+            "ZONES" not in w_df.columns or w_df["ZONES"].isna().all()
+        ):
             w_df = w_df.copy()
             w_df["ZONES"] = _assign_zones_from_tops(
                 pd.to_numeric(w_df["DEPTH"], errors="coerce").to_numpy(dtype=float),
