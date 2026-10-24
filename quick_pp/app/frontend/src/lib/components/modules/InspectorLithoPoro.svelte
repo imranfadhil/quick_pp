@@ -965,7 +965,49 @@
 			{/if}
 		</ParameterSection>
 
-		{#if wellData.poroCoreMetrics && wellData.poroCoreMetrics.count > 0}
+		{#if wellData.coreComparison.poro.count > 0 || (wellData.poroCoreMetrics && wellData.poroCoreMetrics.count > 0)}
+			{@const pStat = wellData.coreComparison.poro}
+			{@const pCount = pStat.count || wellData.poroCoreMetrics?.count || 0}
+			<ParameterSection title="Core Calibration QC (PHIT × CPORE)" badge={`n=${pCount}`}>
+				<div class="grid grid-cols-4 gap-1 text-center">
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">RMSE</div>
+						<div class="mono-num text-[11px] font-bold text-[var(--text-primary)]">
+							{fmtNum(pStat.rmse ?? wellData.poroCoreMetrics?.rmse, 4)}
+						</div>
+					</div>
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">MAE</div>
+						<div class="mono-num text-[11px] font-bold text-[var(--text-primary)]">
+							{fmtNum(pStat.mae ?? wellData.poroCoreMetrics?.mae, 4)}
+						</div>
+					</div>
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Bias</div>
+						<div class="mono-num text-[11px] font-bold text-[var(--text-primary)]">
+							{pStat.bias !== null && pStat.bias >= 0 ? '+' : ''}{fmtNum(pStat.bias, 4)}
+						</div>
+					</div>
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">R²</div>
+						<div class="mono-num text-[11px] font-bold text-[var(--status-ok)]">
+							{fmtNum(pStat.r2 ?? wellData.poroCoreMetrics?.r2, 3)}
+						</div>
+					</div>
+				</div>
+				<button
+					type="button"
+					onclick={() => {
+						workbench.crossplotTemplateOverride = 'core-qc';
+						workbench.coreQcView = 'poro';
+					}}
+					class="mt-1.5 h-6 w-full rounded-xs border border-blue-200 bg-blue-50/80 px-2 text-[10.5px] font-semibold text-blue-700 hover:bg-blue-100"
+				>
+					Open PHIT × CPORE Crossplot &amp; Depth Error →
+				</button>
+			</ParameterSection>
+		{/if}
+		<!--
 			<ParameterSection title="Core Calibration QC" badge={`n=${wellData.poroCoreMetrics.count}`}>
 				<div class="grid grid-cols-3 gap-1.5 text-center">
 					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
@@ -990,6 +1032,7 @@
 			</ParameterSection>
 		{/if}
 
+		-->
 		{#if wellData.lastError}
 			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
 				{wellData.lastError}

@@ -203,10 +203,12 @@ class WorkbenchState {
 		| 'mw-distribution'
 		| 'shf'
 		| 'relperm'
+		| 'core-qc'
 	>('auto');
 
 	// Active curve selected in QAQC for histogram / multi-well distribution inspection
 	selectedQaqcCurve = $state<string>('GR');
+	coreQcView = $state<'dual' | 'poro' | 'perm' | 'depth-error'>('dual');
 
 	// Multi-well QAQC distribution & visualization controls
 	mwQaqcGroupBy = $state<'well' | 'zone' | 'well_zone'>('well');

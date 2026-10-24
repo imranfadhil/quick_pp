@@ -161,6 +161,281 @@ class WellDataState {
 		return out;
 	});
 
+	coreComparison = $derived.by(() => {
+		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		const phitArr = this.curves['PHIT'] ?? this.curves['PHIE'] ?? [];
+		const permArr = this.curves['PERM'] ?? this.curves['PERM_TRANS'] ?? [];
+		const cporeArr = this.curves['CPORE'] ?? this.curves['CORE_PORO'] ?? [];
+		const cpermArr = this.curves['CPERM'] ?? this.curves['CORE_PERM'] ?? [];
+		const vcoalArr = this.curves['VCOAL'] ?? this.curves['COAL_FLAG'] ?? [];
+		const sortedTops = [...this.tops].sort((a, b) => a.depth - b.depth);
+		const indices = this.visibleIndices;
+		const visibleSet = new Set(indices);
+
+		const resolveZone = (idx: number, d: number): string => {
+			const zCol = this.zonesColumn[idx];
+			if (zCol) return zCol;
+			for (let t = sortedTops.length - 1; t >= 0; t--) {
+				if (d >= sortedTops[t].depth) return sortedTops[t].name;
+			}
+			return 'ALL';
+		};
+
+		const normPoro = (val: number | null | undefined): number | null => {
+			if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) return null;
+			return val > 1.0 ? val / 100.0 : val;
+		};
+
+		const normPerm = (val: number | null | undefined): number | null => {
+			if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) return null;
+			return val;
+		};
+
+		// Map core samples to their closest log depth index (within 0.5m)
+		const sampleByIdx = new Map<
+			number,
+			{ sample_name: string; cpore: number | null; cperm: number | null; plug_depth: number }
+		>();
+		if (this.coreSamples.length > 0 && dept.length > 0) {
+			for (let sIdx = 0; sIdx < this.coreSamples.length; sIdx++) {
+				const s = this.coreSamples[sIdx];
+				const sd = Number(s.depth ?? s.DEPTH);
+				if (!Number.isFinite(sd)) continue;
+				const sp = normPoro(Number(s.porosity ?? s.CPORE ?? s.poro));
+				const sk = normPerm(Number(s.permeability ?? s.CPERM ?? s.perm));
+				if (sp === null && sk === null) continue;
+
+				// Binary/linear search for closest log depth index
+				let bestIdx = -1;
+				let bestDist = 0.5;
+				for (const idx of indices) {
+					const dist = Math.abs(dept[idx] - sd);
+					if (dist <= bestDist) {
+						bestDist = dist;
+						bestIdx = idx;
+					}
+				}
+				if (bestIdx >= 0 && visibleSet.has(bestIdx)) {
+					const existing = sampleByIdx.get(bestIdx);
+					if (!existing || Math.abs(dept[bestIdx] - sd) < Math.abs(dept[bestIdx] - existing.plug_depth)) {
+						sampleByIdx.set(bestIdx, {
+							sample_name: String(s.sample_name ?? s.Sample ?? `Plug-${sIdx + 1}`),
+							cpore: sp,
+							cperm: sk,
+							plug_depth: sd
+						});
+					}
+				}
+			}
+		}
+
+		const rows: Array<{
+			DEPTH: number;
+			SAMPLE: string;
+			ZONE: string;
+			CPORE: number | null;
+			PHIT: number | null;
+			ERR_PHIT: number | null;
+			ABS_ERR_PHIT: number | null;
+			REL_ERR_PHIT: number | null;
+			CPERM: number | null;
+			PERM: number | null;
+			ERR_PERM: number | null;
+			LOG10_ERR_PERM: number | null;
+			ABS_LOG10_ERR_PERM: number | null;
+			FACTOR_PERM: number | null;
+			logIndex: number;
+		}> = [];
+
+		let autoSampleCounter = 1;
+		for (const idx of indices) {
+			const d = dept[idx];
+			if (!Number.isFinite(d)) continue;
+			if (Number.isFinite(vcoalArr[idx]) && vcoalArr[idx] >= 0.5) continue;
+
+			const matchedPlug = sampleByIdx.get(idx);
+			const cp = normPoro(cporeArr[idx]) ?? matchedPlug?.cpore ?? null;
+			const ck = normPerm(cpermArr[idx]) ?? matchedPlug?.cperm ?? null;
+			if (cp === null && ck === null) continue;
+
+			const phitVal =
+				typeof phitArr[idx] === 'number' && Number.isFinite(phitArr[idx]) && phitArr[idx] >= 0
+					? phitArr[idx]
+					: null;
+			const permVal = normPerm(permArr[idx]);
+
+			const errPhit = cp !== null && phitVal !== null ? phitVal - cp : null;
+			const absErrPhit = errPhit !== null ? Math.abs(errPhit) : null;
+			const relErrPhit = errPhit !== null && cp !== null && cp > 1e-4 ? (errPhit / cp) * 100 : null;
+
+			const errPerm = ck !== null && permVal !== null ? permVal - ck : null;
+			const log10ErrPerm =
+				ck !== null && permVal !== null ? Math.log10(permVal) - Math.log10(ck) : null;
+			const absLog10ErrPerm = log10ErrPerm !== null ? Math.abs(log10ErrPerm) : null;
+			const factorPerm = ck !== null && permVal !== null ? permVal / ck : null;
+
+			rows.push({
+				DEPTH: Number(d.toFixed(2)),
+				SAMPLE: matchedPlug?.sample_name ?? `C-${autoSampleCounter++}`,
+				ZONE: resolveZone(idx, d),
+				CPORE: cp,
+				PHIT: phitVal,
+				ERR_PHIT: errPhit,
+				ABS_ERR_PHIT: absErrPhit,
+				REL_ERR_PHIT: relErrPhit,
+				CPERM: ck,
+				PERM: permVal,
+				ERR_PERM: errPerm,
+				LOG10_ERR_PERM: log10ErrPerm,
+				ABS_LOG10_ERR_PERM: absLog10ErrPerm,
+				FACTOR_PERM: factorPerm,
+				logIndex: idx
+			});
+		}
+
+		// Compute Porosity (PHIT vs CPORE) error stats
+		const poroRows = rows.filter((r) => r.CPORE !== null && r.PHIT !== null && r.ERR_PHIT !== null);
+		const poroStats = {
+			count: poroRows.length,
+			rmse: null as number | null,
+			mae: null as number | null,
+			bias: null as number | null,
+			mape: null as number | null,
+			r2: null as number | null,
+			pearson_r: null as number | null,
+			within_2pu_pct: null as number | null,
+			slope: 1.0,
+			intercept: 0.0
+		};
+		if (poroRows.length > 0) {
+			const n = poroRows.length;
+			const diffs = poroRows.map((r) => r.ERR_PHIT!);
+			const cpores = poroRows.map((r) => r.CPORE!);
+			const phits = poroRows.map((r) => r.PHIT!);
+			const sqSum = diffs.reduce((acc, v) => acc + v * v, 0);
+			const absSum = diffs.reduce((acc, v) => acc + Math.abs(v), 0);
+			const biasSum = diffs.reduce((acc, v) => acc + v, 0);
+			const mapeVals = poroRows
+				.map((r) => (r.REL_ERR_PHIT !== null ? Math.abs(r.REL_ERR_PHIT) : null))
+				.filter((v): v is number => v !== null);
+			const within2pu = diffs.filter((d) => Math.abs(d) <= 0.02).length;
+
+			poroStats.rmse = Number(Math.sqrt(sqSum / n).toFixed(4));
+			poroStats.mae = Number((absSum / n).toFixed(4));
+			poroStats.bias = Number((biasSum / n).toFixed(4));
+			poroStats.mape =
+				mapeVals.length > 0
+					? Number((mapeVals.reduce((a, b) => a + b, 0) / mapeVals.length).toFixed(1))
+					: null;
+			poroStats.within_2pu_pct = Number(((within2pu / n) * 100).toFixed(1));
+
+			if (n > 1) {
+				const meanX = cpores.reduce((a, b) => a + b, 0) / n;
+				const meanY = phits.reduce((a, b) => a + b, 0) / n;
+				const ssTot = cpores.reduce((acc, x) => acc + Math.pow(x - meanX, 2), 0);
+				if (ssTot > 1e-12) {
+					poroStats.r2 = Number((1 - sqSum / ssTot).toFixed(3));
+				}
+				let cov = 0;
+				let varX = 0;
+				let varY = 0;
+				for (let i = 0; i < n; i++) {
+					const dx = cpores[i] - meanX;
+					const dy = phits[i] - meanY;
+					cov += dx * dy;
+					varX += dx * dx;
+					varY += dy * dy;
+				}
+				if (varX > 1e-12) {
+					poroStats.slope = cov / varX;
+					poroStats.intercept = meanY - poroStats.slope * meanX;
+				}
+				if (varX > 1e-12 && varY > 1e-12) {
+					poroStats.pearson_r = Number((cov / Math.sqrt(varX * varY)).toFixed(3));
+				}
+			}
+		}
+
+		// Compute Permeability (PERM vs CPERM) error stats
+		const permRows = rows.filter(
+			(r) => r.CPERM !== null && r.PERM !== null && r.LOG10_ERR_PERM !== null
+		);
+		const permStats = {
+			count: permRows.length,
+			log10_rmse: null as number | null,
+			log10_mae: null as number | null,
+			log10_bias: null as number | null,
+			factor_error: null as number | null,
+			linear_rmse: null as number | null,
+			linear_mae: null as number | null,
+			r2: null as number | null,
+			pearson_r: null as number | null,
+			within_half_dec_pct: null as number | null,
+			within_one_dec_pct: null as number | null,
+			slope: 1.0,
+			intercept: 0.0
+		};
+		if (permRows.length > 0) {
+			const n = permRows.length;
+			const logDiffs = permRows.map((r) => r.LOG10_ERR_PERM!);
+			const linDiffs = permRows.map((r) => r.ERR_PERM!);
+			const logX = permRows.map((r) => Math.log10(r.CPERM!));
+			const logY = permRows.map((r) => Math.log10(r.PERM!));
+
+			const logSqSum = logDiffs.reduce((acc, v) => acc + v * v, 0);
+			const logAbsSum = logDiffs.reduce((acc, v) => acc + Math.abs(v), 0);
+			const logBiasSum = logDiffs.reduce((acc, v) => acc + v, 0);
+			const linSqSum = linDiffs.reduce((acc, v) => acc + v * v, 0);
+			const linAbsSum = linDiffs.reduce((acc, v) => acc + Math.abs(v), 0);
+
+			const maeDec = logAbsSum / n;
+			permStats.log10_rmse = Number(Math.sqrt(logSqSum / n).toFixed(3));
+			permStats.log10_mae = Number(maeDec.toFixed(3));
+			permStats.log10_bias = Number((logBiasSum / n).toFixed(3));
+			permStats.factor_error = Number(Math.pow(10, maeDec).toFixed(2));
+			permStats.linear_rmse = Number(Math.sqrt(linSqSum / n).toFixed(2));
+			permStats.linear_mae = Number((linAbsSum / n).toFixed(2));
+			permStats.within_half_dec_pct = Number(
+				((logDiffs.filter((d) => Math.abs(d) <= 0.5).length / n) * 100).toFixed(1)
+			);
+			permStats.within_one_dec_pct = Number(
+				((logDiffs.filter((d) => Math.abs(d) <= 1.0).length / n) * 100).toFixed(1)
+			);
+
+			if (n > 1) {
+				const meanX = logX.reduce((a, b) => a + b, 0) / n;
+				const meanY = logY.reduce((a, b) => a + b, 0) / n;
+				const ssTot = logX.reduce((acc, x) => acc + Math.pow(x - meanX, 2), 0);
+				if (ssTot > 1e-12) {
+					permStats.r2 = Number((1 - logSqSum / ssTot).toFixed(3));
+				}
+				let cov = 0;
+				let varX = 0;
+				let varY = 0;
+				for (let i = 0; i < n; i++) {
+					const dx = logX[i] - meanX;
+					const dy = logY[i] - meanY;
+					cov += dx * dy;
+					varX += dx * dx;
+					varY += dy * dy;
+				}
+				if (varX > 1e-12) {
+					permStats.slope = cov / varX;
+					permStats.intercept = meanY - permStats.slope * meanX;
+				}
+				if (varX > 1e-12 && varY > 1e-12) {
+					permStats.pearson_r = Number((cov / Math.sqrt(varX * varY)).toFixed(3));
+				}
+			}
+		}
+
+		return {
+			rows,
+			poro: poroStats,
+			perm: permStats
+		};
+	});
+
 	private getLocalStorageFocusKey(projectId: string | number, wellName: string): string {
 		return `qpp_well_focus_${projectId}_${wellName}`;
 	}

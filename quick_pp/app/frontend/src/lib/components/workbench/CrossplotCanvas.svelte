@@ -1384,6 +1384,489 @@
 			return { traces, layout: baseLayout };
 		}
 
+		if (effectiveMode === 'core-qc') {
+			const cc = wellData.coreComparison;
+			const subView = workbench.coreQcView;
+			const poroRows = cc.rows.filter(
+				(r) => r.CPORE !== null && r.PHIT !== null && r.ERR_PHIT !== null
+			);
+			const permRows = cc.rows.filter(
+				(r) => r.CPERM !== null && r.PERM !== null && r.LOG10_ERR_PERM !== null
+			);
+
+			const buildPoroParityTraces = (xAxis: string, yAxis: string) => {
+				const maxP = Math.max(
+					0.35,
+					...poroRows.map((r) => Math.max(r.CPORE ?? 0, r.PHIT ?? 0))
+				);
+				const lim = Number(Math.min(0.5, maxP * 1.1).toFixed(2));
+
+				const stemX: (number | null)[] = [];
+				const stemY: (number | null)[] = [];
+				for (const r of poroRows) {
+					stemX.push(r.CPORE!, r.CPORE!, null);
+					stemY.push(r.CPORE!, r.PHIT!, null);
+				}
+				if (stemX.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Φ Residual',
+						x: stemX,
+						y: stemY,
+						xaxis: xAxis,
+						yaxis: yAxis,
+						showlegend: false,
+						hoverinfo: 'skip',
+						line: { color: 'rgba(100, 116, 139, 0.45)', width: 1.2 }
+					});
+				}
+
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '1:1 Parity',
+					x: [0, lim],
+					y: [0, lim],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#0F172A', width: 1.6 }
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '±0.02 v/v (±2 p.u.)',
+					x: [0, lim, null, 0, lim],
+					y: [0.02, lim + 0.02, null, -0.02, lim - 0.02],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#94A3B8', width: 1.1, dash: 'dash' },
+					hoverinfo: 'skip'
+				});
+
+				if (poroRows.length > 1) {
+					const fitY0 = cc.poro.intercept;
+					const fitY1 = cc.poro.slope * lim + cc.poro.intercept;
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Φ Fit (${cc.poro.slope.toFixed(2)}x${cc.poro.intercept >= 0 ? '+' : ''}${cc.poro.intercept.toFixed(3)})`,
+						x: [0, lim],
+						y: [fitY0, fitY1],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						line: { color: '#2563EB', width: 1.8, dash: 'dot' }
+					});
+				}
+
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'PHIT vs CPORE',
+					x: poroRows.map((r) => r.CPORE!),
+					y: poroRows.map((r) => r.PHIT!),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: poroRows.map((r) => r.logIndex),
+					text: poroRows.map(
+						(r) =>
+							`${r.SAMPLE} @ ${fmtNum(r.DEPTH, 2)}m (${r.ZONE})<br>` +
+							`CPORE: ${fmtNum(r.CPORE, 4)} v/v | PHIT: ${fmtNum(r.PHIT, 4)} v/v<br>` +
+							`Error (PHIT−CPORE): ${r.ERR_PHIT! >= 0 ? '+' : ''}${fmtNum(r.ERR_PHIT, 4)} v/v (${fmtNum(r.REL_ERR_PHIT, 1)}%)`
+					),
+					hovertemplate: '%{text}<extra></extra>',
+					marker: {
+						size: 7,
+						color: poroRows.map((r) => {
+							const ae = r.ABS_ERR_PHIT ?? 0;
+							return ae <= 0.02 ? '#16A34A' : ae <= 0.04 ? '#D97706' : '#DC2626';
+						}),
+						line: { color: '#0F172A', width: 0.8 }
+					}
+				});
+
+				return lim;
+			};
+
+			const buildPermParityTraces = (xAxis: string, yAxis: string) => {
+				const minExp = -2;
+				const maxExp = 4.5;
+				const minVal = Math.pow(10, minExp);
+				const maxVal = Math.pow(10, maxExp);
+
+				const stemX: (number | null)[] = [];
+				const stemY: (number | null)[] = [];
+				for (const r of permRows) {
+					stemX.push(r.CPERM!, r.CPERM!, null);
+					stemY.push(r.CPERM!, r.PERM!, null);
+				}
+				if (stemX.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'K Residual',
+						x: stemX,
+						y: stemY,
+						xaxis: xAxis,
+						yaxis: yAxis,
+						showlegend: false,
+						hoverinfo: 'skip',
+						line: { color: 'rgba(100, 116, 139, 0.45)', width: 1.2 }
+					});
+				}
+
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: xAxis === 'x' ? '1:1 Parity' : '1:1 K Parity',
+					showlegend: xAxis === 'x',
+					x: [minVal, maxVal],
+					y: [minVal, maxVal],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#0F172A', width: 1.6 }
+				});
+				const halfDecFactor = Math.pow(10, 0.5);
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '±0.5 dec (×3.16)',
+					x: [minVal, maxVal, null, minVal, maxVal],
+					y: [
+						minVal * halfDecFactor,
+						maxVal * halfDecFactor,
+						null,
+						minVal / halfDecFactor,
+						maxVal / halfDecFactor
+					],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#94A3B8', width: 1.1, dash: 'dash' },
+					hoverinfo: 'skip'
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '±1.0 dec (×10)',
+					x: [minVal, maxVal, null, minVal, maxVal],
+					y: [minVal * 10, maxVal * 10, null, minVal / 10, maxVal / 10],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#CBD5E1', width: 1.0, dash: 'dot' },
+					hoverinfo: 'skip'
+				});
+
+				if (permRows.length > 1) {
+					const y0 = Math.pow(10, cc.perm.slope * minExp + cc.perm.intercept);
+					const y1 = Math.pow(10, cc.perm.slope * maxExp + cc.perm.intercept);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `K Fit (slope=${cc.perm.slope.toFixed(2)})`,
+						x: [minVal, maxVal],
+						y: [y0, y1],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						line: { color: '#7C3AED', width: 1.8, dash: 'dot' }
+					});
+				}
+
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'PERM vs CPERM',
+					x: permRows.map((r) => r.CPERM!),
+					y: permRows.map((r) => r.PERM!),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: permRows.map((r) => r.logIndex),
+					text: permRows.map(
+						(r) =>
+							`${r.SAMPLE} @ ${fmtNum(r.DEPTH, 2)}m (${r.ZONE})<br>` +
+							`CPERM: ${fmtNum(r.CPERM, 2)} mD | PERM: ${fmtNum(r.PERM, 2)} mD<br>` +
+							`log10 Error: ${r.LOG10_ERR_PERM! >= 0 ? '+' : ''}${fmtNum(r.LOG10_ERR_PERM, 3)} dec (${fmtNum(r.FACTOR_PERM, 2)}×)`
+					),
+					hovertemplate: '%{text}<extra></extra>',
+					marker: {
+						size: 7,
+						symbol: 'diamond',
+						color: permRows.map((r) => {
+							const ae = r.ABS_LOG10_ERR_PERM ?? 0;
+							return ae <= 0.5 ? '#16A34A' : ae <= 1.0 ? '#D97706' : '#DC2626';
+						}),
+						line: { color: '#0F172A', width: 0.8 }
+					}
+				});
+
+				return [minExp, maxExp] as const;
+			};
+
+			const buildPoroDepthErrorTraces = (xAxis: string, yAxis: string) => {
+				const stemX: (number | null)[] = [];
+				const stemY: (number | null)[] = [];
+				for (const r of poroRows) {
+					stemX.push(0, r.ERR_PHIT!, null);
+					stemY.push(r.DEPTH, r.DEPTH, null);
+				}
+				if (stemX.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'ΔΦ Stem',
+						x: stemX,
+						y: stemY,
+						xaxis: xAxis,
+						yaxis: yAxis,
+						showlegend: false,
+						hoverinfo: 'skip',
+						line: { color: 'rgba(37, 99, 235, 0.45)', width: 1.4 }
+					});
+				}
+				if (poroRows.length > 0) {
+					const minD = Math.min(...poroRows.map((r) => r.DEPTH));
+					const maxD = Math.max(...poroRows.map((r) => r.DEPTH));
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Zero Error',
+						showlegend: false,
+						x: [0, 0],
+						y: [minD, maxD],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						hoverinfo: 'skip',
+						line: { color: '#0F172A', width: 1.3 }
+					});
+					if (cc.poro.rmse !== null) {
+						const rm = cc.poro.rmse;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `±RMSE (±${fmtNum(rm, 3)})`,
+							x: [rm, rm, null, -rm, -rm],
+							y: [minD, maxD, null, minD, maxD],
+							xaxis: xAxis,
+							yaxis: yAxis,
+							hoverinfo: 'skip',
+							line: { color: '#DC2626', width: 1.1, dash: 'dash' }
+						});
+					}
+				}
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'ΔPHIT (PHIT−CPORE)',
+					x: poroRows.map((r) => r.ERR_PHIT!),
+					y: poroRows.map((r) => r.DEPTH),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: poroRows.map((r) => r.logIndex),
+					text: poroRows.map(
+						(r) =>
+							`${r.SAMPLE} @ ${fmtNum(r.DEPTH, 2)}m (${r.ZONE})<br>` +
+							`PHIT: ${fmtNum(r.PHIT, 4)} | CPORE: ${fmtNum(r.CPORE, 4)} v/v<br>` +
+							`ΔPHIT: ${r.ERR_PHIT! >= 0 ? '+' : ''}${fmtNum(r.ERR_PHIT, 4)} v/v (${fmtNum(r.REL_ERR_PHIT, 1)}%)`
+					),
+					hovertemplate: '%{text}<extra></extra>',
+					marker: {
+						size: 6.5,
+						color: poroRows.map((r) => {
+							const ae = r.ABS_ERR_PHIT ?? 0;
+							return ae <= 0.02 ? '#16A34A' : ae <= 0.04 ? '#D97706' : '#DC2626';
+						}),
+						line: { color: '#0F172A', width: 0.7 }
+					}
+				});
+			};
+
+			const buildPermDepthErrorTraces = (xAxis: string, yAxis: string) => {
+				const stemX: (number | null)[] = [];
+				const stemY: (number | null)[] = [];
+				for (const r of permRows) {
+					stemX.push(0, r.LOG10_ERR_PERM!, null);
+					stemY.push(r.DEPTH, r.DEPTH, null);
+				}
+				if (stemX.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'ΔlogK Stem',
+						x: stemX,
+						y: stemY,
+						xaxis: xAxis,
+						yaxis: yAxis,
+						showlegend: false,
+						hoverinfo: 'skip',
+						line: { color: 'rgba(124, 58, 237, 0.45)', width: 1.4 }
+					});
+				}
+				if (permRows.length > 0) {
+					const minD = Math.min(...permRows.map((r) => r.DEPTH));
+					const maxD = Math.max(...permRows.map((r) => r.DEPTH));
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Zero Error',
+						showlegend: false,
+						x: [0, 0],
+						y: [minD, maxD],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						hoverinfo: 'skip',
+						line: { color: '#0F172A', width: 1.3 }
+					});
+					if (cc.perm.log10_rmse !== null) {
+						const rm = cc.perm.log10_rmse;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `±log10 RMSE (±${fmtNum(rm, 2)})`,
+							x: [rm, rm, null, -rm, -rm],
+							y: [minD, maxD, null, minD, maxD],
+							xaxis: xAxis,
+							yaxis: yAxis,
+							hoverinfo: 'skip',
+							line: { color: '#DC2626', width: 1.1, dash: 'dash' }
+						});
+					}
+				}
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'Δlog10(PERM/CPERM)',
+					x: permRows.map((r) => r.LOG10_ERR_PERM!),
+					y: permRows.map((r) => r.DEPTH),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: permRows.map((r) => r.logIndex),
+					text: permRows.map(
+						(r) =>
+							`${r.SAMPLE} @ ${fmtNum(r.DEPTH, 2)}m (${r.ZONE})<br>` +
+							`PERM: ${fmtNum(r.PERM, 2)} | CPERM: ${fmtNum(r.CPERM, 2)} mD<br>` +
+							`Δlog10(K): ${r.LOG10_ERR_PERM! >= 0 ? '+' : ''}${fmtNum(r.LOG10_ERR_PERM, 3)} dec (${fmtNum(r.FACTOR_PERM, 2)}×)`
+					),
+					hovertemplate: '%{text}<extra></extra>',
+					marker: {
+						size: 6.5,
+						symbol: 'diamond',
+						color: permRows.map((r) => {
+							const ae = r.ABS_LOG10_ERR_PERM ?? 0;
+							return ae <= 0.5 ? '#16A34A' : ae <= 1.0 ? '#D97706' : '#DC2626';
+						}),
+						line: { color: '#0F172A', width: 0.7 }
+					}
+				});
+			};
+
+			if (subView === 'dual') {
+				const poroLim = buildPoroParityTraces('x', 'y');
+				const [minExp, maxExp] = buildPermParityTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.45];
+				baseLayout.xaxis.title = { text: 'Core Porosity CPORE (v/v)' };
+				baseLayout.xaxis.range = [0, poroLim];
+				baseLayout.yaxis.title = { text: 'Estimated PHIT (v/v)' };
+				baseLayout.yaxis.range = [0, poroLim];
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.55, 1.0],
+					anchor: 'y2',
+					type: 'log',
+					range: [minExp, maxExp],
+					title: { text: 'Core Perm CPERM (mD)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					type: 'log',
+					range: [minExp, maxExp],
+					title: { text: 'Estimated PERM (mD)' }
+				};
+			} else if (subView === 'poro') {
+				const poroLim = buildPoroParityTraces('x', 'y');
+				buildPoroDepthErrorTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.48];
+				baseLayout.xaxis.title = { text: 'Core Porosity CPORE (v/v)' };
+				baseLayout.xaxis.range = [0, poroLim];
+				baseLayout.yaxis.title = { text: 'Estimated PHIT (v/v)' };
+				baseLayout.yaxis.range = [0, poroLim];
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.58, 1.0],
+					anchor: 'y2',
+					zeroline: true,
+					zerolinecolor: '#0F172A',
+					title: { text: 'ΔPHIT = PHIT − CPORE (v/v)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					autorange: 'reversed',
+					title: { text: 'Depth (m)' }
+				};
+			} else if (subView === 'perm') {
+				const [minExp, maxExp] = buildPermParityTraces('x', 'y');
+				buildPermDepthErrorTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.48];
+				baseLayout.xaxis.type = 'log';
+				baseLayout.xaxis.range = [minExp, maxExp];
+				baseLayout.xaxis.title = { text: 'Core Perm CPERM (mD)' };
+				baseLayout.yaxis.type = 'log';
+				baseLayout.yaxis.range = [minExp, maxExp];
+				baseLayout.yaxis.title = { text: 'Estimated PERM (mD)' };
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.58, 1.0],
+					anchor: 'y2',
+					type: 'linear',
+					range: undefined,
+					zeroline: true,
+					zerolinecolor: '#0F172A',
+					title: { text: 'Δlog10(K) = log10(PERM/CPERM) (dec)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					type: 'linear',
+					range: undefined,
+					autorange: 'reversed',
+					title: { text: 'Depth (m)' }
+				};
+			} else {
+				buildPoroDepthErrorTraces('x', 'y');
+				buildPermDepthErrorTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.45];
+				baseLayout.xaxis.zeroline = true;
+				baseLayout.xaxis.zerolinecolor = '#0F172A';
+				baseLayout.xaxis.title = { text: 'ΔPHIT = PHIT − CPORE (v/v)' };
+				baseLayout.yaxis.autorange = 'reversed';
+				baseLayout.yaxis.title = { text: 'Depth (m)' };
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.55, 1.0],
+					anchor: 'y2',
+					zeroline: true,
+					zerolinecolor: '#0F172A',
+					title: { text: 'Δlog10(K) = log10(PERM/CPERM) (dec)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					autorange: 'reversed',
+					title: { text: 'Depth (m)' }
+				};
+			}
+
+			return { traces, layout: baseLayout };
+		}
+
 		if (effectiveMode === 'relperm') {
 			const sr = workbench.scalResult;
 			const sp = workbench.scalParams;
@@ -1454,6 +1937,8 @@
 		void wellData.curves;
 		void wellData.visibleIndices;
 		void workbench.selectedQaqcCurve;
+		void wellData.coreComparison;
+		void workbench.coreQcView;
 		void workbench.lithoParams.model;
 		void workbench.lithoParams.minerals;
 		void workbench.lithoParams.drySandNphi;
@@ -1527,7 +2012,15 @@
 				});
 				// Click-to-place endpoint on NPHI-RHOB or Thomas-Stieber crossplot when an endpoint is armed
 				(plotEl as any).on('plotly_click', (ev: any) => {
-					if (!activeEndpointKey) return;
+					if (!activeEndpointKey) {
+						const pt = ev?.points?.[0];
+						if (effectiveMode === 'core-qc' && typeof pt?.customdata === 'number') {
+							const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+							const d = dept[pt.customdata];
+							if (Number.isFinite(d)) workbench.scrollToDepth(d);
+						}
+						return;
+					}
 					const pt = ev?.points?.[0];
 					if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number') return;
 					const x = Number(pt.x.toFixed(3));
@@ -1594,6 +2087,7 @@
 				<option value="nphi-rhob">NPHI vs. RHOB (SSC)</option>
 				<option value="thomas-stieber">Thomas-Stieber (Vsh vs. Φ)</option>
 				<option value="phi-k">Porosity vs. Perm (FZI)</option>
+				<option value="core-qc">Core Parity & Error (PHIT×CPORE / PERM×CPERM)</option>
 				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
 				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>
 				<option value="shf">Sw vs. Height (SHF)</option>
@@ -1601,7 +2095,35 @@
 			</select>
 		</div>
 
-		{#if effectiveMode === 'mw-distribution'}
+		{#if effectiveMode === 'core-qc'}
+			<div class="flex items-center gap-1">
+				{#each [['dual', 'Dual Parity'], ['poro', 'PHIT×CPORE + Depth'], ['perm', 'PERM×CPERM + Depth'], ['depth-error', 'Error vs. Depth']] as [vKey, vLbl]}
+					<button
+						type="button"
+						onclick={() => (workbench.coreQcView = vKey as any)}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {workbench.coreQcView ===
+						vKey
+							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{vLbl}
+					</button>
+				{/each}
+			</div>
+		{:else if effectiveMode === 'phi-k' && workbench.scope === 'single-well'}
+			<div class="flex items-center gap-1">
+				<button
+					type="button"
+					onclick={() => {
+						workbench.crossplotTemplateOverride = 'core-qc';
+						workbench.coreQcView = 'dual';
+					}}
+					class="h-5 rounded-xs border border-blue-200 bg-blue-50 px-1.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-100"
+				>
+					Core Parity &amp; Depth Error →
+				</button>
+			</div>
+		{:else if effectiveMode === 'mw-distribution'}
 			<div class="flex items-center gap-1">
 				{#each [['box', 'Box'], ['violin', 'Violin'], ['histogram', 'Hist'], ['cdf', 'CDF'], ['nphi-rhob', 'ΦN–ρb']] as [pKey, pLbl]}
 					<button
@@ -1678,6 +2200,42 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if effectiveMode === 'core-qc'}
+		{@const cc = wellData.coreComparison}
+		<div
+			class="grid shrink-0 grid-cols-2 gap-2 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
+		>
+			<div class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5">
+				<span class="font-semibold text-slate-800">
+					PHIT × CPORE <span class="mono-num text-[var(--text-muted)]">(n={cc.poro.count})</span>
+				</span>
+				<div class="mono-num flex items-center gap-2 text-[10px]">
+					<span>RMSE: <strong>{fmtNum(cc.poro.rmse, 4)}</strong></span>
+					<span>MAE: <strong>{fmtNum(cc.poro.mae, 4)}</strong></span>
+					<span>
+						Bias: <strong class={cc.poro.bias !== null && Math.abs(cc.poro.bias) > 0.015 ? 'text-amber-700' : 'text-slate-900'}>
+							{cc.poro.bias !== null && cc.poro.bias >= 0 ? '+' : ''}{fmtNum(cc.poro.bias, 4)}
+						</strong>
+					</span>
+					<span>±2 p.u.: <strong>{fmtNum(cc.poro.within_2pu_pct, 0)}%</strong></span>
+					<span>R²: <strong class="text-emerald-700">{fmtNum(cc.poro.r2, 3)}</strong></span>
+				</div>
+			</div>
+			<div class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5">
+				<span class="font-semibold text-slate-800">
+					PERM × CPERM <span class="mono-num text-[var(--text-muted)]">(n={cc.perm.count})</span>
+				</span>
+				<div class="mono-num flex items-center gap-2 text-[10px]">
+					<span>log₁₀ RMSE: <strong>{fmtNum(cc.perm.log10_rmse, 3)}</strong></span>
+					<span>log₁₀ MAE: <strong>{fmtNum(cc.perm.log10_mae, 3)}</strong></span>
+					<span>Factor: <strong>{fmtNum(cc.perm.factor_error, 2)}×</strong></span>
+					<span>±0.5 dec: <strong>{fmtNum(cc.perm.within_half_dec_pct, 0)}%</strong></span>
+					<span>R²: <strong class="text-emerald-700">{fmtNum(cc.perm.r2, 3)}</strong></span>
+				</div>
+			</div>
+		</div>
+	{/if}
 
 	<div class="relative min-h-0 flex-1 overflow-hidden">
 		<div bind:this={plotEl} class="absolute inset-0 h-full w-full"></div>

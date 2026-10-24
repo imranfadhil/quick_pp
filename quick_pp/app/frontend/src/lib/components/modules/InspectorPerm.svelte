@@ -186,7 +186,64 @@
 			{/if}
 		</ParameterSection>
 
-		{#if wellData.permCoreMetrics}
+		{#if wellData.coreComparison.perm.count > 0 || wellData.permCoreMetrics}
+			{@const kStat = wellData.coreComparison.perm}
+			{@const kCount = kStat.count || wellData.permCoreMetrics?.count || 0}
+			<ParameterSection
+				title="Core Permeability Calibration (PERM × CPERM)"
+				badge={`n=${kCount}`}
+			>
+				<div class="grid grid-cols-4 gap-1 text-center">
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">log₁₀ RMSE</div>
+						<div class="mono-num text-[11px] font-bold text-[var(--text-primary)]">
+							{fmtNum(kStat.log10_rmse ?? wellData.permCoreMetrics?.rmse, 3)}
+						</div>
+					</div>
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">log₁₀ MAE</div>
+						<div class="mono-num text-[11px] font-bold text-[var(--text-primary)]">
+							{fmtNum(kStat.log10_mae ?? wellData.permCoreMetrics?.mae, 3)}
+						</div>
+					</div>
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Factor Err</div>
+						<div class="mono-num text-[11px] font-bold text-[var(--text-primary)]">
+							{fmtNum(kStat.factor_error, 2)}×
+						</div>
+					</div>
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">R²</div>
+						<div class="mono-num text-[11px] font-bold text-[var(--status-ok)]">
+							{fmtNum(kStat.r2 ?? wellData.permCoreMetrics?.r2, 3)}
+						</div>
+					</div>
+				</div>
+				<div class="mt-1.5 grid grid-cols-2 gap-1">
+					<button
+						type="button"
+						onclick={() => {
+							workbench.crossplotTemplateOverride = 'core-qc';
+							workbench.coreQcView = 'perm';
+						}}
+						class="h-6 rounded-xs border border-blue-200 bg-blue-50/80 px-1.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-100"
+					>
+						PERM × CPERM + Depth →
+					</button>
+					<button
+						type="button"
+						onclick={() => {
+							workbench.crossplotTemplateOverride = 'core-qc';
+							workbench.coreQcView = 'dual';
+						}}
+						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 text-[10px] font-semibold text-[var(--text-primary)] hover:bg-slate-100"
+					>
+						Dual Φ &amp; K Parity →
+					</button>
+				</div>
+			</ParameterSection>
+		{/if}
+		<!--
 			<ParameterSection
 				title="Core Permeability Calibration (log10 mD)"
 				badge={`n=${wellData.permCoreMetrics.count}`}
@@ -214,6 +271,7 @@
 			</ParameterSection>
 		{/if}
 
+		-->
 		<ParameterSection title="Multi-Well FZI Shortcut">
 			<p class="text-[11px] text-[var(--text-secondary)]">
 				Need Rock-Type-based permeability transforms across multiple wells?

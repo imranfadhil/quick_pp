@@ -236,6 +236,33 @@
 				};
 			}
 
+			if (
+				wellData.coreComparison.rows.length > 0 &&
+				(workbench.crossplotTemplateOverride === 'core-qc' ||
+					(workbench.scope === 'single-well' &&
+						(workbench.singleWellStep === 'litho-poro' || workbench.singleWellStep === 'perm')))
+			) {
+				const cc = wellData.coreComparison;
+				return {
+					title: `Core vs. Estimated Depth Error Comparison (n=${cc.rows.length} | Φ RMSE=${cc.poro.rmse ?? '—'}, K log₁₀RMSE=${cc.perm.log10_rmse ?? '—'})`,
+					columns: [
+						{ key: 'DEPTH', label: 'Depth', unit: 'm', numeric: true, decimals: 2 },
+						{ key: 'SAMPLE', label: 'Sample' },
+						{ key: 'ZONE', label: 'Zone' },
+						{ key: 'CPORE', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'PHIT', label: 'PHIT', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'ERR_PHIT', label: 'ΔPHIT', unit: 'v/v', numeric: true, decimals: 4 },
+						{ key: 'REL_ERR_PHIT', label: 'Φ Err', unit: '%', numeric: true, decimals: 1 },
+						{ key: 'CPERM', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2 },
+						{ key: 'PERM', label: 'PERM', unit: 'mD', numeric: true, decimals: 2 },
+						{ key: 'ERR_PERM', label: 'ΔPERM', unit: 'mD', numeric: true, decimals: 2 },
+						{ key: 'LOG10_ERR_PERM', label: 'Δlog₁₀K', unit: 'dec', numeric: true, decimals: 3 },
+						{ key: 'FACTOR_PERM', label: 'K Ratio', unit: '×', numeric: true, decimals: 2 }
+					],
+					rows: cc.rows
+				};
+			}
+
 			if (wellData.zonalSummary.length > 0) {
 				const sample = wellData.zonalSummary[0];
 				const cols: GridColumn[] = Object.keys(sample).map((k) => ({
