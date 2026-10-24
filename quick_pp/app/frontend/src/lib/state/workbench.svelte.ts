@@ -87,12 +87,19 @@ export interface BadholeFlaggingParams {
 export interface LithoEndpointParams {
 	model: 'ssc' | 'multi_mineral' | 'vsh_gr';
 	porosityMethod: 'neu_den' | 'den';
+	logCorrectionMode: 'none' | 'hc' | 'den';
 	useHcCorrected: boolean;
 	enableHcCorrection: boolean;
 	rhoWater: number;
 	rhoHc: number;
 	hiHc: number;
 	hcBuffer: number;
+	denCorrScope: 'full' | 'badhole_only' | 'vsh_mismatch';
+	denCorrSyncEndpoints: boolean;
+	denCorrRhoMa: number;
+	denCorrPhinSh: number;
+	denCorrPhidSh: number;
+	denCorrMismatchThreshold: number;
 	drySandNphi: number;
 	drySandRhob: number;
 	drySiltNphi: number;
@@ -247,12 +254,19 @@ class WorkbenchState {
 	lithoParams = $state<LithoEndpointParams>({
 		model: 'ssc',
 		porosityMethod: 'neu_den',
-		useHcCorrected: true,
-		enableHcCorrection: true,
+		logCorrectionMode: 'none',
+		useHcCorrected: false,
+		enableHcCorrection: false,
 		rhoWater: 1.0,
 		rhoHc: 0.8,
 		hiHc: 0.9,
 		hcBuffer: 0.0,
+		denCorrScope: 'vsh_mismatch',
+		denCorrSyncEndpoints: true,
+		denCorrRhoMa: 2.65,
+		denCorrPhinSh: 0.33,
+		denCorrPhidSh: 0.05,
+		denCorrMismatchThreshold: 0.15,
 		drySandNphi: -0.02,
 		drySandRhob: 2.65,
 		drySiltNphi: 0.12,

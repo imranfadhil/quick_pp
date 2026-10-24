@@ -39,6 +39,8 @@
 	let editingCell = $state<{ row: number; key: string } | null>(null);
 	let editDraft = $state<string>('');
 	let selectedRowIdx = $state<number | null>(null);
+	let displayLimit = $state<number>(300);
+	let visibleRows = $derived(rows.length > displayLimit ? rows.slice(0, displayLimit) : rows);
 
 	function startEdit(rowIdx: number, col: GridColumn) {
 		if (!editable && !col.editable) return;
@@ -163,7 +165,7 @@
 					</td>
 				</tr>
 			{:else}
-				{#each rows as row, rIdx}
+				{#each visibleRows as row, rIdx}
 					<tr
 						onclick={() => handleRowClick(row, rIdx)}
 						class="h-7 cursor-pointer transition-colors hover:bg-[var(--bg-subtle)] {selectedRowIdx ===
@@ -222,8 +224,31 @@
 						{/if}
 					</tr>
 				{/each}
+				{#if rows.length > displayLimit}
+					<tr class="bg-[var(--bg-subtle)]">
+						<td
+							colspan={columns.length + (ondeleteRow ? 1 : 0)}
+							class="px-3 py-1.5 text-center text-[11px] text-[var(--text-secondary)]"
+						>
+							<span>Showing {displayLimit.toLocaleString()} of {rows.length.toLocaleString()} rows</span>
+							<button
+								type="button"
+								onclick={() => (displayLimit += 500)}
+								class="ml-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0.5 font-semibold text-[var(--accent-primary)] hover:bg-blue-50"
+							>
+								+500 rows
+							</button>
+							<button
+								type="button"
+								onclick={() => (displayLimit = rows.length)}
+								class="ml-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0.5 font-medium text-[var(--text-secondary)] hover:bg-slate-100"
+							>
+								Show all
+							</button>
+						</td>
+					</tr>
+				{/if}
 			{/if}
 		</tbody>
 	</table>
 </div>
-

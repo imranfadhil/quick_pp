@@ -29,6 +29,10 @@ router = APIRouter(prefix="/qaqc", tags=["QAQC"])
 class DataPoint(BaseModel):
     nphi: float = Field(..., description="Neutron porosity (fraction)")
     rhob: float = Field(..., description="Bulk density (g/cm^3)")
+    vsh_gr: Optional[float] = Field(
+        None, description="Calibrated Vshale from Gamma Ray (fraction)"
+    )
+    gr: Optional[float] = Field(None, description="Gamma Ray log (gAPI)")
 
 
 class HCCorrectionInput(BaseModel):
@@ -43,6 +47,12 @@ class HCCorrectionInput(BaseModel):
     )
     corr_angle: float = Field(50, description="Correction angle (degrees)")
     buffer: float = Field(0.01, description="Buffer for HC flag detection")
+    gr_clean: Optional[float] = Field(
+        None, description="Clean sand GR endpoint (gAPI) for VSH_GR calculation"
+    )
+    gr_clay: Optional[float] = Field(
+        None, description="Shale GR endpoint (gAPI) for VSH_GR calculation"
+    )
     data: List[DataPoint] = Field(..., description="List of NPHI/RHOB data points")
 
 
@@ -86,13 +96,44 @@ async def apply_hc_correction(inputs: HCCorrectionInput):
 
     # Extract data into arrays
     data_points = input_dict["data"]
-    nphi_array = np.array([p["nphi"] for p in data_points])
-    rhob_array = np.array([p["rhob"] for p in data_points])
+    nphi_array = np.array([p["nphi"] for p in data_points], dtype=float)
+    rhob_array = np.array([p["rhob"] for p in data_points], dtype=float)
+
+    vsh_gr_array: Optional[np.ndarray] = None
+    if any(p.get("vsh_gr") is not None for p in data_points):
+        vsh_gr_array = np.clip(
+            np.array(
+                [
+                    float(p["vsh_gr"]) if p.get("vsh_gr") is not None else 0.0
+                    for p in data_points
+                ],
+                dtype=float,
+            ),
+            0.0,
+            1.0,
+        )
+    elif (
+        input_dict.get("gr_clean") is not None
+        and input_dict.get("gr_clay") is not None
+        and abs(float(input_dict["gr_clay"]) - float(input_dict["gr_clean"])) > 1e-6
+        and any(p.get("gr") is not None for p in data_points)
+    ):
+        gr_clean = float(input_dict["gr_clean"])
+        gr_clay = float(input_dict["gr_clay"])
+        gr_arr = np.array(
+            [
+                float(p["gr"]) if p.get("gr") is not None else gr_clean
+                for p in data_points
+            ],
+            dtype=float,
+        )
+        vsh_gr_array = np.clip((gr_arr - gr_clean) / (gr_clay - gr_clean), 0.0, 1.0)
 
     # Apply HC correction
-    nphi_corrected, rhob_corrected, _ = neu_den_xplot_hc_correction(
+    nphi_corrected, rhob_corrected, hc_flag = neu_den_xplot_hc_correction(
         nphi_array,
         rhob_array,
+        vsh_gr=vsh_gr_array,
         dry_min1_point=input_dict["dry_sand_point"],
         dry_clay_point=input_dict["dry_clay_point"],
         water_point=input_dict["water_point"],
@@ -102,8 +143,10 @@ async def apply_hc_correction(inputs: HCCorrectionInput):
 
     # Return corrected data as list of dicts
     results = []
-    for nphi, rhob in zip(nphi_corrected, rhob_corrected, strict=True):
-        results.append({"nphi": float(nphi), "rhob": float(rhob)})
+    for nphi, rhob, flag in zip(nphi_corrected, rhob_corrected, hc_flag, strict=True):
+        results.append(
+            {"nphi": float(nphi), "rhob": float(rhob), "hc_flag": float(flag)}
+        )
 
     return results
 

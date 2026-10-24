@@ -60,6 +60,41 @@
 		rt_rmse_decade: number | null;
 	} | null>(null);
 
+	let hcSummary = $state<{
+		corr_angle: number;
+		hc_flagged_count: number;
+		valid_count: number;
+		hc_flagged_pct: number;
+		gr_clean: number | null;
+		gr_clay: number | null;
+		mean_vsh_gr_hc: number | null;
+		mean_dnphi: number;
+		mean_drhob: number;
+	} | null>(null);
+
+	let denSummary = $state<{
+		scope: string;
+		sync_endpoints: boolean;
+		corrected_count: number;
+		valid_count: number;
+		corrected_pct: number;
+		rho_ma: number;
+		phin_sh: number;
+		phid_sh: number;
+		gr_clean: number | null;
+		gr_clay: number | null;
+		mean_vsh_gr: number | null;
+		mean_drhob: number;
+		mean_abs_drhob: number;
+	} | null>(null);
+
+	function setLogCorrectionMode(mode: 'none' | 'hc' | 'den') {
+		workbench.lithoParams.logCorrectionMode = mode;
+		workbench.lithoParams.enableHcCorrection = mode !== 'none';
+		workbench.lithoParams.useHcCorrected = mode !== 'none';
+		executeLithoPoro(false);
+	}
+
 	async function loadMlModelsStatus(projectId: string | number) {
 		try {
 			const status = await getJson<any>(
@@ -126,9 +161,9 @@
 		}
 	}
 
-	function zeroUnselectedMineralCurvesInMemory() {
+	function collectZeroedUnselectedMineralCurves(): Record<string, number[]> {
 		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-		if (dept.length === 0) return;
+		if (dept.length === 0) return {};
 
 		const lp = workbench.lithoParams;
 		let activeMnemonics: Set<string>;
@@ -152,10 +187,7 @@
 				zeroedUpdates[curveName] = [...zeroArr];
 			}
 		}
-		if (Object.keys(zeroedUpdates).length > 0) {
-			wellData.curves = { ...wellData.curves, ...zeroedUpdates };
-			wellData.markModuleComputed('litho-poro', Object.keys(zeroedUpdates));
-		}
+		return zeroedUpdates;
 	}
 
 	async function executeLithoPoro(persist: boolean = false) {
@@ -163,8 +195,13 @@
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const lp = workbench.lithoParams;
-		lp.useHcCorrected = lp.enableHcCorrection;
-		zeroUnselectedMineralCurvesInMemory();
+		const useCorrected = lp.logCorrectionMode !== 'none';
+		lp.enableHcCorrection = useCorrected;
+		lp.useHcCorrected = useCorrected;
+
+		const batchedCurves: Record<string, any> = collectZeroedUnselectedMineralCurves();
+		const batchedStats: Record<string, any> = {};
+
 		const filterArgs = {
 			min_depth: workbench.depthFilter?.min ?? null,
 			max_depth: workbench.depthFilter?.max ?? null,
@@ -182,8 +219,9 @@
 		};
 
 		try {
-			// 1. Optional Hydrocarbon Correction
-			if (lp.enableHcCorrection) {
+			// 1. Mutually exclusive NPHI/RHOB Log Correction: HC Correction OR Density Correction
+			if (lp.logCorrectionMode === 'hc') {
+				denSummary = null;
 				const { data: hcData, error: hcErr } = await api.POST(
 					'/quick_pp/workspace/projects/{project_id}/wells/{well_name}/hc_correction',
 					{
@@ -207,8 +245,52 @@
 				);
 				if (hcErr) throw new Error(String((hcErr as any)?.detail ?? 'HC Correction failed'));
 				if (hcData) {
-					wellData.mergeComputedCurves(hcData.data, hcData.stats);
-					wellData.markModuleComputed('litho-poro', hcData.data);
+					if (hcData.data) Object.assign(batchedCurves, hcData.data);
+					if (hcData.stats) Object.assign(batchedStats, hcData.stats);
+					if ((hcData as any).hc_summary) {
+						hcSummary = (hcData as any).hc_summary;
+					}
+				}
+			} else if (lp.logCorrectionMode === 'den') {
+				hcSummary = null;
+				const denData = await postJson<any>(
+					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/den_correction`,
+					{
+						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
+						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
+						rho_water: lp.rhoWater,
+						sync_endpoints: lp.denCorrSyncEndpoints,
+						rho_ma: lp.denCorrRhoMa,
+						phin_sh: lp.denCorrPhinSh,
+						phid_sh: lp.denCorrPhidSh,
+						scope: lp.denCorrScope,
+						vsh_mismatch_threshold: lp.denCorrMismatchThreshold,
+						gr_clean: lp.grClean,
+						gr_clay: lp.grClay,
+						enable_coal_flagging: lp.enableCoalFlagging,
+						coal_rhob_max: lp.coalRhobMax,
+						coal_nphi_min: lp.coalNphiMin,
+						coal_window_size: Math.round(lp.coalWindowSize),
+						coal_trend_factor: lp.coalTrendFactor,
+						...filterArgs
+					}
+				);
+				if (denData?.data) Object.assign(batchedCurves, denData.data);
+				if (denData?.stats) Object.assign(batchedStats, denData.stats);
+				if (denData?.den_summary) {
+					denSummary = denData.den_summary;
+				}
+			} else {
+				hcSummary = null;
+				denSummary = null;
+				const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+				if (dept.length > 0) {
+					if (wellData.curves['HC_FLAG']) {
+						batchedCurves['HC_FLAG'] = new Array(dept.length).fill(0);
+					}
+					if (wellData.curves['DEN_CORR_FLAG']) {
+						batchedCurves['DEN_CORR_FLAG'] = new Array(dept.length).fill(0);
+					}
 				}
 			}
 
@@ -221,7 +303,7 @@
 					},
 					body: {
 						model: lp.model,
-						use_hc_corrected: lp.enableHcCorrection,
+						use_hc_corrected: useCorrected,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
@@ -238,8 +320,8 @@
 			);
 			if (lithErr) throw new Error(String((lithErr as any)?.detail ?? 'Lithology failed'));
 			if (lithData) {
-				wellData.mergeComputedCurves(lithData.data, lithData.stats);
-				wellData.markModuleComputed('litho-poro', lithData.data);
+				if (lithData.data) Object.assign(batchedCurves, lithData.data);
+				if (lithData.stats) Object.assign(batchedStats, lithData.stats);
 			}
 
 			// 3. Porosity Estimation
@@ -252,7 +334,7 @@
 					body: {
 						method: lp.porosityMethod,
 						lithology_model: lp.model,
-						use_hc_corrected: lp.enableHcCorrection,
+						use_hc_corrected: useCorrected,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
@@ -267,9 +349,15 @@
 			);
 			if (poroErr) throw new Error(String((poroErr as any)?.detail ?? 'Porosity failed'));
 			if (poroData) {
-				wellData.mergeComputedCurves(poroData.data, poroData.stats);
-				wellData.markModuleComputed('litho-poro', poroData.data);
+				if (poroData.data) Object.assign(batchedCurves, poroData.data);
+				if (poroData.stats) Object.assign(batchedStats, poroData.stats);
 				wellData.poroCoreMetrics = poroData.core_metrics;
+			}
+
+			// Apply all computed curves from Steps 1–3 in a single atomic reactive update
+			if (Object.keys(batchedCurves).length > 0) {
+				wellData.mergeComputedCurves(batchedCurves, batchedStats);
+				wellData.markModuleComputed('litho-poro', batchedCurves);
 			}
 
 			if (workbench.tsParams.enabled) {
@@ -280,6 +368,10 @@
 				wellData.lastSavedMessage = 'Litho & Poro Saved ✓';
 			}
 		} catch (e: any) {
+			if (Object.keys(batchedCurves).length > 0) {
+				wellData.mergeComputedCurves(batchedCurves, batchedStats);
+				wellData.markModuleComputed('litho-poro', batchedCurves);
+			}
 			wellData.lastError = e?.message || 'Lithology/Porosity error';
 		} finally {
 			wellData.isCalculating = false;
@@ -587,20 +679,46 @@
 			</ParameterSection>
 		{/if}
 
-		<ParameterSection title="Hydrocarbon Correction">
-			<label class="flex items-center gap-2 py-0.5 text-xs font-medium cursor-pointer">
-				<input
-					type="checkbox"
-					bind:checked={workbench.lithoParams.enableHcCorrection}
-					onchange={() => {
-						workbench.lithoParams.useHcCorrected = workbench.lithoParams.enableHcCorrection;
-					}}
-					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
-				/>
-				<span>Enable NPHI/RHOB HC Correction</span>
-			</label>
+		<ParameterSection
+			title="NPHI / RHOB Log Correction"
+			badge={workbench.lithoParams.logCorrectionMode === 'hc'
+				? hcSummary
+					? `HC · ${hcSummary.hc_flagged_count} pts`
+					: `HC · VSH_GR (${fmtNum(workbench.lithoParams.grClean, 0)}–${fmtNum(workbench.lithoParams.grClay, 0)})`
+				: workbench.lithoParams.logCorrectionMode === 'den'
+					? denSummary
+						? `Den · ${denSummary.corrected_count} pts`
+						: `Den · VSH_GR (${fmtNum(workbench.lithoParams.grClean, 0)}–${fmtNum(workbench.lithoParams.grClay, 0)})`
+					: 'Off'}
+		>
+			<div class="mb-1.5 grid grid-cols-3 gap-1">
+				{#each [
+					['none', 'Off', 'Use raw NPHI & RHOB logs without HC or density reconstruction'],
+					['hc', 'HC Correction', 'Shift HC-flagged (NPHI, RHOB) along fluid angle to match VSH_GR'],
+					['den', 'Density Corr', 'Reconstruct RHOB from NPHI and calibrated VSH_GR (den_correction)']
+				] as [mKey, mLbl, mTip]}
+					<button
+						type="button"
+						title={mTip}
+						onclick={() => setLogCorrectionMode(mKey as 'none' | 'hc' | 'den')}
+						class="h-6 rounded-xs border px-1.5 text-[10.5px] font-semibold transition-colors {workbench.lithoParams.logCorrectionMode ===
+						mKey
+							? mKey === 'hc'
+								? 'border-emerald-700 bg-emerald-700 text-white'
+								: mKey === 'den'
+									? 'border-amber-600 bg-amber-600 text-white'
+									: 'border-slate-700 bg-slate-700 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{mLbl}
+					</button>
+				{/each}
+			</div>
 
-			{#if workbench.lithoParams.enableHcCorrection}
+			{#if workbench.lithoParams.logCorrectionMode === 'hc'}
+				<div class="my-1.5 rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] leading-snug text-emerald-950">
+					Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle until crossplot <span class="mono-num font-semibold">VSH_DN</span> matches calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>).
+				</div>
 				<NumericScrubber
 					label="Water Density"
 					bind:value={workbench.lithoParams.rhoWater}
@@ -628,6 +746,159 @@
 					step={0.02}
 					onrun={() => executeLithoPoro(false)}
 				/>
+				<NumericScrubber
+					label="HC Flag Buffer"
+					bind:value={workbench.lithoParams.hcBuffer}
+					unit="frac"
+					min={-0.05}
+					max={0.15}
+					step={0.005}
+					decimals={3}
+					onrun={() => executeLithoPoro(false)}
+				/>
+
+				{#if hcSummary}
+					<div class="mt-1.5 rounded-sm border border-emerald-200 bg-emerald-50/50 p-1.5 text-[10px]">
+						<div class="grid grid-cols-4 gap-1 text-center">
+							<div>
+								<div class="text-[var(--text-muted)]">HC Flagged</div>
+								<div class="mono-num font-bold text-slate-800">
+									{hcSummary.hc_flagged_count} ({fmtNum(hcSummary.hc_flagged_pct, 1)}%)
+								</div>
+							</div>
+							<div>
+								<div class="text-[var(--text-muted)]">Corr Angle</div>
+								<div class="mono-num font-bold text-slate-800">
+									{fmtNum(hcSummary.corr_angle, 1)}°
+								</div>
+							</div>
+							<div>
+								<div class="text-[var(--text-muted)]">Target Vsh,GR</div>
+								<div class="mono-num font-bold text-emerald-800">
+									{hcSummary.mean_vsh_gr_hc !== null ? fmtNum(hcSummary.mean_vsh_gr_hc, 3) : '—'}
+								</div>
+							</div>
+							<div>
+								<div class="text-[var(--text-muted)]">ΔNPHI / Δρb</div>
+								<div class="mono-num font-bold text-blue-800">
+									+{fmtNum(hcSummary.mean_dnphi, 3)} / +{fmtNum(hcSummary.mean_drhob, 2)}
+								</div>
+							</div>
+						</div>
+					</div>
+				{/if}
+			{:else if workbench.lithoParams.logCorrectionMode === 'den'}
+				<div class="my-1.5 rounded-xs border border-amber-200 bg-amber-50/75 px-2 py-1 text-[10px] leading-snug text-amber-950">
+					Reconstructs <span class="mono-num font-semibold">RHOB</span> from <span class="mono-num font-semibold">NPHI</span> and calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>) via <span class="mono-num">ΦD = NPHI − (ΦN,sh − ΦD,sh)·VSH_GR</span>. Avoid in gas-excavated sands.
+				</div>
+
+				<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
+					<span class="text-xs font-medium text-[var(--text-primary)]">Correction Scope</span>
+					<select
+						bind:value={workbench.lithoParams.denCorrScope}
+						onchange={() => executeLithoPoro(false)}
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+					>
+						<option value="vsh_mismatch">|ΔVsh| Mismatch &gt; Cutoff</option>
+						<option value="badhole_only">Badhole / Washout Only</option>
+						<option value="full">Whole Interval</option>
+					</select>
+				</div>
+
+				{#if workbench.lithoParams.denCorrScope === 'vsh_mismatch'}
+					<NumericScrubber
+						label="Min |VSH_DN − VSH_GR|"
+						bind:value={workbench.lithoParams.denCorrMismatchThreshold}
+						unit="v/v"
+						min={0.03}
+						max={0.45}
+						step={0.01}
+						decimals={2}
+						onrun={() => executeLithoPoro(false)}
+					/>
+				{/if}
+
+				<NumericScrubber
+					label="Water Density (ρw)"
+					bind:value={workbench.lithoParams.rhoWater}
+					unit="g/cc"
+					min={0.9}
+					max={1.25}
+					step={0.01}
+					onrun={() => executeLithoPoro(false)}
+				/>
+
+				<label class="mt-1 flex items-center gap-2 py-0.5 text-xs font-medium cursor-pointer">
+					<input
+						type="checkbox"
+						bind:checked={workbench.lithoParams.denCorrSyncEndpoints}
+						onchange={() => executeLithoPoro(false)}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+					/>
+					<span>Sync ρma, ΦN,sh &amp; ΦD,sh with Crossplot Endpoints (A &amp; C)</span>
+				</label>
+
+				{#if !workbench.lithoParams.denCorrSyncEndpoints}
+					<NumericScrubber
+						label="Matrix Density (ρma)"
+						bind:value={workbench.lithoParams.denCorrRhoMa}
+						unit="g/cc"
+						min={2.55}
+						max={2.85}
+						step={0.01}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Shale Neutron (ΦN,sh)"
+						bind:value={workbench.lithoParams.denCorrPhinSh}
+						unit="v/v"
+						min={0.15}
+						max={0.55}
+						step={0.01}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Shale Density Poro (ΦD,sh)"
+						bind:value={workbench.lithoParams.denCorrPhidSh}
+						unit="v/v"
+						min={-0.05}
+						max={0.25}
+						step={0.005}
+						decimals={3}
+						onrun={() => executeLithoPoro(false)}
+					/>
+				{/if}
+
+				{#if denSummary}
+					<div class="mt-1.5 rounded-sm border border-amber-200 bg-amber-50/50 p-1.5 text-[10px]">
+						<div class="grid grid-cols-4 gap-1 text-center">
+							<div>
+								<div class="text-[var(--text-muted)]">Reconstructed</div>
+								<div class="mono-num font-bold text-slate-800">
+									{denSummary.corrected_count} ({fmtNum(denSummary.corrected_pct, 1)}%)
+								</div>
+							</div>
+							<div>
+								<div class="text-[var(--text-muted)]">Eff. ρma / ΦN,sh</div>
+								<div class="mono-num font-bold text-slate-800">
+									{fmtNum(denSummary.rho_ma, 2)} / {fmtNum(denSummary.phin_sh, 2)}
+								</div>
+							</div>
+							<div>
+								<div class="text-[var(--text-muted)]">Mean Vsh,GR</div>
+								<div class="mono-num font-bold text-amber-900">
+									{denSummary.mean_vsh_gr !== null ? fmtNum(denSummary.mean_vsh_gr, 3) : '—'}
+								</div>
+							</div>
+							<div>
+								<div class="text-[var(--text-muted)]">Mean Δρb / |Δρb|</div>
+								<div class="mono-num font-bold text-blue-800">
+									{denSummary.mean_drhob >= 0 ? '+' : ''}{fmtNum(denSummary.mean_drhob, 2)} / {fmtNum(denSummary.mean_abs_drhob, 2)}
+								</div>
+							</div>
+						</div>
+					</div>
+				{/if}
 			{/if}
 		</ParameterSection>
 

@@ -465,7 +465,8 @@ class WellDataState {
 		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		const grArr = this.curves['GR'] ?? [];
 		const lp = workbench.lithoParams;
-		const useHc = lp.enableHcCorrection || lp.useHcCorrected;
+		const useHc =
+			lp.logCorrectionMode === 'hc' && (lp.enableHcCorrection || lp.useHcCorrected);
 		const nphiArr =
 			useHc && this.curves['NPHI_HC'] && this.curves['NPHI_HC'].some((v) => Number.isFinite(v))
 				? this.curves['NPHI_HC']
@@ -481,7 +482,8 @@ class WellDataState {
 		const swArr = this.curves['SWT'] ?? this.curves['SWE'] ?? [];
 		const sortedTops = [...this.tops].sort((a, b) => a.depth - b.depth);
 		const indices = this.visibleIndices;
-		const brushed = workbench.brushedDepthIndices;
+		const scope = workbench.vshCalibScope;
+		const brushed = scope === 'brushed' ? workbench.brushedDepthIndices : null;
 
 		const resolveZone = (idx: number, d: number): string => {
 			const zCol = this.zonesColumn[idx];
@@ -531,6 +533,10 @@ class WellDataState {
 			logIndex: number;
 		}> = [];
 
+		const xdiff0 = A[0] - C[0];
+		const ydiff0 = A[1] - C[1];
+		const d0 = A[0] * C[1] - A[1] * C[0];
+
 		for (const idx of indices) {
 			const d = dept[idx];
 			const gr = grArr[idx];
@@ -546,14 +552,11 @@ class WellDataState {
 			}
 
 			// Compute VSH_DN anchored at C (dry clay point) along rock line C -> B -> A
-			const xdiff0 = A[0] - C[0];
 			const xdiff1 = D[0] - nphi;
-			const ydiff0 = A[1] - C[1];
 			const ydiff1 = D[1] - rhob;
 			const div = xdiff0 * ydiff1 - xdiff1 * ydiff0;
 			if (Math.abs(div) < 1e-12) continue;
 
-			const d0 = A[0] * C[1] - A[1] * C[0];
 			const d1 = D[0] * rhob - D[1] * nphi;
 			const varX = (d0 * xdiff1 - d1 * xdiff0) / div;
 			const varY = (d0 * ydiff1 - d1 * ydiff0) / div;
@@ -567,12 +570,11 @@ class WellDataState {
 					? (-(1.0 - siltClayRatio) / resLen) * projClamped +
 						(rockLen * (1.0 - siltClayRatio)) / resLen
 					: (-siltClayRatio / nonResLen) * projClamped + 1.0;
-			const vshDn = Number(Math.max(0.0, Math.min(1.0, vshDnRaw)).toFixed(4));
-			const vshGr = Number(
-				Math.max(0.0, Math.min(1.0, (gr - grClean) / grSpan)).toFixed(4)
-			);
-			const errVsh = Number((vshGr - vshDn).toFixed(4));
-			const absErr = Number(Math.abs(errVsh).toFixed(4));
+			const vshDn = Math.round(Math.max(0.0, Math.min(1.0, vshDnRaw)) * 10000) / 10000;
+			const vshGr =
+				Math.round(Math.max(0.0, Math.min(1.0, (gr - grClean) / grSpan)) * 10000) / 10000;
+			const errVsh = Math.round((vshGr - vshDn) * 10000) / 10000;
+			const absErr = Math.abs(errVsh);
 
 			const isBadhole = Number.isFinite(badholeArr[idx]) && badholeArr[idx] >= 0.5;
 			const isCoal =
@@ -606,11 +608,11 @@ class WellDataState {
 			}
 
 			rows.push({
-				DEPTH: Number(d.toFixed(2)),
+				DEPTH: Math.round(d * 100) / 100,
 				ZONE: resolveZone(idx, d),
-				GR: Number(gr.toFixed(2)),
-				NPHI: Number(nphi.toFixed(4)),
-				RHOB: Number(rhob.toFixed(4)),
+				GR: Math.round(gr * 100) / 100,
+				NPHI: Math.round(nphi * 10000) / 10000,
+				RHOB: Math.round(rhob * 10000) / 10000,
 				VSH_DN: vshDn,
 				VSH_GR: vshGr,
 				ERR_VSH: errVsh,
@@ -698,10 +700,9 @@ class WellDataState {
 		const sandRows = rows.filter((r) => r.REGIME === 'clean_sand');
 		const goodHoleRows = rows.filter((r) => r.REGIME !== 'excluded');
 		const brushedRows =
-			brushed.size > 0 ? rows.filter((r) => brushed.has(r.logIndex)) : [];
+			brushed && brushed.size > 0 ? rows.filter((r) => brushed.has(r.logIndex)) : [];
 
 		let activeRows: typeof rows;
-		const scope = workbench.vshCalibScope;
 		if (scope === 'brushed' && brushedRows.length > 0) {
 			activeRows = brushedRows;
 		} else if (scope === 'shale_only') {

@@ -211,7 +211,12 @@
 				for (let i = 0; i < pd.well_names.length; i++) {
 					const x = pd.nphi?.[i];
 					const y = pd.rhob?.[i];
-					if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+					if (
+						typeof x !== 'number' ||
+						typeof y !== 'number' ||
+						!Number.isFinite(x) ||
+						!Number.isFinite(y)
+					) {
 						continue;
 					}
 					const wn = pd.well_names[i];
@@ -246,8 +251,20 @@
 					type: 'scatter',
 					mode: 'lines+markers+text',
 					name: 'SSC Endpoints',
-					x: [lp.drySandNphi, lp.drySiltNphi, lp.dryClayNphi, lp.fluidNphi, lp.drySandNphi],
-					y: [lp.drySandRhob, lp.drySiltRhob, lp.dryClayRhob, lp.fluidRhob, lp.drySandRhob],
+					x: [
+						lp.drySandNphi,
+						lp.drySiltNphi,
+						lp.dryClayNphi,
+						lp.fluidNphi,
+						lp.drySandNphi
+					],
+					y: [
+						lp.drySandRhob,
+						lp.drySiltRhob,
+						lp.dryClayRhob,
+						lp.fluidRhob,
+						lp.drySandRhob
+					],
 					text: ['Sand', 'Silt', 'Clay', 'Fluid', ''],
 					textposition: 'top center',
 					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
@@ -284,7 +301,8 @@
 					const byZone = new Map<string, { x: string[]; y: number[] }>();
 					for (let i = 0; i < pd.values.length; i++) {
 						const v = pd.values[i];
-						if (typeof v !== 'number' || !Number.isFinite(v) || (useLog && v <= 0)) continue;
+						if (typeof v !== 'number' || !Number.isFinite(v) || (useLog && v <= 0))
+							continue;
 						const wn = pd.well_names[i];
 						const zn = pd.zones?.[i] || 'ALL';
 						if (!byZone.has(zn)) byZone.set(zn, { x: [], y: [] });
@@ -324,12 +342,20 @@
 									? `${pd.well_names[i]} (${pd.zones?.[i] || 'ALL'})`
 									: pd.well_names[i];
 						const vRaw = pd.values[i];
-						if (typeof vRaw === 'number' && Number.isFinite(vRaw) && (!useLog || vRaw > 0)) {
+						if (
+							typeof vRaw === 'number' &&
+							Number.isFinite(vRaw) &&
+							(!useLog || vRaw > 0)
+						) {
 							rawX.push(lbl);
 							rawY.push(vRaw);
 						}
 						const vOvr = overlayArr[i];
-						if (typeof vOvr === 'number' && Number.isFinite(vOvr) && (!useLog || vOvr > 0)) {
+						if (
+							typeof vOvr === 'number' &&
+							Number.isFinite(vOvr) &&
+							(!useLog || vOvr > 0)
+						) {
 							ovrX.push(lbl);
 							ovrY.push(vOvr);
 						}
@@ -363,7 +389,8 @@
 					const groups = new Map<string, number[]>();
 					for (let i = 0; i < pd.values.length; i++) {
 						const v = pd.values[i];
-						if (typeof v !== 'number' || !Number.isFinite(v) || (useLog && v <= 0)) continue;
+						if (typeof v !== 'number' || !Number.isFinite(v) || (useLog && v <= 0))
+							continue;
 						const lbl = groupBy === 'zone' ? pd.zones?.[i] || 'ALL' : pd.well_names[i];
 						if (!groups.has(lbl)) groups.set(lbl, []);
 						groups.get(lbl)!.push(v);
@@ -437,7 +464,11 @@
 				}
 				if (overlayArr) {
 					const vOvr = overlayArr[i];
-					if (typeof vOvr === 'number' && Number.isFinite(vOvr) && (!useLog || vOvr > 0)) {
+					if (
+						typeof vOvr === 'number' &&
+						Number.isFinite(vOvr) &&
+						(!useLog || vOvr > 0)
+					) {
 						g.ovr.push(vOvr);
 					}
 				}
@@ -537,7 +568,8 @@
 
 		if (effectiveMode === 'nphi-rhob') {
 			const useHc =
-				workbench.lithoParams.enableHcCorrection && workbench.lithoParams.useHcCorrected;
+				workbench.lithoParams.logCorrectionMode !== 'none' &&
+				(workbench.lithoParams.enableHcCorrection || workbench.lithoParams.useHcCorrected);
 			const nphiArr =
 				useHc && wellData.curves['NPHI_HC']
 					? wellData.curves['NPHI_HC']
@@ -654,6 +686,91 @@
 				});
 			}
 
+			// Show pre-correction HC-flagged or Den-corrected raw points when Log Correction is active
+			const hcFlagArr = wellData.curves['HC_FLAG'] ?? [];
+			const denFlagArr = wellData.curves['DEN_CORR_FLAG'] ?? [];
+			const rawNphiArr = wellData.curves['NPHI'] ?? [];
+			const rawRhobArr = wellData.curves['RHOB'] ?? [];
+			if (
+				useHc &&
+				workbench.lithoParams.logCorrectionMode === 'hc' &&
+				wellData.curves['NPHI_HC'] &&
+				hcFlagArr.length > 0
+			) {
+				const rawHcXs: number[] = [];
+				const rawHcYs: number[] = [];
+				const rawHcIdx: number[] = [];
+				for (const idx of indices) {
+					if (
+						Number.isFinite(hcFlagArr[idx]) &&
+						hcFlagArr[idx] >= 0.5 &&
+						Number.isFinite(rawNphiArr[idx]) &&
+						Number.isFinite(rawRhobArr[idx])
+					) {
+						rawHcXs.push(rawNphiArr[idx]);
+						rawHcYs.push(rawRhobArr[idx]);
+						rawHcIdx.push(idx);
+					}
+				}
+				if (rawHcXs.length > 0) {
+					traces.push({
+						type: 'scattergl',
+						mode: 'markers',
+						name: `Raw HC Pre-Shift (${rawHcXs.length})`,
+						x: rawHcXs,
+						y: rawHcYs,
+						customdata: rawHcIdx,
+						marker: {
+							size: 5.5,
+							color: 'rgba(16, 185, 129, 0.18)',
+							symbol: 'triangle-up-open',
+							line: { color: '#059669', width: 1.2 }
+						},
+						hovertemplate:
+							'Raw HC (Pre-Shift)<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f}<extra></extra>'
+					});
+				}
+			} else if (
+				useHc &&
+				workbench.lithoParams.logCorrectionMode === 'den' &&
+				wellData.curves['RHOB_HC'] &&
+				denFlagArr.length > 0
+			) {
+				const rawDenXs: number[] = [];
+				const rawDenYs: number[] = [];
+				const rawDenIdx: number[] = [];
+				for (const idx of indices) {
+					if (
+						Number.isFinite(denFlagArr[idx]) &&
+						denFlagArr[idx] >= 0.5 &&
+						Number.isFinite(rawNphiArr[idx]) &&
+						Number.isFinite(rawRhobArr[idx])
+					) {
+						rawDenXs.push(rawNphiArr[idx]);
+						rawDenYs.push(rawRhobArr[idx]);
+						rawDenIdx.push(idx);
+					}
+				}
+				if (rawDenXs.length > 0) {
+					traces.push({
+						type: 'scattergl',
+						mode: 'markers',
+						name: `Raw RHOB Pre-Correction (${rawDenXs.length})`,
+						x: rawDenXs,
+						y: rawDenYs,
+						customdata: rawDenIdx,
+						marker: {
+							size: 5,
+							color: 'rgba(217, 119, 6, 0.18)',
+							symbol: 'circle-open',
+							line: { color: '#D97706', width: 1.1 }
+						},
+						hovertemplate:
+							'Raw RHOB (Pre-DenCorr)<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f}<extra></extra>'
+					});
+				}
+			}
+
 			// Ternary SSC triangle & mineral endpoints
 			const lp = workbench.lithoParams;
 			if (lp.enableCoalFlagging) {
@@ -700,8 +817,20 @@
 					type: 'scatter',
 					mode: 'lines+markers+text',
 					name: 'SSC Endpoints',
-					x: [lp.drySandNphi, lp.drySiltNphi, lp.dryClayNphi, lp.fluidNphi, lp.drySandNphi],
-					y: [lp.drySandRhob, lp.drySiltRhob, lp.dryClayRhob, lp.fluidRhob, lp.drySandRhob],
+					x: [
+						lp.drySandNphi,
+						lp.drySiltNphi,
+						lp.dryClayNphi,
+						lp.fluidNphi,
+						lp.drySandNphi
+					],
+					y: [
+						lp.drySandRhob,
+						lp.drySiltRhob,
+						lp.dryClayRhob,
+						lp.fluidRhob,
+						lp.drySandRhob
+					],
 					text: ['Sand', 'Silt', 'Clay', 'Fluid', ''],
 					textposition: 'top center',
 					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
@@ -880,7 +1009,8 @@
 			// Check if multi-well rock typing or perm transform data is present when in multi-well scope
 			const mwSource =
 				workbench.scope === 'multi-well'
-					? workbench.multiWellStep === 'perm-transform' && projectData.permTransformResult
+					? workbench.multiWellStep === 'perm-transform' &&
+						projectData.permTransformResult
 						? projectData.permTransformResult
 						: (projectData.rockTypingResult ?? projectData.permTransformResult)
 					: null;
@@ -903,7 +1033,12 @@
 					if (allowedWells && !allowedWells.has(wn)) return;
 					const d = rt.depths?.[i];
 					if (typeof d === 'number' && (d < minD || d > maxD)) return;
-					if (allowedZones && rtZones && (!rtZones[i] || !allowedZones.has(String(rtZones[i])))) return;
+					if (
+						allowedZones &&
+						rtZones &&
+						(!rtZones[i] || !allowedZones.has(String(rtZones[i])))
+					)
+						return;
 					const k = rt.perm[i];
 					const rf = rt.rock_flags[i] ?? 1;
 					if (Number.isFinite(p) && Number.isFinite(k) && k > 0) {
@@ -929,11 +1064,16 @@
 							color: getRockTypeColor(rf),
 							opacity: hasPermFits ? 0.38 : 0.82
 						},
-						hovertemplate: 'Well: %{text}<br>PHIT: %{x:.3f}<br>PERM: %{y:.2f} mD<extra></extra>'
+						hovertemplate:
+							'Well: %{text}<br>PHIT: %{x:.3f}<br>PERM: %{y:.2f} mD<extra></extra>'
 					});
 				}
 			} else {
-				const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? wellData.curves['NPHI'] ?? [];
+				const phitArr =
+					wellData.curves['PHIT'] ??
+					wellData.curves['PHIE'] ??
+					wellData.curves['NPHI'] ??
+					[];
 				const permArr = wellData.curves['PERM'] ?? [];
 				const cporeArr = wellData.curves['CPORE'] ?? [];
 				const cpermArr = wellData.curves['CPERM'] ?? [];
@@ -1054,7 +1194,8 @@
 		}
 
 		if (effectiveMode === 'pickett') {
-			const phiArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? wellData.curves['NPHI'] ?? [];
+			const phiArr =
+				wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? wellData.curves['NPHI'] ?? [];
 			const rtArr = wellData.curves['RT'] ?? [];
 			const vclArr = wellData.curves['VCLAY'] ?? wellData.curves['GR'] ?? [];
 
@@ -1150,7 +1291,15 @@
 				for (let i = 0; i < scal.pc.length; i++) {
 					const rf = scal.rock_flags?.[i] ?? 1;
 					if (!byRt.has(rf)) {
-						byRt.set(rf, { swn: [], sw: [], j: [], pc: [], bvw: [], h: [], labels: [] });
+						byRt.set(rf, {
+							swn: [],
+							sw: [],
+							j: [],
+							pc: [],
+							bvw: [],
+							h: [],
+							labels: []
+						});
 					}
 					const grp = byRt.get(rf)!;
 					grp.swn.push(scal.swn[i]);
@@ -1183,8 +1332,14 @@
 							x: g.swn,
 							y: g.j,
 							text: g.labels,
-							hovertemplate: '%{text}<br>Swn=%{x:.3f}, J=%{y:.3f}<extra>RT ' + rf + '</extra>',
-							marker: { size: 6.5, color, opacity: 0.85, line: { width: 0.5, color: '#fff' } }
+							hovertemplate:
+								'%{text}<br>Swn=%{x:.3f}, J=%{y:.3f}<extra>RT ' + rf + '</extra>',
+							marker: {
+								size: 6.5,
+								color,
+								opacity: 0.85,
+								line: { width: 0.5, color: '#fff' }
+							}
 						});
 					} else if (activeModel === 'skelt_harrison') {
 						traces.push({
@@ -1194,8 +1349,16 @@
 							x: g.sw,
 							y: g.pc,
 							text: g.labels,
-							hovertemplate: '%{text}<br>Sw=%{x:.3f}, Pc=%{y:.2f} psi<extra>RT ' + rf + '</extra>',
-							marker: { size: 6.5, color, opacity: 0.85, line: { width: 0.5, color: '#fff' } }
+							hovertemplate:
+								'%{text}<br>Sw=%{x:.3f}, Pc=%{y:.2f} psi<extra>RT ' +
+								rf +
+								'</extra>',
+							marker: {
+								size: 6.5,
+								color,
+								opacity: 0.85,
+								line: { width: 0.5, color: '#fff' }
+							}
 						});
 					} else {
 						traces.push({
@@ -1205,8 +1368,16 @@
 							x: g.bvw,
 							y: g.pc,
 							text: g.labels,
-							hovertemplate: '%{text}<br>BVW=%{x:.3f}, Pc=%{y:.2f} psi<extra>RT ' + rf + '</extra>',
-							marker: { size: 6.5, color, opacity: 0.85, line: { width: 0.5, color: '#fff' } }
+							hovertemplate:
+								'%{text}<br>BVW=%{x:.3f}, Pc=%{y:.2f} psi<extra>RT ' +
+								rf +
+								'</extra>',
+							marker: {
+								size: 6.5,
+								color,
+								opacity: 0.85,
+								line: { width: 0.5, color: '#fff' }
+							}
 						});
 					}
 				}
@@ -1218,7 +1389,8 @@
 						const color = getRockTypeColor(rfNum);
 						const a = Number(fit.a ?? 0.2);
 						const b = Math.abs(Number(fit.b ?? 0.3));
-						if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) continue;
+						if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0)
+							continue;
 
 						if (activeModel === 'leverett_j') {
 							const xs: number[] = [];
@@ -1248,7 +1420,14 @@
 								const hVal = 0.05 * Math.pow((maxH * 1.25) / 0.05, k / 75);
 								const pcVal = hVal * gradPsi;
 								const swVal =
-									1.0 - a * Math.exp(-Math.pow(Math.max(b, 1e-4) / Math.max(hVal + d, 1e-4), c));
+									1.0 -
+									a *
+										Math.exp(
+											-Math.pow(
+												Math.max(b, 1e-4) / Math.max(hVal + d, 1e-4),
+												c
+											)
+										);
 								if (swVal >= 0 && swVal <= 1.0 && pcVal <= maxPc * 1.25) {
 									xs.push(swVal);
 									ys.push(pcVal);
@@ -1801,6 +1980,7 @@
 					...baseLayout.xaxis,
 					domain: [0.58, 1.0],
 					anchor: 'y2',
+					fixedrange: true,
 					zeroline: true,
 					zerolinecolor: '#0F172A',
 					title: { text: 'ΔPHIT = PHIT − CPORE (v/v)' }
@@ -1808,6 +1988,7 @@
 				baseLayout.yaxis2 = {
 					...baseLayout.yaxis,
 					anchor: 'x2',
+					fixedrange: false,
 					autorange: 'reversed',
 					title: { text: 'Depth (m)' }
 				};
@@ -1829,6 +2010,7 @@
 					anchor: 'y2',
 					type: 'linear',
 					range: undefined,
+					fixedrange: true,
 					zeroline: true,
 					zerolinecolor: '#0F172A',
 					title: { text: 'Δlog10(K) = log10(PERM/CPERM) (dec)' }
@@ -1838,6 +2020,7 @@
 					anchor: 'x2',
 					type: 'linear',
 					range: undefined,
+					fixedrange: false,
 					autorange: 'reversed',
 					title: { text: 'Depth (m)' }
 				};
@@ -1845,10 +2028,13 @@
 				buildPoroDepthErrorTraces('x', 'y');
 				buildPermDepthErrorTraces('x2', 'y2');
 
+				baseLayout.dragmode = 'zoom';
 				baseLayout.xaxis.domain = [0, 0.45];
+				baseLayout.xaxis.fixedrange = true;
 				baseLayout.xaxis.zeroline = true;
 				baseLayout.xaxis.zerolinecolor = '#0F172A';
 				baseLayout.xaxis.title = { text: 'ΔPHIT = PHIT − CPORE (v/v)' };
+				baseLayout.yaxis.fixedrange = false;
 				baseLayout.yaxis.autorange = 'reversed';
 				baseLayout.yaxis.title = { text: 'Depth (m)' };
 
@@ -1856,6 +2042,7 @@
 					...baseLayout.xaxis,
 					domain: [0.55, 1.0],
 					anchor: 'y2',
+					fixedrange: true,
 					zeroline: true,
 					zerolinecolor: '#0F172A',
 					title: { text: 'Δlog10(K) = log10(PERM/CPERM) (dec)' }
@@ -1863,6 +2050,8 @@
 				baseLayout.yaxis2 = {
 					...baseLayout.yaxis,
 					anchor: 'x2',
+					matches: 'y',
+					fixedrange: false,
 					autorange: 'reversed',
 					title: { text: 'Depth (m)' }
 				};
@@ -2042,7 +2231,10 @@
 					y: [0, 1],
 					xaxis: xAxis,
 					yaxis: yAxis,
-					text: [`GR Clean (${lp.grClean.toFixed(0)})`, `GR Shale (${lp.grClay.toFixed(0)})`],
+					text: [
+						`GR Clean (${lp.grClean.toFixed(0)})`,
+						`GR Shale (${lp.grClay.toFixed(0)})`
+					],
 					textposition: ['top right', 'bottom left'],
 					textfont: { family: 'Inter', size: 10, color: '#1E3A8A' },
 					marker: {
@@ -2065,6 +2257,7 @@
 					y: allRows.map((r) => r.DEPTH),
 					xaxis: xAxis,
 					yaxis: yAxis,
+					customdata: allRows.map((r) => r.logIndex),
 					line: { color: '#0F172A', width: 1.5 },
 					hovertemplate: 'Depth: %{y:.1f}m<br>VSH_DN: %{x:.3f}<extra></extra>'
 				});
@@ -2076,6 +2269,7 @@
 					y: allRows.map((r) => r.DEPTH),
 					xaxis: xAxis,
 					yaxis: yAxis,
+					customdata: allRows.map((r) => r.logIndex),
 					fill: 'tonextx',
 					fillcolor: 'rgba(37, 99, 235, 0.14)',
 					line: { color: '#16A34A', width: 1.5 },
@@ -2146,7 +2340,11 @@
 					marker: {
 						size: 5.5,
 						color: activePts.map((r) =>
-							r.ABS_ERR_VSH <= 0.05 ? '#16A34A' : r.ABS_ERR_VSH <= 0.1 ? '#D97706' : '#DC2626'
+							r.ABS_ERR_VSH <= 0.05
+								? '#16A34A'
+								: r.ABS_ERR_VSH <= 0.1
+									? '#D97706'
+									: '#DC2626'
 						)
 					}
 				});
@@ -2167,12 +2365,14 @@
 					domain: [0.57, 1.0],
 					anchor: 'y2',
 					range: [0, 1],
+					fixedrange: true,
 					title: { text: 'VSH_DN vs. VSH_GR (v/v)' }
 				};
 				baseLayout.yaxis2 = {
 					...baseLayout.yaxis,
 					anchor: 'x2',
 					range: undefined,
+					fixedrange: false,
 					autorange: 'reversed',
 					title: { text: 'Depth (m)' }
 				};
@@ -2203,9 +2403,12 @@
 				buildVshDepthOverlayTraces('x', 'y');
 				buildVshDepthResidualTraces('x2', 'y2');
 
+				baseLayout.dragmode = 'zoom';
 				baseLayout.xaxis.domain = [0, 0.46];
 				baseLayout.xaxis.range = [0, 1];
+				baseLayout.xaxis.fixedrange = true;
 				baseLayout.xaxis.title = { text: 'VSH_DN vs. VSH_GR (v/v)' };
+				baseLayout.yaxis.fixedrange = false;
 				baseLayout.yaxis.autorange = 'reversed';
 				baseLayout.yaxis.title = { text: 'Depth (m)' };
 
@@ -2214,6 +2417,7 @@
 					domain: [0.56, 1.0],
 					anchor: 'y2',
 					range: [-0.45, 0.45],
+					fixedrange: true,
 					zeroline: true,
 					zerolinecolor: '#0F172A',
 					title: { text: 'ΔVsh = VSH_GR − VSH_DN (v/v)' }
@@ -2221,6 +2425,8 @@
 				baseLayout.yaxis2 = {
 					...baseLayout.yaxis,
 					anchor: 'x2',
+					matches: 'y',
+					fixedrange: false,
 					autorange: 'reversed',
 					title: { text: 'Depth (m)' }
 				};
@@ -2232,18 +2438,23 @@
 		if (effectiveMode === 'relperm') {
 			const sr = workbench.scalResult;
 			const sp = workbench.scalParams;
-			const sw =
-				sr?.sw ?? Array.from({ length: 41 }, (_, i) => Number((i / 40).toFixed(3)));
+			const sw = sr?.sw ?? Array.from({ length: 41 }, (_, i) => Number((i / 40).toFixed(3)));
 			const krw =
 				sr?.krw ??
 				sw.map((s) => {
-					const se = Math.min(1, Math.max(0, (s - sp.swirr) / Math.max(1e-6, 1 - sp.swirr - sp.sor)));
+					const se = Math.min(
+						1,
+						Math.max(0, (s - sp.swirr) / Math.max(1e-6, 1 - sp.swirr - sp.sor))
+					);
 					return sp.krw_max * Math.pow(se, sp.nw);
 				});
 			const kro =
 				sr?.kro ??
 				sw.map((s) => {
-					const se = Math.min(1, Math.max(0, (s - sp.swirr) / Math.max(1e-6, 1 - sp.swirr - sp.sor)));
+					const se = Math.min(
+						1,
+						Math.max(0, (s - sp.swirr) / Math.max(1e-6, 1 - sp.swirr - sp.sor))
+					);
 					return sp.kro_max * Math.pow(1 - se, sp.no);
 				});
 			const fw =
@@ -2293,6 +2504,107 @@
 		return { traces, layout: baseLayout };
 	}
 
+	function applyBrushedSelectionOverlay(traces: any[]) {
+		const brushed = workbench.brushedDepthIndices;
+		if (brushed.size === 0) return;
+
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const grouped = new Map<
+			string,
+			{
+				xAxis: string;
+				yAxis: string;
+				xs: number[];
+				ys: number[];
+				idxs: number[];
+				texts: string[];
+				seen: Set<string>;
+			}
+		>();
+
+		for (const t of traces) {
+			if (!Array.isArray(t.customdata) || !Array.isArray(t.x) || !Array.isArray(t.y)) {
+				continue;
+			}
+			const isMarkerTrace = typeof t.mode === 'string' && t.mode.includes('markers');
+			if (isMarkerTrace && t.marker) {
+				const baseOp = typeof t.marker.opacity === 'number' ? t.marker.opacity : 0.82;
+				t.marker = { ...t.marker, opacity: Math.min(baseOp, 0.24) };
+			}
+
+			const xAxis = t.xaxis ?? 'x';
+			const yAxis = t.yaxis ?? 'y';
+			const key = `${xAxis}:${yAxis}`;
+			if (!grouped.has(key)) {
+				grouped.set(key, {
+					xAxis,
+					yAxis,
+					xs: [],
+					ys: [],
+					idxs: [],
+					texts: [],
+					seen: new Set()
+				});
+			}
+			const grp = grouped.get(key)!;
+
+			for (let k = 0; k < t.customdata.length; k++) {
+				const idx = t.customdata[k];
+				if (typeof idx !== 'number' || !brushed.has(idx)) continue;
+				const xv = t.x[k];
+				const yv = t.y[k];
+				if (
+					typeof xv !== 'number' ||
+					typeof yv !== 'number' ||
+					!Number.isFinite(xv) ||
+					!Number.isFinite(yv)
+				) {
+					continue;
+				}
+				const ptKey = `${idx}:${xv.toFixed(4)}:${yv.toFixed(4)}`;
+				if (grp.seen.has(ptKey)) continue;
+				grp.seen.add(ptKey);
+				grp.xs.push(xv);
+				grp.ys.push(yv);
+				grp.idxs.push(idx);
+				const dVal = dept[idx];
+				const customTxt =
+					Array.isArray(t.text) && typeof t.text[k] === 'string' ? t.text[k] : null;
+				grp.texts.push(
+					customTxt ??
+						`Selected @ ${Number.isFinite(dVal) ? fmtNum(dVal, 2) + 'm' : '#' + idx}<br>X: ${fmtNum(xv, 3)} | Y: ${fmtNum(yv, 3)}`
+				);
+			}
+		}
+
+		let firstSubplot = true;
+		for (const grp of grouped.values()) {
+			if (grp.xs.length === 0) continue;
+			traces.push({
+				type: 'scattergl',
+				mode: 'markers',
+				name: `Selected (${grp.xs.length})`,
+				meta: 'brushed-highlight',
+				showlegend: firstSubplot,
+				x: grp.xs,
+				y: grp.ys,
+				xaxis: grp.xAxis,
+				yaxis: grp.yAxis,
+				customdata: grp.idxs,
+				text: grp.texts,
+				hovertemplate: '%{text}<extra></extra>',
+				marker: {
+					size: 8,
+					color: '#06B6D4',
+					symbol: 'circle',
+					opacity: 0.98,
+					line: { color: '#0F172A', width: 1.5 }
+				}
+			});
+			firstSubplot = false;
+		}
+	}
+
 	$effect(() => {
 		if (!PlotlyLib || !plotEl) return;
 		void effectiveMode;
@@ -2308,6 +2620,9 @@
 		void workbench.vshSandCutoff;
 		void workbench.lithoParams.grClean;
 		void workbench.lithoParams.grClay;
+		void workbench.lithoParams.logCorrectionMode;
+		void workbench.lithoParams.enableHcCorrection;
+		void workbench.lithoParams.useHcCorrected;
 		void workbench.lithoParams.model;
 		void workbench.lithoParams.minerals;
 		void workbench.lithoParams.drySandNphi;
@@ -2328,6 +2643,7 @@
 		void projectData.selectedWellNames;
 		void workbench.selectedZones;
 		void workbench.depthFilter;
+		void workbench.brushedDepthIndices;
 		void projectData.fziCutoffs;
 		void projectData.rockTypingResult;
 		void projectData.permTransformResult;
@@ -2341,8 +2657,11 @@
 		void workbench.mwQaqcLogScale;
 
 		const { traces, layout } = buildCrossplot();
+		applyBrushedSelectionOverlay(traces);
 		layout.autosize = true;
-		const visibleLegendTraces = traces.filter((t: any) => t.showlegend !== false && t.name).length;
+		const visibleLegendTraces = traces.filter(
+			(t: any) => t.showlegend !== false && t.name
+		).length;
 		if (visibleLegendTraces > 5) {
 			layout.legend = {
 				orientation: 'v',
@@ -2365,16 +2684,18 @@
 				eventsBound = true;
 				(plotEl as any).on('plotly_selected', (ev: any) => {
 					if (!ev || !ev.points) {
-						workbench.setBrushedIndices([]);
 						return;
 					}
-					const selected: number[] = [];
+					if (!ev.range && !ev.lassoPoints && ev.points.length === 0) {
+						return;
+					}
+					const selected = new Set<number>();
 					for (const pt of ev.points) {
 						if (typeof pt.customdata === 'number') {
-							selected.push(pt.customdata);
+							selected.add(pt.customdata);
 						}
 					}
-					workbench.setBrushedIndices(selected);
+					workbench.setBrushedIndices(Array.from(selected));
 				});
 				(plotEl as any).on('plotly_deselect', () => {
 					workbench.setBrushedIndices([]);
@@ -2470,17 +2791,12 @@
 
 		{#if effectiveMode === 'core-qc'}
 			<div class="flex items-center gap-1">
-				{#each [
-					['dual', 'Dual', 'Side-by-side PHIT×CPORE and PERM×CPERM parity crossplots'],
-					['poro', 'Φ + Depth', 'PHIT×CPORE parity crossplot + ΔPHIT vs. Depth'],
-					['perm', 'K + Depth', 'PERM×CPERM parity crossplot + Δlog10(K) vs. Depth'],
-					['depth-error', 'Depth Err', 'ΔPHIT and Δlog10(K) residuals vs. Depth']
-				] as [vKey, vLbl, vTip]}
+				{#each [['dual', 'Dual', 'Side-by-side PHIT×CPORE and PERM×CPERM parity crossplots'], ['poro', 'Φ + Depth', 'PHIT×CPORE parity crossplot + ΔPHIT vs. Depth'], ['perm', 'K + Depth', 'PERM×CPERM parity crossplot + Δlog10(K) vs. Depth'], ['depth-error', 'Depth Err', 'ΔPHIT and Δlog10(K) residuals vs. Depth']] as [vKey, vLbl, vTip]}
 					<button
 						type="button"
 						title={vTip}
 						onclick={() => (workbench.coreQcView = vKey as any)}
-						class="h-5 shrink-0 whitespace-nowrap rounded-xs border px-1.5 text-[10px] font-medium transition-colors {workbench.coreQcView ===
+						class="h-5 shrink-0 rounded-xs border px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors {workbench.coreQcView ===
 						vKey
 							? 'border-blue-600 bg-blue-600 text-white'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
@@ -2492,7 +2808,7 @@
 					type="button"
 					title="Open Core Depth Shift, Stretch/Compress & Tie-Point matcher"
 					onclick={() => (showCoreShiftDrawer = !showCoreShiftDrawer)}
-					class="h-5 shrink-0 whitespace-nowrap rounded-xs border px-1.5 text-[10px] font-semibold transition-colors {showCoreShiftDrawer ||
+					class="h-5 shrink-0 rounded-xs border px-1.5 text-[10px] font-semibold whitespace-nowrap transition-colors {showCoreShiftDrawer ||
 					wellData.coreShiftDirty
 						? 'border-amber-500 bg-amber-50 text-amber-900'
 						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-slate-100'}"
@@ -2532,16 +2848,12 @@
 			</div>
 		{:else if effectiveMode === 'vsh-qc'}
 			<div class="flex items-center gap-1">
-				{#each [
-					['dual', 'Dual', 'VSH_GR × VSH_DN Parity Crossplot + GR Calibration Curve Fit'],
-					['gr-fit', 'GR Fit', 'GR vs. VSH_DN Calibration Curve + ΔVsh vs. Depth'],
-					['depth-error', 'Depth Err', 'VSH_GR vs. VSH_DN Overlay + ΔVsh Residual Track']
-				] as [vKey, vLbl, vTip]}
+				{#each [['dual', 'Dual', 'VSH_GR × VSH_DN Parity Crossplot + GR Calibration Curve Fit'], ['gr-fit', 'GR Fit', 'GR vs. VSH_DN Calibration Curve + ΔVsh vs. Depth'], ['depth-error', 'Depth Err', 'VSH_GR vs. VSH_DN Overlay + ΔVsh Residual Track']] as [vKey, vLbl, vTip]}
 					<button
 						type="button"
 						title={vTip}
 						onclick={() => (workbench.vshQcView = vKey as any)}
-						class="h-5 shrink-0 whitespace-nowrap rounded-xs border px-1.5 text-[10px] font-medium transition-colors {workbench.vshQcView ===
+						class="h-5 shrink-0 rounded-xs border px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors {workbench.vshQcView ===
 						vKey
 							? 'border-blue-600 bg-blue-600 text-white'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
@@ -2553,11 +2865,14 @@
 					type="button"
 					title="Open GRClean / GRClay Calibration Drawer"
 					onclick={() => (showVshCalibDrawer = !showVshCalibDrawer)}
-					class="h-5 shrink-0 whitespace-nowrap rounded-xs border px-1.5 text-[10px] font-semibold transition-colors {showVshCalibDrawer
+					class="h-5 shrink-0 rounded-xs border px-1.5 text-[10px] font-semibold whitespace-nowrap transition-colors {showVshCalibDrawer
 						? 'border-emerald-600 bg-emerald-50 text-emerald-900'
 						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-slate-100'}"
 				>
-					Calibrate GR ({fmtNum(workbench.lithoParams.grClean, 0)}–{fmtNum(workbench.lithoParams.grClay, 0)})
+					Calibrate GR ({fmtNum(workbench.lithoParams.grClean, 0)}–{fmtNum(
+						workbench.lithoParams.grClay,
+						0
+					)})
 				</button>
 			</div>
 		{:else if effectiveMode === 'nphi-rhob'}
@@ -2639,32 +2954,52 @@
 		<div
 			class="grid shrink-0 grid-cols-2 gap-2 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
 		>
-			<div class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5">
+			<div
+				class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5"
+			>
 				<span class="font-semibold text-slate-800">
-					PHIT × CPORE <span class="mono-num text-[var(--text-muted)]">(n={cc.poro.count})</span>
+					PHIT × CPORE <span class="mono-num text-[var(--text-muted)]"
+						>(n={cc.poro.count})</span
+					>
 				</span>
 				<div class="mono-num flex items-center gap-2 text-[10px]">
 					<span>RMSE: <strong>{fmtNum(cc.poro.rmse, 4)}</strong></span>
 					<span>MAE: <strong>{fmtNum(cc.poro.mae, 4)}</strong></span>
 					<span>
-						Bias: <strong class={cc.poro.bias !== null && Math.abs(cc.poro.bias) > 0.015 ? 'text-amber-700' : 'text-slate-900'}>
-							{cc.poro.bias !== null && cc.poro.bias >= 0 ? '+' : ''}{fmtNum(cc.poro.bias, 4)}
+						Bias: <strong
+							class={cc.poro.bias !== null && Math.abs(cc.poro.bias) > 0.015
+								? 'text-amber-700'
+								: 'text-slate-900'}
+						>
+							{cc.poro.bias !== null && cc.poro.bias >= 0 ? '+' : ''}{fmtNum(
+								cc.poro.bias,
+								4
+							)}
 						</strong>
 					</span>
 					<span>±2 p.u.: <strong>{fmtNum(cc.poro.within_2pu_pct, 0)}%</strong></span>
-					<span>R²: <strong class="text-emerald-700">{fmtNum(cc.poro.r2, 3)}</strong></span>
+					<span
+						>R²: <strong class="text-emerald-700">{fmtNum(cc.poro.r2, 3)}</strong></span
+					>
 				</div>
 			</div>
-			<div class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5">
+			<div
+				class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5"
+			>
 				<span class="font-semibold text-slate-800">
-					PERM × CPERM <span class="mono-num text-[var(--text-muted)]">(n={cc.perm.count})</span>
+					PERM × CPERM <span class="mono-num text-[var(--text-muted)]"
+						>(n={cc.perm.count})</span
+					>
 				</span>
 				<div class="mono-num flex items-center gap-2 text-[10px]">
 					<span>log₁₀ RMSE: <strong>{fmtNum(cc.perm.log10_rmse, 3)}</strong></span>
 					<span>log₁₀ MAE: <strong>{fmtNum(cc.perm.log10_mae, 3)}</strong></span>
 					<span>Factor: <strong>{fmtNum(cc.perm.factor_error, 2)}×</strong></span>
-					<span>±0.5 dec: <strong>{fmtNum(cc.perm.within_half_dec_pct, 0)}%</strong></span>
-					<span>R²: <strong class="text-emerald-700">{fmtNum(cc.perm.r2, 3)}</strong></span>
+					<span>±0.5 dec: <strong>{fmtNum(cc.perm.within_half_dec_pct, 0)}%</strong></span
+					>
+					<span
+						>R²: <strong class="text-emerald-700">{fmtNum(cc.perm.r2, 3)}</strong></span
+					>
 				</div>
 			</div>
 		</div>
@@ -2681,32 +3016,56 @@
 		<div
 			class="grid shrink-0 grid-cols-2 gap-2 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
 		>
-			<div class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5">
+			<div
+				class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5"
+			>
 				<span class="font-semibold text-slate-800">
-					VSH_GR × VSH_DN <span class="mono-num text-[var(--text-muted)]">(n={vc.active.count})</span>
+					VSH_GR × VSH_DN <span class="mono-num text-[var(--text-muted)]"
+						>(n={vc.active.count})</span
+					>
 				</span>
 				<div class="mono-num flex items-center gap-2 text-[10px]">
 					<span>RMSE: <strong>{fmtNum(vc.active.rmse, 3)}</strong></span>
 					<span>MAE: <strong>{fmtNum(vc.active.mae, 3)}</strong></span>
 					<span>
-						Bias: <strong class={vc.active.bias !== null && Math.abs(vc.active.bias) > 0.03 ? 'text-amber-700' : 'text-slate-900'}>
-							{vc.active.bias !== null && vc.active.bias >= 0 ? '+' : ''}{fmtNum(vc.active.bias, 3)}
+						Bias: <strong
+							class={vc.active.bias !== null && Math.abs(vc.active.bias) > 0.03
+								? 'text-amber-700'
+								: 'text-slate-900'}
+						>
+							{vc.active.bias !== null && vc.active.bias >= 0 ? '+' : ''}{fmtNum(
+								vc.active.bias,
+								3
+							)}
 						</strong>
 					</span>
 					<span>±0.10: <strong>{fmtNum(vc.active.within_10pu_pct, 0)}%</strong></span>
-					<span>R²: <strong class="text-emerald-700">{fmtNum(vc.active.r2, 3)}</strong></span>
+					<span
+						>R²: <strong class="text-emerald-700">{fmtNum(vc.active.r2, 3)}</strong
+						></span
+					>
 				</div>
 			</div>
-			<div class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5">
-				<span class="font-semibold text-slate-800">
-					Calibration Regimes
-				</span>
+			<div
+				class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5"
+			>
+				<span class="font-semibold text-slate-800"> Calibration Regimes </span>
 				<div class="mono-num flex items-center gap-2.5 text-[10px]">
 					<span class="text-amber-900">
-						Water Sand (n={vc.sand.count}): <strong>{vc.sand.bias !== null ? `${vc.sand.bias >= 0 ? '+' : ''}${fmtNum(vc.sand.bias, 3)}` : '—'}</strong>
+						Water Sand (n={vc.sand.count}):
+						<strong
+							>{vc.sand.bias !== null
+								? `${vc.sand.bias >= 0 ? '+' : ''}${fmtNum(vc.sand.bias, 3)}`
+								: '—'}</strong
+						>
 					</span>
 					<span class="text-emerald-900">
-						Clean Shale (n={vc.shale.count}): <strong>{vc.shale.bias !== null ? `${vc.shale.bias >= 0 ? '+' : ''}${fmtNum(vc.shale.bias, 3)}` : '—'}</strong>
+						Clean Shale (n={vc.shale.count}):
+						<strong
+							>{vc.shale.bias !== null
+								? `${vc.shale.bias >= 0 ? '+' : ''}${fmtNum(vc.shale.bias, 3)}`
+								: '—'}</strong
+						>
 					</span>
 				</div>
 			</div>
@@ -2728,9 +3087,9 @@
 			class="mono-num flex h-6 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-blue-50/70 px-2.5 text-[11px] text-blue-900"
 		>
 			<span>
-				Lasso: <strong>{brushedSummary.count} pts</strong> ({fmtDepth(brushedSummary.min)}–{fmtDepth(
-					brushedSummary.max
-				)})
+				Lasso: <strong>{brushedSummary.count} pts</strong> ({fmtDepth(
+					brushedSummary.min
+				)}–{fmtDepth(brushedSummary.max)})
 			</span>
 			<button
 				type="button"
@@ -2742,4 +3101,3 @@
 		</div>
 	{/if}
 </div>
-

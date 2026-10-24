@@ -84,6 +84,7 @@ from quick_pp.saturation import (
 )
 from quick_pp.uncertainty import calc_stochastic_reservoir_summary
 from quick_pp.upscaling import expand_blocked_logs, upscale_logs
+from quick_pp.utils import length_a_b, line_intersection
 
 router = APIRouter(
     prefix="/workspace/projects/{project_id}",
@@ -125,21 +126,50 @@ def _update_in_memory_well_cache(
 
         base_df = _get_merged_dataframe_sync(project_id, well_name)
         if not base_df.empty and "DEPTH" in base_df.columns:
-            upd = curves_df.drop(columns=["WELL_NAME"], errors="ignore").copy()
-            upd.columns = [str(c).upper() for c in upd.columns]
-            upd = upd.drop_duplicates(subset=["DEPTH"], keep="last")
-            overlap_cols = [
-                c for c in upd.columns if c != "DEPTH" and c in base_df.columns
+            upd_cols = [
+                c
+                for c in curves_df.columns
+                if str(c).upper() not in ("DEPTH", "WELL_NAME")
             ]
-            upd["_IN_UPD"] = True
-            merged_mem = base_df.drop(columns=overlap_cols, errors="ignore").merge(
-                upd, on="DEPTH", how="left"
-            )
-            in_upd_mask = merged_mem["_IN_UPD"].fillna(False).to_numpy(dtype=bool)
-            merged_mem.drop(columns=["_IN_UPD"], errors="ignore", inplace=True)
-            for c in overlap_cols:
-                if c in base_df.columns:
-                    merged_mem[c] = np.where(in_upd_mask, merged_mem[c], base_df[c])
+            if not upd_cols:
+                return
+
+            # Fast path when curves_df shares base_df's index or exact full-well depth grid
+            if len(curves_df) == len(base_df) and np.allclose(
+                curves_df["DEPTH"].to_numpy(dtype=float),
+                base_df["DEPTH"].to_numpy(dtype=float),
+                equal_nan=True,
+            ):
+                merged_mem = base_df.copy()
+                for c in upd_cols:
+                    merged_mem[str(c).upper()] = curves_df[c].to_numpy()
+            elif curves_df.index.isin(base_df.index).all() and np.allclose(
+                curves_df["DEPTH"].to_numpy(dtype=float),
+                base_df.loc[curves_df.index, "DEPTH"].to_numpy(dtype=float),
+                equal_nan=True,
+            ):
+                merged_mem = base_df.copy()
+                for c in upd_cols:
+                    ucol = str(c).upper()
+                    if ucol not in merged_mem.columns:
+                        merged_mem[ucol] = np.nan
+                    merged_mem.loc[curves_df.index, ucol] = curves_df[c].to_numpy()
+            else:
+                upd = curves_df.drop(columns=["WELL_NAME"], errors="ignore").copy()
+                upd.columns = [str(c).upper() for c in upd.columns]
+                upd = upd.drop_duplicates(subset=["DEPTH"], keep="last")
+                overlap_cols = [
+                    c for c in upd.columns if c != "DEPTH" and c in base_df.columns
+                ]
+                upd["_IN_UPD"] = True
+                merged_mem = base_df.drop(columns=overlap_cols, errors="ignore").merge(
+                    upd, on="DEPTH", how="left"
+                )
+                in_upd_mask = merged_mem["_IN_UPD"].fillna(False).to_numpy(dtype=bool)
+                merged_mem.drop(columns=["_IN_UPD"], errors="ignore", inplace=True)
+                for c in overlap_cols:
+                    if c in base_df.columns:
+                        merged_mem[c] = np.where(in_upd_mask, merged_mem[c], base_df[c])
             _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (
                 time.time(),
                 merged_mem,
@@ -334,27 +364,36 @@ def _compute_vsh_gr_series(
     gr_clean: Optional[float] = None,
     gr_clay: Optional[float] = None,
 ) -> pd.Series:
-    """Compute VSH_GR series in [0, 1] from GR curve using endpoints or auto-normalized gr_index."""
-    if "GR" not in df.columns:
-        return pd.Series(np.nan, index=df.index, dtype=float)
-    gr_s = pd.to_numeric(df["GR"], errors="coerce")
-    valid_gr = gr_s.notna()
-    if not valid_gr.any():
-        return pd.Series(np.nan, index=df.index, dtype=float)
+    """Compute calibrated VSH_GR series in [0, 1] from GR endpoints, existing VSH_GR curve, or auto-normalized gr_index."""
     out = pd.Series(np.nan, index=df.index, dtype=float)
     if (
-        gr_clean is not None
+        "GR" in df.columns
+        and gr_clean is not None
         and gr_clay is not None
         and abs(float(gr_clay) - float(gr_clean)) > 1e-6
     ):
-        out.loc[valid_gr] = (
-            (gr_s.loc[valid_gr] - float(gr_clean)) / (float(gr_clay) - float(gr_clean))
-        ).clip(0.0, 1.0)
-    else:
-        vsh_arr = np.asarray(
-            gr_index(gr_s.loc[valid_gr].reset_index(drop=True)), dtype=float
-        ).ravel()
-        out.loc[valid_gr] = np.clip(vsh_arr, 0.0, 1.0)
+        gr_s = pd.to_numeric(df["GR"], errors="coerce")
+        valid_gr = gr_s.notna()
+        if valid_gr.any():
+            out.loc[valid_gr] = (
+                (gr_s.loc[valid_gr] - float(gr_clean))
+                / (float(gr_clay) - float(gr_clean))
+            ).clip(0.0, 1.0)
+            return out
+    if "VSH_GR" in df.columns:
+        vsh_existing = pd.to_numeric(df["VSH_GR"], errors="coerce")
+        if vsh_existing.notna().any():
+            return vsh_existing.clip(0.0, 1.0)
+    if "GR" not in df.columns:
+        return out
+    gr_s = pd.to_numeric(df["GR"], errors="coerce")
+    valid_gr = gr_s.notna()
+    if not valid_gr.any():
+        return out
+    vsh_arr = np.asarray(
+        gr_index(gr_s.loc[valid_gr].reset_index(drop=True)), dtype=float
+    ).ravel()
+    out.loc[valid_gr] = np.clip(vsh_arr, 0.0, 1.0)
     return out
 
 
@@ -445,6 +484,40 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
     badhole_treatment: str = Field(
         "none",
         description="How to treat BADHOLE intervals: 'none', 'vsh_gr', 'interpolate', or 'ignore'",
+    )
+
+
+class WorkspaceDenCorrectionRequest(WorkspaceFilterBase):
+    dry_sand_point: Tuple[float, float] = Field((-0.02, 2.65))
+    dry_clay_point: Tuple[float, float] = Field((0.33, 2.7))
+    rho_water: float = Field(1.0, description="Water density (g/cc)")
+    sync_endpoints: bool = Field(
+        True,
+        description="Synchronize rho_ma, phin_sh, and phid_sh with dry_sand_point and dry_clay_point",
+    )
+    rho_ma: float = Field(2.65, description="Matrix density override (g/cc)")
+    phin_sh: float = Field(0.33, description="Shale neutron porosity override (v/v)")
+    phid_sh: float = Field(0.05, description="Shale density porosity override (v/v)")
+    scope: str = Field(
+        "vsh_mismatch",
+        description="Correction scope: 'vsh_mismatch', 'badhole_only', or 'full'",
+    )
+    vsh_mismatch_threshold: float = Field(
+        0.15,
+        description="Min |VSH_DN - VSH_GR| to trigger density reconstruction when scope=='vsh_mismatch'",
+    )
+    gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
+    gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
+    enable_coal_flagging: bool = Field(
+        False, description="Flag coal beds and exclude them from density reconstruction"
+    )
+    coal_rhob_max: float = Field(2.0, description="Max bulk density for coal (g/cc)")
+    coal_nphi_min: float = Field(
+        0.30, description="Min neutron porosity for coal (v/v)"
+    )
+    coal_window_size: int = Field(41, description="Rolling window size for coal trend")
+    coal_trend_factor: float = Field(
+        0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
     )
 
 
@@ -1053,26 +1126,12 @@ def workspace_hc_correction(
         rhob_hc_full = pd.Series(np.nan, index=df.index, dtype=float)
         hc_flag_full = pd.Series(np.nan, index=df.index, dtype=float)
 
-        vsh_gr_arr: Optional[np.ndarray] = None
-        if "GR" in df.columns:
-            gr_s = pd.to_numeric(df["GR"], errors="coerce")
-            if gr_s.notna().any():
-                if (
-                    req.gr_clean is not None
-                    and req.gr_clay is not None
-                    and abs(float(req.gr_clay) - float(req.gr_clean)) > 1e-6
-                ):
-                    vsh_gr_s = (
-                        (gr_s - float(req.gr_clean))
-                        / (float(req.gr_clay) - float(req.gr_clean))
-                    ).clip(0.0, 1.0)
-                else:
-                    vsh_gr_s = pd.Series(
-                        np.asarray(gr_index(gr_s.reset_index(drop=True)), dtype=float),
-                        index=df.index,
-                        dtype=float,
-                    ).clip(0.0, 1.0)
-                vsh_gr_arr = vsh_gr_s.loc[valid_mask].fillna(0.0).to_numpy(dtype=float)
+        vsh_gr_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+        vsh_gr_arr: Optional[np.ndarray] = (
+            vsh_gr_s.loc[valid_mask].fillna(0.0).to_numpy(dtype=float)
+            if vsh_gr_s.notna().any()
+            else None
+        )
 
         nphi_c, rhob_c, hc_flag = neu_den_xplot_hc_correction(
             nphi[valid_mask].to_numpy(dtype=float),
@@ -1164,41 +1223,270 @@ def workspace_hc_correction(
                         rhob_hc_full.loc[bh_gr] = np.clip(rhob_rec, 1.8, 2.95)
                         nphi_hc_full.loc[bh_gr] = nphi_bh
 
-        out_df = pd.DataFrame(
-            {
-                "DEPTH": df["DEPTH"],
-                "NPHI_HC": nphi_hc_full,
-                "RHOB_HC": rhob_hc_full,
-                "HC_FLAG": hc_flag_full,
-            }
-        )
+        out_cols_dict: Dict[str, Any] = {
+            "DEPTH": df["DEPTH"],
+            "NPHI_HC": nphi_hc_full,
+            "RHOB_HC": rhob_hc_full,
+            "HC_FLAG": hc_flag_full,
+            "DEN_CORR_FLAG": pd.Series(0.0, index=df.index, dtype=float),
+        }
+        if vsh_gr_s.notna().any():
+            out_cols_dict["VSH_GR"] = vsh_gr_s
+        out_df = pd.DataFrame(out_cols_dict)
 
+        hc_active = valid_mask & (hc_flag_full >= 0.5)
+        n_valid = int(valid_mask.sum())
+        n_hc = int(hc_active.sum())
+        mean_vsh_gr_hc = (
+            round(float(vsh_gr_s.loc[hc_active].mean()), 4)
+            if (n_hc > 0 and vsh_gr_s.loc[hc_active].notna().any())
+            else None
+        )
+        mean_dnphi = (
+            round(float((nphi_hc_full.loc[hc_active] - nphi.loc[hc_active]).mean()), 4)
+            if n_hc > 0
+            else 0.0
+        )
+        mean_drhob = (
+            round(float((rhob_hc_full.loc[hc_active] - rhob.loc[hc_active]).mean()), 4)
+            if n_hc > 0
+            else 0.0
+        )
+        hc_summary = {
+            "corr_angle": round(corr_angle, 2),
+            "hc_flagged_count": n_hc,
+            "valid_count": n_valid,
+            "hc_flagged_pct": round((n_hc / n_valid) * 100.0, 1) if n_valid > 0 else 0.0,
+            "gr_clean": float(req.gr_clean) if req.gr_clean is not None else None,
+            "gr_clay": float(req.gr_clay) if req.gr_clay is not None else None,
+            "mean_vsh_gr_hc": mean_vsh_gr_hc,
+            "mean_dnphi": mean_dnphi,
+            "mean_drhob": mean_drhob,
+        }
+
+        save_cols = [c for c in ("NPHI_HC", "RHOB_HC", "HC_FLAG", "VSH_GR") if c in out_df.columns]
         saved_rows = 0
         if req.save:
-            save_df = out_df.loc[valid_mask, ["DEPTH", "NPHI_HC", "RHOB_HC"]]
+            save_df = out_df.loc[valid_mask, ["DEPTH"] + save_cols]
             saved_rows = _save_curves_to_well(project_id, well_name, save_df)
         else:
             _update_in_memory_well_cache(
                 project_id,
                 well_name,
-                out_df.loc[valid_mask, ["DEPTH", "NPHI_HC", "RHOB_HC"]],
+                out_df.loc[valid_mask, ["DEPTH"] + save_cols],
             )
+
+        stats_out = {
+            "NPHI_HC": _curve_summary_stats(nphi_hc_full),
+            "RHOB_HC": _curve_summary_stats(rhob_hc_full),
+            "HC_FLAG": _curve_summary_stats(hc_flag_full),
+        }
+        if "VSH_GR" in out_df.columns:
+            stats_out["VSH_GR"] = _curve_summary_stats(out_df["VSH_GR"])
 
         return {
             "well_name": well_name,
             "corr_angle": round(corr_angle, 3),
+            "hc_summary": hc_summary,
             "saved": req.save,
             "saved_rows": saved_rows,
-            "stats": {
-                "NPHI_HC": _curve_summary_stats(nphi_hc_full),
-                "RHOB_HC": _curve_summary_stats(rhob_hc_full),
-            },
+            "stats": stats_out,
             **dataframe_to_columnar(out_df),
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"HC correction failed: {e}") from e
+
+
+@router.post(
+    "/wells/{well_name}/den_correction",
+    summary="Compute depth-aligned bulk density correction (den_correction) from NPHI and calibrated VSH_GR",
+)
+def workspace_den_correction(
+    project_id: int, well_name: str, req: WorkspaceDenCorrectionRequest
+) -> Dict[str, Any]:
+    """Reconstruct RHOB from NPHI and calibrated VSH_GR using den_correction and store in RHOB_HC / RHOB_CORR."""
+    try:
+        df = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        nphi, rhob = _select_nphi_rhob(df, use_hc_corrected=False)
+        valid_mask = nphi.notna() & rhob.notna()
+        if not valid_mask.any():
+            raise ValueError(
+                "No valid NPHI and RHOB pairs found in the selected interval"
+            )
+
+        vsh_gr_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+        if not vsh_gr_s.notna().any():
+            raise ValueError(
+                "GR or VSH_GR curve is required to run density correction (den_correction)"
+            )
+
+        rho_w = float(req.rho_water)
+        if req.sync_endpoints:
+            nphi_sand = float(req.dry_sand_point[0])
+            rho_sand = float(req.dry_sand_point[1])
+            nphi_clay = float(req.dry_clay_point[0])
+            rho_clay = float(req.dry_clay_point[1])
+            denom_sand = (
+                1.0 - nphi_sand if abs(1.0 - nphi_sand) > 1e-6 else 1.0
+            )
+            rho_ma_val = (rho_sand - nphi_sand * rho_w) / denom_sand
+            phin_sh_val = nphi_clay
+            denom_ma = (
+                rho_ma_val - rho_w if abs(rho_ma_val - rho_w) > 1e-6 else 1.65
+            )
+            phid_sh_val = (rho_ma_val - rho_clay) / denom_ma
+        else:
+            rho_ma_val = float(req.rho_ma)
+            phin_sh_val = float(req.phin_sh)
+            phid_sh_val = float(req.phid_sh)
+
+        if req.enable_coal_flagging:
+            coal_mask = _compute_coal_mask(
+                df,
+                enable_coal_flagging=True,
+                coal_rhob_max=req.coal_rhob_max,
+                coal_nphi_min=req.coal_nphi_min,
+                coal_window_size=req.coal_window_size,
+                coal_trend_factor=req.coal_trend_factor,
+            )
+        else:
+            coal_mask = pd.Series(False, index=df.index, dtype=bool)
+
+        scope_mode = (req.scope or "vsh_mismatch").strip().lower()
+        if scope_mode == "badhole_only":
+            badhole_mask = _resolve_badhole_mask(df, auto_detect_if_missing=True)
+            active_mask = valid_mask & (~coal_mask) & badhole_mask & vsh_gr_s.notna()
+        elif scope_mode == "vsh_mismatch":
+            badhole_mask = _resolve_badhole_mask(df, auto_detect_if_missing=False)
+            A = req.dry_sand_point
+            C = req.dry_clay_point
+            D = (1.0, rho_w)
+            rock_len = max(1e-6, float(length_a_b(A, C)))
+            nphi_valid_np = nphi.loc[valid_mask].to_numpy(dtype=float)
+            rhob_valid_np = rhob.loc[valid_mask].to_numpy(dtype=float)
+            var_pts = line_intersection(
+                (A, C),
+                (D, (nphi_valid_np, rhob_valid_np)),
+            )
+            signed_proj = np.where(var_pts[1] > C[1], -1.0, 1.0) * length_a_b(
+                var_pts, C
+            )
+            proj_clamped = np.clip(signed_proj, 0.0, rock_len)
+            vsh_dn_raw = pd.Series(np.nan, index=df.index, dtype=float)
+            vsh_dn_raw.loc[valid_mask] = 1.0 - (proj_clamped / rock_len)
+            mismatch_mask = (vsh_dn_raw - vsh_gr_s).abs() >= float(
+                req.vsh_mismatch_threshold
+            )
+            active_mask = (
+                valid_mask
+                & (~coal_mask)
+                & (badhole_mask | mismatch_mask)
+                & vsh_gr_s.notna()
+            )
+        else:
+            active_mask = valid_mask & (~coal_mask) & vsh_gr_s.notna()
+
+        nphi_hc_full = nphi.copy()
+        rhob_hc_full = rhob.copy()
+        den_flag_full = pd.Series(0.0, index=df.index, dtype=float)
+        hc_flag_full = pd.Series(0.0, index=df.index, dtype=float)
+
+        if active_mask.any():
+            nphi_act = nphi.loc[active_mask].to_numpy(dtype=float)
+            vsh_act = vsh_gr_s.loc[active_mask].to_numpy(dtype=float)
+            rhob_rec = np.asarray(
+                den_correction(
+                    nphi_act,
+                    None,
+                    vsh_gr=vsh_act,
+                    phin_sh=phin_sh_val,
+                    phid_sh=phid_sh_val,
+                    rho_ma=rho_ma_val,
+                    rho_water=rho_w,
+                ),
+                dtype=float,
+            )
+            rhob_hc_full.loc[active_mask] = np.clip(rhob_rec, 1.65, 2.98)
+            den_flag_full.loc[active_mask] = 1.0
+
+        out_cols_dict: Dict[str, Any] = {
+            "DEPTH": df["DEPTH"],
+            "NPHI_HC": nphi_hc_full,
+            "RHOB_HC": rhob_hc_full,
+            "RHOB_CORR": rhob_hc_full,
+            "DEN_CORR_FLAG": den_flag_full,
+            "HC_FLAG": hc_flag_full,
+            "VSH_GR": vsh_gr_s,
+        }
+        out_df = pd.DataFrame(out_cols_dict)
+
+        n_valid = int(valid_mask.sum())
+        n_corr = int(active_mask.sum())
+        drhob_s = rhob_hc_full.loc[active_mask] - rhob.loc[active_mask]
+        mean_drhob = round(float(drhob_s.mean()), 4) if n_corr > 0 else 0.0
+        mean_abs_drhob = round(float(drhob_s.abs().mean()), 4) if n_corr > 0 else 0.0
+        mean_vsh_gr = (
+            round(float(vsh_gr_s.loc[active_mask].mean()), 4) if n_corr > 0 else None
+        )
+
+        den_summary = {
+            "scope": scope_mode,
+            "sync_endpoints": bool(req.sync_endpoints),
+            "corrected_count": n_corr,
+            "valid_count": n_valid,
+            "corrected_pct": round((n_corr / n_valid) * 100.0, 1)
+            if n_valid > 0
+            else 0.0,
+            "rho_ma": round(rho_ma_val, 4),
+            "phin_sh": round(phin_sh_val, 4),
+            "phid_sh": round(phid_sh_val, 4),
+            "gr_clean": float(req.gr_clean) if req.gr_clean is not None else None,
+            "gr_clay": float(req.gr_clay) if req.gr_clay is not None else None,
+            "mean_vsh_gr": mean_vsh_gr,
+            "mean_drhob": mean_drhob,
+            "mean_abs_drhob": mean_abs_drhob,
+        }
+
+        save_cols = [
+            "NPHI_HC",
+            "RHOB_HC",
+            "RHOB_CORR",
+            "DEN_CORR_FLAG",
+            "HC_FLAG",
+            "VSH_GR",
+        ]
+        saved_rows = 0
+        if req.save:
+            save_df = out_df.loc[valid_mask, ["DEPTH"] + save_cols]
+            saved_rows = _save_curves_to_well(project_id, well_name, save_df)
+        else:
+            _update_in_memory_well_cache(
+                project_id,
+                well_name,
+                out_df.loc[valid_mask, ["DEPTH"] + save_cols],
+            )
+
+        stats_out = {
+            col: _curve_summary_stats(out_df[col]) for col in save_cols
+        }
+        return {
+            "well_name": well_name,
+            "den_summary": den_summary,
+            "saved": req.save,
+            "saved_rows": saved_rows,
+            "stats": stats_out,
+            **dataframe_to_columnar(out_df),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Density correction failed: {e}"
+        ) from e
 
 
 @router.post(
@@ -1334,29 +1622,9 @@ def workspace_lithology(
             out_df["VSH_DN"] = vclay_s
             out_df["PROJ_NPHI"] = px_s
             out_df["PROJ_RHOB"] = py_s
-            if (
-                req.gr_clean is not None
-                and req.gr_clay is not None
-                and "GR" in df.columns
-            ):
-                gr_s = pd.to_numeric(df["GR"], errors="coerce")
-                span = float(req.gr_clay) - float(req.gr_clean)
-                if abs(span) > 1e-6 and gr_s.notna().any():
-                    vsh_gr_s = ((gr_s - float(req.gr_clean)) / span).clip(0.0, 1.0)
-                    out_df["VSH_GR"] = vsh_gr_s
-                    out_df["VCLAY"] = (0.65 * vclay_s + 0.35 * vsh_gr_s).clip(0.0, 1.0)
-                    rem_m = (1.0 - out_df["VCLAY"]).clip(0.0, 1.0)
-                    sand_silt_sum = (vsand_s + vsilt_s).replace(0.0, np.nan)
-                    out_df["VSAND"] = np.where(
-                        sand_silt_sum.notna(),
-                        vsand_s * rem_m / sand_silt_sum,
-                        rem_m * 0.7,
-                    )
-                    out_df["VSILT"] = np.where(
-                        sand_silt_sum.notna(),
-                        vsilt_s * rem_m / sand_silt_sum,
-                        rem_m * 0.3,
-                    )
+            vsh_gr_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+            if vsh_gr_s.notna().any():
+                out_df["VSH_GR"] = vsh_gr_s
 
             # Normalize matrix-relative SSC fractions by (1 - PHIT) so bulk volumes stack with PHIE/PHIT <= 1.0
             rho_ma_ssc = rho_matrix(
@@ -1585,7 +1853,7 @@ def workspace_lithology(
             df, auto_detect_if_missing=(bh_mode != "none")
         )
         active_badhole = badhole_mask & (~coal_mask)
-        if badhole_mask.any() or "BADHOLE" in df.columns:
+        if bh_mode != "none" or badhole_mask.any() or "BADHOLE" in df.columns:
             out_df["BADHOLE"] = np.where(badhole_mask, 1.0, 0.0)
             if "BADHOLE" not in save_cols:
                 save_cols.append("BADHOLE")

@@ -168,7 +168,12 @@ def badhole_flagging(
             if rpt is not None and len(clean_signal) >= 60:
                 try:
                     if clean_signal.nunique() > 1:
-                        kde = scipy.stats.gaussian_kde(clean_signal)
+                        kde_sample = (
+                            clean_signal.iloc[:: max(1, len(clean_signal) // 2500)]
+                            if len(clean_signal) > 2500
+                            else clean_signal
+                        )
+                        kde = scipy.stats.gaussian_kde(kde_sample)
                         evaluated = kde.evaluate(
                             np.linspace(clean_signal.min(), clean_signal.max(), 100)
                         )
@@ -177,8 +182,8 @@ def badhole_flagging(
                         peaks = []
 
                     jump = min(60, max(5, len(signal_data) // 4))
-                    algo = rpt.BottomUp(model="rbf", jump=jump).fit(
-                        signal_data.ffill().bfill().to_numpy()
+                    algo = rpt.BottomUp(model="l2", jump=jump).fit(
+                        signal_data.ffill().bfill().to_numpy(dtype=float)
                     )
                     n_bkps = min(len(peaks), max(0, (len(signal_data) // jump) - 1))
                     my_bkps = algo.predict(n_bkps=n_bkps) if n_bkps > 0 else [len(signal_data)]
@@ -396,18 +401,23 @@ def neu_den_xplot_hc_correction(
     rocklithofrac = length_a_b(A, C)
 
     # Ensure inputs are numpy arrays
-    nphi = np.array(nphi)
-    rhob = np.array(rhob)
-    frac_vsh_gr = np.array(vsh_gr) if vsh_gr is not None else np.zeros_like(nphi)
+    nphi = np.array(nphi, dtype=float)
+    rhob = np.array(rhob, dtype=float)
+    frac_vsh_gr = (
+        np.clip(np.array(vsh_gr, dtype=float), 0.0, 1.0)
+        if vsh_gr is not None
+        else np.zeros_like(nphi)
+    )
 
     # Initialize corrected logs and flags
     nphi_corrected = nphi.copy()
     rhob_corrected = rhob.copy()
     hc_flag = np.zeros_like(nphi, dtype=int)
 
-    # Calculate initial projection and vsh_dn
+    # Calculate initial projection anchored at C (dry clay point) and vsh_dn
     var_pts = line_intersection((A, C), (D, (nphi, rhob)))
-    projlithofrac = length_a_b(var_pts, C) + buffer
+    signed_proj = np.where(var_pts[1] > C[1], -1.0, 1.0) * length_a_b(var_pts, C)
+    projlithofrac = signed_proj + buffer
     vsh_dn = 1 - (projlithofrac / rocklithofrac)
 
     # Identify points needing correction
@@ -430,7 +440,9 @@ def neu_den_xplot_hc_correction(
         var_pts_corr = line_intersection(
             (A, C), (D, (nphi_corrected[active_mask], rhob_corrected[active_mask]))
         )
-        projlithofrac_corr = length_a_b(var_pts_corr, C)
+        projlithofrac_corr = np.where(
+            var_pts_corr[1] > C[1], -1.0, 1.0
+        ) * length_a_b(var_pts_corr, C)
         vsh_dn[active_mask] = 1 - (projlithofrac_corr / rocklithofrac)
 
     return nphi_corrected, rhob_corrected, hc_flag.astype(float)
@@ -482,6 +494,9 @@ def den_correction(
     """
     # Estimate vsh_gr
     vsh_gr = vsh_gr if vsh_gr is not None else estimate_vsh_gr(gr, alpha=alpha)
+    if not np.isscalar(nphi) or not np.isscalar(vsh_gr):
+        nphi = np.asarray(nphi, dtype=float)
+        vsh_gr = np.asarray(vsh_gr, dtype=float)
     # Estimate phid assuming vsh_gr = vsh_dn = (phin - phid) / (phin_sh - phid_sh)
     phid = nphi - (phin_sh - phid_sh) * vsh_gr
     return rho_ma - (rho_ma - rho_water) * phid

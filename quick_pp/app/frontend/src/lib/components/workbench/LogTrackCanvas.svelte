@@ -87,6 +87,10 @@
 		depth: number;
 	} | null>(null);
 
+	// Interactive Depth Interval Selection state (Well Plot -> Crossplot brushing)
+	let intervalSelectMode = $state<boolean>(false);
+	let selectingInterval = $state<{ startDepth: number; currentDepth: number } | null>(null);
+
 	// Current visible Y (depth) range on the plot
 	let yRange = $state<[number, number]>([1000, 1100]);
 	let lastFilterKey = '';
@@ -158,23 +162,33 @@
 			.sort((a, b) => a - b);
 		if (sorted.length === 0) return [];
 
-		const step = dept.length > 1 ? Math.abs(dept[1] - dept[0]) || 0.5 : 0.5;
-		const intervals: Array<{ top: number; bottom: number }> = [];
+		let step = 0.5;
+		for (let i = 1; i < dept.length; i++) {
+			const diff = Math.abs(dept[i] - dept[i - 1]);
+			if (Number.isFinite(diff) && diff > 1e-4 && diff < 10) {
+				step = diff;
+				break;
+			}
+		}
+		const intervals: Array<{ top: number; bottom: number; count: number }> = [];
 		let curTop = dept[sorted[0]] - step * 0.5;
 		let curBot = dept[sorted[0]] + step * 0.5;
+		let curCount = 1;
 
 		for (let k = 1; k < sorted.length; k++) {
 			const idx = sorted[k];
 			const prevIdx = sorted[k - 1];
-			if (idx <= prevIdx + 2) {
+			if (idx <= prevIdx + 2 && Math.abs(dept[idx] - dept[prevIdx]) <= step * 3.5) {
 				curBot = dept[idx] + step * 0.5;
+				curCount++;
 			} else {
-				intervals.push({ top: curTop, bottom: curBot });
+				intervals.push({ top: curTop, bottom: curBot, count: curCount });
 				curTop = dept[idx] - step * 0.5;
 				curBot = dept[idx] + step * 0.5;
+				curCount = 1;
 			}
 		}
-		intervals.push({ top: curTop, bottom: curBot });
+		intervals.push({ top: curTop, bottom: curBot, count: curCount });
 		return intervals;
 	});
 
@@ -427,17 +441,28 @@
 		if (badholeArr.some((v) => v !== null && v >= 0.5)) {
 			// Use continuous 200 baseline and step to 186 only where BADHOLE >= 0.5
 			// so Plotly 'tonextx' never bridges across unflagged (null) intervals.
-			const bhBase = depth.map(() => 200);
-			const bhTop = depth.map((_, i) => {
-				const v = badholeArr[i];
-				return v !== null && v >= 0.5 ? 186 : 200;
-			});
+			// Max-pool over svgStride so thin badhole flags are preserved without 50k+ SVG vertices.
+			const bhBase = new Array(svgDepth.length).fill(200);
+			const bhTop =
+				svgStride > 1
+					? svgSampleIndices.map((startIdx, sIdx) => {
+							const endIdx =
+								sIdx + 1 < svgSampleIndices.length
+									? svgSampleIndices[sIdx + 1]
+									: badholeArr.length;
+							for (let j = startIdx; j < endIdx; j++) {
+								const v = badholeArr[j];
+								if (v !== null && v >= 0.5) return 186;
+							}
+							return 200;
+						})
+					: badholeArr.map((v) => (v !== null && v >= 0.5 ? 186 : 200));
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
 				name: 'BADHOLE_BASE',
 				x: bhBase,
-				y: depth,
+				y: svgDepth,
 				xaxis: 'x',
 				yaxis: 'y',
 				line: { width: 0, color: 'rgba(0,0,0,0)', shape: 'hv' },
@@ -449,7 +474,7 @@
 				mode: 'lines',
 				name: 'BADHOLE',
 				x: bhTop,
-				y: depth,
+				y: svgDepth,
 				xaxis: 'x',
 				yaxis: 'y',
 				fill: 'tonextx',
@@ -1232,21 +1257,6 @@
 			});
 		}
 
-		for (const band of brushedIntervals) {
-			shapes.push({
-				type: 'rect',
-				xref: 'paper',
-				yref: 'y',
-				x0: 0,
-				x1: 1,
-				y0: band.top,
-				y1: band.bottom,
-				fillcolor: 'rgba(37, 99, 235, 0.22)',
-				line: { color: '#2563EB', width: 1 },
-				layer: 'above'
-			});
-		}
-
 		const gridColor = '#E2E8F0';
 		const axisCommon = {
 			showgrid: true,
@@ -1334,7 +1344,8 @@
 		return { traces, layout };
 	}
 
-	// Render or update Plotly chart reactively when curves, filters, or brushing change
+	// Render or update Plotly chart reactively when curves or filters change
+	// (Brushed intervals are rendered in the HTML overlay so brushing never triggers Plotly.react or zoom resets)
 	$effect(() => {
 		if (!PlotlyLib || !plotContainer) return;
 		// Track dependencies
@@ -1342,7 +1353,6 @@
 		void wellData.visibleIndices;
 		void wellData.tops;
 		void wellData.coreSamples;
-		void brushedIntervals;
 		void showHcCorrected;
 		void showDtc;
 		void tsOverlayActive;
@@ -1423,6 +1433,91 @@
 		const ratio = (depth - minD) / (maxD - minD);
 		if (ratio < 0 || ratio > 1) return null;
 		return ratio * 100;
+	}
+
+	// Convert a depth interval [top, bottom] to clipped CSS { topPct, heightPct } inside [0, 100]%
+	function intervalToOverlayBox(
+		topDepth: number,
+		bottomDepth: number
+	): { topPct: number; heightPct: number } | null {
+		const [maxD, minD] = yRange;
+		const viewMin = Math.min(minD, maxD);
+		const viewMax = Math.max(minD, maxD);
+		const span = viewMax - viewMin;
+		if (!Number.isFinite(span) || span <= 0) return null;
+
+		const d0 = Math.min(topDepth, bottomDepth);
+		const d1 = Math.max(topDepth, bottomDepth);
+		if (d1 < viewMin || d0 > viewMax) return null;
+
+		const clippedTop = Math.max(viewMin, d0);
+		const clippedBot = Math.min(viewMax, d1);
+		const topPct = ((clippedTop - viewMin) / span) * 100;
+		const heightPct = Math.max(0.35, ((clippedBot - clippedTop) / span) * 100);
+		return { topPct, heightPct };
+	}
+
+	function selectDepthIntervalIndices(d0: number, d1: number, append: boolean = false) {
+		const minD = Math.min(d0, d1);
+		const maxD = Math.max(d0, d1);
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const next: number[] = append ? Array.from(workbench.brushedDepthIndices) : [];
+		for (const idx of wellData.visibleIndices) {
+			const d = dept[idx];
+			if (Number.isFinite(d) && d >= minD && d <= maxD) {
+				next.push(idx);
+			}
+		}
+		workbench.setBrushedIndices(next);
+	}
+
+	function handlePlotPointerDownCapture(e: PointerEvent) {
+		if (e.button !== 0 || !plotContainer) return;
+		if (!intervalSelectMode && !e.shiftKey) return;
+
+		e.preventDefault();
+		e.stopPropagation();
+
+		const rect = plotContainer.getBoundingClientRect();
+		const plotTop = rect.top + 6;
+		const plotHeight = Math.max(1, rect.height - 14);
+		const [maxD, minD] = yRange;
+		const viewMin = Math.min(minD, maxD);
+		const viewMax = Math.max(minD, maxD);
+
+		const clientYToDepth = (clientY: number) => {
+			const relY = Math.min(1, Math.max(0, (clientY - plotTop) / plotHeight));
+			return Number((viewMin + relY * (viewMax - viewMin)).toFixed(2));
+		};
+
+		const startD = clientYToDepth(e.clientY);
+		const appendSelection = e.ctrlKey || e.metaKey;
+		selectingInterval = { startDepth: startD, currentDepth: startD };
+		workbench.cursorDepth = startD;
+
+		const onMove = (moveEvent: PointerEvent) => {
+			if (!selectingInterval) return;
+			const curD = clientYToDepth(moveEvent.clientY);
+			selectingInterval = { ...selectingInterval, currentDepth: curD };
+			workbench.cursorDepth = curD;
+		};
+
+		const onUp = (upEvent: PointerEvent) => {
+			if (selectingInterval) {
+				const endD = clientYToDepth(upEvent.clientY);
+				if (Math.abs(endD - selectingInterval.startDepth) < 0.05 && !appendSelection) {
+					workbench.setBrushedIndices([]);
+				} else {
+					selectDepthIntervalIndices(selectingInterval.startDepth, endD, appendSelection);
+				}
+			}
+			selectingInterval = null;
+			window.removeEventListener('pointermove', onMove);
+			window.removeEventListener('pointerup', onUp);
+		};
+
+		window.addEventListener('pointermove', onMove);
+		window.addEventListener('pointerup', onUp);
 	}
 
 	function startMarkerDrag(
@@ -1571,6 +1666,16 @@
 				/>
 				<span>HC Overlay</span>
 			</label>
+			<button
+				type="button"
+				title="Drag vertically on tracks to select a depth interval and highlight points on the Crossplot (or hold Shift + Drag anytime)"
+				onclick={() => (intervalSelectMode = !intervalSelectMode)}
+				class="h-5 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {intervalSelectMode
+					? 'border-blue-600 bg-blue-600 text-white'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+			>
+				{intervalSelectMode ? 'Selecting Interval (Drag)' : 'Select Interval'}
+			</button>
 			<button
 				type="button"
 				onclick={resetZoom}
@@ -1930,14 +2035,49 @@
 	</div>
 
 	<!-- Multi-Track Plot Canvas + Interactive Draggable Formation Tops & Fluid Contacts -->
-	<div class="relative min-h-0 flex-1 overflow-hidden">
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		onpointerdowncapture={handlePlotPointerDownCapture}
+		class="relative min-h-0 flex-1 overflow-hidden {intervalSelectMode ? 'cursor-crosshair' : ''}"
+	>
 		<div bind:this={plotContainer} class="h-full w-full"></div>
 
-		<!-- Overlay container aligned with Plotly's plot area (for Fluid Contacts) -->
+		<!-- Overlay container aligned with Plotly's plot area (Brushed Intervals & Fluid Contacts) -->
 		<div
 			style="left: {plotAreaLeft}px; right: {plotAreaRight}px;"
 			class="pointer-events-none absolute top-[6px] bottom-[8px] overflow-hidden"
 		>
+			{#each brushedIntervals as band, bIdx (bIdx)}
+				{@const box = intervalToOverlayBox(band.top, band.bottom)}
+				{#if box !== null}
+					<div
+						style="top: {box.topPct}%; height: {box.heightPct}%; min-height: 3px;"
+						class="pointer-events-none absolute right-0 left-0 border-y border-blue-600/85 border-l-4 border-l-blue-600 bg-blue-500/22"
+					></div>
+				{/if}
+			{/each}
+
+			{#if selectingInterval}
+				{@const liveBox = intervalToOverlayBox(
+					selectingInterval.startDepth,
+					selectingInterval.currentDepth
+				)}
+				{#if liveBox !== null}
+					<div
+						style="top: {liveBox.topPct}%; height: {liveBox.heightPct}%; min-height: 3px;"
+						class="pointer-events-none absolute right-0 left-0 border-y-2 border-dashed border-blue-700 bg-blue-500/28"
+					>
+						<span
+							class="mono-num absolute top-0.5 left-1.5 rounded-xs border border-blue-300 bg-blue-950/90 px-1.5 py-0.2 text-[9.5px] font-semibold text-white shadow-xs"
+						>
+							{fmtDepth(Math.min(selectingInterval.startDepth, selectingInterval.currentDepth))} – {fmtDepth(
+								Math.max(selectingInterval.startDepth, selectingInterval.currentDepth)
+							)}
+						</span>
+					</div>
+				{/if}
+			{/if}
+
 			{#each wellData.contacts as contact (contact.id)}
 				{@const activeDepth =
 					draggingMarker?.kind === 'contact' && draggingMarker.id === contact.id
