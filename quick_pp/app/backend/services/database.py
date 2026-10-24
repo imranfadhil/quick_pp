@@ -831,6 +831,7 @@ async def create_well(project_id: int, payload: dict):
 
 @router.post("/projects/{project_id}/read_las", summary="Upload LAS files into project")
 @router.post("/projects/{project_id}/upload", include_in_schema=False)
+@router.post("/projects/{project_id}/upload-las", include_in_schema=False)
 def project_read_las(
     project_id: int,
     files: List[UploadFile] = File(...),

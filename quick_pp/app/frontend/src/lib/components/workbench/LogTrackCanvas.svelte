@@ -1379,6 +1379,32 @@
 		class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 text-[11px]"
 	>
 		<div class="flex items-center gap-2 overflow-hidden">
+			{#if workbench.scope === 'multi-well'}
+				<div
+					class="flex h-5.5 shrink-0 items-center rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-0.5 text-[10px]"
+				>
+					<button
+						type="button"
+						onclick={() => (workbench.centerPaneMultiWellView = 'logs')}
+						class="h-4.5 rounded-xs px-1.5 font-medium transition-colors {workbench.centerPaneMultiWellView ===
+						'logs'
+							? 'bg-[var(--accent-primary)] font-semibold text-white'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+					>
+						Single-Well Logs
+					</button>
+					<button
+						type="button"
+						onclick={() => (workbench.centerPaneMultiWellView = 'stick-plot')}
+						class="h-4.5 rounded-xs px-1.5 font-medium transition-colors {workbench.centerPaneMultiWellView ===
+						'stick-plot'
+							? 'bg-[var(--accent-primary)] font-semibold text-white'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+					>
+						Multi-Well Stick Plot
+					</button>
+				</div>
+			{/if}
 			<span class="font-semibold text-[var(--text-primary)]">
 				{workbench.wellId ?? 'No Well Selected'}
 			</span>

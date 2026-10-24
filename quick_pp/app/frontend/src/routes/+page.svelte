@@ -5,6 +5,7 @@
 	import { PaneGroup, Pane, PaneResizer } from 'paneforge';
 
 	import LogTrackCanvas from '$lib/components/workbench/LogTrackCanvas.svelte';
+	import StickPlotCanvas from '$lib/components/workbench/StickPlotCanvas.svelte';
 	import CrossplotCanvas from '$lib/components/workbench/CrossplotCanvas.svelte';
 	import CompactDataGrid, {
 		type GridColumn
@@ -54,6 +55,9 @@
 		if (urlStep) {
 			if (workbench.scope === 'multi-well') {
 				workbench.multiWellStep = urlStep as MultiWellStep;
+				if (urlStep === 'shf') {
+					workbench.centerPaneMultiWellView = 'stick-plot';
+				}
 			} else {
 				workbench.singleWellStep = urlStep as SingleWellStep;
 			}
@@ -427,9 +431,13 @@
 				<ReportPreviewCanvas />
 			</Pane>
 		{:else}
-			<!-- CENTER PANE (45% default width): Synchronized Well Log Canvas -->
+			<!-- CENTER PANE (45% default width): Synchronized Well Log Canvas or Multi-Well Stick Plot -->
 			<Pane defaultSize={45} minSize={28} class="h-full overflow-hidden">
-				<LogTrackCanvas />
+				{#if workbench.scope === 'multi-well' && workbench.centerPaneMultiWellView === 'stick-plot'}
+					<StickPlotCanvas />
+				{:else}
+					<LogTrackCanvas />
+				{/if}
 			</Pane>
 
 			<PaneResizer

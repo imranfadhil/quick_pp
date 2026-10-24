@@ -453,7 +453,12 @@
 			</button>
 			<button
 				type="button"
-				onclick={() => (workbench.scope = 'multi-well')}
+				onclick={() => {
+					workbench.scope = 'multi-well';
+					if (workbench.multiWellStep === 'shf') {
+						workbench.centerPaneMultiWellView = 'stick-plot';
+					}
+				}}
 				class="h-6 rounded-xs px-2 text-[11px] font-medium transition-colors {workbench.scope ===
 				'multi-well'
 					? 'bg-[var(--bg-surface)] text-[var(--accent-primary)] shadow-2xs font-semibold'

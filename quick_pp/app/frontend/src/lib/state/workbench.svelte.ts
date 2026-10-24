@@ -215,6 +215,15 @@ class WorkbenchState {
 	mwQaqcExcludeBadhole = $state<boolean>(false);
 	mwQaqcLogScale = $state<boolean>(false);
 
+	// Multi-well Center Pane view ('logs' | 'stick-plot') & Stick Plot controls
+	centerPaneMultiWellView = $state<'logs' | 'stick-plot'>('logs');
+	stickPlotSortMode = $state<'project' | 'crest-tvd' | 'custom'>('crest-tvd');
+	stickPlotCustomOrder = $state<string[]>([]);
+	stickPlotZoneFilter = $state<string>('ALL');
+	stickPlotShowPhit = $state<boolean>(false);
+	stickPlotShowContacts = $state<boolean>(true);
+	stickPlotShowTops = $state<boolean>(true);
+
 	// Global modal / drawer flags
 	importerOpen = $state<boolean>(false);
 	aiDrawerOpen = $state<boolean>(false);

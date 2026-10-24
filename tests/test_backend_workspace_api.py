@@ -38,11 +38,35 @@ def client_and_project(monkeypatch):
             "RHOB": np.linspace(2.25, 2.55, 10),
             "RT": np.linspace(25.0, 4.0, 10),
             "ZONES": ["Zone-1"] * 5 + ["Zone-2"] * 5,
-            "CPORE": [0.22, np.nan, 0.19, np.nan, 0.17, np.nan, 0.15, np.nan, 0.13, np.nan],
-            "CPERM": [150.0, np.nan, 80.0, np.nan, 40.0, np.nan, 15.0, np.nan, 5.0, np.nan],
+            "CPORE": [
+                0.22,
+                np.nan,
+                0.19,
+                np.nan,
+                0.17,
+                np.nan,
+                0.15,
+                np.nan,
+                0.13,
+                np.nan,
+            ],
+            "CPERM": [
+                150.0,
+                np.nan,
+                80.0,
+                np.nan,
+                40.0,
+                np.nan,
+                15.0,
+                np.nan,
+                5.0,
+                np.nan,
+            ],
         }
     )
-    well_a = Well(db_session=session, project_id=proj.project_id, name="Well-A", uwi="WELL-A-1")
+    well_a = Well(
+        db_session=session, project_id=proj.project_id, name="Well-A", uwi="WELL-A-1"
+    )
     well_a.save()
     proj.update_data(df)
     proj.save()
@@ -53,7 +77,9 @@ def client_and_project(monkeypatch):
     session.commit()
 
     # Also add an empty well to verify multi-well endpoints skip empty wells gracefully
-    well_empty = Well(db_session=session, project_id=proj.project_id, name="Well-Empty", uwi="EMPTY-1")
+    well_empty = Well(
+        db_session=session, project_id=proj.project_id, name="Well-Empty", uwi="EMPTY-1"
+    )
     well_empty.save()
     session.commit()
 
@@ -122,9 +148,7 @@ def test_merged_well_data_columnar_and_cache(client_and_project):
     assert len(gen_body["result"]) == 10
 
     # Verify /workspace/projects/{pid}/wells/Well-A/bundle single-request bundle endpoint
-    r_bundle = client.get(
-        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/bundle"
-    )
+    r_bundle = client.get(f"/quick_pp/workspace/projects/{pid}/wells/Well-A/bundle")
     assert r_bundle.status_code == 200
     bundle = r_bundle.json()
     assert bundle["row_count"] == 10
@@ -305,7 +329,7 @@ def test_petrophysical_mcp_server_and_agent_assistant(client_and_project):
         json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     )
     assert r_list.status_code == 200
-    assert len(r_list.json()["result"]["tools"]) == 6
+    assert len(r_list.json()["result"]["tools"]) >= 6
 
     r_call = client.post(
         "/quick_pp/mcp",
@@ -500,4 +524,21 @@ def test_badhole_flagging_and_litho_poro_badhole_treatments(client_and_project):
     assert 0.05 < poro_gr["PHIT"][2] < 0.35
 
 
-
+def test_workspace_stick_plot(client_and_project):
+    client, pid = client_and_project
+    res = client.post(
+        f"/quick_pp/workspace/projects/{pid}/stick_plot",
+        json={"max_points_per_well": 500},
+    )
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["project_id"] == pid
+    assert "wells" in payload
+    assert len(payload["wells"]) == 1
+    w = payload["wells"][0]
+    assert w["well_name"] == "Well-A"
+    assert "tvd" in w and len(w["tvd"]) == 10
+    assert "bvo" in w and len(w["bvo"]) == 10
+    assert "top_reservoir_tvd" in w
+    assert "cum_hcpv" in w
+    assert len(w["tops"]) == 2

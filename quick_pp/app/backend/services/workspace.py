@@ -3919,14 +3919,17 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 )
 
         saved_wells = 0
-        if req.save:
-            by_well: Dict[str, List[Dict[str, Any]]] = {}
-            for wn, d, shf_v in zip(well_names, depths, shf_values):
-                if shf_v is not None and d is not None:
-                    by_well.setdefault(wn, []).append({"DEPTH": d, "SHF": shf_v})
-            for wn, rows in by_well.items():
+        by_well_shf: Dict[str, List[Dict[str, Any]]] = {}
+        for wn, d, shf_v in zip(well_names, depths, shf_values):
+            if shf_v is not None and d is not None:
+                by_well_shf.setdefault(wn, []).append({"DEPTH": d, "SHF": shf_v})
+        for wn, rows in by_well_shf.items():
+            if req.save:
                 _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
-            saved_wells = len(by_well)
+            else:
+                _update_in_memory_well_cache(project_id, wn, pd.DataFrame(rows))
+        if req.save:
+            saved_wells = len(by_well_shf)
 
         scal_payload = {
             "pc": scal_df["PC"].tolist() if not scal_df.empty else [],
@@ -4146,6 +4149,412 @@ def _load_multi_well_dfs(
                 dfs.append(wdf)
 
     return dfs
+
+
+class WorkspaceStickPlotRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(None)
+    zones: Optional[List[str]] = Field(None)
+    min_depth: Optional[float] = Field(None)
+    max_depth: Optional[float] = Field(None)
+    max_points_per_well: int = Field(1200, ge=100, le=5000)
+
+
+def _resolve_well_tvd_array(
+    md_values: np.ndarray,
+    well_df: Optional[pd.DataFrame],
+    surveys_df: Optional[pd.DataFrame],
+) -> np.ndarray:
+    """Resolve TVD array for given MD depths using TVD/TVDSS curve, directional survey minimum curvature, or MD fallback."""
+    if len(md_values) == 0:
+        return np.array([], dtype=float)
+
+    # 1. Explicit TVD or TVDSS curve in well_df
+    if well_df is not None and not well_df.empty and "DEPTH" in well_df.columns:
+        for tvd_col in ("TVD", "TVDSS", "DEPT_TVD", "DEPTH_TVD"):
+            if tvd_col in well_df.columns and well_df[tvd_col].notna().sum() >= 2:
+                sub = (
+                    pd.DataFrame(
+                        {
+                            "DEPTH": pd.to_numeric(well_df["DEPTH"], errors="coerce"),
+                            "TVD": pd.to_numeric(well_df[tvd_col], errors="coerce"),
+                        }
+                    )
+                    .dropna()
+                    .sort_values("DEPTH")
+                )
+                if len(sub) >= 2:
+                    return np.interp(
+                        md_values,
+                        sub["DEPTH"].to_numpy(dtype=float),
+                        sub["TVD"].to_numpy(dtype=float),
+                    )
+
+    # 2. Directional survey table (with surface tie-in if survey starts below surface)
+    if isinstance(surveys_df, pd.DataFrame) and not surveys_df.empty:
+        col_map = {str(c).lower(): c for c in surveys_df.columns}
+        md_c = col_map.get("md") or col_map.get("depth")
+        inc_c = col_map.get("inc") or col_map.get("incl") or col_map.get("inclination")
+        azi_c = col_map.get("azim") or col_map.get("azi") or col_map.get("azimuth")
+        tvd_c = col_map.get("tvd") or col_map.get("tvdss")
+
+        if md_c and tvd_c and surveys_df[tvd_c].notna().sum() >= 2:
+            s_sub = (
+                pd.DataFrame(
+                    {
+                        "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
+                        "tvd": pd.to_numeric(surveys_df[tvd_c], errors="coerce"),
+                    }
+                )
+                .dropna()
+                .sort_values("md")
+            )
+            if len(s_sub) >= 2:
+                return np.interp(
+                    md_values,
+                    s_sub["md"].to_numpy(dtype=float),
+                    s_sub["tvd"].to_numpy(dtype=float),
+                )
+
+        if md_c and inc_c and azi_c:
+            try:
+                import wellpathpy as wpp
+
+                s_sorted = (
+                    pd.DataFrame(
+                        {
+                            "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
+                            "inc": pd.to_numeric(surveys_df[inc_c], errors="coerce"),
+                            "azim": pd.to_numeric(surveys_df[azi_c], errors="coerce"),
+                        }
+                    )
+                    .dropna()
+                    .sort_values("md")
+                    .drop_duplicates(subset=["md"])
+                )
+                if len(s_sorted) >= 2:
+                    mds = s_sorted["md"].to_numpy(dtype=float)
+                    incs = s_sorted["inc"].to_numpy(dtype=float)
+                    azis = s_sorted["azim"].to_numpy(dtype=float)
+                    if mds[0] > 1.0:
+                        mds = np.insert(mds, 0, 0.0)
+                        incs = np.insert(incs, 0, 0.0)
+                        azis = np.insert(azis, 0, 0.0)
+                    dev = wpp.deviation(mds, incs, azis)
+                    pos = dev.minimum_curvature()
+                    return np.interp(
+                        md_values,
+                        np.asarray(pos.md, dtype=float),
+                        np.asarray(pos.depth, dtype=float),
+                    )
+            except Exception:
+                pass
+
+    # 3. Fallback: vertical well (TVD == MD)
+    return np.asarray(md_values, dtype=float).copy()
+
+
+@router.post(
+    "/stick_plot",
+    summary="Compute multi-well TVD stick plot data (BVO_Log, BVO_SHF, PHIT, SWT, TVD, fluid contacts & tops)",
+)
+def workspace_stick_plot(
+    project_id: int, req: WorkspaceStickPlotRequest
+) -> Dict[str, Any]:
+    """Return multi-well stick plot data anchored on True Vertical Depth (TVD) for field-level fluid contact analysis."""
+    try:
+        from quick_pp.plotter.plotter import update_fluid_contacts
+
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not dfs:
+            raise ValueError("No wells found or remaining after filters.")
+
+        max_pts = max(100, int(req.max_points_per_well))
+        wells_payload: List[Dict[str, Any]] = []
+        all_zones_set: set[str] = set()
+        global_min_tvd = float("inf")
+        global_max_tvd = float("-inf")
+
+        with get_db() as session:
+            try:
+                proj = db_objects.Project.load(session, project_id=project_id)
+            except Exception:
+                proj = None
+
+            for wdf in dfs:
+                wn = str(wdf["WELL_NAME"].iloc[0])
+                wdf_sorted = wdf.sort_values("DEPTH").reset_index(drop=True)
+                md_full = pd.to_numeric(wdf_sorted["DEPTH"], errors="coerce").to_numpy(
+                    dtype=float
+                )
+
+                anc: Dict[str, Any] = {}
+                if proj is not None:
+                    try:
+                        anc = (
+                            proj.get_well_ancillary_data(
+                                resolve_db_well_name(project_id, wn)
+                            )
+                            or {}
+                        )
+                    except Exception:
+                        anc = {}
+
+                surveys_df = (
+                    anc.get("well_surveys")
+                    if "well_surveys" in anc
+                    else anc.get("directional_surveys")
+                )
+                if isinstance(surveys_df, list):
+                    surveys_df = pd.DataFrame(surveys_df)
+
+                tvd_full = _resolve_well_tvd_array(md_full, wdf_sorted, surveys_df)
+                wdf_sorted = wdf_sorted.copy()
+                wdf_sorted["TVD"] = tvd_full
+
+                # Resolve PHIT
+                phit_col = next(
+                    (
+                        c
+                        for c in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR")
+                        if c in wdf_sorted.columns and wdf_sorted[c].notna().any()
+                    ),
+                    None,
+                )
+                if phit_col:
+                    phit_s = pd.to_numeric(
+                        wdf_sorted[phit_col], errors="coerce"
+                    ).clip(0.0, 0.5)
+                elif "RHOB" in wdf_sorted.columns and wdf_sorted["RHOB"].notna().any():
+                    rhob_s = pd.to_numeric(wdf_sorted["RHOB"], errors="coerce")
+                    phit_s = ((2.65 - rhob_s) / 1.65).clip(0.0, 0.45)
+                elif "NPHI" in wdf_sorted.columns and wdf_sorted["NPHI"].notna().any():
+                    phit_s = pd.to_numeric(wdf_sorted["NPHI"], errors="coerce").clip(
+                        0.0, 0.45
+                    )
+                else:
+                    phit_s = pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
+
+                # Resolve SWT
+                swt_col = next(
+                    (
+                        c
+                        for c in ("SWT", "SWE", "SW", "SWT_WS", "SWT_ARCHIE")
+                        if c in wdf_sorted.columns and wdf_sorted[c].notna().any()
+                    ),
+                    None,
+                )
+                if swt_col:
+                    swt_s = pd.to_numeric(wdf_sorted[swt_col], errors="coerce").clip(
+                        0.0, 1.0
+                    )
+                else:
+                    rt_col = next(
+                        (
+                            c
+                            for c in ("RT", "ILD", "LLD", "RDEP")
+                            if c in wdf_sorted.columns and wdf_sorted[c].notna().any()
+                        ),
+                        None,
+                    )
+                    if rt_col and phit_s.notna().any():
+                        rt_s = pd.to_numeric(
+                            wdf_sorted[rt_col], errors="coerce"
+                        ).clip(lower=0.1)
+                        swt_s = np.sqrt(
+                            0.05 / (rt_s * (phit_s.clip(lower=0.01) ** 2))
+                        ).clip(0.02, 1.0)
+                    else:
+                        swt_s = pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
+
+                # Resolve SHF
+                shf_s = (
+                    pd.to_numeric(wdf_sorted["SHF"], errors="coerce").clip(0.0, 1.0)
+                    if ("SHF" in wdf_sorted.columns and wdf_sorted["SHF"].notna().any())
+                    else pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
+                )
+
+                bvo_s = (phit_s * (1.0 - swt_s)).clip(0.0, 1.0)
+                bvoh_s = (
+                    (phit_s * (1.0 - shf_s)).clip(0.0, 1.0)
+                    if shf_s.notna().any()
+                    else pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
+                )
+
+                # Extract fluid contacts & map MD -> TVD
+                contacts_raw = anc.get("fluid_contacts")
+                if isinstance(contacts_raw, pd.DataFrame):
+                    contacts_list = (
+                        contacts_raw.to_dict(orient="records")
+                        if not contacts_raw.empty
+                        else []
+                    )
+                elif isinstance(contacts_raw, list):
+                    contacts_list = contacts_raw
+                else:
+                    contacts_list = []
+
+                contact_items: List[Dict[str, Any]] = []
+                contact_dict_tvd: Dict[str, float] = {}
+                for c in contacts_list:
+                    c_depth = c.get("depth")
+                    if c_depth is None or pd.isna(c_depth):
+                        continue
+                    c_md = float(c_depth)
+                    c_name = str(c.get("name") or c.get("type") or "OWC").strip().upper()
+                    c_tvd = float(
+                        _resolve_well_tvd_array(
+                            np.array([c_md], dtype=float), wdf_sorted, surveys_df
+                        )[0]
+                    )
+                    contact_items.append(
+                        {
+                            "type": c_name,
+                            "name": c_name,
+                            "depth": round(c_md, 2),
+                            "tvd": round(c_tvd, 2),
+                        }
+                    )
+                    contact_dict_tvd[c_name] = round(c_tvd, 2)
+
+                # Also compute legacy update_fluid_contacts FLUID_FLAG on wdf_sorted using TVD contacts
+                wdf_sorted["PHIT"] = phit_s
+                wdf_sorted["SWT"] = swt_s
+                wdf_sorted["BVO"] = bvo_s
+                wdf_sorted["BVOH"] = bvoh_s
+                try:
+                    wdf_sorted = update_fluid_contacts(wdf_sorted, contact_dict_tvd)
+                except Exception:
+                    wdf_sorted["FLUID_FLAG"] = -1
+
+                # Extract formation tops & map MD -> TVD
+                tops_raw = anc.get("formation_tops")
+                if isinstance(tops_raw, pd.DataFrame):
+                    tops_list = (
+                        tops_raw.to_dict(orient="records") if not tops_raw.empty else []
+                    )
+                elif isinstance(tops_raw, list):
+                    tops_list = tops_raw
+                else:
+                    tops_list = []
+
+                top_items: List[Dict[str, Any]] = []
+                for t in tops_list:
+                    t_depth = t.get("depth")
+                    if t_depth is None or pd.isna(t_depth):
+                        continue
+                    t_md = float(t_depth)
+                    t_name = str(t.get("name") or "").strip()
+                    if not t_name:
+                        continue
+                    t_tvd = float(
+                        _resolve_well_tvd_array(
+                            np.array([t_md], dtype=float), wdf_sorted, surveys_df
+                        )[0]
+                    )
+                    top_items.append(
+                        {
+                            "name": t_name,
+                            "depth": round(t_md, 2),
+                            "tvd": round(t_tvd, 2),
+                        }
+                    )
+                top_items.sort(key=lambda x: x["tvd"])
+
+                # Cumulative hydrocarbon pore volume column height (m) = integral of BVO over TVD
+                valid_bvo = bvo_s.notna() & pd.Series(tvd_full).notna()
+                cum_hcpv = 0.0
+                if valid_bvo.sum() >= 2:
+                    tvd_v = tvd_full[valid_bvo.to_numpy()]
+                    bvo_v = bvo_s.to_numpy(dtype=float)[valid_bvo.to_numpy()]
+                    dtvd = np.clip(np.diff(tvd_v, prepend=tvd_v[0]), 0.0, 2.0)
+                    cum_hcpv = float(np.nansum(bvo_v * dtvd))
+
+                valid_tvd = tvd_full[np.isfinite(tvd_full)]
+                w_min_tvd = float(np.min(valid_tvd)) if len(valid_tvd) > 0 else 0.0
+                w_max_tvd = float(np.max(valid_tvd)) if len(valid_tvd) > 0 else 1000.0
+                global_min_tvd = min(global_min_tvd, w_min_tvd)
+                global_max_tvd = max(global_max_tvd, w_max_tvd)
+
+                # Determine structural top reservoir TVD (shallowest TVD with PHIT >= 0.06, or first formation top)
+                res_mask = (phit_s >= 0.06) & np.isfinite(tvd_full)
+                if res_mask.any():
+                    top_res_tvd = float(np.min(tvd_full[res_mask.to_numpy()]))
+                elif top_items:
+                    top_res_tvd = float(top_items[0]["tvd"])
+                else:
+                    top_res_tvd = w_min_tvd
+
+                for z_val in wdf_sorted["ZONES"].dropna().unique():
+                    z_str = str(z_val).strip()
+                    if z_str:
+                        all_zones_set.add(z_str)
+
+                # Downsample if needed
+                sub = wdf_sorted
+                if len(sub) > max_pts:
+                    stride = max(1, len(sub) // max_pts)
+                    sub = sub.iloc[::stride].reset_index(drop=True)
+
+                def _clean_float_list(series_in: pd.Series, decimals: int = 4) -> list:
+                    s_num = pd.to_numeric(series_in, errors="coerce").replace(
+                        [np.inf, -np.inf], np.nan
+                    )
+                    return [
+                        round(float(x), decimals) if pd.notna(x) else None
+                        for x in s_num.tolist()
+                    ]
+
+                wells_payload.append(
+                    {
+                        "well_name": wn,
+                        "min_tvd": round(w_min_tvd, 2),
+                        "max_tvd": round(w_max_tvd, 2),
+                        "top_reservoir_tvd": round(top_res_tvd, 2),
+                        "cum_hcpv": round(cum_hcpv, 3),
+                        "contacts": contact_items,
+                        "tops": top_items,
+                        "depths": _clean_float_list(sub["DEPTH"], 2),
+                        "tvd": _clean_float_list(sub["TVD"], 2),
+                        "zones": sub["ZONES"].fillna("ALL").astype(str).tolist(),
+                        "phit": _clean_float_list(sub["PHIT"], 4),
+                        "swt": _clean_float_list(sub["SWT"], 4),
+                        "shf": _clean_float_list(sub["SHF"], 4)
+                        if "SHF" in sub.columns
+                        else [None] * len(sub),
+                        "bvo": _clean_float_list(sub["BVO"], 4),
+                        "bvoh": _clean_float_list(sub["BVOH"], 4),
+                        "fluid_flag": [
+                            int(x) if pd.notna(x) else -1
+                            for x in sub["FLUID_FLAG"].tolist()
+                        ],
+                    }
+                )
+
+        return _sanitize_for_json(
+            {
+                "project_id": project_id,
+                "min_tvd": round(global_min_tvd, 2)
+                if math.isfinite(global_min_tvd)
+                else 0.0,
+                "max_tvd": round(global_max_tvd, 2)
+                if math.isfinite(global_max_tvd)
+                else 1000.0,
+                "available_zones": sorted(all_zones_set),
+                "wells": wells_payload,
+            }
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Stick plot computation failed: {e}"
+        ) from e
 
 
 class WorkspaceOptimizeFwlRequest(BaseModel):

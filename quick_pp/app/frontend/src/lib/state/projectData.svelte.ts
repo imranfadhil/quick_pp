@@ -170,6 +170,32 @@ class ProjectDataState {
 		shf: (number | null)[];
 	} | null>(null);
 
+	stickPlotResult = $state<{
+		project_id: number;
+		min_tvd: number;
+		max_tvd: number;
+		available_zones: string[];
+		wells: Array<{
+			well_name: string;
+			min_tvd: number;
+			max_tvd: number;
+			top_reservoir_tvd: number;
+			cum_hcpv: number;
+			contacts: Array<{ type: string; name: string; depth: number; tvd: number }>;
+			tops: Array<{ name: string; depth: number; tvd: number }>;
+			depths: (number | null)[];
+			tvd: (number | null)[];
+			zones: string[];
+			phit: (number | null)[];
+			swt: (number | null)[];
+			shf: (number | null)[];
+			bvo: (number | null)[];
+			bvoh: (number | null)[];
+			fluid_flag: number[];
+		}>;
+	} | null>(null);
+	isLoadingStickPlot = $state<boolean>(false);
+
 	mlTrainingResult = $state<{
 		suite_key: string;
 		suite_label: string;
@@ -289,12 +315,45 @@ class ProjectDataState {
 			const msg = `Saved ${curveLabel} (${res.saved_wells} wells) ✓`;
 			wellData.lastSavedMessage = msg;
 			appStatus.success(msg);
+			if (this.stickPlotResult) {
+				void this.loadStickPlot();
+			}
 			return true;
 		} catch (e: any) {
 			this.error = e?.message || `Failed to save ${curveLabel} across wells`;
 			return false;
 		} finally {
 			this.isComputingMultiWell = false;
+		}
+	}
+
+	async loadStickPlot(force: boolean = false) {
+		const pid = workbench.projectId;
+		if (!pid) return null;
+		if (!force && this.stickPlotResult && String(this.stickPlotResult.project_id) === String(pid)) {
+			return this.stickPlotResult;
+		}
+		this.isLoadingStickPlot = true;
+		try {
+			const data = await postJson<NonNullable<ProjectDataState['stickPlotResult']>>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/stick_plot`,
+				{
+					max_points_per_well: 1200
+				}
+			);
+			this.stickPlotResult = data;
+			if (
+				workbench.stickPlotCustomOrder.length === 0 &&
+				data?.wells?.length
+			) {
+				workbench.stickPlotCustomOrder = data.wells.map((w) => w.well_name);
+			}
+			return data;
+		} catch (e: any) {
+			console.warn('Stick plot load warning:', e);
+			return null;
+		} finally {
+			this.isLoadingStickPlot = false;
 		}
 	}
 
@@ -322,6 +381,7 @@ class ProjectDataState {
 		this.rockTypingResult = null;
 		this.permTransformResult = null;
 		this.shfResult = null;
+		this.stickPlotResult = null;
 		wellData.curves = {};
 		wellData.tops = [];
 		wellData.contacts = [];
@@ -342,6 +402,7 @@ class ProjectDataState {
 			this.rockTypingResult = null;
 			this.permTransformResult = null;
 			this.shfResult = null;
+			this.stickPlotResult = null;
 		}
 		this.isLoading = true;
 		this.error = null;

@@ -171,7 +171,12 @@
 				{@const isDone = step.readyCheck()}
 				<button
 					type="button"
-					onclick={() => (workbench.multiWellStep = step.id)}
+					onclick={() => {
+						workbench.multiWellStep = step.id;
+						if (step.id === 'shf') {
+							workbench.centerPaneMultiWellView = 'stick-plot';
+						}
+					}}
 					class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isActive
 						? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
 						: 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
