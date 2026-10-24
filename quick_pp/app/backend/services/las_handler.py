@@ -602,6 +602,7 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                     [r["well_data"] for r in well_runs],
                     step=payload.regularize_step,
                     conflict_mode=splicing_mode,
+                    interpolate_gaps=payload.interpolate_gaps,
                 )
             else:
                 spliced_df = well_runs[0]["well_data"]

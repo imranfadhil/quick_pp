@@ -141,8 +141,9 @@
 			const commitBody = {
 				project_id: Number(workbench.projectId),
 				target_depth_uom: 'm',
-				regularize_grid: Boolean(customTargetStep) || inspectedFiles.length > 1,
+				regularize_grid: Boolean(customTargetStep),
 				regularize_step: customTargetStep ? Number(customTargetStep) : 0.1524,
+				interpolate_gaps: false,
 				splicing_mode: spliceOverlapMode,
 				files: configs
 			};

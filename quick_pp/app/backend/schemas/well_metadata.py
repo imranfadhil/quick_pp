@@ -244,6 +244,7 @@ class LogCommitRequest(BaseModel):
     target_depth_uom: str = "m"
     regularize_grid: bool = False
     regularize_step: float = 0.1524
+    interpolate_gaps: bool = False
     splicing_mode: str = Field(
         "keep_last", description="Overlap conflict resolution: keep_last, keep_first, mean"
     )

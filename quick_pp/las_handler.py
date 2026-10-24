@@ -1639,6 +1639,7 @@ def splice_and_regularize_runs(
     conflict_mode: str = "keep_last",
     overlap_mode: Optional[str] = None,
     target_step: Optional[float] = None,
+    interpolate_gaps: bool = False,
 ) -> pd.DataFrame:
     """Splice multiple log runs onto a unified regular depth grid (`step = 0.1524 m`).
 
@@ -1646,6 +1647,8 @@ def splice_and_regularize_runs(
         runs: List of DataFrames, each containing a `DEPTH` column.
         step: Regular depth step in meters (default `0.1524`).
         conflict_mode: Overlap conflict resolution (`keep_last`, `keep_first`, or `mean`).
+        interpolate_gaps: Whether to linearly interpolate across missing (`NaN`) curve intervals.
+            Defaults to `False` so missing log intervals remain `NaN`.
     """
     if overlap_mode is not None:
         conflict_mode = overlap_mode
@@ -1681,11 +1684,20 @@ def splice_and_regularize_runs(
             if c not in all_curves:
                 all_curves.append(c)
 
-    # Interpolate each run onto the target depth grid within its logged interval
+    # Resample each run onto the target depth grid within its logged interval
     interp_runs: List[pd.DataFrame] = []
     for r in valid_runs:
         r_depths = pd.to_numeric(r["DEPTH"], errors="coerce").to_numpy(dtype=np.float64)
-        r_min, r_max = float(r_depths[0]), float(r_depths[-1])
+        finite_d = r_depths[np.isfinite(r_depths)]
+        if len(finite_d) < 2:
+            continue
+        d_diffs = np.diff(finite_d)
+        pos_diffs = d_diffs[d_diffs > 1e-6]
+        native_step = float(np.median(pos_diffs)) if len(pos_diffs) > 0 else step_val
+        max_valid_span = max(step_val, native_step) * 1.75
+        snap_tol = max(step_val, native_step) * 0.55
+
+        r_min, r_max = float(finite_d[0]), float(finite_d[-1])
         in_range = (target_grid >= r_min - 1e-6) & (target_grid <= r_max + 1e-6)
         run_grid_df = pd.DataFrame({"DEPTH": target_grid})
         for c in all_curves:
@@ -1701,9 +1713,22 @@ def splice_and_regularize_runs(
             v_y = vals[valid_mask]
             interp_y = np.full(len(target_grid), np.nan, dtype=np.float32)
             local_mask = in_range & (target_grid >= v_d[0]) & (target_grid <= v_d[-1])
-            interp_y[local_mask] = np.interp(target_grid[local_mask], v_d, v_y).astype(
-                np.float32
-            )
+            if np.any(local_mask):
+                tg_local = target_grid[local_mask]
+                y_local = np.interp(tg_local, v_d, v_y).astype(np.float32)
+                if not interpolate_gaps:
+                    right_idx = np.clip(
+                        np.searchsorted(v_d, tg_local, side="right"), 1, len(v_d) - 1
+                    )
+                    left_idx = right_idx - 1
+                    spans = v_d[right_idx] - v_d[left_idx]
+                    dist_to_nearest = np.minimum(
+                        np.abs(tg_local - v_d[left_idx]),
+                        np.abs(v_d[right_idx] - tg_local),
+                    )
+                    gap_mask = (spans > max_valid_span) & (dist_to_nearest > snap_tol)
+                    y_local[gap_mask] = np.nan
+                interp_y[local_mask] = y_local
             run_grid_df[c] = interp_y
         interp_runs.append(run_grid_df)
 

@@ -217,6 +217,7 @@ def test_multi_run_splicing_and_regularization():
         {
             "DEPTH": [100.0, 100.5, 101.0, 101.5],
             "GR": [40.0, 42.0, 44.0, 46.0],
+            "RHOB": [2.35, np.nan, np.nan, 2.55],
         }
     )
     run2 = pd.DataFrame(
@@ -231,6 +232,11 @@ def test_multi_run_splicing_and_regularization():
     # At depth 101.0, keep_last should take run2 (50.0)
     val_101 = spliced_last.loc[np.isclose(spliced_last["DEPTH"], 101.0), "GR"].iloc[0]
     assert np.isclose(val_101, 50.0, atol=1e-2)
+    # Missing data gap in RHOB at 100.5 and 101.0 must remain NaN (not interpolated) by default
+    rhob_100_5 = spliced_last.loc[np.isclose(spliced_last["DEPTH"], 100.5), "RHOB"].iloc[0]
+    rhob_101_0 = spliced_last.loc[np.isclose(spliced_last["DEPTH"], 101.0), "RHOB"].iloc[0]
+    assert np.isnan(rhob_100_5)
+    assert np.isnan(rhob_101_0)
 
 
 def test_las3_normalization_and_parsing():
