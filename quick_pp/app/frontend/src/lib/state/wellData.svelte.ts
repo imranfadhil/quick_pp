@@ -133,6 +133,7 @@ class WellDataState {
 	scalPc = $state<Record<string, any>[]>([]);
 	pressureTests = $state<Record<string, any>[]>([]);
 	survey = $state<Record<string, any>[]>([]);
+	header = $state<Record<string, any>>({});
 	config = $state<Record<string, any>>({});
 
 	// Reservoir summary table & metrics from latest run
@@ -1021,6 +1022,11 @@ class WellDataState {
 			this.pressureTests = data.pressure_tests || [];
 			this.survey = data.survey || [];
 			this.config = data.config || {};
+			this.header = (data as any).header || {
+				well_name: wellName,
+				uwi: (data.config as any)?.uwi ?? wellName,
+				...(data.config || {})
+			};
 			this.pendingModuleCurves = {};
 			workbench.brushedDepthIndices = new Set();
 			workbench.tsParams.enabled = false;
@@ -1944,6 +1950,33 @@ class WellDataState {
 				`Saved working depth interval: ${finalMin.toFixed(1)} – ${finalMax.toFixed(1)} m`,
 				wid
 			);
+		}
+	}
+
+	async saveWellHeader(updates: Record<string, any>, persist: boolean = true) {
+		const pid = workbench.projectId;
+		const wid = workbench.wellId;
+		this.header = {
+			...this.header,
+			...updates
+		};
+		this.config = {
+			...this.config,
+			...updates
+		};
+		if (persist && pid && wid) {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wid)}/config`,
+				{ header: updates }
+			);
+			if (res?.header && Object.keys(res.header).length > 0) {
+				this.header = { ...this.header, ...res.header };
+			}
+			if (res?.config) {
+				this.config = { ...this.config, ...res.config };
+			}
+			this.lastSavedMessage = 'Well Header Saved ✓';
+			appStatus.success('Saved well header metadata', wid);
 		}
 	}
 

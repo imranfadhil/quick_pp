@@ -24,6 +24,7 @@ from quick_pp.app.backend.schemas.well_metadata import (
 )
 from quick_pp.app.backend.services.database import (
     MAX_DEMO_UPLOAD_BYTES,
+    _ephemeral_well_headers,
     _ephemeral_wells,
     _merged_data_cache,
     invalidate_well_cache,
@@ -618,6 +619,9 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                 if is_demo_mode():
                     proj_eph = _ephemeral_wells.setdefault(project_id, {})
                     proj_eph[well_name] = spliced_df.copy()
+                    _ephemeral_well_headers[(project_id, well_name)] = dict(
+                        primary_meta
+                    )
                     _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (
                         time.time(),
                         spliced_df.copy(),

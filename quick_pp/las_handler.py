@@ -821,36 +821,80 @@ def _parse_float_safe(val: Any) -> Optional[float]:
     return None
 
 
-def _parse_coordinate_value(val: Any) -> Optional[float]:
-    """Parse decimal degree or DMS coordinate string (e.g., `058 26' 29.807" N DMS`) to float."""
+_PLACEHOLDER_HEADER_STRS = {
+    "",
+    "none",
+    "null",
+    "nan",
+    "n/a",
+    "na",
+    "unknown",
+    "undefined",
+    "-",
+    "--",
+    "---",
+    ".",
+}
+
+
+def _is_meaningful_header_val(val: Any) -> bool:
+    """Return True if a header value is non-empty and not a placeholder or sentinel null."""
     if val is None:
+        return False
+    if isinstance(val, (float, np.floating)):
+        if np.isnan(val) or np.isinf(val) or float(val) in SENTINEL_NULLS:
+            return False
+        return True
+    s = str(val).strip()
+    if s.lower() in _PLACEHOLDER_HEADER_STRS:
+        return False
+    try:
+        if float(s) in SENTINEL_NULLS:
+            return False
+    except ValueError:
+        pass
+    return True
+
+
+def _parse_coordinate_value(val: Any) -> Optional[float]:
+    """Parse decimal degree or DMS/DM coordinate string (e.g., `058 26' 29.807" N DMS` or `56 41 57.80 N`) to float."""
+    if not _is_meaningful_header_val(val):
         return None
     if isinstance(val, (int, float, np.number)):
         fval = float(val)
-        return None if (np.isnan(fval) or np.isinf(fval)) else fval
+        return None if (np.isnan(fval) or np.isinf(fval) or fval in SENTINEL_NULLS) else fval
     s = str(val).strip()
     if not s:
         return None
     # Try simple float first if no DMS indicators
     try:
-        return float(s)
+        fval = float(s)
+        return None if (np.isnan(fval) or np.isinf(fval) or fval in SENTINEL_NULLS) else fval
     except ValueError:
         pass
-    # Check for DMS pattern: deg, min, sec + N/S/E/W
+    # Extract numbers for DMS / DM / decimal+hemisphere patterns
     nums = [float(x) for x in re.findall(r"[-+]?\d*\.?\d+", s)]
     if not nums:
         return None
-    hemi_match = re.search(r"\b([NSEW])\b|([NSEW])(?:\s*DMS)?$", s.upper())
-    sign = -1.0 if (hemi_match and hemi_match.group(0)[0] in ("S", "W")) else 1.0
-    if len(nums) >= 3 and ("'" in s or '"' in s or "DMS" in s.upper() or "°" in s):
+    hemi_match = re.search(
+        r"(?:^|[\s\d°'\".,:-])([NSEW])(?:\b|(?=\s*DMS)|$)", s.upper()
+    )
+    hemi = hemi_match.group(1) if hemi_match else None
+    sign = -1.0 if (hemi in ("S", "W") or nums[0] < 0) else 1.0
+    if len(nums) >= 3:
         deg = abs(nums[0])
-        minutes = nums[1] if len(nums) > 1 else 0.0
-        seconds = nums[2] if len(nums) > 2 else 0.0
+        minutes = abs(nums[1]) if len(nums) > 1 else 0.0
+        seconds = abs(nums[2]) if len(nums) > 2 else 0.0
         val_deg = deg + (minutes / 60.0) + (seconds / 3600.0)
-        if nums[0] < 0:
-            sign = -1.0
         return round(sign * val_deg, 7)
-    return sign * abs(nums[0]) if hemi_match else nums[0]
+    if len(nums) == 2:
+        deg = abs(nums[0])
+        minutes = abs(nums[1])
+        val_deg = deg + (minutes / 60.0)
+        return round(sign * val_deg, 7)
+    if nums[0] in SENTINEL_NULLS:
+        return None
+    return round(sign * abs(nums[0]), 7) if hemi else nums[0]
 
 
 def _las_header_to_dataframe(las_header: lasio.LASFile) -> pd.DataFrame:
@@ -863,10 +907,18 @@ def _las_header_to_dataframe(las_header: lasio.LASFile) -> pd.DataFrame:
         ("Parameter", getattr(las_header, "params", [])),
     ):
         for item in section:
+            raw_m = getattr(item, "original_mnemonic", None) or getattr(
+                item, "mnemonic", ""
+            )
+            clean_m = (
+                str(raw_m).split(":")[0].strip()
+                if section_name != "Curves"
+                else str(getattr(item, "mnemonic", "")).strip()
+            )
             rows.append(
                 {
                     "section": section_name,
-                    "mnemonic": str(getattr(item, "mnemonic", "")).strip(),
+                    "mnemonic": clean_m,
                     "unit": str(getattr(item, "unit", "") or "").strip(),
                     "value": getattr(item, "value", None),
                     "descr": str(getattr(item, "descr", "") or "").strip(),
@@ -893,125 +945,377 @@ def extract_las_metadata(
 
     well_items: Dict[str, Dict[str, Any]] = {}
     param_items: Dict[str, Dict[str, Any]] = {}
+    direct_meta: Dict[str, Any] = {}
 
-    if isinstance(las_source, lasio.LASFile):
-        for item in getattr(las_source, "well", []):
-            k = str(item.mnemonic).strip().upper()
-            well_items[k] = {
-                "value": item.value,
-                "unit": str(item.unit or "").strip(),
-                "descr": str(item.descr or "").strip(),
-            }
-        for item in getattr(las_source, "params", []):
-            k = str(item.mnemonic).strip().upper()
-            param_items[k] = {
-                "value": item.value,
-                "unit": str(item.unit or "").strip(),
-                "descr": str(item.descr or "").strip(),
-            }
-    elif isinstance(las_source, pd.DataFrame) and not las_source.empty:
-        for _, row in las_source.iterrows():
+    def _put_item(
+        target: Dict[str, Dict[str, Any]],
+        key: str,
+        val: Any,
+        unit: str = "",
+        descr: str = "",
+    ) -> None:
+        if not key:
+            return
+        k_up = key.strip().upper().split(":")[0].strip()
+        if not k_up:
+            return
+        existing = target.get(k_up)
+        if (
+            existing is not None
+            and _is_meaningful_header_val(existing.get("value"))
+            and not _is_meaningful_header_val(val)
+        ):
+            return
+        target[k_up] = {
+            "value": val,
+            "unit": str(unit or "").strip(),
+            "descr": str(descr or "").strip(),
+        }
+
+    def _populate_from_df(df_hdr: pd.DataFrame) -> None:
+        for _, row in df_hdr.iterrows():
             sec = str(row.get("section", "Well")).strip().lower()
             k = str(row.get("mnemonic", "")).strip().upper()
             if not k:
                 continue
-            entry = {
-                "value": row.get("value"),
-                "unit": str(row.get("unit") or "").strip(),
-                "descr": str(row.get("descr") or "").strip(),
-            }
+            val = row.get("value")
+            unit = str(row.get("unit") or "").strip()
+            descr = str(row.get("descr") or "").strip()
             if "param" in sec:
-                param_items[k] = entry
+                _put_item(param_items, k, val, unit, descr)
             elif "curve" not in sec and "vers" not in sec:
-                well_items[k] = entry
-    elif isinstance(las_source, dict):
-        for k, v in las_source.items():
-            well_items[str(k).upper()] = (
-                v if isinstance(v, dict) else {"value": v, "unit": "", "descr": ""}
+                _put_item(well_items, k, val, unit, descr)
+
+    if isinstance(las_source, lasio.LASFile):
+        for item in getattr(las_source, "well", []):
+            _put_item(
+                well_items,
+                str(item.mnemonic),
+                item.value,
+                str(item.unit or ""),
+                str(item.descr or ""),
             )
+        for item in getattr(las_source, "params", []):
+            _put_item(
+                param_items,
+                str(item.mnemonic),
+                item.value,
+                str(item.unit or ""),
+                str(item.descr or ""),
+            )
+    elif isinstance(las_source, pd.DataFrame) and not las_source.empty:
+        _populate_from_df(las_source)
+    elif isinstance(las_source, dict):
+        # 1. Columnar DataFrame dict from header_df.to_dict()
+        if (
+            "mnemonic" in las_source
+            and "value" in las_source
+            and isinstance(las_source.get("mnemonic"), dict)
+            and isinstance(las_source.get("value"), dict)
+        ):
+            try:
+                df_reconstructed = pd.DataFrame(
+                    {
+                        col: las_source[col]
+                        for col in ("section", "mnemonic", "unit", "value", "descr")
+                        if col in las_source and isinstance(las_source[col], dict)
+                    }
+                )
+                _populate_from_df(df_reconstructed)
+            except Exception:
+                pass
+
+        # 2. Nested well_metadata / raw_well_header / raw_parameters
+        nested_meta = las_source.get("well_metadata")
+        if isinstance(nested_meta, dict):
+            direct_meta.update(nested_meta)
+            if isinstance(nested_meta.get("raw_well_header"), dict):
+                for rk, rv in nested_meta["raw_well_header"].items():
+                    _put_item(well_items, str(rk), rv)
+            if isinstance(nested_meta.get("raw_parameters"), dict):
+                for rk, rv in nested_meta["raw_parameters"].items():
+                    _put_item(param_items, str(rk), rv)
+
+        if isinstance(las_source.get("raw_well_header"), dict):
+            for rk, rv in las_source["raw_well_header"].items():
+                _put_item(well_items, str(rk), rv)
+        if isinstance(las_source.get("raw_parameters"), dict):
+            for rk, rv in las_source["raw_parameters"].items():
+                _put_item(param_items, str(rk), rv)
+
+        # 3. Direct key-value pairs on las_source
+        skip_top_keys = {
+            "section",
+            "mnemonic",
+            "unit",
+            "value",
+            "descr",
+            "well_metadata",
+            "raw_well_header",
+            "raw_parameters",
+        }
+        for k, v in las_source.items():
+            if str(k) in skip_top_keys:
+                continue
+            direct_meta[str(k)] = v
+            if isinstance(v, dict) and "value" in v:
+                _put_item(
+                    well_items,
+                    str(k),
+                    v.get("value"),
+                    str(v.get("unit") or ""),
+                    str(v.get("descr") or ""),
+                )
+            elif not isinstance(v, (dict, list)):
+                _put_item(well_items, str(k), v)
 
     combined = {**param_items, **well_items}
 
-    def _find_str(aliases: List[str]) -> Optional[str]:
+    def _find_str(aliases: List[str], disallow_zero: bool = False) -> Optional[str]:
         for a in aliases:
-            item = well_items.get(a) or param_items.get(a)
+            item = well_items.get(a.upper()) or param_items.get(a.upper())
             if item is not None:
                 v = item.get("value")
-                if v is not None and str(v).strip() != "" and str(v).strip().lower() != "none":
-                    return str(v).strip()
+                if _is_meaningful_header_val(v):
+                    s = re.split(r"\s{2,}:\s*", str(v).strip())[0].strip()
+                    if not _is_meaningful_header_val(s):
+                        continue
+                    if disallow_zero and s in ("0", "0.0", "00"):
+                        continue
+                    return s
+            # Also check direct_meta (case-insensitive)
+            dm_val = direct_meta.get(a) if a in direct_meta else direct_meta.get(a.lower())
+            if _is_meaningful_header_val(dm_val):
+                s = re.split(r"\s{2,}:\s*", str(dm_val).strip())[0].strip()
+                if not _is_meaningful_header_val(s):
+                    continue
+                if disallow_zero and s in ("0", "0.0", "00"):
+                    continue
+                return s
         return None
 
     def _find_float(aliases: List[str]) -> Tuple[Optional[float], Optional[str]]:
         for a in aliases:
-            item = well_items.get(a) or param_items.get(a)
+            item = well_items.get(a.upper()) or param_items.get(a.upper())
             if item is not None:
                 fval = _parse_float_safe(item.get("value"))
                 if fval is not None and fval not in SENTINEL_NULLS:
                     return fval, (item.get("unit") or None)
+            dm_val = direct_meta.get(a) if a in direct_meta else direct_meta.get(a.lower())
+            if dm_val is not None and not isinstance(dm_val, (dict, list)):
+                fval = _parse_float_safe(dm_val)
+                if fval is not None and fval not in SENTINEL_NULLS:
+                    return fval, None
         return None, None
 
     def _find_coord(aliases: List[str]) -> Optional[float]:
         for a in aliases:
-            item = well_items.get(a) or param_items.get(a)
+            item = well_items.get(a.upper()) or param_items.get(a.upper())
             if item is not None:
                 cval = _parse_coordinate_value(item.get("value"))
                 if cval is not None and cval not in SENTINEL_NULLS:
                     return cval
+            dm_val = direct_meta.get(a) if a in direct_meta else direct_meta.get(a.lower())
+            if dm_val is not None and not isinstance(dm_val, (dict, list)):
+                cval = _parse_coordinate_value(dm_val)
+                if cval is not None and cval not in SENTINEL_NULLS:
+                    return cval
         return None
 
-    raw_well_name = _find_str(["WELL", "WN", "WELL_NAME"]) or fallback_well_name
-    clean_well_name = str(raw_well_name).replace("/", "-").replace(" ", "-").strip() or fallback_well_name
-    raw_uwi = _find_str(["UWI", "API", "WELL_ID"])
+    raw_well_name = (
+        _find_str(
+            [
+                "WELL",
+                "WN",
+                "WELL_NAME",
+                "WELL-NAME",
+                "WELLNAME",
+                "HOLE_NAME",
+                "ORIGINALWELLNAME",
+                "LGWN",
+                "SHWN",
+            ]
+        )
+        or fallback_well_name
+    )
+    clean_well_name = (
+        str(raw_well_name).replace("/", "-").replace(" ", "-").strip()
+        or fallback_well_name
+    )
+    raw_uwi = _find_str(["UWI", "API", "WELL_ID", "UWID", "UWI_NO", "UNIQUE_WELL_ID"])
     clean_uwi = (
         str(raw_uwi).replace("/", "-").replace(" ", "-").strip()
         if raw_uwi
         else clean_well_name
     )
+    api_val = _find_str(["API", "APIN", "API_NO"])
+    lic_val = _find_str(["LIC", "LICENSE", "LICENCE", "PERMIT"])
 
-    kb_elev, kb_unit = _find_float(["KB", "EK", "EREF", "EKB", "RKB"])
-    df_elev, df_unit = _find_float(["DF", "EDF", "DFE"])
-    gl_elev, gl_unit = _find_float(["GL", "EGL", "GLE", "SEABED"])
-    water_depth, wd_unit = _find_float(["WD", "WDEP", "WATER_DEPTH"])
-    apd, apd_unit = _find_float(["EPD", "APD"])
+    kb_elev, kb_unit = _find_float(
+        ["KB", "EK", "EREF", "EKB", "RKB", "KB_ELEV", "KBE", "ELEV_KB", "kb_elevation"]
+    )
+    df_elev, df_unit = _find_float(
+        ["DF", "EDF", "DFE", "DF_ELEV", "ELEV_DF", "dfe_elevation"]
+    )
+    gl_elev, gl_unit = _find_float(
+        ["GL", "EGL", "GLE", "SEABED", "GL_ELEV", "ELEV_GL", "ground_elevation"]
+    )
+    water_depth, wd_unit = _find_float(
+        ["WD", "WDEP", "WATER_DEPTH", "WTRD", "SEA_DEPTH"]
+    )
+    apd, apd_unit = _find_float(["EPD", "APD", "ELZ"])
 
-    start_d, start_unit = _find_float(["STRT", "START"])
-    stop_d, _ = _find_float(["STOP"])
+    start_d, start_unit = _find_float(["STRT", "START", "START_DEPTH"])
+    stop_d, _ = _find_float(["STOP", "STOP_DEPTH"])
     step_d, _ = _find_float(["STEP"])
-    null_v, _ = _find_float(["NULL"])
+    null_v, _ = _find_float(["NULL", "NULL_VAL"])
     if null_v is None:
         raw_null = combined.get("NULL", {}).get("value")
         null_v = _parse_float_safe(raw_null) if raw_null is not None else -999.25
 
     datum_unit = (
-        kb_unit or df_unit or gl_unit or start_unit or "m"
+        kb_unit
+        or df_unit
+        or gl_unit
+        or start_unit
+        or _find_str(["datum_unit", "depth_unit"])
+        or "m"
     ).strip().lower()
     if datum_unit in ("ft", "f", "feet", "foot"):
         datum_unit = "ft"
     else:
         datum_unit = "m"
 
-    bht, bht_u = _find_float(["BHT", "BHWT", "BLI", "TEMP"])
-    bht_unit = bht_u or "degC"
-    surface_temp, _ = _find_float(["ST", "SUFT", "MST", "SURF_TEMP"])
-    bit_size, _ = _find_float(["BS", "BIT", "BITSIZE"])
-    rmf, _ = _find_float(["RMF"])
-    rmf_temp, _ = _find_float(["RMFT", "RMF_TEMP"])
-    rmc, _ = _find_float(["RMC"])
-    mud_density, _ = _find_float(["MW", "FD", "DFD", "MDEN", "MUD_WEIGHT"])
+    bht, bht_u = _find_float(["BHT", "BHWT", "BLI", "TEMP", "MAX_BHT", "BHTEMP"])
+    bht_unit = bht_u or _find_str(["bht_unit"]) or "degC"
+    surface_temp, _ = _find_float(
+        ["ST", "SUFT", "MST", "SURF_TEMP", "SURFACE_TEMP", "BHT_SURF"]
+    )
+    bit_size, _ = _find_float(["BS", "BIT", "BITSIZE", "BIT_SIZE"])
+    rmf, _ = _find_float(["RMF", "RMFS"])
+    rmf_temp, _ = _find_float(["RMFT", "RMF_TEMP", "RMFST"])
+    rmc, _ = _find_float(["RMC", "RMCS"])
+    mud_density, _ = _find_float(
+        ["MW", "FD", "DFD", "MDEN", "MUD_WEIGHT", "MUD_DENSITY", "MUDW", "MUDD"]
+    )
+
+    lat_aliases = ["LATI", "LAT", "LATITUDE", "SURF_LAT", "SLAT", "Y_LAT"]
+    lon_aliases = [
+        "LONG",
+        "LON",
+        "LONGITUDE",
+        "LNG",
+        "SURF_LON",
+        "SURF_LONG",
+        "SLON",
+        "X_LON",
+    ]
+    lat_val = _find_coord(lat_aliases)
+    lon_val = _find_coord(lon_aliases)
+    lat_raw = _find_str(lat_aliases)
+    lon_raw = _find_str(lon_aliases)
+
+    ns_hemi = _find_str(["NS", "LAT_NS"])
+    if lat_val is not None and ns_hemi and ns_hemi.strip().upper().startswith("S"):
+        lat_val = -abs(lat_val)
+    ew_hemi = _find_str(["EW", "LON_EW", "LONG_EW"])
+    if lon_val is not None and ew_hemi and ew_hemi.strip().upper().startswith("W"):
+        lon_val = -abs(lon_val)
+
+    county_val = _find_str(["CNTY", "COUNTY"])
+    state_val = _find_str(["STAT", "STATE"])
+    province_val = (
+        _find_str(["PROV", "PROVINCE", "BLOCK", "DISTRICT", "REGION"])
+        or state_val
+        or county_val
+    )
 
     meta = WellHeaderMetadata(
         uwi=clean_uwi,
         well_name=clean_well_name,
-        field=_find_str(["FLD", "FIELD", "FN"]),
-        company=_find_str(["COMP", "COMPANY", "OPERATOR", "CN"]),
-        country=_find_str(["CTRY", "COUNTRY", "NATI"]),
-        spud_date=_find_str(["SPUD", "SPUD_DATE"]),
-        log_date=_find_str(["DATE", "LOG_DATE"]),
-        latitude=_find_coord(["LATI", "LAT", "LATITUDE"]),
-        longitude=_find_coord(["LONG", "LON", "LONGITUDE"]),
-        x_coord=_find_coord(["X", "XCOORD", "EASTING", "LOC_X"]),
-        y_coord=_find_coord(["Y", "YCOORD", "NORTHING", "LOC_Y"]),
-        crs=_find_str(["GDAT", "HZCS", "CRS", "PDAT"]),
+        field=_find_str(["FLD", "FIELD", "FN", "FIELD_NAME", "FIELD-NAME", "FIELDNAME"]),
+        company=_find_str(
+            ["COMP", "COMPANY", "OPERATOR", "OPER", "CN", "COMPANY_NAME"]
+        ),
+        service_company=_find_str(
+            [
+                "SRVC",
+                "SERVICE",
+                "SERVICE_COMPANY",
+                "SRV",
+                "LOGGING_COMPANY",
+                "PRODUCER-NAME",
+                "PRODUCER_NAME",
+            ]
+        ),
+        country=_find_str(["CTRY", "COUNTRY", "NATI", "NATION"]),
+        province=province_val,
+        county=county_val,
+        state=state_val,
+        location=_find_str(["LOC", "LOCATION", "SURF_LOC", "SURFACE_LOCATION"]),
+        api=api_val,
+        license=lic_val,
+        spud_date=_find_str(
+            ["SPUD", "SPUD_DATE", "SPUD-DATE", "SPDA"], disallow_zero=True
+        ),
+        log_date=_find_str(
+            [
+                "DATE",
+                "LOG_DATE",
+                "LOG-DATE",
+                "DATT",
+                "DATF",
+                "SERVICE_DATE",
+                "CREATION-TIME",
+                "CREA",
+                "RUN_DATE",
+            ],
+            disallow_zero=True,
+        ),
+        latitude=lat_val,
+        longitude=lon_val,
+        latitude_raw=lat_raw,
+        longitude_raw=lon_raw,
+        x_coord=_find_coord(
+            [
+                "X",
+                "XCOORD",
+                "X_COORD",
+                "EASTING",
+                "EAST",
+                "LOC_X",
+                "SURF_X",
+                "UTMX",
+                "XWELL",
+            ]
+        ),
+        y_coord=_find_coord(
+            [
+                "Y",
+                "YCOORD",
+                "Y_COORD",
+                "NORTHING",
+                "NORTH",
+                "LOC_Y",
+                "SURF_Y",
+                "UTMY",
+                "YWELL",
+            ]
+        ),
+        crs=_find_str(
+            [
+                "GDAT",
+                "HZCS",
+                "CRS",
+                "PDAT",
+                "PD",
+                "DATUM",
+                "GEODETIC_DATUM",
+                "PROJECTION",
+                "UTM_ZONE",
+                "ZONE_UTM",
+            ]
+        ),
         kb_elev=kb_elev,
         df_elev=df_elev,
         gl_elev=gl_elev,
@@ -1032,8 +1336,20 @@ def extract_las_metadata(
         rmc=rmc,
         mud_density=mud_density,
         mud_weight=mud_density,
-        raw_well_header=_sanitize_json_value({k: v.get("value") for k, v in well_items.items()}),
-        raw_parameters=_sanitize_json_value({k: v.get("value") for k, v in param_items.items()}),
+        raw_well_header=_sanitize_json_value(
+            {
+                k: v.get("value")
+                for k, v in well_items.items()
+                if _is_meaningful_header_val(v.get("value"))
+            }
+        ),
+        raw_parameters=_sanitize_json_value(
+            {
+                k: v.get("value")
+                for k, v in param_items.items()
+                if _is_meaningful_header_val(v.get("value"))
+            }
+        ),
     )
     out_d = _sanitize_json_value(meta.model_dump())
     out_d["depth_unit"] = out_d.get("datum_unit", "m")
@@ -1803,6 +2119,10 @@ def inspect_dlis(
                     raw_origin["FLD"] = str(origin.field_name).strip()
                 if getattr(origin, "company", None):
                     raw_origin["COMP"] = str(origin.company).strip()
+                if getattr(origin, "producer_name", None):
+                    raw_origin["SRVC"] = str(origin.producer_name).strip()
+                if getattr(origin, "creation_time", None):
+                    raw_origin["DATE"] = str(origin.creation_time).strip()
 
             # Extract PARAMETER objects
             for param in getattr(lf, "parameters", []):
@@ -1814,7 +2134,13 @@ def inspect_dlis(
                 if val is not None:
                     if isinstance(val, (np.generic, np.ndarray)):
                         val = val.item() if val.ndim == 0 else str(val.tolist())
-                    raw_params[p_name] = val
+                    p_unit = str(getattr(param, "units", "") or "").strip()
+                    p_descr = str(getattr(param, "long_name", "") or "").strip()
+                    raw_params[p_name] = {
+                        "value": val,
+                        "unit": p_unit,
+                        "descr": p_descr,
+                    }
 
             # Iterate over Frames
             for fr in getattr(lf, "frames", []):
@@ -1931,7 +2257,17 @@ def inspect_dlis(
                 best_idx = idx
         frames_info[best_idx].selected = True
 
-    combined_header = _sanitize_json_value({**raw_params, **raw_origin})
+    combined_header = _sanitize_json_value(
+        {
+            **raw_params,
+            **raw_origin,
+            "raw_well_header": raw_origin,
+            "raw_parameters": {
+                k: (v.get("value") if isinstance(v, dict) else v)
+                for k, v in raw_params.items()
+            },
+        }
+    )
     fallback_stem = Path(filename).stem if filename else p.stem
     well_meta_dict = extract_las_metadata(combined_header, fallback_well_name=fallback_stem)
     if frames_info:

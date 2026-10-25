@@ -373,6 +373,26 @@
 													<span class="text-[11px] text-[var(--text-secondary)]">
 														Well: <strong>{fileItem.metadata.well_name}</strong> (UWI: {fileItem.metadata.uwi})
 													</span>
+													{#if fileItem.metadata.company}
+														<span class="rounded-xs bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-800">
+															{fileItem.metadata.company}
+														</span>
+													{/if}
+													{#if fileItem.metadata.field}
+														<span class="rounded-xs bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-800">
+															Field: {fileItem.metadata.field}
+														</span>
+													{/if}
+													{#if fileItem.metadata.country}
+														<span class="rounded-xs bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
+															{fileItem.metadata.country}
+														</span>
+													{/if}
+													{#if fileItem.metadata.latitude != null && fileItem.metadata.longitude != null}
+														<span class="font-mono text-[10px] text-[var(--text-secondary)]">
+															({Number(fileItem.metadata.latitude).toFixed(5)}°, {Number(fileItem.metadata.longitude).toFixed(5)}°)
+														</span>
+													{/if}
 													<span class="text-[11px] text-[var(--text-muted)]">
 														Depth: {fileItem.metadata.start_depth ?? '?'} – {fileItem.metadata.stop_depth ?? '?'} {fileItem.metadata.datum_unit || 'm'}
 														(step: {fileItem.metadata.step ?? '?'})
@@ -415,78 +435,232 @@
 
 												<!-- Editable Well Header Metadata Grid -->
 												{#if fileItem.metadata}
-													<div class="grid grid-cols-4 gap-2 text-[11px]">
-														<label class="flex flex-col gap-0.5">
-															<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Well Name</span>
-															<input
-																type="text"
-																bind:value={fileItem.metadata.well_name}
-																class="h-6 rounded-xs border border-[var(--border-hairline)] px-1.5"
-															/>
-														</label>
-														<label class="flex flex-col gap-0.5">
-															<span class="text-[10px] font-semibold text-[var(--text-secondary)]">UWI</span>
-															<input
-																type="text"
-																bind:value={fileItem.metadata.uwi}
-																class="h-6 rounded-xs border border-[var(--border-hairline)] px-1.5"
-															/>
-														</label>
-														<label class="flex flex-col gap-0.5">
-															<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Depth Unit</span>
-															<select
-																bind:value={fileItem.metadata.datum_unit}
-																class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
-															>
-																<option value="m">m (Meters)</option>
-																<option value="ft">ft (Feet → Auto-Convert to m)</option>
-															</select>
-														</label>
-														<label class="flex flex-col gap-0.5">
-															<span class="text-[10px] font-semibold text-[var(--text-secondary)]">KB Elevation (m)</span>
-															<input
-																type="number"
-																step="0.1"
-																bind:value={fileItem.metadata.kb_elev}
-																class="h-6 rounded-xs border border-[var(--border-hairline)] px-1.5"
-															/>
-														</label>
-														<label class="flex flex-col gap-0.5">
-															<span class="text-[10px] font-semibold text-[var(--text-secondary)]">GL / Mudline Elev (m)</span>
-															<input
-																type="number"
-																step="0.1"
-																bind:value={fileItem.metadata.gl_elev}
-																class="h-6 rounded-xs border border-[var(--border-hairline)] px-1.5"
-															/>
-														</label>
-														<label class="flex flex-col gap-0.5">
-															<span class="text-[10px] font-semibold text-[var(--text-secondary)]">BHT ({fileItem.metadata.bht_unit || 'degC'})</span>
-															<input
-																type="number"
-																step="0.1"
-																bind:value={fileItem.metadata.bht}
-																class="h-6 rounded-xs border border-[var(--border-hairline)] px-1.5"
-															/>
-														</label>
-														<label class="flex flex-col gap-0.5">
-															<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Rmf (ohm.m)</span>
-															<input
-																type="number"
-																step="0.001"
-																bind:value={fileItem.metadata.rmf}
-																class="h-6 rounded-xs border border-[var(--border-hairline)] px-1.5"
-															/>
-														</label>
-														<label class="flex flex-col gap-0.5">
-															<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Field / Operator</span>
-															<input
-																type="text"
-																bind:value={fileItem.metadata.field}
-																placeholder="Field"
-																class="h-6 rounded-xs border border-[var(--border-hairline)] px-1.5"
-															/>
-														</label>
+													<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 space-y-2">
+														<div class="flex items-center justify-between border-b border-[var(--border-hairline)] pb-1">
+															<span class="text-[10.5px] font-bold uppercase tracking-wide text-[var(--text-secondary)]">
+																Captured Well Header Metadata (~Well &amp; ~Parameter)
+															</span>
+															{#if fileItem.metadata.crs}
+																<span class="rounded-xs bg-slate-200 px-1.5 py-0.5 font-mono text-[9.5px] text-[var(--text-secondary)]">
+																	CRS/Datum: {fileItem.metadata.crs}
+																</span>
+															{/if}
+														</div>
+														<div class="grid grid-cols-4 gap-2 text-[11px]">
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Well Name</span>
+																<input
+																	type="text"
+																	bind:value={fileItem.metadata.well_name}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">UWI / API</span>
+																<input
+																	type="text"
+																	bind:value={fileItem.metadata.uwi}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Company / Operator</span>
+																<input
+																	type="text"
+																	bind:value={fileItem.metadata.company}
+																	placeholder="Company / Operator"
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Field</span>
+																<input
+																	type="text"
+																	bind:value={fileItem.metadata.field}
+																	placeholder="Field"
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
+																/>
+															</label>
+
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Country</span>
+																<input
+																	type="text"
+																	bind:value={fileItem.metadata.country}
+																	placeholder="Country"
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Location / Block</span>
+																<input
+																	type="text"
+																	bind:value={fileItem.metadata.location}
+																	placeholder={fileItem.metadata.province || 'Location'}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Province / State</span>
+																<input
+																	type="text"
+																	bind:value={fileItem.metadata.province}
+																	placeholder="Province / State"
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Service Company</span>
+																<input
+																	type="text"
+																	bind:value={fileItem.metadata.service_company}
+																	placeholder="Service Co."
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
+																/>
+															</label>
+
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">
+																	Latitude (°)
+																	{#if fileItem.metadata.latitude_raw}
+																		<span class="font-normal text-[9px] text-[var(--text-muted)]">({fileItem.metadata.latitude_raw})</span>
+																	{/if}
+																</span>
+																<input
+																	type="number"
+																	step="0.000001"
+																	bind:value={fileItem.metadata.latitude}
+																	placeholder="Decimal deg"
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">
+																	Longitude (°)
+																	{#if fileItem.metadata.longitude_raw}
+																		<span class="font-normal text-[9px] text-[var(--text-muted)]">({fileItem.metadata.longitude_raw})</span>
+																	{/if}
+																</span>
+																<input
+																	type="number"
+																	step="0.000001"
+																	bind:value={fileItem.metadata.longitude}
+																	placeholder="Decimal deg"
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">X / Easting</span>
+																<input
+																	type="number"
+																	step="0.01"
+																	bind:value={fileItem.metadata.x_coord}
+																	placeholder="X Coord"
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Y / Northing</span>
+																<input
+																	type="number"
+																	step="0.01"
+																	bind:value={fileItem.metadata.y_coord}
+																	placeholder="Y Coord"
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
+
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Depth Unit</span>
+																<select
+																	bind:value={fileItem.metadata.datum_unit}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
+																>
+																	<option value="m">m (Meters)</option>
+																	<option value="ft">ft (Feet → Auto-Convert to m)</option>
+																</select>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">KB Elevation ({fileItem.metadata.datum_unit || 'm'})</span>
+																<input
+																	type="number"
+																	step="0.1"
+																	bind:value={fileItem.metadata.kb_elev}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">DF Elevation ({fileItem.metadata.datum_unit || 'm'})</span>
+																<input
+																	type="number"
+																	step="0.1"
+																	bind:value={fileItem.metadata.df_elev}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">GL / Seabed Elev ({fileItem.metadata.datum_unit || 'm'})</span>
+																<input
+																	type="number"
+																	step="0.1"
+																	bind:value={fileItem.metadata.gl_elev}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
+
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Log Date</span>
+																<input
+																	type="text"
+																	bind:value={fileItem.metadata.log_date}
+																	placeholder={fileItem.metadata.spud_date || 'Log Date'}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">BHT ({fileItem.metadata.bht_unit || 'degC'})</span>
+																<input
+																	type="number"
+																	step="0.1"
+																	bind:value={fileItem.metadata.bht}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Bit Size (in)</span>
+																<input
+																	type="number"
+																	step="0.125"
+																	bind:value={fileItem.metadata.bit_size}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Rmf (ohm.m)</span>
+																<input
+																	type="number"
+																	step="0.001"
+																	bind:value={fileItem.metadata.rmf}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
+														</div>
+
+														{#if (fileItem.metadata.raw_well_header && Object.keys(fileItem.metadata.raw_well_header).length > 0) || (fileItem.metadata.raw_parameters && Object.keys(fileItem.metadata.raw_parameters).length > 0)}
+															<details class="text-[10.5px] text-[var(--text-secondary)]">
+																<summary class="cursor-pointer font-semibold hover:text-[var(--text-primary)]">
+																	View Raw LAS/DLIS Header Tags ({Object.keys(fileItem.metadata.raw_well_header || {}).length} ~Well, {Object.keys(fileItem.metadata.raw_parameters || {}).length} ~Parameter)
+																</summary>
+																<div class="mt-1.5 grid max-h-36 grid-cols-3 gap-x-3 gap-y-1 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-white p-2 font-mono text-[10px]">
+																	{#each Object.entries({ ...(fileItem.metadata.raw_well_header || {}), ...(fileItem.metadata.raw_parameters || {}) }) as [rk, rv]}
+																		<div class="truncate" title={`${rk}: ${rv}`}>
+																			<span class="font-semibold text-[var(--text-secondary)]">{rk}:</span>
+																			<span class="text-[var(--text-primary)]">{rv ?? '—'}</span>
+																		</div>
+																	{/each}
+																</div>
+															</details>
+														{/if}
 													</div>
 												{/if}
 

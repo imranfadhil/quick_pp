@@ -32,12 +32,21 @@ class WellHeaderMetadata(BaseModel):
     well_name: str = "UNKNOWN_WELL"
     field: Optional[str] = None
     company: Optional[str] = None
+    service_company: Optional[str] = None
     country: Optional[str] = None
+    province: Optional[str] = None
+    county: Optional[str] = None
+    state: Optional[str] = None
+    location: Optional[str] = None
+    api: Optional[str] = None
+    license: Optional[str] = None
     spud_date: Optional[str] = None
     log_date: Optional[str] = None
     # Coordinates & Datum
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    latitude_raw: Optional[str] = None
+    longitude_raw: Optional[str] = None
     x_coord: Optional[float] = None
     y_coord: Optional[float] = None
     crs: Optional[str] = None
@@ -84,6 +93,8 @@ class WellHeaderMetadata(BaseModel):
             d["df_elev"] = d["dfe_elevation"]
         if "field_name" in d and d.get("field") is None:
             d["field"] = d["field_name"]
+        if "operator" in d and d.get("company") is None:
+            d["company"] = d["operator"]
         if "depth_unit" in d and not d.get("datum_unit"):
             d["datum_unit"] = d["depth_unit"]
         return d

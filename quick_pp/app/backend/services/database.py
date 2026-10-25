@@ -39,6 +39,7 @@ _cache_ttl = 300  # 5 minutes
 _cache_max_entries = 50
 MAX_DEMO_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB cap per file in demo mode
 _ephemeral_wells: Dict[int, Dict[str, pd.DataFrame]] = {}
+_ephemeral_well_headers: Dict[tuple[int, str], Dict[str, Any]] = {}
 _demo_project_overrides: Dict[int, Dict[str, Any]] = {}
 _demo_deleted_projects: set[int] = set()
 _demo_well_renames: Dict[int, Dict[str, str]] = {}
@@ -63,11 +64,14 @@ def reset_demo_project_state(project_id: Optional[int] = None) -> None:
         _demo_deleted_projects.discard(project_id)
         _demo_well_renames.pop(project_id, None)
         _demo_deleted_wells.pop(project_id, None)
+        for k in [k for k in _ephemeral_well_headers if k[0] == project_id]:
+            _ephemeral_well_headers.pop(k, None)
     else:
         _demo_project_overrides.clear()
         _demo_deleted_projects.clear()
         _demo_well_renames.clear()
         _demo_deleted_wells.clear()
+        _ephemeral_well_headers.clear()
 
 
 def invalidate_well_cache(
@@ -897,6 +901,7 @@ def project_read_las(
             proj = db_objects.Project.load(session, project_id=project_id)
             if is_demo_mode():
                 import lasio
+                from quick_pp.las_handler import extract_las_metadata
 
                 proj_eph = _ephemeral_wells.setdefault(project_id, {})
                 for p in saved_paths:
@@ -905,16 +910,14 @@ def project_read_las(
                     ldf.columns = [str(c).upper() for c in ldf.columns]
                     if "DEPT" in ldf.columns and "DEPTH" not in ldf.columns:
                         ldf = ldf.rename(columns={"DEPT": "DEPTH"})
-                    w_name = (
-                        str(
-                            getattr(las.well, "WELL", None).value
-                            if hasattr(las.well, "WELL")
-                            else Path(p).stem.split("_", 1)[-1]
-                        ).strip()
-                        or Path(p).stem
+                    fallback_stem = Path(p).stem.split("_", 1)[-1] or Path(p).stem
+                    meta_d = dict(
+                        extract_las_metadata(las, fallback_well_name=fallback_stem)
                     )
+                    w_name = str(meta_d.get("well_name") or fallback_stem).strip()
                     ldf["WELL_NAME"] = w_name
                     proj_eph[w_name] = ldf
+                    _ephemeral_well_headers[(project_id, w_name)] = meta_d
                     _merged_data_cache[f"{project_id}_{w_name}_0.16"] = (
                         time.time(),
                         ldf.copy(),

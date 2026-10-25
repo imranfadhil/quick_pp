@@ -507,6 +507,81 @@
 	let tempGrad = $state(1.5);
 	let salinityPpm = $state(30000.0);
 
+	// Well Header & Metadata Editor state
+	let editingWellHeader = $state(false);
+	let savingWellHeader = $state(false);
+	let headerDraft = $state<Record<string, any>>({});
+
+	let lastSyncedWellGen = -1;
+	$effect(() => {
+		const gen = wellData.wellLoadGeneration;
+		const hdr = wellData.header || {};
+		if (gen !== lastSyncedWellGen && Object.keys(hdr).length > 0) {
+			lastSyncedWellGen = gen;
+			editingWellHeader = false;
+			if (typeof hdr.bit_size === 'number' && Number.isFinite(hdr.bit_size) && hdr.bit_size > 0) {
+				bitsizeDefault = hdr.bit_size;
+			}
+			if (
+				typeof hdr.mud_density === 'number' &&
+				Number.isFinite(hdr.mud_density) &&
+				hdr.mud_density > 0
+			) {
+				mudWeight = hdr.mud_density;
+			}
+			if (
+				typeof hdr.surface_temp === 'number' &&
+				Number.isFinite(hdr.surface_temp) &&
+				hdr.surface_temp > 0
+			) {
+				surfaceTemp = hdr.surface_temp;
+			}
+		}
+	});
+
+	function openHeaderEditor() {
+		const h = wellData.header || {};
+		headerDraft = {
+			uwi: h.uwi ?? workbench.wellId ?? '',
+			company: h.company ?? '',
+			field: h.field ?? '',
+			country: h.country ?? '',
+			location: h.location ?? '',
+			province: h.province ?? '',
+			service_company: h.service_company ?? '',
+			log_date: h.log_date ?? '',
+			spud_date: h.spud_date ?? '',
+			latitude: h.latitude ?? null,
+			longitude: h.longitude ?? null,
+			x_coord: h.x_coord ?? null,
+			y_coord: h.y_coord ?? null,
+			crs: h.crs ?? '',
+			datum_unit: h.datum_unit || 'm',
+			kb_elev: h.kb_elev ?? null,
+			df_elev: h.df_elev ?? null,
+			gl_elev: h.gl_elev ?? null,
+			water_depth: h.water_depth ?? null,
+			bht: h.bht ?? null,
+			bht_unit: h.bht_unit || 'degC',
+			bit_size: h.bit_size ?? null,
+			rmf: h.rmf ?? null,
+			mud_density: h.mud_density ?? null
+		};
+		editingWellHeader = true;
+	}
+
+	async function saveHeaderDraft() {
+		savingWellHeader = true;
+		try {
+			await wellData.saveWellHeader(headerDraft, true);
+			editingWellHeader = false;
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Failed to save well header';
+		} finally {
+			savingWellHeader = false;
+		}
+	}
+
 	// Badhole Flagging diagnostics summary
 	let badholeSummary = $state<{
 		total_samples: number;
@@ -645,6 +720,298 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<ParameterSection
+			title="Well Header & Metadata"
+			badge={wellData.header?.uwi ? `UWI: ${wellData.header.uwi}` : (workbench.wellId ?? '')}
+		>
+			{@const hdr = wellData.header || {}}
+			{@const dUnit = hdr.datum_unit || 'm'}
+			<div class="mb-1.5 flex flex-wrap items-center justify-between gap-1">
+				<div class="flex flex-wrap items-center gap-1 text-[10px]">
+					{#if hdr.company}
+						<span class="rounded-xs bg-blue-50 px-1.5 py-0.5 font-semibold text-blue-800">
+							{hdr.company}
+						</span>
+					{/if}
+					{#if hdr.field}
+						<span class="rounded-xs bg-indigo-50 px-1.5 py-0.5 font-semibold text-indigo-800">
+							{hdr.field}
+						</span>
+					{/if}
+					{#if hdr.country}
+						<span class="rounded-xs bg-emerald-50 px-1.5 py-0.5 font-semibold text-emerald-800">
+							{hdr.country}
+						</span>
+					{/if}
+					{#if hdr.crs}
+						<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 font-mono text-[9.5px] text-[var(--text-secondary)]">
+							CRS: {hdr.crs}
+						</span>
+					{/if}
+				</div>
+				<button
+					type="button"
+					onclick={() => (editingWellHeader ? (editingWellHeader = false) : openHeaderEditor())}
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-200 hover:text-[var(--text-primary)]"
+				>
+					{editingWellHeader ? 'Cancel' : 'Edit Header'}
+				</button>
+			</div>
+
+			{#if !editingWellHeader}
+				<div class="grid grid-cols-2 gap-1.5 text-[10.5px]">
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Well Name / UWI</div>
+						<div class="truncate font-semibold text-[var(--text-primary)]" title={`${hdr.well_name || workbench.wellId || '—'} (${hdr.uwi || '—'})`}>
+							{hdr.well_name || workbench.wellId || '—'}
+							<span class="font-mono text-[10px] font-normal text-[var(--text-secondary)]">
+								({hdr.uwi || hdr.api || '—'})
+							</span>
+						</div>
+					</div>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Company / Operator</div>
+						<div class="truncate font-semibold text-[var(--text-primary)]" title={hdr.company || '—'}>
+							{hdr.company || '—'}
+						</div>
+					</div>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Field / Block</div>
+						<div class="truncate font-semibold text-[var(--text-primary)]" title={`${hdr.field || '—'}${hdr.location ? ` • ${hdr.location}` : ''}`}>
+							{hdr.field || '—'}{hdr.location ? ` • ${hdr.location}` : ''}
+						</div>
+					</div>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Country / Province</div>
+						<div class="truncate font-semibold text-[var(--text-primary)]" title={`${hdr.country || '—'}${hdr.province ? ` (${hdr.province})` : ''}`}>
+							{hdr.country || '—'}{hdr.province ? ` (${hdr.province})` : ''}
+						</div>
+					</div>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Latitude</div>
+						<div class="mono-num truncate font-semibold text-[var(--text-primary)]" title={hdr.latitude_raw || String(hdr.latitude ?? '—')}>
+							{hdr.latitude != null ? `${Number(hdr.latitude).toFixed(6)}°` : '—'}
+							{#if hdr.latitude_raw && hdr.latitude_raw !== String(hdr.latitude)}
+								<span class="text-[9.5px] font-normal text-[var(--text-muted)]">({hdr.latitude_raw})</span>
+							{/if}
+						</div>
+					</div>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Longitude</div>
+						<div class="mono-num truncate font-semibold text-[var(--text-primary)]" title={hdr.longitude_raw || String(hdr.longitude ?? '—')}>
+							{hdr.longitude != null ? `${Number(hdr.longitude).toFixed(6)}°` : '—'}
+							{#if hdr.longitude_raw && hdr.longitude_raw !== String(hdr.longitude)}
+								<span class="text-[9.5px] font-normal text-[var(--text-muted)]">({hdr.longitude_raw})</span>
+							{/if}
+						</div>
+					</div>
+					{#if hdr.x_coord != null || hdr.y_coord != null}
+						<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+							<div class="text-[9.5px] text-[var(--text-muted)]">X / Easting</div>
+							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+								{hdr.x_coord != null ? fmtNum(hdr.x_coord, 2) : '—'}
+							</div>
+						</div>
+						<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+							<div class="text-[9.5px] text-[var(--text-muted)]">Y / Northing</div>
+							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+								{hdr.y_coord != null ? fmtNum(hdr.y_coord, 2) : '—'}
+							</div>
+						</div>
+					{/if}
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">KB / DF Elevation</div>
+						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+							KB: {hdr.kb_elev != null ? `${hdr.kb_elev} ${dUnit}` : '—'}
+							{#if hdr.df_elev != null}
+								• DF: {hdr.df_elev} {dUnit}
+							{/if}
+						</div>
+					</div>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">GL / Water Depth</div>
+						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+							GL: {hdr.gl_elev != null ? `${hdr.gl_elev} ${dUnit}` : '—'}
+							{#if hdr.water_depth != null}
+								• WD: {hdr.water_depth} {dUnit}
+							{/if}
+						</div>
+					</div>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Service Co. / Date</div>
+						<div class="truncate font-semibold text-[var(--text-primary)]" title={`${hdr.service_company || '—'} • ${hdr.log_date || hdr.spud_date || '—'}`}>
+							{hdr.service_company || '—'}
+							{#if hdr.log_date || hdr.spud_date}
+								<span class="font-normal text-[var(--text-secondary)]">• {hdr.log_date || hdr.spud_date}</span>
+							{/if}
+						</div>
+					</div>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">BHT / Bit Size / Rmf</div>
+						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+							{hdr.bht != null ? `${hdr.bht}°` : '—'} • {hdr.bit_size != null ? `${hdr.bit_size}"` : '—'} • {hdr.rmf != null ? `${hdr.rmf} Ωm` : '—'}
+						</div>
+					</div>
+				</div>
+
+				{#if (hdr.raw_well_header && Object.keys(hdr.raw_well_header).length > 0) || (hdr.raw_parameters && Object.keys(hdr.raw_parameters).length > 0)}
+					<details class="mt-1.5 text-[10px] text-[var(--text-secondary)]">
+						<summary class="cursor-pointer font-semibold hover:text-[var(--text-primary)]">
+							Raw LAS/DLIS Header Tags ({Object.keys(hdr.raw_well_header || {}).length} ~Well, {Object.keys(hdr.raw_parameters || {}).length} ~Parameter)
+						</summary>
+						<div class="mt-1 grid max-h-40 grid-cols-2 gap-x-2 gap-y-0.5 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 font-mono text-[9.5px]">
+							{#each Object.entries({ ...(hdr.raw_well_header || {}), ...(hdr.raw_parameters || {}) }) as [rk, rv]}
+								<div class="truncate" title={`${rk}: ${rv}`}>
+									<span class="font-semibold text-[var(--text-secondary)]">{rk}:</span>
+									<span class="text-[var(--text-primary)]">{rv ?? '—'}</span>
+								</div>
+							{/each}
+						</div>
+					</details>
+				{/if}
+			{:else}
+				<div class="space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 text-[10.5px]">
+					<div class="grid grid-cols-2 gap-1.5">
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">UWI / API</span>
+							<input
+								type="text"
+								bind:value={headerDraft.uwi}
+								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Company / Operator</span>
+							<input
+								type="text"
+								bind:value={headerDraft.company}
+								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Field</span>
+							<input
+								type="text"
+								bind:value={headerDraft.field}
+								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Country</span>
+							<input
+								type="text"
+								bind:value={headerDraft.country}
+								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Location / Block</span>
+							<input
+								type="text"
+								bind:value={headerDraft.location}
+								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Province / State</span>
+							<input
+								type="text"
+								bind:value={headerDraft.province}
+								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Latitude (°)</span>
+							<input
+								type="number"
+								step="0.000001"
+								bind:value={headerDraft.latitude}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Longitude (°)</span>
+							<input
+								type="number"
+								step="0.000001"
+								bind:value={headerDraft.longitude}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">KB Elevation ({headerDraft.datum_unit || 'm'})</span>
+							<input
+								type="number"
+								step="0.1"
+								bind:value={headerDraft.kb_elev}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">GL / Seabed Elev ({headerDraft.datum_unit || 'm'})</span>
+							<input
+								type="number"
+								step="0.1"
+								bind:value={headerDraft.gl_elev}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Service Company</span>
+							<input
+								type="text"
+								bind:value={headerDraft.service_company}
+								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Log Date</span>
+							<input
+								type="text"
+								bind:value={headerDraft.log_date}
+								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">BHT ({headerDraft.bht_unit || 'degC'})</span>
+							<input
+								type="number"
+								step="0.1"
+								bind:value={headerDraft.bht}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Bit Size (in)</span>
+							<input
+								type="number"
+								step="0.125"
+								bind:value={headerDraft.bit_size}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+					</div>
+					<div class="flex justify-end gap-1.5 pt-1">
+						<button
+							type="button"
+							onclick={() => (editingWellHeader = false)}
+							class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[10.5px] font-medium text-[var(--text-secondary)]"
+						>
+							Cancel
+						</button>
+						<button
+							type="button"
+							disabled={savingWellHeader}
+							onclick={saveHeaderDraft}
+							class="h-6 rounded-xs bg-[var(--accent-primary)] px-2.5 text-[10.5px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+						>
+							{savingWellHeader ? 'Saving...' : 'Save Header'}
+						</button>
+					</div>
+				</div>
+			{/if}
+		</ParameterSection>
+
 		<ParameterSection
 			title="Working Depth Interval (Well Focus)"
 			badge={`${wellData.visibleIndices.length} / ${wellData.totalDepthRows} rows`}

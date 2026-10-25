@@ -421,3 +421,103 @@ TNPH.%      : Thermal Neutron Porosity
     res_scal_commit = client.post("/api/v1/import/ancillary/commit", json=scal_commit_payload)
     assert res_scal_commit.status_code == 200
     assert res_scal_commit.json()["total_committed"] == 5
+
+
+def test_well_header_dms_coords_and_bundle_metadata():
+    res_proj = client.post("/quick_pp/database/projects", json={"name": "HeaderMetadataTestProj"})
+    assert res_proj.status_code == 200
+    pid = res_proj.json()["project_id"]
+
+    las_bytes = """~Version
+VERS. 2.0 : CWLS LOG ASCII STANDARD
+WRAP. NO  : ONE LINE PER DEPTH STEP
+~Well
+STRT.FT 100.0 : START DEPTH
+STOP.FT 101.0 : STOP DEPTH
+STEP.FT 0.5   : STEP
+NULL.  -999.25: NULL VALUE
+COMP.         : EMPTY COMPANY PLACEHOLDER
+OPER.  PHILLIPS PETROLEUM : OPERATOR
+WELL.  30/7a-1-TEST : WELL
+UWI .  1231-TEST    : UWI
+FLD .  JOANNE       : FIELD
+LOC .  CENTRAL NORTH SEA : LOCATION
+PROV.  UKCS         : PROVINCE
+CTRY.  UK           : COUNTRY
+CTRY.               : DUPLICATE EMPTY COUNTRY SHOULD NOT OVERWRITE
+SRVC.  ATLAS        : SERVICE COMPANY
+DATE.  06-JAN-1981  : LOG DATE
+LATI.  56 41 57.80 N: LATITUDE SPACE SEPARATED DMS
+LONG.  02 15 23.30 E: LONGITUDE SPACE SEPARATED DMS
+GDAT.  MSL          : GEODETIC DATUM
+EKB .FT 99.0        : KB ELEVATION
+EDF .FT 98.0        : DF ELEVATION
+EGL .FT -255.0      : GL ELEVATION
+~Curve
+DEPT.FT : Depth
+GR  .GAPI : Gamma Ray
+~Ascii
+100.0  45.0
+100.5  50.0
+101.0  55.0
+""".encode("utf-8")
+
+    res_inspect = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("30-7a-1-TEST.las", las_bytes, "text/plain"))],
+    )
+    assert res_inspect.status_code == 200
+    f_info = res_inspect.json()["files"][0]
+    meta = f_info["metadata"]
+    assert meta["company"] == "PHILLIPS PETROLEUM"
+    assert meta["country"] == "UK"
+    assert meta["field"] == "JOANNE"
+    assert meta["service_company"] == "ATLAS"
+    assert meta["location"] == "CENTRAL NORTH SEA"
+    assert meta["province"] == "UKCS"
+    assert meta["log_date"] == "06-JAN-1981"
+    assert np.isclose(meta["latitude"], 56.6993889, atol=1e-5)
+    assert np.isclose(meta["longitude"], 2.2564722, atol=1e-5)
+    assert meta["kb_elev"] == 99.0
+    assert meta["df_elev"] == 98.0
+    assert meta["gl_elev"] == -255.0
+
+    res_commit = client.post(
+        "/api/v1/import/logs/commit",
+        json={
+            "project_id": pid,
+            "files": [
+                {
+                    "file_id": f_info["file_id"],
+                    "filename": "30-7a-1-TEST.las",
+                    "metadata": meta,
+                }
+            ],
+        },
+    )
+    assert res_commit.status_code == 200
+    w_name = res_commit.json()["wells"][0]["well_name"]
+
+    res_bundle = client.get(f"/quick_pp/workspace/projects/{pid}/wells/{w_name}/bundle")
+    assert res_bundle.status_code == 200
+    bundle = res_bundle.json()
+    assert "header" in bundle
+    hdr = bundle["header"]
+    assert hdr["company"] == "PHILLIPS PETROLEUM"
+    assert hdr["country"] == "UK"
+    assert hdr["field"] == "JOANNE"
+    assert hdr["service_company"] == "ATLAS"
+    assert hdr["location"] == "CENTRAL NORTH SEA"
+    assert hdr["province"] == "UKCS"
+    assert np.isclose(hdr["latitude"], 56.6993889, atol=1e-5)
+    assert np.isclose(hdr["longitude"], 2.2564722, atol=1e-5)
+
+    # Test updating well header metadata via /config endpoint
+    res_cfg = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{w_name}/config",
+        json={"header": {"company": "Updated Operator", "country": "United Kingdom"}},
+    )
+    assert res_cfg.status_code == 200
+    assert res_cfg.json()["header"]["company"] == "Updated Operator"
+    assert res_cfg.json()["header"]["country"] == "United Kingdom"
+

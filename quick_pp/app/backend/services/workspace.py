@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from quick_pp.app.backend.services.database import (
+    _ephemeral_well_headers,
     _ephemeral_wells,
     _get_merged_dataframe_sync,
     _merged_data_cache,
@@ -26,6 +27,7 @@ from quick_pp.app.backend.services.database import (
     reset_demo_project_state,
     resolve_db_well_name,
 )
+from quick_pp.las_handler import extract_las_metadata
 from quick_pp.app.backend.services.rock_typing import _compute_fzi_data_sync
 from quick_pp.app.backend.utils.auth import is_demo_mode
 from quick_pp.app.backend.utils.db import get_db
@@ -984,6 +986,9 @@ def workspace_well_bundle(
 
         ancillary: Dict[str, Any] = {}
         well_config: Dict[str, Any] = {}
+        raw_db_header: Dict[str, Any] = {}
+        db_uwi: Optional[str] = None
+        db_depth_uom: Optional[str] = None
         try:
             with get_db() as session:
                 proj = db_objects.Project.load(session, project_id=project_id)
@@ -994,10 +999,13 @@ def workspace_well_bundle(
                     if getattr(well_obj, "config", None)
                     else {}
                 )
-                if well_obj._orm_well and isinstance(
-                    well_obj._orm_well.config_data, dict
-                ):
-                    well_config = {**well_config, **well_obj._orm_well.config_data}
+                if well_obj._orm_well:
+                    db_uwi = well_obj._orm_well.uwi
+                    db_depth_uom = well_obj._orm_well.depth_uom
+                    if isinstance(well_obj._orm_well.config_data, dict):
+                        well_config = {**well_config, **well_obj._orm_well.config_data}
+                    if isinstance(well_obj._orm_well.header_data, dict):
+                        raw_db_header = dict(well_obj._orm_well.header_data)
         except Exception:
             pass
         eph_cfg = _ephemeral_well_configs.get(
@@ -1007,6 +1015,87 @@ def workspace_well_bundle(
         )
         if eph_cfg:
             well_config = {**well_config, **eph_cfg}
+
+        eph_hdr = _ephemeral_well_headers.get(
+            (project_id, well_name)
+        ) or _ephemeral_well_headers.get(
+            (project_id, resolve_db_well_name(project_id, well_name))
+        )
+        base_hdr_source = raw_db_header if raw_db_header else (eph_hdr or {})
+        well_header: Dict[str, Any] = dict(
+            extract_las_metadata(base_hdr_source, fallback_well_name=well_name)
+        )
+        well_header["well_name"] = well_name
+        if db_uwi and (
+            not well_header.get("uwi")
+            or well_header.get("uwi") == "UNKNOWN_WELL"
+        ):
+            well_header["uwi"] = db_uwi
+        if db_depth_uom and not well_header.get("datum_unit"):
+            well_header["datum_unit"] = db_depth_uom
+            well_header["depth_unit"] = db_depth_uom
+
+        # Apply any explicit user overrides saved on header_data or ephemeral headers
+        hdr_overrides = (
+            raw_db_header.get("header_overrides")
+            if isinstance(raw_db_header.get("header_overrides"), dict)
+            else {}
+        )
+        for ovr_src in (hdr_overrides, eph_hdr or {}):
+            if isinstance(ovr_src, dict):
+                for hk, hv in ovr_src.items():
+                    if hv is not None and hk not in (
+                        "raw_well_header",
+                        "raw_parameters",
+                    ):
+                        well_header[hk] = hv
+
+        if depth_s is not None:
+            d_valid_all = depth_s.dropna()
+            if not d_valid_all.empty:
+                if well_header.get("start_depth") is None:
+                    well_header["start_depth"] = round(float(d_valid_all.min()), 4)
+                if well_header.get("stop_depth") is None:
+                    well_header["stop_depth"] = round(float(d_valid_all.max()), 4)
+                if well_header.get("step") is None and len(d_valid_all) > 1:
+                    diffs = d_valid_all.diff().dropna()
+                    diffs = diffs[diffs > 0]
+                    if not diffs.empty:
+                        well_header["step"] = round(float(diffs.median()), 4)
+
+        # Ensure well_config also reflects resolved well_header fields
+        for sync_k in (
+            "uwi",
+            "well_name",
+            "field",
+            "company",
+            "service_company",
+            "country",
+            "province",
+            "location",
+            "spud_date",
+            "log_date",
+            "latitude",
+            "longitude",
+            "x_coord",
+            "y_coord",
+            "crs",
+            "kb_elev",
+            "df_elev",
+            "gl_elev",
+            "water_depth",
+            "datum_unit",
+            "bht",
+            "bht_unit",
+            "surface_temp",
+            "bit_size",
+            "rmf",
+            "rmf_temp",
+            "rmc",
+            "mud_density",
+        ):
+            if well_header.get(sync_k) is not None:
+                well_config[sync_k] = well_header[sync_k]
 
         def _df_or_list(val: Any) -> List[Dict[str, Any]]:
             if val is None:
@@ -1122,6 +1211,7 @@ def workspace_well_bundle(
                 if "well_surveys" in ancillary
                 else ancillary.get("directional_surveys")
             ),
+            "header": well_header,
             "config": {k: v for k, v in well_config.items() if not k.startswith("_")},
         })
     except ValueError as e:
@@ -6272,6 +6362,9 @@ class WorkspaceWellConfigRequest(BaseModel):
     clear_focus_depth: bool = Field(
         False, description="Clear persistent working depth range back to full well"
     )
+    header: Optional[Dict[str, Any]] = Field(
+        None, description="Well header metadata updates"
+    )
     extra: Optional[Dict[str, Any]] = Field(
         None, description="Additional per-well configuration parameters"
     )
@@ -6288,7 +6381,7 @@ class WorkspaceWellConfigRequest(BaseModel):
 def workspace_update_well_config(
     project_id: int, well_name: str, req: WorkspaceWellConfigRequest
 ) -> Dict[str, Any]:
-    """Persist working top and bottom focus depth (and optional well config keys) for a specific well."""
+    """Persist working top and bottom focus depth (and optional well config/header keys) for a specific well."""
     try:
         from quick_pp.database import models as db_models
         from sqlalchemy import select
@@ -6304,14 +6397,28 @@ def workspace_update_well_config(
                 eph["focus_max_depth"] = req.focus_max_depth
         if req.extra:
             eph.update(req.extra)
+
+        clean_header_updates: Dict[str, Any] = {}
+        if req.header and isinstance(req.header, dict):
+            for hk, hv in req.header.items():
+                if hk in ("raw_well_header", "raw_parameters"):
+                    continue
+                clean_header_updates[hk] = hv
+            eph.update(clean_header_updates)
+            curr_eph_hdr = dict(_ephemeral_well_headers.get((project_id, well_name), {}))
+            curr_eph_hdr.update(clean_header_updates)
+            _ephemeral_well_headers[(project_id, well_name)] = curr_eph_hdr
+
         _ephemeral_well_configs[(project_id, well_name)] = eph
 
         saved_cfg = dict(eph)
+        saved_hdr = dict(_ephemeral_well_headers.get((project_id, well_name), {}))
         if not is_demo_mode():
             with get_db() as session:
+                db_name = resolve_db_well_name(project_id, well_name)
                 well_orm = session.scalar(
                     select(db_models.Well).filter_by(
-                        project_id=project_id, name=well_name
+                        project_id=project_id, name=db_name
                     )
                 )
                 if well_orm:
@@ -6324,18 +6431,49 @@ def workspace_update_well_config(
                     if req.clear_focus_depth:
                         current_cfg.pop("focus_min_depth", None)
                         current_cfg.pop("focus_max_depth", None)
-                    well_orm.config_data = current_cfg
+                    well_orm.config_data = _sanitize_for_json(current_cfg)
                     flag_modified(well_orm, "config_data")
+
+                    if clean_header_updates:
+                        current_hdr = (
+                            dict(well_orm.header_data)
+                            if isinstance(well_orm.header_data, dict)
+                            else {}
+                        )
+                        current_hdr.update(clean_header_updates)
+                        ovr = (
+                            dict(current_hdr.get("header_overrides"))
+                            if isinstance(current_hdr.get("header_overrides"), dict)
+                            else {}
+                        )
+                        ovr.update(clean_header_updates)
+                        current_hdr["header_overrides"] = ovr
+                        if isinstance(current_hdr.get("well_metadata"), dict):
+                            wm = dict(current_hdr["well_metadata"])
+                            wm.update(clean_header_updates)
+                            current_hdr["well_metadata"] = wm
+                        if clean_header_updates.get("uwi"):
+                            well_orm.uwi = str(clean_header_updates["uwi"]).strip()
+                        well_orm.header_data = _sanitize_for_json(current_hdr)
+                        flag_modified(well_orm, "header_data")
+                        saved_hdr = dict(
+                            extract_las_metadata(
+                                well_orm.header_data, fallback_well_name=well_name
+                            )
+                        )
+                        saved_hdr.update(ovr)
+
                     session.add(well_orm)
                     session.flush()
                     saved_cfg = current_cfg
 
-        return {
+        return _sanitize_for_json({
             "project_id": project_id,
             "well_name": well_name,
             "config": saved_cfg,
+            "header": saved_hdr,
             "saved": True,
-        }
+        })
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to update well configuration: {e}"

@@ -961,9 +961,41 @@ class Well(object):
             }
         )
 
-        # Auto-populate environmental parameters on WellConfig for downstream modules (saturation, shf, qaqc)
+        # Auto-populate header & environmental parameters on WellConfig for downstream modules (saturation, shf, qaqc)
+        if rich_meta.get("uwi"):
+            self.uwi = str(rich_meta["uwi"])
         env_updates = {}
         for env_key in (
+            "uwi",
+            "well_name",
+            "field",
+            "company",
+            "service_company",
+            "country",
+            "province",
+            "county",
+            "state",
+            "location",
+            "api",
+            "license",
+            "spud_date",
+            "log_date",
+            "latitude",
+            "longitude",
+            "latitude_raw",
+            "longitude_raw",
+            "x_coord",
+            "y_coord",
+            "crs",
+            "kb_elev",
+            "df_elev",
+            "gl_elev",
+            "water_depth",
+            "apd",
+            "datum_unit",
+            "start_depth",
+            "stop_depth",
+            "step",
             "bht",
             "bht_unit",
             "surface_temp",
@@ -972,13 +1004,6 @@ class Well(object):
             "rmf_temp",
             "rmc",
             "mud_density",
-            "kb_elev",
-            "df_elev",
-            "gl_elev",
-            "latitude",
-            "longitude",
-            "field",
-            "company",
         ):
             if rich_meta.get(env_key) is not None:
                 env_updates[env_key] = rich_meta[env_key]
