@@ -2,7 +2,11 @@
 	import { postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
-	import { wellData, type CurveEditOperation } from '$lib/state/wellData.svelte';
+	import {
+		wellData,
+		type CurveEditOperation,
+		type CurveSpliceOverlapMode
+	} from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { getCurveUnit } from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
@@ -44,7 +48,7 @@
 	});
 
 	// --- Curve Editor & Management State ---
-	let editorMode = $state<'math' | 'manage'>('math');
+	let editorMode = $state<'math' | 'splice' | 'manage'>('math');
 	let editOp = $state<CurveEditOperation>('add');
 	let editScope = $state<'full' | 'filtered' | 'brushed'>('full');
 	let editValue = $state<number>(0);
@@ -55,11 +59,228 @@
 	let smoothWindow = $state<number>(5);
 	let outputCurveName = $state<string>('');
 
+	// Curve Splicing (Merge Multiple Log Runs) state
+	let spliceRuns = $state<string[]>(['', '']);
+	let spliceOverlapMode = $state<CurveSpliceOverlapMode>('blend');
+	let spliceDepth = $state<number>(1500);
+	let spliceAutoLevel = $state<boolean>(false);
+	let spliceInterpGaps = $state<boolean>(false);
+	let spliceMaxGapM = $state<number>(2.0);
+	let spliceTargetName = $state<string>('');
+
 	// Curve Management (Duplicate / Rename / Delete) state
 	let duplicateTargetName = $state<string>('');
 	let renameTargetName = $state<string>('');
 	let confirmDeleteCurve = $state<boolean>(false);
 	let editStatusMsg = $state<string | null>(null);
+
+	function pickDefaultSecondRun(primary: string, available: string[]): string {
+		if (available.length <= 1) return primary;
+		const basePrefix = primary.replace(/[_-]?(RUN\d+|\d+|A|B|C|RAW|ORI|SHALLOW|DEEP)$/i, '');
+		const sibling = available.find(
+			(c) =>
+				c !== primary &&
+				!c.endsWith('_ORI') &&
+				basePrefix.length >= 2 &&
+				c.startsWith(basePrefix)
+		);
+		if (sibling) return sibling;
+		return available.find((c) => c !== primary && !c.endsWith('_ORI')) ?? available[0];
+	}
+
+	// Keep spliceRuns populated with valid curve names when well or curveList changes
+	$effect(() => {
+		if (curveList.length === 0) return;
+		const active = workbench.selectedQaqcCurve || curveList[0];
+		const valid0 = spliceRuns[0] && curveList.includes(spliceRuns[0]) ? spliceRuns[0] : active;
+		const valid1 =
+			spliceRuns[1] && curveList.includes(spliceRuns[1]) && spliceRuns[1] !== valid0
+				? spliceRuns[1]
+				: pickDefaultSecondRun(valid0, curveList);
+		if (spliceRuns.length < 2 || spliceRuns[0] !== valid0 || spliceRuns[1] !== valid1) {
+			const extra = spliceRuns.slice(2).filter((c) => curveList.includes(c));
+			spliceRuns = [valid0, valid1, ...extra];
+		}
+	});
+
+	let spliceDiagnostics = $derived.by(() => {
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const validCols = spliceRuns.filter(
+			(c, idx, self) => Boolean(c) && Boolean(wellData.curves[c]) && self.indexOf(c) === idx
+		);
+		if (validCols.length < 2 || dept.length === 0) {
+			return {
+				validCols,
+				hasOverlap: false,
+				overlapTop: null as number | null,
+				overlapBottom: null as number | null,
+				overlapCount: 0,
+				overlapDeltaMean: null as number | null,
+				gapTop: null as number | null,
+				gapBottom: null as number | null,
+				gapSpan: null as number | null,
+				combinedTop: null as number | null,
+				combinedBottom: null as number | null,
+				suggestedSpliceDepth: Number(((wellData.depthRange.min + wellData.depthRange.max) / 2).toFixed(1))
+			};
+		}
+
+		const arrA = wellData.curves[validCols[0]] ?? [];
+		const arrB = wellData.curves[validCols[1]] ?? [];
+		let ovTop = Infinity;
+		let ovBot = -Infinity;
+		let ovCount = 0;
+		let diffSum = 0;
+
+		for (let i = 0; i < dept.length; i++) {
+			const d = dept[i];
+			const va = arrA[i];
+			const vb = arrB[i];
+			if (Number.isFinite(d) && Number.isFinite(va) && Number.isFinite(vb)) {
+				ovCount++;
+				diffSum += va - vb;
+				if (d < ovTop) ovTop = d;
+				if (d > ovBot) ovBot = d;
+			}
+		}
+
+		let combTop = Infinity;
+		let combBot = -Infinity;
+		for (const c of validCols) {
+			const st = wellData.stats[c];
+			if (st?.top !== null && st?.top !== undefined && st.top < combTop) combTop = st.top;
+			if (st?.bottom !== null && st?.bottom !== undefined && st.bottom > combBot) combBot = st.bottom;
+		}
+
+		const stA = wellData.stats[validCols[0]];
+		const stB = wellData.stats[validCols[1]];
+		let gapTop: number | null = null;
+		let gapBottom: number | null = null;
+		let gapSpan: number | null = null;
+
+		if (
+			ovCount === 0 &&
+			stA?.top !== null &&
+			stA?.top !== undefined &&
+			stA?.bottom !== null &&
+			stA?.bottom !== undefined &&
+			stB?.top !== null &&
+			stB?.top !== undefined &&
+			stB?.bottom !== null &&
+			stB?.bottom !== undefined
+		) {
+			const shallowBot = Math.min(stA.bottom, stB.bottom);
+			const deepTop = Math.max(stA.top, stB.top);
+			if (deepTop > shallowBot) {
+				gapTop = Number(shallowBot.toFixed(2));
+				gapBottom = Number(deepTop.toFixed(2));
+				gapSpan = Number((deepTop - shallowBot).toFixed(2));
+			}
+		}
+
+		const suggested =
+			ovCount > 0
+				? Number(((ovTop + ovBot) / 2).toFixed(1))
+				: gapTop !== null && gapBottom !== null
+					? Number(((gapTop + gapBottom) / 2).toFixed(1))
+					: Number.isFinite(combTop) && Number.isFinite(combBot)
+						? Number(((combTop + combBot) / 2).toFixed(1))
+						: Number(((wellData.depthRange.min + wellData.depthRange.max) / 2).toFixed(1));
+
+		return {
+			validCols,
+			hasOverlap: ovCount > 0,
+			overlapTop: ovCount > 0 ? Number(ovTop.toFixed(2)) : null,
+			overlapBottom: ovCount > 0 ? Number(ovBot.toFixed(2)) : null,
+			overlapCount: ovCount,
+			overlapDeltaMean: ovCount > 0 ? Number((diffSum / ovCount).toFixed(4)) : null,
+			gapTop,
+			gapBottom,
+			gapSpan,
+			combinedTop: Number.isFinite(combTop) ? Number(combTop.toFixed(2)) : null,
+			combinedBottom: Number.isFinite(combBot) ? Number(combBot.toFixed(2)) : null,
+			suggestedSpliceDepth: suggested
+		};
+	});
+
+	// Sync spliceDepth to suggested midpoint when selected runs change
+	let lastSplicePairKey = '';
+	$effect(() => {
+		const key = spliceDiagnostics.validCols.slice(0, 2).join(':');
+		if (key && key !== lastSplicePairKey) {
+			lastSplicePairKey = key;
+			spliceDepth = spliceDiagnostics.suggestedSpliceDepth;
+		}
+	});
+
+	function updateSpliceRunAt(idx: number, val: string) {
+		const next = [...spliceRuns];
+		next[idx] = val;
+		spliceRuns = next;
+	}
+
+	function addSpliceRun(curveName?: string) {
+		const used = new Set(spliceRuns);
+		const candidate =
+			curveName && curveList.includes(curveName)
+				? curveName
+				: (curveList.find((c) => !used.has(c) && !c.endsWith('_ORI')) ?? curveList[0] ?? '');
+		if (!candidate) return;
+		if (curveName && spliceRuns.includes(curveName)) return;
+		spliceRuns = [...spliceRuns, candidate];
+	}
+
+	function removeSpliceRun(idx: number) {
+		if (spliceRuns.length <= 2) return;
+		spliceRuns = spliceRuns.filter((_, i) => i !== idx);
+	}
+
+	function swapSpliceRuns(idxA: number, idxB: number) {
+		if (idxA < 0 || idxB < 0 || idxA >= spliceRuns.length || idxB >= spliceRuns.length) return;
+		const next = [...spliceRuns];
+		const tmp = next[idxA];
+		next[idxA] = next[idxB];
+		next[idxB] = tmp;
+		spliceRuns = next;
+	}
+
+	function sortSpliceRunsByDepth() {
+		const next = [...spliceRuns].sort((a, b) => {
+			const topA = wellData.stats[a]?.top ?? Infinity;
+			const topB = wellData.stats[b]?.top ?? Infinity;
+			return topA - topB;
+		});
+		spliceRuns = next;
+	}
+
+	async function applyCurveSplice(persist: boolean = false) {
+		wellData.lastError = null;
+		editStatusMsg = null;
+		const validCols = spliceDiagnostics.validCols;
+		if (validCols.length < 2) {
+			wellData.lastError = 'Please select at least 2 distinct curves to splice.';
+			return;
+		}
+		const target = (spliceTargetName.trim() || validCols[0]).toUpperCase();
+		try {
+			await wellData.spliceCurves({
+				sourceCurves: validCols,
+				targetCurve: target,
+				overlapMode: spliceOverlapMode,
+				spliceDepth: spliceOverlapMode === 'splice_depth' ? spliceDepth : null,
+				autoLevelOverlap: spliceAutoLevel,
+				interpolateGaps: spliceInterpGaps,
+				maxGapMeters: spliceMaxGapM,
+				persist
+			});
+			const st = wellData.stats[target];
+			editStatusMsg = persist
+				? `Saved spliced curve ${target} (${st?.top ?? '—'}–${st?.bottom ?? '—'} m) ✓`
+				: `Spliced ${validCols.join(' + ')} → ${target} (${st?.top ?? '—'}–${st?.bottom ?? '—'} m)`;
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Curve splice failed';
+		}
+	}
 
 	// Update default clip bounds and management names when active curve changes
 	$effect(() => {
@@ -588,27 +809,36 @@
 				</div>
 			{/if}
 
-			<!-- Mode Switcher: Math / Conditioning vs. Rename / Duplicate / Delete -->
+			<!-- Mode Switcher: Math / Conditioning vs. Splice Runs vs. Rename / Duplicate / Delete -->
 			<div
-				class="mt-1.5 grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5"
+				class="mt-1.5 grid grid-cols-3 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5"
 			>
 				<button
 					type="button"
 					onclick={() => (editorMode = 'math')}
-					class="h-6 rounded-xs text-[11px] font-medium transition-colors {editorMode === 'math'
+					class="h-6 rounded-xs text-[10.5px] font-medium transition-colors {editorMode === 'math'
 						? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
 						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 				>
-					Shift / Scale / Condition
+					Shift / Scale
+				</button>
+				<button
+					type="button"
+					onclick={() => (editorMode = 'splice')}
+					class="h-6 rounded-xs text-[10.5px] font-medium transition-colors {editorMode === 'splice'
+						? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+				>
+					Splice Runs
 				</button>
 				<button
 					type="button"
 					onclick={() => (editorMode = 'manage')}
-					class="h-6 rounded-xs text-[11px] font-medium transition-colors {editorMode === 'manage'
+					class="h-6 rounded-xs text-[10.5px] font-medium transition-colors {editorMode === 'manage'
 						? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
 						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 				>
-					Duplicate / Rename / Delete
+					Manage
 				</button>
 			</div>
 
@@ -832,6 +1062,243 @@
 					>
 						Save
 					</button>
+				</div>
+			{:else if editorMode === 'splice'}
+				<!-- Curve Splicing Mode: Merge Multiple Log Runs Across Depth Intervals -->
+				<div class="mt-1.5 space-y-2">
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2">
+						<div class="mb-1.5 flex items-center justify-between">
+							<span class="text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+								Log Runs to Splice ({spliceRuns.length})
+							</span>
+							<div class="flex items-center gap-1">
+								<button
+									type="button"
+									onclick={sortSpliceRunsByDepth}
+									title="Order selected curves from shallowest Top depth to deepest Bottom depth"
+									class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0.5 text-[9.5px] font-medium text-[var(--text-secondary)] hover:bg-slate-100 hover:text-[var(--text-primary)]"
+								>
+									↕ Sort by Top
+								</button>
+								<button
+									type="button"
+									onclick={() => addSpliceRun()}
+									title="Add another log run to splice"
+									class="rounded-xs border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-blue-700 hover:bg-blue-100"
+								>
+									+ Add Run
+								</button>
+							</div>
+						</div>
+
+						<div class="space-y-1.5">
+							{#each spliceRuns as runCol, idx (idx)}
+								{@const runSt = wellData.stats[runCol]}
+								<div class="flex items-center gap-1">
+									<span
+										class="mono-num flex h-5 w-11 shrink-0 items-center justify-center rounded-xs bg-slate-200/70 text-[9.5px] font-semibold text-slate-700"
+									>
+										Run {idx + 1}
+									</span>
+									<select
+										value={runCol}
+										onchange={(e) =>
+											updateSpliceRunAt(idx, (e.currentTarget as HTMLSelectElement).value)}
+										class="mono-num h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-semibold text-[var(--text-primary)]"
+									>
+										{#each curveList as c (c)}
+											{@const cst = wellData.stats[c]}
+											<option value={c}>
+												{c} [{fmtNum(cst?.top, 1)}–{fmtNum(cst?.bottom, 1)}m]
+											</option>
+										{/each}
+									</select>
+									{#if idx > 0}
+										<button
+											type="button"
+											onclick={() => swapSpliceRuns(idx - 1, idx)}
+											title="Move run up"
+											class="h-6 w-5 shrink-0 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[10px] text-[var(--text-secondary)] hover:bg-slate-100"
+										>
+											↑
+										</button>
+									{/if}
+									{#if spliceRuns.length > 2}
+										<button
+											type="button"
+											onclick={() => removeSpliceRun(idx)}
+											title="Remove run from splice list"
+											class="h-6 w-5 shrink-0 rounded-xs border border-red-200 bg-red-50 text-[10px] font-bold text-red-600 hover:bg-red-100"
+										>
+											×
+										</button>
+									{/if}
+								</div>
+								{#if runSt}
+									<div class="flex items-center justify-between pl-12 text-[9.5px] text-[var(--text-muted)]">
+										<span>
+											Interval: <strong class="mono-num text-[var(--text-secondary)]">{fmtNum(runSt.top, 1)} – {fmtNum(runSt.bottom, 1)} m</strong> ({runSt.count} pts)
+										</span>
+										<span class="mono-num">
+											μ={fmtNum(runSt.mean, 2)} | σ={fmtNum(runSt.std, 2)}
+										</span>
+									</div>
+								{/if}
+							{/each}
+						</div>
+
+						<!-- Overlap / Gap Diagnostics Banner -->
+						<div class="mt-2 rounded-xs border border-slate-200 bg-[var(--bg-surface)] px-2 py-1 text-[10px]">
+							{#if spliceDiagnostics.hasOverlap}
+								<div class="flex items-center justify-between text-blue-800">
+									<span>
+										Overlap: <strong class="mono-num">{fmtNum(spliceDiagnostics.overlapTop, 1)} – {fmtNum(spliceDiagnostics.overlapBottom, 1)} m</strong> ({spliceDiagnostics.overlapCount} pts)
+									</span>
+									<span class="mono-num font-semibold">
+										ΔMean: {spliceDiagnostics.overlapDeltaMean !== null && spliceDiagnostics.overlapDeltaMean >= 0 ? '+' : ''}{fmtNum(spliceDiagnostics.overlapDeltaMean, 3)}
+									</span>
+								</div>
+							{:else if spliceDiagnostics.gapSpan !== null}
+								<div class="flex items-center justify-between text-amber-800">
+									<span>
+										Unlogged Gap: <strong class="mono-num">{fmtNum(spliceDiagnostics.gapTop, 1)} – {fmtNum(spliceDiagnostics.gapBottom, 1)} m</strong>
+									</span>
+									<span class="mono-num font-semibold">
+										{fmtNum(spliceDiagnostics.gapSpan, 1)} m gap
+									</span>
+								</div>
+							{:else}
+								<div class="text-[var(--text-muted)]">
+									Combined Interval: <strong class="mono-num text-[var(--text-secondary)]">{fmtNum(spliceDiagnostics.combinedTop, 1)} – {fmtNum(spliceDiagnostics.combinedBottom, 1)} m</strong>
+								</div>
+							{/if}
+						</div>
+					</div>
+
+					<!-- Overlap Resolution Mode -->
+					<div class="grid grid-cols-[1fr_155px] items-center gap-x-2">
+						<span class="text-xs font-medium text-[var(--text-primary)]">Overlap Mode</span>
+						<select
+							bind:value={spliceOverlapMode}
+							class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+						>
+							<option value="blend">Linear Feather Blend</option>
+							<option value="splice_depth">Splice Depth Cutoff</option>
+							<option value="keep_first">Keep Upper / Run 1</option>
+							<option value="keep_last">Keep Lower / Run 2</option>
+							<option value="mean">Average (Mean)</option>
+						</select>
+					</div>
+
+					{#if spliceOverlapMode === 'splice_depth'}
+						<div class="space-y-1">
+							<NumericScrubber
+								label="Splice Tie-In Depth"
+								bind:value={spliceDepth}
+								unit="m"
+								min={wellData.depthRange.min}
+								max={wellData.depthRange.max}
+								step={0.5}
+								decimals={1}
+							/>
+							{#if spliceDiagnostics.hasOverlap}
+								<div class="flex items-center justify-between text-[9.5px] text-[var(--text-muted)]">
+									<span>Uses shallow run ≤ {fmtNum(spliceDepth, 1)}m, deep run &gt; {fmtNum(spliceDepth, 1)}m</span>
+									<button
+										type="button"
+										onclick={() => (spliceDepth = spliceDiagnostics.suggestedSpliceDepth)}
+										class="mono-num font-semibold text-blue-700 hover:underline"
+									>
+										Midpoint ({fmtNum(spliceDiagnostics.suggestedSpliceDepth, 1)}m)
+									</button>
+								</div>
+							{/if}
+						</div>
+					{/if}
+
+					<!-- Conditioning Options During Splice -->
+					<div class="space-y-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[11px]">
+						<label class="flex cursor-pointer items-center gap-1.5 text-[var(--text-secondary)]">
+							<input
+								type="checkbox"
+								bind:checked={spliceAutoLevel}
+								class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+							/>
+							<span>Auto-level secondary run to match mean in overlap</span>
+						</label>
+						<label class="flex cursor-pointer items-center gap-1.5 text-[var(--text-secondary)]">
+							<input
+								type="checkbox"
+								bind:checked={spliceInterpGaps}
+								class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+							/>
+							<span>Interpolate small gaps between runs (≤ {spliceMaxGapM} m)</span>
+						</label>
+						{#if spliceInterpGaps}
+							<div class="pl-5 pt-0.5">
+								<NumericScrubber
+									label="Max Gap to Bridge"
+									bind:value={spliceMaxGapM}
+									unit="m"
+									min={0.5}
+									max={25.0}
+									step={0.5}
+									decimals={1}
+								/>
+							</div>
+						{/if}
+					</div>
+
+					<!-- Target Output Curve Name -->
+					<div class="space-y-1">
+						<div class="flex items-center gap-1.5">
+							<span class="shrink-0 text-[10px] text-[var(--text-muted)]">Output Curve:</span>
+							<input
+								type="text"
+								placeholder={`Overwrite ${spliceRuns[0] || workbench.selectedQaqcCurve} (or type new name)`}
+								bind:value={spliceTargetName}
+								class="mono-num h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 text-[11px] uppercase placeholder:normal-case"
+							/>
+						</div>
+						<div class="flex flex-wrap items-center gap-1">
+							<span class="text-[9.5px] text-[var(--text-muted)]">Standard Target:</span>
+							{#each REQUIRED_STANDARD as stdMnem}
+								<button
+									type="button"
+									onclick={() => (spliceTargetName = stdMnem)}
+									class="mono-num rounded-xs border px-1.5 py-0.2 text-[9.5px] font-semibold {spliceTargetName.trim().toUpperCase() ===
+									stdMnem
+										? 'border-blue-600 bg-blue-600 text-white'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-app)] text-[var(--text-secondary)] hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'}"
+								>
+									{stdMnem}
+								</button>
+							{/each}
+						</div>
+					</div>
+
+					<!-- Apply Splice & Save Buttons -->
+					<div class="flex gap-1.5">
+						<button
+							type="button"
+							disabled={wellData.isCalculating || spliceDiagnostics.validCols.length < 2}
+							onclick={() => applyCurveSplice(false)}
+							class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+						>
+							Apply Splice
+						</button>
+						<button
+							type="button"
+							disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-edit')}
+							onclick={saveCurveEdit}
+							title={wellData.hasPendingComputed('qaqc-edit')
+								? 'Save spliced curve directly to the well'
+								: 'Click Apply Splice first to preview spliced curve before saving'}
+							class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
+						>
+							Save
+						</button>
+					</div>
 				</div>
 			{:else}
 				<!-- Curve Management Mode: Duplicate, Rename, Delete -->
@@ -1297,38 +1764,69 @@
 					<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 						<tr class="h-6 border-b border-[var(--border-hairline)]">
 							<th class="px-1.5 font-semibold">Curve</th>
+							<th class="px-1.5 text-right font-semibold" title="Shallowest valid depth (m)">Top</th>
+							<th class="px-1.5 text-right font-semibold" title="Deepest valid depth (m)">Bottom</th>
 							<th class="px-1.5 text-right font-semibold">Min</th>
-							<th class="px-1.5 text-right font-semibold">P10</th>
-							<th class="px-1.5 text-right font-semibold">P50</th>
-							<th class="px-1.5 text-right font-semibold">Mean</th>
-							<th class="px-1.5 text-right font-semibold">P90</th>
 							<th class="px-1.5 text-right font-semibold">Max</th>
+							<th class="px-1.5 text-right font-semibold">Mean</th>
+							<th class="px-1.5 text-right font-semibold" title="Standard Deviation">Std</th>
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-[var(--border-hairline)]">
 						{#each curveList as c (c)}
 							{@const st = wellData.activeStats[c] ?? wellData.stats[c]}
 							{@const isSelected = workbench.selectedQaqcCurve === c}
+							{@const inSplice = editorMode === 'splice' && spliceRuns.includes(c)}
 							<tr
 								onclick={() => (workbench.selectedQaqcCurve = c)}
+								title={`${c}: ${fmtNum(st?.top, 1)}–${fmtNum(st?.bottom, 1)} m (${st?.count ?? 0} valid samples)`}
 								class="h-6 cursor-pointer transition-colors hover:bg-[var(--bg-subtle)] {isSelected
 									? 'bg-blue-50/90 font-semibold'
-									: ''}"
+									: inSplice
+										? 'bg-indigo-50/50'
+										: ''}"
 							>
-								<td class="mono-num px-1.5 font-semibold text-[var(--text-primary)]">
-									{c}
-									{#if getCurveUnit(c)}
-										<span class="text-[9px] font-normal text-[var(--text-muted)]">
-											({getCurveUnit(c)})
+								<td class="mono-num px-1.5 font-semibold text-[var(--text-primary)] whitespace-nowrap">
+									<div class="flex items-center justify-between gap-1">
+										<span>
+											{c}
+											{#if getCurveUnit(c)}
+												<span class="text-[9px] font-normal text-[var(--text-muted)]">
+													({getCurveUnit(c)})
+												</span>
+											{/if}
 										</span>
-									{/if}
+										{#if editorMode === 'splice'}
+											{#if inSplice}
+												<span class="rounded-xs bg-blue-100 px-1 text-[8.5px] font-bold text-blue-800">
+													R{spliceRuns.indexOf(c) + 1}
+												</span>
+											{:else}
+												<button
+													type="button"
+													onclick={(e) => {
+														e.stopPropagation();
+														addSpliceRun(c);
+													}}
+													title="Add {c} to splice runs"
+													class="rounded-xs border border-blue-200 bg-blue-50 px-1 text-[8.5px] font-semibold text-blue-700 hover:bg-blue-100"
+												>
+													+Splice
+												</button>
+											{/if}
+										{/if}
+									</div>
+								</td>
+								<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
+									{fmtNum(st?.top, 1)}
+								</td>
+								<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
+									{fmtNum(st?.bottom, 1)}
 								</td>
 								<td class="mono-num px-1.5 text-right">{fmtNum(st?.min, 2)}</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.p10, 2)}</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.p50, 2)}</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.mean, 2)}</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.p90, 2)}</td>
 								<td class="mono-num px-1.5 text-right">{fmtNum(st?.max, 2)}</td>
+								<td class="mono-num px-1.5 text-right">{fmtNum(st?.mean, 2)}</td>
+								<td class="mono-num px-1.5 text-right">{fmtNum(st?.std, 2)}</td>
 							</tr>
 						{/each}
 					</tbody>

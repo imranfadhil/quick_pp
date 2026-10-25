@@ -27,14 +27,41 @@ export type CurveEditOperation =
 	| 'depth_shift'
 	| 'smooth';
 
-function computeSummaryStats(arr: number[]): CurveSummaryStats {
-	const valid = arr.filter((v) => typeof v === 'number' && Number.isFinite(v));
+export type CurveSpliceOverlapMode =
+	| 'blend'
+	| 'splice_depth'
+	| 'keep_first'
+	| 'keep_last'
+	| 'mean';
+
+function computeSummaryStats(arr: number[], deptArr?: number[]): CurveSummaryStats {
+	const valid: number[] = [];
+	let topVal = Infinity;
+	let botVal = -Infinity;
+
+	for (let i = 0; i < arr.length; i++) {
+		const v = arr[i];
+		if (typeof v === 'number' && Number.isFinite(v)) {
+			valid.push(v);
+			if (deptArr && i < deptArr.length) {
+				const d = deptArr[i];
+				if (typeof d === 'number' && Number.isFinite(d)) {
+					if (d < topVal) topVal = d;
+					if (d > botVal) botVal = d;
+				}
+			}
+		}
+	}
+
 	if (valid.length === 0) {
 		return {
 			count: 0,
+			top: null,
+			bottom: null,
 			min: null,
 			max: null,
 			mean: null,
+			std: null,
 			p10: null,
 			p50: null,
 			p90: null
@@ -44,6 +71,9 @@ function computeSummaryStats(arr: number[]): CurveSummaryStats {
 	const n = sorted.length;
 	const sum = sorted.reduce((acc, v) => acc + v, 0);
 	const mean = sum / n;
+	const variance =
+		n > 1 ? valid.reduce((acc, v) => acc + (v - mean) * (v - mean), 0) / (n - 1) : 0;
+	const std = Math.sqrt(variance);
 	const pct = (p: number) => {
 		const idx = (p / 100) * (n - 1);
 		const lo = Math.floor(idx);
@@ -53,9 +83,12 @@ function computeSummaryStats(arr: number[]): CurveSummaryStats {
 	};
 	return {
 		count: n,
+		top: Number.isFinite(topVal) ? Number(topVal.toFixed(2)) : null,
+		bottom: Number.isFinite(botVal) ? Number(botVal.toFixed(2)) : null,
 		min: Number(sorted[0].toFixed(4)),
 		max: Number(sorted[n - 1].toFixed(4)),
 		mean: Number(mean.toFixed(4)),
+		std: Number(std.toFixed(4)),
 		p10: Number(pct(10).toFixed(4)),
 		p50: Number(pct(50).toFixed(4)),
 		p90: Number(pct(90).toFixed(4))
@@ -160,11 +193,13 @@ class WellDataState {
 		const hasFilter = !!workbench.depthFilter || workbench.selectedZones.length > 0;
 		if (!hasFilter) return this.stats;
 		const indices = this.visibleIndices;
+		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		const subsetDept = indices.map((i) => dept[i]);
 		const out: Record<string, CurveSummaryStats> = {};
 		for (const [col, arr] of Object.entries(this.curves)) {
 			if (col === 'WELL_NAME' || col === 'ZONES') continue;
 			const subset = indices.map((i) => arr[i]);
-			out[col] = computeSummaryStats(subset);
+			out[col] = computeSummaryStats(subset, subsetDept);
 		}
 		return out;
 	});
@@ -887,11 +922,24 @@ class WellDataState {
 				}
 			}
 
+			const enrichedStats: Record<string, CurveSummaryStats> = { ...(data.stats || {}) };
+			for (const [col, arr] of Object.entries(numericCurves)) {
+				if (col === 'WELL_NAME' || col === 'ZONES') continue;
+				const computedSt = computeSummaryStats(arr, baseDeptGrid);
+				enrichedStats[col] = {
+					...computedSt,
+					...(data.stats?.[col] || {}),
+					top: data.stats?.[col]?.top ?? computedSt.top,
+					bottom: data.stats?.[col]?.bottom ?? computedSt.bottom,
+					std: data.stats?.[col]?.std ?? computedSt.std
+				};
+			}
+
 			this.curves = numericCurves;
 			this.originalCurves = origCopy;
 			this.committedBaseCurves = committedCopy;
 			this.zonesColumn = zCol;
-			this.stats = data.stats || {};
+			this.stats = enrichedStats;
 			this.tops = (data.tops || []).sort((a, b) => a.depth - b.depth);
 			this.contacts = (data.contacts || []).map((c) => ({
 				id: c.id,
@@ -1029,9 +1077,22 @@ class WellDataState {
 		}
 
 		this.curves = updated;
-		if (newStats) {
-			this.stats = { ...this.stats, ...newStats };
+		const finalDept = updated['DEPT'] ?? updated['DEPTH'] ?? baseDept;
+		const mergedStats: Record<string, CurveSummaryStats> = { ...this.stats, ...(newStats || {}) };
+		for (const col of Object.keys(computedData)) {
+			if (col === 'DEPTH' || col === 'DEPT' || col === 'WELL_NAME' || col === 'ZONES') continue;
+			if (updated[col]) {
+				const calcSt = computeSummaryStats(updated[col], finalDept);
+				mergedStats[col] = {
+					...calcSt,
+					...(newStats?.[col] || {}),
+					top: newStats?.[col]?.top ?? calcSt.top,
+					bottom: newStats?.[col]?.bottom ?? calcSt.bottom,
+					std: newStats?.[col]?.std ?? calcSt.std
+				};
+			}
 		}
+		this.stats = mergedStats;
 	}
 
 	/**
@@ -1262,7 +1323,7 @@ class WellDataState {
 			}
 		}
 
-		const newStats = computeSummaryStats(result);
+		const newStats = computeSummaryStats(result, deptArr);
 		const nextCurves: Record<string, number[]> = { ...this.curves, [dst]: result };
 		const nextStats: Record<string, CurveSummaryStats> = { ...this.stats, [dst]: newStats };
 
@@ -1270,7 +1331,7 @@ class WellDataState {
 		if (dst === src && oriName && !nextCurves[oriName]) {
 			const oriCopy = [...origArr];
 			nextCurves[oriName] = oriCopy;
-			nextStats[oriName] = computeSummaryStats(oriCopy);
+			nextStats[oriName] = computeSummaryStats(oriCopy, deptArr);
 		}
 
 		this.curves = nextCurves;
@@ -1335,10 +1396,11 @@ class WellDataState {
 		const srcArr = this.curves[src];
 		if (!srcArr) throw new Error(`Source curve ${src} not found.`);
 
+		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		const copyArr = [...srcArr];
 		this.curves = { ...this.curves, [dst]: copyArr };
 		this.originalCurves = { ...this.originalCurves, [dst]: [...copyArr] };
-		this.stats = { ...this.stats, [dst]: computeSummaryStats(copyArr) };
+		this.stats = { ...this.stats, [dst]: computeSummaryStats(copyArr, deptArr) };
 		workbench.selectedQaqcCurve = dst;
 
 		if (persist && workbench.projectId && workbench.wellId) {
@@ -1371,11 +1433,15 @@ class WellDataState {
 		const srcArr = this.curves[src];
 		if (!srcArr) throw new Error(`Curve ${src} not found.`);
 
+		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		const nextCurves = { ...this.curves, [dst]: [...srcArr] };
 		delete nextCurves[src];
 		this.curves = nextCurves;
 
-		const nextStats = { ...this.stats, [dst]: this.stats[src] ?? computeSummaryStats(srcArr) };
+		const nextStats = {
+			...this.stats,
+			[dst]: this.stats[src] ?? computeSummaryStats(srcArr, deptArr)
+		};
 		delete nextStats[src];
 		this.stats = nextStats;
 
@@ -1461,7 +1527,7 @@ class WellDataState {
 		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		this.curves = { ...this.curves, [src]: [...orig] };
 		this.committedBaseCurves = { ...this.committedBaseCurves, [src]: [...orig] };
-		this.stats = { ...this.stats, [src]: computeSummaryStats(orig) };
+		this.stats = { ...this.stats, [src]: computeSummaryStats(orig, deptArr) };
 
 		if (persist && workbench.projectId && workbench.wellId) {
 			await postJson(
@@ -1478,6 +1544,250 @@ class WellDataState {
 			this.lastSavedMessage = `Restored ${src} ✓`;
 		}
 		appStatus.info(`Restored original values for ${src}`, workbench.wellId ?? undefined);
+	}
+
+	/**
+	 * Splice two or more curves (different log runs across different depth intervals)
+	 * into a single continuous target curve, with overlap handling, optional bias matching,
+	 * and optional gap interpolation.
+	 */
+	async spliceCurves(opts: {
+		sourceCurves: string[];
+		targetCurve: string;
+		overlapMode?: CurveSpliceOverlapMode;
+		spliceDepth?: number | null;
+		autoLevelOverlap?: boolean;
+		interpolateGaps?: boolean;
+		maxGapMeters?: number;
+		persist?: boolean;
+	}) {
+		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		if (deptArr.length === 0) {
+			throw new Error('No depth grid loaded for active well.');
+		}
+
+		const validSources = opts.sourceCurves
+			.map((c) => c.trim().toUpperCase())
+			.filter((c, idx, self) => Boolean(c) && Boolean(this.curves[c]) && self.indexOf(c) === idx);
+		if (validSources.length < 2) {
+			throw new Error('Select at least two distinct curves to splice.');
+		}
+
+		const dst = (opts.targetCurve.trim() || validSources[0]).toUpperCase().replace(/\s+/g, '_');
+		if (['DEPTH', 'DEPT', 'WELL_NAME', 'ZONES'].includes(dst)) {
+			throw new Error(`Cannot overwrite reserved column ${dst}`);
+		}
+
+		const existingDst = this.curves[dst];
+		const oriName = existingDst && !dst.endsWith('_ORI') ? `${dst}_ORI` : null;
+		const origDstArr = existingDst
+			? (oriName ? this.curves[oriName] : undefined) ??
+				this.originalCurves[dst] ??
+				[...existingDst]
+			: null;
+
+		if (existingDst && origDstArr && !this.originalCurves[dst]) {
+			this.originalCurves = { ...this.originalCurves, [dst]: [...origDstArr] };
+		}
+
+		// Use un-spliced base snapshot when dst is one of the source curves so repeated previews are idempotent
+		const getRunArray = (col: string): number[] => {
+			if (col === dst && origDstArr) {
+				return [...origDstArr];
+			}
+			return [...(this.curves[col] ?? [])];
+		};
+
+		const ovMode: CurveSpliceOverlapMode = opts.overlapMode ?? 'blend';
+		const autoLevel = Boolean(opts.autoLevelOverlap);
+		const interpGaps = Boolean(opts.interpolateGaps);
+		const maxGapM = Math.max(0.2, Number(opts.maxGapMeters ?? 2.0));
+
+		let acc = getRunArray(validSources[0]);
+
+		for (let k = 1; k < validSources.length; k++) {
+			const nxt = getRunArray(validSources[k]);
+			const n = deptArr.length;
+
+			let overlapCount = 0;
+			let diffSum = 0;
+			let ovTop = Infinity;
+			let ovBot = -Infinity;
+			let topA = Infinity;
+			let topB = Infinity;
+
+			for (let i = 0; i < n; i++) {
+				const d = deptArr[i];
+				if (!Number.isFinite(d)) continue;
+				const va = acc[i];
+				const vb = nxt[i];
+				const fa = Number.isFinite(va);
+				const fb = Number.isFinite(vb);
+				if (fa && d < topA) topA = d;
+				if (fb && d < topB) topB = d;
+				if (fa && fb) {
+					overlapCount++;
+					diffSum += va - vb;
+					if (d < ovTop) ovTop = d;
+					if (d > ovBot) ovBot = d;
+				}
+			}
+
+			if (autoLevel && overlapCount > 0) {
+				const biasDelta = diffSum / overlapCount;
+				for (let i = 0; i < n; i++) {
+					if (Number.isFinite(nxt[i])) {
+						nxt[i] += biasDelta;
+					}
+				}
+			}
+
+			const cutoffDepth =
+				opts.spliceDepth !== undefined &&
+				opts.spliceDepth !== null &&
+				Number.isFinite(Number(opts.spliceDepth))
+					? Number(opts.spliceDepth)
+					: overlapCount > 0
+						? 0.5 * (ovTop + ovBot)
+						: 0.5 * ((Number.isFinite(topA) ? topA : 0) + (Number.isFinite(topB) ? topB : 0));
+
+			const aIsUpper = (Number.isFinite(topA) ? topA : 0) <= (Number.isFinite(topB) ? topB : 0);
+			const ovSpan = ovBot - ovTop;
+
+			const combined = new Array<number>(n).fill(Number.NaN);
+			for (let i = 0; i < n; i++) {
+				const d = deptArr[i];
+				const va = acc[i];
+				const vb = nxt[i];
+				const fa = Number.isFinite(va);
+				const fb = Number.isFinite(vb);
+
+				if (!fa && !fb) {
+					combined[i] = Number.NaN;
+				} else if (fa && !fb) {
+					combined[i] = va;
+				} else if (!fa && fb) {
+					combined[i] = vb;
+				} else {
+					// Both runs have finite data at depth d
+					if (ovMode === 'keep_first') {
+						combined[i] = va;
+					} else if (ovMode === 'keep_last') {
+						combined[i] = vb;
+					} else if (ovMode === 'mean') {
+						combined[i] = 0.5 * (va + vb);
+					} else if (ovMode === 'splice_depth') {
+						const upperVal = aIsUpper ? va : vb;
+						const lowerVal = aIsUpper ? vb : va;
+						combined[i] = d <= cutoffDepth ? upperVal : lowerVal;
+					} else {
+						// 'blend': smooth linear feather across [ovTop, ovBot]
+						if (ovSpan > 1e-6 && Number.isFinite(d)) {
+							const w = Math.max(0, Math.min(1, (d - ovTop) / ovSpan));
+							combined[i] = aIsUpper ? (1 - w) * va + w * vb : w * va + (1 - w) * vb;
+						} else {
+							combined[i] = 0.5 * (va + vb);
+						}
+					}
+				}
+			}
+			acc = combined;
+		}
+
+		// Optional linear interpolation across small internal gaps between runs
+		if (interpGaps) {
+			let i = 0;
+			const n = acc.length;
+			while (i < n) {
+				if (!Number.isFinite(acc[i])) {
+					const startGap = i;
+					while (i < n && !Number.isFinite(acc[i])) i++;
+					const endGap = i; // first valid index after gap
+					if (startGap > 0 && endGap < n) {
+						const d0 = deptArr[startGap - 1];
+						const d1 = deptArr[endGap];
+						const v0 = acc[startGap - 1];
+						const v1 = acc[endGap];
+						const gapSpan = Math.abs(d1 - d0);
+						if (
+							Number.isFinite(d0) &&
+							Number.isFinite(d1) &&
+							Number.isFinite(v0) &&
+							Number.isFinite(v1) &&
+							gapSpan > 1e-6 &&
+							gapSpan <= maxGapM
+						) {
+							for (let g = startGap; g < endGap; g++) {
+								const dg = deptArr[g];
+								if (Number.isFinite(dg)) {
+									const t = (dg - d0) / (d1 - d0);
+									acc[g] = v0 + t * (v1 - v0);
+								}
+							}
+						}
+					}
+				} else {
+					i++;
+				}
+			}
+		}
+
+		const newStats = computeSummaryStats(acc, deptArr);
+		const nextCurves: Record<string, number[]> = { ...this.curves, [dst]: acc };
+		const nextStats: Record<string, CurveSummaryStats> = { ...this.stats, [dst]: newStats };
+
+		if (existingDst && origDstArr && oriName && !nextCurves[oriName]) {
+			const oriCopy = [...origDstArr];
+			nextCurves[oriName] = oriCopy;
+			nextStats[oriName] = computeSummaryStats(oriCopy, deptArr);
+		}
+
+		this.curves = nextCurves;
+		this.committedBaseCurves = { ...this.committedBaseCurves, [dst]: [...acc] };
+		this.stats = nextStats;
+		workbench.selectedQaqcCurve = dst;
+
+		if (opts.persist && workbench.projectId && workbench.wellId) {
+			this.isCalculating = true;
+			try {
+				const oriToSave = existingDst && oriName ? nextCurves[oriName] : null;
+				await postJson(
+					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/curve_edit`,
+					{
+						action: 'save_values',
+						curve: validSources[0],
+						target_curve: dst,
+						depths: deptArr,
+						values: acc.map((v) => (Number.isFinite(v) ? v : null)),
+						ori_curve: existingDst && oriName ? oriName : null,
+						ori_values: oriToSave
+							? oriToSave.map((v) => (Number.isFinite(v) ? v : null))
+							: null,
+						save: true
+					}
+				);
+				const nextPending = { ...this.pendingModuleCurves };
+				delete nextPending['qaqc-edit'];
+				this.pendingModuleCurves = nextPending;
+				this.lastSavedMessage = `Spliced ${validSources.join(' + ')} → ${dst} ✓`;
+				appStatus.success(
+					`Spliced ${validSources.join(' + ')} → ${dst} (${newStats.count.toLocaleString()} valid pts, ${newStats.top ?? '—'}–${newStats.bottom ?? '—'} m)`,
+					workbench.wellId
+				);
+			} finally {
+				this.isCalculating = false;
+			}
+		} else {
+			const editedCols = [dst];
+			if (existingDst && oriName && nextCurves[oriName]) {
+				editedCols.push(oriName);
+			}
+			this.markModuleComputed('qaqc-edit', editedCols);
+			appStatus.success(
+				`Spliced ${validSources.join(' + ')} → ${dst} (${newStats.top ?? '—'}–${newStats.bottom ?? '—'} m)`,
+				workbench.wellId ?? undefined
+			);
+		}
 	}
 
 	/**

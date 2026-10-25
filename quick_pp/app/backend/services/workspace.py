@@ -232,28 +232,44 @@ def _get_filtered_well_df(
     return filtered
 
 
-def _curve_summary_stats(series: pd.Series) -> Dict[str, Optional[float]]:
-    """Return compact summary statistics (min, max, mean, p10, p50, p90, valid_count) for a numeric Series."""
-    s = (
-        pd.to_numeric(series, errors="coerce")
-        .replace([np.inf, -np.inf], np.nan)
-        .dropna()
-    )
+def _curve_summary_stats(
+    series: pd.Series, depths: Optional[pd.Series] = None
+) -> Dict[str, Optional[float]]:
+    """Return compact summary statistics (top, bottom, min, max, mean, std, p10, p50, p90, valid_count) for a numeric Series."""
+    s_num = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    valid_mask = s_num.notna()
+    s = s_num[valid_mask]
     if s.empty:
         return {
             "count": 0,
+            "top": None,
+            "bottom": None,
             "min": None,
             "max": None,
             "mean": None,
+            "std": None,
             "p10": None,
             "p50": None,
             "p90": None,
         }
+    top_val: Optional[float] = None
+    bottom_val: Optional[float] = None
+    if depths is not None:
+        d_num = pd.to_numeric(depths, errors="coerce").replace(
+            [np.inf, -np.inf], np.nan
+        )
+        d_valid = d_num[valid_mask & d_num.notna()]
+        if not d_valid.empty:
+            top_val = round(float(d_valid.min()), 4)
+            bottom_val = round(float(d_valid.max()), 4)
     return {
         "count": int(len(s)),
+        "top": top_val,
+        "bottom": bottom_val,
         "min": round(float(s.min()), 6),
         "max": round(float(s.max()), 6),
         "mean": round(float(s.mean()), 6),
+        "std": round(float(s.std()), 6) if len(s) > 1 else 0.0,
         "p10": round(float(np.percentile(s, 10)), 6),
         "p50": round(float(np.percentile(s, 50)), 6),
         "p90": round(float(np.percentile(s, 90)), 6),
@@ -925,15 +941,32 @@ def workspace_well_bundle(
                         curves_map[canonical] = curves_map[alias]
                         break
 
+        depth_s = (
+            pd.to_numeric(df["DEPTH"], errors="coerce")
+            if "DEPTH" in df.columns
+            else None
+        )
         stats: Dict[str, Any] = {}
         for col in df.columns:
             if col in ("WELL_NAME", "ZONES"):
                 continue
-            s = pd.to_numeric(df[col], errors="coerce")
-            if s.notna().any():
-                clean = s.dropna()
+            s = pd.to_numeric(df[col], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            )
+            valid_m = s.notna()
+            if valid_m.any():
+                clean = s[valid_m]
+                top_d = None
+                bot_d = None
+                if depth_s is not None:
+                    d_clean = depth_s[valid_m & depth_s.notna()]
+                    if not d_clean.empty:
+                        top_d = round(float(d_clean.min()), 2)
+                        bot_d = round(float(d_clean.max()), 2)
                 stats[col] = {
                     "count": int(len(clean)),
+                    "top": top_d,
+                    "bottom": bot_d,
                     "min": round(float(clean.min()), 4),
                     "max": round(float(clean.max()), 4),
                     "mean": round(float(clean.mean()), 4),
@@ -942,6 +975,12 @@ def workspace_well_bundle(
                     "p50": round(float(np.percentile(clean, 50)), 4),
                     "p90": round(float(np.percentile(clean, 90)), 4),
                 }
+        for canonical, aliases in alias_groups.items():
+            if canonical not in stats and canonical in curves_map:
+                for alias in aliases:
+                    if alias in stats:
+                        stats[canonical] = dict(stats[alias])
+                        break
 
         ancillary: Dict[str, Any] = {}
         well_config: Dict[str, Any] = {}
@@ -6325,12 +6364,36 @@ def workspace_demo_reset(project_id: int) -> Dict[str, Any]:
 class WorkspaceCurveEditRequest(WorkspaceFilterBase):
     action: str = Field(
         "transform",
-        description="Action: 'transform', 'duplicate', 'rename', 'delete', or 'save_values'",
+        description="Action: 'transform', 'duplicate', 'rename', 'delete', 'splice', or 'save_values'",
     )
     curve: str = Field(..., description="Source curve mnemonic")
     target_curve: Optional[str] = Field(
         None,
         description="Target curve mnemonic (defaults to source curve for in-place transform)",
+    )
+    source_curves: Optional[List[str]] = Field(
+        None,
+        description="Ordered list of curve mnemonics to splice when action='splice'",
+    )
+    overlap_mode: Optional[str] = Field(
+        "blend",
+        description="Overlap resolution mode for 'splice': 'blend', 'splice_depth', 'keep_first', 'keep_last', or 'mean'",
+    )
+    splice_depth: Optional[float] = Field(
+        None,
+        description="Explicit splice tie-in depth (m) when overlap_mode='splice_depth'",
+    )
+    auto_level_overlap: bool = Field(
+        False,
+        description="Automatically shift secondary run to match primary run mean in overlap interval",
+    )
+    interpolate_gaps: bool = Field(
+        False,
+        description="Linearly interpolate small gaps between spliced runs",
+    )
+    max_gap_m: float = Field(
+        2.0,
+        description="Maximum gap width (m) to linearly interpolate when interpolate_gaps=True",
     )
     operation: Optional[str] = Field(
         None,
@@ -6467,7 +6530,12 @@ def workspace_curve_edit(
             _update_cached_well_column(project_id, well_name, "rename", src, dst)
             full_df = _get_merged_dataframe_sync(project_id, well_name)
             stats = (
-                {dst: _curve_summary_stats(full_df[dst])}
+                {
+                    dst: _curve_summary_stats(
+                        full_df[dst],
+                        full_df["DEPTH"] if "DEPTH" in full_df.columns else None,
+                    )
+                }
                 if dst in full_df.columns
                 else {}
             )
@@ -6508,9 +6576,11 @@ def workspace_curve_edit(
                 saved_rows = _save_curves_to_well(project_id, well_name, out_df)
             else:
                 _update_in_memory_well_cache(project_id, well_name, out_df)
-            stats_out = {dst: _curve_summary_stats(out_df[dst])}
+            stats_out = {dst: _curve_summary_stats(out_df[dst], out_df["DEPTH"])}
             if ori_name and ori_name in out_df.columns:
-                stats_out[ori_name] = _curve_summary_stats(out_df[ori_name])
+                stats_out[ori_name] = _curve_summary_stats(
+                    out_df[ori_name], out_df["DEPTH"]
+                )
             return {
                 "well_name": well_name,
                 "action": "save_values",
@@ -6525,7 +6595,130 @@ def workspace_curve_edit(
             }
 
         full_df = _get_merged_dataframe_sync(project_id, well_name)
-        if full_df.empty or src not in full_df.columns:
+        if full_df.empty:
+            raise ValueError(f"No data found in well '{well_name}'")
+
+        if act == "splice":
+            src_list = [
+                c.strip().upper()
+                for c in (req.source_curves or [src])
+                if c and c.strip()
+            ]
+            valid_srcs = [c for c in src_list if c in full_df.columns]
+            if len(valid_srcs) < 2:
+                raise ValueError(
+                    "At least two valid curves are required to splice runs."
+                )
+            if not dst or dst in protected:
+                raise ValueError("Valid target curve mnemonic is required for splice.")
+
+            depth_arr = pd.to_numeric(full_df["DEPTH"], errors="coerce").to_numpy(
+                dtype=float
+            )
+            acc = pd.to_numeric(full_df[valid_srcs[0]], errors="coerce").to_numpy(
+                dtype=float
+            ).copy()
+            ov_mode = (req.overlap_mode or "blend").strip().lower()
+
+            for next_col in valid_srcs[1:]:
+                nxt = (
+                    pd.to_numeric(full_df[next_col], errors="coerce")
+                    .to_numpy(dtype=float)
+                    .copy()
+                )
+                valid_a = np.isfinite(acc) & np.isfinite(depth_arr)
+                valid_b = np.isfinite(nxt) & np.isfinite(depth_arr)
+                overlap = valid_a & valid_b
+
+                if req.auto_level_overlap and np.any(overlap):
+                    bias_delta = float(np.mean(acc[overlap] - nxt[overlap]))
+                    nxt[valid_b] = nxt[valid_b] + bias_delta
+
+                only_b = (~valid_a) & valid_b
+                if ov_mode == "keep_first":
+                    acc[only_b] = nxt[only_b]
+                elif ov_mode == "keep_last":
+                    acc[valid_b] = nxt[valid_b]
+                elif ov_mode == "mean":
+                    acc[only_b] = nxt[only_b]
+                    acc[overlap] = 0.5 * (acc[overlap] + nxt[overlap])
+                elif ov_mode == "splice_depth":
+                    top_a = float(np.min(depth_arr[valid_a])) if np.any(valid_a) else 0.0
+                    top_b = float(np.min(depth_arr[valid_b])) if np.any(valid_b) else 0.0
+                    if req.splice_depth is not None and math.isfinite(float(req.splice_depth)):
+                        cutoff = float(req.splice_depth)
+                    elif np.any(overlap):
+                        cutoff = 0.5 * (
+                            float(np.min(depth_arr[overlap]))
+                            + float(np.max(depth_arr[overlap]))
+                        )
+                    else:
+                        cutoff = 0.5 * (top_a + top_b)
+                    upper_arr = acc if top_a <= top_b else nxt
+                    lower_arr = nxt if top_a <= top_b else acc
+                    u_valid = np.isfinite(upper_arr)
+                    l_valid = np.isfinite(lower_arr)
+                    combined = np.full_like(acc, np.nan)
+                    above = depth_arr <= cutoff
+                    below = ~above
+                    combined[above] = np.where(
+                        u_valid[above], upper_arr[above], lower_arr[above]
+                    )
+                    combined[below] = np.where(
+                        l_valid[below], lower_arr[below], upper_arr[below]
+                    )
+                    acc = combined
+                else:  # blend (linear feather across overlap)
+                    acc[only_b] = nxt[only_b]
+                    if np.any(overlap):
+                        ov_d = depth_arr[overlap]
+                        d_min = float(np.min(ov_d))
+                        d_max = float(np.max(ov_d))
+                        top_a = (
+                            float(np.min(depth_arr[valid_a]))
+                            if np.any(valid_a)
+                            else d_min
+                        )
+                        top_b = (
+                            float(np.min(depth_arr[valid_b]))
+                            if np.any(valid_b)
+                            else d_min
+                        )
+                        span = d_max - d_min
+                        if span > 1e-6:
+                            w = (ov_d - d_min) / span
+                            if top_a <= top_b:
+                                acc[overlap] = (1.0 - w) * acc[overlap] + w * nxt[overlap]
+                            else:
+                                acc[overlap] = w * acc[overlap] + (1.0 - w) * nxt[overlap]
+                        else:
+                            acc[overlap] = 0.5 * (acc[overlap] + nxt[overlap])
+
+            s_spliced = pd.Series(acc, index=full_df.index, dtype=float)
+            if req.interpolate_gaps:
+                s_spliced = s_spliced.interpolate(
+                    method="linear", limit=max(1, int(round(float(req.max_gap_m) / 0.1524))), limit_area="inside"
+                )
+
+            out_df = pd.DataFrame({"DEPTH": full_df["DEPTH"], dst: s_spliced})
+            saved_rows = 0
+            if req.save:
+                saved_rows = _save_curves_to_well(project_id, well_name, out_df)
+            else:
+                _update_in_memory_well_cache(project_id, well_name, out_df)
+
+            return {
+                "well_name": well_name,
+                "action": "splice",
+                "source_curves": valid_srcs,
+                "target_curve": dst,
+                "saved": req.save,
+                "saved_rows": saved_rows,
+                "stats": {dst: _curve_summary_stats(out_df[dst], out_df["DEPTH"])},
+                **dataframe_to_columnar(out_df),
+            }
+
+        if src not in full_df.columns:
             raise ValueError(f"Curve '{src}' not found in well '{well_name}'")
 
         if act == "duplicate":
@@ -6549,7 +6742,7 @@ def workspace_curve_edit(
                 "target_curve": dst,
                 "saved": req.save,
                 "saved_rows": saved_rows,
-                "stats": {dst: _curve_summary_stats(out_df[dst])},
+                "stats": {dst: _curve_summary_stats(out_df[dst], out_df["DEPTH"])},
                 **dataframe_to_columnar(out_df),
             }
 
@@ -6617,7 +6810,7 @@ def workspace_curve_edit(
             "target_curve": dst,
             "saved": req.save,
             "saved_rows": saved_rows,
-            "stats": {dst: _curve_summary_stats(s)},
+            "stats": {dst: _curve_summary_stats(s, df["DEPTH"])},
             **dataframe_to_columnar(out_df),
         }
     except ValueError as e:

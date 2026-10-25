@@ -369,22 +369,24 @@
 			// Fallback: Curve summary statistics table
 			const statRows = Object.entries(wellData.stats).map(([curve, s]) => ({
 				Curve: curve,
-				Count: s.count,
+				Top: s.top,
+				Bottom: s.bottom,
 				Min: s.min,
-				P50: s.p50,
+				Max: s.max,
 				Mean: s.mean,
-				Max: s.max
+				Std: s.std
 			}));
 
 			return {
 				title: 'Curve Summary Metrics',
 				columns: [
 					{ key: 'Curve', label: 'Curve' },
-					{ key: 'Count', label: 'Count', numeric: true, decimals: 0 },
+					{ key: 'Top', label: 'Top', unit: 'm', numeric: true, decimals: 1 },
+					{ key: 'Bottom', label: 'Bottom', unit: 'm', numeric: true, decimals: 1 },
 					{ key: 'Min', label: 'Min', numeric: true, decimals: 3 },
-					{ key: 'P50', label: 'P50', numeric: true, decimals: 3 },
+					{ key: 'Max', label: 'Max', numeric: true, decimals: 3 },
 					{ key: 'Mean', label: 'Mean', numeric: true, decimals: 3 },
-					{ key: 'Max', label: 'Max', numeric: true, decimals: 3 }
+					{ key: 'Std', label: 'Std', numeric: true, decimals: 3 }
 				],
 				rows: statRows
 			};

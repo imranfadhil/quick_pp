@@ -36,6 +36,8 @@ export interface ProjectSummaryResponse {
 
 export interface CurveSummaryStats {
 	count: number;
+	top?: number | null;
+	bottom?: number | null;
 	min: number | null;
 	max: number | null;
 	mean: number | null;
