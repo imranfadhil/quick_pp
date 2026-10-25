@@ -70,9 +70,7 @@
 
 	const PROVIDER_BADGES: Record<string, string> = {
 		native_mcp: 'Built-in Agent',
-		openai: 'OpenAI',
-		gemini: 'Gemini',
-		anthropic: 'Claude',
+		openrouter: 'OpenRouter',
 		ollama: 'Ollama'
 	};
 
@@ -86,32 +84,27 @@
 			models: ['qpp-domain-agent-v1']
 		},
 		{
-			id: 'openai',
-			name: 'OpenAI / Compatible (GPT-4o / o3-mini)',
+			id: 'openrouter',
+			name: 'OpenRouter (DeepSeek / Gemini / Claude / GPT)',
 			requires_key: true,
-			default_model: 'gpt-4o-mini',
-			models: ['gpt-4o-mini', 'gpt-4o', 'o3-mini']
-		},
-		{
-			id: 'gemini',
-			name: 'Google Gemini (2.5 Flash / Pro)',
-			requires_key: true,
-			default_model: 'gemini-2.5-flash',
-			models: ['gemini-2.5-flash', 'gemini-2.5-pro']
-		},
-		{
-			id: 'anthropic',
-			name: 'Anthropic Claude (Sonnet / Haiku)',
-			requires_key: true,
-			default_model: 'claude-3-5-sonnet-latest',
-			models: ['claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest']
+			default_model: 'deepseek/deepseek-chat',
+			models: [
+				'deepseek/deepseek-chat',
+				'deepseek/deepseek-r1',
+				'google/gemini-2.5-flash',
+				'google/gemini-2.5-pro',
+				'anthropic/claude-3.7-sonnet',
+				'openai/gpt-4o-mini',
+				'qwen/qwen-2.5-72b-instruct'
+			],
+			default_base_url: 'https://openrouter.ai/api/v1'
 		},
 		{
 			id: 'ollama',
-			name: 'Local Ollama (Qwen 2.5 / Llama 3.2)',
+			name: 'Local Ollama (Qwen 2.5 / DeepSeek R1 / Llama 3.2)',
 			requires_key: false,
 			default_model: 'qwen2.5:7b',
-			models: ['qwen2.5:7b', 'llama3.2:latest', 'mistral:latest'],
+			models: ['qwen2.5:7b', 'deepseek-r1:8b', 'llama3.2:latest', 'mistral:latest'],
 			default_base_url: 'http://localhost:11434/v1'
 		}
 	]);
@@ -142,15 +135,33 @@
 
 	onMount(async () => {
 		try {
+			localStorage.removeItem('qpp_assistant_api_key');
+			const savedProv = localStorage.getItem('qpp_assistant_provider');
+			const savedModel = localStorage.getItem('qpp_assistant_model');
+			if (savedProv) selectedProvider = savedProv;
+			if (savedModel) selectedModel = savedModel;
+
 			const res = await fetch(`${API_BASE}/quick_pp/assistant/providers`);
 			if (res.ok) {
 				const data = await res.json();
 				if (Array.isArray(data.providers) && data.providers.length > 0) {
 					providers = data.providers;
+					const orProv = providers.find((p) => p.id === 'openrouter');
+					if (!savedProv && orProv?.server_key_configured) {
+						selectedProvider = 'openrouter';
+						selectedModel = orProv.default_model;
+					}
 				}
 			}
 		} catch {
 			// Use built-in defaults if offline
+		}
+	});
+
+	$effect(() => {
+		if (typeof window !== 'undefined') {
+			localStorage.setItem('qpp_assistant_provider', selectedProvider);
+			localStorage.setItem('qpp_assistant_model', selectedModel);
 		}
 	});
 
@@ -728,7 +739,7 @@
 						</span>
 						<input
 							type="password"
-							placeholder="sk-... / AIza..."
+							placeholder="sk-or-v1-..."
 							bind:value={apiKey}
 							class="mono-num h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0 text-[11px] text-[var(--text-primary)]"
 						/>
@@ -736,15 +747,15 @@
 				</div>
 			{/if}
 
-			{#if selectedProvider === 'ollama' || selectedProvider === 'openai'}
+			{#if selectedProvider === 'ollama' || selectedProvider === 'openrouter'}
 				<label class="block">
 					<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">
-						Base URL (optional for Ollama / vLLM / OpenRouter)
+						Base URL (optional for Ollama / OpenRouter)
 					</span>
 					<input
 						type="text"
 						placeholder={activeProviderObj.default_base_url ||
-							'https://api.openai.com/v1'}
+							'https://openrouter.ai/api/v1'}
 						bind:value={customBaseUrl}
 						class="mono-num h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0 text-[11px] text-[var(--text-primary)]"
 					/>

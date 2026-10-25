@@ -306,7 +306,7 @@ def test_petrophysical_mcp_server_and_agent_assistant(client_and_project):
     prov_body = r_prov.json()
     provider_ids = [p["id"] for p in prov_body["providers"]]
     assert "native_mcp" in provider_ids
-    assert "openai" in provider_ids
+    assert "openrouter" in provider_ids
     assert "ollama" in provider_ids
     tool_names = [t["name"] for t in prov_body["mcp_tools"]]
     assert "inspect_well" in tool_names

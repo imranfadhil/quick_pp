@@ -4,6 +4,9 @@
 # VCS
 .git
 .git/**
+.env
+.env.*
+!.env.example
 
 # Python caches
 **/__pycache__/

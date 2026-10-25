@@ -1202,19 +1202,19 @@ def synthesize_domain_ai_commentary(
             + "Generate the JSON object of technical section narratives."
         )
 
-        if prov in ("openai", "ollama"):
+        if prov in ("openrouter", "ollama", "openai"):
             b_url = (
                 base_url
                 or (
                     os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
                     if prov == "ollama"
-                    else os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+                    else os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
                 )
             ).rstrip("/")
             key = api_key or (
-                "ollama" if prov == "ollama" else os.getenv("OPENAI_API_KEY", "")
+                "ollama" if prov == "ollama" else os.getenv("OPENROUTER_API_KEY", "")
             )
-            mdl = model or ("qwen2.5:7b" if prov == "ollama" else "gpt-4o-mini")
+            mdl = model or ("qwen2.5:7b" if prov == "ollama" else "deepseek/deepseek-chat")
             if key:
                 resp = requests.post(
                     f"{b_url}/chat/completions",
