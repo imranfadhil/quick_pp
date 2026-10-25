@@ -98,8 +98,19 @@ function computeSummaryStats(arr: number[], deptArr?: number[]): CurveSummarySta
 class WellDataState {
 	isLoading = $state<boolean>(false);
 	isCalculating = $state<boolean>(false);
+	isRenderingPlot = $state<boolean>(false);
+	logCanvasMounted = $state<boolean>(false);
+	wellLoadGeneration = $state<number>(0);
 	lastError = $state<string | null>(null);
 	lastSavedMessage = $state<string | null>(null);
+
+	private _activeWellLoadTask: {
+		taskId: string;
+		wellName: string;
+		detail: string;
+		generation: number;
+		fallbackTimer: ReturnType<typeof setTimeout> | null;
+	} | null = null;
 
 	// Columnar log data keyed by mnemonic: { DEPT: [...], DEPTH: [...], GR: [...], PHIE: [...] }
 	curves = $state<Record<string, number[]>>({});
@@ -765,10 +776,48 @@ class WellDataState {
 		return `qpp_well_focus_${projectId}_${wellName}`;
 	}
 
+	cancelPendingWellLoadTask() {
+		const pending = this._activeWellLoadTask;
+		if (!pending) return;
+		if (pending.fallbackTimer) {
+			clearTimeout(pending.fallbackTimer);
+		}
+		this._activeWellLoadTask = null;
+		this.isRenderingPlot = false;
+		appStatus.endTask(pending.taskId, { silent: true });
+	}
+
+	completeWellRenderStatus(generation?: number) {
+		const pending = this._activeWellLoadTask;
+		if (!pending) {
+			this.isRenderingPlot = false;
+			return;
+		}
+		if (generation !== undefined && pending.generation !== generation) {
+			return;
+		}
+		if (pending.fallbackTimer) {
+			clearTimeout(pending.fallbackTimer);
+		}
+		this._activeWellLoadTask = null;
+		this.isRenderingPlot = false;
+		appStatus.endTask(pending.taskId, {
+			level: 'success',
+			message: `Loaded well ${pending.wellName}`,
+			detail: pending.detail
+		});
+	}
+
 	async loadWellBundle(projectId: string | number, wellName: string) {
 		if (!projectId || !wellName) return;
+		const gen = ++this.wellLoadGeneration;
+		this.cancelPendingWellLoadTask();
 		this.isLoading = true;
 		this.lastError = null;
+		const taskId = appStatus.startTask(
+			`Loading well ${wellName}...`,
+			'Fetching log curves & ancillary data'
+		);
 		try {
 			const { data, error } = await api.GET(
 				'/quick_pp/workspace/projects/{project_id}/wells/{well_name}/bundle',
@@ -778,9 +827,18 @@ class WellDataState {
 					}
 				}
 			);
+			if (gen !== this.wellLoadGeneration) {
+				appStatus.endTask(taskId, { silent: true });
+				return;
+			}
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Failed to load well bundle'));
 			}
+
+			appStatus.updateTask(taskId, {
+				label: `Preparing well data (${wellName})...`,
+				detail: 'Parsing log curves & ancillary tables'
+			});
 
 			const numericCurves: Record<string, number[]> = {};
 			const origCopy: Record<string, number[]> = {};
@@ -1017,16 +1075,44 @@ class WellDataState {
 			const nCurves = Object.keys(numericCurves).filter(
 				(k) => k !== 'DEPT' && k !== 'DEPTH'
 			).length;
-			appStatus.success(
-				`Loaded well ${wellName}`,
-				`${nRows.toLocaleString()} depth rows • ${nCurves} curves • ${this.tops.length} tops`
-			);
+			const detail = `${nRows.toLocaleString()} depth rows • ${nCurves} curves • ${this.tops.length} tops`;
+
+			if (this.logCanvasMounted) {
+				this.isRenderingPlot = true;
+				appStatus.updateTask(taskId, {
+					label: `Rendering well plot for ${wellName}...`,
+					detail
+				});
+				const fallbackTimer = setTimeout(() => {
+					this.completeWellRenderStatus(gen);
+				}, 5000);
+				this._activeWellLoadTask = {
+					taskId,
+					wellName,
+					detail,
+					generation: gen,
+					fallbackTimer
+				};
+			} else {
+				appStatus.endTask(taskId, {
+					level: 'success',
+					message: `Loaded well ${wellName}`,
+					detail
+				});
+			}
 		} catch (e: any) {
 			const errMsg = e?.message || 'Error loading well data';
 			this.lastError = errMsg;
-			appStatus.error(errMsg, wellName);
+			this.isRenderingPlot = false;
+			appStatus.endTask(taskId, {
+				level: 'error',
+				message: errMsg,
+				detail: wellName
+			});
 		} finally {
-			this.isLoading = false;
+			if (gen === this.wellLoadGeneration) {
+				this.isLoading = false;
+			}
 		}
 	}
 

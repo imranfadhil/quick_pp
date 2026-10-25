@@ -147,7 +147,8 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 				return {
 					active: `Loading well bundle (${wellName})...`,
 					done: `Loaded well ${wellName}`,
-					detail: wellName
+					detail: wellName,
+					silent: true
 				};
 			case 'hc_correction':
 				return {
@@ -390,8 +391,10 @@ api.use({
 			request.headers.set('Authorization', `Bearer ${token}`);
 		}
 		const desc = describeApiEndpoint(request.method, request.url);
-		const taskId = appStatus.startTask(desc.active, desc.detail);
-		inFlightRequests.set(request, { taskId, desc });
+		if (!desc.silent) {
+			const taskId = appStatus.startTask(desc.active, desc.detail);
+			inFlightRequests.set(request, { taskId, desc });
+		}
 		return request;
 	},
 	async onResponse({ request, response }) {

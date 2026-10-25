@@ -128,9 +128,14 @@
 
 	$effect(() => {
 		if (!browser) return;
+		wellData.logCanvasMounted = true;
 		import('plotly.js-dist-min').then((mod) => {
 			PlotlyLib = mod.default || mod;
 		});
+		return () => {
+			wellData.logCanvasMounted = false;
+			wellData.completeWellRenderStatus();
+		};
 	});
 
 	// Sync initial or filtered depth range when well or filter changes
@@ -1347,7 +1352,6 @@
 	// Render or update Plotly chart reactively when curves or filters change
 	// (Brushed intervals are rendered in the HTML overlay so brushing never triggers Plotly.react or zoom resets)
 	$effect(() => {
-		if (!PlotlyLib || !plotContainer) return;
 		// Track dependencies
 		void wellData.curves;
 		void wellData.visibleIndices;
@@ -1359,71 +1363,124 @@
 		void workbench.lithoParams.enableHcCorrection;
 		void workbench.lithoParams.model;
 		void workbench.lithoParams.minerals;
+		const renderGen = wellData.wellLoadGeneration;
 
-		const defaultDepthRange = syncYRangeIfFilterChanged();
-		const { traces, layout } = buildTracesAndLayout();
-		untrack(() =>
-			PlotlyLib.react(plotContainer, traces, layout, {
-				responsive: true,
-				displaylogo: false,
-				scrollZoom: true,
-				modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d']
-			})
-		).then(() => {
-			syncPlotBounds();
-			const fullYAxis = (plotContainer as any)?._fullLayout?.yaxis;
-			if (fullYAxis) {
-				fullYAxis._rangeInitial0 = defaultDepthRange[0];
-				fullYAxis._rangeInitial1 = defaultDepthRange[1];
-			}
-			if (!plotReady && plotContainer) {
-				plotReady = true;
-				let hoverRaf = 0;
-				(plotContainer as any).on('plotly_hover', (ev: any) => {
-					const pt = ev?.points?.[0];
-					if (pt && typeof pt.y === 'number') {
-						const nextY = pt.y;
-						cancelAnimationFrame(hoverRaf);
-						hoverRaf = requestAnimationFrame(() => {
-							workbench.cursorDepth = nextY;
+		if (!PlotlyLib || !plotContainer) return;
+
+		let cancelled = false;
+		let preRenderRaf = 0;
+		let postRenderRaf = 0;
+		let renderTimer: ReturnType<typeof setTimeout> | null = null;
+
+		const runPlotRender = () => {
+			if (cancelled || !PlotlyLib || !plotContainer) return;
+			const defaultDepthRange = untrack(() => syncYRangeIfFilterChanged());
+			const { traces, layout } = untrack(() => buildTracesAndLayout());
+			untrack(() =>
+				PlotlyLib.react(plotContainer, traces, layout, {
+					responsive: true,
+					displaylogo: false,
+					scrollZoom: true,
+					modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d']
+				})
+			)
+				.then(() => {
+					if (cancelled) return;
+					syncPlotBounds();
+					const fullYAxis = (plotContainer as any)?._fullLayout?.yaxis;
+					if (fullYAxis) {
+						fullYAxis._rangeInitial0 = defaultDepthRange[0];
+						fullYAxis._rangeInitial1 = defaultDepthRange[1];
+					}
+					if (!plotReady && plotContainer) {
+						plotReady = true;
+						let hoverRaf = 0;
+						(plotContainer as any).on('plotly_hover', (ev: any) => {
+							const pt = ev?.points?.[0];
+							if (pt && typeof pt.y === 'number') {
+								const nextY = pt.y;
+								cancelAnimationFrame(hoverRaf);
+								hoverRaf = requestAnimationFrame(() => {
+									workbench.cursorDepth = nextY;
+								});
+							}
+						});
+						const extractRelayoutRange = (ev: any): [number, number] | null => {
+							if (
+								ev?.['yaxis.range[0]'] !== undefined &&
+								ev?.['yaxis.range[1]'] !== undefined
+							) {
+								return [Number(ev['yaxis.range[0]']), Number(ev['yaxis.range[1]'])];
+							}
+							if (Array.isArray(ev?.['yaxis.range'])) {
+								return [Number(ev['yaxis.range'][0]), Number(ev['yaxis.range'][1])];
+							}
+							const fullRange = (plotContainer as any)?._fullLayout?.yaxis?.range;
+							if (Array.isArray(fullRange) && fullRange.length === 2) {
+								return [Number(fullRange[0]), Number(fullRange[1])];
+							}
+							return null;
+						};
+						let relayoutRaf = 0;
+						(plotContainer as any).on('plotly_relayouting', (ev: any) => {
+							const nextRange = extractRelayoutRange(ev);
+							cancelAnimationFrame(relayoutRaf);
+							relayoutRaf = requestAnimationFrame(() => {
+								if (
+									nextRange &&
+									Number.isFinite(nextRange[0]) &&
+									Number.isFinite(nextRange[1])
+								) {
+									yRange = [nextRange[0], nextRange[1]];
+								}
+							});
+						});
+						(plotContainer as any).on('plotly_relayout', (ev: any) => {
+							cancelAnimationFrame(relayoutRaf);
+							const nextRange = extractRelayoutRange(ev);
+							if (
+								nextRange &&
+								Number.isFinite(nextRange[0]) &&
+								Number.isFinite(nextRange[1])
+							) {
+								yRange = [nextRange[0], nextRange[1]];
+							}
+							relayoutRaf = requestAnimationFrame(() => {
+								syncPlotBounds();
+							});
 						});
 					}
-				});
-				const extractRelayoutRange = (ev: any): [number, number] | null => {
-					if (ev?.['yaxis.range[0]'] !== undefined && ev?.['yaxis.range[1]'] !== undefined) {
-						return [Number(ev['yaxis.range[0]']), Number(ev['yaxis.range[1]'])];
-					}
-					if (Array.isArray(ev?.['yaxis.range'])) {
-						return [Number(ev['yaxis.range'][0]), Number(ev['yaxis.range'][1])];
-					}
-					const fullRange = (plotContainer as any)?._fullLayout?.yaxis?.range;
-					if (Array.isArray(fullRange) && fullRange.length === 2) {
-						return [Number(fullRange[0]), Number(fullRange[1])];
-					}
-					return null;
-				};
-				let relayoutRaf = 0;
-				(plotContainer as any).on('plotly_relayouting', (ev: any) => {
-					const nextRange = extractRelayoutRange(ev);
-					cancelAnimationFrame(relayoutRaf);
-					relayoutRaf = requestAnimationFrame(() => {
-						if (nextRange && Number.isFinite(nextRange[0]) && Number.isFinite(nextRange[1])) {
-							yRange = [nextRange[0], nextRange[1]];
+					// Wait one animation frame after Plotly updates DOM/WebGL so the browser paints
+					// the new well tracks on screen before marking the well status as "Loaded well xxx".
+					postRenderRaf = requestAnimationFrame(() => {
+						if (!cancelled) {
+							wellData.completeWellRenderStatus(renderGen);
 						}
 					});
-				});
-				(plotContainer as any).on('plotly_relayout', (ev: any) => {
-					cancelAnimationFrame(relayoutRaf);
-					const nextRange = extractRelayoutRange(ev);
-					if (nextRange && Number.isFinite(nextRange[0]) && Number.isFinite(nextRange[1])) {
-						yRange = [nextRange[0], nextRange[1]];
+				})
+				.catch(() => {
+					if (!cancelled) {
+						wellData.completeWellRenderStatus(renderGen);
 					}
-					relayoutRaf = requestAnimationFrame(() => {
-						syncPlotBounds();
-					});
 				});
-			}
-		});
+		};
+
+		if (untrack(() => wellData.isRenderingPlot)) {
+			// Yield one paint frame so the status bar visibly updates to "Rendering well plot..."
+			// before buildTracesAndLayout() and Plotly.react() execute on the main thread.
+			preRenderRaf = requestAnimationFrame(() => {
+				renderTimer = setTimeout(runPlotRender, 0);
+			});
+		} else {
+			runPlotRender();
+		}
+
+		return () => {
+			cancelled = true;
+			if (preRenderRaf) cancelAnimationFrame(preRenderRaf);
+			if (postRenderRaf) cancelAnimationFrame(postRenderRaf);
+			if (renderTimer) clearTimeout(renderTimer);
+		};
 	});
 
 	// Convert a depth value to CSS top percentage inside the plot area (margin top=6px, bottom=8px)
@@ -2041,6 +2098,25 @@
 		class="relative min-h-0 flex-1 overflow-hidden {intervalSelectMode ? 'cursor-crosshair' : ''}"
 	>
 		<div bind:this={plotContainer} class="h-full w-full"></div>
+
+		{#if wellData.isLoading || wellData.isRenderingPlot}
+			<div
+				class="pointer-events-none absolute inset-0 z-20 flex items-start justify-center bg-white/45 pt-4 backdrop-blur-[1px]"
+			>
+				<div
+					class="flex items-center gap-2 rounded-xs border border-blue-200 bg-white/95 px-3 py-1.5 text-[11px] font-medium text-slate-700 shadow-sm"
+				>
+					<span
+						class="inline-block h-3 w-3 animate-spin rounded-full border-[1.75px] border-blue-600 border-t-transparent"
+					></span>
+					<span>
+						{wellData.isLoading
+							? `Loading well ${workbench.wellId ?? ''}...`
+							: `Rendering well plot for ${workbench.wellId ?? ''}...`}
+					</span>
+				</div>
+			</div>
+		{/if}
 
 		<!-- Overlay container aligned with Plotly's plot area (Brushed Intervals & Fluid Contacts) -->
 		<div
