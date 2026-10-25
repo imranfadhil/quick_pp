@@ -7106,3 +7106,467 @@ def workspace_save_multi_well_computed_curves(
         raise HTTPException(
             status_code=500, detail=f"Failed to save multi-well computed curves: {e}"
         ) from e
+
+
+CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
+    "qaqc": (
+        "BADHOLE",
+        "BAD_HOLE",
+        "BAD_HOLE_FLAG",
+        "BS",
+        "DCALI",
+        "GR_CORR",
+        "NPHI_CORR",
+        "RHOB_CORR",
+        "RT_CORR",
+        "GR_NORM",
+        "NPHI_NORM",
+        "NPHI_HC",
+        "RHOB_HC",
+        "HC_FLAG",
+        "RHOB_DEN_CORR",
+        "DEN_CORR_FLAG",
+    ),
+    "litho_poro": (
+        "VSAND",
+        "VSILT",
+        "VCLAY",
+        "VSHALE",
+        "VCALC",
+        "VDOLO",
+        "VKAOL",
+        "VFELD",
+        "VANHY",
+        "VGYPS",
+        "VHALI",
+        "VPYRI",
+        "VCOAL",
+        "COAL_FLAG",
+        "VSH_GR",
+        "VSH_DN",
+        "PHIT",
+        "PHIE",
+        "PHID",
+        "PHIT_SH",
+        "VSH_LAM",
+        "VSH_DIS",
+        "PHIT_SAND",
+        "RSAND_TS",
+        "RT_MOD",
+        "PHIT_P10",
+        "PHIT_P50",
+        "PHIT_P90",
+        "PHIE_P10",
+        "PHIE_P50",
+        "PHIE_P90",
+        "VCLAY_P10",
+        "VCLAY_P50",
+        "VCLAY_P90",
+    ),
+    "perm": (
+        "PERM",
+        "PERM_TRANS",
+        "ROCK_FLAG",
+        "FZI",
+        "PERM_P10",
+        "PERM_P50",
+        "PERM_P90",
+    ),
+    "saturation": (
+        "SWT",
+        "SWE",
+        "SWT_ARCHIE",
+        "SWT_WAXMAN",
+        "BVW",
+        "TEMP_GRAD",
+        "RW",
+        "B",
+        "QVN",
+        "M_STAR",
+        "VCL_OVER_PHI",
+        "CWA",
+        "SHF",
+        "SW_SHF",
+        "SW_P10",
+        "SW_P50",
+        "SW_P90",
+    ),
+    "ressum": (
+        "RES_FLAG",
+        "PAY_FLAG",
+        "PAY_FLAGS",
+        "PHIT_BLK",
+        "PHIE_BLK",
+        "VCLAY_BLK",
+        "PERM_BLK",
+        "SWT_BLK",
+        "BVHC_P10",
+        "BVHC_P50",
+        "BVHC_P90",
+    ),
+}
+
+ALL_CALCULATED_CURVE_MNEMONICS: Tuple[str, ...] = tuple(
+    dict.fromkeys(
+        mnem
+        for grp_cols in CALCULATED_CURVES_BY_GROUP.values()
+        for mnem in grp_cols
+    )
+)
+
+
+class WorkspaceClearCalculatedRequest(BaseModel):
+    """Clear calculated/evaluated curves for a well either top-to-bottom or by formation/depth interval."""
+
+    scope: str = Field(
+        default="full",
+        description="Clear scope: 'full' (top to bottom across entire well), 'formation' (selected zones), or 'filtered' (zones and/or depth interval)",
+    )
+    groups: Optional[List[str]] = Field(
+        default=None,
+        description="Optional subset of calculated curve groups to clear: 'qaqc', 'litho_poro', 'perm', 'saturation', 'ressum'. Defaults to all groups.",
+    )
+    curves: Optional[List[str]] = Field(
+        default=None,
+        description="Optional explicit list of curve mnemonics to clear. Overrides `groups` if provided.",
+    )
+    zones: Optional[List[str]] = Field(
+        default=None,
+        description="Formation/zone names to clear when scope is 'formation' or 'filtered'.",
+    )
+    min_depth: Optional[float] = Field(
+        default=None,
+        description="Minimum depth (m) to clear when clearing a depth interval.",
+    )
+    max_depth: Optional[float] = Field(
+        default=None,
+        description="Maximum depth (m) to clear when clearing a depth interval.",
+    )
+    depths: Optional[List[float]] = Field(
+        default=None,
+        description="Optional explicit depth values to clear (nullify) for partial-well clear.",
+    )
+    save: bool = Field(
+        default=True,
+        description="Persist the cleared state to the database (and in-memory cache).",
+    )
+
+
+@router.post(
+    "/wells/{well_name}/clear_calculated",
+    summary="Clear calculated curves top-to-bottom or for selected formations/depth intervals",
+)
+def workspace_clear_calculated_curves(
+    project_id: int,
+    well_name: str,
+    req: WorkspaceClearCalculatedRequest,
+) -> Dict[str, Any]:
+    """Clear all or selected calculated petrophysical curves either top-to-bottom (full well) or within specific formations/depth intervals."""
+    try:
+        import time
+        from sqlalchemy import bindparam, select, text
+        from quick_pp.database import models as db_models
+
+        protected = {"DEPTH", "DEPT", "WELL_NAME", "ZONES"}
+        if req.curves:
+            target_candidates = [
+                str(c).strip().upper()
+                for c in req.curves
+                if str(c).strip() and str(c).strip().upper() not in protected
+            ]
+        elif req.groups:
+            target_candidates = []
+            for g in req.groups:
+                g_key = str(g).strip().lower().replace("-", "_")
+                for col in CALCULATED_CURVES_BY_GROUP.get(g_key, ()):
+                    if col not in target_candidates:
+                        target_candidates.append(col)
+        else:
+            target_candidates = list(ALL_CALCULATED_CURVE_MNEMONICS)
+
+        if not target_candidates:
+            return {
+                "well_name": well_name,
+                "scope": req.scope,
+                "cleared_curves": [],
+                "dropped_curves": [],
+                "cleared_rows": 0,
+                "saved": req.save,
+                "stats": {},
+            }
+
+        full_df = _get_merged_dataframe_sync(project_id, well_name)
+        present_targets = (
+            [c for c in target_candidates if c in full_df.columns]
+            if not full_df.empty
+            else list(target_candidates)
+        )
+
+        scope_norm = (req.scope or "full").strip().lower()
+        valid_zones = (
+            [str(z).strip() for z in (req.zones or []) if str(z).strip()]
+            if req.zones
+            else []
+        )
+        has_partial_filter = (
+            scope_norm in ("formation", "filtered", "depth_range")
+            and (
+                bool(valid_zones)
+                or req.min_depth is not None
+                or req.max_depth is not None
+                or bool(req.depths)
+            )
+        )
+
+        # Case 1: Full-well (Top to Bottom) clear -> drop calculated curve columns completely
+        if not has_partial_filter:
+            for key, (_, cdf) in list(_merged_data_cache.items()):
+                if key.startswith(f"{project_id}_{well_name}_"):
+                    updated = cdf.drop(columns=target_candidates, errors="ignore")
+                    _merged_data_cache[key] = (time.time(), updated)
+
+            eph_proj = _ephemeral_wells.get(project_id, {})
+            if well_name in eph_proj:
+                eph_entry = eph_proj[well_name]
+                if isinstance(eph_entry, pd.DataFrame):
+                    eph_proj[well_name] = eph_entry.drop(
+                        columns=target_candidates, errors="ignore"
+                    )
+                elif isinstance(eph_entry, dict) and isinstance(
+                    eph_entry.get("data"), pd.DataFrame
+                ):
+                    eph_entry["data"] = eph_entry["data"].drop(
+                        columns=target_candidates, errors="ignore"
+                    )
+
+            if req.save and not is_demo_mode():
+                db_name = resolve_db_well_name(project_id, well_name)
+                with get_db() as session:
+                    well_orm = session.scalar(
+                        select(db_models.Well).filter_by(
+                            project_id=project_id, name=db_name
+                        )
+                    )
+                    if well_orm:
+                        cids = [
+                            c.curve_id
+                            for c in well_orm.curves
+                            if str(c.mnemonic).upper() in set(target_candidates)
+                            and c.curve_id is not None
+                        ]
+                        if cids:
+                            session.execute(
+                                text(
+                                    "DELETE FROM curve_data WHERE curve_id IN :cids"
+                                ).bindparams(bindparam("cids", expanding=True)),
+                                {"cids": cids},
+                            )
+                            session.execute(
+                                text(
+                                    "DELETE FROM curves WHERE curve_id IN :cids"
+                                ).bindparams(bindparam("cids", expanding=True)),
+                                {"cids": cids},
+                            )
+                            session.flush()
+                invalidate_well_cache(project_id=project_id, well_name=well_name)
+
+            return {
+                "well_name": well_name,
+                "scope": "full",
+                "cleared_curves": present_targets,
+                "dropped_curves": present_targets,
+                "cleared_rows": int(len(full_df)) if not full_df.empty else 0,
+                "saved": req.save,
+                "stats": {},
+            }
+
+        # Case 2: Partial clear (by formation/zone, depth interval, or explicit depths)
+        if full_df.empty or "DEPTH" not in full_df.columns:
+            raise ValueError(f"No depth data found for well '{well_name}'")
+
+        depth_s = pd.to_numeric(full_df["DEPTH"], errors="coerce")
+        clear_mask = pd.Series(True, index=full_df.index, dtype=bool) & depth_s.notna()
+
+        if req.depths:
+            req_d_arr = np.round(
+                pd.to_numeric(pd.Series(req.depths), errors="coerce")
+                .dropna()
+                .to_numpy(dtype=float),
+                4,
+            )
+            full_d_round = np.round(depth_s.fillna(-999999.0).to_numpy(dtype=float), 4)
+            clear_mask = clear_mask & pd.Series(
+                np.isin(full_d_round, req_d_arr), index=full_df.index
+            )
+        else:
+            if req.min_depth is not None:
+                clear_mask = clear_mask & (depth_s >= float(req.min_depth))
+            if req.max_depth is not None:
+                clear_mask = clear_mask & (depth_s <= float(req.max_depth))
+            if valid_zones:
+                allowed_z = {z.upper() for z in valid_zones}
+                zone_col_s = (
+                    full_df["ZONES"].astype(str).str.strip().str.upper()
+                    if "ZONES" in full_df.columns
+                    else pd.Series("", index=full_df.index, dtype=str)
+                )
+                zone_match = zone_col_s.isin(allowed_z)
+
+                # Also check formation_tops intervals in case ZONES column was not pre-filled
+                if not zone_match.any():
+                    try:
+                        db_name = resolve_db_well_name(project_id, well_name)
+                        with get_db() as session:
+                            proj = db_objects.Project.load(
+                                session, project_id=project_id
+                            )
+                            well_obj = proj.get_well(db_name)
+                            tops_df = well_obj.get_formation_tops()
+                            if tops_df is not None and not tops_df.empty:
+                                tops_sorted = tops_df.sort_values("depth").reset_index(
+                                    drop=True
+                                )
+                                for idx_t, trow in tops_sorted.iterrows():
+                                    tname = str(trow.get("name") or "").strip().upper()
+                                    if tname in allowed_z:
+                                        top_d = float(trow["depth"])
+                                        bot_d = (
+                                            float(tops_sorted.iloc[idx_t + 1]["depth"])
+                                            if idx_t + 1 < len(tops_sorted)
+                                            else float(depth_s.max()) + 1.0
+                                        )
+                                        if idx_t + 1 < len(tops_sorted):
+                                            zone_match = zone_match | (
+                                                (depth_s >= top_d) & (depth_s < bot_d)
+                                            )
+                                        else:
+                                            zone_match = zone_match | (
+                                                (depth_s >= top_d) & (depth_s <= bot_d)
+                                            )
+                    except Exception:
+                        pass
+                clear_mask = clear_mask & zone_match
+
+        cleared_row_count = int(clear_mask.sum())
+        if cleared_row_count == 0:
+            return {
+                "well_name": well_name,
+                "scope": scope_norm,
+                "cleared_curves": [],
+                "dropped_curves": [],
+                "cleared_rows": 0,
+                "saved": req.save,
+                "stats": {},
+            }
+
+        cleared_depths_list = [
+            round(float(d), 4) for d in depth_s.loc[clear_mask].tolist()
+        ]
+        dropped_curves: List[str] = []
+        remaining_stats: Dict[str, Any] = {}
+
+        # Update in-memory DataFrame
+        updated_full = full_df.copy()
+        for col in present_targets:
+            col_s = pd.to_numeric(updated_full[col], errors="coerce")
+            col_s.loc[clear_mask] = np.nan
+            if col_s.notna().any():
+                updated_full[col] = col_s
+                remaining_stats[col] = _curve_summary_stats(col_s, depth_s)
+            else:
+                updated_full = updated_full.drop(columns=[col], errors="ignore")
+                dropped_curves.append(col)
+
+        for key in list(_merged_data_cache.keys()):
+            if key.startswith(f"{project_id}_{well_name}_"):
+                _merged_data_cache[key] = (time.time(), updated_full.copy())
+
+        eph_proj = _ephemeral_wells.get(project_id, {})
+        if well_name in eph_proj:
+            eph_entry = eph_proj[well_name]
+            if isinstance(eph_entry, pd.DataFrame):
+                eph_proj[well_name] = updated_full.copy()
+            elif isinstance(eph_entry, dict) and isinstance(
+                eph_entry.get("data"), pd.DataFrame
+            ):
+                eph_entry["data"] = updated_full.copy()
+        elif is_demo_mode():
+            _ephemeral_wells.setdefault(project_id, {})[well_name] = updated_full.copy()
+
+        if req.save and not is_demo_mode():
+            db_name = resolve_db_well_name(project_id, well_name)
+            with get_db() as session:
+                well_orm = session.scalar(
+                    select(db_models.Well).filter_by(
+                        project_id=project_id, name=db_name
+                    )
+                )
+                if well_orm:
+                    target_set = set(present_targets)
+                    dropped_set = set(dropped_curves)
+                    matching_curves = [
+                        c
+                        for c in well_orm.curves
+                        if str(c.mnemonic).upper() in target_set
+                        and c.curve_id is not None
+                    ]
+                    drop_cids = [
+                        c.curve_id
+                        for c in matching_curves
+                        if str(c.mnemonic).upper() in dropped_set
+                    ]
+                    partial_cids = [
+                        c.curve_id
+                        for c in matching_curves
+                        if str(c.mnemonic).upper() not in dropped_set
+                    ]
+                    if drop_cids:
+                        session.execute(
+                            text(
+                                "DELETE FROM curve_data WHERE curve_id IN :cids"
+                            ).bindparams(bindparam("cids", expanding=True)),
+                            {"cids": drop_cids},
+                        )
+                        session.execute(
+                            text(
+                                "DELETE FROM curves WHERE curve_id IN :cids"
+                            ).bindparams(bindparam("cids", expanding=True)),
+                            {"cids": drop_cids},
+                        )
+                    if partial_cids and cleared_depths_list:
+                        del_stmt = text(
+                            "DELETE FROM curve_data WHERE curve_id IN :cids AND ROUND(depth, 4) IN :depths"
+                        ).bindparams(
+                            bindparam("cids", expanding=True),
+                            bindparam("depths", expanding=True),
+                        )
+                        chunk_sz = 800
+                        for i in range(0, len(cleared_depths_list), chunk_sz):
+                            d_chunk = cleared_depths_list[i : i + chunk_sz]
+                            session.execute(
+                                del_stmt, {"cids": partial_cids, "depths": d_chunk}
+                            )
+                    session.flush()
+            invalidate_well_cache(project_id=project_id, well_name=well_name)
+            _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (
+                time.time(),
+                updated_full.copy(),
+            )
+
+        return {
+            "well_name": well_name,
+            "scope": scope_norm,
+            "zones": valid_zones,
+            "cleared_curves": present_targets,
+            "dropped_curves": dropped_curves,
+            "cleared_rows": cleared_row_count,
+            "saved": req.save,
+            "stats": remaining_stats,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to clear calculated curves: {e}"
+        ) from e
+

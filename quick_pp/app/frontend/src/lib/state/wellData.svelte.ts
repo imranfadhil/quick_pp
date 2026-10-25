@@ -34,6 +34,125 @@ export type CurveSpliceOverlapMode =
 	| 'keep_last'
 	| 'mean';
 
+export type CalculatedCurveGroupKey = 'qaqc' | 'litho_poro' | 'perm' | 'saturation' | 'ressum';
+
+export const CALCULATED_CURVE_GROUPS: Record<
+	CalculatedCurveGroupKey,
+	{ label: string; shortLabel: string; curves: readonly string[] }
+> = {
+	qaqc: {
+		label: 'QAQC & Conditioning',
+		shortLabel: 'QAQC',
+		curves: [
+			'BADHOLE',
+			'BAD_HOLE',
+			'BAD_HOLE_FLAG',
+			'BS',
+			'DCALI',
+			'GR_CORR',
+			'NPHI_CORR',
+			'RHOB_CORR',
+			'RT_CORR',
+			'GR_NORM',
+			'NPHI_NORM',
+			'NPHI_HC',
+			'RHOB_HC',
+			'HC_FLAG',
+			'RHOB_DEN_CORR',
+			'DEN_CORR_FLAG'
+		]
+	},
+	litho_poro: {
+		label: 'Lithology & Porosity',
+		shortLabel: 'Litho & Poro',
+		curves: [
+			'VSAND',
+			'VSILT',
+			'VCLAY',
+			'VSHALE',
+			'VCALC',
+			'VDOLO',
+			'VKAOL',
+			'VFELD',
+			'VANHY',
+			'VGYPS',
+			'VHALI',
+			'VPYRI',
+			'VCOAL',
+			'COAL_FLAG',
+			'VSH_GR',
+			'VSH_DN',
+			'PHIT',
+			'PHIE',
+			'PHID',
+			'PHIT_SH',
+			'VSH_LAM',
+			'VSH_DIS',
+			'PHIT_SAND',
+			'RSAND_TS',
+			'RT_MOD',
+			'PHIT_P10',
+			'PHIT_P50',
+			'PHIT_P90',
+			'PHIE_P10',
+			'PHIE_P50',
+			'PHIE_P90',
+			'VCLAY_P10',
+			'VCLAY_P50',
+			'VCLAY_P90'
+		]
+	},
+	perm: {
+		label: 'Permeability & Rock Type',
+		shortLabel: 'Perm & RT',
+		curves: ['PERM', 'PERM_TRANS', 'ROCK_FLAG', 'FZI', 'PERM_P10', 'PERM_P50', 'PERM_P90']
+	},
+	saturation: {
+		label: 'Water Saturation & SHF',
+		shortLabel: 'Saturation',
+		curves: [
+			'SWT',
+			'SWE',
+			'SWT_ARCHIE',
+			'SWT_WAXMAN',
+			'BVW',
+			'TEMP_GRAD',
+			'RW',
+			'B',
+			'QVN',
+			'M_STAR',
+			'VCL_OVER_PHI',
+			'CWA',
+			'SHF',
+			'SW_SHF',
+			'SW_P10',
+			'SW_P50',
+			'SW_P90'
+		]
+	},
+	ressum: {
+		label: 'Res. Summary & Blocking',
+		shortLabel: 'Res. Summary',
+		curves: [
+			'RES_FLAG',
+			'PAY_FLAG',
+			'PAY_FLAGS',
+			'PHIT_BLK',
+			'PHIE_BLK',
+			'VCLAY_BLK',
+			'PERM_BLK',
+			'SWT_BLK',
+			'BVHC_P10',
+			'BVHC_P50',
+			'BVHC_P90'
+		]
+	}
+};
+
+export const ALL_CALCULATED_CURVE_MNEMONICS: string[] = Array.from(
+	new Set(Object.values(CALCULATED_CURVE_GROUPS).flatMap((g) => g.curves))
+);
+
 function computeSummaryStats(arr: number[], deptArr?: number[]): CurveSummaryStats {
 	const valid: number[] = [];
 	let topVal = Infinity;
@@ -194,6 +313,28 @@ class WellDataState {
 		return Object.keys(this.curves).filter(
 			(k) => k !== 'DEPT' && k !== 'DEPTH' && k !== 'WELL_NAME' && k !== 'ZONES'
 		);
+	});
+
+	calculatedCurvesPresent = $derived.by(() => {
+		const calcSet = new Set(ALL_CALCULATED_CURVE_MNEMONICS);
+		return Object.keys(this.curves).filter(
+			(k) =>
+				calcSet.has(k) &&
+				Array.isArray(this.curves[k]) &&
+				this.curves[k].some((v) => typeof v === 'number' && Number.isFinite(v))
+		);
+	});
+
+	availableZones = $derived.by(() => {
+		const set = new Set<string>();
+		const sortedTops = [...this.tops].sort((a, b) => a.depth - b.depth);
+		for (const t of sortedTops) {
+			if (t.name?.trim()) set.add(t.name.trim());
+		}
+		for (const z of this.zonesColumn) {
+			if (z?.trim()) set.add(z.trim());
+		}
+		return Array.from(set);
 	});
 
 	totalDepthRows = $derived.by(() => {
@@ -1603,6 +1744,243 @@ class WellDataState {
 				this.isCalculating = false;
 			}
 		}
+	}
+
+	/**
+	 * Return log depth indices belonging to one or more formation/zone names.
+	 */
+	resolveIndicesForZones(zoneNames: string[]): number[] {
+		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		if (dept.length === 0 || !zoneNames.length) return [];
+		const allowed = new Set(zoneNames.map((z) => z.trim()).filter(Boolean));
+		if (allowed.size === 0) return [];
+		const sortedTops = [...this.tops].sort((a, b) => a.depth - b.depth);
+
+		const out: number[] = [];
+		for (let i = 0; i < dept.length; i++) {
+			const d = dept[i];
+			if (typeof d !== 'number' || !Number.isFinite(d)) continue;
+			let zName = this.zonesColumn[i] ?? null;
+			if (!zName && sortedTops.length > 0) {
+				for (let t = sortedTops.length - 1; t >= 0; t--) {
+					if (d >= sortedTops[t].depth) {
+						zName = sortedTops[t].name;
+						break;
+					}
+				}
+			}
+			if (zName && allowed.has(zName.trim())) {
+				out.push(i);
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Clear calculated/evaluated curves either top-to-bottom (full well),
+	 * for specific formations/zones, or within the active depth/zone filter.
+	 */
+	async clearCalculatedCurves(opts?: {
+		scope?: 'full' | 'formation' | 'filtered';
+		zones?: string[];
+		groups?: CalculatedCurveGroupKey[];
+		curves?: string[];
+		persist?: boolean;
+	}): Promise<{ clearedCurves: string[]; clearedRows: number }> {
+		const scope = opts?.scope ?? 'full';
+		const persist = opts?.persist ?? true;
+		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+
+		let candidateMnemonics: string[];
+		if (opts?.curves && opts.curves.length > 0) {
+			candidateMnemonics = opts.curves
+				.map((c) => c.trim().toUpperCase())
+				.filter(
+					(c) => Boolean(c) && !['DEPTH', 'DEPT', 'WELL_NAME', 'ZONES'].includes(c)
+				);
+		} else if (opts?.groups && opts.groups.length > 0) {
+			candidateMnemonics = Array.from(
+				new Set(opts.groups.flatMap((g) => CALCULATED_CURVE_GROUPS[g]?.curves ?? []))
+			);
+		} else {
+			candidateMnemonics = [...ALL_CALCULATED_CURVE_MNEMONICS];
+		}
+
+		const targetCurves = candidateMnemonics.filter((c) => Boolean(this.curves[c]));
+		if (targetCurves.length === 0) {
+			appStatus.info('No matching calculated curves to clear', workbench.wellId ?? undefined);
+			return { clearedCurves: [], clearedRows: 0 };
+		}
+
+		const groupSet = new Set<CalculatedCurveGroupKey>(
+			opts?.groups && opts.groups.length > 0
+				? opts.groups
+				: (Object.keys(CALCULATED_CURVE_GROUPS) as CalculatedCurveGroupKey[])
+		);
+
+		if (scope === 'full') {
+			const nextCurves = { ...this.curves };
+			const nextOrig = { ...this.originalCurves };
+			const nextCommitted = { ...this.committedBaseCurves };
+			const nextStats = { ...this.stats };
+
+			for (const c of targetCurves) {
+				delete nextCurves[c];
+				delete nextOrig[c];
+				delete nextCommitted[c];
+				delete nextStats[c];
+			}
+
+			this.curves = nextCurves;
+			this.originalCurves = nextOrig;
+			this.committedBaseCurves = nextCommitted;
+			this.stats = nextStats;
+
+			// Clear pending module curves for cleared curves
+			const clearedSet = new Set(targetCurves);
+			const nextPending: Record<string, string[]> = {};
+			for (const [mKey, cols] of Object.entries(this.pendingModuleCurves)) {
+				const rem = cols.filter((col) => !clearedSet.has(col));
+				if (rem.length > 0) nextPending[mKey] = rem;
+			}
+			this.pendingModuleCurves = nextPending;
+
+			if (groupSet.has('ressum') || clearedSet.has('PHIT') || clearedSet.has('SWT')) {
+				this.zonalSummary = [];
+			}
+			if (groupSet.has('litho_poro') || clearedSet.has('PHIT')) {
+				this.poroCoreMetrics = null;
+			}
+			if (groupSet.has('perm') || clearedSet.has('PERM')) {
+				this.permCoreMetrics = null;
+			}
+
+			if (clearedSet.has(workbench.selectedQaqcCurve)) {
+				const remaining = Object.keys(nextCurves).filter(
+					(k) => k !== 'DEPT' && k !== 'DEPTH' && k !== 'WELL_NAME' && k !== 'ZONES'
+				);
+				workbench.selectedQaqcCurve = remaining.includes('GR')
+					? 'GR'
+					: (remaining[0] ?? 'GR');
+			}
+
+			if (persist && workbench.projectId && workbench.wellId) {
+				this.isCalculating = true;
+				try {
+					await postJson(
+						`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/clear_calculated`,
+						{
+							scope: 'full',
+							groups: opts?.groups ?? null,
+							curves: targetCurves,
+							save: true
+						}
+					);
+				} finally {
+					this.isCalculating = false;
+				}
+			}
+
+			const msg = `Cleared ${targetCurves.length} calculated curve${targetCurves.length === 1 ? '' : 's'} (Top–Bottom) ✓`;
+			this.lastSavedMessage = msg;
+			appStatus.success(
+				`Cleared ${targetCurves.length} calculated curves across full well (${targetCurves.slice(0, 6).join(', ')}${targetCurves.length > 6 ? '…' : ''})`,
+				workbench.wellId ?? undefined
+			);
+			return { clearedCurves: targetCurves, clearedRows: deptArr.length };
+		}
+
+		// Partial clear: 'formation' or 'filtered'
+		const zonesToUse =
+			scope === 'formation'
+				? (opts?.zones ?? []).filter(Boolean)
+				: workbench.selectedZones;
+		const targetIndices =
+			scope === 'formation' ? this.resolveIndicesForZones(zonesToUse) : this.visibleIndices;
+
+		if (targetIndices.length === 0) {
+			appStatus.info(
+				'No depth rows matched the selected formation/interval to clear',
+				workbench.wellId ?? undefined
+			);
+			return { clearedCurves: [], clearedRows: 0 };
+		}
+
+		const nextCurves = { ...this.curves };
+		const nextCommitted = { ...this.committedBaseCurves };
+		const nextStats = { ...this.stats };
+		const droppedSet = new Set<string>();
+
+		for (const c of targetCurves) {
+			const arr = nextCurves[c];
+			if (!arr) continue;
+			const copy = [...arr];
+			for (const idx of targetIndices) {
+				if (idx >= 0 && idx < copy.length) {
+					copy[idx] = Number.NaN;
+				}
+			}
+			const hasFinite = copy.some((v) => typeof v === 'number' && Number.isFinite(v));
+			if (hasFinite) {
+				nextCurves[c] = copy;
+				nextCommitted[c] = [...copy];
+				nextStats[c] = computeSummaryStats(copy, deptArr);
+			} else {
+				delete nextCurves[c];
+				delete nextCommitted[c];
+				delete nextStats[c];
+				droppedSet.add(c);
+			}
+		}
+
+		this.curves = nextCurves;
+		this.committedBaseCurves = nextCommitted;
+		this.stats = nextStats;
+
+		if (droppedSet.has(workbench.selectedQaqcCurve)) {
+			const remaining = Object.keys(nextCurves).filter(
+				(k) => k !== 'DEPT' && k !== 'DEPTH' && k !== 'WELL_NAME' && k !== 'ZONES'
+			);
+			workbench.selectedQaqcCurve = remaining.includes('GR')
+				? 'GR'
+				: (remaining[0] ?? 'GR');
+		}
+
+		const clearedDepths = targetIndices
+			.map((i) => deptArr[i])
+			.filter((d): d is number => typeof d === 'number' && Number.isFinite(d));
+
+		if (persist && workbench.projectId && workbench.wellId) {
+			this.isCalculating = true;
+			try {
+				await postJson(
+					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/clear_calculated`,
+					{
+						scope,
+						zones: zonesToUse.length > 0 ? zonesToUse : null,
+						min_depth:
+							scope === 'filtered' ? (workbench.depthFilter?.min ?? null) : null,
+						max_depth:
+							scope === 'filtered' ? (workbench.depthFilter?.max ?? null) : null,
+						depths: clearedDepths,
+						groups: opts?.groups ?? null,
+						curves: targetCurves,
+						save: true
+					}
+				);
+			} finally {
+				this.isCalculating = false;
+			}
+		}
+
+		const scopeDesc =
+			scope === 'formation' && zonesToUse.length > 0
+				? `in ${zonesToUse.join(', ')}`
+				: `in filtered interval (${targetIndices.length.toLocaleString()} pts)`;
+		const msg = `Cleared ${targetCurves.length} calc curve${targetCurves.length === 1 ? '' : 's'} ${scopeDesc} ✓`;
+		this.lastSavedMessage = msg;
+		appStatus.success(msg, workbench.wellId ?? undefined);
+		return { clearedCurves: targetCurves, clearedRows: targetIndices.length };
 	}
 
 	commitCurveEditBase(curveName: string) {

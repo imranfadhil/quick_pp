@@ -1,5 +1,9 @@
 <script lang="ts">
-	import { wellData } from '$lib/state/wellData.svelte';
+	import {
+		CALCULATED_CURVE_GROUPS,
+		type CalculatedCurveGroupKey,
+		wellData
+	} from '$lib/state/wellData.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { appStatus } from '$lib/state/status.svelte';
 	import {
@@ -7,6 +11,77 @@
 		type MultiWellStep,
 		type SingleWellStep
 	} from '$lib/state/workbench.svelte';
+
+	const GROUP_KEYS = Object.keys(CALCULATED_CURVE_GROUPS) as CalculatedCurveGroupKey[];
+
+	let showClearCalcPopover = $state(false);
+	let clearScope = $state<'full' | 'formation' | 'filtered'>('full');
+	let clearSelectedZones = $state<string[]>([]);
+	let clearSelectedGroups = $state<CalculatedCurveGroupKey[]>([...GROUP_KEYS]);
+	let confirmClearCalc = $state(false);
+
+	let hasActiveFilter = $derived(
+		workbench.selectedZones.length > 0 || workbench.depthFilter !== null
+	);
+
+	function openClearCalcMenu() {
+		confirmClearCalc = false;
+		if (clearSelectedZones.length === 0 && wellData.availableZones.length > 0) {
+			clearSelectedZones =
+				workbench.selectedZones.length > 0
+					? [...workbench.selectedZones]
+					: [wellData.availableZones[0]];
+		}
+		showClearCalcPopover = !showClearCalcPopover;
+	}
+
+	function toggleClearZone(zone: string) {
+		confirmClearCalc = false;
+		if (clearSelectedZones.includes(zone)) {
+			clearSelectedZones = clearSelectedZones.filter((z) => z !== zone);
+		} else {
+			clearSelectedZones = [...clearSelectedZones, zone];
+		}
+	}
+
+	function toggleClearGroup(grp: CalculatedCurveGroupKey) {
+		confirmClearCalc = false;
+		if (clearSelectedGroups.includes(grp)) {
+			if (clearSelectedGroups.length > 1) {
+				clearSelectedGroups = clearSelectedGroups.filter((g) => g !== grp);
+			}
+		} else {
+			clearSelectedGroups = [...clearSelectedGroups, grp];
+		}
+	}
+
+	let matchingCalculatedCurves = $derived.by(() => {
+		const presentSet = new Set(wellData.calculatedCurvesPresent);
+		const candidates = Array.from(
+			new Set(clearSelectedGroups.flatMap((g) => CALCULATED_CURVE_GROUPS[g]?.curves ?? []))
+		);
+		return candidates.filter((c) => presentSet.has(c));
+	});
+
+	let targetClearRowCount = $derived.by(() => {
+		if (clearScope === 'full') return wellData.totalDepthRows;
+		if (clearScope === 'formation') {
+			return wellData.resolveIndicesForZones(clearSelectedZones).length;
+		}
+		return wellData.visibleIndices.length;
+	});
+
+	async function executeClearCalculated() {
+		if (matchingCalculatedCurves.length === 0) return;
+		await wellData.clearCalculatedCurves({
+			scope: clearScope,
+			zones: clearScope === 'formation' ? clearSelectedZones : undefined,
+			groups: clearSelectedGroups,
+			persist: true
+		});
+		confirmClearCalc = false;
+		showClearCalcPopover = false;
+	}
 
 	const SINGLE_WELL_STEPS: Array<{
 		id: SingleWellStep;
@@ -225,7 +300,7 @@
 		{/if}
 	</div>
 
-	<!-- Right Pane Mode Switcher & Live Status Pill -->
+	<!-- Right Pane Mode Switcher, Clear Calculated Curves & Live Status Pill -->
 	<div class="flex items-center gap-2">
 		{#if appStatus.isBusy || wellData.isCalculating || projectData.isComputingMultiWell}
 			<button
@@ -246,6 +321,244 @@
 			>
 				{wellData.lastSavedMessage}
 			</button>
+		{/if}
+
+		{#if workbench.scope === 'single-well' && wellData.calculatedCurvesPresent.length > 0}
+			<div class="relative">
+				<button
+					type="button"
+					onclick={openClearCalcMenu}
+					title="Clear calculated curves top-to-bottom or by formation"
+					class="flex h-6 items-center gap-1 rounded-sm border px-2 text-[10.5px] font-semibold transition-colors {showClearCalcPopover
+						? 'border-red-400 bg-red-50 text-red-800'
+						: 'border-red-200 bg-red-50/60 text-red-700 hover:bg-red-100/80'}"
+				>
+					<span>Clear Calc</span>
+					<span
+						class="mono-num rounded-2xs bg-red-100 px-1 py-0.2 text-[9px] font-bold text-red-800"
+					>
+						{wellData.calculatedCurvesPresent.length}
+					</span>
+					<span class="text-[9px]">▾</span>
+				</button>
+
+				{#if showClearCalcPopover}
+					<div
+						class="absolute top-7 right-0 z-50 w-80 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2.5 shadow-xl"
+					>
+						<div class="mb-2 flex items-center justify-between border-b border-[var(--border-hairline)] pb-1.5">
+							<div>
+								<div class="text-xs font-bold text-[var(--text-primary)]">
+									Clear Calculated Curves
+								</div>
+								<div class="text-[10px] text-[var(--text-muted)]">
+									Well: <strong class="mono-num text-[var(--text-secondary)]">{workbench.wellId ?? '—'}</strong> ({wellData.calculatedCurvesPresent.length} calculated curves)
+								</div>
+							</div>
+							<button
+								type="button"
+								onclick={() => (showClearCalcPopover = false)}
+								class="flex h-5 w-5 items-center justify-center rounded-xs text-xs text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]"
+							>
+								×
+							</button>
+						</div>
+
+						<!-- Scope Selector: Top-to-Bottom vs Formation vs Active Filter -->
+						<div class="mb-2">
+							<div class="mb-1 text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+								1. Clear Scope
+							</div>
+							<div class="grid grid-cols-3 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10px]">
+								<button
+									type="button"
+									onclick={() => {
+										clearScope = 'full';
+										confirmClearCalc = false;
+									}}
+									class="h-6 rounded-xs px-1 font-medium transition-colors {clearScope === 'full'
+										? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+										: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+								>
+									Top–Bottom
+								</button>
+								<button
+									type="button"
+									disabled={wellData.availableZones.length === 0}
+									onclick={() => {
+										clearScope = 'formation';
+										confirmClearCalc = false;
+										if (clearSelectedZones.length === 0 && wellData.availableZones.length > 0) {
+											clearSelectedZones = [wellData.availableZones[0]];
+										}
+									}}
+									title={wellData.availableZones.length === 0
+										? 'No formation tops loaded for this well'
+										: 'Clear calculated curves only in selected formations'}
+									class="h-6 rounded-xs px-1 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 {clearScope === 'formation'
+										? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+										: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+								>
+									By Formation
+								</button>
+								<button
+									type="button"
+									disabled={!hasActiveFilter}
+									onclick={() => {
+										clearScope = 'filtered';
+										confirmClearCalc = false;
+									}}
+									title={hasActiveFilter
+										? 'Clear calculated curves inside the active global depth/zone filter'
+										: 'No active depth or zone filter set'}
+									class="h-6 rounded-xs px-1 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 {clearScope === 'filtered'
+										? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+										: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+								>
+									Active Filter
+								</button>
+							</div>
+						</div>
+
+						{#if clearScope === 'formation'}
+							<div class="mb-2">
+								<div class="mb-1 flex items-center justify-between text-[10px]">
+									<span class="font-semibold uppercase text-[var(--text-muted)]">
+										Select Formations ({clearSelectedZones.length}/{wellData.availableZones.length})
+									</span>
+									<div class="flex items-center gap-1.5">
+										<button
+											type="button"
+											onclick={() => {
+												clearSelectedZones = [...wellData.availableZones];
+												confirmClearCalc = false;
+											}}
+											class="font-medium text-blue-600 hover:underline"
+										>
+											All
+										</button>
+										<span class="text-[var(--text-muted)]">·</span>
+										<button
+											type="button"
+											onclick={() => {
+												clearSelectedZones = [];
+												confirmClearCalc = false;
+											}}
+											class="font-medium text-slate-600 hover:underline"
+										>
+											None
+										</button>
+									</div>
+								</div>
+								<div class="max-h-28 space-y-0.5 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+									{#each wellData.availableZones as z (z)}
+										{@const zCount = wellData.resolveIndicesForZones([z]).length}
+										<label class="flex cursor-pointer items-center justify-between gap-1.5 rounded-xs px-1 py-0.5 text-[11px] hover:bg-[var(--bg-subtle)]">
+											<span class="flex items-center gap-1.5 truncate">
+												<input
+													type="checkbox"
+													checked={clearSelectedZones.includes(z)}
+													onchange={() => toggleClearZone(z)}
+													class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+												/>
+												<span class="truncate font-medium text-[var(--text-primary)]">{z}</span>
+											</span>
+											<span class="mono-num shrink-0 text-[9.5px] text-[var(--text-muted)]">
+												{zCount} pts
+											</span>
+										</label>
+									{/each}
+								</div>
+							</div>
+						{/if}
+
+						<!-- Curve Module Groups Selector -->
+						<div class="mb-2">
+							<div class="mb-1 flex items-center justify-between text-[10px]">
+								<span class="font-semibold uppercase text-[var(--text-muted)]">
+									2. Curve Groups ({matchingCalculatedCurves.length} curves)
+								</span>
+								<button
+									type="button"
+									onclick={() => {
+										clearSelectedGroups = [...GROUP_KEYS];
+										confirmClearCalc = false;
+									}}
+									class="font-medium text-blue-600 hover:underline"
+								>
+									Select All
+								</button>
+							</div>
+							<div class="flex flex-wrap gap-1">
+								{#each GROUP_KEYS as gKey (gKey)}
+									{@const grp = CALCULATED_CURVE_GROUPS[gKey]}
+									{@const grpPresentCount = grp.curves.filter((c) =>
+										wellData.calculatedCurvesPresent.includes(c)
+									).length}
+									{@const isSel = clearSelectedGroups.includes(gKey)}
+									<button
+										type="button"
+										onclick={() => toggleClearGroup(gKey)}
+										class="mono-num rounded-xs border px-1.5 py-0.5 text-[10px] font-medium transition-colors {isSel
+											? 'border-blue-600 bg-blue-50 font-semibold text-blue-800'
+											: 'border-[var(--border-hairline)] bg-[var(--bg-app)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+									>
+										{isSel ? '✓' : ''} {grp.shortLabel} ({grpPresentCount})
+									</button>
+								{/each}
+							</div>
+							{#if matchingCalculatedCurves.length > 0}
+								<div class="mono-num mt-1 truncate rounded-xs bg-[var(--bg-app)] px-1.5 py-1 text-[9.5px] text-[var(--text-secondary)]" title={matchingCalculatedCurves.join(', ')}>
+									Curves: {matchingCalculatedCurves.join(', ')}
+								</div>
+							{/if}
+						</div>
+
+						<!-- Action Footer -->
+						<div class="flex items-center justify-between border-t border-[var(--border-hairline)] pt-2">
+							<span class="mono-num text-[10px] text-[var(--text-muted)]">
+								{targetClearRowCount.toLocaleString()} depth rows
+							</span>
+							{#if !confirmClearCalc}
+								<button
+									type="button"
+									disabled={
+										wellData.isCalculating ||
+										matchingCalculatedCurves.length === 0 ||
+										targetClearRowCount === 0
+									}
+									onclick={() => (confirmClearCalc = true)}
+									class="h-6 rounded-sm border border-red-300 bg-red-50 px-2.5 text-[11px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-40"
+								>
+									{clearScope === 'full'
+										? 'Clear Top–Bottom...'
+										: clearScope === 'formation'
+											? 'Clear Formations...'
+											: 'Clear Filtered...'}
+								</button>
+							{:else}
+								<div class="flex items-center gap-1">
+									<button
+										type="button"
+										onclick={() => (confirmClearCalc = false)}
+										class="h-6 rounded-sm border border-[var(--border-hairline)] bg-white px-2 text-[10px] text-[var(--text-secondary)]"
+									>
+										Cancel
+									</button>
+									<button
+										type="button"
+										disabled={wellData.isCalculating}
+										onclick={executeClearCalculated}
+										class="h-6 rounded-sm bg-red-600 px-2.5 text-[10.5px] font-bold text-white hover:bg-red-700 disabled:opacity-50"
+									>
+										Confirm Clear ({matchingCalculatedCurves.length})
+									</button>
+								</div>
+							{/if}
+						</div>
+					</div>
+				{/if}
+			</div>
 		{/if}
 
 		<div
