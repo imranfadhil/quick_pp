@@ -1,6 +1,8 @@
 <script lang="ts">
-	import { deleteAncillaryItem, saveAncillaryItems } from '$lib/api/client';
-	import CompactDataGrid, { type GridColumn } from '$lib/components/workbench/CompactDataGrid.svelte';
+	import { saveAncillaryItems } from '$lib/api/client';
+	import CompactDataGrid, {
+		type GridColumn
+	} from '$lib/components/workbench/CompactDataGrid.svelte';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -138,40 +140,111 @@
 		await saveCurrentTab();
 	}
 
-	async function handleDeleteRow(idx: number, row: Record<string, any>) {
-		if (!workbench.projectId || !workbench.wellId) return;
+	async function handleDeleteRows(indices: number[], _deletedRows?: Record<string, any>[]) {
+		if (!workbench.projectId || !workbench.wellId || !indices.length) return;
+		const removeSet = new Set(indices);
+		const removedCount = removeSet.size;
 		try {
 			if (activeTab === 'tops') {
-				if (row.name) {
-					await deleteAncillaryItem(workbench.projectId, workbench.wellId, 'formation_tops', row.name);
+				wellData.tops = wellData.tops.filter((_, i) => !removeSet.has(i));
+				if (workbench.selectedZones.length > 0) {
+					const remainingNames = new Set(wellData.tops.map((t) => t.name));
+					workbench.selectedZones = workbench.selectedZones.filter((z) => remainingNames.has(z));
 				}
-				wellData.tops = wellData.tops.filter((_, i) => i !== idx);
 			} else if (activeTab === 'contacts') {
-				if (row.type || row.name) {
-					await deleteAncillaryItem(
-						workbench.projectId,
-						workbench.wellId,
-						'fluid_contacts',
-						row.type || row.name
-					);
-				}
-				wellData.contacts = wellData.contacts.filter((_, i) => i !== idx);
+				wellData.contacts = wellData.contacts.filter((_, i) => !removeSet.has(i));
 			} else if (activeTab === 'core') {
-				wellData.coreSamples = wellData.coreSamples.filter((_, i) => i !== idx);
-				await saveCurrentTab();
+				wellData.coreSamples = wellData.coreSamples.filter((_, i) => !removeSet.has(i));
+				wellData.syncCoreCurvesFromSamples();
 			} else if (activeTab === 'scal') {
-				wellData.scalPc = wellData.scalPc.filter((_, i) => i !== idx);
-				await saveCurrentTab();
+				wellData.scalPc = wellData.scalPc.filter((_, i) => !removeSet.has(i));
+				wellData.syncCoreCurvesFromSamples();
 			} else if (activeTab === 'pressure') {
-				wellData.pressureTests = wellData.pressureTests.filter((_, i) => i !== idx);
-				await saveCurrentTab();
+				wellData.pressureTests = wellData.pressureTests.filter((_, i) => !removeSet.has(i));
 			} else if (activeTab === 'survey') {
-				wellData.survey = wellData.survey.filter((_, i) => i !== idx);
-				await saveCurrentTab();
+				wellData.survey = wellData.survey.filter((_, i) => !removeSet.has(i));
 			}
+			await saveCurrentTab();
+			statusMsg = `Deleted ${removedCount} ${removedCount === 1 ? 'row' : 'rows'} ✓`;
 		} catch (e: any) {
 			statusMsg = e?.message || 'Delete failed';
 		}
+	}
+
+	async function handleDeleteRow(idx: number, row: Record<string, any>) {
+		await handleDeleteRows([idx], [row]);
+	}
+
+	async function handlePasteRows(pastedRows: Record<string, any>[]) {
+		if (!pastedRows.length) return;
+		const now = Date.now();
+		if (activeTab === 'tops') {
+			const mapped = pastedRows
+				.map((r, i) => ({
+					id: `top-${now}-${i}`,
+					name: String(r.name || `Zone-${wellData.tops.length + i + 1}`).trim(),
+					depth: Number(r.depth ?? 0)
+				}))
+				.filter((t) => Number.isFinite(t.depth));
+			wellData.tops = [...wellData.tops, ...mapped].sort((a, b) => a.depth - b.depth);
+		} else if (activeTab === 'contacts') {
+			const mapped = pastedRows
+				.map((r, i) => {
+					const t = String(r.type || r.name || 'OWC').trim().toUpperCase();
+					return {
+						id: `contact-${now}-${i}`,
+						type: t,
+						name: t,
+						depth: Number(r.depth ?? 0)
+					};
+				})
+				.filter((c) => Number.isFinite(c.depth));
+			wellData.contacts = [...wellData.contacts, ...mapped];
+		} else if (activeTab === 'core') {
+			const mapped = pastedRows
+				.map((r, i) => ({
+					sample_name: String(r.sample_name || `S-${wellData.coreSamples.length + i + 1}`).trim(),
+					depth: Number(r.depth ?? 0),
+					porosity: r.porosity !== null && r.porosity !== undefined ? Number(r.porosity) : null,
+					permeability:
+						r.permeability !== null && r.permeability !== undefined
+							? Number(r.permeability)
+							: null
+				}))
+				.filter((s) => Number.isFinite(s.depth));
+			wellData.coreSamples = [...wellData.coreSamples, ...mapped];
+		} else if (activeTab === 'scal') {
+			const mapped = pastedRows
+				.map((r, i) => ({
+					sample_name: String(r.sample_name || `S-${wellData.scalPc.length + i + 1}`).trim(),
+					depth: Number(r.depth ?? 0),
+					pc: Number(r.pc ?? 0),
+					sw: Number(r.sw ?? 0),
+					experiment_type: r.experiment_type || 'micp',
+					cycle: r.cycle || 'drainage'
+				}))
+				.filter((s) => Number.isFinite(s.pc) && Number.isFinite(s.sw));
+			wellData.scalPc = [...wellData.scalPc, ...mapped];
+		} else if (activeTab === 'pressure') {
+			const mapped = pastedRows
+				.map((r) => ({
+					depth: Number(r.depth ?? 0),
+					pressure: Number(r.pressure ?? 0),
+					pressure_uom: 'psi'
+				}))
+				.filter((p) => Number.isFinite(p.depth) && Number.isFinite(p.pressure));
+			wellData.pressureTests = [...wellData.pressureTests, ...mapped];
+		} else if (activeTab === 'survey') {
+			const mapped = pastedRows
+				.map((r) => ({
+					md: Number(r.md ?? 0),
+					inc: Number(r.inc ?? 0),
+					azim: Number(r.azim ?? 0)
+				}))
+				.filter((s) => Number.isFinite(s.md));
+			wellData.survey = [...wellData.survey, ...mapped];
+		}
+		await saveCurrentTab();
 	}
 
 	async function saveCurrentTab() {
@@ -193,9 +266,10 @@
 					workbench.wellId,
 					'fluid_contacts',
 					'contacts',
-					wellData.contacts.map((c) => ({ name: c.type, depth: Number(c.depth) }))
+					wellData.contacts.map((c) => ({ name: c.type || c.name, depth: Number(c.depth) }))
 				);
 			} else if (activeTab === 'core') {
+				wellData.syncCoreCurvesFromSamples();
 				await saveAncillaryItems(
 					workbench.projectId,
 					workbench.wellId,
@@ -223,6 +297,7 @@
 					};
 				});
 				wellData.scalPc = normalizedScal;
+				wellData.syncCoreCurvesFromSamples();
 				await saveAncillaryItems(
 					workbench.projectId,
 					workbench.wellId,
@@ -343,7 +418,7 @@
 				list="scal-known-samples"
 				placeholder="Sample"
 				value={newName}
-				 oninput={(e) => handleScalSampleChange((e.currentTarget as HTMLInputElement).value)}
+				oninput={(e) => handleScalSampleChange((e.currentTarget as HTMLInputElement).value)}
 				title="Core Sample Name (select existing RCA sample or type new name; stays sticky for multiple Pc-Sw pairs)"
 				class="h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
 			/>
@@ -409,7 +484,7 @@
 		</div>
 	{/if}
 
-	<!-- Editable High-Density Grid (Supports Double-Click Edit & Excel Paste) -->
+	<!-- Editable High-Density Grid (Supports Double-Click Edit, Multi-Row Selection & Excel Paste) -->
 	<div class="min-h-0 flex-1">
 		{#if activeTab === 'tops'}
 			<CompactDataGrid
@@ -418,7 +493,9 @@
 				editable={true}
 				emptyMessage="No formation tops. Add above, drag markers on log, or paste from Excel."
 				oncellchange={() => saveCurrentTab()}
+				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}
+				ondeleteRows={handleDeleteRows}
 			/>
 		{:else if activeTab === 'contacts'}
 			<CompactDataGrid
@@ -427,7 +504,9 @@
 				editable={true}
 				emptyMessage="No fluid contacts (OWC/GOC/FWL)."
 				oncellchange={() => saveCurrentTab()}
+				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}
+				ondeleteRows={handleDeleteRows}
 			/>
 		{:else if activeTab === 'core'}
 			<CompactDataGrid
@@ -436,7 +515,9 @@
 				editable={true}
 				emptyMessage="No RCA core plugs (CPORE, CPERM). Add above or paste from Excel."
 				oncellchange={() => saveCurrentTab()}
+				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}
+				ondeleteRows={handleDeleteRows}
 			/>
 		{:else if activeTab === 'scal'}
 			<CompactDataGrid
@@ -445,7 +526,9 @@
 				editable={true}
 				emptyMessage="No SCAL capillary pressure (Pc, Sw) pairs. Add multiple pairs per sample/depth above or paste from Excel."
 				oncellchange={() => saveCurrentTab()}
+				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}
+				ondeleteRows={handleDeleteRows}
 			/>
 		{:else if activeTab === 'pressure'}
 			<CompactDataGrid
@@ -454,7 +537,9 @@
 				editable={true}
 				emptyMessage="No formation pressure tests."
 				oncellchange={() => saveCurrentTab()}
+				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}
+				ondeleteRows={handleDeleteRows}
 			/>
 		{:else}
 			<CompactDataGrid
@@ -463,7 +548,9 @@
 				editable={true}
 				emptyMessage="No directional survey rows."
 				oncellchange={() => saveCurrentTab()}
+				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}
+				ondeleteRows={handleDeleteRows}
 			/>
 		{/if}
 	</div>
@@ -473,7 +560,7 @@
 		class="flex h-9 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5"
 	>
 		<span class="truncate text-[11px] text-[var(--text-muted)]">
-			{statusMsg ?? 'Double-click cells to edit or Ctrl+V from Excel'}
+			{statusMsg ?? 'Double-click cells to edit · Check rows to delete · Ctrl+V from Excel'}
 		</span>
 		<button
 			type="button"
@@ -485,4 +572,3 @@
 		</button>
 	</div>
 </div>
-

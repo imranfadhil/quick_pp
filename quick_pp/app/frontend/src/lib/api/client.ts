@@ -520,7 +520,8 @@ export async function saveAncillaryItems(
 		| 'pressure_tests'
 		| 'well_surveys',
 	payloadKey: 'tops' | 'contacts' | 'samples' | 'pc_data' | 'tests' | 'surveys',
-	items: Record<string, any>[]
+	items: Record<string, any>[],
+	replace: boolean = true
 ) {
 	const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(wellName)}/${entityType}`;
 	const res = await trackedFetch(
@@ -529,7 +530,7 @@ export async function saveAncillaryItems(
 			method: 'POST',
 			credentials: 'include',
 			headers: authHeaders({ 'Content-Type': 'application/json' }),
-			body: JSON.stringify({ [payloadKey]: items })
+			body: JSON.stringify({ [payloadKey]: items, replace })
 		},
 		`Failed to save ${entityType}`
 	);

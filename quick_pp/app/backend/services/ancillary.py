@@ -975,14 +975,15 @@ def list_formation_tops_project(project_id: int, well_name: Optional[str] = None
 def add_formation_tops_project(
     project_id: int,
     well_name: Optional[str] = None,
-    payload: Dict[str, List[Dict[str, Any]]] = Body(...),
+    payload: Dict[str, Any] = Body(...),
 ):
     if not isinstance(payload, dict) or "tops" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must be a dict with key 'tops'."
         )
 
-    tops = payload.get("tops")
+    tops = payload.get("tops") or []
+    replace_mode = bool(payload.get("replace", False))
     target_well = well_name or payload.get("well_name")
     if not target_well:
         raise HTTPException(
@@ -994,7 +995,7 @@ def add_formation_tops_project(
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
-            well.add_formation_tops(tops)
+            well.add_formation_tops(tops, replace=replace_mode)
         invalidate_well_cache(project_id=project_id, well_name=str(target_well))
         return {
             "created": [{"name": t.get("name"), "depth": t.get("depth")} for t in tops]
@@ -1138,13 +1139,14 @@ def list_fluid_contacts_project(project_id: int, well_name: Optional[str] = None
 def add_fluid_contacts_project(
     project_id: int,
     well_name: Optional[str] = None,
-    payload: Dict[str, List[Dict[str, Any]]] = Body(...),
+    payload: Dict[str, Any] = Body(...),
 ):
     if not isinstance(payload, dict) or "contacts" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must be a dict with key 'contacts'."
         )
-    contacts = payload.get("contacts")
+    contacts = payload.get("contacts") or []
+    replace_mode = bool(payload.get("replace", False))
     target_well = well_name or payload.get("well_name")
     if not target_well:
         raise HTTPException(
@@ -1155,7 +1157,7 @@ def add_fluid_contacts_project(
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
-            well.add_fluid_contacts(contacts)
+            well.add_fluid_contacts(contacts, replace=replace_mode)
         invalidate_well_cache(project_id=project_id, well_name=str(target_well))
         return {"created": contacts}
     except ValueError as e:
@@ -1163,6 +1165,46 @@ def add_fluid_contacts_project(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to add fluid contacts: {e}"
+        ) from e
+
+
+@router.delete(
+    "/fluid_contacts/{contact_name}",
+    summary="Delete a fluid contact by name (requires well_name)",
+    tags=["Fluid Contacts"],
+)
+@router.delete(
+    "/wells/{well_name}/fluid_contacts/{contact_name}",
+    include_in_schema=False,
+)
+def delete_fluid_contact_project(
+    project_id: int, contact_name: str, well_name: Optional[str] = None
+):
+    target_well = well_name
+    if not target_well:
+        raise HTTPException(
+            status_code=400,
+            detail="well_name query parameter is required to delete a fluid contact",
+        )
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(target_well)
+            orm_contact = session.scalar(
+                select(db_objects.ORMFluidContact).filter_by(
+                    well_id=well.well_id, name=contact_name
+                )
+            )
+            if not orm_contact:
+                raise ValueError(f"Contact '{contact_name}' not found")
+            session.delete(orm_contact)
+        invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+        return {"deleted": contact_name}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete fluid contact: {e}"
         ) from e
 
 
@@ -1214,13 +1256,14 @@ def list_pressure_tests_project(project_id: int, well_name: Optional[str] = None
 def add_pressure_tests_project(
     project_id: int,
     well_name: Optional[str] = None,
-    payload: Dict[str, List[Dict[str, Any]]] = Body(...),
+    payload: Dict[str, Any] = Body(...),
 ):
     if not isinstance(payload, dict) or "tests" not in payload:
         raise HTTPException(
             status_code=400, detail="Payload must be a dict with key 'tests'."
         )
-    tests = payload.get("tests")
+    tests = payload.get("tests") or []
+    replace_mode = bool(payload.get("replace", False))
     target_well = well_name or payload.get("well_name")
     if not target_well:
         raise HTTPException(
@@ -1231,7 +1274,7 @@ def add_pressure_tests_project(
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
             well = proj.get_well(target_well)
-            well.add_pressure_tests(tests)
+            well.add_pressure_tests(tests, replace=replace_mode)
         invalidate_well_cache(project_id=project_id, well_name=str(target_well))
         return {"created": tests}
     except ValueError as e:

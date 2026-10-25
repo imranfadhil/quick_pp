@@ -2459,6 +2459,77 @@ class WellDataState {
 	}
 
 	/**
+	 * Rebuild in-memory CPORE/CPERM log curves and baseline snapshots from current `coreSamples`
+	 * (e.g., after adding, editing, or deleting core rows in the Ancillary tab).
+	 */
+	syncCoreCurvesFromSamples() {
+		this.originalCoreSamples = this.coreSamples.map((s) => ({
+			...s,
+			raw_depth: Number(s.raw_depth ?? s.depth ?? 0)
+		}));
+		this.originalScalPc = this.scalPc.map((s) => ({
+			...s,
+			raw_depth: Number(s.raw_depth ?? s.depth ?? 0)
+		}));
+
+		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		if (dept.length === 0) return;
+
+		const newCpore = new Array(dept.length).fill(Number.NaN);
+		const newCperm = new Array(dept.length).fill(Number.NaN);
+
+		for (const s of this.coreSamples) {
+			const sd = Number(s.depth ?? s.DEPTH);
+			if (!Number.isFinite(sd)) continue;
+			const pRaw = Number(s.porosity ?? s.CPORE ?? s.poro);
+			const kRaw = Number(s.permeability ?? s.CPERM ?? s.perm);
+			const pVal = Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
+			const kVal = Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null;
+
+			let lo = 0;
+			let hi = dept.length - 1;
+			while (lo < hi) {
+				const mid = (lo + hi) >> 1;
+				if (dept[mid] < sd) lo = mid + 1;
+				else hi = mid;
+			}
+			if (lo > 0 && Math.abs(dept[lo - 1] - sd) < Math.abs(dept[lo] - sd)) {
+				lo = lo - 1;
+			}
+			if (Math.abs(dept[lo] - sd) <= 0.5) {
+				if (pVal !== null) newCpore[lo] = pVal;
+				if (kVal !== null) newCperm[lo] = kVal;
+			}
+		}
+
+		const nextCurves: Record<string, number[]> = {
+			...this.curves,
+			CPORE: newCpore,
+			CPERM: newCperm
+		};
+		const nextOrig: Record<string, number[]> = {
+			...this.originalCurves,
+			CPORE: [...newCpore],
+			CPERM: [...newCperm]
+		};
+		if (this.curves['CORE_PORO']) {
+			nextCurves['CORE_PORO'] = [...newCpore];
+			nextOrig['CORE_PORO'] = [...newCpore];
+		}
+		if (this.curves['CORE_PERM']) {
+			nextCurves['CORE_PERM'] = [...newCperm];
+			nextOrig['CORE_PERM'] = [...newCperm];
+		}
+		this.curves = nextCurves;
+		this.originalCurves = nextOrig;
+		this.stats = {
+			...this.stats,
+			CPORE: computeSummaryStats(newCpore, dept),
+			CPERM: computeSummaryStats(newCperm, dept)
+		};
+	}
+
+	/**
 	 * Immediately update VSH_GR and VSH_DN in `this.curves` in-memory as the user scrubs
 	 * `grClean` / `grClay` so LogTrackCanvas and CrossplotCanvas update at 60fps.
 	 */
