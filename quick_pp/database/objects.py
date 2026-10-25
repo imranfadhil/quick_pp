@@ -177,8 +177,8 @@ class Project(object):
 
         parsed_files = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(parse_las_file, fp): fp for fp in file_paths}
-            for future in as_completed(futures):
+            ordered_futures = [executor.submit(parse_las_file, fp) for fp in file_paths]
+            for future in ordered_futures:
                 result = future.result()
                 if result["success"]:
                     parsed_files.append(result)
@@ -196,7 +196,7 @@ class Project(object):
             }
 
         # Optimization 2: Batch fetch all existing wells for this project
-        well_names = [pf["well_name"] for pf in parsed_files]
+        well_names = list(dict.fromkeys(pf["well_name"] for pf in parsed_files))
         existing_wells = (
             self.db_session.execute(
                 select(ORMWell).filter(
@@ -218,7 +218,7 @@ class Project(object):
 
             if existing_well:
                 logger.warning(
-                    f"Well '{well_name}' already exists in project '{self.name}'. Updating data."
+                    f"Well '{well_name}' already exists in project '{self.name}'. Merging curves."
                 )
                 well_obj = Well(self.db_session, well_id=existing_well.well_id)
                 well_obj.update_data_from_las_parse(
@@ -236,10 +236,12 @@ class Project(object):
                     header_data=parsed["header_data_dict"],
                     depth_uom=depth_uom,
                 )
+                self.db_session.add(well_obj._orm_well)
+                self.db_session.flush()
                 well_obj.update_data_from_las_parse(
                     parsed["well_data"], parsed["header_data"]
                 )
-                self.db_session.add(well_obj._orm_well)
+                wells_by_name[well_name] = well_obj._orm_well
                 new_wells.append(well_name)
 
             logger.debug(f"Processed well '{well_obj.name}' for project '{self.name}'.")
@@ -919,20 +921,26 @@ class Well(object):
         parsed_data: pd.DataFrame,
         parsed_header: Union[pd.DataFrame, Dict[str, Any]],
         metadata_override: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> Dict[str, Any]:
         """Updates the well's data and metadata from a parsed LAS/DLIS file.
 
-        This method performs a complete replacement of the well's data based on the
-        provided LAS/DLIS file content. It will:
+        When the well already contains curves, this method merges incoming curves
+        with existing curves:
         1.  Extract and persist rich `WellHeaderMetadata` (`~Well` and `~Parameter`) into `header_data`
-            and auto-populate environmental parameters on `WellConfig`.
-        2.  Delete any existing curves in the well that are not present in the new data.
-        3.  Bulk-replace curve data points and write columnar Parquet (`wells/{uwi}.parquet`).
+            and auto-populate environmental parameters on `WellConfig` (preserving existing non-null fields).
+        2.  Append new curves not yet present on the well.
+        3.  For curves with the same name as an existing curve:
+            - Skip importing if the incoming curve is identical to the existing curve.
+            - Assign a suffix (`_1`, `_2`, ...) and append if the incoming curve differs.
+        4.  Write the full merged DataFrame to columnar Parquet (`wells/{uwi}.parquet`).
 
         Args:
             parsed_data (pd.DataFrame): DataFrame containing 'DEPTH' and curve mnemonics.
             parsed_header (Union[pd.DataFrame, Dict[str, Any]]): Header DataFrame or metadata dict.
             metadata_override (Optional[Dict[str, Any]]): Optional user-reviewed metadata overrides.
+
+        Returns:
+            Dict[str, Any]: Merge summary (`appended_curves`, `skipped_curves`, `renamed_curves`).
         """
         logger.info(f"Updating well '{self.name}' from LAS/DLIS parse.")
         rich_meta = las.extract_las_metadata(
@@ -949,21 +957,46 @@ class Well(object):
             else dict(parsed_header or {})
         )
         rich_meta_clean = dict(las._sanitize_json_value(dict(rich_meta)))
+        prev_header = (
+            dict(self.header_data) if isinstance(self.header_data, dict) else {}
+        )
+        prev_meta = (
+            dict(prev_header.get("well_metadata"))
+            if isinstance(prev_header.get("well_metadata"), dict)
+            else {}
+        )
+        merged_meta = dict(prev_meta)
+        for k, v in rich_meta_clean.items():
+            if v is not None or k not in merged_meta:
+                merged_meta[k] = v
+
+        if isinstance(prev_header.get("header_overrides"), dict):
+            cleaned_overrides = {
+                ok: ov
+                for ok, ov in prev_header["header_overrides"].items()
+                if rich_meta_clean.get(ok) is None
+            }
+            if cleaned_overrides:
+                prev_header["header_overrides"] = cleaned_overrides
+            else:
+                prev_header.pop("header_overrides", None)
+
         self.header_data = las._sanitize_json_value(
             {
+                **prev_header,
                 **raw_header_dict,
-                "well_metadata": rich_meta_clean,
+                "well_metadata": merged_meta,
                 **{
                     k: v
-                    for k, v in rich_meta_clean.items()
+                    for k, v in merged_meta.items()
                     if k not in ("raw_well_header", "raw_parameters") and v is not None
                 },
             }
         )
 
         # Auto-populate header & environmental parameters on WellConfig for downstream modules (saturation, shf, qaqc)
-        if rich_meta.get("uwi"):
-            self.uwi = str(rich_meta["uwi"])
+        if merged_meta.get("uwi"):
+            self.uwi = str(merged_meta["uwi"])
         env_updates = {}
         for env_key in (
             "uwi",
@@ -1005,8 +1038,8 @@ class Well(object):
             "rmc",
             "mud_density",
         ):
-            if rich_meta.get(env_key) is not None:
-                env_updates[env_key] = rich_meta[env_key]
+            if merged_meta.get(env_key) is not None:
+                env_updates[env_key] = merged_meta[env_key]
         if env_updates:
             clean_env = las._sanitize_json_value(env_updates)
             self._config_instance.update(clean_env)
@@ -1014,14 +1047,21 @@ class Well(object):
                 dict(self._config_instance.__dict__)
             )
 
-        df_work = parsed_data.copy()
-        if "DEPTH" in df_work.columns:
-            df_work = (
-                df_work.dropna(subset=["DEPTH"])
-                .drop_duplicates(subset=["DEPTH"], keep="last")
-                .sort_values("DEPTH")
-            )
-            df_work = df_work.set_index("DEPTH")
+        existing_df: Optional[pd.DataFrame] = None
+        if self._orm_well.curves:
+            if self.well_id is None:
+                self.db_session.flush()
+            existing_df = self.get_data_optimized()
+            if existing_df.empty:
+                existing_df = self.get_data()
+
+        merged_df, merge_summary = las.merge_well_curves_with_dedup(
+            existing_df, parsed_data
+        )
+        if merged_df.empty:
+            return merge_summary
+
+        df_work = merged_df.set_index("DEPTH")
 
         # Save zstd-compressed Parquet to project wells directory for fast columnar access
         try:
@@ -1047,59 +1087,61 @@ class Well(object):
         if drop_meta_cols:
             df_work = df_work.drop(columns=drop_meta_cols, errors="ignore")
 
-        # Get existing curve mnemonics for this well
-        existing_curves_by_mnem = {c.mnemonic: c for c in self._orm_well.curves}
-        existing_mnemonics = set(existing_curves_by_mnem.keys())
-        new_mnemonics = set(df_work.columns)
-
-        # Bulk delete ALL existing curve_data for this well in a single SQL statement
-        # (avoids lazy-loading hundreds of thousands of ORMCurveData objects into RAM)
-        existing_curve_ids = [
-            c.curve_id for c in self._orm_well.curves if c.curve_id is not None
+        appended_curves: List[str] = [
+            c for c in merge_summary.get("appended_curves", []) if c in df_work.columns
         ]
-        if existing_curve_ids:
+        if not appended_curves:
+            self.db_session.flush()
+            logger.info(
+                f"Well '{self.name}' LAS parse had no new or modified curves "
+                f"(skipped identical: {merge_summary.get('skipped_curves', [])})."
+            )
+            return merge_summary
+
+        existing_curves_by_mnem = {c.mnemonic: c for c in self._orm_well.curves}
+        reverse_renamed = {
+            suffixed: orig
+            for orig, suffixed in (merge_summary.get("renamed_curves") or {}).items()
+        }
+
+        # Delete any pre-existing curve_data rows only for curves in `appended_curves` that already had an ORMCurve record
+        reused_curve_ids = [
+            existing_curves_by_mnem[m].curve_id
+            for m in appended_curves
+            if m in existing_curves_by_mnem
+            and existing_curves_by_mnem[m].curve_id is not None
+        ]
+        if reused_curve_ids:
             self.db_session.execute(
                 text("DELETE FROM curve_data WHERE curve_id IN :cids").bindparams(
                     bindparam("cids", expanding=True)
                 ),
-                {"cids": existing_curve_ids},
+                {"cids": reused_curve_ids},
             )
 
-        # Delete curves that are no longer in the new data
-        curves_to_delete = [
-            c
-            for c in self._orm_well.curves
-            if c.mnemonic in (existing_mnemonics - new_mnemonics)
-        ]
-        for curve in curves_to_delete:
-            logger.debug(
-                f"Deleting old curve '{curve.mnemonic}' from well '{self.name}'."
-            )
-            try:
-                self._orm_well.curves.remove(curve)
-            except ValueError:
-                pass
-            if curve.curve_id is not None:
-                self.db_session.execute(
-                    text("DELETE FROM curves WHERE curve_id = :cid"),
-                    {"cid": curve.curve_id},
-                )
-            else:
-                self.db_session.delete(curve)
-
-        # Ensure all ORMCurve records exist and flush once to obtain curve_ids
+        # Ensure ORMCurve records exist for all newly appended/suffixed curves and flush once to obtain curve_ids
         curves_map: Dict[str, ORMCurve] = {}
-        for mnemonic, values in df_work.items():
+        for mnemonic in appended_curves:
+            values = df_work[mnemonic]
             orm_curve = existing_curves_by_mnem.get(mnemonic)
             is_numeric = pd.api.types.is_numeric_dtype(values)
             data_type = "numeric" if is_numeric else "text"
+            header_lookup_mnem = reverse_renamed.get(
+                mnemonic, re.sub(r"_\d+$", "", mnemonic)
+            )
             unit_str = (
-                las.get_unit_from_header(parsed_header, mnemonic)
+                (
+                    las.get_unit_from_header(parsed_header, mnemonic)
+                    or las.get_unit_from_header(parsed_header, header_lookup_mnem)
+                )
                 if isinstance(parsed_header, pd.DataFrame)
                 else None
             )
             descr_str = (
-                las.get_descr_from_header(parsed_header, mnemonic)
+                (
+                    las.get_descr_from_header(parsed_header, mnemonic)
+                    or las.get_descr_from_header(parsed_header, header_lookup_mnem)
+                )
                 if isinstance(parsed_header, pd.DataFrame)
                 else None
             )
@@ -1120,12 +1162,13 @@ class Well(object):
 
         self.db_session.flush()
 
-        # Vectorized chunked bulk_insert_mappings for curve_data (avoids OOM and Gunicorn worker timeouts)
+        # Vectorized chunked bulk_insert_mappings for newly appended curve_data
         depths_arr = np.asarray(df_work.index, dtype=np.float64)
         batch_buffer: List[Dict[str, Any]] = []
         BATCH_FLUSH_SIZE = 25000
 
-        for mnemonic, values in df_work.items():
+        for mnemonic in appended_curves:
+            values = df_work[mnemonic]
             orm_curve = curves_map[mnemonic]
             cid = orm_curve.curve_id
             is_numeric = pd.api.types.is_numeric_dtype(values)
@@ -1176,8 +1219,11 @@ class Well(object):
 
         self.db_session.flush()
         logger.info(
-            f"Well '{self.name}' data updated from LAS parse. {len(df_work.columns)} curves processed."
+            f"Well '{self.name}' data updated from LAS parse. "
+            f"Appended: {len(appended_curves)}, Skipped identical: {len(merge_summary.get('skipped_curves', []))}, "
+            f"Renamed: {merge_summary.get('renamed_curves', {})}."
         )
+        return merge_summary
 
     def update_data(self, data: pd.DataFrame):
         """Updates or inserts curve data for the well from a DataFrame ("upsert").

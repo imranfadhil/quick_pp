@@ -901,13 +901,19 @@ def project_read_las(
             proj = db_objects.Project.load(session, project_id=project_id)
             if is_demo_mode():
                 import lasio
-                from quick_pp.las_handler import extract_las_metadata
+                from quick_pp.las_handler import (
+                    extract_las_metadata,
+                    merge_well_curves_with_dedup,
+                )
 
                 proj_eph = _ephemeral_wells.setdefault(project_id, {})
                 for p in saved_paths:
                     las = lasio.read(p)
                     ldf = las.df().reset_index()
-                    ldf.columns = [str(c).upper() for c in ldf.columns]
+                    ldf.columns = [
+                        re.sub(r":\d+$", "", str(c).strip()).upper()
+                        for c in ldf.columns
+                    ]
                     if "DEPT" in ldf.columns and "DEPTH" not in ldf.columns:
                         ldf = ldf.rename(columns={"DEPT": "DEPTH"})
                     fallback_stem = Path(p).stem.split("_", 1)[-1] or Path(p).stem
@@ -916,11 +922,23 @@ def project_read_las(
                     )
                     w_name = str(meta_d.get("well_name") or fallback_stem).strip()
                     ldf["WELL_NAME"] = w_name
-                    proj_eph[w_name] = ldf
-                    _ephemeral_well_headers[(project_id, w_name)] = meta_d
+                    existing_demo_df = proj_eph.get(w_name)
+                    if existing_demo_df is None and w_name in set(proj.get_well_names()):
+                        try:
+                            existing_demo_df = proj.get_well_data_optimized(w_name)
+                        except Exception:
+                            existing_demo_df = None
+                    merged_ldf, _ = merge_well_curves_with_dedup(existing_demo_df, ldf)
+                    proj_eph[w_name] = merged_ldf
+                    prev_hdr = _ephemeral_well_headers.get((project_id, w_name), {})
+                    merged_hdr = dict(prev_hdr)
+                    for mk, mv in meta_d.items():
+                        if mv is not None or mk not in merged_hdr:
+                            merged_hdr[mk] = mv
+                    _ephemeral_well_headers[(project_id, w_name)] = merged_hdr
                     _merged_data_cache[f"{project_id}_{w_name}_0.16"] = (
                         time.time(),
-                        ldf.copy(),
+                        merged_ldf.copy(),
                     )
             else:
                 proj.read_las(saved_paths, depth_uom=depth_uom)

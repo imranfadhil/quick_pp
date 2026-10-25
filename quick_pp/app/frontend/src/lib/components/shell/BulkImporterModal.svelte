@@ -162,7 +162,23 @@
 			const preferredWell = committedList[0]?.well_name || workbench.wellId;
 			await projectData.selectProject(workbench.projectId, preferredWell);
 			const wellCount = committedList.length || lasFiles.length;
-			uploadStatus = `Committed ${wellCount} well(s) to project (${committedList.map((w: any) => w.well_name).join(', ')}).`;
+			const wellSummaries = committedList.map((w: any) => {
+				const parts: string[] = [];
+				if (Array.isArray(w.appended_curves) && w.appended_curves.length > 0) {
+					parts.push(`+${w.appended_curves.length} curve(s)`);
+				}
+				const renamedEntries = w.renamed_curves ? Object.entries(w.renamed_curves) : [];
+				if (renamedEntries.length > 0) {
+					parts.push(
+						`suffixed: ${renamedEntries.map(([orig, ren]) => `${orig}→${ren}`).join(', ')}`
+					);
+				}
+				if (Array.isArray(w.skipped_curves) && w.skipped_curves.length > 0) {
+					parts.push(`skipped identical: ${w.skipped_curves.join(', ')}`);
+				}
+				return parts.length > 0 ? `${w.well_name} [${parts.join('; ')}]` : w.well_name;
+			});
+			uploadStatus = `Committed ${wellCount} well(s) to project: ${wellSummaries.join(' | ')}.`;
 			appStatus.endTask(taskId, {
 				level: 'success',
 				message: `Imported ${wellCount} well(s)`

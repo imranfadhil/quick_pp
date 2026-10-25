@@ -40,6 +40,7 @@ from quick_pp.las_handler import (
     extract_las_metadata,
     fast_read_las,
     inspect_dlis,
+    merge_well_curves_with_dedup,
     mnemonic_mapper,
     read_dlis_frame,
     read_las_file_fast,
@@ -598,30 +599,105 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
     def _commit_wells_to_db_sync() -> List[Dict[str, Any]]:
         committed: List[Dict[str, Any]] = []
         for well_name, well_runs in runs_by_well.items():
-            if len(well_runs) > 1 or payload.regularize_grid:
-                spliced_df = splice_and_regularize_runs(
-                    [r["well_data"] for r in well_runs],
-                    step=payload.regularize_step,
-                    conflict_mode=splicing_mode,
-                    interpolate_gaps=payload.interpolate_gaps,
-                )
-            else:
-                spliced_df = well_runs[0]["well_data"]
+            merged_units: Dict[str, str] = {}
+            primary_meta: Dict[str, Any] = {}
+            for r in well_runs:
+                merged_units.update(r.get("units") or {})
+                for mk, mv in (r.get("metadata") or {}).items():
+                    if mv is not None or mk not in primary_meta:
+                        primary_meta[mk] = mv
 
-            primary_meta = dict(well_runs[-1]["metadata"])
+            batch_appended: List[str] = []
+            batch_skipped: List[str] = []
+            batch_renamed: Dict[str, str] = {}
+
+            if len(well_runs) == 1:
+                first_df = well_runs[0]["well_data"]
+                if payload.regularize_grid:
+                    spliced_df = splice_and_regularize_runs(
+                        [first_df],
+                        step=payload.regularize_step,
+                        conflict_mode=splicing_mode,
+                        interpolate_gaps=payload.interpolate_gaps,
+                    )
+                else:
+                    spliced_df = first_df
+                batch_appended = [
+                    c
+                    for c in spliced_df.columns
+                    if str(c).upper() not in ("DEPTH", "DEPT", "WELL_NAME", "UWI")
+                ]
+            else:
+                spliced_df = None
+                for idx, r in enumerate(well_runs):
+                    run_df = r["well_data"]
+                    if payload.regularize_grid:
+                        run_df = splice_and_regularize_runs(
+                            [run_df],
+                            step=payload.regularize_step,
+                            conflict_mode=splicing_mode,
+                            interpolate_gaps=payload.interpolate_gaps,
+                        )
+                    spliced_df, step_summary = merge_well_curves_with_dedup(
+                        spliced_df, run_df, incoming_units=merged_units
+                    )
+                    batch_appended.extend(step_summary.get("appended_curves", []))
+                    if idx > 0:
+                        batch_skipped.extend(step_summary.get("skipped_curves", []))
+                        batch_renamed.update(step_summary.get("renamed_curves", {}))
+
             primary_header_df = well_runs[-1]["header_df"]
             uwi = primary_meta.get("uwi") or well_name
-            merged_qaqc = compute_curve_qaqc(
-                spliced_df, curve_units=well_runs[-1]["units"]
-            )
+            final_appended = list(batch_appended)
+            final_skipped = list(batch_skipped)
+            final_renamed = dict(batch_renamed)
+            final_curves = [
+                c for c in spliced_df.columns if c not in ("WELL_NAME", "UWI")
+            ]
+            final_row_count = int(len(spliced_df))
 
             if project_id is not None:
                 if is_demo_mode():
                     proj_eph = _ephemeral_wells.setdefault(project_id, {})
+                    existing_demo_df = proj_eph.get(well_name)
+                    if existing_demo_df is None:
+                        try:
+                            with get_db() as session:
+                                proj = db_objects.Project.load(
+                                    session, project_id=project_id
+                                )
+                                if well_name in set(proj.get_well_names()):
+                                    existing_demo_df = proj.get_well_data_optimized(
+                                        well_name
+                                    )
+                        except Exception:
+                            existing_demo_df = None
+
+                    if existing_demo_df is not None and not existing_demo_df.empty:
+                        spliced_df, demo_summary = merge_well_curves_with_dedup(
+                            existing_demo_df,
+                            spliced_df,
+                            incoming_units=merged_units,
+                        )
+                        final_appended = list(demo_summary.get("appended_curves", []))
+                        final_skipped.extend(demo_summary.get("skipped_curves", []))
+                        final_renamed.update(demo_summary.get("renamed_curves", {}))
+                        final_curves = [
+                            c
+                            for c in spliced_df.columns
+                            if c not in ("WELL_NAME", "UWI")
+                        ]
+                        final_row_count = int(len(spliced_df))
+
                     proj_eph[well_name] = spliced_df.copy()
-                    _ephemeral_well_headers[(project_id, well_name)] = dict(
-                        primary_meta
+                    prev_demo_hdr = _ephemeral_well_headers.get(
+                        (project_id, well_name), {}
                     )
+                    merged_demo_hdr = dict(prev_demo_hdr)
+                    for mk, mv in primary_meta.items():
+                        if mv is not None or mk not in merged_demo_hdr:
+                            merged_demo_hdr[mk] = mv
+                    _ephemeral_well_headers[(project_id, well_name)] = merged_demo_hdr
                     _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (
                         time.time(),
                         spliced_df.copy(),
@@ -630,7 +706,8 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                     with get_db() as session:
                         proj = db_objects.Project.load(session, project_id=project_id)
                         existing_names = set(proj.get_well_names())
-                        if well_name in existing_names:
+                        is_existing_well = well_name in existing_names
+                        if is_existing_well:
                             well_obj = proj.get_well(well_name)
                         else:
                             well_obj = db_objects.Well(
@@ -644,11 +721,24 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                             session.add(well_obj._orm_well)
                             session.flush()
 
-                        well_obj.update_data_from_las_parse(
+                        db_merge_summary = well_obj.update_data_from_las_parse(
                             spliced_df,
                             primary_header_df,
                             metadata_override=primary_meta,
                         )
+                        if is_existing_well and isinstance(db_merge_summary, dict):
+                            final_appended = list(
+                                db_merge_summary.get("appended_curves", [])
+                            )
+                            final_skipped.extend(
+                                db_merge_summary.get("skipped_curves", [])
+                            )
+                            final_renamed.update(
+                                db_merge_summary.get("renamed_curves", {})
+                            )
+                            final_curves = ["DEPTH"] + [
+                                c.mnemonic for c in well_obj._orm_well.curves
+                            ]
 
                         # Persist any embedded LAS 3.0 core/tops data
                         for r in well_runs:
@@ -658,17 +748,21 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                                 well_obj.replace_rca_samples(r["embedded_core"])
 
                         session.flush()
+                    _ephemeral_well_headers.pop((project_id, well_name), None)
                     invalidate_well_cache(project_id=project_id, well_name=well_name)
+
+            merged_qaqc = compute_curve_qaqc(spliced_df, curve_units=merged_units)
 
             committed.append(
                 {
                     "well_name": well_name,
                     "uwi": uwi,
                     "runs_merged": len(well_runs),
-                    "row_count": int(len(spliced_df)),
-                    "curves": [
-                        c for c in spliced_df.columns if c not in ("WELL_NAME", "UWI")
-                    ],
+                    "row_count": final_row_count,
+                    "curves": final_curves,
+                    "appended_curves": final_appended,
+                    "skipped_curves": final_skipped,
+                    "renamed_curves": final_renamed,
                     "metadata": primary_meta,
                     "qaqc": merged_qaqc,
                 }

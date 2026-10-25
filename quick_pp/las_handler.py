@@ -1712,6 +1712,223 @@ def mnemonic_mapper(
     return mapping
 
 
+def _curves_are_identical(
+    series_a: pd.Series,
+    series_b: pd.Series,
+    rtol: float = 1e-3,
+    atol: float = 1e-3,
+) -> bool:
+    """Return True if two depth-aligned curve Series have identical valid masks and values."""
+    if len(series_a) != len(series_b):
+        return False
+
+    num_a = (
+        pd.to_numeric(series_a, errors="coerce")
+        .replace(list(SENTINEL_NULLS), np.nan)
+        .to_numpy(dtype=np.float64)
+    )
+    num_b = (
+        pd.to_numeric(series_b, errors="coerce")
+        .replace(list(SENTINEL_NULLS), np.nan)
+        .to_numpy(dtype=np.float64)
+    )
+    valid_a = np.isfinite(num_a)
+    valid_b = np.isfinite(num_b)
+
+    # Check if either series is genuinely non-numeric text (e.g. FACIES / ZONES)
+    is_num_a = pd.api.types.is_numeric_dtype(series_a)
+    is_num_b = pd.api.types.is_numeric_dtype(series_b)
+    if not is_num_a or not is_num_b:
+        if not valid_a.any() and not valid_b.any():
+            str_a = series_a.fillna("").astype(str).str.strip()
+            str_b = series_b.fillna("").astype(str).str.strip()
+            str_a = str_a.replace({"nan": "", "None": "", "null": ""})
+            str_b = str_b.replace({"nan": "", "None": "", "null": ""})
+            return bool((str_a == str_b).all())
+
+    if not valid_a.any() and not valid_b.any():
+        return True
+    if not np.array_equal(valid_a, valid_b):
+        return False
+    return bool(np.allclose(num_a[valid_a], num_b[valid_b], rtol=rtol, atol=atol))
+
+
+def merge_well_curves_with_dedup(
+    existing_df: Optional[pd.DataFrame],
+    incoming_df: pd.DataFrame,
+    incoming_units: Optional[Dict[str, str]] = None,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """Merge incoming well curves into an existing well DataFrame for the same well.
+
+    Rules:
+    - New curves not present in `existing_df` are appended.
+    - Curves with the same name as an existing curve are inspected:
+      - If the incoming curve is identical to the existing curve (or an existing suffixed
+        variant `CURVE_1`, `CURVE_2`, ...), it is skipped.
+      - If the incoming curve is different, it is assigned a unique suffix (`CURVE_1`,
+        `CURVE_2`, ...) and appended.
+
+    Returns:
+        Tuple of `(merged_df, summary)` where `summary` contains:
+        - `appended_curves`: List of curve names added (including suffixed ones)
+        - `skipped_curves`: List of incoming curve names skipped because they were identical
+        - `renamed_curves`: Dict mapping `{original_incoming_name: suffixed_name}`
+    """
+    summary: Dict[str, Any] = {
+        "appended_curves": [],
+        "skipped_curves": [],
+        "renamed_curves": {},
+    }
+    if incoming_df is None or incoming_df.empty:
+        return (
+            existing_df.copy() if existing_df is not None else pd.DataFrame(),
+            summary,
+        )
+
+    def _clean_depth_frame(df_in: pd.DataFrame) -> pd.DataFrame:
+        d_col = next(
+            (c for c in df_in.columns if str(c).strip().upper() in ("DEPTH", "DEPT")),
+            None,
+        )
+        if d_col is None:
+            return pd.DataFrame()
+        df_c = df_in.copy()
+        if d_col != "DEPTH":
+            df_c.rename(columns={d_col: "DEPTH"}, inplace=True)
+        # Handle case where duplicate DEPTH columns exist
+        if isinstance(df_c["DEPTH"], pd.DataFrame):
+            df_c_depth = pd.to_numeric(df_c["DEPTH"].iloc[:, 0], errors="coerce")
+            df_c = df_c.loc[:, ~df_c.columns.duplicated()]
+            df_c["DEPTH"] = df_c_depth
+        else:
+            df_c["DEPTH"] = pd.to_numeric(df_c["DEPTH"], errors="coerce")
+        df_c = df_c.dropna(subset=["DEPTH"]).copy()
+        df_c["DEPTH"] = np.round(df_c["DEPTH"].to_numpy(dtype=np.float64), 4)
+        df_c = (
+            df_c.sort_values("DEPTH")
+            .drop_duplicates(subset=["DEPTH"], keep="last")
+            .reset_index(drop=True)
+        )
+        return df_c
+
+    inc_clean = _clean_depth_frame(incoming_df)
+    if inc_clean.empty:
+        return (
+            existing_df.copy() if existing_df is not None else pd.DataFrame(),
+            summary,
+        )
+
+    has_existing = existing_df is not None and not existing_df.empty
+    base_clean = _clean_depth_frame(existing_df) if has_existing else pd.DataFrame()
+
+    if not base_clean.empty:
+        exist_depths = base_clean["DEPTH"].to_numpy(dtype=np.float64)
+        inc_depths = inc_clean["DEPTH"].to_numpy(dtype=np.float64)
+        # Snap incoming depths that are within 1e-3 m of an existing depth to avoid sub-millimeter row splits
+        if len(exist_depths) > 0 and len(inc_depths) > 0:
+            idx_right = np.clip(
+                np.searchsorted(exist_depths, inc_depths), 0, len(exist_depths) - 1
+            )
+            idx_left = np.clip(idx_right - 1, 0, len(exist_depths) - 1)
+            dist_r = np.abs(exist_depths[idx_right] - inc_depths)
+            dist_l = np.abs(exist_depths[idx_left] - inc_depths)
+            use_l = dist_l <= dist_r
+            nearest_idx = np.where(use_l, idx_left, idx_right)
+            nearest_dist = np.where(use_l, dist_l, dist_r)
+            snap_mask = nearest_dist <= 1e-3
+            if np.any(snap_mask):
+                snapped_d = inc_depths.copy()
+                snapped_d[snap_mask] = exist_depths[nearest_idx[snap_mask]]
+                inc_clean["DEPTH"] = snapped_d
+                inc_clean = (
+                    inc_clean.sort_values("DEPTH")
+                    .drop_duplicates(subset=["DEPTH"], keep="last")
+                    .reset_index(drop=True)
+                )
+                inc_depths = inc_clean["DEPTH"].to_numpy(dtype=np.float64)
+
+        union_depths = np.union1d(exist_depths, inc_depths)
+        base_indexed = base_clean.set_index("DEPTH").reindex(union_depths)
+        inc_indexed = inc_clean.set_index("DEPTH").reindex(union_depths)
+    else:
+        union_depths = inc_clean["DEPTH"].to_numpy(dtype=np.float64)
+        base_indexed = pd.DataFrame(index= pd.Index(union_depths, name="DEPTH"))
+        inc_indexed = inc_clean.set_index("DEPTH")
+
+    # Preserve WELL_NAME / UWI metadata columns across all union depths
+    for meta_col in ("WELL_NAME", "UWI"):
+        val = None
+        if meta_col in base_indexed.columns:
+            non_na = base_indexed[meta_col].dropna()
+            if not non_na.empty:
+                val = non_na.iloc[0]
+        if val is None and meta_col in inc_indexed.columns:
+            inc_meta = inc_indexed[meta_col]
+            if isinstance(inc_meta, pd.DataFrame):
+                inc_meta = inc_meta.iloc[:, 0]
+            non_na = inc_meta.dropna()
+            if not non_na.empty:
+                val = non_na.iloc[0]
+        if val is not None:
+            base_indexed[meta_col] = val
+
+    existing_upper_map: Dict[str, str] = {
+        str(c).strip().upper(): str(c) for c in base_indexed.columns
+    }
+
+    for col_idx in range(len(inc_indexed.columns)):
+        raw_col_name = str(inc_indexed.columns[col_idx]).strip()
+        # Strip lasio duplicate suffix like ':1', ':2' if present
+        base_col_name = re.sub(r":\d+$", "", raw_col_name).strip() or raw_col_name
+        col_up = base_col_name.upper()
+        if col_up in ("DEPTH", "DEPT", "WELL_NAME", "UWI"):
+            continue
+
+        inc_series = inc_indexed.iloc[:, col_idx]
+        if col_up not in existing_upper_map:
+            base_indexed[base_col_name] = inc_series
+            existing_upper_map[col_up] = base_col_name
+            summary["appended_curves"].append(base_col_name)
+        else:
+            # Inspect against existing curve of same name (and any existing suffixed variants CURVE_1, CURVE_2, ...)
+            candidate_cols = [existing_upper_map[col_up]]
+            suffix_pat = re.compile(rf"^{re.escape(col_up)}_\d+$")
+            for k_up, actual_col in existing_upper_map.items():
+                if suffix_pat.match(k_up) and actual_col not in candidate_cols:
+                    candidate_cols.append(actual_col)
+
+            is_identical = any(
+                _curves_are_identical(base_indexed[cand], inc_series)
+                for cand in candidate_cols
+            )
+            if is_identical:
+                summary["skipped_curves"].append(base_col_name)
+            else:
+                suffix_num = 1
+                while f"{col_up}_{suffix_num}" in existing_upper_map:
+                    suffix_num += 1
+                suffixed_name = f"{base_col_name}_{suffix_num}"
+                base_indexed[suffixed_name] = inc_series
+                existing_upper_map[suffixed_name.upper()] = suffixed_name
+                summary["renamed_curves"][base_col_name] = suffixed_name
+                summary["appended_curves"].append(suffixed_name)
+                if incoming_units is not None:
+                    u_val = incoming_units.get(raw_col_name) or incoming_units.get(
+                        base_col_name
+                    )
+                    if u_val is not None:
+                        incoming_units[suffixed_name] = u_val
+
+    merged_out = base_indexed.reset_index()
+    # Keep DEPTH, WELL_NAME, UWI at the front
+    front_cols = [
+        c for c in ("WELL_NAME", "UWI", "DEPTH") if c in merged_out.columns
+    ]
+    other_cols = [c for c in merged_out.columns if c not in front_cols]
+    merged_out = merged_out[front_cols + other_cols]
+    return merged_out, summary
+
+
 def standardize_curve_units(
     df: pd.DataFrame,
     curve_units: Optional[Dict[str, str]] = None,
@@ -1732,12 +1949,50 @@ def standardize_curve_units(
     out_df = df.copy()
     units_in = {str(k).strip().upper(): str(v or "").strip() for k, v in (curve_units or {}).items()}
     col_map = mnemonic_mapper(out_df, custom_mapping=custom_mnemonic_map)
-    out_df.rename(columns=col_map, inplace=True)
 
-    # Map units to renamed columns
+    # Map units and handle any duplicate target mnemonics within the same file
     std_units: Dict[str, str] = {}
-    for orig_col, new_col in col_map.items():
-        std_units[new_col] = units_in.get(orig_col.strip().upper(), units_in.get(new_col, ""))
+    new_col_names: List[str] = []
+    seen_series_by_base: Dict[str, List[Tuple[str, pd.Series]]] = {}
+    keep_col_indices: List[int] = []
+
+    for col_idx, orig_col in enumerate(out_df.columns):
+        orig_str = str(orig_col)
+        mapped_raw = col_map.get(orig_str, orig_str)
+        base_target = re.sub(r":\d+$", "", str(mapped_raw).strip()).strip() or str(mapped_raw).strip()
+        target_up = base_target.upper()
+        s_col = out_df.iloc[:, col_idx]
+        u_str = units_in.get(orig_str.strip().upper(), units_in.get(target_up, ""))
+
+        if target_up in ("DEPTH", "DEPT", "WELL_NAME", "UWI"):
+            if target_up not in seen_series_by_base:
+                seen_series_by_base[target_up] = [(base_target, s_col)]
+                new_col_names.append(base_target)
+                std_units[base_target] = u_str
+                keep_col_indices.append(col_idx)
+            continue
+
+        if target_up not in seen_series_by_base:
+            seen_series_by_base[target_up] = [(base_target, s_col)]
+            new_col_names.append(base_target)
+            std_units[base_target] = u_str
+            keep_col_indices.append(col_idx)
+        else:
+            # Check if identical to an already-seen column with the same base mnemonic in this file
+            if any(_curves_are_identical(prev_s, s_col) for _, prev_s in seen_series_by_base[target_up]):
+                continue
+            suffix_idx = len(seen_series_by_base[target_up])
+            existing_names_up = {n.upper() for n in new_col_names}
+            while f"{target_up}_{suffix_idx}" in existing_names_up:
+                suffix_idx += 1
+            suffixed_target = f"{base_target}_{suffix_idx}"
+            seen_series_by_base[target_up].append((suffixed_target, s_col))
+            new_col_names.append(suffixed_target)
+            std_units[suffixed_target] = u_str
+            keep_col_indices.append(col_idx)
+
+    out_df = out_df.iloc[:, keep_col_indices].copy()
+    out_df.columns = new_col_names
 
     conversions: Dict[str, Dict[str, Any]] = {}
     target_uom_clean = (target_depth_uom or "m").strip().lower()
@@ -1785,8 +2040,10 @@ def standardize_curve_units(
             std_units[dcol] = std_units.get(dcol) or target_u
 
     # 2. Porosity conversion (% / PU -> v/v)
-    for pcol in ("NPHI", "PHIT", "PHIE", "CPOR", "CPORE", "CORE_POR"):
-        if pcol not in out_df.columns:
+    por_bases = {"NPHI", "PHIT", "PHIE", "CPOR", "CPORE", "CORE_POR"}
+    for pcol in list(out_df.columns):
+        base_pcol = re.sub(r"_\d+$", "", str(pcol).strip().upper())
+        if base_pcol not in por_bases:
             continue
         raw_u = std_units.get(pcol, "").strip().upper()
         s = pd.to_numeric(out_df[pcol], errors="coerce")
@@ -1810,29 +2067,34 @@ def standardize_curve_units(
             std_units[pcol] = "v/v"
 
     # 3. Bulk Density conversion (kg/m3 -> g/cc)
-    if "RHOB" in out_df.columns:
-        raw_u = std_units.get("RHOB", "").strip().upper()
-        s = pd.to_numeric(out_df["RHOB"], errors="coerce")
+    for rcol in list(out_df.columns):
+        base_rcol = re.sub(r"_\d+$", "", str(rcol).strip().upper())
+        if base_rcol != "RHOB":
+            continue
+        raw_u = std_units.get(rcol, "").strip().upper()
+        s = pd.to_numeric(out_df[rcol], errors="coerce")
         valid = s.dropna()
         if not valid.empty:
             med = float(np.nanmedian(valid))
             is_kgm3 = raw_u in ("KG/M3", "KGM3", "KG/M^3", "KG/CBM")
             if is_kgm3 or med > 500.0:
-                out_df["RHOB"] = (s / 1000.0).astype(np.float32)
-                conversions["RHOB"] = {
-                    "curve": "RHOB",
+                out_df[rcol] = (s / 1000.0).astype(np.float32)
+                conversions[rcol] = {
+                    "curve": rcol,
                     "from_unit": raw_u or "kg/m3",
                     "to_unit": "g/cc",
                     "factor": 0.001,
-                    "badge": f"RHOB: {raw_u or 'kg/m3'} -> g/cc",
+                    "badge": f"{rcol}: {raw_u or 'kg/m3'} -> g/cc",
                 }
             else:
-                out_df["RHOB"] = s.astype(np.float32)
-            std_units["RHOB"] = "g/cc"
+                out_df[rcol] = s.astype(np.float32)
+            std_units[rcol] = "g/cc"
 
     # 4. Sonic conversion (us/m -> us/ft)
-    for scol in ("DT", "DTC", "DTS"):
-        if scol not in out_df.columns:
+    sonic_bases = {"DT", "DTC", "DTS"}
+    for scol in list(out_df.columns):
+        base_scol = re.sub(r"_\d+$", "", str(scol).strip().upper())
+        if base_scol not in sonic_bases:
             continue
         raw_u = std_units.get(scol, "").strip().upper()
         s = pd.to_numeric(out_df[scol], errors="coerce")

@@ -521,3 +521,117 @@ GR  .GAPI : Gamma Ray
     assert res_cfg.json()["header"]["company"] == "Updated Operator"
     assert res_cfg.json()["header"]["country"] == "United Kingdom"
 
+
+def test_same_well_las_import_append_skip_identical_and_suffix_different():
+    res_proj = client.post("/quick_pp/database/projects", json={"name": "SameWellMergeTestProj"})
+    assert res_proj.status_code == 200
+    pid = res_proj.json()["project_id"]
+
+    # Ensure clean state if test was run previously against persistent SQLite DB
+    client.delete(f"/quick_pp/database/projects/{pid}/wells/15-9-MERGE-1")
+    client.delete(f"/quick_pp/database/projects/{pid}/wells/15/9-MERGE-1")
+
+    # File 1 for well 15/9-MERGE-1: has GR and RHOB
+    las_file_1 = """~Version
+VERS. 2.0 : CWLS LOG ASCII STANDARD
+WRAP. NO  : ONE LINE PER DEPTH STEP
+~Well
+STRT.M 2000.0 : START DEPTH
+STOP.M 2001.0 : STOP DEPTH
+STEP.M 0.5    : STEP
+NULL.  -999.25: NULL VALUE
+WELL.  15/9-MERGE-1 : WELL
+UWI .  15/9-MERGE-1 : UWI
+COMP.  EQUINOR      : COMPANY
+~Curve
+DEPT.M      : Depth
+GR  .GAPI   : Gamma Ray
+RHOB.G/C3   : Bulk Density
+~Ascii
+2000.0  45.0  2.35
+2000.5  50.0  2.40
+2001.0  55.0  2.45
+""".encode("utf-8")
+
+    # File 2 for same well 15/9-MERGE-1:
+    # - GR is IDENTICAL (45.0, 50.0, 55.0) -> should be skipped
+    # - RHOB is DIFFERENT (2.50, 2.55, 2.60) -> should be suffixed as RHOB_1
+    # - NPHI is NEW (0.22, 0.20, 0.18) -> should be appended as NPHI
+    las_file_2 = """~Version
+VERS. 2.0 : CWLS LOG ASCII STANDARD
+WRAP. NO  : ONE LINE PER DEPTH STEP
+~Well
+STRT.M 2000.0 : START DEPTH
+STOP.M 2001.0 : STOP DEPTH
+STEP.M 0.5    : STEP
+NULL.  -999.25: NULL VALUE
+WELL.  15/9-MERGE-1 : WELL
+UWI .  15/9-MERGE-1 : UWI
+~Curve
+DEPT.M      : Depth
+GR  .GAPI   : Gamma Ray
+RHOB.G/C3   : Bulk Density Run 2
+NPHI.V/V    : Neutron Porosity
+~Ascii
+2000.0  45.0  2.50  0.22
+2000.5  50.0  2.55  0.20
+2001.0  55.0  2.60  0.18
+""".encode("utf-8")
+
+    # Upload File 1 first
+    res_insp_1 = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("merge_1.las", las_file_1, "text/plain"))],
+    )
+    assert res_insp_1.status_code == 200
+    f1_info = res_insp_1.json()["files"][0]
+
+    res_commit_1 = client.post(
+        "/api/v1/import/logs/commit",
+        json={
+            "project_id": pid,
+            "files": [{"file_id": f1_info["file_id"], "filename": "merge_1.las", "metadata": f1_info["metadata"]}],
+        },
+    )
+    assert res_commit_1.status_code == 200
+    w1_out = res_commit_1.json()["wells"][0]
+    w_name = w1_out["well_name"]
+    assert set(w1_out["appended_curves"]) == {"GR", "RHOB"}
+
+    # Upload File 2 for the same well
+    res_insp_2 = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("merge_2.las", las_file_2, "text/plain"))],
+    )
+    assert res_insp_2.status_code == 200
+    f2_info = res_insp_2.json()["files"][0]
+
+    res_commit_2 = client.post(
+        "/api/v1/import/logs/commit",
+        json={
+            "project_id": pid,
+            "files": [{"file_id": f2_info["file_id"], "filename": "merge_2.las", "metadata": f2_info["metadata"]}],
+        },
+    )
+    assert res_commit_2.status_code == 200
+    w2_out = res_commit_2.json()["wells"][0]
+    assert "GR" in w2_out["skipped_curves"]
+    assert w2_out["renamed_curves"] == {"RHOB": "RHOB_1"}
+    assert set(w2_out["appended_curves"]) == {"RHOB_1", "NPHI"}
+
+    # Verify workspace bundle has original GR, RHOB, plus new NPHI and suffixed RHOB_1, and preserved company header
+    res_bundle = client.get(f"/quick_pp/workspace/projects/{pid}/wells/{w_name}/bundle")
+    assert res_bundle.status_code == 200
+    bundle = res_bundle.json()
+    assert bundle["header"]["company"] == "EQUINOR"
+    curves_data = bundle["curves"]
+    assert "GR" in curves_data
+    assert "RHOB" in curves_data
+    assert "RHOB_1" in curves_data
+    assert "NPHI" in curves_data
+    assert "GR_1" not in curves_data
+    assert np.allclose(curves_data["RHOB"], [2.35, 2.40, 2.45], atol=1e-3)
+    assert np.allclose(curves_data["RHOB_1"], [2.50, 2.55, 2.60], atol=1e-3)
+    assert np.allclose(curves_data["NPHI"], [0.22, 0.20, 0.18], atol=1e-3)
+
+
