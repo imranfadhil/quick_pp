@@ -1276,18 +1276,35 @@ class Well(object):
                 if depths_to_update:
                     all_depths_to_delete[orm_curve.curve_id] = depths_to_update
 
-        # Optimization 3: Bulk delete old data points using expanding bindparam in safe chunks
+        # Optimization 3: Bulk delete old data points using primary keys after matching rounded depths
         if all_depths_to_delete:
+            sel_stmt = text(
+                "SELECT curve_data_id, depth FROM curve_data "
+                "WHERE curve_id = :curve_id AND depth >= :min_d AND depth <= :max_d"
+            )
             delete_stmt = text(
-                "DELETE FROM curve_data WHERE curve_id = :curve_id AND depth IN :depths"
-            ).bindparams(bindparam("depths", expanding=True))
+                "DELETE FROM curve_data WHERE curve_data_id IN :cd_ids"
+            ).bindparams(bindparam("cd_ids", expanding=True))
             chunk_size = 900
             for curve_id, depths in all_depths_to_delete.items():
-                for i in range(0, len(depths), chunk_size):
-                    depth_chunk = depths[i : i + chunk_size]
+                rounded_set = {round(float(d), 4) for d in depths if pd.notna(d)}
+                if not rounded_set:
+                    continue
+                min_d = min(rounded_set) - 0.01
+                max_d = max(rounded_set) + 0.01
+                rows = self.db_session.execute(
+                    sel_stmt,
+                    {"curve_id": curve_id, "min_d": min_d, "max_d": max_d},
+                ).fetchall()
+                cd_ids = [
+                    int(r[0])
+                    for r in rows
+                    if r[1] is not None and round(float(r[1]), 4) in rounded_set
+                ]
+                for i in range(0, len(cd_ids), chunk_size):
                     self.db_session.execute(
                         delete_stmt,
-                        {"curve_id": curve_id, "depths": depth_chunk},
+                        {"cd_ids": cd_ids[i : i + chunk_size]},
                     )
 
         # Optimization 4: Batch insert new data points using bulk_insert_mappings

@@ -7534,18 +7534,30 @@ def workspace_clear_calculated_curves(
                             {"cids": drop_cids},
                         )
                     if partial_cids and cleared_depths_list:
-                        del_stmt = text(
-                            "DELETE FROM curve_data WHERE curve_id IN :cids AND ROUND(depth, 4) IN :depths"
-                        ).bindparams(
-                            bindparam("cids", expanding=True),
-                            bindparam("depths", expanding=True),
-                        )
-                        chunk_sz = 800
-                        for i in range(0, len(cleared_depths_list), chunk_sz):
-                            d_chunk = cleared_depths_list[i : i + chunk_sz]
-                            session.execute(
-                                del_stmt, {"cids": partial_cids, "depths": d_chunk}
-                            )
+                        min_d = float(min(cleared_depths_list)) - 0.01
+                        max_d = float(max(cleared_depths_list)) + 0.01
+                        cleared_depths_set = set(cleared_depths_list)
+                        candidate_rows = session.execute(
+                            text(
+                                "SELECT curve_data_id, depth FROM curve_data "
+                                "WHERE curve_id IN :cids AND depth >= :min_d AND depth <= :max_d"
+                            ).bindparams(bindparam("cids", expanding=True)),
+                            {"cids": partial_cids, "min_d": min_d, "max_d": max_d},
+                        ).fetchall()
+                        cd_ids_to_delete = [
+                            int(row[0])
+                            for row in candidate_rows
+                            if row[1] is not None
+                            and round(float(row[1]), 4) in cleared_depths_set
+                        ]
+                        if cd_ids_to_delete:
+                            del_stmt = text(
+                                "DELETE FROM curve_data WHERE curve_data_id IN :cd_ids"
+                            ).bindparams(bindparam("cd_ids", expanding=True))
+                            chunk_sz = 900
+                            for i in range(0, len(cd_ids_to_delete), chunk_sz):
+                                id_chunk = cd_ids_to_delete[i : i + chunk_sz]
+                                session.execute(del_stmt, {"cd_ids": id_chunk})
                     session.flush()
             invalidate_well_cache(project_id=project_id, well_name=well_name)
             _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (
