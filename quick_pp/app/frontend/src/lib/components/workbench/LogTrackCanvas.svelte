@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
 	import { browser } from '$app/environment';
+	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import {
@@ -8,7 +9,10 @@
 		LITHOLOGY_TRACK_SPECS,
 		MINERAL_TO_CURVE_MNEMONIC,
 		PETRO_COLORS,
+		ROCK_FLAG_0_COLOR,
 		ZONE_BAND_COLORS,
+		getRockTypeColor,
+		getRockTypeFillRgba,
 		type LithologyTrackSpec
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum, fmtPerm } from '$lib/utils/formatters';
@@ -331,9 +335,175 @@
 		void wellData.visibleIndices;
 		void workbench.lithoParams.model;
 		void workbench.lithoParams.minerals;
+		void projectData.drtMethod;
+		void projectData.activeDrtCutoffs;
+		void projectData.rockTypingResult;
 		void workbench.lithoParams.enableCoalFlagging;
 		void tsOverlayActive;
 		return resolveActiveLithoSpecs(wellData.visibleIndices);
+	});
+
+	function resolveRockTypeSeries(indices: number[]): {
+		flags: (number | null)[];
+		mlFlags: (number | null)[];
+		indicatorValues: (number | null)[];
+		indicatorLabel: string;
+		uniqueFlags: number[];
+		maxFlag: number;
+		isPreview: boolean;
+	} {
+		const method = projectData.drtMethod;
+		const indicatorLabel = method === 'winland' ? 'R35' : method === 'lucia' ? 'RFN' : 'FZI';
+		const rawRf = wellData.curves['ROCK_FLAG'] ?? wellData.curves['DRT'];
+		const rawMl = wellData.curves['ROCK_FLAG_ML'];
+		const rawInd =
+			wellData.curves[indicatorLabel] ??
+			wellData.curves['FZI'] ??
+			wellData.curves['R35'] ??
+			wellData.curves['RFN'];
+
+		let flags: (number | null)[] = indices.map((i) => {
+			const v = rawRf?.[i];
+			return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : null;
+		});
+		const mlFlags: (number | null)[] = indices.map((i) => {
+			const v = rawMl?.[i];
+			return typeof v === 'number' && Number.isFinite(v) && v >= 1 ? Math.round(v) : null;
+		});
+		let indicatorValues: (number | null)[] = indices.map((i) => {
+			const v = rawInd?.[i];
+			return typeof v === 'number' && Number.isFinite(v) ? v : null;
+		});
+		let isPreview = false;
+
+		// If wellData.curves['ROCK_FLAG'] is not populated yet, check projectData.rockTypingResult or compute live preview from PHIT & PERM
+		if (!flags.some((v) => v !== null && v >= 1)) {
+			const rtRes = projectData.rockTypingResult;
+			const deptAll = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+			if (rtRes && workbench.wellId && Array.isArray(rtRes.well_names)) {
+				const depthToFlag = new Map<number, number>();
+				const depthToInd = new Map<number, number>();
+				const indArr =
+					method === 'winland' ? rtRes.r35 : method === 'lucia' ? rtRes.rfn : rtRes.fzi;
+				for (let j = 0; j < rtRes.well_names.length; j++) {
+					if (rtRes.well_names[j] === workbench.wellId) {
+						const dKey = Math.round(Number(rtRes.depths[j]) * 100);
+						const rfVal = rtRes.rock_flags?.[j];
+						if (typeof rfVal === 'number' && Number.isFinite(rfVal) && rfVal >= 1) {
+							depthToFlag.set(dKey, Math.round(rfVal));
+						}
+						const iv = indArr?.[j];
+						if (typeof iv === 'number' && Number.isFinite(iv)) {
+							depthToInd.set(dKey, iv);
+						}
+					}
+				}
+				if (depthToFlag.size > 0) {
+					flags = indices.map((i) => depthToFlag.get(Math.round(Number(deptAll[i]) * 100)) ?? null);
+					if (!indicatorValues.some((v) => v !== null)) {
+						indicatorValues = indices.map(
+							(i) => depthToInd.get(Math.round(Number(deptAll[i]) * 100)) ?? null
+						);
+					}
+				}
+			}
+		}
+
+		// Live fallback calculation from PHIT & PERM if ROCK_FLAG is still absent
+		if (!flags.some((v) => v !== null && v >= 1)) {
+			const phitCurve = wellData.curves['PHIT'] ?? wellData.curves['PHIE'];
+			const permCurve =
+				wellData.curves['PERM'] ?? wellData.curves['PERM_TRANS'] ?? wellData.curves['CPERM'];
+			if (phitCurve && permCurve) {
+				const cutoffs = [...projectData.activeDrtCutoffs]
+					.filter((c) => Number.isFinite(c))
+					.sort((a, b) => a - b);
+				const kCount = cutoffs.length + 1;
+				const higherIsBetter = method !== 'lucia';
+				const computedFlags: (number | null)[] = [];
+				const computedInd: (number | null)[] = [];
+				for (const idx of indices) {
+					const phi = phitCurve[idx];
+					const k = permCurve[idx];
+					if (
+						typeof phi === 'number' &&
+						Number.isFinite(phi) &&
+						phi > 0.001 &&
+						phi < 0.95 &&
+						typeof k === 'number' &&
+						Number.isFinite(k) &&
+						k > 1e-5
+					) {
+						let indVal: number;
+						if (method === 'winland') {
+							indVal = Math.pow(
+								10,
+								0.732 + 0.588 * Math.log10(k) - 0.864 * Math.log10(phi * 100.0)
+							);
+						} else if (method === 'lucia') {
+							const logPhi = Math.log10(phi);
+							indVal = Math.pow(
+								10,
+								(9.789 + 8.671 * logPhi - Math.log10(k)) / (12.084 + 8.297 * logPhi)
+							);
+						} else {
+							const rqi = 0.0314 * Math.sqrt(k / phi);
+							const phiz = phi / (1.0 - phi);
+							indVal = rqi / phiz;
+						}
+						if (Number.isFinite(indVal) && indVal > 0) {
+							let bin = 0;
+							while (bin < cutoffs.length && indVal >= cutoffs[bin]) {
+								bin++;
+							}
+							const rf = higherIsBetter ? kCount - bin : bin + 1;
+							computedFlags.push(rf);
+							computedInd.push(indVal);
+							continue;
+						}
+					}
+					computedFlags.push(null);
+					computedInd.push(null);
+				}
+				if (computedFlags.some((v) => v !== null)) {
+					flags = computedFlags;
+					if (!indicatorValues.some((v) => v !== null)) {
+						indicatorValues = computedInd;
+					}
+					isPreview = true;
+				}
+			}
+		}
+
+		const uniqueSet = new Set<number>();
+		for (const v of flags) {
+			if (v !== null && v >= 1) uniqueSet.add(v);
+		}
+		const uniqueFlags = Array.from(uniqueSet).sort((a, b) => a - b);
+		const maxFlag = Math.max(
+			uniqueFlags.length > 0 ? uniqueFlags[uniqueFlags.length - 1] : 0,
+			projectData.activeDrtCutoffs.length + 1,
+			4
+		);
+
+		return {
+			flags,
+			mlFlags,
+			indicatorValues,
+			indicatorLabel,
+			uniqueFlags,
+			maxFlag,
+			isPreview
+		};
+	}
+
+	let activeRockTypeInfo = $derived.by(() => {
+		void wellData.curves;
+		void wellData.visibleIndices;
+		void projectData.drtMethod;
+		void projectData.activeDrtCutoffs;
+		void projectData.rockTypingResult;
+		return resolveRockTypeSeries(wellData.visibleIndices);
 	});
 
 	function buildTracesAndLayout() {
@@ -1115,7 +1285,115 @@
 			});
 		}
 
-		// Track 6 (xaxis6): Fluid Saturation (SWT/SWE 1.0 -> 0.0), SWT_BLK, SW_P10/P90 & Pay Flag
+		// Track 6 (xaxis6): Discrete Rock Type (ROCK_FLAG) small track between PERM and SW
+		// Emulates ROCK_FLAG from well_log_config.py (one-hot color-filled bands + ROCK_FLAG_0 warm background)
+		// and improves it with zero-bleed stepped ('hv') rectangular blocks, unified ROCK_TYPE_PALETTE colors,
+		// a stepped reservoir-quality staircase curve, and rich DRT + indicator (FZI / R35 / RFN) hover tooltips.
+		const rtInfo = resolveRockTypeSeries(indices);
+		if (rtInfo.uniqueFlags.length > 0) {
+			const sampleFlagAt = (sIdx: number): number => {
+				if (svgStride <= 1) {
+					const v = rtInfo.flags[sIdx];
+					return v !== null && v >= 1 ? v : 0;
+				}
+				const startIdx = svgSampleIndices[sIdx];
+				const endIdx =
+					sIdx + 1 < svgSampleIndices.length
+						? svgSampleIndices[sIdx + 1]
+						: rtInfo.flags.length;
+				const counts = new Map<number, number>();
+				let bestFlag = 0;
+				let bestCount = 0;
+				for (let j = startIdx; j < endIdx; j++) {
+					const v = rtInfo.flags[j];
+					const f = v !== null && v >= 1 ? v : 0;
+					if (f >= 1) {
+						const nextC = (counts.get(f) ?? 0) + 1;
+						counts.set(f, nextC);
+						if (nextC > bestCount) {
+							bestCount = nextC;
+							bestFlag = f;
+						}
+					}
+				}
+				return bestFlag;
+			};
+
+			const svgFlags = svgDepth.map((_, sIdx) => sampleFlagAt(sIdx));
+
+			// Background ROCK_FLAG_0 trace (unflagged / non-reservoir intervals, matching well_log_config.py)
+			if (svgFlags.some((f) => f === 0)) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'ROCK_FLAG_0',
+					x: svgFlags.map((f) => (f === 0 ? 1 : 0)),
+					y: svgDepth,
+					xaxis: 'x6',
+					yaxis: 'y',
+					fill: 'tozerox',
+					fillcolor: ROCK_FLAG_0_COLOR,
+					line: { width: 0, color: 'rgba(0,0,0,0)', shape: 'hv' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+			}
+
+			// Discrete one-hot ROCK_FLAG_k color-filled block traces (crisp stepped 'hv' blocks across [0, 1])
+			for (const flagVal of rtInfo.uniqueFlags) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: `ROCK_FLAG_${flagVal}`,
+					x: svgFlags.map((f) => (f === flagVal ? 1 : 0)),
+					y: svgDepth,
+					xaxis: 'x6',
+					yaxis: 'y',
+					fill: 'tozerox',
+					fillcolor: getRockTypeFillRgba(flagVal, 0.82),
+					line: { width: 0, color: 'rgba(0,0,0,0)', shape: 'hv' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+			}
+
+			// Stepped reservoir-quality staircase curve (DRT 1 on right -> DRT K on left) + unified rich hover tooltip
+			const maxF = Math.max(rtInfo.maxFlag, 2);
+			const stepX = depth.map((_, i) => {
+				const f = rtInfo.flags[i];
+				if (f === null || f < 1) return null;
+				return Number((0.92 - ((f - 1) / Math.max(1, maxF - 1)) * 0.80).toFixed(3));
+			});
+			const hoverText = depth.map((_, i) => {
+				const f = rtInfo.flags[i];
+				if (f === null || f < 1) return 'Unflagged';
+				const indVal = rtInfo.indicatorValues[i];
+				const mlVal = rtInfo.mlFlags[i];
+				let txt = `DRT ${f}`;
+				if (indVal !== null && Number.isFinite(indVal)) {
+					txt += ` | ${rtInfo.indicatorLabel}: ${indVal.toFixed(2)}`;
+				}
+				if (mlVal !== null && mlVal >= 1 && mlVal !== f) {
+					txt += ` (ML: DRT ${mlVal})`;
+				}
+				return txt;
+			});
+
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'ROCK_FLAG',
+				x: stepX,
+				text: hoverText,
+				y: depth,
+				xaxis: 'x6',
+				yaxis: 'y',
+				line: { color: 'rgba(15, 23, 42, 0.78)', width: 1.15, shape: 'hv' },
+				hovertemplate: '<b>Rock Type:</b> %{text}<extra></extra>'
+			});
+		}
+
+		// Track 7 (xaxis7): Fluid Saturation (SWT/SWE 1.0 -> 0.0), SWT_BLK, SW_P10/P90 & Pay Flag
 		const swt = pick('SWT').length ? pick('SWT') : pick('SWE');
 		if (swt.some((v) => v !== null)) {
 			traces.push({
@@ -1126,7 +1404,7 @@
 					v !== null && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0
 				),
 				y: svgDepth,
-				xaxis: 'x6',
+				xaxis: 'x7',
 				yaxis: 'y',
 				fill: 'tozerox',
 				fillcolor: PETRO_COLORS.waterFill,
@@ -1140,7 +1418,7 @@
 				name: 'SWT',
 				x: swt,
 				y: depth,
-				xaxis: 'x6',
+				xaxis: 'x7',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.water, width: 1.5 },
 				hovertemplate: 'Sw: %{x:.3f} v/v<extra></extra>'
@@ -1154,7 +1432,7 @@
 				name: 'SWT_BLK',
 				x: swtBlk,
 				y: depth,
-				xaxis: 'x6',
+				xaxis: 'x7',
 				yaxis: 'y',
 				line: { color: '#0F172A', width: 1.5, shape: 'hv' },
 				hovertemplate: 'SWT_BLK: %{x:.3f} v/v<extra></extra>'
@@ -1169,7 +1447,7 @@
 				name: 'SW_P10',
 				x: swP10,
 				y: depth,
-				xaxis: 'x6',
+				xaxis: 'x7',
 				yaxis: 'y',
 				line: { color: '#7C3AED', width: 1.0, dash: 'dot' },
 				hovertemplate: 'Sw P10: %{x:.3f}<extra></extra>'
@@ -1180,7 +1458,7 @@
 				name: 'SW_P90',
 				x: swP90,
 				y: depth,
-				xaxis: 'x6',
+				xaxis: 'x7',
 				yaxis: 'y',
 				line: { color: '#7C3AED', width: 1.0, dash: 'dot' },
 				hovertemplate: 'Sw P90: %{x:.3f}<extra></extra>'
@@ -1194,7 +1472,7 @@
 				name: 'SHF',
 				x: shf,
 				y: depth,
-				xaxis: 'x6',
+				xaxis: 'x7',
 				yaxis: 'y',
 				line: { color: '#DC2626', width: 1.2, dash: 'dash' },
 				hovertemplate: 'SHF: %{x:.3f} v/v<extra></extra>'
@@ -1208,7 +1486,7 @@
 				name: 'PAY',
 				x: decimateSvg(payFlags.map((v) => (v && v > 0 ? 0.12 : 0))),
 				y: svgDepth,
-				xaxis: 'x6',
+				xaxis: 'x7',
 				yaxis: 'y',
 				fill: 'tozerox',
 				fillcolor: 'rgba(22, 163, 74, 0.65)',
@@ -1304,13 +1582,13 @@
 			},
 			xaxis: {
 				...axisCommon,
-				domain: [0.0, 0.155],
+				domain: [0.0, 0.146],
 				range: [0, 200],
 				dtick: 50
 			},
 			xaxis2: {
 				...axisCommon,
-				domain: [0.168, 0.323],
+				domain: [0.156, 0.302],
 				type: 'log',
 				range: [Math.log10(0.2), Math.log10(2000)],
 				dtick: 1,
@@ -1325,19 +1603,19 @@
 			},
 			xaxis3: {
 				...axisCommon,
-				domain: [0.336, 0.491],
+				domain: [0.312, 0.458],
 				range: [0.45, -0.15],
 				dtick: 0.15
 			},
 			xaxis4: {
 				...axisCommon,
-				domain: [0.504, 0.659],
+				domain: [0.468, 0.614],
 				range: [0, 1],
 				dtick: 0.25
 			},
 			xaxis5: {
 				...axisCommon,
-				domain: [0.672, 0.827],
+				domain: [0.624, 0.77],
 				type: 'log',
 				range: [Math.log10(0.01), Math.log10(10000)],
 				dtick: 1,
@@ -1352,7 +1630,14 @@
 			},
 			xaxis6: {
 				...axisCommon,
-				domain: [0.84, 1.0],
+				domain: [0.78, 0.844],
+				range: [0, 1],
+				showgrid: false,
+				zeroline: false
+			},
+			xaxis7: {
+				...axisCommon,
+				domain: [0.854, 1.0],
 				range: [1, 0],
 				dtick: 0.25
 			}
@@ -1375,6 +1660,9 @@
 		void workbench.lithoParams.enableHcCorrection;
 		void workbench.lithoParams.model;
 		void workbench.lithoParams.minerals;
+		void projectData.drtMethod;
+		void projectData.activeDrtCutoffs;
+		void projectData.rockTypingResult;
 		const renderGen = wellData.wellLoadGeneration;
 
 		if (!PlotlyLib || !plotContainer) return;
@@ -1763,7 +2051,7 @@
 		<div class="relative flex h-[62px] w-full">
 			<!-- Track 1: GR (0 - 200 gAPI) & CALI / BS (6 - 16 in) -->
 			<div
-				style="left: 0%; width: 15.5%;"
+				style="left: 0%; width: 14.6%;"
 				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<div
@@ -1794,7 +2082,7 @@
 
 			<!-- Track 2: RT, RM, RS (0.2 - 2000 ohm.m, 4-decade log scale) -->
 			<div
-				style="left: 16.8%; width: 15.5%;"
+				style="left: 15.6%; width: 14.6%;"
 				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<!-- Deep Resistivity: RT (solid red) -->
@@ -1896,7 +2184,7 @@
 
 			<!-- Track 3: Vertically Stacked RHOB (1.95 -> 2.95), NPHI (0.45 -> -0.15), PEF (0 -> 10), DRHO (-0.25 -> 0.25) -->
 			<div
-				style="left: 33.6%; width: 15.5%;"
+				style="left: 31.2%; width: 14.6%;"
 				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<!-- Row 1: RHOB (1.95 -> 2.95 g/cc, increases left to right, solid red) -->
@@ -1981,7 +2269,7 @@
 
 			<!-- Track 4: LITH (0 -> 1 v/v) & PHIT / CPORE (0 -> 0.5 v/v) -->
 			<div
-				style="left: 50.4%; width: 15.5%;"
+				style="left: 46.8%; width: 14.6%;"
 				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				{#if tsOverlayActive}
@@ -2047,7 +2335,7 @@
 
 			<!-- Track 5: PERM & PERM_TRANS (0.01 - 10000 mD, 6-decade log scale) -->
 			<div
-				style="left: 67.2%; width: 15.5%;"
+				style="left: 62.4%; width: 14.6%;"
 				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<div
@@ -2085,9 +2373,46 @@
 				</div>
 			</div>
 
-			<!-- Track 6: SW (1.0 <- 0.0 v/v) & PAY -->
+			<!-- Track 6: ROCK_FLAG / DRT (Compact Rock Type Track between PERM and SW) -->
 			<div
-				style="left: 84.0%; width: 16.0%;"
+				style="left: 78.0%; width: 6.4%;"
+				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-0.5 py-0.5 overflow-hidden bg-slate-50/40"
+				title="Discrete Rock Type (ROCK_FLAG) — {activeRockTypeInfo.indicatorLabel} ({activeRockTypeInfo.isPreview ? 'Live Preview from PHIT & PERM' : 'Computed'})"
+			>
+				<div class="flex flex-col items-center">
+					<span class="font-sans text-[8px] font-bold tracking-tight text-slate-800 leading-none">
+						ROCK_FLAG
+					</span>
+					<span class="mt-0.5 rounded-2xs bg-slate-200/80 px-1 py-0 text-[7px] font-semibold text-slate-700 leading-tight">
+						{activeRockTypeInfo.indicatorLabel}
+					</span>
+				</div>
+				{#if activeRockTypeInfo.uniqueFlags.length > 0}
+					<div class="flex flex-wrap items-center justify-center gap-0.5 px-0.5">
+						{#each activeRockTypeInfo.uniqueFlags.slice(0, 6) as rf (rf)}
+							<span
+								class="mono-num inline-flex h-3 min-w-[12px] items-center justify-center rounded-2xs px-0.5 text-[7px] font-bold text-white shadow-2xs"
+								style="background-color: {getRockTypeColor(rf)}"
+								title="DRT {rf}"
+							>
+								{rf}
+							</span>
+						{/each}
+					</div>
+					<div class="flex h-0.5 w-full overflow-hidden rounded-full">
+						{#each activeRockTypeInfo.uniqueFlags as rf (rf)}
+							<div class="h-full flex-1" style="background: {getRockTypeColor(rf)}"></div>
+						{/each}
+					</div>
+				{:else}
+					<div class="text-center text-[7px] text-slate-400">No DRT</div>
+					<div class="h-0.5 w-full rounded-full bg-slate-300"></div>
+				{/if}
+			</div>
+
+			<!-- Track 7: SW (1.0 <- 0.0 v/v) & PAY -->
+			<div
+				style="left: 85.4%; width: 14.6%;"
 				class="absolute inset-y-0 flex flex-col justify-end border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
 				<div
@@ -2301,6 +2626,22 @@
 				<span>
 					<strong style="color: #7C3AED">PERM_TRANS:</strong>
 					{fmtPerm(readout.PERM_TRANS)}
+				</span>
+			{/if}
+			{#if (readout.ROCK_FLAG ?? readout.DRT) !== null && (readout.ROCK_FLAG ?? readout.DRT) !== undefined && Number(readout.ROCK_FLAG ?? readout.DRT) >= 1}
+				{@const rfVal = Math.round(Number(readout.ROCK_FLAG ?? readout.DRT))}
+				<span class="inline-flex items-center gap-1">
+					<strong style="color: {getRockTypeColor(rfVal)}">RT:</strong>
+					<span
+						class="rounded-2xs px-1 py-0 text-[9.5px] font-bold text-white"
+						style="background-color: {getRockTypeColor(rfVal)}"
+					>
+						DRT {rfVal}
+					</span>
+				</span>
+			{/if}
+			{#if false}
+				<span>
 				</span>
 			{/if}
 			<span>

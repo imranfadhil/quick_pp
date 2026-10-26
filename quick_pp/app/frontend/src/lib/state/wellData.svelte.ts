@@ -105,7 +105,7 @@ export const CALCULATED_CURVE_GROUPS: Record<
 	perm: {
 		label: 'Permeability & Rock Type',
 		shortLabel: 'Perm & RT',
-		curves: ['PERM', 'PERM_TRANS', 'ROCK_FLAG', 'FZI', 'PERM_P10', 'PERM_P50', 'PERM_P90']
+		curves: ['PERM', 'PERM_TRANS', 'ROCK_FLAG', 'ROCK_FLAG_ML', 'FZI', 'R35', 'RFN', 'PHI_SEC', 'VDL', 'PERM_P10', 'PERM_P50', 'PERM_P90']
 	},
 	saturation: {
 		label: 'Water Saturation & SHF',

@@ -14,6 +14,11 @@ export interface ProjectListItem {
 
 export type MultiWellSaveModule = 'rock-typing' | 'perm-transform' | 'shf';
 export type DrtMethod = 'fzi' | 'winland' | 'lucia';
+export type DrtCutoffMethod = 'gmm' | 'lorenz' | 'kmeans';
+export type GmmCriterion = 'combined' | 'bic' | 'silhouette';
+export type RockTypingPlotView = 'phi-k' | 'lorenz' | 'gmm' | 'carbonate' | 'classifier';
+export type DrtClassifierModel = 'random_forest' | 'extra_trees' | 'gradient_boosting';
+export type DrtPropagationMode = 'fill_missing' | 'full_ml';
 
 class ProjectDataState {
 	projects = $state<ProjectListItem[]>([]);
@@ -30,6 +35,22 @@ class ProjectDataState {
 	fziCutoffs = $state<number[]>([0.5, 1.2, 2.5, 5.0]);
 	winlandCutoffs = $state<number[]>([0.5, 2.0, 5.0, 10.0]);
 	luciaCutoffs = $state<number[]>([1.5, 2.5, 3.5]);
+	drtCutoffMethod = $state<DrtCutoffMethod>('gmm');
+	drtAutoK = $state<boolean>(true);
+	drtGmmCriterion = $state<GmmCriterion>('combined');
+	drtMaxClusters = $state<number>(7);
+	useInterparticlePorosity = $state<boolean>(true);
+	luciaVuggyOverride = $state<boolean>(false);
+	phiSecCutoff = $state<number>(0.02);
+	dtMatrix = $state<number>(47.6);
+	dtFluid = $state<number>(189.0);
+	rockTypingPlotView = $state<RockTypingPlotView>('phi-k');
+	drtClassifierModel = $state<DrtClassifierModel>('random_forest');
+	drtIncludePef = $state<boolean>(true);
+	drtIncludeVdl = $state<boolean>(true);
+	drtClassifierTestSize = $state<number>(0.25);
+	drtPropagationMode = $state<DrtPropagationMode>('fill_missing');
+	drtClassifierPropagated = $state<boolean>(false);
 	selectedWellNames = $state<string[]>([]);
 
 	get activeDrtCutoffs(): number[] {
@@ -129,7 +150,19 @@ class ProjectDataState {
 		fzi: (number | null)[];
 		r35?: (number | null)[];
 		rfn?: (number | null)[];
+		phis?: (number | null)[];
+		phi_sec?: (number | null)[];
+		phi_ip?: (number | null)[];
+		vuggy_flags?: number[];
+		vdl?: (number | null)[];
+		rock_flags_binned?: (number | null)[];
+		rock_flags_ml?: (number | null)[];
+		rock_prob_ml?: (number | null)[];
 		drt_value?: (number | null)[];
+		optimal_k?: number;
+		selected_k?: number;
+		cutoff_method?: DrtCutoffMethod;
+		diagnostics?: Record<string, any>;
 		rqi?: (number | null)[];
 		phiz?: (number | null)[];
 		rock_flags: (number | null)[];
@@ -306,6 +339,16 @@ class ProjectDataState {
 				);
 			}
 			const m = this.rockTypingResult.method ?? this.drtMethod;
+			if (this.rockTypingResult.rock_flags_ml?.length === depths.length) {
+				curves['ROCK_FLAG_ML'] = this.rockTypingResult.rock_flags_ml.map((v) =>
+					v !== null && v !== undefined && Number.isFinite(v) ? v : null
+				);
+			}
+			if (this.rockTypingResult.vdl?.length === depths.length) {
+				curves['VDL'] = this.rockTypingResult.vdl.map((v) =>
+					v !== null && v !== undefined && Number.isFinite(v) ? v : null
+				);
+			}
 			const indName = m === 'winland' ? 'R35' : m === 'lucia' ? 'RFN' : 'FZI';
 			curveLabel = `ROCK_FLAG & ${indName}`;
 		} else if (moduleKey === 'perm-transform' && this.permTransformResult) {

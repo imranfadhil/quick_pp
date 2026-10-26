@@ -1007,6 +1007,491 @@
 
 		if (effectiveMode === 'phi-k') {
 			// Check if multi-well rock typing or perm transform data is present when in multi-well scope
+			if (
+				workbench.scope === 'multi-well' &&
+				workbench.multiWellStep === 'rock-typing' &&
+				projectData.rockTypingResult &&
+				projectData.rockTypingPlotView !== 'phi-k'
+			) {
+				const rt = projectData.rockTypingResult;
+				const diag = rt.diagnostics ?? {};
+				const methodLbl =
+					projectData.drtMethod === 'winland'
+						? 'R35'
+						: projectData.drtMethod === 'lucia'
+							? 'RFN'
+							: 'FZI';
+
+				if (projectData.rockTypingPlotView === 'lorenz' && diag.lorenz?.lorenz_curve?.storage_cdf) {
+					const lc = diag.lorenz.lorenz_curve;
+					const infPts = (diag.lorenz.inflection_points ?? []) as Array<Record<string, any>>;
+					const lorenzCoeff = diag.lorenz.lorenz_coeff ?? 0;
+
+					// 1:1 Homogeneous line
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Homogeneous (Lc=0)',
+						x: [0, 1],
+						y: [0, 1],
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: '#94A3B8', width: 1.2, dash: 'dash' }
+					});
+
+					// Modified Lorenz curve
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Lorenz Curve (Lc=${fmtNum(lorenzCoeff, 2)})`,
+						x: lc.storage_cdf,
+						y: lc.flow_cdf,
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: '#2563EB', width: 2.5 }
+					});
+
+					// Piecewise linear flow unit segments
+					const segX = [0, ...infPts.map((p) => Number(p.storage_cdf)), 1];
+					const segY = [0, ...infPts.map((p) => Number(p.flow_cdf)), 1];
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Flow Unit Segments',
+						x: segX,
+						y: segY,
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: '#F59E0B', width: 1.6, dash: 'dot' }
+					});
+
+					if (infPts.length > 0) {
+						traces.push({
+							type: 'scatter',
+							mode: 'markers+text',
+							name: 'Inflection Cutoffs',
+							x: infPts.map((p) => Number(p.storage_cdf)),
+							y: infPts.map((p) => Number(p.flow_cdf)),
+							text: infPts.map((p) => `${methodLbl}=${p.cutoff}`),
+							textposition: 'bottom right',
+							xaxis: 'x',
+							yaxis: 'y',
+							marker: {
+								size: 9,
+								color: '#DC2626',
+								symbol: 'diamond',
+								line: { color: '#FFFFFF', width: 1.5 }
+							}
+						});
+					}
+
+					// Right subplot: Cumulative Probability vs log10(Indicator)
+					if (Array.isArray(lc.log_indicator) && Array.isArray(lc.cum_prob)) {
+						traces.push({
+							type: 'scatter',
+							mode: 'markers',
+							name: `Cum. Prob log₁₀(${methodLbl})`,
+							x: lc.log_indicator,
+							y: lc.cum_prob,
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { size: 5, color: '#0F172A', opacity: 0.75 }
+						});
+						for (const p of infPts) {
+							traces.push({
+								type: 'scatter',
+								mode: 'lines',
+								name: `Cutoff ${p.cutoff}`,
+								x: [Number(p.log_indicator), Number(p.log_indicator)],
+								y: [0, 1],
+								xaxis: 'x2',
+								yaxis: 'y2',
+								showlegend: false,
+								line: { color: '#DC2626', width: 1.3, dash: 'dash' }
+							});
+						}
+					}
+
+					const dualLayout: Record<string, any> = {
+						...baseLayout,
+						xaxis: {
+							...baseLayout.xaxis,
+							domain: [0, 0.45],
+							title: { text: 'Cum. Storage Capacity (ΣΦh)' },
+							range: [0, 1]
+						},
+						yaxis: {
+							...baseLayout.yaxis,
+							title: { text: 'Cum. Flow Capacity (ΣKh)' },
+							range: [0, 1]
+						},
+						xaxis2: {
+							...baseLayout.xaxis,
+							domain: [0.55, 1.0],
+							anchor: 'y2',
+							title: { text: `log₁₀(${methodLbl})` }
+						},
+						yaxis2: {
+							...baseLayout.yaxis,
+							anchor: 'x2',
+							title: { text: 'Cumulative Probability' },
+							range: [0, 1]
+						}
+					};
+					return { traces, layout: dualLayout };
+				}
+
+				if (projectData.rockTypingPlotView === 'gmm' && diag.gmm?.distribution?.x_grid) {
+					const dist = diag.gmm.distribution;
+					const kScores = (diag.gmm.k_scores ?? []) as Array<Record<string, any>>;
+					const cutLogs = (diag.gmm.cutoffs_log ?? []) as number[];
+					const isLog = diag.gmm.log_scale !== false;
+
+					traces.push({
+						type: 'bar',
+						name: `${isLog ? `log₁₀(${methodLbl})` : methodLbl} Hist`,
+						x: dist.bin_centers,
+						y: dist.hist_density,
+						xaxis: 'x',
+						yaxis: 'y',
+						marker: { color: '#CBD5E1', opacity: 0.65 }
+					});
+
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'GMM Total PDF',
+						x: dist.x_grid,
+						y: dist.total_pdf,
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: '#0F172A', width: 2.2 }
+					});
+
+					if (Array.isArray(dist.component_pdfs)) {
+						dist.component_pdfs.forEach((pdfArr: number[], idx: number) => {
+							const compNum = idx + 1;
+							traces.push({
+								type: 'scatter',
+								mode: 'lines',
+								name: `Gaussian ${compNum}`,
+								x: dist.x_grid,
+								y: pdfArr,
+								xaxis: 'x',
+								yaxis: 'y',
+								line: { color: getRockTypeColor(compNum), width: 1.8, dash: 'dot' }
+							});
+						});
+					}
+
+					const maxPdf = Math.max(...(dist.total_pdf ?? [1]), 1);
+					for (const cVal of cutLogs) {
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: 'GMM Cutoff',
+							x: [cVal, cVal],
+							y: [0, maxPdf * 1.05],
+							xaxis: 'x',
+							yaxis: 'y',
+							showlegend: false,
+							line: { color: '#DC2626', width: 1.5, dash: 'dash' }
+						});
+					}
+
+					if (kScores.length > 0) {
+						const ks = kScores.map((s) => Number(s.k));
+						traces.push({
+							type: 'scatter',
+							mode: 'lines+markers',
+							name: 'Silhouette Score',
+							x: ks,
+							y: kScores.map((s) => Number(s.silhouette)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							line: { color: '#2563EB', width: 2 },
+							marker: { size: 6 }
+						});
+						traces.push({
+							type: 'scatter',
+							mode: 'lines+markers',
+							name: 'Norm. BIC Score',
+							x: ks,
+							y: kScores.map((s) => Number(s.bic_norm ?? 0)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							line: { color: '#10B981', width: 2, dash: 'dot' },
+							marker: { size: 6 }
+						});
+						traces.push({
+							type: 'scatter',
+							mode: 'lines+markers',
+							name: 'Combined Score',
+							x: ks,
+							y: kScores.map((s) => Number(s.combined_score)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							line: { color: '#D97706', width: 2.4 },
+							marker: { size: 7, symbol: 'diamond' }
+						});
+					}
+
+					const gmmLayout: Record<string, any> = {
+						...baseLayout,
+						barmode: 'overlay',
+						xaxis: {
+							...baseLayout.xaxis,
+							domain: [0, 0.46],
+							title: { text: isLog ? `log₁₀(${methodLbl})` : methodLbl }
+						},
+						yaxis: {
+							...baseLayout.yaxis,
+							title: { text: 'Probability Density' }
+						},
+						xaxis2: {
+							...baseLayout.xaxis,
+							domain: [0.56, 1.0],
+							anchor: 'y2',
+							dtick: 1,
+							title: { text: 'Number of Rock Types (k)' }
+						},
+						yaxis2: {
+							...baseLayout.yaxis,
+							anchor: 'x2',
+							title: { text: 'Silhouette / Normalized BIC Score' }
+						}
+					};
+					return { traces, layout: gmmLayout };
+				}
+
+				if (projectData.rockTypingPlotView === 'carbonate') {
+					const phitArr = rt.phit ?? [];
+					const permArr = rt.perm ?? [];
+					const phiIpArr = rt.phi_ip ?? rt.phit ?? [];
+					const phisArr = rt.phis ?? [];
+					const vugFlags = rt.vuggy_flags ?? [];
+					const rfs = rt.rock_flags ?? [];
+
+					const vugX: number[] = [];
+					const vugY: number[] = [];
+					const matX: number[] = [];
+					const matY: number[] = [];
+					const phitVsPhisX: number[] = [];
+					const phitVsPhisY: number[] = [];
+					const phitVsPhisColor: string[] = [];
+
+					for (let i = 0; i < phitArr.length; i++) {
+						const pt = phitArr[i];
+						const k = permArr[i];
+						const pip = phiIpArr[i] ?? pt;
+						const ps = phisArr[i];
+						const isVug = vugFlags[i] === 1;
+						const rf = rfs[i] ?? 1;
+						if (Number.isFinite(pt) && Number.isFinite(k) && (k as number) > 0) {
+							if (isVug) {
+								vugX.push(pip as number);
+								vugY.push(k as number);
+							} else {
+								matX.push(pip as number);
+								matY.push(k as number);
+							}
+						}
+						if (Number.isFinite(pt) && ps !== null && ps !== undefined && Number.isFinite(ps)) {
+							phitVsPhisX.push(pt as number);
+							phitVsPhisY.push(ps as number);
+							phitVsPhisColor.push(isVug ? '#DC2626' : getRockTypeColor(rf));
+						}
+					}
+
+					if (matX.length > 0) {
+						traces.push({
+							type: 'scattergl',
+							mode: 'markers',
+							name: 'Interparticle Φ_ip vs K',
+							x: matX,
+							y: matY,
+							xaxis: 'x',
+							yaxis: 'y',
+							marker: { size: 5.5, color: '#2563EB', opacity: 0.65 }
+						});
+					}
+					if (vugX.length > 0) {
+						traces.push({
+							type: 'scattergl',
+							mode: 'markers',
+							name: `Vuggy (Φ_sec ≥ ${projectData.phiSecCutoff})`,
+							x: vugX,
+							y: vugY,
+							xaxis: 'x',
+							yaxis: 'y',
+							marker: { size: 7, color: '#DC2626', symbol: 'diamond', opacity: 0.9 }
+						});
+					}
+
+					// Lucia RFN reference lines on left subplot
+					const luciaGrid = Array.from({ length: 33 }, (_, i) => 0.04 + i * 0.01);
+					for (const rfnVal of [0.5, 1.5, 2.5, 3.5]) {
+						const logRfn = Math.log10(rfnVal);
+						const kCurve = luciaGrid.map((phi) =>
+							Math.pow(
+								10,
+								9.7892 - 12.0838 * logRfn + (8.6711 - 8.2965 * logRfn) * Math.log10(phi)
+							)
+						);
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `RFN=${rfnVal}`,
+							x: luciaGrid,
+							y: kCurve,
+							xaxis: 'x',
+							yaxis: 'y',
+							line: { color: '#64748B', width: 1.2, dash: 'dash' }
+						});
+					}
+
+					// Right subplot: Total Porosity (PHIT) vs Sonic Porosity (PHIS)
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Φ_T = Φ_sonic (Φ_sec=0)',
+						x: [0, 0.4],
+						y: [0, 0.4],
+						xaxis: 'x2',
+						yaxis: 'y2',
+						line: { color: '#64748B', width: 1.2, dash: 'dash' }
+					});
+					const cSec = projectData.phiSecCutoff;
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Vuggy Threshold (Φ_sec=${cSec})`,
+						x: [cSec, 0.4],
+						y: [0, 0.4 - cSec],
+						xaxis: 'x2',
+						yaxis: 'y2',
+						line: { color: '#DC2626', width: 1.4, dash: 'dot' }
+					});
+					if (phitVsPhisX.length > 0) {
+						traces.push({
+							type: 'scattergl',
+							mode: 'markers',
+							name: 'Φ_T vs Φ_sonic',
+							x: phitVsPhisX,
+							y: phitVsPhisY,
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { size: 5.5, color: phitVsPhisColor, opacity: 0.8 }
+						});
+					}
+
+					const carbLayout: Record<string, any> = {
+						...baseLayout,
+						xaxis: {
+							...baseLayout.xaxis,
+							domain: [0, 0.46],
+							title: { text: 'Interparticle Porosity Φ_ip (v/v)' },
+							range: [0, 0.38]
+						},
+						yaxis: {
+							...baseLayout.yaxis,
+							title: { text: 'Permeability (mD)' },
+							type: 'log',
+							range: [-2, 4.5]
+						},
+						xaxis2: {
+							...baseLayout.xaxis,
+							domain: [0.56, 1.0],
+							anchor: 'y2',
+							title: { text: 'Total Porosity Φ_T (v/v)' },
+							range: [0, 0.38]
+						},
+						yaxis2: {
+							...baseLayout.yaxis,
+							anchor: 'x2',
+							title: { text: 'Sonic Porosity Φ_sonic (v/v)' },
+							range: [0, 0.38]
+						}
+					};
+					return { traces, layout: carbLayout };
+				}
+
+				if (projectData.rockTypingPlotView === 'classifier' && diag.classifier?.contingency_table) {
+					const ct = diag.classifier.contingency_table;
+					const labels: number[] = ct.labels ?? [];
+					const counts: number[][] = ct.counts ?? [];
+					const normRecall: number[][] = ct.norm_recall ?? [];
+					const featImps: Array<{ feature: string; importance: number }> =
+						diag.classifier.feature_importances ?? [];
+					const strLabels = labels.map((l) => `DRT ${l}`);
+
+					const textGrid = counts.map((row, rIdx) =>
+						row.map(
+							(val, cIdx) =>
+								`${val} (${((normRecall[rIdx]?.[cIdx] ?? 0) * 100).toFixed(0)}%)`
+						)
+					);
+
+					traces.push({
+						type: 'heatmap',
+						name: 'Contingency Matrix',
+						x: strLabels,
+						y: strLabels,
+						z: normRecall,
+						text: textGrid,
+						texttemplate: '%{text}',
+						colorscale: 'Blues',
+						zmin: 0,
+						zmax: 1,
+						showscale: false,
+						xaxis: 'x',
+						yaxis: 'y',
+						hovertemplate:
+							'True: %{y}<br>Predicted: %{x}<br>Recall: %{z:.2%}<br>Count: %{text}<extra></extra>'
+					});
+
+					if (featImps.length > 0) {
+						const revFeats = [...featImps].reverse();
+						traces.push({
+							type: 'bar',
+							orientation: 'h',
+							name: 'Feature Importance',
+							x: revFeats.map((f) => Number(f.importance)),
+							y: revFeats.map((f) => f.feature),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { color: '#2563EB' },
+							hovertemplate: '%{y}: %{x:.1%}<extra></extra>'
+						});
+					}
+
+					const clfLayout: Record<string, any> = {
+						...baseLayout,
+						xaxis: {
+							...baseLayout.xaxis,
+							domain: [0, 0.48],
+							title: { text: 'Predicted ML Rock Type' }
+						},
+						yaxis: {
+							...baseLayout.yaxis,
+							autorange: 'reversed',
+							title: { text: 'True Cutoff-Binned Rock Type' }
+						},
+						xaxis2: {
+							...baseLayout.xaxis,
+							domain: [0.6, 1.0],
+							anchor: 'y2',
+							title: { text: 'Feature Importance (MDI)' }
+						},
+						yaxis2: {
+							...baseLayout.yaxis,
+							anchor: 'x2',
+							title: { text: 'Input Feature' }
+						}
+					};
+					return { traces, layout: clfLayout };
+				}
+			}
 			const mwSource =
 				workbench.scope === 'multi-well'
 					? workbench.multiWellStep === 'perm-transform' &&
@@ -2701,6 +3186,11 @@
 		void projectData.fziCutoffs;
 		void projectData.winlandCutoffs;
 		void projectData.luciaCutoffs;
+		void projectData.rockTypingPlotView;
+		void projectData.drtCutoffMethod;
+		void projectData.useInterparticlePorosity;
+		void projectData.luciaVuggyOverride;
+		void projectData.phiSecCutoff;
 		void projectData.rockTypingResult;
 		void projectData.permTransformResult;
 		void projectData.permTransformResult?.fits;
@@ -2879,6 +3369,21 @@
 						? `Shift (${wellData.coreShiftDelta >= 0 ? '+' : ''}${fmtNum(wellData.coreShiftDelta, 1)}m)`
 						: 'Depth Shift'}
 				</button>
+			</div>
+		{:else if effectiveMode === 'phi-k' && workbench.scope === 'multi-well' && workbench.multiWellStep === 'rock-typing'}
+			<div class="flex items-center gap-1">
+				{#each [['phi-k', 'Φ–K'], ['lorenz', 'Lorenz'], ['gmm', 'GMM / BIC'], ['carbonate', 'Φ_sec Vug'], ['classifier', 'ML Matrix']] as [rvKey, rvLbl]}
+					<button
+						type="button"
+						onclick={() => (projectData.rockTypingPlotView = rvKey as any)}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {projectData.rockTypingPlotView ===
+						rvKey
+							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{rvLbl}
+					</button>
+				{/each}
 			</div>
 		{:else if effectiveMode === 'phi-k' && workbench.scope === 'single-well'}
 			<div class="flex items-center gap-1">

@@ -395,7 +395,12 @@ export const STANDARD_CURVE_META: Record<string, CurveMeta> = {
 	VSH_LAM: { mnemonic: 'VSH_LAM', label: 'Laminated Shale Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.vshLamStroke },
 	VSH_DIS: { mnemonic: 'VSH_DIS', label: 'Dispersed Shale Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.vshDisStroke },
 	PHIT_SAND: { mnemonic: 'PHIT_SAND', label: 'Sand Lamina Porosity', unit: 'v/v', min: 0, max: 0.45, color: PETRO_COLORS.phitSand },
-	RT_MOD: { mnemonic: 'RT_MOD', label: 'Hagiwara Modeled Resistivity', unit: 'ohm.m', min: 0.2, max: 2000, color: PETRO_COLORS.rtMod, logScale: true }
+	RT_MOD: { mnemonic: 'RT_MOD', label: 'Hagiwara Modeled Resistivity', unit: 'ohm.m', min: 0.2, max: 2000, color: PETRO_COLORS.rtMod, logScale: true },
+	ROCK_FLAG: { mnemonic: 'ROCK_FLAG', label: 'Discrete Rock Type (DRT)', unit: 'flag', min: 1, max: 8, color: '#2563EB' },
+	FZI: { mnemonic: 'FZI', label: 'Flow Zone Indicator', unit: 'μm', min: 0.01, max: 50, color: '#0284C7', logScale: true },
+	R35: { mnemonic: 'R35', label: 'Winland Pore Throat Radius R35', unit: 'μm', min: 0.01, max: 100, color: '#0D9488', logScale: true },
+	RFN: { mnemonic: 'RFN', label: 'Lucia Rock Fabric Number', unit: 'RFN', min: 0.5, max: 4.0, color: '#D97706' },
+	VDL: { mnemonic: 'VDL', label: 'Velocity Deviation Log', unit: 'm/s', min: -1500, max: 1500, color: '#7C3AED' }
 };
 
 export function getCurveUnit(mnemonic: string): string {
@@ -414,8 +419,28 @@ export function getCurveUnit(mnemonic: string): string {
 	return '';
 }
 
+export const ROCK_FLAG_0_COLOR = 'hsl(30, 70%, 97%)';
+
 export function getRockTypeColor(rockFlag: number | string | null | undefined): string {
-	const idx = Math.max(0, (Number(rockFlag) || 1) - 1);
+	const num = Number(rockFlag);
+	if (!Number.isFinite(num) || num <= 0) return ROCK_FLAG_0_COLOR;
+	const idx = Math.max(0, Math.round(num) - 1);
 	return ROCK_TYPE_PALETTE[idx % ROCK_TYPE_PALETTE.length];
+}
+
+export function getRockTypeFillRgba(
+	rockFlag: number | string | null | undefined,
+	alpha: number = 0.78
+): string {
+	const num = Number(rockFlag);
+	if (!Number.isFinite(num) || num <= 0) return 'rgba(252, 246, 240, 0.85)';
+	const hex = getRockTypeColor(num);
+	if (hex.startsWith('#') && hex.length === 7) {
+		const r = parseInt(hex.slice(1, 3), 16);
+		const g = parseInt(hex.slice(3, 5), 16);
+		const b = parseInt(hex.slice(5, 7), 16);
+		return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+	}
+	return hex;
 }
 

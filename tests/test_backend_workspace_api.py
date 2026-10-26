@@ -37,6 +37,7 @@ def client_and_project(monkeypatch):
             "NPHI": np.linspace(0.12, 0.28, 10),
             "RHOB": np.linspace(2.25, 2.55, 10),
             "RT": np.linspace(25.0, 4.0, 10),
+            "DTC": np.linspace(62.0, 52.0, 10),
             "ZONES": ["Zone-1"] * 5 + ["Zone-2"] * 5,
             "CPORE": [
                 0.22,
@@ -233,6 +234,35 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert r_rt_lucia.json()["method"] == "lucia"
     assert r_rt_lucia.json()["higher_is_better"] is False
     assert "rfn" in r_rt_lucia.json()["data"]
+
+    r_rt_gmm = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={
+            "method": "fzi",
+            "auto_find_cutoffs": True,
+            "cutoff_method": "gmm",
+            "auto_k": True,
+            "lucia_vuggy_override": True,
+            "phi_sec_cutoff": 0.01,
+            "save": False,
+        },
+    )
+    assert r_rt_gmm.status_code == 200
+    assert "diagnostics" in r_rt_gmm.json()
+    assert r_rt_gmm.json()["diagnostics"]["carbonate"]["has_sonic_data"] is True
+
+    r_rt_lorenz = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={
+            "method": "fzi",
+            "auto_find_cutoffs": True,
+            "cutoff_method": "lorenz",
+            "auto_k": True,
+            "save": False,
+        },
+    )
+    assert r_rt_lorenz.status_code == 200
+    assert "lorenz" in r_rt_lorenz.json()["diagnostics"]
 
     r_rt = client.post(
         f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",

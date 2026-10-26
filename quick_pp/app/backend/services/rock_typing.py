@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 
@@ -13,8 +14,12 @@ from quick_pp.app.backend.utils.utils import sanitize_list
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Rock Typing"])
 
 
-def _compute_fzi_data_sync(project_id: int) -> dict:
-    """Helper to compute FZI data synchronously."""
+def _compute_fzi_data_sync(
+    project_id: int,
+    dt_matrix: float = 47.6,
+    dt_fluid: float = 189.0,
+) -> dict:
+    """Helper to compute FZI / rock typing data (including sonic & secondary porosity if available) synchronously."""
     with get_db() as session:
         proj = db_objects.Project.load(session, project_id=project_id)
 
@@ -26,8 +31,11 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
         depths_list = []
         cpore_list = []
         cperm_list = []
+        phis_list = []
+        phi_sec_list = []
         zones_list = []
         rock_flags_list = []
+        sonic_wells = []
         any_non_empty_well = False
         available_cols = set()
 
@@ -84,14 +92,18 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
                     rhob_s = pd.to_numeric(df["RHOB"], errors="coerce")
                     est_phit = ((2.65 - rhob_s) / (2.65 - 1.0)).clip(0.001, 0.45)
                     if "NPHI" in df.columns and df["NPHI"].notna().any():
-                        nphi_s = pd.to_numeric(df["NPHI"], errors="coerce").clip(0.001, 0.6)
+                        nphi_s = pd.to_numeric(df["NPHI"], errors="coerce").clip(
+                            0.001, 0.6
+                        )
                         est_phit = ((est_phit + nphi_s) / 2.0).clip(0.001, 0.45)
                     df = df.copy()
                     df["_EST_PHIT"] = est_phit
                     phit_col = "_EST_PHIT"
                 elif "NPHI" in df.columns and df["NPHI"].notna().any():
                     df = df.copy()
-                    df["_EST_PHIT"] = pd.to_numeric(df["NPHI"], errors="coerce").clip(0.001, 0.45)
+                    df["_EST_PHIT"] = pd.to_numeric(df["NPHI"], errors="coerce").clip(
+                        0.001, 0.45
+                    )
                     phit_col = "_EST_PHIT"
 
             if phit_col and not perm_col:
@@ -103,13 +115,85 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
             if not phit_col or not perm_col:
                 continue
 
-            cpore = df[phit_col].dropna()
-            cperm = df[perm_col].dropna()
+            cpore = pd.to_numeric(df[phit_col], errors="coerce").dropna()
+            cperm = pd.to_numeric(df[perm_col], errors="coerce").dropna()
 
             common_index = cpore.index.intersection(cperm.index)
             cpore = cpore.loc[common_index]
             cperm = cperm.loc[common_index]
             depths = df.loc[common_index, "DEPTH"]
+
+            if len(cpore) == 0:
+                continue
+
+            # Resolve sonic porosity (PHIS) and secondary/vuggy porosity (PHI_SEC = PHIT - PHIS) if available
+            phis_s = pd.Series(np.nan, index=common_index, dtype=float)
+            phi_sec_s = pd.Series(np.nan, index=common_index, dtype=float)
+            well_has_sonic = False
+
+            sec_col = next(
+                (
+                    c
+                    for c in ("PHI_SEC", "PHIS_SEC", "SPI", "VUG_POR")
+                    if c in df.columns and df[c].notna().any()
+                ),
+                None,
+            )
+            phis_col = next(
+                (
+                    c
+                    for c in ("PHIS", "PHI_SONIC", "PHISONIC", "SPOR")
+                    if c in df.columns and df[c].notna().any()
+                ),
+                None,
+            )
+            dt_col = next(
+                (
+                    c
+                    for c in ("DT", "DTC", "AC", "DTCO", "DT4P")
+                    if c in df.columns and df[c].notna().any()
+                ),
+                None,
+            )
+
+            if sec_col is not None:
+                sec_raw = pd.to_numeric(df.loc[common_index, sec_col], errors="coerce")
+                valid_sec = sec_raw.notna()
+                if valid_sec.any():
+                    phi_sec_s.loc[valid_sec] = np.clip(
+                        sec_raw.loc[valid_sec], 0.0, cpore.loc[valid_sec]
+                    )
+                    phis_s.loc[valid_sec] = np.clip(
+                        cpore.loc[valid_sec] - phi_sec_s.loc[valid_sec], 0.0, 0.99
+                    )
+                    well_has_sonic = True
+            elif phis_col is not None:
+                ps_raw = pd.to_numeric(df.loc[common_index, phis_col], errors="coerce")
+                valid_ps = ps_raw.notna()
+                if valid_ps.any():
+                    phis_s.loc[valid_ps] = np.clip(ps_raw.loc[valid_ps], 0.0, 0.99)
+                    phi_sec_s.loc[valid_ps] = np.maximum(
+                        0.0, cpore.loc[valid_ps] - phis_s.loc[valid_ps]
+                    )
+                    well_has_sonic = True
+            elif dt_col is not None:
+                dt_raw = pd.to_numeric(df.loc[common_index, dt_col], errors="coerce")
+                valid_dt = dt_raw.notna() & (dt_raw > 0)
+                if valid_dt.any():
+                    dt_vals = dt_raw.loc[valid_dt].copy()
+                    # Convert metric us/m to imperial us/ft if median > 135
+                    if float(dt_vals.median()) > 135.0:
+                        dt_vals = dt_vals / 3.28084
+                    denom = max(float(dt_fluid) - float(dt_matrix), 1.0)
+                    ps_calc = ((dt_vals - float(dt_matrix)) / denom).clip(0.001, 0.60)
+                    phis_s.loc[valid_dt] = ps_calc
+                    phi_sec_s.loc[valid_dt] = np.maximum(
+                        0.0, cpore.loc[valid_dt] - ps_calc
+                    )
+                    well_has_sonic = True
+
+            if well_has_sonic:
+                sonic_wells.append(well_name)
 
             if "ZONES" in df.columns:
                 zones = df.loc[common_index, "ZONES"].fillna("Unknown").tolist()
@@ -122,13 +206,12 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
             else:
                 rock_flags = [None] * len(cpore)
 
-            if len(cpore) == 0:
-                continue
-
             well_names.extend([well_name] * len(cpore))
             depths_list.extend(depths.tolist())
             cpore_list.append(cpore)
             cperm_list.append(cperm)
+            phis_list.append(phis_s)
+            phi_sec_list.append(phi_sec_s)
             zones_list.extend(zones)
             rock_flags_list.extend(rock_flags)
 
@@ -142,9 +225,13 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
 
         phit_all = pd.concat(cpore_list).tolist() if cpore_list else []
         perm_all = pd.concat(cperm_list).tolist() if cperm_list else []
+        phis_all = pd.concat(phis_list).tolist() if phis_list else []
+        phi_sec_all = pd.concat(phi_sec_list).tolist() if phi_sec_list else []
 
         phit_all = sanitize_list(phit_all)
         perm_all = sanitize_list(perm_all)
+        phis_all = sanitize_list(phis_all)
+        phi_sec_all = sanitize_list(phi_sec_all)
         depths_list = sanitize_list(depths_list)
         rock_flags_list = [
             (
@@ -160,6 +247,10 @@ def _compute_fzi_data_sync(project_id: int) -> dict:
         return {
             "phit": phit_all,
             "perm": perm_all,
+            "phis": phis_all,
+            "phi_sec": phi_sec_all,
+            "has_sonic": len(sonic_wells) > 0,
+            "sonic_wells": sonic_wells,
             "zones": zones_list,
             "well_names": well_names,
             "depths": depths_list,

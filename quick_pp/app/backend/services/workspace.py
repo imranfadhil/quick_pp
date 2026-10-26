@@ -60,6 +60,7 @@ from quick_pp.permeability import (
     tixier_permeability,
 )
 from quick_pp.porosity import (
+    calc_secondary_porosity,
     density_porosity,
     estimate_shale_porosity,
     neu_den_xplot_poro,
@@ -74,7 +75,17 @@ from quick_pp.qaqc import (
     stratigraphic_normalization,
 )
 from quick_pp.ressum import calc_reservoir_summary
-from quick_pp.rock_type import calc_fzi, calc_r35, calc_rfn, find_cutoffs, rock_typing
+from quick_pp.rock_type import (
+    apply_lucia_rfn_override,
+    calc_fzi,
+    calc_r35,
+    calc_rfn,
+    find_cutoffs,
+    find_cutoffs_gmm,
+    find_cutoffs_lorenz,
+    rock_typing,
+    train_and_validate_rock_type_classifier,
+)
 from quick_pp.saturation import (
     archie_saturation,
     estimate_b_waxman_smits,
@@ -767,6 +778,74 @@ class WorkspaceRockTypingRequest(BaseModel):
         description="Whether higher value of indicator is better rock quality (DRT 1). Defaults to True for FZI/Winland and False for Lucia RFN.",
     )
     auto_find_cutoffs: bool = Field(False)
+    cutoff_method: str = Field(
+        "gmm",
+        description="Automated cutoff detection method: 'gmm' (Gaussian Mixture Model with BIC/Silhouette), 'lorenz' (Cumulative Probability / Modified Lorenz inflection points), or 'kmeans'",
+    )
+    auto_k: bool = Field(
+        True,
+        description="Automatically determine optimal number of rock type groups (k) using Silhouette/BIC scoring or Lorenz inflection knee",
+    )
+    gmm_criterion: str = Field(
+        "combined",
+        description="Criterion for selecting optimal k in GMM: 'combined' (Silhouette + BIC), 'bic', or 'silhouette'",
+    )
+    max_clusters: int = Field(
+        7,
+        description="Maximum number of rock type groups (clusters) to evaluate when auto_k is True (2..max_clusters)",
+    )
+    use_interparticle_porosity: bool = Field(
+        True,
+        description="When computing Lucia RFN, use interparticle porosity phi_ip = phi_T - phi_sec (where phi_sec = max(0, phi_T - phi_sonic)) when sonic porosity is available",
+    )
+    lucia_vuggy_override: bool = Field(
+        False,
+        description="Override primary DRT rock typing with Lucia RFN in vuggy carbonate intervals where secondary porosity phi_sec = phi_T - phi_sonic >= phi_sec_cutoff",
+    )
+    phi_sec_cutoff: float = Field(
+        0.02,
+        description="Secondary/vuggy porosity threshold (phi_sec = phi_T - phi_sonic >= phi_sec_cutoff, v/v) to trigger Lucia RFN carbonate override",
+    )
+    lucia_cutoffs: List[float] = Field(
+        default_factory=lambda: [1.5, 2.5, 3.5],
+        description="Lucia RFN boundary cutoffs used when method=='lucia' or when lucia_vuggy_override is active",
+    )
+    dt_matrix: float = Field(
+        47.6,
+        description="Matrix sonic transit time (us/ft) for Wyllie sonic porosity when DT/DTC log is used (47.6 = Limestone, 43.5 = Dolomite, 55.5 = Sandstone)",
+    )
+    dt_fluid: float = Field(
+        189.0,
+        description="Fluid sonic transit time (us/ft) for Wyllie sonic porosity",
+    )
+    train_classifier: bool = Field(
+        False,
+        description="Train a supervised Rock Type classifier on GR, NPHI, RHOB, log10(RT), optional PEF, and VDL and evaluate via Contingency Table (Confusion Matrix)",
+    )
+    apply_classifier_propagation: bool = Field(
+        False,
+        description="Accept the validated classifier and propagate predicted ROCK_FLAG along the cutoff-binned rock types",
+    )
+    propagation_mode: str = Field(
+        "fill_missing",
+        description="Propagation mode when apply_classifier_propagation is True: 'fill_missing' (keep cutoff-binned DRTs and fill uncored/unbinned depths with ML) or 'full_ml' (use ML predicted DRTs across all log depths)",
+    )
+    classifier_model: str = Field(
+        "random_forest",
+        description="Classification algorithm: 'random_forest', 'extra_trees', or 'gradient_boosting'",
+    )
+    include_pef: bool = Field(
+        True,
+        description="Include Photoelectric Factor (PEF) log as an input feature if available",
+    )
+    include_vdl: bool = Field(
+        True,
+        description="Compute and include Velocity Deviation Log (VDL) as an input feature",
+    )
+    test_size: float = Field(
+        0.25,
+        description="Validation holdout split fraction (0.10..0.50) for Contingency Table evaluation",
+    )
     no_of_cutoffs: int = Field(3)
     save: bool = Field(False)
 
@@ -3658,128 +3737,396 @@ def workspace_rock_typing_compute(
 ) -> Dict[str, Any]:
     """Compute FZI / Winland R35 / Lucia RFN and ROCK_FLAG across all wells in the project on the server."""
     try:
-        method = _normalize_drt_method(req.method)
-        fzi_data = _filter_fzi_data_by_wells(
-            _compute_fzi_data_sync(project_id), req.well_names
-        )
-        phit_arr = np.asarray(fzi_data["phit"], dtype=float)
-        perm_arr = np.asarray(fzi_data["perm"], dtype=float)
-        well_names = fzi_data["well_names"]
-        depths = fzi_data["depths"]
-        zones = fzi_data["zones"]
-
-        valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
-        fzi_arr = np.full_like(phit_arr, np.nan, dtype=float)
-        r35_arr = np.full_like(phit_arr, np.nan, dtype=float)
-        rfn_arr = np.full_like(phit_arr, np.nan, dtype=float)
-        if valid_mask.any():
-            fzi_arr[valid_mask] = calc_fzi(phit_arr[valid_mask], perm_arr[valid_mask])
-            r35_arr[valid_mask] = calc_r35(phit_arr[valid_mask], perm_arr[valid_mask])
-            rfn_arr[valid_mask] = calc_rfn(phit_arr[valid_mask], perm_arr[valid_mask])
-
-        if method == "winland":
-            active_arr = r35_arr
-            default_higher_is_better = True
-            indicator_col = "R35"
-        elif method == "lucia":
-            active_arr = rfn_arr
-            default_higher_is_better = False
-            indicator_col = "RFN"
-        else:
-            active_arr = fzi_arr
-            default_higher_is_better = True
-            indicator_col = "FZI"
-
-        higher_is_better = (
-            req.higher_is_better
-            if req.higher_is_better is not None
-            else default_higher_is_better
-        )
-
-        if req.auto_find_cutoffs and valid_mask.sum() >= (req.no_of_cutoffs + 1):
-            cutoffs = sorted(
-                float(round(c, 4))
-                for c in find_cutoffs(
-                    active_arr[valid_mask], no_of_cutoffs=req.no_of_cutoffs
-                )
-            )
-        else:
-            cutoffs = sorted(float(c) for c in req.cutoffs)
-
-        rf_arr = rock_typing(
-            active_arr, cut_offs=cutoffs, higher_is_better=higher_is_better
-        )
-        rock_flags = [
-            int(val) if not np.isnan(val) else None for val in np.asarray(rf_arr)
-        ]
-        fzi_list = [
-            round(float(val), 5) if not np.isnan(val) else None for val in fzi_arr
-        ]
-        r35_list = [
-            round(float(val), 5) if not np.isnan(val) else None for val in r35_arr
-        ]
-        rfn_list = [
-            round(float(val), 5) if not np.isnan(val) else None for val in rfn_arr
-        ]
-        active_list = (
-            r35_list
-            if method == "winland"
-            else (rfn_list if method == "lucia" else fzi_list)
-        )
-
-        by_well: Dict[str, List[Dict[str, Any]]] = {}
-        for wn, d, rf, ind_val in zip(well_names, depths, rock_flags, active_list):
-            if rf is not None and d is not None:
-                row_dict: Dict[str, Any] = {"DEPTH": d, "ROCK_FLAG": rf}
-                if ind_val is not None:
-                    row_dict[indicator_col] = ind_val
-                by_well.setdefault(wn, []).append(row_dict)
-
-        # Update in-memory well cache so downstream Perm Transform / SHF immediately see the computed ROCK_FLAG
-        for wn, rows in by_well.items():
-            _update_in_memory_well_cache(project_id, wn, pd.DataFrame(rows))
-
-        saved_wells = 0
-        if req.save:
-            for wn, rows in by_well.items():
-                _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
-            saved_wells = len(by_well)
-
-        # Counts per rock flag
-        flag_counts: Dict[str, int] = {}
-        for rf in rock_flags:
-            if rf is not None:
-                key = str(rf)
-                flag_counts[key] = flag_counts.get(key, 0) + 1
-
-        return {
-            "project_id": project_id,
-            "method": method,
-            "cutoffs": cutoffs,
-            "higher_is_better": higher_is_better,
-            "flag_counts": flag_counts,
-            "rock_type_counts": flag_counts,
-            "saved": req.save,
-            "saved_wells": saved_wells,
-            "data": {
-                "well_names": well_names,
-                "depths": depths,
-                "zones": zones,
-                "phit": fzi_data["phit"],
-                "perm": fzi_data["perm"],
-                "fzi": fzi_list,
-                "r35": r35_list,
-                "rfn": rfn_list,
-                "drt_value": active_list,
-                "rock_flags": rock_flags,
-            },
-        }
+        return _execute_workspace_rock_typing(project_id, req)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Rock typing computation failed: {e}"
         ) from e
+
+
+def _execute_workspace_rock_typing(
+    project_id: int, req: WorkspaceRockTypingRequest
+) -> Dict[str, Any]:
+    method = _normalize_drt_method(req.method)
+    raw_fzi_data = _compute_fzi_data_sync(
+        project_id, dt_matrix=req.dt_matrix, dt_fluid=req.dt_fluid
+    )
+    has_sonic = bool(raw_fzi_data.get("has_sonic", False))
+    sonic_wells = list(raw_fzi_data.get("sonic_wells") or [])
+    fzi_data = _filter_fzi_data_by_wells(raw_fzi_data, req.well_names)
+
+    phit_arr = np.asarray(fzi_data["phit"], dtype=float)
+    perm_arr = np.asarray(fzi_data["perm"], dtype=float)
+    phis_raw = fzi_data.get("phis")
+    phis_arr = (
+        np.asarray(
+            [v if v is not None else np.nan for v in phis_raw], dtype=float
+        )
+        if phis_raw and len(phis_raw) == len(phit_arr)
+        else np.full_like(phit_arr, np.nan, dtype=float)
+    )
+    well_names = fzi_data["well_names"]
+    depths = fzi_data["depths"]
+    zones = fzi_data["zones"]
+
+    phi_sec_arr, phi_ip_arr = calc_secondary_porosity(phit_arr, phis_arr)
+    has_valid_phi_sec = bool(np.isfinite(phi_sec_arr).any())
+
+    valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
+    fzi_arr = np.full_like(phit_arr, np.nan, dtype=float)
+    r35_arr = np.full_like(phit_arr, np.nan, dtype=float)
+    rfn_arr = np.full_like(phit_arr, np.nan, dtype=float)
+    rfn_total_arr = np.full_like(phit_arr, np.nan, dtype=float)
+
+    if valid_mask.any():
+        fzi_arr[valid_mask] = calc_fzi(phit_arr[valid_mask], perm_arr[valid_mask])
+        r35_arr[valid_mask] = calc_r35(phit_arr[valid_mask], perm_arr[valid_mask])
+        rfn_total_arr[valid_mask] = calc_rfn(
+            phit_arr[valid_mask], perm_arr[valid_mask]
+        )
+        pore_for_rfn = (
+            phi_ip_arr[valid_mask]
+            if (req.use_interparticle_porosity and has_valid_phi_sec)
+            else phit_arr[valid_mask]
+        )
+        rfn_arr[valid_mask] = calc_rfn(pore_for_rfn, perm_arr[valid_mask])
+
+    if method == "winland":
+        active_arr = r35_arr
+        default_higher_is_better = True
+        indicator_col = "R35"
+    elif method == "lucia":
+        active_arr = rfn_arr
+        default_higher_is_better = False
+        indicator_col = "RFN"
+    else:
+        active_arr = fzi_arr
+        default_higher_is_better = True
+        indicator_col = "FZI"
+
+    higher_is_better = (
+        req.higher_is_better
+        if req.higher_is_better is not None
+        else default_higher_is_better
+    )
+
+    cutoff_method = str(req.cutoff_method or "gmm").strip().lower()
+    if cutoff_method not in ("gmm", "lorenz", "kmeans"):
+        cutoff_method = "gmm"
+
+    target_no_cutoffs = None if req.auto_k else max(1, int(req.no_of_cutoffs))
+    gmm_res = find_cutoffs_gmm(
+        active_arr[valid_mask],
+        no_of_cutoffs=target_no_cutoffs,
+        max_clusters=req.max_clusters,
+        criterion=req.gmm_criterion,
+        log_scale=(method != "lucia"),
+    )
+    lorenz_res = find_cutoffs_lorenz(
+        phit_arr[valid_mask],
+        perm_arr[valid_mask],
+        indicator=active_arr[valid_mask],
+        method=method,
+        no_of_cutoffs=target_no_cutoffs,
+        max_clusters=req.max_clusters,
+    )
+
+    if req.auto_find_cutoffs and valid_mask.sum() >= 4:
+        if cutoff_method == "lorenz" and lorenz_res.get("cutoffs"):
+            cutoffs = sorted(float(round(c, 4)) for c in lorenz_res["cutoffs"])
+        elif cutoff_method == "gmm" and gmm_res.get("cutoffs"):
+            cutoffs = sorted(float(round(c, 4)) for c in gmm_res["cutoffs"])
+        else:
+            k_use = (
+                int(gmm_res.get("optimal_k", req.no_of_cutoffs + 1))
+                if req.auto_k
+                else (int(req.no_of_cutoffs) + 1)
+            )
+            n_c = max(1, min(k_use - 1, int(valid_mask.sum()) - 1))
+            cutoffs = sorted(
+                float(round(c, 4))
+                for c in find_cutoffs(active_arr[valid_mask], no_of_cutoffs=n_c)
+            )
+    else:
+        cutoffs = sorted(float(c) for c in req.cutoffs)
+
+    rf_arr = rock_typing(
+        active_arr, cut_offs=cutoffs, higher_is_better=higher_is_better
+    )
+
+    carb_res = apply_lucia_rfn_override(
+        phit_arr,
+        perm_arr,
+        phis=phis_arr,
+        phi_sec=phi_sec_arr,
+        primary_rock_flags=rf_arr,
+        lucia_cutoffs=req.lucia_cutoffs if req.lucia_cutoffs else [1.5, 2.5, 3.5],
+        phi_sec_cutoff=req.phi_sec_cutoff,
+        use_interparticle_porosity=req.use_interparticle_porosity,
+    )
+    override_active = bool(req.lucia_vuggy_override and has_valid_phi_sec)
+    if override_active:
+        rf_arr = carb_res["overridden_rock_flags"]
+
+    rock_flags = [
+        int(val) if not np.isnan(val) else None for val in np.asarray(rf_arr)
+    ]
+    vuggy_flags = [
+        1 if bool(v) else 0 for v in np.asarray(carb_res["vuggy_mask"], dtype=bool)
+    ]
+    fzi_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in fzi_arr
+    ]
+    r35_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in r35_arr
+    ]
+    rfn_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in rfn_arr
+    ]
+    phis_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in phis_arr
+    ]
+    phi_sec_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in phi_sec_arr
+    ]
+    phi_ip_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in phi_ip_arr
+    ]
+    active_list = (
+        r35_list
+        if method == "winland"
+        else (rfn_list if method == "lucia" else fzi_list)
+    )
+
+    rock_flags_binned = list(rock_flags)
+    rock_flags_ml: List[Optional[int]] = [None] * len(rock_flags)
+    rock_prob_ml: List[Optional[float]] = [None] * len(rock_flags)
+    vdl_list: List[Optional[float]] = [None] * len(rock_flags)
+    classifier_diag: Optional[Dict[str, Any]] = None
+    extra_propagated_by_well: Dict[str, List[Dict[str, Any]]] = {}
+
+    if req.train_classifier or req.apply_classifier_propagation:
+        unique_wells = list(dict.fromkeys(well_names))
+        binned_lookup: Dict[Tuple[str, float], int] = {}
+        for wn, d, rf_b in zip(well_names, depths, rock_flags_binned):
+            if wn is not None and d is not None and rf_b is not None:
+                binned_lookup[(str(wn), round(float(d), 4))] = int(rf_b)
+
+        well_dfs: List[pd.DataFrame] = []
+        for wn in unique_wells:
+            w_df = _get_merged_dataframe_sync(project_id, str(wn))
+            if w_df.empty or "DEPTH" not in w_df.columns:
+                continue
+            w_copy = w_df.copy()
+            w_copy["WELL_NAME"] = str(wn)
+            d_keys = [
+                round(float(dv), 4) if pd.notna(dv) else -999999.0
+                for dv in pd.to_numeric(w_copy["DEPTH"], errors="coerce")
+            ]
+            w_copy["ROCK_FLAG"] = [
+                binned_lookup.get((str(wn), dk), np.nan) for dk in d_keys
+            ]
+            well_dfs.append(w_copy)
+
+        if well_dfs:
+            combined_df = pd.concat(well_dfs, ignore_index=True)
+            clf_res = train_and_validate_rock_type_classifier(
+                combined_df,
+                include_pef=req.include_pef,
+                include_vdl=req.include_vdl,
+                model_type=req.classifier_model,
+                test_size=req.test_size,
+                dt_matrix=req.dt_matrix,
+                dt_fluid=req.dt_fluid,
+            )
+
+            ml_lookup: Dict[Tuple[str, float], Tuple[Optional[int], Optional[float], Optional[float]]] = {}
+            comb_wells = combined_df["WELL_NAME"].astype(str).tolist()
+            comb_depths = pd.to_numeric(combined_df["DEPTH"], errors="coerce").tolist()
+            comb_binned = pd.to_numeric(combined_df["ROCK_FLAG"], errors="coerce").tolist()
+            pred_rf_all = clf_res["predicted_rock_flags"]
+            pred_conf_all = clf_res["predicted_confidence"]
+            vdl_all = clf_res["vdl"]
+
+            propagated_uncored_count = 0
+            for cw, cd, cb, prf, pcf, vdl_v in zip(
+                comb_wells, comb_depths, comb_binned, pred_rf_all, pred_conf_all, vdl_all
+            ):
+                if cd is None or pd.isna(cd):
+                    continue
+                dk = round(float(cd), 4)
+                ml_lookup[(cw, dk)] = (prf, pcf, vdl_v)
+                if pd.isna(cb) and prf is not None:
+                    propagated_uncored_count += 1
+                    if req.apply_classifier_propagation:
+                        row_ext: Dict[str, Any] = {
+                            "DEPTH": float(cd),
+                            "ROCK_FLAG": int(prf),
+                            "ROCK_FLAG_ML": int(prf),
+                        }
+                        if vdl_v is not None:
+                            row_ext["VDL"] = float(vdl_v)
+                        extra_propagated_by_well.setdefault(cw, []).append(row_ext)
+
+            for idx_r, (wn, d) in enumerate(zip(well_names, depths)):
+                if wn is not None and d is not None:
+                    hit = ml_lookup.get((str(wn), round(float(d), 4)))
+                    if hit is not None:
+                        rock_flags_ml[idx_r] = hit[0]
+                        rock_prob_ml[idx_r] = hit[1]
+                        vdl_list[idx_r] = hit[2]
+
+            prop_mode = str(req.propagation_mode or "fill_missing").strip().lower()
+            if req.apply_classifier_propagation:
+                new_rock_flags: List[Optional[int]] = []
+                for rf_b, rf_m in zip(rock_flags_binned, rock_flags_ml):
+                    if prop_mode == "full_ml":
+                        new_rock_flags.append(rf_m if rf_m is not None else rf_b)
+                    else:
+                        new_rock_flags.append(rf_b if rf_b is not None else rf_m)
+                rock_flags = new_rock_flags
+
+            classifier_diag = {
+                "trained": True,
+                "propagated": bool(req.apply_classifier_propagation),
+                "propagation_mode": prop_mode,
+                "model_type": clf_res["model_type"],
+                "features_used": clf_res["features_used"],
+                "labels": clf_res["labels"],
+                "contingency_table": clf_res["contingency_table"],
+                "metrics": {
+                    **clf_res["metrics"],
+                    "uncored_propagated_samples": int(propagated_uncored_count),
+                },
+                "class_metrics": clf_res["class_metrics"],
+                "feature_importances": clf_res["feature_importances"],
+            }
+
+    by_well: Dict[str, List[Dict[str, Any]]] = {}
+    for idx_row, (wn, d, rf, ind_val) in enumerate(
+        zip(well_names, depths, rock_flags, active_list)
+    ):
+        if rf is not None and d is not None:
+            row_dict: Dict[str, Any] = {"DEPTH": d, "ROCK_FLAG": rf}
+            if ind_val is not None:
+                row_dict[indicator_col] = ind_val
+            if rfn_list[idx_row] is not None and (method == "lucia" or override_active):
+                row_dict["RFN"] = rfn_list[idx_row]
+            if phi_sec_list[idx_row] is not None:
+                row_dict["PHI_SEC"] = phi_sec_list[idx_row]
+            if rock_flags_ml[idx_row] is not None:
+                row_dict["ROCK_FLAG_ML"] = rock_flags_ml[idx_row]
+            if vdl_list[idx_row] is not None:
+                row_dict["VDL"] = vdl_list[idx_row]
+            by_well.setdefault(wn, []).append(row_dict)
+
+    for wn, ext_rows in extra_propagated_by_well.items():
+        by_well.setdefault(wn, []).extend(ext_rows)
+
+    for wn, rows in by_well.items():
+        _update_in_memory_well_cache(project_id, wn, pd.DataFrame(rows))
+
+    saved_wells = 0
+    if req.save:
+        for wn, rows in by_well.items():
+            _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
+        saved_wells = len(by_well)
+
+    flag_counts: Dict[str, int] = {}
+    for rf in rock_flags:
+        if rf is not None:
+            key = str(rf)
+            flag_counts[key] = flag_counts.get(key, 0) + 1
+    if req.apply_classifier_propagation:
+        for ext_rows in extra_propagated_by_well.values():
+            for r_ext in ext_rows:
+                rf_e = r_ext.get("ROCK_FLAG")
+                if rf_e is not None:
+                    key = str(rf_e)
+                    flag_counts[key] = flag_counts.get(key, 0) + 1
+
+    active_diag = lorenz_res if cutoff_method == "lorenz" else gmm_res
+    optimal_k = int(active_diag.get("optimal_k", len(cutoffs) + 1))
+
+    return {
+        "project_id": project_id,
+        "method": method,
+        "cutoffs": cutoffs,
+        "cutoff_method": cutoff_method,
+        "auto_k": req.auto_k,
+        "optimal_k": optimal_k,
+        "selected_k": len(cutoffs) + 1,
+        "higher_is_better": higher_is_better,
+        "flag_counts": flag_counts,
+        "rock_type_counts": flag_counts,
+        "saved": req.save,
+        "saved_wells": saved_wells,
+        "diagnostics": {
+            "optimal_k": optimal_k,
+            "selected_k": len(cutoffs) + 1,
+            "cutoff_method": cutoff_method,
+            "k_scores": active_diag.get("k_scores", []),
+            "gmm": {
+                "optimal_k": gmm_res.get("optimal_k"),
+                "cutoffs": gmm_res.get("cutoffs", []),
+                "criterion": gmm_res.get("criterion", req.gmm_criterion),
+                "k_scores": gmm_res.get("k_scores", []),
+                "components": gmm_res.get("components", []),
+                "distribution": gmm_res.get("distribution", {}),
+            },
+            "lorenz": {
+                "optimal_k": lorenz_res.get("optimal_k"),
+                "cutoffs": lorenz_res.get("cutoffs", []),
+                "lorenz_coeff": lorenz_res.get("lorenz_coeff", 0.0),
+                "lorenz_curve": lorenz_res.get("lorenz_curve", {}),
+                "inflection_points": lorenz_res.get("inflection_points", []),
+                "k_scores": lorenz_res.get("k_scores", []),
+            },
+            "carbonate": {
+                "has_sonic_data": has_valid_phi_sec or has_sonic,
+                "sonic_wells": sonic_wells,
+                "vuggy_count": int(carb_res["vuggy_count"]),
+                "override_count": int(carb_res["override_count"]) if override_active else 0,
+                "phi_sec_cutoff": float(req.phi_sec_cutoff),
+                "mean_phi_sec": (
+                    round(float(np.nanmean(phi_sec_arr)), 4)
+                    if has_valid_phi_sec
+                    else None
+                ),
+                "max_phi_sec": (
+                    round(float(np.nanmax(phi_sec_arr)), 4)
+                    if has_valid_phi_sec
+                    else None
+                ),
+                "use_interparticle_porosity": bool(req.use_interparticle_porosity),
+                "lucia_vuggy_override": bool(req.lucia_vuggy_override),
+                "lucia_cutoffs": sorted(float(c) for c in req.lucia_cutoffs),
+            },
+            "classifier": classifier_diag,
+        },
+        "data": {
+            "well_names": well_names,
+            "depths": depths,
+            "zones": zones,
+            "phit": fzi_data["phit"],
+            "perm": fzi_data["perm"],
+            "phis": phis_list,
+            "phi_sec": phi_sec_list,
+            "phi_ip": phi_ip_list,
+            "vuggy_flags": vuggy_flags,
+            "vdl": vdl_list,
+            "fzi": fzi_list,
+            "r35": r35_list,
+            "rfn": rfn_list,
+            "drt_value": active_list,
+            "rock_flags": rock_flags,
+            "rock_flags_binned": rock_flags_binned,
+            "rock_flags_ml": rock_flags_ml,
+            "rock_prob_ml": rock_prob_ml,
+        },
+    }
 
 
 @router.post(
@@ -7273,6 +7620,9 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
         "FZI",
         "R35",
         "RFN",
+        "ROCK_FLAG_ML",
+        "VDL",
+        "PHI_SEC",
         "PERM_P10",
         "PERM_P50",
         "PERM_P90",
