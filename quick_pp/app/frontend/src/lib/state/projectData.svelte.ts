@@ -158,6 +158,11 @@ class ProjectDataState {
 		rock_flags_binned?: (number | null)[];
 		rock_flags_ml?: (number | null)[];
 		rock_prob_ml?: (number | null)[];
+		log_well_names?: string[];
+		log_depths?: number[];
+		log_rock_flags?: (number | null)[];
+		log_rock_flags_ml?: (number | null)[];
+		log_vdl?: (number | null)[];
 		drt_value?: (number | null)[];
 		optimal_k?: number;
 		selected_k?: number;
@@ -316,38 +321,85 @@ class ProjectDataState {
 		let curveLabel = '';
 
 		if (moduleKey === 'rock-typing' && this.rockTypingResult) {
-			wellNames = this.rockTypingResult.well_names;
-			depths = this.rockTypingResult.depths;
-			curves = {
-				ROCK_FLAG: this.rockTypingResult.rock_flags.map((v) =>
-					v !== null && v !== undefined && Number.isFinite(v) ? v : null
-				)
-			};
-			if (this.rockTypingResult.fzi?.length === depths.length) {
-				curves['FZI'] = this.rockTypingResult.fzi.map((v) =>
+			const rt = this.rockTypingResult;
+			const m = rt.method ?? this.drtMethod;
+			if (rt.log_well_names?.length && rt.log_depths?.length) {
+				wellNames = [...rt.log_well_names];
+				depths = [...rt.log_depths];
+				const rfOut = (rt.log_rock_flags ?? []).map((v) =>
 					v !== null && v !== undefined && Number.isFinite(v) ? v : null
 				);
-			}
-			if (this.rockTypingResult.r35?.length === depths.length) {
-				curves['R35'] = this.rockTypingResult.r35.map((v) =>
+				const rfMlOut = (rt.log_rock_flags_ml ?? []).map((v) =>
 					v !== null && v !== undefined && Number.isFinite(v) ? v : null
 				);
-			}
-			if (this.rockTypingResult.rfn?.length === depths.length) {
-				curves['RFN'] = this.rockTypingResult.rfn.map((v) =>
+				const vdlOut = (rt.log_vdl ?? []).map((v) =>
 					v !== null && v !== undefined && Number.isFinite(v) ? v : null
 				);
-			}
-			const m = this.rockTypingResult.method ?? this.drtMethod;
-			if (this.rockTypingResult.rock_flags_ml?.length === depths.length) {
-				curves['ROCK_FLAG_ML'] = this.rockTypingResult.rock_flags_ml.map((v) =>
-					v !== null && v !== undefined && Number.isFinite(v) ? v : null
-				);
-			}
-			if (this.rockTypingResult.vdl?.length === depths.length) {
-				curves['VDL'] = this.rockTypingResult.vdl.map((v) =>
-					v !== null && v !== undefined && Number.isFinite(v) ? v : null
-				);
+
+				// Map core-depth indicator curves (FZI, R35, RFN) onto the full-log depth array
+				const keyOf = (wn: string, d: number | null) =>
+					`${wn}__${d !== null ? Math.round(d * 10000) : 'nan'}`;
+				const coreMap = new Map<
+					string,
+					{ fzi: number | null; r35: number | null; rfn: number | null }
+				>();
+				for (let i = 0; i < rt.well_names.length; i++) {
+					const wn = rt.well_names[i];
+					const d = rt.depths[i];
+					const fziV = rt.fzi?.[i];
+					const r35V = rt.r35?.[i];
+					const rfnV = rt.rfn?.[i];
+					coreMap.set(keyOf(wn, d), {
+						fzi: fziV !== null && fziV !== undefined && Number.isFinite(fziV) ? fziV : null,
+						r35: r35V !== null && r35V !== undefined && Number.isFinite(r35V) ? r35V : null,
+						rfn: rfnV !== null && rfnV !== undefined && Number.isFinite(rfnV) ? rfnV : null
+					});
+				}
+				const fziOut = wellNames.map((wn, idx) => coreMap.get(keyOf(wn, depths[idx]))?.fzi ?? null);
+				const r35Out = wellNames.map((wn, idx) => coreMap.get(keyOf(wn, depths[idx]))?.r35 ?? null);
+				const rfnOut = wellNames.map((wn, idx) => coreMap.get(keyOf(wn, depths[idx]))?.rfn ?? null);
+
+				curves = {
+					ROCK_FLAG: rfOut
+				};
+				if (rfMlOut.some((v) => v !== null)) curves['ROCK_FLAG_ML'] = rfMlOut;
+				if (vdlOut.some((v) => v !== null)) curves['VDL'] = vdlOut;
+				if (fziOut.some((v) => v !== null)) curves['FZI'] = fziOut;
+				if (r35Out.some((v) => v !== null)) curves['R35'] = r35Out;
+				if (rfnOut.some((v) => v !== null)) curves['RFN'] = rfnOut;
+			} else {
+				wellNames = rt.well_names;
+				depths = rt.depths;
+				curves = {
+					ROCK_FLAG: rt.rock_flags.map((v) =>
+						v !== null && v !== undefined && Number.isFinite(v) ? v : null
+					)
+				};
+				if (rt.fzi?.length === depths.length) {
+					curves['FZI'] = rt.fzi.map((v) =>
+						v !== null && v !== undefined && Number.isFinite(v) ? v : null
+					);
+				}
+				if (rt.r35?.length === depths.length) {
+					curves['R35'] = rt.r35.map((v) =>
+						v !== null && v !== undefined && Number.isFinite(v) ? v : null
+					);
+				}
+				if (rt.rfn?.length === depths.length) {
+					curves['RFN'] = rt.rfn.map((v) =>
+						v !== null && v !== undefined && Number.isFinite(v) ? v : null
+					);
+				}
+				if (rt.rock_flags_ml?.length === depths.length) {
+					curves['ROCK_FLAG_ML'] = rt.rock_flags_ml.map((v) =>
+						v !== null && v !== undefined && Number.isFinite(v) ? v : null
+					);
+				}
+				if (rt.vdl?.length === depths.length) {
+					curves['VDL'] = rt.vdl.map((v) =>
+						v !== null && v !== undefined && Number.isFinite(v) ? v : null
+					);
+				}
 			}
 			const indName = m === 'winland' ? 'R35' : m === 'lucia' ? 'RFN' : 'FZI';
 			curveLabel = `ROCK_FLAG & ${indName}`;

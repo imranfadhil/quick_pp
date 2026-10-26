@@ -5,7 +5,10 @@ from fastapi import APIRouter, HTTPException
 from quick_pp.core_analysis import fit_poroperm_curve
 from quick_pp.database import objects as db_objects
 
-from quick_pp.app.backend.services.database import invalidate_well_cache
+from quick_pp.app.backend.services.database import (
+    _get_merged_dataframe_sync,
+    invalidate_well_cache,
+)
 from quick_pp.app.backend.utils.db import get_db
 
 
@@ -38,7 +41,7 @@ async def get_poroperm_fits(project_id: int):
             all_rock_flags = []
 
             for well_name in all_well_names:
-                df = proj.get_well_data_optimized(well_name)
+                df = _get_merged_dataframe_sync(project_id, well_name)
 
                 if df.empty:
                     continue
@@ -47,13 +50,25 @@ async def get_poroperm_fits(project_id: int):
                 phit_col = None
                 perm_col = None
                 rock_flag_col = None
-                for col in df.columns:
-                    if col.upper() in ["PHIT", "POROSITY", "POR"]:
+                for col in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR", "CORE_POR"):
+                    if col in df.columns and df[col].notna().any():
                         phit_col = col
-                    if col.upper() in ["PERM", "PERMEABILITY", "K"]:
+                        break
+                for col in (
+                    "CPERM",
+                    "CORE_PERM",
+                    "PERM",
+                    "KLOGH",
+                    "PERMEABILITY",
+                    "K",
+                ):
+                    if col in df.columns and df[col].notna().any():
                         perm_col = col
-                    if col.upper() == "ROCK_FLAG":
+                        break
+                for col in ("ROCK_FLAG", "ROCK_FLAG_ML"):
+                    if col in df.columns and df[col].notna().any():
                         rock_flag_col = col
+                        break
 
                 if not phit_col or not perm_col or not rock_flag_col:
                     continue

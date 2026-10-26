@@ -307,6 +307,40 @@
 					}
 					wellData.mergeComputedCurves(mergedPayload);
 				}
+				const logWnArr = (data.data as any).log_well_names as string[] | undefined;
+				const logDArr = (data.data as any).log_depths as number[] | undefined;
+				const logRfArr = (data.data as any).log_rock_flags as (number | null)[] | undefined;
+				const logRfMlArr = (data.data as any).log_rock_flags_ml as (number | null)[] | undefined;
+				const logVdlArr = (data.data as any).log_vdl as (number | null)[] | undefined;
+				if (Array.isArray(logWnArr) && Array.isArray(logDArr) && logWnArr.length > 0) {
+					const lDepths: number[] = [];
+					const lRf: (number | null)[] = [];
+					const lRfMl: (number | null)[] = [];
+					const lVdl: (number | null)[] = [];
+					for (let i = 0; i < logWnArr.length; i++) {
+						if (logWnArr[i] === workbench.wellId) {
+							lDepths.push(logDArr[i]);
+							lRf.push(logRfArr?.[i] ?? null);
+							lRfMl.push(logRfMlArr?.[i] ?? null);
+							lVdl.push(logVdlArr?.[i] ?? null);
+						}
+					}
+					if (lDepths.length > 0) {
+						const logPayload: Record<string, (number | null)[]> = {
+							DEPTH: lDepths
+						};
+						if (lRf.some((v) => v !== null)) {
+							logPayload.ROCK_FLAG = lRf;
+						}
+						if (lRfMl.some((v) => v !== null)) {
+							logPayload.ROCK_FLAG_ML = lRfMl;
+						}
+						if (lVdl.some((v) => v !== null)) {
+							logPayload.VDL = lVdl;
+						}
+						wellData.mergeComputedCurves(logPayload);
+					}
+				}
 			}
 		} catch (e: any) {
 			projectData.error = e?.message || 'Rock typing error';

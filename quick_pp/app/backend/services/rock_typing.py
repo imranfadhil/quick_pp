@@ -38,6 +38,9 @@ def _compute_fzi_data_sync(
         sonic_wells = []
         any_non_empty_well = False
         available_cols = set()
+        loaded_wells = []
+        any_real_perm = False
+        perm_candidates = ("CPERM", "CORE_PERM", "PERM", "KLOGH", "PERMEABILITY", "K")
 
         for well_name in all_well_names:
             df = _get_merged_dataframe_sync(project_id, well_name)
@@ -45,6 +48,13 @@ def _compute_fzi_data_sync(
                 continue
             any_non_empty_well = True
             available_cols.update(df.columns)
+            if any(
+                col in df.columns and df[col].notna().any() for col in perm_candidates
+            ):
+                any_real_perm = True
+            loaded_wells.append((well_name, df))
+
+        for well_name, df in loaded_wells:
 
             # Load ancillary data (formation tops)
             try:
@@ -79,7 +89,7 @@ def _compute_fzi_data_sync(
                 if col in df.columns and df[col].notna().any():
                     phit_col = col
                     break
-            for col in ("PERM", "CPERM", "KLOGH", "PERMEABILITY", "K", "CORE_PERM"):
+            for col in perm_candidates:
                 if col in df.columns and df[col].notna().any():
                     perm_col = col
                     break
@@ -106,7 +116,7 @@ def _compute_fzi_data_sync(
                     )
                     phit_col = "_EST_PHIT"
 
-            if phit_col and not perm_col:
+            if phit_col and not perm_col and not any_real_perm:
                 phit_s = pd.to_numeric(df[phit_col], errors="coerce").clip(0.001, 0.45)
                 df = df.copy()
                 df["_EST_PERM"] = (10.0 ** (14.0 * phit_s - 1.5)).clip(0.001, 10000.0)
@@ -115,8 +125,30 @@ def _compute_fzi_data_sync(
             if not phit_col or not perm_col:
                 continue
 
-            cpore = pd.to_numeric(df[phit_col], errors="coerce").dropna()
-            cperm = pd.to_numeric(df[perm_col], errors="coerce").dropna()
+            cpore_s = pd.to_numeric(df[phit_col], errors="coerce")
+            cpore_s = cpore_s.where(cpore_s > 0, np.nan)
+            for fallback_pcol in (
+                "PHIT",
+                "PHIE",
+                "CPORE",
+                "POROSITY",
+                "POR",
+                "CORE_POR",
+            ):
+                if fallback_pcol != phit_col and fallback_pcol in df.columns:
+                    fp_s = pd.to_numeric(df[fallback_pcol], errors="coerce")
+                    fp_s = fp_s.where(fp_s > 0, np.nan)
+                    cpore_s = cpore_s.combine_first(fp_s)
+            cpore = cpore_s.dropna()
+
+            cperm_s = pd.to_numeric(df[perm_col], errors="coerce")
+            cperm_s = cperm_s.where(cperm_s > 0, np.nan)
+            for fallback_kcol in perm_candidates:
+                if fallback_kcol != perm_col and fallback_kcol in df.columns:
+                    fk_s = pd.to_numeric(df[fallback_kcol], errors="coerce")
+                    fk_s = fk_s.where(fk_s > 0, np.nan)
+                    cperm_s = cperm_s.combine_first(fk_s)
+            cperm = cperm_s.dropna()
 
             common_index = cpore.index.intersection(cperm.index)
             cpore = cpore.loc[common_index]
@@ -201,8 +233,23 @@ def _compute_fzi_data_sync(
                 zones = ["Unknown"] * len(cpore)
 
             if rock_flag_col:
-                rock_flags = df.loc[common_index, rock_flag_col]
-                rock_flags = rock_flags.where(pd.notna(rock_flags), None).tolist()
+                rf_s = pd.to_numeric(
+                    df.loc[common_index, rock_flag_col], errors="coerce"
+                )
+                rf_s = rf_s.where(rf_s >= 1, np.nan)
+                if "ROCK_FLAG_ML" in df.columns:
+                    ml_s = pd.to_numeric(
+                        df.loc[common_index, "ROCK_FLAG_ML"], errors="coerce"
+                    )
+                    ml_s = ml_s.where(ml_s >= 1, np.nan)
+                    rf_s = rf_s.combine_first(ml_s)
+                rock_flags = rf_s.where(pd.notna(rf_s), None).tolist()
+            elif "ROCK_FLAG_ML" in df.columns:
+                rf_s = pd.to_numeric(
+                    df.loc[common_index, "ROCK_FLAG_ML"], errors="coerce"
+                )
+                rf_s = rf_s.where(rf_s >= 1, np.nan)
+                rock_flags = rf_s.where(pd.notna(rf_s), None).tolist()
             else:
                 rock_flags = [None] * len(cpore)
 

@@ -50,9 +50,10 @@ def get_gunicorn_worker_flag(debug: bool = False) -> str:
 
     try:
         cpus = os.cpu_count() or 1
+        default_workers = max(1, int(cpus / 3))
+        workers = max(1, int(os.environ.get("QPP_GUNICORN_WORKERS", default_workers)))
     except Exception:
-        cpus = 1
-    workers = max(1, int(cpus / 3))
+        workers = 1
     return f"--workers {workers}"
 
 

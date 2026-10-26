@@ -1855,23 +1855,26 @@ def train_and_validate_rock_type_classifier(
     if n_rows == 0:
         raise ValueError("Empty DataFrame provided for rock type classification.")
 
-    def _first_valid_series(candidates):
+    def _combined_valid_series(candidates):
+        out = pd.Series(np.nan, index=work.index, dtype=float)
         for col in candidates:
             if col in work.columns:
                 s = pd.to_numeric(work[col], errors="coerce").replace(
                     [np.inf, -np.inf], np.nan
                 )
                 if s.notna().any():
-                    return s
-        return pd.Series(np.nan, index=work.index, dtype=float)
+                    out = out.combine_first(s)
+        return out
 
-    gr_s = _first_valid_series(("GR", "SGR", "CGR", "GAMMA"))
-    nphi_s = _first_valid_series(("NPHI_HC", "NPHI", "TNPH", "PHIN"))
-    rhob_s = _first_valid_series(("RHOB_HC", "RHOB", "RHOZ", "DEN"))
-    rt_s = _first_valid_series(("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD"))
-    pef_s = _first_valid_series(("PEF", "PE", "PEFZ", "PEFA"))
-    dtc_s = _first_valid_series(("DTC", "DT", "AC", "DTCO", "DT4P"))
-    phit_s = _first_valid_series(("PHIT", "PHIE", "CPORE", "POROSITY"))
+    gr_s = _combined_valid_series(("GR", "SGR", "CGR", "GAMMA"))
+    nphi_s = _combined_valid_series(("NPHI", "NPHI_HC", "TNPH", "PHIN"))
+    rhob_s = _combined_valid_series(("RHOB", "RHOB_HC", "RHOZ", "DEN"))
+    rt_s = _combined_valid_series(
+        ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD")
+    )
+    pef_s = _combined_valid_series(("PEF", "PE", "PEFZ", "PEFA"))
+    dtc_s = _combined_valid_series(("DTC", "DT", "AC", "DTCO", "DT4P"))
+    phit_s = _combined_valid_series(("PHIT", "PHIE", "CPORE", "POROSITY"))
 
     log_rt_s = pd.Series(np.nan, index=work.index, dtype=float)
     valid_rt = rt_s.notna() & (rt_s > 0)
@@ -1919,7 +1922,7 @@ def train_and_validate_rock_type_classifier(
         )
 
     # Require at least half of the selected features to be non-NaN on a row to predict/train, then median-impute minor gaps
-    min_valid_feats = max(2, len(features_used) - 1)
+    min_valid_feats = max(2, (len(features_used) + 1) // 2)
     row_valid_mask = feat_df.notna().sum(axis=1) >= min_valid_feats
     medians = feat_df.median(numeric_only=True)
     feat_imputed = feat_df.fillna(medians).fillna(0.0)

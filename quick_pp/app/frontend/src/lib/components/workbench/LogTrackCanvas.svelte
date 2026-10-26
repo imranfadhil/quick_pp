@@ -351,6 +351,7 @@
 		uniqueFlags: number[];
 		maxFlag: number;
 		isPreview: boolean;
+		hasMl: boolean;
 	} {
 		const method = projectData.drtMethod;
 		const indicatorLabel = method === 'winland' ? 'R35' : method === 'lucia' ? 'RFN' : 'FZI';
@@ -366,7 +367,7 @@
 			const v = rawRf?.[i];
 			return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : null;
 		});
-		const mlFlags: (number | null)[] = indices.map((i) => {
+		let mlFlags: (number | null)[] = indices.map((i) => {
 			const v = rawMl?.[i];
 			return typeof v === 'number' && Number.isFinite(v) && v >= 1 ? Math.round(v) : null;
 		});
@@ -376,15 +377,17 @@
 		});
 		let isPreview = false;
 
-		// If wellData.curves['ROCK_FLAG'] is not populated yet, check projectData.rockTypingResult or compute live preview from PHIT & PERM
-		if (!flags.some((v) => v !== null && v >= 1)) {
-			const rtRes = projectData.rockTypingResult;
-			const deptAll = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-			if (rtRes && workbench.wellId && Array.isArray(rtRes.well_names)) {
-				const depthToFlag = new Map<number, number>();
-				const depthToInd = new Map<number, number>();
-				const indArr =
-					method === 'winland' ? rtRes.r35 : method === 'lucia' ? rtRes.rfn : rtRes.fzi;
+		// Check projectData.rockTypingResult for full-log ML predictions and core-depth indicators if not yet merged into wellData.curves
+		const rtRes = projectData.rockTypingResult;
+		const deptAll = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		if (rtRes && workbench.wellId) {
+			const depthToFlag = new Map<number, number>();
+			const depthToMl = new Map<number, number>();
+			const depthToInd = new Map<number, number>();
+			const indArr =
+				method === 'winland' ? rtRes.r35 : method === 'lucia' ? rtRes.rfn : rtRes.fzi;
+
+			if (Array.isArray(rtRes.well_names)) {
 				for (let j = 0; j < rtRes.well_names.length; j++) {
 					if (rtRes.well_names[j] === workbench.wellId) {
 						const dKey = Math.round(Number(rtRes.depths[j]) * 100);
@@ -392,20 +395,62 @@
 						if (typeof rfVal === 'number' && Number.isFinite(rfVal) && rfVal >= 1) {
 							depthToFlag.set(dKey, Math.round(rfVal));
 						}
+						const mlVal = rtRes.rock_flags_ml?.[j];
+						if (typeof mlVal === 'number' && Number.isFinite(mlVal) && mlVal >= 1) {
+							depthToMl.set(dKey, Math.round(mlVal));
+						}
 						const iv = indArr?.[j];
 						if (typeof iv === 'number' && Number.isFinite(iv)) {
 							depthToInd.set(dKey, iv);
 						}
 					}
 				}
-				if (depthToFlag.size > 0) {
-					flags = indices.map((i) => depthToFlag.get(Math.round(Number(deptAll[i]) * 100)) ?? null);
-					if (!indicatorValues.some((v) => v !== null)) {
-						indicatorValues = indices.map(
-							(i) => depthToInd.get(Math.round(Number(deptAll[i]) * 100)) ?? null
-						);
+			}
+
+			if (Array.isArray(rtRes.log_well_names) && Array.isArray(rtRes.log_depths)) {
+				for (let j = 0; j < rtRes.log_well_names.length; j++) {
+					if (rtRes.log_well_names[j] === workbench.wellId) {
+						const dKey = Math.round(Number(rtRes.log_depths[j]) * 100);
+						const rfVal = rtRes.log_rock_flags?.[j];
+						if (typeof rfVal === 'number' && Number.isFinite(rfVal) && rfVal >= 1) {
+							depthToFlag.set(dKey, Math.round(rfVal));
+						}
+						const mlVal = rtRes.log_rock_flags_ml?.[j];
+						if (typeof mlVal === 'number' && Number.isFinite(mlVal) && mlVal >= 1) {
+							depthToMl.set(dKey, Math.round(mlVal));
+						}
 					}
 				}
+			}
+
+			if (depthToFlag.size > 0) {
+				flags = indices.map((i, idx) => {
+					const cur = flags[idx];
+					if (cur !== null && cur >= 1) return cur;
+					return depthToFlag.get(Math.round(Number(deptAll[i]) * 100)) ?? cur;
+				});
+			}
+			if (depthToMl.size > 0) {
+				mlFlags = indices.map((i, idx) => {
+					const cur = mlFlags[idx];
+					if (cur !== null && cur >= 1) return cur;
+					return depthToMl.get(Math.round(Number(deptAll[i]) * 100)) ?? null;
+				});
+			}
+			if (depthToInd.size > 0 && !indicatorValues.some((v) => v !== null)) {
+				indicatorValues = indices.map(
+					(i) => depthToInd.get(Math.round(Number(deptAll[i]) * 100)) ?? null
+				);
+			}
+		}
+
+		// Apply ML rock type predictions (RT_ML) to fill uncored intervals or replace full log according to propagation mode
+		const hasMl = mlFlags.some((v) => v !== null && v >= 1);
+		if (hasMl) {
+			if (projectData.drtClassifierPropagated && projectData.drtPropagationMode === 'full_ml') {
+				flags = flags.map((f, idx) => mlFlags[idx] ?? (f !== null && f >= 1 ? f : null));
+			} else {
+				flags = flags.map((f, idx) => (f !== null && f >= 1 ? f : mlFlags[idx]));
 			}
 		}
 
@@ -493,7 +538,8 @@
 			indicatorLabel,
 			uniqueFlags,
 			maxFlag,
-			isPreview
+			isPreview,
+			hasMl
 		};
 	}
 
@@ -503,6 +549,8 @@
 		void projectData.drtMethod;
 		void projectData.activeDrtCutoffs;
 		void projectData.rockTypingResult;
+		void projectData.drtClassifierPropagated;
+		void projectData.drtPropagationMode;
 		return resolveRockTypeSeries(wellData.visibleIndices);
 	});
 
@@ -581,21 +629,155 @@
 			return indices.map((i) => (Number.isFinite(arr[i]) ? arr[i] : null));
 		};
 
-		// Decimate SVG traces on ultra-dense wells (>2500 rows) so all 7 tracks render purely in
-		// crisp SVG ('scatter') without WebGL ('scattergl') buffer clear warnings or context overhead.
-		const svgStride = depth.length > 2500 ? Math.ceil(depth.length / 2500) : 1;
-		const svgSampleIndices: number[] = [];
-		if (svgStride > 1) {
-			for (let i = 0; i < depth.length; i += svgStride) {
-				svgSampleIndices.push(i);
-			}
-			if (svgSampleIndices[svgSampleIndices.length - 1] !== depth.length - 1) {
-				svgSampleIndices.push(depth.length - 1);
+		// Detect depth discontinuities (e.g. filtered-out intermediate zones or missing depth intervals)
+		// so neither curve lines nor polygon fills bridge across gaps.
+		let stepSum = 0;
+		let stepCount = 0;
+		for (let k = 1; k < indices.length && stepCount < 200; k++) {
+			if (indices[k] === indices[k - 1] + 1) {
+				const dd = Math.abs(deptAll[indices[k]] - deptAll[indices[k - 1]]);
+				if (Number.isFinite(dd) && dd > 1e-4 && dd < 5) {
+					stepSum += dd;
+					stepCount++;
+				}
 			}
 		}
-		const svgDepth = svgStride > 1 ? svgSampleIndices.map((i) => depth[i]) : depth;
-		const decimateSvg = <T,>(arr: T[]): T[] =>
-			svgStride > 1 ? svgSampleIndices.map((i) => arr[i]) : arr;
+		const nominalStep = stepCount > 0 ? stepSum / stepCount : 0.1524;
+		const gapThreshold = Math.max(nominalStep * 3.5, 0.8);
+
+		const segments: Array<{ start: number; end: number }> = [];
+		let segStart = 0;
+		for (let k = 1; k < indices.length; k++) {
+			const prevRaw = indices[k - 1];
+			const curRaw = indices[k];
+			const dPrev = deptAll[prevRaw];
+			const dCur = deptAll[curRaw];
+			const isIndexJump = curRaw !== prevRaw + 1;
+			const isDepthJump =
+				!Number.isFinite(dPrev) ||
+				!Number.isFinite(dCur) ||
+				Math.abs(dCur - dPrev) > gapThreshold;
+			if (isIndexJump || isDepthJump) {
+				segments.push({ start: segStart, end: k - 1 });
+				segStart = k;
+			}
+		}
+		segments.push({ start: segStart, end: indices.length - 1 });
+
+		// Decimate SVG traces on ultra-dense wells (>2500 rows) so all 7 tracks render purely in
+		// crisp SVG ('scatter') without WebGL ('scattergl') buffer clear warnings or context overhead,
+		// while preserving exact segment boundaries and inserting dual gap-sentinel rows at
+		// [prevEndDepth, nextStartDepth] so lines break (null) and fills pinch horizontally to 0.
+		const svgStride = depth.length > 2500 ? Math.ceil(depth.length / 2500) : 1;
+		const sampleGrid: Array<{ depth: number; visIdx: number; visEndIdx: number }> = [];
+		for (let s = 0; s < segments.length; s++) {
+			const seg = segments[s];
+			if (s > 0) {
+				const prevEndDepth = depth[segments[s - 1].end];
+				const curStartDepth = depth[seg.start];
+				sampleGrid.push({ depth: prevEndDepth, visIdx: -1, visEndIdx: -1 });
+				sampleGrid.push({ depth: curStartDepth, visIdx: -1, visEndIdx: -1 });
+			}
+			for (let i = seg.start; i <= seg.end; i += svgStride) {
+				const endIdx = Math.min(seg.end + 1, i + svgStride);
+				sampleGrid.push({ depth: depth[i], visIdx: i, visEndIdx: endIdx });
+			}
+			if (sampleGrid[sampleGrid.length - 1].visIdx !== seg.end) {
+				sampleGrid.push({ depth: depth[seg.end], visIdx: seg.end, visEndIdx: seg.end + 1 });
+			}
+		}
+
+		const svgDepth = sampleGrid.map((g) => g.depth);
+		const decimateSvg = <T,>(arr: T[]): (T | null)[] =>
+			sampleGrid.map((g) => (g.visIdx >= 0 ? arr[g.visIdx] : null));
+
+		// Helper to pinch single 'tozerox' / baseline fills horizontally at the exact start and end
+		// depth of every valid interval so null or filtered-out gaps never form diagonal fill ramps.
+		const buildZeroPinchedFill = (
+			vals: (number | null)[],
+			depths: number[],
+			baseline = 0
+		): { x: number[]; y: number[] } => {
+			const fx: number[] = [];
+			const fy: number[] = [];
+			const n = depths.length;
+			const isValid = (idx: number) =>
+				idx >= 0 && idx < n && vals[idx] !== null && Number.isFinite(vals[idx]!);
+			for (let i = 0; i < n; i++) {
+				const d = depths[i];
+				if (isValid(i)) {
+					const v = vals[i]!;
+					if (!isValid(i - 1)) {
+						fx.push(baseline);
+						fy.push(d);
+					}
+					fx.push(v);
+					fy.push(d);
+					if (!isValid(i + 1)) {
+						fx.push(baseline);
+						fy.push(d);
+					}
+				} else {
+					fx.push(baseline);
+					fy.push(d);
+				}
+			}
+			return { x: fx, y: fy };
+		};
+
+		// Helper to pinch 'tonextx' pair fills (e.g. GAS_XOVER, PHIT_SAND_UPLIFT) so base === top
+		// at the exact boundary depths of every valid interval, leaving empty gaps with zero area.
+		const buildPairPinchedFill = (
+			baseVals: (number | null)[],
+			topVals: (number | null)[],
+			depths: number[],
+			fallbackVal = 0
+		): { baseX: number[]; topX: number[]; y: number[] } => {
+			const baseX: number[] = [];
+			const topX: number[] = [];
+			const fy: number[] = [];
+			const n = depths.length;
+			const isValid = (idx: number) =>
+				idx >= 0 &&
+				idx < n &&
+				baseVals[idx] !== null &&
+				Number.isFinite(baseVals[idx]!) &&
+				topVals[idx] !== null &&
+				Number.isFinite(topVals[idx]!);
+			let lastPinch = fallbackVal;
+			for (let i = 0; i < n; i++) {
+				if (baseVals[i] !== null && Number.isFinite(baseVals[i]!)) {
+					lastPinch = baseVals[i]!;
+					break;
+				}
+			}
+			for (let i = 0; i < n; i++) {
+				const d = depths[i];
+				if (isValid(i)) {
+					const b = baseVals[i]!;
+					const t = topVals[i]!;
+					lastPinch = b;
+					if (!isValid(i - 1)) {
+						baseX.push(b);
+						topX.push(b);
+						fy.push(d);
+					}
+					baseX.push(b);
+					topX.push(t);
+					fy.push(d);
+					if (!isValid(i + 1)) {
+						baseX.push(b);
+						topX.push(b);
+						fy.push(d);
+					}
+				} else {
+					baseX.push(lastPinch);
+					topX.push(lastPinch);
+					fy.push(d);
+				}
+			}
+			return { baseX, topX, y: fy };
+		};
 
 		const traces: any[] = [];
 
@@ -603,18 +785,16 @@
 		const gr = pick('GR');
 		if (gr.length) {
 			const grForFill = decimateSvg(gr);
+			const grPinched = buildZeroPinchedFill(grForFill, svgDepth, 0);
 			for (let b = 0; b < GR_EARTH_SHADE_BANDS.length; b++) {
 				const band = GR_EARTH_SHADE_BANDS[b];
-				// Map null to 0 so Plotly SVG 'tozerox'/'tonextx' never splits subpaths or bridges across null gaps
-				const clampedGr = grForFill.map((v) =>
-					v !== null && Number.isFinite(v) ? Math.max(0, Math.min(v, band.maxGr)) : 0
-				);
+				const clampedGr = grPinched.x.map((v) => Math.max(0, Math.min(v, band.maxGr)));
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
 					name: `GR_BAND_${band.maxGr}`,
 					x: clampedGr,
-					y: svgDepth,
+					y: grPinched.y,
 					xaxis: 'x',
 					yaxis: 'y',
 					line: { width: 0, color: 'rgba(0,0,0,0)' },
@@ -677,23 +857,17 @@
 					: pick('BAD_HOLE_FLAG');
 		if (badholeArr.some((v) => v !== null && v >= 0.5)) {
 			// Use continuous 200 baseline and step to 186 only where BADHOLE >= 0.5
-			// so Plotly 'tonextx' never bridges across unflagged (null) intervals.
+			// so Plotly 'tonextx' never bridges across unflagged (null) or gap-sentinel intervals.
 			// Max-pool over svgStride so thin badhole flags are preserved without 50k+ SVG vertices.
 			const bhBase = new Array(svgDepth.length).fill(200);
-			const bhTop =
-				svgStride > 1
-					? svgSampleIndices.map((startIdx, sIdx) => {
-							const endIdx =
-								sIdx + 1 < svgSampleIndices.length
-									? svgSampleIndices[sIdx + 1]
-									: badholeArr.length;
-							for (let j = startIdx; j < endIdx; j++) {
-								const v = badholeArr[j];
-								if (v !== null && v >= 0.5) return 186;
-							}
-							return 200;
-						})
-					: badholeArr.map((v) => (v !== null && v >= 0.5 ? 186 : 200));
+			const bhTop = sampleGrid.map((g) => {
+				if (g.visIdx < 0) return 200;
+				for (let j = g.visIdx; j < g.visEndIdx; j++) {
+					const v = badholeArr[j];
+					if (v !== null && v >= 0.5) return 186;
+				}
+				return 200;
+			});
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
@@ -847,39 +1021,25 @@
 
 		if (nphi.length && rhob.length) {
 			// Gas Crossover Shading: fill yellow ONLY where NPHI crosses to the right of RHOB (nphi < rhobAsNphi).
-			// Never emit null in GAS_XOVER_BASE / GAS_XOVER because Plotly SVG 'tonextx' closes subpaths across nulls
-			// with a straight chord; instead pinch base === top when either curve is null so fill width is 0.
+			// Pinch base === top at the exact start and end depths of every valid interval so null/gap intervals show nothing.
 			const nphiFill = decimateSvg(nphi);
 			const rhobEqFill = decimateSvg(rhobAsNphi);
-			const gasXoverBase: number[] = new Array(svgDepth.length);
-			const gasXoverTop: number[] = new Array(svgDepth.length);
-			let lastNeutral = 0.45;
-			for (let i = 0; i < svgDepth.length; i++) {
-				const n = nphiFill[i];
-				if (n !== null && Number.isFinite(n)) {
-					lastNeutral = n;
-					break;
-				}
-			}
-			for (let i = 0; i < svgDepth.length; i++) {
+			const gasTopRaw = svgDepth.map((_, i) => {
 				const n = nphiFill[i];
 				const rEq = rhobEqFill[i];
-				if (n !== null && Number.isFinite(n) && rEq !== null && Number.isFinite(rEq)) {
-					lastNeutral = n;
-					gasXoverBase[i] = n;
-					gasXoverTop[i] = n < rEq ? rEq : n;
-				} else {
-					if (n !== null && Number.isFinite(n)) lastNeutral = n;
-					gasXoverBase[i] = lastNeutral;
-					gasXoverTop[i] = lastNeutral;
-				}
-			}
+				return n !== null && Number.isFinite(n) && rEq !== null && Number.isFinite(rEq)
+					? n < rEq
+						? rEq
+						: n
+					: null;
+			});
+			const gasPinched = buildPairPinchedFill(nphiFill, gasTopRaw, svgDepth, 0.45);
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
 				name: 'GAS_XOVER_BASE',
-				x: gasXoverBase,
-				y: svgDepth,
+				x: gasPinched.baseX,
+				y: gasPinched.y,
 				xaxis: 'x3',
 				yaxis: 'y',
 				line: { width: 0, color: 'rgba(0,0,0,0)' },
@@ -890,8 +1050,8 @@
 				type: 'scatter',
 				mode: 'lines',
 				name: 'GAS_XOVER',
-				x: gasXoverTop,
-				y: svgDepth,
+				x: gasPinched.topX,
+				y: gasPinched.y,
 				xaxis: 'x3',
 				yaxis: 'y',
 				fill: 'tonextx',
@@ -905,15 +1065,13 @@
 		// Light fill from DRHO = 0 (which maps to 0.15 on Track 3's [0.45 -> -0.15] scale) to DRHO curve
 		if (drho.some((v) => v !== null)) {
 			const drhoZeroEq = 0.15;
-			const drhoFillX = decimateSvg(drhoAsNphi).map((v) =>
-				v !== null && Number.isFinite(v) ? v : drhoZeroEq
-			);
+			const drhoPinched = buildZeroPinchedFill(decimateSvg(drhoAsNphi), svgDepth, drhoZeroEq);
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
 				name: 'DRHO_ZERO_BASE',
-				x: svgDepth.map(() => drhoZeroEq),
-				y: svgDepth,
+				x: drhoPinched.y.map(() => drhoZeroEq),
+				y: drhoPinched.y,
 				xaxis: 'x3',
 				yaxis: 'y',
 				line: { width: 0, color: 'rgba(0,0,0,0)' },
@@ -924,8 +1082,8 @@
 				type: 'scatter',
 				mode: 'lines',
 				name: 'DRHO_FILL',
-				x: drhoFillX,
-				y: svgDepth,
+				x: drhoPinched.x,
+				y: drhoPinched.y,
 				xaxis: 'x3',
 				yaxis: 'y',
 				fill: 'tonextx',
@@ -1041,34 +1199,95 @@
 		// Track 4 (xaxis4): Evaluated Lithology & Porosity (stacked mineral volumes + PHIT + CPORE)
 		const phit = pick('PHIT').length ? pick('PHIT') : pick('PHIE');
 		const lithoToPlot = activeLithoSpecs;
-		let cumVol = new Array(svgDepth.length).fill(0);
-		let hasPrevLithTrace = false;
+		if (lithoToPlot.length > 0) {
+			const decLithArrs = lithoToPlot.map(({ arr }) => decimateSvg(arr));
+			const hasLithAt = (idx: number) =>
+				idx >= 0 &&
+				idx < svgDepth.length &&
+				decLithArrs.some((da) => da[idx] !== null && Number.isFinite(da[idx]!));
 
-		for (const { spec, arr } of lithoToPlot) {
-			const decArr = decimateSvg(arr);
-			const rawVals = svgDepth.map((_, i) => {
-				const v = decArr[i];
-				return v !== null && Number.isFinite(v) && v > 0 ? v : 0;
-			});
-			const nextCum = svgDepth.map((_, i) => Math.min(1, cumVol[i] + rawVals[i]));
+			// Build zero-pinched depth and volume arrays so stacked 'tozerox'/'tonextx' mineral fills
+			// step horizontally to 0 at the exact boundary of any null or filtered-out interval.
+			const lithFillDepth: number[] = [];
+			const lithPinchedVols: number[][] = lithoToPlot.map(() => []);
+			for (let i = 0; i < svgDepth.length; i++) {
+				const d = svgDepth[i];
+				if (hasLithAt(i)) {
+					if (!hasLithAt(i - 1)) {
+						lithFillDepth.push(d);
+						for (let m = 0; m < lithoToPlot.length; m++) lithPinchedVols[m].push(0);
+					}
+					lithFillDepth.push(d);
+					for (let m = 0; m < lithoToPlot.length; m++) {
+						const v = decLithArrs[m][i];
+						lithPinchedVols[m].push(v !== null && Number.isFinite(v) && v > 0 ? v : 0);
+					}
+					if (!hasLithAt(i + 1)) {
+						lithFillDepth.push(d);
+						for (let m = 0; m < lithoToPlot.length; m++) lithPinchedVols[m].push(0);
+					}
+				} else {
+					lithFillDepth.push(d);
+					for (let m = 0; m < lithoToPlot.length; m++) lithPinchedVols[m].push(0);
+				}
+			}
 
-			traces.push({
-				type: 'scatter',
-				mode: 'lines',
-				name: spec.mnemonic,
-				x: nextCum,
-				customdata: rawVals,
-				y: svgDepth,
-				xaxis: 'x4',
-				yaxis: 'y',
-				fill: hasPrevLithTrace ? 'tonextx' : 'tozerox',
-				fillcolor: spec.fillRgba,
-				line: { color: spec.strokeHex, width: 0.9 },
-				hovertemplate: `${spec.mnemonic} (${spec.shortLabel}): %{customdata:.3f} v/v<extra></extra>`
-			});
+			let cumFillVol = new Array(lithFillDepth.length).fill(0);
+			let cumStrokeVol = new Array(svgDepth.length).fill(0);
+			let hasPrevLithTrace = false;
+			const strokeTraces: any[] = [];
 
-			cumVol = nextCum;
-			hasPrevLithTrace = true;
+			// Push all stacked fill traces consecutively FIRST so Plotly 'tonextx' always fills
+			// against the immediately preceding *_FILL trace (which shares lithFillDepth and has no nulls),
+			// then push the stroke/hover line traces afterwards.
+			for (let m = 0; m < lithoToPlot.length; m++) {
+				const { spec } = lithoToPlot[m];
+				const pinchedRaw = lithPinchedVols[m];
+				const nextFillCum = lithFillDepth.map((_, i) =>
+					Math.min(1, cumFillVol[i] + pinchedRaw[i])
+				);
+
+				const decArr = decLithArrs[m];
+				const rawStrokeVals = svgDepth.map((_, i) => {
+					const v = decArr[i];
+					return v !== null && Number.isFinite(v) && v > 0 ? v : 0;
+				});
+				const nextStrokeCum = svgDepth.map((_, i) =>
+					Math.min(1, cumStrokeVol[i] + rawStrokeVals[i])
+				);
+
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: `${spec.mnemonic}_FILL`,
+					x: nextFillCum,
+					y: lithFillDepth,
+					xaxis: 'x4',
+					yaxis: 'y',
+					fill: hasPrevLithTrace ? 'tonextx' : 'tozerox',
+					fillcolor: spec.fillRgba,
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+				strokeTraces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: spec.mnemonic,
+					x: svgDepth.map((_, i) => (hasLithAt(i) ? nextStrokeCum[i] : null)),
+					customdata: rawStrokeVals,
+					y: svgDepth,
+					xaxis: 'x4',
+					yaxis: 'y',
+					line: { color: spec.strokeHex, width: 0.9 },
+					hovertemplate: `${spec.mnemonic} (${spec.shortLabel}): %{customdata:.3f} v/v<extra></extra>`
+				});
+
+				cumFillVol = nextFillCum;
+				cumStrokeVol = nextStrokeCum;
+				hasPrevLithTrace = true;
+			}
+			traces.push(...strokeTraces);
 		}
 
 		// Scale porosity curves (0 -> 0.5 v/v) onto Track 4's [0, 1] x-axis for 2x contrast while keeping customdata in true v/v
@@ -1097,28 +1316,27 @@
 				const psandFill = decimateSvg(phitSand);
 				if (phit.some((v) => v !== null)) {
 					const phitFill = decimateSvg(phit);
-					const upliftBase: number[] = new Array(svgDepth.length);
-					const upliftTop: number[] = new Array(svgDepth.length);
-					let lastP = 0;
-					for (let i = 0; i < svgDepth.length; i++) {
+					const upliftBaseRaw = svgDepth.map((_, i) => {
 						const p = phitFill[i];
 						const ps = psandFill[i];
-						if (p !== null && Number.isFinite(p) && ps !== null && Number.isFinite(ps)) {
-							lastP = p * 2.0;
-							upliftBase[i] = p * 2.0;
-							upliftTop[i] = Math.max(p, ps) * 2.0;
-						} else {
-							if (p !== null && Number.isFinite(p)) lastP = p * 2.0;
-							upliftBase[i] = lastP;
-							upliftTop[i] = lastP;
-						}
-					}
+						return p !== null && Number.isFinite(p) && ps !== null && Number.isFinite(ps)
+							? p * 2.0
+							: null;
+					});
+					const upliftTopRaw = svgDepth.map((_, i) => {
+						const p = phitFill[i];
+						const ps = psandFill[i];
+						return p !== null && Number.isFinite(p) && ps !== null && Number.isFinite(ps)
+							? Math.max(p, ps) * 2.0
+							: null;
+					});
+					const upliftPinched = buildPairPinchedFill(upliftBaseRaw, upliftTopRaw, svgDepth, 0);
 					traces.push({
 						type: 'scatter',
 						mode: 'lines',
 						name: 'PHIT_SAND_BASE',
-						x: upliftBase,
-						y: svgDepth,
+						x: upliftPinched.baseX,
+						y: upliftPinched.y,
 						xaxis: 'x4',
 						yaxis: 'y',
 						line: { width: 0, color: 'rgba(0,0,0,0)' },
@@ -1129,8 +1347,8 @@
 						type: 'scatter',
 						mode: 'lines',
 						name: 'PHIT_SAND_UPLIFT',
-						x: upliftTop,
-						y: svgDepth,
+						x: upliftPinched.topX,
+						y: upliftPinched.y,
 						xaxis: 'x4',
 						yaxis: 'y',
 						fill: 'tonextx',
@@ -1237,7 +1455,28 @@
 				hovertemplate: 'PERM: %{x:.2f} mD<extra></extra>'
 			});
 		}
-		const permTrans = pick('PERM_TRANS');
+		let permTrans = pick('PERM_TRANS');
+		if (
+			!permTrans.some((v) => v !== null && v > 0) &&
+			projectData.permTransformResult &&
+			workbench.wellId &&
+			Array.isArray(projectData.permTransformResult.well_names)
+		) {
+			const ptRes = projectData.permTransformResult;
+			const depthToPt = new Map<number, number>();
+			for (let j = 0; j < ptRes.well_names.length; j++) {
+				if (ptRes.well_names[j] === workbench.wellId) {
+					const dKey = Math.round(Number(ptRes.depths[j]) * 100);
+					const ptVal = ptRes.perm_pred?.[j];
+					if (typeof ptVal === 'number' && Number.isFinite(ptVal) && ptVal > 0) {
+						depthToPt.set(dKey, ptVal);
+					}
+				}
+			}
+			if (depthToPt.size > 0) {
+				permTrans = indices.map((i) => depthToPt.get(Math.round(Number(deptAll[i]) * 100)) ?? null);
+			}
+		}
 		if (permTrans.some((v) => v !== null && v > 0)) {
 			const permTransDec = decimateSvg(permTrans);
 			traces.push({
@@ -1317,43 +1556,70 @@
 		const rtInfo = activeRockTypeInfo;
 		if (rtInfo.uniqueFlags.length > 0) {
 			const sampleFlagAt = (sIdx: number): number => {
+				const g = sampleGrid[sIdx];
+				if (!g || g.visIdx < 0) return -1;
 				if (svgStride <= 1) {
-					const v = rtInfo.flags[sIdx];
-					return v !== null && v >= 1 ? v : 0;
+					const v = rtInfo.flags[g.visIdx];
+					return v !== null && Number.isFinite(v) && v >= 0 ? v : -1;
 				}
-				const startIdx = svgSampleIndices[sIdx];
-				const endIdx =
-					sIdx + 1 < svgSampleIndices.length
-						? svgSampleIndices[sIdx + 1]
-						: rtInfo.flags.length;
 				const counts = new Map<number, number>();
-				let bestFlag = 0;
+				let bestFlag = -1;
 				let bestCount = 0;
-				for (let j = startIdx; j < endIdx; j++) {
+				let sawZero = false;
+				for (let j = g.visIdx; j < g.visEndIdx; j++) {
 					const v = rtInfo.flags[j];
-					const f = v !== null && v >= 1 ? v : 0;
-					if (f >= 1) {
-						const nextC = (counts.get(f) ?? 0) + 1;
-						counts.set(f, nextC);
-						if (nextC > bestCount) {
-							bestCount = nextC;
-							bestFlag = f;
+					if (v !== null && Number.isFinite(v)) {
+						if (v >= 1) {
+							const nextC = (counts.get(v) ?? 0) + 1;
+							counts.set(v, nextC);
+							if (nextC > bestCount) {
+								bestCount = nextC;
+								bestFlag = v;
+							}
+						} else if (v === 0) {
+							sawZero = true;
 						}
 					}
 				}
-				return bestFlag;
+				return bestFlag >= 1 ? bestFlag : sawZero ? 0 : -1;
 			};
 
 			const svgFlags = svgDepth.map((_, sIdx) => sampleFlagAt(sIdx));
 
+			// Pinch 'hv' rock flag fills with -1 sentinels at the exact start/end depths of every
+			// valid rock-flag interval so 'hv' never stretches a rock-type block across null/filtered gaps.
+			const rfFillDepth: number[] = [];
+			const rfFillFlags: number[] = [];
+			for (let sIdx = 0; sIdx < svgDepth.length; sIdx++) {
+				const d = svgDepth[sIdx];
+				const f = svgFlags[sIdx];
+				const prevValid = sIdx > 0 && svgFlags[sIdx - 1] >= 0;
+				const nextValid = sIdx + 1 < svgDepth.length && svgFlags[sIdx + 1] >= 0;
+				if (f >= 0) {
+					if (!prevValid) {
+						rfFillDepth.push(d);
+						rfFillFlags.push(-1);
+					}
+					rfFillDepth.push(d);
+					rfFillFlags.push(f);
+					if (!nextValid) {
+						rfFillDepth.push(d);
+						rfFillFlags.push(-1);
+					}
+				} else {
+					rfFillDepth.push(d);
+					rfFillFlags.push(-1);
+				}
+			}
+
 			// Background ROCK_FLAG_0 trace (unflagged / non-reservoir intervals, matching well_log_config.py)
-			if (svgFlags.some((f) => f === 0)) {
+			if (rfFillFlags.some((f) => f === 0)) {
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
 					name: 'ROCK_FLAG_0',
-					x: svgFlags.map((f) => (f === 0 ? 1 : 0)),
-					y: svgDepth,
+					x: rfFillFlags.map((f) => (f === 0 ? 1 : 0)),
+					y: rfFillDepth,
 					xaxis: 'x6',
 					yaxis: 'y',
 					fill: 'tozerox',
@@ -1370,8 +1636,8 @@
 					type: 'scatter',
 					mode: 'lines',
 					name: `ROCK_FLAG_${flagVal}`,
-					x: svgFlags.map((f) => (f === flagVal ? 1 : 0)),
-					y: svgDepth,
+					x: rfFillFlags.map((f) => (f === flagVal ? 1 : 0)),
+					y: rfFillDepth,
 					xaxis: 'x6',
 					yaxis: 'y',
 					fill: 'tozerox',
@@ -1390,9 +1656,9 @@
 				return Number((0.92 - ((f - 1) / Math.max(1, maxF - 1)) * 0.80).toFixed(3));
 			});
 			const hoverText = svgDepth.map((_, sIdx) => {
-				const rawIdx = svgStride > 1 ? svgSampleIndices[sIdx] : sIdx;
+				const rawIdx = sampleGrid[sIdx]?.visIdx ?? -1;
 				const f = svgFlags[sIdx];
-				if (!f || f < 1) return 'Unflagged';
+				if (rawIdx < 0 || !f || f < 1) return 'Unflagged';
 				const indVal = rtInfo.indicatorValues[rawIdx];
 				const mlVal = rtInfo.mlFlags[rawIdx];
 				let txt = `DRT ${f}`;
@@ -1423,14 +1689,16 @@
 		const swt = pick('SWT').length ? pick('SWT') : pick('SWE');
 		if (swt.some((v) => v !== null)) {
 			const swtDec = decimateSvg(swt);
+			const swtClamped = swtDec.map((v) =>
+				v !== null && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null
+			);
+			const swtPinched = buildZeroPinchedFill(swtClamped, svgDepth, 0);
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
 				name: 'SWT_FILL',
-				x: swtDec.map((v) =>
-					v !== null && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0
-				),
-				y: svgDepth,
+				x: swtPinched.x,
+				y: swtPinched.y,
 				xaxis: 'x7',
 				yaxis: 'y',
 				fill: 'tozerox',
@@ -1507,16 +1775,30 @@
 		}
 		const payFlags = pick('PAY_FLAGS');
 		if (payFlags.some((v) => v !== null && v > 0)) {
+			const payDec = decimateSvg(payFlags).map((v) => (v !== null && v > 0 ? 0.12 : null));
+			const payPinched = buildZeroPinchedFill(payDec, svgDepth, 0);
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
-				name: 'PAY',
-				x: decimateSvg(payFlags.map((v) => (v && v > 0 ? 0.12 : 0))),
-				y: svgDepth,
+				name: 'PAY_FILL',
+				x: payPinched.x,
+				y: payPinched.y,
 				xaxis: 'x7',
 				yaxis: 'y',
 				fill: 'tozerox',
 				fillcolor: 'rgba(22, 163, 74, 0.65)',
+				line: { width: 0, color: 'rgba(0,0,0,0)' },
+				hoverinfo: 'skip',
+				showlegend: false
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'PAY',
+				x: payDec,
+				y: svgDepth,
+				xaxis: 'x7',
+				yaxis: 'y',
 				line: { color: '#15803D', width: 0.5 },
 				hovertemplate: 'Pay Flag: %{x}<extra></extra>'
 			});
@@ -2561,7 +2843,7 @@
 						ROCK_FLAG
 					</span>
 					<span class="mt-0.5 rounded-2xs bg-slate-200/80 px-1 py-0 text-[7px] font-semibold text-slate-700 leading-tight">
-						{activeRockTypeInfo.indicatorLabel}
+						{activeRockTypeInfo.indicatorLabel}{activeRockTypeInfo.hasMl ? ' · ML' : ''}
 					</span>
 				</div>
 				{#if activeRockTypeInfo.uniqueFlags.length > 0}
@@ -2805,8 +3087,8 @@
 					{fmtPerm(readout.PERM_TRANS)}
 				</span>
 			{/if}
-			{#if (readout.ROCK_FLAG ?? readout.DRT) !== null && (readout.ROCK_FLAG ?? readout.DRT) !== undefined && Number(readout.ROCK_FLAG ?? readout.DRT) >= 1}
-				{@const rfVal = Math.round(Number(readout.ROCK_FLAG ?? readout.DRT))}
+			{#if (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== null && (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== undefined && Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) >= 1}
+				{@const rfVal = Math.round(Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT))}
 				<span class="inline-flex items-center gap-1">
 					<strong style="color: {getRockTypeColor(rfVal)}">RT:</strong>
 					<span

@@ -1,12 +1,14 @@
 import logging
+import os
+import pickle
+import re
 import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-import numpy as np
-import pandas as pd
 from fastapi import (
     APIRouter,
     File,
@@ -17,6 +19,8 @@ from fastapi import (
     Response,
     UploadFile,
 )
+import numpy as np
+import pandas as pd
 from sqlalchemy import bindparam, select, text
 
 from quick_pp.app.backend.utils.auth import (
@@ -74,10 +78,51 @@ def reset_demo_project_state(project_id: Optional[int] = None) -> None:
         _ephemeral_well_headers.clear()
 
 
+_SHARED_CACHE_DIR = Path(tempfile.gettempdir()) / "qpp_well_cache_sync"
+
+
+def _safe_cache_token(val: Any) -> str:
+    return "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in str(val))
+
+
+def write_shared_well_cache(project_id: int, well_name: str, df: pd.DataFrame) -> None:
+    """Persist an updated in-memory merged well DataFrame to shared temp storage so all worker processes see it."""
+    try:
+        _SHARED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        w_tok = _safe_cache_token(well_name)
+        target = _SHARED_CACHE_DIR / f"mem_{project_id}_{w_tok}.pkl"
+        tmp = _SHARED_CACHE_DIR / f"mem_{project_id}_{w_tok}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            pickle.dump(df, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, target)
+    except Exception:
+        pass
+
+
 def invalidate_well_cache(
     project_id: Optional[int] = None, well_name: Optional[str] = None
 ) -> int:
-    """Invalidate cached merged well data for a specific well, project, or globally."""
+    """Invalidate cached merged well data for a specific well, project, or globally across all workers."""
+    try:
+        _SHARED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        now_s = str(time.time()).encode("utf-8")
+        if project_id is not None and well_name is not None:
+            w_tok = _safe_cache_token(well_name)
+            (_SHARED_CACHE_DIR / f"inv_{project_id}_{w_tok}.stamp").write_bytes(now_s)
+            mem_p = _SHARED_CACHE_DIR / f"mem_{project_id}_{w_tok}.pkl"
+            if mem_p.exists():
+                mem_p.unlink(missing_ok=True)
+        elif project_id is not None:
+            (_SHARED_CACHE_DIR / f"inv_{project_id}__all.stamp").write_bytes(now_s)
+            for p in _SHARED_CACHE_DIR.glob(f"mem_{project_id}_*.pkl"):
+                p.unlink(missing_ok=True)
+        else:
+            (_SHARED_CACHE_DIR / "inv_global.stamp").write_bytes(now_s)
+            for p in _SHARED_CACHE_DIR.glob("mem_*.pkl"):
+                p.unlink(missing_ok=True)
+    except Exception:
+        pass
+
     if project_id is not None and well_name is not None:
         prefix = f"{project_id}_{well_name}_"
         keys_to_remove = [k for k in _merged_data_cache if k.startswith(prefix)]
@@ -923,7 +968,9 @@ def project_read_las(
                     w_name = str(meta_d.get("well_name") or fallback_stem).strip()
                     ldf["WELL_NAME"] = w_name
                     existing_demo_df = proj_eph.get(w_name)
-                    if existing_demo_df is None and w_name in set(proj.get_well_names()):
+                    if existing_demo_df is None and w_name in set(
+                        proj.get_well_names()
+                    ):
                         try:
                             existing_demo_df = proj.get_well_data_optimized(w_name)
                         except Exception:
@@ -1234,14 +1281,45 @@ def _get_merged_dataframe_sync(
     tol = float(tolerance) if tolerance is not None else 0.16
     cache_key = f"{project_id}_{well_name}_{tol}"
     now = time.time()
+    w_tok = _safe_cache_token(well_name)
+
+    inv_ts = 0.0
+    mem_ts = 0.0
+    mem_pkl_path = _SHARED_CACHE_DIR / f"mem_{project_id}_{w_tok}.pkl"
+    try:
+        for stamp_p in (
+            _SHARED_CACHE_DIR / f"inv_{project_id}_{w_tok}.stamp",
+            _SHARED_CACHE_DIR / f"inv_{project_id}__all.stamp",
+            _SHARED_CACHE_DIR / "inv_global.stamp",
+        ):
+            if stamp_p.exists():
+                inv_ts = max(inv_ts, stamp_p.stat().st_mtime)
+        if mem_pkl_path.exists():
+            mem_ts = mem_pkl_path.stat().st_mtime
+    except Exception:
+        pass
 
     cached_entry = _merged_data_cache.get(cache_key)
     if cached_entry is not None:
         cached_ts, cached_df = cached_entry
-        if is_demo_mode() or (now - cached_ts < _cache_ttl):
+        if (
+            cached_ts >= inv_ts
+            and cached_ts >= mem_ts
+            and (is_demo_mode() or (now - cached_ts < _cache_ttl))
+        ):
             return cached_df.copy()
         else:
             _merged_data_cache.pop(cache_key, None)
+
+    if mem_ts > inv_ts and (is_demo_mode() or (now - mem_ts < _cache_ttl)):
+        try:
+            with open(mem_pkl_path, "rb") as fh:
+                shared_df = pickle.load(fh)
+            if isinstance(shared_df, pd.DataFrame) and not shared_df.empty:
+                _merged_data_cache[cache_key] = (mem_ts, shared_df)
+                return shared_df.copy()
+        except Exception:
+            pass
 
     eph_df = _ephemeral_wells.get(project_id, {}).get(well_name)
     if eph_df is not None:
@@ -1380,7 +1458,9 @@ def _get_merged_dataframe_sync(
                             ("cpore", ("POR", "CPORE", "POROSITY")),
                             ("cperm", ("PERM", "CPERM", "PERMEABILITY")),
                         ):
-                            mask = prop_upper.isin(aliases) & measurements["value"].notna()
+                            mask = (
+                                prop_upper.isin(aliases) & measurements["value"].notna()
+                            )
                             filtered = measurements[mask]
                             if not filtered.empty:
                                 val = float(filtered.iloc[0]["value"])

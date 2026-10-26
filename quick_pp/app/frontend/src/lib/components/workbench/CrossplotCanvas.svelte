@@ -2787,15 +2787,87 @@
 			};
 
 			const buildVshDepthOverlayTraces = (xAxis: string, yAxis: string) => {
+				const lineY: (number | null)[] = [];
+				const vshDnLineX: (number | null)[] = [];
+				const vshGrLineX: (number | null)[] = [];
+				const lineCustom: (number | null)[] = [];
+
+				const fillY: number[] = [];
+				const vshDnFillX: number[] = [];
+				const vshGrFillX: number[] = [];
+
+				for (let i = 0; i < allRows.length; i++) {
+					const r = allRows[i];
+					const prev = i > 0 ? allRows[i - 1] : null;
+					const next = i + 1 < allRows.length ? allRows[i + 1] : null;
+					const isGapBefore =
+						prev !== null &&
+						(r.logIndex !== prev.logIndex + 1 || Math.abs(r.DEPTH - prev.DEPTH) > 1.5);
+					const isGapAfter =
+						next !== null &&
+						(next.logIndex !== r.logIndex + 1 || Math.abs(next.DEPTH - r.DEPTH) > 1.5);
+
+					if (isGapBefore) {
+						lineY.push(null);
+						vshDnLineX.push(null);
+						vshGrLineX.push(null);
+						lineCustom.push(null);
+					}
+					lineY.push(r.DEPTH);
+					vshDnLineX.push(r.VSH_DN);
+					vshGrLineX.push(r.VSH_GR);
+					lineCustom.push(r.logIndex);
+
+					if (i === 0 || isGapBefore) {
+						fillY.push(r.DEPTH);
+						vshDnFillX.push(r.VSH_DN);
+						vshGrFillX.push(r.VSH_DN);
+					}
+					fillY.push(r.DEPTH);
+					vshDnFillX.push(r.VSH_DN);
+					vshGrFillX.push(r.VSH_GR);
+					if (i === allRows.length - 1 || isGapAfter) {
+						fillY.push(r.DEPTH);
+						vshDnFillX.push(r.VSH_DN);
+						vshGrFillX.push(r.VSH_DN);
+					}
+				}
+
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'VSH_DN_FILL_BASE',
+					x: vshDnFillX,
+					y: fillY,
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'VSH_GR_FILL',
+					x: vshGrFillX,
+					y: fillY,
+					xaxis: xAxis,
+					yaxis: yAxis,
+					fill: 'tonextx',
+					fillcolor: 'rgba(37, 99, 235, 0.14)',
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
 					name: 'VSH_DN (Neutron-Density)',
-					x: allRows.map((r) => r.VSH_DN),
-					y: allRows.map((r) => r.DEPTH),
+					x: vshDnLineX,
+					y: lineY,
 					xaxis: xAxis,
 					yaxis: yAxis,
-					customdata: allRows.map((r) => r.logIndex),
+					customdata: lineCustom,
 					line: { color: '#0F172A', width: 1.5 },
 					hovertemplate: 'Depth: %{y:.1f}m<br>VSH_DN: %{x:.3f}<extra></extra>'
 				});
@@ -2803,13 +2875,11 @@
 					type: 'scatter',
 					mode: 'lines',
 					name: 'VSH_GR (Calibrated GR)',
-					x: allRows.map((r) => r.VSH_GR),
-					y: allRows.map((r) => r.DEPTH),
+					x: vshGrLineX,
+					y: lineY,
 					xaxis: xAxis,
 					yaxis: yAxis,
-					customdata: allRows.map((r) => r.logIndex),
-					fill: 'tonextx',
-					fillcolor: 'rgba(37, 99, 235, 0.14)',
+					customdata: lineCustom,
 					line: { color: '#16A34A', width: 1.5 },
 					hovertemplate: 'Depth: %{y:.1f}m<br>VSH_GR: %{x:.3f}<extra></extra>'
 				});
@@ -2847,13 +2917,28 @@
 						});
 					}
 				}
+				const errLineX: (number | null)[] = [];
+				const errLineY: (number | null)[] = [];
+				for (let i = 0; i < allRows.length; i++) {
+					const r = allRows[i];
+					const prev = i > 0 ? allRows[i - 1] : null;
+					if (
+						prev !== null &&
+						(r.logIndex !== prev.logIndex + 1 || Math.abs(r.DEPTH - prev.DEPTH) > 1.5)
+					) {
+						errLineX.push(null);
+						errLineY.push(null);
+					}
+					errLineX.push(r.ERR_VSH);
+					errLineY.push(r.DEPTH);
+				}
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
 					name: 'ΔVsh Profile',
 					showlegend: false,
-					x: allRows.map((r) => r.ERR_VSH),
-					y: allRows.map((r) => r.DEPTH),
+					x: errLineX,
+					y: errLineY,
 					xaxis: xAxis,
 					yaxis: yAxis,
 					hoverinfo: 'skip',

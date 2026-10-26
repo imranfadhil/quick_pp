@@ -135,17 +135,92 @@
 			if (!useCurrentFits) {
 				hasManualEdits = false;
 			}
+			const fitsMap = (data.fits ?? {}) as Record<
+				string,
+				{ a: number; b: number; r2: number | null; count: number }
+			>;
+			const wnArr = [...(data.data?.well_names ?? [])];
+			const dArr = [...(data.data?.depths ?? [])];
+			const phitArr = [...(data.data?.phit ?? [])];
+			const permArr = [...(data.data?.perm ?? [])];
+			const rfArr: (number | null)[] = [...(data.data?.rock_flags ?? [])];
+			let ptArr: (number | null)[] = [
+				...((data.data as any)?.perm_pred ?? (data.data as any)?.perm_trans ?? [])
+			];
+
+			// Ensure any in-memory propagated rock flags from Rock Typing tab are applied
+			const rtRes = projectData.rockTypingResult;
+			if (rtRes) {
+				const rtLookup = new Map<string, number>();
+				if (Array.isArray(rtRes.well_names)) {
+					for (let i = 0; i < rtRes.well_names.length; i++) {
+						const rfV = rtRes.rock_flags?.[i] ?? rtRes.rock_flags_ml?.[i];
+						if (typeof rfV === 'number' && Number.isFinite(rfV) && rfV >= 1) {
+							rtLookup.set(
+								`${rtRes.well_names[i]}__${Math.round(Number(rtRes.depths[i]) * 100)}`,
+								Math.round(rfV)
+							);
+						}
+					}
+				}
+				if (Array.isArray(rtRes.log_well_names) && Array.isArray(rtRes.log_depths)) {
+					for (let i = 0; i < rtRes.log_well_names.length; i++) {
+						const rfV =
+							projectData.drtClassifierPropagated && projectData.drtPropagationMode === 'full_ml'
+								? (rtRes.log_rock_flags_ml?.[i] ?? rtRes.log_rock_flags?.[i])
+								: (rtRes.log_rock_flags?.[i] ?? rtRes.log_rock_flags_ml?.[i]);
+						if (typeof rfV === 'number' && Number.isFinite(rfV) && rfV >= 1) {
+							rtLookup.set(
+								`${rtRes.log_well_names[i]}__${Math.round(Number(rtRes.log_depths[i]) * 100)}`,
+								Math.round(rfV)
+							);
+						}
+					}
+				}
+				if (rtLookup.size > 0) {
+					for (let i = 0; i < wnArr.length; i++) {
+						if (
+							!(
+								typeof rfArr[i] === 'number' &&
+								Number.isFinite(rfArr[i]) &&
+								(rfArr[i] as number) >= 1
+							)
+						) {
+							const hit = rtLookup.get(`${wnArr[i]}__${Math.round(Number(dArr[i]) * 100)}`);
+							if (hit !== undefined) {
+								rfArr[i] = hit;
+							}
+						}
+						const r = rfArr[i];
+						const p = phitArr[i];
+						const f = r !== null && r !== undefined ? fitsMap[String(r)] : undefined;
+						if (
+							(ptArr[i] === null || ptArr[i] === undefined) &&
+							f &&
+							typeof p === 'number' &&
+							Number.isFinite(p) &&
+							p > 0
+						) {
+							const kPred = f.a * Math.pow(p, f.b);
+							ptArr[i] = Number.isFinite(kPred) ? Number(kPred.toFixed(6)) : null;
+						}
+					}
+				}
+			}
+
 			projectData.permTransformResult = {
-				fits: data.fits as any,
+				fits: fitsMap,
 				...(data.data as any),
-				perm_pred: (data.data as any).perm_pred ?? (data.data as any).perm_trans ?? []
+				well_names: wnArr,
+				depths: dArr,
+				phit: phitArr,
+				perm: permArr,
+				rock_flags: rfArr,
+				perm_pred: ptArr
 			};
 			projectData.markMultiWellComputed('perm-transform');
 
-			if (workbench.wellId && data.data?.well_names) {
-				const wnArr = data.data.well_names;
-				const dArr = data.data.depths;
-				const ptArr = (data.data as any).perm_trans ?? (data.data as any).perm_pred ?? [];
+			if (workbench.wellId && wnArr.length > 0) {
 				const wDepths: number[] = [];
 				const wPt: (number | null)[] = [];
 				for (let i = 0; i < wnArr.length; i++) {

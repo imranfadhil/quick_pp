@@ -3170,6 +3170,13 @@ class WellDataState {
 			'PHIT',
 			'PHIE',
 			'PERM',
+			'PERM_TRANS',
+			'ROCK_FLAG',
+			'ROCK_FLAG_ML',
+			'DRT',
+			'FZI',
+			'R35',
+			'RFN',
 			'SWT',
 			'SWE'
 		]) {
