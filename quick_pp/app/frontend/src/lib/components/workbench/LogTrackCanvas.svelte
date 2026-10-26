@@ -506,12 +506,73 @@
 		return resolveRockTypeSeries(wellData.visibleIndices);
 	});
 
+	let cporeTraceIdx = -1;
+	let cpermTraceIdx = -1;
+
+	function buildCoreMarkerData(indices: number[], deptAll: number[]) {
+		const cporeRaw = wellData.curves['CPORE'] ?? wellData.curves['CORE_PORO'];
+		const cporeX: number[] = [];
+		const cporeY: number[] = [];
+		const cporeCustom: number[] = [];
+		if (cporeRaw && cporeRaw.length > 0) {
+			for (const i of indices) {
+				const v = cporeRaw[i];
+				const d = deptAll[i];
+				if (typeof v === 'number' && Number.isFinite(v) && v > 0 && Number.isFinite(d)) {
+					cporeX.push(v * 2.0);
+					cporeY.push(d);
+					cporeCustom.push(v);
+				}
+			}
+		}
+		if (cporeX.length === 0 && wellData.coreSamples.length > 0) {
+			for (const s of wellData.coreSamples) {
+				const d = Number(s.depth ?? s.DEPTH);
+				const p = Number(s.porosity ?? s.CPORE ?? s.poro);
+				if (Number.isFinite(d) && Number.isFinite(p) && p > 0) {
+					const normP = p > 1 ? p / 100 : p;
+					cporeX.push(normP * 2.0);
+					cporeY.push(d);
+					cporeCustom.push(normP);
+				}
+			}
+		}
+
+		const cpermRaw = wellData.curves['CPERM'] ?? wellData.curves['CORE_PERM'];
+		const cpermX: number[] = [];
+		const cpermY: number[] = [];
+		if (cpermRaw && cpermRaw.length > 0) {
+			for (const i of indices) {
+				const v = cpermRaw[i];
+				const d = deptAll[i];
+				if (typeof v === 'number' && Number.isFinite(v) && v > 0 && Number.isFinite(d)) {
+					cpermX.push(v);
+					cpermY.push(d);
+				}
+			}
+		}
+		if (cpermX.length === 0 && wellData.coreSamples.length > 0) {
+			for (const s of wellData.coreSamples) {
+				const d = Number(s.depth ?? s.DEPTH);
+				const k = Number(s.permeability ?? s.CPERM ?? s.perm);
+				if (Number.isFinite(d) && Number.isFinite(k) && k > 0) {
+					cpermX.push(k);
+					cpermY.push(d);
+				}
+			}
+		}
+
+		return { cporeX, cporeY, cporeCustom, cpermX, cpermY };
+	}
+
 	function buildTracesAndLayout() {
 		// Clone into a plain (non-Proxy) array inside untrack so Plotly never mutates or tracks Svelte's $state Proxy
 		const currentYRange: [number, number] = untrack(() => [yRange[0], yRange[1]]);
 		const indices = wellData.visibleIndices;
 		const deptAll = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 		const depth = indices.map((i) => deptAll[i]);
+		cporeTraceIdx = -1;
+		cpermTraceIdx = -1;
 		if (depth.length === 0) return { traces: [], layout: {} };
 
 		const pick = (mnemonic: string): (number | null)[] => {
@@ -520,10 +581,9 @@
 			return indices.map((i) => (Number.isFinite(arr[i]) ? arr[i] : null));
 		};
 
-		// Decimate SVG-only polygon fill traces on ultra-dense wells (>3500 rows) to prevent
-		// 350k+ SVG <path> vertices from lagging browser pan/zoom, while keeping all WebGL
-		// (scattergl) curve lines at 100% full native depth resolution.
-		const svgStride = depth.length > 3500 ? Math.ceil(depth.length / 3500) : 1;
+		// Decimate SVG traces on ultra-dense wells (>2500 rows) so all 7 tracks render purely in
+		// crisp SVG ('scatter') without WebGL ('scattergl') buffer clear warnings or context overhead.
+		const svgStride = depth.length > 2500 ? Math.ceil(depth.length / 2500) : 1;
 		const svgSampleIndices: number[] = [];
 		if (svgStride > 1) {
 			for (let i = 0; i < depth.length; i += svgStride) {
@@ -566,11 +626,11 @@
 			}
 
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'GR',
-				x: gr,
-				y: depth,
+				x: grForFill,
+				y: svgDepth,
 				xaxis: 'x',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.gr, width: 1.4 },
@@ -580,13 +640,14 @@
 		const cali = pick('CALI');
 		const bs = pick('BS');
 		if (bs.some((v) => v !== null)) {
+			const bsDec = decimateSvg(bs);
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'BS',
-				x: bs.map((v) => (v !== null ? (v - 6) * 20 : null)),
-				customdata: bs,
-				y: depth,
+				x: bsDec.map((v) => (v !== null ? (v - 6) * 20 : null)),
+				customdata: bsDec,
+				y: svgDepth,
 				xaxis: 'x',
 				yaxis: 'y',
 				line: { color: '#64748B', width: 1.0, dash: 'dash' },
@@ -594,13 +655,14 @@
 			});
 		}
 		if (cali.length) {
+			const caliDec = decimateSvg(cali);
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'CALI',
-				x: cali.map((v) => (v !== null ? (v - 6) * 20 : null)), // normalized onto 0-200 track (6-16 in)
-				customdata: cali,
-				y: depth,
+				x: caliDec.map((v) => (v !== null ? (v - 6) * 20 : null)), // normalized onto 0-200 track (6-16 in)
+				customdata: caliDec,
+				y: svgDepth,
 				xaxis: 'x',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.cali, width: 1.1, dash: 'dot' },
@@ -707,12 +769,13 @@
 			}
 			if (arr.some((v) => v !== null && v > 0)) {
 				const dimForTs = tsOverlayActive && spec.primary !== 'RT';
+				const arrDec = decimateSvg(arr);
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'lines',
 					name: activeMnem,
-					x: arr.map((v) => (v !== null && v > 0 ? v : null)),
-					y: depth,
+					x: arrDec.map((v) => (v !== null && v > 0 ? v : null)),
+					y: svgDepth,
 					xaxis: 'x2',
 					yaxis: 'y',
 					opacity: dimForTs ? 0.22 : 1.0,
@@ -725,12 +788,13 @@
 		if (tsOverlayActive) {
 			const rtMod = pick('RT_MOD');
 			if (rtMod.some((v) => v !== null && v > 0)) {
+				const rtModDec = decimateSvg(rtMod);
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'lines',
 					name: 'RT_MOD',
-					x: rtMod.map((v) => (v !== null && v > 0 ? v : null)),
-					y: depth,
+					x: rtModDec.map((v) => (v !== null && v > 0 ? v : null)),
+					y: svgDepth,
 					xaxis: 'x2',
 					yaxis: 'y',
 					line: { color: PETRO_COLORS.rtMod, width: 1.65, dash: 'dash' },
@@ -874,12 +938,12 @@
 
 		if (pef.some((v) => v !== null && v >= 0)) {
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'PEF',
-				x: pefAsNphi,
-				customdata: pef,
-				y: depth,
+				x: decimateSvg(pefAsNphi),
+				customdata: decimateSvg(pef),
+				y: svgDepth,
 				xaxis: 'x3',
 				yaxis: 'y',
 				line: { color: 'rgba(168, 85, 247, 0.55)', width: 1.0, dash: 'dot' },
@@ -888,12 +952,12 @@
 		}
 		if (drho.some((v) => v !== null)) {
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'DRHO',
-				x: drhoAsNphi,
-				customdata: drho,
-				y: depth,
+				x: decimateSvg(drhoAsNphi),
+				customdata: decimateSvg(drho),
+				y: svgDepth,
 				xaxis: 'x3',
 				yaxis: 'y',
 				line: { color: 'rgba(217, 119, 6, 0.6)', width: 1.0, dash: 'dot' },
@@ -902,11 +966,11 @@
 		}
 		if (nphi.length) {
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'NPHI',
-				x: nphi,
-				y: depth,
+				x: decimateSvg(nphi),
+				y: svgDepth,
 				xaxis: 'x3',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.nphi, width: 1.45, dash: 'dash' },
@@ -915,12 +979,12 @@
 		}
 		if (rhob.length) {
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'RHOB',
-				x: rhobAsNphi,
-				customdata: rhob,
-				y: depth,
+				x: decimateSvg(rhobAsNphi),
+				customdata: decimateSvg(rhob),
+				y: svgDepth,
 				xaxis: 'x3',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.rhob, width: 1.45 },
@@ -929,12 +993,12 @@
 		}
 		if (showDtc && dtc.some((v) => v !== null && v > 0)) {
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: activeDtcMnem,
-				x: dtcAsNphi,
-				customdata: dtc,
-				y: depth,
+				x: decimateSvg(dtcAsNphi),
+				customdata: decimateSvg(dtc),
+				y: svgDepth,
 				xaxis: 'x3',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.dt, width: 1.35, dash: 'dashdot' },
@@ -946,11 +1010,11 @@
 			const rhobHc = pick('RHOB_HC');
 			if (nphiHc.some((v) => v !== null)) {
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'lines',
 					name: 'NPHI_HC',
-					x: nphiHc,
-					y: depth,
+					x: decimateSvg(nphiHc),
+					y: svgDepth,
 					xaxis: 'x3',
 					yaxis: 'y',
 					line: { color: '#1D4ED8', width: 1.1, dash: 'dot' },
@@ -958,13 +1022,14 @@
 				});
 			}
 			if (rhobHc.some((v) => v !== null)) {
+				const rhobHcDec = decimateSvg(rhobHc);
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'lines',
 					name: 'RHOB_HC',
-					x: rhobHc.map((r) => (r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null)),
-					customdata: rhobHc,
-					y: depth,
+					x: rhobHcDec.map((r) => (r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null)),
+					customdata: rhobHcDec,
+					y: svgDepth,
 					xaxis: 'x3',
 					yaxis: 'y',
 					line: { color: '#B91C1C', width: 1.1, dash: 'dot' },
@@ -975,7 +1040,7 @@
 
 		// Track 4 (xaxis4): Evaluated Lithology & Porosity (stacked mineral volumes + PHIT + CPORE)
 		const phit = pick('PHIT').length ? pick('PHIT') : pick('PHIE');
-		const lithoToPlot = resolveActiveLithoSpecs(indices);
+		const lithoToPlot = activeLithoSpecs;
 		let cumVol = new Array(svgDepth.length).fill(0);
 		let hasPrevLithTrace = false;
 
@@ -1011,13 +1076,14 @@
 			arr.map((v) => (v !== null && Number.isFinite(v) ? v * 2.0 : null));
 
 		if (phit.some((v) => v !== null)) {
+			const phitDec = decimateSvg(phit);
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'PHIT',
-				x: scalePoro(phit),
-				customdata: phit,
-				y: depth,
+				x: scalePoro(phitDec),
+				customdata: phitDec,
+				y: svgDepth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.phie, width: 1.6 },
@@ -1028,9 +1094,9 @@
 		if (tsOverlayActive) {
 			const phitSand = pick('PHIT_SAND');
 			if (phitSand.some((v) => v !== null)) {
+				const psandFill = decimateSvg(phitSand);
 				if (phit.some((v) => v !== null)) {
 					const phitFill = decimateSvg(phit);
-					const psandFill = decimateSvg(phitSand);
 					const upliftBase: number[] = new Array(svgDepth.length);
 					const upliftTop: number[] = new Array(svgDepth.length);
 					let lastP = 0;
@@ -1075,12 +1141,12 @@
 					});
 				}
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'lines',
 					name: 'PHIT_SAND',
-					x: scalePoro(phitSand),
-					customdata: phitSand,
-					y: depth,
+					x: scalePoro(psandFill),
+					customdata: psandFill,
+					y: svgDepth,
 					xaxis: 'x4',
 					yaxis: 'y',
 					line: { color: PETRO_COLORS.phitSand, width: 1.65, dash: 'dash' },
@@ -1092,13 +1158,14 @@
 		// Upscaled blocked porosity & P10/P90 uncertainty on Track 4 (scaled 0 -> 0.5)
 		const phitBlk = pick('PHIT_BLK');
 		if (phitBlk.some((v) => v !== null)) {
+			const phitBlkDec = decimateSvg(phitBlk);
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
 				name: 'PHIT_BLK',
-				x: scalePoro(phitBlk),
-				customdata: phitBlk,
-				y: depth,
+				x: scalePoro(phitBlkDec),
+				customdata: phitBlkDec,
+				y: svgDepth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				line: { color: '#0F172A', width: 1.5, shape: 'hv' },
@@ -1108,25 +1175,27 @@
 		const phitP10 = pick('PHIT_P10');
 		const phitP90 = pick('PHIT_P90');
 		if (phitP10.some((v) => v !== null) && phitP90.some((v) => v !== null)) {
+			const phitP10Dec = decimateSvg(phitP10);
+			const phitP90Dec = decimateSvg(phitP90);
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'PHIT_P10',
-				x: scalePoro(phitP10),
-				customdata: phitP10,
-				y: depth,
+				x: scalePoro(phitP10Dec),
+				customdata: phitP10Dec,
+				y: svgDepth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				line: { color: '#6366F1', width: 1.0, dash: 'dot' },
 				hovertemplate: 'PHIT P10: %{customdata:.3f}<extra></extra>'
 			});
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'PHIT_P90',
-				x: scalePoro(phitP90),
-				customdata: phitP90,
-				y: depth,
+				x: scalePoro(phitP90Dec),
+				customdata: phitP90Dec,
+				y: svgDepth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				line: { color: '#6366F1', width: 1.0, dash: 'dot' },
@@ -1134,54 +1203,34 @@
 			});
 		}
 
-		// Core Porosity black dots (from CPORE curve or coreSamples, scaled 0 -> 0.5)
-		const cpore = pick('CPORE').length ? pick('CPORE') : pick('CORE_PORO');
-		if (cpore.some((v) => v !== null)) {
+		// Core Porosity & Core Permeability discrete points (filtered to non-null finite plugs)
+		const { cporeX, cporeY, cporeCustom, cpermX, cpermY } = buildCoreMarkerData(indices, deptAll);
+		if (cporeX.length > 0) {
+			cporeTraceIdx = traces.length;
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'markers',
 				name: 'CPORE',
-				x: scalePoro(cpore),
-				customdata: cpore,
-				y: depth,
+				x: cporeX,
+				customdata: cporeCustom,
+				y: cporeY,
 				xaxis: 'x4',
 				yaxis: 'y',
 				marker: { color: PETRO_COLORS.core, size: 5.5, symbol: 'circle' },
 				hovertemplate: 'Core Poro: %{customdata:.3f}<extra></extra>'
 			});
-		} else if (wellData.coreSamples.length > 0) {
-			const cDepths = wellData.coreSamples
-				.map((s) => Number(s.depth ?? s.DEPTH))
-				.filter(Number.isFinite);
-			const cPoros = wellData.coreSamples.map((s) => {
-				const p = Number(s.porosity ?? s.CPORE ?? s.poro);
-				return Number.isFinite(p) ? (p > 1 ? p / 100 : p) : null;
-			});
-			if (cPoros.some((v) => v !== null)) {
-				traces.push({
-					type: 'scattergl',
-					mode: 'markers',
-					name: 'CPORE',
-					x: scalePoro(cPoros),
-					customdata: cPoros,
-					y: cDepths,
-					xaxis: 'x4',
-					yaxis: 'y',
-					marker: { color: PETRO_COLORS.core, size: 5.5, symbol: 'circle' },
-					hovertemplate: 'Core Poro: %{customdata:.3f}<extra></extra>'
-				});
-			}
 		}
 
 		// Track 5 (xaxis5): Permeability (Log 0.01 - 10000 mD) + PERM_TRANS + PERM_BLK + CPERM points
 		const perm = pick('PERM');
 		if (perm.some((v) => v !== null && v > 0)) {
+			const permDec = decimateSvg(perm);
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'PERM',
-				x: perm.map((v) => (v !== null && v > 0 ? v : null)),
-				y: depth,
+				x: permDec.map((v) => (v !== null && v > 0 ? v : null)),
+				y: svgDepth,
 				xaxis: 'x5',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.perm, width: 1.5 },
@@ -1190,12 +1239,13 @@
 		}
 		const permTrans = pick('PERM_TRANS');
 		if (permTrans.some((v) => v !== null && v > 0)) {
+			const permTransDec = decimateSvg(permTrans);
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'PERM_TRANS',
-				x: permTrans.map((v) => (v !== null && v > 0 ? v : null)),
-				y: depth,
+				x: permTransDec.map((v) => (v !== null && v > 0 ? v : null)),
+				y: svgDepth,
 				xaxis: 'x5',
 				yaxis: 'y',
 				line: { color: '#7C3AED', width: 1.6, dash: 'dash' },
@@ -1205,23 +1255,25 @@
 		const permP10 = pick('PERM_P10');
 		const permP90 = pick('PERM_P90');
 		if (permP10.some((v) => v !== null && v > 0) && permP90.some((v) => v !== null && v > 0)) {
+			const permP10Dec = decimateSvg(permP10);
+			const permP90Dec = decimateSvg(permP90);
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'PERM_P10',
-				x: permP10.map((v) => (v !== null && v > 0 ? v : null)),
-				y: depth,
+				x: permP10Dec.map((v) => (v !== null && v > 0 ? v : null)),
+				y: svgDepth,
 				xaxis: 'x5',
 				yaxis: 'y',
 				line: { color: '#D97706', width: 1.0, dash: 'dot' },
 				hovertemplate: 'PERM P10: %{x:.2f} mD<extra></extra>'
 			});
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'PERM_P90',
-				x: permP90.map((v) => (v !== null && v > 0 ? v : null)),
-				y: depth,
+				x: permP90Dec.map((v) => (v !== null && v > 0 ? v : null)),
+				y: svgDepth,
 				xaxis: 'x5',
 				yaxis: 'y',
 				line: { color: '#D97706', width: 1.0, dash: 'dot' },
@@ -1230,58 +1282,31 @@
 		}
 		const permBlk = pick('PERM_BLK');
 		if (permBlk.some((v) => v !== null && v > 0)) {
+			const permBlkDec = decimateSvg(permBlk);
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
 				name: 'PERM_BLK',
-				x: permBlk.map((v) => (v !== null && v > 0 ? v : null)),
-				y: depth,
+				x: permBlkDec.map((v) => (v !== null && v > 0 ? v : null)),
+				y: svgDepth,
 				xaxis: 'x5',
 				yaxis: 'y',
 				line: { color: '#0F172A', width: 1.5, shape: 'hv' },
 				hovertemplate: 'PERM_BLK: %{x:.2f} mD<extra></extra>'
 			});
 		}
-		const cperm = pick('CPERM').length ? pick('CPERM') : pick('CORE_PERM');
-		if (cperm.some((v) => v !== null && v > 0)) {
+		if (cpermX.length > 0) {
+			cpermTraceIdx = traces.length;
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'markers',
 				name: 'CPERM',
-				x: cperm.map((v) => (v !== null && v > 0 ? v : null)),
-
-				y: depth,
+				x: cpermX,
+				y: cpermY,
 				xaxis: 'x5',
 				yaxis: 'y',
 				marker: { color: PETRO_COLORS.core, size: 5.5, symbol: 'diamond' },
 				hovertemplate: 'Core Perm: %{x:.2f} mD<extra></extra>'
-			});
-		} else if (wellData.coreSamples.length > 0) {
-			const cDepths: number[] = [];
-			const cPerms: number[] = [];
-			for (const s of wellData.coreSamples) {
-				const d = Number(s.depth ?? s.DEPTH);
-				const k = Number(s.permeability ?? s.CPERM ?? s.perm);
-				if (Number.isFinite(d) && Number.isFinite(k) && k > 0) {
-					cDepths.push(d);
-					cPerms.push(k);
-				}
-			}
-			if (cPerms.length > 0) {
-				traces.push({
-					type: 'scattergl',
-					mode: 'markers',
-					name: 'CPERM',
-					x: cPerms,
-					y: cDepths,
-					xaxis: 'x5',
-					yaxis: 'y',
-					marker: { color: PETRO_COLORS.core, size: 5.5, symbol: 'diamond' },
-					hovertemplate: 'Core Perm: %{x:.2f} mD<extra></extra>'
-				});
-			}
-		}
-		if (false) { void ({
 			});
 		}
 
@@ -1289,7 +1314,7 @@
 		// Emulates ROCK_FLAG from well_log_config.py (one-hot color-filled bands + ROCK_FLAG_0 warm background)
 		// and improves it with zero-bleed stepped ('hv') rectangular blocks, unified ROCK_TYPE_PALETTE colors,
 		// a stepped reservoir-quality staircase curve, and rich DRT + indicator (FZI / R35 / RFN) hover tooltips.
-		const rtInfo = resolveRockTypeSeries(indices);
+		const rtInfo = activeRockTypeInfo;
 		if (rtInfo.uniqueFlags.length > 0) {
 			const sampleFlagAt = (sIdx: number): number => {
 				if (svgStride <= 1) {
@@ -1359,16 +1384,17 @@
 
 			// Stepped reservoir-quality staircase curve (DRT 1 on right -> DRT K on left) + unified rich hover tooltip
 			const maxF = Math.max(rtInfo.maxFlag, 2);
-			const stepX = depth.map((_, i) => {
-				const f = rtInfo.flags[i];
-				if (f === null || f < 1) return null;
+			const stepX = svgDepth.map((_, sIdx) => {
+				const f = svgFlags[sIdx];
+				if (!f || f < 1) return null;
 				return Number((0.92 - ((f - 1) / Math.max(1, maxF - 1)) * 0.80).toFixed(3));
 			});
-			const hoverText = depth.map((_, i) => {
-				const f = rtInfo.flags[i];
-				if (f === null || f < 1) return 'Unflagged';
-				const indVal = rtInfo.indicatorValues[i];
-				const mlVal = rtInfo.mlFlags[i];
+			const hoverText = svgDepth.map((_, sIdx) => {
+				const rawIdx = svgStride > 1 ? svgSampleIndices[sIdx] : sIdx;
+				const f = svgFlags[sIdx];
+				if (!f || f < 1) return 'Unflagged';
+				const indVal = rtInfo.indicatorValues[rawIdx];
+				const mlVal = rtInfo.mlFlags[rawIdx];
 				let txt = `DRT ${f}`;
 				if (indVal !== null && Number.isFinite(indVal)) {
 					txt += ` | ${rtInfo.indicatorLabel}: ${indVal.toFixed(2)}`;
@@ -1385,7 +1411,7 @@
 				name: 'ROCK_FLAG',
 				x: stepX,
 				text: hoverText,
-				y: depth,
+				y: svgDepth,
 				xaxis: 'x6',
 				yaxis: 'y',
 				line: { color: 'rgba(15, 23, 42, 0.78)', width: 1.15, shape: 'hv' },
@@ -1396,11 +1422,12 @@
 		// Track 7 (xaxis7): Fluid Saturation (SWT/SWE 1.0 -> 0.0), SWT_BLK, SW_P10/P90 & Pay Flag
 		const swt = pick('SWT').length ? pick('SWT') : pick('SWE');
 		if (swt.some((v) => v !== null)) {
+			const swtDec = decimateSvg(swt);
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
 				name: 'SWT_FILL',
-				x: decimateSvg(swt).map((v) =>
+				x: swtDec.map((v) =>
 					v !== null && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0
 				),
 				y: svgDepth,
@@ -1413,11 +1440,11 @@
 				showlegend: false
 			});
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'SWT',
-				x: swt,
-				y: depth,
+				x: swtDec,
+				y: svgDepth,
 				xaxis: 'x7',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.water, width: 1.5 },
@@ -1430,8 +1457,8 @@
 				type: 'scatter',
 				mode: 'lines',
 				name: 'SWT_BLK',
-				x: swtBlk,
-				y: depth,
+				x: decimateSvg(swtBlk),
+				y: svgDepth,
 				xaxis: 'x7',
 				yaxis: 'y',
 				line: { color: '#0F172A', width: 1.5, shape: 'hv' },
@@ -1442,22 +1469,22 @@
 		const swP90 = pick('SW_P90');
 		if (swP10.some((v) => v !== null) && swP90.some((v) => v !== null)) {
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'SW_P10',
-				x: swP10,
-				y: depth,
+				x: decimateSvg(swP10),
+				y: svgDepth,
 				xaxis: 'x7',
 				yaxis: 'y',
 				line: { color: '#7C3AED', width: 1.0, dash: 'dot' },
 				hovertemplate: 'Sw P10: %{x:.3f}<extra></extra>'
 			});
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'SW_P90',
-				x: swP90,
-				y: depth,
+				x: decimateSvg(swP90),
+				y: svgDepth,
 				xaxis: 'x7',
 				yaxis: 'y',
 				line: { color: '#7C3AED', width: 1.0, dash: 'dot' },
@@ -1467,11 +1494,11 @@
 		const shf = pick('SHF');
 		if (shf.some((v) => v !== null)) {
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'lines',
 				name: 'SHF',
-				x: shf,
-				y: depth,
+				x: decimateSvg(shf),
+				y: svgDepth,
 				xaxis: 'x7',
 				yaxis: 'y',
 				line: { color: '#DC2626', width: 1.2, dash: 'dash' },
@@ -1646,31 +1673,181 @@
 		return { traces, layout };
 	}
 
+	const NON_CORE_TRACK_MNEMONICS = [
+		'DEPT',
+		'DEPTH',
+		'GR',
+		'CALI',
+		'BS',
+		'BADHOLE',
+		'BAD_HOLE',
+		'BAD_HOLE_FLAG',
+		'RT',
+		'RD',
+		'RDEP',
+		'RDEEP',
+		'LLD',
+		'RILD',
+		'RM',
+		'RMED',
+		'RILM',
+		'ILM',
+		'LLM',
+		'LL8',
+		'M2R6',
+		'RS',
+		'RSHAL',
+		'RSHA',
+		'RXO',
+		'RXOZ',
+		'MSFL',
+		'RMLL',
+		'RFOC',
+		'SFL',
+		'LLS',
+		'RT_MOD',
+		'NPHI',
+		'RHOB',
+		'DTC',
+		'DT',
+		'DTCO',
+		'AC',
+		'DT4P',
+		'PEF',
+		'PE',
+		'PEFZ',
+		'PEFA',
+		'DRHO',
+		'HDRA',
+		'DCOR',
+		'RHOC',
+		'NPHI_HC',
+		'RHOB_HC',
+		'PHIT',
+		'PHIE',
+		'PHIT_SAND',
+		'PHIT_BLK',
+		'PHIT_P10',
+		'PHIT_P90',
+		'VCLAY',
+		'VSHALE',
+		'VSILT',
+		'VSAND',
+		'VCALC',
+		'VDOLO',
+		'VANHY',
+		'VHALI',
+		'VCOAL',
+		'VSH_LAM',
+		'VSH_DIS',
+		'PERM',
+		'PERM_TRANS',
+		'PERM_P10',
+		'PERM_P90',
+		'PERM_BLK',
+		'ROCK_FLAG',
+		'DRT',
+		'ROCK_FLAG_ML',
+		'FZI',
+		'R35',
+		'RFN',
+		'SWT',
+		'SWE',
+		'SWT_BLK',
+		'SW_P10',
+		'SW_P90',
+		'SHF',
+		'PAY_FLAGS'
+	] as const;
+
+	let lastBaseTrackDeps: unknown[] | null = null;
+	let lastCoreDeps: unknown[] | null = null;
+
 	// Render or update Plotly chart reactively when curves or filters change
 	// (Brushed intervals are rendered in the HTML overlay so brushing never triggers Plotly.react or zoom resets)
 	$effect(() => {
 		// Track dependencies
-		void wellData.curves;
-		void wellData.visibleIndices;
-		void wellData.tops;
-		void wellData.coreSamples;
-		void showHcCorrected;
-		void showDtc;
-		void tsOverlayActive;
-		void workbench.lithoParams.enableHcCorrection;
-		void workbench.lithoParams.model;
-		void workbench.lithoParams.minerals;
-		void projectData.drtMethod;
-		void projectData.activeDrtCutoffs;
-		void projectData.rockTypingResult;
+		const curves = wellData.curves;
+		const visIndices = wellData.visibleIndices;
+		const tops = wellData.tops;
+		const coreSamples = wellData.coreSamples;
 		const renderGen = wellData.wellLoadGeneration;
 
+		const currentBaseDeps: unknown[] = [
+			visIndices,
+			tops,
+			showHcCorrected,
+			showDtc,
+			tsOverlayActive,
+			workbench.lithoParams.enableHcCorrection,
+			workbench.lithoParams.model,
+			workbench.lithoParams.minerals,
+			workbench.lithoParams.enableCoalFlagging,
+			projectData.drtMethod,
+			projectData.activeDrtCutoffs,
+			projectData.rockTypingResult,
+			renderGen,
+			...NON_CORE_TRACK_MNEMONICS.map((m) => curves[m])
+		];
+		const currentCoreDeps: unknown[] = [
+			curves['CPORE'],
+			curves['CORE_PORO'],
+			curves['CPERM'],
+			curves['CORE_PERM'],
+			coreSamples
+		];
+
 		if (!PlotlyLib || !plotContainer) return;
+
+		const baseUnchanged =
+			plotReady &&
+			lastBaseTrackDeps !== null &&
+			lastBaseTrackDeps.length === currentBaseDeps.length &&
+			lastBaseTrackDeps.every((v, i) => v === currentBaseDeps[i]);
+
+		const coreUnchanged =
+			lastCoreDeps !== null &&
+			lastCoreDeps.length === currentCoreDeps.length &&
+			lastCoreDeps.every((v, i) => v === currentCoreDeps[i]);
+
+		lastBaseTrackDeps = currentBaseDeps;
+		lastCoreDeps = currentCoreDeps;
+
+		// Fast path 1: Only non-plotted curves changed (e.g. VSH_GR / VSH_DN during Vsh calibration) -> skip!
+		if (baseUnchanged && coreUnchanged) {
+			return;
+		}
 
 		let cancelled = false;
 		let preRenderRaf = 0;
 		let postRenderRaf = 0;
 		let renderTimer: ReturnType<typeof setTimeout> | null = null;
+
+		// Fast path 2: Only CPORE / CPERM / coreSamples changed (e.g. Core Depth Shift slider drag)
+		// -> restyle just the 1-2 core marker traces in <0.5ms instead of rebuilding all 44 traces!
+		if (baseUnchanged && !coreUnchanged && (cporeTraceIdx >= 0 || cpermTraceIdx >= 0)) {
+			preRenderRaf = requestAnimationFrame(() => {
+				if (cancelled || !PlotlyLib || !plotContainer) return;
+				const deptAll = curves['DEPT'] ?? curves['DEPTH'] ?? [];
+				const { cporeX, cporeY, cporeCustom, cpermX, cpermY } = untrack(() =>
+					buildCoreMarkerData(visIndices, deptAll)
+				);
+				if (cporeTraceIdx >= 0) {
+					PlotlyLib.restyle(
+						plotContainer,
+						{ x: [cporeX], y: [cporeY], customdata: [cporeCustom] },
+						[cporeTraceIdx]
+					);
+				}
+				if (cpermTraceIdx >= 0) {
+					PlotlyLib.restyle(plotContainer, { x: [cpermX], y: [cpermY] }, [cpermTraceIdx]);
+				}
+			});
+			return () => {
+				cancelled = true;
+				if (preRenderRaf) cancelAnimationFrame(preRenderRaf);
+			};
+		}
 
 		const runPlotRender = () => {
 			if (cancelled || !PlotlyLib || !plotContainer) return;
@@ -1750,7 +1927,7 @@
 							});
 						});
 					}
-					// Wait one animation frame after Plotly updates DOM/WebGL so the browser paints
+					// Wait one animation frame after Plotly updates DOM so the browser paints
 					// the new well tracks on screen before marking the well status as "Loaded well xxx".
 					postRenderRaf = requestAnimationFrame(() => {
 						if (!cancelled) {
@@ -1772,7 +1949,7 @@
 				renderTimer = setTimeout(runPlotRender, 0);
 			});
 		} else {
-			runPlotRender();
+			preRenderRaf = requestAnimationFrame(runPlotRender);
 		}
 
 		return () => {

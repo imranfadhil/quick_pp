@@ -190,8 +190,11 @@
 		return zeroedUpdates;
 	}
 
+	let lithoPoroRunId = 0;
+
 	async function executeLithoPoro(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const runId = ++lithoPoroRunId;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const lp = workbench.lithoParams;
@@ -243,6 +246,7 @@
 						} as any
 					}
 				);
+				if (runId !== lithoPoroRunId) return;
 				if (hcErr) throw new Error(String((hcErr as any)?.detail ?? 'HC Correction failed'));
 				if (hcData) {
 					if (hcData.data) Object.assign(batchedCurves, hcData.data);
@@ -275,6 +279,7 @@
 						...filterArgs
 					}
 				);
+				if (runId !== lithoPoroRunId) return;
 				if (denData?.data) Object.assign(batchedCurves, denData.data);
 				if (denData?.stats) Object.assign(batchedStats, denData.stats);
 				if (denData?.den_summary) {
@@ -318,6 +323,7 @@
 					} as any
 				}
 			);
+			if (runId !== lithoPoroRunId) return;
 			if (lithErr) throw new Error(String((lithErr as any)?.detail ?? 'Lithology failed'));
 			if (lithData) {
 				if (lithData.data) Object.assign(batchedCurves, lithData.data);
@@ -347,6 +353,7 @@
 					} as any
 				}
 			);
+			if (runId !== lithoPoroRunId) return;
 			if (poroErr) throw new Error(String((poroErr as any)?.detail ?? 'Porosity failed'));
 			if (poroData) {
 				if (poroData.data) Object.assign(batchedCurves, poroData.data);
@@ -354,27 +361,52 @@
 				wellData.poroCoreMetrics = poroData.core_metrics;
 			}
 
-			// Apply all computed curves from Steps 1–3 in a single atomic reactive update
+			// 4. Optional Thomas-Stieber Laminated Shaly-Sand (batched into same single merge)
+			if (workbench.tsParams.enabled) {
+				const ts = workbench.tsParams;
+				const tsRes = await postJson<any>(
+					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/thomas_stieber`,
+					{
+						use_hc_corrected: lp.enableHcCorrection,
+						use_existing_phit_vsh: true,
+						dry_sand_poro: ts.drySandPoro,
+						dry_shale_poro: ts.dryShalePoro,
+						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
+						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
+						fluid_point: [lp.fluidNphi, lp.fluidRhob],
+						rsand: ts.rsand,
+						rv_shale: ts.rvShale,
+						rh_shale: ts.rhShale,
+						theta: ts.theta,
+						...filterArgs
+					}
+				);
+				if (runId !== lithoPoroRunId) return;
+				if (tsRes?.data) Object.assign(batchedCurves, tsRes.data);
+				if (tsRes?.stats) Object.assign(batchedStats, tsRes.stats);
+				if (tsRes?.summary) tsSummary = tsRes.summary;
+			}
+
+			// Apply all computed curves from Steps 1–4 in a single atomic reactive update
 			if (Object.keys(batchedCurves).length > 0) {
 				wellData.mergeComputedCurves(batchedCurves, batchedStats);
 				wellData.markModuleComputed('litho-poro', batchedCurves);
-			}
-
-			if (workbench.tsParams.enabled) {
-				await executeThomasStieber(persist, true);
 			}
 
 			if (persist) {
 				wellData.lastSavedMessage = 'Litho & Poro Saved ✓';
 			}
 		} catch (e: any) {
+			if (runId !== lithoPoroRunId) return;
 			if (Object.keys(batchedCurves).length > 0) {
 				wellData.mergeComputedCurves(batchedCurves, batchedStats);
 				wellData.markModuleComputed('litho-poro', batchedCurves);
 			}
 			wellData.lastError = e?.message || 'Lithology/Porosity error';
 		} finally {
-			wellData.isCalculating = false;
+			if (runId === lithoPoroRunId) {
+				wellData.isCalculating = false;
+			}
 		}
 	}
 

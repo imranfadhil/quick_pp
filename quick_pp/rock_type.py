@@ -1187,7 +1187,6 @@ def cluster_rock_types_from_logs(
     return cluster_assignments.reindex(log_data.index)
 
 
-
 def find_cutoffs_gmm(
     curve,
     no_of_cutoffs=None,
@@ -1795,7 +1794,6 @@ def apply_lucia_rfn_override(
     }
 
 
-
 def train_and_validate_rock_type_classifier(
     df: pd.DataFrame,
     include_pef: bool = True,
@@ -2054,9 +2052,7 @@ def train_and_validate_rock_type_classifier(
         "contingency_table": {
             "labels": labels,
             "counts": [[int(c) for c in row] for row in cm_counts],
-            "norm_recall": [
-                [round(float(v), 4) for v in row] for row in cm_norm
-            ],
+            "norm_recall": [[round(float(v), 4) for v in row] for row in cm_norm],
         },
         "metrics": {
             "accuracy": round(acc, 4),
@@ -2075,4 +2071,3 @@ def train_and_validate_rock_type_classifier(
         "predicted_confidence": pred_conf,
         "vdl": vdl_list,
     }
-

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
@@ -9,12 +10,25 @@
 	}
 
 	let { compact = false, onapply }: Props = $props();
+	let vshRafId = 0;
+
+	function scheduleLiveVshGr() {
+		if (vshRafId) cancelAnimationFrame(vshRafId);
+		vshRafId = requestAnimationFrame(() => {
+			vshRafId = 0;
+			wellData.applyLiveVshGr();
+		});
+	}
+
+	onDestroy(() => {
+		if (vshRafId) cancelAnimationFrame(vshRafId);
+	});
 
 	function handleGrCleanChange(val: number) {
 		if (!Number.isFinite(val)) return;
 		const clamped = Math.max(0, Math.min(workbench.lithoParams.grClay - 10, Number(val.toFixed(1))));
 		workbench.lithoParams.grClean = clamped;
-		wellData.applyLiveVshGr();
+		scheduleLiveVshGr();
 	}
 
 	function handleGrClayChange(val: number) {
@@ -24,7 +38,7 @@
 			Math.min(300, Number(val.toFixed(1)))
 		);
 		workbench.lithoParams.grClay = clamped;
-		wellData.applyLiveVshGr();
+		scheduleLiveVshGr();
 	}
 
 	function resetToP5P95() {

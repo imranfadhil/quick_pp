@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { browser } from '$app/environment';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
@@ -235,7 +235,7 @@
 					const col = MW_PALETTE[colorIdx % MW_PALETTE.length];
 					colorIdx++;
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name: grpName,
 						x: g.x,
@@ -627,7 +627,7 @@
 			}
 
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'markers',
 				name: 'Log Data (Color: GR)',
 				x: xs,
@@ -650,7 +650,7 @@
 
 			if (coalXs.length > 0) {
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'markers',
 					name: `Coal Flagged (${coalXs.length})`,
 					x: coalXs,
@@ -669,7 +669,7 @@
 
 			if (badholeXs.length > 0) {
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'markers',
 					name: `Badhole Flagged (${badholeXs.length})`,
 					x: badholeXs,
@@ -714,7 +714,7 @@
 				}
 				if (rawHcXs.length > 0) {
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name: `Raw HC Pre-Shift (${rawHcXs.length})`,
 						x: rawHcXs,
@@ -753,7 +753,7 @@
 				}
 				if (rawDenXs.length > 0) {
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name: `Raw RHOB Pre-Correction (${rawDenXs.length})`,
 						x: rawDenXs,
@@ -890,7 +890,7 @@
 			}
 
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'markers',
 				name: 'Log Data (Color: GR)',
 				x: xs,
@@ -1305,7 +1305,7 @@
 
 					if (matX.length > 0) {
 						traces.push({
-							type: 'scattergl',
+							type: 'scatter',
 							mode: 'markers',
 							name: 'Interparticle Φ_ip vs K',
 							x: matX,
@@ -1317,7 +1317,7 @@
 					}
 					if (vugX.length > 0) {
 						traces.push({
-							type: 'scattergl',
+							type: 'scatter',
 							mode: 'markers',
 							name: `Vuggy (Φ_sec ≥ ${projectData.phiSecCutoff})`,
 							x: vugX,
@@ -1374,7 +1374,7 @@
 					});
 					if (phitVsPhisX.length > 0) {
 						traces.push({
-							type: 'scattergl',
+							type: 'scatter',
 							mode: 'markers',
 							name: 'Φ_T vs Φ_sonic',
 							x: phitVsPhisX,
@@ -1538,7 +1538,7 @@
 				const hasPermFits = Boolean(projectData.permTransformResult?.fits);
 				for (const [rf, g] of grouped.entries()) {
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name: `DRT ${rf}`,
 						x: g.x,
@@ -1589,7 +1589,7 @@
 
 				if (lx.length > 0) {
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name: 'Log Poro-Perm',
 						x: lx,
@@ -1600,7 +1600,7 @@
 				}
 				if (cx.length > 0) {
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name: 'Core Plugs',
 						x: cx,
@@ -1754,7 +1754,7 @@
 			}
 
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'markers',
 				name: 'Pickett (Rt vs Φ)',
 				x: xs,
@@ -1864,7 +1864,7 @@
 					const color = getRockTypeColor(rf);
 					if (activeModel === 'leverett_j') {
 						traces.push({
-							type: 'scattergl',
+							type: 'scatter',
 							mode: 'markers',
 							name: `SCAL RT ${rf}`,
 							x: g.swn,
@@ -1881,7 +1881,7 @@
 						});
 					} else if (activeModel === 'skelt_harrison') {
 						traces.push({
-							type: 'scattergl',
+							type: 'scatter',
 							mode: 'markers',
 							name: `SCAL RT ${rf}`,
 							x: g.sw,
@@ -1900,7 +1900,7 @@
 						});
 					} else {
 						traces.push({
-							type: 'scattergl',
+							type: 'scatter',
 							mode: 'markers',
 							name: `SCAL RT ${rf}`,
 							x: g.bvw,
@@ -2069,7 +2069,7 @@
 				});
 				for (const [rf, g] of grouped.entries()) {
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name: `RT ${rf}`,
 						x: g.sw,
@@ -2090,7 +2090,7 @@
 					}
 				}
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'markers',
 					name: 'Sw vs HAFWL',
 					x: xs,
@@ -2691,7 +2691,7 @@
 				for (const g of groups) {
 					if (g.rows.length === 0) continue;
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name: g.name,
 						x: g.rows.map((r) => r.VSH_DN),
@@ -2731,7 +2731,7 @@
 				] as const) {
 					if (subset.length === 0) continue;
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name,
 						x: subset.map((r) => r.GR),
@@ -2848,7 +2848,7 @@
 					}
 				}
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'lines',
 					name: 'ΔVsh Profile',
 					showlegend: false,
@@ -2860,7 +2860,7 @@
 					line: { color: 'rgba(100, 116, 139, 0.45)', width: 1.1 }
 				});
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'markers',
 					name: 'ΔVsh (VSH_GR − VSH_DN)',
 					x: activePts.map((r) => r.ERR_VSH),
@@ -3119,7 +3119,7 @@
 		for (const grp of grouped.values()) {
 			if (grp.xs.length === 0) continue;
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'markers',
 				name: `Selected (${grp.xs.length})`,
 				meta: 'brushed-highlight',
@@ -3145,147 +3145,213 @@
 
 	$effect(() => {
 		if (!PlotlyLib || !plotEl) return;
-		void effectiveMode;
-		void wellData.curves;
+		const mode = effectiveMode;
 		void wellData.visibleIndices;
-		void workbench.selectedQaqcCurve;
-		void wellData.coreComparison;
-		void workbench.coreQcView;
-		void wellData.vshComparison;
-		void workbench.vshQcView;
-		void workbench.vshCalibScope;
-		void workbench.vshShaleCutoff;
-		void workbench.vshSandCutoff;
-		void workbench.lithoParams.grClean;
-		void workbench.lithoParams.grClay;
-		void workbench.lithoParams.logCorrectionMode;
-		void workbench.lithoParams.enableHcCorrection;
-		void workbench.lithoParams.useHcCorrected;
-		void workbench.lithoParams.model;
-		void workbench.lithoParams.minerals;
-		void workbench.lithoParams.drySandNphi;
-		void workbench.lithoParams.drySandRhob;
-		void workbench.lithoParams.drySiltNphi;
-		void workbench.lithoParams.drySiltRhob;
-		void workbench.lithoParams.dryClayNphi;
-		void workbench.lithoParams.dryClayRhob;
-		void workbench.lithoParams.enableCoalFlagging;
-		void workbench.lithoParams.coalRhobMax;
-		void workbench.lithoParams.coalNphiMin;
-		void workbench.tsParams.drySandPoro;
-		void workbench.tsParams.dryShalePoro;
-		void workbench.saturationParams.rwPickett;
-		void workbench.saturationParams.m;
-		void workbench.saturationParams.n;
-		void workbench.scalResult;
-		void projectData.selectedWellNames;
 		void workbench.selectedZones;
 		void workbench.depthFilter;
 		void workbench.brushedDepthIndices;
-		void projectData.drtMethod;
-		void projectData.fziCutoffs;
-		void projectData.winlandCutoffs;
-		void projectData.luciaCutoffs;
-		void projectData.rockTypingPlotView;
-		void projectData.drtCutoffMethod;
-		void projectData.useInterparticlePorosity;
-		void projectData.luciaVuggyOverride;
-		void projectData.phiSecCutoff;
-		void projectData.rockTypingResult;
-		void projectData.permTransformResult;
-		void projectData.permTransformResult?.fits;
-		void projectData.shfResult;
-		void projectData.multiWellQaqcResult;
-		void workbench.mwQaqcGroupBy;
-		void workbench.mwQaqcPlotType;
-		void workbench.mwQaqcCompareMode;
-		void workbench.mwQaqcExcludeBadhole;
-		void workbench.mwQaqcLogScale;
 
-		const { traces, layout } = buildCrossplot();
-		applyBrushedSelectionOverlay(traces);
-		layout.autosize = true;
-		const visibleLegendTraces = traces.filter(
-			(t: any) => t.showlegend !== false && t.name
-		).length;
-		if (visibleLegendTraces > 5) {
-			layout.legend = {
-				orientation: 'v',
-				x: 1.01,
-				y: 1,
-				xanchor: 'left',
-				yanchor: 'top',
-				font: { family: 'Inter', size: 10, color: '#334155' }
-			};
+		if (mode === 'core-qc') {
+			void wellData.coreComparison;
+			void workbench.coreQcView;
+		} else if (mode === 'vsh-qc') {
+			void wellData.vshComparison;
+			void workbench.vshQcView;
+			void workbench.vshCalibScope;
+			void workbench.vshShaleCutoff;
+			void workbench.vshSandCutoff;
+			void workbench.lithoParams.grClean;
+			void workbench.lithoParams.grClay;
+		} else if (mode === 'nphi-rhob') {
+			void wellData.curves['NPHI'];
+			void wellData.curves['RHOB'];
+			void wellData.curves['NPHI_HC'];
+			void wellData.curves['RHOB_HC'];
+			void wellData.curves['GR'];
+			void wellData.curves['COAL_FLAG'];
+			void wellData.curves['VCOAL'];
+			void wellData.curves['BADHOLE'];
+			void wellData.curves['BAD_HOLE'];
+			void wellData.curves['BAD_HOLE_FLAG'];
+			void wellData.curves['HC_FLAG'];
+			void wellData.curves['DEN_CORR_FLAG'];
+			void workbench.lithoParams.logCorrectionMode;
+			void workbench.lithoParams.enableHcCorrection;
+			void workbench.lithoParams.useHcCorrected;
+			void workbench.lithoParams.model;
+			void workbench.lithoParams.minerals;
+			void workbench.lithoParams.drySandNphi;
+			void workbench.lithoParams.drySandRhob;
+			void workbench.lithoParams.drySiltNphi;
+			void workbench.lithoParams.drySiltRhob;
+			void workbench.lithoParams.dryClayNphi;
+			void workbench.lithoParams.dryClayRhob;
+			void workbench.lithoParams.fluidNphi;
+			void workbench.lithoParams.fluidRhob;
+			void workbench.lithoParams.enableCoalFlagging;
+			void workbench.lithoParams.coalRhobMax;
+			void workbench.lithoParams.coalNphiMin;
+		} else if (mode === 'thomas-stieber') {
+			void wellData.curves['PHIT'];
+			void wellData.curves['PHIE'];
+			void wellData.curves['VSH_TS'];
+			void wellData.curves['VCLAY'];
+			void wellData.curves['VSHALE'];
+			void wellData.curves['GR'];
+			void workbench.tsParams.drySandPoro;
+			void workbench.tsParams.dryShalePoro;
+		} else if (mode === 'histogram') {
+			const cName = workbench.selectedQaqcCurve || 'GR';
+			void wellData.curves[cName];
+			void wellData.curves[`${cName}_ORI`];
+			void wellData.stats[cName];
+		} else if (mode === 'pickett') {
+			void wellData.curves['PHIT'];
+			void wellData.curves['PHIE'];
+			void wellData.curves['NPHI'];
+			void wellData.curves['RT'];
+			void wellData.curves['VCLAY'];
+			void wellData.curves['GR'];
+			void workbench.saturationParams.rwPickett;
+			void workbench.saturationParams.a;
+			void workbench.saturationParams.m;
+			void workbench.saturationParams.n;
+		} else if (mode === 'relperm') {
+			void workbench.scalResult;
+			void workbench.scalParams.swirr;
+			void workbench.scalParams.sor;
+			void workbench.scalParams.krw_max;
+			void workbench.scalParams.kro_max;
+			void workbench.scalParams.nw;
+			void workbench.scalParams.no;
+			void workbench.scalParams.mu_w;
+			void workbench.scalParams.mu_o;
+		} else {
+			void wellData.curves;
+			void projectData.selectedWellNames;
+			void projectData.drtMethod;
+			void projectData.fziCutoffs;
+			void projectData.winlandCutoffs;
+			void projectData.luciaCutoffs;
+			void projectData.rockTypingPlotView;
+			void projectData.drtCutoffMethod;
+			void projectData.useInterparticlePorosity;
+			void projectData.luciaVuggyOverride;
+			void projectData.phiSecCutoff;
+			void projectData.rockTypingResult;
+			void projectData.permTransformResult;
+			void projectData.permTransformResult?.fits;
+			void projectData.shfResult;
+			void projectData.shfParams.fwl;
+			void projectData.shfParams.fwlByZone;
+			void projectData.shfParams.model;
+			void shfView;
+			void shfLogScale;
+			void projectData.multiWellQaqcResult;
+			void workbench.selectedQaqcCurve;
+			void workbench.mwQaqcGroupBy;
+			void workbench.mwQaqcPlotType;
+			void workbench.mwQaqcCompareMode;
+			void workbench.mwQaqcExcludeBadhole;
+			void workbench.mwQaqcLogScale;
 		}
-		PlotlyLib.react(plotEl, traces, layout, {
-			responsive: true,
-			displaylogo: false,
-			modeBarButtonsToAdd: ['lasso2d', 'select2d']
-		}).then(() => {
-			if (plotEl && (plotEl as any)._fullLayout) {
-				PlotlyLib.Plots.resize(plotEl);
+
+		let cancelled = false;
+		const rafId = requestAnimationFrame(() => {
+			if (cancelled || !PlotlyLib || !plotEl) return;
+			const { traces, layout } = untrack(() => {
+				const res = buildCrossplot();
+				applyBrushedSelectionOverlay(res.traces);
+				return res;
+			});
+			layout.autosize = true;
+			const visibleLegendTraces = traces.filter(
+				(t: any) => t.showlegend !== false && t.name
+			).length;
+			if (visibleLegendTraces > 5) {
+				layout.legend = {
+					orientation: 'v',
+					x: 1.01,
+					y: 1,
+					xanchor: 'left',
+					yanchor: 'top',
+					font: { family: 'Inter', size: 10, color: '#334155' }
+				};
 			}
-			if (!eventsBound && plotEl) {
-				eventsBound = true;
-				(plotEl as any).on('plotly_selected', (ev: any) => {
-					if (!ev || !ev.points) {
-						return;
-					}
-					if (!ev.range && !ev.lassoPoints && ev.points.length === 0) {
-						return;
-					}
-					const selected = new Set<number>();
-					for (const pt of ev.points) {
-						if (typeof pt.customdata === 'number') {
-							selected.add(pt.customdata);
+			untrack(() =>
+				PlotlyLib.react(plotEl, traces, layout, {
+					responsive: true,
+					displaylogo: false,
+					modeBarButtonsToAdd: ['lasso2d', 'select2d']
+				})
+			).then(() => {
+				if (cancelled || !plotEl) return;
+				if (!eventsBound && plotEl) {
+					eventsBound = true;
+					(plotEl as any).on('plotly_selected', (ev: any) => {
+						if (!ev || !ev.points) {
+							return;
 						}
-					}
-					workbench.setBrushedIndices(Array.from(selected));
-				});
-				(plotEl as any).on('plotly_deselect', () => {
-					workbench.setBrushedIndices([]);
-				});
-				// Click-to-place endpoint on NPHI-RHOB or Thomas-Stieber crossplot when an endpoint is armed
-				(plotEl as any).on('plotly_click', (ev: any) => {
-					if (!activeEndpointKey) {
+						if (!ev.range && !ev.lassoPoints && ev.points.length === 0) {
+							return;
+						}
+						const selected = new Set<number>();
+						for (const pt of ev.points) {
+							if (typeof pt.customdata === 'number') {
+								selected.add(pt.customdata);
+							}
+						}
+						workbench.setBrushedIndices(Array.from(selected));
+					});
+					(plotEl as any).on('plotly_deselect', () => {
+						workbench.setBrushedIndices([]);
+					});
+					// Click-to-place endpoint on NPHI-RHOB or Thomas-Stieber crossplot when an endpoint is armed
+					(plotEl as any).on('plotly_click', (ev: any) => {
+						if (!activeEndpointKey) {
+							const pt = ev?.points?.[0];
+							if (
+								(effectiveMode === 'core-qc' || effectiveMode === 'vsh-qc') &&
+								typeof pt?.customdata === 'number'
+							) {
+								const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+								const d = dept[pt.customdata];
+								if (Number.isFinite(d)) workbench.scrollToDepth(d);
+							}
+							return;
+						}
 						const pt = ev?.points?.[0];
-						if (
-							(effectiveMode === 'core-qc' || effectiveMode === 'vsh-qc') &&
-							typeof pt?.customdata === 'number'
-						) {
-							const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-							const d = dept[pt.customdata];
-							if (Number.isFinite(d)) workbench.scrollToDepth(d);
+						if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number') return;
+						const x = Number(pt.x.toFixed(3));
+						const y = Number(pt.y.toFixed(3));
+						if (effectiveMode === 'nphi-rhob') {
+							if (activeEndpointKey === 'sand') {
+								workbench.lithoParams.drySandNphi = x;
+								workbench.lithoParams.drySandRhob = y;
+							} else if (activeEndpointKey === 'silt') {
+								workbench.lithoParams.drySiltNphi = x;
+								workbench.lithoParams.drySiltRhob = y;
+							} else if (activeEndpointKey === 'clay') {
+								workbench.lithoParams.dryClayNphi = x;
+								workbench.lithoParams.dryClayRhob = y;
+							}
+						} else if (effectiveMode === 'thomas-stieber') {
+							if (activeEndpointKey === 'ts-sand') {
+								workbench.tsParams.drySandPoro = Math.max(0.12, Math.min(0.45, y));
+							} else if (activeEndpointKey === 'ts-shale') {
+								workbench.tsParams.dryShalePoro = Math.max(0.02, Math.min(0.35, y));
+							}
 						}
-						return;
-					}
-					const pt = ev?.points?.[0];
-					if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number') return;
-					const x = Number(pt.x.toFixed(3));
-					const y = Number(pt.y.toFixed(3));
-					if (effectiveMode === 'nphi-rhob') {
-						if (activeEndpointKey === 'sand') {
-							workbench.lithoParams.drySandNphi = x;
-							workbench.lithoParams.drySandRhob = y;
-						} else if (activeEndpointKey === 'silt') {
-							workbench.lithoParams.drySiltNphi = x;
-							workbench.lithoParams.drySiltRhob = y;
-						} else if (activeEndpointKey === 'clay') {
-							workbench.lithoParams.dryClayNphi = x;
-							workbench.lithoParams.dryClayRhob = y;
-						}
-					} else if (effectiveMode === 'thomas-stieber') {
-						if (activeEndpointKey === 'ts-sand') {
-							workbench.tsParams.drySandPoro = Math.max(0.12, Math.min(0.45, y));
-						} else if (activeEndpointKey === 'ts-shale') {
-							workbench.tsParams.dryShalePoro = Math.max(0.02, Math.min(0.35, y));
-						}
-					}
-					activeEndpointKey = null;
-				});
-			}
+						activeEndpointKey = null;
+					});
+				}
+			});
 		});
+
+		return () => {
+			cancelled = true;
+			cancelAnimationFrame(rafId);
+		};
 	});
 
 	let brushedSummary = $derived.by(() => {

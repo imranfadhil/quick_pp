@@ -69,7 +69,7 @@ class ProjectDataState {
 		}
 	}
 
-	multiWellQaqcResult = $state<{
+	multiWellQaqcResult = $state.raw<{
 		active_curve: string;
 		norm_curve: string | null;
 		corr_curve: string | null;
@@ -137,11 +137,11 @@ class ProjectDataState {
 		};
 	} | null>(null);
 
-	stratNormReport = $state<Record<string, any>[]>([]);
-	mwBadholeSummaries = $state<Record<string, any>[]>([]);
-	mwConditioningChanges = $state<Record<string, any>[]>([]);
+	stratNormReport = $state.raw<Record<string, any>[]>([]);
+	mwBadholeSummaries = $state.raw<Record<string, any>[]>([]);
+	mwConditioningChanges = $state.raw<Record<string, any>[]>([]);
 
-	rockTypingResult = $state<{
+	rockTypingResult = $state.raw<{
 		method?: DrtMethod;
 		well_names: string[];
 		depths: number[];
@@ -169,7 +169,7 @@ class ProjectDataState {
 		rock_type_counts: Record<string, number>;
 	} | null>(null);
 
-	permTransformResult = $state<{
+	permTransformResult = $state.raw<{
 		fits: Record<string, { a: number; b: number; r2: number | null; count: number }>;
 		well_names: string[];
 		depths: number[];
@@ -190,7 +190,7 @@ class ProjectDataState {
 		ghc: 0.8
 	});
 
-	shfResult = $state<{
+	shfResult = $state.raw<{
 		model?: 'leverett_j' | 'skelt_harrison' | 'cuddy';
 		fits: Record<
 			string,
@@ -227,7 +227,7 @@ class ProjectDataState {
 		shf: (number | null)[];
 	} | null>(null);
 
-	stickPlotResult = $state<{
+	stickPlotResult = $state.raw<{
 		project_id: number;
 		min_tvd: number;
 		max_tvd: number;
@@ -253,7 +253,7 @@ class ProjectDataState {
 	} | null>(null);
 	isLoadingStickPlot = $state<boolean>(false);
 
-	mlTrainingResult = $state<{
+	mlTrainingResult = $state.raw<{
 		suite_key: string;
 		suite_label: string;
 		architecture: string;

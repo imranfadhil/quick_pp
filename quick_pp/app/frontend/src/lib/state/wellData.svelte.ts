@@ -232,17 +232,17 @@ class WellDataState {
 	} | null = null;
 
 	// Columnar log data keyed by mnemonic: { DEPT: [...], DEPTH: [...], GR: [...], PHIE: [...] }
-	curves = $state<Record<string, number[]>>({});
-	originalCurves = $state<Record<string, number[]>>({});
-	committedBaseCurves = $state<Record<string, number[]>>({});
-	zonesColumn = $state<(string | null)[]>([]);
-	stats = $state<Record<string, CurveSummaryStats>>({});
+	curves = $state.raw<Record<string, number[]>>({});
+	originalCurves = $state.raw<Record<string, number[]>>({});
+	committedBaseCurves = $state.raw<Record<string, number[]>>({});
+	zonesColumn = $state.raw<(string | null)[]>([]);
+	stats = $state.raw<Record<string, CurveSummaryStats>>({});
 
 	tops = $state<FormationTop[]>([]);
 	contacts = $state<FluidContact[]>([]);
 	coreSamples = $state<Record<string, any>[]>([]);
-	originalCoreSamples = $state<Record<string, any>[]>([]);
-	originalScalPc = $state<Record<string, any>[]>([]);
+	originalCoreSamples = $state.raw<Record<string, any>[]>([]);
+	originalScalPc = $state.raw<Record<string, any>[]>([]);
 	coreShiftMode = $state<'affine' | 'tie-points'>('affine');
 	coreShiftDelta = $state<number>(0);
 	coreStretchFactor = $state<number>(1.0);
@@ -256,16 +256,50 @@ class WellDataState {
 	config = $state<Record<string, any>>({});
 
 	// Reservoir summary table & metrics from latest run
-	zonalSummary = $state<Record<string, any>[]>([]);
+	zonalSummary = $state.raw<Record<string, any>[]>([]);
 	poroCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 	permCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 
 	// Unsaved computed curve mnemonics per single-well module (cleared on well load or after saving that module)
 	pendingModuleCurves = $state<Record<string, string[]>>({});
 
+	// Fine-grained curve selectors: Svelte 5 checks === reference equality on $derived values,
+	// so updating CPORE/CPERM or VSH_GR/VSH_DN in this.curves will NOT invalidate downstream
+	// derivations that only depend on unaltered curves (like DEPT, GR, NPHI, RHOB, PHIT, PERM).
+	private static readonly EMPTY_ARR: number[] = [];
+	deptCurve = $derived(
+		this.curves['DEPT'] ?? this.curves['DEPTH'] ?? WellDataState.EMPTY_ARR
+	);
+	grCurve = $derived(this.curves['GR'] ?? WellDataState.EMPTY_ARR);
+	nphiCurve = $derived(this.curves['NPHI'] ?? WellDataState.EMPTY_ARR);
+	rhobCurve = $derived(this.curves['RHOB'] ?? WellDataState.EMPTY_ARR);
+	nphiHcCurve = $derived(this.curves['NPHI_HC'] ?? WellDataState.EMPTY_ARR);
+	rhobHcCurve = $derived(this.curves['RHOB_HC'] ?? WellDataState.EMPTY_ARR);
+	badholeCurve = $derived(
+		this.curves['BADHOLE'] ??
+			this.curves['BAD_HOLE'] ??
+			this.curves['BAD_HOLE_FLAG'] ??
+			WellDataState.EMPTY_ARR
+	);
+	vcoalCurve = $derived(
+		this.curves['VCOAL'] ?? this.curves['COAL_FLAG'] ?? WellDataState.EMPTY_ARR
+	);
+	hcFlagCurve = $derived(this.curves['HC_FLAG'] ?? WellDataState.EMPTY_ARR);
+	swCurve = $derived(this.curves['SWT'] ?? this.curves['SWE'] ?? WellDataState.EMPTY_ARR);
+	phitCurve = $derived(this.curves['PHIT'] ?? this.curves['PHIE'] ?? WellDataState.EMPTY_ARR);
+	permCurve = $derived(
+		this.curves['PERM'] ?? this.curves['PERM_TRANS'] ?? WellDataState.EMPTY_ARR
+	);
+	cporeCurve = $derived(
+		this.curves['CPORE'] ?? this.curves['CORE_PORO'] ?? WellDataState.EMPTY_ARR
+	);
+	cpermCurve = $derived(
+		this.curves['CPERM'] ?? this.curves['CORE_PERM'] ?? WellDataState.EMPTY_ARR
+	);
+
 	// Derived filtered indices based on workbench.depthFilter and workbench.selectedZones
 	visibleIndices = $derived.by(() => {
-		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		const dept = this.deptCurve;
 		const hasDepthFilter = !!workbench.depthFilter;
 		const hasZoneFilter = workbench.selectedZones.length > 0;
 		if (!hasDepthFilter && !hasZoneFilter) {
@@ -300,13 +334,16 @@ class WellDataState {
 	});
 
 	depthRange = $derived.by(() => {
-		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		const dept = this.deptCurve;
 		const valid = dept.filter((d) => typeof d === 'number' && Number.isFinite(d));
 		if (valid.length === 0) return { min: 0, max: 1000 };
-		return {
-			min: Math.min(...valid),
-			max: Math.max(...valid)
-		};
+		let min = valid[0];
+		let max = valid[0];
+		for (let i = 1; i < valid.length; i++) {
+			if (valid[i] < min) min = valid[i];
+			if (valid[i] > max) max = valid[i];
+		}
+		return { min, max };
 	});
 
 	availableCurves = $derived.by(() => {
@@ -338,15 +375,14 @@ class WellDataState {
 	});
 
 	totalDepthRows = $derived.by(() => {
-		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
-		return dept.length;
+		return this.deptCurve.length;
 	});
 
 	activeStats = $derived.by(() => {
 		const hasFilter = !!workbench.depthFilter || workbench.selectedZones.length > 0;
 		if (!hasFilter) return this.stats;
 		const indices = this.visibleIndices;
-		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		const dept = this.deptCurve;
 		const subsetDept = indices.map((i) => dept[i]);
 		const out: Record<string, CurveSummaryStats> = {};
 		for (const [col, arr] of Object.entries(this.curves)) {
@@ -358,12 +394,12 @@ class WellDataState {
 	});
 
 	coreComparison = $derived.by(() => {
-		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
-		const phitArr = this.curves['PHIT'] ?? this.curves['PHIE'] ?? [];
-		const permArr = this.curves['PERM'] ?? this.curves['PERM_TRANS'] ?? [];
-		const cporeArr = this.curves['CPORE'] ?? this.curves['CORE_PORO'] ?? [];
-		const cpermArr = this.curves['CPERM'] ?? this.curves['CORE_PERM'] ?? [];
-		const vcoalArr = this.curves['VCOAL'] ?? this.curves['COAL_FLAG'] ?? [];
+		const dept = this.deptCurve;
+		const phitArr = this.phitCurve;
+		const permArr = this.permCurve;
+		const cporeArr = this.cporeCurve;
+		const cpermArr = this.cpermCurve;
+		const vcoalArr = this.vcoalCurve;
 		const sortedTops = [...this.tops].sort((a, b) => a.depth - b.depth);
 		const indices = this.visibleIndices;
 		const visibleSet = new Set(indices);
@@ -387,7 +423,7 @@ class WellDataState {
 			return val;
 		};
 
-		// Map core samples to their closest log depth index (within 0.5m)
+		// Map core samples to their closest log depth index (within 0.5m) using O(log N) binary search
 		const sampleByIdx = new Map<
 			number,
 			{
@@ -408,16 +444,18 @@ class WellDataState {
 				const sk = normPerm(Number(s.permeability ?? s.CPERM ?? s.perm));
 				if (sp === null && sk === null) continue;
 
-				// Binary/linear search for closest log depth index
-				let bestIdx = -1;
-				let bestDist = 0.5;
-				for (const idx of indices) {
-					const dist = Math.abs(dept[idx] - sd);
-					if (dist <= bestDist) {
-						bestDist = dist;
-						bestIdx = idx;
-					}
+				// O(log N) binary search for closest log depth index on dept
+				let lo = 0;
+				let hi = dept.length - 1;
+				while (lo < hi) {
+					const mid = (lo + hi) >> 1;
+					if (dept[mid] < sd) lo = mid + 1;
+					else hi = mid;
 				}
+				if (lo > 0 && Math.abs(dept[lo - 1] - sd) < Math.abs(dept[lo] - sd)) {
+					lo = lo - 1;
+				}
+				const bestIdx = Math.abs(dept[lo] - sd) <= 0.5 ? lo : -1;
 				if (bestIdx >= 0 && visibleSet.has(bestIdx)) {
 					const existing = sampleByIdx.get(bestIdx);
 					if (!existing || Math.abs(dept[bestIdx] - sd) < Math.abs(dept[bestIdx] - existing.plug_depth)) {
@@ -649,29 +687,31 @@ class WellDataState {
 		};
 	});
 
-	vshComparison = $derived.by(() => {
-		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
-		const grArr = this.curves['GR'] ?? [];
+	// Pre-computed geometric VSH_DN rows across visible depths (cached across GR Clean / GR Clay slider scrubs
+	// and across CPORE/CPERM core depth shifts because it only reads fine-grained curve selectors).
+	private vshDnBaseRows = $derived.by(() => {
+		const dept = this.deptCurve;
+		const grArr = this.grCurve;
 		const lp = workbench.lithoParams;
 		const useHc =
 			lp.logCorrectionMode === 'hc' && (lp.enableHcCorrection || lp.useHcCorrected);
-		const nphiArr =
-			useHc && this.curves['NPHI_HC'] && this.curves['NPHI_HC'].some((v) => Number.isFinite(v))
-				? this.curves['NPHI_HC']
-				: (this.curves['NPHI'] ?? []);
-		const rhobArr =
-			useHc && this.curves['RHOB_HC'] && this.curves['RHOB_HC'].some((v) => Number.isFinite(v))
-				? this.curves['RHOB_HC']
-				: (this.curves['RHOB'] ?? []);
-		const badholeArr =
-			this.curves['BADHOLE'] ?? this.curves['BAD_HOLE'] ?? this.curves['BAD_HOLE_FLAG'] ?? [];
-		const coalArr = this.curves['VCOAL'] ?? this.curves['COAL_FLAG'] ?? [];
-		const hcFlagArr = this.curves['HC_FLAG'] ?? [];
-		const swArr = this.curves['SWT'] ?? this.curves['SWE'] ?? [];
+		const nphiHc = this.nphiHcCurve;
+		const rhobHc = this.rhobHcCurve;
+		const hasHcCorrectedCurves = Boolean(
+			useHc &&
+				nphiHc.length > 0 &&
+				nphiHc.some((v) => Number.isFinite(v)) &&
+				rhobHc.length > 0 &&
+				rhobHc.some((v) => Number.isFinite(v))
+		);
+		const nphiArr = hasHcCorrectedCurves ? nphiHc : this.nphiCurve;
+		const rhobArr = hasHcCorrectedCurves ? rhobHc : this.rhobCurve;
+		const badholeArr = this.badholeCurve;
+		const coalArr = this.vcoalCurve;
+		const hcFlagArr = this.hcFlagCurve;
+		const swArr = this.swCurve;
 		const sortedTops = [...this.tops].sort((a, b) => a.depth - b.depth);
 		const indices = this.visibleIndices;
-		const scope = workbench.vshCalibScope;
-		const brushed = scope === 'brushed' ? workbench.brushedDepthIndices : null;
 
 		const resolveZone = (idx: number, d: number): string => {
 			const zCol = this.zonesColumn[idx];
@@ -693,29 +733,19 @@ class WellDataState {
 		const nonResLen = Math.max(1e-6, rockLen * (1 - resRatio));
 		const siltClayRatio = 0.25;
 
-		const grClean = lp.grClean;
-		const grClay = lp.grClay;
-		const grSpan = Math.abs(grClay - grClean) > 1e-4 ? grClay - grClean : 100.0;
 		const shaleCut = workbench.vshShaleCutoff;
 		const sandCut = workbench.vshSandCutoff;
-		const hasHcCorrectedCurves = Boolean(
-			useHc &&
-				this.curves['NPHI_HC'] &&
-				this.curves['NPHI_HC'].some((v) => Number.isFinite(v)) &&
-				this.curves['RHOB_HC'] &&
-				this.curves['RHOB_HC'].some((v) => Number.isFinite(v))
-		);
+		const enableCoalFlagging = lp.enableCoalFlagging;
+		const coalRhobMax = lp.coalRhobMax;
+		const coalNphiMin = lp.coalNphiMin;
 
-		const rows: Array<{
+		const baseRows: Array<{
 			DEPTH: number;
 			ZONE: string;
 			GR: number;
 			NPHI: number;
 			RHOB: number;
 			VSH_DN: number;
-			VSH_GR: number;
-			ERR_VSH: number;
-			ABS_ERR_VSH: number;
 			REGIME: 'clean_shale' | 'clean_sand' | 'transition' | 'excluded';
 			REGIME_LABEL: string;
 			logIndex: number;
@@ -759,15 +789,11 @@ class WellDataState {
 						(rockLen * (1.0 - siltClayRatio)) / resLen
 					: (-siltClayRatio / nonResLen) * projClamped + 1.0;
 			const vshDn = Math.round(Math.max(0.0, Math.min(1.0, vshDnRaw)) * 10000) / 10000;
-			const vshGr =
-				Math.round(Math.max(0.0, Math.min(1.0, (gr - grClean) / grSpan)) * 10000) / 10000;
-			const errVsh = Math.round((vshGr - vshDn) * 10000) / 10000;
-			const absErr = Math.abs(errVsh);
 
 			const isBadhole = Number.isFinite(badholeArr[idx]) && badholeArr[idx] >= 0.5;
 			const isCoal =
 				(Number.isFinite(coalArr[idx]) && coalArr[idx] >= 0.5) ||
-				(lp.enableCoalFlagging && rhob <= lp.coalRhobMax && nphi >= lp.coalNphiMin);
+				(enableCoalFlagging && rhob <= coalRhobMax && nphi >= coalNphiMin);
 			const isHcUncompensated =
 				!hasHcCorrectedCurves &&
 				((Number.isFinite(hcFlagArr[idx]) && hcFlagArr[idx] >= 0.5) ||
@@ -795,21 +821,42 @@ class WellDataState {
 				regimeLabel = 'Silty / Transition';
 			}
 
-			rows.push({
+			baseRows.push({
 				DEPTH: Math.round(d * 100) / 100,
 				ZONE: resolveZone(idx, d),
 				GR: Math.round(gr * 100) / 100,
 				NPHI: Math.round(nphi * 10000) / 10000,
 				RHOB: Math.round(rhob * 10000) / 10000,
 				VSH_DN: vshDn,
-				VSH_GR: vshGr,
-				ERR_VSH: errVsh,
-				ABS_ERR_VSH: absErr,
 				REGIME: regime,
 				REGIME_LABEL: regimeLabel,
 				logIndex: idx
 			});
 		}
+
+		return baseRows;
+	});
+
+	vshComparison = $derived.by(() => {
+		const baseRows = this.vshDnBaseRows;
+		const lp = workbench.lithoParams;
+		const grClean = lp.grClean;
+		const grClay = lp.grClay;
+		const grSpan = Math.abs(grClay - grClean) > 1e-4 ? grClay - grClean : 100.0;
+		const scope = workbench.vshCalibScope;
+		const brushed = scope === 'brushed' ? workbench.brushedDepthIndices : null;
+
+		const rows = baseRows.map((b) => {
+			const vshGr =
+				Math.round(Math.max(0.0, Math.min(1.0, (b.GR - grClean) / grSpan)) * 10000) / 10000;
+			const errVsh = Math.round((vshGr - b.VSH_DN) * 10000) / 10000;
+			return {
+				...b,
+				VSH_GR: vshGr,
+				ERR_VSH: errVsh,
+				ABS_ERR_VSH: Math.abs(errVsh)
+			};
+		});
 
 		const computeRegimeStats = (subset: typeof rows) => {
 			const n = subset.length;
@@ -2421,13 +2468,7 @@ class WellDataState {
 	 * Extract baseline discrete core plugs from `originalCoreSamples` (or synthesize from
 	 * `originalCurves['CPORE']` / `originalCurves['CPERM']` if `originalCoreSamples` is empty).
 	 */
-	getBaseCorePlugs(): Array<{
-		sample_name: string;
-		raw_depth: number;
-		porosity: number | null;
-		permeability: number | null;
-		extra: Record<string, any>;
-	}> {
+	private baseCorePlugs = $derived.by(() => {
 		if (this.originalCoreSamples.length > 0) {
 			return this.originalCoreSamples
 				.map((s, i) => {
@@ -2440,12 +2481,12 @@ class WellDataState {
 						raw_depth: rd,
 						porosity: Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1 ? pRaw / 100 : pRaw) : null,
 						permeability: Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null,
-						extra: { ...s }
+						extra: s
 					};
 				})
 				.filter((x): x is NonNullable<typeof x> => x !== null);
 		}
-		const dept = this.originalCurves['DEPT'] ?? this.originalCurves['DEPTH'] ?? this.curves['DEPT'] ?? [];
+		const dept = this.originalCurves['DEPT'] ?? this.originalCurves['DEPTH'] ?? this.deptCurve;
 		const cpArr = this.originalCurves['CPORE'] ?? this.originalCurves['CORE_PORO'] ?? [];
 		const ckArr = this.originalCurves['CPERM'] ?? this.originalCurves['CORE_PERM'] ?? [];
 		const out: Array<{
@@ -2474,6 +2515,16 @@ class WellDataState {
 			}
 		}
 		return out;
+	});
+
+	getBaseCorePlugs(): Array<{
+		sample_name: string;
+		raw_depth: number;
+		porosity: number | null;
+		permeability: number | null;
+		extra: Record<string, any>;
+	}> {
+		return this.baseCorePlugs;
 	}
 
 	effectiveCorePivotDepth = $derived.by(() => {
@@ -2925,7 +2976,7 @@ class WellDataState {
 		const vshDnArr = this.curves['VSH_DN']
 			? [...this.curves['VSH_DN']]
 			: new Array(dept.length).fill(Number.NaN);
-		for (const r of this.vshComparison.rows) {
+		for (const r of this.vshDnBaseRows) {
 			vshDnArr[r.logIndex] = r.VSH_DN;
 		}
 

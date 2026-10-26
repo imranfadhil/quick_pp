@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 
@@ -11,6 +12,19 @@
 
 	let autoTarget = $state<'poro' | 'perm' | 'combined'>('poro');
 	let allowAutoStretch = $state<boolean>(false);
+	let shiftRafId = 0;
+
+	function scheduleCoreTransform() {
+		if (shiftRafId) cancelAnimationFrame(shiftRafId);
+		shiftRafId = requestAnimationFrame(() => {
+			shiftRafId = 0;
+			wellData.applyCoreDepthTransform();
+		});
+	}
+
+	onDestroy(() => {
+		if (shiftRafId) cancelAnimationFrame(shiftRafId);
+	});
 
 	$effect(() => {
 		autoTarget = defaultTarget;
@@ -26,7 +40,7 @@
 		if (!Number.isFinite(newDelta)) return;
 		wellData.coreShiftMode = 'affine';
 		wellData.coreShiftDelta = Number(newDelta.toFixed(3));
-		wellData.applyCoreDepthTransform();
+		scheduleCoreTransform();
 	}
 
 	function nudgeDelta(step: number) {
@@ -37,7 +51,7 @@
 		if (!Number.isFinite(newStretch) || newStretch <= 0.5 || newStretch >= 2.0) return;
 		wellData.coreShiftMode = 'affine';
 		wellData.coreStretchFactor = Number(newStretch.toFixed(4));
-		wellData.applyCoreDepthTransform();
+		scheduleCoreTransform();
 	}
 
 	function handlePivotChange(val: string) {
