@@ -74,7 +74,7 @@ from quick_pp.qaqc import (
     stratigraphic_normalization,
 )
 from quick_pp.ressum import calc_reservoir_summary
-from quick_pp.rock_type import calc_fzi, find_cutoffs, rock_typing
+from quick_pp.rock_type import calc_fzi, calc_r35, calc_rfn, find_cutoffs, rock_typing
 from quick_pp.saturation import (
     archie_saturation,
     estimate_b_waxman_smits,
@@ -757,8 +757,15 @@ class WorkspaceRockTypingRequest(BaseModel):
     well_names: Optional[List[str]] = Field(
         None, description="Optional subset of well names to include"
     )
+    method: str = Field(
+        "fzi",
+        description="Rock typing method: 'fzi' (Kozeny-Carman FZI), 'winland' (Winland R35), or 'lucia' (Lucia RFN)",
+    )
     cutoffs: List[float] = Field(default_factory=lambda: [0.5, 1.0, 2.5])
-    higher_is_better: bool = Field(True)
+    higher_is_better: Optional[bool] = Field(
+        None,
+        description="Whether higher value of indicator is better rock quality (DRT 1). Defaults to True for FZI/Winland and False for Lucia RFN.",
+    )
     auto_find_cutoffs: bool = Field(False)
     no_of_cutoffs: int = Field(3)
     save: bool = Field(False)
@@ -767,6 +774,10 @@ class WorkspaceRockTypingRequest(BaseModel):
 class WorkspacePermTransformRequest(BaseModel):
     well_names: Optional[List[str]] = Field(
         None, description="Optional subset of well names to include"
+    )
+    method: str = Field(
+        "fzi",
+        description="Fallback rock typing method if ROCK_FLAG is not yet saved: 'fzi', 'winland', or 'lucia'",
     )
     cutoffs: List[float] = Field(default_factory=lambda: [0.5, 1.2, 2.5, 5.0])
     fits: Optional[Dict[str, Dict[str, float]]] = Field(
@@ -783,6 +794,10 @@ class WorkspaceShfRequest(BaseModel):
     model: str = Field(
         "leverett_j",
         description="SHF model: 'leverett_j', 'skelt_harrison', or 'cuddy'",
+    )
+    drt_method: str = Field(
+        "fzi",
+        description="Rock typing method for SCAL core plug and fallback log classification: 'fzi', 'winland', or 'lucia'",
     )
     unit: str = Field("metric", description="Depth unit: 'metric' or 'imperial'")
     cutoffs: List[float] = Field(default_factory=lambda: [0.1, 1.0, 3.0])
@@ -3614,15 +3629,36 @@ def workspace_reservoir_summary(
         ) from e
 
 
+def _normalize_drt_method(method: Optional[str]) -> str:
+    """Normalize DRT method string to 'fzi', 'winland', or 'lucia'."""
+    m = str(method or "fzi").strip().lower()
+    if m in ("winland", "r35", "winland_r35"):
+        return "winland"
+    if m in ("lucia", "rfn", "lucia_rfn"):
+        return "lucia"
+    return "fzi"
+
+
+def _eval_drt_indicator_scalar_or_array(phit, perm, method: str = "fzi"):
+    """Compute FZI, Winland R35, or Lucia RFN and return (indicator, default_higher_is_better, canonical_method)."""
+    m = _normalize_drt_method(method)
+    if m == "winland":
+        return calc_r35(phit, perm), True, "winland"
+    if m == "lucia":
+        return calc_rfn(phit, perm), False, "lucia"
+    return calc_fzi(phit, perm), True, "fzi"
+
+
 @router.post(
     "/rock_typing/compute",
-    summary="Compute FZI rock typing across project wells and optionally save ROCK_FLAG",
+    summary="Compute FZI, Winland R35, or Lucia RFN rock typing across project wells and optionally save ROCK_FLAG",
 )
 def workspace_rock_typing_compute(
     project_id: int, req: WorkspaceRockTypingRequest
 ) -> Dict[str, Any]:
-    """Compute FZI and ROCK_FLAG across all wells in the project on the server."""
+    """Compute FZI / Winland R35 / Lucia RFN and ROCK_FLAG across all wells in the project on the server."""
     try:
+        method = _normalize_drt_method(req.method)
         fzi_data = _filter_fzi_data_by_wells(
             _compute_fzi_data_sync(project_id), req.well_names
         )
@@ -3634,20 +3670,44 @@ def workspace_rock_typing_compute(
 
         valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
         fzi_arr = np.full_like(phit_arr, np.nan, dtype=float)
-        fzi_arr[valid_mask] = calc_fzi(phit_arr[valid_mask], perm_arr[valid_mask])
+        r35_arr = np.full_like(phit_arr, np.nan, dtype=float)
+        rfn_arr = np.full_like(phit_arr, np.nan, dtype=float)
+        if valid_mask.any():
+            fzi_arr[valid_mask] = calc_fzi(phit_arr[valid_mask], perm_arr[valid_mask])
+            r35_arr[valid_mask] = calc_r35(phit_arr[valid_mask], perm_arr[valid_mask])
+            rfn_arr[valid_mask] = calc_rfn(phit_arr[valid_mask], perm_arr[valid_mask])
+
+        if method == "winland":
+            active_arr = r35_arr
+            default_higher_is_better = True
+            indicator_col = "R35"
+        elif method == "lucia":
+            active_arr = rfn_arr
+            default_higher_is_better = False
+            indicator_col = "RFN"
+        else:
+            active_arr = fzi_arr
+            default_higher_is_better = True
+            indicator_col = "FZI"
+
+        higher_is_better = (
+            req.higher_is_better
+            if req.higher_is_better is not None
+            else default_higher_is_better
+        )
 
         if req.auto_find_cutoffs and valid_mask.sum() >= (req.no_of_cutoffs + 1):
             cutoffs = sorted(
                 float(round(c, 4))
                 for c in find_cutoffs(
-                    fzi_arr[valid_mask], no_of_cutoffs=req.no_of_cutoffs
+                    active_arr[valid_mask], no_of_cutoffs=req.no_of_cutoffs
                 )
             )
         else:
             cutoffs = sorted(float(c) for c in req.cutoffs)
 
         rf_arr = rock_typing(
-            fzi_arr, cut_offs=cutoffs, higher_is_better=req.higher_is_better
+            active_arr, cut_offs=cutoffs, higher_is_better=higher_is_better
         )
         rock_flags = [
             int(val) if not np.isnan(val) else None for val in np.asarray(rf_arr)
@@ -3655,13 +3715,32 @@ def workspace_rock_typing_compute(
         fzi_list = [
             round(float(val), 5) if not np.isnan(val) else None for val in fzi_arr
         ]
+        r35_list = [
+            round(float(val), 5) if not np.isnan(val) else None for val in r35_arr
+        ]
+        rfn_list = [
+            round(float(val), 5) if not np.isnan(val) else None for val in rfn_arr
+        ]
+        active_list = (
+            r35_list
+            if method == "winland"
+            else (rfn_list if method == "lucia" else fzi_list)
+        )
+
+        by_well: Dict[str, List[Dict[str, Any]]] = {}
+        for wn, d, rf, ind_val in zip(well_names, depths, rock_flags, active_list):
+            if rf is not None and d is not None:
+                row_dict: Dict[str, Any] = {"DEPTH": d, "ROCK_FLAG": rf}
+                if ind_val is not None:
+                    row_dict[indicator_col] = ind_val
+                by_well.setdefault(wn, []).append(row_dict)
+
+        # Update in-memory well cache so downstream Perm Transform / SHF immediately see the computed ROCK_FLAG
+        for wn, rows in by_well.items():
+            _update_in_memory_well_cache(project_id, wn, pd.DataFrame(rows))
 
         saved_wells = 0
         if req.save:
-            by_well: Dict[str, List[Dict[str, Any]]] = {}
-            for wn, d, rf in zip(well_names, depths, rock_flags):
-                if rf is not None and d is not None:
-                    by_well.setdefault(wn, []).append({"DEPTH": d, "ROCK_FLAG": rf})
             for wn, rows in by_well.items():
                 _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
             saved_wells = len(by_well)
@@ -3675,7 +3754,9 @@ def workspace_rock_typing_compute(
 
         return {
             "project_id": project_id,
+            "method": method,
             "cutoffs": cutoffs,
+            "higher_is_better": higher_is_better,
             "flag_counts": flag_counts,
             "rock_type_counts": flag_counts,
             "saved": req.save,
@@ -3687,6 +3768,9 @@ def workspace_rock_typing_compute(
                 "phit": fzi_data["phit"],
                 "perm": fzi_data["perm"],
                 "fzi": fzi_list,
+                "r35": r35_list,
+                "rfn": rfn_list,
+                "drt_value": active_list,
                 "rock_flags": rock_flags,
             },
         }
@@ -3719,12 +3803,15 @@ def workspace_perm_transform_compute(
 
         if not any(rf is not None for rf in rock_flags):
             valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
-            fzi_arr = np.full_like(phit_arr, np.nan, dtype=float)
-            fzi_arr[valid_mask] = calc_fzi(phit_arr[valid_mask], perm_arr[valid_mask])
+            ind_arr = np.full_like(phit_arr, np.nan, dtype=float)
+            ind_vals, hib, _ = _eval_drt_indicator_scalar_or_array(
+                phit_arr[valid_mask], perm_arr[valid_mask], req.method
+            )
+            ind_arr[valid_mask] = ind_vals
             rf_arr = rock_typing(
-                fzi_arr,
+                ind_arr,
                 cut_offs=sorted(float(c) for c in req.cutoffs),
-                higher_is_better=True,
+                higher_is_better=hib,
             )
             rock_flags = [
                 int(v) if not np.isnan(v) else None for v in np.asarray(rf_arr)
@@ -3860,9 +3947,12 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         # If ROCK_FLAG not yet saved in wells, compute on the fly from req.cutoffs
         if not any(rf is not None for rf in rock_flags):
             valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
-            fzi_arr = np.full_like(phit_arr, np.nan, dtype=float)
-            fzi_arr[valid_mask] = calc_fzi(phit_arr[valid_mask], perm_arr[valid_mask])
-            rf_arr = rock_typing(fzi_arr, cut_offs=req.cutoffs, higher_is_better=True)
+            ind_arr = np.full_like(phit_arr, np.nan, dtype=float)
+            ind_vals, hib, _ = _eval_drt_indicator_scalar_or_array(
+                phit_arr[valid_mask], perm_arr[valid_mask], req.drt_method
+            )
+            ind_arr[valid_mask] = ind_vals
+            rf_arr = rock_typing(ind_arr, cut_offs=req.cutoffs, higher_is_better=hib)
             rock_flags = [
                 int(v) if not np.isnan(v) else None for v in np.asarray(rf_arr)
             ]
@@ -4000,8 +4090,13 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         cperm = 50.0
                     if not (0 < cpore < 1 and cperm > 0):
                         continue
+                    ind_val_plug, hib_plug, _ = _eval_drt_indicator_scalar_or_array(
+                        cpore, cperm, req.drt_method
+                    )
                     rf_val = int(
-                        rock_typing(calc_fzi(cpore, cperm), req.cutoffs).item()
+                        rock_typing(
+                            ind_val_plug, req.cutoffs, higher_is_better=hib_plug
+                        ).item()
                     )
                     pc_col = next(
                         (
@@ -7176,6 +7271,8 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
         "PERM_TRANS",
         "ROCK_FLAG",
         "FZI",
+        "R35",
+        "RFN",
         "PERM_P10",
         "PERM_P50",
         "PERM_P90",

@@ -77,6 +77,40 @@ def calc_r35_perm(r35, pore):
     return 10 ** ((np.log10(r35) - 0.732 + 0.864 * np.log10(pore * 100)) / 0.588)
 
 
+def calc_rfn(pore, perm):
+    """Calculate Lucia Rock Fabric Number (RFN) from porosity and permeability, based on Jennings and Lucia (2003).
+
+    Args:
+        pore (np.ndarray or float): Interparticle/total porosity in fraction.
+        perm (np.ndarray or float): Permeability in mD.
+
+    Returns:
+        np.ndarray or float: The Lucia Rock Fabric Number (RFN).
+    """
+    pore_eff = np.clip(pore, 0.04, 0.99)
+    log_phi = np.log10(pore_eff)
+    log_k = np.log10(np.clip(perm, 1e-6, None))
+    log_rfn = (9.7892 + 8.6711 * log_phi - log_k) / (12.0838 + 8.2965 * log_phi)
+    return np.clip(10.0**log_rfn, 0.1, 10.0)
+
+
+def calc_rfn_perm(rfn, pore):
+    """Calculate permeability from Lucia Rock Fabric Number (RFN) and porosity, based on Jennings and Lucia (2003).
+
+    Args:
+        rfn (np.ndarray or float): Lucia Rock Fabric Number (RFN).
+        pore (np.ndarray or float): Interparticle/total porosity in fraction.
+
+    Returns:
+        np.ndarray or float: Permeability in mD.
+    """
+    return 10 ** (
+        9.7892
+        - 12.0838 * np.log10(rfn)
+        + (8.6711 - 8.2965 * np.log10(rfn)) * np.log10(pore)
+    )
+
+
 def plot_rqi(
     cpore, cperm, cut_offs=None, rock_type=None, title="Rock Quality Index (RQI)"
 ):

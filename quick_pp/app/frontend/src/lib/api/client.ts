@@ -288,8 +288,8 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 	}
 	if (path.endsWith('/rock_typing/compute')) {
 		return {
-			active: 'Clustering multi-well FZI discrete rock types...',
-			done: 'Multi-well FZI rock typing updated'
+			active: 'Clustering multi-well discrete rock types (DRT)...',
+			done: 'Multi-well rock typing updated'
 		};
 	}
 	if (path.endsWith('/perm_transform/compute')) {

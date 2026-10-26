@@ -396,7 +396,11 @@ export interface paths {
 			requestBody: {
 				content: {
 					'application/json': {
+						method?: 'fzi' | 'winland' | 'lucia';
 						cutoffs: number[];
+						higher_is_better?: boolean;
+						auto_find_cutoffs?: boolean;
+						no_of_cutoffs?: number;
 						save?: boolean;
 					};
 				};
@@ -406,7 +410,9 @@ export interface paths {
 					content: {
 						'application/json': {
 							project_id: number;
+							method?: 'fzi' | 'winland' | 'lucia';
 							cutoffs: number[];
+							higher_is_better?: boolean;
 							saved: boolean;
 							saved_wells: number;
 							rock_type_counts: Record<string, number>;
@@ -416,8 +422,11 @@ export interface paths {
 								phit: number[];
 								perm: number[];
 								fzi: (number | null)[];
-								rqi: (number | null)[];
-								phiz: (number | null)[];
+								r35?: (number | null)[];
+								rfn?: (number | null)[];
+								drt_value?: (number | null)[];
+								rqi?: (number | null)[];
+								phiz?: (number | null)[];
 								rock_flags: (number | null)[];
 							};
 						};

@@ -13,6 +13,7 @@ export interface ProjectListItem {
 }
 
 export type MultiWellSaveModule = 'rock-typing' | 'perm-transform' | 'shf';
+export type DrtMethod = 'fzi' | 'winland' | 'lucia';
 
 class ProjectDataState {
 	projects = $state<ProjectListItem[]>([]);
@@ -25,8 +26,27 @@ class ProjectDataState {
 	pendingMultiWellModules = $state<Record<string, boolean>>({});
 
 	// Field-level Multi-Well Parameters & Results
+	drtMethod = $state<DrtMethod>('fzi');
 	fziCutoffs = $state<number[]>([0.5, 1.2, 2.5, 5.0]);
+	winlandCutoffs = $state<number[]>([0.5, 2.0, 5.0, 10.0]);
+	luciaCutoffs = $state<number[]>([1.5, 2.5, 3.5]);
 	selectedWellNames = $state<string[]>([]);
+
+	get activeDrtCutoffs(): number[] {
+		if (this.drtMethod === 'winland') return this.winlandCutoffs;
+		if (this.drtMethod === 'lucia') return this.luciaCutoffs;
+		return this.fziCutoffs;
+	}
+
+	set activeDrtCutoffs(vals: number[]) {
+		if (this.drtMethod === 'winland') {
+			this.winlandCutoffs = vals;
+		} else if (this.drtMethod === 'lucia') {
+			this.luciaCutoffs = vals;
+		} else {
+			this.fziCutoffs = vals;
+		}
+	}
 
 	multiWellQaqcResult = $state<{
 		active_curve: string;
@@ -101,13 +121,17 @@ class ProjectDataState {
 	mwConditioningChanges = $state<Record<string, any>[]>([]);
 
 	rockTypingResult = $state<{
+		method?: DrtMethod;
 		well_names: string[];
 		depths: number[];
 		phit: number[];
 		perm: number[];
 		fzi: (number | null)[];
-		rqi: (number | null)[];
-		phiz: (number | null)[];
+		r35?: (number | null)[];
+		rfn?: (number | null)[];
+		drt_value?: (number | null)[];
+		rqi?: (number | null)[];
+		phiz?: (number | null)[];
 		rock_flags: (number | null)[];
 		rock_type_counts: Record<string, number>;
 	} | null>(null);
@@ -271,7 +295,19 @@ class ProjectDataState {
 					v !== null && v !== undefined && Number.isFinite(v) ? v : null
 				);
 			}
-			curveLabel = 'ROCK_FLAG';
+			if (this.rockTypingResult.r35?.length === depths.length) {
+				curves['R35'] = this.rockTypingResult.r35.map((v) =>
+					v !== null && v !== undefined && Number.isFinite(v) ? v : null
+				);
+			}
+			if (this.rockTypingResult.rfn?.length === depths.length) {
+				curves['RFN'] = this.rockTypingResult.rfn.map((v) =>
+					v !== null && v !== undefined && Number.isFinite(v) ? v : null
+				);
+			}
+			const m = this.rockTypingResult.method ?? this.drtMethod;
+			const indName = m === 'winland' ? 'R35' : m === 'lucia' ? 'RFN' : 'FZI';
+			curveLabel = `ROCK_FLAG & ${indName}`;
 		} else if (moduleKey === 'perm-transform' && this.permTransformResult) {
 			wellNames = this.permTransformResult.well_names;
 			depths = this.permTransformResult.depths;

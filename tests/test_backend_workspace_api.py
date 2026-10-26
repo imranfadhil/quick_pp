@@ -217,9 +217,26 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert len(sat_body["data"]["SWT_WAXMAN"]) == 10
 
     # 6. Rock Typing across project (including empty well) & Perm Transform
+    r_rt_winland = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={"method": "winland", "cutoffs": [0.5, 2.0, 5.0], "save": False},
+    )
+    assert r_rt_winland.status_code == 200
+    assert r_rt_winland.json()["method"] == "winland"
+    assert "r35" in r_rt_winland.json()["data"]
+
+    r_rt_lucia = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={"method": "lucia", "cutoffs": [1.5, 2.5, 3.5], "save": False},
+    )
+    assert r_rt_lucia.status_code == 200
+    assert r_rt_lucia.json()["method"] == "lucia"
+    assert r_rt_lucia.json()["higher_is_better"] is False
+    assert "rfn" in r_rt_lucia.json()["data"]
+
     r_rt = client.post(
         f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
-        json={"cutoffs": [0.5, 1.5, 3.0], "save": True},
+        json={"method": "fzi", "cutoffs": [0.5, 1.5, 3.0], "save": True},
     )
     assert r_rt.status_code == 200
     assert r_rt.json()["saved_wells"] == 1

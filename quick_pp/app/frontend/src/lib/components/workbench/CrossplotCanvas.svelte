@@ -1126,21 +1126,74 @@
 				}
 			}
 
-			// Iso-FZI reference curves: K = 1014 * FZI^2 * (phi^3 / (1 - phi)^2)
+			// Iso-cutoff reference curves for active DRT method (FZI, Winland R35, or Lucia RFN)
 			const phiGrid = Array.from({ length: 35 }, (_, i) => 0.02 + i * 0.01);
-			for (const fziVal of projectData.fziCutoffs) {
-				const kCurve = phiGrid.map(
-					(phi) => 1014 * Math.pow(fziVal, 2) * (Math.pow(phi, 3) / Math.pow(1 - phi, 2))
-				);
-				traces.push({
-					type: 'scatter',
-					mode: 'lines',
-					name: `FZI=${fziVal}`,
-					x: phiGrid,
-					y: kCurve,
-					line: { color: '#94A3B8', width: 1, dash: 'dash' },
-					hoverinfo: 'skip'
-				});
+			const activeDrtMethod =
+				workbench.scope === 'multi-well' ? projectData.drtMethod : 'fzi';
+			const activeCutoffs =
+				workbench.scope === 'multi-well'
+					? projectData.activeDrtCutoffs
+					: projectData.fziCutoffs;
+
+			if (activeDrtMethod === 'winland') {
+				for (const r35Val of activeCutoffs) {
+					if (!Number.isFinite(r35Val) || r35Val <= 0) continue;
+					const kCurve = phiGrid.map((phi) =>
+						Math.pow(
+							10,
+							(Math.log10(r35Val) - 0.732 + 0.864 * Math.log10(phi * 100)) / 0.588
+						)
+					);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `R35=${r35Val} μm`,
+						x: phiGrid,
+						y: kCurve,
+						line: { color: '#94A3B8', width: 1, dash: 'dash' },
+						hoverinfo: 'skip'
+					});
+				}
+			} else if (activeDrtMethod === 'lucia') {
+				const luciaPhiGrid = phiGrid.filter((p) => p >= 0.035);
+				for (const rfnVal of activeCutoffs) {
+					if (!Number.isFinite(rfnVal) || rfnVal <= 0) continue;
+					const logRfn = Math.log10(rfnVal);
+					const kCurve = luciaPhiGrid.map((phi) =>
+						Math.pow(
+							10,
+							9.7892 -
+								12.0838 * logRfn +
+								(8.6711 - 8.2965 * logRfn) * Math.log10(phi)
+						)
+					);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `RFN=${rfnVal}`,
+						x: luciaPhiGrid,
+						y: kCurve,
+						line: { color: '#94A3B8', width: 1, dash: 'dash' },
+						hoverinfo: 'skip'
+					});
+				}
+			} else {
+				for (const fziVal of activeCutoffs) {
+					if (!Number.isFinite(fziVal) || fziVal <= 0) continue;
+					const kCurve = phiGrid.map(
+						(phi) =>
+							1014 * Math.pow(fziVal, 2) * (Math.pow(phi, 3) / Math.pow(1 - phi, 2))
+					);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `FZI=${fziVal}`,
+						x: phiGrid,
+						y: kCurve,
+						line: { color: '#94A3B8', width: 1, dash: 'dash' },
+						hoverinfo: 'skip'
+					});
+				}
 			}
 
 			// Fitted power-law Perm Transform lines per Rock Type: K = a * phi^b
@@ -2644,7 +2697,10 @@
 		void workbench.selectedZones;
 		void workbench.depthFilter;
 		void workbench.brushedDepthIndices;
+		void projectData.drtMethod;
 		void projectData.fziCutoffs;
+		void projectData.winlandCutoffs;
+		void projectData.luciaCutoffs;
 		void projectData.rockTypingResult;
 		void projectData.permTransformResult;
 		void projectData.permTransformResult?.fits;
@@ -2780,7 +2836,13 @@
 				<option value="nphi-rhob">NPHI vs. RHOB (SSC)</option>
 				<option value="vsh-qc">Vsh Calibration (VSH_GR × VSH_DN)</option>
 				<option value="thomas-stieber">Thomas-Stieber (Vsh vs. Φ)</option>
-				<option value="phi-k">Porosity vs. Perm (FZI)</option>
+				<option value="phi-k"
+					>Porosity vs. Perm ({projectData.drtMethod === 'winland'
+						? 'Winland R35'
+						: projectData.drtMethod === 'lucia'
+							? 'Lucia RFN'
+							: 'FZI'})</option
+				>
 				<option value="core-qc">Core Parity &amp; Error (Φ &amp; K)</option>
 				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
 				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>

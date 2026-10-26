@@ -122,7 +122,8 @@
 							projectData.selectedWellNames.length < projectData.wells.length
 								? projectData.selectedWellNames
 								: null,
-						cutoffs: [...projectData.fziCutoffs].sort((a, b) => a - b),
+						method: projectData.drtMethod,
+						cutoffs: [...projectData.activeDrtCutoffs].sort((a, b) => a - b),
 						fits: customFits,
 						save: false
 					} as any
