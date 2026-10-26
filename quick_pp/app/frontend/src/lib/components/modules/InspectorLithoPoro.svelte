@@ -174,7 +174,7 @@
 		} else if (lp.model === 'ssc') {
 			activeMnemonics = new Set(['VSAND', 'VSILT', 'VCLAY']);
 		} else {
-			activeMnemonics = new Set(['VCLAY']);
+			activeMnemonics = new Set(['VSAND', 'VCLAY']);
 		}
 		if (lp.enableCoalFlagging) {
 			activeMnemonics.add('VCOAL');
@@ -490,6 +490,7 @@
 				<span class="text-xs font-medium text-[var(--text-primary)]">Lithology Model</span>
 				<select
 					bind:value={workbench.lithoParams.model}
+					onchange={() => executeLithoPoro(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="ssc">Sand-Silt-Clay</option>
@@ -502,10 +503,11 @@
 				<span class="text-xs font-medium text-[var(--text-primary)]">Porosity Method</span>
 				<select
 					bind:value={workbench.lithoParams.porosityMethod}
+					onchange={() => executeLithoPoro(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
+					<option value="den">Density (ρma from Litho)</option>
 					<option value="neu_den">NPHI-RHOB Xplot</option>
-					<option value="den">Density Only</option>
 				</select>
 			</div>
 		</ParameterSection>

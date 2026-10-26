@@ -1199,7 +1199,7 @@ def generate_well_cpi_plot(
         cm = np.isfinite(cp) & (cp > 0)
         if np.any(cm):
             ax.scatter(cp[cm], d[cm], color="#dc2626", s=16, zorder=5, label="CPORE")
-    ax.set_xlim(0.40, 0.0)
+    ax.set_xlim(0.0, 0.50)
     ax.set_xlabel("Porosity Φ (v/v)", fontsize=8.5, fontweight="bold", color="#1d4ed8")
     ax.set_title("Track 4\nPorosity & Core", fontsize=8.5, fontweight="bold")
 

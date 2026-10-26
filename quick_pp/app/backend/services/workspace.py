@@ -577,7 +577,7 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase):
 
 
 class WorkspacePorosityRequest(WorkspaceFilterBase):
-    method: str = Field("neu_den", description="'neu_den' or 'den'")
+    method: str = Field("den", description="'den' or 'neu_den'")
     lithology_model: Optional[str] = Field(
         None,
         description="Active lithology model ('ssc', 'multi_mineral', 'vsh_gr') so porosity uses matching mineral volumes",
@@ -1774,16 +1774,7 @@ def workspace_lithology(
                 index=df.index,
                 dtype=float,
             )
-            if "PHIT" in df.columns:
-                phit_ref = (
-                    pd.to_numeric(df["PHIT"], errors="coerce")
-                    .where(lambda s: s.notna() & (s >= 0.0) & (s <= 0.6), phid_ssc)
-                    .fillna(phid_ssc)
-                    .fillna(0.0)
-                    .clip(0.0, 0.6)
-                )
-            else:
-                phit_ref = phid_ssc.fillna(0.0).clip(0.0, 0.6)
+            phit_ref = phid_ssc.fillna(0.0).clip(0.0, 0.6)
             vmatrix_s = (1.0 - phit_ref).clip(0.0, 1.0)
             for mcol in ("VSAND", "VSILT", "VCLAY"):
                 out_df[mcol] = (out_df[mcol] * vmatrix_s).clip(0.0, 1.0)
@@ -1918,18 +1909,45 @@ def workspace_lithology(
             vclay_s.loc[valid_mask] = np.clip(
                 np.asarray(vsh, dtype=float).ravel(), 0.0, 1.0
             )
-            phit_ref = (
-                (
-                    pd.to_numeric(df["PHIT"], errors="coerce")
-                    if "PHIT" in df.columns
-                    else pd.Series(0.0, index=df.index, dtype=float)
+            vsand_s = (1.0 - vclay_s).clip(0.0, 1.0)
+            if "RHOB" in df.columns:
+                rhob_gr = pd.to_numeric(df["RHOB"], errors="coerce")
+                rho_ma_gr = np.asarray(
+                    rho_matrix(
+                        vsand=vsand_s.fillna(0.0).to_numpy(dtype=float),
+                        vclay=vclay_s.fillna(0.0).to_numpy(dtype=float),
+                    ),
+                    dtype=float,
                 )
-                .fillna(0.0)
-                .clip(0.0, 0.6)
-            )
+                rho_ma_gr = np.where(
+                    (rho_ma_gr > 1.2) & np.isfinite(rho_ma_gr), rho_ma_gr, 2.65
+                )
+                phit_ref = pd.Series(
+                    np.clip(
+                        density_porosity(
+                            rhob_gr.to_numpy(dtype=float),
+                            rho_ma_gr,
+                            req.fluid_point[1],
+                        ),
+                        0.0,
+                        0.6,
+                    ),
+                    index=df.index,
+                    dtype=float,
+                ).fillna(0.0)
+            else:
+                phit_ref = (
+                    (
+                        pd.to_numeric(df["PHIT"], errors="coerce")
+                        if "PHIT" in df.columns
+                        else pd.Series(0.0, index=df.index, dtype=float)
+                    )
+                    .fillna(0.0)
+                    .clip(0.0, 0.6)
+                )
             vmatrix_s = (1.0 - phit_ref).clip(0.0, 1.0)
             out_df["VCLAY"] = (vclay_s * vmatrix_s).clip(0.0, 1.0)
-            out_df["VSAND"] = ((1.0 - vclay_s).clip(0.0, 1.0) * vmatrix_s).clip(
+            out_df["VSAND"] = (vsand_s * vmatrix_s).clip(
                 0.0, 1.0
             )
             for mcol in ALL_LITHOLOGY_VOL_COLS:
@@ -2041,9 +2059,17 @@ def workspace_lithology(
                         ),
                         dtype=float,
                     )
+                    rho_ma_bh = np.asarray(
+                        rho_matrix(vsand=1.0 - vsh_v, vclay=vsh_v), dtype=float
+                    )
+                    rho_ma_bh = np.where(
+                        (rho_ma_bh > 1.2) & np.isfinite(rho_ma_bh),
+                        rho_ma_bh,
+                        rho_ma_sand,
+                    )
                     phit_bh = np.clip(
                         np.asarray(
-                            density_porosity(rhob_rec, rho_ma_sand, rho_fl), dtype=float
+                            density_porosity(rhob_rec, rho_ma_bh, rho_fl), dtype=float
                         ),
                         0.0,
                         0.45,
@@ -2387,9 +2413,12 @@ def workspace_porosity(
         rhob_v = rhob_s.to_numpy(dtype=float)
 
         lith_model = (req.lithology_model or "").lower()
-        mineral_vol_cols = [
-            c
-            for c in (
+        if lith_model == "ssc":
+            candidate_min_cols = ("VSAND", "VSILT", "VCLAY", "VCOAL")
+        elif lith_model == "vsh_gr":
+            candidate_min_cols = ("VSAND", "VCLAY", "VCOAL")
+        else:
+            candidate_min_cols = (
                 "VSAND",
                 "VSILT",
                 "VCLAY",
@@ -2403,140 +2432,99 @@ def workspace_porosity(
                 "VPYRI",
                 "VCOAL",
             )
-            if c in df.columns
-        ]
-        has_mm_cols = any(
-            c in df.columns
-            and pd.to_numeric(df.loc[valid_mask, c], errors="coerce").fillna(0.0).max()
-            > 1e-4
-            for c in (
-                "VCALC",
-                "VDOLO",
-                "VANHY",
-                "VHALI",
-                "VGYPS",
-                "VKAOL",
-                "VFELD",
-                "VPYRI",
-                "VCOAL",
+        mineral_vol_cols = [c for c in candidate_min_cols if c in df.columns]
+
+        n_valid = int(valid_mask.sum())
+        vol_kwargs: Dict[str, np.ndarray] = {}
+        total_min_vol = np.zeros(n_valid, dtype=float)
+        for c in mineral_vol_cols:
+            arr = (
+                pd.to_numeric(df.loc[valid_mask, c], errors="coerce")
+                .fillna(0.0)
+                .clip(0.0, 1.0)
+                .to_numpy(dtype=float)
             )
-        )
-        use_existing_minerals = lith_model in ("multi_mineral", "vsh_gr") or (
-            not lith_model and has_mm_cols
-        )
+            vol_kwargs[c.lower()] = arr
+            total_min_vol += arr
 
-        if use_existing_minerals and mineral_vol_cols:
-            vol_kwargs: Dict[str, np.ndarray] = {}
-            total_min_vol = np.zeros(int(valid_mask.sum()), dtype=float)
-            for c in mineral_vol_cols:
-                arr = (
-                    pd.to_numeric(df.loc[valid_mask, c], errors="coerce")
-                    .fillna(0.0)
-                    .clip(0.0, 1.0)
-                    .to_numpy(dtype=float)
-                )
-                vol_kwargs[c.lower()] = arr
-                total_min_vol += arr
+        norm_kwargs: Dict[str, np.ndarray] = {
+            k: np.where(total_min_vol > 1e-6, v / total_min_vol, 0.0)
+            for k, v in vol_kwargs.items()
+        }
 
-            norm_kwargs = {
-                k: np.where(total_min_vol > 1e-6, v / total_min_vol, 0.0)
-                for k, v in vol_kwargs.items()
-            }
-            rho_ma = np.asarray(rho_matrix(**norm_kwargs), dtype=float)
-            rho_ma = np.where((rho_ma > 1.2) & np.isfinite(rho_ma), rho_ma, 2.68)
-            phid_v = np.asarray(
-                density_porosity(rhob_v, rho_ma, req.fluid_point[1]), dtype=float
-            )
-
-            if req.method.lower() == "den":
-                phit_v = phid_v
-            elif (
-                lith_model == "multi_mineral"
-                and "PHIT_CONSTRUCTED" in df.columns
-                and pd.to_numeric(
-                    df.loc[valid_mask, "PHIT_CONSTRUCTED"], errors="coerce"
-                )
-                .notna()
-                .any()
-            ):
-                phit_c = pd.to_numeric(
-                    df.loc[valid_mask, "PHIT_CONSTRUCTED"], errors="coerce"
-                ).to_numpy(dtype=float)
-                phit_v = np.where(np.isfinite(phit_c), phit_c, phid_v)
-            else:
-                phit_v = np.clip(0.65 * phid_v + 0.35 * nphi_v, 0.0, 0.6)
-
-            vclay_bulk = vol_kwargs.get(
-                "vclay", np.zeros(int(valid_mask.sum()), dtype=float)
-            ) + vol_kwargs.get("vkaol", np.zeros(int(valid_mask.sum()), dtype=float))
-            vclay_mat = norm_kwargs.get(
-                "vclay", np.zeros(int(valid_mask.sum()), dtype=float)
-            )
-            phit_sh_v = np.asarray(estimate_shale_porosity(nphi_v, phid_v), dtype=float)
-            # Use bulk shale volume where mineral volumes are already bulk-normalized
-            vclay_eff = np.where(total_min_vol < 0.98, vclay_bulk, vclay_mat)
-            phie_v = np.clip(phit_v - (vclay_eff * phit_sh_v), 0.0, phit_v)
-        else:
+        # Fallback to SandSiltClay lithology estimation where no mineral volumes exist yet
+        need_ssc_fallback = total_min_vol <= 1e-6
+        if np.any(need_ssc_fallback) or req.method.lower() == "neu_den":
             vsand_m, vsilt_m, vclay_m, _ = ssc_model.estimate_lithology(nphi_s, rhob_s)
-            vsand = np.asarray(vsand_m, dtype=float)
-            vsilt = np.asarray(vsilt_m, dtype=float)
-            vclay = np.asarray(vclay_m, dtype=float)
-            if all(c in df.columns for c in ("VSAND", "VSILT", "VCLAY")):
-                vs_df = (
-                    pd.to_numeric(df.loc[valid_mask, "VSAND"], errors="coerce")
-                    .fillna(0.0)
-                    .clip(0.0, 1.0)
-                    .to_numpy(dtype=float)
+            if np.any(need_ssc_fallback):
+                vsand_fb = np.asarray(vsand_m, dtype=float)
+                vsilt_fb = np.asarray(vsilt_m, dtype=float)
+                vclay_fb = np.asarray(vclay_m, dtype=float)
+                norm_kwargs["vsand"] = np.where(
+                    need_ssc_fallback,
+                    vsand_fb,
+                    norm_kwargs.get("vsand", np.zeros(n_valid, dtype=float)),
                 )
-                vsi_df = (
-                    pd.to_numeric(df.loc[valid_mask, "VSILT"], errors="coerce")
-                    .fillna(0.0)
-                    .clip(0.0, 1.0)
-                    .to_numpy(dtype=float)
+                norm_kwargs["vsilt"] = np.where(
+                    need_ssc_fallback,
+                    vsilt_fb,
+                    norm_kwargs.get("vsilt", np.zeros(n_valid, dtype=float)),
                 )
-                vcl_df = (
-                    pd.to_numeric(df.loc[valid_mask, "VCLAY"], errors="coerce")
-                    .fillna(0.0)
-                    .clip(0.0, 1.0)
-                    .to_numpy(dtype=float)
-                )
-                tot_ssc = vs_df + vsi_df + vcl_df
-                has_ssc = tot_ssc > 1e-6
-                if np.any(has_ssc):
-                    vsand = np.where(has_ssc, vs_df / tot_ssc, vsand)
-                    vsilt = np.where(has_ssc, vsi_df / tot_ssc, vsilt)
-                    vclay = np.where(has_ssc, vcl_df / tot_ssc, vclay)
-            rho_ma = rho_matrix(vsand=vsand, vsilt=vsilt, vclay=vclay)
-            phid_v = density_porosity(rhob_v, rho_ma, req.fluid_point[1])
-
-            if req.method.lower() == "den":
-                phit_v = np.asarray(phid_v, dtype=float)
-            else:
-                phit_v = np.asarray(
-                    neu_den_xplot_poro(
-                        nphi_s,
-                        rhob_s,
-                        model=req.crossplot_model,
-                        dry_min1_point=req.dry_sand_point,
-                        dry_silt_point=ssc_model.dry_silt_point,
-                        dry_clay_point=ssc_model.dry_clay_point,
-                        fluid_point=req.fluid_point,
-                    ),
-                    dtype=float,
+                norm_kwargs["vclay"] = np.where(
+                    need_ssc_fallback,
+                    vclay_fb,
+                    norm_kwargs.get("vclay", np.zeros(n_valid, dtype=float)),
                 )
 
-            phit_sh_v = np.asarray(estimate_shale_porosity(nphi_v, phid_v), dtype=float)
-            phie_v = phit_v - (np.asarray(vclay, dtype=float) * phit_sh_v)
+        # Calculate matrix density from unnormalized mineral fractions and density porosity
+        rho_ma = np.asarray(rho_matrix(**norm_kwargs), dtype=float)
+        rho_ma = np.where((rho_ma > 1.2) & np.isfinite(rho_ma), rho_ma, 2.65)
+        phid_v = np.asarray(
+            density_porosity(rhob_v, rho_ma, req.fluid_point[1]), dtype=float
+        )
+
+        if req.method.lower() == "neu_den":
+            phit_v = np.asarray(
+                neu_den_xplot_poro(
+                    nphi_s,
+                    rhob_s,
+                    model=req.crossplot_model,
+                    dry_min1_point=req.dry_sand_point,
+                    dry_silt_point=ssc_model.dry_silt_point,
+                    dry_clay_point=ssc_model.dry_clay_point,
+                    fluid_point=req.fluid_point,
+                ),
+                dtype=float,
+            )
+        else:
+            phit_v = phid_v
+
+        vclay_mat = norm_kwargs.get(
+            "vclay", np.zeros(n_valid, dtype=float)
+        ) + norm_kwargs.get("vkaol", np.zeros(n_valid, dtype=float))
+        vclay_bulk = np.clip(
+            vclay_mat * np.clip(1.0 - np.clip(phit_v, 0.0, 1.0), 0.0, 1.0),
+            0.0,
+            1.0,
+        )
+        phit_sh_v = np.asarray(estimate_shale_porosity(nphi_v, phid_v), dtype=float)
+        phie_v = np.clip(
+            phit_v - (vclay_bulk * phit_sh_v),
+            0.0,
+            np.clip(phit_v, 0.0, 1.0),
+        )
 
         phit_s = pd.Series(np.nan, index=df.index, dtype=float)
         phie_s = pd.Series(np.nan, index=df.index, dtype=float)
         phid_s = pd.Series(np.nan, index=df.index, dtype=float)
         phit_sh_s = pd.Series(np.nan, index=df.index, dtype=float)
+        rhom_s = pd.Series(np.nan, index=df.index, dtype=float)
 
         phit_s.loc[valid_mask] = np.clip(phit_v, 0.0, 1.0)
         phie_s.loc[valid_mask] = np.clip(phie_v, 0.0, 1.0)
         phid_s.loc[valid_mask] = np.clip(np.asarray(phid_v, dtype=float), 0.0, 1.0)
         phit_sh_s.loc[valid_mask] = np.clip(phit_sh_v, 0.0, 1.0)
+        rhom_s.loc[valid_mask] = rho_ma
 
         if req.enable_coal_flagging:
             coal_mask = _compute_coal_mask(
@@ -2626,9 +2614,17 @@ def workspace_porosity(
                         ),
                         dtype=float,
                     )
+                    rho_ma_bh = np.asarray(
+                        rho_matrix(vsand=1.0 - vsh_v, vclay=vsh_v), dtype=float
+                    )
+                    rho_ma_bh = np.where(
+                        (rho_ma_bh > 1.2) & np.isfinite(rho_ma_bh),
+                        rho_ma_bh,
+                        rho_ma_sand,
+                    )
                     phid_bh = np.clip(
                         np.asarray(
-                            density_porosity(rhob_rec, rho_ma_sand, rho_fl), dtype=float
+                            density_porosity(rhob_rec, rho_ma_bh, rho_fl), dtype=float
                         ),
                         0.0,
                         0.45,
@@ -2640,11 +2636,15 @@ def workspace_porosity(
                         0.0,
                         0.45,
                     )
-                    phie_bh = np.clip(phid_bh - vsh_v * phit_sh_bh, 0.0, phid_bh)
+                    vclay_bh_bulk = vsh_v * np.clip(1.0 - phid_bh, 0.0, 1.0)
+                    phie_bh = np.clip(
+                        phid_bh - vclay_bh_bulk * phit_sh_bh, 0.0, phid_bh
+                    )
                     phit_s.loc[bh_gr] = phid_bh
                     phid_s.loc[bh_gr] = phid_bh
                     phit_sh_s.loc[bh_gr] = phit_sh_bh
                     phie_s.loc[bh_gr] = phie_bh
+                    rhom_s.loc[bh_gr] = rho_ma_bh
             elif bh_mode == "interpolate":
                 for s_ref in (phit_s, phie_s, phid_s, phit_sh_s):
                     s_ref.loc[active_badhole] = np.nan
@@ -2671,6 +2671,7 @@ def workspace_porosity(
                 "PHIE": phie_s,
                 "PHID": phid_s,
                 "PHIT_SH": phit_sh_s,
+                "RHOM": rhom_s,
                 "CPORE": cpore_s,
             }
         )
@@ -2759,7 +2760,7 @@ def workspace_porosity(
                 if ss_tot > 1e-12:
                     core_metrics["r2"] = round(float(1.0 - ss_res / ss_tot), 4)
 
-        save_poro_cols = ["DEPTH", "PHIT", "PHIE", "PHID"] + [
+        save_poro_cols = ["DEPTH", "PHIT", "PHIE", "PHID", "RHOM"] + [
             c for c in active_min_cols if c in out_df.columns
         ]
         save_row_mask = valid_mask | active_badhole
@@ -2849,11 +2850,18 @@ def _merge_request_fallback_curves(
                     nphi_s[vmask].reset_index(drop=True),
                     rhob_s[vmask].reset_index(drop=True),
                 )
+                rho_ma_fb = np.asarray(
+                    rho_matrix(vsand=vsand_v, vsilt=vsilt_v, vclay=vclay_v),
+                    dtype=float,
+                )
+                rho_ma_fb = np.where(
+                    (rho_ma_fb > 1.2) & np.isfinite(rho_ma_fb), rho_ma_fb, 2.65
+                )
                 phit_v = np.asarray(
-                    neu_den_xplot_poro(
-                        nphi_s[vmask].reset_index(drop=True),
-                        rhob_s[vmask].reset_index(drop=True),
-                        model="ssc",
+                    density_porosity(
+                        rhob_s[vmask].to_numpy(dtype=float),
+                        rho_ma_fb,
+                        ssc.fluid_point[1],
                     ),
                     dtype=float,
                 )

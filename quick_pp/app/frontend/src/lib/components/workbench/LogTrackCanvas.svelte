@@ -836,17 +836,22 @@
 			hasPrevLithTrace = true;
 		}
 
+		// Scale porosity curves (0 -> 0.5 v/v) onto Track 4's [0, 1] x-axis for 2x contrast while keeping customdata in true v/v
+		const scalePoro = (arr: (number | null)[]): (number | null)[] =>
+			arr.map((v) => (v !== null && Number.isFinite(v) ? v * 2.0 : null));
+
 		if (phit.some((v) => v !== null)) {
 			traces.push({
 				type: 'scattergl',
 				mode: 'lines',
 				name: 'PHIT',
-				x: phit,
+				x: scalePoro(phit),
+				customdata: phit,
 				y: depth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.phie, width: 1.6 },
-				hovertemplate: 'PHIT: %{x:.3f} v/v<extra></extra>'
+				hovertemplate: 'PHIT: %{customdata:.3f} v/v<extra></extra>'
 			});
 		}
 
@@ -863,11 +868,11 @@
 						const p = phitFill[i];
 						const ps = psandFill[i];
 						if (p !== null && Number.isFinite(p) && ps !== null && Number.isFinite(ps)) {
-							lastP = p;
-							upliftBase[i] = p;
-							upliftTop[i] = Math.max(p, ps);
+							lastP = p * 2.0;
+							upliftBase[i] = p * 2.0;
+							upliftTop[i] = Math.max(p, ps) * 2.0;
 						} else {
-							if (p !== null && Number.isFinite(p)) lastP = p;
+							if (p !== null && Number.isFinite(p)) lastP = p * 2.0;
 							upliftBase[i] = lastP;
 							upliftTop[i] = lastP;
 						}
@@ -903,29 +908,31 @@
 					type: 'scattergl',
 					mode: 'lines',
 					name: 'PHIT_SAND',
-					x: phitSand,
+					x: scalePoro(phitSand),
+					customdata: phitSand,
 					y: depth,
 					xaxis: 'x4',
 					yaxis: 'y',
 					line: { color: PETRO_COLORS.phitSand, width: 1.65, dash: 'dash' },
-					hovertemplate: 'PHIT_SAND (TS): %{x:.3f} v/v<extra></extra>'
+					hovertemplate: 'PHIT_SAND (TS): %{customdata:.3f} v/v<extra></extra>'
 				});
 			}
 		}
 
-		// Upscaled blocked porosity & P10/P90 uncertainty on Track 4
+		// Upscaled blocked porosity & P10/P90 uncertainty on Track 4 (scaled 0 -> 0.5)
 		const phitBlk = pick('PHIT_BLK');
 		if (phitBlk.some((v) => v !== null)) {
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
 				name: 'PHIT_BLK',
-				x: phitBlk,
+				x: scalePoro(phitBlk),
+				customdata: phitBlk,
 				y: depth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				line: { color: '#0F172A', width: 1.5, shape: 'hv' },
-				hovertemplate: 'PHIT_BLK: %{x:.3f} v/v<extra></extra>'
+				hovertemplate: 'PHIT_BLK: %{customdata:.3f} v/v<extra></extra>'
 			});
 		}
 		const phitP10 = pick('PHIT_P10');
@@ -935,39 +942,42 @@
 				type: 'scattergl',
 				mode: 'lines',
 				name: 'PHIT_P10',
-				x: phitP10,
+				x: scalePoro(phitP10),
+				customdata: phitP10,
 				y: depth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				line: { color: '#6366F1', width: 1.0, dash: 'dot' },
-				hovertemplate: 'PHIT P10: %{x:.3f}<extra></extra>'
+				hovertemplate: 'PHIT P10: %{customdata:.3f}<extra></extra>'
 			});
 			traces.push({
 				type: 'scattergl',
 				mode: 'lines',
 				name: 'PHIT_P90',
-				x: phitP90,
+				x: scalePoro(phitP90),
+				customdata: phitP90,
 				y: depth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				line: { color: '#6366F1', width: 1.0, dash: 'dot' },
-				hovertemplate: 'PHIT P90: %{x:.3f}<extra></extra>'
+				hovertemplate: 'PHIT P90: %{customdata:.3f}<extra></extra>'
 			});
 		}
 
-		// Core Porosity black dots (from CPORE curve or coreSamples)
+		// Core Porosity black dots (from CPORE curve or coreSamples, scaled 0 -> 0.5)
 		const cpore = pick('CPORE').length ? pick('CPORE') : pick('CORE_PORO');
 		if (cpore.some((v) => v !== null)) {
 			traces.push({
 				type: 'scattergl',
 				mode: 'markers',
 				name: 'CPORE',
-				x: cpore,
+				x: scalePoro(cpore),
+				customdata: cpore,
 				y: depth,
 				xaxis: 'x4',
 				yaxis: 'y',
 				marker: { color: PETRO_COLORS.core, size: 5.5, symbol: 'circle' },
-				hovertemplate: 'Core Poro: %{x:.3f}<extra></extra>'
+				hovertemplate: 'Core Poro: %{customdata:.3f}<extra></extra>'
 			});
 		} else if (wellData.coreSamples.length > 0) {
 			const cDepths = wellData.coreSamples
@@ -982,11 +992,13 @@
 					type: 'scattergl',
 					mode: 'markers',
 					name: 'CPORE',
-					x: cPoros,
+					x: scalePoro(cPoros),
+					customdata: cPoros,
 					y: cDepths,
 					xaxis: 'x4',
 					yaxis: 'y',
-					marker: { color: PETRO_COLORS.core, size: 5.5, symbol: 'circle' }
+					marker: { color: PETRO_COLORS.core, size: 5.5, symbol: 'circle' },
+					hovertemplate: 'Core Poro: %{customdata:.3f}<extra></extra>'
 				});
 			}
 		}
@@ -1967,7 +1979,7 @@
 				</div>
 			</div>
 
-			<!-- Track 4: LITH (0 -> 1 v/v) & PHIT / CPORE -->
+			<!-- Track 4: LITH (0 -> 1 v/v) & PHIT / CPORE (0 -> 0.5 v/v) -->
 			<div
 				style="left: 50.4%; width: 15.5%;"
 				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
@@ -1992,7 +2004,7 @@
 						>
 							<span>0</span>
 							<span class="font-sans text-[8px] font-bold">PHIT / CORE ►</span>
-							<span>1.0</span>
+							<span>0.5</span>
 						</div>
 						<div class="mt-[1px] h-[1.5px] w-full" style="background: {PETRO_COLORS.phie}"></div>
 					</div>
@@ -2003,7 +2015,7 @@
 						>
 							<span>0</span>
 							<span class="font-sans text-[8px] font-bold">PHIT_SAND (TS) ►</span>
-							<span>1.0</span>
+							<span>0.5</span>
 						</div>
 						<div
 							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed"
@@ -2026,7 +2038,7 @@
 						>
 							<span>0</span>
 							<span class="font-sans text-[9px] font-bold">PHIT / CORE ►</span>
-							<span>1.0</span>
+							<span>0.5</span>
 						</div>
 						<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.phie}"></div>
 					</div>

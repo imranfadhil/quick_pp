@@ -253,7 +253,7 @@ class WorkbenchState {
 	// Shared interactive parameters between Left Pane Inspectors & Right Pane Crossplot
 	lithoParams = $state<LithoEndpointParams>({
 		model: 'ssc',
-		porosityMethod: 'neu_den',
+		porosityMethod: 'den',
 		logCorrectionMode: 'none',
 		useHcCorrected: false,
 		enableHcCorrection: false,
