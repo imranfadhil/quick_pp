@@ -81,10 +81,15 @@ from quick_pp.rock_type import (
     calc_fzi,
     calc_r35,
     calc_rfn,
+    compute_rock_flag_comparison,
+    delete_saved_rt_classifier,
     find_cutoffs,
     find_cutoffs_gmm,
     find_cutoffs_lorenz,
+    get_saved_rt_classifiers_status,
+    predict_with_saved_rt_classifier,
     rock_typing,
+    save_cached_rt_classifier,
     train_and_validate_rock_type_classifier,
 )
 from quick_pp.saturation import (
@@ -838,7 +843,7 @@ class WorkspaceRockTypingRequest(BaseModel):
     )
     train_classifier: bool = Field(
         False,
-        description="Train a supervised Rock Type classifier on GR, NPHI, RHOB, log10(RT), optional PEF, and VDL and evaluate via Contingency Table (Confusion Matrix)",
+        description="Train a supervised Rock Type classifier on selectable log features and evaluate via Contingency Table (Confusion Matrix)",
     )
     apply_classifier_propagation: bool = Field(
         False,
@@ -846,11 +851,15 @@ class WorkspaceRockTypingRequest(BaseModel):
     )
     propagation_mode: str = Field(
         "fill_missing",
-        description="Propagation mode when apply_classifier_propagation is True: 'fill_missing' (keep cutoff-binned DRTs and fill uncored/unbinned depths with ML) or 'full_ml' (use ML predicted DRTs across all log depths)",
+        description="Active ROCK_FLAG selection / propagation mode: 'cutoff_only' (pure cutoffs), 'fill_missing' (keep cutoff-binned DRTs and fill uncored/unbinned depths in focused interval with ML), or 'full_ml' (use ML predicted DRTs across focused interval)",
     )
     classifier_model: str = Field(
         "random_forest",
         description="Classification algorithm: 'random_forest', 'extra_trees', or 'gradient_boosting'",
+    )
+    selected_features: Optional[List[str]] = Field(
+        None,
+        description="Explicit list of log input features to use for ML classification: subset of ['GR', 'NPHI', 'RHOB', 'LOG_RT', 'PEF', 'VDL']",
     )
     include_pef: bool = Field(
         True,
@@ -864,8 +873,53 @@ class WorkspaceRockTypingRequest(BaseModel):
         0.25,
         description="Validation holdout split fraction (0.10..0.50) for Contingency Table evaluation",
     )
+    zones: Optional[List[str]] = Field(
+        None,
+        description="Optional list of zone names to focus/filter ML propagation",
+    )
+    min_depth: Optional[float] = Field(
+        None,
+        description="Optional minimum depth for focused interval ML propagation",
+    )
+    max_depth: Optional[float] = Field(
+        None,
+        description="Optional maximum depth for focused interval ML propagation",
+    )
+    propagate_focused_only: bool = Field(
+        True,
+        description="Restrict ML propagation to focused/filtered intervals only (selected zones, depth filter, per-well focus depth, and evaluated porosity intervals)",
+    )
+    saved_model_key: Optional[str] = Field(
+        None,
+        description="Optional key of a previously saved Rock Type classifier model to run inference/propagation without retraining",
+    )
+    save_classifier_model: bool = Field(
+        False,
+        description="Save the trained Rock Type classifier model (with its performance metrics and CM) to disk",
+    )
+    classifier_model_key: Optional[str] = Field(
+        None,
+        description="Identifier key when saving the trained Rock Type classifier model",
+    )
+    classifier_model_name: Optional[str] = Field(
+        None,
+        description="Human-readable display name when saving the trained Rock Type classifier model",
+    )
     no_of_cutoffs: int = Field(3)
     save: bool = Field(False)
+
+
+class WorkspaceRtSaveModelRequest(BaseModel):
+    model_key: str = Field(
+        "rt_custom",
+        description="Model identifier key in the saved Rock Type classifier registry",
+    )
+    model_name: Optional[str] = Field(
+        None,
+        description="Human-readable display name for the saved Rock Type classifier",
+    )
+    drt_method: Optional[str] = Field(None)
+    cutoffs: Optional[List[float]] = Field(None)
 
 
 class WorkspacePermTransformRequest(BaseModel):
@@ -877,6 +931,10 @@ class WorkspacePermTransformRequest(BaseModel):
         description="Fallback rock typing method if ROCK_FLAG is not yet saved: 'fzi', 'winland', or 'lucia'",
     )
     cutoffs: List[float] = Field(default_factory=lambda: [0.5, 1.2, 2.5, 5.0])
+    rock_flag_source: Optional[str] = Field(
+        None,
+        description="Which ROCK_FLAG source to use: 'cutoff_only', 'fill_missing', or 'full_ml'",
+    )
     fits: Optional[Dict[str, Dict[str, float]]] = Field(
         None,
         description="Optional manual (a, b) fits per ROCK_FLAG. If None, auto-fitted from well data.",
@@ -895,6 +953,10 @@ class WorkspaceShfRequest(BaseModel):
     drt_method: str = Field(
         "fzi",
         description="Rock typing method for SCAL core plug and fallback log classification: 'fzi', 'winland', or 'lucia'",
+    )
+    rock_flag_source: Optional[str] = Field(
+        None,
+        description="Which ROCK_FLAG source to use: 'cutoff_only', 'fill_missing', or 'full_ml'",
     )
     unit: str = Field("metric", description="Depth unit: 'metric' or 'imperial'")
     cutoffs: List[float] = Field(default_factory=lambda: [0.1, 1.0, 3.0])
@@ -3746,6 +3808,167 @@ def _eval_drt_indicator_scalar_or_array(phit, perm, method: str = "fzi"):
     return calc_fzi(phit, perm), True, "fzi"
 
 
+@router.get(
+    "/rock_typing/models",
+    summary="List saved Rock Type classifier models with performance metrics and contingency tables",
+)
+def workspace_rt_models_status(project_id: int) -> Dict[str, Any]:
+    """Return status and metadata of all saved Rock Type classifiers."""
+    return get_saved_rt_classifiers_status()
+
+
+@router.post(
+    "/rock_typing/models/save",
+    summary="Save the latest trained Rock Type classifier model with its name, performance, and contingency matrix",
+)
+def workspace_rt_save_model(
+    project_id: int, req: WorkspaceRtSaveModelRequest
+) -> Dict[str, Any]:
+    """Save the most recently trained Rock Type classifier into persistent storage."""
+    try:
+        res = save_cached_rt_classifier(
+            model_key=req.model_key,
+            model_name=req.model_name,
+            cache_key=f"project_{project_id}",
+            extra_meta={
+                "project_id": project_id,
+                "drt_method": req.drt_method,
+                "cutoffs": req.cutoffs,
+            },
+        )
+        return {
+            **res,
+            "models_status": get_saved_rt_classifiers_status(),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to save Rock Type classifier model: {e}"
+        ) from e
+
+
+@router.delete(
+    "/rock_typing/models/{model_key}",
+    summary="Delete a saved Rock Type classifier model",
+)
+def workspace_rt_delete_model(project_id: int, model_key: str) -> Dict[str, Any]:
+    """Delete a saved Rock Type classifier model by key."""
+    deleted = delete_saved_rt_classifier(model_key)
+    return {
+        "deleted": deleted,
+        "model_key": model_key,
+        **get_saved_rt_classifiers_status(),
+    }
+
+
+def _populate_well_zones_and_focused_mask(
+    project_id: int,
+    well_name: str,
+    w_df: pd.DataFrame,
+    req_zones: Optional[List[str]],
+    req_min_depth: Optional[float],
+    req_max_depth: Optional[float],
+    propagate_focused_only: bool,
+    proj_obj: Any = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, Any]]:
+    """Populate ZONES from formation tops if missing and compute boolean mask for the focused/filtered interval."""
+    df_out = w_df.copy()
+    d_num = pd.to_numeric(df_out["DEPTH"], errors="coerce")
+
+    if "ZONES" not in df_out.columns or not df_out["ZONES"].notna().any():
+        try:
+            anc = (
+                proj_obj.get_well_ancillary_data(well_name)
+                if proj_obj is not None
+                else {}
+            )
+            tops_df = anc.get("formation_tops") if isinstance(anc, dict) else None
+            if isinstance(tops_df, pd.DataFrame) and not tops_df.empty and not df_out.empty:
+                df_out["ZONES"] = pd.NA
+                for _, top in tops_df.iterrows():
+                    try:
+                        top_depth = float(top.get("depth"))
+                        top_name = str(top.get("name"))
+                    except Exception:
+                        continue
+                    nearest_idx = (d_num - top_depth).abs().idxmin()
+                    df_out.at[nearest_idx, "ZONES"] = top_name
+                df_out["ZONES"] = df_out["ZONES"].ffill()
+        except Exception:
+            pass
+
+    mask = d_num.notna().copy()
+    eff_min_d = req_min_depth
+    eff_max_d = req_max_depth
+
+    if propagate_focused_only and eff_min_d is None and eff_max_d is None:
+        ephem_cfg = _ephemeral_well_configs.get((project_id, str(well_name))) or {}
+        f_min = ephem_cfg.get("focus_min_depth")
+        f_max = ephem_cfg.get("focus_max_depth")
+        if f_min is None and f_max is None and proj_obj is not None:
+            try:
+                w_orm = proj_obj.get_well(str(well_name))
+                cfg_data = getattr(w_orm, "config_data", None) or {}
+                if isinstance(cfg_data, dict):
+                    f_min = cfg_data.get("focus_min_depth")
+                    f_max = cfg_data.get("focus_max_depth")
+            except Exception:
+                pass
+        if f_min is not None:
+            eff_min_d = float(f_min)
+        if f_max is not None:
+            eff_max_d = float(f_max)
+
+    if eff_min_d is not None:
+        mask &= d_num >= float(eff_min_d)
+    if eff_max_d is not None:
+        mask &= d_num <= float(eff_max_d)
+
+    allowed_zones = (
+        {str(z).strip() for z in req_zones if str(z).strip()}
+        if req_zones
+        else set()
+    )
+    if allowed_zones and "ZONES" in df_out.columns:
+        z_series = df_out["ZONES"].fillna("Unknown").astype(str).str.strip()
+        z_mask = z_series.isin(allowed_zones)
+        if z_mask.any():
+            mask &= z_mask
+        else:
+            mask &= False
+
+    # If propagate_focused_only is True and no explicit zone/depth filter narrowed the well,
+    # restrict to the evaluated porosity interval [min_eval_depth, max_eval_depth] if PHIT/PHIE/CPORE is present on a sub-interval
+    if (
+        propagate_focused_only
+        and not allowed_zones
+        and eff_min_d is None
+        and eff_max_d is None
+    ):
+        for pcol in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR", "CORE_POR"):
+            if pcol in df_out.columns:
+                ps = pd.to_numeric(df_out[pcol], errors="coerce")
+                valid_p = ps.notna() & (ps > 0) & d_num.notna()
+                if valid_p.any():
+                    d_eval = d_num[valid_p]
+                    min_eval = float(d_eval.min())
+                    max_eval = float(d_eval.max())
+                    mask &= (d_num >= min_eval) & (d_num <= max_eval)
+                    eff_min_d = min_eval
+                    eff_max_d = max_eval
+                    break
+
+    d_focused = d_num[mask]
+    info = {
+        "total_samples": int(d_num.notna().sum()),
+        "focused_samples": int(mask.sum()),
+        "min_depth": round(float(d_focused.min()), 2) if not d_focused.empty else eff_min_d,
+        "max_depth": round(float(d_focused.max()), 2) if not d_focused.empty else eff_max_d,
+    }
+    return df_out, mask, info
+
+
 @router.post(
     "/rock_typing/compute",
     summary="Compute FZI, Winland R35, or Lucia RFN rock typing across project wells and optionally save ROCK_FLAG",
@@ -3774,6 +3997,37 @@ def _execute_workspace_rock_typing(
     has_sonic = bool(raw_fzi_data.get("has_sonic", False))
     sonic_wells = list(raw_fzi_data.get("sonic_wells") or [])
     fzi_data = _filter_fzi_data_by_wells(raw_fzi_data, req.well_names)
+
+    # Apply optional zone / depth filter to fzi_data if requested and sufficient samples remain
+    if req.zones or req.min_depth is not None or req.max_depth is not None:
+        w_arr_f = fzi_data.get("well_names") or []
+        d_arr_f = fzi_data.get("depths") or []
+        z_arr_f = fzi_data.get("zones") or []
+        allowed_z = (
+            {str(z).strip() for z in req.zones if str(z).strip()}
+            if req.zones
+            else set()
+        )
+        keep_indices: List[int] = []
+        for idx_f, (dv, zv) in enumerate(zip(d_arr_f, z_arr_f)):
+            if dv is None:
+                continue
+            d_flt = float(dv)
+            if req.min_depth is not None and d_flt < float(req.min_depth):
+                continue
+            if req.max_depth is not None and d_flt > float(req.max_depth):
+                continue
+            if allowed_z and str(zv or "Unknown").strip() not in allowed_z:
+                continue
+            keep_indices.append(idx_f)
+        if len(keep_indices) >= 4:
+            filtered_fzi: Dict[str, Any] = {}
+            for k_f, arr_f in fzi_data.items():
+                if isinstance(arr_f, list) and len(arr_f) == len(w_arr_f):
+                    filtered_fzi[k_f] = [arr_f[i] for i in keep_indices]
+                else:
+                    filtered_fzi[k_f] = arr_f
+            fzi_data = filtered_fzi
 
     phit_arr = np.asarray(fzi_data["phit"], dtype=float)
     perm_arr = np.asarray(fzi_data["perm"], dtype=float)
@@ -3927,14 +4181,28 @@ def _execute_workspace_rock_typing(
     log_well_names: List[str] = []
     log_depths: List[float] = []
     log_rock_flags: List[Optional[int]] = []
+    log_rock_flags_cutoff: List[Optional[int]] = []
     log_rock_flags_ml: List[Optional[int]] = []
     log_vdl: List[Optional[float]] = []
 
-    if req.train_classifier or req.apply_classifier_propagation:
+    prop_mode = str(req.propagation_mode or "fill_missing").strip().lower()
+    if prop_mode not in ("cutoff_only", "fill_missing", "full_ml"):
+        prop_mode = "fill_missing"
+
+    run_ml = bool(
+        req.train_classifier
+        or req.apply_classifier_propagation
+        or (req.saved_model_key and str(req.saved_model_key).strip())
+    )
+
+    well_full_updates: Dict[str, pd.DataFrame] = {}
+
+    if run_ml:
+        proj_obj = None
         try:
             with get_db() as session:
-                proj = db_objects.Project.load(session, project_id=project_id)
-                all_proj_wells = [str(w) for w in proj.get_well_names()]
+                proj_obj = db_objects.Project.load(session, project_id=project_id)
+                all_proj_wells = [str(w) for w in proj_obj.get_well_names()]
         except Exception:
             all_proj_wells = []
         if req.well_names:
@@ -3951,12 +4219,34 @@ def _execute_workspace_rock_typing(
                 binned_lookup[(str(wn), round(float(d), 4))] = int(rf_b)
 
         well_dfs: List[pd.DataFrame] = []
+        total_well_samples = 0
+        focused_well_samples = 0
+        focused_min_depths: List[float] = []
+        focused_max_depths: List[float] = []
+
         for wn in unique_wells:
             w_df = _get_merged_dataframe_sync(project_id, str(wn))
             if w_df.empty or "DEPTH" not in w_df.columns:
                 continue
-            w_copy = w_df.copy()
+            w_copy, f_mask, f_info = _populate_well_zones_and_focused_mask(
+                project_id=project_id,
+                well_name=str(wn),
+                w_df=w_df,
+                req_zones=req.zones,
+                req_min_depth=req.min_depth,
+                req_max_depth=req.max_depth,
+                propagate_focused_only=bool(req.propagate_focused_only),
+                proj_obj=proj_obj,
+            )
+            total_well_samples += int(f_info["total_samples"])
+            focused_well_samples += int(f_info["focused_samples"])
+            if f_info["min_depth"] is not None:
+                focused_min_depths.append(float(f_info["min_depth"]))
+            if f_info["max_depth"] is not None:
+                focused_max_depths.append(float(f_info["max_depth"]))
+
             w_copy["WELL_NAME"] = str(wn)
+            w_copy["_FOCUSED_MASK"] = f_mask.to_numpy(dtype=bool)
             d_keys = [
                 round(float(dv), 4) if pd.notna(dv) else -999999.0
                 for dv in pd.to_numeric(w_copy["DEPTH"], errors="coerce")
@@ -3968,33 +4258,99 @@ def _execute_workspace_rock_typing(
 
         if well_dfs:
             combined_df = pd.concat(well_dfs, ignore_index=True)
-            clf_res = train_and_validate_rock_type_classifier(
-                combined_df,
-                include_pef=req.include_pef,
-                include_vdl=req.include_vdl,
-                model_type=req.classifier_model,
-                test_size=req.test_size,
-                dt_matrix=req.dt_matrix,
-                dt_fluid=req.dt_fluid,
+            focused_mask_arr = combined_df["_FOCUSED_MASK"].to_numpy(dtype=bool)
+            # If propagate_focused_only caused 0 focused rows across all wells, fall back to all valid depth rows
+            if req.propagate_focused_only and not focused_mask_arr.any():
+                focused_mask_arr = pd.to_numeric(
+                    combined_df["DEPTH"], errors="coerce"
+                ).notna().to_numpy(dtype=bool)
+                focused_well_samples = int(focused_mask_arr.sum())
+
+            # Subset DataFrame for training/prediction on focused interval if enough labeled samples exist
+            focused_df = (
+                combined_df.loc[focused_mask_arr].reset_index(drop=True)
+                if req.propagate_focused_only
+                else combined_df
+            )
+            labeled_in_focused = int(
+                pd.to_numeric(focused_df["ROCK_FLAG"], errors="coerce").notna().sum()
+            )
+            train_df = (
+                focused_df
+                if (not req.propagate_focused_only or labeled_in_focused >= 6)
+                else combined_df
             )
 
-            ml_lookup: Dict[Tuple[str, float], Tuple[Optional[int], Optional[float], Optional[float]]] = {}
-            comb_wells = combined_df["WELL_NAME"].astype(str).tolist()
-            comb_depths = pd.to_numeric(combined_df["DEPTH"], errors="coerce").tolist()
-            comb_binned = pd.to_numeric(combined_df["ROCK_FLAG"], errors="coerce").tolist()
+            used_saved_key = (
+                str(req.saved_model_key).strip()
+                if (req.saved_model_key and not req.train_classifier)
+                else ""
+            )
+            saved_model_info: Optional[Dict[str, Any]] = None
+
+            if used_saved_key:
+                clf_res = predict_with_saved_rt_classifier(
+                    train_df,
+                    model_key=used_saved_key,
+                    dt_matrix=req.dt_matrix,
+                    dt_fluid=req.dt_fluid,
+                )
+            else:
+                clf_res = train_and_validate_rock_type_classifier(
+                    train_df,
+                    selected_features=req.selected_features,
+                    include_pef=req.include_pef,
+                    include_vdl=req.include_vdl,
+                    model_type=req.classifier_model,
+                    test_size=req.test_size,
+                    dt_matrix=req.dt_matrix,
+                    dt_fluid=req.dt_fluid,
+                    cache_key=f"project_{project_id}",
+                )
+                if req.save_classifier_model:
+                    saved_model_info = save_cached_rt_classifier(
+                        model_key=req.classifier_model_key or "",
+                        model_name=req.classifier_model_name,
+                        cache_key=f"project_{project_id}",
+                        extra_meta={
+                            "project_id": project_id,
+                            "drt_method": method,
+                            "cutoffs": cutoffs,
+                        },
+                    )
+                    used_saved_key = str(saved_model_info.get("model_key") or "")
+
+            ml_lookup: Dict[
+                Tuple[str, float],
+                Tuple[Optional[int], Optional[float], Optional[float]],
+            ] = {}
+            comb_wells = train_df["WELL_NAME"].astype(str).tolist()
+            comb_depths = pd.to_numeric(train_df["DEPTH"], errors="coerce").tolist()
+            comb_binned = pd.to_numeric(train_df["ROCK_FLAG"], errors="coerce").tolist()
+            comb_focused = (
+                train_df["_FOCUSED_MASK"].to_numpy(dtype=bool).tolist()
+                if "_FOCUSED_MASK" in train_df.columns
+                else [True] * len(comb_wells)
+            )
             pred_rf_all = clf_res["predicted_rock_flags"]
             pred_conf_all = clf_res["predicted_confidence"]
             vdl_all = clf_res["vdl"]
-            prop_mode = str(req.propagation_mode or "fill_missing").strip().lower()
 
             propagated_uncored_count = 0
-            for cw, cd, cb, prf, pcf, vdl_v in zip(
-                comb_wells, comb_depths, comb_binned, pred_rf_all, pred_conf_all, vdl_all
+            for cw, cd, cb, is_foc, prf, pcf, vdl_v in zip(
+                comb_wells,
+                comb_depths,
+                comb_binned,
+                comb_focused,
+                pred_rf_all,
+                pred_conf_all,
+                vdl_all,
             ):
                 if cd is None or pd.isna(cd):
                     continue
+                if req.propagate_focused_only and not is_foc:
+                    continue
                 dk = round(float(cd), 4)
-                ml_lookup[(cw, dk)] = (prf, pcf, vdl_v)
                 cb_int = (
                     int(round(float(cb)))
                     if (cb is not None and not pd.isna(cb))
@@ -4006,19 +4362,25 @@ def _execute_workspace_rock_typing(
                     if (vdl_v is not None and not pd.isna(vdl_v))
                     else None
                 )
-                if req.apply_classifier_propagation:
-                    eff_rf = (
-                        (prf_int if prf_int is not None else cb_int)
-                        if prop_mode == "full_ml"
-                        else (cb_int if cb_int is not None else prf_int)
-                    )
+                ml_lookup[(cw, dk)] = (prf_int, pcf, vdl_flt)
+
+                if not req.apply_classifier_propagation or prop_mode == "cutoff_only":
+                    eff_rf = cb_int
+                elif prop_mode == "full_ml":
+                    eff_rf = prf_int if prf_int is not None else cb_int
                 else:
                     eff_rf = cb_int if cb_int is not None else prf_int
 
-                if eff_rf is not None or prf_int is not None or vdl_flt is not None:
+                if (
+                    eff_rf is not None
+                    or cb_int is not None
+                    or prf_int is not None
+                    or vdl_flt is not None
+                ):
                     log_well_names.append(cw)
                     log_depths.append(dk)
                     log_rock_flags.append(eff_rf)
+                    log_rock_flags_cutoff.append(cb_int)
                     log_rock_flags_ml.append(prf_int)
                     log_vdl.append(vdl_flt)
 
@@ -4027,11 +4389,14 @@ def _execute_workspace_rock_typing(
                         propagated_uncored_count += 1
                     row_ext: Dict[str, Any] = {
                         "DEPTH": float(cd),
+                        "ROCK_FLAG": (
+                            int(eff_rf) if eff_rf is not None else np.nan
+                        ),
+                        "ROCK_FLAG_CUTOFF": np.nan,
+                        "ROCK_FLAG_ML": (
+                            int(prf_int) if prf_int is not None else np.nan
+                        ),
                     }
-                    if req.apply_classifier_propagation and prf_int is not None:
-                        row_ext["ROCK_FLAG"] = int(prf_int)
-                    if prf_int is not None:
-                        row_ext["ROCK_FLAG_ML"] = int(prf_int)
                     if vdl_flt is not None:
                         row_ext["VDL"] = float(vdl_flt)
                     extra_propagated_by_well.setdefault(cw, []).append(row_ext)
@@ -4044,7 +4409,7 @@ def _execute_workspace_rock_typing(
                         rock_prob_ml[idx_r] = hit[1]
                         vdl_list[idx_r] = hit[2]
 
-            if req.apply_classifier_propagation:
+            if req.apply_classifier_propagation and prop_mode != "cutoff_only":
                 new_rock_flags: List[Optional[int]] = []
                 for rf_b, rf_m in zip(rock_flags_binned, rock_flags_ml):
                     if prop_mode == "full_ml":
@@ -4052,12 +4417,48 @@ def _execute_workspace_rock_typing(
                     else:
                         new_rock_flags.append(rf_b if rf_b is not None else rf_m)
                 rock_flags = new_rock_flags
+            else:
+                rock_flags = list(rock_flags_binned)
+
+            comparison = compute_rock_flag_comparison(
+                log_rock_flags_cutoff,
+                log_rock_flags_ml,
+                labels=clf_res["labels"],
+            )
 
             classifier_diag = {
-                "trained": True,
-                "propagated": bool(req.apply_classifier_propagation),
+                "trained": bool(clf_res.get("trained", True)),
+                "propagated": bool(
+                    req.apply_classifier_propagation and prop_mode != "cutoff_only"
+                ),
                 "propagation_mode": prop_mode,
+                "propagate_focused_only": bool(req.propagate_focused_only),
+                "focused_interval": {
+                    "propagate_focused_only": bool(req.propagate_focused_only),
+                    "total_well_samples": int(total_well_samples),
+                    "focused_samples": int(focused_well_samples),
+                    "excluded_samples": max(
+                        0, int(total_well_samples - focused_well_samples)
+                    ),
+                    "zones": list(req.zones or []),
+                    "min_depth": (
+                        round(min(focused_min_depths), 2)
+                        if focused_min_depths
+                        else req.min_depth
+                    ),
+                    "max_depth": (
+                        round(max(focused_max_depths), 2)
+                        if focused_max_depths
+                        else req.max_depth
+                    ),
+                },
                 "model_type": clf_res["model_type"],
+                "saved_model_key": used_saved_key or clf_res.get("saved_model_key"),
+                "saved_model_name": (
+                    saved_model_info.get("model_name")
+                    if saved_model_info
+                    else clf_res.get("saved_model_name")
+                ),
                 "features_used": clf_res["features_used"],
                 "labels": clf_res["labels"],
                 "contingency_table": clf_res["contingency_table"],
@@ -4067,14 +4468,99 @@ def _execute_workspace_rock_typing(
                 },
                 "class_metrics": clf_res["class_metrics"],
                 "feature_importances": clf_res["feature_importances"],
+                "comparison": comparison,
+                "models_status": get_saved_rt_classifiers_status(),
             }
 
+            # Build full-well curve DataFrames so in-memory cache clears any stale flags outside the focused interval
+            core_row_lookup: Dict[Tuple[str, float], Dict[str, Any]] = {}
+            for idx_row, (wn_r, d_r, rf_r, rf_b_r, ind_val) in enumerate(
+                zip(well_names, depths, rock_flags, rock_flags_binned, active_list)
+            ):
+                if wn_r is not None and d_r is not None:
+                    dk_r = round(float(d_r), 4)
+                    r_entry: Dict[str, Any] = {
+                        "ROCK_FLAG": float(rf_r) if rf_r is not None else np.nan,
+                        "ROCK_FLAG_CUTOFF": (
+                            float(rf_b_r) if rf_b_r is not None else np.nan
+                        ),
+                    }
+                    if ind_val is not None:
+                        r_entry[indicator_col] = float(ind_val)
+                    if rfn_list[idx_row] is not None and (
+                        method == "lucia" or override_active
+                    ):
+                        r_entry["RFN"] = float(rfn_list[idx_row])
+                    if phi_sec_list[idx_row] is not None:
+                        r_entry["PHI_SEC"] = float(phi_sec_list[idx_row])
+                    core_row_lookup[(str(wn_r), dk_r)] = r_entry
+
+            for w_df_item in well_dfs:
+                wn_str = str(w_df_item["WELL_NAME"].iloc[0])
+                d_col = pd.to_numeric(w_df_item["DEPTH"], errors="coerce")
+                rf_col_vals: List[float] = []
+                rf_cut_vals: List[float] = []
+                rf_ml_vals: List[float] = []
+                vdl_col_vals: List[float] = []
+                ind_col_vals: List[float] = []
+                for dv in d_col.tolist():
+                    if dv is None or pd.isna(dv):
+                        rf_col_vals.append(np.nan)
+                        rf_cut_vals.append(np.nan)
+                        rf_ml_vals.append(np.nan)
+                        vdl_col_vals.append(np.nan)
+                        ind_col_vals.append(np.nan)
+                        continue
+                    dk = round(float(dv), 4)
+                    c_hit = core_row_lookup.get((wn_str, dk))
+                    m_hit = ml_lookup.get((wn_str, dk))
+                    cb_v = c_hit["ROCK_FLAG_CUTOFF"] if c_hit else np.nan
+                    ml_v = (
+                        float(m_hit[0])
+                        if (m_hit and m_hit[0] is not None)
+                        else np.nan
+                    )
+                    vdl_v = (
+                        float(m_hit[2])
+                        if (m_hit and m_hit[2] is not None)
+                        else np.nan
+                    )
+                    if not req.apply_classifier_propagation or prop_mode == "cutoff_only":
+                        act_v = cb_v
+                    elif prop_mode == "full_ml":
+                        act_v = ml_v if not np.isnan(ml_v) else cb_v
+                    else:
+                        act_v = cb_v if not np.isnan(cb_v) else ml_v
+                    rf_col_vals.append(act_v)
+                    rf_cut_vals.append(cb_v)
+                    rf_ml_vals.append(ml_v)
+                    vdl_col_vals.append(vdl_v)
+                    ind_col_vals.append(
+                        c_hit.get(indicator_col, np.nan) if c_hit else np.nan
+                    )
+
+                upd_w_df = pd.DataFrame(
+                    {
+                        "DEPTH": w_df_item["DEPTH"].to_numpy(),
+                        "ROCK_FLAG": rf_col_vals,
+                        "ROCK_FLAG_CUTOFF": rf_cut_vals,
+                        "ROCK_FLAG_ML": rf_ml_vals,
+                        "VDL": vdl_col_vals,
+                        indicator_col: ind_col_vals,
+                    }
+                )
+                well_full_updates[wn_str] = upd_w_df
+
     by_well: Dict[str, List[Dict[str, Any]]] = {}
-    for idx_row, (wn, d, rf, ind_val) in enumerate(
-        zip(well_names, depths, rock_flags, active_list)
+    for idx_row, (wn, d, rf, rf_b, ind_val) in enumerate(
+        zip(well_names, depths, rock_flags, rock_flags_binned, active_list)
     ):
-        if rf is not None and d is not None:
-            row_dict: Dict[str, Any] = {"DEPTH": d, "ROCK_FLAG": rf}
+        if (rf is not None or rf_b is not None) and d is not None:
+            row_dict: Dict[str, Any] = {
+                "DEPTH": d,
+                "ROCK_FLAG": rf if rf is not None else np.nan,
+                "ROCK_FLAG_CUTOFF": rf_b if rf_b is not None else np.nan,
+            }
             if ind_val is not None:
                 row_dict[indicator_col] = ind_val
             if rfn_list[idx_row] is not None and (method == "lucia" or override_active):
@@ -4090,26 +4576,35 @@ def _execute_workspace_rock_typing(
     for wn, ext_rows in extra_propagated_by_well.items():
         by_well.setdefault(wn, []).extend(ext_rows)
 
-    for wn, rows in by_well.items():
-        _update_in_memory_well_cache(project_id, wn, pd.DataFrame(rows))
+    if well_full_updates:
+        for wn, full_df in well_full_updates.items():
+            _update_in_memory_well_cache(project_id, wn, full_df)
+    else:
+        for wn, rows in by_well.items():
+            _update_in_memory_well_cache(project_id, wn, pd.DataFrame(rows))
 
     saved_wells = 0
     if req.save:
-        for wn, rows in by_well.items():
-            _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
-        saved_wells = len(by_well)
+        if well_full_updates:
+            for wn, full_df in well_full_updates.items():
+                _save_curves_to_well(project_id, wn, full_df)
+            saved_wells = len(well_full_updates)
+        else:
+            for wn, rows in by_well.items():
+                _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
+            saved_wells = len(by_well)
 
     flag_counts: Dict[str, int] = {}
     for rf in rock_flags:
         if rf is not None:
             key = str(rf)
             flag_counts[key] = flag_counts.get(key, 0) + 1
-    if req.apply_classifier_propagation:
+    if req.apply_classifier_propagation and prop_mode != "cutoff_only":
         for ext_rows in extra_propagated_by_well.values():
             for r_ext in ext_rows:
                 rf_e = r_ext.get("ROCK_FLAG")
-                if rf_e is not None:
-                    key = str(rf_e)
+                if rf_e is not None and not pd.isna(rf_e):
+                    key = str(int(rf_e))
                     flag_counts[key] = flag_counts.get(key, 0) + 1
 
     active_diag = lorenz_res if cutoff_method == "lorenz" else gmm_res
@@ -4170,6 +4665,7 @@ def _execute_workspace_rock_typing(
                 "lucia_cutoffs": sorted(float(c) for c in req.lucia_cutoffs),
             },
             "classifier": classifier_diag,
+            "models_status": get_saved_rt_classifiers_status(),
         },
         "data": {
             "well_names": well_names,
@@ -4187,12 +4683,14 @@ def _execute_workspace_rock_typing(
             "rfn": rfn_list,
             "drt_value": active_list,
             "rock_flags": rock_flags,
+            "rock_flags_cutoff": rock_flags_binned,
             "rock_flags_binned": rock_flags_binned,
             "rock_flags_ml": rock_flags_ml,
             "rock_prob_ml": rock_prob_ml,
             "log_well_names": log_well_names,
             "log_depths": log_depths,
             "log_rock_flags": log_rock_flags,
+            "log_rock_flags_cutoff": log_rock_flags_cutoff,
             "log_rock_flags_ml": log_rock_flags_ml,
             "log_vdl": log_vdl,
         },
@@ -4383,13 +4881,31 @@ def workspace_perm_transform_compute(
                     ks = ks.where(ks > 0, np.nan)
                     perm_s = perm_s.combine_first(ks)
 
-            # Resolve propagated ROCK_FLAG combined with ROCK_FLAG_ML (ignoring <= 0 unflagged values)
+            # Resolve ROCK_FLAG according to rock_flag_source ('cutoff_only', 'fill_missing', 'full_ml') or active ROCK_FLAG
+            rf_src = str(req.rock_flag_source or "").strip().lower()
             rf_s = pd.Series(np.nan, index=w_df.index, dtype=float)
-            for rcol in ("ROCK_FLAG", "ROCK_FLAG_ML", "DRT"):
-                if rcol in w_df.columns:
-                    rs = pd.to_numeric(w_df[rcol], errors="coerce")
-                    rs = rs.where(rs >= 1, np.nan)
-                    rf_s = rf_s.combine_first(rs)
+            if rf_src == "cutoff_only":
+                for rcol in ("ROCK_FLAG_CUTOFF", "ROCK_FLAG", "DRT"):
+                    if rcol in w_df.columns:
+                        rs = pd.to_numeric(w_df[rcol], errors="coerce")
+                        rs = rs.where(rs >= 1, np.nan)
+                        rf_s = rf_s.combine_first(rs)
+                        break
+            elif rf_src == "full_ml":
+                for rcol in ("ROCK_FLAG_ML", "ROCK_FLAG", "ROCK_FLAG_CUTOFF", "DRT"):
+                    if rcol in w_df.columns:
+                        rs = pd.to_numeric(w_df[rcol], errors="coerce")
+                        rs = rs.where(rs >= 1, np.nan)
+                        rf_s = rf_s.combine_first(rs)
+            elif "ROCK_FLAG" in w_df.columns and rf_src != "fill_missing":
+                rs = pd.to_numeric(w_df["ROCK_FLAG"], errors="coerce")
+                rf_s = rs.where(rs >= 1, np.nan)
+            else:
+                for rcol in ("ROCK_FLAG", "ROCK_FLAG_CUTOFF", "ROCK_FLAG_ML", "DRT"):
+                    if rcol in w_df.columns:
+                        rs = pd.to_numeric(w_df[rcol], errors="coerce")
+                        rs = rs.where(rs >= 1, np.nan)
+                        rf_s = rf_s.combine_first(rs)
 
             zone_vals = (
                 w_df["ZONES"].fillna("Unknown").astype(str).tolist()

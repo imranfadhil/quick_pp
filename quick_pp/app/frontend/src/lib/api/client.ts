@@ -292,6 +292,25 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 			done: 'Multi-well rock typing updated'
 		};
 	}
+	if (path.endsWith('/rock_typing/models') && m === 'GET') {
+		return {
+			active: 'Loading saved Rock Type classifiers...',
+			done: 'Saved Rock Type classifiers loaded',
+			silent: true
+		};
+	}
+	if (path.endsWith('/rock_typing/models/save')) {
+		return {
+			active: 'Saving trained Rock Type classifier & Contingency Matrix...',
+			done: 'Rock Type classifier saved'
+		};
+	}
+	if (path.includes('/rock_typing/models/') && m === 'DELETE') {
+		return {
+			active: 'Deleting saved Rock Type classifier...',
+			done: 'Saved Rock Type classifier deleted'
+		};
+	}
 	if (path.endsWith('/perm_transform/compute')) {
 		return {
 			active: 'Fitting multi-well porosity-permeability transforms...',

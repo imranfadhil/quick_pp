@@ -444,10 +444,14 @@
 			}
 		}
 
-		// Apply ML rock type predictions (RT_ML) to fill uncored intervals or replace full log according to propagation mode
+		// Apply ML rock type predictions (RT_ML) to fill uncored intervals or replace full log only when ML propagation is active
 		const hasMl = mlFlags.some((v) => v !== null && v >= 1);
-		if (hasMl) {
-			if (projectData.drtClassifierPropagated && projectData.drtPropagationMode === 'full_ml') {
+		if (
+			hasMl &&
+			projectData.drtClassifierPropagated &&
+			projectData.drtPropagationMode !== 'cutoff_only'
+		) {
+			if (projectData.drtPropagationMode === 'full_ml') {
 				flags = flags.map((f, idx) => mlFlags[idx] ?? (f !== null && f >= 1 ? f : null));
 			} else {
 				flags = flags.map((f, idx) => (f !== null && f >= 1 ? f : mlFlags[idx]));

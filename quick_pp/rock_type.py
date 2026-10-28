@@ -1794,66 +1794,26 @@ def apply_lucia_rfn_override(
     }
 
 
-def train_and_validate_rock_type_classifier(
-    df: pd.DataFrame,
-    include_pef: bool = True,
-    include_vdl: bool = True,
-    model_type: str = "random_forest",
-    test_size: float = 0.25,
+_RT_CLASSIFIER_CACHE: dict | None = None
+_RT_CLASSIFIER_CACHE_KEY: tuple[str, float] | None = None
+_LAST_TRAINED_RT_CLASSIFIER: dict[str, dict] = {}
+
+ALL_RT_CLASSIFIER_FEATURES = ("GR", "NPHI", "RHOB", "LOG_RT", "PEF", "VDL")
+
+
+def _normalize_rt_feature_name(name: str) -> str:
+    n = str(name or "").strip().upper()
+    if n in ("RT", "LOG_RT", "LOG10(RT)", "LOG10_RT", "LOG(RT)"):
+        return "LOG_RT"
+    return n
+
+
+def _extract_rt_classifier_features(
+    work: pd.DataFrame,
     dt_matrix: float = 47.6,
     dt_fluid: float = 189.0,
-    random_state: int = 42,
-) -> dict:
-    """Train a supervised Rock Type (DRT) classification model on well logs
-    (GR, NPHI, RHOB, log10(RT), optional PEF, and optional VDL = Velocity Deviation Log),
-    evaluate it with a Contingency Table (Confusion Matrix) validator, and predict/propagate
-    rock types across all log depth rows.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing log curves and target 'ROCK_FLAG' (binned by DRT cutoffs).
-        include_pef (bool, optional): Include Photoelectric Factor (PEF) if present. Defaults to True.
-        include_vdl (bool, optional): Compute and include Velocity Deviation Log (VDL). Defaults to True.
-        model_type (str, optional): Classifier type: 'random_forest', 'extra_trees', or 'gradient_boosting'.
-                                    Defaults to 'random_forest'.
-        test_size (float, optional): Validation holdout fraction in (0.1, 0.5). Defaults to 0.25.
-        dt_matrix (float, optional): Matrix transit time [us/ft] for VDL calculation. Defaults to 47.6.
-        dt_fluid (float, optional): Fluid transit time [us/ft] for VDL calculation. Defaults to 189.0.
-        random_state (int, optional): Random seed for reproducibility. Defaults to 42.
-
-    Returns:
-        dict: Dictionary containing:
-            - 'features_used': List of feature names used in training.
-            - 'labels': Sorted list of integer DRT class labels.
-            - 'contingency_table': Dict with 'counts' (2D list), 'norm_recall' (2D list), 'labels' (list).
-            - 'metrics': Dict with 'accuracy', 'balanced_accuracy', 'f1_weighted', 'f1_macro', 'cohen_kappa',
-                         'train_samples', 'val_samples', 'total_predicted'.
-            - 'class_metrics': List of per-DRT dicts `[{'drt', 'precision', 'recall', 'f1', 'support'}]`.
-            - 'feature_importances': List of `[{'feature', 'importance'}]` sorted descending.
-            - 'predicted_rock_flags': List of ML-predicted integer rock flags (or None) for every row of `df`.
-            - 'predicted_confidence': List of max class probabilities for every row of `df`.
-            - 'vdl': List of computed VDL values [m/s] (or None) for every row of `df`.
-    """
-    from sklearn.ensemble import (
-        ExtraTreesClassifier,
-        GradientBoostingClassifier,
-        RandomForestClassifier,
-    )
-    from sklearn.metrics import (
-        accuracy_score,
-        balanced_accuracy_score,
-        cohen_kappa_score,
-        confusion_matrix,
-        f1_score,
-        precision_recall_fscore_support,
-    )
-    from sklearn.model_selection import train_test_split
-
+) -> tuple[dict[str, pd.Series], pd.Series]:
     from quick_pp.machine_learning.feature_engineering import velocity_deviation_log
-
-    work = df.copy()
-    n_rows = len(work)
-    if n_rows == 0:
-        raise ValueError("Empty DataFrame provided for rock type classification.")
 
     def _combined_valid_series(candidates):
         out = pd.Series(np.nan, index=work.index, dtype=float)
@@ -1898,33 +1858,205 @@ def train_and_validate_rock_type_classifier(
         except Exception:
             pass
 
-    feat_df = pd.DataFrame(index=work.index)
-    base_candidates = [
-        ("GR", gr_s),
-        ("NPHI", nphi_s),
-        ("RHOB", rhob_s),
-        ("LOG_RT", log_rt_s),
-    ]
-    for fname, fseries in base_candidates:
-        if fseries.notna().any():
-            feat_df[fname] = fseries
+    candidates_map = {
+        "GR": gr_s,
+        "NPHI": nphi_s,
+        "RHOB": rhob_s,
+        "LOG_RT": log_rt_s,
+        "PEF": pef_s,
+        "VDL": vdl_s,
+    }
+    return candidates_map, vdl_s
 
-    if include_pef and pef_s.notna().sum() >= max(5, int(0.05 * n_rows)):
-        feat_df["PEF"] = pef_s
 
-    if include_vdl and vdl_s.notna().sum() >= 5:
-        feat_df["VDL"] = vdl_s
+def compute_rock_flag_comparison(
+    cutoff_flags: list | np.ndarray,
+    ml_flags: list | np.ndarray,
+    labels: list[int] | None = None,
+) -> dict:
+    """Compare cutoff-binned ROCK_FLAG against ML-predicted ROCK_FLAG_ML across depth samples."""
+    c_list = list(cutoff_flags) if cutoff_flags is not None else []
+    m_list = list(ml_flags) if ml_flags is not None else []
+    n = max(len(c_list), len(m_list))
 
-    features_used = list(feat_df.columns)
-    if len(features_used) < 2:
-        raise ValueError(
-            "Insufficient log features found for classification. At least two of GR, NPHI, RHOB, RT are required."
+    c_counts: dict[int, int] = {}
+    m_counts: dict[int, int] = {}
+    h_counts: dict[int, int] = {}
+    overlap_count = 0
+    exact_match = 0
+    within_one = 0
+    all_labels_set: set[int] = set(int(x) for x in (labels or []) if x is not None and int(x) >= 1)
+
+    for i in range(n):
+        cv_raw = c_list[i] if i < len(c_list) else None
+        mv_raw = m_list[i] if i < len(m_list) else None
+        cv = (
+            int(round(float(cv_raw)))
+            if (cv_raw is not None and not pd.isna(cv_raw) and float(cv_raw) >= 1)
+            else None
+        )
+        mv = (
+            int(round(float(mv_raw)))
+            if (mv_raw is not None and not pd.isna(mv_raw) and float(mv_raw) >= 1)
+            else None
+        )
+        hv = cv if cv is not None else mv
+
+        if cv is not None:
+            c_counts[cv] = c_counts.get(cv, 0) + 1
+            all_labels_set.add(cv)
+        if mv is not None:
+            m_counts[mv] = m_counts.get(mv, 0) + 1
+            all_labels_set.add(mv)
+        if hv is not None:
+            h_counts[hv] = h_counts.get(hv, 0) + 1
+
+        if cv is not None and mv is not None:
+            overlap_count += 1
+            if cv == mv:
+                exact_match += 1
+            if abs(cv - mv) <= 1:
+                within_one += 1
+
+    sorted_labels = sorted(all_labels_set)
+    c_total = sum(c_counts.values())
+    m_total = sum(m_counts.values())
+    h_total = sum(h_counts.values())
+
+    per_drt = []
+    for drt in sorted_labels:
+        cc = c_counts.get(drt, 0)
+        mc = m_counts.get(drt, 0)
+        hc = h_counts.get(drt, 0)
+        per_drt.append(
+            {
+                "drt": int(drt),
+                "cutoff_count": int(cc),
+                "cutoff_pct": round((cc / c_total) * 100.0, 1) if c_total > 0 else 0.0,
+                "ml_count": int(mc),
+                "ml_pct": round((mc / m_total) * 100.0, 1) if m_total > 0 else 0.0,
+                "hybrid_count": int(hc),
+                "hybrid_pct": round((hc / h_total) * 100.0, 1) if h_total > 0 else 0.0,
+                "delta_count": int(mc - cc),
+            }
         )
 
-    # Require at least half of the selected features to be non-NaN on a row to predict/train, then median-impute minor gaps
-    min_valid_feats = max(2, (len(features_used) + 1) // 2)
+    uncored_filled = int(max(0, h_total - c_total))
+    exact_ratio = round(exact_match / overlap_count, 4) if overlap_count > 0 else 0.0
+    within_one_ratio = round(within_one / overlap_count, 4) if overlap_count > 0 else 0.0
+
+    return {
+        "labels": sorted_labels,
+        "cutoff_total": int(c_total),
+        "ml_total": int(m_total),
+        "hybrid_total": int(h_total),
+        "uncored_filled_by_ml": uncored_filled,
+        "uncored_filled_count": uncored_filled,
+        "overlap_samples": int(overlap_count),
+        "exact_match_samples": int(exact_match),
+        "exact_agreement": exact_ratio,
+        "within_one_agreement": within_one_ratio,
+        "agreement_pct": (
+            round((exact_match / overlap_count) * 100.0, 1)
+            if overlap_count > 0
+            else None
+        ),
+        "within_one_drt_pct": (
+            round((within_one / overlap_count) * 100.0, 1)
+            if overlap_count > 0
+            else None
+        ),
+        "per_drt": per_drt,
+    }
+
+
+def train_and_validate_rock_type_classifier(
+    df: pd.DataFrame,
+    include_pef: bool = True,
+    include_vdl: bool = True,
+    selected_features: list[str] | None = None,
+    model_type: str = "random_forest",
+    test_size: float = 0.25,
+    dt_matrix: float = 47.6,
+    dt_fluid: float = 189.0,
+    random_state: int = 42,
+    cache_key: str = "latest",
+) -> dict:
+    """Train a supervised Rock Type (DRT) classification model on selectable well logs
+    (GR, NPHI, RHOB, log10(RT), PEF, and VDL = Velocity Deviation Log),
+    evaluate it with a Contingency Table (Confusion Matrix) validator, and predict/propagate
+    rock types across log depth rows.
+    """
+    from datetime import datetime, timezone
+
+    from sklearn.ensemble import (
+        ExtraTreesClassifier,
+        GradientBoostingClassifier,
+        RandomForestClassifier,
+    )
+    from sklearn.metrics import (
+        accuracy_score,
+        balanced_accuracy_score,
+        cohen_kappa_score,
+        confusion_matrix,
+        f1_score,
+        precision_recall_fscore_support,
+    )
+    from sklearn.model_selection import train_test_split
+
+    work = df.copy()
+    n_rows = len(work)
+    if n_rows == 0:
+        raise ValueError("Empty DataFrame provided for rock type classification.")
+
+    candidates_map, vdl_s = _extract_rt_classifier_features(
+        work, dt_matrix=dt_matrix, dt_fluid=dt_fluid
+    )
+
+    if selected_features is not None and len(selected_features) > 0:
+        requested_norm = []
+        for sf in selected_features:
+            nf = _normalize_rt_feature_name(sf)
+            if nf in candidates_map and nf not in requested_norm:
+                requested_norm.append(nf)
+    else:
+        requested_norm = ["GR", "NPHI", "RHOB", "LOG_RT"]
+        if include_pef:
+            requested_norm.append("PEF")
+        if include_vdl:
+            requested_norm.append("VDL")
+
+    if not requested_norm:
+        raise ValueError(
+            "Please select at least one input feature (GR, NPHI, RHOB, log10(RT), PEF, or VDL)."
+        )
+
+    feat_df = pd.DataFrame(index=work.index)
+    for fname in requested_norm:
+        fseries = candidates_map.get(fname)
+        if fseries is None:
+            continue
+        if fname in ("PEF", "VDL"):
+            min_pts = 5 if selected_features is None else 2
+            if fseries.notna().sum() >= min_pts:
+                feat_df[fname] = fseries
+        elif fseries.notna().any():
+            feat_df[fname] = fseries
+
+    features_used = list(feat_df.columns)
+    if len(features_used) < 1:
+        raise ValueError(
+            f"Selected input features ({', '.join(requested_norm)}) have no valid log values in the active wells."
+        )
+
+    # Require at least half of the selected features (or 1 if 1-2 features selected) to be non-NaN on a row
+    min_valid_feats = 1 if len(features_used) == 1 else max(1, (len(features_used) + 1) // 2)
     row_valid_mask = feat_df.notna().sum(axis=1) >= min_valid_feats
     medians = feat_df.median(numeric_only=True)
+    medians_dict = {
+        str(k): float(v) if (pd.notna(v) and np.isfinite(float(v))) else 0.0
+        for k, v in medians.items()
+    }
     feat_imputed = feat_df.fillna(medians).fillna(0.0)
 
     target_s = pd.to_numeric(work.get("ROCK_FLAG"), errors="coerce")
@@ -2014,7 +2146,7 @@ def train_and_validate_rock_type_classifier(
         for i, lbl in enumerate(labels)
     ]
 
-    # Refit on all labeled data to propagate predictions across the entire multi-well log dataset
+    # Refit on all labeled data to propagate predictions across the dataset
     clf_full = _build_clf()
     clf_full.fit(X_all_labeled, y_all_labeled)
 
@@ -2048,29 +2180,339 @@ def train_and_validate_rock_type_classifier(
         round(float(v), 2) if pd.notna(v) and np.isfinite(v) else None for v in vdl_s
     ]
 
+    contingency_table = {
+        "labels": labels,
+        "counts": [[int(c) for c in row] for row in cm_counts],
+        "norm_recall": [[round(float(v), 4) for v in row] for row in cm_norm],
+    }
+    metrics = {
+        "accuracy": round(acc, 4),
+        "balanced_accuracy": round(bal_acc, 4),
+        "f1_weighted": round(f1_w, 4),
+        "f1_macro": round(f1_m, 4),
+        "cohen_kappa": round(kappa, 4),
+        "train_samples": int(len(y_train)),
+        "val_samples": int(len(y_val)),
+        "labeled_samples": int(len(y_all_labeled)),
+        "total_predicted": int(valid_indices.size),
+    }
+    trained_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    wells_used = (
+        sorted(work.loc[train_mask, "WELL_NAME"].dropna().astype(str).unique().tolist())
+        if "WELL_NAME" in work.columns
+        else []
+    )
+
+    cached_bundle = {
+        "estimator": clf_full,
+        "medians": medians_dict,
+        "model_type": m_type,
+        "features_used": features_used,
+        "labels": labels,
+        "contingency_table": contingency_table,
+        "metrics": metrics,
+        "class_metrics": class_metrics,
+        "feature_importances": feature_importances,
+        "trained_at": trained_at,
+        "wells_used": wells_used,
+        "test_size": val_frac,
+    }
+    _LAST_TRAINED_RT_CLASSIFIER[str(cache_key)] = cached_bundle
+    _LAST_TRAINED_RT_CLASSIFIER["latest"] = cached_bundle
+    _persist_rt_staging_cache(str(cache_key), cached_bundle)
+
     return {
         "model_type": m_type,
         "features_used": features_used,
         "labels": labels,
-        "contingency_table": {
-            "labels": labels,
-            "counts": [[int(c) for c in row] for row in cm_counts],
-            "norm_recall": [[round(float(v), 4) for v in row] for row in cm_norm],
-        },
-        "metrics": {
-            "accuracy": round(acc, 4),
-            "balanced_accuracy": round(bal_acc, 4),
-            "f1_weighted": round(f1_w, 4),
-            "f1_macro": round(f1_m, 4),
-            "cohen_kappa": round(kappa, 4),
-            "train_samples": int(len(y_train)),
-            "val_samples": int(len(y_val)),
-            "labeled_samples": int(len(y_all_labeled)),
-            "total_predicted": int(valid_indices.size),
-        },
+        "contingency_table": contingency_table,
+        "metrics": metrics,
         "class_metrics": class_metrics,
         "feature_importances": feature_importances,
         "predicted_rock_flags": pred_flags,
         "predicted_confidence": pred_conf,
         "vdl": vdl_list,
+        "trained_at": trained_at,
+    }
+
+
+def _resolve_rt_classifiers_path(model_path=None):
+    import os
+    from pathlib import Path
+
+    env_default = Path(
+        os.getenv("QPP_RT_CLASSIFIERS_PATH", "data/rt_classifiers.joblib")
+    )
+    candidates = (
+        [Path(model_path)]
+        if model_path is not None
+        else [
+            env_default,
+            Path("data/rt_classifiers.joblib"),
+            Path("/code/data/seed/rt_classifiers.joblib"),
+        ]
+    )
+    expected = candidates[0]
+    for cand in candidates:
+        if cand.exists() and cand.is_file():
+            return cand, expected
+    return None, expected
+
+
+def _persist_rt_staging_cache(cache_key: str, bundle_entry: dict, model_path=None) -> None:
+    try:
+        import joblib
+
+        _, expected = _resolve_rt_classifiers_path(model_path)
+        staging_path = expected.parent / ".rt_classifiers_staging.joblib"
+        staging_path.parent.mkdir(parents=True, exist_ok=True)
+        staging_data = {}
+        if staging_path.exists():
+            try:
+                loaded = joblib.load(staging_path)
+                if isinstance(loaded, dict):
+                    staging_data = loaded
+            except Exception:
+                staging_data = {}
+        staging_data[cache_key] = bundle_entry
+        staging_data["latest"] = bundle_entry
+        joblib.dump(staging_data, staging_path)
+    except Exception as e:
+        logger.warning(f"Could not write RT classifier staging cache: {e}")
+
+
+def load_saved_rt_classifiers(model_path=None) -> dict:
+    global _RT_CLASSIFIER_CACHE, _RT_CLASSIFIER_CACHE_KEY
+    resolved_path, _ = _resolve_rt_classifiers_path(model_path)
+    if resolved_path is None:
+        return {}
+    cache_key = (str(resolved_path.resolve()), resolved_path.stat().st_mtime)
+    if (
+        model_path is None
+        and _RT_CLASSIFIER_CACHE is not None
+        and _RT_CLASSIFIER_CACHE_KEY == cache_key
+    ):
+        return _RT_CLASSIFIER_CACHE
+    import joblib
+
+    try:
+        bundle = joblib.load(resolved_path)
+        if not isinstance(bundle, dict):
+            return {}
+    except Exception as e:
+        logger.warning(f"Failed to load RT classifiers from {resolved_path}: {e}")
+        return {}
+    if model_path is None:
+        _RT_CLASSIFIER_CACHE = bundle
+        _RT_CLASSIFIER_CACHE_KEY = cache_key
+    return bundle
+
+
+def get_saved_rt_classifiers_status(model_path=None) -> dict:
+    """Return metadata, performance metrics, and Contingency Matrices for all saved Rock Type classifiers."""
+    resolved_path, expected_path = _resolve_rt_classifiers_path(model_path)
+    bundle = load_saved_rt_classifiers(model_path)
+    models_list = []
+    for k, entry in bundle.items():
+        if not isinstance(entry, dict):
+            continue
+        models_list.append(
+            {
+                "model_key": str(k),
+                "model_name": str(entry.get("model_name") or k),
+                "model_type": str(entry.get("model_type") or "random_forest"),
+                "drt_method": str(entry.get("drt_method") or "fzi"),
+                "cutoffs": list(entry.get("cutoffs") or []),
+                "features_used": list(entry.get("features_used") or []),
+                "labels": list(entry.get("labels") or []),
+                "metrics": dict(entry.get("metrics") or {}),
+                "contingency_table": dict(entry.get("contingency_table") or {}),
+                "class_metrics": list(entry.get("class_metrics") or []),
+                "feature_importances": list(entry.get("feature_importances") or []),
+                "trained_at": entry.get("trained_at"),
+                "source_project": entry.get("source_project"),
+                "wells_used": list(entry.get("wells_used") or []),
+            }
+        )
+    return {
+        "available": len(models_list) > 0,
+        "model_path": str(resolved_path.as_posix()) if resolved_path else None,
+        "expected_path": str(expected_path.as_posix()),
+        "models": models_list,
+    }
+
+
+def save_cached_rt_classifier(
+    model_key: str,
+    model_name: str | None = None,
+    source_project: str | None = None,
+    drt_method: str | None = None,
+    cutoffs: list[float] | None = None,
+    cache_key: str = "latest",
+    extra_meta: dict | None = None,
+    model_path=None,
+) -> dict:
+    """Persist the most recently trained Rock Type classifier together with its performance metrics & CM."""
+    global _RT_CLASSIFIER_CACHE, _RT_CLASSIFIER_CACHE_KEY
+    import joblib
+
+    entry = _LAST_TRAINED_RT_CLASSIFIER.get(str(cache_key)) or _LAST_TRAINED_RT_CLASSIFIER.get("latest")
+    if not entry:
+        _, expected = _resolve_rt_classifiers_path(model_path)
+        staging_path = expected.parent / ".rt_classifiers_staging.joblib"
+        if staging_path.exists():
+            try:
+                loaded = joblib.load(staging_path)
+                if isinstance(loaded, dict):
+                    entry = loaded.get(str(cache_key)) or loaded.get("latest")
+            except Exception:
+                entry = None
+    if not entry or "estimator" not in entry:
+        raise ValueError(
+            "No trained Rock Type classifier in memory to save. Please click 'Train & Validate' first."
+        )
+
+    raw_key = (model_key or model_name or "rt_model").strip().lower()
+    clean_key = (
+        "".join(ch if (ch.isalnum() or ch in ("_", "-")) else "_" for ch in raw_key).strip("_")
+        or "rt_model"
+    )
+    display_name = (
+        model_name.strip()
+        if (model_name and model_name.strip())
+        else clean_key.replace("_", " ").title()
+    )
+
+    resolved_path, expected_path = _resolve_rt_classifiers_path(model_path)
+    target_path = resolved_path or expected_path
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    meta = dict(extra_meta or {})
+    bundle = dict(load_saved_rt_classifiers(model_path))
+    saved_entry = {
+        **entry,
+        **meta,
+        "model_key": clean_key,
+        "model_name": display_name,
+        "source_project": source_project or meta.get("source_project") or entry.get("source_project") or "Workspace",
+        "drt_method": drt_method or meta.get("drt_method") or entry.get("drt_method") or "fzi",
+        "cutoffs": (
+            list(cutoffs)
+            if cutoffs is not None
+            else list(meta.get("cutoffs") or entry.get("cutoffs") or [])
+        ),
+    }
+    bundle[clean_key] = saved_entry
+    joblib.dump(bundle, target_path)
+    _RT_CLASSIFIER_CACHE = None
+    _RT_CLASSIFIER_CACHE_KEY = None
+
+    return {
+        "saved": True,
+        "model_key": clean_key,
+        "model_name": display_name,
+        "model_path": str(target_path.as_posix()),
+        "models_status": get_saved_rt_classifiers_status(model_path),
+    }
+
+
+def delete_saved_rt_classifier(model_key: str, model_path=None) -> bool:
+    """Remove a saved Rock Type classifier from disk."""
+    global _RT_CLASSIFIER_CACHE, _RT_CLASSIFIER_CACHE_KEY
+    import joblib
+
+    resolved_path, _ = _resolve_rt_classifiers_path(model_path)
+    if resolved_path is None or not resolved_path.exists():
+        return False
+    bundle = dict(load_saved_rt_classifiers(model_path))
+    if model_key not in bundle:
+        return False
+    del bundle[model_key]
+    joblib.dump(bundle, resolved_path)
+    _RT_CLASSIFIER_CACHE = None
+    _RT_CLASSIFIER_CACHE_KEY = None
+    return True
+
+
+def predict_with_saved_rt_classifier(
+    df: pd.DataFrame,
+    model_key: str,
+    dt_matrix: float = 47.6,
+    dt_fluid: float = 189.0,
+    model_path=None,
+) -> dict:
+    """Run inference on `df` using a previously saved Rock Type classifier without retraining,
+    and return its saved performance metrics & Contingency Matrix alongside predictions.
+    """
+    bundle = load_saved_rt_classifiers(model_path)
+    if model_key not in bundle:
+        raise ValueError(f"Saved Rock Type classifier '{model_key}' not found.")
+    entry = bundle[model_key]
+    clf = entry.get("estimator")
+    if clf is None:
+        raise ValueError(f"Saved model '{model_key}' does not contain a valid estimator.")
+
+    work = df.copy()
+    n_rows = len(work)
+    candidates_map, vdl_s = _extract_rt_classifier_features(
+        work, dt_matrix=dt_matrix, dt_fluid=dt_fluid
+    )
+    features_used = list(entry.get("features_used") or [])
+    if not features_used:
+        raise ValueError(f"Saved model '{model_key}' has no recorded features_used.")
+
+    feat_df = pd.DataFrame(index=work.index)
+    saved_medians = dict(entry.get("medians") or {})
+    for fname in features_used:
+        s = candidates_map.get(fname)
+        feat_df[fname] = s if s is not None else pd.Series(np.nan, index=work.index, dtype=float)
+
+    min_valid_feats = 1 if len(features_used) == 1 else max(1, (len(features_used) + 1) // 2)
+    row_valid_mask = feat_df.notna().sum(axis=1) >= min_valid_feats
+
+    feat_imputed = feat_df.copy()
+    for fname in features_used:
+        fallback_med = saved_medians.get(fname)
+        if fallback_med is None or not np.isfinite(float(fallback_med)):
+            col_med = feat_df[fname].median()
+            fallback_med = float(col_med) if pd.notna(col_med) else 0.0
+        feat_imputed[fname] = feat_imputed[fname].fillna(float(fallback_med)).fillna(0.0)
+
+    pred_flags: list = [None] * n_rows
+    pred_conf: list = [None] * n_rows
+    valid_indices = np.where(row_valid_mask.to_numpy(dtype=bool))[0]
+    if valid_indices.size > 0:
+        X_pred = feat_imputed.iloc[valid_indices][features_used].to_numpy(dtype=float)
+        y_pred_all = clf.predict(X_pred)
+        if hasattr(clf, "predict_proba"):
+            proba_all = clf.predict_proba(X_pred)
+            max_proba = np.max(proba_all, axis=1)
+        else:
+            max_proba = np.ones(len(y_pred_all), dtype=float)
+        for pos, row_idx in enumerate(valid_indices):
+            pred_flags[int(row_idx)] = int(y_pred_all[pos])
+            pred_conf[int(row_idx)] = round(float(max_proba[pos]), 4)
+
+    vdl_list = [
+        round(float(v), 2) if pd.notna(v) and np.isfinite(v) else None for v in vdl_s
+    ]
+
+    metrics = dict(entry.get("metrics") or {})
+    metrics["total_predicted"] = int(valid_indices.size)
+
+    return {
+        "trained": False,
+        "saved_model_key": str(model_key),
+        "saved_model_name": str(entry.get("model_name") or model_key),
+        "model_type": str(entry.get("model_type") or "random_forest"),
+        "features_used": features_used,
+        "labels": list(entry.get("labels") or []),
+        "contingency_table": dict(entry.get("contingency_table") or {}),
+        "metrics": metrics,
+        "class_metrics": list(entry.get("class_metrics") or []),
+        "feature_importances": list(entry.get("feature_importances") or []),
+        "predicted_rock_flags": pred_flags,
+        "predicted_confidence": pred_conf,
+        "vdl": vdl_list,
+        "trained_at": entry.get("trained_at"),
     }

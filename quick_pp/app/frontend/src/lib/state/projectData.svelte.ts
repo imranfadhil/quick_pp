@@ -18,7 +18,8 @@ export type DrtCutoffMethod = 'gmm' | 'lorenz' | 'kmeans';
 export type GmmCriterion = 'combined' | 'bic' | 'silhouette';
 export type RockTypingPlotView = 'phi-k' | 'lorenz' | 'gmm' | 'carbonate' | 'classifier';
 export type DrtClassifierModel = 'random_forest' | 'extra_trees' | 'gradient_boosting';
-export type DrtPropagationMode = 'fill_missing' | 'full_ml';
+export type DrtPropagationMode = 'cutoff_only' | 'fill_missing' | 'full_ml';
+export type DrtFeatureKey = 'GR' | 'NPHI' | 'RHOB' | 'LOG_RT' | 'PEF' | 'VDL';
 
 class ProjectDataState {
 	projects = $state<ProjectListItem[]>([]);
@@ -46,11 +47,34 @@ class ProjectDataState {
 	dtFluid = $state<number>(189.0);
 	rockTypingPlotView = $state<RockTypingPlotView>('phi-k');
 	drtClassifierModel = $state<DrtClassifierModel>('random_forest');
+	drtSelectedFeatures = $state<DrtFeatureKey[]>(['GR', 'NPHI', 'RHOB', 'LOG_RT', 'PEF', 'VDL']);
 	drtIncludePef = $state<boolean>(true);
 	drtIncludeVdl = $state<boolean>(true);
 	drtClassifierTestSize = $state<number>(0.25);
 	drtPropagationMode = $state<DrtPropagationMode>('fill_missing');
+	drtPropagateFocusedOnly = $state<boolean>(true);
 	drtClassifierPropagated = $state<boolean>(false);
+	drtSelectedSavedModelKey = $state<string>('');
+	rtSavedModelsStatus = $state.raw<{
+		has_saved_models: boolean;
+		count: number;
+		bundle_path: string | null;
+		models: Array<{
+			model_key: string;
+			model_name: string;
+			model_type: DrtClassifierModel;
+			features_used: string[];
+			labels: number[];
+			contingency_table: number[][];
+			metrics: Record<string, any>;
+			class_metrics: Array<Record<string, any>>;
+			feature_importances: Record<string, number>;
+			saved_at: string | null;
+			drt_method?: string | null;
+			cutoffs?: number[] | null;
+			project_id?: number | null;
+		}>;
+	} | null>(null);
 	selectedWellNames = $state<string[]>([]);
 
 	get activeDrtCutoffs(): number[] {
@@ -155,12 +179,14 @@ class ProjectDataState {
 		phi_ip?: (number | null)[];
 		vuggy_flags?: number[];
 		vdl?: (number | null)[];
+		rock_flags_cutoff?: (number | null)[];
 		rock_flags_binned?: (number | null)[];
 		rock_flags_ml?: (number | null)[];
 		rock_prob_ml?: (number | null)[];
 		log_well_names?: string[];
 		log_depths?: number[];
 		log_rock_flags?: (number | null)[];
+		log_rock_flags_cutoff?: (number | null)[];
 		log_rock_flags_ml?: (number | null)[];
 		log_vdl?: (number | null)[];
 		drt_value?: (number | null)[];
@@ -329,6 +355,9 @@ class ProjectDataState {
 				const rfOut = (rt.log_rock_flags ?? []).map((v) =>
 					v !== null && v !== undefined && Number.isFinite(v) ? v : null
 				);
+				const rfCutOut = (rt.log_rock_flags_cutoff ?? []).map((v) =>
+					v !== null && v !== undefined && Number.isFinite(v) ? v : null
+				);
 				const rfMlOut = (rt.log_rock_flags_ml ?? []).map((v) =>
 					v !== null && v !== undefined && Number.isFinite(v) ? v : null
 				);
@@ -362,6 +391,7 @@ class ProjectDataState {
 				curves = {
 					ROCK_FLAG: rfOut
 				};
+				if (rfCutOut.some((v) => v !== null)) curves['ROCK_FLAG_CUTOFF'] = rfCutOut;
 				if (rfMlOut.some((v) => v !== null)) curves['ROCK_FLAG_ML'] = rfMlOut;
 				if (vdlOut.some((v) => v !== null)) curves['VDL'] = vdlOut;
 				if (fziOut.some((v) => v !== null)) curves['FZI'] = fziOut;
@@ -375,6 +405,11 @@ class ProjectDataState {
 						v !== null && v !== undefined && Number.isFinite(v) ? v : null
 					)
 				};
+				if (rt.rock_flags_binned?.length === depths.length) {
+					curves['ROCK_FLAG_CUTOFF'] = rt.rock_flags_binned.map((v) =>
+						v !== null && v !== undefined && Number.isFinite(v) ? v : null
+					);
+				}
 				if (rt.fzi?.length === depths.length) {
 					curves['FZI'] = rt.fzi.map((v) =>
 						v !== null && v !== undefined && Number.isFinite(v) ? v : null

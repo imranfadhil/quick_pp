@@ -124,6 +124,9 @@
 								: null,
 						method: projectData.drtMethod,
 						cutoffs: [...projectData.activeDrtCutoffs].sort((a, b) => a - b),
+						rock_flag_source: projectData.drtClassifierPropagated
+							? projectData.drtPropagationMode
+							: 'cutoff_only',
 						fits: customFits,
 						save: false
 					} as any
@@ -148,13 +151,19 @@
 				...((data.data as any)?.perm_pred ?? (data.data as any)?.perm_trans ?? [])
 			];
 
-			// Ensure any in-memory propagated rock flags from Rock Typing tab are applied
+			// Ensure any in-memory active rock flags from Rock Typing tab are applied according to selected source
 			const rtRes = projectData.rockTypingResult;
 			if (rtRes) {
+				const useCutoffOnly =
+					!projectData.drtClassifierPropagated || projectData.drtPropagationMode === 'cutoff_only';
 				const rtLookup = new Map<string, number>();
 				if (Array.isArray(rtRes.well_names)) {
 					for (let i = 0; i < rtRes.well_names.length; i++) {
-						const rfV = rtRes.rock_flags?.[i] ?? rtRes.rock_flags_ml?.[i];
+						const rfV = useCutoffOnly
+							? (rtRes.rock_flags_binned?.[i] ?? rtRes.rock_flags?.[i])
+							: projectData.drtPropagationMode === 'full_ml'
+								? (rtRes.rock_flags_ml?.[i] ?? rtRes.rock_flags?.[i])
+								: (rtRes.rock_flags?.[i] ?? rtRes.rock_flags_ml?.[i]);
 						if (typeof rfV === 'number' && Number.isFinite(rfV) && rfV >= 1) {
 							rtLookup.set(
 								`${rtRes.well_names[i]}__${Math.round(Number(rtRes.depths[i]) * 100)}`,
@@ -163,10 +172,14 @@
 						}
 					}
 				}
-				if (Array.isArray(rtRes.log_well_names) && Array.isArray(rtRes.log_depths)) {
+				if (
+					!useCutoffOnly &&
+					Array.isArray(rtRes.log_well_names) &&
+					Array.isArray(rtRes.log_depths)
+				) {
 					for (let i = 0; i < rtRes.log_well_names.length; i++) {
 						const rfV =
-							projectData.drtClassifierPropagated && projectData.drtPropagationMode === 'full_ml'
+							projectData.drtPropagationMode === 'full_ml'
 								? (rtRes.log_rock_flags_ml?.[i] ?? rtRes.log_rock_flags?.[i])
 								: (rtRes.log_rock_flags?.[i] ?? rtRes.log_rock_flags_ml?.[i]);
 						if (typeof rfV === 'number' && Number.isFinite(rfV) && rfV >= 1) {

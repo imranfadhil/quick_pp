@@ -1423,6 +1423,8 @@
 					const normRecall: number[][] = ct.norm_recall ?? [];
 					const featImps: Array<{ feature: string; importance: number }> =
 						diag.classifier.feature_importances ?? [];
+					const compRows: Array<Record<string, any>> =
+						diag.classifier.comparison?.per_drt ?? [];
 					const strLabels = labels.map((l) => `DRT ${l}`);
 
 					const textGrid = counts.map((row, rIdx) =>
@@ -1450,6 +1452,37 @@
 							'True: %{y}<br>Predicted: %{x}<br>Recall: %{z:.2%}<br>Count: %{text}<extra></extra>'
 					});
 
+					if (compRows.length > 0) {
+						const compLabels = compRows.map((r) => `DRT ${r.drt}`);
+						traces.push({
+							type: 'bar',
+							name: 'Pure Cutoffs (ROCK_FLAG_CUTOFF)',
+							x: compLabels,
+							y: compRows.map((r) => Number(r.cutoff_count ?? 0)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { color: '#475569' }
+						});
+						traces.push({
+							type: 'bar',
+							name: 'ML Predicted (ROCK_FLAG_ML)',
+							x: compLabels,
+							y: compRows.map((r) => Number(r.ml_count ?? 0)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { color: '#059669' }
+						});
+						traces.push({
+							type: 'bar',
+							name: 'Cutoffs + ML Fill',
+							x: compLabels,
+							y: compRows.map((r) => Number(r.hybrid_count ?? 0)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { color: '#2563EB' }
+						});
+					}
+
 					if (featImps.length > 0) {
 						const revFeats = [...featImps].reverse();
 						traces.push({
@@ -1458,37 +1491,78 @@
 							name: 'Feature Importance',
 							x: revFeats.map((f) => Number(f.importance)),
 							y: revFeats.map((f) => f.feature),
-							xaxis: 'x2',
-							yaxis: 'y2',
+							xaxis: compRows.length > 0 ? 'x3' : 'x2',
+							yaxis: compRows.length > 0 ? 'y3' : 'y2',
 							marker: { color: '#2563EB' },
+							showlegend: false,
 							hovertemplate: '%{y}: %{x:.1%}<extra></extra>'
 						});
 					}
 
-					const clfLayout: Record<string, any> = {
-						...baseLayout,
-						xaxis: {
-							...baseLayout.xaxis,
-							domain: [0, 0.48],
-							title: { text: 'Predicted ML Rock Type' }
-						},
-						yaxis: {
-							...baseLayout.yaxis,
-							autorange: 'reversed',
-							title: { text: 'True Cutoff-Binned Rock Type' }
-						},
-						xaxis2: {
-							...baseLayout.xaxis,
-							domain: [0.6, 1.0],
-							anchor: 'y2',
-							title: { text: 'Feature Importance (MDI)' }
-						},
-						yaxis2: {
-							...baseLayout.yaxis,
-							anchor: 'x2',
-							title: { text: 'Input Feature' }
-						}
-					};
+					const clfLayout: Record<string, any> =
+						compRows.length > 0
+							? {
+									...baseLayout,
+									barmode: 'group',
+									xaxis: {
+										...baseLayout.xaxis,
+										domain: [0, 0.45],
+										title: { text: 'Predicted ML Rock Type' }
+									},
+									yaxis: {
+										...baseLayout.yaxis,
+										autorange: 'reversed',
+										title: { text: 'True Cutoff-Binned Rock Type' }
+									},
+									xaxis2: {
+										...baseLayout.xaxis,
+										domain: [0.56, 1.0],
+										anchor: 'y2',
+										title: { text: 'Cutoff vs. ML DRT Distribution' }
+									},
+									yaxis2: {
+										...baseLayout.yaxis,
+										domain: [0.55, 1.0],
+										anchor: 'x2',
+										title: { text: 'Samples (n)' }
+									},
+									xaxis3: {
+										...baseLayout.xaxis,
+										domain: [0.56, 1.0],
+										anchor: 'y3',
+										title: { text: 'Feature Importance (MDI)' }
+									},
+									yaxis3: {
+										...baseLayout.yaxis,
+										domain: [0.0, 0.38],
+										anchor: 'x3',
+										title: { text: 'Feature' }
+									}
+								}
+							: {
+									...baseLayout,
+									xaxis: {
+										...baseLayout.xaxis,
+										domain: [0, 0.48],
+										title: { text: 'Predicted ML Rock Type' }
+									},
+									yaxis: {
+										...baseLayout.yaxis,
+										autorange: 'reversed',
+										title: { text: 'True Cutoff-Binned Rock Type' }
+									},
+									xaxis2: {
+										...baseLayout.xaxis,
+										domain: [0.6, 1.0],
+										anchor: 'y2',
+										title: { text: 'Feature Importance (MDI)' }
+									},
+									yaxis2: {
+										...baseLayout.yaxis,
+										anchor: 'x2',
+										title: { text: 'Input Feature' }
+									}
+								};
 					return { traces, layout: clfLayout };
 				}
 			}
