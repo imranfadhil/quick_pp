@@ -1922,7 +1922,10 @@
 
 				// Overlay fitted curves per Rock Type
 				if (sr?.fits) {
-					for (const [rfKey, fit] of Object.entries(sr.fits)) {
+					const sortedFitEntries = Object.entries(sr.fits).sort(
+						([k1], [k2]) => Number(k1) - Number(k2)
+					);
+					for (const [rfKey, fit] of sortedFitEntries) {
 						const rfNum = Number(rfKey);
 						const color = getRockTypeColor(rfNum);
 						const a = Number(fit.a ?? 0.2);
@@ -1941,10 +1944,11 @@
 									ys.push(jVal);
 								}
 							}
+							const aStr = a < 0.01 ? a.toFixed(3) : a.toFixed(2);
 							traces.push({
 								type: 'scatter',
 								mode: 'lines',
-								name: `Fit RT ${rfKey} (${a.toFixed(2)}·Swn^-${b.toFixed(2)})`,
+								name: `Fit RT ${rfKey} (${aStr}·Swn^-${b.toFixed(2)})`,
 								x: xs,
 								y: ys,
 								line: { color, width: 2.2 }

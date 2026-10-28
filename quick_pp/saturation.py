@@ -2279,7 +2279,12 @@ def optimize_fwl(
                     (zones_raw == z_name)
                     & np.isfinite(depth_arr)
                     & np.isfinite(sw_log_arr)
+                    & np.isfinite(phit_arr)
+                    & (phit_arr > 0)
+                    & (~is_non_res)
                 )
+                if is_leverett:
+                    z_mask = z_mask & np.isfinite(perm_arr) & (perm_arr > 0)
             n_z = int(np.sum(z_mask))
             if n_z < 3:
                 continue

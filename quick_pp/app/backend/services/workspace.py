@@ -4931,10 +4931,49 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 if np.any(valid_m):
                     yt = y_true[valid_m]
                     yp = y_pred[valid_m]
-                    rmse_v = float(np.sqrt(np.mean((yt - yp) ** 2)))
-                    ss_res = float(np.sum((yt - yp) ** 2))
-                    ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
-                    r2_v = max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else 0.0
+                    if model == "leverett_j":
+                        swn_m = sub_scal["SWN"].to_numpy(dtype=float)[valid_m]
+                        pos_m = (yt > 0) & (yp > 0) & (swn_m > 0)
+                        if np.any(pos_m):
+                            yt_p = yt[pos_m]
+                            yp_p = yp[pos_m]
+                            swn_p = swn_m[pos_m]
+                            y_log = np.log(np.clip(yt_p, 1e-8, 1e8))
+                            yp_log = np.log(np.clip(yp_p, 1e-8, 1e8))
+                            res_log = y_log - yp_log
+                            med_r = float(np.median(res_log))
+                            mad_r = float(np.median(np.abs(res_log - med_r)))
+                            sig_r = max(1.4826 * mad_r, 0.15)
+                            u_r = np.abs(res_log - med_r) / (2.0 * sig_r)
+                            w_out = np.where(
+                                u_r < 1.0,
+                                (1.0 - u_r**2) ** 2,
+                                0.02 / np.maximum(u_r**2, 1.0),
+                            )
+                            w_edge = np.where(
+                                (swn_p >= 0.06) & (swn_p <= 0.88),
+                                1.0,
+                                np.where((swn_p <= 0.04) | (swn_p >= 0.93), 0.05, 0.25),
+                            )
+                            w_tot = w_out * w_edge
+                            w_tot = w_tot / max(float(np.sum(w_tot)), 1e-12)
+                            rmse_v = float(np.sqrt(np.sum(w_tot * ((yt_p - yp_p) ** 2))))
+                            ym_log = float(np.sum(w_tot * y_log))
+                            ss_res = float(np.sum(w_tot * ((y_log - yp_log) ** 2)))
+                            ss_tot = float(np.sum(w_tot * ((y_log - ym_log) ** 2)))
+                            r2_v = (
+                                max(0.0, 1.0 - ss_res / ss_tot)
+                                if ss_tot > 1e-12
+                                else 0.0
+                            )
+                        else:
+                            rmse_v = float(np.sqrt(np.mean((yt - yp) ** 2)))
+                            r2_v = 0.0
+                    else:
+                        rmse_v = float(np.sqrt(np.mean((yt - yp) ** 2)))
+                        ss_res = float(np.sum((yt - yp) ** 2))
+                        ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
+                        r2_v = max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else 0.0
                     fit_entry["a"] = round(a_f, 4)
                     fit_entry["b"] = round(b_f, 4)
                     fit_entry["rmse"] = round(rmse_v, 4)

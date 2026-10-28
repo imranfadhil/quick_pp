@@ -313,6 +313,41 @@ def test_core_fitting_and_transforms():
     assert len(cuddy_params_auto) == 1
     assert cuddy_params_auto[0]["rmse"] < 0.01
 
+    # Verify outlier dampening and strict non-crossing across multiple Rock Types
+    swn_eval = np.geomspace(0.01, 1.0, 50)
+    multi_rt_rows = []
+    for rf, (a_true, b_true) in enumerate(
+        [(1.4, 0.75), (0.85, 0.95), (0.50, 0.60), (0.28, 1.35), (0.18, 0.70)],
+        start=1,
+    ):
+        for s_val in np.linspace(0.08, 0.85, 12):
+            multi_rt_rows.append(
+                {
+                    "ROCK_FLAG": rf,
+                    "Well": "W1",
+                    "Sample": f"S{rf}",
+                    "SWN": s_val,
+                    "J": a_true * (s_val ** (-b_true)),
+                }
+            )
+        # Inject severe boundary & interior outliers
+        multi_rt_rows.append(
+            {"ROCK_FLAG": rf, "Well": "W1", "Sample": f"S{rf}", "SWN": 0.03, "J": 120.0}
+        )
+        multi_rt_rows.append(
+            {"ROCK_FLAG": rf, "Well": "W1", "Sample": f"S{rf}", "SWN": 0.96, "J": 0.002}
+        )
+    multi_rt_df = pd.DataFrame(multi_rt_rows)
+    multi_j_fits = auto_j_params(multi_rt_df)
+    assert len(multi_j_fits) == 5
+    curves = [
+        p["a"] * (swn_eval ** (-p["b"]))
+        for p in sorted(multi_j_fits, key=lambda d: d["ROCK_FLAG"])
+    ]
+    for idx_c in range(len(curves) - 1):
+        diff = curves[idx_c] - curves[idx_c + 1]
+        assert np.all(diff > 0) or np.all(diff < 0)
+
 
 def _make_multi_well_contact_dataset(
     true_fwl: float = 8550.0, model: str = "leverett_j"

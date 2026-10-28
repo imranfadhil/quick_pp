@@ -10,13 +10,44 @@
 
 	// Multi-well FWL & Contact Optimizer state
 	let optLoss = $state<'rmse' | 'mae' | 'huber' | 'bvw'>('rmse');
-	let solvePerZone = $state(true);
+	let solvePerZone = $state(false);
 	let useMdtPrior = $state(false);
 	let mdtFwl = $state(3925.0);
 	let mdtWeight = $state(1.0);
 	let poreVolumeWeighted = $state(true);
 	let equalWellWeights = $state(true);
 	let fwlOptResult = $state<any>(null);
+
+	let calculatedZones = $derived.by(() => {
+		const sr = projectData.shfResult;
+		const allowedZones =
+			workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
+		const minD = workbench.depthFilter?.min ?? -Infinity;
+		const maxD = workbench.depthFilter?.max ?? Infinity;
+		const found = new Set<string>();
+
+		if (sr?.zones && sr?.shf) {
+			for (let i = 0; i < sr.zones.length; i++) {
+				const zn = sr.zones[i]?.trim();
+				if (!zn || zn === 'Unknown' || zn === 'None' || zn === 'nan') continue;
+				if (allowedZones && !allowedZones.has(zn)) continue;
+				const d = sr.depths?.[i];
+				if (typeof d === 'number' && (d < minD || d > maxD)) continue;
+				const shfVal = sr.shf[i];
+				if (typeof shfVal === 'number' && Number.isFinite(shfVal)) {
+					found.add(zn);
+				}
+			}
+		}
+
+		for (const zn of Object.keys(projectData.shfParams.fwlByZone)) {
+			if (!allowedZones || allowedZones.has(zn)) {
+				found.add(zn);
+			}
+		}
+
+		return Array.from(found).sort();
+	});
 
 	const MODEL_META: Record<
 		'leverett_j' | 'skelt_harrison' | 'cuddy',
@@ -193,11 +224,17 @@
 		projectData.error = null;
 		try {
 			const sp = projectData.shfParams;
+			const activeZonesPayload =
+				workbench.selectedZones.length > 0
+					? workbench.selectedZones
+					: calculatedZones.length > 0
+						? calculatedZones
+						: null;
 			const res = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/optimize_fwl`,
 				{
 					well_names: projectData.selectedWellNames.length ? projectData.selectedWellNames : null,
-					zones: workbench.selectedZones.length ? workbench.selectedZones : null,
+					zones: activeZonesPayload,
 					model: sp.model,
 					shm_params: projectData.shfResult?.fits ?? null,
 					loss: optLoss,
@@ -273,6 +310,11 @@
 					<input
 						type="checkbox"
 						bind:checked={solvePerZone}
+						onchange={() => {
+							if (!solvePerZone && Object.keys(projectData.shfParams.fwlByZone).length > 0) {
+								void clearZoneFwls();
+							}
+						}}
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span class="font-semibold text-[var(--text-primary)]">Per-Zone FWL</span>
@@ -359,72 +401,77 @@
 				</div>
 			{/if}
 
-			{#if (fwlOptResult?.zone_metrics && fwlOptResult.zone_metrics.length > 0) || Object.keys(projectData.shfParams.fwlByZone).length > 0 || projectData.allZones.length > 1}
+			{#if (solvePerZone || Object.keys(projectData.shfParams.fwlByZone).length > 0) && ((fwlOptResult?.zone_metrics && fwlOptResult.zone_metrics.length > 0) || calculatedZones.length > 0)}
 				{@const zoneRows =
 					fwlOptResult?.zone_metrics && fwlOptResult.zone_metrics.length > 0
-						? fwlOptResult.zone_metrics
-						: projectData.allZones.map((zn) => ({
+						? fwlOptResult.zone_metrics.filter(
+								(zr: any) =>
+									calculatedZones.length === 0 || calculatedZones.includes(zr.zone)
+							)
+						: calculatedZones.map((zn) => ({
 								zone: zn,
 								fwl: projectData.shfParams.fwlByZone[zn] ?? projectData.shfParams.fwl,
 								owc: null,
 								ttz: null,
 								rmse: null
 							}))}
-				<div class="mt-2">
-					<div class="mb-1 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
-						<span class="font-semibold text-[var(--text-primary)]">Per-Zone FWL & Contacts</span>
-						{#if Object.keys(projectData.shfParams.fwlByZone).length > 0}
-							<button
-								type="button"
-								onclick={clearZoneFwls}
-								class="text-[10px] font-medium text-blue-700 hover:underline"
-							>
-								Use Single Global FWL
-							</button>
-						{/if}
-					</div>
-					<div class="overflow-x-auto border border-[var(--border-hairline)]">
-						<table class="w-full border-collapse text-left text-[10px]">
-							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
-								<tr class="h-5 border-b border-[var(--border-hairline)]">
-									<th class="px-1.5 font-semibold">Zone</th>
-									<th class="px-1 text-right font-semibold">FWL (m)</th>
-									<th class="px-1 text-right font-semibold">OWC / TTZ</th>
-									<th class="px-1.5 text-right font-semibold">RMSE</th>
-								</tr>
-							</thead>
-							<tbody class="divide-y divide-[var(--border-hairline)]">
-								{#each zoneRows as zRow}
-									{@const activeZfwl =
-										projectData.shfParams.fwlByZone[zRow.zone] ??
-										zRow.fwl ??
-										projectData.shfParams.fwl}
-									<tr class="h-6">
-										<td class="px-1.5 font-semibold truncate max-w-[90px]" title={zRow.zone}>
-											{zRow.zone}
-										</td>
-										<td class="px-1 text-right">
-											<input
-												type="number"
-												step="1.0"
-												value={activeZfwl}
-												onchange={(e) =>
-													updateZoneFwl(zRow.zone, (e.currentTarget as HTMLInputElement).value)}
-												class="mono-num h-5 w-16 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px] font-semibold text-blue-700"
-											/>
-										</td>
-										<td class="mono-num px-1 text-right text-[var(--text-secondary)]">
-											{zRow.owc != null ? `${fmtNum(zRow.owc, 0)} / ${fmtNum(zRow.ttz, 0)}` : '—'}
-										</td>
-										<td class="mono-num px-1.5 text-right">
-											{zRow.rmse != null ? fmtNum(zRow.rmse, 3) : '—'}
-										</td>
+				{#if zoneRows.length > 0}
+					<div class="mt-2">
+						<div class="mb-1 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
+							<span class="font-semibold text-[var(--text-primary)]">Per-Zone FWL & Contacts</span>
+							{#if Object.keys(projectData.shfParams.fwlByZone).length > 0}
+								<button
+									type="button"
+									onclick={clearZoneFwls}
+									class="text-[10px] font-medium text-blue-700 hover:underline"
+								>
+									Use Single Global FWL
+								</button>
+							{/if}
+						</div>
+						<div class="overflow-x-auto border border-[var(--border-hairline)]">
+							<table class="w-full border-collapse text-left text-[10px]">
+								<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+									<tr class="h-5 border-b border-[var(--border-hairline)]">
+										<th class="px-1.5 font-semibold">Zone</th>
+										<th class="px-1 text-right font-semibold">FWL (m)</th>
+										<th class="px-1 text-right font-semibold">OWC / TTZ</th>
+										<th class="px-1.5 text-right font-semibold">RMSE</th>
 									</tr>
-								{/each}
-							</tbody>
-						</table>
+								</thead>
+								<tbody class="divide-y divide-[var(--border-hairline)]">
+									{#each zoneRows as zRow}
+										{@const activeZfwl =
+											projectData.shfParams.fwlByZone[zRow.zone] ??
+											zRow.fwl ??
+											projectData.shfParams.fwl}
+										<tr class="h-6">
+											<td class="px-1.5 font-semibold truncate max-w-[90px]" title={zRow.zone}>
+												{zRow.zone}
+											</td>
+											<td class="px-1 text-right">
+												<input
+													type="number"
+													step="1.0"
+													value={activeZfwl}
+													onchange={(e) =>
+														updateZoneFwl(zRow.zone, (e.currentTarget as HTMLInputElement).value)}
+													class="mono-num h-5 w-16 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px] font-semibold text-blue-700"
+												/>
+											</td>
+											<td class="mono-num px-1 text-right text-[var(--text-secondary)]">
+												{zRow.owc != null ? `${fmtNum(zRow.owc, 0)} / ${fmtNum(zRow.ttz, 0)}` : '—'}
+											</td>
+											<td class="mono-num px-1.5 text-right">
+												{zRow.rmse != null ? fmtNum(zRow.rmse, 3) : '—'}
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
 					</div>
-				</div>
+				{/if}
 			{/if}
 		</ParameterSection>
 
