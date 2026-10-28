@@ -13,6 +13,7 @@ export type MultiWellStep =
 	| 'rock-typing'
 	| 'perm-transform'
 	| 'shf'
+	| 'rt-classifier'
 	| 'ml-training'
 	| 'report';
 

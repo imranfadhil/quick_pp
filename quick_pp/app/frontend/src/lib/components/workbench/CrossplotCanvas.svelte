@@ -1009,9 +1009,11 @@
 			// Check if multi-well rock typing or perm transform data is present when in multi-well scope
 			if (
 				workbench.scope === 'multi-well' &&
-				workbench.multiWellStep === 'rock-typing' &&
+				(workbench.multiWellStep === 'rock-typing' ||
+					workbench.multiWellStep === 'rt-classifier') &&
 				projectData.rockTypingResult &&
-				projectData.rockTypingPlotView !== 'phi-k'
+				(projectData.rockTypingPlotView !== 'phi-k' ||
+					workbench.multiWellStep === 'rt-classifier')
 			) {
 				const rt = projectData.rockTypingResult;
 				const diag = rt.diagnostics ?? {};
@@ -1416,7 +1418,11 @@
 					return { traces, layout: carbLayout };
 				}
 
-				if (projectData.rockTypingPlotView === 'classifier' && diag.classifier?.contingency_table) {
+				if (
+					(projectData.rockTypingPlotView === 'classifier' ||
+						workbench.multiWellStep === 'rt-classifier') &&
+					diag.classifier?.contingency_table
+				) {
 					const ct = diag.classifier.contingency_table;
 					const labels: number[] = ct.labels ?? [];
 					const counts: number[][] = ct.counts ?? [];
@@ -3599,7 +3605,7 @@
 						: 'Depth Shift'}
 				</button>
 			</div>
-		{:else if effectiveMode === 'phi-k' && workbench.scope === 'multi-well' && workbench.multiWellStep === 'rock-typing'}
+		{:else if effectiveMode === 'phi-k' && workbench.scope === 'multi-well' && (workbench.multiWellStep === 'rock-typing' || workbench.multiWellStep === 'rt-classifier')}
 			<div class="flex items-center gap-1">
 				{#each [['phi-k', 'Φ–K'], ['lorenz', 'Lorenz'], ['gmm', 'GMM / BIC'], ['carbonate', 'Φ_sec Vug'], ['classifier', 'ML Matrix']] as [rvKey, rvLbl]}
 					<button

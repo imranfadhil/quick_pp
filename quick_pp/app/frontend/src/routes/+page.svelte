@@ -26,6 +26,7 @@
 	import MultiWellRockTyping from '$lib/components/modules/MultiWellRockTyping.svelte';
 	import MultiWellPermTransform from '$lib/components/modules/MultiWellPermTransform.svelte';
 	import MultiWellShf from '$lib/components/modules/MultiWellShf.svelte';
+	import MultiWellRtClassifierTrainer from '$lib/components/modules/MultiWellRtClassifierTrainer.svelte';
 	import MultiWellMlTrainer from '$lib/components/modules/MultiWellMlTrainer.svelte';
 
 	import {
@@ -174,6 +175,45 @@
 						PHIT: scal.phit?.[i] ?? null,
 						PERM: scal.perm?.[i] ?? null
 					}))
+				};
+			}
+
+			if (
+				workbench.scope === 'multi-well' &&
+				(workbench.multiWellStep === 'rt-classifier' ||
+					workbench.multiWellStep === 'rock-typing') &&
+				projectData.rockTypingResult?.diagnostics?.classifier?.class_metrics?.length
+			) {
+				const clf = projectData.rockTypingResult.diagnostics.classifier;
+				const compRows: Array<Record<string, any>> = clf.comparison?.per_drt ?? [];
+				const compByDrt = new Map<number, Record<string, any>>(
+					compRows.map((r: any) => [Number(r.drt), r])
+				);
+				return {
+					title: `Rock Type Classifier Per-DRT Validation & Propagation Metrics (Acc=${((Number(clf.metrics?.accuracy ?? 0)) * 100).toFixed(1)}%, F1=${Number(clf.metrics?.f1_weighted ?? 0).toFixed(3)}, κ=${Number(clf.metrics?.cohen_kappa ?? 0).toFixed(3)})`,
+					columns: [
+						{ key: 'DRT', label: 'Group' },
+						{ key: 'PRECISION', label: 'Precision', numeric: true, decimals: 3 },
+						{ key: 'RECALL', label: 'Recall', numeric: true, decimals: 3 },
+						{ key: 'F1', label: 'F1 Score', numeric: true, decimals: 3 },
+						{ key: 'SUPPORT', label: 'Val Support', numeric: true, decimals: 0 },
+						{ key: 'CUTOFF_PTS', label: 'Cutoff Pts', numeric: true, decimals: 0 },
+						{ key: 'ML_PTS', label: 'ML Pred Pts', numeric: true, decimals: 0 },
+						{ key: 'HYBRID_PTS', label: 'Cut+ML Pts', numeric: true, decimals: 0 }
+					],
+					rows: (clf.class_metrics ?? []).map((cm: any) => {
+						const cr = compByDrt.get(Number(cm.drt));
+						return {
+							DRT: `DRT ${cm.drt}`,
+							PRECISION: cm.precision,
+							RECALL: cm.recall,
+							F1: cm.f1,
+							SUPPORT: cm.support,
+							CUTOFF_PTS: cr?.cutoff_count ?? null,
+							ML_PTS: cr?.ml_count ?? null,
+							HYBRID_PTS: cr?.hybrid_count ?? null
+						};
+					})
 				};
 			}
 
@@ -463,6 +503,8 @@
 						<MultiWellRockTyping />
 					{:else if workbench.multiWellStep === 'perm-transform'}
 						<MultiWellPermTransform />
+					{:else if workbench.multiWellStep === 'rt-classifier'}
+						<MultiWellRtClassifierTrainer />
 					{:else if workbench.multiWellStep === 'ml-training'}
 						<MultiWellMlTrainer />
 					{:else if workbench.multiWellStep === 'report'}

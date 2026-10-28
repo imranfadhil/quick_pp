@@ -128,16 +128,29 @@
 		projectData.drtMethod = m;
 		projectData.drtClassifierPropagated = false;
 		if (workbench.projectId) {
-			await executeRockTyping(false, Boolean(classifierDiag?.trained), false);
+			await executeRockTyping(
+				false,
+				Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
+				false,
+				projectData.drtSelectedSavedModelKey || null
+			);
 		}
 	}
 
-	function selectCutoffMethod(cm: DrtCutoffMethod) {
+	async function selectCutoffMethod(cm: DrtCutoffMethod) {
 		projectData.drtCutoffMethod = cm;
 		if (cm === 'lorenz' && projectData.rockTypingPlotView === 'gmm') {
 			projectData.rockTypingPlotView = 'lorenz';
 		} else if (cm === 'gmm' && projectData.rockTypingPlotView === 'lorenz') {
 			projectData.rockTypingPlotView = 'gmm';
+		}
+		if (workbench.projectId) {
+			await executeRockTyping(
+				true,
+				Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
+				projectData.drtClassifierPropagated,
+				projectData.drtSelectedSavedModelKey || null
+			);
 		}
 	}
 
@@ -154,10 +167,15 @@
 			cur.length = targetCutoffsCount;
 		}
 		projectData.activeDrtCutoffs = cur;
-		await executeRockTyping(true, Boolean(classifierDiag?.trained), false);
+		await executeRockTyping(
+			true,
+			Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
+			projectData.drtClassifierPropagated,
+			projectData.drtSelectedSavedModelKey || null
+		);
 	}
 
-	function addCutoff() {
+	async function addCutoff() {
 		const cur = projectData.activeDrtCutoffs;
 		const last = cur[cur.length - 1] ?? 1.0;
 		const nextVal =
@@ -165,12 +183,28 @@
 				? Math.min(4.0, Number((last + 0.5).toFixed(2)))
 				: Number((last * 1.8).toFixed(2));
 		projectData.activeDrtCutoffs = [...cur, nextVal];
+		if (workbench.projectId) {
+			await executeRockTyping(
+				false,
+				Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
+				projectData.drtClassifierPropagated,
+				projectData.drtSelectedSavedModelKey || null
+			);
+		}
 	}
 
-	function removeCutoff(idx: number) {
+	async function removeCutoff(idx: number) {
 		const cur = projectData.activeDrtCutoffs;
 		if (cur.length <= 1) return;
 		projectData.activeDrtCutoffs = cur.filter((_, i) => i !== idx);
+		if (workbench.projectId) {
+			await executeRockTyping(
+				false,
+				Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
+				projectData.drtClassifierPropagated,
+				projectData.drtSelectedSavedModelKey || null
+			);
+		}
 	}
 
 	function formatDrtRange(drtStr: string): string {
@@ -250,6 +284,9 @@
 
 	onMount(() => {
 		loadSavedClassifierModels();
+		if (workbench.projectId && !projectData.rockTypingResult) {
+			void executeRockTyping(false, false, false);
+		}
 	});
 
 	async function saveTrainedClassifierModel() {
@@ -455,11 +492,11 @@
 			const meta = DRT_METHOD_META[method];
 			const sortedCutoffs = [...projectData.activeDrtCutoffs].sort((a, b) => a - b);
 			const activeMinDepth =
-				projectData.drtPropagateFocusedOnly && workbench.depthFilter.min !== null
+				projectData.drtPropagateFocusedOnly && workbench.depthFilter?.min != null
 					? workbench.depthFilter.min
 					: null;
 			const activeMaxDepth =
-				projectData.drtPropagateFocusedOnly && workbench.depthFilter.max !== null
+				projectData.drtPropagateFocusedOnly && workbench.depthFilter?.max != null
 					? workbench.depthFilter.max
 					: null;
 			const activeZones =
@@ -639,9 +676,24 @@
 		}
 	}
 
-	function setPlotView(view: RockTypingPlotView) {
+	async function setPlotView(view: RockTypingPlotView) {
 		workbench.crossplotTemplateOverride = 'phi-k';
 		projectData.rockTypingPlotView = view;
+		if (workbench.projectId && !projectData.isComputingMultiWell) {
+			if (!projectData.rockTypingResult) {
+				await executeRockTyping(false, view === 'classifier', false);
+			} else if (
+				view === 'classifier' &&
+				!projectData.rockTypingResult.diagnostics?.classifier?.contingency_table
+			) {
+				await executeRockTyping(
+					false,
+					!projectData.drtSelectedSavedModelKey,
+					projectData.drtClassifierPropagated,
+					projectData.drtSelectedSavedModelKey || null
+				);
+			}
+		}
 	}
 
 	async function saveRockTyping() {
@@ -651,7 +703,11 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
-		<ParameterSection title="Rock Typing Method (DRT)" badge={activeMeta.badge}>
+		<ParameterSection
+			title="Rock Typing Method (DRT)"
+			badge={activeMeta.badge}
+			defaultOpen={true}
+		>
 			<div class="grid grid-cols-3 gap-1">
 				{#each [['fzi', 'FZI / RQI'], ['winland', 'Winland R35'], ['lucia', 'Lucia RFN']] as [m, lbl]}
 					<button
@@ -963,70 +1019,125 @@
 		</ParameterSection>
 
 		<ParameterSection
-			title="ML Classifier & Contingency Validator"
+			title="ML Model Selection &amp; Propagation"
 			badge={classifierDiag?.propagated
 				? `Propagated (${projectData.drtPropagationMode === 'full_ml' ? 'Full ML' : 'ML Fill'}) ✓`
-				: activeDisplayedClassifier?.metrics?.accuracy !== undefined
-					? `Acc: ${(Number(activeDisplayedClassifier.metrics.accuracy) * 100).toFixed(1)}%`
-					: `${projectData.drtSelectedFeatures.length} Inputs`}
+				: savedModelsList.length > 0
+					? `${savedModelsList.length} Saved`
+					: 'Select Model'}
 		>
 			<div class="space-y-2">
-				<!-- 1) Selectable Log Inputs -->
+				<!-- 1) Select Saved Classifier Model or Jump to Standalone RT Classifier Trainer -->
 				<div
 					class="space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]"
 				>
 					<div class="flex items-center justify-between gap-1">
 						<span class="font-semibold text-[var(--text-primary)]">
-							1. Selectable Log Features ({projectData.drtSelectedFeatures.length}/6)
+							1. Select Classifier Model ({savedModelsList.length} Saved)
 						</span>
-						<div class="flex items-center gap-1">
+						<button
+							type="button"
+							onclick={() => (workbench.multiWellStep = 'rt-classifier')}
+							class="rounded-xs border border-[var(--accent-primary)] bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold text-[var(--accent-primary)] hover:bg-blue-100"
+							title="Open Standalone RT Classifier Trainer to train, validate Contingency Matrix, and save new models"
+						>
+							Train / Validate Models →
+						</button>
+					</div>
+
+					{#if savedModelsList.length > 0}
+						<div class="max-h-40 space-y-1 overflow-y-auto">
+							{#each savedModelsList as sm}
+								{@const isActiveModel =
+									projectData.drtSelectedSavedModelKey === sm.model_key ||
+									classifierDiag?.saved_model_key === sm.model_key}
+								{@const smAcc =
+									sm.metrics?.accuracy !== undefined
+										? `${(Number(sm.metrics.accuracy) * 100).toFixed(1)}%`
+										: '—'}
+								{@const smF1 =
+									sm.metrics?.f1_weighted !== undefined
+										? Number(sm.metrics.f1_weighted).toFixed(2)
+										: '—'}
+								{@const smKappa =
+									sm.metrics?.cohen_kappa !== undefined
+										? Number(sm.metrics.cohen_kappa).toFixed(2)
+										: '—'}
+								<div
+									class="rounded-xs border p-1 transition-colors {isActiveModel
+										? 'border-[var(--accent-primary)] bg-blue-50/60'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)]'}"
+								>
+									<div class="flex items-center justify-between gap-1">
+										<span class="truncate font-semibold text-[var(--text-primary)]" title={sm.model_name}>
+											{sm.model_name}
+										</span>
+										<div class="flex shrink-0 items-center gap-1">
+											<button
+												type="button"
+												onclick={() => inspectSavedClassifierModel(sm)}
+												class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1 py-0.5 text-[9px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+												title="Plot saved Contingency Matrix on crossplot"
+											>
+												CM
+											</button>
+											<button
+												type="button"
+												disabled={projectData.isComputingMultiWell}
+												onclick={() => applySavedClassifierModel(sm.model_key)}
+												class="rounded-xs border border-emerald-600 bg-emerald-600 px-1.5 py-0.5 text-[9px] font-semibold text-white hover:opacity-95 disabled:opacity-50"
+												title="Propagate DRTs using this saved classifier"
+											>
+												{isActiveModel && classifierDiag?.propagated ? 'Active ✓' : 'Propagate'}
+											</button>
+										</div>
+									</div>
+									<div class="mt-0.5 flex flex-wrap items-center justify-between gap-1 text-[9px] text-[var(--text-secondary)]">
+										<span class="mono-num">
+											{(sm.features_used ?? []).join('·')}
+										</span>
+										<span class="mono-num font-medium text-[var(--text-primary)]">
+											Acc:{smAcc} · F1:{smF1} · κ:{smKappa}
+										</span>
+									</div>
+								</div>
+							{/each}
+						</div>
+					{:else if classifierDiag?.trained}
+						<div
+							class="flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-1 text-[9.5px]"
+						>
+							<span>
+								In-memory model ({(classifierDiag.features_used ?? []).join('+')}) · Acc:
+								<strong class="mono-num"
+									>{(Number(classifierDiag.metrics?.accuracy ?? 0) * 100).toFixed(1)}%</strong
+								>
+							</span>
 							<button
 								type="button"
-								onclick={() =>
-									setFeaturePreset(['GR', 'NPHI', 'RHOB', 'LOG_RT', 'PEF', 'VDL'])}
-								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0.5 text-[9px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
-								title="Select all 6 candidate log features"
+								disabled={projectData.isComputingMultiWell}
+								onclick={() => executeRockTyping(false, true, true)}
+								class="rounded-xs border border-emerald-600 bg-emerald-600 px-1.5 py-0.5 text-[9px] font-semibold text-white hover:opacity-95 disabled:opacity-50"
 							>
-								All
-							</button>
-							<button
-								type="button"
-								onclick={() => setFeaturePreset(['NPHI', 'RHOB', 'PEF', 'VDL'])}
-								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0.5 text-[9px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
-								title="Exclude GR and log10(RT) when they do not contribute to rock typing"
-							>
-								No GR/RT
-							</button>
-							<button
-								type="button"
-								onclick={() => setFeaturePreset(['NPHI', 'RHOB', 'VDL'])}
-								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0.5 text-[9px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
-								title="Porosity & Velocity Deviation only"
-							>
-								Φ+VDL
+								Propagate
 							</button>
 						</div>
-					</div>
-
-					<div class="grid grid-cols-3 gap-1">
-						{#each ALL_RT_FEATURES as feat}
-							{@const isSelected = projectData.drtSelectedFeatures.includes(feat.key)}
+					{:else}
+						<div class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2 text-[9.5px] text-[var(--text-secondary)]">
+							No saved Rock Type classifier models yet. Open
 							<button
 								type="button"
-								title={feat.title}
-								onclick={() => toggleFeature(feat.key)}
-								class="flex h-6 items-center justify-between rounded-xs border px-1.5 text-[9.5px] font-medium transition-colors {isSelected
-									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
-									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]'}"
+								onclick={() => (workbench.multiWellStep = 'rt-classifier')}
+								class="font-semibold text-[var(--accent-primary)] underline"
 							>
-								<span class="mono-num">{feat.label}</span>
-								<span class="text-[9px]">{isSelected ? '✓' : '○'}</span>
+								Standalone: RT Classifier
 							</button>
-						{/each}
-					</div>
+							to train, validate with a Contingency Matrix, and save a model.
+						</div>
+					{/if}
 				</div>
 
-				<!-- 3) Focused / Filtered Interval Propagation Scope -->
+				<!-- 2) Focused / Filtered Interval Propagation Scope -->
 				<div
 					class="space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]"
 				>
@@ -1041,8 +1152,8 @@
 						/>
 					</label>
 					<div class="text-[9.5px] text-[var(--text-secondary)]">
-						Restricts ML training &amp; DRT propagation to active zone filters, depth filter bounds,
-						and evaluated reservoir intervals.
+						Restricts ML DRT propagation to active zone filters, depth filter bounds, and evaluated
+						reservoir intervals.
 					</div>
 					{#if projectData.allZones.length > 0}
 						<div class="flex flex-wrap items-center gap-1 pt-0.5">
@@ -1094,216 +1205,86 @@
 					{/if}
 				</div>
 
-				<!-- Classifier Algorithm & Holdout Split + Train Button -->
-				<div class="flex items-center justify-between gap-1.5">
-					<select
-						bind:value={projectData.drtClassifierModel}
-						title="Supervised Classification Model"
-						class="h-6 flex-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 text-[10px] font-medium text-[var(--text-primary)]"
-					>
-						<option value="random_forest">Random Forest (Balanced)</option>
-						<option value="extra_trees">Extra Trees Ensemble</option>
-						<option value="gradient_boosting">Gradient Boosting</option>
-					</select>
-					<select
-						bind:value={projectData.drtClassifierTestSize}
-						title="Validation Holdout Split"
-						class="h-6 w-24 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1 text-[10px] font-medium text-[var(--text-primary)]"
-					>
-						<option value={0.2}>20% Val</option>
-						<option value={0.25}>25% Val</option>
-						<option value={0.3}>30% Val</option>
-					</select>
-				</div>
-
-				<button
-					type="button"
-					disabled={projectData.isComputingMultiWell}
-					onclick={() => executeRockTyping(false, true, false)}
-					class="h-7 w-full rounded-sm border border-[var(--accent-primary)] bg-blue-50/80 text-[11px] font-semibold text-[var(--accent-primary)] transition-colors hover:bg-blue-100 disabled:opacity-50"
-				>
-					Train &amp; Validate New Classifier (Contingency Matrix)
-				</button>
-
-				<!-- 2) Saved Classifier Models Registry -->
-				{#if savedModelsList.length > 0}
-					<div
-						class="space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]"
-					>
-						<div class="flex items-center justify-between">
-							<span class="font-semibold text-[var(--text-primary)]">
-								Saved Classifier Models ({savedModelsList.length})
-							</span>
-							<span class="text-[9px] text-[var(--text-muted)]">Select without retraining</span>
-						</div>
-						<div class="max-h-40 space-y-1 overflow-y-auto">
-							{#each savedModelsList as sm}
-								{@const isActiveModel =
-									projectData.drtSelectedSavedModelKey === sm.model_key ||
-									classifierDiag?.saved_model_key === sm.model_key}
-								{@const smAcc =
-									sm.metrics?.accuracy !== undefined
-										? `${(Number(sm.metrics.accuracy) * 100).toFixed(1)}%`
-										: '—'}
-								{@const smF1 =
-									sm.metrics?.f1_weighted !== undefined
-										? Number(sm.metrics.f1_weighted).toFixed(2)
-										: '—'}
-								{@const smKappa =
-									sm.metrics?.cohen_kappa !== undefined
-										? Number(sm.metrics.cohen_kappa).toFixed(2)
-										: '—'}
-								<div
-									class="rounded-xs border p-1 transition-colors {isActiveModel
-										? 'border-[var(--accent-primary)] bg-blue-50/60'
-										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)]'}"
-								>
-									<div class="flex items-center justify-between gap-1">
-										<span class="truncate font-semibold text-[var(--text-primary)]" title={sm.model_name}>
-											{sm.model_name}
-										</span>
-										<div class="flex shrink-0 items-center gap-1">
-											<button
-												type="button"
-												onclick={() => inspectSavedClassifierModel(sm)}
-												class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1 py-0.5 text-[9px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
-												title="Inspect saved performance metrics & Contingency Matrix"
-											>
-												CM
-											</button>
-											<button
-												type="button"
-												disabled={projectData.isComputingMultiWell}
-												onclick={() => applySavedClassifierModel(sm.model_key)}
-												class="rounded-xs border border-emerald-600 bg-emerald-600 px-1.5 py-0.5 text-[9px] font-semibold text-white hover:opacity-95 disabled:opacity-50"
-												title="Predict & propagate using this saved classifier without retraining"
-											>
-												Use
-											</button>
-											<button
-												type="button"
-												onclick={() => deleteSavedClassifierModel(sm.model_key)}
-												class="rounded-xs border border-[var(--border-hairline)] px-1 py-0.5 text-[9px] text-[var(--text-muted)] hover:bg-red-50 hover:text-red-600"
-												title="Delete saved classifier"
-											>
-												×
-											</button>
-										</div>
-									</div>
-									<div class="mt-0.5 flex flex-wrap items-center justify-between gap-1 text-[9px] text-[var(--text-secondary)]">
-										<span class="mono-num">
-											{(sm.features_used ?? []).join('·')}
-										</span>
-										<span class="mono-num font-medium text-[var(--text-primary)]">
-											Acc:{smAcc} · F1:{smF1} · κ:{smKappa}
-										</span>
-									</div>
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/if}
-
-				{#if activeDisplayedClassifier}
-					{@const ct = activeDisplayedClassifier.contingency_table}
-					{@const m = activeDisplayedClassifier.metrics}
+				<!-- 3) Comparison of Cutoff ROCK_FLAG vs ML Predicted ROCK_FLAG & Workflow Selection -->
+				{#if classifierDiag?.comparison}
+					{@const comp = classifierDiag.comparison}
 					<div
 						class="space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]"
 					>
-						{#if activeDisplayedClassifier.saved_model_name}
-							<div class="flex items-center justify-between rounded-xs bg-blue-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-[var(--accent-primary)]">
-								<span class="truncate">Model: {activeDisplayedClassifier.saved_model_name}</span>
-								{#if previewedSavedModel}
-									<button
-										type="button"
-										onclick={() => applySavedClassifierModel(previewedSavedModel?.model_key)}
-										class="underline"
-									>
-										Apply to Wells →
-									</button>
-								{/if}
-							</div>
-						{/if}
-
-						<!-- Validation KPI Banner -->
-						<div class="grid grid-cols-3 gap-1 text-center">
-							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
-								<div class="text-[9px] text-[var(--text-muted)]">Accuracy</div>
-								<div class="mono-num font-bold text-[var(--text-primary)]">
-									{(Number(m.accuracy) * 100).toFixed(1)}%
-								</div>
-							</div>
-							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
-								<div class="text-[9px] text-[var(--text-muted)]">Weighted F1</div>
-								<div class="mono-num font-bold text-[var(--text-primary)]">
-									{Number(m.f1_weighted).toFixed(3)}
-								</div>
-							</div>
-							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
-								<div class="text-[9px] text-[var(--text-muted)]">Cohen's κ</div>
-								<div class="mono-num font-bold text-[var(--text-primary)]">
-									{Number(m.cohen_kappa).toFixed(3)}
-								</div>
-							</div>
-						</div>
-
-						<!-- Features & Sample Counts -->
-						<div class="flex flex-wrap items-center justify-between gap-1 text-[9.5px] text-[var(--text-secondary)]">
-							<span>
-								Features:
-								<strong class="mono-num text-[var(--text-primary)]"
-									>{(activeDisplayedClassifier.features_used ?? []).join(', ')}</strong
-								>
+						<div class="flex items-center justify-between">
+							<span class="font-semibold text-[var(--text-primary)]">
+								3. Cutoff vs. ML ROCK_FLAG Comparison
 							</span>
-							<button
-								type="button"
-								onclick={() => setPlotView('classifier')}
-								class="font-semibold text-[var(--accent-primary)] hover:underline"
-							>
-								Plot Matrix →
-							</button>
+							<span class="mono-num text-[9px] font-semibold text-emerald-700">
+								Agree: {(Number(comp.exact_agreement ?? 0) * 100).toFixed(1)}% (±1: {(Number(comp.within_one_agreement ?? 0) * 100).toFixed(1)}%)
+							</span>
 						</div>
 
-						<!-- Compact Contingency Table (Confusion Matrix) -->
-						{#if ct?.labels?.length && ct?.counts?.length}
+						<div class="grid grid-cols-3 gap-1 text-center text-[9px]">
+							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
+								<div class="text-[8.5px] text-[var(--text-muted)]">Pure Cutoffs</div>
+								<div class="mono-num font-bold text-[var(--text-primary)]">
+									{comp.cutoff_total} pts
+								</div>
+							</div>
+							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
+								<div class="text-[8.5px] text-[var(--text-muted)]">ML Focused</div>
+								<div class="mono-num font-bold text-[var(--text-primary)]">
+									{comp.ml_total} pts
+								</div>
+							</div>
+							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
+								<div class="text-[8.5px] text-[var(--text-muted)]">Uncored Filled</div>
+								<div class="mono-num font-bold text-emerald-700">
+									+{comp.uncored_filled_count} pts
+								</div>
+							</div>
+						</div>
+
+						{#if comp.per_drt?.length}
 							<div class="overflow-x-auto">
-								<table class="w-full border-collapse text-center text-[9.5px]">
+								<table class="w-full border-collapse text-center text-[9px]">
 									<thead>
 										<tr class="border-b border-[var(--border-hairline)] text-[var(--text-muted)]">
-											<th class="px-1 py-0.5 text-left font-medium">True \ Pred</th>
-											{#each ct.labels as colLbl}
-												<th class="mono-num px-1 py-0.5 font-semibold">DRT {colLbl}</th>
-											{/each}
-											<th class="px-1 py-0.5 font-medium">Recall</th>
+											<th class="px-1 py-0.5 text-left font-medium">Group</th>
+											<th class="px-1 py-0.5 font-medium">Cutoffs</th>
+											<th class="px-1 py-0.5 font-medium">ML Pred</th>
+											<th class="px-1 py-0.5 font-medium">Cut+ML</th>
+											<th class="px-1 py-0.5 font-medium">Δ(ML−Cut)</th>
 										</tr>
 									</thead>
 									<tbody>
-										{#each ct.labels as rowLbl, rIdx}
-											{@const rowCounts = ct.counts[rIdx] ?? []}
-											{@const rowNorm = ct.norm_recall?.[rIdx] ?? []}
-											{@const diagRec = Number(rowNorm[rIdx] ?? 0)}
+										{#each comp.per_drt as row}
 											<tr class="border-b border-[var(--border-hairline)] last:border-b-0">
 												<td class="mono-num px-1 py-0.5 text-left font-semibold">
 													<span
-														style="background-color: {getRockTypeColor(rowLbl)}"
+														style="background-color: {getRockTypeColor(row.drt)}"
 														class="mr-1 inline-block h-2 w-2 rounded-full"
-													></span>DRT {rowLbl}
+													></span>DRT {row.drt}
 												</td>
-												{#each rowCounts as cellVal, cIdx}
-													{@const isDiag = rIdx === cIdx}
-													<td
-														title={`True DRT ${rowLbl} → Pred DRT ${ct.labels[cIdx]}: ${cellVal} samples (${((rowNorm[cIdx] ?? 0) * 100).toFixed(1)}%)`}
-														class="mono-num px-1 py-0.5 {isDiag
-															? 'bg-emerald-50 font-bold text-emerald-800'
-															: cellVal > 0
-																? 'bg-amber-50/60 text-amber-900'
-																: 'text-[var(--text-muted)]'}"
+												<td class="mono-num px-1 py-0.5">
+													{row.cutoff_count}
+													<span class="text-[8.5px] text-[var(--text-muted)]"
+														>({row.cutoff_pct}%)</span
 													>
-														{cellVal}
-													</td>
-												{/each}
-												<td class="mono-num px-1 py-0.5 font-semibold text-[var(--text-primary)]">
-													{(diagRec * 100).toFixed(0)}%
+												</td>
+												<td class="mono-num px-1 py-0.5">
+													{row.ml_count}
+													<span class="text-[8.5px] text-[var(--text-muted)]"
+														>({row.ml_pct}%)</span
+													>
+												</td>
+												<td class="mono-num px-1 py-0.5 font-medium">
+													{row.hybrid_count}
+												</td>
+												<td
+													class="mono-num px-1 py-0.5 font-semibold {row.delta_count > 0
+														? 'text-emerald-700'
+														: row.delta_count < 0
+															? 'text-amber-700'
+															: 'text-[var(--text-muted)]'}"
+												>
+													{row.delta_count > 0 ? `+${row.delta_count}` : row.delta_count}
 												</td>
 											</tr>
 										{/each}
@@ -1312,193 +1293,128 @@
 							</div>
 						{/if}
 
-						<!-- Feature Importance Bars -->
-						{#if activeDisplayedClassifier.feature_importances?.length}
-							<div class="space-y-0.5 pt-0.5">
-								<div class="text-[9px] font-semibold text-[var(--text-muted)]">
-									Feature Importance (MDI)
-								</div>
-								{#each activeDisplayedClassifier.feature_importances as fi}
-									<div class="flex items-center gap-1.5 text-[9.5px]">
-										<span class="mono-num w-12 font-medium text-[var(--text-primary)]"
-											>{fi.feature}</span
-										>
-										<div class="h-2 flex-1 overflow-hidden rounded-xs bg-slate-200">
-											<div
-												class="h-full bg-[var(--accent-primary)]"
-												style="width: {Math.min(100, Math.round(Number(fi.importance) * 100))}%"
-											></div>
-										</div>
-										<span class="mono-num w-8 text-right text-[var(--text-secondary)]">
-											{(Number(fi.importance) * 100).toFixed(0)}%
-										</span>
-									</div>
-								{/each}
+						<!-- Active ROCK_FLAG Selector for Next Workflow -->
+						<div class="space-y-1 pt-0.5">
+							<div class="text-[9.5px] font-semibold text-[var(--text-primary)]">
+								4. Select Active ROCK_FLAG for Next Workflow (Perm Transform &amp; SHF):
 							</div>
-						{/if}
-
-						<!-- Save & Name Trained Classifier Model with Performance + CM -->
-						{#if classifierDiag && !previewedSavedModel}
-							<div class="space-y-1 border-t border-[var(--border-hairline)] pt-1.5">
-								<div class="text-[9px] font-semibold text-[var(--text-muted)]">
-									Save &amp; Name Trained Classifier (with Performance &amp; CM)
-								</div>
-								<div class="flex items-center gap-1">
-									<input
-										type="text"
-										bind:value={customModelName}
-										placeholder={`e.g. ${classifierDiag.model_type === 'extra_trees' ? 'ET' : classifierDiag.model_type === 'gradient_boosting' ? 'GB' : 'RF'} (${(classifierDiag.features_used ?? []).join('+')})`}
-										class="h-6 flex-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[9.5px] text-[var(--text-primary)]"
-									/>
-									<button
-										type="button"
-										disabled={isSavingModel || projectData.isComputingMultiWell}
-										onclick={saveTrainedClassifierModel}
-										class="h-6 shrink-0 rounded-xs border border-[var(--accent-primary)] bg-blue-50 px-2 text-[9.5px] font-semibold text-[var(--accent-primary)] hover:bg-blue-100 disabled:opacity-50"
-									>
-										{isSavingModel ? 'Saving...' : 'Save Model & CM'}
-									</button>
-								</div>
-							</div>
-						{/if}
-
-						<!-- 4) Comparison of Cutoff ROCK_FLAG vs ML Predicted ROCK_FLAG & Workflow Selection -->
-						{#if classifierDiag?.comparison}
-							{@const comp = classifierDiag.comparison}
-							<div class="space-y-1.5 border-t border-[var(--border-hairline)] pt-1.5">
-								<div class="flex items-center justify-between">
-									<span class="font-semibold text-[var(--text-primary)]">
-										3. Cutoff vs. ML ROCK_FLAG Comparison
+							<div class="grid grid-cols-3 gap-1">
+								<button
+									type="button"
+									disabled={projectData.isComputingMultiWell}
+									onclick={() => selectRockFlagSourceForWorkflow('cutoff_only')}
+									class="flex flex-col items-center rounded-xs border px-1 py-1 text-center transition-colors {projectData.drtPropagationMode ===
+										'cutoff_only' || !projectData.drtClassifierPropagated
+										? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+									title="Use purely cutoff-binned ROCK_FLAG_CUTOFF for downstream Perm Transform and SHF"
+								>
+									<span class="text-[9.5px]">Pure Cutoffs</span>
+									<span class="mono-num text-[8.5px] opacity-80">{comp.cutoff_total} pts</span>
+								</button>
+								<button
+									type="button"
+									disabled={projectData.isComputingMultiWell}
+									onclick={() => selectRockFlagSourceForWorkflow('fill_missing')}
+									class="flex flex-col items-center rounded-xs border px-1 py-1 text-center transition-colors {projectData.drtClassifierPropagated &&
+									projectData.drtPropagationMode === 'fill_missing'
+										? 'border-emerald-600 bg-emerald-50 font-semibold text-emerald-800'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+									title="Keep cutoff DRTs where available and fill uncored focused intervals with ML predictions"
+								>
+									<span class="text-[9.5px]">Cutoffs + ML Fill</span>
+									<span class="mono-num text-[8.5px] opacity-80">
+										{comp.cutoff_total + comp.uncored_filled_count} pts
 									</span>
-									<span class="mono-num text-[9px] font-semibold text-emerald-700">
-										Agree: {(Number(comp.exact_agreement ?? 0) * 100).toFixed(1)}% (±1: {(Number(comp.within_one_agreement ?? 0) * 100).toFixed(1)}%)
-									</span>
-								</div>
-
-								<div class="grid grid-cols-3 gap-1 text-center text-[9px]">
-									<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
-										<div class="text-[8.5px] text-[var(--text-muted)]">Pure Cutoffs</div>
-										<div class="mono-num font-bold text-[var(--text-primary)]">
-											{comp.cutoff_total} pts
-										</div>
-									</div>
-									<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
-										<div class="text-[8.5px] text-[var(--text-muted)]">ML Focused</div>
-										<div class="mono-num font-bold text-[var(--text-primary)]">
-											{comp.ml_total} pts
-										</div>
-									</div>
-									<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
-										<div class="text-[8.5px] text-[var(--text-muted)]">Uncored Filled</div>
-										<div class="mono-num font-bold text-emerald-700">
-											+{comp.uncored_filled_count} pts
-										</div>
-									</div>
-								</div>
-
-								{#if comp.per_drt?.length}
-									<div class="overflow-x-auto">
-										<table class="w-full border-collapse text-center text-[9px]">
-											<thead>
-												<tr class="border-b border-[var(--border-hairline)] text-[var(--text-muted)]">
-													<th class="px-1 py-0.5 text-left font-medium">Group</th>
-													<th class="px-1 py-0.5 font-medium">Cutoffs</th>
-													<th class="px-1 py-0.5 font-medium">ML Pred</th>
-													<th class="px-1 py-0.5 font-medium">Cut+ML</th>
-													<th class="px-1 py-0.5 font-medium">Δ(ML−Cut)</th>
-												</tr>
-											</thead>
-											<tbody>
-												{#each comp.per_drt as row}
-													<tr class="border-b border-[var(--border-hairline)] last:border-b-0">
-														<td class="mono-num px-1 py-0.5 text-left font-semibold">
-															<span
-																style="background-color: {getRockTypeColor(row.drt)}"
-																class="mr-1 inline-block h-2 w-2 rounded-full"
-															></span>DRT {row.drt}
-														</td>
-														<td class="mono-num px-1 py-0.5">
-															{row.cutoff_count}
-															<span class="text-[8.5px] text-[var(--text-muted)]"
-																>({row.cutoff_pct}%)</span
-															>
-														</td>
-														<td class="mono-num px-1 py-0.5">
-															{row.ml_count}
-															<span class="text-[8.5px] text-[var(--text-muted)]"
-																>({row.ml_pct}%)</span
-															>
-														</td>
-														<td class="mono-num px-1 py-0.5 font-medium">
-															{row.hybrid_count}
-														</td>
-														<td
-															class="mono-num px-1 py-0.5 font-semibold {row.delta_count > 0
-																? 'text-emerald-700'
-																: row.delta_count < 0
-																	? 'text-amber-700'
-																	: 'text-[var(--text-muted)]'}"
-														>
-															{row.delta_count > 0 ? `+${row.delta_count}` : row.delta_count}
-														</td>
-													</tr>
-												{/each}
-											</tbody>
-										</table>
-									</div>
-								{/if}
-
-								<!-- Active ROCK_FLAG Selector for Next Workflow -->
-								<div class="space-y-1 pt-0.5">
-									<div class="text-[9.5px] font-semibold text-[var(--text-primary)]">
-										4. Select Active ROCK_FLAG for Next Workflow (Perm Transform &amp; SHF):
-									</div>
-									<div class="grid grid-cols-3 gap-1">
-										<button
-											type="button"
-											disabled={projectData.isComputingMultiWell}
-											onclick={() => selectRockFlagSourceForWorkflow('cutoff_only')}
-											class="flex flex-col items-center rounded-xs border px-1 py-1 text-center transition-colors {projectData.drtPropagationMode ===
-												'cutoff_only' || !projectData.drtClassifierPropagated
-												? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
-												: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
-											title="Use purely cutoff-binned ROCK_FLAG_CUTOFF for downstream Perm Transform and SHF"
-										>
-											<span class="text-[9.5px]">Pure Cutoffs</span>
-											<span class="mono-num text-[8.5px] opacity-80">{comp.cutoff_total} pts</span>
-										</button>
-										<button
-											type="button"
-											disabled={projectData.isComputingMultiWell}
-											onclick={() => selectRockFlagSourceForWorkflow('fill_missing')}
-											class="flex flex-col items-center rounded-xs border px-1 py-1 text-center transition-colors {projectData.drtClassifierPropagated &&
-											projectData.drtPropagationMode === 'fill_missing'
-												? 'border-emerald-600 bg-emerald-50 font-semibold text-emerald-800'
-												: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
-											title="Keep cutoff DRTs where available and fill uncored focused intervals with ML predictions"
-										>
-											<span class="text-[9.5px]">Cutoffs + ML Fill</span>
-											<span class="mono-num text-[8.5px] opacity-80">
-												{comp.cutoff_total + comp.uncored_filled_count} pts
-											</span>
-										</button>
-										<button
-											type="button"
-											disabled={projectData.isComputingMultiWell}
-											onclick={() => selectRockFlagSourceForWorkflow('full_ml')}
-											class="flex flex-col items-center rounded-xs border px-1 py-1 text-center transition-colors {projectData.drtClassifierPropagated &&
-											projectData.drtPropagationMode === 'full_ml'
-												? 'border-emerald-600 bg-emerald-50 font-semibold text-emerald-800'
-												: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
-											title="Use ML predicted ROCK_FLAG_ML across the entire focused interval"
-										>
-											<span class="text-[9.5px]">Full ML Pred</span>
-											<span class="mono-num text-[8.5px] opacity-80">{comp.ml_total} pts</span>
-										</button>
-									</div>
-								</div>
+								</button>
+								<button
+									type="button"
+									disabled={projectData.isComputingMultiWell}
+									onclick={() => selectRockFlagSourceForWorkflow('full_ml')}
+									class="flex flex-col items-center rounded-xs border px-1 py-1 text-center transition-colors {projectData.drtClassifierPropagated &&
+									projectData.drtPropagationMode === 'full_ml'
+										? 'border-emerald-600 bg-emerald-50 font-semibold text-emerald-800'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+									title="Use ML predicted ROCK_FLAG_ML across the entire focused interval"
+								>
+									<span class="text-[9.5px]">Full ML Pred</span>
+									<span class="mono-num text-[8.5px] opacity-80">{comp.ml_total} pts</span>
+								</button>
 							</div>
-						{/if}
+						</div>
+					</div>
+				{:else}
+					<!-- Active ROCK_FLAG Selector even before ML propagation -->
+					<div
+						class="space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]"
+					>
+						<div class="text-[9.5px] font-semibold text-[var(--text-primary)]">
+							3. Active ROCK_FLAG for Next Workflow (Perm Transform &amp; SHF):
+						</div>
+						<div class="grid grid-cols-3 gap-1">
+							<button
+								type="button"
+								disabled={projectData.isComputingMultiWell}
+								onclick={() => selectRockFlagSourceForWorkflow('cutoff_only')}
+								class="flex flex-col items-center rounded-xs border px-1 py-1 text-center transition-colors {projectData.drtPropagationMode ===
+									'cutoff_only' || !projectData.drtClassifierPropagated
+									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+							>
+								<span class="text-[9.5px]">Pure Cutoffs</span>
+								<span class="text-[8.5px] opacity-80">Active</span>
+							</button>
+							<button
+								type="button"
+								disabled={
+									projectData.isComputingMultiWell ||
+									(!projectData.drtSelectedSavedModelKey &&
+										!savedModelsList[0]?.model_key &&
+										!classifierDiag?.trained)
+								}
+								onclick={() => {
+									const keyToUse =
+										projectData.drtSelectedSavedModelKey ||
+										savedModelsList[0]?.model_key ||
+										'';
+									if (keyToUse) {
+										projectData.drtPropagationMode = 'fill_missing';
+										void applySavedClassifierModel(keyToUse);
+									} else {
+										void selectRockFlagSourceForWorkflow('fill_missing');
+									}
+								}}
+								class="flex flex-col items-center rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-1 text-center text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-45"
+							>
+								<span class="text-[9.5px]">Cutoffs + ML Fill</span>
+								<span class="text-[8.5px] opacity-80">Propagate</span>
+							</button>
+							<button
+								type="button"
+								disabled={
+									projectData.isComputingMultiWell ||
+									(!projectData.drtSelectedSavedModelKey &&
+										!savedModelsList[0]?.model_key &&
+										!classifierDiag?.trained)
+								}
+								onclick={() => {
+									const keyToUse =
+										projectData.drtSelectedSavedModelKey ||
+										savedModelsList[0]?.model_key ||
+										'';
+									if (keyToUse) {
+										projectData.drtPropagationMode = 'full_ml';
+										void applySavedClassifierModel(keyToUse);
+									} else {
+										void selectRockFlagSourceForWorkflow('full_ml');
+									}
+								}}
+								class="flex flex-col items-center rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-1 text-center text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-45"
+							>
+								<span class="text-[9.5px]">Full ML Pred</span>
+								<span class="text-[8.5px] opacity-80">Propagate</span>
+							</button>
+						</div>
 					</div>
 				{/if}
 			</div>
@@ -1538,6 +1454,12 @@
 					{/each}
 				</div>
 			</ParameterSection>
+		{/if}
+
+		{#if projectData.error}
+			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
+				{projectData.error}
+			</div>
 		{/if}
 	</div>
 

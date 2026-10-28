@@ -269,13 +269,36 @@
 				</button>
 			{/each}
 
-			<!-- Standalone Module Divider + Multi-Well Conformal ML Trainer -->
+			<!-- Standalone Module Divider + Multi-Well RT Classifier & Conformal ML Trainer -->
 			<div class="mx-1.5 h-4 w-[1px] shrink-0 bg-[var(--border-hairline)]"></div>
 			<span
 				class="mr-0.5 text-[9.5px] font-bold tracking-wider text-[var(--text-muted)] uppercase"
 			>
 				Standalone:
 			</span>
+			{@const isRtClfActive = workbench.multiWellStep === 'rt-classifier'}
+			{@const isRtClfDone =
+				Boolean(projectData.rtSavedModelsStatus?.count) ||
+				Boolean(projectData.rockTypingResult?.diagnostics?.classifier?.trained)}
+			<button
+				type="button"
+				onclick={() => (workbench.multiWellStep = 'rt-classifier')}
+				title="Standalone Supervised Rock Type (DRT) Classifier Trainer, Contingency Matrix Validator & Model Registry"
+				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isRtClfActive
+					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
+			>
+				<span
+					class="mono-num flex h-4 items-center justify-center rounded-xs px-1 text-[9px] font-bold {isRtClfActive
+						? 'bg-[var(--accent-primary)] text-white'
+						: isRtClfDone
+							? 'bg-emerald-100 text-emerald-700'
+							: 'bg-teal-100 text-teal-700'}"
+				>
+					{isRtClfDone && !isRtClfActive ? '✓' : 'DRT'}
+				</span>
+				<span>RT Classifier</span>
+			</button>
 			{@const isMlTrainActive = workbench.multiWellStep === 'ml-training'}
 			{@const isMlTrainDone = projectData.mlTrainingResult !== null}
 			<button
