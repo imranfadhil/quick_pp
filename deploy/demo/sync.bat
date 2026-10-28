@@ -143,8 +143,15 @@ REM -- Build & Start isolated demo compose stack -----------------------
 echo [5/5] Starting isolated demo stack ^(project: %COMPOSE_PROJECT%^)...
 set "COMPOSE_CMD=docker compose -p %COMPOSE_PROJECT% --env-file %REMOTE_DIR%/.env -f %REMOTE_DIR%/deploy/demo/docker-compose.yaml"
 
-set "REMOTE_CMD=!COMPOSE_CMD! up -d"
-if %BUILD% equ 1 set "REMOTE_CMD=!REMOTE_CMD! --build"
+REM Rebuild/update only `qpp-demo` (--no-deps) and keep `demo-quicktunnel` running (--no-recreate --no-deps)
+REM so the *.trycloudflare.com HTTPS URL does not change across sync.bat / sync.bat --restart runs.
+if "%1"=="--from-deploy" (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --build"
+) else if %BUILD% equ 1 (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --build --no-deps qpp-demo && !COMPOSE_CMD! up -d --no-recreate --no-deps demo-quicktunnel"
+) else (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-recreate --no-deps qpp-demo demo-quicktunnel"
+)
 
 call :ssh_run "!REMOTE_CMD!"
 if %ERRORLEVEL% neq 0 (

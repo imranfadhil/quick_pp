@@ -751,7 +751,10 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                     _ephemeral_well_headers.pop((project_id, well_name), None)
                     invalidate_well_cache(project_id=project_id, well_name=well_name)
 
-            merged_qaqc = compute_curve_qaqc(spliced_df, curve_units=merged_units)
+            if len(well_runs) == 1 and not payload.regularize_grid and well_runs[0].get("qaqc"):
+                merged_qaqc = well_runs[0]["qaqc"]
+            else:
+                merged_qaqc = compute_curve_qaqc(spliced_df, curve_units=merged_units)
 
             committed.append(
                 {

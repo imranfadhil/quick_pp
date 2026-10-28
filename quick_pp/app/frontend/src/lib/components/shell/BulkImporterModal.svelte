@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { API_BASE } from '$lib/api/client';
+	import { API_BASE, authHeaders } from '$lib/api/client';
 	import BulkAncillaryImporter from '$lib/components/BulkAncillaryImporter.svelte';
 	import { authState } from '$lib/state/auth.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
@@ -66,6 +66,30 @@
 		}
 	}
 
+	function formatHttpError(errText: string, status: number): string {
+		const trimmed = (errText || '').trim();
+		if (!trimmed) return `HTTP ${status}`;
+		if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html') || trimmed.includes('<title>')) {
+			if (status === 524 || trimmed.includes('524')) {
+				return 'Gateway timeout (HTTP 524): The server took longer than 100s to finish this request.';
+			}
+			const titleMatch = trimmed.match(/<title[^>]*>([^<]+)<\/title>/i);
+			if (titleMatch?.[1]) {
+				return `Server Error (HTTP ${status}): ${titleMatch[1].trim()}`;
+			}
+			return `Server Error (HTTP ${status})`;
+		}
+		try {
+			const parsed = JSON.parse(trimmed);
+			if (parsed?.detail) {
+				return typeof parsed.detail === 'string' ? parsed.detail : JSON.stringify(parsed.detail);
+			}
+		} catch {
+			// Not JSON
+		}
+		return trimmed;
+	}
+
 	async function handleInspectLogs() {
 		if (!lasFiles || lasFiles.length === 0) return;
 		if (authState.isDemoMode) {
@@ -86,11 +110,13 @@
 			}
 			const res = await fetch(`${API_BASE}/quick_pp/import/logs/inspect`, {
 				method: 'POST',
+				credentials: 'include',
+				headers: authHeaders(),
 				body: formData
 			});
 			if (!res.ok) {
 				const errText = await res.text();
-				throw new Error(errText || `HTTP ${res.status}`);
+				throw new Error(formatHttpError(errText, res.status));
 			}
 			const data = await res.json();
 			inspectedFiles = (data.files || []).map((item: any) => {
@@ -127,41 +153,72 @@
 
 		uploadingLas = true;
 		uploadStatus = null;
-		const taskId = appStatus.startTask(`Importing ${lasFiles.length} log file(s)...`);
+		const totalFiles = inspectedFiles.length || lasFiles.length;
+		const taskId = appStatus.startTask(`Importing ${totalFiles} log file(s)...`);
+		const committedList: any[] = [];
 		try {
 			const configs = inspectedFiles.map((f) => ({
 				file_id: f.file_id,
 				filename: f.filename,
+				well_label: String(f.metadata?.well_name || f.filename || 'Well').trim(),
 				metadata_overrides: f.metadata,
 				mnemonic_map: f.curveOverrides,
 				unit_map: f.unitOverrides,
 				selected_dlis_frames: f.selectedFrame ? [f.selectedFrame] : null
 			}));
 
-			const commitBody = {
-				project_id: Number(workbench.projectId),
-				target_depth_uom: 'm',
-				regularize_grid: Boolean(customTargetStep),
-				regularize_step: customTargetStep ? Number(customTargetStep) : 0.1524,
-				interpolate_gaps: false,
-				splicing_mode: spliceOverlapMode,
-				files: configs
-			};
-
-			const res = await fetch(`${API_BASE}/quick_pp/import/logs/commit`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(commitBody)
-			});
-			if (!res.ok) {
-				const errText = await res.text();
-				throw new Error(errText || `HTTP ${res.status}`);
+			// Group files by well name so multi-run splicing for the same well happens together,
+			// while distinct wells are committed sequentially (preventing Cloudflare 100s HTTP 524 timeouts).
+			const wellGroupsMap = new Map<string, { label: string; items: typeof configs }>();
+			for (const cfg of configs) {
+				const key = cfg.well_label.toUpperCase();
+				const existing = wellGroupsMap.get(key);
+				if (existing) {
+					existing.items.push(cfg);
+				} else {
+					wellGroupsMap.set(key, { label: cfg.well_label, items: [cfg] });
+				}
 			}
-			const result = await res.json();
-			const committedList = result.wells || result.wells_imported || [];
+			const wellGroups = Array.from(wellGroupsMap.values());
+
+			for (let idx = 0; idx < wellGroups.length; idx++) {
+				const group = wellGroups[idx];
+				if (wellGroups.length > 1) {
+					uploadStatus = `Committing well ${idx + 1} of ${wellGroups.length} (${group.label})...`;
+				}
+
+				const commitBody = {
+					project_id: Number(workbench.projectId),
+					target_depth_uom: 'm',
+					regularize_grid: Boolean(customTargetStep),
+					regularize_step: customTargetStep ? Number(customTargetStep) : 0.1524,
+					interpolate_gaps: false,
+					splicing_mode: spliceOverlapMode,
+					files: group.items.map(({ well_label: _, ...rest }) => rest)
+				};
+
+				const res = await fetch(`${API_BASE}/quick_pp/import/logs/commit`, {
+					method: 'POST',
+					credentials: 'include',
+					headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+					body: JSON.stringify(commitBody)
+				});
+				if (!res.ok) {
+					const errText = await res.text();
+					throw new Error(formatHttpError(errText, res.status));
+				}
+				const result = await res.json();
+				const batchCommitted = result.wells || result.wells_imported || [];
+				committedList.push(...batchCommitted);
+
+				// Remove already-committed files from inspectedFiles so partial progress is preserved
+				const committedIds = new Set(group.items.map((it) => it.file_id));
+				inspectedFiles = inspectedFiles.filter((f) => !committedIds.has(f.file_id));
+			}
+
 			const preferredWell = committedList[0]?.well_name || workbench.wellId;
 			await projectData.selectProject(workbench.projectId, preferredWell);
-			const wellCount = committedList.length || lasFiles.length;
+			const wellCount = committedList.length || totalFiles;
 			const wellSummaries = committedList.map((w: any) => {
 				const parts: string[] = [];
 				if (Array.isArray(w.appended_curves) && w.appended_curves.length > 0) {
@@ -186,7 +243,15 @@
 			lasFiles = null;
 			inspectedFiles = [];
 		} catch (e: any) {
-			uploadStatus = `Error: ${e?.message || 'Failed to commit log files'}`;
+			if (committedList.length > 0 && workbench.projectId) {
+				await projectData.selectProject(
+					workbench.projectId,
+					committedList[0]?.well_name || workbench.wellId
+				);
+			}
+			const partialNote =
+				committedList.length > 0 ? ` (${committedList.length} well(s) committed before error)` : '';
+			uploadStatus = `Error${partialNote}: ${e?.message || 'Failed to commit log files'}`;
 			appStatus.endTask(taskId, {
 				level: 'error',
 				message: uploadStatus
@@ -206,13 +271,18 @@
 				return;
 			}
 		}
+		const count = lasFiles.length;
 		uploadingLas = true;
 		uploadStatus = null;
 		try {
-			await projectData.uploadProjectFiles(lasFiles);
+			await projectData.uploadProjectFiles(lasFiles, (idx, total, name) => {
+				if (total > 1) {
+					uploadStatus = `Uploading file ${idx} of ${total} (${name})...`;
+				}
+			});
 			uploadStatus = authState.isDemoMode
-				? `Loaded ${lasFiles.length} file(s) into ephemeral session (max 5 MB cap; pre-seeded Volve/Costa DB remains read-only).`
-				: `Uploaded and saved ${lasFiles.length} file(s) to project.`;
+				? `Loaded ${count} file(s) into ephemeral session (max 5 MB cap; pre-seeded Volve/Costa DB remains read-only).`
+				: `Uploaded and saved ${count} file(s) to project.`;
 			lasFiles = null;
 			inspectedFiles = [];
 		} catch (e: any) {

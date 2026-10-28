@@ -1,3 +1,4 @@
+import io
 import numpy as np
 import os
 import re
@@ -1162,60 +1163,138 @@ class Well(object):
 
         self.db_session.flush()
 
-        # Vectorized chunked bulk_insert_mappings for newly appended curve_data
+        # Vectorized chunked ingestion for newly appended curve_data
         depths_arr = np.asarray(df_work.index, dtype=np.float64)
-        batch_buffer: List[Dict[str, Any]] = []
-        BATCH_FLUSH_SIZE = 25000
+        # Guard against float32 collisions since PostgreSQL curve_data.depth is REAL (float4)
+        depths_f32 = depths_arr.astype(np.float32)
+        unique_f32_mask = ~pd.Series(depths_f32).duplicated(keep="last").to_numpy()
 
-        for mnemonic in appended_curves:
-            values = df_work[mnemonic]
-            orm_curve = curves_map[mnemonic]
-            cid = orm_curve.curve_id
-            is_numeric = pd.api.types.is_numeric_dtype(values)
+        bind = self.db_session.get_bind()
+        is_postgres = bool(bind is not None and bind.dialect.name == "postgresql")
 
-            if is_numeric:
-                vals_arr = pd.to_numeric(values, errors="coerce").to_numpy(
-                    dtype=np.float64
-                )
-                valid_mask = np.isfinite(depths_arr) & np.isfinite(vals_arr)
-                if not valid_mask.any():
-                    continue
-                v_depths = depths_arr[valid_mask].tolist()
-                v_vals = vals_arr[valid_mask].tolist()
-                batch_buffer.extend(
-                    {
-                        "curve_id": cid,
-                        "depth": d,
-                        "value_numeric": v,
-                        "value_text": None,
-                    }
-                    for d, v in zip(v_depths, v_vals)
-                )
-            else:
-                valid_mask = values.notna().to_numpy() & np.isfinite(depths_arr)
-                if not valid_mask.any():
-                    continue
-                v_depths = depths_arr[valid_mask].tolist()
-                v_vals = values.iloc[np.flatnonzero(valid_mask)].astype(str).tolist()
-                batch_buffer.extend(
-                    {
-                        "curve_id": cid,
-                        "depth": d,
-                        "value_numeric": None,
-                        "value_text": v,
-                    }
-                    for d, v in zip(v_depths, v_vals)
-                )
+        if is_postgres:
+            sio = io.StringIO()
+            buffered_rows = 0
+            COPY_FLUSH_ROWS = 250000
+            raw_conn = self.db_session.connection().connection
 
-            while len(batch_buffer) >= BATCH_FLUSH_SIZE:
-                self.db_session.bulk_insert_mappings(
-                    ORMCurveData, batch_buffer[:BATCH_FLUSH_SIZE]
-                )
-                del batch_buffer[:BATCH_FLUSH_SIZE]
+            def _flush_copy_buffer(buf: io.StringIO) -> None:
+                buf.seek(0)
+                with raw_conn.cursor() as cur:
+                    cur.copy_expert(
+                        "COPY curve_data (curve_id, depth, value_numeric, value_text) FROM STDIN",
+                        buf,
+                    )
+                buf.seek(0)
+                buf.truncate(0)
 
-        if batch_buffer:
-            self.db_session.bulk_insert_mappings(ORMCurveData, batch_buffer)
-            batch_buffer.clear()
+            for mnemonic in appended_curves:
+                values = df_work[mnemonic]
+                orm_curve = curves_map[mnemonic]
+                cid = orm_curve.curve_id
+                is_numeric = pd.api.types.is_numeric_dtype(values)
+
+                if is_numeric:
+                    vals_arr = pd.to_numeric(values, errors="coerce").to_numpy(
+                        dtype=np.float64
+                    )
+                    valid_mask = (
+                        np.isfinite(depths_arr) & unique_f32_mask & np.isfinite(vals_arr)
+                    )
+                    if not valid_mask.any():
+                        continue
+                    v_depths = depths_arr[valid_mask].tolist()
+                    v_vals = vals_arr[valid_mask].tolist()
+                    sio.writelines(
+                        f"{cid}\t{d}\t{v}\t\\N\n" for d, v in zip(v_depths, v_vals)
+                    )
+                    buffered_rows += len(v_depths)
+                else:
+                    valid_mask = (
+                        values.notna().to_numpy()
+                        & np.isfinite(depths_arr)
+                        & unique_f32_mask
+                    )
+                    if not valid_mask.any():
+                        continue
+                    v_depths = depths_arr[valid_mask].tolist()
+                    v_vals = values.iloc[np.flatnonzero(valid_mask)].astype(str).tolist()
+                    for d, v in zip(v_depths, v_vals):
+                        safe_v = (
+                            v.replace("\\", "\\\\")
+                            .replace("\t", " ")
+                            .replace("\n", " ")
+                            .replace("\r", " ")
+                        )
+                        sio.write(f"{cid}\t{d}\t\\N\t{safe_v}\n")
+                    buffered_rows += len(v_depths)
+
+                if buffered_rows >= COPY_FLUSH_ROWS:
+                    _flush_copy_buffer(sio)
+                    buffered_rows = 0
+
+            if buffered_rows > 0:
+                _flush_copy_buffer(sio)
+            sio.close()
+        else:
+            batch_buffer: List[Dict[str, Any]] = []
+            BATCH_FLUSH_SIZE = 25000
+
+            for mnemonic in appended_curves:
+                values = df_work[mnemonic]
+                orm_curve = curves_map[mnemonic]
+                cid = orm_curve.curve_id
+                is_numeric = pd.api.types.is_numeric_dtype(values)
+
+                if is_numeric:
+                    vals_arr = pd.to_numeric(values, errors="coerce").to_numpy(
+                        dtype=np.float64
+                    )
+                    valid_mask = (
+                        np.isfinite(depths_arr) & unique_f32_mask & np.isfinite(vals_arr)
+                    )
+                    if not valid_mask.any():
+                        continue
+                    v_depths = depths_arr[valid_mask].tolist()
+                    v_vals = vals_arr[valid_mask].tolist()
+                    batch_buffer.extend(
+                        {
+                            "curve_id": cid,
+                            "depth": d,
+                            "value_numeric": v,
+                            "value_text": None,
+                        }
+                        for d, v in zip(v_depths, v_vals)
+                    )
+                else:
+                    valid_mask = (
+                        values.notna().to_numpy()
+                        & np.isfinite(depths_arr)
+                        & unique_f32_mask
+                    )
+                    if not valid_mask.any():
+                        continue
+                    v_depths = depths_arr[valid_mask].tolist()
+                    v_vals = values.iloc[np.flatnonzero(valid_mask)].astype(str).tolist()
+                    batch_buffer.extend(
+                        {
+                            "curve_id": cid,
+                            "depth": d,
+                            "value_numeric": None,
+                            "value_text": v,
+                        }
+                        for d, v in zip(v_depths, v_vals)
+                    )
+
+                while len(batch_buffer) >= BATCH_FLUSH_SIZE:
+                    self.db_session.bulk_insert_mappings(
+                        ORMCurveData, batch_buffer[:BATCH_FLUSH_SIZE]
+                    )
+                    del batch_buffer[:BATCH_FLUSH_SIZE]
+
+            if batch_buffer:
+                self.db_session.bulk_insert_mappings(ORMCurveData, batch_buffer)
+                batch_buffer.clear()
 
         self.db_session.flush()
         logger.info(
@@ -1307,38 +1386,99 @@ class Well(object):
                         {"cd_ids": cd_ids[i : i + chunk_size]},
                     )
 
-        # Optimization 4: Batch insert new data points using bulk_insert_mappings
+        # Optimization 4: Batch insert new data points (COPY on PostgreSQL, bulk_insert_mappings otherwise)
         total_inserted = 0
-        for mnemonic, values in data.items():
-            orm_curve = curves_by_mnemonic[mnemonic]
-            is_numeric = pd.api.types.is_numeric_dtype(values)
+        bind = self.db_session.get_bind()
+        is_postgres = bool(bind is not None and bind.dialect.name == "postgresql")
+        depths_arr = np.asarray(data.index, dtype=np.float64)
+        depths_f32 = depths_arr.astype(np.float32)
+        unique_f32_mask = ~pd.Series(depths_f32).duplicated(keep="last").to_numpy()
 
-            # Create data point mappings for bulk insert
-            if is_numeric:
-                data_points = [
-                    {
-                        "curve_id": orm_curve.curve_id,
-                        "depth": depth,
-                        "value_numeric": float(value),
-                        "value_text": None,
-                    }
-                    for depth, value in zip(data.index, values, strict=True)
-                    if pd.notna(value)
-                ]
-            else:
-                data_points = [
-                    {
-                        "curve_id": orm_curve.curve_id,
-                        "depth": depth,
-                        "value_numeric": None,
-                        "value_text": str(value),
-                    }
-                    for depth, value in zip(data.index, values, strict=True)
-                    if pd.notna(value)
-                ]
-            if data_points:
-                self.db_session.bulk_insert_mappings(ORMCurveData, data_points)
-                total_inserted += len(data_points)
+        if is_postgres:
+            sio = io.StringIO()
+            raw_conn = self.db_session.connection().connection
+            for mnemonic, values in data.items():
+                orm_curve = curves_by_mnemonic[mnemonic]
+                cid = orm_curve.curve_id
+                is_numeric = pd.api.types.is_numeric_dtype(values)
+
+                if is_numeric:
+                    vals_arr = pd.to_numeric(values, errors="coerce").to_numpy(
+                        dtype=np.float64
+                    )
+                    valid_mask = (
+                        np.isfinite(depths_arr) & unique_f32_mask & np.isfinite(vals_arr)
+                    )
+                    if not valid_mask.any():
+                        continue
+                    v_depths = depths_arr[valid_mask].tolist()
+                    v_vals = vals_arr[valid_mask].tolist()
+                    sio.writelines(
+                        f"{cid}\t{d}\t{v}\t\\N\n" for d, v in zip(v_depths, v_vals)
+                    )
+                    total_inserted += len(v_depths)
+                else:
+                    valid_mask = (
+                        values.notna().to_numpy()
+                        & np.isfinite(depths_arr)
+                        & unique_f32_mask
+                    )
+                    if not valid_mask.any():
+                        continue
+                    v_depths = depths_arr[valid_mask].tolist()
+                    v_vals = values.iloc[np.flatnonzero(valid_mask)].astype(str).tolist()
+                    for d, v in zip(v_depths, v_vals):
+                        safe_v = (
+                            v.replace("\\", "\\\\")
+                            .replace("\t", " ")
+                            .replace("\n", " ")
+                            .replace("\r", " ")
+                        )
+                        sio.write(f"{cid}\t{d}\t\\N\t{safe_v}\n")
+                    total_inserted += len(v_depths)
+
+            if total_inserted > 0:
+                sio.seek(0)
+                with raw_conn.cursor() as cur:
+                    cur.copy_expert(
+                        "COPY curve_data (curve_id, depth, value_numeric, value_text) FROM STDIN",
+                        sio,
+                    )
+            sio.close()
+        else:
+            for mnemonic, values in data.items():
+                orm_curve = curves_by_mnemonic[mnemonic]
+                is_numeric = pd.api.types.is_numeric_dtype(values)
+
+                if is_numeric:
+                    data_points = [
+                        {
+                            "curve_id": orm_curve.curve_id,
+                            "depth": depth,
+                            "value_numeric": float(value),
+                            "value_text": None,
+                        }
+                        for depth, value, u_ok in zip(
+                            data.index, values, unique_f32_mask, strict=True
+                        )
+                        if u_ok and pd.notna(value)
+                    ]
+                else:
+                    data_points = [
+                        {
+                            "curve_id": orm_curve.curve_id,
+                            "depth": depth,
+                            "value_numeric": None,
+                            "value_text": str(value),
+                        }
+                        for depth, value, u_ok in zip(
+                            data.index, values, unique_f32_mask, strict=True
+                        )
+                        if u_ok and pd.notna(value)
+                    ]
+                if data_points:
+                    self.db_session.bulk_insert_mappings(ORMCurveData, data_points)
+                    total_inserted += len(data_points)
 
         logger.debug(
             f"Updated {len(data.columns)} curves for well '{self.name}' "

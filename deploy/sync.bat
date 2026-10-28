@@ -143,8 +143,14 @@ if not "%1"=="--from-deploy" (
     call :ssh_run "!COMPOSE_CMD! stop qpp-frontend" >nul 2>&1
 )
 
-set "REMOTE_CMD=!COMPOSE_CMD! up -d"
-if %BUILD% equ 1 set "REMOTE_CMD=!REMOTE_CMD! --build"
+REM Keep `web` and `quicktunnel` running (--no-recreate --no-deps) so the *.trycloudflare.com URL never changes on sync/--restart.
+if "%1"=="--from-deploy" (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --build"
+) else if %BUILD% equ 1 (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-recreate --no-deps postgres && !COMPOSE_CMD! up -d --build --no-deps qpp-backend qpp-frontend && !COMPOSE_CMD! up -d --no-recreate --no-deps web quicktunnel"
+) else (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-recreate --no-deps postgres web quicktunnel qpp-backend qpp-frontend && !COMPOSE_CMD! restart qpp-backend"
+)
 
 call :ssh_run "!REMOTE_CMD!"
 if %ERRORLEVEL% neq 0 (

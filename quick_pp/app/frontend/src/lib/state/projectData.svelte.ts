@@ -478,7 +478,7 @@ class ProjectDataState {
 				...this.pendingMultiWellModules,
 				[moduleKey]: false
 			};
-			const msg = `Saved ${curveLabel} (${res.saved_wells} wells) ✓`;
+			const msg = `Saved ${curveLabel} (${res.saved_wells} wells) âœ“`;
 			wellData.lastSavedMessage = msg;
 			appStatus.success(msg);
 			if (this.stickPlotResult) {
@@ -699,7 +699,7 @@ class ProjectDataState {
 		const targetName = res.well_name || trimmed;
 		const wasActive = workbench.wellId === wellName;
 		await this.selectProject(pid, wasActive ? targetName : workbench.wellId);
-		appStatus.success(`Renamed well "${wellName}" → "${targetName}"`, targetName);
+		appStatus.success(`Renamed well "${wellName}" â†’ "${targetName}"`, targetName);
 		return res;
 	}
 
@@ -723,30 +723,50 @@ class ProjectDataState {
 		appStatus.success(`Deleted well "${wellName}"`);
 	}
 
-	async uploadProjectFiles(files: FileList | File[]) {
+	async uploadProjectFiles(
+		files: FileList | File[],
+		onProgress?: (index: number, total: number, filename: string) => void
+	) {
 		if (!workbench.projectId || !files || files.length === 0) return;
 		const fileList = Array.from(files);
 		const taskId = appStatus.startTask(
 			`Uploading & parsing ${fileList.length} log file(s)...`,
 			fileList.map((f) => f.name).join(', ')
 		);
-		const fd = new FormData();
-		for (const f of fileList) {
-			fd.append('files', f);
-		}
+		let uploadedCount = 0;
 		try {
-			const res = await fetch(
-				`${API_BASE}/quick_pp/database/projects/${workbench.projectId}/read_las`,
-				{
-					method: 'POST',
-					credentials: 'include',
-					headers: authHeaders(),
-					body: fd
+			for (let idx = 0; idx < fileList.length; idx++) {
+				const f = fileList[idx];
+				onProgress?.(idx + 1, fileList.length, f.name);
+				const fd = new FormData();
+				fd.append('files', f);
+				const res = await fetch(
+					`${API_BASE}/quick_pp/database/projects/${workbench.projectId}/read_las`,
+					{
+						method: 'POST',
+						credentials: 'include',
+						headers: authHeaders(),
+						body: fd
+					}
+				);
+				if (!res.ok) {
+					const rawMsg = (await res.text()) || '';
+					const trimmed = rawMsg.trim();
+					if (
+						trimmed.startsWith('<!DOCTYPE') ||
+						trimmed.startsWith('<html') ||
+						trimmed.includes('<title>')
+					) {
+						if (res.status === 524 || trimmed.includes('524')) {
+							throw new Error(
+								`Gateway timeout (HTTP 524) while uploading ${f.name} (exceeded Cloudflare 100s limit).`
+							);
+						}
+						throw new Error(`Server Error (HTTP ${res.status}) while uploading ${f.name}`);
+					}
+					throw new Error(trimmed || `Upload failed for ${f.name} (HTTP ${res.status})`);
 				}
-			);
-			if (!res.ok) {
-				const msg = await res.text();
-				throw new Error(msg || 'Upload failed');
+				uploadedCount++;
 			}
 			appStatus.endTask(taskId, {
 				level: 'success',
@@ -755,6 +775,9 @@ class ProjectDataState {
 			});
 			await this.selectProject(workbench.projectId, workbench.wellId);
 		} catch (e: any) {
+			if (uploadedCount > 0 && workbench.projectId) {
+				await this.selectProject(workbench.projectId, workbench.wellId);
+			}
 			appStatus.endTask(taskId, {
 				level: 'error',
 				message: e?.message || 'Well log upload failed'
