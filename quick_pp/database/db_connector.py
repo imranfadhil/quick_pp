@@ -68,14 +68,23 @@ class DBConnector:
             except ImportError:
                 db_url = "postgresql+psycopg2://" + db_url[len("postgresql://") :]
 
-        DBConnector._engine = create_engine(db_url, pool_pre_ping=True)
         if db_url.startswith("sqlite"):
+            DBConnector._engine = create_engine(db_url, pool_pre_ping=True)
 
             @event.listens_for(DBConnector._engine, "connect")
             def _set_sqlite_pragma(dbapi_connection, _connection_record):
                 cursor = dbapi_connection.cursor()
                 cursor.execute("PRAGMA foreign_keys=ON")
                 cursor.close()
+        else:
+            DBConnector._engine = create_engine(
+                db_url,
+                pool_pre_ping=True,
+                pool_size=20,
+                max_overflow=30,
+                pool_timeout=60,
+                pool_recycle=1800,
+            )
         DBConnector._Session = sessionmaker(
             autocommit=False, autoflush=False, bind=DBConnector._engine
         )

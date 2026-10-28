@@ -4,6 +4,7 @@ import pickle
 import re
 import shutil
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -36,11 +37,13 @@ from quick_pp.database import objects as db_objects
 router = APIRouter(prefix="/database", tags=["Database"])
 
 
-# Simple in-memory cache for merged data (stores up to 50 wells, ~5 minutes TTL)
+# Simple in-memory cache for merged data (stores up to 50 wells, ~30 minutes TTL)
 # Maps key "{project_id}_{well_name}_{tolerance}" -> (timestamp, pd.DataFrame)
 _merged_data_cache: Dict[str, tuple[float, pd.DataFrame]] = {}
-_cache_ttl = 300  # 5 minutes
+_cache_ttl = 1800  # 30 minutes
 _cache_max_entries = 50
+_merge_locks: Dict[str, threading.Lock] = {}
+_merge_locks_guard = threading.Lock()
 MAX_DEMO_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB cap per file in demo mode
 _ephemeral_wells: Dict[int, Dict[str, pd.DataFrame]] = {}
 _ephemeral_well_headers: Dict[tuple[int, str], Dict[str, Any]] = {}
@@ -1350,20 +1353,39 @@ def _get_merged_dataframe_sync(
         d = d.dropna(subset=["depth"]) if not d.empty else d
         return d
 
-    try:
-        with get_db() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
+    with _merge_locks_guard:
+        key_lock = _merge_locks.setdefault(cache_key, threading.Lock())
 
-            try:
-                df = proj.get_well_data_optimized(
-                    resolve_db_well_name(project_id, well_name)
-                )
-            except AttributeError:
-                df = proj.get_well_data(resolve_db_well_name(project_id, well_name))
-            if df.empty:
-                return pd.DataFrame()
+    with key_lock:
+        # Double-check cache after acquiring per-well lock
+        cached_entry = _merged_data_cache.get(cache_key)
+        if cached_entry is not None:
+            cached_ts, cached_df = cached_entry
+            if (
+                cached_ts >= inv_ts
+                and cached_ts >= mem_ts
+                and (is_demo_mode() or (now - cached_ts < _cache_ttl))
+            ):
+                return cached_df.copy()
 
-            # Normalize main dataframe depth column
+        try:
+            db_well_name = resolve_db_well_name(project_id, well_name)
+            with get_db() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                try:
+                    df = proj.get_well_data_optimized(db_well_name)
+                except AttributeError:
+                    df = proj.get_well_data(db_well_name)
+                if df.empty:
+                    return pd.DataFrame()
+
+                well = proj.get_well(db_well_name)
+                raw_tops_df = well.get_formation_tops()
+                raw_contacts_df = well.get_fluid_contacts()
+                raw_pressure_df = well.get_pressure_tests()
+                core_raw = well.get_core_data() or {}
+
+            # Database session is now closed; perform CPU/DataFrame merging outside DB pool
             df = df.reset_index(drop=True)
             df.columns = [c.lower() for c in df.columns]
             if "depth" not in df.columns:
@@ -1381,12 +1403,9 @@ def _get_merged_dataframe_sync(
             df = df.dropna(subset=["depth"])
             df = df.sort_values("depth").reset_index(drop=True)
 
-            well = proj.get_well(resolve_db_well_name(project_id, well_name))
-
-            tops_df = _normalize_df_depth(well.get_formation_tops())
-            contacts_df = _normalize_df_depth(well.get_fluid_contacts())
-            pressure_df = _normalize_df_depth(well.get_pressure_tests())
-            core_raw = well.get_core_data() or {}
+            tops_df = _normalize_df_depth(raw_tops_df)
+            contacts_df = _normalize_df_depth(raw_contacts_df)
+            pressure_df = _normalize_df_depth(raw_pressure_df)
 
             def _prefixed(dframe, prefix):
                 if dframe is None or dframe.empty:
@@ -1503,12 +1522,12 @@ def _get_merged_dataframe_sync(
                 )
                 _merged_data_cache.pop(oldest_key, None)
 
-            _merged_data_cache[cache_key] = (now, merged.copy())
+            _merged_data_cache[cache_key] = (time.time(), merged.copy())
             return merged
-    except ValueError as e:
-        raise ValueError(str(e)) from e
-    except Exception as e:
-        raise Exception(f"Failed to produce merged data: {e}") from e
+        except ValueError as e:
+            raise ValueError(str(e)) from e
+        except Exception as e:
+            raise Exception(f"Failed to produce merged data: {e}") from e
 
 
 def _compute_merged_data_sync(

@@ -52,9 +52,10 @@ set SSH_RETRIES=5
 
 REM -- Package code (exclude heavy local folders, venv, notebooks, data) --
 echo [1/5] Packaging project...
-cd /d "%~dp0.."
-if exist "%TEMP%\%PROJECT_NAME%.tar" del "%TEMP%\%PROJECT_NAME%.tar"
-tar -cf "%TEMP%\%PROJECT_NAME%.tar" ^
+set "TAR_TMP=%TEMP%\%PROJECT_NAME%.tar"
+if defined PROJECT_NAME if exist "%TAR_TMP%" del "%TAR_TMP%"
+pushd "%~dp0.."
+tar -cf "%TAR_TMP%" ^
     --exclude="node_modules" ^
     --exclude=".svelte-kit" ^
     --exclude="quick_pp/app/frontend/build" ^
@@ -77,7 +78,9 @@ tar -cf "%TEMP%\%PROJECT_NAME%.tar" ^
     --exclude="deploy" ^
     --exclude="*.log" ^
     *
-if %ERRORLEVEL% neq 0 (
+set TAR_RC=%ERRORLEVEL%
+popd
+if %TAR_RC% neq 0 (
     echo [ERROR] tar packaging failed.
     exit /b 1
 )
@@ -93,9 +96,9 @@ if %ERRORLEVEL% neq 0 (
 echo [OK] Remote directory ready.
 
 echo [3/5] Copying to droplet...
-call :ssh_pipe "%TEMP%\%PROJECT_NAME%.tar" "cat > %REMOTE_DIR%/app.tar"
+call :ssh_pipe "%TAR_TMP%" "cat > %REMOTE_DIR%/app.tar"
 set SCP_RC=%ERRORLEVEL%
-del "%TEMP%\%PROJECT_NAME%.tar" 2>nul
+if defined TAR_TMP if exist "%TAR_TMP%" del "%TAR_TMP%" 2>nul
 if not %SCP_RC% equ 0 (
     echo [ERROR] Upload failed. Droplet may still be booting, or SSH not ready yet.
     exit /b 1
@@ -125,7 +128,7 @@ if not exist "%ENV_TMP%" (
 
 call :ssh_pipe "%ENV_TMP%" "bash -s -- '%REMOTE_DIR%' '%POSTGRES_USER%' '%POSTGRES_DB%' '%POSTGRES_PASSWORD%' '%WEB_PORT%' '%TAVILY_API_KEY%' '%DOMAIN%'"
 set ENV_RC=%ERRORLEVEL%
-del "%ENV_TMP%" 2>nul
+if defined ENV_TMP if exist "%ENV_TMP%" del "%ENV_TMP%" 2>nul
 if not %ENV_RC% equ 0 (
     echo [ERROR] Failed to configure remote .env - SSH error or sed failure.
     echo         Nothing was started. Re-run sync.bat once the droplet is reachable.
@@ -198,7 +201,7 @@ for /l %%n in (1,1,15) do (
         if "!QUICK_URL!"=="" ping -n 3 127.0.0.1 >nul 2>&1
     )
 )
-del "%TEMP%\%PROJECT_NAME%-quick-url.txt" 2>nul
+if defined PROJECT_NAME if exist "%TEMP%\%PROJECT_NAME%-quick-url.txt" del "%TEMP%\%PROJECT_NAME%-quick-url.txt" 2>nul
 
 echo.
 if not "!QUICK_URL!"=="" (

@@ -22,38 +22,40 @@ def _compute_fzi_data_sync(
     """Helper to compute FZI / rock typing data (including sonic & secondary porosity if available) synchronously."""
     with get_db() as session:
         proj = db_objects.Project.load(session, project_id=project_id)
-
         all_well_names = proj.get_well_names()
-        if not all_well_names:
-            raise ValueError(f"No wells found for project {project_id}")
 
-        well_names = []
-        depths_list = []
-        cpore_list = []
-        cperm_list = []
-        phis_list = []
-        phi_sec_list = []
-        zones_list = []
-        rock_flags_list = []
-        sonic_wells = []
-        any_non_empty_well = False
-        available_cols = set()
-        loaded_wells = []
-        any_real_perm = False
-        perm_candidates = ("CPERM", "CORE_PERM", "PERM", "KLOGH", "PERMEABILITY", "K")
+    if not all_well_names:
+        raise ValueError(f"No wells found for project {project_id}")
 
-        for well_name in all_well_names:
-            df = _get_merged_dataframe_sync(project_id, well_name)
-            if df.empty:
-                continue
-            any_non_empty_well = True
-            available_cols.update(df.columns)
-            if any(
-                col in df.columns and df[col].notna().any() for col in perm_candidates
-            ):
-                any_real_perm = True
-            loaded_wells.append((well_name, df))
+    well_names = []
+    depths_list = []
+    cpore_list = []
+    cperm_list = []
+    phis_list = []
+    phi_sec_list = []
+    zones_list = []
+    rock_flags_list = []
+    sonic_wells = []
+    any_non_empty_well = False
+    available_cols = set()
+    loaded_wells = []
+    any_real_perm = False
+    perm_candidates = ("CPERM", "CORE_PERM", "PERM", "KLOGH", "PERMEABILITY", "K")
 
+    for well_name in all_well_names:
+        df = _get_merged_dataframe_sync(project_id, well_name)
+        if df.empty:
+            continue
+        any_non_empty_well = True
+        available_cols.update(df.columns)
+        if any(
+            col in df.columns and df[col].notna().any() for col in perm_candidates
+        ):
+            any_real_perm = True
+        loaded_wells.append((well_name, df))
+
+    with get_db() as session:
+        proj = db_objects.Project.load(session, project_id=project_id)
         for well_name, df in loaded_wells:
 
             # Load ancillary data (formation tops)

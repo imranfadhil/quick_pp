@@ -58,9 +58,10 @@ set SSH_RETRIES=5
 
 REM -- Package code + minimal Volve/Costa seed files -------------------
 echo [1/5] Packaging demo project and Volve/Costa seed files...
-cd /d "%~dp0..\.."
-if exist "%TEMP%\%PROJECT_NAME%.tar" del "%TEMP%\%PROJECT_NAME%.tar"
-tar -cf "%TEMP%\%PROJECT_NAME%.tar" ^
+set "TAR_TMP=%TEMP%\%PROJECT_NAME%.tar"
+if defined PROJECT_NAME if exist "%TAR_TMP%" del "%TAR_TMP%"
+pushd "%~dp0..\.."
+tar -cf "%TAR_TMP%" ^
     --exclude="node_modules" ^
     --exclude=".svelte-kit" ^
     --exclude="quick_pp/app/frontend/build" ^
@@ -95,7 +96,9 @@ tar -cf "%TEMP%\%PROJECT_NAME%.tar" ^
     notebooks/data/01_raw/COSTA ^
     notebooks/data/01_raw/36_7-3.las ^
     notebooks/data/01_raw/formation_pressure_data.csv
-if %ERRORLEVEL% neq 0 (
+set TAR_RC=%ERRORLEVEL%
+popd
+if %TAR_RC% neq 0 (
     echo [ERROR] tar packaging failed.
     exit /b 1
 )
@@ -112,9 +115,9 @@ echo [OK] Remote directory and swap verified.
 
 REM -- Upload archive --------------------------------------------------
 echo [3/5] Uploading archive to %REMOTE_DIR%...
-call :ssh_pipe "%TEMP%\%PROJECT_NAME%.tar" "cat > %REMOTE_DIR%/demo_app.tar"
+call :ssh_pipe "%TAR_TMP%" "cat > %REMOTE_DIR%/demo_app.tar"
 set SCP_RC=%ERRORLEVEL%
-del "%TEMP%\%PROJECT_NAME%.tar" 2>nul
+if defined TAR_TMP if exist "%TAR_TMP%" del "%TAR_TMP%" 2>nul
 if not %SCP_RC% equ 0 (
     echo [ERROR] Upload failed.
     exit /b 1
@@ -179,7 +182,7 @@ for /l %%n in (1,1,15) do (
         if "!QUICK_URL!"=="" ping -n 3 127.0.0.1 >nul 2>&1
     )
 )
-del "%TEMP%\%PROJECT_NAME%-quick-url.txt" 2>nul
+if defined PROJECT_NAME if exist "%TEMP%\%PROJECT_NAME%-quick-url.txt" del "%TEMP%\%PROJECT_NAME%-quick-url.txt" 2>nul
 
 echo.
 if not "!QUICK_URL!"=="" (

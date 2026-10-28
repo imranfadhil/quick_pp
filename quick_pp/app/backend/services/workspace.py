@@ -728,9 +728,9 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     meas_system: str = Field("metric", description="'metric' or 'imperial'")
     water_salinity: float = Field(35000.0, description="Formation water salinity (ppm)")
     temp_gradient: float = Field(
-        30.0, description="Geothermal temperature gradient (°C/km or °F/kft)"
+        30.0, description="Geothermal temperature gradient (Â°C/km or Â°F/kft)"
     )
-    surface_temp: float = Field(25.0, description="Surface temperature (°C or °F)")
+    surface_temp: float = Field(25.0, description="Surface temperature (Â°C or Â°F)")
     m: float = Field(2.0, description="Archie/Waxman-Smits cementation exponent m")
     a: float = Field(1.0, description="Tortuosity factor a")
     n: float = Field(2.0, description="Saturation exponent n")
@@ -3362,7 +3362,7 @@ def workspace_saturation(
         # 1. Temperature gradient & Rw (aligned on every depth row)
         tvd_arr = tvdss.to_numpy(dtype=float)
         if req.meas_system.lower() == "imperial":
-            # Convert TVD (m) to kft, compute T in °F, then convert to °C for Crain/Juhasz formulas
+            # Convert TVD (m) to kft, compute T in Â°F, then convert to Â°C for Crain/Juhasz formulas
             tvd_kft = tvd_arr * 3.28084 / 1000.0
             temp_f = float(req.surface_temp) + float(req.temp_gradient) * tvd_kft
             temp_grad_arr = np.clip((temp_f - 32.0) * 5.0 / 9.0, 5.0, 250.0)
@@ -3878,11 +3878,12 @@ def _populate_well_zones_and_focused_mask(
 
     if "ZONES" not in df_out.columns or not df_out["ZONES"].notna().any():
         try:
-            anc = (
-                proj_obj.get_well_ancillary_data(well_name)
-                if proj_obj is not None
-                else {}
-            )
+            if proj_obj is not None:
+                anc = proj_obj.get_well_ancillary_data(well_name)
+            else:
+                with get_db() as session:
+                    p_tmp = db_objects.Project.load(session, project_id=project_id)
+                    anc = p_tmp.get_well_ancillary_data(well_name)
             tops_df = anc.get("formation_tops") if isinstance(anc, dict) else None
             if isinstance(tops_df, pd.DataFrame) and not tops_df.empty and not df_out.empty:
                 df_out["ZONES"] = pd.NA
@@ -3906,10 +3907,16 @@ def _populate_well_zones_and_focused_mask(
         ephem_cfg = _ephemeral_well_configs.get((project_id, str(well_name))) or {}
         f_min = ephem_cfg.get("focus_min_depth")
         f_max = ephem_cfg.get("focus_max_depth")
-        if f_min is None and f_max is None and proj_obj is not None:
+        if f_min is None and f_max is None:
             try:
-                w_orm = proj_obj.get_well(str(well_name))
-                cfg_data = getattr(w_orm, "config_data", None) or {}
+                if proj_obj is not None:
+                    w_orm = proj_obj.get_well(str(well_name))
+                    cfg_data = getattr(w_orm, "config_data", None) or {}
+                else:
+                    with get_db() as session:
+                        p_tmp = db_objects.Project.load(session, project_id=project_id)
+                        w_orm = p_tmp.get_well(str(well_name))
+                        cfg_data = getattr(w_orm, "config_data", None) or {}
                 if isinstance(cfg_data, dict):
                     f_min = cfg_data.get("focus_min_depth")
                     f_max = cfg_data.get("focus_max_depth")
@@ -4198,11 +4205,10 @@ def _execute_workspace_rock_typing(
     well_full_updates: Dict[str, pd.DataFrame] = {}
 
     if run_ml:
-        proj_obj = None
         try:
             with get_db() as session:
-                proj_obj = db_objects.Project.load(session, project_id=project_id)
-                all_proj_wells = [str(w) for w in proj_obj.get_well_names()]
+                proj_tmp = db_objects.Project.load(session, project_id=project_id)
+                all_proj_wells = [str(w) for w in proj_tmp.get_well_names()]
         except Exception:
             all_proj_wells = []
         if req.well_names:
@@ -4236,7 +4242,7 @@ def _execute_workspace_rock_typing(
                 req_min_depth=req.min_depth,
                 req_max_depth=req.max_depth,
                 propagate_focused_only=bool(req.propagate_focused_only),
-                proj_obj=proj_obj,
+                proj_obj=None,
             )
             total_well_samples += int(f_info["total_samples"])
             focused_well_samples += int(f_info["focused_samples"])
@@ -4873,7 +4879,7 @@ def workspace_perm_transform_compute(
                             pd.to_numeric(w_df[ccol], errors="coerce")
                         )
 
-            # Resolve measured/core permeability for crossplot and R² validation
+            # Resolve measured/core permeability for crossplot and RÂ² validation
             perm_s = pd.Series(np.nan, index=w_df.index, dtype=float)
             for kcol in ("CPERM", "CORE_PERM", "PERM", "KLOGH", "PERMEABILITY", "K"):
                 if kcol in w_df.columns:
@@ -5728,69 +5734,64 @@ def _load_multi_well_dfs(
     )
 
     dfs: List[pd.DataFrame] = []
-    with get_db() as session:
-        try:
-            proj = db_objects.Project.load(session, project_id=project_id)
-        except Exception:
-            proj = None
+    for wn in all_wells:
+        wdf = _get_merged_dataframe_sync(project_id, wn)
+        if wdf.empty:
+            continue
+        wdf = wdf.copy()
+        wdf["WELL_NAME"] = wn
 
-        for wn in all_wells:
-            wdf = _get_merged_dataframe_sync(project_id, wn)
-            if wdf.empty:
-                continue
-            wdf = wdf.copy()
-            wdf["WELL_NAME"] = wn
-
-            # Populate ZONES from formation tops if not already present or all null
-            if "ZONES" not in wdf.columns or not wdf["ZONES"].notna().any():
+        # Populate ZONES from formation tops if not already present or all null
+        if "ZONES" not in wdf.columns or not wdf["ZONES"].notna().any():
+            tops_df = None
+            try:
+                with get_db() as session:
+                    proj = db_objects.Project.load(session, project_id=project_id)
+                    anc = proj.get_well_ancillary_data(
+                        resolve_db_well_name(project_id, wn)
+                    )
+                    tops_df = (
+                        anc.get("formation_tops")
+                        if isinstance(anc, dict)
+                        else None
+                    )
+            except Exception:
                 tops_df = None
-                if proj is not None:
+            if isinstance(tops_df, pd.DataFrame) and not tops_df.empty and "DEPTH" in wdf.columns:
+                wdf["ZONES"] = pd.NA
+                for _, top in tops_df.iterrows():
                     try:
-                        anc = proj.get_well_ancillary_data(
-                            resolve_db_well_name(project_id, wn)
-                        )
-                        tops_df = (
-                            anc.get("formation_tops")
-                            if isinstance(anc, dict)
-                            else None
-                        )
+                        top_depth = float(top.get("depth"))
+                        top_name = str(top.get("name")).strip()
                     except Exception:
-                        tops_df = None
-                if isinstance(tops_df, pd.DataFrame) and not tops_df.empty and "DEPTH" in wdf.columns:
-                    wdf["ZONES"] = pd.NA
-                    for _, top in tops_df.iterrows():
-                        try:
-                            top_depth = float(top.get("depth"))
-                            top_name = str(top.get("name")).strip()
-                        except Exception:
-                            continue
-                        if not top_name:
-                            continue
-                        nearest_idx = (wdf["DEPTH"] - top_depth).abs().idxmin()
-                        wdf.at[nearest_idx, "ZONES"] = top_name
-                    wdf["ZONES"] = wdf["ZONES"].ffill().bfill()
+                        continue
+                    if not top_name:
+                        continue
+                    nearest_idx = (wdf["DEPTH"] - top_depth).abs().idxmin()
+                    wdf.at[nearest_idx, "ZONES"] = top_name
+                wdf["ZONES"] = wdf["ZONES"].ffill().bfill()
 
-            if "ZONES" not in wdf.columns:
-                wdf["ZONES"] = "ALL"
-            else:
-                wdf["ZONES"] = (
-                    wdf["ZONES"]
-                    .replace({"": np.nan, "nan": np.nan, "None": np.nan})
-                    .fillna("ALL")
-                    .astype(str)
-                )
+        if "ZONES" not in wdf.columns:
+            wdf["ZONES"] = "ALL"
+        else:
+            wdf["ZONES"] = (
+                wdf["ZONES"]
+                .replace({"": np.nan, "nan": np.nan, "None": np.nan})
+                .fillna("ALL")
+                .astype(str)
+            )
 
-            if "DEPTH" in wdf.columns:
-                if min_depth is not None:
-                    wdf = wdf[wdf["DEPTH"] >= float(min_depth)]
-                if max_depth is not None:
-                    wdf = wdf[wdf["DEPTH"] <= float(max_depth)]
+        if "DEPTH" in wdf.columns:
+            if min_depth is not None:
+                wdf = wdf[wdf["DEPTH"] >= float(min_depth)]
+            if max_depth is not None:
+                wdf = wdf[wdf["DEPTH"] <= float(max_depth)]
 
-            if allowed_zones:
-                wdf = wdf[wdf["ZONES"].isin(allowed_zones)]
+        if allowed_zones:
+            wdf = wdf[wdf["ZONES"].isin(allowed_zones)]
 
-            if not wdf.empty:
-                dfs.append(wdf)
+        if not wdf.empty:
+            dfs.append(wdf)
 
     return dfs
 
@@ -7021,7 +7022,7 @@ def workspace_multi_well_conditioning(
                 changes.append(
                     {
                         "WELL_NAME": wn,
-                        "ACTION": f"SCALE (×{req.scale:g}{f' +{req.offset:g}' if req.offset else ''})",
+                        "ACTION": f"SCALE (Ã—{req.scale:g}{f' +{req.offset:g}' if req.offset else ''})",
                         "SOURCE": src,
                         "TARGET": dst,
                         "COUNT": int(s_scaled.notna().sum()),
@@ -7064,77 +7065,53 @@ def workspace_optimize_fwl(
             raise ValueError("No wells found in project.")
 
         dfs = []
-        with get_db() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
-            for wn in well_names:
-                wdf = _get_merged_dataframe_sync(project_id, wn)
-                if not wdf.empty:
-                    wdf = wdf.copy()
-                    wdf["WELL_NAME"] = wn
-                    # Populate ZONES from formation tops if not already present on the well
-                    if "ZONES" not in wdf.columns or not wdf["ZONES"].notna().any():
-                        try:
-                            anc = proj.get_well_ancillary_data(wn)
-                        except Exception:
-                            anc = {}
-                        tops_df = (
-                            anc.get("formation_tops") if isinstance(anc, dict) else None
-                        )
-                        if isinstance(tops_df, pd.DataFrame) and not tops_df.empty:
-                            wdf["ZONES"] = pd.NA
-                            for _, top in tops_df.iterrows():
-                                try:
-                                    top_depth = float(top.get("depth"))
-                                    top_name = str(top.get("name"))
-                                except Exception:
-                                    continue
-                                nearest_idx = (wdf["DEPTH"] - top_depth).abs().idxmin()
-                                wdf.at[nearest_idx, "ZONES"] = top_name
-                            wdf["ZONES"] = wdf["ZONES"].ffill()
-                    if "PHIT" not in wdf.columns or not wdf["PHIT"].notna().any():
-                        if "RHOB" in wdf.columns and wdf["RHOB"].notna().any():
-                            wdf["PHIT"] = (
-                                (2.65 - pd.to_numeric(wdf["RHOB"], errors="coerce"))
-                                / 1.65
-                            ).clip(0.01, 0.45)
-                        elif "NPHI" in wdf.columns and wdf["NPHI"].notna().any():
-                            wdf["PHIT"] = pd.to_numeric(
-                                wdf["NPHI"], errors="coerce"
-                            ).clip(0.01, 0.45)
-                    if (
-                        "PERM" not in wdf.columns or not wdf["PERM"].notna().any()
-                    ) and "PHIT" in wdf.columns:
-                        wdf["PERM"] = (10.0 ** (14.0 * wdf["PHIT"] - 1.5)).clip(
-                            0.01, 10000.0
-                        )
-                    if (
-                        ("SW" not in wdf.columns or not wdf["SW"].notna().any())
-                        and "SHF" in wdf.columns
-                        and wdf["SHF"].notna().any()
-                    ):
-                        wdf["SW"] = wdf["SHF"]
-                    elif (
-                        "SW" not in wdf.columns or not wdf["SW"].notna().any()
-                    ) and "PHIT" in wdf.columns:
-                        rt_col = next(
-                            (
-                                c
-                                for c in ("RT", "ILD", "LLD", "RDEP")
-                                if c in wdf.columns and wdf[c].notna().any()
-                            ),
-                            None,
-                        )
-                        if rt_col:
-                            rt_s = pd.to_numeric(wdf[rt_col], errors="coerce").clip(
-                                lower=0.1
-                            )
-                            phi_s = pd.to_numeric(wdf["PHIT"], errors="coerce").clip(
-                                lower=0.01
-                            )
-                            wdf["SW"] = np.sqrt(0.05 / (rt_s * (phi_s**2))).clip(
-                                0.02, 1.0
-                            )
-                    dfs.append(wdf)
+        for wdf in _load_multi_well_dfs(project_id, well_names=well_names):
+            wn = str(wdf["WELL_NAME"].iloc[0])
+            wdf = wdf.copy()
+            if "PHIT" not in wdf.columns or not wdf["PHIT"].notna().any():
+                if "RHOB" in wdf.columns and wdf["RHOB"].notna().any():
+                    wdf["PHIT"] = (
+                        (2.65 - pd.to_numeric(wdf["RHOB"], errors="coerce"))
+                        / 1.65
+                    ).clip(0.01, 0.45)
+                elif "NPHI" in wdf.columns and wdf["NPHI"].notna().any():
+                    wdf["PHIT"] = pd.to_numeric(
+                        wdf["NPHI"], errors="coerce"
+                    ).clip(0.01, 0.45)
+            if (
+                "PERM" not in wdf.columns or not wdf["PERM"].notna().any()
+            ) and "PHIT" in wdf.columns:
+                wdf["PERM"] = (10.0 ** (14.0 * wdf["PHIT"] - 1.5)).clip(
+                    0.01, 10000.0
+                )
+            if (
+                ("SW" not in wdf.columns or not wdf["SW"].notna().any())
+                and "SHF" in wdf.columns
+                and wdf["SHF"].notna().any()
+            ):
+                wdf["SW"] = wdf["SHF"]
+            elif (
+                "SW" not in wdf.columns or not wdf["SW"].notna().any()
+            ) and "PHIT" in wdf.columns:
+                rt_col = next(
+                    (
+                        c
+                        for c in ("RT", "ILD", "LLD", "RDEP")
+                        if c in wdf.columns and wdf[c].notna().any()
+                    ),
+                    None,
+                )
+                if rt_col:
+                    rt_s = pd.to_numeric(wdf[rt_col], errors="coerce").clip(
+                        lower=0.1
+                    )
+                    phi_s = pd.to_numeric(wdf["PHIT"], errors="coerce").clip(
+                        lower=0.01
+                    )
+                    wdf["SW"] = np.sqrt(0.05 / (rt_s * (phi_s**2))).clip(
+                        0.02, 1.0
+                    )
+            dfs.append(wdf)
         if not dfs:
             raise ValueError("No log data available across project wells.")
 
@@ -7317,35 +7294,7 @@ def workspace_ml_train(project_id: int, req: WorkspaceMlTrainRequest) -> Dict[st
         if not well_names:
             raise ValueError("No wells selected or available in project.")
 
-        dfs: List[pd.DataFrame] = []
-        with get_db() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
-            for wn in well_names:
-                wdf = _get_merged_dataframe_sync(project_id, wn)
-                if wdf.empty:
-                    continue
-                wdf = wdf.copy()
-                wdf["WELL_NAME"] = wn
-                if "ZONES" not in wdf.columns or not wdf["ZONES"].notna().any():
-                    try:
-                        anc = proj.get_well_ancillary_data(wn) if proj else {}
-                    except Exception:
-                        anc = {}
-                    tops_df = (
-                        anc.get("formation_tops") if isinstance(anc, dict) else None
-                    )
-                    if isinstance(tops_df, pd.DataFrame) and not tops_df.empty:
-                        wdf["ZONES"] = pd.NA
-                        for _, top in tops_df.iterrows():
-                            try:
-                                top_depth = float(top.get("depth"))
-                                top_name = str(top.get("name"))
-                            except Exception:
-                                continue
-                            nearest_idx = (wdf["DEPTH"] - top_depth).abs().idxmin()
-                            wdf.at[nearest_idx, "ZONES"] = top_name
-                        wdf["ZONES"] = wdf["ZONES"].ffill()
-                dfs.append(wdf)
+        dfs = _load_multi_well_dfs(project_id, well_names=well_names)
 
         if not dfs:
             raise ValueError("No log data found for the selected wells.")
@@ -7460,7 +7409,7 @@ def workspace_ml_delete_model(project_id: int, suite_key: str) -> Dict[str, Any]
 def workspace_ml_inference(
     project_id: int, well_name: str, req: WorkspaceMlInferenceRequest
 ) -> Dict[str, Any]:
-    """Trigger pre-trained PIML & Conformal Prediction inference with P10–P90 uncertainty bands."""
+    """Trigger pre-trained PIML & Conformal Prediction inference with P10â€“P90 uncertainty bands."""
     try:
         from quick_pp.machine_learning.predict_pipeline import (
             get_pretrained_models_status,

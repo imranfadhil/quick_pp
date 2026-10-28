@@ -1630,7 +1630,6 @@ class Well(object):
         FROM curve_data cd
         JOIN curves c ON cd.curve_id = c.curve_id
         WHERE c.well_id = :well_id
-        ORDER BY cd.depth, c.mnemonic
         """)
 
         result = self.db_session.execute(sql, {"well_id": self.well_id})
