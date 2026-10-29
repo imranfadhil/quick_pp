@@ -88,20 +88,11 @@
 						).toFixed(1)
 					);
 		}
-		if (
-
-
-
-
-		false) {
-
-		}
 	});
 
 	function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
 		if (projectData.shfParams.model === m && projectData.shfResult?.model === m) return;
 		projectData.shfParams.model = m;
-
 	}
 
 	function updateFitParam(
@@ -121,7 +112,6 @@
 				}
 			}
 		};
-
 	}
 
 	function updateZoneFwl(zone: string, rawVal: string) {
@@ -131,16 +121,20 @@
 			...projectData.shfParams.fwlByZone,
 			[zone]: Number(num.toFixed(2))
 		};
-
 	}
 
 	function clearZoneFwls() {
 		projectData.shfParams.fwlByZone = {};
-
 	}
 
 	async function executeShf(resetFits: boolean = false, markDirty: boolean = true) {
 		if (!workbench.projectId) return;
+		const validTvdWells = projectData.wellsWithTvd.map((w) => w.name);
+		if (validTvdWells.length === 0) {
+			projectData.error =
+				'TVD is required for Saturation Height Function (SHF). None of the selected wells have a TVD curve or directional survey (TVD is never assumed equal to MD).';
+			return;
+		}
 		projectData.isComputingMultiWell = true;
 		projectData.error = null;
 		try {
@@ -157,11 +151,7 @@
 			const data = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/shf/compute`,
 				{
-					well_names:
-						projectData.selectedWellNames.length > 0 &&
-						projectData.selectedWellNames.length < projectData.wells.length
-							? projectData.selectedWellNames
-							: null,
+					well_names: validTvdWells,
 					model: sp.model,
 					unit: sp.unit ?? 'metric',
 					drt_method: projectData.drtMethod,
@@ -183,8 +173,8 @@
 				scal_data: data.scal_data,
 				...data.data
 			};
-			if (markDirty) { projectData.markMultiWellComputed('shf');
-		
+			if (markDirty) {
+				projectData.markMultiWellComputed('shf');
 			}
 
 			// Live-merge SHF curve into active well so LogTrackCanvas Track 6 updates in real time!
@@ -220,6 +210,12 @@
 
 	async function runOptimizeFwl() {
 		if (!workbench.projectId) return;
+		const validTvdWells = projectData.wellsWithTvd.map((w) => w.name);
+		if (validTvdWells.length === 0) {
+			projectData.error =
+				'TVD is required for FWL optimization. None of the selected wells have a TVD curve or directional survey (TVD is never assumed equal to MD).';
+			return;
+		}
 		projectData.isComputingMultiWell = true;
 		projectData.error = null;
 		try {
@@ -233,7 +229,7 @@
 			const res = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/optimize_fwl`,
 				{
-					well_names: projectData.selectedWellNames.length ? projectData.selectedWellNames : null,
+					well_names: validTvdWells,
 					zones: activeZonesPayload,
 					model: sp.model,
 					shm_params: projectData.shfResult?.fits ?? null,
@@ -263,7 +259,6 @@
 			} else {
 				projectData.shfParams.fwlByZone = {};
 			}
-	
 		} catch (e: any) {
 			projectData.error = e?.message || 'FWL optimization error';
 		} finally {
@@ -274,6 +269,33 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		{#if projectData.activeWells.length > 0 && projectData.wellsWithoutTvd.length > 0}
+			{#if projectData.wellsWithTvd.length === 0}
+				<div
+					class="m-2 rounded-sm border border-red-300 bg-red-50 p-2 text-[11px] leading-snug text-red-900"
+				>
+					<div class="font-bold">TVD Required — SHF &amp; Stick Plot Disabled</div>
+					<div class="mt-0.5 text-[10.5px] text-red-800">
+						None of the {projectData.activeWells.length} selected well(s) have a
+						<span class="mono-num font-semibold">TVD</span> curve or directional survey
+						(&ge; 2 stations). True Vertical Depth is never assumed equal to Measured Depth (MD).
+						Import directional surveys or TVD curves to enable SHF &amp; FWL optimization.
+					</div>
+				</div>
+			{:else}
+				<div
+					class="m-2 rounded-sm border border-amber-300 bg-amber-50 p-2 text-[10.5px] leading-snug text-amber-900"
+				>
+					<div class="font-semibold">
+						{projectData.wellsWithoutTvd.length} well(s) without TVD excluded (TVD &ne; MD):
+					</div>
+					<div class="mono-num mt-0.5 text-[10px] text-amber-800">
+						{projectData.wellsWithoutTvd.map((w) => w.name).join(', ')}
+					</div>
+				</div>
+			{/if}
+		{/if}
+
 		<ParameterSection
 			title="SHF Method & Multi-Well FWL Optimizer"
 			badge={fwlOptResult ? `FWL=${fmtNum(fwlOptResult.fwl, 1)}m` : MODEL_META[projectData.shfParams.model].badge}
@@ -367,9 +389,12 @@
 
 			<button
 				type="button"
-				disabled={projectData.isComputingMultiWell}
+				disabled={projectData.isComputingMultiWell || projectData.wellsWithTvd.length === 0}
 				onclick={runOptimizeFwl}
-				class="mt-1.5 h-7 w-full rounded-sm border border-blue-600 bg-blue-50 px-2 text-xs font-semibold text-blue-800 hover:bg-blue-100 disabled:opacity-50"
+				title={projectData.wellsWithTvd.length === 0
+					? 'Disabled: No selected wells have TVD or directional survey (TVD is never assumed equal to MD)'
+					: 'Optimize Free Water Level (FWL) & fluid contacts using wells with valid TVD'}
+				class="mt-1.5 h-7 w-full rounded-sm border border-blue-600 bg-blue-50 px-2 text-xs font-semibold text-blue-800 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
 			>
 				{solvePerZone ? 'Optimize Per-Zone FWL & Contacts' : 'Optimize Field FWL & Contacts'}
 			</button>
@@ -486,7 +511,6 @@
 				min={0}
 				max={10000}
 				step={1.0}
-
 			/>
 			<NumericScrubber
 				label="Interfacial Tension (IFT)"
@@ -495,7 +519,6 @@
 				min={1.0}
 				max={80.0}
 				step={0.5}
-
 			/>
 			<NumericScrubber
 				label="Contact Angle (θ)"
@@ -504,7 +527,6 @@
 				min={0}
 				max={90}
 				step={1.0}
-
 			/>
 			<NumericScrubber
 				label="Water Gradient (gw)"
@@ -513,7 +535,6 @@
 				min={0.9}
 				max={1.3}
 				step={0.01}
-
 			/>
 			<NumericScrubber
 				label="HC Gradient (ghc)"
@@ -522,7 +543,6 @@
 				min={0.1}
 				max={0.98}
 				step={0.01}
-
 			/>
 		</ParameterSection>
 
@@ -539,8 +559,9 @@
 					</span>
 					<button
 						type="button"
+						disabled={projectData.isComputingMultiWell || projectData.wellsWithTvd.length === 0}
 						onclick={() => executeShf(true, true)}
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)]"
+						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)] disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						Reset Auto-Fit
 					</button>
@@ -639,11 +660,18 @@
 	>
 		<button
 			type="button"
-			disabled={projectData.isComputingMultiWell}
+			disabled={projectData.isComputingMultiWell || projectData.wellsWithTvd.length === 0}
 			onclick={() => executeShf(false, true)}
-			class="h-7 flex-1 mr-1.5 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+			title={projectData.wellsWithTvd.length === 0
+				? 'Disabled: No selected wells have TVD or directional survey (TVD is never assumed equal to MD)'
+				: `Compute SHF across ${projectData.wellsWithTvd.length} well(s) with valid TVD`}
+			class="h-7 flex-1 mr-1.5 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
 		>
-			{projectData.isComputingMultiWell ? 'Computing...' : 'Compute SHF (⌘+Enter)'}
+			{projectData.isComputingMultiWell
+				? 'Computing...'
+				: projectData.wellsWithTvd.length === 0
+					? 'Compute SHF (No TVD)'
+					: 'Compute SHF (⌘+Enter)'}
 		</button>
 		<button
 			type="button"

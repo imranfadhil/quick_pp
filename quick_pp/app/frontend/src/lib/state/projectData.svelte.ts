@@ -263,6 +263,7 @@ class ProjectDataState {
 		min_tvd: number;
 		max_tvd: number;
 		available_zones: string[];
+		skipped_no_tvd_wells?: string[];
 		wells: Array<{
 			well_name: string;
 			min_tvd: number;
@@ -325,6 +326,39 @@ class ProjectDataState {
 	wells = $derived<WellSummaryItem[]>(this.summary?.wells ?? []);
 	allZones = $derived<string[]>(this.summary?.all_zones ?? []);
 	allCurves = $derived<string[]>(this.summary?.all_curves ?? []);
+
+	wellHasTvd(w: WellSummaryItem | undefined | null): boolean {
+		if (!w) return false;
+		const curves = w.curves ?? (w as any).available_curves ?? [];
+		return (
+			curves.includes('TVD') ||
+			curves.includes('TVDSS') ||
+			curves.includes('DEPT_TVD') ||
+			curves.includes('DEPTH_TVD') ||
+			(w.survey_count ?? 0) >= 2
+		);
+	}
+
+	activeWells = $derived<WellSummaryItem[]>(
+		this.selectedWellNames.length > 0
+			? this.wells.filter((w) => this.selectedWellNames.includes(w.name))
+			: this.wells
+	);
+	wellsWithTvd = $derived<WellSummaryItem[]>(
+		this.activeWells.filter((w) => this.wellHasTvd(w))
+	);
+	wellsWithoutTvd = $derived<WellSummaryItem[]>(
+		this.activeWells.filter((w) => !this.wellHasTvd(w))
+	);
+	activeWellHasTvd = $derived<boolean>(
+		Boolean(
+			(wellData.curves['TVD'] &&
+				wellData.curves['TVD'].some((v) => v !== null && Number.isFinite(v))) ||
+				(wellData.curves['TVDSS'] &&
+					wellData.curves['TVDSS'].some((v) => v !== null && Number.isFinite(v))) ||
+				this.wellHasTvd(this.wells.find((w) => w.name === workbench.wellId))
+		)
+	);
 
 	markMultiWellComputed(moduleKey: MultiWellSaveModule) {
 		this.pendingMultiWellModules = {

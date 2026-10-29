@@ -122,6 +122,7 @@
 					title: `Field Well, Core (RCA & SCAL), Tops & Ancillary Inventory (${projectData.wells.length} Wells)`,
 					columns: [
 						{ key: 'WELL', label: 'Well' },
+						{ key: 'TVD', label: 'TVD' },
 						{ key: 'MIN_DEPTH', label: 'Top', unit: 'm', numeric: true, decimals: 1 },
 						{ key: 'MAX_DEPTH', label: 'Bottom', unit: 'm', numeric: true, decimals: 1 },
 						{ key: 'ROWS', label: 'Rows', numeric: true, decimals: 0 },
@@ -138,6 +139,12 @@
 					],
 					rows: projectData.wells.map((w) => ({
 						WELL: w.name,
+						TVD:
+							(w.survey_count ?? 0) >= 2
+								? `Survey (${w.survey_count})`
+								: projectData.wellHasTvd(w)
+									? 'Curve'
+									: 'No TVD',
 						MIN_DEPTH: w.min_depth,
 						MAX_DEPTH: w.max_depth,
 						ROWS: w.depth_count ?? w.row_count ?? 0,

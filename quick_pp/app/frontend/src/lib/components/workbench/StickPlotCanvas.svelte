@@ -726,6 +726,19 @@
 					{/each}
 				</select>
 			</div>
+
+			{#if (projectData.stickPlotResult?.skipped_no_tvd_wells?.length ?? projectData.wellsWithoutTvd.length) > 0}
+				{@const skippedList =
+					projectData.stickPlotResult?.skipped_no_tvd_wells?.length
+						? projectData.stickPlotResult.skipped_no_tvd_wells
+						: projectData.wellsWithoutTvd.map((w) => w.name)}
+				<span
+					title="Wells excluded because they lack TVD curve or directional survey (TVD ≠ MD): {skippedList.join(', ')}"
+					class="inline-flex h-5 shrink-0 items-center gap-1 rounded-xs border border-amber-300 bg-amber-50 px-1.5 text-[10px] font-semibold text-amber-800"
+				>
+					<span>⚠ {skippedList.length} well{skippedList.length === 1 ? '' : 's'} without TVD excluded</span>
+				</span>
+			{/if}
 		</div>
 
 		<!-- Right Controls: Overlays & Reset -->
@@ -857,6 +870,27 @@
 				class="flex h-full w-full items-center justify-center text-xs text-[var(--text-muted)]"
 			>
 				Loading multi-well TVD stick plot...
+			</div>
+		{:else if orderedWells.length === 0}
+			<div
+				class="flex h-full w-full flex-col items-center justify-center gap-2 p-6 text-center"
+			>
+				<div class="text-xs font-semibold text-[var(--text-primary)]">
+					Multi-Well Stick Plot Disabled — No Wells with True Vertical Depth (TVD)
+				</div>
+				<p class="max-w-md text-[11px] leading-relaxed text-[var(--text-secondary)]">
+					None of the selected wells have a <span class="mono-num font-semibold">TVD</span> curve
+					or directional survey (&ge; 2 stations). True Vertical Depth is never assumed equal to
+					Measured Depth (MD). Import directional surveys or TVD curves to enable structural TVD
+					stick plots.
+				</p>
+				<button
+					type="button"
+					onclick={() => (workbench.centerPaneMultiWellView = 'logs')}
+					class="mt-1 h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--accent-primary)] hover:bg-[var(--bg-subtle)]"
+				>
+					Switch to Single-Well Logs
+				</button>
 			</div>
 		{:else}
 			<div bind:this={plotContainer} class="h-full w-full"></div>

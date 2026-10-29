@@ -2421,8 +2421,16 @@
 					</button>
 					<button
 						type="button"
-						onclick={() => (workbench.centerPaneMultiWellView = 'stick-plot')}
-						class="h-4.5 rounded-xs px-1.5 font-medium transition-colors {workbench.centerPaneMultiWellView ===
+						disabled={projectData.activeWells.length > 0 && projectData.wellsWithTvd.length === 0}
+						title={projectData.activeWells.length > 0 && projectData.wellsWithTvd.length === 0
+							? 'Disabled: No selected wells have TVD curve or directional survey (TVD is never assumed equal to MD)'
+							: 'Switch to Multi-Well TVD Stick Plot'}
+						onclick={() => {
+							if (projectData.wellsWithTvd.length > 0) {
+								workbench.centerPaneMultiWellView = 'stick-plot';
+							}
+						}}
+						class="h-4.5 rounded-xs px-1.5 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 {workbench.centerPaneMultiWellView ===
 						'stick-plot'
 							? 'bg-[var(--accent-primary)] font-semibold text-white'
 							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"

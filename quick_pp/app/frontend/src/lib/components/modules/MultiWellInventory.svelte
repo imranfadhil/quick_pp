@@ -24,7 +24,33 @@
 		}
 	}
 
-	const KEY_CURVES = ['GR', 'RT', 'NPHI', 'RHOB', 'PHIE', 'PERM', 'SWT', 'ROCK_FLAG', 'SHF'];
+	const KEY_CURVES = [
+		'TVD',
+		'GR',
+		'RT',
+		'NPHI',
+		'RHOB',
+		'PHIT',
+		'PERM',
+		'SWT',
+		'ROCK_FLAG',
+		'PERM_TRANS',
+		'SHF'
+	];
+
+	const CURVE_HEADER_TITLES: Record<string, string> = {
+		TVD: 'True Vertical Depth (from TVD/TVDSS curve or computed from directional survey — never assumed equal to MD)',
+		GR: 'Gamma Ray',
+		RT: 'Deep Resistivity',
+		NPHI: 'Neutron Porosity',
+		RHOB: 'Bulk Density',
+		PHIT: 'Total Porosity',
+		PERM: 'Permeability',
+		SWT: 'Total Water Saturation',
+		ROCK_FLAG: 'Discrete Rock Type Flag (DRT)',
+		PERM_TRANS: 'Rock-Type Permeability Transform',
+		SHF: 'Saturation Height Function (Sw from Pc / HAFWL)'
+	};
 
 	// Project & Well Management state
 	let isEditingProject = $state(false);
@@ -389,7 +415,12 @@
 							<th class="px-1.5 font-semibold">Well</th>
 							<th class="px-1 text-right font-semibold">Rows</th>
 							{#each KEY_CURVES as kc}
-								<th class="px-1 text-center font-semibold text-[9px]">{kc}</th>
+								<th
+									class="px-1 text-center font-semibold text-[9px]"
+									title={CURVE_HEADER_TITLES[kc] ?? kc}
+								>
+									{kc}
+								</th>
 							{/each}
 						</tr>
 					</thead>
@@ -496,8 +527,23 @@
 										{w.depth_count ?? (w as any).row_count ?? 0}
 									</td>
 									{#each KEY_CURVES as kc}
-										{@const has = (w.curves ?? (w as any).available_curves ?? []).includes(kc)}
-										<td class="px-1 text-center">
+										{@const rawCurves = w.curves ?? (w as any).available_curves ?? []}
+										{@const has =
+											kc === 'TVD'
+												? projectData.wellHasTvd(w)
+												: rawCurves.includes(kc)}
+										{@const isTvdFromSurvey =
+											kc === 'TVD' && (w.survey_count ?? 0) >= 2}
+										<td
+											class="px-1 text-center"
+											title={kc === 'TVD'
+												? has
+													? isTvdFromSurvey
+														? `${w.name}: TVD available (computed from ${w.survey_count} directional survey stations)`
+														: `${w.name}: TVD curve available`
+													: `${w.name}: No TVD curve or directional survey — SHF & Stick Plot disabled for this well`
+												: `${w.name}: ${kc} ${has ? 'available' : 'missing'}`}
+										>
 											<span
 												class="inline-block h-2 w-2 rounded-full {has
 													? 'bg-emerald-500'

@@ -244,15 +244,24 @@
 			{#each MULTI_WELL_STEPS as step (step.id)}
 				{@const isActive = workbench.multiWellStep === step.id}
 				{@const isDone = step.readyCheck()}
+				{@const shfNoTvd =
+					step.id === 'shf' &&
+					projectData.activeWells.length > 0 &&
+					projectData.wellsWithTvd.length === 0}
 				<button
 					type="button"
+					disabled={shfNoTvd}
+					title={shfNoTvd
+						? 'Disabled: No selected wells have TVD curve or directional survey (TVD is never assumed equal to MD)'
+						: step.label}
 					onclick={() => {
+						if (shfNoTvd) return;
 						workbench.multiWellStep = step.id;
-						if (step.id === 'shf') {
+						if (step.id === 'shf' && projectData.wellsWithTvd.length > 0) {
 							workbench.centerPaneMultiWellView = 'stick-plot';
 						}
 					}}
-					class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isActive
+					class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-45 {isActive
 						? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
 						: 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
 				>

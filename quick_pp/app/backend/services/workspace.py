@@ -5511,6 +5511,27 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     fit_entry["count"] = int(np.sum(valid_m))
 
         zones = fzi_data.get("zones") or ["Unknown"] * len(depths)
+        tvd_list = fzi_data.get("tvd") or [None] * len(depths)
+        if len(tvd_list) != len(depths):
+            tvd_list = [None] * len(depths)
+
+        has_any_tvd = any(
+            tvd_v is not None and math.isfinite(float(tvd_v)) for tvd_v in tvd_list
+        )
+        if not has_any_tvd:
+            raise ValueError(
+                "TVD is required for Saturation Height Function (SHF) calculation. "
+                "None of the selected wells have a TVD curve or directional survey."
+            )
+
+        wells_seen = list(dict.fromkeys(str(w) for w in well_names))
+        wells_with_tvd = {
+            str(wn)
+            for wn, tvd_v in zip(well_names, tvd_list)
+            if tvd_v is not None and math.isfinite(float(tvd_v))
+        }
+        skipped_no_tvd_wells = [w for w in wells_seen if w not in wells_with_tvd]
+
         fwl_zone_map: Dict[str, float] = {}
         if req.fwl_by_zone:
             for zk, zv in req.fwl_by_zone.items():
@@ -5518,7 +5539,12 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     fwl_zone_map[str(zk).strip()] = float(zv)
 
         shf_values: List[Optional[float]] = []
-        for p, k, d, rf, zn in zip(phit_arr, perm_arr, depths, rock_flags, zones):
+        for p, k, d, tvd_v, rf, zn in zip(
+            phit_arr, perm_arr, depths, tvd_list, rock_flags, zones
+        ):
+            if tvd_v is None or not math.isfinite(float(tvd_v)):
+                shf_values.append(None)
+                continue
             rf_key = str(int(rf)) if rf is not None else None
             is_non_res = (
                 (
@@ -5536,17 +5562,18 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 a = float(fit_p.get("a", 0.2))
                 b = abs(float(fit_p.get("b", 0.3)))
                 eff_fwl = fwl_zone_map.get(str(zn).strip(), req.fwl)
+                tvd_f = float(tvd_v)
                 if model == "skelt_harrison":
                     c = float(fit_p.get("c", 1.5))
                     d_param = float(fit_p.get("d", 1.5))
                     shf_v = float(
-                        sw_skelt_harrison(float(d), eff_fwl, a, b, c, d_param)
+                        sw_skelt_harrison(tvd_f, eff_fwl, a, b, c, d_param)
                     )
                 elif model == "cuddy":
                     shf_v = float(
                         sw_shf_cuddy(
                             float(p),
-                            float(d),
+                            tvd_f,
                             eff_fwl,
                             req.gw,
                             req.ghc,
@@ -5560,7 +5587,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         sw_shf_leverett_j(
                             float(k),
                             float(p),
-                            float(d),
+                            tvd_f,
                             eff_fwl,
                             req.ift,
                             req.theta,
@@ -5613,9 +5640,11 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
             "scal_data": scal_payload,
             "saved": req.save,
             "saved_wells": saved_wells,
+            "skipped_no_tvd_wells": skipped_no_tvd_wells,
             "data": {
                 "well_names": well_names,
                 "depths": depths,
+                "tvd": tvd_list,
                 "zones": zones,
                 "phit": fzi_data["phit"],
                 "perm": fzi_data["perm"],
@@ -5817,7 +5846,9 @@ def _resolve_well_tvd_array(
     well_df: Optional[pd.DataFrame],
     surveys_df: Optional[pd.DataFrame],
 ) -> np.ndarray:
-    """Resolve TVD array for given MD depths using TVD/TVDSS curve, directional survey minimum curvature, or MD fallback."""
+    """Resolve TVD array for given MD depths using TVD/TVDSS curve or directional survey minimum curvature.
+    Returns an array of NaNs when neither a TVD curve nor a valid directional survey is available (never assumes TVD == MD).
+    """
     if len(md_values) == 0:
         return np.array([], dtype=float)
 
@@ -5862,36 +5893,41 @@ def _resolve_well_tvd_array(
                 .sort_values("md")
             )
             if len(s_sub) >= 2:
+                mds = s_sub["md"].to_numpy(dtype=float)
+                tvds = s_sub["tvd"].to_numpy(dtype=float)
+                if mds[0] > 1.0:
+                    mds = np.insert(mds, 0, 0.0)
+                    tvds = np.insert(tvds, 0, 0.0)
                 return np.interp(
                     md_values,
-                    s_sub["md"].to_numpy(dtype=float),
-                    s_sub["tvd"].to_numpy(dtype=float),
+                    mds,
+                    tvds,
                 )
 
         if md_c and inc_c and azi_c:
-            try:
-                import wellpathpy as wpp
-
-                s_sorted = (
-                    pd.DataFrame(
-                        {
-                            "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
-                            "inc": pd.to_numeric(surveys_df[inc_c], errors="coerce"),
-                            "azim": pd.to_numeric(surveys_df[azi_c], errors="coerce"),
-                        }
-                    )
-                    .dropna()
-                    .sort_values("md")
-                    .drop_duplicates(subset=["md"])
+            s_sorted = (
+                pd.DataFrame(
+                    {
+                        "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
+                        "inc": pd.to_numeric(surveys_df[inc_c], errors="coerce"),
+                        "azim": pd.to_numeric(surveys_df[azi_c], errors="coerce"),
+                    }
                 )
-                if len(s_sorted) >= 2:
-                    mds = s_sorted["md"].to_numpy(dtype=float)
-                    incs = s_sorted["inc"].to_numpy(dtype=float)
-                    azis = s_sorted["azim"].to_numpy(dtype=float)
-                    if mds[0] > 1.0:
-                        mds = np.insert(mds, 0, 0.0)
-                        incs = np.insert(incs, 0, 0.0)
-                        azis = np.insert(azis, 0, 0.0)
+                .dropna()
+                .sort_values("md")
+                .drop_duplicates(subset=["md"])
+            )
+            if len(s_sorted) >= 2:
+                mds = s_sorted["md"].to_numpy(dtype=float)
+                incs = s_sorted["inc"].to_numpy(dtype=float)
+                azis = s_sorted["azim"].to_numpy(dtype=float)
+                if mds[0] > 1.0:
+                    mds = np.insert(mds, 0, 0.0)
+                    incs = np.insert(incs, 0, 0.0)
+                    azis = np.insert(azis, 0, azis[0] if len(azis) > 0 else 0.0)
+                try:
+                    import wellpathpy as wpp
+
                     dev = wpp.deviation(mds, incs, azis)
                     pos = dev.minimum_curvature()
                     return np.interp(
@@ -5899,11 +5935,26 @@ def _resolve_well_tvd_array(
                         np.asarray(pos.md, dtype=float),
                         np.asarray(pos.depth, dtype=float),
                     )
-            except Exception:
-                pass
+                except Exception:
+                    inc_rad = np.deg2rad(incs)
+                    azi_rad = np.deg2rad(azis)
+                    dmd = np.diff(mds)
+                    i1, i2 = inc_rad[:-1], inc_rad[1:]
+                    a1, a2 = azi_rad[:-1], azi_rad[1:]
+                    cos_dl = np.clip(
+                        np.cos(i2 - i1)
+                        - np.sin(i1) * np.sin(i2) * (1.0 - np.cos(a2 - a1)),
+                        -1.0,
+                        1.0,
+                    )
+                    dl = np.arccos(cos_dl)
+                    rf = np.where(dl > 1e-6, (2.0 / dl) * np.tan(dl / 2.0), 1.0)
+                    dz = 0.5 * dmd * (np.cos(i1) + np.cos(i2)) * rf
+                    tvd_calc = np.concatenate([[0.0], np.cumsum(dz)])
+                    return np.interp(md_values, mds, tvd_calc)
 
-    # 3. Fallback: vertical well (TVD == MD)
-    return np.asarray(md_values, dtype=float).copy()
+    # 3. No TVD curve and no valid directional survey -> do NOT assume TVD == MD
+    return np.full(len(md_values), np.nan, dtype=float)
 
 
 @router.post(
@@ -5929,6 +5980,7 @@ def workspace_stick_plot(
 
         max_pts = max(100, int(req.max_points_per_well))
         wells_payload: List[Dict[str, Any]] = []
+        skipped_no_tvd_wells: List[str] = []
         all_zones_set: set[str] = set()
         global_min_tvd = float("inf")
         global_max_tvd = float("-inf")
@@ -5967,6 +6019,9 @@ def workspace_stick_plot(
                     surveys_df = pd.DataFrame(surveys_df)
 
                 tvd_full = _resolve_well_tvd_array(md_full, wdf_sorted, surveys_df)
+                if np.isfinite(tvd_full).sum() < 2:
+                    skipped_no_tvd_wells.append(wn)
+                    continue
                 wdf_sorted = wdf_sorted.copy()
                 wdf_sorted["TVD"] = tvd_full
 
@@ -6200,6 +6255,7 @@ def workspace_stick_plot(
                 else 1000.0,
                 "available_zones": sorted(all_zones_set),
                 "wells": wells_payload,
+                "skipped_no_tvd_wells": skipped_no_tvd_wells,
             }
         )
     except ValueError as e:
@@ -7073,9 +7129,30 @@ def workspace_optimize_fwl(
             raise ValueError("No wells found in project.")
 
         dfs = []
+        skipped_no_tvd_wells: List[str] = []
         for wdf in _load_multi_well_dfs(project_id, well_names=well_names):
             wn = str(wdf["WELL_NAME"].iloc[0])
             wdf = wdf.copy()
+            tvd_col = next(
+                (
+                    c
+                    for c in ("TVD", "TVDSS", "DEPT_TVD", "DEPTH_TVD")
+                    if c in wdf.columns
+                    and pd.to_numeric(wdf[c], errors="coerce").notna().sum() >= 2
+                ),
+                None,
+            )
+            if tvd_col is None:
+                skipped_no_tvd_wells.append(wn)
+                continue
+            if tvd_col != "TVD":
+                wdf["TVD"] = pd.to_numeric(wdf[tvd_col], errors="coerce")
+            else:
+                wdf["TVD"] = pd.to_numeric(wdf["TVD"], errors="coerce")
+            wdf = wdf[wdf["TVD"].notna()].copy()
+            if len(wdf) < 2:
+                skipped_no_tvd_wells.append(wn)
+                continue
             if "PHIT" not in wdf.columns or not wdf["PHIT"].notna().any():
                 if "RHOB" in wdf.columns and wdf["RHOB"].notna().any():
                     wdf["PHIT"] = (
@@ -7121,7 +7198,9 @@ def workspace_optimize_fwl(
                     )
             dfs.append(wdf)
         if not dfs:
-            raise ValueError("No log data available across project wells.")
+            raise ValueError(
+                "TVD is required for FWL optimization. None of the selected wells have a TVD curve or directional survey."
+            )
 
         combined = pd.concat(dfs, ignore_index=True)
         if req.zones and "ZONES" in combined.columns:
@@ -7140,6 +7219,7 @@ def workspace_optimize_fwl(
         )
         res = optimize_fwl(
             df=combined,
+            depth_col="TVD",
             model=req.model,
             shm_params=req.shm_params,
             ift=req.ift,

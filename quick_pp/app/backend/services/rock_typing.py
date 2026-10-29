@@ -29,6 +29,7 @@ def _compute_fzi_data_sync(
 
     well_names = []
     depths_list = []
+    tvd_list = []
     cpore_list = []
     cperm_list = []
     phis_list = []
@@ -36,6 +37,8 @@ def _compute_fzi_data_sync(
     zones_list = []
     rock_flags_list = []
     sonic_wells = []
+    tvd_wells = []
+    no_tvd_wells = []
     any_non_empty_well = False
     available_cols = set()
     loaded_wells = []
@@ -229,6 +232,25 @@ def _compute_fzi_data_sync(
             if well_has_sonic:
                 sonic_wells.append(well_name)
 
+            # Resolve true TVD if available (never assume TVD == DEPTH/MD)
+            tvd_col = next(
+                (
+                    c
+                    for c in ("TVD", "TVDSS", "DEPT_TVD", "DEPTH_TVD")
+                    if c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().sum() >= 2
+                ),
+                None,
+            )
+            if tvd_col is not None:
+                tvd_s = pd.to_numeric(df.loc[common_index, tvd_col], errors="coerce")
+                if tvd_s.notna().any():
+                    tvd_wells.append(well_name)
+                else:
+                    no_tvd_wells.append(well_name)
+            else:
+                tvd_s = pd.Series(np.nan, index=common_index, dtype=float)
+                no_tvd_wells.append(well_name)
+
             if "ZONES" in df.columns:
                 zones = df.loc[common_index, "ZONES"].fillna("Unknown").tolist()
             else:
@@ -257,6 +279,7 @@ def _compute_fzi_data_sync(
 
             well_names.extend([well_name] * len(cpore))
             depths_list.extend(depths.tolist())
+            tvd_list.append(tvd_s)
             cpore_list.append(cpore)
             cperm_list.append(cperm)
             phis_list.append(phis_s)
@@ -276,11 +299,13 @@ def _compute_fzi_data_sync(
         perm_all = pd.concat(cperm_list).tolist() if cperm_list else []
         phis_all = pd.concat(phis_list).tolist() if phis_list else []
         phi_sec_all = pd.concat(phi_sec_list).tolist() if phi_sec_list else []
+        tvd_all = pd.concat(tvd_list).tolist() if tvd_list else []
 
         phit_all = sanitize_list(phit_all)
         perm_all = sanitize_list(perm_all)
         phis_all = sanitize_list(phis_all)
         phi_sec_all = sanitize_list(phi_sec_all)
+        tvd_all = sanitize_list(tvd_all)
         depths_list = sanitize_list(depths_list)
         rock_flags_list = [
             (
@@ -300,6 +325,9 @@ def _compute_fzi_data_sync(
             "phi_sec": phi_sec_all,
             "has_sonic": len(sonic_wells) > 0,
             "sonic_wells": sonic_wells,
+            "tvd": tvd_all,
+            "tvd_wells": tvd_wells,
+            "no_tvd_wells": no_tvd_wells,
             "zones": zones_list,
             "well_names": well_names,
             "depths": depths_list,

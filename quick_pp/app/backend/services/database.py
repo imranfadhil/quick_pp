@@ -859,6 +859,14 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         if c_up not in ("DEPTH", "WELL_NAME"):
                             well_curve_set.add(c_up)
                             all_curves_set.add(c_up)
+                if (
+                    survey_counts.get(wid, 0) >= 2
+                    or "TVDSS" in well_curve_set
+                    or "DEPT_TVD" in well_curve_set
+                    or "DEPTH_TVD" in well_curve_set
+                ):
+                    well_curve_set.add("TVD")
+                    all_curves_set.add("TVD")
                 well_curves_sorted = sorted(well_curve_set)
 
                 c_samples = core_counts.get(wid, 0)
@@ -1354,6 +1362,93 @@ def filter_merged_dataframe(
     return filtered.reset_index(drop=True)
 
 
+def _compute_tvd_from_survey(
+    md_values: np.ndarray,
+    surveys_df: Optional[pd.DataFrame],
+) -> Optional[np.ndarray]:
+    """Compute TVD along md_values from directional survey minimum curvature (or survey TVD column).
+    Returns None if no valid survey with >= 2 stations is available (never assumes TVD == MD).
+    """
+    if len(md_values) == 0 or surveys_df is None or not isinstance(surveys_df, pd.DataFrame) or surveys_df.empty:
+        return None
+
+    col_map = {str(c).lower(): c for c in surveys_df.columns}
+    md_c = col_map.get("md") or col_map.get("depth")
+    inc_c = col_map.get("inc") or col_map.get("incl") or col_map.get("inclination")
+    azi_c = col_map.get("azim") or col_map.get("azi") or col_map.get("azimuth")
+    tvd_c = col_map.get("tvd") or col_map.get("tvdss")
+
+    if md_c and tvd_c and surveys_df[tvd_c].notna().sum() >= 2:
+        s_sub = (
+            pd.DataFrame(
+                {
+                    "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
+                    "tvd": pd.to_numeric(surveys_df[tvd_c], errors="coerce"),
+                }
+            )
+            .dropna()
+            .sort_values("md")
+            .drop_duplicates(subset=["md"], keep="last")
+        )
+        if len(s_sub) >= 2:
+            mds = s_sub["md"].to_numpy(dtype=float)
+            tvds = s_sub["tvd"].to_numpy(dtype=float)
+            if mds[0] > 1.0:
+                mds = np.insert(mds, 0, 0.0)
+                tvds = np.insert(tvds, 0, 0.0)
+            return np.interp(md_values, mds, tvds)
+
+    if md_c and inc_c and azi_c:
+        s_sorted = (
+            pd.DataFrame(
+                {
+                    "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
+                    "inc": pd.to_numeric(surveys_df[inc_c], errors="coerce"),
+                    "azim": pd.to_numeric(surveys_df[azi_c], errors="coerce"),
+                }
+            )
+            .dropna()
+            .sort_values("md")
+            .drop_duplicates(subset=["md"], keep="last")
+        )
+        if len(s_sorted) >= 2:
+            mds = s_sorted["md"].to_numpy(dtype=float)
+            incs = s_sorted["inc"].to_numpy(dtype=float)
+            azis = s_sorted["azim"].to_numpy(dtype=float)
+            if mds[0] > 1.0:
+                mds = np.insert(mds, 0, 0.0)
+                incs = np.insert(incs, 0, 0.0)
+                azis = np.insert(azis, 0, azis[0] if len(azis) > 0 else 0.0)
+            try:
+                import wellpathpy as wpp
+
+                dev = wpp.deviation(mds, incs, azis)
+                pos = dev.minimum_curvature()
+                return np.interp(
+                    md_values,
+                    np.asarray(pos.md, dtype=float),
+                    np.asarray(pos.depth, dtype=float),
+                )
+            except Exception:
+                inc_rad = np.deg2rad(incs)
+                azi_rad = np.deg2rad(azis)
+                dmd = np.diff(mds)
+                i1, i2 = inc_rad[:-1], inc_rad[1:]
+                a1, a2 = azi_rad[:-1], azi_rad[1:]
+                cos_dl = np.clip(
+                    np.cos(i2 - i1) - np.sin(i1) * np.sin(i2) * (1.0 - np.cos(a2 - a1)),
+                    -1.0,
+                    1.0,
+                )
+                dl = np.arccos(cos_dl)
+                rf = np.where(dl > 1e-6, (2.0 / dl) * np.tan(dl / 2.0), 1.0)
+                dz = 0.5 * dmd * (np.cos(i1) + np.cos(i2)) * rf
+                tvd_calc = np.concatenate([[0.0], np.cumsum(dz)])
+                return np.interp(md_values, mds, tvd_calc)
+
+    return None
+
+
 def _get_merged_dataframe_sync(
     project_id: int,
     well_name: str,
@@ -1462,6 +1557,10 @@ def _get_merged_dataframe_sync(
                 raw_tops_df = well.get_formation_tops()
                 raw_contacts_df = well.get_fluid_contacts()
                 raw_pressure_df = well.get_pressure_tests()
+                try:
+                    raw_surveys_df = well.get_well_surveys()
+                except Exception:
+                    raw_surveys_df = pd.DataFrame()
                 core_raw = well.get_core_data() or {}
 
             # Database session is now closed; perform CPU/DataFrame merging outside DB pool
@@ -1590,6 +1689,26 @@ def _get_merged_dataframe_sync(
                         else:
                             merged[c_col] = merged[c_core]
                         merged.drop(columns=[c_core], inplace=True)
+
+            # Resolve TVD from TVDSS/DEPT_TVD/DEPTH_TVD or compute from directional survey (never assume TVD == MD)
+            has_valid_tvd = (
+                "tvd" in merged.columns
+                and pd.to_numeric(merged["tvd"], errors="coerce").notna().sum() >= 2
+            )
+            if not has_valid_tvd:
+                for tvd_alias in ("tvdss", "dept_tvd", "depth_tvd"):
+                    if tvd_alias in merged.columns:
+                        s_alias = pd.to_numeric(merged[tvd_alias], errors="coerce")
+                        if s_alias.notna().sum() >= 2:
+                            merged["tvd"] = s_alias
+                            has_valid_tvd = True
+                            break
+            if not has_valid_tvd and isinstance(raw_surveys_df, pd.DataFrame) and not raw_surveys_df.empty:
+                tvd_from_survey = _compute_tvd_from_survey(
+                    merged["depth"].to_numpy(dtype=float), raw_surveys_df
+                )
+                if tvd_from_survey is not None and np.isfinite(tvd_from_survey).sum() >= 2:
+                    merged["tvd"] = tvd_from_survey
 
             merged = merged.replace([np.inf, -np.inf], np.nan)
             merged.columns = [c.upper() for c in merged.columns]
