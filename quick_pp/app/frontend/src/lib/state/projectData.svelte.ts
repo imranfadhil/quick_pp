@@ -33,6 +33,7 @@ class ProjectDataState {
 	pendingMultiWellModules = $state<Record<string, boolean>>({});
 
 	// Field-level Multi-Well Parameters & Results
+	inventorySelectedZone = $state<string>('');
 	drtDataSource = $state<PhiKDataSource>('core');
 	permTransformDataSource = $state<PhiKDataSource>('core');
 	drtMethod = $state<DrtMethod>('fzi');
@@ -337,6 +338,69 @@ class ProjectDataState {
 	wells = $derived<WellSummaryItem[]>(this.summary?.wells ?? []);
 	allZones = $derived<string[]>(this.summary?.all_zones ?? []);
 	allCurves = $derived<string[]>(this.summary?.all_curves ?? []);
+
+	static readonly COMPUTED_CURVE_KEYS = [
+		'VCLAY',
+		'PHIT',
+		'PERM',
+		'SWT',
+		'ROCK_FLAG',
+		'PERM_TRANS',
+		'SHF'
+	] as const;
+
+	getWellZoneCurves(w: WellSummaryItem | undefined | null, zoneName: string): string[] | null {
+		if (!w || !zoneName) return null;
+		const zNorm = zoneName.trim().toLowerCase();
+		const zMap = w.zone_curves ?? {};
+		for (const [k, crvs] of Object.entries(zMap)) {
+			if (k.trim().toLowerCase() === zNorm && Array.isArray(crvs)) {
+				return crvs;
+			}
+		}
+		const foundTop = (w.formation_tops ?? []).find(
+			(t) => t.name.trim().toLowerCase() === zNorm
+		);
+		if (foundTop && Array.isArray(foundTop.curves)) {
+			return foundTop.curves;
+		}
+		return null;
+	}
+
+	wellHasCurveInZone(
+		w: WellSummaryItem | undefined | null,
+		curve: string,
+		zoneName?: string | null
+	): boolean {
+		if (!w) return false;
+		const cUp = curve.toUpperCase();
+		if (zoneName && zoneName.trim().length > 0) {
+			const zCurves = this.getWellZoneCurves(w, zoneName);
+			if (!zCurves) return false;
+			return zCurves.includes(cUp);
+		}
+		const rawCurves = w.curves ?? (w as any).available_curves ?? [];
+		if (cUp === 'TVD') return this.wellHasTvd(w);
+		if (cUp === 'VCLAY') {
+			return (
+				rawCurves.includes('VCLAY') ||
+				rawCurves.includes('VSH') ||
+				rawCurves.includes('VSHALE') ||
+				rawCurves.includes('VCL') ||
+				rawCurves.includes('VSH_GR')
+			);
+		}
+		if (cUp === 'SHF') {
+			return rawCurves.includes('SHF') || rawCurves.includes('SW_SHF');
+		}
+		return rawCurves.includes(cUp);
+	}
+
+	getWellZoneComputedCurves(w: WellSummaryItem | undefined | null, zoneName: string): string[] {
+		const zCurves = this.getWellZoneCurves(w, zoneName);
+		if (!zCurves) return [];
+		return ProjectDataState.COMPUTED_CURVE_KEYS.filter((ck) => zCurves.includes(ck));
+	}
 
 	wellHasTvd(w: WellSummaryItem | undefined | null): boolean {
 		if (!w) return false;
@@ -689,6 +753,7 @@ class ProjectDataState {
 		const projectChanged = workbench.projectId !== pidStr;
 		workbench.projectId = pidStr;
 		if (projectChanged) {
+			this.inventorySelectedZone = '';
 			this.pendingMultiWellModules = {};
 			this.multiWellQaqcResult = null;
 			this.stratNormReport = [];

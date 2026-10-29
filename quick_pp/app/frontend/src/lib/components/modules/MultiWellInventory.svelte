@@ -30,6 +30,7 @@
 		'RT',
 		'NPHI',
 		'RHOB',
+		'VCLAY',
 		'PHIT',
 		'PERM',
 		'SWT',
@@ -38,12 +39,25 @@
 		'SHF'
 	];
 
+	const COMPUTED_CURVES = [
+		'VCLAY',
+		'PHIT',
+		'PERM',
+		'SWT',
+		'ROCK_FLAG',
+		'PERM_TRANS',
+		'SHF'
+	] as const;
+
+	const CORE_PETRO_CURVES = ['VCLAY', 'PHIT', 'PERM', 'SWT'] as const;
+
 	const CURVE_HEADER_TITLES: Record<string, string> = {
 		TVD: 'True Vertical Depth (from TVD/TVDSS curve or computed from directional survey — never assumed equal to MD)',
 		GR: 'Gamma Ray',
 		RT: 'Deep Resistivity',
 		NPHI: 'Neutron Porosity',
 		RHOB: 'Bulk Density',
+		VCLAY: 'Shale / Clay Volume (VCLAY / VSH)',
 		PHIT: 'Total Porosity',
 		PERM: 'Permeability',
 		SWT: 'Total Water Saturation',
@@ -51,6 +65,21 @@
 		PERM_TRANS: 'Rock-Type Permeability Transform',
 		SHF: 'Saturation Height Function (Sw from Pc / HAFWL)'
 	};
+
+	type StratMatrixFilter = 'all' | 'evaluated' | 'missing';
+	type StratCurveMode =
+		| 'all_computed'
+		| 'core_petro'
+		| 'VCLAY'
+		| 'PHIT'
+		| 'PERM'
+		| 'SWT'
+		| 'ROCK_FLAG'
+		| 'PERM_TRANS'
+		| 'SHF';
+
+	let stratMatrixFilter = $state<StratMatrixFilter>('all');
+	let stratCurveMode = $state<StratCurveMode>('all_computed');
 
 	// Project & Well Management state
 	let isEditingProject = $state(false);
@@ -203,17 +232,160 @@
 		};
 	});
 
-	function getWellTopDepth(w: (typeof projectData.wells)[number], zoneName: string): number | null {
-		const found = (w.formation_tops ?? []).find(
-			(t) => t.name.trim().toLowerCase() === zoneName.trim().toLowerCase()
+	function getWellTopEntry(w: (typeof projectData.wells)[number], zoneName: string) {
+		return (
+			(w.formation_tops ?? []).find(
+				(t) => t.name.trim().toLowerCase() === zoneName.trim().toLowerCase()
+			) ?? null
 		);
-		return found?.depth ?? null;
+	}
+
+	function getWellTopDepth(w: (typeof projectData.wells)[number], zoneName: string): number | null {
+		return getWellTopEntry(w, zoneName)?.depth ?? null;
 	}
 
 	function hasWellZone(w: (typeof projectData.wells)[number], zoneName: string): boolean {
-		return (w.zones ?? []).some(
-			(z) => z.trim().toLowerCase() === zoneName.trim().toLowerCase()
+		return (
+			getWellTopDepth(w, zoneName) !== null ||
+			(w.zones ?? []).some((z) => z.trim().toLowerCase() === zoneName.trim().toLowerCase())
 		);
+	}
+
+	function getTargetCurvesForMode(mode: StratCurveMode): readonly string[] {
+		if (mode === 'all_computed') return COMPUTED_CURVES;
+		if (mode === 'core_petro') return CORE_PETRO_CURVES;
+		return [mode];
+	}
+
+	function evaluateWellZoneStatus(
+		w: (typeof projectData.wells)[number],
+		zoneName: string,
+		mode: StratCurveMode = stratCurveMode
+	): {
+		penetrated: boolean;
+		topDepth: number | null;
+		baseDepth: number | null;
+		computedCurves: string[];
+		rawCurves: string[];
+		targetHitCount: number;
+		targetTotalCount: number;
+		status: 'absent' | 'complete' | 'partial' | 'none';
+	} {
+		const topEntry = getWellTopEntry(w, zoneName);
+		const topDepth = topEntry?.depth ?? null;
+		const baseDepth = topEntry?.base_depth ?? null;
+		const penetrated = hasWellZone(w, zoneName);
+		if (!penetrated) {
+			return {
+				penetrated: false,
+				topDepth: null,
+				baseDepth: null,
+				computedCurves: [],
+				rawCurves: [],
+				targetHitCount: 0,
+				targetTotalCount: 0,
+				status: 'absent'
+			};
+		}
+		const allZoneCurves = projectData.getWellZoneCurves(w, zoneName) ?? [];
+		const computedCurves = COMPUTED_CURVES.filter((c) => allZoneCurves.includes(c));
+		const rawCurves = ['TVD', 'GR', 'RT', 'NPHI', 'RHOB'].filter((c) => allZoneCurves.includes(c));
+		const targets = getTargetCurvesForMode(mode);
+		const targetHits = targets.filter((c) => allZoneCurves.includes(c));
+
+		let status: 'complete' | 'partial' | 'none' = 'none';
+		if (mode === 'all_computed') {
+			const coreHits = CORE_PETRO_CURVES.filter((c) => allZoneCurves.includes(c)).length;
+			if (coreHits === CORE_PETRO_CURVES.length) {
+				status = 'complete';
+			} else if (computedCurves.length > 0) {
+				status = 'partial';
+			} else {
+				status = 'none';
+			}
+		} else if (mode === 'core_petro') {
+			if (targetHits.length === CORE_PETRO_CURVES.length) {
+				status = 'complete';
+			} else if (targetHits.length > 0) {
+				status = 'partial';
+			} else {
+				status = 'none';
+			}
+		} else {
+			status = targetHits.length > 0 ? 'complete' : 'none';
+		}
+
+		return {
+			penetrated: true,
+			topDepth,
+			baseDepth,
+			computedCurves,
+			rawCurves,
+			targetHitCount: targetHits.length,
+			targetTotalCount: targets.length,
+			status
+		};
+	}
+
+	let zoneCoverageSummary = $derived.by(() => {
+		const out: Record<
+			string,
+			{
+				penetratedWells: number;
+				completeWells: number;
+				partialWells: number;
+				evaluatedWells: number;
+				anyComputedWells: number;
+			}
+		> = {};
+		for (const zone of projectData.allZones) {
+			let penetratedWells = 0;
+			let completeWells = 0;
+			let partialWells = 0;
+			let anyComputedWells = 0;
+			for (const w of projectData.wells) {
+				const st = evaluateWellZoneStatus(w, zone, stratCurveMode);
+				if (!st.penetrated) continue;
+				penetratedWells++;
+				if (st.computedCurves.length > 0) anyComputedWells++;
+				if (st.status === 'complete') completeWells++;
+				else if (st.status === 'partial') partialWells++;
+			}
+			out[zone] = {
+				penetratedWells,
+				completeWells,
+				partialWells,
+				evaluatedWells: completeWells + partialWells,
+				anyComputedWells
+			};
+		}
+		return out;
+	});
+
+	let totalEvaluatedFormationsCount = $derived(
+		projectData.allZones.filter((z) => (zoneCoverageSummary[z]?.anyComputedWells ?? 0) > 0).length
+	);
+
+	let filteredStratZones = $derived(
+		projectData.allZones.filter((z) => {
+			const s = zoneCoverageSummary[z];
+			if (!s) return true;
+			if (stratMatrixFilter === 'evaluated') {
+				return s.evaluatedWells > 0;
+			}
+			if (stratMatrixFilter === 'missing') {
+				return s.penetratedWells > 0 && s.completeWells < s.penetratedWells;
+			}
+			return true;
+		})
+	);
+
+	function toggleInventoryZoneFilter(zoneName: string) {
+		if (projectData.inventorySelectedZone === zoneName) {
+			projectData.inventorySelectedZone = '';
+		} else {
+			projectData.inventorySelectedZone = zoneName;
+		}
 	}
 </script>
 
@@ -407,13 +579,56 @@
 			</div>
 		</ParameterSection>
 
-		<ParameterSection title="Well & Curve Availability Matrix">
+		<ParameterSection
+			title="Well & Curve Availability Matrix"
+			badge={projectData.inventorySelectedZone
+				? `Zone: ${projectData.inventorySelectedZone}`
+				: 'Whole Well'}
+		>
+			{#if projectData.allZones.length > 0}
+				<div
+					class="mb-1.5 flex items-center justify-between gap-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px]"
+				>
+					<label
+						for="inv-zone-filter-select"
+						class="shrink-0 font-semibold text-[var(--text-secondary)]"
+					>
+						Formation Scope:
+					</label>
+					<select
+						id="inv-zone-filter-select"
+						bind:value={projectData.inventorySelectedZone}
+						class="h-5.5 min-w-0 flex-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] font-medium text-[var(--text-primary)]"
+					>
+						<option value="">All Formations (Whole Well)</option>
+						{#each projectData.allZones as z}
+							{@const zStat = zoneCoverageSummary[z]}
+							<option value={z}>
+								{z} ({zStat?.anyComputedWells ?? 0}/{zStat?.penetratedWells ?? 0} eval)
+							</option>
+						{/each}
+					</select>
+					{#if projectData.inventorySelectedZone}
+						<button
+							type="button"
+							title="Clear formation filter and show whole-well curve availability"
+							onclick={() => (projectData.inventorySelectedZone = '')}
+							class="h-5.5 shrink-0 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[9.5px] font-semibold text-[var(--accent-primary)] hover:bg-blue-50"
+						>
+							× Clear
+						</button>
+					{/if}
+				</div>
+			{/if}
+
 			<div class="overflow-x-auto border border-[var(--border-hairline)]">
 				<table class="w-full border-collapse text-left text-[11px]">
 					<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 						<tr class="h-6 border-b border-[var(--border-hairline)]">
 							<th class="px-1.5 font-semibold">Well</th>
-							<th class="px-1 text-right font-semibold">Rows</th>
+							<th class="px-1 text-right font-semibold">
+								{projectData.inventorySelectedZone ? 'Top' : 'Rows'}
+							</th>
 							{#each KEY_CURVES as kc}
 								<th
 									class="px-1 text-center font-semibold text-[9px]"
@@ -433,13 +648,16 @@
 							</tr>
 						{:else}
 							{#each projectData.wells as w (w.well_id)}
+								{@const activeZone = projectData.inventorySelectedZone}
+								{@const zonePenetrated = activeZone ? hasWellZone(w, activeZone) : true}
+								{@const zoneTopD = activeZone ? getWellTopDepth(w, activeZone) : null}
 								<tr
 									onclick={() => openWellInSingleMode(w.name)}
 									title="Click to inspect well in Single-Well mode"
 									class="h-6 cursor-pointer hover:bg-[var(--bg-subtle)] {workbench.wellId ===
 									w.name
 										? 'bg-blue-50/70'
-										: ''}"
+										: ''} {!zonePenetrated ? 'opacity-45' : ''}"
 								>
 									<td class="mono-num px-1.5 font-semibold text-[var(--accent-primary)]">
 										{#if editingWellName === w.name}
@@ -524,31 +742,43 @@
 										{/if}
 									</td>
 									<td class="mono-num px-1 text-right text-[var(--text-secondary)]">
-										{w.depth_count ?? (w as any).row_count ?? 0}
+										{#if activeZone}
+											{#if zoneTopD !== null}
+												{zoneTopD.toFixed(1)}
+											{:else if zonePenetrated}
+												✓
+											{:else}
+												—
+											{/if}
+										{:else}
+											{w.depth_count ?? (w as any).row_count ?? 0}
+										{/if}
 									</td>
 									{#each KEY_CURVES as kc}
-										{@const rawCurves = w.curves ?? (w as any).available_curves ?? []}
-										{@const has =
-											kc === 'TVD'
-												? projectData.wellHasTvd(w)
-												: rawCurves.includes(kc)}
+										{@const has = projectData.wellHasCurveInZone(w, kc, activeZone)}
 										{@const isTvdFromSurvey =
 											kc === 'TVD' && (w.survey_count ?? 0) >= 2}
 										<td
 											class="px-1 text-center"
-											title={kc === 'TVD'
-												? has
-													? isTvdFromSurvey
-														? `${w.name}: TVD available (computed from ${w.survey_count} directional survey stations)`
-														: `${w.name}: TVD curve available`
-													: `${w.name}: No TVD curve or directional survey — SHF & Stick Plot disabled for this well`
-												: `${w.name}: ${kc} ${has ? 'available' : 'missing'}`}
+											title={!zonePenetrated
+												? `${w.name}: Formation '${activeZone}' not present in this well`
+												: kc === 'TVD'
+													? has
+														? isTvdFromSurvey
+															? `${w.name}${activeZone ? ` [${activeZone}]` : ''}: TVD available (computed from ${w.survey_count} directional survey stations)`
+															: `${w.name}${activeZone ? ` [${activeZone}]` : ''}: TVD curve available`
+														: `${w.name}${activeZone ? ` [${activeZone}]` : ''}: No TVD curve or directional survey — SHF & Stick Plot disabled for this well`
+													: `${w.name}${activeZone ? ` [${activeZone}]` : ''}: ${kc} ${has ? 'available' : 'missing'}`}
 										>
-											<span
-												class="inline-block h-2 w-2 rounded-full {has
-													? 'bg-emerald-500'
-													: 'bg-slate-200'}"
-											></span>
+											{#if !zonePenetrated}
+												<span class="text-[9px] text-[var(--text-muted)]">—</span>
+											{:else}
+												<span
+													class="inline-block h-2 w-2 rounded-full {has
+														? 'bg-emerald-500'
+														: 'bg-slate-200'}"
+												></span>
+											{/if}
 										</td>
 									{/each}
 								</tr>
@@ -679,15 +909,87 @@
 
 		{#if projectData.allZones.length > 0 && projectData.wells.length > 0}
 			<ParameterSection
-				title="Formation Tops Stratigraphic Matrix"
-				badge={`${projectData.allZones.length} Zones`}
-				defaultOpen={false}
+				title="Formation Tops & Computed Curve Matrix"
+				badge={`${totalEvaluatedFormationsCount}/${projectData.allZones.length} Eval · ${projectData.allZones.length} Zones`}
+				defaultOpen={true}
 			>
+				<!-- Filter & Computed Curve Inspector Bar -->
+				<div
+					class="mb-1.5 space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[9.5px]"
+				>
+					<div class="flex flex-wrap items-center justify-between gap-1">
+						<div class="flex items-center gap-1">
+							<span class="font-semibold text-[var(--text-secondary)]">Show:</span>
+							{#each [
+								['all', `All (${projectData.allZones.length})`],
+								['evaluated', `Evaluated (${totalEvaluatedFormationsCount})`],
+								['missing', 'Missing / Partial']
+							] as [fKey, fLbl]}
+								<button
+									type="button"
+									onclick={() => (stratMatrixFilter = fKey as StratMatrixFilter)}
+									class="rounded-xs border px-1.5 py-0.5 text-[9px] font-medium transition-colors {stratMatrixFilter ===
+									fKey
+										? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+								>
+									{fLbl}
+								</button>
+							{/each}
+						</div>
+						<div class="flex items-center gap-1.5 text-[8.5px] text-[var(--text-muted)]">
+							<span class="flex items-center gap-0.5">
+								<span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>Computed
+							</span>
+							<span class="flex items-center gap-0.5">
+								<span class="inline-block h-2 w-2 rounded-full bg-amber-500"></span>Partial
+							</span>
+							<span class="flex items-center gap-0.5">
+								<span class="inline-block h-2 w-2 rounded-full bg-slate-300"></span>Raw Only
+							</span>
+						</div>
+					</div>
+
+					<div class="flex flex-wrap items-center gap-1 pt-0.5">
+						<span class="font-semibold text-[var(--text-secondary)]">Inspect:</span>
+						{#each [
+							['all_computed', 'All Computed'],
+							['core_petro', 'Core Petro'],
+							['VCLAY', 'VCLAY'],
+							['PHIT', 'PHIT'],
+							['PERM', 'PERM'],
+							['SWT', 'SWT'],
+							['ROCK_FLAG', 'ROCK_FLAG'],
+							['PERM_TRANS', 'PERM_TRANS'],
+							['SHF', 'SHF']
+						] as [cKey, cLbl]}
+							<button
+								type="button"
+								onclick={() => (stratCurveMode = cKey as StratCurveMode)}
+								class="mono-num rounded-xs border px-1 py-0.5 text-[8.5px] font-medium transition-colors {stratCurveMode ===
+								cKey
+									? 'border-slate-800 bg-slate-800 font-semibold text-white'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+							>
+								{cLbl}
+							</button>
+						{/each}
+					</div>
+				</div>
+
 				<div class="overflow-x-auto border border-[var(--border-hairline)]">
 					<table class="w-full border-collapse text-left text-[10.5px]">
 						<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 							<tr class="h-6 border-b border-[var(--border-hairline)]">
-								<th class="px-1.5 font-semibold">Zone / Top</th>
+								<th class="px-1.5 font-semibold" title="Click a formation row to filter the Well & Curve Matrix above">
+									Zone / Top
+								</th>
+								<th
+									class="px-1 text-center font-semibold text-[9px]"
+									title="Wells with computed curves / Wells penetrating this formation"
+								>
+									Eval
+								</th>
 								{#each projectData.wells as w (w.well_id)}
 									<th class="mono-num px-1 text-right font-semibold text-[9.5px]" title={w.name}>
 										{w.name}
@@ -696,33 +998,98 @@
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-[var(--border-hairline)]">
-							{#each projectData.allZones as zone (zone)}
-								<tr class="h-6 hover:bg-[var(--bg-subtle)]">
-									<td class="truncate px-1.5 font-semibold text-[var(--text-primary)]" title={zone}>
-										{zone}
+							{#if filteredStratZones.length === 0}
+								<tr>
+									<td
+										colspan={projectData.wells.length + 2}
+										class="p-3 text-center text-xs text-[var(--text-muted)]"
+									>
+										No formations match the selected filter.
 									</td>
-									{#each projectData.wells as w (w.well_id)}
-										{@const topDepth = getWellTopDepth(w, zone)}
-										{@const present = hasWellZone(w, zone)}
-										<td class="mono-num px-1 text-right">
-											{#if topDepth !== null}
-												<span class="font-medium text-[var(--text-primary)]">
-													{topDepth.toFixed(1)}
-												</span>
-											{:else if present}
+								</tr>
+							{:else}
+								{#each filteredStratZones as zone (zone)}
+									{@const zSum = zoneCoverageSummary[zone]}
+									{@const isSelectedZone = projectData.inventorySelectedZone === zone}
+									<tr
+										onclick={() => toggleInventoryZoneFilter(zone)}
+										title={`Click to filter Well & Curve Matrix by '${zone}'`}
+										class="h-6 cursor-pointer hover:bg-[var(--bg-subtle)] {isSelectedZone
+											? 'bg-blue-50/70'
+											: ''}"
+									>
+										<td
+											class="truncate px-1.5 font-semibold {isSelectedZone
+												? 'text-[var(--accent-primary)]'
+												: 'text-[var(--text-primary)]'}"
+											title={`${zone} — Click to filter Well & Curve Matrix`}
+										>
+											{zone}
+										</td>
+										<td class="mono-num px-1 text-center">
+											{#if !zSum || zSum.penetratedWells === 0}
+												<span class="text-[9px] text-[var(--text-muted)]">0w</span>
+											{:else if zSum.completeWells === zSum.penetratedWells}
 												<span
-													class="rounded-2xs bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold text-emerald-700"
-													title="Present in ZONES curve"
+													class="rounded-xs bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold text-emerald-800"
+													title={`${zSum.completeWells}/${zSum.penetratedWells} wells evaluated in ${zone}`}
 												>
-													✓
+													{zSum.completeWells}/{zSum.penetratedWells}
+												</span>
+											{:else if zSum.evaluatedWells > 0}
+												<span
+													class="rounded-xs bg-amber-50 px-1 py-0.5 text-[9px] font-semibold text-amber-800"
+													title={`${zSum.evaluatedWells}/${zSum.penetratedWells} wells have computed curves (${zSum.completeWells} complete, ${zSum.partialWells} partial)`}
+												>
+													{zSum.evaluatedWells}/{zSum.penetratedWells}
 												</span>
 											{:else}
-												<span class="text-[var(--text-muted)]">—</span>
+												<span
+													class="rounded-xs bg-slate-100 px-1 py-0.5 text-[9px] font-medium text-slate-600"
+													title={`0/${zSum.penetratedWells} wells have computed curves in ${zone} (raw logs only)`}
+												>
+													0/{zSum.penetratedWells}
+												</span>
 											{/if}
 										</td>
-									{/each}
-								</tr>
-							{/each}
+										{#each projectData.wells as w (w.well_id)}
+											{@const st = evaluateWellZoneStatus(w, zone, stratCurveMode)}
+											{@const missingComp = COMPUTED_CURVES.filter(
+												(c) => !st.computedCurves.includes(c)
+											)}
+											{@const cellTooltip = !st.penetrated
+												? `${w.name} — ${zone}: Not penetrated`
+												: `${w.name} — ${zone} (${st.topDepth !== null ? st.topDepth.toFixed(1) : '?'}–${st.baseDepth !== null ? st.baseDepth.toFixed(1) : 'TD'} m)\nComputed (${st.computedCurves.length}/7): ${st.computedCurves.length > 0 ? st.computedCurves.join(', ') : 'None'}\nMissing: ${missingComp.length > 0 ? missingComp.join(', ') : 'None'}\nRaw Logs: ${st.rawCurves.join(', ') || 'None'}`}
+											<td class="mono-num px-1 text-right" title={cellTooltip}>
+												{#if !st.penetrated}
+													<span class="text-[var(--text-muted)]">—</span>
+												{:else}
+													<span
+														class="inline-flex items-center justify-end gap-1 rounded-xs px-1 py-0.5 {st.status ===
+														'complete'
+															? 'bg-emerald-50/80 font-semibold text-emerald-900'
+															: st.status === 'partial'
+																? 'bg-amber-50/80 font-medium text-amber-900'
+																: 'text-[var(--text-secondary)]'}"
+													>
+														<span
+															class="inline-block h-1.5 w-1.5 shrink-0 rounded-full {st.status ===
+															'complete'
+																? 'bg-emerald-500'
+																: st.status === 'partial'
+																	? 'bg-amber-500'
+																	: 'bg-slate-300'}"
+														></span>
+														<span>
+															{st.topDepth !== null ? st.topDepth.toFixed(1) : '✓'}
+														</span>
+													</span>
+												{/if}
+											</td>
+										{/each}
+									</tr>
+								{/each}
+							{/if}
 						</tbody>
 					</table>
 				</div>

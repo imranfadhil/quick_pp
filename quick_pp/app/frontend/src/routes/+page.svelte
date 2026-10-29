@@ -118,6 +118,62 @@
 				workbench.multiWellStep === 'inventory' &&
 				projectData.wells.length > 0
 			) {
+				const selZone = projectData.inventorySelectedZone;
+				if (selZone) {
+					return {
+						title: `Formation Curve Coverage — ${selZone} (${projectData.wells.length} Wells)`,
+						columns: [
+							{ key: 'WELL', label: 'Well' },
+							{ key: 'TOP_DEPTH', label: 'Top', unit: 'm', numeric: true, decimals: 1 },
+							{ key: 'BASE_DEPTH', label: 'Base', unit: 'm', numeric: true, decimals: 1 },
+							{ key: 'COMPUTED_STATUS', label: 'Eval Status' },
+							{ key: 'COMPUTED_CURVES', label: 'Computed Curves Present' },
+							{ key: 'MISSING_CURVES', label: 'Missing Computed' },
+							{ key: 'RAW_CURVES', label: 'Base Logs' }
+						],
+						rows: projectData.wells.map((w) => {
+							const topEntry = (w.formation_tops ?? []).find(
+								(t) => t.name.trim().toLowerCase() === selZone.trim().toLowerCase()
+							);
+							const penetrated =
+								topEntry !== undefined ||
+								(w.zones ?? []).some(
+									(z) => z.trim().toLowerCase() === selZone.trim().toLowerCase()
+								);
+							const zCurves = projectData.getWellZoneCurves(w, selZone) ?? [];
+							const compAll = [
+								'VCLAY',
+								'PHIT',
+								'PERM',
+								'SWT',
+								'ROCK_FLAG',
+								'PERM_TRANS',
+								'SHF'
+							];
+							const compPresent = compAll.filter((c) => zCurves.includes(c));
+							const compMissing = compAll.filter((c) => !zCurves.includes(c));
+							const rawPresent = ['TVD', 'GR', 'RT', 'NPHI', 'RHOB'].filter((c) =>
+								zCurves.includes(c)
+							);
+							return {
+								WELL: w.name,
+								TOP_DEPTH: topEntry?.depth ?? null,
+								BASE_DEPTH: topEntry?.base_depth ?? null,
+								COMPUTED_STATUS: !penetrated
+									? 'Not Penetrated'
+									: compPresent.length >= 4
+										? `Evaluated (${compPresent.length}/7)`
+										: compPresent.length > 0
+											? `Partial (${compPresent.length}/7)`
+											: 'Raw Only (0/7)',
+								COMPUTED_CURVES: penetrated ? compPresent.join(', ') || '—' : '—',
+								MISSING_CURVES: penetrated ? compMissing.join(', ') || 'None' : '—',
+								RAW_CURVES: penetrated ? rawPresent.join(', ') || '—' : '—'
+							};
+						})
+					};
+				}
+
 				return {
 					title: `Field Well, Core (RCA & SCAL), Tops & Ancillary Inventory (${projectData.wells.length} Wells)`,
 					columns: [
@@ -132,40 +188,48 @@
 						{ key: 'SCAL_PC', label: 'SCAL Pc Pts', numeric: true, decimals: 0 },
 						{ key: 'SCAL_PLUGS', label: 'SCAL Plugs', numeric: true, decimals: 0 },
 						{ key: 'TOPS', label: 'Tops', numeric: true, decimals: 0 },
+						{ key: 'EVAL_ZONES', label: 'Eval Zones' },
 						{ key: 'ZONES', label: 'Formations / Zones' },
 						{ key: 'CONTACTS', label: 'Fluid Contacts' },
 						{ key: 'PRESSURE', label: 'Pressure Pts', numeric: true, decimals: 0 },
 						{ key: 'SURVEY', label: 'Survey Stns', numeric: true, decimals: 0 }
 					],
-					rows: projectData.wells.map((w) => ({
-						WELL: w.name,
-						TVD:
-							(w.survey_count ?? 0) >= 2
-								? `Survey (${w.survey_count})`
-								: projectData.wellHasTvd(w)
-									? 'Curve'
-									: 'No TVD',
-						MIN_DEPTH: w.min_depth,
-						MAX_DEPTH: w.max_depth,
-						ROWS: w.depth_count ?? w.row_count ?? 0,
-						CURVES: (w.curves ?? w.available_curves ?? []).length,
-						RCA_PLUGS: w.core_sample_count ?? w.core_samples_count ?? 0,
-						CORE_PCT: w.core_availability_pct ?? 0,
-						SCAL_PC: w.scal_pc_count ?? 0,
-						SCAL_PLUGS: w.scal_sample_count ?? 0,
-						TOPS: w.formation_top_count ?? w.formation_tops_count ?? (w.zones?.length ?? 0),
-						ZONES: (w.zones ?? []).join(', ') || '—',
-						CONTACTS:
-							(w.fluid_contacts ?? []).length > 0
-								? (w.fluid_contacts ?? [])
-										.map((c) => `${c.type}${c.depth !== null ? ` @ ${c.depth}m` : ''}`)
-										.join(', ')
-								: (w.fluid_contact_count ?? 0) > 0
-									? String(w.fluid_contact_count)
-									: '—',
-						PRESSURE: w.pressure_test_count ?? w.pressure_tests_count ?? 0,
-						SURVEY: w.survey_count ?? 0
-					}))
+					rows: projectData.wells.map((w) => {
+						const wZones = w.zones ?? [];
+						const evalCnt = wZones.filter(
+							(z) => projectData.getWellZoneComputedCurves(w, z).length > 0
+						).length;
+						return {
+							WELL: w.name,
+							TVD:
+								(w.survey_count ?? 0) >= 2
+									? `Survey (${w.survey_count})`
+									: projectData.wellHasTvd(w)
+										? 'Curve'
+										: 'No TVD',
+							MIN_DEPTH: w.min_depth,
+							MAX_DEPTH: w.max_depth,
+							ROWS: w.depth_count ?? w.row_count ?? 0,
+							CURVES: (w.curves ?? w.available_curves ?? []).length,
+							RCA_PLUGS: w.core_sample_count ?? w.core_samples_count ?? 0,
+							CORE_PCT: w.core_availability_pct ?? 0,
+							SCAL_PC: w.scal_pc_count ?? 0,
+							SCAL_PLUGS: w.scal_sample_count ?? 0,
+							TOPS: w.formation_top_count ?? w.formation_tops_count ?? wZones.length,
+							EVAL_ZONES: wZones.length > 0 ? `${evalCnt}/${wZones.length}` : '—',
+							ZONES: wZones.join(', ') || '—',
+							CONTACTS:
+								(w.fluid_contacts ?? []).length > 0
+									? (w.fluid_contacts ?? [])
+											.map((c) => `${c.type}${c.depth !== null ? ` @ ${c.depth}m` : ''}`)
+											.join(', ')
+									: (w.fluid_contact_count ?? 0) > 0
+										? String(w.fluid_contact_count)
+										: '—',
+							PRESSURE: w.pressure_test_count ?? w.pressure_tests_count ?? 0,
+							SURVEY: w.survey_count ?? 0
+						};
+					})
 				};
 			}
 

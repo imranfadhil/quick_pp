@@ -656,14 +656,18 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
 
             # 1. Curves per well
             curves_stmt = text(
-                "SELECT well_id, mnemonic FROM curves WHERE well_id IN :well_ids ORDER BY mnemonic"
+                "SELECT curve_id, well_id, mnemonic FROM curves WHERE well_id IN :well_ids ORDER BY mnemonic"
             ).bindparams(bindparam("well_ids", expanding=True))
             curve_rows = session.execute(curves_stmt, {"well_ids": well_ids}).fetchall()
             curves_by_well: Dict[int, List[str]] = {wid: [] for wid in well_ids}
+            curve_ids_by_well_mnemonic: Dict[int, Dict[str, int]] = {
+                wid: {} for wid in well_ids
+            }
             all_curves_set = set()
-            for wid, mnemonic in curve_rows:
+            for cid, wid, mnemonic in curve_rows:
                 m_up = str(mnemonic).upper()
                 curves_by_well.setdefault(wid, []).append(m_up)
+                curve_ids_by_well_mnemonic.setdefault(wid, {})[m_up] = int(cid)
                 all_curves_set.add(m_up)
 
             # 2. Depth statistics per well
@@ -715,13 +719,21 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                     all_zones_set.add(top_name)
 
             # Also check if ZONES curve exists in curve_data (for LAS files with ZONES curve)
+            zones_curve_bounds: Dict[int, Dict[str, Tuple[float, float]]] = {
+                wid: {} for wid in well_ids
+            }
             zones_curve_stmt = text("""
-                SELECT DISTINCT c.well_id, COALESCE(cd.value_text, CAST(cd.value_numeric AS TEXT)) AS zone_val
+                SELECT
+                    c.well_id,
+                    COALESCE(cd.value_text, CAST(cd.value_numeric AS TEXT)) AS zone_val,
+                    MIN(cd.depth) AS z_min,
+                    MAX(cd.depth) AS z_max
                 FROM curve_data cd
                 JOIN curves c ON cd.curve_id = c.curve_id
                 WHERE c.well_id IN :well_ids AND UPPER(c.mnemonic) = 'ZONES'
+                GROUP BY c.well_id, zone_val
             """).bindparams(bindparam("well_ids", expanding=True))
-            for wid, zval in session.execute(
+            for wid, zval, z_min, z_max in session.execute(
                 zones_curve_stmt, {"well_ids": well_ids}
             ).fetchall():
                 if zval is not None and str(zval).strip():
@@ -729,6 +741,11 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                     if z_str not in zones_by_well.setdefault(wid, []):
                         zones_by_well[wid].append(z_str)
                         all_zones_set.add(z_str)
+                    if z_min is not None and z_max is not None:
+                        zones_curve_bounds.setdefault(wid, {})[z_str] = (
+                            float(z_min),
+                            float(z_max) + 1e-4,
+                        )
 
             # 4. Core samples (RCA) & SCAL (Capillary Pressure / RelPerm) & core curves per well
             core_stmt = text("""
@@ -835,6 +852,39 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
             wells_summary = []
             total_depth_sum = 0.0
 
+            canonical_zone_curve_aliases: Dict[str, Tuple[str, ...]] = {
+                "TVD": ("TVD", "TVDSS", "DEPT_TVD", "DEPTH_TVD"),
+                "GR": ("GR", "GAMMA", "GR_ARC", "GR_EDTC"),
+                "RT": ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD"),
+                "NPHI": ("NPHI", "TNPH", "NPOR", "CNCF"),
+                "RHOB": ("RHOB", "RHOZ", "DEN", "ZDEN"),
+                "VCLAY": ("VCLAY", "VSH", "VSHALE", "VCL", "VSH_GR"),
+                "PHIT": ("PHIT", "PHIE", "POROSITY", "POR"),
+                "PERM": ("PERM", "KLOGH", "PERMEABILITY", "K"),
+                "SWT": ("SWT", "SWE", "SW"),
+                "ROCK_FLAG": ("ROCK_FLAG", "ROCK_FLAG_ML", "ROCK_FLAG_CUTOFF"),
+                "PERM_TRANS": ("PERM_TRANS",),
+                "SHF": ("SHF", "SW_SHF"),
+            }
+            computed_curve_keys = (
+                "VCLAY",
+                "PHIT",
+                "PERM",
+                "SWT",
+                "ROCK_FLAG",
+                "PERM_TRANS",
+                "SHF",
+            )
+            zone_probe_stmt = text("""
+                SELECT 1
+                FROM curve_data cd
+                WHERE cd.curve_id = :cid
+                  AND cd.depth >= :d_top
+                  AND cd.depth < :d_base
+                  AND cd.value_numeric IS NOT NULL
+                LIMIT 1
+            """)
+
             for w in orm_wells:
                 wid = w.well_id
                 d_info = depth_by_well.get(
@@ -850,24 +900,147 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 )
                 total_depth_sum += td
 
-                # Include any curves present in live in-memory cache for this well
+                # Include any curves present in live in-memory cache or shared pickle for this well
                 well_curve_set = set(curves_by_well.get(wid, []))
+                live_df: Optional[pd.DataFrame] = None
                 cached_entry = _merged_data_cache.get(f"{project_id}_{w.name}_0.16")
                 if cached_entry is not None and isinstance(cached_entry[1], pd.DataFrame):
-                    for col_name in cached_entry[1].columns:
+                    live_df = cached_entry[1]
+                else:
+                    eph_w = _ephemeral_wells.get(project_id, {}).get(w.name)
+                    if isinstance(eph_w, pd.DataFrame):
+                        live_df = eph_w
+                    elif isinstance(eph_w, dict) and isinstance(eph_w.get("data"), pd.DataFrame):
+                        live_df = eph_w["data"]
+                if live_df is not None:
+                    for col_name in live_df.columns:
                         c_up = str(col_name).upper()
                         if c_up not in ("DEPTH", "WELL_NAME"):
-                            well_curve_set.add(c_up)
-                            all_curves_set.add(c_up)
-                if (
+                            s_col = pd.to_numeric(live_df[col_name], errors="coerce")
+                            if s_col.notna().any():
+                                well_curve_set.add(c_up)
+                                all_curves_set.add(c_up)
+
+                has_tvd_for_well = (
                     survey_counts.get(wid, 0) >= 2
+                    or "TVD" in well_curve_set
                     or "TVDSS" in well_curve_set
                     or "DEPT_TVD" in well_curve_set
                     or "DEPTH_TVD" in well_curve_set
-                ):
+                )
+                if has_tvd_for_well:
                     well_curve_set.add("TVD")
                     all_curves_set.add("TVD")
+                for can_key, aliases in canonical_zone_curve_aliases.items():
+                    if any(a in well_curve_set for a in aliases):
+                        well_curve_set.add(can_key)
+                        all_curves_set.add(can_key)
                 well_curves_sorted = sorted(well_curve_set)
+
+                # Compute per-formation depth intervals and curve availability
+                w_tops = tops_list_by_well.get(wid, [])
+                unique_top_depths = sorted(
+                    {
+                        float(t["depth"])
+                        for t in w_tops
+                        if t.get("depth") is not None
+                    }
+                )
+                w_cid_map = curve_ids_by_well_mnemonic.get(wid, {})
+                zone_intervals: List[Tuple[str, float, float, Optional[Dict[str, Any]]]] = []
+                seen_zone_names = set()
+                for t in w_tops:
+                    z_name = str(t.get("name") or "").strip()
+                    d_top = t.get("depth")
+                    if not z_name or d_top is None:
+                        continue
+                    d_top_f = float(d_top)
+                    next_d = next(
+                        (d for d in unique_top_depths if d > d_top_f + 1e-6),
+                        None,
+                    )
+                    if next_d is not None:
+                        d_base_f = float(next_d)
+                        t["base_depth"] = round(d_base_f, 2)
+                    elif max_d is not None and max_d >= d_top_f:
+                        d_base_f = float(max_d) + 1.0
+                        t["base_depth"] = round(float(max_d), 2)
+                    else:
+                        d_base_f = d_top_f + 1e6
+                        t["base_depth"] = None
+                    zone_intervals.append((z_name, d_top_f, d_base_f, t))
+                    seen_zone_names.add(z_name)
+
+                for z_name, (z_min, z_max) in zones_curve_bounds.get(wid, {}).items():
+                    if z_name not in seen_zone_names:
+                        zone_intervals.append((z_name, z_min, z_max, None))
+                        seen_zone_names.add(z_name)
+
+                live_depth_np: Optional[np.ndarray] = None
+                if live_df is not None and "DEPTH" in live_df.columns:
+                    live_depth_np = pd.to_numeric(
+                        live_df["DEPTH"], errors="coerce"
+                    ).to_numpy(dtype=float)
+
+                zone_curves_map: Dict[str, List[str]] = {}
+                for z_name, d_top_f, d_base_f, top_item in zone_intervals:
+                    present_can: List[str] = []
+                    for can_key, aliases in canonical_zone_curve_aliases.items():
+                        if can_key == "TVD" and survey_counts.get(wid, 0) >= 2:
+                            if (
+                                min_d is not None
+                                and max_d is not None
+                                and d_top_f <= max_d
+                                and d_base_f >= min_d
+                            ):
+                                present_can.append("TVD")
+                                continue
+                        if not any(a in well_curve_set for a in aliases):
+                            continue
+                        found_in_zone = False
+                        if live_df is not None and live_depth_np is not None:
+                            z_mask = (
+                                np.isfinite(live_depth_np)
+                                & (live_depth_np >= d_top_f)
+                                & (live_depth_np < d_base_f)
+                            )
+                            if z_mask.any():
+                                for a in aliases:
+                                    if a in live_df.columns:
+                                        col_v = pd.to_numeric(
+                                            live_df.loc[z_mask, a], errors="coerce"
+                                        )
+                                        if col_v.notna().any():
+                                            found_in_zone = True
+                                            break
+                        if not found_in_zone:
+                            for a in aliases:
+                                cid = w_cid_map.get(a)
+                                if cid is not None:
+                                    hit = session.execute(
+                                        zone_probe_stmt,
+                                        {
+                                            "cid": cid,
+                                            "d_top": d_top_f,
+                                            "d_base": d_base_f,
+                                        },
+                                    ).first()
+                                    if hit is not None:
+                                        found_in_zone = True
+                                        break
+                        if found_in_zone:
+                            present_can.append(can_key)
+                    existing_z = zone_curves_map.get(z_name)
+                    if existing_z:
+                        merged_z = sorted(set(existing_z) | set(present_can))
+                        zone_curves_map[z_name] = merged_z
+                    else:
+                        zone_curves_map[z_name] = present_can
+                    if top_item is not None:
+                        top_item["curves"] = present_can
+                        top_item["computed_curves"] = [
+                            ck for ck in computed_curve_keys if ck in present_can
+                        ]
 
                 c_samples = core_counts.get(wid, 0)
                 c_curve_pts = core_curve_counts.get(wid, 0)
@@ -896,6 +1069,7 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         "curves": well_curves_sorted,
                         "zones": zones_by_well.get(wid, []),
                         "formation_tops": tops_list_by_well.get(wid, []),
+                        "zone_curves": zone_curves_map,
                         "core_sample_count": effective_core_pts,
                         "core_availability_pct": core_pct,
                         "scal_pc_count": scal_info["points"],

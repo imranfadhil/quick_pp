@@ -23,7 +23,14 @@ export interface WellSummaryItem {
 	total_depth?: number;
 	row_count?: number;
 	available_curves?: string[];
-	formation_tops?: Array<{ name: string; depth: number | null }>;
+	formation_tops?: Array<{
+		name: string;
+		depth: number | null;
+		base_depth?: number | null;
+		curves?: string[];
+		computed_curves?: string[];
+	}>;
+	zone_curves?: Record<string, string[]>;
 	formation_top_count?: number;
 	fluid_contacts?: Array<{ type: string; depth: number | null }>;
 	fluid_contact_count?: number;
