@@ -542,8 +542,10 @@ def upscale_logs(
         if found and found not in disc_cols and found not in (d_col, z_col):
             disc_cols.append(found)
 
-    # Assign cell IDs and (top, bottom) intervals
-    cell_intervals: List[Tuple[int, float, float, Optional[Any], pd.DataFrame]] = []
+    # Assign cell IDs and (top, bottom) intervals using integer row indices into `work`
+    cell_intervals: List[Tuple[int, float, float, Optional[Any], np.ndarray]] = []
+    h_full = work["_h"].to_numpy(dtype=float)
+    z_full = work[z_col].to_numpy() if z_col is not None else None
 
     if grid_edges is not None:
         edges = np.asarray(grid_edges, dtype=float)
@@ -552,50 +554,50 @@ def upscale_logs(
         cell_idx = np.searchsorted(edges, depth_vals, side="right") - 1
         for cid in range(len(edges) - 1):
             mask = (cell_idx == cid) if cid < len(edges) - 2 else ((depth_vals >= edges[cid]) & (depth_vals <= edges[cid + 1]))
-            sub = work.loc[mask]
-            if not sub.empty:
-                z_val = majority_upscale(sub[z_col], sub["_h"]) if z_col else None
-                cell_intervals.append((cid + 1, float(edges[cid]), float(edges[cid + 1]), z_val, sub))
+            idx_arr = np.flatnonzero(mask)
+            if idx_arr.size > 0:
+                z_val = majority_upscale(z_full[idx_arr], h_full[idx_arr]) if z_full is not None else None
+                cell_intervals.append((cid + 1, float(edges[cid]), float(edges[cid + 1]), z_val, idx_arr))
     elif by_zone and z_col is not None:
         # Partition into contiguous zone segments first
         zone_series = work[z_col].fillna("UNKNOWN")
         zone_change = (zone_series != zone_series.shift(1)).cumsum()
         cid = 1
         for _, z_group in work.groupby(zone_change, sort=False):
+            z_indices = work.index.get_indexer(z_group.index)
             z_name = z_group[z_col].iloc[0]
-            z_min = float(z_group[d_col].min())
-            z_max = float(z_group[d_col].max())
+            z_depths = depth_vals[z_indices]
+            z_min = float(np.nanmin(z_depths))
+            z_max = float(np.nanmax(z_depths))
             if cell_size is None or cell_size <= 0 or (z_max - z_min) <= cell_size:
-                cell_intervals.append((cid, z_min, z_max, z_name, z_group))
+                cell_intervals.append((cid, z_min, z_max, z_name, z_indices))
                 cid += 1
             else:
                 edges = np.arange(z_min, z_max + cell_size, float(cell_size))
                 if edges[-1] < z_max:
                     edges = np.append(edges, z_max + float(cell_size))
-                z_depths = z_group[d_col].to_numpy(dtype=float)
                 c_idx = np.clip(np.floor((z_depths - z_min) / float(cell_size)).astype(int), 0, len(edges) - 2)
                 for k_idx in range(len(edges) - 1):
-                    sub = z_group.iloc[np.where(c_idx == k_idx)[0]]
-                    if not sub.empty:
+                    rel_idx = np.flatnonzero(c_idx == k_idx)
+                    if rel_idx.size > 0:
                         top_d = float(edges[k_idx])
                         bot_d = float(min(edges[k_idx + 1], z_max)) if k_idx == len(edges) - 2 else float(edges[k_idx + 1])
-                        cell_intervals.append((cid, top_d, bot_d, z_name, sub))
+                        cell_intervals.append((cid, top_d, bot_d, z_name, z_indices[rel_idx]))
                         cid += 1
     else:
         if cell_size is None or cell_size <= 0:
             raise ValueError("`cell_size` must be positive when `grid_edges` is None and `by_zone` is False.")
         d_min = float(np.nanmin(depth_vals))
-        d_max = float(np.nanmax(depth_vals))
         c_idx = np.floor((depth_vals - d_min) / float(cell_size)).astype(int)
         for k_idx in np.unique(c_idx):
-            sub = work.iloc[np.where(c_idx == k_idx)[0]]
-            if not sub.empty:
+            idx_arr = np.flatnonzero(c_idx == k_idx)
+            if idx_arr.size > 0:
                 top_d = d_min + k_idx * float(cell_size)
                 bot_d = top_d + float(cell_size)
-                z_val = majority_upscale(sub[z_col], sub["_h"]) if z_col else None
-                cell_intervals.append((int(k_idx) + 1, float(top_d), float(bot_d), z_val, sub))
+                z_val = majority_upscale(z_full[idx_arr], h_full[idx_arr]) if z_full is not None else None
+                cell_intervals.append((int(k_idx) + 1, float(top_d), float(bot_d), z_val, idx_arr))
 
-    # Aggregate each cell
+    # Pre-extract NumPy arrays once before the cell loop to avoid per-cell DataFrame slicing overhead
     flag_col_map = {
         "rock": "_rock_flag",
         "reservoir": "_res_flag",
@@ -604,25 +606,41 @@ def upscale_logs(
     }
     net_flag_col = flag_col_map.get(net_flag_type.strip().lower(), "_res_flag")
 
+    rock_full = work["_rock_flag"].to_numpy(dtype=int)
+    res_full = work["_res_flag"].to_numpy(dtype=int)
+    pay_full = work["_pay_flag"].to_numpy(dtype=int)
+    net_flag_full = work[net_flag_col].to_numpy(dtype=int)
+    well_name_val = work["WELL_NAME"].iloc[0] if "WELL_NAME" in work.columns and not work.empty else None
+
+    vsh_full = pd.to_numeric(work[vsh_c], errors="coerce").to_numpy(dtype=float) if vsh_c is not None else None
+    phi_full = pd.to_numeric(work[phi_c], errors="coerce").to_numpy(dtype=float) if phi_c is not None else None
+    phie_full = pd.to_numeric(work[phie_c], errors="coerce").to_numpy(dtype=float) if phie_c is not None else None
+    sw_full = pd.to_numeric(work[sw_c], errors="coerce").to_numpy(dtype=float) if sw_c is not None else None
+    swe_full = pd.to_numeric(work[swe_c], errors="coerce").to_numpy(dtype=float) if swe_c is not None else None
+    perm_full = pd.to_numeric(work[perm_c], errors="coerce").to_numpy(dtype=float) if perm_c is not None else None
+    arith_arrays = {ac: pd.to_numeric(work[ac], errors="coerce").to_numpy(dtype=float) for ac in arith_cols}
+    disc_arrays = {dc: work[dc].to_numpy() for dc in disc_cols}
+
     records: List[Dict[str, Any]] = []
     step_df = work.copy() if return_step_log else None
 
-    for cid, top_d, bot_d, z_val, sub in cell_intervals:
-        h_all = sub["_h"].to_numpy(dtype=float)
+    for cid, top_d, bot_d, z_val, idx_arr in cell_intervals:
+        h_all = h_full[idx_arr]
         gross_h = float(np.nansum(h_all))
-        net_rock_h = float(np.nansum(np.where(sub["_rock_flag"] == 1, h_all, 0.0)))
-        net_res_h = float(np.nansum(np.where(sub["_res_flag"] == 1, h_all, 0.0)))
-        net_pay_h = float(np.nansum(np.where(sub["_pay_flag"] == 1, h_all, 0.0)))
+        net_rock_h = float(np.nansum(np.where(rock_full[idx_arr] == 1, h_all, 0.0)))
+        net_res_h = float(np.nansum(np.where(res_full[idx_arr] == 1, h_all, 0.0)))
+        net_pay_h = float(np.nansum(np.where(pay_full[idx_arr] == 1, h_all, 0.0)))
 
         ntg_res = float(net_res_h / gross_h) if gross_h > 0 else np.nan
         ntg_pay = float(net_pay_h / gross_h) if gross_h > 0 else np.nan
 
         # Determine active subset for reservoir property upscaling
         if net_only:
-            active = sub[sub[net_flag_col] == 1]
+            act_idx = idx_arr[net_flag_full[idx_arr] == 1]
         else:
-            active = sub
-        h_act = active["_h"].to_numpy(dtype=float) if not active.empty else np.empty(0, dtype=float)
+            act_idx = idx_arr
+        has_act = act_idx.size > 0
+        h_act = h_full[act_idx] if has_act else np.empty(0, dtype=float)
 
         mid_d = 0.5 * (top_d + bot_d)
         row: Dict[str, Any] = {
@@ -635,50 +653,49 @@ def upscale_logs(
             "NET_PAY": round(net_pay_h, 4),
             "NTG": round(ntg_res, 4) if np.isfinite(ntg_res) else np.nan,
             "NTG_PAY": round(ntg_pay, 4) if np.isfinite(ntg_pay) else np.nan,
-            "N_SAMPLES": int(len(sub)),
+            "N_SAMPLES": int(idx_arr.size),
         }
-        if "WELL_NAME" in sub.columns:
-            row["WELL_NAME"] = sub["WELL_NAME"].iloc[0]
+        if well_name_val is not None:
+            row["WELL_NAME"] = well_name_val
         if z_col is not None:
             row[z_col] = z_val
 
         # 1. Shale volume (arithmetic thickness-weighted)
-        if vsh_c is not None:
-            row[vsh_c] = arith_upscale(active[vsh_c], h_act) if not active.empty else np.nan
+        if vsh_c is not None and vsh_full is not None:
+            row[vsh_c] = arith_upscale(vsh_full[act_idx], h_act) if has_act else np.nan
 
         # 2. Porosity PHIT & PHIE (arithmetic thickness-weighted)
         phi_blk = np.nan
-        if phi_c is not None:
-            phi_blk = arith_upscale(active[phi_c], h_act) if not active.empty else 0.0
+        if phi_c is not None and phi_full is not None:
+            phi_blk = arith_upscale(phi_full[act_idx], h_act) if has_act else 0.0
             row[phi_c] = phi_blk
 
         phie_blk = np.nan
-        if phie_c is not None:
-            phie_blk = arith_upscale(active[phie_c], h_act) if not active.empty else 0.0
+        if phie_c is not None and phie_full is not None:
+            phie_blk = arith_upscale(phie_full[act_idx], h_act) if has_act else 0.0
             row[phie_c] = phie_blk
 
         # 3. Water saturation SWT & SWE (pore-volume weighted arithmetic)
         sw_blk = np.nan
-        if sw_c is not None:
-            if not active.empty and phi_c is not None:
-                sw_blk = pore_volume_upscale(active[sw_c], active[phi_c], h_act)
-            elif not active.empty:
-                sw_blk = arith_upscale(active[sw_c], h_act)
+        if sw_c is not None and sw_full is not None:
+            if has_act and phi_full is not None:
+                sw_blk = pore_volume_upscale(sw_full[act_idx], phi_full[act_idx], h_act)
+            elif has_act:
+                sw_blk = arith_upscale(sw_full[act_idx], h_act)
             else:
                 sw_blk = 1.0 if net_only else np.nan
             row[sw_c] = sw_blk
 
-        if swe_c is not None:
-            weight_phi_col = phie_c if phie_c is not None else phi_c
-            if not active.empty and weight_phi_col is not None:
-                row[swe_c] = pore_volume_upscale(active[swe_c], active[weight_phi_col], h_act)
-            elif not active.empty:
-                row[swe_c] = arith_upscale(active[swe_c], h_act)
+        if swe_c is not None and swe_full is not None:
+            weight_phi_arr = phie_full if phie_full is not None else phi_full
+            if has_act and weight_phi_arr is not None:
+                row[swe_c] = pore_volume_upscale(swe_full[act_idx], weight_phi_arr[act_idx], h_act)
+            elif has_act:
+                row[swe_c] = arith_upscale(swe_full[act_idx], h_act)
             else:
                 row[swe_c] = 1.0 if net_only else np.nan
 
         # 4. Bulk Volume Hydrocarbon (BVHC) & Bulk Volume Water (BVW)
-        # Because Sw is pore-volume weighted, BVHC_upscaled == phi_blk * (1 - sw_blk) == arith_upscale(phi * (1 - sw))
         if phi_c is not None and sw_c is not None:
             if np.isfinite(phi_blk) and np.isfinite(sw_blk):
                 row["BVW"] = float(phi_blk * sw_blk)
@@ -688,21 +705,32 @@ def upscale_logs(
                 row["BVHC"] = np.nan
 
         # 5. Permeability upscaling (Harmonic / Geometric / Power-Law Cardwell-Parsons / Arithmetic)
-        if perm_c is not None:
-            if not active.empty:
+        if perm_c is not None and perm_full is not None:
+            if has_act:
+                k_act = perm_full[act_idx]
                 bounds = cardwell_parsons_bounds(
-                    active[perm_c],
+                    k_act,
                     h=h_act,
                     omega=omega,
                     min_perm=min_perm,
                 )
-                k_primary = upscale_permeability(
-                    active[perm_c],
-                    method=perm_method,
-                    h=h_act,
-                    omega=omega,
-                    min_perm=min_perm,
-                )
+                method_l = perm_method.strip().lower()
+                if method_l in ("harmonic", "harm", "kv"):
+                    k_primary = bounds["k_harm"]
+                elif method_l in ("geometric", "geom", "kh"):
+                    k_primary = bounds["k_geom"]
+                elif method_l in ("arithmetic", "arith"):
+                    k_primary = bounds["k_arith"]
+                elif method_l in ("power", "power_law", "cardwell_parsons"):
+                    k_primary = bounds["k_power"]
+                else:
+                    k_primary = upscale_permeability(
+                        k_act,
+                        method=perm_method,
+                        h=h_act,
+                        omega=omega,
+                        min_perm=min_perm,
+                    )
             else:
                 bounds = {
                     "k_harm": 0.0 if net_only else np.nan,
@@ -721,14 +749,14 @@ def upscale_logs(
             row["KV_KH_RATIO"] = bounds["kv_kh_ratio"]
 
         # 6. Additional continuous curves (arithmetic thickness-weighted)
-        for ac in arith_cols:
+        for ac, ac_arr in arith_arrays.items():
             if ac not in row:
-                row[ac] = arith_upscale(active[ac], h_act) if not active.empty else np.nan
+                row[ac] = arith_upscale(ac_arr[act_idx], h_act) if has_act else np.nan
 
         # 7. Discrete facies / rock type columns (majority thickness-weighted vote)
-        for dc in disc_cols:
+        for dc, dc_arr in disc_arrays.items():
             if dc not in row:
-                row[dc] = majority_upscale(active[dc] if not active.empty else sub[dc], h_act if not active.empty else h_all)
+                row[dc] = majority_upscale(dc_arr[act_idx] if has_act else dc_arr[idx_arr], h_act if has_act else h_all)
 
         # Cell-level flags
         row["ROCK_FLAG"] = int(net_rock_h > 0)
@@ -738,7 +766,7 @@ def upscale_logs(
         records.append(row)
 
         if step_df is not None:
-            idx = sub.index
+            idx = work.index[idx_arr]
             step_df.loc[idx, "CELL_ID"] = cid
             step_df.loc[idx, "CELL_TOP"] = top_d
             step_df.loc[idx, "CELL_BOTTOM"] = bot_d
@@ -818,27 +846,37 @@ def expand_blocked_logs(
     else:
         target_cols = [c for c in cols if c in blocked_df.columns]
 
-    depths = out[d_col].to_numpy(dtype=float)
-    out["CELL_ID"] = np.nan
+    depths = pd.to_numeric(out[d_col], errors="coerce").to_numpy(dtype=float)
+    b_sorted = blocked_df.sort_values("TOP").reset_index(drop=True)
+    tops = pd.to_numeric(b_sorted["TOP"], errors="coerce").to_numpy(dtype=float)
+    bots = pd.to_numeric(b_sorted["BOTTOM"], errors="coerce").to_numpy(dtype=float)
+    n_blocks = len(b_sorted)
+
+    # Vectorized interval lookup: find latest block whose TOP <= depth
+    idx = np.searchsorted(tops, depths, side="right") - 1
+    idx_clipped = np.clip(idx, 0, max(n_blocks - 1, 0))
+    is_last = idx_clipped == (n_blocks - 1)
+    valid = (
+        np.isfinite(depths)
+        & (idx >= 0)
+        & np.where(is_last, depths <= bots[idx_clipped], depths < bots[idx_clipped])
+    )
+
+    if "CELL_ID" in b_sorted.columns:
+        cell_ids = pd.to_numeric(b_sorted["CELL_ID"], errors="coerce").to_numpy(dtype=float)
+        out["CELL_ID"] = np.where(valid, cell_ids[idx_clipped], np.nan)
+    else:
+        out["CELL_ID"] = np.nan
+
     for c in target_cols:
         out_col = f"{c}{suffix}" if suffix and not c.endswith(suffix) else c
-        out[out_col] = np.nan if pd.api.types.is_numeric_dtype(blocked_df[c]) else None
-
-    n_blocks = len(blocked_df)
-    for idx_b, brow in blocked_df.reset_index(drop=True).iterrows():
-        top_d = float(brow["TOP"])
-        bot_d = float(brow["BOTTOM"])
-        if idx_b < n_blocks - 1:
-            mask = (depths >= top_d) & (depths < bot_d)
+        col_series = b_sorted[c]
+        if pd.api.types.is_numeric_dtype(col_series):
+            arr = col_series.to_numpy(dtype=float)
+            out[out_col] = np.where(valid, arr[idx_clipped], np.nan)
         else:
-            mask = (depths >= top_d) & (depths <= bot_d)
-        if not np.any(mask):
-            continue
-        if "CELL_ID" in brow:
-            out.loc[mask, "CELL_ID"] = brow["CELL_ID"]
-        for c in target_cols:
-            out_col = f"{c}{suffix}" if suffix and not c.endswith(suffix) else c
-            out.loc[mask, out_col] = brow[c]
+            arr_obj = col_series.to_numpy(dtype=object)
+            out[out_col] = np.where(valid, arr_obj[idx_clipped], None)
 
     return out
 

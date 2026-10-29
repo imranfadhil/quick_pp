@@ -1,7 +1,9 @@
 # 9. Upscaling, Log Blocking & Deliverables Handover
 
 ### 9.1 Static Geomodel Cellular Blocking & Cardwell-Parsons Averaging
+
 Fine-scale evaluated CPI logs ($0.1524\text{ m}$ sampling) were upscaled onto cellular grid blocks ($h_{cell} = {{ "%.1f"|format(upscaling_params.cell_size) }}\text{ m}$, zone-constrained) using PRMS/SEC and static geomodeling best practices:
+
 * **Shale Volume ($V_{sh}$) & Porosity ($\phi_t, \phi_e$) & $NTG$:** Thickness-weighted arithmetic average: $\bar{\phi}_{cell} = \frac{\sum h_i \phi_i}{\sum h_i}$.
 * **Water Saturation ($S_w$):** Pore-volume weighted average: $\bar{S}_{w,cell} = \frac{\sum h_i \phi_i S_{w,i}}{\sum h_i \phi_i}$.
 * **Horizontal Permeability Proxy ($K_h$):** Arithmetic mean: $K_{arith} = \frac{\sum h_i K_i}{\sum h_i}$.
@@ -23,10 +25,12 @@ Fine-scale evaluated CPI logs ($0.1524\text{ m}$ sampling) were upscaled onto ce
 {% endif %}
 
 {% if assets.upscaling_plot %}
+
 ![Figure 9.1: Fine-Scale CPI vs. Upscaled Blocked Logs Comparison Track]({{ assets.upscaling_plot }})
 {% endif %}
 
 ### 9.2 FDP Subsurface Deliverables Handover Manifest
+
 | Deliverable Artifact | Format | Target Consumer | QA/QC Verification Status |
 | :--- | :---: | :--- | :---: |
 | **Evaluated CPI Composite Well Logs** | `.las` / `.csv` | Petrel / RMS Static Modeling | ✓ Verified ({{ wells|length }} Wells) |

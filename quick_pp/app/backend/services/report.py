@@ -16,6 +16,7 @@ import math
 import os
 import re
 import textwrap
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -30,6 +31,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
+from sqlalchemy import func, select
 
 from quick_pp import logger
 from quick_pp.app.backend.schemas.report import (
@@ -172,10 +174,28 @@ def _ensure_evaluated_curves(df: pd.DataFrame, well_name: str) -> pd.DataFrame:
         work["WELL_NAME"] = well_name
 
     # Alias canonical curves if needed
-    if "RT" not in work.columns:
+    if "RT" not in work.columns or not work["RT"].notna().any():
         for alias in ("RD", "RDEP", "RDEEP", "LLD", "RILD"):
             if alias in work.columns and work[alias].notna().any():
                 work["RT"] = pd.to_numeric(work[alias], errors="coerce")
+                break
+
+    if "VCLAY" not in work.columns or not work["VCLAY"].notna().any():
+        for alias in ("VSHALE", "VSH", "VSH_GR", "VWCL"):
+            if alias in work.columns and work[alias].notna().any():
+                work["VCLAY"] = pd.to_numeric(work[alias], errors="coerce")
+                break
+
+    if "PERM" not in work.columns or not work["PERM"].notna().any():
+        for alias in ("PERM_TRANS", "KLOGH", "K_LOG"):
+            if alias in work.columns and work[alias].notna().any():
+                work["PERM"] = pd.to_numeric(work[alias], errors="coerce")
+                break
+
+    if "SWT" not in work.columns or not work["SWT"].notna().any():
+        for alias in ("SW", "SWE", "SHF"):
+            if alias in work.columns and work[alias].notna().any():
+                work["SWT"] = pd.to_numeric(work[alias], errors="coerce")
                 break
 
     has_vclay = "VCLAY" in work.columns and work["VCLAY"].notna().any()
@@ -184,197 +204,177 @@ def _ensure_evaluated_curves(df: pd.DataFrame, well_name: str) -> pd.DataFrame:
     has_perm = "PERM" in work.columns and work["PERM"].notna().any()
     has_swt = "SWT" in work.columns and work["SWT"].notna().any()
 
-    try:
-        nphi, rhob = _select_nphi_rhob(work, use_hc_corrected=True)
-        valid_nd = nphi.notna() & rhob.notna()
-    except Exception:
-        nphi = _col_series(work, "NPHI", 0.18)
-        rhob = _col_series(work, "RHOB", 2.40)
-        valid_nd = pd.Series(False, index=work.index)
-
-    if not (has_vclay and has_phit and has_phie) and valid_nd.any():
-        try:
-            ssc = SandSiltClay(
-                dry_sand_point=(-0.02, 2.65),
-                dry_silt_point=(None, 2.68),
-                dry_clay_point=(0.33, 2.70),
-                fluid_point=(1.0, 1.0),
-                silt_line_angle=119.0,
-            )
-            n_clean = nphi.ffill().bfill().fillna(0.18)
-            r_clean = rhob.ffill().bfill().fillna(2.40)
-            vsand, vsilt, vclay, _ = ssc.estimate_lithology(n_clean, r_clean)
-            vsand = np.clip(np.asarray(vsand, dtype=float), 0.0, 1.0)
-            vsilt = np.clip(np.asarray(vsilt, dtype=float), 0.0, 1.0)
-            vclay = np.clip(np.asarray(vclay, dtype=float), 0.0, 1.0)
-            rma = rho_matrix(vsand=vsand, vsilt=vsilt, vclay=vclay)
-            phid = np.asarray(
-                density_porosity(r_clean.to_numpy(), rma, 1.0), dtype=float
-            )
-            phit = np.clip(
-                np.asarray(
-                    neu_den_xplot_poro(
-                        n_clean,
-                        r_clean,
-                        model="ssc",
-                        dry_min1_point=(-0.02, 2.65),
-                        dry_silt_point=ssc.dry_silt_point,
-                        dry_clay_point=ssc.dry_clay_point,
-                        fluid_point=(1.0, 1.0),
-                    ),
-                    dtype=float,
-                ),
-                0.005,
-                0.45,
-            )
-            phit_sh = np.asarray(
-                estimate_shale_porosity(n_clean.to_numpy(), phid), dtype=float
-            )
-            phie = np.clip(phit - vclay * phit_sh, 0.0, phit)
-
-            if not has_vclay:
-                work["VCLAY"] = vclay
-                work["VSAND"] = vsand
-                work["VSILT"] = vsilt
-            if not has_phit:
-                work["PHIT"] = phit
-            if not has_phie:
-                work["PHIE"] = phie
-        except Exception as e:
-            logger.debug(f"Report baseline litho/porosity fallback on {well_name}: {e}")
-
-    # Fallbacks if still absent
-    if "VCLAY" not in work.columns or not work["VCLAY"].notna().any():
+    # Fast vectorized fallbacks for missing petrophysical curves (preserving NaN on unlogged/unevaluated intervals)
+    if not has_vclay:
         if "GR" in work.columns and work["GR"].notna().any():
-            gr_s = pd.to_numeric(work["GR"], errors="coerce").fillna(50.0)
-            work["VCLAY"] = ((gr_s - 15.0) / (115.0 - 15.0)).clip(0.0, 1.0)
+            gr_s = pd.to_numeric(work["GR"], errors="coerce")
+            p10 = float(np.nanpercentile(gr_s, 10)) if gr_s.notna().sum() > 5 else 15.0
+            p90 = float(np.nanpercentile(gr_s, 90)) if gr_s.notna().sum() > 5 else 115.0
+            denom = max(p90 - p10, 20.0)
+            work["VCLAY"] = ((gr_s - p10) / denom).clip(0.0, 1.0)
         else:
             work["VCLAY"] = 0.20
 
-    if "PHIT" not in work.columns or not work["PHIT"].notna().any():
-        work["PHIT"] = 0.16
-    if "PHIE" not in work.columns or not work["PHIE"].notna().any():
+    if not has_phit:
+        try:
+            nphi, rhob = _select_nphi_rhob(work, use_hc_corrected=True)
+        except Exception:
+            nphi = _col_series(work, "NPHI", np.nan)
+            rhob = _col_series(work, "RHOB", np.nan)
+        if rhob.notna().any():
+            phid = ((2.65 - rhob) / (2.65 - 1.0)).clip(0.005, 0.45)
+            if nphi.notna().any():
+                n_clean = nphi.clip(-0.05, 0.60)
+                both_valid = phid.notna() & n_clean.notna()
+                phit_est = phid.copy()
+                phit_est.loc[both_valid] = np.sqrt(
+                    0.5 * (phid.loc[both_valid] ** 2 + n_clean.loc[both_valid] ** 2)
+                )
+                work["PHIT"] = phit_est.clip(0.005, 0.45)
+            else:
+                work["PHIT"] = phid
+        elif has_phie:
+            vsh_s = pd.to_numeric(work["VCLAY"], errors="coerce").fillna(0.20)
+            phie_s = pd.to_numeric(work["PHIE"], errors="coerce")
+            work["PHIT"] = (phie_s / np.maximum(1.0 - 0.35 * vsh_s, 0.3)).clip(0.005, 0.45)
+        else:
+            work["PHIT"] = 0.16
+
+    if not has_phie:
         vsh_s = pd.to_numeric(work["VCLAY"], errors="coerce").fillna(0.20)
-        phit_s = pd.to_numeric(work["PHIT"], errors="coerce").fillna(0.16)
+        phit_s = pd.to_numeric(work["PHIT"], errors="coerce")
         work["PHIE"] = (phit_s * (1.0 - 0.35 * vsh_s)).clip(lower=0.0)
 
     if not has_perm:
         try:
+            phit_s = pd.to_numeric(work["PHIT"], errors="coerce")
             vcl_arr = _col_series(work, "VCLAY", 0.2).to_numpy(dtype=float)
             vsi_arr = _col_series(work, "VSILT", 0.1).to_numpy(dtype=float)
-            phi_arr = _col_series(work, "PHIT", 0.15).to_numpy(dtype=float)
-            work["PERM"] = np.clip(
+            phi_arr = phit_s.fillna(0.15).to_numpy(dtype=float)
+            perm_est = np.clip(
                 np.asarray(choo_permeability(vcl_arr, vsi_arr, phi_arr), dtype=float),
                 1e-3,
                 1e5,
             )
+            work["PERM"] = np.where(phit_s.notna(), perm_est, np.nan)
         except Exception:
             work["PERM"] = 25.0
 
     if not has_swt:
         try:
-            d_arr = _col_series(work, "DEPTH", 1500.0).to_numpy(dtype=float)
-            rt_arr = _col_series(work, "RT", 10.0).clip(lower=0.1).to_numpy(dtype=float)
-            phi_arr = (
-                _col_series(work, "PHIT", 0.15).clip(lower=0.01).to_numpy(dtype=float)
-            )
-            vcl_arr = _col_series(work, "VCLAY", 0.2).to_numpy(dtype=float)
-            temp = estimate_temperature_gradient(d_arr, "metric")
-            rw = estimate_rw_temperature_salinity(temp, 35000.0)
-            b_ws = estimate_b_waxman_smits(temp, rw)
-            qvn = estimate_qvn(vcl_arr, phi_arr, 0.25)
-            work["SWT"] = np.clip(
-                np.asarray(
-                    waxman_smits_saturation(rt_arr, rw, phi_arr, b_ws, qvn, m=2.0),
-                    dtype=float,
-                ),
-                0.0,
-                1.0,
-            )
+            rt_s = pd.to_numeric(work["RT"], errors="coerce") if "RT" in work.columns else pd.Series(np.nan, index=work.index)
+            phit_s = pd.to_numeric(work["PHIT"], errors="coerce")
+            if rt_s.notna().any() and phit_s.notna().any():
+                rt_arr = rt_s.clip(lower=0.1).to_numpy(dtype=float)
+                phi_arr = phit_s.clip(lower=0.01).to_numpy(dtype=float)
+                swt_est = np.clip(
+                    np.sqrt(0.08 / np.maximum(rt_arr * (phi_arr**2), 1e-6)),
+                    0.0,
+                    1.0,
+                )
+                work["SWT"] = np.where(rt_s.notna() & phit_s.notna(), swt_est, np.nan)
+            else:
+                work["SWT"] = np.where(phit_s.notna(), 0.45, np.nan)
         except Exception:
             work["SWT"] = 0.45
 
     return work
 
 
-def _annotate_zones_and_core_if_missing(
-    project_id: int, well_name: str, df: pd.DataFrame
-) -> Tuple[pd.DataFrame, Dict[str, Any], Dict[str, Any]]:
-    """Attach ZONES, CPORE, CPERM from DB ancillary data if not already in df, and return (df, ancillary, well_config)."""
-    work = df.copy()
-    ancillary: Dict[str, Any] = {}
-    well_config: Dict[str, Any] = {}
-    try:
-        with get_db() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
-            db_wname = resolve_db_well_name(project_id, well_name)
-            well_obj = proj.get_well(db_wname)
-            ancillary = well_obj.get_ancillary_data() or {}
-            if well_obj._orm_well and isinstance(well_obj._orm_well.config_data, dict):
-                well_config = dict(well_obj._orm_well.config_data)
-            if well_obj._orm_well and isinstance(well_obj._orm_well.header_data, dict):
-                well_config["_header_data"] = dict(well_obj._orm_well.header_data)
-    except Exception:
-        pass
+def _load_project_wells_fast(
+    project_id: int,
+    well_names: Optional[List[str]] = None,
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """Fetch project name and selected well metadata + ancillary counts in a single fast DB session."""
+    with get_db() as session:
+        proj = db_objects.Project.load(session, project_id=project_id)
+        project_name = str(proj.name or f"Project #{project_id}")
+        orm_wells = (
+            session.execute(
+                select(db_objects.ORMWell).where(
+                    db_objects.ORMWell.project_id == project_id
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not orm_wells:
+            raise ValueError(f"No wells found in project {project_id} ({project_name}).")
 
-    eph_cfg = _ephemeral_well_configs.get((project_id, well_name))
-    if eph_cfg:
-        well_config = {**well_config, **eph_cfg}
+        requested_all = (
+            not well_names
+            or "ALL" in [str(w).upper() for w in well_names]
+            or len(well_names) == 0
+        )
+        if not requested_all:
+            req_upper = {
+                str(w).strip().upper().replace("/", "-").replace("_", "-")
+                for w in well_names
+                if w
+            }
+            filtered = [
+                w
+                for w in orm_wells
+                if str(w.name).strip().upper().replace("/", "-").replace("_", "-")
+                in req_upper
+                or str(w.uwi or "").strip().upper().replace("/", "-").replace("_", "-")
+                in req_upper
+            ]
+            if filtered:
+                orm_wells = filtered
 
-    # Populate ZONES from formation_tops if missing
-    if (
-        "ZONES" not in work.columns or not work["ZONES"].notna().any()
-    ) and not work.empty:
-        tops_df = ancillary.get("formation_tops")
-        if isinstance(tops_df, pd.DataFrame) and not tops_df.empty:
-            work["ZONES"] = pd.NA
-            for _, top in tops_df.iterrows():
-                try:
-                    t_d = float(top.get("depth"))
-                    t_n = str(top.get("name"))
-                    nearest = (work["DEPTH"] - t_d).abs().idxmin()
-                    work.at[nearest, "ZONES"] = t_n
-                except Exception:
-                    continue
-            work["ZONES"] = work["ZONES"].ffill().bfill()
+        well_ids = [w.well_id for w in orm_wells]
+        core_counts = dict(
+            session.execute(
+                select(
+                    db_objects.ORMCoreSample.well_id,
+                    func.count(),
+                )
+                .where(db_objects.ORMCoreSample.well_id.in_(well_ids))
+                .group_by(db_objects.ORMCoreSample.well_id)
+            ).all()
+        )
+        press_counts = dict(
+            session.execute(
+                select(
+                    db_objects.ORMPressureTest.well_id,
+                    func.count(),
+                )
+                .where(db_objects.ORMPressureTest.well_id.in_(well_ids))
+                .group_by(db_objects.ORMPressureTest.well_id)
+            ).all()
+        )
+        top_counts = dict(
+            session.execute(
+                select(
+                    db_objects.ORMFormationTop.well_id,
+                    func.count(),
+                )
+                .where(db_objects.ORMFormationTop.well_id.in_(well_ids))
+                .group_by(db_objects.ORMFormationTop.well_id)
+            ).all()
+        )
 
-    if "ZONES" not in work.columns or not work["ZONES"].notna().any():
-        work["ZONES"] = "Main Reservoir"
-
-    # Populate CPORE / CPERM from core_data if missing
-    core_dict = ancillary.get("core_data")
-    if isinstance(core_dict, dict) and core_dict and not work.empty:
-        if "CPORE" not in work.columns:
-            work["CPORE"] = np.nan
-        if "CPERM" not in work.columns:
-            work["CPERM"] = np.nan
-        for _, sample in core_dict.items():
-            try:
-                s_depth = float(sample.get("depth"))
-                meas = sample.get("measurements")
-                if isinstance(meas, pd.DataFrame) and not meas.empty:
-                    nearest = (work["DEPTH"] - s_depth).abs().idxmin()
-                    for _, m in meas.iterrows():
-                        prop = str(
-                            m.get("property") or m.get("property_name") or ""
-                        ).upper()
-                        val = m.get("value")
-                        if prop in ("CPORE", "POROSITY", "PHI") and pd.notna(val):
-                            v_num = float(val)
-                            work.at[nearest, "CPORE"] = (
-                                v_num / 100.0 if v_num > 1.0 else v_num
-                            )
-                        elif prop in (
-                            "CPERM",
-                            "PERMEABILITY",
-                            "PERM",
-                            "K",
-                        ) and pd.notna(val):
-                            work.at[nearest, "CPERM"] = float(val)
-            except Exception:
-                continue
-
-    return work, ancillary, well_config
+        selected_wells_meta: List[Dict[str, Any]] = []
+        for w in orm_wells:
+            w_cfg = dict(w.config_data) if isinstance(w.config_data, dict) else {}
+            if isinstance(w.header_data, dict):
+                w_cfg["_header_data"] = dict(w.header_data)
+            eph_cfg = _ephemeral_well_configs.get((project_id, w.name))
+            if eph_cfg:
+                w_cfg = {**w_cfg, **eph_cfg}
+            selected_wells_meta.append(
+                {
+                    "id": w.well_id,
+                    "name": str(w.name),
+                    "uwi": str(w.uwi or w.name),
+                    "core_sample_count": int(core_counts.get(w.well_id, 0)),
+                    "pressure_test_count": int(press_counts.get(w.well_id, 0)),
+                    "formation_top_count": int(top_counts.get(w.well_id, 0)),
+                    "well_config": w_cfg,
+                }
+            )
+        return project_name, selected_wells_meta
 
 
 # ---------------------------------------------------------------------------
@@ -389,34 +389,18 @@ def build_report_context(
     zones: Optional[List[str]] = None,
     min_depth: Optional[float] = None,
     max_depth: Optional[float] = None,
+    enabled_section_ids: Optional[set[str]] = None,
 ) -> Dict[str, Any]:
     """Collect and compute all petrophysical tables, model parameters, and statistical digests for a project."""
     pid = int(project_id)
-    proj_summary = get_project_summary(pid)
-    project_name = str(proj_summary.get("name") or f"Project #{pid}")
-    all_wells_meta = proj_summary.get("wells", [])
-
-    if not all_wells_meta:
-        raise ValueError(f"No wells found in project {pid} ({project_name}).")
-
-    requested_all = (
-        not well_names
-        or "ALL" in [str(w).upper() for w in well_names]
-        or len(well_names) == 0
-    )
-    if requested_all:
-        selected_wells_meta = all_wells_meta
-    else:
-        req_set = {str(w).strip() for w in well_names}
-        selected_wells_meta = [w for w in all_wells_meta if str(w["name"]) in req_set]
-        if not selected_wells_meta:
-            selected_wells_meta = all_wells_meta
+    project_name, selected_wells_meta = _load_project_wells_fast(pid, well_names)
 
     cut = cutoffs or {"vsh": 0.40, "phie": 0.08, "sw": 0.60}
     vsh_cut = _safe_float(cut.get("vsh", cut.get("VSHALE", 0.40)), 0.40)
     phie_cut = _safe_float(cut.get("phie", cut.get("PHIT", 0.08)), 0.08)
     sw_cut = _safe_float(cut.get("sw", cut.get("SWT", 0.60)), 0.60)
     ressum_cutoffs = {"VSHALE": vsh_cut, "PHIT": phie_cut, "SWT": sw_cut}
+    need_upscaling = enabled_section_ids is None or "09_upscaling" in enabled_section_ids
 
     wells_inventory: List[Dict[str, Any]] = []
     qaqc_table: List[Dict[str, Any]] = []
@@ -438,9 +422,17 @@ def build_report_context(
         if raw_df.empty:
             continue
 
-        w_df, anc, w_cfg = _annotate_zones_and_core_if_missing(pid, w_name, raw_df)
+        w_cfg = w_meta.get("well_config") or {}
         if w_cfg:
             merged_configs.update(w_cfg)
+
+        w_df = raw_df
+        if "ZONES" not in w_df.columns or not w_df["ZONES"].notna().any():
+            w_df = w_df.copy()
+            w_df["ZONES"] = "Main Reservoir"
+
+        # Trim unlogged surface casing / post-TD intervals where all curves are NaN
+        w_df = report_plots._trim_to_logged_interval(w_df)
 
         if min_depth is not None:
             w_df = w_df[
@@ -459,6 +451,14 @@ def build_report_context(
 
         if w_df.empty:
             continue
+
+        # Capture genuinely available non-empty curves before filling evaluation defaults
+        raw_curves = [
+            c
+            for c in w_df.columns
+            if c not in ("DEPTH", "DEPT", "WELL_NAME", "ZONES")
+            and w_df[c].notna().any()
+        ]
 
         w_df = _ensure_evaluated_curves(w_df, w_name)
         combined_dfs.append(w_df)
@@ -481,11 +481,6 @@ def build_report_context(
         if core_cnt == 0 and "CPORE" in w_df.columns:
             core_cnt = int(pd.to_numeric(w_df["CPORE"], errors="coerce").notna().sum())
         press_cnt = int(w_meta.get("pressure_test_count") or 0)
-        raw_curves = [
-            c
-            for c in w_meta.get("available_curves", list(w_df.columns))
-            if c not in ("DEPTH", "DEPT", "WELL_NAME", "ZONES")
-        ]
         wells_inventory.append(
             {
                 "name": w_name,
@@ -557,25 +552,39 @@ def build_report_context(
             }
         )
 
-        # Per-well Zonal Reservoir Summary (`calc_reservoir_summary`)
+        # Per-well Zonal Reservoir Summary (`calc_reservoir_summary`) on evaluated reservoir intervals
         try:
+            phi_col_name = "PHIE" if "PHIE" in w_df.columns and w_df["PHIE"].notna().any() else "PHIT"
+            phi_eval = pd.to_numeric(w_df.get(phi_col_name), errors="coerce")
+            sw_eval = pd.to_numeric(w_df.get("SWT"), errors="coerce")
+            zone_eval = w_df["ZONES"] if "ZONES" in w_df.columns else pd.Series("Main Reservoir", index=w_df.index)
+            has_real_zones = zone_eval.notna().any() and not (zone_eval.dropna().astype(str) == "Main Reservoir").all()
+
+            eval_mask = phi_eval.notna() & sw_eval.notna()
+            if has_real_zones:
+                eval_mask &= zone_eval.notna() & (zone_eval.astype(str).str.strip() != "") & (zone_eval.astype(str) != "nan")
+
+            eval_df = w_df.loc[eval_mask].copy() if eval_mask.any() else w_df.copy()
+            if "ZONES" not in eval_df.columns or not eval_df["ZONES"].notna().any():
+                eval_df["ZONES"] = "Main Reservoir"
+
             rs_df = calc_reservoir_summary(
-                depth=pd.to_numeric(w_df["DEPTH"], errors="coerce").to_numpy(
+                depth=pd.to_numeric(eval_df["DEPTH"], errors="coerce").to_numpy(
                     dtype=float
                 ),
-                vshale=pd.to_numeric(w_df["VCLAY"], errors="coerce")
+                vshale=pd.to_numeric(eval_df["VCLAY"], errors="coerce")
                 .fillna(0.2)
                 .to_numpy(dtype=float),
-                phit=_col_series(
-                    w_df, "PHIE" if "PHIE" in w_df.columns else "PHIT", 0.15
-                ).to_numpy(dtype=float),
-                swt=pd.to_numeric(w_df["SWT"], errors="coerce")
+                phit=pd.to_numeric(eval_df[phi_col_name], errors="coerce")
+                .fillna(0.15)
+                .to_numpy(dtype=float),
+                swt=pd.to_numeric(eval_df["SWT"], errors="coerce")
                 .fillna(0.5)
                 .to_numpy(dtype=float),
-                perm=pd.to_numeric(w_df["PERM"], errors="coerce")
+                perm=pd.to_numeric(eval_df["PERM"], errors="coerce")
                 .fillna(15.0)
                 .to_numpy(dtype=float),
-                zones=w_df["ZONES"].fillna("Main Reservoir").astype(str).to_numpy(),
+                zones=eval_df["ZONES"].fillna("Main Reservoir").astype(str).to_numpy(),
                 cutoffs=ressum_cutoffs,
             )
             pay_rows = rs_df[rs_df["flag"] == "pay"].copy()
@@ -583,19 +592,33 @@ def build_report_context(
                 pay_rows = rs_df[rs_df["flag"] == "reservoir"].copy()
             for _, r in pay_rows.iterrows():
                 gross_v = _safe_float(r.get("gross"), 0.0)
-                net_v = _safe_float(r.get("net"), 0.0)
-                ntg_v = _safe_float(
-                    r.get("ntg"), net_v / gross_v if gross_v > 0 else 0.0
+                if gross_v <= 0.0:
+                    continue
+                net_v = min(_safe_float(r.get("net"), 0.0), gross_v)
+                ntg_v = min(
+                    1.0,
+                    max(
+                        0.0,
+                        _safe_float(
+                            r.get("ntg"), net_v / gross_v if gross_v > 0 else 0.0
+                        ),
+                    ),
                 )
-                phie_v = _safe_float(r.get("av_phit"), 0.0)
-                sw_v = _safe_float(r.get("av_swt"), 1.0)
-                bvhc_v = _safe_float(r.get("av_bvhc"), phie_v * (1.0 - sw_v))
-                hcpt_v = net_v * phie_v * max(0.0, 1.0 - sw_v)
-                perm_gm = _safe_float(r.get("av_perm_gm"), 0.0)
-                perm_am = _safe_float(r.get("av_perm_am"), 0.0)
-                perm_hm = _safe_float(r.get("av_perm_hm"), 0.0)
-                kv_kh = _safe_float(
-                    r.get("kv_kh_ratio"), perm_hm / perm_am if perm_am > 0 else 0.0
+                has_pay = net_v > 0.0
+                phie_v = _safe_float(r.get("av_phit"), 0.0) if has_pay else 0.0
+                sw_v = _safe_float(r.get("av_swt"), 1.0) if has_pay else 1.0
+                vsh_v = _safe_float(r.get("av_vshale"), 0.0) if has_pay else 0.0
+                bvhc_v = _safe_float(r.get("av_bvhc"), phie_v * (1.0 - sw_v)) if has_pay else 0.0
+                hcpt_v = net_v * phie_v * max(0.0, 1.0 - sw_v) if has_pay else 0.0
+                perm_gm = _safe_float(r.get("av_perm_gm"), 0.0) if has_pay else 0.0
+                perm_am = _safe_float(r.get("av_perm_am"), 0.0) if has_pay else 0.0
+                perm_hm = _safe_float(r.get("av_perm_hm"), 0.0) if has_pay else 0.0
+                kv_kh = (
+                    _safe_float(
+                        r.get("kv_kh_ratio"), perm_hm / perm_am if perm_am > 0 else 0.0
+                    )
+                    if has_pay
+                    else 0.0
                 )
                 well_zonal_rows.append(
                     {
@@ -606,7 +629,7 @@ def build_report_context(
                         "gross": round(gross_v, 2),
                         "net_pay": round(net_v, 2),
                         "ntg": round(ntg_v, 3),
-                        "vsh": round(_safe_float(r.get("av_vshale"), 0.2), 3),
+                        "vsh": round(vsh_v, 3),
                         "phie": round(phie_v, 3),
                         "sw": round(sw_v, 3),
                         "bvhc": round(bvhc_v, 3),
@@ -620,86 +643,96 @@ def build_report_context(
         except Exception as exc:
             logger.debug(f"Reservoir summary fallback for {w_name}: {exc}")
 
-        # Per-well Upscaling Summary (`upscale_logs`)
-        try:
-            up_in = pd.DataFrame(
-                {
-                    "DEPTH": pd.to_numeric(w_df["DEPTH"], errors="coerce"),
-                    "VCLAY": pd.to_numeric(w_df["VCLAY"], errors="coerce").fillna(0.2),
-                    "PHIT": _col_series(
-                        w_df, "PHIE" if "PHIE" in w_df.columns else "PHIT", 0.15
-                    ),
-                    "SWT": pd.to_numeric(w_df["SWT"], errors="coerce").fillna(0.45),
-                    "PERM": pd.to_numeric(w_df["PERM"], errors="coerce")
-                    .fillna(20.0)
-                    .clip(lower=1e-2),
-                    "ZONES": w_df["ZONES"].fillna("Main Reservoir").astype(str),
-                }
-            ).dropna(subset=["DEPTH"])
-            blocked = upscale_logs(
-                up_in,
-                cell_size=2.0,
-                by_zone=True,
-                depth_col="DEPTH",
-                zone_col="ZONES",
-                perm_method="geometric",
-                cutoffs=ressum_cutoffs,
-            )
-            k_am = (
-                _safe_float(blocked["PERM_ARITH_UP"].mean(), 25.0)
-                if "PERM_ARITH_UP" in blocked.columns
-                else 25.0
-            )
-            k_gm = (
-                _safe_float(blocked["PERM_GEOM_UP"].mean(), 15.0)
-                if "PERM_GEOM_UP" in blocked.columns
-                else 15.0
-            )
-            k_hm = (
-                _safe_float(blocked["PERM_HARM_UP"].mean(), 5.0)
-                if "PERM_HARM_UP" in blocked.columns
-                else 5.0
-            )
-            upscaling_table.append(
-                {
-                    "well_name": w_name,
-                    "fine_samples": int(len(up_in)),
-                    "n_cells": int(len(blocked)),
-                    "phit_up": round(_safe_float(blocked["PHIT_UP"].mean(), 0.15), 3)
-                    if "PHIT_UP" in blocked.columns
-                    else 0.15,
-                    "swt_up": round(_safe_float(blocked["SWT_UP"].mean(), 0.45), 3)
-                    if "SWT_UP" in blocked.columns
-                    else 0.45,
-                    "k_arith": round(k_am, 1),
-                    "k_geom": round(k_gm, 1),
-                    "k_harm": round(k_hm, 2),
-                    "kv_kh": round(k_hm / max(k_am, 1e-6), 3),
-                }
-            )
-        except Exception as exc:
-            logger.debug(f"Upscaling summary fallback for {w_name}: {exc}")
+        # Per-well Upscaling Summary (`upscale_logs`) — only run when upscaling chapter is needed
+        if need_upscaling:
+            try:
+                up_src = eval_df if "eval_df" in locals() and not eval_df.empty else w_df
+                up_in = pd.DataFrame(
+                    {
+                        "DEPTH": pd.to_numeric(up_src["DEPTH"], errors="coerce"),
+                        "VCLAY": pd.to_numeric(up_src["VCLAY"], errors="coerce").fillna(0.2),
+                        "PHIT": _col_series(
+                            up_src, "PHIE" if "PHIE" in up_src.columns else "PHIT", 0.15
+                        ),
+                        "SWT": pd.to_numeric(up_src["SWT"], errors="coerce").fillna(0.45),
+                        "PERM": pd.to_numeric(up_src["PERM"], errors="coerce")
+                        .fillna(20.0)
+                        .clip(lower=1e-2),
+                        "ZONES": up_src["ZONES"].fillna("Main Reservoir").astype(str),
+                    }
+                ).dropna(subset=["DEPTH"])
+                blocked = upscale_logs(
+                    up_in,
+                    cell_size=2.0,
+                    by_zone=True,
+                    depth_col="DEPTH",
+                    zone_col="ZONES",
+                    perm_method="geometric",
+                    cutoffs=ressum_cutoffs,
+                )
+                k_am_col = "PERM_ARITH" if "PERM_ARITH" in blocked.columns else "PERM_ARITH_UP"
+                k_gm_col = "PERM_GEOM" if "PERM_GEOM" in blocked.columns else "PERM_GEOM_UP"
+                k_hm_col = "PERM_HARM" if "PERM_HARM" in blocked.columns else "PERM_HARM_UP"
+                phi_up_col = "PHIT" if "PHIT" in blocked.columns else "PHIT_UP"
+                sw_up_col = "SWT" if "SWT" in blocked.columns else "SWT_UP"
+
+                k_am = (
+                    _safe_float(blocked[k_am_col].mean(), 25.0)
+                    if k_am_col in blocked.columns
+                    else 25.0
+                )
+                k_gm = (
+                    _safe_float(blocked[k_gm_col].mean(), 15.0)
+                    if k_gm_col in blocked.columns
+                    else 15.0
+                )
+                k_hm = (
+                    _safe_float(blocked[k_hm_col].mean(), 5.0)
+                    if k_hm_col in blocked.columns
+                    else 5.0
+                )
+                upscaling_table.append(
+                    {
+                        "well_name": w_name,
+                        "fine_samples": int(len(up_in)),
+                        "n_cells": int(len(blocked)),
+                        "phit_up": round(_safe_float(blocked[phi_up_col].mean(), 0.15), 3)
+                        if phi_up_col in blocked.columns
+                        else 0.15,
+                        "swt_up": round(_safe_float(blocked[sw_up_col].mean(), 0.45), 3)
+                        if sw_up_col in blocked.columns
+                        else 0.45,
+                        "k_arith": round(k_am, 1),
+                        "k_geom": round(k_gm, 1),
+                        "k_harm": round(k_hm, 2),
+                        "kv_kh": round(k_hm / max(k_am, 1e-6), 3),
+                    }
+                )
+            except Exception as exc:
+                logger.debug(f"Upscaling summary fallback for {w_name}: {exc}")
 
     full_df = (
         pd.concat(combined_dfs, ignore_index=True) if combined_dfs else pd.DataFrame()
     )
 
-    # Aggregate Zonal Summary across wells
+    # Aggregate Zonal Summary across wells (averaging pay properties over pay-bearing penetrations)
     zonal_summary: List[Dict[str, Any]] = []
     if well_zonal_rows:
         wz_df = pd.DataFrame(well_zonal_rows)
         for z_name, grp in wz_df.groupby("zone", sort=False):
+            pay_grp = grp[grp["net_pay"] > 0]
+            ref_grp = pay_grp if not pay_grp.empty else grp
             zonal_summary.append(
                 {
                     "zone": str(z_name),
                     "well_count": int(grp["well_name"].nunique()),
                     "gross": round(float(grp["gross"].mean()), 1),
                     "net_pay": round(float(grp["net_pay"].mean()), 1),
-                    "ntg": round(float(grp["ntg"].mean()), 2),
-                    "vsh": round(float(grp["vsh"].mean()), 3),
-                    "phie": round(float(grp["phie"].mean()), 3),
-                    "sw": round(float(grp["sw"].mean()), 3),
-                    "perm_geom": round(float(grp["perm_geom"].mean()), 1),
+                    "ntg": round(min(1.0, max(0.0, float(grp["ntg"].mean()))), 2),
+                    "vsh": round(float(ref_grp["vsh"].mean()), 3) if not pay_grp.empty else 0.0,
+                    "phie": round(float(ref_grp["phie"].mean()), 3) if not pay_grp.empty else 0.0,
+                    "sw": round(float(ref_grp["sw"].mean()), 3) if not pay_grp.empty else 1.0,
+                    "perm_geom": round(float(ref_grp["perm_geom"].mean()), 1) if not pay_grp.empty else 0.0,
                     "hcpt": round(float(grp["hcpt"].mean()), 2),
                 }
             )
@@ -724,16 +757,41 @@ def build_report_context(
         )
 
     # Build Markdown table for Well-by-Well Zonal Reservoir Summary
-    md_rows = [
-        "| Well | Zone | Interval (m) | Gross (m) | Net Pay (m) | $NTG$ (v/v) | $\\bar{V}_{sh}$ (v/v) | $\\bar{\\phi}_e$ (v/v) | $\\bar{S}_w$ (v/v) | $K_{geom}$ (mD) | $K_v/K_h$ | $HCPT$ (m) |",
-        "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
-    ]
-    for r in well_zonal_rows:
-        md_rows.append(
-            f"| **{r['well_name']}** | {r['zone']} | `{r['top']:.1f}–{r['bottom']:.1f}` | "
-            f"{r['gross']:.1f} | {r['net_pay']:.1f} | {r['ntg']:.2f} | {r['vsh']:.3f} | "
-            f"{r['phie']:.3f} | {r['sw']:.3f} | {r['perm_geom']:.1f} | {r['kv_kh']:.3f} | **{r['hcpt']:.2f}** |"
-        )
+    is_single_well_ctx = len(wells_inventory) == 1
+    if is_single_well_ctx:
+        md_rows = [
+            "| Zone | Interval (m) | Gross (m) | Net Pay (m) | $NTG$ (v/v) | $\\bar{V}_{sh}$ (v/v) | $\\bar{\\phi}_e$ (v/v) | $\\bar{S}_w$ (v/v) | $K_{geom}$ (mD) | $K_v/K_h$ | $HCPT$ (m) |",
+            "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+        ]
+        for r in well_zonal_rows:
+            has_p = r["net_pay"] > 0
+            vsh_str = f"{r['vsh']:.3f}" if has_p else "—"
+            phie_str = f"{r['phie']:.3f}" if has_p else "—"
+            sw_str = f"{r['sw']:.3f}" if has_p else "—"
+            k_str = f"{r['perm_geom']:.1f}" if has_p else "—"
+            kvkh_str = f"{r['kv_kh']:.3f}" if has_p else "—"
+            md_rows.append(
+                f"| **{r['zone']}** | `{r['top']:.1f}–{r['bottom']:.1f}` | "
+                f"{r['gross']:.1f} | {r['net_pay']:.1f} | {r['ntg']:.2f} | {vsh_str} | "
+                f"{phie_str} | {sw_str} | {k_str} | {kvkh_str} | **{r['hcpt']:.2f}** |"
+            )
+    else:
+        md_rows = [
+            "| Well | Zone | Interval (m) | Gross (m) | Net Pay (m) | $NTG$ (v/v) | $\\bar{V}_{sh}$ (v/v) | $\\bar{\\phi}_e$ (v/v) | $\\bar{S}_w$ (v/v) | $K_{geom}$ (mD) | $K_v/K_h$ | $HCPT$ (m) |",
+            "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+        ]
+        for r in well_zonal_rows:
+            has_p = r["net_pay"] > 0
+            vsh_str = f"{r['vsh']:.3f}" if has_p else "—"
+            phie_str = f"{r['phie']:.3f}" if has_p else "—"
+            sw_str = f"{r['sw']:.3f}" if has_p else "—"
+            k_str = f"{r['perm_geom']:.1f}" if has_p else "—"
+            kvkh_str = f"{r['kv_kh']:.3f}" if has_p else "—"
+            md_rows.append(
+                f"| **{r['well_name']}** | {r['zone']} | `{r['top']:.1f}–{r['bottom']:.1f}` | "
+                f"{r['gross']:.1f} | {r['net_pay']:.1f} | {r['ntg']:.2f} | {vsh_str} | "
+                f"{phie_str} | {sw_str} | {k_str} | {kvkh_str} | **{r['hcpt']:.2f}** |"
+            )
     ressum_markdown_table = "\n".join(md_rows)
 
     # Core-to-Log Porosity Calibration stats
@@ -972,12 +1030,14 @@ def synthesize_domain_ai_commentary(
     is_single_well = eff_report_type == "SINGLE_WELL_CPI"
     focal_well = well_names[0] if well_names else "Active Well"
     well_meta = wells[0] if wells else {}
-    top_d = well_meta.get("top_depth", 0.0)
-    bot_d = well_meta.get("bottom_depth", 0.0)
+    top_d = well_meta.get("min_depth", well_meta.get("top_depth", 0.0))
+    bot_d = well_meta.get("max_depth", well_meta.get("bottom_depth", 0.0))
 
-    top_zone = max(zonal, key=lambda z: z.get("hcpt", 0.0)) if zonal else {}
-    mean_phie = np.mean([z.get("phie", 0.16) for z in zonal]) if zonal else 0.16
-    mean_sw = np.mean([z.get("sw", 0.38) for z in zonal]) if zonal else 0.38
+    pay_zones = [z for z in zonal if float(z.get("net_pay", 0.0)) > 0]
+    ref_zones = pay_zones if pay_zones else zonal
+    top_zone = max(ref_zones, key=lambda z: z.get("hcpt", 0.0)) if ref_zones else {}
+    mean_phie = np.mean([z.get("phie", 0.16) for z in ref_zones]) if ref_zones else 0.16
+    mean_sw = np.mean([z.get("sw", 0.38) for z in ref_zones]) if ref_zones else 0.38
     total_hcpt = sum(z.get("hcpt", 0.0) for z in zonal)
     max_bh = max((q.get("badhole_pct", 0.0) for q in qaqc_tbl), default=0.0)
 
@@ -1432,7 +1492,7 @@ def _generate_all_report_plots(
         )
     if "10_appendix_cpi" in enabled_section_ids:
         cpi_list = []
-        for wn in well_names[:8]:
+        for wn in well_names[:4]:
             cpi_url = report_plots.generate_well_cpi_plot(
                 full_df,
                 wn,
@@ -1505,17 +1565,218 @@ def _render_sections_and_base_markdown(
     return full_md, section_contents
 
 
+def _extract_braced(s: str, pos: int) -> Tuple[Optional[str], int]:
+    """Extract balanced `{...}` content starting at or after `pos` (skipping leading whitespace)."""
+    n = len(s)
+    i = pos
+    while i < n and s[i] in (" ", "\t"):
+        i += 1
+    if i >= n or s[i] != "{":
+        return None, pos
+    depth = 0
+    start = i + 1
+    while i < n:
+        if s[i] == "{":
+            depth += 1
+        elif s[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return s[start:i], i + 1
+        i += 1
+    return s[start:], n
+
+
+_LATEX_SYMBOLS: Dict[str, str] = {
+    "phi": "&phi;",
+    "varphi": "&phi;",
+    "rho": "&rho;",
+    "sigma": "&sigma;",
+    "theta": "&theta;",
+    "mu": "&mu;",
+    "omega": "&omega;",
+    "alpha": "&alpha;",
+    "beta": "&beta;",
+    "gamma": "&gamma;",
+    "Delta": "&Delta;",
+    "Omega": "&Omega;",
+    "Sigma": "&sum;",
+    "sum": "&sum;",
+    "cdot": "&middot;",
+    "times": "&times;",
+    "pm": "&plusmn;",
+    "le": "&le;",
+    "leq": "&le;",
+    "ge": "&ge;",
+    "geq": "&ge;",
+    "ne": "&ne;",
+    "neq": "&ne;",
+    "approx": "&approx;",
+    "to": "&rarr;",
+    "rightarrow": "&rarr;",
+    "circ": "&deg;",
+    "quad": '<span class="math-quad"></span>',
+    "qquad": '<span class="math-qquad"></span>',
+    "ln": '<span class="math-fn">ln</span>',
+    "log": '<span class="math-fn">log</span>',
+    "exp": '<span class="math-fn">exp</span>',
+    "cos": '<span class="math-fn">cos</span>',
+    "sin": '<span class="math-fn">sin</span>',
+    "tan": '<span class="math-fn">tan</span>',
+}
+
+
+def _latex_to_html(tex: str) -> str:
+    """Brace-balanced recursive converter from LaTeX math to publication-grade semantic HTML."""
+    if not tex:
+        return ""
+    s = (
+        tex.replace(r"\left(", "(")
+        .replace(r"\right)", ")")
+        .replace(r"\left[", "[")
+        .replace(r"\right]", "]")
+        .replace(r"\%", "%")
+    )
+    out: List[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "\\":
+            m = re.match(r"\\([a-zA-Z]+)", s[i:])
+            if m:
+                cmd = m.group(1)
+                next_i = i + len(m.group(0))
+                if cmd == "frac":
+                    num_str, p1 = _extract_braced(s, next_i)
+                    if num_str is not None:
+                        den_str, p2 = _extract_braced(s, p1)
+                        if den_str is not None:
+                            out.append(
+                                f'<span class="math-frac"><span class="math-num">{_latex_to_html(num_str)}</span>'
+                                f'<span class="math-den">{_latex_to_html(den_str)}</span></span>'
+                            )
+                            i = p2
+                            continue
+                elif cmd == "sqrt":
+                    rad_str, p1 = _extract_braced(s, next_i)
+                    if rad_str is not None:
+                        out.append(
+                            f'<span class="math-sqrt">&radic;<span class="math-radicand">{_latex_to_html(rad_str)}</span></span>'
+                        )
+                        i = p1
+                        continue
+                elif cmd in ("bar", "overline"):
+                    arg_str, p1 = _extract_braced(s, next_i)
+                    if arg_str is not None:
+                        out.append(
+                            f'<span class="math-bar">{_latex_to_html(arg_str)}</span>'
+                        )
+                        i = p1
+                        continue
+                elif cmd == "text":
+                    txt_str, p1 = _extract_braced(s, next_i)
+                    if txt_str is not None:
+                        out.append(
+                            f'<span class="math-text">{html.escape(txt_str)}</span>'
+                        )
+                        i = p1
+                        continue
+                elif cmd in _LATEX_SYMBOLS:
+                    out.append(_LATEX_SYMBOLS[cmd])
+                    i = next_i
+                    continue
+                else:
+                    out.append(html.escape(cmd))
+                    i = next_i
+                    continue
+            # Escaped single character
+            if i + 1 < n:
+                out.append(html.escape(s[i + 1]))
+                i += 2
+                continue
+            i += 1
+        elif ch in ("_", "^"):
+            tag = "sub" if ch == "_" else "sup"
+            arg_str, p1 = _extract_braced(s, i + 1)
+            if arg_str is not None:
+                out.append(f"<{tag}>{_latex_to_html(arg_str)}</{tag}>")
+                i = p1
+                continue
+            if ch == "^" and s[i + 1 :].startswith(r"\circ"):
+                out.append("&deg;")
+                i += 1 + len(r"\circ")
+                continue
+            m_cmd = re.match(r"\\([a-zA-Z]+)", s[i + 1 :])
+            if m_cmd:
+                sym = _LATEX_SYMBOLS.get(m_cmd.group(1), html.escape(m_cmd.group(1)))
+                out.append(f"<{tag}>{sym}</{tag}>")
+                i += 1 + len(m_cmd.group(0))
+                continue
+            m_tok = re.match(r"([a-zA-Z0-9+\-]+)", s[i + 1 :])
+            if m_tok:
+                out.append(f"<{tag}>{html.escape(m_tok.group(1))}</{tag}>")
+                i += 1 + len(m_tok.group(0))
+                continue
+            out.append(ch)
+            i += 1
+        elif ch == "{":
+            inner, p1 = _extract_braced(s, i)
+            if inner is not None:
+                out.append(_latex_to_html(inner))
+                i = p1
+                continue
+            i += 1
+        elif ch == "}":
+            i += 1
+        else:
+            out.append(html.escape(ch))
+            i += 1
+    return "".join(out)
+
+
 def _render_markdown_body_to_html(md_text: str) -> str:
     body_md = re.sub(
         r"^---\s*\r?\n.*?\r?\n---\s*\r?\n?", "", md_text or "", count=1, flags=re.DOTALL
     )
+    # Protect display ($$...$$) and inline ($...$) math before CommonMark parsing
+    # so underscores and backslashes inside equations are never mangled into <em> tags
+    display_math_store: List[str] = []
+    inline_math_store: List[str] = []
+
+    def _stash_display(match: re.Match) -> str:
+        idx = len(display_math_store)
+        display_math_store.append(match.group(1).strip())
+        return f"\n\n@@QPPDISPLAYMATH{idx}@@\n\n"
+
+    def _stash_inline(match: re.Match) -> str:
+        idx = len(inline_math_store)
+        inline_math_store.append(match.group(1).strip())
+        return f"@@QPPINLINEMATH{idx}@@"
+
+    protected_md = re.sub(r"\$\$([\s\S]+?)\$\$", _stash_display, body_md)
+    protected_md = re.sub(r"\$([^$\n]+?)\$", _stash_inline, protected_md)
+
     try:
         from markdown_it import MarkdownIt
 
         md_parser = MarkdownIt("commonmark", {"html": True}).enable("table")
-        return md_parser.render(body_md)
+        rendered_html = md_parser.render(protected_md)
     except Exception:
-        return f"<pre>{html.escape(body_md)}</pre>"
+        rendered_html = f"<pre>{html.escape(protected_md)}</pre>"
+
+    for idx, eq in enumerate(display_math_store):
+        token = f"@@QPPDISPLAYMATH{idx}@@"
+        block_html = f'<div class="report-math-block">{_latex_to_html(eq)}</div>'
+        rendered_html = rendered_html.replace(f"<p>{token}</p>", block_html).replace(
+            token, block_html
+        )
+
+    for idx, eq in enumerate(inline_math_store):
+        token = f"@@QPPINLINEMATH{idx}@@"
+        span_html = f'<span class="report-math-inline">{_latex_to_html(eq)}</span>'
+        rendered_html = rendered_html.replace(token, span_html)
+
+    return rendered_html
 
 
 def _persist_report_state(report_data: Dict[str, Any]) -> None:
@@ -1569,24 +1830,6 @@ def generate_petrophysical_report_service(
     report_id = f"rpt_{uuid4().hex[:10]}"
     now_iso = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    context = build_report_context(
-        project_id=req.project_id,
-        well_names=req.well_names,
-        cutoffs=req.cutoffs,
-        zones=req.zones,
-        min_depth=req.min_depth,
-        max_depth=req.max_depth,
-    )
-
-    effective_title = req.report_title or req.title
-    if req.report_type == "SINGLE_WELL_CPI" and effective_title in (
-        "Field Development Plan (FDP) Petrophysical Evaluation Report",
-        "Single-Well Petrophysical CPI & Evaluation Dossier",
-        "",
-    ):
-        focal_w = context["well_names"][0] if context["well_names"] else "Active Well"
-        effective_title = f"Well {focal_w} — Petrophysical CPI & Evaluation Dossier"
-
     effective_ai = (
         req.include_ai_summary
         if req.include_ai_summary is not None
@@ -1599,6 +1842,25 @@ def generate_petrophysical_report_service(
         include_ai_commentary=effective_ai,
     )
     enabled_ids = {s.section_id for s in sections_cfg if s.enabled}
+
+    context = build_report_context(
+        project_id=req.project_id,
+        well_names=req.well_names,
+        cutoffs=req.cutoffs,
+        zones=req.zones,
+        min_depth=req.min_depth,
+        max_depth=req.max_depth,
+        enabled_section_ids=enabled_ids,
+    )
+
+    effective_title = req.report_title or req.title
+    if req.report_type == "SINGLE_WELL_CPI" and effective_title in (
+        "Field Development Plan (FDP) Petrophysical Evaluation Report",
+        "Single-Well Petrophysical CPI & Evaluation Dossier",
+        "",
+    ):
+        focal_w = context["well_names"][0] if context["well_names"] else "Active Well"
+        effective_title = f"Well {focal_w} — Petrophysical CPI & Evaluation Dossier"
 
     assets = _generate_all_report_plots(report_id, context, enabled_ids)
     ai_commentary = (
@@ -1811,18 +2073,7 @@ def render_report_print_html(report_id: str, auto_print: bool = False) -> str:
     state = _load_report_state(report_id)
     md_text = state.get("markdown_content", "")
 
-    # Strip YAML frontmatter for HTML body and display it in the executive banner
-    body_md = re.sub(
-        r"^---\s*\r?\n.*?\r?\n---\s*\r?\n?", "", md_text, count=1, flags=re.DOTALL
-    )
-
-    try:
-        from markdown_it import MarkdownIt
-
-        md_parser = MarkdownIt("commonmark", {"html": True}).enable("table")
-        rendered_body = md_parser.render(body_md)
-    except Exception:
-        rendered_body = f"<pre>{html.escape(body_md)}</pre>"
+    rendered_body = _render_markdown_body_to_html(md_text)
 
     css_path = REPORTS_TEMPLATE_DIR / "report_print.css"
     css_content = css_path.read_text(encoding="utf-8") if css_path.exists() else ""
@@ -1847,10 +2098,6 @@ def render_report_print_html(report_id: str, auto_print: bool = False) -> str:
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{html.escape(state.get("title", default_doc_title))}</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
-        onload="renderMathInElement(document.body, {{delimiters: [{{left: '$$', right: '$$', display: true}}, {{left: '$', right: '$', display: false}}]}});"></script>
     <style>{css_content}</style>
 </head>
 <body class="qpp-report-print">
@@ -1883,27 +2130,44 @@ def render_report_print_html(report_id: str, auto_print: bool = False) -> str:
 def _strip_latex_for_pdf_text(text: str) -> str:
     """Clean Markdown / LaTeX tokens into readable technical Unicode for matplotlib PdfPages text blocks."""
     out = text
+    # Iteratively simplify nested \frac{a}{b}, \bar{x}, \sqrt{x}, \text{x}
+    for _ in range(4):
+        out = re.sub(r"\\text\{([^{}]*)\}", r"\1", out)
+        out = re.sub(r"\\(?:bar|overline)\{([^{}]*)\}", r"\1\u0304", out)
+        out = re.sub(r"\\sqrt\{([^{}]*)\}", r"√(\1)", out)
+        out = re.sub(r"\\frac\{([^{}]*)\}\{([^{}]*)\}", r"(\1)/(\2)", out)
+        out = re.sub(r"_\{([^{}]*)\}", r"_\1", out)
+        out = re.sub(r"\^\{([^{}]*)\}", r"^\1", out)
     replacements = [
+        (r"\\qquad", "    "),
+        (r"\\quad", "  "),
+        (r"\\left\(", "("),
+        (r"\\right\)", ")"),
         (r"\\phi_e", "Φe"),
         (r"\\phi_t", "Φt"),
         (r"\\phi_D", "ΦD"),
         (r"\\phi_z", "Φz"),
         (r"\\phi", "Φ"),
-        (r"\\rho_{ma}", "ρ_ma"),
-        (r"\\rho_{fl}", "ρ_fl"),
-        (r"\\rho_b", "ρ_b"),
-        (r"\\Delta\\rho", "Δρ"),
+        (r"\\rho", "ρ"),
+        (r"\\Delta", "Δ"),
         (r"\\sigma", "σ"),
         (r"\\theta", "θ"),
         (r"\\mu", "μ"),
-        (r"\\Omega\\cdot\\text\{m\}", "Ω·m"),
+        (r"\\omega", "ω"),
         (r"\\Omega", "Ω"),
         (r"\\le", "≤"),
         (r"\\ge", "≥"),
+        (r"\\pm", "±"),
+        (r"\\to", "→"),
+        (r"\^\\circ", "°"),
+        (r"\\circ", "°"),
         (r"\\cdot", "·"),
         (r"\\times", "×"),
         (r"\\sum", "Σ"),
-        (r"\\text\{([^}]+)\}", r"\1"),
+        (r"\\ln", "ln"),
+        (r"\\log", "log"),
+        (r"\\exp", "exp"),
+        (r"\\cos", "cos"),
         (r"\*\*([^*]+)\*\*", r"\1"),
         (r"`([^`]+)`", r"\1"),
         (r"\$\$([^$]+)\$\$", r"Equation: \1"),
@@ -2152,18 +2416,57 @@ def api_get_project_report_context(
         ) from e
 
 
+_REPORT_JOBS: Dict[str, Dict[str, Any]] = {}
+
+
+def _run_report_job(job_id: str, req: ReportGenerationRequest) -> None:
+    try:
+        res = generate_petrophysical_report_service(req)
+        _REPORT_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "completed",
+            "report": res.model_dump(),
+            "error": None,
+        }
+    except Exception as e:
+        logger.exception(f"Background report job {job_id} failed: {e}")
+        _REPORT_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "failed",
+            "report": None,
+            "error": str(e),
+        }
+
+
 @router.post(
     "/projects/{project_id}/reports/generate",
-    response_model=ReportGenerationResponse,
     summary="Generate an FDP Petrophysical Evaluation Report (Markdown + Plots + optional PDF)",
 )
 def api_generate_project_report(
     project_id: int,
     req: ReportGenerationRequest,
+    async_job: bool = Query(
+        False,
+        description="Run report generation in background and return job_id immediately to prevent reverse-proxy HTTP 524 timeouts",
+    ),
 ):
     """Generate a standardized 10-section FDP Petrophysical Report for the specified project and wells."""
+    req.project_id = project_id
+    if async_job:
+        job_id = f"job_{uuid4().hex[:10]}"
+        _REPORT_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "running",
+            "report": None,
+            "error": None,
+        }
+        t = threading.Thread(
+            target=_run_report_job, args=(job_id, req), daemon=True
+        )
+        t.start()
+        return {"job_id": job_id, "status": "running"}
+
     try:
-        req.project_id = project_id
         return generate_petrophysical_report_service(req)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -2172,6 +2475,18 @@ def api_generate_project_report(
         raise HTTPException(
             status_code=500, detail=f"Failed to generate report: {e}"
         ) from e
+
+
+@router.get(
+    "/projects/{project_id}/reports/jobs/{job_id}",
+    summary="Poll background report generation job status",
+)
+def api_get_report_job_status(project_id: int, job_id: str):
+    """Return status and completed payload for an asynchronous report generation job."""
+    job = _REPORT_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Report job '{job_id}' not found.")
+    return job
 
 
 @router.get(

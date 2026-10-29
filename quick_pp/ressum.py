@@ -274,12 +274,15 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
         )
         temp_df["flag"] = flag
 
-        # Calculate gross thickness
+        # Calculate gross thickness and ensure discrete sample summation net does not exceed (bottom - top)
         temp_df["gross"] = temp_df["bottom"] - temp_df["top"]
+        temp_df["net"] = np.minimum(temp_df["net"], temp_df["gross"])
 
         # Calculate net-to-gross ratio
         temp_df["ntg"] = np.where(
-            temp_df["gross"] > 0, temp_df["net"] / temp_df["gross"], np.nan
+            temp_df["gross"] > 0,
+            np.clip(temp_df["net"] / temp_df["gross"], 0.0, 1.0),
+            np.nan,
         )
 
         # Concat to ressum_df

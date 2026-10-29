@@ -885,6 +885,30 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 LIMIT 1
             """)
 
+            all_alias_names = {
+                a for aliases in canonical_zone_curve_aliases.values() for a in aliases
+            }
+            candidate_probe_cids = [
+                cid
+                for wid_map in curve_ids_by_well_mnemonic.values()
+                for m_name, cid in wid_map.items()
+                if m_name in all_alias_names
+            ]
+            curve_minmax_map: Dict[int, Tuple[float, float]] = {}
+            if candidate_probe_cids:
+                minmax_stmt = text("""
+                    SELECT cd.curve_id, MIN(cd.depth) AS min_d, MAX(cd.depth) AS max_d
+                    FROM curve_data cd
+                    WHERE cd.curve_id IN :probe_cids
+                      AND cd.value_numeric IS NOT NULL
+                    GROUP BY cd.curve_id
+                """).bindparams(bindparam("probe_cids", expanding=True))
+                for cid_val, c_min, c_max in session.execute(
+                    minmax_stmt, {"probe_cids": candidate_probe_cids}
+                ).fetchall():
+                    if c_min is not None and c_max is not None:
+                        curve_minmax_map[int(cid_val)] = (float(c_min), float(c_max))
+
             for w in orm_wells:
                 wid = w.well_id
                 d_info = depth_by_well.get(
@@ -1017,6 +1041,19 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                             for a in aliases:
                                 cid = w_cid_map.get(a)
                                 if cid is not None:
+                                    bounds = curve_minmax_map.get(cid)
+                                    if bounds is None:
+                                        continue
+                                    c_min, c_max = bounds
+                                    if c_max < d_top_f or c_min >= d_base_f:
+                                        continue
+                                    if (
+                                        can_key not in computed_curve_keys
+                                        or (d_top_f <= c_min < d_base_f)
+                                        or (d_top_f <= c_max < d_base_f)
+                                    ):
+                                        found_in_zone = True
+                                        break
                                     hit = session.execute(
                                         zone_probe_stmt,
                                         {
@@ -1735,7 +1772,18 @@ def _get_merged_dataframe_sync(
                     raw_surveys_df = well.get_well_surveys()
                 except Exception:
                     raw_surveys_df = pd.DataFrame()
-                core_raw = well.get_core_data() or {}
+                rca_rows = session.execute(
+                    text("""
+                        SELECT cs.depth, cs.sample_name, UPPER(cm.property_name) AS prop, cm.value
+                        FROM core_samples cs
+                        JOIN core_measurements cm ON cm.sample_id = cs.sample_id
+                        WHERE cs.well_id = :wid
+                          AND cm.value IS NOT NULL
+                          AND UPPER(cm.property_name) IN ('POR', 'CPORE', 'POROSITY', 'PERM', 'CPERM', 'PERMEABILITY')
+                        ORDER BY cs.depth
+                    """),
+                    {"wid": well.well_id},
+                ).fetchall()
 
             # Database session is now closed; perform CPU/DataFrame merging outside DB pool
             df = df.reset_index(drop=True)
@@ -1838,37 +1886,22 @@ def _get_merged_dataframe_sync(
                 )
 
             core_rows_by_depth: Dict[float, Dict[str, Any]] = {}
-            if isinstance(core_raw, dict):
-                for name, sd in core_raw.items():
-                    try:
-                        dval = sd.get("depth")
-                        if dval is None:
-                            continue
-                        measurements = sd.get("measurements")
-                        if measurements is None or measurements.empty:
-                            continue
-
-                        d_float = float(dval)
-                        row_entry = core_rows_by_depth.setdefault(
-                            d_float,
-                            {"depth": d_float, "core_sample_name": name},
-                        )
-                        prop_upper = measurements["property"].astype(str).str.upper()
-                        for target_col, aliases in (
-                            ("cpore", ("POR", "CPORE", "POROSITY")),
-                            ("cperm", ("PERM", "CPERM", "PERMEABILITY")),
-                        ):
-                            mask = (
-                                prop_upper.isin(aliases) & measurements["value"].notna()
-                            )
-                            filtered = measurements[mask]
-                            if not filtered.empty:
-                                val = float(filtered.iloc[0]["value"])
-                                if target_col == "cpore" and val > 1.0:
-                                    val = val / 100.0
-                                row_entry[target_col] = val
-                    except Exception:
-                        continue
+            for dval, sname, prop_up, raw_val in rca_rows:
+                if dval is None or raw_val is None:
+                    continue
+                try:
+                    d_float = float(dval)
+                    val = float(raw_val)
+                except (TypeError, ValueError):
+                    continue
+                row_entry = core_rows_by_depth.setdefault(
+                    d_float,
+                    {"depth": d_float, "core_sample_name": sname},
+                )
+                if prop_up in ("POR", "CPORE", "POROSITY") and "cpore" not in row_entry:
+                    row_entry["cpore"] = val / 100.0 if val > 1.0 else val
+                elif prop_up in ("PERM", "CPERM", "PERMEABILITY") and "cperm" not in row_entry:
+                    row_entry["cperm"] = val
 
             if core_rows_by_depth:
                 core_df = (

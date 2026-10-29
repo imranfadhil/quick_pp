@@ -2515,8 +2515,15 @@ class Well(object):
 
     def get_scal_pc_data(self) -> List[Dict[str, Any]]:
         """Retrieves all SCAL capillary pressure pairs for the well as a flat list of dicts."""
+        stmt = (
+            select(ORMCoreSample)
+            .where(ORMCoreSample.well_id == self.well_id)
+            .options(selectinload(ORMCoreSample.capillary_pressure_data))
+            .order_by(ORMCoreSample.depth)
+        )
+        samples = self.db_session.scalars(stmt).all()
         rows: List[Dict[str, Any]] = []
-        for sample in self._orm_well.core_samples:
+        for sample in samples:
             for p in sample.capillary_pressure_data:
                 rows.append(
                     {
@@ -2672,46 +2679,66 @@ class Well(object):
         return core_data_list
 
     def get_core_data(self) -> Dict[str, pd.DataFrame]:
-        """Retrieves all core data for the well, organized by sample."""
+        """Retrieves all core data for the well, organized by sample (eagerly loaded to avoid N+1 queries)."""
+        stmt = (
+            select(ORMCoreSample)
+            .where(ORMCoreSample.well_id == self.well_id)
+            .options(
+                selectinload(ORMCoreSample.measurements),
+                selectinload(ORMCoreSample.relperm_data),
+                selectinload(ORMCoreSample.capillary_pressure_data),
+            )
+            .order_by(ORMCoreSample.depth)
+        )
+        samples = self.db_session.scalars(stmt).all()
+        empty_df = pd.DataFrame()
         core_data = {}
-        for sample in self._orm_well.core_samples:
+        for sample in samples:
             sample_data = {
                 "depth": sample.depth,
                 "description": sample.description,
                 "remark": sample.remark,
             }
-            measurements = pd.DataFrame(
-                [
-                    {"property": m.property_name, "value": m.value, "unit": m.unit}
-                    for m in sample.measurements
-                ]
-            )
-            # Consolidate relperm data by saturation
-            relperm = pd.DataFrame(
-                [
-                    {"saturation": rp.saturation, f"kr_{rp.phase}": rp.kr}
-                    for rp in sample.relperm_data
-                ]
-            )
-            pc = pd.DataFrame(
-                [
-                    {
-                        "saturation": p.saturation,
-                        "pressure": p.pressure,
-                        "type": p.experiment_type,
-                        "cycle": p.cycle,
-                    }
-                    for p in sample.capillary_pressure_data
-                ]
-            )
+            if sample.measurements:
+                measurements = pd.DataFrame(
+                    [
+                        {"property": m.property_name, "value": m.value, "unit": m.unit}
+                        for m in sample.measurements
+                    ]
+                )
+            else:
+                measurements = empty_df
 
-            if not relperm.empty:
+            if sample.relperm_data:
+                relperm = pd.DataFrame(
+                    [
+                        {"saturation": rp.saturation, f"kr_{rp.phase}": rp.kr}
+                        for rp in sample.relperm_data
+                    ]
+                )
                 relperm = (
                     relperm.groupby("saturation")
                     .first()
                     .reset_index()
                     .sort_values("saturation")
                 )
+            else:
+                relperm = empty_df
+
+            if sample.capillary_pressure_data:
+                pc = pd.DataFrame(
+                    [
+                        {
+                            "saturation": p.saturation,
+                            "pressure": p.pressure,
+                            "type": p.experiment_type,
+                            "cycle": p.cycle,
+                        }
+                        for p in sample.capillary_pressure_data
+                    ]
+                )
+            else:
+                pc = empty_df
 
             sample_data["measurements"] = measurements
             sample_data["relperm"] = relperm

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { API_BASE, postJson } from '$lib/api/client';
+	import { API_BASE, generateProjectReport, postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
@@ -89,8 +89,8 @@
 				include_ai_commentary: withAi
 			};
 
-			const res = await postJson<ActiveReportState>(
-				`/quick_pp/projects/${encodeURIComponent(workbench.projectId)}/reports/generate`,
+			const res = await generateProjectReport<ActiveReportState>(
+				workbench.projectId,
 				payload
 			);
 			workbench.activeReport = res;

@@ -14,11 +14,12 @@ This Single-Well Computer-Processed Interpretation (CPI) & Formation Evaluation 
 {% endif %}
 
 ### Zonal Net Pay Summary — Well `{{ focal_well }}`
+
 | Zone | Interval (m) | Gross (m) | Net Pay (m) | $NTG$ (v/v) | $\bar{V}_{sh}$ (v/v) | $\bar{\phi}_e$ (v/v) | $\bar{S}_w$ (v/v) | $K_{geom}$ (mD) | $HCPT$ (m) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 {% if well_zonal_summary %}
 {% for r in well_zonal_summary %}
-| **{{ r.zone }}** | `{{ "%.1f"|format(r.top) }}–{{ "%.1f"|format(r.bottom) }}` | {{ "%.1f"|format(r.gross) }} | {{ "%.1f"|format(r.net_pay) }} | {{ "%.2f"|format(r.ntg) }} | {{ "%.3f"|format(r.vsh) }} | {{ "%.3f"|format(r.phie) }} | {{ "%.3f"|format(r.sw) }} | {{ "%.1f"|format(r.perm_geom) }} | **{{ "%.2f"|format(r.hcpt) }}** |
+| **{{ r.zone }}** | `{{ "%.1f"|format(r.top) }}–{{ "%.1f"|format(r.bottom) }}` | {{ "%.1f"|format(r.gross) }} | {{ "%.1f"|format(r.net_pay) }} | {{ "%.2f"|format(r.ntg) }} | {{ "%.3f"|format(r.vsh) if r.net_pay > 0 else "—" }} | {{ "%.3f"|format(r.phie) if r.net_pay > 0 else "—" }} | {{ "%.3f"|format(r.sw) if r.net_pay > 0 else "—" }} | {{ "%.1f"|format(r.perm_geom) if r.net_pay > 0 else "—" }} | **{{ "%.2f"|format(r.hcpt) }}** |
 {% endfor %}
 {% else %}
 {% for z in zonal_summary %}
@@ -40,15 +41,18 @@ This technical petrophysical evaluation report documents the deterministic and p
 {% endif %}
 
 ### Key Field Petrophysical Summary (Net Pay)
-| Zone | Wells Penetrated | Mean Gross (m) | Mean Net Pay (m) | Mean $NTG$ (v/v) | Mean $\phi_e$ (v/v) | Mean $S_w$ (v/v) | Mean $K_{geom}$ (mD) | Mean $HCPT$ (m) |
+
+| Zone | Wells Penetrated | Mean Gross (m) | Mean Net Pay (m) | Mean $NTG$ (v/v) | Mean $\bar{\phi}_e$ (v/v) | Mean $\bar{S}_w$ (v/v) | Mean $K_{geom}$ (mD) | Mean $HCPT$ (m) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 {% for z in zonal_summary %}
-| **{{ z.zone }}** | {{ z.well_count }} | {{ "%.1f"|format(z.gross) }} | {{ "%.1f"|format(z.net_pay) }} | {{ "%.2f"|format(z.ntg) }} | {{ "%.3f"|format(z.phie) }} | {{ "%.3f"|format(z.sw) }} | {{ "%.1f"|format(z.perm_geom) }} | {{ "%.2f"|format(z.hcpt) }} |
+| **{{ z.zone }}** | {{ z.well_count }} | {{ "%.1f"|format(z.gross) }} | {{ "%.1f"|format(z.net_pay) }} | {{ "%.2f"|format(z.ntg) }} | {{ "%.3f"|format(z.phie) if z.net_pay > 0 else "—" }} | {{ "%.3f"|format(z.sw) if z.net_pay > 0 else "—" }} | {{ "%.1f"|format(z.perm_geom) if z.net_pay > 0 else "—" }} | **{{ "%.2f"|format(z.hcpt) }}** |
 {% endfor %}
 {% endif %}
 
 {% if anomaly_flags %}
+
 ### Audit & Quality Assurance Highlights
+
 {% for flag in anomaly_flags %}
 - **{{ flag.category }} (`{{ flag.target }}`)**: {{ flag.message }} — *Mitigation:* {{ flag.mitigation }}
 {% endfor %}

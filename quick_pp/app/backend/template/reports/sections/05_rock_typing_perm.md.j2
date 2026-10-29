@@ -1,6 +1,7 @@
 # 5. Rock Typing & Permeability Modeling
 
 ### 5.1 Hydraulic Flow Units (FZI / DRT) & Permeability Transforms
+
 Rock typing and continuous permeability ($K$) prediction were established using Routine Core Analysis (RCA) and log-derived Hydraulic Flow Units via the Reservoir Quality Index ($RQI$), Normalized Porosity ($\phi_z$), Flow Zone Indicator ($FZI$), and Discrete Rock Typing ($DRT$) formulation:
 
 $$RQI = 0.0314 \sqrt{\frac{K}{\phi_e}}, \quad \phi_z = \frac{\phi_e}{1 - \phi_e}, \quad FZI = \frac{RQI}{\phi_z}, \quad DRT = \text{round}(2 \ln(FZI) + 10.6)$$
@@ -20,6 +21,7 @@ $$RQI = 0.0314 \sqrt{\frac{K}{\phi_e}}, \quad \phi_z = \frac{\phi_e}{1 - \phi_e}
 {% endif %}
 
 {% if assets.perm_crossplot %}
+
 ![Figure 5.1: Core Porosity-Permeability Crossplot by Rock Type & Stratigraphic Modified Lorenz Plot]({{ assets.perm_crossplot }})
 {% endif %}
 

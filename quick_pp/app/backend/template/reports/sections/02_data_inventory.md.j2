@@ -11,6 +11,7 @@ A total of **{{ wells|length }}** well(s) were evaluated in this Field Developme
 {% endif %}
 
 ### 2.1 Multi-Well Wireline, Core & Pressure Inventory
+
 | Well Name | UWI | KB (m) | Top–Bottom (m MD) | Logged (m) | Raw Curves Available | Core (RCA/SCAL) | Pressure Data | Tops |
 | :--- | :--- | :---: | :---: | :---: | :--- | :---: | :---: | :---: |
 {% for w in wells %}
@@ -18,6 +19,7 @@ A total of **{{ wells|length }}** well(s) were evaluated in this Field Developme
 {% endfor %}
 
 {% if assets.inventory_heatmap %}
+
 ![Figure 2.1: Multi-Well Data Inventory Matrix]({{ assets.inventory_heatmap }})
 {% endif %}
 

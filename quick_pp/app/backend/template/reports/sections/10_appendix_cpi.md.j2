@@ -2,7 +2,7 @@
 {% if is_single_well %}
 # 6. Composite Petrophysical Evaluation Log (CPI)
 
-Composite 5-track Computer-Processed Interpretation (CPI) log plot displaying gamma ray and caliper washout flags (Track 1), deep resistivity (Track 2), clay/mineralogy/porosity/fluid volumetric partitioning (Track 3), total vs. effective porosity with core anchors (Track 4), and water saturation, permeability & Net Pay flags (Track 5).
+Composite 6-track Computer-Processed Interpretation (CPI) log plot displaying gamma ray (Track 1), deep resistivity (Track 2), density-neutron crossover (Track 3), total & effective porosity with overburden-corrected core `CPORE` anchors (Track 4), permeability with core `CPERM` anchors (Track 5), and water saturation (`SWT`) & saturation-height (`SHF`) hydrocarbon pay profile (Track 6).
 {% else %}
 # Appendix A: Composite Petrophysical Evaluation Logs (CPI)
 {% endif %}
@@ -13,6 +13,7 @@ Composite 5-track Computer-Processed Interpretation (CPI) log plot displaying ga
 
 {% for cpi in assets.cpi_plots %}
 ### Well: `{{ cpi.well_name }}`
+
 ![CPI Log - {{ cpi.well_name }}]({{ cpi.url }})
 {% if not loop.last %}
 

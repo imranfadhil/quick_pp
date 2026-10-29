@@ -379,6 +379,19 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 			done: 'Multi-well curve conditioning complete'
 		};
 	}
+	if (path.includes('/reports/jobs/')) {
+		return {
+			active: 'Checking report generation status...',
+			done: 'Report status checked',
+			silent: true
+		};
+	}
+	if (path.endsWith('/reports/generate')) {
+		return {
+			active: 'Generating petrophysical report & high-DPI figures...',
+			done: 'Petrophysical report generated'
+		};
+	}
 	if (path.includes('/uam/audit-logs')) {
 		return { active: 'Loading audit logs...', done: 'Audit logs loaded', silent: true };
 	}
@@ -464,8 +477,10 @@ async function parseErrorResponse(res: Response, fallbackMsg: string): Promise<E
 					? String(jsonErr.message)
 					: rawText;
 		} catch {
-			// If Nginx or frontend server returned an HTML error page
-			if (res.status === 502 || res.status === 503 || res.status === 504) {
+			// If Nginx, Cloudflare, or frontend server returned an HTML error page
+			if (res.status === 524 || res.status === 504) {
+				errText = `Request timed out at the reverse proxy / Cloudflare (HTTP ${res.status}).`;
+			} else if (res.status === 502 || res.status === 503) {
 				errText = `Backend server is unreachable or starting up (HTTP ${res.status}).`;
 			} else if (
 				rawText.trimStart().toLowerCase().startsWith('<!doctype html') ||
@@ -719,4 +734,45 @@ export async function downloadWellLas(
 	a.click();
 	a.remove();
 	URL.revokeObjectURL(objUrl);
+}
+
+/**
+ * Generate a Multi-Well FDP or Single-Well CPI report using background job polling
+ * to prevent Cloudflare / reverse-proxy HTTP 524 timeouts on large multi-well fields.
+ */
+export async function generateProjectReport<T>(
+	projectId: string | number,
+	payload: Record<string, any>
+): Promise<T> {
+	const pid = encodeURIComponent(String(projectId));
+	const startRes = await postJson<any>(
+		`/quick_pp/projects/${pid}/reports/generate?async_job=true`,
+		payload
+	);
+	if (startRes && startRes.report_id) {
+		return startRes as T;
+	}
+	const jobId = startRes?.job_id;
+	if (!jobId) {
+		throw new Error('Failed to start report generation job.');
+	}
+
+	const maxAttempts = 240; // Up to ~3 minutes of lightweight polling
+	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+		await new Promise((resolve) => setTimeout(resolve, 750));
+		const jobStatus = await getJson<{
+			job_id: string;
+			status: 'running' | 'completed' | 'failed';
+			report?: T;
+			error?: string | null;
+		}>(`/quick_pp/projects/${pid}/reports/jobs/${encodeURIComponent(jobId)}`);
+
+		if (jobStatus.status === 'completed' && jobStatus.report) {
+			return jobStatus.report;
+		}
+		if (jobStatus.status === 'failed') {
+			throw new Error(jobStatus.error || 'Report generation job failed on backend.');
+		}
+	}
+	throw new Error('Report generation timed out waiting for background job completion.');
 }

@@ -61,7 +61,7 @@ def _save_fig(
     filename: str,
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
-    dpi: int = 180,
+    dpi: int = 140,
 ) -> str:
     out_dir = _resolve_output_dir(output_dir)
     out_path = out_dir / filename
@@ -74,6 +74,44 @@ def _save_fig(
         edgecolor="none",
     )
     return _format_return_path(out_path, url_prefix=url_prefix)
+
+
+def _trim_to_logged_interval(df: pd.DataFrame) -> pd.DataFrame:
+    """Trim leading and trailing unlogged surface casing / post-TD intervals where all key log curves are NaN."""
+    if df is None or df.empty or "DEPTH" not in df.columns:
+        return df
+    probe_cols = [
+        c
+        for c in (
+            "GR",
+            "RT",
+            "RD",
+            "NPHI",
+            "RHOB",
+            "DTC",
+            "PHIT",
+            "PHIE",
+            "SWT",
+            "SW",
+            "PERM",
+            "PERM_TRANS",
+            "SHF",
+            "CPORE",
+            "CPERM",
+        )
+        if c in df.columns
+    ]
+    if not probe_cols:
+        return df
+    valid_mask = np.zeros(len(df), dtype=bool)
+    for c in probe_cols:
+        valid_mask |= pd.to_numeric(df[c], errors="coerce").notna().to_numpy()
+    if not valid_mask.any():
+        return df
+    valid_indices = np.flatnonzero(valid_mask)
+    start_idx = max(0, int(valid_indices[0]) - 10)
+    end_idx = min(len(df), int(valid_indices[-1]) + 11)
+    return df.iloc[start_idx:end_idx].copy()
 
 
 def _ensure_df_well_filter(
@@ -899,6 +937,16 @@ def generate_uncertainty_cutoff_plot(
     phie = _get_numeric_series(sub, "PHIE", "PHIT", default=0.0).to_numpy(dtype=float)
     vclay = _get_numeric_series(sub, "VCLAY", default=0.2).to_numpy(dtype=float)
     swt = _get_numeric_series(sub, "SWT", "SW", default=0.5).to_numpy(dtype=float)
+    valid_m = (phie > 0.0) & np.isfinite(phie) & np.isfinite(vclay) & np.isfinite(swt)
+    if valid_m.any():
+        phie = phie[valid_m]
+        vclay = vclay[valid_m]
+        swt = swt[valid_m]
+    if len(phie) > 8000:
+        step_n = max(1, len(phie) // 8000)
+        phie = phie[::step_n]
+        vclay = vclay[::step_n]
+        swt = swt[::step_n]
 
     if len(phie) > 0:
         phi_thresholds = np.linspace(0.0, 0.22, 35)
@@ -1003,7 +1051,7 @@ def generate_upscaling_comparison_plot(
     """Generate Figure 9.1: Fine-Scale vs. Upscaled Blocked Logs Comparison Track."""
     from quick_pp.upscaling import expand_blocked_logs, upscale_logs
 
-    sub = _ensure_df_well_filter(df, [well_name])
+    sub = _trim_to_logged_interval(_ensure_df_well_filter(df, [well_name]))
     fig = Figure(figsize=(10.5, 4.8))
     gs = GridSpec(1, 3, figure=fig, wspace=0.18)
     ax1 = fig.add_subplot(gs[0, 0])
@@ -1023,10 +1071,10 @@ def generate_upscaling_comparison_plot(
     work = pd.DataFrame(
         {
             "DEPTH": _get_numeric_series(sub, "DEPTH"),
-            "VCLAY": _get_numeric_series(sub, "VCLAY", default=0.2),
+            "VCLAY": _get_numeric_series(sub, "VCLAY", "VSHALE", default=0.2),
             "PHIT": _get_numeric_series(sub, "PHIT", "PHIE", default=0.15),
-            "SWT": _get_numeric_series(sub, "SWT", "SW", default=0.45),
-            "PERM": _get_numeric_series(sub, "PERM", default=25.0).clip(lower=1e-2),
+            "SWT": _get_numeric_series(sub, "SWT", "SW", "SHF", default=0.45),
+            "PERM": _get_numeric_series(sub, "PERM", "PERM_TRANS", default=25.0).clip(lower=1e-2),
             "ZONES": sub["ZONES"].fillna("ALL").astype(str)
             if "ZONES" in sub.columns
             else "ALL",
@@ -1042,7 +1090,7 @@ def generate_upscaling_comparison_plot(
             zone_col="ZONES",
             perm_method="geometric",
         )
-        step_df = expand_blocked_logs(work, blocked, depth_col="DEPTH")
+        step_df = expand_blocked_logs(work, blocked, depth_col="DEPTH", suffix="_UP")
     except Exception as exc:
         logger.debug(f"Upscaling preview fallback: {exc}")
         step_df = work.copy()
@@ -1115,7 +1163,7 @@ def generate_well_cpi_plot(
     url_prefix: Optional[str] = None,
 ) -> str:
     """Generate Appendix Composite Petrophysical Evaluation Log (CPI) 6-Track Plot."""
-    sub = _ensure_df_well_filter(df, [well_name])
+    sub_full = _trim_to_logged_interval(_ensure_df_well_filter(df, [well_name]))
     safe_well = "".join(
         c if c.isalnum() or c in ("-", "_") else "_" for c in str(well_name)
     )
@@ -1131,12 +1179,21 @@ def generate_well_cpi_plot(
     )
     axes = [fig.add_subplot(gs[0, i]) for i in range(6)]
 
-    if sub.empty or "DEPTH" not in sub.columns:
+    if sub_full.empty or "DEPTH" not in sub_full.columns:
         axes[0].text(0.5, 0.5, f"No log data for {well_name}", ha="center", va="center")
         return _save_fig(fig, filename, output_dir, url_prefix)
 
-    d = pd.to_numeric(sub["DEPTH"], errors="coerce").to_numpy(dtype=float)
-    d_min, d_max = float(np.nanmin(d)), float(np.nanmax(d))
+    d_full = pd.to_numeric(sub_full["DEPTH"], errors="coerce").to_numpy(dtype=float)
+    d_min, d_max = float(np.nanmin(d_full)), float(np.nanmax(d_full))
+
+    # Downsample continuous log tracks if needed while preserving all discrete CPORE/CPERM rows on sub_full
+    if len(sub_full) > 2500:
+        step_cpi = max(1, len(sub_full) // 2500)
+        sub = sub_full.iloc[::step_cpi]
+        d = d_full[::step_cpi]
+    else:
+        sub = sub_full
+        d = d_full
 
     # Track 1: GR & Badhole
     ax = axes[0]
@@ -1193,26 +1250,26 @@ def generate_well_cpi_plot(
         ax.plot(phit, d, color="#1d4ed8", lw=1.2, label="PHIT")
     if np.isfinite(phie).any():
         ax.plot(phie, d, color="#0d9488", lw=1.0, linestyle=":", label="PHIE")
-    if "CPORE" in sub.columns:
-        cp = _get_numeric_series(sub, "CPORE").to_numpy(dtype=float)
+    if "CPORE" in sub_full.columns:
+        cp = _get_numeric_series(sub_full, "CPORE").to_numpy(dtype=float)
         cp = np.where(cp > 1.0, cp / 100.0, cp)
         cm = np.isfinite(cp) & (cp > 0)
         if np.any(cm):
-            ax.scatter(cp[cm], d[cm], color="#dc2626", s=16, zorder=5, label="CPORE")
+            ax.scatter(cp[cm], d_full[cm], color="#dc2626", s=16, zorder=5, label="CPORE")
     ax.set_xlim(0.0, 0.50)
     ax.set_xlabel("Porosity Φ (v/v)", fontsize=8.5, fontweight="bold", color="#1d4ed8")
     ax.set_title("Track 4\nPorosity & Core", fontsize=8.5, fontweight="bold")
 
     # Track 5: Permeability & Core CPERM
     ax = axes[4]
-    perm = _get_numeric_series(sub, "PERM").clip(lower=1e-2).to_numpy(dtype=float)
+    perm = _get_numeric_series(sub, "PERM", "PERM_TRANS").clip(lower=1e-2).to_numpy(dtype=float)
     if np.isfinite(perm).any():
         ax.plot(perm, d, color="#059669", lw=1.1, label="PERM")
-    if "CPERM" in sub.columns:
-        ck = _get_numeric_series(sub, "CPERM").to_numpy(dtype=float)
+    if "CPERM" in sub_full.columns:
+        ck = _get_numeric_series(sub_full, "CPERM").to_numpy(dtype=float)
         km = np.isfinite(ck) & (ck > 0)
         if np.any(km):
-            ax.scatter(ck[km], d[km], color="#b91c1c", s=16, zorder=5, label="CPERM")
+            ax.scatter(ck[km], d_full[km], color="#b91c1c", s=16, zorder=5, label="CPERM")
     ax.set_xscale("log")
     ax.set_xlim(1e-2, 1e4)
     ax.set_xlabel("PERM (mD)", fontsize=8.5, fontweight="bold", color="#059669")
