@@ -9,6 +9,7 @@
 		type DrtFeatureKey,
 		type DrtMethod,
 		type DrtPropagationMode,
+		type PhiKDataSource,
 		type RockTypingPlotView
 	} from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -126,6 +127,12 @@
 	function selectDrtMethod(m: DrtMethod) {
 		if (projectData.drtMethod === m && projectData.rockTypingResult?.method === m) return;
 		projectData.drtMethod = m;
+		projectData.drtClassifierPropagated = false;
+	}
+
+	function selectDrtDataSource(src: PhiKDataSource) {
+		if (projectData.drtDataSource === src) return;
+		projectData.drtDataSource = src;
 		projectData.drtClassifierPropagated = false;
 	}
 
@@ -280,6 +287,7 @@
 						model_key: keySlug || `rt_${Date.now()}`,
 						model_name: nameToUse,
 						drt_method: projectData.drtMethod,
+						data_source: projectData.drtDataSource,
 						cutoffs: [...projectData.activeDrtCutoffs].sort((a, b) => a - b)
 					})
 				}
@@ -474,6 +482,7 @@
 								? projectData.selectedWellNames
 								: null,
 						method,
+						data_source: projectData.drtDataSource,
 						cutoffs: sortedCutoffs,
 						higher_is_better: meta.higherIsBetter,
 						auto_find_cutoffs: autoFindCutoffs,
@@ -522,6 +531,17 @@
 			const counts = (data as any).rock_type_counts ?? (data as any).flag_counts ?? {};
 			projectData.rockTypingResult = {
 				method: (data as any).method ?? method,
+				data_source: (data as any).data_source ?? projectData.drtDataSource,
+				poro_label:
+					(data as any).poro_label ??
+					((data as any).data_source === 'log' || projectData.drtDataSource === 'log'
+						? 'PHIT'
+						: 'CPORE'),
+				perm_label:
+					(data as any).perm_label ??
+					((data as any).data_source === 'log' || projectData.drtDataSource === 'log'
+						? 'PERM'
+						: 'CPERM'),
 				optimal_k: (data as any).optimal_k,
 				selected_k: (data as any).selected_k,
 				cutoff_method: (data as any).cutoff_method ?? projectData.drtCutoffMethod,
@@ -649,9 +669,87 @@
 	<div class="flex-1 overflow-y-auto">
 		<ParameterSection
 			title="Rock Typing Method (DRT)"
-			badge={activeMeta.badge}
+			badge="{projectData.drtDataSource === 'core' ? 'Core (CPORE & CPERM)' : 'Log (PHIT & PERM)'} · {activeMeta.badge}"
 			defaultOpen={true}
 		>
+			<!-- Input Data Source Selector (Core CPORE/CPERM vs Calculated Log PHIT/PERM) -->
+			<div class="mb-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<div class="mb-1 flex items-center justify-between text-[9.5px]">
+					<span class="font-semibold text-[var(--text-primary)]">
+						Input Porosity &amp; Permeability Source (Φ &amp; K):
+					</span>
+					<span class="mono-num text-[9px] text-[var(--text-muted)]">
+						{#if projectData.rockTypingResult?.data_source}
+							Computed on:
+							<strong class="text-[var(--text-primary)]">
+								{projectData.rockTypingResult.data_source === 'log'
+									? 'Log (PHIT & PERM)'
+									: 'Core (CPORE & CPERM)'}
+							</strong>
+						{:else}
+							Select source
+						{/if}
+					</span>
+				</div>
+				<div class="grid grid-cols-2 gap-1">
+					<button
+						type="button"
+						onclick={() => selectDrtDataSource('core')}
+						class="flex flex-col items-start rounded-xs border px-2 py-1 text-left transition-colors {projectData.drtDataSource ===
+						'core'
+							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+					>
+						<div class="flex w-full items-center justify-between gap-1 text-[10px]">
+							<span>Core Data</span>
+							<span class="mono-num rounded-xs bg-amber-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-amber-800">
+								CPORE &amp; CPERM
+							</span>
+						</div>
+						<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
+							{projectData.wellsWithCorePhiK.length}/{projectData.activeWells.length} wells · {projectData.totalCorePlugCount} RCA plugs
+						</span>
+					</button>
+					<button
+						type="button"
+						onclick={() => selectDrtDataSource('log')}
+						class="flex flex-col items-start rounded-xs border px-2 py-1 text-left transition-colors {projectData.drtDataSource ===
+						'log'
+							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+					>
+						<div class="flex w-full items-center justify-between gap-1 text-[10px]">
+							<span>Calculated Logs</span>
+							<span class="mono-num rounded-xs bg-indigo-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-indigo-800">
+								PHIT &amp; PERM
+							</span>
+						</div>
+						<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
+							{projectData.wellsWithLogPhiK.length}/{projectData.activeWells.length} wells with PHIT &amp; PERM
+						</span>
+					</button>
+				</div>
+				<div class="mt-1 text-[9px] leading-snug text-[var(--text-secondary)]">
+					{#if projectData.drtDataSource === 'core'}
+						Modelling <span class="mono-num font-semibold">{activeMeta.shortName}</span> and cutoff DRT labels strictly from
+						<strong class="mono-num text-[var(--text-primary)]">Core Plugs (CPORE &amp; CPERM)</strong>.
+						{#if projectData.wellsWithCorePhiK.length === 0}
+							<span class="font-semibold text-amber-700">
+								No selected wells have RCA core data — switch to Calculated Logs (PHIT &amp; PERM).
+							</span>
+						{/if}
+					{:else}
+						Modelling <span class="mono-num font-semibold">{activeMeta.shortName}</span> and cutoff DRT labels strictly from
+						<strong class="mono-num text-[var(--text-primary)]">Calculated Logs (PHIT &amp; PERM)</strong>.
+						{#if projectData.wellsWithLogPhiK.length === 0}
+							<span class="font-semibold text-amber-700">
+								No selected wells have both PHIT and PERM curves — switch to Core Data (CPORE &amp; CPERM).
+							</span>
+						{/if}
+					{/if}
+				</div>
+			</div>
+
 			<div class="grid grid-cols-3 gap-1">
 				{#each [['fzi', 'FZI / RQI'], ['winland', 'Winland R35'], ['lucia', 'Lucia RFN']] as [m, lbl]}
 					<button
@@ -1037,8 +1135,16 @@
 										</div>
 									</div>
 									<div class="mt-0.5 flex flex-wrap items-center justify-between gap-1 text-[9px] text-[var(--text-secondary)]">
-										<span class="mono-num">
-											{(sm.features_used ?? []).join('·')}
+										<span class="mono-num flex items-center gap-1">
+											<span
+												class="rounded-xs px-1 py-0.2 text-[8px] font-semibold {sm.data_source ===
+												'log'
+													? 'bg-indigo-100/80 text-indigo-800'
+													: 'bg-amber-100/80 text-amber-800'}"
+											>
+												{sm.data_source === 'log' ? 'Log: PHIT/PERM' : 'Core: CPORE/CPERM'}
+											</span>
+											<span>{(sm.features_used ?? []).join('·')}</span>
 										</span>
 										<span class="mono-num font-medium text-[var(--text-primary)]">
 											Acc:{smAcc} · F1:{smF1} · κ:{smKappa}
@@ -1367,13 +1473,13 @@
 		{#if projectData.rockTypingResult?.rock_type_counts}
 			<ParameterSection
 				title="Active Discrete Rock Type (DRT) Counts"
-				badge={projectData.drtClassifierPropagated
+				badge="{(projectData.rockTypingResult.data_source ?? projectData.drtDataSource) === 'log' ? 'Log: PHIT & PERM' : 'Core: CPORE & CPERM'} · {projectData.drtClassifierPropagated
 					? projectData.drtPropagationMode === 'full_ml'
 						? 'Full ML Predicted'
 						: `${activeMeta.shortName} + ML Fill`
 					: projectData.luciaVuggyOverride && projectData.drtMethod !== 'lucia'
 						? `${activeMeta.shortName} + RFN Override`
-						: `${activeMeta.shortName} Cutoffs Only`}
+						: `${activeMeta.shortName} Cutoffs Only`}"
 			>
 				<div class="space-y-1">
 					{#each Object.entries(projectData.rockTypingResult.rock_type_counts) as [drt, count]}

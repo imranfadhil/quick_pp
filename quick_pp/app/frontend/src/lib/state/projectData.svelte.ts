@@ -13,6 +13,7 @@ export interface ProjectListItem {
 }
 
 export type MultiWellSaveModule = 'rock-typing' | 'perm-transform' | 'shf';
+export type PhiKDataSource = 'core' | 'log';
 export type DrtMethod = 'fzi' | 'winland' | 'lucia';
 export type DrtCutoffMethod = 'gmm' | 'lorenz' | 'kmeans';
 export type GmmCriterion = 'combined' | 'bic' | 'silhouette';
@@ -32,6 +33,8 @@ class ProjectDataState {
 	pendingMultiWellModules = $state<Record<string, boolean>>({});
 
 	// Field-level Multi-Well Parameters & Results
+	drtDataSource = $state<PhiKDataSource>('core');
+	permTransformDataSource = $state<PhiKDataSource>('core');
 	drtMethod = $state<DrtMethod>('fzi');
 	fziCutoffs = $state<number[]>([0.5, 1.2, 2.5, 5.0]);
 	winlandCutoffs = $state<number[]>([0.5, 2.0, 5.0, 10.0]);
@@ -71,6 +74,7 @@ class ProjectDataState {
 			feature_importances: Record<string, number>;
 			saved_at: string | null;
 			drt_method?: string | null;
+			data_source?: PhiKDataSource | null;
 			cutoffs?: number[] | null;
 			project_id?: number | null;
 		}>;
@@ -167,6 +171,9 @@ class ProjectDataState {
 
 	rockTypingResult = $state.raw<{
 		method?: DrtMethod;
+		data_source?: PhiKDataSource;
+		poro_label?: string;
+		perm_label?: string;
 		well_names: string[];
 		depths: number[];
 		phit: number[];
@@ -201,11 +208,15 @@ class ProjectDataState {
 	} | null>(null);
 
 	permTransformResult = $state.raw<{
+		data_source?: PhiKDataSource;
+		poro_label?: string;
+		perm_label?: string;
 		fits: Record<string, { a: number; b: number; r2: number | null; count: number }>;
 		well_names: string[];
 		depths: number[];
 		phit: number[];
 		perm: number[];
+		log_phit?: (number | null)[];
 		rock_flags: (number | null)[];
 		perm_pred: (number | null)[];
 	} | null>(null);
@@ -339,10 +350,47 @@ class ProjectDataState {
 		);
 	}
 
+	wellHasCorePhiK(w: WellSummaryItem | undefined | null): boolean {
+		if (!w) return false;
+		const curves = w.curves ?? (w as any).available_curves ?? [];
+		const hasCoreCurve =
+			(curves.includes('CPORE') || curves.includes('CORE_POR')) &&
+			(curves.includes('CPERM') || curves.includes('CORE_PERM'));
+		return hasCoreCurve || (w.core_sample_count ?? w.core_samples_count ?? 0) > 0;
+	}
+
+	wellHasLogPhiK(w: WellSummaryItem | undefined | null): boolean {
+		if (!w) return false;
+		const curves = w.curves ?? (w as any).available_curves ?? [];
+		const hasPhi =
+			curves.includes('PHIT') ||
+			curves.includes('PHIE') ||
+			curves.includes('POROSITY') ||
+			curves.includes('POR');
+		const hasPerm =
+			curves.includes('PERM') ||
+			curves.includes('KLOGH') ||
+			curves.includes('PERMEABILITY') ||
+			curves.includes('PERM_TRANS');
+		return hasPhi && hasPerm;
+	}
+
 	activeWells = $derived<WellSummaryItem[]>(
 		this.selectedWellNames.length > 0
 			? this.wells.filter((w) => this.selectedWellNames.includes(w.name))
 			: this.wells
+	);
+	wellsWithCorePhiK = $derived<WellSummaryItem[]>(
+		this.activeWells.filter((w) => this.wellHasCorePhiK(w))
+	);
+	wellsWithLogPhiK = $derived<WellSummaryItem[]>(
+		this.activeWells.filter((w) => this.wellHasLogPhiK(w))
+	);
+	totalCorePlugCount = $derived<number>(
+		this.activeWells.reduce(
+			(sum, w) => sum + (w.core_sample_count ?? w.core_samples_count ?? 0),
+			0
+		)
 	);
 	wellsWithTvd = $derived<WellSummaryItem[]>(
 		this.activeWells.filter((w) => this.wellHasTvd(w))
@@ -664,6 +712,11 @@ class ProjectDataState {
 			this.selectedWellNames = (data.wells || []).map((w) => w.name);
 
 			const availableWells = data.wells || [];
+			const hasCore = availableWells.some((w) => this.wellHasCorePhiK(w));
+			const hasLog = availableWells.some((w) => this.wellHasLogPhiK(w));
+			const defaultSrc: PhiKDataSource = hasCore || !hasLog ? 'core' : 'log';
+			this.drtDataSource = defaultSrc;
+			this.permTransformDataSource = defaultSrc;
 			let targetWell =
 				preferredWell && availableWells.some((w) => w.name === preferredWell)
 					? preferredWell

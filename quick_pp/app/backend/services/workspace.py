@@ -799,6 +799,10 @@ class WorkspaceRockTypingRequest(BaseModel):
     well_names: Optional[List[str]] = Field(
         None, description="Optional subset of well names to include"
     )
+    data_source: str = Field(
+        "core",
+        description="Input data source for rock typing & RT classifier target labels: 'core' (CPORE & CPERM) or 'log' (PHIT & PERM)",
+    )
     method: str = Field(
         "fzi",
         description="Rock typing method: 'fzi' (Kozeny-Carman FZI), 'winland' (Winland R35), or 'lucia' (Lucia RFN)",
@@ -928,11 +932,19 @@ class WorkspaceRtSaveModelRequest(BaseModel):
     )
     drt_method: Optional[str] = Field(None)
     cutoffs: Optional[List[float]] = Field(None)
+    data_source: Optional[str] = Field(
+        None,
+        description="Whether target DRT labels were derived from 'core' (CPORE & CPERM) or 'log' (PHIT & PERM)",
+    )
 
 
 class WorkspacePermTransformRequest(BaseModel):
     well_names: Optional[List[str]] = Field(
         None, description="Optional subset of well names to include"
+    )
+    data_source: str = Field(
+        "core",
+        description="Input data source for fitting K = a * Phi^b per ROCK_FLAG: 'core' (CPORE & CPERM) or 'log' (PHIT & PERM)",
     )
     method: str = Field(
         "fzi",
@@ -3842,6 +3854,7 @@ def workspace_rt_save_model(
                 "project_id": project_id,
                 "drt_method": req.drt_method,
                 "cutoffs": req.cutoffs,
+                "data_source": req.data_source or "core",
             },
         )
         return {
@@ -4006,8 +4019,18 @@ def _execute_workspace_rock_typing(
     project_id: int, req: WorkspaceRockTypingRequest
 ) -> Dict[str, Any]:
     method = _normalize_drt_method(req.method)
+    data_source = (
+        "log"
+        if str(req.data_source or "core").strip().lower() == "log"
+        else "core"
+    )
+    poro_label = "CPORE" if data_source == "core" else "PHIT"
+    perm_label = "CPERM" if data_source == "core" else "PERM"
     raw_fzi_data = _compute_fzi_data_sync(
-        project_id, dt_matrix=req.dt_matrix, dt_fluid=req.dt_fluid
+        project_id,
+        dt_matrix=req.dt_matrix,
+        dt_fluid=req.dt_fluid,
+        data_source=data_source,
     )
     has_sonic = bool(raw_fzi_data.get("has_sonic", False))
     sonic_wells = list(raw_fzi_data.get("sonic_wells") or [])
@@ -4330,6 +4353,7 @@ def _execute_workspace_rock_typing(
                             "project_id": project_id,
                             "drt_method": method,
                             "cutoffs": cutoffs,
+                            "data_source": data_source,
                         },
                     )
                     used_saved_key = str(saved_model_info.get("model_key") or "")
@@ -4442,6 +4466,9 @@ def _execute_workspace_rock_typing(
 
             classifier_diag = {
                 "trained": bool(clf_res.get("trained", True)),
+                "data_source": data_source,
+                "poro_label": poro_label,
+                "perm_label": perm_label,
                 "propagated": bool(
                     req.apply_classifier_propagation and prop_mode != "cutoff_only"
                 ),
@@ -4626,6 +4653,9 @@ def _execute_workspace_rock_typing(
 
     return {
         "project_id": project_id,
+        "data_source": data_source,
+        "poro_label": poro_label,
+        "perm_label": perm_label,
         "method": method,
         "cutoffs": cutoffs,
         "cutoff_method": cutoff_method,
@@ -4638,6 +4668,9 @@ def _execute_workspace_rock_typing(
         "saved": req.save,
         "saved_wells": saved_wells,
         "diagnostics": {
+            "data_source": data_source,
+            "poro_label": poro_label,
+            "perm_label": perm_label,
             "optimal_k": optimal_k,
             "selected_k": len(cutoffs) + 1,
             "cutoff_method": cutoff_method,
@@ -4682,6 +4715,9 @@ def _execute_workspace_rock_typing(
             "models_status": get_saved_rt_classifiers_status(),
         },
         "data": {
+            "data_source": data_source,
+            "poro_label": poro_label,
+            "perm_label": perm_label,
             "well_names": well_names,
             "depths": depths,
             "zones": zones,
@@ -4720,8 +4756,15 @@ def workspace_perm_transform_compute(
 ) -> Dict[str, Any]:
     """Fit power-law permeability transforms (a * PHIT^b) per ROCK_FLAG and optionally save PERM_TRANS."""
     try:
+        data_source = (
+            "log"
+            if str(req.data_source or "core").strip().lower() == "log"
+            else "core"
+        )
+        poro_label = "CPORE" if data_source == "core" else "PHIT"
+        perm_label = "CPERM" if data_source == "core" else "PERM"
         fzi_data = _filter_fzi_data_by_wells(
-            _compute_fzi_data_sync(project_id), req.well_names
+            _compute_fzi_data_sync(project_id, data_source=data_source), req.well_names
         )
         phit_arr = np.asarray(fzi_data["phit"], dtype=float)
         perm_arr = np.asarray(fzi_data["perm"], dtype=float)
@@ -4848,6 +4891,7 @@ def workspace_perm_transform_compute(
         out_depths: List[float] = []
         out_zones: List[Optional[str]] = []
         out_phit: List[Optional[float]] = []
+        out_log_phit: List[Optional[float]] = []
         out_perm: List[Optional[float]] = []
         out_rock_flags: List[Optional[int]] = []
         out_perm_trans: List[Optional[float]] = []
@@ -4887,13 +4931,33 @@ def workspace_perm_transform_compute(
                             pd.to_numeric(w_df[ccol], errors="coerce")
                         )
 
-            # Resolve measured/core permeability for crossplot and RÂ² validation
-            perm_s = pd.Series(np.nan, index=w_df.index, dtype=float)
-            for kcol in ("CPERM", "CORE_PERM", "PERM", "KLOGH", "PERMEABILITY", "K"):
-                if kcol in w_df.columns:
-                    ks = pd.to_numeric(w_df[kcol], errors="coerce")
-                    ks = ks.where(ks > 0, np.nan)
-                    perm_s = perm_s.combine_first(ks)
+            # Resolve crossplot & R^2 porosity/permeability strictly according to data_source ('core' vs 'log')
+            scatter_phit_s = pd.Series(np.nan, index=w_df.index, dtype=float)
+            scatter_perm_s = pd.Series(np.nan, index=w_df.index, dtype=float)
+            if data_source == "core":
+                for pcol in ("CPORE", "CORE_POR"):
+                    if pcol in w_df.columns:
+                        ps = pd.to_numeric(w_df[pcol], errors="coerce")
+                        ps = ps.where(ps > 0, np.nan)
+                        scatter_phit_s = scatter_phit_s.combine_first(ps)
+                if scatter_phit_s.notna().any() and float(scatter_phit_s.median()) > 1.0:
+                    scatter_phit_s = scatter_phit_s / 100.0
+                for kcol in ("CPERM", "CORE_PERM"):
+                    if kcol in w_df.columns:
+                        ks = pd.to_numeric(w_df[kcol], errors="coerce")
+                        ks = ks.where(ks > 0, np.nan)
+                        scatter_perm_s = scatter_perm_s.combine_first(ks)
+            else:
+                for pcol in ("PHIT", "PHIE", "POROSITY", "POR"):
+                    if pcol in w_df.columns:
+                        ps = pd.to_numeric(w_df[pcol], errors="coerce")
+                        ps = ps.where(ps > 0, np.nan)
+                        scatter_phit_s = scatter_phit_s.combine_first(ps)
+                for kcol in ("PERM", "KLOGH", "PERMEABILITY", "K", "PERM_TRANS"):
+                    if kcol in w_df.columns:
+                        ks = pd.to_numeric(w_df[kcol], errors="coerce")
+                        ks = ks.where(ks > 0, np.nan)
+                        scatter_perm_s = scatter_perm_s.combine_first(ks)
 
             # Resolve ROCK_FLAG according to rock_flag_source ('cutoff_only', 'fill_missing', 'full_ml') or active ROCK_FLAG
             rf_src = str(req.rock_flag_source or "").strip().lower()
@@ -4927,10 +4991,11 @@ def workspace_perm_transform_compute(
                 else ["Unknown"] * len(w_df)
             )
 
-            for d_v, p_v, k_v, rf_v, z_v in zip(
+            for d_v, p_v, sp_v, sk_v, rf_v, z_v in zip(
                 d_series.tolist(),
                 phit_s.tolist(),
-                perm_s.tolist(),
+                scatter_phit_s.tolist(),
+                scatter_perm_s.tolist(),
                 rf_s.tolist(),
                 zone_vals,
             ):
@@ -4942,12 +5007,16 @@ def workspace_perm_transform_compute(
                 p_log = (
                     round(float(p_v), 5)
                     if (p_v is not None and not pd.isna(p_v) and math.isfinite(float(p_v)) and float(p_v) > 0)
-                    else None
+                    else (core_hit[0] if core_hit else None)
                 )
-                p_clean = p_log if p_log is not None else (core_hit[0] if core_hit else None)
-                k_clean = (
-                    round(float(k_v), 5)
-                    if (k_v is not None and not pd.isna(k_v) and math.isfinite(float(k_v)) and float(k_v) > 0)
+                p_scatter = (
+                    round(float(sp_v), 5)
+                    if (sp_v is not None and not pd.isna(sp_v) and math.isfinite(float(sp_v)) and float(sp_v) > 0)
+                    else (core_hit[0] if core_hit else None)
+                )
+                k_scatter = (
+                    round(float(sk_v), 5)
+                    if (sk_v is not None and not pd.isna(sk_v) and math.isfinite(float(sk_v)) and float(sk_v) > 0)
                     else (core_hit[1] if core_hit else None)
                 )
                 rf_clean: Optional[int] = None
@@ -4962,7 +5031,7 @@ def workspace_perm_transform_compute(
                     else (core_hit[3] if (core_hit and core_hit[3]) else z_v)
                 )
 
-                if p_clean is None and k_clean is None and rf_clean is None:
+                if p_log is None and p_scatter is None and k_scatter is None and rf_clean is None:
                     continue
 
                 rf_key = str(rf_clean) if rf_clean is not None else None
@@ -4975,8 +5044,9 @@ def workspace_perm_transform_compute(
                 out_well_names.append(str(wn))
                 out_depths.append(dk)
                 out_zones.append(z_clean)
-                out_phit.append(p_clean)
-                out_perm.append(k_clean)
+                out_phit.append(p_scatter)
+                out_log_phit.append(p_log)
+                out_perm.append(k_scatter)
                 out_rock_flags.append(rf_clean)
                 out_perm_trans.append(pt_val)
 
@@ -4999,6 +5069,7 @@ def workspace_perm_transform_compute(
                 out_depths.append(float(d_c))
                 out_zones.append(z_c)
                 out_phit.append(p_c)
+                out_log_phit.append(p_c)
                 out_perm.append(k_c)
                 out_rock_flags.append(rf_c)
                 out_perm_trans.append(pt_val)
@@ -5018,14 +5089,21 @@ def workspace_perm_transform_compute(
 
         return {
             "project_id": project_id,
+            "data_source": data_source,
+            "poro_label": poro_label,
+            "perm_label": perm_label,
             "fits": fits,
             "saved": req.save,
             "saved_wells": saved_wells,
             "data": {
+                "data_source": data_source,
+                "poro_label": poro_label,
+                "perm_label": perm_label,
                 "well_names": out_well_names,
                 "depths": out_depths,
                 "zones": out_zones,
                 "phit": out_phit,
+                "log_phit": out_log_phit,
                 "perm": out_perm,
                 "rock_flags": out_rock_flags,
                 "perm_trans": out_perm_trans,

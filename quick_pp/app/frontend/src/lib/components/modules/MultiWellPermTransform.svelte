@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
-	import { projectData } from '$lib/state/projectData.svelte';
+	import { projectData, type PhiKDataSource } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
@@ -50,10 +50,11 @@
 			}
 		};
 
-		const nextPermPred = res.phit.map((p, idx) => {
+		const logPhitArr = res.log_phit ?? res.phit;
+		const nextPermPred = logPhitArr.map((p, idx) => {
 			const r = res.rock_flags[idx];
 			const f = r !== null && r !== undefined ? nextFits[String(r)] : undefined;
-			if (f && Number.isFinite(p) && p > 0) {
+			if (f && p !== null && p !== undefined && Number.isFinite(p) && p > 0) {
 				const kPred = f.a * Math.pow(p, f.b);
 				return Number.isFinite(kPred) ? Number(kPred.toFixed(6)) : null;
 			}
@@ -123,6 +124,7 @@
 								? projectData.selectedWellNames
 								: null,
 						method: projectData.drtMethod,
+						data_source: projectData.permTransformDataSource,
 						cutoffs: [...projectData.activeDrtCutoffs].sort((a, b) => a - b),
 						rock_flag_source: projectData.drtClassifierPropagated
 							? projectData.drtPropagationMode
@@ -146,6 +148,7 @@
 			const dArr = [...(data.data?.depths ?? [])];
 			const phitArr = [...(data.data?.phit ?? [])];
 			const permArr = [...(data.data?.perm ?? [])];
+			const logPhitArr: (number | null)[] = [...((data.data as any)?.log_phit ?? phitArr)];
 			const rfArr: (number | null)[] = [...(data.data?.rock_flags ?? [])];
 			let ptArr: (number | null)[] = [
 				...((data.data as any)?.perm_pred ?? (data.data as any)?.perm_trans ?? [])
@@ -205,7 +208,7 @@
 							}
 						}
 						const r = rfArr[i];
-						const p = phitArr[i];
+						const p = logPhitArr[i];
 						const f = r !== null && r !== undefined ? fitsMap[String(r)] : undefined;
 						if (
 							(ptArr[i] === null || ptArr[i] === undefined) &&
@@ -221,13 +224,19 @@
 				}
 			}
 
+			const activeSrc: PhiKDataSource =
+				(data as any).data_source ?? projectData.permTransformDataSource;
 			projectData.permTransformResult = {
+				data_source: activeSrc,
+				poro_label: (data as any).poro_label ?? (activeSrc === 'log' ? 'PHIT' : 'CPORE'),
+				perm_label: (data as any).perm_label ?? (activeSrc === 'log' ? 'PERM' : 'CPERM'),
 				fits: fitsMap,
 				...(data.data as any),
 				well_names: wnArr,
 				depths: dArr,
 				phit: phitArr,
 				perm: permArr,
+				log_phit: logPhitArr,
 				rock_flags: rfArr,
 				perm_pred: ptArr
 			};
@@ -263,16 +272,91 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
-		<ParameterSection title="Power-Law Regression per Rock Type" badge="K = a · Φ^b">
-			<p class="text-[11px] text-[var(--text-secondary)]">
-				Fits log-linear porosity-permeability transforms per Discrete Rock Type (DRT) across project wells and predicts continuous <code>PERM</code> logs. Edit <code>a</code> or <code>b</code> below to adjust the lines on the crossplot in real time.
-			</p>
+		<ParameterSection
+			title="Power-Law Regression per Rock Type"
+			badge={projectData.permTransformDataSource === 'core'
+				? 'Core: CPERM = a · CPORE^b'
+				: 'Log: PERM = a · PHIT^b'}
+			defaultOpen={true}
+		>
+			<div class="space-y-1.5">
+				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+					<div class="mb-1 flex items-center justify-between text-[9.5px]">
+						<span class="font-semibold text-[var(--text-primary)]">
+							Regression Input Data Source (Φ &amp; K):
+						</span>
+						<span class="mono-num text-[9px] text-[var(--text-muted)]">
+							{#if projectData.permTransformResult?.data_source}
+								Fitted on:
+								<strong class="text-[var(--text-primary)]">
+									{projectData.permTransformResult.data_source === 'log'
+										? 'Log (PHIT & PERM)'
+										: 'Core (CPORE & CPERM)'}
+								</strong>
+							{:else}
+								Select source
+							{/if}
+						</span>
+					</div>
+					<div class="grid grid-cols-2 gap-1">
+						<button
+							type="button"
+							onclick={() => (projectData.permTransformDataSource = 'core')}
+							class="flex flex-col items-start rounded-xs border px-2 py-1 text-left transition-colors {projectData.permTransformDataSource ===
+							'core'
+								? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+						>
+							<div class="flex w-full items-center justify-between gap-1 text-[10px]">
+								<span>Core Data</span>
+								<span class="mono-num rounded-xs bg-amber-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-amber-800">
+									CPORE &amp; CPERM
+								</span>
+							</div>
+							<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
+								{projectData.wellsWithCorePhiK.length}/{projectData.activeWells.length} wells · {projectData.totalCorePlugCount} RCA plugs
+							</span>
+						</button>
+						<button
+							type="button"
+							onclick={() => (projectData.permTransformDataSource = 'log')}
+							class="flex flex-col items-start rounded-xs border px-2 py-1 text-left transition-colors {projectData.permTransformDataSource ===
+							'log'
+								? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+						>
+							<div class="flex w-full items-center justify-between gap-1 text-[10px]">
+								<span>Calculated Logs</span>
+								<span class="mono-num rounded-xs bg-indigo-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-indigo-800">
+									PHIT &amp; PERM
+								</span>
+							</div>
+							<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
+								{projectData.wellsWithLogPhiK.length}/{projectData.activeWells.length} wells with PHIT &amp; PERM
+							</span>
+						</button>
+					</div>
+					<div class="mt-1 text-[9px] leading-snug text-[var(--text-secondary)]">
+						{#if projectData.permTransformDataSource === 'core'}
+							Fits <span class="mono-num font-semibold">CPERM = a · CPORE^b</span> per <span class="mono-num font-semibold">ROCK_FLAG</span> using
+							<strong class="mono-num text-[var(--text-primary)]">Core Plugs (CPORE &amp; CPERM)</strong>, then applies the fitted equations to continuous <span class="mono-num font-semibold">PHIT</span> to generate <span class="mono-num font-semibold">PERM_TRANS</span>.
+						{:else}
+							Fits <span class="mono-num font-semibold">PERM = a · PHIT^b</span> per <span class="mono-num font-semibold">ROCK_FLAG</span> using
+							<strong class="mono-num text-[var(--text-primary)]">Calculated Logs (PHIT &amp; PERM)</strong>, then applies the fitted equations to continuous <span class="mono-num font-semibold">PHIT</span> to generate <span class="mono-num font-semibold">PERM_TRANS</span>.
+						{/if}
+					</div>
+				</div>
+
+				<p class="text-[10.5px] text-[var(--text-secondary)]">
+					Edit <code>a</code> or <code>b</code> below to adjust the regression lines on the crossplot and update <code>PERM_TRANS</code> in real time.
+				</p>
+			</div>
 		</ParameterSection>
 
 		{#if projectData.permTransformResult}
 			<ParameterSection
 				title="Fitted Equations by Rock Type"
-				badge={hasManualEdits ? 'Custom Edited' : 'Auto-Fitted'}
+				badge="{(projectData.permTransformResult.data_source ?? projectData.permTransformDataSource) === 'log' ? 'Log: PHIT & PERM' : 'Core: CPORE & CPERM'} · {hasManualEdits ? 'Custom Edited' : 'Auto-Fitted'}"
 			>
 				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
 					<span>Edit <strong>Coeff a</strong> or <strong>Exp b</strong> to update crossplot lines</span>

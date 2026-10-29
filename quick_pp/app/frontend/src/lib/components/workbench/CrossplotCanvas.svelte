@@ -1616,11 +1616,18 @@
 				});
 
 				const hasPermFits = Boolean(projectData.permTransformResult?.fits);
+				const mwIsCore =
+					((mwSource as any)?.data_source ??
+						(workbench.multiWellStep === 'perm-transform'
+							? projectData.permTransformDataSource
+							: projectData.drtDataSource)) !== 'log';
+				const poroLbl = (mwSource as any)?.poro_label ?? (mwIsCore ? 'CPORE' : 'PHIT');
+				const permLbl = (mwSource as any)?.perm_label ?? (mwIsCore ? 'CPERM' : 'PERM');
 				for (const [rf, g] of grouped.entries()) {
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
-						name: `DRT ${rf}`,
+						name: `DRT ${rf} (${poroLbl}/${permLbl})`,
 						x: g.x,
 						y: g.y,
 						text: g.wells,
@@ -1629,8 +1636,7 @@
 							color: getRockTypeColor(rf),
 							opacity: hasPermFits ? 0.38 : 0.82
 						},
-						hovertemplate:
-							'Well: %{text}<br>PHIT: %{x:.3f}<br>PERM: %{y:.2f} mD<extra></extra>'
+						hovertemplate: `Well: %{text}<br>${poroLbl}: %{x:.3f}<br>${permLbl}: %{y:.2f} mD<extra></extra>`
 					});
 				}
 			} else {
@@ -1803,9 +1809,28 @@
 				}
 			}
 
-			baseLayout.xaxis.title = { text: 'Porosity (v/v)' };
+			const isMwPhiK = workbench.scope === 'multi-well';
+			const isCoreAxis =
+				isMwPhiK &&
+				(((mwSource as any)?.data_source ??
+					(workbench.multiWellStep === 'perm-transform'
+						? projectData.permTransformDataSource
+						: projectData.drtDataSource)) !== 'log');
+			baseLayout.xaxis.title = {
+				text: isMwPhiK
+					? isCoreAxis
+						? 'Core Porosity — CPORE (v/v)'
+						: 'Calculated Log Porosity — PHIT (v/v)'
+					: 'Porosity (v/v)'
+			};
 			baseLayout.xaxis.range = [0, 0.38];
-			baseLayout.yaxis.title = { text: 'Permeability (mD)' };
+			baseLayout.yaxis.title = {
+				text: isMwPhiK
+					? isCoreAxis
+						? 'Core Permeability — CPERM (mD)'
+						: 'Calculated Log Permeability — PERM (mD)'
+					: 'Permeability (mD)'
+			};
 			baseLayout.yaxis.type = 'log';
 			baseLayout.yaxis.range = [-2, 4.5];
 			return { traces, layout: baseLayout };

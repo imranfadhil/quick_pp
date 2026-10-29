@@ -18,8 +18,19 @@ def _compute_fzi_data_sync(
     project_id: int,
     dt_matrix: float = 47.6,
     dt_fluid: float = 189.0,
+    data_source: str = "auto",
 ) -> dict:
-    """Helper to compute FZI / rock typing data (including sonic & secondary porosity if available) synchronously."""
+    """Helper to compute FZI / rock typing data (including sonic & secondary porosity if available) synchronously.
+
+    data_source:
+        - 'core': strictly Core Data (CPORE & CPERM)
+        - 'log': strictly Calculated Logs (PHIT & PERM)
+        - 'auto': combined fallback across available columns
+    """
+    src_norm = str(data_source or "auto").strip().lower()
+    if src_norm not in ("core", "log", "auto"):
+        src_norm = "auto"
+
     with get_db() as session:
         proj = db_objects.Project.load(session, project_id=project_id)
         all_well_names = proj.get_well_names()
@@ -43,7 +54,15 @@ def _compute_fzi_data_sync(
     available_cols = set()
     loaded_wells = []
     any_real_perm = False
-    perm_candidates = ("CPERM", "CORE_PERM", "PERM", "KLOGH", "PERMEABILITY", "K")
+    if src_norm == "core":
+        poro_candidates = ("CPORE", "CORE_POR")
+        perm_candidates = ("CPERM", "CORE_PERM")
+    elif src_norm == "log":
+        poro_candidates = ("PHIT", "PHIE", "POROSITY", "POR")
+        perm_candidates = ("PERM", "KLOGH", "PERMEABILITY", "K", "PERM_TRANS")
+    else:
+        poro_candidates = ("PHIT", "PHIE", "CPORE", "POROSITY", "POR", "CORE_POR")
+        perm_candidates = ("CPERM", "CORE_PERM", "PERM", "KLOGH", "PERMEABILITY", "K")
 
     for well_name in all_well_names:
         df = _get_merged_dataframe_sync(project_id, well_name)
@@ -90,7 +109,7 @@ def _compute_fzi_data_sync(
             phit_col = None
             perm_col = None
             rock_flag_col = None
-            for col in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR", "CORE_POR"):
+            for col in poro_candidates:
                 if col in df.columns and df[col].notna().any():
                     phit_col = col
                     break
@@ -101,49 +120,45 @@ def _compute_fzi_data_sync(
             if "ROCK_FLAG" in df.columns:
                 rock_flag_col = "ROCK_FLAG"
 
-            # Fallback estimation for raw project logs when PHIT or PERM are not yet saved
-            if not phit_col:
-                if "RHOB" in df.columns and df["RHOB"].notna().any():
-                    rhob_s = pd.to_numeric(df["RHOB"], errors="coerce")
-                    est_phit = ((2.65 - rhob_s) / (2.65 - 1.0)).clip(0.001, 0.45)
-                    if "NPHI" in df.columns and df["NPHI"].notna().any():
-                        nphi_s = pd.to_numeric(df["NPHI"], errors="coerce").clip(
-                            0.001, 0.6
+            # Fallback estimation for raw project logs only when data_source == 'auto'
+            if src_norm == "auto":
+                if not phit_col:
+                    if "RHOB" in df.columns and df["RHOB"].notna().any():
+                        rhob_s = pd.to_numeric(df["RHOB"], errors="coerce")
+                        est_phit = ((2.65 - rhob_s) / (2.65 - 1.0)).clip(0.001, 0.45)
+                        if "NPHI" in df.columns and df["NPHI"].notna().any():
+                            nphi_s = pd.to_numeric(df["NPHI"], errors="coerce").clip(
+                                0.001, 0.6
+                            )
+                            est_phit = ((est_phit + nphi_s) / 2.0).clip(0.001, 0.45)
+                        df = df.copy()
+                        df["_EST_PHIT"] = est_phit
+                        phit_col = "_EST_PHIT"
+                    elif "NPHI" in df.columns and df["NPHI"].notna().any():
+                        df = df.copy()
+                        df["_EST_PHIT"] = pd.to_numeric(df["NPHI"], errors="coerce").clip(
+                            0.001, 0.45
                         )
-                        est_phit = ((est_phit + nphi_s) / 2.0).clip(0.001, 0.45)
-                    df = df.copy()
-                    df["_EST_PHIT"] = est_phit
-                    phit_col = "_EST_PHIT"
-                elif "NPHI" in df.columns and df["NPHI"].notna().any():
-                    df = df.copy()
-                    df["_EST_PHIT"] = pd.to_numeric(df["NPHI"], errors="coerce").clip(
-                        0.001, 0.45
-                    )
-                    phit_col = "_EST_PHIT"
+                        phit_col = "_EST_PHIT"
 
-            if phit_col and not perm_col and not any_real_perm:
-                phit_s = pd.to_numeric(df[phit_col], errors="coerce").clip(0.001, 0.45)
-                df = df.copy()
-                df["_EST_PERM"] = (10.0 ** (14.0 * phit_s - 1.5)).clip(0.001, 10000.0)
-                perm_col = "_EST_PERM"
+                if phit_col and not perm_col and not any_real_perm:
+                    phit_s = pd.to_numeric(df[phit_col], errors="coerce").clip(0.001, 0.45)
+                    df = df.copy()
+                    df["_EST_PERM"] = (10.0 ** (14.0 * phit_s - 1.5)).clip(0.001, 10000.0)
+                    perm_col = "_EST_PERM"
 
             if not phit_col or not perm_col:
                 continue
 
             cpore_s = pd.to_numeric(df[phit_col], errors="coerce")
             cpore_s = cpore_s.where(cpore_s > 0, np.nan)
-            for fallback_pcol in (
-                "PHIT",
-                "PHIE",
-                "CPORE",
-                "POROSITY",
-                "POR",
-                "CORE_POR",
-            ):
+            for fallback_pcol in poro_candidates:
                 if fallback_pcol != phit_col and fallback_pcol in df.columns:
                     fp_s = pd.to_numeric(df[fallback_pcol], errors="coerce")
                     fp_s = fp_s.where(fp_s > 0, np.nan)
                     cpore_s = cpore_s.combine_first(fp_s)
+            if cpore_s.notna().any() and float(cpore_s.median()) > 1.0:
+                cpore_s = cpore_s / 100.0
             cpore = cpore_s.dropna()
 
             cperm_s = pd.to_numeric(df[perm_col], errors="coerce")
@@ -291,6 +306,16 @@ def _compute_fzi_data_sync(
             raise ValueError(f"No data for project {project_id}")
 
         if not cpore_list or not cperm_list:
+            if src_norm == "core":
+                raise ValueError(
+                    "No Core Data (CPORE & CPERM) pairs found in the selected project wells. "
+                    "Switch Input Data Source to 'Calculated Logs (PHIT & PERM)' or import RCA core data."
+                )
+            if src_norm == "log":
+                raise ValueError(
+                    "No Calculated Log (PHIT & PERM) pairs found in the selected project wells. "
+                    "Compute and save Porosity (PHIT) and Permeability (PERM) first, or switch Input Data Source to 'Core Data (CPORE & CPERM)'."
+                )
             raise ValueError(
                 f"PHIT or PERM columns not found in project data. Available: {sorted(available_cols)}",
             )
@@ -319,6 +344,9 @@ def _compute_fzi_data_sync(
         ]
 
         return {
+            "data_source": src_norm,
+            "poro_label": "CPORE" if src_norm == "core" else "PHIT",
+            "perm_label": "CPERM" if src_norm == "core" else "PERM",
             "phit": phit_all,
             "perm": perm_all,
             "phis": phis_all,
@@ -336,10 +364,10 @@ def _compute_fzi_data_sync(
 
 
 @router.get("/fzi_data", summary="Get FZI data for plotting")
-async def get_fzi_data(project_id: int) -> dict:
-    """Return PHIT and PERM data for FZI plotting from all wells in the project."""
+async def get_fzi_data(project_id: int, data_source: str = "auto") -> dict:
+    """Return PHIT/CPORE and PERM/CPERM data for FZI plotting from all wells in the project."""
     try:
-        return _compute_fzi_data_sync(project_id)
+        return _compute_fzi_data_sync(project_id, data_source=data_source)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except HTTPException:

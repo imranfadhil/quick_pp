@@ -5,7 +5,8 @@
 	import {
 		projectData,
 		type DrtFeatureKey,
-		type DrtMethod
+		type DrtMethod,
+		type PhiKDataSource
 	} from '$lib/state/projectData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
@@ -124,6 +125,7 @@
 								? projectData.selectedWellNames
 								: null,
 						method,
+						data_source: projectData.drtDataSource,
 						cutoffs: sortedCutoffs,
 						higher_is_better: meta.higherIsBetter,
 						auto_find_cutoffs: false,
@@ -164,6 +166,17 @@
 			const counts = (data as any).rock_type_counts ?? (data as any).flag_counts ?? {};
 			projectData.rockTypingResult = {
 				method: (data as any).method ?? method,
+				data_source: (data as any).data_source ?? projectData.drtDataSource,
+				poro_label:
+					(data as any).poro_label ??
+					((data as any).data_source === 'log' || projectData.drtDataSource === 'log'
+						? 'PHIT'
+						: 'CPORE'),
+				perm_label:
+					(data as any).perm_label ??
+					((data as any).data_source === 'log' || projectData.drtDataSource === 'log'
+						? 'PERM'
+						: 'CPERM'),
 				optimal_k: (data as any).optimal_k,
 				selected_k: (data as any).selected_k,
 				cutoff_method: (data as any).cutoff_method ?? projectData.drtCutoffMethod,
@@ -195,7 +208,8 @@
 					: classifierDiag.model_type === 'gradient_boosting'
 						? 'GB'
 						: 'RF';
-			const defaultName = `${algoShort} (${(classifierDiag.features_used ?? []).join('+')}) ${activeMeta.shortName} ${accPct}`.trim();
+			const srcTag = projectData.drtDataSource === 'log' ? 'Log' : 'Core';
+			const defaultName = `${algoShort} (${(classifierDiag.features_used ?? []).join('+')}) ${activeMeta.shortName}-${srcTag} ${accPct}`.trim();
 			const nameToUse = customModelName.trim() || defaultName;
 			const keySlug = nameToUse
 				.toLowerCase()
@@ -212,6 +226,7 @@
 						model_key: keySlug || `rt_${Date.now()}`,
 						model_name: nameToUse,
 						drt_method: projectData.drtMethod,
+						data_source: projectData.drtDataSource,
 						cutoffs: [...projectData.activeDrtCutoffs].sort((a, b) => a - b)
 					})
 				}
@@ -306,6 +321,10 @@
 	}
 
 	function useModelInRockTyping(modelKey: string) {
+		const matched = savedModelsList.find((m) => m.model_key === modelKey);
+		if (matched?.data_source === 'core' || matched?.data_source === 'log') {
+			projectData.drtDataSource = matched.data_source as PhiKDataSource;
+		}
 		projectData.drtSelectedSavedModelKey = modelKey;
 		if (projectData.drtPropagationMode === 'cutoff_only') {
 			projectData.drtPropagationMode = 'fill_missing';
@@ -318,10 +337,69 @@
 	<div class="flex-1 overflow-y-auto">
 		<ParameterSection
 			title="Target DRT Labels & Log Features"
-			badge={`${projectData.drtSelectedFeatures.length}/6 Inputs`}
+			badge="{projectData.drtDataSource === 'core' ? 'Core (CPORE & CPERM)' : 'Log (PHIT & PERM)'} · {projectData.drtSelectedFeatures.length}/6 Inputs"
 			defaultOpen={true}
 		>
 			<div class="space-y-2">
+				<!-- Target DRT Label Data Source Selector (Core vs Log) -->
+				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]">
+					<div class="mb-1 flex items-center justify-between text-[9.5px]">
+						<span class="font-semibold text-[var(--text-primary)]">
+							Target DRT Ground-Truth Label Source:
+						</span>
+						<span class="mono-num text-[9px] text-[var(--text-muted)]">
+							{projectData.drtDataSource === 'core' ? 'CPORE & CPERM' : 'PHIT & PERM'}
+						</span>
+					</div>
+					<div class="grid grid-cols-2 gap-1">
+						<button
+							type="button"
+							onclick={() => (projectData.drtDataSource = 'core')}
+							class="flex flex-col items-start rounded-xs border px-2 py-1 text-left transition-colors {projectData.drtDataSource ===
+							'core'
+								? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+						>
+							<div class="flex w-full items-center justify-between gap-1 text-[10px]">
+								<span>Core Data</span>
+								<span class="mono-num rounded-xs bg-amber-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-amber-800">
+									CPORE &amp; CPERM
+								</span>
+							</div>
+							<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
+								{projectData.wellsWithCorePhiK.length}/{projectData.activeWells.length} wells · {projectData.totalCorePlugCount} plugs
+							</span>
+						</button>
+						<button
+							type="button"
+							onclick={() => (projectData.drtDataSource = 'log')}
+							class="flex flex-col items-start rounded-xs border px-2 py-1 text-left transition-colors {projectData.drtDataSource ===
+							'log'
+								? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+						>
+							<div class="flex w-full items-center justify-between gap-1 text-[10px]">
+								<span>Calculated Logs</span>
+								<span class="mono-num rounded-xs bg-indigo-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-indigo-800">
+									PHIT &amp; PERM
+								</span>
+							</div>
+							<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
+								{projectData.wellsWithLogPhiK.length}/{projectData.activeWells.length} wells with PHIT &amp; PERM
+							</span>
+						</button>
+					</div>
+					<div class="mt-1 text-[9px] leading-snug text-[var(--text-secondary)]">
+						{#if projectData.drtDataSource === 'core'}
+							Classifier trains against <span class="mono-num font-semibold">{activeMeta.shortName}</span> DRT labels derived from
+							<strong class="mono-num text-[var(--text-primary)]">Core Data (CPORE &amp; CPERM)</strong>.
+						{:else}
+							Classifier trains against <span class="mono-num font-semibold">{activeMeta.shortName}</span> DRT labels derived from
+							<strong class="mono-num text-[var(--text-primary)]">Calculated Logs (PHIT &amp; PERM)</strong>.
+						{/if}
+					</div>
+				</div>
+
 				<!-- Target DRT summary + shortcut back to Step 3 -->
 				<div
 					class="flex items-center justify-between gap-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1.5 text-[10px]"
@@ -709,11 +787,21 @@
 							<div
 								class="mt-1 flex flex-wrap items-center justify-between gap-1 text-[9px] text-[var(--text-secondary)]"
 							>
-								<span class="mono-num">
-									{(sm.features_used ?? []).join('·')}
-									{#if sm.drt_method}
-										· {String(sm.drt_method).toUpperCase()}
-									{/if}
+								<span class="mono-num flex items-center gap-1">
+									<span
+										class="rounded-xs px-1 py-0.2 text-[8px] font-semibold {sm.data_source ===
+										'log'
+											? 'bg-indigo-100/80 text-indigo-800'
+											: 'bg-amber-100/80 text-amber-800'}"
+									>
+										{sm.data_source === 'log' ? 'Log: PHIT/PERM' : 'Core: CPORE/CPERM'}
+									</span>
+									<span>
+										{(sm.features_used ?? []).join('·')}
+										{#if sm.drt_method}
+											· {String(sm.drt_method).toUpperCase()}
+										{/if}
+									</span>
 								</span>
 								<span class="mono-num font-medium text-[var(--text-primary)]">
 									Acc:{smAcc} · F1:{smF1} · κ:{smKappa}
