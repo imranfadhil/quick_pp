@@ -134,6 +134,14 @@ class ReportGenerationRequest(BaseModel):
     zones: Optional[List[str]] = Field(
         default=None, description="Optional geological zone filter"
     )
+    target_zones: Optional[List[str]] = Field(
+        default=None,
+        description="Optional target reservoir zones for Executive Summary KPIs and primary summary tables",
+    )
+    fwl_tvdss: Optional[float] = Field(
+        default=None,
+        description="Optional explicit Free Water Level (m TVDss)",
+    )
     min_depth: Optional[float] = Field(
         default=None, description="Optional minimum depth filter (m)"
     )

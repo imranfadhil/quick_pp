@@ -992,6 +992,15 @@
 							/>
 						</label>
 						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">DF Elevation ({headerDraft.datum_unit || 'm'})</span>
+							<input
+								type="number"
+								step="0.1"
+								bind:value={headerDraft.df_elev}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
 							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">GL / Seabed Elev ({headerDraft.datum_unit || 'm'})</span>
 							<input
 								type="number"

@@ -380,7 +380,7 @@ class ProjectDataState {
 			return zCurves.includes(cUp);
 		}
 		const rawCurves = w.curves ?? (w as any).available_curves ?? [];
-		if (cUp === 'TVD') return this.wellHasTvd(w);
+		if (cUp === 'TVD' || cUp === 'TVDSS') return this.wellHasTvd(w);
 		if (cUp === 'VCLAY') {
 			return (
 				rawCurves.includes('VCLAY') ||

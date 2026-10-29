@@ -2,14 +2,14 @@
 
 ### 5.1 Hydraulic Flow Units (FZI / DRT) & Permeability Transforms
 
-Rock typing and continuous permeability ($K$) prediction were established using Routine Core Analysis (RCA) and log-derived Hydraulic Flow Units via the Reservoir Quality Index ($RQI$), Normalized Porosity ($\phi_z$), Flow Zone Indicator ($FZI$), and Discrete Rock Typing ($DRT$) formulation:
+Rock typing and continuous permeability ($K$) prediction were established using **{{ rt_summary.basis if rt_summary else 'Routine Core Analysis (RCA) & Log-Derived Hydraulic Flow Units' }}** via the Reservoir Quality Index ($RQI$), Normalized Porosity ($\phi_z$), Flow Zone Indicator ($FZI$), and Discrete Rock Typing ($DRT$) formulation:
 
 $$RQI = 0.0314 \sqrt{\frac{K}{\phi_e}}, \quad \phi_z = \frac{\phi_e}{1 - \phi_e}, \quad FZI = \frac{RQI}{\phi_z}, \quad DRT = \text{round}(2 \ln(FZI) + 10.6)$$
 
-| Rock Type | $DRT$ / Class | FZI Range ($\mu\text{m}$) | Sample Share (%) | Porosity-Permeability Transform | Core $R^2$ |
-| :--- | :---: | :---: | :---: | :--- | :---: |
+| Rock Type | $DRT$ / Class | FZI Range ($\mu\text{m}$) | Samples ($n$) | Sample Share (%) | Semi-Log Porosity-Permeability Transform | Regression $R^2$ |
+| :--- | :---: | :---: | :---: | :---: | :--- | :---: |
 {% for rt in rock_types %}
-| **{{ rt.name }}** | {{ rt.code }} | {{ rt.fzi_range }} | {{ "%.1f"|format(rt.share_pct) }}% | $\log_{10}(K) = {{ rt.slope }} \cdot \phi_e + ({{ rt.intercept }})$ | {{ "%.2f"|format(rt.r2) }} |
+| **{{ rt.name }}** | {{ rt.code }} | {{ rt.fzi_range }} | {{ rt.n_samples if rt.n_samples is defined else "—" }} | {{ "%.1f"|format(rt.share_pct) }}% | $\log_{10}(K) = {{ rt.slope }} \cdot \phi_e + ({{ rt.intercept }})$ | {{ "%.2f"|format(rt.r2) }} |
 {% endfor %}
 
 {% if include_ai_commentary and ai_commentary.rock_typing_narrative %}
@@ -22,6 +22,5 @@ $$RQI = 0.0314 \sqrt{\frac{K}{\phi_e}}, \quad \phi_z = \frac{\phi_e}{1 - \phi_e}
 
 {% if assets.perm_crossplot %}
 
-![Figure 5.1: Core Porosity-Permeability Crossplot by Rock Type & Stratigraphic Modified Lorenz Plot]({{ assets.perm_crossplot }})
+![Figure 5.1: Core/Log Porosity-Permeability Crossplot by Rock Type & Stratigraphic Modified Lorenz Plot]({{ assets.perm_crossplot }})
 {% endif %}
-

@@ -26,6 +26,7 @@
 
 	const KEY_CURVES = [
 		'TVD',
+		'TVDSS',
 		'GR',
 		'RT',
 		'NPHI',
@@ -52,7 +53,8 @@
 	const CORE_PETRO_CURVES = ['VCLAY', 'PHIT', 'PERM', 'SWT'] as const;
 
 	const CURVE_HEADER_TITLES: Record<string, string> = {
-		TVD: 'True Vertical Depth (from TVD/TVDSS curve or computed from directional survey — never assumed equal to MD)',
+		TVD: 'True Vertical Depth (from TVD curve or computed from directional survey — never assumed equal to MD)',
+		TVDSS: 'True Vertical Depth Sub-Sea (TVDSS = TVD − DF elevation from well header)',
 		GR: 'Gamma Ray',
 		RT: 'Deep Resistivity',
 		NPHI: 'Neutron Porosity',
@@ -289,7 +291,9 @@
 		}
 		const allZoneCurves = projectData.getWellZoneCurves(w, zoneName) ?? [];
 		const computedCurves = COMPUTED_CURVES.filter((c) => allZoneCurves.includes(c));
-		const rawCurves = ['TVD', 'GR', 'RT', 'NPHI', 'RHOB'].filter((c) => allZoneCurves.includes(c));
+		const rawCurves = ['TVD', 'TVDSS', 'GR', 'RT', 'NPHI', 'RHOB'].filter((c) =>
+			allZoneCurves.includes(c)
+		);
 		const targets = getTargetCurvesForMode(mode);
 		const targetHits = targets.filter((c) => allZoneCurves.includes(c));
 
@@ -757,7 +761,7 @@
 									{#each KEY_CURVES as kc}
 										{@const has = projectData.wellHasCurveInZone(w, kc, activeZone)}
 										{@const isTvdFromSurvey =
-											kc === 'TVD' && (w.survey_count ?? 0) >= 2}
+											(kc === 'TVD' || kc === 'TVDSS') && (w.survey_count ?? 0) >= 2}
 										<td
 											class="px-1 text-center"
 											title={!zonePenetrated
@@ -768,7 +772,11 @@
 															? `${w.name}${activeZone ? ` [${activeZone}]` : ''}: TVD available (computed from ${w.survey_count} directional survey stations)`
 															: `${w.name}${activeZone ? ` [${activeZone}]` : ''}: TVD curve available`
 														: `${w.name}${activeZone ? ` [${activeZone}]` : ''}: No TVD curve or directional survey — SHF & Stick Plot disabled for this well`
-													: `${w.name}${activeZone ? ` [${activeZone}]` : ''}: ${kc} ${has ? 'available' : 'missing'}`}
+													: kc === 'TVDSS'
+														? has
+															? `${w.name}${activeZone ? ` [${activeZone}]` : ''}: TVDSS available (TVD − DF elevation${w.df_elev != null ? ` [${w.df_elev}m]` : ''})`
+															: `${w.name}${activeZone ? ` [${activeZone}]` : ''}: No TVDSS / TVD curve or directional survey`
+														: `${w.name}${activeZone ? ` [${activeZone}]` : ''}: ${kc} ${has ? 'available' : 'missing'}`}
 										>
 											{#if !zonePenetrated}
 												<span class="text-[9px] text-[var(--text-muted)]">—</span>

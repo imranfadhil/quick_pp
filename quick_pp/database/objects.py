@@ -1062,6 +1062,39 @@ class Well(object):
         if merged_df.empty:
             return merge_summary
 
+        # Auto-derive TVDSS = TVD - DF_elevation (or TVD = TVDSS + DF_elevation) when TVD or TVDSS is present
+        df_elev_val = (
+            las.extract_well_df_elevation(
+                self.header_data,
+                getattr(self._orm_well, "config_data", None),
+                target_depth_uom=self.depth_uom or "m",
+            )
+            or 0.0
+        )
+        has_tvd_col = (
+            "TVD" in merged_df.columns
+            and pd.to_numeric(merged_df["TVD"], errors="coerce").notna().any()
+        )
+        has_tvdss_col = (
+            "TVDSS" in merged_df.columns
+            and pd.to_numeric(merged_df["TVDSS"], errors="coerce").notna().any()
+        )
+        appended_list = list(merge_summary.get("appended_curves") or [])
+        if has_tvd_col and not has_tvdss_col:
+            merged_df["TVDSS"] = pd.to_numeric(
+                merged_df["TVD"], errors="coerce"
+            ) - float(df_elev_val)
+            if "TVDSS" not in appended_list:
+                appended_list.append("TVDSS")
+                merge_summary["appended_curves"] = appended_list
+        elif has_tvdss_col and not has_tvd_col:
+            merged_df["TVD"] = pd.to_numeric(
+                merged_df["TVDSS"], errors="coerce"
+            ) + float(df_elev_val)
+            if "TVD" not in appended_list:
+                appended_list.append("TVD")
+                merge_summary["appended_curves"] = appended_list
+
         df_work = merged_df.set_index("DEPTH")
 
         # Save zstd-compressed Parquet to project wells directory for fast columnar access
@@ -1527,26 +1560,68 @@ class Well(object):
                 well_id=self.well_id, mnemonic=mnemonic, unit=unit, data_type=data_type
             )
             self._orm_well.curves.append(orm_curve)
+            self.db_session.flush()
         else:
             # Update unit if provided
             if unit:
                 orm_curve.unit = unit
             orm_curve.data_type = data_type
-            # Delete existing data points for these depths
-            depths_to_update = list(depth_value_map.keys())
-            data_points_to_delete = (
-                self.db_session.query(ORMCurveData)
-                .filter(
-                    ORMCurveData.curve_id == orm_curve.curve_id,
-                    ORMCurveData.depth.in_(depths_to_update),
-                )
-                .all()
-            )
-            for data_point in data_points_to_delete:
-                self.db_session.delete(data_point)
-            self.db_session.flush()
+            if orm_curve.curve_id is not None:
+                depths_to_update = [
+                    float(d) for d in depth_value_map.keys() if d is not None
+                ]
+                if len(depths_to_update) > 800:
+                    # Fast full-curve replacement or range delete to avoid SQLite 999 variable limit
+                    min_d = min(depths_to_update) - 1e-4
+                    max_d = max(depths_to_update) + 1e-4
+                    self.db_session.execute(
+                        text(
+                            "DELETE FROM curve_data WHERE curve_id = :cid AND depth >= :min_d AND depth <= :max_d"
+                        ),
+                        {"cid": orm_curve.curve_id, "min_d": min_d, "max_d": max_d},
+                    )
+                elif depths_to_update:
+                    del_stmt = text(
+                        "DELETE FROM curve_data WHERE curve_id = :cid AND depth IN :depths"
+                    ).bindparams(bindparam("depths", expanding=True))
+                    self.db_session.execute(
+                        del_stmt,
+                        {"cid": orm_curve.curve_id, "depths": depths_to_update},
+                    )
+                self.db_session.flush()
 
-        # Add new data points
+        # Add new data points using fast bulk insert when curve_id is available
+        if orm_curve.curve_id is not None:
+            if is_numeric:
+                mappings = [
+                    {
+                        "curve_id": orm_curve.curve_id,
+                        "depth": float(depth),
+                        "value_numeric": float(value),
+                        "value_text": None,
+                    }
+                    for depth, value in depth_value_map.items()
+                    if value is not None and pd.notna(value)
+                ]
+            else:
+                mappings = [
+                    {
+                        "curve_id": orm_curve.curve_id,
+                        "depth": float(depth),
+                        "value_numeric": None,
+                        "value_text": str(value),
+                    }
+                    for depth, value in depth_value_map.items()
+                    if value is not None
+                ]
+            if mappings:
+                self.db_session.bulk_insert_mappings(ORMCurveData, mappings)
+                self.db_session.flush()
+            logger.debug(
+                f"Added {len(mappings)} data points for curve '{mnemonic}'"
+            )
+            return
+
         if is_numeric:
             curve_data_points = [
                 ORMCurveData(depth=depth, value_numeric=value)

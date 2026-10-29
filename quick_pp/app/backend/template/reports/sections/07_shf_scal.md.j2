@@ -2,7 +2,7 @@
 
 ### 7.1 Leverett $J$-Function & 3D Static Model Initialization
 
-To initialize continuous 3D water saturation in the static geological cellular model above the Free Water Level ($FWL = {{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$), log-derived $S_w$ was reconciled with capillary pressure ($P_c$) curves via the Leverett $J$-Function:
+To initialize continuous 3D water saturation in the static geological cellular model above the Free Water Level ($FWL = {{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$, Basis: `{{ sw_params.fwl_basis }}`), log-derived $S_w$ was reconciled with capillary pressure ($P_c$) curves via the Leverett $J$-Function:
 
 $$h = TVD_{ss}(FWL) - TVD_{ss}, \quad P_c = \Delta\rho \cdot g \cdot h \cdot C, \quad J(S_w) = \frac{0.2166 \cdot P_c}{\sigma \cos\theta} \sqrt{\frac{K}{\phi}}, \quad S_{w,SHF} = a_J \cdot J^{b_J}$$
 
@@ -10,17 +10,21 @@ $$h = TVD_{ss}(FWL) - TVD_{ss}, \quad P_c = \Delta\rho \cdot g \cdot h \cdot C, 
 * **Fluid Density Gradient:** $\rho_w = {{ shf_params.gw }}\text{ g/cc}$, $\rho_{hc} = {{ shf_params.ghc }}\text{ g/cc}$ ($\Delta\rho = {{ "%.2f"|format(shf_params.gw - shf_params.ghc) }}\text{ g/cc}$).
 * **Log $S_w$ vs. $SHF$ Reconciliation:** Mean RMSE $= {{ "%.3f"|format(shf_params.reconciliation_rmse) }}\text{ v/v}$, Mean Bias ($S_w - SHF$) $= {{ "%+.3f"|format(shf_params.reconciliation_bias) }}\text{ v/v}$.
 
-### 7.2 Dynamic Simulation Relative Permeability ($K_{rw}, K_{ro}$) Parameterization
+### 7.2 Dynamic Simulation Relative Permeability ($K_{rw}, K_{ro}$) — {{ scal_params.source_label if scal_params.source_label else 'Analogue / Default North Sea Turbidite SCAL Parameterization' }}
+
+{% if scal_params.is_analogue %}
+> **SCAL Data Provenance Notice:** Project-specific steady-state / unsteady-state coreflood relative permeability ($K_{rw}, K_{ro}$) tables are not loaded (`0 SCAL plugs` in Table 2.1). The Corey parameters below represent an **Analogue / Default North Sea Turbidite SCAL Parameterization** for preliminary simulation sensitivity only.
+{% endif %}
 
 $$S_e = \frac{S_w - S_{wc}}{1 - S_{wc} - S_{or}}, \quad K_{rw}(S_w) = K_{rw}^0 \cdot (S_e)^{N_w}, \quad K_{ro}(S_w) = K_{ro}^0 \cdot (1 - S_e)^{N_o}$$
 
-| Parameter | Symbol | Value | Unit | Dynamic Simulation Role |
+| Parameter | Symbol | Value | Unit | Provenance / Dynamic Simulation Role |
 | :--- | :---: | :---: | :---: | :--- |
-| Connate Water Saturation | $S_{wc}$ | {{ "%.2f"|format(scal_params.swirr) }} | $\text{v/v}$ | Immobile Water Endpoint |
-| Residual Oil Saturation | $S_{or}$ | {{ "%.2f"|format(scal_params.sor) }} | $\text{v/v}$ | Waterflood Residual Hydrocarbon |
-| Max Water RelPerm | $K_{rw}^0$ | {{ "%.2f"|format(scal_params.krw_max) }} | $\text{frac}$ | Endpoint @ $S_w = 1 - S_{or}$ |
-| Max Oil RelPerm | $K_{ro}^0$ | {{ "%.2f"|format(scal_params.kro_max) }} | $\text{frac}$ | Endpoint @ $S_w = S_{wc}$ |
-| Corey Water / Oil Exponents | $N_w$ / $N_o$ | {{ "%.1f"|format(scal_params.nw) }} / {{ "%.1f"|format(scal_params.no) }} | unitless | Relative Permeability Curvature |
+| Connate Water Saturation | $S_{wc}$ | {{ "%.2f"|format(scal_params.swirr) }} | $\text{v/v}$ | Immobile Water Endpoint ({{ scal_params.source_label }}) |
+| Residual Oil Saturation | $S_{or}$ | {{ "%.2f"|format(scal_params.sor) }} | $\text{v/v}$ | Waterflood Residual Hydrocarbon ({{ scal_params.source_label }}) |
+| Max Water RelPerm | $K_{rw}^0$ | {{ "%.2f"|format(scal_params.krw_max) }} | $\text{frac}$ | Endpoint @ $S_w = 1 - S_{or}$ ({{ scal_params.source_label }}) |
+| Max Oil RelPerm | $K_{ro}^0$ | {{ "%.2f"|format(scal_params.kro_max) }} | $\text{frac}$ | Endpoint @ $S_w = S_{wc}$ ({{ scal_params.source_label }}) |
+| Corey Water / Oil Exponents | $N_w$ / $N_o$ | {{ "%.1f"|format(scal_params.nw) }} / {{ "%.1f"|format(scal_params.no) }} | unitless | Relative Permeability Curvature ({{ scal_params.source_label }}) |
 
 {% if include_ai_commentary and ai_commentary.shf_scal_narrative %}
 {{ ai_commentary.shf_scal_narrative }}
@@ -32,6 +36,5 @@ $$S_e = \frac{S_w - S_{wc}}{1 - S_{wc} - S_{or}}, \quad K_{rw}(S_w) = K_{rw}^0 \
 
 {% if assets.shf_scal_plot %}
 
-![Figure 7.1: Capillary Pressure Leverett J-Function by Rock Type & SCAL Relative Permeability Curves]({{ assets.shf_scal_plot }})
+![Figure 7.1: Capillary Pressure Leverett J-Function by Rock Type & Relative Permeability Curves]({{ assets.shf_scal_plot }})
 {% endif %}
-

@@ -234,6 +234,8 @@
 				: 'Generating Full Multi-Well FDP Petrophysical Evaluation Report...'
 		);
 		try {
+			const activeZones =
+				workbench.selectedZones.length > 0 ? [...workbench.selectedZones] : undefined;
 			const res = await generateProjectReport<ActiveReportState>(
 				workbench.projectId,
 				{
@@ -245,6 +247,10 @@
 					author: activeCfg.author,
 					company: activeCfg.company,
 					well_names: targetWells,
+					zones: activeZones,
+					target_zones: activeZones,
+					min_depth: workbench.depthFilter ? workbench.depthFilter[0] : undefined,
+					max_depth: workbench.depthFilter ? workbench.depthFilter[1] : undefined,
 					sections: activeCfg.sections,
 					cutoffs: activeCfg.cutoffs,
 					include_ai_commentary: activeCfg.includeAiSummary

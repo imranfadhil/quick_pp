@@ -8146,6 +8146,9 @@ def workspace_update_well_config(
                     session.flush()
                     saved_cfg = current_cfg
 
+        if clean_header_updates:
+            invalidate_well_cache(project_id=project_id, well_name=well_name)
+
         return _sanitize_for_json({
             "project_id": project_id,
             "well_name": well_name,

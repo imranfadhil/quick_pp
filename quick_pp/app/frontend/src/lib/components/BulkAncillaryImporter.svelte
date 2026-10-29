@@ -124,7 +124,8 @@
       { key: 'MD', label: 'MD — Measured Depth *', required: true },
       { key: 'INC', label: 'INC — Inclination (deg) *', required: true },
       { key: 'AZIM', label: 'AZIM — Azimuth (deg) *', required: true },
-      { key: 'TVD', label: 'TVD — True Vertical Depth (optional)' }
+      { key: 'TVD', label: 'TVD — True Vertical Depth (optional)' },
+      { key: 'TVDSS', label: 'TVDSS — True Vertical Depth Sub-Sea (auto: TVD − DF elev)' }
     ]
   };
 
@@ -491,7 +492,7 @@
     {#if type === 'well_surveys'}
       <label class="flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
         <input type="checkbox" bind:checked={calculateSurveyTvd} />
-        <span>Auto-compute Minimum Curvature (TVD, TVDSS, DX, DY, DLS)</span>
+        <span>Auto-compute Minimum Curvature (TVD &amp; TVDSS = TVD − DF elev, DX, DY, DLS)</span>
       </label>
     {/if}
   </div>

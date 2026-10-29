@@ -795,20 +795,26 @@ def compute_survey_minimum_curvature(
 
 
 def _apply_survey_minimum_curvature_to_well(
-    well: Any, surveys: List[Dict[str, float]]
-) -> Dict[str, int]:
-    """Interpolate computed TVD and TVDSS onto the well's log depth grid and store as curves."""
-    kb_elev = 0.0
-    if isinstance(getattr(well, "header_data", None), dict):
-        kb_elev = float(
-            well.header_data.get("kb_elevation")
-            or well.header_data.get("dfe_elevation")
-            or 0.0
+    well: Any,
+    surveys: List[Dict[str, float]],
+    df_elevation_override: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Interpolate computed TVD and TVDSS (= TVD - DF_elevation) onto the well's log depth grid and store as curves."""
+    from quick_pp.las_handler import extract_well_df_elevation
+
+    w_uom = getattr(well, "depth_uom", None) or "m"
+    if df_elevation_override is not None:
+        df_elev = float(df_elevation_override)
+    else:
+        raw_hdr = getattr(well, "header_data", None)
+        raw_cfg = getattr(getattr(well, "_orm_well", None), "config_data", None)
+        df_elev = float(
+            extract_well_df_elevation(raw_hdr, raw_cfg, target_depth_uom=w_uom) or 0.0
         )
 
-    traj_df = compute_survey_minimum_curvature(surveys, kb_elevation=kb_elev)
+    traj_df = compute_survey_minimum_curvature(surveys, kb_elevation=df_elev)
     if traj_df.empty:
-        return {"tvd_points": 0}
+        return {"tvd_points": 0, "tvdss_points": 0, "df_elev": df_elev}
 
     try:
         curve_df = well.get_curve_data(["WELL_NAME"])
@@ -835,25 +841,31 @@ def _apply_survey_minimum_curvature_to_well(
         target_depths = well_depth[valid_mask]
         if len(target_depths) > 0:
             interp_tvd = np.interp(target_depths, mds_interp, tvds_interp)
+            interp_tvdss = interp_tvd - df_elev
             tvd_dict = dict(
                 zip(target_depths.tolist(), interp_tvd.tolist(), strict=False)
             )
-            well.add_curve_data("TVD", tvd_dict, unit="m")
-            if kb_elev != 0.0:
-                tvdss_dict = dict(
-                    zip(
-                        target_depths.tolist(),
-                        (interp_tvd - kb_elev).tolist(),
-                        strict=False,
-                    )
-                )
-                well.add_curve_data("TVDSS", tvdss_dict, unit="m")
-            return {"tvd_points": len(tvd_dict)}
+            tvdss_dict = dict(
+                zip(target_depths.tolist(), interp_tvdss.tolist(), strict=False)
+            )
+            well.add_curve_data("TVD", tvd_dict, unit=w_uom)
+            well.add_curve_data("TVDSS", tvdss_dict, unit=w_uom)
+            return {
+                "tvd_points": len(tvd_dict),
+                "tvdss_points": len(tvdss_dict),
+                "df_elev": df_elev,
+            }
 
-    # Fallback: save at survey MD stations if well has no log depth grid yet
+    # Fallback: save both TVD and TVDSS at survey MD stations if well has no log depth grid yet
     tvd_dict = dict(zip(mds.tolist(), tvds.tolist(), strict=False))
-    well.add_curve_data("TVD", tvd_dict, unit="m")
-    return {"tvd_points": len(tvd_dict)}
+    tvdss_dict = dict(zip(mds.tolist(), (tvds - df_elev).tolist(), strict=False))
+    well.add_curve_data("TVD", tvd_dict, unit=w_uom)
+    well.add_curve_data("TVDSS", tvdss_dict, unit=w_uom)
+    return {
+        "tvd_points": len(tvd_dict),
+        "tvdss_points": len(tvdss_dict),
+        "df_elev": df_elev,
+    }
 
 
 # ==============================================================================
@@ -1772,7 +1784,7 @@ def upload_well_surveys_project(
         inc_col = payload["inc_column"]
         azim_col = payload["azim_column"]
         tvd_col = payload.get("tvd_column")
-        calculate_tvd = payload.get("calculate_tvd", False)
+        calculate_tvd = payload.get("calculate_tvd", True)
 
         if md_col not in headers:
             raise ValueError(f"Column '{md_col}' not found in file")
@@ -1820,8 +1832,23 @@ def upload_well_surveys_project(
                 res = _apply_survey_minimum_curvature_to_well(well, surveys)
                 tvd_points_stored = res.get("tvd_points", 0)
             elif tvd_data:
-                well.add_curve_data("TVD", tvd_data, unit="m")
+                from quick_pp.las_handler import extract_well_df_elevation
+
+                w_uom = getattr(well, "depth_uom", None) or "m"
+                df_elev = float(
+                    extract_well_df_elevation(
+                        getattr(well, "header_data", None),
+                        getattr(getattr(well, "_orm_well", None), "config_data", None),
+                        target_depth_uom=w_uom,
+                    )
+                    or 0.0
+                )
+                well.add_curve_data("TVD", tvd_data, unit=w_uom)
+                tvdss_data = {d: v - df_elev for d, v in tvd_data.items()}
+                well.add_curve_data("TVDSS", tvdss_data, unit=w_uom)
                 tvd_points_stored = len(tvd_data)
+
+            invalidate_well_cache(project_id=project_id, well_name=str(target_well))
 
             return {
                 "status": "success",
@@ -2213,7 +2240,9 @@ def commit_ancillary_data(
                         well.add_well_surveys(surveys_payload)
                         if request.calculate_tvd:
                             _apply_survey_minimum_curvature_to_well(
-                                well, surveys_payload
+                                well,
+                                surveys_payload,
+                                df_elevation_override=request.kb_elev_override,
                             )
                         summary_by_well[wn] = len(surveys_payload)
 

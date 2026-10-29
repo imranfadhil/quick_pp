@@ -8,6 +8,7 @@ export interface WellSummaryItem {
 	name: string;
 	uwi: string;
 	depth_uom?: string;
+	df_elev?: number | null;
 	min_depth: number | null;
 	max_depth: number | null;
 	depth_count: number;

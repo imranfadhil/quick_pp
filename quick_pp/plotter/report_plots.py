@@ -148,6 +148,94 @@ def _get_numeric_series(
     return pd.Series(default, index=df.index, dtype=float)
 
 
+GENERIC_PLACEHOLDER_ZONES = {
+    "MAIN RESERVOIR",
+    "UNKNOWN",
+    "ALL",
+    "NAN",
+    "NONE",
+    "",
+}
+
+
+def _resolve_target_depth_window(
+    df: pd.DataFrame,
+    target_zones: Optional[Sequence[str]] = None,
+    max_span: float = 480.0,
+) -> tuple[float, float]:
+    """Determine auto-zoomed [ymin, ymax] depth window focused on the evaluated reservoir succession (<= 500 m per CHK-06)."""
+    if df is None or df.empty or "DEPTH" not in df.columns:
+        return (0.0, 500.0)
+
+    d_all = pd.to_numeric(df["DEPTH"], errors="coerce")
+    d_valid = d_all.dropna()
+    if d_valid.empty:
+        return (0.0, 500.0)
+
+    full_min = float(d_valid.min())
+    full_max = float(d_valid.max())
+
+    # 1. Identify rows with evaluated petrophysical curves (PHIE/PHIT & SWT/SW)
+    phi_s = _get_numeric_series(df, "PHIE", "PHIT")
+    sw_s = _get_numeric_series(df, "SWT", "SW")
+    eval_mask = d_all.notna() & phi_s.notna() & sw_s.notna()
+
+    # 2. Apply target_zones filter if available, or restrict to named formations over generic catch-all placeholders
+    if "ZONES" in df.columns and df["ZONES"].notna().any():
+        z_upper = df["ZONES"].astype(str).str.strip().str.upper()
+        if target_zones:
+            tz_set = {str(z).strip().upper() for z in target_zones if z}
+            tz_mask = d_all.notna() & z_upper.isin(tz_set)
+            if (tz_mask & eval_mask).any():
+                eval_mask = tz_mask & eval_mask
+            elif tz_mask.any():
+                eval_mask = tz_mask
+        else:
+            named_zone_mask = ~z_upper.isin(GENERIC_PLACEHOLDER_ZONES)
+            if (eval_mask & named_zone_mask).any():
+                eval_mask = eval_mask & named_zone_mask
+            elif named_zone_mask.any():
+                eval_mask = d_all.notna() & named_zone_mask
+
+    if eval_mask.any():
+        d_target = d_all[eval_mask]
+        t_min = float(d_target.min())
+        t_max = float(d_target.max())
+    else:
+        t_min, t_max = full_min, full_max
+
+    ymin = max(full_min, t_min - 30.0)
+    ymax = min(full_max, t_max + 30.0)
+
+    # Enforce CHK-06: vertical span <= max_span (<= 500.0 m)
+    if (ymax - ymin) > max_span:
+        # Center around highest hydrocarbon / porosity concentration within target window
+        hc_weight = (
+            (phi_s.fillna(0.0) * (1.0 - sw_s.fillna(1.0)).clip(lower=0.0))
+            .where(eval_mask, 0.0)
+            .to_numpy(dtype=float)
+        )
+        if np.nansum(hc_weight) > 0:
+            center_d = float(
+                np.nansum(d_all.fillna(0.0).to_numpy(dtype=float) * hc_weight)
+                / np.nansum(hc_weight)
+            )
+        elif eval_mask.any():
+            center_d = float(np.nanmedian(d_all[eval_mask]))
+        else:
+            center_d = 0.5 * (t_min + t_max)
+        half = 0.5 * max_span
+        ymin = max(full_min, center_d - half)
+        ymax = ymin + max_span
+        if ymax > full_max:
+            ymax = full_max
+            ymin = max(full_min, ymax - max_span)
+
+    if ymax <= ymin + 5.0:
+        ymax = ymin + 50.0
+    return (round(ymin, 1), round(ymax, 1))
+
+
 def generate_inventory_heatmap(
     project_id: Union[int, str],
     wells: List[Dict[str, Any]],
@@ -156,6 +244,8 @@ def generate_inventory_heatmap(
 ) -> str:
     """Generate Figure 2.1: Multi-Well Curve & Data Availability Matrix Heatmap."""
     target_curves = [
+        "TVD",
+        "TVDSS",
         "GR",
         "CALI",
         "RT",
@@ -183,6 +273,13 @@ def generate_inventory_heatmap(
             str(c).upper() for c in (w.get("curves") or w.get("available_curves") or [])
         }
         # Alias support
+        if avail.intersection({"TVD_SCS", "TVDSCS"}) or (w.get("survey_station_count") or 0) > 0:
+            avail.add("TVD")
+            avail.add("TVDSS")
+        if avail.intersection({"TVD_SS", "Z"}):
+            avail.add("TVDSS")
+        if "TVD" in avail:
+            avail.add("TVDSS")
         if avail.intersection({"RD", "RDEP", "LLD", "RILD"}):
             avail.add("RT")
         if avail.intersection({"DT", "DTCO", "AC"}):
@@ -396,19 +493,29 @@ def generate_nd_crossplot(
     df: pd.DataFrame,
     well_names: Optional[List[str]] = None,
     color_by: str = "GR",
+    target_zones: Optional[Sequence[str]] = None,
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Figure 4.1: Neutron-Density Crossplot & Core Porosity Calibration."""
+    """Generate Figure 4.1: Neutron-Density Crossplot, Core Porosity Calibration & Matrix Grain Density (RHOMA) QC."""
     sub = _ensure_df_well_filter(df, well_names)
-    fig = Figure(figsize=(10.5, 4.6))
-    gs = GridSpec(1, 2, figure=fig, width_ratios=[1.15, 1.0], wspace=0.28)
+    fig = Figure(figsize=(13.2, 4.4))
+    gs = GridSpec(1, 3, figure=fig, width_ratios=[1.15, 1.0, 0.95], wspace=0.30)
     ax1 = fig.add_subplot(gs[0, 0])
     ax2 = fig.add_subplot(gs[0, 1])
+    ax3 = fig.add_subplot(gs[0, 2])
 
-    nphi = _get_numeric_series(sub, "NPHI")
-    rhob = _get_numeric_series(sub, "RHOB")
-    c_series = _get_numeric_series(sub, color_by, "VCLAY", "GR")
+    # Filter to target_zones when available for clean reservoir lithology & core calibration
+    cal_sub = sub
+    if target_zones and "ZONES" in sub.columns and sub["ZONES"].notna().any():
+        tz_set = {str(z).strip().upper() for z in target_zones if z}
+        tz_df = sub[sub["ZONES"].astype(str).str.strip().str.upper().isin(tz_set)]
+        if not tz_df.empty:
+            cal_sub = tz_df
+
+    nphi = _get_numeric_series(cal_sub, "NPHI")
+    rhob = _get_numeric_series(cal_sub, "RHOB")
+    c_series = _get_numeric_series(cal_sub, color_by, "VCLAY", "GR")
 
     valid = nphi.notna() & rhob.notna()
     if valid.any():
@@ -469,63 +576,122 @@ def generate_nd_crossplot(
         )
         ax1.set_xlim(-0.05, 0.50)
         ax1.set_ylim(2.95, 1.85)
-        ax1.set_xlabel("Neutron Porosity NPHI (v/v)", fontsize=9, fontweight="bold")
-        ax1.set_ylabel("Bulk Density RHOB (g/cc)", fontsize=9, fontweight="bold")
+        ax1.set_xlabel("Neutron Porosity NPHI (v/v)", fontsize=8.5, fontweight="bold")
+        ax1.set_ylabel("Bulk Density RHOB (g/cc)", fontsize=8.5, fontweight="bold")
         ax1.set_title(
-            "Neutron-Density Lithology Crossplot", fontsize=9.5, fontweight="bold"
+            "Neutron-Density Lithology Crossplot", fontsize=9.0, fontweight="bold"
         )
-        ax1.legend(loc="lower left", fontsize=7.5)
+        ax1.legend(loc="lower left", fontsize=7.0)
         ax1.grid(True, linestyle=":", alpha=0.5)
     else:
         ax1.text(0.5, 0.5, "NPHI / RHOB curves not available", ha="center", va="center")
 
-    # Panel 2: Core vs Log Porosity Calibration (or PHIT vs PHIE distribution)
-    phit = _get_numeric_series(sub, "PHIT", "PHIE")
-    cpore = _get_numeric_series(sub, "CPORE", "CORE_PORO")
-    if cpore.notna().any() and phit.notna().any():
-        cp_frac = np.where(cpore > 1.0, cpore / 100.0, cpore)
-        cmask = (
-            np.isfinite(cp_frac) & np.isfinite(phit) & (cp_frac > 0) & (cp_frac < 0.5)
+    # Panel 2: Core vs Log Porosity Calibration (strictly where both CPORE and PHIT are non-null)
+    phit = _get_numeric_series(cal_sub, "PHIT", "PHIE")
+    cpore = _get_numeric_series(cal_sub, "CPORE", "CORE_PORO")
+    cp_frac = np.where(cpore > 1.0, cpore / 100.0, cpore)
+    cmask = (
+        np.isfinite(cp_frac) & np.isfinite(phit) & (cp_frac > 0.005) & (cp_frac < 0.48)
+    )
+    if np.sum(cmask) < 3 and cal_sub is not sub:
+        # Fallback to full well/field overlapping CPORE & PHIT if target_zones had <3 overlapping plugs
+        phit_all = _get_numeric_series(sub, "PHIT", "PHIE")
+        cpore_all = _get_numeric_series(sub, "CPORE", "CORE_PORO")
+        cp_frac_all = np.where(cpore_all > 1.0, cpore_all / 100.0, cpore_all)
+        cmask_all = (
+            np.isfinite(cp_frac_all)
+            & np.isfinite(phit_all)
+            & (cp_frac_all > 0.005)
+            & (cp_frac_all < 0.48)
         )
-        if np.sum(cmask) >= 2:
-            cx = cp_frac[cmask]
-            ly = phit.to_numpy(dtype=float)[cmask]
-            rmse = float(np.sqrt(np.mean((ly - cx) ** 2)))
-            ss_res = float(np.sum((ly - cx) ** 2))
-            ss_tot = float(np.sum((cx - np.mean(cx)) ** 2))
-            r2 = max(0.0, 1.0 - ss_res / max(ss_tot, 1e-9))
+        if np.sum(cmask_all) >= 3:
+            cp_frac, phit, cmask = cp_frac_all, phit_all, cmask_all
 
-            ax2.scatter(
-                cx,
-                ly,
-                color="#059669",
-                s=26,
-                alpha=0.8,
-                edgecolors="#064e3b",
-                label=f"Core Samples (n={len(cx)})",
-            )
-            ax2.plot([0, 0.4], [0, 0.4], "k--", lw=1.3, label="1:1 Parity Line")
-            ax2.set_xlim(0.0, 0.40)
-            ax2.set_ylim(0.0, 0.40)
-            ax2.set_xlabel(
-                "Overburden-Corrected Core Porosity (v/v)",
-                fontsize=9,
-                fontweight="bold",
-            )
-            ax2.set_ylabel(
-                "Log Total Porosity PHIT (v/v)", fontsize=9, fontweight="bold"
-            )
-            ax2.set_title(
-                f"Core-to-Log Porosity Calibration (R²={r2:.2f}, RMSE={rmse:.3f})",
-                fontsize=9.5,
-                fontweight="bold",
-            )
-            ax2.legend(loc="upper left", fontsize=8)
-            ax2.grid(True, linestyle=":", alpha=0.5)
-        else:
-            _plot_porosity_histogram(ax2, sub)
+    if np.sum(cmask) >= 3:
+        cx = cp_frac[cmask]
+        ly = phit.to_numpy(dtype=float)[cmask]
+        rmse = float(np.sqrt(np.mean((ly - cx) ** 2)))
+        ss_res = float(np.sum((ly - cx) ** 2))
+        ss_tot = float(np.sum((cx - np.mean(cx)) ** 2))
+        r2 = max(0.0, 1.0 - ss_res / max(ss_tot, 1e-9))
+
+        ax2.scatter(
+            cx,
+            ly,
+            color="#059669",
+            s=24,
+            alpha=0.8,
+            edgecolors="#064e3b",
+            label=f"Valid Overlapping Plugs (n={len(cx)})",
+        )
+        ax2.plot([0, 0.4], [0, 0.4], "k--", lw=1.3, label="1:1 Parity Line")
+        ax2.set_xlim(0.0, 0.40)
+        ax2.set_ylim(0.0, 0.40)
+        ax2.set_xlabel(
+            "Overburden-Corrected Core Porosity (v/v)",
+            fontsize=8.5,
+            fontweight="bold",
+        )
+        ax2.set_ylabel(
+            "Log Total Porosity PHIT (v/v)", fontsize=8.5, fontweight="bold"
+        )
+        ax2.set_title(
+            f"Core-to-Log Calibration (R²={r2:.2f}, RMSE={rmse:.3f})",
+            fontsize=9.0,
+            fontweight="bold",
+        )
+        ax2.legend(loc="upper left", fontsize=7.5)
+        ax2.grid(True, linestyle=":", alpha=0.5)
     else:
-        _plot_porosity_histogram(ax2, sub)
+        _plot_porosity_histogram(ax2, cal_sub)
+
+    # Panel 3: RCA Matrix Grain Density (RHOMA / CGD / Apparent Matrix Density) QC
+    rhoma_s = _get_numeric_series(sub, "RHOMA", "CGD", "GRAIN_DENSITY", "RHO_MA")
+    rhoma_vals = rhoma_s[(rhoma_s >= 2.45) & (rhoma_s <= 2.95)].dropna()
+    rhoma_label = "RCA Core Grain Density"
+    if len(rhoma_vals) < 3:
+        # Compute apparent matrix density from RHOB and CPORE/PHIT: rho_ma = (rhob - phi * 1.0) / (1 - phi)
+        rb_s = _get_numeric_series(cal_sub, "RHOB")
+        phi_ref = _get_numeric_series(cal_sub, "CPORE", "PHIT", "PHIE")
+        phi_ref = pd.Series(
+            np.where(phi_ref > 1.0, phi_ref / 100.0, phi_ref), index=cal_sub.index
+        )
+        app_ma = (rb_s - phi_ref * 1.00) / (1.0 - phi_ref).clip(lower=0.4)
+        rhoma_vals = app_ma[(app_ma >= 2.50) & (app_ma <= 2.90)].dropna()
+        rhoma_label = "Apparent Matrix Density ρ_ma"
+
+    if not rhoma_vals.empty:
+        mean_ma = float(rhoma_vals.mean())
+        ax3.hist(
+            rhoma_vals.to_numpy(dtype=float),
+            bins=28,
+            color="#f59e0b",
+            alpha=0.72,
+            edgecolor="#78350f",
+            label=f"{rhoma_label} (μ={mean_ma:.2f} g/cc)",
+        )
+        ax3.axvline(
+            2.65,
+            color="#0f172a",
+            linestyle="--",
+            lw=1.4,
+            label="Quartz Ref (2.65 g/cc)",
+        )
+        ax3.axvline(
+            2.71,
+            color="#2563eb",
+            linestyle=":",
+            lw=1.3,
+            label="Calcite Cement (2.71 g/cc)",
+        )
+        ax3.set_xlim(2.52, 2.88)
+        ax3.set_xlabel("Matrix Grain Density ρ_ma (g/cc)", fontsize=8.5, fontweight="bold")
+        ax3.set_ylabel("Sample Frequency", fontsize=8.5, fontweight="bold")
+        ax3.set_title("Grain Density (ρ_ma) Matrix QC", fontsize=9.0, fontweight="bold")
+        ax3.legend(loc="upper right", fontsize=7.0)
+        ax3.grid(True, linestyle=":", alpha=0.5)
+    else:
+        _plot_porosity_histogram(ax3, cal_sub)
 
     return _save_fig(fig, "fig_4_1_nd_crossplot.png", output_dir, url_prefix)
 
@@ -844,6 +1010,7 @@ def generate_shf_j_function_plot(
     df: pd.DataFrame,
     rock_types: Optional[List[Dict[str, Any]]] = None,
     fwl: Optional[float] = None,
+    is_analogue_scal: bool = True,
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
@@ -903,9 +1070,14 @@ def generate_shf_j_function_plot(
     ax2.set_ylim(0.0, 1.0)
     ax2.set_xlabel("Water Saturation Sw (v/v)", fontsize=9, fontweight="bold")
     ax2.set_ylabel("Relative Permeability Kr (fraction)", fontsize=9, fontweight="bold")
+    scal_title = (
+        "Analogue / Default Corey SCAL RelPerm"
+        if is_analogue_scal
+        else "Measured Project SCAL Water-Oil Relative Permeability"
+    )
     ax2.set_title(
-        "SCAL Water-Oil Relative Permeability Parameterization",
-        fontsize=9.5,
+        scal_title,
+        fontsize=9.0,
         fontweight="bold",
     )
     ax2.legend(loc="center right", fontsize=7.5)
@@ -918,12 +1090,19 @@ def generate_uncertainty_cutoff_plot(
     df: pd.DataFrame,
     well_names: Optional[List[str]] = None,
     cutoffs: Optional[Dict[str, float]] = None,
+    target_zones: Optional[Sequence[str]] = None,
     ressum_df: Optional[pd.DataFrame] = None,
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
     """Generate Figure 8.1: Cut-off Sensitivity Carpet Plot & P10-P50-P90 HCPT Uncertainty."""
     sub = _ensure_df_well_filter(df, well_names)
+    if target_zones and "ZONES" in sub.columns and sub["ZONES"].notna().any():
+        tz_set = {str(z).strip().upper() for z in target_zones if z}
+        tz_sub = sub[sub["ZONES"].astype(str).str.strip().str.upper().isin(tz_set)]
+        if not tz_sub.empty:
+            sub = tz_sub
+
     cut = cutoffs or {"vsh": 0.40, "phie": 0.08, "sw": 0.60}
     vsh_cut = float(cut.get("vsh", cut.get("VSHALE", 0.40)))
     phi_cut = float(cut.get("phie", cut.get("PHIT", 0.08)))
@@ -934,19 +1113,19 @@ def generate_uncertainty_cutoff_plot(
     ax1 = fig.add_subplot(gs[0, 0])
     ax2 = fig.add_subplot(gs[0, 1])
 
-    phie = _get_numeric_series(sub, "PHIE", "PHIT", default=0.0).to_numpy(dtype=float)
-    vclay = _get_numeric_series(sub, "VCLAY", default=0.2).to_numpy(dtype=float)
-    swt = _get_numeric_series(sub, "SWT", "SW", default=0.5).to_numpy(dtype=float)
+    phie = _get_numeric_series(sub, "PHIE", "PHIT").to_numpy(dtype=float)
+    vclay = _get_numeric_series(sub, "VCLAY").to_numpy(dtype=float)
+    swt = _get_numeric_series(sub, "SWT", "SW").to_numpy(dtype=float)
+    n_wells = max(1, int(sub["WELL_NAME"].nunique()) if "WELL_NAME" in sub.columns else 1)
     valid_m = (phie > 0.0) & np.isfinite(phie) & np.isfinite(vclay) & np.isfinite(swt)
     if valid_m.any():
         phie = phie[valid_m]
         vclay = vclay[valid_m]
         swt = swt[valid_m]
-    if len(phie) > 8000:
-        step_n = max(1, len(phie) // 8000)
-        phie = phie[::step_n]
-        vclay = vclay[::step_n]
-        swt = swt[::step_n]
+    else:
+        phie = np.array([], dtype=float)
+        vclay = np.array([], dtype=float)
+        swt = np.array([], dtype=float)
 
     if len(phie) > 0:
         phi_thresholds = np.linspace(0.0, 0.22, 35)
@@ -987,54 +1166,84 @@ def generate_uncertainty_cutoff_plot(
         ax1.legend(loc="lower left", fontsize=8)
         ax1.grid(True, linestyle=":", alpha=0.5)
 
-        # Panel 2: P10 / P50 / P90 Probabilistic HCPT Distribution
+        # Panel 2: Empirical Monte Carlo P90 / P50 / P10 HCPT Perturbation Distribution (N=1000)
         rng = np.random.default_rng(42)
-        pay_mask = (vclay <= vsh_cut) & (phie >= phi_cut) & (swt <= sw_cut)
-        base_hcpt = float(np.sum(np.where(pay_mask, phie * (1.0 - swt) * 0.1524, 0.0)))
-        if base_hcpt <= 0.01:
-            base_hcpt = 2.5
-        sim_hcpt = base_hcpt * rng.lognormal(mean=0.0, sigma=0.18, size=2000)
-        p90_v, p50_v, p10_v = np.percentile(sim_hcpt, [10, 50, 90])
+        n_reals = 1000
+        d_phi = rng.normal(0.0, 0.018, size=(n_reals, 1))
+        d_vsh = rng.normal(0.0, 0.035, size=(n_reals, 1))
+        sw_mult = rng.lognormal(0.0, 0.11, size=(n_reals, 1))
 
-        ax2.hist(
-            sim_hcpt,
-            bins=32,
-            density=True,
-            color="#3b82f6",
-            alpha=0.65,
-            edgecolor="#1e3a8a",
-        )
-        ax2.axvline(
-            p90_v,
-            color="#dc2626",
-            linestyle="--",
-            lw=1.6,
-            label=f"P90 (Low): {p90_v:.2f} m",
-        )
-        ax2.axvline(
-            p50_v,
-            color="#0f172a",
-            linestyle="-",
-            lw=1.8,
-            label=f"P50 (Base): {p50_v:.2f} m",
-        )
-        ax2.axvline(
-            p10_v,
-            color="#059669",
-            linestyle="--",
-            lw=1.6,
-            label=f"P10 (High): {p10_v:.2f} m",
-        )
+        # Subsample up to 4000 pts for fast vectorized 1000xN matrix evaluation
+        if len(phie) > 4000:
+            idx_mc = np.linspace(0, len(phie) - 1, 4000, dtype=int)
+            phi_mc = phie[idx_mc][None, :]
+            vsh_mc = vclay[idx_mc][None, :]
+            sw_mc = swt[idx_mc][None, :]
+            step_h = 0.1524 * (len(phie) / 4000.0) / float(n_wells)
+        else:
+            phi_mc = phie[None, :]
+            vsh_mc = vclay[None, :]
+            sw_mc = swt[None, :]
+            step_h = 0.1524 / float(n_wells)
+
+        phi_r = np.clip(phi_mc + d_phi, 0.0, 0.45)
+        vsh_r = np.clip(vsh_mc + d_vsh, 0.0, 1.0)
+        sw_r = np.clip(sw_mc * sw_mult, 0.02, 1.0)
+        pay_r = (vsh_r <= vsh_cut) & (phi_r >= phi_cut) & (sw_r <= sw_cut)
+        sim_hcpt = np.sum(np.where(pay_r, phi_r * (1.0 - sw_r) * step_h, 0.0), axis=1)
+
+        p90_v, p50_v, p10_v = np.nanpercentile(sim_hcpt, [10, 50, 90])
+
+        if p10_v > 0.001:
+            ax2.hist(
+                sim_hcpt,
+                bins=30,
+                density=True,
+                color="#3b82f6",
+                alpha=0.65,
+                edgecolor="#1e3a8a",
+            )
+            ax2.axvline(
+                p90_v,
+                color="#dc2626",
+                linestyle="--",
+                lw=1.6,
+                label=f"P90 (Low): {p90_v:.2f} m",
+            )
+            ax2.axvline(
+                p50_v,
+                color="#0f172a",
+                linestyle="-",
+                lw=1.8,
+                label=f"P50 (Base): {p50_v:.2f} m",
+            )
+            ax2.axvline(
+                p10_v,
+                color="#059669",
+                linestyle="--",
+                lw=1.6,
+                label=f"P10 (High): {p10_v:.2f} m",
+            )
+            ax2.legend(loc="upper right", fontsize=8)
+        else:
+            ax2.text(
+                0.5,
+                0.5,
+                "Deterministic & Probabilistic Net Pay = 0.00 m\n(100% Water-Bearing across Target Cut-offs)",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="#475569",
+            )
         ax2.set_xlabel(
-            "Hydrocarbon Pore Thickness HCPT (m)", fontsize=9, fontweight="bold"
+            "Mean Well Hydrocarbon Pore Thickness HCPT (m)", fontsize=9, fontweight="bold"
         )
         ax2.set_ylabel("Probability Density", fontsize=9, fontweight="bold")
         ax2.set_title(
-            "Probabilistic HCPT Uncertainty (P90 / P50 / P10)",
+            "Monte Carlo HCPT Uncertainty (N=1000 Realizations)",
             fontsize=9.5,
             fontweight="bold",
         )
-        ax2.legend(loc="upper right", fontsize=8)
         ax2.grid(True, linestyle=":", alpha=0.5)
 
     return _save_fig(fig, "fig_8_1_uncertainty_plot.png", output_dir, url_prefix)
@@ -1045,14 +1254,15 @@ def generate_upscaling_comparison_plot(
     well_name: str,
     cell_size: float = 2.0,
     cutoffs: Optional[Dict[str, float]] = None,
+    target_zones: Optional[Sequence[str]] = None,
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Figure 9.1: Fine-Scale vs. Upscaled Blocked Logs Comparison Track."""
+    """Generate Figure 9.1: Fine-Scale vs. Upscaled Blocked Logs Comparison Track (Target-Zoomed <= 500 m)."""
     from quick_pp.upscaling import expand_blocked_logs, upscale_logs
 
     sub = _trim_to_logged_interval(_ensure_df_well_filter(df, [well_name]))
-    fig = Figure(figsize=(10.5, 4.8))
+    fig = Figure(figsize=(10.8, 5.2))
     gs = GridSpec(1, 3, figure=fig, wspace=0.18)
     ax1 = fig.add_subplot(gs[0, 0])
     ax2 = fig.add_subplot(gs[0, 1], sharey=ax1)
@@ -1068,18 +1278,39 @@ def generate_upscaling_comparison_plot(
         )
         return _save_fig(fig, "fig_9_1_upscaling_plot.png", output_dir, url_prefix)
 
+    ymin, ymax = _resolve_target_depth_window(sub, target_zones=target_zones, max_span=480.0)
+    d_col = pd.to_numeric(sub["DEPTH"], errors="coerce")
+    sub_win = sub[(d_col >= ymin) & (d_col <= ymax)].copy()
+    if sub_win.empty:
+        sub_win = sub.copy()
+
+    # Preserve NaN outside evaluated intervals — never pad with constant 0.15 / 0.45 / 25.0
     work = pd.DataFrame(
         {
-            "DEPTH": _get_numeric_series(sub, "DEPTH"),
-            "VCLAY": _get_numeric_series(sub, "VCLAY", "VSHALE", default=0.2),
-            "PHIT": _get_numeric_series(sub, "PHIT", "PHIE", default=0.15),
-            "SWT": _get_numeric_series(sub, "SWT", "SW", "SHF", default=0.45),
-            "PERM": _get_numeric_series(sub, "PERM", "PERM_TRANS", default=25.0).clip(lower=1e-2),
-            "ZONES": sub["ZONES"].fillna("ALL").astype(str)
-            if "ZONES" in sub.columns
-            else "ALL",
+            "DEPTH": _get_numeric_series(sub_win, "DEPTH"),
+            "VCLAY": _get_numeric_series(sub_win, "VCLAY", "VSHALE"),
+            "PHIT": _get_numeric_series(sub_win, "PHIE", "PHIT"),
+            "SWT": _get_numeric_series(sub_win, "SWT", "SW", "SHF"),
+            "PERM": _get_numeric_series(sub_win, "PERM", "PERM_TRANS").clip(lower=1e-2),
+            "ZONES": sub_win["ZONES"].fillna("Target").astype(str)
+            if "ZONES" in sub_win.columns
+            else "Target",
         }
-    ).dropna(subset=["DEPTH"])
+    ).dropna(subset=["DEPTH", "PHIT", "SWT"], how="any")
+
+    if work.empty:
+        work = pd.DataFrame(
+            {
+                "DEPTH": _get_numeric_series(sub_win, "DEPTH"),
+                "VCLAY": _get_numeric_series(sub_win, "VCLAY", "VSHALE"),
+                "PHIT": _get_numeric_series(sub_win, "PHIE", "PHIT"),
+                "SWT": _get_numeric_series(sub_win, "SWT", "SW", "SHF"),
+                "PERM": _get_numeric_series(sub_win, "PERM", "PERM_TRANS").clip(lower=1e-2),
+                "ZONES": sub_win["ZONES"].fillna("Target").astype(str)
+                if "ZONES" in sub_win.columns
+                else "Target",
+            }
+        ).dropna(subset=["DEPTH"])
 
     try:
         blocked = upscale_logs(
@@ -1096,7 +1327,7 @@ def generate_upscaling_comparison_plot(
         step_df = work.copy()
 
     d = work["DEPTH"].to_numpy(dtype=float)
-    ax1.plot(work["PHIT"], d, color="#93c5fd", lw=0.8, label="Fine-Scale PHIT")
+    ax1.plot(work["PHIT"], d, color="#93c5fd", lw=0.8, label="Fine-Scale Φe")
     if "PHIT_UP" in step_df.columns:
         ax1.plot(
             step_df["PHIT_UP"],
@@ -1107,7 +1338,7 @@ def generate_upscaling_comparison_plot(
         )
     ax1.set_xlim(0.0, 0.40)
     ax1.set_ylabel("Depth (m MD)", fontsize=9, fontweight="bold")
-    ax1.set_xlabel("Porosity Φ (v/v)", fontsize=9, fontweight="bold")
+    ax1.set_xlabel("Effective Porosity Φe (v/v)", fontsize=9, fontweight="bold")
     ax1.set_title("Porosity Blocking", fontsize=9.5, fontweight="bold")
     ax1.legend(loc="upper right", fontsize=7.5)
     ax1.grid(True, linestyle=":", alpha=0.5)
@@ -1144,10 +1375,31 @@ def generate_upscaling_comparison_plot(
     ax3.legend(loc="upper right", fontsize=7.5)
     ax3.grid(True, which="both", linestyle=":", alpha=0.5)
 
-    ax1.invert_yaxis()
+    # Formation tops overlay across all 3 tracks
+    if "ZONES" in work.columns and work["ZONES"].notna().any() and len(d) > 0:
+        z_s = work["ZONES"].astype(str)
+        chg = [0] + [i for i in range(1, len(z_s)) if z_s.iloc[i] != z_s.iloc[i - 1]]
+        for idx in chg[:10]:
+            zd = float(d[idx])
+            zl = str(z_s.iloc[idx]).strip()
+            if not zl or zl.upper() in ("NAN", "ALL", "MAIN RESERVOIR", "UNKNOWN"):
+                continue
+            for a_i in (ax1, ax2, ax3):
+                a_i.axhline(zd, color="k", linestyle="--", lw=0.8, alpha=0.75)
+            ax1.text(
+                0.01,
+                zd + (ymax - ymin) * 0.014,
+                zl,
+                fontsize=7.0,
+                fontweight="bold",
+                color="#0f172a",
+                bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none", "pad": 1.0},
+            )
+
+    ax1.set_ylim(ymax, ymin)
     fig.suptitle(
-        f"Well {well_name} — Fine-Scale CPI vs. {cell_size}m Cellular Grid Upscaled Logs",
-        fontsize=10.5,
+        f"Well {well_name} — Target Reservoir Fine-Scale CPI vs. {cell_size}m Cellular Grid Upscaled Logs ({ymin:.1f}–{ymax:.1f} m MD)",
+        fontsize=10.0,
         fontweight="bold",
         y=1.02,
     )
@@ -1162,8 +1414,8 @@ def generate_well_cpi_plot(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Appendix Composite Petrophysical Evaluation Log (CPI) 6-Track Plot."""
-    sub_full = _trim_to_logged_interval(_ensure_df_well_filter(df, [well_name]))
+    """Generate Appendix Composite Petrophysical Evaluation Log (CPI) 6-Track Plot (Target-Zoomed <= 500 m per CHK-06)."""
+    sub_well = _trim_to_logged_interval(_ensure_df_well_filter(df, [well_name]))
     safe_well = "".join(
         c if c.isalnum() or c in ("-", "_") else "_" for c in str(well_name)
     )
@@ -1179,12 +1431,22 @@ def generate_well_cpi_plot(
     )
     axes = [fig.add_subplot(gs[0, i]) for i in range(6)]
 
-    if sub_full.empty or "DEPTH" not in sub_full.columns:
+    if sub_well.empty or "DEPTH" not in sub_well.columns:
         axes[0].text(0.5, 0.5, f"No log data for {well_name}", ha="center", va="center")
         return _save_fig(fig, filename, output_dir, url_prefix)
 
+    # Auto-zoom to target reservoir window (CHK-06: vertical span <= 500 m)
+    d_min, d_max = _resolve_target_depth_window(sub_well, target_zones=zones, max_span=480.0)
+    d_col = pd.to_numeric(sub_well["DEPTH"], errors="coerce")
+    sub_full = sub_well[(d_col >= d_min) & (d_col <= d_max)].copy()
+    if sub_full.empty:
+        sub_full = sub_well.copy()
     d_full = pd.to_numeric(sub_full["DEPTH"], errors="coerce").to_numpy(dtype=float)
-    d_min, d_max = float(np.nanmin(d_full)), float(np.nanmax(d_full))
+
+    cut = cutoffs or {"vsh": 0.40, "phie": 0.08, "sw": 0.65}
+    vsh_cut = float(cut.get("vsh", cut.get("VSHALE", 0.40)))
+    phi_cut = float(cut.get("phie", cut.get("PHIT", 0.08)))
+    sw_cut = float(cut.get("sw", cut.get("SWT", 0.65)))
 
     # Downsample continuous log tracks if needed while preserving all discrete CPORE/CPERM rows on sub_full
     if len(sub_full) > 2500:
@@ -1195,12 +1457,33 @@ def generate_well_cpi_plot(
         sub = sub_full
         d = d_full
 
-    # Track 1: GR & Badhole
+    # Track 1: GR with Clean Sand (Yellow) & Shale (Green/Brown) Lithology Shading
     ax = axes[0]
     gr = _get_numeric_series(sub, "GR").to_numpy(dtype=float)
     if np.isfinite(gr).any():
-        ax.plot(gr, d, color="#15803d", lw=1.1, label="GR")
-        ax.fill_betweenx(d, 0, np.clip(gr, 0, 150), color="#bbf7d0", alpha=0.45)
+        gr_clip = np.clip(gr, 0.0, 150.0)
+        sand_baseline = 65.0
+        ax.plot(gr_clip, d, color="#14532d", lw=1.1, label="GR")
+        # Yellow fill left of curve for low GR (clean sand)
+        ax.fill_betweenx(
+            d,
+            0.0,
+            gr_clip,
+            where=(gr_clip <= sand_baseline),
+            color="#fef08a",
+            alpha=0.75,
+            label="Clean Sand",
+        )
+        # Green/olive fill for shale (high GR)
+        ax.fill_betweenx(
+            d,
+            0.0,
+            gr_clip,
+            where=(gr_clip > sand_baseline),
+            color="#86efac",
+            alpha=0.55,
+            label="Shale / Argillaceous",
+        )
     ax.set_xlim(0, 150)
     ax.set_xlabel("GR (gAPI)", fontsize=8.5, fontweight="bold", color="#15803d")
     ax.set_ylabel("Depth (m MD)", fontsize=9.5, fontweight="bold")
@@ -1216,7 +1499,7 @@ def generate_well_cpi_plot(
     ax.set_xlabel("RT (Ω·m)", fontsize=8.5, fontweight="bold", color="#dc2626")
     ax.set_title("Track 2\nResistivity", fontsize=8.5, fontweight="bold")
 
-    # Track 3: RHOB & NPHI
+    # Track 3: RHOB & NPHI with Yellow Clean Sand / HC Crossover Fill
     ax = axes[2]
     nphi = _get_numeric_series(sub, "NPHI").to_numpy(dtype=float)
     rhob = _get_numeric_series(sub, "RHOB").to_numpy(dtype=float)
@@ -1232,7 +1515,8 @@ def generate_well_cpi_plot(
             nphi_from_rhob,
             where=(nphi < nphi_from_rhob),
             color="#fde047",
-            alpha=0.55,
+            alpha=0.70,
+            label="Sand / HC Crossover",
         )
     ax.set_xlim(0.45, -0.15)
     ax.set_xlabel("NPHI (v/v) / RHOB", fontsize=8.5, fontweight="bold", color="#1e40af")
@@ -1241,7 +1525,8 @@ def generate_well_cpi_plot(
     # Track 4: Lithology & Porosity + Core CPORE + Conformal P10/P90
     ax = axes[3]
     phit = _get_numeric_series(sub, "PHIT", "PHIE").to_numpy(dtype=float)
-    phie = _get_numeric_series(sub, "PHIE").to_numpy(dtype=float)
+    phie = _get_numeric_series(sub, "PHIE", "PHIT").to_numpy(dtype=float)
+    vclay = _get_numeric_series(sub, "VCLAY", "VSHALE").to_numpy(dtype=float)
     if "PHIT_P10" in sub.columns and "PHIT_P90" in sub.columns:
         p10 = _get_numeric_series(sub, "PHIT_P10").to_numpy(dtype=float)
         p90 = _get_numeric_series(sub, "PHIT_P90").to_numpy(dtype=float)
@@ -1255,7 +1540,7 @@ def generate_well_cpi_plot(
         cp = np.where(cp > 1.0, cp / 100.0, cp)
         cm = np.isfinite(cp) & (cp > 0)
         if np.any(cm):
-            ax.scatter(cp[cm], d_full[cm], color="#dc2626", s=16, zorder=5, label="CPORE")
+            ax.scatter(cp[cm], d_full[cm], color="#dc2626", s=18, zorder=5, label="CPORE")
     ax.set_xlim(0.0, 0.50)
     ax.set_xlabel("Porosity Φ (v/v)", fontsize=8.5, fontweight="bold", color="#1d4ed8")
     ax.set_title("Track 4\nPorosity & Core", fontsize=8.5, fontweight="bold")
@@ -1269,13 +1554,13 @@ def generate_well_cpi_plot(
         ck = _get_numeric_series(sub_full, "CPERM").to_numpy(dtype=float)
         km = np.isfinite(ck) & (ck > 0)
         if np.any(km):
-            ax.scatter(ck[km], d_full[km], color="#b91c1c", s=16, zorder=5, label="CPERM")
+            ax.scatter(ck[km], d_full[km], color="#b91c1c", s=18, zorder=5, label="CPERM")
     ax.set_xscale("log")
     ax.set_xlim(1e-2, 1e4)
     ax.set_xlabel("PERM (mD)", fontsize=8.5, fontweight="bold", color="#059669")
     ax.set_title("Track 5\nPermeability", fontsize=8.5, fontweight="bold")
 
-    # Track 6: Water Saturation SWT, SHF & Net Pay Flag
+    # Track 6: Water Saturation SWT, SHF, Net Reservoir (Green) & Net Pay (Dark Green / Red) Shading
     ax = axes[5]
     swt = _get_numeric_series(sub, "SWT", "SW").to_numpy(dtype=float)
     shf = _get_numeric_series(sub, "SHF").to_numpy(dtype=float)
@@ -1283,16 +1568,44 @@ def generate_well_cpi_plot(
         s10 = _get_numeric_series(sub, "SW_P10").to_numpy(dtype=float)
         s90 = _get_numeric_series(sub, "SW_P90").to_numpy(dtype=float)
         ax.fill_betweenx(d, s10, s90, color="#ddd6fe", alpha=0.55)
+
+    res_flag = (
+        np.isfinite(phie)
+        & (phie >= phi_cut)
+        & (np.where(np.isfinite(vclay), vclay, 0.2) <= vsh_cut)
+    )
+    pay_flag = res_flag & np.isfinite(swt) & (swt <= sw_cut)
+
+    if np.any(res_flag):
+        # Green fill on right margin for Net Reservoir flag
+        ax.fill_betweenx(
+            d,
+            0.92,
+            1.00,
+            where=res_flag,
+            color="#86efac",
+            alpha=0.80,
+            label="Net Reservoir",
+        )
     if np.isfinite(swt).any():
         ax.plot(swt, d, color="#1d4ed8", lw=1.2, label="SWT")
-        ax.fill_betweenx(d, swt, 1.0, where=(swt < 0.65), color="#bbf7d0", alpha=0.55)
+        # Dark green hydrocarbon saturation shading for Net Pay intervals
+        ax.fill_betweenx(
+            d,
+            swt,
+            1.0,
+            where=pay_flag,
+            color="#15803d",
+            alpha=0.45,
+            label="Net Pay (HC)",
+        )
     if np.isfinite(shf).any():
         ax.plot(shf, d, color="#dc2626", lw=1.1, linestyle="--", label="SHF")
     ax.set_xlim(0.0, 1.0)
     ax.set_xlabel("Sw / SHF (v/v)", fontsize=8.5, fontweight="bold", color="#1d4ed8")
     ax.set_title("Track 6\nSaturation & Pay", fontsize=8.5, fontweight="bold")
 
-    # Formation top markers across all tracks
+    # Formation top dashed lines across all tracks with Track 1 annotations
     if "ZONES" in sub.columns and sub["ZONES"].notna().any():
         z_series = sub["ZONES"].astype(str)
         change_idx = [0] + [
@@ -1300,25 +1613,25 @@ def generate_well_cpi_plot(
             for i in range(1, len(z_series))
             if z_series.iloc[i] != z_series.iloc[i - 1]
         ]
-        for idx in change_idx[:12]:
+        for idx in change_idx[:14]:
             z_depth = float(d[idx])
-            z_label = str(z_series.iloc[idx])
-            if not z_label or z_label == "nan":
+            z_label = str(z_series.iloc[idx]).strip()
+            if not z_label or z_label.upper() in ("NAN", "MAIN RESERVOIR", "UNKNOWN", "ALL"):
                 continue
             for a_i in axes:
-                a_i.axhline(z_depth, color="#7c3aed", linestyle=":", lw=0.9, alpha=0.8)
+                a_i.axhline(z_depth, color="k", linestyle="--", lw=0.85, alpha=0.85)
             axes[0].text(
                 4.0,
-                z_depth + (d_max - d_min) * 0.012,
+                z_depth + (d_max - d_min) * 0.013,
                 z_label,
                 fontsize=7.5,
                 fontweight="bold",
-                color="#6d28d9",
+                color="#0f172a",
                 bbox={
                     "facecolor": "white",
-                    "alpha": 0.75,
-                    "edgecolor": "none",
-                    "pad": 1.0,
+                    "alpha": 0.85,
+                    "edgecolor": "#cbd5e1",
+                    "pad": 1.2,
                 },
             )
 
@@ -1329,7 +1642,7 @@ def generate_well_cpi_plot(
             a_i.tick_params(labelleft=False)
 
     fig.suptitle(
-        f"Composite Petrophysical Evaluation Log (CPI) — Well {well_name} ({d_min:.1f}–{d_max:.1f} m MD)",
+        f"Composite Petrophysical Evaluation Log (CPI) — Well {well_name} (Target Window: {d_min:.1f}–{d_max:.1f} m MD)",
         fontsize=11,
         fontweight="bold",
         y=0.98,

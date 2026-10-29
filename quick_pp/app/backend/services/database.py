@@ -849,11 +849,14 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 for r in session.execute(survey_stmt, {"well_ids": well_ids}).fetchall()
             }
 
+            from quick_pp.las_handler import extract_well_df_elevation
+
             wells_summary = []
             total_depth_sum = 0.0
 
             canonical_zone_curve_aliases: Dict[str, Tuple[str, ...]] = {
-                "TVD": ("TVD", "TVDSS", "DEPT_TVD", "DEPTH_TVD"),
+                "TVD": ("TVD", "DEPT_TVD", "DEPTH_TVD"),
+                "TVDSS": ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS"),
                 "GR": ("GR", "GAMMA", "GR_ARC", "GR_EDTC"),
                 "RT": ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD"),
                 "NPHI": ("NPHI", "TNPH", "NPOR", "CNCF"),
@@ -945,16 +948,32 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                                 well_curve_set.add(c_up)
                                 all_curves_set.add(c_up)
 
+                w_hdr_src = (
+                    dict(w.header_data) if isinstance(w.header_data, dict) else {}
+                )
+                eph_hdr_w = _ephemeral_well_headers.get((project_id, w.name))
+                if isinstance(eph_hdr_w, dict):
+                    w_hdr_src = {**w_hdr_src, **eph_hdr_w}
+                w_df_elev = extract_well_df_elevation(
+                    w_hdr_src,
+                    w.config_data if isinstance(w.config_data, dict) else None,
+                    target_depth_uom=w.depth_uom or "m",
+                )
+
                 has_tvd_for_well = (
                     survey_counts.get(wid, 0) >= 2
                     or "TVD" in well_curve_set
                     or "TVDSS" in well_curve_set
                     or "DEPT_TVD" in well_curve_set
                     or "DEPTH_TVD" in well_curve_set
+                    or "DEPT_TVDSS" in well_curve_set
+                    or "DEPTH_TVDSS" in well_curve_set
                 )
                 if has_tvd_for_well:
                     well_curve_set.add("TVD")
                     all_curves_set.add("TVD")
+                    well_curve_set.add("TVDSS")
+                    all_curves_set.add("TVDSS")
                 for can_key, aliases in canonical_zone_curve_aliases.items():
                     if any(a in well_curve_set for a in aliases):
                         well_curve_set.add(can_key)
@@ -1010,14 +1029,14 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 for z_name, d_top_f, d_base_f, top_item in zone_intervals:
                     present_can: List[str] = []
                     for can_key, aliases in canonical_zone_curve_aliases.items():
-                        if can_key == "TVD" and survey_counts.get(wid, 0) >= 2:
+                        if can_key in ("TVD", "TVDSS") and has_tvd_for_well:
                             if (
                                 min_d is not None
                                 and max_d is not None
                                 and d_top_f <= max_d
                                 and d_base_f >= min_d
                             ):
-                                present_can.append("TVD")
+                                present_can.append(can_key)
                                 continue
                         if not any(a in well_curve_set for a in aliases):
                             continue
@@ -1097,6 +1116,7 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         "name": w.name,
                         "uwi": w.uwi,
                         "depth_uom": w.depth_uom or "m",
+                        "df_elev": w_df_elev,
                         "min_depth": min_d,
                         "max_depth": max_d,
                         "total_depth": td,
@@ -1587,7 +1607,7 @@ def _compute_tvd_from_survey(
     md_c = col_map.get("md") or col_map.get("depth")
     inc_c = col_map.get("inc") or col_map.get("incl") or col_map.get("inclination")
     azi_c = col_map.get("azim") or col_map.get("azi") or col_map.get("azimuth")
-    tvd_c = col_map.get("tvd") or col_map.get("tvdss")
+    tvd_c = col_map.get("tvd")
 
     if md_c and tvd_c and surveys_df[tvd_c].notna().sum() >= 2:
         s_sub = (
@@ -1765,6 +1785,21 @@ def _get_merged_dataframe_sync(
                     return pd.DataFrame()
 
                 well = proj.get_well(db_well_name)
+                well_header_data = (
+                    dict(well.header_data)
+                    if isinstance(well.header_data, dict)
+                    else {}
+                )
+                well_config_data = (
+                    dict(well._orm_well.config_data)
+                    if well._orm_well and isinstance(well._orm_well.config_data, dict)
+                    else {}
+                )
+                well_depth_uom = (
+                    (well._orm_well.depth_uom if well._orm_well else None)
+                    or getattr(well, "depth_uom", None)
+                    or "m"
+                )
                 raw_tops_df = well.get_formation_tops()
                 raw_contacts_df = well.get_fluid_contacts()
                 raw_pressure_df = well.get_pressure_tests()
@@ -1926,25 +1961,75 @@ def _get_merged_dataframe_sync(
                             merged[c_col] = merged[c_core]
                         merged.drop(columns=[c_core], inplace=True)
 
-            # Resolve TVD from TVDSS/DEPT_TVD/DEPTH_TVD or compute from directional survey (never assume TVD == MD)
+            # Resolve TVD and TVDSS (= TVD - DF_elevation) from curves or directional survey (never assume TVD == MD)
+            from quick_pp.las_handler import extract_well_df_elevation
+
+            eph_hdr = _ephemeral_well_headers.get(
+                (project_id, well_name)
+            ) or _ephemeral_well_headers.get((project_id, db_well_name))
+            if isinstance(eph_hdr, dict):
+                well_header_data = {**well_header_data, **eph_hdr}
+            df_elev_val = float(
+                extract_well_df_elevation(
+                    well_header_data,
+                    well_config_data,
+                    target_depth_uom=well_depth_uom,
+                )
+                or 0.0
+            )
+
             has_valid_tvd = (
                 "tvd" in merged.columns
                 and pd.to_numeric(merged["tvd"], errors="coerce").notna().sum() >= 2
             )
             if not has_valid_tvd:
-                for tvd_alias in ("tvdss", "dept_tvd", "depth_tvd"):
+                for tvd_alias in ("dept_tvd", "depth_tvd"):
                     if tvd_alias in merged.columns:
                         s_alias = pd.to_numeric(merged[tvd_alias], errors="coerce")
                         if s_alias.notna().sum() >= 2:
                             merged["tvd"] = s_alias
                             has_valid_tvd = True
                             break
-            if not has_valid_tvd and isinstance(raw_surveys_df, pd.DataFrame) and not raw_surveys_df.empty:
+
+            has_valid_tvdss = (
+                "tvdss" in merged.columns
+                and pd.to_numeric(merged["tvdss"], errors="coerce").notna().sum() >= 2
+            )
+            if not has_valid_tvdss:
+                for tvdss_alias in ("dept_tvdss", "depth_tvdss", "tvd_ss"):
+                    if tvdss_alias in merged.columns:
+                        s_alias = pd.to_numeric(merged[tvdss_alias], errors="coerce")
+                        if s_alias.notna().sum() >= 2:
+                            merged["tvdss"] = s_alias
+                            has_valid_tvdss = True
+                            break
+
+            if (
+                not has_valid_tvd
+                and isinstance(raw_surveys_df, pd.DataFrame)
+                and not raw_surveys_df.empty
+            ):
                 tvd_from_survey = _compute_tvd_from_survey(
                     merged["depth"].to_numpy(dtype=float), raw_surveys_df
                 )
-                if tvd_from_survey is not None and np.isfinite(tvd_from_survey).sum() >= 2:
+                if (
+                    tvd_from_survey is not None
+                    and np.isfinite(tvd_from_survey).sum() >= 2
+                ):
                     merged["tvd"] = tvd_from_survey
+                    has_valid_tvd = True
+
+            if not has_valid_tvd and has_valid_tvdss:
+                merged["tvd"] = (
+                    pd.to_numeric(merged["tvdss"], errors="coerce") + df_elev_val
+                )
+                has_valid_tvd = True
+
+            if has_valid_tvd and not has_valid_tvdss:
+                merged["tvdss"] = (
+                    pd.to_numeric(merged["tvd"], errors="coerce") - df_elev_val
+                )
+                has_valid_tvdss = True
 
             merged = merged.replace([np.inf, -np.inf], np.nan)
             merged.columns = [c.upper() for c in merged.columns]

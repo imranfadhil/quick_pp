@@ -71,6 +71,8 @@
 		);
 
 		try {
+			const activeZones =
+				workbench.selectedZones.length > 0 ? [...workbench.selectedZones] : undefined;
 			const payload = {
 				project_id: workbench.projectId,
 				report_type: reportType,
@@ -84,6 +86,10 @@
 				field_name:
 					activeCfg.fieldName.trim() || projectData.summary?.name || undefined,
 				well_names: targetWells,
+				zones: activeZones,
+				target_zones: activeZones,
+				min_depth: workbench.depthFilter ? workbench.depthFilter[0] : undefined,
+				max_depth: workbench.depthFilter ? workbench.depthFilter[1] : undefined,
 				sections: activeCfg.sections,
 				cutoffs: activeCfg.cutoffs,
 				include_ai_commentary: withAi
@@ -303,6 +309,38 @@
 					</div>
 				</div>
 			{/if}
+
+			<div
+				class="mb-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1.5 text-[11px]"
+			>
+				<div class="flex items-center justify-between">
+					<span class="text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+						Included Zones (Top Bar Filter)
+					</span>
+					{#if workbench.selectedZones.length > 0}
+						<span class="mono-num font-semibold text-blue-600">
+							{workbench.selectedZones.length} selected
+						</span>
+					{:else}
+						<span class="text-[10px] text-[var(--text-muted)]">All Evaluated Zones</span>
+					{/if}
+				</div>
+				{#if workbench.selectedZones.length > 0}
+					<div class="mt-1 flex flex-wrap gap-1">
+						{#each workbench.selectedZones as z (z)}
+							<span
+								class="rounded-xs border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-800"
+							>
+								{z}
+							</span>
+						{/each}
+					</div>
+				{:else}
+					<div class="mt-0.5 text-[10px] text-[var(--text-muted)]">
+						Use the Zone Filter in the top bar to restrict formations included in the report.
+					</div>
+				{/if}
+			</div>
 
 			<NumericScrubber
 				label="Max Shale Cutoff (Vsh,max)"

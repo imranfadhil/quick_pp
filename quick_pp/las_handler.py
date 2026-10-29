@@ -1066,6 +1066,17 @@ def extract_las_metadata(
                     str(v.get("unit") or ""),
                     str(v.get("descr") or ""),
                 )
+            elif isinstance(v, list):
+                tgt = param_items if "param" in str(k).lower() else well_items
+                for elem in v:
+                    if isinstance(elem, dict) and "mnemonic" in elem:
+                        _put_item(
+                            tgt,
+                            str(elem.get("mnemonic") or ""),
+                            elem.get("value"),
+                            str(elem.get("unit") or ""),
+                            str(elem.get("descr") or ""),
+                        )
             elif not isinstance(v, (dict, list)):
                 _put_item(well_items, str(k), v)
 
@@ -1152,10 +1163,33 @@ def extract_las_metadata(
     lic_val = _find_str(["LIC", "LICENSE", "LICENCE", "PERMIT"])
 
     kb_elev, kb_unit = _find_float(
-        ["KB", "EK", "EREF", "EKB", "RKB", "KB_ELEV", "KBE", "ELEV_KB", "kb_elevation"]
+        [
+            "KB",
+            "EK",
+            "EREF",
+            "EKB",
+            "RKB",
+            "KB_ELEV",
+            "KBE",
+            "ELEV_KB",
+            "kb_elevation",
+            "kb_elev",
+        ]
     )
     df_elev, df_unit = _find_float(
-        ["DF", "EDF", "DFE", "DF_ELEV", "ELEV_DF", "dfe_elevation"]
+        [
+            "DF",
+            "EDF",
+            "DFE",
+            "DF_ELEV",
+            "ELEV_DF",
+            "dfe_elevation",
+            "df_elev",
+            "ERD",
+            "ERT",
+            "RTE",
+            "DFL",
+        ]
     )
     gl_elev, gl_unit = _find_float(
         ["GL", "EGL", "GLE", "SEABED", "GL_ELEV", "ELEV_GL", "ground_elevation"]
@@ -1163,7 +1197,7 @@ def extract_las_metadata(
     water_depth, wd_unit = _find_float(
         ["WD", "WDEP", "WATER_DEPTH", "WTRD", "SEA_DEPTH"]
     )
-    apd, apd_unit = _find_float(["EPD", "APD", "ELZ"])
+    apd, apd_unit = _find_float(["APD", "ELZ", "EPD"])
 
     start_d, start_unit = _find_float(["STRT", "START", "START_DEPTH"])
     stop_d, _ = _find_float(["STOP", "STOP_DEPTH"])
@@ -1358,6 +1392,96 @@ def extract_las_metadata(
     out_d["dfe_elevation"] = out_d.get("df_elev")
     out_d["field_name"] = out_d.get("field")
     return MetadataDict(out_d)
+
+
+def extract_well_df_elevation(
+    header_data: Any,
+    config_data: Any = None,
+    target_depth_uom: Optional[str] = "m",
+) -> Optional[float]:
+    """Extract Drill Floor (DF) or Kelly Bushing (KB) datum elevation from well header/config.
+
+    Follows priority:
+    1. Explicit overrides in `header_data['header_overrides']` or `config_data`:
+       `df_elev` -> `dfe_elevation` -> `kb_elev` -> `kb_elevation` -> `apd`
+    2. Extracted LAS/DLIS well header metadata via `extract_las_metadata(header_data)`:
+       `df_elev` -> `kb_elev` -> `apd`
+    Converts from feet to meters (or vice-versa) when `datum_unit` differs from `target_depth_uom`.
+    """
+    hdr_dict = header_data if isinstance(header_data, dict) else {}
+    cfg_dict = config_data if isinstance(config_data, dict) else {}
+    ovr_dict = (
+        hdr_dict.get("header_overrides")
+        if isinstance(hdr_dict.get("header_overrides"), dict)
+        else {}
+    )
+
+    meta_dict: Dict[str, Any] = {}
+    if header_data is not None and (not isinstance(header_data, dict) or bool(header_data)):
+        try:
+            meta_dict = dict(extract_las_metadata(header_data))
+        except Exception:
+            meta_dict = {}
+
+    def _pick_elev(src: Dict[str, Any]) -> Optional[float]:
+        if not src:
+            return None
+        for key in (
+            "df_elev",
+            "dfe_elevation",
+            "EDF",
+            "DF",
+            "DFE",
+            "kb_elev",
+            "kb_elevation",
+            "EKB",
+            "KB",
+            "RKB",
+            "apd",
+            "APD",
+        ):
+            raw_v = src.get(key)
+            if raw_v is not None and not isinstance(raw_v, (dict, list)):
+                fv = _parse_float_safe(raw_v)
+                if fv is not None and fv not in SENTINEL_NULLS:
+                    if key in ("apd", "APD") and fv == 0.0:
+                        continue
+                    return fv
+        return None
+
+    elev_val = _pick_elev(ovr_dict)
+    if elev_val is None:
+        elev_val = _pick_elev(cfg_dict)
+    if elev_val is None:
+        elev_val = _pick_elev(meta_dict)
+    if elev_val is None:
+        elev_val = _pick_elev(hdr_dict)
+
+    if elev_val is None:
+        return None
+
+    datum_unit = str(
+        ovr_dict.get("datum_unit")
+        or ovr_dict.get("depth_unit")
+        or cfg_dict.get("datum_unit")
+        or cfg_dict.get("depth_unit")
+        or meta_dict.get("datum_unit")
+        or hdr_dict.get("datum_unit")
+        or "m"
+    ).strip().lower()
+
+    if target_depth_uom:
+        target_u = str(target_depth_uom).strip().lower()
+        is_src_ft = datum_unit in ("ft", "f", "feet", "foot")
+        is_dst_m = target_u in ("m", "meter", "meters", "metre", "metres")
+        is_src_m = datum_unit in ("m", "meter", "meters", "metre", "metres")
+        is_dst_ft = target_u in ("ft", "f", "feet", "foot")
+        if is_src_ft and is_dst_m:
+            elev_val = elev_val * 0.3048
+        elif is_src_m and is_dst_ft:
+            elev_val = elev_val / 0.3048
+
+    return round(float(elev_val), 4)
 
 
 class LAS3NormalizedStream(str):
