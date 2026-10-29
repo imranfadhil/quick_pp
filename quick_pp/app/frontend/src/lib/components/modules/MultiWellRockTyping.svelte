@@ -123,38 +123,22 @@
 		)
 	);
 
-	async function selectDrtMethod(m: DrtMethod) {
+	function selectDrtMethod(m: DrtMethod) {
 		if (projectData.drtMethod === m && projectData.rockTypingResult?.method === m) return;
 		projectData.drtMethod = m;
 		projectData.drtClassifierPropagated = false;
-		if (workbench.projectId) {
-			await executeRockTyping(
-				false,
-				Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
-				false,
-				projectData.drtSelectedSavedModelKey || null
-			);
-		}
 	}
 
-	async function selectCutoffMethod(cm: DrtCutoffMethod) {
+	function selectCutoffMethod(cm: DrtCutoffMethod) {
 		projectData.drtCutoffMethod = cm;
 		if (cm === 'lorenz' && projectData.rockTypingPlotView === 'gmm') {
 			projectData.rockTypingPlotView = 'lorenz';
 		} else if (cm === 'gmm' && projectData.rockTypingPlotView === 'lorenz') {
 			projectData.rockTypingPlotView = 'gmm';
 		}
-		if (workbench.projectId) {
-			await executeRockTyping(
-				true,
-				Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
-				projectData.drtClassifierPropagated,
-				projectData.drtSelectedSavedModelKey || null
-			);
-		}
 	}
 
-	async function selectCandidateK(k: number) {
+	function selectCandidateK(k: number) {
 		if (!Number.isFinite(k) || k < 2) return;
 		projectData.drtAutoK = false;
 		const targetCutoffsCount = k - 1;
@@ -167,15 +151,9 @@
 			cur.length = targetCutoffsCount;
 		}
 		projectData.activeDrtCutoffs = cur;
-		await executeRockTyping(
-			true,
-			Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
-			projectData.drtClassifierPropagated,
-			projectData.drtSelectedSavedModelKey || null
-		);
 	}
 
-	async function addCutoff() {
+	function addCutoff() {
 		const cur = projectData.activeDrtCutoffs;
 		const last = cur[cur.length - 1] ?? 1.0;
 		const nextVal =
@@ -183,28 +161,12 @@
 				? Math.min(4.0, Number((last + 0.5).toFixed(2)))
 				: Number((last * 1.8).toFixed(2));
 		projectData.activeDrtCutoffs = [...cur, nextVal];
-		if (workbench.projectId) {
-			await executeRockTyping(
-				false,
-				Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
-				projectData.drtClassifierPropagated,
-				projectData.drtSelectedSavedModelKey || null
-			);
-		}
 	}
 
-	async function removeCutoff(idx: number) {
+	function removeCutoff(idx: number) {
 		const cur = projectData.activeDrtCutoffs;
 		if (cur.length <= 1) return;
 		projectData.activeDrtCutoffs = cur.filter((_, i) => i !== idx);
-		if (workbench.projectId) {
-			await executeRockTyping(
-				false,
-				Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
-				projectData.drtClassifierPropagated,
-				projectData.drtSelectedSavedModelKey || null
-			);
-		}
 	}
 
 	function formatDrtRange(drtStr: string): string {
@@ -284,9 +246,6 @@
 
 	onMount(() => {
 		loadSavedClassifierModels();
-		if (workbench.projectId && !projectData.rockTypingResult) {
-			void executeRockTyping(false, false, false);
-		}
 	});
 
 	async function saveTrainedClassifierModel() {
@@ -471,10 +430,10 @@
 			}
 		}
 
-		// Sync active ROCK_FLAG selection with backend workspace well cache
-		const savedKey =
-			projectData.drtSelectedSavedModelKey || classifierDiag?.saved_model_key || null;
-		await executeRockTyping(false, !savedKey, mode !== 'cutoff_only', savedKey);
+
+
+
+
 	}
 
 	async function executeRockTyping(
@@ -676,24 +635,9 @@
 		}
 	}
 
-	async function setPlotView(view: RockTypingPlotView) {
+	function setPlotView(view: RockTypingPlotView) {
 		workbench.crossplotTemplateOverride = 'phi-k';
 		projectData.rockTypingPlotView = view;
-		if (workbench.projectId && !projectData.isComputingMultiWell) {
-			if (!projectData.rockTypingResult) {
-				await executeRockTyping(false, view === 'classifier', false);
-			} else if (
-				view === 'classifier' &&
-				!projectData.rockTypingResult.diagnostics?.classifier?.contingency_table
-			) {
-				await executeRockTyping(
-					false,
-					!projectData.drtSelectedSavedModelKey,
-					projectData.drtClassifierPropagated,
-					projectData.drtSelectedSavedModelKey || null
-				);
-			}
-		}
 	}
 
 	async function saveRockTyping() {
@@ -882,7 +826,7 @@
 					<input
 						type="checkbox"
 						bind:checked={projectData.useInterparticlePorosity}
-						onchange={() => executeRockTyping(false, Boolean(classifierDiag?.trained), false)}
+
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] accent-[var(--accent-primary)]"
 					/>
 				</label>
@@ -895,7 +839,7 @@
 						<input
 							type="checkbox"
 							bind:checked={projectData.luciaVuggyOverride}
-							onchange={() => executeRockTyping(false, Boolean(classifierDiag?.trained), false)}
+	
 							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] accent-[var(--accent-primary)]"
 						/>
 					</label>
@@ -908,7 +852,7 @@
 					min={0.005}
 					max={0.15}
 					step={0.005}
-					onrun={() => executeRockTyping(false, Boolean(classifierDiag?.trained), false)}
+
 				/>
 
 				<NumericScrubber
@@ -918,7 +862,7 @@
 					min={40.0}
 					max={65.0}
 					step={0.5}
-					onrun={() => executeRockTyping(false, Boolean(classifierDiag?.trained), false)}
+
 				/>
 
 				{#if carbonateDiag}
@@ -971,7 +915,7 @@
 									min={activeMeta.min}
 									max={activeMeta.max}
 									step={activeMeta.step}
-									onrun={() => executeRockTyping(false, Boolean(classifierDiag?.trained), false)}
+				
 								/>
 							{:else if projectData.drtMethod === 'lucia'}
 								<NumericScrubber
@@ -981,7 +925,7 @@
 									min={activeMeta.min}
 									max={activeMeta.max}
 									step={activeMeta.step}
-									onrun={() => executeRockTyping(false, Boolean(classifierDiag?.trained), false)}
+				
 								/>
 							{:else}
 								<NumericScrubber
@@ -991,7 +935,7 @@
 									min={activeMeta.min}
 									max={activeMeta.max}
 									step={activeMeta.step}
-									onrun={() => executeRockTyping(false, Boolean(classifierDiag?.trained), false)}
+				
 								/>
 							{/if}
 						</div>
@@ -1464,7 +1408,7 @@
 	</div>
 
 	<div
-		class="space-y-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2"
+		class="grid grid-cols-2 gap-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2"
 	>
 		<button
 			type="button"
@@ -1487,7 +1431,7 @@
 			onclick={saveRockTyping}
 			class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
 		>
-			Save ROCK_FLAG{classifierDiag?.propagated ? ', ROCK_FLAG_ML & VDL' : ` & ${activeMeta.shortName}`} to Project Wells
+			Save All Wells
 		</button>
 	</div>
 </div>

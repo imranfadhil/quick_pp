@@ -89,22 +89,22 @@
 					);
 		}
 		if (
-			workbench.projectId &&
-			(!projectData.shfResult ||
-				projectData.shfResult.model !== projectData.shfParams.model ||
-				!projectData.shfResult.scal_data)
-		) {
-			executeShf(true, false);
+
+
+
+
+		false) {
+
 		}
 	});
 
-	async function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
+	function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
 		if (projectData.shfParams.model === m && projectData.shfResult?.model === m) return;
 		projectData.shfParams.model = m;
-		await executeShf(true, true);
+
 	}
 
-	async function updateFitParam(
+	function updateFitParam(
 		rf: string,
 		paramKey: 'a' | 'b' | 'c' | 'd',
 		rawVal: string
@@ -121,22 +121,22 @@
 				}
 			}
 		};
-		await executeShf(false, true);
+
 	}
 
-	async function updateZoneFwl(zone: string, rawVal: string) {
+	function updateZoneFwl(zone: string, rawVal: string) {
 		const num = Number(rawVal);
 		if (!Number.isFinite(num)) return;
 		projectData.shfParams.fwlByZone = {
 			...projectData.shfParams.fwlByZone,
 			[zone]: Number(num.toFixed(2))
 		};
-		await executeShf(false, true);
+
 	}
 
-	async function clearZoneFwls() {
+	function clearZoneFwls() {
 		projectData.shfParams.fwlByZone = {};
-		await executeShf(false, true);
+
 	}
 
 	async function executeShf(resetFits: boolean = false, markDirty: boolean = true) {
@@ -183,8 +183,8 @@
 				scal_data: data.scal_data,
 				...data.data
 			};
-			if (markDirty) {
-				projectData.markMultiWellComputed('shf');
+			if (markDirty) { projectData.markMultiWellComputed('shf');
+		
 			}
 
 			// Live-merge SHF curve into active well so LogTrackCanvas Track 6 updates in real time!
@@ -263,7 +263,7 @@
 			} else {
 				projectData.shfParams.fwlByZone = {};
 			}
-			await executeShf(false, true);
+	
 		} catch (e: any) {
 			projectData.error = e?.message || 'FWL optimization error';
 		} finally {
@@ -486,7 +486,7 @@
 				min={0}
 				max={10000}
 				step={1.0}
-				onrun={() => executeShf(false, true)}
+
 			/>
 			<NumericScrubber
 				label="Interfacial Tension (IFT)"
@@ -495,7 +495,7 @@
 				min={1.0}
 				max={80.0}
 				step={0.5}
-				onrun={() => executeShf(false, true)}
+
 			/>
 			<NumericScrubber
 				label="Contact Angle (θ)"
@@ -504,7 +504,7 @@
 				min={0}
 				max={90}
 				step={1.0}
-				onrun={() => executeShf(false, true)}
+
 			/>
 			<NumericScrubber
 				label="Water Gradient (gw)"
@@ -513,7 +513,7 @@
 				min={0.9}
 				max={1.3}
 				step={0.01}
-				onrun={() => executeShf(false, true)}
+
 			/>
 			<NumericScrubber
 				label="HC Gradient (ghc)"
@@ -522,7 +522,7 @@
 				min={0.1}
 				max={0.98}
 				step={0.01}
-				onrun={() => executeShf(false, true)}
+
 			/>
 		</ParameterSection>
 

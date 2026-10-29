@@ -89,12 +89,6 @@
 		workbench.crossplotTemplateOverride = 'phi-k';
 		projectData.rockTypingPlotView = 'classifier';
 		loadSavedClassifierModels();
-		if (
-			workbench.projectId &&
-			!projectData.rockTypingResult?.diagnostics?.classifier?.contingency_table
-		) {
-			void trainAndValidateClassifier();
-		}
 	});
 
 	async function trainAndValidateClassifier() {
@@ -739,20 +733,30 @@
 	</div>
 
 	<div class="space-y-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2">
-		<button
-			type="button"
-			disabled={projectData.isComputingMultiWell}
-			onclick={trainAndValidateClassifier}
-			class="h-7 w-full rounded-sm bg-[var(--accent-primary)] text-xs font-medium text-white transition-opacity hover:opacity-95 disabled:opacity-50"
-		>
-			{projectData.isComputingMultiWell
-				? 'Training & Validating...'
-				: 'Train & Validate Classifier (⌘+Enter)'}
-		</button>
+		<div class="grid grid-cols-2 gap-1.5">
+			<button
+				type="button"
+				disabled={projectData.isComputingMultiWell}
+				onclick={trainAndValidateClassifier}
+				class="h-7 rounded-sm bg-[var(--accent-primary)] text-xs font-medium text-white transition-opacity hover:opacity-95 disabled:opacity-50"
+			>
+				{projectData.isComputingMultiWell
+					? 'Training...'
+					: 'Train & Validate (⌘+Enter)'}
+			</button>
+			<button
+				type="button"
+				disabled={!classifierDiag || Boolean(previewedSavedModel) || isSavingModel || projectData.isComputingMultiWell}
+				onclick={saveTrainedClassifierModel}
+				class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
+			>
+				{isSavingModel ? 'Saving...' : 'Save Model & CM'}
+			</button>
+		</div>
 		<button
 			type="button"
 			onclick={() => (workbench.multiWellStep = 'rock-typing')}
-			class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]"
+			class="h-6.5 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
 		>
 			← Back to Rock Typing &amp; Propagation
 		</button>

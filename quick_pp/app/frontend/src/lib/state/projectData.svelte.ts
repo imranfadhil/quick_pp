@@ -333,13 +333,51 @@ class ProjectDataState {
 		};
 	}
 
-	hasPendingMultiWell(moduleKey: MultiWellSaveModule): boolean {
-		return Boolean(this.pendingMultiWellModules[moduleKey]);
+	private static readonly MULTI_WELL_PIPELINE: MultiWellSaveModule[] = [
+		'rock-typing',
+		'perm-transform',
+		'shf'
+	];
+
+	hasPendingMultiWell(upToModule: MultiWellSaveModule): boolean {
+		const idx = ProjectDataState.MULTI_WELL_PIPELINE.indexOf(upToModule);
+		const targets =
+			idx >= 0 ? ProjectDataState.MULTI_WELL_PIPELINE.slice(0, idx + 1) : [upToModule];
+		return targets.some((m) => Boolean(this.pendingMultiWellModules[m]));
 	}
 
-	async saveMultiWellComputed(moduleKey: MultiWellSaveModule): Promise<boolean> {
+	async saveMultiWellComputed(upToModule: MultiWellSaveModule): Promise<boolean> {
 		const pid = workbench.projectId;
-		if (!pid || !this.hasPendingMultiWell(moduleKey)) return false;
+		if (!pid || !this.hasPendingMultiWell(upToModule)) return false;
+
+		const idx = ProjectDataState.MULTI_WELL_PIPELINE.indexOf(upToModule);
+		const candidates =
+			idx >= 0 ? ProjectDataState.MULTI_WELL_PIPELINE.slice(0, idx + 1) : [upToModule];
+		const modulesToSave = candidates.filter((m) => Boolean(this.pendingMultiWellModules[m]));
+		if (modulesToSave.length === 0) return false;
+
+		const savedLabels: string[] = [];
+		let maxSavedWells = 0;
+		for (const moduleKey of modulesToSave) {
+			const res = await this.saveSingleMultiWellModule(pid, moduleKey);
+			if (!res) return false;
+			savedLabels.push(res.curveLabel);
+			maxSavedWells = Math.max(maxSavedWells, res.savedWells);
+		}
+		const msg = `Saved ${savedLabels.join(' + ')} (${maxSavedWells} wells) ✓`;
+		wellData.lastSavedMessage = msg;
+		appStatus.success(msg);
+		void this.refreshSummary(pid);
+		if (this.stickPlotResult) {
+			void this.loadStickPlot(true);
+		}
+		return true;
+	}
+
+	private async saveSingleMultiWellModule(
+		pid: string,
+		moduleKey: MultiWellSaveModule
+	): Promise<{ curveLabel: string; savedWells: number } | null> {
 
 		let wellNames: string[] = [];
 		let depths: (number | null)[] = [];
@@ -457,10 +495,10 @@ class ProjectDataState {
 			};
 			curveLabel = 'SHF';
 		} else {
-			return false;
+			return null;
 		}
 
-		if (wellNames.length === 0 || depths.length === 0) return false;
+		if (wellNames.length === 0 || depths.length === 0) return null;
 
 		this.isComputingMultiWell = true;
 		this.error = null;
@@ -478,16 +516,10 @@ class ProjectDataState {
 				...this.pendingMultiWellModules,
 				[moduleKey]: false
 			};
-			const msg = `Saved ${curveLabel} (${res.saved_wells} wells) âœ“`;
-			wellData.lastSavedMessage = msg;
-			appStatus.success(msg);
-			if (this.stickPlotResult) {
-				void this.loadStickPlot();
-			}
-			return true;
+			return { curveLabel, savedWells: res.saved_wells };
 		} catch (e: any) {
 			this.error = e?.message || `Failed to save ${curveLabel} across wells`;
-			return false;
+			return null;
 		} finally {
 			this.isComputingMultiWell = false;
 		}
