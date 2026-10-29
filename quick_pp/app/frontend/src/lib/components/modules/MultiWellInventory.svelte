@@ -96,9 +96,98 @@
 		}
 	}
 
-	async function openWellInSingleMode(wellName: string) {
+	async function openWellInSingleMode(wellName: string, step?: 'qaqc' | 'ancillary') {
 		await projectData.selectWell(wellName);
 		workbench.scope = 'single-well';
+		if (step) {
+			workbench.singleWellStep = step;
+		}
+	}
+
+	let ancillaryTotals = $derived.by(() => {
+		const wells = projectData.wells;
+		let rcaSamples = 0;
+		let rcaWells = 0;
+		let scalPoints = 0;
+		let scalPlugs = 0;
+		let scalWells = 0;
+		let relpermPoints = 0;
+		let topsTotal = 0;
+		let topsWells = 0;
+		let contactsTotal = 0;
+		let contactsWells = 0;
+		let pressureTotal = 0;
+		let pressureWells = 0;
+		let surveyTotal = 0;
+		let surveyWells = 0;
+
+		for (const w of wells) {
+			const rca = w.core_sample_count ?? w.core_samples_count ?? 0;
+			if (rca > 0) {
+				rcaSamples += rca;
+				rcaWells++;
+			}
+			const scPts = w.scal_pc_count ?? 0;
+			const scPlugs = w.scal_sample_count ?? 0;
+			const rpPts = w.relperm_count ?? 0;
+			if (scPts > 0 || rpPts > 0) {
+				scalPoints += scPts;
+				scalPlugs += scPlugs;
+				relpermPoints += rpPts;
+				scalWells++;
+			}
+			const tops = w.formation_top_count ?? w.formation_tops_count ?? (w.zones?.length ?? 0);
+			if (tops > 0) {
+				topsTotal += tops;
+				topsWells++;
+			}
+			const contacts = w.fluid_contact_count ?? w.fluid_contacts_count ?? 0;
+			if (contacts > 0) {
+				contactsTotal += contacts;
+				contactsWells++;
+			}
+			const press = w.pressure_test_count ?? w.pressure_tests_count ?? 0;
+			if (press > 0) {
+				pressureTotal += press;
+				pressureWells++;
+			}
+			const surv = w.survey_count ?? 0;
+			if (surv > 0) {
+				surveyTotal += surv;
+				surveyWells++;
+			}
+		}
+
+		return {
+			totalWells: wells.length,
+			rcaSamples,
+			rcaWells,
+			scalPoints,
+			scalPlugs,
+			scalWells,
+			relpermPoints,
+			topsTotal,
+			topsWells,
+			contactsTotal,
+			contactsWells,
+			pressureTotal,
+			pressureWells,
+			surveyTotal,
+			surveyWells
+		};
+	});
+
+	function getWellTopDepth(w: (typeof projectData.wells)[number], zoneName: string): number | null {
+		const found = (w.formation_tops ?? []).find(
+			(t) => t.name.trim().toLowerCase() === zoneName.trim().toLowerCase()
+		);
+		return found?.depth ?? null;
+	}
+
+	function hasWellZone(w: (typeof projectData.wells)[number], zoneName: string): boolean {
+		return (w.zones ?? []).some(
+			(z) => z.trim().toLowerCase() === zoneName.trim().toLowerCase()
+		);
 	}
 </script>
 
@@ -210,6 +299,64 @@
 					<div class="text-[10px] text-[var(--text-muted)]">Field Max Depth</div>
 					<div class="mono-num font-semibold text-[var(--text-primary)]">
 						{fmtDepth(projectData.summary?.max_depth)}
+					</div>
+				</div>
+			</div>
+
+			<!-- Field-Wide Core (RCA & SCAL) and Ancillary KPI Summary -->
+			<div class="mt-1.5 grid grid-cols-3 gap-1 text-[10.5px]">
+				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+					<div class="text-[9.5px] text-[var(--text-muted)]">RCA Core Plugs</div>
+					<div class="mono-num font-bold {ancillaryTotals.rcaSamples > 0 ? 'text-amber-700' : 'text-[var(--text-muted)]'}">
+						{ancillaryTotals.rcaSamples}
+						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
+							({ancillaryTotals.rcaWells}/{ancillaryTotals.totalWells}w)
+						</span>
+					</div>
+				</div>
+				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+					<div class="text-[9.5px] text-[var(--text-muted)]">SCAL Pc Pairs</div>
+					<div class="mono-num font-bold {ancillaryTotals.scalPoints > 0 ? 'text-indigo-700' : 'text-[var(--text-muted)]'}">
+						{ancillaryTotals.scalPoints}
+						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
+							({ancillaryTotals.scalWells}/{ancillaryTotals.totalWells}w)
+						</span>
+					</div>
+				</div>
+				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+					<div class="text-[9.5px] text-[var(--text-muted)]">Formation Tops</div>
+					<div class="mono-num font-bold {ancillaryTotals.topsTotal > 0 ? 'text-emerald-700' : 'text-[var(--text-muted)]'}">
+						{ancillaryTotals.topsTotal}
+						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
+							({projectData.allZones.length}z)
+						</span>
+					</div>
+				</div>
+				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+					<div class="text-[9.5px] text-[var(--text-muted)]">Fluid Contacts</div>
+					<div class="mono-num font-semibold {ancillaryTotals.contactsTotal > 0 ? 'text-sky-700' : 'text-[var(--text-muted)]'}">
+						{ancillaryTotals.contactsTotal}
+						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
+							({ancillaryTotals.contactsWells}/{ancillaryTotals.totalWells}w)
+						</span>
+					</div>
+				</div>
+				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+					<div class="text-[9.5px] text-[var(--text-muted)]">Pressure Tests</div>
+					<div class="mono-num font-semibold {ancillaryTotals.pressureTotal > 0 ? 'text-teal-700' : 'text-[var(--text-muted)]'}">
+						{ancillaryTotals.pressureTotal}
+						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
+							({ancillaryTotals.pressureWells}/{ancillaryTotals.totalWells}w)
+						</span>
+					</div>
+				</div>
+				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+					<div class="text-[9.5px] text-[var(--text-muted)]">Well Surveys</div>
+					<div class="mono-num font-semibold {ancillaryTotals.surveyTotal > 0 ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}">
+						{ancillaryTotals.surveyTotal}
+						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
+							({ancillaryTotals.surveyWells}/{ancillaryTotals.totalWells}w)
+						</span>
 					</div>
 				</div>
 			</div>
@@ -365,6 +512,176 @@
 				</table>
 			</div>
 		</ParameterSection>
+
+		<ParameterSection
+			title="RCA, SCAL & Ancillary Data Matrix"
+			badge={`${ancillaryTotals.rcaSamples} RCA · ${ancillaryTotals.scalPoints} SCAL`}
+		>
+			<div class="overflow-x-auto border border-[var(--border-hairline)]">
+				<table class="w-full border-collapse text-left text-[10.5px]">
+					<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+						<tr class="h-6 border-b border-[var(--border-hairline)]">
+							<th class="px-1.5 font-semibold">Well</th>
+							<th class="px-1 text-right font-semibold" title="Routine Core Analysis (CPORE / CPERM plugs)">RCA</th>
+							<th class="px-1 text-right font-semibold" title="SCAL Capillary Pressure (Pc-Sw pairs & plugs)">SCAL Pc</th>
+							<th class="px-1 text-right font-semibold" title="Picked Formation Tops / Stratigraphic Zones">Tops</th>
+							<th class="px-1 text-center font-semibold" title="Fluid Contacts (OWC / GOC / FWL)">Contacts</th>
+							<th class="px-1 text-right font-semibold" title="MDT / RFT Formation Pressure Tests">Press</th>
+							<th class="px-1 text-right font-semibold" title="Directional Survey Stations (MD / Inc / Azim)">Survey</th>
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-[var(--border-hairline)]">
+						{#if projectData.wells.length === 0}
+							<tr>
+								<td colspan="7" class="p-3 text-center text-xs text-[var(--text-muted)]">
+									No wells in project.
+								</td>
+							</tr>
+						{:else}
+							{#each projectData.wells as w (w.well_id)}
+								{@const rca = w.core_sample_count ?? w.core_samples_count ?? 0}
+								{@const scalPts = w.scal_pc_count ?? 0}
+								{@const scalPlugs = w.scal_sample_count ?? 0}
+								{@const tops = w.formation_top_count ?? w.formation_tops_count ?? (w.zones?.length ?? 0)}
+								{@const contacts = w.fluid_contact_count ?? w.fluid_contacts_count ?? 0}
+								{@const contactsList = w.fluid_contacts ?? []}
+								{@const press = w.pressure_test_count ?? w.pressure_tests_count ?? 0}
+								{@const surv = w.survey_count ?? 0}
+								{@const topsTooltip = (w.formation_tops ?? []).length > 0
+									? (w.formation_tops ?? []).map((t) => `${t.name}: ${t.depth ?? '—'}m`).join(' | ')
+									: (w.zones ?? []).join(', ') || 'No formation tops'}
+								{@const contactsTooltip = contactsList.length > 0
+									? contactsList.map((c) => `${c.type} @ ${c.depth ?? '—'}m`).join(' | ')
+									: 'No fluid contacts'}
+								<tr
+									onclick={() => openWellInSingleMode(w.name, 'ancillary')}
+									title={`Click to open ${w.name} in Single-Well Ancillary editor`}
+									class="h-6 cursor-pointer hover:bg-[var(--bg-subtle)] {workbench.wellId === w.name
+										? 'bg-blue-50/70'
+										: ''}"
+								>
+									<td class="mono-num truncate px-1.5 font-semibold text-[var(--accent-primary)]">
+										{w.name}
+									</td>
+									<td
+										class="mono-num px-1 text-right"
+										title={rca > 0 ? `${rca} RCA core samples (${w.core_availability_pct ?? 0}% log coverage)` : 'No RCA core plugs'}
+									>
+										{#if rca > 0}
+											<span class="rounded-xs bg-amber-50 px-1 py-0.5 font-semibold text-amber-800">
+												{rca}
+											</span>
+										{:else}
+											<span class="text-[var(--text-muted)]">—</span>
+										{/if}
+									</td>
+									<td
+										class="mono-num px-1 text-right"
+										title={scalPts > 0 ? `${scalPts} Pc-Sw pairs across ${scalPlugs} core plug(s)` : 'No SCAL Pc data'}
+									>
+										{#if scalPts > 0}
+											<span class="rounded-xs bg-indigo-50 px-1 py-0.5 font-semibold text-indigo-800">
+												{scalPts}{#if scalPlugs > 0}<span class="text-[9px] font-normal text-indigo-600"> ({scalPlugs}p)</span>{/if}
+											</span>
+										{:else}
+											<span class="text-[var(--text-muted)]">—</span>
+										{/if}
+									</td>
+									<td class="mono-num px-1 text-right" title={topsTooltip}>
+										{#if tops > 0}
+											<span class="rounded-xs bg-emerald-50 px-1 py-0.5 font-semibold text-emerald-800">
+												{tops}
+											</span>
+										{:else}
+											<span class="text-[var(--text-muted)]">—</span>
+										{/if}
+									</td>
+									<td class="mono-num px-1 text-center" title={contactsTooltip}>
+										{#if contactsList.length > 0}
+											<span class="rounded-xs bg-sky-50 px-1 py-0.5 text-[9.5px] font-semibold text-sky-800">
+												{contactsList.map((c) => c.type).join(',')}
+											</span>
+										{:else if contacts > 0}
+											<span class="rounded-xs bg-sky-50 px-1 py-0.5 font-semibold text-sky-800">
+												{contacts}
+											</span>
+										{:else}
+											<span class="text-[var(--text-muted)]">—</span>
+										{/if}
+									</td>
+									<td class="mono-num px-1 text-right">
+										{#if press > 0}
+											<span class="font-semibold text-teal-700">{press}</span>
+										{:else}
+											<span class="text-[var(--text-muted)]">—</span>
+										{/if}
+									</td>
+									<td class="mono-num px-1 text-right">
+										{#if surv > 0}
+											<span class="font-medium text-[var(--text-secondary)]">{surv}</span>
+										{:else}
+											<span class="text-[var(--text-muted)]">—</span>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						{/if}
+					</tbody>
+				</table>
+			</div>
+		</ParameterSection>
+
+		{#if projectData.allZones.length > 0 && projectData.wells.length > 0}
+			<ParameterSection
+				title="Formation Tops Stratigraphic Matrix"
+				badge={`${projectData.allZones.length} Zones`}
+				defaultOpen={false}
+			>
+				<div class="overflow-x-auto border border-[var(--border-hairline)]">
+					<table class="w-full border-collapse text-left text-[10.5px]">
+						<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+							<tr class="h-6 border-b border-[var(--border-hairline)]">
+								<th class="px-1.5 font-semibold">Zone / Top</th>
+								{#each projectData.wells as w (w.well_id)}
+									<th class="mono-num px-1 text-right font-semibold text-[9.5px]" title={w.name}>
+										{w.name}
+									</th>
+								{/each}
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-[var(--border-hairline)]">
+							{#each projectData.allZones as zone (zone)}
+								<tr class="h-6 hover:bg-[var(--bg-subtle)]">
+									<td class="truncate px-1.5 font-semibold text-[var(--text-primary)]" title={zone}>
+										{zone}
+									</td>
+									{#each projectData.wells as w (w.well_id)}
+										{@const topDepth = getWellTopDepth(w, zone)}
+										{@const present = hasWellZone(w, zone)}
+										<td class="mono-num px-1 text-right">
+											{#if topDepth !== null}
+												<span class="font-medium text-[var(--text-primary)]">
+													{topDepth.toFixed(1)}
+												</span>
+											{:else if present}
+												<span
+													class="rounded-2xs bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold text-emerald-700"
+													title="Present in ZONES curve"
+												>
+													✓
+												</span>
+											{:else}
+												<span class="text-[var(--text-muted)]">—</span>
+											{/if}
+										</td>
+									{/each}
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			</ParameterSection>
+		{/if}
 
 		{#if projectData.error}
 			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">

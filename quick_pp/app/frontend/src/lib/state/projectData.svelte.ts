@@ -554,6 +554,21 @@ class ProjectDataState {
 		wellData.coreSamples = [];
 	}
 
+	async refreshSummary(projectId?: string | number | null) {
+		const pid = projectId ?? workbench.projectId;
+		if (!pid) return;
+		try {
+			const { data, error } = await api.GET('/quick_pp/workspace/projects/{project_id}/summary', {
+				params: { path: { project_id: String(pid) } }
+			});
+			if (!error && data) {
+				this.summary = data;
+			}
+		} catch {
+			// Ignore background summary refresh error
+		}
+	}
+
 	async selectProject(projectId: string | number, preferredWell?: string | null) {
 		if (!projectId) return;
 		const pidStr = String(projectId);

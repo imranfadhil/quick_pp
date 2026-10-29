@@ -694,10 +694,22 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
             ).bindparams(bindparam("well_ids", expanding=True))
             top_rows = session.execute(tops_stmt, {"well_ids": well_ids}).fetchall()
             zones_by_well: Dict[int, List[str]] = {wid: [] for wid in well_ids}
+            tops_list_by_well: Dict[int, List[Dict[str, Any]]] = {
+                wid: [] for wid in well_ids
+            }
             tops_count_by_well: Dict[int, int] = {wid: 0 for wid in well_ids}
             all_zones_set = set()
-            for wid, top_name, _ in top_rows:
+            for wid, top_name, top_depth in top_rows:
                 tops_count_by_well[wid] = tops_count_by_well.get(wid, 0) + 1
+                if top_name:
+                    tops_list_by_well.setdefault(wid, []).append(
+                        {
+                            "name": str(top_name),
+                            "depth": round(float(top_depth), 2)
+                            if top_depth is not None
+                            else None,
+                        }
+                    )
                 if top_name and top_name not in zones_by_well.setdefault(wid, []):
                     zones_by_well[wid].append(top_name)
                     all_zones_set.add(top_name)
@@ -718,12 +730,15 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         zones_by_well[wid].append(z_str)
                         all_zones_set.add(z_str)
 
-            # 4. Core samples & core curves per well
+            # 4. Core samples (RCA) & SCAL (Capillary Pressure / RelPerm) & core curves per well
             core_stmt = text("""
-                SELECT well_id, COUNT(*) AS sample_count
-                FROM core_samples
-                WHERE well_id IN :well_ids
-                GROUP BY well_id
+                SELECT cs.well_id, COUNT(DISTINCT cs.sample_id) AS sample_count
+                FROM core_samples cs
+                LEFT JOIN core_measurements cm ON cm.sample_id = cs.sample_id
+                LEFT JOIN capillary_pressure cp ON cp.sample_id = cs.sample_id
+                WHERE cs.well_id IN :well_ids
+                  AND (cm.measurement_id IS NOT NULL OR cp.pc_id IS NULL)
+                GROUP BY cs.well_id
             """).bindparams(bindparam("well_ids", expanding=True))
             core_counts = {
                 r[0]: int(r[1] or 0)
@@ -746,16 +761,58 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 ).fetchall()
             }
 
+            scal_pc_stmt = text("""
+                SELECT
+                    cs.well_id,
+                    COUNT(cp.pc_id) AS pc_points,
+                    COUNT(DISTINCT cs.sample_id) AS pc_samples
+                FROM capillary_pressure cp
+                JOIN core_samples cs ON cp.sample_id = cs.sample_id
+                WHERE cs.well_id IN :well_ids
+                GROUP BY cs.well_id
+            """).bindparams(bindparam("well_ids", expanding=True))
+            scal_pc_counts: Dict[int, Dict[str, int]] = {}
+            for r in session.execute(scal_pc_stmt, {"well_ids": well_ids}).fetchall():
+                scal_pc_counts[r[0]] = {
+                    "points": int(r[1] or 0),
+                    "samples": int(r[2] or 0),
+                }
+
+            relperm_stmt = text("""
+                SELECT
+                    cs.well_id,
+                    COUNT(rp.relperm_id) AS rp_points,
+                    COUNT(DISTINCT cs.sample_id) AS rp_samples
+                FROM relative_permeability rp
+                JOIN core_samples cs ON rp.sample_id = cs.sample_id
+                WHERE cs.well_id IN :well_ids
+                GROUP BY cs.well_id
+            """).bindparams(bindparam("well_ids", expanding=True))
+            relperm_counts: Dict[int, Dict[str, int]] = {}
+            for r in session.execute(relperm_stmt, {"well_ids": well_ids}).fetchall():
+                relperm_counts[r[0]] = {
+                    "points": int(r[1] or 0),
+                    "samples": int(r[2] or 0),
+                }
+
             # 5. Fluid contacts, pressure tests, surveys counts
             contacts_stmt = text(
-                "SELECT well_id, COUNT(*) FROM fluid_contacts WHERE well_id IN :well_ids GROUP BY well_id"
+                "SELECT well_id, name, depth FROM fluid_contacts WHERE well_id IN :well_ids ORDER BY depth"
             ).bindparams(bindparam("well_ids", expanding=True))
-            contact_counts = {
-                r[0]: int(r[1] or 0)
-                for r in session.execute(
-                    contacts_stmt, {"well_ids": well_ids}
-                ).fetchall()
+            contact_counts: Dict[int, int] = {wid: 0 for wid in well_ids}
+            contacts_list_by_well: Dict[int, List[Dict[str, Any]]] = {
+                wid: [] for wid in well_ids
             }
+            for wid, cname, cdepth in session.execute(
+                contacts_stmt, {"well_ids": well_ids}
+            ).fetchall():
+                contact_counts[wid] = contact_counts.get(wid, 0) + 1
+                contacts_list_by_well.setdefault(wid, []).append(
+                    {
+                        "type": str(cname or "OWC").upper(),
+                        "depth": round(float(cdepth), 2) if cdepth is not None else None,
+                    }
+                )
 
             pressure_stmt = text(
                 "SELECT well_id, COUNT(*) FROM pressure_tests WHERE well_id IN :well_ids GROUP BY well_id"
@@ -793,6 +850,17 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 )
                 total_depth_sum += td
 
+                # Include any curves present in live in-memory cache for this well
+                well_curve_set = set(curves_by_well.get(wid, []))
+                cached_entry = _merged_data_cache.get(f"{project_id}_{w.name}_0.16")
+                if cached_entry is not None and isinstance(cached_entry[1], pd.DataFrame):
+                    for col_name in cached_entry[1].columns:
+                        c_up = str(col_name).upper()
+                        if c_up not in ("DEPTH", "WELL_NAME"):
+                            well_curve_set.add(c_up)
+                            all_curves_set.add(c_up)
+                well_curves_sorted = sorted(well_curve_set)
+
                 c_samples = core_counts.get(wid, 0)
                 c_curve_pts = core_curve_counts.get(wid, 0)
                 effective_core_pts = max(c_samples, c_curve_pts)
@@ -801,6 +869,8 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                     if row_count > 0
                     else 0.0
                 )
+                scal_info = scal_pc_counts.get(wid, {"points": 0, "samples": 0})
+                rp_info = relperm_counts.get(wid, {"points": 0, "samples": 0})
 
                 wells_summary.append(
                     {
@@ -814,13 +884,22 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         "total_depth": td,
                         "row_count": row_count,
                         "depth_count": row_count,
-                        "available_curves": curves_by_well.get(wid, []),
-                        "curves": curves_by_well.get(wid, []),
+                        "available_curves": well_curves_sorted,
+                        "curves": well_curves_sorted,
                         "zones": zones_by_well.get(wid, []),
+                        "formation_tops": tops_list_by_well.get(wid, []),
                         "core_sample_count": effective_core_pts,
                         "core_availability_pct": core_pct,
-                        "formation_top_count": tops_count_by_well.get(wid, 0),
+                        "scal_pc_count": scal_info["points"],
+                        "scal_sample_count": scal_info["samples"],
+                        "relperm_count": rp_info["points"],
+                        "relperm_sample_count": rp_info["samples"],
+                        "formation_top_count": max(
+                            tops_count_by_well.get(wid, 0),
+                            len(zones_by_well.get(wid, [])),
+                        ),
                         "fluid_contact_count": contact_counts.get(wid, 0),
+                        "fluid_contacts": contacts_list_by_well.get(wid, []),
                         "pressure_test_count": pressure_counts.get(wid, 0),
                         "survey_count": survey_counts.get(wid, 0),
                     }

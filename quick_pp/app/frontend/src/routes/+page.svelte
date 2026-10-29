@@ -115,6 +115,55 @@
 
 			if (
 				workbench.scope === 'multi-well' &&
+				workbench.multiWellStep === 'inventory' &&
+				projectData.wells.length > 0
+			) {
+				return {
+					title: `Field Well, Core (RCA & SCAL), Tops & Ancillary Inventory (${projectData.wells.length} Wells)`,
+					columns: [
+						{ key: 'WELL', label: 'Well' },
+						{ key: 'MIN_DEPTH', label: 'Top', unit: 'm', numeric: true, decimals: 1 },
+						{ key: 'MAX_DEPTH', label: 'Bottom', unit: 'm', numeric: true, decimals: 1 },
+						{ key: 'ROWS', label: 'Rows', numeric: true, decimals: 0 },
+						{ key: 'CURVES', label: 'Curves', numeric: true, decimals: 0 },
+						{ key: 'RCA_PLUGS', label: 'RCA Plugs', numeric: true, decimals: 0 },
+						{ key: 'CORE_PCT', label: 'Core %', unit: '%', numeric: true, decimals: 1 },
+						{ key: 'SCAL_PC', label: 'SCAL Pc Pts', numeric: true, decimals: 0 },
+						{ key: 'SCAL_PLUGS', label: 'SCAL Plugs', numeric: true, decimals: 0 },
+						{ key: 'TOPS', label: 'Tops', numeric: true, decimals: 0 },
+						{ key: 'ZONES', label: 'Formations / Zones' },
+						{ key: 'CONTACTS', label: 'Fluid Contacts' },
+						{ key: 'PRESSURE', label: 'Pressure Pts', numeric: true, decimals: 0 },
+						{ key: 'SURVEY', label: 'Survey Stns', numeric: true, decimals: 0 }
+					],
+					rows: projectData.wells.map((w) => ({
+						WELL: w.name,
+						MIN_DEPTH: w.min_depth,
+						MAX_DEPTH: w.max_depth,
+						ROWS: w.depth_count ?? w.row_count ?? 0,
+						CURVES: (w.curves ?? w.available_curves ?? []).length,
+						RCA_PLUGS: w.core_sample_count ?? w.core_samples_count ?? 0,
+						CORE_PCT: w.core_availability_pct ?? 0,
+						SCAL_PC: w.scal_pc_count ?? 0,
+						SCAL_PLUGS: w.scal_sample_count ?? 0,
+						TOPS: w.formation_top_count ?? w.formation_tops_count ?? (w.zones?.length ?? 0),
+						ZONES: (w.zones ?? []).join(', ') || '—',
+						CONTACTS:
+							(w.fluid_contacts ?? []).length > 0
+								? (w.fluid_contacts ?? [])
+										.map((c) => `${c.type}${c.depth !== null ? ` @ ${c.depth}m` : ''}`)
+										.join(', ')
+								: (w.fluid_contact_count ?? 0) > 0
+									? String(w.fluid_contact_count)
+									: '—',
+						PRESSURE: w.pressure_test_count ?? w.pressure_tests_count ?? 0,
+						SURVEY: w.survey_count ?? 0
+					}))
+				};
+			}
+
+			if (
+				workbench.scope === 'multi-well' &&
 				workbench.multiWellStep === 'qaqc' &&
 				projectData.multiWellQaqcResult?.group_stats?.length
 			) {

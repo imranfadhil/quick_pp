@@ -20,6 +20,21 @@ export interface WellSummaryItem {
 	core_samples_count: number;
 	core_poro_count: number;
 	core_perm_count: number;
+	total_depth?: number;
+	row_count?: number;
+	available_curves?: string[];
+	formation_tops?: Array<{ name: string; depth: number | null }>;
+	formation_top_count?: number;
+	fluid_contacts?: Array<{ type: string; depth: number | null }>;
+	fluid_contact_count?: number;
+	pressure_test_count?: number;
+	survey_count?: number;
+	core_sample_count?: number;
+	core_availability_pct?: number;
+	scal_pc_count?: number;
+	scal_sample_count?: number;
+	relperm_count?: number;
+	relperm_sample_count?: number;
 }
 
 export interface ProjectSummaryResponse {

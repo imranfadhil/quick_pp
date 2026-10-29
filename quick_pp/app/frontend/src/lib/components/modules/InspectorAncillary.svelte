@@ -329,6 +329,7 @@
 			if (activeTab === 'scal' || activeTab === 'core') {
 				projectData.shfResult = null;
 			}
+			void projectData.refreshSummary(workbench.projectId);
 			wellData.lastSavedMessage = activeTab === 'scal' ? 'SCAL Pc Saved' : 'Ancillary Saved';
 		} catch (e: any) {
 			statusMsg = `Error: ${e?.message || 'Save failed'}`;
