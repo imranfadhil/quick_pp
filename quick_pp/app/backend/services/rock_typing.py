@@ -62,7 +62,15 @@ def _compute_fzi_data_sync(
         perm_candidates = ("PERM", "KLOGH", "PERMEABILITY", "K", "PERM_TRANS")
     else:
         poro_candidates = ("PHIT", "PHIE", "CPORE", "POROSITY", "POR", "CORE_POR")
-        perm_candidates = ("CPERM", "CORE_PERM", "PERM", "KLOGH", "PERMEABILITY", "K")
+        perm_candidates = (
+            "PERM",
+            "PERM_TRANS",
+            "KLOGH",
+            "PERMEABILITY",
+            "K",
+            "CPERM",
+            "CORE_PERM",
+        )
 
     for well_name in all_well_names:
         df = _get_merged_dataframe_sync(project_id, well_name)

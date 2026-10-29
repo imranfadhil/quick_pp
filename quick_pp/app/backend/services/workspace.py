@@ -5588,104 +5588,405 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     fit_entry["r2"] = round(r2_v, 4)
                     fit_entry["count"] = int(np.sum(valid_m))
 
-        zones = fzi_data.get("zones") or ["Unknown"] * len(depths)
-        tvd_list = fzi_data.get("tvd") or [None] * len(depths)
-        if len(tvd_list) != len(depths):
-            tvd_list = [None] * len(depths)
-
-        has_any_tvd = any(
-            tvd_v is not None and math.isfinite(float(tvd_v)) for tvd_v in tvd_list
-        )
-        if not has_any_tvd:
-            raise ValueError(
-                "TVD is required for Saturation Height Function (SHF) calculation. "
-                "None of the selected wells have a TVD curve or directional survey."
-            )
-
-        wells_seen = list(dict.fromkeys(str(w) for w in well_names))
-        wells_with_tvd = {
-            str(wn)
-            for wn, tvd_v in zip(well_names, tvd_list)
-            if tvd_v is not None and math.isfinite(float(tvd_v))
-        }
-        skipped_no_tvd_wells = [w for w in wells_seen if w not in wells_with_tvd]
-
         fwl_zone_map: Dict[str, float] = {}
         if req.fwl_by_zone:
             for zk, zv in req.fwl_by_zone.items():
                 if zv is not None and math.isfinite(float(zv)):
                     fwl_zone_map[str(zk).strip()] = float(zv)
 
-        shf_values: List[Optional[float]] = []
-        for p, k, d, tvd_v, rf, zn in zip(
-            phit_arr, perm_arr, depths, tvd_list, rock_flags, zones
-        ):
-            if tvd_v is None or not math.isfinite(float(tvd_v)):
-                shf_values.append(None)
-                continue
-            rf_key = str(int(rf)) if rf is not None else None
-            is_non_res = (
-                (
-                    rf is not None
-                    and highest_flag is not None
-                    and int(rf) == highest_flag
-                )
-                or rf_key is None
-                or rf_key not in fits
+        # Build fallback permeability per rock flag for continuous log evaluation
+        rf_fallback_perm: Dict[str, float] = {}
+        for rf_int in reservoir_flags:
+            mask_rf = (
+                (rf_arr_full == rf_int)
+                & np.isfinite(perm_arr)
+                & (perm_arr > 0)
             )
-            if is_non_res:
-                shf_values.append(1.0)
+            if np.any(mask_rf):
+                rf_fallback_perm[str(rf_int)] = float(np.nanmedian(perm_arr[mask_rf]))
             else:
-                fit_p = fits[rf_key]
-                a = float(fit_p.get("a", 0.2))
-                b = abs(float(fit_p.get("b", 0.3)))
-                eff_fwl = fwl_zone_map.get(str(zn).strip(), req.fwl)
-                tvd_f = float(tvd_v)
-                if model == "skelt_harrison":
-                    c = float(fit_p.get("c", 1.5))
-                    d_param = float(fit_p.get("d", 1.5))
-                    shf_v = float(
-                        sw_skelt_harrison(tvd_f, eff_fwl, a, b, c, d_param)
-                    )
-                elif model == "cuddy":
-                    shf_v = float(
-                        sw_shf_cuddy(
-                            float(p),
-                            tvd_f,
-                            eff_fwl,
-                            req.gw,
-                            req.ghc,
-                            a,
-                            b,
-                            unit=req.unit,
+                rf_fallback_perm[str(rf_int)] = max(250.0 / (4.0 ** (rf_int - 1)), 0.5)
+
+        # Evaluate continuous SHF across all selected wells with valid TVD
+        try:
+            well_dfs = _load_multi_well_dfs(project_id, well_names=req.well_names)
+        except Exception:
+            well_dfs = []
+
+        out_well_names: List[str] = []
+        out_depths: List[float] = []
+        out_tvd: List[Optional[float]] = []
+        out_zones: List[str] = []
+        out_phit: List[Optional[float]] = []
+        out_perm: List[Optional[float]] = []
+        out_rock_flags: List[Optional[int]] = []
+        out_shf: List[Optional[float]] = []
+        by_well_shf: Dict[str, List[Dict[str, Any]]] = {}
+        skipped_no_tvd_wells: List[str] = []
+        wells_with_tvd: set[str] = set()
+
+        with get_db() as session:
+            try:
+                proj_shf = db_objects.Project.load(session, project_id=project_id)
+            except Exception:
+                proj_shf = None
+
+            for w_df in well_dfs:
+                if w_df.empty or "DEPTH" not in w_df.columns:
+                    continue
+                wn = str(w_df["WELL_NAME"].iloc[0])
+                w_sorted = w_df.sort_values("DEPTH").reset_index(drop=True)
+                md_arr = pd.to_numeric(w_sorted["DEPTH"], errors="coerce").to_numpy(
+                    dtype=float
+                )
+
+                anc_w: Dict[str, Any] = {}
+                if proj_shf is not None:
+                    try:
+                        anc_w = (
+                            proj_shf.get_well_ancillary_data(
+                                resolve_db_well_name(project_id, wn)
+                            )
+                            or {}
                         )
-                    )
+                    except Exception:
+                        anc_w = {}
+
+                surveys_df = (
+                    anc_w.get("well_surveys")
+                    if "well_surveys" in anc_w
+                    else anc_w.get("directional_surveys")
+                )
+                if isinstance(surveys_df, list):
+                    surveys_df = pd.DataFrame(surveys_df)
+
+                tvd_arr_w = _resolve_well_tvd_array(md_arr, w_sorted, surveys_df)
+                if np.isfinite(tvd_arr_w).sum() < 2:
+                    skipped_no_tvd_wells.append(wn)
+                    continue
+                wells_with_tvd.add(wn)
+
+                # Continuous porosity: PHIT -> PHIE -> POROSITY -> POR -> CPORE
+                p_s = pd.Series(np.nan, index=w_sorted.index, dtype=float)
+                for pcol in ("PHIT", "PHIE", "POROSITY", "POR", "CPORE", "CORE_POR"):
+                    if pcol in w_sorted.columns:
+                        ps = pd.to_numeric(w_sorted[pcol], errors="coerce")
+                        ps = ps.where(ps > 0, np.nan)
+                        if ps.notna().any() and float(ps.median()) > 1.0:
+                            ps = ps / 100.0
+                        p_s = p_s.combine_first(ps)
+
+                # Continuous permeability: PERM_TRANS -> PERM -> KLOGH -> PERMEABILITY -> K -> CPERM
+                k_s = pd.Series(np.nan, index=w_sorted.index, dtype=float)
+                for kcol in (
+                    "PERM_TRANS",
+                    "PERM",
+                    "KLOGH",
+                    "PERMEABILITY",
+                    "K",
+                    "CPERM",
+                    "CORE_PERM",
+                ):
+                    if kcol in w_sorted.columns:
+                        ks = pd.to_numeric(w_sorted[kcol], errors="coerce")
+                        ks = ks.where(ks > 0, np.nan)
+                        k_s = k_s.combine_first(ks)
+
+                # Continuous rock flag
+                rf_src = str(req.rock_flag_source or "").strip().lower()
+                rf_s = pd.Series(np.nan, index=w_sorted.index, dtype=float)
+                if rf_src == "cutoff_only":
+                    rf_cols = ("ROCK_FLAG_CUTOFF", "ROCK_FLAG", "DRT")
+                elif rf_src == "full_ml":
+                    rf_cols = ("ROCK_FLAG_ML", "ROCK_FLAG", "ROCK_FLAG_CUTOFF", "DRT")
                 else:
-                    shf_v = float(
-                        sw_shf_leverett_j(
-                            float(k),
-                            float(p),
-                            tvd_f,
-                            eff_fwl,
-                            req.ift,
-                            req.theta,
-                            req.gw,
-                            req.ghc,
-                            a,
-                            b,
-                        )
+                    rf_cols = ("ROCK_FLAG", "ROCK_FLAG_ML", "ROCK_FLAG_CUTOFF", "DRT")
+                for rcol in rf_cols:
+                    if rcol in w_sorted.columns:
+                        rs = pd.to_numeric(w_sorted[rcol], errors="coerce")
+                        rs = rs.where(rs >= 1, np.nan)
+                        rf_s = rf_s.combine_first(rs)
+
+                # On-the-fly DRT fallback where rf_s is still NaN and p_s & k_s are valid
+                need_rf = rf_s.isna() & (p_s > 0) & (p_s < 1.0) & (k_s > 0)
+                if need_rf.any():
+                    ind_v, hib_w, _ = _eval_drt_indicator_scalar_or_array(
+                        p_s[need_rf].to_numpy(dtype=float),
+                        k_s[need_rf].to_numpy(dtype=float),
+                        req.drt_method,
                     )
-                shf_values.append(
+                    rf_calc = rock_typing(
+                        ind_v, cut_offs=req.cutoffs, higher_is_better=hib_w
+                    )
+                    rf_s.loc[need_rf] = pd.Series(
+                        np.asarray(rf_calc, dtype=float), index=w_sorted.index[need_rf]
+                    ).where(lambda s: s >= 1, np.nan)
+
+                z_list_w = (
+                    w_sorted["ZONES"].fillna("Unknown").astype(str).tolist()
+                    if "ZONES" in w_sorted.columns
+                    else ["Unknown"] * len(w_sorted)
+                )
+
+                # Build co-depth-aware zone interval FWL overrides from formation_tops if fwl_zone_map is used
+                top_fwl_intervals: List[Tuple[float, float, float]] = []
+                if fwl_zone_map:
+                    tops_raw_w = anc_w.get("formation_tops")
+                    if isinstance(tops_raw_w, pd.DataFrame) and not tops_raw_w.empty:
+                        t_recs = tops_raw_w.to_dict(orient="records")
+                    elif isinstance(tops_raw_w, list):
+                        t_recs = tops_raw_w
+                    else:
+                        t_recs = []
+                    u_depths = sorted(
+                        {
+                            float(tr["depth"])
+                            for tr in t_recs
+                            if tr.get("depth") is not None
+                            and not pd.isna(tr.get("depth"))
+                        }
+                    )
+                    for tr in t_recs:
+                        tn = str(tr.get("name") or "").strip()
+                        td = tr.get("depth")
+                        if tn in fwl_zone_map and td is not None and not pd.isna(td):
+                            td_f = float(td)
+                            nxt_d = next(
+                                (ud for ud in u_depths if ud > td_f + 0.5),
+                                float("inf"),
+                            )
+                            top_fwl_intervals.append((td_f, nxt_d, fwl_zone_map[tn]))
+
+                p_list_w = p_s.tolist()
+                k_list_w = k_s.tolist()
+                rf_list_w = rf_s.tolist()
+                well_rows_shf: List[Dict[str, Any]] = []
+
+                for md_v, tvd_v, p_v, k_v, rf_v, zn_v in zip(
+                    md_arr.tolist(),
+                    tvd_arr_w.tolist(),
+                    p_list_w,
+                    k_list_w,
+                    rf_list_w,
+                    z_list_w,
+                ):
+                    if (
+                        md_v is None
+                        or pd.isna(md_v)
+                        or tvd_v is None
+                        or pd.isna(tvd_v)
+                        or not math.isfinite(float(tvd_v))
+                    ):
+                        continue
+                    has_p = (
+                        p_v is not None
+                        and not pd.isna(p_v)
+                        and math.isfinite(float(p_v))
+                        and float(p_v) > 0
+                    )
+                    has_k = (
+                        k_v is not None
+                        and not pd.isna(k_v)
+                        and math.isfinite(float(k_v))
+                        and float(k_v) > 0
+                    )
+                    has_rf = (
+                        rf_v is not None
+                        and not pd.isna(rf_v)
+                        and math.isfinite(float(rf_v))
+                        and int(round(float(rf_v))) >= 1
+                    )
+                    if not has_p and not has_rf:
+                        continue
+
+                    rf_int_v = int(round(float(rf_v))) if has_rf else None
+                    rf_key = str(rf_int_v) if rf_int_v is not None else None
+                    is_non_res = (
+                        (
+                            rf_int_v is not None
+                            and highest_flag is not None
+                            and rf_int_v == highest_flag
+                        )
+                        or rf_key is None
+                        or rf_key not in fits
+                    )
+
+                    zn_clean = str(zn_v or "Unknown").strip()
+                    eff_fwl = fwl_zone_map.get(zn_clean)
+                    if eff_fwl is None and top_fwl_intervals:
+                        for t_start, t_end, fwl_ov in top_fwl_intervals:
+                            if t_start <= float(md_v) < t_end:
+                                eff_fwl = fwl_ov
+                                break
+                    if eff_fwl is None:
+                        eff_fwl = req.fwl
+
+                    tvd_f = float(tvd_v)
+                    p_f = float(p_v) if has_p else 0.0
+                    k_f = (
+                        float(k_v)
+                        if has_k
+                        else rf_fallback_perm.get(rf_key or "", 10.0)
+                    )
+
+                    if is_non_res or p_f <= 0.005:
+                        shf_clean: Optional[float] = 1.0
+                    else:
+                        fit_p = fits[rf_key]
+                        a = float(fit_p.get("a", 0.2))
+                        b = abs(float(fit_p.get("b", 0.3)))
+                        if model == "skelt_harrison":
+                            c = float(fit_p.get("c", 1.5))
+                            d_param = float(fit_p.get("d", 1.5))
+                            shf_raw = float(
+                                sw_skelt_harrison(tvd_f, eff_fwl, a, b, c, d_param)
+                            )
+                        elif model == "cuddy":
+                            shf_raw = float(
+                                sw_shf_cuddy(
+                                    p_f,
+                                    tvd_f,
+                                    eff_fwl,
+                                    req.gw,
+                                    req.ghc,
+                                    a,
+                                    b,
+                                    unit=req.unit,
+                                )
+                            )
+                        else:
+                            shf_raw = float(
+                                sw_shf_leverett_j(
+                                    k_f,
+                                    p_f,
+                                    tvd_f,
+                                    eff_fwl,
+                                    req.ift,
+                                    req.theta,
+                                    req.gw,
+                                    req.ghc,
+                                    a,
+                                    b,
+                                )
+                            )
+                        shf_clean = (
+                            round(float(np.clip(shf_raw, 0.0, 1.0)), 5)
+                            if math.isfinite(shf_raw)
+                            else None
+                        )
+
+                    if shf_clean is not None:
+                        well_rows_shf.append(
+                            {"DEPTH": round(float(md_v), 4), "SHF": shf_clean}
+                        )
+                        out_well_names.append(wn)
+                        out_depths.append(round(float(md_v), 4))
+                        out_tvd.append(round(tvd_f, 2))
+                        out_zones.append(zn_clean)
+                        out_phit.append(round(p_f, 5) if has_p else None)
+                        out_perm.append(round(k_f, 5) if has_k else None)
+                        out_rock_flags.append(rf_int_v)
+                        out_shf.append(shf_clean)
+
+                if well_rows_shf:
+                    by_well_shf[wn] = well_rows_shf
+
+        # Fallback to fzi_data if well_dfs produced no TVD rows
+        if not wells_with_tvd:
+            zones = fzi_data.get("zones") or ["Unknown"] * len(depths)
+            tvd_list = fzi_data.get("tvd") or [None] * len(depths)
+            if len(tvd_list) != len(depths):
+                tvd_list = [None] * len(depths)
+            has_any_tvd = any(
+                tvd_v is not None and math.isfinite(float(tvd_v)) for tvd_v in tvd_list
+            )
+            if not has_any_tvd:
+                raise ValueError(
+                    "TVD is required for Saturation Height Function (SHF) calculation. "
+                    "None of the selected wells have a TVD curve or directional survey."
+                )
+            for wn_f, p, k, d, tvd_v, rf, zn in zip(
+                well_names,
+                phit_arr,
+                perm_arr,
+                depths,
+                tvd_list,
+                rock_flags,
+                zones,
+            ):
+                if tvd_v is None or not math.isfinite(float(tvd_v)):
+                    continue
+                rf_key = str(int(rf)) if rf is not None else None
+                is_non_res = (
+                    (
+                        rf is not None
+                        and highest_flag is not None
+                        and int(rf) == highest_flag
+                    )
+                    or rf_key is None
+                    or rf_key not in fits
+                )
+                if is_non_res:
+                    shf_v = 1.0
+                else:
+                    fit_p = fits[rf_key]
+                    a = float(fit_p.get("a", 0.2))
+                    b = abs(float(fit_p.get("b", 0.3)))
+                    eff_fwl = fwl_zone_map.get(str(zn).strip(), req.fwl)
+                    tvd_f = float(tvd_v)
+                    if model == "skelt_harrison":
+                        c = float(fit_p.get("c", 1.5))
+                        d_param = float(fit_p.get("d", 1.5))
+                        shf_v = float(
+                            sw_skelt_harrison(tvd_f, eff_fwl, a, b, c, d_param)
+                        )
+                    elif model == "cuddy":
+                        shf_v = float(
+                            sw_shf_cuddy(
+                                float(p),
+                                tvd_f,
+                                eff_fwl,
+                                req.gw,
+                                req.ghc,
+                                a,
+                                b,
+                                unit=req.unit,
+                            )
+                        )
+                    else:
+                        shf_v = float(
+                            sw_shf_leverett_j(
+                                float(k),
+                                float(p),
+                                tvd_f,
+                                eff_fwl,
+                                req.ift,
+                                req.theta,
+                                req.gw,
+                                req.ghc,
+                                a,
+                                b,
+                            )
+                        )
+                shf_c = (
                     round(float(np.clip(shf_v, 0.0, 1.0)), 5)
                     if math.isfinite(shf_v)
                     else None
                 )
+                if shf_c is not None and d is not None:
+                    by_well_shf.setdefault(str(wn_f), []).append(
+                        {"DEPTH": float(d), "SHF": shf_c}
+                    )
+                    out_well_names.append(str(wn_f))
+                    out_depths.append(float(d))
+                    out_tvd.append(round(float(tvd_v), 2))
+                    out_zones.append(str(zn))
+                    out_phit.append(float(p) if math.isfinite(float(p)) else None)
+                    out_perm.append(float(k) if math.isfinite(float(k)) else None)
+                    out_rock_flags.append(int(rf) if rf is not None else None)
+                    out_shf.append(shf_c)
 
         saved_wells = 0
-        by_well_shf: Dict[str, List[Dict[str, Any]]] = {}
-        for wn, d, shf_v in zip(well_names, depths, shf_values):
-            if shf_v is not None and d is not None:
-                by_well_shf.setdefault(wn, []).append({"DEPTH": d, "SHF": shf_v})
         for wn, rows in by_well_shf.items():
             if req.save:
                 _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
@@ -5720,14 +6021,14 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
             "saved_wells": saved_wells,
             "skipped_no_tvd_wells": skipped_no_tvd_wells,
             "data": {
-                "well_names": well_names,
-                "depths": depths,
-                "tvd": tvd_list,
-                "zones": zones,
-                "phit": fzi_data["phit"],
-                "perm": fzi_data["perm"],
-                "rock_flags": rock_flags,
-                "shf": shf_values,
+                "well_names": out_well_names,
+                "depths": out_depths,
+                "tvd": out_tvd,
+                "zones": out_zones,
+                "phit": out_phit,
+                "perm": out_perm,
+                "rock_flags": out_rock_flags,
+                "shf": out_shf,
             },
         }
     except ValueError as e:
@@ -5916,7 +6217,7 @@ class WorkspaceStickPlotRequest(BaseModel):
     zones: Optional[List[str]] = Field(None)
     min_depth: Optional[float] = Field(None)
     max_depth: Optional[float] = Field(None)
-    max_points_per_well: int = Field(1200, ge=100, le=5000)
+    max_points_per_well: int = Field(4000, ge=100, le=10000)
 
 
 def _resolve_well_tvd_array(
@@ -6103,43 +6404,30 @@ def workspace_stick_plot(
                 wdf_sorted = wdf_sorted.copy()
                 wdf_sorted["TVD"] = tvd_full
 
-                # Resolve PHIT
-                phit_col = next(
-                    (
-                        c
-                        for c in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR")
-                        if c in wdf_sorted.columns and wdf_sorted[c].notna().any()
-                    ),
-                    None,
-                )
-                if phit_col:
-                    phit_s = pd.to_numeric(
-                        wdf_sorted[phit_col], errors="coerce"
-                    ).clip(0.0, 0.5)
-                elif "RHOB" in wdf_sorted.columns and wdf_sorted["RHOB"].notna().any():
-                    rhob_s = pd.to_numeric(wdf_sorted["RHOB"], errors="coerce")
-                    phit_s = ((2.65 - rhob_s) / 1.65).clip(0.0, 0.45)
-                elif "NPHI" in wdf_sorted.columns and wdf_sorted["NPHI"].notna().any():
-                    phit_s = pd.to_numeric(wdf_sorted["NPHI"], errors="coerce").clip(
-                        0.0, 0.45
-                    )
-                else:
-                    phit_s = pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
+                # Resolve PHIT (combine across PHIT, PHIE, CPORE, POROSITY, POR so sparse gaps are filled)
+                phit_s = pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
+                for c in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR"):
+                    if c in wdf_sorted.columns and wdf_sorted[c].notna().any():
+                        phit_s = phit_s.combine_first(
+                            pd.to_numeric(wdf_sorted[c], errors="coerce").clip(0.0, 0.5)
+                        )
+                if phit_s.isna().all():
+                    if "RHOB" in wdf_sorted.columns and wdf_sorted["RHOB"].notna().any():
+                        rhob_s = pd.to_numeric(wdf_sorted["RHOB"], errors="coerce")
+                        phit_s = ((2.65 - rhob_s) / 1.65).clip(0.0, 0.45)
+                    elif "NPHI" in wdf_sorted.columns and wdf_sorted["NPHI"].notna().any():
+                        phit_s = pd.to_numeric(wdf_sorted["NPHI"], errors="coerce").clip(
+                            0.0, 0.45
+                        )
 
-                # Resolve SWT
-                swt_col = next(
-                    (
-                        c
-                        for c in ("SWT", "SWE", "SW", "SWT_WS", "SWT_ARCHIE")
-                        if c in wdf_sorted.columns and wdf_sorted[c].notna().any()
-                    ),
-                    None,
-                )
-                if swt_col:
-                    swt_s = pd.to_numeric(wdf_sorted[swt_col], errors="coerce").clip(
-                        0.0, 1.0
-                    )
-                else:
+                # Resolve SWT (combine across SWT, SWE, SW, SWT_WS, SWT_ARCHIE, SWT_WAXMAN)
+                swt_s = pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
+                for c in ("SWT", "SWE", "SW", "SWT_WS", "SWT_ARCHIE", "SWT_WAXMAN"):
+                    if c in wdf_sorted.columns and wdf_sorted[c].notna().any():
+                        swt_s = swt_s.combine_first(
+                            pd.to_numeric(wdf_sorted[c], errors="coerce").clip(0.0, 1.0)
+                        )
+                if swt_s.isna().all():
                     rt_col = next(
                         (
                             c
@@ -6155,8 +6443,6 @@ def workspace_stick_plot(
                         swt_s = np.sqrt(
                             0.05 / (rt_s * (phit_s.clip(lower=0.01) ** 2))
                         ).clip(0.02, 1.0)
-                    else:
-                        swt_s = pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
 
                 # Resolve SHF
                 shf_s = (
@@ -6250,6 +6536,7 @@ def workspace_stick_plot(
                             "tvd": round(t_tvd, 2),
                         }
                     )
+                    all_zones_set.add(t_name)
                 top_items.sort(key=lambda x: x["tvd"])
 
                 # Cumulative hydrocarbon pore volume column height (m) = integral of BVO over TVD
@@ -6278,14 +6565,47 @@ def workspace_stick_plot(
 
                 for z_val in wdf_sorted["ZONES"].dropna().unique():
                     z_str = str(z_val).strip()
-                    if z_str:
+                    if z_str and z_str != "ALL":
                         all_zones_set.add(z_str)
 
-                # Downsample if needed
+                # Focus sampling budget on the logged / formation interval while preserving hydrocarbon samples
+                eval_mask = phit_s.notna() | swt_s.notna() | shf_s.notna()
+                for c_check in ("GR", "RT", "RHOB", "NPHI", "PERM", "PERM_TRANS"):
+                    if c_check in wdf_sorted.columns:
+                        eval_mask = eval_mask | wdf_sorted[c_check].notna()
                 sub = wdf_sorted
+                if eval_mask.any():
+                    eval_mds = md_full[eval_mask.to_numpy()]
+                    min_eval_md = float(np.nanmin(eval_mds))
+                    max_eval_md = float(np.nanmax(eval_mds))
+                    if top_items:
+                        min_eval_md = min(
+                            min_eval_md, min(float(t["depth"]) for t in top_items)
+                        )
+                        max_eval_md = max(
+                            max_eval_md, max(float(t["depth"]) for t in top_items)
+                        )
+                    trim_mask = (md_full >= (min_eval_md - 25.0)) & (
+                        md_full <= (max_eval_md + 25.0)
+                    )
+                    if trim_mask.sum() >= 20:
+                        sub = wdf_sorted.loc[trim_mask].reset_index(drop=True)
+
                 if len(sub) > max_pts:
                     stride = max(1, len(sub) // max_pts)
-                    sub = sub.iloc[::stride].reset_index(drop=True)
+                    stride_idx = np.arange(0, len(sub), stride, dtype=int)
+                    hc_mask = (
+                        pd.to_numeric(sub["BVO"], errors="coerce").fillna(0.0) > 0.005
+                    ) | (
+                        pd.to_numeric(sub["BVOH"], errors="coerce").fillna(0.0) > 0.005
+                    )
+                    hc_idx = np.flatnonzero(hc_mask.to_numpy())
+                    keep_idx = np.unique(np.concatenate([stride_idx, hc_idx]))
+                    if len(keep_idx) > max_pts * 2:
+                        keep_idx = keep_idx[
+                            :: max(1, len(keep_idx) // (max_pts * 2))
+                        ]
+                    sub = sub.iloc[keep_idx].reset_index(drop=True)
 
                 def _clean_float_list(series_in: pd.Series, decimals: int = 4) -> list:
                     s_num = pd.to_numeric(series_in, errors="coerce").replace(

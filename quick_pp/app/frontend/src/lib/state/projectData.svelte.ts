@@ -514,9 +514,7 @@ class ProjectDataState {
 		wellData.lastSavedMessage = msg;
 		appStatus.success(msg);
 		void this.refreshSummary(pid);
-		if (this.stickPlotResult) {
-			void this.loadStickPlot(true);
-		}
+		void this.loadStickPlot(true);
 		return true;
 	}
 
@@ -682,7 +680,7 @@ class ProjectDataState {
 			const data = await postJson<NonNullable<ProjectDataState['stickPlotResult']>>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/stick_plot`,
 				{
-					max_points_per_well: 1200
+					max_points_per_well: 4000
 				}
 			);
 			this.stickPlotResult = data;

@@ -7,7 +7,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from fastapi import (
@@ -1785,7 +1785,36 @@ def _get_merged_dataframe_sync(
                     tolerance=tol,
                     suffixes=("", "_top"),
                 )
-                if "top_name" in merged.columns:
+                if "top_name" in tops_p.columns:
+                    # Deduplicate co-depth tops deterministically (prefer specific unit/sandstone over broad group)
+                    def _top_specificity(name_val: Any) -> tuple:
+                        s = str(name_val or "").strip()
+                        sl = s.lower()
+                        has_res_kw = any(
+                            k in sl
+                            for k in ("sand", "member", "unit", "tuff", "clay", "silt")
+                        )
+                        return (1 if has_res_kw else 0, len(s), s)
+
+                    tops_zone_df = tops_p[["depth", "top_name"]].dropna().copy()
+                    if not tops_zone_df.empty:
+                        tops_zone_df["_spec"] = tops_zone_df["top_name"].map(
+                            _top_specificity
+                        )
+                        tops_zone_df = (
+                            tops_zone_df.sort_values(["depth", "_spec"])
+                            .drop_duplicates(subset=["depth"], keep="last")
+                            .drop(columns=["_spec"])
+                            .reset_index(drop=True)
+                        )
+                        z_merged = pd.merge_asof(
+                            merged[["depth"]],
+                            tops_zone_df,
+                            on="depth",
+                            direction="backward",
+                        )
+                        merged["zones"] = z_merged["top_name"].ffill()
+                elif "top_name" in merged.columns:
                     merged["zones"] = merged["top_name"].ffill()
 
             if contacts_p is not None and not contacts_p.empty:

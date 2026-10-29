@@ -48,8 +48,8 @@
 	}
 
 	onMount(() => {
-		if (workbench.projectId && !projectData.stickPlotResult) {
-			void projectData.loadStickPlot();
+		if (workbench.projectId) {
+			void projectData.loadStickPlot(true);
 		}
 	});
 
@@ -100,10 +100,47 @@
 		return ['ALL', ...Array.from(merged).sort()];
 	});
 
-	// Live lookup map for SHF computed in MultiWellShf: Map<well_name, Map<rounded_depth, shf>>
+	function findNearestDepthValue(
+		sortedDepths: number[],
+		values: number[],
+		targetMd: number,
+		maxTolerance = 2.0
+	): number | undefined {
+		const n = sortedDepths.length;
+		if (n === 0 || !Number.isFinite(targetMd)) return undefined;
+		let lo = 0;
+		let hi = n - 1;
+		while (lo <= hi) {
+			const mid = (lo + hi) >> 1;
+			const d = sortedDepths[mid];
+			if (d < targetMd) lo = mid + 1;
+			else if (d > targetMd) hi = mid - 1;
+			else return values[mid];
+		}
+		let bestIdx = -1;
+		let bestDiff = Infinity;
+		if (lo < n) {
+			const diff = Math.abs(sortedDepths[lo] - targetMd);
+			if (diff < bestDiff) {
+				bestDiff = diff;
+				bestIdx = lo;
+			}
+		}
+		if (hi >= 0) {
+			const diff = Math.abs(sortedDepths[hi] - targetMd);
+			if (diff < bestDiff) {
+				bestDiff = diff;
+				bestIdx = hi;
+			}
+		}
+		return bestIdx >= 0 && bestDiff <= maxTolerance ? values[bestIdx] : undefined;
+	}
+
+	// Live lookup map for SHF computed in MultiWellShf: Map<well_name, { depths: number[], values: number[] }>
 	let liveShfLookup = $derived.by(() => {
 		const sr = projectData.shfResult;
-		const map = new Map<string, Map<number, number>>();
+		const rawMap = new Map<string, Array<{ d: number; s: number }>>();
+		const map = new Map<string, { depths: number[]; values: number[] }>();
 		if (!sr || !sr.well_names || !sr.depths || !sr.shf) return map;
 		for (let i = 0; i < sr.well_names.length; i++) {
 			const wn = sr.well_names[i];
@@ -112,14 +149,90 @@
 			if (!wn || typeof d !== 'number' || s === null || s === undefined || !Number.isFinite(s)) {
 				continue;
 			}
-			let wMap = map.get(wn);
-			if (!wMap) {
-				wMap = new Map<number, number>();
-				map.set(wn, wMap);
+			let arr = rawMap.get(wn);
+			if (!arr) {
+				arr = [];
+				rawMap.set(wn, arr);
 			}
-			wMap.set(Math.round(d * 10), s);
+			arr.push({ d, s });
+		}
+		for (const [wn, arr] of rawMap.entries()) {
+			arr.sort((a, b) => a.d - b.d);
+			map.set(wn, {
+				depths: arr.map((x) => x.d),
+				values: arr.map((x) => x.s)
+			});
 		}
 		return map;
+	});
+
+	function getWellZoneBounds(
+		w: NonNullable<typeof projectData.stickPlotResult>['wells'][number],
+		zoneName: string
+	): { startMd: number; endMd: number; startTvd: number; endTvd: number } | null {
+		if (!zoneName || zoneName === 'ALL' || !w.tops || w.tops.length === 0) return null;
+		const sortedTops = [...w.tops]
+			.filter((t) => Number.isFinite(t.depth) && Number.isFinite(t.tvd))
+			.sort((a, b) => a.depth - b.depth);
+		const matchTop = sortedTops.find((t) => t.name === zoneName);
+		if (!matchTop) return null;
+		const nextTop = sortedTops.find((t) => t.depth > matchTop.depth + 0.5);
+		return {
+			startMd: matchTop.depth,
+			endMd: nextTop ? nextTop.depth : Infinity,
+			startTvd: matchTop.tvd,
+			endTvd: nextTop ? nextTop.tvd : Infinity
+		};
+	}
+
+	// Per-well zone-specific Top TVD and cumulative HCPV for sorting and header display
+	let wellZoneMetrics = $derived.by(() => {
+		const rawWells = projectData.stickPlotResult?.wells ?? [];
+		const activeZone = workbench.stickPlotZoneFilter;
+		const result = new Map<string, { topTvd: number; hcpv: number; hasZone: boolean }>();
+
+		for (const w of rawWells) {
+			if (activeZone === 'ALL') {
+				result.set(w.well_name, {
+					topTvd: w.top_reservoir_tvd,
+					hcpv: w.cum_hcpv,
+					hasZone: true
+				});
+				continue;
+			}
+			const zb = getWellZoneBounds(w, activeZone);
+			let minZoneTvd = zb ? zb.startTvd : Infinity;
+			let hcpv = 0;
+			let prevTvd: number | null = null;
+			let matchedAny = zb !== null;
+
+			for (let i = 0; i < w.tvd.length; i++) {
+				const tvd = w.tvd[i];
+				const md = w.depths[i] ?? tvd;
+				const zn = w.zones[i] ?? 'ALL';
+				if (tvd === null || tvd === undefined || !Number.isFinite(tvd)) continue;
+				const inZone =
+					zn === activeZone ||
+					(zb !== null && md !== null && md >= zb.startMd - 0.15 && md < zb.endMd);
+				if (!inZone) continue;
+				matchedAny = true;
+				if (tvd < minZoneTvd) minZoneTvd = tvd;
+				const bvo = w.bvo[i];
+				if (bvo !== null && Number.isFinite(bvo) && bvo > 0) {
+					const dtvd =
+						prevTvd !== null ? Math.max(0, Math.min(3.5, tvd - prevTvd)) : 0.15;
+					hcpv += bvo * dtvd;
+				}
+				prevTvd = tvd;
+			}
+
+			result.set(w.well_name, {
+				topTvd: Number.isFinite(minZoneTvd) ? minZoneTvd : w.top_reservoir_tvd,
+				hcpv: matchedAny ? hcpv : 0,
+				hasZone: matchedAny
+			});
+		}
+		return result;
 	});
 
 	// Filtered & sorted wells
@@ -140,7 +253,16 @@
 
 		const sortMode = workbench.stickPlotSortMode;
 		if (sortMode === 'crest-tvd') {
-			return [...filtered].sort((a, b) => a.top_reservoir_tvd - b.top_reservoir_tvd);
+			return [...filtered].sort((a, b) => {
+				const ma = wellZoneMetrics.get(a.well_name);
+				const mb = wellZoneMetrics.get(b.well_name);
+				if (ma && mb && ma.hasZone !== mb.hasZone) {
+					return ma.hasZone ? -1 : 1;
+				}
+				const tvdA = ma?.topTvd ?? a.top_reservoir_tvd;
+				const tvdB = mb?.topTvd ?? b.top_reservoir_tvd;
+				return tvdA - tvdB;
+			});
 		}
 		if (sortMode === 'custom' && workbench.stickPlotCustomOrder.length > 0) {
 			const orderMap = new Map(workbench.stickPlotCustomOrder.map((name, idx) => [name, idx]));
@@ -193,6 +315,15 @@
 		return Number.isFinite(sp.fwl) && sp.fwl > 0 ? Number(sp.fwl) : null;
 	}
 
+	let lastZoneFilter = $state<string>(workbench.stickPlotZoneFilter);
+	$effect(() => {
+		const zf = workbench.stickPlotZoneFilter;
+		if (zf !== lastZoneFilter) {
+			lastZoneFilter = zf;
+			yRange = null;
+		}
+	});
+
 	function resetTvdZoom() {
 		yRange = null;
 		if (PlotlyLib && plotContainer && (plotContainer as any)._fullLayout) {
@@ -223,6 +354,30 @@
 			const axisSuffix = wIdx === 0 ? '' : String(wIdx + 1);
 			const xAxisRef = `x${axisSuffix}`;
 			const wShfMap = liveShfLookup.get(w.well_name);
+			const zb = getWellZoneBounds(w, activeZone);
+
+			if (zb !== null && Number.isFinite(zb.startTvd)) {
+				if (zb.startTvd < minTvd) minTvd = zb.startTvd;
+				if (Number.isFinite(zb.endTvd) && zb.endTvd > maxTvd) maxTvd = zb.endTvd;
+			}
+
+			// Compute dynamic TVD step threshold per well so downsampled stride never triggers false gaps
+			const stepDiffs: number[] = [];
+			let lastSampleTvd: number | null = null;
+			for (let k = 0; k < w.tvd.length; k++) {
+				const tVal = w.tvd[k];
+				if (tVal !== null && tVal !== undefined && Number.isFinite(tVal)) {
+					if (lastSampleTvd !== null) {
+						const dStep = Math.abs(tVal - lastSampleTvd);
+						if (dStep > 0.001 && dStep < 50) stepDiffs.push(dStep);
+					}
+					lastSampleTvd = tVal;
+				}
+			}
+			stepDiffs.sort((a, b) => a - b);
+			const medianStep =
+				stepDiffs.length > 0 ? stepDiffs[Math.floor(stepDiffs.length / 2)] : 0.5;
+			const gapThreshold = Math.max(15.0, medianStep * 8.0);
 
 			const tvdArr: (number | null)[] = [];
 			const bvoArr: (number | null)[] = [];
@@ -243,7 +398,8 @@
 				if (tvd === null || tvd === undefined || !Number.isFinite(tvd)) continue;
 				if (md !== null && (md < minD || md > maxD)) continue;
 
-				const hasDepthGap = prevValidTvd !== null && Math.abs(tvd - prevValidTvd) > 2.5;
+				const hasDepthGap =
+					prevValidTvd !== null && Math.abs(tvd - prevValidTvd) > gapThreshold;
 				if (hasDepthGap && prevValidTvd !== null) {
 					// Clamp fill polygon back to x=0 across missing depth intervals
 					fillTvdArr.push(prevValidTvd, tvd);
@@ -259,9 +415,12 @@
 				}
 				prevValidTvd = tvd;
 
+				const matchesActiveZone =
+					activeZone === 'ALL' ||
+					zn === activeZone ||
+					(zb !== null && md !== null && md >= zb.startMd - 0.15 && md < zb.endMd);
 				const zoneMatches =
-					(activeZone === 'ALL' || zn === activeZone) &&
-					(!globalSelectedZones || globalSelectedZones.has(zn));
+					matchesActiveZone && (!globalSelectedZones || globalSelectedZones.has(zn));
 
 				if (!zoneMatches) {
 					// Keep fill anchored at x=0 in excluded zones so 'tozerox' never bridges across zones
@@ -285,10 +444,10 @@
 				const swt = w.swt[i];
 				const bvo = w.bvo[i];
 
-				// Prefer live SHF from projectData.shfResult if available
+				// Prefer live SHF from projectData.shfResult if available (nearest-depth lookup within 2.0m)
 				let shf = w.shf[i];
 				if (wShfMap && md !== null) {
-					const liveVal = wShfMap.get(Math.round(md * 10));
+					const liveVal = findNearestDepthValue(wShfMap.depths, wShfMap.values, md, 2.0);
 					if (liveVal !== undefined) {
 						shf = liveVal;
 					}
@@ -310,7 +469,7 @@
 					well: w.well_name,
 					tvd,
 					md,
-					zone: zn,
+					zone: activeZone !== 'ALL' && matchesActiveZone ? activeZone : zn,
 					bvo,
 					bvoh,
 					phit,
@@ -524,32 +683,56 @@
 				}
 			}
 
-			// Formation Tops Horizontal Markers
+			// Formation Tops Horizontal Markers (group co-depth tops within 0.6m TVD to prevent overlapping labels)
 			if (workbench.stickPlotShowTops && w.tops?.length) {
+				const groupedTops: Array<{ tvd: number; names: string[] }> = [];
 				for (const top of w.tops) {
-					if (!Number.isFinite(top.tvd)) continue;
+					if (!Number.isFinite(top.tvd) || !top.name) continue;
+					const lastGrp = groupedTops[groupedTops.length - 1];
+					if (lastGrp && Math.abs(top.tvd - lastGrp.tvd) <= 0.6) {
+						if (!lastGrp.names.includes(top.name)) {
+							lastGrp.names.push(top.name);
+						}
+					} else {
+						groupedTops.push({ tvd: top.tvd, names: [top.name] });
+					}
+				}
+				for (const grp of groupedTops) {
+					const isHighlighted = activeZone !== 'ALL' && grp.names.includes(activeZone);
+					const labelText =
+						grp.names.length <= 2
+							? grp.names.join(' / ')
+							: `${grp.names.slice(0, 2).join(' / ')} +${grp.names.length - 2}`;
 					shapes.push({
 						type: 'line',
 						xref: xAxisRef,
 						yref: 'y',
 						x0: 0,
 						x1: xMax,
-						y0: top.tvd,
-						y1: top.tvd,
-						line: { color: '#64748B', width: 1, dash: 'dashdot' },
+						y0: grp.tvd,
+						y1: grp.tvd,
+						line: {
+							color: isHighlighted ? '#0F172A' : '#64748B',
+							width: isHighlighted ? 1.4 : 1,
+							dash: 'dashdot'
+						},
 						layer: 'below'
 					});
 					annotations.push({
 						xref: xAxisRef,
 						yref: 'y',
 						x: xMax * 0.98,
-						y: top.tvd,
+						y: grp.tvd,
 						xanchor: 'right',
 						yanchor: 'top',
 						showarrow: false,
-						text: top.name,
-						font: { family: 'Inter', size: 8, color: '#475569' },
-						bgcolor: 'rgba(248, 250, 252, 0.8)'
+						text: labelText,
+						font: {
+							family: 'Inter',
+							size: 8,
+							color: isHighlighted ? '#0F172A' : '#475569'
+						},
+						bgcolor: 'rgba(248, 250, 252, 0.85)'
 					});
 				}
 			}
@@ -775,6 +958,15 @@
 			</label>
 			<button
 				type="button"
+				disabled={projectData.isLoadingStickPlot}
+				onclick={() => void projectData.loadStickPlot(true)}
+				title="Reload latest computed curves across all wells"
+				class="h-5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+			>
+				{projectData.isLoadingStickPlot ? 'Refreshing...' : '↻ Refresh'}
+			</button>
+			<button
+				type="button"
 				onclick={resetTvdZoom}
 				class="h-5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-100"
 			>
@@ -794,6 +986,9 @@
 				{@const leftPct = dom[0] * 100}
 				{@const widthPct = Math.max(2, (dom[1] - dom[0]) * 100)}
 				{@const isActiveWell = workbench.wellId === well.well_name}
+				{@const wMetrics = wellZoneMetrics.get(well.well_name)}
+				{@const dispTopTvd = wMetrics?.topTvd ?? well.top_reservoir_tvd}
+				{@const dispHcpv = wMetrics?.hcpv ?? well.cum_hcpv}
 				<div
 					style="left: {leftPct}%; width: {widthPct}%;"
 					class="absolute inset-y-0 flex flex-col justify-between border-x px-1 py-0.5 overflow-hidden transition-colors {isActiveWell
@@ -814,7 +1009,7 @@
 						<button
 							type="button"
 							onclick={() => projectData.selectWell(well.well_name)}
-							title="Click to inspect {well.well_name} (Top TVD: {well.top_reservoir_tvd.toFixed(1)}m)"
+							title="Click to inspect {well.well_name} (Top TVD: {dispTopTvd.toFixed(1)}m)"
 							class="truncate font-sans text-[9.5px] font-bold hover:underline {isActiveWell
 								? 'text-[var(--accent-primary)]'
 								: 'text-[var(--text-primary)]'}"
@@ -836,9 +1031,9 @@
 					<div
 						class="mono-num flex items-center justify-between whitespace-nowrap text-[7.5px] text-[var(--text-muted)]"
 					>
-						<span title="Top Reservoir TVD">Top:{well.top_reservoir_tvd.toFixed(0)}m</span>
-						<span class="font-semibold text-emerald-700" title="Cumulative Hydrocarbon Pore Volume Column">
-							HCPV:{well.cum_hcpv.toFixed(2)}m
+						<span title="Top TVD ({workbench.stickPlotZoneFilter})">Top:{dispTopTvd.toFixed(0)}m</span>
+						<span class="font-semibold text-emerald-700" title="Cumulative Hydrocarbon Pore Volume Column ({workbench.stickPlotZoneFilter})">
+							HCPV:{dispHcpv.toFixed(2)}m
 						</span>
 					</div>
 

@@ -197,6 +197,7 @@
 					});
 				}
 			}
+			void projectData.loadStickPlot(true);
 		} catch (e: any) {
 			projectData.error = e?.message || 'SHF error';
 		} finally {
