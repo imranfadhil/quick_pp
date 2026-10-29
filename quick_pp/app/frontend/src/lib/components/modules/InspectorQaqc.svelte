@@ -2292,7 +2292,10 @@
 					disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-badhole')}
 					onclick={saveBadholeFlagging}
 					title={wellData.hasPendingComputed('qaqc-badhole')
-						? 'Save BADHOLE, BS, and DCALI curves directly to the well'
+						? wellData.getPendingSaveTooltip(
+								'qaqc-badhole',
+								'Save BADHOLE, BS, and DCALI curves directly to the well'
+							)
 						: 'Click Flag Badhole first to preview flags before saving'}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 				>
@@ -2367,7 +2370,10 @@
 					disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-env')}
 					onclick={saveEnvCorrections}
 					title={wellData.hasPendingComputed('qaqc-env')
-						? 'Save corrected environmental curves directly to the well'
+						? wellData.getPendingSaveTooltip(
+								'qaqc-env',
+								'Save corrected environmental curves directly to the well'
+							)
 						: 'Apply Env Corrections first to enable saving'}
 					class="h-6 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[11px] font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 				>

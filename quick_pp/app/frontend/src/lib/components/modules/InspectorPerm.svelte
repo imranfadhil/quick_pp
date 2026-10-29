@@ -315,7 +315,7 @@
 			disabled={wellData.isCalculating || !wellData.hasPendingComputed('perm')}
 			onclick={savePerm}
 			title={wellData.hasPendingComputed('perm')
-				? 'Save computed Permeability curve directly to the well'
+				? wellData.getPendingSaveTooltip('perm', 'Save computed Permeability curve directly to the well')
 				: 'Run the calculation first to enable saving'}
 			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>

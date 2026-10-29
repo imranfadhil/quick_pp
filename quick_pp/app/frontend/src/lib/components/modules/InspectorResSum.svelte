@@ -563,7 +563,7 @@
 			disabled={wellData.isCalculating || !wellData.hasPendingComputed('ressum')}
 			onclick={saveResSumFlags}
 			title={wellData.hasPendingComputed('ressum')
-				? 'Save computed Pay Flags & blocked curves directly to the well'
+				? wellData.getPendingSaveTooltip('ressum', 'Save computed Pay Flags & blocked curves directly to the well')
 				: 'Run Summary first to enable saving'}
 			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>

@@ -234,13 +234,21 @@ def _save_curves_to_well(
     if is_demo_mode():
         return len(df_to_save)
 
+    cache_key = f"{project_id}_{well_name}_0.16"
+    cached_entry = _merged_data_cache.get(cache_key)
+    preserved_mem_df = cached_entry[1].copy() if cached_entry is not None else None
+
     with get_db() as session:
         proj = db_objects.Project.load(session, project_id=project_id)
         proj.update_data(df_to_save, group_by="WELL_NAME")
         proj.save()
 
     invalidate_well_cache(project_id=project_id, well_name=well_name)
-    _update_in_memory_well_cache(project_id, well_name, df_to_save)
+    _update_in_memory_well_cache(
+        project_id,
+        well_name,
+        preserved_mem_df if preserved_mem_df is not None else df_to_save,
+    )
     return len(df_to_save)
 
 

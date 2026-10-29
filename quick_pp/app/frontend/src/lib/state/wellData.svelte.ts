@@ -1376,6 +1376,52 @@ class WellDataState {
 	}
 
 	/**
+	 * Ordered single-well calculation modules for cascading upstream saves.
+	 */
+	private static readonly WORKFLOW_MODULE_ORDER = [
+		'qaqc-edit',
+		'qaqc-badhole',
+		'qaqc-env',
+		'litho-poro',
+		'perm',
+		'saturation',
+		'ressum'
+	] as const;
+
+	private static readonly WORKFLOW_MODULE_LABELS: Record<string, string> = {
+		'qaqc-edit': 'QAQC Edits',
+		'qaqc-badhole': 'Badhole Flags',
+		'qaqc-env': 'Env Corrections',
+		'litho-poro': 'Litho & Poro',
+		perm: 'Permeability',
+		saturation: 'Saturation',
+		ressum: 'Res. Summary'
+	};
+
+	getCascadingModuleKeys(moduleKey: string): string[] {
+		const order = WellDataState.WORKFLOW_MODULE_ORDER as readonly string[];
+		const idx = order.indexOf(moduleKey);
+		if (idx < 0) return [moduleKey];
+		return order.slice(0, idx + 1);
+	}
+
+	getPendingCascadingModules(moduleKey: string): string[] {
+		return this.getCascadingModuleKeys(moduleKey).filter(
+			(k) => (this.pendingModuleCurves[k]?.length ?? 0) > 0
+		);
+	}
+
+	getPendingCascadingCurves(moduleKey: string): string[] {
+		const seen = new Set<string>();
+		for (const k of this.getPendingCascadingModules(moduleKey)) {
+			for (const c of this.pendingModuleCurves[k] ?? []) {
+				seen.add(c);
+			}
+		}
+		return Array.from(seen);
+	}
+
+	/**
 	 * Record curve mnemonics produced by a module's `Run` action so the module's `Save` button
 	 * becomes enabled and can persist them directly without re-running the calculation.
 	 */
@@ -1407,18 +1453,35 @@ class WellDataState {
 	}
 
 	hasPendingComputed(moduleKey: string): boolean {
-		return (this.pendingModuleCurves[moduleKey]?.length ?? 0) > 0;
+		if (moduleKey.startsWith('qaqc-')) {
+			return (this.pendingModuleCurves[moduleKey]?.length ?? 0) > 0;
+		}
+		return this.getPendingCascadingCurves(moduleKey).length > 0 || this.coreShiftDirty;
+	}
+
+	getPendingSaveTooltip(moduleKey: string, defaultTooltip: string): string {
+		const pendingMods = this.getPendingCascadingModules(moduleKey);
+		const upstreamMods = pendingMods
+			.filter((k) => k !== moduleKey)
+			.map((k) => WellDataState.WORKFLOW_MODULE_LABELS[k] ?? k);
+		if (!moduleKey.startsWith('qaqc-') && this.coreShiftDirty) {
+			upstreamMods.push('Core Depth Shift');
+		}
+		if (upstreamMods.length === 0) return defaultTooltip;
+		return `${defaultTooltip} (also saves pending ${upstreamMods.join(', ')})`;
 	}
 
 	/**
-	 * Directly persist the already-computed in-memory curves for `moduleKey` to the backend
-	 * without re-executing the petrophysical calculation.
+	 * Directly persist the already-computed in-memory curves for `moduleKey` and all pending
+	 * upstream workflow steps to the backend without re-executing the petrophysical calculations.
 	 */
 	async saveModuleComputed(moduleKey: string, successLabel: string): Promise<boolean> {
 		const pid = workbench.projectId;
 		const wid = workbench.wellId;
-		const cols = this.pendingModuleCurves[moduleKey] ?? [];
-		if (!pid || !wid || cols.length === 0) return false;
+		const pendingModules = this.getPendingCascadingModules(moduleKey);
+		const cols = this.getPendingCascadingCurves(moduleKey);
+		const includeCoreShift = !moduleKey.startsWith('qaqc-') && this.coreShiftDirty;
+		if (!pid || !wid || (cols.length === 0 && !includeCoreShift)) return false;
 
 		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		if (deptArr.length === 0) return false;
@@ -1430,24 +1493,90 @@ class WellDataState {
 				curvesPayload[col] = arr.map((v) => (Number.isFinite(v) ? v : null));
 			}
 		}
-		if (Object.keys(curvesPayload).length === 0) return false;
+		if (includeCoreShift) {
+			if (this.curves['CPORE'] && this.curves['CPORE'].length === deptArr.length) {
+				curvesPayload['CPORE'] = this.curves['CPORE'].map((v) =>
+					Number.isFinite(v) ? v : null
+				);
+			}
+			if (this.curves['CPERM'] && this.curves['CPERM'].length === deptArr.length) {
+				curvesPayload['CPERM'] = this.curves['CPERM'].map((v) =>
+					Number.isFinite(v) ? v : null
+				);
+			}
+		}
+		if (Object.keys(curvesPayload).length === 0 && !includeCoreShift) return false;
 
 		this.isCalculating = true;
 		this.lastError = null;
 		try {
-			await postJson(
-				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wid)}/save_computed`,
-				{
-					module: moduleKey,
-					depths: deptArr.map((d) => (Number.isFinite(d) ? d : null)),
-					curves: curvesPayload
+			if (includeCoreShift) {
+				if (this.coreSamples.length > 0) {
+					await saveAncillaryItems(pid, wid, 'core_samples', 'samples', this.coreSamples);
 				}
-			);
+				if (this.scalPc.length > 0) {
+					await saveAncillaryItems(pid, wid, 'scal_pc', 'pc_data', this.scalPc);
+				}
+			}
+
+			if (Object.keys(curvesPayload).length > 0) {
+				await postJson(
+					`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wid)}/save_computed`,
+					{
+						module: moduleKey,
+						depths: deptArr.map((d) => (Number.isFinite(d) ? d : null)),
+						curves: curvesPayload
+					}
+				);
+			}
+
+			if (includeCoreShift) {
+				this.originalCoreSamples = this.coreSamples.map((s) => ({
+					...s,
+					raw_depth: Number(s.depth)
+				}));
+				this.coreSamples = this.originalCoreSamples.map((s) => ({ ...s }));
+				if (this.scalPc.length > 0) {
+					this.originalScalPc = this.scalPc.map((s) => ({
+						...s,
+						raw_depth: Number(s.depth)
+					}));
+				}
+				if (this.curves['CPORE']) {
+					this.originalCurves = { ...this.originalCurves, CPORE: [...this.curves['CPORE']] };
+				}
+				if (this.curves['CPERM']) {
+					this.originalCurves = { ...this.originalCurves, CPERM: [...this.curves['CPERM']] };
+				}
+				this.coreShiftDelta = 0;
+				this.coreStretchFactor = 1.0;
+				this.coreTiePoints = [];
+				this.coreShiftDirty = false;
+			}
+
 			const nextPending = { ...this.pendingModuleCurves };
-			delete nextPending[moduleKey];
+			for (const k of pendingModules) {
+				delete nextPending[k];
+			}
 			this.pendingModuleCurves = nextPending;
-			this.lastSavedMessage = successLabel;
-			appStatus.success(successLabel, wid);
+
+			const upstreamLabels = pendingModules
+				.filter((k) => k !== moduleKey)
+				.map((k) => WellDataState.WORKFLOW_MODULE_LABELS[k] ?? k);
+			if (includeCoreShift) {
+				upstreamLabels.push('Core Shift');
+			}
+			const selfWasPending = pendingModules.includes(moduleKey);
+			let finalLabel = successLabel;
+			if (!selfWasPending && upstreamLabels.length > 0) {
+				finalLabel = `${upstreamLabels.join(' + ')} Saved ✓`;
+			} else if (upstreamLabels.length > 0) {
+				const cleanBase = successLabel.replace(/\s*✓$/, '');
+				finalLabel = `${cleanBase} (+ ${upstreamLabels.join(', ')}) ✓`;
+			}
+
+			this.lastSavedMessage = finalLabel;
+			appStatus.success(finalLabel, wid);
 			return true;
 		} catch (e: any) {
 			this.lastError = e?.message || 'Failed to save computed curves';
@@ -2831,9 +2960,18 @@ class WellDataState {
 				await saveAncillaryItems(pid, wid, 'scal_pc', 'pc_data', this.scalPc);
 			}
 
+			const pendingQaqcModules = this.getPendingCascadingModules('qaqc-env');
+			const pendingQaqcCols = this.getPendingCascadingCurves('qaqc-env');
+
 			const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 			if (deptArr.length > 0) {
 				const curvesPayload: Record<string, (number | null)[]> = {};
+				for (const col of pendingQaqcCols) {
+					const arr = this.curves[col];
+					if (arr && arr.length === deptArr.length) {
+						curvesPayload[col] = arr.map((v) => (Number.isFinite(v) ? v : null));
+					}
+				}
 				if (this.curves['CPORE']) {
 					curvesPayload['CPORE'] = this.curves['CPORE'].map((v) =>
 						Number.isFinite(v) ? v : null
@@ -2854,6 +2992,14 @@ class WellDataState {
 						}
 					);
 				}
+			}
+
+			if (pendingQaqcModules.length > 0) {
+				const nextPending = { ...this.pendingModuleCurves };
+				for (const k of pendingQaqcModules) {
+					delete nextPending[k];
+				}
+				this.pendingModuleCurves = nextPending;
 			}
 
 			// Update baselines to the newly saved depths
@@ -2878,8 +3024,16 @@ class WellDataState {
 			this.coreStretchFactor = 1.0;
 			this.coreTiePoints = [];
 			this.coreShiftDirty = false;
-			this.lastSavedMessage = 'Core Depth Shift Saved ✓';
-			appStatus.success('Saved shifted core depths & CPORE/CPERM curves', wid);
+			this.lastSavedMessage =
+				pendingQaqcModules.length > 0
+					? 'Core Depth Shift (+ QAQC) Saved ✓'
+					: 'Core Depth Shift Saved ✓';
+			appStatus.success(
+				pendingQaqcModules.length > 0
+					? 'Saved shifted core depths, CPORE/CPERM & pending QAQC curves'
+					: 'Saved shifted core depths & CPORE/CPERM curves',
+				wid
+			);
 		} catch (e: any) {
 			this.lastError = e?.message || 'Failed to save core depth shift';
 		} finally {

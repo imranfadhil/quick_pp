@@ -322,6 +322,9 @@
 					wellData.survey
 				);
 			}
+			if (wellData.getPendingCascadingCurves('qaqc-env').length > 0) {
+				await wellData.saveModuleComputed('qaqc-env', 'QAQC Curves Saved ✓');
+			}
 			statusMsg = 'Saved ✓';
 			if (activeTab === 'scal' || activeTab === 'core') {
 				projectData.shfResult = null;
