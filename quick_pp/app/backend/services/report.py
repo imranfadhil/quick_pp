@@ -46,7 +46,6 @@ from quick_pp.app.backend.schemas.report import (
 from quick_pp.app.backend.services.database import (
     _get_merged_dataframe_sync,
     get_project_summary,
-    resolve_db_well_name,
 )
 from quick_pp.app.backend.services.workspace import (
     _ephemeral_well_configs,
@@ -54,23 +53,9 @@ from quick_pp.app.backend.services.workspace import (
 )
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.database import objects as db_objects
-from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.permeability import choo_permeability
 from quick_pp.plotter import report_plots
-from quick_pp.porosity import (
-    density_porosity,
-    estimate_shale_porosity,
-    neu_den_xplot_poro,
-    rho_matrix,
-)
 from quick_pp.ressum import calc_reservoir_summary
-from quick_pp.saturation import (
-    estimate_b_waxman_smits,
-    estimate_qvn,
-    estimate_rw_temperature_salinity,
-    estimate_temperature_gradient,
-    waxman_smits_saturation,
-)
 from quick_pp.upscaling import upscale_logs
 
 router = APIRouter(tags=["Petrophysical Reports"])
@@ -327,7 +312,32 @@ def _load_project_wells_fast(
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """Fetch project name and selected well metadata + ancillary counts in a single fast DB session."""
     with get_db() as session:
-        proj = db_objects.Project.load(session, project_id=project_id)
+        try:
+            proj = db_objects.Project.load(session, project_id=project_id)
+        except Exception:
+            proj = None
+        if proj is None:
+            summary = get_project_summary(project_id)
+            project_name = str(summary.get("name") or f"Project #{project_id}")
+            raw_wells = summary.get("wells") or []
+            if not raw_wells:
+                raise ValueError(
+                    f"No wells found in project {project_id} ({project_name})."
+                )
+            return project_name, [
+                {
+                    "id": w.get("id", idx + 1),
+                    "name": str(w.get("name", f"Well-{idx + 1}")),
+                    "uwi": str(w.get("uwi") or w.get("name", f"Well-{idx + 1}")),
+                    "core_sample_count": int(w.get("core_sample_count", 0)),
+                    "pressure_test_count": int(w.get("pressure_test_count", 0)),
+                    "formation_top_count": int(
+                        w.get("formation_top_count") or len(w.get("tops") or [])
+                    ),
+                    "well_config": w.get("well_config") or {},
+                }
+                for idx, w in enumerate(raw_wells)
+            ]
         project_name = str(proj.name or f"Project #{project_id}")
         orm_wells = (
             session.execute(
@@ -432,6 +442,7 @@ def build_report_context(
     min_depth: Optional[float] = None,
     max_depth: Optional[float] = None,
     enabled_section_ids: Optional[set[str]] = None,
+    model_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Collect and compute all petrophysical tables, model parameters, and statistical digests for a project."""
     from scipy.stats import linregress
@@ -509,16 +520,6 @@ def build_report_context(
             ):
                 all_zones_seen.append(z_str)
 
-        # Capture genuinely available non-empty curves before filling evaluation defaults
-        raw_curves = [
-            c
-            for c in w_df.columns
-            if c not in ("DEPTH", "DEPT", "WELL_NAME", "ZONES")
-            and w_df[c].notna().any()
-        ]
-        if any(c.upper() in ("PC", "KRW", "KRO", "SCAL_PC") for c in raw_curves):
-            any_scal_data = True
-
         from quick_pp.las_handler import extract_well_df_elevation
 
         header_info = w_cfg.get("_header_data") or {}
@@ -558,6 +559,37 @@ def build_report_context(
                 }
             )
 
+        # Capture genuinely available non-empty curves before filling evaluation defaults
+        raw_curves = [
+            c
+            for c in w_df.columns
+            if c not in ("DEPTH", "DEPT", "WELL_NAME", "ZONES")
+            and w_df[c].notna().any()
+        ]
+        if any(c.upper() in ("PC", "KRW", "KRO", "SCAL_PC") for c in raw_curves):
+            any_scal_data = True
+
+        # Prioritize canonical Field Inventory curves for display in Table 2.1
+        priority_order = [
+            "TVD",
+            "TVDSS",
+            "GR",
+            "RT",
+            "NPHI",
+            "RHOB",
+            "VCLAY",
+            "PHIT",
+            "PERM",
+            "SWT",
+            "ROCK_FLAG",
+            "PERM_TRANS",
+            "SHF",
+        ]
+        raw_upper_map = {str(c).upper(): str(c) for c in raw_curves}
+        display_curves = [
+            raw_upper_map[k] for k in priority_order if k in raw_upper_map
+        ] + [c for c in raw_curves if str(c).upper() not in priority_order]
+
         w_df = _ensure_evaluated_curves(w_df, w_name)
         unfiltered_dfs.append(w_df)
 
@@ -584,7 +616,7 @@ def build_report_context(
                 "min_depth": round(d_min, 1),
                 "max_depth": round(d_max, 1),
                 "td": round(td, 1),
-                "curves": raw_curves[:12],
+                "curves": display_curves[:13],
                 "available_curves": raw_curves,
                 "core_sample_count": core_cnt,
                 "has_core": f"Yes ({core_cnt} pts)" if core_cnt > 0 else "No",
@@ -1545,36 +1577,156 @@ def build_report_context(
             shf_rmse = round(float(np.sqrt(np.mean(diff**2))), 4)
             shf_bias = round(float(diff.mean()), 4)
 
+    if model_params and isinstance(model_params, dict):
+        merged_configs.update(
+            {k: v for k, v in model_params.items() if v is not None}
+        )
+
+    # Resolve active Lithology, Porosity, and Saturation models from config or evaluated curves
+    raw_litho_key = str(
+        merged_configs.get("litho_model_key")
+        or merged_configs.get("litho_model")
+        or ""
+    ).strip().lower()
+
+    def _has_positive_col(col_name: str, threshold: float = 0.005) -> bool:
+        if full_df.empty or col_name not in full_df.columns:
+            return False
+        s_num = pd.to_numeric(full_df[col_name], errors="coerce").dropna()
+        return bool((s_num > threshold).any())
+
+    has_carb_evap = any(
+        _has_positive_col(c)
+        for c in ("VCALC", "VDOLO", "VANHY", "VHALI", "VGYPS")
+    )
+    has_ssc_cols = _has_positive_col("VSAND") and _has_positive_col("VSILT")
+
+    if raw_litho_key in ("multi_mineral", "multimineral", "multi-mineral"):
+        resolved_litho_key = "multi_mineral"
+    elif raw_litho_key in ("ssc", "sand_silt_clay", "kuttan"):
+        resolved_litho_key = "ssc"
+    elif raw_litho_key in ("vsh_gr", "gr", "gamma_ray"):
+        resolved_litho_key = "vsh_gr"
+    elif has_carb_evap:
+        resolved_litho_key = "multi_mineral"
+    elif has_ssc_cols:
+        resolved_litho_key = "ssc"
+    elif _has_positive_col("VCLAY") or _has_positive_col("VSH_GR"):
+        resolved_litho_key = "ssc" if _has_positive_col("VSAND") else "vsh_gr"
+    else:
+        resolved_litho_key = "ssc"
+
+    if resolved_litho_key == "multi_mineral":
+        cfg_mins = merged_configs.get("litho_minerals")
+        if not cfg_mins or not isinstance(cfg_mins, list):
+            cfg_mins = []
+            for m_col, m_label in (
+                ("VSAND", "Quartz"),
+                ("VCALC", "Calcite"),
+                ("VDOLO", "Dolomite"),
+                ("VCLAY", "Shale"),
+                ("VANHY", "Anhydrite"),
+                ("VHALI", "Halite"),
+            ):
+                if _has_positive_col(m_col):
+                    cfg_mins.append(m_label)
+        min_str = (
+            ", ".join(str(m).title() for m in cfg_mins)
+            if cfg_mins
+            else "Quartz, Calcite, Dolomite, Shale"
+        )
+        litho_model_display = f"Multi-Mineral Optimization Solver ({min_str})"
+    elif resolved_litho_key == "vsh_gr":
+        litho_model_display = "Gamma Ray Shale Volume Index (Vsh,GR) Model"
+    else:
+        litho_model_display = "Modified Kuttan Sand-Silt-Clay (SSC) Ternary Model"
+
+    raw_poro_key = str(
+        merged_configs.get("porosity_method_key")
+        or merged_configs.get("porosity_method")
+        or "den"
+    ).strip().lower()
+    if raw_poro_key in ("neu_den", "neutron_density", "xplot"):
+        poro_method_display = (
+            "Neutron-Density Crossplot Total & Clay-Corrected Effective Porosity"
+        )
+    else:
+        poro_method_display = (
+            "Clay-Corrected Matrix Density Total & Effective Porosity"
+        )
+
+    raw_sw_key = str(
+        merged_configs.get("sw_model_key")
+        or merged_configs.get("sw_model")
+        or "waxman_smits"
+    ).strip().lower()
+    if raw_sw_key == "archie":
+        sw_model_display = "Archie Clean-Sand Water Saturation Model"
+    else:
+        sw_model_display = "Waxman-Smits Shaly-Sand Cation Exchange ($Q_v$) Model"
+
+    dry_sand_pt = merged_configs.get("dry_sand_point")
+    dry_clay_pt = merged_configs.get("dry_clay_point")
+    fluid_pt = merged_configs.get("fluid_point")
+    rho_ma_cfg = (
+        _safe_float(dry_sand_pt[1], 2.65)
+        if isinstance(dry_sand_pt, (list, tuple)) and len(dry_sand_pt) > 1
+        else _safe_float(merged_configs.get("rho_ma"), 2.65)
+    )
+    nphi_clay_cfg = (
+        _safe_float(dry_clay_pt[0], 0.33)
+        if isinstance(dry_clay_pt, (list, tuple)) and len(dry_clay_pt) > 0
+        else _safe_float(merged_configs.get("nphi_clay"), 0.33)
+    )
+    rho_clay_cfg = (
+        _safe_float(dry_clay_pt[1], 2.70)
+        if isinstance(dry_clay_pt, (list, tuple)) and len(dry_clay_pt) > 1
+        else _safe_float(merged_configs.get("rho_clay"), 2.70)
+    )
+    rho_fl_cfg = (
+        _safe_float(fluid_pt[1], 1.00)
+        if isinstance(fluid_pt, (list, tuple)) and len(fluid_pt) > 1
+        else _safe_float(merged_configs.get("rho_fl"), 1.00)
+    )
+    gr_clean_cfg = _safe_float(merged_configs.get("gr_clean"), 15.0)
+    gr_clay_cfg = _safe_float(
+        merged_configs.get("gr_clay", merged_configs.get("gr_shale")), 115.0
+    )
+    bh_treat_raw = str(merged_configs.get("badhole_treatment") or "vsh_gr").strip()
+    bh_treat_display = (
+        "vsh_gr (GR Shale Fallback)"
+        if bh_treat_raw.lower() == "vsh_gr"
+        else bh_treat_raw
+    )
+
     qaqc_params = {
-        "caliper_limit": 2.0,
-        "bitsize_in": 8.5,
-        "drho_limit": 0.15,
-        "rhob_min": 1.95,
-        "badhole_treatment": "vsh_gr (GR Shale Fallback)",
-        "rho_hc": 0.80,
-        "hi_hc": 0.90,
+        "caliper_limit": _safe_float(merged_configs.get("cali_threshold"), 2.0),
+        "bitsize_in": _safe_float(merged_configs.get("bitsize_default"), 8.5),
+        "drho_limit": _safe_float(merged_configs.get("drho_threshold"), 0.15),
+        "rhob_min": _safe_float(merged_configs.get("rhob_min"), 1.95),
+        "badhole_treatment": bh_treat_display,
+        "rho_hc": _safe_float(merged_configs.get("rho_hc"), 0.80),
+        "hi_hc": _safe_float(merged_configs.get("hi_hc"), 0.90),
         "norm_method": "Stratigraphic Zonal P10–P90 Quantile Alignment",
     }
     litho_params = {
-        "model_name": str(
-            merged_configs.get(
-                "litho_model",
-                "Modified Kuttan Sand-Silt-Clay (SSC) & Multi-Mineral Solver",
-            )
-        ),
-        "rho_clay": 2.70,
-        "nphi_clay": 0.33,
-        "gr_clean": 15.0,
-        "gr_shale": 115.0,
+        "model_key": resolved_litho_key,
+        "model_name": litho_model_display,
+        "rho_clay": round(rho_clay_cfg, 2),
+        "nphi_clay": round(nphi_clay_cfg, 2),
+        "gr_clean": round(gr_clean_cfg, 1),
+        "gr_shale": round(gr_clay_cfg, 1),
     }
     poro_params = {
-        "method_name": "Neutron-Density Crossplot Total & Clay-Corrected Effective Porosity",
-        "rho_ma": 2.65,
+        "method_key": raw_poro_key,
+        "method_name": poro_method_display,
+        "use_hc_corrected": bool(merged_configs.get("use_hc_corrected", False)),
+        "rho_ma": round(rho_ma_cfg, 2),
         "rhoma_mean": rhoma_mean,
         "rhoma_std": rhoma_std,
         "rhoma_count": rhoma_count,
-        "rho_fl": 1.00,
-        "core_ref": f"2.65 g/cc Quartz Matrix (Measured RCA mean = {rhoma_mean:.2f} g/cc)",
+        "rho_fl": round(rho_fl_cfg, 2),
+        "core_ref": f"{rho_ma_cfg:.2f} g/cc Matrix (Measured RCA mean = {rhoma_mean:.2f} g/cc)",
         "core_r2": core_r2,
         "core_rmse": core_rmse,
         "core_bias": core_bias,
@@ -1582,16 +1734,17 @@ def build_report_context(
         "total_core_count": total_core_plugs_loaded,
     }
     sw_params = {
-        "model_name": "Waxman-Smits Shaly-Sand Cation Exchange ($Q_v$) Model",
+        "model_key": raw_sw_key,
+        "model_name": sw_model_display,
         "fwl": fwl_val,
         "fwl_basis": "Target-Zone Hydrocarbon-Water Transition Zone (TVDss)",
         "median_target_tvdss": median_target_tvdss,
-        "salinity": 35000,
-        "rw": 0.080,
+        "salinity": int(_safe_float(merged_configs.get("water_salinity"), 35000.0)),
+        "rw": round(_safe_float(merged_configs.get("rw_val"), 0.080), 3),
         "temp": 75.0,
-        "a": 1.0,
-        "m": 2.0,
-        "n": 2.0,
+        "a": round(_safe_float(merged_configs.get("sw_a"), 1.0), 2),
+        "m": round(_safe_float(merged_configs.get("sw_m"), 2.0), 2),
+        "n": round(_safe_float(merged_configs.get("sw_n"), 2.0), 2),
     }
     shf_params = {
         "ift": 30.0,
@@ -1667,7 +1820,7 @@ def validate_fdp_report_payload(context: Dict[str, Any]) -> List[Dict[str, str]]
 
     # CHK-01: No synthetic constant padding outside evaluated intervals
     chk01_status = "PASS"
-    chk01_detail = "All non-evaluated overburden/underburden intervals preserve NaN (0 synthetic padded rows)."
+    chk01_detail = "All non-evaluated overburden/underburden intervals preserve null data (0 synthetic padded rows)."
     if not full_df.empty and "PHIE" in full_df.columns and "RT" in full_df.columns:
         outside_mask = (
             ~full_df["ZONES"].astype(str).str.strip().str.upper().isin(target_zones_upper)
@@ -1764,9 +1917,17 @@ def get_compact_report_context(
     project_id: Union[int, str],
     well_names: Optional[List[str]] = None,
     cutoffs: Optional[Dict[str, float]] = None,
+    zones: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Return a JSON-serializable digest of the project's report context (excludes raw DataFrames)."""
-    ctx = build_report_context(project_id, well_names=well_names, cutoffs=cutoffs)
+    ctx = build_report_context(
+        project_id,
+        well_names=well_names,
+        cutoffs=cutoffs,
+        zones=zones,
+        target_zones=zones,
+        enabled_section_ids=set(),
+    )
     return {k: v for k, v in ctx.items() if not k.startswith("_")}
 
 
@@ -1849,14 +2010,6 @@ def synthesize_domain_ai_commentary(
         f"{float(np.median(valid_spreads)):.2f}×" if valid_spreads else "N/A (Water-bearing)"
     )
 
-    anomaly_sentence = ""
-    if anomalies:
-        first_anom = anomalies[0]
-        anomaly_sentence = (
-            f" **Quality Assurance Alert:** {first_anom['category']} was flagged in `{first_anom['target']}` "
-            f"({first_anom['message']}) and mitigated via {first_anom['mitigation']}"
-        )
-
     if is_single_well:
         if c_cal_cnt >= 3:
             core_clause = (
@@ -1909,7 +2062,6 @@ def synthesize_domain_ai_commentary(
                         else ""
                     )
                 )
-                + anomaly_sentence
             ),
             "inventory_narrative": (
                 f"Well **`{focal_well}`** penetrates **{context.get('total_logged_thickness', 0.0):.1f} m** of logged "
@@ -1918,8 +2070,8 @@ def synthesize_domain_ai_commentary(
             "qaqc_narrative": (
                 f"Borehole environmental quality control was performed on well **`{focal_well}`** prior to quantitative CPI "
                 f"computation. Across the evaluated interval, caliper/density washout (`BADHOLE`) flagging is "
-                f"**{max_bh:.1f}%** (using caliper washout $> {context['qaqc_params']['caliper_limit']}\\text{{ in}}$ and "
-                f"$\\Delta\\rho > {context['qaqc_params']['drho_limit']}\\text{{ g/cc}}$ criteria). "
+                f"**{max_bh:.1f}%** (using caliper washout $> {context['qaqc_params']['caliper_limit']}$ inch and "
+                f"$\\Delta\\rho > {context['qaqc_params']['drho_limit']}$ g/cc criteria). "
                 + (
                     f"Rugose intervals exceeding the washout threshold were mitigated using `{context['qaqc_params']['badhole_treatment']}` "
                     f"to prevent pad-standoff bulk density spikes from overestimating porosity."
@@ -1974,7 +2126,7 @@ def synthesize_domain_ai_commentary(
         base_commentary = {
             "executive_summary": (
                 f"This Field Development Plan (FDP) Petrophysical Evaluation integrates wireline log conditioning, "
-                f"multi-mineral/sand-silt-clay lithology optimization, Routine Core Analysis (RCA), "
+                f"{context['litho_params']['model_name']} lithology evaluation, Routine Core Analysis (RCA), "
                 f"Hydraulic Flow Unit ($FZI$) rock typing, and Leverett-$J$ Saturation Height Modeling ($SHF$) across "
                 f"**{len(well_names)} evaluated well(s)** (`{', '.join(well_names)}`) in **{proj_name}**, focusing on the "
                 f"target reservoir succession (`{', '.join(context.get('target_zones', []))}`). "
@@ -1991,7 +2143,6 @@ def synthesize_domain_ai_commentary(
                     if top_zone
                     else ""
                 )
-                + anomaly_sentence
             ),
             "inventory_narrative": (
                 f"The petrophysical database for **{proj_name}** comprises **{len(wells)} wells** totaling "
@@ -2004,8 +2155,8 @@ def synthesize_domain_ai_commentary(
             "qaqc_narrative": (
                 f"Rigorous borehole environmental conditioning and multi-well normalization were executed prior to quantitative "
                 f"interpretation. Across the {len(qaqc_tbl)} evaluated well(s), maximum washout/bad-hole flagging is "
-                f"**{max_bh:.1f}%** (using caliper washout $> {context['qaqc_params']['caliper_limit']}\\text{{ in}}$ and "
-                f"$\\Delta\\rho > {context['qaqc_params']['drho_limit']}\\text{{ g/cc}}$ criteria). "
+                f"**{max_bh:.1f}%** (using caliper washout $> {context['qaqc_params']['caliper_limit']}$ in (inches) and "
+                f"$\\Delta\\rho > {context['qaqc_params']['drho_limit']}$ g/cc criteria). "
                 + (
                     f"Intervals exceeding the 15% washout threshold were automatically switched to `{context['qaqc_params']['badhole_treatment']}` "
                     f"to prevent pad-standoff density spikes from overestimating effective porosity."
@@ -2084,7 +2235,6 @@ def synthesize_domain_ai_commentary(
             "poro_params": poro_p,
             "sw_params": sw_p,
             "shf_params": shf_p,
-            "anomaly_flags": anomalies,
         }
         sys_prompt = (
             "You are a Senior Petrophysicist writing a Single-Well Computer-Processed Interpretation (CPI) & Formation Evaluation Dossier. "
@@ -2594,6 +2744,13 @@ def _render_markdown_body_to_html(md_text: str) -> str:
     body_md = re.sub(
         r"^---\s*\r?\n.*?\r?\n---\s*\r?\n?", "", md_text or "", count=1, flags=re.DOTALL
     )
+    # Strip any legacy code-style `~np.isnan(...)` callouts or stray `\text{ in}` tokens
+    body_md = re.sub(
+        r"\s*\(`~?np\.isnan\([^`]+`\)",
+        "",
+        body_md,
+    )
+    body_md = re.sub(r"\\text\{\s*in\s*\}", " in (inches)", body_md)
     # Protect display ($$...$$) and inline ($...$) math before CommonMark parsing
     # so underscores and backslashes inside equations are never mangled into <em> tags
     display_math_store: List[str] = []
@@ -2709,6 +2866,7 @@ def generate_petrophysical_report_service(
         min_depth=req.min_depth,
         max_depth=req.max_depth,
         enabled_section_ids=enabled_ids,
+        model_params=req.model_params,
     )
 
     effective_title = req.report_title or req.title
@@ -2833,6 +2991,7 @@ def update_report_section_service(
         f'date: "{state.get("created_at", "")}"\n'
         f'author: "{state.get("author", "quick_pp Petrophysical Team")}"\n'
         f'report_type: "{state.get("report_type", "FDP_FULL")}"\n'
+        f'platform: "Prepared with quick_pp — Quantitative Petrophysics & Reservoir Evaluation Suite"\n'
         f'version: "1.0"\n'
         f"---\n\n"
     )
@@ -2968,6 +3127,7 @@ def render_report_print_html(report_id: str, auto_print: bool = False) -> str:
     </div>
     <div style="max-width:210mm;margin:0 auto;padding:12mm;">
         <div class="qpp-report-header-banner">
+            <div class="qpp-report-brand-tagline">Prepared with <code>quick_pp</code> &mdash; Quantitative Petrophysics &amp; Reservoir Evaluation Suite</div>
             <h1>{html.escape(state.get("title", default_doc_title))}</h1>
             <div class="qpp-report-meta-grid">
                 <div><strong>Project / Field:</strong> {html.escape(state.get("project_name", ""))}</div>
@@ -3102,6 +3262,16 @@ def compile_report_to_pdf(report_id: str) -> Path:
             y_cursor = 0.98
             if page_idx == 0:
                 # Executive Header Banner on Page 1
+                ax.text(
+                    0.0,
+                    y_cursor,
+                    "PREPARED WITH quick_pp — QUANTITATIVE PETROPHYSICS & RESERVOIR EVALUATION SUITE",
+                    fontsize=7.2,
+                    fontweight="bold",
+                    color="#1e40af",
+                    va="top",
+                )
+                y_cursor -= 0.018
                 ax.text(
                     0.0,
                     y_cursor,
@@ -3304,13 +3474,19 @@ def compile_report_to_pdf(report_id: str) -> Path:
 def api_get_project_report_context(
     project_id: int,
     wells: Optional[str] = Query(None, description="Comma-separated well names or ALL"),
+    zones: Optional[str] = Query(None, description="Comma-separated zone names"),
 ):
     """Return compact JSON digest of project parameters, QA/QC flags, and zonal reservoir summary."""
     try:
         well_list = (
             [w.strip() for w in wells.split(",") if w.strip()] if wells else None
         )
-        return get_compact_report_context(project_id, well_names=well_list)
+        zone_list = (
+            [z.strip() for z in zones.split(",") if z.strip()] if zones else None
+        )
+        return get_compact_report_context(
+            project_id, well_names=well_list, zones=zone_list
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:

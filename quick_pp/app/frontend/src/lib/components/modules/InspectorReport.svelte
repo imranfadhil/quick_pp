@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { API_BASE, generateProjectReport, postJson } from '$lib/api/client';
+	import { API_BASE, generateProjectReport, getJson, postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
@@ -10,13 +10,81 @@
 		type ReportType
 	} from '$lib/state/workbench.svelte';
 
+	interface GateCheckItem {
+		id?: string;
+		check_id?: string;
+		rule: string;
+		status: string;
+		detail: string;
+	}
+
+	interface AnomalyFlagItem {
+		category: string;
+		target: string;
+		message: string;
+		mitigation: string;
+	}
+
 	let reportError = $state<string | null>(null);
 	let expandedNoteSecId = $state<string | null>(null);
+	let preCheckContext = $state<Record<string, any> | null>(null);
+	let isRunningPreCheck = $state(false);
 
 	let isSingleWell = $derived(workbench.scope === 'single-well');
 	let activeCfg = $derived(
 		isSingleWell ? workbench.singleWellReportConfig : workbench.reportConfig
 	);
+	let activeGateChecks = $derived(
+		((workbench.activeReport?.context_summary?.gate_checks ??
+			preCheckContext?.gate_checks) ||
+			[]) as GateCheckItem[]
+	);
+	let activeAnomalyFlags = $derived(
+		((workbench.activeReport?.context_summary?.anomaly_flags ??
+			preCheckContext?.anomaly_flags) ||
+			[]) as AnomalyFlagItem[]
+	);
+
+	async function runPreRenderAudit() {
+		if (!workbench.projectId) return;
+		isRunningPreCheck = true;
+		try {
+			const targetWells = isSingleWell
+				? workbench.wellId
+					? [workbench.wellId]
+					: projectData.wells.slice(0, 1).map((w) => w.name)
+				: projectData.selectedWellNames.length > 0
+					? projectData.selectedWellNames
+					: projectData.wells.map((w) => w.name);
+			const params = new URLSearchParams();
+			if (targetWells.length > 0) {
+				params.set('wells', targetWells.join(','));
+			}
+			if (workbench.selectedZones.length > 0) {
+				params.set('zones', workbench.selectedZones.join(','));
+			}
+			const qs = params.toString() ? `?${params.toString()}` : '';
+			const ctx = await getJson<Record<string, any>>(
+				`/quick_pp/projects/${encodeURIComponent(workbench.projectId)}/reports/context${qs}`
+			);
+			preCheckContext = ctx;
+			appStatus.success('Pre-render gate-check & QA audit updated');
+		} catch (e: any) {
+			appStatus.error(e?.message || 'Failed to run pre-render gate check');
+		} finally {
+			isRunningPreCheck = false;
+		}
+	}
+
+	function gateStatusBadgeClass(status: string): string {
+		const s = (status || '').toUpperCase();
+		if (s === 'PASS') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+		if (s === 'FAIL') return 'border-red-200 bg-red-50 text-red-800';
+		if (s.includes('ALERT') || s.includes('FLAG') || s.includes('REMEDIATED')) {
+			return 'border-amber-200 bg-amber-50 text-amber-800';
+		}
+		return 'border-slate-200 bg-slate-100 text-slate-700';
+	}
 
 	function applyMultiWellPreset(type: ReportType) {
 		workbench.reportConfig.reportType = type;
@@ -88,8 +156,31 @@
 				well_names: targetWells,
 				zones: activeZones,
 				target_zones: activeZones,
-				min_depth: workbench.depthFilter ? workbench.depthFilter[0] : undefined,
-				max_depth: workbench.depthFilter ? workbench.depthFilter[1] : undefined,
+				min_depth: workbench.depthFilter ? workbench.depthFilter.min : undefined,
+				max_depth: workbench.depthFilter ? workbench.depthFilter.max : undefined,
+				model_params: {
+					litho_model_key: workbench.lithoParams.model,
+					litho_minerals: workbench.lithoParams.minerals,
+					porosity_method_key: workbench.lithoParams.porosityMethod,
+					use_hc_corrected: workbench.lithoParams.useHcCorrected,
+					gr_clean: workbench.lithoParams.grClean,
+					gr_clay: workbench.lithoParams.grClay,
+					rho_ma: workbench.lithoParams.drySandRhob,
+					nphi_clay: workbench.lithoParams.dryClayNphi,
+					rho_clay: workbench.lithoParams.dryClayRhob,
+					rho_fl: workbench.lithoParams.fluidRhob,
+					badhole_treatment: workbench.lithoParams.badholeTreatment,
+					cali_threshold: workbench.badholeParams.caliThreshold,
+					bitsize_default: workbench.badholeParams.bitsizeDefault,
+					drho_threshold: workbench.badholeParams.drhoThreshold,
+					rhob_min: workbench.badholeParams.rhobMin,
+					sw_model_key: workbench.saturationParams.method,
+					sw_a: workbench.saturationParams.a,
+					sw_m: workbench.saturationParams.m,
+					sw_n: workbench.saturationParams.n,
+					water_salinity: workbench.saturationParams.waterSalinity,
+					rw_val: workbench.saturationParams.rwPickett
+				},
 				sections: activeCfg.sections,
 				cutoffs: activeCfg.cutoffs,
 				include_ai_commentary: withAi
@@ -449,7 +540,107 @@
 			</div>
 		</ParameterSection>
 
-		<!-- 4. Export & Print Actions -->
+		<!-- 4. Pre-Render Automated Gate-Check & QA Audit Highlights -->
+		<ParameterSection
+			title="Pre-Render Gate-Check & QA Audit"
+			badge={activeGateChecks.length > 0
+				? `${activeGateChecks.filter((c) => c.status === 'PASS').length}/${activeGateChecks.length} PASS`
+				: 'Audit'}
+		>
+			<div class="space-y-2 text-[11px]">
+				<div class="flex items-center justify-between gap-1.5">
+					<span class="text-[10px] text-[var(--text-muted)]">
+						Automated payload verification & QA alerts
+					</span>
+					<button
+						type="button"
+						disabled={isRunningPreCheck || workbench.isGeneratingReport || !workbench.projectId}
+						onclick={runPreRenderAudit}
+						class="shrink-0 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-primary)] hover:bg-slate-200 disabled:opacity-45"
+					>
+						{isRunningPreCheck ? 'Checking...' : '↻ Run Audit'}
+					</button>
+				</div>
+
+				{#if activeGateChecks.length === 0 && activeAnomalyFlags.length === 0}
+					<div
+						class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 text-center text-[10.5px] text-[var(--text-muted)]"
+					>
+						Click <strong>Run Audit</strong> or generate a report to view pre-render gate checks and QA highlights.
+					</div>
+				{:else}
+					{#if activeGateChecks.length > 0}
+						<div class="space-y-1">
+							<div class="text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+								Gate-Check Rules ({activeGateChecks.length})
+							</div>
+							{#each activeGateChecks as chk (chk.id || chk.check_id || chk.rule)}
+								<div
+									class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+								>
+									<div class="flex items-center justify-between gap-1">
+										<span class="font-semibold text-[var(--text-primary)]">
+											<code class="mr-1 rounded-xs bg-slate-100 px-1 py-0.2 text-[9.5px] font-bold text-slate-800">
+												{chk.id || chk.check_id}
+											</code>
+											{chk.rule}
+										</span>
+										<span
+											class="shrink-0 rounded-xs border px-1.5 py-0.2 text-[9.5px] font-bold {gateStatusBadgeClass(
+												chk.status
+											)}"
+										>
+											{chk.status}
+										</span>
+									</div>
+									<div class="mt-0.5 text-[10px] leading-snug text-[var(--text-secondary)]">
+										{chk.detail}
+									</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+
+					<div class="space-y-1 pt-1">
+						<div class="text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+							Audit & QA Highlights ({activeAnomalyFlags.length})
+						</div>
+						{#if activeAnomalyFlags.length === 0}
+							<div
+								class="rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10.5px] font-medium text-emerald-800"
+							>
+								✓ No QA/QC anomalies flagged across target intervals.
+							</div>
+						{:else}
+							<div class="max-h-56 space-y-1 overflow-y-auto pr-0.5">
+								{#each activeAnomalyFlags as flag, idx (idx)}
+									<div
+										class="rounded-xs border border-amber-200 bg-amber-50/60 p-1.5 text-[10.5px]"
+									>
+										<div class="font-semibold text-amber-950">
+											{flag.category}
+											<code
+												class="ml-1 rounded-xs bg-white/80 px-1 py-0.2 text-[9.5px] font-bold text-amber-900"
+											>
+												{flag.target}
+											</code>
+										</div>
+										<div class="mt-0.5 leading-snug text-amber-900">
+											{flag.message}
+										</div>
+										<div class="mt-0.5 text-[10px] italic text-amber-800">
+											Mitigation: {flag.mitigation}
+										</div>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		</ParameterSection>
+
+		<!-- 5. Export & Print Actions -->
 		<ParameterSection
 			title="Document Export & Handover"
 			badge={workbench.activeReport ? workbench.activeReport.report_id : 'Ready'}

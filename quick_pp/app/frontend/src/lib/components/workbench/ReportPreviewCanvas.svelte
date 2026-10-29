@@ -34,10 +34,13 @@
 		const rawHtml = workbench.activeReport?.html_content || '';
 		if (!rawHtml) return '';
 
-		const resolvedAssets = rawHtml.replace(
-			/src="(\/static\/reports\/[^"]+)"/g,
-			(_, relPath) => `src="${API_BASE}${relPath}"`
-		);
+		const resolvedAssets = rawHtml
+			.replace(
+				/src="(\/static\/reports\/[^"]+)"/g,
+				(_, relPath) => `src="${API_BASE}${relPath}"`
+			)
+			.replace(/\s*\((?:<code>)?~?np\.isnan\([\s\S]*?(?:<\/code>)\)/g, '')
+			.replace(/\\text\{\s*in\s*\}/g, ' in (inches)');
 
 		// Convert display math $$...$$ into styled equation blocks
 		const withDisplayMath = resolvedAssets.replace(
@@ -249,8 +252,31 @@
 					well_names: targetWells,
 					zones: activeZones,
 					target_zones: activeZones,
-					min_depth: workbench.depthFilter ? workbench.depthFilter[0] : undefined,
-					max_depth: workbench.depthFilter ? workbench.depthFilter[1] : undefined,
+					min_depth: workbench.depthFilter ? workbench.depthFilter.min : undefined,
+					max_depth: workbench.depthFilter ? workbench.depthFilter.max : undefined,
+					model_params: {
+						litho_model_key: workbench.lithoParams.model,
+						litho_minerals: workbench.lithoParams.minerals,
+						porosity_method_key: workbench.lithoParams.porosityMethod,
+						use_hc_corrected: workbench.lithoParams.useHcCorrected,
+						gr_clean: workbench.lithoParams.grClean,
+						gr_clay: workbench.lithoParams.grClay,
+						rho_ma: workbench.lithoParams.drySandRhob,
+						nphi_clay: workbench.lithoParams.dryClayNphi,
+						rho_clay: workbench.lithoParams.dryClayRhob,
+						rho_fl: workbench.lithoParams.fluidRhob,
+						badhole_treatment: workbench.lithoParams.badholeTreatment,
+						cali_threshold: workbench.badholeParams.caliThreshold,
+						bitsize_default: workbench.badholeParams.bitsizeDefault,
+						drho_threshold: workbench.badholeParams.drhoThreshold,
+						rhob_min: workbench.badholeParams.rhobMin,
+						sw_model_key: workbench.saturationParams.method,
+						sw_a: workbench.saturationParams.a,
+						sw_m: workbench.saturationParams.m,
+						sw_n: workbench.saturationParams.n,
+						water_salinity: workbench.saturationParams.waterSalinity,
+						rw_val: workbench.saturationParams.rwPickett
+					},
 					sections: activeCfg.sections,
 					cutoffs: activeCfg.cutoffs,
 					include_ai_commentary: activeCfg.includeAiSummary
@@ -470,6 +496,22 @@
 		<!-- Live A4 Print-Styled Preview -->
 		<div class="flex-1 overflow-y-auto p-6">
 			<article class="fdp-a4-sheet mx-auto bg-white p-10 shadow-md">
+				{#if editScope === 'full'}
+					<div class="mb-5 border-b-2 border-blue-900 pb-3">
+						<div class="mb-1 text-[10px] font-bold tracking-wider uppercase text-blue-800">
+							Prepared with <code class="rounded-xs border border-blue-200 bg-blue-50 px-1.5 py-0.5 font-mono text-[10.5px] font-extrabold text-blue-700 normal-case">quick_pp</code> &mdash; Quantitative Petrophysics &amp; Reservoir Evaluation Suite
+						</div>
+						<h1 class="!mt-0 !mb-2 !border-none !p-0 text-[22px] font-extrabold text-slate-900">
+							{workbench.activeReport.title}
+						</h1>
+						<div class="grid grid-cols-4 gap-2 rounded-xs border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+							<div><strong class="text-slate-800">Project / Field:</strong> {workbench.activeReport.project_name || projectData.summary?.name || ''}</div>
+							<div><strong class="text-slate-800">{workbench.activeReport.report_type === 'SINGLE_WELL_CPI' ? 'Target Well:' : 'Evaluated Wells:'}</strong> {(workbench.activeReport.well_names || []).join(', ')}</div>
+							<div><strong class="text-slate-800">Author:</strong> {workbench.activeReport.author || ''}</div>
+							<div><strong class="text-slate-800">Generated:</strong> {workbench.activeReport.updated_at || workbench.activeReport.created_at || ''}</div>
+						</div>
+					</div>
+				{/if}
 				{@html formattedHtml}
 			</article>
 		</div>
@@ -508,6 +550,22 @@
 			</div>
 			<div class="h-full overflow-y-auto bg-slate-100 p-4">
 				<article class="fdp-a4-sheet mx-auto bg-white p-8 shadow-sm">
+					{#if editScope === 'full'}
+						<div class="mb-5 border-b-2 border-blue-900 pb-3">
+							<div class="mb-1 text-[10px] font-bold tracking-wider uppercase text-blue-800">
+								Prepared with <code class="rounded-xs border border-blue-200 bg-blue-50 px-1.5 py-0.5 font-mono text-[10.5px] font-extrabold text-blue-700 normal-case">quick_pp</code> &mdash; Quantitative Petrophysics &amp; Reservoir Evaluation Suite
+							</div>
+							<h1 class="!mt-0 !mb-2 !border-none !p-0 text-[20px] font-extrabold text-slate-900">
+								{workbench.activeReport.title}
+							</h1>
+							<div class="grid grid-cols-2 gap-1.5 rounded-xs border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[10.5px] text-slate-600">
+								<div><strong class="text-slate-800">Project / Field:</strong> {workbench.activeReport.project_name || projectData.summary?.name || ''}</div>
+								<div><strong class="text-slate-800">{workbench.activeReport.report_type === 'SINGLE_WELL_CPI' ? 'Target Well:' : 'Evaluated Wells:'}</strong> {(workbench.activeReport.well_names || []).join(', ')}</div>
+								<div><strong class="text-slate-800">Author:</strong> {workbench.activeReport.author || ''}</div>
+								<div><strong class="text-slate-800">Generated:</strong> {workbench.activeReport.updated_at || workbench.activeReport.created_at || ''}</div>
+							</div>
+						</div>
+					{/if}
 					{@html formattedHtml}
 				</article>
 			</div>

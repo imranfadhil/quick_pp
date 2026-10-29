@@ -48,23 +48,3 @@ This technical petrophysical evaluation report documents the deterministic and p
 | **{{ z.zone }}** | {{ z.well_count }} | {{ "%.1f"|format(z.gross) }} | {{ "%.1f"|format(z.net_res) }} | {{ "%.2f"|format(z.ntg_res) }} | {{ "%.3f"|format(z.vsh_res) if z.net_res > 0 else "—" }} | {{ "%.3f"|format(z.phie_res) if z.net_res > 0 else "—" }} | {{ "%.1f"|format(z.perm_geom_res) if z.net_res > 0 else "—" }} | {{ "%.1f"|format(z.net_pay) }} | {{ "%.2f"|format(z.ntg) }} | {{ "%.3f"|format(z.phie) if z.net_pay > 0 else "—" }} | {{ "%.3f"|format(z.sw) if z.net_pay > 0 else "—" }} | **{{ "%.2f"|format(z.hcpt) }}** |
 {% endfor %}
 {% endif %}
-
-{% if gate_checks %}
-
-### Pre-Render Automated Gate-Check Verification (`validate_fdp_report_payload`)
-
-| Check ID | Gate-Check Rule | Status | Verification Details |
-| :---: | :--- | :---: | :--- |
-{% for chk in gate_checks %}
-| **`{{ chk.id or chk.check_id }}`** | {{ chk.rule }} | **{{ chk.status }}** | {{ chk.detail }} |
-{% endfor %}
-{% endif %}
-
-{% if anomaly_flags %}
-
-### Audit & Quality Assurance Highlights
-
-{% for flag in anomaly_flags %}
-- **{{ flag.category }} (`{{ flag.target }}`)**: {{ flag.message }} — *Mitigation:* {{ flag.mitigation }}
-{% endfor %}
-{% endif %}

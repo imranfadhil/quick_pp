@@ -23,6 +23,27 @@ body.qpp-report-print {
     margin-bottom: 20px;
 }
 
+.qpp-report-brand-tagline {
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #1e40af;
+    margin-bottom: 4px;
+}
+
+.qpp-report-brand-tagline code {
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 8.5pt;
+    font-weight: 800;
+    color: #1d4ed8;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    padding: 1px 5px;
+    border-radius: 3px;
+    text-transform: none;
+}
+
 .qpp-report-header-banner h1 {
     font-size: 18pt;
     font-weight: 800;

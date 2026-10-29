@@ -247,49 +247,57 @@ def generate_inventory_heatmap(
         "TVD",
         "TVDSS",
         "GR",
-        "CALI",
         "RT",
         "NPHI",
         "RHOB",
-        "DTC",
-        "PEF",
         "VCLAY",
         "PHIT",
-        "PHIE",
         "PERM",
         "SWT",
+        "ROCK_FLAG",
+        "PERM_TRANS",
         "SHF",
         "CORE",
         "MDT/PRESS",
         "TOPS",
     ]
+    canonical_aliases = {
+        "TVD": {"TVD", "DEPT_TVD", "DEPTH_TVD", "TVD_SCS", "TVDSCS"},
+        "TVDSS": {"TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS", "Z"},
+        "GR": {"GR", "GAMMA", "GR_ARC", "GR_EDTC"},
+        "RT": {"RT", "RD", "RDEP", "RDEEP", "LLD", "RILD"},
+        "NPHI": {"NPHI", "TNPH", "NPOR", "CNCF"},
+        "RHOB": {"RHOB", "RHOZ", "DEN", "ZDEN"},
+        "VCLAY": {"VCLAY", "VSH", "VSHALE", "VCL", "VSH_GR", "VSHA"},
+        "PHIT": {"PHIT", "PHIE", "POROSITY", "POR"},
+        "PERM": {"PERM", "KLOGH", "PERMEABILITY", "K"},
+        "SWT": {"SWT", "SWE", "SW"},
+        "ROCK_FLAG": {"ROCK_FLAG", "ROCK_FLAG_ML", "ROCK_FLAG_CUTOFF"},
+        "PERM_TRANS": {"PERM_TRANS"},
+        "SHF": {"SHF", "SW_SHF"},
+    }
     well_labels = [str(w.get("name", f"Well-{i + 1}")) for i, w in enumerate(wells)]
     if not well_labels:
         well_labels = ["No Wells"]
 
     matrix = np.zeros((len(well_labels), len(target_curves)), dtype=float)
     for r_idx, w in enumerate(wells):
-        avail = {
-            str(c).upper() for c in (w.get("curves") or w.get("available_curves") or [])
-        }
-        # Alias support
-        if avail.intersection({"TVD_SCS", "TVDSCS"}) or (w.get("survey_station_count") or 0) > 0:
+        full_curve_list = list(w.get("available_curves") or []) + list(
+            w.get("curves") or []
+        )
+        avail = {str(c).upper() for c in full_curve_list if c}
+
+        # Canonical alias resolution matching Field Inventory (`get_project_summary`)
+        for canon_key, aliases in canonical_aliases.items():
+            if avail.intersection(aliases):
+                avail.add(canon_key)
+        if (
+            bool(w.get("has_tvd"))
+            or (w.get("survey_station_count") or 0) > 0
+            or "TVD" in avail
+        ):
             avail.add("TVD")
             avail.add("TVDSS")
-        if avail.intersection({"TVD_SS", "Z"}):
-            avail.add("TVDSS")
-        if "TVD" in avail:
-            avail.add("TVDSS")
-        if avail.intersection({"RD", "RDEP", "LLD", "RILD"}):
-            avail.add("RT")
-        if avail.intersection({"DT", "DTCO", "AC"}):
-            avail.add("DTC")
-        if avail.intersection({"PE", "PEFZ"}):
-            avail.add("PEF")
-        if avail.intersection({"VSH", "VSHALE", "VSHA"}):
-            avail.add("VCLAY")
-        if avail.intersection({"SW", "SWE"}):
-            avail.add("SWT")
 
         for c_idx, cname in enumerate(target_curves):
             if cname == "CORE":

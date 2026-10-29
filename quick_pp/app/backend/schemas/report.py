@@ -148,6 +148,10 @@ class ReportGenerationRequest(BaseModel):
     max_depth: Optional[float] = Field(
         default=None, description="Optional maximum depth filter (m)"
     )
+    model_params: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional active petrophysical model parameters from workbench (litho_model, porosity_method, sw_model, etc.)",
+    )
     export_format: Literal["markdown", "pdf", "both"] = Field(
         default="markdown",
         description="Output format to compile on generation",

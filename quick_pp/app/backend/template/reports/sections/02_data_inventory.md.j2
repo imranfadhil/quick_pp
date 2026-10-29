@@ -1,6 +1,6 @@
 # 2. Well Inventory & Data Availability
 
-A total of **{{ wells|length }}** well(s) were evaluated in this Field Development Study (`{{ project_name }}`), comprising **{{ "%.1f"|format(total_logged_thickness) }} m** of logged borehole section across **{{ all_zones|length }}** stratigraphic zone(s) (Target Reservoir Zones: `{{ target_zones|join(', ') }}`). Across the field dataset, **{{ poro_params.total_core_count }}** total Routine Core Analysis (RCA) plugs are loaded in the database, of which **{{ poro_params.core_count }}** valid depth-matched plugs reside within the target reservoir zones and have non-null overlapping log porosity (`~np.isnan(CPORE) & ~np.isnan(PHIT)`).
+A total of **{{ wells|length }}** well(s) were evaluated in this Field Development Study (`{{ project_name }}`), comprising **{{ "%.1f"|format(total_logged_thickness) }} m** of logged borehole section across **{{ all_zones|length }}** stratigraphic zone(s) (Target Reservoir Zones: `{{ target_zones|join(', ') }}`). Across the field dataset, **{{ poro_params.total_core_count }}** total Routine Core Analysis (RCA) plugs are loaded in the database, of which **{{ poro_params.core_count }}** valid depth-matched plugs reside within the target reservoir zones and have non-null overlapping log porosity.
 
 {% if include_ai_commentary and ai_commentary.inventory_narrative %}
 {{ ai_commentary.inventory_narrative }}

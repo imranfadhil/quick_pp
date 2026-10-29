@@ -12,9 +12,9 @@
 
 ### 2.1 Borehole Washout Flagging & Environmental Conditioning Criteria
 
-* **Bad-Hole Flagging Criteria (`BADHOLE`):** Caliper washout $> {{ qaqc_params.caliper_limit }}\text{ in}$ above bit size (`{{ qaqc_params.bitsize_in }}\text{ in}`), density pad-standoff correction $\Delta\rho > {{ qaqc_params.drho_limit }}\text{ g/cc}$, or rugose bulk density $\rho_b < {{ qaqc_params.rhob_min }}\text{ g/cc}$.
+* **Bad-Hole Flagging Criteria (`BADHOLE`):** Caliper washout $> {{ qaqc_params.caliper_limit }}$ in (inches) above bit size (`{{ qaqc_params.bitsize_in }} in`), density pad-standoff correction $\Delta\rho > {{ qaqc_params.drho_limit }}$ g/cc, or rugose bulk density $\rho_b < {{ qaqc_params.rhob_min }}$ g/cc.
 * **Bad-Hole Mitigation Mode:** `{{ qaqc_params.badhole_treatment }}` (automatic fallback in rugose washouts to prevent optimistic density-porosity spikes).
-* **Light-Hydrocarbon Invasion Correction:** Gaymard-Poupon neutron-density response correction applied where $\rho_{hc} = {{ qaqc_params.rho_hc }}\text{ g/cc}$ and $HI_{hc} = {{ qaqc_params.hi_hc }}$.
+* **Light-Hydrocarbon Invasion Correction:** Gaymard-Poupon neutron-density response correction applied where $\rho_{hc} = {{ qaqc_params.rho_hc }}$ g/cc and $HI_{hc} = {{ qaqc_params.hi_hc }}$.
 
 ### 2.2 Well Curve Conditioning & Washout Audit Summary
 
@@ -41,9 +41,9 @@
 
 ### 3.1 Borehole Environment, Bad-Hole Flagging & Normalization Criteria
 
-* **Bad-Hole Criteria Applied:** Caliper washout $> {{ qaqc_params.caliper_limit }}\text{ in}$ above bit size (`{{ qaqc_params.bitsize_in }}\text{ in}`), Density correction $\Delta\rho > {{ qaqc_params.drho_limit }}\text{ g/cc}$, or density washout $\rho_b < {{ qaqc_params.rhob_min }}\text{ g/cc}$.
+* **Bad-Hole Criteria Applied:** Caliper washout $> {{ qaqc_params.caliper_limit }}$ in (inches) above bit size (`{{ qaqc_params.bitsize_in }} in`), Density correction $\Delta\rho > {{ qaqc_params.drho_limit }}$ g/cc, or density washout $\rho_b < {{ qaqc_params.rhob_min }}$ g/cc.
 * **Bad-Hole Mitigation Mode:** `{{ qaqc_params.badhole_treatment }}` (shale/porosity fallback in rugose washouts to prevent optimistic density porosity spikes).
-* **Hydrocarbon Light-Fluid Correction:** Gaymard-Poupon crossplot rotation applied where $\rho_{hc} = {{ qaqc_params.rho_hc }}\text{ g/cc}$ and $HI_{hc} = {{ qaqc_params.hi_hc }}$.
+* **Hydrocarbon Light-Fluid Correction:** Gaymard-Poupon crossplot rotation applied where $\rho_{hc} = {{ qaqc_params.rho_hc }}$ g/cc and $HI_{hc} = {{ qaqc_params.hi_hc }}$.
 * **Normalization Method:** {{ qaqc_params.norm_method }} across target reservoir zones.
 
 ### 3.2 Well-by-Well QA/QC & Conditioning Summary

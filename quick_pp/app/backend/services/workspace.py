@@ -1882,6 +1882,43 @@ def workspace_badhole_flagging(
         ) from e
 
 
+def _record_well_model_config(
+    project_id: int,
+    well_name: str,
+    updates: Dict[str, Any],
+    persist_db: bool = False,
+) -> None:
+    """Record active petrophysical model & parameter selections in ephemeral and (optionally) DB well config."""
+    clean_upd = {k: v for k, v in updates.items() if v is not None}
+    if not clean_upd:
+        return
+    for w_key in {well_name, resolve_db_well_name(project_id, well_name)}:
+        cur = dict(_ephemeral_well_configs.get((project_id, w_key), {}))
+        cur.update(clean_upd)
+        _ephemeral_well_configs[(project_id, w_key)] = cur
+    if persist_db and not is_demo_mode():
+        try:
+            with get_db() as session:
+                db_name = resolve_db_well_name(project_id, well_name)
+                well_orm = session.scalar(
+                    select(db_models.Well).filter_by(
+                        project_id=project_id, name=db_name
+                    )
+                )
+                if well_orm:
+                    current_cfg = (
+                        dict(well_orm.config_data)
+                        if isinstance(well_orm.config_data, dict)
+                        else {}
+                    )
+                    current_cfg.update(clean_upd)
+                    well_orm.config_data = _sanitize_for_json(current_cfg)
+                    flag_modified(well_orm, "config_data")
+                    session.commit()
+        except Exception:
+            pass
+
+
 @router.post(
     "/wells/{well_name}/lithology",
     summary="Compute depth-aligned lithology volumes (SSC, Multi-Mineral, or Vsh-GR) on server",
@@ -2311,6 +2348,31 @@ def workspace_lithology(
             else:
                 _update_in_memory_well_cache(project_id, well_name, save_df)
 
+        _record_well_model_config(
+            project_id,
+            well_name,
+            {
+                "litho_model_key": model,
+                "litho_minerals": (
+                    [m.upper() for m in (req.minerals or []) if m]
+                    if model == "multi_mineral"
+                    else None
+                ),
+                "porosity_method_key": req.porosity_method,
+                "use_hc_corrected": req.use_hc_corrected,
+                "gr_clean": req.gr_clean,
+                "gr_clay": req.gr_clay,
+                "dry_sand_point": list(req.dry_sand_point)
+                if req.dry_sand_point
+                else None,
+                "dry_clay_point": list(req.dry_clay_point)
+                if req.dry_clay_point
+                else None,
+                "fluid_point": list(req.fluid_point) if req.fluid_point else None,
+                "badhole_treatment": bh_mode,
+            },
+            persist_db=bool(req.save),
+        )
         stats = {col: _curve_summary_stats(out_df[col]) for col in save_cols}
         return {
             "well_name": well_name,
@@ -2544,6 +2606,12 @@ def workspace_thomas_stieber(
             else 0.0
         )
 
+        _record_well_model_config(
+            project_id,
+            well_name,
+            {"thomas_stieber_enabled": True},
+            persist_db=bool(req.save),
+        )
         stats = {col: _curve_summary_stats(out_df[col]) for col in save_cols}
         return {
             "well_name": well_name,
@@ -2967,6 +3035,26 @@ def workspace_porosity(
                 project_id, well_name, out_df.loc[save_row_mask, save_poro_cols]
             )
 
+        _record_well_model_config(
+            project_id,
+            well_name,
+            {
+                "porosity_method_key": req.method.lower(),
+                "litho_model_key": lith_model if lith_model else None,
+                "use_hc_corrected": req.use_hc_corrected,
+                "gr_clean": req.gr_clean,
+                "gr_clay": req.gr_clay,
+                "dry_sand_point": list(req.dry_sand_point)
+                if req.dry_sand_point
+                else None,
+                "dry_clay_point": list(req.dry_clay_point)
+                if req.dry_clay_point
+                else None,
+                "fluid_point": list(req.fluid_point) if req.fluid_point else None,
+                "badhole_treatment": bh_mode,
+            },
+            persist_db=bool(req.save),
+        )
         return {
             "well_name": well_name,
             "method": req.method,
@@ -3598,6 +3686,19 @@ def workspace_saturation(
                 project_id, well_name, out_df.loc[primary_swt.notna(), save_sat_cols]
             )
 
+        _record_well_model_config(
+            project_id,
+            well_name,
+            {
+                "sw_model_key": req.method.lower(),
+                "sw_a": float(req.a),
+                "sw_m": float(req.m),
+                "sw_n": float(req.n),
+                "water_salinity": float(salinity_ppm),
+                "rw_val": float(np.nanmedian(rw_arr)) if len(rw_arr) > 0 else 0.08,
+            },
+            persist_db=bool(req.save),
+        )
         return {
             "well_name": well_name,
             "method": req.method.lower(),
