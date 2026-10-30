@@ -65,35 +65,24 @@ tar -cf "%TAR_TMP%" ^
     --exclude="node_modules" ^
     --exclude=".svelte-kit" ^
     --exclude="quick_pp/app/frontend/build" ^
-    --exclude=".git" ^
-    --exclude=".venv" ^
-    --exclude="venv" ^
     --exclude="__pycache__" ^
     --exclude=".pytest_cache" ^
     --exclude=".mypy_cache" ^
-    --exclude="dist" ^
-    --exclude="build" ^
     --exclude="*.egg-info" ^
-    --exclude="docs" ^
-    --exclude="data" ^
-    --exclude="uploads" ^
-    --exclude="mlruns" ^
     --exclude="quick_pp/app/docker/data" ^
-    --exclude=".env" ^
-    --exclude="deploy/demo/config.bat" ^
     --exclude="*.log" ^
-    --exclude="notebooks/*.ipynb" ^
-    --exclude="notebooks/data/02_interim" ^
-    --exclude="notebooks/data/03_primary" ^
-    --exclude="notebooks/data/04_project" ^
     pyproject.toml README.md quick_pp ^
     deploy/demo/Dockerfile ^
     deploy/demo/docker-compose.yaml ^
     deploy/demo/nginx.conf ^
     deploy/demo/start_demo.sh ^
     deploy/demo/seed_demo.py ^
-    notebooks/data/01_raw/VOLVE ^
-    notebooks/data/01_raw/COSTA ^
+    notebooks/data/01_raw/VOLVE/15-9-19-A.las ^
+    notebooks/data/01_raw/VOLVE/VOLVE_15-9_Surveys.csv ^
+    notebooks/data/01_raw/COSTA/HW-3.las ^
+    notebooks/data/01_raw/COSTA/HW-4.las ^
+    notebooks/data/01_raw/COSTA/HW-5.las ^
+    notebooks/data/01_raw/COSTA/HW_core_data_all.csv ^
     notebooks/data/01_raw/36_7-3.las ^
     notebooks/data/01_raw/formation_pressure_data.csv
 set TAR_RC=%ERRORLEVEL%

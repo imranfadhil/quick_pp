@@ -832,6 +832,8 @@ class Well(object):
 
             if existing_well:
                 self._orm_well = existing_well
+                if depth_uom and not self._orm_well.depth_uom:
+                    self._orm_well.depth_uom = depth_uom
                 self._load_config_from_orm()
                 logger.info(f"Well '{name}' (UWI: {uwi}) loaded from DB.")
             else:
@@ -878,6 +880,15 @@ class Well(object):
     @uwi.setter
     def uwi(self, value: str):
         self._orm_well.uwi = value
+
+    @property
+    def depth_uom(self) -> Optional[str]:
+        return self._orm_well.depth_uom if self._orm_well else None
+
+    @depth_uom.setter
+    def depth_uom(self, value: Optional[str]):
+        if self._orm_well is not None:
+            self._orm_well.depth_uom = value
 
     @property
     def header_data(self) -> Dict[str, Any]:

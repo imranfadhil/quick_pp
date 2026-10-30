@@ -709,6 +709,8 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                         is_existing_well = well_name in existing_names
                         if is_existing_well:
                             well_obj = proj.get_well(well_name)
+                            if payload.target_depth_uom and not well_obj.depth_uom:
+                                well_obj.depth_uom = payload.target_depth_uom
                         else:
                             well_obj = db_objects.Well(
                                 session,
