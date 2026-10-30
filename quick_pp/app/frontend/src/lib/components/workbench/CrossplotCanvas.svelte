@@ -1963,6 +1963,8 @@
 				const maxBvw = Math.max(0.25, ...scal.bvw.filter(Number.isFinite));
 				const conv = (sp.unit ?? 'metric') === 'metric' ? 0.433 * 3.28084 : 0.433;
 				const gradPsi = Math.max((sp.gw - sp.ghc) * conv, 1e-4);
+				const useRawSw = (sp.jSatMode ?? 'swn') === 'sw';
+				const satSym = useRawSw ? 'Sw' : 'Swn';
 
 				for (const rf of sortedRts) {
 					const g = byRt.get(rf)!;
@@ -1972,11 +1974,17 @@
 							type: 'scatter',
 							mode: 'markers',
 							name: `SCAL RT ${rf}`,
-							x: g.swn,
+							x: useRawSw ? g.sw : g.swn,
 							y: g.j,
+							customdata: useRawSw ? g.swn : g.sw,
 							text: g.labels,
-							hovertemplate:
-								'%{text}<br>Swn=%{x:.3f}, J=%{y:.3f}<extra>RT ' + rf + '</extra>',
+							hovertemplate: useRawSw
+								? '%{text}<br>Sw=%{x:.3f} (Swn=%{customdata:.3f}), J=%{y:.3f}<extra>RT ' +
+									rf +
+									'</extra>'
+								: '%{text}<br>Swn=%{x:.3f} (Sw=%{customdata:.3f}), J=%{y:.3f}<extra>RT ' +
+									rf +
+									'</extra>',
 							marker: {
 								size: 6.5,
 								color,
@@ -2026,8 +2034,14 @@
 				}
 
 				// Overlay fitted curves per Rock Type
-				if (sr?.fits) {
-					const sortedFitEntries = Object.entries(sr.fits).sort(
+				const activeFits =
+					activeModel === 'leverett_j'
+						? useRawSw
+							? (sr?.fits_sw && Object.keys(sr.fits_sw).length > 0 ? sr.fits_sw : sr?.fits)
+							: (sr?.fits_swn && Object.keys(sr.fits_swn).length > 0 ? sr.fits_swn : sr?.fits)
+						: sr?.fits;
+				if (activeFits) {
+					const sortedFitEntries = Object.entries(activeFits).sort(
 						([k1], [k2]) => Number(k1) - Number(k2)
 					);
 					for (const [rfKey, fit] of sortedFitEntries) {
@@ -2042,10 +2056,10 @@
 							const xs: number[] = [];
 							const ys: number[] = [];
 							for (let k = 0; k <= 60; k++) {
-								const swn = 0.03 * Math.pow(1.0 / 0.03, k / 60);
-								const jVal = a * Math.pow(swn, -b);
+								const satVal = 0.03 * Math.pow(1.0 / 0.03, k / 60);
+								const jVal = a * Math.pow(satVal, -b);
 								if (jVal <= maxJ * 1.35) {
-									xs.push(swn);
+									xs.push(satVal);
 									ys.push(jVal);
 								}
 							}
@@ -2053,7 +2067,7 @@
 							traces.push({
 								type: 'scatter',
 								mode: 'lines',
-								name: `Fit RT ${rfKey} (${aStr}·Swn^-${b.toFixed(2)})`,
+								name: `Fit RT ${rfKey} (${aStr}·${satSym}^-${b.toFixed(2)})`,
 								x: xs,
 								y: ys,
 								line: { color, width: 2.2 }
@@ -2112,7 +2126,11 @@
 				}
 
 				if (activeModel === 'leverett_j') {
-					baseLayout.xaxis.title = { text: 'Normalized Water Saturation Swn (v/v)' };
+					baseLayout.xaxis.title = {
+						text: useRawSw
+							? 'Water Saturation Sw (v/v)'
+							: 'Normalized Water Saturation Swn (v/v)'
+					};
 					baseLayout.yaxis.title = { text: 'Leverett J-Function (unitless)' };
 					if (shfLogScale) {
 						baseLayout.xaxis.type = 'log';
@@ -3762,6 +3780,24 @@
 					</button>
 				{/each}
 				{#if shfView === 'scal_fit'}
+					{#if (projectData.shfResult?.model ?? projectData.shfParams.model ?? 'leverett_j') === 'leverett_j'}
+						<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+							{#each [['swn', 'J vs Swn'], ['sw', 'J vs Sw']] as [sKey, sLbl]}
+								<button
+									type="button"
+									onclick={() => projectData.setShfJSatMode(sKey as 'swn' | 'sw')}
+									title={sKey === 'swn'
+										? 'Plot & fit Leverett-J vs Normalized Water Saturation (Swn)'
+										: 'Plot & fit Leverett-J vs Water Saturation (Sw)'}
+									class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {(projectData.shfParams.jSatMode ?? 'swn') === sKey
+										? 'bg-blue-600 font-semibold text-white'
+										: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+								>
+									{sLbl}
+								</button>
+							{/each}
+						</div>
+					{/if}
 					<button
 						type="button"
 						onclick={() => (shfLogScale = !shfLogScale)}

@@ -266,6 +266,32 @@ ANCILLARY_TARGET_SCHEMAS: Dict[str, Dict[str, List[str]]] = {
         "WELL_NAME": ["well", "well_name", "wellname", "uwi", "wellbore", "well_id"],
         "SAMPLE_NAME": ["sample", "sample_id", "sample_name", "plug", "plug_id", "id"],
         "DEPTH": ["depth", "core_depth", "md", "depth_md", "sample_depth"],
+        "CPORE": [
+            "cpore",
+            "porosity",
+            "por_hor",
+            "por",
+            "phi",
+            "phit",
+            "helium_porosity",
+            "core_porosity",
+            "por_pct",
+            "por_frac",
+        ],
+        "CPERM": [
+            "cperm",
+            "permeability",
+            "kl_hor",
+            "kg_hor",
+            "k_hor",
+            "perm",
+            "k",
+            "kh",
+            "kl",
+            "kair",
+            "klinkenberg",
+            "perm_md",
+        ],
         "PC": [
             "pc",
             "capillary_pressure",
@@ -2447,6 +2473,8 @@ def commit_ancillary_data(
                 elif dtype == "scal":
                     s_col, _ = col_map.get("SAMPLE_NAME", (None, None))
                     d_col, d_unit = col_map.get("DEPTH", ("depth", None))
+                    por_col, por_unit = col_map.get("CPORE", (None, None))
+                    perm_col, perm_unit = col_map.get("CPERM", (None, None))
                     exp_col, _ = col_map.get("EXPERIMENT_TYPE", (None, None))
                     cyc_col, _ = col_map.get("CYCLE", (None, None))
                     desc_col, _ = col_map.get("DESCRIPTION", (None, None))
@@ -2518,6 +2546,16 @@ def commit_ancillary_data(
                         )
                         if not s_name or s_name.lower() in ("nan", "none"):
                             s_name = f"SCAL-{idx + 1}"
+                        por_v = (
+                            _convert_ancillary_numeric(r.get(por_col), por_unit, "CPORE")
+                            if por_col
+                            else None
+                        )
+                        perm_v = (
+                            _convert_ancillary_numeric(r.get(perm_col), perm_unit, "CPERM")
+                            if perm_col
+                            else None
+                        )
                         exp_val = (
                             str(r.get(exp_col, "micp")).strip()
                             if exp_col and r.get(exp_col) is not None
@@ -2543,6 +2581,8 @@ def commit_ancillary_data(
                                 {
                                     "sample_name": s_name,
                                     "depth": d_v if d_v is not None else 0.0,
+                                    "porosity": por_v,
+                                    "permeability": perm_v,
                                     "pc": pc_v,
                                     "sw": sw_v,
                                     "experiment_type": exp_val,

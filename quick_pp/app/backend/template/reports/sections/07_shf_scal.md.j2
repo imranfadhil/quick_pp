@@ -1,30 +1,43 @@
-# 7. Capillary Pressure, Saturation Height Modeling (SHF) & SCAL
+{% set is_single_well = (report_type == 'SINGLE_WELL_CPI') %}
+{% set sec_num = '5' if is_single_well else '7' %}
+# {{ sec_num }}. Capillary Pressure, Saturation Height Modeling (SHF) & SCAL
 
-### 7.1 Leverett $J$-Function & 3D Static Model Initialization
+### {{ sec_num }}.1 Leverett $J$-Function, Lab-to-Reservoir $P_c$ Scaling & Core Stress Lineage
 
-To initialize continuous 3D water saturation in the static geological cellular model above the Free Water Level ($FWL = {{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$, Basis: `{{ sw_params.fwl_basis }}`), log-derived $S_w$ was reconciled with capillary pressure ($P_c$) curves via the Leverett $J$-Function:
+To initialize continuous 3D water saturation in the static geological cellular model above the Free Water Level ($FWL = {{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$, Basis: `{{ sw_params.fwl_basis }}`), log-derived $S_w$ was reconciled with capillary pressure ($P_c$) curves via the Leverett $J$-Function and Lab-to-Reservoir interfacial tension scaling:
 
-$$h = TVD_{ss}(FWL) - TVD_{ss}, \quad P_c = \Delta\rho \cdot g \cdot h \cdot C, \quad J(S_w) = \frac{0.2166 \cdot P_c}{\sigma \cos\theta} \sqrt{\frac{K}{\phi}}, \quad S_{w,SHF} = a_J \cdot J^{b_J}$$
+$$P_{c,res} = P_{c,lab} \cdot \frac{(\sigma \cos\theta)_{res}}{(\sigma \cos\theta)_{lab}}, \quad h = TVD_{ss}(FWL) - TVD_{ss}, \quad J(S_w) = \frac{0.2166 \cdot P_{c,res}}{\sigma_{res} \cos\theta_{res}} \sqrt{\frac{K}{\phi}}$$
 
-* **Interfacial Tension & Wettability:** $\sigma \cos\theta = {{ "%.1f"|format(shf_params.ift_cos_theta) }}\text{ dynes/cm}$ ($\sigma = {{ shf_params.ift }}\text{ dynes/cm}$, $\theta = {{ shf_params.theta }}^\circ$).
+* **Reservoir Interfacial Tension & Wettability:** $(\sigma \cos\theta)_{res} = {{ "%.1f"|format(shf_params.ift_cos_theta) }}\text{ dynes/cm}$ ($\sigma_{res} = {{ shf_params.ift }}\text{ dynes/cm}$, $\theta_{res} = {{ shf_params.theta }}^\circ$).
+* **Laboratory Fluid System & $P_c$ Scaling:** $(\sigma \cos\theta)_{lab} = {{ "%.1f"|format(shf_params.ift_lab_cos_theta) }}\text{ dynes/cm}$ ($\sigma_{lab} = {{ shf_params.ift_lab }}\text{ dynes/cm}$, $\theta_{lab} = {{ shf_params.theta_lab }}^\circ$; Multiplier $= {{ "%.4f"|format(shf_params.pc_scale_factor) }}\times$; Reference ${{ "%.1f"|format(shf_params.pc_lab_ref) }}\text{ psi Lab} \to {{ "%.3f"|format(shf_params.pc_res_ref) }}\text{ psi Reservoir}$; Lineage: `PC_LAB` $\to$ `PC`).
+{% if poro_params.core_corrected %}
+* **Core Overburden & Klinkenberg Stress Lineage:** $\sigma_{eff} = {{ "%.0f"|format(poro_params.net_confining_stress) }}\text{ psi}$ ({{ poro_params.core_lithology }}, $c_\phi = {{ "%.1e"|format(poro_params.compaction_coeff) }}\text{ psi}^{-1}$, $c_k = {{ "%.1e"|format(poro_params.perm_compaction_coeff) }}\text{ psi}^{-1}$), $P_m = {{ "%.1f"|format(poro_params.mean_pore_pressure) }}\text{ psi}$ ({{ poro_params.klinkenberg_method }}); baseline preserved in `CPORE_AMB` / `CPORE_ORI` and `CPERM_AIR` / `CPERM_ORI`, active curves updated in `CPORE` and `CPERM`.
+{% endif %}
 * **Fluid Density Gradient:** $\rho_w = {{ shf_params.gw }}\text{ g/cc}$, $\rho_{hc} = {{ shf_params.ghc }}\text{ g/cc}$ ($\Delta\rho = {{ "%.2f"|format(shf_params.gw - shf_params.ghc) }}\text{ g/cc}$).
 * **Log $S_w$ vs. $SHF$ Reconciliation:** Mean RMSE $= {{ "%.3f"|format(shf_params.reconciliation_rmse) }}\text{ v/v}$, Mean Bias ($S_w - SHF$) $= {{ "%+.3f"|format(shf_params.reconciliation_bias) }}\text{ v/v}$.
 
-### 7.2 Dynamic Simulation Relative Permeability ($K_{rw}, K_{ro}$) — {{ scal_params.source_label if scal_params.source_label else 'Analogue / Default North Sea Turbidite SCAL Parameterization' }}
+### {{ sec_num }}.2 Dynamic Simulation Relative Permeability ($K_{rw}, K_{ro}$) — {{ scal_params.source_label if scal_params.source_label else 'Analogue / Default North Sea Turbidite SCAL Parameterization' }}
 
 {% if scal_params.is_analogue %}
-> **SCAL Data Provenance Notice:** Project-specific steady-state / unsteady-state coreflood relative permeability ($K_{rw}, K_{ro}$) tables are not loaded (`0 SCAL plugs` in Table 2.1). The Corey parameters below represent an **Analogue / Default North Sea Turbidite SCAL Parameterization** for preliminary simulation sensitivity only.
+> **SCAL Data Provenance Notice:** Project-specific steady-state / unsteady-state coreflood relative permeability ($K_{rw}, K_{ro}$) tables are not loaded (`0 SCAL plugs` in Table 2.1). The parameters below represent an **Analogue / Default North Sea Turbidite SCAL Parameterization** for preliminary simulation sensitivity only.
 {% endif %}
 
 $$S_e = \frac{S_w - S_{wc}}{1 - S_{wc} - S_{or}}, \quad K_{rw}(S_w) = K_{rw}^0 \cdot (S_e)^{N_w}, \quad K_{ro}(S_w) = K_{ro}^0 \cdot (1 - S_e)^{N_o}$$
 
 | Parameter | Symbol | Value | Unit | Provenance / Dynamic Simulation Role |
 | :--- | :---: | :---: | :---: | :--- |
+| Relative Permeability Model | $\text{Model}$ | {{ (scal_params.model or 'corey')|upper }} | — | Active Single-Well / Simulation SCAL Model |
 | Connate Water Saturation | $S_{wc}$ | {{ "%.2f"|format(scal_params.swirr) }} | $\text{v/v}$ | Immobile Water Endpoint ({{ scal_params.source_label }}) |
 | Residual Oil Saturation | $S_{or}$ | {{ "%.2f"|format(scal_params.sor) }} | $\text{v/v}$ | Waterflood Residual Hydrocarbon ({{ scal_params.source_label }}) |
 | Max Water RelPerm | $K_{rw}^0$ | {{ "%.2f"|format(scal_params.krw_max) }} | $\text{frac}$ | Endpoint @ $S_w = 1 - S_{or}$ ({{ scal_params.source_label }}) |
 | Max Oil RelPerm | $K_{ro}^0$ | {{ "%.2f"|format(scal_params.kro_max) }} | $\text{frac}$ | Endpoint @ $S_w = S_{wc}$ ({{ scal_params.source_label }}) |
+{% if scal_params.model == 'let' %}
+| LET Water Parameters | $L_w / E_w / T_w$ | {{ "%.1f"|format(scal_params.lw) }} / {{ "%.1f"|format(scal_params.ew) }} / {{ "%.1f"|format(scal_params.tw) }} | unitless | Lomeland-Ebeltoft-Thomas Water Curve |
+| LET Oil Parameters | $L_o / E_o / T_o$ | {{ "%.1f"|format(scal_params.lo) }} / {{ "%.1f"|format(scal_params.eo) }} / {{ "%.1f"|format(scal_params.to) }} | unitless | Lomeland-Ebeltoft-Thomas Oil Curve |
+{% else %}
 | Corey Water / Oil Exponents | $N_w$ / $N_o$ | {{ "%.1f"|format(scal_params.nw) }} / {{ "%.1f"|format(scal_params.no) }} | unitless | Relative Permeability Curvature ({{ scal_params.source_label }}) |
+{% endif %}
+| SWOF Entry / Max $P_{cow}$ | $P_{ce}$ / $P_{c,\max}$ | {{ "%.2f"|format(scal_params.pc_entry) }} / {{ "%.1f"|format(scal_params.pc_max) }} | $\text{psi}$ | Reservoir Capillary Pressure Table Bounds |
 
 {% if include_ai_commentary and ai_commentary.shf_scal_narrative %}
 {{ ai_commentary.shf_scal_narrative }}
@@ -36,5 +49,5 @@ $$S_e = \frac{S_w - S_{wc}}{1 - S_{wc} - S_{or}}, \quad K_{rw}(S_w) = K_{rw}^0 \
 
 {% if assets.shf_scal_plot %}
 
-![Figure 7.1: Capillary Pressure Leverett J-Function by Rock Type & Relative Permeability Curves]({{ assets.shf_scal_plot }})
+![Figure {{ sec_num }}.1: Capillary Pressure Leverett J-Function by Rock Type & Relative Permeability Curves]({{ assets.shf_scal_plot }})
 {% endif %}

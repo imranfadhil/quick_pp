@@ -63,7 +63,8 @@
 	}
 
 	function seedTiePointsFromEnds() {
-		const plugs = wellData.getBaseCorePlugs();
+		const activePlugs = wellData.getActiveBaseCorePlugs();
+		const plugs = activePlugs.length > 0 ? activePlugs : wellData.getBaseCorePlugs();
 		if (plugs.length === 0) return;
 		const depths = plugs.map((p) => p.raw_depth).sort((a, b) => a - b);
 		const topD = Number(depths[0].toFixed(2));
@@ -82,7 +83,8 @@
 	}
 
 	function addTiePoint() {
-		const plugs = wellData.getBaseCorePlugs();
+		const activePlugs = wellData.getActiveBaseCorePlugs();
+		const plugs = activePlugs.length > 0 ? activePlugs : wellData.getBaseCorePlugs();
 		const defaultD =
 			wellData.coreTiePoints.length > 0
 				? Number(
@@ -153,13 +155,29 @@
 			</button>
 		</div>
 
-		{#if wellData.coreShiftDirty}
-			<span
-				class="rounded-2xs border border-amber-300 bg-amber-50 px-1.5 py-0.5 font-mono text-[9.5px] font-bold text-amber-800"
-			>
-				Preview Active
-			</span>
-		{/if}
+		<div class="flex items-center gap-1">
+			{#if wellData.hasActiveFilter}
+				<span
+					title="Only core plugs inside the active zone / depth filter are shifted"
+					class="rounded-2xs border border-blue-200 bg-blue-50 px-1.5 py-0.5 font-mono text-[9.5px] font-semibold text-blue-800"
+				>
+					Active Zone: {wellData.getActiveBaseCorePlugs().length}/{wellData.getBaseCorePlugs().length} plugs
+				</span>
+			{/if}
+			{#if wellData.coreShiftDirty}
+				<span
+					class="rounded-2xs border border-amber-300 bg-amber-50 px-1.5 py-0.5 font-mono text-[9.5px] font-bold text-amber-800"
+				>
+					Preview Active
+				</span>
+			{:else if wellData.coreShiftApplied}
+				<span
+					class="rounded-2xs border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 font-mono text-[9.5px] font-bold text-emerald-800"
+				>
+					Saved ({wellData.coreShiftDelta >= 0 ? '+' : ''}{fmtNum(wellData.coreShiftDelta, 2)}m)
+				</span>
+			{/if}
+		</div>
 	</div>
 
 	{#if wellData.coreShiftMode === 'affine'}
@@ -418,7 +436,10 @@
 		<div class="flex items-center gap-1">
 			<button
 				type="button"
-				disabled={!wellData.coreShiftDirty && wellData.coreShiftDelta === 0 && wellData.coreStretchFactor === 1.0}
+				disabled={!wellData.coreShiftDirty &&
+					!wellData.coreShiftApplied &&
+					wellData.coreShiftDelta === 0 &&
+					wellData.coreStretchFactor === 1.0}
 				onclick={() => wellData.resetCoreDepthShift()}
 				class="h-5 rounded-xs border border-[var(--border-hairline)] bg-white px-2 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-40"
 			>
@@ -434,5 +455,10 @@
 			</button>
 		</div>
 	</div>
+	{#if wellData.coreShiftDirty || wellData.coreShiftApplied}
+		<div class="mt-1 border-t border-[var(--border-hairline)] pt-1 text-[9px] text-[var(--text-muted)]">
+			Lineage: <span class="mono-num">RAW_DEPTH → DEPTH</span> (<span class="mono-num">SHIFT_M</span>) • <span class="mono-num">CPORE_UNSHIFTED / CPERM_UNSHIFTED</span> preserved
+		</div>
+	{/if}
 </div>
 

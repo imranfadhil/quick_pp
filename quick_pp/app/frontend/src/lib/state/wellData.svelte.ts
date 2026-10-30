@@ -249,6 +249,7 @@ class WellDataState {
 	corePivotDepth = $state<number | null>(null);
 	coreTiePoints = $state<Array<{ coreDepth: number; logDepth: number }>>([]);
 	coreShiftDirty = $state<boolean>(false);
+	coreShiftApplied = $state<boolean>(false);
 	scalPc = $state<Record<string, any>[]>([]);
 	pressureTests = $state<Record<string, any>[]>([]);
 	survey = $state<Record<string, any>[]>([]);
@@ -332,6 +333,66 @@ class WellDataState {
 			return acc;
 		}, []);
 	});
+
+	hasActiveFilter = $derived.by(() => {
+		return Boolean(workbench.depthFilter || workbench.selectedZones.length > 0);
+	});
+
+	resolveZoneAtDepth(d: number): string {
+		if (!Number.isFinite(d)) return 'ALL';
+		const dept = this.deptCurve;
+		if (dept.length > 0 && this.zonesColumn.length > 0) {
+			let lo = 0;
+			let hi = dept.length - 1;
+			while (lo < hi) {
+				const mid = (lo + hi) >> 1;
+				if (dept[mid] < d) lo = mid + 1;
+				else hi = mid;
+			}
+			if (lo > 0 && Math.abs(dept[lo - 1] - d) < Math.abs(dept[lo] - d)) {
+				lo = lo - 1;
+			}
+			if (Math.abs(dept[lo] - d) <= 0.5 && this.zonesColumn[lo]?.trim()) {
+				return this.zonesColumn[lo]!.trim();
+			}
+		}
+		const sortedTops = [...this.tops].sort((a, b) => a.depth - b.depth);
+		for (let t = sortedTops.length - 1; t >= 0; t--) {
+			if (d >= sortedTops[t].depth && sortedTops[t].name?.trim()) {
+				return sortedTops[t].name.trim();
+			}
+		}
+		return 'ALL';
+	}
+
+	isDepthInActiveFilter(d: number): boolean {
+		if (!Number.isFinite(d)) return false;
+		if (!workbench.depthFilter && workbench.selectedZones.length === 0) return true;
+		if (workbench.depthFilter) {
+			const minD = workbench.depthFilter.min ?? -Infinity;
+			const maxD = workbench.depthFilter.max ?? Infinity;
+			if (d < minD || d > maxD) return false;
+		}
+		if (workbench.selectedZones.length > 0) {
+			const zName = this.resolveZoneAtDepth(d);
+			const allowed = new Set(workbench.selectedZones.map((z) => z.trim()));
+			if (!zName || !allowed.has(zName)) return false;
+		}
+		return true;
+	}
+
+	isCorePlugInActiveFilter(rawDepth: number, currentDepth?: number | null): boolean {
+		if (!this.hasActiveFilter) return true;
+		if (this.isDepthInActiveFilter(rawDepth)) return true;
+		if (
+			typeof currentDepth === 'number' &&
+			Number.isFinite(currentDepth) &&
+			this.isDepthInActiveFilter(currentDepth)
+		) {
+			return true;
+		}
+		return false;
+	}
 
 	depthRange = $derived.by(() => {
 		const dept = this.deptCurve;
@@ -1194,18 +1255,39 @@ class WellDataState {
 				name: c.name || c.type || 'OWC',
 				depth: c.depth
 			}));
-			this.coreSamples = rawCoreList;
-			this.originalCoreSamples = rawCoreList.map((s: any) => ({ ...s }));
+			this.coreSamples = rawCoreList.map((s: any) => ({
+				...s,
+				raw_depth: Number(s.raw_depth ?? s.depth ?? s.DEPTH)
+			}));
+			this.originalCoreSamples = this.coreSamples.map((s: any) => ({ ...s }));
 			this.originalScalPc = ((data as any).scal_pc || []).map((s: any) => ({
 				...s,
 				raw_depth: Number(s.raw_depth ?? s.depth ?? s.DEPTH)
 			}));
-			this.coreShiftMode = 'affine';
-			this.coreShiftDelta = 0;
-			this.coreStretchFactor = 1.0;
-			this.corePivotDepth = null;
-			this.coreTiePoints = [];
+			const initCfg = (data.config || {}) as Record<string, any>;
+			this.coreShiftMode = initCfg.core_shift_mode === 'tie-points' ? 'tie-points' : 'affine';
+			this.coreShiftDelta =
+				typeof initCfg.core_shift_delta === 'number' && Number.isFinite(initCfg.core_shift_delta)
+					? initCfg.core_shift_delta
+					: 0;
+			this.coreStretchFactor =
+				typeof initCfg.core_stretch_factor === 'number' &&
+				Number.isFinite(initCfg.core_stretch_factor)
+					? initCfg.core_stretch_factor
+					: 1.0;
+			this.corePivotDepth =
+				typeof initCfg.core_pivot_depth === 'number' && Number.isFinite(initCfg.core_pivot_depth)
+					? initCfg.core_pivot_depth
+					: null;
+			this.coreTiePoints = Array.isArray(initCfg.core_tie_points) ? initCfg.core_tie_points : [];
 			this.coreShiftDirty = false;
+			this.coreShiftApplied = Boolean(
+				initCfg.core_shift_applied ||
+					Math.abs(this.coreShiftDelta) > 1e-4 ||
+					Math.abs(this.coreStretchFactor - 1.0) > 1e-4 ||
+					this.coreTiePoints.length > 0 ||
+					this.coreSamples.some((s: any) => Math.abs(Number(s.shift_m ?? 0)) > 1e-3)
+			);
 			this.scalPc = (data as any).scal_pc || [];
 			this.pressureTests = data.pressure_tests || [];
 			this.survey = data.survey || [];
@@ -1218,6 +1300,98 @@ class WellDataState {
 			this.pendingModuleCurves = {};
 			workbench.brushedDepthIndices = new Set();
 			workbench.tsParams.enabled = false;
+
+			// Restore persisted SCAL, Core Overburden/Klinkenberg & Pc scaling parameters from well config
+			const cfgAny = (this.config || {}) as Record<string, any>;
+			const savedScal = (cfgAny.scal_params || {}) as Record<string, any>;
+			const pickNum = (key: string, fallback: number): number => {
+				const v = savedScal[key] ?? cfgAny[key];
+				return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+			};
+			const pickNullableNum = (key: string, fallback: number | null): number | null => {
+				const v = savedScal[key] ?? cfgAny[key];
+				return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+			};
+			workbench.scalParams.model = (savedScal.model ?? cfgAny.scal_model ?? workbench.scalParams.model) as any;
+			workbench.scalParams.swirr = pickNum('swirr', workbench.scalParams.swirr);
+			workbench.scalParams.sor = pickNum('sor', workbench.scalParams.sor);
+			workbench.scalParams.krw_max = pickNum('krw_max', workbench.scalParams.krw_max);
+			workbench.scalParams.kro_max = pickNum('kro_max', workbench.scalParams.kro_max);
+			workbench.scalParams.nw = pickNum('nw', workbench.scalParams.nw);
+			workbench.scalParams.no = pickNum('no', workbench.scalParams.no);
+			workbench.scalParams.lam = pickNum('lam', workbench.scalParams.lam);
+			workbench.scalParams.lw = pickNum('lw', workbench.scalParams.lw);
+			workbench.scalParams.ew = pickNum('ew', workbench.scalParams.ew);
+			workbench.scalParams.tw = pickNum('tw', workbench.scalParams.tw);
+			workbench.scalParams.lo = pickNum('lo', workbench.scalParams.lo);
+			workbench.scalParams.eo = pickNum('eo', workbench.scalParams.eo);
+			workbench.scalParams.to = pickNum('to', workbench.scalParams.to);
+			workbench.scalParams.mu_w = pickNum('mu_w', workbench.scalParams.mu_w);
+			workbench.scalParams.mu_o = pickNum('mu_o', workbench.scalParams.mu_o);
+			workbench.scalParams.pc_entry = pickNum('pc_entry', workbench.scalParams.pc_entry);
+			workbench.scalParams.pc_exponent = pickNum('pc_exponent', workbench.scalParams.pc_exponent);
+			workbench.scalParams.pc_max = pickNum('pc_max', workbench.scalParams.pc_max);
+			const rawCoreLith = savedScal.core_lithology ?? cfgAny.core_lithology;
+			workbench.scalParams.core_lithology =
+				rawCoreLith === 'carbonate'
+					? 'carbonate'
+					: rawCoreLith === 'friable_sandstone'
+						? 'friable_sandstone'
+						: 'sandstone';
+			workbench.scalParams.net_confining_stress = pickNum(
+				'net_confining_stress',
+				workbench.scalParams.net_confining_stress
+			);
+			workbench.scalParams.mean_pore_pressure = pickNum(
+				'mean_pore_pressure',
+				workbench.scalParams.mean_pore_pressure
+			);
+			workbench.scalParams.compaction_coeff = pickNum(
+				'compaction_coeff',
+				workbench.scalParams.core_lithology === 'carbonate'
+					? 2.5e-6
+					: workbench.scalParams.core_lithology === 'friable_sandstone'
+						? 8.0e-6
+						: 4.5e-6
+			);
+			workbench.scalParams.perm_compaction_coeff = pickNum(
+				'perm_compaction_coeff',
+				workbench.scalParams.core_lithology === 'carbonate'
+					? 1.5e-5
+					: workbench.scalParams.core_lithology === 'friable_sandstone'
+						? 4.0e-5
+						: 3.0e-5
+			);
+			workbench.scalParams.klinkenberg_method = ((savedScal.klinkenberg_method ??
+				cfgAny.klinkenberg_method) === 'heins_jones'
+				? 'heins_jones'
+				: 'jones');
+			workbench.scalParams.core_corrected = Boolean(
+				savedScal.core_corrected ?? cfgAny.core_corrected ?? false
+			);
+			workbench.scalParams.core_poro_amb_mean = pickNullableNum('core_poro_amb_mean', null);
+			workbench.scalParams.core_poro_res_mean = pickNullableNum('core_poro_res_mean', null);
+			workbench.scalParams.core_perm_air_mean = pickNullableNum('core_perm_air_mean', null);
+			workbench.scalParams.core_perm_liq_mean = pickNullableNum('core_perm_liq_mean', null);
+			workbench.scalParams.pc_lab_input = pickNum('pc_lab_input', workbench.scalParams.pc_lab_input);
+			workbench.scalParams.ift_lab = pickNum('ift_lab', workbench.scalParams.ift_lab);
+			workbench.scalParams.theta_lab = pickNum('theta_lab', workbench.scalParams.theta_lab);
+			workbench.scalParams.ift_res = pickNum(
+				'ift_res',
+				pickNum('ift', workbench.scalParams.ift_res)
+			);
+			workbench.scalParams.theta_res = pickNum(
+				'theta_res',
+				pickNum('theta', workbench.scalParams.theta_res)
+			);
+			workbench.scalParams.pc_res_output = pickNullableNum(
+				'pc_res_output',
+				pickNullableNum('pc_res_ref', null)
+			);
+			workbench.scalParams.pc_scale_factor = pickNullableNum('pc_scale_factor', null);
+			workbench.scalParams.pc_scaling_applied = Boolean(
+				savedScal.pc_scaling_applied ?? cfgAny.pc_scaling_applied ?? false
+			);
 
 			// Restore persistent working Top/Bottom depth interval for this specific well (if configured)
 			let focusMin: number | null =
@@ -1385,6 +1559,7 @@ class WellDataState {
 		'litho-poro',
 		'perm',
 		'saturation',
+		'scal',
 		'ressum'
 	] as const;
 
@@ -1395,6 +1570,7 @@ class WellDataState {
 		'litho-poro': 'Litho & Poro',
 		perm: 'Permeability',
 		saturation: 'Saturation',
+		scal: 'SCAL & Core',
 		ressum: 'Res. Summary'
 	};
 
@@ -1494,15 +1670,21 @@ class WellDataState {
 			}
 		}
 		if (includeCoreShift) {
-			if (this.curves['CPORE'] && this.curves['CPORE'].length === deptArr.length) {
-				curvesPayload['CPORE'] = this.curves['CPORE'].map((v) =>
-					Number.isFinite(v) ? v : null
-				);
-			}
-			if (this.curves['CPERM'] && this.curves['CPERM'].length === deptArr.length) {
-				curvesPayload['CPERM'] = this.curves['CPERM'].map((v) =>
-					Number.isFinite(v) ? v : null
-				);
+			for (const cCol of [
+				'CPORE',
+				'CPERM',
+				'CPORE_UNSHIFTED',
+				'CPERM_UNSHIFTED',
+				'CPORE_AMB',
+				'CPERM_AIR',
+				'CPORE_ORI',
+				'CPERM_ORI'
+			]) {
+				if (this.curves[cCol] && this.curves[cCol].length === deptArr.length) {
+					curvesPayload[cCol] = this.curves[cCol].map((v) =>
+						Number.isFinite(v) ? v : null
+					);
+				}
 			}
 		}
 		if (Object.keys(curvesPayload).length === 0 && !includeCoreShift) return false;
@@ -1517,6 +1699,14 @@ class WellDataState {
 				if (this.scalPc.length > 0) {
 					await saveAncillaryItems(pid, wid, 'scal_pc', 'pc_data', this.scalPc);
 				}
+				const shiftExtra = this.buildCoreShiftConfigExtra();
+				const cfgRes = await postJson<any>(
+					`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wid)}/config`,
+					{ extra: shiftExtra }
+				);
+				this.config = cfgRes?.config
+					? { ...this.config, ...cfgRes.config }
+					: { ...this.config, ...shiftExtra };
 			}
 
 			if (Object.keys(curvesPayload).length > 0) {
@@ -1531,15 +1721,20 @@ class WellDataState {
 			}
 
 			if (includeCoreShift) {
-				this.originalCoreSamples = this.coreSamples.map((s) => ({
+				// Preserve original unshifted driller's raw_depth for full data lineage & future resets
+				this.originalCoreSamples = this.coreSamples.map((s, idx) => ({
 					...s,
-					raw_depth: Number(s.depth)
+					raw_depth: Number(
+						s.raw_depth ?? this.originalCoreSamples[idx]?.raw_depth ?? s.depth
+					)
 				}));
 				this.coreSamples = this.originalCoreSamples.map((s) => ({ ...s }));
 				if (this.scalPc.length > 0) {
-					this.originalScalPc = this.scalPc.map((s) => ({
+					this.originalScalPc = this.scalPc.map((s, idx) => ({
 						...s,
-						raw_depth: Number(s.depth)
+						raw_depth: Number(
+							s.raw_depth ?? this.originalScalPc[idx]?.raw_depth ?? s.depth
+						)
 					}));
 				}
 				if (this.curves['CPORE']) {
@@ -1548,10 +1743,12 @@ class WellDataState {
 				if (this.curves['CPERM']) {
 					this.originalCurves = { ...this.originalCurves, CPERM: [...this.curves['CPERM']] };
 				}
-				this.coreShiftDelta = 0;
-				this.coreStretchFactor = 1.0;
-				this.coreTiePoints = [];
 				this.coreShiftDirty = false;
+				this.coreShiftApplied = Boolean(
+					Math.abs(this.coreShiftDelta) > 1e-4 ||
+						Math.abs(this.coreStretchFactor - 1.0) > 1e-4 ||
+						this.coreTiePoints.length > 0
+				);
 			}
 
 			const nextPending = { ...this.pendingModuleCurves };
@@ -2603,11 +2800,13 @@ class WellDataState {
 				.map((s, i) => {
 					const rd = Number(s.raw_depth ?? s.depth ?? s.DEPTH);
 					if (!Number.isFinite(rd)) return null;
+					const savedD = Number(s.depth ?? s.DEPTH ?? rd);
 					const pRaw = Number(s.porosity ?? s.CPORE ?? s.poro);
 					const kRaw = Number(s.permeability ?? s.CPERM ?? s.perm);
 					return {
 						sample_name: String(s.sample_name ?? s.Sample ?? `Plug-${i + 1}`),
 						raw_depth: rd,
+						saved_depth: Number.isFinite(savedD) ? savedD : rd,
 						porosity: Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1 ? pRaw / 100 : pRaw) : null,
 						permeability: Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null,
 						extra: s
@@ -2621,6 +2820,7 @@ class WellDataState {
 		const out: Array<{
 			sample_name: string;
 			raw_depth: number;
+			saved_depth: number;
 			porosity: number | null;
 			permeability: number | null;
 			extra: Record<string, any>;
@@ -2637,6 +2837,7 @@ class WellDataState {
 				out.push({
 					sample_name: `C-${n++}`,
 					raw_depth: d,
+					saved_depth: d,
 					porosity: p,
 					permeability: k,
 					extra: {}
@@ -2649,11 +2850,25 @@ class WellDataState {
 	getBaseCorePlugs(): Array<{
 		sample_name: string;
 		raw_depth: number;
+		saved_depth: number;
 		porosity: number | null;
 		permeability: number | null;
 		extra: Record<string, any>;
 	}> {
 		return this.baseCorePlugs;
+	}
+
+	getActiveBaseCorePlugs(): Array<{
+		sample_name: string;
+		raw_depth: number;
+		saved_depth: number;
+		porosity: number | null;
+		permeability: number | null;
+		extra: Record<string, any>;
+	}> {
+		const plugs = this.baseCorePlugs;
+		if (!this.hasActiveFilter) return plugs;
+		return plugs.filter((p) => this.isCorePlugInActiveFilter(p.raw_depth, p.saved_depth));
 	}
 
 	effectiveCorePivotDepth = $derived.by(() => {
@@ -2662,9 +2877,7 @@ class WellDataState {
 		}
 		const plugs = this.getBaseCorePlugs();
 		if (plugs.length === 0) return this.depthRange.min;
-		const minFilter = workbench.depthFilter?.min ?? -Infinity;
-		const maxFilter = workbench.depthFilter?.max ?? Infinity;
-		const inWindow = plugs.filter((p) => p.raw_depth >= minFilter && p.raw_depth <= maxFilter);
+		const inWindow = this.getActiveBaseCorePlugs();
 		const pool = inWindow.length > 0 ? inWindow : plugs;
 		return Number(Math.min(...pool.map((p) => p.raw_depth)).toFixed(2));
 	});
@@ -2707,19 +2920,57 @@ class WellDataState {
 		return pivot + (rawDepth - pivot) * stretch + delta;
 	}
 
+	buildCoreShiftConfigExtra(): Record<string, any> {
+		const shifts = this.coreSamples
+			.map((s) => Number(s.shift_m ?? (Number(s.depth) - Number(s.raw_depth ?? s.depth))))
+			.filter((v) => Number.isFinite(v));
+		const meanShift =
+			shifts.length > 0
+				? Number((shifts.reduce((a, b) => a + b, 0) / shifts.length).toFixed(3))
+				: this.coreShiftDelta;
+		const minShift = shifts.length > 0 ? Number(Math.min(...shifts).toFixed(3)) : this.coreShiftDelta;
+		const maxShift = shifts.length > 0 ? Number(Math.max(...shifts).toFixed(3)) : this.coreShiftDelta;
+		const isApplied = Boolean(
+			Math.abs(this.coreShiftDelta) > 1e-4 ||
+				Math.abs(this.coreStretchFactor - 1.0) > 1e-4 ||
+				this.coreTiePoints.length > 0 ||
+				shifts.some((v) => Math.abs(v) > 1e-3)
+		);
+		return {
+			core_shift_applied: isApplied,
+			core_shift_mode: this.coreShiftMode,
+			core_shift_delta: Number(this.coreShiftDelta.toFixed(3)),
+			core_stretch_factor: Number(this.coreStretchFactor.toFixed(4)),
+			core_pivot_depth: this.effectiveCorePivotDepth,
+			core_tie_points: this.coreTiePoints.map((tp) => ({
+				coreDepth: Number(tp.coreDepth.toFixed(3)),
+				logDepth: Number(tp.logDepth.toFixed(3))
+			})),
+			core_shift_mean_m: meanShift,
+			core_shift_min_m: minShift,
+			core_shift_max_m: maxShift,
+			core_shift_zones:
+				workbench.selectedZones.length > 0 ? [...workbench.selectedZones] : ['ALL']
+		};
+	}
+
 	applyCoreDepthTransform() {
 		const plugs = this.getBaseCorePlugs();
 		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		if (plugs.length === 0 || dept.length === 0) return;
 
 		const updatedSamples = plugs.map((p) => {
-			const shifted = Number(this.computeShiftedCoreDepth(p.raw_depth).toFixed(3));
+			const inActive = this.isCorePlugInActiveFilter(p.raw_depth, p.saved_depth);
+			const shifted = inActive
+				? Number(this.computeShiftedCoreDepth(p.raw_depth).toFixed(3))
+				: Number(p.saved_depth.toFixed(3));
+			const dShift = Number((shifted - p.raw_depth).toFixed(3));
 			return {
 				...p.extra,
 				sample_name: p.sample_name,
 				raw_depth: p.raw_depth,
 				depth: shifted,
-				shift_m: Number((shifted - p.raw_depth).toFixed(3)),
+				shift_m: dShift,
 				porosity: p.porosity,
 				permeability: p.permeability
 			};
@@ -2727,26 +2978,54 @@ class WellDataState {
 
 		const newCpore = new Array(dept.length).fill(Number.NaN);
 		const newCperm = new Array(dept.length).fill(Number.NaN);
+		const unshiftedCpore = new Array(dept.length).fill(Number.NaN);
+		const unshiftedCperm = new Array(dept.length).fill(Number.NaN);
+		const newCporeAmb = new Array(dept.length).fill(Number.NaN);
+		const newCpermAir = new Array(dept.length).fill(Number.NaN);
+		let hasAmb = false;
+		let hasAir = false;
 
-		for (const s of updatedSamples) {
-			const sd = s.depth;
-			// Binary search closest log depth index within 0.5m
+		const findClosestLogIdx = (targetD: number): number => {
 			let lo = 0;
 			let hi = dept.length - 1;
 			while (lo < hi) {
 				const mid = (lo + hi) >> 1;
-				if (dept[mid] < sd) lo = mid + 1;
+				if (dept[mid] < targetD) lo = mid + 1;
 				else hi = mid;
 			}
-			if (lo > 0 && Math.abs(dept[lo - 1] - sd) < Math.abs(dept[lo] - sd)) {
+			if (lo > 0 && Math.abs(dept[lo - 1] - targetD) < Math.abs(dept[lo] - targetD)) {
 				lo = lo - 1;
 			}
-			if (Math.abs(dept[lo] - sd) <= 0.5) {
+			return Math.abs(dept[lo] - targetD) <= 0.5 ? lo : -1;
+		};
+
+		for (const s of updatedSamples) {
+			const rawIdx = findClosestLogIdx(s.raw_depth);
+			if (rawIdx >= 0) {
 				if (s.porosity !== null && Number.isFinite(s.porosity)) {
-					newCpore[lo] = s.porosity;
+					unshiftedCpore[rawIdx] = s.porosity;
 				}
 				if (s.permeability !== null && Number.isFinite(s.permeability)) {
-					newCperm[lo] = s.permeability;
+					unshiftedCperm[rawIdx] = s.permeability;
+				}
+			}
+			const shiftIdx = findClosestLogIdx(s.depth);
+			if (shiftIdx >= 0) {
+				if (s.porosity !== null && Number.isFinite(s.porosity)) {
+					newCpore[shiftIdx] = s.porosity;
+				}
+				if (s.permeability !== null && Number.isFinite(s.permeability)) {
+					newCperm[shiftIdx] = s.permeability;
+				}
+				const pAmb = Number((s as any).porosity_amb ?? (s as any).CPORE_AMB);
+				const kAir = Number((s as any).perm_air ?? (s as any).CPERM_AIR);
+				if (Number.isFinite(pAmb) && pAmb > 0) {
+					newCporeAmb[shiftIdx] = pAmb > 1 ? pAmb / 100 : pAmb;
+					hasAmb = true;
+				}
+				if (Number.isFinite(kAir) && kAir > 0) {
+					newCpermAir[shiftIdx] = kAir;
+					hasAir = true;
 				}
 			}
 		}
@@ -2755,10 +3034,14 @@ class WellDataState {
 		if (this.originalScalPc.length > 0) {
 			this.scalPc = this.originalScalPc.map((r) => {
 				const rd = Number(r.raw_depth ?? r.depth ?? 0);
+				const savedPcDepth = Number(r.depth ?? rd);
+				const inActive = this.isCorePlugInActiveFilter(rd, savedPcDepth);
 				return {
 					...r,
 					raw_depth: rd,
-					depth: Number(this.computeShiftedCoreDepth(rd).toFixed(3))
+					depth: inActive
+						? Number(this.computeShiftedCoreDepth(rd).toFixed(3))
+						: Number(savedPcDepth.toFixed(3))
 				};
 			});
 		}
@@ -2766,8 +3049,14 @@ class WellDataState {
 		const nextCurves: Record<string, number[]> = {
 			...this.curves,
 			CPORE: newCpore,
-			CPERM: newCperm
+			CPERM: newCperm,
+			CPORE_UNSHIFTED: unshiftedCpore,
+			CPERM_UNSHIFTED: unshiftedCperm
 		};
+		if (!nextCurves['CPORE_ORI']) nextCurves['CPORE_ORI'] = [...unshiftedCpore];
+		if (!nextCurves['CPERM_ORI']) nextCurves['CPERM_ORI'] = [...unshiftedCperm];
+		if (hasAmb) nextCurves['CPORE_AMB'] = newCporeAmb;
+		if (hasAir) nextCurves['CPERM_AIR'] = newCpermAir;
 		if (this.curves['CORE_PORO']) nextCurves['CORE_PORO'] = [...newCpore];
 		if (this.curves['CORE_PERM']) nextCurves['CORE_PERM'] = [...newCperm];
 		this.curves = nextCurves;
@@ -2790,13 +3079,9 @@ class WellDataState {
 		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		const phitArr = this.curves['PHIT'] ?? this.curves['PHIE'] ?? [];
 		const permArr = this.curves['PERM'] ?? this.curves['PERM_TRANS'] ?? [];
-		const minFilter = workbench.depthFilter?.min ?? -Infinity;
-		const maxFilter = workbench.depthFilter?.max ?? Infinity;
 
 		const allPlugs = this.getBaseCorePlugs();
-		const activePlugs = allPlugs.filter(
-			(p) => p.raw_depth >= minFilter && p.raw_depth <= maxFilter
-		);
+		const activePlugs = this.getActiveBaseCorePlugs();
 		const plugs = activePlugs.length >= 2 ? activePlugs : allPlugs;
 		if (plugs.length === 0 || dept.length < 2) return;
 
@@ -2931,18 +3216,14 @@ class WellDataState {
 		this.coreStretchFactor = 1.0;
 		this.corePivotDepth = null;
 		this.coreTiePoints = [];
-		this.coreShiftDirty = false;
-		this.coreSamples = this.originalCoreSamples.map((s) => ({ ...s, depth: s.raw_depth ?? s.depth }));
-		if (this.originalScalPc.length > 0) {
-			this.scalPc = this.originalScalPc.map((s) => ({ ...s, depth: s.raw_depth ?? s.depth }));
-		}
-		const nextCurves: Record<string, number[]> = { ...this.curves };
-		if (this.originalCurves['CPORE']) nextCurves['CPORE'] = [...this.originalCurves['CPORE']];
-		if (this.originalCurves['CPERM']) nextCurves['CPERM'] = [...this.originalCurves['CPERM']];
-		if (this.originalCurves['CORE_PORO']) nextCurves['CORE_PORO'] = [...this.originalCurves['CORE_PORO']];
-		if (this.originalCurves['CORE_PERM']) nextCurves['CORE_PERM'] = [...this.originalCurves['CORE_PERM']];
-		this.curves = nextCurves;
-		appStatus.info('Reset core depths to original unshifted values', workbench.wellId ?? undefined);
+		this.applyCoreDepthTransform();
+		this.coreShiftDirty = this.coreShiftApplied;
+		appStatus.info(
+			this.coreShiftApplied
+				? 'Reset core depths to unshifted driller depths (click Save Core Shift to persist)'
+				: 'Reset core depths to original unshifted values',
+			workbench.wellId ?? undefined
+		);
 	}
 
 	async saveCoreDepthShift() {
@@ -2960,6 +3241,15 @@ class WellDataState {
 				await saveAncillaryItems(pid, wid, 'scal_pc', 'pc_data', this.scalPc);
 			}
 
+			const shiftExtra = this.buildCoreShiftConfigExtra();
+			const cfgRes = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wid)}/config`,
+				{ extra: shiftExtra }
+			);
+			this.config = cfgRes?.config
+				? { ...this.config, ...cfgRes.config }
+				: { ...this.config, ...shiftExtra };
+
 			const pendingQaqcModules = this.getPendingCascadingModules('qaqc-env');
 			const pendingQaqcCols = this.getPendingCascadingCurves('qaqc-env');
 
@@ -2972,15 +3262,21 @@ class WellDataState {
 						curvesPayload[col] = arr.map((v) => (Number.isFinite(v) ? v : null));
 					}
 				}
-				if (this.curves['CPORE']) {
-					curvesPayload['CPORE'] = this.curves['CPORE'].map((v) =>
-						Number.isFinite(v) ? v : null
-					);
-				}
-				if (this.curves['CPERM']) {
-					curvesPayload['CPERM'] = this.curves['CPERM'].map((v) =>
-						Number.isFinite(v) ? v : null
-					);
+				for (const cCol of [
+					'CPORE',
+					'CPERM',
+					'CPORE_UNSHIFTED',
+					'CPERM_UNSHIFTED',
+					'CPORE_AMB',
+					'CPERM_AIR',
+					'CPORE_ORI',
+					'CPERM_ORI'
+				]) {
+					if (this.curves[cCol] && this.curves[cCol].length === deptArr.length) {
+						curvesPayload[cCol] = this.curves[cCol].map((v) =>
+							Number.isFinite(v) ? v : null
+						);
+					}
 				}
 				if (Object.keys(curvesPayload).length > 0) {
 					await postJson(
@@ -3002,16 +3298,20 @@ class WellDataState {
 				this.pendingModuleCurves = nextPending;
 			}
 
-			// Update baselines to the newly saved depths
-			this.originalCoreSamples = this.coreSamples.map((s) => ({
+			// Preserve original unshifted driller's raw_depth for full data lineage & future resets
+			this.originalCoreSamples = this.coreSamples.map((s, idx) => ({
 				...s,
-				raw_depth: Number(s.depth)
+				raw_depth: Number(
+					s.raw_depth ?? this.originalCoreSamples[idx]?.raw_depth ?? s.depth
+				)
 			}));
 			this.coreSamples = this.originalCoreSamples.map((s) => ({ ...s }));
 			if (this.scalPc.length > 0) {
-				this.originalScalPc = this.scalPc.map((s) => ({
+				this.originalScalPc = this.scalPc.map((s, idx) => ({
 					...s,
-					raw_depth: Number(s.depth)
+					raw_depth: Number(
+						s.raw_depth ?? this.originalScalPc[idx]?.raw_depth ?? s.depth
+					)
 				}));
 			}
 			if (this.curves['CPORE']) {
@@ -3020,18 +3320,16 @@ class WellDataState {
 			if (this.curves['CPERM']) {
 				this.originalCurves = { ...this.originalCurves, CPERM: [...this.curves['CPERM']] };
 			}
-			this.coreShiftDelta = 0;
-			this.coreStretchFactor = 1.0;
-			this.coreTiePoints = [];
 			this.coreShiftDirty = false;
+			this.coreShiftApplied = Boolean(shiftExtra.core_shift_applied);
 			this.lastSavedMessage =
 				pendingQaqcModules.length > 0
 					? 'Core Depth Shift (+ QAQC) Saved ✓'
 					: 'Core Depth Shift Saved ✓';
 			appStatus.success(
 				pendingQaqcModules.length > 0
-					? 'Saved shifted core depths, CPORE/CPERM & pending QAQC curves'
-					: 'Saved shifted core depths & CPORE/CPERM curves',
+					? 'Saved shifted core depths, CPORE/CPERM, lineage & pending QAQC curves'
+					: 'Saved shifted core depths, CPORE/CPERM curves & shift lineage',
 				wid
 			);
 		} catch (e: any) {
@@ -3060,14 +3358,27 @@ class WellDataState {
 
 		const newCpore = new Array(dept.length).fill(Number.NaN);
 		const newCperm = new Array(dept.length).fill(Number.NaN);
+		const newCporeAmb = new Array(dept.length).fill(Number.NaN);
+		const newCpermAir = new Array(dept.length).fill(Number.NaN);
+		let hasAmb = false;
+		let hasAir = false;
 
 		for (const s of this.coreSamples) {
 			const sd = Number(s.depth ?? s.DEPTH);
 			if (!Number.isFinite(sd)) continue;
 			const pRaw = Number(s.porosity ?? s.CPORE ?? s.poro);
 			const kRaw = Number(s.permeability ?? s.CPERM ?? s.perm);
+			const pAmbRaw = Number(s.porosity_amb ?? s.CPORE_AMB ?? s.CPORE_ORI);
+			const kAirRaw = Number(s.perm_air ?? s.CPERM_AIR ?? s.CPERM_ORI);
 			const pVal = Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
 			const kVal = Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null;
+			const pAmbVal =
+				Number.isFinite(pAmbRaw) && pAmbRaw > 0
+					? pAmbRaw > 1.0
+						? pAmbRaw / 100.0
+						: pAmbRaw
+					: null;
+			const kAirVal = Number.isFinite(kAirRaw) && kAirRaw > 0 ? kAirRaw : null;
 
 			let lo = 0;
 			let hi = dept.length - 1;
@@ -3082,6 +3393,14 @@ class WellDataState {
 			if (Math.abs(dept[lo] - sd) <= 0.5) {
 				if (pVal !== null) newCpore[lo] = pVal;
 				if (kVal !== null) newCperm[lo] = kVal;
+				if (pAmbVal !== null) {
+					newCporeAmb[lo] = pAmbVal;
+					hasAmb = true;
+				}
+				if (kAirVal !== null) {
+					newCpermAir[lo] = kAirVal;
+					hasAir = true;
+				}
 			}
 		}
 
@@ -3095,6 +3414,14 @@ class WellDataState {
 			CPORE: [...newCpore],
 			CPERM: [...newCperm]
 		};
+		if (hasAmb) {
+			nextCurves['CPORE_AMB'] = newCporeAmb;
+			nextCurves['CPORE_ORI'] = [...newCporeAmb];
+		}
+		if (hasAir) {
+			nextCurves['CPERM_AIR'] = newCpermAir;
+			nextCurves['CPERM_ORI'] = [...newCpermAir];
+		}
 		if (this.curves['CORE_PORO']) {
 			nextCurves['CORE_PORO'] = [...newCpore];
 			nextOrig['CORE_PORO'] = [...newCpore];
@@ -3108,7 +3435,9 @@ class WellDataState {
 		this.stats = {
 			...this.stats,
 			CPORE: computeSummaryStats(newCpore, dept),
-			CPERM: computeSummaryStats(newCperm, dept)
+			CPERM: computeSummaryStats(newCperm, dept),
+			...(hasAmb ? { CPORE_AMB: computeSummaryStats(newCporeAmb, dept) } : {}),
+			...(hasAir ? { CPERM_AIR: computeSummaryStats(newCpermAir, dept) } : {})
 		};
 	}
 

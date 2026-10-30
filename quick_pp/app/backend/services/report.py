@@ -1170,9 +1170,37 @@ def build_report_context(
     core_r2 = 0.0
     core_rmse = 0.0
     core_bias = 0.0
+    valid_cal_perm_count = 0
+    core_perm_r2 = 0.0
+    core_perm_log_rmse = 0.0
+    core_perm_factor_err = 1.0
     rhoma_mean = 2.65
     rhoma_std = 0.0
     rhoma_count = 0
+    if not full_df.empty and "CPERM" in full_df.columns and "PERM" in full_df.columns:
+        ck_s = _col_series(full_df, "CPERM", np.nan)
+        pm_s = _col_series(full_df, "PERM", np.nan)
+        tz_mask_perm = (
+            full_df["ZONES"].astype(str).str.strip().str.upper().isin(target_zones_upper)
+            if "ZONES" in full_df.columns
+            else pd.Series(True, index=full_df.index)
+        )
+        kmask_target = (
+            ck_s.notna() & pm_s.notna() & (ck_s > 1e-3) & (pm_s > 1e-3) & tz_mask_perm
+        )
+        kmask_all = ck_s.notna() & pm_s.notna() & (ck_s > 1e-3) & (pm_s > 1e-3)
+        active_kmask = kmask_target if kmask_target.sum() >= 3 else kmask_all
+        if active_kmask.sum() >= 3:
+            kx = np.log10(ck_s[active_kmask].to_numpy(dtype=float))
+            ky = np.log10(pm_s[active_kmask].to_numpy(dtype=float))
+            valid_cal_perm_count = int(len(kx))
+            core_perm_log_rmse = round(float(np.sqrt(np.mean((ky - kx) ** 2))), 3)
+            core_perm_factor_err = round(float(10.0 ** core_perm_log_rmse), 2)
+            ss_res_k = float(np.sum((ky - kx) ** 2))
+            ss_tot_k = float(np.sum((kx - np.mean(kx)) ** 2))
+            core_perm_r2 = round(
+                max(0.0, min(0.99, 1.0 - ss_res_k / max(ss_tot_k, 1e-9))), 3
+            )
     if not full_df.empty and "CPORE" in full_df.columns:
         cp_s = _col_series(full_df, "CPORE", np.nan)
         ph_s = _col_series(
@@ -1717,6 +1745,91 @@ def build_report_context(
         "gr_clean": round(gr_clean_cfg, 1),
         "gr_shale": round(gr_clay_cfg, 1),
     }
+    scal_cfg = (
+        merged_configs.get("scal_params")
+        if isinstance(merged_configs.get("scal_params"), dict)
+        else {}
+    )
+    core_corr_active = bool(
+        merged_configs.get("core_corrected")
+        or scal_cfg.get("core_corrected")
+        or ("CPORE_AMB" in full_df.columns)
+        or ("CPORE_ORI" in full_df.columns)
+        or ("CPERM_AIR" in full_df.columns)
+        or ("CPERM_ORI" in full_df.columns)
+    )
+    ncs_val = _safe_float(
+        merged_configs.get("net_confining_stress", scal_cfg.get("net_confining_stress")),
+        3500.0,
+    )
+    pm_val = _safe_float(
+        merged_configs.get("mean_pore_pressure", scal_cfg.get("mean_pore_pressure")),
+        45.0,
+    )
+    core_litho_val = str(
+        merged_configs.get("core_lithology")
+        or scal_cfg.get("core_lithology")
+        or "sandstone"
+    ).strip().lower()
+    if core_litho_val == "carbonate":
+        default_c_phi = 2.5e-6
+        core_litho_label = "Carbonate (Stiff / Well-Cemented)"
+    elif core_litho_val in ("friable_sandstone", "friable"):
+        default_c_phi = 8.0e-6
+        core_litho_label = "Friable Sandstone"
+    else:
+        default_c_phi = 4.5e-6
+        core_litho_label = "Well-Consolidated Sandstone"
+    c_phi_val = _safe_float(
+        merged_configs.get("compaction_coeff", scal_cfg.get("compaction_coeff")),
+        default_c_phi,
+    )
+    c_k_val = _safe_float(
+        merged_configs.get(
+            "perm_compaction_coeff", scal_cfg.get("perm_compaction_coeff")
+        ),
+        c_phi_val * 5.0,
+    )
+    klink_method_val = str(
+        merged_configs.get("klinkenberg_method")
+        or scal_cfg.get("klinkenberg_method")
+        or "jones"
+    ).strip().title()
+
+    core_shift_mode_raw = str(
+        merged_configs.get("core_shift_mode") or "affine"
+    ).strip().lower()
+    core_shift_delta_val = _safe_float(merged_configs.get("core_shift_delta"), 0.0)
+    core_stretch_val = _safe_float(merged_configs.get("core_stretch_factor"), 1.0)
+    core_tie_pts = (
+        merged_configs.get("core_tie_points")
+        if isinstance(merged_configs.get("core_tie_points"), list)
+        else []
+    )
+    core_shift_active = bool(
+        merged_configs.get("core_shift_applied")
+        or abs(core_shift_delta_val) > 1e-4
+        or abs(core_stretch_val - 1.0) > 1e-4
+        or len(core_tie_pts) > 0
+        or ("CPORE_UNSHIFTED" in full_df.columns)
+        or ("CPERM_UNSHIFTED" in full_df.columns)
+    )
+    core_shift_mode_label = (
+        f"Piecewise Tie-Point Table ({len(core_tie_pts)} ties)"
+        if core_shift_mode_raw == "tie-points" and len(core_tie_pts) > 0
+        else "Affine Shift & Stretch"
+    )
+    core_shift_mean_val = _safe_float(
+        merged_configs.get("core_shift_mean_m"), core_shift_delta_val
+    )
+    core_shift_min_val = _safe_float(
+        merged_configs.get("core_shift_min_m"), core_shift_delta_val
+    )
+    core_shift_max_val = _safe_float(
+        merged_configs.get("core_shift_max_m"), core_shift_delta_val
+    )
+    core_pivot_val = merged_configs.get("core_pivot_depth")
+
     poro_params = {
         "method_key": raw_poro_key,
         "method_name": poro_method_display,
@@ -1732,6 +1845,43 @@ def build_report_context(
         "core_bias": core_bias,
         "core_count": valid_cal_core_count,
         "total_core_count": total_core_plugs_loaded,
+        "core_perm_count": valid_cal_perm_count,
+        "core_perm_r2": core_perm_r2,
+        "core_perm_log_rmse": core_perm_log_rmse,
+        "core_perm_factor_err": core_perm_factor_err,
+        "core_shift_applied": core_shift_active,
+        "core_shift_mode": core_shift_mode_raw,
+        "core_shift_mode_label": core_shift_mode_label,
+        "core_shift_delta": round(core_shift_delta_val, 3),
+        "core_stretch_factor": round(core_stretch_val, 4),
+        "core_pivot_depth": (
+            round(float(core_pivot_val), 2)
+            if isinstance(core_pivot_val, (int, float))
+            else None
+        ),
+        "core_tie_points": core_tie_pts,
+        "core_shift_mean_m": round(core_shift_mean_val, 3),
+        "core_shift_min_m": round(core_shift_min_val, 3),
+        "core_shift_max_m": round(core_shift_max_val, 3),
+        "core_corrected": core_corr_active,
+        "core_lithology": core_litho_label,
+        "net_confining_stress": round(ncs_val, 0),
+        "mean_pore_pressure": round(pm_val, 1),
+        "compaction_coeff": c_phi_val,
+        "perm_compaction_coeff": c_k_val,
+        "klinkenberg_method": klink_method_val,
+        "core_poro_amb_mean": merged_configs.get(
+            "core_poro_amb_mean", scal_cfg.get("core_poro_amb_mean")
+        ),
+        "core_poro_res_mean": merged_configs.get(
+            "core_poro_res_mean", scal_cfg.get("core_poro_res_mean")
+        ),
+        "core_perm_air_mean": merged_configs.get(
+            "core_perm_air_mean", scal_cfg.get("core_perm_air_mean")
+        ),
+        "core_perm_liq_mean": merged_configs.get(
+            "core_perm_liq_mean", scal_cfg.get("core_perm_liq_mean")
+        ),
     }
     sw_params = {
         "model_key": raw_sw_key,
@@ -1746,28 +1896,87 @@ def build_report_context(
         "m": round(_safe_float(merged_configs.get("sw_m"), 2.0), 2),
         "n": round(_safe_float(merged_configs.get("sw_n"), 2.0), 2),
     }
+    ift_res_cfg = _safe_float(
+        merged_configs.get("ift_res", scal_cfg.get("ift_res", merged_configs.get("ift"))),
+        30.0,
+    )
+    theta_res_cfg = _safe_float(
+        merged_configs.get(
+            "theta_res", scal_cfg.get("theta_res", merged_configs.get("theta"))
+        ),
+        30.0,
+    )
+    ift_lab_cfg = _safe_float(
+        merged_configs.get("ift_lab", scal_cfg.get("ift_lab")), 480.0
+    )
+    theta_lab_cfg = _safe_float(
+        merged_configs.get("theta_lab", scal_cfg.get("theta_lab")), 140.0
+    )
+    lab_denom = max( abs(ift_lab_cfg * math.cos(math.radians(theta_lab_cfg))), 1e-6 )
+    res_num = abs(ift_res_cfg * math.cos(math.radians(theta_res_cfg)))
+    pc_scale_cfg = _safe_float(
+        merged_configs.get("pc_scale_factor", scal_cfg.get("pc_scale_factor")),
+        res_num / lab_denom,
+    )
+    pc_scaling_applied = bool(
+        merged_configs.get("pc_scaling_applied") or scal_cfg.get("pc_scaling_applied")
+    )
     shf_params = {
-        "ift": 30.0,
-        "theta": 30.0,
-        "ift_cos_theta": round(30.0 * math.cos(math.radians(30.0)), 1),
+        "ift": round(ift_res_cfg, 1),
+        "theta": round(theta_res_cfg, 1),
+        "ift_cos_theta": round(res_num, 1),
+        "ift_lab": round(ift_lab_cfg, 1),
+        "theta_lab": round(theta_lab_cfg, 1),
+        "ift_lab_cos_theta": round(lab_denom, 1),
+        "pc_scaling_applied": pc_scaling_applied,
+        "pc_scale_factor": round(pc_scale_cfg, 5),
+        "pc_lab_ref": _safe_float(
+            merged_configs.get("pc_lab_input", scal_cfg.get("pc_lab_input")), 25.0
+        ),
+        "pc_res_ref": _safe_float(
+            merged_configs.get("pc_res_output", scal_cfg.get("pc_res_output")),
+            round(25.0 * pc_scale_cfg, 3),
+        ),
         "gw": 1.05,
         "ghc": 0.80,
         "reconciliation_rmse": shf_rmse,
         "reconciliation_bias": shf_bias,
     }
+    scal_model_key = str(
+        scal_cfg.get("model") or merged_configs.get("scal_model") or "corey"
+    ).strip().lower()
     scal_params = {
-        "is_analogue": not any_scal_data,
+        "is_analogue": not (any_scal_data or bool(scal_cfg)),
+        "model": scal_model_key,
         "source_label": (
-            "Measured Project SCAL Dataset"
-            if any_scal_data
+            f"Calibrated {scal_model_key.upper()} SCAL & Core Parameterization"
+            if (any_scal_data or bool(scal_cfg))
             else "Analogue / Default Corey SCAL Parameterization"
         ),
-        "swirr": 0.15,
-        "sor": 0.20,
-        "krw_max": 0.45,
-        "kro_max": 0.90,
-        "nw": 2.5,
-        "no": 2.5,
+        "swirr": _safe_float(
+            scal_cfg.get("swirr", merged_configs.get("scal_swirr")), 0.15
+        ),
+        "sor": _safe_float(scal_cfg.get("sor", merged_configs.get("scal_sor")), 0.20),
+        "krw_max": _safe_float(
+            scal_cfg.get("krw_max", merged_configs.get("scal_krw_max")), 0.45
+        ),
+        "kro_max": _safe_float(
+            scal_cfg.get("kro_max", merged_configs.get("scal_kro_max")), 0.90
+        ),
+        "nw": _safe_float(scal_cfg.get("nw", merged_configs.get("scal_nw")), 2.5),
+        "no": _safe_float(scal_cfg.get("no", merged_configs.get("scal_no")), 2.5),
+        "lw": _safe_float(scal_cfg.get("lw", merged_configs.get("scal_lw")), 2.0),
+        "ew": _safe_float(scal_cfg.get("ew", merged_configs.get("scal_ew")), 1.5),
+        "tw": _safe_float(scal_cfg.get("tw", merged_configs.get("scal_tw")), 2.0),
+        "lo": _safe_float(scal_cfg.get("lo", merged_configs.get("scal_lo")), 2.0),
+        "eo": _safe_float(scal_cfg.get("eo", merged_configs.get("scal_eo")), 1.5),
+        "to": _safe_float(scal_cfg.get("to", merged_configs.get("scal_to")), 2.0),
+        "pc_entry": _safe_float(
+            scal_cfg.get("pc_entry", merged_configs.get("scal_pc_entry")), 1.5
+        ),
+        "pc_max": _safe_float(
+            scal_cfg.get("pc_max", merged_configs.get("scal_pc_max")), 50.0
+        ),
     }
     upscaling_params = {
         "cell_size": 2.0,

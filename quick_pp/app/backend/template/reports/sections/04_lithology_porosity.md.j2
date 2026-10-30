@@ -30,8 +30,22 @@ $$V_{sand} + V_{silt} + V_{clay} + \phi_t = 1, \quad \phi_D = \frac{\rho_{ma} - 
 | Shale GR Endpoint | $GR_{shale}$ | {{ litho_params.gr_shale }} | $\text{gAPI}$ | P95 Intra-Reservoir Shale Baseline |
 | Total Core Plugs Loaded | $N_{core,total}$ | {{ poro_params.total_core_count }} | plugs | Full-Wellbore RCA Inventory (Table 2.1) |
 | Target-Zone Calibration Plugs | $N_{core,target}$ | {{ poro_params.core_count }} | plugs | Valid Overlapping Plugs (`{{ target_zones|join(', ') }}`) |
+{% if poro_params.core_shift_applied %}
+| Core-to-Log Depth Matching | $\Delta d_{core}$ / $s_{core}$ | {{ "%+.2f"|format(poro_params.core_shift_delta) }} m / {{ "%.3f"|format(poro_params.core_stretch_factor) }}$\times$ | $\text{m}$ | {{ poro_params.core_shift_mode_label }}{% if poro_params.core_pivot_depth %} ($d_{ref} = {{ "%.1f"|format(poro_params.core_pivot_depth) }}\text{ m}$){% endif %} (`RAW_DEPTH` $\to$ `DEPTH`) |
+{% endif %}
+{% if poro_params.core_corrected %}
+| Core Overburden Stress | $\sigma_{eff}$ (NCS) | {{ "%.0f"|format(poro_params.net_confining_stress) }} | $\text{psi}$ | {{ poro_params.core_lithology }} Compaction ($c_\phi = {{ "%.1e"|format(poro_params.compaction_coeff) }}\text{ psi}^{-1}$, $c_k = {{ "%.1e"|format(poro_params.perm_compaction_coeff) }}\text{ psi}^{-1}$) |
+| Klinkenberg Slippage Pressure | $P_m$ | {{ "%.1f"|format(poro_params.mean_pore_pressure) }} | $\text{psi}$ | {{ poro_params.klinkenberg_method }} Correlation (`CPERM_AIR` / `CPERM_ORI` $\to$ `CPERM`) |
+{% endif %}
 {% if poro_params.core_count > 0 %}
 | Core-to-Log Calibration | $R^2$ / $\text{RMSE}$ | {{ "%.2f"|format(poro_params.core_r2) }} / {{ "%.3f"|format(poro_params.core_rmse) }} | $\text{v/v}$ | Mean Bias ($\phi_{log} - \phi_{core}$) $= {{ "%+.3f"|format(poro_params.core_bias) }}\text{ v/v}$ |
+{% endif %}
+
+{% if poro_params.core_shift_applied %}
+> **Core-to-Log Depth Matching Lineage:** Driller's core plug depths were depth-matched to wireline logs using **{{ poro_params.core_shift_mode_label }}** ($\Delta d = {{ "%+.2f"|format(poro_params.core_shift_delta) }}\text{ m}$, stretch factor $s = {{ "%.4f"|format(poro_params.core_stretch_factor) }}\times${% if poro_params.core_pivot_depth %}, anchor pivot $d_{ref} = {{ "%.1f"|format(poro_params.core_pivot_depth) }}\text{ m}${% endif %}, mean plug shift $= {{ "%+.2f"|format(poro_params.core_shift_mean_m) }}\text{ m}$). Original unshifted driller's depths (`RAW_DEPTH`) and per-plug shifts (`SHIFT_M`) are preserved on every RCA sample, while unshifted log-grid curves are retained as `CPORE_UNSHIFTED` and `CPERM_UNSHIFTED`.
+{% endif %}
+{% if poro_params.core_corrected %}
+> **Core Overburden & Klinkenberg Lineage:** Ambient laboratory core porosity and gas permeability were corrected to reservoir stress ($\sigma_{eff} = {{ "%.0f"|format(poro_params.net_confining_stress) }}\text{ psi}$, $P_m = {{ "%.1f"|format(poro_params.mean_pore_pressure) }}\text{ psi}$, `{{ poro_params.core_lithology }}` compaction). Uncorrected baseline curves are preserved as `CPORE_AMB` / `CPORE_ORI` and `CPERM_AIR` / `CPERM_ORI`, while active evaluation curves `CPORE` and `CPERM` store reservoir-corrected values{% if poro_params.core_poro_amb_mean and poro_params.core_poro_res_mean %} ($\bar{\phi}_{amb} = {{ "%.3f"|format(poro_params.core_poro_amb_mean) }} \to \bar{\phi}_{res} = {{ "%.3f"|format(poro_params.core_poro_res_mean) }}\text{ v/v}${% if poro_params.core_perm_air_mean and poro_params.core_perm_liq_mean %}, $\bar{K}_{air} = {{ "%.1f"|format(poro_params.core_perm_air_mean) }} \to \bar{K}_{liq} = {{ "%.1f"|format(poro_params.core_perm_liq_mean) }}\text{ mD}${% endif %}){% endif %}.
 {% endif %}
 
 {% if include_ai_commentary and ai_commentary.litho_poro_narrative %}

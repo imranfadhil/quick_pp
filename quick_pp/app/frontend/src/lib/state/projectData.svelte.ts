@@ -224,6 +224,7 @@ class ProjectDataState {
 
 	shfParams = $state({
 		model: 'leverett_j' as 'leverett_j' | 'skelt_harrison' | 'cuddy',
+		jSatMode: 'swn' as 'swn' | 'sw',
 		unit: 'metric' as 'metric' | 'imperial',
 		fwl: 2500.0,
 		fwlByZone: {} as Record<string, number>,
@@ -235,6 +236,7 @@ class ProjectDataState {
 
 	shfResult = $state.raw<{
 		model?: 'leverett_j' | 'skelt_harrison' | 'cuddy';
+		j_sat_mode?: 'swn' | 'sw';
 		fits: Record<
 			string,
 			{
@@ -242,6 +244,26 @@ class ProjectDataState {
 				b: number;
 				c?: number;
 				d?: number;
+				rmse?: number;
+				r2?: number;
+				count?: number;
+			}
+		>;
+		fits_swn?: Record<
+			string,
+			{
+				a: number;
+				b: number;
+				rmse?: number;
+				r2?: number;
+				count?: number;
+			}
+		>;
+		fits_sw?: Record<
+			string,
+			{
+				a: number;
+				b: number;
 				rmse?: number;
 				r2?: number;
 				count?: number;
@@ -516,6 +538,99 @@ class ProjectDataState {
 		void this.refreshSummary(pid);
 		void this.loadStickPlot(true);
 		return true;
+	}
+
+	setShfJSatMode(mode: 'swn' | 'sw') {
+		if (this.shfParams.jSatMode === mode && this.shfResult?.j_sat_mode === mode) return;
+		this.shfParams.jSatMode = mode;
+		const sr = this.shfResult;
+		if (!sr || (sr.model ?? this.shfParams.model) !== 'leverett_j') return;
+
+		let nextFits =
+			mode === 'sw'
+				? sr.fits_sw && Object.keys(sr.fits_sw).length > 0
+					? sr.fits_sw
+					: null
+				: sr.fits_swn && Object.keys(sr.fits_swn).length > 0
+					? sr.fits_swn
+					: null;
+
+		if (!nextFits && sr.scal_data && Array.isArray(sr.scal_data.j)) {
+			const satArr = mode === 'sw' ? sr.scal_data.sw : sr.scal_data.swn;
+			const jArr = sr.scal_data.j;
+			const rfArr = sr.scal_data.rock_flags;
+			const byRf = new Map<number, { x: number[]; y: number[]; s: number[]; j: number[] }>();
+			for (let i = 0; i < jArr.length; i++) {
+				const s = satArr?.[i];
+				const j = jArr[i];
+				const rf = rfArr?.[i] ?? 1;
+				if (
+					typeof s === 'number' &&
+					typeof j === 'number' &&
+					Number.isFinite(s) &&
+					Number.isFinite(j) &&
+					s > 0.01 &&
+					s <= 1.0 &&
+					j > 0
+				) {
+					if (!byRf.has(rf)) byRf.set(rf, { x: [], y: [], s: [], j: [] });
+					const g = byRf.get(rf)!;
+					g.x.push(-Math.log(s));
+					g.y.push(Math.log(j));
+					g.s.push(s);
+					g.j.push(j);
+				}
+			}
+			const computed: Record<
+				string,
+				{ a: number; b: number; rmse?: number; r2?: number; count?: number }
+			> = {};
+			for (const [rf, g] of byRf.entries()) {
+				const n = g.x.length;
+				if (n < 2) continue;
+				const mx = g.x.reduce((a, b) => a + b, 0) / n;
+				const my = g.y.reduce((a, b) => a + b, 0) / n;
+				let num = 0;
+				let den = 0;
+				for (let k = 0; k < n; k++) {
+					num += (g.x[k] - mx) * (g.y[k] - my);
+					den += (g.x[k] - mx) * (g.x[k] - mx);
+				}
+				const b = Math.min(2.8, Math.max(0.08, den > 1e-8 ? num / den : 0.4));
+				const alpha = my - b * mx;
+				const a = Math.min(50.0, Math.max(1e-4, Math.exp(alpha)));
+				let ssRes = 0;
+				let ssTot = 0;
+				let sqErr = 0;
+				for (let k = 0; k < n; k++) {
+					const ypLog = alpha + b * g.x[k];
+					ssRes += (g.y[k] - ypLog) ** 2;
+					ssTot += (g.y[k] - my) ** 2;
+					const yp = a * Math.pow(g.s[k], -b);
+					sqErr += (g.j[k] - yp) ** 2;
+				}
+				computed[String(rf)] = {
+					a: Number(a.toFixed(4)),
+					b: Number(b.toFixed(4)),
+					rmse: Number(Math.sqrt(sqErr / n).toFixed(4)),
+					r2: Number((ssTot > 1e-12 ? Math.max(0, 1 - ssRes / ssTot) : 0).toFixed(4)),
+					count: n
+				};
+			}
+			if (Object.keys(computed).length > 0) {
+				nextFits = computed;
+			}
+		}
+
+		if (nextFits) {
+			this.shfResult = {
+				...sr,
+				j_sat_mode: mode,
+				fits: nextFits,
+				fits_swn: mode === 'swn' ? nextFits : (sr.fits_swn ?? sr.fits),
+				fits_sw: mode === 'sw' ? nextFits : sr.fits_sw
+			};
+		}
 	}
 
 	private async saveSingleMultiWellModule(

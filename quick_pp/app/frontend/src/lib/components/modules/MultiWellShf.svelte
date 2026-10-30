@@ -102,15 +102,20 @@
 	) {
 		const num = Number(rawVal);
 		if (!Number.isFinite(num) || !projectData.shfResult?.fits?.[rf]) return;
+		const nextEntry = {
+			...projectData.shfResult.fits[rf],
+			[paramKey]: num
+		};
+		const nextFits = {
+			...projectData.shfResult.fits,
+			[rf]: nextEntry
+		};
+		const isSwMode = (projectData.shfParams.jSatMode ?? 'swn') === 'sw';
 		projectData.shfResult = {
 			...projectData.shfResult,
-			fits: {
-				...projectData.shfResult.fits,
-				[rf]: {
-					...projectData.shfResult.fits[rf],
-					[paramKey]: num
-				}
-			}
+			fits: nextFits,
+			fits_swn: isSwMode ? projectData.shfResult.fits_swn : nextFits,
+			fits_sw: isSwMode ? nextFits : projectData.shfResult.fits_sw
 		};
 	}
 
@@ -139,9 +144,11 @@
 		projectData.error = null;
 		try {
 			const sp = projectData.shfParams;
+			const jSatMode = sp.jSatMode ?? 'swn';
 			const customFits =
 				!resetFits &&
 				projectData.shfResult?.model === sp.model &&
+				(sp.model !== 'leverett_j' || (projectData.shfResult?.j_sat_mode ?? 'swn') === jSatMode) &&
 				projectData.shfResult?.fits &&
 				Object.keys(projectData.shfResult.fits).length > 0
 					? projectData.shfResult.fits
@@ -153,6 +160,7 @@
 				{
 					well_names: validTvdWells,
 					model: sp.model,
+					j_sat_mode: jSatMode,
 					unit: sp.unit ?? 'metric',
 					drt_method: projectData.drtMethod,
 					cutoffs: [...projectData.activeDrtCutoffs].sort((a, b) => a - b),
@@ -168,7 +176,10 @@
 			);
 			projectData.shfResult = {
 				model: data.model ?? sp.model,
+				j_sat_mode: data.j_sat_mode ?? jSatMode,
 				fits: data.fits ?? {},
+				fits_swn: data.fits_swn ?? (jSatMode === 'swn' ? data.fits : undefined),
+				fits_sw: data.fits_sw ?? (jSatMode === 'sw' ? data.fits : undefined),
 				fwl_by_zone: data.fwl_by_zone ?? sp.fwlByZone,
 				scal_data: data.scal_data,
 				...data.data
@@ -550,7 +561,14 @@
 		{#if projectData.shfResult}
 			{@const activeModel = projectData.shfResult.model ?? projectData.shfParams.model}
 			{@const meta = MODEL_META[activeModel]}
-			<ParameterSection title={meta.fitTitle} badge={meta.formula}>
+			{@const isSwMode = (projectData.shfParams.jSatMode ?? 'swn') === 'sw'}
+			{@const activeFormula =
+				activeModel === 'leverett_j'
+					? isSwMode
+						? 'J = a · Sw^(-b)'
+						: 'J = a · Swn^(-b)'
+					: meta.formula}
+			<ParameterSection title={meta.fitTitle} badge={activeFormula}>
 				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
 					<span>
 						SCAL points:
@@ -558,14 +576,31 @@
 							{projectData.shfResult.scal_data?.pc?.length ?? 0}
 						</strong>
 					</span>
-					<button
-						type="button"
-						disabled={projectData.isComputingMultiWell || projectData.wellsWithTvd.length === 0}
-						onclick={() => executeShf(true, true)}
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)] disabled:cursor-not-allowed disabled:opacity-50"
-					>
-						Reset Auto-Fit
-					</button>
+					<div class="flex items-center gap-1">
+						{#if activeModel === 'leverett_j'}
+							<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+								{#each [['swn', 'J vs Swn'], ['sw', 'J vs Sw']] as [sKey, sLbl]}
+									<button
+										type="button"
+										onclick={() => projectData.setShfJSatMode(sKey as 'swn' | 'sw')}
+										class="px-1.5 py-0.5 text-[10px] font-medium first:border-r first:border-[var(--border-hairline)] {(projectData.shfParams.jSatMode ?? 'swn') === sKey
+											? 'bg-blue-600 font-semibold text-white'
+											: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+									>
+										{sLbl}
+									</button>
+								{/each}
+							</div>
+						{/if}
+						<button
+							type="button"
+							disabled={projectData.isComputingMultiWell || projectData.wellsWithTvd.length === 0}
+							onclick={() => executeShf(true, true)}
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							Reset Auto-Fit
+						</button>
+					</div>
 				</div>
 
 				<div class="overflow-x-auto border border-[var(--border-hairline)]">

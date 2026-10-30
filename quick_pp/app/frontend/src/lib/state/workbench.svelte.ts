@@ -171,6 +171,27 @@ export interface ScalModelParams {
 	pc_exponent: number;
 	pc_max: number;
 	n_points: number;
+	// Core Overburden & Klinkenberg Correction Parameters
+	core_lithology: 'sandstone' | 'friable_sandstone' | 'carbonate';
+	net_confining_stress: number;
+	mean_pore_pressure: number;
+	compaction_coeff: number;
+	perm_compaction_coeff: number;
+	klinkenberg_method: 'jones' | 'heithaus';
+	core_corrected: boolean;
+	core_poro_amb_mean: number | null;
+	core_poro_res_mean: number | null;
+	core_perm_air_mean: number | null;
+	core_perm_liq_mean: number | null;
+	// Lab-to-Reservoir Pc Scaling Parameters
+	pc_lab_input: number;
+	ift_lab: number;
+	theta_lab: number;
+	ift_res: number;
+	theta_res: number;
+	pc_res_output: number | null;
+	pc_scale_factor: number | null;
+	pc_scaling_applied: boolean;
 }
 
 export interface ScalComputedResult {
@@ -355,7 +376,26 @@ class WorkbenchState {
 		pc_entry: 1.5,
 		pc_exponent: 2.0,
 		pc_max: 50.0,
-		n_points: 25
+		n_points: 25,
+		core_lithology: 'sandstone',
+		net_confining_stress: 3500,
+		mean_pore_pressure: 45,
+		compaction_coeff: 6e-6,
+		perm_compaction_coeff: 3e-5,
+		klinkenberg_method: 'jones',
+		core_corrected: false,
+		core_poro_amb_mean: null,
+		core_poro_res_mean: null,
+		core_perm_air_mean: null,
+		core_perm_liq_mean: null,
+		pc_lab_input: 25.0,
+		ift_lab: 480.0,
+		theta_lab: 140.0,
+		ift_res: 30.0,
+		theta_res: 30.0,
+		pc_res_output: null,
+		pc_scale_factor: null,
+		pc_scaling_applied: false
 	});
 
 	scalResult = $state<ScalComputedResult | null>(null);

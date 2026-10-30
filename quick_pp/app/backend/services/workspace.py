@@ -970,6 +970,10 @@ class WorkspaceShfRequest(BaseModel):
         "leverett_j",
         description="SHF model: 'leverett_j', 'skelt_harrison', or 'cuddy'",
     )
+    j_sat_mode: str = Field(
+        "swn",
+        description="Saturation variable for Leverett-J curve fitting: 'swn' (normalized water saturation) or 'sw' (water saturation)",
+    )
     drt_method: str = Field(
         "fzi",
         description="Rock typing method for SCAL core plug and fallback log classification: 'fzi', 'winland', or 'lucia'",
@@ -1325,6 +1329,15 @@ def workspace_well_bundle(
 
         core_samples_list: List[Dict[str, Any]] = []
         scal_pc_list: List[Dict[str, Any]] = []
+        pc_scale_saved = (
+            float(well_config["pc_scale_factor"])
+            if (
+                well_config.get("pc_scaling_applied")
+                and well_config.get("pc_scale_factor") is not None
+                and float(well_config.get("pc_scale_factor") or 0.0) > 1e-9
+            )
+            else None
+        )
         core_data_raw = ancillary.get("core_data")
         if isinstance(core_data_raw, dict):
             for sname, sdict in core_data_raw.items():
@@ -1332,6 +1345,10 @@ def workspace_well_bundle(
                 meas_df = sdict.get("measurements")
                 poro_val = None
                 perm_val = None
+                poro_amb_val = None
+                perm_air_val = None
+                raw_depth_val = None
+                shift_m_val = None
                 if isinstance(meas_df, pd.DataFrame) and not meas_df.empty:
                     for _, mrow in meas_df.iterrows():
                         prop = str(mrow.get("property", "")).upper()
@@ -1345,6 +1362,26 @@ def workspace_well_bundle(
                             and mrow.get("value") is not None
                         ):
                             perm_val = float(mrow["value"])
+                        elif (
+                            prop in ("CPORE_AMB", "CPORE_ORI", "POR_AMB")
+                            and mrow.get("value") is not None
+                        ):
+                            poro_amb_val = float(mrow["value"])
+                        elif (
+                            prop in ("CPERM_AIR", "CPERM_ORI", "PERM_AIR")
+                            and mrow.get("value") is not None
+                        ):
+                            perm_air_val = float(mrow["value"])
+                        elif (
+                            prop in ("RAW_DEPTH", "DRILLER_DEPTH")
+                            and mrow.get("value") is not None
+                        ):
+                            raw_depth_val = float(mrow["value"])
+                        elif (
+                            prop in ("SHIFT_M", "CORE_SHIFT")
+                            and mrow.get("value") is not None
+                        ):
+                            shift_m_val = float(mrow["value"])
 
                 pc_df = sdict.get("pc")
                 has_pc = isinstance(pc_df, pd.DataFrame) and not pc_df.empty
@@ -1359,31 +1396,57 @@ def workspace_well_bundle(
                             or pd.isna(sw_v)
                         ):
                             continue
-                        scal_pc_list.append(
-                            {
-                                "sample_name": str(sname),
-                                "depth": s_depth,
-                                "pc": float(pc_v),
-                                "sw": float(sw_v),
-                                "experiment_type": str(
-                                    prow.get("type")
-                                    or prow.get("experiment_type")
-                                    or "micp"
-                                ),
-                                "cycle": str(prow.get("cycle") or "drainage"),
-                            }
+                        exp_str = str(
+                            prow.get("type")
+                            or prow.get("experiment_type")
+                            or "micp"
                         )
+                        pc_float = float(pc_v)
+                        pc_item: Dict[str, Any] = {
+                            "sample_name": str(sname),
+                            "depth": s_depth,
+                            "pc": pc_float,
+                            "sw": float(sw_v),
+                            "experiment_type": exp_str,
+                            "cycle": str(prow.get("cycle") or "drainage"),
+                        }
+                        if pc_scale_saved and (
+                            exp_str.endswith("_res")
+                            or well_config.get("pc_scaling_applied")
+                        ):
+                            pc_item["pc_lab"] = round(pc_float / pc_scale_saved, 4)
+                            pc_item["pc_res"] = pc_float
+                        scal_pc_list.append(pc_item)
 
                 # Include in RCA list if it has RCA measurements or if it's an empty sample stub without SCAL Pc
                 if poro_val is not None or perm_val is not None or not has_pc:
-                    core_samples_list.append(
-                        {
-                            "sample_name": str(sname),
-                            "depth": s_depth,
-                            "porosity": poro_val,
-                            "permeability": perm_val,
-                        }
+                    eff_raw_d = raw_depth_val if raw_depth_val is not None else s_depth
+                    eff_shift = (
+                        shift_m_val
+                        if shift_m_val is not None
+                        else round(s_depth - eff_raw_d, 3)
                     )
+                    sample_entry: Dict[str, Any] = {
+                        "sample_name": str(sname),
+                        "depth": s_depth,
+                        "raw_depth": eff_raw_d,
+                        "shift_m": eff_shift,
+                        "porosity": poro_val,
+                        "permeability": perm_val,
+                    }
+                    if poro_amb_val is not None:
+                        sample_entry["porosity_amb"] = poro_amb_val
+                        if poro_val is not None:
+                            sample_entry["porosity_res"] = poro_val
+                    if perm_air_val is not None:
+                        sample_entry["perm_air"] = perm_air_val
+                        if perm_val is not None:
+                            sample_entry["perm_liquid"] = perm_val
+                    if sdict.get("description"):
+                        sample_entry["description"] = str(sdict["description"])
+                    if sdict.get("remark"):
+                        sample_entry["remark"] = str(sdict["remark"])
+                    core_samples_list.append(sample_entry)
 
         core_samples_list.sort(key=lambda r: (r["depth"], r["sample_name"]))
         scal_pc_list.sort(key=lambda r: (r["depth"], r["sample_name"], r["pc"]))
@@ -5286,6 +5349,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     meas = sample.get("measurements")
                     cperm = None
                     cpore = None
+                    s_raw_depth = s_depth
                     if (
                         isinstance(meas, pd.DataFrame)
                         and not meas.empty
@@ -5303,46 +5367,108 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                             .str.upper()
                             .isin(["CPORE", "POR", "POROSITY"])
                         ]
+                        raw_d_r = meas[
+                            meas["property"]
+                            .astype(str)
+                            .str.upper()
+                            .isin(["RAW_DEPTH", "CORE_DEPTH_RAW"])
+                        ]
                         if not perm_r.empty and pd.notna(perm_r["value"].iloc[0]):
                             cperm = float(perm_r["value"].iloc[0])
                         if not phit_r.empty and pd.notna(phit_r["value"].iloc[0]):
                             cpore = float(phit_r["value"].iloc[0])
+                        if not raw_d_r.empty and pd.notna(raw_d_r["value"].iloc[0]):
+                            s_raw_depth = float(raw_d_r["value"].iloc[0])
 
-                    # Fallback 1: check if another core sample at the same depth in this well has RCA CPORE/CPERM
-                    if (cpore is None or cperm is None) and s_depth > 0:
-                        for other_s in core_data.values():
-                            if abs(float(other_s.get("depth") or 0.0) - s_depth) < 0.05:
-                                o_meas = other_s.get("measurements")
-                                if (
-                                    isinstance(o_meas, pd.DataFrame)
-                                    and not o_meas.empty
-                                    and "property" in o_meas.columns
-                                ):
-                                    if cperm is None:
-                                        pr = o_meas[
-                                            o_meas["property"]
-                                            .astype(str)
-                                            .str.upper()
-                                            .isin(["CPERM", "PERM", "PERMEABILITY"])
-                                        ]
-                                        if not pr.empty and pd.notna(
-                                            pr["value"].iloc[0]
-                                        ):
-                                            cperm = float(pr["value"].iloc[0])
-                                    if cpore is None:
-                                        phr = o_meas[
-                                            o_meas["property"]
-                                            .astype(str)
-                                            .str.upper()
-                                            .isin(["CPORE", "POR", "POROSITY"])
-                                        ]
-                                        if not phr.empty and pd.notna(
-                                            phr["value"].iloc[0]
-                                        ):
-                                            cpore = float(phr["value"].iloc[0])
+                    has_core_perm = cperm is not None
 
-                    # Fallback 2: interpolate / lookup well's log PHIT & PERM at nearest depth
-                    if (cpore is None or cperm is None) and s_depth > 0:
+                    # Fallback 1: check companion RCA core sample in this well by sister sample name (e.g. 1A -> 1)
+                    # or nearest depth (matching against both shifted depth and RAW_DEPTH / CORE_DEPTH_RAW within 0.50m)
+                    if cpore is None or cperm is None:
+                        import re as _re
+
+                        def _norm_plug_stem(val: Any) -> str:
+                            base = str(val or "").split("@")[0].strip().upper()
+                            base = _re.sub(r"^(PLUG|SAMPLE|RCA|SCAL)[\s_\-]*", "", base)
+                            # Strip trailing sister-plug letter (e.g. 1A -> 1, 12B -> 12)
+                            m_stem = _re.match(r"^(\d+)[A-Z]$", base)
+                            return m_stem.group(1) if m_stem else base
+
+                        target_stem = _norm_plug_stem(sname)
+                        best_poro_cand: Optional[Tuple[float, float]] = None
+                        best_perm_cand: Optional[Tuple[float, float]] = None
+
+                        for other_name, other_s in core_data.items():
+                            if other_name == sname:
+                                continue
+                            o_meas = other_s.get("measurements")
+                            if (
+                                not isinstance(o_meas, pd.DataFrame)
+                                or o_meas.empty
+                                or "property" not in o_meas.columns
+                            ):
+                                continue
+                            o_depth = float(other_s.get("depth") or 0.0)
+                            o_raw_depth = o_depth
+                            o_raw_r = o_meas[
+                                o_meas["property"]
+                                .astype(str)
+                                .str.upper()
+                                .isin(["RAW_DEPTH", "CORE_DEPTH_RAW"])
+                            ]
+                            if not o_raw_r.empty and pd.notna(o_raw_r["value"].iloc[0]):
+                                o_raw_depth = float(o_raw_r["value"].iloc[0])
+
+                            dist = min(
+                                abs(o_depth - s_depth) if s_depth > 0 and o_depth > 0 else 999.0,
+                                abs(o_raw_depth - s_depth) if s_depth > 0 and o_raw_depth > 0 else 999.0,
+                                abs(o_raw_depth - s_raw_depth) if s_raw_depth > 0 and o_raw_depth > 0 else 999.0,
+                                abs(o_depth - s_raw_depth) if s_raw_depth > 0 and o_depth > 0 else 999.0,
+                            )
+                            same_stem = bool(
+                                target_stem and _norm_plug_stem(other_name) == target_stem
+                            )
+                            if not (dist <= 0.50 or (same_stem and dist <= 2.50)):
+                                continue
+                            # Prioritize exact/sister stem match + minimal depth distance
+                            score = dist - (1.0 if same_stem else 0.0)
+
+                            if cperm is None:
+                                pr = o_meas[
+                                    o_meas["property"]
+                                    .astype(str)
+                                    .str.upper()
+                                    .isin(["CPERM", "PERM", "PERMEABILITY"])
+                                ]
+                                if not pr.empty and pd.notna(pr["value"].iloc[0]):
+                                    kv = float(pr["value"].iloc[0])
+                                    if kv > 0 and (
+                                        best_perm_cand is None or score < best_perm_cand[0]
+                                    ):
+                                        best_perm_cand = (score, kv)
+                            if cpore is None:
+                                phr = o_meas[
+                                    o_meas["property"]
+                                    .astype(str)
+                                    .str.upper()
+                                    .isin(["CPORE", "POR", "POROSITY"])
+                                ]
+                                if not phr.empty and pd.notna(phr["value"].iloc[0]):
+                                    pv = float(phr["value"].iloc[0])
+                                    if pv > 0 and (
+                                        best_poro_cand is None or score < best_poro_cand[0]
+                                    ):
+                                        best_poro_cand = (score, pv)
+
+                        if cpore is None and best_poro_cand is not None:
+                            cpore = best_poro_cand[1]
+                        if cperm is None and best_perm_cand is not None:
+                            cperm = best_perm_cand[1]
+                            has_core_perm = True
+
+                    # Fallback 2: lookup well's merged CPORE/CPERM (within ±0.50m) or log PHIT & PERM_TRANS/PERM at nearest depth
+                    near_rock_flag: Optional[int] = None
+                    if s_depth > 0:
                         try:
                             if well_df_cache is None:
                                 well_df_cache = _get_filtered_well_df(project_id, wn)
@@ -5351,10 +5477,31 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                                 and not well_df_cache.empty
                                 and "DEPTH" in well_df_cache.columns
                             ):
-                                idx_near = (
-                                    (well_df_cache["DEPTH"] - s_depth).abs().idxmin()
-                                )
+                                depth_diff = (well_df_cache["DEPTH"] - s_depth).abs()
+                                idx_near = depth_diff.idxmin()
                                 near_row = well_df_cache.loc[idx_near]
+                                for rf_col in ("ROCK_FLAG", "ROCK_FLAG_ML"):
+                                    if rf_col in near_row and pd.notna(near_row[rf_col]):
+                                        rf_candidate = int(float(near_row[rf_col]))
+                                        if rf_candidate >= 1:
+                                            near_rock_flag = rf_candidate
+                                            break
+
+                                win_df = well_df_cache.loc[depth_diff <= 0.50]
+                                if cpore is None and not win_df.empty and "CPORE" in win_df.columns:
+                                    valid_cp = pd.to_numeric(win_df["CPORE"], errors="coerce")
+                                    valid_cp = valid_cp[valid_cp > 0]
+                                    if not valid_cp.empty:
+                                        cp_idx = (well_df_cache.loc[valid_cp.index, "DEPTH"] - s_depth).abs().idxmin()
+                                        cpore = float(valid_cp.loc[cp_idx])
+                                if cperm is None and not win_df.empty and "CPERM" in win_df.columns:
+                                    valid_ck = pd.to_numeric(win_df["CPERM"], errors="coerce")
+                                    valid_ck = valid_ck[valid_ck > 0]
+                                    if not valid_ck.empty:
+                                        ck_idx = (well_df_cache.loc[valid_ck.index, "DEPTH"] - s_depth).abs().idxmin()
+                                        cperm = float(valid_ck.loc[ck_idx])
+                                        has_core_perm = True
+
                                 if cpore is None:
                                     for pcol in ("CPORE", "PHIT", "PHIE"):
                                         if (
@@ -5365,7 +5512,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                                             cpore = float(near_row[pcol])
                                             break
                                 if cperm is None:
-                                    for kcol in ("CPERM", "PERM", "K"):
+                                    for kcol in ("CPERM", "PERM_TRANS", "PERM", "K"):
                                         if (
                                             kcol in near_row
                                             and pd.notna(near_row[kcol])
@@ -5393,6 +5540,8 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                             ind_val_plug, req.cutoffs, higher_is_better=hib_plug
                         ).item()
                     )
+                    if not has_core_perm and near_rock_flag is not None:
+                        rf_val = near_rock_flag
                     pc_col = next(
                         (
                             c
@@ -5444,10 +5593,23 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         len(sw_vals) >= 4
                         and (np.nanmax(sw_vals) - np.nanmin(sw_vals)) > 0.25
                     ):
-                        raw_swn = np.asarray(
-                            normalize_sw(pd.Series(sw_vals)), dtype=float
+                        # Use a poro-perm bounded Swirr estimate so incomplete drainage curves
+                        # (e.g., tight plugs terminating at Sw=0.41) are not artificially stretched to Swn=0.030
+                        sw_min_plug = float(np.nanmin(sw_vals))
+                        swirr_est = float(
+                            np.clip(
+                                0.08
+                                * (
+                                    (max(float(cperm), 0.01) / max(float(cpore), 0.01))
+                                    ** -0.12
+                                ),
+                                0.04,
+                                0.22,
+                            )
                         )
-                        swn_vals = np.clip(0.03 + 0.94 * raw_swn, 0.02, 0.98)
+                        eff_swirr = min(sw_min_plug * 0.92, swirr_est)
+                        raw_swn = (sw_vals - eff_swirr) / max(1.0 - eff_swirr, 1e-3)
+                        swn_vals = np.clip(raw_swn, 0.02, 0.98)
                     else:
                         swn_vals = np.clip(sw_vals, 0.02, 0.98)
                     for pc_v, sw_v, swn_v in zip(pc_vals, sw_vals, swn_vals):
@@ -5545,6 +5707,32 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 )
 
         scal_df = pd.DataFrame(core_rows)
+        j_sat_mode = (
+            "sw"
+            if str(getattr(req, "j_sat_mode", "swn") or "swn").strip().lower() == "sw"
+            else "swn"
+        )
+        fits_swn: Dict[str, Dict[str, float]] = {}
+        fits_sw: Dict[str, Dict[str, float]] = {}
+        if model == "leverett_j" and not scal_df.empty:
+            for param in auto_j_params(scal_df):
+                fits_swn[str(param["ROCK_FLAG"])] = {
+                    "a": float(param["a"]),
+                    "b": float(param["b"]),
+                    "rmse": float(param["rmse"]),
+                    "r2": float(param.get("r2", 0.0)),
+                    "count": int(param.get("count", 0)),
+                }
+            scal_df_sw = scal_df.assign(SWN=scal_df["SW"])
+            for param in auto_j_params(scal_df_sw):
+                fits_sw[str(param["ROCK_FLAG"])] = {
+                    "a": float(param["a"]),
+                    "b": float(param["b"]),
+                    "rmse": float(param["rmse"]),
+                    "r2": float(param.get("r2", 0.0)),
+                    "count": int(param.get("count", 0)),
+                }
+
         fits: Dict[str, Dict[str, float]] = {}
         if req.fits:
             for k_rf, v_fit in req.fits.items():
@@ -5589,17 +5777,13 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                             "count": int(param.get("count", 0)),
                         }
                 else:
-                    for param in auto_j_params(scal_df):
-                        fits[str(param["ROCK_FLAG"])] = {
-                            "a": float(param["a"]),
-                            "b": float(param["b"]),
-                            "rmse": float(param["rmse"]),
-                            "r2": float(param.get("r2", 0.0)),
-                            "count": int(param.get("count", 0)),
-                        }
+                    src_fits = fits_sw if j_sat_mode == "sw" else fits_swn
+                    for rf_k, f_val in src_fits.items():
+                        fits[rf_k] = dict(f_val)
 
         # Recompute fit diagnostics (rmse, r2, count) against SCAL points for all entries in fits
         if not scal_df.empty and fits:
+            j_sat_col = "SW" if j_sat_mode == "sw" else "SWN"
             for rf_key, fit_entry in list(fits.items()):
                 try:
                     rf_int = int(rf_key)
@@ -5632,7 +5816,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     y_true = sub_scal["J"].to_numpy(dtype=float)
                     y_pred = np.asarray(
                         inv_power_law_func(
-                            sub_scal["SWN"].to_numpy(dtype=float), a_f, b_f
+                            sub_scal[j_sat_col].to_numpy(dtype=float), a_f, b_f
                         ),
                         dtype=float,
                     )
@@ -5641,7 +5825,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     yt = y_true[valid_m]
                     yp = y_pred[valid_m]
                     if model == "leverett_j":
-                        swn_m = sub_scal["SWN"].to_numpy(dtype=float)[valid_m]
+                        swn_m = sub_scal[j_sat_col].to_numpy(dtype=float)[valid_m]
                         pos_m = (yt > 0) & (yp > 0) & (swn_m > 0)
                         if np.any(pos_m):
                             yt_p = yt[pos_m]
@@ -5688,6 +5872,12 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     fit_entry["rmse"] = round(rmse_v, 4)
                     fit_entry["r2"] = round(r2_v, 4)
                     fit_entry["count"] = int(np.sum(valid_m))
+
+        if model == "leverett_j":
+            if j_sat_mode == "sw":
+                fits_sw = {k: dict(v) for k, v in fits.items()}
+            else:
+                fits_swn = {k: dict(v) for k, v in fits.items()}
 
         fwl_zone_map: Dict[str, float] = {}
         if req.fwl_by_zone:
@@ -6115,7 +6305,10 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         return {
             "project_id": project_id,
             "model": model,
+            "j_sat_mode": j_sat_mode,
             "fits": fits,
+            "fits_swn": fits_swn if model == "leverett_j" else fits,
+            "fits_sw": fits_sw if model == "leverett_j" else fits,
             "fwl_by_zone": fwl_zone_map,
             "scal_data": scal_payload,
             "saved": req.save,

@@ -581,7 +581,12 @@
 			for (const s of wellData.coreSamples) {
 				const d = Number(s.depth ?? s.DEPTH);
 				const p = Number(s.porosity ?? s.CPORE ?? s.poro);
-				if (Number.isFinite(d) && Number.isFinite(p) && p > 0) {
+				if (
+					Number.isFinite(d) &&
+					Number.isFinite(p) &&
+					p > 0 &&
+					wellData.isDepthInActiveFilter(d)
+				) {
 					const normP = p > 1 ? p / 100 : p;
 					cporeX.push(normP * 2.0);
 					cporeY.push(d);
@@ -607,7 +612,12 @@
 			for (const s of wellData.coreSamples) {
 				const d = Number(s.depth ?? s.DEPTH);
 				const k = Number(s.permeability ?? s.CPERM ?? s.perm);
-				if (Number.isFinite(d) && Number.isFinite(k) && k > 0) {
+				if (
+					Number.isFinite(d) &&
+					Number.isFinite(k) &&
+					k > 0 &&
+					wellData.isDepthInActiveFilter(d)
+				) {
 					cpermX.push(k);
 					cpermY.push(d);
 				}
@@ -834,7 +844,7 @@
 				y: svgDepth,
 				xaxis: 'x',
 				yaxis: 'y',
-				line: { color: '#64748B', width: 1.0, dash: 'dash' },
+				line: { color: '#64748B', width: 1.0, dash: '4px,2px' },
 				hovertemplate: 'BS: %{customdata:.2f} in<extra></extra>'
 			});
 		}
@@ -906,7 +916,7 @@
 			primary: string;
 			aliases: string[];
 			color: string;
-			dash: 'solid' | 'dash' | 'dot';
+			dash: string;
 			width: number;
 		}> = [
 			{
@@ -920,7 +930,7 @@
 				primary: 'RM',
 				aliases: ['RMED', 'RILM', 'ILM', 'LLM', 'LL8', 'M2R6'],
 				color: PETRO_COLORS.rm,
-				dash: 'dash',
+				dash: '4px,2px',
 				width: 1.3
 			},
 			{
@@ -975,7 +985,7 @@
 					y: svgDepth,
 					xaxis: 'x2',
 					yaxis: 'y',
-					line: { color: PETRO_COLORS.rtMod, width: 1.65, dash: 'dash' },
+					line: { color: PETRO_COLORS.rtMod, width: 1.65, dash: '4px,2px' },
 					hovertemplate: 'RT_MOD (Hagiwara TS): %{x:.2f} ohm.m<extra></extra>'
 				});
 			}
@@ -1135,7 +1145,7 @@
 				y: svgDepth,
 				xaxis: 'x3',
 				yaxis: 'y',
-				line: { color: PETRO_COLORS.nphi, width: 1.45, dash: 'dash' },
+				line: { color: PETRO_COLORS.nphi, width: 1.45, dash: '4px,2px' },
 				hovertemplate: 'NPHI: %{x:.3f} v/v<extra></extra>'
 			});
 		}
@@ -1163,7 +1173,7 @@
 				y: svgDepth,
 				xaxis: 'x3',
 				yaxis: 'y',
-				line: { color: PETRO_COLORS.dt, width: 1.35, dash: 'dashdot' },
+				line: { color: PETRO_COLORS.dt, width: 1.35, dash: '5px,2px,1.5px,2px' },
 				hovertemplate: `${activeDtcMnem}: %{customdata:.1f} µs/ft<extra></extra>`
 			});
 		}
@@ -1371,7 +1381,7 @@
 					y: svgDepth,
 					xaxis: 'x4',
 					yaxis: 'y',
-					line: { color: PETRO_COLORS.phitSand, width: 1.65, dash: 'dash' },
+					line: { color: PETRO_COLORS.phitSand, width: 1.65, dash: '4px,2px' },
 					hovertemplate: 'PHIT_SAND (TS): %{customdata:.3f} v/v<extra></extra>'
 				});
 			}
@@ -1491,7 +1501,7 @@
 				y: svgDepth,
 				xaxis: 'x5',
 				yaxis: 'y',
-				line: { color: '#7C3AED', width: 1.6, dash: 'dash' },
+				line: { color: '#7C3AED', width: 1.6, dash: '4px,2px' },
 				hovertemplate: 'PERM_TRANS: %{x:.2f} mD<extra></extra>'
 			});
 		}
@@ -1763,18 +1773,19 @@
 				hovertemplate: 'Sw P90: %{x:.3f}<extra></extra>'
 			});
 		}
-		const shf = pick('SHF');
+		const shf = pick('SHF').length ? pick('SHF') : pick('SW_SHF');
+		const shfMnem = pick('SHF').length ? 'SHF' : 'SW_SHF';
 		if (shf.some((v) => v !== null)) {
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
-				name: 'SHF',
+				name: shfMnem,
 				x: decimateSvg(shf),
 				y: svgDepth,
 				xaxis: 'x7',
 				yaxis: 'y',
-				line: { color: '#DC2626', width: 1.2, dash: 'dash' },
-				hovertemplate: 'SHF: %{x:.3f} v/v<extra></extra>'
+				line: { color: '#DC2626', width: 1.35, dash: '4px,2px' },
+				hovertemplate: `${shfMnem}: %{x:.3f} v/v<extra></extra>`
 			});
 		}
 		const payFlags = pick('PAY_FLAGS');
@@ -2043,6 +2054,7 @@
 		'SW_P10',
 		'SW_P90',
 		'SHF',
+		'SW_SHF',
 		'PAY_FLAGS'
 	] as const;
 
@@ -2881,20 +2893,38 @@
 				{/if}
 			</div>
 
-			<!-- Track 7: SW (1.0 <- 0.0 v/v) & PAY -->
+			<!-- Track 7: SW (1.0 <- 0.0 v/v) & SHF / PAY -->
 			<div
 				style="left: 85.4%; width: 14.6%;"
-				class="absolute inset-y-0 flex flex-col justify-end border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
 			>
-				<div
-					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
-					style="color: {PETRO_COLORS.water}"
-				>
-					<span>1.0</span>
-					<span class="font-sans text-[9.5px] font-bold">◄ SW / PAY</span>
-					<span>0.0</span>
+				{#if wellData.curves['SHF'] || wellData.curves['SW_SHF']}
+					<div class="flex flex-col">
+						<div
+							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none text-[#DC2626]"
+						>
+							<span>1.0</span>
+							<span class="font-sans text-[8px] font-bold">
+								◄ {wellData.curves['SW_SHF'] && !wellData.curves['SHF'] ? 'SW_SHF' : 'SHF'}
+							</span>
+							<span>0.0</span>
+						</div>
+						<div class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed border-[#DC2626]"></div>
+					</div>
+				{:else}
+					<div></div>
+				{/if}
+				<div class="flex flex-col">
+					<div
+						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+						style="color: {PETRO_COLORS.water}"
+					>
+						<span>1.0</span>
+						<span class="font-sans text-[9.5px] font-bold">◄ SW / PAY</span>
+						<span>0.0</span>
+					</div>
+					<div class="h-0.5 w-full rounded-full" style="background: {PETRO_COLORS.water}"></div>
 				</div>
-				<div class="h-0.5 w-full rounded-full" style="background: {PETRO_COLORS.water}"></div>
 			</div>
 		</div>
 	</div>

@@ -21,30 +21,6 @@
 	let newScalPc = $state<number>(15);
 	let newScalSw = $state<number>(0.35);
 
-	// Known sample names & depths from RCA and SCAL for quick auto-fill when adding multiple Pc-Sw pairs
-	let knownSamples = $derived.by(() => {
-		const map = new Map<string, number>();
-		for (const s of wellData.coreSamples) {
-			if (s.sample_name && Number.isFinite(Number(s.depth))) {
-				map.set(String(s.sample_name), Number(s.depth));
-			}
-		}
-		for (const s of wellData.scalPc) {
-			if (s.sample_name && Number.isFinite(Number(s.depth)) && !map.has(String(s.sample_name))) {
-				map.set(String(s.sample_name), Number(s.depth));
-			}
-		}
-		return Array.from(map.entries()).map(([sample_name, depth]) => ({ sample_name, depth }));
-	});
-
-	function handleScalSampleChange(val: string) {
-		newName = val;
-		const match = knownSamples.find((s) => s.sample_name.toLowerCase() === val.trim().toLowerCase());
-		if (match) {
-			newDepth = match.depth;
-		}
-	}
-
 	const TOP_COLS: GridColumn[] = [
 		{ key: 'name', label: 'Formation / Zone', editable: true },
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 1, editable: true }
@@ -113,7 +89,7 @@
 				newName.trim() ||
 				(wellData.scalPc.length > 0
 					? String(wellData.scalPc[wellData.scalPc.length - 1].sample_name)
-					: knownSamples[0]?.sample_name || 'S-1');
+					: 'S-1');
 			newName = sampleName;
 			wellData.scalPc = [
 				...wellData.scalPc,
@@ -419,18 +395,11 @@
 		{:else if activeTab === 'scal'}
 			<input
 				type="text"
-				list="scal-known-samples"
 				placeholder="Sample"
-				value={newName}
-				oninput={(e) => handleScalSampleChange((e.currentTarget as HTMLInputElement).value)}
-				title="Core Sample Name (select existing RCA sample or type new name; stays sticky for multiple Pc-Sw pairs)"
+				bind:value={newName}
+				title="Sample Name (enter manually; stays sticky for multiple Pc-Sw pairs)"
 				class="h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
 			/>
-			<datalist id="scal-known-samples">
-				{#each knownSamples as ks}
-					<option value={ks.sample_name}>{ks.sample_name} ({ks.depth} m)</option>
-				{/each}
-			</datalist>
 			<input
 				type="number"
 				step="0.5"

@@ -2464,6 +2464,10 @@ class Well(object):
             meas_list: List[Dict[str, Any]] = list(s.get("measurements") or [])
             poro = s.get("porosity", s.get("cpore"))
             perm = s.get("permeability", s.get("cperm"))
+            poro_amb = s.get("porosity_amb", s.get("cpore_amb", s.get("cpore_ori")))
+            perm_air = s.get("perm_air", s.get("cperm_air", s.get("cperm_ori")))
+            raw_depth_val = s.get("raw_depth", s.get("driller_depth"))
+            shift_m_val = s.get("shift_m")
             if poro is not None and str(poro).strip() != "":
                 try:
                     meas_list.append(
@@ -2475,6 +2479,50 @@ class Well(object):
                 try:
                     meas_list.append(
                         {"property_name": "CPERM", "value": float(perm), "unit": "mD"}
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if poro_amb is not None and str(poro_amb).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "CPORE_AMB",
+                            "value": float(poro_amb),
+                            "unit": "v/v",
+                        }
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if perm_air is not None and str(perm_air).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "CPERM_AIR",
+                            "value": float(perm_air),
+                            "unit": "mD",
+                        }
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if raw_depth_val is not None and str(raw_depth_val).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "RAW_DEPTH",
+                            "value": float(raw_depth_val),
+                            "unit": "m",
+                        }
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if shift_m_val is not None and str(shift_m_val).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "SHIFT_M",
+                            "value": float(shift_m_val),
+                            "unit": "m",
+                        }
                     )
                 except (TypeError, ValueError):
                     pass
@@ -2536,10 +2584,19 @@ class Well(object):
                 sname,
                 {
                     "depth": depth_val,
+                    "raw_depth": row.get("raw_depth"),
+                    "porosity": row.get("porosity", row.get("cpore")),
+                    "permeability": row.get("permeability", row.get("cperm")),
                     "pc_data": [],
                     "description": row.get("description"),
                 },
             )
+            if entry.get("porosity") is None and row.get("porosity", row.get("cpore")) is not None:
+                entry["porosity"] = row.get("porosity", row.get("cpore"))
+            if entry.get("permeability") is None and row.get("permeability", row.get("cperm")) is not None:
+                entry["permeability"] = row.get("permeability", row.get("cperm"))
+            if entry.get("raw_depth") is None and row.get("raw_depth") is not None:
+                entry["raw_depth"] = row.get("raw_depth")
             # Support both nested `pc_data` and flat `(pc, sw)` row formats
             if isinstance(row.get("pc_data"), list):
                 entry["pc_data"].extend(row["pc_data"])
@@ -2572,27 +2629,70 @@ class Well(object):
 
         for sname, sdata in grouped.items():
             pc_points = sdata["pc_data"]
-            if append:
-                orm_existing = self.db_session.scalar(
-                    select(ORMCoreSample).filter_by(
-                        well_id=self.well_id, sample_name=sname
-                    )
+            orm_existing = self.db_session.scalar(
+                select(ORMCoreSample).filter_by(
+                    well_id=self.well_id, sample_name=sname
                 )
-                if orm_existing and orm_existing.capillary_pressure_data:
-                    existing_pts = [
-                        {
-                            "saturation": p.saturation,
-                            "pressure": p.pressure,
-                            "experiment_type": p.experiment_type,
-                            "cycle": p.cycle,
+            )
+            if append and orm_existing and orm_existing.capillary_pressure_data:
+                existing_pts = [
+                    {
+                        "saturation": p.saturation,
+                        "pressure": p.pressure,
+                        "experiment_type": p.experiment_type,
+                        "cycle": p.cycle,
+                    }
+                    for p in orm_existing.capillary_pressure_data
+                ]
+                pc_points = existing_pts + pc_points
+
+            meas_to_pass = None
+            has_new_meas = any(
+                sdata.get(k) is not None and str(sdata.get(k)).strip() != ""
+                for k in ("porosity", "permeability", "raw_depth")
+            )
+            if has_new_meas:
+                existing_meas_map: Dict[str, Dict[str, Any]] = {}
+                if orm_existing and orm_existing.measurements:
+                    for m in orm_existing.measurements:
+                        existing_meas_map[str(m.property_name).upper()] = {
+                            "property_name": m.property_name,
+                            "value": float(m.value),
+                            "unit": m.unit,
                         }
-                        for p in orm_existing.capillary_pressure_data
-                    ]
-                    pc_points = existing_pts + pc_points
+                if sdata.get("porosity") is not None and str(sdata.get("porosity")).strip() != "":
+                    try:
+                        existing_meas_map["CPORE"] = {
+                            "property_name": "CPORE",
+                            "value": float(sdata["porosity"]),
+                            "unit": "v/v",
+                        }
+                    except (TypeError, ValueError):
+                        pass
+                if sdata.get("permeability") is not None and str(sdata.get("permeability")).strip() != "":
+                    try:
+                        existing_meas_map["CPERM"] = {
+                            "property_name": "CPERM",
+                            "value": float(sdata["permeability"]),
+                            "unit": "mD",
+                        }
+                    except (TypeError, ValueError):
+                        pass
+                if sdata.get("raw_depth") is not None and str(sdata.get("raw_depth")).strip() != "":
+                    try:
+                        existing_meas_map["RAW_DEPTH"] = {
+                            "property_name": "RAW_DEPTH",
+                            "value": float(sdata["raw_depth"]),
+                            "unit": "m",
+                        }
+                    except (TypeError, ValueError):
+                        pass
+                meas_to_pass = list(existing_meas_map.values())
+
             self.add_core_sample_with_measurements(
                 sample_name=sname,
                 depth=sdata["depth"],
-                measurements=None,
+                measurements=meas_to_pass,
                 description=sdata.get("description"),
                 relperm_data=None,
                 pc_data=pc_points,
