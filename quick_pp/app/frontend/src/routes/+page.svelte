@@ -25,6 +25,7 @@
 	import MultiWellQaqc from '$lib/components/modules/MultiWellQaqc.svelte';
 	import MultiWellRockTyping from '$lib/components/modules/MultiWellRockTyping.svelte';
 	import MultiWellPermTransform from '$lib/components/modules/MultiWellPermTransform.svelte';
+	import MultiWellSwirr from '$lib/components/modules/MultiWellSwirr.svelte';
 	import MultiWellShf from '$lib/components/modules/MultiWellShf.svelte';
 	import MultiWellRtClassifierTrainer from '$lib/components/modules/MultiWellRtClassifierTrainer.svelte';
 	import MultiWellMlTrainer from '$lib/components/modules/MultiWellMlTrainer.svelte';
@@ -260,6 +261,47 @@
 					title: `Multi-Well ${qaqc.active_curve} Distribution Summary (${qaqc.group_by.toUpperCase()})`,
 					columns: cols,
 					rows: qaqc.group_stats
+				};
+			}
+
+			if (
+				workbench.scope === 'multi-well' &&
+				workbench.multiWellStep === 'swirr-corr' &&
+				projectData.swirrResult?.plugs?.length
+			) {
+				const plugs = projectData.swirrResult.plugs;
+				return {
+					title: `Multi-Well SCAL Plug Swirr Summary (Ref Pc=${projectData.swirrConfig.referencePcPsi} psi | n=${plugs.filter((p) => p.included).length}/${plugs.length} included)`,
+					columns: [
+						{ key: 'WELL', label: 'Well' },
+						{ key: 'SAMPLE', label: 'Sample' },
+						{ key: 'DEPTH', label: 'Depth', unit: 'm', numeric: true, decimals: 1 },
+						{ key: 'RT', label: 'RT', numeric: true, decimals: 0 },
+						{ key: 'CPORE', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'CPERM', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2 },
+						{ key: 'RQI', label: 'RQI', unit: 'μm', numeric: true, decimals: 3 },
+						{ key: 'MAX_PC', label: 'Max Pc [psi]', unit: 'psi', numeric: true, decimals: 1 },
+						{ key: 'SW_AT_MAX_PC', label: 'Sw @ Max Pc', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'EXTRACTED_SWIRR', label: 'Swirr (Lab)', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'MODELED_SWIRR', label: 'Modeled Swirr', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'RESIDUAL', label: 'Residual', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'STATUS', label: 'Status' }
+					],
+					rows: plugs.map((p) => ({
+						WELL: p.well,
+						SAMPLE: p.sample,
+						DEPTH: p.depth,
+						RT: p.rt,
+						CPORE: p.cpore,
+						CPERM: p.cperm,
+						RQI: p.rqi,
+						MAX_PC: p.max_pc,
+						SW_AT_MAX_PC: p.sw_at_max_pc,
+						EXTRACTED_SWIRR: p.extracted_swirr,
+						MODELED_SWIRR: p.modeled_swirr,
+						RESIDUAL: p.residual,
+						STATUS: p.included ? 'Included' : !p.valid_pc ? 'Low Pc (< Ref)' : 'Excluded'
+					}))
 				};
 			}
 
@@ -623,6 +665,8 @@
 						<MultiWellRockTyping />
 					{:else if workbench.multiWellStep === 'perm-transform'}
 						<MultiWellPermTransform />
+					{:else if workbench.multiWellStep === 'swirr-corr'}
+						<MultiWellSwirr />
 					{:else if workbench.multiWellStep === 'rt-classifier'}
 						<MultiWellRtClassifierTrainer />
 					{:else if workbench.multiWellStep === 'ml-training'}

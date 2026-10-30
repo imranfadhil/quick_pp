@@ -2778,3 +2778,236 @@ class ContactOptimizer:
         return plot_fwl_reconciliation(self.result_, **kwargs)
 
 
+
+def swirr_rqi(
+    poro, perm, a: float = 0.25, b: float = 0.50, swirr_min: float = 0.02, swirr_max: float = 0.90
+):
+    """Estimate irreducible water saturation ($S_{wirr}$) from Reservoir Quality Index (RQI) ratio.
+
+    $$S_{wirr} = \\text{clip}\\left(a \\cdot \\left(\\sqrt{\\frac{k}{\\phi}}\\right)^{-b}, S_{wirr,\\min}, S_{wirr,\\max}\\right)$$
+
+    Args:
+        poro (np.ndarray or float): Porosity in fraction (v/v).
+        perm (np.ndarray or float): Permeability in mD.
+        a (float, optional): Power-law multiplier coefficient. Defaults to 0.25.
+        b (float, optional): Power-law exponent. Defaults to 0.50.
+        swirr_min (float, optional): Lower physical clamp bound. Defaults to 0.02.
+        swirr_max (float, optional): Upper physical clamp bound. Defaults to 0.90.
+
+    Returns:
+        np.ndarray or float: Modeled irreducible water saturation (fraction).
+    """
+    phi_arr = np.asarray(poro, dtype=float)
+    k_arr = np.asarray(perm, dtype=float)
+    valid = np.isfinite(phi_arr) & np.isfinite(k_arr) & (phi_arr > 0) & (k_arr > 0)
+    safe_phi = np.where(valid, np.maximum(phi_arr, 1e-4), 0.1)
+    safe_k = np.where(valid, np.maximum(k_arr, 1e-4), 1.0)
+    rqi_ratio = np.sqrt(safe_k / safe_phi)
+    raw = float(a) * np.power(np.maximum(rqi_ratio, 1e-6), -float(b))
+    clipped = np.clip(raw, float(swirr_min), float(swirr_max))
+    res = np.where(valid, clipped, np.nan)
+    return float(res) if np.ndim(poro) == 0 and np.ndim(perm) == 0 else res
+
+
+def swirr_semilog_k(
+    perm, a: float = 0.35, b: float = 0.10, swirr_min: float = 0.02, swirr_max: float = 0.90
+):
+    """Estimate irreducible water saturation ($S_{wirr}$) using a semi-log permeability correlation.
+
+    $$S_{wirr} = \\text{clip}\\left(a - b \\cdot \\log_{10}(k), S_{wirr,\\min}, S_{wirr,\\max}\\right)$$
+
+    Args:
+        perm (np.ndarray or float): Permeability in mD.
+        a (float, optional): Intercept at $k = 1\\text{ mD}$. Defaults to 0.35.
+        b (float, optional): Slope per log decade of permeability. Defaults to 0.10.
+        swirr_min (float, optional): Lower physical clamp bound. Defaults to 0.02.
+        swirr_max (float, optional): Upper physical clamp bound. Defaults to 0.90.
+
+    Returns:
+        np.ndarray or float: Modeled irreducible water saturation (fraction).
+    """
+    k_arr = np.asarray(perm, dtype=float)
+    valid = np.isfinite(k_arr) & (k_arr > 0)
+    safe_k = np.where(valid, np.maximum(k_arr, 1e-4), 1.0)
+    raw = float(a) - float(b) * np.log10(safe_k)
+    clipped = np.clip(raw, float(swirr_min), float(swirr_max))
+    res = np.where(valid, clipped, np.nan)
+    return float(res) if np.ndim(perm) == 0 else res
+
+
+def swirr_timur(
+    poro,
+    perm,
+    a: float = 0.15,
+    b: float = 1.50,
+    c: float = 0.50,
+    swirr_min: float = 0.02,
+    swirr_max: float = 0.90,
+):
+    """Estimate irreducible water saturation ($S_{wirr}$) using a Generalized Timur-Coates correlation.
+
+    $$S_{wirr} = \\text{clip}\\left(a \\cdot \\frac{\\phi^b}{k^c}, S_{wirr,\\min}, S_{wirr,\\max}\\right)$$
+
+    Args:
+        poro (np.ndarray or float): Porosity in fraction (v/v).
+        perm (np.ndarray or float): Permeability in mD.
+        a (float, optional): Multiplier coefficient. Defaults to 0.15.
+        b (float, optional): Porosity exponent. Defaults to 1.50.
+        c (float, optional): Permeability exponent. Defaults to 0.50.
+        swirr_min (float, optional): Lower physical clamp bound. Defaults to 0.02.
+        swirr_max (float, optional): Upper physical clamp bound. Defaults to 0.90.
+
+    Returns:
+        np.ndarray or float: Modeled irreducible water saturation (fraction).
+    """
+    phi_arr = np.asarray(poro, dtype=float)
+    k_arr = np.asarray(perm, dtype=float)
+    valid = np.isfinite(phi_arr) & np.isfinite(k_arr) & (phi_arr > 0) & (k_arr > 0)
+    safe_phi = np.where(valid, np.maximum(phi_arr, 1e-4), 0.1)
+    safe_k = np.where(valid, np.maximum(k_arr, 1e-4), 1.0)
+    raw = float(a) * (np.power(safe_phi, float(b)) / np.power(safe_k, float(c)))
+    clipped = np.clip(raw, float(swirr_min), float(swirr_max))
+    res = np.where(valid, clipped, np.nan)
+    return float(res) if np.ndim(poro) == 0 and np.ndim(perm) == 0 else res
+
+
+def fit_swirr_correlation(
+    poro,
+    perm,
+    swirr,
+    equation_type: str = "rqi_power",
+    swirr_min: float = 0.02,
+    swirr_max: float = 0.90,
+) -> dict:
+    """Fit empirical $S_{wirr}$ correlation parameters (`a`, `b`, `c`) from plug porosity, permeability, and $S_{wirr}$.
+
+    Args:
+        poro (array-like): Core porosity in fraction (v/v).
+        perm (array-like): Core permeability in mD.
+        swirr (array-like): Extracted reference irreducible water saturation (fraction).
+        equation_type (str, optional): One of `'rqi_power'`, `'semilog_k'`, or `'timur'`. Defaults to `'rqi_power'`.
+        swirr_min (float, optional): Lower physical clamp bound. Defaults to 0.02.
+        swirr_max (float, optional): Upper physical clamp bound. Defaults to 0.90.
+
+    Returns:
+        dict: Fitted parameters `{'a', 'b', 'c', 'r2', 'rmse', 'count'}`.
+    """
+    phi_arr = np.asarray(poro, dtype=float).ravel()
+    k_arr = np.asarray(perm, dtype=float).ravel()
+    sw_arr = np.asarray(swirr, dtype=float).ravel()
+
+    eq = str(equation_type or "rqi_power").strip().lower()
+    if eq == "semilog_k":
+        mask = np.isfinite(k_arr) & np.isfinite(sw_arr) & (k_arr > 0) & (sw_arr > 0)
+    else:
+        mask = (
+            np.isfinite(phi_arr)
+            & np.isfinite(k_arr)
+            & np.isfinite(sw_arr)
+            & (phi_arr > 0)
+            & (k_arr > 0)
+            & (sw_arr > 0)
+        )
+
+    n = int(np.sum(mask))
+    if n == 0:
+        return {
+            "a": 0.30 if eq != "timur" else 0.80,
+            "b": 0.35 if eq == "rqi_power" else (0.08 if eq == "semilog_k" else 1.20),
+            "c": 0.45 if eq == "timur" else None,
+            "r2": 0.0,
+            "rmse": 0.0,
+            "count": 0,
+        }
+
+    phi_v = np.maximum(phi_arr[mask], 1e-4)
+    k_v = np.maximum(k_arr[mask], 1e-4)
+    sw_v = np.clip(sw_arr[mask], 1e-3, 0.999)
+
+    a_val, b_val, c_val = 0.30, 0.35, None
+    if n == 1:
+        if eq == "semilog_k":
+            b_val = 0.08
+            a_val = float(np.clip(sw_v[0] + b_val * np.log10(k_v[0]), 0.02, 1.5))
+        elif eq == "timur":
+            b_val, c_val = 1.20, 0.40
+            a_val = float(
+                np.clip(sw_v[0] * (k_v[0] ** c_val) / (phi_v[0] ** b_val), 0.01, 50.0)
+            )
+        else:
+            b_val = 0.35
+            rqi_0 = np.sqrt(k_v[0] / phi_v[0])
+            a_val = float(np.clip(sw_v[0] * (rqi_0**b_val), 0.01, 10.0))
+    else:
+        if eq == "semilog_k":
+            x_log = np.log10(k_v)
+            if np.std(x_log) > 1e-9:
+                slope, intercept = np.polyfit(x_log, sw_v, 1)
+                a_val = float(np.clip(intercept, 0.01, 2.0))
+                b_val = float(np.clip(-slope, 0.001, 1.0))
+            else:
+                a_val = float(np.mean(sw_v))
+                b_val = 0.05
+        elif eq == "timur":
+            ln_sw = np.log(sw_v)
+            ln_phi = np.log(phi_v)
+            ln_k = np.log(k_v)
+            if n >= 3 and np.std(ln_phi) > 1e-6 and np.std(ln_k) > 1e-6:
+                X = np.column_stack([np.ones(n), ln_phi, -ln_k])
+                coeffs, _, _, _ = np.linalg.lstsq(X, ln_sw, rcond=None)
+                a_val = float(np.clip(np.exp(coeffs[0]), 1e-4, 100.0))
+                b_val = float(np.clip(coeffs[1], -2.0, 4.0))
+                c_val = float(np.clip(coeffs[2], 0.01, 2.0))
+            else:
+                b_val = 1.0
+                y_adj = ln_sw - b_val * ln_phi
+                if np.std(ln_k) > 1e-6:
+                    slope, intercept = np.polyfit(ln_k, y_adj, 1)
+                    a_val = float(np.clip(np.exp(intercept), 1e-4, 100.0))
+                    c_val = float(np.clip(-slope, 0.01, 2.0))
+                else:
+                    c_val = 0.40
+                    a_val = float(
+                        np.clip(
+                            np.mean(sw_v * (k_v**c_val) / (phi_v**b_val)), 1e-4, 100.0
+                        )
+                    )
+        else:
+            rqi_ratio = np.sqrt(k_v / phi_v)
+            ln_x = np.log(np.maximum(rqi_ratio, 1e-6))
+            ln_y = np.log(sw_v)
+            if np.std(ln_x) > 1e-9:
+                slope, intercept = np.polyfit(ln_x, ln_y, 1)
+                a_val = float(np.clip(np.exp(intercept), 0.005, 10.0))
+                b_val = float(np.clip(-slope, 0.01, 3.0))
+            else:
+                a_val = float(np.mean(sw_v))
+                b_val = 0.25
+
+    if eq == "semilog_k":
+        sw_pred = swirr_semilog_k(k_v, a_val, b_val, swirr_min, swirr_max)
+    elif eq == "timur":
+        sw_pred = swirr_timur(
+            phi_v, k_v, a_val, b_val, c_val if c_val is not None else 0.5, swirr_min, swirr_max
+        )
+    else:
+        sw_pred = swirr_rqi(phi_v, k_v, a_val, b_val, swirr_min, swirr_max)
+
+    sw_pred = np.asarray(sw_pred, dtype=float)
+    residuals = sw_v - sw_pred
+    rmse = float(np.sqrt(np.mean(residuals**2))) if n > 0 else 0.0
+    ss_res = float(np.sum(residuals**2))
+    ss_tot = float(np.sum((sw_v - np.mean(sw_v)) ** 2))
+    if ss_tot > 1e-12:
+        r2 = float(max(0.0, min(1.0, 1.0 - ss_res / ss_tot)))
+    else:
+        r2 = 1.0 if rmse < 1e-4 else 0.0
+
+    return {
+        "a": round(float(a_val), 4),
+        "b": round(float(b_val), 4),
+        "c": round(float(c_val), 4) if c_val is not None else None,
+        "r2": round(float(r2), 4),
+        "rmse": round(float(rmse), 4),
+        "count": n,
+    }

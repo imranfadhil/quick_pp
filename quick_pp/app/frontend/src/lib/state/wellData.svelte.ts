@@ -125,6 +125,7 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'CWA',
 			'SHF',
 			'SW_SHF',
+			'SWIRR',
 			'SW_P10',
 			'SW_P50',
 			'SW_P90'

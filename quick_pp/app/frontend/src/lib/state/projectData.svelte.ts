@@ -12,7 +12,87 @@ export interface ProjectListItem {
 	created_at?: string;
 }
 
-export type MultiWellSaveModule = 'rock-typing' | 'perm-transform' | 'shf';
+export type MultiWellSaveModule = 'rock-typing' | 'perm-transform' | 'swirr-corr' | 'shf';
+export type SwirrExtractionMode = 'cutoff_pc' | 'interp_pc';
+export type SwirrEquationType = 'rqi_power' | 'semilog_k' | 'timur';
+export type SwirrFitScope = 'global' | 'per_rt';
+
+export interface SwirrCorrelationRule {
+	scope: 'global' | number | string;
+	a: number;
+	b: number;
+	c?: number | null;
+	r2: number;
+	rmse: number;
+	count: number;
+}
+
+export interface SwirrModelConfig {
+	extractionMode: SwirrExtractionMode;
+	referencePcPsi: number;
+	equationType: SwirrEquationType;
+	fitScope: SwirrFitScope;
+	swirrMin: number;
+	swirrMax: number;
+	rules: Record<string, SwirrCorrelationRule>;
+	excludedPlugIds: string[];
+}
+
+export interface SwirrPlugRow {
+	plug_id: string;
+	well: string;
+	sample: string;
+	depth: number;
+	rt: number;
+	cpore: number;
+	cperm: number;
+	rqi_ratio: number;
+	rqi: number;
+	max_pc: number;
+	sw_at_max_pc: number;
+	extracted_swirr: number;
+	modeled_swirr: number;
+	residual: number;
+	valid_pc: boolean;
+	excluded: boolean;
+	included: boolean;
+	pc_curve: number[];
+	sw_curve: number[];
+}
+
+export interface SwirrFitResult {
+	project_id: number;
+	config: SwirrModelConfig;
+	rules: Record<string, SwirrCorrelationRule>;
+	plugs: SwirrPlugRow[];
+	valid_plug_count: number;
+	included_plug_count: number;
+	total_plug_count: number;
+}
+
+export interface SwirrApplyResult {
+	project_id: number;
+	saved: boolean;
+	saved_wells: number;
+	mean_swirr: number | null;
+	min_swirr: number | null;
+	max_swirr: number | null;
+	well_summaries: Array<{
+		well_name: string;
+		count: number;
+		mean_swirr: number | null;
+		min_swirr: number | null;
+		max_swirr: number | null;
+	}>;
+	data: {
+		well_names: string[];
+		depths: number[];
+		phit: (number | null)[];
+		perm: (number | null)[];
+		rock_flags: (number | null)[];
+		swirr: (number | null)[];
+	};
+}
 export type PhiKDataSource = 'core' | 'log';
 export type DrtMethod = 'fzi' | 'winland' | 'lucia';
 export type DrtCutoffMethod = 'gmm' | 'lorenz' | 'kmeans';
@@ -225,6 +305,7 @@ class ProjectDataState {
 	shfParams = $state({
 		model: 'leverett_j' as 'leverett_j' | 'skelt_harrison' | 'cuddy',
 		jSatMode: 'swn' as 'swn' | 'sw',
+		swirrSource: 'lab_min' as 'lab_min' | 'poro_perm',
 		unit: 'metric' as 'metric' | 'imperial',
 		fwl: 2500.0,
 		fwlByZone: {} as Record<string, number>,
@@ -233,6 +314,36 @@ class ProjectDataState {
 		gw: 1.05,
 		ghc: 0.8
 	});
+
+	swirrConfig = $state<SwirrModelConfig>({
+		extractionMode: 'cutoff_pc',
+		referencePcPsi: 50.0,
+		equationType: 'rqi_power',
+		fitScope: 'global',
+		swirrMin: 0.03,
+		swirrMax: 0.85,
+		rules: {
+			global: {
+				scope: 'global',
+				a: 0.28,
+				b: 0.35,
+				c: null,
+				r2: 0.0,
+				rmse: 0.0,
+				count: 0
+			}
+		},
+		excludedPlugIds: []
+	});
+
+	swirrInputCols = $state<{ phieCol: string; permCol: string; rtCol: string }>({
+		phieCol: 'PHIT',
+		permCol: 'PERM_TRANS',
+		rtCol: 'ROCK_FLAG'
+	});
+
+	swirrResult = $state.raw<SwirrFitResult | null>(null);
+	swirrApplyResult = $state.raw<SwirrApplyResult | null>(null);
 
 	shfResult = $state.raw<{
 		model?: 'leverett_j' | 'skelt_harrison' | 'cuddy';
@@ -254,6 +365,8 @@ class ProjectDataState {
 			{
 				a: number;
 				b: number;
+				c?: number;
+				d?: number;
 				rmse?: number;
 				r2?: number;
 				count?: number;
@@ -264,6 +377,8 @@ class ProjectDataState {
 			{
 				a: number;
 				b: number;
+				c?: number;
+				d?: number;
 				rmse?: number;
 				r2?: number;
 				count?: number;
@@ -368,6 +483,7 @@ class ProjectDataState {
 		'SWT',
 		'ROCK_FLAG',
 		'PERM_TRANS',
+		'SWIRR',
 		'SHF'
 	] as const;
 
@@ -504,6 +620,7 @@ class ProjectDataState {
 	private static readonly MULTI_WELL_PIPELINE: MultiWellSaveModule[] = [
 		'rock-typing',
 		'perm-transform',
+		'swirr-corr',
 		'shf'
 	];
 
@@ -633,6 +750,316 @@ class ProjectDataState {
 		}
 	}
 
+	evalSwirrValue(cpore: number, cperm: number, rt?: number | null): number {
+		const cfg = this.swirrConfig;
+		const phi = Math.max(0.001, Number.isFinite(cpore) ? cpore : 0.15);
+		const k = Math.max(0.0001, Number.isFinite(cperm) ? cperm : 10.0);
+		const sMin = Number.isFinite(cfg.swirrMin) ? cfg.swirrMin : 0.03;
+		const sMax = Number.isFinite(cfg.swirrMax) ? cfg.swirrMax : 0.85;
+		const rules = cfg.rules || {};
+		let rule: SwirrCorrelationRule | undefined;
+		if (cfg.fitScope === 'per_rt' && rt !== null && rt !== undefined && rules[String(rt)]) {
+			rule = rules[String(rt)];
+		}
+		if (!rule) {
+			rule = rules['global'] ?? Object.values(rules)[0];
+		}
+		const a = rule?.a ?? 0.28;
+		const b = rule?.b ?? 0.35;
+		const c = rule?.c ?? 0.5;
+		let raw = 0.2;
+		if (cfg.equationType === 'semilog_k') {
+			raw = a - b * Math.log10(k);
+		} else if (cfg.equationType === 'timur') {
+			raw = a * (Math.pow(phi, b) / Math.pow(k, c));
+		} else {
+			const rqiRatio = Math.sqrt(k / phi);
+			raw = a * Math.pow(Math.max(1e-6, rqiRatio), -b);
+		}
+		return Math.min(sMax, Math.max(sMin, Number.isFinite(raw) ? raw : sMin));
+	}
+
+	recomputeSwirrClientSide(autoFit: boolean = true) {
+		const sr = this.swirrResult;
+		if (!sr || !Array.isArray(sr.plugs) || sr.plugs.length === 0) return;
+		const cfg = this.swirrConfig;
+		const refPc = Math.max(0.1, Number(cfg.referencePcPsi) || 50.0);
+		const sMin = Number(cfg.swirrMin) || 0.03;
+		const sMax = Math.max(sMin + 0.05, Number(cfg.swirrMax) || 0.85);
+		const exclSet = new Set(cfg.excludedPlugIds || []);
+
+		// 1. Re-extract Swirr per plug at referencePcPsi
+		const updatedPlugs: SwirrPlugRow[] = sr.plugs.map((p) => {
+			const pcArr = p.pc_curve || [];
+			const swArr = p.sw_curve || [];
+			const maxPc = pcArr.length > 0 ? Math.max(...pcArr) : p.max_pc;
+			const minSw = swArr.length > 0 ? Math.min(...swArr) : p.sw_at_max_pc;
+			let extSwirr = minSw;
+			let validPc = maxPc >= refPc;
+			if (cfg.extractionMode === 'interp_pc') {
+				validPc = pcArr.length >= 2;
+				if (pcArr.length >= 2) {
+					const n = pcArr.length;
+					const lnPc = pcArr.map((v) => Math.log(Math.max(1e-4, v)));
+					const lnSw = swArr.map((v) => Math.log(Math.min(0.999, Math.max(1e-3, v))));
+					const mx = lnPc.reduce((a, b) => a + b, 0) / n;
+					const my = lnSw.reduce((a, b) => a + b, 0) / n;
+					let num = 0;
+					let den = 0;
+					for (let i = 0; i < n; i++) {
+						num += (lnPc[i] - mx) * (lnSw[i] - my);
+						den += (lnPc[i] - mx) * (lnPc[i] - mx);
+					}
+					if (den > 1e-8) {
+						const slope = Math.min(-0.01, num / den);
+						const intercept = my - slope * mx;
+						extSwirr = Math.min(0.99, Math.max(0.01, Math.exp(intercept + slope * Math.log(refPc))));
+					}
+				}
+			}
+			const isExcl = exclSet.has(p.plug_id);
+			return {
+				...p,
+				max_pc: Number(maxPc.toFixed(2)),
+				sw_at_max_pc: Number(minSw.toFixed(4)),
+				extracted_swirr: Number(extSwirr.toFixed(4)),
+				valid_pc: validPc,
+				excluded: isExcl,
+				included: validPc && !isExcl
+			};
+		});
+
+		let inclPlugs = updatedPlugs.filter((p) => p.included);
+		if (inclPlugs.length === 0) {
+			inclPlugs = updatedPlugs.filter((p) => !p.excluded);
+		}
+		if (inclPlugs.length === 0) {
+			inclPlugs = updatedPlugs;
+		}
+
+		const fitSubset = (subset: SwirrPlugRow[], scopeKey: string): SwirrCorrelationRule => {
+			const existing = cfg.rules?.[scopeKey];
+			let aVal = existing?.a ?? (cfg.equationType === 'timur' ? 0.8 : 0.28);
+			let bVal =
+				existing?.b ??
+				(cfg.equationType === 'semilog_k' ? 0.08 : cfg.equationType === 'timur' ? 1.2 : 0.35);
+			let cVal: number | null =
+				cfg.equationType === 'timur' ? (existing?.c ?? 0.45) : null;
+
+			if (autoFit && subset.length >= 2) {
+				const n = subset.length;
+				if (cfg.equationType === 'semilog_k') {
+					const x = subset.map((p) => Math.log10(Math.max(1e-4, p.cperm)));
+					const y = subset.map((p) => p.extracted_swirr);
+					const mx = x.reduce((s, v) => s + v, 0) / n;
+					const my = y.reduce((s, v) => s + v, 0) / n;
+					let num = 0;
+					let den = 0;
+					for (let i = 0; i < n; i++) {
+						num += (x[i] - mx) * (y[i] - my);
+						den += (x[i] - mx) * (x[i] - mx);
+					}
+					if (den > 1e-9) {
+						const slope = num / den;
+						const intercept = my - slope * mx;
+						aVal = Math.min(2.0, Math.max(0.01, intercept));
+						bVal = Math.min(1.0, Math.max(0.001, -slope));
+					}
+					cVal = null;
+				} else if (cfg.equationType === 'timur') {
+					// Fix b = existing?.b or 1.2 for stable 2-parameter log fit on client, or 2D OLS if n >= 3
+					const lnSw = subset.map((p) => Math.log(Math.max(1e-3, p.extracted_swirr)));
+					const lnPhi = subset.map((p) => Math.log(Math.max(1e-4, p.cpore)));
+					const lnK = subset.map((p) => Math.log(Math.max(1e-4, p.cperm)));
+					bVal = existing?.b && existing.b > 0.1 && existing.b < 3.5 ? existing.b : 1.2;
+					const yAdj = lnSw.map((v, i) => v - bVal * lnPhi[i]);
+					const mx = lnK.reduce((s, v) => s + v, 0) / n;
+					const my = yAdj.reduce((s, v) => s + v, 0) / n;
+					let num = 0;
+					let den = 0;
+					for (let i = 0; i < n; i++) {
+						num += (lnK[i] - mx) * (yAdj[i] - my);
+						den += (lnK[i] - mx) * (lnK[i] - mx);
+					}
+					if (den > 1e-8) {
+						const slope = num / den;
+						const intercept = my - slope * mx;
+						aVal = Math.min(100.0, Math.max(1e-4, Math.exp(intercept)));
+						cVal = Math.min(2.0, Math.max(0.01, -slope));
+					} else {
+						cVal = 0.45;
+					}
+				} else {
+					const x = subset.map((p) => Math.log(Math.max(1e-6, p.rqi_ratio)));
+					const y = subset.map((p) => Math.log(Math.max(1e-3, p.extracted_swirr)));
+					const mx = x.reduce((s, v) => s + v, 0) / n;
+					const my = y.reduce((s, v) => s + v, 0) / n;
+					let num = 0;
+					let den = 0;
+					for (let i = 0; i < n; i++) {
+						num += (x[i] - mx) * (y[i] - my);
+						den += (x[i] - mx) * (x[i] - mx);
+					}
+					if (den > 1e-9) {
+						const slope = num / den;
+						const intercept = my - slope * mx;
+						aVal = Math.min(10.0, Math.max(0.005, Math.exp(intercept)));
+						bVal = Math.min(3.0, Math.max(0.01, -slope));
+					}
+					cVal = null;
+				}
+			}
+
+			const evalRule = (p: SwirrPlugRow) => {
+				const phi = Math.max(0.001, p.cpore);
+				const k = Math.max(0.0001, p.cperm);
+				let raw = 0.2;
+				if (cfg.equationType === 'semilog_k') {
+					raw = aVal - bVal * Math.log10(k);
+				} else if (cfg.equationType === 'timur') {
+					raw = aVal * (Math.pow(phi, bVal) / Math.pow(k, cVal ?? 0.5));
+				} else {
+					raw = aVal * Math.pow(Math.max(1e-6, Math.sqrt(k / phi)), -bVal);
+				}
+				return Math.min(sMax, Math.max(sMin, raw));
+			};
+
+			const n = subset.length;
+			let rmse = 0;
+			let r2 = 0;
+			if (n > 0) {
+				const yTrue = subset.map((p) => p.extracted_swirr);
+				const yPred = subset.map(evalRule);
+				const meanY = yTrue.reduce((a, b) => a + b, 0) / n;
+				let ssRes = 0;
+				let ssTot = 0;
+				for (let i = 0; i < n; i++) {
+					ssRes += (yTrue[i] - yPred[i]) ** 2;
+					ssTot += (yTrue[i] - meanY) ** 2;
+				}
+				rmse = Math.sqrt(ssRes / n);
+				r2 = ssTot > 1e-12 ? Math.max(0, Math.min(1, 1 - ssRes / ssTot)) : 0;
+			}
+
+			return {
+				scope: scopeKey,
+				a: Number(aVal.toFixed(4)),
+				b: Number(bVal.toFixed(4)),
+				c: cVal !== null ? Number(cVal.toFixed(4)) : null,
+				r2: Number(r2.toFixed(4)),
+				rmse: Number(rmse.toFixed(4)),
+				count: n
+			};
+		};
+
+		const nextRules: Record<string, SwirrCorrelationRule> = {};
+		const globalRule = fitSubset(inclPlugs, 'global');
+		nextRules['global'] = globalRule;
+
+		const rts = Array.from(new Set(updatedPlugs.map((p) => p.rt))).sort((a, b) => a - b);
+		for (const rt of rts) {
+			const rtKey = String(rt);
+			const sub = inclPlugs.filter((p) => p.rt === rt);
+			nextRules[rtKey] =
+				sub.length >= 1
+					? fitSubset(sub, rtKey)
+					: { ...globalRule, scope: rtKey, count: 0 };
+		}
+
+		this.swirrConfig.rules = nextRules;
+
+		const finalPlugs = updatedPlugs.map((p) => {
+			const mod = this.evalSwirrValue(p.cpore, p.cperm, p.rt);
+			return {
+				...p,
+				modeled_swirr: Number(mod.toFixed(4)),
+				residual: Number((p.extracted_swirr - mod).toFixed(4))
+			};
+		});
+
+		this.swirrResult = {
+			...sr,
+			config: { ...this.swirrConfig, rules: nextRules },
+			rules: nextRules,
+			plugs: finalPlugs,
+			valid_plug_count: finalPlugs.filter((p) => p.valid_pc).length,
+			included_plug_count: finalPlugs.filter((p) => p.included).length,
+			total_plug_count: finalPlugs.length
+		};
+	}
+
+	toggleSwirrPlugExclusion(plugId: string) {
+		const id = String(plugId || '').trim();
+		if (!id) return;
+		const cur = new Set(this.swirrConfig.excludedPlugIds || []);
+		if (cur.has(id)) {
+			cur.delete(id);
+		} else {
+			cur.add(id);
+		}
+		this.swirrConfig.excludedPlugIds = Array.from(cur);
+		this.recomputeSwirrClientSide(true);
+	}
+
+	setShfSwirrSource(source: 'lab_min' | 'poro_perm') {
+		this.shfParams.swirrSource = source;
+		const sr = this.shfResult;
+		if (!sr || !sr.scal_data || !Array.isArray(sr.scal_data.sw)) return;
+		const swArr = sr.scal_data.sw;
+		const phitArr = sr.scal_data.phit || [];
+		const permArr = sr.scal_data.perm || [];
+		const rfArr = sr.scal_data.rock_flags || [];
+		const samplesArr = sr.scal_data.samples || [];
+		const wellsArr = sr.scal_data.well_names || [];
+
+		// Group by plug to compute lab_min per plug or poro_perm per point
+		const plugMinSw = new Map<string, number>();
+		for (let i = 0; i < swArr.length; i++) {
+			const pk = `${wellsArr[i] ?? 'W'}:${samplesArr[i] ?? i}`;
+			const sv = swArr[i];
+			if (typeof sv === 'number' && Number.isFinite(sv)) {
+				const prev = plugMinSw.get(pk);
+				if (prev === undefined || sv < prev) plugMinSw.set(pk, sv);
+			}
+		}
+
+		const nextSwn: number[] = [];
+		for (let i = 0; i < swArr.length; i++) {
+			const sw = swArr[i];
+			const phi = phitArr[i] ?? 0.18;
+			const k = permArr[i] ?? 50.0;
+			const rf = rfArr[i] ?? 1;
+			if (source === 'poro_perm') {
+				const swirrCalc = this.evalSwirrValue(phi, k, rf);
+				const swn = Math.min(0.99, Math.max(0.005, (sw - swirrCalc) / Math.max(0.05, 1.0 - swirrCalc)));
+				nextSwn.push(Number(swn.toFixed(4)));
+			} else {
+				const pk = `${wellsArr[i] ?? 'W'}:${samplesArr[i] ?? i}`;
+				const swMinPlug = plugMinSw.get(pk) ?? 0.1;
+				const swirrEst = Math.min(
+					0.22,
+					Math.max(0.04, 0.08 * Math.pow(Math.max(k, 0.01) / Math.max(phi, 0.01), -0.12))
+				);
+				const effSwirr = Math.min(swMinPlug * 0.92, swirrEst);
+				const swn = Math.min(0.98, Math.max(0.02, (sw - effSwirr) / Math.max(1.0 - effSwirr, 1e-3)));
+				nextSwn.push(Number(swn.toFixed(4)));
+			}
+		}
+
+		this.shfResult = {
+			...sr,
+			fits_swn: undefined,
+			scal_data: {
+				...sr.scal_data,
+				swn: nextSwn
+			}
+		};
+		// Force refit of Swn J-curves
+		const curMode = this.shfParams.jSatMode;
+		this.shfResult.j_sat_mode = undefined;
+		this.setShfJSatMode(curMode);
+	}
+
 	private async saveSingleMultiWellModule(
 		pid: string,
 		moduleKey: MultiWellSaveModule
@@ -744,6 +1171,15 @@ class ProjectDataState {
 				)
 			};
 			curveLabel = 'PERM_TRANS';
+		} else if (moduleKey === 'swirr-corr' && this.swirrApplyResult) {
+			wellNames = this.swirrApplyResult.data.well_names;
+			depths = this.swirrApplyResult.data.depths;
+			curves = {
+				SWIRR: (this.swirrApplyResult.data.swirr || []).map((v) =>
+					v !== null && v !== undefined && Number.isFinite(v) ? v : null
+				)
+			};
+			curveLabel = 'SWIRR';
 		} else if (moduleKey === 'shf' && this.shfResult) {
 			wellNames = this.shfResult.well_names;
 			depths = this.shfResult.depths;
@@ -837,6 +1273,8 @@ class ProjectDataState {
 		this.mwConditioningChanges = [];
 		this.rockTypingResult = null;
 		this.permTransformResult = null;
+		this.swirrResult = null;
+		this.swirrApplyResult = null;
 		this.shfResult = null;
 		this.stickPlotResult = null;
 		wellData.curves = {};

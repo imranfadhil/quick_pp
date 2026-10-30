@@ -88,6 +88,13 @@
 						).toFixed(1)
 					);
 		}
+		if (
+			projectData.swirrResult ||
+			projectData.swirrApplyResult ||
+			Object.keys(projectData.swirrConfig.rules ?? {}).length > 0
+		) {
+			projectData.shfParams.swirrSource = 'poro_perm';
+		}
 	});
 
 	function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
@@ -170,6 +177,8 @@
 					theta: sp.theta,
 					gw: sp.gw,
 					ghc: sp.ghc,
+					swirr_source: sp.swirrSource ?? 'lab_min',
+					swirr_config: projectData.swirrConfig,
 					fits: customFits,
 					save: false
 				}
@@ -556,6 +565,36 @@
 				max={0.98}
 				step={0.01}
 			/>
+
+			{#if projectData.shfParams.model === 'leverett_j' && (projectData.shfParams.jSatMode ?? 'swn') === 'swn'}
+				<div class="mt-2 border-t border-[var(--border-hairline)] pt-2">
+					<div class="mb-1 flex items-center justify-between text-[10px]">
+						<span class="font-semibold text-[var(--text-primary)]">
+							Swirr Normalization Method
+						</span>
+						<span class="mono-num text-[9.5px] text-[var(--text-muted)]">
+							{(projectData.shfParams.swirrSource ?? 'lab_min') === 'poro_perm'
+								? 'Swn uses modeled Swirr(k, φ)'
+								: 'Swn uses plug min(Sw)'}
+						</span>
+					</div>
+					<div class="grid grid-cols-2 gap-1">
+						{#each [['lab_min', 'Lab Terminal Sw (Per-Plug)'], ['poro_perm', 'Poro-Perm Correlation (Modeled)']] as [srcKey, srcLabel]}
+							<button
+								type="button"
+								onclick={() =>
+									projectData.setShfSwirrSource(srcKey as 'lab_min' | 'poro_perm')}
+								class="h-6 rounded-sm border px-1.5 text-[10px] font-medium {(projectData.shfParams
+									.swirrSource ?? 'lab_min') === srcKey
+									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+							>
+								{srcLabel}
+							</button>
+						{/each}
+					</div>
+				</div>
+			{/if}
 		</ParameterSection>
 
 		{#if projectData.shfResult}

@@ -1829,9 +1829,7 @@ def _extract_rt_classifier_features(
     gr_s = _combined_valid_series(("GR", "SGR", "CGR", "GAMMA"))
     nphi_s = _combined_valid_series(("NPHI", "NPHI_HC", "TNPH", "PHIN"))
     rhob_s = _combined_valid_series(("RHOB", "RHOB_HC", "RHOZ", "DEN"))
-    rt_s = _combined_valid_series(
-        ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD")
-    )
+    rt_s = _combined_valid_series(("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD"))
     pef_s = _combined_valid_series(("PEF", "PE", "PEFZ", "PEFA"))
     dtc_s = _combined_valid_series(("DTC", "DT", "AC", "DTCO", "DT4P"))
     phit_s = _combined_valid_series(("PHIT", "PHIE", "CPORE", "POROSITY"))
@@ -1885,7 +1883,9 @@ def compute_rock_flag_comparison(
     overlap_count = 0
     exact_match = 0
     within_one = 0
-    all_labels_set: set[int] = set(int(x) for x in (labels or []) if x is not None and int(x) >= 1)
+    all_labels_set: set[int] = set(
+        int(x) for x in (labels or []) if x is not None and int(x) >= 1
+    )
 
     for i in range(n):
         cv_raw = c_list[i] if i < len(c_list) else None
@@ -1943,7 +1943,9 @@ def compute_rock_flag_comparison(
 
     uncored_filled = int(max(0, h_total - c_total))
     exact_ratio = round(exact_match / overlap_count, 4) if overlap_count > 0 else 0.0
-    within_one_ratio = round(within_one / overlap_count, 4) if overlap_count > 0 else 0.0
+    within_one_ratio = (
+        round(within_one / overlap_count, 4) if overlap_count > 0 else 0.0
+    )
 
     return {
         "labels": sorted_labels,
@@ -2050,7 +2052,9 @@ def train_and_validate_rock_type_classifier(
         )
 
     # Require at least half of the selected features (or 1 if 1-2 features selected) to be non-NaN on a row
-    min_valid_feats = 1 if len(features_used) == 1 else max(1, (len(features_used) + 1) // 2)
+    min_valid_feats = (
+        1 if len(features_used) == 1 else max(1, (len(features_used) + 1) // 2)
+    )
     row_valid_mask = feat_df.notna().sum(axis=1) >= min_valid_feats
     medians = feat_df.median(numeric_only=True)
     medians_dict = {
@@ -2259,7 +2263,9 @@ def _resolve_rt_classifiers_path(model_path=None):
     return None, expected
 
 
-def _persist_rt_staging_cache(cache_key: str, bundle_entry: dict, model_path=None) -> None:
+def _persist_rt_staging_cache(
+    cache_key: str, bundle_entry: dict, model_path=None
+) -> None:
     try:
         import joblib
 
@@ -2356,7 +2362,9 @@ def save_cached_rt_classifier(
     global _RT_CLASSIFIER_CACHE, _RT_CLASSIFIER_CACHE_KEY
     import joblib
 
-    entry = _LAST_TRAINED_RT_CLASSIFIER.get(str(cache_key)) or _LAST_TRAINED_RT_CLASSIFIER.get("latest")
+    entry = _LAST_TRAINED_RT_CLASSIFIER.get(
+        str(cache_key)
+    ) or _LAST_TRAINED_RT_CLASSIFIER.get("latest")
     if not entry:
         _, expected = _resolve_rt_classifiers_path(model_path)
         staging_path = expected.parent / ".rt_classifiers_staging.joblib"
@@ -2374,7 +2382,9 @@ def save_cached_rt_classifier(
 
     raw_key = (model_key or model_name or "rt_model").strip().lower()
     clean_key = (
-        "".join(ch if (ch.isalnum() or ch in ("_", "-")) else "_" for ch in raw_key).strip("_")
+        "".join(
+            ch if (ch.isalnum() or ch in ("_", "-")) else "_" for ch in raw_key
+        ).strip("_")
         or "rt_model"
     )
     display_name = (
@@ -2394,8 +2404,14 @@ def save_cached_rt_classifier(
         **meta,
         "model_key": clean_key,
         "model_name": display_name,
-        "source_project": source_project or meta.get("source_project") or entry.get("source_project") or "Workspace",
-        "drt_method": drt_method or meta.get("drt_method") or entry.get("drt_method") or "fzi",
+        "source_project": source_project
+        or meta.get("source_project")
+        or entry.get("source_project")
+        or "Workspace",
+        "drt_method": drt_method
+        or meta.get("drt_method")
+        or entry.get("drt_method")
+        or "fzi",
         "cutoffs": (
             list(cutoffs)
             if cutoffs is not None
@@ -2450,7 +2466,9 @@ def predict_with_saved_rt_classifier(
     entry = bundle[model_key]
     clf = entry.get("estimator")
     if clf is None:
-        raise ValueError(f"Saved model '{model_key}' does not contain a valid estimator.")
+        raise ValueError(
+            f"Saved model '{model_key}' does not contain a valid estimator."
+        )
 
     work = df.copy()
     n_rows = len(work)
@@ -2465,9 +2483,13 @@ def predict_with_saved_rt_classifier(
     saved_medians = dict(entry.get("medians") or {})
     for fname in features_used:
         s = candidates_map.get(fname)
-        feat_df[fname] = s if s is not None else pd.Series(np.nan, index=work.index, dtype=float)
+        feat_df[fname] = (
+            s if s is not None else pd.Series(np.nan, index=work.index, dtype=float)
+        )
 
-    min_valid_feats = 1 if len(features_used) == 1 else max(1, (len(features_used) + 1) // 2)
+    min_valid_feats = (
+        1 if len(features_used) == 1 else max(1, (len(features_used) + 1) // 2)
+    )
     row_valid_mask = feat_df.notna().sum(axis=1) >= min_valid_feats
 
     feat_imputed = feat_df.copy()
@@ -2476,7 +2498,9 @@ def predict_with_saved_rt_classifier(
         if fallback_med is None or not np.isfinite(float(fallback_med)):
             col_med = feat_df[fname].median()
             fallback_med = float(col_med) if pd.notna(col_med) else 0.0
-        feat_imputed[fname] = feat_imputed[fname].fillna(float(fallback_med)).fillna(0.0)
+        feat_imputed[fname] = (
+            feat_imputed[fname].fillna(float(fallback_med)).fillna(0.0)
+        )
 
     pred_flags: list = [None] * n_rows
     pred_conf: list = [None] * n_rows

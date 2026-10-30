@@ -1788,6 +1788,20 @@
 				hovertemplate: `${shfMnem}: %{x:.3f} v/v<extra></extra>`
 			});
 		}
+		const swirr = pick('SWIRR');
+		if (swirr.some((v) => v !== null)) {
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'SWIRR',
+				x: decimateSvg(swirr),
+				y: svgDepth,
+				xaxis: 'x7',
+				yaxis: 'y',
+				line: { color: '#D97706', width: 1.35, dash: '2px,2px' },
+				hovertemplate: 'SWIRR: %{x:.3f} v/v<extra></extra>'
+			});
+		}
 		const payFlags = pick('PAY_FLAGS');
 		if (payFlags.some((v) => v !== null && v > 0)) {
 			const payDec = decimateSvg(payFlags).map((v) => (v !== null && v > 0 ? 0.12 : null));
@@ -2055,6 +2069,7 @@
 		'SW_P90',
 		'SHF',
 		'SW_SHF',
+		'SWIRR',
 		'PAY_FLAGS'
 	] as const;
 
@@ -2893,7 +2908,7 @@
 				{/if}
 			</div>
 
-			<!-- Track 7: SW (1.0 <- 0.0 v/v) & SHF / PAY -->
+			<!-- Track 7: SW (1.0 <- 0.0 v/v) & SHF / SWIRR / PAY -->
 			<div
 				style="left: 85.4%; width: 14.6%;"
 				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
@@ -2911,8 +2926,20 @@
 						</div>
 						<div class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed border-[#DC2626]"></div>
 					</div>
-				{:else}
+				{:else if !wellData.curves['SWIRR']}
 					<div></div>
+				{/if}
+				{#if wellData.curves['SWIRR']}
+					<div class="flex flex-col">
+						<div
+							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none text-[#D97706]"
+						>
+							<span>1.0</span>
+							<span class="font-sans text-[8px] font-bold">◄ SWIRR</span>
+							<span>0.0</span>
+						</div>
+						<div class="mt-[1px] h-0 w-full border-t-[1.5px] border-dotted border-[#D97706]"></div>
+					</div>
 				{/if}
 				<div class="flex flex-col">
 					<div

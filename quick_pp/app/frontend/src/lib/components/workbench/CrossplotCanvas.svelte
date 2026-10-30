@@ -23,6 +23,7 @@
 	// SHF crossplot sub-view ('scal_fit' shows SCAL J / Pc / BVW curve fits; 'height_profile' shows Sw vs HAFWL)
 	let shfView = $state<'scal_fit' | 'height_profile'>('scal_fit');
 	let shfLogScale = $state<boolean>(false);
+	let swirrLogY = $state<boolean>(false);
 	let showCoreShiftDrawer = $state<boolean>(false);
 	let showVshCalibDrawer = $state<boolean>(false);
 
@@ -32,6 +33,7 @@
 		}
 		if (workbench.scope === 'multi-well') {
 			if (workbench.multiWellStep === 'qaqc') return 'mw-distribution';
+			if (workbench.multiWellStep === 'swirr-corr') return 'swirr-fit';
 			if (workbench.multiWellStep === 'shf') return 'shf';
 			return 'phi-k';
 		}
@@ -3251,6 +3253,294 @@
 			return { traces, layout: baseLayout };
 		}
 
+		if (effectiveMode === 'swirr-fit') {
+			const sr = projectData.swirrResult;
+			const cfg = projectData.swirrConfig;
+			const tab = workbench.swirrCrossplotTab;
+
+			if (!sr || !sr.plugs || sr.plugs.length === 0) {
+				baseLayout.dragmode = 'zoom';
+				baseLayout.xaxis.title = {
+					text: 'No SCAL plugs loaded — click "Auto-Fit SCAL Swirr" in the left panel'
+				};
+				baseLayout.yaxis.title = { text: 'Irreducible Water Saturation Swirr (v/v)' };
+				return { traces, layout: baseLayout };
+			}
+
+			if (tab === 'pc-qc') {
+				const seenRt = new Set<number>();
+				for (const c of sr.plugs) {
+					if (!c.pc_curve?.length || !c.sw_curve?.length) continue;
+					const rt = c.rt ?? 1;
+					const col = getRockTypeColor(rt);
+					const showLeg = !seenRt.has(rt);
+					seenRt.add(rt);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines+markers',
+						name: `RT ${rt} Pc Curve`,
+						legendgroup: `rt-${rt}`,
+						showlegend: showLeg,
+						x: c.sw_curve,
+						y: c.pc_curve,
+						line: {
+							color: col,
+							width: c.included ? 1.6 : 1.0,
+							dash: c.included ? 'solid' : 'dot'
+						},
+						marker: {
+							size: 4,
+							color: col,
+							opacity: c.included ? 0.85 : 0.35
+						},
+						opacity: c.included ? 0.85 : 0.35,
+						hovertemplate:
+							`<b>${c.well} · ${c.sample}</b> (RT ${rt})<br>` +
+							`CPORE: ${fmtNum(c.cpore, 3)} | CPERM: ${fmtNum(c.cperm, 2)} mD<br>` +
+							`Sw: %{x:.3f} v/v | Pc: %{y:.1f} psi<extra></extra>`
+					});
+				}
+
+				const extractedPlugs = sr.plugs.filter(
+					(p) => p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr)
+				);
+				if (extractedPlugs.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'markers',
+						name: `Extracted Swirr @ Ref Pc`,
+						x: extractedPlugs.map((p) => p.extracted_swirr),
+						y: extractedPlugs.map((p) =>
+							cfg.extractionMode === 'interp_pc' ? cfg.referencePcPsi : p.max_pc
+						),
+						customdata: extractedPlugs.map((p) => p.plug_id),
+						marker: {
+							size: 8,
+							symbol: extractedPlugs.map((p) => (p.included ? 'diamond' : 'x')),
+							color: extractedPlugs.map((p) =>
+								p.included ? getRockTypeColor(p.rt) : '#94A3B8'
+							),
+							line: { color: '#0F172A', width: 1 }
+						},
+						text: extractedPlugs.map(
+							(p) =>
+								`<b>${p.well} · ${p.sample}</b> (RT ${p.rt})<br>` +
+								`Extracted Swirr: ${fmtNum(p.extracted_swirr, 3)} v/v | Max Pc: ${fmtNum(p.max_pc, 1)} psi<br>` +
+								`<i>Click to ${p.included ? 'exclude' : 're-include'} plug</i>`
+						),
+						hovertemplate: '%{text}<extra></extra>'
+					});
+				}
+
+				shapes.push({
+					type: 'line',
+					xref: 'paper',
+					yref: 'y',
+					x0: 0,
+					x1: 1,
+					y0: cfg.referencePcPsi,
+					y1: cfg.referencePcPsi,
+					line: { color: '#DC2626', width: 1.5, dash: 'dash' }
+				});
+
+				baseLayout.dragmode = 'zoom';
+				baseLayout.shapes = shapes;
+				baseLayout.xaxis.title = { text: 'Water Saturation Sw (v/v)' };
+				baseLayout.xaxis.range = [0, 1.02];
+				baseLayout.yaxis.title = {
+					text: `Capillary Pressure Pc (psi) — Ref Pc = ${cfg.referencePcPsi} psi`
+				};
+				baseLayout.yaxis.type = swirrLogY ? 'log' : 'linear';
+				return { traces, layout: baseLayout };
+			}
+
+			// Tab 1: Swirr vs sqrt(k/phi) (or CPERM for semilog_k)
+			const isSemilogK = cfg.equationType === 'semilog_k';
+			const getPlugX = (p: { cpore: number; cperm: number }) =>
+				isSemilogK
+					? Math.max(1e-4, p.cperm)
+					: Math.sqrt(Math.max(1e-6, p.cperm) / Math.max(1e-4, p.cpore));
+
+			const includedByRt = new Map<number, typeof sr.plugs>();
+			const excludedPlugs: typeof sr.plugs = [];
+			const allValidX: number[] = [];
+
+			for (const p of sr.plugs) {
+				const xv = getPlugX(p);
+				if (Number.isFinite(xv) && xv > 0) allValidX.push(xv);
+				if (p.included && p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr)) {
+					const rt = p.rt ?? 1;
+					if (!includedByRt.has(rt)) includedByRt.set(rt, []);
+					includedByRt.get(rt)!.push(p);
+				} else if (
+					(p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr)) ||
+					(p.sw_at_max_pc !== null && Number.isFinite(p.sw_at_max_pc))
+				) {
+					excludedPlugs.push(p);
+				}
+			}
+
+			for (const [rt, grp] of Array.from(includedByRt.entries()).sort((a, b) => a[0] - b[0])) {
+				const col = getRockTypeColor(rt);
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `RT ${rt} Plugs (n=${grp.length})`,
+					x: grp.map((p) => getPlugX(p)),
+					y: grp.map((p) => p.extracted_swirr),
+					customdata: grp.map((p) => p.plug_id),
+					marker: {
+						size: 7.5,
+						color: col,
+						symbol: 'circle',
+						opacity: 0.9,
+						line: { color: '#0F172A', width: 0.8 }
+					},
+					text: grp.map(
+						(p) =>
+							`<b>${p.well} · Sample ${p.sample}</b> (${p.depth !== null ? fmtNum(p.depth, 1) + 'm' : '—'}) · RT ${p.rt}<br>` +
+							`CPORE: ${fmtNum(p.cpore, 3)} v/v | CPERM: ${fmtNum(p.cperm, 2)} mD | √(k/φ): ${fmtNum(Math.sqrt(p.cperm / p.cpore), 2)}<br>` +
+							`Lab Swirr: ${fmtNum(p.extracted_swirr, 3)} | Modeled: ${fmtNum(p.modeled_swirr, 3)} | Residual: ${p.residual !== null ? (p.residual >= 0 ? '+' : '') + fmtNum(p.residual, 3) : '—'}<br>` +
+							`<i>Click point to exclude from regression</i>`
+					),
+					hovertemplate: '%{text}<extra></extra>'
+				});
+			}
+
+			if (excludedPlugs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Excluded / Low Pc (${excludedPlugs.length})`,
+					x: excludedPlugs.map((p) => getPlugX(p)),
+					y: excludedPlugs.map((p) => p.extracted_swirr ?? p.sw_at_max_pc),
+					customdata: excludedPlugs.map((p) => p.plug_id),
+					marker: {
+						size: 7,
+						color: '#94A3B8',
+						symbol: 'x',
+						opacity: 0.75,
+						line: { color: '#64748B', width: 1 }
+					},
+					text: excludedPlugs.map(
+						(p) =>
+							`<b>${p.well} · Sample ${p.sample}</b> (RT ${p.rt}) · ${!p.valid_pc ? `Low Pc (${fmtNum(p.max_pc, 0)} < ${cfg.referencePcPsi} psi)` : 'Manually Excluded'}<br>` +
+							`CPORE: ${fmtNum(p.cpore, 3)} v/v | CPERM: ${fmtNum(p.cperm, 2)} mD<br>` +
+							`Sw @ Max Pc: ${fmtNum(p.extracted_swirr ?? p.sw_at_max_pc, 3)} v/v<br>` +
+							`<i>Click point to toggle exclusion</i>`
+					),
+					hovertemplate: '%{text}<extra></extra>'
+				});
+			}
+
+			// Overlay fitted correlation curve(s)
+			const xMin = allValidX.length > 0 ? Math.max(1e-3, Math.min(...allValidX) * 0.65) : 0.1;
+			const xMax = allValidX.length > 0 ? Math.max(...allValidX) * 1.45 : 200;
+			const nGrid = 60;
+			const logMin = Math.log10(xMin);
+			const logMax = Math.log10(Math.max(xMin * 10, xMax));
+			const xGrid = Array.from(
+				{ length: nGrid },
+				(_, i) => Math.pow(10, logMin + (i / (nGrid - 1)) * (logMax - logMin))
+			);
+
+			const evalRuleAtX = (
+				rule: { a: number; b: number; c?: number | null },
+				xv: number,
+				meanPhi: number
+			) => {
+				let raw = 0.1;
+				if (cfg.equationType === 'rqi_power') {
+					raw = rule.a * Math.pow(Math.max(xv, 1e-6), -rule.b);
+				} else if (cfg.equationType === 'semilog_k') {
+					raw = rule.a - rule.b * Math.log10(Math.max(xv, 1e-4));
+				} else {
+					const phi = Math.max(meanPhi, 0.01);
+					const kFromX = xv * xv * phi;
+					raw =
+						rule.a *
+						(Math.pow(phi, rule.b) / Math.pow(Math.max(kFromX, 1e-4), rule.c ?? 0.5));
+				}
+				return Math.min(cfg.swirrMax, Math.max(cfg.swirrMin, raw));
+			};
+
+			const incPlugsAll = sr.plugs.filter((p) => p.included);
+			const globalMeanPhi =
+				incPlugsAll.length > 0
+					? incPlugsAll.reduce((acc, p) => acc + p.cpore, 0) / incPlugsAll.length
+					: 0.18;
+
+			if (cfg.fitScope === 'global') {
+				const gRule = cfg.rules['global'];
+				if (gRule) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Global Fit (R²=${fmtNum(gRule.r2, 2)})`,
+						x: xGrid,
+						y: xGrid.map((xv) => evalRuleAtX(gRule, xv, globalMeanPhi)),
+						line: { color: '#0F172A', width: 2.3 }
+					});
+				}
+			} else {
+				const rtKeys = Object.keys(cfg.rules)
+					.filter((k) => k !== 'global')
+					.sort((a, b) => Number(a) - Number(b));
+				for (const rk of rtKeys) {
+					const rule = cfg.rules[rk];
+					if (!rule) continue;
+					const rtNum = Number(rk);
+					const rtGrp = includedByRt.get(rtNum) ?? [];
+					const rtMeanPhi =
+						rtGrp.length > 0
+							? rtGrp.reduce((acc, p) => acc + p.cpore, 0) / rtGrp.length
+							: globalMeanPhi;
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `RT ${rk} Fit (R²=${fmtNum(rule.r2, 2)})`,
+						x: xGrid,
+						y: xGrid.map((xv) => evalRuleAtX(rule, xv, rtMeanPhi)),
+						line: { color: getRockTypeColor(rtNum), width: 2.0, dash: 'solid' }
+					});
+				}
+			}
+
+			// Physical clamp bounds
+			for (const [bVal] of [
+				[cfg.swirrMin, 'Swirr Min'],
+				[cfg.swirrMax, 'Swirr Max']
+			] as const) {
+				shapes.push({
+					type: 'line',
+					xref: 'paper',
+					yref: 'y',
+					x0: 0,
+					x1: 1,
+					y0: bVal,
+					y1: bVal,
+					line: { color: '#94A3B8', width: 1, dash: 'dot' }
+				});
+			}
+
+			baseLayout.dragmode = 'zoom';
+			baseLayout.shapes = shapes;
+			baseLayout.xaxis.type = 'log';
+			baseLayout.xaxis.title = {
+				text: isSemilogK
+					? 'Core Permeability CPERM (mD)'
+					: 'Reservoir Quality Proxy √(CPERM / CPORE) [√mD]'
+			};
+			baseLayout.yaxis.type = swirrLogY ? 'log' : 'linear';
+			if (!swirrLogY) {
+				baseLayout.yaxis.range = [0, Math.min(1.0, Math.max(0.65, cfg.swirrMax + 0.05))];
+			}
+			baseLayout.yaxis.title = {
+				text: `Irreducible Water Saturation Swirr @ ${cfg.referencePcPsi} psi (v/v)`
+			};
+			return { traces, layout: baseLayout };
+		}
+
 		return { traces, layout: baseLayout };
 	}
 
@@ -3438,6 +3728,18 @@
 			void workbench.scalParams.no;
 			void workbench.scalParams.mu_w;
 			void workbench.scalParams.mu_o;
+		} else if (mode === 'swirr-fit') {
+			void projectData.swirrResult;
+			void projectData.swirrConfig.equationType;
+			void projectData.swirrConfig.fitScope;
+			void projectData.swirrConfig.extractionMode;
+			void projectData.swirrConfig.referencePcPsi;
+			void projectData.swirrConfig.swirrMin;
+			void projectData.swirrConfig.swirrMax;
+			void projectData.swirrConfig.rules;
+			void projectData.swirrConfig.excludedPlugIds;
+			void workbench.swirrCrossplotTab;
+			void swirrLogY;
 		} else {
 			void wellData.curves;
 			void projectData.selectedWellNames;
@@ -3522,6 +3824,14 @@
 					(plotEl as any).on('plotly_click', (ev: any) => {
 						if (!activeEndpointKey) {
 							const pt = ev?.points?.[0];
+							if (
+								effectiveMode === 'swirr-fit' &&
+								typeof pt?.customdata === 'string' &&
+								pt.customdata.includes(':')
+							) {
+								projectData.toggleSwirrPlugExclusion(pt.customdata);
+								return;
+							}
 							if (
 								(effectiveMode === 'core-qc' || effectiveMode === 'vsh-qc') &&
 								typeof pt?.customdata === 'number'
@@ -3614,12 +3924,38 @@
 				<option value="core-qc">Core Parity &amp; Error (Φ &amp; K)</option>
 				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
 				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>
+				<option value="swirr-fit">Swirr Correlation (SCAL)</option>
 				<option value="shf">Sw vs. Height (SHF)</option>
 				<option value="histogram">Single-Well Histogram</option>
 			</select>
 		</div>
 
-		{#if effectiveMode === 'core-qc'}
+		{#if effectiveMode === 'swirr-fit'}
+			<div class="flex items-center gap-1">
+				{#each [['swirr-corr', 'Swirr vs. √(k/φ)'], ['pc-qc', 'Pc vs. Sw (Plug QC)']] as [tKey, tLbl]}
+					<button
+						type="button"
+						onclick={() =>
+							(workbench.swirrCrossplotTab = tKey as 'swirr-corr' | 'pc-qc')}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {workbench.swirrCrossplotTab ===
+						tKey
+							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{tLbl}
+					</button>
+				{/each}
+				<button
+					type="button"
+					onclick={() => (swirrLogY = !swirrLogY)}
+					class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {swirrLogY
+						? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+				>
+					Log Y
+				</button>
+			</div>
+		{:else if effectiveMode === 'core-qc'}
 			<div class="flex items-center gap-1">
 				{#each [['dual', 'Dual', 'Side-by-side PHIT×CPORE and PERM×CPERM parity crossplots'], ['poro', 'Φ + Depth', 'PHIT×CPORE parity crossplot + ΔPHIT vs. Depth'], ['perm', 'K + Depth', 'PERM×CPERM parity crossplot + Δlog10(K) vs. Depth'], ['depth-error', 'Depth Err', 'ΔPHIT and Δlog10(K) residuals vs. Depth']] as [vKey, vLbl, vTip]}
 					<button

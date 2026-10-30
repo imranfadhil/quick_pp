@@ -165,14 +165,21 @@
 			readyCheck: () => projectData.permTransformResult !== null
 		},
 		{
-			id: 'shf',
+			id: 'swirr-corr',
 			num: 5,
+			label: 'Swirr Correlation',
+			readyCheck: () =>
+				projectData.swirrResult !== null || projectData.swirrApplyResult !== null
+		},
+		{
+			id: 'shf',
+			num: 6,
 			label: 'Saturation Height (SHF)',
 			readyCheck: () => projectData.shfResult !== null
 		},
 		{
 			id: 'report',
-			num: 6,
+			num: 7,
 			label: 'FDP Report',
 			readyCheck: () => workbench.multiWellReport !== null
 		}

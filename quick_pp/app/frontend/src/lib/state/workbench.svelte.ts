@@ -12,6 +12,7 @@ export type MultiWellStep =
 	| 'qaqc'
 	| 'rock-typing'
 	| 'perm-transform'
+	| 'swirr-corr'
 	| 'shf'
 	| 'rt-classifier'
 	| 'ml-training'
@@ -230,6 +231,8 @@ class WorkbenchState {
 		| 'pickett'
 		| 'histogram'
 		| 'mw-distribution'
+		| 'swirr-fit'
+		| 'shf'
 		| 'shf'
 		| 'relperm'
 		| 'core-qc'
@@ -238,6 +241,7 @@ class WorkbenchState {
 
 	// Active curve selected in QAQC for histogram / multi-well distribution inspection
 	selectedQaqcCurve = $state<string>('GR');
+	swirrCrossplotTab = $state<'swirr-corr' | 'pc-qc'>('swirr-corr');
 	coreQcView = $state<'dual' | 'poro' | 'perm' | 'depth-error'>('dual');
 	vshQcView = $state<'dual' | 'gr-fit' | 'depth-error'>('dual');
 	vshCalibScope = $state<'shale_sand' | 'shale_only' | 'all' | 'brushed'>('shale_sand');
