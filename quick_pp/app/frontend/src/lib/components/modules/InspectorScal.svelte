@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { postJson, saveAncillaryItems } from '$lib/api/client';
+	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { appStatus } from '$lib/state/status.svelte';
@@ -8,7 +9,6 @@
 	import { fmtNum } from '$lib/utils/formatters';
 
 	let scalPendingSave = $state(false);
-	let copiedSwof = $state(false);
 
 	const canSaveScal = $derived(
 		Boolean(workbench.projectId && workbench.wellId) &&
@@ -41,84 +41,6 @@
 		workbench.scalParams.perm_compaction_coeff =
 			lith === 'carbonate' ? 1.5e-5 : lith === 'friable_sandstone' ? 4.0e-5 : 3.0e-5;
 		scalPendingSave = true;
-	}
-
-	async function computeScal() {
-		wellData.isCalculating = true;
-		wellData.lastError = null;
-		const sp = workbench.scalParams;
-		try {
-			const [relpermRes, swofRes] = await Promise.all([
-				postJson<{
-					model: string;
-					data: Array<{ sw: number; swn: number; krw: number; kro: number; fw: number }>;
-				}>('/quick_pp/scal/relperm', {
-					model: sp.model,
-					swirr: sp.swirr,
-					sor: sp.sor,
-					krw_max: sp.krw_max,
-					kro_max: sp.kro_max,
-					nw: sp.nw,
-					no: sp.no,
-					lam: sp.lam,
-					lw: sp.lw,
-					ew: sp.ew,
-					tw: sp.tw,
-					lo: sp.lo,
-					eo: sp.eo,
-					to: sp.to
-				}),
-				postJson<{
-					table: Array<{ SW: number; KRW: number; KROW: number; PCOW: number }>;
-					swof_keyword: string;
-				}>('/quick_pp/scal/swof', {
-					model: sp.model,
-					swirr: sp.swirr,
-					sor: sp.sor,
-					krw_max: sp.krw_max,
-					kro_max: sp.kro_max,
-					nw: sp.nw,
-					no: sp.no,
-					lam: sp.lam,
-					lw: sp.lw,
-					ew: sp.ew,
-					tw: sp.tw,
-					lo: sp.lo,
-					eo: sp.eo,
-					to: sp.to,
-					pc_entry: sp.pc_entry,
-					pc_exponent: sp.pc_exponent,
-					pc_max: sp.pc_max,
-					n_points: sp.n_points
-				})
-			]);
-
-			const rows = relpermRes.data || [];
-			const swArr = rows.map((r) => r.sw);
-			const seArr = rows.map((r) => r.swn);
-			const krwArr = rows.map((r) => r.krw);
-			const kroArr = rows.map((r) => r.kro);
-			const fwArr = rows.map((r, i) => {
-				const kw = krwArr[i] / Math.max(1e-6, sp.mu_w);
-				const ko = kroArr[i] / Math.max(1e-6, sp.mu_o);
-				return kw + ko > 0 ? kw / (kw + ko) : (r.fw ?? 0);
-			});
-
-			workbench.scalResult = {
-				sw: swArr,
-				se: seArr,
-				krw: krwArr,
-				kro: kroArr,
-				fw: fwArr,
-				swofTable: swofRes.table,
-				swofKeyword: swofRes.swof_keyword
-			};
-			scalPendingSave = true;
-		} catch (e: any) {
-			wellData.lastError = e?.message || 'SCAL calculation error';
-		} finally {
-			wellData.isCalculating = false;
-		}
 	}
 
 	async function runCoreCorrections() {
@@ -584,7 +506,7 @@
 
 			// 3. Save updated SCAL capillary pressure rows (if present)
 			if (wellData.scalPc.length > 0) {
-				await saveAncillaryItems(pid, wid, 'scal_pc', 'scal_pc', wellData.scalPc);
+				await saveAncillaryItems(pid, wid, 'scal_pc', 'pc_data', wellData.scalPc);
 				wellData.originalScalPc = wellData.scalPc.map((s) => ({ ...s }));
 			}
 
@@ -638,249 +560,42 @@
 			wellData.isCalculating = false;
 		}
 	}
-
-	async function copySwofKeyword() {
-		const kw = workbench.scalResult?.swofKeyword;
-		if (!kw) return;
-		await navigator.clipboard.writeText(kw);
-		copiedSwof = true;
-		setTimeout(() => (copiedSwof = false), 2000);
-	}
-
-	function downloadSwofInc() {
-		const kw = workbench.scalResult?.swofKeyword;
-		if (!kw) return;
-		const blob = new Blob([kw], { type: 'text/plain;charset=utf-8;' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = `${workbench.wellId || 'SCAL'}_SWOF.INC`;
-		a.click();
-		URL.revokeObjectURL(url);
-	}
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
+	<!-- Module Header -->
+	<div
+		class="flex h-8 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 text-xs"
+	>
+		<span class="font-semibold text-[var(--text-primary)]">
+			Core Depth Shift, Stress &amp; Pc Prep
+		</span>
+		<span
+			class="mono-num rounded-xs border border-slate-300 bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700"
+		>
+			SINGLE-WELL LAB
+		</span>
+	</div>
+
 	<div class="flex-1 overflow-y-auto">
 		<ParameterSection
-			title="Relative Permeability Model"
-			badge={workbench.scalParams.model.toUpperCase()}
+			title="1. Core Depth Shift & Alignment"
+			badge={wellData.coreShiftDirty
+				? `Shift ${wellData.coreShiftDelta >= 0 ? '+' : ''}${fmtNum(wellData.coreShiftDelta, 2)}m`
+				: `${totalCorePlugCount} PLUGS`}
+			defaultOpen={true}
 		>
-			<div class="grid grid-cols-3 gap-1">
-				{#each [['let', 'LET (3-Param)'], ['corey', 'Corey'], ['brooks_corey', 'Brooks-Corey']] as [m, lbl]}
-					<button
-						type="button"
-						onclick={() => {
-							workbench.scalParams.model = m as any;
-							scalPendingSave = true;
-						}}
-						class="h-6 rounded-sm border text-[11px] font-medium {workbench.scalParams.model ===
-						m
-							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
-							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
-					>
-						{lbl}
-					</button>
-				{/each}
-			</div>
-
-			<NumericScrubber
-				label="Connate Water (Sw,irr)"
-				bind:value={workbench.scalParams.swirr}
-				unit="v/v"
-				min={0.01}
-				max={0.5}
-				step={0.01}
-				onrun={computeScal}
-			/>
-			<NumericScrubber
-				label="Residual Oil (Sor)"
-				bind:value={workbench.scalParams.sor}
-				unit="v/v"
-				min={0.01}
-				max={0.5}
-				step={0.01}
-				onrun={computeScal}
-			/>
-			<NumericScrubber
-				label="Max Water Rel-Perm (krw,max)"
-				bind:value={workbench.scalParams.krw_max}
-				unit="frac"
-				min={0.05}
-				max={1.0}
-				step={0.02}
-				onrun={computeScal}
-			/>
-			<NumericScrubber
-				label="Max Oil Rel-Perm (kro,max)"
-				bind:value={workbench.scalParams.kro_max}
-				unit="frac"
-				min={0.1}
-				max={1.0}
-				step={0.02}
-				onrun={computeScal}
-			/>
-
-			{#if workbench.scalParams.model === 'corey'}
-				<NumericScrubber
-					label="Water Corey Exponent (nw)"
-					bind:value={workbench.scalParams.nw}
-					min={1.0}
-					max={8.0}
-					step={0.1}
-					onrun={computeScal}
-				/>
-				<NumericScrubber
-					label="Oil Corey Exponent (no)"
-					bind:value={workbench.scalParams.no}
-					min={1.0}
-					max={8.0}
-					step={0.1}
-					onrun={computeScal}
-				/>
-			{:else if workbench.scalParams.model === 'brooks_corey'}
-				<NumericScrubber
-					label="Pore-Size Distribution (λ)"
-					bind:value={workbench.scalParams.lam}
-					min={0.3}
-					max={6.0}
-					step={0.1}
-					onrun={computeScal}
-				/>
-			{:else}
-				<div class="grid grid-cols-2 gap-x-2">
-					<NumericScrubber
-						label="Water L (Lw)"
-						bind:value={workbench.scalParams.lw}
-						min={0.5}
-						max={6.0}
-						step={0.1}
-						onrun={computeScal}
-					/>
-					<NumericScrubber
-						label="Oil L (Lo)"
-						bind:value={workbench.scalParams.lo}
-						min={0.5}
-						max={6.0}
-						step={0.1}
-						onrun={computeScal}
-					/>
-					<NumericScrubber
-						label="Water E (Ew)"
-						bind:value={workbench.scalParams.ew}
-						min={0.1}
-						max={10.0}
-						step={0.2}
-						onrun={computeScal}
-					/>
-					<NumericScrubber
-						label="Oil E (Eo)"
-						bind:value={workbench.scalParams.eo}
-						min={0.1}
-						max={10.0}
-						step={0.2}
-						onrun={computeScal}
-					/>
-					<NumericScrubber
-						label="Water T (Tw)"
-						bind:value={workbench.scalParams.tw}
-						min={0.5}
-						max={6.0}
-						step={0.1}
-						onrun={computeScal}
-					/>
-					<NumericScrubber
-						label="Oil T (To)"
-						bind:value={workbench.scalParams.to}
-						min={0.5}
-						max={6.0}
-						step={0.1}
-						onrun={computeScal}
-					/>
-				</div>
-			{/if}
-
-			<div class="grid grid-cols-2 gap-x-2">
-				<NumericScrubber
-					label="Water Viscosity (μw)"
-					bind:value={workbench.scalParams.mu_w}
-					unit="cP"
-					min={0.1}
-					max={5.0}
-					step={0.1}
-					onrun={computeScal}
-				/>
-				<NumericScrubber
-					label="Oil Viscosity (μo)"
-					bind:value={workbench.scalParams.mu_o}
-					unit="cP"
-					min={0.1}
-					max={50.0}
-					step={0.2}
-					onrun={computeScal}
-				/>
-			</div>
+			<CoreDepthShiftPanel defaultTarget="combined" />
 		</ParameterSection>
 
 		<ParameterSection
-			title="Eclipse SWOF Simulation Deck"
-			badge={`${workbench.scalResult?.swofTable.length ?? 0} rows`}
-		>
-			<NumericScrubber
-				label="Entry Capillary Pressure (Pd)"
-				bind:value={workbench.scalParams.pc_entry}
-				unit="psi"
-				min={0.1}
-				max={25.0}
-				step={0.2}
-				onrun={computeScal}
-			/>
-			<NumericScrubber
-				label="Capillary Exponent (1/λ)"
-				bind:value={workbench.scalParams.pc_exponent}
-				min={0.5}
-				max={6.0}
-				step={0.1}
-				onrun={computeScal}
-			/>
-			<NumericScrubber
-				label="Max Capillary Pressure"
-				bind:value={workbench.scalParams.pc_max}
-				unit="psi"
-				min={5.0}
-				max={200.0}
-				step={5.0}
-				onrun={computeScal}
-			/>
-
-			<div class="mt-1.5 flex gap-1.5">
-				<button
-					type="button"
-					disabled={!workbench.scalResult?.swofKeyword}
-					onclick={copySwofKeyword}
-					class="h-7 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-xs font-semibold text-[var(--text-primary)] hover:bg-slate-200 disabled:opacity-40"
-				>
-					{copiedSwof ? 'Copied SWOF ✓' : 'Copy SWOF Keyword'}
-				</button>
-				<button
-					type="button"
-					disabled={!workbench.scalResult?.swofKeyword}
-					onclick={downloadSwofInc}
-					class="h-7 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-semibold text-[var(--accent-primary)] hover:bg-blue-50 disabled:opacity-40"
-				>
-					Download SWOF.INC
-				</button>
-			</div>
-		</ParameterSection>
-
-		<ParameterSection
-			title="Core Overburden & Klinkenberg"
+			title="2. Core Overburden & Klinkenberg"
 			badge={wellData.hasActiveFilter
 				? `${activeCorePlugCount}/${totalCorePlugCount} PLUGS • ZONE`
 				: workbench.scalParams.core_corrected
 					? `${totalCorePlugCount} PLUGS • RES`
 					: `${totalCorePlugCount} PLUGS`}
-			defaultOpen={false}
+			defaultOpen={true}
 		>
 			<div class="grid grid-cols-3 gap-1">
 				{#each [
@@ -991,13 +706,13 @@
 		</ParameterSection>
 
 		<ParameterSection
-			title="Lab-to-Reservoir Pc Scaling"
+			title="3. Lab-to-Reservoir Pc Scaling"
 			badge={workbench.scalParams.pc_scaling_applied
 				? `×${fmtNum(workbench.scalParams.pc_scale_factor, 4)}`
 				: wellData.scalPc.length > 0
 					? `${wellData.scalPc.length} PTS`
 					: undefined}
-			defaultOpen={false}
+			defaultOpen={true}
 		>
 			<NumericScrubber
 				label="Lab Capillary Pressure"
@@ -1111,10 +826,13 @@
 		<button
 			type="button"
 			disabled={wellData.isCalculating}
-			onclick={computeScal}
+			onclick={async () => {
+				await runCoreCorrections();
+				await runPcScaling();
+			}}
 			class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 		>
-			{wellData.isCalculating ? 'Computing...' : 'Compute Rel-Perm & SWOF'}
+			{wellData.isCalculating ? 'Applying...' : 'Apply Core & Pc Corrections'}
 		</button>
 		<button
 			type="button"
@@ -1126,7 +844,7 @@
 			)}
 			class="h-7 shrink-0 rounded-sm border border-emerald-600 bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:border-[var(--border-hairline)] disabled:bg-[var(--bg-surface)] disabled:text-[var(--text-muted)] disabled:opacity-45"
 		>
-			Save Core & Pc
+			Save Core &amp; Pc
 		</button>
 	</div>
 </div>

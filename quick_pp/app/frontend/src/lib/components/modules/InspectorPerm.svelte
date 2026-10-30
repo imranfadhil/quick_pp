@@ -2,7 +2,6 @@
 	import { api } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
-	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
@@ -242,9 +241,6 @@
 						Dual Φ &amp; K Parity →
 					</button>
 				</div>
-				<div class="mt-2">
-					<CoreDepthShiftPanel defaultTarget="perm" />
-				</div>
 			</ParameterSection>
 		{/if}
 		<!--
@@ -276,21 +272,6 @@
 		{/if}
 
 		-->
-		<ParameterSection title="Multi-Well FZI Shortcut">
-			<p class="text-[11px] text-[var(--text-secondary)]">
-				Need Rock-Type-based permeability transforms across multiple wells?
-			</p>
-			<button
-				type="button"
-				onclick={() => {
-					workbench.scope = 'multi-well';
-					workbench.multiWellStep = 'perm-transform';
-				}}
-				class="mt-1 h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-xs font-medium text-[var(--accent-primary)] hover:bg-blue-50"
-			>
-				Open Field Perm Transform →
-			</button>
-		</ParameterSection>
 
 		{#if wellData.lastError}
 			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">

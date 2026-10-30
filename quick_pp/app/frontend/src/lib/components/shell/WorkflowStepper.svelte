@@ -165,21 +165,14 @@
 			readyCheck: () => projectData.permTransformResult !== null
 		},
 		{
-			id: 'swirr-corr',
-			num: 5,
-			label: 'Swirr Correlation',
-			readyCheck: () =>
-				projectData.swirrResult !== null || projectData.swirrApplyResult !== null
-		},
-		{
 			id: 'shf',
-			num: 6,
+			num: 5,
 			label: 'Saturation Height (SHF)',
 			readyCheck: () => projectData.shfResult !== null
 		},
 		{
 			id: 'report',
-			num: 7,
+			num: 6,
 			label: 'FDP Report',
 			readyCheck: () => workbench.multiWellReport !== null
 		}
@@ -219,7 +212,7 @@
 				</button>
 			{/each}
 
-			<!-- Standalone Module Divider + SCAL & Rel-Perm -->
+			<!-- Standalone Module Divider + Core & Pc Prep -->
 			<div class="mx-1.5 h-4 w-[1px] shrink-0 bg-[var(--border-hairline)]"></div>
 			<span
 				class="mr-0.5 text-[9.5px] font-bold tracking-wider text-[var(--text-muted)] uppercase"
@@ -227,11 +220,16 @@
 				Standalone:
 			</span>
 			{@const isScalActive = workbench.singleWellStep === 'scal'}
-			{@const isScalDone = workbench.scalResult !== null}
+			{@const isScalDone = Boolean(
+				workbench.scalParams.core_corrected ||
+					workbench.scalParams.pc_scaling_applied ||
+					wellData.coreShiftDirty ||
+					Math.abs(wellData.coreShiftDelta) > 1e-4
+			)}
 			<button
 				type="button"
 				onclick={() => (workbench.singleWellStep = 'scal')}
-				title="Standalone SCAL, Relative Permeability & Eclipse SWOF Deck Generator"
+				title="Standalone Core Depth Shift, Overburden & Klinkenberg Correction + Lab-to-Reservoir Capillary Pressure (Pc) Scaling"
 				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isScalActive
 					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
 					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
@@ -245,7 +243,7 @@
 				>
 					{isScalDone && !isScalActive ? '✓' : 'LAB'}
 				</span>
-				<span>SCAL & Rel-Perm</span>
+				<span>Core & Pc Prep</span>
 			</button>
 		{:else}
 			{#each MULTI_WELL_STEPS as step (step.id)}
@@ -285,13 +283,41 @@
 				</button>
 			{/each}
 
-			<!-- Standalone Module Divider + Multi-Well RT Classifier & Conformal ML Trainer -->
+			<!-- Standalone Module Divider + Multi-Well SCAL Swirr & Pc Fit, RT Classifier & Conformal ML Trainer -->
 			<div class="mx-1.5 h-4 w-[1px] shrink-0 bg-[var(--border-hairline)]"></div>
 			<span
 				class="mr-0.5 text-[9.5px] font-bold tracking-wider text-[var(--text-muted)] uppercase"
 			>
 				Standalone:
 			</span>
+			{@const isSwirrActive = workbench.multiWellStep === 'swirr-corr'}
+			{@const isSwirrDone =
+				projectData.swirrResult !== null ||
+				projectData.swirrApplyResult !== null ||
+				Object.keys(projectData.shfResult?.fits ?? {}).length > 0 ||
+				workbench.scalResult !== null}
+			<button
+				type="button"
+				onclick={() => {
+					workbench.multiWellStep = 'swirr-corr';
+					workbench.centerPaneMultiWellView = 'logs';
+				}}
+				title="Standalone Multi-Well SCAL: Swirr Correlation, J / Pc Curve Fit & Relative Permeability (SWOF) Deck"
+				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isSwirrActive
+					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
+			>
+				<span
+					class="mono-num flex h-4 items-center justify-center rounded-xs px-1 text-[9px] font-bold {isSwirrActive
+						? 'bg-[var(--accent-primary)] text-white'
+						: isSwirrDone
+							? 'bg-emerald-100 text-emerald-700'
+							: 'bg-amber-100 text-amber-800'}"
+				>
+					{isSwirrDone && !isSwirrActive ? '✓' : 'SCAL'}
+				</span>
+				<span>SCAL & Rel-Perm</span>
+			</button>
 			{@const isRtClfActive = workbench.multiWellStep === 'rt-classifier'}
 			{@const isRtClfDone =
 				Boolean(projectData.rtSavedModelsStatus?.count) ||

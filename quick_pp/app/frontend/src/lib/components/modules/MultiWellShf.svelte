@@ -95,35 +95,17 @@
 		) {
 			projectData.shfParams.swirrSource = 'poro_perm';
 		}
+		if (!projectData.shfResult && projectData.swirrResult) {
+			projectData.recomputeScalFitsFromPlugs(false);
+		}
 	});
 
 	function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
 		if (projectData.shfParams.model === m && projectData.shfResult?.model === m) return;
 		projectData.shfParams.model = m;
-	}
-
-	function updateFitParam(
-		rf: string,
-		paramKey: 'a' | 'b' | 'c' | 'd',
-		rawVal: string
-	) {
-		const num = Number(rawVal);
-		if (!Number.isFinite(num) || !projectData.shfResult?.fits?.[rf]) return;
-		const nextEntry = {
-			...projectData.shfResult.fits[rf],
-			[paramKey]: num
-		};
-		const nextFits = {
-			...projectData.shfResult.fits,
-			[rf]: nextEntry
-		};
-		const isSwMode = (projectData.shfParams.jSatMode ?? 'swn') === 'sw';
-		projectData.shfResult = {
-			...projectData.shfResult,
-			fits: nextFits,
-			fits_swn: isSwMode ? projectData.shfResult.fits_swn : nextFits,
-			fits_sw: isSwMode ? nextFits : projectData.shfResult.fits_sw
-		};
+		if (projectData.swirrResult && !projectData.shfResult?.shf?.length) {
+			projectData.recomputeScalFitsFromPlugs(false);
+		}
 	}
 
 	function updateZoneFwl(zone: string, rawVal: string) {
@@ -597,8 +579,8 @@
 			{/if}
 		</ParameterSection>
 
-		{#if projectData.shfResult}
-			{@const activeModel = projectData.shfResult.model ?? projectData.shfParams.model}
+		{#if true}
+			{@const activeModel = projectData.shfResult?.model ?? projectData.shfParams.model}
 			{@const meta = MODEL_META[activeModel]}
 			{@const isSwMode = (projectData.shfParams.jSatMode ?? 'swn') === 'sw'}
 			{@const activeFormula =
@@ -607,119 +589,73 @@
 						? 'J = a · Sw^(-b)'
 						: 'J = a · Swn^(-b)'
 					: meta.formula}
-			<ParameterSection title={meta.fitTitle} badge={activeFormula}>
+			{@const fitEntries = Object.entries(projectData.shfResult?.fits ?? {})}
+			<ParameterSection title="Resultant SCAL Fit Parameters" badge={activeFormula}>
 				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
 					<span>
 						SCAL points:
 						<strong class="mono-num text-[var(--text-primary)]">
-							{projectData.shfResult.scal_data?.pc?.length ?? 0}
+							{projectData.shfResult?.scal_data?.pc?.length ?? 0}
 						</strong>
 					</span>
-					<div class="flex items-center gap-1">
-						{#if activeModel === 'leverett_j'}
-							<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
-								{#each [['swn', 'J vs Swn'], ['sw', 'J vs Sw']] as [sKey, sLbl]}
-									<button
-										type="button"
-										onclick={() => projectData.setShfJSatMode(sKey as 'swn' | 'sw')}
-										class="px-1.5 py-0.5 text-[10px] font-medium first:border-r first:border-[var(--border-hairline)] {(projectData.shfParams.jSatMode ?? 'swn') === sKey
-											? 'bg-blue-600 font-semibold text-white'
-											: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
-									>
-										{sLbl}
-									</button>
-								{/each}
-							</div>
-						{/if}
-						<button
-							type="button"
-							disabled={projectData.isComputingMultiWell || projectData.wellsWithTvd.length === 0}
-							onclick={() => executeShf(true, true)}
-							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)] disabled:cursor-not-allowed disabled:opacity-50"
-						>
-							Reset Auto-Fit
-						</button>
-					</div>
 				</div>
 
-				<div class="overflow-x-auto border border-[var(--border-hairline)]">
-					<table class="w-full border-collapse text-left text-[11px]">
-						<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
-							<tr class="h-6 border-b border-[var(--border-hairline)]">
-								<th class="px-1.5 font-semibold">RT</th>
-								<th class="px-1 text-right font-semibold">a</th>
-								<th class="px-1 text-right font-semibold">b</th>
-								{#if activeModel === 'skelt_harrison'}
-									<th class="px-1 text-right font-semibold">c</th>
-									<th class="px-1 text-right font-semibold">d</th>
-								{/if}
-								<th class="px-1.5 text-right font-semibold">RMSE</th>
-								{#if activeModel !== 'skelt_harrison'}
-									<th class="px-1.5 text-right font-semibold">R²</th>
-								{/if}
-							</tr>
-						</thead>
-						<tbody class="divide-y divide-[var(--border-hairline)]">
-							{#each Object.entries(projectData.shfResult.fits) as [rf, fit], idx}
-								{@const rtColor = ROCK_COLORS[(Number(rf) - 1) % ROCK_COLORS.length] ?? '#2563eb'}
-								<tr class="h-6">
-									<td class="px-1.5 font-semibold whitespace-nowrap">
-										<span
-											class="mr-1 inline-block h-2 w-2 rounded-full"
-											style="background:{rtColor}"
-										></span>RT {rf}
-									</td>
-									<td class="px-1 text-right">
-										<input
-											type="number"
-											step="0.005"
-											value={fit.a}
-											onchange={(e) =>
-												updateFitParam(rf, 'a', (e.currentTarget as HTMLInputElement).value)}
-											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
-										/>
-									</td>
-									<td class="px-1 text-right">
-										<input
-											type="number"
-											step="0.01"
-											value={fit.b}
-											onchange={(e) =>
-												updateFitParam(rf, 'b', (e.currentTarget as HTMLInputElement).value)}
-											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
-										/>
-									</td>
+				{#if fitEntries.length > 0}
+					<div class="overflow-x-auto border border-[var(--border-hairline)]">
+						<table class="w-full border-collapse text-left text-[11px]">
+							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+								<tr class="h-6 border-b border-[var(--border-hairline)]">
+									<th class="px-1.5 font-semibold">RT</th>
+									<th class="px-1.5 text-right font-semibold">a</th>
+									<th class="px-1.5 text-right font-semibold">b</th>
 									{#if activeModel === 'skelt_harrison'}
-										<td class="px-1 text-right">
-											<input
-												type="number"
-												step="0.05"
-												value={fit.c ?? 1.5}
-												onchange={(e) =>
-													updateFitParam(rf, 'c', (e.currentTarget as HTMLInputElement).value)}
-												class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
-											/>
-										</td>
-										<td class="px-1 text-right">
-											<input
-												type="number"
-												step="0.1"
-												value={fit.d ?? 1.5}
-												onchange={(e) =>
-													updateFitParam(rf, 'd', (e.currentTarget as HTMLInputElement).value)}
-												class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
-											/>
-										</td>
+										<th class="px-1.5 text-right font-semibold">c</th>
+										<th class="px-1.5 text-right font-semibold">d</th>
 									{/if}
-									<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.rmse, 3)}</td>
+									<th class="px-1.5 text-right font-semibold">RMSE</th>
 									{#if activeModel !== 'skelt_harrison'}
-										<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.r2, 3)}</td>
+										<th class="px-1.5 text-right font-semibold">R²</th>
 									{/if}
 								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
+							</thead>
+							<tbody class="divide-y divide-[var(--border-hairline)]">
+								{#each fitEntries as [rf, fit]}
+									{@const rtColor = ROCK_COLORS[(Number(rf) - 1) % ROCK_COLORS.length] ?? '#2563eb'}
+									<tr class="h-6">
+										<td class="px-1.5 font-semibold whitespace-nowrap">
+											<span
+												class="mr-1 inline-block h-2 w-2 rounded-full"
+												style="background:{rtColor}"
+											></span>RT {rf}
+										</td>
+										<td class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]">
+											{fmtNum(fit.a, 4)}
+										</td>
+										<td class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]">
+											{fmtNum(fit.b, 3)}
+										</td>
+										{#if activeModel === 'skelt_harrison'}
+											<td class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]">
+												{fmtNum(fit.c ?? 1.5, 2)}
+											</td>
+											<td class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]">
+												{fmtNum(fit.d ?? 1.5, 2)}
+											</td>
+										{/if}
+										<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.rmse, 3)}</td>
+										{#if activeModel !== 'skelt_harrison'}
+											<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.r2, 3)}</td>
+										{/if}
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{:else}
+					<div class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2 text-[10px] text-[var(--text-secondary)]">
+						No SCAL curve fits available yet. Fit Swirr &amp; J/Pc curves in the <strong>[SCAL] SCAL &amp; Rel-Perm</strong> standalone module, or run <strong>Compute SHF</strong> to auto-fit from project SCAL data.
+					</div>
+				{/if}
 			</ParameterSection>
 		{/if}
 

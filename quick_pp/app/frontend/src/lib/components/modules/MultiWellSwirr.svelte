@@ -12,10 +12,174 @@
 	} from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
+	import { fmtNum } from '$lib/utils/formatters';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
 
 	let isApplying = $state(false);
+	let copiedSwof = $state(false);
 	let autoLoadedProjectKey = $state<string | null>(null);
+
+	function switchScalSubMode(mode: 'static' | 'relperm') {
+		workbench.scalSubMode = mode;
+		if (mode === 'relperm') {
+			workbench.swirrCrossplotTab = 'relperm';
+			if (!workbench.scalResult) {
+				void computeScal();
+			}
+		} else if (workbench.swirrCrossplotTab === 'relperm') {
+			workbench.swirrCrossplotTab = 'swirr-corr';
+		}
+	}
+
+	// Per-RT & Global mean Swirr presets from SCAL plugs for quick Rel-Perm / SWOF initialization
+	const scalSwirrPresets = $derived.by(() => {
+		const plugs = (projectData.swirrResult?.plugs ?? []).filter(
+			(p) => p.included && p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr)
+		);
+		if (plugs.length === 0) return [] as Array<{ key: string; label: string; value: number; rt?: number }>;
+		const items: Array<{ key: string; label: string; value: number; rt?: number }> = [];
+		const meanAll =
+			plugs.reduce((acc, p) => acc + (p.extracted_swirr as number), 0) / plugs.length;
+		items.push({
+			key: 'global',
+			label: `Field Mean (${fmtNum(meanAll, 3)})`,
+			value: Number(meanAll.toFixed(3))
+		});
+		const byRt = new Map<number, number[]>();
+		for (const p of plugs) {
+			const rt = p.rt ?? 1;
+			if (!byRt.has(rt)) byRt.set(rt, []);
+			byRt.get(rt)!.push(p.extracted_swirr as number);
+		}
+		for (const [rt, vals] of [...byRt.entries()].sort((a, b) => a[0] - b[0])) {
+			const m = vals.reduce((a, b) => a + b, 0) / vals.length;
+			items.push({
+				key: `rt-${rt}`,
+				label: `RT ${rt} (${fmtNum(m, 3)})`,
+				value: Number(m.toFixed(3)),
+				rt
+			});
+		}
+		return items;
+	});
+
+	async function computeScal() {
+		projectData.isComputingMultiWell = true;
+		projectData.error = null;
+		const sp = workbench.scalParams;
+		try {
+			const [relpermRes, swofRes] = await Promise.all([
+				postJson<{
+					model: string;
+					data: Array<{ sw: number; swn: number; krw: number; kro: number; fw: number }>;
+				}>('/quick_pp/scal/relperm', {
+					model: sp.model,
+					swirr: sp.swirr,
+					sor: sp.sor,
+					krw_max: sp.krw_max,
+					kro_max: sp.kro_max,
+					nw: sp.nw,
+					no: sp.no,
+					lam: sp.lam,
+					lw: sp.lw,
+					ew: sp.ew,
+					tw: sp.tw,
+					lo: sp.lo,
+					eo: sp.eo,
+					to: sp.to
+				}),
+				postJson<{
+					table: Array<{ SW: number; KRW: number; KROW: number; PCOW: number }>;
+					swof_keyword: string;
+				}>('/quick_pp/scal/swof', {
+					model: sp.model,
+					swirr: sp.swirr,
+					sor: sp.sor,
+					krw_max: sp.krw_max,
+					kro_max: sp.kro_max,
+					nw: sp.nw,
+					no: sp.no,
+					lam: sp.lam,
+					lw: sp.lw,
+					ew: sp.ew,
+					tw: sp.tw,
+					lo: sp.lo,
+					eo: sp.eo,
+					to: sp.to,
+					pc_entry: sp.pc_entry,
+					pc_exponent: sp.pc_exponent,
+					pc_max: sp.pc_max,
+					n_points: sp.n_points
+				})
+			]);
+
+			const rows = relpermRes.data || [];
+			const swArr = rows.map((r) => r.sw);
+			const seArr = rows.map((r) => r.swn);
+			const krwArr = rows.map((r) => r.krw);
+			const kroArr = rows.map((r) => r.kro);
+			const fwArr = rows.map((r, i) => {
+				const kw = krwArr[i] / Math.max(1e-6, sp.mu_w);
+				const ko = kroArr[i] / Math.max(1e-6, sp.mu_o);
+				return kw + ko > 0 ? kw / (kw + ko) : (r.fw ?? 0);
+			});
+
+			workbench.scalResult = {
+				sw: swArr,
+				se: seArr,
+				krw: krwArr,
+				kro: kroArr,
+				fw: fwArr,
+				swofTable: swofRes.table,
+				swofKeyword: swofRes.swof_keyword
+			};
+		} catch (e: any) {
+			projectData.error = e?.message || 'SCAL Rel-Perm calculation error';
+		} finally {
+			projectData.isComputingMultiWell = false;
+		}
+	}
+
+	async function copySwofKeyword() {
+		const kw = workbench.scalResult?.swofKeyword;
+		if (!kw) return;
+		await navigator.clipboard.writeText(kw);
+		copiedSwof = true;
+		setTimeout(() => (copiedSwof = false), 2000);
+	}
+
+	function downloadSwofInc() {
+		const kw = workbench.scalResult?.swofKeyword;
+		if (!kw) return;
+		const blob = new Blob([kw], { type: 'text/plain;charset=utf-8;' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `${workbench.projectId || 'FIELD_SCAL'}_SWOF.INC`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
+	const SHF_MODEL_META: Record<
+		'leverett_j' | 'skelt_harrison' | 'cuddy',
+		{ label: string; fitTitle: string; formula: string }
+	> = {
+		leverett_j: {
+			label: 'Leverett-J',
+			fitTitle: 'SCAL Leverett-J Curve Fit',
+			formula: 'J = a · Swn^(-b)'
+		},
+		skelt_harrison: {
+			label: 'Skelt-Harrison',
+			fitTitle: 'SCAL Skelt-Harrison Pc Fit',
+			formula: 'Sw = 1 - a·exp(-(b/(h+d))^c)'
+		},
+		cuddy: {
+			label: 'Cuddy Bvw',
+			fitTitle: 'SCAL Cuddy BVW Fit',
+			formula: 'BVW = φ·Sw = a · Pc^(-b)'
+		}
+	};
 
 	function applyActiveWellSwirrCurve(res: SwirrApplyResult | null) {
 		const activeWell = workbench.wellId;
@@ -71,6 +235,8 @@
 			);
 			projectData.swirrConfig.rules = res.rules || {};
 			projectData.swirrResult = res;
+			projectData.shfParams.swirrSource = 'poro_perm';
+			projectData.recomputeScalFitsFromPlugs(true);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Swirr correlation fit failed';
 		} finally {
@@ -111,6 +277,7 @@
 
 			// Automatically switch SHF Swirr normalization source to 'poro_perm' and update SHF
 			projectData.shfParams.swirrSource = 'poro_perm';
+			projectData.recomputeScalFitsFromPlugs(false);
 			try {
 				const shfRes = await postJson<any>(
 					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/shf/compute`,
@@ -134,6 +301,7 @@
 						theta: projectData.shfParams.theta,
 						gw: projectData.shfParams.gw,
 						ghc: projectData.shfParams.ghc,
+						fits: projectData.shfResult?.fits ?? null,
 						save: false
 					}
 				);
@@ -149,8 +317,8 @@
 				};
 				projectData.markMultiWellComputed('shf');
 			} catch {
-				// If TVD is not present yet for full SHF log evaluation, still update client-side Swn if shfResult exists
-				projectData.setShfSwirrSource('poro_perm');
+				// If TVD is not present yet for full SHF log evaluation, keep client-side SCAL fits updated
+				projectData.recomputeScalFitsFromPlugs(false);
 			}
 
 			if (save) {
@@ -182,12 +350,14 @@
 	function setEquationType(eq: SwirrEquationType) {
 		if (projectData.swirrConfig.equationType === eq) return;
 		projectData.swirrConfig.equationType = eq;
+		workbench.swirrCrossplotTab = 'swirr-corr';
 		projectData.recomputeSwirrClientSide(true);
 	}
 
 	function setFitScope(scope: SwirrFitScope) {
 		if (projectData.swirrConfig.fitScope === scope) return;
 		projectData.swirrConfig.fitScope = scope;
+		workbench.swirrCrossplotTab = 'swirr-corr';
 		projectData.recomputeSwirrClientSide(false);
 	}
 
@@ -203,7 +373,35 @@
 				[field]: num
 			}
 		};
+		workbench.swirrCrossplotTab = 'swirr-corr';
 		projectData.recomputeSwirrClientSide(false);
+	}
+
+	function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
+		projectData.shfParams.model = m;
+		workbench.swirrCrossplotTab = 'scal-fit';
+		projectData.recomputeScalFitsFromPlugs(true);
+	}
+
+	function updateShfFitParam(rf: string, paramKey: 'a' | 'b' | 'c' | 'd', rawVal: string) {
+		const num = Number(rawVal);
+		if (!Number.isFinite(num) || !projectData.shfResult?.fits?.[rf]) return;
+		const nextEntry = {
+			...projectData.shfResult.fits[rf],
+			[paramKey]: num
+		};
+		const nextFits = {
+			...projectData.shfResult.fits,
+			[rf]: nextEntry
+		};
+		const isSwMode = (projectData.shfParams.jSatMode ?? 'swn') === 'sw';
+		projectData.shfResult = {
+			...projectData.shfResult,
+			fits: nextFits,
+			fits_swn: isSwMode ? projectData.shfResult.fits_swn : nextFits,
+			fits_sw: isSwMode ? nextFits : projectData.shfResult.fits_sw
+		};
+		workbench.swirrCrossplotTab = 'scal-fit';
 	}
 
 	function clearExcludedPlugs() {
@@ -243,52 +441,75 @@
 		return cands.length > 0 ? cands : ['ROCK_FLAG', 'ROCK_FLAG_ML'];
 	});
 
-	// Auto-load SCAL plugs and initial fit when entering module
+	// Auto-load SCAL plugs and initial Swirr + J/Pc fits when entering module
 	$effect(() => {
 		const pid = workbench.projectId;
 		if (!pid) return;
-		if (!projectData.swirrResult && autoLoadedProjectKey !== pid && !projectData.isComputingMultiWell) {
+		if (
+			!projectData.swirrResult &&
+			autoLoadedProjectKey !== pid &&
+			!projectData.isComputingMultiWell
+		) {
 			autoLoadedProjectKey = pid;
 			void runAutoFit(true);
 		}
 	});
 </script>
 
-<div class="flex h-full flex-col overflow-hidden">
+<div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
+	<!-- Top Mode Switcher: Static SCAL (Swirr & Pc) vs Dynamic SCAL (Rel-Perm & SWOF) -->
+	<div
+		class="shrink-0 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 py-1.5"
+	>
+		<div class="grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-0.5">
+			{#each [['static', '1. Swirr & Pc Fit (Static)'], ['relperm', '2. Rel-Perm & SWOF (Dynamic)']] as [mKey, mLbl]}
+				<button
+					type="button"
+					onclick={() => switchScalSubMode(mKey as 'static' | 'relperm')}
+					class="h-6 rounded-xs px-2 text-[10.5px] font-semibold transition-colors {workbench.scalSubMode ===
+					mKey
+						? 'bg-[var(--accent-primary)] text-white shadow-2xs'
+						: 'text-[var(--text-secondary)] hover:bg-slate-100 hover:text-[var(--text-primary)]'}"
+				>
+					{mLbl}
+				</button>
+			{/each}
+		</div>
+	</div>
+
 	<div class="flex-1 overflow-y-auto">
-		<!-- Step 1: SCAL Reference Swirr Extraction -->
-		<ParameterSection title="1. SCAL Reference Swirr Extraction" defaultOpen={true}>
-			<p class="mb-2 text-[11px] leading-relaxed text-[var(--text-muted)]">
-				Define how plug-level irreducible water saturation (<span class="font-mono text-[var(--text-primary)]">Swirr</span>) is extracted from SCAL drainage curves at a reference capillary pressure.
+		{#if workbench.scalSubMode === 'static'}
+		<!-- Section 1: SCAL Reference Swirr Extraction -->
+		<ParameterSection
+			title="1. SCAL Reference Swirr Extraction"
+			badge="{projectData.swirrConfig.referencePcPsi} psi"
+			defaultOpen={true}
+		>
+			<p class="mb-2 text-[10.5px] leading-relaxed text-[var(--text-muted)]">
+				Extract plug-level irreducible water saturation (<span
+					class="mono-num font-semibold text-[var(--text-primary)]">Swirr</span
+				>) from SCAL drainage curves at a reference capillary pressure.
 			</p>
 
-			<div class="mb-2.5">
-				<span class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+			<div class="mb-2">
+				<span
+					class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+				>
 					Extraction Method
 				</span>
-				<div class="grid grid-cols-2 gap-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-0.5">
-					<button
-						type="button"
-						class="rounded py-1 text-[10px] font-medium transition-colors {projectData.swirrConfig
-							.extractionMode === 'cutoff_pc'
-							? 'bg-[var(--accent-primary)] font-semibold text-black'
-							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
-						onclick={() => setExtractionMode('cutoff_pc')}
-						title="Use terminal Sw from plugs reaching at least Reference Pc"
-					>
-						Max Pc Cutoff
-					</button>
-					<button
-						type="button"
-						class="rounded py-1 text-[10px] font-medium transition-colors {projectData.swirrConfig
-							.extractionMode === 'interp_pc'
-							? 'bg-[var(--accent-primary)] font-semibold text-black'
-							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
-						onclick={() => setExtractionMode('interp_pc')}
-						title="Interpolate or extrapolate log-linear Pc vs Sw trend at Reference Pc"
-					>
-						Interpolate @ Ref Pc
-					</button>
+				<div class="grid grid-cols-2 gap-1">
+					{#each [['cutoff_pc', 'Max Pc Cutoff'], ['interp_pc', 'Interpolate @ Ref Pc']] as [mKey, mLbl]}
+						<button
+							type="button"
+							onclick={() => setExtractionMode(mKey as SwirrExtractionMode)}
+							class="h-6 rounded-sm border text-[10px] font-medium transition-colors {projectData
+								.swirrConfig.extractionMode === mKey
+								? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+						>
+							{mLbl}
+						</button>
+					{/each}
 				</div>
 			</div>
 
@@ -304,36 +525,54 @@
 			/>
 
 			{#if projectData.swirrResult}
-				<div class="mt-2 flex items-center justify-between rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-2.5 py-1.5 text-[10px]">
-					<div class="flex items-center gap-2">
-						<span class="text-[var(--text-muted)]">Valid Plugs:</span>
-						<span class="font-mono font-semibold text-[var(--accent-primary)]">
+				<div
+					class="mt-2 flex items-center justify-between rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[10px]"
+				>
+					<div class="flex items-center gap-1.5">
+						<span class="text-[var(--text-secondary)]">Valid Plugs:</span>
+						<span class="mono-num font-bold text-[var(--accent-primary)]">
 							{projectData.swirrResult.valid_plug_count} / {projectData.swirrResult.total_plug_count}
 						</span>
 					</div>
-					{#if projectData.swirrConfig.excludedPlugIds.length > 0}
-						<div class="flex items-center gap-1.5">
-							<span class="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[9px] text-amber-300">
-								{projectData.swirrConfig.excludedPlugIds.length} excluded
+					<div class="flex items-center gap-1.5">
+						{#if projectData.swirrConfig.excludedPlugIds.length > 0}
+							<span
+								class="rounded-xs bg-amber-100 px-1 py-0.5 font-mono text-[9px] font-semibold text-amber-800"
+							>
+								{projectData.swirrConfig.excludedPlugIds.length} excl
 							</span>
 							<button
 								type="button"
-								class="text-[9px] text-[var(--accent-primary)] underline hover:opacity-80"
+								class="text-[9.5px] font-medium text-blue-700 hover:underline"
 								onclick={clearExcludedPlugs}
 							>
 								Reset
 							</button>
-						</div>
-					{:else}
-						<span class="text-[9px] text-[var(--text-muted)]">Click crossplot points to exclude outliers</span>
-					{/if}
+						{:else}
+							<button
+								type="button"
+								onclick={() => (workbench.swirrCrossplotTab = 'pc-qc')}
+								class="text-[9.5px] font-medium text-blue-700 hover:underline"
+							>
+								Inspect Pc vs Sw →
+							</button>
+						{/if}
+					</div>
 				</div>
 			{/if}
 		</ParameterSection>
 
-		<!-- Step 2: Correlation Model & Grouping -->
-		<ParameterSection title="2. Correlation Model & Grouping" defaultOpen={true}>
-			<div class="mb-2.5">
+		<!-- Section 2: Swirr Correlation Model & Fit -->
+		<ParameterSection
+			title="2. Swirr Correlation Fit"
+			badge={projectData.swirrConfig.equationType === 'rqi_power'
+				? 'a·√(k/φ)^(-b)'
+				: projectData.swirrConfig.equationType === 'semilog_k'
+					? 'a - b·log10(k)'
+					: 'a·φ^b / k^c'}
+			defaultOpen={true}
+		>
+			<div class="mb-2">
 				<label
 					for="swirr-eq-select"
 					class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
@@ -342,7 +581,7 @@
 				</label>
 				<select
 					id="swirr-eq-select"
-					class="h-7 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-2 font-mono text-[11px] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:outline-none"
+					class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 font-mono text-[10.5px] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:outline-none"
 					value={projectData.swirrConfig.equationType}
 					onchange={(e) => setEquationType(e.currentTarget.value as SwirrEquationType)}
 				>
@@ -352,31 +591,25 @@
 				</select>
 			</div>
 
-			<div class="mb-2.5">
-				<span class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+			<div class="mb-2">
+				<span
+					class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+				>
 					Fit Scope
 				</span>
-				<div class="grid grid-cols-2 gap-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-0.5">
-					<button
-						type="button"
-						class="rounded py-1 text-[10px] font-medium transition-colors {projectData.swirrConfig
-							.fitScope === 'global'
-							? 'bg-[var(--accent-primary)] font-semibold text-black'
-							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
-						onclick={() => setFitScope('global')}
-					>
-						Global Fit (All RTs)
-					</button>
-					<button
-						type="button"
-						class="rounded py-1 text-[10px] font-medium transition-colors {projectData.swirrConfig
-							.fitScope === 'per_rt'
-							? 'bg-[var(--accent-primary)] font-semibold text-black'
-							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
-						onclick={() => setFitScope('per_rt')}
-					>
-						Per Rock Type (RT 1..N)
-					</button>
+				<div class="grid grid-cols-2 gap-1">
+					{#each [['global', 'Global Fit (All RTs)'], ['per_rt', 'Per Rock Type (RT 1..N)']] as [sKey, sLbl]}
+						<button
+							type="button"
+							onclick={() => setFitScope(sKey as SwirrFitScope)}
+							class="h-6 rounded-sm border text-[10px] font-medium transition-colors {projectData
+								.swirrConfig.fitScope === sKey
+								? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+						>
+							{sLbl}
+						</button>
+					{/each}
 				</div>
 			</div>
 
@@ -403,107 +636,313 @@
 				/>
 			</div>
 
-			<button
-				type="button"
-				class="mt-2 h-7 w-full rounded border border-[var(--accent-primary)]/50 bg-[var(--accent-primary)]/15 text-[11px] font-semibold text-[var(--accent-primary)] transition-colors hover:bg-[var(--accent-primary)]/25 disabled:opacity-40"
-				disabled={projectData.isComputingMultiWell}
-				onclick={() => runAutoFit(true)}
-			>
-				{projectData.isComputingMultiWell ? 'Fitting...' : 'Auto-Fit SCAL Swirr'}
-			</button>
-		</ParameterSection>
-
-		<!-- Step 3: Fitted Coefficients Table -->
-		<ParameterSection title="3. Fitted Coefficients Table" defaultOpen={true}>
-			<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
-				<span>Editable regression coefficients</span>
-				<span class="font-mono text-[9px] text-[var(--text-secondary)]">
-					{#if projectData.swirrConfig.equationType === 'rqi_power'}
-						Swirr = a · √(k/φ)^(-b)
-					{:else if projectData.swirrConfig.equationType === 'semilog_k'}
-						Swirr = a - b · log10(k)
-					{:else}
-						Swirr = a · φ^b / k^c
-					{/if}
-				</span>
+			<div class="mt-2 mb-1 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
+				<span class="font-semibold text-[var(--text-primary)]">Swirr Fit Coefficients</span>
+				<button
+					type="button"
+					disabled={projectData.isComputingMultiWell}
+					onclick={() => {
+						workbench.swirrCrossplotTab = 'swirr-corr';
+						void runAutoFit(true);
+					}}
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)] disabled:opacity-50"
+				>
+					{projectData.isComputingMultiWell ? 'Fitting...' : 'Reset Auto-Fit'}
+				</button>
 			</div>
 
 			{#if displayedRules.length > 0}
-				<div class="overflow-x-auto rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)]">
-					<table class="w-full border-collapse text-left font-mono text-[10px]">
-						<thead>
-							<tr class="border-b border-[var(--border-hairline)] text-[var(--text-muted)]">
-								<th class="px-2 py-1">Scope</th>
-								<th class="px-1.5 py-1">a</th>
-								<th class="px-1.5 py-1">b</th>
+				<div class="overflow-x-auto border border-[var(--border-hairline)]">
+					<table class="w-full border-collapse text-left text-[11px]">
+						<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+							<tr class="h-6 border-b border-[var(--border-hairline)]">
+								<th class="px-1.5 font-semibold">Scope</th>
+								<th class="px-1 text-right font-semibold">a</th>
+								<th class="px-1 text-right font-semibold">b</th>
 								{#if projectData.swirrConfig.equationType === 'timur'}
-									<th class="px-1.5 py-1">c</th>
+									<th class="px-1 text-right font-semibold">c</th>
 								{/if}
-								<th class="px-1.5 py-1 text-right">R²</th>
-								<th class="px-2 py-1 text-right">Plugs</th>
+								<th class="px-1.5 text-right font-semibold">RMSE</th>
+								<th class="px-1.5 text-right font-semibold">R²</th>
 							</tr>
 						</thead>
-						<tbody>
+						<tbody class="divide-y divide-[var(--border-hairline)]">
 							{#each displayedRules as [scopeKey, rule] (scopeKey)}
 								{@const isGlobal = scopeKey === 'global'}
-								{@const rtColor = isGlobal ? '#38bdf8' : getRockTypeColor(Number(scopeKey))}
-								<tr class="border-b border-[var(--border-hairline)]/50">
-									<td class="px-2 py-1 font-semibold whitespace-nowrap">
+								{@const rtColor = isGlobal ? '#0F172A' : getRockTypeColor(Number(scopeKey))}
+								<tr class="h-6">
+									<td class="px-1.5 font-semibold whitespace-nowrap">
 										<span
 											class="mr-1 inline-block h-2 w-2 rounded-full"
 											style="background:{rtColor}"
-										></span>
-										{isGlobal ? 'Global' : `RT ${scopeKey}`}
+										></span>{isGlobal ? 'Global' : `RT ${scopeKey}`}
 									</td>
-									<td class="px-1 py-0.5">
+									<td class="px-1 text-right">
 										<input
 											type="number"
 											step="0.01"
 											value={rule.a}
 											onchange={(e) => updateRuleCoeff(scopeKey, 'a', e.currentTarget.value)}
-											class="w-14 rounded border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-1 py-0.5 font-mono text-[10px] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:outline-none"
+											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
 										/>
 									</td>
-									<td class="px-1 py-0.5">
+									<td class="px-1 text-right">
 										<input
 											type="number"
 											step="0.01"
 											value={rule.b}
 											onchange={(e) => updateRuleCoeff(scopeKey, 'b', e.currentTarget.value)}
-											class="w-14 rounded border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-1 py-0.5 font-mono text-[10px] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:outline-none"
+											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
 										/>
 									</td>
 									{#if projectData.swirrConfig.equationType === 'timur'}
-										<td class="px-1 py-0.5">
+										<td class="px-1 text-right">
 											<input
 												type="number"
 												step="0.01"
 												value={rule.c ?? 0.5}
 												onchange={(e) => updateRuleCoeff(scopeKey, 'c', e.currentTarget.value)}
-												class="w-14 rounded border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-1 py-0.5 font-mono text-[10px] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:outline-none"
+												class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
 											/>
 										</td>
 									{/if}
-									<td class="px-1.5 py-1 text-right text-[var(--accent-primary)]">
-										{rule.r2 !== undefined ? rule.r2.toFixed(3) : '—'}
-									</td>
-									<td class="px-2 py-1 text-right text-[var(--text-secondary)]">
-										{rule.count ?? 0}
-									</td>
+									<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(rule.rmse, 3)}</td>
+									<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(rule.r2, 3)}</td>
 								</tr>
 							{/each}
 						</tbody>
 					</table>
 				</div>
-			{:else}
-				<div class="rounded border border-dashed border-[var(--border-subtle)] p-2.5 text-center text-[10px] text-[var(--text-muted)]">
-					Click "Auto-Fit SCAL Swirr" to fit correlation parameters.
-				</div>
 			{/if}
 		</ParameterSection>
 
-		<!-- Step 4: Apply & Propagate -->
-		<ParameterSection title="4. Apply & Propagate" defaultOpen={true}>
+		<!-- Section 3: SCAL J / Pc Curve Fit -->
+		{#if true}
+		{@const activeShfModel = projectData.shfParams.model}
+		{@const isSwMode = (projectData.shfParams.jSatMode ?? 'swn') === 'sw'}
+		{@const activeShfFormula =
+			activeShfModel === 'leverett_j'
+				? isSwMode
+					? 'J = a · Sw^(-b)'
+					: 'J = a · Swn^(-b)'
+				: SHF_MODEL_META[activeShfModel].formula}
+		<ParameterSection
+			title="3. SCAL J / Pc Curve Fit"
+			badge={activeShfFormula}
+			defaultOpen={true}
+		>
+			<div class="grid grid-cols-3 gap-1">
+				{#each [['leverett_j', 'Leverett-J'], ['skelt_harrison', 'Skelt-Harrison'], ['cuddy', 'Cuddy Bvw']] as [m, lbl]}
+					<button
+						type="button"
+						onclick={() => selectShfModel(m as any)}
+						class="h-6 rounded-sm border text-[10px] font-medium {projectData.shfParams.model === m
+							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+					>
+						{lbl}
+					</button>
+				{/each}
+			</div>
+
+			{#if activeShfModel === 'leverett_j'}
+				<div class="mt-2 grid grid-cols-2 gap-2">
+					<NumericScrubber
+						label="IFT"
+						bind:value={projectData.shfParams.ift}
+						unit="dyn/cm"
+						min={1.0}
+						max={80.0}
+						step={0.5}
+						onchange={() => projectData.recomputeScalFitsFromPlugs(true)}
+					/>
+					<NumericScrubber
+						label="Contact Angle (θ)"
+						bind:value={projectData.shfParams.theta}
+						unit="deg"
+						min={0}
+						max={90}
+						step={1.0}
+						onchange={() => projectData.recomputeScalFitsFromPlugs(true)}
+					/>
+				</div>
+
+				{#if !isSwMode}
+					<div class="mt-1.5">
+						<div class="mb-1 flex items-center justify-between text-[10px]">
+							<span class="font-semibold text-[var(--text-primary)]">
+								Swn Swirr Normalization
+							</span>
+							<span class="mono-num text-[9.5px] text-[var(--text-muted)]">
+								{(projectData.shfParams.swirrSource ?? 'poro_perm') === 'poro_perm'
+									? 'Modeled Swirr(k, φ)'
+									: 'Plug min(Sw)'}
+							</span>
+						</div>
+						<div class="grid grid-cols-2 gap-1">
+							{#each [['poro_perm', 'Poro-Perm Correlation'], ['lab_min', 'Lab Terminal Sw']] as [srcKey, srcLabel]}
+								<button
+									type="button"
+									onclick={() => {
+										workbench.swirrCrossplotTab = 'scal-fit';
+										projectData.setShfSwirrSource(srcKey as 'lab_min' | 'poro_perm');
+									}}
+									class="h-6 rounded-sm border px-1.5 text-[10px] font-medium {(projectData
+										.shfParams.swirrSource ?? 'poro_perm') === srcKey
+										? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+								>
+									{srcLabel}
+								</button>
+							{/each}
+						</div>
+					</div>
+				{/if}
+			{/if}
+
+			<div class="mt-2 mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
+				<span>
+					SCAL points:
+					<strong class="mono-num text-[var(--text-primary)]">
+						{projectData.shfResult?.scal_data?.pc?.length ?? 0}
+					</strong>
+				</span>
+				<div class="flex items-center gap-1">
+					{#if activeShfModel === 'leverett_j'}
+						<div
+							class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+						>
+							{#each [['swn', 'J vs Swn'], ['sw', 'J vs Sw']] as [sKey, sLbl]}
+								<button
+									type="button"
+									onclick={() => {
+										workbench.swirrCrossplotTab = 'scal-fit';
+										projectData.setShfJSatMode(sKey as 'swn' | 'sw');
+									}}
+									class="px-1.5 py-0.5 text-[10px] font-medium first:border-r first:border-[var(--border-hairline)] {(projectData
+										.shfParams.jSatMode ?? 'swn') === sKey
+										? 'bg-blue-600 font-semibold text-white'
+										: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+								>
+									{sLbl}
+								</button>
+							{/each}
+						</div>
+					{/if}
+					<button
+						type="button"
+						onclick={() => {
+							workbench.swirrCrossplotTab = 'scal-fit';
+							projectData.recomputeScalFitsFromPlugs(true);
+						}}
+						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)]"
+					>
+						Reset Auto-Fit
+					</button>
+				</div>
+			</div>
+
+			{#if projectData.shfResult?.fits && Object.keys(projectData.shfResult.fits).length > 0}
+				<div class="overflow-x-auto border border-[var(--border-hairline)]">
+					<table class="w-full border-collapse text-left text-[11px]">
+						<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+							<tr class="h-6 border-b border-[var(--border-hairline)]">
+								<th class="px-1.5 font-semibold">RT</th>
+								<th class="px-1 text-right font-semibold">a</th>
+								<th class="px-1 text-right font-semibold">b</th>
+								{#if activeShfModel === 'skelt_harrison'}
+									<th class="px-1 text-right font-semibold">c</th>
+									<th class="px-1 text-right font-semibold">d</th>
+								{/if}
+								<th class="px-1.5 text-right font-semibold">RMSE</th>
+								{#if activeShfModel !== 'skelt_harrison'}
+									<th class="px-1.5 text-right font-semibold">R²</th>
+								{/if}
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-[var(--border-hairline)]">
+							{#each Object.entries(projectData.shfResult.fits) as [rf, fit]}
+								{@const rtColor = getRockTypeColor(Number(rf))}
+								<tr class="h-6">
+									<td class="px-1.5 font-semibold whitespace-nowrap">
+										<span
+											class="mr-1 inline-block h-2 w-2 rounded-full"
+											style="background:{rtColor}"
+										></span>RT {rf}
+									</td>
+									<td class="px-1 text-right">
+										<input
+											type="number"
+											step="0.005"
+											value={fit.a}
+											onchange={(e) =>
+												updateShfFitParam(
+													rf,
+													'a',
+													(e.currentTarget as HTMLInputElement).value
+												)}
+											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+										/>
+									</td>
+									<td class="px-1 text-right">
+										<input
+											type="number"
+											step="0.01"
+											value={fit.b}
+											onchange={(e) =>
+												updateShfFitParam(
+													rf,
+													'b',
+													(e.currentTarget as HTMLInputElement).value
+												)}
+											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+										/>
+									</td>
+									{#if activeShfModel === 'skelt_harrison'}
+										<td class="px-1 text-right">
+											<input
+												type="number"
+												step="0.05"
+												value={fit.c ?? 1.5}
+												onchange={(e) =>
+													updateShfFitParam(
+														rf,
+														'c',
+														(e.currentTarget as HTMLInputElement).value
+													)}
+												class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+											/>
+										</td>
+										<td class="px-1 text-right">
+											<input
+												type="number"
+												step="0.1"
+												value={fit.d ?? 0.5}
+												onchange={(e) =>
+													updateShfFitParam(
+														rf,
+														'd',
+														(e.currentTarget as HTMLInputElement).value
+													)}
+												class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+											/>
+										</td>
+									{/if}
+									<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.rmse, 3)}</td>
+									{#if activeShfModel !== 'skelt_harrison'}
+										<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.r2, 3)}</td>
+									{/if}
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		</ParameterSection>
+		{/if}
+
+		<!-- Section 4: Apply & Propagate SWIRR to Logs -->
+		<ParameterSection title="4. Apply & Propagate SWIRR to Logs" badge="Track 7 SWIRR" defaultOpen={true}>
 			<div class="space-y-2">
 				<div class="grid grid-cols-3 gap-1.5">
 					<div>
@@ -516,7 +955,7 @@
 						<select
 							id="swirr-phie-col"
 							bind:value={projectData.swirrInputCols.phieCol}
-							class="h-6 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-1.5 font-mono text-[10px] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:outline-none"
+							class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
 						>
 							{#each availablePoroCurves as c (c)}
 								<option value={c}>{c}</option>
@@ -533,7 +972,7 @@
 						<select
 							id="swirr-perm-col"
 							bind:value={projectData.swirrInputCols.permCol}
-							class="h-6 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-1.5 font-mono text-[10px] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:outline-none"
+							class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
 						>
 							{#each availablePermCurves as c (c)}
 								<option value={c}>{c}</option>
@@ -550,7 +989,7 @@
 						<select
 							id="swirr-rt-col"
 							bind:value={projectData.swirrInputCols.rtCol}
-							class="h-6 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-1.5 font-mono text-[10px] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:outline-none"
+							class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
 						>
 							{#each availableRtCurves as c (c)}
 								<option value={c}>{c}</option>
@@ -559,63 +998,312 @@
 					</div>
 				</div>
 
-				<button
-					type="button"
-					class="h-8 w-full rounded bg-[var(--accent-primary)] text-xs font-semibold text-black shadow-sm transition-opacity hover:opacity-90 disabled:opacity-40"
-					disabled={projectData.isComputingMultiWell || isApplying}
-					onclick={() => applySwirrAndUpdateShf(false)}
-				>
-					{isApplying ? 'Applying SWIRR & Updating SHF...' : 'Apply SWIRR to Wells & Update SHF'}
-				</button>
-
 				{#if projectData.swirrApplyResult}
-					<div class="rounded border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-[10px]">
-						<div class="flex items-center justify-between font-semibold text-emerald-300">
+					<div
+						class="rounded-sm border border-emerald-300 bg-emerald-50/80 px-2 py-1.5 text-[10px] text-emerald-950"
+					>
+						<div class="flex items-center justify-between font-semibold">
 							<span>SWIRR Applied ({projectData.swirrApplyResult.well_summaries.length} wells)</span>
-							<span class="font-mono">
+							<span class="mono-num">
 								Mean: {projectData.swirrApplyResult.mean_swirr?.toFixed(3) ?? '—'}
 							</span>
 						</div>
-						<div class="mt-0.5 flex items-center justify-between font-mono text-[9px] text-[var(--text-secondary)]">
-							<span>Min: {projectData.swirrApplyResult.min_swirr?.toFixed(3) ?? '—'}</span>
-							<span>Max: {projectData.swirrApplyResult.max_swirr?.toFixed(3) ?? '—'}</span>
-							<span class="text-[var(--accent-primary)]">SHF Swn Linked ✓</span>
+						<div class="mt-0.5 flex items-center justify-between text-[9.5px] text-emerald-800">
+							<span class="mono-num">
+								Range: {projectData.swirrApplyResult.min_swirr?.toFixed(3) ?? '—'} – {projectData.swirrApplyResult.max_swirr?.toFixed(3) ?? '—'}
+							</span>
 						</div>
 					</div>
 				{/if}
 			</div>
 		</ParameterSection>
-	</div>
+		{:else}
+		<!-- Mode 2: Rel-Perm & SWOF (Dynamic) -->
+		<ParameterSection
+			title="1. Relative Permeability Model"
+			badge={workbench.scalParams.model.toUpperCase()}
+			defaultOpen={true}
+		>
+			<div class="grid grid-cols-3 gap-1">
+				{#each [['let', 'LET (3-Param)'], ['corey', 'Corey'], ['brooks_corey', 'Brooks-Corey']] as [m, lbl]}
+					<button
+						type="button"
+						onclick={() => {
+							workbench.scalParams.model = m as any;
+							void computeScal();
+						}}
+						class="h-6 rounded-sm border text-[10.5px] font-medium {workbench.scalParams.model ===
+						m
+							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+					>
+						{lbl}
+					</button>
+				{/each}
+			</div>
 
-	<div class="shrink-0 space-y-1.5 border-t border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3">
+			{#if scalSwirrPresets.length > 0}
+				<div class="mt-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-1.5">
+					<div class="mb-1 flex items-center justify-between text-[9.5px] text-[var(--text-secondary)]">
+						<span class="font-semibold">Sync Sw,irr from SCAL Plugs:</span>
+						<span class="mono-num text-[9px] text-[var(--text-muted)]">Click to apply</span>
+					</div>
+					<div class="flex flex-wrap gap-1">
+						{#each scalSwirrPresets as preset (preset.key)}
+							<button
+								type="button"
+								onclick={() => {
+									workbench.scalParams.swirr = preset.value;
+									void computeScal();
+								}}
+								class="mono-num inline-flex h-5 items-center gap-1 rounded-xs border px-1.5 text-[9.5px] font-medium transition-colors {Math.abs(
+									workbench.scalParams.swirr - preset.value
+								) < 0.001
+									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+							>
+								{#if preset.rt !== undefined}
+									<span
+										class="inline-block h-1.5 w-1.5 rounded-full"
+										style="background:{getRockTypeColor(preset.rt)}"
+									></span>
+								{/if}
+								{preset.label}
+							</button>
+						{/each}
+					</div>
+				</div>
+			{/if}
+
+			<NumericScrubber
+				label="Connate Water (Sw,irr)"
+				bind:value={workbench.scalParams.swirr}
+				unit="v/v"
+				min={0.01}
+				max={0.5}
+				step={0.01}
+				onrun={computeScal}
+			/>
+			<NumericScrubber
+				label="Residual Oil (Sor)"
+				bind:value={workbench.scalParams.sor}
+				unit="v/v"
+				min={0.01}
+				max={0.5}
+				step={0.01}
+				onrun={computeScal}
+			/>
+			<NumericScrubber
+				label="Max Water Rel-Perm (krw,max)"
+				bind:value={workbench.scalParams.krw_max}
+				unit="frac"
+				min={0.05}
+				max={1.0}
+				step={0.02}
+				onrun={computeScal}
+			/>
+			<NumericScrubber
+				label="Max Oil Rel-Perm (kro,max)"
+				bind:value={workbench.scalParams.kro_max}
+				unit="frac"
+				min={0.1}
+				max={1.0}
+				step={0.02}
+				onrun={computeScal}
+			/>
+
+			{#if workbench.scalParams.model === 'corey'}
+				<NumericScrubber
+					label="Water Corey Exponent (nw)"
+					bind:value={workbench.scalParams.nw}
+					min={1.0}
+					max={8.0}
+					step={0.1}
+					onrun={computeScal}
+				/>
+				<NumericScrubber
+					label="Oil Corey Exponent (no)"
+					bind:value={workbench.scalParams.no}
+					min={1.0}
+					max={8.0}
+					step={0.1}
+					onrun={computeScal}
+				/>
+			{:else if workbench.scalParams.model === 'brooks_corey'}
+				<NumericScrubber
+					label="Pore-Size Distribution (λ)"
+					bind:value={workbench.scalParams.lam}
+					min={0.3}
+					max={6.0}
+					step={0.1}
+					onrun={computeScal}
+				/>
+			{:else}
+				<div class="grid grid-cols-2 gap-x-2">
+					<NumericScrubber
+						label="Water L (Lw)"
+						bind:value={workbench.scalParams.lw}
+						min={0.5}
+						max={6.0}
+						step={0.1}
+						onrun={computeScal}
+					/>
+					<NumericScrubber
+						label="Oil L (Lo)"
+						bind:value={workbench.scalParams.lo}
+						min={0.5}
+						max={6.0}
+						step={0.1}
+						onrun={computeScal}
+					/>
+					<NumericScrubber
+						label="Water E (Ew)"
+						bind:value={workbench.scalParams.ew}
+						min={0.1}
+						max={10.0}
+						step={0.2}
+						onrun={computeScal}
+					/>
+					<NumericScrubber
+						label="Oil E (Eo)"
+						bind:value={workbench.scalParams.eo}
+						min={0.1}
+						max={10.0}
+						step={0.2}
+						onrun={computeScal}
+					/>
+					<NumericScrubber
+						label="Water T (Tw)"
+						bind:value={workbench.scalParams.tw}
+						min={0.5}
+						max={6.0}
+						step={0.1}
+						onrun={computeScal}
+					/>
+					<NumericScrubber
+						label="Oil T (To)"
+						bind:value={workbench.scalParams.to}
+						min={0.5}
+						max={6.0}
+						step={0.1}
+						onrun={computeScal}
+					/>
+				</div>
+			{/if}
+
+			<div class="grid grid-cols-2 gap-x-2">
+				<NumericScrubber
+					label="Water Viscosity (μw)"
+					bind:value={workbench.scalParams.mu_w}
+					unit="cP"
+					min={0.1}
+					max={5.0}
+					step={0.1}
+					onrun={computeScal}
+				/>
+				<NumericScrubber
+					label="Oil Viscosity (μo)"
+					bind:value={workbench.scalParams.mu_o}
+					unit="cP"
+					min={0.1}
+					max={50.0}
+					step={0.2}
+					onrun={computeScal}
+				/>
+			</div>
+		</ParameterSection>
+
+		<ParameterSection
+			title="2. Eclipse SWOF Simulation Deck"
+			badge={`${workbench.scalResult?.swofTable.length ?? 0} rows`}
+			defaultOpen={true}
+		>
+			<NumericScrubber
+				label="Entry Capillary Pressure (Pd)"
+				bind:value={workbench.scalParams.pc_entry}
+				unit="psi"
+				min={0.1}
+				max={25.0}
+				step={0.2}
+				onrun={computeScal}
+			/>
+			<NumericScrubber
+				label="Capillary Exponent (1/λ)"
+				bind:value={workbench.scalParams.pc_exponent}
+				min={0.5}
+				max={6.0}
+				step={0.1}
+				onrun={computeScal}
+			/>
+			<NumericScrubber
+				label="Max Capillary Pressure"
+				bind:value={workbench.scalParams.pc_max}
+				unit="psi"
+				min={5.0}
+				max={200.0}
+				step={5.0}
+				onrun={computeScal}
+			/>
+
+			<div class="mt-1.5 flex gap-1.5">
+				<button
+					type="button"
+					disabled={!workbench.scalResult?.swofKeyword}
+					onclick={copySwofKeyword}
+					class="h-7 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-xs font-semibold text-[var(--text-primary)] hover:bg-slate-200 disabled:opacity-40"
+				>
+					{copiedSwof ? 'Copied SWOF ✓' : 'Copy SWOF Keyword'}
+				</button>
+				<button
+					type="button"
+					disabled={!workbench.scalResult?.swofKeyword}
+					onclick={downloadSwofInc}
+					class="h-7 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-semibold text-[var(--accent-primary)] hover:bg-blue-50 disabled:opacity-40"
+				>
+					Download SWOF.INC
+				</button>
+			</div>
+		</ParameterSection>
+		{/if}
+
 		{#if projectData.error}
-			<div class="rounded border border-red-500/40 bg-red-500/10 px-2 py-1 text-[10px] text-red-400">
+			<div
+				class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]"
+			>
 				{projectData.error}
 			</div>
 		{/if}
-		<div class="flex gap-2">
+	</div>
+
+	<div
+		class="flex h-9 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5"
+	>
+		{#if workbench.scalSubMode === 'static'}
 			<button
 				type="button"
-				class="h-8 flex-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-xs font-semibold text-[var(--text-primary)] hover:border-[var(--accent-primary)] disabled:opacity-40"
-				disabled={projectData.isComputingMultiWell}
-				onclick={() => runAutoFit(true)}
+				disabled={projectData.isComputingMultiWell || isApplying}
+				onclick={() => applySwirrAndUpdateShf(false)}
+				class="mr-1.5 h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
 			>
-				Auto-Fit SCAL
+				{isApplying ? 'Applying SWIRR...' : 'Apply SWIRR & Update SHF'}
 			</button>
 			<button
 				type="button"
-				class="relative h-8 flex-1 rounded bg-[var(--accent-primary)] text-xs font-semibold text-black hover:opacity-90 disabled:opacity-40"
-				disabled={projectData.isComputingMultiWell}
+				disabled={projectData.isComputingMultiWell || !projectData.hasPendingMultiWell('swirr-corr')}
 				onclick={saveAllWells}
+				class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 			>
 				Save All Wells
-				{#if projectData.hasPendingMultiWell('swirr-corr')}
-					<span
-						class="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-950 align-middle"
-						title="Unsaved multi-well curves ready to commit"
-					></span>
-				{/if}
 			</button>
-		</div>
+		{:else}
+			<button
+				type="button"
+				disabled={projectData.isComputingMultiWell}
+				onclick={computeScal}
+				class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+			>
+				{projectData.isComputingMultiWell ? 'Computing...' : 'Compute Rel-Perm & SWOF'}
+			</button>
+		{/if}
 	</div>
 </div>

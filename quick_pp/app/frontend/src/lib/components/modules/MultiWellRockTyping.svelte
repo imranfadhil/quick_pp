@@ -1077,14 +1077,6 @@
 						<span class="font-semibold text-[var(--text-primary)]">
 							1. Select Classifier Model ({savedModelsList.length} Saved)
 						</span>
-						<button
-							type="button"
-							onclick={() => (workbench.multiWellStep = 'rt-classifier')}
-							class="rounded-xs border border-[var(--accent-primary)] bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold text-[var(--accent-primary)] hover:bg-blue-100"
-							title="Open Standalone RT Classifier Trainer to train, validate Contingency Matrix, and save new models"
-						>
-							Train / Validate Models →
-						</button>
 					</div>
 
 					{#if savedModelsList.length > 0}
@@ -1174,15 +1166,7 @@
 						</div>
 					{:else}
 						<div class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2 text-[9.5px] text-[var(--text-secondary)]">
-							No saved Rock Type classifier models yet. Open
-							<button
-								type="button"
-								onclick={() => (workbench.multiWellStep = 'rt-classifier')}
-								class="font-semibold text-[var(--accent-primary)] underline"
-							>
-								Standalone: RT Classifier
-							</button>
-							to train, validate with a Contingency Matrix, and save a model.
+							No saved Rock Type classifier models yet. Use the <strong>[DRT] RT Classifier</strong> standalone module to train, validate with a Contingency Matrix, and save a model.
 						</div>
 					{/if}
 				</div>

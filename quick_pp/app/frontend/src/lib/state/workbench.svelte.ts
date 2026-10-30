@@ -241,7 +241,8 @@ class WorkbenchState {
 
 	// Active curve selected in QAQC for histogram / multi-well distribution inspection
 	selectedQaqcCurve = $state<string>('GR');
-	swirrCrossplotTab = $state<'swirr-corr' | 'pc-qc'>('swirr-corr');
+	scalSubMode = $state<'static' | 'relperm'>('static');
+	swirrCrossplotTab = $state<'swirr-corr' | 'pc-qc' | 'scal-fit' | 'relperm'>('swirr-corr');
 	coreQcView = $state<'dual' | 'poro' | 'perm' | 'depth-error'>('dual');
 	vshQcView = $state<'dual' | 'gr-fit' | 'depth-error'>('dual');
 	vshCalibScope = $state<'shale_sand' | 'shale_only' | 'all' | 'brushed'>('shale_sand');

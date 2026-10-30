@@ -986,6 +986,235 @@ class ProjectDataState {
 			included_plug_count: finalPlugs.filter((p) => p.included).length,
 			total_plug_count: finalPlugs.length
 		};
+		this.recomputeScalFitsFromPlugs(true);
+	}
+
+	recomputeScalFitsFromPlugs(resetFits: boolean = true) {
+		const sr = this.swirrResult;
+		if (!sr || !Array.isArray(sr.plugs) || sr.plugs.length === 0) return;
+
+		const sp = this.shfParams;
+		const activeModel = sp.model ?? 'leverett_j';
+		const jSatMode = sp.jSatMode ?? 'swn';
+		const swirrSource = sp.swirrSource ?? 'poro_perm';
+		const iftCos = Math.max(
+			1e-4,
+			(sp.ift || 30.0) * Math.cos(((sp.theta ?? 30.0) * Math.PI) / 180.0)
+		);
+		const conv = (sp.unit ?? 'metric') === 'metric' ? 0.433 * 3.28084 : 0.433;
+		const gradPsi = Math.max(1e-4, ((sp.gw ?? 1.05) - (sp.ghc ?? 0.8)) * conv);
+
+		const pcArr: number[] = [];
+		const swArr: number[] = [];
+		const swnArr: number[] = [];
+		const jArr: number[] = [];
+		const hArr: number[] = [];
+		const bvwArr: number[] = [];
+		const phitArr: number[] = [];
+		const permArr: number[] = [];
+		const rfArr: number[] = [];
+		const wellArr: string[] = [];
+		const sampleArr: string[] = [];
+
+		const activePlugs = sr.plugs.filter((p) => !p.excluded);
+		const plugsToUse = activePlugs.length > 0 ? activePlugs : sr.plugs;
+
+		for (const p of plugsToUse) {
+			const pCurve = p.pc_curve || [];
+			const sCurve = p.sw_curve || [];
+			const phi = Math.max(1e-4, p.cpore || 0.15);
+			const k = Math.max(1e-4, p.cperm || 10.0);
+			const rf = p.rt ?? 1;
+			const swMinPlug =
+				sCurve.length > 0 ? Math.min(...sCurve) : (p.sw_at_max_pc ?? 0.12);
+
+			const swirrNorm =
+				swirrSource === 'poro_perm'
+					? this.evalSwirrValue(phi, k, rf)
+					: Math.min(
+							swMinPlug * 0.92,
+							Math.min(0.22, Math.max(0.04, 0.08 * Math.pow(k / phi, -0.12)))
+						);
+
+			for (let i = 0; i < Math.min(pCurve.length, sCurve.length); i++) {
+				const pc = Number(pCurve[i]);
+				const sw = Number(sCurve[i]);
+				if (!Number.isFinite(pc) || !Number.isFinite(sw) || pc <= 0 || sw <= 0) continue;
+				const swn = Math.min(
+					0.99,
+					Math.max(0.005, (sw - swirrNorm) / Math.max(0.05, 1.0 - swirrNorm))
+				);
+				const j = (0.2166 * pc * Math.sqrt(k / phi)) / iftCos;
+				const h = pc / gradPsi;
+				const bvw = phi * sw;
+
+				pcArr.push(Number(pc.toFixed(3)));
+				swArr.push(Number(sw.toFixed(4)));
+				swnArr.push(Number(swn.toFixed(4)));
+				jArr.push(Number(j.toFixed(4)));
+				hArr.push(Number(h.toFixed(2)));
+				bvwArr.push(Number(bvw.toFixed(4)));
+				phitArr.push(Number(phi.toFixed(4)));
+				permArr.push(Number(k.toFixed(3)));
+				rfArr.push(rf);
+				wellArr.push(p.well);
+				sampleArr.push(p.sample);
+			}
+		}
+
+		const fitPowerLawByRf = (
+			xVals: number[],
+			yVals: number[]
+		): Record<string, { a: number; b: number; rmse?: number; r2?: number; count?: number }> => {
+			const byRf = new Map<number, { lx: number[]; ly: number[]; x: number[]; y: number[] }>();
+			for (let i = 0; i < xVals.length; i++) {
+				const xv = xVals[i];
+				const yv = yVals[i];
+				const rf = rfArr[i] ?? 1;
+				if (xv > 0.005 && yv > 0 && Number.isFinite(xv) && Number.isFinite(yv)) {
+					if (!byRf.has(rf)) byRf.set(rf, { lx: [], ly: [], x: [], y: [] });
+					const g = byRf.get(rf)!;
+					g.lx.push(-Math.log(xv));
+					g.ly.push(Math.log(yv));
+					g.x.push(xv);
+					g.y.push(yv);
+				}
+			}
+			const out: Record<
+				string,
+				{ a: number; b: number; rmse?: number; r2?: number; count?: number }
+			> = {};
+			for (const [rf, g] of Array.from(byRf.entries()).sort((a, b) => a[0] - b[0])) {
+				const n = g.lx.length;
+				if (n < 2) continue;
+				const mx = g.lx.reduce((a, b) => a + b, 0) / n;
+				const my = g.ly.reduce((a, b) => a + b, 0) / n;
+				let num = 0;
+				let den = 0;
+				for (let k = 0; k < n; k++) {
+					num += (g.lx[k] - mx) * (g.ly[k] - my);
+					den += (g.lx[k] - mx) * (g.lx[k] - mx);
+				}
+				const b = Math.min(2.8, Math.max(0.06, den > 1e-8 ? num / den : 0.4));
+				const alpha = my - b * mx;
+				const a = Math.min(50.0, Math.max(1e-4, Math.exp(alpha)));
+				let ssRes = 0;
+				let ssTot = 0;
+				let sqErr = 0;
+				for (let k = 0; k < n; k++) {
+					const ypLog = alpha + b * g.lx[k];
+					ssRes += (g.ly[k] - ypLog) ** 2;
+					ssTot += (g.ly[k] - my) ** 2;
+					const yp = a * Math.pow(g.x[k], -b);
+					sqErr += (g.y[k] - yp) ** 2;
+				}
+				out[String(rf)] = {
+					a: Number(a.toFixed(4)),
+					b: Number(b.toFixed(4)),
+					rmse: Number(Math.sqrt(sqErr / n).toFixed(4)),
+					r2: Number((ssTot > 1e-12 ? Math.max(0, 1 - ssRes / ssTot) : 0).toFixed(4)),
+					count: n
+				};
+			}
+			return out;
+		};
+
+		const fitSkeltByRf = (): Record<
+			string,
+			{ a: number; b: number; c?: number; d?: number; rmse?: number; r2?: number; count?: number }
+		> => {
+			const byRf = new Map<number, { h: number[]; sw: number[] }>();
+			for (let i = 0; i < hArr.length; i++) {
+				const hv = hArr[i];
+				const sv = swArr[i];
+				const rf = rfArr[i] ?? 1;
+				if (hv > 0 && sv > 0 && sv <= 1.0) {
+					if (!byRf.has(rf)) byRf.set(rf, { h: [], sw: [] });
+					const g = byRf.get(rf)!;
+					g.h.push(hv);
+					g.sw.push(sv);
+				}
+			}
+			const out: Record<
+				string,
+				{ a: number; b: number; c?: number; d?: number; rmse?: number; r2?: number; count?: number }
+			> = {};
+			for (const [rf, g] of Array.from(byRf.entries()).sort((a, b) => a[0] - b[0])) {
+				const n = g.h.length;
+				if (n < 2) continue;
+				const minSw = Math.min(...g.sw);
+				const a = Number(Math.min(0.96, Math.max(0.35, 1.0 - minSw * 0.92)).toFixed(4));
+				const medH = [...g.h].sort((x, y) => x - y)[Math.floor(n / 2)] ?? 10.0;
+				const b = Number(Math.max(0.5, medH * 0.55).toFixed(4));
+				const c = 1.5;
+				const d = 0.5;
+				let sqErr = 0;
+				for (let k = 0; k < n; k++) {
+					const pred = 1.0 - a * Math.exp(-Math.pow(b / Math.max(g.h[k] + d, 1e-4), c));
+					sqErr += (g.sw[k] - pred) ** 2;
+				}
+				out[String(rf)] = {
+					a,
+					b,
+					c,
+					d,
+					rmse: Number(Math.sqrt(sqErr / n).toFixed(4)),
+					count: n
+				};
+			}
+			return out;
+		};
+
+		const fitsSwn = fitPowerLawByRf(swnArr, jArr);
+		const fitsSw = fitPowerLawByRf(swArr, jArr);
+		const fitsCuddy = fitPowerLawByRf(pcArr, bvwArr);
+		const fitsSkelt = fitSkeltByRf();
+
+		const existing = this.shfResult;
+		const keepExistingFits =
+			!resetFits &&
+			existing?.model === activeModel &&
+			existing?.fits &&
+			Object.keys(existing.fits).length > 0;
+
+		const nextFits = keepExistingFits
+			? existing!.fits
+			: activeModel === 'leverett_j'
+				? jSatMode === 'sw'
+					? fitsSw
+					: fitsSwn
+				: activeModel === 'skelt_harrison'
+					? fitsSkelt
+					: fitsCuddy;
+
+		this.shfResult = {
+			model: activeModel,
+			j_sat_mode: jSatMode,
+			fits: nextFits,
+			fits_swn: fitsSwn,
+			fits_sw: fitsSw,
+			fwl_by_zone: existing?.fwl_by_zone ?? this.shfParams.fwlByZone,
+			scal_data: {
+				pc: pcArr,
+				sw: swArr,
+				swn: swnArr,
+				j: jArr,
+				h: hArr,
+				bvw: bvwArr,
+				phit: phitArr,
+				perm: permArr,
+				rock_flags: rfArr,
+				well_names: wellArr,
+				samples: sampleArr
+			},
+			well_names: existing?.well_names ?? [],
+			depths: existing?.depths ?? [],
+			zones: existing?.zones ?? [],
+			phit: existing?.phit ?? [],
+			perm: existing?.perm ?? [],
+			rock_flags: existing?.rock_flags ?? [],
+			shf: existing?.shf ?? []
+		};
 	}
 
 	toggleSwirrPlugExclusion(plugId: string) {

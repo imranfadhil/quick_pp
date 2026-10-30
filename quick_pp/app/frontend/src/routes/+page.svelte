@@ -98,8 +98,11 @@
 	let rightGridConfig = $derived.by(
 		(): { title: string; columns: GridColumn[]; rows: Record<string, any>[] } => {
 			if (
-				workbench.scope === 'single-well' &&
-				workbench.singleWellStep === 'scal' &&
+				(workbench.crossplotTemplateOverride === 'relperm' ||
+					(workbench.scope === 'multi-well' &&
+						workbench.multiWellStep === 'swirr-corr' &&
+						(workbench.scalSubMode === 'relperm' ||
+							workbench.swirrCrossplotTab === 'relperm'))) &&
 				workbench.scalResult?.swofTable?.length
 			) {
 				return {
@@ -266,6 +269,43 @@
 
 			if (
 				workbench.scope === 'multi-well' &&
+				((workbench.multiWellStep === 'swirr-corr' &&
+					workbench.swirrCrossplotTab === 'scal-fit') ||
+					workbench.multiWellStep === 'shf') &&
+				projectData.shfResult?.scal_data?.pc?.length
+			) {
+				const scal = projectData.shfResult.scal_data;
+				return {
+					title: 'Multi-Well SCAL Capillary Pressure & Leverett-J Table',
+					columns: [
+						{ key: 'Well', label: 'Well' },
+						{ key: 'Sample', label: 'Sample' },
+						{ key: 'ROCK_FLAG', label: 'RT', numeric: true, decimals: 0 },
+						{ key: 'PC', label: 'Pc', unit: 'psi', numeric: true, decimals: 2 },
+						{ key: 'SW', label: 'Sw', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'SWN', label: 'Swn', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'J', label: 'J', numeric: true, decimals: 3 },
+						{ key: 'H', label: 'Height', unit: 'm', numeric: true, decimals: 1 },
+						{ key: 'PHIT', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'PERM', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2 }
+					],
+					rows: scal.pc.map((pcVal, i) => ({
+						Well: scal.well_names?.[i] ?? '',
+						Sample: scal.samples?.[i] ?? '',
+						ROCK_FLAG: scal.rock_flags?.[i] ?? null,
+						PC: pcVal,
+						SW: scal.sw?.[i] ?? null,
+						SWN: scal.swn?.[i] ?? null,
+						J: scal.j?.[i] ?? null,
+						H: scal.h?.[i] ?? null,
+						PHIT: scal.phit?.[i] ?? null,
+						PERM: scal.perm?.[i] ?? null
+					}))
+				};
+			}
+
+			if (
+				workbench.scope === 'multi-well' &&
 				workbench.multiWellStep === 'swirr-corr' &&
 				projectData.swirrResult?.plugs?.length
 			) {
@@ -301,41 +341,6 @@
 						MODELED_SWIRR: p.modeled_swirr,
 						RESIDUAL: p.residual,
 						STATUS: p.included ? 'Included' : !p.valid_pc ? 'Low Pc (< Ref)' : 'Excluded'
-					}))
-				};
-			}
-
-			if (
-				workbench.scope === 'multi-well' &&
-				workbench.multiWellStep === 'shf' &&
-				projectData.shfResult?.scal_data?.pc?.length
-			) {
-				const scal = projectData.shfResult.scal_data;
-				return {
-					title: 'Multi-Well SCAL Capillary Pressure & Leverett-J Table',
-					columns: [
-						{ key: 'Well', label: 'Well' },
-						{ key: 'Sample', label: 'Sample' },
-						{ key: 'ROCK_FLAG', label: 'RT', numeric: true, decimals: 0 },
-						{ key: 'PC', label: 'Pc', unit: 'psi', numeric: true, decimals: 2 },
-						{ key: 'SW', label: 'Sw', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'SWN', label: 'Swn', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'J', label: 'J', numeric: true, decimals: 3 },
-						{ key: 'H', label: 'Height', unit: 'm', numeric: true, decimals: 1 },
-						{ key: 'PHIT', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'PERM', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2 }
-					],
-					rows: scal.pc.map((pcVal, i) => ({
-						Well: scal.well_names?.[i] ?? '',
-						Sample: scal.samples?.[i] ?? '',
-						ROCK_FLAG: scal.rock_flags?.[i] ?? null,
-						PC: pcVal,
-						SW: scal.sw?.[i] ?? null,
-						SWN: scal.swn?.[i] ?? null,
-						J: scal.j?.[i] ?? null,
-						H: scal.h?.[i] ?? null,
-						PHIT: scal.phit?.[i] ?? null,
-						PERM: scal.perm?.[i] ?? null
 					}))
 				};
 			}
@@ -465,7 +470,9 @@
 				wellData.coreComparison.rows.length > 0 &&
 				(workbench.crossplotTemplateOverride === 'core-qc' ||
 					(workbench.scope === 'single-well' &&
-						(workbench.singleWellStep === 'litho-poro' || workbench.singleWellStep === 'perm')))
+						(workbench.singleWellStep === 'litho-poro' ||
+							workbench.singleWellStep === 'perm' ||
+							workbench.singleWellStep === 'scal')))
 			) {
 				const cc = wellData.coreComparison;
 				return {

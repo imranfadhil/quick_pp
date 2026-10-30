@@ -3,7 +3,6 @@
 	import { authState } from '$lib/state/auth.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
-	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
@@ -1360,9 +1359,6 @@
 				>
 					Open PHIT × CPORE Crossplot &amp; Depth Error →
 				</button>
-				<div class="mt-2">
-					<CoreDepthShiftPanel defaultTarget="poro" />
-				</div>
 			</ParameterSection>
 		{/if}
 		<!--
