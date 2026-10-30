@@ -35,6 +35,13 @@ export interface WellSummaryItem {
 	formation_top_count?: number;
 	fluid_contacts?: Array<{ type: string; depth: number | null }>;
 	fluid_contact_count?: number;
+	perforations?: Array<{
+		name: string;
+		top: number | null;
+		bottom: number | null;
+		description?: string | null;
+	}>;
+	perforation_count?: number;
 	pressure_test_count?: number;
 	survey_count?: number;
 	core_sample_count?: number;

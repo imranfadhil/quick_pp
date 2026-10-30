@@ -11,6 +11,7 @@
 		| 'las'
 		| 'formation_tops'
 		| 'fluid_contacts'
+		| 'perforations'
 		| 'core_samples'
 		| 'scal_pc'
 		| 'pressure_tests'
@@ -342,6 +343,7 @@
 					['las', 'LAS / DLIS / Parquet Logs'],
 					['formation_tops', 'Formation Tops'],
 					['fluid_contacts', 'Fluid Contacts'],
+					['perforations', 'Perforations'],
 					['core_samples', 'RCA Core Plugs'],
 					['scal_pc', 'SCAL (Pc)'],
 					['pressure_tests', 'Pressure Tests'],

@@ -20,6 +20,7 @@ from quick_pp.database.models import (
     CurveData as ORMCurveData,
     FluidContact as ORMFluidContact,
     FormationTop as ORMFormationTop,
+    Perforation as ORMPerforation,
     PressureTest as ORMPressureTest,
     Project as ORMProject,
     RelativePermeability as ORMRelativePermeability,
@@ -501,6 +502,8 @@ class Project(object):
                 well_obj.add_pressure_tests(ancillary_data["pressure_tests"])
             if "well_surveys" in ancillary_data:
                 well_obj.add_well_surveys(ancillary_data["well_surveys"])
+            if "perforations" in ancillary_data:
+                well_obj.add_perforations(ancillary_data["perforations"])
             if "core_data" in ancillary_data:
                 for core_sample_data in ancillary_data["core_data"]:
                     well_obj.add_core_sample_with_measurements(**core_sample_data)
@@ -2258,6 +2261,118 @@ class Well(object):
         logger.debug(f"Retrieved {len(df)} well survey points for well '{self.name}'.")
         return df
 
+    def add_perforations(
+        self, perforations: List[Dict[str, Any]], replace: bool = False
+    ):
+        """Adds or updates a list of perforation intervals for the well.
+
+        Args:
+            perforations (List[Dict[str, Any]]): A list of dictionaries, where each
+                dictionary represents a perforation interval and contains
+                'name' (optional, auto-named if empty), 'top', 'bottom', and optional 'description'.
+            replace (bool): If True, deletes all existing perforations for this well before inserting.
+        """
+        logger.info(
+            f"Adding/updating {len(perforations or [])} perforations for well '{self.name}' (replace={replace})."
+        )
+        try:
+            ORMPerforation.__table__.create(
+                bind=self.db_session.get_bind(), checkfirst=True
+            )
+        except Exception:
+            pass
+
+        dedup_perfs: Dict[tuple, Dict[str, Any]] = {}
+        for idx, perf_data in enumerate(perforations or []):
+            if not isinstance(perf_data, dict):
+                continue
+            top_raw = perf_data.get("top", perf_data.get("top_md", perf_data.get("depth")))
+            bot_raw = perf_data.get("bottom", perf_data.get("base", perf_data.get("bottom_md", top_raw)))
+            if top_raw is None or bot_raw is None:
+                logger.warning(f"Skipping invalid perforation data: {perf_data}")
+                continue
+            try:
+                t_val = round(float(top_raw), 4)
+                b_val = round(float(bot_raw), 4)
+            except (TypeError, ValueError):
+                continue
+            if not (np.isfinite(t_val) and np.isfinite(b_val)):
+                continue
+            if b_val < t_val:
+                t_val, b_val = b_val, t_val
+            p_name = str(
+                perf_data.get("name")
+                or perf_data.get("perf_name")
+                or f"Perf-{idx + 1}"
+            ).strip()
+            if not p_name:
+                p_name = f"Perf-{idx + 1}"
+            desc_raw = perf_data.get("description", perf_data.get("remark", perf_data.get("comment")))
+            p_desc = str(desc_raw).strip() if desc_raw is not None and str(desc_raw).strip() != "" else None
+            dedup_perfs[(p_name, t_val, b_val)] = {
+                "name": p_name,
+                "top": t_val,
+                "bottom": b_val,
+                "description": p_desc,
+            }
+
+        if not dedup_perfs and not replace:
+            return
+
+        if replace:
+            self.db_session.query(ORMPerforation).filter_by(
+                well_id=self.well_id
+            ).delete(synchronize_session="fetch")
+        else:
+            existing_perfs = list(
+                self.db_session.scalars(
+                    select(ORMPerforation).filter_by(well_id=self.well_id)
+                ).all()
+            )
+            for ep in existing_perfs:
+                key = (
+                    str(ep.name).strip(),
+                    round(float(ep.top), 4),
+                    round(float(ep.bottom), 4),
+                )
+                if key in dedup_perfs or any(
+                    k[0] == str(ep.name).strip() for k in dedup_perfs
+                ):
+                    self.db_session.delete(ep)
+        self.db_session.flush()
+
+        for p_clean in dedup_perfs.values():
+            orm_perf = ORMPerforation(well_id=self.well_id, **p_clean)
+            self.db_session.add(orm_perf)
+        self.db_session.flush()
+
+    def get_perforations(self) -> pd.DataFrame:
+        """Retrieves all perforation intervals for the well as a DataFrame."""
+        try:
+            perfs = self._orm_well.perforations
+        except Exception:
+            try:
+                self.db_session.rollback()
+            except Exception:
+                pass
+            perfs = []
+
+        if not perfs:
+            return pd.DataFrame(columns=["name", "top", "bottom", "description"])
+
+        data = [
+            {
+                "name": p.name,
+                "top": float(p.top),
+                "bottom": float(p.bottom),
+                "description": p.description or "",
+            }
+            for p in perfs
+        ]
+        df = pd.DataFrame(data).sort_values(by=["top", "bottom"]).reset_index(drop=True)
+        logger.debug(f"Retrieved {len(df)} perforations for well '{self.name}'.")
+        return df
+
     def add_core_sample_with_measurements(
         self,
         sample_name: str,
@@ -2954,6 +3069,7 @@ class Well(object):
             "fluid_contacts": self.get_fluid_contacts(),
             "pressure_tests": self.get_pressure_tests(),
             "well_surveys": self.get_well_surveys(),
+            "perforations": self.get_perforations(),
             "core_data": self.get_core_data(),
         }
         return ancillary_data

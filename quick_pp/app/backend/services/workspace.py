@@ -1340,6 +1340,19 @@ def workspace_well_bundle(
             if c.get("depth") is not None
         ]
 
+        perfs_raw = _df_or_list(ancillary.get("perforations"))
+        perforations = [
+            {
+                "id": f"perf-{i}-{p.get('name', i)}",
+                "name": str(p.get("name") or f"Perf-{i + 1}"),
+                "top": float(p.get("top", 0.0)),
+                "bottom": float(p.get("bottom", p.get("top", 0.0))),
+                "description": str(p.get("description") or ""),
+            }
+            for i, p in enumerate(perfs_raw)
+            if p.get("top") is not None
+        ]
+
         core_samples_list: List[Dict[str, Any]] = []
         scal_pc_list: List[Dict[str, Any]] = []
         pc_scale_saved = (
@@ -1473,6 +1486,7 @@ def workspace_well_bundle(
             "stats": stats,
             "tops": tops,
             "contacts": contacts,
+            "perforations": perforations,
             "core_samples": core_samples_list,
             "scal_pc": scal_pc_list,
             "pressure_tests": _df_or_list(ancillary.get("pressure_tests")),
@@ -7175,6 +7189,48 @@ def workspace_stick_plot(
                     all_zones_set.add(t_name)
                 top_items.sort(key=lambda x: x["tvd"])
 
+                # Extract perforations & map top/bottom MD -> TVDSS
+                perfs_raw = anc.get("perforations")
+                if isinstance(perfs_raw, pd.DataFrame):
+                    perfs_list = (
+                        perfs_raw.to_dict(orient="records") if not perfs_raw.empty else []
+                    )
+                elif isinstance(perfs_raw, list):
+                    perfs_list = perfs_raw
+                else:
+                    perfs_list = []
+
+                perf_items: List[Dict[str, Any]] = []
+                for p_idx, p in enumerate(perfs_list):
+                    p_top = p.get("top")
+                    p_bot = p.get("bottom", p_top)
+                    if p_top is None or pd.isna(p_top):
+                        continue
+                    t_md = float(p_top)
+                    b_md = float(p_bot) if (p_bot is not None and not pd.isna(p_bot)) else t_md
+                    if b_md < t_md:
+                        t_md, b_md = b_md, t_md
+                    p_name = str(p.get("name") or f"Perf-{p_idx + 1}").strip()
+                    p_desc = str(p.get("description") or "").strip()
+                    tvd_pair = _resolve_well_tvd_array(
+                        np.array([t_md, b_md], dtype=float), full_well_ref_df, surveys_df
+                    )
+                    t_tvd = float(tvd_pair[0]) if np.isfinite(tvd_pair[0]) else t_md
+                    b_tvd = float(tvd_pair[1]) if np.isfinite(tvd_pair[1]) else b_md
+                    if b_tvd < t_tvd:
+                        t_tvd, b_tvd = b_tvd, t_tvd
+                    perf_items.append(
+                        {
+                            "name": p_name,
+                            "top": round(t_md, 2),
+                            "bottom": round(b_md, 2),
+                            "top_tvd": round(t_tvd, 2),
+                            "bottom_tvd": round(b_tvd, 2),
+                            "description": p_desc,
+                        }
+                    )
+                perf_items.sort(key=lambda x: (x["top_tvd"], x["bottom_tvd"]))
+
                 # Cumulative hydrocarbon pore volume column height (m) = integral of BVO over TVD
                 valid_bvo = bvo_s.notna() & pd.Series(tvd_full).notna()
                 cum_hcpv = 0.0
@@ -7268,6 +7324,7 @@ def workspace_stick_plot(
                         "cum_hcpv": round(cum_hcpv, 3),
                         "contacts": contact_items,
                         "tops": top_items,
+                        "perforations": perf_items,
                         "depths": _clean_float_list(sub["DEPTH"], 2),
                         "tvd": tvdss_clean_list,
                         "tvdss": tvdss_clean_list,

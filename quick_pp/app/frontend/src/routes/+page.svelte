@@ -195,6 +195,7 @@
 						{ key: 'EVAL_ZONES', label: 'Eval Zones' },
 						{ key: 'ZONES', label: 'Formations / Zones' },
 						{ key: 'CONTACTS', label: 'Fluid Contacts' },
+						{ key: 'PERFS', label: 'Perforations' },
 						{ key: 'PRESSURE', label: 'Pressure Pts', numeric: true, decimals: 0 },
 						{ key: 'SURVEY', label: 'Survey Stns', numeric: true, decimals: 0 }
 					],
@@ -229,6 +230,17 @@
 											.join(', ')
 									: (w.fluid_contact_count ?? 0) > 0
 										? String(w.fluid_contact_count)
+										: '—',
+							PERFS:
+								(w.perforations ?? []).length > 0
+									? (w.perforations ?? [])
+											.map(
+												(p) =>
+													`${p.name}${p.top !== null && p.bottom !== null ? ` ${p.top}–${p.bottom}m` : ''}`
+											)
+											.join(', ')
+									: (w.perforation_count ?? 0) > 0
+										? String(w.perforation_count)
 										: '—',
 							PRESSURE: w.pressure_test_count ?? w.pressure_tests_count ?? 0,
 							SURVEY: w.survey_count ?? 0

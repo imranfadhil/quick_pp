@@ -264,6 +264,7 @@ class WorkbenchState {
 	stickPlotShowPhit = $state<boolean>(false);
 	stickPlotShowContacts = $state<boolean>(true);
 	stickPlotShowTops = $state<boolean>(true);
+	stickPlotShowPerfs = $state<boolean>(true);
 
 	// Global modal / drawer flags
 	importerOpen = $state<boolean>(false);

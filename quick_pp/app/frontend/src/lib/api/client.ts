@@ -228,6 +228,12 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 					done: `Fluid contacts saved (${wellName})`,
 					detail: wellName
 				};
+			case 'perforations':
+				return {
+					active: `Saving perforations (${wellName})...`,
+					done: `Perforations saved (${wellName})`,
+					detail: wellName
+				};
 			case 'core_samples':
 				return {
 					active: `Saving core plug samples (${wellName})...`,
@@ -549,11 +555,12 @@ export async function saveAncillaryItems(
 	entityType:
 		| 'formation_tops'
 		| 'fluid_contacts'
+		| 'perforations'
 		| 'core_samples'
 		| 'scal_pc'
 		| 'pressure_tests'
 		| 'well_surveys',
-	payloadKey: 'tops' | 'contacts' | 'samples' | 'pc_data' | 'tests' | 'surveys',
+	payloadKey: 'tops' | 'contacts' | 'perforations' | 'samples' | 'pc_data' | 'tests' | 'surveys',
 	items: Record<string, any>[],
 	replace: boolean = true
 ) {
@@ -574,7 +581,13 @@ export async function saveAncillaryItems(
 export async function deleteAncillaryItem(
 	projectId: string | number,
 	wellName: string,
-	entityType: 'formation_tops' | 'fluid_contacts' | 'core_samples' | 'scal_pc' | 'pressure_tests',
+	entityType:
+		| 'formation_tops'
+		| 'fluid_contacts'
+		| 'perforations'
+		| 'core_samples'
+		| 'scal_pc'
+		| 'pressure_tests',
 	identifier: string | number
 ) {
 	const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(wellName)}/${entityType}/${encodeURIComponent(String(identifier))}`;

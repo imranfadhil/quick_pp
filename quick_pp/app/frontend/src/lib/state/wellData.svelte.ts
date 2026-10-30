@@ -16,6 +16,14 @@ export interface FluidContact {
 	depth: number;
 }
 
+export interface PerforationItem {
+	id: string;
+	name: string;
+	top: number;
+	bottom: number;
+	description?: string;
+}
+
 export type CurveEditOperation =
 	| 'add'
 	| 'subtract'
@@ -241,6 +249,7 @@ class WellDataState {
 
 	tops = $state<FormationTop[]>([]);
 	contacts = $state<FluidContact[]>([]);
+	perforations = $state<PerforationItem[]>([]);
 	coreSamples = $state<Record<string, any>[]>([]);
 	originalCoreSamples = $state.raw<Record<string, any>[]>([]);
 	originalScalPc = $state.raw<Record<string, any>[]>([]);
@@ -1256,6 +1265,16 @@ class WellDataState {
 				name: c.name || c.type || 'OWC',
 				depth: c.depth
 			}));
+			this.perforations = (((data as any).perforations || []) as any[])
+				.map((p: any, i: number) => ({
+					id: String(p.id ?? `perf-${i}`),
+					name: String(p.name ?? `PERF_${i + 1}`),
+					top: Number(p.top),
+					bottom: Number(p.bottom),
+					description: p.description ?? ''
+				}))
+				.filter((p) => Number.isFinite(p.top) && Number.isFinite(p.bottom))
+				.sort((a, b) => a.top - b.top);
 			this.coreSamples = rawCoreList.map((s: any) => ({
 				...s,
 				raw_depth: Number(s.raw_depth ?? s.depth ?? s.DEPTH)
@@ -1364,8 +1383,8 @@ class WellDataState {
 						: 3.0e-5
 			);
 			workbench.scalParams.klinkenberg_method = ((savedScal.klinkenberg_method ??
-				cfgAny.klinkenberg_method) === 'heins_jones'
-				? 'heins_jones'
+				cfgAny.klinkenberg_method) === 'heithaus'
+				? 'heithaus'
 				: 'jones');
 			workbench.scalParams.core_corrected = Boolean(
 				savedScal.core_corrected ?? cfgAny.core_corrected ?? false

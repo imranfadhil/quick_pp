@@ -993,6 +993,83 @@
 					});
 				}
 			}
+
+			// Perforation intervals (TVDSS): orange perf-gun strip on the left of each well track + hoverable markers
+			if (workbench.stickPlotShowPerfs && w.perforations?.length) {
+				for (const perf of w.perforations) {
+					const tTop = perf.top_tvd;
+					const tBot = perf.bottom_tvd;
+					if (
+						tTop === null ||
+						tBot === null ||
+						tTop === undefined ||
+						tBot === undefined ||
+						!Number.isFinite(tTop) ||
+						!Number.isFinite(tBot)
+					)
+						continue;
+					const y0 = Math.min(tTop, tBot);
+					const y1 = Math.max(tTop, tBot);
+					const descTxt = perf.description ? `<br>${perf.description}` : '';
+					const hoverTxt =
+						`<b>${w.well_name} — Perf ${perf.name}</b><br>` +
+						`TVDSS: ${y0.toFixed(1)} – ${y1.toFixed(1)} m<br>` +
+						`MD: ${Number(perf.top).toFixed(1)} – ${Number(perf.bottom).toFixed(1)} m${descTxt}`;
+					shapes.push({
+						type: 'rect',
+						xref: xAxisRef,
+						yref: 'y',
+						x0: 0,
+						x1: xMax,
+						y0,
+						y1,
+						fillcolor: 'rgba(234, 88, 12, 0.08)',
+						line: { width: 0 },
+						layer: 'below'
+					});
+					shapes.push({
+						type: 'rect',
+						xref: xAxisRef,
+						yref: 'y',
+						x0: 0,
+						x1: xMax * 0.035,
+						y0,
+						y1,
+						fillcolor: '#EA580C',
+						line: { color: '#9A3412', width: 0.5 }
+					});
+					const span = y1 - y0;
+					const nSamples = Math.max(2, Math.min(30, Math.ceil(span / 0.5) + 1));
+					const perfY: number[] = [];
+					for (let k = 0; k < nSamples; k++) perfY.push(y0 + (span * k) / (nSamples - 1));
+					traces.push({
+						type: 'scatter',
+						mode: 'markers',
+						name: `PERF_${wIdx}_${perf.name}`,
+						showlegend: false,
+						xaxis: xAxisRef,
+						yaxis: 'y',
+						x: perfY.map(() => xMax * 0.06),
+						y: perfY,
+						marker: { color: '#EA580C', size: 5, symbol: 'triangle-right' },
+						text: perfY.map(() => hoverTxt),
+						hovertemplate: '%{text}<extra></extra>'
+					});
+					annotations.push({
+						xref: xAxisRef,
+						yref: 'y',
+						x: xMax * 0.09,
+						y: (y0 + y1) / 2,
+						xanchor: 'left',
+						yanchor: 'middle',
+						showarrow: false,
+						text: `▶ ${perf.name}`,
+						hovertext: hoverTxt,
+						font: { family: 'JetBrains Mono', size: 8, color: '#9A3412' },
+						bgcolor: 'rgba(255, 247, 237, 0.88)'
+					});
+				}
+			}
 		});
 
 		if (!Number.isFinite(minTvd) || !Number.isFinite(maxTvd) || maxTvd <= minTvd) {
@@ -1067,6 +1144,7 @@
 		void workbench.stickPlotShowPhit;
 		void workbench.stickPlotShowContacts;
 		void workbench.stickPlotShowTops;
+		void workbench.stickPlotShowPerfs;
 		void workbench.selectedZones;
 		void workbench.depthFilter;
 
@@ -1202,6 +1280,17 @@
 					class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)] focus:ring-0"
 				/>
 				<span>Contacts</span>
+			</label>
+			<label
+				class="flex cursor-pointer items-center gap-1 text-[10.5px] text-[var(--text-secondary)]"
+				title="Show perforation intervals (TVDSS)"
+			>
+				<input
+					type="checkbox"
+					bind:checked={workbench.stickPlotShowPerfs}
+					class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)] focus:ring-0"
+				/>
+				<span>Perfs</span>
 			</label>
 			<label
 				class="flex cursor-pointer items-center gap-1 text-[10.5px] text-[var(--text-secondary)]"

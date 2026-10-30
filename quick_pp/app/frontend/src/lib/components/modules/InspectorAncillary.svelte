@@ -8,7 +8,7 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 
-	type AncillaryTab = 'tops' | 'contacts' | 'core' | 'scal' | 'pressure' | 'survey';
+	type AncillaryTab = 'tops' | 'contacts' | 'perfs' | 'core' | 'scal' | 'pressure' | 'survey';
 	let activeTab = $state<AncillaryTab>('tops');
 	let isSaving = $state(false);
 	let statusMsg = $state<string | null>(null);
@@ -20,6 +20,8 @@
 	let newVal2 = $state<number>(100);
 	let newScalPc = $state<number>(15);
 	let newScalSw = $state<number>(0.35);
+	let newPerfBottom = $state<number>(1005);
+	let newPerfDesc = $state('');
 
 	const TOP_COLS: GridColumn[] = [
 		{ key: 'name', label: 'Formation / Zone', editable: true },
@@ -29,6 +31,13 @@
 	const CONTACT_COLS: GridColumn[] = [
 		{ key: 'type', label: 'Contact Type', editable: true },
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 1, editable: true }
+	];
+
+	const PERF_COLS: GridColumn[] = [
+		{ key: 'name', label: 'Name', editable: true },
+		{ key: 'top', label: 'Top', unit: 'm', numeric: true, decimals: 1, editable: true },
+		{ key: 'bottom', label: 'Bottom', unit: 'm', numeric: true, decimals: 1, editable: true },
+		{ key: 'description', label: 'Description', editable: true }
 	];
 
 	const CORE_COLS: GridColumn[] = [
@@ -72,6 +81,21 @@
 				{ id: `contact-${Date.now()}`, type, name: type, depth: Number(newDepth) }
 			];
 			newName = '';
+		} else if (activeTab === 'perfs') {
+			const t = Number(newDepth);
+			const b = Number(newPerfBottom);
+			wellData.perforations = [
+				...wellData.perforations,
+				{
+					id: `perf-${Date.now()}`,
+					name: newName.trim() || `PERF-${wellData.perforations.length + 1}`,
+					top: Math.min(t, b),
+					bottom: Math.max(t, b),
+					description: newPerfDesc.trim()
+				}
+			].sort((a, b2) => a.top - b2.top);
+			newName = '';
+			newPerfDesc = '';
 		} else if (activeTab === 'core') {
 			wellData.coreSamples = [
 				...wellData.coreSamples,
@@ -129,6 +153,8 @@
 				}
 			} else if (activeTab === 'contacts') {
 				wellData.contacts = wellData.contacts.filter((_, i) => !removeSet.has(i));
+			} else if (activeTab === 'perfs') {
+				wellData.perforations = wellData.perforations.filter((_, i) => !removeSet.has(i));
 			} else if (activeTab === 'core') {
 				wellData.coreSamples = wellData.coreSamples.filter((_, i) => !removeSet.has(i));
 				wellData.syncCoreCurvesFromSamples();
@@ -176,6 +202,21 @@
 				})
 				.filter((c) => Number.isFinite(c.depth));
 			wellData.contacts = [...wellData.contacts, ...mapped];
+		} else if (activeTab === 'perfs') {
+			const mapped = pastedRows
+				.map((r, i) => {
+					const t = Number(r.top ?? r.depth);
+					const b = Number(r.bottom ?? r.top ?? r.depth);
+					return {
+						id: `perf-${now}-${i}`,
+						name: String(r.name || `PERF-${wellData.perforations.length + i + 1}`).trim(),
+						top: Math.min(t, b),
+						bottom: Math.max(t, b),
+						description: String(r.description ?? '').trim()
+					};
+				})
+				.filter((p) => Number.isFinite(p.top) && Number.isFinite(p.bottom));
+			wellData.perforations = [...wellData.perforations, ...mapped].sort((a, b) => a.top - b.top);
 		} else if (activeTab === 'core') {
 			const mapped = pastedRows
 				.map((r, i) => ({
@@ -244,6 +285,33 @@
 					'contacts',
 					wellData.contacts.map((c) => ({ name: c.type || c.name, depth: Number(c.depth) }))
 				);
+			} else if (activeTab === 'perfs') {
+				// Re-assign a normalized copy so plots (reference-tracked deps) refresh after inline cell edits
+				wellData.perforations = wellData.perforations
+					.filter((p) => Number.isFinite(Number(p.top)) && Number.isFinite(Number(p.bottom)))
+					.map((p) => ({
+						id: p.id,
+						name: String(p.name || '').trim() || 'PERF',
+						top: Math.min(Number(p.top), Number(p.bottom)),
+						bottom: Math.max(Number(p.top), Number(p.bottom)),
+						description: p.description ?? ''
+					}))
+					.sort((a, b) => a.top - b.top);
+				await saveAncillaryItems(
+					workbench.projectId,
+					workbench.wellId,
+					'perforations',
+					'perforations',
+					wellData.perforations.map((p) => ({
+						name: p.name,
+						top: p.top,
+						bottom: p.bottom,
+						description: p.description ?? ''
+					}))
+				);
+				if (projectData.stickPlotResult) {
+					void projectData.loadStickPlot(true);
+				}
 			} else if (activeTab === 'core') {
 				wellData.syncCoreCurvesFromSamples();
 				await saveAncillaryItems(
@@ -318,11 +386,12 @@
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<!-- Sub-navigation Tabs -->
 	<div
-		class="grid grid-cols-6 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[10px] font-semibold"
+		class="grid grid-cols-7 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[10px] font-semibold"
 	>
 		{#each [
 			['tops', `Tops (${wellData.tops.length})`],
 			['contacts', `Contacts (${wellData.contacts.length})`],
+			['perfs', `Perfs (${wellData.perforations.length})`],
 			['core', `RCA (${wellData.coreSamples.length})`],
 			['scal', `SCAL (${wellData.scalPc.length})`],
 			['pressure', `Press (${wellData.pressureTests.length})`],
@@ -339,7 +408,9 @@
 					? 'Routine Core Analysis (CPORE, CPERM)'
 					: key === 'scal'
 						? 'SCAL Capillary Pressure (Multiple Pc & Sw pairs per sample/depth)'
-						: lbl}
+						: key === 'perfs'
+							? 'Perforation intervals (Name, Top, Bottom, Description)'
+							: lbl}
 			>
 				{lbl}
 			</button>
@@ -363,6 +434,35 @@
 				placeholder="Depth (m)"
 				bind:value={newDepth}
 				class="mono-num h-6 w-20 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
+			/>
+		{:else if activeTab === 'perfs'}
+			<input
+				type="text"
+				placeholder="Name"
+				bind:value={newName}
+				class="h-6 w-16 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
+			/>
+			<input
+				type="number"
+				step="0.5"
+				placeholder="Top"
+				title="Perforation Top MD (m)"
+				bind:value={newDepth}
+				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="0.5"
+				placeholder="Bottom"
+				title="Perforation Bottom MD (m)"
+				bind:value={newPerfBottom}
+				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="text"
+				placeholder="Description"
+				bind:value={newPerfDesc}
+				class="h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
 			/>
 		{:else if activeTab === 'core'}
 			<input
@@ -476,6 +576,17 @@
 				bind:rows={wellData.contacts}
 				editable={true}
 				emptyMessage="No fluid contacts (OWC/GOC/FWL)."
+				oncellchange={() => saveCurrentTab()}
+				onpasteRows={handlePasteRows}
+				ondeleteRow={handleDeleteRow}
+				ondeleteRows={handleDeleteRows}
+			/>
+		{:else if activeTab === 'perfs'}
+			<CompactDataGrid
+				columns={PERF_COLS}
+				bind:rows={wellData.perforations}
+				editable={true}
+				emptyMessage="No perforation intervals. Add above or paste (Name, Top, Bottom, Description) from Excel."
 				oncellchange={() => saveCurrentTab()}
 				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}

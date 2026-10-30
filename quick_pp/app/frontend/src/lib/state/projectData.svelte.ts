@@ -435,6 +435,14 @@ class ProjectDataState {
 			cum_hcpv: number;
 			contacts: Array<{ type: string; name: string; depth: number; tvd: number }>;
 			tops: Array<{ name: string; depth: number; tvd: number }>;
+			perforations?: Array<{
+				name: string;
+				top: number;
+				bottom: number;
+				top_tvd: number | null;
+				bottom_tvd: number | null;
+				description?: string | null;
+			}>;
 			depths: (number | null)[];
 			tvd: (number | null)[];
 			tvdss?: (number | null)[];

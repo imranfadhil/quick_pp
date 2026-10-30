@@ -4,6 +4,7 @@
   export let type:
     | 'formation_tops'
     | 'fluid_contacts'
+    | 'perforations'
     | 'pressure_tests'
     | 'core_samples'
     | 'scal_pc'
@@ -60,6 +61,7 @@
   const BACKEND_DATA_TYPE_MAP: Record<string, string> = {
     formation_tops: 'tops',
     fluid_contacts: 'contacts',
+    perforations: 'perforations',
     pressure_tests: 'pressures',
     core_samples: 'rca',
     scal_pc: 'scal',
@@ -69,6 +71,7 @@
   const DATA_TYPE_DESCRIPTIONS: Record<string, string> = {
     formation_tops: 'Map columns for Well Name (or select Target Well), Formation/Marker Name, and Measured Depth (MD).',
     fluid_contacts: 'Map columns for Well Name (or select Target Well), Contact Type (OWC/GOC/GWC/FWL), and Depth.',
+    perforations: 'Map columns for Well Name (or select Target Well), Perforation Name, Top MD, Bottom MD, and Description.',
     pressure_tests: 'Map columns for Well Name (or select Target Well), Test Depth, and Formation Pressure.',
     core_samples: 'Map columns for Well Name (or select Target Well), Plug Depth, Core Porosity (CPORE), and Permeability (CPERM).',
     scal_pc: 'Map columns for Well Name (or select Target Well), Capillary Pressure (PC), and Water Saturation (SW).',
@@ -86,6 +89,13 @@
       { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
       { key: 'CONTACT_TYPE', label: 'CONTACT_TYPE — Fluid Contact (OWC/GOC/FWL) *', required: true },
       { key: 'DEPTH', label: 'DEPTH — Contact Depth *', required: true }
+    ],
+    perforations: [
+      { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
+      { key: 'PERF_NAME', label: 'PERF_NAME — Perforation Name / ID' },
+      { key: 'TOP', label: 'TOP — Perforation Top MD *', required: true },
+      { key: 'BOTTOM', label: 'BOTTOM — Perforation Bottom MD *', required: true },
+      { key: 'DESCRIPTION', label: 'DESCRIPTION — Gun / Shot Density / Comment' }
     ],
     pressure_tests: [
       { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
@@ -463,6 +473,7 @@
         >
           <option value="formation_tops">Formation Tops</option>
           <option value="fluid_contacts">Fluid Contacts</option>
+          <option value="perforations">Perforations</option>
           <option value="pressure_tests">Pressure Tests (RFT/MDT)</option>
           <option value="core_samples">RCA Core Plugs (CPORE/CPERM)</option>
           <option value="scal_pc">SCAL Capillary Pressure (Pc/Sw)</option>

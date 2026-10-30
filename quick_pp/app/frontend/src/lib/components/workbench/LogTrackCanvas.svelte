@@ -1890,6 +1890,79 @@
 			});
 		}
 
+		// Perforation intervals: translucent band across all tracks + hoverable perf-gun strip on Track 1 left edge
+		const perfList = [...wellData.perforations]
+			.filter((p) => Number.isFinite(p.top) && Number.isFinite(p.bottom))
+			.sort((a, b) => a.top - b.top);
+		for (const perf of perfList) {
+			const pTop = Math.min(perf.top, perf.bottom);
+			const pBot = Math.max(perf.top, perf.bottom);
+			const thick = pBot - pTop;
+			const descTxt = perf.description ? `<br>${perf.description}` : '';
+			const hoverTxt =
+				`<b>Perforation: ${perf.name}</b><br>` +
+				`MD: ${pTop.toFixed(1)} – ${pBot.toFixed(1)} m<br>` +
+				`Thickness: ${thick.toFixed(1)} m${descTxt}`;
+			shapes.push({
+				type: 'rect',
+				xref: 'paper',
+				yref: 'y',
+				x0: 0,
+				x1: 1,
+				y0: pTop,
+				y1: pBot,
+				fillcolor: 'rgba(234, 88, 12, 0.07)',
+				line: { width: 0 },
+				layer: 'below'
+			});
+			shapes.push({
+				type: 'rect',
+				xref: 'paper',
+				yref: 'y',
+				x0: 0,
+				x1: 0.006,
+				y0: pTop,
+				y1: pBot,
+				fillcolor: '#EA580C',
+				line: { color: '#9A3412', width: 0.5 },
+				layer: 'above'
+			});
+			const nSamples = Math.max(2, Math.min(40, Math.ceil(thick / 0.5) + 1));
+			const perfY: number[] = [];
+			for (let k = 0; k < nSamples; k++) {
+				perfY.push(pTop + (thick * k) / (nSamples - 1));
+			}
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: `PERF_${perf.name}`,
+				x: perfY.map(() => 6),
+				y: perfY,
+				xaxis: 'x',
+				yaxis: 'y',
+				marker: { color: '#EA580C', size: 5, symbol: 'triangle-right', line: { width: 0 } },
+				text: perfY.map(() => hoverTxt),
+				hovertemplate: '%{text}<extra></extra>',
+				showlegend: false
+			});
+			annotations.push({
+				xref: 'paper',
+				yref: 'y',
+				x: 0.144,
+				y: (pTop + pBot) / 2,
+				xanchor: 'right',
+				yanchor: 'middle',
+				text: `▶▶ ${perf.name}`,
+				hovertext: hoverTxt,
+				showarrow: false,
+				font: { family: 'JetBrains Mono, monospace', size: 8.5, color: '#9A3412' },
+				bgcolor: 'rgba(255, 247, 237, 0.92)',
+				bordercolor: '#FDBA74',
+				borderwidth: 1,
+				borderpad: 1
+			});
+		}
+
 		const gridColor = '#E2E8F0';
 		const axisCommon = {
 			showgrid: true,
@@ -2083,12 +2156,14 @@
 		const curves = wellData.curves;
 		const visIndices = wellData.visibleIndices;
 		const tops = wellData.tops;
+		const perforations = wellData.perforations;
 		const coreSamples = wellData.coreSamples;
 		const renderGen = wellData.wellLoadGeneration;
 
 		const currentBaseDeps: unknown[] = [
 			visIndices,
 			tops,
+			perforations,
 			showHcCorrected,
 			showDtc,
 			tsOverlayActive,

@@ -4,6 +4,7 @@
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { appStatus } from '$lib/state/status.svelte';
+	import { wellData } from '$lib/state/wellData.svelte';
 	import {
 		workbench,
 		type ActiveReportState,

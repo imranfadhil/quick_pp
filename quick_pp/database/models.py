@@ -175,6 +175,13 @@ class Well(Base):
     def __repr__(self):
         return f"<Well(well_id={self.well_id}, name='{self.name}', uwi='{self.uwi}')>"
 
+    perforations: Mapped[List["Perforation"]] = relationship(
+        "Perforation",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
     __table_args__ = (UniqueConstraint("project_id", "uwi", name="uq_project_id_uwi"),)
 
 
@@ -238,6 +245,28 @@ class PressureTest(Base):
 
     def __repr__(self):
         return f"<PressureTest(test_id={self.test_id}, depth={self.depth}, pressure={self.pressure} {self.pressure_uom})>"
+
+
+class Perforation(Base):
+    __tablename__ = "perforations"
+
+    perf_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    well_id: Mapped[int] = mapped_column(
+        ForeignKey("wells.well_id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    top: Mapped[float] = mapped_column(REAL, nullable=False)
+    bottom: Mapped[float] = mapped_column(REAL, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+
+    well: Mapped["Well"] = relationship("Well", back_populates="perforations")
+
+    __table_args__ = (
+        UniqueConstraint("well_id", "name", "top", "bottom", name="uq_well_id_perf"),
+    )
+
+    def __repr__(self):
+        return f"<Perforation(perf_id={self.perf_id}, well_id={self.well_id}, name='{self.name}', top={self.top}, bottom={self.bottom})>"
 
 
 class Curve(Base):

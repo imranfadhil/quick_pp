@@ -849,6 +849,38 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 for r in session.execute(survey_stmt, {"well_ids": well_ids}).fetchall()
             }
 
+            perf_counts: Dict[int, int] = {wid: 0 for wid in well_ids}
+            perfs_list_by_well: Dict[int, List[Dict[str, Any]]] = {
+                wid: [] for wid in well_ids
+            }
+            try:
+                db_models.Perforation.__table__.create(
+                    bind=session.get_bind(), checkfirst=True
+                )
+            except Exception:
+                pass
+            try:
+                perfs_stmt = text(
+                    "SELECT well_id, name, top, bottom, description FROM perforations WHERE well_id IN :well_ids ORDER BY top, bottom"
+                ).bindparams(bindparam("well_ids", expanding=True))
+                for wid, pname, ptop, pbot, pdesc in session.execute(
+                    perfs_stmt, {"well_ids": well_ids}
+                ).fetchall():
+                    perf_counts[wid] = perf_counts.get(wid, 0) + 1
+                    perfs_list_by_well.setdefault(wid, []).append(
+                        {
+                            "name": str(pname or "Perf"),
+                            "top": round(float(ptop), 2) if ptop is not None else None,
+                            "bottom": round(float(pbot), 2) if pbot is not None else None,
+                            "description": str(pdesc or ""),
+                        }
+                    )
+            except Exception:
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+
             from quick_pp.las_handler import extract_las_metadata, extract_well_df_elevation
 
             wells_summary = []
@@ -1159,6 +1191,8 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         "fluid_contacts": contacts_list_by_well.get(wid, []),
                         "pressure_test_count": pressure_counts.get(wid, 0),
                         "survey_count": survey_counts.get(wid, 0),
+                        "perforation_count": perf_counts.get(wid, 0),
+                        "perforations": perfs_list_by_well.get(wid, []),
                     }
                 )
 
@@ -1516,6 +1550,11 @@ def get_well_data(
                     "formation_tops": tops,
                     "fluid_contacts": contacts,
                     "pressure_tests": pressure,
+                    "perforations": (
+                        well.get_perforations().to_dict(orient="records")
+                        if not well.get_perforations().empty
+                        else []
+                    ),
                     "core_samples": core_samples,
                 }
 
