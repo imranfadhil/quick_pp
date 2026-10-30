@@ -255,11 +255,19 @@ def _compute_fzi_data_sync(
             if well_has_sonic:
                 sonic_wells.append(well_name)
 
-            # Resolve true TVD if available (never assume TVD == DEPTH/MD)
+            # Resolve true TVDSS / TVD if available (never assume TVDSS == DEPTH/MD)
             tvd_col = next(
                 (
                     c
-                    for c in ("TVD", "TVDSS", "DEPT_TVD", "DEPTH_TVD")
+                    for c in (
+                        "TVDSS",
+                        "DEPT_TVDSS",
+                        "DEPTH_TVDSS",
+                        "TVD_SS",
+                        "TVD",
+                        "DEPT_TVD",
+                        "DEPTH_TVD",
+                    )
                     if c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().sum() >= 2
                 ),
                 None,

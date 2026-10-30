@@ -5383,6 +5383,25 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         grad_psi = max((req.gw - req.ghc) * conv, 1e-4)
 
         # Extract core SCAL capillary pressure points across project wells
+        swirr_cfg_dict = getattr(req, "swirr_config", None) or {}
+        excl_plug_set = {
+            str(pid).strip()
+            for pid in (
+                swirr_cfg_dict.get("excludedPlugIds")
+                or swirr_cfg_dict.get("excluded_plug_ids")
+                or []
+            )
+            if str(pid).strip()
+        }
+        excl_pt_set = {
+            str(ptid).strip()
+            for ptid in (
+                swirr_cfg_dict.get("excludedScalPointIds")
+                or swirr_cfg_dict.get("excluded_scal_point_ids")
+                or []
+            )
+            if str(ptid).strip()
+        }
         core_rows: List[Dict[str, Any]] = []
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
@@ -5396,6 +5415,8 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 core_data = (anc or {}).get("core_data") or {}
                 well_df_cache: Optional[pd.DataFrame] = None
                 for sname, sample in core_data.items():
+                    if f"{wn}::{sname}" in excl_plug_set:
+                        continue
                     pc_df = sample.get("pc")
                     if pc_df is None or pc_df.empty:
                         continue
@@ -5682,7 +5703,12 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         swn_vals = np.clip(raw_swn, 0.02, 0.98)
                     else:
                         swn_vals = np.clip(sw_vals, 0.02, 0.98)
-                    for pc_v, sw_v, swn_v in zip(pc_vals, sw_vals, swn_vals):
+                    for pt_idx, (pc_v, sw_v, swn_v) in enumerate(zip(pc_vals, sw_vals, swn_vals)):
+                        if (
+                            f"{wn}::{sname}::{pt_idx}" in excl_pt_set
+                            or f"{wn}::{sname}::{round(float(pc_v), 2)}" in excl_pt_set
+                        ):
+                            continue
                         if not (0.004 <= swn_v <= 0.995 and pc_v > 0):
                             continue
                         j_v = float(leverett_j(pc_v, req.ift, req.theta, cperm, cpore))
@@ -6602,68 +6628,143 @@ class WorkspaceStickPlotRequest(BaseModel):
     max_points_per_well: int = Field(4000, ge=100, le=10000)
 
 
+def _interp_or_extrapolate_depth(
+    target_md: np.ndarray, ref_md: np.ndarray, ref_tvd: np.ndarray
+) -> np.ndarray:
+    """Interpolate TVDSS/TVD along target_md and linearly extrapolate outside [ref_md[0], ref_md[-1]]
+    using local dTVD/dMD slope (clamped to [0.1, 1.0]) so contacts/tops outside filtered intervals are not flat-clamped.
+    """
+    out = np.interp(target_md, ref_md, ref_tvd)
+    if len(ref_md) >= 2:
+        below_mask = target_md < ref_md[0]
+        if np.any(below_mask):
+            dmd_top = float(ref_md[min(5, len(ref_md) - 1)] - ref_md[0])
+            dtvd_top = float(ref_tvd[min(5, len(ref_tvd) - 1)] - ref_tvd[0])
+            slope_top = (
+                float(np.clip(dtvd_top / dmd_top, 0.1, 1.0)) if dmd_top > 1e-4 else 1.0
+            )
+            out[below_mask] = ref_tvd[0] + (target_md[below_mask] - ref_md[0]) * slope_top
+        above_mask = target_md > ref_md[-1]
+        if np.any(above_mask):
+            idx0 = max(0, len(ref_md) - 6)
+            dmd_bot = float(ref_md[-1] - ref_md[idx0])
+            dtvd_bot = float(ref_tvd[-1] - ref_tvd[idx0])
+            slope_bot = (
+                float(np.clip(dtvd_bot / dmd_bot, 0.1, 1.0)) if dmd_bot > 1e-4 else 1.0
+            )
+            out[above_mask] = (
+                ref_tvd[-1] + (target_md[above_mask] - ref_md[-1]) * slope_bot
+            )
+    return out
+
+
 def _resolve_well_tvd_array(
     md_values: np.ndarray,
     well_df: Optional[pd.DataFrame],
     surveys_df: Optional[pd.DataFrame],
+    df_elev: float = 0.0,
 ) -> np.ndarray:
-    """Resolve TVD array for given MD depths using TVD/TVDSS curve or directional survey minimum curvature.
-    Returns an array of NaNs when neither a TVD curve nor a valid directional survey is available (never assumes TVD == MD).
+    """Resolve TVDSS array (True Vertical Depth Subsea, m) for given MD depths using TVDSS/TVD curve or directional survey.
+    Returns an array of NaNs when neither a TVDSS/TVD curve nor a valid directional survey is available (never assumes TVDSS == MD).
     """
     if len(md_values) == 0:
         return np.array([], dtype=float)
 
-    # 1. Explicit TVD or TVDSS curve in well_df
+    elev = float(df_elev or 0.0)
+    if (
+        abs(elev) < 1e-6
+        and well_df is not None
+        and not well_df.empty
+        and "TVD" in well_df.columns
+        and "TVDSS" in well_df.columns
+    ):
+        diff_s = (
+            pd.to_numeric(well_df["TVD"], errors="coerce")
+            - pd.to_numeric(well_df["TVDSS"], errors="coerce")
+        ).dropna()
+        if not diff_s.empty:
+            elev = float(diff_s.median())
+
+    # 1a. Explicit TVDSS curve in well_df (preferred)
     if well_df is not None and not well_df.empty and "DEPTH" in well_df.columns:
-        for tvd_col in ("TVD", "TVDSS", "DEPT_TVD", "DEPTH_TVD"):
+        for tvdss_col in ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS"):
+            if tvdss_col in well_df.columns and well_df[tvdss_col].notna().sum() >= 2:
+                s_tvdss = pd.to_numeric(well_df[tvdss_col], errors="coerce")
+                if (s_tvdss.dropna() < 0).mean() > 0.8:
+                    s_tvdss = s_tvdss.abs()
+                sub = (
+                    pd.DataFrame(
+                        {
+                            "DEPTH": pd.to_numeric(well_df["DEPTH"], errors="coerce"),
+                            "TVDSS": s_tvdss,
+                        }
+                    )
+                    .dropna()
+                    .sort_values("DEPTH")
+                    .drop_duplicates(subset=["DEPTH"], keep="last")
+                )
+                if len(sub) >= 2:
+                    return _interp_or_extrapolate_depth(
+                        md_values,
+                        sub["DEPTH"].to_numpy(dtype=float),
+                        sub["TVDSS"].to_numpy(dtype=float),
+                    )
+
+        # 1b. Explicit TVD curve in well_df -> convert to TVDSS = TVD - df_elev
+        for tvd_col in ("TVD", "DEPT_TVD", "DEPTH_TVD"):
             if tvd_col in well_df.columns and well_df[tvd_col].notna().sum() >= 2:
                 sub = (
                     pd.DataFrame(
                         {
                             "DEPTH": pd.to_numeric(well_df["DEPTH"], errors="coerce"),
-                            "TVD": pd.to_numeric(well_df[tvd_col], errors="coerce"),
+                            "TVDSS": pd.to_numeric(well_df[tvd_col], errors="coerce")
+                            - elev,
                         }
                     )
                     .dropna()
                     .sort_values("DEPTH")
+                    .drop_duplicates(subset=["DEPTH"], keep="last")
                 )
                 if len(sub) >= 2:
-                    return np.interp(
+                    return _interp_or_extrapolate_depth(
                         md_values,
                         sub["DEPTH"].to_numpy(dtype=float),
-                        sub["TVD"].to_numpy(dtype=float),
+                        sub["TVDSS"].to_numpy(dtype=float),
                     )
 
-    # 2. Directional survey table (with surface tie-in if survey starts below surface)
+    # 2. Directional survey table (with surface tie-in if survey starts below surface) -> convert to TVDSS
     if isinstance(surveys_df, pd.DataFrame) and not surveys_df.empty:
         col_map = {str(c).lower(): c for c in surveys_df.columns}
         md_c = col_map.get("md") or col_map.get("depth")
         inc_c = col_map.get("inc") or col_map.get("incl") or col_map.get("inclination")
         azi_c = col_map.get("azim") or col_map.get("azi") or col_map.get("azimuth")
-        tvd_c = col_map.get("tvd") or col_map.get("tvdss")
+        tvdss_c = col_map.get("tvdss") or col_map.get("tvd_ss")
+        tvd_c = tvdss_c or col_map.get("tvd")
+        is_already_subsea = tvdss_c is not None and tvd_c == tvdss_c
 
         if md_c and tvd_c and surveys_df[tvd_c].notna().sum() >= 2:
+            s_vals = pd.to_numeric(surveys_df[tvd_c], errors="coerce")
+            if is_already_subsea and (s_vals.dropna() < 0).mean() > 0.8:
+                s_vals = s_vals.abs()
             s_sub = (
                 pd.DataFrame(
                     {
                         "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
-                        "tvd": pd.to_numeric(surveys_df[tvd_c], errors="coerce"),
+                        "tvd": s_vals,
                     }
                 )
                 .dropna()
                 .sort_values("md")
+                .drop_duplicates(subset=["md"], keep="last")
             )
             if len(s_sub) >= 2:
                 mds = s_sub["md"].to_numpy(dtype=float)
                 tvds = s_sub["tvd"].to_numpy(dtype=float)
                 if mds[0] > 1.0:
                     mds = np.insert(mds, 0, 0.0)
-                    tvds = np.insert(tvds, 0, 0.0)
-                return np.interp(
-                    md_values,
-                    mds,
-                    tvds,
-                )
+                    tvds = np.insert(tvds, 0, -elev if is_already_subsea else 0.0)
+                interp_tvd = _interp_or_extrapolate_depth(md_values, mds, tvds)
+                return interp_tvd if is_already_subsea else (interp_tvd - elev)
 
         if md_c and inc_c and azi_c:
             s_sorted = (
@@ -6691,10 +6792,13 @@ def _resolve_well_tvd_array(
 
                     dev = wpp.deviation(mds, incs, azis)
                     pos = dev.minimum_curvature()
-                    return np.interp(
-                        md_values,
-                        np.asarray(pos.md, dtype=float),
-                        np.asarray(pos.depth, dtype=float),
+                    return (
+                        _interp_or_extrapolate_depth(
+                            md_values,
+                            np.asarray(pos.md, dtype=float),
+                            np.asarray(pos.depth, dtype=float),
+                        )
+                        - elev
                     )
                 except Exception:
                     inc_rad = np.deg2rad(incs)
@@ -6712,10 +6816,156 @@ def _resolve_well_tvd_array(
                     rf = np.where(dl > 1e-6, (2.0 / dl) * np.tan(dl / 2.0), 1.0)
                     dz = 0.5 * dmd * (np.cos(i1) + np.cos(i2)) * rf
                     tvd_calc = np.concatenate([[0.0], np.cumsum(dz)])
-                    return np.interp(md_values, mds, tvd_calc)
+                    return _interp_or_extrapolate_depth(md_values, mds, tvd_calc) - elev
 
-    # 3. No TVD curve and no valid directional survey -> do NOT assume TVD == MD
+    # 3. No TVDSS/TVD curve and no valid directional survey -> do NOT assume TVDSS == MD
     return np.full(len(md_values), np.nan, dtype=float)
+
+
+def _parse_well_date_str(raw_val: Any) -> Tuple[Optional[str], Optional[str]]:
+    """Parse a raw LAS/well header date string into ('MMM YYYY', 'YYYY-MM-DD') for display and sorting."""
+    if raw_val is None:
+        return None, None
+    s = str(raw_val).strip()
+    if not s or s.upper() in ("NONE", "NULL", "N/A", "NA", "UNKNOWN", "-999.25", "-999", "0"):
+        return None, None
+    import re
+    from datetime import datetime
+
+    # 4-digit year only
+    if re.fullmatch(r"(19\d\d|20\d\d)", s):
+        return s, f"{s}-01-01"
+
+    # Try common explicit date formats first (avoids pandas ambiguity warnings)
+    for fmt in (
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d-%b-%Y",
+        "%d-%B-%Y",
+        "%d/%b/%Y",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%b %d, %Y",
+        "%B %d, %Y",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+        "%d.%m.%Y",
+        "%Y%m%d",
+        "%d-%b-%y",
+        "%d/%b/%y",
+        "%b-%Y",
+        "%B-%Y",
+        "%b %Y",
+        "%B %Y",
+        "%Y-%m",
+        "%Y/%m",
+    ):
+        try:
+            dt = datetime.strptime(s[:19].split("T")[0].split(" ")[0] if "T" in s else s, fmt)
+            return dt.strftime("%b %Y"), dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    # Fallback: pandas to_datetime
+    try:
+        dt_pd = pd.to_datetime(s, errors="coerce")
+        if pd.notna(dt_pd) and 1900 <= dt_pd.year <= 2100:
+            return dt_pd.strftime("%b %Y"), dt_pd.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    # Regex fallback for month + 4-digit year anywhere in string
+    m_yr = re.search(r"(19\d\d|20\d\d)", s)
+    if m_yr:
+        yr = m_yr.group(1)
+        m_mon = re.search(
+            r"\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\b",
+            s.upper(),
+        )
+        if m_mon:
+            mon_str = m_mon.group(1).capitalize()
+            try:
+                dt = datetime.strptime(f"{mon_str} {yr}", "%b %Y")
+                return dt.strftime("%b %Y"), dt.strftime("%Y-%m-%d")
+            except Exception:
+                return f"{mon_str} {yr}", f"{yr}-01-01"
+        return yr, f"{yr}-01-01"
+
+    return s[:14], None
+
+
+def _resolve_well_date_info(
+    project_id: int, well_name: str, proj: Optional[Any] = None
+) -> Dict[str, Optional[str]]:
+    """Extract spud_date and log_date from well header/config and format Month & Year (preferring spud_date)."""
+    raw_db_header: Dict[str, Any] = {}
+    well_config: Dict[str, Any] = {}
+    if proj is not None:
+        try:
+            db_wn = resolve_db_well_name(project_id, well_name)
+            well_obj = proj.get_well(db_wn)
+            if well_obj is not None and getattr(well_obj, "_orm_well", None) is not None:
+                if isinstance(well_obj._orm_well.header_data, dict):
+                    raw_db_header = dict(well_obj._orm_well.header_data)
+                if isinstance(well_obj._orm_well.config_data, dict):
+                    well_config = dict(well_obj._orm_well.config_data)
+        except Exception:
+            pass
+
+    eph_cfg = _ephemeral_well_configs.get((project_id, well_name)) or _ephemeral_well_configs.get(
+        (project_id, resolve_db_well_name(project_id, well_name))
+    )
+    if isinstance(eph_cfg, dict):
+        well_config = {**well_config, **eph_cfg}
+
+    eph_hdr = _ephemeral_well_headers.get((project_id, well_name)) or _ephemeral_well_headers.get(
+        (project_id, resolve_db_well_name(project_id, well_name))
+    )
+    base_hdr_source = raw_db_header if raw_db_header else (eph_hdr or {})
+    meta = dict(extract_las_metadata(base_hdr_source, fallback_well_name=well_name))
+
+    hdr_overrides = (
+        raw_db_header.get("header_overrides")
+        if isinstance(raw_db_header.get("header_overrides"), dict)
+        else {}
+    )
+    for ovr_src in (well_config, hdr_overrides, eph_hdr or {}):
+        if isinstance(ovr_src, dict):
+            for k in ("spud_date", "log_date"):
+                val = ovr_src.get(k)
+                if val is not None and str(val).strip():
+                    meta[k] = str(val).strip()
+
+    spud_raw = str(meta.get("spud_date") or "").strip() or None
+    log_raw = str(meta.get("log_date") or "").strip() or None
+
+    spud_disp, spud_iso = _parse_well_date_str(spud_raw)
+    log_disp, log_iso = _parse_well_date_str(log_raw)
+
+    if spud_disp:
+        return {
+            "spud_date": spud_raw,
+            "log_date": log_raw,
+            "well_date": spud_disp,
+            "well_date_source": "spud",
+            "well_date_iso": spud_iso,
+        }
+    if log_disp:
+        return {
+            "spud_date": spud_raw,
+            "log_date": log_raw,
+            "well_date": log_disp,
+            "well_date_source": "log",
+            "well_date_iso": log_iso,
+        }
+    return {
+        "spud_date": spud_raw,
+        "log_date": log_raw,
+        "well_date": None,
+        "well_date_source": None,
+        "well_date_iso": None,
+    }
 
 
 @router.post(
@@ -6785,6 +7035,10 @@ def workspace_stick_plot(
                     continue
                 wdf_sorted = wdf_sorted.copy()
                 wdf_sorted["TVD"] = tvd_full
+                wdf_sorted["TVDSS"] = tvd_full
+                full_well_ref_df = _get_merged_dataframe_sync(project_id, wn)
+                if full_well_ref_df is None or full_well_ref_df.empty:
+                    full_well_ref_df = wdf_sorted
 
                 # Resolve PHIT (combine across PHIT, PHIE, CPORE, POROSITY, POR so sparse gaps are filled)
                 phit_s = pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
@@ -6863,7 +7117,7 @@ def workspace_stick_plot(
                     c_name = str(c.get("name") or c.get("type") or "OWC").strip().upper()
                     c_tvd = float(
                         _resolve_well_tvd_array(
-                            np.array([c_md], dtype=float), wdf_sorted, surveys_df
+                            np.array([c_md], dtype=float), full_well_ref_df, surveys_df
                         )[0]
                     )
                     contact_items.append(
@@ -6876,7 +7130,7 @@ def workspace_stick_plot(
                     )
                     contact_dict_tvd[c_name] = round(c_tvd, 2)
 
-                # Also compute legacy update_fluid_contacts FLUID_FLAG on wdf_sorted using TVD contacts
+                # Also compute legacy update_fluid_contacts FLUID_FLAG on wdf_sorted using TVDSS contacts
                 wdf_sorted["PHIT"] = phit_s
                 wdf_sorted["SWT"] = swt_s
                 wdf_sorted["BVO"] = bvo_s
@@ -6886,7 +7140,7 @@ def workspace_stick_plot(
                 except Exception:
                     wdf_sorted["FLUID_FLAG"] = -1
 
-                # Extract formation tops & map MD -> TVD
+                # Extract formation tops & map MD -> TVDSS
                 tops_raw = anc.get("formation_tops")
                 if isinstance(tops_raw, pd.DataFrame):
                     tops_list = (
@@ -6908,7 +7162,7 @@ def workspace_stick_plot(
                         continue
                     t_tvd = float(
                         _resolve_well_tvd_array(
-                            np.array([t_md], dtype=float), wdf_sorted, surveys_df
+                            np.array([t_md], dtype=float), full_well_ref_df, surveys_df
                         )[0]
                     )
                     top_items.append(
@@ -6998,9 +7252,16 @@ def workspace_stick_plot(
                         for x in s_num.tolist()
                     ]
 
+                tvdss_clean_list = _clean_float_list(sub["TVD"], 2)
+                date_info = _resolve_well_date_info(project_id, wn, proj)
                 wells_payload.append(
                     {
                         "well_name": wn,
+                        "spud_date": date_info["spud_date"],
+                        "log_date": date_info["log_date"],
+                        "well_date": date_info["well_date"],
+                        "well_date_source": date_info["well_date_source"],
+                        "well_date_iso": date_info["well_date_iso"],
                         "min_tvd": round(w_min_tvd, 2),
                         "max_tvd": round(w_max_tvd, 2),
                         "top_reservoir_tvd": round(top_res_tvd, 2),
@@ -7008,7 +7269,8 @@ def workspace_stick_plot(
                         "contacts": contact_items,
                         "tops": top_items,
                         "depths": _clean_float_list(sub["DEPTH"], 2),
-                        "tvd": _clean_float_list(sub["TVD"], 2),
+                        "tvd": tvdss_clean_list,
+                        "tvdss": tvdss_clean_list,
                         "zones": sub["ZONES"].fillna("ALL").astype(str).tolist(),
                         "phit": _clean_float_list(sub["PHIT"], 4),
                         "swt": _clean_float_list(sub["SWT"], 4),
@@ -7916,7 +8178,15 @@ def workspace_optimize_fwl(
             tvd_col = next(
                 (
                     c
-                    for c in ("TVD", "TVDSS", "DEPT_TVD", "DEPTH_TVD")
+                    for c in (
+                        "TVDSS",
+                        "DEPT_TVDSS",
+                        "DEPTH_TVDSS",
+                        "TVD_SS",
+                        "TVD",
+                        "DEPT_TVD",
+                        "DEPTH_TVD",
+                    )
                     if c in wdf.columns
                     and pd.to_numeric(wdf[c], errors="coerce").notna().sum() >= 2
                 ),
@@ -7925,10 +8195,13 @@ def workspace_optimize_fwl(
             if tvd_col is None:
                 skipped_no_tvd_wells.append(wn)
                 continue
-            if tvd_col != "TVD":
-                wdf["TVD"] = pd.to_numeric(wdf[tvd_col], errors="coerce")
-            else:
-                wdf["TVD"] = pd.to_numeric(wdf["TVD"], errors="coerce")
+            s_tvd_opt = pd.to_numeric(wdf[tvd_col], errors="coerce")
+            if tvd_col in ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS") and (
+                s_tvd_opt.dropna() < 0
+            ).mean() > 0.8:
+                s_tvd_opt = s_tvd_opt.abs()
+            wdf["TVD"] = s_tvd_opt
+            wdf["TVDSS"] = s_tvd_opt
             wdf = wdf[wdf["TVD"].notna()].copy()
             if len(wdf) < 2:
                 skipped_no_tvd_wells.append(wn)

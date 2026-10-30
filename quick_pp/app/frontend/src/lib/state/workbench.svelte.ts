@@ -258,7 +258,7 @@ class WorkbenchState {
 
 	// Multi-well Center Pane view ('logs' | 'stick-plot') & Stick Plot controls
 	centerPaneMultiWellView = $state<'logs' | 'stick-plot'>('logs');
-	stickPlotSortMode = $state<'project' | 'crest-tvd' | 'custom'>('crest-tvd');
+	stickPlotSortMode = $state<'project' | 'crest-tvd' | 'chronological' | 'custom'>('crest-tvd');
 	stickPlotCustomOrder = $state<string[]>([]);
 	stickPlotZoneFilter = $state<string>('ALL');
 	stickPlotShowPhit = $state<boolean>(false);

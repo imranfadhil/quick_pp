@@ -76,17 +76,51 @@
 	const ROCK_COLORS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#9333ea', '#0891b2'];
 
 	onMount(() => {
-		// Initialize sensible default FWL based on current well depth range if still at default 2500m
+		// Initialize sensible default FWL (TVDSS) based on current well TVDSS range or contact if still at default 2500m
 		if (wellData.depthRange.max > 0 && projectData.shfParams.fwl === 2500.0) {
+			const tvdssArr = (wellData.curves['TVDSS'] ?? wellData.curves['TVD'] ?? []).filter(
+				(v): v is number => typeof v === 'number' && Number.isFinite(v)
+			);
 			const contactFwl = wellData.contacts.find((c) => c.type === 'FWL' || c.type === 'OWC');
-			projectData.shfParams.fwl = contactFwl
-				? contactFwl.depth
-				: Number(
-						(
-							wellData.depthRange.min +
-							0.72 * (wellData.depthRange.max - wellData.depthRange.min)
-						).toFixed(1)
-					);
+			if (contactFwl) {
+				const deptArr = wellData.deptCurve;
+				const rawTvdss = wellData.curves['TVDSS'] ?? wellData.curves['TVD'];
+				let contactTvdss = contactFwl.depth;
+				if (rawTvdss && deptArr.length === rawTvdss.length && deptArr.length > 0) {
+					let bestIdx = -1;
+					let bestDist = Infinity;
+					for (let i = 0; i < deptArr.length; i++) {
+						const d = deptArr[i];
+						const t = rawTvdss[i];
+						if (typeof d === 'number' && typeof t === 'number' && Number.isFinite(t)) {
+							const dist = Math.abs(d - contactFwl.depth);
+							if (dist < bestDist) {
+								bestDist = dist;
+								bestIdx = i;
+							}
+						}
+					}
+					if (bestIdx >= 0) {
+						contactTvdss = Number(
+							(rawTvdss[bestIdx] + (contactFwl.depth - deptArr[bestIdx])).toFixed(1)
+						);
+					}
+				}
+				projectData.shfParams.fwl = contactTvdss;
+			} else if (tvdssArr.length >= 2) {
+				const minTvdss = Math.min(...tvdssArr);
+				const maxTvdss = Math.max(...tvdssArr);
+				projectData.shfParams.fwl = Number(
+					(minTvdss + 0.72 * (maxTvdss - minTvdss)).toFixed(1)
+				);
+			} else {
+				projectData.shfParams.fwl = Number(
+					(
+						wellData.depthRange.min +
+						0.72 * (wellData.depthRange.max - wellData.depthRange.min)
+					).toFixed(1)
+				);
+			}
 		}
 		if (
 			projectData.swirrResult ||
@@ -277,12 +311,12 @@
 				<div
 					class="m-2 rounded-sm border border-red-300 bg-red-50 p-2 text-[11px] leading-snug text-red-900"
 				>
-					<div class="font-bold">TVD Required — SHF &amp; Stick Plot Disabled</div>
+					<div class="font-bold">TVDSS Required — SHF &amp; Stick Plot Disabled</div>
 					<div class="mt-0.5 text-[10.5px] text-red-800">
 						None of the {projectData.activeWells.length} selected well(s) have a
-						<span class="mono-num font-semibold">TVD</span> curve or directional survey
-						(&ge; 2 stations). True Vertical Depth is never assumed equal to Measured Depth (MD).
-						Import directional surveys or TVD curves to enable SHF &amp; FWL optimization.
+						<span class="mono-num font-semibold">TVDSS</span> / <span class="mono-num font-semibold">TVD</span> curve or directional survey
+						(&ge; 2 stations). True Vertical Depth Subsea is never assumed equal to Measured Depth (MD).
+						Import directional surveys or TVDSS/TVD curves to enable SHF &amp; FWL optimization.
 					</div>
 				</div>
 			{:else}
@@ -290,7 +324,7 @@
 					class="m-2 rounded-sm border border-amber-300 bg-amber-50 p-2 text-[10.5px] leading-snug text-amber-900"
 				>
 					<div class="font-semibold">
-						{projectData.wellsWithoutTvd.length} well(s) without TVD excluded (TVD &ne; MD):
+						{projectData.wellsWithoutTvd.length} well(s) without TVDSS excluded (TVDSS &ne; MD):
 					</div>
 					<div class="mono-num mt-0.5 text-[10px] text-amber-800">
 						{projectData.wellsWithoutTvd.map((w) => w.name).join(', ')}
@@ -373,9 +407,9 @@
 			{#if useMdtPrior}
 				<div class="grid grid-cols-2 gap-x-2">
 					<NumericScrubber
-						label="MDT FWL Depth"
+						label="MDT FWL (TVDSS)"
 						bind:value={mdtFwl}
-						unit="m"
+						unit="m TVDSS"
 						min={0}
 						max={10000}
 						step={5.0}
@@ -395,21 +429,21 @@
 				disabled={projectData.isComputingMultiWell || projectData.wellsWithTvd.length === 0}
 				onclick={runOptimizeFwl}
 				title={projectData.wellsWithTvd.length === 0
-					? 'Disabled: No selected wells have TVD or directional survey (TVD is never assumed equal to MD)'
-					: 'Optimize Free Water Level (FWL) & fluid contacts using wells with valid TVD'}
+					? 'Disabled: No selected wells have TVDSS/TVD or directional survey (TVDSS is never assumed equal to MD)'
+					: 'Optimize Free Water Level (FWL) & fluid contacts in TVDSS using wells with valid TVDSS'}
 				class="mt-1.5 h-7 w-full rounded-sm border border-blue-600 bg-blue-50 px-2 text-xs font-semibold text-blue-800 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
 			>
-				{solvePerZone ? 'Optimize Per-Zone FWL & Contacts' : 'Optimize Field FWL & Contacts'}
+				{solvePerZone ? 'Optimize Per-Zone FWL & Contacts (TVDSS)' : 'Optimize Field FWL & Contacts (TVDSS)'}
 			</button>
 
 			{#if fwlOptResult}
 				<div class="mt-1.5 grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]">
 					<div>
-						<span class="text-[var(--text-muted)]">Field Fallback FWL:</span>
-						<div class="mono-num font-bold text-blue-700">{fmtNum(fwlOptResult.fwl, 2)} m</div>
+						<span class="text-[var(--text-muted)]">Field Fallback FWL (TVDSS):</span>
+						<div class="mono-num font-bold text-blue-700">{fmtNum(fwlOptResult.fwl, 2)} m TVDSS</div>
 					</div>
 					<div>
-						<span class="text-[var(--text-muted)]">OWC / TTZ:</span>
+						<span class="text-[var(--text-muted)]">OWC / TTZ (TVDSS):</span>
 						<div class="mono-num font-semibold">
 							{fmtNum(fwlOptResult.owc, 1)} / {fmtNum(fwlOptResult.ttz, 1)} m
 						</div>
@@ -446,7 +480,7 @@
 				{#if zoneRows.length > 0}
 					<div class="mt-2">
 						<div class="mb-1 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
-							<span class="font-semibold text-[var(--text-primary)]">Per-Zone FWL & Contacts</span>
+							<span class="font-semibold text-[var(--text-primary)]">Per-Zone FWL & Contacts (TVDSS)</span>
 							{#if Object.keys(projectData.shfParams.fwlByZone).length > 0}
 								<button
 									type="button"
@@ -462,8 +496,8 @@
 								<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 									<tr class="h-5 border-b border-[var(--border-hairline)]">
 										<th class="px-1.5 font-semibold">Zone</th>
-										<th class="px-1 text-right font-semibold">FWL (m)</th>
-										<th class="px-1 text-right font-semibold">OWC / TTZ</th>
+										<th class="px-1 text-right font-semibold">FWL (m TVDSS)</th>
+										<th class="px-1 text-right font-semibold">OWC / TTZ (TVDSS)</th>
 										<th class="px-1.5 text-right font-semibold">RMSE</th>
 									</tr>
 								</thead>
@@ -508,9 +542,9 @@
 			badge={MODEL_META[projectData.shfParams.model].label}
 		>
 			<NumericScrubber
-				label="Free Water Level (FWL)"
+				label="Free Water Level — FWL (TVDSS)"
 				bind:value={projectData.shfParams.fwl}
-				unit="m"
+				unit="m TVDSS"
 				min={0}
 				max={10000}
 				step={1.0}

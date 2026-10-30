@@ -849,7 +849,7 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 for r in session.execute(survey_stmt, {"well_ids": well_ids}).fetchall()
             }
 
-            from quick_pp.las_handler import extract_well_df_elevation
+            from quick_pp.las_handler import extract_las_metadata, extract_well_df_elevation
 
             wells_summary = []
             total_depth_sum = 0.0
@@ -959,6 +959,22 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                     w.config_data if isinstance(w.config_data, dict) else None,
                     target_depth_uom=w.depth_uom or "m",
                 )
+                w_meta = dict(extract_las_metadata(w_hdr_src, fallback_well_name=w.name))
+                w_ovr = (
+                    w_hdr_src.get("header_overrides")
+                    if isinstance(w_hdr_src.get("header_overrides"), dict)
+                    else {}
+                )
+                for _src in (
+                    w.config_data if isinstance(w.config_data, dict) else {},
+                    w_ovr,
+                    eph_hdr_w if isinstance(eph_hdr_w, dict) else {},
+                ):
+                    for _dk in ("spud_date", "log_date"):
+                        if _src.get(_dk) is not None and str(_src.get(_dk)).strip():
+                            w_meta[_dk] = str(_src.get(_dk)).strip()
+                w_spud_date = str(w_meta.get("spud_date") or "").strip() or None
+                w_log_date = str(w_meta.get("log_date") or "").strip() or None
 
                 has_tvd_for_well = (
                     survey_counts.get(wid, 0) >= 2
@@ -1115,6 +1131,8 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         "well_id": wid,
                         "name": w.name,
                         "uwi": w.uwi,
+                        "spud_date": w_spud_date,
+                        "log_date": w_log_date,
                         "depth_uom": w.depth_uom or "m",
                         "df_elev": w_df_elev,
                         "min_depth": min_d,
@@ -1962,7 +1980,7 @@ def _get_merged_dataframe_sync(
                         merged.drop(columns=[c_core], inplace=True)
 
             # Resolve TVD and TVDSS (= TVD - DF_elevation) from curves or directional survey (never assume TVD == MD)
-            from quick_pp.las_handler import extract_well_df_elevation
+            from quick_pp.las_handler import extract_las_metadata, extract_well_df_elevation
 
             eph_hdr = _ephemeral_well_headers.get(
                 (project_id, well_name)
@@ -2003,6 +2021,10 @@ def _get_merged_dataframe_sync(
                             merged["tvdss"] = s_alias
                             has_valid_tvdss = True
                             break
+            if has_valid_tvdss:
+                s_tvdss_chk = pd.to_numeric(merged["tvdss"], errors="coerce")
+                if (s_tvdss_chk.dropna() < 0).mean() > 0.8:
+                    merged["tvdss"] = s_tvdss_chk.abs()
 
             if (
                 not has_valid_tvd

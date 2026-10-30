@@ -160,6 +160,61 @@ ANCILLARY_TARGET_SCHEMAS: Dict[str, Dict[str, List[str]]] = {
             "depth_ft",
         ],
     },
+    "perforations": {
+        "WELL_NAME": ["well", "well_name", "wellname", "uwi", "wellbore", "well_id"],
+        "PERF_NAME": [
+            "name",
+            "perf_name",
+            "perforation",
+            "perf",
+            "interval",
+            "zone",
+            "id",
+            "perf_id",
+        ],
+        "TOP": [
+            "top",
+            "top_md",
+            "depth_top",
+            "top_depth",
+            "md_top",
+            "from",
+            "start_depth",
+            "start",
+            "top_m",
+            "top_ft",
+        ],
+        "BOTTOM": [
+            "bottom",
+            "base",
+            "bot",
+            "bottom_md",
+            "base_md",
+            "depth_bottom",
+            "depth_base",
+            "bottom_depth",
+            "base_depth",
+            "md_bottom",
+            "to",
+            "end_depth",
+            "end",
+            "bottom_m",
+            "bottom_ft",
+        ],
+        "DESCRIPTION": [
+            "description",
+            "desc",
+            "remark",
+            "remarks",
+            "comment",
+            "comments",
+            "notes",
+            "status",
+            "gun",
+            "spf",
+            "type",
+        ],
+    },
     "rca": {
         "WELL_NAME": ["well", "well_name", "wellname", "uwi", "wellbore", "well_id"],
         "SAMPLE_NAME": [
@@ -1955,6 +2010,135 @@ def calculate_tvd_project(project_id: int, well_name: Optional[str] = Query(None
 
 
 # ==============================================================================
+# Perforations Endpoints
+# ==============================================================================
+
+
+@router.get(
+    "/perforations",
+    summary="List perforation intervals for a project (optional well_name)",
+    tags=["Perforations"],
+)
+@router.get(
+    "/wells/{well_name}/perforations",
+    include_in_schema=False,
+)
+def list_perforations_project(project_id: int, well_name: Optional[str] = None):
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            if well_name:
+                well = proj.get_well(well_name)
+                df = well.get_perforations()
+                return {"perforations": df.to_dict(orient="records")}
+            all_rows = []
+            for wn in proj.get_well_names():
+                try:
+                    well = proj.get_well(wn)
+                    df = well.get_perforations()
+                    for r in df.to_dict(orient="records"):
+                        r["well_name"] = wn
+                        all_rows.append(r)
+                except Exception:
+                    continue
+            return {"perforations": all_rows}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list perforations: {e}"
+        ) from e
+
+
+@router.post(
+    "/perforations",
+    summary="Add or update perforation intervals for a project (requires well_name)",
+    tags=["Perforations"],
+)
+@router.post(
+    "/wells/{well_name}/perforations",
+    include_in_schema=False,
+)
+def add_perforations_project(
+    project_id: int,
+    well_name: Optional[str] = None,
+    payload: Dict[str, Any] = Body(...),
+):
+    if not isinstance(payload, dict) or (
+        "perforations" not in payload and "perfs" not in payload
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Payload must be a dict with key 'perforations' (or 'perfs').",
+        )
+    perfs = payload.get("perforations") if "perforations" in payload else payload.get("perfs")
+    perfs = perfs or []
+    replace_mode = bool(payload.get("replace", False))
+    target_well = well_name or payload.get("well_name")
+    if not target_well:
+        raise HTTPException(
+            status_code=400,
+            detail="well_name must be provided as query parameter or in payload",
+        )
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(target_well)
+            well.add_perforations(perfs, replace=replace_mode)
+        invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+        return {"created": perfs}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to add perforations: {e}"
+        ) from e
+
+
+@router.delete(
+    "/perforations/{perf_name}",
+    summary="Delete a perforation interval by name (requires well_name)",
+    tags=["Perforations"],
+)
+@router.delete(
+    "/wells/{well_name}/perforations/{perf_name}",
+    include_in_schema=False,
+)
+def delete_perforation_project(
+    project_id: int, perf_name: str, well_name: Optional[str] = None
+):
+    target_well = well_name
+    if not target_well:
+        raise HTTPException(
+            status_code=400,
+            detail="well_name query parameter is required to delete a perforation",
+        )
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(target_well)
+            orm_perfs = list(
+                session.scalars(
+                    select(db_objects.ORMPerforation).filter_by(
+                        well_id=well.well_id, name=perf_name
+                    )
+                ).all()
+            )
+            if not orm_perfs:
+                raise ValueError(f"Perforation '{perf_name}' not found")
+            for p in orm_perfs:
+                session.delete(p)
+        invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+        return {"deleted": perf_name}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete perforation: {e}"
+        ) from e
+
+
+# ==============================================================================
 # Phase 2 & 3: Unified Interactive Ancillary Preview & Commit Endpoints
 # ==============================================================================
 
@@ -2039,7 +2223,7 @@ def _convert_ancillary_numeric(
     u = (source_unit or "").strip().lower()
     t = target_col.upper()
 
-    if t in ("MD", "TVD", "DEPTH", "DEPTH_TOP", "DEPTH_BASE") and u in ("ft", "feet"):
+    if t in ("MD", "TVD", "DEPTH", "DEPTH_TOP", "DEPTH_BASE", "TOP", "BOTTOM") and u in ("ft", "feet"):
         return num * 0.3048
     if t in ("CPORE", "SW", "CSAT_WATER", "CSAT_OIL"):
         if u in ("%", "pct", "percent") or (not u and num > 1.0 and num <= 100.0):
@@ -2306,6 +2490,49 @@ def commit_ancillary_data(
                     if contacts_payload:
                         well.add_fluid_contacts(contacts_payload, replace=True)
                         summary_by_well[wn] = len(contacts_payload)
+
+                elif dtype in ("perforations", "perfs"):
+                    name_col, _ = col_map.get("PERF_NAME", ("name", None))
+                    top_col, top_unit = col_map.get("TOP", ("top", None))
+                    bot_col, bot_unit = col_map.get("BOTTOM", ("bottom", None))
+                    desc_col, _ = col_map.get("DESCRIPTION", ("description", None))
+                    perfs_payload = []
+                    for idx, r in enumerate(w_rows):
+                        top_v = _convert_ancillary_numeric(r.get(top_col), top_unit, "TOP")
+                        bot_v = _convert_ancillary_numeric(r.get(bot_col), bot_unit, "BOTTOM")
+                        if top_v is None and bot_v is None:
+                            continue
+                        if top_v is None:
+                            top_v = bot_v
+                        if bot_v is None:
+                            bot_v = top_v
+                        if bot_v < top_v:
+                            top_v, bot_v = bot_v, top_v
+                        p_name = (
+                            str(r.get(name_col, "")).strip()
+                            if name_col and r.get(name_col) is not None
+                            else ""
+                        )
+                        if not p_name or p_name.lower() in ("nan", "none"):
+                            p_name = f"Perf-{idx + 1}"
+                        desc_val = (
+                            str(r.get(desc_col, "")).strip()
+                            if desc_col and r.get(desc_col) is not None
+                            else ""
+                        )
+                        if desc_val.lower() in ("nan", "none"):
+                            desc_val = ""
+                        perfs_payload.append(
+                            {
+                                "name": p_name,
+                                "top": top_v,
+                                "bottom": bot_v,
+                                "description": desc_val,
+                            }
+                        )
+                    if perfs_payload:
+                        well.add_perforations(perfs_payload, replace=True)
+                        summary_by_well[wn] = len(perfs_payload)
 
                 elif dtype == "rca":
                     s_col, _ = col_map.get("SAMPLE_NAME", (None, None))

@@ -235,6 +235,134 @@
 		return result;
 	});
 
+	const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+	const MONTH_LOOKUP: Record<string, number> = {
+		JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5,
+		JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11
+	};
+
+	function parseClientDateStr(raw: string | null | undefined): { label: string; iso: string } | null {
+		if (!raw) return null;
+		const s = String(raw).trim();
+		if (!s || /^(none|null|n\/a|na|unknown|-999(\.25)?|0)$/i.test(s)) return null;
+
+		// 4-digit year only
+		if (/^(19\d\d|20\d\d)$/.test(s)) {
+			return { label: s, iso: `${s}-01-01` };
+		}
+
+		// ISO YYYY-MM-DD or YYYY/MM/DD or YYYY-MM
+		const isoMatch = s.match(/^(19\d\d|20\d\d)[-/.](0?[1-9]|1[0-2])(?:[-/.](0?[1-9]|[12]\d|3[01]))?/);
+		if (isoMatch) {
+			const yr = isoMatch[1];
+			const mIdx = parseInt(isoMatch[2], 10) - 1;
+			const day = isoMatch[3] ? isoMatch[3].padStart(2, '0') : '01';
+			return {
+				label: `${MONTH_NAMES[mIdx]} ${yr}`,
+				iso: `${yr}-${String(mIdx + 1).padStart(2, '0')}-${day}`
+			};
+		}
+
+		// DD-MMM-YYYY or DD/MMM/YYYY or DD MMM YYYY or MMM YYYY
+		const monMatch = s.toUpperCase().match(/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\b/);
+		const yrMatch = s.match(/\b(19\d\d|20\d\d)\b/);
+		if (monMatch && yrMatch) {
+			const mIdx = MONTH_LOOKUP[monMatch[1]];
+			const yr = yrMatch[1];
+			const dayMatch = s.match(/\b(0?[1-9]|[12]\d|3[01])\b/);
+			const day = dayMatch && dayMatch[1] !== yr ? dayMatch[1].padStart(2, '0') : '01';
+			return {
+				label: `${MONTH_NAMES[mIdx]} ${yr}`,
+				iso: `${yr}-${String(mIdx + 1).padStart(2, '0')}-${day}`
+			};
+		}
+
+		// DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+		const dmyMatch = s.match(/^(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.](19\d\d|20\d\d)$/);
+		if (dmyMatch) {
+			const day = dmyMatch[1].padStart(2, '0');
+			const mIdx = parseInt(dmyMatch[2], 10) - 1;
+			const yr = dmyMatch[3];
+			return {
+				label: `${MONTH_NAMES[mIdx]} ${yr}`,
+				iso: `${yr}-${String(mIdx + 1).padStart(2, '0')}-${day}`
+			};
+		}
+
+		const d = new Date(s);
+		if (!Number.isNaN(d.getTime()) && d.getFullYear() >= 1900 && d.getFullYear() <= 2100) {
+			const yr = d.getFullYear();
+			const mIdx = d.getMonth();
+			const day = String(d.getDate()).padStart(2, '0');
+			return {
+				label: `${MONTH_NAMES[mIdx]} ${yr}`,
+				iso: `${yr}-${String(mIdx + 1).padStart(2, '0')}-${day}`
+			};
+		}
+
+		if (yrMatch) {
+			return { label: yrMatch[1], iso: `${yrMatch[1]}-01-01` };
+		}
+		return { label: s.slice(0, 12), iso: '9999-12-31' };
+	}
+
+	function getWellDateDisplay(w: NonNullable<typeof projectData.stickPlotResult>['wells'][number]): {
+		label: string | null;
+		source: 'spud' | 'log' | null;
+		raw: string | null;
+		iso: string | null;
+		tooltip: string;
+	} {
+		const pw = projectData.wells.find((item) => item.name === w.well_name) as
+			| { spud_date?: string | null; log_date?: string | null }
+			| undefined;
+		const spudRaw = w.spud_date ?? pw?.spud_date ?? null;
+		const logRaw = w.log_date ?? pw?.log_date ?? null;
+
+		if (w.well_date) {
+			const src = w.well_date_source ?? (spudRaw ? 'spud' : logRaw ? 'log' : null);
+			const rawUsed = src === 'spud' ? spudRaw : src === 'log' ? logRaw : (spudRaw ?? logRaw);
+			const srcTitle = src === 'spud' ? 'Well Drilled (Spud Date)' : src === 'log' ? 'Log Acquired Date' : 'Well Date';
+			return {
+				label: w.well_date,
+				source: src,
+				raw: rawUsed,
+				iso: w.well_date_iso ?? parseClientDateStr(rawUsed)?.iso ?? null,
+				tooltip: rawUsed ? `${srcTitle}: ${rawUsed}` : `${srcTitle}: ${w.well_date}`
+			};
+		}
+
+		const parsedSpud = parseClientDateStr(spudRaw);
+		if (parsedSpud) {
+			return {
+				label: parsedSpud.label,
+				source: 'spud',
+				raw: spudRaw,
+				iso: parsedSpud.iso,
+				tooltip: `Well Drilled (Spud Date): ${spudRaw}`
+			};
+		}
+
+		const parsedLog = parseClientDateStr(logRaw);
+		if (parsedLog) {
+			return {
+				label: parsedLog.label,
+				source: 'log',
+				raw: logRaw,
+				iso: parsedLog.iso,
+				tooltip: `Log Acquired Date: ${logRaw}`
+			};
+		}
+
+		return {
+			label: null,
+			source: null,
+			raw: null,
+			iso: null,
+			tooltip: 'No spud date or log acquisition date in well header'
+		};
+	}
+
 	// Filtered & sorted wells
 	let orderedWells = $derived.by(() => {
 		const rawWells = projectData.stickPlotResult?.wells ?? [];
@@ -262,6 +390,14 @@
 				const tvdA = ma?.topTvd ?? a.top_reservoir_tvd;
 				const tvdB = mb?.topTvd ?? b.top_reservoir_tvd;
 				return tvdA - tvdB;
+			});
+		}
+		if (sortMode === 'chronological') {
+			return [...filtered].sort((a, b) => {
+				const da = getWellDateDisplay(a).iso ?? '9999-12-31';
+				const db = getWellDateDisplay(b).iso ?? '9999-12-31';
+				if (da !== db) return da.localeCompare(db);
+				return a.well_name.localeCompare(b.well_name);
 			});
 		}
 		if (sortMode === 'custom' && workbench.stickPlotCustomOrder.length > 0) {
@@ -313,6 +449,93 @@
 			}
 		}
 		return Number.isFinite(sp.fwl) && sp.fwl > 0 ? Number(sp.fwl) : null;
+	}
+
+	/**
+	 * Continuous SHF fallback evaluator for stick plot depths where saved/cached SHF is missing or sparse
+	 * (e.g. when Rock Typing or SHF was previously computed only at core plug depths).
+	 */
+	function evalContinuousShfFallback(
+		phit: number | null,
+		tvd: number,
+		effFwl: number | null
+	): number | null {
+		if (phit === null || !Number.isFinite(phit) || phit <= 0.005) return 1.0;
+		if (effFwl === null || !Number.isFinite(effFwl)) return null;
+		const hAboveFwl = effFwl - tvd;
+		if (hAboveFwl <= 0) return 1.0;
+
+		const sp = projectData.shfParams;
+		const model = projectData.shfResult?.model ?? sp.model ?? 'leverett_j';
+		const conv = (sp.unit ?? 'metric') === 'metric' ? 0.433 * 3.28084 : 0.433;
+		const gradPsi = Math.max(1e-4, ((sp.gw ?? 1.05) - (sp.ghc ?? 0.8)) * conv);
+		const pc = Math.max(1e-4, hAboveFwl * gradPsi);
+
+		// Estimate permeability from porosity using permTransformResult fits or Timur-Coates correlation
+		let permEst = Math.max(0.05, 0.15 * Math.pow(10, 12.5 * phit));
+		const ptFits = projectData.permTransformResult?.fits;
+		if (ptFits && Object.keys(ptFits).length > 0) {
+			const firstFit = Object.values(ptFits)[0];
+			if (firstFit && Number.isFinite(firstFit.a) && Number.isFinite(firstFit.b)) {
+				permEst = Math.max(
+					0.01,
+					Math.pow(10, firstFit.a * phit + firstFit.b)
+				);
+			}
+		}
+
+		// Determine Rock Type from active DRT cutoffs (FZI / Winland / Lucia)
+		let rt = 1;
+		const cutoffs = projectData.activeDrtCutoffs || [];
+		if (cutoffs.length > 0) {
+			const phiz = phit / Math.max(1.0 - phit, 0.01);
+			const rqi = 0.0314 * Math.sqrt(permEst / Math.max(phit, 0.005));
+			const fzi = rqi / Math.max(phiz, 0.01);
+			// Higher FZI = better rock (RT 1 = highest FZI)
+			const sortedCutoffs = [...cutoffs].sort((a, b) => b - a);
+			rt = 1;
+			for (const c of sortedCutoffs) {
+				if (fzi < c) rt++;
+			}
+		}
+
+		const fits = projectData.shfResult?.fits || {};
+		const fitKeys = Object.keys(fits);
+		const fit =
+			fits[String(rt)] ??
+			(fitKeys.length > 0 ? fits[fitKeys[Math.min(rt - 1, fitKeys.length - 1)]] : null);
+
+		const a = fit && Number.isFinite(fit.a) && fit.a > 0 ? Number(fit.a) : 0.22;
+		const b = fit && Number.isFinite(fit.b) && Math.abs(fit.b) > 0 ? Math.abs(Number(fit.b)) : 0.35;
+
+		if (model === 'skelt_harrison') {
+			const c = fit && Number.isFinite(fit.c) ? Number(fit.c) : 1.5;
+			const d = fit && Number.isFinite(fit.d) ? Number(fit.d) : 0.5;
+			const sw = 1.0 - a * Math.exp(-Math.pow(Math.max(b, 1e-4) / Math.max(hAboveFwl + d, 1e-4), c));
+			return Math.max(0.02, Math.min(1.0, sw));
+		}
+		if (model === 'cuddy') {
+			const bvw = a * Math.pow(pc, -b);
+			return Math.max(0.02, Math.min(1.0, bvw / Math.max(phit, 0.01)));
+		}
+
+		// Leverett-J: J = 0.2166 * Pc * sqrt(k / phi) / (ift * cos(theta))
+		const iftCos = Math.max(
+			1e-4,
+			(sp.ift || 30.0) * Math.cos(((sp.theta ?? 30.0) * Math.PI) / 180.0)
+		);
+		const jVal = (0.2166 * pc * Math.sqrt(permEst / Math.max(phit, 0.005))) / iftCos;
+		if (jVal <= 1e-6) return 1.0;
+		const swn = Math.max(0.0, Math.min(1.0, Math.pow(jVal / Math.max(a, 1e-4), -1.0 / b)));
+		const useRawSw = (sp.jSatMode ?? 'swn') === 'sw';
+		if (useRawSw) {
+			return Math.max(0.02, Math.min(1.0, swn));
+		}
+		const swirrVal =
+			(sp.swirrSource ?? 'poro_perm') === 'poro_perm'
+				? projectData.evalSwirrValue(phit, permEst, rt)
+				: Math.min(0.25, Math.max(0.04, 0.08 * Math.pow(permEst / Math.max(phit, 0.01), -0.12)));
+		return Math.max(swirrVal, Math.min(1.0, swirrVal + swn * (1.0 - swirrVal)));
 	}
 
 	let lastZoneFilter = $state<string>(workbench.stickPlotZoneFilter);
@@ -388,7 +611,9 @@
 			// Dedicated non-null arrays for SVG 'tozerox' fill so Plotly never bridges diagonally across null gaps
 			const fillTvdArr: number[] = [];
 			const fillBvoArr: number[] = [];
+			const fillBvohArr: number[] = [];
 			let prevValidTvd: number | null = null;
+			const wellEffFwl = resolveEffectiveFwl(activeZone, w.zones);
 
 			for (let i = 0; i < w.tvd.length; i++) {
 				const tvd = w.tvd[i];
@@ -404,6 +629,7 @@
 					// Clamp fill polygon back to x=0 across missing depth intervals
 					fillTvdArr.push(prevValidTvd, tvd);
 					fillBvoArr.push(0, 0);
+					fillBvohArr.push(0, 0);
 					// Break stroke lines across missing depth intervals
 					if (tvdArr.length > 0 && tvdArr[tvdArr.length - 1] !== null) {
 						tvdArr.push(null);
@@ -426,6 +652,7 @@
 					// Keep fill anchored at x=0 in excluded zones so 'tozerox' never bridges across zones
 					fillTvdArr.push(tvd);
 					fillBvoArr.push(0);
+					fillBvohArr.push(0);
 					// Insert null break so line stroke doesn't bridge across excluded zones
 					if (tvdArr.length > 0 && tvdArr[tvdArr.length - 1] !== null) {
 						tvdArr.push(null);
@@ -444,22 +671,36 @@
 				const swt = w.swt[i];
 				const bvo = w.bvo[i];
 
-				// Prefer live SHF from projectData.shfResult if available (nearest-depth lookup within 2.0m)
+				// Prefer live SHF from projectData.shfResult if available (nearest-depth lookup within 2.5m),
+				// then saved w.shf[i], and fall back to continuous model evaluation when SHF is sparse/null
 				let shf = w.shf[i];
 				if (wShfMap && md !== null) {
-					const liveVal = findNearestDepthValue(wShfMap.depths, wShfMap.values, md, 2.0);
+					const liveVal = findNearestDepthValue(wShfMap.depths, wShfMap.values, md, 2.5);
 					if (liveVal !== undefined) {
 						shf = liveVal;
 					}
 				}
+				if (
+					(shf === null || shf === undefined || !Number.isFinite(shf)) &&
+					phit !== null &&
+					Number.isFinite(phit)
+				) {
+					const sampleFwl = resolveEffectiveFwl(
+						activeZone !== 'ALL' ? activeZone : zn,
+						[zn, ...w.zones]
+					) ?? wellEffFwl;
+					shf = evalContinuousShfFallback(phit, tvd, sampleFwl);
+				}
+
 				const bvoh =
 					phit !== null && shf !== null && Number.isFinite(phit) && Number.isFinite(shf)
 						? Math.max(0, Math.min(1, phit * (1 - shf)))
 						: w.bvoh[i];
 
-				// Map null BVO to 0 in fill array so SVG 'tozerox' drops horizontally to 0 at null boundaries
+				// Map null BVO/BVOH to 0 in fill arrays so SVG 'tozerox' drops horizontally to 0 at null boundaries
 				fillTvdArr.push(tvd);
 				fillBvoArr.push(bvo !== null && Number.isFinite(bvo) ? Math.max(0, bvo) : 0);
+				fillBvohArr.push(bvoh !== null && Number.isFinite(bvoh) ? Math.max(0, bvoh) : 0);
 
 				tvdArr.push(tvd);
 				bvoArr.push(bvo);
@@ -524,15 +765,31 @@
 				x: bvoArr,
 				y: tvdArr,
 				customdata: customDataArr,
-				line: { color: '#15803D', width: 1.6 },
+				line: { color: '#15803D', width: 1.5 },
 				hovertemplate:
 					`<b>${w.well_name}</b><br>` +
-					'TVD: %{y:.1f} m<br>' +
+					'TVDSS: %{y:.1f} m<br>' +
 					'BVO (Log): %{x:.3f} v/v<extra></extra>'
 			});
 
-			// BVO_SHF = PHIT * (1 - SHF)
+			// BVO_SHF = PHIT * (1 - SHF) — tight 4px,2px dash + subtle fill for clean comparison against BVO (Log)
 			if (bvohArr.some((v) => v !== null && Number.isFinite(v))) {
+				if (fillTvdArr.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `BVOH_FILL_${wIdx}`,
+						showlegend: false,
+						xaxis: xAxisRef,
+						yaxis: 'y',
+						x: fillBvohArr,
+						y: fillTvdArr,
+						fill: 'tozerox',
+						fillcolor: 'rgba(220, 38, 38, 0.11)',
+						line: { width: 0, color: 'rgba(0,0,0,0)' },
+						hoverinfo: 'skip'
+					});
+				}
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
@@ -543,10 +800,10 @@
 					x: bvohArr,
 					y: tvdArr,
 					customdata: customDataArr,
-					line: { color: '#DC2626', width: 1.6, dash: 'dash' },
+					line: { color: '#DC2626', width: 1.55, dash: '4px,2px' },
 					hovertemplate:
 						`<b>${w.well_name}</b><br>` +
-						'TVD: %{y:.1f} m<br>' +
+						'TVDSS: %{y:.1f} m<br>' +
 						'BVO (SHF): %{x:.3f} v/v<extra></extra>'
 				});
 			}
@@ -758,7 +1015,7 @@
 			showlegend: false,
 			yaxis: {
 				title: {
-					text: 'True Vertical Depth — TVD (m)',
+					text: 'True Vertical Depth Subsea — TVDSS (m)',
 					font: { family: 'Inter', size: 10, color: '#334155' }
 				},
 				range: computedRange,
@@ -795,8 +1052,17 @@
 		void orderedWells;
 		void trackDomains;
 		void liveShfLookup;
+		void projectData.shfParams.model;
+		void projectData.shfParams.jSatMode;
+		void projectData.shfParams.swirrSource;
 		void projectData.shfParams.fwl;
 		void projectData.shfParams.fwlByZone;
+		void projectData.shfParams.ift;
+		void projectData.shfParams.theta;
+		void projectData.shfParams.gw;
+		void projectData.shfParams.ghc;
+		void projectData.shfResult?.fits;
+		void projectData.permTransformResult?.fits;
 		void workbench.stickPlotZoneFilter;
 		void workbench.stickPlotShowPhit;
 		void workbench.stickPlotShowContacts;
@@ -891,7 +1157,8 @@
 					bind:value={workbench.stickPlotSortMode}
 					class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-5 pl-1.5 text-[10.5px] font-medium text-[var(--text-primary)]"
 				>
-					<option value="crest-tvd">Crest → Flank (Top TVD)</option>
+					<option value="crest-tvd">Crest → Flank (Top TVDSS)</option>
+					<option value="chronological">Chronological (Well Date)</option>
 					<option value="project">Project Order</option>
 					<option value="custom">Custom Order (◀/▶)</option>
 				</select>
@@ -916,10 +1183,10 @@
 						? projectData.stickPlotResult.skipped_no_tvd_wells
 						: projectData.wellsWithoutTvd.map((w) => w.name)}
 				<span
-					title="Wells excluded because they lack TVD curve or directional survey (TVD ≠ MD): {skippedList.join(', ')}"
+					title="Wells excluded because they lack TVDSS/TVD curve or directional survey (TVDSS ≠ MD): {skippedList.join(', ')}"
 					class="inline-flex h-5 shrink-0 items-center gap-1 rounded-xs border border-amber-300 bg-amber-50 px-1.5 text-[10px] font-semibold text-amber-800"
 				>
-					<span>⚠ {skippedList.length} well{skippedList.length === 1 ? '' : 's'} without TVD excluded</span>
+					<span>⚠ {skippedList.length} well{skippedList.length === 1 ? '' : 's'} without TVDSS excluded</span>
 				</span>
 			{/if}
 		</div>
@@ -970,7 +1237,7 @@
 				onclick={resetTvdZoom}
 				class="h-5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-100"
 			>
-				Reset TVD Zoom
+				Reset TVDSS Zoom
 			</button>
 		</div>
 	</div>
@@ -980,7 +1247,7 @@
 		style="padding-left: {plotAreaLeft}px; padding-right: {plotAreaRight}px;"
 		class="flex shrink-0 items-stretch border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[9px] leading-tight"
 	>
-		<div class="relative flex h-[62px] w-full">
+		<div class="relative flex h-[76px] w-full">
 			{#each orderedWells as well, wIdx (well.well_name)}
 				{@const dom = trackDomains[wIdx] ?? [0, 1]}
 				{@const leftPct = dom[0] * 100}
@@ -989,6 +1256,7 @@
 				{@const wMetrics = wellZoneMetrics.get(well.well_name)}
 				{@const dispTopTvd = wMetrics?.topTvd ?? well.top_reservoir_tvd}
 				{@const dispHcpv = wMetrics?.hcpv ?? well.cum_hcpv}
+				{@const wDate = getWellDateDisplay(well)}
 				<div
 					style="left: {leftPct}%; width: {widthPct}%;"
 					class="absolute inset-y-0 flex flex-col justify-between border-x px-1 py-0.5 overflow-hidden transition-colors {isActiveWell
@@ -1009,7 +1277,7 @@
 						<button
 							type="button"
 							onclick={() => projectData.selectWell(well.well_name)}
-							title="Click to inspect {well.well_name} (Top TVD: {dispTopTvd.toFixed(1)}m)"
+							title="Click to inspect {well.well_name} (Top TVDSS: {dispTopTvd.toFixed(1)}m{wDate.label ? ` · ${wDate.tooltip}` : ''})"
 							class="truncate font-sans text-[9.5px] font-bold hover:underline {isActiveWell
 								? 'text-[var(--accent-primary)]'
 								: 'text-[var(--text-primary)]'}"
@@ -1027,17 +1295,34 @@
 						</button>
 					</div>
 
-					<!-- Row 2: Top TVD & Cumulative Hydrocarbon Column (HCPV·m) -->
+					<!-- Row 2: Well Drilled / Log Acquisition Date (Month & Year) -->
+					<div
+						title={wDate.tooltip}
+						class="mono-num flex items-center justify-center truncate rounded-2xs bg-slate-100/80 px-1 py-[1px] text-[7.5px] font-medium text-slate-600"
+					>
+						{#if wDate.label}
+							<span class="truncate">
+								<span class="text-[7px] font-normal text-slate-400">
+									{wDate.source === 'spud' ? 'Spud:' : wDate.source === 'log' ? 'Log:' : ''}
+								</span>
+								<span class="font-semibold text-slate-700">{wDate.label}</span>
+							</span>
+						{:else}
+							<span class="text-[7px] text-slate-400">Date: —</span>
+						{/if}
+					</div>
+
+					<!-- Row 3: Top TVDSS & Cumulative Hydrocarbon Column (HCPV·m) -->
 					<div
 						class="mono-num flex items-center justify-between whitespace-nowrap text-[7.5px] text-[var(--text-muted)]"
 					>
-						<span title="Top TVD ({workbench.stickPlotZoneFilter})">Top:{dispTopTvd.toFixed(0)}m</span>
+						<span title="Top TVDSS ({workbench.stickPlotZoneFilter})">Top:{dispTopTvd.toFixed(0)}m</span>
 						<span class="font-semibold text-emerald-700" title="Cumulative Hydrocarbon Pore Volume Column ({workbench.stickPlotZoneFilter})">
 							HCPV:{dispHcpv.toFixed(2)}m
 						</span>
 					</div>
 
-					<!-- Row 3: BVO_Log (Green) & BVO_SHF (Red Dashed) Scale Header -->
+					<!-- Row 4: BVO_Log (Green) & BVO_SHF (Red) Scale Header -->
 					<div class="flex flex-col">
 						<div class="mono-num flex items-center justify-between text-[8px] font-semibold">
 							<span class="text-emerald-700">0</span>
@@ -1050,7 +1335,10 @@
 						</div>
 						<div class="mt-[1px] flex w-full items-center gap-0.5">
 							<div class="h-[1.5px] flex-1 bg-emerald-700"></div>
-							<div class="h-0 flex-1 border-t-[1.5px] border-dashed border-red-600"></div>
+							<div
+								class="h-[1.5px] flex-1"
+								style="background: repeating-linear-gradient(to right, #DC2626 0 4px, transparent 4px 6px);"
+							></div>
 						</div>
 					</div>
 				</div>
@@ -1058,26 +1346,26 @@
 		</div>
 	</div>
 
-	<!-- Multi-Well TVD Stick Plot Canvas -->
+	<!-- Multi-Well TVDSS Stick Plot Canvas -->
 	<div class="relative min-h-0 flex-1 overflow-hidden">
 		{#if projectData.isLoadingStickPlot && orderedWells.length === 0}
 			<div
 				class="flex h-full w-full items-center justify-center text-xs text-[var(--text-muted)]"
 			>
-				Loading multi-well TVD stick plot...
+				Loading multi-well TVDSS stick plot...
 			</div>
 		{:else if orderedWells.length === 0}
 			<div
 				class="flex h-full w-full flex-col items-center justify-center gap-2 p-6 text-center"
 			>
 				<div class="text-xs font-semibold text-[var(--text-primary)]">
-					Multi-Well Stick Plot Disabled — No Wells with True Vertical Depth (TVD)
+					Multi-Well Stick Plot Disabled — No Wells with True Vertical Depth Subsea (TVDSS)
 				</div>
 				<p class="max-w-md text-[11px] leading-relaxed text-[var(--text-secondary)]">
-					None of the selected wells have a <span class="mono-num font-semibold">TVD</span> curve
-					or directional survey (&ge; 2 stations). True Vertical Depth is never assumed equal to
-					Measured Depth (MD). Import directional surveys or TVD curves to enable structural TVD
-					stick plots.
+					None of the selected wells have a <span class="mono-num font-semibold">TVDSS</span> /
+					<span class="mono-num font-semibold">TVD</span> curve or directional survey (&ge; 2 stations).
+					True Vertical Depth Subsea is never assumed equal to Measured Depth (MD). Import directional
+					surveys or TVDSS/TVD curves to enable structural TVDSS stick plots.
 				</p>
 				<button
 					type="button"
@@ -1102,7 +1390,7 @@
 				{hoverReadout.well ?? workbench.wellId ?? '—'}
 			</span>
 			<span>
-				<strong class="text-[var(--text-primary)]">TVD:</strong>
+				<strong class="text-[var(--text-primary)]">TVDSS:</strong>
 				{fmtDepth(hoverReadout.tvd)}
 			</span>
 			<span>

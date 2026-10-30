@@ -1921,6 +1921,9 @@
 				return { traces, layout: baseLayout };
 			}
 
+			const excludedSet = new Set(projectData.swirrConfig.excludedScalPointIds || []);
+			const selectedSet = new Set(projectData.selectedScalPointIds || []);
+
 			const byRt = new Map<
 				number,
 				{
@@ -1931,10 +1934,58 @@
 					bvw: number[];
 					h: number[];
 					labels: string[];
+					ptIds: string[];
 				}
 			>();
+			const exclPts = {
+				swn: [] as number[],
+				sw: [] as number[],
+				j: [] as number[],
+				pc: [] as number[],
+				bvw: [] as number[],
+				labels: [] as string[],
+				ptIds: [] as string[]
+			};
+			const selPts = {
+				swn: [] as number[],
+				sw: [] as number[],
+				j: [] as number[],
+				pc: [] as number[],
+				bvw: [] as number[],
+				labels: [] as string[],
+				ptIds: [] as string[]
+			};
+
 			for (let i = 0; i < scal.pc.length; i++) {
 				const rf = scal.rock_flags?.[i] ?? 1;
+				const rawPtId =
+					scal.point_ids?.[i] ||
+					`${scal.well_names?.[i] ?? 'W'}::${scal.samples?.[i] ?? 'S'}::${i}`;
+				const isExcl = Boolean(scal.excluded?.[i]) || excludedSet.has(rawPtId);
+				const cdata = `scal_pt::${rawPtId}`;
+				const lbl = `${scal.samples?.[i] ?? 'Plug'} (${scal.well_names?.[i] ?? ''}) | Pc=${fmtNum(scal.pc[i], 2)} psi | Sw=${fmtNum(scal.sw[i], 3)}, Swn=${fmtNum(scal.swn[i], 3)}`;
+
+				if (selectedSet.has(rawPtId)) {
+					selPts.swn.push(scal.swn[i]);
+					selPts.sw.push(scal.sw[i]);
+					selPts.j.push(scal.j[i]);
+					selPts.pc.push(scal.pc[i]);
+					selPts.bvw.push(scal.bvw[i]);
+					selPts.labels.push(lbl);
+					selPts.ptIds.push(cdata);
+				}
+
+				if (isExcl) {
+					exclPts.swn.push(scal.swn[i]);
+					exclPts.sw.push(scal.sw[i]);
+					exclPts.j.push(scal.j[i]);
+					exclPts.pc.push(scal.pc[i]);
+					exclPts.bvw.push(scal.bvw[i]);
+					exclPts.labels.push(lbl);
+					exclPts.ptIds.push(cdata);
+					continue;
+				}
+
 				if (!byRt.has(rf)) {
 					byRt.set(rf, {
 						swn: [],
@@ -1943,7 +1994,8 @@
 						pc: [],
 						bvw: [],
 						h: [],
-						labels: []
+						labels: [],
+						ptIds: []
 					});
 				}
 				const grp = byRt.get(rf)!;
@@ -1953,9 +2005,8 @@
 				grp.pc.push(scal.pc[i]);
 				grp.bvw.push(scal.bvw[i]);
 				grp.h.push(scal.h[i]);
-				grp.labels.push(
-					`${scal.samples?.[i] ?? 'Plug'} (${scal.well_names?.[i] ?? ''}) | Pc=${fmtNum(scal.pc[i], 2)} psi`
-				);
+				grp.labels.push(lbl);
+				grp.ptIds.push(cdata);
 			}
 
 			const sortedRts = [...byRt.keys()].sort((a, b) => a - b);
@@ -1975,18 +2026,15 @@
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
-						name: `SCAL RT ${rf}`,
+						name: `SCAL RT ${rf} (${g.j.length})`,
 						x: useRawSw ? g.sw : g.swn,
 						y: g.j,
-						customdata: useRawSw ? g.swn : g.sw,
+						customdata: g.ptIds,
 						text: g.labels,
-						hovertemplate: useRawSw
-							? '%{text}<br>Sw=%{x:.3f} (Swn=%{customdata:.3f}), J=%{y:.3f}<extra>RT ' +
-								rf +
-								'</extra>'
-							: '%{text}<br>Swn=%{x:.3f} (Sw=%{customdata:.3f}), J=%{y:.3f}<extra>RT ' +
-								rf +
-								'</extra>',
+						hovertemplate:
+							'%{text}<br>J=%{y:.3f}<br><i>Click to exclude point</i><extra>RT ' +
+							rf +
+							'</extra>',
 						marker: {
 							size: 6.5,
 							color,
@@ -1998,12 +2046,15 @@
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
-						name: `SCAL RT ${rf}`,
+						name: `SCAL RT ${rf} (${g.pc.length})`,
 						x: g.sw,
 						y: g.pc,
+						customdata: g.ptIds,
 						text: g.labels,
 						hovertemplate:
-							'%{text}<br>Sw=%{x:.3f}, Pc=%{y:.2f} psi<extra>RT ' + rf + '</extra>',
+							'%{text}<br>Sw=%{x:.3f}, Pc=%{y:.2f} psi<br><i>Click to exclude point</i><extra>RT ' +
+							rf +
+							'</extra>',
 						marker: {
 							size: 6.5,
 							color,
@@ -2015,12 +2066,15 @@
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
-						name: `SCAL RT ${rf}`,
+						name: `SCAL RT ${rf} (${g.pc.length})`,
 						x: g.bvw,
 						y: g.pc,
+						customdata: g.ptIds,
 						text: g.labels,
 						hovertemplate:
-							'%{text}<br>BVW=%{x:.3f}, Pc=%{y:.2f} psi<extra>RT ' + rf + '</extra>',
+							'%{text}<br>BVW=%{x:.3f}, Pc=%{y:.2f} psi<br><i>Click to exclude point</i><extra>RT ' +
+							rf +
+							'</extra>',
 						marker: {
 							size: 6.5,
 							color,
@@ -2029,6 +2083,66 @@
 						}
 					});
 				}
+			}
+
+			// Render Excluded SCAL Points trace (grey 'x' markers)
+			if (exclPts.ptIds.length > 0) {
+				const exclX =
+					activeModel === 'leverett_j'
+						? useRawSw
+							? exclPts.sw
+							: exclPts.swn
+						: activeModel === 'skelt_harrison'
+							? exclPts.sw
+							: exclPts.bvw;
+				const exclY = activeModel === 'leverett_j' ? exclPts.j : exclPts.pc;
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Excluded Pts (${exclPts.ptIds.length})`,
+					x: exclX,
+					y: exclY,
+					customdata: exclPts.ptIds,
+					text: exclPts.labels,
+					hovertemplate:
+						'%{text}<br>Val=%{y:.3f}<br><i>Excluded — click to restore point</i><extra>EXCLUDED</extra>',
+					marker: {
+						size: 7.5,
+						symbol: 'x',
+						color: '#94A3B8',
+						opacity: 0.75,
+						line: { width: 1, color: '#64748B' }
+					}
+				});
+			}
+
+			// Render Box/Lasso Selected SCAL Points highlight trace
+			if (selPts.ptIds.length > 0) {
+				const selX =
+					activeModel === 'leverett_j'
+						? useRawSw
+							? selPts.sw
+							: selPts.swn
+						: activeModel === 'skelt_harrison'
+							? selPts.sw
+							: selPts.bvw;
+				const selY = activeModel === 'leverett_j' ? selPts.j : selPts.pc;
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Selected (${selPts.ptIds.length})`,
+					x: selX,
+					y: selY,
+					customdata: selPts.ptIds,
+					text: selPts.labels,
+					hoverinfo: 'skip',
+					marker: {
+						size: 10.5,
+						symbol: 'circle-open',
+						color: '#F59E0B',
+						line: { width: 2.2, color: '#D97706' }
+					}
+				});
 			}
 
 			// Overlay fitted curves per Rock Type
@@ -2206,7 +2320,8 @@
 						zn && (sp.fwlByZone?.[zn] ?? sr.fwl_by_zone?.[zn]) !== undefined
 							? Number(sp.fwlByZone?.[zn] ?? sr.fwl_by_zone?.[zn])
 							: fwl;
-					const h = effFwl - d;
+					const tvdssVal = sr.tvd?.[i] ?? d;
+					const h = typeof tvdssVal === 'number' ? effFwl - tvdssVal : NaN;
 					if (Number.isFinite(s) && Number.isFinite(h) && h >= 0) {
 						if (!grouped.has(rf)) grouped.set(rf, { sw: [], hafwl: [] });
 						grouped.get(rf)!.sw.push(s as number);
@@ -2225,11 +2340,13 @@
 				}
 			} else {
 				const swArr = wellData.curves['SHF'] ?? wellData.curves['SWT'] ?? [];
+				const tvdssArr = wellData.curves['TVDSS'] ?? wellData.curves['TVD'] ?? deptAll;
 				const xs: number[] = [];
 				const ys: number[] = [];
 				for (const idx of indices) {
 					const sw = swArr[idx];
-					const h = fwl - deptAll[idx];
+					const dSub = tvdssArr[idx] ?? deptAll[idx];
+					const h = fwl - dSub;
 					if (Number.isFinite(sw) && Number.isFinite(h)) {
 						xs.push(sw);
 						ys.push(h);
@@ -2238,7 +2355,7 @@
 				traces.push({
 					type: 'scatter',
 					mode: 'markers',
-					name: 'Sw vs HAFWL',
+					name: 'Sw vs HAFWL (TVDSS)',
 					x: xs,
 					y: ys,
 					marker: { size: 5.5, color: PETRO_COLORS.water }
@@ -2247,7 +2364,7 @@
 
 			baseLayout.xaxis.title = { text: 'Water Saturation Sw (v/v)' };
 			baseLayout.xaxis.range = [0, 1];
-			baseLayout.yaxis.title = { text: 'Height Above FWL (m)' };
+			baseLayout.yaxis.title = { text: 'Height Above FWL — HAFWL (m TVDSS)' };
 			return { traces, layout: baseLayout };
 		}
 
@@ -3762,6 +3879,8 @@
 			void projectData.swirrConfig.swirrMax;
 			void projectData.swirrConfig.rules;
 			void projectData.swirrConfig.excludedPlugIds;
+			void projectData.swirrConfig.excludedScalPointIds;
+			void projectData.selectedScalPointIds;
 			void projectData.shfResult;
 			void projectData.shfParams.model;
 			void projectData.shfParams.jSatMode;
@@ -3795,6 +3914,8 @@
 			void projectData.permTransformResult;
 			void projectData.permTransformResult?.fits;
 			void projectData.shfResult;
+			void projectData.swirrConfig.excludedScalPointIds;
+			void projectData.selectedScalPointIds;
 			void projectData.shfParams.fwl;
 			void projectData.shfParams.fwlByZone;
 			void projectData.shfParams.model;
@@ -3849,20 +3970,55 @@
 							return;
 						}
 						const selected = new Set<number>();
+						const selectedScalPts = new Set<string>();
 						for (const pt of ev.points) {
 							if (typeof pt.customdata === 'number') {
 								selected.add(pt.customdata);
+							} else if (
+								typeof pt.customdata === 'string' &&
+								pt.customdata.startsWith('scal_pt::')
+							) {
+								selectedScalPts.add(pt.customdata.slice('scal_pt::'.length));
 							}
 						}
-						workbench.setBrushedIndices(Array.from(selected));
+						if (selectedScalPts.size > 0) {
+							projectData.setSelectedScalPoints(Array.from(selectedScalPts));
+						} else if (selected.size > 0) {
+							workbench.setBrushedIndices(Array.from(selected));
+						}
 					});
 					(plotEl as any).on('plotly_deselect', () => {
 						workbench.setBrushedIndices([]);
+						if (projectData.selectedScalPointIds.length > 0) {
+							projectData.setSelectedScalPoints([]);
+						}
 					});
 					// Click-to-place endpoint on NPHI-RHOB or Thomas-Stieber crossplot when an endpoint is armed
 					(plotEl as any).on('plotly_click', (ev: any) => {
 						if (!activeEndpointKey) {
 							const pt = ev?.points?.[0];
+							if (
+								typeof pt?.customdata === 'string' &&
+								pt.customdata.startsWith('scal_pt::')
+							) {
+								const rawPtId = pt.customdata.slice('scal_pt::'.length);
+								const parts = rawPtId.split('::');
+								const plugId = parts.length >= 2 ? `${parts[0]}::${parts[1]}` : '';
+								const isPlugExcluded =
+									plugId &&
+									(projectData.swirrConfig.excludedPlugIds || []).includes(plugId);
+								if (
+									plugId &&
+									(projectData.scalClickFilterTarget === 'plug' ||
+										Boolean(ev?.event?.shiftKey) ||
+										isPlugExcluded)
+								) {
+									projectData.toggleSwirrPlugExclusion(plugId);
+								} else {
+									projectData.toggleScalPointExclusion(rawPtId);
+								}
+								return;
+							}
 							if (
 								effectiveMode === 'swirr-fit' &&
 								typeof pt?.customdata === 'string' &&
@@ -4355,6 +4511,57 @@
 	<div class="relative min-h-0 flex-1 overflow-hidden">
 		<div bind:this={plotEl} class="absolute inset-0 h-full w-full"></div>
 	</div>
+
+	{#if projectData.selectedScalPointIds.length > 0}
+		<div
+			class="mono-num flex min-h-6 shrink-0 flex-wrap items-center justify-between gap-1.5 border-t border-amber-300 bg-amber-50/90 px-2.5 py-0.5 text-[10px] text-amber-950"
+		>
+			<span>
+				SCAL Selection: <strong>{projectData.selectedScalPointIds.length} pts</strong>
+			</span>
+			<div class="flex items-center gap-1">
+				<button
+					type="button"
+					onclick={() => projectData.excludeSelectedScalPoints()}
+					class="rounded-xs border border-rose-300 bg-rose-600 px-1.5 py-0.5 font-semibold text-white hover:bg-rose-700"
+					title="Exclude selected SCAL points from J/Pc curve fitting"
+				>
+					Exclude Pts ({projectData.selectedScalPointIds.length})
+				</button>
+				<button
+					type="button"
+					onclick={() => projectData.includeSelectedScalPoints()}
+					class="rounded-xs border border-emerald-300 bg-emerald-600 px-1.5 py-0.5 font-semibold text-white hover:bg-emerald-700"
+					title="Restore selected SCAL points into J/Pc curve fitting"
+				>
+					Restore Pts
+				</button>
+				<button
+					type="button"
+					onclick={() => projectData.excludeSelectedScalPlugs()}
+					class="rounded-xs border border-amber-400 bg-white px-1.5 py-0.5 font-semibold text-amber-900 hover:bg-amber-100"
+					title="Exclude entire core plugs containing the selected points"
+				>
+					Exclude Plugs
+				</button>
+				<button
+					type="button"
+					onclick={() => projectData.includeSelectedScalPlugs()}
+					class="rounded-xs border border-emerald-400 bg-white px-1.5 py-0.5 font-semibold text-emerald-800 hover:bg-emerald-50"
+					title="Restore entire core plugs containing the selected points"
+				>
+					Restore Plugs
+				</button>
+				<button
+					type="button"
+					onclick={() => projectData.setSelectedScalPoints([])}
+					class="px-1 font-semibold text-slate-600 hover:underline"
+				>
+					Clear ×
+				</button>
+			</div>
+		</div>
+	{/if}
 
 	{#if brushedSummary}
 		<div

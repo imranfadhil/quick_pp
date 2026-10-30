@@ -36,6 +36,7 @@ export interface SwirrModelConfig {
 	swirrMax: number;
 	rules: Record<string, SwirrCorrelationRule>;
 	excludedPlugIds: string[];
+	excludedScalPointIds?: string[];
 }
 
 export interface SwirrPlugRow {
@@ -333,8 +334,12 @@ class ProjectDataState {
 				count: 0
 			}
 		},
-		excludedPlugIds: []
+		excludedPlugIds: [],
+		excludedScalPointIds: []
 	});
+
+	selectedScalPointIds = $state<string[]>([]);
+	scalClickFilterTarget = $state<'point' | 'plug'>('point');
 
 	swirrInputCols = $state<{ phieCol: string; permCol: string; rtCol: string }>({
 		phieCol: 'PHIT',
@@ -397,9 +402,13 @@ class ProjectDataState {
 			rock_flags: number[];
 			well_names: string[];
 			samples: string[];
+			point_ids?: string[];
+			plug_ids?: string[];
+			excluded?: boolean[];
 		};
 		well_names: string[];
 		depths: number[];
+		tvd?: (number | null)[];
 		zones?: string[];
 		phit: number[];
 		perm: number[];
@@ -415,6 +424,11 @@ class ProjectDataState {
 		skipped_no_tvd_wells?: string[];
 		wells: Array<{
 			well_name: string;
+			spud_date?: string | null;
+			log_date?: string | null;
+			well_date?: string | null;
+			well_date_source?: 'spud' | 'log' | null;
+			well_date_iso?: string | null;
 			min_tvd: number;
 			max_tvd: number;
 			top_reservoir_tvd: number;
@@ -423,6 +437,7 @@ class ProjectDataState {
 			tops: Array<{ name: string; depth: number; tvd: number }>;
 			depths: (number | null)[];
 			tvd: (number | null)[];
+			tvdss?: (number | null)[];
 			zones: string[];
 			phit: (number | null)[];
 			swt: (number | null)[];
@@ -657,6 +672,341 @@ class ProjectDataState {
 		return true;
 	}
 
+	/**
+	 * Robust log-space IRLS + non-crossing joint power-law fit y = a * x^(-b) across Rock Types.
+	 * Guarantees that Rock Type curves do not cross anywhere on x in [0.01, 1.0]:
+	 * In log-log space u = -ln(x) in [0, u_max], ln(y) = ln(a) + b*u is linear in u,
+	 * so curve k lies strictly above curve k-1 on [0.01, 1.0] iff:
+	 *   1) At x = 1.0 (u = 0): ln(a_k) >= ln(a_{k-1}) + delta
+	 *   2) At x = 0.01 (u = u_max): ln(a_k) + b_k * u_max >= ln(a_{k-1}) + b_{k-1} * u_max + delta
+	 */
+	fitNonCrossingPowerLawByRf(
+		xVals: number[],
+		yVals: number[],
+		rfVals: number[],
+		excludedMask?: boolean[],
+		ensureNonCrossing: boolean = true,
+		isSaturationX: boolean = true
+	): Record<string, { a: number; b: number; rmse?: number; r2?: number; count?: number }> {
+		const byRf = new Map<
+			number,
+			{ lx: number[]; ly: number[]; x: number[]; y: number[]; w: number[] }
+		>();
+		for (let i = 0; i < xVals.length; i++) {
+			if (excludedMask && excludedMask[i]) continue;
+			const xv = xVals[i];
+			const yv = yVals[i];
+			const rf = rfVals[i] ?? 1;
+			const minX = isSaturationX ? 0.005 : 1e-4;
+			const maxX = isSaturationX ? 1.0 : 1e9;
+			if (
+				typeof xv === 'number' &&
+				typeof yv === 'number' &&
+				Number.isFinite(xv) &&
+				Number.isFinite(yv) &&
+				xv > minX &&
+				xv <= maxX &&
+				yv > 0
+			) {
+				if (!byRf.has(rf)) byRf.set(rf, { lx: [], ly: [], x: [], y: [], w: [] });
+				const g = byRf.get(rf)!;
+				g.lx.push(-Math.log(xv));
+				g.ly.push(Math.log(yv));
+				g.x.push(xv);
+				g.y.push(yv);
+				let wPrior = 1.0;
+				if (isSaturationX) {
+					if (xv <= 0.055) {
+						wPrior = Math.pow(Math.max(0.05, (xv - 0.015) / 0.04), 2);
+					} else if (xv >= 0.9) {
+						wPrior = Math.pow(Math.max(0.15, (0.99 - xv) / 0.09), 2);
+					}
+				}
+				g.w.push(wPrior);
+			}
+		}
+
+		const sortedEntries = Array.from(byRf.entries())
+			.filter(([, g]) => g.lx.length >= 2)
+			.sort((a, b) => a[0] - b[0]);
+
+		const out: Record<
+			string,
+			{ a: number; b: number; rmse?: number; r2?: number; count?: number }
+		> = {};
+		if (sortedEntries.length === 0) return out;
+
+		const median = (arr: number[]): number => {
+			if (arr.length === 0) return 0;
+			const s = [...arr].sort((p, q) => p - q);
+			const mid = Math.floor(s.length / 2);
+			return s.length % 2 === 0 ? 0.5 * (s[mid - 1] + s[mid]) : s[mid];
+		};
+
+		// Step 1: Robust per-RT IRLS fit in log-space: ly = alpha + b * lx
+		const indivFits: Array<{
+			rf: number;
+			alpha: number;
+			b: number;
+			a: number;
+			weights: number[];
+			lx: number[];
+			ly: number[];
+			x: number[];
+			y: number[];
+		}> = [];
+
+		for (const [rf, g] of sortedEntries) {
+			const n = g.lx.length;
+			const coreSlopes: number[] = [];
+			for (let i = 0; i < n; i++) {
+				for (let j = i + 1; j < n; j++) {
+					if (isSaturationX && (g.x[i] < 0.05 || g.x[i] > 0.9 || g.x[j] < 0.05 || g.x[j] > 0.9)) {
+						continue;
+					}
+					const dx = g.lx[j] - g.lx[i];
+					if (Math.abs(dx) > 0.08) {
+						const sl = (g.ly[j] - g.ly[i]) / dx;
+						if (sl > 0.05 && sl < 2.8) coreSlopes.push(sl);
+					}
+				}
+			}
+
+			let b = coreSlopes.length >= 3 ? median(coreSlopes) : 0.4;
+			b = Math.min(2.6, Math.max(0.08, b));
+			let alpha = median(g.ly.map((yv, idx) => yv - b * g.lx[idx]));
+
+			let w = [...g.w];
+			for (let iter = 0; iter < 8; iter++) {
+				const resid = g.ly.map((yv, idx) => yv - (alpha + b * g.lx[idx]));
+				const medR = median(resid);
+				const absDev = resid.map((r) => Math.abs(r - medR));
+				const mad = median(absDev);
+				const scale = Math.max(1.4826 * mad, 0.12);
+
+				w = g.w.map((wp, idx) => {
+					const u = Math.abs(resid[idx]) / (3.2 * scale);
+					const wTukey = u < 1.0 ? Math.pow(1.0 - u * u, 2) : 0.0;
+					const wHuber =
+						Math.abs(resid[idx]) <= 1.345 * scale
+							? 1.0
+							: (1.345 * scale) / Math.max(Math.abs(resid[idx]), 1e-8);
+					return Math.max(wp * (0.65 * wTukey + 0.35 * wHuber), 1e-5);
+				});
+
+				const wSum = w.reduce((acc, v) => acc + v, 0);
+				if (wSum <= 1e-8) break;
+				const mx = w.reduce((acc, v, idx) => acc + v * g.lx[idx], 0) / wSum;
+				const my = w.reduce((acc, v, idx) => acc + v * g.ly[idx], 0) / wSum;
+				let num = 0;
+				let den = 0;
+				for (let k = 0; k < n; k++) {
+					num += w[k] * (g.lx[k] - mx) * (g.ly[k] - my);
+					den += w[k] * (g.lx[k] - mx) * (g.lx[k] - mx);
+				}
+				if (den > 1e-8) {
+					b = Math.min(2.6, Math.max(0.08, num / den));
+					alpha = my - b * mx;
+				}
+			}
+
+			const a = Math.min(50.0, Math.max(1e-4, Math.exp(alpha)));
+			indivFits.push({
+				rf,
+				alpha: Math.log(a),
+				b,
+				a,
+				weights: w,
+				lx: g.lx,
+				ly: g.ly,
+				x: g.x,
+				y: g.y
+			});
+		}
+
+		// Step 2: Enforce strict non-crossing across Rock Types over x in [0.01, 1.0]
+		if (ensureNonCrossing && indivFits.length >= 2) {
+			const uMax = -Math.log(0.01); // ~4.605170186
+			const delta = 0.045; // minimum log-J separation (~4.6%) at both x=1.0 and x=0.01
+
+			// Order Rock Types by their mid-range log-J value at x = 0.30 (u = -ln(0.30) ~ 1.204)
+			// In standard DRT/FZI ordering, lower Rock Type index = higher permeability = lower J curve,
+			// and higher Rock Type index = tighter rock = higher J curve.
+			// Check whether the general trend with rf is increasing or decreasing, and enforce monotonic ordering.
+			const uMid = -Math.log(0.3);
+			let trendScore = 0;
+			for (let k = 1; k < indivFits.length; k++) {
+				const prevMid = indivFits[k - 1].alpha + indivFits[k - 1].b * uMid;
+				const curMid = indivFits[k].alpha + indivFits[k].b * uMid;
+				trendScore += curMid - prevMid;
+			}
+			// Order curves from lowest J curve to highest J curve
+			const ordered =
+				trendScore >= -0.05 ? [...indivFits] : [...indivFits].reverse();
+
+			const m = ordered.length;
+			// Compute weighted shared slope bShared as regularizer
+			let bWeightedSum = 0;
+			let bWeightTot = 0;
+			for (const f of ordered) {
+				const wt = Math.sqrt(f.lx.length);
+				bWeightedSum += wt * f.b;
+				bWeightTot += wt;
+			}
+			const bShared = Math.min(
+				2.4,
+				Math.max(0.12, bWeightTot > 0 ? bWeightedSum / bWeightTot : 0.4)
+			);
+
+			// Endpoints R_k = ln(a_k) at u=0 (x=1.0), and L_k = ln(a_k) + b_k * uMax at u=uMax (x=0.01)
+			const R = ordered.map((f) => f.alpha);
+			const L = ordered.map((f) => f.alpha + f.b * uMax);
+
+			// Alternating projection + weighted coordinate descent on (R_k, L_k)
+			// Subject to:
+			//   R_k - R_{k-1} >= delta   (non-crossing at x = 1.0)
+			//   L_k - L_{k-1} >= delta   (non-crossing at x = 0.01)
+			//   0.08 * uMax <= L_k - R_k <= 2.6 * uMax  (valid positive slope b_k)
+			const projectIsotonicWithGap = (vals: number[], gap: number): number[] => {
+				// Shift z_k = vals[k] - k * gap, apply Pool Adjacent Violators (PAVA), then unshift
+				const z = vals.map((v, idx) => v - idx * gap);
+				const blocks: Array<{ sum: number; count: number; indices: number[] }> = [];
+				for (let k = 0; k < z.length; k++) {
+					blocks.push({ sum: z[k], count: 1, indices: [k] });
+					while (
+						blocks.length >= 2 &&
+						blocks[blocks.length - 2].sum / blocks[blocks.length - 2].count >
+							blocks[blocks.length - 1].sum / blocks[blocks.length - 1].count
+					) {
+						const last = blocks.pop()!;
+						const prev = blocks[blocks.length - 1];
+						prev.sum += last.sum;
+						prev.count += last.count;
+						prev.indices.push(...last.indices);
+					}
+				}
+				const res = new Array<number>(vals.length);
+				for (const blk of blocks) {
+					const avg = blk.sum / blk.count;
+					for (const idx of blk.indices) {
+						res[idx] = avg + idx * gap;
+					}
+				}
+				return res;
+			};
+
+			// Compute unconstrained weighted normal equation targets for each curve k in terms of (R_k, L_k)
+			// Since ln J(u) = R_k * (1 - u/uMax) + L_k * (u/uMax)
+			for (let iter = 0; iter < 45; iter++) {
+				// Step A: Gradient / optimal update toward IRLS-weighted data + slope regularization
+				const stepSize = 0.45 / (1 + 0.04 * iter);
+				for (let k = 0; k < m; k++) {
+					const f = ordered[k];
+					const wSum = Math.max(
+						1e-6,
+						f.weights.reduce((acc, v) => acc + v, 0)
+					);
+					let gradR = 0;
+					let gradL = 0;
+					for (let i = 0; i < f.lx.length; i++) {
+						const t = f.lx[i] / uMax; // in [0, 1]
+						const pred = R[k] * (1.0 - t) + L[k] * t;
+						const err = pred - f.ly[i];
+						const wi = f.weights[i] / wSum;
+						gradR += 2.0 * wi * err * (1.0 - t);
+						gradL += 2.0 * wi * err * t;
+					}
+					// Regularization toward shared slope bShared so noisy curves stay sub-parallel
+					const curB = (L[k] - R[k]) / uMax;
+					const regSlope = 0.14 * (curB - bShared) / uMax;
+					gradR -= regSlope;
+					gradL += regSlope;
+
+					R[k] -= stepSize * gradR;
+					L[k] -= stepSize * gradL;
+
+					// Clamp slope b_k in [0.08, 2.6]
+					const diff = L[k] - R[k];
+					const minDiff = 0.08 * uMax;
+					const maxDiff = 2.6 * uMax;
+					if (diff < minDiff) {
+						const mid = 0.5 * (L[k] + R[k]);
+						R[k] = mid - 0.5 * minDiff;
+						L[k] = mid + 0.5 * minDiff;
+					} else if (diff > maxDiff) {
+						const mid = 0.5 * (L[k] + R[k]);
+						R[k] = mid - 0.5 * maxDiff;
+						L[k] = mid + 0.5 * maxDiff;
+					}
+				}
+
+				// Step B: Exact isotonic projection on both R (at x=1.0) and L (at x=0.01)
+				const projR = projectIsotonicWithGap(R, delta);
+				const projL = projectIsotonicWithGap(L, delta);
+				for (let k = 0; k < m; k++) {
+					R[k] = Math.min(Math.log(50.0), Math.max(Math.log(1e-4), projR[k]));
+					L[k] = Math.max(R[k] + 0.08 * uMax, Math.min(R[k] + 2.6 * uMax, projL[k]));
+				}
+			}
+
+			// Final strict pass after 4-decimal rounding to guarantee zero crossing at both x=1.0 and x=0.01
+			const finalR = projectIsotonicWithGap(R, delta);
+			const finalL = projectIsotonicWithGap(L, delta);
+			let prevA = 0;
+			let prevJ001 = 0;
+			for (let k = 0; k < m; k++) {
+				const f = ordered[k];
+				let rk = finalR[k];
+				let lk = Math.max(rk + 0.08 * uMax, finalL[k]);
+				let ak = Number(Math.min(50.0, Math.max(1e-4, Math.exp(rk))).toFixed(4));
+				if (k > 0 && ak <= prevA) {
+					ak = Number((prevA + 0.001).toFixed(4));
+					rk = Math.log(ak);
+				}
+				let bk = Number(
+					Math.min(2.6, Math.max(0.08, (lk - rk) / uMax)).toFixed(4)
+				);
+				let j001 = ak * Math.pow(0.01, -bk);
+				if (k > 0 && j001 <= prevJ001 * 1.01) {
+					const reqJ001 = prevJ001 * 1.02 + 0.01;
+					const reqB = Math.log(reqJ001 / ak) / uMax;
+					bk = Number(Math.min(2.8, Math.max(bk, reqB + 0.0002)).toFixed(4));
+					j001 = ak * Math.pow(0.01, -bk);
+				}
+				prevA = ak;
+				prevJ001 = j001;
+				f.a = ak;
+				f.b = bk;
+				f.alpha = Math.log(ak);
+			}
+		}
+
+		// Step 3: Populate output metrics per Rock Type
+		for (const f of indivFits) {
+			const n = f.lx.length;
+			const my = f.ly.reduce((acc, v) => acc + v, 0) / n;
+			let ssRes = 0;
+			let ssTot = 0;
+			let sqErr = 0;
+			for (let k = 0; k < n; k++) {
+				const ypLog = Math.log(f.a) + f.b * f.lx[k];
+				ssRes += (f.ly[k] - ypLog) ** 2;
+				ssTot += (f.ly[k] - my) ** 2;
+				const yp = f.a * Math.pow(f.x[k], -f.b);
+				sqErr += (f.y[k] - yp) ** 2;
+			}
+			out[String(f.rf)] = {
+				a: Number(f.a.toFixed(4)),
+				b: Number(f.b.toFixed(4)),
+				rmse: Number(Math.sqrt(sqErr / n).toFixed(4)),
+				r2: Number((ssTot > 1e-12 ? Math.max(0, 1 - ssRes / ssTot) : 0).toFixed(4)),
+				count: n
+			};
+		}
+
+		return out;
+	}
+
 	setShfJSatMode(mode: 'swn' | 'sw') {
 		if (this.shfParams.jSatMode === mode && this.shfResult?.j_sat_mode === mode) return;
 		this.shfParams.jSatMode = mode;
@@ -673,67 +1023,18 @@ class ProjectDataState {
 					: null;
 
 		if (!nextFits && sr.scal_data && Array.isArray(sr.scal_data.j)) {
-			const satArr = mode === 'sw' ? sr.scal_data.sw : sr.scal_data.swn;
-			const jArr = sr.scal_data.j;
-			const rfArr = sr.scal_data.rock_flags;
-			const byRf = new Map<number, { x: number[]; y: number[]; s: number[]; j: number[] }>();
-			for (let i = 0; i < jArr.length; i++) {
-				const s = satArr?.[i];
-				const j = jArr[i];
-				const rf = rfArr?.[i] ?? 1;
-				if (
-					typeof s === 'number' &&
-					typeof j === 'number' &&
-					Number.isFinite(s) &&
-					Number.isFinite(j) &&
-					s > 0.01 &&
-					s <= 1.0 &&
-					j > 0
-				) {
-					if (!byRf.has(rf)) byRf.set(rf, { x: [], y: [], s: [], j: [] });
-					const g = byRf.get(rf)!;
-					g.x.push(-Math.log(s));
-					g.y.push(Math.log(j));
-					g.s.push(s);
-					g.j.push(j);
-				}
-			}
-			const computed: Record<
-				string,
-				{ a: number; b: number; rmse?: number; r2?: number; count?: number }
-			> = {};
-			for (const [rf, g] of byRf.entries()) {
-				const n = g.x.length;
-				if (n < 2) continue;
-				const mx = g.x.reduce((a, b) => a + b, 0) / n;
-				const my = g.y.reduce((a, b) => a + b, 0) / n;
-				let num = 0;
-				let den = 0;
-				for (let k = 0; k < n; k++) {
-					num += (g.x[k] - mx) * (g.y[k] - my);
-					den += (g.x[k] - mx) * (g.x[k] - mx);
-				}
-				const b = Math.min(2.8, Math.max(0.08, den > 1e-8 ? num / den : 0.4));
-				const alpha = my - b * mx;
-				const a = Math.min(50.0, Math.max(1e-4, Math.exp(alpha)));
-				let ssRes = 0;
-				let ssTot = 0;
-				let sqErr = 0;
-				for (let k = 0; k < n; k++) {
-					const ypLog = alpha + b * g.x[k];
-					ssRes += (g.y[k] - ypLog) ** 2;
-					ssTot += (g.y[k] - my) ** 2;
-					const yp = a * Math.pow(g.s[k], -b);
-					sqErr += (g.j[k] - yp) ** 2;
-				}
-				computed[String(rf)] = {
-					a: Number(a.toFixed(4)),
-					b: Number(b.toFixed(4)),
-					rmse: Number(Math.sqrt(sqErr / n).toFixed(4)),
-					r2: Number((ssTot > 1e-12 ? Math.max(0, 1 - ssRes / ssTot) : 0).toFixed(4)),
-					count: n
-				};
-			}
+			const satArr = (mode === 'sw' ? sr.scal_data.sw : sr.scal_data.swn) || [];
+			const jArr = sr.scal_data.j || [];
+			const rfArr = sr.scal_data.rock_flags || [];
+			const exclArr = sr.scal_data.excluded;
+			const computed = this.fitNonCrossingPowerLawByRf(
+				satArr,
+				jArr,
+				rfArr,
+				exclArr,
+				true,
+				true
+			);
 			if (Object.keys(computed).length > 0) {
 				nextFits = computed;
 			}
@@ -1015,16 +1316,25 @@ class ProjectDataState {
 		const rfArr: number[] = [];
 		const wellArr: string[] = [];
 		const sampleArr: string[] = [];
+		const pointIdArr: string[] = [];
+		const plugIdArr: string[] = [];
+		const excludedArr: boolean[] = [];
 
-		const activePlugs = sr.plugs.filter((p) => !p.excluded);
-		const plugsToUse = activePlugs.length > 0 ? activePlugs : sr.plugs;
+		const excludedPtsSet = new Set(
+			(this.swirrConfig.excludedScalPointIds || []).map((id) => String(id).trim())
+		);
+		const excludedPlugsSet = new Set(
+			(this.swirrConfig.excludedPlugIds || []).map((id) => String(id).trim())
+		);
 
-		for (const p of plugsToUse) {
+		for (const p of sr.plugs) {
 			const pCurve = p.pc_curve || [];
 			const sCurve = p.sw_curve || [];
 			const phi = Math.max(1e-4, p.cpore || 0.15);
 			const k = Math.max(1e-4, p.cperm || 10.0);
 			const rf = p.rt ?? 1;
+			const plugId = p.plug_id || `${p.well}::${p.sample}`;
+			const isPlugExcluded = Boolean(p.excluded) || excludedPlugsSet.has(plugId);
 			const swMinPlug =
 				sCurve.length > 0 ? Math.min(...sCurve) : (p.sw_at_max_pc ?? 0.12);
 
@@ -1047,6 +1357,10 @@ class ProjectDataState {
 				const j = (0.2166 * pc * Math.sqrt(k / phi)) / iftCos;
 				const h = pc / gradPsi;
 				const bvw = phi * sw;
+				const ptId = `${plugId}::${i}`;
+				const ptIdByPc = `${plugId}::${Number(pc.toFixed(2))}`;
+				const isPtExcluded =
+					isPlugExcluded || excludedPtsSet.has(ptId) || excludedPtsSet.has(ptIdByPc);
 
 				pcArr.push(Number(pc.toFixed(3)));
 				swArr.push(Number(sw.toFixed(4)));
@@ -1059,65 +1373,11 @@ class ProjectDataState {
 				rfArr.push(rf);
 				wellArr.push(p.well);
 				sampleArr.push(p.sample);
+				pointIdArr.push(ptId);
+				plugIdArr.push(plugId);
+				excludedArr.push(isPtExcluded);
 			}
 		}
-
-		const fitPowerLawByRf = (
-			xVals: number[],
-			yVals: number[]
-		): Record<string, { a: number; b: number; rmse?: number; r2?: number; count?: number }> => {
-			const byRf = new Map<number, { lx: number[]; ly: number[]; x: number[]; y: number[] }>();
-			for (let i = 0; i < xVals.length; i++) {
-				const xv = xVals[i];
-				const yv = yVals[i];
-				const rf = rfArr[i] ?? 1;
-				if (xv > 0.005 && yv > 0 && Number.isFinite(xv) && Number.isFinite(yv)) {
-					if (!byRf.has(rf)) byRf.set(rf, { lx: [], ly: [], x: [], y: [] });
-					const g = byRf.get(rf)!;
-					g.lx.push(-Math.log(xv));
-					g.ly.push(Math.log(yv));
-					g.x.push(xv);
-					g.y.push(yv);
-				}
-			}
-			const out: Record<
-				string,
-				{ a: number; b: number; rmse?: number; r2?: number; count?: number }
-			> = {};
-			for (const [rf, g] of Array.from(byRf.entries()).sort((a, b) => a[0] - b[0])) {
-				const n = g.lx.length;
-				if (n < 2) continue;
-				const mx = g.lx.reduce((a, b) => a + b, 0) / n;
-				const my = g.ly.reduce((a, b) => a + b, 0) / n;
-				let num = 0;
-				let den = 0;
-				for (let k = 0; k < n; k++) {
-					num += (g.lx[k] - mx) * (g.ly[k] - my);
-					den += (g.lx[k] - mx) * (g.lx[k] - mx);
-				}
-				const b = Math.min(2.8, Math.max(0.06, den > 1e-8 ? num / den : 0.4));
-				const alpha = my - b * mx;
-				const a = Math.min(50.0, Math.max(1e-4, Math.exp(alpha)));
-				let ssRes = 0;
-				let ssTot = 0;
-				let sqErr = 0;
-				for (let k = 0; k < n; k++) {
-					const ypLog = alpha + b * g.lx[k];
-					ssRes += (g.ly[k] - ypLog) ** 2;
-					ssTot += (g.ly[k] - my) ** 2;
-					const yp = a * Math.pow(g.x[k], -b);
-					sqErr += (g.y[k] - yp) ** 2;
-				}
-				out[String(rf)] = {
-					a: Number(a.toFixed(4)),
-					b: Number(b.toFixed(4)),
-					rmse: Number(Math.sqrt(sqErr / n).toFixed(4)),
-					r2: Number((ssTot > 1e-12 ? Math.max(0, 1 - ssRes / ssTot) : 0).toFixed(4)),
-					count: n
-				};
-			}
-			return out;
-		};
 
 		const fitSkeltByRf = (): Record<
 			string,
@@ -1125,6 +1385,7 @@ class ProjectDataState {
 		> => {
 			const byRf = new Map<number, { h: number[]; sw: number[] }>();
 			for (let i = 0; i < hArr.length; i++) {
+				if (excludedArr[i]) continue;
 				const hv = hArr[i];
 				const sv = swArr[i];
 				const rf = rfArr[i] ?? 1;
@@ -1139,13 +1400,24 @@ class ProjectDataState {
 				string,
 				{ a: number; b: number; c?: number; d?: number; rmse?: number; r2?: number; count?: number }
 			> = {};
+			let prevA = 0.99;
+			let prevB = 0.1;
 			for (const [rf, g] of Array.from(byRf.entries()).sort((a, b) => a[0] - b[0])) {
 				const n = g.h.length;
 				if (n < 2) continue;
 				const minSw = Math.min(...g.sw);
-				const a = Number(Math.min(0.96, Math.max(0.35, 1.0 - minSw * 0.92)).toFixed(4));
+				let a = Number(Math.min(0.96, Math.max(0.35, 1.0 - minSw * 0.92)).toFixed(4));
+				// Ensure non-crossing asymptote (lower Sw_min / higher 'a' for better rock types)
+				if (a >= prevA) {
+					a = Number(Math.max(0.30, prevA - 0.015).toFixed(4));
+				}
+				prevA = a;
 				const medH = [...g.h].sort((x, y) => x - y)[Math.floor(n / 2)] ?? 10.0;
-				const b = Number(Math.max(0.5, medH * 0.55).toFixed(4));
+				let b = Number(Math.max(0.5, medH * 0.55).toFixed(4));
+				if (b <= prevB) {
+					b = Number((prevB + 0.35).toFixed(4));
+				}
+				prevB = b;
 				const c = 1.5;
 				const d = 0.5;
 				let sqErr = 0;
@@ -1165,9 +1437,30 @@ class ProjectDataState {
 			return out;
 		};
 
-		const fitsSwn = fitPowerLawByRf(swnArr, jArr);
-		const fitsSw = fitPowerLawByRf(swArr, jArr);
-		const fitsCuddy = fitPowerLawByRf(pcArr, bvwArr);
+		const fitsSwn = this.fitNonCrossingPowerLawByRf(
+			swnArr,
+			jArr,
+			rfArr,
+			excludedArr,
+			true,
+			true
+		);
+		const fitsSw = this.fitNonCrossingPowerLawByRf(
+			swArr,
+			jArr,
+			rfArr,
+			excludedArr,
+			true,
+			true
+		);
+		const fitsCuddy = this.fitNonCrossingPowerLawByRf(
+			pcArr,
+			bvwArr,
+			rfArr,
+			excludedArr,
+			false,
+			false
+		);
 		const fitsSkelt = fitSkeltByRf();
 
 		const existing = this.shfResult;
@@ -1205,7 +1498,10 @@ class ProjectDataState {
 				perm: permArr,
 				rock_flags: rfArr,
 				well_names: wellArr,
-				samples: sampleArr
+				samples: sampleArr,
+				point_ids: pointIdArr,
+				plug_ids: plugIdArr,
+				excluded: excludedArr
 			},
 			well_names: existing?.well_names ?? [],
 			depths: existing?.depths ?? [],
@@ -1228,6 +1524,183 @@ class ProjectDataState {
 		}
 		this.swirrConfig.excludedPlugIds = Array.from(cur);
 		this.recomputeSwirrClientSide(true);
+	}
+
+	toggleScalPointExclusion(pointId: string) {
+		const id = String(pointId || '').trim();
+		if (!id) return;
+		const cur = new Set(this.swirrConfig.excludedScalPointIds || []);
+		if (cur.has(id)) {
+			cur.delete(id);
+		} else {
+			cur.add(id);
+		}
+		this.swirrConfig.excludedScalPointIds = Array.from(cur);
+		this.recomputeScalFitsFromPlugs(true);
+	}
+
+	setSelectedScalPoints(pointIds: string[]) {
+		const unique = Array.from(
+			new Set((pointIds || []).map((id) => String(id).trim()).filter(Boolean))
+		);
+		this.selectedScalPointIds = unique;
+	}
+
+	excludeSelectedScalPoints() {
+		if (this.selectedScalPointIds.length === 0) return;
+		const cur = new Set(this.swirrConfig.excludedScalPointIds || []);
+		for (const id of this.selectedScalPointIds) {
+			cur.add(id);
+		}
+		this.swirrConfig.excludedScalPointIds = Array.from(cur);
+		this.selectedScalPointIds = [];
+		this.recomputeScalFitsFromPlugs(true);
+	}
+
+	includeSelectedScalPoints() {
+		if (this.selectedScalPointIds.length === 0) return;
+		const cur = new Set(this.swirrConfig.excludedScalPointIds || []);
+		for (const id of this.selectedScalPointIds) {
+			cur.delete(id);
+		}
+		this.swirrConfig.excludedScalPointIds = Array.from(cur);
+		this.selectedScalPointIds = [];
+		this.recomputeScalFitsFromPlugs(true);
+	}
+
+	excludeSelectedScalPlugs() {
+		if (this.selectedScalPointIds.length === 0) return;
+		const curPlugs = new Set(this.swirrConfig.excludedPlugIds || []);
+		for (const ptId of this.selectedScalPointIds) {
+			const parts = ptId.split('::');
+			if (parts.length >= 2) {
+				curPlugs.add(`${parts[0]}::${parts[1]}`);
+			}
+		}
+		this.swirrConfig.excludedPlugIds = Array.from(curPlugs);
+		this.selectedScalPointIds = [];
+		this.recomputeSwirrClientSide(true);
+	}
+
+	includeSelectedScalPlugs() {
+		if (this.selectedScalPointIds.length === 0) return;
+		const curPlugs = new Set(this.swirrConfig.excludedPlugIds || []);
+		for (const ptId of this.selectedScalPointIds) {
+			const parts = ptId.split('::');
+			if (parts.length >= 2) {
+				curPlugs.delete(`${parts[0]}::${parts[1]}`);
+			}
+		}
+		this.swirrConfig.excludedPlugIds = Array.from(curPlugs);
+		this.selectedScalPointIds = [];
+		this.recomputeSwirrClientSide(true);
+	}
+
+	clearExcludedScalPoints() {
+		if ((this.swirrConfig.excludedScalPointIds || []).length === 0) return;
+		this.swirrConfig.excludedScalPointIds = [];
+		this.selectedScalPointIds = [];
+		this.recomputeScalFitsFromPlugs(true);
+	}
+
+	/**
+	 * Automatically detects and excludes corrupted or outlier SCAL data points:
+	 * - 'asymptotes': Boundary saturation pile-ups (Swn <= 0.03 or Swn >= 0.95)
+	 * - 'outliers': Non-monotonic capillary drainage reversals (Pc increases while Sw increases)
+	 *               and high log-J residual outliers (> 2.2 MAD or > 0.65 log units from RT curve)
+	 * - 'all': Both asymptotes and corrupted/outlier points
+	 */
+	autoFilterCorruptedScalPoints(mode: 'all' | 'outliers' | 'asymptotes' = 'all'): number {
+		const scal = this.shfResult?.scal_data;
+		if (!scal || !Array.isArray(scal.j) || scal.j.length === 0) return 0;
+
+		const ptIds = scal.point_ids || [];
+		const plugIds = scal.plug_ids || [];
+		const pcArr = scal.pc || [];
+		const swArr = scal.sw || [];
+		const swnArr = scal.swn || [];
+		const jArr = scal.j || [];
+		const rfArr = scal.rock_flags || [];
+		const fits = this.shfResult?.fits || {};
+		const jSatMode = this.shfParams.jSatMode ?? 'swn';
+
+		const flagged = new Set<string>(this.swirrConfig.excludedScalPointIds || []);
+		const beforeCount = flagged.size;
+
+		// 1. Check non-monotonic capillary pressure steps within each plug (Pc increases -> Sw should decrease)
+		if (mode === 'all' || mode === 'outliers') {
+			const byPlug = new Map<string, number[]>();
+			for (let i = 0; i < jArr.length; i++) {
+				const pid = plugIds[i] || `${scal.well_names?.[i] ?? 'W'}::${scal.samples?.[i] ?? 'S'}`;
+				if (!byPlug.has(pid)) byPlug.set(pid, []);
+				byPlug.get(pid)!.push(i);
+			}
+			for (const [, indices] of byPlug.entries()) {
+				const sorted = [...indices].sort((a, b) => (pcArr[a] ?? 0) - (pcArr[b] ?? 0));
+				let minSwSoFar = Infinity;
+				for (const idx of sorted) {
+					const sw = swArr[idx];
+					const ptId = ptIds[idx];
+					if (!ptId || !Number.isFinite(sw)) continue;
+					if (sw > minSwSoFar + 0.015) {
+						// Corrupted drainage reversal: higher Pc has higher Sw than a lower Pc step
+						flagged.add(ptId);
+					} else if (sw < minSwSoFar) {
+						minSwSoFar = sw;
+					}
+				}
+			}
+		}
+
+		// 2. Compute per-RT log-J residuals and MAD scale
+		const residByRf = new Map<number, Array<{ idx: number; absRes: number }>>();
+		for (let i = 0; i < jArr.length; i++) {
+			const ptId = ptIds[i];
+			if (!ptId) continue;
+			const swn = swnArr[i];
+			const sw = swArr[i];
+			const j = jArr[i];
+			const rf = rfArr[i] ?? 1;
+
+			// Boundary asymptote check
+			if (mode === 'all' || mode === 'asymptotes') {
+				if (swn <= 0.035 || swn >= 0.94 || sw >= 0.985) {
+					flagged.add(ptId);
+				}
+			}
+
+			if (mode === 'all' || mode === 'outliers') {
+				const fit = fits[String(rf)];
+				const satVal = jSatMode === 'sw' ? sw : swn;
+				if (fit && fit.a > 0 && satVal > 0.005 && j > 0) {
+					const predLogJ = Math.log(fit.a) - fit.b * Math.log(satVal);
+					const actualLogJ = Math.log(j);
+					const absRes = Math.abs(actualLogJ - predLogJ);
+					if (!residByRf.has(rf)) residByRf.set(rf, []);
+					residByRf.get(rf)!.push({ idx: i, absRes });
+				}
+			}
+		}
+
+		if (mode === 'all' || mode === 'outliers') {
+			for (const [, list] of residByRf.entries()) {
+				if (list.length < 3) continue;
+				const sortedRes = list.map((it) => it.absRes).sort((a, b) => a - b);
+				const med = sortedRes[Math.floor(sortedRes.length / 2)] || 0.1;
+				const sigmaMad = Math.max(0.16, 1.4826 * med);
+				const threshold = Math.min(0.62, Math.max(0.32, 2.2 * sigmaMad));
+				for (const item of list) {
+					if (item.absRes > threshold) {
+						const ptId = ptIds[item.idx];
+						if (ptId) flagged.add(ptId);
+					}
+				}
+			}
+		}
+
+		this.swirrConfig.excludedScalPointIds = Array.from(flagged);
+		this.recomputeScalFitsFromPlugs(true);
+		return flagged.size - beforeCount;
 	}
 
 	setShfSwirrSource(source: 'lab_min' | 'poro_perm') {
