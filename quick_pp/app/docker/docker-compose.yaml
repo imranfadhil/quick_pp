@@ -4,6 +4,9 @@ services:
     restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    env_file:
+      - path: ../../../.env
+        required: false
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-qpp_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change_this_strong_password}
@@ -25,6 +28,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    env_file:
+      - path: ../../../.env
+        required: false
     environment:
       - QPP_DATABASE_URL=${QPP_DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-qpp_user}:${POSTGRES_PASSWORD:-change_this_strong_password}@postgres:5432/${POSTGRES_DB:-quick_pp}}
       - POSTGRES_USER=${POSTGRES_USER:-qpp_user}
@@ -41,6 +47,7 @@ services:
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_FROM=${SMTP_FROM:-}
       - SMTP_TLS=${SMTP_TLS:-true}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
     volumes:
       - ${QPP_HOST_UPLOADS_DIR:-../../../uploads}:/code/uploads
       - ${QPP_HOST_DATA_DIR:-../../../data}:/code/data
@@ -59,13 +66,16 @@ services:
       - /app/node_modules
     depends_on:
       - qpp-backend
+    env_file:
+      - path: ../../../.env
+        required: false
     environment:
       - VITE_BACKEND_URL=${VITE_BACKEND_URL:-}
       - HOST=0.0.0.0
       - PORT=5469
       - NODE_OPTIONS=--max-old-space-size=${FRONTEND_MAX_OLD_SPACE:-4096}
-    # Install deps, build the app, and run the production server
-    command: sh -c "if [ -f build/index.js ]; then node build/index.js; else npm install && npm run build && node build/index.js; fi"
+    # Build only if build/client/_app/version.json is missing OR if any file in src/ is newer than it, then run fast production Node server
+    command: sh -c "if [ ! -d node_modules/@sveltejs/kit ]; then npm install; fi && if [ ! -f build/index.js ] || [ ! -f build/client/_app/version.json ] || [ -n \"$$(find src -newer build/client/_app/version.json 2>/dev/null | head -n 1)\" ]; then npm run build; fi && exec node build/index.js"
     networks:
       - qpp-network
 

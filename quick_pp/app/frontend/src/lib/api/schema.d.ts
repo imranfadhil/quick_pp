@@ -8,6 +8,7 @@ export interface WellSummaryItem {
 	name: string;
 	uwi: string;
 	depth_uom?: string;
+	df_elev?: number | null;
 	min_depth: number | null;
 	max_depth: number | null;
 	depth_count: number;
@@ -20,6 +21,35 @@ export interface WellSummaryItem {
 	core_samples_count: number;
 	core_poro_count: number;
 	core_perm_count: number;
+	total_depth?: number;
+	row_count?: number;
+	available_curves?: string[];
+	formation_tops?: Array<{
+		name: string;
+		depth: number | null;
+		base_depth?: number | null;
+		curves?: string[];
+		computed_curves?: string[];
+	}>;
+	zone_curves?: Record<string, string[]>;
+	formation_top_count?: number;
+	fluid_contacts?: Array<{ type: string; depth: number | null }>;
+	fluid_contact_count?: number;
+	perforations?: Array<{
+		name: string;
+		top: number | null;
+		bottom: number | null;
+		description?: string | null;
+	}>;
+	perforation_count?: number;
+	pressure_test_count?: number;
+	survey_count?: number;
+	core_sample_count?: number;
+	core_availability_pct?: number;
+	scal_pc_count?: number;
+	scal_sample_count?: number;
+	relperm_count?: number;
+	relperm_sample_count?: number;
 }
 
 export interface ProjectSummaryResponse {
@@ -36,6 +66,8 @@ export interface ProjectSummaryResponse {
 
 export interface CurveSummaryStats {
 	count: number;
+	top?: number | null;
+	bottom?: number | null;
 	min: number | null;
 	max: number | null;
 	mean: number | null;
@@ -152,6 +184,9 @@ export interface paths {
 						rho_hc?: number;
 						hi_hc?: number;
 						buffer?: number;
+						flag_mode?: 'strict' | 'vsh_gr';
+						vsh_tol?: number;
+						target_mode?: 'bulk' | 'solid';
 						min_depth?: number | null;
 						max_depth?: number | null;
 						zones?: string[] | null;
@@ -394,7 +429,11 @@ export interface paths {
 			requestBody: {
 				content: {
 					'application/json': {
+						method?: 'fzi' | 'winland' | 'lucia';
 						cutoffs: number[];
+						higher_is_better?: boolean;
+						auto_find_cutoffs?: boolean;
+						no_of_cutoffs?: number;
 						save?: boolean;
 					};
 				};
@@ -404,7 +443,9 @@ export interface paths {
 					content: {
 						'application/json': {
 							project_id: number;
+							method?: 'fzi' | 'winland' | 'lucia';
 							cutoffs: number[];
+							higher_is_better?: boolean;
 							saved: boolean;
 							saved_wells: number;
 							rock_type_counts: Record<string, number>;
@@ -414,8 +455,11 @@ export interface paths {
 								phit: number[];
 								perm: number[];
 								fzi: (number | null)[];
-								rqi: (number | null)[];
-								phiz: (number | null)[];
+								r35?: (number | null)[];
+								rfn?: (number | null)[];
+								drt_value?: (number | null)[];
+								rqi?: (number | null)[];
+								phiz?: (number | null)[];
 								rock_flags: (number | null)[];
 							};
 						};

@@ -1,3 +1,10 @@
+"""Command-Line Interface for the quick_pp library.
+
+This script provides a set of commands to interact with the various components
+of the quick_pp application, including running the web app, managing MLflow
+servers, and executing machine learning training and prediction pipelines.
+"""
+
 import os
 import shutil
 import signal
@@ -11,14 +18,6 @@ from pathlib import Path
 from subprocess import Popen
 
 import click
-
-"""
-Command-Line Interface for the quick_pp library.
-
-This script provides a set of commands to interact with the various components
-of the quick_pp application, including running the web app, managing MLflow
-servers, and executing machine learning training and prediction pipelines.
-"""
 
 
 from quick_pp import __version__ as quick_ppVersion
@@ -50,9 +49,10 @@ def get_gunicorn_worker_flag(debug: bool = False) -> str:
 
     try:
         cpus = os.cpu_count() or 1
+        default_workers = max(1, int(cpus / 3))
+        workers = max(1, int(os.environ.get("QPP_GUNICORN_WORKERS", default_workers)))
     except Exception:
-        cpus = 1
-    workers = max(1, int(cpus / 3))
+        workers = 1
     return f"--workers {workers}"
 
 

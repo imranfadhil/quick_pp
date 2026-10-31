@@ -2,9 +2,10 @@ import os
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 class DBConnector:
@@ -68,7 +69,31 @@ class DBConnector:
             except ImportError:
                 db_url = "postgresql+psycopg2://" + db_url[len("postgresql://") :]
 
-        DBConnector._engine = create_engine(db_url, pool_pre_ping=True)
+        if db_url.startswith("sqlite"):
+            if ":memory:" in db_url:
+                DBConnector._engine = create_engine(
+                    db_url,
+                    connect_args={"check_same_thread": False},
+                    poolclass=StaticPool,
+                )
+            else:
+                DBConnector._engine = create_engine(db_url, pool_pre_ping=True)
+
+            @event.listens_for(DBConnector._engine, "connect")
+            def _set_sqlite_pragma(dbapi_connection, _connection_record):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
+        else:
+            DBConnector._engine = create_engine(
+                db_url,
+                pool_pre_ping=True,
+                pool_size=20,
+                max_overflow=30,
+                pool_timeout=60,
+                pool_recycle=1800,
+                connect_args={"connect_timeout": 3} if "postgres" in db_url else {},
+            )
         DBConnector._Session = sessionmaker(
             autocommit=False, autoflush=False, bind=DBConnector._engine
         )
@@ -140,6 +165,8 @@ class DBConnector:
         try:
             self.run_sql_script(os.path.join(script_dir, sql_script))
             self._migrate_uam_columns()
+            self._migrate_project_columns()
+            self._migrate_pressure_test_columns()
         except Exception as exc:
             if "readonly" in str(exc).lower() or os.environ.get("QPP_DEMO_MODE", "").lower() in ("1", "true", "yes"):
                 pass
@@ -173,6 +200,63 @@ class DBConnector:
                     if col_name not in existing_cols:
                         conn.execute(
                             text(f'ALTER TABLE "users" ADD COLUMN "{col_name}" {col_def}')
+                        )
+        except Exception:
+            pass
+
+    def _migrate_project_columns(self):
+        """Ensure existing `projects` tables have the project-level `config_data` JSON column."""
+        if DBConnector._engine is None:
+            return
+        from sqlalchemy import inspect as sa_inspect, text
+
+        try:
+            inspector = sa_inspect(DBConnector._engine)
+            if not inspector.has_table("projects"):
+                return
+            existing_cols = {c["name"] for c in inspector.get_columns("projects")}
+            if "config_data" in existing_cols:
+                return
+            is_sqlite = "sqlite" in DBConnector._engine.url.drivername
+            col_type = "JSON" if is_sqlite else "JSONB"
+            with DBConnector._engine.begin() as conn:
+                conn.execute(
+                    text(f'ALTER TABLE "projects" ADD COLUMN "config_data" {col_type}')
+                )
+        except Exception:
+            pass
+
+    def _migrate_pressure_test_columns(self):
+        """Ensure existing `pressure_tests` tables have formation pressure testing columns
+        (mobility, permeability, temperature, temperature_uom, remarks) and FPT interpretation
+        columns (tvdss, fluid_type, test_quality, zone)."""
+        if DBConnector._engine is None:
+            return
+        from sqlalchemy import inspect as sa_inspect, text
+
+        try:
+            inspector = sa_inspect(DBConnector._engine)
+            if not inspector.has_table("pressure_tests"):
+                return
+            existing_cols = {c["name"] for c in inspector.get_columns("pressure_tests")}
+            migrations = [
+                ("mobility", "REAL"),
+                ("permeability", "REAL"),
+                ("temperature", "REAL"),
+                ("temperature_uom", "VARCHAR(50) DEFAULT 'degC'"),
+                ("remarks", "TEXT"),
+                ("tvdss", "REAL"),
+                ("fluid_type", "VARCHAR(20) DEFAULT 'UNASSIGNED'"),
+                ("test_quality", "VARCHAR(20) DEFAULT 'VALID'"),
+                ("zone", "VARCHAR(255)"),
+            ]
+            with DBConnector._engine.begin() as conn:
+                for col_name, col_def in migrations:
+                    if col_name not in existing_cols:
+                        conn.execute(
+                            text(
+                                f'ALTER TABLE "pressure_tests" ADD COLUMN "{col_name}" {col_def}'
+                            )
                         )
         except Exception:
             pass

@@ -1,3 +1,5 @@
+"""Saturation Height Function (SHF) and Leverett J-function API endpoints."""
+
 import math
 
 import pandas as pd
@@ -405,3 +407,36 @@ async def save_shf(project_id: int, payload: dict):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save SHF: {e}") from e
+
+
+
+@router.post(
+    "/swirr/fit",
+    summary="Fit Swirr correlation coefficients from SCAL plug data",
+    tags=["Saturation Height Function"],
+)
+async def shf_swirr_fit(project_id: int, payload: dict):
+    """Delegate Swirr correlation fitting to workspace_swirr_fit."""
+    from quick_pp.app.backend.services.workspace import (
+        WorkspaceSwirrFitRequest,
+        workspace_swirr_fit,
+    )
+
+    req = WorkspaceSwirrFitRequest(**(payload or {}))
+    return workspace_swirr_fit(project_id, req)
+
+
+@router.post(
+    "/swirr/apply",
+    summary="Apply fitted Swirr correlation model to project wells",
+    tags=["Saturation Height Function"],
+)
+async def shf_swirr_apply(project_id: int, payload: dict):
+    """Delegate Swirr curve application to workspace_swirr_apply."""
+    from quick_pp.app.backend.services.workspace import (
+        WorkspaceSwirrApplyRequest,
+        workspace_swirr_apply,
+    )
+
+    req = WorkspaceSwirrApplyRequest(**(payload or {}))
+    return workspace_swirr_apply(project_id, req)

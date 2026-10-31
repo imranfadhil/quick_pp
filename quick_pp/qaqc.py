@@ -1,4 +1,9 @@
-import math
+"""Log quality control (QA/QC), environmental corrections, and curve reconstruction.
+
+Provides out-of-range handling, borehole washout flagging, neutron-density
+environmental corrections, curve normalization, and machine-learning / multi-well
+synthetic curve reconstruction.
+"""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,7 +13,7 @@ from quick_pp import logger
 from quick_pp.config import Config
 from quick_pp.ressum import calc_reservoir_summary, flag_interval
 from quick_pp.rock_type import estimate_vsh_gr
-from quick_pp.utils import length_a_b, line_intersection
+from quick_pp.utils import length_a_b, nd_triangle_coords
 
 plt.style.use("seaborn-v0_8-paper")
 
@@ -130,7 +135,11 @@ def badhole_flagging(
         med = s_clean.median()
         d = np.abs(s_clean - med)
         mdev = np.nanmedian(d)
-        s = d / mdev if (mdev and not np.isnan(mdev) and mdev > 1e-6) else 0.0
+        s = (
+            d / mdev
+            if (mdev and not np.isnan(mdev) and mdev > 1e-6)
+            else pd.Series(0.0, index=s_clean.index, dtype=float)
+        )
         return s_clean.where(s < m, med)
 
     bit_sizes = {6.0: 6.0, 8.5: 8.5, 12.25: 12.25, 17.5: 17.5}
@@ -164,7 +173,12 @@ def badhole_flagging(
             if rpt is not None and len(clean_signal) >= 60:
                 try:
                     if clean_signal.nunique() > 1:
-                        kde = scipy.stats.gaussian_kde(clean_signal)
+                        kde_sample = (
+                            clean_signal.iloc[:: max(1, len(clean_signal) // 2500)]
+                            if len(clean_signal) > 2500
+                            else clean_signal
+                        )
+                        kde = scipy.stats.gaussian_kde(kde_sample)
                         evaluated = kde.evaluate(
                             np.linspace(clean_signal.min(), clean_signal.max(), 100)
                         )
@@ -173,8 +187,8 @@ def badhole_flagging(
                         peaks = []
 
                     jump = min(60, max(5, len(signal_data) // 4))
-                    algo = rpt.BottomUp(model="rbf", jump=jump).fit(
-                        signal_data.ffill().bfill().to_numpy()
+                    algo = rpt.BottomUp(model="l2", jump=jump).fit(
+                        signal_data.ffill().bfill().to_numpy(dtype=float)
                     )
                     n_bkps = min(len(peaks), max(0, (len(signal_data) // jump) - 1))
                     my_bkps = algo.predict(n_bkps=n_bkps) if n_bkps > 0 else [len(signal_data)]
@@ -361,99 +375,205 @@ def neu_den_xplot_hc_correction(
     dry_clay_point: tuple = (),
     water_point: tuple = (1.0, 1.0),
     corr_angle: float = 50,
-    buffer=0.0,
+    buffer: float = 0.0,
+    target_mode: str = "bulk",
+    flag_mode: str = "strict",
+    vsh_tol: float = 0.05,
+    nphi_max: float = 0.45,
 ):
-    """Correct neutron porosity and bulk density for hydrocarbon effects.
+    """Correct neutron porosity and bulk density for light hydrocarbon effects.
 
-    This function iteratively adjusts NPHI and RHOB logs in hydrocarbon-bearing
-    zones, shifting them along a specified correction angle until the calculated
-    shale volume from the neutron-density crossplot aligns with the shale volume
-    derived from the gamma-ray log.
+    Hydrocarbon-affected (NPHI, RHOB) points are shifted along ``corr_angle``
+    until the crossplot clay volume reconciles with the gamma-ray shale volume
+    ``vsh_gr``. The shift is solved analytically (exact intersection of the
+    correction ray with the target iso-Vshale line), so there is no step
+    quantization or iteration cap.
+
+    Crossplot coordinates are expressed in the barycentric (porosity, clay)
+    frame of the matrix (A), dry clay (C) and water (D) triangle, see
+    :func:`quick_pp.utils.nd_triangle_coords`. This makes the result independent
+    of whether the dry clay is heavier or lighter than the matrix.
+
+    Flagging:
+        * ``flag_mode="strict"`` (default): only points plotting beyond the
+          clean-sand (D-A) line are flagged, i.e. where the clay fraction of
+          solids projected from the water point is below
+          ``buffer / |A - C|``. ``buffer`` (crossplot distance along A-C) only
+          widens this flagging region; it does not move the correction target.
+        * ``flag_mode="vsh_gr"``: additionally flags points inside the triangle
+          whose crossplot clay volume is below ``vsh_gr - vsh_tol``. This
+          captures shaly gas sands, but may produce false positives where the
+          gamma ray overestimates shale (e.g. radioactive/feldspathic sands).
+
+    Target:
+        * ``target_mode="bulk"`` (default): ``vsh_gr`` is treated as bulk clay
+          volume; the target is the iso-Vcl line through ``A + vsh_gr (C - A)``
+          parallel to D-A. Consistent with :func:`den_correction`.
+        * ``target_mode="solid"``: ``vsh_gr`` is treated as clay fraction of the
+          solids, i.e. the target is the line from D through
+          ``C + (1 - vsh_gr)(A - C)`` (legacy convention).
+
+    Corrected points never move backwards along the ray (flagged points already
+    on the shaly side of the target are left unchanged) and never cross the
+    zero-porosity (A-C) line.
 
     Args:
-        nphi (np.ndarray or float): Neutron porosity log in fraction.
+        nphi (np.ndarray or float): Neutron porosity log in fraction (v/v).
         rhob (np.ndarray or float): Bulk density log in g/cc.
-        vsh_gr (np.ndarray or float, optional): Vshale from gamma ray log. Defaults to None.
-        dry_min1_point (tuple, optional): NPHI and RHOB of the primary matrix mineral. Defaults to ().
-        dry_clay_point (tuple, optional): NPHI and RHOB of dry clay. Defaults to ().
-        water_point (tuple, optional): NPHI and RHOB of the formation water. Defaults to (1.0, 1.0).
-        corr_angle (float, optional): Correction angle in degrees from the horizontal. Defaults to 50.
-        buffer (float, optional): A buffer added to the lithology fraction for flagging. Defaults to 0.0.
+        vsh_gr (np.ndarray or float, optional): Vshale from gamma ray (v/v). NaN values
+            are skipped (not corrected, not flagged). If None, a clean-sand target
+            (0) is used everywhere. Defaults to None.
+        dry_min1_point (tuple): (NPHI, RHOB) of the primary matrix mineral (A).
+        dry_clay_point (tuple): (NPHI, RHOB) of dry clay (C).
+        water_point (tuple, optional): (NPHI, RHOB) of the formation water (D). Defaults to (1.0, 1.0).
+        corr_angle (float, optional): Correction angle in degrees counter-clockwise from the
+            positive NPHI axis (tan = dRHOB / dNPHI). See
+            :func:`neu_den_xplot_hc_correction_angle`. Defaults to 50.
+        buffer (float, optional): Flagging tolerance as crossplot distance along A-C. Only widens
+            the strict flagging region. Defaults to 0.0.
+        target_mode (str, optional): 'bulk' or 'solid'. Defaults to 'bulk'.
+        flag_mode (str, optional): 'strict' or 'vsh_gr'. Defaults to 'strict'.
+        vsh_tol (float, optional): Tolerance for ``flag_mode='vsh_gr'``. Defaults to 0.05.
+        nphi_max (float, optional): Points with NPHI >= nphi_max are never corrected. Defaults to 0.45.
 
     Returns:
         tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing:
             - Corrected neutron porosity (NPHI).
             - Corrected bulk density (RHOB).
-            - A flag indicating hydrocarbon presence (1 for HC, 0 otherwise).
+            - Hydrocarbon flag (1.0 where flagged, 0.0 otherwise).
     """
-    A = dry_min1_point
-    C = dry_clay_point
-    D = water_point
-    rocklithofrac = length_a_b(A, C)
+    target_mode = str(target_mode).strip().lower()
+    flag_mode = str(flag_mode).strip().lower()
+    if target_mode not in ("bulk", "solid"):
+        raise ValueError("target_mode must be 'bulk' or 'solid'")
+    if flag_mode not in ("strict", "vsh_gr"):
+        raise ValueError("flag_mode must be 'strict' or 'vsh_gr'")
 
-    # Ensure inputs are numpy arrays
-    nphi = np.array(nphi)
-    rhob = np.array(rhob)
-    frac_vsh_gr = np.array(vsh_gr) if vsh_gr is not None else np.zeros_like(nphi)
+    A = (float(dry_min1_point[0]), float(dry_min1_point[1]))
+    C = (float(dry_clay_point[0]), float(dry_clay_point[1]))
+    D = (float(water_point[0]), float(water_point[1]))
+    rock_len = float(length_a_b(A, C))
+    if rock_len <= 0:
+        raise ValueError("dry_min1_point and dry_clay_point must be distinct")
 
-    # Initialize corrected logs and flags
-    nphi_corrected = nphi.copy()
-    rhob_corrected = rhob.copy()
-    hc_flag = np.zeros_like(nphi, dtype=int)
-
-    # Calculate initial projection and vsh_dn
-    var_pts = line_intersection((A, C), (D, (nphi, rhob)))
-    projlithofrac = length_a_b(var_pts, C) + buffer
-    vsh_dn = 1 - (projlithofrac / rocklithofrac)
-
-    # Identify points needing correction
-    correction_mask = (projlithofrac > rocklithofrac) & (nphi < 0.45)
-    hc_flag[correction_mask] = 1
-
-    # Iteratively correct points
-    # Using a max iteration count to prevent infinite loops
-    for _ in range(100):
-        # Only work on points that still need correction
-        active_mask = correction_mask & (vsh_dn <= frac_vsh_gr) & ~np.isnan(frac_vsh_gr)
-        if not np.any(active_mask):
-            break  # Exit if no more points need correction
-
-        # Apply correction shift
-        nphi_corrected[active_mask] += 1e-2 * np.cos(np.radians(corr_angle))
-        rhob_corrected[active_mask] += 1e-2 * np.sin(np.radians(corr_angle))
-
-        # Recalculate vsh_dn for the corrected points
-        var_pts_corr = line_intersection(
-            (A, C), (D, (nphi_corrected[active_mask], rhob_corrected[active_mask]))
+    nphi = np.asarray(nphi, dtype=float)
+    rhob = np.asarray(rhob, dtype=float)
+    if vsh_gr is None:
+        target_vsh = np.zeros_like(nphi)
+    else:
+        target_vsh = np.broadcast_to(
+            np.clip(np.asarray(vsh_gr, dtype=float), 0.0, 1.0), nphi.shape
         )
-        projlithofrac_corr = length_a_b(var_pts_corr, C)
-        vsh_dn[active_mask] = 1 - (projlithofrac_corr / rocklithofrac)
 
-    return nphi_corrected, rhob_corrected, hc_flag.astype(float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # Barycentric porosity and bulk clay volume of the raw points
+        phi0, vcl0 = nd_triangle_coords(nphi, rhob, A, C, D)
+        # Clay fraction of solids == projection from D onto A-C (legacy vsh_dn)
+        vsh_dn_solid = vcl0 / (1.0 - phi0)
+
+        valid = (
+            np.isfinite(nphi)
+            & np.isfinite(rhob)
+            & np.isfinite(target_vsh)
+            & (nphi < nphi_max)
+            & (phi0 < 1.0)
+        )
+
+        # 1. Flag hydrocarbon-affected points
+        flag = vsh_dn_solid < (float(buffer) / rock_len)
+        if flag_mode == "vsh_gr":
+            v_mode = vcl0 if target_mode == "bulk" else vsh_dn_solid
+            flag = flag | (v_mode < (target_vsh - float(vsh_tol)))
+        flag = flag & valid
+
+        # 2. Correction ray direction, expressed in the (phi, vcl) frame
+        rad = np.radians(float(corr_angle))
+        ux, uy = float(np.cos(rad)), float(np.sin(rad))
+        dphi, dvcl = nd_triangle_coords(A[0] + ux, A[1] + uy, A, C, D)
+        dphi, dvcl = float(dphi), float(dvcl)
+
+        # 3. Exact ray length to reach the target iso-Vshale line
+        if target_mode == "bulk":
+            denom = np.full_like(phi0, dvcl)
+            numer = target_vsh - vcl0
+        else:
+            denom = dvcl + target_vsh * dphi
+            numer = target_vsh * (1.0 - phi0) - vcl0
+        s = np.where(np.abs(denom) > 1e-12, numer / denom, np.nan)
+
+        # Do not cross the zero-porosity (A-C) line
+        if dphi < 0:
+            s = np.minimum(s, -phi0 / dphi)
+
+        move = flag & np.isfinite(s) & (s > 0)
+        nphi_corrected = np.where(move, nphi + s * ux, nphi)
+        rhob_corrected = np.where(move, rhob + s * uy, rhob)
+
+    return nphi_corrected, rhob_corrected, flag.astype(float)
 
 
 def neu_den_xplot_hc_correction_angle(rho_water=1.0, rho_hc=0.3, HI_hc=None):
-    """Estimate correction angle for neutron porosity and bulk density based on water and hydrocarbon density.
-    The angle is measured from the east (horizontal) line.
+    """Estimate the hydrocarbon correction angle on the NPHI-RHOB crossplot.
+
+    Replacing water with hydrocarbon lowers NPHI by ``phi * Shc * (1 - HI_hc)`` and
+    RHOB by ``phi * Shc * (rho_water - rho_hc)``. The correction vector therefore
+    satisfies ``tan(angle) = dRHOB / dNPHI = (rho_water - rho_hc) / (1 - HI_hc)``,
+    with the angle measured counter-clockwise from the positive NPHI (horizontal)
+    axis, the same convention used by :func:`neu_den_xplot_hc_correction`.
+
+    The neutron excavation effect is not modelled; in gas zones the real NPHI
+    depression is larger, so the effective angle may be somewhat shallower.
 
     Args:
         rho_water (float, optional): Fluid density, typically 0.8-1.2 g/cc. Defaults to 1.0.
         rho_hc (float, optional): Hydrocarbon density (gas: 0.1-0.3, oil: 0.4-0.8 g/cc). Defaults to 0.3.
-        HI_hc (float, optional): Hydrogen Index of the hydrocarbon (gas: 0.2-0.7, oil: 0.8-1.0). If None, it is estimated as 2.2 * rho_hc. Defaults to None.
+        HI_hc (float, optional): Hydrogen Index of the hydrocarbon (gas: 0.2-0.7, oil: 0.8-1.0).
+            If None, it is estimated with the gas relation ``2.2 * rho_hc`` capped at 1.0
+            (liquids). Defaults to None.
 
     Returns:
-        float: The hydrocarbon correction angle in degrees.
+        float: The hydrocarbon correction angle in degrees (90 for HI_hc = 1, > 90 for HI_hc > 1).
     """
     if HI_hc is None:
-        HI_hc = 2.2 * rho_hc
-    # Estimate correction angle
-    corr_angle = np.arctan((rho_water - rho_hc) / (1 - HI_hc))
-    return 90 - math.degrees(corr_angle)
+        HI_hc = min(2.2 * float(rho_hc), 1.0)
+    return float(
+        np.degrees(np.arctan2(float(rho_water) - float(rho_hc), 1.0 - float(HI_hc)))
+    )
+
+
+def den_correction_params_from_endpoints(
+    dry_sand_point: tuple, dry_clay_point: tuple, rho_water: float = 1.0
+):
+    """Derive :func:`den_correction` parameters consistent with crossplot endpoints.
+
+    Maps the dry sand (A), dry clay (C) and water (rho_water) crossplot points to
+    ``(rho_ma, phin_sh, phid_sh)`` such that :func:`den_correction` reproduces the
+    linear three-component (matrix-clay-water) mixing model exactly, with
+    ``vsh_gr`` interpreted as bulk clay volume.
+
+    Args:
+        dry_sand_point (tuple): (NPHI, RHOB) of the dry matrix point.
+        dry_clay_point (tuple): (NPHI, RHOB) of the dry clay point.
+        rho_water (float, optional): Water density in g/cc. Defaults to 1.0.
+
+    Returns:
+        tuple[float, float, float]: ``(rho_ma, phin_sh, phid_sh)``.
+    """
+    nphi_sand, rho_sand = float(dry_sand_point[0]), float(dry_sand_point[1])
+    nphi_clay, rho_clay = float(dry_clay_point[0]), float(dry_clay_point[1])
+    rho_w = float(rho_water)
+    if abs(1.0 - nphi_sand) < 1e-6:
+        raise ValueError("Dry sand NPHI must differ from 1.0")
+    rho_ma = (rho_sand - nphi_sand * rho_w) / (1.0 - nphi_sand)
+    if abs(rho_ma - rho_w) < 1e-6:
+        raise ValueError("Matrix density must differ from water density")
+    phid_sh = (rho_ma - rho_clay) / (rho_ma - rho_w)
+    return rho_ma, nphi_clay, phid_sh
 
 
 def den_correction(
     nphi,
-    gr,
+    gr=None,
     vsh_gr=None,
     phin_sh=0.35,
     phid_sh=0.05,
@@ -461,12 +581,26 @@ def den_correction(
     rho_water=1.0,
     alpha=0.05,
 ):
-    """Correct bulk density based on nphi and gamma ray.
+    """Reconstruct bulk density from neutron porosity and gamma-ray shale volume.
+
+    Assumes ``vsh_gr = vsh_dn = (phin - phid) / (phin_sh - phid_sh)`` and solves for
+    density porosity, then converts it to bulk density. Intended for bad-hole
+    (washout) RHOB reconstruction in **water-bearing** intervals.
+
+    Important:
+        * ``vsh_gr`` is interpreted as **bulk** clay volume.
+        * ``nphi`` must be water-filled or already **hydrocarbon-corrected**
+          (e.g. NPHI_HC). Gas-depressed NPHI yields an artificially high RHOB
+          (in clean sand ``phid = nphi``).
+        * Use :func:`den_correction_params_from_endpoints` to derive
+          ``rho_ma``, ``phin_sh`` and ``phid_sh`` consistent with the
+          neutron-density crossplot endpoints.
 
     Args:
-        nphi (np.ndarray or float): Neutron porosity log in fraction.
-        gr (np.ndarray or float): Gamma ray log in GAPI.
-        vsh_gr (np.ndarray or float, optional): Pre-calculated Vshale from gamma ray. If None, it will be estimated. Defaults to None.
+        nphi (np.ndarray or float): Neutron porosity log in fraction (water-filled or HC-corrected).
+        gr (np.ndarray or float, optional): Gamma ray log in GAPI. Only used when vsh_gr is None.
+        vsh_gr (np.ndarray or float, optional): Pre-calculated bulk Vshale from gamma ray. If None, it is
+            estimated from ``gr``. Defaults to None.
         phin_sh (float, optional): Neutron porosity of shale. Defaults to .35.
         phid_sh (float, optional): Density porosity of shale. Defaults to .05.
         rho_ma (float, optional): Matrix density. Defaults to 2.68.
@@ -474,10 +608,16 @@ def den_correction(
         alpha (float, optional): Alpha value for gamma ray normalization if vsh_gr is not provided. Defaults to 0.05.
 
     Returns:
-        np.ndarray or float: Corrected bulk density.
+        np.ndarray or float: Reconstructed bulk density.
     """
     # Estimate vsh_gr
-    vsh_gr = vsh_gr if vsh_gr is not None else estimate_vsh_gr(gr, alpha=alpha)
+    if vsh_gr is None:
+        if gr is None:
+            raise ValueError("Either gr or vsh_gr must be provided")
+        vsh_gr = estimate_vsh_gr(gr, alpha=alpha)
+    if not np.isscalar(nphi) or not np.isscalar(vsh_gr):
+        nphi = np.asarray(nphi, dtype=float)
+        vsh_gr = np.asarray(vsh_gr, dtype=float)
     # Estimate phid assuming vsh_gr = vsh_dn = (phin - phid) / (phin_sh - phid_sh)
     phid = nphi - (phin_sh - phid_sh) * vsh_gr
     return rho_ma - (rho_ma - rho_water) * phid
@@ -829,6 +969,7 @@ def normalize_by_zone(
     inplace: bool = False,
     suffix: str = "_NORM",
     return_report: bool = False,
+    exclude_badhole: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """Perform stratigraphic (zone-by-zone) multi-well quantile or histogram log normalization.
 
@@ -923,7 +1064,19 @@ def normalize_by_zone(
             well_stats: dict[str, tuple[float, float]] = {}
             well_cdfs: dict[str, np.ndarray] = {}
             for well_name, well_zone_df in zone_df.groupby(well_col, dropna=False):
-                valid_vals = well_zone_df[col].dropna().to_numpy(dtype=float)
+                val_series = well_zone_df[col]
+                if exclude_badhole:
+                    for bh_col in ("BADHOLE", "BAD_HOLE", "BAD_HOLE_FLAG"):
+                        if bh_col in well_zone_df.columns:
+                            bh_mask = (
+                                pd.to_numeric(well_zone_df[bh_col], errors="coerce")
+                                .fillna(0.0)
+                                >= 0.5
+                            )
+                            if (~bh_mask & val_series.notna()).sum() >= 5:
+                                val_series = val_series.where(~bh_mask)
+                            break
+                valid_vals = val_series.dropna().to_numpy(dtype=float)
                 if len(valid_vals) < 2:
                     continue
                 p_low = float(np.nanquantile(valid_vals, q_low))
@@ -1033,6 +1186,8 @@ def normalize_by_zone(
                         "P_HIGH_REF": p_high_ref,
                         "SCALE_FACTOR": float(scale),
                         "DRIFT_SHIFT": float(p_low_ref - p_low_w),
+                        "SCALE": float(scale),
+                        "SHIFT": float(p_low_ref - p_low_w),
                     }
                 )
 

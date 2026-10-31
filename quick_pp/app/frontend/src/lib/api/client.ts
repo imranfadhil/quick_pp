@@ -128,13 +128,27 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 			done: 'Well log files imported'
 		};
 	}
+	if (path.endsWith('/export')) {
+		return {
+			active: 'Building Handover Package (.zip)...',
+			done: 'Handover Package (.zip) downloaded'
+		};
+	}
+	if (path.endsWith('/export_las')) {
+		return {
+			active: `Exporting LAS 2.0 file (${wellName ?? 'well'})...`,
+			done: `LAS 2.0 exported (${wellName ?? 'well'})`,
+			detail: wellName
+		};
+	}
 	if (wellName && action) {
 		switch (action) {
 			case 'bundle':
 				return {
 					active: `Loading well bundle (${wellName})...`,
 					done: `Loaded well ${wellName}`,
-					detail: wellName
+					detail: wellName,
+					silent: true
 				};
 			case 'hc_correction':
 				return {
@@ -214,6 +228,12 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 					done: `Fluid contacts saved (${wellName})`,
 					detail: wellName
 				};
+			case 'perforations':
+				return {
+					active: `Saving perforations (${wellName})...`,
+					done: `Perforations saved (${wellName})`,
+					detail: wellName
+				};
 			case 'core_samples':
 				return {
 					active: `Saving core plug samples (${wellName})...`,
@@ -274,8 +294,27 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 	}
 	if (path.endsWith('/rock_typing/compute')) {
 		return {
-			active: 'Clustering multi-well FZI discrete rock types...',
-			done: 'Multi-well FZI rock typing updated'
+			active: 'Clustering multi-well discrete rock types (DRT)...',
+			done: 'Multi-well rock typing updated'
+		};
+	}
+	if (path.endsWith('/rock_typing/models') && m === 'GET') {
+		return {
+			active: 'Loading saved Rock Type classifiers...',
+			done: 'Saved Rock Type classifiers loaded',
+			silent: true
+		};
+	}
+	if (path.endsWith('/rock_typing/models/save')) {
+		return {
+			active: 'Saving trained Rock Type classifier & Contingency Matrix...',
+			done: 'Rock Type classifier saved'
+		};
+	}
+	if (path.includes('/rock_typing/models/') && m === 'DELETE') {
+		return {
+			active: 'Deleting saved Rock Type classifier...',
+			done: 'Saved Rock Type classifier deleted'
 		};
 	}
 	if (path.endsWith('/perm_transform/compute')) {
@@ -321,6 +360,44 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 			done: 'Multi-well stratigraphic normalization complete'
 		};
 	}
+	if (path.endsWith('/multi_well_qaqc/distributions')) {
+		return {
+			active: 'Computing multi-well curve distributions & QAQC stats...',
+			done: 'Multi-well distributions updated',
+			silent: true
+		};
+	}
+	if (path.endsWith('/multi_well_qaqc/badhole_flagging')) {
+		return {
+			active: 'Running batch badhole flagging across wells...',
+			done: 'Batch badhole flagging complete'
+		};
+	}
+	if (path.endsWith('/multi_well_qaqc/environmental_corrections')) {
+		return {
+			active: 'Applying batch borehole environmental corrections...',
+			done: 'Batch environmental corrections complete'
+		};
+	}
+	if (path.endsWith('/multi_well_qaqc/conditioning')) {
+		return {
+			active: 'Running multi-well curve conditioning & harmonization...',
+			done: 'Multi-well curve conditioning complete'
+		};
+	}
+	if (path.includes('/reports/jobs/')) {
+		return {
+			active: 'Checking report generation status...',
+			done: 'Report status checked',
+			silent: true
+		};
+	}
+	if (path.endsWith('/reports/generate')) {
+		return {
+			active: 'Generating petrophysical report & high-DPI figures...',
+			done: 'Petrophysical report generated'
+		};
+	}
 	if (path.includes('/uam/audit-logs')) {
 		return { active: 'Loading audit logs...', done: 'Audit logs loaded', silent: true };
 	}
@@ -352,8 +429,10 @@ api.use({
 			request.headers.set('Authorization', `Bearer ${token}`);
 		}
 		const desc = describeApiEndpoint(request.method, request.url);
-		const taskId = appStatus.startTask(desc.active, desc.detail);
-		inFlightRequests.set(request, { taskId, desc });
+		if (!desc.silent) {
+			const taskId = appStatus.startTask(desc.active, desc.detail);
+			inFlightRequests.set(request, { taskId, desc });
+		}
 		return request;
 	},
 	async onResponse({ request, response }) {
@@ -404,8 +483,10 @@ async function parseErrorResponse(res: Response, fallbackMsg: string): Promise<E
 					? String(jsonErr.message)
 					: rawText;
 		} catch {
-			// If Nginx or frontend server returned an HTML error page
-			if (res.status === 502 || res.status === 503 || res.status === 504) {
+			// If Nginx, Cloudflare, or frontend server returned an HTML error page
+			if (res.status === 524 || res.status === 504) {
+				errText = `Request timed out at the reverse proxy / Cloudflare (HTTP ${res.status}).`;
+			} else if (res.status === 502 || res.status === 503) {
 				errText = `Backend server is unreachable or starting up (HTTP ${res.status}).`;
 			} else if (
 				rawText.trimStart().toLowerCase().startsWith('<!doctype html') ||
@@ -466,7 +547,7 @@ async function trackedFetch(
 
 /**
  * Helper to save ancillary entities (formation_tops, fluid_contacts, core_samples,
- * pressure_tests, well_surveys) via the FastAPI ancillary routes.
+ * scal_pc, pressure_tests, well_surveys) via the FastAPI ancillary routes.
  */
 export async function saveAncillaryItems(
 	projectId: string | number,
@@ -474,11 +555,14 @@ export async function saveAncillaryItems(
 	entityType:
 		| 'formation_tops'
 		| 'fluid_contacts'
+		| 'perforations'
 		| 'core_samples'
+		| 'scal_pc'
 		| 'pressure_tests'
 		| 'well_surveys',
-	payloadKey: 'tops' | 'contacts' | 'samples' | 'tests' | 'surveys',
-	items: Record<string, any>[]
+	payloadKey: 'tops' | 'contacts' | 'perforations' | 'samples' | 'pc_data' | 'tests' | 'surveys',
+	items: Record<string, any>[],
+	replace: boolean = true
 ) {
 	const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(wellName)}/${entityType}`;
 	const res = await trackedFetch(
@@ -487,7 +571,7 @@ export async function saveAncillaryItems(
 			method: 'POST',
 			credentials: 'include',
 			headers: authHeaders({ 'Content-Type': 'application/json' }),
-			body: JSON.stringify({ [payloadKey]: items })
+			body: JSON.stringify({ [payloadKey]: items, replace })
 		},
 		`Failed to save ${entityType}`
 	);
@@ -497,7 +581,13 @@ export async function saveAncillaryItems(
 export async function deleteAncillaryItem(
 	projectId: string | number,
 	wellName: string,
-	entityType: 'formation_tops' | 'fluid_contacts' | 'core_samples' | 'pressure_tests',
+	entityType:
+		| 'formation_tops'
+		| 'fluid_contacts'
+		| 'perforations'
+		| 'core_samples'
+		| 'scal_pc'
+		| 'pressure_tests',
 	identifier: string | number
 ) {
 	const url = `${API_BASE}/quick_pp/database/projects/${projectId}/wells/${encodeURIComponent(wellName)}/${entityType}/${encodeURIComponent(String(identifier))}`;
@@ -584,3 +674,118 @@ export const apiGet = getJson;
 export const apiPost = postJson;
 export const apiPatch = patchJson;
 export const apiDelete = deleteJson;
+
+/**
+ * Download the complete Petrophysical Handover Package (.zip) for a project or well.
+ */
+export async function downloadHandoverPackage(
+	projectId: string | number,
+	options?: { wellName?: string; wells?: string[]; fallbackFilename?: string }
+): Promise<void> {
+	const params = new URLSearchParams();
+	if (options?.wellName) {
+		params.set('well_name', options.wellName);
+	} else if (options?.wells && options.wells.length > 0) {
+		params.set('wells', options.wells.join(','));
+	}
+	const qs = params.toString();
+	const url = `${API_BASE}/quick_pp/database/projects/${encodeURIComponent(String(projectId))}/export${qs ? `?${qs}` : ''}`;
+	const res = await trackedFetch(
+		url,
+		{
+			method: 'GET',
+			credentials: 'include',
+			headers: authHeaders()
+		},
+		'Failed to export handover package'
+	);
+	const blob = await res.blob();
+	const cd = res.headers.get('Content-Disposition') || '';
+	const match = cd.match(/filename="?([^"]+)"?/i);
+	const filename =
+		match?.[1] ||
+		options?.fallbackFilename ||
+		`${options?.wellName || `project_${projectId}`}_Handover.zip`;
+
+	const a = document.createElement('a');
+	const objUrl = URL.createObjectURL(blob);
+	a.href = objUrl;
+	a.download = filename;
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
+	URL.revokeObjectURL(objUrl);
+}
+
+/**
+ * Download an evaluated LAS 2.0 file (including ~Parameter CPI metadata) for a single well.
+ */
+export async function downloadWellLas(
+	projectId: string | number,
+	wellName: string
+): Promise<void> {
+	const url = `${API_BASE}/quick_pp/database/projects/${encodeURIComponent(String(projectId))}/wells/${encodeURIComponent(wellName)}/export_las`;
+	const res = await trackedFetch(
+		url,
+		{
+			method: 'GET',
+			credentials: 'include',
+			headers: authHeaders()
+		},
+		`Failed to export LAS 2.0 for ${wellName}`
+	);
+	const blob = await res.blob();
+	const cd = res.headers.get('Content-Disposition') || '';
+	const match = cd.match(/filename="?([^"]+)"?/i);
+	const filename = match?.[1] || `${wellName}.las`;
+
+	const a = document.createElement('a');
+	const objUrl = URL.createObjectURL(blob);
+	a.href = objUrl;
+	a.download = filename;
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
+	URL.revokeObjectURL(objUrl);
+}
+
+/**
+ * Generate a Multi-Well FDP or Single-Well CPI report using background job polling
+ * to prevent Cloudflare / reverse-proxy HTTP 524 timeouts on large multi-well fields.
+ */
+export async function generateProjectReport<T>(
+	projectId: string | number,
+	payload: Record<string, any>
+): Promise<T> {
+	const pid = encodeURIComponent(String(projectId));
+	const startRes = await postJson<any>(
+		`/quick_pp/projects/${pid}/reports/generate?async_job=true`,
+		payload
+	);
+	if (startRes && startRes.report_id) {
+		return startRes as T;
+	}
+	const jobId = startRes?.job_id;
+	if (!jobId) {
+		throw new Error('Failed to start report generation job.');
+	}
+
+	const maxAttempts = 240; // Up to ~3 minutes of lightweight polling
+	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+		await new Promise((resolve) => setTimeout(resolve, 750));
+		const jobStatus = await getJson<{
+			job_id: string;
+			status: 'running' | 'completed' | 'failed';
+			report?: T;
+			error?: string | null;
+		}>(`/quick_pp/projects/${pid}/reports/jobs/${encodeURIComponent(jobId)}`);
+
+		if (jobStatus.status === 'completed' && jobStatus.report) {
+			return jobStatus.report;
+		}
+		if (jobStatus.status === 'failed') {
+			throw new Error(jobStatus.error || 'Report generation job failed on backend.');
+		}
+	}
+	throw new Error('Report generation timed out waiting for background job completion.');
+}

@@ -42,7 +42,10 @@ class User(Base):
         "Project", back_populates="creator"
     )
     project_memberships: Mapped[List["ProjectMember"]] = relationship(
-        "ProjectMember", back_populates="user"
+        "ProjectMember",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     audit_logs: Mapped[List["AuditLog"]] = relationship(
         "AuditLog", back_populates="user"
@@ -59,6 +62,11 @@ class Project(Base):
         Integer, primary_key=True, autoincrement=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Project-level settings, e.g. multi-well module parameters keyed by zone selection.
+    # Deferred so regular project queries never touch the column (safe on un-migrated DBs).
+    config_data: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        "config_data", JSON, deferred=True
+    )
     description: Mapped[Optional[str]] = mapped_column(Text)
     created_by: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.user_id", ondelete="SET NULL")
@@ -72,10 +80,16 @@ class Project(Base):
 
     creator: Mapped[Optional["User"]] = relationship("User", back_populates="projects")
     members: Mapped[List["ProjectMember"]] = relationship(
-        "ProjectMember", back_populates="project"
+        "ProjectMember",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     wells: Mapped[List["Well"]] = relationship(
-        "Well", back_populates="project", cascade="all, delete-orphan"
+        "Well",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     def __repr__(self):
@@ -127,26 +141,51 @@ class Well(Base):
 
     project: Mapped["Project"] = relationship("Project", back_populates="wells")
     curves: Mapped[List["Curve"]] = relationship(
-        "Curve", back_populates="well", cascade="all, delete-orphan"
+        "Curve",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     formation_tops: Mapped[List["FormationTop"]] = relationship(
-        "FormationTop", back_populates="well", cascade="all, delete-orphan"
+        "FormationTop",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     fluid_contacts: Mapped[List["FluidContact"]] = relationship(
-        "FluidContact", back_populates="well", cascade="all, delete-orphan"
+        "FluidContact",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     pressure_tests: Mapped[List["PressureTest"]] = relationship(
-        "PressureTest", back_populates="well", cascade="all, delete-orphan"
+        "PressureTest",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     core_samples: Mapped[List["CoreSample"]] = relationship(
-        "CoreSample", back_populates="well", cascade="all, delete-orphan"
+        "CoreSample",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     survey_points: Mapped[List["WellSurvey"]] = relationship(
-        "WellSurvey", back_populates="well", cascade="all, delete-orphan"
+        "WellSurvey",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     def __repr__(self):
         return f"<Well(well_id={self.well_id}, name='{self.name}', uwi='{self.uwi}')>"
+
+    perforations: Mapped[List["Perforation"]] = relationship(
+        "Perforation",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (UniqueConstraint("project_id", "uwi", name="uq_project_id_uwi"),)
 
@@ -202,6 +241,25 @@ class PressureTest(Base):
     depth: Mapped[float] = mapped_column(REAL, nullable=False)
     pressure: Mapped[float] = mapped_column(REAL, nullable=False)
     pressure_uom: Mapped[str] = mapped_column(String(50), default="psi")
+    # Formation pressure testing (MDT/RFT/RCI) attributes
+    mobility: Mapped[Optional[float]] = mapped_column(REAL, nullable=True)  # mD/cP
+    permeability: Mapped[Optional[float]] = mapped_column(REAL, nullable=True)  # mD
+    temperature: Mapped[Optional[float]] = mapped_column(REAL, nullable=True)
+    temperature_uom: Mapped[Optional[str]] = mapped_column(
+        String(50), default="degC", nullable=True
+    )
+    remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # FPT interpretation attributes (fluid gradient & contact analysis)
+    tvdss: Mapped[Optional[float]] = mapped_column(
+        REAL, nullable=True
+    )  # Optional user-supplied TVDSS override (m); computed from survey/TVD when null
+    fluid_type: Mapped[Optional[str]] = mapped_column(
+        String(20), default="UNASSIGNED", nullable=True
+    )  # GAS | OIL | WATER | UNASSIGNED
+    test_quality: Mapped[Optional[str]] = mapped_column(
+        String(20), default="VALID", nullable=True
+    )  # VALID | TIGHT | SUPERCHARGED | LOST_SEAL | EXCLUDED
+    zone: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     well: Mapped["Well"] = relationship("Well", back_populates="pressure_tests")
 
@@ -211,6 +269,28 @@ class PressureTest(Base):
 
     def __repr__(self):
         return f"<PressureTest(test_id={self.test_id}, depth={self.depth}, pressure={self.pressure} {self.pressure_uom})>"
+
+
+class Perforation(Base):
+    __tablename__ = "perforations"
+
+    perf_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    well_id: Mapped[int] = mapped_column(
+        ForeignKey("wells.well_id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    top: Mapped[float] = mapped_column(REAL, nullable=False)
+    bottom: Mapped[float] = mapped_column(REAL, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+
+    well: Mapped["Well"] = relationship("Well", back_populates="perforations")
+
+    __table_args__ = (
+        UniqueConstraint("well_id", "name", "top", "bottom", name="uq_well_id_perf"),
+    )
+
+    def __repr__(self):
+        return f"<Perforation(perf_id={self.perf_id}, well_id={self.well_id}, name='{self.name}', top={self.top}, bottom={self.bottom})>"
 
 
 class Curve(Base):
@@ -234,7 +314,10 @@ class Curve(Base):
 
     well: Mapped["Well"] = relationship("Well", back_populates="curves")
     data: Mapped[List["CurveData"]] = relationship(
-        "CurveData", back_populates="curve", cascade="all, delete-orphan"
+        "CurveData",
+        back_populates="curve",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     def __repr__(self):
@@ -289,13 +372,22 @@ class CoreSample(Base):
 
     well: Mapped["Well"] = relationship("Well", back_populates="core_samples")
     measurements: Mapped[List["CoreMeasurement"]] = relationship(
-        "CoreMeasurement", back_populates="sample", cascade="all, delete-orphan"
+        "CoreMeasurement",
+        back_populates="sample",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     relperm_data: Mapped[List["RelativePermeability"]] = relationship(
-        "RelativePermeability", back_populates="sample", cascade="all, delete-orphan"
+        "RelativePermeability",
+        back_populates="sample",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     capillary_pressure_data: Mapped[List["CapillaryPressure"]] = relationship(
-        "CapillaryPressure", back_populates="sample", cascade="all, delete-orphan"
+        "CapillaryPressure",
+        back_populates="sample",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     __table_args__ = (

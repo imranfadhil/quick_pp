@@ -2,6 +2,7 @@
 	import { deleteJson, getJson, postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { authState } from '$lib/state/auth.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -22,23 +23,13 @@
 	const CARBONATE_OUTPUTS = ['PHIT', 'SWT', 'LOG_PERM', 'VCALC', 'VCLAY', 'VDOLO'];
 
 	// Training configuration state
-	let architecture = $state<'clastic' | 'carbonate'>('clastic');
-	let suiteKey = $state<string>('clastic_custom');
-	let suiteLabel = $state<string>('Custom Clastic PIML');
+	// Training configuration lives in shared project state so it is saved/restored per zone selection;
+	// zones use the shared workbench zone selection (same key as other multi-well modules).
+	const mp = projectData.mlTrainerParams;
 
 	// Well, Zone & Flag Filter state
-	let selectedWells = $state<string[]>([]);
-	let selectedZones = $state<string[]>([]);
-	let excludeCoal = $state<boolean>(true);
-	let excludeTight = $state<boolean>(false);
-	let excludeBadHole = $state<boolean>(true);
-	let selectedRockFlags = $state<number[]>([]);
 
 	// Hyperparameters & Conformal calibration
-	let conformalAlpha = $state<number>(0.2);
-	let testSize = $state<number>(0.2);
-	let nEstimators = $state<number>(50);
-	let maxDepth = $state<number>(10);
 
 	// Global bundle status
 	let bundleStatus = $state<{
@@ -59,59 +50,65 @@
 	} | null>(null);
 
 	let activeTargets = $derived(
-		architecture === 'carbonate' ? CARBONATE_OUTPUTS : CLASTIC_OUTPUTS
+		mp.architecture === 'carbonate' ? CARBONATE_OUTPUTS : CLASTIC_OUTPUTS
 	);
 
 	let lastInitProjectId = '';
 
-	// Initialize selectedWells & bundle status once per project change
+	// Refresh bundle status once per project; keep training wells valid for the active project without
+	// overwriting a restored / user-edited well selection when the inspector remounts.
 	$effect(() => {
 		const pid = workbench.projectId ? String(workbench.projectId) : '';
 		const allNames = projectData.wells.map((w) => w.name);
 		if (pid && pid !== lastInitProjectId) {
 			lastInitProjectId = pid;
-			selectedWells = [...allNames];
 			refreshBundleStatus(pid);
-		} else if (allNames.length > 0 && selectedWells.length === 0) {
-			selectedWells = [...allNames];
+		}
+		if (allNames.length > 0) {
+			const valid = mp.selectedWells.filter((w) => allNames.includes(w));
+			if (valid.length === 0) {
+				mp.selectedWells = [...allNames];
+			} else if (valid.length !== mp.selectedWells.length) {
+				mp.selectedWells = valid;
+			}
 		}
 	});
 
 	function handleArchitectureChange(nextArch: 'clastic' | 'carbonate') {
-		architecture = nextArch;
-		if (suiteKey === 'clastic_custom' || suiteKey === 'carbonate_custom') {
-			suiteKey = `${nextArch}_custom`;
+		mp.architecture = nextArch;
+		if (mp.suiteKey === 'clastic_custom' || mp.suiteKey === 'carbonate_custom') {
+			mp.suiteKey = `${nextArch}_custom`;
 		}
 		if (
-			suiteLabel === 'Custom Clastic PIML' ||
-			suiteLabel === 'Custom Carbonate PIML'
+			mp.suiteLabel === 'Custom Clastic PIML' ||
+			mp.suiteLabel === 'Custom Carbonate PIML'
 		) {
-			suiteLabel = `Custom ${nextArch === 'carbonate' ? 'Carbonate' : 'Clastic'} PIML`;
+			mp.suiteLabel = `Custom ${nextArch === 'carbonate' ? 'Carbonate' : 'Clastic'} PIML`;
 		}
 	}
 
 	function toggleWell(wellName: string) {
-		if (selectedWells.includes(wellName)) {
-			if (selectedWells.length <= 1) return;
-			selectedWells = selectedWells.filter((w) => w !== wellName);
+		if (mp.selectedWells.includes(wellName)) {
+			if (mp.selectedWells.length <= 1) return;
+			mp.selectedWells = mp.selectedWells.filter((w) => w !== wellName);
 		} else {
-			selectedWells = [...selectedWells, wellName];
+			mp.selectedWells = [...mp.selectedWells, wellName];
 		}
 	}
 
 	function toggleZone(zoneName: string) {
-		if (selectedZones.includes(zoneName)) {
-			selectedZones = selectedZones.filter((z) => z !== zoneName);
+		if (workbench.selectedZones.includes(zoneName)) {
+			workbench.selectedZones = workbench.selectedZones.filter((z) => z !== zoneName);
 		} else {
-			selectedZones = [...selectedZones, zoneName];
+			workbench.selectedZones = [...workbench.selectedZones, zoneName];
 		}
 	}
 
 	function toggleRockFlag(rf: number) {
-		if (selectedRockFlags.includes(rf)) {
-			selectedRockFlags = selectedRockFlags.filter((r) => r !== rf);
+		if (mp.selectedRockFlags.includes(rf)) {
+			mp.selectedRockFlags = mp.selectedRockFlags.filter((r) => r !== rf);
 		} else {
-			selectedRockFlags = [...selectedRockFlags, rf].sort((a, b) => a - b);
+			mp.selectedRockFlags = [...mp.selectedRockFlags, rf].sort((a, b) => a - b);
 		}
 	}
 
@@ -148,23 +145,25 @@
 			const res = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/ml_models/train`,
 				{
-					well_names: selectedWells.length > 0 ? selectedWells : null,
-					zones: selectedZones.length > 0 ? selectedZones : null,
-					architecture,
-					suite_key: suiteKey.trim() || `${architecture}_custom`,
-					suite_label: suiteLabel.trim() || null,
-					exclude_coal: excludeCoal,
-					exclude_tight: excludeTight,
-					exclude_bad_hole: excludeBadHole,
-					rock_flags: selectedRockFlags.length > 0 ? selectedRockFlags : null,
-					test_size: testSize,
-					alpha: conformalAlpha,
-					n_estimators: Math.round(nEstimators),
-					max_depth: Math.round(maxDepth),
+					well_names: mp.selectedWells.length > 0 ? mp.selectedWells : null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					architecture: mp.architecture,
+					suite_key: mp.suiteKey.trim() || `${mp.architecture}_custom`,
+					suite_label: mp.suiteLabel.trim() || null,
+					exclude_coal: mp.excludeCoal,
+					exclude_tight: mp.excludeTight,
+					exclude_bad_hole: mp.excludeBadHole,
+					rock_flags: mp.selectedRockFlags.length > 0 ? mp.selectedRockFlags : null,
+					test_size: mp.testSize,
+					alpha: mp.conformalAlpha,
+					n_estimators: Math.round(mp.nEstimators),
+					max_depth: Math.round(mp.maxDepth),
 					save: false
 				}
 			);
 			projectData.mlTrainingResult = res;
+			projectData.pendingProjectParamSnapshots['ml-training'] =
+				projectData.snapshotProjectParams('ml-training');
 			if (res.models_status) {
 				bundleStatus = res.models_status;
 			}
@@ -184,8 +183,8 @@
 			const res = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/ml_models/save`,
 				{
-					suite_key: suiteKey.trim() || `${architecture}_custom`,
-					suite_label: suiteLabel.trim() || null
+					suite_key: mp.suiteKey.trim() || `${mp.architecture}_custom`,
+					suite_label: mp.suiteLabel.trim() || null
 				}
 			);
 			projectData.mlTrainingResult = {
@@ -199,6 +198,8 @@
 				bundleStatus = res.models_status;
 			}
 			wellData.lastSavedMessage = `Saved ML Suite '${res.suite_key}' to Global Bundle ✓`;
+			// Persist training configuration (captured at train time) keyed by zone selection
+			await projectData.persistProjectParams(['ml-training'], ['ml-training']);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Failed to save trained model';
 		} finally {
@@ -225,10 +226,11 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['ml-training']} />
 		<!-- 1. Restricted Architecture & I/O Specification -->
 		<ParameterSection
 			title="Conformal PIML Architecture (Restricted I/O)"
-			badge={architecture.toUpperCase()}
+			badge={mp.architecture.toUpperCase()}
 		>
 			{#if authState.isDemoMode}
 				<div class="mb-2 rounded-xs border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] text-amber-900">
@@ -241,7 +243,7 @@
 					<button
 						type="button"
 						onclick={() => handleArchitectureChange(archKey as 'clastic' | 'carbonate')}
-						class="h-6.5 rounded-sm border text-[11px] font-medium transition-colors {architecture ===
+						class="h-6.5 rounded-sm border text-[11px] font-medium transition-colors {mp.architecture ===
 						archKey
 							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
@@ -291,14 +293,14 @@
 		<!-- 2. Well Selection -->
 		<ParameterSection
 			title="1. Select Training Wells"
-			badge={`${selectedWells.length}/${projectData.wells.length} Wells`}
+			badge={`${mp.selectedWells.length}/${projectData.wells.length} Wells`}
 		>
 			<div class="mb-1 flex items-center justify-between text-[10px]">
 				<span class="text-[var(--text-muted)]">Select evaluated wells to pool for training</span>
 				<div class="flex gap-1.5">
 					<button
 						type="button"
-						onclick={() => (selectedWells = projectData.wells.map((w) => w.name))}
+						onclick={() => (mp.selectedWells = projectData.wells.map((w) => w.name))}
 						class="font-semibold text-[var(--accent-primary)] hover:underline"
 					>
 						All
@@ -307,7 +309,7 @@
 					<button
 						type="button"
 						onclick={() => {
-							if (projectData.wells.length > 0) selectedWells = [projectData.wells[0].name];
+							if (projectData.wells.length > 0) mp.selectedWells = [projectData.wells[0].name];
 						}}
 						class="font-medium text-[var(--text-secondary)] hover:underline"
 					>
@@ -318,7 +320,7 @@
 
 			<div class="max-h-36 overflow-y-auto rounded-xs border border-[var(--border-hairline)] divide-y divide-[var(--border-hairline)]">
 				{#each projectData.wells as w (w.well_id)}
-					{@const isChecked = selectedWells.includes(w.name)}
+					{@const isChecked = mp.selectedWells.includes(w.name)}
 					{@const status = checkWellReady(w)}
 					<label
 						class="flex items-center justify-between px-2 py-1 text-xs cursor-pointer hover:bg-[var(--bg-subtle)] {isChecked
@@ -329,7 +331,7 @@
 							<input
 								type="checkbox"
 								checked={isChecked}
-								disabled={isChecked && selectedWells.length <= 1}
+								disabled={isChecked && mp.selectedWells.length <= 1}
 								onchange={() => toggleWell(w.name)}
 								class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 							/>
@@ -364,24 +366,24 @@
 		<!-- 3. Zone & Flag Filtering -->
 		<ParameterSection
 			title="2. Zone & Flag Filters"
-			badge={selectedZones.length > 0 ? `${selectedZones.length} Zones` : 'All Zones'}
+			badge={workbench.selectedZones.length > 0 ? `${workbench.selectedZones.length} Zones` : 'All Zones'}
 		>
 			{#if projectData.allZones.length > 0}
 				<div class="mb-1 flex items-center justify-between text-[10px]">
 					<span class="font-medium text-[var(--text-secondary)]">Include Zones (empty = all):</span>
-					{#if selectedZones.length > 0}
+					{#if workbench.selectedZones.length > 0}
 						<button
 							type="button"
-							onclick={() => (selectedZones = [])}
+							onclick={() => (workbench.selectedZones = [])}
 							class="text-[10px] font-semibold text-[var(--accent-primary)] hover:underline"
 						>
-							Clear ({selectedZones.length})
+							Clear ({workbench.selectedZones.length})
 						</button>
 					{/if}
 				</div>
 				<div class="mb-2 flex flex-wrap gap-1">
 					{#each projectData.allZones as z}
-						{@const active = selectedZones.includes(z)}
+						{@const active = workbench.selectedZones.includes(z)}
 						<button
 							type="button"
 							onclick={() => toggleZone(z)}
@@ -400,7 +402,7 @@
 				<label class="flex items-center gap-2 py-0.5 text-[11px] cursor-pointer">
 					<input
 						type="checkbox"
-						bind:checked={excludeCoal}
+						bind:checked={mp.excludeCoal}
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span>Exclude Coal Intervals (<code>COAL_FLAG=1</code> or <code>VCOAL&gt;0.5</code>)</span>
@@ -408,7 +410,7 @@
 				<label class="flex items-center gap-2 py-0.5 text-[11px] cursor-pointer">
 					<input
 						type="checkbox"
-						bind:checked={excludeBadHole}
+						bind:checked={mp.excludeBadHole}
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span>Exclude Bad Hole Washouts (<code>BAD_HOLE=1</code>)</span>
@@ -416,7 +418,7 @@
 				<label class="flex items-center gap-2 py-0.5 text-[11px] cursor-pointer">
 					<input
 						type="checkbox"
-						bind:checked={excludeTight}
+						bind:checked={mp.excludeTight}
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span>Exclude Tight Non-Reservoir (<code>TIGHT_FLAG=1</code>)</span>
@@ -427,10 +429,10 @@
 				<div class="mt-1.5 border-t border-[var(--border-hairline)] pt-1.5">
 					<div class="mb-1 flex items-center justify-between text-[10px]">
 						<span class="font-medium text-[var(--text-secondary)]">Filter by Rock Type (<code>ROCK_FLAG</code>):</span>
-						{#if selectedRockFlags.length > 0}
+						{#if mp.selectedRockFlags.length > 0}
 							<button
 								type="button"
-								onclick={() => (selectedRockFlags = [])}
+								onclick={() => (mp.selectedRockFlags = [])}
 								class="text-[10px] font-semibold text-[var(--accent-primary)] hover:underline"
 							>
 								All RTs
@@ -439,7 +441,7 @@
 					</div>
 					<div class="flex gap-1">
 						{#each [1, 2, 3, 4] as rf}
-							{@const isRfActive = selectedRockFlags.includes(rf)}
+							{@const isRfActive = mp.selectedRockFlags.includes(rf)}
 							<button
 								type="button"
 								onclick={() => toggleRockFlag(rf)}
@@ -458,11 +460,11 @@
 		<!-- 4. Hyperparameters & Global Bundle Target -->
 		<ParameterSection
 			title="3. Calibration & Global Save Target"
-			badge={`CI=${Math.round((1 - conformalAlpha) * 100)}%`}
+			badge={`CI=${Math.round((1 - mp.conformalAlpha) * 100)}%`}
 		>
 			<NumericScrubber
 				label="Conformal Alpha (α)"
-				bind:value={conformalAlpha}
+				bind:value={mp.conformalAlpha}
 				min={0.05}
 				max={0.4}
 				step={0.02}
@@ -470,7 +472,7 @@
 			/>
 			<NumericScrubber
 				label="Validation Holdout Split"
-				bind:value={testSize}
+				bind:value={mp.testSize}
 				min={0.1}
 				max={0.4}
 				step={0.05}
@@ -478,7 +480,7 @@
 			/>
 			<NumericScrubber
 				label="RF Trees (n_estimators)"
-				bind:value={nEstimators}
+				bind:value={mp.nEstimators}
 				min={10}
 				max={200}
 				step={10}
@@ -486,7 +488,7 @@
 			/>
 			<NumericScrubber
 				label="Max Tree Depth"
-				bind:value={maxDepth}
+				bind:value={mp.maxDepth}
 				min={4}
 				max={25}
 				step={1}
@@ -501,7 +503,7 @@
 					<span class="text-[11px] text-[var(--text-secondary)]">Suite Key:</span>
 					<input
 						type="text"
-						bind:value={suiteKey}
+						bind:value={mp.suiteKey}
 						placeholder="e.g. clastic, carbonate, volve_v2"
 						class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs font-medium text-[var(--text-primary)]"
 					/>
@@ -510,7 +512,7 @@
 					<span class="text-[11px] text-[var(--text-secondary)]">Dropdown Label:</span>
 					<input
 						type="text"
-						bind:value={suiteLabel}
+						bind:value={mp.suiteLabel}
 						placeholder="Display name in Single Well > Litho"
 						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs font-medium text-[var(--text-primary)]"
 					/>
@@ -519,12 +521,12 @@
 					<button
 						type="button"
 						onclick={() => {
-							suiteKey = architecture;
-							suiteLabel = `${architecture === 'carbonate' ? 'Carbonate' : 'Clastic'} (Pre-Trained PIML)`;
+							mp.suiteKey = mp.architecture;
+							mp.suiteLabel = `${mp.architecture === 'carbonate' ? 'Carbonate' : 'Clastic'} (Pre-Trained PIML)`;
 						}}
 						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
 					>
-						Use Default '{architecture}' Key
+						Use Default '{mp.architecture}' Key
 					</button>
 				</div>
 			</div>

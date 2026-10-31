@@ -299,9 +299,23 @@ async def estimate_hc_correction(inputs: LithologyHCCorrectionInput):
         input_dict, required_points=["dry_sand_point", "dry_clay_point", "fluid_point"]
     )
     df = _to_dataframe(input_dict["data"], columns=["nphi", "rhob"])
+    vsh_gr_arr = None
+    if any(isinstance(r, dict) and r.get("vsh_gr") is not None for r in input_dict["data"]):
+        vsh_gr_arr = np.clip(
+            np.array(
+                [
+                    float(r["vsh_gr"]) if isinstance(r, dict) and r.get("vsh_gr") is not None else 0.0
+                    for r in input_dict["data"]
+                ],
+                dtype=float,
+            ),
+            0.0,
+            1.0,
+        )
     nphihc, rhobhc, _ = neu_den_xplot_hc_correction(
         df["nphi"],
         df["rhob"],
+        vsh_gr=vsh_gr_arr,
         dry_min1_point=input_dict["dry_sand_point"],
         dry_clay_point=input_dict["dry_clay_point"],
         corr_angle=input_dict["corr_angle"],

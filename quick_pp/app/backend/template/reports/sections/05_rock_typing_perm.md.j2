@@ -1,0 +1,43 @@
+# 5. Rock Typing & Permeability Modeling
+
+### 5.1 Hydraulic Flow Units (FZI / DRT) & Permeability Transforms
+
+Rock typing and continuous permeability ($K$) prediction were established using **{{ rt_summary.basis if rt_summary else 'Routine Core Analysis (RCA) & Log-Derived Hydraulic Flow Units' }}** via the Reservoir Quality Index ($RQI$), Normalized Porosity ($\phi_z$), Flow Zone Indicator ($FZI$), and Discrete Rock Typing ($DRT$) formulation:
+
+$$RQI = 0.0314 \sqrt{\frac{K}{\phi_e}}, \quad \phi_z = \frac{\phi_e}{1 - \phi_e}, \quad FZI = \frac{RQI}{\phi_z}, \quad DRT = \text{round}(2 \ln(FZI) + 10.6)$$
+
+| Rock Type | $DRT$ / Class | FZI Range ($\mu\text{m}$) | Samples ($n$) | Sample Share (%) | Semi-Log Porosity-Permeability Transform | Regression $R^2$ |
+| :--- | :---: | :---: | :---: | :---: | :--- | :---: |
+{% for rt in rock_types %}
+| **{{ rt.name }}** | {{ rt.code }} | {{ rt.fzi_range }} | {{ rt.n_samples if rt.n_samples is defined else "—" }} | {{ "%.1f"|format(rt.share_pct) }}% | $\log_{10}(K) = {{ rt.slope }} \cdot \phi_e + ({{ rt.intercept }})$ | {{ "%.2f"|format(rt.r2) }} |
+{% endfor %}
+
+{% if poro_params.core_perm_count > 0 or poro_params.core_shift_applied or poro_params.core_corrected %}
+### 5.2 Core Permeability Calibration (`PERM` $\times$ `CPERM`) & Data Lineage
+
+| Calibration / Lineage Parameter | Symbol | Value | Unit | Basis / Reference |
+| :--- | :---: | :---: | :---: | :--- |
+{% if poro_params.core_perm_count > 0 %}
+| Overlapping Core Perm Plugs | $N_{perm,cal}$ | {{ poro_params.core_perm_count }} | plugs | Target-Zone `PERM` $\times$ `CPERM` Parity |
+| Log-Core Permeability Parity | $R^2$ / $\text{RMSE}_{\log_{10}}$ | {{ "%.2f"|format(poro_params.core_perm_r2) }} / {{ "%.3f"|format(poro_params.core_perm_log_rmse) }} | $\text{dec}$ | Multiplicative Factor Error $= {{ "%.2f"|format(poro_params.core_perm_factor_err) }}\times$ |
+{% endif %}
+{% if poro_params.core_shift_applied %}
+| Core-to-Log Depth Shift | $\Delta d_{core}$ / $s_{core}$ | {{ "%+.2f"|format(poro_params.core_shift_delta) }} m / {{ "%.3f"|format(poro_params.core_stretch_factor) }}$\times$ | $\text{m}$ | {{ poro_params.core_shift_mode_label }} (`RAW_DEPTH` $\to$ `DEPTH`, `CPERM_UNSHIFTED` $\to$ `CPERM`) |
+{% endif %}
+{% if poro_params.core_corrected %}
+| Overburden & Klinkenberg $K$ | $\sigma_{eff}$ / $P_m$ | {{ "%.0f"|format(poro_params.net_confining_stress) }} / {{ "%.1f"|format(poro_params.mean_pore_pressure) }} | $\text{psi}$ | `CPERM_AIR` $\to$ `CPERM` ($c_k = {{ "%.1e"|format(poro_params.perm_compaction_coeff) }}\text{ psi}^{-1}$, {{ poro_params.klinkenberg_method }}) |
+{% endif %}
+{% endif %}
+
+{% if include_ai_commentary and ai_commentary.rock_typing_narrative %}
+{{ ai_commentary.rock_typing_narrative }}
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+{% if assets.perm_crossplot %}
+
+![Figure 5.1: Core/Log Porosity-Permeability Crossplot by Rock Type & Stratigraphic Modified Lorenz Plot]({{ assets.perm_crossplot }})
+{% endif %}

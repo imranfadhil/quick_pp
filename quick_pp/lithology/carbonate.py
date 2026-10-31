@@ -152,6 +152,11 @@ class Carbonate:
             f"(model: {model}, type: {carbonate_type})"
         )
 
+        nphi_arr = np.asarray(nphi, dtype=float)
+        rhob_arr = np.asarray(rhob, dtype=float)
+        if nphi_arr.shape != rhob_arr.shape:
+            raise ValueError("nphi and rhob must have the same shape")
+
         if model == "single":
             A = self.dry_clay_point
             C = (
@@ -163,18 +168,14 @@ class Carbonate:
             A = self.dry_dolo_point
             C = self.dry_calc_point
         D = self.fluid_point
-        E = zip(nphi, rhob, strict=True)
         rocklithofrac = length_a_b(A, C)
 
-        vlitho1 = np.empty(0)
-        vlitho2 = np.empty(0)
-        for _, point in enumerate(E):
-            var_pt = line_intersection((A, C), (D, point))
-            projlithofrac = length_a_b(var_pt, A)
-            vfrac = projlithofrac / rocklithofrac
+        var_pt = line_intersection((A, C), (D, (nphi_arr, rhob_arr)))
+        projlithofrac = length_a_b(var_pt, A)
+        vfrac = projlithofrac / rocklithofrac
 
-            vlitho1 = np.append(vlitho1, (1 - vfrac))
-            vlitho2 = np.append(vlitho2, vfrac)
+        vlitho1 = 1.0 - vfrac
+        vlitho2 = vfrac
 
         logger.debug(f"Neutron-density calculation completed for {len(vlitho1)} points")
         return vlitho1, vlitho2
@@ -191,21 +192,22 @@ class Carbonate:
         """
         logger.debug("Calculating lithology fractions using density-PEF crossplot")
 
-        A = (Config.MINERALS_LOG_VALUE["PEF_CALCITE"], self.dry_calc_point[1])
-        C = (Config.MINERALS_LOG_VALUE["PEF_DOLOMITE"], self.dry_dolo_point[1])
+        pef_arr = np.asarray(pef, dtype=float)
+        rhob_arr = np.asarray(rhob, dtype=float)
+        if pef_arr.shape != rhob_arr.shape:
+            raise ValueError("pef and rhob must have the same shape")
+
+        A = (Config.MINERALS_LOG_VALUE["CALCITE"]["PEF"], self.dry_calc_point[1])
+        C = (Config.MINERALS_LOG_VALUE["DOLOMITE"]["PEF"], self.dry_dolo_point[1])
         D = self.fluid_point
-        E = zip(pef, rhob, strict=True)
         rocklithofrac = length_a_b(A, C)
 
-        vcalc = np.empty(0)
-        vdolo = np.empty(0)
-        for _, point in enumerate(E):
-            var_pt = line_intersection((A, C), (D, point))
-            projlithofrac = length_a_b(var_pt, A)
-            dolo_frac = projlithofrac / rocklithofrac
+        var_pt = line_intersection((A, C), (D, (pef_arr, rhob_arr)))
+        projlithofrac = length_a_b(var_pt, A)
+        dolo_frac = projlithofrac / rocklithofrac
 
-            vcalc = np.append(vcalc, (1 - dolo_frac))
-            vdolo = np.append(vdolo, dolo_frac)
+        vcalc = 1.0 - dolo_frac
+        vdolo = dolo_frac
 
         logger.debug(f"Density-PEF calculation completed for {len(vcalc)} points")
         return vcalc, vdolo
@@ -231,7 +233,7 @@ class Carbonate:
 
         nphicc = (nphi - vcld * self.dry_clay_point[0]) / (1 - vcld)
         rhobcc = (rhob - vcld * self.dry_clay_point[1]) / (1 - vcld)
-        pefcc = (pef - vcld * Config.MINERALS_LOG_VALUE["PEF_SH"]) / (1 - vcld)
+        pefcc = (pef - vcld * Config.MINERALS_LOG_VALUE["SHALE"]["PEF"]) / (1 - vcld)
 
         logger.debug(f"Clay correction completed. Input length: {len(nphi)}")
         return nphicc, rhobcc, pefcc

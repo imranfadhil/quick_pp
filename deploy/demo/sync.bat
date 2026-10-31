@@ -58,44 +58,36 @@ set SSH_RETRIES=5
 
 REM -- Package code + minimal Volve/Costa seed files -------------------
 echo [1/5] Packaging demo project and Volve/Costa seed files...
-cd /d "%~dp0..\.."
-if exist "%TEMP%\%PROJECT_NAME%.tar" del "%TEMP%\%PROJECT_NAME%.tar"
-tar -cf "%TEMP%\%PROJECT_NAME%.tar" ^
+set "TAR_TMP=%TEMP%\%PROJECT_NAME%.tar"
+if defined PROJECT_NAME if exist "%TAR_TMP%" del "%TAR_TMP%"
+pushd "%~dp0..\.."
+tar -cf "%TAR_TMP%" ^
     --exclude="node_modules" ^
     --exclude=".svelte-kit" ^
     --exclude="quick_pp/app/frontend/build" ^
-    --exclude=".git" ^
-    --exclude=".venv" ^
-    --exclude="venv" ^
     --exclude="__pycache__" ^
     --exclude=".pytest_cache" ^
     --exclude=".mypy_cache" ^
-    --exclude="dist" ^
-    --exclude="build" ^
     --exclude="*.egg-info" ^
-    --exclude="docs" ^
-    --exclude="data" ^
-    --exclude="uploads" ^
-    --exclude="mlruns" ^
     --exclude="quick_pp/app/docker/data" ^
-    --exclude=".env" ^
-    --exclude="deploy/demo/config.bat" ^
     --exclude="*.log" ^
-    --exclude="notebooks/*.ipynb" ^
-    --exclude="notebooks/data/02_interim" ^
-    --exclude="notebooks/data/03_primary" ^
-    --exclude="notebooks/data/04_project" ^
     pyproject.toml README.md quick_pp ^
     deploy/demo/Dockerfile ^
     deploy/demo/docker-compose.yaml ^
     deploy/demo/nginx.conf ^
     deploy/demo/start_demo.sh ^
     deploy/demo/seed_demo.py ^
-    notebooks/data/01_raw/VOLVE ^
-    notebooks/data/01_raw/COSTA ^
+    notebooks/data/01_raw/VOLVE/15-9-19-A.las ^
+    notebooks/data/01_raw/VOLVE/VOLVE_15-9_Surveys.csv ^
+    notebooks/data/01_raw/COSTA/HW-3.las ^
+    notebooks/data/01_raw/COSTA/HW-4.las ^
+    notebooks/data/01_raw/COSTA/HW-5.las ^
+    notebooks/data/01_raw/COSTA/HW_core_data_all.csv ^
     notebooks/data/01_raw/36_7-3.las ^
     notebooks/data/01_raw/formation_pressure_data.csv
-if %ERRORLEVEL% neq 0 (
+set TAR_RC=%ERRORLEVEL%
+popd
+if %TAR_RC% neq 0 (
     echo [ERROR] tar packaging failed.
     exit /b 1
 )
@@ -112,9 +104,9 @@ echo [OK] Remote directory and swap verified.
 
 REM -- Upload archive --------------------------------------------------
 echo [3/5] Uploading archive to %REMOTE_DIR%...
-call :ssh_pipe "%TEMP%\%PROJECT_NAME%.tar" "cat > %REMOTE_DIR%/demo_app.tar"
+call :ssh_pipe "%TAR_TMP%" "cat > %REMOTE_DIR%/demo_app.tar"
 set SCP_RC=%ERRORLEVEL%
-del "%TEMP%\%PROJECT_NAME%.tar" 2>nul
+if defined TAR_TMP if exist "%TAR_TMP%" del "%TAR_TMP%" 2>nul
 if not %SCP_RC% equ 0 (
     echo [ERROR] Upload failed.
     exit /b 1
@@ -143,8 +135,15 @@ REM -- Build & Start isolated demo compose stack -----------------------
 echo [5/5] Starting isolated demo stack ^(project: %COMPOSE_PROJECT%^)...
 set "COMPOSE_CMD=docker compose -p %COMPOSE_PROJECT% --env-file %REMOTE_DIR%/.env -f %REMOTE_DIR%/deploy/demo/docker-compose.yaml"
 
-set "REMOTE_CMD=!COMPOSE_CMD! up -d"
-if %BUILD% equ 1 set "REMOTE_CMD=!REMOTE_CMD! --build"
+REM Rebuild/update only `qpp-demo` (--no-deps) and keep `demo-quicktunnel` running (--no-recreate --no-deps)
+REM so the *.trycloudflare.com HTTPS URL does not change across sync.bat / sync.bat --restart runs.
+if "%1"=="--from-deploy" (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --build"
+) else if %BUILD% equ 1 (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --build --no-deps qpp-demo && !COMPOSE_CMD! up -d --no-recreate --no-deps demo-quicktunnel"
+) else (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-recreate --no-deps qpp-demo demo-quicktunnel"
+)
 
 call :ssh_run "!REMOTE_CMD!"
 if %ERRORLEVEL% neq 0 (
@@ -172,7 +171,7 @@ for /l %%n in (1,1,15) do (
         if "!QUICK_URL!"=="" ping -n 3 127.0.0.1 >nul 2>&1
     )
 )
-del "%TEMP%\%PROJECT_NAME%-quick-url.txt" 2>nul
+if defined PROJECT_NAME if exist "%TEMP%\%PROJECT_NAME%-quick-url.txt" del "%TEMP%\%PROJECT_NAME%-quick-url.txt" 2>nul
 
 echo.
 if not "!QUICK_URL!"=="" (

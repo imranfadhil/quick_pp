@@ -5,8 +5,67 @@ export type SingleWellStep =
 	| 'perm'
 	| 'saturation'
 	| 'ressum'
-	| 'scal';
-export type MultiWellStep = 'inventory' | 'rock-typing' | 'perm-transform' | 'shf' | 'ml-training';
+	| 'scal'
+	| 'report';
+export type MultiWellStep =
+	| 'inventory'
+	| 'qaqc'
+	| 'rock-typing'
+	| 'perm-transform'
+	| 'swirr-corr'
+	| 'shf'
+	| 'rt-classifier'
+	| 'ml-training'
+	| 'fpt'
+	| 'report';
+
+export type ReportType = 'FDP_FULL' | 'SINGLE_WELL_CPI' | 'QAQC_SUMMARY' | 'RESSUM_ONLY';
+
+export interface ReportSectionConfig {
+	section_id: string;
+	title: string;
+	enabled: boolean;
+	include_plots: boolean;
+	include_tables: boolean;
+	custom_notes: string;
+}
+
+export interface ReportConfigParams {
+	reportType: ReportType;
+	reportTitle: string;
+	author: string;
+	company: string;
+	fieldName: string;
+	includeAiSummary: boolean;
+	cutoffs: { vsh: number; phie: number; sw: number };
+	sections: ReportSectionConfig[];
+}
+
+export interface ActiveReportState {
+	report_id: string;
+	project_id: string;
+	project_name?: string;
+	title: string;
+	author: string;
+	report_type: string;
+	well_names: string[];
+	sections: Array<{
+		section_id: string;
+		title: string;
+		enabled: boolean;
+		include_ai_commentary?: boolean;
+		custom_notes?: string | null;
+	}>;
+	section_contents: Record<string, string>;
+	markdown_content: string;
+	html_content: string;
+	asset_urls: Record<string, any>;
+	pdf_download_url?: string | null;
+	print_html_url?: string | null;
+	context_summary: Record<string, any>;
+	created_at: string;
+	updated_at?: string | null;
+}
 
 export type BadholeTreatmentMode = 'none' | 'vsh_gr' | 'interpolate' | 'ignore';
 
@@ -31,12 +90,21 @@ export interface BadholeFlaggingParams {
 export interface LithoEndpointParams {
 	model: 'ssc' | 'multi_mineral' | 'vsh_gr';
 	porosityMethod: 'neu_den' | 'den';
+	logCorrectionMode: 'none' | 'hc' | 'den';
 	useHcCorrected: boolean;
 	enableHcCorrection: boolean;
 	rhoWater: number;
 	rhoHc: number;
 	hiHc: number;
 	hcBuffer: number;
+	hcFlagMode: 'strict' | 'vsh_gr';
+	hcVshTol: number;
+	denCorrScope: 'full' | 'badhole_only' | 'vsh_mismatch';
+	denCorrSyncEndpoints: boolean;
+	denCorrRhoMa: number;
+	denCorrPhinSh: number;
+	denCorrPhidSh: number;
+	denCorrMismatchThreshold: number;
 	drySandNphi: number;
 	drySandRhob: number;
 	drySiltNphi: number;
@@ -55,6 +123,18 @@ export interface LithoEndpointParams {
 	coalWindowSize: number;
 	coalTrendFactor: number;
 	badholeTreatment: BadholeTreatmentMode;
+}
+
+export interface ThomasStieberParams {
+	enabled: boolean;
+	useInPerm: boolean;
+	useInSaturation: boolean;
+	drySandPoro: number;
+	dryShalePoro: number;
+	rsand: number;
+	rvShale: number;
+	rhShale: number;
+	theta: number;
 }
 
 export interface SaturationModelParams {
@@ -95,6 +175,27 @@ export interface ScalModelParams {
 	pc_exponent: number;
 	pc_max: number;
 	n_points: number;
+	// Core Overburden & Klinkenberg Correction Parameters
+	core_lithology: 'sandstone' | 'friable_sandstone' | 'carbonate';
+	net_confining_stress: number;
+	mean_pore_pressure: number;
+	compaction_coeff: number;
+	perm_compaction_coeff: number;
+	klinkenberg_method: 'jones' | 'heithaus';
+	core_corrected: boolean;
+	core_poro_amb_mean: number | null;
+	core_poro_res_mean: number | null;
+	core_perm_air_mean: number | null;
+	core_perm_liq_mean: number | null;
+	// Lab-to-Reservoir Pc Scaling Parameters
+	pc_lab_input: number;
+	ift_lab: number;
+	theta_lab: number;
+	ift_res: number;
+	theta_res: number;
+	pc_res_output: number | null;
+	pc_scale_factor: number | null;
+	pc_scaling_applied: boolean;
 }
 
 export interface ScalComputedResult {
@@ -105,6 +206,46 @@ export interface ScalComputedResult {
 	fw: number[];
 	swofTable: Array<{ SW: number; KRW: number; KROW: number; PCOW: number }>;
 	swofKeyword: string;
+}
+
+export interface EnvCorrectionParams {
+	bitsizeDefault: number;
+	mudWeight: number;
+	surfaceTemp: number;
+	tempGrad: number;
+	salinityPpm: number;
+}
+
+export interface PermModelParams {
+	method: 'choo' | 'timur' | 'tixier' | 'coates' | 'kozeny_carman';
+	m: number;
+	A: number;
+	B: number;
+	C: number;
+	s: number;
+	swirr: number;
+}
+
+export interface ResSumParams {
+	vshMax: number;
+	phitMin: number;
+	swtMax: number;
+	includeUpscaling: boolean;
+	byZone: boolean;
+	cellSize: number;
+	permMethod: 'geometric' | 'arithmetic' | 'harmonic' | 'power_law';
+	omega: number;
+	includeUncertainty: boolean;
+	nSamples: number;
+	uncMetric: 'stoiip' | 'net' | 'phit' | 'swt' | 'bvhc';
+	areaMean: number;
+	areaStd: number;
+	thickMean: number;
+	thickStd: number;
+	ntgMean: number;
+	poroMean: number;
+	swMean: number;
+	boP50: number;
 }
 
 class WorkbenchState {
@@ -125,9 +266,48 @@ class WorkbenchState {
 
 	// Right pane view mode
 	rightPaneTab = $state<'crossplot' | 'grid' | 'split'>('split');
+	crossplotTemplateOverride = $state<
+		| 'auto'
+		| 'nphi-rhob'
+		| 'thomas-stieber'
+		| 'phi-k'
+		| 'pickett'
+		| 'histogram'
+		| 'mw-distribution'
+		| 'swirr-fit'
+		| 'shf'
+		| 'shf'
+		| 'relperm'
+		| 'core-qc'
+		| 'vsh-qc'
+	>('auto');
 
-	// Active curve selected in QAQC for histogram inspection
+	// Active curve selected in QAQC for histogram / multi-well distribution inspection
 	selectedQaqcCurve = $state<string>('GR');
+	scalSubMode = $state<'static' | 'relperm'>('static');
+	swirrCrossplotTab = $state<'swirr-corr' | 'pc-qc' | 'scal-fit' | 'relperm'>('swirr-corr');
+	coreQcView = $state<'dual' | 'poro' | 'perm' | 'depth-error'>('dual');
+	vshQcView = $state<'dual' | 'gr-fit' | 'depth-error'>('dual');
+	vshCalibScope = $state<'shale_sand' | 'shale_only' | 'all' | 'brushed'>('shale_sand');
+	vshShaleCutoff = $state<number>(0.6);
+	vshSandCutoff = $state<number>(0.2);
+
+	// Multi-well QAQC distribution & visualization controls
+	mwQaqcGroupBy = $state<'well' | 'zone' | 'well_zone'>('well');
+	mwQaqcPlotType = $state<'box' | 'violin' | 'histogram' | 'cdf' | 'nphi-rhob'>('box');
+	mwQaqcCompareMode = $state<'none' | 'norm' | 'corr'>('norm');
+	mwQaqcExcludeBadhole = $state<boolean>(false);
+	mwQaqcLogScale = $state<boolean>(false);
+
+	// Multi-well Center Pane view ('logs' | 'stick-plot') & Stick Plot controls
+	centerPaneMultiWellView = $state<'logs' | 'stick-plot'>('logs');
+	stickPlotSortMode = $state<'project' | 'crest-tvd' | 'chronological' | 'custom'>('crest-tvd');
+	stickPlotCustomOrder = $state<string[]>([]);
+	stickPlotZoneFilter = $state<string>('ALL');
+	stickPlotShowPhit = $state<boolean>(false);
+	stickPlotShowContacts = $state<boolean>(true);
+	stickPlotShowTops = $state<boolean>(true);
+	stickPlotShowPerfs = $state<boolean>(true);
 
 	// Global modal / drawer flags
 	importerOpen = $state<boolean>(false);
@@ -144,13 +324,22 @@ class WorkbenchState {
 	// Shared interactive parameters between Left Pane Inspectors & Right Pane Crossplot
 	lithoParams = $state<LithoEndpointParams>({
 		model: 'ssc',
-		porosityMethod: 'neu_den',
-		useHcCorrected: true,
-		enableHcCorrection: true,
+		porosityMethod: 'den',
+		logCorrectionMode: 'none',
+		useHcCorrected: false,
+		enableHcCorrection: false,
 		rhoWater: 1.0,
 		rhoHc: 0.8,
 		hiHc: 0.9,
 		hcBuffer: 0.0,
+		hcFlagMode: 'strict',
+		hcVshTol: 0.05,
+		denCorrScope: 'vsh_mismatch',
+		denCorrSyncEndpoints: true,
+		denCorrRhoMa: 2.65,
+		denCorrPhinSh: 0.33,
+		denCorrPhidSh: 0.05,
+		denCorrMismatchThreshold: 0.15,
 		drySandNphi: -0.02,
 		drySandRhob: 2.65,
 		drySiltNphi: 0.12,
@@ -165,10 +354,22 @@ class WorkbenchState {
 		minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'],
 		enableCoalFlagging: true,
 		coalRhobMax: 2.0,
-		coalNphiMin: 0.30,
+		coalNphiMin: 0.3,
 		coalWindowSize: 41,
 		coalTrendFactor: 0.05,
 		badholeTreatment: 'vsh_gr'
+	});
+
+	tsParams = $state<ThomasStieberParams>({
+		enabled: false,
+		useInPerm: true,
+		useInSaturation: true,
+		drySandPoro: 0.28,
+		dryShalePoro: 0.1,
+		rsand: 20.0,
+		rvShale: 4.0,
+		rhShale: 1.5,
+		theta: 0.0
 	});
 
 	badholeParams = $state<BadholeFlaggingParams>({
@@ -226,10 +427,242 @@ class WorkbenchState {
 		pc_entry: 1.5,
 		pc_exponent: 2.0,
 		pc_max: 50.0,
-		n_points: 25
+		n_points: 25,
+		core_lithology: 'sandstone',
+		net_confining_stress: 3500,
+		mean_pore_pressure: 45,
+		compaction_coeff: 6e-6,
+		perm_compaction_coeff: 3e-5,
+		klinkenberg_method: 'jones',
+		core_corrected: false,
+		core_poro_amb_mean: null,
+		core_poro_res_mean: null,
+		core_perm_air_mean: null,
+		core_perm_liq_mean: null,
+		pc_lab_input: 25.0,
+		ift_lab: 480.0,
+		theta_lab: 140.0,
+		ift_res: 30.0,
+		theta_res: 30.0,
+		pc_res_output: null,
+		pc_scale_factor: null,
+		pc_scaling_applied: false
 	});
 
 	scalResult = $state<ScalComputedResult | null>(null);
+
+	envCorrParams = $state<EnvCorrectionParams>({
+		bitsizeDefault: 8.5,
+		mudWeight: 9.5,
+		surfaceTemp: 75.0,
+		tempGrad: 1.5,
+		salinityPpm: 30000.0
+	});
+
+	permParams = $state<PermModelParams>({
+		method: 'choo',
+		m: 2.0,
+		A: 1000000,
+		B: 3.0,
+		C: 2.0,
+		s: 0.01,
+		swirr: 0.2
+	});
+
+	resSumParams = $state<ResSumParams>({
+		vshMax: 0.4,
+		phitMin: 0.05,
+		swtMax: 0.75,
+		includeUpscaling: true,
+		byZone: false,
+		cellSize: 2.0,
+		permMethod: 'geometric',
+		omega: 0.33,
+		includeUncertainty: false,
+		nSamples: 300,
+		uncMetric: 'stoiip',
+		areaMean: 640.0,
+		areaStd: 80.0,
+		thickMean: 25.0,
+		thickStd: 4.0,
+		ntgMean: 0.65,
+		poroMean: 0.18,
+		swMean: 0.28,
+		boP50: 1.22
+	});
+
+	// FDP Petrophysical Report Generation Workbench State
+	reportConfig = $state<ReportConfigParams>({
+		reportType: 'FDP_FULL',
+		reportTitle: 'Field Development Plan (FDP) Petrophysical Evaluation Report',
+		author: 'Petrophysics Team',
+		company: 'Subsurface Asset Team',
+		fieldName: '',
+		includeAiSummary: true,
+		cutoffs: { vsh: 0.4, phie: 0.08, sw: 0.65 },
+		sections: [
+			{
+				section_id: 'exec_summary',
+				title: '1. Executive Summary',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'data_inventory',
+				title: '2. Well & Data Inventory',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'qaqc',
+				title: '3. Log QAQC & Conditioning',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'litho_poro',
+				title: '4. Lithology & Porosity Evaluation',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'rock_perm',
+				title: '5. Rock Typing & Permeability Modeling',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'saturation',
+				title: '6. Water Saturation & Fluid Contacts',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'shf_scal',
+				title: '7. Saturation Height Function (SHF) & SCAL',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'ressum_uncert',
+				title: '8. Reservoir Summary (Net Pay) & Uncertainty',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'upscaling',
+				title: '9. Geocellular Model Handover & Upscaling',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'appendix_cpi',
+				title: '10. Appendices (Well CPI Plots & Audit Trail)',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			}
+		]
+	});
+
+	// Single-Well CPI Dossier Configuration (streamlined 6 chapters)
+	singleWellReportConfig = $state<ReportConfigParams>({
+		reportType: 'SINGLE_WELL_CPI',
+		reportTitle: 'Single-Well Petrophysical CPI & Evaluation Dossier',
+		author: 'Petrophysics Team',
+		company: 'Subsurface Asset Team',
+		fieldName: '',
+		includeAiSummary: true,
+		cutoffs: { vsh: 0.4, phie: 0.08, sw: 0.65 },
+		sections: [
+			{
+				section_id: 'exec_summary',
+				title: '1. Well Evaluation Summary',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'qaqc',
+				title: '2. Borehole QA/QC & Log Conditioning',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'litho_poro',
+				title: '3. Lithology, Porosity & Core Parity',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'saturation',
+				title: '4. Water Saturation & Fluid Contacts',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'ressum_uncert',
+				title: '5. Zonal Net Pay Summary & Cutoffs',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'appendix_cpi',
+				title: '6. 6-Track Composite CPI Log',
+				enabled: true,
+				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			}
+		]
+	});
+
+	singleWellReport = $state<ActiveReportState | null>(null);
+	multiWellReport = $state<ActiveReportState | null>(null);
+
+	get activeReport(): ActiveReportState | null {
+		return this.scope === 'single-well' ? this.singleWellReport : this.multiWellReport;
+	}
+
+	set activeReport(val: ActiveReportState | null) {
+		if (this.scope === 'single-well') {
+			this.singleWellReport = val;
+		} else {
+			this.multiWellReport = val;
+		}
+	}
+
+	reportViewMode = $state<'preview' | 'markdown' | 'split'>('preview');
+	selectedReportSectionId = $state<string>('exec_summary');
+	isGeneratingReport = $state<boolean>(false);
 
 	clearFilters() {
 		this.depthFilter = null;

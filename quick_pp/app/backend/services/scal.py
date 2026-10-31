@@ -112,11 +112,26 @@ class CoreCorrectionsInput(BaseModel):
     compaction_coeff: float = Field(
         4e-6, gt=0.0, description="Pore volume compaction coefficient (1/psi)"
     )
+    perm_compaction_coeff: Optional[float] = Field(
+        default=None,
+        description="Permeability compaction coefficient (1/psi); defaults to 5 * compaction_coeff if omitted",
+    )
+    ambient_stress: float = Field(
+        default=400.0, ge=0.0, description="Ambient laboratory confining stress (psi)"
+    )
+    compaction_method: str = Field(
+        default="exponential",
+        description="Overburden compaction model: 'exponential' or 'power_law'",
+    )
+    klinkenberg_method: str = Field(
+        default="jones",
+        description="Klinkenberg slippage correlation: 'jones' or 'heithaus'",
+    )
     oven_dried: bool = Field(
         False, description="Whether core plugs were oven-dried prior to Dean-Stark"
     )
     replace_ori: bool = Field(
-        False, description="Overwrite CPORE/CPERM in-place instead of preserving _ORI columns"
+        False, description="Overwrite CPORE/CPERM in-place instead of preserving _AMB/_AIR columns"
     )
     data: List[Dict[str, Any]] = Field(..., description="Core/log records")
 
@@ -127,6 +142,18 @@ class PcLabToReservoirInput(BaseModel):
     theta_lab: float = Field(0.0, ge=0.0, le=180.0, description="Laboratory contact angle (deg)")
     ift_res: float = Field(30.0, gt=0.0, description="Reservoir interfacial tension (dynes/cm)")
     theta_res: float = Field(30.0, ge=0.0, le=180.0, description="Reservoir contact angle (deg)")
+    phi_amb: Optional[Union[float, List[float]]] = Field(
+        default=None, description="Optional ambient porosity (v/v) for Leverett-J stress correction"
+    )
+    phi_res: Optional[Union[float, List[float]]] = Field(
+        default=None, description="Optional reservoir porosity (v/v) for Leverett-J stress correction"
+    )
+    k_amb: Optional[Union[float, List[float]]] = Field(
+        default=None, description="Optional ambient permeability (mD) for Leverett-J stress correction"
+    )
+    k_res: Optional[Union[float, List[float]]] = Field(
+        default=None, description="Optional reservoir permeability (mD) for Leverett-J stress correction"
+    )
 
 
 @router.post(
@@ -271,12 +298,21 @@ async def apply_core_corrections_endpoint(inputs: CoreCorrectionsInput):
     """Correct ambient laboratory core plug porosity, permeability, and saturation to reservoir conditions."""
     try:
         df = pd.DataFrame(inputs.data)
+        eff_perm_coeff = (
+            inputs.perm_compaction_coeff
+            if inputs.perm_compaction_coeff is not None
+            else (float(inputs.compaction_coeff) * 5.0 if inputs.compaction_coeff else 2.0e-5)
+        )
         corr_df = correct_core_data(
             df,
             net_confining_stress=inputs.net_confining_stress,
+            ambient_stress=inputs.ambient_stress,
             mean_pore_pressure=inputs.mean_pore_pressure,
             cbw=inputs.cbw,
             compaction_coeff=inputs.compaction_coeff,
+            perm_compaction_coeff=eff_perm_coeff,
+            compaction_method=inputs.compaction_method,
+            klinkenberg_method=inputs.klinkenberg_method,
             oven_dried=inputs.oven_dried,
             replace_ori=inputs.replace_ori,
         )
@@ -295,14 +331,37 @@ async def apply_core_corrections_endpoint(inputs: CoreCorrectionsInput):
 async def convert_pc_lab_to_reservoir_endpoint(inputs: PcLabToReservoirInput):
     """Scale laboratory capillary pressure (MICP / porous plate / centrifuge) to reservoir IFT and wettability."""
     try:
+        pc_arr = np.asarray(inputs.pc_lab, dtype=float)
         pc_res = pc_lab_to_reservoir(
-            np.asarray(inputs.pc_lab, dtype=float),
+            pc_arr,
             ift_lab=inputs.ift_lab,
             theta_lab=inputs.theta_lab,
             ift_res=inputs.ift_res,
             theta_res=inputs.theta_res,
+            phi_amb=inputs.phi_amb,
+            phi_res=inputs.phi_res,
+            k_amb=inputs.k_amb,
+            k_res=inputs.k_res,
         )
-        return {"pc_res": [float(x) for x in np.asarray(pc_res).flatten()]}
+        unit_res = float(
+            np.asarray(
+                pc_lab_to_reservoir(
+                    1.0,
+                    ift_lab=inputs.ift_lab,
+                    theta_lab=inputs.theta_lab,
+                    ift_res=inputs.ift_res,
+                    theta_res=inputs.theta_res,
+                    phi_amb=inputs.phi_amb if isinstance(inputs.phi_amb, (int, float)) else None,
+                    phi_res=inputs.phi_res if isinstance(inputs.phi_res, (int, float)) else None,
+                    k_amb=inputs.k_amb if isinstance(inputs.k_amb, (int, float)) else None,
+                    k_res=inputs.k_res if isinstance(inputs.k_res, (int, float)) else None,
+                )
+            ).flat[0]
+        )
+        return {
+            "pc_res": [float(x) for x in np.asarray(pc_res).flatten()],
+            "scale_factor": round(unit_res, 6),
+        }
     except Exception as e:
         raise HTTPException(
             status_code=400, detail=f"Error converting capillary pressure: {e}"

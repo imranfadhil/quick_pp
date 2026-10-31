@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS "users" (
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS "projects" (
     "project_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+    "config_data" JSON, -- Project-level settings (e.g. multi-well module parameters)
     "name" TEXT NOT NULL,
     "description" TEXT,
     "created_by" INTEGER REFERENCES "users"("user_id") ON DELETE SET NULL,
@@ -133,6 +134,15 @@ CREATE TABLE IF NOT EXISTS "pressure_tests" (
     "depth" REAL NOT NULL,
     "pressure" REAL NOT NULL,
     "pressure_uom" TEXT DEFAULT 'psi',
+    "mobility" REAL,
+    "permeability" REAL,
+    "temperature" REAL,
+    "temperature_uom" TEXT DEFAULT 'degC',
+    "remarks" TEXT,
+    "tvdss" REAL,
+    "fluid_type" TEXT DEFAULT 'UNASSIGNED',
+    "test_quality" TEXT DEFAULT 'VALID',
+    "zone" TEXT,
     UNIQUE("well_id", "depth")
 );
 
@@ -147,6 +157,20 @@ CREATE TABLE IF NOT EXISTS "well_surveys" (
     "inc" REAL NOT NULL, -- Inclination
     "azim" REAL NOT NULL, -- Azimuth
     UNIQUE("well_id", "md")
+);
+
+-- -----------------------------------------------------------------------------
+-- TABLE: perforations
+-- Stores perforated intervals (name, top, bottom, description).
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS "perforations" (
+    "perf_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+    "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
+    "name" TEXT NOT NULL,
+    "top" REAL NOT NULL,
+    "bottom" REAL NOT NULL,
+    "description" TEXT,
+    UNIQUE("well_id", "name", "top", "bottom")
 );
 
 -- -----------------------------------------------------------------------------
@@ -230,6 +254,7 @@ CREATE INDEX IF NOT EXISTS "idx_formation_tops_well_id" ON "formation_tops" ("we
 CREATE INDEX IF NOT EXISTS "idx_fluid_contacts_well_id" ON "fluid_contacts" ("well_id");
 CREATE INDEX IF NOT EXISTS "idx_pressure_tests_well_id" ON "pressure_tests" ("well_id");
 CREATE INDEX IF NOT EXISTS "idx_well_surveys_well_id" ON "well_surveys" ("well_id");
+CREATE INDEX IF NOT EXISTS "idx_perforations_well_id" ON "perforations" ("well_id");
 CREATE INDEX IF NOT EXISTS "idx_core_samples_well_id" ON "core_samples" ("well_id");
 CREATE INDEX IF NOT EXISTS "idx_core_measurements_sample_id" ON "core_measurements" ("sample_id");
 CREATE INDEX IF NOT EXISTS "idx_relative_permeability_sample_id" ON "relative_permeability" ("sample_id");

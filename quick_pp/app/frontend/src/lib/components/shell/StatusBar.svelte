@@ -16,9 +16,12 @@
 		scal: 'SCAL & Rel-Perm',
 		ressum: 'Reservoir Summary',
 		inventory: 'Field Inventory',
-		'rock-typing': 'Rock Typing (FZI)',
+		'rock-typing': 'Rock Typing (DRT)',
 		'perm-transform': 'Perm Transform',
-		shf: 'Saturation Height (SHF)'
+		shf: 'Saturation Height (SHF)',
+		'rt-classifier': 'RT Classifier Trainer',
+		'ml-training': 'Conformal ML Trainer',
+		fpt: 'Pressure & Contacts'
 	};
 
 	let elapsedMs = $state(0);

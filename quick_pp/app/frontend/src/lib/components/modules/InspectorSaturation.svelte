@@ -2,18 +2,39 @@
 	import { api } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 
-	// Live preview of formation temperature and Rw at median depth from Salinity & Temp Gradient
-	let medianDepth = $derived.by(() => {
-		const dr = wellData.depthRange;
-		return 0.5 * (dr.min + dr.max);
+	// Default reference depth is the bottom of the active filtered interval (or well max depth)
+	let defaultRefDepth = $derived.by(() => {
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const indices = wellData.visibleIndices;
+		if (indices.length > 0 && dept.length > 0) {
+			let maxD = -Infinity;
+			for (const i of indices) {
+				const d = dept[i];
+				if (typeof d === 'number' && Number.isFinite(d) && d > maxD) {
+					maxD = d;
+				}
+			}
+			if (Number.isFinite(maxD)) return Number(maxD.toFixed(1));
+		}
+		if (workbench.depthFilter && Number.isFinite(workbench.depthFilter.max)) {
+			return Number(workbench.depthFilter.max.toFixed(1));
+		}
+		return Number(wellData.depthRange.max.toFixed(1));
 	});
 
-	let estimatedRwAtMedianDepth = $derived.by(() => {
+	let refDepth = $state<number>(0);
+
+	$effect(() => {
+		refDepth = defaultRefDepth;
+	});
+
+	function estimateTempAndRwAtDepth(depthM: number) {
 		const sp = workbench.saturationParams;
-		const d = medianDepth;
+		const d = Number.isFinite(depthM) ? Math.max(0, depthM) : 0;
 		let tempC: number;
 		if (sp.measSystem === 'imperial') {
 			const tvdKft = (d * 3.28084) / 1000.0;
@@ -29,6 +50,16 @@
 			tempC: Number(tempC.toFixed(1)),
 			rw: Number(rw.toFixed(4))
 		};
+	}
+
+	let estimatedRwAtSurface = $derived.by(() => estimateTempAndRwAtDepth(0));
+	let estimatedRwAtRefDepth = $derived.by(() => estimateTempAndRwAtDepth(refDepth));
+
+	let hasTsAvailable = $derived.by(() => {
+		const ps = wellData.curves['PHIT_SAND'];
+		return Boolean(
+			workbench.tsParams.enabled || (ps && ps.some((v) => Number.isFinite(v)))
+		);
 	});
 
 	async function executeSaturation(persist: boolean = false) {
@@ -39,6 +70,11 @@
 		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 		const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
 		const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
+		const phitSandArr = wellData.curves['PHIT_SAND'] ?? [];
+		const vshLamArr = wellData.curves['VSH_LAM'] ?? [];
+		const vshDisArr = wellData.curves['VSH_DIS'] ?? [];
+		const rsandTsArr = wellData.curves['RSAND_TS'] ?? [];
+		const useTs = hasTsAvailable && workbench.tsParams.useInSaturation;
 		const cleanArr = (arr: number[]) =>
 			arr.length > 0 ? arr.map((v) => (Number.isFinite(v) ? v : null)) : undefined;
 
@@ -64,9 +100,14 @@
 						qv_method: sp.qvMethod,
 						cec_clay: sp.cecClay,
 						rho_dry_clay: sp.rhoDryClay,
+						use_thomas_stieber: useTs,
 						depths: cleanArr(deptArr) as number[] | undefined,
 						phit: cleanArr(phitArr),
 						vclay: cleanArr(vclayArr),
+						phit_sand: useTs ? cleanArr(phitSandArr) : undefined,
+						vsh_lam: useTs ? cleanArr(vshLamArr) : undefined,
+						vsh_dis: useTs ? cleanArr(vshDisArr) : undefined,
+						rsand_ts: useTs ? cleanArr(rsandTsArr) : undefined,
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,
 						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
@@ -104,6 +145,7 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['saturation']} />
 		<ParameterSection
 			title="Water Saturation Model"
 			badge={workbench.saturationParams.method === 'waxman_smits' ? 'WAXMAN-SMITS' : 'ARCHIE'}
@@ -140,6 +182,32 @@
 					<option value="imperial">Imperial (°F / kft)</option>
 				</select>
 			</div>
+
+			{#if hasTsAvailable}
+				<div class="my-1.5 rounded-xs border border-teal-200 bg-teal-50/70 px-2 py-1.5 text-[10.5px]">
+					<label class="flex items-center justify-between gap-2 font-medium text-teal-950 cursor-pointer">
+						<span class="flex items-center gap-1.5">
+							<input
+								type="checkbox"
+								bind:checked={workbench.tsParams.useInSaturation}
+								onchange={() => executeSaturation(false)}
+								class="h-3.5 w-3.5 rounded-xs border-teal-400 text-teal-700"
+							/>
+							<span>Use Thomas-Stieber Thin-Bed Inputs</span>
+						</span>
+						<span class="rounded-2xs bg-teal-100 px-1 py-0.5 font-mono text-[9px] font-bold text-teal-800">
+							{workbench.tsParams.useInSaturation ? 'TS Active' : 'Bulk'}
+						</span>
+					</label>
+					<div class="mt-0.5 text-[9.5px] leading-snug text-teal-800">
+						{#if workbench.tsParams.useInSaturation}
+							Solves sand-lamina <span class="mono-num">Sw</span> from <span class="mono-num">PHIT_SAND</span>, dispersed <span class="mono-num">VSH_DIS</span>, and de-shaled <span class="mono-num">RSAND_TS</span>, then maps back to bulk <span class="mono-num">SWT</span> conserving HCPV.
+						{:else}
+							Using standard bulk <span class="mono-num">RT</span>, <span class="mono-num">PHIT</span>, and total <span class="mono-num">VCLAY</span>.
+						{/if}
+					</div>
+				</div>
+			{/if}
 		</ParameterSection>
 
 		<ParameterSection title="Electrical Constants & Pickett Plot" badge="Live Pickett Line">
@@ -180,7 +248,7 @@
 		<ParameterSection
 			title="Salinity & Geothermal Gradient"
 			badge={workbench.saturationParams.rwMode === 'salinity_temp'
-				? `Rw ≈ ${estimatedRwAtMedianDepth.rw} Ω·m`
+				? `Rw ≈ ${estimatedRwAtRefDepth.rw} Ω·m`
 				: 'Temp B(T) Only'}
 		>
 			<NumericScrubber
@@ -208,22 +276,64 @@
 				max={120}
 				step={1.0}
 			/>
-			<div class="mt-1 flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px] text-[var(--text-secondary)]">
-				<span>
-					At {medianDepth.toFixed(0)} m: <strong class="mono-num">{estimatedRwAtMedianDepth.tempC}°C</strong> →
-					<strong class="mono-num text-[var(--accent-primary)]">Rw = {estimatedRwAtMedianDepth.rw} ohm.m</strong>
-				</span>
-				{#if workbench.saturationParams.rwMode === 'pickett'}
-					<button
-						type="button"
-						onclick={() => {
-							workbench.saturationParams.rwPickett = estimatedRwAtMedianDepth.rw;
-						}}
-						class="font-semibold text-blue-700 hover:underline"
-					>
-						Copy to Rw
-					</button>
-				{/if}
+			<div class="mt-1 space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1.5 text-[10px] text-[var(--text-secondary)]">
+				<div class="flex items-center justify-between gap-1.5">
+					<span>
+						At Surface: <strong class="mono-num">{estimatedRwAtSurface.tempC}°C</strong> →
+						<strong class="mono-num text-[var(--accent-primary)]">Rw = {estimatedRwAtSurface.rw} ohm.m</strong>
+					</span>
+					{#if workbench.saturationParams.rwMode === 'pickett'}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.saturationParams.rwPickett = estimatedRwAtSurface.rw;
+							}}
+							class="shrink-0 font-semibold text-blue-700 hover:underline"
+						>
+							Copy to Rw
+						</button>
+					{/if}
+				</div>
+				<div class="flex items-center justify-between gap-1.5 border-t border-[var(--border-hairline)] pt-1">
+					<span class="flex flex-wrap items-center gap-1">
+						<span>At</span>
+						<input
+							type="number"
+							step="1"
+							min="0"
+							bind:value={refDepth}
+							title="Reference depth for Rw calculation (defaults to bottom of filtered interval)"
+							class="mono-num h-5 w-16 rounded-2xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0 text-right text-[10px] font-semibold text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:ring-1 focus:ring-[var(--border-focus)] focus:outline-none"
+						/>
+						<span>m:</span>
+						<strong class="mono-num">{estimatedRwAtRefDepth.tempC}°C</strong>
+						<span>→</span>
+						<strong class="mono-num text-[var(--accent-primary)]">Rw = {estimatedRwAtRefDepth.rw} ohm.m</strong>
+						{#if Math.abs((refDepth ?? 0) - defaultRefDepth) > 0.1}
+							<button
+								type="button"
+								onclick={() => {
+									refDepth = defaultRefDepth;
+								}}
+								title="Reset to bottom of filtered interval ({defaultRefDepth} m)"
+								class="ml-0.5 text-[9.5px] font-medium text-[var(--text-muted)] hover:text-[var(--accent-primary)]"
+							>
+								↺
+							</button>
+						{/if}
+					</span>
+					{#if workbench.saturationParams.rwMode === 'pickett'}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.saturationParams.rwPickett = estimatedRwAtRefDepth.rw;
+							}}
+							class="shrink-0 font-semibold text-blue-700 hover:underline"
+						>
+							Copy to Rw
+						</button>
+					{/if}
+				</div>
 			</div>
 		</ParameterSection>
 
@@ -291,7 +401,10 @@
 			disabled={wellData.isCalculating || !wellData.hasPendingComputed('saturation')}
 			onclick={saveSaturation}
 			title={wellData.hasPendingComputed('saturation')
-				? 'Save computed Water Saturation curves directly to the well'
+				? wellData.getPendingSaveTooltip(
+						'saturation',
+						'Save computed Water Saturation curves directly to the well'
+					)
 				: 'Run the calculation first to enable saving'}
 			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>

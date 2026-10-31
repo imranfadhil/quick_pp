@@ -12,22 +12,26 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 
 from quick_pp.app.backend.services.database import (
+    _ephemeral_well_headers,
+    _ephemeral_wells,
     _get_merged_dataframe_sync,
+    _merged_data_cache,
+    _sanitize_for_json,
     dataframe_to_columnar,
     dataframe_to_records,
     filter_merged_dataframe,
     get_project_summary,
     invalidate_well_cache,
-)
-from quick_pp.app.backend.services.rock_typing import _compute_fzi_data_sync
-from quick_pp.app.backend.services.database import (
-    _ephemeral_wells,
-    _merged_data_cache,
     reset_demo_project_state,
     resolve_db_well_name,
+    write_shared_well_cache,
 )
+from quick_pp.las_handler import extract_las_metadata
+from quick_pp.app.backend.services.rock_typing import _compute_fzi_data_sync
 from quick_pp.app.backend.utils.auth import is_demo_mode
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.core_analysis import (
@@ -38,17 +42,17 @@ from quick_pp.core_analysis import (
     fit_poroperm_curve,
     inv_power_law_func,
     leverett_j,
-    normalize_sw,
     skelt_harrison_func,
     sw_shf_cuddy,
     sw_shf_leverett_j,
     sw_skelt_harrison,
 )
 from quick_pp.config import Config
-from quick_pp.database import objects as db_objects
+from quick_pp.database import models as db_models, objects as db_objects
 from quick_pp.lithology import gr_index
 from quick_pp.lithology.multi_mineral import MultiMineral
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
+from quick_pp.lithology.thin_beds import ThinBeds
 from quick_pp.machine_learning.feature_engineering import coal_flagging
 from quick_pp.permeability import (
     choo_permeability,
@@ -58,6 +62,7 @@ from quick_pp.permeability import (
     tixier_permeability,
 )
 from quick_pp.porosity import (
+    calc_secondary_porosity,
     density_porosity,
     estimate_shale_porosity,
     neu_den_xplot_poro,
@@ -67,23 +72,45 @@ from quick_pp.qaqc import (
     apply_environmental_corrections,
     badhole_flagging,
     den_correction,
+    den_correction_params_from_endpoints,
+    handle_outer_limit,
     neu_den_xplot_hc_correction,
+    neu_den_xplot_hc_correction_angle,
     stratigraphic_normalization,
 )
 from quick_pp.ressum import calc_reservoir_summary
-from quick_pp.rock_type import calc_fzi, find_cutoffs, rock_typing
+from quick_pp.rock_type import (
+    apply_lucia_rfn_override,
+    calc_fzi,
+    calc_r35,
+    calc_rfn,
+    compute_rock_flag_comparison,
+    delete_saved_rt_classifier,
+    find_cutoffs,
+    find_cutoffs_gmm,
+    find_cutoffs_lorenz,
+    get_saved_rt_classifiers_status,
+    predict_with_saved_rt_classifier,
+    rock_typing,
+    save_cached_rt_classifier,
+    train_and_validate_rock_type_classifier,
+)
 from quick_pp.saturation import (
     archie_saturation,
     estimate_b_waxman_smits,
     estimate_qv,
     estimate_qvn,
     estimate_rw_temperature_salinity,
-    estimate_temperature_gradient,
+    fit_swirr_correlation,
     optimize_fwl,
+    swirr_rqi,
+    swirr_semilog_k,
+    swirr_timur,
     waxman_smits_saturation,
 )
 from quick_pp.uncertainty import calc_stochastic_reservoir_summary
 from quick_pp.upscaling import expand_blocked_logs, upscale_logs
+from quick_pp.utils import nd_triangle_coords
 
 router = APIRouter(
     prefix="/workspace/projects/{project_id}",
@@ -125,25 +152,71 @@ def _update_in_memory_well_cache(
 
         base_df = _get_merged_dataframe_sync(project_id, well_name)
         if not base_df.empty and "DEPTH" in base_df.columns:
-            upd = curves_df.drop(columns=["WELL_NAME"], errors="ignore").copy()
-            upd.columns = [str(c).upper() for c in upd.columns]
-            upd = upd.drop_duplicates(subset=["DEPTH"], keep="last")
-            overlap_cols = [
-                c for c in upd.columns if c != "DEPTH" and c in base_df.columns
+            upd_cols = [
+                c
+                for c in curves_df.columns
+                if str(c).upper() not in ("DEPTH", "WELL_NAME")
             ]
-            upd["_IN_UPD"] = True
-            merged_mem = base_df.drop(columns=overlap_cols, errors="ignore").merge(
-                upd, on="DEPTH", how="left"
-            )
-            in_upd_mask = merged_mem["_IN_UPD"].fillna(False).to_numpy(dtype=bool)
-            merged_mem.drop(columns=["_IN_UPD"], errors="ignore", inplace=True)
-            for c in overlap_cols:
-                if c in base_df.columns:
-                    merged_mem[c] = np.where(in_upd_mask, merged_mem[c], base_df[c])
+            if not upd_cols:
+                return
+
+            # Fast path when curves_df shares base_df's index or exact full-well depth grid
+            if len(curves_df) == len(base_df) and np.allclose(
+                curves_df["DEPTH"].to_numpy(dtype=float),
+                base_df["DEPTH"].to_numpy(dtype=float),
+                equal_nan=True,
+            ):
+                merged_mem = base_df.copy()
+                for c in upd_cols:
+                    merged_mem[str(c).upper()] = curves_df[c].to_numpy()
+            elif curves_df.index.isin(base_df.index).all() and np.allclose(
+                curves_df["DEPTH"].to_numpy(dtype=float),
+                base_df.loc[curves_df.index, "DEPTH"].to_numpy(dtype=float),
+                equal_nan=True,
+            ):
+                merged_mem = base_df.copy()
+                for c in upd_cols:
+                    ucol = str(c).upper()
+                    if ucol not in merged_mem.columns:
+                        merged_mem[ucol] = np.nan
+                    merged_mem.loc[curves_df.index, ucol] = curves_df[c].to_numpy()
+            else:
+                upd = curves_df.drop(columns=["WELL_NAME"], errors="ignore").copy()
+                upd.columns = [str(c).upper() for c in upd.columns]
+                upd["_DEPTH_KEY"] = pd.to_numeric(upd["DEPTH"], errors="coerce").round(4)
+                upd = upd.dropna(subset=["_DEPTH_KEY"]).drop_duplicates(
+                    subset=["_DEPTH_KEY"], keep="last"
+                )
+                upd_no_depth = upd.drop(columns=["DEPTH"], errors="ignore")
+                overlap_cols = [
+                    c
+                    for c in upd_no_depth.columns
+                    if c != "_DEPTH_KEY" and c in base_df.columns
+                ]
+                upd_no_depth["_IN_UPD"] = True
+                base_with_key = base_df.copy()
+                base_with_key["_DEPTH_KEY"] = pd.to_numeric(
+                    base_with_key["DEPTH"], errors="coerce"
+                ).round(4)
+                merged_mem = base_with_key.drop(
+                    columns=overlap_cols, errors="ignore"
+                ).merge(upd_no_depth, on="_DEPTH_KEY", how="left")
+                in_upd_mask = merged_mem["_IN_UPD"].fillna(False).to_numpy(dtype=bool)
+                merged_mem.drop(
+                    columns=["_IN_UPD", "_DEPTH_KEY"], errors="ignore", inplace=True
+                )
+                for c in overlap_cols:
+                    if c in base_df.columns:
+                        merged_mem[c] = np.where(
+                            in_upd_mask & merged_mem[c].notna(),
+                            merged_mem[c],
+                            base_df[c],
+                        )
             _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (
                 time.time(),
                 merged_mem,
             )
+            write_shared_well_cache(project_id, well_name, merged_mem)
             if (
                 project_id in _ephemeral_wells
                 and well_name in _ephemeral_wells[project_id]
@@ -168,13 +241,21 @@ def _save_curves_to_well(
     if is_demo_mode():
         return len(df_to_save)
 
+    cache_key = f"{project_id}_{well_name}_0.16"
+    cached_entry = _merged_data_cache.get(cache_key)
+    preserved_mem_df = cached_entry[1].copy() if cached_entry is not None else None
+
     with get_db() as session:
         proj = db_objects.Project.load(session, project_id=project_id)
         proj.update_data(df_to_save, group_by="WELL_NAME")
         proj.save()
 
     invalidate_well_cache(project_id=project_id, well_name=well_name)
-    _update_in_memory_well_cache(project_id, well_name, df_to_save)
+    _update_in_memory_well_cache(
+        project_id,
+        well_name,
+        preserved_mem_df if preserved_mem_df is not None else df_to_save,
+    )
     return len(df_to_save)
 
 
@@ -202,28 +283,44 @@ def _get_filtered_well_df(
     return filtered
 
 
-def _curve_summary_stats(series: pd.Series) -> Dict[str, Optional[float]]:
-    """Return compact summary statistics (min, max, mean, p10, p50, p90, valid_count) for a numeric Series."""
-    s = (
-        pd.to_numeric(series, errors="coerce")
-        .replace([np.inf, -np.inf], np.nan)
-        .dropna()
-    )
+def _curve_summary_stats(
+    series: pd.Series, depths: Optional[pd.Series] = None
+) -> Dict[str, Optional[float]]:
+    """Return compact summary statistics (top, bottom, min, max, mean, std, p10, p50, p90, valid_count) for a numeric Series."""
+    s_num = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    valid_mask = s_num.notna()
+    s = s_num[valid_mask]
     if s.empty:
         return {
             "count": 0,
+            "top": None,
+            "bottom": None,
             "min": None,
             "max": None,
             "mean": None,
+            "std": None,
             "p10": None,
             "p50": None,
             "p90": None,
         }
+    top_val: Optional[float] = None
+    bottom_val: Optional[float] = None
+    if depths is not None:
+        d_num = pd.to_numeric(depths, errors="coerce").replace(
+            [np.inf, -np.inf], np.nan
+        )
+        d_valid = d_num[valid_mask & d_num.notna()]
+        if not d_valid.empty:
+            top_val = round(float(d_valid.min()), 4)
+            bottom_val = round(float(d_valid.max()), 4)
     return {
         "count": int(len(s)),
+        "top": top_val,
+        "bottom": bottom_val,
         "min": round(float(s.min()), 6),
         "max": round(float(s.max()), 6),
         "mean": round(float(s.mean()), 6),
+        "std": round(float(s.std()), 6) if len(s) > 1 else 0.0,
         "p10": round(float(np.percentile(s, 10)), 6),
         "p50": round(float(np.percentile(s, 50)), 6),
         "p90": round(float(np.percentile(s, 90)), 6),
@@ -334,28 +431,36 @@ def _compute_vsh_gr_series(
     gr_clean: Optional[float] = None,
     gr_clay: Optional[float] = None,
 ) -> pd.Series:
-    """Compute VSH_GR series in [0, 1] from GR curve using endpoints or auto-normalized gr_index."""
-    if "GR" not in df.columns:
-        return pd.Series(np.nan, index=df.index, dtype=float)
-    gr_s = pd.to_numeric(df["GR"], errors="coerce")
-    valid_gr = gr_s.notna()
-    if not valid_gr.any():
-        return pd.Series(np.nan, index=df.index, dtype=float)
+    """Compute calibrated VSH_GR series in [0, 1] from GR endpoints, existing VSH_GR curve, or auto-normalized gr_index."""
     out = pd.Series(np.nan, index=df.index, dtype=float)
     if (
-        gr_clean is not None
+        "GR" in df.columns
+        and gr_clean is not None
         and gr_clay is not None
         and abs(float(gr_clay) - float(gr_clean)) > 1e-6
     ):
-        out.loc[valid_gr] = (
-            (gr_s.loc[valid_gr] - float(gr_clean))
-            / (float(gr_clay) - float(gr_clean))
-        ).clip(0.0, 1.0)
-    else:
-        vsh_arr = np.asarray(
-            gr_index(gr_s.loc[valid_gr].reset_index(drop=True)), dtype=float
-        ).ravel()
-        out.loc[valid_gr] = np.clip(vsh_arr, 0.0, 1.0)
+        gr_s = pd.to_numeric(df["GR"], errors="coerce")
+        valid_gr = gr_s.notna()
+        if valid_gr.any():
+            out.loc[valid_gr] = (
+                (gr_s.loc[valid_gr] - float(gr_clean))
+                / (float(gr_clay) - float(gr_clean))
+            ).clip(0.0, 1.0)
+            return out
+    if "VSH_GR" in df.columns:
+        vsh_existing = pd.to_numeric(df["VSH_GR"], errors="coerce")
+        if vsh_existing.notna().any():
+            return vsh_existing.clip(0.0, 1.0)
+    if "GR" not in df.columns:
+        return out
+    gr_s = pd.to_numeric(df["GR"], errors="coerce")
+    valid_gr = gr_s.notna()
+    if not valid_gr.any():
+        return out
+    vsh_arr = np.asarray(
+        gr_index(gr_s.loc[valid_gr].reset_index(drop=True)), dtype=float
+    ).ravel()
+    out.loc[valid_gr] = np.clip(vsh_arr, 0.0, 1.0)
     return out
 
 
@@ -381,7 +486,8 @@ class WorkspaceBadholeRequest(WorkspaceFilterBase):
         2.0, description="Max allowable |CALI - BS| before flagging badhole (inches)"
     )
     auto_bitsize: bool = Field(
-        True, description="Auto-estimate bit size per hole section from CALI when BS is absent"
+        True,
+        description="Auto-estimate bit size per hole section from CALI when BS is absent",
     )
     bitsize_default: float = Field(
         8.5, description="Nominal/fallback bit size (inches)"
@@ -402,13 +508,15 @@ class WorkspaceBadholeRequest(WorkspaceFilterBase):
         True, description="Exclude coal seams from RHOB/NPHI bound and rugosity flags"
     )
     use_rugosity: bool = Field(
-        False, description="Flag local borehole rugosity spikes from rolling RHOB/CALI trends"
+        False,
+        description="Flag local borehole rugosity spikes from rolling RHOB/CALI trends",
     )
     rugosity_window: int = Field(
         21, description="Rolling window size (samples) for rugosity spike detection"
     )
     rhob_trend_factor: float = Field(
-        0.05, description="Fractional drop below rolling RHOB median to flag washout spike"
+        0.05,
+        description="Fractional drop below rolling RHOB median to flag washout spike",
     )
     cali_spike_threshold: float = Field(
         0.5, description="Local caliper spike deviation from rolling median (inches)"
@@ -426,7 +534,24 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
     rho_water: float = Field(1.0, description="Water density (g/cc)")
     rho_hc: float = Field(0.8, description="Hydrocarbon density (g/cc)")
     hi_hc: float = Field(0.9, description="Hydrocarbon hydrogen index")
-    buffer: float = Field(0.0, description="Buffer for HC flag detection")
+    buffer: float = Field(
+        0.0,
+        description="Flagging tolerance (crossplot distance along matrix-clay line); only widens HC flagging",
+    )
+    flag_mode: str = Field(
+        "strict",
+        description=(
+            "'strict': flag only points beyond the clean-sand line; "
+            "'vsh_gr': also flag points whose crossplot Vcl < VSH_GR - vsh_tol (shaly gas sands)"
+        ),
+    )
+    vsh_tol: float = Field(
+        0.05, description="Vshale tolerance used when flag_mode='vsh_gr'"
+    )
+    target_mode: str = Field(
+        "bulk",
+        description="Interpret VSH_GR as 'bulk' clay volume (default) or 'solid' clay fraction of solids",
+    )
     gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
     gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
     enable_coal_flagging: bool = Field(
@@ -443,6 +568,47 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
     badhole_treatment: str = Field(
         "none",
         description="How to treat BADHOLE intervals: 'none', 'vsh_gr', 'interpolate', or 'ignore'",
+    )
+
+
+class WorkspaceDenCorrectionRequest(WorkspaceFilterBase):
+    dry_sand_point: Tuple[float, float] = Field((-0.02, 2.65))
+    dry_clay_point: Tuple[float, float] = Field((0.33, 2.7))
+    rho_water: float = Field(1.0, description="Water density (g/cc)")
+    sync_endpoints: bool = Field(
+        True,
+        description="Synchronize rho_ma, phin_sh, and phid_sh with dry_sand_point and dry_clay_point",
+    )
+    rho_ma: float = Field(2.65, description="Matrix density override (g/cc)")
+    phin_sh: float = Field(0.33, description="Shale neutron porosity override (v/v)")
+    phid_sh: float = Field(0.05, description="Shale density porosity override (v/v)")
+    scope: str = Field(
+        "vsh_mismatch",
+        description="Correction scope: 'vsh_mismatch', 'badhole_only', or 'full'",
+    )
+    vsh_mismatch_threshold: float = Field(
+        0.15,
+        description="Min |VSH_DN - VSH_GR| to trigger density reconstruction when scope=='vsh_mismatch'",
+    )
+    gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
+    gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
+    enable_coal_flagging: bool = Field(
+        False, description="Flag coal beds and exclude them from density reconstruction"
+    )
+    coal_rhob_max: float = Field(2.0, description="Max bulk density for coal (g/cc)")
+    coal_nphi_min: float = Field(
+        0.30, description="Min neutron porosity for coal (v/v)"
+    )
+    coal_window_size: int = Field(41, description="Rolling window size for coal trend")
+    coal_trend_factor: float = Field(
+        0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
+    )
+    protect_hc_rows: bool = Field(
+        True,
+        description=(
+            "Skip samples already flagged by hydrocarbon correction (HC_FLAG == 1) and "
+            "preserve their NPHI_HC/RHOB_HC/HC_FLAG values"
+        ),
     )
 
 
@@ -484,7 +650,7 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase):
 
 
 class WorkspacePorosityRequest(WorkspaceFilterBase):
-    method: str = Field("neu_den", description="'neu_den' or 'den'")
+    method: str = Field("den", description="'den' or 'neu_den'")
     lithology_model: Optional[str] = Field(
         None,
         description="Active lithology model ('ssc', 'multi_mineral', 'vsh_gr') so porosity uses matching mineral volumes",
@@ -520,6 +686,35 @@ class WorkspacePorosityRequest(WorkspaceFilterBase):
     )
 
 
+class WorkspaceThomasStieberRequest(WorkspaceFilterBase):
+    use_hc_corrected: bool = Field(
+        True, description="Use NPHI_HC and RHOB_HC curves if present"
+    )
+    use_existing_phit_vsh: bool = Field(
+        True,
+        description="Use existing evaluated PHIT and VCLAY/VSHALE curves if present",
+    )
+    dry_sand_poro: float = Field(0.28, description="Clean sand endpoint porosity (v/v)")
+    dry_shale_poro: float = Field(
+        0.10, description="Pure shale endpoint porosity (v/v)"
+    )
+    dry_sand_point: Tuple[float, float] = Field((-0.02, 2.65))
+    dry_clay_point: Tuple[float, float] = Field((0.33, 2.7))
+    fluid_point: Tuple[float, float] = Field((1.0, 1.0))
+    rsand: float = Field(
+        20.0, description="Hagiwara sand lamina resistivity Rsand (ohm.m)"
+    )
+    rv_shale: float = Field(
+        4.0, description="Hagiwara vertical shale resistivity Rv_shale (ohm.m)"
+    )
+    rh_shale: float = Field(
+        1.5, description="Hagiwara horizontal shale resistivity Rh_shale (ohm.m)"
+    )
+    theta: float = Field(
+        0.0, description="Relative dip / wellbore deviation angle theta (degrees)"
+    )
+
+
 class WorkspacePermeabilityRequest(WorkspaceFilterBase):
     method: str = Field(
         "choo",
@@ -545,6 +740,19 @@ class WorkspacePermeabilityRequest(WorkspaceFilterBase):
     vsilt: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side VSILT array fallback"
     )
+    use_thomas_stieber: bool = Field(
+        False,
+        description="Use Thomas-Stieber sand-lamina porosity (PHIT_SAND) and dispersed clay (VSH_DIS) weighted by (1 - VSH_LAM)",
+    )
+    phit_sand: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side PHIT_SAND array fallback"
+    )
+    vsh_lam: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side VSH_LAM array fallback"
+    )
+    vsh_dis: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side VSH_DIS array fallback"
+    )
 
 
 class WorkspaceSaturationRequest(WorkspaceFilterBase):
@@ -559,9 +767,9 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     meas_system: str = Field("metric", description="'metric' or 'imperial'")
     water_salinity: float = Field(35000.0, description="Formation water salinity (ppm)")
     temp_gradient: float = Field(
-        30.0, description="Geothermal temperature gradient (°C/km or °F/kft)"
+        30.0, description="Geothermal temperature gradient (Â°C/km or Â°F/kft)"
     )
-    surface_temp: float = Field(25.0, description="Surface temperature (°C or °F)")
+    surface_temp: float = Field(25.0, description="Surface temperature (Â°C or Â°F)")
     m: float = Field(2.0, description="Archie/Waxman-Smits cementation exponent m")
     a: float = Field(1.0, description="Tortuosity factor a")
     n: float = Field(2.0, description="Saturation exponent n")
@@ -587,6 +795,22 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     vclay: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side VCLAY array fallback"
     )
+    use_thomas_stieber: bool = Field(
+        False,
+        description="Use Thomas-Stieber thin-bed inputs (PHIT_SAND, VSH_DIS, RSAND_TS) for saturation evaluation",
+    )
+    phit_sand: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side PHIT_SAND array fallback"
+    )
+    vsh_lam: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side VSH_LAM array fallback"
+    )
+    vsh_dis: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side VSH_DIS array fallback"
+    )
+    rsand_ts: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side RSAND_TS array fallback"
+    )
 
 
 class WorkspaceReservoirSummaryRequest(WorkspaceFilterBase):
@@ -606,18 +830,162 @@ class WorkspaceRockTypingRequest(BaseModel):
     well_names: Optional[List[str]] = Field(
         None, description="Optional subset of well names to include"
     )
+    data_source: str = Field(
+        "core",
+        description="Input data source for rock typing & RT classifier target labels: 'core' (CPORE & CPERM) or 'log' (PHIT & PERM)",
+    )
+    method: str = Field(
+        "fzi",
+        description="Rock typing method: 'fzi' (Kozeny-Carman FZI), 'winland' (Winland R35), or 'lucia' (Lucia RFN)",
+    )
     cutoffs: List[float] = Field(default_factory=lambda: [0.5, 1.0, 2.5])
-    higher_is_better: bool = Field(True)
+    higher_is_better: Optional[bool] = Field(
+        None,
+        description="Whether higher value of indicator is better rock quality (DRT 1). Defaults to True for FZI/Winland and False for Lucia RFN.",
+    )
     auto_find_cutoffs: bool = Field(False)
+    cutoff_method: str = Field(
+        "gmm",
+        description="Automated cutoff detection method: 'gmm' (Gaussian Mixture Model with BIC/Silhouette), 'lorenz' (Cumulative Probability / Modified Lorenz inflection points), or 'kmeans'",
+    )
+    auto_k: bool = Field(
+        True,
+        description="Automatically determine optimal number of rock type groups (k) using Silhouette/BIC scoring or Lorenz inflection knee",
+    )
+    gmm_criterion: str = Field(
+        "combined",
+        description="Criterion for selecting optimal k in GMM: 'combined' (Silhouette + BIC), 'bic', or 'silhouette'",
+    )
+    max_clusters: int = Field(
+        7,
+        description="Maximum number of rock type groups (clusters) to evaluate when auto_k is True (2..max_clusters)",
+    )
+    use_interparticle_porosity: bool = Field(
+        True,
+        description="When computing Lucia RFN, use interparticle porosity phi_ip = phi_T - phi_sec (where phi_sec = max(0, phi_T - phi_sonic)) when sonic porosity is available",
+    )
+    lucia_vuggy_override: bool = Field(
+        False,
+        description="Override primary DRT rock typing with Lucia RFN in vuggy carbonate intervals where secondary porosity phi_sec = phi_T - phi_sonic >= phi_sec_cutoff",
+    )
+    phi_sec_cutoff: float = Field(
+        0.02,
+        description="Secondary/vuggy porosity threshold (phi_sec = phi_T - phi_sonic >= phi_sec_cutoff, v/v) to trigger Lucia RFN carbonate override",
+    )
+    lucia_cutoffs: List[float] = Field(
+        default_factory=lambda: [1.5, 2.5, 3.5],
+        description="Lucia RFN boundary cutoffs used when method=='lucia' or when lucia_vuggy_override is active",
+    )
+    dt_matrix: float = Field(
+        47.6,
+        description="Matrix sonic transit time (us/ft) for Wyllie sonic porosity when DT/DTC log is used (47.6 = Limestone, 43.5 = Dolomite, 55.5 = Sandstone)",
+    )
+    dt_fluid: float = Field(
+        189.0,
+        description="Fluid sonic transit time (us/ft) for Wyllie sonic porosity",
+    )
+    train_classifier: bool = Field(
+        False,
+        description="Train a supervised Rock Type classifier on selectable log features and evaluate via Contingency Table (Confusion Matrix)",
+    )
+    apply_classifier_propagation: bool = Field(
+        False,
+        description="Accept the validated classifier and propagate predicted ROCK_FLAG along the cutoff-binned rock types",
+    )
+    propagation_mode: str = Field(
+        "fill_missing",
+        description="Active ROCK_FLAG selection / propagation mode: 'cutoff_only' (pure cutoffs), 'fill_missing' (keep cutoff-binned DRTs and fill uncored/unbinned depths in focused interval with ML), or 'full_ml' (use ML predicted DRTs across focused interval)",
+    )
+    classifier_model: str = Field(
+        "random_forest",
+        description="Classification algorithm: 'random_forest', 'extra_trees', or 'gradient_boosting'",
+    )
+    selected_features: Optional[List[str]] = Field(
+        None,
+        description="Explicit list of log input features to use for ML classification: subset of ['GR', 'NPHI', 'RHOB', 'LOG_RT', 'PEF', 'VDL', 'PHIT', 'VSAND', 'VSHALE', 'VSILT', 'VCLAY']",
+    )
+    include_pef: bool = Field(
+        True,
+        description="Include Photoelectric Factor (PEF) log as an input feature if available",
+    )
+    include_vdl: bool = Field(
+        True,
+        description="Compute and include Velocity Deviation Log (VDL) as an input feature",
+    )
+    test_size: float = Field(
+        0.25,
+        description="Validation holdout split fraction (0.10..0.50) for Contingency Table evaluation",
+    )
+    zones: Optional[List[str]] = Field(
+        None,
+        description="Optional list of zone names to focus/filter ML propagation",
+    )
+    min_depth: Optional[float] = Field(
+        None,
+        description="Optional minimum depth for focused interval ML propagation",
+    )
+    max_depth: Optional[float] = Field(
+        None,
+        description="Optional maximum depth for focused interval ML propagation",
+    )
+    propagate_focused_only: bool = Field(
+        True,
+        description="Restrict ML propagation to focused/filtered intervals only (selected zones, depth filter, per-well focus depth, and evaluated porosity intervals)",
+    )
+    saved_model_key: Optional[str] = Field(
+        None,
+        description="Optional key of a previously saved Rock Type classifier model to run inference/propagation without retraining",
+    )
+    save_classifier_model: bool = Field(
+        False,
+        description="Save the trained Rock Type classifier model (with its performance metrics and CM) to disk",
+    )
+    classifier_model_key: Optional[str] = Field(
+        None,
+        description="Identifier key when saving the trained Rock Type classifier model",
+    )
+    classifier_model_name: Optional[str] = Field(
+        None,
+        description="Human-readable display name when saving the trained Rock Type classifier model",
+    )
     no_of_cutoffs: int = Field(3)
     save: bool = Field(False)
+
+
+class WorkspaceRtSaveModelRequest(BaseModel):
+    model_key: str = Field(
+        "rt_custom",
+        description="Model identifier key in the saved Rock Type classifier registry",
+    )
+    model_name: Optional[str] = Field(
+        None,
+        description="Human-readable display name for the saved Rock Type classifier",
+    )
+    drt_method: Optional[str] = Field(None)
+    cutoffs: Optional[List[float]] = Field(None)
+    data_source: Optional[str] = Field(
+        None,
+        description="Whether target DRT labels were derived from 'core' (CPORE & CPERM) or 'log' (PHIT & PERM)",
+    )
 
 
 class WorkspacePermTransformRequest(BaseModel):
     well_names: Optional[List[str]] = Field(
         None, description="Optional subset of well names to include"
     )
+    data_source: str = Field(
+        "core",
+        description="Input data source for fitting K = a * Phi^b per ROCK_FLAG: 'core' (CPORE & CPERM) or 'log' (PHIT & PERM)",
+    )
+    method: str = Field(
+        "fzi",
+        description="Fallback rock typing method if ROCK_FLAG is not yet saved: 'fzi', 'winland', or 'lucia'",
+    )
     cutoffs: List[float] = Field(default_factory=lambda: [0.5, 1.2, 2.5, 5.0])
+    rock_flag_source: Optional[str] = Field(
+        None,
+        description="Which ROCK_FLAG source to use: 'cutoff_only', 'fill_missing', or 'full_ml'",
+    )
     fits: Optional[Dict[str, Dict[str, float]]] = Field(
         None,
         description="Optional manual (a, b) fits per ROCK_FLAG. If None, auto-fitted from well data.",
@@ -632,6 +1000,18 @@ class WorkspaceShfRequest(BaseModel):
     model: str = Field(
         "leverett_j",
         description="SHF model: 'leverett_j', 'skelt_harrison', or 'cuddy'",
+    )
+    j_sat_mode: str = Field(
+        "swn",
+        description="Saturation variable for Leverett-J curve fitting: 'swn' (normalized water saturation) or 'sw' (water saturation)",
+    )
+    drt_method: str = Field(
+        "fzi",
+        description="Rock typing method for SCAL core plug and fallback log classification: 'fzi', 'winland', or 'lucia'",
+    )
+    rock_flag_source: Optional[str] = Field(
+        None,
+        description="Which ROCK_FLAG source to use: 'cutoff_only', 'fill_missing', or 'full_ml'",
     )
     unit: str = Field("metric", description="Depth unit: 'metric' or 'imperial'")
     cutoffs: List[float] = Field(default_factory=lambda: [0.1, 1.0, 3.0])
@@ -653,6 +1033,14 @@ class WorkspaceShfRequest(BaseModel):
     fits: Optional[Dict[str, Dict[str, float]]] = Field(
         None,
         description="Optional SHF curve fits per ROCK_FLAG. If None, auto-fitted from core SCAL data.",
+    )
+    swirr_source: str = Field(
+        "lab_min",
+        description="Swirr normalization method for Swn: 'lab_min' (Lab Terminal Sw per-plug) or 'poro_perm' (Poro-Perm Correlation modeled)",
+    )
+    swirr_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Optional SwirrModelConfig dict used when swirr_source == 'poro_perm'",
     )
     save: bool = Field(False)
 
@@ -763,15 +1151,61 @@ def workspace_well_bundle(
         if "DEPTH" in curves_map and "DEPT" not in curves_map:
             curves_map["DEPT"] = curves_map["DEPTH"]
 
+        # Map standard aliases onto canonical display mnemonics (RT, RM, RS, PEF, DRHO) if canonical key is absent
+        alias_groups = {
+            "RT": ("RD", "RDEP", "RDEEP", "LLD", "RILD"),
+            "RM": ("RMED", "RILM", "ILM", "LLM", "LL8", "M2R6"),
+            "RS": (
+                "RSHAL",
+                "RSHA",
+                "RXO",
+                "RXOZ",
+                "MSFL",
+                "RMLL",
+                "RFOC",
+                "SFL",
+                "LLS",
+            ),
+            "PEF": ("PE", "PEFZ", "PEFA"),
+            "DRHO": ("HDRA", "DCOR", "RHOC"),
+        }
+        for canonical, aliases in alias_groups.items():
+            if canonical not in curves_map or not any(
+                v is not None for v in curves_map.get(canonical, [])
+            ):
+                for alias in aliases:
+                    if alias in curves_map and any(
+                        v is not None for v in curves_map[alias]
+                    ):
+                        curves_map[canonical] = curves_map[alias]
+                        break
+
+        depth_s = (
+            pd.to_numeric(df["DEPTH"], errors="coerce")
+            if "DEPTH" in df.columns
+            else None
+        )
         stats: Dict[str, Any] = {}
         for col in df.columns:
             if col in ("WELL_NAME", "ZONES"):
                 continue
-            s = pd.to_numeric(df[col], errors="coerce")
-            if s.notna().any():
-                clean = s.dropna()
+            s = pd.to_numeric(df[col], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            )
+            valid_m = s.notna()
+            if valid_m.any():
+                clean = s[valid_m]
+                top_d = None
+                bot_d = None
+                if depth_s is not None:
+                    d_clean = depth_s[valid_m & depth_s.notna()]
+                    if not d_clean.empty:
+                        top_d = round(float(d_clean.min()), 2)
+                        bot_d = round(float(d_clean.max()), 2)
                 stats[col] = {
                     "count": int(len(clean)),
+                    "top": top_d,
+                    "bottom": bot_d,
                     "min": round(float(clean.min()), 4),
                     "max": round(float(clean.max()), 4),
                     "mean": round(float(clean.mean()), 4),
@@ -780,9 +1214,18 @@ def workspace_well_bundle(
                     "p50": round(float(np.percentile(clean, 50)), 4),
                     "p90": round(float(np.percentile(clean, 90)), 4),
                 }
+        for canonical, aliases in alias_groups.items():
+            if canonical not in stats and canonical in curves_map:
+                for alias in aliases:
+                    if alias in stats:
+                        stats[canonical] = dict(stats[alias])
+                        break
 
         ancillary: Dict[str, Any] = {}
         well_config: Dict[str, Any] = {}
+        raw_db_header: Dict[str, Any] = {}
+        db_uwi: Optional[str] = None
+        db_depth_uom: Optional[str] = None
         try:
             with get_db() as session:
                 proj = db_objects.Project.load(session, project_id=project_id)
@@ -793,10 +1236,13 @@ def workspace_well_bundle(
                     if getattr(well_obj, "config", None)
                     else {}
                 )
-                if well_obj._orm_well and isinstance(
-                    well_obj._orm_well.config_data, dict
-                ):
-                    well_config = {**well_config, **well_obj._orm_well.config_data}
+                if well_obj._orm_well:
+                    db_uwi = well_obj._orm_well.uwi
+                    db_depth_uom = well_obj._orm_well.depth_uom
+                    if isinstance(well_obj._orm_well.config_data, dict):
+                        well_config = {**well_config, **well_obj._orm_well.config_data}
+                    if isinstance(well_obj._orm_well.header_data, dict):
+                        raw_db_header = dict(well_obj._orm_well.header_data)
         except Exception:
             pass
         eph_cfg = _ephemeral_well_configs.get(
@@ -806,6 +1252,87 @@ def workspace_well_bundle(
         )
         if eph_cfg:
             well_config = {**well_config, **eph_cfg}
+
+        eph_hdr = _ephemeral_well_headers.get(
+            (project_id, well_name)
+        ) or _ephemeral_well_headers.get(
+            (project_id, resolve_db_well_name(project_id, well_name))
+        )
+        base_hdr_source = raw_db_header if raw_db_header else (eph_hdr or {})
+        well_header: Dict[str, Any] = dict(
+            extract_las_metadata(base_hdr_source, fallback_well_name=well_name)
+        )
+        well_header["well_name"] = well_name
+        if db_uwi and (
+            not well_header.get("uwi")
+            or well_header.get("uwi") == "UNKNOWN_WELL"
+        ):
+            well_header["uwi"] = db_uwi
+        if db_depth_uom and not well_header.get("datum_unit"):
+            well_header["datum_unit"] = db_depth_uom
+            well_header["depth_unit"] = db_depth_uom
+
+        # Apply any explicit user overrides saved on header_data or ephemeral headers
+        hdr_overrides = (
+            raw_db_header.get("header_overrides")
+            if isinstance(raw_db_header.get("header_overrides"), dict)
+            else {}
+        )
+        for ovr_src in (hdr_overrides, eph_hdr or {}):
+            if isinstance(ovr_src, dict):
+                for hk, hv in ovr_src.items():
+                    if hv is not None and hk not in (
+                        "raw_well_header",
+                        "raw_parameters",
+                    ):
+                        well_header[hk] = hv
+
+        if depth_s is not None:
+            d_valid_all = depth_s.dropna()
+            if not d_valid_all.empty:
+                if well_header.get("start_depth") is None:
+                    well_header["start_depth"] = round(float(d_valid_all.min()), 4)
+                if well_header.get("stop_depth") is None:
+                    well_header["stop_depth"] = round(float(d_valid_all.max()), 4)
+                if well_header.get("step") is None and len(d_valid_all) > 1:
+                    diffs = d_valid_all.diff().dropna()
+                    diffs = diffs[diffs > 0]
+                    if not diffs.empty:
+                        well_header["step"] = round(float(diffs.median()), 4)
+
+        # Ensure well_config also reflects resolved well_header fields
+        for sync_k in (
+            "uwi",
+            "well_name",
+            "field",
+            "company",
+            "service_company",
+            "country",
+            "province",
+            "location",
+            "spud_date",
+            "log_date",
+            "latitude",
+            "longitude",
+            "x_coord",
+            "y_coord",
+            "crs",
+            "kb_elev",
+            "df_elev",
+            "gl_elev",
+            "water_depth",
+            "datum_unit",
+            "bht",
+            "bht_unit",
+            "surface_temp",
+            "bit_size",
+            "rmf",
+            "rmf_temp",
+            "rmc",
+            "mud_density",
+        ):
+            if well_header.get(sync_k) is not None:
+                well_config[sync_k] = well_header[sync_k]
 
         def _df_or_list(val: Any) -> List[Dict[str, Any]]:
             if val is None:
@@ -839,30 +1366,144 @@ def workspace_well_bundle(
             if c.get("depth") is not None
         ]
 
+        perfs_raw = _df_or_list(ancillary.get("perforations"))
+        perforations = [
+            {
+                "id": f"perf-{i}-{p.get('name', i)}",
+                "name": str(p.get("name") or f"Perf-{i + 1}"),
+                "top": float(p.get("top", 0.0)),
+                "bottom": float(p.get("bottom", p.get("top", 0.0))),
+                "description": str(p.get("description") or ""),
+            }
+            for i, p in enumerate(perfs_raw)
+            if p.get("top") is not None
+        ]
+
         core_samples_list: List[Dict[str, Any]] = []
+        scal_pc_list: List[Dict[str, Any]] = []
+        pc_scale_saved = (
+            float(well_config["pc_scale_factor"])
+            if (
+                well_config.get("pc_scaling_applied")
+                and well_config.get("pc_scale_factor") is not None
+                and float(well_config.get("pc_scale_factor") or 0.0) > 1e-9
+            )
+            else None
+        )
         core_data_raw = ancillary.get("core_data")
         if isinstance(core_data_raw, dict):
             for sname, sdict in core_data_raw.items():
+                s_depth = float(sdict.get("depth", 0.0))
                 meas_df = sdict.get("measurements")
                 poro_val = None
                 perm_val = None
+                poro_amb_val = None
+                perm_air_val = None
+                raw_depth_val = None
+                shift_m_val = None
                 if isinstance(meas_df, pd.DataFrame) and not meas_df.empty:
                     for _, mrow in meas_df.iterrows():
                         prop = str(mrow.get("property", "")).upper()
-                        if prop in ("POR", "CPORE", "POROSITY"):
+                        if (
+                            prop in ("POR", "CPORE", "POROSITY")
+                            and mrow.get("value") is not None
+                        ):
                             poro_val = float(mrow["value"])
-                        elif prop in ("PERM", "CPERM", "PERMEABILITY"):
+                        elif (
+                            prop in ("PERM", "CPERM", "PERMEABILITY")
+                            and mrow.get("value") is not None
+                        ):
                             perm_val = float(mrow["value"])
-                core_samples_list.append(
-                    {
+                        elif (
+                            prop in ("CPORE_AMB", "CPORE_ORI", "POR_AMB")
+                            and mrow.get("value") is not None
+                        ):
+                            poro_amb_val = float(mrow["value"])
+                        elif (
+                            prop in ("CPERM_AIR", "CPERM_ORI", "PERM_AIR")
+                            and mrow.get("value") is not None
+                        ):
+                            perm_air_val = float(mrow["value"])
+                        elif (
+                            prop in ("RAW_DEPTH", "DRILLER_DEPTH")
+                            and mrow.get("value") is not None
+                        ):
+                            raw_depth_val = float(mrow["value"])
+                        elif (
+                            prop in ("SHIFT_M", "CORE_SHIFT")
+                            and mrow.get("value") is not None
+                        ):
+                            shift_m_val = float(mrow["value"])
+
+                pc_df = sdict.get("pc")
+                has_pc = isinstance(pc_df, pd.DataFrame) and not pc_df.empty
+                if has_pc:
+                    for _, prow in pc_df.iterrows():
+                        pc_v = prow.get("pressure", prow.get("pc"))
+                        sw_v = prow.get("saturation", prow.get("sw"))
+                        if (
+                            pc_v is None
+                            or sw_v is None
+                            or pd.isna(pc_v)
+                            or pd.isna(sw_v)
+                        ):
+                            continue
+                        exp_str = str(
+                            prow.get("type")
+                            or prow.get("experiment_type")
+                            or "micp"
+                        )
+                        pc_float = float(pc_v)
+                        pc_item: Dict[str, Any] = {
+                            "sample_name": str(sname),
+                            "depth": s_depth,
+                            "pc": pc_float,
+                            "sw": float(sw_v),
+                            "experiment_type": exp_str,
+                            "cycle": str(prow.get("cycle") or "drainage"),
+                        }
+                        if pc_scale_saved and (
+                            exp_str.endswith("_res")
+                            or well_config.get("pc_scaling_applied")
+                        ):
+                            pc_item["pc_lab"] = round(pc_float / pc_scale_saved, 4)
+                            pc_item["pc_res"] = pc_float
+                        scal_pc_list.append(pc_item)
+
+                # Include in RCA list if it has RCA measurements or if it's an empty sample stub without SCAL Pc
+                if poro_val is not None or perm_val is not None or not has_pc:
+                    eff_raw_d = raw_depth_val if raw_depth_val is not None else s_depth
+                    eff_shift = (
+                        shift_m_val
+                        if shift_m_val is not None
+                        else round(s_depth - eff_raw_d, 3)
+                    )
+                    sample_entry: Dict[str, Any] = {
                         "sample_name": str(sname),
-                        "depth": float(sdict.get("depth", 0.0)),
+                        "depth": s_depth,
+                        "raw_depth": eff_raw_d,
+                        "shift_m": eff_shift,
                         "porosity": poro_val,
                         "permeability": perm_val,
                     }
-                )
+                    if poro_amb_val is not None:
+                        sample_entry["porosity_amb"] = poro_amb_val
+                        if poro_val is not None:
+                            sample_entry["porosity_res"] = poro_val
+                    if perm_air_val is not None:
+                        sample_entry["perm_air"] = perm_air_val
+                        if perm_val is not None:
+                            sample_entry["perm_liquid"] = perm_val
+                    if sdict.get("description"):
+                        sample_entry["description"] = str(sdict["description"])
+                    if sdict.get("remark"):
+                        sample_entry["remark"] = str(sdict["remark"])
+                    core_samples_list.append(sample_entry)
 
-        return {
+        core_samples_list.sort(key=lambda r: (r["depth"], r["sample_name"]))
+        scal_pc_list.sort(key=lambda r: (r["depth"], r["sample_name"], r["pc"]))
+
+        return _sanitize_for_json({
             "project_id": project_id,
             "well_name": well_name,
             "row_count": col_payload.get("row_count", 0),
@@ -871,15 +1512,18 @@ def workspace_well_bundle(
             "stats": stats,
             "tops": tops,
             "contacts": contacts,
+            "perforations": perforations,
             "core_samples": core_samples_list,
+            "scal_pc": scal_pc_list,
             "pressure_tests": _df_or_list(ancillary.get("pressure_tests")),
             "survey": _df_or_list(
                 ancillary.get("well_surveys")
                 if "well_surveys" in ancillary
                 else ancillary.get("directional_surveys")
             ),
+            "header": well_header,
             "config": {k: v for k, v in well_config.items() if not k.startswith("_")},
-        }
+        })
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
@@ -910,37 +1554,24 @@ def workspace_hc_correction(
         if req.corr_angle is not None:
             corr_angle = float(req.corr_angle)
         else:
-            denom = 1.0 - float(req.hi_hc)
-            if abs(denom) < 1e-9:
-                corr_angle = 50.0
-            else:
-                rad = math.atan((float(req.rho_water) - float(req.rho_hc)) / denom)
-                corr_angle = 90.0 - (rad * 180.0 / math.pi)
+            corr_angle = neu_den_xplot_hc_correction_angle(
+                rho_water=float(req.rho_water),
+                rho_hc=float(req.rho_hc),
+                HI_hc=float(req.hi_hc),
+            )
 
         nphi_hc_full = pd.Series(np.nan, index=df.index, dtype=float)
         rhob_hc_full = pd.Series(np.nan, index=df.index, dtype=float)
         hc_flag_full = pd.Series(np.nan, index=df.index, dtype=float)
 
-        vsh_gr_arr: Optional[np.ndarray] = None
-        if "GR" in df.columns:
-            gr_s = pd.to_numeric(df["GR"], errors="coerce")
-            if gr_s.notna().any():
-                if (
-                    req.gr_clean is not None
-                    and req.gr_clay is not None
-                    and abs(float(req.gr_clay) - float(req.gr_clean)) > 1e-6
-                ):
-                    vsh_gr_s = (
-                        (gr_s - float(req.gr_clean))
-                        / (float(req.gr_clay) - float(req.gr_clean))
-                    ).clip(0.0, 1.0)
-                else:
-                    vsh_gr_s = pd.Series(
-                        np.asarray(gr_index(gr_s.reset_index(drop=True)), dtype=float),
-                        index=df.index,
-                        dtype=float,
-                    ).clip(0.0, 1.0)
-                vsh_gr_arr = vsh_gr_s.loc[valid_mask].fillna(0.0).to_numpy(dtype=float)
+        vsh_gr_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+        # Keep NaN where GR is missing so those samples are skipped rather than
+        # being corrected all the way to the clean-sand line.
+        vsh_gr_arr: Optional[np.ndarray] = (
+            vsh_gr_s.loc[valid_mask].to_numpy(dtype=float)
+            if vsh_gr_s.notna().any()
+            else None
+        )
 
         nphi_c, rhob_c, hc_flag = neu_den_xplot_hc_correction(
             nphi[valid_mask].to_numpy(dtype=float),
@@ -951,6 +1582,9 @@ def workspace_hc_correction(
             water_point=req.water_point,
             corr_angle=corr_angle,
             buffer=req.buffer,
+            target_mode=req.target_mode,
+            flag_mode=req.flag_mode,
+            vsh_tol=req.vsh_tol,
         )
 
         nphi_hc_full.loc[valid_mask] = np.asarray(nphi_c, dtype=float)
@@ -987,15 +1621,30 @@ def workspace_hc_correction(
                     bh_gr = badhole_mask & vsh_bh_s.notna()
                     if bh_gr.any():
                         vsh_v = vsh_bh_s.loc[bh_gr].to_numpy(dtype=float)
-                        phin_sh = (
-                            float(req.dry_clay_point[0])
-                            if (req.dry_clay_point and req.dry_clay_point[0] is not None)
-                            else 0.33
+                        sand_pt = (
+                            req.dry_sand_point
+                            if (
+                                req.dry_sand_point
+                                and req.dry_sand_point[0] is not None
+                                and req.dry_sand_point[1] is not None
+                            )
+                            else (-0.02, 2.65)
                         )
-                        rho_ma_sand = (
-                            float(req.dry_sand_point[1])
-                            if (req.dry_sand_point and req.dry_sand_point[1] is not None)
-                            else 2.65
+                        clay_pt = (
+                            req.dry_clay_point
+                            if (
+                                req.dry_clay_point
+                                and req.dry_clay_point[0] is not None
+                                and req.dry_clay_point[1] is not None
+                            )
+                            else (0.33, 2.7)
+                        )
+                        # Parameters consistent with the crossplot endpoints so the
+                        # reconstruction honours the matrix-clay-water triangle.
+                        rho_ma_bh, phin_sh, phid_sh_bh = (
+                            den_correction_params_from_endpoints(
+                                sand_pt, clay_pt, rho_water=float(req.rho_water)
+                            )
                         )
                         nphi_bh = (
                             nphi.loc[bh_gr]
@@ -1008,19 +1657,13 @@ def workspace_hc_correction(
                             )
                             .to_numpy(dtype=float)
                         )
-                        gr_bh = (
-                            pd.to_numeric(df.loc[bh_gr, "GR"], errors="coerce")
-                            .fillna(50.0)
-                            .to_numpy(dtype=float)
-                        )
                         rhob_rec = np.asarray(
                             den_correction(
                                 nphi_bh,
-                                gr_bh,
                                 vsh_gr=vsh_v,
                                 phin_sh=phin_sh,
-                                phid_sh=0.05,
-                                rho_ma=rho_ma_sand,
+                                phid_sh=phid_sh_bh,
+                                rho_ma=rho_ma_bh,
                                 rho_water=float(req.rho_water),
                             ),
                             dtype=float,
@@ -1028,41 +1671,276 @@ def workspace_hc_correction(
                         rhob_hc_full.loc[bh_gr] = np.clip(rhob_rec, 1.8, 2.95)
                         nphi_hc_full.loc[bh_gr] = nphi_bh
 
-        out_df = pd.DataFrame(
-            {
-                "DEPTH": df["DEPTH"],
-                "NPHI_HC": nphi_hc_full,
-                "RHOB_HC": rhob_hc_full,
-                "HC_FLAG": hc_flag_full,
-            }
-        )
+        out_cols_dict: Dict[str, Any] = {
+            "DEPTH": df["DEPTH"],
+            "NPHI_HC": nphi_hc_full,
+            "RHOB_HC": rhob_hc_full,
+            "HC_FLAG": hc_flag_full,
+            "DEN_CORR_FLAG": pd.Series(0.0, index=df.index, dtype=float),
+        }
+        if vsh_gr_s.notna().any():
+            out_cols_dict["VSH_GR"] = vsh_gr_s
+        out_df = pd.DataFrame(out_cols_dict)
 
+        hc_active = valid_mask & (hc_flag_full >= 0.5)
+        n_valid = int(valid_mask.sum())
+        n_hc = int(hc_active.sum())
+        mean_vsh_gr_hc = (
+            round(float(vsh_gr_s.loc[hc_active].mean()), 4)
+            if (n_hc > 0 and vsh_gr_s.loc[hc_active].notna().any())
+            else None
+        )
+        mean_dnphi = (
+            round(float((nphi_hc_full.loc[hc_active] - nphi.loc[hc_active]).mean()), 4)
+            if n_hc > 0
+            else 0.0
+        )
+        mean_drhob = (
+            round(float((rhob_hc_full.loc[hc_active] - rhob.loc[hc_active]).mean()), 4)
+            if n_hc > 0
+            else 0.0
+        )
+        hc_summary = {
+            "corr_angle": round(corr_angle, 2),
+            "hc_flagged_count": n_hc,
+            "valid_count": n_valid,
+            "hc_flagged_pct": round((n_hc / n_valid) * 100.0, 1) if n_valid > 0 else 0.0,
+            "gr_clean": float(req.gr_clean) if req.gr_clean is not None else None,
+            "gr_clay": float(req.gr_clay) if req.gr_clay is not None else None,
+            "mean_vsh_gr_hc": mean_vsh_gr_hc,
+            "mean_dnphi": mean_dnphi,
+            "mean_drhob": mean_drhob,
+        }
+
+        save_cols = [c for c in ("NPHI_HC", "RHOB_HC", "HC_FLAG", "VSH_GR") if c in out_df.columns]
         saved_rows = 0
         if req.save:
-            save_df = out_df.loc[valid_mask, ["DEPTH", "NPHI_HC", "RHOB_HC"]]
+            save_df = out_df.loc[valid_mask, ["DEPTH"] + save_cols]
             saved_rows = _save_curves_to_well(project_id, well_name, save_df)
         else:
             _update_in_memory_well_cache(
                 project_id,
                 well_name,
-                out_df.loc[valid_mask, ["DEPTH", "NPHI_HC", "RHOB_HC"]],
+                out_df.loc[valid_mask, ["DEPTH"] + save_cols],
             )
+
+        stats_out = {
+            "NPHI_HC": _curve_summary_stats(nphi_hc_full),
+            "RHOB_HC": _curve_summary_stats(rhob_hc_full),
+            "HC_FLAG": _curve_summary_stats(hc_flag_full),
+        }
+        if "VSH_GR" in out_df.columns:
+            stats_out["VSH_GR"] = _curve_summary_stats(out_df["VSH_GR"])
 
         return {
             "well_name": well_name,
             "corr_angle": round(corr_angle, 3),
+            "hc_summary": hc_summary,
             "saved": req.save,
             "saved_rows": saved_rows,
-            "stats": {
-                "NPHI_HC": _curve_summary_stats(nphi_hc_full),
-                "RHOB_HC": _curve_summary_stats(rhob_hc_full),
-            },
+            "stats": stats_out,
             **dataframe_to_columnar(out_df),
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"HC correction failed: {e}") from e
+
+
+@router.post(
+    "/wells/{well_name}/den_correction",
+    summary="Compute depth-aligned bulk density correction (den_correction) from NPHI and calibrated VSH_GR",
+)
+def workspace_den_correction(
+    project_id: int, well_name: str, req: WorkspaceDenCorrectionRequest
+) -> Dict[str, Any]:
+    """Reconstruct RHOB from NPHI and calibrated VSH_GR using den_correction and store in RHOB_HC / RHOB_CORR."""
+    try:
+        df = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        nphi, rhob = _select_nphi_rhob(df, use_hc_corrected=False)
+        valid_mask = nphi.notna() & rhob.notna()
+        if not valid_mask.any():
+            raise ValueError(
+                "No valid NPHI and RHOB pairs found in the selected interval"
+            )
+
+        vsh_gr_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+        if not vsh_gr_s.notna().any():
+            raise ValueError(
+                "GR or VSH_GR curve is required to run density correction (den_correction)"
+            )
+
+        rho_w = float(req.rho_water)
+        if req.sync_endpoints:
+            rho_ma_val, phin_sh_val, phid_sh_val = den_correction_params_from_endpoints(
+                req.dry_sand_point, req.dry_clay_point, rho_water=rho_w
+            )
+        else:
+            rho_ma_val = float(req.rho_ma)
+            phin_sh_val = float(req.phin_sh)
+            phid_sh_val = float(req.phid_sh)
+
+        # Samples already hydrocarbon-corrected are protected: den_correction assumes
+        # water-filled NPHI, and gas-depressed NPHI would synthesize too-dense RHOB.
+        if req.protect_hc_rows and "HC_FLAG" in df.columns:
+            hc_prev_mask = (
+                pd.to_numeric(df["HC_FLAG"], errors="coerce").fillna(0.0) >= 0.5
+            )
+        else:
+            hc_prev_mask = pd.Series(False, index=df.index, dtype=bool)
+
+        if req.enable_coal_flagging:
+            coal_mask = _compute_coal_mask(
+                df,
+                enable_coal_flagging=True,
+                coal_rhob_max=req.coal_rhob_max,
+                coal_nphi_min=req.coal_nphi_min,
+                coal_window_size=req.coal_window_size,
+                coal_trend_factor=req.coal_trend_factor,
+            )
+        else:
+            coal_mask = pd.Series(False, index=df.index, dtype=bool)
+
+        scope_mode = (req.scope or "vsh_mismatch").strip().lower()
+        if scope_mode == "badhole_only":
+            badhole_mask = _resolve_badhole_mask(df, auto_detect_if_missing=True)
+            active_mask = valid_mask & (~coal_mask) & badhole_mask & vsh_gr_s.notna()
+        elif scope_mode == "vsh_mismatch":
+            badhole_mask = _resolve_badhole_mask(df, auto_detect_if_missing=False)
+            A = req.dry_sand_point
+            C = req.dry_clay_point
+            D = (1.0, rho_w)
+            # Bulk clay volume from the matrix-clay-water triangle (same convention
+            # as VSH_GR and den_correction; independent of endpoint ordering).
+            _, vcl_dn_np = nd_triangle_coords(
+                nphi.loc[valid_mask].to_numpy(dtype=float),
+                rhob.loc[valid_mask].to_numpy(dtype=float),
+                A,
+                C,
+                D,
+            )
+            vsh_dn_raw = pd.Series(np.nan, index=df.index, dtype=float)
+            vsh_dn_raw.loc[valid_mask] = np.clip(vcl_dn_np, 0.0, 1.0)
+            mismatch_mask = (vsh_dn_raw - vsh_gr_s).abs() >= float(
+                req.vsh_mismatch_threshold
+            )
+            active_mask = (
+                valid_mask
+                & (~coal_mask)
+                & (badhole_mask | mismatch_mask)
+                & vsh_gr_s.notna()
+            )
+        else:
+            active_mask = valid_mask & (~coal_mask) & vsh_gr_s.notna()
+        active_mask = active_mask & (~hc_prev_mask)
+
+        nphi_hc_full = nphi.copy()
+        rhob_hc_full = rhob.copy()
+        den_flag_full = pd.Series(0.0, index=df.index, dtype=float)
+        hc_flag_full = pd.Series(0.0, index=df.index, dtype=float)
+        if hc_prev_mask.any():
+            # Preserve previous hydrocarbon correction results
+            hc_flag_full.loc[hc_prev_mask] = 1.0
+            for col, target in (("NPHI_HC", nphi_hc_full), ("RHOB_HC", rhob_hc_full)):
+                if col in df.columns:
+                    prev = pd.to_numeric(df[col], errors="coerce")
+                    keep = hc_prev_mask & prev.notna()
+                    target.loc[keep] = prev.loc[keep]
+
+        if active_mask.any():
+            nphi_act = nphi.loc[active_mask].to_numpy(dtype=float)
+            vsh_act = vsh_gr_s.loc[active_mask].to_numpy(dtype=float)
+            rhob_rec = np.asarray(
+                den_correction(
+                    nphi_act,
+                    vsh_gr=vsh_act,
+                    phin_sh=phin_sh_val,
+                    phid_sh=phid_sh_val,
+                    rho_ma=rho_ma_val,
+                    rho_water=rho_w,
+                ),
+                dtype=float,
+            )
+            rhob_hc_full.loc[active_mask] = np.clip(rhob_rec, 1.65, 2.98)
+            den_flag_full.loc[active_mask] = 1.0
+
+        out_cols_dict: Dict[str, Any] = {
+            "DEPTH": df["DEPTH"],
+            "NPHI_HC": nphi_hc_full,
+            "RHOB_HC": rhob_hc_full,
+            "RHOB_CORR": rhob_hc_full,
+            "DEN_CORR_FLAG": den_flag_full,
+            "HC_FLAG": hc_flag_full,
+            "VSH_GR": vsh_gr_s,
+        }
+        out_df = pd.DataFrame(out_cols_dict)
+
+        n_valid = int(valid_mask.sum())
+        n_corr = int(active_mask.sum())
+        drhob_s = rhob_hc_full.loc[active_mask] - rhob.loc[active_mask]
+        mean_drhob = round(float(drhob_s.mean()), 4) if n_corr > 0 else 0.0
+        mean_abs_drhob = round(float(drhob_s.abs().mean()), 4) if n_corr > 0 else 0.0
+        mean_vsh_gr = (
+            round(float(vsh_gr_s.loc[active_mask].mean()), 4) if n_corr > 0 else None
+        )
+
+        den_summary = {
+            "scope": scope_mode,
+            "sync_endpoints": bool(req.sync_endpoints),
+            "corrected_count": n_corr,
+            "hc_protected_count": int((valid_mask & hc_prev_mask).sum()),
+            "valid_count": n_valid,
+            "corrected_pct": round((n_corr / n_valid) * 100.0, 1)
+            if n_valid > 0
+            else 0.0,
+            "rho_ma": round(rho_ma_val, 4),
+            "phin_sh": round(phin_sh_val, 4),
+            "phid_sh": round(phid_sh_val, 4),
+            "gr_clean": float(req.gr_clean) if req.gr_clean is not None else None,
+            "gr_clay": float(req.gr_clay) if req.gr_clay is not None else None,
+            "mean_vsh_gr": mean_vsh_gr,
+            "mean_drhob": mean_drhob,
+            "mean_abs_drhob": mean_abs_drhob,
+        }
+
+        save_cols = [
+            "NPHI_HC",
+            "RHOB_HC",
+            "RHOB_CORR",
+            "DEN_CORR_FLAG",
+            "HC_FLAG",
+            "VSH_GR",
+        ]
+        saved_rows = 0
+        if req.save:
+            save_df = out_df.loc[valid_mask, ["DEPTH"] + save_cols]
+            saved_rows = _save_curves_to_well(project_id, well_name, save_df)
+        else:
+            _update_in_memory_well_cache(
+                project_id,
+                well_name,
+                out_df.loc[valid_mask, ["DEPTH"] + save_cols],
+            )
+
+        stats_out = {
+            col: _curve_summary_stats(out_df[col]) for col in save_cols
+        }
+        return {
+            "well_name": well_name,
+            "den_summary": den_summary,
+            "saved": req.save,
+            "saved_rows": saved_rows,
+            "stats": stats_out,
+            **dataframe_to_columnar(out_df),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Density correction failed: {e}"
+        ) from e
 
 
 @router.post(
@@ -1105,7 +1983,9 @@ def workspace_badhole_flagging(
             out_cols.append("DCALI")
 
         out_df = bh_df[out_cols].copy()
-        out_df["BADHOLE"] = pd.to_numeric(out_df["BADHOLE"], errors="coerce").fillna(0.0)
+        out_df["BADHOLE"] = pd.to_numeric(out_df["BADHOLE"], errors="coerce").fillna(
+            0.0
+        )
 
         saved_rows = 0
         if req.save:
@@ -1131,6 +2011,43 @@ def workspace_badhole_flagging(
         raise HTTPException(
             status_code=500, detail=f"Badhole flagging failed: {e}"
         ) from e
+
+
+def _record_well_model_config(
+    project_id: int,
+    well_name: str,
+    updates: Dict[str, Any],
+    persist_db: bool = False,
+) -> None:
+    """Record active petrophysical model & parameter selections in ephemeral and (optionally) DB well config."""
+    clean_upd = {k: v for k, v in updates.items() if v is not None}
+    if not clean_upd:
+        return
+    for w_key in {well_name, resolve_db_well_name(project_id, well_name)}:
+        cur = dict(_ephemeral_well_configs.get((project_id, w_key), {}))
+        cur.update(clean_upd)
+        _ephemeral_well_configs[(project_id, w_key)] = cur
+    if persist_db and not is_demo_mode():
+        try:
+            with get_db() as session:
+                db_name = resolve_db_well_name(project_id, well_name)
+                well_orm = session.scalar(
+                    select(db_models.Well).filter_by(
+                        project_id=project_id, name=db_name
+                    )
+                )
+                if well_orm:
+                    current_cfg = (
+                        dict(well_orm.config_data)
+                        if isinstance(well_orm.config_data, dict)
+                        else {}
+                    )
+                    current_cfg.update(clean_upd)
+                    well_orm.config_data = _sanitize_for_json(current_cfg)
+                    flag_modified(well_orm, "config_data")
+                    session.commit()
+        except Exception:
+            pass
 
 
 @router.post(
@@ -1193,31 +2110,12 @@ def workspace_lithology(
             out_df["VSAND"] = vsand_s
             out_df["VSILT"] = vsilt_s
             out_df["VCLAY"] = vclay_s
+            out_df["VSH_DN"] = vclay_s
             out_df["PROJ_NPHI"] = px_s
             out_df["PROJ_RHOB"] = py_s
-            if (
-                req.gr_clean is not None
-                and req.gr_clay is not None
-                and "GR" in df.columns
-            ):
-                gr_s = pd.to_numeric(df["GR"], errors="coerce")
-                span = float(req.gr_clay) - float(req.gr_clean)
-                if abs(span) > 1e-6 and gr_s.notna().any():
-                    vsh_gr_s = ((gr_s - float(req.gr_clean)) / span).clip(0.0, 1.0)
-                    out_df["VSH_GR"] = vsh_gr_s
-                    out_df["VCLAY"] = (0.65 * vclay_s + 0.35 * vsh_gr_s).clip(0.0, 1.0)
-                    rem_m = (1.0 - out_df["VCLAY"]).clip(0.0, 1.0)
-                    sand_silt_sum = (vsand_s + vsilt_s).replace(0.0, np.nan)
-                    out_df["VSAND"] = np.where(
-                        sand_silt_sum.notna(),
-                        vsand_s * rem_m / sand_silt_sum,
-                        rem_m * 0.7,
-                    )
-                    out_df["VSILT"] = np.where(
-                        sand_silt_sum.notna(),
-                        vsilt_s * rem_m / sand_silt_sum,
-                        rem_m * 0.3,
-                    )
+            vsh_gr_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+            if vsh_gr_s.notna().any():
+                out_df["VSH_GR"] = vsh_gr_s
 
             # Normalize matrix-relative SSC fractions by (1 - PHIT) so bulk volumes stack with PHIE/PHIT <= 1.0
             rho_ma_ssc = rho_matrix(
@@ -1238,16 +2136,7 @@ def workspace_lithology(
                 index=df.index,
                 dtype=float,
             )
-            if "PHIT" in df.columns:
-                phit_ref = (
-                    pd.to_numeric(df["PHIT"], errors="coerce")
-                    .where(lambda s: s.notna() & (s >= 0.0) & (s <= 0.6), phid_ssc)
-                    .fillna(phid_ssc)
-                    .fillna(0.0)
-                    .clip(0.0, 0.6)
-                )
-            else:
-                phit_ref = phid_ssc.fillna(0.0).clip(0.0, 0.6)
+            phit_ref = phid_ssc.fillna(0.0).clip(0.0, 0.6)
             vmatrix_s = (1.0 - phit_ref).clip(0.0, 1.0)
             for mcol in ("VSAND", "VSILT", "VCLAY"):
                 out_df[mcol] = (out_df[mcol] * vmatrix_s).clip(0.0, 1.0)
@@ -1258,7 +2147,9 @@ def workspace_lithology(
                     zero_s = pd.Series(np.nan, index=df.index, dtype=float)
                     zero_s.loc[valid_mask] = 0.0
                     out_df[mcol] = zero_s
-            save_cols = list(ALL_LITHOLOGY_VOL_COLS)
+            save_cols = list(ALL_LITHOLOGY_VOL_COLS) + [
+                c for c in ("VSH_GR", "VSH_DN") if c in out_df.columns
+            ]
 
             crossplot_meta = {
                 "dry_sand_point": list(ssc_model.dry_sand_point),
@@ -1380,18 +2271,45 @@ def workspace_lithology(
             vclay_s.loc[valid_mask] = np.clip(
                 np.asarray(vsh, dtype=float).ravel(), 0.0, 1.0
             )
-            phit_ref = (
-                (
-                    pd.to_numeric(df["PHIT"], errors="coerce")
-                    if "PHIT" in df.columns
-                    else pd.Series(0.0, index=df.index, dtype=float)
+            vsand_s = (1.0 - vclay_s).clip(0.0, 1.0)
+            if "RHOB" in df.columns:
+                rhob_gr = pd.to_numeric(df["RHOB"], errors="coerce")
+                rho_ma_gr = np.asarray(
+                    rho_matrix(
+                        vsand=vsand_s.fillna(0.0).to_numpy(dtype=float),
+                        vclay=vclay_s.fillna(0.0).to_numpy(dtype=float),
+                    ),
+                    dtype=float,
                 )
-                .fillna(0.0)
-                .clip(0.0, 0.6)
-            )
+                rho_ma_gr = np.where(
+                    (rho_ma_gr > 1.2) & np.isfinite(rho_ma_gr), rho_ma_gr, 2.65
+                )
+                phit_ref = pd.Series(
+                    np.clip(
+                        density_porosity(
+                            rhob_gr.to_numpy(dtype=float),
+                            rho_ma_gr,
+                            req.fluid_point[1],
+                        ),
+                        0.0,
+                        0.6,
+                    ),
+                    index=df.index,
+                    dtype=float,
+                ).fillna(0.0)
+            else:
+                phit_ref = (
+                    (
+                        pd.to_numeric(df["PHIT"], errors="coerce")
+                        if "PHIT" in df.columns
+                        else pd.Series(0.0, index=df.index, dtype=float)
+                    )
+                    .fillna(0.0)
+                    .clip(0.0, 0.6)
+                )
             vmatrix_s = (1.0 - phit_ref).clip(0.0, 1.0)
             out_df["VCLAY"] = (vclay_s * vmatrix_s).clip(0.0, 1.0)
-            out_df["VSAND"] = ((1.0 - vclay_s).clip(0.0, 1.0) * vmatrix_s).clip(
+            out_df["VSAND"] = (vsand_s * vmatrix_s).clip(
                 0.0, 1.0
             )
             for mcol in ALL_LITHOLOGY_VOL_COLS:
@@ -1444,7 +2362,7 @@ def workspace_lithology(
             df, auto_detect_if_missing=(bh_mode != "none")
         )
         active_badhole = badhole_mask & (~coal_mask)
-        if badhole_mask.any() or "BADHOLE" in df.columns:
+        if bh_mode != "none" or badhole_mask.any() or "BADHOLE" in df.columns:
             out_df["BADHOLE"] = np.where(badhole_mask, 1.0, 0.0)
             if "BADHOLE" not in save_cols:
                 save_cols.append("BADHOLE")
@@ -1491,21 +2409,57 @@ def workspace_lithology(
                         .fillna(50.0)
                         .to_numpy(dtype=float)
                     )
+                    # Endpoint-consistent den_correction parameters (honours the
+                    # matrix-clay-fluid triangle instead of a fixed phid_sh).
+                    try:
+                        rho_ma_dc, phin_sh_dc, phid_sh_dc = (
+                            den_correction_params_from_endpoints(
+                                (
+                                    float(req.dry_sand_point[0]),
+                                    rho_ma_sand,
+                                )
+                                if (
+                                    req.dry_sand_point
+                                    and req.dry_sand_point[0] is not None
+                                )
+                                else (-0.02, rho_ma_sand),
+                                (
+                                    phin_sh,
+                                    float(req.dry_clay_point[1]),
+                                )
+                                if (
+                                    req.dry_clay_point
+                                    and req.dry_clay_point[1] is not None
+                                )
+                                else (phin_sh, 2.7),
+                                rho_water=rho_fl,
+                            )
+                        )
+                    except ValueError:
+                        rho_ma_dc, phin_sh_dc, phid_sh_dc = rho_ma_sand, phin_sh, 0.05
                     rhob_rec = np.asarray(
                         den_correction(
                             nphi_bh,
                             gr_bh,
                             vsh_gr=vsh_v,
-                            phin_sh=phin_sh,
-                            phid_sh=0.05,
-                            rho_ma=rho_ma_sand,
+                            phin_sh=phin_sh_dc,
+                            phid_sh=phid_sh_dc,
+                            rho_ma=rho_ma_dc,
                             rho_water=rho_fl,
                         ),
                         dtype=float,
                     )
+                    rho_ma_bh = np.asarray(
+                        rho_matrix(vsand=1.0 - vsh_v, vclay=vsh_v), dtype=float
+                    )
+                    rho_ma_bh = np.where(
+                        (rho_ma_bh > 1.2) & np.isfinite(rho_ma_bh),
+                        rho_ma_bh,
+                        rho_ma_sand,
+                    )
                     phit_bh = np.clip(
                         np.asarray(
-                            density_porosity(rhob_rec, rho_ma_sand, rho_fl), dtype=float
+                            density_porosity(rhob_rec, rho_ma_bh, rho_fl), dtype=float
                         ),
                         0.0,
                         0.45,
@@ -1553,6 +2507,31 @@ def workspace_lithology(
             else:
                 _update_in_memory_well_cache(project_id, well_name, save_df)
 
+        _record_well_model_config(
+            project_id,
+            well_name,
+            {
+                "litho_model_key": model,
+                "litho_minerals": (
+                    [m.upper() for m in (req.minerals or []) if m]
+                    if model == "multi_mineral"
+                    else None
+                ),
+                "porosity_method_key": req.porosity_method,
+                "use_hc_corrected": req.use_hc_corrected,
+                "gr_clean": req.gr_clean,
+                "gr_clay": req.gr_clay,
+                "dry_sand_point": list(req.dry_sand_point)
+                if req.dry_sand_point
+                else None,
+                "dry_clay_point": list(req.dry_clay_point)
+                if req.dry_clay_point
+                else None,
+                "fluid_point": list(req.fluid_point) if req.fluid_point else None,
+                "badhole_treatment": bh_mode,
+            },
+            persist_db=bool(req.save),
+        )
         stats = {col: _curve_summary_stats(out_df[col]) for col in save_cols}
         return {
             "well_name": well_name,
@@ -1570,6 +2549,250 @@ def workspace_lithology(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Lithology calculation failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/wells/{well_name}/thomas_stieber",
+    summary="Compute Thomas-Stieber thin-bed shale partitioning (VSH_LAM, VSH_DIS, PHIT_SAND) and Hagiwara RT_MOD",
+)
+def workspace_thomas_stieber(
+    project_id: int, well_name: str, req: WorkspaceThomasStieberRequest
+) -> Dict[str, Any]:
+    """Compute Thomas-Stieber laminated/dispersed shale volumes, sand lamina porosity, and Hagiwara resistivity."""
+    try:
+        df = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        dry_sand_poro = max(0.05, min(float(req.dry_sand_poro), 0.50))
+        dry_shale_poro = max(0.01, min(float(req.dry_shale_poro), 0.45))
+
+        tb = ThinBeds(
+            dry_sand_poro=dry_sand_poro,
+            dry_shale_poro=dry_shale_poro,
+            dry_sand_point=req.dry_sand_point,
+            dry_clay_point=req.dry_clay_point,
+            fluid_point=req.fluid_point,
+        )
+
+        has_existing = (
+            req.use_existing_phit_vsh
+            and "PHIT" in df.columns
+            and ("VCLAY" in df.columns or "VSHALE" in df.columns)
+        )
+
+        phit_s = (
+            pd.to_numeric(df["PHIT"], errors="coerce")
+            if "PHIT" in df.columns
+            else pd.Series(np.nan, index=df.index, dtype=float)
+        )
+        vclay_col = (
+            "VCLAY"
+            if "VCLAY" in df.columns
+            else ("VSHALE" if "VSHALE" in df.columns else None)
+        )
+        vclay_bulk_s = (
+            pd.to_numeric(df[vclay_col], errors="coerce")
+            if vclay_col is not None
+            else pd.Series(np.nan, index=df.index, dtype=float)
+        )
+
+        if not has_existing or not (phit_s.notna() & vclay_bulk_s.notna()).any():
+            nphi, rhob = _select_nphi_rhob(df, use_hc_corrected=req.use_hc_corrected)
+            valid_nd = nphi.notna() & rhob.notna()
+            if not valid_nd.any():
+                raise ValueError(
+                    "No valid PHIT/VCLAY or NPHI/RHOB pairs found in the selected interval"
+                )
+            _, vsh_tb, phit_tb, _, _, _, _ = tb.estimate_litho_poro(
+                nphi[valid_nd].to_numpy(dtype=float),
+                rhob[valid_nd].to_numpy(dtype=float),
+            )
+            phit_s.loc[valid_nd] = np.clip(np.asarray(phit_tb, dtype=float), 0.0, 0.5)
+            vsh_norm_nd = np.clip(np.asarray(vsh_tb, dtype=float), 0.0, 1.0)
+            vclay_bulk_s.loc[valid_nd] = np.clip(
+                vsh_norm_nd * (1.0 - phit_s.loc[valid_nd].to_numpy(dtype=float)),
+                0.0,
+                1.0,
+            )
+
+        valid_mask = phit_s.notna() & vclay_bulk_s.notna()
+        if not valid_mask.any():
+            raise ValueError(
+                "No valid porosity and shale volume rows available for Thomas-Stieber estimation"
+            )
+
+        phit_v = np.clip(phit_s.loc[valid_mask].to_numpy(dtype=float), 0.0, 0.55)
+        vclay_bulk_v = np.clip(
+            vclay_bulk_s.loc[valid_mask].to_numpy(dtype=float), 0.0, 1.0
+        )
+
+        # Normalize bulk clay volume to [0, 1] on the Thomas-Stieber Vshale axis where pure shale = 1.0
+        vmatrix_denom = np.maximum(1.0 - phit_v + dry_shale_poro * vclay_bulk_v, 1e-4)
+        vsh_ts_v = np.clip(vclay_bulk_v / np.maximum(1.0 - phit_v, 0.15), 0.0, 1.0)
+        # If VCLAY is already unscaled VSHALE close to 1.0 in shales, blend smoothly
+        if float(np.nanmax(vclay_bulk_v)) > 0.88:
+            vsh_ts_v = np.clip(vclay_bulk_v, 0.0, 1.0)
+
+        vsh_lam_raw, vsh_dis_raw, vsand_dis_raw, phit_sand_raw = tb.litho_poro_fraction(
+            phit_v, vsh_ts_v
+        )
+        vsh_lam_raw = np.asarray(vsh_lam_raw, dtype=float)
+        vsh_dis_raw = np.asarray(vsh_dis_raw, dtype=float)
+        vsand_dis_raw = np.asarray(vsand_dis_raw, dtype=float)
+        phit_sand_raw = np.asarray(phit_sand_raw, dtype=float)
+
+        # Partition bulk VCLAY into VSH_LAM + VSH_DIS == VCLAY so Track 4 mineral stacking stays exact
+        vsh_lam_norm = np.clip(vsh_lam_raw, 0.0, vsh_ts_v)
+        lam_fraction = np.where(
+            vsh_ts_v > 1e-5,
+            np.clip(vsh_lam_norm / vsh_ts_v, 0.0, 1.0),
+            0.0,
+        )
+        vsh_lam_bulk = np.clip(vclay_bulk_v * lam_fraction, 0.0, vclay_bulk_v)
+        vsh_dis_bulk = np.clip(vclay_bulk_v - vsh_lam_bulk, 0.0, vclay_bulk_v)
+        vsand_dis_clamped = np.clip(vsand_dis_raw, 0.0, 1.0)
+        phit_sand_clamped = np.clip(
+            np.where(np.isfinite(phit_sand_raw), phit_sand_raw, phit_v),
+            0.0,
+            max(dry_sand_poro * 1.15, 0.45),
+        )
+        # In pure shale (Vsh > 0.95), intrinsic sand lamina porosity tapers to shale porosity
+        phit_sand_clamped = np.where(
+            vsh_ts_v > 0.95, phit_v, np.maximum(phit_sand_clamped, phit_v)
+        )
+
+        # Hagiwara (1995) anisotropic thin-bed resistivity forward model
+        rsand = max(0.05, float(req.rsand))
+        rv_shale = max(0.05, float(req.rv_shale))
+        rh_shale = max(0.05, float(req.rh_shale))
+        theta = max(0.0, min(float(req.theta), 89.9))
+
+        rt_mod_v = np.asarray(
+            tb.resistivity_modelling(
+                vsh_lam_norm,
+                rsand=rsand,
+                rv_shale=rv_shale,
+                rh_shale=rh_shale,
+                theta=theta,
+            ),
+            dtype=float,
+        )
+        rt_mod_v = np.clip(rt_mod_v, 0.05, 5000.0)
+
+        # Invert true sand-lamina resistivity RSAND_TS from measured RT & VSH_LAM (with Hagiwara parallel conductivity)
+        rsand_ts_v = np.full_like(rt_mod_v, rsand)
+        for rt_alias in ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD"):
+            if rt_alias in df.columns:
+                rt_m = pd.to_numeric(
+                    df.loc[valid_mask, rt_alias], errors="coerce"
+                ).to_numpy(dtype=float)
+                valid_rt_m = np.isfinite(rt_m) & (rt_m > 0.05)
+                if valid_rt_m.any():
+                    # Parallel horizontal conductivity: 1/Rt = Vsh_lam/Rh_shale + (1 - Vsh_lam)/Rsand
+                    c_meas = 1.0 / np.maximum(rt_m, 0.05)
+                    c_sh = vsh_lam_norm / rh_shale
+                    sand_frac = np.maximum(1.0 - vsh_lam_norm, 0.05)
+                    # Blend measured conductivity subtraction with forward Rsand prior where shale fraction is high
+                    c_sand_inv = (c_meas - 0.85 * c_sh) / sand_frac
+                    r_inv = np.where(
+                        c_sand_inv > (1.0 / max(rsand * 3.0, 500.0)),
+                        1.0 / np.maximum(c_sand_inv, 1e-4),
+                        rsand,
+                    )
+                    r_inv = np.clip(
+                        np.maximum(r_inv, rt_m), 0.1, max(rsand * 3.0, 1000.0)
+                    )
+                    rsand_ts_v = np.where(valid_rt_m, r_inv, rsand)
+                break
+
+        out_df = pd.DataFrame({"DEPTH": df["DEPTH"]})
+        for col_name, arr_vals in (
+            ("VSH_LAM", vsh_lam_bulk),
+            ("VSH_DIS", vsh_dis_bulk),
+            ("VSAND_DIS", vsand_dis_clamped),
+            ("PHIT_SAND", phit_sand_clamped),
+            ("RT_MOD", rt_mod_v),
+            ("RSAND_TS", rsand_ts_v),
+            ("VSH_TS", vsh_ts_v),
+        ):
+            s_col = pd.Series(np.nan, index=df.index, dtype=float)
+            s_col.loc[valid_mask] = arr_vals
+            out_df[col_name] = s_col
+
+        save_cols = [
+            "VSH_LAM",
+            "VSH_DIS",
+            "VSAND_DIS",
+            "PHIT_SAND",
+            "RT_MOD",
+            "RSAND_TS",
+            "VSH_TS",
+        ]
+        saved_rows = 0
+        save_df = out_df.loc[valid_mask, ["DEPTH"] + save_cols]
+        if req.save:
+            saved_rows = _save_curves_to_well(project_id, well_name, save_df)
+        else:
+            _update_in_memory_well_cache(project_id, well_name, save_df)
+
+        # Compute summary & resistivity fit metrics against measured RT if present
+        rt_rmse_decade: Optional[float] = None
+        for rt_alias in ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD"):
+            if rt_alias in df.columns:
+                rt_meas = pd.to_numeric(
+                    df.loc[valid_mask, rt_alias], errors="coerce"
+                ).to_numpy(dtype=float)
+                valid_rt = (
+                    np.isfinite(rt_meas)
+                    & (rt_meas > 0)
+                    & np.isfinite(rt_mod_v)
+                    & (rt_mod_v > 0)
+                )
+                if valid_rt.any():
+                    diff_log = np.log10(rt_mod_v[valid_rt]) - np.log10(
+                        rt_meas[valid_rt]
+                    )
+                    rt_rmse_decade = round(float(np.sqrt(np.mean(diff_log**2))), 4)
+                break
+
+        sand_mask = vsh_ts_v < 0.65
+        mean_uplift = (
+            round(
+                float(np.nanmean(phit_sand_clamped[sand_mask] - phit_v[sand_mask])), 4
+            )
+            if sand_mask.any()
+            else 0.0
+        )
+
+        _record_well_model_config(
+            project_id,
+            well_name,
+            {"thomas_stieber_enabled": True},
+            persist_db=bool(req.save),
+        )
+        stats = {col: _curve_summary_stats(out_df[col]) for col in save_cols}
+        return {
+            "well_name": well_name,
+            "saved": req.save,
+            "saved_rows": saved_rows,
+            "summary": {
+                "mean_vsh_lam": round(float(np.nanmean(vsh_lam_bulk)), 4),
+                "mean_vsh_dis": round(float(np.nanmean(vsh_dis_bulk)), 4),
+                "mean_phit_sand": round(float(np.nanmean(phit_sand_clamped)), 4),
+                "mean_porosity_uplift_vv": mean_uplift,
+                "rt_rmse_decade": rt_rmse_decade,
+                "lower_vertex_vsh": round(dry_sand_poro, 4),
+                "lower_vertex_phit": round(dry_sand_poro * dry_shale_poro, 4),
+            },
+            "stats": stats,
+            **dataframe_to_columnar(out_df),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Thomas-Stieber calculation failed: {e}"
         ) from e
 
 
@@ -1611,9 +2834,12 @@ def workspace_porosity(
         rhob_v = rhob_s.to_numpy(dtype=float)
 
         lith_model = (req.lithology_model or "").lower()
-        mineral_vol_cols = [
-            c
-            for c in (
+        if lith_model == "ssc":
+            candidate_min_cols = ("VSAND", "VSILT", "VCLAY", "VCOAL")
+        elif lith_model == "vsh_gr":
+            candidate_min_cols = ("VSAND", "VCLAY", "VCOAL")
+        else:
+            candidate_min_cols = (
                 "VSAND",
                 "VSILT",
                 "VCLAY",
@@ -1627,140 +2853,99 @@ def workspace_porosity(
                 "VPYRI",
                 "VCOAL",
             )
-            if c in df.columns
-        ]
-        has_mm_cols = any(
-            c in df.columns
-            and pd.to_numeric(df.loc[valid_mask, c], errors="coerce").fillna(0.0).max()
-            > 1e-4
-            for c in (
-                "VCALC",
-                "VDOLO",
-                "VANHY",
-                "VHALI",
-                "VGYPS",
-                "VKAOL",
-                "VFELD",
-                "VPYRI",
-                "VCOAL",
+        mineral_vol_cols = [c for c in candidate_min_cols if c in df.columns]
+
+        n_valid = int(valid_mask.sum())
+        vol_kwargs: Dict[str, np.ndarray] = {}
+        total_min_vol = np.zeros(n_valid, dtype=float)
+        for c in mineral_vol_cols:
+            arr = (
+                pd.to_numeric(df.loc[valid_mask, c], errors="coerce")
+                .fillna(0.0)
+                .clip(0.0, 1.0)
+                .to_numpy(dtype=float)
             )
-        )
-        use_existing_minerals = lith_model in ("multi_mineral", "vsh_gr") or (
-            not lith_model and has_mm_cols
-        )
+            vol_kwargs[c.lower()] = arr
+            total_min_vol += arr
 
-        if use_existing_minerals and mineral_vol_cols:
-            vol_kwargs: Dict[str, np.ndarray] = {}
-            total_min_vol = np.zeros(int(valid_mask.sum()), dtype=float)
-            for c in mineral_vol_cols:
-                arr = (
-                    pd.to_numeric(df.loc[valid_mask, c], errors="coerce")
-                    .fillna(0.0)
-                    .clip(0.0, 1.0)
-                    .to_numpy(dtype=float)
-                )
-                vol_kwargs[c.lower()] = arr
-                total_min_vol += arr
+        norm_kwargs: Dict[str, np.ndarray] = {
+            k: np.where(total_min_vol > 1e-6, v / total_min_vol, 0.0)
+            for k, v in vol_kwargs.items()
+        }
 
-            norm_kwargs = {
-                k: np.where(total_min_vol > 1e-6, v / total_min_vol, 0.0)
-                for k, v in vol_kwargs.items()
-            }
-            rho_ma = np.asarray(rho_matrix(**norm_kwargs), dtype=float)
-            rho_ma = np.where((rho_ma > 1.2) & np.isfinite(rho_ma), rho_ma, 2.68)
-            phid_v = np.asarray(
-                density_porosity(rhob_v, rho_ma, req.fluid_point[1]), dtype=float
-            )
-
-            if req.method.lower() == "den":
-                phit_v = phid_v
-            elif (
-                lith_model == "multi_mineral"
-                and "PHIT_CONSTRUCTED" in df.columns
-                and pd.to_numeric(
-                    df.loc[valid_mask, "PHIT_CONSTRUCTED"], errors="coerce"
-                )
-                .notna()
-                .any()
-            ):
-                phit_c = pd.to_numeric(
-                    df.loc[valid_mask, "PHIT_CONSTRUCTED"], errors="coerce"
-                ).to_numpy(dtype=float)
-                phit_v = np.where(np.isfinite(phit_c), phit_c, phid_v)
-            else:
-                phit_v = np.clip(0.65 * phid_v + 0.35 * nphi_v, 0.0, 0.6)
-
-            vclay_bulk = vol_kwargs.get(
-                "vclay", np.zeros(int(valid_mask.sum()), dtype=float)
-            ) + vol_kwargs.get("vkaol", np.zeros(int(valid_mask.sum()), dtype=float))
-            vclay_mat = norm_kwargs.get(
-                "vclay", np.zeros(int(valid_mask.sum()), dtype=float)
-            )
-            phit_sh_v = np.asarray(estimate_shale_porosity(nphi_v, phid_v), dtype=float)
-            # Use bulk shale volume where mineral volumes are already bulk-normalized
-            vclay_eff = np.where(total_min_vol < 0.98, vclay_bulk, vclay_mat)
-            phie_v = np.clip(phit_v - (vclay_eff * phit_sh_v), 0.0, phit_v)
-        else:
+        # Fallback to SandSiltClay lithology estimation where no mineral volumes exist yet
+        need_ssc_fallback = total_min_vol <= 1e-6
+        if np.any(need_ssc_fallback) or req.method.lower() == "neu_den":
             vsand_m, vsilt_m, vclay_m, _ = ssc_model.estimate_lithology(nphi_s, rhob_s)
-            vsand = np.asarray(vsand_m, dtype=float)
-            vsilt = np.asarray(vsilt_m, dtype=float)
-            vclay = np.asarray(vclay_m, dtype=float)
-            if all(c in df.columns for c in ("VSAND", "VSILT", "VCLAY")):
-                vs_df = (
-                    pd.to_numeric(df.loc[valid_mask, "VSAND"], errors="coerce")
-                    .fillna(0.0)
-                    .clip(0.0, 1.0)
-                    .to_numpy(dtype=float)
+            if np.any(need_ssc_fallback):
+                vsand_fb = np.asarray(vsand_m, dtype=float)
+                vsilt_fb = np.asarray(vsilt_m, dtype=float)
+                vclay_fb = np.asarray(vclay_m, dtype=float)
+                norm_kwargs["vsand"] = np.where(
+                    need_ssc_fallback,
+                    vsand_fb,
+                    norm_kwargs.get("vsand", np.zeros(n_valid, dtype=float)),
                 )
-                vsi_df = (
-                    pd.to_numeric(df.loc[valid_mask, "VSILT"], errors="coerce")
-                    .fillna(0.0)
-                    .clip(0.0, 1.0)
-                    .to_numpy(dtype=float)
+                norm_kwargs["vsilt"] = np.where(
+                    need_ssc_fallback,
+                    vsilt_fb,
+                    norm_kwargs.get("vsilt", np.zeros(n_valid, dtype=float)),
                 )
-                vcl_df = (
-                    pd.to_numeric(df.loc[valid_mask, "VCLAY"], errors="coerce")
-                    .fillna(0.0)
-                    .clip(0.0, 1.0)
-                    .to_numpy(dtype=float)
-                )
-                tot_ssc = vs_df + vsi_df + vcl_df
-                has_ssc = tot_ssc > 1e-6
-                if np.any(has_ssc):
-                    vsand = np.where(has_ssc, vs_df / tot_ssc, vsand)
-                    vsilt = np.where(has_ssc, vsi_df / tot_ssc, vsilt)
-                    vclay = np.where(has_ssc, vcl_df / tot_ssc, vclay)
-            rho_ma = rho_matrix(vsand=vsand, vsilt=vsilt, vclay=vclay)
-            phid_v = density_porosity(rhob_v, rho_ma, req.fluid_point[1])
-
-            if req.method.lower() == "den":
-                phit_v = np.asarray(phid_v, dtype=float)
-            else:
-                phit_v = np.asarray(
-                    neu_den_xplot_poro(
-                        nphi_s,
-                        rhob_s,
-                        model=req.crossplot_model,
-                        dry_min1_point=req.dry_sand_point,
-                        dry_silt_point=ssc_model.dry_silt_point,
-                        dry_clay_point=ssc_model.dry_clay_point,
-                        fluid_point=req.fluid_point,
-                    ),
-                    dtype=float,
+                norm_kwargs["vclay"] = np.where(
+                    need_ssc_fallback,
+                    vclay_fb,
+                    norm_kwargs.get("vclay", np.zeros(n_valid, dtype=float)),
                 )
 
-            phit_sh_v = np.asarray(estimate_shale_porosity(nphi_v, phid_v), dtype=float)
-            phie_v = phit_v - (np.asarray(vclay, dtype=float) * phit_sh_v)
+        # Calculate matrix density from unnormalized mineral fractions and density porosity
+        rho_ma = np.asarray(rho_matrix(**norm_kwargs), dtype=float)
+        rho_ma = np.where((rho_ma > 1.2) & np.isfinite(rho_ma), rho_ma, 2.65)
+        phid_v = np.asarray(
+            density_porosity(rhob_v, rho_ma, req.fluid_point[1]), dtype=float
+        )
+
+        if req.method.lower() == "neu_den":
+            phit_v = np.asarray(
+                neu_den_xplot_poro(
+                    nphi_s,
+                    rhob_s,
+                    model=req.crossplot_model,
+                    dry_min1_point=req.dry_sand_point,
+                    dry_silt_point=ssc_model.dry_silt_point,
+                    dry_clay_point=ssc_model.dry_clay_point,
+                    fluid_point=req.fluid_point,
+                ),
+                dtype=float,
+            )
+        else:
+            phit_v = phid_v
+
+        vclay_mat = norm_kwargs.get(
+            "vclay", np.zeros(n_valid, dtype=float)
+        ) + norm_kwargs.get("vkaol", np.zeros(n_valid, dtype=float))
+        vclay_bulk = np.clip(
+            vclay_mat * np.clip(1.0 - np.clip(phit_v, 0.0, 1.0), 0.0, 1.0),
+            0.0,
+            1.0,
+        )
+        phit_sh_v = np.asarray(estimate_shale_porosity(nphi_v, phid_v), dtype=float)
+        phie_v = np.clip(
+            phit_v - (vclay_bulk * phit_sh_v),
+            0.0,
+            np.clip(phit_v, 0.0, 1.0),
+        )
 
         phit_s = pd.Series(np.nan, index=df.index, dtype=float)
         phie_s = pd.Series(np.nan, index=df.index, dtype=float)
         phid_s = pd.Series(np.nan, index=df.index, dtype=float)
         phit_sh_s = pd.Series(np.nan, index=df.index, dtype=float)
+        rhom_s = pd.Series(np.nan, index=df.index, dtype=float)
 
         phit_s.loc[valid_mask] = np.clip(phit_v, 0.0, 1.0)
         phie_s.loc[valid_mask] = np.clip(phie_v, 0.0, 1.0)
         phid_s.loc[valid_mask] = np.clip(np.asarray(phid_v, dtype=float), 0.0, 1.0)
         phit_sh_s.loc[valid_mask] = np.clip(phit_sh_v, 0.0, 1.0)
+        rhom_s.loc[valid_mask] = rho_ma
 
         if req.enable_coal_flagging:
             coal_mask = _compute_coal_mask(
@@ -1838,43 +3023,83 @@ def workspace_porosity(
                         if "GR" in df.columns
                         else np.full(len(vsh_v), 50.0)
                     )
+                    # Endpoint-consistent den_correction parameters (honours the
+                    # matrix-clay-fluid triangle instead of a fixed phid_sh).
+                    try:
+                        rho_ma_dc, phin_sh_dc, phid_sh_dc = (
+                            den_correction_params_from_endpoints(
+                                (
+                                    float(req.dry_sand_point[0]),
+                                    rho_ma_sand,
+                                )
+                                if (
+                                    req.dry_sand_point
+                                    and req.dry_sand_point[0] is not None
+                                )
+                                else (-0.02, rho_ma_sand),
+                                (
+                                    phin_sh,
+                                    float(req.dry_clay_point[1]),
+                                )
+                                if (
+                                    req.dry_clay_point
+                                    and req.dry_clay_point[1] is not None
+                                )
+                                else (phin_sh, 2.7),
+                                rho_water=rho_fl,
+                            )
+                        )
+                    except ValueError:
+                        rho_ma_dc, phin_sh_dc, phid_sh_dc = rho_ma_sand, phin_sh, 0.05
                     rhob_rec = np.asarray(
                         den_correction(
                             nphi_bh,
                             gr_bh,
                             vsh_gr=vsh_v,
-                            phin_sh=phin_sh,
-                            phid_sh=0.05,
-                            rho_ma=rho_ma_sand,
+                            phin_sh=phin_sh_dc,
+                            phid_sh=phid_sh_dc,
+                            rho_ma=rho_ma_dc,
                             rho_water=rho_fl,
                         ),
                         dtype=float,
                     )
+                    rho_ma_bh = np.asarray(
+                        rho_matrix(vsand=1.0 - vsh_v, vclay=vsh_v), dtype=float
+                    )
+                    rho_ma_bh = np.where(
+                        (rho_ma_bh > 1.2) & np.isfinite(rho_ma_bh),
+                        rho_ma_bh,
+                        rho_ma_sand,
+                    )
                     phid_bh = np.clip(
                         np.asarray(
-                            density_porosity(rhob_rec, rho_ma_sand, rho_fl), dtype=float
+                            density_porosity(rhob_rec, rho_ma_bh, rho_fl), dtype=float
                         ),
                         0.0,
                         0.45,
                     )
                     phit_sh_bh = np.clip(
-                        np.asarray(estimate_shale_porosity(nphi_bh, phid_bh), dtype=float),
+                        np.asarray(
+                            estimate_shale_porosity(nphi_bh, phid_bh), dtype=float
+                        ),
                         0.0,
                         0.45,
                     )
-                    phie_bh = np.clip(phid_bh - vsh_v * phit_sh_bh, 0.0, phid_bh)
+                    vclay_bh_bulk = vsh_v * np.clip(1.0 - phid_bh, 0.0, 1.0)
+                    phie_bh = np.clip(
+                        phid_bh - vclay_bh_bulk * phit_sh_bh, 0.0, phid_bh
+                    )
                     phit_s.loc[bh_gr] = phid_bh
                     phid_s.loc[bh_gr] = phid_bh
                     phit_sh_s.loc[bh_gr] = phit_sh_bh
                     phie_s.loc[bh_gr] = phie_bh
+                    rhom_s.loc[bh_gr] = rho_ma_bh
             elif bh_mode == "interpolate":
                 for s_ref in (phit_s, phie_s, phid_s, phit_sh_s):
                     s_ref.loc[active_badhole] = np.nan
-                    s_ref[:] = (
-                        s_ref.interpolate(method="linear", limit_direction="both").clip(
-                            0.0, 1.0
-                        )
-                    )
+                    s_ref[:] = s_ref.interpolate(
+                        method="linear", limit_direction="both"
+                    ).clip(0.0, 1.0)
             elif bh_mode in ("ignore", "null", "nan"):
                 phit_s.loc[active_badhole] = np.nan
                 phie_s.loc[active_badhole] = np.nan
@@ -1895,6 +3120,7 @@ def workspace_porosity(
                 "PHIE": phie_s,
                 "PHID": phid_s,
                 "PHIT_SH": phit_sh_s,
+                "RHOM": rhom_s,
                 "CPORE": cpore_s,
             }
         )
@@ -1932,9 +3158,9 @@ def workspace_porosity(
                     scaled_col = pd.Series(np.nan, index=df.index, dtype=float)
                     scaled_col.loc[eff_valid] = np.where(
                         has_pos_min.loc[eff_valid],
-                        (
-                            min_mat.loc[eff_valid, c] * scale_factor.loc[eff_valid]
-                        ).clip(0.0, 1.0),
+                        (min_mat.loc[eff_valid, c] * scale_factor.loc[eff_valid]).clip(
+                            0.0, 1.0
+                        ),
                         0.0,
                     )
                     if bh_mode in ("ignore", "null", "nan") and active_badhole.any():
@@ -1983,7 +3209,7 @@ def workspace_porosity(
                 if ss_tot > 1e-12:
                     core_metrics["r2"] = round(float(1.0 - ss_res / ss_tot), 4)
 
-        save_poro_cols = ["DEPTH", "PHIT", "PHIE", "PHID"] + [
+        save_poro_cols = ["DEPTH", "PHIT", "PHIE", "PHID", "RHOM"] + [
             c for c in active_min_cols if c in out_df.columns
         ]
         save_row_mask = valid_mask | active_badhole
@@ -1996,6 +3222,26 @@ def workspace_porosity(
                 project_id, well_name, out_df.loc[save_row_mask, save_poro_cols]
             )
 
+        _record_well_model_config(
+            project_id,
+            well_name,
+            {
+                "porosity_method_key": req.method.lower(),
+                "litho_model_key": lith_model if lith_model else None,
+                "use_hc_corrected": req.use_hc_corrected,
+                "gr_clean": req.gr_clean,
+                "gr_clay": req.gr_clay,
+                "dry_sand_point": list(req.dry_sand_point)
+                if req.dry_sand_point
+                else None,
+                "dry_clay_point": list(req.dry_clay_point)
+                if req.dry_clay_point
+                else None,
+                "fluid_point": list(req.fluid_point) if req.fluid_point else None,
+                "badhole_treatment": bh_mode,
+            },
+            persist_db=bool(req.save),
+        )
         return {
             "well_name": well_name,
             "method": req.method,
@@ -2073,11 +3319,18 @@ def _merge_request_fallback_curves(
                     nphi_s[vmask].reset_index(drop=True),
                     rhob_s[vmask].reset_index(drop=True),
                 )
+                rho_ma_fb = np.asarray(
+                    rho_matrix(vsand=vsand_v, vsilt=vsilt_v, vclay=vclay_v),
+                    dtype=float,
+                )
+                rho_ma_fb = np.where(
+                    (rho_ma_fb > 1.2) & np.isfinite(rho_ma_fb), rho_ma_fb, 2.65
+                )
                 phit_v = np.asarray(
-                    neu_den_xplot_poro(
-                        nphi_s[vmask].reset_index(drop=True),
-                        rhob_s[vmask].reset_index(drop=True),
-                        model="ssc",
+                    density_porosity(
+                        rhob_s[vmask].to_numpy(dtype=float),
+                        rho_ma_fb,
+                        ssc.fluid_point[1],
                     ),
                     dtype=float,
                 )
@@ -2135,6 +3388,9 @@ def workspace_permeability(
                 "PHIT": req.phit,
                 "VCLAY": req.vclay,
                 "VSILT": req.vsilt,
+                "PHIT_SAND": req.phit_sand,
+                "VSH_LAM": req.vsh_lam,
+                "VSH_DIS": req.vsh_dis,
             },
         )
         if "PHIT" not in df.columns:
@@ -2143,6 +3399,21 @@ def workspace_permeability(
             )
 
         phit = pd.to_numeric(df["PHIT"], errors="coerce")
+        use_ts = (
+            bool(req.use_thomas_stieber)
+            and "PHIT_SAND" in df.columns
+            and pd.to_numeric(df["PHIT_SAND"], errors="coerce").notna().any()
+        )
+        phit_eval = (
+            pd.to_numeric(df["PHIT_SAND"], errors="coerce").fillna(phit)
+            if use_ts
+            else phit
+        )
+        vsh_lam_s = (
+            pd.to_numeric(df["VSH_LAM"], errors="coerce").fillna(0.0).clip(0.0, 0.99)
+            if (use_ts and "VSH_LAM" in df.columns)
+            else pd.Series(0.0, index=df.index, dtype=float)
+        )
         method = req.method.lower()
         perm_s = pd.Series(np.nan, index=df.index, dtype=float)
 
@@ -2156,16 +3427,23 @@ def workspace_permeability(
                     "VCLAY and VSILT curves are required for Choo permeability. Compute and save lithology first."
                 )
             vclay = pd.to_numeric(df["VCLAY"], errors="coerce")
+            vclay_eval = (
+                pd.to_numeric(df["VSH_DIS"], errors="coerce").fillna(vclay)
+                if (use_ts and "VSH_DIS" in df.columns)
+                else vclay
+            )
             vsilt = pd.to_numeric(df["VSILT"], errors="coerce")
-            valid_mask = phit.notna() & vclay.notna() & vsilt.notna() & (phit > 0)
+            valid_mask = (
+                phit_eval.notna() & vclay_eval.notna() & vsilt.notna() & (phit_eval > 0)
+            )
             if not valid_mask.any():
                 raise ValueError(
                     "No valid PHIT, VCLAY, and VSILT rows found in selected interval"
                 )
             perm_v = choo_permeability(
-                vclay[valid_mask].to_numpy(dtype=float),
+                vclay_eval[valid_mask].to_numpy(dtype=float),
                 vsilt[valid_mask].to_numpy(dtype=float),
-                phit[valid_mask].to_numpy(dtype=float),
+                phit_eval[valid_mask].to_numpy(dtype=float),
                 m=req.m,
                 A=req.A,
                 B=req.B,
@@ -2174,10 +3452,10 @@ def workspace_permeability(
             perm_s.loc[valid_mask] = np.asarray(perm_v, dtype=float).ravel()
 
         elif method in ("timur", "tixier", "coates"):
-            valid_mask = phit.notna() & (phit > 0)
+            valid_mask = phit_eval.notna() & (phit_eval > 0)
             if not valid_mask.any():
                 raise ValueError("No valid PHIT rows found in selected interval")
-            phit_v = phit[valid_mask].to_numpy(dtype=float)
+            phit_v = phit_eval[valid_mask].to_numpy(dtype=float)
             swirr_v = np.full_like(phit_v, float(req.swirr))
             if method == "timur":
                 perm_v = timur_permeability(phit_v, swirr_v)
@@ -2188,14 +3466,18 @@ def workspace_permeability(
             perm_s.loc[valid_mask] = np.asarray(perm_v, dtype=float).ravel()
 
         elif method == "kozeny_carman":
-            valid_mask = phit.notna() & (phit > 0)
+            valid_mask = phit_eval.notna() & (phit_eval > 0)
             if not valid_mask.any():
                 raise ValueError("No valid PHIT rows found in selected interval")
-            phit_v = phit[valid_mask].to_numpy(dtype=float)
+            phit_v = phit_eval[valid_mask].to_numpy(dtype=float)
             perm_v = kozeny_carman_permeability(phit_v, S=req.s)
             perm_s.loc[valid_mask] = np.asarray(perm_v, dtype=float).ravel()
         else:
             raise ValueError(f"Unsupported permeability method: {req.method}")
+
+        if use_ts:
+            # Horizontal thin-bed permeability: kh = (1 - Vsh_lam) * k_sand
+            perm_s = perm_s * (1.0 - vsh_lam_s)
 
         coal_or_zero_phi = phit.notna() & (phit <= 0.0)
         if "COAL_FLAG" in df.columns:
@@ -2229,10 +3511,24 @@ def workspace_permeability(
         core_metrics: Dict[str, Optional[float]] = {
             "count": int(core_mask.sum()),
             "log10_rmse": None,
+            "rmse": None,
+            "mae": None,
+            "r2": None,
         }
         if core_mask.any():
-            log_diff = np.log10(perm_s[core_mask]) - np.log10(cperm_s[core_mask])
-            core_metrics["log10_rmse"] = round(float(np.sqrt(np.mean(log_diff**2))), 4)
+            y_pred_log = np.log10(perm_s[core_mask].to_numpy(dtype=float))
+            y_true_log = np.log10(cperm_s[core_mask].to_numpy(dtype=float))
+            log_diff = y_pred_log - y_true_log
+            rmse_val = round(float(np.sqrt(np.mean(log_diff**2))), 4)
+            mae_val = round(float(np.mean(np.abs(log_diff))), 4)
+            core_metrics["log10_rmse"] = rmse_val
+            core_metrics["rmse"] = rmse_val
+            core_metrics["mae"] = mae_val
+            if len(y_true_log) > 1:
+                ss_res = float(np.sum(log_diff**2))
+                ss_tot = float(np.sum((y_true_log - np.mean(y_true_log)) ** 2))
+                if ss_tot > 1e-12:
+                    core_metrics["r2"] = round(float(1.0 - ss_res / ss_tot), 4)
 
         save_cols = ["DEPTH", "PERM"]
         if req.phit is not None:
@@ -2288,6 +3584,10 @@ def workspace_saturation(
             curve_arrays={
                 "PHIT": req.phit,
                 "VCLAY": req.vclay,
+                "PHIT_SAND": req.phit_sand,
+                "VSH_LAM": req.vsh_lam,
+                "VSH_DIS": req.vsh_dis,
+                "RSAND_TS": req.rsand_ts,
             },
         )
 
@@ -2310,12 +3610,38 @@ def workspace_saturation(
             (c for c in ("TVDSS", "TVD", "DEPTH") if c in df.columns), "DEPTH"
         )
         tvdss = pd.to_numeric(df[tvdss_col], errors="coerce").fillna(depth)
-        rt = pd.to_numeric(df[rt_col], errors="coerce")
-        phit = pd.to_numeric(df["PHIT"], errors="coerce")
-        vclay = (
+        rt_raw = pd.to_numeric(df[rt_col], errors="coerce")
+        phit_bulk = pd.to_numeric(df["PHIT"], errors="coerce")
+        vclay_bulk = (
             pd.to_numeric(df["VCLAY"], errors="coerce")
             if "VCLAY" in df.columns
             else pd.Series(0.0, index=df.index, dtype=float)
+        )
+
+        use_ts = (
+            bool(req.use_thomas_stieber)
+            and "PHIT_SAND" in df.columns
+            and pd.to_numeric(df["PHIT_SAND"], errors="coerce").notna().any()
+        )
+        phit = (
+            pd.to_numeric(df["PHIT_SAND"], errors="coerce").fillna(phit_bulk)
+            if use_ts
+            else phit_bulk
+        )
+        vclay = (
+            pd.to_numeric(df["VSH_DIS"], errors="coerce").fillna(vclay_bulk)
+            if (use_ts and "VSH_DIS" in df.columns)
+            else vclay_bulk
+        )
+        vsh_lam_s = (
+            pd.to_numeric(df["VSH_LAM"], errors="coerce").fillna(0.0).clip(0.0, 0.99)
+            if (use_ts and "VSH_LAM" in df.columns)
+            else pd.Series(0.0, index=df.index, dtype=float)
+        )
+        rt = (
+            pd.to_numeric(df["RSAND_TS"], errors="coerce").fillna(rt_raw)
+            if (use_ts and "RSAND_TS" in df.columns)
+            else rt_raw
         )
         nphi = (
             pd.to_numeric(df["NPHI"], errors="coerce")
@@ -2331,7 +3657,7 @@ def workspace_saturation(
         # 1. Temperature gradient & Rw (aligned on every depth row)
         tvd_arr = tvdss.to_numpy(dtype=float)
         if req.meas_system.lower() == "imperial":
-            # Convert TVD (m) to kft, compute T in °F, then convert to °C for Crain/Juhasz formulas
+            # Convert TVD (m) to kft, compute T in Â°F, then convert to Â°C for Crain/Juhasz formulas
             tvd_kft = tvd_arr * 3.28084 / 1000.0
             temp_f = float(req.surface_temp) + float(req.temp_gradient) * tvd_kft
             temp_grad_arr = np.clip((temp_f - 32.0) * 5.0 / 9.0, 5.0, 250.0)
@@ -2477,8 +3803,28 @@ def workspace_saturation(
             swt_archie_s.loc[coal_or_zero_phi] = 1.0
             swt_ws_s.loc[coal_or_zero_phi] = 1.0
 
+        if use_ts:
+            # Map sand-lamina water saturation Sw_sand back to bulk SWT so bulk HCPV = PHIT_bulk * (1 - SWT)
+            # equals thin-bed sand HCPV = (1 - VSH_LAM) * PHIT_SAND * (1 - Sw_sand)
+            sand_frac = (1.0 - vsh_lam_s).clip(0.0, 1.0)
+            denom_phi = phit_bulk.clip(lower=1e-4)
+            for sw_series in (swt_archie_s, swt_ws_s):
+                valid_sw = sw_series.notna() & phit_bulk.notna() & (phit_bulk > 1e-4)
+                if valid_sw.any():
+                    hcpv_lam = (
+                        sand_frac.loc[valid_sw]
+                        * phit.loc[valid_sw]
+                        * (1.0 - sw_series.loc[valid_sw])
+                    )
+                    swt_bulk_mapped = (1.0 - (hcpv_lam / denom_phi.loc[valid_sw])).clip(
+                        0.0, 1.0
+                    )
+                    sw_series.loc[valid_sw] = np.maximum(
+                        sw_series.loc[valid_sw], swt_bulk_mapped
+                    )
+
         primary_swt = swt_ws_s if req.method.lower() == "waxman_smits" else swt_archie_s
-        bvw_s = phit * primary_swt
+        bvw_s = phit_bulk * primary_swt
 
         # Crossplot helper columns (CWA vs VCLAY/PHIT)
         vcl_phi_s = pd.Series(np.nan, index=df.index, dtype=float)
@@ -2495,9 +3841,9 @@ def workspace_saturation(
         out_df = pd.DataFrame(
             {
                 "DEPTH": df["DEPTH"],
-                "RT": rt,
-                "PHIT": phit,
-                "VCLAY": vclay,
+                "RT": rt_raw,
+                "PHIT": phit_bulk,
+                "VCLAY": vclay_bulk,
                 "TEMP_GRAD": temp_grad_s,
                 "RW": rw_s,
                 "B": b_s,
@@ -2527,6 +3873,19 @@ def workspace_saturation(
                 project_id, well_name, out_df.loc[primary_swt.notna(), save_sat_cols]
             )
 
+        _record_well_model_config(
+            project_id,
+            well_name,
+            {
+                "sw_model_key": req.method.lower(),
+                "sw_a": float(req.a),
+                "sw_m": float(req.m),
+                "sw_n": float(req.n),
+                "water_salinity": float(salinity_ppm),
+                "rw_val": float(np.nanmedian(rw_arr)) if len(rw_arr) > 0 else 0.08,
+            },
+            persist_db=bool(req.save),
+        )
         return {
             "well_name": well_name,
             "method": req.method.lower(),
@@ -2737,88 +4096,943 @@ def workspace_reservoir_summary(
         ) from e
 
 
+def _normalize_drt_method(method: Optional[str]) -> str:
+    """Normalize DRT method string to 'fzi', 'winland', or 'lucia'."""
+    m = str(method or "fzi").strip().lower()
+    if m in ("winland", "r35", "winland_r35"):
+        return "winland"
+    if m in ("lucia", "rfn", "lucia_rfn"):
+        return "lucia"
+    return "fzi"
+
+
+def _eval_drt_indicator_scalar_or_array(phit, perm, method: str = "fzi"):
+    """Compute FZI, Winland R35, or Lucia RFN and return (indicator, default_higher_is_better, canonical_method)."""
+    m = _normalize_drt_method(method)
+    if m == "winland":
+        return calc_r35(phit, perm), True, "winland"
+    if m == "lucia":
+        return calc_rfn(phit, perm), False, "lucia"
+    return calc_fzi(phit, perm), True, "fzi"
+
+
+@router.get(
+    "/rock_typing/models",
+    summary="List saved Rock Type classifier models with performance metrics and contingency tables",
+)
+def workspace_rt_models_status(project_id: int) -> Dict[str, Any]:
+    """Return status and metadata of all saved Rock Type classifiers."""
+    return get_saved_rt_classifiers_status()
+
+
+@router.post(
+    "/rock_typing/models/save",
+    summary="Save the latest trained Rock Type classifier model with its name, performance, and contingency matrix",
+)
+def workspace_rt_save_model(
+    project_id: int, req: WorkspaceRtSaveModelRequest
+) -> Dict[str, Any]:
+    """Save the most recently trained Rock Type classifier into persistent storage."""
+    try:
+        res = save_cached_rt_classifier(
+            model_key=req.model_key,
+            model_name=req.model_name,
+            cache_key=f"project_{project_id}",
+            extra_meta={
+                "project_id": project_id,
+                "drt_method": req.drt_method,
+                "cutoffs": req.cutoffs,
+                "data_source": req.data_source or "core",
+            },
+        )
+        return {
+            **res,
+            "models_status": get_saved_rt_classifiers_status(),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to save Rock Type classifier model: {e}"
+        ) from e
+
+
+@router.delete(
+    "/rock_typing/models/{model_key}",
+    summary="Delete a saved Rock Type classifier model",
+)
+def workspace_rt_delete_model(project_id: int, model_key: str) -> Dict[str, Any]:
+    """Delete a saved Rock Type classifier model by key."""
+    deleted = delete_saved_rt_classifier(model_key)
+    return {
+        "deleted": deleted,
+        "model_key": model_key,
+        **get_saved_rt_classifiers_status(),
+    }
+
+
+def _populate_well_zones_and_focused_mask(
+    project_id: int,
+    well_name: str,
+    w_df: pd.DataFrame,
+    req_zones: Optional[List[str]],
+    req_min_depth: Optional[float],
+    req_max_depth: Optional[float],
+    propagate_focused_only: bool,
+    proj_obj: Any = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, Any]]:
+    """Populate ZONES from formation tops if missing and compute boolean mask for the focused/filtered interval."""
+    df_out = w_df.copy()
+    d_num = pd.to_numeric(df_out["DEPTH"], errors="coerce")
+
+    if "ZONES" not in df_out.columns or not df_out["ZONES"].notna().any():
+        try:
+            if proj_obj is not None:
+                anc = proj_obj.get_well_ancillary_data(well_name)
+            else:
+                with get_db() as session:
+                    p_tmp = db_objects.Project.load(session, project_id=project_id)
+                    anc = p_tmp.get_well_ancillary_data(well_name)
+            tops_df = anc.get("formation_tops") if isinstance(anc, dict) else None
+            if isinstance(tops_df, pd.DataFrame) and not tops_df.empty and not df_out.empty:
+                df_out["ZONES"] = pd.NA
+                for _, top in tops_df.iterrows():
+                    try:
+                        top_depth = float(top.get("depth"))
+                        top_name = str(top.get("name"))
+                    except Exception:
+                        continue
+                    nearest_idx = (d_num - top_depth).abs().idxmin()
+                    df_out.at[nearest_idx, "ZONES"] = top_name
+                df_out["ZONES"] = df_out["ZONES"].ffill()
+        except Exception:
+            pass
+
+    mask = d_num.notna().copy()
+    eff_min_d = req_min_depth
+    eff_max_d = req_max_depth
+
+    if propagate_focused_only and eff_min_d is None and eff_max_d is None:
+        ephem_cfg = _ephemeral_well_configs.get((project_id, str(well_name))) or {}
+        f_min = ephem_cfg.get("focus_min_depth")
+        f_max = ephem_cfg.get("focus_max_depth")
+        if f_min is None and f_max is None:
+            try:
+                if proj_obj is not None:
+                    w_orm = proj_obj.get_well(str(well_name))
+                    cfg_data = getattr(w_orm, "config_data", None) or {}
+                else:
+                    with get_db() as session:
+                        p_tmp = db_objects.Project.load(session, project_id=project_id)
+                        w_orm = p_tmp.get_well(str(well_name))
+                        cfg_data = getattr(w_orm, "config_data", None) or {}
+                if isinstance(cfg_data, dict):
+                    f_min = cfg_data.get("focus_min_depth")
+                    f_max = cfg_data.get("focus_max_depth")
+            except Exception:
+                pass
+        if f_min is not None:
+            eff_min_d = float(f_min)
+        if f_max is not None:
+            eff_max_d = float(f_max)
+
+    if eff_min_d is not None:
+        mask &= d_num >= float(eff_min_d)
+    if eff_max_d is not None:
+        mask &= d_num <= float(eff_max_d)
+
+    allowed_zones = (
+        {str(z).strip() for z in req_zones if str(z).strip()}
+        if req_zones
+        else set()
+    )
+    if allowed_zones and "ZONES" in df_out.columns:
+        z_series = df_out["ZONES"].fillna("Unknown").astype(str).str.strip()
+        z_mask = z_series.isin(allowed_zones)
+        if z_mask.any():
+            mask &= z_mask
+        else:
+            mask &= False
+
+    # If propagate_focused_only is True and no explicit zone/depth filter narrowed the well,
+    # restrict to the evaluated porosity interval [min_eval_depth, max_eval_depth] if PHIT/PHIE/CPORE is present on a sub-interval
+    if (
+        propagate_focused_only
+        and not allowed_zones
+        and eff_min_d is None
+        and eff_max_d is None
+    ):
+        for pcol in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR", "CORE_POR"):
+            if pcol in df_out.columns:
+                ps = pd.to_numeric(df_out[pcol], errors="coerce")
+                valid_p = ps.notna() & (ps > 0) & d_num.notna()
+                if valid_p.any():
+                    d_eval = d_num[valid_p]
+                    min_eval = float(d_eval.min())
+                    max_eval = float(d_eval.max())
+                    mask &= (d_num >= min_eval) & (d_num <= max_eval)
+                    eff_min_d = min_eval
+                    eff_max_d = max_eval
+                    break
+
+    d_focused = d_num[mask]
+    info = {
+        "total_samples": int(d_num.notna().sum()),
+        "focused_samples": int(mask.sum()),
+        "min_depth": round(float(d_focused.min()), 2) if not d_focused.empty else eff_min_d,
+        "max_depth": round(float(d_focused.max()), 2) if not d_focused.empty else eff_max_d,
+    }
+    return df_out, mask, info
+
+
 @router.post(
     "/rock_typing/compute",
-    summary="Compute FZI rock typing across project wells and optionally save ROCK_FLAG",
+    summary="Compute FZI, Winland R35, or Lucia RFN rock typing across project wells and optionally save ROCK_FLAG",
 )
 def workspace_rock_typing_compute(
     project_id: int, req: WorkspaceRockTypingRequest
 ) -> Dict[str, Any]:
-    """Compute FZI and ROCK_FLAG across all wells in the project on the server."""
+    """Compute FZI / Winland R35 / Lucia RFN and ROCK_FLAG across all wells in the project on the server."""
     try:
-        fzi_data = _filter_fzi_data_by_wells(
-            _compute_fzi_data_sync(project_id), req.well_names
-        )
-        phit_arr = np.asarray(fzi_data["phit"], dtype=float)
-        perm_arr = np.asarray(fzi_data["perm"], dtype=float)
-        well_names = fzi_data["well_names"]
-        depths = fzi_data["depths"]
-        zones = fzi_data["zones"]
-
-        valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
-        fzi_arr = np.full_like(phit_arr, np.nan, dtype=float)
-        fzi_arr[valid_mask] = calc_fzi(phit_arr[valid_mask], perm_arr[valid_mask])
-
-        if req.auto_find_cutoffs and valid_mask.sum() >= (req.no_of_cutoffs + 1):
-            cutoffs = sorted(
-                float(round(c, 4))
-                for c in find_cutoffs(
-                    fzi_arr[valid_mask], no_of_cutoffs=req.no_of_cutoffs
-                )
-            )
-        else:
-            cutoffs = sorted(float(c) for c in req.cutoffs)
-
-        rf_arr = rock_typing(
-            fzi_arr, cut_offs=cutoffs, higher_is_better=req.higher_is_better
-        )
-        rock_flags = [
-            int(val) if not np.isnan(val) else None for val in np.asarray(rf_arr)
-        ]
-        fzi_list = [
-            round(float(val), 5) if not np.isnan(val) else None for val in fzi_arr
-        ]
-
-        saved_wells = 0
-        if req.save:
-            by_well: Dict[str, List[Dict[str, Any]]] = {}
-            for wn, d, rf in zip(well_names, depths, rock_flags):
-                if rf is not None and d is not None:
-                    by_well.setdefault(wn, []).append({"DEPTH": d, "ROCK_FLAG": rf})
-            for wn, rows in by_well.items():
-                _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
-            saved_wells = len(by_well)
-
-        # Counts per rock flag
-        flag_counts: Dict[str, int] = {}
-        for rf in rock_flags:
-            if rf is not None:
-                key = str(rf)
-                flag_counts[key] = flag_counts.get(key, 0) + 1
-
-        return {
-            "project_id": project_id,
-            "cutoffs": cutoffs,
-            "flag_counts": flag_counts,
-            "rock_type_counts": flag_counts,
-            "saved": req.save,
-            "saved_wells": saved_wells,
-            "data": {
-                "well_names": well_names,
-                "depths": depths,
-                "zones": zones,
-                "phit": fzi_data["phit"],
-                "perm": fzi_data["perm"],
-                "fzi": fzi_list,
-                "rock_flags": rock_flags,
-            },
-        }
+        return _execute_workspace_rock_typing(project_id, req)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Rock typing computation failed: {e}"
         ) from e
+
+
+def _execute_workspace_rock_typing(
+    project_id: int, req: WorkspaceRockTypingRequest
+) -> Dict[str, Any]:
+    method = _normalize_drt_method(req.method)
+    data_source = (
+        "log"
+        if str(req.data_source or "core").strip().lower() == "log"
+        else "core"
+    )
+    poro_label = "CPORE" if data_source == "core" else "PHIT"
+    perm_label = "CPERM" if data_source == "core" else "PERM"
+    raw_fzi_data = _compute_fzi_data_sync(
+        project_id,
+        dt_matrix=req.dt_matrix,
+        dt_fluid=req.dt_fluid,
+        data_source=data_source,
+    )
+    has_sonic = bool(raw_fzi_data.get("has_sonic", False))
+    sonic_wells = list(raw_fzi_data.get("sonic_wells") or [])
+    fzi_data = _filter_fzi_data_by_wells(raw_fzi_data, req.well_names)
+
+    # Apply optional zone / depth filter to fzi_data if requested and sufficient samples remain
+    if req.zones or req.min_depth is not None or req.max_depth is not None:
+        w_arr_f = fzi_data.get("well_names") or []
+        d_arr_f = fzi_data.get("depths") or []
+        z_arr_f = fzi_data.get("zones") or []
+        allowed_z = (
+            {str(z).strip() for z in req.zones if str(z).strip()}
+            if req.zones
+            else set()
+        )
+        keep_indices: List[int] = []
+        for idx_f, (dv, zv) in enumerate(zip(d_arr_f, z_arr_f)):
+            if dv is None:
+                continue
+            d_flt = float(dv)
+            if req.min_depth is not None and d_flt < float(req.min_depth):
+                continue
+            if req.max_depth is not None and d_flt > float(req.max_depth):
+                continue
+            if allowed_z and str(zv or "Unknown").strip() not in allowed_z:
+                continue
+            keep_indices.append(idx_f)
+        if len(keep_indices) >= 4:
+            filtered_fzi: Dict[str, Any] = {}
+            for k_f, arr_f in fzi_data.items():
+                if isinstance(arr_f, list) and len(arr_f) == len(w_arr_f):
+                    filtered_fzi[k_f] = [arr_f[i] for i in keep_indices]
+                else:
+                    filtered_fzi[k_f] = arr_f
+            fzi_data = filtered_fzi
+
+    phit_arr = np.asarray(fzi_data["phit"], dtype=float)
+    perm_arr = np.asarray(fzi_data["perm"], dtype=float)
+    phis_raw = fzi_data.get("phis")
+    phis_arr = (
+        np.asarray(
+            [v if v is not None else np.nan for v in phis_raw], dtype=float
+        )
+        if phis_raw and len(phis_raw) == len(phit_arr)
+        else np.full_like(phit_arr, np.nan, dtype=float)
+    )
+    well_names = fzi_data["well_names"]
+    depths = fzi_data["depths"]
+    zones = fzi_data["zones"]
+
+    phi_sec_arr, phi_ip_arr = calc_secondary_porosity(phit_arr, phis_arr)
+    has_valid_phi_sec = bool(np.isfinite(phi_sec_arr).any())
+
+    valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
+    fzi_arr = np.full_like(phit_arr, np.nan, dtype=float)
+    r35_arr = np.full_like(phit_arr, np.nan, dtype=float)
+    rfn_arr = np.full_like(phit_arr, np.nan, dtype=float)
+    rfn_total_arr = np.full_like(phit_arr, np.nan, dtype=float)
+
+    if valid_mask.any():
+        fzi_arr[valid_mask] = calc_fzi(phit_arr[valid_mask], perm_arr[valid_mask])
+        r35_arr[valid_mask] = calc_r35(phit_arr[valid_mask], perm_arr[valid_mask])
+        rfn_total_arr[valid_mask] = calc_rfn(
+            phit_arr[valid_mask], perm_arr[valid_mask]
+        )
+        pore_for_rfn = (
+            phi_ip_arr[valid_mask]
+            if (req.use_interparticle_porosity and has_valid_phi_sec)
+            else phit_arr[valid_mask]
+        )
+        rfn_arr[valid_mask] = calc_rfn(pore_for_rfn, perm_arr[valid_mask])
+
+    if method == "winland":
+        active_arr = r35_arr
+        default_higher_is_better = True
+        indicator_col = "R35"
+    elif method == "lucia":
+        active_arr = rfn_arr
+        default_higher_is_better = False
+        indicator_col = "RFN"
+    else:
+        active_arr = fzi_arr
+        default_higher_is_better = True
+        indicator_col = "FZI"
+
+    higher_is_better = (
+        req.higher_is_better
+        if req.higher_is_better is not None
+        else default_higher_is_better
+    )
+
+    cutoff_method = str(req.cutoff_method or "gmm").strip().lower()
+    if cutoff_method not in ("gmm", "lorenz", "kmeans"):
+        cutoff_method = "gmm"
+
+    target_no_cutoffs = None if req.auto_k else max(1, int(req.no_of_cutoffs))
+    gmm_res = find_cutoffs_gmm(
+        active_arr[valid_mask],
+        no_of_cutoffs=target_no_cutoffs,
+        max_clusters=req.max_clusters,
+        criterion=req.gmm_criterion,
+        log_scale=(method != "lucia"),
+    )
+    lorenz_res = find_cutoffs_lorenz(
+        phit_arr[valid_mask],
+        perm_arr[valid_mask],
+        indicator=active_arr[valid_mask],
+        method=method,
+        no_of_cutoffs=target_no_cutoffs,
+        max_clusters=req.max_clusters,
+    )
+
+    if req.auto_find_cutoffs and valid_mask.sum() >= 4:
+        if cutoff_method == "lorenz" and lorenz_res.get("cutoffs"):
+            cutoffs = sorted(float(round(c, 4)) for c in lorenz_res["cutoffs"])
+        elif cutoff_method == "gmm" and gmm_res.get("cutoffs"):
+            cutoffs = sorted(float(round(c, 4)) for c in gmm_res["cutoffs"])
+        else:
+            k_use = (
+                int(gmm_res.get("optimal_k", req.no_of_cutoffs + 1))
+                if req.auto_k
+                else (int(req.no_of_cutoffs) + 1)
+            )
+            n_c = max(1, min(k_use - 1, int(valid_mask.sum()) - 1))
+            cutoffs = sorted(
+                float(round(c, 4))
+                for c in find_cutoffs(active_arr[valid_mask], no_of_cutoffs=n_c)
+            )
+    else:
+        cutoffs = sorted(float(c) for c in req.cutoffs)
+
+    rf_arr = rock_typing(
+        active_arr, cut_offs=cutoffs, higher_is_better=higher_is_better
+    )
+
+    carb_res = apply_lucia_rfn_override(
+        phit_arr,
+        perm_arr,
+        phis=phis_arr,
+        phi_sec=phi_sec_arr,
+        primary_rock_flags=rf_arr,
+        lucia_cutoffs=req.lucia_cutoffs if req.lucia_cutoffs else [1.5, 2.5, 3.5],
+        phi_sec_cutoff=req.phi_sec_cutoff,
+        use_interparticle_porosity=req.use_interparticle_porosity,
+    )
+    override_active = bool(req.lucia_vuggy_override and has_valid_phi_sec)
+    if override_active:
+        rf_arr = carb_res["overridden_rock_flags"]
+
+    rock_flags = [
+        int(val) if not np.isnan(val) else None for val in np.asarray(rf_arr)
+    ]
+    vuggy_flags = [
+        1 if bool(v) else 0 for v in np.asarray(carb_res["vuggy_mask"], dtype=bool)
+    ]
+    fzi_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in fzi_arr
+    ]
+    r35_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in r35_arr
+    ]
+    rfn_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in rfn_arr
+    ]
+    phis_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in phis_arr
+    ]
+    phi_sec_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in phi_sec_arr
+    ]
+    phi_ip_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in phi_ip_arr
+    ]
+    active_list = (
+        r35_list
+        if method == "winland"
+        else (rfn_list if method == "lucia" else fzi_list)
+    )
+
+    rock_flags_binned = list(rock_flags)
+    rock_flags_ml: List[Optional[int]] = [None] * len(rock_flags)
+    rock_prob_ml: List[Optional[float]] = [None] * len(rock_flags)
+    vdl_list: List[Optional[float]] = [None] * len(rock_flags)
+    classifier_diag: Optional[Dict[str, Any]] = None
+    extra_propagated_by_well: Dict[str, List[Dict[str, Any]]] = {}
+    log_well_names: List[str] = []
+    log_depths: List[float] = []
+    log_rock_flags: List[Optional[int]] = []
+    log_rock_flags_cutoff: List[Optional[int]] = []
+    log_rock_flags_ml: List[Optional[int]] = []
+    log_vdl: List[Optional[float]] = []
+
+    prop_mode = str(req.propagation_mode or "fill_missing").strip().lower()
+    if prop_mode not in ("cutoff_only", "fill_missing", "full_ml"):
+        prop_mode = "fill_missing"
+
+    run_ml = bool(
+        req.train_classifier
+        or req.apply_classifier_propagation
+        or (req.saved_model_key and str(req.saved_model_key).strip())
+    )
+
+    well_full_updates: Dict[str, pd.DataFrame] = {}
+
+    if run_ml:
+        try:
+            with get_db() as session:
+                proj_tmp = db_objects.Project.load(session, project_id=project_id)
+                all_proj_wells = [str(w) for w in proj_tmp.get_well_names()]
+        except Exception:
+            all_proj_wells = []
+        if req.well_names:
+            allowed_set = {str(w) for w in req.well_names}
+            all_proj_wells = [w for w in all_proj_wells if w in allowed_set]
+        unique_wells = list(
+            dict.fromkeys(
+                [str(w) for w in well_names if w is not None] + all_proj_wells
+            )
+        )
+        binned_lookup: Dict[Tuple[str, float], int] = {}
+        for wn, d, rf_b in zip(well_names, depths, rock_flags_binned):
+            if wn is not None and d is not None and rf_b is not None:
+                binned_lookup[(str(wn), round(float(d), 4))] = int(rf_b)
+
+        well_dfs: List[pd.DataFrame] = []
+        total_well_samples = 0
+        focused_well_samples = 0
+        focused_min_depths: List[float] = []
+        focused_max_depths: List[float] = []
+
+        for wn in unique_wells:
+            w_df = _get_merged_dataframe_sync(project_id, str(wn))
+            if w_df.empty or "DEPTH" not in w_df.columns:
+                continue
+            w_copy, f_mask, f_info = _populate_well_zones_and_focused_mask(
+                project_id=project_id,
+                well_name=str(wn),
+                w_df=w_df,
+                req_zones=req.zones,
+                req_min_depth=req.min_depth,
+                req_max_depth=req.max_depth,
+                propagate_focused_only=bool(req.propagate_focused_only),
+                proj_obj=None,
+            )
+            total_well_samples += int(f_info["total_samples"])
+            focused_well_samples += int(f_info["focused_samples"])
+            if f_info["min_depth"] is not None:
+                focused_min_depths.append(float(f_info["min_depth"]))
+            if f_info["max_depth"] is not None:
+                focused_max_depths.append(float(f_info["max_depth"]))
+
+            w_copy["WELL_NAME"] = str(wn)
+            w_copy["_FOCUSED_MASK"] = f_mask.to_numpy(dtype=bool)
+            d_keys = [
+                round(float(dv), 4) if pd.notna(dv) else -999999.0
+                for dv in pd.to_numeric(w_copy["DEPTH"], errors="coerce")
+            ]
+            w_copy["ROCK_FLAG"] = [
+                binned_lookup.get((str(wn), dk), np.nan) for dk in d_keys
+            ]
+            well_dfs.append(w_copy)
+
+        if well_dfs:
+            combined_df = pd.concat(well_dfs, ignore_index=True)
+            focused_mask_arr = combined_df["_FOCUSED_MASK"].to_numpy(dtype=bool)
+            # If propagate_focused_only caused 0 focused rows across all wells, fall back to all valid depth rows
+            if req.propagate_focused_only and not focused_mask_arr.any():
+                focused_mask_arr = pd.to_numeric(
+                    combined_df["DEPTH"], errors="coerce"
+                ).notna().to_numpy(dtype=bool)
+                focused_well_samples = int(focused_mask_arr.sum())
+
+            # Subset DataFrame for training/prediction on focused interval if enough labeled samples exist
+            focused_df = (
+                combined_df.loc[focused_mask_arr].reset_index(drop=True)
+                if req.propagate_focused_only
+                else combined_df
+            )
+            labeled_in_focused = int(
+                pd.to_numeric(focused_df["ROCK_FLAG"], errors="coerce").notna().sum()
+            )
+            train_df = (
+                focused_df
+                if (not req.propagate_focused_only or labeled_in_focused >= 6)
+                else combined_df
+            )
+
+            used_saved_key = (
+                str(req.saved_model_key).strip()
+                if (req.saved_model_key and not req.train_classifier)
+                else ""
+            )
+            saved_model_info: Optional[Dict[str, Any]] = None
+
+            if used_saved_key:
+                clf_res = predict_with_saved_rt_classifier(
+                    train_df,
+                    model_key=used_saved_key,
+                    dt_matrix=req.dt_matrix,
+                    dt_fluid=req.dt_fluid,
+                )
+            else:
+                clf_res = train_and_validate_rock_type_classifier(
+                    train_df,
+                    selected_features=req.selected_features,
+                    include_pef=req.include_pef,
+                    include_vdl=req.include_vdl,
+                    model_type=req.classifier_model,
+                    test_size=req.test_size,
+                    dt_matrix=req.dt_matrix,
+                    dt_fluid=req.dt_fluid,
+                    cache_key=f"project_{project_id}",
+                )
+                if req.save_classifier_model:
+                    saved_model_info = save_cached_rt_classifier(
+                        model_key=req.classifier_model_key or "",
+                        model_name=req.classifier_model_name,
+                        cache_key=f"project_{project_id}",
+                        extra_meta={
+                            "project_id": project_id,
+                            "drt_method": method,
+                            "cutoffs": cutoffs,
+                            "data_source": data_source,
+                        },
+                    )
+                    used_saved_key = str(saved_model_info.get("model_key") or "")
+
+            ml_lookup: Dict[
+                Tuple[str, float],
+                Tuple[Optional[int], Optional[float], Optional[float]],
+            ] = {}
+            comb_wells = train_df["WELL_NAME"].astype(str).tolist()
+            comb_depths = pd.to_numeric(train_df["DEPTH"], errors="coerce").tolist()
+            comb_binned = pd.to_numeric(train_df["ROCK_FLAG"], errors="coerce").tolist()
+            comb_focused = (
+                train_df["_FOCUSED_MASK"].to_numpy(dtype=bool).tolist()
+                if "_FOCUSED_MASK" in train_df.columns
+                else [True] * len(comb_wells)
+            )
+            pred_rf_all = clf_res["predicted_rock_flags"]
+            pred_conf_all = clf_res["predicted_confidence"]
+            vdl_all = clf_res["vdl"]
+
+            propagated_uncored_count = 0
+            for cw, cd, cb, is_foc, prf, pcf, vdl_v in zip(
+                comb_wells,
+                comb_depths,
+                comb_binned,
+                comb_focused,
+                pred_rf_all,
+                pred_conf_all,
+                vdl_all,
+            ):
+                if cd is None or pd.isna(cd):
+                    continue
+                if req.propagate_focused_only and not is_foc:
+                    continue
+                dk = round(float(cd), 4)
+                cb_int = (
+                    int(round(float(cb)))
+                    if (cb is not None and not pd.isna(cb))
+                    else None
+                )
+                prf_int = int(prf) if prf is not None else None
+                vdl_flt = (
+                    round(float(vdl_v), 4)
+                    if (vdl_v is not None and not pd.isna(vdl_v))
+                    else None
+                )
+                ml_lookup[(cw, dk)] = (prf_int, pcf, vdl_flt)
+
+                if not req.apply_classifier_propagation or prop_mode == "cutoff_only":
+                    eff_rf = cb_int
+                elif prop_mode == "full_ml":
+                    eff_rf = prf_int if prf_int is not None else cb_int
+                else:
+                    eff_rf = cb_int if cb_int is not None else prf_int
+
+                if (
+                    eff_rf is not None
+                    or cb_int is not None
+                    or prf_int is not None
+                    or vdl_flt is not None
+                ):
+                    log_well_names.append(cw)
+                    log_depths.append(dk)
+                    log_rock_flags.append(eff_rf)
+                    log_rock_flags_cutoff.append(cb_int)
+                    log_rock_flags_ml.append(prf_int)
+                    log_vdl.append(vdl_flt)
+
+                if cb_int is None and (prf_int is not None or vdl_flt is not None):
+                    if prf_int is not None:
+                        propagated_uncored_count += 1
+                    row_ext: Dict[str, Any] = {
+                        "DEPTH": float(cd),
+                        "ROCK_FLAG": (
+                            int(eff_rf) if eff_rf is not None else np.nan
+                        ),
+                        "ROCK_FLAG_CUTOFF": np.nan,
+                        "ROCK_FLAG_ML": (
+                            int(prf_int) if prf_int is not None else np.nan
+                        ),
+                    }
+                    if vdl_flt is not None:
+                        row_ext["VDL"] = float(vdl_flt)
+                    extra_propagated_by_well.setdefault(cw, []).append(row_ext)
+
+            for idx_r, (wn, d) in enumerate(zip(well_names, depths)):
+                if wn is not None and d is not None:
+                    hit = ml_lookup.get((str(wn), round(float(d), 4)))
+                    if hit is not None:
+                        rock_flags_ml[idx_r] = hit[0]
+                        rock_prob_ml[idx_r] = hit[1]
+                        vdl_list[idx_r] = hit[2]
+
+            if req.apply_classifier_propagation and prop_mode != "cutoff_only":
+                new_rock_flags: List[Optional[int]] = []
+                for rf_b, rf_m in zip(rock_flags_binned, rock_flags_ml):
+                    if prop_mode == "full_ml":
+                        new_rock_flags.append(rf_m if rf_m is not None else rf_b)
+                    else:
+                        new_rock_flags.append(rf_b if rf_b is not None else rf_m)
+                rock_flags = new_rock_flags
+            else:
+                rock_flags = list(rock_flags_binned)
+
+            comparison = compute_rock_flag_comparison(
+                log_rock_flags_cutoff,
+                log_rock_flags_ml,
+                labels=clf_res["labels"],
+            )
+
+            classifier_diag = {
+                "trained": bool(clf_res.get("trained", True)),
+                "data_source": data_source,
+                "poro_label": poro_label,
+                "perm_label": perm_label,
+                "propagated": bool(
+                    req.apply_classifier_propagation and prop_mode != "cutoff_only"
+                ),
+                "propagation_mode": prop_mode,
+                "propagate_focused_only": bool(req.propagate_focused_only),
+                "focused_interval": {
+                    "propagate_focused_only": bool(req.propagate_focused_only),
+                    "total_well_samples": int(total_well_samples),
+                    "focused_samples": int(focused_well_samples),
+                    "excluded_samples": max(
+                        0, int(total_well_samples - focused_well_samples)
+                    ),
+                    "zones": list(req.zones or []),
+                    "min_depth": (
+                        round(min(focused_min_depths), 2)
+                        if focused_min_depths
+                        else req.min_depth
+                    ),
+                    "max_depth": (
+                        round(max(focused_max_depths), 2)
+                        if focused_max_depths
+                        else req.max_depth
+                    ),
+                },
+                "model_type": clf_res["model_type"],
+                "saved_model_key": used_saved_key or clf_res.get("saved_model_key"),
+                "saved_model_name": (
+                    saved_model_info.get("model_name")
+                    if saved_model_info
+                    else clf_res.get("saved_model_name")
+                ),
+                "features_used": clf_res["features_used"],
+                "labels": clf_res["labels"],
+                "contingency_table": clf_res["contingency_table"],
+                "metrics": {
+                    **clf_res["metrics"],
+                    "uncored_propagated_samples": int(propagated_uncored_count),
+                },
+                "class_metrics": clf_res["class_metrics"],
+                "feature_importances": clf_res["feature_importances"],
+                "comparison": comparison,
+                "models_status": get_saved_rt_classifiers_status(),
+            }
+
+            # Build full-well curve DataFrames so in-memory cache clears any stale flags outside the focused interval
+            core_row_lookup: Dict[Tuple[str, float], Dict[str, Any]] = {}
+            for idx_row, (wn_r, d_r, rf_r, rf_b_r, ind_val) in enumerate(
+                zip(well_names, depths, rock_flags, rock_flags_binned, active_list)
+            ):
+                if wn_r is not None and d_r is not None:
+                    dk_r = round(float(d_r), 4)
+                    r_entry: Dict[str, Any] = {
+                        "ROCK_FLAG": float(rf_r) if rf_r is not None else np.nan,
+                        "ROCK_FLAG_CUTOFF": (
+                            float(rf_b_r) if rf_b_r is not None else np.nan
+                        ),
+                    }
+                    if ind_val is not None:
+                        r_entry[indicator_col] = float(ind_val)
+                    if rfn_list[idx_row] is not None and (
+                        method == "lucia" or override_active
+                    ):
+                        r_entry["RFN"] = float(rfn_list[idx_row])
+                    if phi_sec_list[idx_row] is not None:
+                        r_entry["PHI_SEC"] = float(phi_sec_list[idx_row])
+                    core_row_lookup[(str(wn_r), dk_r)] = r_entry
+
+            for w_df_item in well_dfs:
+                wn_str = str(w_df_item["WELL_NAME"].iloc[0])
+                d_col = pd.to_numeric(w_df_item["DEPTH"], errors="coerce")
+                rf_col_vals: List[float] = []
+                rf_cut_vals: List[float] = []
+                rf_ml_vals: List[float] = []
+                vdl_col_vals: List[float] = []
+                ind_col_vals: List[float] = []
+                for dv in d_col.tolist():
+                    if dv is None or pd.isna(dv):
+                        rf_col_vals.append(np.nan)
+                        rf_cut_vals.append(np.nan)
+                        rf_ml_vals.append(np.nan)
+                        vdl_col_vals.append(np.nan)
+                        ind_col_vals.append(np.nan)
+                        continue
+                    dk = round(float(dv), 4)
+                    c_hit = core_row_lookup.get((wn_str, dk))
+                    m_hit = ml_lookup.get((wn_str, dk))
+                    cb_v = c_hit["ROCK_FLAG_CUTOFF"] if c_hit else np.nan
+                    ml_v = (
+                        float(m_hit[0])
+                        if (m_hit and m_hit[0] is not None)
+                        else np.nan
+                    )
+                    vdl_v = (
+                        float(m_hit[2])
+                        if (m_hit and m_hit[2] is not None)
+                        else np.nan
+                    )
+                    if not req.apply_classifier_propagation or prop_mode == "cutoff_only":
+                        act_v = cb_v
+                    elif prop_mode == "full_ml":
+                        act_v = ml_v if not np.isnan(ml_v) else cb_v
+                    else:
+                        act_v = cb_v if not np.isnan(cb_v) else ml_v
+                    rf_col_vals.append(act_v)
+                    rf_cut_vals.append(cb_v)
+                    rf_ml_vals.append(ml_v)
+                    vdl_col_vals.append(vdl_v)
+                    ind_col_vals.append(
+                        c_hit.get(indicator_col, np.nan) if c_hit else np.nan
+                    )
+
+                upd_w_df = pd.DataFrame(
+                    {
+                        "DEPTH": w_df_item["DEPTH"].to_numpy(),
+                        "ROCK_FLAG": rf_col_vals,
+                        "ROCK_FLAG_CUTOFF": rf_cut_vals,
+                        "ROCK_FLAG_ML": rf_ml_vals,
+                        "VDL": vdl_col_vals,
+                        indicator_col: ind_col_vals,
+                    }
+                )
+                well_full_updates[wn_str] = upd_w_df
+
+    by_well: Dict[str, List[Dict[str, Any]]] = {}
+    for idx_row, (wn, d, rf, rf_b, ind_val) in enumerate(
+        zip(well_names, depths, rock_flags, rock_flags_binned, active_list)
+    ):
+        if (rf is not None or rf_b is not None) and d is not None:
+            row_dict: Dict[str, Any] = {
+                "DEPTH": d,
+                "ROCK_FLAG": rf if rf is not None else np.nan,
+                "ROCK_FLAG_CUTOFF": rf_b if rf_b is not None else np.nan,
+            }
+            if ind_val is not None:
+                row_dict[indicator_col] = ind_val
+            if rfn_list[idx_row] is not None and (method == "lucia" or override_active):
+                row_dict["RFN"] = rfn_list[idx_row]
+            if phi_sec_list[idx_row] is not None:
+                row_dict["PHI_SEC"] = phi_sec_list[idx_row]
+            if rock_flags_ml[idx_row] is not None:
+                row_dict["ROCK_FLAG_ML"] = rock_flags_ml[idx_row]
+            if vdl_list[idx_row] is not None:
+                row_dict["VDL"] = vdl_list[idx_row]
+            by_well.setdefault(wn, []).append(row_dict)
+
+    for wn, ext_rows in extra_propagated_by_well.items():
+        by_well.setdefault(wn, []).extend(ext_rows)
+
+    if well_full_updates:
+        for wn, full_df in well_full_updates.items():
+            _update_in_memory_well_cache(project_id, wn, full_df)
+    else:
+        for wn, rows in by_well.items():
+            _update_in_memory_well_cache(project_id, wn, pd.DataFrame(rows))
+
+    saved_wells = 0
+    if req.save:
+        if well_full_updates:
+            for wn, full_df in well_full_updates.items():
+                _save_curves_to_well(project_id, wn, full_df)
+            saved_wells = len(well_full_updates)
+        else:
+            for wn, rows in by_well.items():
+                _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
+            saved_wells = len(by_well)
+
+    flag_counts: Dict[str, int] = {}
+    for rf in rock_flags:
+        if rf is not None:
+            key = str(rf)
+            flag_counts[key] = flag_counts.get(key, 0) + 1
+    if req.apply_classifier_propagation and prop_mode != "cutoff_only":
+        for ext_rows in extra_propagated_by_well.values():
+            for r_ext in ext_rows:
+                rf_e = r_ext.get("ROCK_FLAG")
+                if rf_e is not None and not pd.isna(rf_e):
+                    key = str(int(rf_e))
+                    flag_counts[key] = flag_counts.get(key, 0) + 1
+
+    active_diag = lorenz_res if cutoff_method == "lorenz" else gmm_res
+    optimal_k = int(active_diag.get("optimal_k", len(cutoffs) + 1))
+
+    return {
+        "project_id": project_id,
+        "data_source": data_source,
+        "poro_label": poro_label,
+        "perm_label": perm_label,
+        "method": method,
+        "cutoffs": cutoffs,
+        "cutoff_method": cutoff_method,
+        "auto_k": req.auto_k,
+        "optimal_k": optimal_k,
+        "selected_k": len(cutoffs) + 1,
+        "higher_is_better": higher_is_better,
+        "flag_counts": flag_counts,
+        "rock_type_counts": flag_counts,
+        "saved": req.save,
+        "saved_wells": saved_wells,
+        "diagnostics": {
+            "data_source": data_source,
+            "poro_label": poro_label,
+            "perm_label": perm_label,
+            "optimal_k": optimal_k,
+            "selected_k": len(cutoffs) + 1,
+            "cutoff_method": cutoff_method,
+            "k_scores": active_diag.get("k_scores", []),
+            "gmm": {
+                "optimal_k": gmm_res.get("optimal_k"),
+                "cutoffs": gmm_res.get("cutoffs", []),
+                "criterion": gmm_res.get("criterion", req.gmm_criterion),
+                "k_scores": gmm_res.get("k_scores", []),
+                "components": gmm_res.get("components", []),
+                "distribution": gmm_res.get("distribution", {}),
+            },
+            "lorenz": {
+                "optimal_k": lorenz_res.get("optimal_k"),
+                "cutoffs": lorenz_res.get("cutoffs", []),
+                "lorenz_coeff": lorenz_res.get("lorenz_coeff", 0.0),
+                "lorenz_curve": lorenz_res.get("lorenz_curve", {}),
+                "inflection_points": lorenz_res.get("inflection_points", []),
+                "k_scores": lorenz_res.get("k_scores", []),
+            },
+            "carbonate": {
+                "has_sonic_data": has_valid_phi_sec or has_sonic,
+                "sonic_wells": sonic_wells,
+                "vuggy_count": int(carb_res["vuggy_count"]),
+                "override_count": int(carb_res["override_count"]) if override_active else 0,
+                "phi_sec_cutoff": float(req.phi_sec_cutoff),
+                "mean_phi_sec": (
+                    round(float(np.nanmean(phi_sec_arr)), 4)
+                    if has_valid_phi_sec
+                    else None
+                ),
+                "max_phi_sec": (
+                    round(float(np.nanmax(phi_sec_arr)), 4)
+                    if has_valid_phi_sec
+                    else None
+                ),
+                "use_interparticle_porosity": bool(req.use_interparticle_porosity),
+                "lucia_vuggy_override": bool(req.lucia_vuggy_override),
+                "lucia_cutoffs": sorted(float(c) for c in req.lucia_cutoffs),
+            },
+            "classifier": classifier_diag,
+            "models_status": get_saved_rt_classifiers_status(),
+        },
+        "data": {
+            "data_source": data_source,
+            "poro_label": poro_label,
+            "perm_label": perm_label,
+            "well_names": well_names,
+            "depths": depths,
+            "zones": zones,
+            "phit": fzi_data["phit"],
+            "perm": fzi_data["perm"],
+            "phis": phis_list,
+            "phi_sec": phi_sec_list,
+            "phi_ip": phi_ip_list,
+            "vuggy_flags": vuggy_flags,
+            "vdl": vdl_list,
+            "fzi": fzi_list,
+            "r35": r35_list,
+            "rfn": rfn_list,
+            "drt_value": active_list,
+            "rock_flags": rock_flags,
+            "rock_flags_cutoff": rock_flags_binned,
+            "rock_flags_binned": rock_flags_binned,
+            "rock_flags_ml": rock_flags_ml,
+            "rock_prob_ml": rock_prob_ml,
+            "log_well_names": log_well_names,
+            "log_depths": log_depths,
+            "log_rock_flags": log_rock_flags,
+            "log_rock_flags_cutoff": log_rock_flags_cutoff,
+            "log_rock_flags_ml": log_rock_flags_ml,
+            "log_vdl": log_vdl,
+        },
+    }
 
 
 @router.post(
@@ -2830,8 +5044,15 @@ def workspace_perm_transform_compute(
 ) -> Dict[str, Any]:
     """Fit power-law permeability transforms (a * PHIT^b) per ROCK_FLAG and optionally save PERM_TRANS."""
     try:
+        data_source = (
+            "log"
+            if str(req.data_source or "core").strip().lower() == "log"
+            else "core"
+        )
+        poro_label = "CPORE" if data_source == "core" else "PHIT"
+        perm_label = "CPERM" if data_source == "core" else "PERM"
         fzi_data = _filter_fzi_data_by_wells(
-            _compute_fzi_data_sync(project_id), req.well_names
+            _compute_fzi_data_sync(project_id, data_source=data_source), req.well_names
         )
         phit_arr = np.asarray(fzi_data["phit"], dtype=float)
         perm_arr = np.asarray(fzi_data["perm"], dtype=float)
@@ -2840,17 +5061,25 @@ def workspace_perm_transform_compute(
         depths = fzi_data["depths"]
         zones = fzi_data.get("zones") or [None] * len(depths)
 
-        if not any(rf is not None for rf in rock_flags):
+        if not all(rf is not None for rf in rock_flags) and len(phit_arr) > 0:
             valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
-            fzi_arr = np.full_like(phit_arr, np.nan, dtype=float)
-            fzi_arr[valid_mask] = calc_fzi(phit_arr[valid_mask], perm_arr[valid_mask])
-            rf_arr = rock_typing(
-                fzi_arr,
-                cut_offs=sorted(float(c) for c in req.cutoffs),
-                higher_is_better=True,
+            ind_arr = np.full_like(phit_arr, np.nan, dtype=float)
+            ind_vals, hib, _ = _eval_drt_indicator_scalar_or_array(
+                phit_arr[valid_mask], perm_arr[valid_mask], req.method
+            )
+            ind_arr[valid_mask] = ind_vals
+            rf_arr = np.asarray(
+                rock_typing(
+                    ind_arr,
+                    cut_offs=sorted(float(c) for c in req.cutoffs),
+                    higher_is_better=hib,
+                )
             )
             rock_flags = [
-                int(v) if not np.isnan(v) else None for v in np.asarray(rf_arr)
+                rf_existing
+                if rf_existing is not None
+                else (int(rf_calc) if not np.isnan(rf_calc) else None)
+                for rf_existing, rf_calc in zip(rock_flags, rf_arr)
             ]
 
         unique_flags = sorted({rf for rf in rock_flags if rf is not None})
@@ -2917,39 +5146,256 @@ def workspace_perm_transform_compute(
                 "count": count_n,
             }
 
-        perm_trans: List[Optional[float]] = []
-        for p, rf in zip(phit_arr, rock_flags):
-            rf_key = str(rf) if rf is not None else None
-            if rf_key and rf_key in fits and p is not None and p > 0:
-                val = fits[rf_key]["a"] * (float(p) ** fits[rf_key]["b"])
-                perm_trans.append(round(float(val), 6) if math.isfinite(val) else None)
+        core_lookup: Dict[
+            Tuple[str, float],
+            Tuple[Optional[float], Optional[float], Optional[int], Optional[str]],
+        ] = {}
+        for wn_c, d_c, p_c, k_c, rf_c, z_c in zip(
+            well_names, depths, phit_arr, perm_arr, rock_flags, zones
+        ):
+            if wn_c is not None and d_c is not None:
+                dk_c = round(float(d_c), 4)
+                p_v = float(p_c) if np.isfinite(p_c) else None
+                k_v = float(k_c) if np.isfinite(k_c) else None
+                rf_v = int(rf_c) if rf_c is not None else None
+                core_lookup[(str(wn_c), dk_c)] = (p_v, k_v, rf_v, z_c)
+
+        try:
+            with get_db() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                all_proj_wells = [str(w) for w in proj.get_well_names()]
+        except Exception:
+            all_proj_wells = []
+        if req.well_names:
+            allowed_set = {str(w) for w in req.well_names}
+            all_proj_wells = [w for w in all_proj_wells if w in allowed_set]
+        target_wells = list(
+            dict.fromkeys(
+                all_proj_wells + [str(w) for w in well_names if w is not None]
+            )
+        )
+
+        out_well_names: List[str] = []
+        out_depths: List[float] = []
+        out_zones: List[Optional[str]] = []
+        out_phit: List[Optional[float]] = []
+        out_log_phit: List[Optional[float]] = []
+        out_perm: List[Optional[float]] = []
+        out_rock_flags: List[Optional[int]] = []
+        out_perm_trans: List[Optional[float]] = []
+        by_well: Dict[str, List[Dict[str, Any]]] = {}
+
+        for wn in target_wells:
+            w_df = _get_merged_dataframe_sync(project_id, str(wn))
+            if w_df.empty or "DEPTH" not in w_df.columns:
+                continue
+
+            d_series = pd.to_numeric(w_df["DEPTH"], errors="coerce")
+
+            # Resolve continuous log PHIT first, with fallback estimation when no PHIT/PHIE exists
+            phit_s = pd.Series(np.nan, index=w_df.index, dtype=float)
+            for pcol in ("PHIT", "PHIE", "POROSITY", "POR"):
+                if pcol in w_df.columns:
+                    ps = pd.to_numeric(w_df[pcol], errors="coerce")
+                    ps = ps.where(ps > 0, np.nan)
+                    phit_s = phit_s.combine_first(ps)
+            if phit_s.isna().all():
+                if "RHOB" in w_df.columns and w_df["RHOB"].notna().any():
+                    rhob_s = pd.to_numeric(w_df["RHOB"], errors="coerce")
+                    est_phit = ((2.65 - rhob_s) / (2.65 - 1.0)).clip(0.001, 0.45)
+                    if "NPHI" in w_df.columns and w_df["NPHI"].notna().any():
+                        nphi_s = pd.to_numeric(w_df["NPHI"], errors="coerce").clip(
+                            0.001, 0.6
+                        )
+                        est_phit = ((est_phit + nphi_s) / 2.0).clip(0.001, 0.45)
+                    phit_s = est_phit
+                elif "NPHI" in w_df.columns and w_df["NPHI"].notna().any():
+                    phit_s = pd.to_numeric(w_df["NPHI"], errors="coerce").clip(
+                        0.001, 0.45
+                    )
+                for ccol in ("CPORE", "CORE_POR"):
+                    if ccol in w_df.columns:
+                        phit_s = phit_s.combine_first(
+                            pd.to_numeric(w_df[ccol], errors="coerce")
+                        )
+
+            # Resolve crossplot & R^2 porosity/permeability strictly according to data_source ('core' vs 'log')
+            scatter_phit_s = pd.Series(np.nan, index=w_df.index, dtype=float)
+            scatter_perm_s = pd.Series(np.nan, index=w_df.index, dtype=float)
+            if data_source == "core":
+                for pcol in ("CPORE", "CORE_POR"):
+                    if pcol in w_df.columns:
+                        ps = pd.to_numeric(w_df[pcol], errors="coerce")
+                        ps = ps.where(ps > 0, np.nan)
+                        scatter_phit_s = scatter_phit_s.combine_first(ps)
+                if scatter_phit_s.notna().any() and float(scatter_phit_s.median()) > 1.0:
+                    scatter_phit_s = scatter_phit_s / 100.0
+                for kcol in ("CPERM", "CORE_PERM"):
+                    if kcol in w_df.columns:
+                        ks = pd.to_numeric(w_df[kcol], errors="coerce")
+                        ks = ks.where(ks > 0, np.nan)
+                        scatter_perm_s = scatter_perm_s.combine_first(ks)
             else:
-                perm_trans.append(None)
+                for pcol in ("PHIT", "PHIE", "POROSITY", "POR"):
+                    if pcol in w_df.columns:
+                        ps = pd.to_numeric(w_df[pcol], errors="coerce")
+                        ps = ps.where(ps > 0, np.nan)
+                        scatter_phit_s = scatter_phit_s.combine_first(ps)
+                for kcol in ("PERM", "KLOGH", "PERMEABILITY", "K", "PERM_TRANS"):
+                    if kcol in w_df.columns:
+                        ks = pd.to_numeric(w_df[kcol], errors="coerce")
+                        ks = ks.where(ks > 0, np.nan)
+                        scatter_perm_s = scatter_perm_s.combine_first(ks)
+
+            # Resolve ROCK_FLAG according to rock_flag_source ('cutoff_only', 'fill_missing', 'full_ml') or active ROCK_FLAG
+            rf_src = str(req.rock_flag_source or "").strip().lower()
+            rf_s = pd.Series(np.nan, index=w_df.index, dtype=float)
+            if rf_src == "cutoff_only":
+                for rcol in ("ROCK_FLAG_CUTOFF", "ROCK_FLAG", "DRT"):
+                    if rcol in w_df.columns:
+                        rs = pd.to_numeric(w_df[rcol], errors="coerce")
+                        rs = rs.where(rs >= 1, np.nan)
+                        rf_s = rf_s.combine_first(rs)
+                        break
+            elif rf_src == "full_ml":
+                for rcol in ("ROCK_FLAG_ML", "ROCK_FLAG", "ROCK_FLAG_CUTOFF", "DRT"):
+                    if rcol in w_df.columns:
+                        rs = pd.to_numeric(w_df[rcol], errors="coerce")
+                        rs = rs.where(rs >= 1, np.nan)
+                        rf_s = rf_s.combine_first(rs)
+            elif "ROCK_FLAG" in w_df.columns and rf_src != "fill_missing":
+                rs = pd.to_numeric(w_df["ROCK_FLAG"], errors="coerce")
+                rf_s = rs.where(rs >= 1, np.nan)
+            else:
+                for rcol in ("ROCK_FLAG", "ROCK_FLAG_CUTOFF", "ROCK_FLAG_ML", "DRT"):
+                    if rcol in w_df.columns:
+                        rs = pd.to_numeric(w_df[rcol], errors="coerce")
+                        rs = rs.where(rs >= 1, np.nan)
+                        rf_s = rf_s.combine_first(rs)
+
+            zone_vals = (
+                w_df["ZONES"].fillna("Unknown").astype(str).tolist()
+                if "ZONES" in w_df.columns
+                else ["Unknown"] * len(w_df)
+            )
+
+            for d_v, p_v, sp_v, sk_v, rf_v, z_v in zip(
+                d_series.tolist(),
+                phit_s.tolist(),
+                scatter_phit_s.tolist(),
+                scatter_perm_s.tolist(),
+                rf_s.tolist(),
+                zone_vals,
+            ):
+                if d_v is None or pd.isna(d_v):
+                    continue
+                dk = round(float(d_v), 4)
+                core_hit = core_lookup.get((str(wn), dk))
+
+                p_log = (
+                    round(float(p_v), 5)
+                    if (p_v is not None and not pd.isna(p_v) and math.isfinite(float(p_v)) and float(p_v) > 0)
+                    else (core_hit[0] if core_hit else None)
+                )
+                p_scatter = (
+                    round(float(sp_v), 5)
+                    if (sp_v is not None and not pd.isna(sp_v) and math.isfinite(float(sp_v)) and float(sp_v) > 0)
+                    else (core_hit[0] if core_hit else None)
+                )
+                k_scatter = (
+                    round(float(sk_v), 5)
+                    if (sk_v is not None and not pd.isna(sk_v) and math.isfinite(float(sk_v)) and float(sk_v) > 0)
+                    else (core_hit[1] if core_hit else None)
+                )
+                rf_clean: Optional[int] = None
+                if rf_v is not None and not pd.isna(rf_v) and math.isfinite(float(rf_v)) and int(round(float(rf_v))) >= 1:
+                    rf_clean = int(round(float(rf_v)))
+                elif core_hit and core_hit[2] is not None:
+                    rf_clean = core_hit[2]
+
+                z_clean = (
+                    z_v
+                    if (z_v and z_v != "Unknown")
+                    else (core_hit[3] if (core_hit and core_hit[3]) else z_v)
+                )
+
+                if p_log is None and p_scatter is None and k_scatter is None and rf_clean is None:
+                    continue
+
+                rf_key = str(rf_clean) if rf_clean is not None else None
+                pt_val: Optional[float] = None
+                if rf_key and rf_key in fits and p_log is not None and p_log > 0:
+                    val = fits[rf_key]["a"] * (float(p_log) ** fits[rf_key]["b"])
+                    if math.isfinite(val):
+                        pt_val = round(float(val), 6)
+
+                out_well_names.append(str(wn))
+                out_depths.append(dk)
+                out_zones.append(z_clean)
+                out_phit.append(p_scatter)
+                out_log_phit.append(p_log)
+                out_perm.append(k_scatter)
+                out_rock_flags.append(rf_clean)
+                out_perm_trans.append(pt_val)
+
+                if pt_val is not None:
+                    by_well.setdefault(str(wn), []).append(
+                        {"DEPTH": float(d_v), "PERM_TRANS": pt_val}
+                    )
+
+        if not out_well_names:
+            for wn_c, d_c, z_c, p_c, k_c, rf_c in zip(
+                well_names, depths, zones, fzi_data["phit"], fzi_data["perm"], rock_flags
+            ):
+                rf_key = str(rf_c) if rf_c is not None else None
+                pt_val = None
+                if rf_key and rf_key in fits and p_c is not None and p_c > 0:
+                    val = fits[rf_key]["a"] * (float(p_c) ** fits[rf_key]["b"])
+                    if math.isfinite(val):
+                        pt_val = round(float(val), 6)
+                out_well_names.append(str(wn_c))
+                out_depths.append(float(d_c))
+                out_zones.append(z_c)
+                out_phit.append(p_c)
+                out_log_phit.append(p_c)
+                out_perm.append(k_c)
+                out_rock_flags.append(rf_c)
+                out_perm_trans.append(pt_val)
+                if pt_val is not None and d_c is not None:
+                    by_well.setdefault(str(wn_c), []).append(
+                        {"DEPTH": float(d_c), "PERM_TRANS": pt_val}
+                    )
+
+        for wn, rows in by_well.items():
+            _update_in_memory_well_cache(project_id, wn, pd.DataFrame(rows))
 
         saved_wells = 0
         if req.save:
-            by_well: Dict[str, List[Dict[str, Any]]] = {}
-            for wn, d, pt in zip(well_names, depths, perm_trans):
-                if pt is not None and d is not None:
-                    by_well.setdefault(wn, []).append({"DEPTH": d, "PERM_TRANS": pt})
             for wn, rows in by_well.items():
                 _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
             saved_wells = len(by_well)
 
         return {
             "project_id": project_id,
+            "data_source": data_source,
+            "poro_label": poro_label,
+            "perm_label": perm_label,
             "fits": fits,
             "saved": req.save,
             "saved_wells": saved_wells,
             "data": {
-                "well_names": well_names,
-                "depths": depths,
-                "zones": zones,
-                "phit": fzi_data["phit"],
-                "perm": fzi_data["perm"],
-                "rock_flags": rock_flags,
-                "perm_trans": perm_trans,
-                "perm_pred": perm_trans,
+                "data_source": data_source,
+                "poro_label": poro_label,
+                "perm_label": perm_label,
+                "well_names": out_well_names,
+                "depths": out_depths,
+                "zones": out_zones,
+                "phit": out_phit,
+                "log_phit": out_log_phit,
+                "perm": out_perm,
+                "rock_flags": out_rock_flags,
+                "perm_trans": out_perm_trans,
+                "perm_pred": out_perm_trans,
             },
         }
     except ValueError as e:
@@ -2958,6 +5404,47 @@ def workspace_perm_transform_compute(
         raise HTTPException(
             status_code=500, detail=f"Permeability transform computation failed: {e}"
         ) from e
+
+
+def _eval_swirr_scalar_from_config(
+    poro: Optional[float],
+    perm: Optional[float],
+    rf: Optional[int],
+    swirr_cfg: Optional[Dict[str, Any]],
+) -> float:
+    """Evaluate modeled Swirr for a single (poro, perm, rock_flag) point from a SwirrModelConfig dict."""
+    phi = float(poro) if (poro is not None and math.isfinite(float(poro)) and float(poro) > 0) else 0.15
+    k = float(perm) if (perm is not None and math.isfinite(float(perm)) and float(perm) > 0) else 10.0
+    if not isinstance(swirr_cfg, dict):
+        return float(swirr_rqi(phi, k, a=0.28, b=0.35, swirr_min=0.03, swirr_max=0.85))
+
+    eq = str(swirr_cfg.get("equationType") or swirr_cfg.get("equation_type") or "rqi_power").strip().lower()
+    scope = str(swirr_cfg.get("fitScope") or swirr_cfg.get("fit_scope") or "global").strip().lower()
+    s_min = float(swirr_cfg.get("swirrMin") or swirr_cfg.get("swirr_min") or 0.03)
+    s_max = float(swirr_cfg.get("swirrMax") or swirr_cfg.get("swirr_max") or 0.85)
+    rules = swirr_cfg.get("rules") or {}
+
+    rule: Optional[Dict[str, Any]] = None
+    if scope == "per_rt" and rf is not None and str(int(rf)) in rules:
+        rule = rules.get(str(int(rf)))
+    if not isinstance(rule, dict):
+        rule = rules.get("global")
+    if not isinstance(rule, dict) and rules:
+        first_val = next(iter(rules.values()), None)
+        if isinstance(first_val, dict):
+            rule = first_val
+
+    if not isinstance(rule, dict):
+        return float(swirr_rqi(phi, k, a=0.28, b=0.35, swirr_min=s_min, swirr_max=s_max))
+
+    a_v = float(rule.get("a", 0.28))
+    b_v = float(rule.get("b", 0.35))
+    c_v = float(rule.get("c", 0.50)) if rule.get("c") is not None else 0.50
+    if eq == "semilog_k":
+        return float(swirr_semilog_k(k, a=a_v, b=b_v, swirr_min=s_min, swirr_max=s_max))
+    elif eq == "timur":
+        return float(swirr_timur(phi, k, a=a_v, b=b_v, c=c_v, swirr_min=s_min, swirr_max=s_max))
+    return float(swirr_rqi(phi, k, a=a_v, b=b_v, swirr_min=s_min, swirr_max=s_max))
 
 
 @router.post(
@@ -2983,9 +5470,12 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         # If ROCK_FLAG not yet saved in wells, compute on the fly from req.cutoffs
         if not any(rf is not None for rf in rock_flags):
             valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
-            fzi_arr = np.full_like(phit_arr, np.nan, dtype=float)
-            fzi_arr[valid_mask] = calc_fzi(phit_arr[valid_mask], perm_arr[valid_mask])
-            rf_arr = rock_typing(fzi_arr, cut_offs=req.cutoffs, higher_is_better=True)
+            ind_arr = np.full_like(phit_arr, np.nan, dtype=float)
+            ind_vals, hib, _ = _eval_drt_indicator_scalar_or_array(
+                phit_arr[valid_mask], perm_arr[valid_mask], req.drt_method
+            )
+            ind_arr[valid_mask] = ind_vals
+            rf_arr = rock_typing(ind_arr, cut_offs=req.cutoffs, higher_is_better=hib)
             rock_flags = [
                 int(v) if not np.isnan(v) else None for v in np.asarray(rf_arr)
             ]
@@ -3004,6 +5494,25 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         grad_psi = max((req.gw - req.ghc) * conv, 1e-4)
 
         # Extract core SCAL capillary pressure points across project wells
+        swirr_cfg_dict = getattr(req, "swirr_config", None) or {}
+        excl_plug_set = {
+            str(pid).strip()
+            for pid in (
+                swirr_cfg_dict.get("excludedPlugIds")
+                or swirr_cfg_dict.get("excluded_plug_ids")
+                or []
+            )
+            if str(pid).strip()
+        }
+        excl_pt_set = {
+            str(ptid).strip()
+            for ptid in (
+                swirr_cfg_dict.get("excludedScalPointIds")
+                or swirr_cfg_dict.get("excluded_scal_point_ids")
+                or []
+            )
+            if str(ptid).strip()
+        }
         core_rows: List[Dict[str, Any]] = []
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
@@ -3015,22 +5524,210 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 except Exception:
                     continue
                 core_data = (anc or {}).get("core_data") or {}
+                well_df_cache: Optional[pd.DataFrame] = None
                 for sname, sample in core_data.items():
-                    meas = sample.get("measurements")
+                    if f"{wn}::{sname}" in excl_plug_set:
+                        continue
                     pc_df = sample.get("pc")
-                    if meas is None or pc_df is None or meas.empty or pc_df.empty:
+                    if pc_df is None or pc_df.empty:
                         continue
-                    perm_r = meas[meas["property"].str.upper() == "CPERM"]
-                    phit_r = meas[meas["property"].str.upper() == "CPORE"]
-                    if perm_r.empty or phit_r.empty:
-                        continue
-                    cperm = float(perm_r["value"].iloc[0])
-                    cpore = float(phit_r["value"].iloc[0])
+                    s_depth = float(sample.get("depth") or 0.0)
+                    meas = sample.get("measurements")
+                    cperm = None
+                    cpore = None
+                    s_raw_depth = s_depth
+                    if (
+                        isinstance(meas, pd.DataFrame)
+                        and not meas.empty
+                        and "property" in meas.columns
+                    ):
+                        perm_r = meas[
+                            meas["property"]
+                            .astype(str)
+                            .str.upper()
+                            .isin(["CPERM", "PERM", "PERMEABILITY"])
+                        ]
+                        phit_r = meas[
+                            meas["property"]
+                            .astype(str)
+                            .str.upper()
+                            .isin(["CPORE", "POR", "POROSITY"])
+                        ]
+                        raw_d_r = meas[
+                            meas["property"]
+                            .astype(str)
+                            .str.upper()
+                            .isin(["RAW_DEPTH", "CORE_DEPTH_RAW"])
+                        ]
+                        if not perm_r.empty and pd.notna(perm_r["value"].iloc[0]):
+                            cperm = float(perm_r["value"].iloc[0])
+                        if not phit_r.empty and pd.notna(phit_r["value"].iloc[0]):
+                            cpore = float(phit_r["value"].iloc[0])
+                        if not raw_d_r.empty and pd.notna(raw_d_r["value"].iloc[0]):
+                            s_raw_depth = float(raw_d_r["value"].iloc[0])
+
+                    has_core_perm = cperm is not None
+
+                    # Fallback 1: check companion RCA core sample in this well by sister sample name (e.g. 1A -> 1)
+                    # or nearest depth (matching against both shifted depth and RAW_DEPTH / CORE_DEPTH_RAW within 0.50m)
+                    if cpore is None or cperm is None:
+                        import re as _re
+
+                        def _norm_plug_stem(val: Any) -> str:
+                            base = str(val or "").split("@")[0].strip().upper()
+                            base = _re.sub(r"^(PLUG|SAMPLE|RCA|SCAL)[\s_\-]*", "", base)
+                            # Strip trailing sister-plug letter (e.g. 1A -> 1, 12B -> 12)
+                            m_stem = _re.match(r"^(\d+)[A-Z]$", base)
+                            return m_stem.group(1) if m_stem else base
+
+                        target_stem = _norm_plug_stem(sname)
+                        best_poro_cand: Optional[Tuple[float, float]] = None
+                        best_perm_cand: Optional[Tuple[float, float]] = None
+
+                        for other_name, other_s in core_data.items():
+                            if other_name == sname:
+                                continue
+                            o_meas = other_s.get("measurements")
+                            if (
+                                not isinstance(o_meas, pd.DataFrame)
+                                or o_meas.empty
+                                or "property" not in o_meas.columns
+                            ):
+                                continue
+                            o_depth = float(other_s.get("depth") or 0.0)
+                            o_raw_depth = o_depth
+                            o_raw_r = o_meas[
+                                o_meas["property"]
+                                .astype(str)
+                                .str.upper()
+                                .isin(["RAW_DEPTH", "CORE_DEPTH_RAW"])
+                            ]
+                            if not o_raw_r.empty and pd.notna(o_raw_r["value"].iloc[0]):
+                                o_raw_depth = float(o_raw_r["value"].iloc[0])
+
+                            dist = min(
+                                abs(o_depth - s_depth) if s_depth > 0 and o_depth > 0 else 999.0,
+                                abs(o_raw_depth - s_depth) if s_depth > 0 and o_raw_depth > 0 else 999.0,
+                                abs(o_raw_depth - s_raw_depth) if s_raw_depth > 0 and o_raw_depth > 0 else 999.0,
+                                abs(o_depth - s_raw_depth) if s_raw_depth > 0 and o_depth > 0 else 999.0,
+                            )
+                            same_stem = bool(
+                                target_stem and _norm_plug_stem(other_name) == target_stem
+                            )
+                            if not (dist <= 0.50 or (same_stem and dist <= 2.50)):
+                                continue
+                            # Prioritize exact/sister stem match + minimal depth distance
+                            score = dist - (1.0 if same_stem else 0.0)
+
+                            if cperm is None:
+                                pr = o_meas[
+                                    o_meas["property"]
+                                    .astype(str)
+                                    .str.upper()
+                                    .isin(["CPERM", "PERM", "PERMEABILITY"])
+                                ]
+                                if not pr.empty and pd.notna(pr["value"].iloc[0]):
+                                    kv = float(pr["value"].iloc[0])
+                                    if kv > 0 and (
+                                        best_perm_cand is None or score < best_perm_cand[0]
+                                    ):
+                                        best_perm_cand = (score, kv)
+                            if cpore is None:
+                                phr = o_meas[
+                                    o_meas["property"]
+                                    .astype(str)
+                                    .str.upper()
+                                    .isin(["CPORE", "POR", "POROSITY"])
+                                ]
+                                if not phr.empty and pd.notna(phr["value"].iloc[0]):
+                                    pv = float(phr["value"].iloc[0])
+                                    if pv > 0 and (
+                                        best_poro_cand is None or score < best_poro_cand[0]
+                                    ):
+                                        best_poro_cand = (score, pv)
+
+                        if cpore is None and best_poro_cand is not None:
+                            cpore = best_poro_cand[1]
+                        if cperm is None and best_perm_cand is not None:
+                            cperm = best_perm_cand[1]
+                            has_core_perm = True
+
+                    # Fallback 2: lookup well's merged CPORE/CPERM (within ±0.50m) or log PHIT & PERM_TRANS/PERM at nearest depth
+                    near_rock_flag: Optional[int] = None
+                    if s_depth > 0:
+                        try:
+                            if well_df_cache is None:
+                                well_df_cache = _get_filtered_well_df(project_id, wn)
+                            if (
+                                well_df_cache is not None
+                                and not well_df_cache.empty
+                                and "DEPTH" in well_df_cache.columns
+                            ):
+                                depth_diff = (well_df_cache["DEPTH"] - s_depth).abs()
+                                idx_near = depth_diff.idxmin()
+                                near_row = well_df_cache.loc[idx_near]
+                                for rf_col in ("ROCK_FLAG", "ROCK_FLAG_ML"):
+                                    if rf_col in near_row and pd.notna(near_row[rf_col]):
+                                        rf_candidate = int(float(near_row[rf_col]))
+                                        if rf_candidate >= 1:
+                                            near_rock_flag = rf_candidate
+                                            break
+
+                                win_df = well_df_cache.loc[depth_diff <= 0.50]
+                                if cpore is None and not win_df.empty and "CPORE" in win_df.columns:
+                                    valid_cp = pd.to_numeric(win_df["CPORE"], errors="coerce")
+                                    valid_cp = valid_cp[valid_cp > 0]
+                                    if not valid_cp.empty:
+                                        cp_idx = (well_df_cache.loc[valid_cp.index, "DEPTH"] - s_depth).abs().idxmin()
+                                        cpore = float(valid_cp.loc[cp_idx])
+                                if cperm is None and not win_df.empty and "CPERM" in win_df.columns:
+                                    valid_ck = pd.to_numeric(win_df["CPERM"], errors="coerce")
+                                    valid_ck = valid_ck[valid_ck > 0]
+                                    if not valid_ck.empty:
+                                        ck_idx = (well_df_cache.loc[valid_ck.index, "DEPTH"] - s_depth).abs().idxmin()
+                                        cperm = float(valid_ck.loc[ck_idx])
+                                        has_core_perm = True
+
+                                if cpore is None:
+                                    for pcol in ("CPORE", "PHIT", "PHIE"):
+                                        if (
+                                            pcol in near_row
+                                            and pd.notna(near_row[pcol])
+                                            and float(near_row[pcol]) > 0
+                                        ):
+                                            cpore = float(near_row[pcol])
+                                            break
+                                if cperm is None:
+                                    for kcol in ("CPERM", "PERM_TRANS", "PERM", "K"):
+                                        if (
+                                            kcol in near_row
+                                            and pd.notna(near_row[kcol])
+                                            and float(near_row[kcol]) > 0
+                                        ):
+                                            cperm = float(near_row[kcol])
+                                            break
+                        except Exception:
+                            pass
+
+                    # Final sensible defaults if neither RCA nor log curve is present
+                    if cpore is None:
+                        cpore = 0.18
+                    elif cpore > 1.0:
+                        cpore = cpore / 100.0
+                    if cperm is None:
+                        cperm = 50.0
                     if not (0 < cpore < 1 and cperm > 0):
                         continue
-                    rf_val = int(
-                        rock_typing(calc_fzi(cpore, cperm), req.cutoffs).item()
+                    ind_val_plug, hib_plug, _ = _eval_drt_indicator_scalar_or_array(
+                        cpore, cperm, req.drt_method
                     )
+                    rf_val = int(
+                        rock_typing(
+                            ind_val_plug, req.cutoffs, higher_is_better=hib_plug
+                        ).item()
+                    )
+                    if not has_core_perm and near_rock_flag is not None:
+                        rf_val = near_rock_flag
                     pc_col = next(
                         (
                             c
@@ -3066,7 +5763,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     )
                     pc_vals = pc_vals[valid_pc]
                     sw_vals = sw_vals[valid_pc]
-                    if len(pc_vals) < 2:
+                    if len(pc_vals) < 1:
                         continue
                     if np.nanmax(sw_vals) > 1.5:
                         sw_vals = sw_vals / 100.0
@@ -3078,9 +5775,52 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         )
                         lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
                         pc_vals = pc_vals * (res_num / lab_den)
-                    swn_vals = np.asarray(normalize_sw(pd.Series(sw_vals)), dtype=float)
-                    for pc_v, sw_v, swn_v in zip(pc_vals, sw_vals, swn_vals):
-                        if not (0.02 <= swn_v <= 0.98 and pc_v > 0):
+                    swirr_src_mode = (
+                        "poro_perm"
+                        if str(getattr(req, "swirr_source", "lab_min") or "lab_min")
+                        .strip()
+                        .lower()
+                        == "poro_perm"
+                        else "lab_min"
+                    )
+                    swirr_calc_plug = _eval_swirr_scalar_from_config(
+                        cpore, cperm, rf_val, getattr(req, "swirr_config", None)
+                    )
+                    if swirr_src_mode == "poro_perm":
+                        raw_swn = (sw_vals - swirr_calc_plug) / max(
+                            0.05, 1.0 - swirr_calc_plug
+                        )
+                        swn_vals = np.clip(raw_swn, 0.005, 0.99)
+                    elif (
+                        len(sw_vals) >= 4
+                        and (np.nanmax(sw_vals) - np.nanmin(sw_vals)) > 0.25
+                    ):
+                        # Use a poro-perm bounded Swirr estimate so incomplete drainage curves
+                        # (e.g., tight plugs terminating at Sw=0.41) are not artificially stretched to Swn=0.030
+                        sw_min_plug = float(np.nanmin(sw_vals))
+                        swirr_est = float(
+                            np.clip(
+                                0.08
+                                * (
+                                    (max(float(cperm), 0.01) / max(float(cpore), 0.01))
+                                    ** -0.12
+                                ),
+                                0.04,
+                                0.22,
+                            )
+                        )
+                        eff_swirr = min(sw_min_plug * 0.92, swirr_est)
+                        raw_swn = (sw_vals - eff_swirr) / max(1.0 - eff_swirr, 1e-3)
+                        swn_vals = np.clip(raw_swn, 0.02, 0.98)
+                    else:
+                        swn_vals = np.clip(sw_vals, 0.02, 0.98)
+                    for pt_idx, (pc_v, sw_v, swn_v) in enumerate(zip(pc_vals, sw_vals, swn_vals)):
+                        if (
+                            f"{wn}::{sname}::{pt_idx}" in excl_pt_set
+                            or f"{wn}::{sname}::{round(float(pc_v), 2)}" in excl_pt_set
+                        ):
+                            continue
+                        if not (0.004 <= swn_v <= 0.995 and pc_v > 0):
                             continue
                         j_v = float(leverett_j(pc_v, req.ift, req.theta, cperm, cpore))
                         h_v = float(pc_v / grad_psi)
@@ -3098,6 +5838,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                                 "PC": round(float(pc_v), 4),
                                 "SW": round(float(sw_v), 4),
                                 "SWN": round(float(swn_v), 4),
+                                "SWIRR_CALC": round(float(swirr_calc_plug), 4),
                                 "J": round(float(j_v), 4),
                                 "H": round(float(h_v), 4),
                                 "BVW": round(float(bvw_v), 4),
@@ -3105,6 +5846,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                                 "PERM": round(float(cperm), 4),
                                 "Well": wn,
                                 "Sample": str(sname),
+                                "DEPTH": round(float(s_depth), 2),
                             }
                         )
 
@@ -3173,6 +5915,32 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 )
 
         scal_df = pd.DataFrame(core_rows)
+        j_sat_mode = (
+            "sw"
+            if str(getattr(req, "j_sat_mode", "swn") or "swn").strip().lower() == "sw"
+            else "swn"
+        )
+        fits_swn: Dict[str, Dict[str, float]] = {}
+        fits_sw: Dict[str, Dict[str, float]] = {}
+        if model == "leverett_j" and not scal_df.empty:
+            for param in auto_j_params(scal_df):
+                fits_swn[str(param["ROCK_FLAG"])] = {
+                    "a": float(param["a"]),
+                    "b": float(param["b"]),
+                    "rmse": float(param["rmse"]),
+                    "r2": float(param.get("r2", 0.0)),
+                    "count": int(param.get("count", 0)),
+                }
+            scal_df_sw = scal_df.assign(SWN=scal_df["SW"])
+            for param in auto_j_params(scal_df_sw):
+                fits_sw[str(param["ROCK_FLAG"])] = {
+                    "a": float(param["a"]),
+                    "b": float(param["b"]),
+                    "rmse": float(param["rmse"]),
+                    "r2": float(param.get("r2", 0.0)),
+                    "count": int(param.get("count", 0)),
+                }
+
         fits: Dict[str, Dict[str, float]] = {}
         if req.fits:
             for k_rf, v_fit in req.fits.items():
@@ -3217,17 +5985,13 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                             "count": int(param.get("count", 0)),
                         }
                 else:
-                    for param in auto_j_params(scal_df):
-                        fits[str(param["ROCK_FLAG"])] = {
-                            "a": float(param["a"]),
-                            "b": float(param["b"]),
-                            "rmse": float(param["rmse"]),
-                            "r2": float(param.get("r2", 0.0)),
-                            "count": int(param.get("count", 0)),
-                        }
+                    src_fits = fits_sw if j_sat_mode == "sw" else fits_swn
+                    for rf_k, f_val in src_fits.items():
+                        fits[rf_k] = dict(f_val)
 
         # Recompute fit diagnostics (rmse, r2, count) against SCAL points for all entries in fits
         if not scal_df.empty and fits:
+            j_sat_col = "SW" if j_sat_mode == "sw" else "SWN"
             for rf_key, fit_entry in list(fits.items()):
                 try:
                     rf_int = int(rf_key)
@@ -3260,7 +6024,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     y_true = sub_scal["J"].to_numpy(dtype=float)
                     y_pred = np.asarray(
                         inv_power_law_func(
-                            sub_scal["SWN"].to_numpy(dtype=float), a_f, b_f
+                            sub_scal[j_sat_col].to_numpy(dtype=float), a_f, b_f
                         ),
                         dtype=float,
                     )
@@ -3268,96 +6032,489 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 if np.any(valid_m):
                     yt = y_true[valid_m]
                     yp = y_pred[valid_m]
-                    rmse_v = float(np.sqrt(np.mean((yt - yp) ** 2)))
-                    ss_res = float(np.sum((yt - yp) ** 2))
-                    ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
-                    r2_v = max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else 0.0
+                    if model == "leverett_j":
+                        swn_m = sub_scal[j_sat_col].to_numpy(dtype=float)[valid_m]
+                        pos_m = (yt > 0) & (yp > 0) & (swn_m > 0)
+                        if np.any(pos_m):
+                            yt_p = yt[pos_m]
+                            yp_p = yp[pos_m]
+                            swn_p = swn_m[pos_m]
+                            y_log = np.log(np.clip(yt_p, 1e-8, 1e8))
+                            yp_log = np.log(np.clip(yp_p, 1e-8, 1e8))
+                            res_log = y_log - yp_log
+                            med_r = float(np.median(res_log))
+                            mad_r = float(np.median(np.abs(res_log - med_r)))
+                            sig_r = max(1.4826 * mad_r, 0.15)
+                            u_r = np.abs(res_log - med_r) / (2.0 * sig_r)
+                            w_out = np.where(
+                                u_r < 1.0,
+                                (1.0 - u_r**2) ** 2,
+                                0.02 / np.maximum(u_r**2, 1.0),
+                            )
+                            w_edge = np.where(
+                                (swn_p >= 0.06) & (swn_p <= 0.88),
+                                1.0,
+                                np.where((swn_p <= 0.04) | (swn_p >= 0.93), 0.05, 0.25),
+                            )
+                            w_tot = w_out * w_edge
+                            w_tot = w_tot / max(float(np.sum(w_tot)), 1e-12)
+                            rmse_v = float(np.sqrt(np.sum(w_tot * ((yt_p - yp_p) ** 2))))
+                            ym_log = float(np.sum(w_tot * y_log))
+                            ss_res = float(np.sum(w_tot * ((y_log - yp_log) ** 2)))
+                            ss_tot = float(np.sum(w_tot * ((y_log - ym_log) ** 2)))
+                            r2_v = (
+                                max(0.0, 1.0 - ss_res / ss_tot)
+                                if ss_tot > 1e-12
+                                else 0.0
+                            )
+                        else:
+                            rmse_v = float(np.sqrt(np.mean((yt - yp) ** 2)))
+                            r2_v = 0.0
+                    else:
+                        rmse_v = float(np.sqrt(np.mean((yt - yp) ** 2)))
+                        ss_res = float(np.sum((yt - yp) ** 2))
+                        ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
+                        r2_v = max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else 0.0
                     fit_entry["a"] = round(a_f, 4)
                     fit_entry["b"] = round(b_f, 4)
                     fit_entry["rmse"] = round(rmse_v, 4)
                     fit_entry["r2"] = round(r2_v, 4)
                     fit_entry["count"] = int(np.sum(valid_m))
 
-        zones = fzi_data.get("zones") or ["Unknown"] * len(depths)
+        if model == "leverett_j":
+            if j_sat_mode == "sw":
+                fits_sw = {k: dict(v) for k, v in fits.items()}
+            else:
+                fits_swn = {k: dict(v) for k, v in fits.items()}
+
         fwl_zone_map: Dict[str, float] = {}
         if req.fwl_by_zone:
             for zk, zv in req.fwl_by_zone.items():
                 if zv is not None and math.isfinite(float(zv)):
                     fwl_zone_map[str(zk).strip()] = float(zv)
 
-        shf_values: List[Optional[float]] = []
-        for p, k, d, rf, zn in zip(phit_arr, perm_arr, depths, rock_flags, zones):
-            rf_key = str(int(rf)) if rf is not None else None
-            is_non_res = (
-                (
-                    rf is not None
-                    and highest_flag is not None
-                    and int(rf) == highest_flag
-                )
-                or rf_key is None
-                or rf_key not in fits
+        # Build fallback permeability per rock flag for continuous log evaluation
+        rf_fallback_perm: Dict[str, float] = {}
+        for rf_int in reservoir_flags:
+            mask_rf = (
+                (rf_arr_full == rf_int)
+                & np.isfinite(perm_arr)
+                & (perm_arr > 0)
             )
-            if is_non_res:
-                shf_values.append(1.0)
+            if np.any(mask_rf):
+                rf_fallback_perm[str(rf_int)] = float(np.nanmedian(perm_arr[mask_rf]))
             else:
-                fit_p = fits[rf_key]
-                a = float(fit_p.get("a", 0.2))
-                b = abs(float(fit_p.get("b", 0.3)))
-                eff_fwl = fwl_zone_map.get(str(zn).strip(), req.fwl)
-                if model == "skelt_harrison":
-                    c = float(fit_p.get("c", 1.5))
-                    d_param = float(fit_p.get("d", 1.5))
-                    shf_v = float(
-                        sw_skelt_harrison(float(d), eff_fwl, a, b, c, d_param)
-                    )
-                elif model == "cuddy":
-                    shf_v = float(
-                        sw_shf_cuddy(
-                            float(p),
-                            float(d),
-                            eff_fwl,
-                            req.gw,
-                            req.ghc,
-                            a,
-                            b,
-                            unit=req.unit,
+                rf_fallback_perm[str(rf_int)] = max(250.0 / (4.0 ** (rf_int - 1)), 0.5)
+
+        # Evaluate continuous SHF across all selected wells with valid TVD
+        try:
+            well_dfs = _load_multi_well_dfs(project_id, well_names=req.well_names)
+        except Exception:
+            well_dfs = []
+
+        out_well_names: List[str] = []
+        out_depths: List[float] = []
+        out_tvd: List[Optional[float]] = []
+        out_zones: List[str] = []
+        out_phit: List[Optional[float]] = []
+        out_perm: List[Optional[float]] = []
+        out_rock_flags: List[Optional[int]] = []
+        out_shf: List[Optional[float]] = []
+        by_well_shf: Dict[str, List[Dict[str, Any]]] = {}
+        skipped_no_tvd_wells: List[str] = []
+        wells_with_tvd: set[str] = set()
+
+        with get_db() as session:
+            try:
+                proj_shf = db_objects.Project.load(session, project_id=project_id)
+            except Exception:
+                proj_shf = None
+
+            for w_df in well_dfs:
+                if w_df.empty or "DEPTH" not in w_df.columns:
+                    continue
+                wn = str(w_df["WELL_NAME"].iloc[0])
+                w_sorted = w_df.sort_values("DEPTH").reset_index(drop=True)
+                md_arr = pd.to_numeric(w_sorted["DEPTH"], errors="coerce").to_numpy(
+                    dtype=float
+                )
+
+                anc_w: Dict[str, Any] = {}
+                if proj_shf is not None:
+                    try:
+                        anc_w = (
+                            proj_shf.get_well_ancillary_data(
+                                resolve_db_well_name(project_id, wn)
+                            )
+                            or {}
                         )
-                    )
+                    except Exception:
+                        anc_w = {}
+
+                surveys_df = (
+                    anc_w.get("well_surveys")
+                    if "well_surveys" in anc_w
+                    else anc_w.get("directional_surveys")
+                )
+                if isinstance(surveys_df, list):
+                    surveys_df = pd.DataFrame(surveys_df)
+
+                tvd_arr_w = _resolve_well_tvd_array(md_arr, w_sorted, surveys_df)
+                if np.isfinite(tvd_arr_w).sum() < 2:
+                    skipped_no_tvd_wells.append(wn)
+                    continue
+                wells_with_tvd.add(wn)
+
+                # Continuous porosity: PHIT -> PHIE -> POROSITY -> POR -> CPORE
+                p_s = pd.Series(np.nan, index=w_sorted.index, dtype=float)
+                for pcol in ("PHIT", "PHIE", "POROSITY", "POR", "CPORE", "CORE_POR"):
+                    if pcol in w_sorted.columns:
+                        ps = pd.to_numeric(w_sorted[pcol], errors="coerce")
+                        ps = ps.where(ps > 0, np.nan)
+                        if ps.notna().any() and float(ps.median()) > 1.0:
+                            ps = ps / 100.0
+                        p_s = p_s.combine_first(ps)
+
+                # Continuous permeability: PERM_TRANS -> PERM -> KLOGH -> PERMEABILITY -> K -> CPERM
+                k_s = pd.Series(np.nan, index=w_sorted.index, dtype=float)
+                for kcol in (
+                    "PERM_TRANS",
+                    "PERM",
+                    "KLOGH",
+                    "PERMEABILITY",
+                    "K",
+                    "CPERM",
+                    "CORE_PERM",
+                ):
+                    if kcol in w_sorted.columns:
+                        ks = pd.to_numeric(w_sorted[kcol], errors="coerce")
+                        ks = ks.where(ks > 0, np.nan)
+                        k_s = k_s.combine_first(ks)
+
+                # Continuous rock flag
+                rf_src = str(req.rock_flag_source or "").strip().lower()
+                rf_s = pd.Series(np.nan, index=w_sorted.index, dtype=float)
+                if rf_src == "cutoff_only":
+                    rf_cols = ("ROCK_FLAG_CUTOFF", "ROCK_FLAG", "DRT")
+                elif rf_src == "full_ml":
+                    rf_cols = ("ROCK_FLAG_ML", "ROCK_FLAG", "ROCK_FLAG_CUTOFF", "DRT")
                 else:
-                    shf_v = float(
-                        sw_shf_leverett_j(
-                            float(k),
-                            float(p),
-                            float(d),
-                            eff_fwl,
-                            req.ift,
-                            req.theta,
-                            req.gw,
-                            req.ghc,
-                            a,
-                            b,
-                        )
+                    rf_cols = ("ROCK_FLAG", "ROCK_FLAG_ML", "ROCK_FLAG_CUTOFF", "DRT")
+                for rcol in rf_cols:
+                    if rcol in w_sorted.columns:
+                        rs = pd.to_numeric(w_sorted[rcol], errors="coerce")
+                        rs = rs.where(rs >= 1, np.nan)
+                        rf_s = rf_s.combine_first(rs)
+
+                # On-the-fly DRT fallback where rf_s is still NaN and p_s & k_s are valid
+                need_rf = rf_s.isna() & (p_s > 0) & (p_s < 1.0) & (k_s > 0)
+                if need_rf.any():
+                    ind_v, hib_w, _ = _eval_drt_indicator_scalar_or_array(
+                        p_s[need_rf].to_numpy(dtype=float),
+                        k_s[need_rf].to_numpy(dtype=float),
+                        req.drt_method,
                     )
-                shf_values.append(
+                    rf_calc = rock_typing(
+                        ind_v, cut_offs=req.cutoffs, higher_is_better=hib_w
+                    )
+                    rf_s.loc[need_rf] = pd.Series(
+                        np.asarray(rf_calc, dtype=float), index=w_sorted.index[need_rf]
+                    ).where(lambda s: s >= 1, np.nan)
+
+                z_list_w = (
+                    w_sorted["ZONES"].fillna("Unknown").astype(str).tolist()
+                    if "ZONES" in w_sorted.columns
+                    else ["Unknown"] * len(w_sorted)
+                )
+
+                # Build co-depth-aware zone interval FWL overrides from formation_tops if fwl_zone_map is used
+                top_fwl_intervals: List[Tuple[float, float, float]] = []
+                if fwl_zone_map:
+                    tops_raw_w = anc_w.get("formation_tops")
+                    if isinstance(tops_raw_w, pd.DataFrame) and not tops_raw_w.empty:
+                        t_recs = tops_raw_w.to_dict(orient="records")
+                    elif isinstance(tops_raw_w, list):
+                        t_recs = tops_raw_w
+                    else:
+                        t_recs = []
+                    u_depths = sorted(
+                        {
+                            float(tr["depth"])
+                            for tr in t_recs
+                            if tr.get("depth") is not None
+                            and not pd.isna(tr.get("depth"))
+                        }
+                    )
+                    for tr in t_recs:
+                        tn = str(tr.get("name") or "").strip()
+                        td = tr.get("depth")
+                        if tn in fwl_zone_map and td is not None and not pd.isna(td):
+                            td_f = float(td)
+                            nxt_d = next(
+                                (ud for ud in u_depths if ud > td_f + 0.5),
+                                float("inf"),
+                            )
+                            top_fwl_intervals.append((td_f, nxt_d, fwl_zone_map[tn]))
+
+                p_list_w = p_s.tolist()
+                k_list_w = k_s.tolist()
+                rf_list_w = rf_s.tolist()
+                well_rows_shf: List[Dict[str, Any]] = []
+
+                for md_v, tvd_v, p_v, k_v, rf_v, zn_v in zip(
+                    md_arr.tolist(),
+                    tvd_arr_w.tolist(),
+                    p_list_w,
+                    k_list_w,
+                    rf_list_w,
+                    z_list_w,
+                ):
+                    if (
+                        md_v is None
+                        or pd.isna(md_v)
+                        or tvd_v is None
+                        or pd.isna(tvd_v)
+                        or not math.isfinite(float(tvd_v))
+                    ):
+                        continue
+                    has_p = (
+                        p_v is not None
+                        and not pd.isna(p_v)
+                        and math.isfinite(float(p_v))
+                        and float(p_v) > 0
+                    )
+                    has_k = (
+                        k_v is not None
+                        and not pd.isna(k_v)
+                        and math.isfinite(float(k_v))
+                        and float(k_v) > 0
+                    )
+                    has_rf = (
+                        rf_v is not None
+                        and not pd.isna(rf_v)
+                        and math.isfinite(float(rf_v))
+                        and int(round(float(rf_v))) >= 1
+                    )
+                    if not has_p and not has_rf:
+                        continue
+
+                    rf_int_v = int(round(float(rf_v))) if has_rf else None
+                    rf_key = str(rf_int_v) if rf_int_v is not None else None
+                    is_non_res = (
+                        (
+                            rf_int_v is not None
+                            and highest_flag is not None
+                            and rf_int_v == highest_flag
+                        )
+                        or rf_key is None
+                        or rf_key not in fits
+                    )
+
+                    zn_clean = str(zn_v or "Unknown").strip()
+                    eff_fwl = fwl_zone_map.get(zn_clean)
+                    if eff_fwl is None and top_fwl_intervals:
+                        for t_start, t_end, fwl_ov in top_fwl_intervals:
+                            if t_start <= float(md_v) < t_end:
+                                eff_fwl = fwl_ov
+                                break
+                    if eff_fwl is None:
+                        eff_fwl = req.fwl
+
+                    tvd_f = float(tvd_v)
+                    p_f = float(p_v) if has_p else 0.0
+                    k_f = (
+                        float(k_v)
+                        if has_k
+                        else rf_fallback_perm.get(rf_key or "", 10.0)
+                    )
+
+                    if is_non_res or p_f <= 0.005:
+                        shf_clean: Optional[float] = 1.0
+                    else:
+                        fit_p = fits[rf_key]
+                        a = float(fit_p.get("a", 0.2))
+                        b = abs(float(fit_p.get("b", 0.3)))
+                        if model == "skelt_harrison":
+                            c = float(fit_p.get("c", 1.5))
+                            d_param = float(fit_p.get("d", 1.5))
+                            shf_raw = float(
+                                sw_skelt_harrison(tvd_f, eff_fwl, a, b, c, d_param)
+                            )
+                        elif model == "cuddy":
+                            shf_raw = float(
+                                sw_shf_cuddy(
+                                    p_f,
+                                    tvd_f,
+                                    eff_fwl,
+                                    req.gw,
+                                    req.ghc,
+                                    a,
+                                    b,
+                                    unit=req.unit,
+                                )
+                            )
+                        else:
+                            swirr_log_v = 0.0
+                            if (
+                                str(getattr(req, "swirr_source", "lab_min") or "lab_min")
+                                .strip()
+                                .lower()
+                                == "poro_perm"
+                                and j_sat_mode == "swn"
+                            ):
+                                swirr_log_v = _eval_swirr_scalar_from_config(
+                                    p_f, k_f, rf_int_v, getattr(req, "swirr_config", None)
+                                )
+                            shf_raw = float(
+                                sw_shf_leverett_j(
+                                    k_f,
+                                    p_f,
+                                    tvd_f,
+                                    eff_fwl,
+                                    req.ift,
+                                    req.theta,
+                                    req.gw,
+                                    req.ghc,
+                                    a,
+                                    b,
+                                    swirr=swirr_log_v,
+                                )
+                            )
+                        shf_clean = (
+                            round(float(np.clip(shf_raw, 0.0, 1.0)), 5)
+                            if math.isfinite(shf_raw)
+                            else None
+                        )
+
+                    if shf_clean is not None:
+                        well_rows_shf.append(
+                            {"DEPTH": round(float(md_v), 4), "SHF": shf_clean}
+                        )
+                        out_well_names.append(wn)
+                        out_depths.append(round(float(md_v), 4))
+                        out_tvd.append(round(tvd_f, 2))
+                        out_zones.append(zn_clean)
+                        out_phit.append(round(p_f, 5) if has_p else None)
+                        out_perm.append(round(k_f, 5) if has_k else None)
+                        out_rock_flags.append(rf_int_v)
+                        out_shf.append(shf_clean)
+
+                if well_rows_shf:
+                    by_well_shf[wn] = well_rows_shf
+
+        # Fallback to fzi_data if well_dfs produced no TVD rows
+        if not wells_with_tvd:
+            zones = fzi_data.get("zones") or ["Unknown"] * len(depths)
+            tvd_list = fzi_data.get("tvd") or [None] * len(depths)
+            if len(tvd_list) != len(depths):
+                tvd_list = [None] * len(depths)
+            has_any_tvd = any(
+                tvd_v is not None and math.isfinite(float(tvd_v)) for tvd_v in tvd_list
+            )
+            if not has_any_tvd:
+                raise ValueError(
+                    "TVD is required for Saturation Height Function (SHF) calculation. "
+                    "None of the selected wells have a TVD curve or directional survey."
+                )
+            for wn_f, p, k, d, tvd_v, rf, zn in zip(
+                well_names,
+                phit_arr,
+                perm_arr,
+                depths,
+                tvd_list,
+                rock_flags,
+                zones,
+            ):
+                if tvd_v is None or not math.isfinite(float(tvd_v)):
+                    continue
+                rf_key = str(int(rf)) if rf is not None else None
+                is_non_res = (
+                    (
+                        rf is not None
+                        and highest_flag is not None
+                        and int(rf) == highest_flag
+                    )
+                    or rf_key is None
+                    or rf_key not in fits
+                )
+                if is_non_res:
+                    shf_v = 1.0
+                else:
+                    fit_p = fits[rf_key]
+                    a = float(fit_p.get("a", 0.2))
+                    b = abs(float(fit_p.get("b", 0.3)))
+                    eff_fwl = fwl_zone_map.get(str(zn).strip(), req.fwl)
+                    tvd_f = float(tvd_v)
+                    if model == "skelt_harrison":
+                        c = float(fit_p.get("c", 1.5))
+                        d_param = float(fit_p.get("d", 1.5))
+                        shf_v = float(
+                            sw_skelt_harrison(tvd_f, eff_fwl, a, b, c, d_param)
+                        )
+                    elif model == "cuddy":
+                        shf_v = float(
+                            sw_shf_cuddy(
+                                float(p),
+                                tvd_f,
+                                eff_fwl,
+                                req.gw,
+                                req.ghc,
+                                a,
+                                b,
+                                unit=req.unit,
+                            )
+                        )
+                    else:
+                        shf_v = float(
+                            sw_shf_leverett_j(
+                                float(k),
+                                float(p),
+                                tvd_f,
+                                eff_fwl,
+                                req.ift,
+                                req.theta,
+                                req.gw,
+                                req.ghc,
+                                a,
+                                b,
+                            )
+                        )
+                shf_c = (
                     round(float(np.clip(shf_v, 0.0, 1.0)), 5)
                     if math.isfinite(shf_v)
                     else None
                 )
+                if shf_c is not None and d is not None:
+                    by_well_shf.setdefault(str(wn_f), []).append(
+                        {"DEPTH": float(d), "SHF": shf_c}
+                    )
+                    out_well_names.append(str(wn_f))
+                    out_depths.append(float(d))
+                    out_tvd.append(round(float(tvd_v), 2))
+                    out_zones.append(str(zn))
+                    out_phit.append(float(p) if math.isfinite(float(p)) else None)
+                    out_perm.append(float(k) if math.isfinite(float(k)) else None)
+                    out_rock_flags.append(int(rf) if rf is not None else None)
+                    out_shf.append(shf_c)
 
         saved_wells = 0
-        if req.save:
-            by_well: Dict[str, List[Dict[str, Any]]] = {}
-            for wn, d, shf_v in zip(well_names, depths, shf_values):
-                if shf_v is not None and d is not None:
-                    by_well.setdefault(wn, []).append({"DEPTH": d, "SHF": shf_v})
-            for wn, rows in by_well.items():
+        for wn, rows in by_well_shf.items():
+            if req.save:
                 _save_curves_to_well(project_id, wn, pd.DataFrame(rows))
-            saved_wells = len(by_well)
+            else:
+                _update_in_memory_well_cache(project_id, wn, pd.DataFrame(rows))
+        if req.save:
+            saved_wells = len(by_well_shf)
 
         scal_payload = {
             "pc": scal_df["PC"].tolist() if not scal_df.empty else [],
             "sw": scal_df["SW"].tolist() if not scal_df.empty else [],
             "swn": scal_df["SWN"].tolist() if not scal_df.empty else [],
+            "swirr_calc": (
+                scal_df["SWIRR_CALC"].tolist()
+                if (not scal_df.empty and "SWIRR_CALC" in scal_df.columns)
+                else []
+            ),
             "j": scal_df["J"].tolist() if not scal_df.empty else [],
             "h": scal_df["H"].tolist() if not scal_df.empty else [],
             "bvw": scal_df["BVW"].tolist() if not scal_df.empty else [],
@@ -3373,19 +6530,24 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         return {
             "project_id": project_id,
             "model": model,
+            "j_sat_mode": j_sat_mode,
             "fits": fits,
+            "fits_swn": fits_swn if model == "leverett_j" else fits,
+            "fits_sw": fits_sw if model == "leverett_j" else fits,
             "fwl_by_zone": fwl_zone_map,
             "scal_data": scal_payload,
             "saved": req.save,
             "saved_wells": saved_wells,
+            "skipped_no_tvd_wells": skipped_no_tvd_wells,
             "data": {
-                "well_names": well_names,
-                "depths": depths,
-                "zones": zones,
-                "phit": fzi_data["phit"],
-                "perm": fzi_data["perm"],
-                "rock_flags": rock_flags,
-                "shf": shf_values,
+                "well_names": out_well_names,
+                "depths": out_depths,
+                "tvd": out_tvd,
+                "zones": out_zones,
+                "phit": out_phit,
+                "perm": out_perm,
+                "rock_flags": out_rock_flags,
+                "shf": out_shf,
             },
         }
     except ValueError as e:
@@ -3406,11 +6568,898 @@ class WorkspaceEnvCorrectionRequest(WorkspaceFilterBase):
 
 
 class WorkspaceStratNormalizationRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(None)
+    zones: Optional[List[str]] = Field(None)
+    min_depth: Optional[float] = Field(None)
+    max_depth: Optional[float] = Field(None)
     key_well: Optional[str] = Field(None)
     logs: List[str] = Field(default_factory=lambda: ["GR", "NPHI"])
     method: str = Field("quantile")
     quantiles: Tuple[float, float] = Field((0.05, 0.95))
+    by_zone: bool = Field(True)
+    exclude_badhole: bool = Field(True)
     save: bool = Field(False)
+
+
+class WorkspaceMultiWellDistributionsRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(None)
+    zones: Optional[List[str]] = Field(None)
+    min_depth: Optional[float] = Field(None)
+    max_depth: Optional[float] = Field(None)
+    active_curve: str = Field("GR")
+    curves: List[str] = Field(
+        default_factory=lambda: ["GR", "RT", "NPHI", "RHOB", "DTC", "CALI", "PEF"]
+    )
+    group_by: str = Field(
+        "well", description="Grouping mode: 'well', 'zone', or 'well_zone'"
+    )
+    exclude_badhole: bool = Field(False)
+    max_points_per_well: int = Field(800, ge=100, le=5000)
+
+
+class WorkspaceMultiWellBadholeRequest(WorkspaceBadholeRequest):
+    well_names: Optional[List[str]] = Field(None)
+
+
+class WorkspaceMultiWellEnvCorrectionRequest(WorkspaceEnvCorrectionRequest):
+    well_names: Optional[List[str]] = Field(None)
+
+
+class WorkspaceMultiWellConditioningRequest(BaseModel):
+    action: str = Field(
+        ...,
+        description="Conditioning action: 'harmonize_aliases', 'outer_limits', or 'unit_scale'",
+    )
+    well_names: Optional[List[str]] = Field(None)
+    zones: Optional[List[str]] = Field(None)
+    min_depth: Optional[float] = Field(None)
+    max_depth: Optional[float] = Field(None)
+    fill: bool = Field(
+        False,
+        description="For 'outer_limits': True clamps to min/max, False replaces out-of-range with NaN",
+    )
+    curves: Optional[List[str]] = Field(
+        None, description="Target curves for 'outer_limits'"
+    )
+    alias_map: Optional[Dict[str, List[str]]] = Field(
+        None,
+        description="Optional custom target -> [alias1, alias2] map for 'harmonize_aliases'",
+    )
+    source_curve: Optional[str] = Field(
+        None, description="Explicit source curve for single-alias or unit_scale"
+    )
+    target_curve: Optional[str] = Field(
+        None, description="Explicit target curve for single-alias or unit_scale"
+    )
+    scale: float = Field(1.0, description="Multiplier for 'unit_scale'")
+    offset: float = Field(0.0, description="Additive offset for 'unit_scale'")
+    save: bool = Field(False)
+
+
+STANDARD_ALIAS_MAP: Dict[str, List[str]] = {
+    "GR": ["GR_EDTC", "SGR", "CGR", "GAMMA", "GRC", "GR_RAW", "GRD"],
+    "RT": ["ILD", "LLD", "RDEP", "RT_HRLT", "RESD", "RLLD", "RTRUE", "RD", "AT90", "HDRS"],
+    "NPHI": ["TNPH", "NPOR", "CNC", "CNL", "PHIN", "NPHI_LS", "NPSS"],
+    "RHOB": ["RHOZ", "ZDEN", "DEN", "BDEL", "RHOB_COMP"],
+    "DTC": ["DT", "AC", "DTCO", "DT4P", "DT24", "SONIC"],
+    "CALI": ["CAL", "HCAL", "CALIPER", "CALS", "DCAL"],
+    "PEF": ["PE", "PEFZ", "PEFL"],
+}
+
+
+def _load_multi_well_dfs(
+    project_id: int,
+    well_names: Optional[List[str]] = None,
+    min_depth: Optional[float] = None,
+    max_depth: Optional[float] = None,
+    zones: Optional[List[str]] = None,
+) -> List[pd.DataFrame]:
+    """Load merged DataFrames across project wells with ZONES populated from formation_tops if needed."""
+    proj_summary = get_project_summary(project_id)
+    all_wells = [w["name"] for w in proj_summary.get("wells", [])]
+    if well_names:
+        allowed = {str(w).strip() for w in well_names if str(w).strip()}
+        if allowed:
+            all_wells = [w for w in all_wells if w in allowed]
+    if not all_wells:
+        raise ValueError("No wells found or selected in project.")
+
+    allowed_zones = (
+        {str(z).strip() for z in zones if str(z).strip()} if zones else None
+    )
+
+    dfs: List[pd.DataFrame] = []
+    for wn in all_wells:
+        wdf = _get_merged_dataframe_sync(project_id, wn)
+        if wdf.empty:
+            continue
+        wdf = wdf.copy()
+        wdf["WELL_NAME"] = wn
+
+        # Populate ZONES from formation tops if not already present or all null
+        if "ZONES" not in wdf.columns or not wdf["ZONES"].notna().any():
+            tops_df = None
+            try:
+                with get_db() as session:
+                    proj = db_objects.Project.load(session, project_id=project_id)
+                    anc = proj.get_well_ancillary_data(
+                        resolve_db_well_name(project_id, wn)
+                    )
+                    tops_df = (
+                        anc.get("formation_tops")
+                        if isinstance(anc, dict)
+                        else None
+                    )
+            except Exception:
+                tops_df = None
+            if isinstance(tops_df, pd.DataFrame) and not tops_df.empty and "DEPTH" in wdf.columns:
+                wdf["ZONES"] = pd.NA
+                for _, top in tops_df.iterrows():
+                    try:
+                        top_depth = float(top.get("depth"))
+                        top_name = str(top.get("name")).strip()
+                    except Exception:
+                        continue
+                    if not top_name:
+                        continue
+                    nearest_idx = (wdf["DEPTH"] - top_depth).abs().idxmin()
+                    wdf.at[nearest_idx, "ZONES"] = top_name
+                wdf["ZONES"] = wdf["ZONES"].ffill().bfill()
+
+        if "ZONES" not in wdf.columns:
+            wdf["ZONES"] = "ALL"
+        else:
+            wdf["ZONES"] = (
+                wdf["ZONES"]
+                .replace({"": np.nan, "nan": np.nan, "None": np.nan})
+                .fillna("ALL")
+                .astype(str)
+            )
+
+        if "DEPTH" in wdf.columns:
+            if min_depth is not None:
+                wdf = wdf[wdf["DEPTH"] >= float(min_depth)]
+            if max_depth is not None:
+                wdf = wdf[wdf["DEPTH"] <= float(max_depth)]
+
+        if allowed_zones:
+            wdf = wdf[wdf["ZONES"].isin(allowed_zones)]
+
+        if not wdf.empty:
+            dfs.append(wdf)
+
+    return dfs
+
+
+class WorkspaceStickPlotRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(None)
+    zones: Optional[List[str]] = Field(None)
+    min_depth: Optional[float] = Field(None)
+    max_depth: Optional[float] = Field(None)
+    max_points_per_well: int = Field(4000, ge=100, le=10000)
+
+
+def _interp_or_extrapolate_depth(
+    target_md: np.ndarray, ref_md: np.ndarray, ref_tvd: np.ndarray
+) -> np.ndarray:
+    """Interpolate TVDSS/TVD along target_md and linearly extrapolate outside [ref_md[0], ref_md[-1]]
+    using local dTVD/dMD slope (clamped to [0.1, 1.0]) so contacts/tops outside filtered intervals are not flat-clamped.
+    """
+    out = np.interp(target_md, ref_md, ref_tvd)
+    if len(ref_md) >= 2:
+        below_mask = target_md < ref_md[0]
+        if np.any(below_mask):
+            dmd_top = float(ref_md[min(5, len(ref_md) - 1)] - ref_md[0])
+            dtvd_top = float(ref_tvd[min(5, len(ref_tvd) - 1)] - ref_tvd[0])
+            slope_top = (
+                float(np.clip(dtvd_top / dmd_top, 0.1, 1.0)) if dmd_top > 1e-4 else 1.0
+            )
+            out[below_mask] = ref_tvd[0] + (target_md[below_mask] - ref_md[0]) * slope_top
+        above_mask = target_md > ref_md[-1]
+        if np.any(above_mask):
+            idx0 = max(0, len(ref_md) - 6)
+            dmd_bot = float(ref_md[-1] - ref_md[idx0])
+            dtvd_bot = float(ref_tvd[-1] - ref_tvd[idx0])
+            slope_bot = (
+                float(np.clip(dtvd_bot / dmd_bot, 0.1, 1.0)) if dmd_bot > 1e-4 else 1.0
+            )
+            out[above_mask] = (
+                ref_tvd[-1] + (target_md[above_mask] - ref_md[-1]) * slope_bot
+            )
+    return out
+
+
+def _resolve_well_tvd_array(
+    md_values: np.ndarray,
+    well_df: Optional[pd.DataFrame],
+    surveys_df: Optional[pd.DataFrame],
+    df_elev: float = 0.0,
+) -> np.ndarray:
+    """Resolve TVDSS array (True Vertical Depth Subsea, m) for given MD depths using TVDSS/TVD curve or directional survey.
+    Returns an array of NaNs when neither a TVDSS/TVD curve nor a valid directional survey is available (never assumes TVDSS == MD).
+    """
+    if len(md_values) == 0:
+        return np.array([], dtype=float)
+
+    elev = float(df_elev or 0.0)
+    if (
+        abs(elev) < 1e-6
+        and well_df is not None
+        and not well_df.empty
+        and "TVD" in well_df.columns
+        and "TVDSS" in well_df.columns
+    ):
+        diff_s = (
+            pd.to_numeric(well_df["TVD"], errors="coerce")
+            - pd.to_numeric(well_df["TVDSS"], errors="coerce")
+        ).dropna()
+        if not diff_s.empty:
+            elev = float(diff_s.median())
+
+    # 1a. Explicit TVDSS curve in well_df (preferred)
+    if well_df is not None and not well_df.empty and "DEPTH" in well_df.columns:
+        for tvdss_col in ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS"):
+            if tvdss_col in well_df.columns and well_df[tvdss_col].notna().sum() >= 2:
+                s_tvdss = pd.to_numeric(well_df[tvdss_col], errors="coerce")
+                if (s_tvdss.dropna() < 0).mean() > 0.8:
+                    s_tvdss = s_tvdss.abs()
+                sub = (
+                    pd.DataFrame(
+                        {
+                            "DEPTH": pd.to_numeric(well_df["DEPTH"], errors="coerce"),
+                            "TVDSS": s_tvdss,
+                        }
+                    )
+                    .dropna()
+                    .sort_values("DEPTH")
+                    .drop_duplicates(subset=["DEPTH"], keep="last")
+                )
+                if len(sub) >= 2:
+                    return _interp_or_extrapolate_depth(
+                        md_values,
+                        sub["DEPTH"].to_numpy(dtype=float),
+                        sub["TVDSS"].to_numpy(dtype=float),
+                    )
+
+        # 1b. Explicit TVD curve in well_df -> convert to TVDSS = TVD - df_elev
+        for tvd_col in ("TVD", "DEPT_TVD", "DEPTH_TVD"):
+            if tvd_col in well_df.columns and well_df[tvd_col].notna().sum() >= 2:
+                sub = (
+                    pd.DataFrame(
+                        {
+                            "DEPTH": pd.to_numeric(well_df["DEPTH"], errors="coerce"),
+                            "TVDSS": pd.to_numeric(well_df[tvd_col], errors="coerce")
+                            - elev,
+                        }
+                    )
+                    .dropna()
+                    .sort_values("DEPTH")
+                    .drop_duplicates(subset=["DEPTH"], keep="last")
+                )
+                if len(sub) >= 2:
+                    return _interp_or_extrapolate_depth(
+                        md_values,
+                        sub["DEPTH"].to_numpy(dtype=float),
+                        sub["TVDSS"].to_numpy(dtype=float),
+                    )
+
+    # 2. Directional survey table (with surface tie-in if survey starts below surface) -> convert to TVDSS
+    if isinstance(surveys_df, pd.DataFrame) and not surveys_df.empty:
+        col_map = {str(c).lower(): c for c in surveys_df.columns}
+        md_c = col_map.get("md") or col_map.get("depth")
+        inc_c = col_map.get("inc") or col_map.get("incl") or col_map.get("inclination")
+        azi_c = col_map.get("azim") or col_map.get("azi") or col_map.get("azimuth")
+        tvdss_c = col_map.get("tvdss") or col_map.get("tvd_ss")
+        tvd_c = tvdss_c or col_map.get("tvd")
+        is_already_subsea = tvdss_c is not None and tvd_c == tvdss_c
+
+        if md_c and tvd_c and surveys_df[tvd_c].notna().sum() >= 2:
+            s_vals = pd.to_numeric(surveys_df[tvd_c], errors="coerce")
+            if is_already_subsea and (s_vals.dropna() < 0).mean() > 0.8:
+                s_vals = s_vals.abs()
+            s_sub = (
+                pd.DataFrame(
+                    {
+                        "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
+                        "tvd": s_vals,
+                    }
+                )
+                .dropna()
+                .sort_values("md")
+                .drop_duplicates(subset=["md"], keep="last")
+            )
+            if len(s_sub) >= 2:
+                mds = s_sub["md"].to_numpy(dtype=float)
+                tvds = s_sub["tvd"].to_numpy(dtype=float)
+                if mds[0] > 1.0:
+                    mds = np.insert(mds, 0, 0.0)
+                    tvds = np.insert(tvds, 0, -elev if is_already_subsea else 0.0)
+                interp_tvd = _interp_or_extrapolate_depth(md_values, mds, tvds)
+                return interp_tvd if is_already_subsea else (interp_tvd - elev)
+
+        if md_c and inc_c and azi_c:
+            s_sorted = (
+                pd.DataFrame(
+                    {
+                        "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
+                        "inc": pd.to_numeric(surveys_df[inc_c], errors="coerce"),
+                        "azim": pd.to_numeric(surveys_df[azi_c], errors="coerce"),
+                    }
+                )
+                .dropna()
+                .sort_values("md")
+                .drop_duplicates(subset=["md"])
+            )
+            if len(s_sorted) >= 2:
+                mds = s_sorted["md"].to_numpy(dtype=float)
+                incs = s_sorted["inc"].to_numpy(dtype=float)
+                azis = s_sorted["azim"].to_numpy(dtype=float)
+                if mds[0] > 1.0:
+                    mds = np.insert(mds, 0, 0.0)
+                    incs = np.insert(incs, 0, 0.0)
+                    azis = np.insert(azis, 0, azis[0] if len(azis) > 0 else 0.0)
+                try:
+                    import wellpathpy as wpp
+
+                    dev = wpp.deviation(mds, incs, azis)
+                    pos = dev.minimum_curvature()
+                    return (
+                        _interp_or_extrapolate_depth(
+                            md_values,
+                            np.asarray(pos.md, dtype=float),
+                            np.asarray(pos.depth, dtype=float),
+                        )
+                        - elev
+                    )
+                except Exception:
+                    inc_rad = np.deg2rad(incs)
+                    azi_rad = np.deg2rad(azis)
+                    dmd = np.diff(mds)
+                    i1, i2 = inc_rad[:-1], inc_rad[1:]
+                    a1, a2 = azi_rad[:-1], azi_rad[1:]
+                    cos_dl = np.clip(
+                        np.cos(i2 - i1)
+                        - np.sin(i1) * np.sin(i2) * (1.0 - np.cos(a2 - a1)),
+                        -1.0,
+                        1.0,
+                    )
+                    dl = np.arccos(cos_dl)
+                    rf = np.where(dl > 1e-6, (2.0 / dl) * np.tan(dl / 2.0), 1.0)
+                    dz = 0.5 * dmd * (np.cos(i1) + np.cos(i2)) * rf
+                    tvd_calc = np.concatenate([[0.0], np.cumsum(dz)])
+                    return _interp_or_extrapolate_depth(md_values, mds, tvd_calc) - elev
+
+    # 3. No TVDSS/TVD curve and no valid directional survey -> do NOT assume TVDSS == MD
+    return np.full(len(md_values), np.nan, dtype=float)
+
+
+def _parse_well_date_str(raw_val: Any) -> Tuple[Optional[str], Optional[str]]:
+    """Parse a raw LAS/well header date string into ('MMM YYYY', 'YYYY-MM-DD') for display and sorting."""
+    if raw_val is None:
+        return None, None
+    s = str(raw_val).strip()
+    if not s or s.upper() in ("NONE", "NULL", "N/A", "NA", "UNKNOWN", "-999.25", "-999", "0"):
+        return None, None
+    import re
+    from datetime import datetime
+
+    # 4-digit year only
+    if re.fullmatch(r"(19\d\d|20\d\d)", s):
+        return s, f"{s}-01-01"
+
+    # Try common explicit date formats first (avoids pandas ambiguity warnings)
+    for fmt in (
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d-%b-%Y",
+        "%d-%B-%Y",
+        "%d/%b/%Y",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%b %d, %Y",
+        "%B %d, %Y",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+        "%d.%m.%Y",
+        "%Y%m%d",
+        "%d-%b-%y",
+        "%d/%b/%y",
+        "%b-%Y",
+        "%B-%Y",
+        "%b %Y",
+        "%B %Y",
+        "%Y-%m",
+        "%Y/%m",
+    ):
+        try:
+            dt = datetime.strptime(s[:19].split("T")[0].split(" ")[0] if "T" in s else s, fmt)
+            return dt.strftime("%b %Y"), dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    # Fallback: pandas to_datetime
+    try:
+        dt_pd = pd.to_datetime(s, errors="coerce")
+        if pd.notna(dt_pd) and 1900 <= dt_pd.year <= 2100:
+            return dt_pd.strftime("%b %Y"), dt_pd.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    # Regex fallback for month + 4-digit year anywhere in string
+    m_yr = re.search(r"(19\d\d|20\d\d)", s)
+    if m_yr:
+        yr = m_yr.group(1)
+        m_mon = re.search(
+            r"\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\b",
+            s.upper(),
+        )
+        if m_mon:
+            mon_str = m_mon.group(1).capitalize()
+            try:
+                dt = datetime.strptime(f"{mon_str} {yr}", "%b %Y")
+                return dt.strftime("%b %Y"), dt.strftime("%Y-%m-%d")
+            except Exception:
+                return f"{mon_str} {yr}", f"{yr}-01-01"
+        return yr, f"{yr}-01-01"
+
+    return s[:14], None
+
+
+def _resolve_well_date_info(
+    project_id: int, well_name: str, proj: Optional[Any] = None
+) -> Dict[str, Optional[str]]:
+    """Extract spud_date and log_date from well header/config and format Month & Year (preferring spud_date)."""
+    raw_db_header: Dict[str, Any] = {}
+    well_config: Dict[str, Any] = {}
+    if proj is not None:
+        try:
+            db_wn = resolve_db_well_name(project_id, well_name)
+            well_obj = proj.get_well(db_wn)
+            if well_obj is not None and getattr(well_obj, "_orm_well", None) is not None:
+                if isinstance(well_obj._orm_well.header_data, dict):
+                    raw_db_header = dict(well_obj._orm_well.header_data)
+                if isinstance(well_obj._orm_well.config_data, dict):
+                    well_config = dict(well_obj._orm_well.config_data)
+        except Exception:
+            pass
+
+    eph_cfg = _ephemeral_well_configs.get((project_id, well_name)) or _ephemeral_well_configs.get(
+        (project_id, resolve_db_well_name(project_id, well_name))
+    )
+    if isinstance(eph_cfg, dict):
+        well_config = {**well_config, **eph_cfg}
+
+    eph_hdr = _ephemeral_well_headers.get((project_id, well_name)) or _ephemeral_well_headers.get(
+        (project_id, resolve_db_well_name(project_id, well_name))
+    )
+    base_hdr_source = raw_db_header if raw_db_header else (eph_hdr or {})
+    meta = dict(extract_las_metadata(base_hdr_source, fallback_well_name=well_name))
+
+    hdr_overrides = (
+        raw_db_header.get("header_overrides")
+        if isinstance(raw_db_header.get("header_overrides"), dict)
+        else {}
+    )
+    for ovr_src in (well_config, hdr_overrides, eph_hdr or {}):
+        if isinstance(ovr_src, dict):
+            for k in ("spud_date", "log_date"):
+                val = ovr_src.get(k)
+                if val is not None and str(val).strip():
+                    meta[k] = str(val).strip()
+
+    spud_raw = str(meta.get("spud_date") or "").strip() or None
+    log_raw = str(meta.get("log_date") or "").strip() or None
+
+    spud_disp, spud_iso = _parse_well_date_str(spud_raw)
+    log_disp, log_iso = _parse_well_date_str(log_raw)
+
+    if spud_disp:
+        return {
+            "spud_date": spud_raw,
+            "log_date": log_raw,
+            "well_date": spud_disp,
+            "well_date_source": "spud",
+            "well_date_iso": spud_iso,
+        }
+    if log_disp:
+        return {
+            "spud_date": spud_raw,
+            "log_date": log_raw,
+            "well_date": log_disp,
+            "well_date_source": "log",
+            "well_date_iso": log_iso,
+        }
+    return {
+        "spud_date": spud_raw,
+        "log_date": log_raw,
+        "well_date": None,
+        "well_date_source": None,
+        "well_date_iso": None,
+    }
+
+
+@router.post(
+    "/stick_plot",
+    summary="Compute multi-well TVD stick plot data (BVO_Log, BVO_SHF, PHIT, SWT, TVD, fluid contacts & tops)",
+)
+def workspace_stick_plot(
+    project_id: int, req: WorkspaceStickPlotRequest
+) -> Dict[str, Any]:
+    """Return multi-well stick plot data anchored on True Vertical Depth (TVD) for field-level fluid contact analysis."""
+    try:
+        from quick_pp.plotter.plotter import update_fluid_contacts
+
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not dfs:
+            raise ValueError("No wells found or remaining after filters.")
+
+        max_pts = max(100, int(req.max_points_per_well))
+        wells_payload: List[Dict[str, Any]] = []
+        skipped_no_tvd_wells: List[str] = []
+        all_zones_set: set[str] = set()
+        global_min_tvd = float("inf")
+        global_max_tvd = float("-inf")
+
+        with get_db() as session:
+            try:
+                proj = db_objects.Project.load(session, project_id=project_id)
+            except Exception:
+                proj = None
+
+            for wdf in dfs:
+                wn = str(wdf["WELL_NAME"].iloc[0])
+                wdf_sorted = wdf.sort_values("DEPTH").reset_index(drop=True)
+                md_full = pd.to_numeric(wdf_sorted["DEPTH"], errors="coerce").to_numpy(
+                    dtype=float
+                )
+
+                anc: Dict[str, Any] = {}
+                if proj is not None:
+                    try:
+                        anc = (
+                            proj.get_well_ancillary_data(
+                                resolve_db_well_name(project_id, wn)
+                            )
+                            or {}
+                        )
+                    except Exception:
+                        anc = {}
+
+                surveys_df = (
+                    anc.get("well_surveys")
+                    if "well_surveys" in anc
+                    else anc.get("directional_surveys")
+                )
+                if isinstance(surveys_df, list):
+                    surveys_df = pd.DataFrame(surveys_df)
+
+                tvd_full = _resolve_well_tvd_array(md_full, wdf_sorted, surveys_df)
+                if np.isfinite(tvd_full).sum() < 2:
+                    skipped_no_tvd_wells.append(wn)
+                    continue
+                wdf_sorted = wdf_sorted.copy()
+                wdf_sorted["TVD"] = tvd_full
+                wdf_sorted["TVDSS"] = tvd_full
+                full_well_ref_df = _get_merged_dataframe_sync(project_id, wn)
+                if full_well_ref_df is None or full_well_ref_df.empty:
+                    full_well_ref_df = wdf_sorted
+
+                # Resolve PHIT (combine across PHIT, PHIE, CPORE, POROSITY, POR so sparse gaps are filled)
+                phit_s = pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
+                for c in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR"):
+                    if c in wdf_sorted.columns and wdf_sorted[c].notna().any():
+                        phit_s = phit_s.combine_first(
+                            pd.to_numeric(wdf_sorted[c], errors="coerce").clip(0.0, 0.5)
+                        )
+                if phit_s.isna().all():
+                    if "RHOB" in wdf_sorted.columns and wdf_sorted["RHOB"].notna().any():
+                        rhob_s = pd.to_numeric(wdf_sorted["RHOB"], errors="coerce")
+                        phit_s = ((2.65 - rhob_s) / 1.65).clip(0.0, 0.45)
+                    elif "NPHI" in wdf_sorted.columns and wdf_sorted["NPHI"].notna().any():
+                        phit_s = pd.to_numeric(wdf_sorted["NPHI"], errors="coerce").clip(
+                            0.0, 0.45
+                        )
+
+                # Resolve SWT (combine across SWT, SWE, SW, SWT_WS, SWT_ARCHIE, SWT_WAXMAN)
+                swt_s = pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
+                for c in ("SWT", "SWE", "SW", "SWT_WS", "SWT_ARCHIE", "SWT_WAXMAN"):
+                    if c in wdf_sorted.columns and wdf_sorted[c].notna().any():
+                        swt_s = swt_s.combine_first(
+                            pd.to_numeric(wdf_sorted[c], errors="coerce").clip(0.0, 1.0)
+                        )
+                if swt_s.isna().all():
+                    rt_col = next(
+                        (
+                            c
+                            for c in ("RT", "ILD", "LLD", "RDEP")
+                            if c in wdf_sorted.columns and wdf_sorted[c].notna().any()
+                        ),
+                        None,
+                    )
+                    if rt_col and phit_s.notna().any():
+                        rt_s = pd.to_numeric(
+                            wdf_sorted[rt_col], errors="coerce"
+                        ).clip(lower=0.1)
+                        swt_s = np.sqrt(
+                            0.05 / (rt_s * (phit_s.clip(lower=0.01) ** 2))
+                        ).clip(0.02, 1.0)
+
+                # Resolve SHF
+                shf_s = (
+                    pd.to_numeric(wdf_sorted["SHF"], errors="coerce").clip(0.0, 1.0)
+                    if ("SHF" in wdf_sorted.columns and wdf_sorted["SHF"].notna().any())
+                    else pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
+                )
+
+                bvo_s = (phit_s * (1.0 - swt_s)).clip(0.0, 1.0)
+                bvoh_s = (
+                    (phit_s * (1.0 - shf_s)).clip(0.0, 1.0)
+                    if shf_s.notna().any()
+                    else pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
+                )
+
+                # Extract fluid contacts & map MD -> TVD
+                contacts_raw = anc.get("fluid_contacts")
+                if isinstance(contacts_raw, pd.DataFrame):
+                    contacts_list = (
+                        contacts_raw.to_dict(orient="records")
+                        if not contacts_raw.empty
+                        else []
+                    )
+                elif isinstance(contacts_raw, list):
+                    contacts_list = contacts_raw
+                else:
+                    contacts_list = []
+
+                contact_items: List[Dict[str, Any]] = []
+                contact_dict_tvd: Dict[str, float] = {}
+                for c in contacts_list:
+                    c_depth = c.get("depth")
+                    if c_depth is None or pd.isna(c_depth):
+                        continue
+                    c_md = float(c_depth)
+                    c_name = str(c.get("name") or c.get("type") or "OWC").strip().upper()
+                    c_tvd = float(
+                        _resolve_well_tvd_array(
+                            np.array([c_md], dtype=float), full_well_ref_df, surveys_df
+                        )[0]
+                    )
+                    contact_items.append(
+                        {
+                            "type": c_name,
+                            "name": c_name,
+                            "depth": round(c_md, 2),
+                            "tvd": round(c_tvd, 2),
+                        }
+                    )
+                    contact_dict_tvd[c_name] = round(c_tvd, 2)
+
+                # Also compute legacy update_fluid_contacts FLUID_FLAG on wdf_sorted using TVDSS contacts
+                wdf_sorted["PHIT"] = phit_s
+                wdf_sorted["SWT"] = swt_s
+                wdf_sorted["BVO"] = bvo_s
+                wdf_sorted["BVOH"] = bvoh_s
+                try:
+                    wdf_sorted = update_fluid_contacts(wdf_sorted, contact_dict_tvd)
+                except Exception:
+                    wdf_sorted["FLUID_FLAG"] = -1
+
+                # Extract formation tops & map MD -> TVDSS
+                tops_raw = anc.get("formation_tops")
+                if isinstance(tops_raw, pd.DataFrame):
+                    tops_list = (
+                        tops_raw.to_dict(orient="records") if not tops_raw.empty else []
+                    )
+                elif isinstance(tops_raw, list):
+                    tops_list = tops_raw
+                else:
+                    tops_list = []
+
+                top_items: List[Dict[str, Any]] = []
+                for t in tops_list:
+                    t_depth = t.get("depth")
+                    if t_depth is None or pd.isna(t_depth):
+                        continue
+                    t_md = float(t_depth)
+                    t_name = str(t.get("name") or "").strip()
+                    if not t_name:
+                        continue
+                    t_tvd = float(
+                        _resolve_well_tvd_array(
+                            np.array([t_md], dtype=float), full_well_ref_df, surveys_df
+                        )[0]
+                    )
+                    top_items.append(
+                        {
+                            "name": t_name,
+                            "depth": round(t_md, 2),
+                            "tvd": round(t_tvd, 2),
+                        }
+                    )
+                    all_zones_set.add(t_name)
+                top_items.sort(key=lambda x: x["tvd"])
+
+                # Extract perforations & map top/bottom MD -> TVDSS
+                perfs_raw = anc.get("perforations")
+                if isinstance(perfs_raw, pd.DataFrame):
+                    perfs_list = (
+                        perfs_raw.to_dict(orient="records") if not perfs_raw.empty else []
+                    )
+                elif isinstance(perfs_raw, list):
+                    perfs_list = perfs_raw
+                else:
+                    perfs_list = []
+
+                perf_items: List[Dict[str, Any]] = []
+                for p_idx, p in enumerate(perfs_list):
+                    p_top = p.get("top")
+                    p_bot = p.get("bottom", p_top)
+                    if p_top is None or pd.isna(p_top):
+                        continue
+                    t_md = float(p_top)
+                    b_md = float(p_bot) if (p_bot is not None and not pd.isna(p_bot)) else t_md
+                    if b_md < t_md:
+                        t_md, b_md = b_md, t_md
+                    p_name = str(p.get("name") or f"Perf-{p_idx + 1}").strip()
+                    p_desc = str(p.get("description") or "").strip()
+                    tvd_pair = _resolve_well_tvd_array(
+                        np.array([t_md, b_md], dtype=float), full_well_ref_df, surveys_df
+                    )
+                    t_tvd = float(tvd_pair[0]) if np.isfinite(tvd_pair[0]) else t_md
+                    b_tvd = float(tvd_pair[1]) if np.isfinite(tvd_pair[1]) else b_md
+                    if b_tvd < t_tvd:
+                        t_tvd, b_tvd = b_tvd, t_tvd
+                    perf_items.append(
+                        {
+                            "name": p_name,
+                            "top": round(t_md, 2),
+                            "bottom": round(b_md, 2),
+                            "top_tvd": round(t_tvd, 2),
+                            "bottom_tvd": round(b_tvd, 2),
+                            "description": p_desc,
+                        }
+                    )
+                perf_items.sort(key=lambda x: (x["top_tvd"], x["bottom_tvd"]))
+
+                # Cumulative hydrocarbon pore volume column height (m) = integral of BVO over TVD
+                valid_bvo = bvo_s.notna() & pd.Series(tvd_full).notna()
+                cum_hcpv = 0.0
+                if valid_bvo.sum() >= 2:
+                    tvd_v = tvd_full[valid_bvo.to_numpy()]
+                    bvo_v = bvo_s.to_numpy(dtype=float)[valid_bvo.to_numpy()]
+                    dtvd = np.clip(np.diff(tvd_v, prepend=tvd_v[0]), 0.0, 2.0)
+                    cum_hcpv = float(np.nansum(bvo_v * dtvd))
+
+                valid_tvd = tvd_full[np.isfinite(tvd_full)]
+                w_min_tvd = float(np.min(valid_tvd)) if len(valid_tvd) > 0 else 0.0
+                w_max_tvd = float(np.max(valid_tvd)) if len(valid_tvd) > 0 else 1000.0
+                global_min_tvd = min(global_min_tvd, w_min_tvd)
+                global_max_tvd = max(global_max_tvd, w_max_tvd)
+
+                # Determine structural top reservoir TVD (shallowest TVD with PHIT >= 0.06, or first formation top)
+                res_mask = (phit_s >= 0.06) & np.isfinite(tvd_full)
+                if res_mask.any():
+                    top_res_tvd = float(np.min(tvd_full[res_mask.to_numpy()]))
+                elif top_items:
+                    top_res_tvd = float(top_items[0]["tvd"])
+                else:
+                    top_res_tvd = w_min_tvd
+
+                for z_val in wdf_sorted["ZONES"].dropna().unique():
+                    z_str = str(z_val).strip()
+                    if z_str and z_str != "ALL":
+                        all_zones_set.add(z_str)
+
+                # Focus sampling budget on the logged / formation interval while preserving hydrocarbon samples
+                eval_mask = phit_s.notna() | swt_s.notna() | shf_s.notna()
+                for c_check in ("GR", "RT", "RHOB", "NPHI", "PERM", "PERM_TRANS"):
+                    if c_check in wdf_sorted.columns:
+                        eval_mask = eval_mask | wdf_sorted[c_check].notna()
+                sub = wdf_sorted
+                if eval_mask.any():
+                    eval_mds = md_full[eval_mask.to_numpy()]
+                    min_eval_md = float(np.nanmin(eval_mds))
+                    max_eval_md = float(np.nanmax(eval_mds))
+                    if top_items:
+                        min_eval_md = min(
+                            min_eval_md, min(float(t["depth"]) for t in top_items)
+                        )
+                        max_eval_md = max(
+                            max_eval_md, max(float(t["depth"]) for t in top_items)
+                        )
+                    trim_mask = (md_full >= (min_eval_md - 25.0)) & (
+                        md_full <= (max_eval_md + 25.0)
+                    )
+                    if trim_mask.sum() >= 20:
+                        sub = wdf_sorted.loc[trim_mask].reset_index(drop=True)
+
+                if len(sub) > max_pts:
+                    stride = max(1, len(sub) // max_pts)
+                    stride_idx = np.arange(0, len(sub), stride, dtype=int)
+                    hc_mask = (
+                        pd.to_numeric(sub["BVO"], errors="coerce").fillna(0.0) > 0.005
+                    ) | (
+                        pd.to_numeric(sub["BVOH"], errors="coerce").fillna(0.0) > 0.005
+                    )
+                    hc_idx = np.flatnonzero(hc_mask.to_numpy())
+                    keep_idx = np.unique(np.concatenate([stride_idx, hc_idx]))
+                    if len(keep_idx) > max_pts * 2:
+                        keep_idx = keep_idx[
+                            :: max(1, len(keep_idx) // (max_pts * 2))
+                        ]
+                    sub = sub.iloc[keep_idx].reset_index(drop=True)
+
+                def _clean_float_list(series_in: pd.Series, decimals: int = 4) -> list:
+                    s_num = pd.to_numeric(series_in, errors="coerce").replace(
+                        [np.inf, -np.inf], np.nan
+                    )
+                    return [
+                        round(float(x), decimals) if pd.notna(x) else None
+                        for x in s_num.tolist()
+                    ]
+
+                tvdss_clean_list = _clean_float_list(sub["TVD"], 2)
+                date_info = _resolve_well_date_info(project_id, wn, proj)
+                wells_payload.append(
+                    {
+                        "well_name": wn,
+                        "spud_date": date_info["spud_date"],
+                        "log_date": date_info["log_date"],
+                        "well_date": date_info["well_date"],
+                        "well_date_source": date_info["well_date_source"],
+                        "well_date_iso": date_info["well_date_iso"],
+                        "min_tvd": round(w_min_tvd, 2),
+                        "max_tvd": round(w_max_tvd, 2),
+                        "top_reservoir_tvd": round(top_res_tvd, 2),
+                        "cum_hcpv": round(cum_hcpv, 3),
+                        "contacts": contact_items,
+                        "tops": top_items,
+                        "perforations": perf_items,
+                        "depths": _clean_float_list(sub["DEPTH"], 2),
+                        "tvd": tvdss_clean_list,
+                        "tvdss": tvdss_clean_list,
+                        "zones": sub["ZONES"].fillna("ALL").astype(str).tolist(),
+                        "phit": _clean_float_list(sub["PHIT"], 4),
+                        "swt": _clean_float_list(sub["SWT"], 4),
+                        "shf": _clean_float_list(sub["SHF"], 4)
+                        if "SHF" in sub.columns
+                        else [None] * len(sub),
+                        "bvo": _clean_float_list(sub["BVO"], 4),
+                        "bvoh": _clean_float_list(sub["BVOH"], 4),
+                        "fluid_flag": [
+                            int(x) if pd.notna(x) else -1
+                            for x in sub["FLUID_FLAG"].tolist()
+                        ],
+                    }
+                )
+
+        return _sanitize_for_json(
+            {
+                "project_id": project_id,
+                "min_tvd": round(global_min_tvd, 2)
+                if math.isfinite(global_min_tvd)
+                else 0.0,
+                "max_tvd": round(global_max_tvd, 2)
+                if math.isfinite(global_max_tvd)
+                else 1000.0,
+                "available_zones": sorted(all_zones_set),
+                "wells": wells_payload,
+                "skipped_no_tvd_wells": skipped_no_tvd_wells,
+            }
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Stick plot computation failed: {e}"
+        ) from e
 
 
 class WorkspaceOptimizeFwlRequest(BaseModel):
@@ -3489,45 +7538,51 @@ def workspace_stratigraphic_normalization(
 ) -> Dict[str, Any]:
     """Normalize log curves across all project wells per geological zone."""
     try:
-        proj_summary = get_project_summary(project_id)
-        well_names = [w["name"] for w in proj_summary.get("wells", [])]
-        if not well_names:
-            raise ValueError("No wells found in project.")
-
-        dfs = []
-        for wn in well_names:
-            wdf = _get_merged_dataframe_sync(project_id, wn)
-            if not wdf.empty:
-                wdf = wdf.copy()
-                wdf["WELL_NAME"] = wn
-                if "ZONES" not in wdf.columns:
-                    wdf["ZONES"] = "ALL"
-                dfs.append(wdf)
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
         if not dfs:
-            raise ValueError("No log data available across project wells.")
+            raise ValueError("No log data available across selected project wells.")
 
         combined = pd.concat(dfs, ignore_index=True)
+        zone_col_used = "ZONES"
+        if not req.by_zone:
+            combined["_GLOBAL_ZONE"] = "ALL"
+            zone_col_used = "_GLOBAL_ZONE"
+
         norm_df, report_df = stratigraphic_normalization(
             combined,
             key_well=req.key_well,
-            zone_col="ZONES",
+            zone_col=zone_col_used,
             quantiles=req.quantiles,
             logs=req.logs,
             well_col="WELL_NAME",
             method=req.method,
+            exclude_badhole=req.exclude_badhole,
             return_report=True,
         )
 
         norm_cols = [f"{lg}_NORM" for lg in req.logs if f"{lg}_NORM" in norm_df.columns]
         saved_wells = 0
-        if req.save and norm_cols:
+        if norm_cols:
             for wn, grp in norm_df.groupby("WELL_NAME"):
-                _save_curves_to_well(project_id, str(wn), grp[["DEPTH"] + norm_cols])
-                saved_wells += 1
+                sub_df = grp[["DEPTH"] + norm_cols]
+                if req.save:
+                    _save_curves_to_well(project_id, str(wn), sub_df)
+                    saved_wells += 1
+                else:
+                    _update_in_memory_well_cache(project_id, str(wn), sub_df)
 
         return {
             "project_id": project_id,
             "method": req.method,
+            "by_zone": req.by_zone,
+            "exclude_badhole": req.exclude_badhole,
+            "quantiles": list(req.quantiles),
             "normalized_curves": norm_cols,
             "normalized_columns": norm_cols,
             "saved": req.save,
@@ -3537,6 +7592,717 @@ def workspace_stratigraphic_normalization(
     except Exception as e:
         raise HTTPException(
             status_code=400, detail=f"Stratigraphic normalization failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/multi_well_qaqc/distributions",
+    summary="Compute multi-well and per-zone curve statistical distributions, anomaly flags, and plot data",
+)
+def workspace_multi_well_distributions(
+    project_id: int, req: WorkspaceMultiWellDistributionsRequest
+) -> Dict[str, Any]:
+    """Return multi-well/zone distributions, quantile statistics, outlier/unit diagnostics, and sampled plot points."""
+    try:
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not dfs:
+            raise ValueError("No well data available for the selected filters.")
+
+        combined = pd.concat(dfs, ignore_index=True)
+        active_curve = req.active_curve.strip().upper() or "GR"
+        norm_curve = (
+            f"{active_curve}_NORM"
+            if not active_curve.endswith("_NORM")
+            else active_curve
+        )
+        corr_curve = (
+            f"{active_curve}_CORR"
+            if not active_curve.endswith("_CORR")
+            else active_curve
+        )
+
+        # Resolve BADHOLE column across combined dataframe
+        bh_series = pd.Series(0, index=combined.index, dtype=int)
+        for bh_col in ("BADHOLE", "BAD_HOLE", "BAD_HOLE_FLAG"):
+            if bh_col in combined.columns:
+                s_bh = pd.to_numeric(combined[bh_col], errors="coerce").fillna(0.0)
+                bh_series = bh_series | (s_bh >= 0.5).astype(int)
+        combined["_BADHOLE_INT"] = bh_series
+
+        # Filter out badhole for statistical calculations if requested
+        stat_df = (
+            combined[combined["_BADHOLE_INT"] == 0]
+            if req.exclude_badhole and (combined["_BADHOLE_INT"] == 0).any()
+            else combined
+        )
+
+        target_curves = list(
+            dict.fromkeys(
+                [c.strip().upper() for c in req.curves if c.strip()]
+                + [active_curve, norm_curve, corr_curve]
+            )
+        )
+        present_curves = [c for c in target_curves if c in combined.columns]
+
+        # 1. Field-wide reference stats per curve
+        field_stats: Dict[str, Dict[str, Optional[float]]] = {}
+        for c in present_curves:
+            s = (
+                pd.to_numeric(stat_df[c], errors="coerce")
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+            )
+            if s.empty:
+                field_stats[c] = {
+                    "count": 0,
+                    "min": None,
+                    "p05": None,
+                    "p10": None,
+                    "p25": None,
+                    "p50": None,
+                    "mean": None,
+                    "std": None,
+                    "p75": None,
+                    "p90": None,
+                    "p95": None,
+                    "max": None,
+                }
+            else:
+                arr = s.to_numpy(dtype=float)
+                qs = np.percentile(arr, [5, 10, 25, 50, 75, 90, 95])
+                field_stats[c] = {
+                    "count": int(len(arr)),
+                    "min": round(float(np.min(arr)), 4),
+                    "p05": round(float(qs[0]), 4),
+                    "p10": round(float(qs[1]), 4),
+                    "p25": round(float(qs[2]), 4),
+                    "p50": round(float(qs[3]), 4),
+                    "mean": round(float(np.mean(arr)), 4),
+                    "std": round(float(np.std(arr)), 4),
+                    "p75": round(float(qs[4]), 4),
+                    "p90": round(float(qs[5]), 4),
+                    "p95": round(float(qs[6]), 4),
+                    "max": round(float(np.max(arr)), 4),
+                }
+
+        # 2. Group statistics for active_curve (and optional norm_curve)
+        group_mode = req.group_by.strip().lower()
+        if group_mode == "zone":
+            group_cols = ["ZONES"]
+        elif group_mode == "well_zone":
+            group_cols = ["WELL_NAME", "ZONES"]
+        else:
+            group_cols = ["WELL_NAME"]
+
+        f_st = field_stats.get(active_curve, {})
+        f_p50 = f_st.get("p50")
+        f_iqr = (
+            (f_st["p75"] - f_st["p25"])
+            if (f_st.get("p75") is not None and f_st.get("p25") is not None)
+            else None
+        )
+        var_bounds = Config.VARS.get(active_curve, {})
+
+        group_stats: List[Dict[str, Any]] = []
+        for grp_key, grp_df in combined.groupby(group_cols, sort=False, dropna=False):
+            if not isinstance(grp_key, tuple):
+                grp_key = (grp_key,)
+            well_label = str(grp_key[0]) if group_mode != "zone" else "ALL_WELLS"
+            zone_label = (
+                str(grp_key[0])
+                if group_mode == "zone"
+                else (str(grp_key[1]) if len(grp_key) > 1 else "ALL")
+            )
+
+            total_n = len(grp_df)
+            bh_n = int(grp_df["_BADHOLE_INT"].sum())
+            bh_pct = round((bh_n / total_n) * 100.0, 2) if total_n > 0 else 0.0
+
+            eval_grp = (
+                grp_df[grp_df["_BADHOLE_INT"] == 0]
+                if req.exclude_badhole and (grp_df["_BADHOLE_INT"] == 0).any()
+                else grp_df
+            )
+            s = (
+                pd.to_numeric(eval_grp[active_curve], errors="coerce")
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+                if active_curve in eval_grp.columns
+                else pd.Series(dtype=float)
+            )
+
+            if s.empty:
+                group_stats.append(
+                    {
+                        "WELL_NAME": well_label,
+                        "ZONE": zone_label,
+                        "CURVE": active_curve,
+                        "COUNT": 0,
+                        "BADHOLE_PCT": bh_pct,
+                        "MIN": None,
+                        "P10": None,
+                        "P25": None,
+                        "P50": None,
+                        "MEAN": None,
+                        "STD": None,
+                        "P75": None,
+                        "P90": None,
+                        "MAX": None,
+                        "NORM_P50": None,
+                        "DRIFT": None,
+                        "STATUS": "MISSING",
+                    }
+                )
+                continue
+
+            arr = s.to_numpy(dtype=float)
+            qs = np.percentile(arr, [10, 25, 50, 75, 90])
+            w_min = float(np.min(arr))
+            w_max = float(np.max(arr))
+            w_p50 = float(qs[2])
+            drift = round(w_p50 - f_p50, 4) if f_p50 is not None else 0.0
+
+            norm_p50 = None
+            if norm_curve in eval_grp.columns and norm_curve != active_curve:
+                s_norm = (
+                    pd.to_numeric(eval_grp[norm_curve], errors="coerce")
+                    .replace([np.inf, -np.inf], np.nan)
+                    .dropna()
+                )
+                if not s_norm.empty:
+                    norm_p50 = round(float(np.median(s_norm)), 4)
+
+            status = "OK"
+            if active_curve in ("NPHI", "PHIT", "PHIE", "SWT") and w_p50 > 1.2:
+                status = "UNIT_MISMATCH (%)"
+            elif (
+                "min" in var_bounds and w_min < var_bounds["min"]
+            ) or ("max" in var_bounds and w_max > var_bounds["max"]):
+                status = "OUT_OF_BOUNDS"
+            elif (
+                f_iqr is not None
+                and f_iqr > 1e-6
+                and abs(drift) > 1.25 * f_iqr
+            ):
+                status = "HIGH_DRIFT"
+
+            group_stats.append(
+                {
+                    "WELL_NAME": well_label,
+                    "ZONE": zone_label,
+                    "CURVE": active_curve,
+                    "COUNT": int(len(arr)),
+                    "BADHOLE_PCT": bh_pct,
+                    "MIN": round(w_min, 4),
+                    "P10": round(float(qs[0]), 4),
+                    "P25": round(float(qs[1]), 4),
+                    "P50": round(w_p50, 4),
+                    "MEAN": round(float(np.mean(arr)), 4),
+                    "STD": round(float(np.std(arr)), 4),
+                    "P75": round(float(qs[3]), 4),
+                    "P90": round(float(qs[4]), 4),
+                    "MAX": round(w_max, 4),
+                    "NORM_P50": norm_p50,
+                    "DRIFT": drift,
+                    "STATUS": status,
+                }
+            )
+
+        # 3. Scan across all loaded wells for actionable anomalies (aliases, unit mismatches, outer limits)
+        anomalies: List[Dict[str, Any]] = []
+        for wdf in dfs:
+            wn = str(wdf["WELL_NAME"].iloc[0])
+            w_cols = set(wdf.columns)
+            # Check missing standard curves that have aliases present
+            for std_col, aliases in STANDARD_ALIAS_MAP.items():
+                if std_col not in w_cols or not wdf[std_col].notna().any():
+                    found_alias = next(
+                        (a for a in aliases if a in w_cols and wdf[a].notna().any()),
+                        None,
+                    )
+                    if found_alias:
+                        anomalies.append(
+                            {
+                                "well_name": wn,
+                                "curve": std_col,
+                                "type": "alias",
+                                "source_curve": found_alias,
+                                "target_curve": std_col,
+                                "message": f"{wn}: Missing '{std_col}', found alias '{found_alias}'",
+                            }
+                        )
+            # Check unit mismatch on NPHI (percent vs v/v)
+            if "NPHI" in w_cols:
+                s_nphi = pd.to_numeric(wdf["NPHI"], errors="coerce").dropna()
+                if not s_nphi.empty and float(s_nphi.median()) > 1.2:
+                    anomalies.append(
+                        {
+                            "well_name": wn,
+                            "curve": "NPHI",
+                            "type": "unit_scale",
+                            "scale": 0.01,
+                            "message": f"{wn}: NPHI median is {float(s_nphi.median()):.1f} (looks like % instead of v/v)",
+                        }
+                    )
+            # Check outer limits from Config.VARS
+            for var_name, v_dict in Config.VARS.items():
+                if var_name in w_cols and ("min" in v_dict or "max" in v_dict):
+                    s_v = pd.to_numeric(wdf[var_name], errors="coerce").dropna()
+                    if s_v.empty:
+                        continue
+                    n_out = int(
+                        ((s_v < v_dict.get("min", -np.inf)) | (s_v > v_dict.get("max", np.inf))).sum()
+                    )
+                    if n_out > 0:
+                        anomalies.append(
+                            {
+                                "well_name": wn,
+                                "curve": var_name,
+                                "type": "outer_limits",
+                                "count": n_out,
+                                "message": f"{wn}: {var_name} has {n_out} pts outside [{v_dict.get('min')}, {v_dict.get('max')}]",
+                            }
+                        )
+
+        # 4. Downsample plot points per well for fast Plotly rendering
+        sampled_parts: List[pd.DataFrame] = []
+        max_pts = max(100, int(req.max_points_per_well))
+        for wdf in dfs:
+            sub = (
+                wdf[wdf.get("BADHOLE", 0) == 0]
+                if req.exclude_badhole and "BADHOLE" in wdf.columns
+                else wdf
+            )
+            if len(sub) > max_pts:
+                stride = max(1, len(sub) // max_pts)
+                sub = sub.iloc[::stride]
+            sampled_parts.append(sub)
+
+        sampled_df = (
+            pd.concat(sampled_parts, ignore_index=True)
+            if sampled_parts
+            else pd.DataFrame()
+        )
+
+        def _col_list(df_in: pd.DataFrame, col_name: str) -> list:
+            if df_in.empty or col_name not in df_in.columns:
+                return []
+            s = pd.to_numeric(df_in[col_name], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            )
+            return [round(float(x), 6) if pd.notna(x) else None for x in s.tolist()]
+
+        bh_sampled = pd.Series(0, index=sampled_df.index, dtype=int)
+        for bh_col in ("BADHOLE", "BAD_HOLE", "BAD_HOLE_FLAG"):
+            if bh_col in sampled_df.columns:
+                s_bh = pd.to_numeric(sampled_df[bh_col], errors="coerce").fillna(0.0)
+                bh_sampled = bh_sampled | (s_bh >= 0.5).astype(int)
+
+        available_zones = sorted(
+            {
+                str(z)
+                for z in combined["ZONES"].dropna().unique()
+                if str(z).strip()
+            }
+        )
+        available_curves = sorted(
+            [
+                str(c)
+                for c in combined.columns
+                if str(c) not in ("DEPTH", "DEPT", "WELL_NAME", "ZONES", "_BADHOLE_INT")
+                and not str(c).startswith("TOP_")
+                and not str(c).startswith("CONTACT_")
+                and not str(c).startswith("PRESSURE_")
+            ]
+        )
+
+        return {
+            "project_id": project_id,
+            "active_curve": active_curve,
+            "norm_curve": norm_curve if norm_curve in combined.columns else None,
+            "corr_curve": corr_curve if corr_curve in combined.columns else None,
+            "group_by": group_mode,
+            "exclude_badhole": req.exclude_badhole,
+            "available_curves": available_curves,
+            "available_zones": available_zones,
+            "field_stats": field_stats,
+            "group_stats": group_stats,
+            "anomalies": anomalies,
+            "plot_data": {
+                "well_names": (
+                    sampled_df["WELL_NAME"].astype(str).tolist()
+                    if not sampled_df.empty
+                    else []
+                ),
+                "zones": (
+                    sampled_df["ZONES"].astype(str).tolist()
+                    if not sampled_df.empty
+                    else []
+                ),
+                "depths": _col_list(sampled_df, "DEPTH"),
+                "badhole": bh_sampled.tolist() if not sampled_df.empty else [],
+                "values": _col_list(sampled_df, active_curve),
+                "norm_values": (
+                    _col_list(sampled_df, norm_curve)
+                    if norm_curve in sampled_df.columns and norm_curve != active_curve
+                    else []
+                ),
+                "corr_values": (
+                    _col_list(sampled_df, corr_curve)
+                    if corr_curve in sampled_df.columns and corr_curve != active_curve
+                    else []
+                ),
+                "nphi": _col_list(sampled_df, "NPHI"),
+                "rhob": _col_list(sampled_df, "RHOB"),
+                "gr": _col_list(sampled_df, "GR"),
+            },
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Multi-well distribution computation failed: {e}",
+        ) from e
+
+
+@router.post(
+    "/multi_well_qaqc/badhole_flagging",
+    summary="Run batch badhole flagging across selected project wells",
+)
+def workspace_multi_well_badhole_flagging(
+    project_id: int, req: WorkspaceMultiWellBadholeRequest
+) -> Dict[str, Any]:
+    """Execute badhole_flagging across multiple wells and optionally save BADHOLE, BS, and DCALI."""
+    try:
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not dfs:
+            raise ValueError("No wells available for batch badhole flagging.")
+
+        well_summaries: List[Dict[str, Any]] = []
+        total_samples = 0
+        total_flagged = 0
+        saved_wells = 0
+
+        for wdf in dfs:
+            wn = str(wdf["WELL_NAME"].iloc[0])
+            bh_df = badhole_flagging(
+                wdf,
+                thold=req.cali_threshold,
+                use_cali=req.use_cali,
+                auto_bitsize=req.auto_bitsize,
+                bitsize_default=req.bitsize_default,
+                use_drho=req.use_drho,
+                drho_threshold=req.drho_threshold,
+                use_rhob_nphi=req.use_rhob_nphi,
+                rhob_min=req.rhob_min,
+                rhob_max=req.rhob_max,
+                nphi_max=req.nphi_max,
+                exclude_coal=req.exclude_coal,
+                use_rugosity=req.use_rugosity,
+                rugosity_window=req.rugosity_window,
+                rhob_trend_factor=req.rhob_trend_factor,
+                cali_spike_threshold=req.cali_spike_threshold,
+            )
+            summary = dict(bh_df.attrs.get("badhole_summary", {}))
+            out_cols = [
+                c for c in ("BADHOLE", "BS", "DCALI") if c in bh_df.columns
+            ]
+            if out_cols and "DEPTH" in bh_df.columns:
+                sub_df = bh_df[["DEPTH"] + out_cols].copy()
+                if req.save:
+                    _save_curves_to_well(project_id, wn, sub_df)
+                    saved_wells += 1
+                else:
+                    _update_in_memory_well_cache(project_id, wn, sub_df)
+
+            n_s = int(summary.get("total_samples", len(bh_df)))
+            n_f = int(summary.get("flagged_count", 0))
+            total_samples += n_s
+            total_flagged += n_f
+            well_summaries.append(
+                {
+                    "WELL_NAME": wn,
+                    "TOTAL": n_s,
+                    "FLAGGED": n_f,
+                    "FLAGGED_PCT": summary.get("flagged_pct", 0.0),
+                    "CALI": summary.get("cali_flagged", 0),
+                    "DRHO": summary.get("drho_flagged", 0),
+                    "RHOB_NPHI": summary.get("rhob_nphi_flagged", 0),
+                    "RUGOSITY": summary.get("rugosity_flagged", 0),
+                }
+            )
+
+        return {
+            "project_id": project_id,
+            "saved": req.save,
+            "saved_wells": saved_wells,
+            "total_samples": total_samples,
+            "total_flagged": total_flagged,
+            "total_flagged_pct": (
+                round((total_flagged / total_samples) * 100.0, 2)
+                if total_samples > 0
+                else 0.0
+            ),
+            "well_summaries": well_summaries,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Batch badhole flagging failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/multi_well_qaqc/environmental_corrections",
+    summary="Apply borehole environmental and invasion corrections across multiple wells",
+)
+def workspace_multi_well_environmental_corrections(
+    project_id: int, req: WorkspaceMultiWellEnvCorrectionRequest
+) -> Dict[str, Any]:
+    """Run apply_environmental_corrections across selected project wells."""
+    try:
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not dfs:
+            raise ValueError("No wells available for batch environmental corrections.")
+
+        well_summaries: List[Dict[str, Any]] = []
+        all_corr_cols: set[str] = set()
+        saved_wells = 0
+
+        for wdf in dfs:
+            wn = str(wdf["WELL_NAME"].iloc[0])
+            corr_df = apply_environmental_corrections(
+                wdf,
+                bitsize_default=req.bitsize_default,
+                mud_weight=req.mud_weight,
+                surface_temp=req.surface_temp,
+                temp_grad=req.temp_grad,
+                salinity_ppm=req.salinity_ppm,
+                rho_mudcake=req.rho_mudcake,
+            )
+            corr_cols = [
+                c
+                for c in (
+                    "GR_CORR",
+                    "NPHI_CORR",
+                    "RHOB_CORR",
+                    "RT_CORR",
+                    "INVASION_FLAG",
+                )
+                if c in corr_df.columns
+            ]
+            all_corr_cols.update(corr_cols)
+            if corr_cols and "DEPTH" in corr_df.columns:
+                sub_df = corr_df[["DEPTH"] + corr_cols].copy()
+                if req.save:
+                    _save_curves_to_well(project_id, wn, sub_df)
+                    saved_wells += 1
+                else:
+                    _update_in_memory_well_cache(project_id, wn, sub_df)
+
+            well_summaries.append(
+                {
+                    "WELL_NAME": wn,
+                    "ROWS": len(corr_df),
+                    "CURVES_CORRECTED": ", ".join(corr_cols),
+                }
+            )
+
+        return {
+            "project_id": project_id,
+            "saved": req.save,
+            "saved_wells": saved_wells,
+            "corrected_curves": sorted(all_corr_cols),
+            "well_summaries": well_summaries,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Batch environmental corrections failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/multi_well_qaqc/conditioning",
+    summary="Run batch curve alias harmonization, outer-limit clipping, or unit scaling across wells",
+)
+def workspace_multi_well_conditioning(
+    project_id: int, req: WorkspaceMultiWellConditioningRequest
+) -> Dict[str, Any]:
+    """Execute batch curve conditioning (harmonize_aliases, outer_limits, or unit_scale) across project wells."""
+    try:
+        dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not dfs:
+            raise ValueError("No wells available for batch conditioning.")
+
+        act = req.action.strip().lower()
+        changes: List[Dict[str, Any]] = []
+        updated_wells = 0
+
+        if act == "harmonize_aliases":
+            alias_dict = dict(STANDARD_ALIAS_MAP)
+            if req.alias_map:
+                for k, v in req.alias_map.items():
+                    alias_dict[k.strip().upper()] = [
+                        str(x).strip().upper() for x in v if str(x).strip()
+                    ]
+            if req.source_curve and req.target_curve:
+                alias_dict = {
+                    req.target_curve.strip().upper(): [req.source_curve.strip().upper()]
+                }
+
+            for wdf in dfs:
+                wn = str(wdf["WELL_NAME"].iloc[0])
+                mapped_cols: Dict[str, pd.Series] = {}
+                for target_col, aliases in alias_dict.items():
+                    if target_col in wdf.columns and wdf[target_col].notna().any():
+                        continue
+                    found = next(
+                        (
+                            a
+                            for a in aliases
+                            if a in wdf.columns and wdf[a].notna().any()
+                        ),
+                        None,
+                    )
+                    if found:
+                        mapped_cols[target_col] = pd.to_numeric(
+                            wdf[found], errors="coerce"
+                        )
+                        changes.append(
+                            {
+                                "WELL_NAME": wn,
+                                "ACTION": "ALIAS_MAP",
+                                "SOURCE": found,
+                                "TARGET": target_col,
+                                "COUNT": int(mapped_cols[target_col].notna().sum()),
+                            }
+                        )
+                if mapped_cols and "DEPTH" in wdf.columns:
+                    sub_df = pd.DataFrame({"DEPTH": wdf["DEPTH"], **mapped_cols})
+                    if req.save:
+                        _save_curves_to_well(project_id, wn, sub_df)
+                    else:
+                        _update_in_memory_well_cache(project_id, wn, sub_df)
+                    updated_wells += 1
+
+        elif act == "outer_limits":
+            target_vars = (
+                [c.strip().upper() for c in req.curves if c.strip()]
+                if req.curves
+                else list(Config.VARS.keys())
+            )
+            for wdf in dfs:
+                wn = str(wdf["WELL_NAME"].iloc[0])
+                cols_present = [
+                    c
+                    for c in target_vars
+                    if c in wdf.columns
+                    and c in Config.VARS
+                    and ("min" in Config.VARS[c] or "max" in Config.VARS[c])
+                ]
+                if not cols_present or "DEPTH" not in wdf.columns:
+                    continue
+                cleaned = handle_outer_limit(
+                    wdf[["DEPTH"] + cols_present], fill=req.fill
+                )
+                modified_cols = []
+                for c in cols_present:
+                    s_before = pd.to_numeric(wdf[c], errors="coerce")
+                    s_after = pd.to_numeric(cleaned[c], errors="coerce")
+                    n_diff = int(
+                        (
+                            (s_before.notna() != s_after.notna())
+                            | (
+                                s_before.notna()
+                                & s_after.notna()
+                                & ((s_before - s_after).abs() > 1e-9)
+                            )
+                        ).sum()
+                    )
+                    if n_diff > 0:
+                        modified_cols.append(c)
+                        changes.append(
+                            {
+                                "WELL_NAME": wn,
+                                "ACTION": "CLAMP" if req.fill else "NULL_OUTLIERS",
+                                "SOURCE": c,
+                                "TARGET": c,
+                                "COUNT": n_diff,
+                            }
+                        )
+                if modified_cols:
+                    sub_df = cleaned[["DEPTH"] + modified_cols]
+                    if req.save:
+                        _save_curves_to_well(project_id, wn, sub_df)
+                    else:
+                        _update_in_memory_well_cache(project_id, wn, sub_df)
+                    updated_wells += 1
+
+        elif act == "unit_scale":
+            src = (req.source_curve or req.target_curve or "NPHI").strip().upper()
+            dst = (req.target_curve or src).strip().upper()
+            for wdf in dfs:
+                wn = str(wdf["WELL_NAME"].iloc[0])
+                if src not in wdf.columns or "DEPTH" not in wdf.columns:
+                    continue
+                s = pd.to_numeric(wdf[src], errors="coerce")
+                if not s.notna().any():
+                    continue
+                s_scaled = s * float(req.scale) + float(req.offset)
+                sub_df = pd.DataFrame({"DEPTH": wdf["DEPTH"], dst: s_scaled})
+                if req.save:
+                    _save_curves_to_well(project_id, wn, sub_df)
+                else:
+                    _update_in_memory_well_cache(project_id, wn, sub_df)
+                updated_wells += 1
+                changes.append(
+                    {
+                        "WELL_NAME": wn,
+                        "ACTION": f"SCALE (Ã—{req.scale:g}{f' +{req.offset:g}' if req.offset else ''})",
+                        "SOURCE": src,
+                        "TARGET": dst,
+                        "COUNT": int(s_scaled.notna().sum()),
+                    }
+                )
+        else:
+            raise ValueError(f"Unsupported conditioning action: {act}")
+
+        return {
+            "project_id": project_id,
+            "action": act,
+            "saved": req.save,
+            "updated_wells": updated_wells,
+            "changes": changes,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Batch conditioning failed: {e}"
         ) from e
 
 
@@ -3559,79 +8325,89 @@ def workspace_optimize_fwl(
             raise ValueError("No wells found in project.")
 
         dfs = []
-        with get_db() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
-            for wn in well_names:
-                wdf = _get_merged_dataframe_sync(project_id, wn)
-                if not wdf.empty:
-                    wdf = wdf.copy()
-                    wdf["WELL_NAME"] = wn
-                    # Populate ZONES from formation tops if not already present on the well
-                    if "ZONES" not in wdf.columns or not wdf["ZONES"].notna().any():
-                        try:
-                            anc = proj.get_well_ancillary_data(wn)
-                        except Exception:
-                            anc = {}
-                        tops_df = (
-                            anc.get("formation_tops") if isinstance(anc, dict) else None
-                        )
-                        if isinstance(tops_df, pd.DataFrame) and not tops_df.empty:
-                            wdf["ZONES"] = pd.NA
-                            for _, top in tops_df.iterrows():
-                                try:
-                                    top_depth = float(top.get("depth"))
-                                    top_name = str(top.get("name"))
-                                except Exception:
-                                    continue
-                                nearest_idx = (wdf["DEPTH"] - top_depth).abs().idxmin()
-                                wdf.at[nearest_idx, "ZONES"] = top_name
-                            wdf["ZONES"] = wdf["ZONES"].ffill()
-                    if "PHIT" not in wdf.columns or not wdf["PHIT"].notna().any():
-                        if "RHOB" in wdf.columns and wdf["RHOB"].notna().any():
-                            wdf["PHIT"] = (
-                                (2.65 - pd.to_numeric(wdf["RHOB"], errors="coerce"))
-                                / 1.65
-                            ).clip(0.01, 0.45)
-                        elif "NPHI" in wdf.columns and wdf["NPHI"].notna().any():
-                            wdf["PHIT"] = pd.to_numeric(
-                                wdf["NPHI"], errors="coerce"
-                            ).clip(0.01, 0.45)
-                    if (
-                        "PERM" not in wdf.columns or not wdf["PERM"].notna().any()
-                    ) and "PHIT" in wdf.columns:
-                        wdf["PERM"] = (10.0 ** (14.0 * wdf["PHIT"] - 1.5)).clip(
-                            0.01, 10000.0
-                        )
-                    if (
-                        ("SW" not in wdf.columns or not wdf["SW"].notna().any())
-                        and "SHF" in wdf.columns
-                        and wdf["SHF"].notna().any()
-                    ):
-                        wdf["SW"] = wdf["SHF"]
-                    elif (
-                        "SW" not in wdf.columns or not wdf["SW"].notna().any()
-                    ) and "PHIT" in wdf.columns:
-                        rt_col = next(
-                            (
-                                c
-                                for c in ("RT", "ILD", "LLD", "RDEP")
-                                if c in wdf.columns and wdf[c].notna().any()
-                            ),
-                            None,
-                        )
-                        if rt_col:
-                            rt_s = pd.to_numeric(wdf[rt_col], errors="coerce").clip(
-                                lower=0.1
-                            )
-                            phi_s = pd.to_numeric(wdf["PHIT"], errors="coerce").clip(
-                                lower=0.01
-                            )
-                            wdf["SW"] = np.sqrt(0.05 / (rt_s * (phi_s**2))).clip(
-                                0.02, 1.0
-                            )
-                    dfs.append(wdf)
+        skipped_no_tvd_wells: List[str] = []
+        for wdf in _load_multi_well_dfs(project_id, well_names=well_names):
+            wn = str(wdf["WELL_NAME"].iloc[0])
+            wdf = wdf.copy()
+            tvd_col = next(
+                (
+                    c
+                    for c in (
+                        "TVDSS",
+                        "DEPT_TVDSS",
+                        "DEPTH_TVDSS",
+                        "TVD_SS",
+                        "TVD",
+                        "DEPT_TVD",
+                        "DEPTH_TVD",
+                    )
+                    if c in wdf.columns
+                    and pd.to_numeric(wdf[c], errors="coerce").notna().sum() >= 2
+                ),
+                None,
+            )
+            if tvd_col is None:
+                skipped_no_tvd_wells.append(wn)
+                continue
+            s_tvd_opt = pd.to_numeric(wdf[tvd_col], errors="coerce")
+            if tvd_col in ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS") and (
+                s_tvd_opt.dropna() < 0
+            ).mean() > 0.8:
+                s_tvd_opt = s_tvd_opt.abs()
+            wdf["TVD"] = s_tvd_opt
+            wdf["TVDSS"] = s_tvd_opt
+            wdf = wdf[wdf["TVD"].notna()].copy()
+            if len(wdf) < 2:
+                skipped_no_tvd_wells.append(wn)
+                continue
+            if "PHIT" not in wdf.columns or not wdf["PHIT"].notna().any():
+                if "RHOB" in wdf.columns and wdf["RHOB"].notna().any():
+                    wdf["PHIT"] = (
+                        (2.65 - pd.to_numeric(wdf["RHOB"], errors="coerce"))
+                        / 1.65
+                    ).clip(0.01, 0.45)
+                elif "NPHI" in wdf.columns and wdf["NPHI"].notna().any():
+                    wdf["PHIT"] = pd.to_numeric(
+                        wdf["NPHI"], errors="coerce"
+                    ).clip(0.01, 0.45)
+            if (
+                "PERM" not in wdf.columns or not wdf["PERM"].notna().any()
+            ) and "PHIT" in wdf.columns:
+                wdf["PERM"] = (10.0 ** (14.0 * wdf["PHIT"] - 1.5)).clip(
+                    0.01, 10000.0
+                )
+            if (
+                ("SW" not in wdf.columns or not wdf["SW"].notna().any())
+                and "SHF" in wdf.columns
+                and wdf["SHF"].notna().any()
+            ):
+                wdf["SW"] = wdf["SHF"]
+            elif (
+                "SW" not in wdf.columns or not wdf["SW"].notna().any()
+            ) and "PHIT" in wdf.columns:
+                rt_col = next(
+                    (
+                        c
+                        for c in ("RT", "ILD", "LLD", "RDEP")
+                        if c in wdf.columns and wdf[c].notna().any()
+                    ),
+                    None,
+                )
+                if rt_col:
+                    rt_s = pd.to_numeric(wdf[rt_col], errors="coerce").clip(
+                        lower=0.1
+                    )
+                    phi_s = pd.to_numeric(wdf["PHIT"], errors="coerce").clip(
+                        lower=0.01
+                    )
+                    wdf["SW"] = np.sqrt(0.05 / (rt_s * (phi_s**2))).clip(
+                        0.02, 1.0
+                    )
+            dfs.append(wdf)
         if not dfs:
-            raise ValueError("No log data available across project wells.")
+            raise ValueError(
+                "TVD is required for FWL optimization. None of the selected wells have a TVD curve or directional survey."
+            )
 
         combined = pd.concat(dfs, ignore_index=True)
         if req.zones and "ZONES" in combined.columns:
@@ -3650,6 +8426,7 @@ def workspace_optimize_fwl(
         )
         res = optimize_fwl(
             df=combined,
+            depth_col="TVD",
             model=req.model,
             shm_params=req.shm_params,
             ift=req.ift,
@@ -3812,35 +8589,7 @@ def workspace_ml_train(project_id: int, req: WorkspaceMlTrainRequest) -> Dict[st
         if not well_names:
             raise ValueError("No wells selected or available in project.")
 
-        dfs: List[pd.DataFrame] = []
-        with get_db() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
-            for wn in well_names:
-                wdf = _get_merged_dataframe_sync(project_id, wn)
-                if wdf.empty:
-                    continue
-                wdf = wdf.copy()
-                wdf["WELL_NAME"] = wn
-                if "ZONES" not in wdf.columns or not wdf["ZONES"].notna().any():
-                    try:
-                        anc = proj.get_well_ancillary_data(wn) if proj else {}
-                    except Exception:
-                        anc = {}
-                    tops_df = (
-                        anc.get("formation_tops") if isinstance(anc, dict) else None
-                    )
-                    if isinstance(tops_df, pd.DataFrame) and not tops_df.empty:
-                        wdf["ZONES"] = pd.NA
-                        for _, top in tops_df.iterrows():
-                            try:
-                                top_depth = float(top.get("depth"))
-                                top_name = str(top.get("name"))
-                            except Exception:
-                                continue
-                            nearest_idx = (wdf["DEPTH"] - top_depth).abs().idxmin()
-                            wdf.at[nearest_idx, "ZONES"] = top_name
-                        wdf["ZONES"] = wdf["ZONES"].ffill()
-                dfs.append(wdf)
+        dfs = _load_multi_well_dfs(project_id, well_names=well_names)
 
         if not dfs:
             raise ValueError("No log data found for the selected wells.")
@@ -3955,7 +8704,7 @@ def workspace_ml_delete_model(project_id: int, suite_key: str) -> Dict[str, Any]
 def workspace_ml_inference(
     project_id: int, well_name: str, req: WorkspaceMlInferenceRequest
 ) -> Dict[str, Any]:
-    """Trigger pre-trained PIML & Conformal Prediction inference with P10–P90 uncertainty bands."""
+    """Trigger pre-trained PIML & Conformal Prediction inference with P10â€“P90 uncertainty bands."""
     try:
         from quick_pp.machine_learning.predict_pipeline import (
             get_pretrained_models_status,
@@ -4101,6 +8850,9 @@ class WorkspaceWellConfigRequest(BaseModel):
     clear_focus_depth: bool = Field(
         False, description="Clear persistent working depth range back to full well"
     )
+    header: Optional[Dict[str, Any]] = Field(
+        None, description="Well header metadata updates"
+    )
     extra: Optional[Dict[str, Any]] = Field(
         None, description="Additional per-well configuration parameters"
     )
@@ -4117,7 +8869,7 @@ class WorkspaceWellConfigRequest(BaseModel):
 def workspace_update_well_config(
     project_id: int, well_name: str, req: WorkspaceWellConfigRequest
 ) -> Dict[str, Any]:
-    """Persist working top and bottom focus depth (and optional well config keys) for a specific well."""
+    """Persist working top and bottom focus depth (and optional well config/header keys) for a specific well."""
     try:
         from quick_pp.database import models as db_models
         from sqlalchemy import select
@@ -4133,14 +8885,28 @@ def workspace_update_well_config(
                 eph["focus_max_depth"] = req.focus_max_depth
         if req.extra:
             eph.update(req.extra)
+
+        clean_header_updates: Dict[str, Any] = {}
+        if req.header and isinstance(req.header, dict):
+            for hk, hv in req.header.items():
+                if hk in ("raw_well_header", "raw_parameters"):
+                    continue
+                clean_header_updates[hk] = hv
+            eph.update(clean_header_updates)
+            curr_eph_hdr = dict(_ephemeral_well_headers.get((project_id, well_name), {}))
+            curr_eph_hdr.update(clean_header_updates)
+            _ephemeral_well_headers[(project_id, well_name)] = curr_eph_hdr
+
         _ephemeral_well_configs[(project_id, well_name)] = eph
 
         saved_cfg = dict(eph)
+        saved_hdr = dict(_ephemeral_well_headers.get((project_id, well_name), {}))
         if not is_demo_mode():
             with get_db() as session:
+                db_name = resolve_db_well_name(project_id, well_name)
                 well_orm = session.scalar(
                     select(db_models.Well).filter_by(
-                        project_id=project_id, name=well_name
+                        project_id=project_id, name=db_name
                     )
                 )
                 if well_orm:
@@ -4153,21 +8919,264 @@ def workspace_update_well_config(
                     if req.clear_focus_depth:
                         current_cfg.pop("focus_min_depth", None)
                         current_cfg.pop("focus_max_depth", None)
-                    well_orm.config_data = current_cfg
+                    well_orm.config_data = _sanitize_for_json(current_cfg)
                     flag_modified(well_orm, "config_data")
+
+                    if clean_header_updates:
+                        current_hdr = (
+                            dict(well_orm.header_data)
+                            if isinstance(well_orm.header_data, dict)
+                            else {}
+                        )
+                        current_hdr.update(clean_header_updates)
+                        ovr = (
+                            dict(current_hdr.get("header_overrides"))
+                            if isinstance(current_hdr.get("header_overrides"), dict)
+                            else {}
+                        )
+                        ovr.update(clean_header_updates)
+                        current_hdr["header_overrides"] = ovr
+                        if isinstance(current_hdr.get("well_metadata"), dict):
+                            wm = dict(current_hdr["well_metadata"])
+                            wm.update(clean_header_updates)
+                            current_hdr["well_metadata"] = wm
+                        if clean_header_updates.get("uwi"):
+                            well_orm.uwi = str(clean_header_updates["uwi"]).strip()
+                        well_orm.header_data = _sanitize_for_json(current_hdr)
+                        flag_modified(well_orm, "header_data")
+                        saved_hdr = dict(
+                            extract_las_metadata(
+                                well_orm.header_data, fallback_well_name=well_name
+                            )
+                        )
+                        saved_hdr.update(ovr)
+
                     session.add(well_orm)
                     session.flush()
                     saved_cfg = current_cfg
 
-        return {
+        if clean_header_updates:
+            invalidate_well_cache(project_id=project_id, well_name=well_name)
+
+        return _sanitize_for_json({
             "project_id": project_id,
             "well_name": well_name,
             "config": saved_cfg,
+            "header": saved_hdr,
             "saved": True,
-        }
+        })
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to update well configuration: {e}"
+        ) from e
+
+
+MODULE_PARAMS_CONFIG_KEY = "module_params"
+
+
+class WorkspaceModuleParamsEntry(BaseModel):
+    module: str = Field(..., description="Single-well workflow module key (e.g. 'litho-poro')")
+    key: str = Field(
+        ...,
+        description="Selection key: 'zone:<Z1+Z2>', 'depth:<min>-<max>' or 'well'",
+    )
+    selection: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Active selection at compute time (zones, min_depth, max_depth)",
+    )
+    label: Optional[str] = Field(None, description="Human-readable selection label")
+    params: Dict[str, Any] = Field(
+        default_factory=dict, description="Full module parameter snapshot"
+    )
+
+
+class WorkspaceModuleParamsRequest(BaseModel):
+    entries: List[WorkspaceModuleParamsEntry] = Field(default_factory=list)
+
+
+def _merge_module_params(
+    current: Any, entries: List[WorkspaceModuleParamsEntry]
+) -> Dict[str, Any]:
+    """Merge module parameter entries into a `module_params` mapping keyed by module then selection key."""
+    import datetime as _dt
+
+    merged: Dict[str, Any] = (
+        {k: dict(v) for k, v in current.items() if isinstance(v, dict)}
+        if isinstance(current, dict)
+        else {}
+    )
+    now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    for entry in entries:
+        module = str(entry.module or "").strip()
+        sel_key = str(entry.key or "").strip()
+        if not module or not sel_key:
+            continue
+        mod_map = dict(merged.get(module) or {})
+        mod_map[sel_key] = {
+            "params": entry.params or {},
+            "selection": entry.selection or {},
+            "label": entry.label or sel_key,
+            "saved_at": now_iso,
+        }
+        merged[module] = mod_map
+    return merged
+
+
+@router.post(
+    "/wells/{well_name}/module_params",
+    summary="Persist single-well module parameters keyed by the active zone / depth selection",
+)
+def workspace_save_module_params(
+    project_id: int, well_name: str, req: WorkspaceModuleParamsRequest
+) -> Dict[str, Any]:
+    """Store parameter snapshots per module and per selection (zones or depth interval) in well config."""
+    try:
+        if not req.entries:
+            return {"well_name": well_name, "module_params": {}, "saved": False}
+
+        well_keys = {well_name, resolve_db_well_name(project_id, well_name)}
+        merged: Dict[str, Any] = {}
+        persisted = False
+        if not is_demo_mode():
+            with get_db() as session:
+                db_name = resolve_db_well_name(project_id, well_name)
+                well_orm = session.scalar(
+                    select(db_models.Well).filter_by(project_id=project_id, name=db_name)
+                )
+                if well_orm:
+                    current_cfg = (
+                        dict(well_orm.config_data)
+                        if isinstance(well_orm.config_data, dict)
+                        else {}
+                    )
+                    merged = _merge_module_params(
+                        current_cfg.get(MODULE_PARAMS_CONFIG_KEY), req.entries
+                    )
+                    current_cfg[MODULE_PARAMS_CONFIG_KEY] = merged
+                    well_orm.config_data = _sanitize_for_json(current_cfg)
+                    flag_modified(well_orm, "config_data")
+                    session.add(well_orm)
+                    persisted = True
+            # Drop any stale ephemeral copy so DB remains the source of truth on reload
+            for w_key in well_keys:
+                eph = _ephemeral_well_configs.get((project_id, w_key))
+                if eph and MODULE_PARAMS_CONFIG_KEY in eph:
+                    eph = dict(eph)
+                    eph.pop(MODULE_PARAMS_CONFIG_KEY, None)
+                    _ephemeral_well_configs[(project_id, w_key)] = eph
+
+        if not persisted:
+            # Demo mode or ephemeral (uploaded) well: keep in session memory only
+            base: Any = None
+            for w_key in well_keys:
+                eph = _ephemeral_well_configs.get((project_id, w_key)) or {}
+                if isinstance(eph.get(MODULE_PARAMS_CONFIG_KEY), dict):
+                    base = eph[MODULE_PARAMS_CONFIG_KEY]
+                    break
+            merged = _merge_module_params(base, req.entries)
+            for w_key in well_keys:
+                eph = dict(_ephemeral_well_configs.get((project_id, w_key), {}))
+                eph[MODULE_PARAMS_CONFIG_KEY] = merged
+                _ephemeral_well_configs[(project_id, w_key)] = eph
+
+        return _sanitize_for_json({
+            "well_name": well_name,
+            "module_params": merged,
+            "saved": True,
+            "persisted": persisted,
+        })
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to save module parameters: {e}"
+        ) from e
+
+
+# Demo-mode / fallback session store for project-level module parameters
+_ephemeral_project_module_params: Dict[int, Dict[str, Any]] = {}
+
+
+def _load_project_module_params(project_id: int) -> Tuple[Dict[str, Any], bool]:
+    """Return (module_params, from_db) for a project, preferring the DB unless in demo mode."""
+    if not is_demo_mode():
+        try:
+            with get_db() as session:
+                proj = session.get(db_models.Project, project_id)
+                if proj is not None:
+                    cfg = proj.config_data if isinstance(proj.config_data, dict) else {}
+                    mp = cfg.get(MODULE_PARAMS_CONFIG_KEY)
+                    return (dict(mp) if isinstance(mp, dict) else {}), True
+        except Exception:
+            pass
+    return dict(_ephemeral_project_module_params.get(project_id) or {}), False
+
+
+@router.get(
+    "/module_params",
+    summary="Get project-level (multi-well) module parameters keyed by zone selection",
+)
+def workspace_get_project_module_params(project_id: int) -> Dict[str, Any]:
+    """Return saved multi-well module parameters stored in the project config."""
+    mp, from_db = _load_project_module_params(project_id)
+    return _sanitize_for_json({
+        "project_id": project_id,
+        "module_params": mp,
+        "persisted": from_db,
+    })
+
+
+@router.post(
+    "/module_params",
+    summary="Persist project-level (multi-well) module parameters keyed by zone selection",
+)
+def workspace_save_project_module_params(
+    project_id: int, req: WorkspaceModuleParamsRequest
+) -> Dict[str, Any]:
+    """Merge multi-well module parameter snapshots into `projects.config_data.module_params`."""
+    try:
+        if not req.entries:
+            mp, from_db = _load_project_module_params(project_id)
+            return {"project_id": project_id, "module_params": mp, "saved": False}
+
+        merged: Dict[str, Any] = {}
+        persisted = False
+        if not is_demo_mode():
+            try:
+                with get_db() as session:
+                    proj = session.get(db_models.Project, project_id)
+                    if proj is not None:
+                        cfg = (
+                            dict(proj.config_data)
+                            if isinstance(proj.config_data, dict)
+                            else {}
+                        )
+                        merged = _merge_module_params(
+                            cfg.get(MODULE_PARAMS_CONFIG_KEY), req.entries
+                        )
+                        cfg[MODULE_PARAMS_CONFIG_KEY] = merged
+                        proj.config_data = _sanitize_for_json(cfg)
+                        flag_modified(proj, "config_data")
+                        session.add(proj)
+                        persisted = True
+            except Exception:
+                persisted = False
+
+        if not persisted:
+            merged = _merge_module_params(
+                _ephemeral_project_module_params.get(project_id), req.entries
+            )
+            _ephemeral_project_module_params[project_id] = merged
+        else:
+            _ephemeral_project_module_params.pop(project_id, None)
+
+        return _sanitize_for_json({
+            "project_id": project_id,
+            "module_params": merged,
+            "saved": True,
+            "persisted": persisted,
+        })
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to save project module parameters: {e}"
         ) from e
 
 
@@ -4181,6 +9190,7 @@ def workspace_demo_reset(project_id: int) -> Dict[str, Any]:
     reset_demo_project_state(project_id)
     for k in [k for k in _ephemeral_well_configs if k[0] == project_id]:
         _ephemeral_well_configs.pop(k, None)
+    _ephemeral_project_module_params.pop(project_id, None)
     cleared = invalidate_well_cache(project_id=project_id)
     return {
         "project_id": project_id,
@@ -4193,12 +9203,36 @@ def workspace_demo_reset(project_id: int) -> Dict[str, Any]:
 class WorkspaceCurveEditRequest(WorkspaceFilterBase):
     action: str = Field(
         "transform",
-        description="Action: 'transform', 'duplicate', 'rename', 'delete', or 'save_values'",
+        description="Action: 'transform', 'duplicate', 'rename', 'delete', 'splice', or 'save_values'",
     )
     curve: str = Field(..., description="Source curve mnemonic")
     target_curve: Optional[str] = Field(
         None,
         description="Target curve mnemonic (defaults to source curve for in-place transform)",
+    )
+    source_curves: Optional[List[str]] = Field(
+        None,
+        description="Ordered list of curve mnemonics to splice when action='splice'",
+    )
+    overlap_mode: Optional[str] = Field(
+        "blend",
+        description="Overlap resolution mode for 'splice': 'blend', 'splice_depth', 'keep_first', 'keep_last', or 'mean'",
+    )
+    splice_depth: Optional[float] = Field(
+        None,
+        description="Explicit splice tie-in depth (m) when overlap_mode='splice_depth'",
+    )
+    auto_level_overlap: bool = Field(
+        False,
+        description="Automatically shift secondary run to match primary run mean in overlap interval",
+    )
+    interpolate_gaps: bool = Field(
+        False,
+        description="Linearly interpolate small gaps between spliced runs",
+    )
+    max_gap_m: float = Field(
+        2.0,
+        description="Maximum gap width (m) to linearly interpolate when interpolate_gaps=True",
     )
     operation: Optional[str] = Field(
         None,
@@ -4335,7 +9369,12 @@ def workspace_curve_edit(
             _update_cached_well_column(project_id, well_name, "rename", src, dst)
             full_df = _get_merged_dataframe_sync(project_id, well_name)
             stats = (
-                {dst: _curve_summary_stats(full_df[dst])}
+                {
+                    dst: _curve_summary_stats(
+                        full_df[dst],
+                        full_df["DEPTH"] if "DEPTH" in full_df.columns else None,
+                    )
+                }
                 if dst in full_df.columns
                 else {}
             )
@@ -4376,9 +9415,11 @@ def workspace_curve_edit(
                 saved_rows = _save_curves_to_well(project_id, well_name, out_df)
             else:
                 _update_in_memory_well_cache(project_id, well_name, out_df)
-            stats_out = {dst: _curve_summary_stats(out_df[dst])}
+            stats_out = {dst: _curve_summary_stats(out_df[dst], out_df["DEPTH"])}
             if ori_name and ori_name in out_df.columns:
-                stats_out[ori_name] = _curve_summary_stats(out_df[ori_name])
+                stats_out[ori_name] = _curve_summary_stats(
+                    out_df[ori_name], out_df["DEPTH"]
+                )
             return {
                 "well_name": well_name,
                 "action": "save_values",
@@ -4393,7 +9434,130 @@ def workspace_curve_edit(
             }
 
         full_df = _get_merged_dataframe_sync(project_id, well_name)
-        if full_df.empty or src not in full_df.columns:
+        if full_df.empty:
+            raise ValueError(f"No data found in well '{well_name}'")
+
+        if act == "splice":
+            src_list = [
+                c.strip().upper()
+                for c in (req.source_curves or [src])
+                if c and c.strip()
+            ]
+            valid_srcs = [c for c in src_list if c in full_df.columns]
+            if len(valid_srcs) < 2:
+                raise ValueError(
+                    "At least two valid curves are required to splice runs."
+                )
+            if not dst or dst in protected:
+                raise ValueError("Valid target curve mnemonic is required for splice.")
+
+            depth_arr = pd.to_numeric(full_df["DEPTH"], errors="coerce").to_numpy(
+                dtype=float
+            )
+            acc = pd.to_numeric(full_df[valid_srcs[0]], errors="coerce").to_numpy(
+                dtype=float
+            ).copy()
+            ov_mode = (req.overlap_mode or "blend").strip().lower()
+
+            for next_col in valid_srcs[1:]:
+                nxt = (
+                    pd.to_numeric(full_df[next_col], errors="coerce")
+                    .to_numpy(dtype=float)
+                    .copy()
+                )
+                valid_a = np.isfinite(acc) & np.isfinite(depth_arr)
+                valid_b = np.isfinite(nxt) & np.isfinite(depth_arr)
+                overlap = valid_a & valid_b
+
+                if req.auto_level_overlap and np.any(overlap):
+                    bias_delta = float(np.mean(acc[overlap] - nxt[overlap]))
+                    nxt[valid_b] = nxt[valid_b] + bias_delta
+
+                only_b = (~valid_a) & valid_b
+                if ov_mode == "keep_first":
+                    acc[only_b] = nxt[only_b]
+                elif ov_mode == "keep_last":
+                    acc[valid_b] = nxt[valid_b]
+                elif ov_mode == "mean":
+                    acc[only_b] = nxt[only_b]
+                    acc[overlap] = 0.5 * (acc[overlap] + nxt[overlap])
+                elif ov_mode == "splice_depth":
+                    top_a = float(np.min(depth_arr[valid_a])) if np.any(valid_a) else 0.0
+                    top_b = float(np.min(depth_arr[valid_b])) if np.any(valid_b) else 0.0
+                    if req.splice_depth is not None and math.isfinite(float(req.splice_depth)):
+                        cutoff = float(req.splice_depth)
+                    elif np.any(overlap):
+                        cutoff = 0.5 * (
+                            float(np.min(depth_arr[overlap]))
+                            + float(np.max(depth_arr[overlap]))
+                        )
+                    else:
+                        cutoff = 0.5 * (top_a + top_b)
+                    upper_arr = acc if top_a <= top_b else nxt
+                    lower_arr = nxt if top_a <= top_b else acc
+                    u_valid = np.isfinite(upper_arr)
+                    l_valid = np.isfinite(lower_arr)
+                    combined = np.full_like(acc, np.nan)
+                    above = depth_arr <= cutoff
+                    below = ~above
+                    combined[above] = np.where(
+                        u_valid[above], upper_arr[above], lower_arr[above]
+                    )
+                    combined[below] = np.where(
+                        l_valid[below], lower_arr[below], upper_arr[below]
+                    )
+                    acc = combined
+                else:  # blend (linear feather across overlap)
+                    acc[only_b] = nxt[only_b]
+                    if np.any(overlap):
+                        ov_d = depth_arr[overlap]
+                        d_min = float(np.min(ov_d))
+                        d_max = float(np.max(ov_d))
+                        top_a = (
+                            float(np.min(depth_arr[valid_a]))
+                            if np.any(valid_a)
+                            else d_min
+                        )
+                        top_b = (
+                            float(np.min(depth_arr[valid_b]))
+                            if np.any(valid_b)
+                            else d_min
+                        )
+                        span = d_max - d_min
+                        if span > 1e-6:
+                            w = (ov_d - d_min) / span
+                            if top_a <= top_b:
+                                acc[overlap] = (1.0 - w) * acc[overlap] + w * nxt[overlap]
+                            else:
+                                acc[overlap] = w * acc[overlap] + (1.0 - w) * nxt[overlap]
+                        else:
+                            acc[overlap] = 0.5 * (acc[overlap] + nxt[overlap])
+
+            s_spliced = pd.Series(acc, index=full_df.index, dtype=float)
+            if req.interpolate_gaps:
+                s_spliced = s_spliced.interpolate(
+                    method="linear", limit=max(1, int(round(float(req.max_gap_m) / 0.1524))), limit_area="inside"
+                )
+
+            out_df = pd.DataFrame({"DEPTH": full_df["DEPTH"], dst: s_spliced})
+            saved_rows = 0
+            if req.save:
+                saved_rows = _save_curves_to_well(project_id, well_name, out_df)
+            else:
+                _update_in_memory_well_cache(project_id, well_name, out_df)
+
+            return {
+                "well_name": well_name,
+                "action": "splice",
+                "source_curves": valid_srcs,
+                "target_curve": dst,
+                "saved": req.save,
+                "saved_rows": saved_rows,
+                "stats": {dst: _curve_summary_stats(out_df[dst], out_df["DEPTH"])},
+                **dataframe_to_columnar(out_df),
+            }
+
+        if src not in full_df.columns:
             raise ValueError(f"Curve '{src}' not found in well '{well_name}'")
 
         if act == "duplicate":
@@ -4417,7 +9581,7 @@ def workspace_curve_edit(
                 "target_curve": dst,
                 "saved": req.save,
                 "saved_rows": saved_rows,
-                "stats": {dst: _curve_summary_stats(out_df[dst])},
+                "stats": {dst: _curve_summary_stats(out_df[dst], out_df["DEPTH"])},
                 **dataframe_to_columnar(out_df),
             }
 
@@ -4485,7 +9649,7 @@ def workspace_curve_edit(
             "target_curve": dst,
             "saved": req.save,
             "saved_rows": saved_rows,
-            "stats": {dst: _curve_summary_stats(s)},
+            "stats": {dst: _curve_summary_stats(s, df["DEPTH"])},
             **dataframe_to_columnar(out_df),
         }
     except ValueError as e:
@@ -4594,7 +9758,9 @@ def workspace_save_multi_well_computed_curves(
     try:
         n_rows = len(req.depths)
         if n_rows == 0 or len(req.well_names) != n_rows or not req.curves:
-            raise ValueError("No valid multi-well computed curve values provided to save.")
+            raise ValueError(
+                "No valid multi-well computed curve values provided to save."
+            )
 
         cols: Dict[str, Any] = {
             "WELL_NAME": [str(w).strip() for w in req.well_names],
@@ -4623,7 +9789,9 @@ def workspace_save_multi_well_computed_curves(
                 how="all", subset=saved_curve_names
             )
             if not well_df.empty:
-                _save_curves_to_well(project_id, str(wn), well_df.reset_index(drop=True))
+                _save_curves_to_well(
+                    project_id, str(wn), well_df.reset_index(drop=True)
+                )
                 saved_wells += 1
 
         return {
@@ -4638,4 +9806,1372 @@ def workspace_save_multi_well_computed_curves(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to save multi-well computed curves: {e}"
+        ) from e
+
+
+CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
+    "qaqc": (
+        "BADHOLE",
+        "BAD_HOLE",
+        "BAD_HOLE_FLAG",
+        "BS",
+        "DCALI",
+        "GR_CORR",
+        "NPHI_CORR",
+        "RHOB_CORR",
+        "RT_CORR",
+        "GR_NORM",
+        "NPHI_NORM",
+        "NPHI_HC",
+        "RHOB_HC",
+        "HC_FLAG",
+        "RHOB_DEN_CORR",
+        "DEN_CORR_FLAG",
+    ),
+    "litho_poro": (
+        "VSAND",
+        "VSILT",
+        "VCLAY",
+        "VSHALE",
+        "VCALC",
+        "VDOLO",
+        "VKAOL",
+        "VFELD",
+        "VANHY",
+        "VGYPS",
+        "VHALI",
+        "VPYRI",
+        "VCOAL",
+        "COAL_FLAG",
+        "VSH_GR",
+        "VSH_DN",
+        "PHIT",
+        "PHIE",
+        "PHID",
+        "PHIT_SH",
+        "VSH_LAM",
+        "VSH_DIS",
+        "PHIT_SAND",
+        "RSAND_TS",
+        "RT_MOD",
+        "PHIT_P10",
+        "PHIT_P50",
+        "PHIT_P90",
+        "PHIE_P10",
+        "PHIE_P50",
+        "PHIE_P90",
+        "VCLAY_P10",
+        "VCLAY_P50",
+        "VCLAY_P90",
+    ),
+    "perm": (
+        "PERM",
+        "PERM_TRANS",
+        "ROCK_FLAG",
+        "FZI",
+        "R35",
+        "RFN",
+        "ROCK_FLAG_ML",
+        "VDL",
+        "PHI_SEC",
+        "PERM_P10",
+        "PERM_P50",
+        "PERM_P90",
+    ),
+    "saturation": (
+        "SWT",
+        "SWE",
+        "SWT_ARCHIE",
+        "SWT_WAXMAN",
+        "BVW",
+        "TEMP_GRAD",
+        "RW",
+        "B",
+        "QVN",
+        "M_STAR",
+        "VCL_OVER_PHI",
+        "CWA",
+        "SHF",
+        "SW_SHF",
+        "SWIRR",
+        "SW_P10",
+        "SW_P50",
+        "SW_P90",
+    ),
+    "ressum": (
+        "RES_FLAG",
+        "PAY_FLAG",
+        "PAY_FLAGS",
+        "PHIT_BLK",
+        "PHIE_BLK",
+        "VCLAY_BLK",
+        "PERM_BLK",
+        "SWT_BLK",
+        "BVHC_P10",
+        "BVHC_P50",
+        "BVHC_P90",
+    ),
+}
+
+ALL_CALCULATED_CURVE_MNEMONICS: Tuple[str, ...] = tuple(
+    dict.fromkeys(
+        mnem
+        for grp_cols in CALCULATED_CURVES_BY_GROUP.values()
+        for mnem in grp_cols
+    )
+)
+
+
+class WorkspaceClearCalculatedRequest(BaseModel):
+    """Clear calculated/evaluated curves for a well either top-to-bottom or by formation/depth interval."""
+
+    scope: str = Field(
+        default="full",
+        description="Clear scope: 'full' (top to bottom across entire well), 'formation' (selected zones), or 'filtered' (zones and/or depth interval)",
+    )
+    groups: Optional[List[str]] = Field(
+        default=None,
+        description="Optional subset of calculated curve groups to clear: 'qaqc', 'litho_poro', 'perm', 'saturation', 'ressum'. Defaults to all groups.",
+    )
+    curves: Optional[List[str]] = Field(
+        default=None,
+        description="Optional explicit list of curve mnemonics to clear. Overrides `groups` if provided.",
+    )
+    zones: Optional[List[str]] = Field(
+        default=None,
+        description="Formation/zone names to clear when scope is 'formation' or 'filtered'.",
+    )
+    min_depth: Optional[float] = Field(
+        default=None,
+        description="Minimum depth (m) to clear when clearing a depth interval.",
+    )
+    max_depth: Optional[float] = Field(
+        default=None,
+        description="Maximum depth (m) to clear when clearing a depth interval.",
+    )
+    depths: Optional[List[float]] = Field(
+        default=None,
+        description="Optional explicit depth values to clear (nullify) for partial-well clear.",
+    )
+    save: bool = Field(
+        default=True,
+        description="Persist the cleared state to the database (and in-memory cache).",
+    )
+
+
+@router.post(
+    "/wells/{well_name}/clear_calculated",
+    summary="Clear calculated curves top-to-bottom or for selected formations/depth intervals",
+)
+def workspace_clear_calculated_curves(
+    project_id: int,
+    well_name: str,
+    req: WorkspaceClearCalculatedRequest,
+) -> Dict[str, Any]:
+    """Clear all or selected calculated petrophysical curves either top-to-bottom (full well) or within specific formations/depth intervals."""
+    try:
+        import time
+        from sqlalchemy import bindparam, select, text
+        from quick_pp.database import models as db_models
+
+        protected = {"DEPTH", "DEPT", "WELL_NAME", "ZONES"}
+        if req.curves:
+            target_candidates = [
+                str(c).strip().upper()
+                for c in req.curves
+                if str(c).strip() and str(c).strip().upper() not in protected
+            ]
+        elif req.groups:
+            target_candidates = []
+            for g in req.groups:
+                g_key = str(g).strip().lower().replace("-", "_")
+                for col in CALCULATED_CURVES_BY_GROUP.get(g_key, ()):
+                    if col not in target_candidates:
+                        target_candidates.append(col)
+        else:
+            target_candidates = list(ALL_CALCULATED_CURVE_MNEMONICS)
+
+        if not target_candidates:
+            return {
+                "well_name": well_name,
+                "scope": req.scope,
+                "cleared_curves": [],
+                "dropped_curves": [],
+                "cleared_rows": 0,
+                "saved": req.save,
+                "stats": {},
+            }
+
+        full_df = _get_merged_dataframe_sync(project_id, well_name)
+        present_targets = (
+            [c for c in target_candidates if c in full_df.columns]
+            if not full_df.empty
+            else list(target_candidates)
+        )
+
+        scope_norm = (req.scope or "full").strip().lower()
+        valid_zones = (
+            [str(z).strip() for z in (req.zones or []) if str(z).strip()]
+            if req.zones
+            else []
+        )
+        has_partial_filter = (
+            scope_norm in ("formation", "filtered", "depth_range")
+            and (
+                bool(valid_zones)
+                or req.min_depth is not None
+                or req.max_depth is not None
+                or bool(req.depths)
+            )
+        )
+
+        # Case 1: Full-well (Top to Bottom) clear -> drop calculated curve columns completely
+        if not has_partial_filter:
+            for key, (_, cdf) in list(_merged_data_cache.items()):
+                if key.startswith(f"{project_id}_{well_name}_"):
+                    updated = cdf.drop(columns=target_candidates, errors="ignore")
+                    _merged_data_cache[key] = (time.time(), updated)
+
+            eph_proj = _ephemeral_wells.get(project_id, {})
+            if well_name in eph_proj:
+                eph_entry = eph_proj[well_name]
+                if isinstance(eph_entry, pd.DataFrame):
+                    eph_proj[well_name] = eph_entry.drop(
+                        columns=target_candidates, errors="ignore"
+                    )
+                elif isinstance(eph_entry, dict) and isinstance(
+                    eph_entry.get("data"), pd.DataFrame
+                ):
+                    eph_entry["data"] = eph_entry["data"].drop(
+                        columns=target_candidates, errors="ignore"
+                    )
+
+            if req.save and not is_demo_mode():
+                db_name = resolve_db_well_name(project_id, well_name)
+                with get_db() as session:
+                    well_orm = session.scalar(
+                        select(db_models.Well).filter_by(
+                            project_id=project_id, name=db_name
+                        )
+                    )
+                    if well_orm:
+                        cids = [
+                            c.curve_id
+                            for c in well_orm.curves
+                            if str(c.mnemonic).upper() in set(target_candidates)
+                            and c.curve_id is not None
+                        ]
+                        if cids:
+                            session.execute(
+                                text(
+                                    "DELETE FROM curve_data WHERE curve_id IN :cids"
+                                ).bindparams(bindparam("cids", expanding=True)),
+                                {"cids": cids},
+                            )
+                            session.execute(
+                                text(
+                                    "DELETE FROM curves WHERE curve_id IN :cids"
+                                ).bindparams(bindparam("cids", expanding=True)),
+                                {"cids": cids},
+                            )
+                            session.flush()
+                invalidate_well_cache(project_id=project_id, well_name=well_name)
+
+            return {
+                "well_name": well_name,
+                "scope": "full",
+                "cleared_curves": present_targets,
+                "dropped_curves": present_targets,
+                "cleared_rows": int(len(full_df)) if not full_df.empty else 0,
+                "saved": req.save,
+                "stats": {},
+            }
+
+        # Case 2: Partial clear (by formation/zone, depth interval, or explicit depths)
+        if full_df.empty or "DEPTH" not in full_df.columns:
+            raise ValueError(f"No depth data found for well '{well_name}'")
+
+        depth_s = pd.to_numeric(full_df["DEPTH"], errors="coerce")
+        clear_mask = pd.Series(True, index=full_df.index, dtype=bool) & depth_s.notna()
+
+        if req.depths:
+            req_d_arr = np.round(
+                pd.to_numeric(pd.Series(req.depths), errors="coerce")
+                .dropna()
+                .to_numpy(dtype=float),
+                4,
+            )
+            full_d_round = np.round(depth_s.fillna(-999999.0).to_numpy(dtype=float), 4)
+            clear_mask = clear_mask & pd.Series(
+                np.isin(full_d_round, req_d_arr), index=full_df.index
+            )
+        else:
+            if req.min_depth is not None:
+                clear_mask = clear_mask & (depth_s >= float(req.min_depth))
+            if req.max_depth is not None:
+                clear_mask = clear_mask & (depth_s <= float(req.max_depth))
+            if valid_zones:
+                allowed_z = {z.upper() for z in valid_zones}
+                zone_col_s = (
+                    full_df["ZONES"].astype(str).str.strip().str.upper()
+                    if "ZONES" in full_df.columns
+                    else pd.Series("", index=full_df.index, dtype=str)
+                )
+                zone_match = zone_col_s.isin(allowed_z)
+
+                # Also check formation_tops intervals in case ZONES column was not pre-filled
+                if not zone_match.any():
+                    try:
+                        db_name = resolve_db_well_name(project_id, well_name)
+                        with get_db() as session:
+                            proj = db_objects.Project.load(
+                                session, project_id=project_id
+                            )
+                            well_obj = proj.get_well(db_name)
+                            tops_df = well_obj.get_formation_tops()
+                            if tops_df is not None and not tops_df.empty:
+                                tops_sorted = tops_df.sort_values("depth").reset_index(
+                                    drop=True
+                                )
+                                for idx_t, trow in tops_sorted.iterrows():
+                                    tname = str(trow.get("name") or "").strip().upper()
+                                    if tname in allowed_z:
+                                        top_d = float(trow["depth"])
+                                        bot_d = (
+                                            float(tops_sorted.iloc[idx_t + 1]["depth"])
+                                            if idx_t + 1 < len(tops_sorted)
+                                            else float(depth_s.max()) + 1.0
+                                        )
+                                        if idx_t + 1 < len(tops_sorted):
+                                            zone_match = zone_match | (
+                                                (depth_s >= top_d) & (depth_s < bot_d)
+                                            )
+                                        else:
+                                            zone_match = zone_match | (
+                                                (depth_s >= top_d) & (depth_s <= bot_d)
+                                            )
+                    except Exception:
+                        pass
+                clear_mask = clear_mask & zone_match
+
+        cleared_row_count = int(clear_mask.sum())
+        if cleared_row_count == 0:
+            return {
+                "well_name": well_name,
+                "scope": scope_norm,
+                "cleared_curves": [],
+                "dropped_curves": [],
+                "cleared_rows": 0,
+                "saved": req.save,
+                "stats": {},
+            }
+
+        cleared_depths_list = [
+            round(float(d), 4) for d in depth_s.loc[clear_mask].tolist()
+        ]
+        dropped_curves: List[str] = []
+        remaining_stats: Dict[str, Any] = {}
+
+        # Update in-memory DataFrame
+        updated_full = full_df.copy()
+        for col in present_targets:
+            col_s = pd.to_numeric(updated_full[col], errors="coerce")
+            col_s.loc[clear_mask] = np.nan
+            if col_s.notna().any():
+                updated_full[col] = col_s
+                remaining_stats[col] = _curve_summary_stats(col_s, depth_s)
+            else:
+                updated_full = updated_full.drop(columns=[col], errors="ignore")
+                dropped_curves.append(col)
+
+        for key in list(_merged_data_cache.keys()):
+            if key.startswith(f"{project_id}_{well_name}_"):
+                _merged_data_cache[key] = (time.time(), updated_full.copy())
+
+        eph_proj = _ephemeral_wells.get(project_id, {})
+        if well_name in eph_proj:
+            eph_entry = eph_proj[well_name]
+            if isinstance(eph_entry, pd.DataFrame):
+                eph_proj[well_name] = updated_full.copy()
+            elif isinstance(eph_entry, dict) and isinstance(
+                eph_entry.get("data"), pd.DataFrame
+            ):
+                eph_entry["data"] = updated_full.copy()
+        elif is_demo_mode():
+            _ephemeral_wells.setdefault(project_id, {})[well_name] = updated_full.copy()
+
+        if req.save and not is_demo_mode():
+            db_name = resolve_db_well_name(project_id, well_name)
+            with get_db() as session:
+                well_orm = session.scalar(
+                    select(db_models.Well).filter_by(
+                        project_id=project_id, name=db_name
+                    )
+                )
+                if well_orm:
+                    target_set = set(present_targets)
+                    dropped_set = set(dropped_curves)
+                    matching_curves = [
+                        c
+                        for c in well_orm.curves
+                        if str(c.mnemonic).upper() in target_set
+                        and c.curve_id is not None
+                    ]
+                    drop_cids = [
+                        c.curve_id
+                        for c in matching_curves
+                        if str(c.mnemonic).upper() in dropped_set
+                    ]
+                    partial_cids = [
+                        c.curve_id
+                        for c in matching_curves
+                        if str(c.mnemonic).upper() not in dropped_set
+                    ]
+                    if drop_cids:
+                        session.execute(
+                            text(
+                                "DELETE FROM curve_data WHERE curve_id IN :cids"
+                            ).bindparams(bindparam("cids", expanding=True)),
+                            {"cids": drop_cids},
+                        )
+                        session.execute(
+                            text(
+                                "DELETE FROM curves WHERE curve_id IN :cids"
+                            ).bindparams(bindparam("cids", expanding=True)),
+                            {"cids": drop_cids},
+                        )
+                    if partial_cids and cleared_depths_list:
+                        min_d = float(min(cleared_depths_list)) - 0.01
+                        max_d = float(max(cleared_depths_list)) + 0.01
+                        cleared_depths_set = set(cleared_depths_list)
+                        candidate_rows = session.execute(
+                            text(
+                                "SELECT curve_data_id, depth FROM curve_data "
+                                "WHERE curve_id IN :cids AND depth >= :min_d AND depth <= :max_d"
+                            ).bindparams(bindparam("cids", expanding=True)),
+                            {"cids": partial_cids, "min_d": min_d, "max_d": max_d},
+                        ).fetchall()
+                        cd_ids_to_delete = [
+                            int(row[0])
+                            for row in candidate_rows
+                            if row[1] is not None
+                            and round(float(row[1]), 4) in cleared_depths_set
+                        ]
+                        if cd_ids_to_delete:
+                            del_stmt = text(
+                                "DELETE FROM curve_data WHERE curve_data_id IN :cd_ids"
+                            ).bindparams(bindparam("cd_ids", expanding=True))
+                            chunk_sz = 900
+                            for i in range(0, len(cd_ids_to_delete), chunk_sz):
+                                id_chunk = cd_ids_to_delete[i : i + chunk_sz]
+                                session.execute(del_stmt, {"cd_ids": id_chunk})
+                    session.flush()
+            invalidate_well_cache(project_id=project_id, well_name=well_name)
+            _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (
+                time.time(),
+                updated_full.copy(),
+            )
+
+        return {
+            "well_name": well_name,
+            "scope": scope_norm,
+            "zones": valid_zones,
+            "cleared_curves": present_targets,
+            "dropped_curves": dropped_curves,
+            "cleared_rows": cleared_row_count,
+            "saved": req.save,
+            "stats": remaining_stats,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to clear calculated curves: {e}"
+        ) from e
+
+
+
+
+# ---------------------------------------------------------------------------
+# Multi-Well Swirr Correlation (swirr-corr) Endpoints
+# ---------------------------------------------------------------------------
+
+
+class WorkspaceSwirrFitRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(None)
+    extraction_mode: Optional[str] = Field(None)
+    extractionMode: Optional[str] = Field(None)
+    reference_pc_psi: Optional[float] = Field(None)
+    referencePcPsi: Optional[float] = Field(None)
+    equation_type: Optional[str] = Field(None)
+    equationType: Optional[str] = Field(None)
+    fit_scope: Optional[str] = Field(None)
+    fitScope: Optional[str] = Field(None)
+    swirr_min: Optional[float] = Field(None)
+    swirrMin: Optional[float] = Field(None)
+    swirr_max: Optional[float] = Field(None)
+    swirrMax: Optional[float] = Field(None)
+    excluded_plug_ids: Optional[List[str]] = Field(None)
+    excludedPlugIds: Optional[List[str]] = Field(None)
+    rules: Optional[Dict[str, Dict[str, Any]]] = Field(None)
+    auto_fit: bool = Field(True)
+    drt_method: str = Field("fzi")
+    cutoffs: List[float] = Field(default_factory=lambda: [0.5, 1.2, 2.5, 5.0])
+    ift: float = Field(30.0)
+    theta: float = Field(30.0)
+
+
+class WorkspaceSwirrApplyRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(None)
+    config: Dict[str, Any] = Field(default_factory=dict)
+    phie_col: str = Field("PHIT")
+    perm_col: str = Field("PERM_TRANS")
+    rt_col: str = Field("ROCK_FLAG")
+    drt_method: str = Field("fzi")
+    cutoffs: List[float] = Field(default_factory=lambda: [0.5, 1.2, 2.5, 5.0])
+    save: bool = Field(False)
+
+
+def _extract_plug_swirr_at_ref_pc(
+    pc_vals: np.ndarray,
+    sw_vals: np.ndarray,
+    extraction_mode: str,
+    ref_pc_psi: float,
+) -> Tuple[float, bool, float, float]:
+    """Extract reference Swirr for a single SCAL plug at ref_pc_psi.
+
+    Returns:
+        Tuple of (extracted_swirr, valid_pc, max_pc, sw_at_max_pc)
+    """
+    order = np.argsort(pc_vals)
+    pc_s = pc_vals[order]
+    sw_s = sw_vals[order]
+    max_pc = float(np.nanmax(pc_s))
+    idx_max = int(np.nanargmax(pc_s))
+    sw_min = float(np.nanmin(sw_s))
+    sw_at_max = float(min(sw_s[idx_max], sw_min))
+
+    mode = str(extraction_mode or "cutoff_pc").strip().lower()
+    ref_pc = max(float(ref_pc_psi or 50.0), 0.1)
+
+    if mode == "interp_pc":
+        valid_pc = len(pc_s) >= 2
+        if len(pc_s) >= 2:
+            ln_pc = np.log(np.maximum(pc_s, 1e-4))
+            ln_sw = np.log(np.clip(sw_s, 1e-3, 0.999))
+            if float(np.std(ln_pc)) > 1e-6:
+                slope, intercept = np.polyfit(ln_pc, ln_sw, 1)
+                # Ensure physically non-increasing Sw with increasing Pc
+                slope = min(float(slope), -0.01)
+                sw_interp = float(np.exp(intercept + slope * math.log(ref_pc)))
+                extracted = float(np.clip(sw_interp, 0.01, 0.99))
+            else:
+                extracted = float(np.clip(sw_min, 0.01, 0.99))
+        else:
+            extracted = float(np.clip(sw_min, 0.01, 0.99))
+        return extracted, valid_pc, max_pc, sw_at_max
+
+    # Default Mode A: cutoff_pc
+    valid_pc = bool(max_pc >= ref_pc)
+    extracted = float(np.clip(sw_min, 0.01, 0.99))
+    return extracted, valid_pc, max_pc, sw_at_max
+
+
+def _extract_project_scal_plugs_for_swirr(
+    project_id: int,
+    well_names: Optional[List[str]] = None,
+    drt_method: str = "fzi",
+    cutoffs: Optional[List[float]] = None,
+    ift: float = 30.0,
+    theta: float = 30.0,
+) -> List[Dict[str, Any]]:
+    """Extract plug-level SCAL drainage curves and matched CPORE/CPERM/ROCK_FLAG across project wells."""
+    cutoffs_list = sorted(float(c) for c in (cutoffs or [0.5, 1.2, 2.5, 5.0]))
+    fzi_data = _filter_fzi_data_by_wells(
+        _compute_fzi_data_sync(project_id), well_names
+    )
+    phit_arr = np.asarray(fzi_data["phit"], dtype=float)
+    perm_arr = np.asarray(fzi_data["perm"], dtype=float)
+    rock_flags = fzi_data["rock_flags"]
+    fzi_wells = fzi_data["well_names"]
+
+    if not any(rf is not None for rf in rock_flags) and len(phit_arr) > 0:
+        valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
+        ind_arr = np.full_like(phit_arr, np.nan, dtype=float)
+        ind_vals, hib, _ = _eval_drt_indicator_scalar_or_array(
+            phit_arr[valid_mask], perm_arr[valid_mask], drt_method
+        )
+        ind_arr[valid_mask] = ind_vals
+        rf_arr = rock_typing(ind_arr, cut_offs=cutoffs_list, higher_is_better=hib)
+        rock_flags = [
+            int(v) if not np.isnan(v) else None for v in np.asarray(rf_arr)
+        ]
+
+    valid_flags = sorted({int(rf) for rf in rock_flags if rf is not None})
+    highest_flag = max(valid_flags) if len(valid_flags) > 1 else None
+    reservoir_flags = [
+        rf for rf in valid_flags if highest_flag is None or rf < highest_flag
+    ] or ([1, 2, 3] if not valid_flags else valid_flags)
+
+    plug_records: List[Dict[str, Any]] = []
+    with get_db() as session:
+        proj = db_objects.Project.load(session, project_id=project_id)
+        for wn in proj.get_well_names():
+            if well_names and wn not in well_names:
+                continue
+            try:
+                anc = proj.get_well_ancillary_data(wn)
+            except Exception:
+                continue
+            core_data = (anc or {}).get("core_data") or {}
+            well_df_cache: Optional[pd.DataFrame] = None
+            for sname, sample in core_data.items():
+                pc_df = sample.get("pc")
+                if pc_df is None or pc_df.empty:
+                    continue
+                s_depth = float(sample.get("depth") or 0.0)
+                meas = sample.get("measurements")
+                cperm = None
+                cpore = None
+                s_raw_depth = s_depth
+                if (
+                    isinstance(meas, pd.DataFrame)
+                    and not meas.empty
+                    and "property" in meas.columns
+                ):
+                    perm_r = meas[
+                        meas["property"]
+                        .astype(str)
+                        .str.upper()
+                        .isin(["CPERM", "PERM", "PERMEABILITY"])
+                    ]
+                    phit_r = meas[
+                        meas["property"]
+                        .astype(str)
+                        .str.upper()
+                        .isin(["CPORE", "POR", "POROSITY"])
+                    ]
+                    raw_d_r = meas[
+                        meas["property"]
+                        .astype(str)
+                        .str.upper()
+                        .isin(["RAW_DEPTH", "CORE_DEPTH_RAW"])
+                    ]
+                    if not perm_r.empty and pd.notna(perm_r["value"].iloc[0]):
+                        cperm = float(perm_r["value"].iloc[0])
+                    if not phit_r.empty and pd.notna(phit_r["value"].iloc[0]):
+                        cpore = float(phit_r["value"].iloc[0])
+                    if not raw_d_r.empty and pd.notna(raw_d_r["value"].iloc[0]):
+                        s_raw_depth = float(raw_d_r["value"].iloc[0])
+
+                has_core_perm = cperm is not None
+
+                if cpore is None or cperm is None:
+                    import re as _re
+
+                    def _norm_stem(val: Any) -> str:
+                        base = str(val or "").split("@")[0].strip().upper()
+                        base = _re.sub(r"^(PLUG|SAMPLE|RCA|SCAL)[\s_\-]*", "", base)
+                        m_s = _re.match(r"^(\d+)[A-Z]$", base)
+                        return m_s.group(1) if m_s else base
+
+                    target_stem = _norm_stem(sname)
+                    best_poro_cand: Optional[Tuple[float, float]] = None
+                    best_perm_cand: Optional[Tuple[float, float]] = None
+                    for other_name, other_s in core_data.items():
+                        if other_name == sname:
+                            continue
+                        o_meas = other_s.get("measurements")
+                        if (
+                            not isinstance(o_meas, pd.DataFrame)
+                            or o_meas.empty
+                            or "property" not in o_meas.columns
+                        ):
+                            continue
+                        o_depth = float(other_s.get("depth") or 0.0)
+                        o_raw_depth = o_depth
+                        o_raw_r = o_meas[
+                            o_meas["property"]
+                            .astype(str)
+                            .str.upper()
+                            .isin(["RAW_DEPTH", "CORE_DEPTH_RAW"])
+                        ]
+                        if not o_raw_r.empty and pd.notna(o_raw_r["value"].iloc[0]):
+                            o_raw_depth = float(o_raw_r["value"].iloc[0])
+                        dist = min(
+                            abs(o_depth - s_depth) if s_depth > 0 and o_depth > 0 else 999.0,
+                            abs(o_raw_depth - s_depth) if s_depth > 0 and o_raw_depth > 0 else 999.0,
+                            abs(o_raw_depth - s_raw_depth) if s_raw_depth > 0 and o_raw_depth > 0 else 999.0,
+                            abs(o_depth - s_raw_depth) if s_raw_depth > 0 and o_depth > 0 else 999.0,
+                        )
+                        same_stem = bool(target_stem and _norm_stem(other_name) == target_stem)
+                        if not (dist <= 0.50 or (same_stem and dist <= 2.50)):
+                            continue
+                        score = dist - (1.0 if same_stem else 0.0)
+                        if cperm is None:
+                            pr = o_meas[
+                                o_meas["property"]
+                                .astype(str)
+                                .str.upper()
+                                .isin(["CPERM", "PERM", "PERMEABILITY"])
+                            ]
+                            if not pr.empty and pd.notna(pr["value"].iloc[0]):
+                                kv = float(pr["value"].iloc[0])
+                                if kv > 0 and (best_perm_cand is None or score < best_perm_cand[0]):
+                                    best_perm_cand = (score, kv)
+                        if cpore is None:
+                            phr = o_meas[
+                                o_meas["property"]
+                                .astype(str)
+                                .str.upper()
+                                .isin(["CPORE", "POR", "POROSITY"])
+                            ]
+                            if not phr.empty and pd.notna(phr["value"].iloc[0]):
+                                pv = float(phr["value"].iloc[0])
+                                if pv > 0 and (best_poro_cand is None or score < best_poro_cand[0]):
+                                    best_poro_cand = (score, pv)
+                    if cpore is None and best_poro_cand is not None:
+                        cpore = best_poro_cand[1]
+                    if cperm is None and best_perm_cand is not None:
+                        cperm = best_perm_cand[1]
+                        has_core_perm = True
+
+                near_rock_flag: Optional[int] = None
+                if s_depth > 0:
+                    try:
+                        if well_df_cache is None:
+                            well_df_cache = _get_filtered_well_df(project_id, wn)
+                        if (
+                            well_df_cache is not None
+                            and not well_df_cache.empty
+                            and "DEPTH" in well_df_cache.columns
+                        ):
+                            depth_diff = (well_df_cache["DEPTH"] - s_depth).abs()
+                            idx_near = depth_diff.idxmin()
+                            near_row = well_df_cache.loc[idx_near]
+                            for rf_col in ("ROCK_FLAG", "ROCK_FLAG_ML"):
+                                if rf_col in near_row and pd.notna(near_row[rf_col]):
+                                    rf_cand = int(float(near_row[rf_col]))
+                                    if rf_cand >= 1:
+                                        near_rock_flag = rf_cand
+                                        break
+                            win_df = well_df_cache.loc[depth_diff <= 0.50]
+                            if cpore is None and not win_df.empty and "CPORE" in win_df.columns:
+                                valid_cp = pd.to_numeric(win_df["CPORE"], errors="coerce")
+                                valid_cp = valid_cp[valid_cp > 0]
+                                if not valid_cp.empty:
+                                    cp_idx = (well_df_cache.loc[valid_cp.index, "DEPTH"] - s_depth).abs().idxmin()
+                                    cpore = float(valid_cp.loc[cp_idx])
+                            if cperm is None and not win_df.empty and "CPERM" in win_df.columns:
+                                valid_ck = pd.to_numeric(win_df["CPERM"], errors="coerce")
+                                valid_ck = valid_ck[valid_ck > 0]
+                                if not valid_ck.empty:
+                                    ck_idx = (well_df_cache.loc[valid_ck.index, "DEPTH"] - s_depth).abs().idxmin()
+                                    cperm = float(valid_ck.loc[ck_idx])
+                                    has_core_perm = True
+                            if cpore is None:
+                                for pcol in ("CPORE", "PHIT", "PHIE"):
+                                    if pcol in near_row and pd.notna(near_row[pcol]) and float(near_row[pcol]) > 0:
+                                        cpore = float(near_row[pcol])
+                                        break
+                            if cperm is None:
+                                for kcol in ("CPERM", "PERM_TRANS", "PERM", "K"):
+                                    if kcol in near_row and pd.notna(near_row[kcol]) and float(near_row[kcol]) > 0:
+                                        cperm = float(near_row[kcol])
+                                        break
+                    except Exception:
+                        pass
+
+                if cpore is None:
+                    cpore = 0.18
+                elif cpore > 1.0:
+                    cpore = cpore / 100.0
+                if cperm is None:
+                    cperm = 50.0
+                if not (0 < cpore < 1 and cperm > 0):
+                    continue
+
+                ind_val_plug, hib_plug, _ = _eval_drt_indicator_scalar_or_array(
+                    cpore, cperm, drt_method
+                )
+                rf_val = int(
+                    rock_typing(
+                        ind_val_plug, cutoffs_list, higher_is_better=hib_plug
+                    ).item()
+                )
+                if not has_core_perm and near_rock_flag is not None:
+                    rf_val = near_rock_flag
+
+                pc_col = next(
+                    (c for c in pc_df.columns if c.upper() in ("PRESSURE", "PC", "PC_RES")),
+                    None,
+                )
+                sw_col = next(
+                    (c for c in pc_df.columns if c.upper() in ("SATURATION", "SW", "SWN")),
+                    None,
+                )
+                if not pc_col or not sw_col:
+                    continue
+                sub_pc = pc_df[[pc_col, sw_col]].dropna()
+                if sub_pc.empty:
+                    continue
+                pc_vals = pd.to_numeric(sub_pc[pc_col], errors="coerce").to_numpy(dtype=float)
+                sw_vals = pd.to_numeric(sub_pc[sw_col], errors="coerce").to_numpy(dtype=float)
+                valid_pc_mask = (
+                    np.isfinite(pc_vals)
+                    & np.isfinite(sw_vals)
+                    & (pc_vals > 0)
+                    & (sw_vals > 0)
+                )
+                pc_vals = pc_vals[valid_pc_mask]
+                sw_vals = sw_vals[valid_pc_mask]
+                if len(pc_vals) < 1:
+                    continue
+                if np.nanmax(sw_vals) > 1.5:
+                    sw_vals = sw_vals / 100.0
+                sw_vals = np.clip(sw_vals, 0.01, 1.0)
+                if np.nanmax(pc_vals) > 200.0:
+                    res_num = max(ift * abs(math.cos(math.radians(theta))), 1.0)
+                    lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
+                    pc_vals = pc_vals * (res_num / lab_den)
+
+                order = np.argsort(pc_vals)
+                pc_sorted = [round(float(x), 4) for x in pc_vals[order]]
+                sw_sorted = [round(float(x), 4) for x in sw_vals[order]]
+
+                plug_records.append(
+                    {
+                        "plug_id": f"{wn}:{sname}",
+                        "well": str(wn),
+                        "sample": str(sname),
+                        "depth": round(float(s_depth), 2),
+                        "rt": int(rf_val),
+                        "cpore": round(float(cpore), 4),
+                        "cperm": round(float(cperm), 4),
+                        "pc_curve": pc_sorted,
+                        "sw_curve": sw_sorted,
+                    }
+                )
+
+    # Synthesize representative SCAL plugs for reservoir rock types if project has < 3 plugs
+    rf_arr_full = np.array(
+        [int(r) if r is not None else -1 for r in rock_flags], dtype=int
+    )
+    default_well = fzi_wells[0] if fzi_wells else "Project"
+    if len(plug_records) < 3:
+        for rf_int in reservoir_flags:
+            mask_rf = (
+                (rf_arr_full == rf_int)
+                & np.isfinite(phit_arr)
+                & np.isfinite(perm_arr)
+                & (phit_arr > 0)
+                & (perm_arr > 0)
+            )
+            p_med = (
+                float(np.nanmedian(phit_arr[mask_rf]))
+                if np.any(mask_rf)
+                else max(0.24 - 0.04 * (rf_int - 1), 0.08)
+            )
+            k_med = (
+                float(np.nanmedian(perm_arr[mask_rf]))
+                if np.any(mask_rf)
+                else max(250.0 / (4.0 ** (rf_int - 1)), 1.0)
+            )
+            for p_idx, mult in enumerate((0.75, 1.0, 1.30)):
+                p_plug = float(np.clip(p_med * (0.92 + 0.08 * p_idx), 0.05, 0.36))
+                k_plug = float(max(k_med * mult, 0.05))
+                rqi_ratio = math.sqrt(k_plug / p_plug)
+                swirr_true = float(
+                    np.clip(0.28 * (rqi_ratio**-0.32) * (1.0 + 0.04 * (p_idx - 1)), 0.04, 0.65)
+                )
+                pc_grid = [2.0, 5.0, 12.0, 25.0, 45.0, 75.0, 120.0]
+                sw_grid = [
+                    round(
+                        float(
+                            np.clip(
+                                swirr_true + (1.0 - swirr_true) * ((pc_v / 1.5) ** -0.42),
+                                swirr_true,
+                                0.99,
+                            )
+                        ),
+                        4,
+                    )
+                    for pc_v in pc_grid
+                ]
+                sname_syn = f"SYN_RT{rf_int}_{p_idx + 1}"
+                plug_records.append(
+                    {
+                        "plug_id": f"{default_well}:{sname_syn}",
+                        "well": str(default_well),
+                        "sample": sname_syn,
+                        "depth": round(1500.0 + rf_int * 25.0 + p_idx * 3.5, 2),
+                        "rt": int(rf_int),
+                        "cpore": round(p_plug, 4),
+                        "cperm": round(k_plug, 4),
+                        "pc_curve": pc_grid,
+                        "sw_curve": sw_grid,
+                    }
+                )
+
+    return plug_records
+
+
+@router.post(
+    "/swirr/fit",
+    summary="Extract SCAL plug reference Swirr and fit multi-well Swirr correlations (RQI, Semi-Log k, or Timur)",
+)
+def workspace_swirr_fit(
+    project_id: int, req: WorkspaceSwirrFitRequest
+) -> Dict[str, Any]:
+    """Extract SCAL plug Swirr at reference Pc and fit global or per-rock-type correlation coefficients."""
+    try:
+        extraction_mode = (
+            str(req.extraction_mode or req.extractionMode or "cutoff_pc").strip().lower()
+        )
+        if extraction_mode not in ("cutoff_pc", "interp_pc"):
+            extraction_mode = "cutoff_pc"
+
+        ref_pc = float(
+            req.reference_pc_psi
+            if req.reference_pc_psi is not None
+            else (req.referencePcPsi if req.referencePcPsi is not None else 50.0)
+        )
+        equation_type = (
+            str(req.equation_type or req.equationType or "rqi_power").strip().lower()
+        )
+        if equation_type not in ("rqi_power", "semilog_k", "timur"):
+            equation_type = "rqi_power"
+
+        fit_scope = str(req.fit_scope or req.fitScope or "global").strip().lower()
+        if fit_scope not in ("global", "per_rt"):
+            fit_scope = "global"
+
+        swirr_min = float(
+            req.swirr_min
+            if req.swirr_min is not None
+            else (req.swirrMin if req.swirrMin is not None else 0.03)
+        )
+        swirr_max = float(
+            req.swirr_max
+            if req.swirr_max is not None
+            else (req.swirrMax if req.swirrMax is not None else 0.85)
+        )
+        if swirr_max <= swirr_min:
+            swirr_max = min(0.99, swirr_min + 0.20)
+
+        excl_raw = (
+            req.excluded_plug_ids
+            if req.excluded_plug_ids is not None
+            else (req.excludedPlugIds or [])
+        )
+        excluded_set = {str(x).strip() for x in excl_raw if str(x).strip()}
+
+        raw_plugs = _extract_project_scal_plugs_for_swirr(
+            project_id,
+            well_names=req.well_names,
+            drt_method=req.drt_method,
+            cutoffs=req.cutoffs,
+            ift=req.ift,
+            theta=req.theta,
+        )
+
+        plug_rows: List[Dict[str, Any]] = []
+        for p in raw_plugs:
+            pc_arr = np.asarray(p["pc_curve"], dtype=float)
+            sw_arr = np.asarray(p["sw_curve"], dtype=float)
+            ext_swirr, valid_pc, max_pc, sw_at_max = _extract_plug_swirr_at_ref_pc(
+                pc_arr, sw_arr, extraction_mode, ref_pc
+            )
+            cpore = float(p["cpore"])
+            cperm = float(p["cperm"])
+            rqi_ratio = math.sqrt(cperm / max(0.001, cpore))
+            rqi_um = 0.0314 * rqi_ratio
+            pid = str(p["plug_id"])
+            is_excl = pid in excluded_set
+            is_incl = bool(valid_pc and not is_excl)
+
+            plug_rows.append(
+                {
+                    **p,
+                    "rqi_ratio": round(rqi_ratio, 4),
+                    "rqi": round(rqi_um, 4),
+                    "max_pc": round(max_pc, 2),
+                    "sw_at_max_pc": round(sw_at_max, 4),
+                    "extracted_swirr": round(ext_swirr, 4),
+                    "valid_pc": valid_pc,
+                    "excluded": is_excl,
+                    "included": is_incl,
+                }
+            )
+
+        # Fit global and per-RT rules on included plugs
+        incl_plugs = [p for p in plug_rows if p["included"]]
+        if not incl_plugs:
+            # Fallback to all non-excluded plugs if cutoff filtered everything out
+            incl_plugs = [p for p in plug_rows if not p["excluded"]] or plug_rows
+
+        def _fit_subset(subset: List[Dict[str, Any]], scope_key: str) -> Dict[str, Any]:
+            if (
+                not req.auto_fit
+                and isinstance(req.rules, dict)
+                and scope_key in req.rules
+                and isinstance(req.rules[scope_key], dict)
+            ):
+                man = req.rules[scope_key]
+                a_m = float(man.get("a", 0.28))
+                b_m = float(man.get("b", 0.35))
+                c_m = (
+                    float(man.get("c", 0.50))
+                    if (equation_type == "timur" and man.get("c") is not None)
+                    else (0.50 if equation_type == "timur" else None)
+                )
+                if not subset:
+                    return {
+                        "scope": scope_key,
+                        "a": round(a_m, 4),
+                        "b": round(b_m, 4),
+                        "c": round(c_m, 4) if c_m is not None else None,
+                        "r2": 0.0,
+                        "rmse": 0.0,
+                        "count": 0,
+                    }
+                phi_s = np.array([float(x["cpore"]) for x in subset], dtype=float)
+                k_s = np.array([float(x["cperm"]) for x in subset], dtype=float)
+                sw_s = np.array([float(x["extracted_swirr"]) for x in subset], dtype=float)
+                if equation_type == "semilog_k":
+                    pred_s = np.asarray(swirr_semilog_k(k_s, a_m, b_m, swirr_min, swirr_max), dtype=float)
+                elif equation_type == "timur":
+                    pred_s = np.asarray(
+                        swirr_timur(phi_s, k_s, a_m, b_m, c_m or 0.5, swirr_min, swirr_max),
+                        dtype=float,
+                    )
+                else:
+                    pred_s = np.asarray(swirr_rqi(phi_s, k_s, a_m, b_m, swirr_min, swirr_max), dtype=float)
+                res = sw_s - pred_s
+                rmse_v = float(np.sqrt(np.mean(res**2)))
+                ss_res = float(np.sum(res**2))
+                ss_tot = float(np.sum((sw_s - np.mean(sw_s)) ** 2))
+                r2_v = max(0.0, min(1.0, 1.0 - ss_res / ss_tot)) if ss_tot > 1e-12 else 0.0
+                return {
+                    "scope": scope_key,
+                    "a": round(a_m, 4),
+                    "b": round(b_m, 4),
+                    "c": round(c_m, 4) if c_m is not None else None,
+                    "r2": round(r2_v, 4),
+                    "rmse": round(rmse_v, 4),
+                    "count": len(subset),
+                }
+
+            phi_s = [float(x["cpore"]) for x in subset]
+            k_s = [float(x["cperm"]) for x in subset]
+            sw_s = [float(x["extracted_swirr"]) for x in subset]
+            fit_res = fit_swirr_correlation(
+                phi_s,
+                k_s,
+                sw_s,
+                equation_type=equation_type,
+                swirr_min=swirr_min,
+                swirr_max=swirr_max,
+            )
+            return {
+                "scope": scope_key,
+                **fit_res,
+            }
+
+        rules_out: Dict[str, Dict[str, Any]] = {}
+        global_rule = _fit_subset(incl_plugs, "global")
+        rules_out["global"] = global_rule
+
+        all_rts = sorted({int(p["rt"]) for p in plug_rows if p.get("rt") is not None})
+        for rt_val in all_rts:
+            rt_key = str(rt_val)
+            rt_subset = [p for p in incl_plugs if int(p["rt"]) == rt_val]
+            if len(rt_subset) >= 1:
+                rules_out[rt_key] = _fit_subset(rt_subset, rt_key)
+            else:
+                rules_out[rt_key] = {
+                    **global_rule,
+                    "scope": rt_key,
+                    "count": 0,
+                }
+
+        cfg_eval = {
+            "extractionMode": extraction_mode,
+            "referencePcPsi": ref_pc,
+            "equationType": equation_type,
+            "fitScope": fit_scope,
+            "swirrMin": swirr_min,
+            "swirrMax": swirr_max,
+            "rules": rules_out,
+            "excludedPlugIds": sorted(excluded_set),
+        }
+
+        for p in plug_rows:
+            mod_swirr = _eval_swirr_scalar_from_config(
+                p["cpore"], p["cperm"], p["rt"], cfg_eval
+            )
+            p["modeled_swirr"] = round(float(mod_swirr), 4)
+            p["residual"] = round(float(p["extracted_swirr"]) - float(mod_swirr), 4)
+
+        valid_count = sum(1 for p in plug_rows if p["valid_pc"])
+        incl_count = sum(1 for p in plug_rows if p["included"])
+
+        return _sanitize_for_json(
+            {
+                "project_id": project_id,
+                "config": cfg_eval,
+                "rules": rules_out,
+                "plugs": plug_rows,
+                "valid_plug_count": valid_count,
+                "included_plug_count": incl_count,
+                "total_plug_count": len(plug_rows),
+            }
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Swirr correlation fit failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/swirr/apply",
+    summary="Apply fitted Swirr correlation model to well logs across project wells and compute SWIRR curve",
+)
+def workspace_swirr_apply(
+    project_id: int, req: WorkspaceSwirrApplyRequest
+) -> Dict[str, Any]:
+    """Evaluate continuous SWIRR curve across project wells from porosity, permeability, and rock type logs."""
+    try:
+        cfg = dict(req.config or {})
+        eq = str(cfg.get("equationType") or cfg.get("equation_type") or "rqi_power").strip().lower()
+        scope = str(cfg.get("fitScope") or cfg.get("fit_scope") or "global").strip().lower()
+        s_min = float(cfg.get("swirrMin") or cfg.get("swirr_min") or 0.03)
+        s_max = float(cfg.get("swirrMax") or cfg.get("swirr_max") or 0.85)
+        rules = cfg.get("rules") or {}
+
+        well_dfs = _load_multi_well_dfs(project_id, well_names=req.well_names)
+        if not well_dfs:
+            raise ValueError("No wells found in project to apply SWIRR.")
+
+        phie_pref = str(req.phie_col or "PHIT").strip().upper()
+        perm_pref = str(req.perm_col or "PERM_TRANS").strip().upper()
+        rt_pref = str(req.rt_col or "ROCK_FLAG").strip().upper()
+        cutoffs_list = sorted(float(c) for c in (req.cutoffs or [0.5, 1.2, 2.5, 5.0]))
+
+        out_well_names: List[str] = []
+        out_depths: List[float] = []
+        out_phit: List[Optional[float]] = []
+        out_perm: List[Optional[float]] = []
+        out_rock_flags: List[Optional[int]] = []
+        out_swirr: List[Optional[float]] = []
+        well_summaries: List[Dict[str, Any]] = []
+        saved_wells = 0
+
+        for w_df in well_dfs:
+            if w_df.empty or "DEPTH" not in w_df.columns:
+                continue
+            wn = str(w_df["WELL_NAME"].iloc[0])
+            w_sorted = w_df.sort_values("DEPTH").reset_index(drop=True)
+            d_s = pd.to_numeric(w_sorted["DEPTH"], errors="coerce")
+
+            # Resolve porosity column
+            p_s = pd.Series(np.nan, index=w_sorted.index, dtype=float)
+            p_candidates = [phie_pref] + [
+                c for c in ("PHIE", "PHIT", "POROSITY", "POR", "CPORE") if c != phie_pref
+            ]
+            for pcol in p_candidates:
+                if pcol in w_sorted.columns:
+                    ps = pd.to_numeric(w_sorted[pcol], errors="coerce")
+                    ps = ps.where(ps > 0, np.nan)
+                    if ps.notna().any() and float(ps.median()) > 1.0:
+                        ps = ps / 100.0
+                    p_s = p_s.combine_first(ps)
+
+            # Resolve permeability column
+            k_s = pd.Series(np.nan, index=w_sorted.index, dtype=float)
+            k_candidates = [perm_pref] + [
+                c
+                for c in ("PERM_TRANS", "PERM", "KLOGH", "PERMEABILITY", "K", "CPERM")
+                if c != perm_pref
+            ]
+            for kcol in k_candidates:
+                if kcol in w_sorted.columns:
+                    ks = pd.to_numeric(w_sorted[kcol], errors="coerce")
+                    ks = ks.where(ks > 0, np.nan)
+                    k_s = k_s.combine_first(ks)
+
+            # Resolve rock type column
+            rf_s = pd.Series(np.nan, index=w_sorted.index, dtype=float)
+            rt_candidates = [rt_pref] + [
+                c for c in ("ROCK_FLAG", "ROCK_FLAG_ML", "ROCK_FLAG_CUTOFF", "DRT") if c != rt_pref
+            ]
+            for rcol in rt_candidates:
+                if rcol in w_sorted.columns:
+                    rs = pd.to_numeric(w_sorted[rcol], errors="coerce")
+                    rs = rs.where(rs >= 1, np.nan)
+                    rf_s = rf_s.combine_first(rs)
+
+            need_rf = rf_s.isna() & (p_s > 0) & (p_s < 1.0) & (k_s > 0)
+            if need_rf.any():
+                ind_v, hib_w, _ = _eval_drt_indicator_scalar_or_array(
+                    p_s[need_rf].to_numpy(dtype=float),
+                    k_s[need_rf].to_numpy(dtype=float),
+                    req.drt_method,
+                )
+                rf_calc = rock_typing(
+                    ind_v, cut_offs=cutoffs_list, higher_is_better=hib_w
+                )
+                rf_s.loc[need_rf] = pd.Series(
+                    np.asarray(rf_calc, dtype=float), index=w_sorted.index[need_rf]
+                ).where(lambda s: s >= 1, np.nan)
+
+            phi_arr = p_s.to_numpy(dtype=float)
+            k_arr = k_s.to_numpy(dtype=float)
+            rf_arr = rf_s.to_numpy(dtype=float)
+
+            # Evaluate global rule as baseline array
+            g_rule = rules.get("global") or (next(iter(rules.values()), None) if rules else None) or {}
+            a_g = float(g_rule.get("a", 0.28))
+            b_g = float(g_rule.get("b", 0.35))
+            c_g = float(g_rule.get("c", 0.50)) if g_rule.get("c") is not None else 0.50
+
+            if eq == "semilog_k":
+                swirr_arr = np.asarray(
+                    swirr_semilog_k(k_arr, a=a_g, b=b_g, swirr_min=s_min, swirr_max=s_max),
+                    dtype=float,
+                )
+            elif eq == "timur":
+                swirr_arr = np.asarray(
+                    swirr_timur(phi_arr, k_arr, a=a_g, b=b_g, c=c_g, swirr_min=s_min, swirr_max=s_max),
+                    dtype=float,
+                )
+            else:
+                swirr_arr = np.asarray(
+                    swirr_rqi(phi_arr, k_arr, a=a_g, b=b_g, swirr_min=s_min, swirr_max=s_max),
+                    dtype=float,
+                )
+
+            if scope == "per_rt" and isinstance(rules, dict):
+                for rk, r_dict in rules.items():
+                    if rk == "global" or not isinstance(r_dict, dict):
+                        continue
+                    try:
+                        rt_int = int(rk)
+                    except ValueError:
+                        continue
+                    rt_mask = np.isfinite(rf_arr) & (np.round(rf_arr).astype(int) == rt_int)
+                    if not np.any(rt_mask):
+                        continue
+                    a_r = float(r_dict.get("a", a_g))
+                    b_r = float(r_dict.get("b", b_g))
+                    c_r = float(r_dict.get("c", c_g)) if r_dict.get("c") is not None else c_g
+                    if eq == "semilog_k":
+                        sub_vals = swirr_semilog_k(
+                            k_arr[rt_mask], a=a_r, b=b_r, swirr_min=s_min, swirr_max=s_max
+                        )
+                    elif eq == "timur":
+                        sub_vals = swirr_timur(
+                            phi_arr[rt_mask],
+                            k_arr[rt_mask],
+                            a=a_r,
+                            b=b_r,
+                            c=c_r,
+                            swirr_min=s_min,
+                            swirr_max=s_max,
+                        )
+                    else:
+                        sub_vals = swirr_rqi(
+                            phi_arr[rt_mask],
+                            k_arr[rt_mask],
+                            a=a_r,
+                            b=b_r,
+                            swirr_min=s_min,
+                            swirr_max=s_max,
+                        )
+                    swirr_arr[rt_mask] = np.asarray(sub_vals, dtype=float)
+
+            sub_df = pd.DataFrame(
+                {
+                    "DEPTH": d_s,
+                    "SWIRR": pd.Series(swirr_arr, index=w_sorted.index, dtype=float).round(5),
+                }
+            ).dropna(subset=["DEPTH"])
+
+            if req.save:
+                _save_curves_to_well(project_id, wn, sub_df)
+                saved_wells += 1
+            else:
+                _update_in_memory_well_cache(project_id, wn, sub_df)
+
+            # Swirr correlation config is persisted once at project level
+            # (`/module_params`), not duplicated into every well's config.
+
+            valid_sw = swirr_arr[np.isfinite(swirr_arr)]
+            well_summaries.append(
+                {
+                    "well_name": wn,
+                    "count": int(len(valid_sw)),
+                    "mean_swirr": round(float(np.mean(valid_sw)), 4) if len(valid_sw) > 0 else None,
+                    "min_swirr": round(float(np.min(valid_sw)), 4) if len(valid_sw) > 0 else None,
+                    "max_swirr": round(float(np.max(valid_sw)), 4) if len(valid_sw) > 0 else None,
+                }
+            )
+
+            for d_v, p_v, k_v, rf_v, sw_v in zip(
+                d_s.tolist(),
+                phi_arr.tolist(),
+                k_arr.tolist(),
+                rf_arr.tolist(),
+                swirr_arr.tolist(),
+            ):
+                if d_v is None or pd.isna(d_v) or not math.isfinite(float(d_v)):
+                    continue
+                if sw_v is None or pd.isna(sw_v) or not math.isfinite(float(sw_v)):
+                    continue
+                out_well_names.append(wn)
+                out_depths.append(round(float(d_v), 4))
+                out_phit.append(
+                    round(float(p_v), 5)
+                    if (p_v is not None and math.isfinite(float(p_v)))
+                    else None
+                )
+                out_perm.append(
+                    round(float(k_v), 5)
+                    if (k_v is not None and math.isfinite(float(k_v)))
+                    else None
+                )
+                out_rock_flags.append(
+                    int(round(float(rf_v)))
+                    if (rf_v is not None and math.isfinite(float(rf_v)))
+                    else None
+                )
+                out_swirr.append(round(float(sw_v), 5))
+
+        all_valid = [x for x in out_swirr if x is not None]
+        return _sanitize_for_json(
+            {
+                "project_id": project_id,
+                "saved": req.save,
+                "saved_wells": saved_wells,
+                "mean_swirr": round(float(np.mean(all_valid)), 4) if all_valid else None,
+                "min_swirr": round(float(np.min(all_valid)), 4) if all_valid else None,
+                "max_swirr": round(float(np.max(all_valid)), 4) if all_valid else None,
+                "well_summaries": well_summaries,
+                "data": {
+                    "well_names": out_well_names,
+                    "depths": out_depths,
+                    "phit": out_phit,
+                    "perm": out_perm,
+                    "rock_flags": out_rock_flags,
+                    "swirr": out_swirr,
+                },
+            }
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Swirr application failed: {e}"
         ) from e

@@ -1,17 +1,30 @@
 import logging
+import os
+import pickle
+import re
 import shutil
+import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy import bindparam, select, text
 
 from quick_pp.app.backend.utils.auth import (
-    check_project_permission,
     get_current_user_optional,
     is_demo_mode,
 )
@@ -24,13 +37,16 @@ from quick_pp.database import objects as db_objects
 router = APIRouter(prefix="/database", tags=["Database"])
 
 
-# Simple in-memory cache for merged data (stores up to 50 wells, ~5 minutes TTL)
+# Simple in-memory cache for merged data (stores up to 50 wells, ~30 minutes TTL)
 # Maps key "{project_id}_{well_name}_{tolerance}" -> (timestamp, pd.DataFrame)
 _merged_data_cache: Dict[str, tuple[float, pd.DataFrame]] = {}
-_cache_ttl = 300  # 5 minutes
+_cache_ttl = 1800  # 30 minutes
 _cache_max_entries = 50
+_merge_locks: Dict[str, threading.Lock] = {}
+_merge_locks_guard = threading.Lock()
 MAX_DEMO_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB cap per file in demo mode
 _ephemeral_wells: Dict[int, Dict[str, pd.DataFrame]] = {}
+_ephemeral_well_headers: Dict[tuple[int, str], Dict[str, Any]] = {}
 _demo_project_overrides: Dict[int, Dict[str, Any]] = {}
 _demo_deleted_projects: set[int] = set()
 _demo_well_renames: Dict[int, Dict[str, str]] = {}
@@ -55,17 +71,61 @@ def reset_demo_project_state(project_id: Optional[int] = None) -> None:
         _demo_deleted_projects.discard(project_id)
         _demo_well_renames.pop(project_id, None)
         _demo_deleted_wells.pop(project_id, None)
+        for k in [k for k in _ephemeral_well_headers if k[0] == project_id]:
+            _ephemeral_well_headers.pop(k, None)
     else:
         _demo_project_overrides.clear()
         _demo_deleted_projects.clear()
         _demo_well_renames.clear()
         _demo_deleted_wells.clear()
+        _ephemeral_well_headers.clear()
+
+
+_SHARED_CACHE_DIR = Path(tempfile.gettempdir()) / "qpp_well_cache_sync"
+
+
+def _safe_cache_token(val: Any) -> str:
+    return "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in str(val))
+
+
+def write_shared_well_cache(project_id: int, well_name: str, df: pd.DataFrame) -> None:
+    """Persist an updated in-memory merged well DataFrame to shared temp storage so all worker processes see it."""
+    try:
+        _SHARED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        w_tok = _safe_cache_token(well_name)
+        target = _SHARED_CACHE_DIR / f"mem_{project_id}_{w_tok}.pkl"
+        tmp = _SHARED_CACHE_DIR / f"mem_{project_id}_{w_tok}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            pickle.dump(df, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, target)
+    except Exception:
+        pass
 
 
 def invalidate_well_cache(
     project_id: Optional[int] = None, well_name: Optional[str] = None
 ) -> int:
-    """Invalidate cached merged well data for a specific well, project, or globally."""
+    """Invalidate cached merged well data for a specific well, project, or globally across all workers."""
+    try:
+        _SHARED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        now_s = str(time.time()).encode("utf-8")
+        if project_id is not None and well_name is not None:
+            w_tok = _safe_cache_token(well_name)
+            (_SHARED_CACHE_DIR / f"inv_{project_id}_{w_tok}.stamp").write_bytes(now_s)
+            mem_p = _SHARED_CACHE_DIR / f"mem_{project_id}_{w_tok}.pkl"
+            if mem_p.exists():
+                mem_p.unlink(missing_ok=True)
+        elif project_id is not None:
+            (_SHARED_CACHE_DIR / f"inv_{project_id}__all.stamp").write_bytes(now_s)
+            for p in _SHARED_CACHE_DIR.glob(f"mem_{project_id}_*.pkl"):
+                p.unlink(missing_ok=True)
+        else:
+            (_SHARED_CACHE_DIR / "inv_global.stamp").write_bytes(now_s)
+            for p in _SHARED_CACHE_DIR.glob("mem_*.pkl"):
+                p.unlink(missing_ok=True)
+    except Exception:
+        pass
+
     if project_id is not None and well_name is not None:
         prefix = f"{project_id}_{well_name}_"
         keys_to_remove = [k for k in _merged_data_cache if k.startswith(prefix)]
@@ -106,8 +166,8 @@ async def create_project(payload: dict, request: Request):
     description = payload.get("description") if isinstance(payload, dict) else ""
     current_user = get_current_user_optional(request)
     created_by = (
-        (payload.get("created_by_user_id") if isinstance(payload, dict) else None) or (int(current_user["user_id"]) if current_user else None)
-    )
+        payload.get("created_by_user_id") if isinstance(payload, dict) else None
+    ) or (int(current_user["user_id"]) if current_user else None)
 
     try:
         with get_db() as session:
@@ -119,7 +179,9 @@ async def create_project(payload: dict, request: Request):
             )
             proj.save()
             if created_by is not None:
-                if not session.get(db_models.ProjectMember, (proj.project_id, int(created_by))):
+                if not session.get(
+                    db_models.ProjectMember, (proj.project_id, int(created_by))
+                ):
                     session.add(
                         db_models.ProjectMember(
                             project_id=proj.project_id,
@@ -171,7 +233,9 @@ async def list_projects(request: Request):
                         "project_id": r.project_id,
                         "name": r.name,
                         "description": r.description,
-                        "user_role": "admin" if r.created_by == uid else pms[r.project_id],
+                        "user_role": "admin"
+                        if r.created_by == uid
+                        else pms[r.project_id],
                     }
                     for r in rows
                     if r.created_by == uid or r.project_id in pms
@@ -229,7 +293,10 @@ async def update_project(project_id: int, payload: dict, request: Request):
             if new_name:
                 all_projs = session.execute(select(db_models.Project)).scalars().all()
                 for p in all_projs:
-                    if p.project_id == project_id or p.project_id in _demo_deleted_projects:
+                    if (
+                        p.project_id == project_id
+                        or p.project_id in _demo_deleted_projects
+                    ):
                         continue
                     p_name = _demo_project_overrides.get(p.project_id, {}).get(
                         "name", p.name
@@ -267,7 +334,7 @@ async def update_project(project_id: int, payload: dict, request: Request):
 
 
 @router.delete("/projects/{project_id}", summary="Delete a project and all its wells")
-async def delete_project(project_id: int, request: Request):
+def delete_project(project_id: int, request: Request):
     """Delete a project and all associated wells, curves, and cache entries."""
     try:
         with get_db() as session:
@@ -284,7 +351,20 @@ async def delete_project(project_id: int, request: Request):
                 _demo_well_renames.pop(project_id, None)
                 _demo_deleted_wells.pop(project_id, None)
             else:
-                session.delete(orm_proj)
+                session.expunge(orm_proj)
+                session.execute(
+                    text(
+                        "DELETE FROM curve_data WHERE curve_id IN ("
+                        "SELECT c.curve_id FROM curves c "
+                        "JOIN wells w ON c.well_id = w.well_id "
+                        "WHERE w.project_id = :pid)"
+                    ),
+                    {"pid": project_id},
+                )
+                session.execute(
+                    text("DELETE FROM projects WHERE project_id = :pid"),
+                    {"pid": project_id},
+                )
                 session.flush()
 
             _ephemeral_wells.pop(project_id, None)
@@ -308,9 +388,7 @@ async def delete_project(project_id: int, request: Request):
     "/projects/{project_id}/wells/{well_name}",
     summary="Rename a well within a project",
 )
-async def rename_well(
-    project_id: int, well_name: str, payload: dict, request: Request
-):
+async def rename_well(project_id: int, well_name: str, payload: dict, request: Request):
     """Rename a well in the project and update cached data references.
 
     Payload example: {"name": "15_9-F-11B", "uwi": "15_9-F-11B"}
@@ -356,15 +434,18 @@ async def rename_well(
                 if eph_n not in deleted_set:
                     active_names.add(eph_n)
 
-            if well_name not in active_names and target_orm_well is None and well_name not in eph_proj:
+            if (
+                well_name not in active_names
+                and target_orm_well is None
+                and well_name not in eph_proj
+            ):
                 raise HTTPException(
                     status_code=404,
                     detail=f"Well '{well_name}' not found in project {project_id}",
                 )
 
             if any(
-                n.lower() == new_name.lower() and n != well_name
-                for n in active_names
+                n.lower() == new_name.lower() and n != well_name for n in active_names
             ):
                 raise HTTPException(
                     status_code=400,
@@ -373,7 +454,7 @@ async def rename_well(
 
             # Update in-memory merged cache keys and WELL_NAME column
             old_prefix = f"{project_id}_{well_name}_"
-            for key, (ts, cdf) in list(_merged_data_cache.items()):
+            for key, (_, cdf) in list(_merged_data_cache.items()):
                 if key.startswith(old_prefix):
                     suffix = key[len(old_prefix) :]
                     updated_df = cdf.copy()
@@ -401,7 +482,10 @@ async def rename_well(
                     new_uwi = payload.get("uwi")
                     if new_uwi is not None:
                         target_orm_well.uwi = str(new_uwi).strip()
-                    elif not target_orm_well.uwi or target_orm_well.uwi == target_orm_well.name:
+                    elif (
+                        not target_orm_well.uwi
+                        or target_orm_well.uwi == target_orm_well.name
+                    ):
                         target_orm_well.uwi = new_name
                     target_orm_well.name = new_name
                     session.add(target_orm_well)
@@ -428,7 +512,7 @@ async def rename_well(
     "/projects/{project_id}/wells/{well_name}",
     summary="Delete a well from a project",
 )
-async def delete_well(project_id: int, well_name: str, request: Request):
+def delete_well(project_id: int, well_name: str, request: Request):
     """Delete a well and all its curve/ancillary data from a project."""
     try:
         with get_db() as session:
@@ -465,7 +549,19 @@ async def delete_well(project_id: int, well_name: str, request: Request):
                     deleted_set.add(orig_db_name)
             else:
                 if target_orm_well is not None:
-                    session.delete(target_orm_well)
+                    wid = target_orm_well.well_id
+                    session.expunge_all()
+                    session.execute(
+                        text(
+                            "DELETE FROM curve_data WHERE curve_id IN ("
+                            "SELECT curve_id FROM curves WHERE well_id = :wid)"
+                        ),
+                        {"wid": wid},
+                    )
+                    session.execute(
+                        text("DELETE FROM wells WHERE well_id = :wid"),
+                        {"wid": wid},
+                    )
                     session.flush()
 
             invalidate_well_cache(project_id=project_id, well_name=well_name)
@@ -505,7 +601,9 @@ async def list_wells(project_id: int):
             existing_names = {w["name"] for w in wells}
             for eph_name in _ephemeral_wells.get(project_id, {}):
                 if eph_name not in existing_names:
-                    wells.append({"id": f"eph_{eph_name}", "name": eph_name, "uwi": eph_name})
+                    wells.append(
+                        {"id": f"eph_{eph_name}", "name": eph_name, "uwi": eph_name}
+                    )
             return {"project_id": proj.project_id, "wells": wells}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -516,7 +614,6 @@ async def list_wells(project_id: int):
 @router.get(
     "/projects/{project_id}/summary",
     summary="Get lightweight project and per-well summary statistics",
-
 )
 def get_project_summary(project_id: int) -> Dict[str, Any]:
     """Return aggregated metadata and statistics for all wells in a project without loading full curve arrays."""
@@ -559,14 +656,18 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
 
             # 1. Curves per well
             curves_stmt = text(
-                "SELECT well_id, mnemonic FROM curves WHERE well_id IN :well_ids ORDER BY mnemonic"
+                "SELECT curve_id, well_id, mnemonic FROM curves WHERE well_id IN :well_ids ORDER BY mnemonic"
             ).bindparams(bindparam("well_ids", expanding=True))
             curve_rows = session.execute(curves_stmt, {"well_ids": well_ids}).fetchall()
             curves_by_well: Dict[int, List[str]] = {wid: [] for wid in well_ids}
+            curve_ids_by_well_mnemonic: Dict[int, Dict[str, int]] = {
+                wid: {} for wid in well_ids
+            }
             all_curves_set = set()
-            for wid, mnemonic in curve_rows:
+            for cid, wid, mnemonic in curve_rows:
                 m_up = str(mnemonic).upper()
                 curves_by_well.setdefault(wid, []).append(m_up)
+                curve_ids_by_well_mnemonic.setdefault(wid, {})[m_up] = int(cid)
                 all_curves_set.add(m_up)
 
             # 2. Depth statistics per well
@@ -597,22 +698,42 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
             ).bindparams(bindparam("well_ids", expanding=True))
             top_rows = session.execute(tops_stmt, {"well_ids": well_ids}).fetchall()
             zones_by_well: Dict[int, List[str]] = {wid: [] for wid in well_ids}
+            tops_list_by_well: Dict[int, List[Dict[str, Any]]] = {
+                wid: [] for wid in well_ids
+            }
             tops_count_by_well: Dict[int, int] = {wid: 0 for wid in well_ids}
             all_zones_set = set()
-            for wid, top_name, _ in top_rows:
+            for wid, top_name, top_depth in top_rows:
                 tops_count_by_well[wid] = tops_count_by_well.get(wid, 0) + 1
+                if top_name:
+                    tops_list_by_well.setdefault(wid, []).append(
+                        {
+                            "name": str(top_name),
+                            "depth": round(float(top_depth), 2)
+                            if top_depth is not None
+                            else None,
+                        }
+                    )
                 if top_name and top_name not in zones_by_well.setdefault(wid, []):
                     zones_by_well[wid].append(top_name)
                     all_zones_set.add(top_name)
 
             # Also check if ZONES curve exists in curve_data (for LAS files with ZONES curve)
+            zones_curve_bounds: Dict[int, Dict[str, Tuple[float, float]]] = {
+                wid: {} for wid in well_ids
+            }
             zones_curve_stmt = text("""
-                SELECT DISTINCT c.well_id, COALESCE(cd.value_text, CAST(cd.value_numeric AS TEXT)) AS zone_val
+                SELECT
+                    c.well_id,
+                    COALESCE(cd.value_text, CAST(cd.value_numeric AS TEXT)) AS zone_val,
+                    MIN(cd.depth) AS z_min,
+                    MAX(cd.depth) AS z_max
                 FROM curve_data cd
                 JOIN curves c ON cd.curve_id = c.curve_id
                 WHERE c.well_id IN :well_ids AND UPPER(c.mnemonic) = 'ZONES'
+                GROUP BY c.well_id, zone_val
             """).bindparams(bindparam("well_ids", expanding=True))
-            for wid, zval in session.execute(
+            for wid, zval, z_min, z_max in session.execute(
                 zones_curve_stmt, {"well_ids": well_ids}
             ).fetchall():
                 if zval is not None and str(zval).strip():
@@ -620,13 +741,21 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                     if z_str not in zones_by_well.setdefault(wid, []):
                         zones_by_well[wid].append(z_str)
                         all_zones_set.add(z_str)
+                    if z_min is not None and z_max is not None:
+                        zones_curve_bounds.setdefault(wid, {})[z_str] = (
+                            float(z_min),
+                            float(z_max) + 1e-4,
+                        )
 
-            # 4. Core samples & core curves per well
+            # 4. Core samples (RCA) & SCAL (Capillary Pressure / RelPerm) & core curves per well
             core_stmt = text("""
-                SELECT well_id, COUNT(*) AS sample_count
-                FROM core_samples
-                WHERE well_id IN :well_ids
-                GROUP BY well_id
+                SELECT cs.well_id, COUNT(DISTINCT cs.sample_id) AS sample_count
+                FROM core_samples cs
+                LEFT JOIN core_measurements cm ON cm.sample_id = cs.sample_id
+                LEFT JOIN capillary_pressure cp ON cp.sample_id = cs.sample_id
+                WHERE cs.well_id IN :well_ids
+                  AND (cm.measurement_id IS NOT NULL OR cp.pc_id IS NULL)
+                GROUP BY cs.well_id
             """).bindparams(bindparam("well_ids", expanding=True))
             core_counts = {
                 r[0]: int(r[1] or 0)
@@ -649,16 +778,58 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 ).fetchall()
             }
 
+            scal_pc_stmt = text("""
+                SELECT
+                    cs.well_id,
+                    COUNT(cp.pc_id) AS pc_points,
+                    COUNT(DISTINCT cs.sample_id) AS pc_samples
+                FROM capillary_pressure cp
+                JOIN core_samples cs ON cp.sample_id = cs.sample_id
+                WHERE cs.well_id IN :well_ids
+                GROUP BY cs.well_id
+            """).bindparams(bindparam("well_ids", expanding=True))
+            scal_pc_counts: Dict[int, Dict[str, int]] = {}
+            for r in session.execute(scal_pc_stmt, {"well_ids": well_ids}).fetchall():
+                scal_pc_counts[r[0]] = {
+                    "points": int(r[1] or 0),
+                    "samples": int(r[2] or 0),
+                }
+
+            relperm_stmt = text("""
+                SELECT
+                    cs.well_id,
+                    COUNT(rp.relperm_id) AS rp_points,
+                    COUNT(DISTINCT cs.sample_id) AS rp_samples
+                FROM relative_permeability rp
+                JOIN core_samples cs ON rp.sample_id = cs.sample_id
+                WHERE cs.well_id IN :well_ids
+                GROUP BY cs.well_id
+            """).bindparams(bindparam("well_ids", expanding=True))
+            relperm_counts: Dict[int, Dict[str, int]] = {}
+            for r in session.execute(relperm_stmt, {"well_ids": well_ids}).fetchall():
+                relperm_counts[r[0]] = {
+                    "points": int(r[1] or 0),
+                    "samples": int(r[2] or 0),
+                }
+
             # 5. Fluid contacts, pressure tests, surveys counts
             contacts_stmt = text(
-                "SELECT well_id, COUNT(*) FROM fluid_contacts WHERE well_id IN :well_ids GROUP BY well_id"
+                "SELECT well_id, name, depth FROM fluid_contacts WHERE well_id IN :well_ids ORDER BY depth"
             ).bindparams(bindparam("well_ids", expanding=True))
-            contact_counts = {
-                r[0]: int(r[1] or 0)
-                for r in session.execute(
-                    contacts_stmt, {"well_ids": well_ids}
-                ).fetchall()
+            contact_counts: Dict[int, int] = {wid: 0 for wid in well_ids}
+            contacts_list_by_well: Dict[int, List[Dict[str, Any]]] = {
+                wid: [] for wid in well_ids
             }
+            for wid, cname, cdepth in session.execute(
+                contacts_stmt, {"well_ids": well_ids}
+            ).fetchall():
+                contact_counts[wid] = contact_counts.get(wid, 0) + 1
+                contacts_list_by_well.setdefault(wid, []).append(
+                    {
+                        "type": str(cname or "OWC").upper(),
+                        "depth": round(float(cdepth), 2) if cdepth is not None else None,
+                    }
+                )
 
             pressure_stmt = text(
                 "SELECT well_id, COUNT(*) FROM pressure_tests WHERE well_id IN :well_ids GROUP BY well_id"
@@ -678,8 +849,100 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 for r in session.execute(survey_stmt, {"well_ids": well_ids}).fetchall()
             }
 
+            perf_counts: Dict[int, int] = {wid: 0 for wid in well_ids}
+            perfs_list_by_well: Dict[int, List[Dict[str, Any]]] = {
+                wid: [] for wid in well_ids
+            }
+            try:
+                db_models.Perforation.__table__.create(
+                    bind=session.get_bind(), checkfirst=True
+                )
+            except Exception:
+                pass
+            try:
+                perfs_stmt = text(
+                    "SELECT well_id, name, top, bottom, description FROM perforations WHERE well_id IN :well_ids ORDER BY top, bottom"
+                ).bindparams(bindparam("well_ids", expanding=True))
+                for wid, pname, ptop, pbot, pdesc in session.execute(
+                    perfs_stmt, {"well_ids": well_ids}
+                ).fetchall():
+                    perf_counts[wid] = perf_counts.get(wid, 0) + 1
+                    perfs_list_by_well.setdefault(wid, []).append(
+                        {
+                            "name": str(pname or "Perf"),
+                            "top": round(float(ptop), 2) if ptop is not None else None,
+                            "bottom": round(float(pbot), 2) if pbot is not None else None,
+                            "description": str(pdesc or ""),
+                        }
+                    )
+            except Exception:
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+
+            from quick_pp.las_handler import extract_las_metadata, extract_well_df_elevation
+
             wells_summary = []
             total_depth_sum = 0.0
+
+            canonical_zone_curve_aliases: Dict[str, Tuple[str, ...]] = {
+                "TVD": ("TVD", "DEPT_TVD", "DEPTH_TVD"),
+                "TVDSS": ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS"),
+                "GR": ("GR", "GAMMA", "GR_ARC", "GR_EDTC"),
+                "RT": ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD"),
+                "NPHI": ("NPHI", "TNPH", "NPOR", "CNCF"),
+                "RHOB": ("RHOB", "RHOZ", "DEN", "ZDEN"),
+                "VCLAY": ("VCLAY", "VSH", "VSHALE", "VCL", "VSH_GR"),
+                "PHIT": ("PHIT", "PHIE", "POROSITY", "POR"),
+                "PERM": ("PERM", "KLOGH", "PERMEABILITY", "K"),
+                "SWT": ("SWT", "SWE", "SW"),
+                "ROCK_FLAG": ("ROCK_FLAG", "ROCK_FLAG_ML", "ROCK_FLAG_CUTOFF"),
+                "PERM_TRANS": ("PERM_TRANS",),
+                "SHF": ("SHF", "SW_SHF"),
+            }
+            computed_curve_keys = (
+                "VCLAY",
+                "PHIT",
+                "PERM",
+                "SWT",
+                "ROCK_FLAG",
+                "PERM_TRANS",
+                "SHF",
+            )
+            zone_probe_stmt = text("""
+                SELECT 1
+                FROM curve_data cd
+                WHERE cd.curve_id = :cid
+                  AND cd.depth >= :d_top
+                  AND cd.depth < :d_base
+                  AND cd.value_numeric IS NOT NULL
+                LIMIT 1
+            """)
+
+            all_alias_names = {
+                a for aliases in canonical_zone_curve_aliases.values() for a in aliases
+            }
+            candidate_probe_cids = [
+                cid
+                for wid_map in curve_ids_by_well_mnemonic.values()
+                for m_name, cid in wid_map.items()
+                if m_name in all_alias_names
+            ]
+            curve_minmax_map: Dict[int, Tuple[float, float]] = {}
+            if candidate_probe_cids:
+                minmax_stmt = text("""
+                    SELECT cd.curve_id, MIN(cd.depth) AS min_d, MAX(cd.depth) AS max_d
+                    FROM curve_data cd
+                    WHERE cd.curve_id IN :probe_cids
+                      AND cd.value_numeric IS NOT NULL
+                    GROUP BY cd.curve_id
+                """).bindparams(bindparam("probe_cids", expanding=True))
+                for cid_val, c_min, c_max in session.execute(
+                    minmax_stmt, {"probe_cids": candidate_probe_cids}
+                ).fetchall():
+                    if c_min is not None and c_max is not None:
+                        curve_minmax_map[int(cid_val)] = (float(c_min), float(c_max))
 
             for w in orm_wells:
                 wid = w.well_id
@@ -696,6 +959,193 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 )
                 total_depth_sum += td
 
+                # Include any curves present in live in-memory cache or shared pickle for this well
+                well_curve_set = set(curves_by_well.get(wid, []))
+                live_df: Optional[pd.DataFrame] = None
+                cached_entry = _merged_data_cache.get(f"{project_id}_{w.name}_0.16")
+                if cached_entry is not None and isinstance(cached_entry[1], pd.DataFrame):
+                    live_df = cached_entry[1]
+                else:
+                    eph_w = _ephemeral_wells.get(project_id, {}).get(w.name)
+                    if isinstance(eph_w, pd.DataFrame):
+                        live_df = eph_w
+                    elif isinstance(eph_w, dict) and isinstance(eph_w.get("data"), pd.DataFrame):
+                        live_df = eph_w["data"]
+                if live_df is not None:
+                    for col_name in live_df.columns:
+                        c_up = str(col_name).upper()
+                        if c_up not in ("DEPTH", "WELL_NAME"):
+                            s_col = pd.to_numeric(live_df[col_name], errors="coerce")
+                            if s_col.notna().any():
+                                well_curve_set.add(c_up)
+                                all_curves_set.add(c_up)
+
+                w_hdr_src = (
+                    dict(w.header_data) if isinstance(w.header_data, dict) else {}
+                )
+                eph_hdr_w = _ephemeral_well_headers.get((project_id, w.name))
+                if isinstance(eph_hdr_w, dict):
+                    w_hdr_src = {**w_hdr_src, **eph_hdr_w}
+                w_df_elev = extract_well_df_elevation(
+                    w_hdr_src,
+                    w.config_data if isinstance(w.config_data, dict) else None,
+                    target_depth_uom=w.depth_uom or "m",
+                )
+                w_meta = dict(extract_las_metadata(w_hdr_src, fallback_well_name=w.name))
+                w_ovr = (
+                    w_hdr_src.get("header_overrides")
+                    if isinstance(w_hdr_src.get("header_overrides"), dict)
+                    else {}
+                )
+                for _src in (
+                    w.config_data if isinstance(w.config_data, dict) else {},
+                    w_ovr,
+                    eph_hdr_w if isinstance(eph_hdr_w, dict) else {},
+                ):
+                    for _dk in ("spud_date", "log_date"):
+                        if _src.get(_dk) is not None and str(_src.get(_dk)).strip():
+                            w_meta[_dk] = str(_src.get(_dk)).strip()
+                w_spud_date = str(w_meta.get("spud_date") or "").strip() or None
+                w_log_date = str(w_meta.get("log_date") or "").strip() or None
+
+                has_tvd_for_well = (
+                    survey_counts.get(wid, 0) >= 2
+                    or "TVD" in well_curve_set
+                    or "TVDSS" in well_curve_set
+                    or "DEPT_TVD" in well_curve_set
+                    or "DEPTH_TVD" in well_curve_set
+                    or "DEPT_TVDSS" in well_curve_set
+                    or "DEPTH_TVDSS" in well_curve_set
+                )
+                if has_tvd_for_well:
+                    well_curve_set.add("TVD")
+                    all_curves_set.add("TVD")
+                    well_curve_set.add("TVDSS")
+                    all_curves_set.add("TVDSS")
+                for can_key, aliases in canonical_zone_curve_aliases.items():
+                    if any(a in well_curve_set for a in aliases):
+                        well_curve_set.add(can_key)
+                        all_curves_set.add(can_key)
+                well_curves_sorted = sorted(well_curve_set)
+
+                # Compute per-formation depth intervals and curve availability
+                w_tops = tops_list_by_well.get(wid, [])
+                unique_top_depths = sorted(
+                    {
+                        float(t["depth"])
+                        for t in w_tops
+                        if t.get("depth") is not None
+                    }
+                )
+                w_cid_map = curve_ids_by_well_mnemonic.get(wid, {})
+                zone_intervals: List[Tuple[str, float, float, Optional[Dict[str, Any]]]] = []
+                seen_zone_names = set()
+                for t in w_tops:
+                    z_name = str(t.get("name") or "").strip()
+                    d_top = t.get("depth")
+                    if not z_name or d_top is None:
+                        continue
+                    d_top_f = float(d_top)
+                    next_d = next(
+                        (d for d in unique_top_depths if d > d_top_f + 1e-6),
+                        None,
+                    )
+                    if next_d is not None:
+                        d_base_f = float(next_d)
+                        t["base_depth"] = round(d_base_f, 2)
+                    elif max_d is not None and max_d >= d_top_f:
+                        d_base_f = float(max_d) + 1.0
+                        t["base_depth"] = round(float(max_d), 2)
+                    else:
+                        d_base_f = d_top_f + 1e6
+                        t["base_depth"] = None
+                    zone_intervals.append((z_name, d_top_f, d_base_f, t))
+                    seen_zone_names.add(z_name)
+
+                for z_name, (z_min, z_max) in zones_curve_bounds.get(wid, {}).items():
+                    if z_name not in seen_zone_names:
+                        zone_intervals.append((z_name, z_min, z_max, None))
+                        seen_zone_names.add(z_name)
+
+                live_depth_np: Optional[np.ndarray] = None
+                if live_df is not None and "DEPTH" in live_df.columns:
+                    live_depth_np = pd.to_numeric(
+                        live_df["DEPTH"], errors="coerce"
+                    ).to_numpy(dtype=float)
+
+                zone_curves_map: Dict[str, List[str]] = {}
+                for z_name, d_top_f, d_base_f, top_item in zone_intervals:
+                    present_can: List[str] = []
+                    for can_key, aliases in canonical_zone_curve_aliases.items():
+                        if can_key in ("TVD", "TVDSS") and has_tvd_for_well:
+                            if (
+                                min_d is not None
+                                and max_d is not None
+                                and d_top_f <= max_d
+                                and d_base_f >= min_d
+                            ):
+                                present_can.append(can_key)
+                                continue
+                        if not any(a in well_curve_set for a in aliases):
+                            continue
+                        found_in_zone = False
+                        if live_df is not None and live_depth_np is not None:
+                            z_mask = (
+                                np.isfinite(live_depth_np)
+                                & (live_depth_np >= d_top_f)
+                                & (live_depth_np < d_base_f)
+                            )
+                            if z_mask.any():
+                                for a in aliases:
+                                    if a in live_df.columns:
+                                        col_v = pd.to_numeric(
+                                            live_df.loc[z_mask, a], errors="coerce"
+                                        )
+                                        if col_v.notna().any():
+                                            found_in_zone = True
+                                            break
+                        if not found_in_zone:
+                            for a in aliases:
+                                cid = w_cid_map.get(a)
+                                if cid is not None:
+                                    bounds = curve_minmax_map.get(cid)
+                                    if bounds is None:
+                                        continue
+                                    c_min, c_max = bounds
+                                    if c_max < d_top_f or c_min >= d_base_f:
+                                        continue
+                                    if (
+                                        can_key not in computed_curve_keys
+                                        or (d_top_f <= c_min < d_base_f)
+                                        or (d_top_f <= c_max < d_base_f)
+                                    ):
+                                        found_in_zone = True
+                                        break
+                                    hit = session.execute(
+                                        zone_probe_stmt,
+                                        {
+                                            "cid": cid,
+                                            "d_top": d_top_f,
+                                            "d_base": d_base_f,
+                                        },
+                                    ).first()
+                                    if hit is not None:
+                                        found_in_zone = True
+                                        break
+                        if found_in_zone:
+                            present_can.append(can_key)
+                    existing_z = zone_curves_map.get(z_name)
+                    if existing_z:
+                        merged_z = sorted(set(existing_z) | set(present_can))
+                        zone_curves_map[z_name] = merged_z
+                    else:
+                        zone_curves_map[z_name] = present_can
+                    if top_item is not None:
+                        top_item["curves"] = present_can
+                        top_item["computed_curves"] = [
+                            ck for ck in computed_curve_keys if ck in present_can
+                        ]
+
                 c_samples = core_counts.get(wid, 0)
                 c_curve_pts = core_curve_counts.get(wid, 0)
                 effective_core_pts = max(c_samples, c_curve_pts)
@@ -704,6 +1154,8 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                     if row_count > 0
                     else 0.0
                 )
+                scal_info = scal_pc_counts.get(wid, {"points": 0, "samples": 0})
+                rp_info = relperm_counts.get(wid, {"points": 0, "samples": 0})
 
                 wells_summary.append(
                     {
@@ -711,43 +1163,67 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         "well_id": wid,
                         "name": w.name,
                         "uwi": w.uwi,
+                        "spud_date": w_spud_date,
+                        "log_date": w_log_date,
                         "depth_uom": w.depth_uom or "m",
+                        "df_elev": w_df_elev,
                         "min_depth": min_d,
                         "max_depth": max_d,
                         "total_depth": td,
                         "row_count": row_count,
                         "depth_count": row_count,
-                        "available_curves": curves_by_well.get(wid, []),
-                        "curves": curves_by_well.get(wid, []),
-                        "available_curves": curves_by_well.get(wid, []),
+                        "available_curves": well_curves_sorted,
+                        "curves": well_curves_sorted,
                         "zones": zones_by_well.get(wid, []),
+                        "formation_tops": tops_list_by_well.get(wid, []),
+                        "zone_curves": zone_curves_map,
                         "core_sample_count": effective_core_pts,
                         "core_availability_pct": core_pct,
-                        "formation_top_count": tops_count_by_well.get(wid, 0),
+                        "scal_pc_count": scal_info["points"],
+                        "scal_sample_count": scal_info["samples"],
+                        "relperm_count": rp_info["points"],
+                        "relperm_sample_count": rp_info["samples"],
+                        "formation_top_count": max(
+                            tops_count_by_well.get(wid, 0),
+                            len(zones_by_well.get(wid, [])),
+                        ),
                         "fluid_contact_count": contact_counts.get(wid, 0),
+                        "fluid_contacts": contacts_list_by_well.get(wid, []),
                         "pressure_test_count": pressure_counts.get(wid, 0),
                         "survey_count": survey_counts.get(wid, 0),
+                        "perforation_count": perf_counts.get(wid, 0),
+                        "perforations": perfs_list_by_well.get(wid, []),
                     }
                 )
 
-            return {
-                "project_id": proj.project_id,
-                "name": proj.name,
-                "description": proj.description,
-                "well_count": len(wells_summary),
-                "min_depth": min(
-                    (w["min_depth"] for w in wells_summary if w.get("min_depth") is not None),
-                    default=None,
-                ),
-                "max_depth": max(
-                    (w["max_depth"] for w in wells_summary if w.get("max_depth") is not None),
-                    default=None,
-                ),
-                "total_depth_sum": round(total_depth_sum, 2),
-                "all_zones": sorted(all_zones_set),
-                "all_curves": sorted(all_curves_set),
-                "wells": wells_summary,
-            }
+            return _sanitize_for_json(
+                {
+                    "project_id": int(proj.project_id),
+                    "name": proj.name,
+                    "description": proj.description,
+                    "well_count": len(wells_summary),
+                    "min_depth": min(
+                        (
+                            w["min_depth"]
+                            for w in wells_summary
+                            if w.get("min_depth") is not None
+                        ),
+                        default=None,
+                    ),
+                    "max_depth": max(
+                        (
+                            w["max_depth"]
+                            for w in wells_summary
+                            if w.get("max_depth") is not None
+                        ),
+                        default=None,
+                    ),
+                    "total_depth_sum": round(float(total_depth_sum), 2),
+                    "all_zones": sorted(all_zones_set),
+                    "all_curves": sorted(all_curves_set),
+                    "wells": wells_summary,
+                }
+            )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
@@ -802,6 +1278,7 @@ async def create_well(project_id: int, payload: dict):
 
 @router.post("/projects/{project_id}/read_las", summary="Upload LAS files into project")
 @router.post("/projects/{project_id}/upload", include_in_schema=False)
+@router.post("/projects/{project_id}/upload-las", include_in_schema=False)
 def project_read_las(
     project_id: int,
     files: List[UploadFile] = File(...),
@@ -842,18 +1319,47 @@ def project_read_las(
             proj = db_objects.Project.load(session, project_id=project_id)
             if is_demo_mode():
                 import lasio
+                from quick_pp.las_handler import (
+                    extract_las_metadata,
+                    merge_well_curves_with_dedup,
+                )
 
                 proj_eph = _ephemeral_wells.setdefault(project_id, {})
                 for p in saved_paths:
                     las = lasio.read(p)
                     ldf = las.df().reset_index()
-                    ldf.columns = [str(c).upper() for c in ldf.columns]
+                    ldf.columns = [
+                        re.sub(r":\d+$", "", str(c).strip()).upper()
+                        for c in ldf.columns
+                    ]
                     if "DEPT" in ldf.columns and "DEPTH" not in ldf.columns:
                         ldf = ldf.rename(columns={"DEPT": "DEPTH"})
-                    w_name = str(getattr(las.well, "WELL", None).value if hasattr(las.well, "WELL") else Path(p).stem.split("_", 1)[-1]).strip() or Path(p).stem
+                    fallback_stem = Path(p).stem.split("_", 1)[-1] or Path(p).stem
+                    meta_d = dict(
+                        extract_las_metadata(las, fallback_well_name=fallback_stem)
+                    )
+                    w_name = str(meta_d.get("well_name") or fallback_stem).strip()
                     ldf["WELL_NAME"] = w_name
-                    proj_eph[w_name] = ldf
-                    _merged_data_cache[f"{project_id}_{w_name}_0.16"] = (time.time(), ldf.copy())
+                    existing_demo_df = proj_eph.get(w_name)
+                    if existing_demo_df is None and w_name in set(
+                        proj.get_well_names()
+                    ):
+                        try:
+                            existing_demo_df = proj.get_well_data_optimized(w_name)
+                        except Exception:
+                            existing_demo_df = None
+                    merged_ldf, _ = merge_well_curves_with_dedup(existing_demo_df, ldf)
+                    proj_eph[w_name] = merged_ldf
+                    prev_hdr = _ephemeral_well_headers.get((project_id, w_name), {})
+                    merged_hdr = dict(prev_hdr)
+                    for mk, mv in meta_d.items():
+                        if mv is not None or mk not in merged_hdr:
+                            merged_hdr[mk] = mv
+                    _ephemeral_well_headers[(project_id, w_name)] = merged_hdr
+                    _merged_data_cache[f"{project_id}_{w_name}_0.16"] = (
+                        time.time(),
+                        merged_ldf.copy(),
+                    )
             else:
                 proj.read_las(saved_paths, depth_uom=depth_uom)
 
@@ -868,7 +1374,8 @@ def project_read_las(
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
-            status_code=(413 if getattr(e, "status_code", 500) == 413 else 500), detail=getattr(e, "detail", f"Failed to read LAS into project: {e}")
+            status_code=(413 if getattr(e, "status_code", 500) == 413 else 500),
+            detail=getattr(e, "detail", f"Failed to read LAS into project: {e}"),
         ) from e
 
 
@@ -938,7 +1445,10 @@ async def save_well_data(project_id: int, well_name: str, payload: dict):
         if is_demo_mode():
             for wn, wdf in df.groupby("WELL_NAME"):
                 _ephemeral_wells.setdefault(project_id, {})[str(wn)] = wdf.copy()
-                _merged_data_cache[f"{project_id}_{wn}_0.16"] = (time.time(), wdf.copy())
+                _merged_data_cache[f"{project_id}_{wn}_0.16"] = (
+                    time.time(),
+                    wdf.copy(),
+                )
             return {
                 "message": "Well data saved to ephemeral demo session",
                 "rows": len(df),
@@ -977,7 +1487,6 @@ async def save_well_data(project_id: int, well_name: str, payload: dict):
 @router.get(
     "/projects/{project_id}/wells/{well_name}/data",
     summary="Get top-to-bottom well data",
-
 )
 def get_well_data(
     project_id: int, well_name: str, include_ancillary: bool = False
@@ -993,7 +1502,9 @@ def get_well_data(
 
             # Use optimized method if available
             try:
-                df = proj.get_well_data_optimized(resolve_db_well_name(project_id, well_name))
+                df = proj.get_well_data_optimized(
+                    resolve_db_well_name(project_id, well_name)
+                )
             except AttributeError:
                 df = proj.get_well_data(resolve_db_well_name(project_id, well_name))
 
@@ -1039,6 +1550,11 @@ def get_well_data(
                     "formation_tops": tops,
                     "fluid_contacts": contacts,
                     "pressure_tests": pressure,
+                    "perforations": (
+                        well.get_perforations().to_dict(orient="records")
+                        if not well.get_perforations().empty
+                        else []
+                    ),
                     "core_samples": core_samples,
                 }
 
@@ -1075,13 +1591,20 @@ def _sanitize_for_json(obj):
 def _series_to_py_list(series: pd.Series) -> list:
     """Convert a pandas Series to a native Python list with NaN/Inf mapped to None."""
     if pd.api.types.is_numeric_dtype(series):
-        s = series.replace([np.inf, -np.inf], np.nan)
-        return s.astype(object).where(pd.notna(s), None).tolist()
+        arr = pd.to_numeric(series, errors="coerce").to_numpy(dtype=np.float64)
+        finite = np.isfinite(arr)
+        py_vals = arr.tolist()
+        return [py_vals[i] if finite[i] else None for i in range(len(py_vals))]
     elif pd.api.types.is_datetime64_any_dtype(series):
         s = series.dt.strftime("%Y-%m-%dT%H:%M:%S")
-        return s.astype(object).where(pd.notna(series), None).tolist()
+        return [None if pd.isna(x) else str(x) for x in s.tolist()]
     else:
-        return series.astype(object).where(pd.notna(series), None).tolist()
+        return [
+            None
+            if pd.isna(x)
+            else (_sanitize_for_json(x) if isinstance(x, np.generic) else x)
+            for x in series.tolist()
+        ]
 
 
 def dataframe_to_columnar(df: pd.DataFrame) -> Dict[str, Any]:
@@ -1127,6 +1650,93 @@ def filter_merged_dataframe(
     return filtered.reset_index(drop=True)
 
 
+def _compute_tvd_from_survey(
+    md_values: np.ndarray,
+    surveys_df: Optional[pd.DataFrame],
+) -> Optional[np.ndarray]:
+    """Compute TVD along md_values from directional survey minimum curvature (or survey TVD column).
+    Returns None if no valid survey with >= 2 stations is available (never assumes TVD == MD).
+    """
+    if len(md_values) == 0 or surveys_df is None or not isinstance(surveys_df, pd.DataFrame) or surveys_df.empty:
+        return None
+
+    col_map = {str(c).lower(): c for c in surveys_df.columns}
+    md_c = col_map.get("md") or col_map.get("depth")
+    inc_c = col_map.get("inc") or col_map.get("incl") or col_map.get("inclination")
+    azi_c = col_map.get("azim") or col_map.get("azi") or col_map.get("azimuth")
+    tvd_c = col_map.get("tvd")
+
+    if md_c and tvd_c and surveys_df[tvd_c].notna().sum() >= 2:
+        s_sub = (
+            pd.DataFrame(
+                {
+                    "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
+                    "tvd": pd.to_numeric(surveys_df[tvd_c], errors="coerce"),
+                }
+            )
+            .dropna()
+            .sort_values("md")
+            .drop_duplicates(subset=["md"], keep="last")
+        )
+        if len(s_sub) >= 2:
+            mds = s_sub["md"].to_numpy(dtype=float)
+            tvds = s_sub["tvd"].to_numpy(dtype=float)
+            if mds[0] > 1.0:
+                mds = np.insert(mds, 0, 0.0)
+                tvds = np.insert(tvds, 0, 0.0)
+            return np.interp(md_values, mds, tvds)
+
+    if md_c and inc_c and azi_c:
+        s_sorted = (
+            pd.DataFrame(
+                {
+                    "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
+                    "inc": pd.to_numeric(surveys_df[inc_c], errors="coerce"),
+                    "azim": pd.to_numeric(surveys_df[azi_c], errors="coerce"),
+                }
+            )
+            .dropna()
+            .sort_values("md")
+            .drop_duplicates(subset=["md"], keep="last")
+        )
+        if len(s_sorted) >= 2:
+            mds = s_sorted["md"].to_numpy(dtype=float)
+            incs = s_sorted["inc"].to_numpy(dtype=float)
+            azis = s_sorted["azim"].to_numpy(dtype=float)
+            if mds[0] > 1.0:
+                mds = np.insert(mds, 0, 0.0)
+                incs = np.insert(incs, 0, 0.0)
+                azis = np.insert(azis, 0, azis[0] if len(azis) > 0 else 0.0)
+            try:
+                import wellpathpy as wpp
+
+                dev = wpp.deviation(mds, incs, azis)
+                pos = dev.minimum_curvature()
+                return np.interp(
+                    md_values,
+                    np.asarray(pos.md, dtype=float),
+                    np.asarray(pos.depth, dtype=float),
+                )
+            except Exception:
+                inc_rad = np.deg2rad(incs)
+                azi_rad = np.deg2rad(azis)
+                dmd = np.diff(mds)
+                i1, i2 = inc_rad[:-1], inc_rad[1:]
+                a1, a2 = azi_rad[:-1], azi_rad[1:]
+                cos_dl = np.clip(
+                    np.cos(i2 - i1) - np.sin(i1) * np.sin(i2) * (1.0 - np.cos(a2 - a1)),
+                    -1.0,
+                    1.0,
+                )
+                dl = np.arccos(cos_dl)
+                rf = np.where(dl > 1e-6, (2.0 / dl) * np.tan(dl / 2.0), 1.0)
+                dz = 0.5 * dmd * (np.cos(i1) + np.cos(i2)) * rf
+                tvd_calc = np.concatenate([[0.0], np.cumsum(dz)])
+                return np.interp(md_values, mds, tvd_calc)
+
+    return None
+
+
 def _get_merged_dataframe_sync(
     project_id: int,
     well_name: str,
@@ -1136,14 +1746,45 @@ def _get_merged_dataframe_sync(
     tol = float(tolerance) if tolerance is not None else 0.16
     cache_key = f"{project_id}_{well_name}_{tol}"
     now = time.time()
+    w_tok = _safe_cache_token(well_name)
+
+    inv_ts = 0.0
+    mem_ts = 0.0
+    mem_pkl_path = _SHARED_CACHE_DIR / f"mem_{project_id}_{w_tok}.pkl"
+    try:
+        for stamp_p in (
+            _SHARED_CACHE_DIR / f"inv_{project_id}_{w_tok}.stamp",
+            _SHARED_CACHE_DIR / f"inv_{project_id}__all.stamp",
+            _SHARED_CACHE_DIR / "inv_global.stamp",
+        ):
+            if stamp_p.exists():
+                inv_ts = max(inv_ts, stamp_p.stat().st_mtime)
+        if mem_pkl_path.exists():
+            mem_ts = mem_pkl_path.stat().st_mtime
+    except Exception:
+        pass
 
     cached_entry = _merged_data_cache.get(cache_key)
     if cached_entry is not None:
         cached_ts, cached_df = cached_entry
-        if is_demo_mode() or (now - cached_ts < _cache_ttl):
+        if (
+            cached_ts >= inv_ts
+            and cached_ts >= mem_ts
+            and (is_demo_mode() or (now - cached_ts < _cache_ttl))
+        ):
             return cached_df.copy()
         else:
             _merged_data_cache.pop(cache_key, None)
+
+    if mem_ts > inv_ts and (is_demo_mode() or (now - mem_ts < _cache_ttl)):
+        try:
+            with open(mem_pkl_path, "rb") as fh:
+                shared_df = pickle.load(fh)
+            if isinstance(shared_df, pd.DataFrame) and not shared_df.empty:
+                _merged_data_cache[cache_key] = (mem_ts, shared_df)
+                return shared_df.copy()
+        except Exception:
+            pass
 
     eph_df = _ephemeral_wells.get(project_id, {}).get(well_name)
     if eph_df is not None:
@@ -1174,18 +1815,69 @@ def _get_merged_dataframe_sync(
         d = d.dropna(subset=["depth"]) if not d.empty else d
         return d
 
-    try:
-        with get_db() as session:
-            proj = db_objects.Project.load(session, project_id=project_id)
+    with _merge_locks_guard:
+        key_lock = _merge_locks.setdefault(cache_key, threading.Lock())
 
-            try:
-                df = proj.get_well_data_optimized(resolve_db_well_name(project_id, well_name))
-            except AttributeError:
-                df = proj.get_well_data(resolve_db_well_name(project_id, well_name))
-            if df.empty:
-                return pd.DataFrame()
+    with key_lock:
+        # Double-check cache after acquiring per-well lock
+        cached_entry = _merged_data_cache.get(cache_key)
+        if cached_entry is not None:
+            cached_ts, cached_df = cached_entry
+            if (
+                cached_ts >= inv_ts
+                and cached_ts >= mem_ts
+                and (is_demo_mode() or (now - cached_ts < _cache_ttl))
+            ):
+                return cached_df.copy()
 
-            # Normalize main dataframe depth column
+        try:
+            db_well_name = resolve_db_well_name(project_id, well_name)
+            with get_db() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                try:
+                    df = proj.get_well_data_optimized(db_well_name)
+                except AttributeError:
+                    df = proj.get_well_data(db_well_name)
+                if df.empty:
+                    return pd.DataFrame()
+
+                well = proj.get_well(db_well_name)
+                well_header_data = (
+                    dict(well.header_data)
+                    if isinstance(well.header_data, dict)
+                    else {}
+                )
+                well_config_data = (
+                    dict(well._orm_well.config_data)
+                    if well._orm_well and isinstance(well._orm_well.config_data, dict)
+                    else {}
+                )
+                well_depth_uom = (
+                    (well._orm_well.depth_uom if well._orm_well else None)
+                    or getattr(well, "depth_uom", None)
+                    or "m"
+                )
+                raw_tops_df = well.get_formation_tops()
+                raw_contacts_df = well.get_fluid_contacts()
+                raw_pressure_df = well.get_pressure_tests()
+                try:
+                    raw_surveys_df = well.get_well_surveys()
+                except Exception:
+                    raw_surveys_df = pd.DataFrame()
+                rca_rows = session.execute(
+                    text("""
+                        SELECT cs.depth, cs.sample_name, UPPER(cm.property_name) AS prop, cm.value
+                        FROM core_samples cs
+                        JOIN core_measurements cm ON cm.sample_id = cs.sample_id
+                        WHERE cs.well_id = :wid
+                          AND cm.value IS NOT NULL
+                          AND UPPER(cm.property_name) IN ('POR', 'CPORE', 'POROSITY', 'PERM', 'CPERM', 'PERMEABILITY')
+                        ORDER BY cs.depth
+                    """),
+                    {"wid": well.well_id},
+                ).fetchall()
+
+            # Database session is now closed; perform CPU/DataFrame merging outside DB pool
             df = df.reset_index(drop=True)
             df.columns = [c.lower() for c in df.columns]
             if "depth" not in df.columns:
@@ -1203,12 +1895,13 @@ def _get_merged_dataframe_sync(
             df = df.dropna(subset=["depth"])
             df = df.sort_values("depth").reset_index(drop=True)
 
-            well = proj.get_well(resolve_db_well_name(project_id, well_name))
-
-            tops_df = _normalize_df_depth(well.get_formation_tops())
-            contacts_df = _normalize_df_depth(well.get_fluid_contacts())
-            pressure_df = _normalize_df_depth(well.get_pressure_tests())
-            core_raw = well.get_core_data() or {}
+            tops_df = _normalize_df_depth(raw_tops_df)
+            contacts_df = _normalize_df_depth(raw_contacts_df)
+            pressure_df = _normalize_df_depth(
+                raw_pressure_df.drop(columns=["test_id"], errors="ignore")
+                if isinstance(raw_pressure_df, pd.DataFrame)
+                else raw_pressure_df
+            )
 
             def _prefixed(dframe, prefix):
                 if dframe is None or dframe.empty:
@@ -1236,7 +1929,36 @@ def _get_merged_dataframe_sync(
                     tolerance=tol,
                     suffixes=("", "_top"),
                 )
-                if "top_name" in merged.columns:
+                if "top_name" in tops_p.columns:
+                    # Deduplicate co-depth tops deterministically (prefer specific unit/sandstone over broad group)
+                    def _top_specificity(name_val: Any) -> tuple:
+                        s = str(name_val or "").strip()
+                        sl = s.lower()
+                        has_res_kw = any(
+                            k in sl
+                            for k in ("sand", "member", "unit", "tuff", "clay", "silt")
+                        )
+                        return (1 if has_res_kw else 0, len(s), s)
+
+                    tops_zone_df = tops_p[["depth", "top_name"]].dropna().copy()
+                    if not tops_zone_df.empty:
+                        tops_zone_df["_spec"] = tops_zone_df["top_name"].map(
+                            _top_specificity
+                        )
+                        tops_zone_df = (
+                            tops_zone_df.sort_values(["depth", "_spec"])
+                            .drop_duplicates(subset=["depth"], keep="last")
+                            .drop(columns=["_spec"])
+                            .reset_index(drop=True)
+                        )
+                        z_merged = pd.merge_asof(
+                            merged[["depth"]],
+                            tops_zone_df,
+                            on="depth",
+                            direction="backward",
+                        )
+                        merged["zones"] = z_merged["top_name"].ffill()
+                elif "top_name" in merged.columns:
                     merged["zones"] = merged["top_name"].ffill()
 
             if contacts_p is not None and not contacts_p.empty:
@@ -1260,30 +1982,22 @@ def _get_merged_dataframe_sync(
                 )
 
             core_rows_by_depth: Dict[float, Dict[str, Any]] = {}
-            if isinstance(core_raw, dict):
-                for name, sd in core_raw.items():
-                    try:
-                        dval = sd.get("depth")
-                        if dval is None:
-                            continue
-                        measurements = sd.get("measurements")
-                        if measurements is None or measurements.empty:
-                            continue
-
-                        d_float = float(dval)
-                        row_entry = core_rows_by_depth.setdefault(
-                            d_float,
-                            {"depth": d_float, "core_sample_name": name},
-                        )
-                        for prop in ("cpore", "cperm"):
-                            mask = (measurements["property"] == prop) & measurements[
-                                "value"
-                            ].notna()
-                            filtered = measurements[mask]
-                            if not filtered.empty:
-                                row_entry[prop] = float(filtered.iloc[0]["value"])
-                    except Exception:
-                        continue
+            for dval, sname, prop_up, raw_val in rca_rows:
+                if dval is None or raw_val is None:
+                    continue
+                try:
+                    d_float = float(dval)
+                    val = float(raw_val)
+                except (TypeError, ValueError):
+                    continue
+                row_entry = core_rows_by_depth.setdefault(
+                    d_float,
+                    {"depth": d_float, "core_sample_name": sname},
+                )
+                if prop_up in ("POR", "CPORE", "POROSITY") and "cpore" not in row_entry:
+                    row_entry["cpore"] = val / 100.0 if val > 1.0 else val
+                elif prop_up in ("PERM", "CPERM", "PERMEABILITY") and "cperm" not in row_entry:
+                    row_entry["cperm"] = val
 
             if core_rows_by_depth:
                 core_df = (
@@ -1299,6 +2013,88 @@ def _get_merged_dataframe_sync(
                     tolerance=tol,
                     suffixes=("", "_core"),
                 )
+                for c_col in ("cpore", "cperm"):
+                    c_core = f"{c_col}_core"
+                    if c_core in merged.columns:
+                        if c_col in merged.columns:
+                            merged[c_col] = merged[c_core].combine_first(merged[c_col])
+                        else:
+                            merged[c_col] = merged[c_core]
+                        merged.drop(columns=[c_core], inplace=True)
+
+            # Resolve TVD and TVDSS (= TVD - DF_elevation) from curves or directional survey (never assume TVD == MD)
+            from quick_pp.las_handler import extract_las_metadata, extract_well_df_elevation
+
+            eph_hdr = _ephemeral_well_headers.get(
+                (project_id, well_name)
+            ) or _ephemeral_well_headers.get((project_id, db_well_name))
+            if isinstance(eph_hdr, dict):
+                well_header_data = {**well_header_data, **eph_hdr}
+            df_elev_val = float(
+                extract_well_df_elevation(
+                    well_header_data,
+                    well_config_data,
+                    target_depth_uom=well_depth_uom,
+                )
+                or 0.0
+            )
+
+            has_valid_tvd = (
+                "tvd" in merged.columns
+                and pd.to_numeric(merged["tvd"], errors="coerce").notna().sum() >= 2
+            )
+            if not has_valid_tvd:
+                for tvd_alias in ("dept_tvd", "depth_tvd"):
+                    if tvd_alias in merged.columns:
+                        s_alias = pd.to_numeric(merged[tvd_alias], errors="coerce")
+                        if s_alias.notna().sum() >= 2:
+                            merged["tvd"] = s_alias
+                            has_valid_tvd = True
+                            break
+
+            has_valid_tvdss = (
+                "tvdss" in merged.columns
+                and pd.to_numeric(merged["tvdss"], errors="coerce").notna().sum() >= 2
+            )
+            if not has_valid_tvdss:
+                for tvdss_alias in ("dept_tvdss", "depth_tvdss", "tvd_ss"):
+                    if tvdss_alias in merged.columns:
+                        s_alias = pd.to_numeric(merged[tvdss_alias], errors="coerce")
+                        if s_alias.notna().sum() >= 2:
+                            merged["tvdss"] = s_alias
+                            has_valid_tvdss = True
+                            break
+            if has_valid_tvdss:
+                s_tvdss_chk = pd.to_numeric(merged["tvdss"], errors="coerce")
+                if (s_tvdss_chk.dropna() < 0).mean() > 0.8:
+                    merged["tvdss"] = s_tvdss_chk.abs()
+
+            if (
+                not has_valid_tvd
+                and isinstance(raw_surveys_df, pd.DataFrame)
+                and not raw_surveys_df.empty
+            ):
+                tvd_from_survey = _compute_tvd_from_survey(
+                    merged["depth"].to_numpy(dtype=float), raw_surveys_df
+                )
+                if (
+                    tvd_from_survey is not None
+                    and np.isfinite(tvd_from_survey).sum() >= 2
+                ):
+                    merged["tvd"] = tvd_from_survey
+                    has_valid_tvd = True
+
+            if not has_valid_tvd and has_valid_tvdss:
+                merged["tvd"] = (
+                    pd.to_numeric(merged["tvdss"], errors="coerce") + df_elev_val
+                )
+                has_valid_tvd = True
+
+            if has_valid_tvd and not has_valid_tvdss:
+                merged["tvdss"] = (
+                    pd.to_numeric(merged["tvd"], errors="coerce") - df_elev_val
+                )
+                has_valid_tvdss = True
 
             merged = merged.replace([np.inf, -np.inf], np.nan)
             merged.columns = [c.upper() for c in merged.columns]
@@ -1310,12 +2106,12 @@ def _get_merged_dataframe_sync(
                 )
                 _merged_data_cache.pop(oldest_key, None)
 
-            _merged_data_cache[cache_key] = (now, merged.copy())
+            _merged_data_cache[cache_key] = (time.time(), merged.copy())
             return merged
-    except ValueError as e:
-        raise ValueError(str(e)) from e
-    except Exception as e:
-        raise Exception(f"Failed to produce merged data: {e}") from e
+        except ValueError as e:
+            raise ValueError(str(e)) from e
+        except Exception as e:
+            raise Exception(f"Failed to produce merged data: {e}") from e
 
 
 def _compute_merged_data_sync(
@@ -1348,7 +2144,9 @@ def get_merged_well_data(
     """Return merged well curve and ancillary data directly with in-memory caching and optional depth/zone filtering."""
     try:
         merged = _get_merged_dataframe_sync(project_id, well_name, tolerance=tolerance)
-        zone_list = [z.strip() for z in zones.split(",") if z.strip()] if zones else None
+        zone_list = (
+            [z.strip() for z in zones.split(",") if z.strip()] if zones else None
+        )
         filtered = filter_merged_dataframe(
             merged, min_depth=min_depth, max_depth=max_depth, zones=zone_list
         )
@@ -1415,3 +2213,252 @@ async def get_cache_stats():
         "cache_ttl_seconds": _cache_ttl,
         "cached_wells": list({k.rsplit("_", 1)[0] for k in _merged_data_cache.keys()}),
     }
+
+
+def _collect_project_handover_bundles(
+    project_id: int,
+    well_names_filter: Optional[List[str]] = None,
+) -> tuple[str, str, List[Dict[str, Any]], Dict[str, Any]]:
+    """Gather project metadata, project-level multi-well config, and per-well handover dictionaries (including ephemeral/cached live edits)."""
+    from quick_pp.handover import collect_well_handover_dict
+    from quick_pp.app.backend.services.workspace import _ephemeral_well_configs
+
+    if project_id in _demo_deleted_projects:
+        raise ValueError(f"Project {project_id} not found")
+
+    allowed = (
+        {str(w).strip() for w in well_names_filter if str(w).strip()}
+        if well_names_filter
+        else None
+    )
+    deleted_w_set = _demo_deleted_wells.get(project_id, set())
+    renamed_w_map = _demo_well_renames.get(project_id, {})
+
+    with get_db() as session:
+        proj = db_objects.Project.load(session, project_id=project_id)
+        ovr = _demo_project_overrides.get(project_id, {})
+        proj_name = ovr.get("name", proj.name)
+        proj_desc = ovr.get("description", proj.description or "")
+        proj_cfg: Dict[str, Any] = dict(
+            getattr(proj._orm_project, "config_data", None) or {}
+        )
+        eph_proj_cfg = _ephemeral_well_configs.get((project_id, "__PROJECT__"))
+        if isinstance(eph_proj_cfg, dict):
+            proj_cfg.update(eph_proj_cfg)
+
+        wells_bundle: List[Dict[str, Any]] = []
+        seen_names = set()
+
+        for orm_well in proj._orm_project.wells:
+            curr_name = renamed_w_map.get(orm_well.name, orm_well.name)
+            if orm_well.name in deleted_w_set or curr_name in deleted_w_set:
+                continue
+            if allowed and curr_name not in allowed and orm_well.name not in allowed:
+                continue
+
+            seen_names.add(curr_name)
+            well_obj = db_objects.Well(session, well_id=orm_well.well_id)
+            # Check if there is an updated merged/ephemeral dataframe in memory
+            live_df = None
+            eph_entry = _ephemeral_wells.get(project_id, {}).get(curr_name)
+            if isinstance(eph_entry, pd.DataFrame):
+                live_df = eph_entry
+            elif isinstance(eph_entry, dict) and isinstance(
+                eph_entry.get("data"), pd.DataFrame
+            ):
+                live_df = eph_entry["data"]
+            else:
+                cached = _merged_data_cache.get(f"{project_id}_{curr_name}_0.16")
+                if cached is not None:
+                    live_df = cached[1]
+                else:
+                    try:
+                        live_df = _get_merged_dataframe_sync(project_id, curr_name)
+                    except Exception:
+                        live_df = None
+
+            eph_w_cfg = _ephemeral_well_configs.get((project_id, curr_name)) or _ephemeral_well_configs.get((project_id, orm_well.name))
+            b_dict = collect_well_handover_dict(
+                well_obj,
+                override_df=live_df,
+                override_config=eph_w_cfg if isinstance(eph_w_cfg, dict) else None,
+            )
+            b_dict["name"] = curr_name
+            wells_bundle.append(b_dict)
+
+        # Include any purely ephemeral uploaded wells in demo mode
+        for eph_name, eph_val in _ephemeral_wells.get(project_id, {}).items():
+            if eph_name in seen_names or eph_name in deleted_w_set:
+                continue
+            if allowed and eph_name not in allowed:
+                continue
+            eph_df = (
+                eph_val
+                if isinstance(eph_val, pd.DataFrame)
+                else eph_val.get("data", pd.DataFrame())
+                if isinstance(eph_val, dict)
+                else pd.DataFrame()
+            )
+            eph_hdr = (
+                eph_val.get("header", {})
+                if isinstance(eph_val, dict) and isinstance(eph_val.get("header"), dict)
+                else {}
+            )
+            eph_cfg = _ephemeral_well_configs.get((project_id, eph_name)) or (
+                eph_val.get("config", {})
+                if isinstance(eph_val, dict) and isinstance(eph_val.get("config"), dict)
+                else {}
+            )
+            wells_bundle.append(
+                {
+                    "name": eph_name,
+                    "uwi": eph_name,
+                    "depth_uom": "m",
+                    "header": eph_hdr,
+                    "config": eph_cfg,
+                    "data": eph_df,
+                    "formation_tops": pd.DataFrame(columns=["name", "depth"]),
+                    "fluid_contacts": pd.DataFrame(columns=["name", "depth"]),
+                    "perforations": pd.DataFrame(
+                        columns=["name", "top_depth", "bottom_depth", "description"]
+                    ),
+                    "well_surveys": pd.DataFrame(columns=["md", "inc", "azim"]),
+                    "pressure_tests": pd.DataFrame(
+                        columns=[
+                            "depth",
+                            "pressure",
+                            "pressure_uom",
+                            "mobility",
+                            "permeability",
+                            "temperature",
+                            "temperature_uom",
+                            "remarks",
+                            "tvdss",
+                            "fluid_type",
+                            "test_quality",
+                            "zone",
+                        ]
+                    ),
+                    "core_data": {},
+                    "scal_pc": [],
+                }
+            )
+
+    return proj_name, proj_desc, wells_bundle, proj_cfg
+
+
+@router.get(
+    "/projects/{project_id}/export",
+    summary="Export Petrophysical Handover Package (.zip) for Techlog / Geolog / IP / Petrel",
+)
+def export_project_handover(
+    project_id: int,
+    well_name: Optional[str] = Query(
+        None, description="Optional single well name to export"
+    ),
+    wells: Optional[str] = Query(
+        None, description="Optional comma-separated list of well names to export"
+    ),
+    include_las: bool = Query(True, description="Include LAS 2.0 files"),
+    include_excel: bool = Query(
+        True, description="Include multi-tab Master Excel Workbook (.xlsx)"
+    ),
+):
+    """Build and stream a standardized Petrophysical Handover Package (.zip)."""
+    from quick_pp.handover import _sanitize_name, build_handover_archive_bytes
+
+    try:
+        filter_list: Optional[List[str]] = None
+        if well_name:
+            filter_list = [well_name]
+        elif wells:
+            filter_list = [w.strip() for w in wells.split(",") if w.strip()]
+
+        proj_name, proj_desc, wells_bundle, proj_cfg = _collect_project_handover_bundles(
+            project_id=project_id, well_names_filter=filter_list
+        )
+        if not wells_bundle:
+            raise ValueError("No matching wells found to export.")
+
+        bundle_title = (
+            f"{proj_name}_{well_name}"
+            if well_name and len(wells_bundle) == 1
+            else proj_name
+        )
+        zip_bytes = build_handover_archive_bytes(
+            project_name=bundle_title,
+            project_description=proj_desc,
+            wells_bundle=wells_bundle,
+            include_las=include_las,
+            include_excel=include_excel,
+            project_config=proj_cfg,
+        )
+        filename = f"{_sanitize_name(bundle_title)}_Handover.zip"
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to export handover package: {e}"
+        ) from e
+
+
+@router.get(
+    "/projects/{project_id}/wells/{well_name}/export_las",
+    summary="Export evaluated well logs and CPI parameters as a LAS 2.0 file",
+)
+def export_well_las_endpoint(project_id: int, well_name: str):
+    """Stream a single well's continuous curves and CPI parameters as a LAS 2.0 file."""
+    from quick_pp.handover import _assign_zones_from_tops, _sanitize_name
+    from quick_pp.las_handler import export_to_las_string
+
+    try:
+        _, _, wells_bundle, _ = _collect_project_handover_bundles(
+            project_id=project_id, well_names_filter=[well_name]
+        )
+        if not wells_bundle:
+            raise ValueError(f"Well '{well_name}' not found in project {project_id}")
+
+        w = wells_bundle[0]
+        w_df: pd.DataFrame = w["data"]
+        if w_df is None or w_df.empty:
+            raise ValueError(f"Well '{well_name}' has no log data to export")
+
+        tops_df: pd.DataFrame = w["formation_tops"]
+        if not tops_df.empty and (
+            "ZONES" not in w_df.columns or w_df["ZONES"].isna().all()
+        ):
+            w_df = w_df.copy()
+            w_df["ZONES"] = _assign_zones_from_tops(
+                pd.to_numeric(w_df["DEPTH"], errors="coerce").to_numpy(dtype=float),
+                tops_df,
+            )
+
+        las_content = export_to_las_string(
+            well_data=w_df,
+            well_name=w["name"],
+            uwi=w["uwi"],
+            depth_uom=w["depth_uom"],
+            parameters=w["config"],
+            well_header=w.get("header"),
+        )
+        filename = f"{_sanitize_name(w['name'])}.las"
+        return Response(
+            content=las_content.encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to export LAS file: {e}"
+        ) from e

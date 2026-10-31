@@ -131,12 +131,12 @@ if "%PUBLIC_IP%"=="" (
     exit /b 1
 )
 echo [OK] Public IP: %PUBLIC_IP%
-echo %PUBLIC_IP% > "%TEMP%\%PROJECT_NAME%-do-ip.txt"
+(echo %PUBLIC_IP%)> "%TEMP%\%PROJECT_NAME%-do-ip.txt"
 
 REM -- Step 4: Wait for Docker/boot to settle ------------------------
 echo.
 echo [4/5] Waiting for the droplet to finish booting...
-timeout /t 45 /nobreak >nul
+ping -n 46 127.0.0.1 >nul 2>&1
 
 REM -- Step 5: Push code and start the app ---------------------------
 echo.

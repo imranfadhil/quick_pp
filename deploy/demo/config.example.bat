@@ -18,7 +18,7 @@ set REMOTE_DIR=/opt/quick_pp_demo
 
 REM ---- Droplet ----
 REM Set DROPLET_NAME to an existing droplet to share it, or a new name to create one.
-set DROPLET_NAME=quick-pp-demo
+set DROPLET_NAME=quick-pp-server
 REM Optional: If deploying to a non-DO server or by IP directly, set SHARED_DROPLET_IP.
 set SHARED_DROPLET_IP=
 

@@ -73,8 +73,8 @@ class SandShale:
             nphi_clean = remove_outliers(nphi)
             _, rhob_max_line = min_max_line(rhob_clean, 0.05)
             _, nphi_max_line = min_max_line(nphi_clean, 0.05)
-            wetclay_RHOB = np.min(rhob_max_line)
-            wetclay_NPHI = np.max(nphi_max_line)
+            wetclay_RHOB = np.nanmin(rhob_max_line)
+            wetclay_NPHI = np.nanmax(nphi_max_line)
             self.wet_clay_point = (wetclay_NPHI, wetclay_RHOB)
             logger.debug(
                 f"Updated wet clay point to: ({wetclay_NPHI:.3f}, {wetclay_RHOB:.3f})"
@@ -90,8 +90,8 @@ class SandShale:
         vsand, vcld = self.lithology_fraction(nphi, rhob)
 
         logger.debug(
-            f"Sand-shale estimation completed - mean vsand: {vsand.mean():.3f}, "
-            f"vcld: {vcld.mean():.3f}"
+            f"Sand-shale estimation completed - mean vsand: {np.nanmean(vsand):.3f}, "
+            f"vcld: {np.nanmean(vcld):.3f}"
         )
 
         return vsand, vcld, (nphi_max_line, rhob_max_line)
@@ -108,21 +108,21 @@ class SandShale:
         """
         logger.debug("Calculating sand-shale lithology fractions")
 
+        nphi_arr = np.asarray(nphi, dtype=float)
+        rhob_arr = np.asarray(rhob, dtype=float)
+        if nphi_arr.shape != rhob_arr.shape:
+            raise ValueError("nphi and rhob must have the same shape")
+
         A = self.dry_sand_point
         C = self.dry_clay_point
         D = self.fluid_point
-        E = list(zip(nphi, rhob, strict=True))
         rocklithofrac = length_a_b(A, C)
 
-        vsand = np.empty(0)
-        vcld = np.empty(0)
-        for _, point in enumerate(E):
-            var_pt = line_intersection((A, C), (D, point))
-            projlithofrac = length_a_b(var_pt, C)
-            sand_frac = projlithofrac / rocklithofrac
-            sand_frac = 0 if var_pt[0] > C[0] else sand_frac
-            vsand = np.append(vsand, sand_frac)
-            vcld = np.append(vcld, 1 - sand_frac)
+        var_pt = line_intersection((A, C), (D, (nphi_arr, rhob_arr)))
+        projlithofrac = length_a_b(var_pt, C)
+        sand_frac = projlithofrac / rocklithofrac
+        vsand = np.where(var_pt[0] > C[0], 0.0, sand_frac)
+        vcld = 1.0 - vsand
 
         logger.debug(
             f"Lithology fraction calculation completed for {len(vsand)} points"

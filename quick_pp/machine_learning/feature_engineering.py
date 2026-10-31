@@ -286,6 +286,112 @@ def mn_lithology_parameters(
     return m_lith, n_lith
 
 
+def velocity_deviation_log(
+    rhob=None,
+    nphi=None,
+    dtc=None,
+    phit=None,
+    dt_matrix: float = 47.6,
+    dt_fluid: float = 189.0,
+    rho_matrix: float = 2.68,
+    rho_fluid: float = 1.0,
+):
+    """Calculate the Velocity Deviation Log (VDL = Vp_measured - Vp_Wyllie) in [m/s],
+    based on Anselmetti & Eberli (1999).
+
+    Compares measured sonic velocity (Vp = 304800 / DTC) against the synthetic velocity
+    predicted from total porosity (or neutron-density porosity) via Wyllie's time-average
+    equation:
+        DT_Wyllie = (1 - phi_T) * dt_matrix + phi_T * dt_fluid
+        Vp_Wyllie = 304800.0 / DT_Wyllie
+        VDL = Vp_measured - Vp_Wyllie  [m/s]
+
+    Petrophysical interpretation:
+        - VDL > 0 (positive anomaly): Stiff frame-forming pores (intraparticle, moldic, or separate vugs).
+        - VDL ~ 0 (zero deviation): Interparticle / intercrystalline matrix porosity following Wyllie.
+        - VDL < 0 (negative anomaly): Fractures, microcracks, unconsolidated frame, or gas effect.
+
+    Args:
+        rhob (pd.Series or np.ndarray, optional): Bulk density log [g/cm³].
+        nphi (pd.Series or np.ndarray, optional): Neutron porosity log [v/v].
+        dtc (pd.Series or np.ndarray, optional): Compressional sonic slowness [us/ft or us/m].
+        phit (pd.Series or np.ndarray, optional): Total porosity [v/v]. If None, estimated from RHOB/NPHI.
+        dt_matrix (float, optional): Matrix sonic transit time [us/ft]. Defaults to 47.6 (carbonate/mixed).
+        dt_fluid (float, optional): Fluid sonic transit time [us/ft]. Defaults to 189.0.
+        rho_matrix (float, optional): Fallback matrix density [g/cm³] when `phit` is None. Defaults to 2.68.
+        rho_fluid (float, optional): Fallback fluid density [g/cm³] when `phit` is None. Defaults to 1.0.
+
+    Returns:
+        pd.Series or np.ndarray: Velocity Deviation Log (VDL) in [m/s].
+    """
+    ref_index = None
+    for candidate in (phit, rhob, nphi, dtc):
+        if isinstance(candidate, pd.Series):
+            ref_index = candidate.index
+            break
+
+    # 1. Resolve total porosity phi_t in [0.001, 0.55]
+    phi_est = None
+    if rhob is not None:
+        rhob_arr = np.asarray(rhob, dtype=float)
+        phi_d = (float(rho_matrix) - rhob_arr) / max(
+            float(rho_matrix) - float(rho_fluid), 0.1
+        )
+        if nphi is not None:
+            nphi_arr = np.asarray(nphi, dtype=float)
+            both_nd = np.isfinite(phi_d) & np.isfinite(nphi_arr)
+            phi_est = np.where(both_nd, 0.5 * (phi_d + nphi_arr), phi_d)
+        else:
+            phi_est = phi_d
+    elif nphi is not None:
+        phi_est = np.asarray(nphi, dtype=float)
+
+    if phit is not None:
+        phit_arr = np.asarray(phit, dtype=float)
+        if phi_est is not None:
+            phi_t = np.where(np.isfinite(phit_arr), phit_arr, phi_est)
+        else:
+            phi_t = phit_arr
+    elif phi_est is not None:
+        phi_t = phi_est
+    else:
+        raise ValueError(
+            "At least one of `phit`, `rhob`, or `nphi` must be provided to calculate VDL."
+        )
+
+    phi_t_clipped = np.clip(phi_t, 0.001, 0.55)
+
+    # 2. Synthetic Wyllie transit time [us/ft] and velocity [m/s]
+    dt_wyllie = (1.0 - phi_t_clipped) * float(dt_matrix) + phi_t_clipped * float(
+        dt_fluid
+    )
+    vp_wyllie = 304800.0 / np.clip(dt_wyllie, 35.0, 220.0)
+
+    # 3. Measured sonic transit time [us/ft] (with Gardner fallback where DTC is missing)
+    dtc_fallback = (
+        _estimate_dtc_from_rhob_gardner(np.asarray(rhob, dtype=float))
+        if rhob is not None
+        else dt_wyllie
+    )
+    if dtc is None:
+        dtc_eff = dtc_fallback
+    else:
+        dtc_arr = np.asarray(dtc, dtype=float)
+        valid_dt = np.isfinite(dtc_arr) & (dtc_arr > 20.0)
+        if valid_dt.any():
+            med_dt = float(np.nanmedian(dtc_arr[valid_dt]))
+            if med_dt > 135.0:
+                dtc_arr = np.where(valid_dt, dtc_arr / 3.28084, np.nan)
+        dtc_eff = np.where(valid_dt, dtc_arr, dtc_fallback)
+
+    vp_meas = 304800.0 / np.clip(dtc_eff, 35.0, 220.0)
+    vdl = np.clip(vp_meas - vp_wyllie, -3000.0, 3000.0)
+
+    if ref_index is not None:
+        return pd.Series(vdl, index=ref_index, name="VDL")
+    return vdl
+
+
 def generate_fe_features(df):
     """Generate a suite of engineered and physics-derived features from raw well log data.
 
@@ -356,6 +462,9 @@ def generate_fe_features(df):
     m_lith, n_lith = mn_lithology_parameters(df["RHOB"], df["NPHI"], sonic_col)
     df["M_LITH"] = m_lith
     df["N_LITH"] = n_lith
+    df["VDL"] = velocity_deviation_log(
+        df.get("RHOB"), df.get("NPHI"), sonic_col, phit=df.get("PHIT")
+    )
 
     if "PERM" in df.columns and "LOG_PERM" not in df.columns:
         df["LOG_PERM"] = log_perm(df["PERM"])

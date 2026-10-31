@@ -1,9 +1,12 @@
 from fastapi import APIRouter
 
+from .services.ancillary import import_ancillary_router
 from .services.ancillary import router as ancillary_router
 from .services.auth import router as auth_router
 from .services.chat import router as chat_router
 from .services.database import router as database_router
+from .services.fpt import router as fpt_router
+from .services.las_handler import import_logs_router
 from .services.las_handler import router as las_router
 from .services.lithology import router as lithology_router
 from .services.perm_transform import router as perm_transform_router
@@ -11,6 +14,7 @@ from .services.permeability import router as permeability_router
 from .services.plotter import router as plotter_router
 from .services.porosity import router as porosity_router
 from .services.qaqc import router as qaqc_router
+from .services.report import router as report_router
 from .services.reservoir_summary import router as ressum_router
 from .services.rock_typing import router as rock_typing_router
 from .services.saturation import router as saturation_router
@@ -24,6 +28,7 @@ api_router = APIRouter(prefix="/quick_pp")
 
 api_router.include_router(auth_router)
 api_router.include_router(las_router)
+api_router.include_router(import_logs_router)
 api_router.include_router(lithology_router)
 api_router.include_router(porosity_router)
 api_router.include_router(saturation_router)
@@ -36,9 +41,11 @@ api_router.include_router(chat_router)
 api_router.include_router(database_router)
 api_router.include_router(plotter_router)
 api_router.include_router(ancillary_router)
+api_router.include_router(import_ancillary_router)
 api_router.include_router(qaqc_router)
 api_router.include_router(rock_typing_router)
 api_router.include_router(perm_transform_router)
 api_router.include_router(shf_router)
 api_router.include_router(workspace_router)
-
+api_router.include_router(fpt_router)
+api_router.include_router(report_router)

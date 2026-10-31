@@ -1,0 +1,62 @@
+{% set is_single_well = (report_type == 'SINGLE_WELL_CPI') %}
+{% set sec_num = '3' if is_single_well else '4' %}
+{% set sec_heading = 'Clay Volume ($V_{sh}$), Lithology & Porosity Evaluation' if is_single_well else 'Lithology, Mineralogy & Porosity Evaluation' %}
+# {{ sec_num }}. {{ sec_heading }}
+
+### {{ sec_num }}.1 Methodology, Core-to-Log Alignment & Petrophysical Equations
+
+* **Lithology Model:** `{{ litho_params.model_name }}`
+* **Porosity Model:** `{{ poro_params.method_name }}`{% if poro_params.use_hc_corrected %} with light-hydrocarbon invasion fluid correction and clay-bound water ($CBW$) partitioning{% else %} with clay-bound water ($CBW$) partitioning{% endif %}.
+* **Core-to-Log Calibration Scope:** Total RCA core plugs loaded $= {{ poro_params.total_core_count }}$; valid target-zone plugs (`{{ target_zones|join(', ') }}`) with overlapping depth-matched log porosity used in regression $= {{ poro_params.core_count }}$.
+
+{% if litho_params.model_key == 'multi_mineral' %}
+$$\sum_i V_{min,i} + \phi_t = 1, \quad \rho_{ma} = \frac{\sum_i V_{min,i} \cdot \rho_i}{\sum_i V_{min,i}}, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\rho_{ma} - \rho_{fl}}, \quad \phi_e = \phi_t - V_{sh} \cdot \phi_{sh}$$
+{% elif litho_params.model_key == 'vsh_gr' %}
+$$I_{GR} = \frac{GR - GR_{clean}}{GR_{shale} - GR_{clean}}, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\rho_{ma} - \rho_{fl}}, \quad \phi_e = \phi_t - V_{sh} \cdot \phi_{sh}$$
+{% else %}
+$$V_{sand} + V_{silt} + V_{clay} + \phi_t = 1, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\rho_{ma} - \rho_{fl}}, \quad \phi_e = \phi_t - V_{clay} \cdot \phi_{sh}$$
+{% endif %}
+
+| Parameter | Symbol | Value | Unit | Basis / Reference |
+| :--- | :---: | :---: | :---: | :--- |
+| Clean Matrix Density | $\rho_{ma}$ | {{ poro_params.rho_ma }} | $\text{g/cc}$ | Matrix Grain Density ({{ poro_params.core_ref }}) |
+{% if poro_params.rhoma_count and poro_params.rhoma_count > 0 %}
+| Measured RCA Grain Density | $\bar{\rho}_{ma,core}$ | {{ "%.3f"|format(poro_params.rhoma_mean) }} $\pm$ {{ "%.3f"|format(poro_params.rhoma_std) }} | $\text{g/cc}$ | RCA Grain Density ({{ poro_params.rhoma_count }} plugs) |
+{% endif %}
+| Filtrate / Fluid Density | $\rho_{fl}$ | {{ poro_params.rho_fl }} | $\text{g/cc}$ | Mud Filtrate / Invasion Zone |
+| Dry Clay Density | $\rho_{clay}$ | {{ litho_params.rho_clay }} | $\text{g/cc}$ | Clay Mineralogy Endpoint |
+| Dry Clay Neutron | $NPHI_{clay}$ | {{ litho_params.nphi_clay }} | $\text{v/v}$ | Neutron-Density Crossplot Clay Point |
+| Clean GR Endpoint | $GR_{clean}$ | {{ litho_params.gr_clean }} | $\text{gAPI}$ | P5 Clean Reservoir Baseline |
+| Shale GR Endpoint | $GR_{shale}$ | {{ litho_params.gr_shale }} | $\text{gAPI}$ | P95 Intra-Reservoir Shale Baseline |
+| Total Core Plugs Loaded | $N_{core,total}$ | {{ poro_params.total_core_count }} | plugs | Full-Wellbore RCA Inventory (Table 2.1) |
+| Target-Zone Calibration Plugs | $N_{core,target}$ | {{ poro_params.core_count }} | plugs | Valid Overlapping Plugs (`{{ target_zones|join(', ') }}`) |
+{% if poro_params.core_shift_applied %}
+| Core-to-Log Depth Matching | $\Delta d_{core}$ / $s_{core}$ | {{ "%+.2f"|format(poro_params.core_shift_delta) }} m / {{ "%.3f"|format(poro_params.core_stretch_factor) }}$\times$ | $\text{m}$ | {{ poro_params.core_shift_mode_label }}{% if poro_params.core_pivot_depth %} ($d_{ref} = {{ "%.1f"|format(poro_params.core_pivot_depth) }}\text{ m}$){% endif %} (`RAW_DEPTH` $\to$ `DEPTH`) |
+{% endif %}
+{% if poro_params.core_corrected %}
+| Core Overburden Stress | $\sigma_{eff}$ (NCS) | {{ "%.0f"|format(poro_params.net_confining_stress) }} | $\text{psi}$ | {{ poro_params.core_lithology }} Compaction ($c_\phi = {{ "%.1e"|format(poro_params.compaction_coeff) }}\text{ psi}^{-1}$, $c_k = {{ "%.1e"|format(poro_params.perm_compaction_coeff) }}\text{ psi}^{-1}$) |
+| Klinkenberg Slippage Pressure | $P_m$ | {{ "%.1f"|format(poro_params.mean_pore_pressure) }} | $\text{psi}$ | {{ poro_params.klinkenberg_method }} Correlation (`CPERM_AIR` / `CPERM_ORI` $\to$ `CPERM`) |
+{% endif %}
+{% if poro_params.core_count > 0 %}
+| Core-to-Log Calibration | $R^2$ / $\text{RMSE}$ | {{ "%.2f"|format(poro_params.core_r2) }} / {{ "%.3f"|format(poro_params.core_rmse) }} | $\text{v/v}$ | Mean Bias ($\phi_{log} - \phi_{core}$) $= {{ "%+.3f"|format(poro_params.core_bias) }}\text{ v/v}$ |
+{% endif %}
+
+{% if poro_params.core_shift_applied %}
+> **Core-to-Log Depth Matching Lineage:** Driller's core plug depths were depth-matched to wireline logs using **{{ poro_params.core_shift_mode_label }}** ($\Delta d = {{ "%+.2f"|format(poro_params.core_shift_delta) }}\text{ m}$, stretch factor $s = {{ "%.4f"|format(poro_params.core_stretch_factor) }}\times${% if poro_params.core_pivot_depth %}, anchor pivot $d_{ref} = {{ "%.1f"|format(poro_params.core_pivot_depth) }}\text{ m}${% endif %}, mean plug shift $= {{ "%+.2f"|format(poro_params.core_shift_mean_m) }}\text{ m}$). Original unshifted driller's depths (`RAW_DEPTH`) and per-plug shifts (`SHIFT_M`) are preserved on every RCA sample, while unshifted log-grid curves are retained as `CPORE_UNSHIFTED` and `CPERM_UNSHIFTED`.
+{% endif %}
+{% if poro_params.core_corrected %}
+> **Core Overburden & Klinkenberg Lineage:** Ambient laboratory core porosity and gas permeability were corrected to reservoir stress ($\sigma_{eff} = {{ "%.0f"|format(poro_params.net_confining_stress) }}\text{ psi}$, $P_m = {{ "%.1f"|format(poro_params.mean_pore_pressure) }}\text{ psi}$, `{{ poro_params.core_lithology }}` compaction). Uncorrected baseline curves are preserved as `CPORE_AMB` / `CPORE_ORI` and `CPERM_AIR` / `CPERM_ORI`, while active evaluation curves `CPORE` and `CPERM` store reservoir-corrected values{% if poro_params.core_poro_amb_mean and poro_params.core_poro_res_mean %} ($\bar{\phi}_{amb} = {{ "%.3f"|format(poro_params.core_poro_amb_mean) }} \to \bar{\phi}_{res} = {{ "%.3f"|format(poro_params.core_poro_res_mean) }}\text{ v/v}${% if poro_params.core_perm_air_mean and poro_params.core_perm_liq_mean %}, $\bar{K}_{air} = {{ "%.1f"|format(poro_params.core_perm_air_mean) }} \to \bar{K}_{liq} = {{ "%.1f"|format(poro_params.core_perm_liq_mean) }}\text{ mD}${% endif %}){% endif %}.
+{% endif %}
+
+{% if include_ai_commentary and ai_commentary.litho_poro_narrative %}
+{{ ai_commentary.litho_poro_narrative }}
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+{% if assets.litho_poro_crossplot %}
+
+![Figure {{ sec_num }}.1: Neutron-Density Crossplot, Core-to-Log Porosity Calibration & Matrix Grain Density QC]({{ assets.litho_poro_crossplot }})
+{% endif %}

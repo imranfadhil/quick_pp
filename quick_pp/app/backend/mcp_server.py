@@ -15,7 +15,7 @@ import inspect
 import json
 import math
 import sys
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -184,7 +184,9 @@ class PetrophysicalMCPServer:
                     prop_type = next((pt for pt in prop_type if pt != "null"), "string")
                 if "anyOf" in v:
                     non_null = [a for a in v["anyOf"] if a.get("type") != "null"]
-                    prop_type = non_null[0].get("type", "string") if non_null else "string"
+                    prop_type = (
+                        non_null[0].get("type", "string") if non_null else "string"
+                    )
                 gem_prop: Dict[str, Any] = {
                     "type": prop_type.upper(),
                     "description": v.get("description", ""),
@@ -208,9 +210,13 @@ class PetrophysicalMCPServer:
             )
         return [{"function_declarations": declarations}]
 
-    def call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def call_tool(
+        self, name: str, arguments: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         if name not in self._tools:
-            raise ValueError(f"Unknown MCP tool: '{name}'. Available: {list(self._tools.keys())}")
+            raise ValueError(
+                f"Unknown MCP tool: '{name}'. Available: {list(self._tools.keys())}"
+            )
         tool = self._tools[name]
         args = arguments or {}
         return tool.fn(**args)
@@ -301,9 +307,15 @@ class InspectWellArgs(BaseModel):
         None,
         description="Well name to inspect. If omitted, inspects the project summary and first available well.",
     )
-    min_depth: Optional[float] = Field(None, description="Optional minimum depth filter (m)")
-    max_depth: Optional[float] = Field(None, description="Optional maximum depth filter (m)")
-    zones: Optional[List[str]] = Field(None, description="Optional list of zone names to filter")
+    min_depth: Optional[float] = Field(
+        None, description="Optional minimum depth filter (m)"
+    )
+    max_depth: Optional[float] = Field(
+        None, description="Optional maximum depth filter (m)"
+    )
+    zones: Optional[List[str]] = Field(
+        None, description="Optional list of zone names to filter"
+    )
 
 
 class RunQaqcArgs(BaseModel):
@@ -313,17 +325,29 @@ class RunQaqcArgs(BaseModel):
         True, description="Detect washout / badhole intervals from CALI and bit size"
     )
     run_hc_correction: bool = Field(
-        True, description="Apply NPHI/RHOB hydrocarbon correction (NPHI_HC, RHOB_HC, HC_FLAG)"
+        True,
+        description="Apply NPHI/RHOB hydrocarbon correction (NPHI_HC, RHOB_HC, HC_FLAG)",
     )
     run_env_correction: bool = Field(
-        False, description="Apply borehole environmental corrections (GR_CORR, NPHI_CORR, RHOB_CORR)"
+        False,
+        description="Apply borehole environmental corrections (GR_CORR, NPHI_CORR, RHOB_CORR)",
     )
-    rho_hc: float = Field(0.8, description="Hydrocarbon density (g/cc) for HC correction")
-    hi_hc: float = Field(0.9, description="Hydrocarbon hydrogen index for HC correction")
-    min_depth: Optional[float] = Field(None, description="Optional minimum depth filter")
-    max_depth: Optional[float] = Field(None, description="Optional maximum depth filter")
+    rho_hc: float = Field(
+        0.8, description="Hydrocarbon density (g/cc) for HC correction"
+    )
+    hi_hc: float = Field(
+        0.9, description="Hydrocarbon hydrogen index for HC correction"
+    )
+    min_depth: Optional[float] = Field(
+        None, description="Optional minimum depth filter"
+    )
+    max_depth: Optional[float] = Field(
+        None, description="Optional maximum depth filter"
+    )
     zones: Optional[List[str]] = Field(None, description="Optional zone filter")
-    save: bool = Field(True, description="Persist QAQC corrected curves to well database")
+    save: bool = Field(
+        True, description="Persist QAQC corrected curves to well database"
+    )
 
 
 class RunMultiMineralArgs(BaseModel):
@@ -338,25 +362,36 @@ class RunMultiMineralArgs(BaseModel):
         description="Minerals to solve for when model='multi_mineral'",
     )
     porosity_method: str = Field(
-        "neutron_density", description="Porosity method: 'density', 'neutron_density', or 'sonic'"
+        "neutron_density",
+        description="Porosity method: 'density', 'neutron_density', or 'sonic'",
     )
     use_hc_corrected: bool = Field(
         True, description="Use NPHI_HC and RHOB_HC if available"
     )
-    min_depth: Optional[float] = Field(None, description="Optional minimum depth filter")
-    max_depth: Optional[float] = Field(None, description="Optional maximum depth filter")
+    min_depth: Optional[float] = Field(
+        None, description="Optional minimum depth filter"
+    )
+    max_depth: Optional[float] = Field(
+        None, description="Optional maximum depth filter"
+    )
     zones: Optional[List[str]] = Field(None, description="Optional zone filter")
-    save: bool = Field(True, description="Persist computed mineral & porosity curves to database")
+    save: bool = Field(
+        True, description="Persist computed mineral & porosity curves to database"
+    )
 
 
 class RunShfArgs(BaseModel):
     project_id: int = Field(..., description="Project ID")
     well_name: Optional[str] = Field(
-        None, description="Optional focal well name for detailed zonal SHF vs Sw comparison"
+        None,
+        description="Optional focal well name for detailed zonal SHF vs Sw comparison",
     )
-    fwl: float = Field(1020.0, description="Free Water Level (FWL) depth in meters/feet")
+    fwl: float = Field(
+        1020.0, description="Free Water Level (FWL) depth in meters/feet"
+    )
     optimize_fwl_first: bool = Field(
-        False, description="Automatically optimize multi-well FWL from log Sw before computing SHF"
+        False,
+        description="Automatically optimize multi-well FWL from log Sw before computing SHF",
     )
     cutoffs: List[float] = Field(
         default_factory=lambda: [0.5, 1.5, 3.0],
@@ -366,12 +401,16 @@ class RunShfArgs(BaseModel):
     theta: float = Field(30.0, description="Contact angle (degrees)")
     gw: float = Field(1.05, description="Water specific gravity")
     ghc: float = Field(0.80, description="Hydrocarbon specific gravity")
-    save: bool = Field(True, description="Persist ROCK_FLAG and SHF curves to project wells")
+    save: bool = Field(
+        True, description="Persist ROCK_FLAG and SHF curves to project wells"
+    )
 
 
 class ConformalEvaluationArgs(BaseModel):
     project_id: int = Field(..., description="Project ID")
-    well_name: str = Field(..., description="Well name to evaluate with conformal prediction bounds")
+    well_name: str = Field(
+        ..., description="Well name to evaluate with conformal prediction bounds"
+    )
     alpha: float = Field(
         CONFORMAL_ALPHA,
         ge=0.02,
@@ -382,10 +421,15 @@ class ConformalEvaluationArgs(BaseModel):
         "clastic", description="Target suite: 'clastic' or 'carbonate'"
     )
     water_salinity: float = Field(
-        35000.0, description="Formation water salinity (ppm) for baseline physics calibration"
+        35000.0,
+        description="Formation water salinity (ppm) for baseline physics calibration",
     )
-    min_depth: Optional[float] = Field(None, description="Optional minimum depth filter")
-    max_depth: Optional[float] = Field(None, description="Optional maximum depth filter")
+    min_depth: Optional[float] = Field(
+        None, description="Optional minimum depth filter"
+    )
+    max_depth: Optional[float] = Field(
+        None, description="Optional maximum depth filter"
+    )
     zones: Optional[List[str]] = Field(None, description="Optional zone filter")
     save: bool = Field(
         True,
@@ -399,7 +443,7 @@ class WorkbenchUiControlArgs(BaseModel):
     )
     step: Optional[str] = Field(
         None,
-        description="Switch active workflow step: 'qaqc', 'ancillary', 'litho-poro', 'perm', 'saturation', 'scal', 'ressum', 'inventory', 'rock-typing', 'perm-transform', or 'shf'",
+        description="Switch active workflow step: 'qaqc', 'ancillary', 'litho-poro', 'perm', 'saturation', 'scal', 'ressum', 'inventory', 'rock-typing', 'perm-transform', 'shf', or 'report'",
     )
     scroll_to_depth: Optional[float] = Field(
         None, description="Center and highlight a specific depth on the LogTrackCanvas"
@@ -418,6 +462,59 @@ class WorkbenchUiControlArgs(BaseModel):
     )
     right_pane_tab: Optional[str] = Field(
         None, description="Switch right pane view: 'crossplot', 'grid', or 'split'"
+    )
+
+
+class GetProjectReportContextArgs(BaseModel):
+    project_id: Union[int, str] = Field(
+        ..., description="Project ID in quick_pp database"
+    )
+    well_names: Optional[List[str]] = Field(
+        None, description="Optional subset of well names to include in report context"
+    )
+
+
+class GeneratePetrophysicalReportArgs(BaseModel):
+    project_id: Union[int, str] = Field(
+        ..., description="Project ID in quick_pp database"
+    )
+    report_type: str = Field(
+        "FDP_FULL",
+        description="Report template type: 'FDP_FULL', 'SINGLE_WELL_CPI', 'QAQC_SUMMARY', or 'RESSUM_ONLY'",
+    )
+    well_names: Optional[List[str]] = Field(
+        None, description="Optional subset of well names to include in the report"
+    )
+    include_ai_summary: bool = Field(
+        True,
+        description="Include AI-synthesized petrophysical narrative and executive commentary",
+    )
+
+
+class UpdateReportSectionArgs(BaseModel):
+    project_id: Union[int, str] = Field(
+        ..., description="Project ID in quick_pp database"
+    )
+    report_id: str = Field(
+        ...,
+        description="Target report ID (or 'latest' to update the most recent report)",
+    )
+    section_id: str = Field(
+        ...,
+        description="Section ID to rewrite (e.g., 'exec_summary', 'data_inventory', 'qaqc', 'litho_poro', 'rock_perm', 'saturation', 'shf_scal', 'ressum_uncert', 'upscaling', 'appendix_cpi')",
+    )
+    markdown_content: str = Field(
+        ..., description="New Markdown content for the target section"
+    )
+
+
+class ExportReportToPdfArgs(BaseModel):
+    project_id: Union[int, str] = Field(
+        ..., description="Project ID in quick_pp database"
+    )
+    report_id: str = Field(
+        ...,
+        description="Target report ID (or 'latest' to export the most recent report)",
     )
 
 
@@ -538,7 +635,17 @@ def tool_inspect_well(
                 "gross_thickness": round(float(z_d.max() - z_d.min()), 2),
                 "samples": int(len(z_grp)),
             }
-            for col in ("GR", "NPHI", "RHOB", "RT", "VCLAY", "PHIT", "PHIE", "SWT", "PERM"):
+            for col in (
+                "GR",
+                "NPHI",
+                "RHOB",
+                "RT",
+                "VCLAY",
+                "PHIT",
+                "PHIE",
+                "SWT",
+                "PERM",
+            ):
                 if col in z_grp.columns:
                     s = pd.to_numeric(z_grp[col], errors="coerce").dropna()
                     if not s.empty:
@@ -600,16 +707,24 @@ def tool_run_well_qaqc(
     for var in Config.VARS.keys():
         if var in df.columns:
             orig_valid = int(pd.to_numeric(df[var], errors="coerce").notna().sum())
-            after_valid = int(pd.to_numeric(limit_clipped[var], errors="coerce").notna().sum())
+            after_valid = int(
+                pd.to_numeric(limit_clipped[var], errors="coerce").notna().sum()
+            )
             if orig_valid > after_valid:
                 outliers_by_curve[var] = orig_valid - after_valid
 
     # 2. Badhole / Washout Flagging & tight/coal flags
-    badhole_summary: Dict[str, Any] = {"available": False, "flagged_count": 0, "intervals": []}
+    badhole_summary: Dict[str, Any] = {
+        "available": False,
+        "flagged_count": 0,
+        "intervals": [],
+    }
     if run_badhole:
         if "CALI" in df.columns and df["CALI"].notna().any():
             bh_df = badhole_flagging(df)
-            bh_series = pd.to_numeric(bh_df.get("BADHOLE", 0), errors="coerce").fillna(0)
+            bh_series = pd.to_numeric(bh_df.get("BADHOLE", 0), errors="coerce").fillna(
+                0
+            )
             out_df["BADHOLE"] = bh_series
             save_cols.append("BADHOLE")
             bh_mask = bh_series.to_numpy(dtype=float) >= 1.0
@@ -624,7 +739,9 @@ def tool_run_well_qaqc(
             # Infer density-spike / washout anomalies where RHOB < 2.05 or NPHI > 0.42
             rhob_s = pd.to_numeric(df.get("RHOB"), errors="coerce")
             nphi_s = pd.to_numeric(df.get("NPHI"), errors="coerce")
-            bh_mask = ((rhob_s < 2.0) | (nphi_s > 0.42)).fillna(False).to_numpy(dtype=bool)
+            bh_mask = (
+                ((rhob_s < 2.0) | (nphi_s > 0.42)).fillna(False).to_numpy(dtype=bool)
+            )
             out_df["BADHOLE"] = bh_mask.astype(float)
             save_cols.append("BADHOLE")
             badhole_summary = {
@@ -671,7 +788,10 @@ def tool_run_well_qaqc(
                 out_df[c] = hc_col_data[c]
                 if c in ("NPHI_HC", "RHOB_HC", "HC_FLAG"):
                     save_cols.append(c)
-        hc_flag_arr = pd.to_numeric(out_df.get("HC_FLAG"), errors="coerce").fillna(0).to_numpy() >= 1.0
+        hc_flag_arr = (
+            pd.to_numeric(out_df.get("HC_FLAG"), errors="coerce").fillna(0).to_numpy()
+            >= 1.0
+        )
         hc_summary = {
             "applied": True,
             "corr_angle_deg": hc_res.get("corr_angle"),
@@ -765,7 +885,9 @@ def tool_run_multi_mineral(
         if "VSHA" in df_out.columns and "VCLAY" not in df_out.columns:
             df_out["VCLAY"] = df_out["VSHA"]
             extra_save_cols.append("VCLAY")
-        if ("VCALC" in df_out.columns or "VCAL" in df_out.columns) and "VSILT" not in df_out.columns:
+        if (
+            "VCALC" in df_out.columns or "VCAL" in df_out.columns
+        ) and "VSILT" not in df_out.columns:
             vcal_s = pd.to_numeric(
                 df_out.get("VCALC", df_out.get("VCAL", 0.0)), errors="coerce"
             ).fillna(0.0)
@@ -775,13 +897,17 @@ def tool_run_multi_mineral(
             df_out["VSILT"] = (vcal_s + vdol_s).clip(0.0, 1.0)
             extra_save_cols.append("VSILT")
         if "PHIT_CONSTRUCTED" in df_out.columns:
-            df_out["PHIT"] = pd.to_numeric(df_out["PHIT_CONSTRUCTED"], errors="coerce").clip(0.0, 0.5)
+            df_out["PHIT"] = pd.to_numeric(
+                df_out["PHIT_CONSTRUCTED"], errors="coerce"
+            ).clip(0.0, 0.5)
             vsh = pd.to_numeric(df_out.get("VCLAY", 0.0), errors="coerce").fillna(0.0)
             df_out["PHIE"] = (df_out["PHIT"] * (1.0 - 0.35 * vsh)).clip(lower=0.0)
             extra_save_cols.extend(["PHIT", "PHIE"])
 
         if save and extra_save_cols and "DEPTH" in df_out.columns:
-            _save_curves_to_well(project_id, well_name, df_out[["DEPTH"] + extra_save_cols])
+            _save_curves_to_well(
+                project_id, well_name, df_out[["DEPTH"] + extra_save_cols]
+            )
         for c in extra_save_cols:
             stats[c] = _curve_summary_stats(df_out[c])
         col_data = dataframe_to_columnar(df_out).get("data", {})
@@ -792,7 +918,9 @@ def tool_run_multi_mineral(
         err_s = pd.to_numeric(df_out["AVG_ERROR"], errors="coerce").dropna()
         if not err_s.empty:
             diagnostics["mean_reconstruction_error"] = round(float(err_s.mean()), 5)
-            diagnostics["p90_reconstruction_error"] = round(float(np.percentile(err_s, 90)), 5)
+            diagnostics["p90_reconstruction_error"] = round(
+                float(np.percentile(err_s, 90)), 5
+            )
     if "OPTIMIZER_SUCCESS" in df_out.columns:
         succ_s = pd.to_numeric(df_out["OPTIMIZER_SUCCESS"], errors="coerce").dropna()
         if not succ_s.empty:
@@ -803,7 +931,9 @@ def tool_run_multi_mineral(
         "project_id": project_id,
         "well_name": well_name,
         "model": model,
-        "minerals": mineral_list if model == "multi_mineral" else ["VSAND", "VSILT", "VCLAY"],
+        "minerals": mineral_list
+        if model == "multi_mineral"
+        else ["VSAND", "VSILT", "VCLAY"],
         "porosity_method": porosity_method,
         "saved": save,
         "saved_rows": lith_res.get("saved_rows", 0),
@@ -938,7 +1068,10 @@ def tool_run_shf_evaluation(
             full_wdf = _get_merged_dataframe_sync(project_id, focal_well)
             if "SWT" in full_wdf.columns:
                 merged_cmp = pd.merge(
-                    full_wdf[["DEPTH", "SWT"]], w_df[["DEPTH", "SHF"]], on="DEPTH", how="inner"
+                    full_wdf[["DEPTH", "SWT"]],
+                    w_df[["DEPTH", "SHF"]],
+                    on="DEPTH",
+                    how="inner",
                 ).dropna()
                 if not merged_cmp.empty:
                     diff = (
@@ -948,7 +1081,9 @@ def tool_run_shf_evaluation(
                     if not diff.empty:
                         reconciliation = {
                             "compared_samples": int(len(diff)),
-                            "rmse_sw_vs_shf": round(float(np.sqrt(np.mean(diff**2))), 4),
+                            "rmse_sw_vs_shf": round(
+                                float(np.sqrt(np.mean(diff**2))), 4
+                            ),
                             "mae_sw_vs_shf": round(float(np.mean(np.abs(diff))), 4),
                             "mean_bias_sw_minus_shf": round(float(diff.mean()), 4),
                         }
@@ -1021,11 +1156,7 @@ def tool_evaluate_with_conformal_bounds(
             else pd.Series(10.0, index=df.index, dtype=float)
         )
     )
-    dtc = (
-        pd.to_numeric(df["DTC"], errors="coerce")
-        if "DTC" in df.columns
-        else None
-    )
+    dtc = pd.to_numeric(df["DTC"], errors="coerce") if "DTC" in df.columns else None
 
     valid_mask = nphi.notna() & rhob.notna() & gr.notna() & rt.notna()
     if valid_mask.sum() < 3:
@@ -1092,7 +1223,9 @@ def tool_evaluate_with_conformal_bounds(
         0.005,
         0.48,
     )
-    phit_sh = np.asarray(estimate_shale_porosity(nphi_v.to_numpy(), phid_ref), dtype=float)
+    phit_sh = np.asarray(
+        estimate_shale_porosity(nphi_v.to_numpy(), phid_ref), dtype=float
+    )
     phie_ref = np.clip(phit_ref - vclay_ref * phit_sh, 0.0, phit_ref)
 
     # Anchor PHIT to Core Porosity (CPORE) where present
@@ -1131,9 +1264,7 @@ def tool_evaluate_with_conformal_bounds(
     qvn = estimate_qvn(vclay_ref, phit_ref, 2.70)
     swt_ref = np.clip(
         np.asarray(
-            waxman_smits_saturation(
-                rt_v.to_numpy(), rw, phit_ref, b_ws, qvn, m=2.0
-            ),
+            waxman_smits_saturation(rt_v.to_numpy(), rw, phit_ref, b_ws, qvn, m=2.0),
             dtype=float,
         ),
         0.0,
@@ -1158,7 +1289,8 @@ def tool_evaluate_with_conformal_bounds(
     from sklearn.ensemble import ExtraTreesRegressor
 
     base_rf = ExtraTreesRegressor(
-        n_estimators=16, max_depth=10,
+        n_estimators=16,
+        max_depth=10,
         min_samples_leaf=5,
         max_features=0.85,
         bootstrap=True,
@@ -1197,8 +1329,12 @@ def tool_evaluate_with_conformal_bounds(
     pred_sub["SW_P10"] = pred_sub["SWT_P10"]
     pred_sub["SW_P90"] = pred_sub["SWT_P90"]
     pred_sub["BVHC"] = ((1.0 - pred_sub["SWT"]) * pred_sub["PHIT"]).clip(0.0, 0.5)
-    pred_sub["BVHC_P10"] = ((1.0 - pred_sub["SWT_P90"]) * pred_sub["PHIT_P10"]).clip(0.0, 0.5)
-    pred_sub["BVHC_P90"] = ((1.0 - pred_sub["SWT_P10"]) * pred_sub["PHIT_P90"]).clip(0.0, 0.5)
+    pred_sub["BVHC_P10"] = ((1.0 - pred_sub["SWT_P90"]) * pred_sub["PHIT_P10"]).clip(
+        0.0, 0.5
+    )
+    pred_sub["BVHC_P90"] = ((1.0 - pred_sub["SWT_P10"]) * pred_sub["PHIT_P90"]).clip(
+        0.0, 0.5
+    )
 
     out_df = pd.DataFrame({"DEPTH": df["DEPTH"]})
     all_out_cols = [
@@ -1239,7 +1375,11 @@ def tool_evaluate_with_conformal_bounds(
     ).to_numpy(dtype=float)
 
     zonal_conformal: List[Dict[str, Any]] = []
-    zones_col = sub["ZONES"] if "ZONES" in sub.columns and sub["ZONES"].notna().any() else pd.Series(["Full Interval"] * len(sub))
+    zones_col = (
+        sub["ZONES"]
+        if "ZONES" in sub.columns and sub["ZONES"].notna().any()
+        else pd.Series(["Full Interval"] * len(sub))
+    )
     for z_name, z_idx in zones_col.groupby(zones_col).groups.items():
         idx_arr = np.asarray(list(z_idx), dtype=int)
         z_depths = depths_v[idx_arr]
@@ -1292,7 +1432,11 @@ def tool_evaluate_with_conformal_bounds(
         t: round(float(q), 4)
         for t, q in zip(target_cols, getattr(conformal_model, "conformal_q_", []))
     }
-    stats = {col: _curve_summary_stats(out_df[col]) for col in all_out_cols if col in out_df.columns}
+    stats = {
+        col: _curve_summary_stats(out_df[col])
+        for col in all_out_cols
+        if col in out_df.columns
+    }
     col_payload = dataframe_to_columnar(out_df)
 
     return {
@@ -1356,6 +1500,151 @@ def tool_control_workbench_ui(
         "tool": "control_workbench_ui",
         "status": "applied",
         "ui_action": ui_action,
+    }
+
+
+def tool_get_project_report_context(
+    project_id: Union[int, str],
+    well_names: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Retrieve a compact JSON summary of project wells, zones, QAQC flags, rock types, FWL, and P10/P50/P90 sums."""
+    from quick_pp.app.backend.services.report import get_compact_report_context
+
+    ctx = get_compact_report_context(str(project_id), well_names=well_names)
+    return {
+        "tool": "get_project_report_context",
+        **ctx,
+    }
+
+
+def tool_generate_petrophysical_report(
+    project_id: Union[int, str],
+    report_type: str = "FDP_FULL",
+    well_names: Optional[List[str]] = None,
+    include_ai_summary: bool = True,
+) -> Dict[str, Any]:
+    """Trigger full petrophysical report generation, plot asset rendering, and open the Report Workbench."""
+    from quick_pp.app.backend.schemas.report import ReportGenerationRequest
+    from quick_pp.app.backend.services.report import (
+        generate_petrophysical_report_service,
+    )
+
+    rt_upper = (report_type or "FDP_FULL").upper()
+    if rt_upper not in ("FDP_FULL", "SINGLE_WELL_CPI", "QAQC_SUMMARY", "RESSUM_ONLY"):
+        rt_upper = "FDP_FULL"
+
+    req = ReportGenerationRequest(
+        project_id=str(project_id),
+        report_type=rt_upper,  # type: ignore[arg-type]
+        well_names=well_names or [],
+        include_ai_summary=include_ai_summary,
+    )
+    res = generate_petrophysical_report_service(req)
+    report_payload = res.model_dump()
+    return {
+        "tool": "generate_petrophysical_report",
+        "project_id": project_id,
+        "report_id": res.report_id,
+        "report_type": rt_upper,
+        "created_at": res.created_at,
+        "asset_urls": res.asset_urls,
+        "context_summary": res.context_summary,
+        "sections": [s.model_dump() for s in res.sections],
+        "report_data": report_payload,
+        "ui_action": {
+            "step": "report",
+            "report_id": res.report_id,
+        },
+    }
+
+
+def tool_update_report_section(
+    project_id: Union[int, str],
+    report_id: str,
+    section_id: str,
+    markdown_content: str,
+) -> Dict[str, Any]:
+    """Rewrite or refine a specific report section in the active FDP Petrophysical Report."""
+    from quick_pp.app.backend.services.report import (
+        get_latest_project_report,
+        update_report_section_service,
+    )
+
+    target_rid = report_id
+    if not target_rid or target_rid.lower() == "latest":
+        latest = get_latest_project_report(str(project_id))
+        if not latest:
+            from quick_pp.app.backend.schemas.report import ReportGenerationRequest
+            from quick_pp.app.backend.services.report import (
+                generate_petrophysical_report_service,
+            )
+
+            gen = generate_petrophysical_report_service(
+                ReportGenerationRequest(
+                    project_id=str(project_id), include_ai_summary=True
+                )
+            )
+            target_rid = gen.report_id
+        else:
+            target_rid = latest["report_id"]
+
+    res = update_report_section_service(target_rid, section_id, markdown_content)
+    return {
+        "tool": "update_report_section",
+        "project_id": project_id,
+        "report_id": res.report_id,
+        "section_id": section_id,
+        "updated_at": res.updated_at or res.created_at,
+        "report_data": res.model_dump(),
+        "ui_action": {
+            "step": "report",
+            "report_id": res.report_id,
+        },
+    }
+
+
+def tool_export_report_to_pdf(
+    project_id: Union[int, str],
+    report_id: str = "latest",
+) -> Dict[str, Any]:
+    """Compile the active FDP Petrophysical Report into a publication-ready A4 PDF document."""
+    from quick_pp.app.backend.services.report import (
+        compile_report_to_pdf,
+        get_latest_project_report,
+    )
+
+    target_rid = report_id
+    if not target_rid or target_rid.lower() == "latest":
+        latest = get_latest_project_report(str(project_id))
+        if not latest:
+            from quick_pp.app.backend.schemas.report import ReportGenerationRequest
+            from quick_pp.app.backend.services.report import (
+                generate_petrophysical_report_service,
+            )
+
+            gen = generate_petrophysical_report_service(
+                ReportGenerationRequest(
+                    project_id=str(project_id), include_ai_summary=True
+                )
+            )
+            target_rid = gen.report_id
+        else:
+            target_rid = latest["report_id"]
+
+    pdf_path = compile_report_to_pdf(target_rid)
+    pdf_url = f"/quick_pp/projects/{project_id}/reports/{target_rid}/pdf"
+    print_url = f"/quick_pp/projects/{project_id}/reports/{target_rid}/print"
+    return {
+        "tool": "export_report_to_pdf",
+        "project_id": project_id,
+        "report_id": target_rid,
+        "pdf_path": str(pdf_path),
+        "pdf_url": pdf_url,
+        "print_url": print_url,
+        "ui_action": {
+            "step": "report",
+            "report_id": target_rid,
+        },
     }
 
 
@@ -1424,8 +1713,47 @@ petro_mcp_server.register_tool(
     name="control_workbench_ui",
     description=(
         "Control the Svelte petrophysical workbench UI: switch workflow steps ('qaqc', 'litho-poro', 'saturation', "
-        "'shf'), scroll/zoom the log canvas to a specific depth, or filter by depth interval and geological zones."
+        "'shf', 'report'), scroll/zoom the log canvas to a specific depth, or filter by depth interval and geological zones."
     ),
     schema_model=WorkbenchUiControlArgs,
     fn=tool_control_workbench_ui,
+)
+
+petro_mcp_server.register_tool(
+    name="get_project_report_context",
+    description=(
+        "Retrieve a compact JSON summary of project wells, zones, QAQC flags, rock types, FWL, "
+        "and P10/P50/P90 reservoir sums so the AI can write grounded petrophysical report commentary."
+    ),
+    schema_model=GetProjectReportContextArgs,
+    fn=tool_get_project_report_context,
+)
+
+petro_mcp_server.register_tool(
+    name="generate_petrophysical_report",
+    description=(
+        "Trigger full FDP Petrophysical Evaluation Report generation (`FDP_FULL`, `SINGLE_WELL_CPI`, "
+        "`QAQC_SUMMARY`, or `RESSUM_ONLY`), export publication-quality plot assets, and open the Report Workbench."
+    ),
+    schema_model=GeneratePetrophysicalReportArgs,
+    fn=tool_generate_petrophysical_report,
+)
+
+petro_mcp_server.register_tool(
+    name="update_report_section",
+    description=(
+        "Rewrite or refine a specific section (`exec_summary`, `data_inventory`, `qaqc`, `litho_poro`, "
+        "`rock_perm`, `saturation`, `shf_scal`, `ressum_uncert`, `upscaling`, `appendix_cpi`) in the active report."
+    ),
+    schema_model=UpdateReportSectionArgs,
+    fn=tool_update_report_section,
+)
+
+petro_mcp_server.register_tool(
+    name="export_report_to_pdf",
+    description=(
+        "Compile the active FDP Petrophysical Evaluation Report into a downloadable A4 PDF document."
+    ),
+    schema_model=ExportReportToPdfArgs,
+    fn=tool_export_report_to_pdf,
 )

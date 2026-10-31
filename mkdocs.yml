@@ -130,9 +130,8 @@ nav:
       - Reservoir Summary (ressum): api/ressum.md
       - Rock Physics (rock_physics): api/rock_physics.md
       - Machine Learning & Conformal (machine_learning): api/machine_learning.md
-      - Plotting, LAS & Utilities: api/plotter.md
+      - Plotting, LAS, Handover & Utilities: api/plotter.md
   - Community:
       - Contributing: community/contributing.md
       - Changelog: community/changelog.md
       - Credits: community/authors.md
-

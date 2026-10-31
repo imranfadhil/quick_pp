@@ -1,3 +1,9 @@
+"""Permeability estimation correlations from petrophysical logs and rock types.
+
+Provides empirical permeability equations including Choo, Timur, Coates, Tixier,
+and Kozeny-Carman models.
+"""
+
 from quick_pp import logger
 
 

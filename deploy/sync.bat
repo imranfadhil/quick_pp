@@ -52,9 +52,10 @@ set SSH_RETRIES=5
 
 REM -- Package code (exclude heavy local folders, venv, notebooks, data) --
 echo [1/5] Packaging project...
-cd /d "%~dp0.."
-if exist "%TEMP%\%PROJECT_NAME%.tar" del "%TEMP%\%PROJECT_NAME%.tar"
-tar -cf "%TEMP%\%PROJECT_NAME%.tar" ^
+set "TAR_TMP=%TEMP%\%PROJECT_NAME%.tar"
+if defined PROJECT_NAME if exist "%TAR_TMP%" del "%TAR_TMP%"
+pushd "%~dp0.."
+tar -cf "%TAR_TMP%" ^
     --exclude="node_modules" ^
     --exclude=".svelte-kit" ^
     --exclude="quick_pp/app/frontend/build" ^
@@ -77,7 +78,9 @@ tar -cf "%TEMP%\%PROJECT_NAME%.tar" ^
     --exclude="deploy" ^
     --exclude="*.log" ^
     *
-if %ERRORLEVEL% neq 0 (
+set TAR_RC=%ERRORLEVEL%
+popd
+if %TAR_RC% neq 0 (
     echo [ERROR] tar packaging failed.
     exit /b 1
 )
@@ -93,9 +96,9 @@ if %ERRORLEVEL% neq 0 (
 echo [OK] Remote directory ready.
 
 echo [3/5] Copying to droplet...
-call :ssh_pipe "%TEMP%\%PROJECT_NAME%.tar" "cat > %REMOTE_DIR%/app.tar"
+call :ssh_pipe "%TAR_TMP%" "cat > %REMOTE_DIR%/app.tar"
 set SCP_RC=%ERRORLEVEL%
-del "%TEMP%\%PROJECT_NAME%.tar" 2>nul
+if defined TAR_TMP if exist "%TAR_TMP%" del "%TAR_TMP%" 2>nul
 if not %SCP_RC% equ 0 (
     echo [ERROR] Upload failed. Droplet may still be booting, or SSH not ready yet.
     exit /b 1
@@ -104,7 +107,7 @@ echo [OK] Uploaded.
 
 REM -- Extract + configure .env ---------------------------------------
 echo [4/5] Extracting and configuring environment...
-call :ssh_run "cd %REMOTE_DIR% && tar -xf app.tar && rm -f app.tar"
+call :ssh_run "cd %REMOTE_DIR% && rm -rf quick_pp/app/frontend/build && tar -xf app.tar && rm -f app.tar"
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Extraction failed.
     exit /b 1
@@ -125,7 +128,7 @@ if not exist "%ENV_TMP%" (
 
 call :ssh_pipe "%ENV_TMP%" "bash -s -- '%REMOTE_DIR%' '%POSTGRES_USER%' '%POSTGRES_DB%' '%POSTGRES_PASSWORD%' '%WEB_PORT%' '%TAVILY_API_KEY%' '%DOMAIN%'"
 set ENV_RC=%ERRORLEVEL%
-del "%ENV_TMP%" 2>nul
+if defined ENV_TMP if exist "%ENV_TMP%" del "%ENV_TMP%" 2>nul
 if not %ENV_RC% equ 0 (
     echo [ERROR] Failed to configure remote .env - SSH error or sed failure.
     echo         Nothing was started. Re-run sync.bat once the droplet is reachable.
@@ -137,8 +140,20 @@ REM -- Start containers -----------------------------------------------
 echo [5/5] Starting containers...
 set "COMPOSE_CMD=docker compose --env-file %REMOTE_DIR%/.env -f %REMOTE_DIR%/quick_pp/app/docker/docker-compose.yaml"
 
-set "REMOTE_CMD=!COMPOSE_CMD! up -d"
-if %BUILD% equ 1 set "REMOTE_CMD=!REMOTE_CMD! --build"
+REM Stop qpp-frontend before `up -d` (rather than restarting it right after `up -d`)
+REM so an in-progress `npm install` is never killed mid-extraction (which causes SIGBUS / exit 135).
+if not "%1"=="--from-deploy" (
+    call :ssh_run "!COMPOSE_CMD! stop qpp-frontend" >nul 2>&1
+)
+
+REM Keep `web` and `quicktunnel` running (--no-recreate --no-deps) so the *.trycloudflare.com URL never changes on sync/--restart.
+if "%1"=="--from-deploy" (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --build"
+) else if %BUILD% equ 1 (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-recreate --no-deps postgres && !COMPOSE_CMD! up -d --build --no-deps qpp-backend qpp-frontend && !COMPOSE_CMD! up -d --no-recreate --no-deps web quicktunnel"
+) else (
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-recreate --no-deps postgres web quicktunnel qpp-backend qpp-frontend && !COMPOSE_CMD! restart qpp-backend"
+)
 
 call :ssh_run "!REMOTE_CMD!"
 if %ERRORLEVEL% neq 0 (
@@ -147,12 +162,29 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-REM Always restart qpp-frontend on sync so SvelteKit rebuilds with latest uploaded files
-call :ssh_run "!COMPOSE_CMD! restart qpp-frontend" >nul 2>&1
-
 echo.
 echo [OK] Sync complete.
 if %BUILD% equ 1 echo [OK] Containers rebuilt.
+
+echo.
+echo [INFO] Waiting for frontend build to complete ^(takes ~1-2 min on first deploy^)...
+set FE_READY=0
+for /l %%n in (1,1,40) do (
+    if !FE_READY! equ 0 (
+        ssh %SSH_OPTS% root@%PUBLIC_IP% "curl -sf -o /dev/null http://127.0.0.1:%WEB_PORT%/" <nul >nul 2>&1
+        if !ERRORLEVEL! equ 0 (
+            set FE_READY=1
+        ) else (
+            ping -n 5 127.0.0.1 >nul 2>&1
+        )
+    )
+)
+if !FE_READY! equ 1 (
+    echo [OK] Frontend is built and serving HTTP 200.
+) else (
+    echo [WARN] Frontend build is still running in the background. Check logs with:
+    echo        ssh -i "%KEY_FILE%" root@%PUBLIC_IP% "!COMPOSE_CMD! logs -f qpp-frontend"
+)
 
 echo.
 echo [INFO] Container status:
@@ -169,13 +201,11 @@ for /l %%n in (1,1,15) do (
         if "!QUICK_URL!"=="" ping -n 3 127.0.0.1 >nul 2>&1
     )
 )
-del "%TEMP%\%PROJECT_NAME%-quick-url.txt" 2>nul
+if defined PROJECT_NAME if exist "%TEMP%\%PROJECT_NAME%-quick-url.txt" del "%TEMP%\%PROJECT_NAME%-quick-url.txt" 2>nul
 
 echo.
 if not "!QUICK_URL!"=="" (
     echo [OK] App ^(HTTPS Tunnel^): !QUICK_URL!
-    echo [INFO] Note: First frontend build takes ~30-60s inside qpp-frontend.
-    echo        If you see 502 Bad Gateway initially, refresh after ~30 seconds.
 ) else (
     echo [WARN] Quick tunnel URL not ready yet. Check:
     echo        ssh -i "%KEY_FILE%" root@%PUBLIC_IP% "!COMPOSE_CMD! logs quicktunnel"

@@ -1,0 +1,23 @@
+{% set is_single_well = (report_type == 'SINGLE_WELL_CPI') %}
+{% if is_single_well %}
+# 6. Composite Petrophysical Evaluation Log (CPI)
+
+Composite 6-track Computer-Processed Interpretation (CPI) log plot displaying gamma ray (Track 1), deep resistivity (Track 2), density-neutron crossover (Track 3), total & effective porosity with overburden-corrected core `CPORE` anchors (Track 4), permeability with core `CPERM` anchors (Track 5), and water saturation (`SWT`) & saturation-height (`SHF`) hydrocarbon pay profile (Track 6).
+{% else %}
+# Appendix A: Composite Petrophysical Evaluation Logs (CPI)
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+{% for cpi in assets.cpi_plots %}
+### Well: `{{ cpi.well_name }}`
+
+![CPI Log - {{ cpi.well_name }}]({{ cpi.url }})
+{% if not loop.last %}
+
+<div class="page-break"></div>
+
+{% endif %}
+{% endfor %}

@@ -18,27 +18,387 @@ class Config:
 
     # Defines properties for common well log variables, including names, units, and typical ranges.
     VARS = {
+        "DEPTH": {"name": "Measured Depth", "unit": "m", "min": 0, "max": 10000},
+        "TVD": {"name": "True Vertical Depth", "unit": "m", "min": 0, "max": 10000},
+        "TVDSS": {
+            "name": "True Vertical Depth Sub-Sea",
+            "unit": "m",
+            "min": -100,
+            "max": 10000,
+        },
+        "CALI": {"name": "Caliper", "unit": "in", "min": 4, "max": 24},
+        "BS": {"name": "Bit Size", "unit": "in", "min": 4, "max": 24},
+        "DRHO": {"name": "Density Correction", "unit": "g/cc", "min": -0.5, "max": 0.5},
+        "BADHOLE": {"name": "Badhole Flag", "unit": "unitless", "min": 0, "max": 1},
         "GR": {"name": "Gamma Ray", "unit": "GAPI", "min": 0, "max": 200},
+        "GR_NORM": {
+            "name": "Normalized Gamma Ray",
+            "unit": "GAPI",
+            "min": 0,
+            "max": 200,
+        },
+        "GR_CORR": {
+            "name": "Environmentally Corrected Gamma Ray",
+            "unit": "GAPI",
+            "min": 0,
+            "max": 200,
+        },
         "RT": {"name": "True Resistivity", "unit": "ohm.m", "min": 0, "max": 2000},
+        "RT_CORR": {
+            "name": "Environmentally Corrected Resistivity",
+            "unit": "ohm.m",
+            "min": 0,
+            "max": 2000,
+        },
         "NPHI": {"name": "Neutron Porosity", "unit": "v/v", "min": -0.05, "max": 1.0},
+        "NPHI_NORM": {
+            "name": "Normalized Neutron Porosity",
+            "unit": "v/v",
+            "min": -0.05,
+            "max": 1.0,
+        },
+        "NPHI_CORR": {
+            "name": "Environmentally Corrected Neutron Porosity",
+            "unit": "v/v",
+            "min": -0.05,
+            "max": 1.0,
+        },
         "RHOB": {"name": "Bulk Density", "unit": "g/cc", "min": 1.0, "max": 3.0},
-        "PEF": {"name": "Peak Frequency", "unit": "Hz", "min": 0, "max": 10},
-        "DTC": {"name": "DTC", "unit": "us/ft", "min": 20, "max": 260},
-        "DTS": {"name": "DTS", "unit": "us/ft", "min": 20, "max": 260},
+        "RHOB_NORM": {
+            "name": "Normalized Bulk Density",
+            "unit": "g/cc",
+            "min": 1.0,
+            "max": 3.0,
+        },
+        "RHOB_CORR": {
+            "name": "Environmentally Corrected Bulk Density",
+            "unit": "g/cc",
+            "min": 1.0,
+            "max": 3.0,
+        },
+        "NPHI_HC": {
+            "name": "HC-Corrected Neutron Porosity",
+            "unit": "v/v",
+            "min": -0.05,
+            "max": 1.0,
+        },
+        "RHOB_HC": {
+            "name": "HC-Corrected Bulk Density",
+            "unit": "g/cc",
+            "min": 1.0,
+            "max": 3.0,
+        },
+        "HC_FLAG": {"name": "Hydrocarbon Flag", "unit": "unitless", "min": 0, "max": 1},
+        "PEF": {"name": "Photoelectric Factor", "unit": "b/e", "min": 0, "max": 10},
+        "DTC": {"name": "Compressional Slowness", "unit": "us/ft", "min": 20, "max": 260},
+        "DTS": {"name": "Shear Slowness", "unit": "us/ft", "min": 20, "max": 260},
         "VSAND": {"name": "Sand Volume", "unit": "v/v", "min": 0, "max": 1},
         "VSILT": {"name": "Silt Volume", "unit": "v/v", "min": 0, "max": 1},
         "VCLAY": {"name": "Clay Volume", "unit": "v/v", "min": 0, "max": 1},
         "VSHALE": {"name": "Shale Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VSH_GR": {"name": "Gamma Ray Shale Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VDL": {
+            "name": "Density-Neutron Separation (VDL)",
+            "unit": "v/v",
+            "min": -0.5,
+            "max": 0.5,
+        },
+        "VCALC": {"name": "Calcite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VDOLO": {"name": "Dolomite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VKAOL": {"name": "Kaolinite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VFELD": {"name": "Feldspar Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VANHY": {"name": "Anhydrite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VGYPS": {"name": "Gypsum Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VHALI": {"name": "Halite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VPYRI": {"name": "Pyrite Volume", "unit": "v/v", "min": 0, "max": 1},
+        "VCOAL": {"name": "Coal Volume", "unit": "v/v", "min": 0, "max": 1},
+        "RHOM": {"name": "Matrix Density", "unit": "g/cc", "min": 2.0, "max": 3.1},
         "PHIT": {"name": "Total Porosity", "unit": "v/v", "min": 0, "max": 0.5},
         "PHIE": {"name": "Effective Porosity", "unit": "v/v", "min": 0, "max": 0.5},
-        "SWT": {"vname": "Total Water Saturation", "unit": "v/v", "min": 0, "max": 1},
+        "PHIT_COMP": {
+            "name": "Upscaled Composite Total Porosity",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "PHIE_COMP": {
+            "name": "Upscaled Composite Effective Porosity",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "PHIT_P10": {
+            "name": "Total Porosity P10 Realization",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "PHIT_P50": {
+            "name": "Total Porosity P50 Realization",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "PHIT_P90": {
+            "name": "Total Porosity P90 Realization",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "SWT": {
+            "name": "Total Water Saturation",
+            "vname": "Total Water Saturation",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
         "SWE": {
+            "name": "Effective Water Saturation",
             "vname": "Effective Water Saturation",
             "unit": "v/v",
             "min": 0,
             "max": 1,
         },
+        "SWIRR": {
+            "name": "Irreducible Water Saturation",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "SW_ARCHIE": {
+            "name": "Archie Water Saturation",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "SW_WS": {
+            "name": "Waxman-Smits Water Saturation",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "SHF": {
+            "name": "Saturation Height Function Sw",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "SW_SHF": {
+            "name": "Saturation Height Function Sw",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "SWT_P10": {
+            "name": "Total Water Saturation P10 Realization",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "SWT_P50": {
+            "name": "Total Water Saturation P50 Realization",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "SWT_P90": {
+            "name": "Total Water Saturation P90 Realization",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "HAFWL": {
+            "name": "Height Above Free Water Level",
+            "unit": "m",
+            "min": 0,
+            "max": 1000,
+        },
+        "PC_RES": {
+            "name": "Reservoir Capillary Pressure",
+            "unit": "psi",
+            "min": 0,
+            "max": 1000,
+        },
+        "BVW": {"name": "Bulk Volume Water", "unit": "v/v", "min": 0, "max": 0.5},
+        "BVHC": {"name": "Bulk Volume Hydrocarbon", "unit": "v/v", "min": 0, "max": 0.5},
+        "BVHC_P10": {
+            "name": "Bulk Volume Hydrocarbon P10 Realization",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "BVHC_P50": {
+            "name": "Bulk Volume Hydrocarbon P50 Realization",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "BVHC_P90": {
+            "name": "Bulk Volume Hydrocarbon P90 Realization",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
         "PERM": {"name": "Permeability", "unit": "mD", "min": 0.01, "max": 100000},
+        "PERM_TRANS": {
+            "name": "Rock-Typed Transform Permeability",
+            "unit": "mD",
+            "min": 0.01,
+            "max": 100000,
+        },
+        "PERM_COMP": {
+            "name": "Upscaled Composite Permeability",
+            "unit": "mD",
+            "min": 0.01,
+            "max": 100000,
+        },
+        "PERM_P10": {
+            "name": "Permeability P10 Realization",
+            "unit": "mD",
+            "min": 0.01,
+            "max": 100000,
+        },
+        "PERM_P50": {
+            "name": "Permeability P50 Realization",
+            "unit": "mD",
+            "min": 0.01,
+            "max": 100000,
+        },
+        "PERM_P90": {
+            "name": "Permeability P90 Realization",
+            "unit": "mD",
+            "min": 0.01,
+            "max": 100000,
+        },
+        "CPORE": {"name": "Core Plug Porosity", "unit": "v/v", "min": 0, "max": 0.5},
+        "CPERM": {
+            "name": "Core Plug Permeability",
+            "unit": "mD",
+            "min": 0.01,
+            "max": 100000,
+        },
+        "CPORE_AMB": {
+            "name": "Ambient Uncorrected Core Porosity",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "CPERM_AIR": {
+            "name": "Air Uncorrected Core Permeability",
+            "unit": "mD",
+            "min": 0.01,
+            "max": 100000,
+        },
+        "FZI": {"name": "Flow Zone Indicator", "unit": "um", "min": 0.01, "max": 100},
+        "RQI": {
+            "name": "Reservoir Quality Index",
+            "unit": "um",
+            "min": 0.01,
+            "max": 100,
+        },
+        "R35": {
+            "name": "Winland R35 Pore Throat Radius",
+            "unit": "um",
+            "min": 0.01,
+            "max": 100,
+        },
+        "RFN": {
+            "name": "Lucia Rock Fabric Number",
+            "unit": "unitless",
+            "min": 0.5,
+            "max": 4.0,
+        },
+        "GHE": {
+            "name": "Global Hydraulic Element",
+            "unit": "unitless",
+            "min": 1,
+            "max": 10,
+        },
+        "ROCK_FLAG": {
+            "name": "Rock Type / Facies Flag",
+            "unit": "unitless",
+            "min": 0,
+            "max": 10,
+        },
+        "ROCK_FLAG_CORE": {
+            "name": "Core-Derived Discrete Rock Type Flag",
+            "unit": "unitless",
+            "min": 0,
+            "max": 10,
+        },
+        "ROCK_FLAG_PRED": {
+            "name": "ML-Predicted Continuous Rock Type Flag",
+            "unit": "unitless",
+            "min": 0,
+            "max": 10,
+        },
+        "RES_FLAG": {
+            "name": "Net Reservoir Flag",
+            "unit": "unitless",
+            "min": 0,
+            "max": 1,
+        },
+        "PAY_FLAG": {"name": "Net Pay Flag", "unit": "unitless", "min": 0, "max": 1},
+        "VSH_LAM": {
+            "name": "Thomas-Stieber Laminated Shale",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "VSH_DIS": {
+            "name": "Thomas-Stieber Dispersed Clay",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "VSH_DISP": {
+            "name": "Thomas-Stieber Dispersed Clay",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "VSH_STR": {
+            "name": "Thomas-Stieber Structural Shale",
+            "unit": "v/v",
+            "min": 0,
+            "max": 1,
+        },
+        "PHIT_SAND": {
+            "name": "Thomas-Stieber Sand Lamina Porosity",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "PHISAND_TS": {
+            "name": "Thomas-Stieber Sand Lamina Porosity",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "PHIT_TS": {
+            "name": "Thomas-Stieber Total Porosity",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "PHIE_TS": {
+            "name": "Thomas-Stieber Effective Porosity",
+            "unit": "v/v",
+            "min": 0,
+            "max": 0.5,
+        },
+        "RSAND_TS": {
+            "name": "Hagiwara Sand Lamina Resistivity",
+            "unit": "ohm.m",
+            "min": 0.1,
+            "max": 2000,
+        },
+        "ZONE_ID": {
+            "name": "Numeric Formation Zone Index",
+            "unit": "unitless",
+            "min": 0,
+            "max": 100,
+        },
     }
 
     # Default endpoints for the Sand-Silt-Clay lithology model.
@@ -221,6 +581,81 @@ class Config:
         "rubble": "RUBBLE",
     }
 
+    # Standard curve mnemonic aliasing dictionary mapping target quick_pp mnemonics
+    # to common vendor / service company mnemonics (SLB, Halliburton, Baker Hughes, Weatherford).
+    MNEMONIC_ALIASES = {
+        "DEPTH": ["DEPT", "DEPTH", "MD", "TDEP", "DEPT:1", "DEPT_M", "DEPT_FT"],
+        "GR": ["GR", "GAMMA", "CGR", "SGR", "GR_EDTC", "GR_ARC", "HCGR", "GRC", "GRD"],
+        "RT": [
+            "RT",
+            "RDEP",
+            "RILD",
+            "LLD",
+            "AT90",
+            "AF90",
+            "HRLT",
+            "RESD",
+            "ILD",
+            "RD",
+            "RTRUE",
+        ],
+        "RMED": ["RMED", "RILM", "LLM", "AT60", "AT30", "ILM", "RM"],
+        "RSHA": [
+            "RSHA",
+            "MSFL",
+            "RXO",
+            "RLL3",
+            "AT10",
+            "SFL",
+            "RXOZ",
+            "RS",
+            "RSHAL",
+        ],
+        "NPHI": [
+            "NPHI",
+            "TNPH",
+            "NPOR",
+            "CNCF",
+            "CNL",
+            "PHIN",
+            "NPHI_LS",
+            "NPUC",
+        ],
+        "RHOB": ["RHOB", "RHOZ", "DEN", "ZDEN", "BDEL", "RHO"],
+        "DRHO": ["DRHO", "HDRA", "DCOR", "ZCOR"],
+        "DTC": ["DTC", "DT", "DTCO", "AC", "DT4P", "DTCOMP"],
+        "DTS": ["DTS", "DTSM", "DT4S", "DTSH"],
+        "PEF": ["PEF", "PEFZ", "PE", "PEDN"],
+        "CALI": ["CALI", "HCAL", "CAL", "C1", "CALX"],
+        "BS": ["BS", "BIT", "BITSIZE"],
+        "SP": ["SP", "SSP"],
+        "CPORE": ["CPORE", "CPOR", "CORE_POR", "CORE_POROSITY", "POR_CORE"],
+        "CPERM": [
+            "CPERM",
+            "CKHG",
+            "CORE_PERM",
+            "CORE_PERMEABILITY",
+            "KLOGH",
+            "PERM_CORE",
+        ],
+    }
+
+    @staticmethod
+    def resolve_mnemonic_alias(mnemonic: str) -> str:
+        """Resolve a vendor curve mnemonic to its standard quick_pp mnemonic if known."""
+        if not mnemonic:
+            return ""
+        clean = str(mnemonic).strip().upper()
+        # Strip LAS duplicate suffix like :1 or _1 when checking aliases if exact doesn't match
+        for target, aliases in Config.MNEMONIC_ALIASES.items():
+            if clean == target or clean in aliases:
+                return target
+        base_clean = clean.split(":")[0].strip()
+        for target, aliases in Config.MNEMONIC_ALIASES.items():
+            if base_clean == target or base_clean in aliases:
+                return target
+        return clean
+
     @staticmethod
     def vars_units(data):
         """Return a dictionary of units for variables present in the DataFrame.
@@ -235,4 +670,13 @@ class Config:
             k: v["unit"]
             for k, v in Config.VARS.items()
             if k in data.columns and "unit" in v.keys()
+        }
+
+    @staticmethod
+    def vars_descriptions(data):
+        """Return a dictionary of descriptions for variables present in the DataFrame."""
+        return {
+            k: v.get("name") or v.get("vname") or k
+            for k, v in Config.VARS.items()
+            if k in data.columns
         }

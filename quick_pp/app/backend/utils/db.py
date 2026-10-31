@@ -10,7 +10,8 @@ log = logging.getLogger(__name__)
 
 
 # Initialize application-wide DBConnector singleton
-_DB_URL = os.environ.get("QPP_DATABASE_URL") or None
+_FALLBACK_SQLITE_URL = "sqlite:///./data/quick_pp.db"
+_DB_URL = os.environ.get("QPP_DATABASE_URL") or _FALLBACK_SQLITE_URL
 if not _DB_URL or _DB_URL.startswith("sqlite:///./data"):
     os.makedirs("./data", exist_ok=True)
 _connector = DBConnector(_DB_URL)
@@ -24,7 +25,9 @@ except Exception as exc:
     )
     os.makedirs("./data", exist_ok=True)
     _connector.dispose()
-    _connector = DBConnector("sqlite:///./data/quick_pp.db")
+    _DB_URL = _FALLBACK_SQLITE_URL
+    os.environ["QPP_DATABASE_URL"] = _DB_URL
+    _connector = DBConnector(_DB_URL)
     _connector.setup_db()
 
 
@@ -37,15 +40,28 @@ def get_db() -> Generator[Any, None, None]:
             ...
     """
     global _DB_URL, _connector
-    env_url = os.environ.get("QPP_DATABASE_URL") or None
-    if env_url and env_url != _DB_URL:
+    env_url = os.environ.get("QPP_DATABASE_URL") or _FALLBACK_SQLITE_URL
+    if env_url != _DB_URL or DBConnector._engine is None or DBConnector._engine_url != _DB_URL:
         try:
             _connector.dispose()
         except Exception:
             pass
         _DB_URL = env_url
         _connector = DBConnector(_DB_URL)
-        _connector.setup_db()
+        try:
+            _connector.setup_db()
+        except Exception as exc:
+            log.warning(
+                "Database (%s) unreachable (%s); falling back to local SQLite database.",
+                _DB_URL,
+                exc,
+            )
+            os.makedirs("./data", exist_ok=True)
+            _connector.dispose()
+            _DB_URL = _FALLBACK_SQLITE_URL
+            os.environ["QPP_DATABASE_URL"] = _DB_URL
+            _connector = DBConnector(_DB_URL)
+            _connector.setup_db()
     with _connector.get_session() as session:
         yield session
 

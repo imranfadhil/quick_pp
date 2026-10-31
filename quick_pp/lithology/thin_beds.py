@@ -65,10 +65,15 @@ class ThinBeds:
             f"Estimating thin bed lithology and porosity for {len(nphi)} data points"
         )
 
+        nphi_arr = np.asarray(nphi, dtype=float)
+        rhob_arr = np.asarray(rhob, dtype=float)
+        if nphi_arr.shape != rhob_arr.shape:
+            raise ValueError("nphi and rhob must have the same shape")
+
         # Calculate porosity
         phit = neu_den_xplot_poro(
-            nphi,
-            rhob,
+            nphi_arr,
+            rhob_arr,
             model="ss",
             dry_min1_point=self.dry_sand_point,
             dry_clay_point=self.dry_clay_point,
@@ -77,24 +82,19 @@ class ThinBeds:
         A = self.dry_sand_point
         C = self.dry_clay_point
         D = self.fluid_point
-        E = list(zip(nphi, rhob, strict=True))
         rocklithofrac = length_a_b(A, C)
 
-        vsand = np.empty(0)
-        vshale = np.empty(0)
-        for _, point in enumerate(E):
-            var_pt = line_intersection((A, C), (D, point))
-            projlithofrac = length_a_b(var_pt, A)
-            vsh_pt = projlithofrac / rocklithofrac
-            vsand = np.append(vsand, (1 - vsh_pt))
-            vshale = np.append(vshale, vsh_pt)
+        var_pt = line_intersection((A, C), (D, (nphi_arr, rhob_arr)))
+        projlithofrac = length_a_b(var_pt, A)
+        vshale = projlithofrac / rocklithofrac
+        vsand = 1.0 - vshale
 
         vsh_lam, vsh_dis, vsand_dis, phit_sand = self.litho_poro_fraction(phit, vshale)
 
         logger.debug(
-            f"Thin bed estimation completed - mean vsand: {vsand.mean():.3f}, "
-            f"vshale: {vshale.mean():.3f}, vsh_lam: {vsh_lam.mean():.3f}, "
-            f"vsh_dis: {vsh_dis.mean():.3f}"
+            f"Thin bed estimation completed - mean vsand: {np.nanmean(vsand):.3f}, "
+            f"vshale: {np.nanmean(vshale):.3f}, vsh_lam: {np.nanmean(vsh_lam):.3f}, "
+            f"vsh_dis: {np.nanmean(vsh_dis):.3f}"
         )
 
         return vsand, vshale, phit, vsh_lam, vsh_dis, vsand_dis, phit_sand
@@ -112,6 +112,11 @@ class ThinBeds:
         """
         logger.debug("Calculating lithology-porosity fractions for thin beds")
 
+        vsh_arr = np.asarray(vshale, dtype=float)
+        phit_arr = np.asarray(phit, dtype=float)
+        if vsh_arr.shape != phit_arr.shape:
+            raise ValueError("phit and vshale must have the same shape")
+
         # Initialize the endpoints
         A = (0, self.dry_sand_poro)
         B = (1, self.dry_shale_poro)
@@ -123,26 +128,22 @@ class ThinBeds:
 
         vsh_lam_frac = length_a_b(B, C)
         vsh_dis_frac = length_a_b(A, C)
-        vsh_lam = np.empty(0)
-        vsh_dis = np.empty(0)
-        vsand_dis = np.empty(0)
-        phit_sand = np.empty(0)
-        D = list(zip(vshale, phit, strict=True))
-        for _, point in enumerate(D):
-            vsh_pt = point[0] + length_a_b(point, (point[0], 0)) * math.tan(
-                math.radians(theta_vsh_lam)
-            )
-            vsh_lam_pt = line_intersection((B, C), ((vsh_pt, 0), point))
-            proj_vsh_lam_frac = length_a_b(vsh_lam_pt, C)
-            vsh_lam = np.append(vsh_lam, proj_vsh_lam_frac / vsh_lam_frac)
 
-            proj_pt = line_intersection((A, C), (B, point))
-            proj_poro_frac = length_a_b(proj_pt, C)
-            vsand_dis_pt = proj_poro_frac / vsh_dis_frac
-            poro_sand_pt = vsand_dis_pt * (A[1] - C[1])
-            phit_sand = np.append(phit_sand, poro_sand_pt)
-            vsand_dis = np.append(vsand_dis, vsand_dis_pt)
-            vsh_dis = np.append(vsh_dis, (1 - vsand_dis_pt))
+        zeros = np.zeros_like(vsh_arr)
+        point = (vsh_arr, phit_arr)
+
+        vsh_pt = vsh_arr + length_a_b(point, (vsh_arr, zeros)) * math.tan(
+            math.radians(theta_vsh_lam)
+        )
+        vsh_lam_pt = line_intersection((B, C), ((vsh_pt, zeros), point))
+        proj_vsh_lam_frac = length_a_b(vsh_lam_pt, C)
+        vsh_lam = proj_vsh_lam_frac / vsh_lam_frac
+
+        proj_pt = line_intersection((A, C), (B, point))
+        proj_poro_frac = length_a_b(proj_pt, C)
+        vsand_dis = proj_poro_frac / vsh_dis_frac
+        phit_sand = vsand_dis * (A[1] - C[1])
+        vsh_dis = 1.0 - vsand_dis
 
         logger.debug(
             f"Lithology-porosity fraction calculation completed for {len(vsh_lam)} points"

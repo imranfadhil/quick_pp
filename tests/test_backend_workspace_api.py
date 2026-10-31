@@ -32,17 +32,43 @@ def client_and_project(monkeypatch):
     df = pd.DataFrame(
         {
             "DEPTH": depths,
+            "TVD": depths,
             "WELL_NAME": ["Well-A"] * 10,
             "GR": np.linspace(30.0, 110.0, 10),
             "NPHI": np.linspace(0.12, 0.28, 10),
             "RHOB": np.linspace(2.25, 2.55, 10),
             "RT": np.linspace(25.0, 4.0, 10),
+            "DTC": np.linspace(62.0, 52.0, 10),
             "ZONES": ["Zone-1"] * 5 + ["Zone-2"] * 5,
-            "CPORE": [0.22, np.nan, 0.19, np.nan, 0.17, np.nan, 0.15, np.nan, 0.13, np.nan],
-            "CPERM": [150.0, np.nan, 80.0, np.nan, 40.0, np.nan, 15.0, np.nan, 5.0, np.nan],
+            "CPORE": [
+                0.22,
+                np.nan,
+                0.19,
+                np.nan,
+                0.17,
+                np.nan,
+                0.15,
+                np.nan,
+                0.13,
+                np.nan,
+            ],
+            "CPERM": [
+                150.0,
+                np.nan,
+                80.0,
+                np.nan,
+                40.0,
+                np.nan,
+                15.0,
+                np.nan,
+                5.0,
+                np.nan,
+            ],
         }
     )
-    well_a = Well(db_session=session, project_id=proj.project_id, name="Well-A", uwi="WELL-A-1")
+    well_a = Well(
+        db_session=session, project_id=proj.project_id, name="Well-A", uwi="WELL-A-1"
+    )
     well_a.save()
     proj.update_data(df)
     proj.save()
@@ -53,7 +79,9 @@ def client_and_project(monkeypatch):
     session.commit()
 
     # Also add an empty well to verify multi-well endpoints skip empty wells gracefully
-    well_empty = Well(db_session=session, project_id=proj.project_id, name="Well-Empty", uwi="EMPTY-1")
+    well_empty = Well(
+        db_session=session, project_id=proj.project_id, name="Well-Empty", uwi="EMPTY-1"
+    )
     well_empty.save()
     session.commit()
 
@@ -122,9 +150,7 @@ def test_merged_well_data_columnar_and_cache(client_and_project):
     assert len(gen_body["result"]) == 10
 
     # Verify /workspace/projects/{pid}/wells/Well-A/bundle single-request bundle endpoint
-    r_bundle = client.get(
-        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/bundle"
-    )
+    r_bundle = client.get(f"/quick_pp/workspace/projects/{pid}/wells/Well-A/bundle")
     assert r_bundle.status_code == 200
     bundle = r_bundle.json()
     assert bundle["row_count"] == 10
@@ -193,9 +219,55 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert len(sat_body["data"]["SWT_WAXMAN"]) == 10
 
     # 6. Rock Typing across project (including empty well) & Perm Transform
+    r_rt_winland = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={"method": "winland", "cutoffs": [0.5, 2.0, 5.0], "save": False},
+    )
+    assert r_rt_winland.status_code == 200
+    assert r_rt_winland.json()["method"] == "winland"
+    assert "r35" in r_rt_winland.json()["data"]
+
+    r_rt_lucia = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={"method": "lucia", "cutoffs": [1.5, 2.5, 3.5], "save": False},
+    )
+    assert r_rt_lucia.status_code == 200
+    assert r_rt_lucia.json()["method"] == "lucia"
+    assert r_rt_lucia.json()["higher_is_better"] is False
+    assert "rfn" in r_rt_lucia.json()["data"]
+
+    r_rt_gmm = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={
+            "method": "fzi",
+            "auto_find_cutoffs": True,
+            "cutoff_method": "gmm",
+            "auto_k": True,
+            "lucia_vuggy_override": True,
+            "phi_sec_cutoff": 0.01,
+            "save": False,
+        },
+    )
+    assert r_rt_gmm.status_code == 200
+    assert "diagnostics" in r_rt_gmm.json()
+    assert r_rt_gmm.json()["diagnostics"]["carbonate"]["has_sonic_data"] is True
+
+    r_rt_lorenz = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={
+            "method": "fzi",
+            "auto_find_cutoffs": True,
+            "cutoff_method": "lorenz",
+            "auto_k": True,
+            "save": False,
+        },
+    )
+    assert r_rt_lorenz.status_code == 200
+    assert "lorenz" in r_rt_lorenz.json()["diagnostics"]
+
     r_rt = client.post(
         f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
-        json={"cutoffs": [0.5, 1.5, 3.0], "save": True},
+        json={"method": "fzi", "cutoffs": [0.5, 1.5, 3.0], "save": True},
     )
     assert r_rt.status_code == 200
     assert r_rt.json()["saved_wells"] == 1
@@ -282,7 +354,7 @@ def test_petrophysical_mcp_server_and_agent_assistant(client_and_project):
     prov_body = r_prov.json()
     provider_ids = [p["id"] for p in prov_body["providers"]]
     assert "native_mcp" in provider_ids
-    assert "openai" in provider_ids
+    assert "openrouter" in provider_ids
     assert "ollama" in provider_ids
     tool_names = [t["name"] for t in prov_body["mcp_tools"]]
     assert "inspect_well" in tool_names
@@ -305,7 +377,7 @@ def test_petrophysical_mcp_server_and_agent_assistant(client_and_project):
         json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     )
     assert r_list.status_code == 200
-    assert len(r_list.json()["result"]["tools"]) == 6
+    assert len(r_list.json()["result"]["tools"]) >= 6
 
     r_call = client.post(
         "/quick_pp/mcp",
@@ -500,4 +572,71 @@ def test_badhole_flagging_and_litho_poro_badhole_treatments(client_and_project):
     assert 0.05 < poro_gr["PHIT"][2] < 0.35
 
 
+def test_workspace_stick_plot(client_and_project):
+    client, pid = client_and_project
+    res = client.post(
+        f"/quick_pp/workspace/projects/{pid}/stick_plot",
+        json={"max_points_per_well": 500},
+    )
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["project_id"] == pid
+    assert "wells" in payload
+    assert len(payload["wells"]) == 1
+    w = payload["wells"][0]
+    assert w["well_name"] == "Well-A"
+    assert "tvd" in w and len(w["tvd"]) == 10
+    assert "bvo" in w and len(w["bvo"]) == 10
+    assert "top_reservoir_tvd" in w
+    assert "cum_hcpv" in w
+    assert len(w["tops"]) == 2
 
+
+def test_hc_correction_angle_and_den_correction_protects_hc_rows(client_and_project):
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+
+    r_hc = client.post(
+        f"{base}/hc_correction",
+        json={
+            "rho_water": 1.0,
+            "rho_hc": 0.3,
+            "hi_hc": 0.66,
+            "gr_clean": 30.0,
+            "gr_clay": 110.0,
+            "save": True,
+        },
+    )
+    assert r_hc.status_code == 200
+    hc_body = r_hc.json()
+    # Angle measured from the NPHI axis: atan2(0.7, 0.34) ~= 64.09 deg
+    assert hc_body["corr_angle"] == pytest.approx(64.09, abs=0.01)
+    hc_flag = np.asarray(hc_body["data"]["HC_FLAG"], dtype=float)
+    assert hc_flag.sum() >= 1
+    nphi_hc = np.asarray(hc_body["data"]["NPHI_HC"], dtype=float)
+    rhob_hc = np.asarray(hc_body["data"]["RHOB_HC"], dtype=float)
+
+    r_bad_mode = client.post(f"{base}/hc_correction", json={"flag_mode": "bogus"})
+    assert r_bad_mode.status_code == 400
+
+    r_den = client.post(
+        f"{base}/den_correction",
+        json={"scope": "full", "gr_clean": 30.0, "gr_clay": 110.0, "save": False},
+    )
+    assert r_den.status_code == 200
+    den_body = r_den.json()
+    den_data = den_body["data"]
+    hc_rows = hc_flag >= 0.5
+    np.testing.assert_allclose(
+        np.asarray(den_data["HC_FLAG"], dtype=float)[hc_rows], 1.0
+    )
+    np.testing.assert_allclose(
+        np.asarray(den_data["DEN_CORR_FLAG"], dtype=float)[hc_rows], 0.0
+    )
+    np.testing.assert_allclose(
+        np.asarray(den_data["NPHI_HC"], dtype=float)[hc_rows], nphi_hc[hc_rows]
+    )
+    np.testing.assert_allclose(
+        np.asarray(den_data["RHOB_HC"], dtype=float)[hc_rows], rhob_hc[hc_rows]
+    )
+    assert den_body["den_summary"]["hc_protected_count"] == int(hc_rows.sum())

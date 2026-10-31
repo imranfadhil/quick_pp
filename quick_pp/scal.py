@@ -61,7 +61,6 @@ __all__ = [
 ]
 
 
-
 def overburden_porosity_correction(
     core_poro: Union[float, np.ndarray, pd.Series],
     net_confining_stress: Union[float, np.ndarray, pd.Series],
@@ -202,7 +201,9 @@ def overburden_poroperm_correction(
     Returns:
         tuple: `(poro_res, perm_res)` corrected to reservoir net confining stress.
     """
-    poro_method = "power_law" if method.strip().lower() == "power_law" else "exponential"
+    poro_method = (
+        "power_law" if method.strip().lower() == "power_law" else "exponential"
+    )
     poro_res = overburden_porosity_correction(
         core_poro,
         net_confining_stress,
@@ -253,8 +254,10 @@ def klinkenberg_permeability_correction(
     Returns:
         float or np.ndarray: Equivalent liquid permeability (mD).
     """
-    is_scalar = np.isscalar(k_air) and np.isscalar(mean_pore_pressure) and (
-        b_factor is None or np.isscalar(b_factor)
+    is_scalar = (
+        np.isscalar(k_air)
+        and np.isscalar(mean_pore_pressure)
+        and (b_factor is None or np.isscalar(b_factor))
     )
     k_safe = np.maximum(k_air, 1e-6)
     p_safe = np.maximum(mean_pore_pressure, 1e-6)
@@ -293,7 +296,7 @@ def estimate_cbw_from_qv(
         float or np.ndarray: Bulk volume fraction of clay-bound water $V_{cbw}$ (v/v).
     """
     sal_safe = np.maximum(water_salinity, 1.0)
-    swb = np.clip((0.084 * (sal_safe ** -0.5) + 0.22) * np.maximum(qv, 0.0), 0.0, 1.0)
+    swb = np.clip((0.084 * (sal_safe**-0.5) + 0.22) * np.maximum(qv, 0.0), 0.0, 1.0)
     return np.clip(phit * swb, 0.0, np.maximum(phit, 0.0))
 
 
@@ -389,7 +392,7 @@ def dean_stark_cbw_correction(
             swb = (phit - phie) / np.maximum(phit, 1e-6)
         elif qv is not None:
             sal_safe = np.maximum(water_salinity, 1.0)
-            swb = (0.084 * (sal_safe ** -0.5) + 0.22) * np.maximum(qv, 0.0)
+            swb = (0.084 * (sal_safe**-0.5) + 0.22) * np.maximum(qv, 0.0)
         else:
             raise ValueError(
                 "Must provide one of: `swb`, (`cbw` and `phit`), (`phit` and `phie`), or `qv`."
@@ -499,7 +502,9 @@ def correct_core_data(
             column name in `df`, or True to infer `PHIT - PHIE` from `df`. If provided,
             applies `humidity_to_total_porosity`.
         compaction_coeff (float, optional): Pore compaction coefficient for overburden
-            porosity correction. Defaults to 4e-6.
+            porosity correction (1/psi). Typical values: 4.5e-6 (1/psi) for well-consolidated sandstone,
+            8e-6 (1/psi) for friable/poorly cemented sandstone, and 2.5e-6 (1/psi) for carbonate that is
+            stiff/well-cemented limestone/dolomite. Defaults to 4e-6.
         perm_compaction_coeff (float, optional): Permeability stress-sensitivity coefficient $\\gamma$
             for overburden permeability correction when `net_confining_stress` is provided.
             Defaults to None.
@@ -704,7 +709,9 @@ def corey_relperm(
         dict: Dictionary containing `sw`, `swn`, `krw`, `kro`, and `fw` (fractional water cut).
     """
     sw_arr = np.atleast_1d(np.asarray(sw, dtype=float))
-    swn = np.asarray(normalize_water_saturation(sw_arr, swirr=swirr, sor=sor), dtype=float)
+    swn = np.asarray(
+        normalize_water_saturation(sw_arr, swirr=swirr, sor=sor), dtype=float
+    )
     krw = np.clip(float(krw_max) * np.power(swn, max(float(nw), 1e-4)), 0.0, 1.0)
     kro = np.clip(float(kro_max) * np.power(1.0 - swn, max(float(no), 1e-4)), 0.0, 1.0)
 
@@ -751,7 +758,9 @@ def brooks_corey_relperm(
     """
     lam_safe = max(float(lam), 1e-3)
     sw_arr = np.atleast_1d(np.asarray(sw, dtype=float))
-    swn = np.asarray(normalize_water_saturation(sw_arr, swirr=swirr, sor=sor), dtype=float)
+    swn = np.asarray(
+        normalize_water_saturation(sw_arr, swirr=swirr, sor=sor), dtype=float
+    )
     exp_w = (2.0 + 3.0 * lam_safe) / lam_safe
     exp_o = (2.0 + lam_safe) / lam_safe
 
@@ -810,7 +819,9 @@ def let_relperm(
         dict: Dictionary containing `sw`, `swn`, `krw`, `kro`, and `fw`.
     """
     sw_arr = np.atleast_1d(np.asarray(sw, dtype=float))
-    swn = np.asarray(normalize_water_saturation(sw_arr, swirr=swirr, sor=sor), dtype=float)
+    swn = np.asarray(
+        normalize_water_saturation(sw_arr, swirr=swirr, sor=sor), dtype=float
+    )
     s_o = 1.0 - swn
 
     num_w = np.power(swn, max(float(lw), 1e-4))
@@ -864,14 +875,26 @@ def fit_relperm(
     sw_arr = np.asarray(sw, dtype=float)
     valid_sw = sw_arr[np.isfinite(sw_arr)]
     if len(valid_sw) < 2:
-        raise ValueError("At least 2 valid saturation points are required for fit_relperm.")
+        raise ValueError(
+            "At least 2 valid saturation points are required for fit_relperm."
+        )
 
-    swirr_val = float(swirr) if swirr is not None else float(np.clip(np.min(valid_sw), 0.0, 0.6))
-    sor_val = float(sor) if sor is not None else float(np.clip(1.0 - np.max(valid_sw), 0.0, 0.6))
+    swirr_val = (
+        float(swirr)
+        if swirr is not None
+        else float(np.clip(np.min(valid_sw), 0.0, 0.6))
+    )
+    sor_val = (
+        float(sor)
+        if sor is not None
+        else float(np.clip(1.0 - np.max(valid_sw), 0.0, 0.6))
+    )
     if swirr_val + sor_val >= 0.95:
         sor_val = max(0.0, 0.90 - swirr_val)
 
-    swn_all = np.asarray(normalize_water_saturation(sw_arr, swirr=swirr_val, sor=sor_val), dtype=float)
+    swn_all = np.asarray(
+        normalize_water_saturation(sw_arr, swirr=swirr_val, sor=sor_val), dtype=float
+    )
     model_clean = model.strip().lower()
 
     out: Dict[str, Any] = {
@@ -888,6 +911,7 @@ def fit_relperm(
         krw_max_init = float(np.clip(np.max(y_w) if len(y_w) > 0 else 0.3, 0.01, 1.0))
 
         if model_clean == "let" and len(swn_w) >= 3:
+
             def _let_w(s, k_max, l_p, e_p, t_p):
                 n = np.power(s, l_p)
                 d = n + e_p * np.power(1.0 - s, t_p)
@@ -912,6 +936,7 @@ def fit_relperm(
                 }
             )
         else:
+
             def _corey_w(s, k_max, n_p):
                 return k_max * np.power(s, n_p)
 
@@ -940,6 +965,7 @@ def fit_relperm(
         kro_max_init = float(np.clip(np.max(y_o) if len(y_o) > 0 else 0.9, 0.01, 1.0))
 
         if model_clean == "let" and len(swn_o) >= 3:
+
             def _let_o(s, k_max, l_p, e_p, t_p):
                 so = 1.0 - s
                 n = np.power(so, l_p)
@@ -965,6 +991,7 @@ def fit_relperm(
                 }
             )
         else:
+
             def _corey_o(s, k_max, n_p):
                 return k_max * np.power(1.0 - s, n_p)
 
@@ -1057,7 +1084,13 @@ def generate_swof_table(
         )
     else:
         rp = corey_relperm(
-            sw_grid, swirr=swirr, sor=sor, krw_max=krw_max, kro_max=kro_max, nw=nw, no=no
+            sw_grid,
+            swirr=swirr,
+            sor=sor,
+            krw_max=krw_max,
+            kro_max=kro_max,
+            nw=nw,
+            no=no,
         )
 
     krw = rp["krw"].copy()
@@ -1066,11 +1099,17 @@ def generate_swof_table(
         krw[-1] = 1.0
         kro[-1] = 0.0
 
-    swn_pc = np.clip((sw_grid - float(swirr)) / max(1.0 - float(swirr), 1e-6), 1e-3, 1.0)
+    swn_pc = np.clip(
+        (sw_grid - float(swirr)) / max(1.0 - float(swirr), 1e-6), 1e-3, 1.0
+    )
     pcow = np.where(
         sw_grid >= sw_max_mobile,
         0.0,
-        np.clip(float(pc_entry) * np.power(swn_pc, -1.0 / max(float(pc_exponent), 0.1)), 0.0, float(pc_max)),
+        np.clip(
+            float(pc_entry) * np.power(swn_pc, -1.0 / max(float(pc_exponent), 0.1)),
+            0.0,
+            float(pc_max),
+        ),
     )
 
     table_df = pd.DataFrame(

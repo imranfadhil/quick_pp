@@ -1,3 +1,5 @@
+"""Core-to-log poro-perm curve fitting and permeability transformation API endpoints."""
+
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
@@ -5,7 +7,10 @@ from fastapi import APIRouter, HTTPException
 from quick_pp.core_analysis import fit_poroperm_curve
 from quick_pp.database import objects as db_objects
 
-from quick_pp.app.backend.services.database import invalidate_well_cache
+from quick_pp.app.backend.services.database import (
+    _get_merged_dataframe_sync,
+    invalidate_well_cache,
+)
 from quick_pp.app.backend.utils.db import get_db
 
 
@@ -25,83 +30,95 @@ async def get_poroperm_fits(project_id: int):
     try:
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
-
             all_well_names = proj.get_well_names()
-            if not all_well_names:
-                raise HTTPException(
-                    status_code=404, detail=f"No wells found for project {project_id}"
-                )
 
-            # Collect all data with rock_flags
-            all_phit = []
-            all_perm = []
-            all_rock_flags = []
+        if not all_well_names:
+            raise HTTPException(
+                status_code=404, detail=f"No wells found for project {project_id}"
+            )
 
-            for well_name in all_well_names:
-                df = proj.get_well_data_optimized(well_name)
+        # Collect all data with rock_flags
+        all_phit = []
+        all_perm = []
+        all_rock_flags = []
 
-                if df.empty:
-                    continue
+        for well_name in all_well_names:
+            df = _get_merged_dataframe_sync(project_id, well_name)
 
-                # Extract columns
-                phit_col = None
-                perm_col = None
-                rock_flag_col = None
-                for col in df.columns:
-                    if col.upper() in ["PHIT", "POROSITY", "POR"]:
-                        phit_col = col
-                    if col.upper() in ["PERM", "PERMEABILITY", "K"]:
-                        perm_col = col
-                    if col.upper() == "ROCK_FLAG":
-                        rock_flag_col = col
+            if df.empty:
+                continue
 
-                if not phit_col or not perm_col or not rock_flag_col:
-                    continue
+            # Extract columns
+            phit_col = None
+            perm_col = None
+            rock_flag_col = None
+            for col in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR", "CORE_POR"):
+                if col in df.columns and df[col].notna().any():
+                    phit_col = col
+                    break
+            for col in (
+                "CPERM",
+                "CORE_PERM",
+                "PERM",
+                "KLOGH",
+                "PERMEABILITY",
+                "K",
+            ):
+                if col in df.columns and df[col].notna().any():
+                    perm_col = col
+                    break
+            for col in ("ROCK_FLAG", "ROCK_FLAG_ML"):
+                if col in df.columns and df[col].notna().any():
+                    rock_flag_col = col
+                    break
 
-                cpore = df[phit_col].dropna()
-                cperm = df[perm_col].dropna()
-                crock = df[rock_flag_col].dropna()
+            if not phit_col or not perm_col or not rock_flag_col:
+                continue
 
-                # Align
-                common_index = cpore.index.intersection(cperm.index).intersection(
-                    crock.index
-                )
-                cpore = cpore.loc[common_index]
-                cperm = cperm.loc[common_index]
-                crock = crock.loc[common_index]
+            cpore = df[phit_col].dropna()
+            cperm = df[perm_col].dropna()
+            crock = df[rock_flag_col].dropna()
 
-                if len(cpore) == 0:
-                    continue
+            # Align
+            common_index = cpore.index.intersection(cperm.index).intersection(
+                crock.index
+            )
+            cpore = cpore.loc[common_index]
+            cperm = cperm.loc[common_index]
+            crock = crock.loc[common_index]
 
-                all_phit.extend(cpore.tolist())
-                all_perm.extend(cperm.tolist())
-                all_rock_flags.extend(crock.tolist())
+            if len(cpore) == 0:
+                continue
 
-            if not all_phit:
-                raise HTTPException(
-                    status_code=404, detail="No data with ROCK_FLAG found"
-                )
+            all_phit.extend(cpore.tolist())
+            all_perm.extend(cperm.tolist())
+            all_rock_flags.extend(crock.tolist())
 
-            # Group by rock_flag
-            from collections import defaultdict
+        if not all_phit:
+            raise HTTPException(
+                status_code=404, detail="No data with ROCK_FLAG found"
+            )
 
-            groups = defaultdict(list)
-            for phit, perm, rf in zip(all_phit, all_perm, all_rock_flags, strict=True):
-                groups[rf].append((phit, perm))
+        # Group by rock_flag
+        from collections import defaultdict
 
-            # Fit for each group
-            fits = {}
-            for rf, data in groups.items():
-                poro = [d[0] for d in data]
-                perm = [d[1] for d in data]
-                try:
-                    a, b = fit_poroperm_curve(np.array(poro), np.array(perm))
-                    fits[str(rf)] = {"a": a, "b": b}
-                except Exception as e:
-                    print(f"Failed to fit for ROCK_FLAG {rf}: {e}")
-                    fits[str(rf)] = {"a": 1, "b": 1}
+        groups = defaultdict(list)
+        for phit, perm, rf in zip(all_phit, all_perm, all_rock_flags, strict=True):
+            groups[rf].append((phit, perm))
 
-            return {"fits": fits}
+        # Fit for each group
+        fits = {}
+        for rf, data in groups.items():
+            poro = [d[0] for d in data]
+            perm = [d[1] for d in data]
+            try:
+                a, b = fit_poroperm_curve(np.array(poro), np.array(perm))
+                fits[str(rf)] = {"a": a, "b": b}
+            except Exception as e:
+                print(f"Failed to fit for ROCK_FLAG {rf}: {e}")
+                fits[str(rf)] = {"a": 1, "b": 1}
+
+        return {"fits": fits}
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

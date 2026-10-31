@@ -1,3 +1,10 @@
+"""Routine and special core analysis (RCA/SCAL) processing, corrections, and calibration.
+
+Provides core porosity overburden stress correction, Klinkenberg gas slippage
+permeability correction, core-to-log depth shifting, poro-perm curve fitting,
+capillary pressure J-function fitting, and interactive SCAL diagnostic plots.
+"""
+
 import hashlib
 import re
 
@@ -209,38 +216,113 @@ def j_xplot(
 
 
 # Best-fit functions
-def fit_j_curve(sw, j):
+def _robust_fit_j_logspace(sw, j, dampen_outliers=True):
+    """Robust log-space IRLS fit for Leverett-J curve J = a * Swn^(-b) with outlier and asymptote dampening.
+
+    Returns:
+        tuple: (a, b, weights, sw_clean, j_clean)
+    """
+    sw_arr = np.asarray(sw, dtype=float)
+    j_arr = np.asarray(j, dtype=float)
+    mask = np.isfinite(sw_arr) & np.isfinite(j_arr) & (sw_arr > 0) & (j_arr > 0)
+    sw_arr = sw_arr[mask]
+    j_arr = j_arr[mask]
+    if len(sw_arr) < 2:
+        return 0.2, 0.3, np.ones(len(sw_arr), dtype=float), sw_arr, j_arr
+
+    x = -np.log(np.clip(sw_arr, 1e-6, 1.0))
+    y = np.log(np.clip(j_arr, 1e-8, 1e8))
+
+    if float(np.std(x)) < 1e-8:
+        a_const = float(np.clip(np.exp(np.median(y)), 1e-4, 50.0))
+        return round(a_const, 4), 0.5, np.ones(len(sw_arr), dtype=float), sw_arr, j_arr
+
+    # Fast path for exact or near-noiseless synthetic power-law curves
+    slope_ols, intercept_ols = np.polyfit(x, y, 1)
+    resid_ols = y - (intercept_ols + slope_ols * x)
+    if not dampen_outliers or len(sw_arr) <= 5 and float(np.max(np.abs(resid_ols))) < 0.05:
+        a_ols = float(np.clip(np.exp(intercept_ols), 1e-4, 50.0))
+        b_ols = float(np.clip(slope_ols, 0.02, 5.0))
+        return round(a_ols, 4), round(b_ols, 4), np.ones(len(sw_arr), dtype=float), sw_arr, j_arr
+
+    # Dampen capillary asymptote pile-ups (Swn <= 0.055 at Swirr and Swn >= 0.90 below entry pressure)
+    interior_mask = (sw_arr > 0.055) & (sw_arr < 0.90)
+    if int(np.sum(interior_mask)) >= 3 and float(np.std(x[interior_mask])) > 0.08:
+        w_prior = np.where(
+            (sw_arr >= 0.06) & (sw_arr <= 0.88),
+            1.0,
+            np.where((sw_arr <= 0.04) | (sw_arr >= 0.93), 0.05, 0.25),
+        )
+    else:
+        interior_mask = np.ones(len(sw_arr), dtype=bool)
+        w_prior = np.ones(len(sw_arr), dtype=float)
+
+    x_int = x[interior_mask]
+    y_int = y[interior_mask]
+
+    # Pairwise Theil-Sen median slope across interior points for outlier-resistant initialization
+    pair_slopes = []
+    n_int = len(x_int)
+    step = max(1, n_int // 40)
+    for i in range(0, n_int, step):
+        dx = x_int[i + 1 :: step] - x_int[i]
+        dy = y_int[i + 1 :: step] - y_int[i]
+        valid_dx = np.abs(dx) > 0.12
+        if np.any(valid_dx):
+            s_vals = dy[valid_dx] / dx[valid_dx]
+            pos_s = s_vals[(s_vals > 0.02) & (s_vals < 4.0)]
+            if len(pos_s) > 0:
+                pair_slopes.extend(pos_s.tolist())
+
+    if pair_slopes:
+        b = float(np.clip(np.median(pair_slopes), 0.08, 2.8))
+    else:
+        b_init, _ = np.polyfit(x_int, y_int, 1)
+        b = float(np.clip(b_init, 0.08, 2.8))
+    alpha = float(np.median(y_int - b * x_int))
+
+    # Iteratively Reweighted Least Squares (IRLS) with Tukey biweight + Huber tail dampening
+    weights = w_prior.copy()
+    for _ in range(8):
+        resid = y - (alpha + b * x)
+        r_ref = resid[interior_mask]
+        med_r = float(np.median(r_ref))
+        mad = float(np.median(np.abs(r_ref - med_r)))
+        sigma = max(1.4826 * mad, 0.15)
+        u = np.abs(resid - med_r) / (2.0 * sigma)
+        w_out = np.where(u < 1.0, (1.0 - u**2) ** 2, 0.02 / np.maximum(u**2, 1.0))
+        weights = w_prior * w_out
+        w_sum = float(np.sum(weights))
+        if w_sum <= 1e-12:
+            weights = w_prior.copy()
+            break
+        x_bar = float(np.sum(weights * x) / w_sum)
+        y_bar = float(np.sum(weights * y) / w_sum)
+        denom = float(np.sum(weights * ((x - x_bar) ** 2)))
+        if denom > 1e-8:
+            b_new = float(np.sum(weights * (x - x_bar) * (y - y_bar)) / denom)
+            b = float(np.clip(b_new, 0.05, 3.0))
+        alpha = float(y_bar - b * x_bar)
+
+    a_val = float(np.clip(np.exp(alpha), 1e-4, 50.0))
+    b_val = float(np.clip(b, 0.05, 3.0))
+    return round(a_val, 4), round(b_val, 4), weights, sw_arr, j_arr
+
+
+def fit_j_curve(sw, j, dampen_outliers=True):
     """Estimate a and b constants of best fit given core water saturation and J value.
 
     Args:
-        sw (float): Core water saturation (frac).
-        j (float): Calculated J value (unitless).
+        sw (float or array-like): Core water saturation (frac).
+        j (float or array-like): Calculated J value (unitless).
+        dampen_outliers (bool, optional): Whether to apply robust log-space IRLS outlier
+            and capillary-asymptote dampening. Defaults to True.
 
     Returns:
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        sw_arr = np.asarray(sw, dtype=float)
-        j_arr = np.asarray(j, dtype=float)
-        mask = np.isfinite(sw_arr) & np.isfinite(j_arr) & (sw_arr > 0) & (j_arr > 0)
-        sw_arr = sw_arr[mask]
-        j_arr = j_arr[mask]
-        if len(sw_arr) < 2:
-            return 0.2, 0.3
-        # Log-linear initial guess: ln(J) = ln(a) - b * ln(Sw)
-        slope, intercept = np.polyfit(np.log(sw_arr), np.log(j_arr), 1)
-        a0 = float(np.clip(np.exp(intercept), 1e-4, 20.0))
-        b0 = float(np.clip(-slope, 0.02, 5.0))
-        popt, _ = curve_fit(
-            inv_power_law_func,
-            sw_arr,
-            j_arr,
-            p0=[a0, b0],
-            bounds=([1e-5, 0.01], [50.0, 10.0]),
-            maxfev=5000,
-        )
-        a = [round(c, 3) for c in popt][0]
-        b = [round(c, 3) for c in popt][1]
+        a, b, _, _, _ = _robust_fit_j_logspace(sw, j, dampen_outliers=dampen_outliers)
         return a, b
     except Exception as e:
         logger.error(e)
@@ -1583,12 +1665,17 @@ def auto_cluster_scal_data(core_data):
     )
 
 
-def auto_j_params(core_data, excluded_samples=None, cluster_by=None):
+def auto_j_params(
+    core_data,
+    excluded_samples=None,
+    cluster_by=None,
+    ensure_non_crossing=True,
+    dampen_outliers=True,
+):
     """Automatically calculates J-function parameters (a, b) for each rock type.
 
-    This function groups the data by 'ROCK_FLAG', fits a J-curve for each group,
-    and returns the best-fit parameters 'a' and 'b' along with the RMSE. It can
-    also create sub-groups within each rock type for more granular parameterization.
+    This function groups the data by 'ROCK_FLAG', fits a robust outlier-dampened J-curve
+    for each group, and enforces non-crossing constraints across rock types over Swn in [0.01, 1.0].
 
     Args:
         core_data (pd.DataFrame): DataFrame containing 'ROCK_FLAG', 'SWN', and 'J' columns.
@@ -1598,13 +1685,22 @@ def auto_j_params(core_data, excluded_samples=None, cluster_by=None):
             within each 'ROCK_FLAG'. If provided, parameters will be calculated
             for each unique combination of 'ROCK_FLAG' and the cluster_by columns.
             Defaults to None.
+        ensure_non_crossing (bool, optional): Enforce strict non-crossing ordering across
+            rock-type curves over the saturation range Swn in [0.01, 1.0]. Defaults to True.
+        dampen_outliers (bool, optional): Dampen extreme SCAL outliers and boundary asymptotes.
+            Defaults to True.
 
     Returns:
         list: A list of dictionaries, where each dictionary contains the
-              group identifiers (e.g., 'ROCK_FLAG') and the J-parameters ('a', 'b', 'rmse').
+              group identifiers (e.g., 'ROCK_FLAG') and the J-parameters ('a', 'b', 'rmse', 'r2', 'count').
     """
+    from scipy.optimize import minimize
+
     excluded_samples = excluded_samples or []
-    core_data = core_data[~core_data["Sample"].isin(excluded_samples)].copy()
+    if "Sample" in core_data.columns:
+        core_data = core_data[~core_data["Sample"].isin(excluded_samples)].copy()
+    else:
+        core_data = core_data.copy()
 
     grouping_cols = ["ROCK_FLAG"]
     if cluster_by:
@@ -1612,27 +1708,19 @@ def auto_j_params(core_data, excluded_samples=None, cluster_by=None):
             cluster_by = [cluster_by]
         grouping_cols.extend(cluster_by)
 
-    j_params_list = []
+    group_records = []
     for group_key, data in core_data.groupby(grouping_cols):
-        clean_data = data.dropna(subset=["SWN", "J"]).query("SWN > 0")
-
-        # Ensure there's still data left to fit
+        clean_data = data.dropna(subset=["SWN", "J"]).query("SWN > 0 and J > 0")
         if len(clean_data) < 2:
-            continue  # Skip groups with insufficient data after filtering
+            continue
 
-        a, b = fit_j_curve(clean_data["SWN"], clean_data["J"])
-        j_pred = inv_power_law_func(clean_data["SWN"], a, b)
-        rmse = round(
-            root_mean_squared_error(clean_data["J"], j_pred),
-            4,
+        a_init, b_init, weights, sw_arr, j_arr = _robust_fit_j_logspace(
+            clean_data["SWN"], clean_data["J"], dampen_outliers=dampen_outliers
         )
-        ss_res = float(np.sum((clean_data["J"] - j_pred) ** 2))
-        ss_tot = float(np.sum((clean_data["J"] - np.mean(clean_data["J"])) ** 2))
-        r2 = round(max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else 0.0, 4)
+        if len(sw_arr) < 2:
+            continue
 
-        # Create a dictionary for the group identifiers
         params = {
-            # Cast to standard python types to ensure JSON serializability
             col: (
                 int(val) if isinstance(val, (np.integer, np.int32, np.int64)) else val
             )
@@ -1642,22 +1730,174 @@ def auto_j_params(core_data, excluded_samples=None, cluster_by=None):
                 strict=True,
             )
         }
+        group_records.append(
+            {
+                "id_params": params,
+                "a": float(a_init),
+                "b": float(b_init),
+                "weights": weights,
+                "sw": sw_arr,
+                "j": j_arr,
+                "x": -np.log(np.clip(sw_arr, 1e-6, 1.0)),
+                "y": np.log(np.clip(j_arr, 1e-8, 1e8)),
+                "count": int(len(clean_data)),
+            }
+        )
 
-        # Add the calculated J-parameters
+    # Joint non-crossing optimization across Rock Types in log-log space
+    if ensure_non_crossing and not cluster_by and len(group_records) >= 2:
+        group_records.sort(key=lambda r: r["id_params"].get("ROCK_FLAG", 0))
+        k_groups = len(group_records)
+        u_ref = float(-np.log(0.30))
+        u_max = float(-np.log(0.01))
+
+        mu_vals = np.array(
+            [np.log(max(r["a"], 1e-4)) + r["b"] * u_ref for r in group_records],
+            dtype=float,
+        )
+        rf_idx = np.arange(k_groups, dtype=float)
+        cov_rf_mu = float(np.sum((rf_idx - np.mean(rf_idx)) * (mu_vals - np.mean(mu_vals))))
+
+        # Order from lowest J curve to highest J curve following physical rock-type progression
+        if cov_rf_mu >= 0.0:
+            order = list(range(k_groups))
+        else:
+            order = list(range(k_groups - 1, -1, -1))
+
+        sqrt_counts = np.array([np.sqrt(max(r["count"], 1)) for r in group_records], dtype=float)
+        b_raw = np.array([r["b"] for r in group_records], dtype=float)
+        b_shared = float(
+            np.clip(np.sum(sqrt_counts * b_raw) / np.sum(sqrt_counts), 0.15, 2.2)
+        )
+
+        mu_span = max(float(np.max(mu_vals) - np.min(mu_vals)), 0.25 * (k_groups - 1))
+        delta = float(np.clip(0.25 * mu_span / max(k_groups - 1, 1), 0.06, 0.18))
+
+        # Initialize monotonic endpoints R_j (at Swn=1, u=0) and L_j (at Swn=0.01, u=u_max)
+        mu_ordered = np.array([mu_vals[idx] for idx in order], dtype=float)
+        mu_mono = np.zeros(k_groups, dtype=float)
+        mu_mono[0] = float(np.min(mu_ordered)) if mu_ordered[0] > np.median(mu_ordered) else float(mu_ordered[0])
+        for j_i in range(1, k_groups):
+            mu_mono[j_i] = max(float(mu_ordered[j_i]), mu_mono[j_i - 1] + delta * 1.2)
+        # Re-center monotonic mid-levels to match the empirical mean level
+        mu_mono += float(np.mean(mu_ordered) - np.mean(mu_mono))
+
+        r_init = mu_mono - b_shared * u_ref
+        l_init = r_init + b_shared * u_max
+
+        z0 = np.zeros(2 * k_groups, dtype=float)
+        z0[0] = r_init[0]
+        z0[1:k_groups] = np.maximum(np.diff(r_init), delta)
+        z0[k_groups] = l_init[0]
+        z0[k_groups + 1 : 2 * k_groups] = np.maximum(np.diff(l_init), delta)
+
+        bounds = (
+            [(float(np.log(1e-4)), float(np.log(50.0)))]
+            + [(delta, 8.0)] * (k_groups - 1)
+            + [(float(np.log(1e-4)), float(np.log(5000.0)))]
+            + [(delta, 8.0)] * (k_groups - 1)
+        )
+
+        def _joint_loss(z_vec: np.ndarray) -> float:
+            r_ends = np.cumsum(z_vec[:k_groups])
+            l_ends = np.cumsum(z_vec[k_groups:])
+            total = 0.0
+            tau = 0.25
+            for j_pos, rec_idx in enumerate(order):
+                rec = group_records[rec_idx]
+                alpha_k = r_ends[j_pos]
+                b_k = (l_ends[j_pos] - r_ends[j_pos]) / u_max
+                res_k = rec["y"] - (alpha_k + b_k * rec["x"])
+                abs_r = np.abs(res_k)
+                huber_k = np.where(
+                    abs_r <= tau, 0.5 * (abs_r**2), tau * (abs_r - 0.5 * tau)
+                )
+                w_k = rec["weights"]
+                w_sum = max(float(np.sum(w_k)), 1e-8)
+                data_loss = float(np.sum(w_k * huber_k) / w_sum)
+                slope_pen = (
+                    0.18 * ((b_k - b_shared) ** 2)
+                    + 0.04 * ((b_k - rec["b"]) ** 2)
+                    + 30.0 * (max(0.0, 0.08 - b_k) ** 2)
+                    + 30.0 * (max(0.0, b_k - 2.4) ** 2)
+                )
+                total += data_loss + slope_pen
+            return total
+
+        try:
+            opt = minimize(
+                _joint_loss,
+                z0,
+                method="L-BFGS-B",
+                bounds=bounds,
+                options={"maxiter": 600, "ftol": 1e-9},
+            )
+            z_best = opt.x if opt.success or np.isfinite(opt.fun) else z0
+        except Exception:
+            z_best = z0
+
+        r_final = np.cumsum(z_best[:k_groups])
+        l_final = np.cumsum(z_best[k_groups:])
+        for j_pos, rec_idx in enumerate(order):
+            alpha_k = float(r_final[j_pos])
+            b_k = float(np.clip((l_final[j_pos] - r_final[j_pos]) / u_max, 0.08, 2.5))
+            group_records[rec_idx]["a"] = float(np.clip(np.exp(alpha_k), 1e-4, 50.0))
+            group_records[rec_idx]["b"] = b_k
+
+        # Guarantee strict non-crossing even after 4-decimal rounding
+        for j_pos in range(k_groups):
+            rec_idx = order[j_pos]
+            a_r = max(round(group_records[rec_idx]["a"], 4), 1e-4)
+            b_r = max(round(group_records[rec_idx]["b"], 4), 0.05)
+            if j_pos > 0:
+                prev_idx = order[j_pos - 1]
+                a_prev = group_records[prev_idx]["a"]
+                b_prev = group_records[prev_idx]["b"]
+                if a_r <= a_prev:
+                    a_r = round(a_prev * float(np.exp(delta)), 4)
+                    if a_r <= a_prev:
+                        a_r = round(a_prev + 0.005, 4)
+                j_left_prev = a_prev * (0.01 ** (-b_prev))
+                j_left_curr = a_r * (0.01 ** (-b_r))
+                if j_left_curr <= j_left_prev * 1.02:
+                    b_min_req = float(
+                        np.log((j_left_prev * float(np.exp(delta))) / a_r) / u_max
+                    )
+                    b_r = max(round(b_min_req, 4), 0.05)
+            group_records[rec_idx]["a"] = a_r
+            group_records[rec_idx]["b"] = b_r
+
+    j_params_list = []
+    for rec in group_records:
+        a = round(float(rec["a"]), 4)
+        b = round(float(rec["b"]), 4)
+        sw_arr = rec["sw"]
+        j_arr = rec["j"]
+        w_arr = rec["weights"]
+        j_pred = inv_power_law_func(sw_arr, a, b)
+
+        # Compute outlier-dampened RMSE and log-space / weighted R2
+        w_norm = w_arr / max(float(np.sum(w_arr)), 1e-12)
+        rmse = round(float(np.sqrt(np.sum(w_norm * ((j_arr - j_pred) ** 2)))), 4)
+        y_log = rec["y"]
+        y_pred_log = np.log(np.clip(j_pred, 1e-8, 1e8))
+        y_mean_log = float(np.sum(w_norm * y_log))
+        ss_res = float(np.sum(w_norm * ((y_log - y_pred_log) ** 2)))
+        ss_tot = float(np.sum(w_norm * ((y_log - y_mean_log) ** 2)))
+        r2 = round(max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-12 else 0.0, 4)
+
+        params = dict(rec["id_params"])
         params.update(
             {
-                "a": round(a, 4),
-                "b": round(b, 4),
+                "a": a,
+                "b": b,
                 "rmse": rmse,
                 "r2": r2,
-                "count": int(len(clean_data)),
+                "count": rec["count"],
             }
         )
         j_params_list.append(params)
 
-    # Sort the list to ensure the best rock quality for each ROCK_FLAG is first.
-    # Best quality = lowest 'a' (entry pressure) and most negative 'b' (pore distribution).
-    # The sorting is done by ROCK_FLAG, then 'a', then 'b'.
     j_params_list.sort(
         key=lambda x: (x.get("ROCK_FLAG", 0), x.get("a", 0), x.get("b", 0))
     )

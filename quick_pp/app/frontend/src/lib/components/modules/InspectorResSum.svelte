@@ -5,17 +5,14 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { downloadCsv, fmtNum } from '$lib/utils/formatters';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 
-	let vshMax = $state(0.4);
-	let phitMin = $state(0.05);
-	let swtMax = $state(0.75);
+	// Cutoff, upscaling, uncertainty & volumetric inputs live in shared workbench state so they persist
+	// across module switches and are restored per zone / depth interval from saved well config.
+	const rp = workbench.resSumParams;
+
 
 	// Upscaling & Log Blocking state
-	let includeUpscaling = $state(true);
-	let byZone = $state(false);
-	let cellSize = $state(2.0);
-	let permMethod = $state<'geometric' | 'arithmetic' | 'harmonic' | 'power_law'>('geometric');
-	let omega = $state(0.33);
 	let upscaledCellCount = $state<number | null>(null);
 	let blockedCells = $state<Record<string, any>[]>([]);
 	let permBounds = $state<{
@@ -27,9 +24,6 @@
 	} | null>(null);
 
 	// Log-level & Zonal Monte Carlo Uncertainty state
-	let includeUncertainty = $state(false);
-	let nSamples = $state(300);
-	let uncMetric = $state<'stoiip' | 'net' | 'phit' | 'swt' | 'bvhc'>('stoiip');
 	let zoneUncertaintySummary = $state<Record<string, any>[]>([]);
 
 	let uniqueZoneCount = $derived(
@@ -41,14 +35,6 @@
 	);
 
 	// Volumetric LHS STOIIP Monte Carlo state
-	let areaMean = $state(640.0);
-	let areaStd = $state(80.0);
-	let thickMean = $state(25.0);
-	let thickStd = $state(4.0);
-	let ntgMean = $state(0.65);
-	let poroMean = $state(0.18);
-	let swMean = $state(0.28);
-	let boP50 = $state(1.22);
 	let stoiipMcResult = $state<{
 		p10: number;
 		p50: number;
@@ -66,17 +52,17 @@
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/reservoir_summary`,
 				{
 					cut_offs: {
-						VSHALE: vshMax,
-						PHIT: phitMin,
-						SWT: swtMax
+						VSHALE: rp.vshMax,
+						PHIT: rp.phitMin,
+						SWT: rp.swtMax
 					},
-					include_upscaling: includeUpscaling,
-					cell_size: cellSize,
-					by_zone: byZone,
-					perm_method: permMethod,
-					omega,
-					include_uncertainty: includeUncertainty,
-					n_samples: nSamples,
+					include_upscaling: rp.includeUpscaling,
+					cell_size: rp.cellSize,
+					by_zone: rp.byZone,
+					perm_method: rp.permMethod,
+					omega: rp.omega,
+					include_uncertainty: rp.includeUncertainty,
+					n_samples: rp.nSamples,
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
@@ -121,7 +107,7 @@
 			if (permArr.length > 1) {
 				const boundsRes = await postJson<any>('/quick_pp/upscaling/permeability_bounds', {
 					perm: permArr,
-					omega
+					omega: rp.omega
 				});
 				permBounds = boundsRes;
 			}
@@ -144,14 +130,14 @@
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		try {
-			const netThickMeanFt = thickMean * ntgMean * 3.28084;
-			const netThickStdFt = thickStd * ntgMean * 3.28084;
+			const netThickMeanFt = rp.thickMean * rp.ntgMean * 3.28084;
+			const netThickStdFt = rp.thickStd * rp.ntgMean * 3.28084;
 			const res = await postJson<any>('/quick_pp/uncertainty/volumetric', {
 				area_bound: [
-					Math.max(10, areaMean - 2.5 * areaStd),
-					areaMean + 2.5 * areaStd,
-					areaMean,
-					areaStd
+					Math.max(10, rp.areaMean - 2.5 * rp.areaStd),
+					rp.areaMean + 2.5 * rp.areaStd,
+					rp.areaMean,
+					rp.areaStd
 				],
 				thickness_bound: [
 					Math.max(1, netThickMeanFt - 2.5 * netThickStdFt),
@@ -160,18 +146,18 @@
 					netThickStdFt
 				],
 				porosity_bound: [
-					Math.max(0.02, poroMean - 0.08),
-					Math.min(0.4, poroMean + 0.08),
-					poroMean,
+					Math.max(0.02, rp.poroMean - 0.08),
+					Math.min(0.4, rp.poroMean + 0.08),
+					rp.poroMean,
 					0.03
 				],
 				water_saturation_bound: [
-					Math.max(0.05, swMean - 0.15),
-					Math.min(0.95, swMean + 0.15),
-					swMean,
+					Math.max(0.05, rp.swMean - 0.15),
+					Math.min(0.95, rp.swMean + 0.15),
+					rp.swMean,
 					0.06
 				],
-				volume_factor_bound: [Math.max(1.01, boP50 - 0.08), boP50 + 0.12],
+				volume_factor_bound: [Math.max(1.01, rp.boP50 - 0.08), rp.boP50 + 0.12],
 				n_try: 5000,
 				seed: 42
 			});
@@ -214,10 +200,11 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['ressum']} />
 		<ParameterSection title="Net Rock & Net Pay Cutoffs" badge="Live Flag Strip">
 			<NumericScrubber
 				label="Max Shale (Vsh,max)"
-				bind:value={vshMax}
+				bind:value={rp.vshMax}
 				unit="v/v"
 				min={0.05}
 				max={1.0}
@@ -226,7 +213,7 @@
 			/>
 			<NumericScrubber
 				label="Min Porosity (Φ,min)"
-				bind:value={phitMin}
+				bind:value={rp.phitMin}
 				unit="v/v"
 				min={0.0}
 				max={0.35}
@@ -235,7 +222,7 @@
 			/>
 			<NumericScrubber
 				label="Max Water Sat (Sw,max)"
-				bind:value={swtMax}
+				bind:value={rp.swtMax}
 				unit="v/v"
 				min={0.1}
 				max={1.0}
@@ -252,18 +239,18 @@
 				<label class="flex items-center gap-1.5 font-medium cursor-pointer">
 					<input
 						type="checkbox"
-						bind:checked={includeUpscaling}
+						bind:checked={rp.includeUpscaling}
 						onchange={() => executeResSum(false)}
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span>Block Logs to Grid</span>
 				</label>
 
-				{#if includeUpscaling}
+				{#if rp.includeUpscaling}
 					<label class="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)] cursor-pointer">
 						<input
 							type="checkbox"
-							bind:checked={byZone}
+							bind:checked={rp.byZone}
 							onchange={() => executeResSum(false)}
 							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 						/>
@@ -272,11 +259,11 @@
 				{/if}
 			</div>
 
-			{#if includeUpscaling}
-				{#if !byZone}
+			{#if rp.includeUpscaling}
+				{#if !rp.byZone}
 					<NumericScrubber
 						label="Grid Cell Thickness"
-						bind:value={cellSize}
+						bind:value={rp.cellSize}
 						unit="m"
 						min={0.25}
 						max={50.0}
@@ -288,7 +275,7 @@
 				<div class="mt-1 flex items-center justify-between text-[11px]">
 					<span class="text-[var(--text-secondary)]">Perm Averaging:</span>
 					<select
-						bind:value={permMethod}
+						bind:value={rp.permMethod}
 						onchange={() => executeResSum(false)}
 						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
 					>
@@ -299,10 +286,10 @@
 					</select>
 				</div>
 
-				{#if permMethod === 'power_law'}
+				{#if rp.permMethod === 'power_law'}
 					<NumericScrubber
 						label="Power-Law Exponent (ω)"
-						bind:value={omega}
+						bind:value={rp.omega}
 						min={-1.0}
 						max={1.0}
 						step={0.05}
@@ -343,22 +330,22 @@
 
 		<ParameterSection
 			title="Probabilistic Uncertainty (Monte Carlo LHS)"
-			badge={includeUncertainty ? `N=${nSamples}` : 'P10/P50/P90'}
+			badge={rp.includeUncertainty ? `N=${rp.nSamples}` : 'P10/P50/P90'}
 		>
 			<label class="flex items-center gap-2 py-0.5 text-xs font-medium cursor-pointer">
 				<input
 					type="checkbox"
-					bind:checked={includeUncertainty}
+					bind:checked={rp.includeUncertainty}
 					onchange={() => executeResSum(false)}
 					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 				/>
 				<span>Propagate Log CPI Uncertainty (P10/P50/P90)</span>
 			</label>
 
-			{#if includeUncertainty}
+			{#if rp.includeUncertainty}
 				<NumericScrubber
 					label="LHS Realizations per Depth"
-					bind:value={nSamples}
+					bind:value={rp.nSamples}
 					min={50}
 					max={1000}
 					step={50}
@@ -368,7 +355,7 @@
 					<div class="mt-1 flex items-center justify-between text-[10px]">
 						<span class="font-medium text-[var(--text-secondary)]">Zonal P90/P50/P10:</span>
 						<select
-							bind:value={uncMetric}
+							bind:value={rp.uncMetric}
 							class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-5 pl-1 text-[10px] font-medium"
 						>
 							<option value="stoiip">STOIIP (MMbbl)</option>
@@ -392,36 +379,36 @@
 								{#each zoneUncertaintySummary as z}
 									{@const zoneName = z.zones ?? z.ZONE ?? 'ALL'}
 									{@const p90Val =
-										uncMetric === 'stoiip'
+										rp.uncMetric === 'stoiip'
 											? (z.stoiip_p10_mmbbl ?? z.STOIIP_MMBBL_P90)
-											: uncMetric === 'net'
+											: rp.uncMetric === 'net'
 												? z.net_p10
-												: uncMetric === 'phit'
+												: rp.uncMetric === 'phit'
 													? z.av_phit_p10
-													: uncMetric === 'swt'
+													: rp.uncMetric === 'swt'
 														? z.av_swt_p90
 														: z.av_bvhc_p10}
 									{@const p50Val =
-										uncMetric === 'stoiip'
+										rp.uncMetric === 'stoiip'
 											? (z.stoiip_p50_mmbbl ?? z.STOIIP_MMBBL_P50)
-											: uncMetric === 'net'
+											: rp.uncMetric === 'net'
 												? z.net
-												: uncMetric === 'phit'
+												: rp.uncMetric === 'phit'
 													? (z.av_phit_p50 ?? z.av_phit)
-													: uncMetric === 'swt'
+													: rp.uncMetric === 'swt'
 														? (z.av_swt_p50 ?? z.av_swt)
 														: (z.av_bvhc_p50 ?? z.av_bvhc)}
 									{@const p10Val =
-										uncMetric === 'stoiip'
+										rp.uncMetric === 'stoiip'
 											? (z.stoiip_p90_mmbbl ?? z.STOIIP_MMBBL_P10)
-											: uncMetric === 'net'
+											: rp.uncMetric === 'net'
 												? z.net_p90
-												: uncMetric === 'phit'
+												: rp.uncMetric === 'phit'
 													? z.av_phit_p90
-													: uncMetric === 'swt'
+													: rp.uncMetric === 'swt'
 														? z.av_swt_p10
 														: z.av_bvhc_p90}
-									{@const dec = uncMetric === 'stoiip' || uncMetric === 'net' ? 2 : 3}
+									{@const dec = rp.uncMetric === 'stoiip' || rp.uncMetric === 'net' ? 2 : 3}
 									<tr class="h-5">
 										<td class="px-1 font-medium">{zoneName}</td>
 										<td class="mono-num px-1 text-right">{fmtNum(p90Val, dec)}</td>
@@ -444,7 +431,7 @@
 				<div class="grid grid-cols-2 gap-x-2">
 					<NumericScrubber
 						label="Area Mean"
-						bind:value={areaMean}
+						bind:value={rp.areaMean}
 						unit="ac"
 						min={40}
 						max={10000}
@@ -453,7 +440,7 @@
 					/>
 					<NumericScrubber
 						label="Area StdDev"
-						bind:value={areaStd}
+						bind:value={rp.areaStd}
 						unit="ac"
 						min={5}
 						max={2000}
@@ -462,7 +449,7 @@
 					/>
 					<NumericScrubber
 						label="Net Pay h"
-						bind:value={thickMean}
+						bind:value={rp.thickMean}
 						unit="m"
 						min={1}
 						max={250}
@@ -471,7 +458,7 @@
 					/>
 					<NumericScrubber
 						label="NTG Mode"
-						bind:value={ntgMean}
+						bind:value={rp.ntgMean}
 						unit="v/v"
 						min={0.1}
 						max={1.0}
@@ -480,7 +467,7 @@
 					/>
 					<NumericScrubber
 						label="Porosity Φ"
-						bind:value={poroMean}
+						bind:value={rp.poroMean}
 						unit="v/v"
 						min={0.04}
 						max={0.35}
@@ -489,7 +476,7 @@
 					/>
 					<NumericScrubber
 						label="Water Sat Sw"
-						bind:value={swMean}
+						bind:value={rp.swMean}
 						unit="v/v"
 						min={0.05}
 						max={0.85}
@@ -563,7 +550,7 @@
 			disabled={wellData.isCalculating || !wellData.hasPendingComputed('ressum')}
 			onclick={saveResSumFlags}
 			title={wellData.hasPendingComputed('ressum')
-				? 'Save computed Pay Flags & blocked curves directly to the well'
+				? wellData.getPendingSaveTooltip('ressum', 'Save computed Pay Flags & blocked curves directly to the well')
 				: 'Run Summary first to enable saving'}
 			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>

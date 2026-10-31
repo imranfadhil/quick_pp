@@ -17,6 +17,7 @@ COPY pyproject.toml .
 COPY . /code
 
 # Create a virtual environment using uv and install dependencies inside it
+ENV UV_HTTP_TIMEOUT=300
 RUN uv venv --python 3.11 /venv \
     && . /venv/bin/activate \
     && uv pip install --no-cache-dir ".[app,ml]"

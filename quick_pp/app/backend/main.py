@@ -19,6 +19,9 @@ from quick_pp.database.db_connector import DBConnector
 
 from .exceptions import return_exception_message
 from .router import api_router
+from .services.ancillary import import_ancillary_router
+from .services.las_handler import import_logs_router
+from .services.report import router as report_v1_router
 
 # Robust per-process DBConnector singleton
 _db_connector_instance = None
@@ -47,7 +50,10 @@ tags_metadata = [
     },
     {"name": "Database", "description": "Database related endpoints."},
     {"name": "Ancillary Data", "description": "Ancillary related endpoints."},
-    {"name": "Agentic Assistant & MCP", "description": "Petrophysical MCP Server and Agentic Assistant endpoints."},
+    {
+        "name": "Agentic Assistant & MCP",
+        "description": "Petrophysical MCP Server and Agentic Assistant endpoints.",
+    },
     {"name": "Plotter", "description": "Plotter related endpoints."},
 ]
 
@@ -61,6 +67,7 @@ async def lifespan(app: "FastAPI"):
     try:
         get_db_connector()
         from quick_pp.app.backend.utils.auth import bootstrap_default_admin
+
         bootstrap_default_admin()
     except Exception as e:
         logging.getLogger(__name__).exception("Failed to initialize DBConnector: %s", e)
@@ -115,6 +122,9 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+app.include_router(report_v1_router, prefix="/api/v1", include_in_schema=False)
+app.include_router(import_logs_router, prefix="/api/v1", include_in_schema=False)
+app.include_router(import_ancillary_router, prefix="/api/v1", include_in_schema=False)
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -140,7 +150,9 @@ async def qpp_assistant(request: Request):
         "api_base_url": base_url + "/quick_pp",
     }
 
-    return templates.TemplateResponse(request=request, name="chat.html", context=context)
+    return templates.TemplateResponse(
+        request=request, name="chat.html", context=context
+    )
 
 
 @app.exception_handler(Exception)

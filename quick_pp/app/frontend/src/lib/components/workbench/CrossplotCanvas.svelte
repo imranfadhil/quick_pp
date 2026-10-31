@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { browser } from '$app/environment';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
@@ -10,26 +10,30 @@
 		PETRO_COLORS
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
+	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
+	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 
 	let plotEl = $state<HTMLDivElement | null>(null);
 	let PlotlyLib: any = $state(null);
 	let eventsBound = $state(false);
 
-	// Optional manual override of template; defaults to 'auto' (follows active workflow step)
-	let templateOverride = $state<
-		'auto' | 'nphi-rhob' | 'phi-k' | 'pickett' | 'histogram' | 'shf' | 'relperm'
-	>('auto');
+	// Active draggable endpoint on NPHI-RHOB or Thomas-Stieber plot
+	let activeEndpointKey = $state<'sand' | 'silt' | 'clay' | 'ts-sand' | 'ts-shale' | null>(null);
 
-	// Active draggable endpoint on NPHI-RHOB plot
-	let activeEndpointKey = $state<'sand' | 'silt' | 'clay' | null>(null);
-
-	// SHF crossplot sub-view ('scal_fit' shows SCAL J / Pc / BVW curve fits; 'height_profile' shows Sw vs HAFWL)
-	let shfView = $state<'scal_fit' | 'height_profile'>('scal_fit');
+	// SHF crossplot sub-view ('height_profile' shows Sw vs HAFWL; 'scal_fit' shows SCAL J / Pc / BVW curve fits)
+	let shfView = $state<'scal_fit' | 'height_profile'>('height_profile');
 	let shfLogScale = $state<boolean>(false);
+	let swirrLogY = $state<boolean>(false);
+	let showCoreShiftDrawer = $state<boolean>(false);
+	let showVshCalibDrawer = $state<boolean>(false);
 
 	let effectiveMode = $derived.by(() => {
-		if (templateOverride !== 'auto') return templateOverride;
+		if (workbench.crossplotTemplateOverride !== 'auto') {
+			return workbench.crossplotTemplateOverride;
+		}
 		if (workbench.scope === 'multi-well') {
+			if (workbench.multiWellStep === 'qaqc') return 'mw-distribution';
+			if (workbench.multiWellStep === 'swirr-corr') return 'swirr-fit';
 			if (workbench.multiWellStep === 'shf') return 'shf';
 			return 'phi-k';
 		}
@@ -41,17 +45,48 @@
 			case 'saturation':
 				return 'pickett';
 			case 'scal':
-				return 'relperm';
+				return 'core-qc';
 			default:
 				return 'nphi-rhob';
 		}
 	});
+
+	const MW_PALETTE = [
+		'#2563EB',
+		'#0D9488',
+		'#D97706',
+		'#DC2626',
+		'#7C3AED',
+		'#DB2777',
+		'#059669',
+		'#4F46E5',
+		'#EA580C',
+		'#0284C7'
+	];
 
 	$effect(() => {
 		if (!browser) return;
 		import('plotly.js-dist-min').then((mod) => {
 			PlotlyLib = mod.default || mod;
 		});
+	});
+
+	$effect(() => {
+		if (!browser || !plotEl) return;
+		let rafId = 0;
+		const ro = new ResizeObserver(() => {
+			cancelAnimationFrame(rafId);
+			rafId = requestAnimationFrame(() => {
+				if (PlotlyLib && plotEl && (plotEl as any)._fullLayout) {
+					PlotlyLib.Plots.resize(plotEl);
+				}
+			});
+		});
+		ro.observe(plotEl);
+		return () => {
+			cancelAnimationFrame(rafId);
+			ro.disconnect();
+		};
 	});
 
 	function buildCrossplot() {
@@ -61,7 +96,8 @@
 		const shapes: any[] = [];
 
 		const baseLayout: any = {
-			margin: { l: 48, r: 16, t: 28, b: 38 },
+			autosize: true,
+			margin: { l: 52, r: 18, t: 32, b: 44 },
 			paper_bgcolor: '#FFFFFF',
 			plot_bgcolor: '#FFFFFF',
 			dragmode: 'lasso',
@@ -70,13 +106,16 @@
 			legend: {
 				orientation: 'h',
 				x: 0,
-				y: 1.12,
+				y: 1.02,
+				xanchor: 'left',
+				yanchor: 'bottom',
 				font: { family: 'Inter', size: 10, color: '#334155' }
 			},
 			xaxis: {
 				showgrid: true,
 				gridcolor: '#E2E8F0',
 				zeroline: false,
+				automargin: true,
 				tickfont: { family: 'JetBrains Mono', size: 10, color: '#64748B' },
 				titlefont: { family: 'Inter', size: 11, color: '#0F172A' }
 			},
@@ -84,6 +123,7 @@
 				showgrid: true,
 				gridcolor: '#E2E8F0',
 				zeroline: false,
+				automargin: true,
 				tickfont: { family: 'JetBrains Mono', size: 10, color: '#64748B' },
 				titlefont: { family: 'Inter', size: 11, color: '#0F172A' }
 			}
@@ -153,9 +193,385 @@
 			return { traces, layout: baseLayout };
 		}
 
+		if (effectiveMode === 'mw-distribution') {
+			const qaqc = projectData.multiWellQaqcResult;
+			const curveName = qaqc?.active_curve || workbench.selectedQaqcCurve || 'GR';
+			const plotType = workbench.mwQaqcPlotType;
+			const groupBy = workbench.mwQaqcGroupBy;
+			const useLog = workbench.mwQaqcLogScale;
+			const cmpMode = workbench.mwQaqcCompareMode;
+			const pd = qaqc?.plot_data;
+
+			if (!pd || !pd.well_names || pd.well_names.length === 0) {
+				baseLayout.xaxis.title = { text: `${curveName} (Loading Multi-Well Data...)` };
+				return { traces, layout: baseLayout };
+			}
+
+			// Multi-Well NPHI vs RHOB Crossplot colored by Well or Zone
+			if (plotType === 'nphi-rhob') {
+				const grouped = new Map<string, { x: number[]; y: number[]; labels: string[] }>();
+				for (let i = 0; i < pd.well_names.length; i++) {
+					const x = pd.nphi?.[i];
+					const y = pd.rhob?.[i];
+					if (
+						typeof x !== 'number' ||
+						typeof y !== 'number' ||
+						!Number.isFinite(x) ||
+						!Number.isFinite(y)
+					) {
+						continue;
+					}
+					const wn = pd.well_names[i];
+					const zn = pd.zones?.[i] || 'ALL';
+					const key =
+						groupBy === 'zone' ? zn : groupBy === 'well_zone' ? `${wn} · ${zn}` : wn;
+					if (!grouped.has(key)) grouped.set(key, { x: [], y: [], labels: [] });
+					const g = grouped.get(key)!;
+					g.x.push(x);
+					g.y.push(y);
+					g.labels.push(`${wn} (${zn}) @ ${fmtNum(pd.depths?.[i], 1)}m`);
+				}
+
+				let colorIdx = 0;
+				for (const [grpName, g] of grouped.entries()) {
+					const col = MW_PALETTE[colorIdx % MW_PALETTE.length];
+					colorIdx++;
+					traces.push({
+						type: 'scatter',
+						mode: 'markers',
+						name: grpName,
+						x: g.x,
+						y: g.y,
+						text: g.labels,
+						marker: { size: 5, color: col, opacity: 0.78 },
+						hovertemplate: '%{text}<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f}<extra></extra>'
+					});
+				}
+
+				const lp = workbench.lithoParams;
+				traces.push({
+					type: 'scatter',
+					mode: 'lines+markers+text',
+					name: 'SSC Endpoints',
+					x: [
+						lp.drySandNphi,
+						lp.drySiltNphi,
+						lp.dryClayNphi,
+						lp.fluidNphi,
+						lp.drySandNphi
+					],
+					y: [
+						lp.drySandRhob,
+						lp.drySiltRhob,
+						lp.dryClayRhob,
+						lp.fluidRhob,
+						lp.drySandRhob
+					],
+					text: ['Sand', 'Silt', 'Clay', 'Fluid', ''],
+					textposition: 'top center',
+					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+					line: { color: '#0F172A', width: 1.5, dash: 'dot' },
+					marker: { size: 8, color: '#0F172A', symbol: 'diamond' }
+				});
+
+				baseLayout.dragmode = 'zoom';
+				baseLayout.xaxis.title = { text: 'NPHI (v/v)' };
+				baseLayout.xaxis.range = [-0.08, 0.65];
+				baseLayout.yaxis.title = { text: 'RHOB (g/cc)' };
+				baseLayout.yaxis.range = [2.95, 1.85];
+				return { traces, layout: baseLayout };
+			}
+
+			const overlayArr =
+				cmpMode === 'norm' && pd.norm_values?.length === pd.values.length
+					? pd.norm_values
+					: cmpMode === 'corr' && pd.corr_values?.length === pd.values.length
+						? pd.corr_values
+						: null;
+			const overlayName =
+				cmpMode === 'norm'
+					? qaqc?.norm_curve || `${curveName}_NORM`
+					: cmpMode === 'corr'
+						? qaqc?.corr_curve || `${curveName}_CORR`
+						: null;
+
+			const fSt = qaqc?.field_stats?.[curveName];
+
+			if (plotType === 'box' || plotType === 'violin') {
+				if (groupBy === 'well_zone' && !overlayArr) {
+					// Group by Zone across Wells on X-axis
+					const byZone = new Map<string, { x: string[]; y: number[] }>();
+					for (let i = 0; i < pd.values.length; i++) {
+						const v = pd.values[i];
+						if (typeof v !== 'number' || !Number.isFinite(v) || (useLog && v <= 0))
+							continue;
+						const wn = pd.well_names[i];
+						const zn = pd.zones?.[i] || 'ALL';
+						if (!byZone.has(zn)) byZone.set(zn, { x: [], y: [] });
+						const g = byZone.get(zn)!;
+						g.x.push(wn);
+						g.y.push(v);
+					}
+					let zIdx = 0;
+					for (const [zn, g] of byZone.entries()) {
+						const col = MW_PALETTE[zIdx % MW_PALETTE.length];
+						zIdx++;
+						traces.push({
+							type: plotType,
+							name: zn,
+							x: g.x,
+							y: g.y,
+							box: plotType === 'violin' ? { visible: true } : undefined,
+							meanline: { visible: true },
+							boxpoints: false,
+							marker: { color: col },
+							line: { color: col, width: 1.5 }
+						});
+					}
+					baseLayout.boxmode = 'group';
+					baseLayout.violinmode = 'group';
+				} else if (overlayArr && overlayName) {
+					// Side-by-side Raw vs Normalized/Corrected per Well or Zone
+					const rawX: string[] = [];
+					const rawY: number[] = [];
+					const ovrX: string[] = [];
+					const ovrY: number[] = [];
+					for (let i = 0; i < pd.values.length; i++) {
+						const lbl =
+							groupBy === 'zone'
+								? pd.zones?.[i] || 'ALL'
+								: groupBy === 'well_zone'
+									? `${pd.well_names[i]} (${pd.zones?.[i] || 'ALL'})`
+									: pd.well_names[i];
+						const vRaw = pd.values[i];
+						if (
+							typeof vRaw === 'number' &&
+							Number.isFinite(vRaw) &&
+							(!useLog || vRaw > 0)
+						) {
+							rawX.push(lbl);
+							rawY.push(vRaw);
+						}
+						const vOvr = overlayArr[i];
+						if (
+							typeof vOvr === 'number' &&
+							Number.isFinite(vOvr) &&
+							(!useLog || vOvr > 0)
+						) {
+							ovrX.push(lbl);
+							ovrY.push(vOvr);
+						}
+					}
+					traces.push({
+						type: plotType,
+						name: `${curveName} (Raw)`,
+						x: rawX,
+						y: rawY,
+						box: plotType === 'violin' ? { visible: true } : undefined,
+						meanline: { visible: true },
+						boxpoints: false,
+						marker: { color: 'rgba(100, 116, 139, 0.65)' },
+						line: { color: '#475569', width: 1.5 }
+					});
+					traces.push({
+						type: plotType,
+						name: overlayName,
+						x: ovrX,
+						y: ovrY,
+						box: plotType === 'violin' ? { visible: true } : undefined,
+						meanline: { visible: true },
+						boxpoints: false,
+						marker: { color: 'rgba(37, 99, 235, 0.75)' },
+						line: { color: '#1D4ED8', width: 1.5 }
+					});
+					baseLayout.boxmode = 'group';
+					baseLayout.violinmode = 'group';
+				} else {
+					// Distinct colored box/violin per Well or Zone
+					const groups = new Map<string, number[]>();
+					for (let i = 0; i < pd.values.length; i++) {
+						const v = pd.values[i];
+						if (typeof v !== 'number' || !Number.isFinite(v) || (useLog && v <= 0))
+							continue;
+						const lbl = groupBy === 'zone' ? pd.zones?.[i] || 'ALL' : pd.well_names[i];
+						if (!groups.has(lbl)) groups.set(lbl, []);
+						groups.get(lbl)!.push(v);
+					}
+					let cIdx = 0;
+					for (const [lbl, vals] of groups.entries()) {
+						const col = MW_PALETTE[cIdx % MW_PALETTE.length];
+						cIdx++;
+						traces.push({
+							type: plotType,
+							name: lbl,
+							x: vals.map(() => lbl),
+							y: vals,
+							box: plotType === 'violin' ? { visible: true } : undefined,
+							meanline: { visible: true },
+							boxpoints: false,
+							marker: { color: col },
+							line: { color: col, width: 1.5 }
+						});
+					}
+				}
+
+				// Field P10 / P50 / P90 horizontal reference lines
+				if (fSt) {
+					for (const [val, col] of [
+						[fSt.p10, '#D97706'],
+						[fSt.p50, '#16A34A'],
+						[fSt.p90, '#DC2626']
+					] as const) {
+						if (val !== null && val !== undefined && (!useLog || val > 0)) {
+							shapes.push({
+								type: 'line',
+								xref: 'paper',
+								yref: 'y',
+								x0: 0,
+								x1: 1,
+								y0: val,
+								y1: val,
+								line: { color: col, width: 1.3, dash: 'dash' }
+							});
+						}
+					}
+				}
+
+				baseLayout.dragmode = 'zoom';
+				baseLayout.xaxis.tickangle = -28;
+				baseLayout.xaxis.title = {
+					text: groupBy === 'zone' ? 'Formation Zone' : 'Well',
+					standoff: 12
+				};
+				baseLayout.yaxis.title = { text: `${curveName} Value` };
+				if (useLog) baseLayout.yaxis.type = 'log';
+				baseLayout.shapes = shapes;
+				return { traces, layout: baseLayout };
+			}
+
+			// Histogram or Empirical CDF mode across groups
+			const groups = new Map<string, { raw: number[]; ovr: number[] }>();
+			for (let i = 0; i < pd.values.length; i++) {
+				const lbl =
+					groupBy === 'zone'
+						? pd.zones?.[i] || 'ALL'
+						: groupBy === 'well_zone'
+							? `${pd.well_names[i]} · ${pd.zones?.[i] || 'ALL'}`
+							: pd.well_names[i];
+				if (!groups.has(lbl)) groups.set(lbl, { raw: [], ovr: [] });
+				const g = groups.get(lbl)!;
+				const vRaw = pd.values[i];
+				if (typeof vRaw === 'number' && Number.isFinite(vRaw) && (!useLog || vRaw > 0)) {
+					g.raw.push(vRaw);
+				}
+				if (overlayArr) {
+					const vOvr = overlayArr[i];
+					if (
+						typeof vOvr === 'number' &&
+						Number.isFinite(vOvr) &&
+						(!useLog || vOvr > 0)
+					) {
+						g.ovr.push(vOvr);
+					}
+				}
+			}
+
+			let cIdx = 0;
+			for (const [lbl, g] of groups.entries()) {
+				const col = MW_PALETTE[cIdx % MW_PALETTE.length];
+				cIdx++;
+				if (plotType === 'histogram') {
+					if (g.raw.length > 0) {
+						traces.push({
+							type: 'histogram',
+							name: overlayArr && overlayName ? `${lbl} (Raw)` : lbl,
+							x: g.raw,
+							nbinsx: 45,
+							opacity: overlayArr ? 0.35 : 0.55,
+							marker: { color: col, line: { color: col, width: 1 } }
+						});
+					}
+					if (overlayArr && overlayName && g.ovr.length > 0) {
+						traces.push({
+							type: 'histogram',
+							name: `${lbl} (${overlayName})`,
+							x: g.ovr,
+							nbinsx: 45,
+							opacity: 0.65,
+							marker: { color: col, line: { color: '#0F172A', width: 1.2 } }
+						});
+					}
+				} else {
+					// Empirical CDF
+					if (g.raw.length > 1) {
+						const sorted = [...g.raw].sort((a, b) => a - b);
+						const n = sorted.length;
+						const ys = sorted.map((_, idx) => (idx / (n - 1)) * 100);
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: overlayArr && overlayName ? `${lbl} (Raw)` : lbl,
+							x: sorted,
+							y: ys,
+							line: {
+								color: col,
+								width: overlayArr ? 1.4 : 2.0,
+								dash: overlayArr ? 'dot' : 'solid'
+							}
+						});
+					}
+					if (overlayArr && overlayName && g.ovr.length > 1) {
+						const sortedOvr = [...g.ovr].sort((a, b) => a - b);
+						const n = sortedOvr.length;
+						const ys = sortedOvr.map((_, idx) => (idx / (n - 1)) * 100);
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `${lbl} (${overlayName})`,
+							x: sortedOvr,
+							y: ys,
+							line: { color: col, width: 2.2, dash: 'solid' }
+						});
+					}
+				}
+			}
+
+			if (fSt) {
+				for (const [val, col] of [
+					[fSt.p10, '#D97706'],
+					[fSt.p50, '#16A34A'],
+					[fSt.p90, '#DC2626']
+				] as const) {
+					if (val !== null && val !== undefined && (!useLog || val > 0)) {
+						shapes.push({
+							type: 'line',
+							xref: 'x',
+							yref: 'paper',
+							x0: val,
+							x1: val,
+							y0: 0,
+							y1: 1,
+							line: { color: col, width: 1.3, dash: 'dash' }
+						});
+					}
+				}
+			}
+
+			baseLayout.dragmode = 'zoom';
+			baseLayout.barmode = 'overlay';
+			baseLayout.xaxis.title = { text: `${curveName} Value` };
+			if (useLog) baseLayout.xaxis.type = 'log';
+			baseLayout.yaxis.title = {
+				text: plotType === 'cdf' ? 'Cumulative Probability (%)' : 'Frequency (Count)'
+			};
+			baseLayout.shapes = shapes;
+			return { traces, layout: baseLayout };
+		}
+
 		if (effectiveMode === 'nphi-rhob') {
 			const useHc =
-				workbench.lithoParams.enableHcCorrection && workbench.lithoParams.useHcCorrected;
+				workbench.lithoParams.logCorrectionMode !== 'none' &&
+				(workbench.lithoParams.enableHcCorrection || workbench.lithoParams.useHcCorrected);
 			const nphiArr =
 				useHc && wellData.curves['NPHI_HC']
 					? wellData.curves['NPHI_HC']
@@ -213,7 +629,7 @@
 			}
 
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'markers',
 				name: 'Log Data (Color: GR)',
 				x: xs,
@@ -236,7 +652,7 @@
 
 			if (coalXs.length > 0) {
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'markers',
 					name: `Coal Flagged (${coalXs.length})`,
 					x: coalXs,
@@ -255,7 +671,7 @@
 
 			if (badholeXs.length > 0) {
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'markers',
 					name: `Badhole Flagged (${badholeXs.length})`,
 					x: badholeXs,
@@ -270,6 +686,91 @@
 					},
 					hovertemplate: 'BADHOLE<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f}<extra></extra>'
 				});
+			}
+
+			// Show pre-correction HC-flagged or Den-corrected raw points when Log Correction is active
+			const hcFlagArr = wellData.curves['HC_FLAG'] ?? [];
+			const denFlagArr = wellData.curves['DEN_CORR_FLAG'] ?? [];
+			const rawNphiArr = wellData.curves['NPHI'] ?? [];
+			const rawRhobArr = wellData.curves['RHOB'] ?? [];
+			if (
+				useHc &&
+				workbench.lithoParams.logCorrectionMode === 'hc' &&
+				wellData.curves['NPHI_HC'] &&
+				hcFlagArr.length > 0
+			) {
+				const rawHcXs: number[] = [];
+				const rawHcYs: number[] = [];
+				const rawHcIdx: number[] = [];
+				for (const idx of indices) {
+					if (
+						Number.isFinite(hcFlagArr[idx]) &&
+						hcFlagArr[idx] >= 0.5 &&
+						Number.isFinite(rawNphiArr[idx]) &&
+						Number.isFinite(rawRhobArr[idx])
+					) {
+						rawHcXs.push(rawNphiArr[idx]);
+						rawHcYs.push(rawRhobArr[idx]);
+						rawHcIdx.push(idx);
+					}
+				}
+				if (rawHcXs.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'markers',
+						name: `Raw HC Pre-Shift (${rawHcXs.length})`,
+						x: rawHcXs,
+						y: rawHcYs,
+						customdata: rawHcIdx,
+						marker: {
+							size: 5.5,
+							color: 'rgba(16, 185, 129, 0.18)',
+							symbol: 'triangle-up-open',
+							line: { color: '#059669', width: 1.2 }
+						},
+						hovertemplate:
+							'Raw HC (Pre-Shift)<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f}<extra></extra>'
+					});
+				}
+			} else if (
+				useHc &&
+				workbench.lithoParams.logCorrectionMode === 'den' &&
+				wellData.curves['RHOB_HC'] &&
+				denFlagArr.length > 0
+			) {
+				const rawDenXs: number[] = [];
+				const rawDenYs: number[] = [];
+				const rawDenIdx: number[] = [];
+				for (const idx of indices) {
+					if (
+						Number.isFinite(denFlagArr[idx]) &&
+						denFlagArr[idx] >= 0.5 &&
+						Number.isFinite(rawNphiArr[idx]) &&
+						Number.isFinite(rawRhobArr[idx])
+					) {
+						rawDenXs.push(rawNphiArr[idx]);
+						rawDenYs.push(rawRhobArr[idx]);
+						rawDenIdx.push(idx);
+					}
+				}
+				if (rawDenXs.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'markers',
+						name: `Raw RHOB Pre-Correction (${rawDenXs.length})`,
+						x: rawDenXs,
+						y: rawDenYs,
+						customdata: rawDenIdx,
+						marker: {
+							size: 5,
+							color: 'rgba(217, 119, 6, 0.18)',
+							symbol: 'circle-open',
+							line: { color: '#D97706', width: 1.1 }
+						},
+						hovertemplate:
+							'Raw RHOB (Pre-DenCorr)<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f}<extra></extra>'
+					});
+				}
 			}
 
 			// Ternary SSC triangle & mineral endpoints
@@ -318,8 +819,20 @@
 					type: 'scatter',
 					mode: 'lines+markers+text',
 					name: 'SSC Endpoints',
-					x: [lp.drySandNphi, lp.drySiltNphi, lp.dryClayNphi, lp.fluidNphi, lp.drySandNphi],
-					y: [lp.drySandRhob, lp.drySiltRhob, lp.dryClayRhob, lp.fluidRhob, lp.drySandRhob],
+					x: [
+						lp.drySandNphi,
+						lp.drySiltNphi,
+						lp.dryClayNphi,
+						lp.fluidNphi,
+						lp.drySandNphi
+					],
+					y: [
+						lp.drySandRhob,
+						lp.drySiltRhob,
+						lp.dryClayRhob,
+						lp.fluidRhob,
+						lp.drySandRhob
+					],
 					text: ['Sand', 'Silt', 'Clay', 'Fluid', ''],
 					textposition: 'top center',
 					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
@@ -341,11 +854,730 @@
 			return { traces, layout: baseLayout };
 		}
 
+		if (effectiveMode === 'thomas-stieber') {
+			const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+			const vshTsArr = wellData.curves['VSH_TS'];
+			const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
+			const grArr = wellData.curves['GR'] ?? [];
+
+			const xs: number[] = [];
+			const ys: number[] = [];
+			const colors: number[] = [];
+			const customIdx: number[] = [];
+
+			let maxBulkVclay = 0;
+			for (const idx of indices) {
+				const vc = vclayArr[idx];
+				if (Number.isFinite(vc) && vc > maxBulkVclay) maxBulkVclay = vc;
+			}
+
+			for (const idx of indices) {
+				const phi = phitArr[idx];
+				let vsh = vshTsArr ? vshTsArr[idx] : Number.NaN;
+				if (!Number.isFinite(vsh)) {
+					const vc = vclayArr[idx];
+					if (Number.isFinite(vc) && Number.isFinite(phi)) {
+						vsh =
+							maxBulkVclay > 0.88
+								? Math.min(1, Math.max(0, vc))
+								: Math.min(1, Math.max(0, vc / Math.max(1 - phi, 0.15)));
+					}
+				}
+				if (Number.isFinite(vsh) && Number.isFinite(phi)) {
+					xs.push(vsh);
+					ys.push(phi);
+					colors.push(Number.isFinite(grArr[idx]) ? grArr[idx] : vsh * 150);
+					customIdx.push(idx);
+				}
+			}
+
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: 'Log Data (Color: GR)',
+				x: xs,
+				y: ys,
+				customdata: customIdx,
+				marker: {
+					size: 5.5,
+					color: colors,
+					colorscale: 'Viridis',
+					opacity: 0.82,
+					colorbar: {
+						title: { text: 'GR', font: { size: 9 } },
+						thickness: 10,
+						len: 0.75,
+						tickfont: { family: 'JetBrains Mono', size: 8 }
+					}
+				},
+				hovertemplate: 'Vsh: %{x:.3f} v/v<br>PHIT: %{y:.3f} v/v<extra></extra>'
+			});
+
+			const phiSand = workbench.tsParams.drySandPoro;
+			const phiShale = workbench.tsParams.dryShalePoro;
+			const A: [number, number] = [0, phiSand];
+			const B: [number, number] = [1, phiShale];
+			const C: [number, number] = [phiSand, Number((phiSand * phiShale).toFixed(4))];
+
+			// Laminated & Φsand isolines inside the A-B-C triangle
+			for (const t of [0.2, 0.4, 0.6, 0.8]) {
+				// Vsh,lam isoline (parallel to A-C)
+				const lamX0 = A[0] + t * (B[0] - A[0]);
+				const lamY0 = A[1] + t * (B[1] - A[1]);
+				const lamX1 = C[0] + t * (B[0] - C[0]);
+				const lamY1 = C[1] + t * (B[1] - C[1]);
+				shapes.push({
+					type: 'line',
+					xref: 'x',
+					yref: 'y',
+					x0: lamX0,
+					y0: lamY0,
+					x1: lamX1,
+					y1: lamY1,
+					line: { color: 'rgba(37, 99, 235, 0.35)', width: 1, dash: 'dot' }
+				});
+				// Φsand isoline (radiating from B to A-C)
+				const disX0 = A[0] + t * (C[0] - A[0]);
+				const disY0 = A[1] + t * (C[1] - A[1]);
+				shapes.push({
+					type: 'line',
+					xref: 'x',
+					yref: 'y',
+					x0: disX0,
+					y0: disY0,
+					x1: B[0],
+					y1: B[1],
+					line: { color: 'rgba(13, 148, 136, 0.35)', width: 1, dash: 'dot' }
+				});
+			}
+
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Laminated Shale',
+				x: [A[0], B[0]],
+				y: [A[1], B[1]],
+				line: { color: '#2563EB', width: 2.0 },
+				hoverinfo: 'skip'
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Dispersed (Pore-Filling)',
+				x: [A[0], C[0]],
+				y: [A[1], C[1]],
+				line: { color: '#0D9488', width: 2.0 },
+				hoverinfo: 'skip'
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Grain-Replacing Envelope',
+				x: [C[0], B[0], 0],
+				y: [C[1], B[1], 0],
+				line: { color: '#475569', width: 1.4, dash: 'dash' },
+				hoverinfo: 'skip'
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'markers+text',
+				name: 'TS Endpoints',
+				x: [A[0], B[0], C[0]],
+				y: [A[1], B[1], C[1]],
+				text: [
+					`Clean Sand (${phiSand.toFixed(2)})`,
+					`Pure Shale (${phiShale.toFixed(2)})`,
+					`Dispersed (${C[0].toFixed(2)}, ${C[1].toFixed(3)})`
+				],
+				textposition: ['top right', 'top left', 'bottom right'],
+				textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+				marker: {
+					size: 9.5,
+					color: ['#CA8A04', '#475569', '#0D9488'],
+					symbol: 'diamond',
+					line: { color: '#FFFFFF', width: 1.5 }
+				}
+			});
+
+			baseLayout.xaxis.title = { text: 'Vshale (v/v)' };
+			baseLayout.xaxis.range = [-0.04, 1.05];
+			baseLayout.yaxis.title = { text: 'Total Porosity PHIT (v/v)' };
+			baseLayout.yaxis.range = [0, Math.max(0.42, phiSand + 0.08)];
+			baseLayout.shapes = shapes;
+			return { traces, layout: baseLayout };
+		}
+
 		if (effectiveMode === 'phi-k') {
 			// Check if multi-well rock typing or perm transform data is present when in multi-well scope
+			if (
+				workbench.scope === 'multi-well' &&
+				(workbench.multiWellStep === 'rock-typing' ||
+					workbench.multiWellStep === 'rt-classifier') &&
+				projectData.rockTypingResult &&
+				(projectData.rockTypingPlotView !== 'phi-k' ||
+					workbench.multiWellStep === 'rt-classifier')
+			) {
+				const rt = projectData.rockTypingResult;
+				const diag = rt.diagnostics ?? {};
+				const methodLbl =
+					projectData.drtMethod === 'winland'
+						? 'R35'
+						: projectData.drtMethod === 'lucia'
+							? 'RFN'
+							: 'FZI';
+
+				if (projectData.rockTypingPlotView === 'lorenz' && diag.lorenz?.lorenz_curve?.storage_cdf) {
+					const lc = diag.lorenz.lorenz_curve;
+					const infPts = (diag.lorenz.inflection_points ?? []) as Array<Record<string, any>>;
+					const lorenzCoeff = diag.lorenz.lorenz_coeff ?? 0;
+
+					// 1:1 Homogeneous line
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Homogeneous (Lc=0)',
+						x: [0, 1],
+						y: [0, 1],
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: '#94A3B8', width: 1.2, dash: 'dash' }
+					});
+
+					// Modified Lorenz curve
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Lorenz Curve (Lc=${fmtNum(lorenzCoeff, 2)})`,
+						x: lc.storage_cdf,
+						y: lc.flow_cdf,
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: '#2563EB', width: 2.5 }
+					});
+
+					// Piecewise linear flow unit segments
+					const segX = [0, ...infPts.map((p) => Number(p.storage_cdf)), 1];
+					const segY = [0, ...infPts.map((p) => Number(p.flow_cdf)), 1];
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Flow Unit Segments',
+						x: segX,
+						y: segY,
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: '#F59E0B', width: 1.6, dash: 'dot' }
+					});
+
+					if (infPts.length > 0) {
+						traces.push({
+							type: 'scatter',
+							mode: 'markers+text',
+							name: 'Inflection Cutoffs',
+							x: infPts.map((p) => Number(p.storage_cdf)),
+							y: infPts.map((p) => Number(p.flow_cdf)),
+							text: infPts.map((p) => `${methodLbl}=${p.cutoff}`),
+							textposition: 'bottom right',
+							xaxis: 'x',
+							yaxis: 'y',
+							marker: {
+								size: 9,
+								color: '#DC2626',
+								symbol: 'diamond',
+								line: { color: '#FFFFFF', width: 1.5 }
+							}
+						});
+					}
+
+					// Right subplot: Cumulative Probability vs log10(Indicator)
+					if (Array.isArray(lc.log_indicator) && Array.isArray(lc.cum_prob)) {
+						traces.push({
+							type: 'scatter',
+							mode: 'markers',
+							name: `Cum. Prob log₁₀(${methodLbl})`,
+							x: lc.log_indicator,
+							y: lc.cum_prob,
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { size: 5, color: '#0F172A', opacity: 0.75 }
+						});
+						for (const p of infPts) {
+							traces.push({
+								type: 'scatter',
+								mode: 'lines',
+								name: `Cutoff ${p.cutoff}`,
+								x: [Number(p.log_indicator), Number(p.log_indicator)],
+								y: [0, 1],
+								xaxis: 'x2',
+								yaxis: 'y2',
+								showlegend: false,
+								line: { color: '#DC2626', width: 1.3, dash: 'dash' }
+							});
+						}
+					}
+
+					const dualLayout: Record<string, any> = {
+						...baseLayout,
+						xaxis: {
+							...baseLayout.xaxis,
+							domain: [0, 0.45],
+							title: { text: 'Cum. Storage Capacity (ΣΦh)' },
+							range: [0, 1]
+						},
+						yaxis: {
+							...baseLayout.yaxis,
+							title: { text: 'Cum. Flow Capacity (ΣKh)' },
+							range: [0, 1]
+						},
+						xaxis2: {
+							...baseLayout.xaxis,
+							domain: [0.55, 1.0],
+							anchor: 'y2',
+							title: { text: `log₁₀(${methodLbl})` }
+						},
+						yaxis2: {
+							...baseLayout.yaxis,
+							anchor: 'x2',
+							title: { text: 'Cumulative Probability' },
+							range: [0, 1]
+						}
+					};
+					return { traces, layout: dualLayout };
+				}
+
+				if (projectData.rockTypingPlotView === 'gmm' && diag.gmm?.distribution?.x_grid) {
+					const dist = diag.gmm.distribution;
+					const kScores = (diag.gmm.k_scores ?? []) as Array<Record<string, any>>;
+					const cutLogs = (diag.gmm.cutoffs_log ?? []) as number[];
+					const isLog = diag.gmm.log_scale !== false;
+
+					traces.push({
+						type: 'bar',
+						name: `${isLog ? `log₁₀(${methodLbl})` : methodLbl} Hist`,
+						x: dist.bin_centers,
+						y: dist.hist_density,
+						xaxis: 'x',
+						yaxis: 'y',
+						marker: { color: '#CBD5E1', opacity: 0.65 }
+					});
+
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'GMM Total PDF',
+						x: dist.x_grid,
+						y: dist.total_pdf,
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: '#0F172A', width: 2.2 }
+					});
+
+					if (Array.isArray(dist.component_pdfs)) {
+						dist.component_pdfs.forEach((pdfArr: number[], idx: number) => {
+							const compNum = idx + 1;
+							traces.push({
+								type: 'scatter',
+								mode: 'lines',
+								name: `Gaussian ${compNum}`,
+								x: dist.x_grid,
+								y: pdfArr,
+								xaxis: 'x',
+								yaxis: 'y',
+								line: { color: getRockTypeColor(compNum), width: 1.8, dash: 'dot' }
+							});
+						});
+					}
+
+					const maxPdf = Math.max(...(dist.total_pdf ?? [1]), 1);
+					for (const cVal of cutLogs) {
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: 'GMM Cutoff',
+							x: [cVal, cVal],
+							y: [0, maxPdf * 1.05],
+							xaxis: 'x',
+							yaxis: 'y',
+							showlegend: false,
+							line: { color: '#DC2626', width: 1.5, dash: 'dash' }
+						});
+					}
+
+					if (kScores.length > 0) {
+						const ks = kScores.map((s) => Number(s.k));
+						traces.push({
+							type: 'scatter',
+							mode: 'lines+markers',
+							name: 'Silhouette Score',
+							x: ks,
+							y: kScores.map((s) => Number(s.silhouette)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							line: { color: '#2563EB', width: 2 },
+							marker: { size: 6 }
+						});
+						traces.push({
+							type: 'scatter',
+							mode: 'lines+markers',
+							name: 'Norm. BIC Score',
+							x: ks,
+							y: kScores.map((s) => Number(s.bic_norm ?? 0)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							line: { color: '#10B981', width: 2, dash: 'dot' },
+							marker: { size: 6 }
+						});
+						traces.push({
+							type: 'scatter',
+							mode: 'lines+markers',
+							name: 'Combined Score',
+							x: ks,
+							y: kScores.map((s) => Number(s.combined_score)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							line: { color: '#D97706', width: 2.4 },
+							marker: { size: 7, symbol: 'diamond' }
+						});
+					}
+
+					const gmmLayout: Record<string, any> = {
+						...baseLayout,
+						barmode: 'overlay',
+						xaxis: {
+							...baseLayout.xaxis,
+							domain: [0, 0.46],
+							title: { text: isLog ? `log₁₀(${methodLbl})` : methodLbl }
+						},
+						yaxis: {
+							...baseLayout.yaxis,
+							title: { text: 'Probability Density' }
+						},
+						xaxis2: {
+							...baseLayout.xaxis,
+							domain: [0.56, 1.0],
+							anchor: 'y2',
+							dtick: 1,
+							title: { text: 'Number of Rock Types (k)' }
+						},
+						yaxis2: {
+							...baseLayout.yaxis,
+							anchor: 'x2',
+							title: { text: 'Silhouette / Normalized BIC Score' }
+						}
+					};
+					return { traces, layout: gmmLayout };
+				}
+
+				if (projectData.rockTypingPlotView === 'carbonate') {
+					const phitArr = rt.phit ?? [];
+					const permArr = rt.perm ?? [];
+					const phiIpArr = rt.phi_ip ?? rt.phit ?? [];
+					const phisArr = rt.phis ?? [];
+					const vugFlags = rt.vuggy_flags ?? [];
+					const rfs = rt.rock_flags ?? [];
+
+					const vugX: number[] = [];
+					const vugY: number[] = [];
+					const matX: number[] = [];
+					const matY: number[] = [];
+					const phitVsPhisX: number[] = [];
+					const phitVsPhisY: number[] = [];
+					const phitVsPhisColor: string[] = [];
+
+					for (let i = 0; i < phitArr.length; i++) {
+						const pt = phitArr[i];
+						const k = permArr[i];
+						const pip = phiIpArr[i] ?? pt;
+						const ps = phisArr[i];
+						const isVug = vugFlags[i] === 1;
+						const rf = rfs[i] ?? 1;
+						if (Number.isFinite(pt) && Number.isFinite(k) && (k as number) > 0) {
+							if (isVug) {
+								vugX.push(pip as number);
+								vugY.push(k as number);
+							} else {
+								matX.push(pip as number);
+								matY.push(k as number);
+							}
+						}
+						if (Number.isFinite(pt) && ps !== null && ps !== undefined && Number.isFinite(ps)) {
+							phitVsPhisX.push(pt as number);
+							phitVsPhisY.push(ps as number);
+							phitVsPhisColor.push(isVug ? '#DC2626' : getRockTypeColor(rf));
+						}
+					}
+
+					if (matX.length > 0) {
+						traces.push({
+							type: 'scatter',
+							mode: 'markers',
+							name: 'Interparticle Φ_ip vs K',
+							x: matX,
+							y: matY,
+							xaxis: 'x',
+							yaxis: 'y',
+							marker: { size: 5.5, color: '#2563EB', opacity: 0.65 }
+						});
+					}
+					if (vugX.length > 0) {
+						traces.push({
+							type: 'scatter',
+							mode: 'markers',
+							name: `Vuggy (Φ_sec ≥ ${projectData.phiSecCutoff})`,
+							x: vugX,
+							y: vugY,
+							xaxis: 'x',
+							yaxis: 'y',
+							marker: { size: 7, color: '#DC2626', symbol: 'diamond', opacity: 0.9 }
+						});
+					}
+
+					// Lucia RFN reference lines on left subplot
+					const luciaGrid = Array.from({ length: 33 }, (_, i) => 0.04 + i * 0.01);
+					for (const rfnVal of [0.5, 1.5, 2.5, 3.5]) {
+						const logRfn = Math.log10(rfnVal);
+						const kCurve = luciaGrid.map((phi) =>
+							Math.pow(
+								10,
+								9.7892 - 12.0838 * logRfn + (8.6711 - 8.2965 * logRfn) * Math.log10(phi)
+							)
+						);
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `RFN=${rfnVal}`,
+							x: luciaGrid,
+							y: kCurve,
+							xaxis: 'x',
+							yaxis: 'y',
+							line: { color: '#64748B', width: 1.2, dash: 'dash' }
+						});
+					}
+
+					// Right subplot: Total Porosity (PHIT) vs Sonic Porosity (PHIS)
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Φ_T = Φ_sonic (Φ_sec=0)',
+						x: [0, 0.4],
+						y: [0, 0.4],
+						xaxis: 'x2',
+						yaxis: 'y2',
+						line: { color: '#64748B', width: 1.2, dash: 'dash' }
+					});
+					const cSec = projectData.phiSecCutoff;
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Vuggy Threshold (Φ_sec=${cSec})`,
+						x: [cSec, 0.4],
+						y: [0, 0.4 - cSec],
+						xaxis: 'x2',
+						yaxis: 'y2',
+						line: { color: '#DC2626', width: 1.4, dash: 'dot' }
+					});
+					if (phitVsPhisX.length > 0) {
+						traces.push({
+							type: 'scatter',
+							mode: 'markers',
+							name: 'Φ_T vs Φ_sonic',
+							x: phitVsPhisX,
+							y: phitVsPhisY,
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { size: 5.5, color: phitVsPhisColor, opacity: 0.8 }
+						});
+					}
+
+					const carbLayout: Record<string, any> = {
+						...baseLayout,
+						xaxis: {
+							...baseLayout.xaxis,
+							domain: [0, 0.46],
+							title: { text: 'Interparticle Porosity Φ_ip (v/v)' },
+							range: [0, 0.38]
+						},
+						yaxis: {
+							...baseLayout.yaxis,
+							title: { text: 'Permeability (mD)' },
+							type: 'log',
+							range: [-2, 4.5]
+						},
+						xaxis2: {
+							...baseLayout.xaxis,
+							domain: [0.56, 1.0],
+							anchor: 'y2',
+							title: { text: 'Total Porosity Φ_T (v/v)' },
+							range: [0, 0.38]
+						},
+						yaxis2: {
+							...baseLayout.yaxis,
+							anchor: 'x2',
+							title: { text: 'Sonic Porosity Φ_sonic (v/v)' },
+							range: [0, 0.38]
+						}
+					};
+					return { traces, layout: carbLayout };
+				}
+
+				if (
+					(projectData.rockTypingPlotView === 'classifier' ||
+						workbench.multiWellStep === 'rt-classifier') &&
+					diag.classifier?.contingency_table
+				) {
+					const ct = diag.classifier.contingency_table;
+					const labels: number[] = ct.labels ?? [];
+					const counts: number[][] = ct.counts ?? [];
+					const normRecall: number[][] = ct.norm_recall ?? [];
+					const featImps: Array<{ feature: string; importance: number }> =
+						diag.classifier.feature_importances ?? [];
+					const compRows: Array<Record<string, any>> =
+						diag.classifier.comparison?.per_drt ?? [];
+					const strLabels = labels.map((l) => `DRT ${l}`);
+
+					const textGrid = counts.map((row, rIdx) =>
+						row.map(
+							(val, cIdx) =>
+								`${val} (${((normRecall[rIdx]?.[cIdx] ?? 0) * 100).toFixed(0)}%)`
+						)
+					);
+
+					traces.push({
+						type: 'heatmap',
+						name: 'Contingency Matrix',
+						x: strLabels,
+						y: strLabels,
+						z: normRecall,
+						text: textGrid,
+						texttemplate: '%{text}',
+						colorscale: 'Blues',
+						zmin: 0,
+						zmax: 1,
+						showscale: false,
+						xaxis: 'x',
+						yaxis: 'y',
+						hovertemplate:
+							'True: %{y}<br>Predicted: %{x}<br>Recall: %{z:.2%}<br>Count: %{text}<extra></extra>'
+					});
+
+					if (compRows.length > 0) {
+						const compLabels = compRows.map((r) => `DRT ${r.drt}`);
+						traces.push({
+							type: 'bar',
+							name: 'Pure Cutoffs (ROCK_FLAG_CUTOFF)',
+							x: compLabels,
+							y: compRows.map((r) => Number(r.cutoff_count ?? 0)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { color: '#475569' }
+						});
+						traces.push({
+							type: 'bar',
+							name: 'ML Predicted (ROCK_FLAG_ML)',
+							x: compLabels,
+							y: compRows.map((r) => Number(r.ml_count ?? 0)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { color: '#059669' }
+						});
+						traces.push({
+							type: 'bar',
+							name: 'Cutoffs + ML Fill',
+							x: compLabels,
+							y: compRows.map((r) => Number(r.hybrid_count ?? 0)),
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { color: '#2563EB' }
+						});
+					}
+
+					if (featImps.length > 0) {
+						const revFeats = [...featImps].reverse();
+						traces.push({
+							type: 'bar',
+							orientation: 'h',
+							name: 'Feature Importance',
+							x: revFeats.map((f) => Number(f.importance)),
+							y: revFeats.map((f) => f.feature),
+							xaxis: compRows.length > 0 ? 'x3' : 'x2',
+							yaxis: compRows.length > 0 ? 'y3' : 'y2',
+							marker: { color: '#2563EB' },
+							showlegend: false,
+							hovertemplate: '%{y}: %{x:.1%}<extra></extra>'
+						});
+					}
+
+					const clfLayout: Record<string, any> =
+						compRows.length > 0
+							? {
+									...baseLayout,
+									barmode: 'group',
+									xaxis: {
+										...baseLayout.xaxis,
+										domain: [0, 0.45],
+										title: { text: 'Predicted ML Rock Type' }
+									},
+									yaxis: {
+										...baseLayout.yaxis,
+										autorange: 'reversed',
+										title: { text: 'True Cutoff-Binned Rock Type' }
+									},
+									xaxis2: {
+										...baseLayout.xaxis,
+										domain: [0.56, 1.0],
+										anchor: 'y2',
+										title: { text: 'Cutoff vs. ML DRT Distribution' }
+									},
+									yaxis2: {
+										...baseLayout.yaxis,
+										domain: [0.55, 1.0],
+										anchor: 'x2',
+										title: { text: 'Samples (n)' }
+									},
+									xaxis3: {
+										...baseLayout.xaxis,
+										domain: [0.56, 1.0],
+										anchor: 'y3',
+										title: { text: 'Feature Importance (MDI)' }
+									},
+									yaxis3: {
+										...baseLayout.yaxis,
+										domain: [0.0, 0.38],
+										anchor: 'x3',
+										title: { text: 'Feature' }
+									}
+								}
+							: {
+									...baseLayout,
+									xaxis: {
+										...baseLayout.xaxis,
+										domain: [0, 0.48],
+										title: { text: 'Predicted ML Rock Type' }
+									},
+									yaxis: {
+										...baseLayout.yaxis,
+										autorange: 'reversed',
+										title: { text: 'True Cutoff-Binned Rock Type' }
+									},
+									xaxis2: {
+										...baseLayout.xaxis,
+										domain: [0.6, 1.0],
+										anchor: 'y2',
+										title: { text: 'Feature Importance (MDI)' }
+									},
+									yaxis2: {
+										...baseLayout.yaxis,
+										anchor: 'x2',
+										title: { text: 'Input Feature' }
+									}
+								};
+					return { traces, layout: clfLayout };
+				}
+			}
 			const mwSource =
 				workbench.scope === 'multi-well'
-					? workbench.multiWellStep === 'perm-transform' && projectData.permTransformResult
+					? workbench.multiWellStep === 'perm-transform' &&
+						projectData.permTransformResult
 						? projectData.permTransformResult
 						: (projectData.rockTypingResult ?? projectData.permTransformResult)
 					: null;
@@ -368,7 +1600,12 @@
 					if (allowedWells && !allowedWells.has(wn)) return;
 					const d = rt.depths?.[i];
 					if (typeof d === 'number' && (d < minD || d > maxD)) return;
-					if (allowedZones && rtZones && (!rtZones[i] || !allowedZones.has(String(rtZones[i])))) return;
+					if (
+						allowedZones &&
+						rtZones &&
+						(!rtZones[i] || !allowedZones.has(String(rtZones[i])))
+					)
+						return;
 					const k = rt.perm[i];
 					const rf = rt.rock_flags[i] ?? 1;
 					if (Number.isFinite(p) && Number.isFinite(k) && k > 0) {
@@ -381,11 +1618,18 @@
 				});
 
 				const hasPermFits = Boolean(projectData.permTransformResult?.fits);
+				const mwIsCore =
+					((mwSource as any)?.data_source ??
+						(workbench.multiWellStep === 'perm-transform'
+							? projectData.permTransformDataSource
+							: projectData.drtDataSource)) !== 'log';
+				const poroLbl = (mwSource as any)?.poro_label ?? (mwIsCore ? 'CPORE' : 'PHIT');
+				const permLbl = (mwSource as any)?.perm_label ?? (mwIsCore ? 'CPERM' : 'PERM');
 				for (const [rf, g] of grouped.entries()) {
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
-						name: `DRT ${rf}`,
+						name: `DRT ${rf} (${poroLbl}/${permLbl})`,
 						x: g.x,
 						y: g.y,
 						text: g.wells,
@@ -394,11 +1638,15 @@
 							color: getRockTypeColor(rf),
 							opacity: hasPermFits ? 0.38 : 0.82
 						},
-						hovertemplate: 'Well: %{text}<br>PHIT: %{x:.3f}<br>PERM: %{y:.2f} mD<extra></extra>'
+						hovertemplate: `Well: %{text}<br>${poroLbl}: %{x:.3f}<br>${permLbl}: %{y:.2f} mD<extra></extra>`
 					});
 				}
 			} else {
-				const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? wellData.curves['NPHI'] ?? [];
+				const phitArr =
+					wellData.curves['PHIT'] ??
+					wellData.curves['PHIE'] ??
+					wellData.curves['NPHI'] ??
+					[];
 				const permArr = wellData.curves['PERM'] ?? [];
 				const cporeArr = wellData.curves['CPORE'] ?? [];
 				const cpermArr = wellData.curves['CPERM'] ?? [];
@@ -429,7 +1677,7 @@
 
 				if (lx.length > 0) {
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name: 'Log Poro-Perm',
 						x: lx,
@@ -440,7 +1688,7 @@
 				}
 				if (cx.length > 0) {
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name: 'Core Plugs',
 						x: cx,
@@ -451,21 +1699,74 @@
 				}
 			}
 
-			// Iso-FZI reference curves: K = 1014 * FZI^2 * (phi^3 / (1 - phi)^2)
+			// Iso-cutoff reference curves for active DRT method (FZI, Winland R35, or Lucia RFN)
 			const phiGrid = Array.from({ length: 35 }, (_, i) => 0.02 + i * 0.01);
-			for (const fziVal of projectData.fziCutoffs) {
-				const kCurve = phiGrid.map(
-					(phi) => 1014 * Math.pow(fziVal, 2) * (Math.pow(phi, 3) / Math.pow(1 - phi, 2))
-				);
-				traces.push({
-					type: 'scatter',
-					mode: 'lines',
-					name: `FZI=${fziVal}`,
-					x: phiGrid,
-					y: kCurve,
-					line: { color: '#94A3B8', width: 1, dash: 'dash' },
-					hoverinfo: 'skip'
-				});
+			const activeDrtMethod =
+				workbench.scope === 'multi-well' ? projectData.drtMethod : 'fzi';
+			const activeCutoffs =
+				workbench.scope === 'multi-well'
+					? projectData.activeDrtCutoffs
+					: projectData.fziCutoffs;
+
+			if (activeDrtMethod === 'winland') {
+				for (const r35Val of activeCutoffs) {
+					if (!Number.isFinite(r35Val) || r35Val <= 0) continue;
+					const kCurve = phiGrid.map((phi) =>
+						Math.pow(
+							10,
+							(Math.log10(r35Val) - 0.732 + 0.864 * Math.log10(phi * 100)) / 0.588
+						)
+					);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `R35=${r35Val} μm`,
+						x: phiGrid,
+						y: kCurve,
+						line: { color: '#94A3B8', width: 1, dash: 'dash' },
+						hoverinfo: 'skip'
+					});
+				}
+			} else if (activeDrtMethod === 'lucia') {
+				const luciaPhiGrid = phiGrid.filter((p) => p >= 0.035);
+				for (const rfnVal of activeCutoffs) {
+					if (!Number.isFinite(rfnVal) || rfnVal <= 0) continue;
+					const logRfn = Math.log10(rfnVal);
+					const kCurve = luciaPhiGrid.map((phi) =>
+						Math.pow(
+							10,
+							9.7892 -
+								12.0838 * logRfn +
+								(8.6711 - 8.2965 * logRfn) * Math.log10(phi)
+						)
+					);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `RFN=${rfnVal}`,
+						x: luciaPhiGrid,
+						y: kCurve,
+						line: { color: '#94A3B8', width: 1, dash: 'dash' },
+						hoverinfo: 'skip'
+					});
+				}
+			} else {
+				for (const fziVal of activeCutoffs) {
+					if (!Number.isFinite(fziVal) || fziVal <= 0) continue;
+					const kCurve = phiGrid.map(
+						(phi) =>
+							1014 * Math.pow(fziVal, 2) * (Math.pow(phi, 3) / Math.pow(1 - phi, 2))
+					);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `FZI=${fziVal}`,
+						x: phiGrid,
+						y: kCurve,
+						line: { color: '#94A3B8', width: 1, dash: 'dash' },
+						hoverinfo: 'skip'
+					});
+				}
 			}
 
 			// Fitted power-law Perm Transform lines per Rock Type: K = a * phi^b
@@ -510,16 +1811,36 @@
 				}
 			}
 
-			baseLayout.xaxis.title = { text: 'Porosity (v/v)' };
+			const isMwPhiK = workbench.scope === 'multi-well';
+			const isCoreAxis =
+				isMwPhiK &&
+				(((mwSource as any)?.data_source ??
+					(workbench.multiWellStep === 'perm-transform'
+						? projectData.permTransformDataSource
+						: projectData.drtDataSource)) !== 'log');
+			baseLayout.xaxis.title = {
+				text: isMwPhiK
+					? isCoreAxis
+						? 'Core Porosity — CPORE (v/v)'
+						: 'Calculated Log Porosity — PHIT (v/v)'
+					: 'Porosity (v/v)'
+			};
 			baseLayout.xaxis.range = [0, 0.38];
-			baseLayout.yaxis.title = { text: 'Permeability (mD)' };
+			baseLayout.yaxis.title = {
+				text: isMwPhiK
+					? isCoreAxis
+						? 'Core Permeability — CPERM (mD)'
+						: 'Calculated Log Permeability — PERM (mD)'
+					: 'Permeability (mD)'
+			};
 			baseLayout.yaxis.type = 'log';
 			baseLayout.yaxis.range = [-2, 4.5];
 			return { traces, layout: baseLayout };
 		}
 
 		if (effectiveMode === 'pickett') {
-			const phiArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? wellData.curves['NPHI'] ?? [];
+			const phiArr =
+				wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? wellData.curves['NPHI'] ?? [];
 			const rtArr = wellData.curves['RT'] ?? [];
 			const vclArr = wellData.curves['VCLAY'] ?? wellData.curves['GR'] ?? [];
 
@@ -540,7 +1861,7 @@
 			}
 
 			traces.push({
-				type: 'scattergl',
+				type: 'scatter',
 				mode: 'markers',
 				name: 'Pickett (Rt vs Φ)',
 				x: xs,
@@ -585,12 +1906,384 @@
 			return { traces, layout: baseLayout };
 		}
 
+		function buildScalCurveFitTraces() {
+			const sp = projectData.shfParams;
+			const sr = projectData.shfResult;
+			const activeModel = sr?.model ?? sp.model ?? 'leverett_j';
+			const scal = sr?.scal_data;
+
+			if (!scal || !Array.isArray(scal.pc) || scal.pc.length === 0) {
+				baseLayout.dragmode = 'zoom';
+				baseLayout.xaxis.title = {
+					text: 'No SCAL curve points loaded — click "Auto-Fit SCAL Swirr" in the left panel'
+				};
+				baseLayout.yaxis.title = { text: 'Leverett-J / Capillary Pressure Pc' };
+				return { traces, layout: baseLayout };
+			}
+
+			const excludedSet = new Set(projectData.swirrConfig.excludedScalPointIds || []);
+			const selectedSet = new Set(projectData.selectedScalPointIds || []);
+
+			const byRt = new Map<
+				number,
+				{
+					swn: number[];
+					sw: number[];
+					j: number[];
+					pc: number[];
+					bvw: number[];
+					h: number[];
+					labels: string[];
+					ptIds: string[];
+				}
+			>();
+			const exclPts = {
+				swn: [] as number[],
+				sw: [] as number[],
+				j: [] as number[],
+				pc: [] as number[],
+				bvw: [] as number[],
+				labels: [] as string[],
+				ptIds: [] as string[]
+			};
+			const selPts = {
+				swn: [] as number[],
+				sw: [] as number[],
+				j: [] as number[],
+				pc: [] as number[],
+				bvw: [] as number[],
+				labels: [] as string[],
+				ptIds: [] as string[]
+			};
+
+			for (let i = 0; i < scal.pc.length; i++) {
+				const rf = scal.rock_flags?.[i] ?? 1;
+				const rawPtId =
+					scal.point_ids?.[i] ||
+					`${scal.well_names?.[i] ?? 'W'}::${scal.samples?.[i] ?? 'S'}::${i}`;
+				const isExcl = Boolean(scal.excluded?.[i]) || excludedSet.has(rawPtId);
+				const cdata = `scal_pt::${rawPtId}`;
+				const lbl = `${scal.samples?.[i] ?? 'Plug'} (${scal.well_names?.[i] ?? ''}) | Pc=${fmtNum(scal.pc[i], 2)} psi | Sw=${fmtNum(scal.sw[i], 3)}, Swn=${fmtNum(scal.swn[i], 3)}`;
+
+				if (selectedSet.has(rawPtId)) {
+					selPts.swn.push(scal.swn[i]);
+					selPts.sw.push(scal.sw[i]);
+					selPts.j.push(scal.j[i]);
+					selPts.pc.push(scal.pc[i]);
+					selPts.bvw.push(scal.bvw[i]);
+					selPts.labels.push(lbl);
+					selPts.ptIds.push(cdata);
+				}
+
+				if (isExcl) {
+					exclPts.swn.push(scal.swn[i]);
+					exclPts.sw.push(scal.sw[i]);
+					exclPts.j.push(scal.j[i]);
+					exclPts.pc.push(scal.pc[i]);
+					exclPts.bvw.push(scal.bvw[i]);
+					exclPts.labels.push(lbl);
+					exclPts.ptIds.push(cdata);
+					continue;
+				}
+
+				if (!byRt.has(rf)) {
+					byRt.set(rf, {
+						swn: [],
+						sw: [],
+						j: [],
+						pc: [],
+						bvw: [],
+						h: [],
+						labels: [],
+						ptIds: []
+					});
+				}
+				const grp = byRt.get(rf)!;
+				grp.swn.push(scal.swn[i]);
+				grp.sw.push(scal.sw[i]);
+				grp.j.push(scal.j[i]);
+				grp.pc.push(scal.pc[i]);
+				grp.bvw.push(scal.bvw[i]);
+				grp.h.push(scal.h[i]);
+				grp.labels.push(lbl);
+				grp.ptIds.push(cdata);
+			}
+
+			const sortedRts = [...byRt.keys()].sort((a, b) => a - b);
+			const maxJ = Math.max(2.0, ...scal.j.filter(Number.isFinite));
+			const maxPc = Math.max(15.0, ...scal.pc.filter(Number.isFinite));
+			const maxH = Math.max(30.0, ...scal.h.filter(Number.isFinite));
+			const maxBvw = Math.max(0.25, ...scal.bvw.filter(Number.isFinite));
+			const conv = (sp.unit ?? 'metric') === 'metric' ? 0.433 * 3.28084 : 0.433;
+			const gradPsi = Math.max((sp.gw - sp.ghc) * conv, 1e-4);
+			const useRawSw = (sp.jSatMode ?? 'swn') === 'sw';
+			const satSym = useRawSw ? 'Sw' : 'Swn';
+
+			for (const rf of sortedRts) {
+				const g = byRt.get(rf)!;
+				const color = getRockTypeColor(rf);
+				if (activeModel === 'leverett_j') {
+					traces.push({
+						type: 'scatter',
+						mode: 'markers',
+						name: `SCAL RT ${rf} (${g.j.length})`,
+						x: useRawSw ? g.sw : g.swn,
+						y: g.j,
+						customdata: g.ptIds,
+						text: g.labels,
+						hovertemplate:
+							'%{text}<br>J=%{y:.3f}<br><i>Click to exclude point</i><extra>RT ' +
+							rf +
+							'</extra>',
+						marker: {
+							size: 6.5,
+							color,
+							opacity: 0.85,
+							line: { width: 0.5, color: '#fff' }
+						}
+					});
+				} else if (activeModel === 'skelt_harrison') {
+					traces.push({
+						type: 'scatter',
+						mode: 'markers',
+						name: `SCAL RT ${rf} (${g.pc.length})`,
+						x: g.sw,
+						y: g.pc,
+						customdata: g.ptIds,
+						text: g.labels,
+						hovertemplate:
+							'%{text}<br>Sw=%{x:.3f}, Pc=%{y:.2f} psi<br><i>Click to exclude point</i><extra>RT ' +
+							rf +
+							'</extra>',
+						marker: {
+							size: 6.5,
+							color,
+							opacity: 0.85,
+							line: { width: 0.5, color: '#fff' }
+						}
+					});
+				} else {
+					traces.push({
+						type: 'scatter',
+						mode: 'markers',
+						name: `SCAL RT ${rf} (${g.pc.length})`,
+						x: g.bvw,
+						y: g.pc,
+						customdata: g.ptIds,
+						text: g.labels,
+						hovertemplate:
+							'%{text}<br>BVW=%{x:.3f}, Pc=%{y:.2f} psi<br><i>Click to exclude point</i><extra>RT ' +
+							rf +
+							'</extra>',
+						marker: {
+							size: 6.5,
+							color,
+							opacity: 0.85,
+							line: { width: 0.5, color: '#fff' }
+						}
+					});
+				}
+			}
+
+			// Render Excluded SCAL Points trace (grey 'x' markers)
+			if (exclPts.ptIds.length > 0) {
+				const exclX =
+					activeModel === 'leverett_j'
+						? useRawSw
+							? exclPts.sw
+							: exclPts.swn
+						: activeModel === 'skelt_harrison'
+							? exclPts.sw
+							: exclPts.bvw;
+				const exclY = activeModel === 'leverett_j' ? exclPts.j : exclPts.pc;
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Excluded Pts (${exclPts.ptIds.length})`,
+					x: exclX,
+					y: exclY,
+					customdata: exclPts.ptIds,
+					text: exclPts.labels,
+					hovertemplate:
+						'%{text}<br>Val=%{y:.3f}<br><i>Excluded — click to restore point</i><extra>EXCLUDED</extra>',
+					marker: {
+						size: 7.5,
+						symbol: 'x',
+						color: '#94A3B8',
+						opacity: 0.75,
+						line: { width: 1, color: '#64748B' }
+					}
+				});
+			}
+
+			// Render Box/Lasso Selected SCAL Points highlight trace
+			if (selPts.ptIds.length > 0) {
+				const selX =
+					activeModel === 'leverett_j'
+						? useRawSw
+							? selPts.sw
+							: selPts.swn
+						: activeModel === 'skelt_harrison'
+							? selPts.sw
+							: selPts.bvw;
+				const selY = activeModel === 'leverett_j' ? selPts.j : selPts.pc;
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Selected (${selPts.ptIds.length})`,
+					x: selX,
+					y: selY,
+					customdata: selPts.ptIds,
+					text: selPts.labels,
+					hoverinfo: 'skip',
+					marker: {
+						size: 10.5,
+						symbol: 'circle-open',
+						color: '#F59E0B',
+						line: { width: 2.2, color: '#D97706' }
+					}
+				});
+			}
+
+			// Overlay fitted curves per Rock Type
+			const activeFits =
+				activeModel === 'leverett_j'
+					? useRawSw
+						? sr?.fits_sw && Object.keys(sr.fits_sw).length > 0
+							? sr.fits_sw
+							: sr?.fits
+						: sr?.fits_swn && Object.keys(sr.fits_swn).length > 0
+							? sr.fits_swn
+							: sr?.fits
+					: sr?.fits;
+			if (activeFits) {
+				const sortedFitEntries = Object.entries(activeFits).sort(
+					([k1], [k2]) => Number(k1) - Number(k2)
+				);
+				for (const [rfKey, fit] of sortedFitEntries) {
+					const rfNum = Number(rfKey);
+					const color = getRockTypeColor(rfNum);
+					const a = Number(fit.a ?? 0.2);
+					const b = Math.abs(Number(fit.b ?? 0.3));
+					if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) continue;
+
+					if (activeModel === 'leverett_j') {
+						const xs: number[] = [];
+						const ys: number[] = [];
+						for (let k = 0; k <= 60; k++) {
+							const satVal = 0.03 * Math.pow(1.0 / 0.03, k / 60);
+							const jVal = a * Math.pow(satVal, -b);
+							if (jVal <= maxJ * 1.35) {
+								xs.push(satVal);
+								ys.push(jVal);
+							}
+						}
+						const aStr = a < 0.01 ? a.toFixed(3) : a.toFixed(2);
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `Fit RT ${rfKey} (${aStr}·${satSym}^-${b.toFixed(2)})`,
+							x: xs,
+							y: ys,
+							line: { color, width: 2.2 }
+						});
+					} else if (activeModel === 'skelt_harrison') {
+						const c = Number(fit.c ?? 1.5);
+						const d = Number(fit.d ?? 1.5);
+						const xs: number[] = [];
+						const ys: number[] = [];
+						for (let k = 0; k <= 75; k++) {
+							const hVal = 0.05 * Math.pow((maxH * 1.25) / 0.05, k / 75);
+							const pcVal = hVal * gradPsi;
+							const swVal =
+								1.0 -
+								a *
+									Math.exp(
+										-Math.pow(
+											Math.max(b, 1e-4) / Math.max(hVal + d, 1e-4),
+											c
+										)
+									);
+							if (swVal >= 0 && swVal <= 1.0 && pcVal <= maxPc * 1.25) {
+								xs.push(swVal);
+								ys.push(pcVal);
+							}
+						}
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `Fit RT ${rfKey} (a=${a.toFixed(2)}, b=${b.toFixed(1)})`,
+							x: xs,
+							y: ys,
+							line: { color, width: 2.2 }
+						});
+					} else {
+						const xs: number[] = [];
+						const ys: number[] = [];
+						for (let k = 0; k <= 60; k++) {
+							const pcVal = 0.1 * Math.pow((maxPc * 1.25) / 0.1, k / 60);
+							const bvwVal = a * Math.pow(pcVal, -b);
+							if (bvwVal > 0 && bvwVal <= Math.max(maxBvw * 1.35, 0.45)) {
+								xs.push(bvwVal);
+								ys.push(pcVal);
+							}
+						}
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `Fit RT ${rfKey} (${a.toFixed(3)}·Pc^-${b.toFixed(2)})`,
+							x: xs,
+							y: ys,
+							line: { color, width: 2.2 }
+						});
+					}
+				}
+			}
+
+			baseLayout.dragmode = 'zoom';
+			if (activeModel === 'leverett_j') {
+				baseLayout.xaxis.title = {
+					text: useRawSw
+						? 'Water Saturation Sw (v/v)'
+						: 'Normalized Water Saturation Swn (v/v)'
+				};
+				baseLayout.yaxis.title = { text: 'Leverett J-Function (unitless)' };
+				if (shfLogScale) {
+					baseLayout.xaxis.type = 'log';
+					baseLayout.yaxis.type = 'log';
+				} else {
+					baseLayout.xaxis.range = [0, 1.02];
+					baseLayout.yaxis.range = [0, Number((maxJ * 1.15).toFixed(2))];
+				}
+			} else if (activeModel === 'skelt_harrison') {
+				baseLayout.xaxis.title = { text: 'Water Saturation Sw (v/v)' };
+				baseLayout.yaxis.title = { text: 'Capillary Pressure Pc (psi)' };
+				if (shfLogScale) {
+					baseLayout.xaxis.type = 'log';
+					baseLayout.yaxis.type = 'log';
+				} else {
+					baseLayout.xaxis.range = [0, 1.02];
+					baseLayout.yaxis.range = [0, Number((maxPc * 1.15).toFixed(2))];
+				}
+			} else {
+				baseLayout.xaxis.title = { text: 'Bulk Volume Water BVW = Φ·Sw (v/v)' };
+				baseLayout.yaxis.title = { text: 'Capillary Pressure Pc (psi)' };
+				if (shfLogScale) {
+					baseLayout.xaxis.type = 'log';
+					baseLayout.yaxis.type = 'log';
+				} else {
+					baseLayout.xaxis.range = [0, Number((maxBvw * 1.2).toFixed(3))];
+					baseLayout.yaxis.range = [0, Number((maxPc * 1.15).toFixed(2))];
+				}
+			}
+			return { traces, layout: baseLayout };
+		}
+
 		// SHF mode: SCAL Curve Fit (Leverett-J / Skelt-Harrison / Cuddy BVW) or Sw vs Height Above FWL
 		if (effectiveMode === 'shf') {
 			const sp = projectData.shfParams;
 			const fwl = sp.fwl;
 			const sr = projectData.shfResult;
-			const activeModel = sr?.model ?? sp.model ?? 'leverett_j';
 			const scal = sr?.scal_data;
 
 			if (
@@ -600,188 +2293,7 @@
 				Array.isArray(scal.pc) &&
 				scal.pc.length > 0
 			) {
-				const byRt = new Map<
-					number,
-					{
-						swn: number[];
-						sw: number[];
-						j: number[];
-						pc: number[];
-						bvw: number[];
-						h: number[];
-						labels: string[];
-					}
-				>();
-				for (let i = 0; i < scal.pc.length; i++) {
-					const rf = scal.rock_flags?.[i] ?? 1;
-					if (!byRt.has(rf)) {
-						byRt.set(rf, { swn: [], sw: [], j: [], pc: [], bvw: [], h: [], labels: [] });
-					}
-					const grp = byRt.get(rf)!;
-					grp.swn.push(scal.swn[i]);
-					grp.sw.push(scal.sw[i]);
-					grp.j.push(scal.j[i]);
-					grp.pc.push(scal.pc[i]);
-					grp.bvw.push(scal.bvw[i]);
-					grp.h.push(scal.h[i]);
-					grp.labels.push(
-						`${scal.samples?.[i] ?? 'Plug'} (${scal.well_names?.[i] ?? ''}) | Pc=${fmtNum(scal.pc[i], 2)} psi`
-					);
-				}
-
-				const sortedRts = [...byRt.keys()].sort((a, b) => a - b);
-				const maxJ = Math.max(2.0, ...scal.j.filter(Number.isFinite));
-				const maxPc = Math.max(15.0, ...scal.pc.filter(Number.isFinite));
-				const maxH = Math.max(30.0, ...scal.h.filter(Number.isFinite));
-				const maxBvw = Math.max(0.25, ...scal.bvw.filter(Number.isFinite));
-				const conv = (sp.unit ?? 'metric') === 'metric' ? 0.433 * 3.28084 : 0.433;
-				const gradPsi = Math.max((sp.gw - sp.ghc) * conv, 1e-4);
-
-				for (const rf of sortedRts) {
-					const g = byRt.get(rf)!;
-					const color = getRockTypeColor(rf);
-					if (activeModel === 'leverett_j') {
-						traces.push({
-							type: 'scattergl',
-							mode: 'markers',
-							name: `SCAL RT ${rf}`,
-							x: g.swn,
-							y: g.j,
-							text: g.labels,
-							hovertemplate: '%{text}<br>Swn=%{x:.3f}, J=%{y:.3f}<extra>RT ' + rf + '</extra>',
-							marker: { size: 6.5, color, opacity: 0.85, line: { width: 0.5, color: '#fff' } }
-						});
-					} else if (activeModel === 'skelt_harrison') {
-						traces.push({
-							type: 'scattergl',
-							mode: 'markers',
-							name: `SCAL RT ${rf}`,
-							x: g.sw,
-							y: g.pc,
-							text: g.labels,
-							hovertemplate: '%{text}<br>Sw=%{x:.3f}, Pc=%{y:.2f} psi<extra>RT ' + rf + '</extra>',
-							marker: { size: 6.5, color, opacity: 0.85, line: { width: 0.5, color: '#fff' } }
-						});
-					} else {
-						traces.push({
-							type: 'scattergl',
-							mode: 'markers',
-							name: `SCAL RT ${rf}`,
-							x: g.bvw,
-							y: g.pc,
-							text: g.labels,
-							hovertemplate: '%{text}<br>BVW=%{x:.3f}, Pc=%{y:.2f} psi<extra>RT ' + rf + '</extra>',
-							marker: { size: 6.5, color, opacity: 0.85, line: { width: 0.5, color: '#fff' } }
-						});
-					}
-				}
-
-				// Overlay fitted curves per Rock Type
-				if (sr?.fits) {
-					for (const [rfKey, fit] of Object.entries(sr.fits)) {
-						const rfNum = Number(rfKey);
-						const color = getRockTypeColor(rfNum);
-						const a = Number(fit.a ?? 0.2);
-						const b = Math.abs(Number(fit.b ?? 0.3));
-						if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) continue;
-
-						if (activeModel === 'leverett_j') {
-							const xs: number[] = [];
-							const ys: number[] = [];
-							for (let k = 0; k <= 60; k++) {
-								const swn = 0.03 * Math.pow(1.0 / 0.03, k / 60);
-								const jVal = a * Math.pow(swn, -b);
-								if (jVal <= maxJ * 1.35) {
-									xs.push(swn);
-									ys.push(jVal);
-								}
-							}
-							traces.push({
-								type: 'scatter',
-								mode: 'lines',
-								name: `Fit RT ${rfKey} (${a.toFixed(2)}·Swn^-${b.toFixed(2)})`,
-								x: xs,
-								y: ys,
-								line: { color, width: 2.2 }
-							});
-						} else if (activeModel === 'skelt_harrison') {
-							const c = Number(fit.c ?? 1.5);
-							const d = Number(fit.d ?? 1.5);
-							const xs: number[] = [];
-							const ys: number[] = [];
-							for (let k = 0; k <= 75; k++) {
-								const hVal = 0.05 * Math.pow((maxH * 1.25) / 0.05, k / 75);
-								const pcVal = hVal * gradPsi;
-								const swVal =
-									1.0 - a * Math.exp(-Math.pow(Math.max(b, 1e-4) / Math.max(hVal + d, 1e-4), c));
-								if (swVal >= 0 && swVal <= 1.0 && pcVal <= maxPc * 1.25) {
-									xs.push(swVal);
-									ys.push(pcVal);
-								}
-							}
-							traces.push({
-								type: 'scatter',
-								mode: 'lines',
-								name: `Fit RT ${rfKey} (a=${a.toFixed(2)}, b=${b.toFixed(1)})`,
-								x: xs,
-								y: ys,
-								line: { color, width: 2.2 }
-							});
-						} else {
-							const xs: number[] = [];
-							const ys: number[] = [];
-							for (let k = 0; k <= 60; k++) {
-								const pcVal = 0.1 * Math.pow((maxPc * 1.25) / 0.1, k / 60);
-								const bvwVal = a * Math.pow(pcVal, -b);
-								if (bvwVal > 0 && bvwVal <= Math.max(maxBvw * 1.35, 0.45)) {
-									xs.push(bvwVal);
-									ys.push(pcVal);
-								}
-							}
-							traces.push({
-								type: 'scatter',
-								mode: 'lines',
-								name: `Fit RT ${rfKey} (${a.toFixed(3)}·Pc^-${b.toFixed(2)})`,
-								x: xs,
-								y: ys,
-								line: { color, width: 2.2 }
-							});
-						}
-					}
-				}
-
-				if (activeModel === 'leverett_j') {
-					baseLayout.xaxis.title = { text: 'Normalized Water Saturation Swn (v/v)' };
-					baseLayout.yaxis.title = { text: 'Leverett J-Function (unitless)' };
-					if (shfLogScale) {
-						baseLayout.xaxis.type = 'log';
-						baseLayout.yaxis.type = 'log';
-					} else {
-						baseLayout.xaxis.range = [0, 1.02];
-						baseLayout.yaxis.range = [0, Number((maxJ * 1.15).toFixed(2))];
-					}
-				} else if (activeModel === 'skelt_harrison') {
-					baseLayout.xaxis.title = { text: 'Water Saturation Sw (v/v)' };
-					baseLayout.yaxis.title = { text: 'Capillary Pressure Pc (psi)' };
-					if (shfLogScale) {
-						baseLayout.xaxis.type = 'log';
-						baseLayout.yaxis.type = 'log';
-					} else {
-						baseLayout.xaxis.range = [0, 1.02];
-						baseLayout.yaxis.range = [0, Number((maxPc * 1.15).toFixed(2))];
-					}
-				} else {
-					baseLayout.xaxis.title = { text: 'Bulk Volume Water BVW = Φ·Sw (v/v)' };
-					baseLayout.yaxis.title = { text: 'Capillary Pressure Pc (psi)' };
-					if (shfLogScale) {
-						baseLayout.xaxis.type = 'log';
-						baseLayout.yaxis.type = 'log';
-					} else {
-						baseLayout.xaxis.range = [0, Number((maxBvw * 1.2).toFixed(3))];
-						baseLayout.yaxis.range = [0, Number((maxPc * 1.15).toFixed(2))];
-					}
-				}
-				return { traces, layout: baseLayout };
+				return buildScalCurveFitTraces();
 			}
 
 			if (workbench.scope === 'multi-well' && sr) {
@@ -808,7 +2320,8 @@
 						zn && (sp.fwlByZone?.[zn] ?? sr.fwl_by_zone?.[zn]) !== undefined
 							? Number(sp.fwlByZone?.[zn] ?? sr.fwl_by_zone?.[zn])
 							: fwl;
-					const h = effFwl - d;
+					const tvdssVal = sr.tvd?.[i] ?? d;
+					const h = typeof tvdssVal === 'number' ? effFwl - tvdssVal : NaN;
 					if (Number.isFinite(s) && Number.isFinite(h) && h >= 0) {
 						if (!grouped.has(rf)) grouped.set(rf, { sw: [], hafwl: [] });
 						grouped.get(rf)!.sw.push(s as number);
@@ -817,7 +2330,7 @@
 				});
 				for (const [rf, g] of grouped.entries()) {
 					traces.push({
-						type: 'scattergl',
+						type: 'scatter',
 						mode: 'markers',
 						name: `RT ${rf}`,
 						x: g.sw,
@@ -827,20 +2340,22 @@
 				}
 			} else {
 				const swArr = wellData.curves['SHF'] ?? wellData.curves['SWT'] ?? [];
+				const tvdssArr = wellData.curves['TVDSS'] ?? wellData.curves['TVD'] ?? deptAll;
 				const xs: number[] = [];
 				const ys: number[] = [];
 				for (const idx of indices) {
 					const sw = swArr[idx];
-					const h = fwl - deptAll[idx];
+					const dSub = tvdssArr[idx] ?? deptAll[idx];
+					const h = fwl - dSub;
 					if (Number.isFinite(sw) && Number.isFinite(h)) {
 						xs.push(sw);
 						ys.push(h);
 					}
 				}
 				traces.push({
-					type: 'scattergl',
+					type: 'scatter',
 					mode: 'markers',
-					name: 'Sw vs HAFWL',
+					name: 'Sw vs HAFWL (TVDSS)',
 					x: xs,
 					y: ys,
 					marker: { size: 5.5, color: PETRO_COLORS.water }
@@ -849,25 +2364,986 @@
 
 			baseLayout.xaxis.title = { text: 'Water Saturation Sw (v/v)' };
 			baseLayout.xaxis.range = [0, 1];
-			baseLayout.yaxis.title = { text: 'Height Above FWL (m)' };
+			baseLayout.yaxis.title = { text: 'Height Above FWL — HAFWL (m TVDSS)' };
 			return { traces, layout: baseLayout };
 		}
 
-		if (effectiveMode === 'relperm') {
+		if (effectiveMode === 'core-qc') {
+			const cc = wellData.coreComparison;
+			const subView = workbench.coreQcView;
+			const poroRows = cc.rows.filter(
+				(r) => r.CPORE !== null && r.PHIT !== null && r.ERR_PHIT !== null
+			);
+			const permRows = cc.rows.filter(
+				(r) => r.CPERM !== null && r.PERM !== null && r.LOG10_ERR_PERM !== null
+			);
+
+			const buildPoroParityTraces = (xAxis: string, yAxis: string) => {
+				const maxP = Math.max(
+					0.35,
+					...poroRows.map((r) => Math.max(r.CPORE ?? 0, r.PHIT ?? 0))
+				);
+				const lim = Number(Math.min(0.5, maxP * 1.1).toFixed(2));
+
+				const stemX: (number | null)[] = [];
+				const stemY: (number | null)[] = [];
+				for (const r of poroRows) {
+					stemX.push(r.CPORE!, r.CPORE!, null);
+					stemY.push(r.CPORE!, r.PHIT!, null);
+				}
+				if (stemX.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Φ Residual',
+						x: stemX,
+						y: stemY,
+						xaxis: xAxis,
+						yaxis: yAxis,
+						showlegend: false,
+						hoverinfo: 'skip',
+						line: { color: 'rgba(100, 116, 139, 0.45)', width: 1.2 }
+					});
+				}
+
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '1:1 Parity',
+					x: [0, lim],
+					y: [0, lim],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#0F172A', width: 1.6 }
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '±0.02 v/v (±2 p.u.)',
+					x: [0, lim, null, 0, lim],
+					y: [0.02, lim + 0.02, null, -0.02, lim - 0.02],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#94A3B8', width: 1.1, dash: 'dash' },
+					hoverinfo: 'skip'
+				});
+
+				if (poroRows.length > 1) {
+					const fitY0 = cc.poro.intercept;
+					const fitY1 = cc.poro.slope * lim + cc.poro.intercept;
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Φ Fit (${cc.poro.slope.toFixed(2)}x${cc.poro.intercept >= 0 ? '+' : ''}${cc.poro.intercept.toFixed(3)})`,
+						x: [0, lim],
+						y: [fitY0, fitY1],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						line: { color: '#2563EB', width: 1.8, dash: 'dot' }
+					});
+				}
+
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'PHIT vs CPORE',
+					x: poroRows.map((r) => r.CPORE!),
+					y: poroRows.map((r) => r.PHIT!),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: poroRows.map((r) => r.logIndex),
+					text: poroRows.map(
+						(r) =>
+							`${r.SAMPLE} @ ${fmtNum(r.DEPTH, 2)}m (${r.ZONE})<br>` +
+							`CPORE: ${fmtNum(r.CPORE, 4)} v/v | PHIT: ${fmtNum(r.PHIT, 4)} v/v<br>` +
+							`Error (PHIT−CPORE): ${r.ERR_PHIT! >= 0 ? '+' : ''}${fmtNum(r.ERR_PHIT, 4)} v/v (${fmtNum(r.REL_ERR_PHIT, 1)}%)`
+					),
+					hovertemplate: '%{text}<extra></extra>',
+					marker: {
+						size: 7,
+						color: poroRows.map((r) => {
+							const ae = r.ABS_ERR_PHIT ?? 0;
+							return ae <= 0.02 ? '#16A34A' : ae <= 0.04 ? '#D97706' : '#DC2626';
+						}),
+						line: { color: '#0F172A', width: 0.8 }
+					}
+				});
+
+				return lim;
+			};
+
+			const buildPermParityTraces = (xAxis: string, yAxis: string) => {
+				const minExp = -2;
+				const maxExp = 4.5;
+				const minVal = Math.pow(10, minExp);
+				const maxVal = Math.pow(10, maxExp);
+
+				const stemX: (number | null)[] = [];
+				const stemY: (number | null)[] = [];
+				for (const r of permRows) {
+					stemX.push(r.CPERM!, r.CPERM!, null);
+					stemY.push(r.CPERM!, r.PERM!, null);
+				}
+				if (stemX.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'K Residual',
+						x: stemX,
+						y: stemY,
+						xaxis: xAxis,
+						yaxis: yAxis,
+						showlegend: false,
+						hoverinfo: 'skip',
+						line: { color: 'rgba(100, 116, 139, 0.45)', width: 1.2 }
+					});
+				}
+
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: xAxis === 'x' ? '1:1 Parity' : '1:1 K Parity',
+					showlegend: xAxis === 'x',
+					x: [minVal, maxVal],
+					y: [minVal, maxVal],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#0F172A', width: 1.6 }
+				});
+				const halfDecFactor = Math.pow(10, 0.5);
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '±0.5 dec (×3.16)',
+					x: [minVal, maxVal, null, minVal, maxVal],
+					y: [
+						minVal * halfDecFactor,
+						maxVal * halfDecFactor,
+						null,
+						minVal / halfDecFactor,
+						maxVal / halfDecFactor
+					],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#94A3B8', width: 1.1, dash: 'dash' },
+					hoverinfo: 'skip'
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '±1.0 dec (×10)',
+					x: [minVal, maxVal, null, minVal, maxVal],
+					y: [minVal * 10, maxVal * 10, null, minVal / 10, maxVal / 10],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#CBD5E1', width: 1.0, dash: 'dot' },
+					hoverinfo: 'skip'
+				});
+
+				if (permRows.length > 1) {
+					const y0 = Math.pow(10, cc.perm.slope * minExp + cc.perm.intercept);
+					const y1 = Math.pow(10, cc.perm.slope * maxExp + cc.perm.intercept);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `K Fit (slope=${cc.perm.slope.toFixed(2)})`,
+						x: [minVal, maxVal],
+						y: [y0, y1],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						line: { color: '#7C3AED', width: 1.8, dash: 'dot' }
+					});
+				}
+
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'PERM vs CPERM',
+					x: permRows.map((r) => r.CPERM!),
+					y: permRows.map((r) => r.PERM!),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: permRows.map((r) => r.logIndex),
+					text: permRows.map(
+						(r) =>
+							`${r.SAMPLE} @ ${fmtNum(r.DEPTH, 2)}m (${r.ZONE})<br>` +
+							`CPERM: ${fmtNum(r.CPERM, 2)} mD | PERM: ${fmtNum(r.PERM, 2)} mD<br>` +
+							`log10 Error: ${r.LOG10_ERR_PERM! >= 0 ? '+' : ''}${fmtNum(r.LOG10_ERR_PERM, 3)} dec (${fmtNum(r.FACTOR_PERM, 2)}×)`
+					),
+					hovertemplate: '%{text}<extra></extra>',
+					marker: {
+						size: 7,
+						symbol: 'diamond',
+						color: permRows.map((r) => {
+							const ae = r.ABS_LOG10_ERR_PERM ?? 0;
+							return ae <= 0.5 ? '#16A34A' : ae <= 1.0 ? '#D97706' : '#DC2626';
+						}),
+						line: { color: '#0F172A', width: 0.8 }
+					}
+				});
+
+				return [minExp, maxExp] as const;
+			};
+
+			const buildPoroDepthErrorTraces = (xAxis: string, yAxis: string) => {
+				const stemX: (number | null)[] = [];
+				const stemY: (number | null)[] = [];
+				for (const r of poroRows) {
+					stemX.push(0, r.ERR_PHIT!, null);
+					stemY.push(r.DEPTH, r.DEPTH, null);
+				}
+				if (stemX.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'ΔΦ Stem',
+						x: stemX,
+						y: stemY,
+						xaxis: xAxis,
+						yaxis: yAxis,
+						showlegend: false,
+						hoverinfo: 'skip',
+						line: { color: 'rgba(37, 99, 235, 0.45)', width: 1.4 }
+					});
+				}
+				if (poroRows.length > 0) {
+					const minD = Math.min(...poroRows.map((r) => r.DEPTH));
+					const maxD = Math.max(...poroRows.map((r) => r.DEPTH));
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Zero Error',
+						showlegend: false,
+						x: [0, 0],
+						y: [minD, maxD],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						hoverinfo: 'skip',
+						line: { color: '#0F172A', width: 1.3 }
+					});
+					if (cc.poro.rmse !== null) {
+						const rm = cc.poro.rmse;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `±RMSE (±${fmtNum(rm, 3)})`,
+							x: [rm, rm, null, -rm, -rm],
+							y: [minD, maxD, null, minD, maxD],
+							xaxis: xAxis,
+							yaxis: yAxis,
+							hoverinfo: 'skip',
+							line: { color: '#DC2626', width: 1.1, dash: 'dash' }
+						});
+					}
+				}
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'ΔPHIT (PHIT−CPORE)',
+					x: poroRows.map((r) => r.ERR_PHIT!),
+					y: poroRows.map((r) => r.DEPTH),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: poroRows.map((r) => r.logIndex),
+					text: poroRows.map(
+						(r) =>
+							`${r.SAMPLE} @ ${fmtNum(r.DEPTH, 2)}m (${r.ZONE})<br>` +
+							`PHIT: ${fmtNum(r.PHIT, 4)} | CPORE: ${fmtNum(r.CPORE, 4)} v/v<br>` +
+							`ΔPHIT: ${r.ERR_PHIT! >= 0 ? '+' : ''}${fmtNum(r.ERR_PHIT, 4)} v/v (${fmtNum(r.REL_ERR_PHIT, 1)}%)`
+					),
+					hovertemplate: '%{text}<extra></extra>',
+					marker: {
+						size: 6.5,
+						color: poroRows.map((r) => {
+							const ae = r.ABS_ERR_PHIT ?? 0;
+							return ae <= 0.02 ? '#16A34A' : ae <= 0.04 ? '#D97706' : '#DC2626';
+						}),
+						line: { color: '#0F172A', width: 0.7 }
+					}
+				});
+			};
+
+			const buildPermDepthErrorTraces = (xAxis: string, yAxis: string) => {
+				const stemX: (number | null)[] = [];
+				const stemY: (number | null)[] = [];
+				for (const r of permRows) {
+					stemX.push(0, r.LOG10_ERR_PERM!, null);
+					stemY.push(r.DEPTH, r.DEPTH, null);
+				}
+				if (stemX.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'ΔlogK Stem',
+						x: stemX,
+						y: stemY,
+						xaxis: xAxis,
+						yaxis: yAxis,
+						showlegend: false,
+						hoverinfo: 'skip',
+						line: { color: 'rgba(124, 58, 237, 0.45)', width: 1.4 }
+					});
+				}
+				if (permRows.length > 0) {
+					const minD = Math.min(...permRows.map((r) => r.DEPTH));
+					const maxD = Math.max(...permRows.map((r) => r.DEPTH));
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Zero Error',
+						showlegend: false,
+						x: [0, 0],
+						y: [minD, maxD],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						hoverinfo: 'skip',
+						line: { color: '#0F172A', width: 1.3 }
+					});
+					if (cc.perm.log10_rmse !== null) {
+						const rm = cc.perm.log10_rmse;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `±log10 RMSE (±${fmtNum(rm, 2)})`,
+							x: [rm, rm, null, -rm, -rm],
+							y: [minD, maxD, null, minD, maxD],
+							xaxis: xAxis,
+							yaxis: yAxis,
+							hoverinfo: 'skip',
+							line: { color: '#DC2626', width: 1.1, dash: 'dash' }
+						});
+					}
+				}
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'Δlog10(PERM/CPERM)',
+					x: permRows.map((r) => r.LOG10_ERR_PERM!),
+					y: permRows.map((r) => r.DEPTH),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: permRows.map((r) => r.logIndex),
+					text: permRows.map(
+						(r) =>
+							`${r.SAMPLE} @ ${fmtNum(r.DEPTH, 2)}m (${r.ZONE})<br>` +
+							`PERM: ${fmtNum(r.PERM, 2)} | CPERM: ${fmtNum(r.CPERM, 2)} mD<br>` +
+							`Δlog10(K): ${r.LOG10_ERR_PERM! >= 0 ? '+' : ''}${fmtNum(r.LOG10_ERR_PERM, 3)} dec (${fmtNum(r.FACTOR_PERM, 2)}×)`
+					),
+					hovertemplate: '%{text}<extra></extra>',
+					marker: {
+						size: 6.5,
+						symbol: 'diamond',
+						color: permRows.map((r) => {
+							const ae = r.ABS_LOG10_ERR_PERM ?? 0;
+							return ae <= 0.5 ? '#16A34A' : ae <= 1.0 ? '#D97706' : '#DC2626';
+						}),
+						line: { color: '#0F172A', width: 0.7 }
+					}
+				});
+			};
+
+			if (subView === 'dual') {
+				const poroLim = buildPoroParityTraces('x', 'y');
+				const [minExp, maxExp] = buildPermParityTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.45];
+				baseLayout.xaxis.title = { text: 'Core Porosity CPORE (v/v)' };
+				baseLayout.xaxis.range = [0, poroLim];
+				baseLayout.yaxis.title = { text: 'Estimated PHIT (v/v)' };
+				baseLayout.yaxis.range = [0, poroLim];
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.55, 1.0],
+					anchor: 'y2',
+					type: 'log',
+					range: [minExp, maxExp],
+					title: { text: 'Core Perm CPERM (mD)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					type: 'log',
+					range: [minExp, maxExp],
+					title: { text: 'Estimated PERM (mD)' }
+				};
+			} else if (subView === 'poro') {
+				const poroLim = buildPoroParityTraces('x', 'y');
+				buildPoroDepthErrorTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.48];
+				baseLayout.xaxis.title = { text: 'Core Porosity CPORE (v/v)' };
+				baseLayout.xaxis.range = [0, poroLim];
+				baseLayout.yaxis.title = { text: 'Estimated PHIT (v/v)' };
+				baseLayout.yaxis.range = [0, poroLim];
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.58, 1.0],
+					anchor: 'y2',
+					fixedrange: true,
+					zeroline: true,
+					zerolinecolor: '#0F172A',
+					title: { text: 'ΔPHIT = PHIT − CPORE (v/v)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					fixedrange: false,
+					autorange: 'reversed',
+					title: { text: 'Depth (m)' }
+				};
+			} else if (subView === 'perm') {
+				const [minExp, maxExp] = buildPermParityTraces('x', 'y');
+				buildPermDepthErrorTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.48];
+				baseLayout.xaxis.type = 'log';
+				baseLayout.xaxis.range = [minExp, maxExp];
+				baseLayout.xaxis.title = { text: 'Core Perm CPERM (mD)' };
+				baseLayout.yaxis.type = 'log';
+				baseLayout.yaxis.range = [minExp, maxExp];
+				baseLayout.yaxis.title = { text: 'Estimated PERM (mD)' };
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.58, 1.0],
+					anchor: 'y2',
+					type: 'linear',
+					range: undefined,
+					fixedrange: true,
+					zeroline: true,
+					zerolinecolor: '#0F172A',
+					title: { text: 'Δlog10(K) = log10(PERM/CPERM) (dec)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					type: 'linear',
+					range: undefined,
+					fixedrange: false,
+					autorange: 'reversed',
+					title: { text: 'Depth (m)' }
+				};
+			} else {
+				buildPoroDepthErrorTraces('x', 'y');
+				buildPermDepthErrorTraces('x2', 'y2');
+
+				baseLayout.dragmode = 'zoom';
+				baseLayout.xaxis.domain = [0, 0.45];
+				baseLayout.xaxis.fixedrange = true;
+				baseLayout.xaxis.zeroline = true;
+				baseLayout.xaxis.zerolinecolor = '#0F172A';
+				baseLayout.xaxis.title = { text: 'ΔPHIT = PHIT − CPORE (v/v)' };
+				baseLayout.yaxis.fixedrange = false;
+				baseLayout.yaxis.autorange = 'reversed';
+				baseLayout.yaxis.title = { text: 'Depth (m)' };
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.55, 1.0],
+					anchor: 'y2',
+					fixedrange: true,
+					zeroline: true,
+					zerolinecolor: '#0F172A',
+					title: { text: 'Δlog10(K) = log10(PERM/CPERM) (dec)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					matches: 'y',
+					fixedrange: false,
+					autorange: 'reversed',
+					title: { text: 'Depth (m)' }
+				};
+			}
+
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'vsh-qc') {
+			const vc = wellData.vshComparison;
+			const subView = workbench.vshQcView;
+			const lp = workbench.lithoParams;
+			const allRows = vc.rows;
+			const sandRows = allRows.filter((r) => r.REGIME === 'clean_sand');
+			const shaleRows = allRows.filter((r) => r.REGIME === 'clean_shale');
+			const transRows = allRows.filter((r) => r.REGIME === 'transition');
+			const exclRows = allRows.filter((r) => r.REGIME === 'excluded');
+
+			const buildVshParityTraces = (xAxis: string, yAxis: string) => {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '1:1 Parity',
+					x: [0, 1],
+					y: [0, 1],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#0F172A', width: 1.6 }
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: '±0.10 v/v',
+					x: [0, 0.9, null, 0.1, 1.0],
+					y: [0.1, 1.0, null, 0.0, 0.9],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#94A348', width: 1.1, dash: 'dash' },
+					hoverinfo: 'skip'
+				});
+
+				if (vc.activeRows.length > 1) {
+					const y0 = vc.active.intercept;
+					const y1 = vc.active.slope + vc.active.intercept;
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Fit (${vc.active.slope.toFixed(2)}x${vc.active.intercept >= 0 ? '+' : ''}${vc.active.intercept.toFixed(2)})`,
+						x: [0, 1],
+						y: [y0, y1],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						line: { color: '#2563EB', width: 1.8, dash: 'dot' }
+					});
+				}
+
+				const groups: Array<{
+					name: string;
+					rows: typeof allRows;
+					color: string;
+					symbol: string;
+					size: number;
+					opacity: number;
+				}> = [
+					{
+						name: 'Silty / Transition',
+						rows: transRows,
+						color: '#64748B',
+						symbol: 'circle',
+						size: 5,
+						opacity: 0.45
+					},
+					{
+						name: 'Excluded (HC/Badhole)',
+						rows: exclRows,
+						color: '#CBD5E1',
+						symbol: 'x',
+						size: 4.5,
+						opacity: 0.45
+					},
+					{
+						name: 'Clean Water Sand',
+						rows: sandRows,
+						color: '#D97706',
+						symbol: 'diamond',
+						size: 6.5,
+						opacity: 0.88
+					},
+					{
+						name: 'Clean Shale',
+						rows: shaleRows,
+						color: '#059669',
+						symbol: 'circle',
+						size: 6.5,
+						opacity: 0.88
+					}
+				];
+
+				for (const g of groups) {
+					if (g.rows.length === 0) continue;
+					traces.push({
+						type: 'scatter',
+						mode: 'markers',
+						name: g.name,
+						x: g.rows.map((r) => r.VSH_DN),
+						y: g.rows.map((r) => r.VSH_GR),
+						xaxis: xAxis,
+						yaxis: yAxis,
+						customdata: g.rows.map((r) => r.logIndex),
+						text: g.rows.map(
+							(r) =>
+								`Depth: ${fmtNum(r.DEPTH, 2)}m (${r.ZONE}) · ${r.REGIME_LABEL}<br>` +
+								`GR: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}<br>` +
+								`ΔVsh (GR−DN): ${r.ERR_VSH >= 0 ? '+' : ''}${fmtNum(r.ERR_VSH, 3)} v/v`
+						),
+						hovertemplate: '%{text}<extra></extra>',
+						marker: {
+							size: g.size,
+							symbol: g.symbol,
+							color: g.color,
+							opacity: g.opacity
+						}
+					});
+				}
+			};
+
+			const buildGrCalibrationTraces = (xAxis: string, yAxis: string) => {
+				const maxGr = Math.max(
+					180,
+					lp.grClay + 25,
+					...(allRows.length > 0 ? allRows.map((r) => r.GR) : [150])
+				);
+
+				for (const [name, subset, col, sym, sz, op] of [
+					['Silty / Transition', transRows, '#64748B', 'circle', 5, 0.45],
+					['Excluded (HC/Badhole)', exclRows, '#CBD5E1', 'x', 4.5, 0.4],
+					['Clean Water Sand', sandRows, '#D97706', 'diamond', 6.5, 0.88],
+					['Clean Shale', shaleRows, '#059669', 'circle', 6.5, 0.88]
+				] as const) {
+					if (subset.length === 0) continue;
+					traces.push({
+						type: 'scatter',
+						mode: 'markers',
+						name,
+						x: subset.map((r) => r.GR),
+						y: subset.map((r) => r.VSH_DN),
+						xaxis: xAxis,
+						yaxis: yAxis,
+						customdata: subset.map((r) => r.logIndex),
+						text: subset.map(
+							(r) =>
+								`Depth: ${fmtNum(r.DEPTH, 2)}m (${r.ZONE}) · ${r.REGIME_LABEL}<br>` +
+								`GR: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}`
+						),
+						hovertemplate: '%{text}<extra></extra>',
+						marker: { size: sz, symbol: sym, color: col, opacity: op }
+					});
+				}
+
+				// Interactive Linear Calibration Line: (0,0) -> (grClean,0) -> (grClay,1) -> (maxGr,1)
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'VSH_GR Calibration Line',
+					x: [0, lp.grClean, lp.grClay, maxGr],
+					y: [0, 0, 1, 1],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { color: '#2563EB', width: 2.4 }
+				});
+
+				traces.push({
+					type: 'scatter',
+					mode: 'markers+text',
+					name: 'GR Endpoints',
+					x: [lp.grClean, lp.grClay],
+					y: [0, 1],
+					xaxis: xAxis,
+					yaxis: yAxis,
+					text: [
+						`GR Clean (${lp.grClean.toFixed(0)})`,
+						`GR Shale (${lp.grClay.toFixed(0)})`
+					],
+					textposition: ['top right', 'bottom left'],
+					textfont: { family: 'Inter', size: 10, color: '#1E3A8A' },
+					marker: {
+						size: 9.5,
+						symbol: 'diamond',
+						color: ['#D97706', '#059669'],
+						line: { color: '#FFFFFF', width: 1.5 }
+					}
+				});
+
+				return maxGr;
+			};
+
+			const buildVshDepthOverlayTraces = (xAxis: string, yAxis: string) => {
+				const lineY: (number | null)[] = [];
+				const vshDnLineX: (number | null)[] = [];
+				const vshGrLineX: (number | null)[] = [];
+				const lineCustom: (number | null)[] = [];
+
+				const fillY: number[] = [];
+				const vshDnFillX: number[] = [];
+				const vshGrFillX: number[] = [];
+
+				for (let i = 0; i < allRows.length; i++) {
+					const r = allRows[i];
+					const prev = i > 0 ? allRows[i - 1] : null;
+					const next = i + 1 < allRows.length ? allRows[i + 1] : null;
+					const isGapBefore =
+						prev !== null &&
+						(r.logIndex !== prev.logIndex + 1 || Math.abs(r.DEPTH - prev.DEPTH) > 1.5);
+					const isGapAfter =
+						next !== null &&
+						(next.logIndex !== r.logIndex + 1 || Math.abs(next.DEPTH - r.DEPTH) > 1.5);
+
+					if (isGapBefore) {
+						lineY.push(null);
+						vshDnLineX.push(null);
+						vshGrLineX.push(null);
+						lineCustom.push(null);
+					}
+					lineY.push(r.DEPTH);
+					vshDnLineX.push(r.VSH_DN);
+					vshGrLineX.push(r.VSH_GR);
+					lineCustom.push(r.logIndex);
+
+					if (i === 0 || isGapBefore) {
+						fillY.push(r.DEPTH);
+						vshDnFillX.push(r.VSH_DN);
+						vshGrFillX.push(r.VSH_DN);
+					}
+					fillY.push(r.DEPTH);
+					vshDnFillX.push(r.VSH_DN);
+					vshGrFillX.push(r.VSH_GR);
+					if (i === allRows.length - 1 || isGapAfter) {
+						fillY.push(r.DEPTH);
+						vshDnFillX.push(r.VSH_DN);
+						vshGrFillX.push(r.VSH_DN);
+					}
+				}
+
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'VSH_DN_FILL_BASE',
+					x: vshDnFillX,
+					y: fillY,
+					xaxis: xAxis,
+					yaxis: yAxis,
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'VSH_GR_FILL',
+					x: vshGrFillX,
+					y: fillY,
+					xaxis: xAxis,
+					yaxis: yAxis,
+					fill: 'tonextx',
+					fillcolor: 'rgba(37, 99, 235, 0.14)',
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'VSH_DN (Neutron-Density)',
+					x: vshDnLineX,
+					y: lineY,
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: lineCustom,
+					line: { color: '#0F172A', width: 1.5 },
+					hovertemplate: 'Depth: %{y:.1f}m<br>VSH_DN: %{x:.3f}<extra></extra>'
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'VSH_GR (Calibrated GR)',
+					x: vshGrLineX,
+					y: lineY,
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: lineCustom,
+					line: { color: '#16A34A', width: 1.5 },
+					hovertemplate: 'Depth: %{y:.1f}m<br>VSH_GR: %{x:.3f}<extra></extra>'
+				});
+			};
+
+			const buildVshDepthResidualTraces = (xAxis: string, yAxis: string) => {
+				const activePts = vc.activeRows;
+				if (allRows.length > 0) {
+					const minD = Math.min(...allRows.map((r) => r.DEPTH));
+					const maxD = Math.max(...allRows.map((r) => r.DEPTH));
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Zero Error',
+						showlegend: false,
+						x: [0, 0],
+						y: [minD, maxD],
+						xaxis: xAxis,
+						yaxis: yAxis,
+						hoverinfo: 'skip',
+						line: { color: '#0F172A', width: 1.3 }
+					});
+					if (vc.active.rmse !== null) {
+						const rm = vc.active.rmse;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `±RMSE (±${fmtNum(rm, 3)})`,
+							x: [rm, rm, null, -rm, -rm],
+							y: [minD, maxD, null, minD, maxD],
+							xaxis: xAxis,
+							yaxis: yAxis,
+							hoverinfo: 'skip',
+							line: { color: '#DC2626', width: 1.1, dash: 'dash' }
+						});
+					}
+				}
+				const errLineX: (number | null)[] = [];
+				const errLineY: (number | null)[] = [];
+				for (let i = 0; i < allRows.length; i++) {
+					const r = allRows[i];
+					const prev = i > 0 ? allRows[i - 1] : null;
+					if (
+						prev !== null &&
+						(r.logIndex !== prev.logIndex + 1 || Math.abs(r.DEPTH - prev.DEPTH) > 1.5)
+					) {
+						errLineX.push(null);
+						errLineY.push(null);
+					}
+					errLineX.push(r.ERR_VSH);
+					errLineY.push(r.DEPTH);
+				}
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'ΔVsh Profile',
+					showlegend: false,
+					x: errLineX,
+					y: errLineY,
+					xaxis: xAxis,
+					yaxis: yAxis,
+					hoverinfo: 'skip',
+					line: { color: 'rgba(100, 116, 139, 0.45)', width: 1.1 }
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'ΔVsh (VSH_GR − VSH_DN)',
+					x: activePts.map((r) => r.ERR_VSH),
+					y: activePts.map((r) => r.DEPTH),
+					xaxis: xAxis,
+					yaxis: yAxis,
+					customdata: activePts.map((r) => r.logIndex),
+					text: activePts.map(
+						(r) =>
+							`Depth: ${fmtNum(r.DEPTH, 2)}m (${r.ZONE}) · ${r.REGIME_LABEL}<br>` +
+							`VSH_GR: ${fmtNum(r.VSH_GR, 3)} | VSH_DN: ${fmtNum(r.VSH_DN, 3)}<br>` +
+							`ΔVsh: ${r.ERR_VSH >= 0 ? '+' : ''}${fmtNum(r.ERR_VSH, 3)} v/v`
+					),
+					hovertemplate: '%{text}<extra></extra>',
+					marker: {
+						size: 5.5,
+						color: activePts.map((r) =>
+							r.ABS_ERR_VSH <= 0.05
+								? '#16A34A'
+								: r.ABS_ERR_VSH <= 0.1
+									? '#D97706'
+									: '#DC2626'
+						)
+					}
+				});
+			};
+
+			if (subView === 'dual') {
+				buildVshParityTraces('x', 'y');
+				buildVshDepthOverlayTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.47];
+				baseLayout.xaxis.range = [-0.03, 1.03];
+				baseLayout.xaxis.title = { text: 'VSH_DN (Density-Neutron, v/v)' };
+				baseLayout.yaxis.range = [-0.03, 1.03];
+				baseLayout.yaxis.title = { text: 'VSH_GR (Gamma Ray, v/v)' };
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.57, 1.0],
+					anchor: 'y2',
+					range: [0, 1],
+					fixedrange: true,
+					title: { text: 'VSH_DN vs. VSH_GR (v/v)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					range: undefined,
+					fixedrange: false,
+					autorange: 'reversed',
+					title: { text: 'Depth (m)' }
+				};
+			} else if (subView === 'gr-fit') {
+				const maxGr = buildGrCalibrationTraces('x', 'y');
+				buildVshParityTraces('x2', 'y2');
+
+				baseLayout.xaxis.domain = [0, 0.47];
+				baseLayout.xaxis.range = [0, Number((maxGr * 1.05).toFixed(0))];
+				baseLayout.xaxis.title = { text: 'Gamma Ray GR (gAPI)' };
+				baseLayout.yaxis.range = [-0.03, 1.05];
+				baseLayout.yaxis.title = { text: 'VSH_DN & Calibration Curve (v/v)' };
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.57, 1.0],
+					anchor: 'y2',
+					range: [-0.03, 1.03],
+					title: { text: 'VSH_DN (v/v)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					range: [-0.03, 1.03],
+					title: { text: 'VSH_GR (v/v)' }
+				};
+			} else {
+				buildVshDepthOverlayTraces('x', 'y');
+				buildVshDepthResidualTraces('x2', 'y2');
+
+				baseLayout.dragmode = 'zoom';
+				baseLayout.xaxis.domain = [0, 0.46];
+				baseLayout.xaxis.range = [0, 1];
+				baseLayout.xaxis.fixedrange = true;
+				baseLayout.xaxis.title = { text: 'VSH_DN vs. VSH_GR (v/v)' };
+				baseLayout.yaxis.fixedrange = false;
+				baseLayout.yaxis.autorange = 'reversed';
+				baseLayout.yaxis.title = { text: 'Depth (m)' };
+
+				baseLayout.xaxis2 = {
+					...baseLayout.xaxis,
+					domain: [0.56, 1.0],
+					anchor: 'y2',
+					range: [-0.45, 0.45],
+					fixedrange: true,
+					zeroline: true,
+					zerolinecolor: '#0F172A',
+					title: { text: 'ΔVsh = VSH_GR − VSH_DN (v/v)' }
+				};
+				baseLayout.yaxis2 = {
+					...baseLayout.yaxis,
+					anchor: 'x2',
+					matches: 'y',
+					fixedrange: false,
+					autorange: 'reversed',
+					title: { text: 'Depth (m)' }
+				};
+			}
+
+			return { traces, layout: baseLayout };
+		}
+
+		if (
+			effectiveMode === 'relperm' ||
+			(effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'relperm')
+		) {
 			const sr = workbench.scalResult;
 			const sp = workbench.scalParams;
-			const sw =
-				sr?.sw ?? Array.from({ length: 41 }, (_, i) => Number((i / 40).toFixed(3)));
+			const sw = sr?.sw ?? Array.from({ length: 41 }, (_, i) => Number((i / 40).toFixed(3)));
 			const krw =
 				sr?.krw ??
 				sw.map((s) => {
-					const se = Math.min(1, Math.max(0, (s - sp.swirr) / Math.max(1e-6, 1 - sp.swirr - sp.sor)));
+					const se = Math.min(
+						1,
+						Math.max(0, (s - sp.swirr) / Math.max(1e-6, 1 - sp.swirr - sp.sor))
+					);
 					return sp.krw_max * Math.pow(se, sp.nw);
 				});
 			const kro =
 				sr?.kro ??
 				sw.map((s) => {
-					const se = Math.min(1, Math.max(0, (s - sp.swirr) / Math.max(1e-6, 1 - sp.swirr - sp.sor)));
+					const se = Math.min(
+						1,
+						Math.max(0, (s - sp.swirr) / Math.max(1e-6, 1 - sp.swirr - sp.sor))
+					);
 					return sp.kro_max * Math.pow(1 - se, sp.no);
 				});
 			const fw =
@@ -914,84 +3390,685 @@
 			return { traces, layout: baseLayout };
 		}
 
+		if (effectiveMode === 'swirr-fit') {
+			const sr = projectData.swirrResult;
+			const cfg = projectData.swirrConfig;
+			const tab = workbench.swirrCrossplotTab;
+
+			if (tab === 'scal-fit') {
+				return buildScalCurveFitTraces();
+			}
+
+			if (!sr || !sr.plugs || sr.plugs.length === 0) {
+				baseLayout.dragmode = 'zoom';
+				baseLayout.xaxis.title = {
+					text: 'No SCAL plugs loaded — click "Auto-Fit SCAL Swirr" in the left panel'
+				};
+				baseLayout.yaxis.title = { text: 'Irreducible Water Saturation Swirr (v/v)' };
+				return { traces, layout: baseLayout };
+			}
+
+			if (tab === 'pc-qc') {
+				const seenRt = new Set<number>();
+				for (const c of sr.plugs) {
+					if (!c.pc_curve?.length || !c.sw_curve?.length) continue;
+					const rt = c.rt ?? 1;
+					const col = getRockTypeColor(rt);
+					const showLeg = !seenRt.has(rt);
+					seenRt.add(rt);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines+markers',
+						name: `RT ${rt} Pc Curve`,
+						legendgroup: `rt-${rt}`,
+						showlegend: showLeg,
+						x: c.sw_curve,
+						y: c.pc_curve,
+						line: {
+							color: col,
+							width: c.included ? 1.6 : 1.0,
+							dash: c.included ? 'solid' : 'dot'
+						},
+						marker: {
+							size: 4,
+							color: col,
+							opacity: c.included ? 0.85 : 0.35
+						},
+						opacity: c.included ? 0.85 : 0.35,
+						hovertemplate:
+							`<b>${c.well} · ${c.sample}</b> (RT ${rt})<br>` +
+							`CPORE: ${fmtNum(c.cpore, 3)} | CPERM: ${fmtNum(c.cperm, 2)} mD<br>` +
+							`Sw: %{x:.3f} v/v | Pc: %{y:.1f} psi<extra></extra>`
+					});
+				}
+
+				const extractedPlugs = sr.plugs.filter(
+					(p) => p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr)
+				);
+				if (extractedPlugs.length > 0) {
+					traces.push({
+						type: 'scatter',
+						mode: 'markers',
+						name: `Extracted Swirr @ Ref Pc`,
+						x: extractedPlugs.map((p) => p.extracted_swirr),
+						y: extractedPlugs.map((p) =>
+							cfg.extractionMode === 'interp_pc' ? cfg.referencePcPsi : p.max_pc
+						),
+						customdata: extractedPlugs.map((p) => p.plug_id),
+						marker: {
+							size: 8,
+							symbol: extractedPlugs.map((p) => (p.included ? 'diamond' : 'x')),
+							color: extractedPlugs.map((p) =>
+								p.included ? getRockTypeColor(p.rt) : '#94A3B8'
+							),
+							line: { color: '#0F172A', width: 1 }
+						},
+						text: extractedPlugs.map(
+							(p) =>
+								`<b>${p.well} · ${p.sample}</b> (RT ${p.rt})<br>` +
+								`Extracted Swirr: ${fmtNum(p.extracted_swirr, 3)} v/v | Max Pc: ${fmtNum(p.max_pc, 1)} psi<br>` +
+								`<i>Click to ${p.included ? 'exclude' : 're-include'} plug</i>`
+						),
+						hovertemplate: '%{text}<extra></extra>'
+					});
+				}
+
+				shapes.push({
+					type: 'line',
+					xref: 'paper',
+					yref: 'y',
+					x0: 0,
+					x1: 1,
+					y0: cfg.referencePcPsi,
+					y1: cfg.referencePcPsi,
+					line: { color: '#DC2626', width: 1.5, dash: 'dash' }
+				});
+
+				baseLayout.dragmode = 'zoom';
+				baseLayout.shapes = shapes;
+				baseLayout.xaxis.title = { text: 'Water Saturation Sw (v/v)' };
+				baseLayout.xaxis.range = [0, 1.02];
+				baseLayout.yaxis.title = {
+					text: `Capillary Pressure Pc (psi) — Ref Pc = ${cfg.referencePcPsi} psi`
+				};
+				baseLayout.yaxis.type = swirrLogY ? 'log' : 'linear';
+				return { traces, layout: baseLayout };
+			}
+
+			// Tab 1: Swirr vs sqrt(k/phi) (or CPERM for semilog_k)
+			const isSemilogK = cfg.equationType === 'semilog_k';
+			const getPlugX = (p: { cpore: number; cperm: number }) =>
+				isSemilogK
+					? Math.max(1e-4, p.cperm)
+					: Math.sqrt(Math.max(1e-6, p.cperm) / Math.max(1e-4, p.cpore));
+
+			const includedByRt = new Map<number, typeof sr.plugs>();
+			const excludedPlugs: typeof sr.plugs = [];
+			const allValidX: number[] = [];
+
+			for (const p of sr.plugs) {
+				const xv = getPlugX(p);
+				if (Number.isFinite(xv) && xv > 0) allValidX.push(xv);
+				if (p.included && p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr)) {
+					const rt = p.rt ?? 1;
+					if (!includedByRt.has(rt)) includedByRt.set(rt, []);
+					includedByRt.get(rt)!.push(p);
+				} else if (
+					(p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr)) ||
+					(p.sw_at_max_pc !== null && Number.isFinite(p.sw_at_max_pc))
+				) {
+					excludedPlugs.push(p);
+				}
+			}
+
+			for (const [rt, grp] of Array.from(includedByRt.entries()).sort((a, b) => a[0] - b[0])) {
+				const col = getRockTypeColor(rt);
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `RT ${rt} Plugs (n=${grp.length})`,
+					x: grp.map((p) => getPlugX(p)),
+					y: grp.map((p) => p.extracted_swirr),
+					customdata: grp.map((p) => p.plug_id),
+					marker: {
+						size: 7.5,
+						color: col,
+						symbol: 'circle',
+						opacity: 0.9,
+						line: { color: '#0F172A', width: 0.8 }
+					},
+					text: grp.map(
+						(p) =>
+							`<b>${p.well} · Sample ${p.sample}</b> (${p.depth !== null ? fmtNum(p.depth, 1) + 'm' : '—'}) · RT ${p.rt}<br>` +
+							`CPORE: ${fmtNum(p.cpore, 3)} v/v | CPERM: ${fmtNum(p.cperm, 2)} mD | √(k/φ): ${fmtNum(Math.sqrt(p.cperm / p.cpore), 2)}<br>` +
+							`Lab Swirr: ${fmtNum(p.extracted_swirr, 3)} | Modeled: ${fmtNum(p.modeled_swirr, 3)} | Residual: ${p.residual !== null ? (p.residual >= 0 ? '+' : '') + fmtNum(p.residual, 3) : '—'}<br>` +
+							`<i>Click point to exclude from regression</i>`
+					),
+					hovertemplate: '%{text}<extra></extra>'
+				});
+			}
+
+			if (excludedPlugs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Excluded / Low Pc (${excludedPlugs.length})`,
+					x: excludedPlugs.map((p) => getPlugX(p)),
+					y: excludedPlugs.map((p) => p.extracted_swirr ?? p.sw_at_max_pc),
+					customdata: excludedPlugs.map((p) => p.plug_id),
+					marker: {
+						size: 7,
+						color: '#94A3B8',
+						symbol: 'x',
+						opacity: 0.75,
+						line: { color: '#64748B', width: 1 }
+					},
+					text: excludedPlugs.map(
+						(p) =>
+							`<b>${p.well} · Sample ${p.sample}</b> (RT ${p.rt}) · ${!p.valid_pc ? `Low Pc (${fmtNum(p.max_pc, 0)} < ${cfg.referencePcPsi} psi)` : 'Manually Excluded'}<br>` +
+							`CPORE: ${fmtNum(p.cpore, 3)} v/v | CPERM: ${fmtNum(p.cperm, 2)} mD<br>` +
+							`Sw @ Max Pc: ${fmtNum(p.extracted_swirr ?? p.sw_at_max_pc, 3)} v/v<br>` +
+							`<i>Click point to toggle exclusion</i>`
+					),
+					hovertemplate: '%{text}<extra></extra>'
+				});
+			}
+
+			// Overlay fitted correlation curve(s)
+			const xMin = allValidX.length > 0 ? Math.max(1e-3, Math.min(...allValidX) * 0.65) : 0.1;
+			const xMax = allValidX.length > 0 ? Math.max(...allValidX) * 1.45 : 200;
+			const nGrid = 60;
+			const logMin = Math.log10(xMin);
+			const logMax = Math.log10(Math.max(xMin * 10, xMax));
+			const xGrid = Array.from(
+				{ length: nGrid },
+				(_, i) => Math.pow(10, logMin + (i / (nGrid - 1)) * (logMax - logMin))
+			);
+
+			const evalRuleAtX = (
+				rule: { a: number; b: number; c?: number | null },
+				xv: number,
+				meanPhi: number
+			) => {
+				let raw = 0.1;
+				if (cfg.equationType === 'rqi_power') {
+					raw = rule.a * Math.pow(Math.max(xv, 1e-6), -rule.b);
+				} else if (cfg.equationType === 'semilog_k') {
+					raw = rule.a - rule.b * Math.log10(Math.max(xv, 1e-4));
+				} else {
+					const phi = Math.max(meanPhi, 0.01);
+					const kFromX = xv * xv * phi;
+					raw =
+						rule.a *
+						(Math.pow(phi, rule.b) / Math.pow(Math.max(kFromX, 1e-4), rule.c ?? 0.5));
+				}
+				return Math.min(cfg.swirrMax, Math.max(cfg.swirrMin, raw));
+			};
+
+			const incPlugsAll = sr.plugs.filter((p) => p.included);
+			const globalMeanPhi =
+				incPlugsAll.length > 0
+					? incPlugsAll.reduce((acc, p) => acc + p.cpore, 0) / incPlugsAll.length
+					: 0.18;
+
+			if (cfg.fitScope === 'global') {
+				const gRule = cfg.rules['global'];
+				if (gRule) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Global Fit (R²=${fmtNum(gRule.r2, 2)})`,
+						x: xGrid,
+						y: xGrid.map((xv) => evalRuleAtX(gRule, xv, globalMeanPhi)),
+						line: { color: '#0F172A', width: 2.3 }
+					});
+				}
+			} else {
+				const rtKeys = Object.keys(cfg.rules)
+					.filter((k) => k !== 'global')
+					.sort((a, b) => Number(a) - Number(b));
+				for (const rk of rtKeys) {
+					const rule = cfg.rules[rk];
+					if (!rule) continue;
+					const rtNum = Number(rk);
+					const rtGrp = includedByRt.get(rtNum) ?? [];
+					const rtMeanPhi =
+						rtGrp.length > 0
+							? rtGrp.reduce((acc, p) => acc + p.cpore, 0) / rtGrp.length
+							: globalMeanPhi;
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `RT ${rk} Fit (R²=${fmtNum(rule.r2, 2)})`,
+						x: xGrid,
+						y: xGrid.map((xv) => evalRuleAtX(rule, xv, rtMeanPhi)),
+						line: { color: getRockTypeColor(rtNum), width: 2.0, dash: 'solid' }
+					});
+				}
+			}
+
+			// Physical clamp bounds
+			for (const [bVal] of [
+				[cfg.swirrMin, 'Swirr Min'],
+				[cfg.swirrMax, 'Swirr Max']
+			] as const) {
+				shapes.push({
+					type: 'line',
+					xref: 'paper',
+					yref: 'y',
+					x0: 0,
+					x1: 1,
+					y0: bVal,
+					y1: bVal,
+					line: { color: '#94A3B8', width: 1, dash: 'dot' }
+				});
+			}
+
+			baseLayout.dragmode = 'zoom';
+			baseLayout.shapes = shapes;
+			baseLayout.xaxis.type = 'log';
+			baseLayout.xaxis.title = {
+				text: isSemilogK
+					? 'Core Permeability CPERM (mD)'
+					: 'Reservoir Quality Proxy √(CPERM / CPORE) [√mD]'
+			};
+			baseLayout.yaxis.type = swirrLogY ? 'log' : 'linear';
+			if (!swirrLogY) {
+				baseLayout.yaxis.range = [0, Math.min(1.0, Math.max(0.65, cfg.swirrMax + 0.05))];
+			}
+			baseLayout.yaxis.title = {
+				text: `Irreducible Water Saturation Swirr @ ${cfg.referencePcPsi} psi (v/v)`
+			};
+			return { traces, layout: baseLayout };
+		}
+
 		return { traces, layout: baseLayout };
+	}
+
+	function applyBrushedSelectionOverlay(traces: any[]) {
+		const brushed = workbench.brushedDepthIndices;
+		if (brushed.size === 0) return;
+
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const grouped = new Map<
+			string,
+			{
+				xAxis: string;
+				yAxis: string;
+				xs: number[];
+				ys: number[];
+				idxs: number[];
+				texts: string[];
+				seen: Set<string>;
+			}
+		>();
+
+		for (const t of traces) {
+			if (!Array.isArray(t.customdata) || !Array.isArray(t.x) || !Array.isArray(t.y)) {
+				continue;
+			}
+			const isMarkerTrace = typeof t.mode === 'string' && t.mode.includes('markers');
+			if (isMarkerTrace && t.marker) {
+				const baseOp = typeof t.marker.opacity === 'number' ? t.marker.opacity : 0.82;
+				t.marker = { ...t.marker, opacity: Math.min(baseOp, 0.24) };
+			}
+
+			const xAxis = t.xaxis ?? 'x';
+			const yAxis = t.yaxis ?? 'y';
+			const key = `${xAxis}:${yAxis}`;
+			if (!grouped.has(key)) {
+				grouped.set(key, {
+					xAxis,
+					yAxis,
+					xs: [],
+					ys: [],
+					idxs: [],
+					texts: [],
+					seen: new Set()
+				});
+			}
+			const grp = grouped.get(key)!;
+
+			for (let k = 0; k < t.customdata.length; k++) {
+				const idx = t.customdata[k];
+				if (typeof idx !== 'number' || !brushed.has(idx)) continue;
+				const xv = t.x[k];
+				const yv = t.y[k];
+				if (
+					typeof xv !== 'number' ||
+					typeof yv !== 'number' ||
+					!Number.isFinite(xv) ||
+					!Number.isFinite(yv)
+				) {
+					continue;
+				}
+				const ptKey = `${idx}:${xv.toFixed(4)}:${yv.toFixed(4)}`;
+				if (grp.seen.has(ptKey)) continue;
+				grp.seen.add(ptKey);
+				grp.xs.push(xv);
+				grp.ys.push(yv);
+				grp.idxs.push(idx);
+				const dVal = dept[idx];
+				const customTxt =
+					Array.isArray(t.text) && typeof t.text[k] === 'string' ? t.text[k] : null;
+				grp.texts.push(
+					customTxt ??
+						`Selected @ ${Number.isFinite(dVal) ? fmtNum(dVal, 2) + 'm' : '#' + idx}<br>X: ${fmtNum(xv, 3)} | Y: ${fmtNum(yv, 3)}`
+				);
+			}
+		}
+
+		let firstSubplot = true;
+		for (const grp of grouped.values()) {
+			if (grp.xs.length === 0) continue;
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: `Selected (${grp.xs.length})`,
+				meta: 'brushed-highlight',
+				showlegend: firstSubplot,
+				x: grp.xs,
+				y: grp.ys,
+				xaxis: grp.xAxis,
+				yaxis: grp.yAxis,
+				customdata: grp.idxs,
+				text: grp.texts,
+				hovertemplate: '%{text}<extra></extra>',
+				marker: {
+					size: 8,
+					color: '#06B6D4',
+					symbol: 'circle',
+					opacity: 0.98,
+					line: { color: '#0F172A', width: 1.5 }
+				}
+			});
+			firstSubplot = false;
+		}
 	}
 
 	$effect(() => {
 		if (!PlotlyLib || !plotEl) return;
-		void effectiveMode;
-		void wellData.curves;
+		const mode = effectiveMode;
 		void wellData.visibleIndices;
-		void workbench.selectedQaqcCurve;
-		void workbench.lithoParams.model;
-		void workbench.lithoParams.minerals;
-		void workbench.lithoParams.drySandNphi;
-		void workbench.lithoParams.drySandRhob;
-		void workbench.lithoParams.drySiltNphi;
-		void workbench.lithoParams.drySiltRhob;
-		void workbench.lithoParams.dryClayNphi;
-		void workbench.lithoParams.dryClayRhob;
-		void workbench.lithoParams.enableCoalFlagging;
-		void workbench.lithoParams.coalRhobMax;
-		void workbench.lithoParams.coalNphiMin;
-		void workbench.saturationParams.rwPickett;
-		void workbench.saturationParams.m;
-		void workbench.saturationParams.n;
-		void workbench.scalResult;
-		void projectData.selectedWellNames;
 		void workbench.selectedZones;
 		void workbench.depthFilter;
-		void projectData.fziCutoffs;
-		void projectData.rockTypingResult;
-		void projectData.permTransformResult;
-		void projectData.permTransformResult?.fits;
-		void projectData.shfResult;
+		void workbench.brushedDepthIndices;
 
-		const { traces, layout } = buildCrossplot();
-		PlotlyLib.react(plotEl, traces, layout, {
-			responsive: true,
-			displaylogo: false,
-			modeBarButtonsToAdd: ['lasso2d', 'select2d']
-		}).then(() => {
-			if (!eventsBound && plotEl) {
-				eventsBound = true;
-				(plotEl as any).on('plotly_selected', (ev: any) => {
-					if (!ev || !ev.points) {
-						workbench.setBrushedIndices([]);
-						return;
-					}
-					const selected: number[] = [];
-					for (const pt of ev.points) {
-						if (typeof pt.customdata === 'number') {
-							selected.push(pt.customdata);
-						}
-					}
-					workbench.setBrushedIndices(selected);
-				});
-				(plotEl as any).on('plotly_deselect', () => {
-					workbench.setBrushedIndices([]);
-				});
-				// Click-to-place endpoint on NPHI-RHOB crossplot when an endpoint is armed
-				(plotEl as any).on('plotly_click', (ev: any) => {
-					if (effectiveMode !== 'nphi-rhob' || !activeEndpointKey) return;
-					const pt = ev?.points?.[0];
-					if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number') return;
-					const x = Number(pt.x.toFixed(3));
-					const y = Number(pt.y.toFixed(3));
-					if (activeEndpointKey === 'sand') {
-						workbench.lithoParams.drySandNphi = x;
-						workbench.lithoParams.drySandRhob = y;
-					} else if (activeEndpointKey === 'silt') {
-						workbench.lithoParams.drySiltNphi = x;
-						workbench.lithoParams.drySiltRhob = y;
-					} else if (activeEndpointKey === 'clay') {
-						workbench.lithoParams.dryClayNphi = x;
-						workbench.lithoParams.dryClayRhob = y;
-					}
-					activeEndpointKey = null;
-				});
+		if (mode === 'core-qc') {
+			void wellData.coreComparison;
+			void workbench.coreQcView;
+		} else if (mode === 'vsh-qc') {
+			void wellData.vshComparison;
+			void workbench.vshQcView;
+			void workbench.vshCalibScope;
+			void workbench.vshShaleCutoff;
+			void workbench.vshSandCutoff;
+			void workbench.lithoParams.grClean;
+			void workbench.lithoParams.grClay;
+		} else if (mode === 'nphi-rhob') {
+			void wellData.curves['NPHI'];
+			void wellData.curves['RHOB'];
+			void wellData.curves['NPHI_HC'];
+			void wellData.curves['RHOB_HC'];
+			void wellData.curves['GR'];
+			void wellData.curves['COAL_FLAG'];
+			void wellData.curves['VCOAL'];
+			void wellData.curves['BADHOLE'];
+			void wellData.curves['BAD_HOLE'];
+			void wellData.curves['BAD_HOLE_FLAG'];
+			void wellData.curves['HC_FLAG'];
+			void wellData.curves['DEN_CORR_FLAG'];
+			void workbench.lithoParams.logCorrectionMode;
+			void workbench.lithoParams.enableHcCorrection;
+			void workbench.lithoParams.useHcCorrected;
+			void workbench.lithoParams.model;
+			void workbench.lithoParams.minerals;
+			void workbench.lithoParams.drySandNphi;
+			void workbench.lithoParams.drySandRhob;
+			void workbench.lithoParams.drySiltNphi;
+			void workbench.lithoParams.drySiltRhob;
+			void workbench.lithoParams.dryClayNphi;
+			void workbench.lithoParams.dryClayRhob;
+			void workbench.lithoParams.fluidNphi;
+			void workbench.lithoParams.fluidRhob;
+			void workbench.lithoParams.enableCoalFlagging;
+			void workbench.lithoParams.coalRhobMax;
+			void workbench.lithoParams.coalNphiMin;
+		} else if (mode === 'thomas-stieber') {
+			void wellData.curves['PHIT'];
+			void wellData.curves['PHIE'];
+			void wellData.curves['VSH_TS'];
+			void wellData.curves['VCLAY'];
+			void wellData.curves['VSHALE'];
+			void wellData.curves['GR'];
+			void workbench.tsParams.drySandPoro;
+			void workbench.tsParams.dryShalePoro;
+		} else if (mode === 'histogram') {
+			const cName = workbench.selectedQaqcCurve || 'GR';
+			void wellData.curves[cName];
+			void wellData.curves[`${cName}_ORI`];
+			void wellData.stats[cName];
+		} else if (mode === 'pickett') {
+			void wellData.curves['PHIT'];
+			void wellData.curves['PHIE'];
+			void wellData.curves['NPHI'];
+			void wellData.curves['RT'];
+			void wellData.curves['VCLAY'];
+			void wellData.curves['GR'];
+			void workbench.saturationParams.rwPickett;
+			void workbench.saturationParams.a;
+			void workbench.saturationParams.m;
+			void workbench.saturationParams.n;
+		} else if (mode === 'relperm') {
+			void workbench.scalResult;
+			void workbench.scalParams.swirr;
+			void workbench.scalParams.sor;
+			void workbench.scalParams.krw_max;
+			void workbench.scalParams.kro_max;
+			void workbench.scalParams.nw;
+			void workbench.scalParams.no;
+			void workbench.scalParams.mu_w;
+			void workbench.scalParams.mu_o;
+		} else if (mode === 'swirr-fit') {
+			void projectData.swirrResult;
+			void projectData.swirrConfig.equationType;
+			void projectData.swirrConfig.fitScope;
+			void projectData.swirrConfig.extractionMode;
+			void projectData.swirrConfig.referencePcPsi;
+			void projectData.swirrConfig.swirrMin;
+			void projectData.swirrConfig.swirrMax;
+			void projectData.swirrConfig.rules;
+			void projectData.swirrConfig.excludedPlugIds;
+			void projectData.swirrConfig.excludedScalPointIds;
+			void projectData.selectedScalPointIds;
+			void projectData.shfResult;
+			void projectData.shfParams.model;
+			void projectData.shfParams.jSatMode;
+			void projectData.shfParams.swirrSource;
+			void workbench.scalResult;
+			void workbench.scalParams.model;
+			void workbench.scalParams.swirr;
+			void workbench.scalParams.sor;
+			void workbench.scalParams.krw_max;
+			void workbench.scalParams.kro_max;
+			void workbench.scalParams.nw;
+			void workbench.scalParams.no;
+			void workbench.scalParams.mu_w;
+			void workbench.scalParams.mu_o;
+			void workbench.swirrCrossplotTab;
+			void swirrLogY;
+			void shfLogScale;
+		} else {
+			void wellData.curves;
+			void projectData.selectedWellNames;
+			void projectData.drtMethod;
+			void projectData.fziCutoffs;
+			void projectData.winlandCutoffs;
+			void projectData.luciaCutoffs;
+			void projectData.rockTypingPlotView;
+			void projectData.drtCutoffMethod;
+			void projectData.useInterparticlePorosity;
+			void projectData.luciaVuggyOverride;
+			void projectData.phiSecCutoff;
+			void projectData.rockTypingResult;
+			void projectData.permTransformResult;
+			void projectData.permTransformResult?.fits;
+			void projectData.shfResult;
+			void projectData.swirrConfig.excludedScalPointIds;
+			void projectData.selectedScalPointIds;
+			void projectData.shfParams.fwl;
+			void projectData.shfParams.fwlByZone;
+			void projectData.shfParams.model;
+			void shfView;
+			void shfLogScale;
+			void projectData.multiWellQaqcResult;
+			void workbench.selectedQaqcCurve;
+			void workbench.mwQaqcGroupBy;
+			void workbench.mwQaqcPlotType;
+			void workbench.mwQaqcCompareMode;
+			void workbench.mwQaqcExcludeBadhole;
+			void workbench.mwQaqcLogScale;
+		}
+
+		let cancelled = false;
+		const rafId = requestAnimationFrame(() => {
+			if (cancelled || !PlotlyLib || !plotEl) return;
+			const { traces, layout } = untrack(() => {
+				const res = buildCrossplot();
+				applyBrushedSelectionOverlay(res.traces);
+				return res;
+			});
+			layout.autosize = true;
+			const visibleLegendTraces = traces.filter(
+				(t: any) => t.showlegend !== false && t.name
+			).length;
+			if (visibleLegendTraces > 5) {
+				layout.legend = {
+					orientation: 'v',
+					x: 1.01,
+					y: 1,
+					xanchor: 'left',
+					yanchor: 'top',
+					font: { family: 'Inter', size: 10, color: '#334155' }
+				};
 			}
+			untrack(() =>
+				PlotlyLib.react(plotEl, traces, layout, {
+					responsive: true,
+					displaylogo: false,
+					modeBarButtonsToAdd: ['lasso2d', 'select2d']
+				})
+			).then(() => {
+				if (cancelled || !plotEl) return;
+				if (!eventsBound && plotEl) {
+					eventsBound = true;
+					(plotEl as any).on('plotly_selected', (ev: any) => {
+						if (!ev || !ev.points) {
+							return;
+						}
+						if (!ev.range && !ev.lassoPoints && ev.points.length === 0) {
+							return;
+						}
+						const selected = new Set<number>();
+						const selectedScalPts = new Set<string>();
+						for (const pt of ev.points) {
+							if (typeof pt.customdata === 'number') {
+								selected.add(pt.customdata);
+							} else if (
+								typeof pt.customdata === 'string' &&
+								pt.customdata.startsWith('scal_pt::')
+							) {
+								selectedScalPts.add(pt.customdata.slice('scal_pt::'.length));
+							}
+						}
+						if (selectedScalPts.size > 0) {
+							projectData.setSelectedScalPoints(Array.from(selectedScalPts));
+						} else if (selected.size > 0) {
+							workbench.setBrushedIndices(Array.from(selected));
+						}
+					});
+					(plotEl as any).on('plotly_deselect', () => {
+						workbench.setBrushedIndices([]);
+						if (projectData.selectedScalPointIds.length > 0) {
+							projectData.setSelectedScalPoints([]);
+						}
+					});
+					// Click-to-place endpoint on NPHI-RHOB or Thomas-Stieber crossplot when an endpoint is armed
+					(plotEl as any).on('plotly_click', (ev: any) => {
+						if (!activeEndpointKey) {
+							const pt = ev?.points?.[0];
+							if (
+								typeof pt?.customdata === 'string' &&
+								pt.customdata.startsWith('scal_pt::')
+							) {
+								const rawPtId = pt.customdata.slice('scal_pt::'.length);
+								const parts = rawPtId.split('::');
+								const plugId = parts.length >= 2 ? `${parts[0]}::${parts[1]}` : '';
+								const isPlugExcluded =
+									plugId &&
+									(projectData.swirrConfig.excludedPlugIds || []).includes(plugId);
+								if (
+									plugId &&
+									(projectData.scalClickFilterTarget === 'plug' ||
+										Boolean(ev?.event?.shiftKey) ||
+										isPlugExcluded)
+								) {
+									projectData.toggleSwirrPlugExclusion(plugId);
+								} else {
+									projectData.toggleScalPointExclusion(rawPtId);
+								}
+								return;
+							}
+							if (
+								effectiveMode === 'swirr-fit' &&
+								typeof pt?.customdata === 'string' &&
+								pt.customdata.includes(':')
+							) {
+								projectData.toggleSwirrPlugExclusion(pt.customdata);
+								return;
+							}
+							if (
+								(effectiveMode === 'core-qc' || effectiveMode === 'vsh-qc') &&
+								typeof pt?.customdata === 'number'
+							) {
+								const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+								const d = dept[pt.customdata];
+								if (Number.isFinite(d)) workbench.scrollToDepth(d);
+							}
+							return;
+						}
+						const pt = ev?.points?.[0];
+						if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number') return;
+						const x = Number(pt.x.toFixed(3));
+						const y = Number(pt.y.toFixed(3));
+						if (effectiveMode === 'nphi-rhob') {
+							if (activeEndpointKey === 'sand') {
+								workbench.lithoParams.drySandNphi = x;
+								workbench.lithoParams.drySandRhob = y;
+							} else if (activeEndpointKey === 'silt') {
+								workbench.lithoParams.drySiltNphi = x;
+								workbench.lithoParams.drySiltRhob = y;
+							} else if (activeEndpointKey === 'clay') {
+								workbench.lithoParams.dryClayNphi = x;
+								workbench.lithoParams.dryClayRhob = y;
+							}
+						} else if (effectiveMode === 'thomas-stieber') {
+							if (activeEndpointKey === 'ts-sand') {
+								workbench.tsParams.drySandPoro = Math.max(0.12, Math.min(0.45, y));
+							} else if (activeEndpointKey === 'ts-shale') {
+								workbench.tsParams.dryShalePoro = Math.max(0.02, Math.min(0.35, y));
+							}
+						}
+						activeEndpointKey = null;
+					});
+				}
+			});
 		});
+
+		return () => {
+			cancelled = true;
+			cancelAnimationFrame(rafId);
+		};
 	});
 
 	let brushedSummary = $derived.by(() => {
@@ -1019,25 +4096,198 @@
 <div class="flex h-full w-full flex-col bg-[var(--bg-surface)] select-none">
 	<!-- Crossplot Header Bar -->
 	<div
-		class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[11px]"
+		class="flex min-h-7 shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[11px]"
 	>
 		<div class="flex items-center gap-1.5">
 			<span class="font-semibold text-[var(--text-primary)]">Crossplot:</span>
 			<select
-				bind:value={templateOverride}
-				class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
+				bind:value={workbench.crossplotTemplateOverride}
+				class="h-5 max-w-[195px] truncate rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
 			>
 				<option value="auto">Auto ({effectiveMode.toUpperCase()})</option>
+				<option value="mw-distribution">Multi-Well Distribution (QAQC)</option>
 				<option value="nphi-rhob">NPHI vs. RHOB (SSC)</option>
-				<option value="phi-k">Porosity vs. Perm (FZI)</option>
+				<option value="vsh-qc">Vsh Calibration (VSH_GR × VSH_DN)</option>
+				<option value="thomas-stieber">Thomas-Stieber (Vsh vs. Φ)</option>
+				<option value="phi-k"
+					>Porosity vs. Perm ({projectData.drtMethod === 'winland'
+						? 'Winland R35'
+						: projectData.drtMethod === 'lucia'
+							? 'Lucia RFN'
+							: 'FZI'})</option
+				>
+				<option value="core-qc">Core Parity &amp; Error (Φ &amp; K)</option>
 				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
 				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>
+				<option value="swirr-fit">Swirr &amp; Pc Fit (SCAL)</option>
 				<option value="shf">Sw vs. Height (SHF)</option>
-				<option value="histogram">Curve Histogram</option>
+				<option value="histogram">Single-Well Histogram</option>
 			</select>
 		</div>
 
-		{#if effectiveMode === 'nphi-rhob'}
+		{#if effectiveMode === 'swirr-fit'}
+			<div class="flex items-center gap-1">
+				{#each [['swirr-corr', 'Swirr vs. √(k/φ)'], ['pc-qc', 'Pc vs. Sw (Plug QC)'], ['scal-fit', 'J / Pc Curve Fit'], ['relperm', 'Rel-Perm & fw']] as [tKey, tLbl]}
+					<button
+						type="button"
+						onclick={() => {
+							workbench.swirrCrossplotTab = tKey as
+								| 'swirr-corr'
+								| 'pc-qc'
+								| 'scal-fit'
+								| 'relperm';
+							workbench.scalSubMode = tKey === 'relperm' ? 'relperm' : 'static';
+						}}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {workbench.swirrCrossplotTab ===
+						tKey
+							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{tLbl}
+					</button>
+				{/each}
+				{#if workbench.swirrCrossplotTab === 'scal-fit'}
+					{#if (projectData.shfResult?.model ?? projectData.shfParams.model ?? 'leverett_j') === 'leverett_j'}
+						<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+							{#each [['swn', 'J vs Swn'], ['sw', 'J vs Sw']] as [sKey, sLbl]}
+								<button
+									type="button"
+									onclick={() => projectData.setShfJSatMode(sKey as 'swn' | 'sw')}
+									title={sKey === 'swn'
+										? 'Plot & fit Leverett-J vs Normalized Water Saturation (Swn)'
+										: 'Plot & fit Leverett-J vs Water Saturation (Sw)'}
+									class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {(projectData.shfParams.jSatMode ?? 'swn') === sKey
+										? 'bg-blue-600 font-semibold text-white'
+										: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+								>
+									{sLbl}
+								</button>
+							{/each}
+						</div>
+					{/if}
+					<button
+						type="button"
+						onclick={() => (shfLogScale = !shfLogScale)}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {shfLogScale
+							? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						Log-Log
+					</button>
+				{:else if workbench.swirrCrossplotTab !== 'relperm'}
+					<button
+						type="button"
+						onclick={() => (swirrLogY = !swirrLogY)}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {swirrLogY
+							? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						Log Y
+					</button>
+				{/if}
+			</div>
+		{:else if effectiveMode === 'core-qc'}
+			<div class="flex items-center gap-1">
+				{#each [['dual', 'Dual', 'Side-by-side PHIT×CPORE and PERM×CPERM parity crossplots'], ['poro', 'Φ + Depth', 'PHIT×CPORE parity crossplot + ΔPHIT vs. Depth'], ['perm', 'K + Depth', 'PERM×CPERM parity crossplot + Δlog10(K) vs. Depth'], ['depth-error', 'Depth Err', 'ΔPHIT and Δlog10(K) residuals vs. Depth']] as [vKey, vLbl, vTip]}
+					<button
+						type="button"
+						title={vTip}
+						onclick={() => (workbench.coreQcView = vKey as any)}
+						class="h-5 shrink-0 rounded-xs border px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors {workbench.coreQcView ===
+						vKey
+							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{vLbl}
+					</button>
+				{/each}
+				<button
+					type="button"
+					title="Open Core Depth Shift, Stretch/Compress & Tie-Point matcher"
+					onclick={() => (showCoreShiftDrawer = !showCoreShiftDrawer)}
+					class="h-5 shrink-0 rounded-xs border px-1.5 text-[10px] font-semibold whitespace-nowrap transition-colors {showCoreShiftDrawer ||
+					wellData.coreShiftDirty
+						? 'border-amber-500 bg-amber-50 text-amber-900'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-slate-100'}"
+				>
+					{wellData.coreShiftDirty
+						? `Shift (${wellData.coreShiftDelta >= 0 ? '+' : ''}${fmtNum(wellData.coreShiftDelta, 1)}m)`
+						: 'Depth Shift'}
+				</button>
+			</div>
+		{:else if effectiveMode === 'phi-k' && workbench.scope === 'multi-well' && (workbench.multiWellStep === 'rock-typing' || workbench.multiWellStep === 'rt-classifier')}
+			<div class="flex items-center gap-1">
+				{#each [['phi-k', 'Φ–K'], ['lorenz', 'Lorenz'], ['gmm', 'GMM / BIC'], ['carbonate', 'Φ_sec Vug'], ['classifier', 'ML Matrix']] as [rvKey, rvLbl]}
+					<button
+						type="button"
+						onclick={() => (projectData.rockTypingPlotView = rvKey as any)}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {projectData.rockTypingPlotView ===
+						rvKey
+							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{rvLbl}
+					</button>
+				{/each}
+			</div>
+		{:else if effectiveMode === 'phi-k' && workbench.scope === 'single-well'}
+			<div class="flex items-center gap-1">
+				<button
+					type="button"
+					onclick={() => {
+						workbench.crossplotTemplateOverride = 'core-qc';
+						workbench.coreQcView = 'dual';
+					}}
+					class="h-5 rounded-xs border border-blue-200 bg-blue-50 px-1.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-100"
+				>
+					Core Parity &amp; Depth Error →
+				</button>
+			</div>
+		{:else if effectiveMode === 'mw-distribution'}
+			<div class="flex items-center gap-1">
+				{#each [['box', 'Box'], ['violin', 'Violin'], ['histogram', 'Hist'], ['cdf', 'CDF'], ['nphi-rhob', 'ΦN–ρb']] as [pKey, pLbl]}
+					<button
+						type="button"
+						onclick={() => (workbench.mwQaqcPlotType = pKey as any)}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {workbench.mwQaqcPlotType ===
+						pKey
+							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{pLbl}
+					</button>
+				{/each}
+			</div>
+		{:else if effectiveMode === 'vsh-qc'}
+			<div class="flex items-center gap-1">
+				{#each [['dual', 'Dual', 'VSH_GR × VSH_DN Parity Crossplot + GR Calibration Curve Fit'], ['gr-fit', 'GR Fit', 'GR vs. VSH_DN Calibration Curve + ΔVsh vs. Depth'], ['depth-error', 'Depth Err', 'VSH_GR vs. VSH_DN Overlay + ΔVsh Residual Track']] as [vKey, vLbl, vTip]}
+					<button
+						type="button"
+						title={vTip}
+						onclick={() => (workbench.vshQcView = vKey as any)}
+						class="h-5 shrink-0 rounded-xs border px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors {workbench.vshQcView ===
+						vKey
+							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{vLbl}
+					</button>
+				{/each}
+				<button
+					type="button"
+					title="Open GRClean / GRClay Calibration Drawer"
+					onclick={() => (showVshCalibDrawer = !showVshCalibDrawer)}
+					class="h-5 shrink-0 rounded-xs border px-1.5 text-[10px] font-semibold whitespace-nowrap transition-colors {showVshCalibDrawer
+						? 'border-emerald-600 bg-emerald-50 text-emerald-900'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-slate-100'}"
+				>
+					Calibrate GR ({fmtNum(workbench.lithoParams.grClean, 0)}–{fmtNum(
+						workbench.lithoParams.grClay,
+						0
+					)})
+				</button>
+			</div>
+		{:else if effectiveMode === 'nphi-rhob'}
 			<div class="flex items-center gap-1">
 				<span class="text-[10px] text-[var(--text-muted)]">Pick Endpoint:</span>
 				{#each [['sand', 'Sand'], ['silt', 'Silt'], ['clay', 'Clay']] as [key, lbl]}
@@ -1048,6 +4298,34 @@
 						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {activeEndpointKey ===
 						key
 							? 'border-blue-600 bg-blue-600 text-white'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{lbl}
+					</button>
+				{/each}
+				<button
+					type="button"
+					title="Open VSH_GR vs. VSH_DN Calibration & Error Plot"
+					onclick={() => {
+						workbench.crossplotTemplateOverride = 'vsh-qc';
+						workbench.vshQcView = 'dual';
+					}}
+					class="h-5 rounded-xs border border-emerald-300 bg-emerald-50 px-1.5 text-[10px] font-semibold text-emerald-800 hover:bg-emerald-100"
+				>
+					Vsh Calib →
+				</button>
+			</div>
+		{:else if effectiveMode === 'thomas-stieber'}
+			<div class="flex items-center gap-1">
+				<span class="text-[10px] text-[var(--text-muted)]">Pick Φ Endpoint:</span>
+				{#each [['ts-sand', 'Sand Φmax'], ['ts-shale', 'Shale Φsh']] as [key, lbl]}
+					<button
+						type="button"
+						onclick={() =>
+							(activeEndpointKey = activeEndpointKey === key ? null : (key as any))}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {activeEndpointKey ===
+						key
+							? 'border-teal-700 bg-teal-700 text-white'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
 					>
 						{lbl}
@@ -1069,6 +4347,24 @@
 					</button>
 				{/each}
 				{#if shfView === 'scal_fit'}
+					{#if (projectData.shfResult?.model ?? projectData.shfParams.model ?? 'leverett_j') === 'leverett_j'}
+						<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+							{#each [['swn', 'J vs Swn'], ['sw', 'J vs Sw']] as [sKey, sLbl]}
+								<button
+									type="button"
+									onclick={() => projectData.setShfJSatMode(sKey as 'swn' | 'sw')}
+									title={sKey === 'swn'
+										? 'Plot & fit Leverett-J vs Normalized Water Saturation (Swn)'
+										: 'Plot & fit Leverett-J vs Water Saturation (Sw)'}
+									class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {(projectData.shfParams.jSatMode ?? 'swn') === sKey
+										? 'bg-blue-600 font-semibold text-white'
+										: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+								>
+									{sLbl}
+								</button>
+							{/each}
+						</div>
+					{/if}
 					<button
 						type="button"
 						onclick={() => (shfLogScale = !shfLogScale)}
@@ -1083,18 +4379,198 @@
 		{/if}
 	</div>
 
-	<div class="relative min-h-0 flex-1">
-		<div bind:this={plotEl} class="h-full w-full"></div>
+	{#if effectiveMode === 'core-qc'}
+		{@const cc = wellData.coreComparison}
+		<div
+			class="grid shrink-0 grid-cols-2 gap-2 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
+		>
+			<div
+				class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5"
+			>
+				<span class="font-semibold text-slate-800">
+					PHIT × CPORE <span class="mono-num text-[var(--text-muted)]"
+						>(n={cc.poro.count})</span
+					>
+				</span>
+				<div class="mono-num flex items-center gap-2 text-[10px]">
+					<span>RMSE: <strong>{fmtNum(cc.poro.rmse, 4)}</strong></span>
+					<span>MAE: <strong>{fmtNum(cc.poro.mae, 4)}</strong></span>
+					<span>
+						Bias: <strong
+							class={cc.poro.bias !== null && Math.abs(cc.poro.bias) > 0.015
+								? 'text-amber-700'
+								: 'text-slate-900'}
+						>
+							{cc.poro.bias !== null && cc.poro.bias >= 0 ? '+' : ''}{fmtNum(
+								cc.poro.bias,
+								4
+							)}
+						</strong>
+					</span>
+					<span>±2 p.u.: <strong>{fmtNum(cc.poro.within_2pu_pct, 0)}%</strong></span>
+					<span
+						>R²: <strong class="text-emerald-700">{fmtNum(cc.poro.r2, 3)}</strong></span
+					>
+				</div>
+			</div>
+			<div
+				class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5"
+			>
+				<span class="font-semibold text-slate-800">
+					PERM × CPERM <span class="mono-num text-[var(--text-muted)]"
+						>(n={cc.perm.count})</span
+					>
+				</span>
+				<div class="mono-num flex items-center gap-2 text-[10px]">
+					<span>log₁₀ RMSE: <strong>{fmtNum(cc.perm.log10_rmse, 3)}</strong></span>
+					<span>log₁₀ MAE: <strong>{fmtNum(cc.perm.log10_mae, 3)}</strong></span>
+					<span>Factor: <strong>{fmtNum(cc.perm.factor_error, 2)}×</strong></span>
+					<span>±0.5 dec: <strong>{fmtNum(cc.perm.within_half_dec_pct, 0)}%</strong></span
+					>
+					<span
+						>R²: <strong class="text-emerald-700">{fmtNum(cc.perm.r2, 3)}</strong></span
+					>
+				</div>
+			</div>
+		</div>
+	{/if}
+
+	{#if effectiveMode === 'core-qc' && showCoreShiftDrawer}
+		<div class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2.5 py-1.5">
+			<CoreDepthShiftPanel compact={true} />
+		</div>
+	{/if}
+
+	{#if effectiveMode === 'vsh-qc'}
+		{@const vc = wellData.vshComparison}
+		<div
+			class="grid shrink-0 grid-cols-2 gap-2 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
+		>
+			<div
+				class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5"
+			>
+				<span class="font-semibold text-slate-800">
+					VSH_GR × VSH_DN <span class="mono-num text-[var(--text-muted)]"
+						>(n={vc.active.count})</span
+					>
+				</span>
+				<div class="mono-num flex items-center gap-2 text-[10px]">
+					<span>RMSE: <strong>{fmtNum(vc.active.rmse, 3)}</strong></span>
+					<span>MAE: <strong>{fmtNum(vc.active.mae, 3)}</strong></span>
+					<span>
+						Bias: <strong
+							class={vc.active.bias !== null && Math.abs(vc.active.bias) > 0.03
+								? 'text-amber-700'
+								: 'text-slate-900'}
+						>
+							{vc.active.bias !== null && vc.active.bias >= 0 ? '+' : ''}{fmtNum(
+								vc.active.bias,
+								3
+							)}
+						</strong>
+					</span>
+					<span>±0.10: <strong>{fmtNum(vc.active.within_10pu_pct, 0)}%</strong></span>
+					<span
+						>R²: <strong class="text-emerald-700">{fmtNum(vc.active.r2, 3)}</strong
+						></span
+					>
+				</div>
+			</div>
+			<div
+				class="flex flex-wrap items-center justify-between gap-x-2 rounded-xs border border-[var(--border-hairline)] bg-white px-2 py-0.5"
+			>
+				<span class="font-semibold text-slate-800"> Calibration Regimes </span>
+				<div class="mono-num flex items-center gap-2.5 text-[10px]">
+					<span class="text-amber-900">
+						Water Sand (n={vc.sand.count}):
+						<strong
+							>{vc.sand.bias !== null
+								? `${vc.sand.bias >= 0 ? '+' : ''}${fmtNum(vc.sand.bias, 3)}`
+								: '—'}</strong
+						>
+					</span>
+					<span class="text-emerald-900">
+						Clean Shale (n={vc.shale.count}):
+						<strong
+							>{vc.shale.bias !== null
+								? `${vc.shale.bias >= 0 ? '+' : ''}${fmtNum(vc.shale.bias, 3)}`
+								: '—'}</strong
+						>
+					</span>
+				</div>
+			</div>
+		</div>
+	{/if}
+
+	{#if effectiveMode === 'vsh-qc' && showVshCalibDrawer}
+		<div class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2.5 py-1.5">
+			<VshCalibrationPanel compact={true} />
+		</div>
+	{/if}
+
+	<div class="relative min-h-0 flex-1 overflow-hidden">
+		<div bind:this={plotEl} class="absolute inset-0 h-full w-full"></div>
 	</div>
+
+	{#if projectData.selectedScalPointIds.length > 0}
+		<div
+			class="mono-num flex min-h-6 shrink-0 flex-wrap items-center justify-between gap-1.5 border-t border-amber-300 bg-amber-50/90 px-2.5 py-0.5 text-[10px] text-amber-950"
+		>
+			<span>
+				SCAL Selection: <strong>{projectData.selectedScalPointIds.length} pts</strong>
+			</span>
+			<div class="flex items-center gap-1">
+				<button
+					type="button"
+					onclick={() => projectData.excludeSelectedScalPoints()}
+					class="rounded-xs border border-rose-300 bg-rose-600 px-1.5 py-0.5 font-semibold text-white hover:bg-rose-700"
+					title="Exclude selected SCAL points from J/Pc curve fitting"
+				>
+					Exclude Pts ({projectData.selectedScalPointIds.length})
+				</button>
+				<button
+					type="button"
+					onclick={() => projectData.includeSelectedScalPoints()}
+					class="rounded-xs border border-emerald-300 bg-emerald-600 px-1.5 py-0.5 font-semibold text-white hover:bg-emerald-700"
+					title="Restore selected SCAL points into J/Pc curve fitting"
+				>
+					Restore Pts
+				</button>
+				<button
+					type="button"
+					onclick={() => projectData.excludeSelectedScalPlugs()}
+					class="rounded-xs border border-amber-400 bg-white px-1.5 py-0.5 font-semibold text-amber-900 hover:bg-amber-100"
+					title="Exclude entire core plugs containing the selected points"
+				>
+					Exclude Plugs
+				</button>
+				<button
+					type="button"
+					onclick={() => projectData.includeSelectedScalPlugs()}
+					class="rounded-xs border border-emerald-400 bg-white px-1.5 py-0.5 font-semibold text-emerald-800 hover:bg-emerald-50"
+					title="Restore entire core plugs containing the selected points"
+				>
+					Restore Plugs
+				</button>
+				<button
+					type="button"
+					onclick={() => projectData.setSelectedScalPoints([])}
+					class="px-1 font-semibold text-slate-600 hover:underline"
+				>
+					Clear ×
+				</button>
+			</div>
+		</div>
+	{/if}
 
 	{#if brushedSummary}
 		<div
 			class="mono-num flex h-6 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-blue-50/70 px-2.5 text-[11px] text-blue-900"
 		>
 			<span>
-				Lasso: <strong>{brushedSummary.count} pts</strong> ({fmtDepth(brushedSummary.min)}–{fmtDepth(
-					brushedSummary.max
-				)})
+				Lasso: <strong>{brushedSummary.count} pts</strong> ({fmtDepth(
+					brushedSummary.min
+				)}–{fmtDepth(brushedSummary.max)})
 			</span>
 			<button
 				type="button"
@@ -1106,4 +4582,3 @@
 		</div>
 	{/if}
 </div>
-

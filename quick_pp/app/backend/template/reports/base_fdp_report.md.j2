@@ -1,0 +1,19 @@
+---
+title: "{{ title }}"
+project: "{{ project_name }}"
+date: "{{ generation_date }}"
+author: "{{ author }}"
+report_type: "{{ report_type }}"
+platform: "Prepared with quick_pp — Quantitative Petrophysics & Reservoir Evaluation Suite"
+version: "1.0"
+---
+
+{% for sec in rendered_sections %}
+{{ sec.content }}
+{% if not loop.last %}
+
+<div class="page-break"></div>
+
+{% endif %}
+{% endfor %}
+

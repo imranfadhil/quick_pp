@@ -1,3 +1,11 @@
+"""Rock Typing, Hydraulic Flow Units (FZI, RQI, Winland R35, Lucia RFN, GHE), and Supervised DRT Classification.
+
+This module provides core-to-log rock typing and hydraulic flow unit characterization:
+- Reservoir Quality Index (`calc_rqi`), Flow Zone Indicator (`calc_fzi`), Winland R35 (`calc_r35`), Lucia Rock Fabric Number (`calc_rfn`, `apply_lucia_rfn_override`), and Global Hydraulic Elements (`calc_ghe`)
+- Automatic discrete rock type cutoff detection via KMeans/ward clustering (`find_cutoffs`), Gaussian Mixture Models (`find_cutoffs_gmm`), and Modified Lorenz Plots (`find_cutoffs_lorenz`)
+- Supervised ML Rock Type (DRT) classifier training, Contingency Matrix validation, model persistence, and uncored well propagation (`train_and_validate_rock_type_classifier`, `save_cached_rt_classifier`, `predict_with_saved_rt_classifier`, `compute_rock_flag_comparison`)
+"""
+
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
@@ -5,6 +13,7 @@ import pandas as pd
 
 from quick_pp import logger
 from quick_pp.lithology import shale_volume_steiber
+from quick_pp.porosity import calc_secondary_porosity
 
 plt.style.use("seaborn-v0_8-paper")
 plt.rcParams.update(
@@ -75,6 +84,40 @@ def calc_r35_perm(r35, pore):
         np.ndarray or float: Permeability in mD.
     """
     return 10 ** ((np.log10(r35) - 0.732 + 0.864 * np.log10(pore * 100)) / 0.588)
+
+
+def calc_rfn(pore, perm):
+    """Calculate Lucia Rock Fabric Number (RFN) from porosity and permeability, based on Jennings and Lucia (2003).
+
+    Args:
+        pore (np.ndarray or float): Interparticle/total porosity in fraction.
+        perm (np.ndarray or float): Permeability in mD.
+
+    Returns:
+        np.ndarray or float: The Lucia Rock Fabric Number (RFN).
+    """
+    pore_eff = np.clip(pore, 0.04, 0.99)
+    log_phi = np.log10(pore_eff)
+    log_k = np.log10(np.clip(perm, 1e-6, None))
+    log_rfn = (9.7892 + 8.6711 * log_phi - log_k) / (12.0838 + 8.2965 * log_phi)
+    return np.clip(10.0**log_rfn, 0.1, 10.0)
+
+
+def calc_rfn_perm(rfn, pore):
+    """Calculate permeability from Lucia Rock Fabric Number (RFN) and porosity, based on Jennings and Lucia (2003).
+
+    Args:
+        rfn (np.ndarray or float): Lucia Rock Fabric Number (RFN).
+        pore (np.ndarray or float): Interparticle/total porosity in fraction.
+
+    Returns:
+        np.ndarray or float: Permeability in mD.
+    """
+    return 10 ** (
+        9.7892
+        - 12.0838 * np.log10(rfn)
+        + (8.6711 - 8.2965 * np.log10(rfn)) * np.log10(pore)
+    )
 
 
 def plot_rqi(
@@ -1150,3 +1193,1476 @@ def cluster_rock_types_from_logs(
     )
 
     return cluster_assignments.reindex(log_data.index)
+
+
+def find_cutoffs_gmm(
+    curve,
+    no_of_cutoffs=None,
+    max_clusters=7,
+    criterion="combined",
+    log_scale=True,
+    random_state=42,
+):
+    """Find optimal rock type group count and boundary cutoffs using Gaussian Mixture Models (GMM)
+    with Silhouette and Bayesian Information Criterion (BIC) scoring.
+
+    Args:
+        curve (pd.Series or np.ndarray): 1D indicator array (e.g., FZI, Winland R35, or Lucia RFN).
+        no_of_cutoffs (int, optional): Fixed number of cutoffs (`k = no_of_cutoffs + 1` groups).
+                                       If None, automatically selects the optimal number of rock types `k`
+                                       in `2..max_clusters` using `criterion`. Defaults to None.
+        max_clusters (int, optional): Maximum number of rock type groups `k` to evaluate. Defaults to 7.
+        criterion (str, optional): Model selection criterion: 'combined' (BIC + Silhouette), 'bic', or 'silhouette'.
+                                   Defaults to 'combined'.
+        log_scale (bool, optional): Fit GMM on `log10(curve)` (recommended for log-normally distributed
+                                    indicators such as FZI and R35). Defaults to True.
+        random_state (int, optional): Random seed for reproducibility. Defaults to 42.
+
+    Returns:
+        dict: Dictionary containing:
+            - 'cutoffs': Sorted list of boundary cutoff values in original curve space.
+            - 'optimal_k': Automatically detected optimal number of rock types (clusters).
+            - 'selected_k': Number of rock types used to generate `cutoffs`.
+            - 'k_scores': List of dicts `[{'k', 'bic', 'aic', 'silhouette', 'combined_score'}, ...]`.
+            - 'components': List of GMM component dicts `[{'mean', 'std', 'weight', 'mean_raw'}]`.
+            - 'distribution': Dict with `'x_grid'`, `'hist_density'`, `'total_pdf'`, `'component_pdfs'` for plotting.
+    """
+    from sklearn.metrics import silhouette_score
+    from sklearn.mixture import GaussianMixture
+
+    raw = np.asarray(curve, dtype=float).ravel()
+    if log_scale:
+        valid = raw[np.isfinite(raw) & (raw > 0)]
+        x = np.log10(valid) if valid.size > 0 else np.array([], dtype=float)
+    else:
+        valid = raw[np.isfinite(raw)]
+        x = valid.copy()
+
+    if x.size < 4 or np.nanstd(x) < 1e-9:
+        fallback_c = [0.5, 1.0, 2.5] if log_scale else [1.5, 2.5, 3.5]
+        return {
+            "cutoffs": fallback_c,
+            "optimal_k": len(fallback_c) + 1,
+            "selected_k": len(fallback_c) + 1,
+            "k_scores": [],
+            "components": [],
+            "distribution": {},
+        }
+
+    X = x.reshape(-1, 1)
+    max_k = max(2, min(int(max_clusters), x.size - 1, 10))
+    if x.size > 1800:
+        sub_idx = np.linspace(0, x.size - 1, 1800, dtype=int)
+        x_sorted_idx = np.argsort(x)
+        sample_idx = x_sorted_idx[sub_idx]
+    else:
+        sample_idx = np.arange(x.size)
+    X_sub = X[sample_idx]
+
+    models_by_k = {}
+    raw_scores = []
+    for k in range(2, max_k + 1):
+        try:
+            gmm = GaussianMixture(
+                n_components=k,
+                covariance_type="full",
+                random_state=random_state,
+                n_init=2,
+                max_iter=150,
+            ).fit(X)
+            bic_val = float(gmm.bic(X))
+            aic_val = float(gmm.aic(X))
+            labels_sub = gmm.predict(X_sub)
+            if np.unique(labels_sub).size > 1:
+                sil_val = float(silhouette_score(X_sub, labels_sub))
+            else:
+                sil_val = -1.0
+            models_by_k[k] = gmm
+            raw_scores.append(
+                {"k": int(k), "bic": bic_val, "aic": aic_val, "silhouette": sil_val}
+            )
+        except Exception:
+            continue
+
+    if not raw_scores:
+        fallback_k = (int(no_of_cutoffs) + 1) if no_of_cutoffs else 4
+        c_arr = find_cutoffs(valid, no_of_cutoffs=max(1, fallback_k - 1))
+        return {
+            "cutoffs": [round(float(c), 4) for c in np.sort(c_arr)],
+            "optimal_k": fallback_k,
+            "selected_k": fallback_k,
+            "k_scores": [],
+            "components": [],
+            "distribution": {},
+        }
+
+    bics = np.array([s["bic"] for s in raw_scores], dtype=float)
+    sils = np.array([s["silhouette"] for s in raw_scores], dtype=float)
+    bic_span = max(float(np.max(bics) - np.min(bics)), 1e-9)
+    bic_norm = (np.max(bics) - bics) / bic_span
+    sil_span = max(float(np.max(sils) - np.min(sils)), 1e-9)
+    sil_norm = (
+        (sils - np.min(sils)) / sil_span if sil_span > 1e-6 else np.ones_like(sils)
+    )
+
+    crit = str(criterion or "combined").strip().lower()
+    k_scores = []
+    best_k = raw_scores[0]["k"]
+    best_score = -1e18
+
+    for idx, item in enumerate(raw_scores):
+        k_val = item["k"]
+        b_n = float(bic_norm[idx])
+        s_n = float(sil_norm[idx])
+        if crit == "bic":
+            comb = b_n - 0.03 * max(0, k_val - 3)
+        elif crit == "silhouette":
+            comb = float(item["silhouette"])
+        else:
+            two_cluster_penalty = (
+                0.08
+                if (k_val == 2 and len(raw_scores) >= 2 and bic_norm[1] > 0.35)
+                else 0.0
+            )
+            parsimony_penalty = 0.025 * max(0, k_val - 5)
+            comb = 0.52 * b_n + 0.48 * s_n - two_cluster_penalty - parsimony_penalty
+
+        entry = {
+            "k": int(k_val),
+            "bic": round(float(item["bic"]), 2),
+            "aic": round(float(item["aic"]), 2),
+            "silhouette": round(float(item["silhouette"]), 4),
+            "bic_norm": round(b_n, 4),
+            "combined_score": round(float(comb), 4),
+        }
+        k_scores.append(entry)
+        if comb > best_score:
+            best_score = comb
+            best_k = int(k_val)
+
+    selected_k = (
+        max(2, min(int(no_of_cutoffs) + 1, max_k))
+        if no_of_cutoffs is not None
+        else best_k
+    )
+    if selected_k not in models_by_k:
+        selected_k = best_k
+    gmm_sel = models_by_k[selected_k]
+
+    means = gmm_sel.means_.ravel()
+    stds = np.sqrt(np.maximum(gmm_sel.covariances_.ravel(), 1e-9))
+    weights = gmm_sel.weights_.ravel()
+    order = np.argsort(means)
+    means_s = means[order]
+    stds_s = stds[order]
+    weights_s = weights[order]
+
+    cutoffs_x = []
+    for i in range(len(means_s) - 1):
+        m1, s1, w1 = means_s[i], stds_s[i], weights_s[i]
+        m2, s2, w2 = means_s[i + 1], stds_s[i + 1], weights_s[i + 1]
+        grid = np.linspace(m1, m2, 200)
+        pdf1 = (w1 / (s1 * np.sqrt(2.0 * np.pi))) * np.exp(
+            -0.5 * ((grid - m1) / s1) ** 2
+        )
+        pdf2 = (w2 / (s2 * np.sqrt(2.0 * np.pi))) * np.exp(
+            -0.5 * ((grid - m2) / s2) ** 2
+        )
+        diff = pdf2 - pdf1
+        cross_idx = np.where(diff >= 0)[0]
+        if cross_idx.size > 0 and 0 < cross_idx[0] < grid.size - 1:
+            idx0 = int(cross_idx[0])
+            d0, d1 = diff[idx0 - 1], diff[idx0]
+            frac = -d0 / (d1 - d0) if abs(d1 - d0) > 1e-12 else 0.5
+            c_x = float(grid[idx0 - 1] + frac * (grid[idx0] - grid[idx0 - 1]))
+        else:
+            c_x = float(0.5 * (m1 + m2))
+        cutoffs_x.append(c_x)
+
+    cutoffs_raw = [
+        round(float(10.0**c if log_scale else c), 4) for c in sorted(cutoffs_x)
+    ]
+
+    x_min, x_max = float(np.percentile(x, 0.5)), float(np.percentile(x, 99.5))
+    if abs(x_max - x_min) < 1e-6:
+        x_min, x_max = float(np.min(x)) - 0.5, float(np.max(x)) + 0.5
+    pad = 0.08 * (x_max - x_min)
+    x_grid = np.linspace(x_min - pad, x_max + pad, 100)
+    hist_counts, bin_edges = np.histogram(
+        x, bins=36, range=(x_min - pad, x_max + pad), density=True
+    )
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+    comp_pdfs = []
+    total_pdf = np.zeros_like(x_grid)
+    components_meta = []
+    for i in range(len(means_s)):
+        m_i, s_i, w_i = float(means_s[i]), float(stds_s[i]), float(weights_s[i])
+        pdf_i = (w_i / (s_i * np.sqrt(2.0 * np.pi))) * np.exp(
+            -0.5 * ((x_grid - m_i) / s_i) ** 2
+        )
+        total_pdf += pdf_i
+        comp_pdfs.append([round(float(v), 4) for v in pdf_i])
+        components_meta.append(
+            {
+                "component": i + 1,
+                "mean_log": round(m_i, 4),
+                "std_log": round(s_i, 4),
+                "weight": round(w_i, 4),
+                "mean_raw": round(float(10.0**m_i if log_scale else m_i), 4),
+            }
+        )
+
+    return {
+        "cutoffs": cutoffs_raw,
+        "cutoffs_log": [round(float(c), 4) for c in sorted(cutoffs_x)],
+        "optimal_k": int(best_k),
+        "selected_k": int(selected_k),
+        "criterion": crit,
+        "log_scale": bool(log_scale),
+        "k_scores": k_scores,
+        "components": components_meta,
+        "distribution": {
+            "bin_centers": [round(float(v), 4) for v in bin_centers],
+            "hist_density": [round(float(v), 4) for v in hist_counts],
+            "x_grid": [round(float(v), 4) for v in x_grid],
+            "total_pdf": [round(float(v), 4) for v in total_pdf],
+            "component_pdfs": comp_pdfs,
+        },
+    }
+
+
+def find_cutoffs_lorenz(
+    phit,
+    perm,
+    indicator=None,
+    method="fzi",
+    no_of_cutoffs=None,
+    max_clusters=7,
+):
+    """Find optimal flow unit count and boundary cutoffs using Modified Lorenz (Flow vs. Storage Capacity)
+    and Cumulative Probability inflection points (slope breaks).
+
+    Uses exact dynamic-programming piecewise-linear segmentation on the resampled Modified Lorenz
+    and log-indicator Cumulative Probability curves to locate flow unit inflection knees, scored
+    with piecewise-linear BIC and 1D Silhouette score.
+
+    Args:
+        phit (np.ndarray or pd.Series): Total/interparticle porosity in fraction (v/v).
+        perm (np.ndarray or pd.Series): Permeability in mD.
+        indicator (np.ndarray, optional): Precomputed DRT indicator array (FZI, R35, or RFN).
+                                          If None, computed from `phit` and `perm` using `method`.
+        method (str, optional): DRT method ('fzi', 'winland', or 'lucia'). Defaults to 'fzi'.
+        no_of_cutoffs (int, optional): Fixed number of cutoffs (`k = no_of_cutoffs + 1` flow units).
+                                       If None, automatically selects optimal `k` in `2..max_clusters`.
+        max_clusters (int, optional): Maximum number of flow units `k` to evaluate. Defaults to 7.
+
+    Returns:
+        dict: Dictionary containing:
+            - 'cutoffs': Sorted list of boundary cutoff values.
+            - 'optimal_k': Automatically detected optimal number of rock types (flow units).
+            - 'selected_k': Number of rock types used to generate `cutoffs`.
+            - 'lorenz_coeff': Lorenz heterogeneity coefficient in [0, 1].
+            - 'lorenz_curve': Dict with `'storage_cdf'`, `'flow_cdf'`, `'cum_prob'`, `'log_indicator'`, `'indicator'`.
+            - 'inflection_points': List of inflection point dicts on the Lorenz & Cumulative Probability curves.
+            - 'k_scores': List of dicts `[{'k', 'bic', 'silhouette', 'r2', 'combined_score'}, ...]`.
+    """
+    from sklearn.metrics import silhouette_score
+
+    phit_arr = np.asarray(phit, dtype=float).ravel()
+    perm_arr = np.asarray(perm, dtype=float).ravel()
+    m_norm = str(method or "fzi").strip().lower()
+    higher_is_better = m_norm != "lucia"
+
+    if indicator is None:
+        if m_norm in ("winland", "r35"):
+            ind_arr = np.asarray(calc_r35(phit_arr, perm_arr), dtype=float)
+        elif m_norm in ("lucia", "rfn"):
+            ind_arr = np.asarray(calc_rfn(phit_arr, perm_arr), dtype=float)
+        else:
+            ind_arr = np.asarray(calc_fzi(phit_arr, perm_arr), dtype=float)
+    else:
+        ind_arr = np.asarray(indicator, dtype=float).ravel()
+
+    valid_mask = (
+        np.isfinite(phit_arr)
+        & np.isfinite(perm_arr)
+        & np.isfinite(ind_arr)
+        & (phit_arr > 0)
+        & (perm_arr > 0)
+        & (ind_arr > 0)
+    )
+    if valid_mask.sum() < 6:
+        fallback_c = [1.5, 2.5, 3.5] if not higher_is_better else [0.5, 1.0, 2.5]
+        return {
+            "cutoffs": fallback_c,
+            "optimal_k": len(fallback_c) + 1,
+            "selected_k": len(fallback_c) + 1,
+            "lorenz_coeff": 0.0,
+            "lorenz_curve": {},
+            "inflection_points": [],
+            "k_scores": [],
+        }
+
+    phi_v = phit_arr[valid_mask]
+    k_v = perm_arr[valid_mask]
+    ind_v = ind_arr[valid_mask]
+
+    order_best = np.argsort(-ind_v) if higher_is_better else np.argsort(ind_v)
+    phi_ord = phi_v[order_best]
+    k_ord = k_v[order_best]
+    ind_ord = ind_v[order_best]
+    log_ind_ord = np.log10(ind_ord)
+
+    storage_cdf = np.concatenate(([0.0], np.cumsum(phi_ord) / np.sum(phi_ord)))
+    flow_cdf = np.concatenate(([0.0], np.cumsum(k_ord) / np.sum(k_ord)))
+    trapezoid_fn = getattr(np, "trapezoid", getattr(np, "trapz", None))
+    auc_val = float(trapezoid_fn(flow_cdf, storage_cdf)) if trapezoid_fn else 0.5
+    lorenz_coeff = float(np.clip((auc_val - 0.5) / 0.5, 0.0, 1.0))
+
+    M = min(100, len(ind_ord))
+    q_idx = np.linspace(0, len(ind_ord) - 1, M, dtype=int)
+    c_grid = storage_cdf[1:][q_idx]
+    f_grid = flow_cdf[1:][q_idx]
+    ind_grid = ind_ord[q_idx]
+    log_grid = log_ind_ord[q_idx]
+    prob_grid = (q_idx + 0.5) / len(ind_ord)
+
+    log_min, log_max = float(np.min(log_grid)), float(np.max(log_grid))
+    log_span = max(log_max - log_min, 1e-9)
+    log_norm = (log_grid - log_min) / log_span
+
+    cost = np.full((M, M), np.inf, dtype=float)
+    min_seg_len = max(2, M // 16)
+    for a in range(M):
+        cost[a, a] = 0.0
+        for b in range(a + min_seg_len, M):
+            dc = c_grid[b] - c_grid[a]
+            if abs(dc) > 1e-9:
+                t_c = (c_grid[a : b + 1] - c_grid[a]) / dc
+            else:
+                t_c = np.linspace(0.0, 1.0, b - a + 1)
+            f_hat = f_grid[a] + t_c * (f_grid[b] - f_grid[a])
+            err_lorenz = float(np.sum((f_grid[a : b + 1] - f_hat) ** 2))
+
+            dp = prob_grid[b] - prob_grid[a]
+            t_p = (prob_grid[a : b + 1] - prob_grid[a]) / dp if abs(dp) > 1e-9 else t_c
+            y_hat = log_norm[a] + t_p * (log_norm[b] - log_norm[a])
+            err_prob = float(np.sum((log_norm[a : b + 1] - y_hat) ** 2))
+
+            cost[a, b] = 0.65 * err_lorenz + 0.35 * err_prob
+
+    total_ss = max(float(cost[0, M - 1]) if np.isfinite(cost[0, M - 1]) else 1.0, 1e-9)
+    max_k = max(2, min(int(max_clusters), M // min_seg_len, 8))
+
+    dp_val = np.full((max_k + 1, M), np.inf, dtype=float)
+    dp_prev = np.zeros((max_k + 1, M), dtype=int)
+    for j in range(min_seg_len, M):
+        dp_val[1, j] = cost[0, j]
+
+    for k in range(2, max_k + 1):
+        for j in range(k * min_seg_len, M):
+            prev_end = np.arange((k - 1) * min_seg_len, j - min_seg_len + 1)
+            if prev_end.size == 0:
+                continue
+            cand = dp_val[k - 1, prev_end] + cost[prev_end, j]
+            best_pos = int(np.argmin(cand))
+            if np.isfinite(cand[best_pos]):
+                dp_val[k, j] = float(cand[best_pos])
+                dp_prev[k, j] = int(prev_end[best_pos])
+
+    breakpoints_by_k = {}
+    raw_scores = []
+    X_log = log_grid.reshape(-1, 1)
+
+    for k in range(2, max_k + 1):
+        rss = float(dp_val[k, M - 1])
+        if not np.isfinite(rss):
+            continue
+        bps = []
+        curr = M - 1
+        for seg in range(k, 1, -1):
+            prev_idx = int(dp_prev[seg, curr])
+            bps.append(prev_idx)
+            curr = prev_idx
+        bps = sorted(bps)
+        breakpoints_by_k[k] = bps
+
+        labels_grid = np.zeros(M, dtype=int)
+        for seg_idx, bp in enumerate(bps):
+            labels_grid[bp:] = seg_idx + 1
+        sil_val = (
+            float(silhouette_score(X_log, labels_grid))
+            if np.unique(labels_grid).size > 1
+            else -1.0
+        )
+        r2_val = float(np.clip(1.0 - (rss / total_ss), 0.0, 1.0))
+        bic_val = float(M * np.log(max(rss / M, 1e-8)) + 2.5 * k * np.log(M))
+        raw_scores.append(
+            {
+                "k": int(k),
+                "rss": rss,
+                "r2": r2_val,
+                "bic": bic_val,
+                "silhouette": sil_val,
+            }
+        )
+
+    if not raw_scores:
+        fallback_k = (int(no_of_cutoffs) + 1) if no_of_cutoffs else 4
+        c_arr = find_cutoffs(ind_v, no_of_cutoffs=max(1, fallback_k - 1))
+        return {
+            "cutoffs": [round(float(c), 4) for c in np.sort(c_arr)],
+            "optimal_k": fallback_k,
+            "selected_k": fallback_k,
+            "lorenz_coeff": round(lorenz_coeff, 4),
+            "lorenz_curve": {},
+            "inflection_points": [],
+            "k_scores": [],
+        }
+
+    rss_arr = np.array([s["rss"] for s in raw_scores], dtype=float)
+    k_arr = np.array([s["k"] for s in raw_scores], dtype=float)
+    rss_min = float(np.min(rss_arr))
+    rss_norm = (rss_arr - rss_min) / max(total_ss - rss_min, 1e-9)
+    chord_y = 1.0 - (k_arr - 1.0) / max(float(np.max(k_arr)) - 1.0, 1.0)
+    elbow_raw = np.maximum(0.0, chord_y - rss_norm)
+    bic_norm = elbow_raw / max(float(np.max(elbow_raw)), 1e-9)
+    sils = np.array([s["silhouette"] for s in raw_scores], dtype=float)
+    sil_span = max(float(np.max(sils) - np.min(sils)), 1e-9)
+    sil_norm = (
+        (sils - np.min(sils)) / sil_span if sil_span > 1e-6 else np.ones_like(sils)
+    )
+
+    k_scores = []
+    best_k = raw_scores[0]["k"]
+    best_score = -1e18
+    for idx, item in enumerate(raw_scores):
+        k_val = item["k"]
+        b_n = float(bic_norm[idx])
+        s_n = float(sil_norm[idx])
+        two_penalty = (
+            0.08 if (k_val == 2 and item["r2"] < 0.94 and len(raw_scores) > 1) else 0.0
+        )
+        parsimony_penalty = 0.03 * max(0, k_val - 5)
+        comb = 0.55 * b_n + 0.45 * s_n - two_penalty - parsimony_penalty
+        k_scores.append(
+            {
+                "k": int(k_val),
+                "bic": round(float(item["bic"]), 2),
+                "silhouette": round(float(item["silhouette"]), 4),
+                "r2": round(float(item["r2"]), 4),
+                "bic_norm": round(b_n, 4),
+                "combined_score": round(float(comb), 4),
+            }
+        )
+        if comb > best_score:
+            best_score = comb
+            best_k = int(k_val)
+
+    selected_k = (
+        max(2, min(int(no_of_cutoffs) + 1, max_k))
+        if no_of_cutoffs is not None
+        else best_k
+    )
+    if selected_k not in breakpoints_by_k:
+        selected_k = best_k
+    bps_sel = breakpoints_by_k[selected_k]
+
+    inflection_points = []
+    raw_cutoffs = []
+    for i, bp in enumerate(bps_sel):
+        c_val = float(0.5 * (ind_grid[max(0, bp - 1)] + ind_grid[bp]))
+        raw_cutoffs.append(round(c_val, 4))
+        inflection_points.append(
+            {
+                "rank": i + 1,
+                "storage_cdf": round(float(c_grid[bp]), 4),
+                "flow_cdf": round(float(f_grid[bp]), 4),
+                "cum_prob": round(float(prob_grid[bp]), 4),
+                "log_indicator": round(float(log_grid[bp]), 4),
+                "cutoff": round(c_val, 4),
+                "drt_before": i + 1,
+                "drt_after": i + 2,
+            }
+        )
+
+    return {
+        "cutoffs": sorted(raw_cutoffs),
+        "optimal_k": int(best_k),
+        "selected_k": int(selected_k),
+        "lorenz_coeff": round(lorenz_coeff, 4),
+        "lorenz_curve": {
+            "storage_cdf": [0.0] + [round(float(v), 4) for v in c_grid],
+            "flow_cdf": [0.0] + [round(float(v), 4) for v in f_grid],
+            "cum_prob": [round(float(v), 4) for v in prob_grid],
+            "log_indicator": [round(float(v), 4) for v in log_grid],
+            "indicator": [round(float(v), 4) for v in ind_grid],
+        },
+        "inflection_points": inflection_points,
+        "k_scores": k_scores,
+    }
+
+
+def apply_lucia_rfn_override(
+    phit,
+    perm,
+    phis=None,
+    phi_sec=None,
+    primary_rock_flags=None,
+    lucia_cutoffs=None,
+    phi_sec_cutoff=0.02,
+    use_interparticle_porosity=True,
+):
+    """Compute interparticle-corrected Lucia Rock Fabric Number (RFN) and optionally override
+    primary rock type flags in vuggy carbonate intervals where `phi_sec = phi_T - phi_sonic >= phi_sec_cutoff`.
+
+    Args:
+        phit (np.ndarray or pd.Series): Total porosity in fraction (v/v).
+        perm (np.ndarray or pd.Series): Permeability in mD.
+        phis (np.ndarray or pd.Series, optional): Sonic (matrix) porosity in fraction (v/v).
+        phi_sec (np.ndarray or pd.Series, optional): Precomputed secondary porosity `phi_T - phi_sonic`.
+        primary_rock_flags (np.ndarray, optional): Primary ROCK_FLAG array to override in vuggy intervals.
+        lucia_cutoffs (list, optional): Lucia RFN boundary cutoffs. Defaults to `[1.5, 2.5, 3.5]`.
+        phi_sec_cutoff (float, optional): Secondary porosity threshold (v/v) to flag vuggy carbonate
+                                          and apply Lucia RFN override. Defaults to 0.02 (2 p.u.).
+        use_interparticle_porosity (bool, optional): Use interparticle porosity `phi_ip = phi_T - phi_sec`
+                                                     when computing Lucia RFN. Defaults to True.
+
+    Returns:
+        dict: Dictionary containing:
+            - 'rfn': Interparticle-corrected (or total) Lucia RFN array.
+            - 'rfn_total': Total-porosity Lucia RFN array.
+            - 'phi_sec': Secondary porosity `max(0, phi_T - phi_sonic)` array.
+            - 'phi_ip': Interparticle porosity `phi_T - phi_sec` array.
+            - 'vuggy_mask': Boolean mask where `phi_sec >= phi_sec_cutoff`.
+            - 'lucia_rock_flags': Rock flags classified purely by Lucia RFN (`higher_is_better=False`).
+            - 'overridden_rock_flags': `primary_rock_flags` overridden by `lucia_rock_flags` where `vuggy_mask` is True.
+            - 'override_count': Number of samples overridden.
+            - 'vuggy_count': Number of samples with `phi_sec >= phi_sec_cutoff`.
+    """
+    if lucia_cutoffs is None:
+        lucia_cutoffs = [1.5, 2.5, 3.5]
+    sorted_lucia_cutoffs = sorted(float(c) for c in lucia_cutoffs)
+
+    phit_arr = np.asarray(phit, dtype=float)
+    perm_arr = np.asarray(perm, dtype=float)
+
+    if phi_sec is not None:
+        phi_sec_arr = np.asarray(phi_sec, dtype=float)
+        phi_ip_arr = np.where(
+            np.isfinite(phit_arr) & np.isfinite(phi_sec_arr),
+            np.clip(phit_arr - np.maximum(0.0, phi_sec_arr), 0.001, phit_arr),
+            np.clip(phit_arr, 0.001, 0.99),
+        )
+    elif phis is not None:
+        phi_sec_arr, phi_ip_arr = calc_secondary_porosity(phit_arr, phis)
+    else:
+        phi_sec_arr = np.full_like(phit_arr, np.nan, dtype=float)
+        phi_ip_arr = np.clip(phit_arr, 0.001, 0.99)
+
+    valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
+    rfn_total_arr = np.full_like(phit_arr, np.nan, dtype=float)
+    rfn_ip_arr = np.full_like(phit_arr, np.nan, dtype=float)
+
+    if valid_mask.any():
+        rfn_total_arr[valid_mask] = calc_rfn(phit_arr[valid_mask], perm_arr[valid_mask])
+        pore_for_rfn = (
+            phi_ip_arr[valid_mask]
+            if use_interparticle_porosity
+            else phit_arr[valid_mask]
+        )
+        rfn_ip_arr[valid_mask] = calc_rfn(pore_for_rfn, perm_arr[valid_mask])
+
+    lucia_rf = rock_typing(
+        rfn_ip_arr, cut_offs=sorted_lucia_cutoffs, higher_is_better=False
+    )
+    vuggy_mask = (
+        valid_mask & np.isfinite(phi_sec_arr) & (phi_sec_arr >= float(phi_sec_cutoff))
+    )
+
+    if primary_rock_flags is not None:
+        prim_arr = np.asarray(primary_rock_flags, dtype=float)
+        overridden_rf = np.where(vuggy_mask & np.isfinite(lucia_rf), lucia_rf, prim_arr)
+        override_count = int(np.sum(vuggy_mask & np.isfinite(lucia_rf)))
+    else:
+        overridden_rf = lucia_rf
+        override_count = int(np.sum(vuggy_mask & np.isfinite(lucia_rf)))
+
+    return {
+        "rfn": rfn_ip_arr,
+        "rfn_total": rfn_total_arr,
+        "phi_sec": phi_sec_arr,
+        "phi_ip": phi_ip_arr,
+        "vuggy_mask": vuggy_mask,
+        "lucia_rock_flags": lucia_rf,
+        "overridden_rock_flags": overridden_rf,
+        "override_count": override_count,
+        "vuggy_count": int(np.sum(vuggy_mask)),
+    }
+
+
+_RT_CLASSIFIER_CACHE: dict | None = None
+_RT_CLASSIFIER_CACHE_KEY: tuple[str, float] | None = None
+_LAST_TRAINED_RT_CLASSIFIER: dict[str, dict] = {}
+
+ALL_RT_CLASSIFIER_FEATURES = (
+    "GR",
+    "NPHI",
+    "RHOB",
+    "LOG_RT",
+    "PEF",
+    "VDL",
+    "PHIT",
+    "VSAND",
+    "VSHALE",
+    "VSILT",
+    "VCLAY",
+)
+
+
+def _normalize_rt_feature_name(name: str) -> str:
+    n = str(name or "").strip().upper()
+    if n in ("RT", "LOG_RT", "LOG10(RT)", "LOG10_RT", "LOG(RT)"):
+        return "LOG_RT"
+    if n in ("PHIE", "PHI", "POROSITY", "POR"):
+        return "PHIT"
+    if n in ("VSND", "V_SAND"):
+        return "VSAND"
+    if n in ("VSH", "VSH_GR", "VSH_DN", "VSH_TS", "V_SHALE"):
+        return "VSHALE"
+    if n in ("VSLT", "V_SILT"):
+        return "VSILT"
+    if n in ("VCL", "V_CLAY"):
+        return "VCLAY"
+    return n
+
+
+def _extract_rt_classifier_features(
+    work: pd.DataFrame,
+    dt_matrix: float = 47.6,
+    dt_fluid: float = 189.0,
+) -> tuple[dict[str, pd.Series], pd.Series]:
+    from quick_pp.machine_learning.feature_engineering import velocity_deviation_log
+
+    def _combined_valid_series(candidates):
+        out = pd.Series(np.nan, index=work.index, dtype=float)
+        for col in candidates:
+            if col in work.columns:
+                s = pd.to_numeric(work[col], errors="coerce").replace(
+                    [np.inf, -np.inf], np.nan
+                )
+                if s.notna().any():
+                    out = out.combine_first(s)
+        return out
+
+    gr_s = _combined_valid_series(("GR", "SGR", "CGR", "GAMMA"))
+    nphi_s = _combined_valid_series(("NPHI", "NPHI_HC", "TNPH", "PHIN"))
+    rhob_s = _combined_valid_series(("RHOB", "RHOB_HC", "RHOZ", "DEN"))
+    rt_s = _combined_valid_series(("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD"))
+    pef_s = _combined_valid_series(("PEF", "PE", "PEFZ", "PEFA"))
+    dtc_s = _combined_valid_series(("DTC", "DT", "AC", "DTCO", "DT4P"))
+    phit_log_s = _combined_valid_series(
+        ("PHIT", "PHIE", "POROSITY", "POR", "PHIT_CONSTRUCTED")
+    )
+    phit_vdl_s = phit_log_s.combine_first(_combined_valid_series(("CPORE",)))
+    vsand_s = _combined_valid_series(("VSAND", "VSND", "V_SAND"))
+    vsilt_s = _combined_valid_series(("VSILT", "VSLT", "V_SILT"))
+    vclay_s = _combined_valid_series(("VCLAY", "VCL", "V_CLAY"))
+    vshale_s = _combined_valid_series(
+        ("VSHALE", "VSH", "VSH_GR", "VSH_DN", "VSH_TS", "V_SHALE")
+    )
+    if vshale_s.isna().all() and vclay_s.notna().any():
+        if vsilt_s.notna().any() and (vsilt_s > 0).any():
+            vshale_s = (vclay_s.fillna(0.0) + vsilt_s.fillna(0.0)).clip(0.0, 1.0)
+            vshale_s.loc[vclay_s.isna() & vsilt_s.isna()] = np.nan
+        else:
+            vshale_s = vclay_s.copy()
+
+    log_rt_s = pd.Series(np.nan, index=work.index, dtype=float)
+    valid_rt = rt_s.notna() & (rt_s > 0)
+    if valid_rt.any():
+        log_rt_s.loc[valid_rt] = np.log10(rt_s.loc[valid_rt].clip(1e-3, 1e5))
+
+    vdl_s = pd.Series(np.nan, index=work.index, dtype=float)
+    if rhob_s.notna().any() or nphi_s.notna().any() or phit_vdl_s.notna().any():
+        try:
+            vdl_calc = velocity_deviation_log(
+                rhob=rhob_s if rhob_s.notna().any() else None,
+                nphi=nphi_s if nphi_s.notna().any() else None,
+                dtc=dtc_s if dtc_s.notna().any() else None,
+                phit=phit_vdl_s if phit_vdl_s.notna().any() else None,
+                dt_matrix=dt_matrix,
+                dt_fluid=dt_fluid,
+            )
+            vdl_s = pd.Series(vdl_calc, index=work.index, dtype=float).replace(
+                [np.inf, -np.inf], np.nan
+            )
+        except Exception:
+            pass
+
+    candidates_map = {
+        "GR": gr_s,
+        "NPHI": nphi_s,
+        "RHOB": rhob_s,
+        "LOG_RT": log_rt_s,
+        "PEF": pef_s,
+        "VDL": vdl_s,
+        "PHIT": phit_log_s,
+        "VSAND": vsand_s,
+        "VSHALE": vshale_s,
+        "VSILT": vsilt_s,
+        "VCLAY": vclay_s,
+    }
+    return candidates_map, vdl_s
+
+
+def compute_rock_flag_comparison(
+    cutoff_flags: list | np.ndarray,
+    ml_flags: list | np.ndarray,
+    labels: list[int] | None = None,
+) -> dict:
+    """Compare cutoff-binned `ROCK_FLAG` against ML-predicted `ROCK_FLAG_ML` across depth samples.
+
+    Args:
+        cutoff_flags (list | np.ndarray): Core/cutoff-derived discrete rock type flags.
+        ml_flags (list | np.ndarray): ML-predicted discrete rock type flags.
+        labels (list[int] | None, optional): Optional explicit list of DRT class labels.
+
+    Returns:
+        dict: Comparison metrics dictionary including `exact_agreement`, `within_one_agreement`,
+        `agreement_pct`, `uncored_filled_by_ml`, and `per_drt` breakdown.
+    """
+    c_list = list(cutoff_flags) if cutoff_flags is not None else []
+    m_list = list(ml_flags) if ml_flags is not None else []
+    n = max(len(c_list), len(m_list))
+
+    c_counts: dict[int, int] = {}
+    m_counts: dict[int, int] = {}
+    h_counts: dict[int, int] = {}
+    overlap_count = 0
+    exact_match = 0
+    within_one = 0
+    all_labels_set: set[int] = set(
+        int(x) for x in (labels or []) if x is not None and int(x) >= 1
+    )
+
+    for i in range(n):
+        cv_raw = c_list[i] if i < len(c_list) else None
+        mv_raw = m_list[i] if i < len(m_list) else None
+        cv = (
+            int(round(float(cv_raw)))
+            if (cv_raw is not None and not pd.isna(cv_raw) and float(cv_raw) >= 1)
+            else None
+        )
+        mv = (
+            int(round(float(mv_raw)))
+            if (mv_raw is not None and not pd.isna(mv_raw) and float(mv_raw) >= 1)
+            else None
+        )
+        hv = cv if cv is not None else mv
+
+        if cv is not None:
+            c_counts[cv] = c_counts.get(cv, 0) + 1
+            all_labels_set.add(cv)
+        if mv is not None:
+            m_counts[mv] = m_counts.get(mv, 0) + 1
+            all_labels_set.add(mv)
+        if hv is not None:
+            h_counts[hv] = h_counts.get(hv, 0) + 1
+
+        if cv is not None and mv is not None:
+            overlap_count += 1
+            if cv == mv:
+                exact_match += 1
+            if abs(cv - mv) <= 1:
+                within_one += 1
+
+    sorted_labels = sorted(all_labels_set)
+    c_total = sum(c_counts.values())
+    m_total = sum(m_counts.values())
+    h_total = sum(h_counts.values())
+
+    per_drt = []
+    for drt in sorted_labels:
+        cc = c_counts.get(drt, 0)
+        mc = m_counts.get(drt, 0)
+        hc = h_counts.get(drt, 0)
+        per_drt.append(
+            {
+                "drt": int(drt),
+                "cutoff_count": int(cc),
+                "cutoff_pct": round((cc / c_total) * 100.0, 1) if c_total > 0 else 0.0,
+                "ml_count": int(mc),
+                "ml_pct": round((mc / m_total) * 100.0, 1) if m_total > 0 else 0.0,
+                "hybrid_count": int(hc),
+                "hybrid_pct": round((hc / h_total) * 100.0, 1) if h_total > 0 else 0.0,
+                "delta_count": int(mc - cc),
+            }
+        )
+
+    uncored_filled = int(max(0, h_total - c_total))
+    exact_ratio = round(exact_match / overlap_count, 4) if overlap_count > 0 else 0.0
+    within_one_ratio = (
+        round(within_one / overlap_count, 4) if overlap_count > 0 else 0.0
+    )
+
+    return {
+        "labels": sorted_labels,
+        "cutoff_total": int(c_total),
+        "ml_total": int(m_total),
+        "hybrid_total": int(h_total),
+        "uncored_filled_by_ml": uncored_filled,
+        "uncored_filled_count": uncored_filled,
+        "overlap_samples": int(overlap_count),
+        "exact_match_samples": int(exact_match),
+        "exact_agreement": exact_ratio,
+        "within_one_agreement": within_one_ratio,
+        "agreement_pct": (
+            round((exact_match / overlap_count) * 100.0, 1)
+            if overlap_count > 0
+            else None
+        ),
+        "within_one_drt_pct": (
+            round((within_one / overlap_count) * 100.0, 1)
+            if overlap_count > 0
+            else None
+        ),
+        "per_drt": per_drt,
+    }
+
+
+def train_and_validate_rock_type_classifier(
+    df: pd.DataFrame,
+    include_pef: bool = True,
+    include_vdl: bool = True,
+    selected_features: list[str] | None = None,
+    model_type: str = "random_forest",
+    test_size: float = 0.25,
+    dt_matrix: float = 47.6,
+    dt_fluid: float = 189.0,
+    random_state: int = 42,
+    cache_key: str = "latest",
+) -> dict:
+    """Train and validate a supervised Rock Type (DRT) classification model on well logs and calculated curves.
+
+    Supports raw logs (`GR`, `NPHI`, `RHOB`, `LOG_RT`, `PEF`) and calculated petrophysical features
+    (`VDL`, `PHIT`, `VSAND`, `VSHALE`, `VSILT`, `VCLAY`), evaluates held-out validation predictions
+    with a Contingency Table (Confusion Matrix), and propagates rock type predictions across all valid rows.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame containing feature curves and target `ROCK_FLAG`.
+        include_pef (bool): Include `PEF` when `selected_features` is None. Defaults to True.
+        include_vdl (bool): Include `VDL` when `selected_features` is None. Defaults to True.
+        selected_features (list[str] | None, optional): Explicit list of feature mnemonics to use.
+        model_type (str): Classifier algorithm (`'random_forest'`, `'extra_trees'`, or `'gradient_boosting'`).
+            Defaults to `'random_forest'`.
+        test_size (float): Validation split fraction in `[0.10, 0.50]`. Defaults to 0.25.
+        dt_matrix (float): Matrix transit time (us/ft) for `VDL` calculation. Defaults to 47.6.
+        dt_fluid (float): Fluid transit time (us/ft) for `VDL` calculation. Defaults to 189.0.
+        random_state (int): Random seed for reproducible train/test split and estimator training. Defaults to 42.
+        cache_key (str): In-memory staging key for subsequent `save_cached_rt_classifier` calls. Defaults to `'latest'`.
+
+    Returns:
+        dict: Dictionary containing `model_type`, `features_used`, `labels`, `contingency_table`,
+        `metrics`, `class_metrics`, `feature_importances`, `predicted_rock_flags`, `predicted_confidence`,
+        `vdl`, and `trained_at`.
+    """
+    from datetime import datetime, timezone
+
+    from sklearn.ensemble import (
+        ExtraTreesClassifier,
+        GradientBoostingClassifier,
+        RandomForestClassifier,
+    )
+    from sklearn.metrics import (
+        accuracy_score,
+        balanced_accuracy_score,
+        cohen_kappa_score,
+        confusion_matrix,
+        f1_score,
+        precision_recall_fscore_support,
+    )
+    from sklearn.model_selection import train_test_split
+
+    work = df.copy()
+    n_rows = len(work)
+    if n_rows == 0:
+        raise ValueError("Empty DataFrame provided for rock type classification.")
+
+    candidates_map, vdl_s = _extract_rt_classifier_features(
+        work, dt_matrix=dt_matrix, dt_fluid=dt_fluid
+    )
+
+    if selected_features is not None and len(selected_features) > 0:
+        requested_norm = []
+        for sf in selected_features:
+            nf = _normalize_rt_feature_name(sf)
+            if nf in candidates_map and nf not in requested_norm:
+                requested_norm.append(nf)
+    else:
+        requested_norm = ["GR", "NPHI", "RHOB", "LOG_RT"]
+        if include_pef:
+            requested_norm.append("PEF")
+        if include_vdl:
+            requested_norm.append("VDL")
+
+    if not requested_norm:
+        raise ValueError(
+            "Please select at least one input feature (GR, NPHI, RHOB, log10(RT), PEF, VDL, PHIT, VSAND, VSHALE, VSILT, or VCLAY)."
+        )
+
+    feat_df = pd.DataFrame(index=work.index)
+    for fname in requested_norm:
+        fseries = candidates_map.get(fname)
+        if fseries is None:
+            continue
+        if fname in ("PEF", "VDL"):
+            min_pts = 5 if selected_features is None else 2
+            if fseries.notna().sum() >= min_pts:
+                feat_df[fname] = fseries
+        elif fseries.notna().any():
+            feat_df[fname] = fseries
+
+    features_used = list(feat_df.columns)
+    if len(features_used) < 1:
+        raise ValueError(
+            f"Selected input features ({', '.join(requested_norm)}) have no valid log values in the active wells."
+        )
+
+    # Require at least half of the selected features (or 1 if 1-2 features selected) to be non-NaN on a row
+    min_valid_feats = (
+        1 if len(features_used) == 1 else max(1, (len(features_used) + 1) // 2)
+    )
+    row_valid_mask = feat_df.notna().sum(axis=1) >= min_valid_feats
+    medians = feat_df.median(numeric_only=True)
+    medians_dict = {
+        str(k): float(v) if (pd.notna(v) and np.isfinite(float(v))) else 0.0
+        for k, v in medians.items()
+    }
+    feat_imputed = feat_df.fillna(medians).fillna(0.0)
+
+    target_s = pd.to_numeric(work.get("ROCK_FLAG"), errors="coerce")
+    train_mask = row_valid_mask & target_s.notna() & (target_s >= 1)
+    if train_mask.sum() < 8:
+        raise ValueError(
+            f"At least 8 cutoff-binned ROCK_FLAG samples with valid logs are required to train classifier (found {int(train_mask.sum())})."
+        )
+
+    X_all_labeled = feat_imputed.loc[train_mask, features_used].to_numpy(dtype=float)
+    y_all_labeled = target_s.loc[train_mask].to_numpy(dtype=int)
+    labels = sorted(int(v) for v in np.unique(y_all_labeled))
+    if len(labels) < 2:
+        raise ValueError(
+            "At least 2 distinct Rock Types (DRTs) are required to train a classification model."
+        )
+
+    val_frac = float(np.clip(test_size, 0.10, 0.50))
+    _, class_counts = np.unique(y_all_labeled, return_counts=True)
+    can_stratify = bool(
+        np.min(class_counts) >= 2 and int(len(y_all_labeled) * val_frac) >= len(labels)
+    )
+
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_all_labeled,
+        y_all_labeled,
+        test_size=val_frac,
+        random_state=random_state,
+        stratify=y_all_labeled if can_stratify else None,
+    )
+
+    m_type = str(model_type or "random_forest").strip().lower()
+
+    def _build_clf():
+        if m_type == "extra_trees":
+            return ExtraTreesClassifier(
+                n_estimators=160,
+                max_depth=16,
+                class_weight="balanced",
+                random_state=random_state,
+                n_jobs=-1,
+            )
+        if m_type == "gradient_boosting":
+            return GradientBoostingClassifier(
+                n_estimators=120,
+                max_depth=4,
+                learning_rate=0.08,
+                random_state=random_state,
+            )
+        return RandomForestClassifier(
+            n_estimators=160,
+            max_depth=16,
+            class_weight="balanced",
+            random_state=random_state,
+            n_jobs=-1,
+        )
+
+    clf_val = _build_clf()
+    clf_val.fit(X_train, y_train)
+    y_val_pred = clf_val.predict(X_val)
+
+    cm_counts = confusion_matrix(y_val, y_val_pred, labels=labels)
+    row_sums = np.maximum(cm_counts.sum(axis=1, keepdims=True), 1)
+    cm_norm = cm_counts.astype(float) / row_sums
+
+    acc = float(accuracy_score(y_val, y_val_pred))
+    bal_acc = float(balanced_accuracy_score(y_val, y_val_pred))
+    f1_w = float(f1_score(y_val, y_val_pred, average="weighted", zero_division=0))
+    f1_m = float(f1_score(y_val, y_val_pred, average="macro", zero_division=0))
+    kappa = (
+        float(cohen_kappa_score(y_val, y_val_pred))
+        if np.unique(y_val).size > 1
+        else 0.0
+    )
+
+    prec_arr, rec_arr, f1_arr, sup_arr = precision_recall_fscore_support(
+        y_val, y_val_pred, labels=labels, zero_division=0
+    )
+    class_metrics = [
+        {
+            "drt": int(lbl),
+            "precision": round(float(prec_arr[i]), 4),
+            "recall": round(float(rec_arr[i]), 4),
+            "f1": round(float(f1_arr[i]), 4),
+            "support": int(sup_arr[i]),
+        }
+        for i, lbl in enumerate(labels)
+    ]
+
+    # Refit on all labeled data to propagate predictions across the dataset
+    clf_full = _build_clf()
+    clf_full.fit(X_all_labeled, y_all_labeled)
+
+    importances_raw = getattr(
+        clf_full,
+        "feature_importances_",
+        np.ones(len(features_used)) / len(features_used),
+    )
+    feature_importances = sorted(
+        [
+            {"feature": fname, "importance": round(float(imp), 4)}
+            for fname, imp in zip(features_used, importances_raw)
+        ],
+        key=lambda d: d["importance"],
+        reverse=True,
+    )
+
+    pred_flags: list = [None] * n_rows
+    pred_conf: list = [None] * n_rows
+    valid_indices = np.where(row_valid_mask.to_numpy(dtype=bool))[0]
+    if valid_indices.size > 0:
+        X_pred = feat_imputed.iloc[valid_indices][features_used].to_numpy(dtype=float)
+        y_pred_all = clf_full.predict(X_pred)
+        proba_all = clf_full.predict_proba(X_pred)
+        max_proba = np.max(proba_all, axis=1)
+        for pos, row_idx in enumerate(valid_indices):
+            pred_flags[int(row_idx)] = int(y_pred_all[pos])
+            pred_conf[int(row_idx)] = round(float(max_proba[pos]), 4)
+
+    vdl_list = [
+        round(float(v), 2) if pd.notna(v) and np.isfinite(v) else None for v in vdl_s
+    ]
+
+    contingency_table = {
+        "labels": labels,
+        "counts": [[int(c) for c in row] for row in cm_counts],
+        "norm_recall": [[round(float(v), 4) for v in row] for row in cm_norm],
+    }
+    metrics = {
+        "accuracy": round(acc, 4),
+        "balanced_accuracy": round(bal_acc, 4),
+        "f1_weighted": round(f1_w, 4),
+        "f1_macro": round(f1_m, 4),
+        "cohen_kappa": round(kappa, 4),
+        "train_samples": int(len(y_train)),
+        "val_samples": int(len(y_val)),
+        "labeled_samples": int(len(y_all_labeled)),
+        "total_predicted": int(valid_indices.size),
+    }
+    trained_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    wells_used = (
+        sorted(work.loc[train_mask, "WELL_NAME"].dropna().astype(str).unique().tolist())
+        if "WELL_NAME" in work.columns
+        else []
+    )
+
+    cached_bundle = {
+        "estimator": clf_full,
+        "medians": medians_dict,
+        "model_type": m_type,
+        "features_used": features_used,
+        "labels": labels,
+        "contingency_table": contingency_table,
+        "metrics": metrics,
+        "class_metrics": class_metrics,
+        "feature_importances": feature_importances,
+        "trained_at": trained_at,
+        "wells_used": wells_used,
+        "test_size": val_frac,
+    }
+    _LAST_TRAINED_RT_CLASSIFIER[str(cache_key)] = cached_bundle
+    _LAST_TRAINED_RT_CLASSIFIER["latest"] = cached_bundle
+    _persist_rt_staging_cache(str(cache_key), cached_bundle)
+
+    return {
+        "model_type": m_type,
+        "features_used": features_used,
+        "labels": labels,
+        "contingency_table": contingency_table,
+        "metrics": metrics,
+        "class_metrics": class_metrics,
+        "feature_importances": feature_importances,
+        "predicted_rock_flags": pred_flags,
+        "predicted_confidence": pred_conf,
+        "vdl": vdl_list,
+        "trained_at": trained_at,
+    }
+
+
+def _resolve_rt_classifiers_path(model_path=None):
+    import os
+    from pathlib import Path
+
+    env_default = Path(
+        os.getenv("QPP_RT_CLASSIFIERS_PATH", "data/rt_classifiers.joblib")
+    )
+    candidates = (
+        [Path(model_path)]
+        if model_path is not None
+        else [
+            env_default,
+            Path("data/rt_classifiers.joblib"),
+            Path("/code/data/seed/rt_classifiers.joblib"),
+        ]
+    )
+    expected = candidates[0]
+    for cand in candidates:
+        if cand.exists() and cand.is_file():
+            return cand, expected
+    return None, expected
+
+
+def _persist_rt_staging_cache(
+    cache_key: str, bundle_entry: dict, model_path=None
+) -> None:
+    try:
+        import joblib
+
+        _, expected = _resolve_rt_classifiers_path(model_path)
+        staging_path = expected.parent / ".rt_classifiers_staging.joblib"
+        staging_path.parent.mkdir(parents=True, exist_ok=True)
+        staging_data = {}
+        if staging_path.exists():
+            try:
+                loaded = joblib.load(staging_path)
+                if isinstance(loaded, dict):
+                    staging_data = loaded
+            except Exception:
+                staging_data = {}
+        staging_data[cache_key] = bundle_entry
+        staging_data["latest"] = bundle_entry
+        joblib.dump(staging_data, staging_path)
+    except Exception as e:
+        logger.warning(f"Could not write RT classifier staging cache: {e}")
+
+
+def load_saved_rt_classifiers(model_path=None) -> dict:
+    """Load persisted Rock Type classifier bundles from disk (`data/rt_classifiers.joblib`).
+
+    Args:
+        model_path (str | Path | None, optional): Optional custom path to the `.joblib` bundle file.
+
+    Returns:
+        dict: Mapping of `model_key` to saved classifier bundle dictionaries.
+    """
+    global _RT_CLASSIFIER_CACHE, _RT_CLASSIFIER_CACHE_KEY
+    resolved_path, _ = _resolve_rt_classifiers_path(model_path)
+    if resolved_path is None:
+        return {}
+    cache_key = (str(resolved_path.resolve()), resolved_path.stat().st_mtime)
+    if (
+        model_path is None
+        and _RT_CLASSIFIER_CACHE is not None
+        and _RT_CLASSIFIER_CACHE_KEY == cache_key
+    ):
+        return _RT_CLASSIFIER_CACHE
+    import joblib
+
+    try:
+        bundle = joblib.load(resolved_path)
+        if not isinstance(bundle, dict):
+            return {}
+    except Exception as e:
+        logger.warning(f"Failed to load RT classifiers from {resolved_path}: {e}")
+        return {}
+    if model_path is None:
+        _RT_CLASSIFIER_CACHE = bundle
+        _RT_CLASSIFIER_CACHE_KEY = cache_key
+    return bundle
+
+
+def get_saved_rt_classifiers_status(model_path=None) -> dict:
+    """Return metadata, performance metrics, and Contingency Matrices for all saved Rock Type classifiers.
+
+    Args:
+        model_path (str | Path | None, optional): Optional custom path to the `.joblib` bundle file.
+
+    Returns:
+        dict: Status dictionary with `available`, `model_path`, `expected_path`, and `models` list.
+    """
+    resolved_path, expected_path = _resolve_rt_classifiers_path(model_path)
+    bundle = load_saved_rt_classifiers(model_path)
+    models_list = []
+    for k, entry in bundle.items():
+        if not isinstance(entry, dict):
+            continue
+        models_list.append(
+            {
+                "model_key": str(k),
+                "model_name": str(entry.get("model_name") or k),
+                "model_type": str(entry.get("model_type") or "random_forest"),
+                "drt_method": str(entry.get("drt_method") or "fzi"),
+                "cutoffs": list(entry.get("cutoffs") or []),
+                "features_used": list(entry.get("features_used") or []),
+                "labels": list(entry.get("labels") or []),
+                "metrics": dict(entry.get("metrics") or {}),
+                "contingency_table": dict(entry.get("contingency_table") or {}),
+                "class_metrics": list(entry.get("class_metrics") or []),
+                "feature_importances": list(entry.get("feature_importances") or []),
+                "trained_at": entry.get("trained_at"),
+                "source_project": entry.get("source_project"),
+                "wells_used": list(entry.get("wells_used") or []),
+            }
+        )
+    return {
+        "available": len(models_list) > 0,
+        "model_path": str(resolved_path.as_posix()) if resolved_path else None,
+        "expected_path": str(expected_path.as_posix()),
+        "models": models_list,
+    }
+
+
+def save_cached_rt_classifier(
+    model_key: str,
+    model_name: str | None = None,
+    source_project: str | None = None,
+    drt_method: str | None = None,
+    cutoffs: list[float] | None = None,
+    cache_key: str = "latest",
+    extra_meta: dict | None = None,
+    model_path=None,
+) -> dict:
+    """Persist the most recently trained Rock Type classifier together with its performance metrics and Contingency Matrix.
+
+    Args:
+        model_key (str): Unique identifier key for the saved classifier.
+        model_name (str | None, optional): Human-readable display name.
+        source_project (str | None, optional): Name of the project where the classifier was trained.
+        drt_method (str | None, optional): Underlying rock typing method (`'fzi'`, `'r35'`, `'rfn'`, `'ghe'`).
+        cutoffs (list[float] | None, optional): Cutoff thresholds used to define the DRT classes.
+        cache_key (str): Staging cache key from `train_and_validate_rock_type_classifier`. Defaults to `'latest'`.
+        extra_meta (dict | None, optional): Additional metadata fields to store alongside the model.
+        model_path (str | Path | None, optional): Optional custom `.joblib` file path.
+
+    Returns:
+        dict: Confirmation dictionary containing `saved`, `model_key`, `model_name`, `model_path`, and `models_status`.
+    """
+    global _RT_CLASSIFIER_CACHE, _RT_CLASSIFIER_CACHE_KEY
+    import joblib
+
+    entry = _LAST_TRAINED_RT_CLASSIFIER.get(
+        str(cache_key)
+    ) or _LAST_TRAINED_RT_CLASSIFIER.get("latest")
+    if not entry:
+        _, expected = _resolve_rt_classifiers_path(model_path)
+        staging_path = expected.parent / ".rt_classifiers_staging.joblib"
+        if staging_path.exists():
+            try:
+                loaded = joblib.load(staging_path)
+                if isinstance(loaded, dict):
+                    entry = loaded.get(str(cache_key)) or loaded.get("latest")
+            except Exception:
+                entry = None
+    if not entry or "estimator" not in entry:
+        raise ValueError(
+            "No trained Rock Type classifier in memory to save. Please click 'Train & Validate' first."
+        )
+
+    raw_key = (model_key or model_name or "rt_model").strip().lower()
+    clean_key = (
+        "".join(
+            ch if (ch.isalnum() or ch in ("_", "-")) else "_" for ch in raw_key
+        ).strip("_")
+        or "rt_model"
+    )
+    display_name = (
+        model_name.strip()
+        if (model_name and model_name.strip())
+        else clean_key.replace("_", " ").title()
+    )
+
+    resolved_path, expected_path = _resolve_rt_classifiers_path(model_path)
+    target_path = resolved_path or expected_path
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    meta = dict(extra_meta or {})
+    bundle = dict(load_saved_rt_classifiers(model_path))
+    saved_entry = {
+        **entry,
+        **meta,
+        "model_key": clean_key,
+        "model_name": display_name,
+        "source_project": source_project
+        or meta.get("source_project")
+        or entry.get("source_project")
+        or "Workspace",
+        "drt_method": drt_method
+        or meta.get("drt_method")
+        or entry.get("drt_method")
+        or "fzi",
+        "cutoffs": (
+            list(cutoffs)
+            if cutoffs is not None
+            else list(meta.get("cutoffs") or entry.get("cutoffs") or [])
+        ),
+    }
+    bundle[clean_key] = saved_entry
+    joblib.dump(bundle, target_path)
+    _RT_CLASSIFIER_CACHE = None
+    _RT_CLASSIFIER_CACHE_KEY = None
+
+    return {
+        "saved": True,
+        "model_key": clean_key,
+        "model_name": display_name,
+        "model_path": str(target_path.as_posix()),
+        "models_status": get_saved_rt_classifiers_status(model_path),
+    }
+
+
+def delete_saved_rt_classifier(model_key: str, model_path=None) -> bool:
+    """Remove a saved Rock Type classifier from disk.
+
+    Args:
+        model_key (str): Identifier key of the saved classifier to delete.
+        model_path (str | Path | None, optional): Optional custom `.joblib` file path.
+
+    Returns:
+        bool: True if the model was found and deleted, False otherwise.
+    """
+    global _RT_CLASSIFIER_CACHE, _RT_CLASSIFIER_CACHE_KEY
+    import joblib
+
+    resolved_path, _ = _resolve_rt_classifiers_path(model_path)
+    if resolved_path is None or not resolved_path.exists():
+        return False
+    bundle = dict(load_saved_rt_classifiers(model_path))
+    if model_key not in bundle:
+        return False
+    del bundle[model_key]
+    joblib.dump(bundle, resolved_path)
+    _RT_CLASSIFIER_CACHE = None
+    _RT_CLASSIFIER_CACHE_KEY = None
+    return True
+
+
+def predict_with_saved_rt_classifier(
+    df: pd.DataFrame,
+    model_key: str,
+    dt_matrix: float = 47.6,
+    dt_fluid: float = 189.0,
+    model_path=None,
+) -> dict:
+    """Run inference on `df` using a previously saved Rock Type classifier without retraining.
+
+    Args:
+        df (pd.DataFrame): Input well log DataFrame containing the required feature curves.
+        model_key (str): Key of the saved classifier in `data/rt_classifiers.joblib`.
+        dt_matrix (float): Matrix transit time (us/ft) for `VDL` calculation. Defaults to 47.6.
+        dt_fluid (float): Fluid transit time (us/ft) for `VDL` calculation. Defaults to 189.0.
+        model_path (str | Path | None, optional): Optional custom `.joblib` file path.
+
+    Returns:
+        dict: Prediction result dictionary containing `predicted_rock_flags`, `predicted_confidence`,
+        `contingency_table`, `metrics`, `class_metrics`, and `feature_importances`.
+    """
+    bundle = load_saved_rt_classifiers(model_path)
+    if model_key not in bundle:
+        raise ValueError(f"Saved Rock Type classifier '{model_key}' not found.")
+    entry = bundle[model_key]
+    clf = entry.get("estimator")
+    if clf is None:
+        raise ValueError(
+            f"Saved model '{model_key}' does not contain a valid estimator."
+        )
+
+    work = df.copy()
+    n_rows = len(work)
+    candidates_map, vdl_s = _extract_rt_classifier_features(
+        work, dt_matrix=dt_matrix, dt_fluid=dt_fluid
+    )
+    features_used = list(entry.get("features_used") or [])
+    if not features_used:
+        raise ValueError(f"Saved model '{model_key}' has no recorded features_used.")
+
+    feat_df = pd.DataFrame(index=work.index)
+    saved_medians = dict(entry.get("medians") or {})
+    for fname in features_used:
+        s = candidates_map.get(fname)
+        feat_df[fname] = (
+            s if s is not None else pd.Series(np.nan, index=work.index, dtype=float)
+        )
+
+    min_valid_feats = (
+        1 if len(features_used) == 1 else max(1, (len(features_used) + 1) // 2)
+    )
+    row_valid_mask = feat_df.notna().sum(axis=1) >= min_valid_feats
+
+    feat_imputed = feat_df.copy()
+    for fname in features_used:
+        fallback_med = saved_medians.get(fname)
+        if fallback_med is None or not np.isfinite(float(fallback_med)):
+            col_med = feat_df[fname].median()
+            fallback_med = float(col_med) if pd.notna(col_med) else 0.0
+        feat_imputed[fname] = (
+            feat_imputed[fname].fillna(float(fallback_med)).fillna(0.0)
+        )
+
+    pred_flags: list = [None] * n_rows
+    pred_conf: list = [None] * n_rows
+    valid_indices = np.where(row_valid_mask.to_numpy(dtype=bool))[0]
+    if valid_indices.size > 0:
+        X_pred = feat_imputed.iloc[valid_indices][features_used].to_numpy(dtype=float)
+        y_pred_all = clf.predict(X_pred)
+        if hasattr(clf, "predict_proba"):
+            proba_all = clf.predict_proba(X_pred)
+            max_proba = np.max(proba_all, axis=1)
+        else:
+            max_proba = np.ones(len(y_pred_all), dtype=float)
+        for pos, row_idx in enumerate(valid_indices):
+            pred_flags[int(row_idx)] = int(y_pred_all[pos])
+            pred_conf[int(row_idx)] = round(float(max_proba[pos]), 4)
+
+    vdl_list = [
+        round(float(v), 2) if pd.notna(v) and np.isfinite(v) else None for v in vdl_s
+    ]
+
+    metrics = dict(entry.get("metrics") or {})
+    metrics["total_predicted"] = int(valid_indices.size)
+
+    return {
+        "trained": False,
+        "saved_model_key": str(model_key),
+        "saved_model_name": str(entry.get("model_name") or model_key),
+        "model_type": str(entry.get("model_type") or "random_forest"),
+        "features_used": features_used,
+        "labels": list(entry.get("labels") or []),
+        "contingency_table": dict(entry.get("contingency_table") or {}),
+        "metrics": metrics,
+        "class_metrics": list(entry.get("class_metrics") or []),
+        "feature_importances": list(entry.get("feature_importances") or []),
+        "predicted_rock_flags": pred_flags,
+        "predicted_confidence": pred_conf,
+        "vdl": vdl_list,
+        "trained_at": entry.get("trained_at"),
+    }

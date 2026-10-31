@@ -1,0 +1,61 @@
+{% set is_single_well = (report_type == 'SINGLE_WELL_CPI') %}
+{% if is_single_well %}
+# 2. Borehole Environment & Log Curve Quality Control
+
+{% if include_ai_commentary and ai_commentary.qaqc_narrative %}
+{{ ai_commentary.qaqc_narrative }}
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+### 2.1 Borehole Washout Flagging & Environmental Conditioning Criteria
+
+* **Bad-Hole Flagging Criteria (`BADHOLE`):** Caliper washout $> {{ qaqc_params.caliper_limit }}$ in (inches) above bit size (`{{ qaqc_params.bitsize_in }} in`), density pad-standoff correction $\Delta\rho > {{ qaqc_params.drho_limit }}$ g/cc, or rugose bulk density $\rho_b < {{ qaqc_params.rhob_min }}$ g/cc.
+* **Bad-Hole Mitigation Mode:** `{{ qaqc_params.badhole_treatment }}` (automatic fallback in rugose washouts to prevent optimistic density-porosity spikes).
+* **Light-Hydrocarbon Invasion Correction:** Gaymard-Poupon neutron-density response correction applied where $\rho_{hc} = {{ qaqc_params.rho_hc }}$ g/cc and $HI_{hc} = {{ qaqc_params.hi_hc }}$.
+
+### 2.2 Well Curve Conditioning & Washout Audit Summary
+
+| Well Name | Evaluated Samples | Bad-Hole Samples | Bad-Hole (%) | HC-Corrected (%) | Tight / Coal Flags | GR P50 (gAPI) | RHOB P50 (g/cc) | QC Status |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for q in qaqc_table %}
+| **{{ q.well_name }}** | {{ q.samples }} | {{ q.badhole_count }} | {{ "%.1f"|format(q.badhole_pct) }}% | {{ "%.1f"|format(q.hc_pct) }}% | {{ q.tight_count }} / {{ q.coal_count }} | {{ "%.1f"|format(q.gr_p50) }} | {{ "%.3f"|format(q.rhob_p50) }} | **{{ q.status }}** |
+{% endfor %}
+
+{% if assets.norm_plot %}
+
+![Figure 2.1: Well Curve Distributions & Borehole Washout Quality Audit]({{ assets.norm_plot }})
+{% endif %}
+{% else %}
+# 3. Data Quality Control (QA/QC) & Conditioning
+
+{% if include_ai_commentary and ai_commentary.qaqc_narrative %}
+{{ ai_commentary.qaqc_narrative }}
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+### 3.1 Borehole Environment, Bad-Hole Flagging & Normalization Criteria
+
+* **Bad-Hole Criteria Applied:** Caliper washout $> {{ qaqc_params.caliper_limit }}$ in (inches) above bit size (`{{ qaqc_params.bitsize_in }} in`), Density correction $\Delta\rho > {{ qaqc_params.drho_limit }}$ g/cc, or density washout $\rho_b < {{ qaqc_params.rhob_min }}$ g/cc.
+* **Bad-Hole Mitigation Mode:** `{{ qaqc_params.badhole_treatment }}` (shale/porosity fallback in rugose washouts to prevent optimistic density porosity spikes).
+* **Hydrocarbon Light-Fluid Correction:** Gaymard-Poupon crossplot rotation applied where $\rho_{hc} = {{ qaqc_params.rho_hc }}$ g/cc and $HI_{hc} = {{ qaqc_params.hi_hc }}$.
+* **Normalization Method:** {{ qaqc_params.norm_method }} across target reservoir zones.
+
+### 3.2 Well-by-Well QA/QC & Conditioning Summary
+
+| Well Name | Evaluated Samples | Bad-Hole Samples | Bad-Hole (%) | HC-Corrected (%) | Tight / Coal Flags | GR P50 (gAPI) | RHOB P50 (g/cc) | QC Status |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for q in qaqc_table %}
+| **{{ q.well_name }}** | {{ q.samples }} | {{ q.badhole_count }} | {{ "%.1f"|format(q.badhole_pct) }}% | {{ "%.1f"|format(q.hc_pct) }}% | {{ q.tight_count }} / {{ q.coal_count }} | {{ "%.1f"|format(q.gr_p50) }} | {{ "%.3f"|format(q.rhob_p50) }} | **{{ q.status }}** |
+{% endfor %}
+
+{% if assets.norm_plot %}
+
+![Figure 3.1: Curve Distribution Pre- and Post-Normalization & Bad-Hole Audit]({{ assets.norm_plot }})
+{% endif %}
+{% endif %}

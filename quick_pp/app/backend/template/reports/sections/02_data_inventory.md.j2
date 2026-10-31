@@ -1,0 +1,24 @@
+# 2. Well Inventory & Data Availability
+
+A total of **{{ wells|length }}** well(s) were evaluated in this Field Development Study (`{{ project_name }}`), comprising **{{ "%.1f"|format(total_logged_thickness) }} m** of logged borehole section across **{{ all_zones|length }}** stratigraphic zone(s) (Target Reservoir Zones: `{{ target_zones|join(', ') }}`). Across the field dataset, **{{ poro_params.total_core_count }}** total Routine Core Analysis (RCA) plugs are loaded in the database, of which **{{ poro_params.core_count }}** valid depth-matched plugs reside within the target reservoir zones and have non-null overlapping log porosity.
+
+{% if include_ai_commentary and ai_commentary.inventory_narrative %}
+{{ ai_commentary.inventory_narrative }}
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+### 2.1 Multi-Well Wireline, Deviation Survey, Core & Pressure Inventory
+
+| Well Name | UWI | KB (m) | TVD Survey | Top–Bottom (m MD) | Logged (m) | Raw Curves Available | Core (RCA/SCAL) | Pressure Data | Tops |
+| :--- | :--- | :---: | :---: | :---: | :---: | :--- | :---: | :---: | :---: |
+{% for w in wells %}
+| **{{ w.name }}** | {{ w.uwi }} | {{ w.kb }} | {{ "✓" if w.has_tvd else "Missing" }} | `{{ "%.1f"|format(w.min_depth) }}–{{ "%.1f"|format(w.max_depth) }}` | {{ "%.1f"|format(w.td) }} | `{{ w.curves|join(', ') }}` | {{ w.has_core }} | {{ w.has_pressure }} | {{ w.formation_top_count }} |
+{% endfor %}
+
+{% if assets.inventory_heatmap %}
+
+![Figure 2.1: Multi-Well Data Inventory Matrix]({{ assets.inventory_heatmap }})
+{% endif %}

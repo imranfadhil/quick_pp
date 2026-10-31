@@ -71,4 +71,4 @@ if [ -n "$DOMAIN" ]; then
 fi
 
 echo '--- applied ---'
-grep -E '^(POSTGRES_USER|POSTGRES_DB|WEB_PORT|VITE_BACKEND_URL|PUBLIC_URL)=' .env || true
+grep -E '^(POSTGRES_USER|POSTGRES_DB|WEB_PORT|FRONTEND_MODE|VITE_BACKEND_URL|PUBLIC_URL)=' .env || true

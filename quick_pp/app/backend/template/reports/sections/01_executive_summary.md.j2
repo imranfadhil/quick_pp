@@ -1,0 +1,50 @@
+{% set is_single_well = (report_type == 'SINGLE_WELL_CPI') %}
+{% set focal_well = (well_names[0] if well_names else 'Active Well') %}
+{% if is_single_well %}
+# 1. Well Petrophysical Evaluation Summary — `{{ focal_well }}`
+
+{% if include_ai_commentary and ai_commentary.executive_summary %}
+{{ ai_commentary.executive_summary }}
+{% else %}
+This Single-Well Computer-Processed Interpretation (CPI) & Formation Evaluation Dossier documents the borehole quality control, shale/mineralogy volume ($V_{sh}$), total and effective porosity ($\phi_t, \phi_e$), water saturation ($S_w$), fluid contacts, and decoupled **Net Reservoir** and **Net Pay** summation for well **`{{ focal_well }}`** in **{{ project_name }}**.
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+### Table 1.1: Zonal Net Reservoir & Net Pay Summary — Well `{{ focal_well }}`
+
+| Zone | Interval (m MD) | Interval (m TVDss) | Gross (m) | Net Res (m) | $NTG_{res}$ | $\bar{V}_{sh,res}$ | $\bar{\phi}_{e,res}$ | $K_{geom,res}$ (mD) | Net Pay (m) | $NTG_{pay}$ | $\bar{\phi}_{e,pay}$ | $\bar{S}_{w,pay}$ | $HCPT$ (m) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% if well_zonal_summary %}
+{% for r in well_zonal_summary %}
+| **{{ r.zone }}** | `{{ "%.1f"|format(r.top) }}–{{ "%.1f"|format(r.bottom) }}` | {{ ("`" ~ "%.1f"|format(r.top_tvdss) ~ "–" ~ "%.1f"|format(r.bottom_tvdss) ~ "`") if r.top_tvdss is not none and r.bottom_tvdss is not none else "No TVD" }} | {{ "%.1f"|format(r.gross) }} | {{ "%.1f"|format(r.net_res) }} | {{ "%.2f"|format(r.ntg_res) }} | {{ "%.3f"|format(r.vsh_res) if r.net_res > 0 else "—" }} | {{ "%.3f"|format(r.phie_res) if r.net_res > 0 else "—" }} | {{ "%.1f"|format(r.perm_geom_res) if r.net_res > 0 else "—" }} | {{ "%.1f"|format(r.net_pay) }} | {{ "%.2f"|format(r.ntg) }} | {{ "%.3f"|format(r.phie) if r.net_pay > 0 else "—" }} | {{ "%.3f"|format(r.sw) if r.net_pay > 0 else "—" }} | **{{ "%.2f"|format(r.hcpt) }}** |
+{% endfor %}
+{% else %}
+{% for z in zonal_summary %}
+| **{{ z.zone }}** | Full Interval | — | {{ "%.1f"|format(z.gross) }} | {{ "%.1f"|format(z.net_res) }} | {{ "%.2f"|format(z.ntg_res) }} | {{ "%.3f"|format(z.vsh_res) if z.net_res > 0 else "—" }} | {{ "%.3f"|format(z.phie_res) if z.net_res > 0 else "—" }} | {{ "%.1f"|format(z.perm_geom_res) if z.net_res > 0 else "—" }} | {{ "%.1f"|format(z.net_pay) }} | {{ "%.2f"|format(z.ntg) }} | {{ "%.3f"|format(z.phie) if z.net_pay > 0 else "—" }} | {{ "%.3f"|format(z.sw) if z.net_pay > 0 else "—" }} | **{{ "%.2f"|format(z.hcpt) }}** |
+{% endfor %}
+{% endif %}
+
+{% else %}
+# 1. Executive Summary
+
+{% if include_ai_commentary and ai_commentary.executive_summary %}
+{{ ai_commentary.executive_summary }}
+{% else %}
+This technical petrophysical evaluation report documents the deterministic and probabilistic log, core, and special core analysis (SCAL) interpretation for **{{ project_name }}** across **{{ wells|length }}** evaluated well(s) (`{{ well_names|join(', ') }}`) targeting **{{ target_zones|join(', ') }}**, prepared for Static Geological Modeling (Petrel/RMS) and Dynamic Reservoir Simulation (Eclipse/Intersect) handover.
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+### Table 1.1: Field-Wide Zonal Net Reservoir & Net Pay Summary (Thickness & Pore-Volume Weighted)
+
+| Zone | Wells | Mean Gross (m) | Mean Net Res (m) | $NTG_{res}$ | $\bar{V}_{sh,res}$ | $\bar{\phi}_{e,res}$ | $K_{geom,res}$ (mD) | Mean Net Pay (m) | $NTG_{pay}$ | $\bar{\phi}_{e,pay}$ | $\bar{S}_{w,pay}$ | Mean $HCPT$ (m) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for z in zonal_summary %}
+| **{{ z.zone }}** | {{ z.well_count }} | {{ "%.1f"|format(z.gross) }} | {{ "%.1f"|format(z.net_res) }} | {{ "%.2f"|format(z.ntg_res) }} | {{ "%.3f"|format(z.vsh_res) if z.net_res > 0 else "—" }} | {{ "%.3f"|format(z.phie_res) if z.net_res > 0 else "—" }} | {{ "%.1f"|format(z.perm_geom_res) if z.net_res > 0 else "—" }} | {{ "%.1f"|format(z.net_pay) }} | {{ "%.2f"|format(z.ntg) }} | {{ "%.3f"|format(z.phie) if z.net_pay > 0 else "—" }} | {{ "%.3f"|format(z.sw) if z.net_pay > 0 else "—" }} | **{{ "%.2f"|format(z.hcpt) }}** |
+{% endfor %}
+{% endif %}
