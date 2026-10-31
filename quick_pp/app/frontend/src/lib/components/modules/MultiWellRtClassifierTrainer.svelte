@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { API_BASE, api, authHeaders } from '$lib/api/client';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import {
 		projectData,
 		type DrtFeatureKey,
@@ -245,6 +246,8 @@
 				projectData.drtSelectedSavedModelKey = savedPayload.model_key;
 			}
 			customModelName = '';
+			// Persist classifier settings keyed by the active zone selection
+			await projectData.persistProjectParams([], ['rt-classifier']);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Failed to save classifier model';
 		} finally {
@@ -335,6 +338,7 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['rt-classifier']} />
 		<ParameterSection
 			title="Target DRT Labels & Log Features"
 			badge="{projectData.drtDataSource === 'core' ? 'Core (CPORE & CPERM)' : 'Log (PHIT & PERM)'} · {projectData.drtSelectedFeatures.length}/6 Inputs"

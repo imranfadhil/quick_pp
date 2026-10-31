@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { replaceState } from '$app/navigation';
 	import { browser } from '$app/environment';
 	import { PaneGroup, Pane, PaneResizer } from 'paneforge';
@@ -37,6 +37,41 @@
 	} from '$lib/state/workbench.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
+	import {
+		currentSelection,
+		moduleParams,
+		selectionKey
+	} from '$lib/state/moduleParams.svelte';
+	import { projectParams, zoneSelectionKey } from '$lib/state/projectParams.svelte';
+
+	// Auto-restore saved single-well module parameters on exact zone / depth-interval match.
+	// Re-applies only when the loaded well, the selection key, or the scope changes (not on every
+	// config update) so unsaved edits are not overwritten by unrelated config writes.
+	let lastParamsRestoreTrigger = '';
+	$effect(() => {
+		const gen = wellData.wellLoadGeneration;
+		const loading = wellData.isLoading;
+		const scope = workbench.scope;
+		const key = selectionKey(currentSelection());
+		if (loading || gen === 0 || scope !== 'single-well' || !workbench.wellId) return;
+		const trigger = `${workbench.projectId}|${workbench.wellId}|${gen}|${key}`;
+		if (trigger === lastParamsRestoreTrigger) return;
+		lastParamsRestoreTrigger = trigger;
+		untrack(() => moduleParams.applyForCurrentSelection(wellData.config));
+	});
+
+	// Auto-restore saved multi-well (project-level) parameters on exact zone-selection match.
+	let lastProjectParamsRestoreTrigger = '';
+	$effect(() => {
+		const loadGen = projectParams.loadGeneration;
+		const scope = workbench.scope;
+		const key = zoneSelectionKey(workbench.selectedZones);
+		if (loadGen === 0 || scope !== 'multi-well' || !workbench.projectId) return;
+		const trigger = `${workbench.projectId}|${loadGen}|${key}`;
+		if (trigger === lastProjectParamsRestoreTrigger) return;
+		lastProjectParamsRestoreTrigger = trigger;
+		untrack(() => projectData.applyProjectParamsForCurrentSelection());
+	});
 
 	let initialized = $state(false);
 	let isReportMode = $derived(

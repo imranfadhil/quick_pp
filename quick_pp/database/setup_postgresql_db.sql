@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS "projects" (
     "description" TEXT,
     "created_by" INTEGER REFERENCES "users"("user_id") ON DELETE SET NULL,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "config_data" JSONB, -- Project-level settings (e.g. multi-well module parameters)
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

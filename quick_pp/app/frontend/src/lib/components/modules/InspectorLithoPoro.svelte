@@ -3,6 +3,7 @@
 	import { authState } from '$lib/state/auth.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
@@ -516,6 +517,7 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['litho-poro']} />
 		<ParameterSection title="Lithology & Porosity Model" badge={workbench.lithoParams.model.toUpperCase()}>
 			<div class="grid grid-cols-[1fr_118px] items-center gap-x-2 py-0.5">
 				<span class="text-xs font-medium text-[var(--text-primary)]">Lithology Model</span>

@@ -2,6 +2,14 @@ import { api, postJson, saveAncillaryItems } from '$lib/api/client';
 import type { CoreComparisonMetrics, CurveSummaryStats } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { workbench } from './workbench.svelte';
+import {
+	isParamModuleKey,
+	moduleParams,
+	snapshotModuleParams,
+	type ModuleParamsMap,
+	type ModuleParamsSnapshot,
+	type ParamModuleKey
+} from './moduleParams.svelte';
 
 export interface FormationTop {
 	id: string;
@@ -273,6 +281,8 @@ class WellDataState {
 
 	// Unsaved computed curve mnemonics per single-well module (cleared on well load or after saving that module)
 	pendingModuleCurves = $state<Record<string, string[]>>({});
+	/** Parameter + selection snapshots captured when each module was last computed (persisted on Save). */
+	pendingParamSnapshots: Partial<Record<ParamModuleKey, ModuleParamsSnapshot>> = {};
 
 	// Fine-grained curve selectors: Svelte 5 checks === reference equality on $derived values,
 	// so updating CPORE/CPERM or VSH_GR/VSH_DN in this.curves will NOT invalidate downstream
@@ -1318,6 +1328,8 @@ class WellDataState {
 				...(data.config || {})
 			};
 			this.pendingModuleCurves = {};
+			this.pendingParamSnapshots = {};
+			moduleParams.reset();
 			workbench.brushedDepthIndices = new Set();
 			workbench.tsParams.enabled = false;
 
@@ -1640,6 +1652,9 @@ class WellDataState {
 					Boolean(this.curves[c])
 			);
 		if (validCols.length === 0) return;
+		if (isParamModuleKey(moduleKey)) {
+			this.pendingParamSnapshots[moduleKey] = snapshotModuleParams(moduleKey);
+		}
 		const existing = new Set(this.pendingModuleCurves[moduleKey] ?? []);
 		for (const c of validCols) existing.add(c);
 		this.pendingModuleCurves = {
@@ -1777,6 +1792,10 @@ class WellDataState {
 			}
 			this.pendingModuleCurves = nextPending;
 
+			// Persist the parameters used for each saved module, keyed by the selection active at compute time
+			const paramModules = Array.from(new Set([...pendingModules, moduleKey]));
+			await this.persistModuleParams(paramModules);
+
 			const upstreamLabels = pendingModules
 				.filter((k) => k !== moduleKey)
 				.map((k) => WellDataState.WORKFLOW_MODULE_LABELS[k] ?? k);
@@ -1800,6 +1819,55 @@ class WellDataState {
 			return false;
 		} finally {
 			this.isCalculating = false;
+		}
+	}
+
+	/**
+	 * Persist parameter snapshots for the given workflow modules into the well config, keyed by the
+	 * zone / depth selection that was active when each module was computed. Modules without a
+	 * compute-time snapshot are skipped unless listed in `forceCurrent` (snapshotted from current state).
+	 */
+	async persistModuleParams(
+		moduleKeys: string[],
+		forceCurrent: ParamModuleKey[] = []
+	): Promise<boolean> {
+		const pid = workbench.projectId;
+		const wid = workbench.wellId;
+		if (!pid || !wid) return false;
+		const entries: Array<{ module: ParamModuleKey } & ModuleParamsSnapshot> = [];
+		for (const k of new Set([...moduleKeys, ...forceCurrent])) {
+			if (!isParamModuleKey(k)) continue;
+			const snap =
+				this.pendingParamSnapshots[k] ??
+				(forceCurrent.includes(k) ? snapshotModuleParams(k) : undefined);
+			if (snap) entries.push({ module: k, ...snap });
+		}
+		if (entries.length === 0) return false;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wid)}/module_params`,
+				{
+					entries: entries.map((e) => ({
+						module: e.module,
+						key: e.key,
+						label: e.label,
+						selection: e.selection,
+						params: e.params
+					}))
+				}
+			);
+			// Ignore late responses if the user switched wells meanwhile
+			if (workbench.wellId !== wid) return false;
+			const mp = (res?.module_params ?? {}) as ModuleParamsMap;
+			this.config = { ...this.config, module_params: mp };
+			for (const e of entries) {
+				delete this.pendingParamSnapshots[e.module];
+			}
+			moduleParams.markSaved(entries, mp);
+			return true;
+		} catch (e: any) {
+			appStatus.warn(`Parameters could not be saved: ${e?.message ?? e}`, wid);
+			return false;
 		}
 	}
 

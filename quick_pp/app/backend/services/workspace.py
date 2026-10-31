@@ -8874,6 +8874,215 @@ def workspace_update_well_config(
         ) from e
 
 
+MODULE_PARAMS_CONFIG_KEY = "module_params"
+
+
+class WorkspaceModuleParamsEntry(BaseModel):
+    module: str = Field(..., description="Single-well workflow module key (e.g. 'litho-poro')")
+    key: str = Field(
+        ...,
+        description="Selection key: 'zone:<Z1+Z2>', 'depth:<min>-<max>' or 'well'",
+    )
+    selection: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Active selection at compute time (zones, min_depth, max_depth)",
+    )
+    label: Optional[str] = Field(None, description="Human-readable selection label")
+    params: Dict[str, Any] = Field(
+        default_factory=dict, description="Full module parameter snapshot"
+    )
+
+
+class WorkspaceModuleParamsRequest(BaseModel):
+    entries: List[WorkspaceModuleParamsEntry] = Field(default_factory=list)
+
+
+def _merge_module_params(
+    current: Any, entries: List[WorkspaceModuleParamsEntry]
+) -> Dict[str, Any]:
+    """Merge module parameter entries into a `module_params` mapping keyed by module then selection key."""
+    import datetime as _dt
+
+    merged: Dict[str, Any] = (
+        {k: dict(v) for k, v in current.items() if isinstance(v, dict)}
+        if isinstance(current, dict)
+        else {}
+    )
+    now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    for entry in entries:
+        module = str(entry.module or "").strip()
+        sel_key = str(entry.key or "").strip()
+        if not module or not sel_key:
+            continue
+        mod_map = dict(merged.get(module) or {})
+        mod_map[sel_key] = {
+            "params": entry.params or {},
+            "selection": entry.selection or {},
+            "label": entry.label or sel_key,
+            "saved_at": now_iso,
+        }
+        merged[module] = mod_map
+    return merged
+
+
+@router.post(
+    "/wells/{well_name}/module_params",
+    summary="Persist single-well module parameters keyed by the active zone / depth selection",
+)
+def workspace_save_module_params(
+    project_id: int, well_name: str, req: WorkspaceModuleParamsRequest
+) -> Dict[str, Any]:
+    """Store parameter snapshots per module and per selection (zones or depth interval) in well config."""
+    try:
+        if not req.entries:
+            return {"well_name": well_name, "module_params": {}, "saved": False}
+
+        well_keys = {well_name, resolve_db_well_name(project_id, well_name)}
+        merged: Dict[str, Any] = {}
+        persisted = False
+        if not is_demo_mode():
+            with get_db() as session:
+                db_name = resolve_db_well_name(project_id, well_name)
+                well_orm = session.scalar(
+                    select(db_models.Well).filter_by(project_id=project_id, name=db_name)
+                )
+                if well_orm:
+                    current_cfg = (
+                        dict(well_orm.config_data)
+                        if isinstance(well_orm.config_data, dict)
+                        else {}
+                    )
+                    merged = _merge_module_params(
+                        current_cfg.get(MODULE_PARAMS_CONFIG_KEY), req.entries
+                    )
+                    current_cfg[MODULE_PARAMS_CONFIG_KEY] = merged
+                    well_orm.config_data = _sanitize_for_json(current_cfg)
+                    flag_modified(well_orm, "config_data")
+                    session.add(well_orm)
+                    persisted = True
+            # Drop any stale ephemeral copy so DB remains the source of truth on reload
+            for w_key in well_keys:
+                eph = _ephemeral_well_configs.get((project_id, w_key))
+                if eph and MODULE_PARAMS_CONFIG_KEY in eph:
+                    eph = dict(eph)
+                    eph.pop(MODULE_PARAMS_CONFIG_KEY, None)
+                    _ephemeral_well_configs[(project_id, w_key)] = eph
+
+        if not persisted:
+            # Demo mode or ephemeral (uploaded) well: keep in session memory only
+            base: Any = None
+            for w_key in well_keys:
+                eph = _ephemeral_well_configs.get((project_id, w_key)) or {}
+                if isinstance(eph.get(MODULE_PARAMS_CONFIG_KEY), dict):
+                    base = eph[MODULE_PARAMS_CONFIG_KEY]
+                    break
+            merged = _merge_module_params(base, req.entries)
+            for w_key in well_keys:
+                eph = dict(_ephemeral_well_configs.get((project_id, w_key), {}))
+                eph[MODULE_PARAMS_CONFIG_KEY] = merged
+                _ephemeral_well_configs[(project_id, w_key)] = eph
+
+        return _sanitize_for_json({
+            "well_name": well_name,
+            "module_params": merged,
+            "saved": True,
+            "persisted": persisted,
+        })
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to save module parameters: {e}"
+        ) from e
+
+
+# Demo-mode / fallback session store for project-level module parameters
+_ephemeral_project_module_params: Dict[int, Dict[str, Any]] = {}
+
+
+def _load_project_module_params(project_id: int) -> Tuple[Dict[str, Any], bool]:
+    """Return (module_params, from_db) for a project, preferring the DB unless in demo mode."""
+    if not is_demo_mode():
+        try:
+            with get_db() as session:
+                proj = session.get(db_models.Project, project_id)
+                if proj is not None:
+                    cfg = proj.config_data if isinstance(proj.config_data, dict) else {}
+                    mp = cfg.get(MODULE_PARAMS_CONFIG_KEY)
+                    return (dict(mp) if isinstance(mp, dict) else {}), True
+        except Exception:
+            pass
+    return dict(_ephemeral_project_module_params.get(project_id) or {}), False
+
+
+@router.get(
+    "/module_params",
+    summary="Get project-level (multi-well) module parameters keyed by zone selection",
+)
+def workspace_get_project_module_params(project_id: int) -> Dict[str, Any]:
+    """Return saved multi-well module parameters stored in the project config."""
+    mp, from_db = _load_project_module_params(project_id)
+    return _sanitize_for_json({
+        "project_id": project_id,
+        "module_params": mp,
+        "persisted": from_db,
+    })
+
+
+@router.post(
+    "/module_params",
+    summary="Persist project-level (multi-well) module parameters keyed by zone selection",
+)
+def workspace_save_project_module_params(
+    project_id: int, req: WorkspaceModuleParamsRequest
+) -> Dict[str, Any]:
+    """Merge multi-well module parameter snapshots into `projects.config_data.module_params`."""
+    try:
+        if not req.entries:
+            mp, from_db = _load_project_module_params(project_id)
+            return {"project_id": project_id, "module_params": mp, "saved": False}
+
+        merged: Dict[str, Any] = {}
+        persisted = False
+        if not is_demo_mode():
+            try:
+                with get_db() as session:
+                    proj = session.get(db_models.Project, project_id)
+                    if proj is not None:
+                        cfg = (
+                            dict(proj.config_data)
+                            if isinstance(proj.config_data, dict)
+                            else {}
+                        )
+                        merged = _merge_module_params(
+                            cfg.get(MODULE_PARAMS_CONFIG_KEY), req.entries
+                        )
+                        cfg[MODULE_PARAMS_CONFIG_KEY] = merged
+                        proj.config_data = _sanitize_for_json(cfg)
+                        flag_modified(proj, "config_data")
+                        session.add(proj)
+                        persisted = True
+            except Exception:
+                persisted = False
+
+        if not persisted:
+            merged = _merge_module_params(
+                _ephemeral_project_module_params.get(project_id), req.entries
+            )
+            _ephemeral_project_module_params[project_id] = merged
+        else:
+            _ephemeral_project_module_params.pop(project_id, None)
+
+        return _sanitize_for_json({
+            "project_id": project_id,
+            "module_params": merged,
+            "saved": True,
+            "persisted": persisted,
+        })
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to save project module parameters: {e}"
+        ) from e
+
+
 @router.post(
     "/demo/reset",
     summary="Reset ephemeral demo session edits back to pre-seeded Volve/Costa state",
@@ -8884,6 +9093,7 @@ def workspace_demo_reset(project_id: int) -> Dict[str, Any]:
     reset_demo_project_state(project_id)
     for k in [k for k in _ephemeral_well_configs if k[0] == project_id]:
         _ephemeral_well_configs.pop(k, None)
+    _ephemeral_project_module_params.pop(project_id, None)
     cleared = invalidate_well_cache(project_id=project_id)
     return {
         "project_id": project_id,
@@ -10798,12 +11008,8 @@ def workspace_swirr_apply(
             else:
                 _update_in_memory_well_cache(project_id, wn, sub_df)
 
-            _record_well_model_config(
-                project_id,
-                wn,
-                {"swirr_config": cfg},
-                persist_db=bool(req.save),
-            )
+            # Swirr correlation config is persisted once at project level
+            # (`/module_params`), not duplicated into every well's config.
 
             valid_sw = swirr_arr[np.isfinite(swirr_arr)]
             well_summaries.append(

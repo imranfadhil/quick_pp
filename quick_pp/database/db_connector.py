@@ -156,6 +156,7 @@ class DBConnector:
         try:
             self.run_sql_script(os.path.join(script_dir, sql_script))
             self._migrate_uam_columns()
+            self._migrate_project_columns()
         except Exception as exc:
             if "readonly" in str(exc).lower() or os.environ.get("QPP_DEMO_MODE", "").lower() in ("1", "true", "yes"):
                 pass
@@ -190,6 +191,28 @@ class DBConnector:
                         conn.execute(
                             text(f'ALTER TABLE "users" ADD COLUMN "{col_name}" {col_def}')
                         )
+        except Exception:
+            pass
+
+    def _migrate_project_columns(self):
+        """Ensure existing `projects` tables have the project-level `config_data` JSON column."""
+        if DBConnector._engine is None:
+            return
+        from sqlalchemy import inspect as sa_inspect, text
+
+        try:
+            inspector = sa_inspect(DBConnector._engine)
+            if not inspector.has_table("projects"):
+                return
+            existing_cols = {c["name"] for c in inspector.get_columns("projects")}
+            if "config_data" in existing_cols:
+                return
+            is_sqlite = "sqlite" in DBConnector._engine.url.drivername
+            col_type = "JSON" if is_sqlite else "JSONB"
+            with DBConnector._engine.begin() as conn:
+                conn.execute(
+                    text(f'ALTER TABLE "projects" ADD COLUMN "config_data" {col_type}')
+                )
         except Exception:
             pass
 

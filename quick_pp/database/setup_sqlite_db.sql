@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS "users" (
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS "projects" (
     "project_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+    "config_data" JSON, -- Project-level settings (e.g. multi-well module parameters)
     "name" TEXT NOT NULL,
     "description" TEXT,
     "created_by" INTEGER REFERENCES "users"("user_id") ON DELETE SET NULL,

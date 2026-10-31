@@ -2,6 +2,7 @@
 	import { postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
@@ -27,30 +28,17 @@
 	});
 
 	// --- Stratigraphic Normalization State ---
-	let normMethod = $state<'quantile' | 'histogram'>('quantile');
-	let normByZone = $state<boolean>(true);
-	let normKeyWell = $state<string>('');
-	let normLowQ = $state<number>(0.05);
-	let normHighQ = $state<number>(0.95);
-	let normExcludeBadhole = $state<boolean>(true);
-	let normLogs = $state<string[]>(['GR', 'NPHI']);
+	// Normalization, conditioning, batch badhole & env-correction parameters live in shared project state
+	// so they persist across module switches and are restored per zone selection from the project config.
+	const qp = projectData.mwQaqcParams;
 
 	// --- Alias Harmonizer & Batch Conditioning State ---
 	let condTab = $state<'anomalies' | 'aliases' | 'limits' | 'scale'>('anomalies');
 	let aliasSourceCurve = $state<string>('');
 	let aliasTargetCurve = $state<string>('RT');
-	let outerLimitFill = $state<boolean>(false);
-	let batchScaleFactor = $state<number>(0.01);
-	let batchOffset = $state<number>(0.0);
 	let batchTargetWells = $state<string>(''); // empty = all selected wells
 
 	// --- Batch Environmental Corrections State ---
-	let envBitsize = $state<number>(8.5);
-	let envMudWeight = $state<number>(9.5);
-	let envSurfaceTemp = $state<number>(75.0);
-	let envTempGrad = $state<number>(1.5);
-	let envSalinity = $state<number>(30000.0);
-	let envRhoMudcake = $state<number>(1.5);
 	let envSummaryRows = $state<Record<string, any>[]>([]);
 
 	let statusBanner = $state<string | null>(null);
@@ -111,10 +99,10 @@
 	});
 
 	function toggleNormLog(mnem: string) {
-		if (normLogs.includes(mnem)) {
-			if (normLogs.length > 1) normLogs = normLogs.filter((c) => c !== mnem);
+		if (qp.normLogs.includes(mnem)) {
+			if (qp.normLogs.length > 1) qp.normLogs = qp.normLogs.filter((c) => c !== mnem);
 		} else {
-			normLogs = [...normLogs, mnem];
+			qp.normLogs = [...qp.normLogs, mnem];
 		}
 	}
 
@@ -130,8 +118,8 @@
 		projectData.error = null;
 		statusBanner = null;
 		try {
-			const qLow = Math.min(normLowQ, normHighQ - 0.01);
-			const qHigh = Math.max(normHighQ, qLow + 0.01);
+			const qLow = Math.min(qp.normLowQ, qp.normHighQ - 0.01);
+			const qHigh = Math.max(qp.normHighQ, qLow + 0.01);
 			const res = await postJson<{
 				report: Record<string, any>[];
 				saved_wells: number;
@@ -143,12 +131,12 @@
 					zones: activeZoneSubset(),
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
-					logs: normLogs,
-					key_well: normKeyWell || null,
-					method: normMethod,
+					logs: qp.normLogs,
+					key_well: qp.normKeyWell || null,
+					method: qp.normMethod,
 					quantiles: [qLow, qHigh],
-					by_zone: normByZone,
-					exclude_badhole: normExcludeBadhole,
+					by_zone: qp.normByZone,
+					exclude_badhole: qp.normExcludeBadhole,
 					save: persist
 				}
 			);
@@ -161,6 +149,7 @@
 				: `Previewed ${res.normalized_columns.join(', ')} (${res.report?.length ?? 0} zone-well fits)`;
 			if (persist) {
 				wellData.lastSavedMessage = statusBanner;
+				void projectData.persistProjectParams([], ['mw-qaqc']);
 			}
 		} catch (e: any) {
 			projectData.error = e?.message || 'Stratigraphic normalization error';
@@ -192,11 +181,11 @@
 					zones: activeZoneSubset(),
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
-					fill: overrides.fill ?? outerLimitFill,
+					fill: overrides.fill ?? qp.outerLimitFill,
 					source_curve: overrides.source_curve ?? (aliasSourceCurve.trim() || workbench.selectedQaqcCurve),
 					target_curve: overrides.target_curve ?? (action === 'harmonize_aliases' ? (aliasSourceCurve.trim() ? aliasTargetCurve : null) : workbench.selectedQaqcCurve),
-					scale: overrides.scale ?? batchScaleFactor,
-					offset: overrides.offset ?? batchOffset,
+					scale: overrides.scale ?? qp.batchScaleFactor,
+					offset: overrides.offset ?? qp.batchOffset,
 					save: persist
 				}
 			);
@@ -206,6 +195,7 @@
 			statusBanner = `${persist ? 'Saved' : 'Applied'} ${action.replace('_', ' ')} (${res.changes?.length ?? 0} curve updates across ${res.updated_wells} wells) ✓`;
 			if (persist) {
 				wellData.lastSavedMessage = statusBanner;
+				void projectData.persistProjectParams([], ['mw-qaqc']);
 			}
 		} catch (e: any) {
 			projectData.error = e?.message || 'Batch conditioning error';
@@ -276,7 +266,7 @@
 		projectData.isComputingMultiWell = true;
 		projectData.error = null;
 		statusBanner = null;
-		const bp = workbench.badholeParams;
+		const bp = qp.badhole;
 		try {
 			const res = await postJson<{
 				saved: boolean;
@@ -316,6 +306,7 @@
 			statusBanner = `${persist ? 'Saved' : 'Flagged'} BADHOLE: ${res.total_flagged.toLocaleString()} / ${res.total_samples.toLocaleString()} pts (${fmtNum(res.total_flagged_pct, 1)}%) across ${res.well_summaries.length} wells ✓`;
 			if (persist) {
 				wellData.lastSavedMessage = statusBanner;
+				void projectData.persistProjectParams([], ['mw-qaqc']);
 			}
 		} catch (e: any) {
 			projectData.error = e?.message || 'Batch badhole flagging failed';
@@ -342,12 +333,12 @@
 					zones: activeZoneSubset(),
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
-					bitsize_default: envBitsize,
-					mud_weight: envMudWeight,
-					surface_temp: envSurfaceTemp,
-					temp_grad: envTempGrad,
-					salinity_ppm: envSalinity,
-					rho_mudcake: envRhoMudcake,
+					bitsize_default: qp.envBitsize,
+					mud_weight: qp.envMudWeight,
+					surface_temp: qp.envSurfaceTemp,
+					temp_grad: qp.envTempGrad,
+					salinity_ppm: qp.envSalinity,
+					rho_mudcake: qp.envRhoMudcake,
 					save: persist
 				}
 			);
@@ -358,6 +349,7 @@
 			statusBanner = `${persist ? 'Saved' : 'Applied'} ${res.corrected_curves.join(', ')} across ${res.well_summaries.length} wells ✓`;
 			if (persist) {
 				wellData.lastSavedMessage = statusBanner;
+				void projectData.persistProjectParams([], ['mw-qaqc']);
 			}
 		} catch (e: any) {
 			projectData.error = e?.message || 'Batch environmental corrections failed';
@@ -374,6 +366,7 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['mw-qaqc']} />
 		<!-- 1. Multi-Well Curve Distributions & Grouping -->
 		<ParameterSection
 			title="Multi-Well Curve Distributions"
@@ -523,7 +516,7 @@
 			title="Multi-Well Stratigraphic Normalization"
 			badge={projectData.stratNormReport.length
 				? `${projectData.stratNormReport.length} fits`
-				: normByZone
+				: qp.normByZone
 					? 'Zone-Aware'
 					: 'Global'}
 		>
@@ -531,8 +524,8 @@
 				{#each [['quantile', 'Quantile (Linear)'], ['histogram', 'Histogram CDF']] as [m, lbl]}
 					<button
 						type="button"
-						onclick={() => (normMethod = m as any)}
-						class="h-6 rounded-sm border text-[11px] font-medium {normMethod === m
+						onclick={() => (qp.normMethod = m as any)}
+						class="h-6 rounded-sm border text-[11px] font-medium {qp.normMethod === m
 							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 					>
@@ -546,8 +539,8 @@
 				<div class="flex items-center gap-1">
 					<button
 						type="button"
-						onclick={() => (normByZone = true)}
-						class="rounded-xs border px-2 py-0.5 text-[10px] font-medium {normByZone
+						onclick={() => (qp.normByZone = true)}
+						class="rounded-xs border px-2 py-0.5 text-[10px] font-medium {qp.normByZone
 							? 'border-blue-600 bg-blue-50 font-semibold text-blue-800'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 					>
@@ -555,8 +548,8 @@
 					</button>
 					<button
 						type="button"
-						onclick={() => (normByZone = false)}
-						class="rounded-xs border px-2 py-0.5 text-[10px] font-medium {!normByZone
+						onclick={() => (qp.normByZone = false)}
+						class="rounded-xs border px-2 py-0.5 text-[10px] font-medium {!qp.normByZone
 							? 'border-blue-600 bg-blue-50 font-semibold text-blue-800'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 					>
@@ -568,7 +561,7 @@
 			<div class="mt-1.5 flex items-center justify-between text-[11px]">
 				<span class="text-[var(--text-secondary)]">Reference Key Well:</span>
 				<select
-					bind:value={normKeyWell}
+					bind:value={qp.normKeyWell}
 					class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
 				>
 					<option value="">Pooled Field Median</option>
@@ -581,7 +574,7 @@
 			<div class="mt-1 grid grid-cols-2 gap-x-2">
 				<NumericScrubber
 					label="Low Quantile"
-					bind:value={normLowQ}
+					bind:value={qp.normLowQ}
 					min={0.01}
 					max={0.35}
 					step={0.01}
@@ -589,7 +582,7 @@
 				/>
 				<NumericScrubber
 					label="High Quantile"
-					bind:value={normHighQ}
+					bind:value={qp.normHighQ}
 					min={0.65}
 					max={0.99}
 					step={0.01}
@@ -604,7 +597,7 @@
 						<button
 							type="button"
 							onclick={() => toggleNormLog(mnem)}
-							class="mono-num h-5 rounded-xs border px-1.5 text-[10px] font-semibold {normLogs.includes(
+							class="mono-num h-5 rounded-xs border px-1.5 text-[10px] font-semibold {qp.normLogs.includes(
 								mnem
 							)
 								? 'border-blue-600 bg-blue-600 text-white'
@@ -617,7 +610,7 @@
 				<label class="flex items-center gap-1 text-[10.5px] text-[var(--text-secondary)] cursor-pointer">
 					<input
 						type="checkbox"
-						bind:checked={normExcludeBadhole}
+						bind:checked={qp.normExcludeBadhole}
 						class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span>Ignore Badhole in Fit</span>
@@ -789,8 +782,8 @@
 					<div class="grid grid-cols-2 gap-1">
 						<button
 							type="button"
-							onclick={() => (outerLimitFill = false)}
-							class="h-6 rounded-sm border text-[10.5px] font-medium {!outerLimitFill
+							onclick={() => (qp.outerLimitFill = false)}
+							class="h-6 rounded-sm border text-[10.5px] font-medium {!qp.outerLimitFill
 								? 'border-blue-600 bg-blue-50 font-semibold text-blue-800'
 								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 						>
@@ -798,8 +791,8 @@
 						</button>
 						<button
 							type="button"
-							onclick={() => (outerLimitFill = true)}
-							class="h-6 rounded-sm border text-[10.5px] font-medium {outerLimitFill
+							onclick={() => (qp.outerLimitFill = true)}
+							class="h-6 rounded-sm border text-[10.5px] font-medium {qp.outerLimitFill
 								? 'border-blue-600 bg-blue-50 font-semibold text-blue-800'
 								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 						>
@@ -842,7 +835,7 @@
 					<div class="grid grid-cols-2 gap-x-2">
 						<NumericScrubber
 							label={`Scale ${workbench.selectedQaqcCurve} (×)`}
-							bind:value={batchScaleFactor}
+							bind:value={qp.batchScaleFactor}
 							min={-1000}
 							max={1000}
 							step={0.01}
@@ -850,7 +843,7 @@
 						/>
 						<NumericScrubber
 							label="Offset (+)"
-							bind:value={batchOffset}
+							bind:value={qp.batchOffset}
 							min={-500}
 							max={500}
 							step={0.5}
@@ -863,8 +856,8 @@
 							<button
 								type="button"
 								onclick={() => {
-									batchScaleFactor = Number(sc);
-									batchOffset = 0;
+									qp.batchScaleFactor = Number(sc);
+									qp.batchOffset = 0;
 								}}
 								class="mono-num rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-0.5 text-[9.5px] font-medium text-[var(--text-secondary)] hover:border-blue-400 hover:bg-blue-50"
 							>
@@ -907,20 +900,20 @@
 					<span class="flex items-center gap-1.5 font-medium">
 						<input
 							type="checkbox"
-							bind:checked={workbench.badholeParams.useCali}
+							bind:checked={qp.badhole.useCali}
 							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 						/>
 						<span>1. Differential Caliper (|CALI − BS|)</span>
 					</span>
 					<span class="mono-num text-[10px] text-[var(--text-muted)]">
-						≥ {workbench.badholeParams.caliThreshold}"
+						≥ {qp.badhole.caliThreshold}"
 					</span>
 				</label>
-				{#if workbench.badholeParams.useCali}
+				{#if qp.badhole.useCali}
 					<div class="grid grid-cols-2 gap-x-2 px-1">
 						<NumericScrubber
 							label="Washout ΔCALI"
-							bind:value={workbench.badholeParams.caliThreshold}
+							bind:value={qp.badhole.caliThreshold}
 							unit="in"
 							min={0.5}
 							max={8.0}
@@ -929,7 +922,7 @@
 						/>
 						<NumericScrubber
 							label="Fallback BS"
-							bind:value={workbench.badholeParams.bitsizeDefault}
+							bind:value={qp.badhole.bitsizeDefault}
 							unit="in"
 							min={4.5}
 							max={26.0}
@@ -943,20 +936,20 @@
 					<span class="flex items-center gap-1.5 font-medium">
 						<input
 							type="checkbox"
-							bind:checked={workbench.badholeParams.useDrho}
+							bind:checked={qp.badhole.useDrho}
 							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 						/>
 						<span>2. Density Correction (|DRHO|)</span>
 					</span>
 					<span class="mono-num text-[10px] text-[var(--text-muted)]">
-						&gt; {workbench.badholeParams.drhoThreshold} g/cc
+						&gt; {qp.badhole.drhoThreshold} g/cc
 					</span>
 				</label>
-				{#if workbench.badholeParams.useDrho}
+				{#if qp.badhole.useDrho}
 					<div class="px-1">
 						<NumericScrubber
 							label="Max |DRHO|"
-							bind:value={workbench.badholeParams.drhoThreshold}
+							bind:value={qp.badhole.drhoThreshold}
 							unit="g/cc"
 							min={0.05}
 							max={0.5}
@@ -970,7 +963,7 @@
 					<span class="flex items-center gap-1.5 font-medium">
 						<input
 							type="checkbox"
-							bind:checked={workbench.badholeParams.useRhobNphi}
+							bind:checked={qp.badhole.useRhobNphi}
 							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 						/>
 						<span>3. RHOB / NPHI Standoff Cutoffs</span>
@@ -981,7 +974,7 @@
 					<span class="flex items-center gap-1.5 font-medium">
 						<input
 							type="checkbox"
-							bind:checked={workbench.badholeParams.useRugosity}
+							bind:checked={qp.badhole.useRugosity}
 							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 						/>
 						<span>4. Rolling Rugosity & RHOB Drop</span>
@@ -1047,7 +1040,7 @@
 			<div class="grid grid-cols-2 gap-x-2">
 				<NumericScrubber
 					label="Bit Size"
-					bind:value={envBitsize}
+					bind:value={qp.envBitsize}
 					unit="in"
 					min={4.5}
 					max={17.5}
@@ -1055,7 +1048,7 @@
 				/>
 				<NumericScrubber
 					label="Mud Weight"
-					bind:value={envMudWeight}
+					bind:value={qp.envMudWeight}
 					unit="ppg"
 					min={8.0}
 					max={18.0}
@@ -1063,7 +1056,7 @@
 				/>
 				<NumericScrubber
 					label="Surface Temp"
-					bind:value={envSurfaceTemp}
+					bind:value={qp.envSurfaceTemp}
 					unit="°F"
 					min={40}
 					max={120}
@@ -1071,7 +1064,7 @@
 				/>
 				<NumericScrubber
 					label="Temp Gradient"
-					bind:value={envTempGrad}
+					bind:value={qp.envTempGrad}
 					unit="°F/100ft"
 					min={0.5}
 					max={3.5}
@@ -1080,7 +1073,7 @@
 			</div>
 			<NumericScrubber
 				label="Mud Filtrate Salinity"
-				bind:value={envSalinity}
+				bind:value={qp.envSalinity}
 				unit="ppm"
 				min={1000}
 				max={250000}

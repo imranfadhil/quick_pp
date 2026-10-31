@@ -3,19 +3,16 @@
 	import { postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
+	import { projectParams } from '$lib/state/projectParams.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 
 	// Multi-well FWL & Contact Optimizer state
-	let optLoss = $state<'rmse' | 'mae' | 'huber' | 'bvw'>('rmse');
-	let solvePerZone = $state(false);
-	let useMdtPrior = $state(false);
-	let mdtFwl = $state(3925.0);
-	let mdtWeight = $state(1.0);
-	let poreVolumeWeighted = $state(true);
-	let equalWellWeights = $state(true);
+	// Optimizer settings live in shared project state so they are saved/restored per zone selection
+	const so = projectData.shfOptParams;
 	let fwlOptResult = $state<any>(null);
 
 	let calculatedZones = $derived.by(() => {
@@ -123,9 +120,10 @@
 			}
 		}
 		if (
-			projectData.swirrResult ||
-			projectData.swirrApplyResult ||
-			Object.keys(projectData.swirrConfig.rules ?? {}).length > 0
+			!projectParams.status['shf']?.matched &&
+			(projectData.swirrResult ||
+				projectData.swirrApplyResult ||
+				Object.keys(projectData.swirrConfig.rules ?? {}).length > 0)
 		) {
 			projectData.shfParams.swirrSource = 'poro_perm';
 		}
@@ -168,14 +166,26 @@
 		try {
 			const sp = projectData.shfParams;
 			const jSatMode = sp.jSatMode ?? 'swn';
-			const customFits =
+			// Restored SHF fits (from saved project params) are used once on the next non-reset run
+			const saved = projectData.shfSavedFits;
+			projectData.shfSavedFits = null;
+			const restoredFits =
 				!resetFits &&
+				saved &&
+				saved.model === sp.model &&
+				(sp.model !== 'leverett_j' || (saved.j_sat_mode ?? 'swn') === jSatMode) &&
+				Object.keys(saved.fits ?? {}).length > 0
+					? saved.fits
+					: null;
+			const customFits =
+				restoredFits ??
+				(!resetFits &&
 				projectData.shfResult?.model === sp.model &&
 				(sp.model !== 'leverett_j' || (projectData.shfResult?.j_sat_mode ?? 'swn') === jSatMode) &&
 				projectData.shfResult?.fits &&
 				Object.keys(projectData.shfResult.fits).length > 0
 					? projectData.shfResult.fits
-					: null;
+					: null);
 			const fwlByZonePayload =
 				sp.fwlByZone && Object.keys(sp.fwlByZone).length > 0 ? sp.fwlByZone : null;
 			const data = await postJson<any>(
@@ -270,16 +280,16 @@
 					zones: activeZonesPayload,
 					model: sp.model,
 					shm_params: projectData.shfResult?.fits ?? null,
-					loss: optLoss,
-					solve_per_zone: solvePerZone,
+					loss: so.optLoss,
+					solve_per_zone: so.solvePerZone,
 					ift: sp.ift,
 					theta: sp.theta,
 					gw: sp.gw,
 					ghc: sp.ghc,
-					mdt_fwl: useMdtPrior ? mdtFwl : null,
-					mdt_weight: mdtWeight,
-					pore_volume_weighted: poreVolumeWeighted,
-					equal_well_weights: equalWellWeights
+					mdt_fwl: so.useMdtPrior ? so.mdtFwl : null,
+					mdt_weight: so.mdtWeight,
+					pore_volume_weighted: so.poreVolumeWeighted,
+					equal_well_weights: so.equalWellWeights
 				}
 			);
 			fwlOptResult = res;
@@ -287,7 +297,7 @@
 				projectData.shfParams.fwl = Number(res.fwl.toFixed(2));
 			}
 			if (
-				solvePerZone &&
+				so.solvePerZone &&
 				res?.fwl_by_zone &&
 				typeof res.fwl_by_zone === 'object' &&
 				Object.keys(res.fwl_by_zone).length > 0
@@ -306,6 +316,7 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['shf']} />
 		{#if projectData.activeWells.length > 0 && projectData.wellsWithoutTvd.length > 0}
 			{#if projectData.wellsWithTvd.length === 0}
 				<div
@@ -354,7 +365,7 @@
 			<div class="mt-1.5 flex items-center justify-between text-[11px]">
 				<span class="text-[var(--text-secondary)]">Loss Objective:</span>
 				<select
-					bind:value={optLoss}
+					bind:value={so.optLoss}
 					class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
 				>
 					<option value="rmse">RMSE (L2)</option>
@@ -368,9 +379,9 @@
 				<label class="flex items-center gap-1 cursor-pointer">
 					<input
 						type="checkbox"
-						bind:checked={solvePerZone}
+						bind:checked={so.solvePerZone}
 						onchange={() => {
-							if (!solvePerZone && Object.keys(projectData.shfParams.fwlByZone).length > 0) {
+							if (!so.solvePerZone && Object.keys(projectData.shfParams.fwlByZone).length > 0) {
 								void clearZoneFwls();
 							}
 						}}
@@ -381,7 +392,7 @@
 				<label class="flex items-center gap-1 cursor-pointer">
 					<input
 						type="checkbox"
-						bind:checked={poreVolumeWeighted}
+						bind:checked={so.poreVolumeWeighted}
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span>Φ-Weighted</span>
@@ -389,7 +400,7 @@
 				<label class="flex items-center gap-1 cursor-pointer">
 					<input
 						type="checkbox"
-						bind:checked={equalWellWeights}
+						bind:checked={so.equalWellWeights}
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span>Equal Well Wt</span>
@@ -397,18 +408,18 @@
 				<label class="flex items-center gap-1 cursor-pointer">
 					<input
 						type="checkbox"
-						bind:checked={useMdtPrior}
+						bind:checked={so.useMdtPrior}
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span>MDT Prior</span>
 				</label>
 			</div>
 
-			{#if useMdtPrior}
+			{#if so.useMdtPrior}
 				<div class="grid grid-cols-2 gap-x-2">
 					<NumericScrubber
 						label="MDT FWL (TVDSS)"
-						bind:value={mdtFwl}
+						bind:value={so.mdtFwl}
 						unit="m TVDSS"
 						min={0}
 						max={10000}
@@ -416,7 +427,7 @@
 					/>
 					<NumericScrubber
 						label="Prior Weight"
-						bind:value={mdtWeight}
+						bind:value={so.mdtWeight}
 						min={0.1}
 						max={10.0}
 						step={0.2}
@@ -433,7 +444,7 @@
 					: 'Optimize Free Water Level (FWL) & fluid contacts in TVDSS using wells with valid TVDSS'}
 				class="mt-1.5 h-7 w-full rounded-sm border border-blue-600 bg-blue-50 px-2 text-xs font-semibold text-blue-800 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
 			>
-				{solvePerZone ? 'Optimize Per-Zone FWL & Contacts (TVDSS)' : 'Optimize Field FWL & Contacts (TVDSS)'}
+				{so.solvePerZone ? 'Optimize Per-Zone FWL & Contacts (TVDSS)' : 'Optimize Field FWL & Contacts (TVDSS)'}
 			</button>
 
 			{#if fwlOptResult}
@@ -463,7 +474,7 @@
 				</div>
 			{/if}
 
-			{#if (solvePerZone || Object.keys(projectData.shfParams.fwlByZone).length > 0) && ((fwlOptResult?.zone_metrics && fwlOptResult.zone_metrics.length > 0) || calculatedZones.length > 0)}
+			{#if (so.solvePerZone || Object.keys(projectData.shfParams.fwlByZone).length > 0) && ((fwlOptResult?.zone_metrics && fwlOptResult.zone_metrics.length > 0) || calculatedZones.length > 0)}
 				{@const zoneRows =
 					fwlOptResult?.zone_metrics && fwlOptResult.zone_metrics.length > 0
 						? fwlOptResult.zone_metrics.filter(

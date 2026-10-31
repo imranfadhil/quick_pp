@@ -1,7 +1,16 @@
+<script lang="ts" module>
+	// Well-load generation for which env-correction defaults were last seeded from the header.
+	// Module-level so remounting the inspector does not overwrite restored / edited parameters.
+	let lastEnvHeaderSyncGen = -1;
+</script>
+
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
+	import { moduleParams } from '$lib/state/moduleParams.svelte';
 	import {
 		ALL_CALCULATED_CURVE_MNEMONICS,
 		CALCULATED_CURVE_GROUPS,
@@ -545,11 +554,9 @@
 	}
 
 	// Borehole Environmental Correction parameters
-	let bitsizeDefault = $state(8.5);
-	let mudWeight = $state(9.5);
-	let surfaceTemp = $state(75.0);
-	let tempGrad = $state(1.5);
-	let salinityPpm = $state(30000.0);
+	// Environmental correction parameters live in shared workbench state so they persist across module
+	// switches and are restored per zone / depth interval from saved well config.
+	const ep = workbench.envCorrParams;
 
 	// Well Header & Metadata Editor state
 	let editingWellHeader = $state(false);
@@ -563,22 +570,28 @@
 		if (gen !== lastSyncedWellGen && Object.keys(hdr).length > 0) {
 			lastSyncedWellGen = gen;
 			editingWellHeader = false;
+		}
+		// Seed env-correction defaults from the well header once per well load, unless saved
+		// parameters were restored for the active zone / depth selection.
+		if (gen !== lastEnvHeaderSyncGen && Object.keys(hdr).length > 0) {
+			lastEnvHeaderSyncGen = gen;
+			if (untrack(() => moduleParams.status['qaqc-env']?.matched)) return;
 			if (typeof hdr.bit_size === 'number' && Number.isFinite(hdr.bit_size) && hdr.bit_size > 0) {
-				bitsizeDefault = hdr.bit_size;
+				ep.bitsizeDefault = hdr.bit_size;
 			}
 			if (
 				typeof hdr.mud_density === 'number' &&
 				Number.isFinite(hdr.mud_density) &&
 				hdr.mud_density > 0
 			) {
-				mudWeight = hdr.mud_density;
+				ep.mudWeight = hdr.mud_density;
 			}
 			if (
 				typeof hdr.surface_temp === 'number' &&
 				Number.isFinite(hdr.surface_temp) &&
 				hdr.surface_temp > 0
 			) {
-				surfaceTemp = hdr.surface_temp;
+				ep.surfaceTemp = hdr.surface_temp;
 			}
 		}
 	});
@@ -732,11 +745,11 @@
 			const res = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/environmental_corrections`,
 				{
-					bitsize_default: bitsizeDefault,
-					mud_weight: mudWeight,
-					surface_temp: surfaceTemp,
-					temp_grad: tempGrad,
-					salinity_ppm: salinityPpm,
+					bitsize_default: ep.bitsizeDefault,
+					mud_weight: ep.mudWeight,
+					surface_temp: ep.surfaceTemp,
+					temp_grad: ep.tempGrad,
+					salinity_ppm: ep.salinityPpm,
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
@@ -764,6 +777,7 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['qaqc-badhole', 'qaqc-env']} />
 		<ParameterSection
 			title="Well Header & Metadata"
 			badge={wellData.header?.uwi ? `UWI: ${wellData.header.uwi}` : (workbench.wellId ?? '')}
@@ -2321,7 +2335,7 @@
 			<div class="grid grid-cols-2 gap-x-2">
 				<NumericScrubber
 					label="Bit Size"
-					bind:value={bitsizeDefault}
+					bind:value={ep.bitsizeDefault}
 					unit="in"
 					min={4.5}
 					max={17.5}
@@ -2330,7 +2344,7 @@
 				/>
 				<NumericScrubber
 					label="Mud Weight"
-					bind:value={mudWeight}
+					bind:value={ep.mudWeight}
 					unit="ppg"
 					min={8.0}
 					max={18.0}
@@ -2339,7 +2353,7 @@
 				/>
 				<NumericScrubber
 					label="Surface Temp"
-					bind:value={surfaceTemp}
+					bind:value={ep.surfaceTemp}
 					unit="°F"
 					min={40}
 					max={120}
@@ -2348,7 +2362,7 @@
 				/>
 				<NumericScrubber
 					label="Temp Gradient"
-					bind:value={tempGrad}
+					bind:value={ep.tempGrad}
 					unit="°F/100ft"
 					min={0.5}
 					max={3.5}
@@ -2358,7 +2372,7 @@
 			</div>
 			<NumericScrubber
 				label="Mud Filtrate Salinity"
-				bind:value={salinityPpm}
+				bind:value={ep.salinityPpm}
 				unit="ppm"
 				min={1000}
 				max={250000}

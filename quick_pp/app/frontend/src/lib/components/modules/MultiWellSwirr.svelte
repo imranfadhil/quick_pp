@@ -2,6 +2,7 @@
 	import { postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import {
 		projectData,
 		type SwirrApplyResult,
@@ -18,8 +19,7 @@
 	let isApplying = $state(false);
 	let copiedSwof = $state(false);
 	let relpermPendingSave = $state(false);
-	let hasManualRuleOverride = $state(false);
-	let hasManualShfFitOverride = $state(false);
+	// Manual override flags live in shared project state so they are saved/restored with project params
 
 	function switchScalSubMode(mode: 'static' | 'relperm') {
 		workbench.scalSubMode = mode;
@@ -244,7 +244,7 @@
 		projectData.error = null;
 		try {
 			if (autoFit) {
-				hasManualRuleOverride = false;
+				projectData.swirrManualRuleOverride = false;
 			}
 			const cfg = projectData.swirrConfig;
 			const res = await postJson<SwirrFitResult>(
@@ -269,7 +269,7 @@
 			);
 			projectData.swirrConfig.rules = res.rules || {};
 			projectData.swirrResult = res;
-			projectData.recomputeScalFitsFromPlugs(!hasManualShfFitOverride);
+			projectData.recomputeScalFitsFromPlugs(!projectData.shfManualFitOverride);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Swirr correlation fit failed';
 		} finally {
@@ -297,7 +297,7 @@
 					swirr_max: cfg.swirrMax,
 					excluded_plug_ids: cfg.excludedPlugIds,
 					rules: cfg.rules,
-					auto_fit: !hasManualRuleOverride,
+					auto_fit: !projectData.swirrManualRuleOverride,
 					drt_method: projectData.drtMethod,
 					cutoffs: projectData.activeDrtCutoffs,
 					ift: projectData.shfParams.ift,
@@ -306,7 +306,7 @@
 			);
 			projectData.swirrConfig.rules = fitRes.rules || {};
 			projectData.swirrResult = fitRes;
-			projectData.recomputeScalFitsFromPlugs(!hasManualShfFitOverride);
+			projectData.recomputeScalFitsFromPlugs(!projectData.shfManualFitOverride);
 
 			const applyRes = await postJson<SwirrApplyResult>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/swirr/apply`,
@@ -360,6 +360,8 @@
 			};
 			applyActiveWellSwirrCurve(applyRes);
 			wellData.lastSavedMessage = `Saved SWIRR (${applyRes.saved_wells} wells) ✓`;
+			// Persist the Swirr correlation config once at project level, keyed by zone selection
+			await projectData.persistProjectParams(['swirr-corr'], ['swirr-corr']);
 			void projectData.refreshSummary(workbench.projectId);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Failed to save SWIRR to wells';
@@ -372,13 +374,13 @@
 	function setExtractionMode(mode: SwirrExtractionMode) {
 		if (projectData.swirrConfig.extractionMode === mode) return;
 		projectData.swirrConfig.extractionMode = mode;
-		hasManualRuleOverride = false;
+		projectData.swirrManualRuleOverride = false;
 	}
 
 	function setEquationType(eq: SwirrEquationType) {
 		if (projectData.swirrConfig.equationType === eq) return;
 		projectData.swirrConfig.equationType = eq;
-		hasManualRuleOverride = false;
+		projectData.swirrManualRuleOverride = false;
 		workbench.swirrCrossplotTab = 'swirr-corr';
 	}
 
@@ -393,7 +395,7 @@
 		if (!Number.isFinite(num)) return;
 		const existing = projectData.swirrConfig.rules[scopeKey];
 		if (!existing) return;
-		hasManualRuleOverride = true;
+		projectData.swirrManualRuleOverride = true;
 		projectData.swirrConfig.rules = {
 			...projectData.swirrConfig.rules,
 			[scopeKey]: {
@@ -407,14 +409,14 @@
 
 	function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
 		projectData.shfParams.model = m;
-		hasManualShfFitOverride = false;
+		projectData.shfManualFitOverride = false;
 		workbench.swirrCrossplotTab = 'scal-fit';
 	}
 
 	function updateShfFitParam(rf: string, paramKey: 'a' | 'b' | 'c' | 'd', rawVal: string) {
 		const num = Number(rawVal);
 		if (!Number.isFinite(num) || !projectData.shfResult?.fits?.[rf]) return;
-		hasManualShfFitOverride = true;
+		projectData.shfManualFitOverride = true;
 		const nextEntry = {
 			...projectData.shfResult.fits[rf],
 			[paramKey]: num
@@ -435,8 +437,8 @@
 
 	function clearExcludedPlugs() {
 		projectData.swirrConfig.excludedPlugIds = [];
-		hasManualRuleOverride = false;
-		hasManualShfFitOverride = false;
+		projectData.swirrManualRuleOverride = false;
+		projectData.shfManualFitOverride = false;
 		projectData.recomputeSwirrClientSide(true);
 	}
 
@@ -495,6 +497,7 @@
 	</div>
 
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['swirr-corr']} />
 		{#if workbench.scalSubMode === 'static'}
 		<!-- Section 1: SCAL Reference Swirr Extraction -->
 		<ParameterSection
@@ -539,7 +542,7 @@
 				decimals={1}
 				bind:value={projectData.swirrConfig.referencePcPsi}
 				onchange={() => {
-					hasManualRuleOverride = false;
+					projectData.swirrManualRuleOverride = false;
 				}}
 			/>
 
@@ -772,7 +775,7 @@
 						max={80.0}
 						step={0.5}
 						onchange={() => {
-							hasManualShfFitOverride = false;
+							projectData.shfManualFitOverride = false;
 						}}
 					/>
 					<NumericScrubber
@@ -783,7 +786,7 @@
 						max={90}
 						step={1.0}
 						onchange={() => {
-							hasManualShfFitOverride = false;
+							projectData.shfManualFitOverride = false;
 						}}
 					/>
 				</div>
@@ -807,7 +810,7 @@
 									onclick={() => {
 										workbench.swirrCrossplotTab = 'scal-fit';
 										projectData.shfParams.swirrSource = srcKey as 'lab_min' | 'poro_perm';
-										hasManualShfFitOverride = false;
+										projectData.shfManualFitOverride = false;
 									}}
 									class="h-6 rounded-sm border px-1.5 text-[10px] font-medium {(projectData
 										.shfParams.swirrSource ?? 'poro_perm') === srcKey
@@ -851,7 +854,7 @@
 									onclick={() => {
 										workbench.swirrCrossplotTab = 'scal-fit';
 										projectData.setShfJSatMode(sKey as 'swn' | 'sw');
-										hasManualShfFitOverride = false;
+										projectData.shfManualFitOverride = false;
 									}}
 									class="px-1.5 py-0.5 text-[10px] font-medium first:border-r first:border-[var(--border-hairline)] {(projectData
 										.shfParams.jSatMode ?? 'swn') === sKey
@@ -867,7 +870,7 @@
 						type="button"
 						onclick={() => {
 							workbench.swirrCrossplotTab = 'scal-fit';
-							hasManualShfFitOverride = false;
+							projectData.shfManualFitOverride = false;
 							projectData.recomputeScalFitsFromPlugs(true);
 						}}
 						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)]"
@@ -913,7 +916,7 @@
 						type="button"
 						onclick={() => {
 							workbench.swirrCrossplotTab = 'scal-fit';
-							hasManualShfFitOverride = false;
+							projectData.shfManualFitOverride = false;
 							projectData.autoFilterCorruptedScalPoints('all');
 						}}
 						class="rounded-xs border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-amber-900 hover:bg-amber-100"
@@ -925,7 +928,7 @@
 						type="button"
 						onclick={() => {
 							workbench.swirrCrossplotTab = 'scal-fit';
-							hasManualShfFitOverride = false;
+							projectData.shfManualFitOverride = false;
 							projectData.autoFilterCorruptedScalPoints('asymptotes');
 						}}
 						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0.5 text-[9.5px] font-medium text-[var(--text-secondary)] hover:bg-slate-100"
@@ -937,7 +940,7 @@
 						<button
 							type="button"
 							onclick={() => {
-								hasManualShfFitOverride = false;
+								projectData.shfManualFitOverride = false;
 								projectData.clearExcludedScalPoints();
 							}}
 							class="ml-auto text-[9.5px] font-semibold text-blue-700 hover:underline"
@@ -967,7 +970,7 @@
 							<button
 								type="button"
 								onclick={() => {
-									hasManualShfFitOverride = false;
+									projectData.shfManualFitOverride = false;
 									projectData.excludeSelectedScalPoints();
 								}}
 								class="rounded-xs bg-rose-600 px-1.5 py-0.5 font-semibold text-white hover:bg-rose-700"
@@ -977,7 +980,7 @@
 							<button
 								type="button"
 								onclick={() => {
-									hasManualShfFitOverride = false;
+									projectData.shfManualFitOverride = false;
 									projectData.excludeSelectedScalPlugs();
 								}}
 								class="rounded-xs border border-amber-400 bg-white px-1.5 py-0.5 font-semibold text-amber-900 hover:bg-amber-50"
@@ -1034,8 +1037,8 @@
 												? 'bg-slate-50/70 text-slate-400 line-through'
 												: ''}"
 											onclick={() => {
-												hasManualRuleOverride = false;
-												hasManualShfFitOverride = false;
+												projectData.swirrManualRuleOverride = false;
+												projectData.shfManualFitOverride = false;
 												projectData.toggleSwirrPlugExclusion(plug.plug_id);
 											}}
 										>
@@ -1045,8 +1048,8 @@
 													checked={!isExcl}
 													onclick={(e) => e.stopPropagation()}
 													onchange={() => {
-														hasManualRuleOverride = false;
-														hasManualShfFitOverride = false;
+														projectData.swirrManualRuleOverride = false;
+														projectData.shfManualFitOverride = false;
 														projectData.toggleSwirrPlugExclusion(plug.plug_id);
 													}}
 													class="h-3 w-3 accent-blue-600"
@@ -1088,7 +1091,7 @@
 								<button
 									type="button"
 									onclick={() => {
-										hasManualShfFitOverride = false;
+										projectData.shfManualFitOverride = false;
 										projectData.toggleScalPointExclusion(ptId);
 									}}
 									class="inline-flex items-center gap-0.5 rounded-xs border border-slate-300 bg-white px-1 py-0.5 font-mono text-[9px] text-slate-700 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-800"

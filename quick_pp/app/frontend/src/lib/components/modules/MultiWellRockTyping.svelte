@@ -3,6 +3,7 @@
 	import { API_BASE, api, authHeaders } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import {
 		projectData,
 		type DrtCutoffMethod,
@@ -306,6 +307,8 @@
 				projectData.drtSelectedSavedModelKey = savedPayload.model_key;
 			}
 			customModelName = '';
+			// Persist classifier settings keyed by the active zone selection
+			await projectData.persistProjectParams([], ['rt-classifier']);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Failed to save classifier model';
 		} finally {
@@ -667,6 +670,7 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['rock-typing', 'rt-classifier']} />
 		<ParameterSection
 			title="Rock Typing Method (DRT)"
 			badge="{projectData.drtDataSource === 'core' ? 'Core (CPORE & CPERM)' : 'Log (PHIT & PERM)'} · {activeMeta.badge}"

@@ -2,17 +2,14 @@
 	import { api } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 
-	let method = $state<'choo' | 'timur' | 'tixier' | 'coates' | 'kozeny_carman'>('choo');
-	let m = $state(2.0);
-	let A = $state(1000000);
-	let B = $state(3.0);
-	let C = $state(2.0);
-	let s = $state(0.01);
-	let swirr = $state(0.2);
+	// Model parameters live in shared workbench state so they survive module switches and can be
+	// restored per zone / depth interval from saved well config.
+	const pp = workbench.permParams;
 
 	let hasTsAvailable = $derived.by(() => {
 		const ps = wellData.curves['PHIT_SAND'];
@@ -43,13 +40,13 @@
 						path: { project_id: workbench.projectId, well_name: workbench.wellId }
 					},
 					body: {
-						method,
-						m,
-						A,
-						B,
-						C,
-						s,
-						swirr,
+						method: pp.method,
+						m: pp.m,
+						A: pp.A,
+						B: pp.B,
+						C: pp.C,
+						s: pp.s,
+						swirr: pp.swirr,
 						use_thomas_stieber: useTs,
 						depths: cleanArr(deptArr) as number[] | undefined,
 						phit: cleanArr(phitArr),
@@ -88,11 +85,12 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
-		<ParameterSection title="Permeability Model" badge={method.toUpperCase()}>
+		<SavedParamsIndicator modules={['perm']} />
+		<ParameterSection title="Permeability Model" badge={pp.method.toUpperCase()}>
 			<div class="grid grid-cols-[1fr_118px] items-center gap-x-2 py-0.5">
 				<span class="text-xs font-medium text-[var(--text-primary)]">Empirical Equation</span>
 				<select
-					bind:value={method}
+					bind:value={pp.method}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="choo">Choo (Sand-Silt-Clay)</option>
@@ -129,10 +127,10 @@
 				</div>
 			{/if}
 
-			{#if method === 'choo'}
+			{#if pp.method === 'choo'}
 				<NumericScrubber
 					label="Cementation m"
-					bind:value={m}
+					bind:value={pp.m}
 					min={1.0}
 					max={4.0}
 					step={0.05}
@@ -140,7 +138,7 @@
 				/>
 				<NumericScrubber
 					label="Constant A"
-					bind:value={A}
+					bind:value={pp.A}
 					min={100}
 					max={1e8}
 					step={10000}
@@ -149,7 +147,7 @@
 				/>
 				<NumericScrubber
 					label="Clay Exponent B"
-					bind:value={B}
+					bind:value={pp.B}
 					min={0.5}
 					max={8.0}
 					step={0.1}
@@ -157,16 +155,16 @@
 				/>
 				<NumericScrubber
 					label="Silt Exponent C"
-					bind:value={C}
+					bind:value={pp.C}
 					min={0.5}
 					max={8.0}
 					step={0.1}
 					onrun={() => executePerm(false)}
 				/>
-			{:else if method === 'kozeny_carman'}
+			{:else if pp.method === 'kozeny_carman'}
 				<NumericScrubber
 					label="Surface Area Factor s"
-					bind:value={s}
+					bind:value={pp.s}
 					min={0.0001}
 					max={1.0}
 					step={0.001}
@@ -176,7 +174,7 @@
 			{:else}
 				<NumericScrubber
 					label="Irreducible Sw (Swirr)"
-					bind:value={swirr}
+					bind:value={pp.swirr}
 					unit="v/v"
 					min={0.02}
 					max={0.8}

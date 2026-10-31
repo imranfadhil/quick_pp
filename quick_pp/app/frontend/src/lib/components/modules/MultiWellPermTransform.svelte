@@ -1,13 +1,14 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { projectData, type PhiKDataSource } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
 
-	let hasManualEdits = $state(false);
+	// Manual-edit flag lives in shared project state so it is saved/restored with project parameters
 
 	function recomputeR2AndActiveWellPreview(rfKey: string, aVal: number, bVal: number) {
 		const res = projectData.permTransformResult;
@@ -92,7 +93,7 @@
 		if (!res || !res.fits[rfKey]) return;
 		const parsed = parseFloat(rawValue);
 		if (!Number.isFinite(parsed)) return;
-		hasManualEdits = true;
+		projectData.permTransformManualEdits = true;
 		const nextA = field === 'a' ? Math.max(1e-6, parsed) : res.fits[rfKey].a;
 		const nextB = field === 'b' ? parsed : res.fits[rfKey].b;
 		recomputeR2AndActiveWellPreview(rfKey, nextA, nextB);
@@ -103,6 +104,12 @@
 		projectData.isComputingMultiWell = true;
 		projectData.error = null;
 		try {
+			// Restored manually-edited fits (from saved project params) are used once on the next run
+			const restoredFits =
+				!useCurrentFits && projectData.permTransformSavedFits
+					? projectData.permTransformSavedFits
+					: null;
+			projectData.permTransformSavedFits = null;
 			const customFits =
 				useCurrentFits && projectData.permTransformResult?.fits
 					? Object.fromEntries(
@@ -111,7 +118,7 @@
 								{ a: Number(v.a), b: Number(v.b) }
 							])
 						)
-					: null;
+					: restoredFits;
 
 			const { data, error } = await api.POST(
 				'/quick_pp/workspace/projects/{project_id}/perm_transform/compute',
@@ -137,8 +144,8 @@
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Perm transform failed'));
 			}
-			if (!useCurrentFits) {
-				hasManualEdits = false;
+			if (!useCurrentFits && !restoredFits) {
+				projectData.permTransformManualEdits = false;
 			}
 			const fitsMap = (data.fits ?? {}) as Record<
 				string,
@@ -272,6 +279,7 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['perm-transform']} />
 		<ParameterSection
 			title="Power-Law Regression per Rock Type"
 			badge={projectData.permTransformDataSource === 'core'
@@ -356,11 +364,11 @@
 		{#if projectData.permTransformResult}
 			<ParameterSection
 				title="Fitted Equations by Rock Type"
-				badge="{(projectData.permTransformResult.data_source ?? projectData.permTransformDataSource) === 'log' ? 'Log: PHIT & PERM' : 'Core: CPORE & CPERM'} · {hasManualEdits ? 'Custom Edited' : 'Auto-Fitted'}"
+				badge="{(projectData.permTransformResult.data_source ?? projectData.permTransformDataSource) === 'log' ? 'Log: PHIT & PERM' : 'Core: CPORE & CPERM'} · {projectData.permTransformManualEdits ? 'Custom Edited' : 'Auto-Fitted'}"
 			>
 				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
 					<span>Edit <strong>Coeff a</strong> or <strong>Exp b</strong> to update crossplot lines</span>
-					{#if hasManualEdits}
+					{#if projectData.permTransformManualEdits}
 						<button
 							type="button"
 							onclick={() => executePermTransform(false)}

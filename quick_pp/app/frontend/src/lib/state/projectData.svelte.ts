@@ -1,8 +1,111 @@
-import { API_BASE, api, authHeaders, deleteJson, patchJson, postJson } from '$lib/api/client';
+import { API_BASE, api, authHeaders, deleteJson, getJson, patchJson, postJson } from '$lib/api/client';
 import type { ProjectSummaryResponse, WellSummaryItem } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { wellData } from './wellData.svelte';
 import { workbench } from './workbench.svelte';
+import { assignKnown, clone } from './moduleParams.svelte';
+import {
+	isProjectParamModuleKey,
+	PROJECT_PARAM_MODULE_KEYS,
+	projectParams,
+	zoneSelectionKey,
+	zoneSelectionLabel,
+	type ProjectModuleParamsMap,
+	type ProjectParamModuleKey,
+	type ProjectParamsSnapshot
+} from './projectParams.svelte';
+
+export interface MultiWellQaqcParams {
+	normMethod: 'quantile' | 'histogram';
+	normByZone: boolean;
+	normKeyWell: string;
+	normLowQ: number;
+	normHighQ: number;
+	normExcludeBadhole: boolean;
+	normLogs: string[];
+	outerLimitFill: boolean;
+	batchScaleFactor: number;
+	batchOffset: number;
+	envBitsize: number;
+	envMudWeight: number;
+	envSurfaceTemp: number;
+	envTempGrad: number;
+	envSalinity: number;
+	envRhoMudcake: number;
+	badhole: {
+		useCali: boolean;
+		caliThreshold: number;
+		autoBitsize: boolean;
+		bitsizeDefault: number;
+		useDrho: boolean;
+		drhoThreshold: number;
+		useRhobNphi: boolean;
+		rhobMin: number;
+		rhobMax: number;
+		nphiMax: number;
+		excludeCoal: boolean;
+		useRugosity: boolean;
+		rugosityWindow: number;
+		rhobTrendFactor: number;
+		caliSpikeThreshold: number;
+	};
+}
+
+export interface ShfOptimizerParams {
+	optLoss: 'rmse' | 'mae' | 'huber' | 'bvw';
+	solvePerZone: boolean;
+	useMdtPrior: boolean;
+	mdtFwl: number;
+	mdtWeight: number;
+	poreVolumeWeighted: boolean;
+	equalWellWeights: boolean;
+}
+
+export interface MlTrainerParams {
+	architecture: 'clastic' | 'carbonate';
+	suiteKey: string;
+	suiteLabel: string;
+	selectedWells: string[];
+	excludeCoal: boolean;
+	excludeTight: boolean;
+	excludeBadHole: boolean;
+	selectedRockFlags: number[];
+	conformalAlpha: number;
+	testSize: number;
+	nEstimators: number;
+	maxDepth: number;
+}
+
+const ROCK_TYPING_PARAM_KEYS = [
+	'drtDataSource',
+	'drtMethod',
+	'fziCutoffs',
+	'winlandCutoffs',
+	'luciaCutoffs',
+	'drtCutoffMethod',
+	'drtAutoK',
+	'drtGmmCriterion',
+	'drtMaxClusters',
+	'useInterparticlePorosity',
+	'luciaVuggyOverride',
+	'phiSecCutoff',
+	'dtMatrix',
+	'dtFluid',
+	'drtPropagationMode',
+	'drtPropagateFocusedOnly',
+	'drtSelectedSavedModelKey'
+] as const;
+
+const RT_CLASSIFIER_PARAM_KEYS = [
+	'drtClassifierModel',
+	'drtSelectedFeatures',
+	'drtIncludePef',
+	'drtIncludeVdl',
+	'drtClassifierTestSize',
+	'drtPropagationMode',
+	'drtPropagateFocusedOnly',
+	'drtSelectedSavedModelKey'
+] as const;
 
 export interface ProjectListItem {
 	project_id: number;
@@ -350,6 +453,81 @@ class ProjectDataState {
 	swirrResult = $state.raw<SwirrFitResult | null>(null);
 	swirrApplyResult = $state.raw<SwirrApplyResult | null>(null);
 
+	// Manual-override flags live in shared state so they persist with saved project parameters
+	swirrManualRuleOverride = $state<boolean>(false);
+	shfManualFitOverride = $state<boolean>(false);
+	permTransformManualEdits = $state<boolean>(false);
+	/** Restored manually-edited perm-transform fits, consumed by the next perm-transform run. */
+	permTransformSavedFits: Record<string, { a: number; b: number }> | null = null;
+	/** Restored SHF fits, consumed by the next SHF run when no in-memory SHF result exists. */
+	shfSavedFits: { model: string; j_sat_mode: string; fits: Record<string, any> } | null = null;
+
+	mwQaqcParams = $state<MultiWellQaqcParams>({
+		normMethod: 'quantile',
+		normByZone: true,
+		normKeyWell: '',
+		normLowQ: 0.05,
+		normHighQ: 0.95,
+		normExcludeBadhole: true,
+		normLogs: ['GR', 'NPHI'],
+		outerLimitFill: false,
+		batchScaleFactor: 0.01,
+		batchOffset: 0.0,
+		envBitsize: 8.5,
+		envMudWeight: 9.5,
+		envSurfaceTemp: 75.0,
+		envTempGrad: 1.5,
+		envSalinity: 30000.0,
+		envRhoMudcake: 1.5,
+		badhole: {
+			useCali: true,
+			caliThreshold: 2.0,
+			autoBitsize: true,
+			bitsizeDefault: 8.5,
+			useDrho: true,
+			drhoThreshold: 0.15,
+			useRhobNphi: false,
+			rhobMin: 1.95,
+			rhobMax: 2.95,
+			nphiMax: 0.45,
+			excludeCoal: true,
+			useRugosity: false,
+			rugosityWindow: 21,
+			rhobTrendFactor: 0.05,
+			caliSpikeThreshold: 0.5
+		}
+	});
+
+	shfOptParams = $state<ShfOptimizerParams>({
+		optLoss: 'rmse',
+		solvePerZone: false,
+		useMdtPrior: false,
+		mdtFwl: 3925.0,
+		mdtWeight: 1.0,
+		poreVolumeWeighted: true,
+		equalWellWeights: true
+	});
+
+	mlTrainerParams = $state<MlTrainerParams>({
+		architecture: 'clastic',
+		suiteKey: 'clastic_custom',
+		suiteLabel: 'Custom Clastic PIML',
+		selectedWells: [],
+		excludeCoal: true,
+		excludeTight: false,
+		excludeBadHole: true,
+		selectedRockFlags: [],
+		conformalAlpha: 0.2,
+		testSize: 0.2,
+		nEstimators: 50,
+		maxDepth: 10
+	});
+
+	/** Saved project-level module parameters (`projects.config_data.module_params`). */
+	projectModuleParams = $state.raw<ProjectModuleParamsMap>({});
+	/** Parameter + zone snapshots captured when each multi-well module was last computed. */
+	pendingProjectParamSnapshots: Partial<Record<ProjectParamModuleKey, ProjectParamsSnapshot>> = {};
+
 	shfResult = $state.raw<{
 		model?: 'leverett_j' | 'skelt_harrison' | 'cuddy';
 		j_sat_mode?: 'swn' | 'sw';
@@ -638,6 +816,232 @@ class ProjectDataState {
 			...this.pendingMultiWellModules,
 			[moduleKey]: true
 		};
+		this.pendingProjectParamSnapshots[moduleKey] = this.snapshotProjectParams(moduleKey);
+	}
+
+	// ---------------------------------------------------------------------------
+	// Project-level (multi-well) parameter persistence keyed by zone selection
+	// ---------------------------------------------------------------------------
+
+	private pickFields(keys: readonly string[]): Record<string, any> {
+		const self = this as unknown as Record<string, any>;
+		return Object.fromEntries(keys.map((k) => [k, clone(self[k])]));
+	}
+
+	private assignFields(keys: readonly string[], src: Record<string, any> | null | undefined) {
+		if (!src || typeof src !== 'object') return;
+		const self = this as unknown as Record<string, any>;
+		for (const k of keys) {
+			if (!(k in src)) continue;
+			const nv = src[k];
+			const cur = self[k];
+			if (nv === undefined || nv === null) continue;
+			if (Array.isArray(cur) ? Array.isArray(nv) : typeof cur === typeof nv) {
+				if (typeof nv === 'number' && !Number.isFinite(nv)) continue;
+				self[k] = clone(nv);
+			}
+		}
+	}
+
+	getProjectParams(module: ProjectParamModuleKey): Record<string, any> {
+		switch (module) {
+			case 'mw-qaqc':
+				return clone(this.mwQaqcParams);
+			case 'rock-typing':
+				return this.pickFields(ROCK_TYPING_PARAM_KEYS);
+			case 'perm-transform': {
+				const fits = this.permTransformResult?.fits;
+				return {
+					permTransformDataSource: this.permTransformDataSource,
+					manualEdits: this.permTransformManualEdits,
+					fits:
+						this.permTransformManualEdits && fits
+							? Object.fromEntries(
+									Object.entries(fits).map(([k, v]) => [k, { a: Number(v.a), b: Number(v.b) }])
+								)
+							: null
+				};
+			}
+			case 'swirr-corr':
+				return {
+					swirrConfig: clone(this.swirrConfig),
+					swirrInputCols: clone(this.swirrInputCols),
+					swirrManualRuleOverride: this.swirrManualRuleOverride,
+					shfManualFitOverride: this.shfManualFitOverride
+				};
+			case 'shf': {
+				const sr = this.shfResult;
+				return {
+					shfParams: clone(this.shfParams),
+					shfOpt: clone(this.shfOptParams),
+					fits:
+						sr?.fits && Object.keys(sr.fits).length > 0
+							? {
+									model: sr.model ?? this.shfParams.model,
+									j_sat_mode: sr.j_sat_mode ?? this.shfParams.jSatMode,
+									fits: clone(sr.fits)
+								}
+							: null
+				};
+			}
+			case 'rt-classifier':
+				return this.pickFields(RT_CLASSIFIER_PARAM_KEYS);
+			case 'ml-training':
+				return clone(this.mlTrainerParams);
+		}
+	}
+
+	applyProjectParams(module: ProjectParamModuleKey, p: Record<string, any>) {
+		if (!p || typeof p !== 'object') return;
+		switch (module) {
+			case 'mw-qaqc':
+				assignKnown(this.mwQaqcParams, p);
+				if (p.badhole) assignKnown(this.mwQaqcParams.badhole, p.badhole);
+				break;
+			case 'rock-typing':
+				this.assignFields(ROCK_TYPING_PARAM_KEYS, p);
+				break;
+			case 'perm-transform':
+				this.assignFields(['permTransformDataSource'], p);
+				if (p.manualEdits && p.fits && typeof p.fits === 'object') {
+					this.permTransformSavedFits = clone(p.fits);
+					this.permTransformManualEdits = true;
+				} else {
+					this.permTransformSavedFits = null;
+					this.permTransformManualEdits = false;
+				}
+				break;
+			case 'swirr-corr':
+				assignKnown(this.swirrConfig, p.swirrConfig);
+				assignKnown(this.swirrInputCols, p.swirrInputCols);
+				if (typeof p.swirrManualRuleOverride === 'boolean') {
+					this.swirrManualRuleOverride = p.swirrManualRuleOverride;
+				}
+				if (typeof p.shfManualFitOverride === 'boolean') {
+					this.shfManualFitOverride = p.shfManualFitOverride;
+				}
+				break;
+			case 'shf':
+				assignKnown(this.shfParams, p.shfParams);
+				assignKnown(this.shfOptParams, p.shfOpt);
+				this.shfSavedFits = p.fits && typeof p.fits === 'object' ? clone(p.fits) : null;
+				break;
+			case 'rt-classifier':
+				this.assignFields(RT_CLASSIFIER_PARAM_KEYS, p);
+				break;
+			case 'ml-training':
+				assignKnown(this.mlTrainerParams, p);
+				break;
+		}
+	}
+
+	snapshotProjectParams(module: ProjectParamModuleKey): ProjectParamsSnapshot {
+		const zones = workbench.selectedZones.length > 0 ? [...workbench.selectedZones] : null;
+		const wells =
+			module === 'ml-training' && this.mlTrainerParams.selectedWells.length > 0
+				? [...this.mlTrainerParams.selectedWells]
+				: this.selectedWellNames.length > 0
+					? [...this.selectedWellNames]
+					: null;
+		return {
+			key: zoneSelectionKey(zones),
+			label: zoneSelectionLabel(zones),
+			selection: { zones, well_names: wells },
+			params: this.getProjectParams(module)
+		};
+	}
+
+	resetProjectParamState() {
+		this.projectModuleParams = {};
+		this.pendingProjectParamSnapshots = {};
+		this.permTransformSavedFits = null;
+		this.shfSavedFits = null;
+		projectParams.reset();
+	}
+
+	/** Load saved project-level module parameters for `pid` from the backend. */
+	async loadProjectModuleParams(pid: string): Promise<void> {
+		try {
+			const res = await getJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/module_params`
+			);
+			if (workbench.projectId !== pid) return;
+			this.projectModuleParams = (res?.module_params ?? {}) as ProjectModuleParamsMap;
+		} catch {
+			if (workbench.projectId !== pid) return;
+			this.projectModuleParams = {};
+		}
+		projectParams.setCounts(this.projectModuleParams);
+		projectParams.loadGeneration += 1;
+	}
+
+	/** Apply exact zone-key matches from saved project parameters to all multi-well modules. */
+	applyProjectParamsForCurrentSelection() {
+		const mp = this.projectModuleParams || {};
+		const key = zoneSelectionKey();
+		const label = zoneSelectionLabel();
+		for (const module of PROJECT_PARAM_MODULE_KEYS) {
+			const entry = mp[module]?.[key] ?? null;
+			if (entry?.params) {
+				try {
+					this.applyProjectParams(module, entry.params);
+				} catch {
+					// Ignore malformed saved entry; keep current values
+				}
+			}
+			projectParams.setStatus(module, key, label, entry);
+		}
+		projectParams.setCounts(mp);
+	}
+
+	/**
+	 * Persist parameter snapshots for the given multi-well modules to the project config. Modules
+	 * without a compute-time snapshot are skipped unless listed in `forceCurrent`.
+	 */
+	async persistProjectParams(
+		modules: string[],
+		forceCurrent: ProjectParamModuleKey[] = []
+	): Promise<boolean> {
+		const pid = workbench.projectId;
+		if (!pid) return false;
+		const entries: Array<{ module: ProjectParamModuleKey } & ProjectParamsSnapshot> = [];
+		for (const m of new Set([...modules, ...forceCurrent])) {
+			if (!isProjectParamModuleKey(m)) continue;
+			const snap =
+				this.pendingProjectParamSnapshots[m] ??
+				(forceCurrent.includes(m) ? this.snapshotProjectParams(m) : undefined);
+			if (snap) entries.push({ module: m, ...snap });
+		}
+		if (entries.length === 0) return false;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/module_params`,
+				{
+					entries: entries.map((e) => ({
+						module: e.module,
+						key: e.key,
+						label: e.label,
+						selection: e.selection,
+						params: e.params
+					}))
+				}
+			);
+			if (workbench.projectId !== pid) return false;
+			const mp = (res?.module_params ?? {}) as ProjectModuleParamsMap;
+			this.projectModuleParams = mp;
+			const curKey = zoneSelectionKey();
+			for (const e of entries) {
+				delete this.pendingProjectParamSnapshots[e.module];
+				if (e.key === curKey) {
+					projectParams.setStatus(e.module, e.key, e.label, mp[e.module]?.[e.key] ?? null);
+				}
+			}
+			projectParams.setCounts(mp);
+			return true;
+		} catch (e: any) {
+			appStatus.warn(`Parameters could not be saved: ${e?.message ?? e}`);
+			return false;
+		}
 	}
 
 	private static readonly MULTI_WELL_PIPELINE: MultiWellSaveModule[] = [
@@ -672,6 +1076,8 @@ class ProjectDataState {
 			savedLabels.push(res.curveLabel);
 			maxSavedWells = Math.max(maxSavedWells, res.savedWells);
 		}
+		// Persist each saved module's parameters keyed by the zone selection active at compute time
+		await this.persistProjectParams(modulesToSave);
 		const msg = `Saved ${savedLabels.join(' + ')} (${maxSavedWells} wells) ✓`;
 		wellData.lastSavedMessage = msg;
 		appStatus.success(msg);
@@ -1977,6 +2383,7 @@ class ProjectDataState {
 		this.summary = null;
 		this.selectedWellNames = [];
 		this.pendingMultiWellModules = {};
+		this.resetProjectParamState();
 		this.multiWellQaqcResult = null;
 		this.stratNormReport = [];
 		this.mwBadholeSummaries = [];
@@ -2016,6 +2423,7 @@ class ProjectDataState {
 		if (projectChanged) {
 			this.inventorySelectedZone = '';
 			this.pendingMultiWellModules = {};
+			this.resetProjectParamState();
 			this.multiWellQaqcResult = null;
 			this.stratNormReport = [];
 			this.mwBadholeSummaries = [];
@@ -2043,6 +2451,8 @@ class ProjectDataState {
 			const defaultSrc: PhiKDataSource = hasCore || !hasLog ? 'core' : 'log';
 			this.drtDataSource = defaultSrc;
 			this.permTransformDataSource = defaultSrc;
+			// Saved multi-well parameters (applied on exact zone match) override these defaults
+			await this.loadProjectModuleParams(pidStr);
 			let targetWell =
 				preferredWell && availableWells.some((w) => w.name === preferredWell)
 					? preferredWell

@@ -205,6 +205,46 @@ export interface ScalComputedResult {
 	swofKeyword: string;
 }
 
+export interface EnvCorrectionParams {
+	bitsizeDefault: number;
+	mudWeight: number;
+	surfaceTemp: number;
+	tempGrad: number;
+	salinityPpm: number;
+}
+
+export interface PermModelParams {
+	method: 'choo' | 'timur' | 'tixier' | 'coates' | 'kozeny_carman';
+	m: number;
+	A: number;
+	B: number;
+	C: number;
+	s: number;
+	swirr: number;
+}
+
+export interface ResSumParams {
+	vshMax: number;
+	phitMin: number;
+	swtMax: number;
+	includeUpscaling: boolean;
+	byZone: boolean;
+	cellSize: number;
+	permMethod: 'geometric' | 'arithmetic' | 'harmonic' | 'power_law';
+	omega: number;
+	includeUncertainty: boolean;
+	nSamples: number;
+	uncMetric: 'stoiip' | 'net' | 'phit' | 'swt' | 'bvhc';
+	areaMean: number;
+	areaStd: number;
+	thickMean: number;
+	thickStd: number;
+	ntgMean: number;
+	poroMean: number;
+	swMean: number;
+	boP50: number;
+}
+
 class WorkbenchState {
 	projectId = $state<string | null>(null);
 	wellId = $state<string | null>(null);
@@ -405,6 +445,46 @@ class WorkbenchState {
 	});
 
 	scalResult = $state<ScalComputedResult | null>(null);
+
+	envCorrParams = $state<EnvCorrectionParams>({
+		bitsizeDefault: 8.5,
+		mudWeight: 9.5,
+		surfaceTemp: 75.0,
+		tempGrad: 1.5,
+		salinityPpm: 30000.0
+	});
+
+	permParams = $state<PermModelParams>({
+		method: 'choo',
+		m: 2.0,
+		A: 1000000,
+		B: 3.0,
+		C: 2.0,
+		s: 0.01,
+		swirr: 0.2
+	});
+
+	resSumParams = $state<ResSumParams>({
+		vshMax: 0.4,
+		phitMin: 0.05,
+		swtMax: 0.75,
+		includeUpscaling: true,
+		byZone: false,
+		cellSize: 2.0,
+		permMethod: 'geometric',
+		omega: 0.33,
+		includeUncertainty: false,
+		nSamples: 300,
+		uncMetric: 'stoiip',
+		areaMean: 640.0,
+		areaStd: 80.0,
+		thickMean: 25.0,
+		thickStd: 4.0,
+		ntgMean: 0.65,
+		poroMean: 0.18,
+		swMean: 0.28,
+		boP50: 1.22
+	});
 
 	// FDP Petrophysical Report Generation Workbench State
 	reportConfig = $state<ReportConfigParams>({

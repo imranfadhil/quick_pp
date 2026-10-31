@@ -62,6 +62,11 @@ class Project(Base):
         Integer, primary_key=True, autoincrement=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Project-level settings, e.g. multi-well module parameters keyed by zone selection.
+    # Deferred so regular project queries never touch the column (safe on un-migrated DBs).
+    config_data: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        "config_data", JSON, deferred=True
+    )
     description: Mapped[Optional[str]] = mapped_column(Text)
     created_by: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.user_id", ondelete="SET NULL")

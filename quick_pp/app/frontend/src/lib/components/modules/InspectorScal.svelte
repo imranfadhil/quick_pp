@@ -3,6 +3,7 @@
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
+	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { appStatus } from '$lib/state/status.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
@@ -548,6 +549,9 @@
 				wellData.config = { ...wellData.config, ...extraConfig };
 			}
 
+			// 5. Persist SCAL parameters keyed by the active zone / depth selection for auto-restore
+			await wellData.persistModuleParams([], ['scal']);
+
 			scalPendingSave = false;
 			wellData.lastSavedMessage = 'SCAL, CPORE/CPERM & Pc Saved ✓';
 			appStatus.success(
@@ -578,6 +582,7 @@
 	</div>
 
 	<div class="flex-1 overflow-y-auto">
+		<SavedParamsIndicator modules={['scal']} />
 		<ParameterSection
 			title="1. Core Depth Shift & Alignment"
 			badge={wellData.coreShiftDirty
