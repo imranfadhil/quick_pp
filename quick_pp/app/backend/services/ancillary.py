@@ -135,7 +135,24 @@ ANCILLARY_TARGET_SCHEMAS: Dict[str, Dict[str, List[str]]] = {
             "grad",
             "fluid_gradient",
         ],
-        "MOBILITY": ["mobility", "mob", "drawdown_mobility", "md_cp"],
+        "MOBILITY": ["mobility", "mob", "drawdown_mobility", "md_cp", "mobility_md_cp"],
+        "PERMEABILITY": [
+            "permeability",
+            "perm",
+            "k",
+            "kperm",
+            "drawdown_perm",
+            "perm_md",
+        ],
+        "TEMPERATURE": [
+            "temperature",
+            "temp",
+            "form_temp",
+            "formation_temperature",
+            "tool_temperature",
+            "temp_degc",
+            "temp_degf",
+        ],
         "TEST_TYPE": ["test_type", "tool", "type", "rpt", "mdt", "rdt", "sft"],
         "REMARK": ["remark", "remarks", "comment", "comments", "quality", "status"],
     },
@@ -2241,6 +2258,11 @@ def _convert_ancillary_numeric(
             return num * 0.145038
         if u in ("mpa",):
             return num * 145.038
+    if t == "TEMPERATURE":
+        if u in ("degf", "f", "°f", "deg f", "fahrenheit"):
+            return (num - 32.0) * 5.0 / 9.0
+        if u in ("k", "kelvin"):
+            return num - 273.15
     return num
 
 
@@ -2459,6 +2481,11 @@ def commit_ancillary_data(
                 elif dtype == "pressures":
                     d_col, d_unit = col_map.get("DEPTH", ("depth", None))
                     p_col, p_unit = col_map.get("PRESSURE", ("pressure", None))
+                    mob_col, _ = col_map.get("MOBILITY", (None, None))
+                    perm_col, _ = col_map.get("PERMEABILITY", (None, None))
+                    temp_col, temp_unit = col_map.get("TEMPERATURE", (None, None))
+                    if temp_col and not temp_unit and "degf" in str(temp_col).lower():
+                        temp_unit = "degF"
                     rem_col, _ = col_map.get("REMARK", (None, None))
                     tests_payload = []
                     for r in w_rows:
@@ -2467,11 +2494,35 @@ def commit_ancillary_data(
                             r.get(p_col), p_unit, "PRESSURE"
                         )
                         if d_v is not None and p_v is not None:
+                            rem_raw = r.get(rem_col) if rem_col else None
+                            rem_v = (
+                                str(rem_raw).strip()
+                                if rem_raw is not None
+                                and str(rem_raw).strip() not in ("", "nan", "None")
+                                else None
+                            )
                             tests_payload.append(
                                 {
                                     "depth": d_v,
                                     "pressure": p_v,
                                     "pressure_uom": "psi",
+                                    "mobility": _convert_ancillary_numeric(
+                                        r.get(mob_col), None, "MOBILITY"
+                                    )
+                                    if mob_col
+                                    else None,
+                                    "permeability": _convert_ancillary_numeric(
+                                        r.get(perm_col), None, "PERMEABILITY"
+                                    )
+                                    if perm_col
+                                    else None,
+                                    "temperature": _convert_ancillary_numeric(
+                                        r.get(temp_col), temp_unit, "TEMPERATURE"
+                                    )
+                                    if temp_col
+                                    else None,
+                                    "temperature_uom": "degC",
+                                    "remarks": rem_v,
                                 }
                             )
                     if tests_payload:

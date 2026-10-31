@@ -136,6 +136,11 @@ CREATE TABLE IF NOT EXISTS "pressure_tests" (
     "depth" REAL NOT NULL,
     "pressure" REAL NOT NULL,
     "pressure_uom" VARCHAR(50) DEFAULT 'psi',
+    "mobility" REAL,
+    "permeability" REAL,
+    "temperature" REAL,
+    "temperature_uom" VARCHAR(50) DEFAULT 'degC',
+    "remarks" TEXT,
     UNIQUE("well_id", "depth")
 );
 

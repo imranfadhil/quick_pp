@@ -72,7 +72,7 @@
     formation_tops: 'Map columns for Well Name (or select Target Well), Formation/Marker Name, and Measured Depth (MD).',
     fluid_contacts: 'Map columns for Well Name (or select Target Well), Contact Type (OWC/GOC/GWC/FWL), and Depth.',
     perforations: 'Map columns for Well Name (or select Target Well), Perforation Name, Top MD, Bottom MD, and Description.',
-    pressure_tests: 'Map columns for Well Name (or select Target Well), Test Depth, and Formation Pressure.',
+    pressure_tests: 'Map columns for Well Name (or select Target Well), Test Depth and Formation Pressure, plus optional Mobility, Permeability, Temperature and Remarks.',
     core_samples: 'Map columns for Well Name (or select Target Well), Plug Depth, Core Porosity (CPORE), and Permeability (CPERM).',
     scal_pc: 'Map columns for Well Name (or select Target Well), Capillary Pressure (PC), and Water Saturation (SW).',
     well_surveys: 'Map columns for Well Name (or select Target Well), Measured Depth (MD), Inclination (INC), and Azimuth (AZIM).'
@@ -103,6 +103,8 @@
       { key: 'PRESSURE', label: 'PRESSURE — Formation Pressure *', required: true },
       { key: 'PRESSURE_GRADIENT', label: 'PRESSURE_GRADIENT — Fluid Gradient' },
       { key: 'MOBILITY', label: 'MOBILITY — Drawdown Mobility (mD/cP)' },
+      { key: 'PERMEABILITY', label: 'PERMEABILITY — Test Permeability (mD)' },
+      { key: 'TEMPERATURE', label: 'TEMPERATURE — Formation / Tool Temperature (degC; degF auto-converted)' },
       { key: 'TEST_TYPE', label: 'TEST_TYPE — Tool / Test Type (MDT/RFT)' },
       { key: 'REMARK', label: 'REMARK — Quality / Comment' }
     ],

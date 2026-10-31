@@ -2289,7 +2289,16 @@ def _collect_project_handover_bundles(
                     "fluid_contacts": pd.DataFrame(columns=["name", "depth"]),
                     "well_surveys": pd.DataFrame(columns=["md", "inc", "azim"]),
                     "pressure_tests": pd.DataFrame(
-                        columns=["depth", "pressure", "pressure_uom"]
+                        columns=[
+                            "depth",
+                            "pressure",
+                            "pressure_uom",
+                            "mobility",
+                            "permeability",
+                            "temperature",
+                            "temperature_uom",
+                            "remarks",
+                        ]
                     ),
                     "core_data": {},
                     "scal_pc": [],

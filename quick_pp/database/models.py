@@ -241,6 +241,14 @@ class PressureTest(Base):
     depth: Mapped[float] = mapped_column(REAL, nullable=False)
     pressure: Mapped[float] = mapped_column(REAL, nullable=False)
     pressure_uom: Mapped[str] = mapped_column(String(50), default="psi")
+    # Formation pressure testing (MDT/RFT/RCI) attributes
+    mobility: Mapped[Optional[float]] = mapped_column(REAL, nullable=True)  # mD/cP
+    permeability: Mapped[Optional[float]] = mapped_column(REAL, nullable=True)  # mD
+    temperature: Mapped[Optional[float]] = mapped_column(REAL, nullable=True)
+    temperature_uom: Mapped[Optional[str]] = mapped_column(
+        String(50), default="degC", nullable=True
+    )
+    remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     well: Mapped["Well"] = relationship("Well", back_populates="pressure_tests")
 

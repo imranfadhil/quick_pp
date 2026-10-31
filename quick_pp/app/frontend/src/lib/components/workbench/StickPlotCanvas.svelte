@@ -571,11 +571,14 @@
 		let minTvd = Infinity;
 		let maxTvd = -Infinity;
 
-		const xMax = 0.45;
+		const xMax = 0.4;
 
 		wells.forEach((w, wIdx) => {
 			const axisSuffix = wIdx === 0 ? '' : String(wIdx + 1);
 			const xAxisRef = `x${axisSuffix}`;
+			// Keep right-anchored top/contact labels clear of the right-edge perforation strip
+			const hasPerfStrip = workbench.stickPlotShowPerfs && (w.perforations?.length ?? 0) > 0;
+			const rightLabelX = hasPerfStrip ? xMax * 0.8 : xMax * 0.98;
 			const wShfMap = liveShfLookup.get(w.well_name);
 			const zb = getWellZoneBounds(w, activeZone);
 
@@ -902,7 +905,7 @@
 					annotations.push({
 						xref: xAxisRef,
 						yref: 'y',
-						x: xMax * 0.96,
+						x: rightLabelX,
 						y: c.tvd,
 						xanchor: 'right',
 						yanchor: 'bottom',
@@ -978,7 +981,7 @@
 					annotations.push({
 						xref: xAxisRef,
 						yref: 'y',
-						x: xMax * 0.98,
+						x: rightLabelX,
 						y: grp.tvd,
 						xanchor: 'right',
 						yanchor: 'top',
@@ -1031,8 +1034,8 @@
 						type: 'rect',
 						xref: xAxisRef,
 						yref: 'y',
-						x0: 0,
-						x1: xMax * 0.035,
+						x0: xMax * 0.955,
+						x1: xMax,
 						y0,
 						y1,
 						fillcolor: '#EA580C',
@@ -1049,24 +1052,29 @@
 						showlegend: false,
 						xaxis: xAxisRef,
 						yaxis: 'y',
-						x: perfY.map(() => xMax * 0.06),
+						x: perfY.map(() => xMax * 0.93),
 						y: perfY,
-						marker: { color: '#EA580C', size: 5, symbol: 'triangle-right' },
+						marker: { color: '#EA580C', size: 5, symbol: 'triangle-left' },
 						text: perfY.map(() => hoverTxt),
 						hovertemplate: '%{text}<extra></extra>'
 					});
+					// Vertical perf name label, reading bottom-to-top, just inside the right-edge perf strip
 					annotations.push({
 						xref: xAxisRef,
 						yref: 'y',
-						x: xMax * 0.09,
+						x: xMax * 0.875,
 						y: (y0 + y1) / 2,
-						xanchor: 'left',
+						xanchor: 'center',
 						yanchor: 'middle',
+						textangle: -90,
 						showarrow: false,
-						text: `▶ ${perf.name}`,
+						text: perf.name,
 						hovertext: hoverTxt,
 						font: { family: 'JetBrains Mono', size: 8, color: '#9A3412' },
-						bgcolor: 'rgba(255, 247, 237, 0.88)'
+						bgcolor: 'rgba(255, 247, 237, 0.9)',
+						bordercolor: '#FDBA74',
+						borderwidth: 0.5,
+						borderpad: 1
 					});
 				}
 			}
@@ -1107,6 +1115,18 @@
 
 		domains.forEach((dom, wIdx) => {
 			const axisKey = wIdx === 0 ? 'xaxis' : `xaxis${wIdx + 1}`;
+			// Emphasized 0.2 v/v midline for quick eyeballing of BVO magnitude across wells
+			shapes.push({
+				type: 'line',
+				xref: wIdx === 0 ? 'x' : `x${wIdx + 1}`,
+				yref: 'paper',
+				x0: 0.2,
+				x1: 0.2,
+				y0: 0,
+				y1: 1,
+				line: { color: '#94A3B8', width: 1, dash: 'dash' },
+				layer: 'below'
+			});
 			layout[axisKey] = {
 				domain: dom,
 				range: [0, xMax],
@@ -1114,8 +1134,8 @@
 				gridcolor: '#E2E8F0',
 				zeroline: true,
 				zerolinecolor: '#CBD5E1',
-				tickvals: [0, 0.2, 0.4],
-				ticktext: ['0', '.2', '.4'],
+				tickvals: [0, 0.1, 0.2, 0.3, 0.4],
+				ticktext: ['0', '', '.2', '', '.4'],
 				tickfont: { family: 'JetBrains Mono', size: 8.5, color: '#64748B' },
 				fixedrange: true
 			};
@@ -1420,7 +1440,7 @@
 								/
 								<span class="text-red-600">SHF</span>
 							</span>
-							<span class="text-red-600">0.45</span>
+							<span class="text-red-600">0.4</span>
 						</div>
 						<div class="mt-[1px] flex w-full items-center gap-0.5">
 							<div class="h-[1.5px] flex-1 bg-emerald-700"></div>

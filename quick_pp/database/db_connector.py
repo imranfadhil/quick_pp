@@ -157,6 +157,7 @@ class DBConnector:
             self.run_sql_script(os.path.join(script_dir, sql_script))
             self._migrate_uam_columns()
             self._migrate_project_columns()
+            self._migrate_pressure_test_columns()
         except Exception as exc:
             if "readonly" in str(exc).lower() or os.environ.get("QPP_DEMO_MODE", "").lower() in ("1", "true", "yes"):
                 pass
@@ -213,6 +214,36 @@ class DBConnector:
                 conn.execute(
                     text(f'ALTER TABLE "projects" ADD COLUMN "config_data" {col_type}')
                 )
+        except Exception:
+            pass
+
+    def _migrate_pressure_test_columns(self):
+        """Ensure existing `pressure_tests` tables have formation pressure testing columns
+        (mobility, permeability, temperature, temperature_uom, remarks)."""
+        if DBConnector._engine is None:
+            return
+        from sqlalchemy import inspect as sa_inspect, text
+
+        try:
+            inspector = sa_inspect(DBConnector._engine)
+            if not inspector.has_table("pressure_tests"):
+                return
+            existing_cols = {c["name"] for c in inspector.get_columns("pressure_tests")}
+            migrations = [
+                ("mobility", "REAL"),
+                ("permeability", "REAL"),
+                ("temperature", "REAL"),
+                ("temperature_uom", "VARCHAR(50) DEFAULT 'degC'"),
+                ("remarks", "TEXT"),
+            ]
+            with DBConnector._engine.begin() as conn:
+                for col_name, col_def in migrations:
+                    if col_name not in existing_cols:
+                        conn.execute(
+                            text(
+                                f'ALTER TABLE "pressure_tests" ADD COLUMN "{col_name}" {col_def}'
+                            )
+                        )
         except Exception:
             pass
 

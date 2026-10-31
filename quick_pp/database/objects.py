@@ -2141,17 +2141,32 @@ class Well(object):
     def add_pressure_tests(
         self, tests: List[Dict[str, Any]], replace: bool = False
     ):
-        """Adds or updates a list of pressure tests for the well.
+        """Adds or updates a list of formation pressure tests for the well.
 
         Args:
             tests (List[Dict[str, Any]]): A list of dictionaries, where each
                                           dictionary represents a test and must contain
-                                          'depth' and 'pressure'. 'pressure_uom' is optional.
+                                          'depth' and 'pressure'. Optional keys:
+                                          'pressure_uom', 'mobility' (mD/cP),
+                                          'permeability' (mD), 'temperature',
+                                          'temperature_uom' (default degC) and 'remarks'.
             replace (bool): If True, deletes all existing pressure tests for this well before inserting.
         """
         logger.info(
             f"Adding/updating {len(tests)} pressure tests for well '{self.name}' (replace={replace})."
         )
+
+        def _opt_float(v: Any) -> Optional[float]:
+            if v is None:
+                return None
+            if isinstance(v, str) and not v.strip():
+                return None
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return f if np.isfinite(f) else None
+
         dedup_tests: Dict[float, Dict[str, Any]] = {}
         for test_data in tests or []:
             if not isinstance(test_data, dict) or not all(
@@ -2164,15 +2179,33 @@ class Well(object):
                 p_val = float(test_data["pressure"])
             except (TypeError, ValueError):
                 continue
+            if not (np.isfinite(d_val) and np.isfinite(p_val)):
+                continue
             uom = str(
                 test_data.get("pressure_uom")
                 or test_data.get("pressure_unit")
                 or "psi"
             ).strip()
+            t_uom = str(
+                test_data.get("temperature_uom")
+                or test_data.get("temperature_unit")
+                or "degC"
+            ).strip()
+            remarks_raw = test_data.get("remarks", test_data.get("remark"))
+            remarks = (
+                str(remarks_raw).strip()
+                if remarks_raw is not None and str(remarks_raw).strip() not in ("", "nan", "None")
+                else None
+            )
             dedup_tests[d_val] = {
                 "depth": d_val,
                 "pressure": p_val,
                 "pressure_uom": uom or "psi",
+                "mobility": _opt_float(test_data.get("mobility")),
+                "permeability": _opt_float(test_data.get("permeability")),
+                "temperature": _opt_float(test_data.get("temperature")),
+                "temperature_uom": t_uom or "degC",
+                "remarks": remarks,
             }
 
         if not dedup_tests and not replace:
@@ -2199,16 +2232,38 @@ class Well(object):
         self.db_session.flush()
 
     def get_pressure_tests(self) -> pd.DataFrame:
-        """Retrieves all pressure tests for the well as a DataFrame."""
+        """Retrieves all formation pressure tests for the well as a DataFrame."""
+        cols = [
+            "depth",
+            "pressure",
+            "pressure_uom",
+            "mobility",
+            "permeability",
+            "temperature",
+            "temperature_uom",
+            "remarks",
+        ]
         tests = self._orm_well.pressure_tests
         if not tests:
-            return pd.DataFrame(columns=["depth", "pressure", "pressure_uom"])
+            return pd.DataFrame(columns=cols)
 
         data = [
-            {"depth": t.depth, "pressure": t.pressure, "pressure_uom": t.pressure_uom}
+            {
+                "depth": t.depth,
+                "pressure": t.pressure,
+                "pressure_uom": t.pressure_uom,
+                "mobility": t.mobility,
+                "permeability": t.permeability,
+                "temperature": t.temperature,
+                "temperature_uom": t.temperature_uom or "degC",
+                "remarks": t.remarks or "",
+            }
             for t in tests
         ]
-        df = pd.DataFrame(data).sort_values(by="depth").reset_index(drop=True)
+        df = pd.DataFrame(data, columns=cols).sort_values(by="depth").reset_index(drop=True)
+        # Keep missing optional measurements as None (JSON-safe) rather than NaN
+        for c in ("mobility", "permeability", "temperature"):
+            df[c] = df[c].astype(object).where(pd.notna(df[c]), None)
         logger.debug(f"Retrieved {len(df)} pressure tests for well '{self.name}'.")
         return df
 

@@ -22,6 +22,11 @@
 	let newScalSw = $state<number>(0.35);
 	let newPerfBottom = $state<number>(1005);
 	let newPerfDesc = $state('');
+	// Formation pressure test quick-entry drafts (optional fields may be left blank)
+	let newPressMob = $state<number | null>(null);
+	let newPressPerm = $state<number | null>(null);
+	let newPressTemp = $state<number | null>(null);
+	let newPressRemarks = $state('');
 
 	const TOP_COLS: GridColumn[] = [
 		{ key: 'name', label: 'Formation / Zone', editable: true },
@@ -56,8 +61,33 @@
 
 	const PRESSURE_COLS: GridColumn[] = [
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 1, editable: true },
-		{ key: 'pressure', label: 'Pressure', unit: 'psi', numeric: true, decimals: 1, editable: true }
+		{ key: 'pressure', label: 'Form. Press.', unit: 'psi', numeric: true, decimals: 1, editable: true },
+		{ key: 'mobility', label: 'Mobility', unit: 'mD/cP', numeric: true, decimals: 2, editable: true },
+		{ key: 'permeability', label: 'Perm', unit: 'mD', numeric: true, decimals: 2, editable: true },
+		{ key: 'temperature', label: 'Temp', unit: 'degC', numeric: true, decimals: 1, editable: true },
+		{ key: 'remarks', label: 'Remarks', editable: true }
 	];
+
+	/** Parse an optional numeric input (blank / invalid -> null). */
+	function optNum(v: unknown): number | null {
+		if (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) return null;
+		const n = Number(v);
+		return Number.isFinite(n) ? n : null;
+	}
+
+	/** Normalize a formation pressure test row to the backend payload shape. */
+	function normalizePressureRow(r: Record<string, any>): Record<string, any> {
+		return {
+			depth: Number(r.depth),
+			pressure: Number(r.pressure),
+			pressure_uom: r.pressure_uom || 'psi',
+			mobility: optNum(r.mobility),
+			permeability: optNum(r.permeability),
+			temperature: optNum(r.temperature),
+			temperature_uom: r.temperature_uom || 'degC',
+			remarks: String(r.remarks ?? r.remark ?? '').trim()
+		};
+	}
 
 	const SURVEY_COLS: GridColumn[] = [
 		{ key: 'md', label: 'MD', unit: 'm', numeric: true, decimals: 1, editable: true },
@@ -129,8 +159,16 @@
 		} else if (activeTab === 'pressure') {
 			wellData.pressureTests = [
 				...wellData.pressureTests,
-				{ depth: Number(newDepth), pressure: Number(newVal2), pressure_uom: 'psi' }
-			];
+				normalizePressureRow({
+					depth: newDepth,
+					pressure: newVal2,
+					mobility: newPressMob,
+					permeability: newPressPerm,
+					temperature: newPressTemp,
+					remarks: newPressRemarks
+				})
+			].sort((a, b) => a.depth - b.depth);
+			newPressRemarks = '';
 		} else if (activeTab === 'survey') {
 			wellData.survey = [
 				...wellData.survey,
@@ -244,13 +282,11 @@
 			wellData.scalPc = [...wellData.scalPc, ...mapped];
 		} else if (activeTab === 'pressure') {
 			const mapped = pastedRows
-				.map((r) => ({
-					depth: Number(r.depth ?? 0),
-					pressure: Number(r.pressure ?? 0),
-					pressure_uom: 'psi'
-				}))
+				.map((r) => normalizePressureRow(r))
 				.filter((p) => Number.isFinite(p.depth) && Number.isFinite(p.pressure));
-			wellData.pressureTests = [...wellData.pressureTests, ...mapped];
+			wellData.pressureTests = [...wellData.pressureTests, ...mapped].sort(
+				(a, b) => a.depth - b.depth
+			);
 		} else if (activeTab === 'survey') {
 			const mapped = pastedRows
 				.map((r) => ({
@@ -350,6 +386,11 @@
 					normalizedScal
 				);
 			} else if (activeTab === 'pressure') {
+				// Normalize (blank optional cells -> null) & drop rows missing depth/pressure
+				wellData.pressureTests = wellData.pressureTests
+					.map((r) => normalizePressureRow(r))
+					.filter((p) => Number.isFinite(p.depth) && Number.isFinite(p.pressure))
+					.sort((a, b) => a.depth - b.depth);
 				await saveAncillaryItems(
 					workbench.projectId,
 					workbench.wellId,
@@ -410,7 +451,9 @@
 						? 'SCAL Capillary Pressure (Multiple Pc & Sw pairs per sample/depth)'
 						: key === 'perfs'
 							? 'Perforation intervals (Name, Top, Bottom, Description)'
-							: lbl}
+							: key === 'pressure'
+								? 'Formation pressure tests (Depth, Pressure, Mobility, Permeability, Temperature, Remarks)'
+								: lbl}
 			>
 				{lbl}
 			</button>
@@ -526,6 +569,54 @@
 				title="Water Saturation Sw (v/v)"
 				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
+		{:else if activeTab === 'pressure'}
+			<input
+				type="number"
+				step="0.5"
+				placeholder="Depth"
+				title="Test Depth MD (m)"
+				bind:value={newDepth}
+				class="mono-num h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="0.1"
+				placeholder="Press"
+				title="Formation Pressure (psi)"
+				bind:value={newVal2}
+				class="mono-num h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="any"
+				placeholder="Mob"
+				title="Drawdown Mobility (mD/cP) — optional"
+				bind:value={newPressMob}
+				class="mono-num h-6 w-12 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="any"
+				placeholder="Perm"
+				title="Permeability (mD) — optional"
+				bind:value={newPressPerm}
+				class="mono-num h-6 w-12 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="0.1"
+				placeholder="Temp"
+				title="Temperature (degC) — optional"
+				bind:value={newPressTemp}
+				class="mono-num h-6 w-12 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="text"
+				placeholder="Remarks"
+				title="Remarks (e.g. Valid, Tight, Supercharged, Lost seal)"
+				bind:value={newPressRemarks}
+				class="h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
+			/>
 		{:else}
 			<input
 				type="number"
@@ -537,7 +628,7 @@
 			<input
 				type="number"
 				step="1"
-				placeholder={activeTab === 'pressure' ? 'Pressure (psi)' : 'Azim'}
+				placeholder="Azim"
 				bind:value={newVal2}
 				class="mono-num h-6 flex-1 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
@@ -619,7 +710,7 @@
 				columns={PRESSURE_COLS}
 				bind:rows={wellData.pressureTests}
 				editable={true}
-				emptyMessage="No formation pressure tests."
+				emptyMessage="No formation pressure tests. Add above or paste (Depth, Pressure, Mobility, Perm, Temp, Remarks) from Excel."
 				oncellchange={() => saveCurrentTab()}
 				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}
