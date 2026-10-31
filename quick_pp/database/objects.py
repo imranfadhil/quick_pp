@@ -28,6 +28,59 @@ from quick_pp.database.models import (
     WellSurvey as ORMWellSurvey,
 )
 
+# Controlled vocabularies for formation pressure test (FPT) interpretation
+FPT_FLUID_TYPES = ("GAS", "OIL", "WATER", "UNASSIGNED")
+FPT_TEST_QUALITIES = ("VALID", "TIGHT", "SUPERCHARGED", "LOST_SEAL", "EXCLUDED")
+_FPT_FLUID_ALIASES = {
+    "G": "GAS",
+    "GAS": "GAS",
+    "CONDENSATE": "GAS",
+    "O": "OIL",
+    "OIL": "OIL",
+    "W": "WATER",
+    "WTR": "WATER",
+    "WATER": "WATER",
+    "AQUIFER": "WATER",
+    "BRINE": "WATER",
+}
+_FPT_QUALITY_ALIASES = {
+    "VALID": "VALID",
+    "GOOD": "VALID",
+    "OK": "VALID",
+    "NORMAL": "VALID",
+    "TIGHT": "TIGHT",
+    "DRY": "TIGHT",
+    "NO_SEAL": "LOST_SEAL",
+    "LOST_SEAL": "LOST_SEAL",
+    "LOSTSEAL": "LOST_SEAL",
+    "SEAL_FAILURE": "LOST_SEAL",
+    "SUPERCHARGED": "SUPERCHARGED",
+    "SUPERCHARGE": "SUPERCHARGED",
+    "SC": "SUPERCHARGED",
+    "EXCLUDED": "EXCLUDED",
+    "EXCLUDE": "EXCLUDED",
+    "INVALID": "EXCLUDED",
+    "BAD": "EXCLUDED",
+}
+
+
+def normalize_fpt_fluid_type(value: Any) -> str:
+    """Normalize a fluid phase label to GAS / OIL / WATER / UNASSIGNED."""
+    if value is None:
+        return "UNASSIGNED"
+    key = re.sub(r"[^A-Z_]", "", str(value).strip().upper().replace(" ", "_"))
+    return _FPT_FLUID_ALIASES.get(key, "UNASSIGNED")
+
+
+def normalize_fpt_test_quality(value: Any) -> str:
+    """Normalize a pre-test quality flag to VALID / TIGHT / SUPERCHARGED / LOST_SEAL / EXCLUDED."""
+    if value is None:
+        return "VALID"
+    key = re.sub(r"[^A-Z_]", "", str(value).strip().upper().replace(" ", "_").replace("-", "_"))
+    if not key:
+        return "VALID"
+    return _FPT_QUALITY_ALIASES.get(key, "VALID")
+
 
 class Project(object):
     def __init__(
@@ -2149,7 +2202,10 @@ class Well(object):
                                           'depth' and 'pressure'. Optional keys:
                                           'pressure_uom', 'mobility' (mD/cP),
                                           'permeability' (mD), 'temperature',
-                                          'temperature_uom' (default degC) and 'remarks'.
+                                          'temperature_uom' (default degC), 'remarks', and the FPT
+                                          interpretation keys 'tvdss' (override, m), 'fluid_type'
+                                          (GAS/OIL/WATER/UNASSIGNED), 'test_quality'
+                                          (VALID/TIGHT/SUPERCHARGED/LOST_SEAL/EXCLUDED) and 'zone'.
             replace (bool): If True, deletes all existing pressure tests for this well before inserting.
         """
         logger.info(
@@ -2206,6 +2262,17 @@ class Well(object):
                 "temperature": _opt_float(test_data.get("temperature")),
                 "temperature_uom": t_uom or "degC",
                 "remarks": remarks,
+                "tvdss": _opt_float(test_data.get("tvdss")),
+                "fluid_type": normalize_fpt_fluid_type(test_data.get("fluid_type")),
+                "test_quality": normalize_fpt_test_quality(
+                    test_data.get("test_quality")
+                ),
+                "zone": (
+                    str(test_data.get("zone")).strip()
+                    if test_data.get("zone") is not None
+                    and str(test_data.get("zone")).strip() not in ("", "nan", "None")
+                    else None
+                ),
             }
 
         if not dedup_tests and not replace:
@@ -2231,9 +2298,54 @@ class Well(object):
             self.db_session.add(orm_test)
         self.db_session.flush()
 
+    def update_pressure_test_interpretations(
+        self, updates: List[Dict[str, Any]]
+    ) -> int:
+        """Batch-update FPT interpretation fields (fluid_type, test_quality, zone, tvdss) by test_id.
+
+        Only keys present in each update dict are modified, so measured values are never touched.
+
+        Returns:
+            int: Number of pressure test rows updated.
+        """
+        by_id: Dict[int, Dict[str, Any]] = {}
+        for u in updates or []:
+            try:
+                by_id[int(u.get("test_id"))] = u
+            except (TypeError, ValueError):
+                continue
+        if not by_id:
+            return 0
+        rows = list(
+            self.db_session.scalars(
+                select(ORMPressureTest).filter(
+                    ORMPressureTest.well_id == self.well_id,
+                    ORMPressureTest.test_id.in_(list(by_id.keys())),
+                )
+            ).all()
+        )
+        for row in rows:
+            u = by_id[row.test_id]
+            if "fluid_type" in u:
+                row.fluid_type = normalize_fpt_fluid_type(u.get("fluid_type"))
+            if "test_quality" in u:
+                row.test_quality = normalize_fpt_test_quality(u.get("test_quality"))
+            if "zone" in u:
+                z = u.get("zone")
+                row.zone = str(z).strip() if z is not None and str(z).strip() else None
+            if "tvdss" in u:
+                try:
+                    tv = float(u.get("tvdss"))
+                    row.tvdss = tv if np.isfinite(tv) else None
+                except (TypeError, ValueError):
+                    row.tvdss = None
+        self.db_session.flush()
+        return len(rows)
+
     def get_pressure_tests(self) -> pd.DataFrame:
         """Retrieves all formation pressure tests for the well as a DataFrame."""
         cols = [
+            "test_id",
             "depth",
             "pressure",
             "pressure_uom",
@@ -2242,6 +2354,10 @@ class Well(object):
             "temperature",
             "temperature_uom",
             "remarks",
+            "tvdss",
+            "fluid_type",
+            "test_quality",
+            "zone",
         ]
         tests = self._orm_well.pressure_tests
         if not tests:
@@ -2249,6 +2365,7 @@ class Well(object):
 
         data = [
             {
+                "test_id": t.test_id,
                 "depth": t.depth,
                 "pressure": t.pressure,
                 "pressure_uom": t.pressure_uom,
@@ -2257,12 +2374,16 @@ class Well(object):
                 "temperature": t.temperature,
                 "temperature_uom": t.temperature_uom or "degC",
                 "remarks": t.remarks or "",
+                "tvdss": t.tvdss,
+                "fluid_type": normalize_fpt_fluid_type(t.fluid_type),
+                "test_quality": normalize_fpt_test_quality(t.test_quality),
+                "zone": t.zone or "",
             }
             for t in tests
         ]
         df = pd.DataFrame(data, columns=cols).sort_values(by="depth").reset_index(drop=True)
         # Keep missing optional measurements as None (JSON-safe) rather than NaN
-        for c in ("mobility", "permeability", "temperature"):
+        for c in ("mobility", "permeability", "temperature", "tvdss"):
             df[c] = df[c].astype(object).where(pd.notna(df[c]), None)
         logger.debug(f"Retrieved {len(df)} pressure tests for well '{self.name}'.")
         return df

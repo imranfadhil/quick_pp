@@ -5,6 +5,7 @@
 		wellData
 	} from '$lib/state/wellData.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
+	import { fpt } from '$lib/state/fpt.svelte';
 	import { appStatus } from '$lib/state/status.svelte';
 	import {
 		workbench,
@@ -361,6 +362,27 @@
 					{isMlTrainDone && !isMlTrainActive ? '✓' : 'PIML'}
 				</span>
 				<span>Conformal ML Trainer</span>
+			</button>
+			{@const isFptActive = workbench.multiWellStep === 'fpt'}
+			{@const isFptDone = fpt.result !== null && Object.keys(fpt.result.contacts ?? {}).length > 0}
+			<button
+				type="button"
+				onclick={() => (workbench.multiWellStep = 'fpt')}
+				title="Standalone Formation Pressure (MDT/RFT) Fluid Gradients, Pressure vs. TVDSS & Contact (GOC/OWC/FWL) Estimation"
+				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isFptActive
+					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
+			>
+				<span
+					class="mono-num flex h-4 items-center justify-center rounded-xs px-1 text-[9px] font-bold {isFptActive
+						? 'bg-[var(--accent-primary)] text-white'
+						: isFptDone
+							? 'bg-emerald-100 text-emerald-700'
+							: 'bg-sky-100 text-sky-800'}"
+				>
+					{isFptDone && !isFptActive ? '✓' : 'FPT'}
+				</span>
+				<span>Pressure &amp; Contacts</span>
 			</button>
 		{/if}
 	</div>

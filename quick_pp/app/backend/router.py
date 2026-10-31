@@ -5,6 +5,7 @@ from .services.ancillary import router as ancillary_router
 from .services.auth import router as auth_router
 from .services.chat import router as chat_router
 from .services.database import router as database_router
+from .services.fpt import router as fpt_router
 from .services.las_handler import import_logs_router
 from .services.las_handler import router as las_router
 from .services.lithology import router as lithology_router
@@ -46,4 +47,5 @@ api_router.include_router(rock_typing_router)
 api_router.include_router(perm_transform_router)
 api_router.include_router(shf_router)
 api_router.include_router(workspace_router)
+api_router.include_router(fpt_router)
 api_router.include_router(report_router)

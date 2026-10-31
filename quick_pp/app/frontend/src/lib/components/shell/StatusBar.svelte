@@ -20,7 +20,8 @@
 		'perm-transform': 'Perm Transform',
 		shf: 'Saturation Height (SHF)',
 		'rt-classifier': 'RT Classifier Trainer',
-		'ml-training': 'Conformal ML Trainer'
+		'ml-training': 'Conformal ML Trainer',
+		fpt: 'Pressure & Contacts'
 	};
 
 	let elapsedMs = $state(0);

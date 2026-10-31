@@ -29,6 +29,9 @@
 	import MultiWellShf from '$lib/components/modules/MultiWellShf.svelte';
 	import MultiWellRtClassifierTrainer from '$lib/components/modules/MultiWellRtClassifierTrainer.svelte';
 	import MultiWellMlTrainer from '$lib/components/modules/MultiWellMlTrainer.svelte';
+	import MultiWellFpt from '$lib/components/modules/MultiWellFpt.svelte';
+	import FptPlotCanvas from '$lib/components/workbench/FptPlotCanvas.svelte';
+	import { fpt } from '$lib/state/fpt.svelte';
 
 	import {
 		workbench,
@@ -78,6 +81,14 @@
 		(workbench.scope === 'single-well' && workbench.singleWellStep === 'report') ||
 			(workbench.scope === 'multi-well' && workbench.multiWellStep === 'report')
 	);
+	let isFptMode = $derived(workbench.scope === 'multi-well' && workbench.multiWellStep === 'fpt');
+
+	/** FPT grid: clicking a row selects the point on the Pressure vs TVDSS plots. */
+	function handleRightGridRowClick(row: Record<string, any>) {
+		if (isFptMode && typeof row?._id === 'number') {
+			fpt.selectedIds = [row._id];
+		}
+	}
 
 	onMount(async () => {
 		const params = new URLSearchParams(window.location.search);
@@ -149,6 +160,45 @@
 						{ key: 'PCOW', label: 'Pcow', unit: 'psi', numeric: true, decimals: 3 }
 					],
 					rows: workbench.scalResult.swofTable
+				};
+			}
+
+			if (workbench.scope === 'multi-well' && workbench.multiWellStep === 'fpt') {
+				const res = fpt.result;
+				const du = res?.units.depth ?? fpt.depthUnit;
+				const pu = res?.units.pressure ?? fpt.pressureUnit;
+				const edits = fpt.pointEdits;
+				return {
+					title: res
+						? `Formation Pressure Points (${res.n_points} pts${fpt.pendingCount ? ` · ${fpt.pendingCount} unsaved` : ''})`
+						: 'Formation Pressure Points — run Analyze',
+					columns: [
+						{ key: 'WELL', label: 'Well' },
+						{ key: 'MD', label: 'MD', unit: 'm', numeric: true, decimals: 1 },
+						{ key: 'TVDSS', label: 'TVDSS', unit: du, numeric: true, decimals: 1 },
+						{ key: 'PRESSURE', label: 'Pressure', unit: pu, numeric: true, decimals: 2 },
+						{ key: 'EXCESS', label: 'Excess', unit: pu, numeric: true, decimals: 2 },
+						{ key: 'MOBILITY', label: 'Mobility', unit: 'mD/cP', numeric: true, decimals: 2 },
+						{ key: 'FLUID', label: 'Fluid' },
+						{ key: 'QC', label: 'QC' },
+						{ key: 'FIT', label: 'In Fit' },
+						{ key: 'ZONE', label: 'Zone' },
+						{ key: 'REMARKS', label: 'Remarks' }
+					],
+					rows: (res?.points ?? []).map((p) => ({
+						_id: p.id,
+						WELL: p.well_name,
+						MD: p.md,
+						TVDSS: p.tvdss_display,
+						PRESSURE: p.pressure_display,
+						EXCESS: p.excess_pressure,
+						MOBILITY: p.mobility,
+						FLUID: `${p.fluid_type}${edits[String(p.id)]?.fluid_type ? ' *' : ''}`,
+						QC: `${p.test_quality}${edits[String(p.id)]?.test_quality ? ' *' : ''}`,
+						FIT: p.used_in_fit ? '✓' : '',
+						ZONE: p.zone || '—',
+						REMARKS: p.tvdss_source === 'missing' ? 'No TVDSS' : p.remarks || ''
+					}))
 				};
 			}
 
@@ -725,6 +775,8 @@
 						<MultiWellRtClassifierTrainer />
 					{:else if workbench.multiWellStep === 'ml-training'}
 						<MultiWellMlTrainer />
+					{:else if workbench.multiWellStep === 'fpt'}
+						<MultiWellFpt />
 					{:else if workbench.multiWellStep === 'report'}
 						<InspectorReport />
 					{:else}
@@ -746,7 +798,9 @@
 		{:else}
 			<!-- CENTER PANE (45% default width): Synchronized Well Log Canvas or Multi-Well Stick Plot -->
 			<Pane defaultSize={45} minSize={28} class="h-full overflow-hidden">
-				{#if workbench.scope === 'multi-well' && workbench.centerPaneMultiWellView === 'stick-plot'}
+				{#if isFptMode}
+					<FptPlotCanvas initialMode="pressure" />
+				{:else if workbench.scope === 'multi-well' && workbench.centerPaneMultiWellView === 'stick-plot'}
 					<StickPlotCanvas />
 				{:else}
 					<LogTrackCanvas />
@@ -760,7 +814,11 @@
 			<!-- RIGHT PANE (30% default width): Crossplot & Zonal Data Grid -->
 			<Pane defaultSize={30} minSize={20} class="h-full overflow-hidden">
 				{#if workbench.rightPaneTab === 'crossplot'}
-					<CrossplotCanvas />
+					{#if isFptMode}
+						<FptPlotCanvas initialMode="excess" />
+					{:else}
+						<CrossplotCanvas />
+					{/if}
 				{:else if workbench.rightPaneTab === 'grid'}
 					<div class="flex h-full flex-col bg-[var(--bg-surface)]">
 						<div
@@ -772,6 +830,7 @@
 							<CompactDataGrid
 								columns={rightGridConfig.columns}
 								rows={rightGridConfig.rows}
+								onrowclick={handleRightGridRowClick}
 							/>
 						</div>
 					</div>
@@ -782,7 +841,11 @@
 						class="h-full w-full"
 					>
 						<Pane defaultSize={58} minSize={25} class="w-full overflow-hidden">
-							<CrossplotCanvas />
+							{#if isFptMode}
+								<FptPlotCanvas initialMode="excess" />
+							{:else}
+								<CrossplotCanvas />
+							{/if}
 						</Pane>
 
 						<PaneResizer
@@ -805,6 +868,7 @@
 									<CompactDataGrid
 										columns={rightGridConfig.columns}
 										rows={rightGridConfig.rows}
+										onrowclick={handleRightGridRowClick}
 									/>
 								</div>
 							</div>

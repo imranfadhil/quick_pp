@@ -493,3 +493,133 @@ def neutron_density_xplot(
     fig.update_layout(**layout)
 
     return fig
+
+
+# Petrophysical fluid colour conventions (parity with frontend petrophysicsColors.ts)
+FPT_FLUID_COLORS = {
+    "GAS": "#EF4444",
+    "OIL": "#10B981",
+    "WATER": "#3B82F6",
+    "UNASSIGNED": "#64748B",
+}
+FPT_EXCLUDED_COLOR = "#9CA3AF"
+
+
+def plot_formation_pressure(
+    analyzer,
+    show_excess: bool = True,
+    well_col: str = "WELL_NAME",
+    title: str = "Formation Pressure vs. TVDSS",
+    figsize: tuple = (11, 7),
+    ref_water_gradient: float = None,
+):
+    """Dual-track Pressure (and Excess Pressure) vs. TVDSS plot from a fitted FormationPressureAnalyzer.
+
+    Left track: measured formation pressure coloured by fluid phase, gradient trend lines extrapolated
+    across the depth range, horizontal contact lines with P10-P90 shaded bands and density call-outs.
+    Right track (optional): excess pressure relative to the hydrostatic water reference.
+
+    Args:
+        analyzer (quick_pp.fluid_type.FormationPressureAnalyzer): Analyzer after `fit_all()` /
+            `fit_gradient()` and (optionally) `estimate_contacts()`.
+        show_excess (bool): Add the Excess Pressure track. Defaults to True.
+        well_col (str): Column used for per-well marker shapes. Defaults to 'WELL_NAME'.
+        title (str): Figure title.
+        figsize (tuple): Matplotlib figure size.
+        ref_water_gradient (float, optional): Reference gradient for excess pressure
+            (defaults to the fitted WATER line or 1.0 g/cc).
+
+    Returns:
+        matplotlib.figure.Figure: The generated figure.
+    """
+    df = analyzer.df
+    zc, pc, fc, qc = (
+        analyzer.tvdss_col,
+        analyzer.pressure_col,
+        analyzer.fluid_col,
+        analyzer.quality_col,
+    )
+    pu, du = analyzer.pressure_unit, analyzer.depth_unit
+    ncols = 2 if show_excess else 1
+    fig, axes = plt.subplots(
+        1,
+        ncols,
+        figsize=figsize,
+        sharey=True,
+        gridspec_kw={"width_ratios": [2.2, 1] if show_excess else [1]},
+    )
+    axes = np.atleast_1d(axes)
+    ax = axes[0]
+
+    markers = ["o", "s", "^", "D", "v", "P", "X", "<", ">", "h"]
+    wells = list(df[well_col].dropna().unique()) if well_col in df.columns else [None]
+    excess = analyzer.calculate_excess_pressure(ref_water_gradient) if show_excess else None
+    fin = df[zc].notna() & df[pc].notna()
+
+    for wi, wn in enumerate(wells):
+        wmask = fin & ((df[well_col] == wn) if wn is not None else True)
+        mk = markers[wi % len(markers)]
+        for fl, color in FPT_FLUID_COLORS.items():
+            m_valid = wmask & (df[fc] == fl) & (df[qc] == "VALID")
+            if m_valid.any():
+                lbl = f"{fl.title()}" + (f" · {wn}" if wn is not None and len(wells) > 1 else "")
+                ax.scatter(df.loc[m_valid, pc], df.loc[m_valid, zc], c=color, marker=mk, s=28,
+                           edgecolors="white", linewidths=0.4, label=lbl, zorder=3)
+                if excess is not None:
+                    axes[1].scatter(excess[m_valid], df.loc[m_valid, zc], c=color, marker=mk,
+                                    s=24, edgecolors="white", linewidths=0.4, zorder=3)
+        m_bad = wmask & (df[qc] != "VALID")
+        if m_bad.any():
+            ax.scatter(df.loc[m_bad, pc], df.loc[m_bad, zc], facecolors="none",
+                       edgecolors=FPT_EXCLUDED_COLOR, marker=mk, s=30, linewidths=0.9,
+                       label="Excluded / Tight / Supercharged" if wi == 0 else None, zorder=2)
+            if excess is not None:
+                axes[1].scatter(excess[m_bad], df.loc[m_bad, zc], facecolors="none",
+                                edgecolors=FPT_EXCLUDED_COLOR, marker=mk, s=26, linewidths=0.9,
+                                zorder=2)
+
+    z_vals = df.loc[fin, zc]
+    contact_z = [c.tvdss_p50 for c in analyzer.contacts.values()]
+    z_lo = float(min([z_vals.min()] + contact_z)) if len(z_vals) else 0.0
+    z_hi = float(max([z_vals.max()] + contact_z)) if len(z_vals) else 1.0
+    pad = max((z_hi - z_lo) * 0.08, 1.0)
+    z_lo, z_hi = z_lo - pad, z_hi + pad
+
+    for fl, g in analyzer.gradients.items():
+        color = FPT_FLUID_COLORS.get(fl, "#334155")
+        zz = np.array([z_lo, z_hi])
+        ax.plot(g.pressure_at(zz), zz, color=color, lw=1.4,
+                ls="-" if g.method != "manual" else "--", alpha=0.85, zorder=2,
+                label=f"{fl.title()} {g.gradient:.4f} {pu}/{du} (ρ={g.density_gcc:.3f} g/cc)")
+
+    for label, c in analyzer.contacts.items():
+        color = FPT_FLUID_COLORS.get(c.lower_fluid.fluid_type, "#334155")
+        for a in axes:
+            if c.tvdss_p90 > c.tvdss_p10:
+                a.axhspan(c.tvdss_p10, c.tvdss_p90, color=color, alpha=0.12, zorder=1)
+            a.axhline(c.tvdss_p50, color=color, ls="--", lw=1.0, zorder=1)
+        half = 0.5 * (c.tvdss_p90 - c.tvdss_p10)
+        name = "OWC / FWL" if label == "OWC" else label
+        ax.annotate(
+            f"{name}: {c.tvdss_p50:.1f} {du} TVDSS (±{half:.1f}) @ {c.pressure_at_contact:.0f} {pu} | "
+            f"ρ_{c.upper_fluid.fluid_type[0].lower()}={c.upper_fluid.density_gcc:.2f}, "
+            f"ρ_{c.lower_fluid.fluid_type[0].lower()}={c.lower_fluid.density_gcc:.2f} g/cc",
+            xy=(0.01, c.tvdss_p50), xycoords=("axes fraction", "data"),
+            xytext=(0, -3), textcoords="offset points", va="top", fontsize=7.5,
+            color="#0F172A",
+            bbox={"boxstyle": "round,pad=0.2", "fc": "white", "ec": color, "alpha": 0.85},
+        )
+
+    ax.set_ylim(z_hi, z_lo)
+    ax.set_xlabel(f"Formation Pressure ({pu})")
+    ax.set_ylabel(f"TVDSS ({du})")
+    ax.grid(True, ls=":", alpha=0.6)
+    ax.legend(loc="lower left", fontsize=7, framealpha=0.85)
+    ax.set_title(title, fontsize=11)
+    if show_excess:
+        axes[1].axvline(0.0, color="#475569", lw=0.8)
+        axes[1].set_xlabel(f"Excess Pressure ({pu})")
+        axes[1].grid(True, ls=":", alpha=0.6)
+        axes[1].set_title("Excess vs. Hydrostatic", fontsize=10)
+    fig.tight_layout()
+    return fig

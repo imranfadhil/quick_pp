@@ -249,6 +249,17 @@ class PressureTest(Base):
         String(50), default="degC", nullable=True
     )
     remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # FPT interpretation attributes (fluid gradient & contact analysis)
+    tvdss: Mapped[Optional[float]] = mapped_column(
+        REAL, nullable=True
+    )  # Optional user-supplied TVDSS override (m); computed from survey/TVD when null
+    fluid_type: Mapped[Optional[str]] = mapped_column(
+        String(20), default="UNASSIGNED", nullable=True
+    )  # GAS | OIL | WATER | UNASSIGNED
+    test_quality: Mapped[Optional[str]] = mapped_column(
+        String(20), default="VALID", nullable=True
+    )  # VALID | TIGHT | SUPERCHARGED | LOST_SEAL | EXCLUDED
+    zone: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     well: Mapped["Well"] = relationship("Well", back_populates="pressure_tests")
 

@@ -1897,7 +1897,11 @@ def _get_merged_dataframe_sync(
 
             tops_df = _normalize_df_depth(raw_tops_df)
             contacts_df = _normalize_df_depth(raw_contacts_df)
-            pressure_df = _normalize_df_depth(raw_pressure_df)
+            pressure_df = _normalize_df_depth(
+                raw_pressure_df.drop(columns=["test_id"], errors="ignore")
+                if isinstance(raw_pressure_df, pd.DataFrame)
+                else raw_pressure_df
+            )
 
             def _prefixed(dframe, prefix):
                 if dframe is None or dframe.empty:

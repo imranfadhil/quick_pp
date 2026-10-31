@@ -141,6 +141,10 @@ CREATE TABLE IF NOT EXISTS "pressure_tests" (
     "temperature" REAL,
     "temperature_uom" VARCHAR(50) DEFAULT 'degC',
     "remarks" TEXT,
+    "tvdss" REAL,
+    "fluid_type" VARCHAR(20) DEFAULT 'UNASSIGNED',
+    "test_quality" VARCHAR(20) DEFAULT 'VALID',
+    "zone" VARCHAR(255),
     UNIQUE("well_id", "depth")
 );
 

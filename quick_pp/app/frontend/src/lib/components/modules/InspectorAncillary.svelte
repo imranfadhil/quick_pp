@@ -65,7 +65,9 @@
 		{ key: 'mobility', label: 'Mobility', unit: 'mD/cP', numeric: true, decimals: 2, editable: true },
 		{ key: 'permeability', label: 'Perm', unit: 'mD', numeric: true, decimals: 2, editable: true },
 		{ key: 'temperature', label: 'Temp', unit: 'degC', numeric: true, decimals: 1, editable: true },
-		{ key: 'remarks', label: 'Remarks', editable: true }
+		{ key: 'remarks', label: 'Remarks', editable: true },
+		{ key: 'fluid_type', label: 'Fluid', editable: true },
+		{ key: 'test_quality', label: 'QC', editable: true }
 	];
 
 	/** Parse an optional numeric input (blank / invalid -> null). */
@@ -85,7 +87,12 @@
 			permeability: optNum(r.permeability),
 			temperature: optNum(r.temperature),
 			temperature_uom: r.temperature_uom || 'degC',
-			remarks: String(r.remarks ?? r.remark ?? '').trim()
+			remarks: String(r.remarks ?? r.remark ?? '').trim(),
+			// Preserve FPT interpretation (set in the multi-well Pressure & Contacts module)
+			tvdss: optNum(r.tvdss),
+			fluid_type: String(r.fluid_type || 'UNASSIGNED').trim().toUpperCase(),
+			test_quality: String(r.test_quality || 'VALID').trim().toUpperCase().replace(/[\s-]+/g, '_'),
+			zone: r.zone ?? ''
 		};
 	}
 

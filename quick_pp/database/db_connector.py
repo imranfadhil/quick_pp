@@ -219,7 +219,8 @@ class DBConnector:
 
     def _migrate_pressure_test_columns(self):
         """Ensure existing `pressure_tests` tables have formation pressure testing columns
-        (mobility, permeability, temperature, temperature_uom, remarks)."""
+        (mobility, permeability, temperature, temperature_uom, remarks) and FPT interpretation
+        columns (tvdss, fluid_type, test_quality, zone)."""
         if DBConnector._engine is None:
             return
         from sqlalchemy import inspect as sa_inspect, text
@@ -235,6 +236,10 @@ class DBConnector:
                 ("temperature", "REAL"),
                 ("temperature_uom", "VARCHAR(50) DEFAULT 'degC'"),
                 ("remarks", "TEXT"),
+                ("tvdss", "REAL"),
+                ("fluid_type", "VARCHAR(20) DEFAULT 'UNASSIGNED'"),
+                ("test_quality", "VARCHAR(20) DEFAULT 'VALID'"),
+                ("zone", "VARCHAR(255)"),
             ]
             with DBConnector._engine.begin() as conn:
                 for col_name, col_def in migrations:

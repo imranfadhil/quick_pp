@@ -106,7 +106,11 @@
       { key: 'PERMEABILITY', label: 'PERMEABILITY — Test Permeability (mD)' },
       { key: 'TEMPERATURE', label: 'TEMPERATURE — Formation / Tool Temperature (degC; degF auto-converted)' },
       { key: 'TEST_TYPE', label: 'TEST_TYPE — Tool / Test Type (MDT/RFT)' },
-      { key: 'REMARK', label: 'REMARK — Quality / Comment' }
+      { key: 'TVDSS', label: 'TVDSS — True Vertical Depth Subsea (optional; else from survey/TVD)' },
+      { key: 'FLUID_TYPE', label: 'FLUID_TYPE — Fluid Phase (GAS/OIL/WATER)' },
+      { key: 'TEST_QUALITY', label: 'TEST_QUALITY — VALID/TIGHT/SUPERCHARGED/LOST_SEAL/EXCLUDED' },
+      { key: 'ZONE', label: 'ZONE — Reservoir Zone / Compartment' },
+      { key: 'REMARK', label: 'REMARK — Comment' }
     ],
     core_samples: [
       { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },

@@ -16,6 +16,7 @@ export type MultiWellStep =
 	| 'shf'
 	| 'rt-classifier'
 	| 'ml-training'
+	| 'fpt'
 	| 'report';
 
 export type ReportType = 'FDP_FULL' | 'SINGLE_WELL_CPI' | 'QAQC_SUMMARY' | 'RESSUM_ONLY';

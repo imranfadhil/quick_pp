@@ -154,7 +154,19 @@ ANCILLARY_TARGET_SCHEMAS: Dict[str, Dict[str, List[str]]] = {
             "temp_degf",
         ],
         "TEST_TYPE": ["test_type", "tool", "type", "rpt", "mdt", "rdt", "sft"],
-        "REMARK": ["remark", "remarks", "comment", "comments", "quality", "status"],
+        "TVDSS": ["tvdss", "tvd_ss", "depth_tvdss", "tvdss_m", "tvdss_ft", "subsea_depth"],
+        "FLUID_TYPE": ["fluid_type", "fluid", "phase", "fluid_phase", "interpreted_fluid"],
+        "TEST_QUALITY": [
+            "test_quality",
+            "quality",
+            "pretest_quality",
+            "qc",
+            "qc_flag",
+            "status",
+            "test_status",
+        ],
+        "ZONE": ["zone", "compartment", "reservoir", "formation", "unit"],
+        "REMARK": ["remark", "remarks", "comment", "comments"],
     },
     "contacts": {
         "WELL_NAME": ["well", "well_name", "wellname", "uwi", "wellbore", "well_id"],
@@ -2487,6 +2499,19 @@ def commit_ancillary_data(
                     if temp_col and not temp_unit and "degf" in str(temp_col).lower():
                         temp_unit = "degF"
                     rem_col, _ = col_map.get("REMARK", (None, None))
+                    tvdss_col, tvdss_unit = col_map.get("TVDSS", (None, None))
+                    fluid_col, _ = col_map.get("FLUID_TYPE", (None, None))
+                    qual_col, _ = col_map.get("TEST_QUALITY", (None, None))
+                    zone_col, _ = col_map.get("ZONE", (None, None))
+
+                    def _opt_str(row: Dict[str, Any], col: Optional[str]) -> Optional[str]:
+                        if not col:
+                            return None
+                        v = row.get(col)
+                        if v is None or str(v).strip() in ("", "nan", "None"):
+                            return None
+                        return str(v).strip()
+
                     tests_payload = []
                     for r in w_rows:
                         d_v = _convert_ancillary_numeric(r.get(d_col), d_unit, "DEPTH")
@@ -2494,18 +2519,25 @@ def commit_ancillary_data(
                             r.get(p_col), p_unit, "PRESSURE"
                         )
                         if d_v is not None and p_v is not None:
-                            rem_raw = r.get(rem_col) if rem_col else None
-                            rem_v = (
-                                str(rem_raw).strip()
-                                if rem_raw is not None
-                                and str(rem_raw).strip() not in ("", "nan", "None")
+                            rem_v = _opt_str(r, rem_col)
+                            tvdss_v = (
+                                _convert_ancillary_numeric(
+                                    r.get(tvdss_col), tvdss_unit, "TVD"
+                                )
+                                if tvdss_col
                                 else None
                             )
+                            if tvdss_v is not None:
+                                tvdss_v = abs(tvdss_v)
                             tests_payload.append(
                                 {
                                     "depth": d_v,
                                     "pressure": p_v,
                                     "pressure_uom": "psi",
+                                    "tvdss": tvdss_v,
+                                    "fluid_type": _opt_str(r, fluid_col),
+                                    "test_quality": _opt_str(r, qual_col),
+                                    "zone": _opt_str(r, zone_col),
                                     "mobility": _convert_ancillary_numeric(
                                         r.get(mob_col), None, "MOBILITY"
                                     )
