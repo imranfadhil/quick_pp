@@ -2218,9 +2218,10 @@ async def get_cache_stats():
 def _collect_project_handover_bundles(
     project_id: int,
     well_names_filter: Optional[List[str]] = None,
-) -> tuple[str, str, List[Dict[str, Any]]]:
-    """Gather project metadata and per-well handover dictionaries (including ephemeral/cached live edits)."""
+) -> tuple[str, str, List[Dict[str, Any]], Dict[str, Any]]:
+    """Gather project metadata, project-level multi-well config, and per-well handover dictionaries (including ephemeral/cached live edits)."""
     from quick_pp.handover import collect_well_handover_dict
+    from quick_pp.app.backend.services.workspace import _ephemeral_well_configs
 
     if project_id in _demo_deleted_projects:
         raise ValueError(f"Project {project_id} not found")
@@ -2238,6 +2239,12 @@ def _collect_project_handover_bundles(
         ovr = _demo_project_overrides.get(project_id, {})
         proj_name = ovr.get("name", proj.name)
         proj_desc = ovr.get("description", proj.description or "")
+        proj_cfg: Dict[str, Any] = dict(
+            getattr(proj._orm_project, "config_data", None) or {}
+        )
+        eph_proj_cfg = _ephemeral_well_configs.get((project_id, "__PROJECT__"))
+        if isinstance(eph_proj_cfg, dict):
+            proj_cfg.update(eph_proj_cfg)
 
         wells_bundle: List[Dict[str, Any]] = []
         seen_names = set()
@@ -2264,8 +2271,18 @@ def _collect_project_handover_bundles(
                 cached = _merged_data_cache.get(f"{project_id}_{curr_name}_0.16")
                 if cached is not None:
                     live_df = cached[1]
+                else:
+                    try:
+                        live_df = _get_merged_dataframe_sync(project_id, curr_name)
+                    except Exception:
+                        live_df = None
 
-            b_dict = collect_well_handover_dict(well_obj, override_df=live_df)
+            eph_w_cfg = _ephemeral_well_configs.get((project_id, curr_name)) or _ephemeral_well_configs.get((project_id, orm_well.name))
+            b_dict = collect_well_handover_dict(
+                well_obj,
+                override_df=live_df,
+                override_config=eph_w_cfg if isinstance(eph_w_cfg, dict) else None,
+            )
             b_dict["name"] = curr_name
             wells_bundle.append(b_dict)
 
@@ -2282,15 +2299,29 @@ def _collect_project_handover_bundles(
                 if isinstance(eph_val, dict)
                 else pd.DataFrame()
             )
+            eph_hdr = (
+                eph_val.get("header", {})
+                if isinstance(eph_val, dict) and isinstance(eph_val.get("header"), dict)
+                else {}
+            )
+            eph_cfg = _ephemeral_well_configs.get((project_id, eph_name)) or (
+                eph_val.get("config", {})
+                if isinstance(eph_val, dict) and isinstance(eph_val.get("config"), dict)
+                else {}
+            )
             wells_bundle.append(
                 {
                     "name": eph_name,
                     "uwi": eph_name,
                     "depth_uom": "m",
-                    "config": {},
+                    "header": eph_hdr,
+                    "config": eph_cfg,
                     "data": eph_df,
                     "formation_tops": pd.DataFrame(columns=["name", "depth"]),
                     "fluid_contacts": pd.DataFrame(columns=["name", "depth"]),
+                    "perforations": pd.DataFrame(
+                        columns=["name", "top_depth", "bottom_depth", "description"]
+                    ),
                     "well_surveys": pd.DataFrame(columns=["md", "inc", "azim"]),
                     "pressure_tests": pd.DataFrame(
                         columns=[
@@ -2302,6 +2333,10 @@ def _collect_project_handover_bundles(
                             "temperature",
                             "temperature_uom",
                             "remarks",
+                            "tvdss",
+                            "fluid_type",
+                            "test_quality",
+                            "zone",
                         ]
                     ),
                     "core_data": {},
@@ -2309,7 +2344,7 @@ def _collect_project_handover_bundles(
                 }
             )
 
-    return proj_name, proj_desc, wells_bundle
+    return proj_name, proj_desc, wells_bundle, proj_cfg
 
 
 @router.get(
@@ -2339,7 +2374,7 @@ def export_project_handover(
         elif wells:
             filter_list = [w.strip() for w in wells.split(",") if w.strip()]
 
-        proj_name, proj_desc, wells_bundle = _collect_project_handover_bundles(
+        proj_name, proj_desc, wells_bundle, proj_cfg = _collect_project_handover_bundles(
             project_id=project_id, well_names_filter=filter_list
         )
         if not wells_bundle:
@@ -2356,6 +2391,7 @@ def export_project_handover(
             wells_bundle=wells_bundle,
             include_las=include_las,
             include_excel=include_excel,
+            project_config=proj_cfg,
         )
         filename = f"{_sanitize_name(bundle_title)}_Handover.zip"
         return Response(
@@ -2383,7 +2419,7 @@ def export_well_las_endpoint(project_id: int, well_name: str):
     from quick_pp.las_handler import export_to_las_string
 
     try:
-        _, _, wells_bundle = _collect_project_handover_bundles(
+        _, _, wells_bundle, _ = _collect_project_handover_bundles(
             project_id=project_id, well_names_filter=[well_name]
         )
         if not wells_bundle:
@@ -2410,6 +2446,7 @@ def export_well_las_endpoint(project_id: int, well_name: str):
             uwi=w["uwi"],
             depth_uom=w["depth_uom"],
             parameters=w["config"],
+            well_header=w.get("header"),
         )
         filename = f"{_sanitize_name(w['name'])}.las"
         return Response(

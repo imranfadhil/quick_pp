@@ -751,12 +751,14 @@ class Project(object):
             well_obj = Well(self.db_session, well_id=orm_well.well_id)
             wells_bundle.append(collect_well_handover_dict(well_obj))
 
+        proj_cfg = dict(getattr(self._orm_project, "config_data", None) or {})
         zip_bytes = build_handover_archive_bytes(
             project_name=self.name,
             project_description=self.description or "",
             wells_bundle=wells_bundle,
             include_las=include_las,
             include_excel=include_excel,
+            project_config=proj_cfg,
         )
         if not output_zip_path:
             os.makedirs(self.output_path, exist_ok=True)
@@ -2008,6 +2010,7 @@ class Well(object):
             uwi=self.uwi or self.name,
             depth_uom=getattr(self._orm_well, "depth_uom", None) or "m",
             parameters=getattr(self.config, "__dict__", {}),
+            well_header=getattr(self, "header_data", None),
         )
 
     def export_handover_package(
@@ -2038,12 +2041,18 @@ class Well(object):
             if self._orm_well and self._orm_well.project
             else self.name
         )
+        proj_cfg = (
+            dict(getattr(self._orm_well.project, "config_data", None) or {})
+            if self._orm_well and self._orm_well.project
+            else {}
+        )
         zip_bytes = build_handover_archive_bytes(
             project_name=f"{proj_name}_{self.name}",
             project_description=f"Single-well handover package for {self.name}",
             wells_bundle=[collect_well_handover_dict(self)],
             include_las=include_las,
             include_excel=include_excel,
+            project_config=proj_cfg,
         )
         if not output_zip_path:
             os.makedirs(self.output_path, exist_ok=True)
@@ -2462,8 +2471,17 @@ class Well(object):
         for idx, perf_data in enumerate(perforations or []):
             if not isinstance(perf_data, dict):
                 continue
-            top_raw = perf_data.get("top", perf_data.get("top_md", perf_data.get("depth")))
-            bot_raw = perf_data.get("bottom", perf_data.get("base", perf_data.get("bottom_md", top_raw)))
+            top_raw = perf_data.get(
+                "top",
+                perf_data.get("top_depth", perf_data.get("top_md", perf_data.get("depth"))),
+            )
+            bot_raw = perf_data.get(
+                "bottom",
+                perf_data.get(
+                    "bottom_depth",
+                    perf_data.get("base", perf_data.get("bottom_md", top_raw)),
+                ),
+            )
             if top_raw is None or bot_raw is None:
                 logger.warning(f"Skipping invalid perforation data: {perf_data}")
                 continue

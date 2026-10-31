@@ -190,6 +190,10 @@ def test_end_to_end_report_service_and_mcp_tools(synthetic_well_df: pd.DataFrame
 
     with (
         patch(
+            "quick_pp.app.backend.services.report.db_objects.Project.load",
+            side_effect=ValueError("Mocked project"),
+        ),
+        patch(
             "quick_pp.app.backend.services.report.get_project_summary",
             return_value=mock_summary,
         ),

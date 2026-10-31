@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quick-pp"
-version = "0.3.2"
+version = "0.3.3"
 description = "Comprehensive Python package and web platform for deterministic and probabilistic petrophysical evaluation, SCAL & relative permeability modeling, multi-well FWL optimization, stratigraphic normalization, and geomodel log upscaling."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [
     { name = "Imran Fadhil", email = "imranfadhil@gmail.com" },
@@ -157,7 +158,7 @@ Homepage = "https://github.com/imranfadhil/quick_pp"
 Repository = "https://github.com/imranfadhil/quick_pp"
 Documentation = "https://quick-pp.readthedocs.io"
 "Bug Reports" = "https://github.com/imranfadhil/quick_pp/issues"
-Changelog = "https://github.com/imranfadhil/quick_pp/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/imranfadhil/quick_pp/blob/main/docs/community/changelog.md"
 
 [tool.setuptools]
 
@@ -184,7 +185,9 @@ quick_pp = [
     "app/frontend/node_modules",
     "app/frontend/node_modules/**/*",
     "app/frontend/.svelte-kit",
-    "app/frontend/.svelte-kit/**/*"
+    "app/frontend/.svelte-kit/**/*",
+    "app/backend/static/reports",
+    "app/backend/static/reports/**/*"
 ]
 
 # Development tools configuration

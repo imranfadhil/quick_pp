@@ -3,8 +3,6 @@ import json
 import os
 import zipfile
 
-os.environ["QPP_DATABASE_URL"] = "sqlite:///:memory:"
-
 import lasio
 import numpy as np
 import pandas as pd
@@ -108,7 +106,22 @@ def test_project_and_well_export_handover_package(db_session, tmp_path):
             "PERM": np.logspace(2.5, -0.5, 21),
         }
     )
+    proj._orm_project.config_data = {
+        "shf": {"fwl_depth": 3005.5, "ift": 30.0},
+        "fpt": {"water_gradient": 0.433},
+    }
     proj.read_dataframe(well_df)
+    w_obj = proj.get_well("15-9-F-12")
+    w_obj.header_data = {
+        "kb_elev": 54.0,
+        "df_elev": 54.0,
+        "field": "Volve",
+        "company": "Equinor",
+        "country": "Norway",
+        "x_coord": 435000.0,
+        "y_coord": 6478000.0,
+    }
+    w_obj.save()
     proj.update_ancillary_data(
         {
             "15-9-F-12": {
@@ -119,9 +132,34 @@ def test_project_and_well_export_handover_package(db_session, tmp_path):
                 "fluid_contacts": [
                     {"name": "OWC", "depth": 3005.5},
                 ],
+                "perforations": [
+                    {
+                        "name": "PERF-1",
+                        "top_depth": 3001.0,
+                        "bottom_depth": 3004.5,
+                        "description": "Upper Hugin interval",
+                    }
+                ],
                 "pressure_tests": [
-                    {"depth": 3002.0, "pressure": 4450.0, "pressure_uom": "psi"},
-                    {"depth": 3007.0, "pressure": 4462.0, "pressure_uom": "psi"},
+                    {
+                        "depth": 3002.0,
+                        "pressure": 4450.0,
+                        "pressure_uom": "psi",
+                        "mobility": 125.0,
+                        "permeability": 85.0,
+                        "temperature": 98.5,
+                        "fluid_type": "OIL",
+                        "test_quality": "GOOD",
+                        "zone": "Hugin_Top",
+                    },
+                    {
+                        "depth": 3007.0,
+                        "pressure": 4462.0,
+                        "pressure_uom": "psi",
+                        "fluid_type": "WATER",
+                        "test_quality": "GOOD",
+                        "zone": "Sleipner_Top",
+                    },
                 ],
                 "well_surveys": [
                     {"md": 3000.0, "inc": 0.0, "azim": 0.0},
@@ -136,6 +174,10 @@ def test_project_and_well_export_handover_package(db_session, tmp_path):
                         "measurements": [
                             {"property_name": "CPORE", "value": 0.23, "unit": "v/v"},
                             {"property_name": "CPERM", "value": 280.0, "unit": "mD"},
+                            {"property_name": "CPORE_AMB", "value": 0.245, "unit": "v/v"},
+                            {"property_name": "CPERM_AIR", "value": 310.0, "unit": "mD"},
+                            {"property_name": "RAW_DEPTH", "value": 3000.0, "unit": "m"},
+                            {"property_name": "SHIFT_M", "value": 1.5, "unit": "m"},
                         ],
                         "relperm_data": [
                             {"saturation": 0.20, "kr": 0.0, "phase": "water"},
@@ -175,9 +217,12 @@ def test_project_and_well_export_handover_package(db_session, tmp_path):
         assert f"{prefix}/01_well_logs_las/15-9-F-12.las" in names
         assert f"{prefix}/02_tops_and_contacts/formation_tops.csv" in names
         assert f"{prefix}/02_tops_and_contacts/fluid_contacts.csv" in names
+        assert f"{prefix}/02_tops_and_contacts/perforations.csv" in names
+        assert f"{prefix}/03_surveys/well_headers_and_datum.csv" in names
         assert f"{prefix}/03_surveys/well_surveys.csv" in names
         assert f"{prefix}/04_core_and_pressure/core_rca_points.csv" in names
         assert f"{prefix}/04_core_and_pressure/las_point_sets/15-9-F-12_RCA.las" in names
+        assert f"{prefix}/04_core_and_pressure/las_point_sets/15-9-F-12_MDT.las" in names
         assert f"{prefix}/04_core_and_pressure/pressure_tests_mdt.csv" in names
         assert f"{prefix}/05_scal_and_sim/scal_capillary_pressure.csv" in names
         assert f"{prefix}/05_scal_and_sim/scal_relperm_tables.csv" in names
@@ -188,7 +233,7 @@ def test_project_and_well_export_handover_package(db_session, tmp_path):
         assert f"{prefix}/import_scripts/import_to_geolog.tcl" in names
         assert f"{prefix}/README_HANDOVER.md" in names
 
-        # Verify manifest counts
+        # Verify manifest counts & project_parameters
         manifest = json.loads(
             zf.read(f"{prefix}/06_summaries_and_audit/CPI_Parameters_Manifest.json")
         )
@@ -196,19 +241,46 @@ def test_project_and_well_export_handover_package(db_session, tmp_path):
         assert counts["wells"] == 1
         assert counts["formation_tops"] == 2
         assert counts["fluid_contacts"] == 1
+        assert counts["perforations"] == 1
         assert counts["well_surveys"] == 2
         assert counts["core_rca_samples"] == 1
         assert counts["pressure_tests"] == 2
         assert counts["scal_pc_points"] == 2
         assert counts["scal_relperm_points"] == 2
         assert counts["reservoir_summary_rows"] > 0
+        assert manifest["project_parameters"]["shf"]["fwl_depth"] == pytest.approx(3005.5)
 
-        # Verify tops CSV has TVD column
+        # Verify tops CSV has TVD and TVDSS columns
         tops_csv = pd.read_csv(
             io.BytesIO(zf.read(f"{prefix}/02_tops_and_contacts/formation_tops.csv"))
         )
         assert list(tops_csv["TOP_NAME"]) == ["Hugin_Top", "Sleipner_Top"]
         assert "TVD" in tops_csv.columns
+        assert "TVDSS" in tops_csv.columns
+        assert float(tops_csv["TVDSS"].iloc[0]) == pytest.approx(3000.0 - 54.0, abs=0.1)
+
+        # Verify perforations CSV
+        perfs_csv = pd.read_csv(
+            io.BytesIO(zf.read(f"{prefix}/02_tops_and_contacts/perforations.csv"))
+        )
+        assert list(perfs_csv["PERF_NAME"]) == ["PERF-1"]
+        assert "TOP_TVDSS" in perfs_csv.columns
+
+        # Verify core RCA lineage columns
+        rca_csv = pd.read_csv(
+            io.BytesIO(zf.read(f"{prefix}/04_core_and_pressure/core_rca_points.csv"))
+        )
+        assert float(rca_csv["CPORE_AMB"].iloc[0]) == pytest.approx(0.245)
+        assert float(rca_csv["CPERM_AIR"].iloc[0]) == pytest.approx(310.0)
+        assert float(rca_csv["RAW_DEPTH"].iloc[0]) == pytest.approx(3000.0)
+        assert float(rca_csv["SHIFT_M"].iloc[0]) == pytest.approx(1.5)
+
+        # Verify pressure tests CSV has FPT columns
+        mdt_csv = pd.read_csv(
+            io.BytesIO(zf.read(f"{prefix}/04_core_and_pressure/pressure_tests_mdt.csv"))
+        )
+        assert list(mdt_csv["FLUID_TYPE"]) == ["OIL", "WATER"]
+        assert "TVDSS" in mdt_csv.columns
 
     # Also test single-well export
     well_obj = proj.get_well("15-9-F-12")

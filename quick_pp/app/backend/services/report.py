@@ -3081,6 +3081,7 @@ def generate_petrophysical_report_service(
     effective_title = req.report_title or req.title
     if req.report_type == "SINGLE_WELL_CPI" and effective_title in (
         "Field Development Plan (FDP) Petrophysical Evaluation Report",
+        "Field Development Plan - Petrophysical Evaluation Report",
         "Single-Well Petrophysical CPI & Evaluation Dossier",
         "",
     ):

@@ -1,12 +1,11 @@
-import numpy as np
-
-"""
-Default configuration for well log plotting.
+"""Default configuration for well log plotting.
 
 This module defines the default dictionaries used by the `plotly_log` function
 to control the appearance and layout of well log plots. These configurations
 can be overridden by passing custom dictionaries to the plotting function.
 """
+
+import numpy as np
 
 
 COLOR_DICT = {

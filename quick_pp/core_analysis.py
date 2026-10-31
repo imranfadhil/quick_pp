@@ -1,3 +1,10 @@
+"""Routine and special core analysis (RCA/SCAL) processing, corrections, and calibration.
+
+Provides core porosity overburden stress correction, Klinkenberg gas slippage
+permeability correction, core-to-log depth shifting, poro-perm curve fitting,
+capillary pressure J-function fitting, and interactive SCAL diagnostic plots.
+"""
+
 import hashlib
 import re
 

@@ -24,7 +24,11 @@ import pandas as pd
 from quick_pp import __version__ as quick_pp_version
 from quick_pp import logger
 from quick_pp.config import Config
-from quick_pp.las_handler import export_to_las_string
+from quick_pp.las_handler import (
+    extract_las_metadata,
+    extract_well_df_elevation,
+    export_to_las_string,
+)
 from quick_pp.ressum import calc_reservoir_summary
 from quick_pp.scal import generate_swof_table
 
@@ -224,47 +228,112 @@ HANDOVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LAS_DIR = os.path.join(HANDOVER_DIR, "01_well_logs_las")
 TOPS_CSV = os.path.join(HANDOVER_DIR, "02_tops_and_contacts", "formation_tops.csv")
 CONTACTS_CSV = os.path.join(HANDOVER_DIR, "02_tops_and_contacts", "fluid_contacts.csv")
+PERFS_CSV = os.path.join(HANDOVER_DIR, "02_tops_and_contacts", "perforations.csv")
+HEADERS_CSV = os.path.join(HANDOVER_DIR, "03_surveys", "well_headers_and_datum.csv")
 SURVEYS_CSV = os.path.join(HANDOVER_DIR, "03_surveys", "well_surveys.csv")
 RCA_LAS_DIR = os.path.join(HANDOVER_DIR, "04_core_and_pressure", "las_point_sets")
+MDT_CSV = os.path.join(HANDOVER_DIR, "04_core_and_pressure", "pressure_tests_mdt.csv")
 
 # Mapping from quick_pp curve mnemonics to standard Techlog Families & Units
 TECHLOG_FAMILY_MAP = {{
     "DEPTH": ("Measured Depth", "m"),
     "TVD": ("True Vertical Depth", "m"),
+    "TVDSS": ("True Vertical Depth Sub-Sea", "m"),
     "CALI": ("Caliper", "in"),
     "BS": ("Bit Size", "in"),
     "GR": ("Gamma Ray", "GAPI"),
+    "GR_NORM": ("Gamma Ray", "GAPI"),
+    "GR_CORR": ("Gamma Ray", "GAPI"),
     "RT": ("True Resistivity", "ohm.m"),
+    "RT_CORR": ("True Resistivity", "ohm.m"),
     "NPHI": ("Neutron Porosity", "v/v"),
+    "NPHI_NORM": ("Neutron Porosity", "v/v"),
+    "NPHI_CORR": ("Neutron Porosity", "v/v"),
     "RHOB": ("Bulk Density", "g/cc"),
+    "RHOB_NORM": ("Bulk Density", "g/cc"),
+    "RHOB_CORR": ("Bulk Density", "g/cc"),
     "DRHO": ("Bulk Density Correction", "g/cc"),
     "PEF": ("Photoelectric Factor", "b/e"),
     "DTC": ("Compressional Slowness", "us/ft"),
     "DTS": ("Shear Slowness", "us/ft"),
     "NPHI_HC": ("Neutron Porosity", "v/v"),
     "RHOB_HC": ("Bulk Density", "g/cc"),
+    "HC_FLAG": ("Hydrocarbon Flag", "unitless"),
     "VSAND": ("Volume Sand", "v/v"),
     "VSILT": ("Volume Silt", "v/v"),
     "VCLAY": ("Volume Clay", "v/v"),
     "VSHALE": ("Shale Volume", "v/v"),
     "VSH_GR": ("Shale Volume", "v/v"),
+    "VDL": ("Porosity Difference", "v/v"),
     "VCALC": ("Volume Calcite", "v/v"),
     "VDOLO": ("Volume Dolomite", "v/v"),
+    "VKAOL": ("Volume Kaolinite", "v/v"),
+    "VFELD": ("Volume Feldspar", "v/v"),
+    "VANHY": ("Volume Anhydrite", "v/v"),
+    "VGYPS": ("Volume Gypsum", "v/v"),
+    "VHALI": ("Volume Halite", "v/v"),
+    "VPYRI": ("Volume Pyrite", "v/v"),
     "VCOAL": ("Volume Coal", "v/v"),
+    "RHOM": ("Matrix Density", "g/cc"),
     "PHIT": ("Total Porosity", "v/v"),
     "PHIE": ("Effective Porosity", "v/v"),
+    "PHIT_COMP": ("Total Porosity", "v/v"),
+    "PHIE_COMP": ("Effective Porosity", "v/v"),
+    "PHIT_P10": ("Total Porosity", "v/v"),
+    "PHIT_P50": ("Total Porosity", "v/v"),
+    "PHIT_P90": ("Total Porosity", "v/v"),
     "SWT": ("Water Saturation", "v/v"),
     "SWE": ("Effective Water Saturation", "v/v"),
+    "SWIRR": ("Irreducible Water Saturation", "v/v"),
+    "SW_ARCHIE": ("Water Saturation", "v/v"),
+    "SW_WS": ("Water Saturation", "v/v"),
     "SHF": ("Water Saturation", "v/v"),
+    "SW_SHF": ("Water Saturation", "v/v"),
+    "SWT_P10": ("Water Saturation", "v/v"),
+    "SWT_P50": ("Water Saturation", "v/v"),
+    "SWT_P90": ("Water Saturation", "v/v"),
+    "HAFWL": ("Height Above Free Water Level", "m"),
+    "PC_RES": ("Capillary Pressure", "psi"),
+    "BVW": ("Bulk Volume Water", "v/v"),
+    "BVHC": ("Bulk Volume Hydrocarbon", "v/v"),
+    "BVHC_P10": ("Bulk Volume Hydrocarbon", "v/v"),
+    "BVHC_P50": ("Bulk Volume Hydrocarbon", "v/v"),
+    "BVHC_P90": ("Bulk Volume Hydrocarbon", "v/v"),
     "PERM": ("Permeability", "mD"),
+    "PERM_TRANS": ("Permeability", "mD"),
+    "PERM_COMP": ("Permeability", "mD"),
+    "PERM_P10": ("Permeability", "mD"),
+    "PERM_P50": ("Permeability", "mD"),
+    "PERM_P90": ("Permeability", "mD"),
     "CPORE": ("Core Porosity", "v/v"),
     "CPERM": ("Core Permeability", "mD"),
+    "CPORE_AMB": ("Core Porosity", "v/v"),
+    "CPERM_AIR": ("Core Permeability", "mD"),
     "FZI": ("Flow Zone Indicator", "um"),
     "RQI": ("Reservoir Quality Index", "um"),
+    "R35": ("Pore Throat Radius", "um"),
+    "RFN": ("Rock Fabric Number", "unitless"),
+    "GHE": ("Global Hydraulic Element", "unitless"),
     "ROCK_FLAG": ("Rock Type", "unitless"),
+    "ROCK_FLAG_CORE": ("Rock Type", "unitless"),
+    "ROCK_FLAG_PRED": ("Rock Type", "unitless"),
     "RES_FLAG": ("Net Reservoir Flag", "unitless"),
     "PAY_FLAG": ("Net Pay Flag", "unitless"),
     "BADHOLE": ("Bad Hole Flag", "unitless"),
+    "VSH_LAM": ("Laminated Shale Volume", "v/v"),
+    "VSH_DIS": ("Dispersed Shale Volume", "v/v"),
+    "VSH_DISP": ("Dispersed Shale Volume", "v/v"),
+    "VSH_STR": ("Structural Shale Volume", "v/v"),
+    "PHIT_SAND": ("Sand Lamina Porosity", "v/v"),
+    "PHISAND_TS": ("Sand Lamina Porosity", "v/v"),
+    "PHIT_TS": ("Total Porosity", "v/v"),
+    "PHIE_TS": ("Effective Porosity", "v/v"),
+    "RSAND_TS": ("True Resistivity", "ohm.m"),
+    "ZONE_ID": ("Zone Index", "unitless"),
+    "PRESSURE": ("Formation Pressure", "psi"),
+    "MOBILITY": ("Fluid Mobility", "mD/cP"),
+    "PERMEABILITY": ("Permeability", "mD"),
+    "TEMPERATURE": ("Temperature", "degC"),
 }}
 
 
@@ -311,6 +380,35 @@ def import_zonation_csv(csv_path, dataset_name="ZONATION"):
             db.variableSave(wn, dataset_name, "Zone_Name", "Zone Name", "unitless", names)
 
 
+def import_perforations_csv(csv_path, dataset_name="PERFORATIONS"):
+    """Load perforation intervals CSV into Techlog interval dataset."""
+    if not os.path.exists(csv_path):
+        return
+    by_well = {{}}
+    with open(csv_path, mode="r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            wn = row.get("WELL_NAME", "").strip()
+            name = row.get("PERF_NAME", "").strip() or "PERF"
+            top_str = row.get("TOP_MD", "")
+            bot_str = row.get("BOTTOM_MD", "")
+            if wn and top_str != "" and bot_str != "":
+                by_well.setdefault(wn, []).append((float(top_str), float(bot_str), name))
+
+    for wn, items in by_well.items():
+        items.sort(key=lambda x: x[0])
+        tops = [x[0] for x in items]
+        bots = [x[1] for x in items]
+        names = [x[2] for x in items]
+        print(f"[Techlog] Loading {{len(items)}} perforation intervals into {{wn}}.{{dataset_name}}")
+        if db is not None:
+            if not db.wellExists(wn):
+                db.wellCreate(wn)
+            db.datasetCreate(wn, dataset_name, "MD", "Measured Depth", "m", tops, "interval")
+            db.variableSave(wn, dataset_name, "BOTTOM_MD", "Measured Depth", "m", bots)
+            db.variableSave(wn, dataset_name, "PERF_NAME", "Zone Name", "unitless", names)
+
+
 def main():
     print("=== Starting quick_pp Handover Import for '{project_name}' ===")
     las_files = sorted(glob.glob(os.path.join(LAS_DIR, "*.las")))
@@ -328,6 +426,7 @@ def main():
 
     import_zonation_csv(TOPS_CSV, dataset_name="ZONATION")
     import_zonation_csv(CONTACTS_CSV, dataset_name="FLUID_CONTACTS")
+    import_perforations_csv(PERFS_CSV, dataset_name="PERFORATIONS")
     print("=== Handover Import Completed ===")
 
 
@@ -369,6 +468,14 @@ foreach well_name $well_list {{
             tp_in_las -file $rca_file -well $well_name -set CORE_RCA -overwrite yes
         }}
     }}
+
+    set mdt_file [file join $rca_las_dir "${{well_name}}_MDT.las"]
+    if {{[file exists $mdt_file]}} {{
+        puts "Loading discrete MDT Pressure point set for well: $well_name"
+        catch {{
+            tp_in_las -file $mdt_file -well $well_name -set MDT_PRESSURE -overwrite yes
+        }}
+    }}
 }}
 
 puts "=== Completed Geolog LAS & RCA Import. Load $tops_csv into TOPS set via ASCII Importer ==="
@@ -390,6 +497,7 @@ Generated by **quick_pp v{quick_pp_version}** on `{manifest.get("exported_at", "
 - **Wells Exported ({len(well_names)})**: {", ".join(f"`{w}`" for w in well_names) if well_names else "None"}
 - **Formation Tops**: {counts.get("formation_tops", 0)} markers
 - **Fluid Contacts**: {counts.get("fluid_contacts", 0)} contacts
+- **Perforation Intervals**: {counts.get("perforations", 0)} intervals
 - **Well Deviation Surveys**: {counts.get("well_surveys", 0)} station points
 - **Core RCA Plugs**: {counts.get("core_rca_samples", 0)} samples ({counts.get("core_measurements_long", 0)} measurements)
 - **SCAL Capillary Pressure ($P_c$)**: {counts.get("scal_pc_points", 0)} pairs
@@ -403,20 +511,23 @@ Generated by **quick_pp v{quick_pp_version}** on `{manifest.get("exported_at", "
 
 | Folder / File | Contents & Purpose |
 | :--- | :--- |
-| `01_well_logs_las/*.las` | **Continuous Evaluated Well Logs (LAS 2.0)** — Raw logs + computed CPI logs (`VCLAY`, `VSHALE`, `PHIT`, `PHIE`, `SWT`, `PERM`, `ROCK_FLAG`, `RES_FLAG`, `PAY_FLAG`, `BADHOLE`). Each LAS file embeds the well's petrophysical parameters (`m`, `n`, salinity, mineral endpoints, cutoffs) inside the `~Parameter` (`~P`) block. |
-| `02_tops_and_contacts/formation_tops.csv` | **Multi-Well Formation Tops** (`WELL_NAME, UWI, TOP_NAME, MD, TVD, DEPTH_UOM`) ready for batch Zonation import. |
-| `02_tops_and_contacts/fluid_contacts.csv` | **Multi-Well Fluid Contacts** (`WELL_NAME, UWI, CONTACT_NAME, MD, TVD, DEPTH_UOM`) such as OWC, GOC, FWL, ODT. |
-| `03_surveys/well_surveys.csv` | **Multi-Well Deviation Surveys** (`WELL_NAME, UWI, MD, INC, AZIM, TVD`). |
-| `04_core_and_pressure/core_rca_points.csv` | **Discrete Core Plug RCA Table (Wide)** (`WELL_NAME, SAMPLE_NAME, DEPTH, CPORE, CPERM, DESCRIPTION, REMARK`). |
+| `01_well_logs_las/*.las` | **Continuous Evaluated Well Logs (LAS 2.0)** — Raw logs + computed CPI logs (`VCLAY`, `VSHALE`, `PHIT`, `PHIE`, `SWT`, `SWIRR`, `PERM`, `ROCK_FLAG`, `RES_FLAG`, `PAY_FLAG`, `BADHOLE`, `TVD`, `TVDSS`). Each LAS file embeds the well's header datum/coordinates in `~Well` and petrophysical parameters (`m`, `n`, salinity, mineral endpoints, cutoffs) inside the `~Parameter` (`~P`) block. |
+| `02_tops_and_contacts/formation_tops.csv` | **Multi-Well Formation Tops** (`WELL_NAME, UWI, TOP_NAME, MD, TVD, TVDSS, DEPTH_UOM`) ready for batch Zonation import. |
+| `02_tops_and_contacts/fluid_contacts.csv` | **Multi-Well Fluid Contacts** (`WELL_NAME, UWI, CONTACT_NAME, MD, TVD, TVDSS, DEPTH_UOM`) such as OWC, GOC, FWL, ODT. |
+| `02_tops_and_contacts/perforations.csv` | **Multi-Well Perforation Intervals** (`WELL_NAME, UWI, PERF_NAME, TOP_MD, BOTTOM_MD, TOP_TVD, BOTTOM_TVD, TOP_TVDSS, BOTTOM_TVDSS, DESCRIPTION, DEPTH_UOM`). |
+| `03_surveys/well_headers_and_datum.csv` | **Well Headers, Datum Elevations & Surface Coordinates** (`WELL_NAME, UWI, DEPTH_UOM, DATUM_TYPE, DATUM_ELEVATION, KB, DF, GL, WATER_DEPTH, TOTAL_DEPTH, X_COORD, Y_COORD, LAT, LON, CRS, FIELD, COMPANY, COUNTRY, LOCATION`). |
+| `03_surveys/well_surveys.csv` | **Multi-Well Deviation Surveys** (`WELL_NAME, UWI, MD, INC, AZIM, TVD, TVDSS, DEPTH_UOM`). |
+| `04_core_and_pressure/core_rca_points.csv` | **Discrete Core Plug RCA Table (Wide)** (`WELL_NAME, UWI, SAMPLE_NAME, DEPTH, RAW_DEPTH, SHIFT_M, TVD, TVDSS, CPORE, CPERM, CPORE_AMB, CPERM_AIR, DESCRIPTION, REMARK`). |
 | `04_core_and_pressure/las_point_sets/*_RCA.las` | **Discrete Core Plug LAS 2.0 Point-Sets** (`STEP = 0.0`) — Drag-and-drop directly into Techlog/Geolog to create a separate `CORE_RCA` point dataset without resampling onto the wireline depth grid. |
-| `04_core_and_pressure/pressure_tests_mdt.csv` | **Formation Pressure Tests (MDT/RFT)** (`WELL_NAME, DEPTH, PRESSURE, PRESSURE_UOM, MOBILITY, PERMEABILITY, TEMPERATURE, TEMPERATURE_UOM, REMARKS, FLUID_TYPE, TEST_QUALITY, ZONE`). |
-| `05_scal_and_sim/scal_capillary_pressure.csv` | **SCAL Capillary Pressure Curves** (`WELL_NAME, SAMPLE_NAME, DEPTH, PC, SW, EXPERIMENT_TYPE, CYCLE`). |
-| `05_scal_and_sim/scal_relperm_tables.csv` | **SCAL Relative Permeability Curves** (`WELL_NAME, SAMPLE_NAME, DEPTH, SATURATION, ...`). |
+| `04_core_and_pressure/pressure_tests_mdt.csv` | **Formation Pressure Tests (MDT/RFT)** (`WELL_NAME, UWI, DEPTH, TVD, TVDSS, PRESSURE, PRESSURE_UOM, MOBILITY, PERMEABILITY, TEMPERATURE, TEMPERATURE_UOM, REMARKS, FLUID_TYPE, TEST_QUALITY, ZONE`). |
+| `04_core_and_pressure/las_point_sets/*_MDT.las` | **Discrete MDT/RFT Pressure LAS 2.0 Point-Sets** (`STEP = 0.0`) — Load directly into Techlog/Geolog as a `MDT_PRESSURE` point dataset. |
+| `05_scal_and_sim/scal_capillary_pressure.csv` | **SCAL Capillary Pressure Curves** (`WELL_NAME, UWI, SAMPLE_NAME, DEPTH, PC, SW, EXPERIMENT_TYPE, CYCLE`). |
+| `05_scal_and_sim/scal_relperm_tables.csv` | **SCAL Relative Permeability Curves** (`WELL_NAME, UWI, SAMPLE_NAME, DEPTH, SATURATION, ...`). |
 | `05_scal_and_sim/eclipse_swof.inc` | **Simulator-Ready `SWOF` Deck** for Eclipse / Intersect / tNavigator. |
-| `06_summaries_and_audit/{_sanitize_name(project_name)}_Master_Workbook.xlsx` | **Multi-Tab Master Excel Workbook** containing all tables, zonal Net-to-Gross / Pay summaries, and CPI parameter audit trail. |
-| `06_summaries_and_audit/CPI_Parameters_Manifest.json` | **Machine-Readable Audit Manifest** of all model endpoints, Archie/Waxman-Smits parameters, and cutoffs per well. |
-| `import_scripts/import_to_techlog.py` | **Techlog Python Auto-Importer** — Assigns curve families/units and loads Zonation markers automatically. |
-| `import_scripts/import_to_geolog.tcl` | **Geolog Tcl Batch Loader** — Loads continuous CPI LAS and discrete `CORE_RCA` sets into Geolog. |
+| `06_summaries_and_audit/{_sanitize_name(project_name)}_Master_Workbook.xlsx` | **Multi-Tab Master Excel Workbook** containing all tables (`Wells_Overview`, `Well_Headers`, `Reservoir_Summary`, `Formation_Tops`, `Fluid_Contacts`, `Perforations`, `Core_RCA`, `SCAL_Capillary_Pressure`, `SCAL_RelPerm`, `Pressure_Tests`, `Well_Surveys`, `CPI_Parameters`, `Project_Parameters`). |
+| `06_summaries_and_audit/CPI_Parameters_Manifest.json` | **Machine-Readable Audit Manifest** of all single-well and multi-well project parameters, endpoints, Archie/Waxman-Smits parameters, FPT/SHF/Swirr settings, and cutoffs. |
+| `import_scripts/import_to_techlog.py` | **Techlog Python Auto-Importer** — Assigns curve families/units and loads Zonation, Fluid Contacts, and Perforations automatically. |
+| `import_scripts/import_to_geolog.tcl` | **Geolog Tcl Batch Loader** — Loads continuous CPI LAS, discrete `CORE_RCA`, and discrete `MDT_PRESSURE` sets into Geolog. |
 
 ---
 
@@ -447,27 +558,41 @@ def build_handover_archive_bytes(
     wells_bundle: List[Dict[str, Any]],
     include_las: bool = True,
     include_excel: bool = True,
+    project_config: Optional[Dict[str, Any]] = None,
 ) -> bytes:
-    """Build an in-memory `.zip` archive bytes object from a list of well bundles.
+    """Build an in-memory `.zip` handover archive from a list of well bundles.
 
-    Each item in `wells_bundle` is a dict containing:
-    - `name`: str (well name)
-    - `uwi`: str
-    - `depth_uom`: str ('m' or 'ft')
-    - `config`: dict (WellConfig parameters)
-    - `data`: pd.DataFrame (curve data with 'DEPTH' column)
-    - `formation_tops`: pd.DataFrame (columns: ['name', 'depth'])
-    - `fluid_contacts`: pd.DataFrame (columns: ['name', 'depth'])
-    - `well_surveys`: pd.DataFrame (columns: ['md', 'inc', 'azim'])
-    - `pressure_tests`: pd.DataFrame (columns: ['depth', 'pressure', 'pressure_uom', 'mobility', 'permeability', 'temperature', 'temperature_uom', 'remarks'])
-    - `core_data`: dict[sample_name -> {'depth', 'description', 'remark', 'measurements', 'relperm', 'pc'}]
-    - `scal_pc`: list[dict]
+    Args:
+        project_name (str): Name of the project used for archive root naming and manifest metadata.
+        project_description (str): Project description string.
+        wells_bundle (List[Dict[str, Any]]): List of per-well dictionaries, where each item contains:
+            - `name`: str (well name)
+            - `uwi`: str
+            - `depth_uom`: str (`'m'` or `'ft'`)
+            - `header`: dict (well header metadata & datum overrides)
+            - `config`: dict (WellConfig evaluation parameters)
+            - `data`: pd.DataFrame (continuous curve data with `'DEPTH'` column)
+            - `formation_tops`: pd.DataFrame (columns: `['name', 'depth']`)
+            - `fluid_contacts`: pd.DataFrame (columns: `['name', 'depth']`)
+            - `perforations`: pd.DataFrame (columns: `['name', 'top_depth', 'bottom_depth', 'description']`)
+            - `well_surveys`: pd.DataFrame (columns: `['md', 'inc', 'azim']`)
+            - `pressure_tests`: pd.DataFrame (columns: `['depth', 'pressure', 'pressure_uom', 'mobility', 'permeability', 'temperature', 'temperature_uom', 'remarks', 'tvdss', 'fluid_type', 'test_quality', 'zone']`)
+            - `core_data`: dict[sample_name -> `{'depth', 'description', 'remark', 'measurements', 'relperm', 'pc'}`]
+            - `scal_pc`: list[dict]
+        include_las (bool): Whether to generate continuous and discrete point-set LAS 2.0 files. Defaults to True.
+        include_excel (bool): Whether to generate the multi-tab Master Excel Workbook (`.xlsx`). Defaults to True.
+        project_config (Optional[Dict[str, Any]]): Optional project-level multi-well parameters dictionary.
+
+    Returns:
+        bytes: Complete `.zip` archive bytes ready for writing to disk or streaming over HTTP.
     """
     safe_proj = _sanitize_name(project_name)
     root_prefix = f"{safe_proj}_Handover"
 
+    all_headers_rows: List[Dict[str, Any]] = []
     all_tops_rows: List[Dict[str, Any]] = []
     all_contacts_rows: List[Dict[str, Any]] = []
+    all_perfs_rows: List[Dict[str, Any]] = []
     all_surveys_rows: List[Dict[str, Any]] = []
     all_pressure_rows: List[Dict[str, Any]] = []
     all_rca_wide_rows: List[Dict[str, Any]] = []
@@ -488,6 +613,7 @@ def build_handover_archive_bytes(
             w_name = str(w.get("name") or "UNKNOWN_WELL")
             w_uwi = str(w.get("uwi") or w_name)
             w_uom = str(w.get("depth_uom") or "m")
+            w_hdr: Dict[str, Any] = dict(w.get("header") or {})
             w_cfg: Dict[str, Any] = dict(w.get("config") or {})
             w_df: pd.DataFrame = (
                 w["data"].copy()
@@ -502,6 +628,11 @@ def build_handover_archive_bytes(
             contacts_df: pd.DataFrame = (
                 w["fluid_contacts"].copy()
                 if isinstance(w.get("fluid_contacts"), pd.DataFrame)
+                else pd.DataFrame()
+            )
+            perfs_df: pd.DataFrame = (
+                w["perforations"].copy()
+                if isinstance(w.get("perforations"), pd.DataFrame)
                 else pd.DataFrame()
             )
             surveys_df: pd.DataFrame = (
@@ -519,6 +650,102 @@ def build_handover_archive_bytes(
 
             well_names_exported.append(w_name)
             safe_well = _sanitize_name(w_name)
+
+            # Extract well header metadata and datum elevation (DF/KB) for TVDSS computation
+            try:
+                parsed_meta = dict(extract_las_metadata(w_hdr)) if w_hdr else {}
+            except Exception:
+                parsed_meta = {}
+            ovr_meta = (
+                w_hdr.get("header_overrides")
+                if isinstance(w_hdr.get("header_overrides"), dict)
+                else {}
+            )
+            merged_hdr = {**parsed_meta, **ovr_meta}
+            datum_elev = extract_well_df_elevation(
+                w_hdr, w_cfg, target_depth_uom=w_uom
+            )
+            datum_elev_f = float(datum_elev) if datum_elev is not None else 0.0
+            datum_type = (
+                "DF"
+                if (
+                    merged_hdr.get("df_elev") is not None
+                    or merged_hdr.get("dfe_elevation") is not None
+                )
+                else "KB"
+                if (
+                    merged_hdr.get("kb_elev") is not None
+                    or merged_hdr.get("kb_elevation") is not None
+                )
+                else "MSL"
+            )
+
+            def _calc_tvdss(tvd_v: Any) -> Optional[float]:
+                try:
+                    f_tvd = float(tvd_v)
+                except (TypeError, ValueError):
+                    return None
+                if not np.isfinite(f_tvd):
+                    return None
+                return round(f_tvd - datum_elev_f, 4)
+
+            # Ensure TVD and TVDSS columns exist on w_df if surveys or TVD exist
+            if not w_df.empty and "DEPTH" in w_df.columns:
+                if (
+                    ("TVD" not in w_df.columns or w_df["TVD"].isna().all())
+                    and not surveys_df.empty
+                    and "md" in surveys_df.columns
+                ):
+                    w_df["TVD"] = _interpolate_tvd(
+                        pd.to_numeric(w_df["DEPTH"], errors="coerce").to_numpy(
+                            dtype=float
+                        ),
+                        None,
+                        surveys_df,
+                    )
+                if (
+                    "TVD" in w_df.columns
+                    and w_df["TVD"].notna().any()
+                    and ("TVDSS" not in w_df.columns or w_df["TVDSS"].isna().all())
+                ):
+                    w_df["TVDSS"] = (
+                        pd.to_numeric(w_df["TVD"], errors="coerce") - datum_elev_f
+                    ).round(4)
+
+            # Collect Well Header & Datum row
+            max_md_val = (
+                round(float(w_df["DEPTH"].max()), 2)
+                if not w_df.empty and "DEPTH" in w_df.columns
+                else merged_hdr.get("stop_depth")
+            )
+            all_headers_rows.append(
+                {
+                    "WELL_NAME": w_name,
+                    "UWI": w_uwi,
+                    "DEPTH_UOM": w_uom,
+                    "DATUM_TYPE": datum_type,
+                    "DATUM_ELEVATION": round(datum_elev_f, 4)
+                    if datum_elev is not None
+                    else 0.0,
+                    "KB": merged_hdr.get("kb_elev") or merged_hdr.get("kb_elevation"),
+                    "DF": merged_hdr.get("df_elev") or merged_hdr.get("dfe_elevation"),
+                    "GL": merged_hdr.get("gl_elev")
+                    or merged_hdr.get("ground_elevation"),
+                    "WATER_DEPTH": merged_hdr.get("water_depth"),
+                    "TOTAL_DEPTH": max_md_val,
+                    "X_COORD": merged_hdr.get("x_coord"),
+                    "Y_COORD": merged_hdr.get("y_coord"),
+                    "LAT": merged_hdr.get("latitude"),
+                    "LON": merged_hdr.get("longitude"),
+                    "CRS": merged_hdr.get("crs") or "",
+                    "FIELD": merged_hdr.get("field")
+                    or merged_hdr.get("field_name")
+                    or "",
+                    "COMPANY": merged_hdr.get("company") or "",
+                    "COUNTRY": merged_hdr.get("country") or "",
+                    "LOCATION": merged_hdr.get("location") or "",
+                }
+            )
 
             # Ensure ZONES column is populated on w_df if formation tops exist
             if not w_df.empty and "DEPTH" in w_df.columns and not tops_df.empty:
@@ -539,6 +766,7 @@ def build_handover_archive_bytes(
                         uwi=w_uwi,
                         depth_uom=w_uom,
                         parameters=w_cfg,
+                        well_header=w_hdr,
                     )
                     zf.writestr(
                         f"{root_prefix}/01_well_logs_las/{safe_well}.las",
@@ -547,42 +775,95 @@ def build_handover_archive_bytes(
                 except Exception as e:
                     logger.warning(f"Failed to generate LAS for well '{w_name}': {e}")
 
-            # 2. Collect Formation Tops (with interpolated TVD)
+            # 2. Collect Formation Tops (with interpolated TVD & TVDSS)
             if not tops_df.empty and "depth" in tops_df.columns:
                 mds = pd.to_numeric(tops_df["depth"], errors="coerce").to_numpy(
                     dtype=float
                 )
                 tvds = _interpolate_tvd(mds, w_df, surveys_df)
                 for (_, row), tvd_val in zip(tops_df.iterrows(), tvds):
+                    tvd_clean = (
+                        round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
+                    )
                     all_tops_rows.append(
                         {
                             "WELL_NAME": w_name,
                             "UWI": w_uwi,
                             "TOP_NAME": str(row.get("name") or ""),
                             "MD": round(float(row["depth"]), 4),
-                            "TVD": round(float(tvd_val), 4)
-                            if np.isfinite(tvd_val)
-                            else None,
+                            "TVD": tvd_clean,
+                            "TVDSS": _calc_tvdss(tvd_clean),
                             "DEPTH_UOM": w_uom,
                         }
                     )
 
-            # 3. Collect Fluid Contacts (with interpolated TVD)
+            # 3. Collect Fluid Contacts (with interpolated TVD & TVDSS)
             if not contacts_df.empty and "depth" in contacts_df.columns:
                 mds = pd.to_numeric(contacts_df["depth"], errors="coerce").to_numpy(
                     dtype=float
                 )
                 tvds = _interpolate_tvd(mds, w_df, surveys_df)
                 for (_, row), tvd_val in zip(contacts_df.iterrows(), tvds):
+                    tvd_clean = (
+                        round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
+                    )
                     all_contacts_rows.append(
                         {
                             "WELL_NAME": w_name,
                             "UWI": w_uwi,
                             "CONTACT_NAME": str(row.get("name") or ""),
                             "MD": round(float(row["depth"]), 4),
-                            "TVD": round(float(tvd_val), 4)
-                            if np.isfinite(tvd_val)
-                            else None,
+                            "TVD": tvd_clean,
+                            "TVDSS": _calc_tvdss(tvd_clean),
+                            "DEPTH_UOM": w_uom,
+                        }
+                    )
+
+            # 3b. Collect Perforation Intervals (with interpolated TOP/BOTTOM TVD & TVDSS)
+            top_col = (
+                "top"
+                if "top" in perfs_df.columns
+                else "top_depth"
+                if "top_depth" in perfs_df.columns
+                else None
+            )
+            bot_col = (
+                "bottom"
+                if "bottom" in perfs_df.columns
+                else "bottom_depth"
+                if "bottom_depth" in perfs_df.columns
+                else None
+            )
+            if not perfs_df.empty and top_col and bot_col:
+                top_mds = pd.to_numeric(perfs_df[top_col], errors="coerce").to_numpy(
+                    dtype=float
+                )
+                bot_mds = pd.to_numeric(perfs_df[bot_col], errors="coerce").to_numpy(
+                    dtype=float
+                )
+                top_tvds = _interpolate_tvd(top_mds, w_df, surveys_df)
+                bot_tvds = _interpolate_tvd(bot_mds, w_df, surveys_df)
+                for (_, row), t_tvd, b_tvd in zip(
+                    perfs_df.iterrows(), top_tvds, bot_tvds
+                ):
+                    t_tvd_clean = (
+                        round(float(t_tvd), 4) if np.isfinite(t_tvd) else None
+                    )
+                    b_tvd_clean = (
+                        round(float(b_tvd), 4) if np.isfinite(b_tvd) else None
+                    )
+                    all_perfs_rows.append(
+                        {
+                            "WELL_NAME": w_name,
+                            "UWI": w_uwi,
+                            "PERF_NAME": str(row.get("name") or "PERF"),
+                            "TOP_MD": round(float(row[top_col]), 4),
+                            "BOTTOM_MD": round(float(row[bot_col]), 4),
+                            "TOP_TVD": t_tvd_clean,
+                            "BOTTOM_TVD": b_tvd_clean,
+                            "TOP_TVDSS": _calc_tvdss(t_tvd_clean),
+                            "BOTTOM_TVDSS": _calc_tvdss(b_tvd_clean),
+                            "DESCRIPTION": str(row.get("description") or ""),
                             "DEPTH_UOM": w_uom,
                         }
                     )
@@ -594,6 +875,9 @@ def build_handover_archive_bytes(
                 )
                 tvds = _interpolate_tvd(mds, w_df, surveys_df)
                 for (_, row), tvd_val in zip(surveys_df.iterrows(), tvds):
+                    tvd_clean = (
+                        round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
+                    )
                     all_surveys_rows.append(
                         {
                             "WELL_NAME": w_name,
@@ -601,14 +885,14 @@ def build_handover_archive_bytes(
                             "MD": round(float(row["md"]), 4),
                             "INC": round(float(row.get("inc") or 0.0), 4),
                             "AZIM": round(float(row.get("azim") or 0.0), 4),
-                            "TVD": round(float(tvd_val), 4)
-                            if np.isfinite(tvd_val)
-                            else None,
+                            "TVD": tvd_clean,
+                            "TVDSS": _calc_tvdss(tvd_clean),
                             "DEPTH_UOM": w_uom,
                         }
                     )
 
-            # 5. Collect Pressure Tests (MDT/RFT)
+            # 5. Collect Pressure Tests (MDT/RFT) & export discrete *_MDT.las point-set
+            well_pressure_rows: List[Dict[str, Any]] = []
             if not pressure_df.empty and "depth" in pressure_df.columns:
                 mds = pd.to_numeric(pressure_df["depth"], errors="coerce").to_numpy(
                     dtype=float
@@ -623,28 +907,64 @@ def build_handover_archive_bytes(
                     return round(f, nd) if np.isfinite(f) else None
 
                 for (_, row), tvd_val in zip(pressure_df.iterrows(), tvds):
-                    all_pressure_rows.append(
-                        {
-                            "WELL_NAME": w_name,
-                            "UWI": w_uwi,
-                            "DEPTH": round(float(row["depth"]), 4),
-                            "TVD": round(float(tvd_val), 4)
-                            if np.isfinite(tvd_val)
-                            else None,
-                            "PRESSURE": round(float(row["pressure"]), 4)
-                            if pd.notna(row.get("pressure"))
-                            else None,
-                            "PRESSURE_UOM": str(row.get("pressure_uom") or "psi"),
-                            "MOBILITY": _opt_round(row.get("mobility")),
-                            "PERMEABILITY": _opt_round(row.get("permeability")),
-                            "TEMPERATURE": _opt_round(row.get("temperature"), 2),
-                            "TEMPERATURE_UOM": str(row.get("temperature_uom") or "degC"),
-                            "REMARKS": str(row.get("remarks") or ""),
-                            "FLUID_TYPE": str(row.get("fluid_type") or "UNASSIGNED"),
-                            "TEST_QUALITY": str(row.get("test_quality") or "VALID"),
-                            "ZONE": str(row.get("zone") or ""),
-                        }
+                    tvd_clean = (
+                        round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
                     )
+                    explicit_tvdss = _opt_round(row.get("tvdss"))
+                    p_entry = {
+                        "WELL_NAME": w_name,
+                        "UWI": w_uwi,
+                        "DEPTH": round(float(row["depth"]), 4),
+                        "TVD": tvd_clean,
+                        "TVDSS": explicit_tvdss
+                        if explicit_tvdss is not None
+                        else _calc_tvdss(tvd_clean),
+                        "PRESSURE": round(float(row["pressure"]), 4)
+                        if pd.notna(row.get("pressure"))
+                        else None,
+                        "PRESSURE_UOM": str(row.get("pressure_uom") or "psi"),
+                        "MOBILITY": _opt_round(row.get("mobility")),
+                        "PERMEABILITY": _opt_round(row.get("permeability")),
+                        "TEMPERATURE": _opt_round(row.get("temperature"), 2),
+                        "TEMPERATURE_UOM": str(row.get("temperature_uom") or "degC"),
+                        "REMARKS": str(row.get("remarks") or ""),
+                        "FLUID_TYPE": str(row.get("fluid_type") or "UNASSIGNED"),
+                        "TEST_QUALITY": str(row.get("test_quality") or "VALID"),
+                        "ZONE": str(row.get("zone") or ""),
+                    }
+                    well_pressure_rows.append(p_entry)
+                    all_pressure_rows.append(p_entry)
+
+                if include_las and well_pressure_rows:
+                    try:
+                        mdt_las_df = pd.DataFrame(well_pressure_rows)
+                        mdt_las_str = export_to_las_string(
+                            well_data=mdt_las_df,
+                            well_name=w_name,
+                            uwi=w_uwi,
+                            depth_uom=w_uom,
+                            vars_units={
+                                "PRESSURE": str(
+                                    well_pressure_rows[0].get("PRESSURE_UOM") or "psi"
+                                ),
+                                "MOBILITY": "mD/cP",
+                                "PERMEABILITY": "mD",
+                                "TEMPERATURE": str(
+                                    well_pressure_rows[0].get("TEMPERATURE_UOM")
+                                    or "degC"
+                                ),
+                            },
+                            parameters={"DATASET_TYPE": "DISCRETE_MDT_PRESSURE"},
+                            well_header=w_hdr,
+                        )
+                        zf.writestr(
+                            f"{root_prefix}/04_core_and_pressure/las_point_sets/{safe_well}_MDT.las",
+                            mdt_las_str,
+                        )
+                    except Exception as e:
+                        logger.debug(
+                            f"Could not write discrete MDT LAS for well '{w_name}': {e}"
+                        )
 
             # 6. Collect Core RCA & SCAL RelPerm / Pc
             well_rca_wide: List[Dict[str, Any]] = []
@@ -653,13 +973,27 @@ def build_handover_archive_bytes(
                 if s_depth is None:
                     continue
                 s_depth_f = round(float(s_depth), 4)
+                s_tvd_arr = _interpolate_tvd(
+                    np.array([s_depth_f], dtype=float), w_df, surveys_df
+                )
+                s_tvd_f = (
+                    round(float(s_tvd_arr[0]), 4)
+                    if len(s_tvd_arr) > 0 and np.isfinite(s_tvd_arr[0])
+                    else None
+                )
                 wide_entry: Dict[str, Any] = {
                     "WELL_NAME": w_name,
                     "UWI": w_uwi,
                     "SAMPLE_NAME": str(sample_name),
                     "DEPTH": s_depth_f,
+                    "RAW_DEPTH": None,
+                    "SHIFT_M": None,
+                    "TVD": s_tvd_f,
+                    "TVDSS": _calc_tvdss(s_tvd_f),
                     "CPORE": None,
                     "CPERM": None,
+                    "CPORE_AMB": None,
+                    "CPERM_AIR": None,
                     "DESCRIPTION": s_info.get("description") or "",
                     "REMARK": s_info.get("remark") or "",
                 }
@@ -722,7 +1056,9 @@ def build_handover_archive_bytes(
                 has_cperm = "CPERM" in w_df.columns and w_df["CPERM"].notna().any()
                 if has_cpore or has_cperm:
                     c_cols = ["DEPTH"] + [
-                        c for c in ("CPORE", "CPERM") if c in w_df.columns
+                        c
+                        for c in ("CPORE", "CPERM", "CPORE_AMB", "CPERM_AIR", "TVD", "TVDSS")
+                        if c in w_df.columns
                     ]
                     core_sub = w_df[c_cols].dropna(
                         subset=[c for c in ("CPORE", "CPERM") if c in w_df.columns],
@@ -731,6 +1067,16 @@ def build_handover_archive_bytes(
                     for idx_r, c_row in core_sub.iterrows():
                         sname = f"PLUG-{idx_r + 1}"
                         d_val = round(float(c_row["DEPTH"]), 4)
+                        tvd_v = (
+                            round(float(c_row["TVD"]), 4)
+                            if "TVD" in c_row and pd.notna(c_row["TVD"])
+                            else None
+                        )
+                        tvdss_v = (
+                            round(float(c_row["TVDSS"]), 4)
+                            if "TVDSS" in c_row and pd.notna(c_row["TVDSS"])
+                            else _calc_tvdss(tvd_v)
+                        )
                         cpore_v = (
                             float(c_row["CPORE"])
                             if "CPORE" in c_row and pd.notna(c_row["CPORE"])
@@ -741,13 +1087,29 @@ def build_handover_archive_bytes(
                             if "CPERM" in c_row and pd.notna(c_row["CPERM"])
                             else None
                         )
+                        cpore_amb_v = (
+                            float(c_row["CPORE_AMB"])
+                            if "CPORE_AMB" in c_row and pd.notna(c_row["CPORE_AMB"])
+                            else None
+                        )
+                        cperm_air_v = (
+                            float(c_row["CPERM_AIR"])
+                            if "CPERM_AIR" in c_row and pd.notna(c_row["CPERM_AIR"])
+                            else None
+                        )
                         w_entry = {
                             "WELL_NAME": w_name,
                             "UWI": w_uwi,
                             "SAMPLE_NAME": sname,
                             "DEPTH": d_val,
+                            "RAW_DEPTH": None,
+                            "SHIFT_M": None,
+                            "TVD": tvd_v,
+                            "TVDSS": tvdss_v,
                             "CPORE": cpore_v,
                             "CPERM": cperm_v,
+                            "CPORE_AMB": cpore_amb_v,
+                            "CPERM_AIR": cperm_air_v,
                             "DESCRIPTION": "",
                             "REMARK": "Extracted from well log core curves",
                         }
@@ -764,6 +1126,7 @@ def build_handover_archive_bytes(
                         uwi=w_uwi,
                         depth_uom=w_uom,
                         parameters={"DATASET_TYPE": "DISCRETE_CORE_RCA"},
+                        well_header=w_hdr,
                     )
                     zf.writestr(
                         f"{root_prefix}/04_core_and_pressure/las_point_sets/{safe_well}_RCA.las",
@@ -828,12 +1191,16 @@ def build_handover_archive_bytes(
                     "WELL_NAME": w_name,
                     "UWI": w_uwi,
                     "DEPTH_UOM": w_uom,
+                    "DATUM_ELEVATION": round(datum_elev_f, 4)
+                    if datum_elev is not None
+                    else 0.0,
                     "MIN_DEPTH": min_d,
                     "MAX_DEPTH": max_d,
                     "ROW_COUNT": int(len(w_df)),
                     "CURVE_COUNT": len(curve_list),
                     "FORMATION_TOPS_COUNT": int(len(tops_df)),
                     "FLUID_CONTACTS_COUNT": int(len(contacts_df)),
+                    "PERFORATIONS_COUNT": int(len(perfs_df)),
                     "SURVEY_POINTS_COUNT": int(len(surveys_df)),
                     "PRESSURE_TESTS_COUNT": int(len(pressure_df)),
                     "CORE_RCA_SAMPLES_COUNT": int(len(well_rca_wide)),
@@ -844,19 +1211,58 @@ def build_handover_archive_bytes(
             params_manifest_wells[w_name] = {
                 "uwi": w_uwi,
                 "depth_uom": w_uom,
+                "datum_elevation": round(datum_elev_f, 4)
+                if datum_elev is not None
+                else 0.0,
                 "min_depth": min_d,
                 "max_depth": max_d,
                 "row_count": int(len(w_df)),
                 "curves": curve_list,
+                "header": all_headers_rows[-1],
                 "parameters": w_cfg,
             }
 
         # Convert collected lists to DataFrames with clean headers even when empty
+        headers_out_df = (
+            pd.DataFrame(all_headers_rows)
+            if all_headers_rows
+            else pd.DataFrame(
+                columns=[
+                    "WELL_NAME",
+                    "UWI",
+                    "DEPTH_UOM",
+                    "DATUM_TYPE",
+                    "DATUM_ELEVATION",
+                    "KB",
+                    "DF",
+                    "GL",
+                    "WATER_DEPTH",
+                    "TOTAL_DEPTH",
+                    "X_COORD",
+                    "Y_COORD",
+                    "LAT",
+                    "LON",
+                    "CRS",
+                    "FIELD",
+                    "COMPANY",
+                    "COUNTRY",
+                    "LOCATION",
+                ]
+            )
+        )
         tops_out_df = (
             pd.DataFrame(all_tops_rows)
             if all_tops_rows
             else pd.DataFrame(
-                columns=["WELL_NAME", "UWI", "TOP_NAME", "MD", "TVD", "DEPTH_UOM"]
+                columns=[
+                    "WELL_NAME",
+                    "UWI",
+                    "TOP_NAME",
+                    "MD",
+                    "TVD",
+                    "TVDSS",
+                    "DEPTH_UOM",
+                ]
             )
         )
         contacts_out_df = (
@@ -869,6 +1275,26 @@ def build_handover_archive_bytes(
                     "CONTACT_NAME",
                     "MD",
                     "TVD",
+                    "TVDSS",
+                    "DEPTH_UOM",
+                ]
+            )
+        )
+        perfs_out_df = (
+            pd.DataFrame(all_perfs_rows)
+            if all_perfs_rows
+            else pd.DataFrame(
+                columns=[
+                    "WELL_NAME",
+                    "UWI",
+                    "PERF_NAME",
+                    "TOP_MD",
+                    "BOTTOM_MD",
+                    "TOP_TVD",
+                    "BOTTOM_TVD",
+                    "TOP_TVDSS",
+                    "BOTTOM_TVDSS",
+                    "DESCRIPTION",
                     "DEPTH_UOM",
                 ]
             )
@@ -877,7 +1303,16 @@ def build_handover_archive_bytes(
             pd.DataFrame(all_surveys_rows)
             if all_surveys_rows
             else pd.DataFrame(
-                columns=["WELL_NAME", "UWI", "MD", "INC", "AZIM", "TVD", "DEPTH_UOM"]
+                columns=[
+                    "WELL_NAME",
+                    "UWI",
+                    "MD",
+                    "INC",
+                    "AZIM",
+                    "TVD",
+                    "TVDSS",
+                    "DEPTH_UOM",
+                ]
             )
         )
         rca_wide_out_df = (
@@ -889,8 +1324,14 @@ def build_handover_archive_bytes(
                     "UWI",
                     "SAMPLE_NAME",
                     "DEPTH",
+                    "RAW_DEPTH",
+                    "SHIFT_M",
+                    "TVD",
+                    "TVDSS",
                     "CPORE",
                     "CPERM",
+                    "CPORE_AMB",
+                    "CPERM_AIR",
                     "DESCRIPTION",
                     "REMARK",
                 ]
@@ -920,6 +1361,7 @@ def build_handover_archive_bytes(
                     "UWI",
                     "DEPTH",
                     "TVD",
+                    "TVDSS",
                     "PRESSURE",
                     "PRESSURE_UOM",
                     "MOBILITY",
@@ -1001,6 +1443,14 @@ def build_handover_archive_bytes(
             contacts_out_df.to_csv(index=False),
         )
         zf.writestr(
+            f"{root_prefix}/02_tops_and_contacts/perforations.csv",
+            perfs_out_df.to_csv(index=False),
+        )
+        zf.writestr(
+            f"{root_prefix}/03_surveys/well_headers_and_datum.csv",
+            headers_out_df.to_csv(index=False),
+        )
+        zf.writestr(
             f"{root_prefix}/03_surveys/well_surveys.csv",
             surveys_out_df.to_csv(index=False),
         )
@@ -1058,6 +1508,7 @@ def build_handover_archive_bytes(
                 "wells": len(well_names_exported),
                 "formation_tops": int(len(tops_out_df)),
                 "fluid_contacts": int(len(contacts_out_df)),
+                "perforations": int(len(perfs_out_df)),
                 "well_surveys": int(len(surveys_out_df)),
                 "core_rca_samples": int(len(rca_wide_out_df)),
                 "core_measurements_long": int(len(rca_long_out_df)),
@@ -1066,6 +1517,7 @@ def build_handover_archive_bytes(
                 "scal_relperm_points": int(len(scal_rp_out_df)),
                 "reservoir_summary_rows": int(len(ressum_out_df)),
             },
+            "project_parameters": dict(project_config or {}),
             "wells": params_manifest_wells,
         }
         zf.writestr(
@@ -1087,9 +1539,27 @@ def build_handover_archive_bytes(
                     params_rows.append(flat_p)
                 params_df = pd.DataFrame(params_rows)
 
+                proj_params_rows = [
+                    {
+                        "SECTION": str(sec_k),
+                        "PARAMETERS_JSON": json.dumps(sec_v, default=str)
+                        if isinstance(sec_v, (dict, list, tuple))
+                        else str(sec_v),
+                    }
+                    for sec_k, sec_v in (project_config or {}).items()
+                ]
+                proj_params_df = (
+                    pd.DataFrame(proj_params_rows)
+                    if proj_params_rows
+                    else pd.DataFrame(columns=["SECTION", "PARAMETERS_JSON"])
+                )
+
                 with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
                     overview_out_df.to_excel(
                         writer, sheet_name="Wells_Overview", index=False
+                    )
+                    headers_out_df.to_excel(
+                        writer, sheet_name="Well_Headers", index=False
                     )
                     ressum_out_df.to_excel(
                         writer, sheet_name="Reservoir_Summary", index=False
@@ -1099,6 +1569,9 @@ def build_handover_archive_bytes(
                     )
                     contacts_out_df.to_excel(
                         writer, sheet_name="Fluid_Contacts", index=False
+                    )
+                    perfs_out_df.to_excel(
+                        writer, sheet_name="Perforations", index=False
                     )
                     rca_wide_out_df.to_excel(
                         writer, sheet_name="Core_RCA", index=False
@@ -1117,6 +1590,9 @@ def build_handover_archive_bytes(
                     )
                     params_df.to_excel(
                         writer, sheet_name="CPI_Parameters", index=False
+                    )
+                    proj_params_df.to_excel(
+                        writer, sheet_name="Project_Parameters", index=False
                     )
 
                 zf.writestr(
@@ -1150,7 +1626,19 @@ def collect_well_handover_dict(
     override_df: Optional[pd.DataFrame] = None,
     override_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Extract a well bundle dictionary from a `quick_pp.database.objects.Well` instance."""
+    """Extract a well bundle dictionary from a `quick_pp.database.objects.Well` instance.
+
+    Args:
+        well_obj (Any): Instance of `quick_pp.database.objects.Well`.
+        override_df (Optional[pd.DataFrame]): Optional merged/live DataFrame to use in place of
+            querying the database.
+        override_config (Optional[Dict[str, Any]]): Optional configuration parameter overrides to
+            merge on top of `well_obj.config`.
+
+    Returns:
+        Dict[str, Any]: Standardized dictionary suitable for passing in `wells_bundle` to
+        `build_handover_archive_bytes`.
+    """
     try:
         well_df = (
             override_df.copy()
@@ -1161,17 +1649,33 @@ def collect_well_handover_dict(
         well_df = well_obj.get_data()
 
     cfg_dict = dict(getattr(well_obj.config, "__dict__", {}) or {})
+    orm_cfg = getattr(getattr(well_obj, "_orm_well", None), "config_data", None)
+    if isinstance(orm_cfg, dict):
+        cfg_dict.update(orm_cfg)
     if override_config:
         cfg_dict.update(override_config)
+
+    raw_hdr = getattr(well_obj, "header_data", None) or getattr(
+        getattr(well_obj, "_orm_well", None), "header_data", None
+    )
+    hdr_dict = dict(raw_hdr) if isinstance(raw_hdr, dict) else {}
+
+    perfs_df = (
+        well_obj.get_perforations()
+        if hasattr(well_obj, "get_perforations")
+        else pd.DataFrame(columns=["name", "top_depth", "bottom_depth", "description"])
+    )
 
     return {
         "name": well_obj.name,
         "uwi": well_obj.uwi or well_obj.name,
         "depth_uom": getattr(well_obj._orm_well, "depth_uom", None) or "m",
+        "header": hdr_dict,
         "config": cfg_dict,
         "data": well_df,
         "formation_tops": well_obj.get_formation_tops(),
         "fluid_contacts": well_obj.get_fluid_contacts(),
+        "perforations": perfs_df,
         "well_surveys": well_obj.get_well_surveys(),
         "pressure_tests": well_obj.get_pressure_tests(),
         "core_data": well_obj.get_core_data(),

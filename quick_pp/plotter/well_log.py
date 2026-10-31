@@ -1,3 +1,5 @@
+"""Interactive Plotly multi-track well log composite plotting utilities."""
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go

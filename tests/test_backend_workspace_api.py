@@ -32,6 +32,7 @@ def client_and_project(monkeypatch):
     df = pd.DataFrame(
         {
             "DEPTH": depths,
+            "TVD": depths,
             "WELL_NAME": ["Well-A"] * 10,
             "GR": np.linspace(30.0, 110.0, 10),
             "NPHI": np.linspace(0.12, 0.28, 10),

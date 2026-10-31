@@ -1,3 +1,15 @@
+"""LAS 2.0/3.0 and DLIS Well Log Parsing, Inspection, Normalization, and Export Engine.
+
+This module provides high-performance readers and writers for industry-standard well log
+formats (LAS 2.0, LAS 3.0, and binary DLIS RP66), including:
+- Fast two-stage hybrid LAS parsing (`fast_read_las`, `read_las_file_fast`)
+- LAS 3.0 stream normalization (`normalize_las3_to_las2_stream`)
+- DLIS logical file and frame inspection and extraction (`inspect_dlis`, `read_dlis_frame`)
+- Well header metadata & datum elevation extraction (`extract_las_metadata`, `extract_well_df_elevation`)
+- Curve mnemonic alias resolution, unit standardization, and multi-run splicing (`standardize_curve_units`, `splice_and_regularize_runs`)
+- LAS 2.0 export with embedded `~Well` header and `~Parameter` CPI settings (`build_las_object`, `export_to_las_string`, `export_to_las`)
+"""
+
 import io
 import mmap
 import os
@@ -29,7 +41,18 @@ class _LASHeaderDataFrame(pd.DataFrame):
 
 
 def read_las_file_fast(file_object, depth_uom=None):
-    """Read a LAS file using the fast two-stage hybrid parser (`fast_read_las`)."""
+    """Read a LAS file using the fast two-stage hybrid parser (`fast_read_las`).
+
+    Args:
+        file_object: File path, string buffer, or binary file-like object to parse.
+        depth_uom (str, optional): Target unit of measurement for the depth column
+            (`'m'` or `'ft'`). Converts depth automatically if different from the raw LAS unit.
+
+    Returns:
+        tuple[pd.DataFrame, _LASHeaderDataFrame]:
+            - DataFrame containing standardized curve data with `WELL_NAME`, `UWI`, and `DEPTH`.
+            - Header DataFrame with attached `_meta_dict` dictionary lookup support.
+    """
     source = getattr(file_object, "name", None)
     if source and isinstance(source, str) and os.path.exists(source):
         with open(source, "rb") as raw_f:
@@ -530,6 +553,7 @@ def build_las_object(
     uwi: Optional[str] = None,
     depth_uom: str = "m",
     parameters: Optional[Dict[str, Any]] = None,
+    well_header: Optional[Dict[str, Any]] = None,
 ) -> lasio.LASFile:
     """Build a LAS 2.0 `lasio.LASFile` object from a DataFrame of well data.
 
@@ -537,6 +561,21 @@ def build_las_object(
     categorical `ZONES` column into a numeric `ZONE_ID` curve (recording the
     zone index table in `~Parameter`), and populates `~Well`, `~Curve`, and
     `~Parameter` metadata for seamless import into Techlog, Geolog, IP, and Petrel.
+
+    Args:
+        well_data (pd.DataFrame): DataFrame containing well log curves and a `DEPTH` column.
+        well_name (str): Name of the well.
+        vars_units (Optional[Dict[str, str]]): Optional mapping of curve mnemonics to units.
+        vars_descr (Optional[Dict[str, str]]): Optional mapping of curve mnemonics to descriptions.
+        uwi (Optional[str]): Unique Well Identifier. Defaults to `well_name` if omitted.
+        depth_uom (str): Depth unit of measurement (`'m'` or `'ft'`). Defaults to `'m'`.
+        parameters (Optional[Dict[str, Any]]): Petrophysical evaluation parameters to write into `~Parameter`.
+        well_header (Optional[Dict[str, Any]]): Optional well header metadata dict (e.g. `kb_elev`,
+            `df_elev`, `gl_elev`, `x_coord`, `y_coord`, `latitude`, `longitude`, `field`, `company`,
+            `country`, `crs`) to populate standard `~Well` header items.
+
+    Returns:
+        lasio.LASFile: Populated LAS 2.0 file object ready for serialization.
     """
     from .config import Config
 
@@ -612,6 +651,72 @@ def build_las_object(
     las_file.well.WELL = str(well_name)
     las_file.well.UWI = str(uwi or well_name)
     las_file.well.NULL = -999.25
+
+    # Populate optional ~Well header items from well_header if provided
+    if well_header:
+        try:
+            meta_h = dict(extract_las_metadata(well_header))
+        except Exception:
+            meta_h = dict(well_header) if isinstance(well_header, dict) else {}
+        ovr_h = (
+            well_header.get("header_overrides")
+            if isinstance(well_header, dict)
+            and isinstance(well_header.get("header_overrides"), dict)
+            else {}
+        )
+        merged_h = {**meta_h, **ovr_h}
+        d_unit = str(merged_h.get("datum_unit") or depth_uom or "m")
+
+        for las_mnem, keys, descr in (
+            ("COMP", ("company", "COMP"), "COMPANY"),
+            ("FLD", ("field", "field_name", "FLD"), "FIELD"),
+            ("LOC", ("location", "LOC"), "LOCATION"),
+            ("CTRY", ("country", "CTRY"), "COUNTRY"),
+            ("SRVC", ("service_company", "SRVC"), "SERVICE COMPANY"),
+            ("DATE", ("log_date", "spud_date", "DATE"), "LOG DATE"),
+            ("API", ("api", "API"), "API NUMBER"),
+        ):
+            val_s = next(
+                (
+                    str(merged_h[k]).strip()
+                    for k in keys
+                    if _is_meaningful_header_val(merged_h.get(k))
+                ),
+                None,
+            )
+            if val_s:
+                las_file.well[las_mnem] = lasio.HeaderItem(
+                    las_mnem, value=val_s, descr=descr
+                )
+
+        for las_mnem, keys, unit_val, descr in (
+            ("EKB", ("kb_elev", "kb_elevation", "EKB"), d_unit, "KELLY BUSHING ELEVATION"),
+            ("EDF", ("df_elev", "dfe_elevation", "EDF"), d_unit, "DRILL FLOOR ELEVATION"),
+            ("EGL", ("gl_elev", "ground_elevation", "EGL"), d_unit, "GROUND LEVEL ELEVATION"),
+            ("WDEP", ("water_depth", "WDEP"), d_unit, "WATER DEPTH"),
+            ("X", ("x_coord", "X"), "m", "X COORDINATE"),
+            ("Y", ("y_coord", "Y"), "m", "Y COORDINATE"),
+            ("LATI", ("latitude", "LATI"), "deg", "LATITUDE"),
+            ("LONG", ("longitude", "LONG"), "deg", "LONGITUDE"),
+        ):
+            val_f = next(
+                (
+                    _parse_float_safe(merged_h.get(k))
+                    for k in keys
+                    if _is_meaningful_header_val(merged_h.get(k))
+                ),
+                None,
+            )
+            if val_f is not None:
+                las_file.well[las_mnem] = lasio.HeaderItem(
+                    las_mnem, unit=unit_val, value=round(float(val_f), 6), descr=descr
+                )
+
+        crs_val = merged_h.get("crs") or merged_h.get("GDAT")
+        if _is_meaningful_header_val(crs_val):
+            las_file.well["GDAT"] = lasio.HeaderItem(
+                "GDAT", value=str(crs_val).strip(), descr="GEODETIC DATUM / CRS"
+            )
 
     depths = df["DEPTH"].to_numpy(dtype=float)
     if len(depths) > 0:
@@ -689,8 +794,23 @@ def export_to_las_string(
     uwi: Optional[str] = None,
     depth_uom: str = "m",
     parameters: Optional[Dict[str, Any]] = None,
+    well_header: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Serialize a DataFrame of well data to a LAS 2.0 formatted string."""
+    """Serialize a DataFrame of well data to a LAS 2.0 formatted string.
+
+    Args:
+        well_data (pd.DataFrame): DataFrame containing well log curves and a `DEPTH` column.
+        well_name (str): Name of the well.
+        vars_units (Optional[Dict[str, str]]): Optional mapping of curve mnemonics to units.
+        vars_descr (Optional[Dict[str, str]]): Optional mapping of curve mnemonics to descriptions.
+        uwi (Optional[str]): Unique Well Identifier. Defaults to `well_name` if omitted.
+        depth_uom (str): Depth unit of measurement (`'m'` or `'ft'`). Defaults to `'m'`.
+        parameters (Optional[Dict[str, Any]]): Petrophysical evaluation parameters to write into `~Parameter`.
+        well_header (Optional[Dict[str, Any]]): Optional well header metadata dict to populate `~Well` items.
+
+    Returns:
+        str: Complete LAS 2.0 formatted text string.
+    """
     las_file = build_las_object(
         well_data=well_data,
         well_name=well_name,
@@ -699,6 +819,7 @@ def export_to_las_string(
         uwi=uwi,
         depth_uom=depth_uom,
         parameters=parameters,
+        well_header=well_header,
     )
     buf = io.StringIO()
     las_file.write(buf, version=2.0)
@@ -714,6 +835,7 @@ def export_to_las(
     uwi: Optional[str] = None,
     depth_uom: str = "m",
     parameters: Optional[Dict[str, Any]] = None,
+    well_header: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Export a DataFrame of well data to a LAS 2.0 file.
 
@@ -732,6 +854,7 @@ def export_to_las(
         uwi (str, optional): Optional Unique Well Identifier.
         depth_uom (str, optional): Depth unit of measurement ('m' or 'ft'). Defaults to 'm'.
         parameters (dict, optional): Optional dictionary of well evaluation parameters to write to `~Parameter`.
+        well_header (dict, optional): Optional well header metadata dict to populate `~Well` items.
 
     Returns:
         str: Path to the written LAS file.
@@ -746,6 +869,7 @@ def export_to_las(
         uwi=uwi,
         depth_uom=depth_uom,
         parameters=parameters,
+        well_header=well_header,
     )
     well_path = os.path.join(folder, f"{well_name}.las") if folder else f"{well_name}.las"
     las_file.write(well_path, version=2.0)
@@ -1500,6 +1624,15 @@ class LAS3NormalizedStream(str):
         return super().__getitem__(key)
 
     def get(self, key: str, default: Any = None) -> Any:
+        """Retrieve an extracted LAS 3.0 metadata or table item by key with a fallback default.
+
+        Args:
+            key (str): Metadata key (e.g., `'core_df'`, `'tops_df'`, `'delimiter'`).
+            default (Any, optional): Default value if `key` is not found. Defaults to None.
+
+        Returns:
+            Any: The requested metadata entry or `default`.
+        """
         if hasattr(self, "_info"):
             return self._info.get(key, default)
         return default
@@ -2465,8 +2598,19 @@ def splice_and_regularize_runs(
 def inspect_dlis(
     file_path: Union[str, Path, bytes], filename: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Open a binary `.dlis` file via `dlisio.dlis.load()`, iterate over Logical Files and Frames,
-    and extract `WellHeaderMetadata`, frame index ranges, and 1D scalar vs multi-dimensional array channels.
+    """Inspect a binary DLIS (RP66) file and extract header metadata, frames, and channel definitions.
+
+    Opens a binary `.dlis` file via `dlisio.dlis.load()`, iterates over Logical Files and Frames,
+    and extracts `WellHeaderMetadata`, frame index ranges, and 1D scalar vs. multi-dimensional array channels.
+
+    Args:
+        file_path (Union[str, Path, bytes]): File system path or raw bytes of the `.dlis` file.
+        filename (Optional[str]): Optional original filename used as fallback well name when
+            `file_path` is passed as bytes or a temporary file.
+
+    Returns:
+        Dict[str, Any]: Dictionary containing `'metadata'` (`WellHeaderMetadata`),
+        `'frames'` (`List[DlisFrameInfo]`), and `'curves'` (`List[CurveInspectionItem]`).
     """
     import tempfile
     from dlisio import dlis
@@ -2684,8 +2828,25 @@ def read_dlis_frame(
     custom_mnemonic_map: Optional[Dict[str, str]] = None,
     filename: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any], Dict[str, str]]:
-    """Extract a DLIS frame's curves into a standardized `pandas.DataFrame`,
-    replace DLIS absent values (`-999.25`) with `NaN`, and run unit/mnemonic normalization.
+    """Extract a DLIS frame's curves into a standardized DataFrame with unit and mnemonic normalization.
+
+    Replaces DLIS absent/sentinel values (`-999.25`, etc.) with `NaN`, filters out multi-dimensional
+    acoustic/image array channels when `skip_array_channels=True`, and standardizes units and mnemonics.
+
+    Args:
+        file_path (Union[str, Path, bytes]): File system path or raw bytes of the `.dlis` file.
+        logical_file_idx (int): Zero-based index of the DLIS Logical File to read. Defaults to 0.
+        frame_name (Optional[str]): Name of the DLIS frame to extract. Defaults to the first frame.
+        skip_array_channels (bool): Whether to exclude multi-dimensional array channels. Defaults to True.
+        target_depth_uom (str): Target depth unit (`'m'` or `'ft'`). Defaults to `'m'`.
+        custom_mnemonic_map (Optional[Dict[str, str]]): Optional user-specified raw-to-target mnemonic overrides.
+        filename (Optional[str]): Optional original filename for fallback well naming.
+
+    Returns:
+        Tuple[pd.DataFrame, Dict[str, Any], Dict[str, str]]:
+            - Standardized curve DataFrame including `WELL_NAME`, `UWI`, and `DEPTH`.
+            - Extracted well header metadata dictionary.
+            - Dictionary mapping standardized curve mnemonics to their units.
     """
     import tempfile
     from dlisio import dlis

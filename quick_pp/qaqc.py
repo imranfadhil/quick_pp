@@ -1,3 +1,10 @@
+"""Log quality control (QA/QC), environmental corrections, and curve reconstruction.
+
+Provides out-of-range handling, borehole washout flagging, neutron-density
+environmental corrections, curve normalization, and machine-learning / multi-well
+synthetic curve reconstruction.
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd

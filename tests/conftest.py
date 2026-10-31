@@ -2,10 +2,18 @@
 
 import asyncio
 import json as std_json
+import os
 import sys
 import types
 import urllib.parse
+from pathlib import Path
 from typing import Any, Dict, Optional
+
+_cache_dir = Path(__file__).resolve().parent.parent / ".pytest_cache"
+_mpl_dir = _cache_dir / "matplotlib"
+_mpl_dir.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(_mpl_dir))
+os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
 
 
 class _ASGIMockResponse:

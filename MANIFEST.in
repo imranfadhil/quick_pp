@@ -7,6 +7,7 @@ recursive-include docs *.md *.png *.jpg *.gif
 recursive-exclude * __pycache__
 recursive-exclude * *.py[co]
 recursive-exclude docs/_build *
+recursive-exclude quick_pp/app/backend/static/reports *
 
 prune scripts
 prune deploy

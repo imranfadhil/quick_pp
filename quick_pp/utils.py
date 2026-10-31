@@ -1,3 +1,5 @@
+"""General mathematical, statistical, geometric, and dataframe utility functions."""
+
 import math
 
 import numpy as np

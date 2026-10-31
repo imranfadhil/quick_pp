@@ -1,3 +1,10 @@
+"""Porosity and multi-mineral volumetric estimation models.
+
+Provides density, neutron-density, sonic, and multi-mineral solver routines,
+shale porosity trend estimation, hydrocarbon density corrections, and Thomas-Stieber
+thin-bed sand porosity partitioning.
+"""
+
 import numpy as np
 
 from quick_pp import logger

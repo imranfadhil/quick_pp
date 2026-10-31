@@ -1,3 +1,13 @@
+"""Formation Pressure Testing (FPT), Fluid Gradient Regression, Contact Estimation, and Gas Composition Analysis.
+
+This module provides petrophysical fluid typing and formation pressure analysis workflows:
+- Linear, Huber-IRLS, RANSAC, fixed-slope, and manual fluid gradient fitting (`FormationPressureAnalyzer`, `FluidGradientResult`)
+- Free-Fluid Level / Fluid Contact (`GOC`, `OWC`/`FWL`, `GWC`) intersection with Monte Carlo P10/P50/P90 uncertainty (`FluidContactResult`)
+- Excess pressure profile calculation relative to an aquifer baseline (`FormationPressureAnalyzer.compute_excess_pressure`)
+- Unit-agnostic gradient/density conversion (`gradient_to_density`, `density_to_gradient`)
+- Haworth (1985) mud-gas composition ratios (`gas_composition_analysis`) and physical fluid segregation (`fix_fluid_segregation`)
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -277,9 +287,17 @@ class InvalidFluidGradientError(ValueError):
 def gradient_to_density(
     gradient: float, pressure_unit: str = "psi", depth_unit: str = "ft"
 ) -> float:
-    """Convert a pressure gradient (pressure_unit / depth_unit) to in-situ density (g/cc).
+    """Convert a pressure gradient (`pressure_unit / depth_unit`) to in-situ fluid density (`g/cc`).
 
-    Equivalent to: psi/ft / 0.433527, psi/m / 1.42233, bar/m / 0.0980665, kPa/m / 9.80665.
+    Equivalent to: `psi/ft / 0.433527`, `psi/m / 1.42233`, `bar/m / 0.0980665`, `kPa/m / 9.80665`.
+
+    Args:
+        gradient (float): Pressure gradient value in `pressure_unit / depth_unit`.
+        pressure_unit (str): Pressure unit (`'psi'`, `'bar'`, or `'kPa'`). Defaults to `'psi'`.
+        depth_unit (str): Depth unit (`'ft'` or `'m'`). Defaults to `'ft'`.
+
+    Returns:
+        float: Equivalent in-situ fluid density in `g/cc`.
     """
     pa_per_m = float(gradient) * PRESSURE_TO_PA[pressure_unit] / DEPTH_TO_M[depth_unit]
     return pa_per_m / (_G * 1000.0)
@@ -288,7 +306,16 @@ def gradient_to_density(
 def density_to_gradient(
     density_gcc: float, pressure_unit: str = "psi", depth_unit: str = "ft"
 ) -> float:
-    """Convert an in-situ density (g/cc) to a pressure gradient (pressure_unit / depth_unit)."""
+    """Convert an in-situ fluid density (`g/cc`) to a pressure gradient (`pressure_unit / depth_unit`).
+
+    Args:
+        density_gcc (float): In-situ fluid density in `g/cc`.
+        pressure_unit (str): Target pressure unit (`'psi'`, `'bar'`, or `'kPa'`). Defaults to `'psi'`.
+        depth_unit (str): Target depth unit (`'ft'` or `'m'`). Defaults to `'ft'`.
+
+    Returns:
+        float: Equivalent pressure gradient in `pressure_unit / depth_unit`.
+    """
     pa_per_m = float(density_gcc) * 1000.0 * _G
     return pa_per_m * DEPTH_TO_M[depth_unit] / PRESSURE_TO_PA[pressure_unit]
 
@@ -340,9 +367,22 @@ class FluidGradientResult:
     warnings: List[str] = field(default_factory=list)
 
     def pressure_at(self, tvdss: Any) -> Any:
+        """Evaluate fluid pressure `P = gradient * TVDSS + intercept` at one or more TVDSS depths.
+
+        Args:
+            tvdss (Any): Scalar or array-like True Vertical Depth Sub-Sea values.
+
+        Returns:
+            Any: Computed formation pressure in `self.pressure_unit`.
+        """
         return self.gradient * np.asarray(tvdss, dtype=float) + self.intercept
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize the fluid gradient regression result into a JSON-safe dictionary.
+
+        Returns:
+            Dict[str, Any]: Dictionary containing gradient, intercept, density, R2, covariance, and warnings.
+        """
         def _f(v: Any) -> Optional[float]:
             try:
                 fv = float(v)
@@ -387,6 +427,11 @@ class FluidContactResult:
     warnings: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize the fluid contact result into a JSON-safe dictionary.
+
+        Returns:
+            Dict[str, Any]: Dictionary containing P10/P50/P90 contact TVDSS, contact pressure, and fluid densities.
+        """
         def _f(v: Any) -> Optional[float]:
             try:
                 fv = float(v)
@@ -550,18 +595,43 @@ class FormationPressureAnalyzer:
     # ------------------------------------------------------------------ helpers
     @property
     def gradient_unit(self) -> str:
+        """Return the composite pressure gradient unit string (`'<pressure_unit>/<depth_unit>'`)."""
         return f"{self.pressure_unit}/{self.depth_unit}"
 
     def to_density(self, gradient: float) -> float:
+        """Convert a gradient in `self.gradient_unit` to in-situ fluid density (`g/cc`).
+
+        Args:
+            gradient (float): Pressure gradient in `self.gradient_unit`.
+
+        Returns:
+            float: Fluid density in `g/cc`.
+        """
         return gradient_to_density(gradient, self.pressure_unit, self.depth_unit)
 
     def from_density(self, density_gcc: float) -> float:
+        """Convert an in-situ fluid density (`g/cc`) to a pressure gradient in `self.gradient_unit`.
+
+        Args:
+            density_gcc (float): Fluid density in `g/cc`.
+
+        Returns:
+            float: Pressure gradient in `self.gradient_unit`.
+        """
         return density_to_gradient(density_gcc, self.pressure_unit, self.depth_unit)
 
     def _finite_mask(self) -> pd.Series:
         return self.df[self.tvdss_col].notna() & self.df[self.pressure_col].notna()
 
     def valid_mask(self, fluid_type: Optional[str] = None) -> pd.Series:
+        """Return a boolean Series selecting rows with finite TVDSS/pressure and `TEST_QUALITY == 'VALID'`.
+
+        Args:
+            fluid_type (Optional[str]): Optional fluid phase (`'GAS'`, `'OIL'`, `'WATER'`) to filter by.
+
+        Returns:
+            pd.Series: Boolean mask indexed like `self.df`.
+        """
         mask = self._finite_mask() & (self.df[self.quality_col] == "VALID")
         if fluid_type is not None:
             mask &= self.df[self.fluid_col] == fluid_type

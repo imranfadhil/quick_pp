@@ -48,6 +48,8 @@ M_TO: Dict[str, float] = {"m": 1.0, "ft": 1.0 / 0.3048}
 # Schemas
 # ---------------------------------------------------------------------------
 class ManualGradientOverride(BaseModel):
+    """Manual or regional fluid gradient / density override specification."""
+
     gradient: Optional[float] = Field(
         None, description="Fixed gradient in display units (pressure_unit / depth_unit)"
     )
@@ -64,11 +66,15 @@ class ManualGradientOverride(BaseModel):
 
 
 class PointOverride(BaseModel):
+    """Per-point transient override for fluid phase or test quality during analysis."""
+
     fluid_type: Optional[str] = None
     test_quality: Optional[str] = None
 
 
 class AutoClassifyOptions(BaseModel):
+    """Configuration options for automatic mobility/supercharge quality flagging and phase clustering."""
+
     min_mobility: Optional[float] = Field(None, description="Flag TIGHT below this mobility (mD/cP)")
     ransac_residual_threshold: Optional[float] = Field(
         None,
@@ -78,6 +84,8 @@ class AutoClassifyOptions(BaseModel):
 
 
 class FPTAnalysisRequest(BaseModel):
+    """Request payload for formation pressure gradient regression and contact estimation."""
+
     well_names: Optional[List[str]] = None
     zones: Optional[List[str]] = None
     active_zone: Optional[str] = None
@@ -96,6 +104,8 @@ class FPTAnalysisRequest(BaseModel):
 
 
 class FPTPointUpdate(BaseModel):
+    """Single formation pressure test point interpretation update."""
+
     test_id: int
     well_name: str
     fluid_type: Optional[str] = None
@@ -109,10 +119,14 @@ class FPTPointUpdate(BaseModel):
 
 
 class FPTPointsPatchRequest(BaseModel):
+    """Batch request payload for persisting formation pressure test interpretations."""
+
     updates: List[FPTPointUpdate] = Field(default_factory=list)
 
 
 class FPTApplyContactsRequest(BaseModel):
+    """Request payload for writing estimated TVDSS fluid contacts to well fluid contact tables."""
+
     contacts: Dict[str, float] = Field(
         ..., description="Contact TVDSS in metres keyed by type (GOC, OWC, GWC)"
     )
@@ -218,6 +232,7 @@ def fpt_list_points(
     project_id: int,
     well_names: Optional[str] = Query(None, description="Comma-separated well names"),
 ) -> Dict[str, Any]:
+    """List formation pressure points across wells in a project with resolved TVDSS and zone."""
     try:
         wn_list = [w.strip() for w in well_names.split(",")] if well_names else None
         pts = _collect_fpt_points(project_id, wn_list)
@@ -340,6 +355,7 @@ def _analyze_subset(
 
 @router.post("/analyze", summary="Fit fluid gradients and estimate contacts with P10/P50/P90 uncertainty")
 def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
+    """Run fluid gradient regression, fluid contact intersection, and excess pressure analysis."""
     try:
         pts = _collect_fpt_points(project_id, req.well_names)
         if req.zones:
@@ -474,6 +490,7 @@ def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
 
 @router.patch("/points", summary="Persist fluid phase / test quality / zone assignments for pressure points")
 def fpt_patch_points(project_id: int, req: FPTPointsPatchRequest) -> Dict[str, Any]:
+    """Persist fluid phase, test quality, zone, or TVDSS overrides for pressure points."""
     if not req.updates:
         return {"updated": 0}
     try:
@@ -508,6 +525,7 @@ def fpt_patch_points(project_id: int, req: FPTPointsPatchRequest) -> Dict[str, A
     summary="Write estimated contacts (TVDSS) into each well's fluid contacts (converted to MD)",
 )
 def fpt_apply_contacts(project_id: int, req: FPTApplyContactsRequest) -> Dict[str, Any]:
+    """Convert estimated TVDSS fluid contacts to measured depth (MD) and persist to well contacts."""
     contacts = {
         (req.owc_name if k.upper() == "OWC" else k.upper()): float(v)
         for k, v in (req.contacts or {}).items()

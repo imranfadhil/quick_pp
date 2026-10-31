@@ -1,3 +1,5 @@
+"""Rock typing, FZI/Winland/GHE classification, and vuggy/fracture porosity API endpoints."""
+
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException

@@ -1,3 +1,11 @@
+"""Water saturation, irreducible water saturation (Swirr), and saturation height models.
+
+Provides resistivity-based saturation equations (Archie, Waxman-Smits, Dual Water,
+Indonesian, Simandoux, Connectivity), Rw / Qv / m estimation utilities, Swirr
+correlations (Timur, RQI, semi-log permeability), and capillary pressure / height
+above free water level (SHF) calculations.
+"""
+
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
@@ -689,9 +697,20 @@ def estimate_m_indonesian(rt, rw, phie, vsh, rsh):
 
 
 def estimate_m_star(m_apparent, b_parameter, qv, rw, phi):
-    """
-    Estimates m* from an apparent Archie m in a shaly sand.
-    Note: This is a simplified approximation.
+    """Estimate intrinsic cementation exponent (m*) from apparent Archie m in shaly sand.
+
+    Corrects an apparent cementation exponent for excess clay conductivity using
+    the Waxman-Smits conductivity factor `1 + B * Qv * Rw`.
+
+    Args:
+        m_apparent (np.ndarray or float): Apparent Archie cementation exponent (m).
+        b_parameter (np.ndarray or float): Waxman-Smits equivalent clay conductance B [S·m²/meq].
+        qv (np.ndarray or float): Cation exchange capacity per unit pore volume [meq/cm³].
+        rw (np.ndarray or float): Formation water resistivity [ohm.m].
+        phi (np.ndarray or float): Total porosity [fraction].
+
+    Returns:
+        np.ndarray or float: Intrinsic Waxman-Smits cementation exponent (m*).
     """
     # Conductivity of water
     cw = 1.0 / rw

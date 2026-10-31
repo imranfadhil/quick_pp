@@ -242,7 +242,17 @@ def generate_inventory_heatmap(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Figure 2.1: Multi-Well Curve & Data Availability Matrix Heatmap."""
+    """Generate Figure 2.1: Multi-Well Curve & Data Availability Matrix Heatmap.
+
+    Args:
+        project_id (Union[int, str]): Project identifier displayed in the figure title.
+        wells (List[Dict[str, Any]]): List of well summary dictionaries containing curve and ancillary counts.
+        output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
+        url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
+
+    Returns:
+        str: File path or URL to the generated `fig_2_1_inventory_heatmap.png`.
+    """
     target_curves = [
         "TVD",
         "TVDSS",
@@ -374,7 +384,17 @@ def generate_qaqc_norm_plot(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Figure 3.1: Multi-Well Curve Distribution & Bad-Hole QA/QC Summary."""
+    """Generate Figure 3.1: Multi-Well Curve Distribution & Bad-Hole QA/QC Summary.
+
+    Args:
+        df (pd.DataFrame): Multi-well log DataFrame.
+        well_names (Optional[List[str]]): Optional subset of well names to include.
+        output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
+        url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
+
+    Returns:
+        str: File path or URL to the generated `fig_3_1_qaqc_norm_plot.png`.
+    """
     sub = _ensure_df_well_filter(df, well_names)
     fig = Figure(figsize=(10.5, 4.4))
     gs = GridSpec(1, 2, figure=fig, width_ratios=[1.35, 1.0], wspace=0.28)
@@ -505,7 +525,19 @@ def generate_nd_crossplot(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Figure 4.1: Neutron-Density Crossplot, Core Porosity Calibration & Matrix Grain Density (RHOMA) QC."""
+    """Generate Figure 4.1: Neutron-Density Crossplot, Core Porosity Calibration & Matrix Grain Density (RHOMA) QC.
+
+    Args:
+        df (pd.DataFrame): Multi-well log DataFrame containing `NPHI`, `RHOB`, `PHIT`, and optional `CPORE`.
+        well_names (Optional[List[str]]): Optional subset of well names to filter.
+        color_by (str): Curve mnemonic used to color-code crossplot points. Defaults to `'GR'`.
+        target_zones (Optional[Sequence[str]]): Optional target reservoir zone names to focus calibration.
+        output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
+        url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
+
+    Returns:
+        str: File path or URL to the generated `fig_4_1_nd_crossplot.png`.
+    """
     sub = _ensure_df_well_filter(df, well_names)
     fig = Figure(figsize=(13.2, 4.4))
     gs = GridSpec(1, 3, figure=fig, width_ratios=[1.15, 1.0, 0.95], wspace=0.30)
@@ -741,7 +773,17 @@ def generate_core_calibration_plot(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate standalone Core Calibration & Overburden Compaction Plot."""
+    """Generate standalone Core Calibration & Overburden Compaction Plot.
+
+    Args:
+        df (pd.DataFrame): Multi-well log DataFrame containing `PHIT` and `PHIE`.
+        well_names (Optional[List[str]]): Optional subset of well names to filter.
+        output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
+        url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
+
+    Returns:
+        str: File path or URL to the generated `fig_4_2_core_calibration.png`.
+    """
     sub = _ensure_df_well_filter(df, well_names)
     fig = Figure(figsize=(9.5, 4.2))
     gs = GridSpec(1, 2, figure=fig, wspace=0.28)
@@ -780,7 +822,18 @@ def generate_rock_typing_perm_plot(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Figure 5.1: Core/Log Porosity-Permeability Crossplot by Rock Type & Lorenz SMLP."""
+    """Generate Figure 5.1: Core/Log Porosity-Permeability Crossplot by Rock Type & Lorenz SMLP.
+
+    Args:
+        df (pd.DataFrame): Multi-well log DataFrame containing porosity and permeability curves.
+        well_names (Optional[List[str]]): Optional subset of well names to filter.
+        rock_types (Optional[List[Dict[str, Any]]]): Optional list of rock type definitions.
+        output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
+        url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
+
+    Returns:
+        str: File path or URL to the generated `fig_5_1_perm_crossplot.png`.
+    """
     sub = _ensure_df_well_filter(df, well_names)
     fig = Figure(figsize=(10.5, 4.5))
     gs = GridSpec(1, 2, figure=fig, width_ratios=[1.2, 1.0], wspace=0.28)
@@ -898,7 +951,22 @@ def generate_pickett_plot(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Figure 6.1: Log-Log Pickett Plot & Saturation vs Depth / FWL Profile."""
+    """Generate Figure 6.1: Log-Log Pickett Plot & Saturation vs Depth / FWL Profile.
+
+    Args:
+        df (pd.DataFrame): Multi-well log DataFrame containing `RT`, `PHIT`, `SWT`, and optional `SHF`.
+        well_names (Optional[List[str]]): Optional subset of well names to filter.
+        rw (float): Formation water resistivity in `ohm.m`. Defaults to 0.08.
+        a (float): Tortuosity factor. Defaults to 1.0.
+        m (float): Cementation exponent. Defaults to 2.0.
+        n (float): Saturation exponent. Defaults to 2.0.
+        fwl (Optional[float]): Optional Free Water Level depth (`m`) to overlay on the saturation profile.
+        output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
+        url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
+
+    Returns:
+        str: File path or URL to the generated `fig_6_1_pickett_shf_plot.png`.
+    """
     sub = _ensure_df_well_filter(df, well_names)
     fig = Figure(figsize=(10.5, 4.5))
     gs = GridSpec(1, 2, figure=fig, width_ratios=[1.15, 1.0], wspace=0.28)
@@ -1022,7 +1090,20 @@ def generate_shf_j_function_plot(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Figure 7.1: Leverett J-Function by Rock Type & Relative Permeability Curves."""
+    """Generate Figure 7.1: Leverett J-Function by Rock Type & Relative Permeability Curves.
+
+    Args:
+        df (pd.DataFrame): Multi-well log DataFrame.
+        rock_types (Optional[List[Dict[str, Any]]]): Optional list of rock type J-function definitions.
+        fwl (Optional[float]): Optional Free Water Level depth (`m`).
+        is_analogue_scal (bool): Whether the SCAL curves represent analogue defaults vs. measured project SCAL.
+            Defaults to True.
+        output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
+        url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
+
+    Returns:
+        str: File path or URL to the generated `fig_7_1_shf_scal_plot.png`.
+    """
     fig = Figure(figsize=(10.5, 4.4))
     gs = GridSpec(1, 2, figure=fig, wspace=0.28)
     ax1 = fig.add_subplot(gs[0, 0])
@@ -1103,7 +1184,20 @@ def generate_uncertainty_cutoff_plot(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Figure 8.1: Cut-off Sensitivity Carpet Plot & P10-P50-P90 HCPT Uncertainty."""
+    """Generate Figure 8.1: Cut-off Sensitivity Carpet Plot & P10-P50-P90 HCPT Uncertainty.
+
+    Args:
+        df (pd.DataFrame): Multi-well log DataFrame containing `PHIE`/`PHIT`, `VCLAY`, and `SWT`.
+        well_names (Optional[List[str]]): Optional subset of well names to filter.
+        cutoffs (Optional[Dict[str, float]]): Cut-off dictionary (`vsh`, `phie`, `sw`).
+        target_zones (Optional[Sequence[str]]): Optional target reservoir zone names.
+        ressum_df (Optional[pd.DataFrame]): Optional pre-computed reservoir summary DataFrame.
+        output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
+        url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
+
+    Returns:
+        str: File path or URL to the generated `fig_8_1_uncertainty_plot.png`.
+    """
     sub = _ensure_df_well_filter(df, well_names)
     if target_zones and "ZONES" in sub.columns and sub["ZONES"].notna().any():
         tz_set = {str(z).strip().upper() for z in target_zones if z}
@@ -1266,7 +1360,20 @@ def generate_upscaling_comparison_plot(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Figure 9.1: Fine-Scale vs. Upscaled Blocked Logs Comparison Track (Target-Zoomed <= 500 m)."""
+    """Generate Figure 9.1: Fine-Scale vs. Upscaled Blocked Logs Comparison Track (Target-Zoomed <= 500 m).
+
+    Args:
+        df (pd.DataFrame): Log DataFrame containing `DEPTH`, `PHIT`, `SWT`, and `PERM`.
+        well_name (str): Name of the reference well to upscale and plot.
+        cell_size (float): Vertical grid cell thickness in meters. Defaults to 2.0.
+        cutoffs (Optional[Dict[str, float]]): Optional reservoir/pay cut-offs.
+        target_zones (Optional[Sequence[str]]): Optional target reservoir zone names for auto-zooming.
+        output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
+        url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
+
+    Returns:
+        str: File path or URL to the generated `fig_9_1_upscaling_plot.png`.
+    """
     from quick_pp.upscaling import expand_blocked_logs, upscale_logs
 
     sub = _trim_to_logged_interval(_ensure_df_well_filter(df, [well_name]))
@@ -1422,7 +1529,19 @@ def generate_well_cpi_plot(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
-    """Generate Appendix Composite Petrophysical Evaluation Log (CPI) 6-Track Plot (Target-Zoomed <= 500 m per CHK-06)."""
+    """Generate Appendix Composite Petrophysical Evaluation Log (CPI) 6-Track Plot (Target-Zoomed <= 500 m per CHK-06).
+
+    Args:
+        df (pd.DataFrame): Well log DataFrame containing `DEPTH`, `GR`, `RT`, `NPHI`, `RHOB`, `PHIT`, `PERM`, and `SWT`.
+        well_name (str): Name of the well to render.
+        zones (Optional[List[str]]): Optional target reservoir zone names for depth window auto-zooming.
+        cutoffs (Optional[Dict[str, float]]): Optional Net Reservoir / Net Pay cut-offs (`vsh`, `phie`, `sw`).
+        output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
+        url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
+
+    Returns:
+        str: File path or URL to the generated `cpi_<well_name>.png`.
+    """
     sub_well = _trim_to_logged_interval(_ensure_df_well_filter(df, [well_name]))
     safe_well = "".join(
         c if c.isalnum() or c in ("-", "_") else "_" for c in str(well_name)

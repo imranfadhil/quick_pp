@@ -1,3 +1,10 @@
+"""Reservoir summary, net-to-gross cutoffs, log upscaling, and volumetric calculations.
+
+Provides deterministic and Monte Carlo stochastic reservoir summaries, interval
+flagging, sensitivity cutoff analysis, and arithmetic/geometric/harmonic log
+blocking.
+"""
+
 import random
 
 import matplotlib.pyplot as plt

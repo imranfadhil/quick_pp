@@ -5,6 +5,7 @@ from typing import Generator
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 class DBConnector:
@@ -69,7 +70,14 @@ class DBConnector:
                 db_url = "postgresql+psycopg2://" + db_url[len("postgresql://") :]
 
         if db_url.startswith("sqlite"):
-            DBConnector._engine = create_engine(db_url, pool_pre_ping=True)
+            if ":memory:" in db_url:
+                DBConnector._engine = create_engine(
+                    db_url,
+                    connect_args={"check_same_thread": False},
+                    poolclass=StaticPool,
+                )
+            else:
+                DBConnector._engine = create_engine(db_url, pool_pre_ping=True)
 
             @event.listens_for(DBConnector._engine, "connect")
             def _set_sqlite_pragma(dbapi_connection, _connection_record):
@@ -84,6 +92,7 @@ class DBConnector:
                 max_overflow=30,
                 pool_timeout=60,
                 pool_recycle=1800,
+                connect_args={"connect_timeout": 3} if "postgres" in db_url else {},
             )
         DBConnector._Session = sessionmaker(
             autocommit=False, autoflush=False, bind=DBConnector._engine

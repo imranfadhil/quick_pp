@@ -1,3 +1,11 @@
+"""Rock Typing, Hydraulic Flow Units (FZI, RQI, Winland R35, Lucia RFN, GHE), and Supervised DRT Classification.
+
+This module provides core-to-log rock typing and hydraulic flow unit characterization:
+- Reservoir Quality Index (`calc_rqi`), Flow Zone Indicator (`calc_fzi`), Winland R35 (`calc_r35`), Lucia Rock Fabric Number (`calc_rfn`, `apply_lucia_rfn_override`), and Global Hydraulic Elements (`calc_ghe`)
+- Automatic discrete rock type cutoff detection via KMeans/ward clustering (`find_cutoffs`), Gaussian Mixture Models (`find_cutoffs_gmm`), and Modified Lorenz Plots (`find_cutoffs_lorenz`)
+- Supervised ML Rock Type (DRT) classifier training, Contingency Matrix validation, model persistence, and uncored well propagation (`train_and_validate_rock_type_classifier`, `save_cached_rt_classifier`, `predict_with_saved_rt_classifier`, `compute_rock_flag_comparison`)
+"""
+
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
@@ -1914,7 +1922,17 @@ def compute_rock_flag_comparison(
     ml_flags: list | np.ndarray,
     labels: list[int] | None = None,
 ) -> dict:
-    """Compare cutoff-binned ROCK_FLAG against ML-predicted ROCK_FLAG_ML across depth samples."""
+    """Compare cutoff-binned `ROCK_FLAG` against ML-predicted `ROCK_FLAG_ML` across depth samples.
+
+    Args:
+        cutoff_flags (list | np.ndarray): Core/cutoff-derived discrete rock type flags.
+        ml_flags (list | np.ndarray): ML-predicted discrete rock type flags.
+        labels (list[int] | None, optional): Optional explicit list of DRT class labels.
+
+    Returns:
+        dict: Comparison metrics dictionary including `exact_agreement`, `within_one_agreement`,
+        `agreement_pct`, `uncored_filled_by_ml`, and `per_drt` breakdown.
+    """
     c_list = list(cutoff_flags) if cutoff_flags is not None else []
     m_list = list(ml_flags) if ml_flags is not None else []
     n = max(len(c_list), len(m_list))
@@ -2026,10 +2044,29 @@ def train_and_validate_rock_type_classifier(
     random_state: int = 42,
     cache_key: str = "latest",
 ) -> dict:
-    """Train a supervised Rock Type (DRT) classification model on selectable well logs
-    (GR, NPHI, RHOB, log10(RT), PEF, VDL, PHIT, VSAND, VSHALE, VSILT, VCLAY),
-    evaluate it with a Contingency Table (Confusion Matrix) validator, and predict/propagate
-    rock types across log depth rows.
+    """Train and validate a supervised Rock Type (DRT) classification model on well logs and calculated curves.
+
+    Supports raw logs (`GR`, `NPHI`, `RHOB`, `LOG_RT`, `PEF`) and calculated petrophysical features
+    (`VDL`, `PHIT`, `VSAND`, `VSHALE`, `VSILT`, `VCLAY`), evaluates held-out validation predictions
+    with a Contingency Table (Confusion Matrix), and propagates rock type predictions across all valid rows.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame containing feature curves and target `ROCK_FLAG`.
+        include_pef (bool): Include `PEF` when `selected_features` is None. Defaults to True.
+        include_vdl (bool): Include `VDL` when `selected_features` is None. Defaults to True.
+        selected_features (list[str] | None, optional): Explicit list of feature mnemonics to use.
+        model_type (str): Classifier algorithm (`'random_forest'`, `'extra_trees'`, or `'gradient_boosting'`).
+            Defaults to `'random_forest'`.
+        test_size (float): Validation split fraction in `[0.10, 0.50]`. Defaults to 0.25.
+        dt_matrix (float): Matrix transit time (us/ft) for `VDL` calculation. Defaults to 47.6.
+        dt_fluid (float): Fluid transit time (us/ft) for `VDL` calculation. Defaults to 189.0.
+        random_state (int): Random seed for reproducible train/test split and estimator training. Defaults to 42.
+        cache_key (str): In-memory staging key for subsequent `save_cached_rt_classifier` calls. Defaults to `'latest'`.
+
+    Returns:
+        dict: Dictionary containing `model_type`, `features_used`, `labels`, `contingency_table`,
+        `metrics`, `class_metrics`, `feature_importances`, `predicted_rock_flags`, `predicted_confidence`,
+        `vdl`, and `trained_at`.
     """
     from datetime import datetime, timezone
 
@@ -2330,6 +2367,14 @@ def _persist_rt_staging_cache(
 
 
 def load_saved_rt_classifiers(model_path=None) -> dict:
+    """Load persisted Rock Type classifier bundles from disk (`data/rt_classifiers.joblib`).
+
+    Args:
+        model_path (str | Path | None, optional): Optional custom path to the `.joblib` bundle file.
+
+    Returns:
+        dict: Mapping of `model_key` to saved classifier bundle dictionaries.
+    """
     global _RT_CLASSIFIER_CACHE, _RT_CLASSIFIER_CACHE_KEY
     resolved_path, _ = _resolve_rt_classifiers_path(model_path)
     if resolved_path is None:
@@ -2357,7 +2402,14 @@ def load_saved_rt_classifiers(model_path=None) -> dict:
 
 
 def get_saved_rt_classifiers_status(model_path=None) -> dict:
-    """Return metadata, performance metrics, and Contingency Matrices for all saved Rock Type classifiers."""
+    """Return metadata, performance metrics, and Contingency Matrices for all saved Rock Type classifiers.
+
+    Args:
+        model_path (str | Path | None, optional): Optional custom path to the `.joblib` bundle file.
+
+    Returns:
+        dict: Status dictionary with `available`, `model_path`, `expected_path`, and `models` list.
+    """
     resolved_path, expected_path = _resolve_rt_classifiers_path(model_path)
     bundle = load_saved_rt_classifiers(model_path)
     models_list = []
@@ -2400,7 +2452,21 @@ def save_cached_rt_classifier(
     extra_meta: dict | None = None,
     model_path=None,
 ) -> dict:
-    """Persist the most recently trained Rock Type classifier together with its performance metrics & CM."""
+    """Persist the most recently trained Rock Type classifier together with its performance metrics and Contingency Matrix.
+
+    Args:
+        model_key (str): Unique identifier key for the saved classifier.
+        model_name (str | None, optional): Human-readable display name.
+        source_project (str | None, optional): Name of the project where the classifier was trained.
+        drt_method (str | None, optional): Underlying rock typing method (`'fzi'`, `'r35'`, `'rfn'`, `'ghe'`).
+        cutoffs (list[float] | None, optional): Cutoff thresholds used to define the DRT classes.
+        cache_key (str): Staging cache key from `train_and_validate_rock_type_classifier`. Defaults to `'latest'`.
+        extra_meta (dict | None, optional): Additional metadata fields to store alongside the model.
+        model_path (str | Path | None, optional): Optional custom `.joblib` file path.
+
+    Returns:
+        dict: Confirmation dictionary containing `saved`, `model_key`, `model_name`, `model_path`, and `models_status`.
+    """
     global _RT_CLASSIFIER_CACHE, _RT_CLASSIFIER_CACHE_KEY
     import joblib
 
@@ -2475,7 +2541,15 @@ def save_cached_rt_classifier(
 
 
 def delete_saved_rt_classifier(model_key: str, model_path=None) -> bool:
-    """Remove a saved Rock Type classifier from disk."""
+    """Remove a saved Rock Type classifier from disk.
+
+    Args:
+        model_key (str): Identifier key of the saved classifier to delete.
+        model_path (str | Path | None, optional): Optional custom `.joblib` file path.
+
+    Returns:
+        bool: True if the model was found and deleted, False otherwise.
+    """
     global _RT_CLASSIFIER_CACHE, _RT_CLASSIFIER_CACHE_KEY
     import joblib
 
@@ -2499,8 +2573,18 @@ def predict_with_saved_rt_classifier(
     dt_fluid: float = 189.0,
     model_path=None,
 ) -> dict:
-    """Run inference on `df` using a previously saved Rock Type classifier without retraining,
-    and return its saved performance metrics & Contingency Matrix alongside predictions.
+    """Run inference on `df` using a previously saved Rock Type classifier without retraining.
+
+    Args:
+        df (pd.DataFrame): Input well log DataFrame containing the required feature curves.
+        model_key (str): Key of the saved classifier in `data/rt_classifiers.joblib`.
+        dt_matrix (float): Matrix transit time (us/ft) for `VDL` calculation. Defaults to 47.6.
+        dt_fluid (float): Fluid transit time (us/ft) for `VDL` calculation. Defaults to 189.0.
+        model_path (str | Path | None, optional): Optional custom `.joblib` file path.
+
+    Returns:
+        dict: Prediction result dictionary containing `predicted_rock_flags`, `predicted_confidence`,
+        `contingency_table`, `metrics`, `class_metrics`, and `feature_importances`.
     """
     bundle = load_saved_rt_classifiers(model_path)
     if model_key not in bundle:
