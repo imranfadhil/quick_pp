@@ -23,7 +23,12 @@
 		{ key: 'RHOB', label: 'RHOB', short: 'RHOB', title: 'Bulk Density (g/cc)' },
 		{ key: 'LOG_RT', label: 'log₁₀(RT)', short: 'log(RT)', title: 'Log10 Deep Resistivity (ohm.m)' },
 		{ key: 'PEF', label: 'PEF', short: 'PEF', title: 'Photoelectric Factor (b/e)' },
-		{ key: 'VDL', label: 'VDL', short: 'VDL', title: 'Velocity Deviation Log (Φ_T − Φ_sonic)' }
+		{ key: 'VDL', label: 'VDL', short: 'VDL', title: 'Velocity Deviation Log (Φ_T − Φ_sonic)' },
+		{ key: 'PHIT', label: 'PHIT', short: 'PHIT', title: 'Total Porosity (v/v)' },
+		{ key: 'VSAND', label: 'VSAND', short: 'VSAND', title: 'Sand Volume Fraction (v/v)' },
+		{ key: 'VSHALE', label: 'VSHALE', short: 'VSHALE', title: 'Shale Volume Fraction (v/v)' },
+		{ key: 'VSILT', label: 'VSILT', short: 'VSILT', title: 'Silt Volume Fraction (v/v)' },
+		{ key: 'VCLAY', label: 'VCLAY', short: 'VCLAY', title: 'Clay Volume Fraction (v/v)' }
 	];
 
 	let customModelName = $state<string>('');

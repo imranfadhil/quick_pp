@@ -204,7 +204,18 @@ export type GmmCriterion = 'combined' | 'bic' | 'silhouette';
 export type RockTypingPlotView = 'phi-k' | 'lorenz' | 'gmm' | 'carbonate' | 'classifier';
 export type DrtClassifierModel = 'random_forest' | 'extra_trees' | 'gradient_boosting';
 export type DrtPropagationMode = 'cutoff_only' | 'fill_missing' | 'full_ml';
-export type DrtFeatureKey = 'GR' | 'NPHI' | 'RHOB' | 'LOG_RT' | 'PEF' | 'VDL';
+export type DrtFeatureKey =
+	| 'GR'
+	| 'NPHI'
+	| 'RHOB'
+	| 'LOG_RT'
+	| 'PEF'
+	| 'VDL'
+	| 'PHIT'
+	| 'VSAND'
+	| 'VSHALE'
+	| 'VSILT'
+	| 'VCLAY';
 
 class ProjectDataState {
 	projects = $state<ProjectListItem[]>([]);

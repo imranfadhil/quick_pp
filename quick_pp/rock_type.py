@@ -1798,13 +1798,35 @@ _RT_CLASSIFIER_CACHE: dict | None = None
 _RT_CLASSIFIER_CACHE_KEY: tuple[str, float] | None = None
 _LAST_TRAINED_RT_CLASSIFIER: dict[str, dict] = {}
 
-ALL_RT_CLASSIFIER_FEATURES = ("GR", "NPHI", "RHOB", "LOG_RT", "PEF", "VDL")
+ALL_RT_CLASSIFIER_FEATURES = (
+    "GR",
+    "NPHI",
+    "RHOB",
+    "LOG_RT",
+    "PEF",
+    "VDL",
+    "PHIT",
+    "VSAND",
+    "VSHALE",
+    "VSILT",
+    "VCLAY",
+)
 
 
 def _normalize_rt_feature_name(name: str) -> str:
     n = str(name or "").strip().upper()
     if n in ("RT", "LOG_RT", "LOG10(RT)", "LOG10_RT", "LOG(RT)"):
         return "LOG_RT"
+    if n in ("PHIE", "PHI", "POROSITY", "POR"):
+        return "PHIT"
+    if n in ("VSND", "V_SAND"):
+        return "VSAND"
+    if n in ("VSH", "VSH_GR", "VSH_DN", "VSH_TS", "V_SHALE"):
+        return "VSHALE"
+    if n in ("VSLT", "V_SILT"):
+        return "VSILT"
+    if n in ("VCL", "V_CLAY"):
+        return "VCLAY"
     return n
 
 
@@ -1832,7 +1854,22 @@ def _extract_rt_classifier_features(
     rt_s = _combined_valid_series(("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD"))
     pef_s = _combined_valid_series(("PEF", "PE", "PEFZ", "PEFA"))
     dtc_s = _combined_valid_series(("DTC", "DT", "AC", "DTCO", "DT4P"))
-    phit_s = _combined_valid_series(("PHIT", "PHIE", "CPORE", "POROSITY"))
+    phit_log_s = _combined_valid_series(
+        ("PHIT", "PHIE", "POROSITY", "POR", "PHIT_CONSTRUCTED")
+    )
+    phit_vdl_s = phit_log_s.combine_first(_combined_valid_series(("CPORE",)))
+    vsand_s = _combined_valid_series(("VSAND", "VSND", "V_SAND"))
+    vsilt_s = _combined_valid_series(("VSILT", "VSLT", "V_SILT"))
+    vclay_s = _combined_valid_series(("VCLAY", "VCL", "V_CLAY"))
+    vshale_s = _combined_valid_series(
+        ("VSHALE", "VSH", "VSH_GR", "VSH_DN", "VSH_TS", "V_SHALE")
+    )
+    if vshale_s.isna().all() and vclay_s.notna().any():
+        if vsilt_s.notna().any() and (vsilt_s > 0).any():
+            vshale_s = (vclay_s.fillna(0.0) + vsilt_s.fillna(0.0)).clip(0.0, 1.0)
+            vshale_s.loc[vclay_s.isna() & vsilt_s.isna()] = np.nan
+        else:
+            vshale_s = vclay_s.copy()
 
     log_rt_s = pd.Series(np.nan, index=work.index, dtype=float)
     valid_rt = rt_s.notna() & (rt_s > 0)
@@ -1840,13 +1877,13 @@ def _extract_rt_classifier_features(
         log_rt_s.loc[valid_rt] = np.log10(rt_s.loc[valid_rt].clip(1e-3, 1e5))
 
     vdl_s = pd.Series(np.nan, index=work.index, dtype=float)
-    if rhob_s.notna().any() or nphi_s.notna().any() or phit_s.notna().any():
+    if rhob_s.notna().any() or nphi_s.notna().any() or phit_vdl_s.notna().any():
         try:
             vdl_calc = velocity_deviation_log(
                 rhob=rhob_s if rhob_s.notna().any() else None,
                 nphi=nphi_s if nphi_s.notna().any() else None,
                 dtc=dtc_s if dtc_s.notna().any() else None,
-                phit=phit_s if phit_s.notna().any() else None,
+                phit=phit_vdl_s if phit_vdl_s.notna().any() else None,
                 dt_matrix=dt_matrix,
                 dt_fluid=dt_fluid,
             )
@@ -1863,6 +1900,11 @@ def _extract_rt_classifier_features(
         "LOG_RT": log_rt_s,
         "PEF": pef_s,
         "VDL": vdl_s,
+        "PHIT": phit_log_s,
+        "VSAND": vsand_s,
+        "VSHALE": vshale_s,
+        "VSILT": vsilt_s,
+        "VCLAY": vclay_s,
     }
     return candidates_map, vdl_s
 
@@ -1985,7 +2027,7 @@ def train_and_validate_rock_type_classifier(
     cache_key: str = "latest",
 ) -> dict:
     """Train a supervised Rock Type (DRT) classification model on selectable well logs
-    (GR, NPHI, RHOB, log10(RT), PEF, and VDL = Velocity Deviation Log),
+    (GR, NPHI, RHOB, log10(RT), PEF, VDL, PHIT, VSAND, VSHALE, VSILT, VCLAY),
     evaluate it with a Contingency Table (Confusion Matrix) validator, and predict/propagate
     rock types across log depth rows.
     """
@@ -2030,7 +2072,7 @@ def train_and_validate_rock_type_classifier(
 
     if not requested_norm:
         raise ValueError(
-            "Please select at least one input feature (GR, NPHI, RHOB, log10(RT), PEF, or VDL)."
+            "Please select at least one input feature (GR, NPHI, RHOB, log10(RT), PEF, VDL, PHIT, VSAND, VSHALE, VSILT, or VCLAY)."
         )
 
     feat_df = pd.DataFrame(index=work.index)

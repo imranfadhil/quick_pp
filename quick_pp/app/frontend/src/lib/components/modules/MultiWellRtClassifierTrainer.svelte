@@ -12,13 +12,26 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
 
-	const ALL_RT_FEATURES: Array<{ key: DrtFeatureKey; label: string; short: string; title: string }> = [
+	const RAW_RT_FEATURES: Array<{ key: DrtFeatureKey; label: string; short: string; title: string }> = [
 		{ key: 'GR', label: 'GR', short: 'GR', title: 'Gamma Ray (API)' },
 		{ key: 'NPHI', label: 'NPHI', short: 'NPHI', title: 'Neutron Porosity (v/v)' },
 		{ key: 'RHOB', label: 'RHOB', short: 'RHOB', title: 'Bulk Density (g/cc)' },
 		{ key: 'LOG_RT', label: 'log₁₀(RT)', short: 'log(RT)', title: 'Log10 Deep Resistivity (ohm.m)' },
 		{ key: 'PEF', label: 'PEF', short: 'PEF', title: 'Photoelectric Factor (b/e)' },
 		{ key: 'VDL', label: 'VDL', short: 'VDL', title: 'Velocity Deviation Log (Φ_T − Φ_sonic)' }
+	];
+
+	const CALC_RT_FEATURES: Array<{ key: DrtFeatureKey; label: string; short: string; title: string }> = [
+		{ key: 'PHIT', label: 'PHIT', short: 'PHIT', title: 'Total Porosity (v/v)' },
+		{ key: 'VSAND', label: 'VSAND', short: 'VSAND', title: 'Sand Volume Fraction (v/v)' },
+		{ key: 'VSHALE', label: 'VSHALE', short: 'VSHALE', title: 'Shale Volume Fraction (v/v)' },
+		{ key: 'VSILT', label: 'VSILT', short: 'VSILT', title: 'Silt Volume Fraction (v/v)' },
+		{ key: 'VCLAY', label: 'VCLAY', short: 'VCLAY', title: 'Clay Volume Fraction (v/v)' }
+	];
+
+	const ALL_RT_FEATURES: Array<{ key: DrtFeatureKey; label: string; short: string; title: string }> = [
+		...RAW_RT_FEATURES,
+		...CALC_RT_FEATURES
 	];
 
 	const DRT_METHOD_META: Record<
@@ -341,7 +354,7 @@
 		<SavedParamsIndicator modules={['rt-classifier']} />
 		<ParameterSection
 			title="Target DRT Labels & Log Features"
-			badge="{projectData.drtDataSource === 'core' ? 'Core (CPORE & CPERM)' : 'Log (PHIT & PERM)'} · {projectData.drtSelectedFeatures.length}/6 Inputs"
+			badge="{projectData.drtDataSource === 'core' ? 'Core (CPORE & CPERM)' : 'Log (PHIT & PERM)'} · {projectData.drtSelectedFeatures.length}/{ALL_RT_FEATURES.length} Inputs"
 			defaultOpen={true}
 		>
 			<div class="space-y-2">
@@ -431,27 +444,49 @@
 				<div
 					class="space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]"
 				>
-					<div class="flex items-center justify-between gap-1">
+					<div class="flex flex-wrap items-center justify-between gap-1">
 						<span class="font-semibold text-[var(--text-primary)]">
-							1. Selectable Log Features ({projectData.drtSelectedFeatures.length}/6)
+							1. Selectable Input Curves ({projectData.drtSelectedFeatures.length}/{ALL_RT_FEATURES.length})
 						</span>
-						<div class="flex items-center gap-1">
+						<div class="flex flex-wrap items-center gap-1">
 							<button
 								type="button"
 								onclick={() =>
 									setFeaturePreset(['GR', 'NPHI', 'RHOB', 'LOG_RT', 'PEF', 'VDL'])}
 								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0.5 text-[9px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
-								title="Select all 6 candidate log features"
+								title="Select raw & sonic logs (GR, NPHI, RHOB, log10(RT), PEF, VDL)"
 							>
-								All
+								Raw Logs
 							</button>
 							<button
 								type="button"
-								onclick={() => setFeaturePreset(['NPHI', 'RHOB', 'PEF', 'VDL'])}
+								onclick={() =>
+									setFeaturePreset(['PHIT', 'VSAND', 'VSHALE', 'VSILT', 'VCLAY'])}
 								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0.5 text-[9px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
-								title="Exclude GR and log10(RT) when they do not contribute to rock typing"
+								title="Select evaluated porosity & lithology volume fractions (PHIT, VSAND, VSHALE, VSILT, VCLAY)"
 							>
-								No GR/RT
+								Litho+Poro
+							</button>
+							<button
+								type="button"
+								onclick={() =>
+									setFeaturePreset([
+										'GR',
+										'NPHI',
+										'RHOB',
+										'LOG_RT',
+										'PEF',
+										'VDL',
+										'PHIT',
+										'VSAND',
+										'VSHALE',
+										'VSILT',
+										'VCLAY'
+									])}
+								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0.5 text-[9px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+								title="Select all 11 raw and calculated candidate features"
+							>
+								All
 							</button>
 							<button
 								type="button"
@@ -464,21 +499,51 @@
 						</div>
 					</div>
 
-					<div class="grid grid-cols-3 gap-1">
-						{#each ALL_RT_FEATURES as feat}
-							{@const isSelected = projectData.drtSelectedFeatures.includes(feat.key)}
-							<button
-								type="button"
-								title={feat.title}
-								onclick={() => toggleFeature(feat.key)}
-								class="flex h-6 items-center justify-between rounded-xs border px-1.5 text-[9.5px] font-medium transition-colors {isSelected
-									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
-									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]'}"
-							>
-								<span class="mono-num">{feat.label}</span>
-								<span class="text-[9px]">{isSelected ? '✓' : '○'}</span>
-							</button>
-						{/each}
+					<div class="space-y-1">
+						<div class="text-[8.5px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+							Raw &amp; Sonic Logs
+						</div>
+						<div class="grid grid-cols-3 gap-1">
+							{#each RAW_RT_FEATURES as feat}
+								{@const isSelected = projectData.drtSelectedFeatures.includes(feat.key)}
+								<button
+									type="button"
+									title={feat.title}
+									onclick={() => toggleFeature(feat.key)}
+									class="flex h-6 items-center justify-between rounded-xs border px-1.5 text-[9.5px] font-medium transition-colors {isSelected
+										? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]'}"
+								>
+									<span class="mono-num">{feat.label}</span>
+									<span class="text-[9px]">{isSelected ? '✓' : '○'}</span>
+								</button>
+							{/each}
+						</div>
+					</div>
+
+					<div class="space-y-1 pt-0.5">
+						<div class="flex items-center justify-between text-[8.5px]">
+							<span class="font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+								Calculated Curves (Litho &amp; Porosity)
+							</span>
+							<span class="text-[8px] text-[var(--text-muted)]">v/v</span>
+						</div>
+						<div class="grid grid-cols-3 gap-1">
+							{#each CALC_RT_FEATURES as feat}
+								{@const isSelected = projectData.drtSelectedFeatures.includes(feat.key)}
+								<button
+									type="button"
+									title={feat.title}
+									onclick={() => toggleFeature(feat.key)}
+									class="flex h-6 items-center justify-between rounded-xs border px-1.5 text-[9.5px] font-medium transition-colors {isSelected
+										? 'border-indigo-600 bg-indigo-50/90 font-semibold text-indigo-700'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]'}"
+								>
+									<span class="mono-num">{feat.label}</span>
+									<span class="text-[9px]">{isSelected ? '✓' : '○'}</span>
+								</button>
+							{/each}
+						</div>
 					</div>
 				</div>
 

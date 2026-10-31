@@ -902,7 +902,7 @@ class WorkspaceRockTypingRequest(BaseModel):
     )
     selected_features: Optional[List[str]] = Field(
         None,
-        description="Explicit list of log input features to use for ML classification: subset of ['GR', 'NPHI', 'RHOB', 'LOG_RT', 'PEF', 'VDL']",
+        description="Explicit list of log input features to use for ML classification: subset of ['GR', 'NPHI', 'RHOB', 'LOG_RT', 'PEF', 'VDL', 'PHIT', 'VSAND', 'VSHALE', 'VSILT', 'VCLAY']",
     )
     include_pef: bool = Field(
         True,
