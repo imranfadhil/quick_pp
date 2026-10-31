@@ -72,8 +72,10 @@ from quick_pp.qaqc import (
     apply_environmental_corrections,
     badhole_flagging,
     den_correction,
+    den_correction_params_from_endpoints,
     handle_outer_limit,
     neu_den_xplot_hc_correction,
+    neu_den_xplot_hc_correction_angle,
     stratigraphic_normalization,
 )
 from quick_pp.ressum import calc_reservoir_summary
@@ -108,7 +110,7 @@ from quick_pp.saturation import (
 )
 from quick_pp.uncertainty import calc_stochastic_reservoir_summary
 from quick_pp.upscaling import expand_blocked_logs, upscale_logs
-from quick_pp.utils import length_a_b, line_intersection
+from quick_pp.utils import nd_triangle_coords
 
 router = APIRouter(
     prefix="/workspace/projects/{project_id}",
@@ -532,7 +534,24 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
     rho_water: float = Field(1.0, description="Water density (g/cc)")
     rho_hc: float = Field(0.8, description="Hydrocarbon density (g/cc)")
     hi_hc: float = Field(0.9, description="Hydrocarbon hydrogen index")
-    buffer: float = Field(0.0, description="Buffer for HC flag detection")
+    buffer: float = Field(
+        0.0,
+        description="Flagging tolerance (crossplot distance along matrix-clay line); only widens HC flagging",
+    )
+    flag_mode: str = Field(
+        "strict",
+        description=(
+            "'strict': flag only points beyond the clean-sand line; "
+            "'vsh_gr': also flag points whose crossplot Vcl < VSH_GR - vsh_tol (shaly gas sands)"
+        ),
+    )
+    vsh_tol: float = Field(
+        0.05, description="Vshale tolerance used when flag_mode='vsh_gr'"
+    )
+    target_mode: str = Field(
+        "bulk",
+        description="Interpret VSH_GR as 'bulk' clay volume (default) or 'solid' clay fraction of solids",
+    )
     gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
     gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
     enable_coal_flagging: bool = Field(
@@ -583,6 +602,13 @@ class WorkspaceDenCorrectionRequest(WorkspaceFilterBase):
     coal_window_size: int = Field(41, description="Rolling window size for coal trend")
     coal_trend_factor: float = Field(
         0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
+    )
+    protect_hc_rows: bool = Field(
+        True,
+        description=(
+            "Skip samples already flagged by hydrocarbon correction (HC_FLAG == 1) and "
+            "preserve their NPHI_HC/RHOB_HC/HC_FLAG values"
+        ),
     )
 
 
@@ -1528,20 +1554,21 @@ def workspace_hc_correction(
         if req.corr_angle is not None:
             corr_angle = float(req.corr_angle)
         else:
-            denom = 1.0 - float(req.hi_hc)
-            if abs(denom) < 1e-9:
-                corr_angle = 50.0
-            else:
-                rad = math.atan((float(req.rho_water) - float(req.rho_hc)) / denom)
-                corr_angle = 90.0 - (rad * 180.0 / math.pi)
+            corr_angle = neu_den_xplot_hc_correction_angle(
+                rho_water=float(req.rho_water),
+                rho_hc=float(req.rho_hc),
+                HI_hc=float(req.hi_hc),
+            )
 
         nphi_hc_full = pd.Series(np.nan, index=df.index, dtype=float)
         rhob_hc_full = pd.Series(np.nan, index=df.index, dtype=float)
         hc_flag_full = pd.Series(np.nan, index=df.index, dtype=float)
 
         vsh_gr_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+        # Keep NaN where GR is missing so those samples are skipped rather than
+        # being corrected all the way to the clean-sand line.
         vsh_gr_arr: Optional[np.ndarray] = (
-            vsh_gr_s.loc[valid_mask].fillna(0.0).to_numpy(dtype=float)
+            vsh_gr_s.loc[valid_mask].to_numpy(dtype=float)
             if vsh_gr_s.notna().any()
             else None
         )
@@ -1555,6 +1582,9 @@ def workspace_hc_correction(
             water_point=req.water_point,
             corr_angle=corr_angle,
             buffer=req.buffer,
+            target_mode=req.target_mode,
+            flag_mode=req.flag_mode,
+            vsh_tol=req.vsh_tol,
         )
 
         nphi_hc_full.loc[valid_mask] = np.asarray(nphi_c, dtype=float)
@@ -1591,19 +1621,30 @@ def workspace_hc_correction(
                     bh_gr = badhole_mask & vsh_bh_s.notna()
                     if bh_gr.any():
                         vsh_v = vsh_bh_s.loc[bh_gr].to_numpy(dtype=float)
-                        phin_sh = (
-                            float(req.dry_clay_point[0])
+                        sand_pt = (
+                            req.dry_sand_point
                             if (
-                                req.dry_clay_point and req.dry_clay_point[0] is not None
+                                req.dry_sand_point
+                                and req.dry_sand_point[0] is not None
+                                and req.dry_sand_point[1] is not None
                             )
-                            else 0.33
+                            else (-0.02, 2.65)
                         )
-                        rho_ma_sand = (
-                            float(req.dry_sand_point[1])
+                        clay_pt = (
+                            req.dry_clay_point
                             if (
-                                req.dry_sand_point and req.dry_sand_point[1] is not None
+                                req.dry_clay_point
+                                and req.dry_clay_point[0] is not None
+                                and req.dry_clay_point[1] is not None
                             )
-                            else 2.65
+                            else (0.33, 2.7)
+                        )
+                        # Parameters consistent with the crossplot endpoints so the
+                        # reconstruction honours the matrix-clay-water triangle.
+                        rho_ma_bh, phin_sh, phid_sh_bh = (
+                            den_correction_params_from_endpoints(
+                                sand_pt, clay_pt, rho_water=float(req.rho_water)
+                            )
                         )
                         nphi_bh = (
                             nphi.loc[bh_gr]
@@ -1616,19 +1657,13 @@ def workspace_hc_correction(
                             )
                             .to_numpy(dtype=float)
                         )
-                        gr_bh = (
-                            pd.to_numeric(df.loc[bh_gr, "GR"], errors="coerce")
-                            .fillna(50.0)
-                            .to_numpy(dtype=float)
-                        )
                         rhob_rec = np.asarray(
                             den_correction(
                                 nphi_bh,
-                                gr_bh,
                                 vsh_gr=vsh_v,
                                 phin_sh=phin_sh,
-                                phid_sh=0.05,
-                                rho_ma=rho_ma_sand,
+                                phid_sh=phid_sh_bh,
+                                rho_ma=rho_ma_bh,
                                 rho_water=float(req.rho_water),
                             ),
                             dtype=float,
@@ -1739,23 +1774,22 @@ def workspace_den_correction(
 
         rho_w = float(req.rho_water)
         if req.sync_endpoints:
-            nphi_sand = float(req.dry_sand_point[0])
-            rho_sand = float(req.dry_sand_point[1])
-            nphi_clay = float(req.dry_clay_point[0])
-            rho_clay = float(req.dry_clay_point[1])
-            denom_sand = (
-                1.0 - nphi_sand if abs(1.0 - nphi_sand) > 1e-6 else 1.0
+            rho_ma_val, phin_sh_val, phid_sh_val = den_correction_params_from_endpoints(
+                req.dry_sand_point, req.dry_clay_point, rho_water=rho_w
             )
-            rho_ma_val = (rho_sand - nphi_sand * rho_w) / denom_sand
-            phin_sh_val = nphi_clay
-            denom_ma = (
-                rho_ma_val - rho_w if abs(rho_ma_val - rho_w) > 1e-6 else 1.65
-            )
-            phid_sh_val = (rho_ma_val - rho_clay) / denom_ma
         else:
             rho_ma_val = float(req.rho_ma)
             phin_sh_val = float(req.phin_sh)
             phid_sh_val = float(req.phid_sh)
+
+        # Samples already hydrocarbon-corrected are protected: den_correction assumes
+        # water-filled NPHI, and gas-depressed NPHI would synthesize too-dense RHOB.
+        if req.protect_hc_rows and "HC_FLAG" in df.columns:
+            hc_prev_mask = (
+                pd.to_numeric(df["HC_FLAG"], errors="coerce").fillna(0.0) >= 0.5
+            )
+        else:
+            hc_prev_mask = pd.Series(False, index=df.index, dtype=bool)
 
         if req.enable_coal_flagging:
             coal_mask = _compute_coal_mask(
@@ -1778,19 +1812,17 @@ def workspace_den_correction(
             A = req.dry_sand_point
             C = req.dry_clay_point
             D = (1.0, rho_w)
-            rock_len = max(1e-6, float(length_a_b(A, C)))
-            nphi_valid_np = nphi.loc[valid_mask].to_numpy(dtype=float)
-            rhob_valid_np = rhob.loc[valid_mask].to_numpy(dtype=float)
-            var_pts = line_intersection(
-                (A, C),
-                (D, (nphi_valid_np, rhob_valid_np)),
+            # Bulk clay volume from the matrix-clay-water triangle (same convention
+            # as VSH_GR and den_correction; independent of endpoint ordering).
+            _, vcl_dn_np = nd_triangle_coords(
+                nphi.loc[valid_mask].to_numpy(dtype=float),
+                rhob.loc[valid_mask].to_numpy(dtype=float),
+                A,
+                C,
+                D,
             )
-            signed_proj = np.where(var_pts[1] > C[1], -1.0, 1.0) * length_a_b(
-                var_pts, C
-            )
-            proj_clamped = np.clip(signed_proj, 0.0, rock_len)
             vsh_dn_raw = pd.Series(np.nan, index=df.index, dtype=float)
-            vsh_dn_raw.loc[valid_mask] = 1.0 - (proj_clamped / rock_len)
+            vsh_dn_raw.loc[valid_mask] = np.clip(vcl_dn_np, 0.0, 1.0)
             mismatch_mask = (vsh_dn_raw - vsh_gr_s).abs() >= float(
                 req.vsh_mismatch_threshold
             )
@@ -1802,11 +1834,20 @@ def workspace_den_correction(
             )
         else:
             active_mask = valid_mask & (~coal_mask) & vsh_gr_s.notna()
+        active_mask = active_mask & (~hc_prev_mask)
 
         nphi_hc_full = nphi.copy()
         rhob_hc_full = rhob.copy()
         den_flag_full = pd.Series(0.0, index=df.index, dtype=float)
         hc_flag_full = pd.Series(0.0, index=df.index, dtype=float)
+        if hc_prev_mask.any():
+            # Preserve previous hydrocarbon correction results
+            hc_flag_full.loc[hc_prev_mask] = 1.0
+            for col, target in (("NPHI_HC", nphi_hc_full), ("RHOB_HC", rhob_hc_full)):
+                if col in df.columns:
+                    prev = pd.to_numeric(df[col], errors="coerce")
+                    keep = hc_prev_mask & prev.notna()
+                    target.loc[keep] = prev.loc[keep]
 
         if active_mask.any():
             nphi_act = nphi.loc[active_mask].to_numpy(dtype=float)
@@ -1814,7 +1855,6 @@ def workspace_den_correction(
             rhob_rec = np.asarray(
                 den_correction(
                     nphi_act,
-                    None,
                     vsh_gr=vsh_act,
                     phin_sh=phin_sh_val,
                     phid_sh=phid_sh_val,
@@ -1850,6 +1890,7 @@ def workspace_den_correction(
             "scope": scope_mode,
             "sync_endpoints": bool(req.sync_endpoints),
             "corrected_count": n_corr,
+            "hc_protected_count": int((valid_mask & hc_prev_mask).sum()),
             "valid_count": n_valid,
             "corrected_pct": round((n_corr / n_valid) * 100.0, 1)
             if n_valid > 0
@@ -2368,14 +2409,42 @@ def workspace_lithology(
                         .fillna(50.0)
                         .to_numpy(dtype=float)
                     )
+                    # Endpoint-consistent den_correction parameters (honours the
+                    # matrix-clay-fluid triangle instead of a fixed phid_sh).
+                    try:
+                        rho_ma_dc, phin_sh_dc, phid_sh_dc = (
+                            den_correction_params_from_endpoints(
+                                (
+                                    float(req.dry_sand_point[0]),
+                                    rho_ma_sand,
+                                )
+                                if (
+                                    req.dry_sand_point
+                                    and req.dry_sand_point[0] is not None
+                                )
+                                else (-0.02, rho_ma_sand),
+                                (
+                                    phin_sh,
+                                    float(req.dry_clay_point[1]),
+                                )
+                                if (
+                                    req.dry_clay_point
+                                    and req.dry_clay_point[1] is not None
+                                )
+                                else (phin_sh, 2.7),
+                                rho_water=rho_fl,
+                            )
+                        )
+                    except ValueError:
+                        rho_ma_dc, phin_sh_dc, phid_sh_dc = rho_ma_sand, phin_sh, 0.05
                     rhob_rec = np.asarray(
                         den_correction(
                             nphi_bh,
                             gr_bh,
                             vsh_gr=vsh_v,
-                            phin_sh=phin_sh,
-                            phid_sh=0.05,
-                            rho_ma=rho_ma_sand,
+                            phin_sh=phin_sh_dc,
+                            phid_sh=phid_sh_dc,
+                            rho_ma=rho_ma_dc,
                             rho_water=rho_fl,
                         ),
                         dtype=float,
@@ -2954,14 +3023,42 @@ def workspace_porosity(
                         if "GR" in df.columns
                         else np.full(len(vsh_v), 50.0)
                     )
+                    # Endpoint-consistent den_correction parameters (honours the
+                    # matrix-clay-fluid triangle instead of a fixed phid_sh).
+                    try:
+                        rho_ma_dc, phin_sh_dc, phid_sh_dc = (
+                            den_correction_params_from_endpoints(
+                                (
+                                    float(req.dry_sand_point[0]),
+                                    rho_ma_sand,
+                                )
+                                if (
+                                    req.dry_sand_point
+                                    and req.dry_sand_point[0] is not None
+                                )
+                                else (-0.02, rho_ma_sand),
+                                (
+                                    phin_sh,
+                                    float(req.dry_clay_point[1]),
+                                )
+                                if (
+                                    req.dry_clay_point
+                                    and req.dry_clay_point[1] is not None
+                                )
+                                else (phin_sh, 2.7),
+                                rho_water=rho_fl,
+                            )
+                        )
+                    except ValueError:
+                        rho_ma_dc, phin_sh_dc, phid_sh_dc = rho_ma_sand, phin_sh, 0.05
                     rhob_rec = np.asarray(
                         den_correction(
                             nphi_bh,
                             gr_bh,
                             vsh_gr=vsh_v,
-                            phin_sh=phin_sh,
-                            phid_sh=0.05,
-                            rho_ma=rho_ma_sand,
+                            phin_sh=phin_sh_dc,
+                            phid_sh=phid_sh_dc,
+                            rho_ma=rho_ma_dc,
                             rho_water=rho_fl,
                         ),
                         dtype=float,

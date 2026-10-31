@@ -184,6 +184,9 @@ export interface paths {
 						rho_hc?: number;
 						hi_hc?: number;
 						buffer?: number;
+						flag_mode?: 'strict' | 'vsh_gr';
+						vsh_tol?: number;
+						target_mode?: 'bulk' | 'solid';
 						min_depth?: number | null;
 						max_depth?: number | null;
 						zones?: string[] | null;

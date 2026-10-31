@@ -589,3 +589,53 @@ def test_workspace_stick_plot(client_and_project):
     assert "top_reservoir_tvd" in w
     assert "cum_hcpv" in w
     assert len(w["tops"]) == 2
+
+
+def test_hc_correction_angle_and_den_correction_protects_hc_rows(client_and_project):
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+
+    r_hc = client.post(
+        f"{base}/hc_correction",
+        json={
+            "rho_water": 1.0,
+            "rho_hc": 0.3,
+            "hi_hc": 0.66,
+            "gr_clean": 30.0,
+            "gr_clay": 110.0,
+            "save": True,
+        },
+    )
+    assert r_hc.status_code == 200
+    hc_body = r_hc.json()
+    # Angle measured from the NPHI axis: atan2(0.7, 0.34) ~= 64.09 deg
+    assert hc_body["corr_angle"] == pytest.approx(64.09, abs=0.01)
+    hc_flag = np.asarray(hc_body["data"]["HC_FLAG"], dtype=float)
+    assert hc_flag.sum() >= 1
+    nphi_hc = np.asarray(hc_body["data"]["NPHI_HC"], dtype=float)
+    rhob_hc = np.asarray(hc_body["data"]["RHOB_HC"], dtype=float)
+
+    r_bad_mode = client.post(f"{base}/hc_correction", json={"flag_mode": "bogus"})
+    assert r_bad_mode.status_code == 400
+
+    r_den = client.post(
+        f"{base}/den_correction",
+        json={"scope": "full", "gr_clean": 30.0, "gr_clay": 110.0, "save": False},
+    )
+    assert r_den.status_code == 200
+    den_body = r_den.json()
+    den_data = den_body["data"]
+    hc_rows = hc_flag >= 0.5
+    np.testing.assert_allclose(
+        np.asarray(den_data["HC_FLAG"], dtype=float)[hc_rows], 1.0
+    )
+    np.testing.assert_allclose(
+        np.asarray(den_data["DEN_CORR_FLAG"], dtype=float)[hc_rows], 0.0
+    )
+    np.testing.assert_allclose(
+        np.asarray(den_data["NPHI_HC"], dtype=float)[hc_rows], nphi_hc[hc_rows]
+    )
+    np.testing.assert_allclose(
+        np.asarray(den_data["RHOB_HC"], dtype=float)[hc_rows], rhob_hc[hc_rows]
+    )
+    assert den_body["den_summary"]["hc_protected_count"] == int(hc_rows.sum())

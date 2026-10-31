@@ -239,6 +239,8 @@
 							rho_hc: lp.rhoHc,
 							hi_hc: lp.hiHc,
 							buffer: lp.hcBuffer,
+							flag_mode: lp.hcFlagMode ?? 'strict',
+							vsh_tol: lp.hcVshTol ?? 0.05,
 							gr_clean: lp.grClean,
 							gr_clay: lp.grClay,
 							...coalArgs,
@@ -791,6 +793,30 @@
 					decimals={3}
 					onrun={() => executeLithoPoro(false)}
 				/>
+
+				<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
+					<span class="text-xs font-medium text-[var(--text-primary)]">HC Flag Mode</span>
+					<select
+						bind:value={workbench.lithoParams.hcFlagMode}
+						onchange={() => executeLithoPoro(false)}
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+					>
+						<option value="strict">Beyond Clean-Sand Line</option>
+						<option value="vsh_gr">VSH_DN &lt; VSH_GR − Tol</option>
+					</select>
+				</div>
+				{#if workbench.lithoParams.hcFlagMode === 'vsh_gr'}
+					<NumericScrubber
+						label="VSH Tolerance"
+						bind:value={workbench.lithoParams.hcVshTol}
+						unit="v/v"
+						min={0.0}
+						max={0.3}
+						step={0.01}
+						decimals={2}
+						onrun={() => executeLithoPoro(false)}
+					/>
+				{/if}
 
 				{#if hcSummary}
 					<div class="mt-1.5 rounded-sm border border-emerald-200 bg-emerald-50/50 p-1.5 text-[10px]">

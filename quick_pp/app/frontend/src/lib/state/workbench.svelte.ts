@@ -96,6 +96,8 @@ export interface LithoEndpointParams {
 	rhoHc: number;
 	hiHc: number;
 	hcBuffer: number;
+	hcFlagMode: 'strict' | 'vsh_gr';
+	hcVshTol: number;
 	denCorrScope: 'full' | 'badhole_only' | 'vsh_mismatch';
 	denCorrSyncEndpoints: boolean;
 	denCorrRhoMa: number;
@@ -329,6 +331,8 @@ class WorkbenchState {
 		rhoHc: 0.8,
 		hiHc: 0.9,
 		hcBuffer: 0.0,
+		hcFlagMode: 'strict',
+		hcVshTol: 0.05,
 		denCorrScope: 'vsh_mismatch',
 		denCorrSyncEndpoints: true,
 		denCorrRhoMa: 2.65,

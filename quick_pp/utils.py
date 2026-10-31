@@ -138,6 +138,46 @@ def line_intersection(line1: tuple, line2: tuple):
     return x, y
 
 
+def nd_triangle_coords(x, y, A: tuple, C: tuple, D: tuple):
+    """Express crossplot points in barycentric (porosity, bulk clay) coordinates.
+
+    Solves ``P = A + phi * (D - A) + vcl * (C - A)`` for each point ``P = (x, y)``,
+    where ``A`` is the dry matrix point, ``C`` the dry clay point and ``D`` the
+    fluid point. ``vcl`` is the *bulk* clay volume and ``phi`` the total porosity
+    of a linear three-component mixing model. The clay fraction of the solids,
+    equivalent to projecting ``P`` from ``D`` onto line ``A-C``, is
+    ``vcl / (1 - phi)``.
+
+    The result is independent of the relative ordering of the endpoint
+    coordinates (e.g. clay lighter or heavier than matrix). Values are not
+    clipped, so points outside the triangle yield negative or >1 coordinates.
+
+    Args:
+        x (np.ndarray or float): X-axis values (e.g. NPHI).
+        y (np.ndarray or float): Y-axis values (e.g. RHOB).
+        A (tuple): (x, y) of the dry matrix point.
+        C (tuple): (x, y) of the dry clay point.
+        D (tuple): (x, y) of the fluid point.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: ``(phi, vcl)`` arrays.
+
+    Raises:
+        ValueError: If ``A``, ``C`` and ``D`` are collinear.
+    """
+    ax, ay = float(A[0]), float(A[1])
+    dax, day = float(D[0]) - ax, float(D[1]) - ay
+    cax, cay = float(C[0]) - ax, float(C[1]) - ay
+    det = dax * cay - day * cax
+    if abs(det) < 1e-12:
+        raise ValueError("Matrix, clay and fluid points must not be collinear")
+    px = np.asarray(x, dtype=float) - ax
+    py = np.asarray(y, dtype=float) - ay
+    phi = (px * cay - py * cax) / det
+    vcl = (dax * py - day * px) / det
+    return phi, vcl
+
+
 def angle_between_lines(line1: tuple, line2: tuple):
     """Calculates the convex angle between two lines in degrees.
 
