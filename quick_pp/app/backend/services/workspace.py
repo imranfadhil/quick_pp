@@ -861,6 +861,26 @@ class WorkspaceMultiWellVolumetricsRequest(WorkspaceFilterBase):
         default_factory=dict,
         description="Per-zone fluid contact overrides {zone: {'owc': val, 'goc': val, 'gwc': val}}",
     )
+    saturation_method: str = Field(
+        "log_average",
+        description="Water saturation calculation method: 'log_average' (lumped log distribution) or 'shf' (1D Hypsometric Saturation-Height Function)",
+    )
+    fwl_uncertainty: float = Field(
+        5.0,
+        description="Free Water Level 1-sigma uncertainty in meters for LHS sampling",
+    )
+    crest_depth: Optional[float] = Field(
+        None,
+        description="Optional structural crest depth (TVDSS, m). If None, inferred from minimum well top.",
+    )
+    hypsometry_model: str = Field(
+        "structural_dome",
+        description="Structural hypsometric model: 'structural_dome' (conical/dome area vs depth) or 'well_tracks' (multi-well depth track integration)",
+    )
+    shf_params: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Optional explicit SHF parameters override {a, b, swirr, ift, theta, gw, ghc, fwl}",
+    )
     save_to_project: bool = Field(
         False, description="Whether to persist parameters into project ancillary"
     )
@@ -11588,6 +11608,39 @@ def workspace_multi_well_volumetrics(
             pass
 
         shf_anc = anc_data.get("shf_params") or {}
+        shf_module_anc = anc_data.get("shf") or {}
+        shf_fits_anc = (
+            shf_anc.get("fits")
+            or (shf_module_anc.get("fits") if isinstance(shf_module_anc, dict) else {})
+            or {}
+        )
+        shf_a_default = 0.35
+        shf_b_default = -0.45
+        shf_swirr_default = 0.12
+        shf_ift_default = float(shf_anc.get("ift", 30.0))
+        shf_theta_default = float(shf_anc.get("theta", 30.0))
+        shf_gw_default = float(shf_anc.get("gw", 1.05))
+        shf_ghc_default = float(shf_anc.get("ghc", 0.80 if req.compute_oil else 0.20))
+
+        if isinstance(shf_fits_anc, dict) and shf_fits_anc:
+            first_fit = next(iter(shf_fits_anc.values()), {})
+            if isinstance(first_fit, dict):
+                shf_a_default = float(first_fit.get("a", shf_a_default))
+                shf_b_default = float(first_fit.get("b", shf_b_default))
+        if shf_anc.get("swirr") is not None:
+            shf_swirr_default = float(shf_anc["swirr"])
+        elif shf_anc.get("swirr_params", {}).get("mean_swirr") is not None:
+            shf_swirr_default = float(shf_anc["swirr_params"]["mean_swirr"])
+
+        if req.shf_params:
+            shf_a_default = float(req.shf_params.get("a", shf_a_default))
+            shf_b_default = float(req.shf_params.get("b", shf_b_default))
+            shf_swirr_default = float(req.shf_params.get("swirr", shf_swirr_default))
+            shf_ift_default = float(req.shf_params.get("ift", shf_ift_default))
+            shf_theta_default = float(req.shf_params.get("theta", shf_theta_default))
+            shf_gw_default = float(req.shf_params.get("gw", shf_gw_default))
+            shf_ghc_default = float(req.shf_params.get("ghc", shf_ghc_default))
+
         contacts_anc_raw = anc_data.get("fluid_contacts")
         inherited_contacts: Dict[str, float] = {}
 
@@ -11964,6 +12017,138 @@ def workspace_multi_well_volumetrics(
 
             poro_arr = np.clip(lhs_df["porosity"].to_numpy(dtype=float), 0.01, 0.50)
             sw_arr = np.clip(lhs_df["water_saturation"].to_numpy(dtype=float), 0.02, 0.98)
+
+            z_shf_profile = []
+            z_shf_comparison = None
+            if req.saturation_method == "shf":
+                well_tops = [
+                    r["top"] for r in rows if r["top"] is not None and math.isfinite(r["top"])
+                ]
+                well_bottoms = [
+                    r["bottom"]
+                    for r in rows
+                    if r["bottom"] is not None and math.isfinite(r["bottom"])
+                ]
+                min_top = float(np.min(well_tops)) if well_tops else -2400.0
+                max_bot = float(np.max(well_bottoms)) if well_bottoms else min_top + 50.0
+
+                z_crest = float(req.crest_depth) if req.crest_depth is not None else min_top
+                z_fwl_mean = zc.get("owc") or zc.get("gwc") or shf_global_fwl
+                if z_fwl_mean is None or pd.isna(z_fwl_mean):
+                    z_fwl_mean = max_bot + 10.0
+                else:
+                    z_fwl_mean = float(z_fwl_mean)
+
+                is_subsea = z_fwl_mean < 0 and z_crest < 0
+                if is_subsea:
+                    if z_crest > z_fwl_mean:
+                        column_h = abs(z_crest - z_fwl_mean)
+                    else:
+                        z_crest = z_fwl_mean + 50.0
+                        column_h = 50.0
+                else:
+                    if z_fwl_mean > z_crest:
+                        column_h = z_fwl_mean - z_crest
+                    else:
+                        z_fwl_mean = z_crest + 50.0
+                        column_h = 50.0
+
+                column_h = max(10.0, column_h)
+                fwl_sigma = max(0.5, float(req.fwl_uncertainty))
+
+                fwl_samples = np.random.RandomState(seed_base + z_idx * 31).normal(
+                    z_fwl_mean, fwl_sigma, n_samples
+                )
+
+                K_slices = 50
+                xi = np.linspace(0.02, 0.98, K_slices)
+                if req.hypsometry_model == "well_tracks":
+                    area_weights = np.ones(K_slices)
+                else:
+                    area_weights = np.maximum(0.1, np.sqrt(xi))
+                area_weights /= np.sum(area_weights)
+
+                k_samples = np.maximum(
+                    0.01, mean_perm * ((poro_arr / max(0.01, mean_phie)) ** 2.2)
+                )
+
+                h_columns = np.abs(fwl_samples - z_crest)
+                H_matrix = np.maximum(0.0, h_columns[:, None] * (1.0 - xi[None, :]))
+
+                conv = 1.4206
+                delta_rho = max(0.05, shf_gw_default - shf_ghc_default)
+                Pc_matrix = H_matrix * delta_rho * conv
+
+                sigma_cos = max(1.0, shf_ift_default * math.cos(math.radians(shf_theta_default)))
+                sqrt_k_phi = np.sqrt(k_samples / poro_arr)[:, None]
+                J_matrix = 0.21645 * (Pc_matrix / sigma_cos) * sqrt_k_phi
+
+                b_abs = max(0.05, abs(shf_b_default))
+                a_val = max(1e-4, shf_a_default)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    swn_matrix = np.where(
+                        (J_matrix > 1e-4) & (H_matrix > 0),
+                        (a_val / np.maximum(1e-4, J_matrix)) ** (1.0 / b_abs),
+                        1.0,
+                    )
+                swn_matrix = np.clip(swn_matrix, 0.0, 1.0)
+                sw_matrix = shf_swirr_default + (1.0 - shf_swirr_default) * swn_matrix
+                sw_matrix = np.clip(sw_matrix, shf_swirr_default, 1.0)
+
+                sw_arr = np.dot(sw_matrix, area_weights)
+                sw_arr = np.clip(sw_arr, 0.02, 0.98)
+
+                p50_fwl = float(np.median(fwl_samples))
+                p50_k = float(np.median(k_samples))
+                p50_phi = float(np.median(poro_arr))
+                p50_H = np.maximum(0.0, abs(p50_fwl - z_crest) * (1.0 - xi))
+                p50_Pc = p50_H * delta_rho * conv
+                p50_J = 0.21645 * (p50_Pc / sigma_cos) * math.sqrt(p50_k / p50_phi)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    p50_swn = np.where(
+                        (p50_J > 1e-4) & (p50_H > 0),
+                        (a_val / np.maximum(1e-4, p50_J)) ** (1.0 / b_abs),
+                        1.0,
+                    )
+                p50_sw = shf_swirr_default + (1.0 - shf_swirr_default) * np.clip(p50_swn, 0.0, 1.0)
+                p50_depths = (
+                    z_crest - xi * abs(p50_fwl - z_crest)
+                    if is_subsea
+                    else z_crest + xi * abs(p50_fwl - z_crest)
+                )
+
+                z_shf_profile = [
+                    {
+                        "depth_tvd": round(float(p50_depths[k]), 2),
+                        "height_above_fwl": round(float(p50_H[k]), 2),
+                        "sw_shf": round(float(p50_sw[k]), 4),
+                        "pc_psi": round(float(p50_Pc[k]), 2),
+                        "area_fraction": round(float(area_weights[k]), 4),
+                    }
+                    for k in range(K_slices)
+                ]
+
+                shf_p50_sw_val = float(np.median(sw_arr))
+                delta_sw = shf_p50_sw_val - mean_sw
+                vol_delta_pct = (
+                    ((1.0 - shf_p50_sw_val) - (1.0 - mean_sw)) / max(0.01, (1.0 - mean_sw))
+                ) * 100.0
+
+                z_shf_comparison = {
+                    "log_mean_sw": round(mean_sw, 4),
+                    "shf_p50_sw": round(shf_p50_sw_val, 4),
+                    "delta_sw": round(delta_sw, 4),
+                    "delta_volume_pct": round(vol_delta_pct, 1),
+                    "model": "Leverett J (1D Hypsometric)",
+                    "parameters": {
+                        "a": round(a_val, 4),
+                        "b": round(shf_b_default, 4),
+                        "swirr": round(shf_swirr_default, 4),
+                        "fwl_p50": round(p50_fwl, 1),
+                        "crest": round(z_crest, 1),
+                    },
+                }
+
             bo_arr = np.maximum(1e-4, lhs_df["bo"].to_numpy(dtype=float))
             bg_arr = np.maximum(1e-6, lhs_df["bg"].to_numpy(dtype=float))
             rf_oil_arr = np.clip(lhs_df["rf_oil"].to_numpy(dtype=float), 0.0, 1.0)
@@ -12123,7 +12308,11 @@ def workspace_multi_well_volumetrics(
                 lhs_df["porosity"].to_numpy(), "porosity", "Effective Porosity (Φe)", "v/v"
             )
             input_dists["water_saturation"] = _calc_dist_summary(
-                lhs_df["water_saturation"].to_numpy(), "water_saturation", "Water Saturation (Sw)", "v/v"
+                sw_arr,
+                "water_saturation",
+                "Water Saturation (Sw)",
+                "v/v",
+                dist_type="1D Hypsometric SHF" if req.saturation_method == "shf" else "Truncated Normal",
             )
             input_dists["bo"] = _calc_dist_summary(
                 lhs_df["bo"].to_numpy(), "bo", "Oil FVF (Bo)", "bbl/STB"
@@ -12171,6 +12360,8 @@ def workspace_multi_well_volumetrics(
                     "histogram": hist_st,
                     "tornado": tornado_items,
                     "input_distributions": input_dists,
+                    "shf_profile": z_shf_profile,
+                    "shf_comparison": z_shf_comparison,
                 }
             )
 
@@ -12252,6 +12443,9 @@ def workspace_multi_well_volumetrics(
             "histogram": hist_f_st,
             "tornado": field_tornado_items,
             "input_distributions": field_input_dists,
+            "saturation_method": req.saturation_method,
+            "shf_profile": zonal_summaries[0].get("shf_profile", []) if zonal_summaries else [],
+            "shf_comparison": zonal_summaries[0].get("shf_comparison") if zonal_summaries else None,
         }
 
         # Basis of Estimate & Assumptions Register
@@ -12261,7 +12455,17 @@ def workspace_multi_well_volumetrics(
 
         assumptions_register = {
             "standard": "SPE-PRMS (2018) Guidelines for Evaluation of Petroleum Reserves and Resources",
+            "saturation_method": "1D Hypsometric Saturation-Height Function (SPE-PRMS Mode 2)" if req.saturation_method == "shf" else "Log-Derived Average Sw (Lumped Distribution Mode 1)",
             "structural_mode": "Drainage Area (Acres × Net Pay)" if req.mode == "area" else "Gross Rock Volume (10^6 m^3 × NTG)",
+            "shf_specifications": {
+                "active": req.saturation_method == "shf",
+                "model": "Leverett J-Function",
+                "hypsometry": req.hypsometry_model,
+                "fwl_uncertainty_m": req.fwl_uncertainty,
+                "a": shf_a_default,
+                "b": shf_b_default,
+                "swirr": shf_swirr_default,
+            },
             "cutoffs": {
                 "vsh_max": vsh_cut,
                 "phit_min": phi_cut,

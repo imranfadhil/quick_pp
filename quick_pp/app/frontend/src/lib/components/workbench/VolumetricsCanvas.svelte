@@ -26,7 +26,10 @@
 				histogram: activeResult.field_totals?.histogram ?? [],
 				tornado: activeResult.field_totals?.tornado ?? [],
 				inputDistributions: activeResult.field_totals?.input_distributions ?? {},
-				assumptionsRegister: activeResult.field_totals?.assumptions_register ?? activeResult.assumptions_register
+				assumptionsRegister: activeResult.field_totals?.assumptions_register ?? activeResult.assumptions_register,
+				shfProfile: activeResult.field_totals?.shf_profile ?? [],
+				shfComparison: activeResult.field_totals?.shf_comparison ?? null,
+				saturationMethod: activeResult.field_totals?.saturation_method ?? 'log_average'
 			};
 		}
 		const z = activeResult.zonal_summary.find((x) => x.zone === mv.selectedZone);
@@ -45,7 +48,10 @@
 			histogram: z.histogram ?? [],
 			tornado: z.tornado ?? [],
 			inputDistributions: z.input_distributions ?? {},
-			assumptionsRegister: z.assumptions_register ?? activeResult.assumptions_register
+			assumptionsRegister: z.assumptions_register ?? activeResult.assumptions_register,
+			shfProfile: z.shf_profile ?? activeResult.field_totals?.shf_profile ?? [],
+			shfComparison: z.shf_comparison ?? activeResult.field_totals?.shf_comparison ?? null,
+			saturationMethod: activeResult.field_totals?.saturation_method ?? 'log_average'
 		};
 	});
 
@@ -195,6 +201,15 @@
 						Contacts: {activeResult.contacts.owc != null ? `OWC ${activeResult.contacts.owc}m` : ''} {activeResult.contacts.goc != null ? `| GOC ${activeResult.contacts.goc}m` : ''}
 					</span>
 				{/if}
+				{#if activeResult.field_totals?.saturation_method === 'shf'}
+					<span class="rounded-xs bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-800 border border-purple-200">
+						⚡ Mode 2: SHF Coupled
+					</span>
+				{:else}
+					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 border border-slate-200">
+						📊 Mode 1: Log Sw
+					</span>
+				{/if}
 			{/if}
 		</div>
 
@@ -240,6 +255,15 @@
 					onclick={() => (mv.activeTab = 'inputs')}
 				>
 					Input Distributions
+				</button>
+				<button
+					type="button"
+					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'shf_profile'
+						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
+						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+					onclick={() => (mv.activeTab = 'shf_profile')}
+				>
+					SHF Profile & Transition
 				</button>
 				<button
 					type="button"
@@ -803,6 +827,204 @@
 					{:else}
 						<div class="py-12 text-center text-xs text-[var(--text-muted)]">
 							No sample distribution data found. Please click "Compute Volumetrics" in the left panel to generate distributions.
+						</div>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- TAB: Saturation-Height Profile & Transition Zone Integration -->
+			{#if mv.activeTab === 'shf_profile'}
+				<div class="flex flex-col gap-3">
+					<!-- SHF Benchmark Comparison Banner -->
+					{#if activeData.shfComparison}
+						{@const comp = activeData.shfComparison}
+						<div class="rounded-sm border border-purple-200 bg-purple-50/50 p-3 shadow-xs">
+							<div class="flex items-center justify-between border-b border-purple-200 pb-2 mb-2">
+								<div>
+									<h4 class="font-bold text-xs text-purple-950 flex items-center gap-1.5">
+										<span>⚡ 1D Hypsometric Saturation-Height Function (SPE-PRMS Mode 2)</span>
+									</h4>
+									<p class="text-[11px] text-purple-800">
+										Physics-coupled capillary transition zone evaluation eliminating lumped arithmetic averaging bias.
+									</p>
+								</div>
+								<span class="rounded-xs bg-purple-200/80 text-purple-900 border border-purple-300 px-2 py-0.5 text-[10px] font-bold">
+									{comp.model}
+								</span>
+							</div>
+
+							<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+								<div class="rounded-xs bg-white/80 p-2 border border-purple-100">
+									<div class="text-[10px] text-purple-700 uppercase font-semibold">Log-Derived Sw (Lumped)</div>
+									<div class="mono-num text-base font-bold text-slate-800">{fmtNum(comp.log_mean_sw * 100, 1)}%</div>
+									<div class="text-[10px] text-slate-500">Arithmetic well cut-off mean</div>
+								</div>
+
+								<div class="rounded-xs bg-white/80 p-2 border border-purple-100">
+									<div class="text-[10px] text-purple-700 uppercase font-semibold">SHF Effective Sw (P50)</div>
+									<div class="mono-num text-base font-bold text-purple-900">{fmtNum(comp.shf_p50_sw * 100, 1)}%</div>
+									<div class="text-[10px] text-purple-600">Pore-volume & depth weighted</div>
+								</div>
+
+								<div class="rounded-xs bg-white/80 p-2 border border-purple-100">
+									<div class="text-[10px] text-purple-700 uppercase font-semibold">Saturation Delta (ΔSw)</div>
+									<div class="mono-num text-base font-bold {comp.delta_sw > 0 ? 'text-amber-800' : 'text-emerald-800'}">
+										{comp.delta_sw > 0 ? '+' : ''}{fmtNum(comp.delta_sw * 100, 1)}%
+									</div>
+									<div class="text-[10px] text-slate-500">Capillary transition zone effect</div>
+								</div>
+
+								<div class="rounded-xs bg-white/80 p-2 border border-purple-100">
+									<div class="text-[10px] text-purple-700 uppercase font-semibold">Volumetric Impact (HCPV)</div>
+									<div class="mono-num text-base font-bold {comp.delta_volume_pct >= 0 ? 'text-emerald-800' : 'text-rose-800'}">
+										{comp.delta_volume_pct > 0 ? '+' : ''}{fmtNum(comp.delta_volume_pct, 1)}%
+									</div>
+									<div class="text-[10px] text-slate-500">Vs lumped macro assumption</div>
+								</div>
+							</div>
+
+							<!-- Parameters strip -->
+							<div class="mt-2 flex flex-wrap items-center gap-3 text-[10.5px] text-purple-900 border-t border-purple-200/60 pt-1.5">
+								<span>J coeff <strong>a = {comp.parameters.a}</strong></span>
+								<span>•</span>
+								<span>J exponent <strong>b = {comp.parameters.b}</strong></span>
+								<span>•</span>
+								<span><strong>Swirr = {fmtNum(comp.parameters.swirr * 100, 1)}%</strong></span>
+								<span>•</span>
+								<span>Structural Crest: <strong>{comp.parameters.crest} m TVDSS</strong></span>
+								<span>•</span>
+								<span>P50 FWL: <strong>{comp.parameters.fwl_p50} m TVDSS</strong></span>
+							</div>
+						</div>
+					{/if}
+
+					<!-- Interactive Depth-Track SVG Profile Plot -->
+					{#if activeData.shfProfile && activeData.shfProfile.length > 0}
+						{@const prof = activeData.shfProfile}
+						{@const plotW_shf = 680}
+						{@const plotH_shf = 340}
+						{@const mLeft_shf = 60}
+						{@const mRight_shf = 50}
+						{@const mTop_shf = 25}
+						{@const mBot_shf = 40}
+						{@const pW_shf = plotW_shf - mLeft_shf - mRight_shf}
+						{@const pH_shf = plotH_shf - mTop_shf - mBot_shf}
+						{@const depths = prof.map((p) => p.depth_tvd)}
+						{@const minD = Math.min(...depths)}
+						{@const maxD = Math.max(...depths)}
+						{@const dSpan = maxD - minD || 1}
+						{@const scaleY_shf = (d: number) => mTop_shf + ((d - minD) / dSpan) * pH_shf}
+						{@const scaleX_shf = (sw: number) => mLeft_shf + Math.max(0, Math.min(1.0, sw)) * pW_shf}
+						{@const fwlY = scaleY_shf(prof[prof.length - 1].depth_tvd)}
+						{@const crestY = scaleY_shf(prof[0].depth_tvd)}
+
+						{@const pathShf = prof
+							.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${scaleX_shf(p.sw_shf).toFixed(1)} ${scaleY_shf(p.depth_tvd).toFixed(1)}`)
+							.join(' ')}
+
+						{@const polyHc = [
+							`M ${scaleX_shf(prof[0].sw_shf).toFixed(1)} ${scaleY_shf(prof[0].depth_tvd).toFixed(1)}`,
+							...prof.map((p) => `L ${scaleX_shf(p.sw_shf).toFixed(1)} ${scaleY_shf(p.depth_tvd).toFixed(1)}`),
+							`L ${scaleX_shf(1.0).toFixed(1)} ${scaleY_shf(prof[prof.length - 1].depth_tvd).toFixed(1)}`,
+							`L ${scaleX_shf(1.0).toFixed(1)} ${scaleY_shf(prof[0].depth_tvd).toFixed(1)}`,
+							'Z'
+						].join(' ')}
+
+						<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-xs">
+							<div class="flex items-center justify-between mb-2 text-xs">
+								<div>
+									<h4 class="font-bold text-[var(--text-primary)]">
+										Structural Saturation-Height Profile Curve Sw(z)
+									</h4>
+									<p class="text-[11px] text-[var(--text-secondary)]">
+										Capillary pressure transition zone from structural crest down to Free Water Level (FWL). Shaded area represents Hydrocarbon Pore Volume (1 - Sw).
+									</p>
+								</div>
+								<div class="flex items-center gap-3 text-[11px]">
+									<span class="flex items-center gap-1.5">
+										<span class="inline-block h-3 w-3 rounded-xs bg-amber-400/70 border border-amber-500"></span>
+										<span>Hydrocarbon Pay Column (1 - Sw)</span>
+									</span>
+									<span class="flex items-center gap-1.5">
+										<span class="inline-block h-2 w-4 bg-blue-600 rounded-xs"></span>
+										<span>Sw(z) Profile</span>
+									</span>
+								</div>
+							</div>
+
+							<div class="flex justify-center overflow-x-auto py-1">
+								<svg width={plotW_shf} height={plotH_shf} viewBox="0 0 {plotW_shf} {plotH_shf}" class="select-none overflow-visible">
+									<defs>
+										<linearGradient id="hcGrad" x1="0" y1="0" x2="1" y2="0">
+											<stop offset="0%" stop-color="#fbbf24" stop-opacity="0.65" />
+											<stop offset="100%" stop-color="#f59e0b" stop-opacity="0.15" />
+										</linearGradient>
+									</defs>
+
+									<!-- Background & Grid -->
+									<rect x={mLeft_shf} y={mTop_shf} width={pW_shf} height={pH_shf} fill="rgba(248, 250, 252, 0.6)" rx="2" />
+
+									<!-- X Grid Lines (Sw = 0.0, 0.2, 0.4, 0.6, 0.8, 1.0) -->
+									{#each [0.0, 0.2, 0.4, 0.6, 0.8, 1.0] as swTick}
+										{@const x = scaleX_shf(swTick)}
+										<line x1={x} y1={mTop_shf} x2={x} y2={mTop_shf + pH_shf} stroke="#e2e8f0" stroke-width="1" />
+										<text x={x} y={mTop_shf + pH_shf + 14} text-anchor="middle" font-size="9" fill="var(--text-muted)">
+											{Math.round(swTick * 100)}%
+										</text>
+									{/each}
+
+									<!-- Y Grid Lines (Depth) -->
+									{#each [0.0, 0.25, 0.5, 0.75, 1.0] as frac}
+										{@const dVal = minD + frac * dSpan}
+										{@const y = scaleY_shf(dVal)}
+										<line x1={mLeft_shf} y1={y} x2={mLeft_shf + pW_shf} y2={y} stroke="#e2e8f0" stroke-width="1" />
+										<text x={mLeft_shf - 8} y={y + 3} text-anchor="end" font-size="9" fill="var(--text-muted)">
+											{fmtNum(dVal, 0)}m
+										</text>
+									{/each}
+
+									<!-- Hydrocarbon Column Polygon -->
+									<path d={polyHc} fill="url(#hcGrad)" stroke="none" />
+
+									<!-- 100% Water Reference Line -->
+									<line
+										x1={scaleX_shf(1.0)}
+										y1={mTop_shf}
+										x2={scaleX_shf(1.0)}
+										y2={mTop_shf + pH_shf}
+										stroke="#94a3b8"
+										stroke-width="1.5"
+										stroke-dasharray="3,3"
+									/>
+
+									<!-- Saturation-Height Curve -->
+									<path d={pathShf} fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linecap="round" />
+
+									<!-- FWL Horizontal Line (Bottom) -->
+									<line x1={mLeft_shf} y1={fwlY} x2={mLeft_shf + pW_shf} y2={fwlY} stroke="#0284c7" stroke-width="2" stroke-dasharray="4,3" />
+									<text x={mLeft_shf + pW_shf + 4} y={fwlY + 3} font-size="8.5" font-weight="bold" fill="#0284c7">
+										FWL ({fmtNum(prof[prof.length - 1].depth_tvd, 0)}m)
+									</text>
+
+									<!-- Structural Crest Line (Top) -->
+									<line x1={mLeft_shf} y1={crestY} x2={mLeft_shf + pW_shf} y2={crestY} stroke="#16a34a" stroke-width="1.5" stroke-dasharray="3,2" />
+									<text x={mLeft_shf + pW_shf + 4} y={crestY + 3} font-size="8.5" font-weight="bold" fill="#16a34a">
+										Crest ({fmtNum(prof[0].depth_tvd, 0)}m)
+									</text>
+
+									<!-- Axis Labels -->
+									<text x={mLeft_shf + pW_shf / 2} y={plotH_shf - 6} text-anchor="middle" font-size="10" font-weight="bold" fill="var(--text-secondary)">
+										Water Saturation Sw (v/v)
+									</text>
+									<text x={-plotH_shf / 2} y={15} text-anchor="middle" transform="rotate(-90)" font-size="10" font-weight="bold" fill="var(--text-secondary)">
+										True Vertical Depth Subsea (TVDSS, m)
+									</text>
+								</svg>
+							</div>
+						</div>
+					{:else}
+						<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-8 text-center text-xs text-[var(--text-muted)] shadow-xs">
+							No Saturation-Height profile generated yet. In the left inspector, select <strong>"SHF Physics"</strong> under Saturation Assessment Method and click <strong>"Compute Volumetrics"</strong>.
 						</div>
 					{/if}
 				</div>

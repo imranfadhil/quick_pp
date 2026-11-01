@@ -98,6 +98,15 @@
 				goc: mv.goc,
 				gwc: mv.gwc,
 				contacts_by_zone: mv.contactsByZone,
+				saturation_method: mv.saturationMethod,
+				fwl_uncertainty: mv.fwlUncertainty,
+				crest_depth: mv.crestDepth,
+				hypsometry_model: mv.hypsometryModel,
+				shf_params: {
+					a: mv.shfA,
+					b: mv.shfB,
+					swirr: mv.shfSwirr
+				},
 				well_names:
 					projectData.selectedWellNames.length > 0
 						? projectData.selectedWellNames
@@ -281,6 +290,109 @@
 						max={0}
 						step={5}
 					/>
+				</div>
+			{/if}
+		</ParameterSection>
+
+		<!-- Saturation Assessment Method (SPE-PRMS Mode 1 vs Mode 2) -->
+		<ParameterSection
+			title="Saturation Assessment Method"
+			badge={mv.saturationMethod === 'shf' ? 'SHF Physics (Mode 2)' : 'Lumped Sw (Mode 1)'}
+		>
+			<div class="flex items-center justify-between py-1 text-xs">
+				<span class="font-medium text-[var(--text-secondary)]">Sw Method:</span>
+				<div class="flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10.5px]">
+					<button
+						type="button"
+						class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.saturationMethod === 'log_average'
+							? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-xs'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						onclick={() => (mv.saturationMethod = 'log_average')}
+					>
+						Log-Derived Sw
+					</button>
+					<button
+						type="button"
+						class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.saturationMethod === 'shf'
+							? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-xs'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						onclick={() => (mv.saturationMethod = 'shf')}
+					>
+						SHF Physics
+					</button>
+				</div>
+			</div>
+
+			{#if mv.saturationMethod === 'shf'}
+				<div class="mt-1.5 flex flex-col gap-1 border-t border-[var(--border-hairline)] pt-1.5 text-xs">
+					<div class="flex items-center justify-between py-0.5">
+						<span class="font-medium text-[var(--text-secondary)]">Hypsometry:</span>
+						<div class="flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10px]">
+							<button
+								type="button"
+								class="rounded-xs px-1.5 py-0.5 transition-colors {mv.hypsometryModel === 'structural_dome'
+									? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
+									: 'text-[var(--text-secondary)]'}"
+								onclick={() => (mv.hypsometryModel = 'structural_dome')}
+							>
+								Dome A(z)
+							</button>
+							<button
+								type="button"
+								class="rounded-xs px-1.5 py-0.5 transition-colors {mv.hypsometryModel === 'well_tracks'
+									? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
+									: 'text-[var(--text-secondary)]'}"
+								onclick={() => (mv.hypsometryModel = 'well_tracks')}
+							>
+								Well Tracks
+							</button>
+						</div>
+					</div>
+
+					<NumericScrubber
+						label="FWL Uncertainty (±σ)"
+						bind:value={mv.fwlUncertainty}
+						unit="m"
+						min={0.5}
+						max={50}
+						step={0.5}
+					/>
+
+					<div class="mt-1 border-t border-[var(--border-hairline)] pt-1">
+						<span class="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+							Leverett J Parameters (Step 5 SHF)
+						</span>
+						<div class="grid grid-cols-2 gap-x-1 mt-0.5">
+							<NumericScrubber
+								label="J Coeff (a)"
+								bind:value={mv.shfA}
+								min={0.01}
+								max={5.0}
+								step={0.02}
+							/>
+							<NumericScrubber
+								label="J Power (b)"
+								bind:value={mv.shfB}
+								min={-3.0}
+								max={-0.05}
+								step={0.02}
+							/>
+							<div class="col-span-2">
+								<NumericScrubber
+									label="Irreducible Sw (Swirr)"
+									bind:value={mv.shfSwirr}
+									unit="v/v"
+									min={0.01}
+									max={0.50}
+									step={0.01}
+								/>
+							</div>
+						</div>
+					</div>
+				</div>
+			{:else}
+				<div class="mt-1 text-[10px] text-[var(--text-muted)] italic">
+					Using lumped well log cut-off water saturation distribution (SPE-PRMS Mode 1).
 				</div>
 			{/if}
 		</ParameterSection>

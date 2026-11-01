@@ -280,6 +280,29 @@ export interface HistBin {
 	count: number;
 }
 
+export interface ShfProfilePoint {
+	depth_tvd: number;
+	height_above_fwl: number;
+	sw_shf: number;
+	pc_psi: number;
+	area_fraction: number;
+}
+
+export interface ShfComparison {
+	log_mean_sw: number;
+	shf_p50_sw: number;
+	delta_sw: number;
+	delta_volume_pct: number;
+	model: string;
+	parameters: {
+		a: number;
+		b: number;
+		swirr: number;
+		fwl_p50: number;
+		crest: number;
+	};
+}
+
 export interface InputDistSummary {
 	param: string;
 	label: string;
@@ -355,6 +378,9 @@ export interface ZonalVolumetricSummary {
 		reservoir_type: string;
 		source: string;
 	};
+	shf_profile?: ShfProfilePoint[];
+	shf_comparison?: ShfComparison | null;
+	saturation_method?: 'log_average' | 'shf';
 }
 
 export interface FieldVolumetricTotals {
@@ -371,6 +397,9 @@ export interface FieldVolumetricTotals {
 	tornado: TornadoItem[];
 	input_distributions?: Record<string, InputDistSummary>;
 	assumptions_register?: AssumptionsRegister;
+	shf_profile?: ShfProfilePoint[];
+	shf_comparison?: ShfComparison | null;
+	saturation_method?: 'log_average' | 'shf';
 }
 
 export interface MultiWellVolumetricResult {
@@ -450,12 +479,19 @@ export interface MultiWellVolumetricsState {
 	goc: number;
 	gwc: number;
 	contactsByZone: Record<string, { owc?: number | null; goc?: number | null; gwc?: number | null }>;
+	saturationMethod: 'log_average' | 'shf';
+	fwlUncertainty: number;
+	crestDepth: number | null;
+	hypsometryModel: 'structural_dome' | 'well_tracks';
+	shfA: number;
+	shfB: number;
+	shfSwirr: number;
 	vshMax: number;
 	phitMin: number;
 	swtMax: number;
 	nSamples: number;
 	seed: number;
-	activeTab: 'exceedance' | 'inputs' | 'assumptions' | 'tornado' | 'summary' | 'well_matrix';
+	activeTab: 'exceedance' | 'inputs' | 'shf_profile' | 'assumptions' | 'tornado' | 'summary' | 'well_matrix';
 	selectedZone: string;
 	fluidMetric: 'oil' | 'gas';
 	zoneConfigs: Record<string, VolumetricZoneParamConfig>;
@@ -743,6 +779,13 @@ class WorkbenchState {
 		goc: -2400,
 		gwc: -2500,
 		contactsByZone: {},
+		saturationMethod: 'log_average',
+		fwlUncertainty: 5.0,
+		crestDepth: null,
+		hypsometryModel: 'structural_dome',
+		shfA: 0.35,
+		shfB: -0.45,
+		shfSwirr: 0.12,
 		vshMax: 0.4,
 		phitMin: 0.05,
 		swtMax: 0.8,
