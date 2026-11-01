@@ -30,10 +30,10 @@ from quick_pp.app.backend.services.database import (
     resolve_db_well_name,
     write_shared_well_cache,
 )
-from quick_pp.las_handler import extract_las_metadata
 from quick_pp.app.backend.services.rock_typing import _compute_fzi_data_sync
 from quick_pp.app.backend.utils.auth import is_demo_mode
 from quick_pp.app.backend.utils.db import get_db
+from quick_pp.config import Config
 from quick_pp.core_analysis import (
     auto_cuddy_params,
     auto_j_params,
@@ -47,8 +47,8 @@ from quick_pp.core_analysis import (
     sw_shf_leverett_j,
     sw_skelt_harrison,
 )
-from quick_pp.config import Config
 from quick_pp.database import models as db_models, objects as db_objects
+from quick_pp.las_handler import extract_las_metadata
 from quick_pp.lithology import gr_index
 from quick_pp.lithology.multi_mineral import MultiMineral
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
@@ -2676,7 +2676,6 @@ def workspace_thomas_stieber(
         )
 
         # Normalize bulk clay volume to [0, 1] on the Thomas-Stieber Vshale axis where pure shale = 1.0
-        vmatrix_denom = np.maximum(1.0 - phit_v + dry_shale_poro * vclay_bulk_v, 1e-4)
         vsh_ts_v = np.clip(vclay_bulk_v / np.maximum(1.0 - phit_v, 0.15), 0.0, 1.0)
         # If VCLAY is already unscaled VSHALE close to 1.0 in shales, blend smoothly
         if float(np.nanmax(vclay_bulk_v)) > 0.88:
@@ -4432,7 +4431,7 @@ def _execute_workspace_rock_typing(
             else set()
         )
         keep_indices: List[int] = []
-        for idx_f, (dv, zv) in enumerate(zip(d_arr_f, z_arr_f)):
+        for idx_f, (dv, zv) in enumerate(zip(d_arr_f, z_arr_f, strict=False)):
             if dv is None:
                 continue
             d_flt = float(dv)
@@ -4460,14 +4459,6 @@ def _execute_workspace_rock_typing(
             [v if v is not None else np.nan for v in phis_raw], dtype=float
         )
         if phis_raw and len(phis_raw) == len(phit_arr)
-        else np.full_like(phit_arr, np.nan, dtype=float)
-    )
-    vsh_raw = fzi_data.get("vsh")
-    vsh_arr = (
-        np.asarray(
-            [v if v is not None else np.nan for v in vsh_raw], dtype=float
-        )
-        if vsh_raw and len(vsh_raw) == len(phit_arr)
         else np.full_like(phit_arr, np.nan, dtype=float)
     )
     coal_raw = fzi_data.get("coal_flags")
@@ -4670,7 +4661,7 @@ def _execute_workspace_rock_typing(
             )
         )
         binned_lookup: Dict[Tuple[str, float], int] = {}
-        for wn, d, rf_b in zip(well_names, depths, rock_flags_binned):
+        for wn, d, rf_b in zip(well_names, depths, rock_flags_binned, strict=False):
             if wn is not None and d is not None and rf_b is not None:
                 binned_lookup[(str(wn), round(float(d), 4))] = int(rf_b)
 
@@ -4758,7 +4749,7 @@ def _execute_workspace_rock_typing(
                 if existing_nr_cnt < 4 and len(unlabeled_nr_idx) > 0:
                     res_counts = [
                         int(c)
-                        for k_v, c in rf_num[rf_num >= 1].value_counts().items()
+                        for _k_v, c in rf_num[rf_num >= 1].value_counts().items()
                         if c > 0
                     ]
                     target_nr = max(8, int(np.median(res_counts))) if res_counts else 20
@@ -4821,7 +4812,7 @@ def _execute_workspace_rock_typing(
                         (str(w_n), round(float(d_v), 4) if pd.notna(d_v) else -999999.0),
                         np.nan,
                     )
-                    for w_n, d_v in zip(comb_wells, comb_depths)
+                    for w_n, d_v in zip(comb_wells, comb_depths, strict=False)
                 ]
                 comb_focused = (
                     train_df["_FOCUSED_MASK"].to_numpy(dtype=bool).tolist()
@@ -4847,6 +4838,7 @@ def _execute_workspace_rock_typing(
                     pred_rf_all,
                     pred_conf_all,
                     vdl_all,
+                    strict=False,
                 ):
                     if cd is None or pd.isna(cd):
                         continue
@@ -4912,7 +4904,7 @@ def _execute_workspace_rock_typing(
                             row_ext["VDL"] = float(vdl_flt)
                         extra_propagated_by_well.setdefault(cw, []).append(row_ext)
 
-                for idx_r, (wn, d) in enumerate(zip(well_names, depths)):
+                for idx_r, (wn, d) in enumerate(zip(well_names, depths, strict=False)):
                     if wn is not None and d is not None:
                         hit = ml_lookup.get((str(wn), round(float(d), 4)))
                         if hit is not None:
@@ -4922,7 +4914,7 @@ def _execute_workspace_rock_typing(
 
                 if req.apply_classifier_propagation and prop_mode != "cutoff_only":
                     new_rock_flags: List[Optional[int]] = []
-                    for rf_b, rf_m in zip(rock_flags_binned, rock_flags_ml):
+                    for rf_b, rf_m in zip(rock_flags_binned, rock_flags_ml, strict=False):
                         if prop_mode == "full_ml":
                             new_rock_flags.append(rf_m if rf_m is not None else rf_b)
                         else:
@@ -4999,7 +4991,7 @@ def _execute_workspace_rock_typing(
                     else [False] * len(comb_wells)
                 )
                 for cw, cd, is_foc, is_nr in zip(
-                    comb_wells, comb_depths, comb_focused, comb_non_res
+                    comb_wells, comb_depths, comb_focused, comb_non_res, strict=False
                 ):
                     if cd is None or pd.isna(cd):
                         continue
@@ -5028,7 +5020,14 @@ def _execute_workspace_rock_typing(
             # Build full-well curve DataFrames so in-memory cache clears any stale flags outside the focused interval
             core_row_lookup: Dict[Tuple[str, float], Dict[str, Any]] = {}
             for idx_row, (wn_r, d_r, rf_r, rf_b_r, ind_val) in enumerate(
-                zip(well_names, depths, rock_flags, rock_flags_binned, active_list)
+                zip(
+                    well_names,
+                    depths,
+                    rock_flags,
+                    rock_flags_binned,
+                    active_list,
+                    strict=False,
+                )
             ):
                 if wn_r is not None and d_r is not None:
                     dk_r = round(float(d_r), 4)
@@ -5066,7 +5065,7 @@ def _execute_workspace_rock_typing(
                 rf_ml_vals: List[float] = []
                 vdl_col_vals: List[float] = []
                 ind_col_vals: List[float] = []
-                for dv, is_f_row, is_nr_row in zip(d_col.tolist(), f_col, nr_col):
+                for dv, is_f_row, is_nr_row in zip(d_col.tolist(), f_col, nr_col, strict=False):
                     if dv is None or pd.isna(dv):
                         rf_col_vals.append(np.nan)
                         rf_cut_vals.append(np.nan)
@@ -5123,7 +5122,7 @@ def _execute_workspace_rock_typing(
 
     by_well: Dict[str, List[Dict[str, Any]]] = {}
     for idx_row, (wn, d, rf, rf_b, ind_val) in enumerate(
-        zip(well_names, depths, rock_flags, rock_flags_binned, active_list)
+        zip(well_names, depths, rock_flags, rock_flags_binned, active_list, strict=False)
     ):
         if (rf is not None or rf_b is not None) and d is not None:
             row_dict: Dict[str, Any] = {
@@ -5353,7 +5352,7 @@ def workspace_perm_transform_compute(
                 rf_existing
                 if rf_existing is not None
                 else (int(rf_calc) if not np.isnan(rf_calc) else None)
-                for rf_existing, rf_calc in zip(rock_flags, rf_arr)
+                for rf_existing, rf_calc in zip(rock_flags, rf_arr, strict=False)
             ]
 
         if use_non_res and len(phit_arr) > 0:
@@ -5370,7 +5369,7 @@ def workspace_perm_transform_compute(
                 )
                 else rf_v
                 for rf_v, p_v, k_v, c_v in zip(
-                    rock_flags, phit_arr, perm_arr, coal_arr_pt
+                    rock_flags, phit_arr, perm_arr, coal_arr_pt, strict=False
                 )
             ]
 
@@ -5402,7 +5401,7 @@ def workspace_perm_transform_compute(
             mask = np.array(
                 [
                     (r == rf) and (p > 0) and (k > 0)
-                    for r, p, k in zip(rock_flags, phit_arr, perm_arr)
+                    for r, p, k in zip(rock_flags, phit_arr, perm_arr, strict=False)
                 ],
                 dtype=bool,
             )
@@ -5451,7 +5450,7 @@ def workspace_perm_transform_compute(
             Tuple[Optional[float], Optional[float], Optional[int], Optional[str]],
         ] = {}
         for wn_c, d_c, p_c, k_c, rf_c, z_c in zip(
-            well_names, depths, phit_arr, perm_arr, rock_flags, zones
+            well_names, depths, phit_arr, perm_arr, rock_flags, zones, strict=False
         ):
             if wn_c is not None and d_c is not None:
                 dk_c = round(float(d_c), 4)
@@ -5586,6 +5585,7 @@ def workspace_perm_transform_compute(
                 scatter_perm_s.tolist(),
                 rf_s.tolist(),
                 zone_vals,
+                strict=False,
             ):
                 if d_v is None or pd.isna(d_v):
                     continue
@@ -5650,7 +5650,13 @@ def workspace_perm_transform_compute(
 
         if not out_well_names:
             for wn_c, d_c, z_c, p_c, k_c, rf_c in zip(
-                well_names, depths, zones, fzi_data["phit"], fzi_data["perm"], rock_flags
+                well_names,
+                depths,
+                zones,
+                fzi_data["phit"],
+                fzi_data["perm"],
+                rock_flags,
+                strict=False,
             ):
                 rf_key = str(rf_c) if rf_c is not None else None
                 pt_val = None
@@ -6119,7 +6125,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         swn_vals = np.clip(raw_swn, 0.02, 0.98)
                     else:
                         swn_vals = np.clip(sw_vals, 0.02, 0.98)
-                    for pt_idx, (pc_v, sw_v, swn_v) in enumerate(zip(pc_vals, sw_vals, swn_vals)):
+                    for pt_idx, (pc_v, sw_v, swn_v) in enumerate(zip(pc_vals, sw_vals, swn_vals, strict=False)):
                         if (
                             f"{wn}::{sname}::{pt_idx}" in excl_pt_set
                             or f"{wn}::{sname}::{round(float(pc_v), 2)}" in excl_pt_set
@@ -6573,6 +6579,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     k_list_w,
                     rf_list_w,
                     z_list_w,
+                    strict=False,
                 ):
                     if (
                         md_v is None
@@ -6729,6 +6736,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 tvd_list,
                 rock_flags,
                 zones,
+                strict=False,
             ):
                 if tvd_v is None or not math.isfinite(float(tvd_v)):
                     continue
@@ -9176,10 +9184,6 @@ def workspace_update_well_config(
 ) -> Dict[str, Any]:
     """Persist working top and bottom focus depth (and optional well config/header keys) for a specific well."""
     try:
-        from quick_pp.database import models as db_models
-        from sqlalchemy import select
-        from sqlalchemy.orm.attributes import flag_modified
-
         eph = dict(_ephemeral_well_configs.get((project_id, well_name), {}))
         if req.clear_focus_depth:
             eph["focus_min_depth"] = None
@@ -9439,7 +9443,7 @@ def workspace_save_project_module_params(
     """Merge multi-well module parameter snapshots into `projects.config_data.module_params`."""
     try:
         if not req.entries:
-            mp, from_db = _load_project_module_params(project_id)
+            mp, _ = _load_project_module_params(project_id)
             return {"project_id": project_id, "module_params": mp, "saved": False}
 
         merged: Dict[str, Any] = {}
@@ -9585,13 +9589,11 @@ def _update_cached_well_column(
 ) -> None:
     """Apply rename or delete directly to in-memory cached / ephemeral DataFrames."""
     import time
-    from quick_pp.database import models as db_models
-    from sqlalchemy import select
 
     src = curve.strip().upper()
     dst = target_curve.strip().upper() if target_curve else None
 
-    for key, (ts, cdf) in list(_merged_data_cache.items()):
+    for key, (_ts, cdf) in list(_merged_data_cache.items()):
         if key.startswith(f"{project_id}_{well_name}_"):
             updated = cdf.copy()
             if action == "delete" and src in updated.columns:
@@ -10276,8 +10278,8 @@ def workspace_clear_calculated_curves(
     """Clear all or selected calculated petrophysical curves either top-to-bottom (full well) or within specific formations/depth intervals."""
     try:
         import time
-        from sqlalchemy import bindparam, select, text
-        from quick_pp.database import models as db_models
+
+        from sqlalchemy import bindparam, text
 
         protected = {"DEPTH", "DEPT", "WELL_NAME", "ZONES"}
         if req.curves:
@@ -11430,6 +11432,7 @@ def workspace_swirr_apply(
                 k_arr.tolist(),
                 rf_arr.tolist(),
                 swirr_arr.tolist(),
+                strict=False,
             ):
                 if d_v is None or pd.isna(d_v) or not math.isfinite(float(d_v)):
                     continue
@@ -11654,10 +11657,10 @@ def workspace_multi_well_volumetrics(
                 "std": round(float(np.std(s)), 2),
             }
 
-        zone_names = sorted(list(zone_groups.keys()))
+        zone_names = sorted(zone_groups.keys())
         for z_idx, z_name in enumerate(zone_names):
             rows = zone_groups[z_name]
-            w_count = len(set(r["well_name"] for r in rows))
+            w_count = len({r["well_name"] for r in rows})
 
             gross_vals = [r["gross"] for r in rows if r["gross"] > 0]
             net_res_vals = [r["net_res"] for r in rows]
@@ -11677,7 +11680,7 @@ def workspace_multi_well_volumetrics(
             mean_perm = float(np.mean(perm_vals)) if perm_vals else 10.0
             mean_hcpt = float(np.mean(hcpt_vals)) if hcpt_vals else 0.0
 
-            zp = req.zone_params.get(z_name, {})
+            zp = req.zone_params.get(z_name) or req.zone_params.get("ALL") or {}
 
             # Prepare bounds
             if req.mode == "grv":
@@ -11954,7 +11957,7 @@ def workspace_multi_well_volumetrics(
             field_tornado_items.sort(key=lambda x: x["swing"], reverse=True)
 
         field_totals = {
-            "total_wells": len(set(r["well_name"] for r in well_records)),
+            "total_wells": len({r["well_name"] for r in well_records}),
             "total_zones": len(zonal_summaries),
             "stoiip": field_st,
             "rec_oil": field_ro,

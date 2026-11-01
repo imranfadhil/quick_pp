@@ -97,7 +97,12 @@
 				mode: mv.mode,
 				compute_oil: mv.computeOil,
 				compute_gas: mv.computeGas,
-				well_names: projectData.activeWells.length > 0 ? projectData.activeWells : null,
+				well_names:
+					projectData.selectedWellNames.length > 0
+						? projectData.selectedWellNames
+						: projectData.activeWells.length > 0
+							? projectData.activeWells.map((w) => w.name)
+							: null,
 				zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
 				zone_params: zoneParamsPayload,
 				n_samples: mv.nSamples,

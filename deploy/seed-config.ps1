@@ -41,11 +41,13 @@ if (Test-Path -LiteralPath $envFile) {
     if ($i -lt 1) { continue }
     $k = $t.Substring(0, $i).Trim()
     $v = $t.Substring($i + 1).Trim()
-    # Strip inline comments if unquoted
-    if (-not ($v.StartsWith('"') -or $v.StartsWith("'"))) {
-      $v = ($v -split '\s+#')[0].Trim()
+    # Strip quotes and inline comments (including comments after closing quotes, e.g. KEY="val" # comment)
+    if ($v -match '^"([^"]*)"') {
+      $v = $Matches[1].Trim()
+    } elseif ($v -match "^'([^']*)'") {
+      $v = $Matches[1].Trim()
     } else {
-      $v = $v.Trim('"', "'")
+      $v = ($v -split '\s+#')[0].Trim()
     }
     $dotenv[$k] = $v
   }
