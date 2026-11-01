@@ -24,7 +24,9 @@
 				totalGas: activeResult.field_totals?.total_gas,
 				exceedanceCurve: activeResult.field_totals?.exceedance_curve ?? [],
 				histogram: activeResult.field_totals?.histogram ?? [],
-				tornado: activeResult.field_totals?.tornado ?? []
+				tornado: activeResult.field_totals?.tornado ?? [],
+				inputDistributions: activeResult.field_totals?.input_distributions ?? {},
+				assumptionsRegister: activeResult.field_totals?.assumptions_register ?? activeResult.assumptions_register
 			};
 		}
 		const z = activeResult.zonal_summary.find((x) => x.zone === mv.selectedZone);
@@ -41,7 +43,9 @@
 			totalGas: z.giip,
 			exceedanceCurve: z.exceedance_curve ?? [],
 			histogram: z.histogram ?? [],
-			tornado: z.tornado ?? []
+			tornado: z.tornado ?? [],
+			inputDistributions: z.input_distributions ?? {},
+			assumptionsRegister: z.assumptions_register ?? activeResult.assumptions_register
 		};
 	});
 
@@ -186,6 +190,11 @@
 				<span class="text-[11px] text-[var(--text-muted)]">
 					• {activeResult.mode === 'area' ? 'Drainage Area' : 'GRV'} Mode ({activeResult.n_samples} LHS)
 				</span>
+				{#if activeResult.contacts}
+					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700 border border-slate-200">
+						Contacts: {activeResult.contacts.owc != null ? `OWC ${activeResult.contacts.owc}m` : ''} {activeResult.contacts.goc != null ? `| GOC ${activeResult.contacts.goc}m` : ''}
+					</span>
+				{/if}
 			{/if}
 		</div>
 
@@ -222,6 +231,24 @@
 					onclick={() => (mv.activeTab = 'exceedance')}
 				>
 					S-Curve (1-CDF)
+				</button>
+				<button
+					type="button"
+					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'inputs'
+						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
+						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+					onclick={() => (mv.activeTab = 'inputs')}
+				>
+					Input Distributions
+				</button>
+				<button
+					type="button"
+					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'assumptions'
+						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
+						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+					onclick={() => (mv.activeTab = 'assumptions')}
+				>
+					Assumptions & Basis
 				</button>
 				<button
 					type="button"
@@ -596,6 +623,379 @@
 							</svg>
 						</div>
 					{/if}
+				</div>
+			{/if}
+
+			<!-- TAB: Input Sample Distributions & Statistics -->
+			{#if mv.activeTab === 'inputs'}
+				<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-xs">
+					<div class="mb-3 flex items-center justify-between text-xs">
+						<div>
+							<h4 class="font-bold text-[var(--text-primary)]">
+								Input Sample Distributions & Parameter Statistics
+							</h4>
+							<p class="text-[11px] text-[var(--text-secondary)]">
+								Evaluated over {activeResult?.n_samples ?? 5000} Latin Hypercube realizations. Assumed distribution forms and empirical sample bounds for volumetric inputs.
+							</p>
+						</div>
+						<div class="flex items-center gap-3 text-[11px]">
+							<span class="flex items-center gap-1.5">
+								<span class="inline-block h-2 w-3 rounded-xs bg-amber-500 border border-amber-600"></span>
+								<span>P90 (Low)</span>
+							</span>
+							<span class="flex items-center gap-1.5">
+								<span class="inline-block h-2 w-3 rounded-xs bg-blue-600 border border-blue-700"></span>
+								<span>P50 (Median)</span>
+							</span>
+							<span class="flex items-center gap-1.5">
+								<span class="inline-block h-2 w-3 rounded-xs bg-emerald-500 border border-emerald-600"></span>
+								<span>P10 (High)</span>
+							</span>
+						</div>
+					</div>
+
+					{#if activeData.inputDistributions && Object.keys(activeData.inputDistributions).length > 0}
+						<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+							{#each Object.entries(activeData.inputDistributions) as [paramKey, dist]}
+								{@const minV = dist.min}
+								{@const maxV = dist.max}
+								{@const vSpan = maxV - minV || 1}
+								{@const hist = dist.histogram ?? []}
+								{@const maxCount = hist.length ? Math.max(...hist.map((b) => b.count)) : 1}
+								{@const cardW = 320}
+								{@const cardH = 130}
+								{@const mLeft = 32}
+								{@const mRight = 16}
+								{@const mTop = 15}
+								{@const mBot = 22}
+								{@const pW = cardW - mLeft - mRight}
+								{@const pH = cardH - mTop - mBot}
+								{@const scaleX = (val: number) => mLeft + ((val - minV) / vSpan) * pW}
+								{@const p90X = scaleX(dist.p90)}
+								{@const p50X = scaleX(dist.p50)}
+								{@const p10X = scaleX(dist.p10)}
+
+								<div class="flex flex-col rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)]/30 p-2.5 shadow-2xs">
+									<!-- Card Header -->
+									<div class="flex items-center justify-between pb-1 border-b border-[var(--border-hairline)]">
+										<div class="flex items-center gap-1.5">
+											<span class="font-bold text-xs text-[var(--text-primary)]">{dist.label}</span>
+											{#if dist.unit}
+												<span class="text-[10px] text-[var(--text-muted)]">({dist.unit})</span>
+											{/if}
+										</div>
+										<span class="rounded-xs bg-blue-100/70 text-blue-800 px-1.5 py-0.5 text-[9.5px] font-semibold">
+											{dist.dist_type}
+										</span>
+									</div>
+
+									<!-- Mini Distribution SVG Histogram -->
+									<div class="my-1.5 flex justify-center">
+										<svg width="100%" height={cardH} viewBox="0 0 {cardW} {cardH}" class="overflow-visible select-none">
+											<!-- Plot Background -->
+											<rect x={mLeft} y={mTop} width={pW} height={pH} fill="rgba(248, 250, 252, 0.7)" rx="2" />
+
+											<!-- Histogram Bars -->
+											{#each hist as b}
+												{@const bx0 = scaleX(b.bin_start)}
+												{@const bx1 = scaleX(b.bin_end)}
+												{@const barW = Math.max(1, bx1 - bx0 - 0.8)}
+												{@const barH = (b.count / maxCount) * (pH - 4)}
+												{@const by = mTop + pH - barH}
+												<rect
+													x={bx0}
+													y={by}
+													width={barW}
+													height={barH}
+													fill="rgba(59, 130, 246, 0.45)"
+													stroke="rgba(37, 99, 235, 0.6)"
+													stroke-width="0.5"
+													rx="1"
+												>
+													<title>{b.bin_start} - {b.bin_end} {dist.unit}: {b.count} samples</title>
+												</rect>
+											{/each}
+
+											<!-- Percentile Vertical Lines -->
+											<!-- P90 -->
+											<line
+												x1={p90X}
+												y1={mTop}
+												x2={p90X}
+												y2={mTop + pH}
+												stroke="#d97706"
+												stroke-width="1.5"
+												stroke-dasharray="2,2"
+											/>
+											<text x={p90X} y={mTop - 3} text-anchor="middle" font-size="8" font-weight="bold" fill="#d97706">
+												P90
+											</text>
+
+											<!-- P50 -->
+											<line
+												x1={p50X}
+												y1={mTop}
+												x2={p50X}
+												y2={mTop + pH}
+												stroke="#2563eb"
+												stroke-width="1.8"
+											/>
+											<text x={p50X} y={mTop - 3} text-anchor="middle" font-size="8.5" font-weight="bold" fill="#2563eb">
+												P50
+											</text>
+
+											<!-- P10 -->
+											<line
+												x1={p10X}
+												y1={mTop}
+												x2={p10X}
+												y2={mTop + pH}
+												stroke="#059669"
+												stroke-width="1.5"
+												stroke-dasharray="2,2"
+											/>
+											<text x={p10X} y={mTop - 3} text-anchor="middle" font-size="8" font-weight="bold" fill="#059669">
+												P10
+											</text>
+
+											<!-- X-Axis Baseline & Ticks -->
+											<line x1={mLeft} y1={mTop + pH} x2={mLeft + pW} y2={mTop + pH} stroke="#94a3b8" stroke-width="1" />
+											<text x={mLeft} y={mTop + pH + 12} text-anchor="start" font-size="8" fill="var(--text-muted)">
+												{fmtNum(minV, 2)}
+											</text>
+											<text x={p50X} y={mTop + pH + 12} text-anchor="middle" font-size="8" font-weight="bold" fill="#2563eb">
+												{fmtNum(dist.p50, 2)}
+											</text>
+											<text x={mLeft + pW} y={mTop + pH + 12} text-anchor="end" font-size="8" fill="var(--text-muted)">
+												{fmtNum(maxV, 2)}
+											</text>
+										</svg>
+									</div>
+
+									<!-- Numerical Statistics Table -->
+									<div class="mt-1 grid grid-cols-3 gap-1 rounded-xs bg-[var(--bg-surface)] p-1.5 text-[10px] border border-[var(--border-hairline)]">
+										<div>
+											<span class="text-[var(--text-muted)]">P90 (Low):</span>
+											<div class="font-bold text-amber-800 mono-num">{fmtNum(dist.p90, 3)}</div>
+										</div>
+										<div>
+											<span class="text-[var(--text-muted)]">P50 (Median):</span>
+											<div class="font-bold text-blue-900 mono-num">{fmtNum(dist.p50, 3)}</div>
+										</div>
+										<div>
+											<span class="text-[var(--text-muted)]">P10 (High):</span>
+											<div class="font-bold text-emerald-800 mono-num">{fmtNum(dist.p10, 3)}</div>
+										</div>
+										<div class="col-span-2 pt-0.5 border-t border-[var(--border-hairline)]">
+											<span class="text-[var(--text-muted)]">Mean ± Std:</span>
+											<span class="font-medium mono-num text-slate-700 ml-1">
+												{fmtNum(dist.mean, 3)} ± {fmtNum(dist.std, 3)}
+											</span>
+										</div>
+										<div class="pt-0.5 border-t border-[var(--border-hairline)] text-right">
+											<span class="text-[var(--text-muted)]">Range:</span>
+											<span class="mono-num text-slate-600 ml-0.5">[{fmtNum(minV, 2)}, {fmtNum(maxV, 2)}]</span>
+										</div>
+									</div>
+								</div>
+							{/each}
+						</div>
+					{:else}
+						<div class="py-12 text-center text-xs text-[var(--text-muted)]">
+							No sample distribution data found. Please click "Compute Volumetrics" in the left panel to generate distributions.
+						</div>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- TAB: Assumptions Register & Basis of Estimate -->
+			{#if mv.activeTab === 'assumptions'}
+				<div class="flex flex-col gap-3">
+					<!-- Summary Banner -->
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-xs">
+						<div class="flex items-center justify-between border-b border-[var(--border-hairline)] pb-2 mb-2.5">
+							<div>
+								<h4 class="font-bold text-sm text-[var(--text-primary)]">
+									Basis of Estimate & Reservoir Assumptions Register
+								</h4>
+								<p class="text-[11px] text-[var(--text-secondary)]">
+									Formal audit documentation complying with SPE/WPC/AAPG/SPEE Petroleum Resources Management System (PRMS 2018).
+								</p>
+							</div>
+							<span class="rounded-xs bg-emerald-100 text-emerald-900 border border-emerald-300 px-2 py-0.5 text-xs font-bold">
+								SPE-PRMS Compliant
+							</span>
+						</div>
+
+						<!-- Core Methodology Cards -->
+						<div class="grid grid-cols-1 md:grid-cols-3 gap-2.5 text-xs">
+							<div class="rounded-xs border border-blue-200 bg-blue-50/50 p-2.5">
+								<div class="font-bold text-blue-900 mb-1">1. Evaluation Standard</div>
+								<div class="text-[11px] text-blue-950 font-medium">SPE-PRMS (2018) Guidelines</div>
+								<div class="text-[10px] text-blue-700 mt-1 leading-relaxed">
+									1P / P90 (90% exceedance probability - Conservative), 2P / P50 (Best Estimate), and 3P / P10 (Optimistic High).
+								</div>
+							</div>
+
+							<div class="rounded-xs border border-purple-200 bg-purple-50/50 p-2.5">
+								<div class="font-bold text-purple-900 mb-1">2. Simulation Engine</div>
+								<div class="text-[11px] text-purple-950 font-medium">
+									Latin Hypercube Sampling (LHS)
+								</div>
+								<div class="text-[10px] text-purple-700 mt-1 leading-relaxed">
+									N = {activeResult?.n_samples ?? 5000} realizations with stratified hypercube stratification. Preserves parameter tail distributions more efficiently than standard Monte Carlo.
+								</div>
+							</div>
+
+							<div class="rounded-xs border border-amber-200 bg-amber-50/50 p-2.5">
+								<div class="font-bold text-amber-900 mb-1">3. Multi-Zone Rollup Principle</div>
+								<div class="text-[11px] text-amber-950 font-medium">Probabilistic Non-Additive Addition</div>
+								<div class="text-[10px] text-amber-800 mt-1 leading-relaxed">
+									Field totals are calculated by summing realization arrays zone-by-zone before computing final percentiles, preserving true geological independence.
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- Fluid Contacts & Hydrocarbon Regime Definition -->
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-xs text-xs">
+						<h5 class="font-bold text-[var(--text-primary)] mb-1.5 flex items-center justify-between">
+							<span>Fluid Contacts & Column Partitioning Rules</span>
+							{#if activeResult?.contacts?.source}
+								<span class="text-[10px] text-blue-700 font-normal">Source: {activeResult.contacts.source}</span>
+							{/if}
+						</h5>
+						<div class="overflow-x-auto border border-[var(--border-hairline)] rounded-xs">
+							<table class="w-full border-collapse text-left text-xs">
+								<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+									<tr class="h-6 border-b border-[var(--border-hairline)]">
+										<th class="px-2 font-semibold">Boundary / Contact</th>
+										<th class="px-2 font-semibold">Depth (TVDSS)</th>
+										<th class="px-2 font-semibold">Partitioned Phase</th>
+										<th class="px-2 font-semibold">PRMS Volumetric Allocation</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-[var(--border-hairline)]">
+									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+										<td class="px-2 font-medium">Gas-Oil Contact (GOC)</td>
+										<td class="mono-num px-2 font-bold text-blue-800">
+											{activeResult?.contacts?.goc != null ? `${activeResult.contacts.goc} m` : 'Not Encountered / Above Top'}
+										</td>
+										<td class="px-2 font-medium text-amber-800">Gas Cap (Free Gas)</td>
+										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+											Interval above GOC contributes to Net Gas Pay (h_gas) & GIIP.
+										</td>
+									</tr>
+									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+										<td class="px-2 font-medium">Oil-Water Contact (OWC)</td>
+										<td class="mono-num px-2 font-bold text-blue-800">
+											{activeResult?.contacts?.owc != null ? `${activeResult.contacts.owc} m` : 'Not Encountered / Below TD'}
+										</td>
+										<td class="px-2 font-medium text-amber-800">Oil Leg (STOIIP)</td>
+										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+											Interval between GOC and OWC contributes to Net Oil Pay (h_oil) & STOIIP + Associated Gas (Rs).
+										</td>
+									</tr>
+									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+										<td class="px-2 font-medium">Free Water Level / Aquifer</td>
+										<td class="mono-num px-2 text-[var(--text-muted)]">
+											{activeResult?.contacts?.owc != null ? `Below ${activeResult.contacts.owc} m` : 'Below Reservoir Base'}
+										</td>
+										<td class="px-2 font-medium text-slate-500">Water Leg / Aquifer</td>
+										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+											Excluded from hydrocarbon pay (h_pay = 0).
+										</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+					</div>
+
+					<!-- Reservoir Cut-offs Applied -->
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-xs text-xs">
+						<h5 class="font-bold text-[var(--text-primary)] mb-1.5">
+							Petrophysical Cut-offs Applied (Well Log Integration)
+						</h5>
+						<div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2">
+								<div class="text-[10px] uppercase font-semibold text-[var(--text-muted)]">Clay Volume Boundary</div>
+								<div class="mono-num text-sm font-bold text-slate-800">Vsh ≤ {mv.vshMax} v/v</div>
+								<div class="text-[10px] text-[var(--text-secondary)] mt-0.5">Defines Gross Sand / Net Reservoir column.</div>
+							</div>
+							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2">
+								<div class="text-[10px] uppercase font-semibold text-[var(--text-muted)]">Porosity Threshold</div>
+								<div class="mono-num text-sm font-bold text-slate-800">Φ ≥ {mv.phitMin} v/v</div>
+								<div class="text-[10px] text-[var(--text-secondary)] mt-0.5">Defines permeable storage pore volume.</div>
+							</div>
+							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2">
+								<div class="text-[10px] uppercase font-semibold text-[var(--text-muted)]">Water Saturation Pay Cut-off</div>
+								<div class="mono-num text-sm font-bold text-slate-800">Sw ≤ {mv.swtMax} v/v</div>
+								<div class="text-[10px] text-[var(--text-secondary)] mt-0.5">Defines Net Hydrocarbon Pay column.</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- Assumed Distribution Types & Analogue Justifications -->
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-xs text-xs">
+						<h5 class="font-bold text-[var(--text-primary)] mb-1.5">
+							Parameter Probability Distribution Shapes & Engineering Justification
+						</h5>
+						<div class="overflow-x-auto border border-[var(--border-hairline)] rounded-xs">
+							<table class="w-full border-collapse text-left text-xs">
+								<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+									<tr class="h-6 border-b border-[var(--border-hairline)]">
+										<th class="px-2 font-semibold">Parameter</th>
+										<th class="px-2 font-semibold">Distribution Model</th>
+										<th class="px-2 font-semibold">Engineering Justification</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-[var(--border-hairline)]">
+									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+										<td class="px-2 font-medium">Drainage Area (A) / GRV</td>
+										<td class="px-2 font-semibold text-blue-700">Truncated Normal / Lognormal</td>
+										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+											Bounded by minimum seismic closure fault polygon and maximum spill contour (±2.5σ limits).
+										</td>
+									</tr>
+									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+										<td class="px-2 font-medium">Net Pay Thickness (h) & NTG</td>
+										<td class="px-2 font-semibold text-blue-700">Empirical Cut-off Integration</td>
+										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+											Directly integrated from high-resolution petrophysical logs across all penetrating wells (mean ± inter-well variance).
+										</td>
+									</tr>
+									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+										<td class="px-2 font-medium">Average Porosity (Φe)</td>
+										<td class="px-2 font-semibold text-blue-700">Truncated Normal [0.01 - 0.50]</td>
+										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+											Pay-weighted mean porosity bounded physically between minimum cut-off and clean sand limit.
+										</td>
+									</tr>
+									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+										<td class="px-2 font-medium">Average Water Saturation (Sw)</td>
+										<td class="px-2 font-semibold text-blue-700">Truncated Normal [0.02 - 0.98]</td>
+										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+											Derived from Archie/Dual-Water resistivity saturation models calibrated with Step 5 Capillary Pressure / SHF.
+										</td>
+									</tr>
+									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+										<td class="px-2 font-medium">Formation Volume Factors (Bo, Bg)</td>
+										<td class="px-2 font-semibold text-blue-700">Truncated Normal / Triangular</td>
+										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+											PVT laboratory report measurement uncertainty and empirical Standing-Katz correlations.
+										</td>
+									</tr>
+									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+										<td class="px-2 font-medium">Recovery Factors (RFoil, RFgas)</td>
+										<td class="px-2 font-semibold text-blue-700">Truncated Triangular / Normal</td>
+										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+											Derived from regional analogue drive mechanisms (solution gas drive, waterflood, or gas depletion).
+										</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+					</div>
 				</div>
 			{/if}
 

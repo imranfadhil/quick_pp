@@ -6,12 +6,17 @@
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
-	import { workbench, type VolumetricZoneParamConfig } from '$lib/state/workbench.svelte';
+	import {
+		workbench,
+		DEFAULT_VOLUMETRIC_ZONE_CONFIG,
+		type VolumetricZoneParamConfig
+	} from '$lib/state/workbench.svelte';
 	import { downloadCsv, fmtNum } from '$lib/utils/formatters';
 
 	const mv = workbench.multiWellVolumetrics;
 
 	let isCalculating = $state(false);
+	let isSaved = $state(false);
 	let lastError = $state<string | null>(null);
 	let saveMessage = $state<string | null>(null);
 
@@ -29,34 +34,24 @@
 		return Array.from(zones).sort();
 	});
 
-	// Get or initialize config for active selected zone
-	function getZoneConfig(zone: string): VolumetricZoneParamConfig {
+	function ensureZoneConfig(zone: string) {
+		if (!zone) return;
 		if (!mv.zoneConfigs[zone]) {
-			mv.zoneConfigs[zone] = {
-				areaMean: 1200.0,
-				areaStd: 300.0,
-				grvMean: 50.0,
-				grvStd: 15.0,
-				thickMean: 25.0,
-				thickStd: 5.0,
-				ntgMean: 0.65,
-				ntgStd: 0.10,
-				poroMean: 0.18,
-				swMean: 0.35,
-				boP50: 1.25,
-				bgP50: 0.005,
-				rs: 500.0,
-				rfOil: 0.30,
-				rfGas: 0.70
-			};
+			const fallback = mv.zoneConfigs['ALL'] ?? DEFAULT_VOLUMETRIC_ZONE_CONFIG;
+			mv.zoneConfigs[zone] = { ...fallback };
 		}
-		return mv.zoneConfigs[zone] as VolumetricZoneParamConfig;
 	}
 
+	onMount(() => {
+		ensureZoneConfig('ALL');
+		if (mv.selectedZone && mv.selectedZone !== 'ALL') {
+			ensureZoneConfig(mv.selectedZone);
+		}
+	});
+
+	// Pure derived accessor without state mutation
 	let activeZoneCfg = $derived(
-		mv.selectedZone === 'ALL'
-			? getZoneConfig('ALL')
-			: getZoneConfig(mv.selectedZone)
+		mv.zoneConfigs[mv.selectedZone] ?? mv.zoneConfigs['ALL'] ?? DEFAULT_VOLUMETRIC_ZONE_CONFIG
 	);
 
 	async function runVolumetrics(persist: boolean = false) {
@@ -97,6 +92,12 @@
 				mode: mv.mode,
 				compute_oil: mv.computeOil,
 				compute_gas: mv.computeGas,
+				contact_source: mv.contactSource,
+				reservoir_type: mv.reservoirType,
+				owc: mv.owc,
+				goc: mv.goc,
+				gwc: mv.gwc,
+				contacts_by_zone: mv.contactsByZone,
 				well_names:
 					projectData.selectedWellNames.length > 0
 						? projectData.selectedWellNames
@@ -118,10 +119,13 @@
 			projectData.volumetricResult = res;
 
 			if (persist) {
-				saveMessage = 'Volumetric Evaluation & Parameters Saved to Project ✓';
+				isSaved = true;
+				saveMessage = 'Volumetric Assessment & Parameters Saved to Project ✓';
 				setTimeout(() => {
 					saveMessage = null;
 				}, 4000);
+			} else {
+				isSaved = false;
 			}
 		} catch (e: any) {
 			lastError = e?.message || 'Failed to compute multi-well volumetrics.';
@@ -168,12 +172,6 @@
 			res.well_summary
 		);
 	}
-
-	onMount(() => {
-		if (!projectData.volumetricResult && workbench.projectId) {
-			runVolumetrics(false);
-		}
-	});
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
@@ -192,6 +190,101 @@
 			</div>
 		{/if}
 
+		<!-- Fluid Contacts & Hydrocarbon Regime Section -->
+		<ParameterSection
+			title="Fluid Contacts & Hydrocarbon Regime"
+			badge={mv.reservoirType === 'auto' ? 'Auto Contacts' : mv.reservoirType.toUpperCase()}
+		>
+			<div class="flex items-center justify-between py-1 text-xs">
+				<span class="font-medium text-[var(--text-secondary)]">Contact Source:</span>
+				<div class="flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10.5px]">
+					<button
+						type="button"
+						class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.contactSource === 'inherit'
+							? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-xs'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						onclick={() => (mv.contactSource = 'inherit')}
+					>
+						Inherit (Step 5 SHF)
+					</button>
+					<button
+						type="button"
+						class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.contactSource === 'custom'
+							? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-xs'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						onclick={() => (mv.contactSource = 'custom')}
+					>
+						Custom TVDSS
+					</button>
+				</div>
+			</div>
+
+			<div class="mt-1 flex items-center justify-between text-xs">
+				<span class="font-medium text-[var(--text-secondary)]">Reservoir Regime:</span>
+				<select
+					bind:value={mv.reservoirType}
+					class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
+				>
+					<option value="auto">Auto from Contacts</option>
+					<option value="oil_and_gas">Gas Cap + Oil Leg</option>
+					<option value="oil_only">Oil Leg Only (STOIIP)</option>
+					<option value="gas_only">Gas Reservoir Only (GIIP)</option>
+				</select>
+			</div>
+
+			{#if mv.contactSource === 'inherit'}
+				<div class="mt-2 rounded-xs border border-blue-200 bg-blue-50/50 p-2 text-[11px] text-blue-900">
+					<div class="font-semibold flex items-center justify-between">
+						<span>Step 5 SHF Contacts</span>
+						<span class="text-[10px] text-blue-700 font-normal">Auto-linked</span>
+					</div>
+					{#if projectData.volumetricResult?.contacts}
+						<div class="mt-1 grid grid-cols-2 gap-1 text-[10.5px]">
+							<div>OWC: <span class="font-bold">{projectData.volumetricResult.contacts.owc != null ? `${projectData.volumetricResult.contacts.owc} m` : 'None / Below TD'}</span></div>
+							<div>GOC: <span class="font-bold">{projectData.volumetricResult.contacts.goc != null ? `${projectData.volumetricResult.contacts.goc} m` : 'None / Above Top'}</span></div>
+						</div>
+						<div class="mt-0.5 text-[9.5px] text-blue-700">
+							Source: {projectData.volumetricResult.contacts.source}
+						</div>
+					{:else}
+						<div class="mt-1 text-[10px] text-slate-600">
+							Auto-reads FWL from Step 5 Saturation-Height analysis or database fluid contacts.
+						</div>
+					{/if}
+				</div>
+			{:else}
+				<div class="mt-2 flex flex-col gap-1 border-t border-[var(--border-hairline)] pt-1.5">
+					<span class="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+						Custom TVDSS Fluid Contacts
+					</span>
+					<NumericScrubber
+						label="Gas-Oil Contact (GOC TVDSS)"
+						bind:value={mv.goc}
+						unit="m"
+						min={-5000}
+						max={0}
+						step={5}
+					/>
+					<NumericScrubber
+						label="Oil-Water Contact (OWC TVDSS)"
+						bind:value={mv.owc}
+						unit="m"
+						min={-5000}
+						max={0}
+						step={5}
+					/>
+					<NumericScrubber
+						label="Gas-Water Contact (GWC TVDSS)"
+						bind:value={mv.gwc}
+						unit="m"
+						min={-5000}
+						max={0}
+						step={5}
+					/>
+				</div>
+			{/if}
+		</ParameterSection>
+
 		<!-- Net Pay Cutoffs Section -->
 		<ParameterSection title="Net Rock & Net Pay Cut-offs" badge="All Wells">
 			<NumericScrubber
@@ -201,7 +294,6 @@
 				min={0.05}
 				max={0.90}
 				step={0.02}
-				onrun={() => runVolumetrics(false)}
 			/>
 			<NumericScrubber
 				label="Min Porosity (Φ,min)"
@@ -210,7 +302,6 @@
 				min={0.01}
 				max={0.35}
 				step={0.005}
-				onrun={() => runVolumetrics(false)}
 			/>
 			<NumericScrubber
 				label="Max Water Sat (Sw,max)"
@@ -219,7 +310,6 @@
 				min={0.10}
 				max={0.95}
 				step={0.02}
-				onrun={() => runVolumetrics(false)}
 			/>
 		</ParameterSection>
 
@@ -233,10 +323,7 @@
 						class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.mode === 'area'
 							? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-xs'
 							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
-						onclick={() => {
-							mv.mode = 'area';
-							runVolumetrics(false);
-						}}
+						onclick={() => (mv.mode = 'area')}
 					>
 						Drainage Area (Acres)
 					</button>
@@ -245,32 +332,29 @@
 						class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.mode === 'grv'
 							? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-xs'
 							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
-						onclick={() => {
-							mv.mode = 'grv';
-							runVolumetrics(false);
-						}}
+						onclick={() => (mv.mode = 'grv')}
 					>
 						GRV (10⁶ m³)
 					</button>
 				</div>
 			</div>
 
-			<div class="mt-1 flex items-center justify-between border-t border-[var(--border-hairline)] pt-1 text-xs">
-				<span class="font-medium text-[var(--text-secondary)]">Phases:</span>
-				<div class="flex items-center gap-3">
-					<label class="flex items-center gap-1 text-[11px] font-medium cursor-pointer">
+			<div class="mt-2 flex items-center justify-between border-t border-[var(--border-hairline)] pt-1.5 text-xs">
+				<span class="font-medium text-[var(--text-secondary)]">Hydrocarbon Phases:</span>
+				<div class="flex items-center gap-3 text-[11px]">
+					<label class="flex items-center gap-1 cursor-pointer">
 						<input
 							type="checkbox"
 							bind:checked={mv.computeOil}
-							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+							class="rounded-xs text-[var(--accent-primary)]"
 						/>
 						<span>Oil (STOIIP)</span>
 					</label>
-					<label class="flex items-center gap-1 text-[11px] font-medium cursor-pointer">
+					<label class="flex items-center gap-1 cursor-pointer">
 						<input
 							type="checkbox"
 							bind:checked={mv.computeGas}
-							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+							class="rounded-xs text-[var(--accent-primary)]"
 						/>
 						<span>Gas (GIIP)</span>
 					</label>
@@ -287,6 +371,7 @@
 				<span class="text-[11px] font-medium text-[var(--text-secondary)]">Edit Formation:</span>
 				<select
 					bind:value={mv.selectedZone}
+					onchange={() => ensureZoneConfig(mv.selectedZone)}
 					class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
 				>
 					<option value="ALL">All Formations (Default)</option>
@@ -296,16 +381,18 @@
 				</select>
 			</div>
 
+			<div class="mb-1 text-[10px] text-[var(--text-muted)] italic">
+				Assumed: Area/GRV ~ Truncated Normal; Porosity & Sw ~ Truncated Normal from well averages; Bo/Bg/RF ~ Truncated Normal / Triangular.
+			</div>
 			{#if mv.mode === 'area'}
 				<div class="grid grid-cols-2 gap-x-1.5">
 					<NumericScrubber
-						label="Area Mean"
+						label="Area Mean (Trunc. Normal)"
 						bind:value={activeZoneCfg.areaMean}
 						unit="ac"
 						min={50}
 						max={25000}
 						step={50}
-						onrun={() => runVolumetrics(false)}
 					/>
 					<NumericScrubber
 						label="Area StdDev"
@@ -314,7 +401,6 @@
 						min={10}
 						max={5000}
 						step={25}
-						onrun={() => runVolumetrics(false)}
 					/>
 				</div>
 			{:else}
@@ -326,7 +412,6 @@
 						min={1}
 						max={1000}
 						step={2}
-						onrun={() => runVolumetrics(false)}
 					/>
 					<NumericScrubber
 						label="GRV StdDev"
@@ -335,7 +420,6 @@
 						min={0.5}
 						max={200}
 						step={1}
-						onrun={() => runVolumetrics(false)}
 					/>
 				</div>
 			{/if}
@@ -353,7 +437,6 @@
 							min={1.02}
 							max={2.20}
 							step={0.02}
-							onrun={() => runVolumetrics(false)}
 						/>
 						<NumericScrubber
 							label="Solution GOR (Rs)"
@@ -362,7 +445,6 @@
 							min={0}
 							max={5000}
 							step={50}
-							onrun={() => runVolumetrics(false)}
 						/>
 						<NumericScrubber
 							label="Oil RF"
@@ -371,7 +453,6 @@
 							min={0.05}
 							max={0.65}
 							step={0.02}
-							onrun={() => runVolumetrics(false)}
 						/>
 					{/if}
 
@@ -383,7 +464,6 @@
 							min={0.001}
 							max={0.03}
 							step={0.0005}
-							onrun={() => runVolumetrics(false)}
 						/>
 						<NumericScrubber
 							label="Gas RF"
@@ -392,7 +472,6 @@
 							min={0.20}
 							max={0.90}
 							step={0.02}
-							onrun={() => runVolumetrics(false)}
 						/>
 					{/if}
 				</div>
@@ -407,7 +486,6 @@
 				min={500}
 				max={20000}
 				step={500}
-				onrun={() => runVolumetrics(false)}
 			/>
 			<NumericScrubber
 				label="Random Seed"
@@ -415,33 +493,7 @@
 				min={1}
 				max={9999}
 				step={1}
-				onrun={() => runVolumetrics(false)}
 			/>
-
-			<div class="mt-2 flex flex-col gap-1.5">
-				<button
-					type="button"
-					onclick={() => runVolumetrics(false)}
-					disabled={isCalculating}
-					class="flex h-7 w-full items-center justify-center gap-1.5 rounded-sm bg-[var(--accent-primary)] text-xs font-semibold text-white shadow-xs hover:bg-blue-600 disabled:opacity-50"
-				>
-					{#if isCalculating}
-						<span class="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
-						<span>Running Monte Carlo...</span>
-					{:else}
-						<span>Run Field Volumetrics (LHS)</span>
-					{/if}
-				</button>
-
-				<button
-					type="button"
-					onclick={() => runVolumetrics(true)}
-					disabled={isCalculating}
-					class="flex h-6 w-full items-center justify-center gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[11px] font-medium text-[var(--text-primary)] hover:bg-slate-200"
-				>
-					<span>Save Volumetric Parameters to Project</span>
-				</button>
-			</div>
 		</ParameterSection>
 
 		<!-- Exports -->
@@ -465,5 +517,39 @@
 				</button>
 			</div>
 		</ParameterSection>
+	</div>
+
+	<!-- Action Footer -->
+	<div class="border-t border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2">
+		<div class="flex items-center gap-1.5">
+			<button
+				type="button"
+				onclick={() => runVolumetrics(false)}
+				disabled={isCalculating || !workbench.projectId}
+				class="flex h-7 flex-1 items-center justify-center gap-1.5 rounded-sm bg-[var(--accent-primary)] text-xs font-semibold text-white shadow-xs hover:bg-blue-600 disabled:opacity-50"
+				title="Run Latin Hypercube Monte Carlo volumetric simulation"
+			>
+				{#if isCalculating}
+					<span class="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
+					<span>Computing...</span>
+				{:else}
+					<span>Compute Volumetrics</span>
+				{/if}
+			</button>
+
+			<button
+				type="button"
+				onclick={() => runVolumetrics(true)}
+				disabled={isCalculating || !projectData.volumetricResult}
+				class="flex h-7 items-center justify-center gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-slate-200 disabled:opacity-40"
+				title="Save volumetric assessment to project database"
+			>
+				{#if isSaved}
+					<span class="font-medium text-emerald-600">✓ Saved</span>
+				{:else}
+					<span>Save to Project</span>
+				{/if}
+			</button>
+		</div>
 	</div>
 </div>

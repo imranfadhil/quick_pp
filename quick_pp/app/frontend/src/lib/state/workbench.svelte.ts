@@ -280,6 +280,49 @@ export interface HistBin {
 	count: number;
 }
 
+export interface InputDistSummary {
+	param: string;
+	label: string;
+	unit: string;
+	dist_type: string;
+	n_samples?: number;
+	mean: number;
+	std: number;
+	min: number;
+	max: number;
+	p90: number;
+	p50: number;
+	p10: number;
+	histogram: HistBin[];
+}
+
+export interface AssumptionsRegister {
+	evaluation_standard: string;
+	reservoir_type_applied: string;
+	contact_source_applied: string;
+	fluid_contacts: {
+		goc_tvdss: number | null;
+		owc_tvdss: number | null;
+		gwc_tvdss: number | null;
+		source: string;
+	};
+	cut_offs: {
+		vsh_max: number;
+		phit_min: number;
+		swt_max: number;
+	};
+	monte_carlo_engine: {
+		method: string;
+		realizations: number;
+		random_seed: number;
+	};
+	parameter_assumptions: Array<{
+		parameter: string;
+		distribution: string;
+		justification: string;
+	}>;
+}
+
 export interface ZonalVolumetricSummary {
 	zone: string;
 	well_count: number;
@@ -303,6 +346,15 @@ export interface ZonalVolumetricSummary {
 	exceedance_curve: ExceedancePoint[];
 	histogram: HistBin[];
 	tornado: TornadoItem[];
+	input_distributions?: Record<string, InputDistSummary>;
+	assumptions_register?: AssumptionsRegister;
+	contacts?: {
+		goc: number | null;
+		owc: number | null;
+		gwc: number | null;
+		reservoir_type: string;
+		source: string;
+	};
 }
 
 export interface FieldVolumetricTotals {
@@ -317,6 +369,8 @@ export interface FieldVolumetricTotals {
 	exceedance_curve: ExceedancePoint[];
 	histogram: HistBin[];
 	tornado: TornadoItem[];
+	input_distributions?: Record<string, InputDistSummary>;
+	assumptions_register?: AssumptionsRegister;
 }
 
 export interface MultiWellVolumetricResult {
@@ -341,6 +395,13 @@ export interface MultiWellVolumetricResult {
 	}>;
 	zonal_summary: ZonalVolumetricSummary[];
 	field_totals: FieldVolumetricTotals;
+	contacts?: {
+		goc: number | null;
+		owc: number | null;
+		gwc: number | null;
+		source: string;
+	};
+	assumptions_register?: AssumptionsRegister;
 }
 
 export interface VolumetricZoneParamConfig {
@@ -361,16 +422,40 @@ export interface VolumetricZoneParamConfig {
 	rfGas: number;
 }
 
+export const DEFAULT_VOLUMETRIC_ZONE_CONFIG: VolumetricZoneParamConfig = {
+	areaMean: 1200.0,
+	areaStd: 300.0,
+	grvMean: 50.0,
+	grvStd: 15.0,
+	thickMean: 25.0,
+	thickStd: 5.0,
+	ntgMean: 0.65,
+	ntgStd: 0.10,
+	poroMean: 0.18,
+	swMean: 0.35,
+	boP50: 1.25,
+	bgP50: 0.005,
+	rs: 500.0,
+	rfOil: 0.30,
+	rfGas: 0.70
+};
+
 export interface MultiWellVolumetricsState {
 	mode: 'area' | 'grv';
 	computeOil: boolean;
 	computeGas: boolean;
+	contactSource: 'inherit' | 'custom';
+	reservoirType: 'auto' | 'oil_only' | 'gas_only' | 'oil_and_gas';
+	owc: number;
+	goc: number;
+	gwc: number;
+	contactsByZone: Record<string, { owc?: number | null; goc?: number | null; gwc?: number | null }>;
 	vshMax: number;
 	phitMin: number;
 	swtMax: number;
 	nSamples: number;
 	seed: number;
-	activeTab: 'exceedance' | 'tornado' | 'summary' | 'well_matrix';
+	activeTab: 'exceedance' | 'inputs' | 'assumptions' | 'tornado' | 'summary' | 'well_matrix';
 	selectedZone: string;
 	fluidMetric: 'oil' | 'gas';
 	zoneConfigs: Record<string, VolumetricZoneParamConfig>;
@@ -652,6 +737,12 @@ class WorkbenchState {
 		mode: 'area',
 		computeOil: true,
 		computeGas: true,
+		contactSource: 'inherit',
+		reservoirType: 'auto',
+		owc: -2500,
+		goc: -2400,
+		gwc: -2500,
+		contactsByZone: {},
 		vshMax: 0.4,
 		phitMin: 0.05,
 		swtMax: 0.8,
@@ -660,7 +751,9 @@ class WorkbenchState {
 		activeTab: 'exceedance',
 		selectedZone: 'ALL',
 		fluidMetric: 'oil',
-		zoneConfigs: {}
+		zoneConfigs: {
+			ALL: { ...DEFAULT_VOLUMETRIC_ZONE_CONFIG }
+		}
 	});
 
 	// FDP Petrophysical Report Generation Workbench State
