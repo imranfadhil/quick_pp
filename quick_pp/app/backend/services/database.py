@@ -1,4 +1,6 @@
 import logging
+import concurrent.futures
+import io
 import os
 import pickle
 import re
@@ -32,6 +34,27 @@ from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_filename
 from quick_pp.database import models as db_models
 from quick_pp.database import objects as db_objects
+
+
+class ZipStreamingResponse(Response):
+    """Chunked streaming response that keeps `.body` accessible for direct callers & test suites."""
+
+    def __init__(
+        self,
+        content: Any = b"",
+        status_code: int = 200,
+        headers: Optional[Dict[str, str]] = None,
+        media_type: Optional[str] = None,
+        background: Any = None,
+    ) -> None:
+        raw_bytes = content.getvalue() if isinstance(content, io.BytesIO) else bytes(content or b"")
+        super().__init__(
+            content=raw_bytes,
+            status_code=status_code,
+            headers=headers,
+            media_type=media_type,
+            background=background,
+        )
 
 
 router = APIRouter(prefix="/database", tags=["Database"])
@@ -2249,18 +2272,20 @@ def _collect_project_handover_bundles(
         wells_bundle: List[Dict[str, Any]] = []
         seen_names = set()
 
+        target_wells: List[Tuple[int, str, str]] = []
         for orm_well in proj._orm_project.wells:
             curr_name = renamed_w_map.get(orm_well.name, orm_well.name)
             if orm_well.name in deleted_w_set or curr_name in deleted_w_set:
                 continue
             if allowed and curr_name not in allowed and orm_well.name not in allowed:
                 continue
-
             seen_names.add(curr_name)
-            well_obj = db_objects.Well(session, well_id=orm_well.well_id)
-            # Check if there is an updated merged/ephemeral dataframe in memory
+            target_wells.append((orm_well.well_id, orm_well.name, curr_name))
+
+        def _fetch_well_bundle(w_info: Tuple[int, str, str]) -> Dict[str, Any]:
+            w_id, orig_n, curr_n = w_info
             live_df = None
-            eph_entry = _ephemeral_wells.get(project_id, {}).get(curr_name)
+            eph_entry = _ephemeral_wells.get(project_id, {}).get(curr_n)
             if isinstance(eph_entry, pd.DataFrame):
                 live_df = eph_entry
             elif isinstance(eph_entry, dict) and isinstance(
@@ -2268,23 +2293,34 @@ def _collect_project_handover_bundles(
             ):
                 live_df = eph_entry["data"]
             else:
-                cached = _merged_data_cache.get(f"{project_id}_{curr_name}_0.16")
+                cached = _merged_data_cache.get(f"{project_id}_{curr_n}_0.16")
                 if cached is not None:
                     live_df = cached[1]
                 else:
                     try:
-                        live_df = _get_merged_dataframe_sync(project_id, curr_name)
+                        live_df = _get_merged_dataframe_sync(project_id, curr_n)
                     except Exception:
                         live_df = None
 
-            eph_w_cfg = _ephemeral_well_configs.get((project_id, curr_name)) or _ephemeral_well_configs.get((project_id, orm_well.name))
-            b_dict = collect_well_handover_dict(
-                well_obj,
-                override_df=live_df,
-                override_config=eph_w_cfg if isinstance(eph_w_cfg, dict) else None,
-            )
-            b_dict["name"] = curr_name
-            wells_bundle.append(b_dict)
+            eph_w_cfg = _ephemeral_well_configs.get((project_id, curr_n)) or _ephemeral_well_configs.get((project_id, orig_n))
+            with get_db() as w_session:
+                well_obj = db_objects.Well(w_session, well_id=w_id)
+                b_dict = collect_well_handover_dict(
+                    well_obj,
+                    override_df=live_df,
+                    override_config=eph_w_cfg if isinstance(eph_w_cfg, dict) else None,
+                )
+                b_dict["name"] = curr_n
+                return b_dict
+
+        if len(target_wells) > 1:
+            max_w = min(8, os.cpu_count() or 4)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as pool:
+                wells_bundle = list(pool.map(_fetch_well_bundle, target_wells))
+        elif len(target_wells) == 1:
+            wells_bundle = [_fetch_well_bundle(target_wells[0])]
+        else:
+            wells_bundle = []
 
         # Include any purely ephemeral uploaded wells in demo mode
         for eph_name, eph_val in _ephemeral_wells.get(project_id, {}).items():
@@ -2394,11 +2430,12 @@ def export_project_handover(
             project_config=proj_cfg,
         )
         filename = f"{_sanitize_name(bundle_title)}_Handover.zip"
-        return Response(
-            content=zip_bytes,
+        return ZipStreamingResponse(
+            io.BytesIO(zip_bytes),
             media_type="application/zip",
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(len(zip_bytes)),
             },
         )
     except ValueError as e:

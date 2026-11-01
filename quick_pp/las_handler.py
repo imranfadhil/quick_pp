@@ -821,6 +821,32 @@ def export_to_las_string(
         parameters=parameters,
         well_header=well_header,
     )
+    # High-performance path: format header via lasio and ASCII data section via vectorized NumPy
+    try:
+        data_arr = getattr(las_file, "data", None)
+        if data_arr is not None and len(las_file.curves) > 0 and len(data_arr) > 20:
+            strt_val = round(float(las_file.well.STRT.value), 4) if hasattr(las_file.well, "STRT") else 0.0
+            stop_val = round(float(las_file.well.STOP.value), 4) if hasattr(las_file.well, "STOP") else 0.0
+            step_val = round(float(las_file.well.STEP.value), 4) if hasattr(las_file.well, "STEP") else 0.0
+
+            hdr_buf = io.StringIO()
+            las_file.data = data_arr[:1]
+            las_file.write(hdr_buf, version=2.0, STRT=strt_val, STOP=stop_val, STEP=step_val)
+            las_file.data = data_arr
+
+            hdr_str = hdr_buf.getvalue()
+            ascii_idx = hdr_str.find("~A")
+            if ascii_idx != -1:
+                hdr_end = hdr_str.find("\n", ascii_idx)
+                header_part = hdr_str[:hdr_end + 1]
+                null_val = float(las_file.well.NULL.value) if hasattr(las_file.well, "NULL") else -999.25
+                mat = np.nan_to_num(data_arr, nan=null_val)
+                data_buf = io.BytesIO()
+                np.savetxt(data_buf, mat, fmt=" %11.5f")
+                return header_part + data_buf.getvalue().decode("ascii")
+    except Exception as e:
+        logger.debug(f"Fast LAS serialization fallback to lasio standard writer: {e}")
+
     buf = io.StringIO()
     las_file.write(buf, version=2.0)
     return buf.getvalue()
@@ -861,7 +887,8 @@ def export_to_las(
     """
     if folder:
         os.makedirs(folder, exist_ok=True)
-    las_file = build_las_object(
+    well_path = os.path.join(folder, f"{well_name}.las") if folder else f"{well_name}.las"
+    las_str = export_to_las_string(
         well_data=well_data,
         well_name=well_name,
         vars_units=vars_units,
@@ -871,8 +898,8 @@ def export_to_las(
         parameters=parameters,
         well_header=well_header,
     )
-    well_path = os.path.join(folder, f"{well_name}.las") if folder else f"{well_name}.las"
-    las_file.write(well_path, version=2.0)
+    with open(well_path, "w", encoding="ascii") as f:
+        f.write(las_str)
     return well_path
 
 
