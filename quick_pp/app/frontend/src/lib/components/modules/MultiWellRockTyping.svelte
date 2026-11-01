@@ -184,6 +184,9 @@
 
 	function formatDrtRange(drtStr: string): string {
 		const drtNum = Number(drtStr);
+		if (drtNum === 0) {
+			return `Non-Res: Φ<${projectData.drtNonResPhitCutoff}, Vsh>${projectData.drtNonResVshCutoff}, K<${projectData.drtNonResPermCutoff}`;
+		}
 		const sorted = [...projectData.activeDrtCutoffs].sort((a, b) => a - b);
 		const n = sorted.length;
 		if (!Number.isFinite(drtNum) || n === 0) return '';
@@ -518,6 +521,10 @@
 						include_vdl: projectData.drtSelectedFeatures.includes('VDL'),
 						test_size: projectData.drtClassifierTestSize,
 						saved_model_key: savedModelKey,
+						include_non_reservoir: projectData.drtIncludeNonReservoir,
+						non_res_phit_cutoff: projectData.drtNonResPhitCutoff,
+						non_res_vsh_cutoff: projectData.drtNonResVshCutoff,
+						non_res_perm_cutoff: projectData.drtNonResPermCutoff,
 						save: false
 					} as any
 				}
@@ -1067,6 +1074,56 @@
 					{activeMeta.addLabel}
 				</button>
 			</div>
+
+			<!-- Non-Reservoir Gate (ROCK_FLAG = 0 / DRT 0) -->
+			<div class="mt-2 space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]">
+				<label class="flex cursor-pointer items-center justify-between gap-2 font-semibold text-[var(--text-primary)]">
+					<span class="flex items-center gap-1.5">
+						<span
+							style="background-color: {getRockTypeColor(0)}"
+							class="inline-block h-2.5 w-2.5 rounded-full"
+						></span>
+						<span>Include Non-Reservoir Flag (DRT 0 / ROCK_FLAG = 0)</span>
+					</span>
+					<input
+						type="checkbox"
+						bind:checked={projectData.drtIncludeNonReservoir}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] accent-[var(--accent-primary)]"
+					/>
+				</label>
+				<div class="text-[9.5px] text-[var(--text-secondary)]">
+					Separates tight/shale/coal intervals into <strong>DRT 0 (Non-Reservoir)</strong> so
+					<strong>DRT 1..{projectData.activeDrtCutoffs.length + 1}</strong> remain strictly reservoir flow units and non-reservoir intervals are excluded from Perm Transform &amp; SHF regressions.
+				</div>
+				{#if projectData.drtIncludeNonReservoir}
+					<div class="space-y-1 pt-0.5">
+						<NumericScrubber
+							label="Min Reservoir Porosity (PHIT Cutoff)"
+							bind:value={projectData.drtNonResPhitCutoff}
+							unit="v/v"
+							min={0.0}
+							max={0.2}
+							step={0.005}
+						/>
+						<NumericScrubber
+							label="Max Reservoir Vshale / Vclay Cutoff"
+							bind:value={projectData.drtNonResVshCutoff}
+							unit="v/v"
+							min={0.1}
+							max={1.0}
+							step={0.05}
+						/>
+						<NumericScrubber
+							label="Min Reservoir Permeability (PERM Cutoff)"
+							bind:value={projectData.drtNonResPermCutoff}
+							unit="mD"
+							min={0.0}
+							max={10.0}
+							step={0.01}
+						/>
+					</div>
+				{/if}
+			</div>
 		</ParameterSection>
 
 		<ParameterSection
@@ -1303,7 +1360,7 @@
 													<span
 														style="background-color: {getRockTypeColor(row.drt)}"
 														class="mr-1 inline-block h-2 w-2 rounded-full"
-													></span>DRT {row.drt}
+													></span>{Number(row.drt) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${row.drt}`}
 												</td>
 												<td class="mono-num px-1 py-0.5">
 													{row.cutoff_count}
@@ -1485,7 +1542,7 @@
 									style="background-color: {getRockTypeColor(drt)}"
 									class="inline-block h-2.5 w-2.5 rounded-full"
 								></span>
-								<span>DRT {drt}</span>
+								<span>{Number(drt) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${drt}`}</span>
 								{#if rangeLbl}
 									<span class="mono-num text-[10px] font-normal text-[var(--text-muted)]">
 										({rangeLbl})

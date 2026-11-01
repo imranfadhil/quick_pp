@@ -369,7 +369,7 @@
 		});
 		let mlFlags: (number | null)[] = indices.map((i) => {
 			const v = rawMl?.[i];
-			return typeof v === 'number' && Number.isFinite(v) && v >= 1 ? Math.round(v) : null;
+			return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : null;
 		});
 		let indicatorValues: (number | null)[] = indices.map((i) => {
 			const v = rawInd?.[i];
@@ -392,11 +392,11 @@
 					if (rtRes.well_names[j] === workbench.wellId) {
 						const dKey = Math.round(Number(rtRes.depths[j]) * 100);
 						const rfVal = rtRes.rock_flags?.[j];
-						if (typeof rfVal === 'number' && Number.isFinite(rfVal) && rfVal >= 1) {
+						if (typeof rfVal === 'number' && Number.isFinite(rfVal) && rfVal >= 0) {
 							depthToFlag.set(dKey, Math.round(rfVal));
 						}
 						const mlVal = rtRes.rock_flags_ml?.[j];
-						if (typeof mlVal === 'number' && Number.isFinite(mlVal) && mlVal >= 1) {
+						if (typeof mlVal === 'number' && Number.isFinite(mlVal) && mlVal >= 0) {
 							depthToMl.set(dKey, Math.round(mlVal));
 						}
 						const iv = indArr?.[j];
@@ -412,11 +412,11 @@
 					if (rtRes.log_well_names[j] === workbench.wellId) {
 						const dKey = Math.round(Number(rtRes.log_depths[j]) * 100);
 						const rfVal = rtRes.log_rock_flags?.[j];
-						if (typeof rfVal === 'number' && Number.isFinite(rfVal) && rfVal >= 1) {
+						if (typeof rfVal === 'number' && Number.isFinite(rfVal) && rfVal >= 0) {
 							depthToFlag.set(dKey, Math.round(rfVal));
 						}
 						const mlVal = rtRes.log_rock_flags_ml?.[j];
-						if (typeof mlVal === 'number' && Number.isFinite(mlVal) && mlVal >= 1) {
+						if (typeof mlVal === 'number' && Number.isFinite(mlVal) && mlVal >= 0) {
 							depthToMl.set(dKey, Math.round(mlVal));
 						}
 					}
@@ -426,14 +426,14 @@
 			if (depthToFlag.size > 0) {
 				flags = indices.map((i, idx) => {
 					const cur = flags[idx];
-					if (cur !== null && cur >= 1) return cur;
+					if (cur !== null && cur >= 0) return cur;
 					return depthToFlag.get(Math.round(Number(deptAll[i]) * 100)) ?? cur;
 				});
 			}
 			if (depthToMl.size > 0) {
 				mlFlags = indices.map((i, idx) => {
 					const cur = mlFlags[idx];
-					if (cur !== null && cur >= 1) return cur;
+					if (cur !== null && cur >= 0) return cur;
 					return depthToMl.get(Math.round(Number(deptAll[i]) * 100)) ?? null;
 				});
 			}
@@ -445,16 +445,16 @@
 		}
 
 		// Apply ML rock type predictions (RT_ML) to fill uncored intervals or replace full log only when ML propagation is active
-		const hasMl = mlFlags.some((v) => v !== null && v >= 1);
+		const hasMl = mlFlags.some((v) => v !== null && v >= 0);
 		if (
 			hasMl &&
 			projectData.drtClassifierPropagated &&
 			projectData.drtPropagationMode !== 'cutoff_only'
 		) {
 			if (projectData.drtPropagationMode === 'full_ml') {
-				flags = flags.map((f, idx) => mlFlags[idx] ?? (f !== null && f >= 1 ? f : null));
+				flags = flags.map((f, idx) => mlFlags[idx] ?? (f !== null && f >= 0 ? f : null));
 			} else {
-				flags = flags.map((f, idx) => (f !== null && f >= 1 ? f : mlFlags[idx]));
+				flags = flags.map((f, idx) => (f !== null && f >= 0 ? f : mlFlags[idx]));
 			}
 		}
 
@@ -1672,15 +1672,15 @@
 			const hoverText = svgDepth.map((_, sIdx) => {
 				const rawIdx = sampleGrid[sIdx]?.visIdx ?? -1;
 				const f = svgFlags[sIdx];
-				if (rawIdx < 0 || !f || f < 1) return 'Unflagged';
+				if (rawIdx < 0 || f === null || f === undefined || f < 0) return 'Unflagged';
 				const indVal = rtInfo.indicatorValues[rawIdx];
 				const mlVal = rtInfo.mlFlags[rawIdx];
-				let txt = `DRT ${f}`;
+				let txt = f === 0 ? 'DRT 0 (Non-Reservoir)' : `DRT ${f}`;
 				if (indVal !== null && Number.isFinite(indVal)) {
 					txt += ` | ${rtInfo.indicatorLabel}: ${indVal.toFixed(2)}`;
 				}
-				if (mlVal !== null && mlVal >= 1 && mlVal !== f) {
-					txt += ` (ML: DRT ${mlVal})`;
+				if (mlVal !== null && mlVal >= 0 && mlVal !== f) {
+					txt += ` (ML: ${mlVal === 0 ? 'DRT 0' : `DRT ${mlVal}`})`;
 				}
 				return txt;
 			});

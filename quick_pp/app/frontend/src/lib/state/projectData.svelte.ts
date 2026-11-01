@@ -93,7 +93,11 @@ const ROCK_TYPING_PARAM_KEYS = [
 	'dtFluid',
 	'drtPropagationMode',
 	'drtPropagateFocusedOnly',
-	'drtSelectedSavedModelKey'
+	'drtSelectedSavedModelKey',
+	'drtIncludeNonReservoir',
+	'drtNonResPhitCutoff',
+	'drtNonResVshCutoff',
+	'drtNonResPermCutoff'
 ] as const;
 
 const RT_CLASSIFIER_PARAM_KEYS = [
@@ -104,7 +108,11 @@ const RT_CLASSIFIER_PARAM_KEYS = [
 	'drtClassifierTestSize',
 	'drtPropagationMode',
 	'drtPropagateFocusedOnly',
-	'drtSelectedSavedModelKey'
+	'drtSelectedSavedModelKey',
+	'drtIncludeNonReservoir',
+	'drtNonResPhitCutoff',
+	'drtNonResVshCutoff',
+	'drtNonResPermCutoff'
 ] as const;
 
 export interface ProjectListItem {
@@ -254,6 +262,10 @@ class ProjectDataState {
 	drtPropagateFocusedOnly = $state<boolean>(true);
 	drtClassifierPropagated = $state<boolean>(false);
 	drtSelectedSavedModelKey = $state<string>('');
+	drtIncludeNonReservoir = $state<boolean>(true);
+	drtNonResPhitCutoff = $state<number>(0.05);
+	drtNonResVshCutoff = $state<number>(0.50);
+	drtNonResPermCutoff = $state<number>(0.01);
 	rtSavedModelsStatus = $state.raw<{
 		has_saved_models: boolean;
 		count: number;

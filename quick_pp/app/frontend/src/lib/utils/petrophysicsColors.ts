@@ -420,10 +420,12 @@ export function getCurveUnit(mnemonic: string): string {
 }
 
 export const ROCK_FLAG_0_COLOR = 'hsl(30, 70%, 97%)';
+export const ROCK_FLAG_0_ACCENT = '#94A3B8';
 
 export function getRockTypeColor(rockFlag: number | string | null | undefined): string {
 	const num = Number(rockFlag);
-	if (!Number.isFinite(num) || num <= 0) return ROCK_FLAG_0_COLOR;
+	if (!Number.isFinite(num) || num < 0) return ROCK_FLAG_0_COLOR;
+	if (Math.round(num) === 0) return ROCK_FLAG_0_ACCENT;
 	const idx = Math.max(0, Math.round(num) - 1);
 	return ROCK_TYPE_PALETTE[idx % ROCK_TYPE_PALETTE.length];
 }

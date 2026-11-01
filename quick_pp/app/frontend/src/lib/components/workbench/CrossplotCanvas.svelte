@@ -1433,7 +1433,7 @@
 						diag.classifier.feature_importances ?? [];
 					const compRows: Array<Record<string, any>> =
 						diag.classifier.comparison?.per_drt ?? [];
-					const strLabels = labels.map((l) => `DRT ${l}`);
+					const strLabels = labels.map((l) => (Number(l) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${l}`));
 
 					const textGrid = counts.map((row, rIdx) =>
 						row.map(
@@ -1461,7 +1461,9 @@
 					});
 
 					if (compRows.length > 0) {
-						const compLabels = compRows.map((r) => `DRT ${r.drt}`);
+						const compLabels = compRows.map((r) =>
+							Number(r.drt) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${r.drt}`
+						);
 						traces.push({
 							type: 'bar',
 							name: 'Pure Cutoffs (ROCK_FLAG_CUTOFF)',
@@ -1629,7 +1631,7 @@
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
-						name: `DRT ${rf} (${poroLbl}/${permLbl})`,
+						name: Number(rf) === 0 ? `DRT 0 Non-Res (${poroLbl}/${permLbl})` : `DRT ${rf} (${poroLbl}/${permLbl})`,
 						x: g.x,
 						y: g.y,
 						text: g.wells,

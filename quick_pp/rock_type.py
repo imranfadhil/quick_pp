@@ -1944,7 +1944,7 @@ def compute_rock_flag_comparison(
     exact_match = 0
     within_one = 0
     all_labels_set: set[int] = set(
-        int(x) for x in (labels or []) if x is not None and int(x) >= 1
+        int(x) for x in (labels or []) if x is not None and int(x) >= 0
     )
 
     for i in range(n):
@@ -1952,12 +1952,12 @@ def compute_rock_flag_comparison(
         mv_raw = m_list[i] if i < len(m_list) else None
         cv = (
             int(round(float(cv_raw)))
-            if (cv_raw is not None and not pd.isna(cv_raw) and float(cv_raw) >= 1)
+            if (cv_raw is not None and not pd.isna(cv_raw) and float(cv_raw) >= 0)
             else None
         )
         mv = (
             int(round(float(mv_raw)))
-            if (mv_raw is not None and not pd.isna(mv_raw) and float(mv_raw) >= 1)
+            if (mv_raw is not None and not pd.isna(mv_raw) and float(mv_raw) >= 0)
             else None
         )
         hv = cv if cv is not None else mv
@@ -2143,7 +2143,7 @@ def train_and_validate_rock_type_classifier(
     feat_imputed = feat_df.fillna(medians).fillna(0.0)
 
     target_s = pd.to_numeric(work.get("ROCK_FLAG"), errors="coerce")
-    train_mask = row_valid_mask & target_s.notna() & (target_s >= 1)
+    train_mask = row_valid_mask & target_s.notna() & (target_s >= 0)
     if train_mask.sum() < 8:
         raise ValueError(
             f"At least 8 cutoff-binned ROCK_FLAG samples with valid logs are required to train classifier (found {int(train_mask.sum())})."
