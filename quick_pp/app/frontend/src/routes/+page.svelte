@@ -33,6 +33,7 @@
 	import FptPlotCanvas from '$lib/components/workbench/FptPlotCanvas.svelte';
 	import MultiWellVolumetrics from '$lib/components/modules/MultiWellVolumetrics.svelte';
 	import VolumetricsCanvas from '$lib/components/workbench/VolumetricsCanvas.svelte';
+	import VolumetricsRightPanel from '$lib/components/workbench/VolumetricsRightPanel.svelte';
 	import { fpt } from '$lib/state/fpt.svelte';
 
 	import {
@@ -867,7 +868,9 @@
 
 			<!-- RIGHT PANE (30% default width): Crossplot & Zonal Data Grid -->
 			<Pane defaultSize={30} minSize={20} class="h-full overflow-hidden">
-				{#if workbench.rightPaneTab === 'crossplot'}
+				{#if isVolumetricsMode}
+					<VolumetricsRightPanel />
+				{:else if workbench.rightPaneTab === 'crossplot'}
 					{#if isFptMode}
 						<FptPlotCanvas initialMode="excess" />
 					{:else}

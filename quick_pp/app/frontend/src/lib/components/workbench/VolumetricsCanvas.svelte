@@ -185,62 +185,44 @@
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-app)]">
 	<!-- Canvas Header Toolbar -->
 	<div class="flex h-10 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 select-none">
+		<!-- Left: Combined Oil / Gas Toggle -->
 		<div class="flex items-center gap-2">
-			<span class="text-xs font-bold text-[var(--text-primary)]">
-				Volumetric Assessment & Uncertainty
-			</span>
-			<span class="rounded-xs bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
-				SPE-PRMS
-			</span>
-			{#if activeResult}
-				<span class="text-[11px] text-[var(--text-muted)]">
-					• {activeResult.mode === 'area' ? 'Drainage Area' : 'GRV'} Mode ({activeResult.n_samples} LHS)
-				</span>
-				{#if activeResult.contacts}
-					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700 border border-slate-200">
-						Contacts: {activeResult.contacts.owc != null ? `OWC ${activeResult.contacts.owc}m` : ''} {activeResult.contacts.goc != null ? `| GOC ${activeResult.contacts.goc}m` : ''}
-					</span>
-				{/if}
-				{#if activeResult.field_totals?.saturation_method === 'shf'}
-					<span class="rounded-xs bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-800 border border-purple-200">
-						⚡ Mode 2: SHF Coupled
-					</span>
-				{:else}
-					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 border border-slate-200">
-						📊 Mode 1: Log Sw
-					</span>
-				{/if}
-			{/if}
-		</div>
-
-		<div class="flex items-center gap-2">
-			<!-- Fluid Metric Selector -->
-			<div class="flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[11px]">
+			<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[11px]">
 				<button
 					type="button"
-					class="rounded-xs px-2 py-0.5 font-medium transition-colors {isOil
+					class="rounded-xs px-2.5 py-0.5 font-medium transition-colors {isOil
 						? 'bg-[var(--bg-surface)] font-bold text-amber-700 shadow-xs'
 						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 					onclick={() => (mv.fluidMetric = 'oil')}
+					title="Switch to Oil Volumetrics (STOIIP)"
 				>
-					🛢️ Oil (STOIIP)
+					🛢️ Oil
 				</button>
 				<button
 					type="button"
-					class="rounded-xs px-2 py-0.5 font-medium transition-colors {!isOil
+					class="rounded-xs px-2.5 py-0.5 font-medium transition-colors {!isOil
 						? 'bg-[var(--bg-surface)] font-bold text-blue-700 shadow-xs'
 						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 					onclick={() => (mv.fluidMetric = 'gas')}
+					title="Switch to Gas Volumetrics (GIIP)"
 				>
-					🔥 Gas (GIIP)
+					🔥 Gas
 				</button>
 			</div>
 
-			<!-- View Tabs -->
+			{#if activeResult}
+				<span class="text-[10px] text-[var(--text-muted)] hidden sm:inline">
+					{activeResult.mode === 'area' ? 'Area' : 'GRV'} • {activeResult.n_samples} LHS
+				</span>
+			{/if}
+		</div>
+
+		<!-- Right: Visual Canvas Tabs (Tornado, Formations & Wells are in the right panel) -->
+		<div class="flex items-center gap-1">
 			<div class="flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[11px]">
 				<button
 					type="button"
-					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'exceedance'
+					class="rounded-xs px-2.5 py-0.5 font-medium transition-colors {mv.activeTab === 'exceedance'
 						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
 						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 					onclick={() => (mv.activeTab = 'exceedance')}
@@ -249,7 +231,7 @@
 				</button>
 				<button
 					type="button"
-					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'inputs'
+					class="rounded-xs px-2.5 py-0.5 font-medium transition-colors {mv.activeTab === 'inputs'
 						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
 						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 					onclick={() => (mv.activeTab = 'inputs')}
@@ -258,7 +240,7 @@
 				</button>
 				<button
 					type="button"
-					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'shf_profile'
+					class="rounded-xs px-2.5 py-0.5 font-medium transition-colors {mv.activeTab === 'shf_profile'
 						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
 						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 					onclick={() => (mv.activeTab = 'shf_profile')}
@@ -267,39 +249,12 @@
 				</button>
 				<button
 					type="button"
-					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'assumptions'
+					class="rounded-xs px-2.5 py-0.5 font-medium transition-colors {mv.activeTab === 'assumptions'
 						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
 						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 					onclick={() => (mv.activeTab = 'assumptions')}
 				>
 					Assumptions & Basis
-				</button>
-				<button
-					type="button"
-					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'tornado'
-						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
-						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
-					onclick={() => (mv.activeTab = 'tornado')}
-				>
-					Tornado Sensitivity
-				</button>
-				<button
-					type="button"
-					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'summary'
-						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
-						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
-					onclick={() => (mv.activeTab = 'summary')}
-				>
-					Zonal Breakdown
-				</button>
-				<button
-					type="button"
-					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'well_matrix'
-						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
-						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
-					onclick={() => (mv.activeTab = 'well_matrix')}
-				>
-					Well Matrix
 				</button>
 			</div>
 		</div>

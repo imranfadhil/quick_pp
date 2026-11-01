@@ -492,6 +492,7 @@ export interface MultiWellVolumetricsState {
 	nSamples: number;
 	seed: number;
 	activeTab: 'exceedance' | 'inputs' | 'shf_profile' | 'assumptions' | 'tornado' | 'summary' | 'well_matrix';
+	rightTab: 'crossplot' | 'tornado' | 'summary' | 'well_matrix';
 	selectedZone: string;
 	fluidMetric: 'oil' | 'gas';
 	zoneConfigs: Record<string, VolumetricZoneParamConfig>;
@@ -806,6 +807,7 @@ class WorkbenchState {
 		nSamples: 5000,
 		seed: 42,
 		activeTab: 'exceedance',
+		rightTab: 'crossplot',
 		selectedZone: 'ALL',
 		fluidMetric: 'oil',
 		zoneConfigs: {
