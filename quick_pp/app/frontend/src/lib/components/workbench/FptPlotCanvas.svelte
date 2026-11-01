@@ -2,11 +2,13 @@
 	import { onDestroy, untrack } from 'svelte';
 	import { browser } from '$app/environment';
 	import {
+		densityToGradient,
 		fpt,
 		FPT_EXCLUDED_COLOR,
 		FPT_FLUID_COLORS,
 		FPT_PHASES,
 		type FptFluid,
+		type FptPhase,
 		type FptPoint,
 		type FptQuality
 	} from '$lib/state/fpt.svelte';
@@ -188,6 +190,7 @@
 			const zRef = zRes.reference ?? res.reference;
 			const zPrefix = zoneEntries.length > 1 && zName ? `[${zName}] ` : '';
 			for (const ph of FPT_PHASES) {
+				if (!fpt.isFluidAllowed(ph)) continue;
 				const g = zRes.gradients?.[ph];
 				const ln = zRes.plot_lines?.[ph];
 				if (!g || !ln) continue;
@@ -214,6 +217,9 @@
 			// Contacts with P10–P90 bands per zone
 			for (const c of Object.values(zRes.contacts ?? {})) {
 				if (!c) continue;
+				const upFl = (c as any).upper_fluid as FptPhase;
+				const loFl = (c as any).lower_fluid as FptPhase;
+				if (!fpt.isFluidAllowed(upFl) || !fpt.isFluidAllowed(loFl)) continue;
 				const color = FPT_FLUID_COLORS[(c as any).lower_fluid as FptFluid] ?? '#3B82F6';
 				if ((c as any).tvdss_p90 > (c as any).tvdss_p10) {
 					shapes.push({
@@ -259,6 +265,60 @@
 						`<b>${zPrefix}${(c as any).label}</b> ${fmtNum((c as any).tvdss_p50, 1)} ${du} TVDSS (±${fmtNum(half, 1)})` +
 						(mode === 'pressure' ? ` @ ${fmtNum((c as any).pressure_at_contact, 0)} ${pu}` : '') +
 						` · ρ ${fmtNum((c as any).upper_density_gcc, 2)} / ${fmtNum((c as any).lower_density_gcc, 2)} g/cc`
+				});
+			}
+		}
+
+		// Regional normal hydrostatic baseline (extrapolated from surface P=0 @ TVDSS=0)
+		if (fpt.showHydrostaticLine && pts.length > 0) {
+			const tvdssList: number[] = pts
+				.map((p) => p.tvdss_display)
+				.filter((z): z is number => z !== null && Number.isFinite(z));
+			for (const [, zRes] of zoneEntries) {
+				for (const ln of Object.values(zRes.plot_lines ?? {})) {
+					if (Array.isArray(ln)) {
+						for (const pt of ln as Array<[number, number]>) {
+							if (Number.isFinite(pt[1])) tvdssList.push(pt[1]);
+						}
+					}
+				}
+				for (const c of Object.values(zRes.contacts ?? {})) {
+					if (c && Number.isFinite((c as any).tvdss_p50)) {
+						tvdssList.push((c as any).tvdss_p50);
+					}
+				}
+			}
+
+			if (tvdssList.length > 0) {
+				const zMin = Math.min(...tvdssList);
+				const zMax = Math.max(...tvdssList);
+				const pad = Math.max((zMax - zMin) * 0.08, 10.0);
+				const zLo = Math.max(0, zMin - pad);
+				const zHi = zMax + pad;
+				const rhoHydro = fpt.hydrostaticDensity ?? 1.03;
+				const gradHydro = densityToGradient(rhoHydro, pu, du);
+				const zRef = res.reference;
+				const xs =
+					mode === 'excess' && zRef
+						? [zLo, zHi].map((z) => gradHydro * z - (zRef.datum_pressure + zRef.gradient * (z - zRef.datum_tvdss)))
+						: [gradHydro * zLo, gradHydro * zHi];
+
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: `Hydrostatic (${fmtNum(rhoHydro, 2)} g/cc) · ${fmtNum(gradHydro, 4)} ${pu}/${du}`,
+					x: xs,
+					y: [zLo, zHi],
+					hovertemplate:
+						`<b>Hydrostatic Baseline</b> (${fmtNum(rhoHydro, 2)} g/cc)<br>` +
+						`TVDSS: %{y:.1f} ${du}<br>` +
+						(mode === 'excess' ? `Excess: %{x:.1f} ${pu}` : `P: %{x:.1f} ${pu}`) +
+						`<extra></extra>`,
+					line: {
+						color: '#0284C7',
+						width: 1.6,
+						dash: 'dash'
+					}
 				});
 			}
 		}
@@ -323,6 +383,10 @@
 		void fpt.filterPlotToActiveZone;
 		void fpt.groupZones;
 		void mode;
+		void fpt.showHydrostaticLine;
+		void fpt.hydrostaticDensity;
+		void fpt.allowedFluids;
+		void fpt.fluidSystem;
 		let cancelled = false;
 		const rafId = requestAnimationFrame(() => {
 			if (cancelled || !PlotlyLib || !plotEl) return;
@@ -450,6 +514,17 @@
 					{/each}
 				</div>
 			{/if}
+			<label
+				class="flex h-5 items-center gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
+				title="Show normal hydrostatic baseline from surface ({fmtNum(fpt.hydrostaticDensity, 2)} g/cc)"
+			>
+				<input
+					type="checkbox"
+					bind:checked={fpt.showHydrostaticLine}
+					class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)] focus:ring-0"
+				/>
+				<span>Hydrostatic</span>
+			</label>
 		</div>
 	</div>
 

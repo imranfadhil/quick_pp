@@ -335,6 +335,7 @@ def plotly_log(
     trace_defs: dict = None,
     xaxis_defs: dict = None,
     column_widths: list = None,
+    datum_elevation: float = None,
 ):
     """Generate a multi-track well log plot using Plotly.
 
@@ -480,16 +481,47 @@ def plotly_log(
                 secondary_y=False,
             )
 
-    # Add TVD to hover box in each tracks if available
-    if "TVD" in df.columns:
+    # Resolve TVDSS if not present but TVD and datum_elevation are provided
+    tvd_col = next((c for c in ("TVD", "tvd", "DEPT_TVD", "DEPTH_TVD") if c in df.columns), None)
+    tvdss_col = next((c for c in ("TVDSS", "tvdss", "DEPT_TVDSS", "DEPTH_TVDSS") if c in df.columns), None)
+
+    if tvdss_col is None and tvd_col is not None and datum_elevation is not None:
+        try:
+            df["TVDSS"] = pd.to_numeric(df[tvd_col], errors="coerce") - float(datum_elevation)
+            tvdss_col = "TVDSS"
+        except Exception:
+            pass
+
+    # Add TVD to hover box in each track if available
+    if tvd_col:
         for c in range(1, no_of_track + 1):
             fig.add_trace(
                 go.Scatter(
-                    x=df["TVD"],
+                    x=df[tvd_col],
                     y=index,
                     name="TVD",
                     line={"width": 0},
-                    hovertemplate="<b>TVD</b>: %{x}<extra></extra>",
+                    hovertemplate=f"<b>TVD</b>: %{{x:.2f}} {depth_uom}<extra></extra>"
+                    if depth_uom
+                    else "<b>TVD</b>: %{x:.2f}<extra></extra>",
+                ),
+                row=1,
+                col=c,
+                secondary_y=False,
+            )
+
+    # Add TVDSS to hover box in each track if available
+    if tvdss_col:
+        for c in range(1, no_of_track + 1):
+            fig.add_trace(
+                go.Scatter(
+                    x=df[tvdss_col],
+                    y=index,
+                    name="TVDSS",
+                    line={"width": 0},
+                    hovertemplate=f"<b>TVDSS</b>: %{{x:.2f}} {depth_uom}<extra></extra>"
+                    if depth_uom
+                    else "<b>TVDSS</b>: %{x:.2f}<extra></extra>",
                 ),
                 row=1,
                 col=c,
@@ -508,9 +540,17 @@ def plotly_log(
         for x in fig.data
         if k in visible_xaxis and x.name == k
     }
+    y_title_text = f"<b>DEPTH ({depth_uom.upper()}) MD</b>" if depth_uom else "<b>DEPTH MD</b>"
+    if tvdss_col and tvd_col:
+        y_title_text += "<br><span style='font-size:9px;color:#64748B'>[Hover: TVD & TVDSS]</span>"
+    elif tvdss_col:
+        y_title_text += "<br><span style='font-size:9px;color:#64748B'>[Hover: TVDSS]</span>"
+    elif tvd_col:
+        y_title_text += "<br><span style='font-size:9px;color:#64748B'>[Hover: TVD]</span>"
+
     layout_dict["yaxis"] = {
         "domain": [0, 0.84],
-        "title": {"text": f"<b>DEPTH ({depth_uom.upper()}) MD</b>", "font_size": 12},
+        "title": {"text": y_title_text, "font_size": 12},
     }
 
     for i in range(1, no_of_track * 2):

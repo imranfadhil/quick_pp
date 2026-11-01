@@ -156,3 +156,23 @@ def test_plot_formation_pressure_renders():
     fpa.estimate_contacts(n_simulations=200)
     fig = plot_formation_pressure(fpa, show_excess=True)
     assert len(fig.axes) == 2
+
+
+def test_allowed_fluids_constrains_auto_classify_and_contacts():
+    df = _three_phase_df()
+    # Mask all as unassigned
+    df['FLUID_TYPE'] = 'UNASSIGNED'
+    fpa = FormationPressureAnalyzer(df, 'psi', 'ft')
+    # Auto-classify with ONLY Oil + Water allowed
+    fpa.auto_classify_points(allowed_fluids=['OIL', 'WATER'])
+    assigned = set(fpa.df['FLUID_TYPE'])
+    assert 'GAS' not in assigned, 'GAS should never be assigned when allowed_fluids=[OIL, WATER]'
+    assert 'OIL' in assigned
+    assert 'WATER' in assigned
+
+    # Fit all and estimate contacts
+    fpa.fit_all(allowed_fluids=['OIL', 'WATER'])
+    assert set(fpa.gradients.keys()) == {'OIL', 'WATER'}
+    contacts = fpa.estimate_contacts(n_simulations=100, allowed_fluids=['OIL', 'WATER'])
+    assert set(contacts.keys()) == {'OWC'}
+    assert 'GOC' not in contacts

@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 from tqdm import tqdm
 
@@ -657,6 +657,7 @@ class FormationPressureAnalyzer:
         ransac_residual_threshold: Optional[float] = None,
         assign_unassigned: bool = True,
         window: int = 2,
+        allowed_fluids: Optional[Sequence[str]] = None,
     ) -> pd.DataFrame:
         """Flag tight / supercharged points and suggest fluid phases for UNASSIGNED points.
 
@@ -673,7 +674,12 @@ class FormationPressureAnalyzer:
             tight = (df[self.quality_col] == "VALID") & mob.notna() & (mob < float(min_mobility))
             df.loc[tight, self.quality_col] = "TIGHT"
 
-        if assign_unassigned:
+        allowed_set = {f.upper() for f in allowed_fluids} if allowed_fluids else set(FLUID_PHASES)
+        has_gas = "GAS" in allowed_set
+        has_oil = "OIL" in allowed_set
+        has_water = "WATER" in allowed_set
+
+        if assign_unassigned and len(allowed_set) > 0:
             cand = self.valid_mask() & (df[self.fluid_col] == "UNASSIGNED")
             valid_idx = df.index[self.valid_mask()]
             if cand.any() and len(valid_idx) >= 2:
@@ -692,16 +698,36 @@ class FormationPressureAnalyzer:
                     rho = self.to_density(m)
                     if not np.isfinite(rho) or rho <= 0 or rho > 1.6:
                         continue
-                    if rho < _AUTO_GAS_OIL_DENSITY:
-                        df.at[idx, self.fluid_col] = "GAS"
-                    elif rho < _AUTO_OIL_WATER_DENSITY:
-                        df.at[idx, self.fluid_col] = "OIL"
-                    else:
-                        df.at[idx, self.fluid_col] = "WATER"
+                    if has_gas and has_oil and has_water:
+                        if rho < _AUTO_GAS_OIL_DENSITY:
+                            df.at[idx, self.fluid_col] = "GAS"
+                        elif rho < _AUTO_OIL_WATER_DENSITY:
+                            df.at[idx, self.fluid_col] = "OIL"
+                        else:
+                            df.at[idx, self.fluid_col] = "WATER"
+                    elif has_oil and has_water:
+                        if rho < _AUTO_OIL_WATER_DENSITY:
+                            df.at[idx, self.fluid_col] = "OIL"
+                        else:
+                            df.at[idx, self.fluid_col] = "WATER"
+                    elif has_gas and has_water:
+                        if rho < _AUTO_OIL_WATER_DENSITY:
+                            df.at[idx, self.fluid_col] = "GAS"
+                        else:
+                            df.at[idx, self.fluid_col] = "WATER"
+                    elif has_gas and has_oil:
+                        if rho < _AUTO_GAS_OIL_DENSITY:
+                            df.at[idx, self.fluid_col] = "GAS"
+                        else:
+                            df.at[idx, self.fluid_col] = "OIL"
+                    elif len(allowed_set) == 1:
+                        df.at[idx, self.fluid_col] = next(iter(allowed_set))
 
         if ransac_residual_threshold is not None:
             thr = float(ransac_residual_threshold)
             for fl in FLUID_PHASES:
+                if fl not in allowed_set:
+                    continue
                 m_fl = self.valid_mask(fl)
                 if m_fl.sum() < 4:
                     continue
@@ -829,6 +855,7 @@ class FormationPressureAnalyzer:
         self,
         method: Literal["ols", "huber", "ransac"] = "ols",
         overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+        allowed_fluids: Optional[Sequence[str]] = None,
     ) -> Dict[str, FluidGradientResult]:
         """Fit every phase that has data, applying per-phase overrides.
 
@@ -838,7 +865,10 @@ class FormationPressureAnalyzer:
         """
         overrides = {(_norm_fluid(k)): v for k, v in (overrides or {}).items() if v}
         self.gradients = {}
+        allowed_set = {f.upper() for f in allowed_fluids} if allowed_fluids else set(FLUID_PHASES)
         for fl in FLUID_PHASES:
+            if fl not in allowed_set:
+                continue
             ov = overrides.get(fl) or {}
             grad = ov.get("gradient")
             try:
@@ -881,13 +911,17 @@ class FormationPressureAnalyzer:
         return float(z), float(upper.gradient * z + upper.intercept)
 
     def estimate_contacts(
-        self, n_simulations: int = 2000, random_state: int = 42
+        self,
+        n_simulations: int = 2000,
+        random_state: int = 42,
+        allowed_fluids: Optional[Sequence[str]] = None,
     ) -> Dict[str, FluidContactResult]:
         """GOC (gas-oil), OWC / FWL (oil-water) or GWC (gas-water; only without oil) with
         P10 / P50 / P90 depth uncertainty from Monte Carlo sampling of the fit covariances."""
         self.contacts = {}
         rng = np.random.default_rng(random_state)
-        have = set(self.gradients.keys())
+        allowed_set = {f.upper() for f in allowed_fluids} if allowed_fluids else set(FLUID_PHASES)
+        have = set(self.gradients.keys()) & allowed_set
         for label, up_fl, lo_fl in CONTACT_PAIRS:
             if up_fl not in have or lo_fl not in have:
                 continue

@@ -18,6 +18,7 @@ export type FptQuality = 'VALID' | 'TIGHT' | 'SUPERCHARGED' | 'LOST_SEAL' | 'EXC
 export type FptPressureUnit = 'psi' | 'bar' | 'kPa';
 export type FptDepthUnit = 'm' | 'ft';
 export type FptMethod = 'ols' | 'huber' | 'ransac';
+export type FptFluidSystem = 'OIL_WATER' | 'GAS_WATER' | 'GAS_OIL_WATER' | 'CUSTOM';
 
 export const FPT_PHASES: FptPhase[] = ['GAS', 'OIL', 'WATER'];
 export const FPT_QUALITIES: FptQuality[] = [
@@ -168,6 +169,12 @@ class FptState {
 	overridesByZone = $state<Record<string, Record<FptPhase, FptOverride>>>({});
 	/** Excess-pressure reference density (g/cc); null = fitted water line (or 1.0 g/cc). */
 	refDensity = $state<number | null>(null);
+	/** Normal hydrostatic baseline reference from surface (P = 0 @ TVDSS = 0). */
+	showHydrostaticLine = $state<boolean>(true);
+	hydrostaticDensity = $state<number>(1.03);
+	/** Active fluids present in the reservoir (constrains classification, fitting, contacts). */
+	allowedFluids = $state<FptPhase[]>(['OIL', 'WATER']);
+	fluidSystem = $state<FptFluidSystem>('OIL_WATER');
 	autoMinMobility = $state<number | null>(0.5);
 	autoSupercharge = $state<boolean>(true);
 	autoAssignFluids = $state<boolean>(true);
@@ -191,6 +198,34 @@ class FptState {
 	gradientUnit = $derived(`${this.pressureUnit}/${this.depthUnit}`);
 
 	availableZones = $derived(this.result?.available_zones ?? []);
+
+	setFluidSystem(sys: FptFluidSystem) {
+		this.fluidSystem = sys;
+		if (sys === 'OIL_WATER') this.allowedFluids = ['OIL', 'WATER'];
+		else if (sys === 'GAS_WATER') this.allowedFluids = ['GAS', 'WATER'];
+		else if (sys === 'GAS_OIL_WATER') this.allowedFluids = ['GAS', 'OIL', 'WATER'];
+	}
+
+	toggleAllowedFluid(fl: FptPhase) {
+		const set = new Set(this.allowedFluids);
+		if (set.has(fl)) {
+			if (set.size > 1) set.delete(fl);
+		} else {
+			set.add(fl);
+		}
+		this.allowedFluids = FPT_PHASES.filter((p) => set.has(p));
+		const hasGas = set.has('GAS');
+		const hasOil = set.has('OIL');
+		const hasWater = set.has('WATER');
+		if (hasOil && hasWater && !hasGas) this.fluidSystem = 'OIL_WATER';
+		else if (hasGas && hasWater && !hasOil) this.fluidSystem = 'GAS_WATER';
+		else if (hasGas && hasOil && hasWater) this.fluidSystem = 'GAS_OIL_WATER';
+		else this.fluidSystem = 'CUSTOM';
+	}
+
+	isFluidAllowed(fl: FptPhase): boolean {
+		return this.allowedFluids.includes(fl);
+	}
 
 	/** Selected well subset (null = all wells). */
 	scopeWells(): string[] | null {
@@ -293,6 +328,7 @@ class FptState {
 				overrides_by_zone: this.buildOverridesByZone(),
 				point_overrides: this.pointEdits,
 				n_simulations: Math.max(0, Math.round(this.nSimulations || 0)),
+				allowed_fluids: this.allowedFluids,
 				ref_water_gradient:
 					this.refDensity !== null && Number.isFinite(Number(this.refDensity))
 						? densityToGradient(Number(this.refDensity), this.pressureUnit, this.depthUnit)
@@ -305,7 +341,8 @@ class FptState {
 							? Number(this.autoMinMobility)
 							: null,
 					ransac_residual_threshold: this.autoSupercharge ? 0 : null,
-					assign_unassigned: this.autoAssignFluids
+					assign_unassigned: this.autoAssignFluids,
+					allowed_fluids: this.allowedFluids
 				};
 			}
 			const res = await postJson<FptResult>(`${base}/analyze`, body);
@@ -455,6 +492,10 @@ class FptState {
 			overrides: $state.snapshot(this.overrides),
 			overridesByZone: $state.snapshot(this.overridesByZone),
 			refDensity: this.refDensity,
+			showHydrostaticLine: this.showHydrostaticLine,
+			hydrostaticDensity: this.hydrostaticDensity,
+			allowedFluids: $state.snapshot(this.allowedFluids),
+			fluidSystem: this.fluidSystem,
 			autoMinMobility: this.autoMinMobility,
 			autoSupercharge: this.autoSupercharge,
 			autoAssignFluids: this.autoAssignFluids,
@@ -487,6 +528,10 @@ class FptState {
 		if (p.overrides) this.overrides = { ...DEFAULT_OVERRIDES(), ...p.overrides };
 		if (p.overridesByZone) this.overridesByZone = p.overridesByZone;
 		this.refDensity = p.refDensity ?? null;
+		if (typeof p.showHydrostaticLine === 'boolean') this.showHydrostaticLine = p.showHydrostaticLine;
+		if (Number.isFinite(p.hydrostaticDensity)) this.hydrostaticDensity = p.hydrostaticDensity;
+		if (Array.isArray(p.allowedFluids) && p.allowedFluids.length > 0) this.allowedFluids = p.allowedFluids;
+		if (p.fluidSystem) this.fluidSystem = p.fluidSystem;
 		if ('autoMinMobility' in p) this.autoMinMobility = p.autoMinMobility;
 		if (typeof p.autoSupercharge === 'boolean') this.autoSupercharge = p.autoSupercharge;
 		if (typeof p.autoAssignFluids === 'boolean') this.autoAssignFluids = p.autoAssignFluids;

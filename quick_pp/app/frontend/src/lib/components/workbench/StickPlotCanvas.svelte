@@ -49,7 +49,7 @@
 
 	onMount(() => {
 		if (workbench.projectId) {
-			void projectData.loadStickPlot(true);
+			void projectData.loadStickPlot(false);
 		}
 	});
 

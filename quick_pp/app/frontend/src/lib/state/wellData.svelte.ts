@@ -3729,6 +3729,8 @@ class WellDataState {
 
 		const out: Record<string, number | null> = { DEPT: dept[lo] };
 		for (const k of [
+			'TVD',
+			'TVDSS',
 			'GR',
 			'RT',
 			'NPHI',

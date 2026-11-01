@@ -3129,9 +3129,20 @@
 	>
 		<div class="flex flex-wrap items-center gap-x-3">
 			<span>
-				<strong class="text-[var(--text-primary)]">Depth:</strong>
+				<strong class="text-[var(--text-primary)]">MD:</strong>
 				{fmtDepth(readout.DEPT ?? workbench.cursorDepth)}
 			</span>
+			{#if readout.TVDSS !== null && readout.TVDSS !== undefined}
+				<span>
+					<strong class="text-sky-600">TVDSS:</strong>
+					{fmtDepth(readout.TVDSS)}
+				</span>
+			{:else if readout.TVD !== null && readout.TVD !== undefined}
+				<span>
+					<strong class="text-sky-600">TVD:</strong>
+					{fmtDepth(readout.TVD)}
+				</span>
+			{/if}
 			<span>
 				<strong style="color: {PETRO_COLORS.gr}">GR:</strong>
 				{fmtNum(readout.GR, 1)}
