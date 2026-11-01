@@ -191,9 +191,24 @@
 >
 	<!-- Dynamic Workflow Step Tabs -->
 	<div class="flex items-center gap-1 overflow-x-auto">
-		<span class="mr-1 text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
-			Workflow:
-		</span>
+		<div class="flex items-center gap-1 mr-1">
+			<span class="text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
+				Workflow:
+			</span>
+			<button
+				type="button"
+				title="Open Petrophysical Technical Reference for current workflow step"
+				onclick={() => {
+					const anchor = workbench.scope === 'single-well'
+						? `sw-step-${workbench.singleWellStep === 'qaqc' ? '1-qaqc' : workbench.singleWellStep === 'ancillary' ? '2-ancillary' : workbench.singleWellStep === 'litho-poro' ? '3-litho-poro' : workbench.singleWellStep === 'perm' ? '4-perm' : workbench.singleWellStep === 'saturation' ? '5-saturation' : workbench.singleWellStep === 'scal' ? '6-scal' : workbench.singleWellStep === 'ressum' ? '7-ressum' : '8-report'}`
+						: `mw-step-${workbench.multiWellStep === 'inventory' ? '1-inventory' : workbench.multiWellStep === 'qaqc' ? '2-qaqc' : workbench.multiWellStep === 'fpt' ? '3-fpt' : workbench.multiWellStep === 'rock-typing' ? '4-rock-typing' : (workbench.multiWellStep === 'rt-classifier' || workbench.multiWellStep === 'ml-training') ? '5-ml-training' : (workbench.multiWellStep === 'perm-transform' || workbench.multiWellStep === 'swirr-corr') ? '6-perm-swirr' : workbench.multiWellStep === 'shf' ? '7-shf' : workbench.multiWellStep === 'volumetrics' ? '8-volumetrics' : '9-report'}`;
+					workbench.openWorkflowGuide(workbench.scope, anchor);
+				}}
+				class="flex h-4 w-4 items-center justify-center rounded-2xs text-[10px] text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--accent-primary)]"
+			>
+				📖
+			</button>
+		</div>
 
 		{#if workbench.scope === 'single-well'}
 			{#each SINGLE_WELL_STEPS as step (step.id)}
@@ -421,39 +436,6 @@
 				class="mono-num shrink-0 whitespace-nowrap text-[11px] font-medium text-[var(--status-ok)] hover:underline"
 			>
 				{wellData.lastSavedMessage}
-			</button>
-		{/if}
-
-		{#if workbench.scope === 'multi-well' && projectData.wells.length > 0}
-			{@const hasPendingMw = projectData.hasAnyPendingMultiWell()}
-			<button
-				type="button"
-				disabled={
-					projectData.isComputingMultiWell ||
-					projectData.isCascadingMultiWell ||
-					projectData.wellsWithTvd.length === 0
-				}
-				onclick={() => {
-					const stepMap: Record<string, 'rock-typing' | 'perm-transform' | 'swirr-corr' | 'shf'> = {
-						'rock-typing': 'rock-typing',
-						'perm-transform': 'perm-transform',
-						'swirr-corr': 'swirr-corr',
-						shf: 'shf'
-					};
-					const startFrom = stepMap[workbench.multiWellStep] ?? 'rock-typing';
-					void projectData.cascadeMultiWellToStickPlot(startFrom, true);
-				}}
-				title={projectData.wellsWithTvd.length === 0
-					? 'Disabled: No selected wells have TVD curve or directional survey'
-					: 'Intentionally cascade Multi-Well steps (Rock Typing → Perm Transform → Swirr → SHF), save across wells, and update the Stick Plot'}
-				class="flex h-6 shrink-0 items-center gap-1 rounded-sm border px-2 text-[10.5px] font-semibold whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-45 {hasPendingMw
-					? 'border-indigo-400 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
-					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[var(--text-secondary)] hover:bg-slate-200/70 hover:text-[var(--text-primary)]'}"
-			>
-				<span>{projectData.isCascadingMultiWell ? 'Cascading...' : '⟳ Cascade → Stick Plot'}</span>
-				{#if hasPendingMw && !projectData.isCascadingMultiWell}
-					<span class="h-1.5 w-1.5 rounded-full bg-indigo-600" title="Unsaved multi-well step changes ready to cascade"></span>
-				{/if}
 			</button>
 		{/if}
 

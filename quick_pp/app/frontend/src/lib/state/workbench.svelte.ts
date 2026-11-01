@@ -572,6 +572,20 @@ class WorkbenchState {
 		| 'handover'
 	>('las');
 	aiDrawerOpen = $state<boolean>(false);
+	workflowGuideOpen = $state<boolean>(false);
+	workflowGuideScope = $state<'single-well' | 'multi-well'>('single-well');
+	workflowGuideTargetAnchor = $state<string | null>(null);
+
+	openWorkflowGuide(scope?: 'single-well' | 'multi-well', anchor?: string) {
+		this.workflowGuideScope = scope ?? this.scope;
+		this.workflowGuideTargetAnchor = anchor ?? null;
+		this.workflowGuideOpen = true;
+	}
+
+	closeWorkflowGuide() {
+		this.workflowGuideOpen = false;
+		this.workflowGuideTargetAnchor = null;
+	}
 
 	openImporter(
 		tab?:

@@ -10,6 +10,7 @@
 	import BulkImporterModal from '$lib/components/shell/BulkImporterModal.svelte';
 	import PetrophysicalAssistantDrawer from '$lib/components/shell/PetrophysicalAssistantDrawer.svelte';
 	import UamConsoleModal from '$lib/components/shell/UamConsoleModal.svelte';
+	import WorkflowGuideSheet from '$lib/components/shell/WorkflowGuideSheet.svelte';
 	import { authState } from '$lib/state/auth.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 
@@ -54,6 +55,10 @@
 
 			{#if workbench.aiDrawerOpen}
 				<PetrophysicalAssistantDrawer />
+			{/if}
+
+			{#if workbench.workflowGuideOpen}
+				<WorkflowGuideSheet />
 			{/if}
 		</main>
 

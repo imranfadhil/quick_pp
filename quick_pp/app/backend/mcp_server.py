@@ -518,6 +518,21 @@ class ExportReportToPdfArgs(BaseModel):
     )
 
 
+class GetTechnicalReferenceArgs(BaseModel):
+    scope: Optional[str] = Field(
+        "single-well",
+        description="Workflow space: 'single-well' or 'multi-well'",
+    )
+    step: Optional[str] = Field(
+        None,
+        description="Workflow step ID: 'qaqc', 'ancillary', 'litho-poro', 'perm', 'saturation', 'scal', 'ressum', 'inventory', 'fpt', 'rock-typing', 'ml-training', 'perm-transform', 'shf', 'volumetrics', 'report'",
+    )
+    query: Optional[str] = Field(
+        None,
+        description="Petrophysical formula, cutoff, or concept search query (e.g. 'Waxman-Smits', 'FZI', 'Leverett', 'Conformal', 'Choo', 'LHS')",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helper: Contiguous Depth Interval Extraction
 # ---------------------------------------------------------------------------
@@ -1648,6 +1663,54 @@ def tool_export_report_to_pdf(
     }
 
 
+def tool_get_workflow_technical_reference(
+    scope: Optional[str] = "single-well",
+    step: Optional[str] = None,
+    query: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Retrieve grounded petrophysical reference, equations, curve specs, and guidelines from docs/workflows/."""
+    from quick_pp.app.backend.services.ssot_reference import (
+        get_step_reference,
+        query_workflow_reference,
+    )
+
+    effective_scope = scope or "single-well"
+    if query:
+        # Search requested scope first, then fallback to global workflow search
+        matches = query_workflow_reference(query, scope=effective_scope, max_results=3)
+        if not matches:
+            matches = query_workflow_reference(query, scope=None, max_results=3)
+        if matches:
+            return {
+                "tool": "get_workflow_technical_reference",
+                "query": query,
+                "scope": matches[0]["scope"],
+                "matches_count": len(matches),
+                "primary_match": matches[0],
+                "reference_content": matches[0]["content"],
+                "source": f"docs/workflows/{'multi_well.md' if 'multi' in matches[0]['scope'] else 'single_well.md'}",
+            }
+
+    if step:
+        content = get_step_reference(effective_scope, step)
+        return {
+            "tool": "get_workflow_technical_reference",
+            "scope": effective_scope,
+            "step": step,
+            "reference_content": content,
+            "source": f"docs/workflows/{'multi_well.md' if 'multi' in effective_scope else 'single_well.md'}",
+        }
+
+    content = get_step_reference(effective_scope, "overview")
+    return {
+        "tool": "get_workflow_technical_reference",
+        "scope": effective_scope,
+        "step": "overview",
+        "reference_content": content,
+        "source": "docs/workflows/index.md",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Singleton MCP Server Instance
 # ---------------------------------------------------------------------------
@@ -1756,4 +1819,14 @@ petro_mcp_server.register_tool(
     ),
     schema_model=ExportReportToPdfArgs,
     fn=tool_export_report_to_pdf,
+)
+
+petro_mcp_server.register_tool(
+    name="get_workflow_technical_reference",
+    description=(
+        "Retrieve authoritative petrophysical equations, curve contracts, parameter "
+        "bounds, and diagnostic guidelines from the quick_pp SSOT technical foundation in docs/workflows/."
+    ),
+    schema_model=GetTechnicalReferenceArgs,
+    fn=tool_get_workflow_technical_reference,
 )

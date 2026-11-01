@@ -874,6 +874,17 @@
 
 		<button
 			type="button"
+			title="Open Petrophysical Workflow Guide & SSOT Reference"
+			onclick={() => workbench.openWorkflowGuide()}
+			class="h-7 rounded-sm border px-2.5 text-xs font-medium transition-colors {workbench.workflowGuideOpen
+				? 'border-[var(--accent-primary)] bg-[var(--accent-primary)] text-white'
+				: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]'}"
+		>
+			<span class="mr-1">📖</span>Guide
+		</button>
+
+		<button
+			type="button"
 			onclick={() => (workbench.aiDrawerOpen = !workbench.aiDrawerOpen)}
 			class="h-7 rounded-sm border px-2.5 text-xs font-medium transition-colors {workbench.aiDrawerOpen
 				? 'border-blue-600 bg-blue-600 text-white'

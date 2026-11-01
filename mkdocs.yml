@@ -97,6 +97,10 @@ nav:
       - Installation: getting-started/installation.md
       - Quickstart & CLI: getting-started/usage.md
       - AI Assistant & MCP: getting-started/ai-assistant.md
+  - Workflows & Technical Foundations:
+      - Overview: workflows/index.md
+      - Single-Well Petrophysics: workflows/single_well.md
+      - Multi-Well Field Evaluation: workflows/multi_well.md
   - Visual Tutorials (Notebooks):
       - Overview: tutorials/index.md
       - "04 — FDP & PIML Showcase":
