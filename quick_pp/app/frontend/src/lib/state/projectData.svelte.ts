@@ -230,6 +230,7 @@ class ProjectDataState {
 	summary = $state<ProjectSummaryResponse | null>(null);
 	isLoading = $state<boolean>(false);
 	isComputingMultiWell = $state<boolean>(false);
+	isCascadingMultiWell = $state<boolean>(false);
 	error = $state<string | null>(null);
 
 	// Track which multi-well modules have unsaved computed results / parameter edits
@@ -1076,39 +1077,389 @@ class ProjectDataState {
 		'shf'
 	];
 
-	hasPendingMultiWell(upToModule: MultiWellSaveModule): boolean {
-		const idx = ProjectDataState.MULTI_WELL_PIPELINE.indexOf(upToModule);
-		const targets =
-			idx >= 0 ? ProjectDataState.MULTI_WELL_PIPELINE.slice(0, idx + 1) : [upToModule];
-		return targets.some((m) => Boolean(this.pendingMultiWellModules[m]));
+	hasPendingMultiWell(moduleKey: MultiWellSaveModule): boolean {
+		return Boolean(this.pendingMultiWellModules[moduleKey]);
 	}
 
-	async saveMultiWellComputed(upToModule: MultiWellSaveModule): Promise<boolean> {
+	hasAnyPendingMultiWell(): boolean {
+		return ProjectDataState.MULTI_WELL_PIPELINE.some((m) => Boolean(this.pendingMultiWellModules[m]));
+	}
+
+	async saveMultiWellComputed(moduleKey: MultiWellSaveModule): Promise<boolean> {
 		const pid = workbench.projectId;
-		if (!pid || !this.hasPendingMultiWell(upToModule)) return false;
+		if (!pid || !this.hasPendingMultiWell(moduleKey)) return false;
 
-		const idx = ProjectDataState.MULTI_WELL_PIPELINE.indexOf(upToModule);
-		const candidates =
-			idx >= 0 ? ProjectDataState.MULTI_WELL_PIPELINE.slice(0, idx + 1) : [upToModule];
-		const modulesToSave = candidates.filter((m) => Boolean(this.pendingMultiWellModules[m]));
-		if (modulesToSave.length === 0) return false;
+		const res = await this.saveSingleMultiWellModule(pid, moduleKey);
+		if (!res) return false;
 
-		const savedLabels: string[] = [];
-		let maxSavedWells = 0;
-		for (const moduleKey of modulesToSave) {
-			const res = await this.saveSingleMultiWellModule(pid, moduleKey);
-			if (!res) return false;
-			savedLabels.push(res.curveLabel);
-			maxSavedWells = Math.max(maxSavedWells, res.savedWells);
-		}
-		// Persist each saved module's parameters keyed by the zone selection active at compute time
-		await this.persistProjectParams(modulesToSave);
-		const msg = `Saved ${savedLabels.join(' + ')} (${maxSavedWells} wells) ✓`;
+		// Persist the saved module's parameters keyed by the zone selection active at compute time
+		await this.persistProjectParams([moduleKey]);
+		const msg = `Saved ${res.curveLabel} (${res.savedWells} wells) ✓`;
 		wellData.lastSavedMessage = msg;
 		appStatus.success(msg);
 		void this.refreshSummary(pid);
-		void this.loadStickPlot(true);
 		return true;
+	}
+
+	/**
+	 * Intentionally cascade Multi-Well computations and saves from `fromStep` down to Stick Plot:
+	 * Rock Typing (ROCK_FLAG) -> Perm Transform (PERM_TRANS) -> Swirr (SWIRR) -> SHF -> Stick Plot.
+	 */
+	async cascadeMultiWellToStickPlot(
+		fromStep: MultiWellSaveModule = 'rock-typing',
+		switchToStickPlot: boolean = true
+	): Promise<boolean> {
+		const pid = workbench.projectId;
+		if (!pid || this.isComputingMultiWell || this.isCascadingMultiWell) return false;
+
+		const startIdx = Math.max(0, ProjectDataState.MULTI_WELL_PIPELINE.indexOf(fromStep));
+		const taskId = appStatus.startTask(
+			'Cascading Multi-Well workflow → Stick Plot...',
+			`Starting from ${fromStep}`
+		);
+		this.isCascadingMultiWell = true;
+		this.isComputingMultiWell = true;
+		this.error = null;
+
+		const cascadedSteps: string[] = [];
+		const persistedModules: string[] = [];
+		let maxSavedWells = 0;
+
+		try {
+			const selectedWellsPayload =
+				this.selectedWellNames.length > 0 && this.selectedWellNames.length < this.wells.length
+					? this.selectedWellNames
+					: null;
+
+			// 1. Rock Typing (if starting at rock-typing, or if rock-typing has unsaved changes)
+			if (startIdx <= 0 || this.pendingMultiWellModules['rock-typing']) {
+				if (!this.rockTypingResult) {
+					const sortedCutoffs = [...this.activeDrtCutoffs].sort((a, b) => a - b);
+					const higherIsBetter = this.drtMethod !== 'lucia';
+					const activeMinDepth =
+						this.drtPropagateFocusedOnly && workbench.depthFilter?.min != null
+							? workbench.depthFilter.min
+							: null;
+					const activeMaxDepth =
+						this.drtPropagateFocusedOnly && workbench.depthFilter?.max != null
+							? workbench.depthFilter.max
+							: null;
+					const activeZones =
+						this.drtPropagateFocusedOnly && workbench.selectedZones.length > 0
+							? workbench.selectedZones
+							: null;
+
+					const { data, error } = await api.POST(
+						'/quick_pp/workspace/projects/{project_id}/rock_typing/compute',
+						{
+							params: { path: { project_id: pid } },
+							body: {
+								well_names: selectedWellsPayload,
+								method: this.drtMethod,
+								data_source: this.drtDataSource,
+								cutoffs: sortedCutoffs,
+								higher_is_better: higherIsBetter,
+								auto_find_cutoffs: false,
+								cutoff_method: this.drtCutoffMethod,
+								auto_k: this.drtAutoK,
+								gmm_criterion: this.drtGmmCriterion,
+								max_clusters: this.drtMaxClusters,
+								no_of_cutoffs: sortedCutoffs.length,
+								use_interparticle_porosity: this.useInterparticlePorosity,
+								lucia_vuggy_override: this.luciaVuggyOverride,
+								phi_sec_cutoff: this.phiSecCutoff,
+								lucia_cutoffs: [...this.luciaCutoffs].sort((a, b) => a - b),
+								dt_matrix: this.dtMatrix,
+								dt_fluid: this.dtFluid,
+								train_classifier: false,
+								apply_classifier_propagation: this.drtClassifierPropagated,
+								propagation_mode: this.drtPropagationMode,
+								propagate_focused_only: this.drtPropagateFocusedOnly,
+								zones: activeZones,
+								min_depth: activeMinDepth,
+								max_depth: activeMaxDepth,
+								classifier_model: this.drtClassifierModel,
+								selected_features: this.drtSelectedFeatures,
+								include_pef: this.drtSelectedFeatures.includes('PEF'),
+								include_vdl: this.drtSelectedFeatures.includes('VDL'),
+								test_size: this.drtClassifierTestSize,
+								saved_model_key: this.drtSelectedSavedModelKey || null,
+								include_non_reservoir: this.drtIncludeNonReservoir,
+								non_res_phit_cutoff: this.drtNonResPhitCutoff,
+								non_res_vsh_cutoff: this.drtNonResVshCutoff,
+								non_res_perm_cutoff: this.drtNonResPermCutoff,
+								save: false
+							} as any
+						}
+					);
+					if (error || !data) {
+						throw new Error(String((error as any)?.detail ?? 'Cascade failed at Rock Typing'));
+					}
+					const counts = (data as any).rock_type_counts ?? (data as any).flag_counts ?? {};
+					this.rockTypingResult = {
+						method: (data as any).method ?? this.drtMethod,
+						data_source: (data as any).data_source ?? this.drtDataSource,
+						poro_label:
+							(data as any).poro_label ?? (this.drtDataSource === 'log' ? 'PHIT' : 'CPORE'),
+						perm_label:
+							(data as any).perm_label ?? (this.drtDataSource === 'log' ? 'PERM' : 'CPERM'),
+						optimal_k: (data as any).optimal_k,
+						selected_k: (data as any).selected_k,
+						cutoff_method: (data as any).cutoff_method ?? this.drtCutoffMethod,
+						diagnostics: (data as any).diagnostics ?? null,
+						...(data.data as any),
+						rock_type_counts: counts
+					};
+					this.markMultiWellComputed('rock-typing');
+				}
+
+				const rtSaved = await this.saveSingleMultiWellModule(pid, 'rock-typing');
+				if (rtSaved) {
+					cascadedSteps.push('DRT');
+					persistedModules.push('rock-typing');
+					maxSavedWells = Math.max(maxSavedWells, rtSaved.savedWells);
+				}
+			}
+
+			// 2. Permeability Transform (if starting at or before perm-transform, or if pending)
+			if (startIdx <= 1 || this.pendingMultiWellModules['perm-transform']) {
+				const customFits =
+					this.permTransformManualEdits && this.permTransformResult?.fits
+						? Object.fromEntries(
+								Object.entries(this.permTransformResult.fits)
+									.filter(([k]) => Number(k) >= 1)
+									.map(([k, v]) => [k, { a: Number(v.a), b: Number(v.b) }])
+							)
+						: null;
+
+				const { data: ptData, error: ptErr } = await api.POST(
+					'/quick_pp/workspace/projects/{project_id}/perm_transform/compute',
+					{
+						params: { path: { project_id: pid } },
+						body: {
+							well_names: selectedWellsPayload,
+							method: this.drtMethod,
+							data_source: this.permTransformDataSource,
+							cutoffs: [...this.activeDrtCutoffs].sort((a, b) => a - b),
+							include_non_reservoir: this.drtIncludeNonReservoir,
+							non_res_phit_cutoff: this.drtNonResPhitCutoff,
+							non_res_vsh_cutoff: this.drtNonResVshCutoff,
+							non_res_perm_cutoff: this.drtNonResPermCutoff,
+							rock_flag_source: this.drtClassifierPropagated
+								? this.drtPropagationMode
+								: 'cutoff_only',
+							fits: customFits,
+							save: false
+						} as any
+					}
+				);
+				if (ptErr || !ptData) {
+					throw new Error(String((ptErr as any)?.detail ?? 'Cascade failed at Perm Transform'));
+				}
+				const rawFits = (ptData.fits ?? {}) as Record<
+					string,
+					{ a: number; b: number; r2: number | null; count: number }
+				>;
+				const fitsMap = Object.fromEntries(
+					Object.entries(rawFits).filter(([k]) => Number(k) >= 1)
+				);
+				const wnArr = [...(ptData.data?.well_names ?? [])];
+				const dArr = [...(ptData.data?.depths ?? [])];
+				const phitArr = [...(ptData.data?.phit ?? [])];
+				const permArr = [...(ptData.data?.perm ?? [])];
+				const logPhitArr: (number | null)[] = [...((ptData.data as any)?.log_phit ?? phitArr)];
+				const rfArr: (number | null)[] = [...(ptData.data?.rock_flags ?? [])];
+				const ptArr: (number | null)[] = [
+					...((ptData.data as any)?.perm_pred ?? (ptData.data as any)?.perm_trans ?? [])
+				];
+				const activeSrc: PhiKDataSource =
+					(ptData as any).data_source ?? this.permTransformDataSource;
+
+				this.permTransformResult = {
+					data_source: activeSrc,
+					poro_label: (ptData as any).poro_label ?? (activeSrc === 'log' ? 'PHIT' : 'CPORE'),
+					perm_label: (ptData as any).perm_label ?? (activeSrc === 'log' ? 'PERM' : 'CPERM'),
+					fits: fitsMap,
+					...(ptData.data as any),
+					well_names: wnArr,
+					depths: dArr,
+					phit: phitArr,
+					perm: permArr,
+					log_phit: logPhitArr,
+					rock_flags: rfArr,
+					perm_pred: ptArr
+				};
+				this.markMultiWellComputed('perm-transform');
+
+				if (workbench.wellId && wnArr.length > 0) {
+					const wDepths: number[] = [];
+					const wPt: (number | null)[] = [];
+					for (let i = 0; i < wnArr.length; i++) {
+						if (wnArr[i] === workbench.wellId) {
+							wDepths.push(dArr[i]);
+							wPt.push(ptArr[i] ?? null);
+						}
+					}
+					if (wDepths.length > 0) {
+						wellData.mergeComputedCurves({
+							DEPTH: wDepths,
+							PERM_TRANS: wPt
+						});
+					}
+				}
+
+				const ptSaved = await this.saveSingleMultiWellModule(pid, 'perm-transform');
+				if (ptSaved) {
+					cascadedSteps.push('PERM_TRANS');
+					persistedModules.push('perm-transform');
+					maxSavedWells = Math.max(maxSavedWells, ptSaved.savedWells);
+				}
+			}
+
+			// 3. Swirr Correlation (if SCAL Swirr rules exist or swirr-corr is pending)
+			const hasSwirrRules = Object.keys(this.swirrConfig.rules ?? {}).length > 0;
+			if (
+				(startIdx <= 2 && (hasSwirrRules || this.swirrResult || this.swirrApplyResult)) ||
+				this.pendingMultiWellModules['swirr-corr']
+			) {
+				try {
+					const applyRes = await postJson<SwirrApplyResult>(
+						`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/swirr/apply`,
+						{
+							well_names: selectedWellsPayload,
+							config: this.swirrConfig,
+							phie_col: this.swirrInputCols.phieCol,
+							perm_col: this.swirrInputCols.permCol,
+							rt_col: this.swirrInputCols.rtCol,
+							drt_method: this.drtMethod,
+							cutoffs: [...this.activeDrtCutoffs].sort((a, b) => a - b),
+							save: true
+						}
+					);
+					this.swirrApplyResult = applyRes;
+					this.pendingMultiWellModules = {
+						...this.pendingMultiWellModules,
+						'swirr-corr': false
+					};
+					cascadedSteps.push('SWIRR');
+					persistedModules.push('swirr-corr');
+					maxSavedWells = Math.max(maxSavedWells, applyRes.saved_wells ?? 0);
+				} catch {
+					// Continue cascade if project has no SCAL plugs for Swirr
+				}
+			}
+
+			// 4. Saturation Height Function (SHF) across wells with valid TVD
+			const validTvdWells = this.wellsWithTvd.map((w) => w.name);
+			if (validTvdWells.length > 0) {
+				const sp = this.shfParams;
+				const jSatMode = sp.jSatMode ?? 'swn';
+				const customShfFits =
+					this.shfResult?.model === sp.model &&
+					(sp.model !== 'leverett_j' || (this.shfResult?.j_sat_mode ?? 'swn') === jSatMode) &&
+					this.shfResult?.fits &&
+					Object.keys(this.shfResult.fits).length > 0
+						? this.shfResult.fits
+						: null;
+				const fwlByZonePayload =
+					sp.fwlByZone && Object.keys(sp.fwlByZone).length > 0 ? sp.fwlByZone : null;
+
+				const shfData = await postJson<any>(
+					`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/shf/compute`,
+					{
+						well_names: validTvdWells,
+						model: sp.model,
+						j_sat_mode: jSatMode,
+						unit: sp.unit ?? 'metric',
+						drt_method: this.drtMethod,
+						cutoffs: [...this.activeDrtCutoffs].sort((a, b) => a - b),
+						fwl: sp.fwl,
+						fwl_by_zone: fwlByZonePayload,
+						ift: sp.ift,
+						theta: sp.theta,
+						gw: sp.gw,
+						ghc: sp.ghc,
+						swirr_source: sp.swirrSource ?? 'lab_min',
+						swirr_config: this.swirrConfig,
+						fits: customShfFits,
+						save: false
+					}
+				);
+				this.shfResult = {
+					model: shfData.model ?? sp.model,
+					j_sat_mode: shfData.j_sat_mode ?? jSatMode,
+					fits: shfData.fits ?? {},
+					fits_swn: shfData.fits_swn ?? (jSatMode === 'swn' ? shfData.fits : undefined),
+					fits_sw: shfData.fits_sw ?? (jSatMode === 'sw' ? shfData.fits : undefined),
+					fwl_by_zone: shfData.fwl_by_zone ?? sp.fwlByZone,
+					scal_data: shfData.scal_data,
+					...shfData.data
+				};
+				this.markMultiWellComputed('shf');
+
+				if (workbench.wellId && shfData.data?.well_names) {
+					const wnArr = shfData.data.well_names;
+					const dArr = shfData.data.depths;
+					const shfArr = shfData.data.shf;
+					const wDepths: number[] = [];
+					const wShf: (number | null)[] = [];
+					for (let i = 0; i < wnArr.length; i++) {
+						if (wnArr[i] === workbench.wellId) {
+							wDepths.push(dArr[i]);
+							wShf.push(shfArr[i] ?? null);
+						}
+					}
+					if (wDepths.length > 0) {
+						wellData.mergeComputedCurves({
+							DEPTH: wDepths,
+							SHF: wShf
+						});
+					}
+				}
+
+				const shfSaved = await this.saveSingleMultiWellModule(pid, 'shf');
+				if (shfSaved) {
+					cascadedSteps.push('SHF');
+					persistedModules.push('shf');
+					maxSavedWells = Math.max(maxSavedWells, shfSaved.savedWells);
+				}
+			}
+
+			if (persistedModules.length > 0) {
+				await this.persistProjectParams(persistedModules);
+			}
+			void this.refreshSummary(pid);
+
+			if (validTvdWells.length > 0) {
+				await this.loadStickPlot(true);
+				cascadedSteps.push('Stick Plot');
+				if (switchToStickPlot) {
+					workbench.centerPaneMultiWellView = 'stick-plot';
+				}
+			}
+
+			const summaryMsg =
+				cascadedSteps.length > 0
+					? `Cascaded ${cascadedSteps.join(' → ')} (${maxSavedWells || validTvdWells.length} wells) ✓`
+					: 'Multi-well cascade complete ✓';
+			wellData.lastSavedMessage = summaryMsg;
+			appStatus.endTask(taskId, {
+				level: 'success',
+				message: summaryMsg
+			});
+			return true;
+		} catch (e: any) {
+			const errMsg = e?.message || 'Multi-well cascade failed';
+			this.error = errMsg;
+			appStatus.endTask(taskId, {
+				level: 'error',
+				message: errMsg
+			});
+			return false;
+		} finally {
+			this.isCascadingMultiWell = false;
+			this.isComputingMultiWell = false;
+		}
 	}
 
 	/**

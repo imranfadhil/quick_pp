@@ -243,7 +243,6 @@
 					});
 				}
 			}
-			void projectData.loadStickPlot(true);
 		} catch (e: any) {
 			projectData.error = e?.message || 'SHF error';
 		} finally {
@@ -712,33 +711,50 @@
 	</div>
 
 	<div
-		class="flex h-9 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5"
+		class="flex flex-col gap-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-app)] p-2"
 	>
+		<div class="flex items-center justify-between gap-1.5">
+			<button
+				type="button"
+				disabled={projectData.isComputingMultiWell || projectData.wellsWithTvd.length === 0}
+				onclick={() => executeShf(false, true)}
+				title={projectData.wellsWithTvd.length === 0
+					? 'Disabled: No selected wells have TVD or directional survey (TVD is never assumed equal to MD)'
+					: `Compute SHF across ${projectData.wellsWithTvd.length} well(s) with valid TVD`}
+				class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+			>
+				{projectData.isComputingMultiWell
+					? 'Computing...'
+					: projectData.wellsWithTvd.length === 0
+						? 'Compute SHF (No TVD)'
+						: 'Compute SHF (⌘+Enter)'}
+			</button>
+			<button
+				type="button"
+				disabled={projectData.isComputingMultiWell || !projectData.hasPendingMultiWell('shf')}
+				onclick={saveShf}
+				title={projectData.hasPendingMultiWell('shf')
+					? 'Save computed SHF curves across all project wells'
+					: 'Compute or adjust SHF parameters first to enable saving'}
+				class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
+			>
+				Save All Wells
+			</button>
+		</div>
 		<button
 			type="button"
-			disabled={projectData.isComputingMultiWell || projectData.wellsWithTvd.length === 0}
-			onclick={() => executeShf(false, true)}
-			title={projectData.wellsWithTvd.length === 0
-				? 'Disabled: No selected wells have TVD or directional survey (TVD is never assumed equal to MD)'
-				: `Compute SHF across ${projectData.wellsWithTvd.length} well(s) with valid TVD`}
-			class="h-7 flex-1 mr-1.5 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+			disabled={
+				projectData.isComputingMultiWell ||
+				projectData.isCascadingMultiWell ||
+				projectData.wellsWithTvd.length === 0
+			}
+			onclick={() => void projectData.cascadeMultiWellToStickPlot('shf', true)}
+			title="Save SHF across wells and refresh the Multi-Well Stick Plot"
+			class="h-6.5 w-full rounded-sm border border-indigo-300 bg-indigo-50 px-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-45"
 		>
-			{projectData.isComputingMultiWell
-				? 'Computing...'
-				: projectData.wellsWithTvd.length === 0
-					? 'Compute SHF (No TVD)'
-					: 'Compute SHF (⌘+Enter)'}
-		</button>
-		<button
-			type="button"
-			disabled={projectData.isComputingMultiWell || !projectData.hasPendingMultiWell('shf')}
-			onclick={saveShf}
-			title={projectData.hasPendingMultiWell('shf')
-				? 'Save computed SHF curves across all project wells'
-				: 'Compute or adjust SHF parameters first to enable saving'}
-			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
-		>
-			Save All Wells
+			{projectData.isCascadingMultiWell
+				? 'Updating Stick Plot...'
+				: '⟳ Save SHF & Update Stick Plot'}
 		</button>
 	</div>
 </div>

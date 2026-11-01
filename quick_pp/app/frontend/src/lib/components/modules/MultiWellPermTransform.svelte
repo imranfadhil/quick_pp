@@ -446,50 +446,69 @@
 	</div>
 
 	<div
-		class="flex h-9 shrink-0 items-center justify-between gap-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5"
+		class="flex flex-col gap-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-app)] p-2"
 	>
-		{#if !projectData.permTransformResult}
+		<div class="flex items-center justify-between gap-1.5">
+			{#if !projectData.permTransformResult}
+				<button
+					type="button"
+					disabled={projectData.isComputingMultiWell}
+					onclick={() => executePermTransform(false)}
+					class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+				>
+					{projectData.isComputingMultiWell ? 'Fitting...' : 'Fit Transforms (⌘+Enter)'}
+				</button>
+			{:else}
+				<button
+					type="button"
+					disabled={projectData.isComputingMultiWell}
+					onclick={() => executePermTransform(true)}
+					title="Recompute PERM_TRANS logs using current a and b equations"
+					class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+				>
+					{projectData.isComputingMultiWell ? 'Applying...' : 'Apply Fits'}
+				</button>
+				<button
+					type="button"
+					disabled={projectData.isComputingMultiWell}
+					onclick={() => executePermTransform(false)}
+					title="Re-run automatic regression per rock type"
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
+				>
+					Auto-Fit
+				</button>
+			{/if}
 			<button
 				type="button"
-				disabled={projectData.isComputingMultiWell}
-				onclick={() => executePermTransform(false)}
-				class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+				disabled={
+					projectData.isComputingMultiWell ||
+					!projectData.hasPendingMultiWell('perm-transform')
+				}
+				onclick={savePermTransform}
+				title={projectData.hasPendingMultiWell('perm-transform')
+					? 'Save computed PERM_TRANS curves across all project wells (without cascading downstream steps)'
+					: 'Fit or edit permeability transforms first to enable saving'}
+				class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 			>
-				{projectData.isComputingMultiWell ? 'Fitting...' : 'Fit Transforms (⌘+Enter)'}
+				Save All Wells
 			</button>
-		{:else}
-			<button
-				type="button"
-				disabled={projectData.isComputingMultiWell}
-				onclick={() => executePermTransform(true)}
-				title="Recompute PERM_TRANS logs using current a and b equations"
-				class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-			>
-				{projectData.isComputingMultiWell ? 'Applying...' : 'Apply Fits'}
-			</button>
-			<button
-				type="button"
-				disabled={projectData.isComputingMultiWell}
-				onclick={() => executePermTransform(false)}
-				title="Re-run automatic regression per rock type"
-				class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
-			>
-				Auto-Fit
-			</button>
-		{/if}
+		</div>
 		<button
 			type="button"
 			disabled={
 				projectData.isComputingMultiWell ||
-				!projectData.hasPendingMultiWell('perm-transform')
+				projectData.isCascadingMultiWell ||
+				projectData.wellsWithTvd.length === 0
 			}
-			onclick={savePermTransform}
-			title={projectData.hasPendingMultiWell('perm-transform')
-				? 'Save computed PERM_TRANS curves across all project wells'
-				: 'Fit or edit permeability transforms first to enable saving'}
-			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
+			onclick={() => void projectData.cascadeMultiWellToStickPlot('perm-transform', true)}
+			title={projectData.wellsWithTvd.length === 0
+				? 'Disabled: No selected wells have TVD curve or directional survey'
+				: 'Intentionally cascade Perm Transform → Swirr → SHF and open Multi-Well Stick Plot'}
+			class="h-6.5 w-full rounded-sm border border-indigo-300 bg-indigo-50 px-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-45"
 		>
-			Save All Wells
+			{projectData.isCascadingMultiWell
+				? 'Cascading to Stick Plot...'
+				: '⟳ Cascade → Stick Plot'}
 		</button>
 	</div>
 </div>

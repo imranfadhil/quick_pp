@@ -271,6 +271,8 @@
 						workbench.multiWellStep = step.id;
 						if (step.id === 'shf' && projectData.wellsWithTvd.length > 0) {
 							workbench.centerPaneMultiWellView = 'stick-plot';
+						} else {
+							workbench.centerPaneMultiWellView = 'logs';
 						}
 					}}
 					class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-45 {isActive
@@ -331,7 +333,10 @@
 				Boolean(projectData.rockTypingResult?.diagnostics?.classifier?.trained)}
 			<button
 				type="button"
-				onclick={() => (workbench.multiWellStep = 'rt-classifier')}
+				onclick={() => {
+					workbench.multiWellStep = 'rt-classifier';
+					workbench.centerPaneMultiWellView = 'logs';
+				}}
 				title="Standalone Supervised Rock Type (DRT) Classifier Trainer, Contingency Matrix Validator & Model Registry"
 				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isRtClfActive
 					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
@@ -352,7 +357,10 @@
 			{@const isMlTrainDone = projectData.mlTrainingResult !== null}
 			<button
 				type="button"
-				onclick={() => (workbench.multiWellStep = 'ml-training')}
+				onclick={() => {
+					workbench.multiWellStep = 'ml-training';
+					workbench.centerPaneMultiWellView = 'logs';
+				}}
 				title="Standalone Multi-Well Conformal PIML Model Trainer & Global Bundle Exporter"
 				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isMlTrainActive
 					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
@@ -413,6 +421,39 @@
 				class="mono-num shrink-0 whitespace-nowrap text-[11px] font-medium text-[var(--status-ok)] hover:underline"
 			>
 				{wellData.lastSavedMessage}
+			</button>
+		{/if}
+
+		{#if workbench.scope === 'multi-well' && projectData.wells.length > 0}
+			{@const hasPendingMw = projectData.hasAnyPendingMultiWell()}
+			<button
+				type="button"
+				disabled={
+					projectData.isComputingMultiWell ||
+					projectData.isCascadingMultiWell ||
+					projectData.wellsWithTvd.length === 0
+				}
+				onclick={() => {
+					const stepMap: Record<string, 'rock-typing' | 'perm-transform' | 'swirr-corr' | 'shf'> = {
+						'rock-typing': 'rock-typing',
+						'perm-transform': 'perm-transform',
+						'swirr-corr': 'swirr-corr',
+						shf: 'shf'
+					};
+					const startFrom = stepMap[workbench.multiWellStep] ?? 'rock-typing';
+					void projectData.cascadeMultiWellToStickPlot(startFrom, true);
+				}}
+				title={projectData.wellsWithTvd.length === 0
+					? 'Disabled: No selected wells have TVD curve or directional survey'
+					: 'Intentionally cascade Multi-Well steps (Rock Typing → Perm Transform → Swirr → SHF), save across wells, and update the Stick Plot'}
+				class="flex h-6 shrink-0 items-center gap-1 rounded-sm border px-2 text-[10.5px] font-semibold whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-45 {hasPendingMw
+					? 'border-indigo-400 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[var(--text-secondary)] hover:bg-slate-200/70 hover:text-[var(--text-primary)]'}"
+			>
+				<span>{projectData.isCascadingMultiWell ? 'Cascading...' : '⟳ Cascade → Stick Plot'}</span>
+				{#if hasPendingMw && !projectData.isCascadingMultiWell}
+					<span class="h-1.5 w-1.5 rounded-full bg-indigo-600" title="Unsaved multi-well step changes ready to cascade"></span>
+				{/if}
 			</button>
 		{/if}
 
