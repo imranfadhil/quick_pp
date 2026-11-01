@@ -301,6 +301,29 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert z0.get("ZONE") is not None
     assert z0.get("STOIIP_MMBBL_P50") is not None
 
+    # 7b. Multi-well Volumetric Assessment (Area mode & GRV mode)
+    r_vol_area = client.post(
+        f"/quick_pp/workspace/projects/{pid}/multi_well_volumetrics",
+        json={"mode": "area", "n_samples": 200, "seed": 42, "save_to_project": True},
+    )
+    assert r_vol_area.status_code == 200
+    vol_area_body = r_vol_area.json()
+    assert vol_area_body["mode"] == "area"
+    assert len(vol_area_body["well_summary"]) >= 1
+    assert len(vol_area_body["zonal_summary"]) >= 1
+    assert "field_totals" in vol_area_body
+    assert vol_area_body["field_totals"]["stoiip"]["p50"] > 0
+    assert len(vol_area_body["field_totals"]["exceedance_curve"]) == 100
+    assert len(vol_area_body["zonal_summary"][0]["tornado"]) >= 1
+
+    r_vol_grv = client.post(
+        f"/quick_pp/workspace/projects/{pid}/multi_well_volumetrics",
+        json={"mode": "grv", "n_samples": 200, "seed": 42},
+    )
+    assert r_vol_grv.status_code == 200
+    assert r_vol_grv.json()["mode"] == "grv"
+    assert r_vol_grv.json()["field_totals"]["stoiip"]["p50"] > 0
+
     # 8. Saturation Height Function (Leverett-J / Skelt-Harrison / Cuddy)
     r_shf = client.post(
         f"/quick_pp/workspace/projects/{pid}/shf/compute",

@@ -2009,6 +2009,8 @@ def build_report_context(
         "well_zonal_summary": well_zonal_rows,
         "ressum_markdown_table": ressum_markdown_table,
         "uncertainty_summary": uncertainty_summary,
+        "volumetric_summary": merged_configs.get("volumetric_summary"),
+        "volumetric_params": merged_configs.get("volumetric_params"),
         "upscaling_params": upscaling_params,
         "upscaling_table": upscaling_table,
         "anomaly_flags": anomaly_flags,

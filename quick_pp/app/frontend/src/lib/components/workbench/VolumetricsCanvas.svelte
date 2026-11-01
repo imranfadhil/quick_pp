@@ -1,0 +1,829 @@
+<script lang="ts">
+	import { projectData } from '$lib/state/projectData.svelte';
+	import { workbench } from '$lib/state/workbench.svelte';
+	import { downloadCsv, fmtNum } from '$lib/utils/formatters';
+
+	const mv = workbench.multiWellVolumetrics;
+
+	let activeResult = $derived(projectData.volumetricResult);
+	let isOil = $derived(mv.fluidMetric === 'oil');
+
+	// Active zone data (Field Rollup or specific zone)
+	let activeData = $derived.by(() => {
+		if (!activeResult) return null;
+		if (mv.selectedZone === 'ALL' || !mv.selectedZone) {
+			return {
+				isField: true,
+				name: 'Field Rollup (All Formations)',
+				wellCount: activeResult.field_totals?.total_wells ?? 0,
+				stoiip: activeResult.field_totals?.stoiip,
+				recOil: activeResult.field_totals?.rec_oil,
+				giip: activeResult.field_totals?.giip,
+				recGas: activeResult.field_totals?.rec_gas,
+				assocGas: activeResult.field_totals?.assoc_gas,
+				totalGas: activeResult.field_totals?.total_gas,
+				exceedanceCurve: activeResult.field_totals?.exceedance_curve ?? [],
+				histogram: activeResult.field_totals?.histogram ?? [],
+				tornado: activeResult.field_totals?.tornado ?? []
+			};
+		}
+		const z = activeResult.zonal_summary.find((x) => x.zone === mv.selectedZone);
+		if (!z) return null;
+		return {
+			isField: false,
+			name: `Formation: ${z.zone}`,
+			wellCount: z.well_count,
+			stoiip: z.stoiip,
+			recOil: z.rec_oil,
+			giip: z.giip,
+			recGas: z.rec_gas,
+			assocGas: z.assoc_gas,
+			totalGas: z.giip,
+			exceedanceCurve: z.exceedance_curve ?? [],
+			histogram: z.histogram ?? [],
+			tornado: z.tornado ?? []
+		};
+	});
+
+	// SVG Dimensions & Scales for Exceedance S-Curve
+	const svgWidth = 850;
+	const svgHeight = 360;
+	const margin = { top: 30, right: 40, bottom: 45, left: 55 };
+	const plotW = svgWidth - margin.left - margin.right;
+	const plotH = svgHeight - margin.top - margin.bottom;
+
+	let curveStats = $derived.by(() => {
+		if (!activeData || !activeData.exceedanceCurve.length) return null;
+		const pts = activeData.exceedanceCurve;
+		const vols = pts.map((p) => p.volume);
+		const minV = Math.max(0, Math.min(...vols) * 0.9);
+		const maxV = Math.max(...vols) * 1.05;
+		const vSpan = maxV - minV || 1;
+
+		const scaleX = (val: number) => margin.left + ((val - minV) / vSpan) * plotW;
+		const scaleY = (prob: number) => margin.top + (1.0 - prob) * plotH;
+
+		const pathD = pts
+			.map((p, i) => `${i === 0 ? 'M' : 'L'} ${scaleX(p.volume).toFixed(1)} ${scaleY(p.prob).toFixed(1)}`)
+			.join(' ');
+
+		// Histogram bars scaling
+		const hist = activeData.histogram;
+		const maxCount = hist.length ? Math.max(...hist.map((b) => b.count)) : 1;
+		const histBars = hist.map((b) => {
+			const x0 = scaleX(b.bin_start);
+			const x1 = scaleX(b.bin_end);
+			const barW = Math.max(1, x1 - x0 - 1);
+			const barH = (b.count / maxCount) * (plotH * 0.35);
+			const y = margin.top + plotH - barH;
+			return { x: x0, y, width: barW, height: barH, count: b.count };
+		});
+
+		// Key markers
+		const st = isOil ? activeData.stoiip : activeData.giip;
+		const p90X = scaleX(st?.p90 ?? 0);
+		const p50X = scaleX(st?.p50 ?? 0);
+		const p10X = scaleX(st?.p10 ?? 0);
+
+		return {
+			minV,
+			maxV,
+			scaleX,
+			scaleY,
+			pathD,
+			histBars,
+			p90X,
+			p50X,
+			p10X,
+			p90Val: st?.p90 ?? 0,
+			p50Val: st?.p50 ?? 0,
+			p10Val: st?.p10 ?? 0
+		};
+	});
+
+	// Hover tooltip in S-curve
+	let hoverPt = $state<{ x: number; y: number; vol: number; prob: number } | null>(null);
+
+	function handleSvgMouseMove(e: MouseEvent) {
+		if (!curveStats || !activeData?.exceedanceCurve.length) return;
+		const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+		const mouseX = ((e.clientX - rect.left) / rect.width) * svgWidth;
+		if (mouseX < margin.left || mouseX > margin.left + plotW) {
+			hoverPt = null;
+			return;
+		}
+
+		// Find closest point
+		let closest = activeData.exceedanceCurve[0];
+		let minDist = Infinity;
+		for (const p of activeData.exceedanceCurve) {
+			const px = curveStats.scaleX(p.volume);
+			const dist = Math.abs(px - mouseX);
+			if (dist < minDist) {
+				minDist = dist;
+				closest = p;
+			}
+		}
+		if (closest) {
+			hoverPt = {
+				x: curveStats.scaleX(closest.volume),
+				y: curveStats.scaleY(closest.prob),
+				vol: closest.volume,
+				prob: closest.prob
+			};
+		}
+	}
+
+	function exportZonalCsv() {
+		const res = projectData.volumetricResult;
+		if (!res?.zonal_summary?.length) return;
+		const rows = res.zonal_summary.map((z) => ({
+			Zone: z.zone,
+			Wells: z.well_count,
+			Gross_m: z.mean_gross,
+			Net_Pay_m: z.mean_net_pay,
+			NTG_pay: z.ntg_pay,
+			PHIE_pay: z.mean_phie,
+			Sw_pay: z.mean_sw,
+			HCPT_m: z.mean_hcpt,
+			Mode: z.mode,
+			Area_Acres: z.area_mean ?? '',
+			GRV_10e6_m3: z.grv_mean ?? '',
+			STOIIP_1P_MMbbl: z.stoiip?.p90 ?? 0,
+			STOIIP_2P_MMbbl: z.stoiip?.p50 ?? 0,
+			STOIIP_3P_MMbbl: z.stoiip?.p10 ?? 0,
+			Rec_Oil_2P_MMbbl: z.rec_oil?.p50 ?? 0,
+			GIIP_1P_Bcf: z.giip?.p90 ?? 0,
+			GIIP_2P_Bcf: z.giip?.p50 ?? 0,
+			GIIP_3P_Bcf: z.giip?.p10 ?? 0,
+			Rec_Gas_2P_Bcf: z.rec_gas?.p50 ?? 0
+		}));
+		downloadCsv('MultiWell_Zonal_Volumetrics.csv', Object.keys(rows[0]), rows);
+	}
+
+	function exportWellMatrixCsv() {
+		const res = projectData.volumetricResult;
+		if (!res?.well_summary?.length) return;
+		downloadCsv(
+			'MultiWell_Zonal_Well_Matrix.csv',
+			Object.keys(res.well_summary[0]),
+			res.well_summary
+		);
+	}
+</script>
+
+<div class="flex h-full flex-col overflow-hidden bg-[var(--bg-app)]">
+	<!-- Canvas Header Toolbar -->
+	<div class="flex h-10 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 select-none">
+		<div class="flex items-center gap-2">
+			<span class="text-xs font-bold text-[var(--text-primary)]">
+				Volumetric Assessment & Uncertainty
+			</span>
+			<span class="rounded-xs bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
+				SPE-PRMS
+			</span>
+			{#if activeResult}
+				<span class="text-[11px] text-[var(--text-muted)]">
+					• {activeResult.mode === 'area' ? 'Drainage Area' : 'GRV'} Mode ({activeResult.n_samples} LHS)
+				</span>
+			{/if}
+		</div>
+
+		<div class="flex items-center gap-2">
+			<!-- Fluid Metric Selector -->
+			<div class="flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[11px]">
+				<button
+					type="button"
+					class="rounded-xs px-2 py-0.5 font-medium transition-colors {isOil
+						? 'bg-[var(--bg-surface)] font-bold text-amber-700 shadow-xs'
+						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+					onclick={() => (mv.fluidMetric = 'oil')}
+				>
+					🛢️ Oil (STOIIP)
+				</button>
+				<button
+					type="button"
+					class="rounded-xs px-2 py-0.5 font-medium transition-colors {!isOil
+						? 'bg-[var(--bg-surface)] font-bold text-blue-700 shadow-xs'
+						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+					onclick={() => (mv.fluidMetric = 'gas')}
+				>
+					🔥 Gas (GIIP)
+				</button>
+			</div>
+
+			<!-- View Tabs -->
+			<div class="flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[11px]">
+				<button
+					type="button"
+					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'exceedance'
+						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
+						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+					onclick={() => (mv.activeTab = 'exceedance')}
+				>
+					S-Curve (1-CDF)
+				</button>
+				<button
+					type="button"
+					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'tornado'
+						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
+						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+					onclick={() => (mv.activeTab = 'tornado')}
+				>
+					Tornado Sensitivity
+				</button>
+				<button
+					type="button"
+					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'summary'
+						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
+						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+					onclick={() => (mv.activeTab = 'summary')}
+				>
+					Zonal Breakdown
+				</button>
+				<button
+					type="button"
+					class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.activeTab === 'well_matrix'
+						? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-xs'
+						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+					onclick={() => (mv.activeTab = 'well_matrix')}
+				>
+					Well Matrix
+				</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- Main Canvas Body -->
+	<div class="flex-1 overflow-y-auto p-3">
+		{#if !activeResult}
+			<div class="flex h-full flex-col items-center justify-center text-center">
+				<div class="text-3xl mb-2">📊</div>
+				<h3 class="text-sm font-semibold text-[var(--text-primary)]">
+					Multi-Well Volumetric Assessment Ready
+				</h3>
+				<p class="max-w-md text-xs text-[var(--text-secondary)] mt-1">
+					Adjust net pay cut-offs, select calculation mode (Drainage Area vs GRV), and click
+					<strong class="text-[var(--text-primary)]">"Run Field Volumetrics (LHS)"</strong> in the left inspector to compute probabilistic STOIIP and GIIP.
+				</p>
+			</div>
+		{:else if activeData}
+			<!-- KPI Stat Strip Cards -->
+			<div class="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-5">
+				{#if isOil}
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2">
+						<div class="text-[10px] font-semibold text-[var(--text-muted)] uppercase">1P / P90 STOIIP</div>
+						<div class="mono-num text-base font-bold text-slate-800">
+							{fmtNum(activeData.stoiip?.p90, 2)} <span class="text-xs font-normal text-[var(--text-muted)]">MMbbl</span>
+						</div>
+						<div class="text-[10px] text-slate-500">Conservative / Low</div>
+					</div>
+
+					<div class="rounded-sm border border-blue-200 bg-blue-50/60 p-2">
+						<div class="text-[10px] font-semibold text-blue-800 uppercase">2P / P50 STOIIP</div>
+						<div class="mono-num text-base font-bold text-blue-900">
+							{fmtNum(activeData.stoiip?.p50, 2)} <span class="text-xs font-normal text-blue-700">MMbbl</span>
+						</div>
+						<div class="text-[10px] text-blue-600">Base / Best Estimate</div>
+					</div>
+
+					<div class="rounded-sm border border-emerald-200 bg-emerald-50/60 p-2">
+						<div class="text-[10px] font-semibold text-emerald-800 uppercase">3P / P10 STOIIP</div>
+						<div class="mono-num text-base font-bold text-emerald-900">
+							{fmtNum(activeData.stoiip?.p10, 2)} <span class="text-xs font-normal text-emerald-700">MMbbl</span>
+						</div>
+						<div class="text-[10px] text-emerald-600">High / Optimistic</div>
+					</div>
+
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2">
+						<div class="text-[10px] font-semibold text-[var(--text-muted)] uppercase">Rec Oil (2P)</div>
+						<div class="mono-num text-base font-bold text-amber-800">
+							{fmtNum(activeData.recOil?.p50, 2)} <span class="text-xs font-normal text-[var(--text-muted)]">MMbbl</span>
+						</div>
+						<div class="text-[10px] text-[var(--text-muted)]">RF ~ {fmtNum((activeData.recOil?.p50 ?? 0) / (activeData.stoiip?.p50 || 1) * 100, 1)}%</div>
+					</div>
+
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2">
+						<div class="text-[10px] font-semibold text-[var(--text-muted)] uppercase">Spread (P10 / P90)</div>
+						<div class="mono-num text-base font-bold text-slate-700">
+							{fmtNum((activeData.stoiip?.p10 ?? 0) / (activeData.stoiip?.p90 || 1), 2)}×
+						</div>
+						<div class="text-[10px] text-[var(--text-muted)]">Mean: {fmtNum(activeData.stoiip?.mean, 1)} MMbbl</div>
+					</div>
+				{:else}
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2">
+						<div class="text-[10px] font-semibold text-[var(--text-muted)] uppercase">1P / P90 GIIP</div>
+						<div class="mono-num text-base font-bold text-slate-800">
+							{fmtNum(activeData.giip?.p90, 2)} <span class="text-xs font-normal text-[var(--text-muted)]">Bcf</span>
+						</div>
+						<div class="text-[10px] text-slate-500">Conservative / Low</div>
+					</div>
+
+					<div class="rounded-sm border border-blue-200 bg-blue-50/60 p-2">
+						<div class="text-[10px] font-semibold text-blue-800 uppercase">2P / P50 GIIP</div>
+						<div class="mono-num text-base font-bold text-blue-900">
+							{fmtNum(activeData.giip?.p50, 2)} <span class="text-xs font-normal text-blue-700">Bcf</span>
+						</div>
+						<div class="text-[10px] text-blue-600">Base / Best Estimate</div>
+					</div>
+
+					<div class="rounded-sm border border-emerald-200 bg-emerald-50/60 p-2">
+						<div class="text-[10px] font-semibold text-emerald-800 uppercase">3P / P10 GIIP</div>
+						<div class="mono-num text-base font-bold text-emerald-900">
+							{fmtNum(activeData.giip?.p10, 2)} <span class="text-xs font-normal text-emerald-700">Bcf</span>
+						</div>
+						<div class="text-[10px] text-emerald-600">High / Optimistic</div>
+					</div>
+
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2">
+						<div class="text-[10px] font-semibold text-[var(--text-muted)] uppercase">Rec Gas (2P)</div>
+						<div class="mono-num text-base font-bold text-blue-800">
+							{fmtNum(activeData.recGas?.p50, 2)} <span class="text-xs font-normal text-[var(--text-muted)]">Bcf</span>
+						</div>
+						<div class="text-[10px] text-[var(--text-muted)]">RF ~ {fmtNum((activeData.recGas?.p50 ?? 0) / (activeData.giip?.p50 || 1) * 100, 1)}%</div>
+					</div>
+
+					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2">
+						<div class="text-[10px] font-semibold text-[var(--text-muted)] uppercase">Solution Gas (2P)</div>
+						<div class="mono-num text-base font-bold text-amber-700">
+							{fmtNum(activeData.assocGas?.p50, 2)} <span class="text-xs font-normal text-[var(--text-muted)]">Bcf</span>
+						</div>
+						<div class="text-[10px] text-[var(--text-muted)]">Total Gas: {fmtNum((activeData.giip?.p50 ?? 0) + (activeData.assocGas?.p50 ?? 0), 1)} Bcf</div>
+					</div>
+				{/if}
+			</div>
+
+			<!-- TAB 1: S-Curve Exceedance & Histogram -->
+			{#if mv.activeTab === 'exceedance'}
+				<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-xs">
+					<div class="mb-2 flex items-center justify-between text-xs">
+						<div>
+							<h4 class="font-bold text-[var(--text-primary)]">
+								Cumulative Exceedance Probability (1 - CDF) & Frequency Distribution
+							</h4>
+							<p class="text-[11px] text-[var(--text-secondary)]">
+								{activeData.name} • Monte Carlo Realizations ($N = {activeResult.n_samples}$)
+							</p>
+						</div>
+						<div class="flex items-center gap-3 text-[11px]">
+							<span class="flex items-center gap-1">
+								<span class="inline-block h-2 w-4 bg-slate-500 rounded-xs"></span>
+								<strong class="text-slate-700">1P (P90):</strong> {fmtNum(curveStats?.p90Val, 2)}
+							</span>
+							<span class="flex items-center gap-1">
+								<span class="inline-block h-2 w-4 bg-blue-600 rounded-xs"></span>
+								<strong class="text-blue-700">2P (P50):</strong> {fmtNum(curveStats?.p50Val, 2)}
+							</span>
+							<span class="flex items-center gap-1">
+								<span class="inline-block h-2 w-4 bg-emerald-600 rounded-xs"></span>
+								<strong class="text-emerald-700">3P (P10):</strong> {fmtNum(curveStats?.p10Val, 2)}
+							</span>
+						</div>
+					</div>
+
+					{#if curveStats}
+						<div class="relative overflow-hidden">
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<svg
+								viewBox="0 0 {svgWidth} {svgHeight}"
+								class="w-full h-auto select-none"
+								onmousemove={handleSvgMouseMove}
+								onmouseleave={() => (hoverPt = null)}
+							>
+								<!-- Grid Lines -->
+								{#each [0, 0.25, 0.5, 0.75, 1.0] as prob}
+									{@const y = curveStats.scaleY(prob)}
+									<line
+										x1={margin.left}
+										y1={y}
+										x2={margin.left + plotW}
+										y2={y}
+										stroke="var(--border-hairline)"
+										stroke-dasharray="2,2"
+									/>
+									<text
+										x={margin.left - 6}
+										y={y + 3}
+										text-anchor="end"
+										font-size="9"
+										fill="var(--text-muted)"
+									>
+										{Math.round(prob * 100)}%
+									</text>
+								{/each}
+
+								<!-- Histogram Bars (subtle in background) -->
+								{#each curveStats.histBars as bar}
+									<rect
+										x={bar.x}
+										y={bar.y}
+										width={bar.width}
+										height={bar.height}
+										fill="rgba(59, 130, 246, 0.15)"
+										stroke="rgba(59, 130, 246, 0.3)"
+										stroke-width="0.5"
+									/>
+								{/each}
+
+								<!-- S-Curve Path -->
+								<path
+									d={curveStats.pathD}
+									fill="none"
+									stroke="var(--accent-primary)"
+									stroke-width="2.5"
+								/>
+
+								<!-- P90 / 1P Line -->
+								<line
+									x1={curveStats.p90X}
+									y1={margin.top}
+									x2={curveStats.p90X}
+									y2={margin.top + plotH}
+									stroke="#64748b"
+									stroke-width="1.5"
+									stroke-dasharray="4,3"
+								/>
+								<text
+									x={curveStats.p90X}
+									y={margin.top - 6}
+									text-anchor="middle"
+									font-size="9.5"
+									font-weight="bold"
+									fill="#475569"
+								>
+									1P (P90)
+								</text>
+
+								<!-- P50 / 2P Line -->
+								<line
+									x1={curveStats.p50X}
+									y1={margin.top}
+									x2={curveStats.p50X}
+									y2={margin.top + plotH}
+									stroke="#2563eb"
+									stroke-width="2"
+									stroke-dasharray="4,3"
+								/>
+								<text
+									x={curveStats.p50X}
+									y={margin.top - 6}
+									text-anchor="middle"
+									font-size="9.5"
+									font-weight="bold"
+									fill="#1d4ed8"
+								>
+									2P (P50)
+								</text>
+
+								<!-- P10 / 3P Line -->
+								<line
+									x1={curveStats.p10X}
+									y1={margin.top}
+									x2={curveStats.p10X}
+									y2={margin.top + plotH}
+									stroke="#059669"
+									stroke-width="1.5"
+									stroke-dasharray="4,3"
+								/>
+								<text
+									x={curveStats.p10X}
+									y={margin.top - 6}
+									text-anchor="middle"
+									font-size="9.5"
+									font-weight="bold"
+									fill="#047857"
+								>
+									3P (P10)
+								</text>
+
+								<!-- X Axis & Ticks -->
+								<line
+									x1={margin.left}
+									y1={margin.top + plotH}
+									x2={margin.left + plotW}
+									y2={margin.top + plotH}
+									stroke="var(--border-hairline)"
+								/>
+								{#each [0, 0.25, 0.5, 0.75, 1.0] as frac}
+									{@const val = curveStats.minV + frac * (curveStats.maxV - curveStats.minV)}
+									{@const x = curveStats.scaleX(val)}
+									<line
+										x1={x}
+										y1={margin.top + plotH}
+										x2={x}
+										y2={margin.top + plotH + 4}
+										stroke="var(--border-hairline)"
+									/>
+									<text
+										x={x}
+										y={margin.top + plotH + 15}
+										text-anchor="middle"
+										font-size="9.5"
+										fill="var(--text-muted)"
+									>
+										{fmtNum(val, 1)}
+									</text>
+								{/each}
+
+								<!-- Axis Labels -->
+								<text
+									x={margin.left + plotW / 2}
+									y={svgHeight - 6}
+									text-anchor="middle"
+									font-size="10"
+									font-weight="600"
+									fill="var(--text-secondary)"
+								>
+									{isOil ? 'STOIIP (MMbbl)' : 'GIIP (Bcf)'}
+								</text>
+								<text
+									x={-svgHeight / 2}
+									y={14}
+									text-anchor="middle"
+									transform="rotate(-90)"
+									font-size="10"
+									font-weight="600"
+									fill="var(--text-secondary)"
+								>
+									Cumulative Exceedance Probability P(V ≥ v)
+								</text>
+
+								<!-- Interactive Crosshair -->
+								{#if hoverPt}
+									<circle
+										cx={hoverPt.x}
+										cy={hoverPt.y}
+										r="4.5"
+										fill="var(--accent-primary)"
+										stroke="white"
+										stroke-width="1.5"
+									/>
+									<line
+										x1={hoverPt.x}
+										y1={margin.top}
+										x2={hoverPt.x}
+										y2={margin.top + plotH}
+										stroke="var(--accent-primary)"
+										stroke-width="1"
+										stroke-dasharray="2,2"
+									/>
+									<line
+										x1={margin.left}
+										y1={hoverPt.y}
+										x2={margin.left + plotW}
+										y2={hoverPt.y}
+										stroke="var(--accent-primary)"
+										stroke-width="1"
+										stroke-dasharray="2,2"
+									/>
+									<g transform="translate({Math.min(hoverPt.x + 8, svgWidth - 110)}, {Math.max(hoverPt.y - 30, margin.top + 5)})">
+										<rect
+											x="0"
+											y="0"
+											width="100"
+											height="30"
+											rx="3"
+											fill="rgba(15, 23, 42, 0.88)"
+										/>
+										<text x="6" y="13" font-size="9" fill="white" font-weight="bold">
+											Vol: {fmtNum(hoverPt.vol, 2)} {isOil ? 'MMbbl' : 'Bcf'}
+										</text>
+										<text x="6" y="24" font-size="8.5" fill="#93c5fd">
+											Exceed: {Math.round(hoverPt.prob * 100)}%
+										</text>
+									</g>
+								{/if}
+							</svg>
+						</div>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- TAB 2: Tornado Sensitivity Analysis -->
+			{#if mv.activeTab === 'tornado'}
+				<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-xs">
+					<div class="mb-3 flex items-center justify-between text-xs">
+						<div>
+							<h4 class="font-bold text-[var(--text-primary)]">
+								Tornado Sensitivity Analysis (Parameter Uncertainty Impact)
+							</h4>
+							<p class="text-[11px] text-[var(--text-secondary)]">
+								Evaluated by varying each parameter from P10 to P90 while holding others at their Base Case (P50).
+							</p>
+						</div>
+						<div class="flex items-center gap-3 text-[11px]">
+							<span class="flex items-center gap-1.5">
+								<span class="inline-block h-3 w-3 rounded-xs bg-amber-500"></span>
+								<span>Low Outcome (P90 parameter)</span>
+							</span>
+							<span class="flex items-center gap-1.5">
+								<span class="inline-block h-3 w-3 rounded-xs bg-emerald-500"></span>
+								<span>High Outcome (P10 parameter)</span>
+							</span>
+						</div>
+					</div>
+
+					{#if activeData.tornado && activeData.tornado.length > 0}
+						{@const maxSwing = Math.max(...activeData.tornado.map((t) => t.swing)) || 1}
+						<div class="flex flex-col gap-2.5">
+							{#each activeData.tornado as t}
+								{@const lowWidth = (t.swing / 2 / maxSwing) * 50}
+								{@const highWidth = (t.swing / 2 / maxSwing) * 50}
+								<div class="flex flex-col text-xs">
+									<div class="flex items-center justify-between py-0.5">
+										<span class="font-semibold text-[var(--text-primary)]">
+											{t.label} <span class="font-normal text-[var(--text-muted)]">({t.unit})</span>
+										</span>
+										<span class="mono-num text-[11px] text-[var(--text-secondary)]">
+											Δ {fmtNum(t.swing, 2)} {isOil ? 'MMbbl' : 'Bcf'} swing
+										</span>
+									</div>
+									<div class="relative h-6 w-full rounded-xs bg-[var(--bg-subtle)] border border-[var(--border-hairline)] overflow-hidden">
+										<!-- Center Base Line -->
+										<div class="absolute top-0 bottom-0 left-1/2 w-[1px] bg-slate-400 z-10"></div>
+
+										<!-- Low Outcome Bar (left from center) -->
+										<div
+											class="absolute top-1 bottom-1 right-1/2 rounded-l-xs bg-amber-400/90 flex items-center justify-start pl-1 text-[9.5px] font-bold text-amber-900 mono-num"
+											style="width: {lowWidth}%;"
+										>
+											{fmtNum(t.vol_at_low, 1)}
+										</div>
+
+										<!-- High Outcome Bar (right from center) -->
+										<div
+											class="absolute top-1 bottom-1 left-1/2 rounded-r-xs bg-emerald-400/90 flex items-center justify-end pr-1 text-[9.5px] font-bold text-emerald-900 mono-num"
+											style="width: {highWidth}%;"
+										>
+											{fmtNum(t.vol_at_high, 1)}
+										</div>
+									</div>
+								</div>
+							{/each}
+						</div>
+					{:else}
+						<div class="py-6 text-center text-xs text-[var(--text-muted)]">
+							No sensitivity parameters available for current formation.
+						</div>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- TAB 3: Zonal Volumetrics Breakdown Table -->
+			{#if mv.activeTab === 'summary'}
+				<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-xs">
+					<div class="mb-2 flex items-center justify-between text-xs">
+						<div>
+							<h4 class="font-bold text-[var(--text-primary)]">
+								Field & Zonal In-Place & Recoverable Resources (SPE-PRMS)
+							</h4>
+							<p class="text-[11px] text-[var(--text-secondary)]">
+								P90 (1P / Conservative) • P50 (2P / Best Estimate) • P10 (3P / High Case)
+							</p>
+						</div>
+						<button
+							type="button"
+							onclick={exportZonalCsv}
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[11px] font-semibold text-[var(--text-primary)] hover:bg-slate-200"
+						>
+							Download CSV
+						</button>
+					</div>
+
+					<div class="overflow-x-auto border border-[var(--border-hairline)]">
+						<table class="w-full border-collapse text-left text-xs">
+							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+								<tr class="h-6 border-b border-[var(--border-hairline)]">
+									<th class="px-2 font-semibold">Formation</th>
+									<th class="px-1 text-center font-semibold">Wells</th>
+									<th class="px-2 text-right font-semibold">Net Pay (m)</th>
+									<th class="px-2 text-right font-semibold">NTG</th>
+									<th class="px-2 text-right font-semibold">Φe (v/v)</th>
+									<th class="px-2 text-right font-semibold">Sw (v/v)</th>
+									<th class="px-2 text-right font-semibold">HCPT (m)</th>
+									{#if isOil}
+										<th class="px-2 text-right font-semibold bg-amber-50/50">1P STOIIP</th>
+										<th class="px-2 text-right font-semibold bg-amber-50/70 text-amber-900">2P STOIIP</th>
+										<th class="px-2 text-right font-semibold bg-amber-50/50">3P STOIIP</th>
+										<th class="px-2 text-right font-semibold">Rec Oil (2P)</th>
+									{:else}
+										<th class="px-2 text-right font-semibold bg-blue-50/50">1P GIIP</th>
+										<th class="px-2 text-right font-semibold bg-blue-50/70 text-blue-900">2P GIIP</th>
+										<th class="px-2 text-right font-semibold bg-blue-50/50">3P GIIP</th>
+										<th class="px-2 text-right font-semibold">Rec Gas (2P)</th>
+									{/if}
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-[var(--border-hairline)]">
+								{#each activeResult.zonal_summary as z}
+									<tr class="h-7 hover:bg-[var(--bg-subtle)]/50">
+										<td class="px-2 font-medium">{z.zone}</td>
+										<td class="px-1 text-center mono-num text-[var(--text-muted)]">{z.well_count}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(z.mean_net_pay, 1)}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(z.ntg_pay, 2)}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(z.mean_phie, 3)}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(z.mean_sw, 3)}</td>
+										<td class="mono-num px-2 text-right font-medium">{fmtNum(z.mean_hcpt, 2)}</td>
+										{#if isOil}
+											<td class="mono-num px-2 text-right bg-amber-50/30">{fmtNum(z.stoiip?.p90, 2)}</td>
+											<td class="mono-num px-2 text-right font-bold text-amber-900 bg-amber-50/50">{fmtNum(z.stoiip?.p50, 2)}</td>
+											<td class="mono-num px-2 text-right bg-amber-50/30">{fmtNum(z.stoiip?.p10, 2)}</td>
+											<td class="mono-num px-2 text-right font-semibold">{fmtNum(z.rec_oil?.p50, 2)}</td>
+										{:else}
+											<td class="mono-num px-2 text-right bg-blue-50/30">{fmtNum(z.giip?.p90, 2)}</td>
+											<td class="mono-num px-2 text-right font-bold text-blue-900 bg-blue-50/50">{fmtNum(z.giip?.p50, 2)}</td>
+											<td class="mono-num px-2 text-right bg-blue-50/30">{fmtNum(z.giip?.p10, 2)}</td>
+											<td class="mono-num px-2 text-right font-semibold">{fmtNum(z.rec_gas?.p50, 2)}</td>
+										{/if}
+									</tr>
+								{/each}
+
+								<!-- Field Rollup Row -->
+								<tr class="h-8 bg-blue-50/80 font-bold border-t-2 border-blue-300">
+									<td class="px-2 text-blue-900">FIELD ROLLUP (ALL)</td>
+									<td class="px-1 text-center mono-num text-blue-800">{activeResult.field_totals.total_wells}</td>
+									<td class="mono-num px-2 text-right text-blue-900">—</td>
+									<td class="mono-num px-2 text-right text-blue-900">—</td>
+									<td class="mono-num px-2 text-right text-blue-900">—</td>
+									<td class="mono-num px-2 text-right text-blue-900">—</td>
+									<td class="mono-num px-2 text-right text-blue-900">—</td>
+									{#if isOil}
+										<td class="mono-num px-2 text-right text-blue-900">{fmtNum(activeResult.field_totals.stoiip?.p90, 2)}</td>
+										<td class="mono-num px-2 text-right text-blue-950 font-extrabold">{fmtNum(activeResult.field_totals.stoiip?.p50, 2)}</td>
+										<td class="mono-num px-2 text-right text-blue-900">{fmtNum(activeResult.field_totals.stoiip?.p10, 2)}</td>
+										<td class="mono-num px-2 text-right text-blue-900">{fmtNum(activeResult.field_totals.rec_oil?.p50, 2)}</td>
+									{:else}
+										<td class="mono-num px-2 text-right text-blue-900">{fmtNum(activeResult.field_totals.giip?.p90, 2)}</td>
+										<td class="mono-num px-2 text-right text-blue-950 font-extrabold">{fmtNum(activeResult.field_totals.giip?.p50, 2)}</td>
+										<td class="mono-num px-2 text-right text-blue-900">{fmtNum(activeResult.field_totals.giip?.p10, 2)}</td>
+										<td class="mono-num px-2 text-right text-blue-900">{fmtNum(activeResult.field_totals.rec_gas?.p50, 2)}</td>
+									{/if}
+								</tr>
+							</tbody>
+						</table>
+					</div>
+				</div>
+			{/if}
+
+			<!-- TAB 4: Well-by-Well Matrix -->
+			{#if mv.activeTab === 'well_matrix'}
+				<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-xs">
+					<div class="mb-2 flex items-center justify-between text-xs">
+						<div>
+							<h4 class="font-bold text-[var(--text-primary)]">
+								Well-by-Well Zonal Summation Matrix
+							</h4>
+							<p class="text-[11px] text-[var(--text-secondary)]">
+								Individual well penetration metrics across evaluated reservoir formations
+							</p>
+						</div>
+						<button
+							type="button"
+							onclick={exportWellMatrixCsv}
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[11px] font-semibold text-[var(--text-primary)] hover:bg-slate-200"
+						>
+							Download Matrix CSV
+						</button>
+					</div>
+
+					<div class="overflow-x-auto border border-[var(--border-hairline)]">
+						<table class="w-full border-collapse text-left text-xs">
+							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+								<tr class="h-6 border-b border-[var(--border-hairline)]">
+									<th class="px-2 font-semibold">Well</th>
+									<th class="px-2 font-semibold">Zone</th>
+									<th class="px-2 text-right font-semibold">Gross (m)</th>
+									<th class="px-2 text-right font-semibold">Net Res (m)</th>
+									<th class="px-2 text-right font-semibold">NTG (Res)</th>
+									<th class="px-2 text-right font-semibold">Net Pay (m)</th>
+									<th class="px-2 text-right font-semibold">NTG (Pay)</th>
+									<th class="px-2 text-right font-semibold">Φe (v/v)</th>
+									<th class="px-2 text-right font-semibold">Sw (v/v)</th>
+									<th class="px-2 text-right font-semibold">K (mD)</th>
+									<th class="px-2 text-right font-semibold">HCPT (m)</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-[var(--border-hairline)]">
+								{#each activeResult.well_summary as w}
+									<tr class="h-6 hover:bg-[var(--bg-subtle)]/50">
+										<td class="px-2 font-semibold text-slate-800">{w.well_name}</td>
+										<td class="px-2 font-medium">{w.zone}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(w.gross, 1)}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(w.net_res, 1)}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(w.ntg_res, 2)}</td>
+										<td class="mono-num px-2 text-right font-medium text-blue-700">{fmtNum(w.net_pay, 1)}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(w.ntg_pay, 2)}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(w.phie, 3)}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(w.sw, 3)}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(w.perm_geom, 1)}</td>
+										<td class="mono-num px-2 text-right font-bold text-emerald-800">{fmtNum(w.hcpt, 2)}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			{/if}
+		{/if}
+	</div>
+</div>

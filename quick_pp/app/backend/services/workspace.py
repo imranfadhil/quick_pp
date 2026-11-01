@@ -108,7 +108,7 @@ from quick_pp.saturation import (
     swirr_timur,
     waxman_smits_saturation,
 )
-from quick_pp.uncertainty import calc_stochastic_reservoir_summary
+from quick_pp.uncertainty import calc_stochastic_reservoir_summary, sample_lhs_parameters
 from quick_pp.upscaling import expand_blocked_logs, upscale_logs
 from quick_pp.utils import nd_triangle_coords
 
@@ -824,6 +824,31 @@ class WorkspaceReservoirSummaryRequest(WorkspaceFilterBase):
     omega: float = Field(0.33)
     include_uncertainty: bool = Field(False)
     n_samples: int = Field(100)
+
+
+class WorkspaceMultiWellVolumetricsRequest(WorkspaceFilterBase):
+    cut_offs: Dict[str, float] = Field(
+        default_factory=lambda: {"VSHALE": 0.4, "PHIT": 0.05, "SWT": 0.8}
+    )
+    mode: str = Field(
+        "area", description="Volumetric calculation mode: 'area' (acres & ft) or 'grv' (10^6 m^3 & NTG)"
+    )
+    compute_oil: bool = Field(True, description="Compute STOIIP and recoverable oil")
+    compute_gas: bool = Field(True, description="Compute GIIP, associated gas, and recoverable gas")
+    well_names: Optional[List[str]] = Field(
+        None, description="Optional subset of well names to include"
+    )
+    zone_params: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Zone-specific volumetric and PVT bounds (area/grv, bo, bg, rs, rf_oil, rf_gas)",
+    )
+    n_samples: int = Field(
+        5000, ge=100, le=50000, description="Number of Latin Hypercube Monte Carlo realizations"
+    )
+    seed: Optional[int] = Field(42, description="Random seed")
+    save_to_project: bool = Field(
+        False, description="Whether to persist parameters into project ancillary"
+    )
 
 
 class WorkspaceRockTypingRequest(BaseModel):
@@ -11174,4 +11199,543 @@ def workspace_swirr_apply(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Swirr application failed: {e}"
+        ) from e
+
+
+
+@router.post(
+    "/multi_well_volumetrics",
+    summary="Run multi-well volumetric assessment and Latin Hypercube Monte Carlo uncertainty across project wells",
+)
+@router.post(
+    "/volumetrics",
+    summary="Run multi-well volumetric assessment (alias)",
+)
+def workspace_multi_well_volumetrics(
+    project_id: int, req: WorkspaceMultiWellVolumetricsRequest
+) -> Dict[str, Any]:
+    """Calculate multi-well reservoir summary aggregation and Latin Hypercube probabilistic STOIIP/GIIP volumes."""
+    try:
+        well_dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not well_dfs:
+            raise ValueError("No wells with valid data found for volumetric evaluation.")
+
+        vsh_cut = float(req.cut_offs.get("VSHALE", 0.40))
+        phi_cut = float(req.cut_offs.get("PHIT", req.cut_offs.get("PHIE", 0.05)))
+        sw_cut = float(req.cut_offs.get("SWT", req.cut_offs.get("SWE", 0.80)))
+        cutoffs_dict = {"VSHALE": vsh_cut, "PHIT": phi_cut, "SWT": sw_cut}
+
+        # 1. Compute per-well reservoir summary
+        well_records: List[Dict[str, Any]] = []
+        for wdf in well_dfs:
+            wn = str(wdf["WELL_NAME"].iloc[0])
+            depth = (
+                pd.to_numeric(wdf["DEPTH"], errors="coerce")
+                if "DEPTH" in wdf.columns
+                else pd.Series([], dtype=float)
+            )
+            vclay = (
+                pd.to_numeric(wdf["VCLAY"], errors="coerce")
+                if "VCLAY" in wdf.columns
+                else (
+                    pd.to_numeric(wdf["VSHALE"], errors="coerce")
+                    if "VSHALE" in wdf.columns
+                    else pd.Series(0.0, index=wdf.index, dtype=float)
+                )
+            )
+            phit = (
+                pd.to_numeric(wdf["PHIT"], errors="coerce")
+                if "PHIT" in wdf.columns
+                else (
+                    pd.to_numeric(wdf["PHIE"], errors="coerce")
+                    if "PHIE" in wdf.columns
+                    else pd.Series(np.nan, index=wdf.index, dtype=float)
+                )
+            )
+            swt = (
+                pd.to_numeric(wdf["SWT"], errors="coerce")
+                if "SWT" in wdf.columns
+                else (
+                    pd.to_numeric(wdf["SWE"], errors="coerce")
+                    if "SWE" in wdf.columns
+                    else pd.Series(np.nan, index=wdf.index, dtype=float)
+                )
+            )
+            perm_col = (
+                "PERM_TRANS"
+                if ("PERM_TRANS" in wdf.columns and wdf["PERM_TRANS"].notna().any())
+                else "PERM"
+            )
+            perm = (
+                pd.to_numeric(wdf[perm_col], errors="coerce")
+                if perm_col in wdf.columns
+                else pd.Series(0.0, index=wdf.index, dtype=float)
+            )
+            zones = (
+                wdf["ZONES"].fillna("ALL").astype(str)
+                if "ZONES" in wdf.columns
+                else pd.Series("ALL", index=wdf.index, dtype=str)
+            )
+
+            if phit.isna().all() or swt.isna().all():
+                continue
+
+            try:
+                rs_df = calc_reservoir_summary(
+                    depth=depth,
+                    vshale=vclay.fillna(0.0),
+                    phit=phit.fillna(0.0),
+                    swt=swt.fillna(1.0),
+                    perm=perm.fillna(0.0),
+                    zones=zones,
+                    cutoffs=cutoffs_dict,
+                )
+                if rs_df.empty:
+                    continue
+
+                for _, row in rs_df.iterrows():
+                    z_name = str(row.get("zones", row.get("ZONE", "ALL"))).strip()
+                    if not z_name or z_name.lower() in ("nan", "none"):
+                        continue
+                    if req.zones and z_name not in req.zones:
+                        continue
+
+                    top_v = float(row.get("top", 0.0))
+                    bot_v = float(row.get("bottom", 0.0))
+                    gross_v = float(row.get("gross", 0.0))
+                    net_res_v = float(row.get("net_res", row.get("net", 0.0)))
+                    ntg_res_v = float(row.get("ntg_res", row.get("ntg", 0.0)))
+                    net_pay_v = float(row.get("net_pay", row.get("net", 0.0)))
+                    ntg_pay_v = float(row.get("ntg_pay", row.get("ntg", 0.0)))
+                    phie_pay_v = float(row.get("av_phit", row.get("av_phie", 0.0)))
+                    sw_pay_v = float(row.get("av_swt", row.get("av_sw", 1.0)))
+                    perm_pay_v = float(row.get("av_perm", 0.0))
+                    hcpt_v = float(
+                        row.get("hcpt", net_pay_v * phie_pay_v * (1.0 - sw_pay_v))
+                    )
+
+                    well_records.append(
+                        {
+                            "well_name": wn,
+                            "zone": z_name,
+                            "top": round(top_v, 2),
+                            "bottom": round(bot_v, 2),
+                            "gross": round(gross_v, 2),
+                            "net_res": round(net_res_v, 2),
+                            "ntg_res": round(ntg_res_v, 4),
+                            "net_pay": round(net_pay_v, 2),
+                            "ntg_pay": round(ntg_pay_v, 4),
+                            "phie": round(phie_pay_v, 4),
+                            "sw": round(sw_pay_v, 4),
+                            "perm_geom": round(perm_pay_v, 2),
+                            "hcpt": round(hcpt_v, 2),
+                        }
+                    )
+            except Exception:
+                continue
+
+        if not well_records:
+            raise ValueError(
+                "No valid reservoir summary zones computed across selected wells."
+            )
+
+        # Group by zone
+        zone_groups: Dict[str, List[Dict[str, Any]]] = {}
+        for r in well_records:
+            z = r["zone"]
+            zone_groups.setdefault(z, []).append(r)
+
+        n_samples = max(100, min(int(req.n_samples), 50000))
+        seed_base = req.seed if req.seed is not None else 42
+
+        zonal_summaries: List[Dict[str, Any]] = []
+        field_stoiip_reals = np.zeros(n_samples, dtype=float)
+        field_recoil_reals = np.zeros(n_samples, dtype=float)
+        field_giip_reals = np.zeros(n_samples, dtype=float)
+        field_recgas_reals = np.zeros(n_samples, dtype=float)
+        field_assocgas_reals = np.zeros(n_samples, dtype=float)
+
+        def _pct(arr: np.ndarray) -> Dict[str, float]:
+            s = np.sort(arr)
+            p90 = float(np.percentile(s, 10.0))
+            p50 = float(np.percentile(s, 50.0))
+            p10 = float(np.percentile(s, 90.0))
+            return {
+                "p90": round(p90, 2),
+                "p50": round(p50, 2),
+                "p10": round(p10, 2),
+                "mean": round(float(np.mean(s)), 2),
+                "std": round(float(np.std(s)), 2),
+            }
+
+        zone_names = sorted(list(zone_groups.keys()))
+        for z_idx, z_name in enumerate(zone_names):
+            rows = zone_groups[z_name]
+            w_count = len(set(r["well_name"] for r in rows))
+
+            gross_vals = [r["gross"] for r in rows if r["gross"] > 0]
+            net_res_vals = [r["net_res"] for r in rows]
+            net_pay_vals = [r["net_pay"] for r in rows]
+            phie_vals = [r["phie"] for r in rows if r["phie"] > 0]
+            sw_vals = [r["sw"] for r in rows if r["sw"] > 0]
+            perm_vals = [r["perm_geom"] for r in rows if r["perm_geom"] > 0]
+            hcpt_vals = [r["hcpt"] for r in rows]
+
+            mean_gross = float(np.mean(gross_vals)) if gross_vals else 0.0
+            mean_net_res = float(np.mean(net_res_vals)) if net_res_vals else 0.0
+            mean_net_pay = float(np.mean(net_pay_vals)) if net_pay_vals else 0.0
+            ntg_res = mean_net_res / mean_gross if mean_gross > 0 else 0.0
+            ntg_pay = mean_net_pay / mean_gross if mean_gross > 0 else 0.0
+            mean_phie = float(np.mean(phie_vals)) if phie_vals else 0.15
+            mean_sw = float(np.mean(sw_vals)) if sw_vals else 0.40
+            mean_perm = float(np.mean(perm_vals)) if perm_vals else 10.0
+            mean_hcpt = float(np.mean(hcpt_vals)) if hcpt_vals else 0.0
+
+            zp = req.zone_params.get(z_name, {})
+
+            # Prepare bounds
+            if req.mode == "grv":
+                grv_spec = zp.get("grv") or [10.0, 120.0, 50.0, 15.0]
+                ntg_mean_bound = max(0.05, min(0.95, ntg_pay if ntg_pay > 0.05 else 0.50))
+                ntg_spec = zp.get("ntg") or [
+                    max(0.02, ntg_mean_bound - 0.20),
+                    min(1.0, ntg_mean_bound + 0.20),
+                    ntg_mean_bound,
+                    max(0.02, ntg_mean_bound * 0.15),
+                ]
+            else:
+                area_spec = zp.get("area") or [200.0, 3000.0, 1200.0, 350.0]
+                h_mean_ft = max(
+                    1.0,
+                    mean_net_pay * 3.28084
+                    if mean_net_pay > 0
+                    else mean_gross * 3.28084 * 0.5,
+                )
+                thick_spec = zp.get("thickness") or [
+                    max(1.0, h_mean_ft * 0.6),
+                    max(5.0, h_mean_ft * 1.4),
+                    h_mean_ft,
+                    max(1.0, h_mean_ft * 0.15),
+                ]
+
+            phi_spec = zp.get("porosity") or [
+                max(0.02, mean_phie - 0.06),
+                min(0.40, mean_phie + 0.06),
+                mean_phie,
+                max(0.01, mean_phie * 0.15),
+            ]
+            sw_spec = zp.get("water_saturation") or [
+                max(0.05, mean_sw - 0.15),
+                min(0.95, mean_sw + 0.15),
+                mean_sw,
+                max(0.02, mean_sw * 0.15),
+            ]
+            bo_spec = zp.get("bo") or [1.10, 1.45, 1.25, 0.05]
+            bg_spec = zp.get("bg") or [0.0035, 0.0070, 0.0050, 0.0006]
+            rs_val = float(zp.get("rs", 500.0))
+            rf_oil_spec = zp.get("rf_oil") or [0.15, 0.45, 0.30, 0.06]
+            rf_gas_spec = zp.get("rf_gas") or [0.50, 0.85, 0.70, 0.07]
+
+            spec_dict: Dict[str, Any] = {
+                "porosity": phi_spec,
+                "water_saturation": sw_spec,
+                "bo": bo_spec,
+                "bg": bg_spec,
+                "rf_oil": rf_oil_spec,
+                "rf_gas": rf_gas_spec,
+            }
+            if req.mode == "grv":
+                spec_dict["grv"] = grv_spec
+                spec_dict["ntg"] = ntg_spec
+            else:
+                spec_dict["area"] = area_spec
+                spec_dict["thickness"] = thick_spec
+
+            lhs_df = sample_lhs_parameters(
+                spec_dict, n_samples=n_samples, seed=seed_base + z_idx * 17
+            )
+
+            poro_arr = np.clip(lhs_df["porosity"].to_numpy(dtype=float), 0.01, 0.50)
+            sw_arr = np.clip(lhs_df["water_saturation"].to_numpy(dtype=float), 0.02, 0.98)
+            bo_arr = np.maximum(1e-4, lhs_df["bo"].to_numpy(dtype=float))
+            bg_arr = np.maximum(1e-6, lhs_df["bg"].to_numpy(dtype=float))
+            rf_oil_arr = np.clip(lhs_df["rf_oil"].to_numpy(dtype=float), 0.0, 1.0)
+            rf_gas_arr = np.clip(lhs_df["rf_gas"].to_numpy(dtype=float), 0.0, 1.0)
+
+            if req.mode == "grv":
+                grv_arr = np.maximum(0.0, lhs_df["grv"].to_numpy(dtype=float))
+                ntg_arr = np.clip(lhs_df["ntg"].to_numpy(dtype=float), 0.0, 1.0)
+                # GRV in 10^6 m^3, 1 m^3 = 6.28981 bbl
+                stoiip_reals = (
+                    grv_arr * 6.28981 * ntg_arr * poro_arr * (1.0 - sw_arr)
+                ) / bo_arr
+                recoil_reals = stoiip_reals * rf_oil_arr
+                # 1 m^3 = 35.3147 ft^3. In Bcf:
+                giip_reals = (
+                    grv_arr * 35.3147 * ntg_arr * poro_arr * (1.0 - sw_arr)
+                ) / (bg_arr * 1000.0)
+            else:
+                area_arr = np.maximum(0.0, lhs_df["area"].to_numpy(dtype=float))
+                thick_arr = np.maximum(0.0, lhs_df["thickness"].to_numpy(dtype=float))
+                hcpv_acft = area_arr * thick_arr * poro_arr * (1.0 - sw_arr)
+                stoiip_reals = (7758.37 * hcpv_acft / bo_arr) * 1e-6
+                recoil_reals = stoiip_reals * rf_oil_arr
+                giip_reals = (43560.0 * hcpv_acft / bg_arr) * 1e-9
+
+            assocgas_reals = stoiip_reals * rs_val * 1e-3
+            recgas_reals = giip_reals * rf_gas_arr
+
+            # Add to field vectors
+            field_stoiip_reals += stoiip_reals
+            field_recoil_reals += recoil_reals
+            field_giip_reals += giip_reals
+            field_recgas_reals += recgas_reals
+            field_assocgas_reals += assocgas_reals
+
+            st_p = _pct(stoiip_reals)
+            ro_p = _pct(recoil_reals)
+            gi_p = _pct(giip_reals)
+            rg_p = _pct(recgas_reals)
+            ag_p = _pct(assocgas_reals)
+
+            # Exceedance Curve (100 points)
+            sorted_st = np.sort(stoiip_reals)
+            prob_st = 1.0 - np.linspace(0, 1.0, len(sorted_st))
+            step_idx = np.linspace(0, len(sorted_st) - 1, 100, dtype=int)
+            exceedance_st = [
+                {
+                    "volume": round(float(sorted_st[i]), 2),
+                    "prob": round(float(prob_st[i]), 4),
+                }
+                for i in step_idx
+            ]
+
+            # Histogram
+            counts, bin_edges = np.histogram(stoiip_reals, bins=25)
+            hist_st = [
+                {
+                    "bin_start": round(float(bin_edges[i]), 2),
+                    "bin_end": round(float(bin_edges[i + 1]), 2),
+                    "count": int(counts[i]),
+                }
+                for i in range(len(counts))
+            ]
+
+            # Tornado Sensitivity
+            tornado_items = []
+            med_vals = {col: float(np.median(lhs_df[col])) for col in lhs_df.columns}
+
+            def _eval_vol(params_dict: Dict[str, float]) -> float:
+                p = params_dict.get("porosity", 0.15)
+                sw = params_dict.get("water_saturation", 0.40)
+                bo = max(1e-4, params_dict.get("bo", 1.25))
+                if req.mode == "grv":
+                    grv = params_dict.get("grv", 50.0)
+                    ntg = params_dict.get("ntg", 0.5)
+                    return float(grv * 6.28981 * ntg * p * (1.0 - sw) / bo)
+                else:
+                    a = params_dict.get("area", 1000.0)
+                    h = params_dict.get("thickness", 50.0)
+                    return float(7758.37 * (a * h * p * (1.0 - sw)) / bo * 1e-6)
+
+            base_stoiip = _eval_vol(med_vals)
+            eval_cols = (
+                ["area", "thickness", "porosity", "water_saturation", "bo"]
+                if req.mode == "area"
+                else ["grv", "ntg", "porosity", "water_saturation", "bo"]
+            )
+            labels_map = {
+                "area": ("Drainage Area", "acres"),
+                "thickness": ("Net Pay Thickness", "ft"),
+                "grv": ("Gross Rock Volume (GRV)", "10⁶ m³"),
+                "ntg": ("Net-to-Gross (NTG)", "v/v"),
+                "porosity": ("Porosity (Φe)", "v/v"),
+                "water_saturation": ("Water Saturation (Sw)", "v/v"),
+                "bo": ("Oil FVF (Bo)", "bbl/STB"),
+            }
+
+            for col in eval_cols:
+                low_p = float(np.percentile(lhs_df[col], 10.0))
+                high_p = float(np.percentile(lhs_df[col], 90.0))
+
+                mod_low = dict(med_vals)
+                mod_low[col] = low_p
+                vol_low = _eval_vol(mod_low)
+
+                mod_high = dict(med_vals)
+                mod_high[col] = high_p
+                vol_high = _eval_vol(mod_high)
+
+                lbl, unit = labels_map.get(col, (col.capitalize(), ""))
+                tornado_items.append(
+                    {
+                        "param": col,
+                        "label": lbl,
+                        "unit": unit,
+                        "low_param": round(low_p, 3),
+                        "high_param": round(high_p, 3),
+                        "vol_at_low": round(min(vol_low, vol_high), 2),
+                        "vol_at_high": round(max(vol_low, vol_high), 2),
+                        "base_vol": round(base_stoiip, 2),
+                        "swing": round(abs(vol_high - vol_low), 2),
+                    }
+                )
+
+            tornado_items.sort(key=lambda x: x["swing"], reverse=True)
+
+            zonal_summaries.append(
+                {
+                    "zone": z_name,
+                    "well_count": w_count,
+                    "mean_gross": round(mean_gross, 2),
+                    "mean_net_res": round(mean_net_res, 2),
+                    "ntg_res": round(ntg_res, 3),
+                    "mean_net_pay": round(mean_net_pay, 2),
+                    "ntg_pay": round(ntg_pay, 3),
+                    "mean_phie": round(mean_phie, 3),
+                    "mean_sw": round(mean_sw, 3),
+                    "mean_perm_geom": round(mean_perm, 2),
+                    "mean_hcpt": round(mean_hcpt, 2),
+                    "mode": req.mode,
+                    "area_mean": round(float(np.mean(lhs_df["area"])), 1)
+                    if req.mode == "area"
+                    else None,
+                    "grv_mean": round(float(np.mean(lhs_df["grv"])), 1)
+                    if req.mode == "grv"
+                    else None,
+                    "stoiip": st_p,
+                    "rec_oil": ro_p,
+                    "giip": gi_p,
+                    "rec_gas": rg_p,
+                    "assoc_gas": ag_p,
+                    "exceedance_curve": exceedance_st,
+                    "histogram": hist_st,
+                    "tornado": tornado_items,
+                }
+            )
+
+        # Field Totals
+        field_st = _pct(field_stoiip_reals)
+        field_ro = _pct(field_recoil_reals)
+        field_gi = _pct(field_giip_reals)
+        field_rg = _pct(field_recgas_reals)
+        field_ag = _pct(field_assocgas_reals)
+        field_tg = _pct(field_giip_reals + field_assocgas_reals)
+
+        sorted_f_st = np.sort(field_stoiip_reals)
+        prob_f_st = 1.0 - np.linspace(0, 1.0, len(sorted_f_st))
+        step_f = np.linspace(0, len(sorted_f_st) - 1, 100, dtype=int)
+        exceedance_f_st = [
+            {
+                "volume": round(float(sorted_f_st[i]), 2),
+                "prob": round(float(prob_f_st[i]), 4),
+            }
+            for i in step_f
+        ]
+
+        f_counts, f_bin_edges = np.histogram(field_stoiip_reals, bins=25)
+        hist_f_st = [
+            {
+                "bin_start": round(float(f_bin_edges[i]), 2),
+                "bin_end": round(float(f_bin_edges[i + 1]), 2),
+                "count": int(f_counts[i]),
+            }
+            for i in range(len(f_counts))
+        ]
+
+        # Field Tornado (evaluating overall parameters)
+        field_tornado_items = []
+        if zonal_summaries:
+            param_swings: Dict[str, Dict[str, Any]] = {}
+            for z in zonal_summaries:
+                for t in z.get("tornado", []):
+                    p_key = t["param"]
+                    if p_key not in param_swings:
+                        param_swings[p_key] = {
+                            "param": p_key,
+                            "label": t["label"],
+                            "unit": t["unit"],
+                            "swing": 0.0,
+                            "vol_at_low": 0.0,
+                            "vol_at_high": 0.0,
+                            "base_vol": field_st["p50"],
+                        }
+                    param_swings[p_key]["swing"] += t["swing"]
+                    param_swings[p_key]["vol_at_low"] += t["vol_at_low"]
+                    param_swings[p_key]["vol_at_high"] += t["vol_at_high"]
+
+            field_tornado_items = list(param_swings.values())
+            field_tornado_items.sort(key=lambda x: x["swing"], reverse=True)
+
+        field_totals = {
+            "total_wells": len(set(r["well_name"] for r in well_records)),
+            "total_zones": len(zonal_summaries),
+            "stoiip": field_st,
+            "rec_oil": field_ro,
+            "giip": field_gi,
+            "rec_gas": field_rg,
+            "assoc_gas": field_ag,
+            "total_gas": field_tg,
+            "exceedance_curve": exceedance_f_st,
+            "histogram": hist_f_st,
+            "tornado": field_tornado_items,
+        }
+
+        # Optional save to project
+        if req.save_to_project:
+            try:
+                with get_db() as session:
+                    proj = db_objects.Project.load(session, project_id=project_id)
+                    anc = (
+                        proj.get_project_ancillary_data()
+                        if hasattr(proj, "get_project_ancillary_data")
+                        else {}
+                    )
+                    if not isinstance(anc, dict):
+                        anc = {}
+                    anc["volumetric_params"] = {
+                        "mode": req.mode,
+                        "cut_offs": req.cut_offs,
+                        "zone_params": req.zone_params,
+                        "n_samples": n_samples,
+                        "seed": req.seed,
+                    }
+                    anc["volumetric_summary"] = {
+                        "field_totals": field_totals,
+                        "zonal_summaries": [
+                            {
+                                k: v
+                                for k, v in z.items()
+                                if k not in ("exceedance_curve", "histogram")
+                            }
+                            for z in zonal_summaries
+                        ],
+                    }
+                    if hasattr(proj, "set_project_ancillary_data"):
+                        proj.set_project_ancillary_data(session, anc)
+            except Exception:
+                pass
+
+        return _sanitize_for_json(
+            {
+                "project_id": project_id,
+                "mode": req.mode,
+                "cut_offs": req.cut_offs,
+                "n_samples": n_samples,
+                "well_summary": well_records,
+                "zonal_summary": zonal_summaries,
+                "field_totals": field_totals,
+            }
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Multi-well volumetrics failed: {e}"
         ) from e

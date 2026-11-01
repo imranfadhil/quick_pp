@@ -17,6 +17,7 @@ export type MultiWellStep =
 	| 'rt-classifier'
 	| 'ml-training'
 	| 'fpt'
+	| 'volumetrics'
 	| 'report';
 
 export type ReportType = 'FDP_FULL' | 'SINGLE_WELL_CPI' | 'QAQC_SUMMARY' | 'RESSUM_ONLY';
@@ -246,6 +247,133 @@ export interface ResSumParams {
 	poroMean: number;
 	swMean: number;
 	boP50: number;
+}
+
+export interface VolumetricPercentiles {
+	p90: number;
+	p50: number;
+	p10: number;
+	mean: number;
+	std: number;
+}
+
+export interface TornadoItem {
+	param: string;
+	label: string;
+	unit: string;
+	low_param?: number;
+	high_param?: number;
+	vol_at_low: number;
+	vol_at_high: number;
+	base_vol: number;
+	swing: number;
+}
+
+export interface ExceedancePoint {
+	volume: number;
+	prob: number;
+}
+
+export interface HistBin {
+	bin_start: number;
+	bin_end: number;
+	count: number;
+}
+
+export interface ZonalVolumetricSummary {
+	zone: string;
+	well_count: number;
+	mean_gross: number;
+	mean_net_res: number;
+	ntg_res: number;
+	mean_net_pay: number;
+	ntg_pay: number;
+	mean_phie: number;
+	mean_sw: number;
+	mean_perm_geom: number;
+	mean_hcpt: number;
+	mode: 'area' | 'grv';
+	area_mean?: number | null;
+	grv_mean?: number | null;
+	stoiip: VolumetricPercentiles;
+	rec_oil: VolumetricPercentiles;
+	giip: VolumetricPercentiles;
+	rec_gas: VolumetricPercentiles;
+	assoc_gas: VolumetricPercentiles;
+	exceedance_curve: ExceedancePoint[];
+	histogram: HistBin[];
+	tornado: TornadoItem[];
+}
+
+export interface FieldVolumetricTotals {
+	total_wells: number;
+	total_zones: number;
+	stoiip: VolumetricPercentiles;
+	rec_oil: VolumetricPercentiles;
+	giip: VolumetricPercentiles;
+	rec_gas: VolumetricPercentiles;
+	assoc_gas: VolumetricPercentiles;
+	total_gas: VolumetricPercentiles;
+	exceedance_curve: ExceedancePoint[];
+	histogram: HistBin[];
+	tornado: TornadoItem[];
+}
+
+export interface MultiWellVolumetricResult {
+	project_id: number;
+	mode: 'area' | 'grv';
+	cut_offs: Record<string, number>;
+	n_samples: number;
+	well_summary: Array<{
+		well_name: string;
+		zone: string;
+		top: number;
+		bottom: number;
+		gross: number;
+		net_res: number;
+		ntg_res: number;
+		net_pay: number;
+		ntg_pay: number;
+		phie: number;
+		sw: number;
+		perm_geom: number;
+		hcpt: number;
+	}>;
+	zonal_summary: ZonalVolumetricSummary[];
+	field_totals: FieldVolumetricTotals;
+}
+
+export interface VolumetricZoneParamConfig {
+	areaMean: number;
+	areaStd: number;
+	grvMean: number;
+	grvStd: number;
+	thickMean: number;
+	thickStd: number;
+	ntgMean: number;
+	ntgStd: number;
+	poroMean: number;
+	swMean: number;
+	boP50: number;
+	bgP50: number;
+	rs: number;
+	rfOil: number;
+	rfGas: number;
+}
+
+export interface MultiWellVolumetricsState {
+	mode: 'area' | 'grv';
+	computeOil: boolean;
+	computeGas: boolean;
+	vshMax: number;
+	phitMin: number;
+	swtMax: number;
+	nSamples: number;
+	seed: number;
+	activeTab: 'exceedance' | 'tornado' | 'summary' | 'well_matrix';
+	selectedZone: string;
+	fluidMetric: 'oil' | 'gas';
+	zoneConfigs: Record<string, VolumetricZoneParamConfig>;
 }
 
 class WorkbenchState {
@@ -489,6 +617,21 @@ class WorkbenchState {
 		poroMean: 0.18,
 		swMean: 0.28,
 		boP50: 1.22
+	});
+
+	multiWellVolumetrics = $state<MultiWellVolumetricsState>({
+		mode: 'area',
+		computeOil: true,
+		computeGas: true,
+		vshMax: 0.4,
+		phitMin: 0.05,
+		swtMax: 0.8,
+		nSamples: 5000,
+		seed: 42,
+		activeTab: 'exceedance',
+		selectedZone: 'ALL',
+		fluidMetric: 'oil',
+		zoneConfigs: {}
 	});
 
 	// FDP Petrophysical Report Generation Workbench State

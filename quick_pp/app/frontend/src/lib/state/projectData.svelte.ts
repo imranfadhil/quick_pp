@@ -2,7 +2,7 @@ import { API_BASE, api, authHeaders, deleteJson, getJson, patchJson, postJson } 
 import type { ProjectSummaryResponse, WellSummaryItem } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { wellData } from './wellData.svelte';
-import { workbench } from './workbench.svelte';
+import { workbench, type MultiWellVolumetricResult } from './workbench.svelte';
 import { assignKnown, clone } from './moduleParams.svelte';
 import {
 	isProjectParamModuleKey,
@@ -538,6 +538,8 @@ class ProjectDataState {
 	projectModuleParams = $state.raw<ProjectModuleParamsMap>({});
 	/** Parameter + zone snapshots captured when each multi-well module was last computed. */
 	pendingProjectParamSnapshots: Partial<Record<ProjectParamModuleKey, ProjectParamsSnapshot>> = {};
+
+	volumetricResult = $state.raw<MultiWellVolumetricResult | null>(null);
 
 	shfResult = $state.raw<{
 		model?: 'leverett_j' | 'skelt_harrison' | 'cuddy';
@@ -2404,6 +2406,7 @@ class ProjectDataState {
 		this.swirrResult = null;
 		this.swirrApplyResult = null;
 		this.shfResult = null;
+		this.volumetricResult = null;
 		this.stickPlotResult = null;
 		wellData.curves = {};
 		wellData.tops = [];
@@ -2442,6 +2445,7 @@ class ProjectDataState {
 			this.rockTypingResult = null;
 			this.permTransformResult = null;
 			this.shfResult = null;
+		this.volumetricResult = null;
 			this.stickPlotResult = null;
 		}
 		this.isLoading = true;

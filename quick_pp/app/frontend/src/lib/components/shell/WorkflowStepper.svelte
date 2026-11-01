@@ -172,8 +172,14 @@
 			readyCheck: () => projectData.shfResult !== null
 		},
 		{
-			id: 'report',
+			id: 'volumetrics',
 			num: 6,
+			label: 'Volumetric Assessment',
+			readyCheck: () => projectData.volumetricResult !== null
+		},
+		{
+			id: 'report',
+			num: 7,
 			label: 'FDP Report',
 			readyCheck: () => workbench.multiWellReport !== null
 		}

@@ -203,6 +203,8 @@
 					pc_scale_factor: workbench.scalParams.pc_scale_factor,
 					pc_lab_input: workbench.scalParams.pc_lab_input,
 					pc_res_output: workbench.scalParams.pc_res_output,
+					volumetric_summary: projectData.volumetricResult,
+					volumetric_params: { ...workbench.multiWellVolumetrics },
 					...wellData.buildCoreShiftConfigExtra()
 				},
 				sections: activeCfg.sections,
