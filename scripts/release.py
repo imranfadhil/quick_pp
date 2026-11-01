@@ -5,16 +5,19 @@ Usage examples:
     # 1. Verify current version (run tests, frontend check/build, build wheel+sdist, twine check, wheel audit)
     python scripts/release.py
 
-    # 2. Bump version across all files and run full verification
+    # 2. Bump version across all files, update CITATION.cff date-released to today, and run full verification
     python scripts/release.py --bump 0.3.3
 
-    # 3. Fast build & check (skip full pytest suite or frontend build if already verified)
+    # 3. Bump version with an explicit release date
+    python scripts/release.py --bump 0.3.3 --release-date 2026-11-01
+
+    # 4. Fast build & check (skip full pytest suite or frontend build if already verified)
     python scripts/release.py --skip-tests
 
-    # 4. Upload verified dist/* to PyPI and build+push Docker image to Docker Hub
+    # 5. Upload verified dist/* to PyPI and build+push Docker image to Docker Hub
     python scripts/release.py --publish
 
-    # 5. Upload to PyPI without pushing Docker image (or push Docker image only)
+    # 6. Upload to PyPI without pushing Docker image (or push Docker image only)
     python scripts/release.py --publish --skip-docker
     python scripts/release.py --docker-only
 """
@@ -22,6 +25,7 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import re
 import shutil
@@ -46,7 +50,7 @@ VERSION_FILES = {
     ),
     "CITATION.cff": (
         ROOT / "CITATION.cff",
-        r"(^version:\s*)(\S+)()",
+        r"(^\s*version:\s*)(\S+)()",
     ),
     "quick_pp/app/frontend/package.json": (
         FRONTEND_DIR / "package.json",
@@ -98,14 +102,21 @@ def read_versions() -> dict[str, str]:
     return versions
 
 
-def bump_version(new_version: str) -> None:
+def bump_version(new_version: str, release_date: str | None = None) -> None:
     step(f"Bumping version to {new_version}")
     if not re.match(r"^\d+\.\d+\.\d+([a-zA-Z0-9.\-]+)?$", new_version):
         raise ValueError(f"Invalid semantic version: {new_version}")
 
+    if release_date is None:
+        release_date = datetime.date.today().isoformat()
+    elif not re.match(r"^\d{4}-\d{2}-\d{2}$", release_date):
+        raise ValueError(f"Invalid release date format (expected YYYY-MM-DD): {release_date}")
+
+    release_year = release_date.split("-")[0]
+
     for label, (path, pattern) in VERSION_FILES.items():
         text = path.read_text(encoding="utf-8")
-        max_replacements = 2 if label.endswith("package-lock.json") else 1
+        max_replacements = 2 if (label.endswith("package-lock.json") or label == "CITATION.cff") else 1
         updated, count = re.subn(
             pattern,
             rf"\g<1>{new_version}\g<3>",
@@ -115,8 +126,52 @@ def bump_version(new_version: str) -> None:
         )
         if count == 0:
             raise RuntimeError(f"Failed to update version in {label}")
+
+        if label == "CITATION.cff":
+            # Update date-released: "YYYY-MM-DD"
+            updated, d_count = re.subn(
+                r'(^date-released:\s*["\']?)\d{4}-\d{2}-\d{2}(["\']?)',
+                rf"\g<1>{release_date}\g<2>",
+                updated,
+                count=1,
+                flags=re.MULTILINE,
+            )
+            # Update year under preferred-citation
+            updated, _ = re.subn(
+                r'(^\s*year:\s*)\d{4}()',
+                rf"\g<1>{release_year}\g<2>",
+                updated,
+                count=1,
+                flags=re.MULTILINE,
+            )
+            if d_count > 0:
+                print(f"  Updated CITATION.cff -> date-released: {release_date}, year: {release_year}")
+
         path.write_text(updated, encoding="utf-8")
         print(f"  Updated {label} -> {new_version}")
+
+    # Also synchronize BibTeX in README.md if present
+    readme_path = ROOT / "README.md"
+    if readme_path.exists():
+        readme_text = readme_path.read_text(encoding="utf-8")
+        readme_updated = re.sub(
+            r'(@software\{quick_pp)\d{4}(,)',
+            rf"\g<1>{release_year}\g<2>",
+            readme_text,
+        )
+        readme_updated = re.sub(
+            r'(\s*year\s*=\s*\{)\d{4}(\})',
+            rf"\g<1>{release_year}\g<2>",
+            readme_updated,
+        )
+        readme_updated = re.sub(
+            r'(\s*version\s*=\s*\{)[^\}]+(\})',
+            rf"\g<1>{new_version}\g<2>",
+            readme_updated,
+        )
+        if readme_updated != readme_text:
+            readme_path.write_text(readme_updated, encoding="utf-8")
+            print(f"  Updated README.md citation block -> v{new_version} ({release_year})")
 
 
 def verify_version_sync() -> str:
@@ -124,6 +179,14 @@ def verify_version_sync() -> str:
     versions = read_versions()
     for label, ver in versions.items():
         print(f"  {label:<52} : {ver}")
+
+    cff_path = ROOT / "CITATION.cff"
+    if cff_path.exists():
+        cff_text = cff_path.read_text(encoding="utf-8")
+        m_date = re.search(r'^date-released:\s*["\']?(\d{4}-\d{2}-\d{2})["\']?', cff_text, flags=re.MULTILINE)
+        if m_date:
+            print(f"  {'CITATION.cff (date-released)':<52} : {m_date.group(1)}")
+
     unique = set(versions.values())
     if len(unique) != 1:
         raise RuntimeError(
@@ -237,6 +300,11 @@ def main() -> None:
         help="Bump version across pyproject.toml, __init__.py, CITATION.cff, and frontend",
     )
     parser.add_argument(
+        "--release-date",
+        metavar="YYYY-MM-DD",
+        help="Release date for CITATION.cff (defaults to today's date YYYY-MM-DD when --bump is passed)",
+    )
+    parser.add_argument(
         "--skip-tests",
         action="store_true",
         help="Skip running pytest suite",
@@ -279,7 +347,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.bump:
-        bump_version(args.bump.strip())
+        bump_version(
+            args.bump.strip(),
+            release_date=args.release_date.strip() if args.release_date else None,
+        )
 
     version = verify_version_sync()
 

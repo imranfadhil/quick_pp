@@ -1,5 +1,11 @@
 # quick_pp
 
+[![CI](https://github.com/imranfadhil/quick_pp/actions/workflows/ci.yml/badge.svg)](https://github.com/imranfadhil/quick_pp/actions/workflows/ci.yml)
+[![PyPI version](https://badge.fury.io/py/quick-pp.svg)](https://badge.fury.io/py/quick-pp)
+[![Documentation Status](https://readthedocs.org/projects/quick-pp/badge/?version=latest)](https://quick-pp.readthedocs.io/en/latest/?badge=latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+
 Comprehensive Python library and full-stack web platform for deterministic and probabilistic petrophysical evaluation, Special Core Analysis (SCAL) & relative permeability modeling, multi-well Free Water Level (FWL) contact optimization, stratigraphic log normalization, core-log calibration & depth matching, automated FDP report generation, petrophysical handover packaging, rock physics, and static-to-dynamic geomodeling upscaling.
 
 This repository contains the core `quick_pp` scientific Python package, the FastAPI backend (`quick_pp/app/backend`), and the SvelteKit interactive workstation frontend (`quick_pp/app/frontend`), plus MLflow-integrated machine learning pipelines (`quick_pp/machine_learning`).
@@ -284,3 +290,47 @@ Notes:
     predict pipeline).
 - For production or reproducible experiments, register models in MLflow and
     configure the model registry settings used by the deployment code.
+
+
+## ☕ Support & Sponsorship
+
+`quick_pp` is an independently maintained open-source project. If this library has saved you time in your research, coursework, or subsurface workflows, please consider:
+* Starring ⭐ the repository to help other geoscientists discover it.
+* Citing the package in your academic papers or technical posters.
+* [Sponsoring the project on GitHub](https://github.com/sponsors/imranfadhil) to support ongoing development and new tutorials.
+
+
+## 🤝 Contributing
+
+Contributions are warmly welcome! Whether you are a petrophysicist fixing an equation, adding a tutorial notebook, or improving documentation, your help makes `quick_pp` better for everyone.
+
+To keep the library fast, lightweight, and maintainable, please keep these guidelines in mind:
+* **Discuss first**: Before building large new features or proposing major architectural changes, please [open an Issue](https://github.com/imranfadhil/quick_pp/issues) or [Discussion](https://github.com/imranfadhil/quick_pp/discussions) so we can ensure it aligns with `quick_pp`'s lightweight design philosophy.
+* **Keep dependencies minimal**: Avoid adding new external packages when standard library or existing core dependencies (`numpy`, `scipy`, `pandas`) can achieve the result.
+* **Standards & Tests**: Ensure all unit tests pass (`pytest -q`), code is formatted with Black & Ruff (`ruff check quick_pp tests`), and public functions are typed (`mypy quick_pp`).
+
+See our comprehensive [CONTRIBUTING.md](CONTRIBUTING.md) guide for local environment setup (`uv pip install -e ".[dev]"`), coding standards, and PR workflows.
+
+## ✨ Contributors
+
+Thanks to all the wonderful people who contribute to `quick_pp`!
+
+<a href="https://github.com/imranfadhil/quick_pp/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=imranfadhil/quick_pp" alt="Contributors" />
+</a>
+
+## 📖 Citation
+
+If you use `quick_pp` in your academic research, coursework, publications, or technical evaluations, please cite it using the metadata in [CITATION.cff](CITATION.cff) or the BibTeX entry below:
+
+```bibtex
+@software{quick_pp2026,
+  author       = {Fadhil, Imran},
+  title        = {{quick\_pp: Practical Open-Source Petrophysics, Special Core Analysis (SCAL), and Subsurface Machine Learning}},
+  year         = {2026},
+  publisher    = {GitHub},
+  journal      = {GitHub repository},
+  howpublished = {\url{https://github.com/imranfadhil/quick_pp}},
+  version      = {0.3.3}
+}
+```
