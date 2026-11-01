@@ -1609,7 +1609,9 @@
 					)
 						return;
 					const k = rt.perm[i];
-					const rf = rt.rock_flags[i] ?? 1;
+					const rfRaw = rt.rock_flags[i];
+					if (rfRaw === null || rfRaw === undefined || !Number.isFinite(Number(rfRaw))) return;
+					const rf = Number(rfRaw);
 					if (Number.isFinite(p) && Number.isFinite(k) && k > 0) {
 						if (!grouped.has(rf)) grouped.set(rf, { x: [], y: [], wells: [] });
 						const g = grouped.get(rf)!;
@@ -1627,7 +1629,12 @@
 							: projectData.drtDataSource)) !== 'log';
 				const poroLbl = (mwSource as any)?.poro_label ?? (mwIsCore ? 'CPORE' : 'PHIT');
 				const permLbl = (mwSource as any)?.perm_label ?? (mwIsCore ? 'CPERM' : 'PERM');
-				for (const [rf, g] of grouped.entries()) {
+				const sortedGrouped = [...grouped.entries()].sort(([a], [b]) => {
+					if (a === 0 && b !== 0) return 1;
+					if (b === 0 && a !== 0) return -1;
+					return a - b;
+				});
+				for (const [rf, g] of sortedGrouped) {
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
@@ -1771,10 +1778,11 @@
 				}
 			}
 
-			// Fitted power-law Perm Transform lines per Rock Type: K = a * phi^b
+			// Fitted power-law Perm Transform lines per Rock Type: K = a * phi^b (strictly reservoir DRTs >= 1)
 			if (workbench.scope === 'multi-well' && projectData.permTransformResult?.fits) {
 				for (const [rf, fit] of Object.entries(projectData.permTransformResult.fits)) {
-					if (!fit || !Number.isFinite(fit.a) || !Number.isFinite(fit.b)) continue;
+					if (!fit || Number(rf) < 1 || !Number.isFinite(fit.a) || !Number.isFinite(fit.b))
+						continue;
 					const kFit = phiGrid.map((phi) => fit.a * Math.pow(phi, fit.b));
 					const rtCol = getRockTypeColor(rf);
 					// High-contrast dark casing halo behind the fitted line so it stands out over same-color points

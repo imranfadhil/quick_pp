@@ -184,14 +184,20 @@
 
 	function formatDrtRange(drtStr: string): string {
 		const drtNum = Number(drtStr);
-		if (drtNum === 0) {
-			return `Non-Res: Φ<${projectData.drtNonResPhitCutoff}, Vsh>${projectData.drtNonResVshCutoff}, K<${projectData.drtNonResPermCutoff}`;
-		}
 		const sorted = [...projectData.activeDrtCutoffs].sort((a, b) => a - b);
 		const n = sorted.length;
-		if (!Number.isFinite(drtNum) || n === 0) return '';
 		const meta = activeMeta;
 		const u = meta.unit ? ` ${meta.unit}` : '';
+		if (drtNum === 0) {
+			const lowestStr =
+				n > 0
+					? meta.higherIsBetter
+						? `${meta.shortName} < ${sorted[0]}${u}, `
+						: `${meta.shortName} ≥ ${sorted[n - 1]}${u}, `
+					: '';
+			return `${lowestStr}Φ≤${projectData.drtNonResPhitCutoff}, Vsh>${projectData.drtNonResVshCutoff}, K≤${projectData.drtNonResPermCutoff}`;
+		}
+		if (!Number.isFinite(drtNum) || n === 0) return '';
 		if (meta.higherIsBetter) {
 			const upperIdx = n - (drtNum - 1);
 			const lowerIdx = n - drtNum;

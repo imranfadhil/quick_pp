@@ -1023,6 +1023,13 @@ class WorkspacePermTransformRequest(BaseModel):
         description="Fallback rock typing method if ROCK_FLAG is not yet saved: 'fzi', 'winland', or 'lucia'",
     )
     cutoffs: List[float] = Field(default_factory=lambda: [0.5, 1.2, 2.5, 5.0])
+    include_non_reservoir: bool = Field(
+        False,
+        description="Whether ROCK_FLAG = 0 (Non-Reservoir) is enabled for the lowest cutoff bin and non-reservoir gate",
+    )
+    non_res_phit_cutoff: float = Field(0.05)
+    non_res_vsh_cutoff: float = Field(0.50)
+    non_res_perm_cutoff: float = Field(0.01)
     rock_flag_source: Optional[str] = Field(
         None,
         description="Which ROCK_FLAG source to use: 'cutoff_only', 'fill_missing', or 'full_ml'",
@@ -4479,18 +4486,7 @@ def _execute_workspace_rock_typing(
     has_valid_phi_sec = bool(np.isfinite(phi_sec_arr).any())
 
     valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
-    if req.include_non_reservoir:
-        non_res_sample_mask = valid_mask & (
-            (phit_arr < float(req.non_res_phit_cutoff))
-            | (perm_arr < float(req.non_res_perm_cutoff))
-            | (np.isfinite(vsh_arr) & (vsh_arr > float(req.non_res_vsh_cutoff)))
-            | (coal_arr >= 1)
-        )
-        res_valid_mask = valid_mask & (~non_res_sample_mask)
-        fit_valid_mask = res_valid_mask if int(res_valid_mask.sum()) >= 4 else valid_mask
-    else:
-        non_res_sample_mask = np.zeros_like(valid_mask, dtype=bool)
-        fit_valid_mask = valid_mask
+    fit_valid_mask = valid_mask
 
     fzi_arr = np.full_like(phit_arr, np.nan, dtype=float)
     r35_arr = np.full_like(phit_arr, np.nan, dtype=float)
@@ -4569,8 +4565,11 @@ def _execute_workspace_rock_typing(
     else:
         cutoffs = sorted(float(c) for c in req.cutoffs)
 
-    rf_arr = rock_typing(
-        active_arr, cut_offs=cutoffs, higher_is_better=higher_is_better
+    rf_arr = np.asarray(
+        rock_typing(
+            active_arr, cut_offs=cutoffs, higher_is_better=higher_is_better
+        ),
+        dtype=float,
     )
 
     carb_res = apply_lucia_rfn_override(
@@ -4585,9 +4584,20 @@ def _execute_workspace_rock_typing(
     )
     override_active = bool(req.lucia_vuggy_override and has_valid_phi_sec)
     if override_active:
-        rf_arr = carb_res["overridden_rock_flags"]
-    if req.include_non_reservoir and non_res_sample_mask.any():
-        rf_arr = np.where(non_res_sample_mask, 0.0, rf_arr)
+        rf_arr = np.asarray(carb_res["overridden_rock_flags"], dtype=float)
+
+    if req.include_non_reservoir:
+        worst_bin = float(len(cutoffs) + 1)
+        non_res_sample_mask = valid_mask & (
+            (rf_arr >= worst_bin)
+            | (phit_arr <= float(req.non_res_phit_cutoff))
+            | (perm_arr <= float(req.non_res_perm_cutoff))
+            | (coal_arr >= 1)
+        )
+        if non_res_sample_mask.any():
+            rf_arr = np.where(non_res_sample_mask, 0.0, rf_arr)
+    else:
+        non_res_sample_mask = np.zeros_like(valid_mask, dtype=bool)
 
     rock_flags = [
         int(val) if not np.isnan(val) else None for val in np.asarray(rf_arr)
@@ -5301,6 +5311,21 @@ def workspace_perm_transform_compute(
         depths = fzi_data["depths"]
         zones = fzi_data.get("zones") or [None] * len(depths)
 
+        has_existing_zero = any(
+            rf is not None and int(rf) == 0 for rf in rock_flags
+        )
+        use_non_res = bool(req.include_non_reservoir or has_existing_zero)
+        sorted_cuts = sorted(float(c) for c in req.cutoffs)
+        worst_bin_val = len(sorted_cuts) + 1
+        coal_raw_pt = fzi_data.get("coal_flags")
+        coal_arr_pt = (
+            np.asarray(
+                [int(v) if v is not None else 0 for v in coal_raw_pt], dtype=int
+            )
+            if coal_raw_pt and len(coal_raw_pt) == len(phit_arr)
+            else np.zeros_like(phit_arr, dtype=int)
+        )
+
         if not all(rf is not None for rf in rock_flags) and len(phit_arr) > 0:
             valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
             ind_arr = np.full_like(phit_arr, np.nan, dtype=float)
@@ -5311,10 +5336,19 @@ def workspace_perm_transform_compute(
             rf_arr = np.asarray(
                 rock_typing(
                     ind_arr,
-                    cut_offs=sorted(float(c) for c in req.cutoffs),
+                    cut_offs=sorted_cuts,
                     higher_is_better=hib,
-                )
+                ),
+                dtype=float,
             )
+            if use_non_res:
+                nr_fallback = valid_mask & (
+                    (rf_arr >= float(worst_bin_val))
+                    | (phit_arr <= float(req.non_res_phit_cutoff))
+                    | (perm_arr <= float(req.non_res_perm_cutoff))
+                    | (coal_arr_pt >= 1)
+                )
+                rf_arr = np.where(nr_fallback, 0.0, rf_arr)
             rock_flags = [
                 rf_existing
                 if rf_existing is not None
@@ -5322,16 +5356,42 @@ def workspace_perm_transform_compute(
                 for rf_existing, rf_calc in zip(rock_flags, rf_arr)
             ]
 
-        unique_flags = sorted({rf for rf in rock_flags if rf is not None})
+        if use_non_res and len(phit_arr) > 0:
+            rock_flags = [
+                0
+                if (
+                    rf_v is not None
+                    and (
+                        int(rf_v) >= worst_bin_val
+                        or (np.isfinite(p_v) and p_v <= float(req.non_res_phit_cutoff))
+                        or (np.isfinite(k_v) and k_v <= float(req.non_res_perm_cutoff))
+                        or int(c_v) >= 1
+                    )
+                )
+                else rf_v
+                for rf_v, p_v, k_v, c_v in zip(
+                    rock_flags, phit_arr, perm_arr, coal_arr_pt
+                )
+            ]
+
+        unique_flags = sorted(
+            {int(rf) for rf in rock_flags if rf is not None and int(rf) >= 1}
+        )
         if not unique_flags and not req.fits:
             raise ValueError(
-                "No ROCK_FLAG values found in project wells. Run Rock Typing first."
+                "No reservoir ROCK_FLAG (>= 1) values found in project wells. Run Rock Typing first."
             )
 
         fits: Dict[str, Dict[str, Any]] = {}
         target_flags = (
             sorted(
-                {int(k) for k in req.fits.keys() if str(k).isdigit()}
+                {
+                    int(k)
+                    for k in req.fits.keys()
+                    if str(k).isdigit()
+                    and int(k) >= 1
+                    and (not use_non_res or int(k) < worst_bin_val)
+                }
                 | set(unique_flags)
             )
             if req.fits
@@ -5494,23 +5554,23 @@ def workspace_perm_transform_compute(
                 for rcol in ("ROCK_FLAG_CUTOFF", "ROCK_FLAG", "DRT"):
                     if rcol in w_df.columns:
                         rs = pd.to_numeric(w_df[rcol], errors="coerce")
-                        rs = rs.where(rs >= 1, np.nan)
+                        rs = rs.where(rs >= 0, np.nan)
                         rf_s = rf_s.combine_first(rs)
                         break
             elif rf_src == "full_ml":
                 for rcol in ("ROCK_FLAG_ML", "ROCK_FLAG", "ROCK_FLAG_CUTOFF", "DRT"):
                     if rcol in w_df.columns:
                         rs = pd.to_numeric(w_df[rcol], errors="coerce")
-                        rs = rs.where(rs >= 1, np.nan)
+                        rs = rs.where(rs >= 0, np.nan)
                         rf_s = rf_s.combine_first(rs)
             elif "ROCK_FLAG" in w_df.columns and rf_src != "fill_missing":
                 rs = pd.to_numeric(w_df["ROCK_FLAG"], errors="coerce")
-                rf_s = rs.where(rs >= 1, np.nan)
+                rf_s = rs.where(rs >= 0, np.nan)
             else:
                 for rcol in ("ROCK_FLAG", "ROCK_FLAG_CUTOFF", "ROCK_FLAG_ML", "DRT"):
                     if rcol in w_df.columns:
                         rs = pd.to_numeric(w_df[rcol], errors="coerce")
-                        rs = rs.where(rs >= 1, np.nan)
+                        rs = rs.where(rs >= 0, np.nan)
                         rf_s = rf_s.combine_first(rs)
 
             zone_vals = (
@@ -5548,10 +5608,12 @@ def workspace_perm_transform_compute(
                     else (core_hit[1] if core_hit else None)
                 )
                 rf_clean: Optional[int] = None
-                if rf_v is not None and not pd.isna(rf_v) and math.isfinite(float(rf_v)) and int(round(float(rf_v))) >= 1:
+                if rf_v is not None and not pd.isna(rf_v) and math.isfinite(float(rf_v)) and int(round(float(rf_v))) >= 0:
                     rf_clean = int(round(float(rf_v)))
                 elif core_hit and core_hit[2] is not None:
                     rf_clean = core_hit[2]
+                if use_non_res and rf_clean is not None and rf_clean >= worst_bin_val:
+                    rf_clean = 0
 
                 z_clean = (
                     z_v
@@ -5562,7 +5624,7 @@ def workspace_perm_transform_compute(
                 if p_log is None and p_scatter is None and k_scatter is None and rf_clean is None:
                     continue
 
-                rf_key = str(rf_clean) if rf_clean is not None else None
+                rf_key = str(rf_clean) if (rf_clean is not None and rf_clean >= 1) else None
                 pt_val: Optional[float] = None
                 if rf_key and rf_key in fits and p_log is not None and p_log > 0:
                     val = fits[rf_key]["a"] * (float(p_log) ** fits[rf_key]["b"])
@@ -5578,9 +5640,12 @@ def workspace_perm_transform_compute(
                 out_rock_flags.append(rf_clean)
                 out_perm_trans.append(pt_val)
 
-                if pt_val is not None:
+                if pt_val is not None or rf_clean == 0:
                     by_well.setdefault(str(wn), []).append(
-                        {"DEPTH": float(d_v), "PERM_TRANS": pt_val}
+                        {
+                            "DEPTH": float(d_v),
+                            "PERM_TRANS": pt_val if pt_val is not None else np.nan,
+                        }
                     )
 
         if not out_well_names:

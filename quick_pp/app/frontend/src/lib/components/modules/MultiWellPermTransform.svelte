@@ -113,12 +113,15 @@
 			const customFits =
 				useCurrentFits && projectData.permTransformResult?.fits
 					? Object.fromEntries(
-							Object.entries(projectData.permTransformResult.fits).map(([k, v]) => [
-								k,
-								{ a: Number(v.a), b: Number(v.b) }
-							])
+							Object.entries(projectData.permTransformResult.fits)
+								.filter(([k]) => Number(k) >= 1)
+								.map(([k, v]) => [k, { a: Number(v.a), b: Number(v.b) }])
 						)
-					: restoredFits;
+					: restoredFits
+						? Object.fromEntries(
+								Object.entries(restoredFits).filter(([k]) => Number(k) >= 1)
+							)
+						: null;
 
 			const { data, error } = await api.POST(
 				'/quick_pp/workspace/projects/{project_id}/perm_transform/compute',
@@ -133,6 +136,10 @@
 						method: projectData.drtMethod,
 						data_source: projectData.permTransformDataSource,
 						cutoffs: [...projectData.activeDrtCutoffs].sort((a, b) => a - b),
+						include_non_reservoir: projectData.drtIncludeNonReservoir,
+						non_res_phit_cutoff: projectData.drtNonResPhitCutoff,
+						non_res_vsh_cutoff: projectData.drtNonResVshCutoff,
+						non_res_perm_cutoff: projectData.drtNonResPermCutoff,
 						rock_flag_source: projectData.drtClassifierPropagated
 							? projectData.drtPropagationMode
 							: 'cutoff_only',
@@ -147,10 +154,13 @@
 			if (!useCurrentFits && !restoredFits) {
 				projectData.permTransformManualEdits = false;
 			}
-			const fitsMap = (data.fits ?? {}) as Record<
+			const rawFits = (data.fits ?? {}) as Record<
 				string,
 				{ a: number; b: number; r2: number | null; count: number }
 			>;
+			const fitsMap = Object.fromEntries(
+				Object.entries(rawFits).filter(([k]) => Number(k) >= 1)
+			);
 			const wnArr = [...(data.data?.well_names ?? [])];
 			const dArr = [...(data.data?.depths ?? [])];
 			const phitArr = [...(data.data?.phit ?? [])];
@@ -174,7 +184,7 @@
 							: projectData.drtPropagationMode === 'full_ml'
 								? (rtRes.rock_flags_ml?.[i] ?? rtRes.rock_flags?.[i])
 								: (rtRes.rock_flags?.[i] ?? rtRes.rock_flags_ml?.[i]);
-						if (typeof rfV === 'number' && Number.isFinite(rfV) && rfV >= 1) {
+						if (typeof rfV === 'number' && Number.isFinite(rfV) && rfV >= 0) {
 							rtLookup.set(
 								`${rtRes.well_names[i]}__${Math.round(Number(rtRes.depths[i]) * 100)}`,
 								Math.round(rfV)
@@ -192,7 +202,7 @@
 							projectData.drtPropagationMode === 'full_ml'
 								? (rtRes.log_rock_flags_ml?.[i] ?? rtRes.log_rock_flags?.[i])
 								: (rtRes.log_rock_flags?.[i] ?? rtRes.log_rock_flags_ml?.[i]);
-						if (typeof rfV === 'number' && Number.isFinite(rfV) && rfV >= 1) {
+						if (typeof rfV === 'number' && Number.isFinite(rfV) && rfV >= 0) {
 							rtLookup.set(
 								`${rtRes.log_well_names[i]}__${Math.round(Number(rtRes.log_depths[i]) * 100)}`,
 								Math.round(rfV)
@@ -202,21 +212,17 @@
 				}
 				if (rtLookup.size > 0) {
 					for (let i = 0; i < wnArr.length; i++) {
-						if (
-							!(
-								typeof rfArr[i] === 'number' &&
-								Number.isFinite(rfArr[i]) &&
-								(rfArr[i] as number) >= 1
-							)
-						) {
-							const hit = rtLookup.get(`${wnArr[i]}__${Math.round(Number(dArr[i]) * 100)}`);
-							if (hit !== undefined) {
-								rfArr[i] = hit;
-							}
+						const hit = rtLookup.get(`${wnArr[i]}__${Math.round(Number(dArr[i]) * 100)}`);
+						if (hit !== undefined) {
+							rfArr[i] = hit;
 						}
 						const r = rfArr[i];
+						if (r === 0) {
+							ptArr[i] = null;
+							continue;
+						}
 						const p = logPhitArr[i];
-						const f = r !== null && r !== undefined ? fitsMap[String(r)] : undefined;
+						const f = r !== null && r !== undefined && r >= 1 ? fitsMap[String(r)] : undefined;
 						if (
 							(ptArr[i] === null || ptArr[i] === undefined) &&
 							f &&
@@ -391,7 +397,7 @@
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-[var(--border-hairline)]">
-							{#each Object.entries(projectData.permTransformResult.fits) as [rf, fit] (rf)}
+							{#each Object.entries(projectData.permTransformResult.fits).filter(([rf]) => Number(rf) >= 1) as [rf, fit] (rf)}
 								<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
 									<td class="px-1.5 font-semibold whitespace-nowrap">
 										<span
