@@ -134,6 +134,18 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 			done: 'Handover Package (.zip) downloaded'
 		};
 	}
+	if (path.includes('/projects/import-handover/inspect')) {
+		return {
+			active: 'Inspecting Handover Package (.zip)...',
+			done: 'Handover Package inspected'
+		};
+	}
+	if (path.includes('/projects/import-handover/commit')) {
+		return {
+			active: 'Importing Handover Package (.zip)...',
+			done: 'Handover Package imported successfully'
+		};
+	}
 	if (path.endsWith('/export_las')) {
 		return {
 			active: `Exporting LAS 2.0 file (${wellName ?? 'well'})...`,
@@ -788,4 +800,105 @@ export async function generateProjectReport<T>(
 		}
 	}
 	throw new Error('Report generation timed out waiting for background job completion.');
+}
+
+
+export interface HandoverInventoryCounts {
+	wells?: number;
+	formation_tops?: number;
+	fluid_contacts?: number;
+	perforations?: number;
+	well_surveys?: number;
+	core_rca_samples?: number;
+	pressure_tests?: number;
+	scal_pc_points?: number;
+	scal_relperm_points?: number;
+	reservoir_summary_rows?: number;
+	[key: string]: number | undefined;
+}
+
+export interface HandoverInspectionResult {
+	project_name: string;
+	description?: string;
+	export_timestamp?: string;
+	quick_pp_version?: string;
+	wells_count: number;
+	well_names: string[];
+	inventory_counts: HandoverInventoryCounts;
+	has_las_logs: boolean;
+	has_tops: boolean;
+	has_contacts: boolean;
+	has_perforations: boolean;
+	has_surveys: boolean;
+	has_core: boolean;
+	has_pressure: boolean;
+	has_scal: boolean;
+	has_summaries: boolean;
+	has_manifest: boolean;
+	is_duplicate_name?: boolean;
+	suggested_name?: string;
+}
+
+export interface HandoverCommitResult {
+	success: boolean;
+	project_id: number;
+	project_name: string;
+	wells_imported: number;
+	well_names: string[];
+	counts: HandoverInventoryCounts;
+	warnings?: string[];
+}
+
+/**
+ * Inspect an uploaded Petrophysical Handover Package (.zip) and return manifest/preview.
+ */
+export async function inspectHandoverPackage(file: File): Promise<HandoverInspectionResult> {
+	const fd = new FormData();
+	fd.append('file', file);
+	const res = await trackedFetch(
+		`${API_BASE}/quick_pp/database/projects/import-handover/inspect`,
+		{
+			method: 'POST',
+			credentials: 'include',
+			headers: authHeaders(),
+			body: fd
+		},
+		'Failed to inspect handover package'
+	);
+	return res.json();
+}
+
+/**
+ * Commit/ingest an inspected Handover Package (.zip) into the database.
+ */
+export async function commitHandoverPackage(
+	file: File,
+	options?: {
+		projectName?: string;
+		projectId?: number;
+		overwriteExisting?: boolean;
+	}
+): Promise<HandoverCommitResult> {
+	const fd = new FormData();
+	fd.append('file', file);
+	if (options?.projectName) {
+		fd.append('project_name', options.projectName);
+	}
+	if (options?.projectId != null) {
+		fd.append('project_id', String(options.projectId));
+	}
+	if (options?.overwriteExisting !== undefined) {
+		fd.append('overwrite_existing', String(options.overwriteExisting));
+	}
+	const res = await trackedFetch(
+		`${API_BASE}/quick_pp/database/projects/import-handover/commit`,
+		{
+			method: 'POST',
+			credentials: 'include',
+			headers: authHeaders(),
+			body: fd
+		},
+		'Failed to import handover package'
+	);
+	return res.json();
 }

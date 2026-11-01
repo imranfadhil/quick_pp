@@ -35,6 +35,8 @@ from quick_pp.app.backend.utils.utils import sanitize_filename
 from quick_pp.database import models as db_models
 from quick_pp.database import objects as db_objects
 
+logger = logging.getLogger(__name__)
+
 
 class ZipStreamingResponse(Response):
     """Chunked streaming response that keeps `.body` accessible for direct callers & test suites."""
@@ -2498,4 +2500,71 @@ def export_well_las_endpoint(project_id: int, well_name: str):
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to export LAS file: {e}"
+        ) from e
+
+
+
+@router.post(
+    "/projects/import-handover/inspect",
+    summary="Inspect a Petrophysical Handover Package (.zip) before ingestion",
+)
+def inspect_handover_package_endpoint(file: UploadFile = File(...)):
+    """Inspect an uploaded Petrophysical Handover Package (.zip) and return metadata preview."""
+    from quick_pp.handover import inspect_handover_archive
+
+    try:
+        content = file.file.read()
+        preview = inspect_handover_archive(content)
+        with get_db() as session:
+            existing = (
+                session.query(db_models.Project)
+                .filter_by(name=preview["project_name"])
+                .first()
+            )
+            preview["is_duplicate_name"] = bool(existing)
+            preview["suggested_name"] = (
+                f"{preview['project_name']}_Imported"
+                if existing
+                else preview["project_name"]
+            )
+        return preview
+    except Exception as e:
+        logger.exception("Failed to inspect handover package")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid handover package: {e}"
+        ) from e
+
+
+@router.post(
+    "/projects/import-handover/commit",
+    summary="Ingest a Petrophysical Handover Package (.zip) into database",
+)
+def commit_handover_package_endpoint(
+    request: Request,
+    file: UploadFile = File(...),
+    project_name: Optional[str] = Form(None),
+    project_id: Optional[int] = Form(None),
+    overwrite_existing: bool = Form(True),
+):
+    """Import a complete Petrophysical Handover Package (.zip) into database."""
+    from quick_pp.handover import import_handover_archive
+
+    try:
+        current_user = get_current_user_optional(request)
+        user_id = int(current_user["user_id"]) if current_user else None
+        content = file.file.read()
+        with get_db() as session:
+            res = import_handover_archive(
+                db_session=session,
+                zip_source=content,
+                target_project_name=project_name,
+                target_project_id=project_id,
+                created_by_user_id=user_id,
+                overwrite_existing_wells=overwrite_existing,
+            )
+            return res
+    except Exception as e:
+        logger.exception("Failed to import handover package")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to import handover package: {e}"
         ) from e

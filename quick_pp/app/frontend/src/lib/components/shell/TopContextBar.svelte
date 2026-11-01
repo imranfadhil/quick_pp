@@ -306,6 +306,15 @@
 					✎
 				</button>
 			{/if}
+			<button
+				type="button"
+				title="Import Petrophysical Handover Package (.zip)"
+				onclick={() => workbench.openImporter('handover')}
+				class="flex h-7 items-center gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]"
+			>
+				<span class="text-xs">📦</span>
+				<span class="hidden sm:inline">Import Package</span>
+			</button>
 
 			{#if showNewProjectPopover}
 				<div

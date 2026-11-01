@@ -30,6 +30,8 @@ from quick_pp.las_handler import (
     extract_las_metadata,
     extract_well_df_elevation,
     export_to_las_string,
+    fast_read_las,
+    _las_header_to_dataframe,
 )
 from quick_pp.ressum import calc_reservoir_summary
 from quick_pp.scal import generate_swof_table
@@ -1754,3 +1756,719 @@ def collect_well_handover_dict(
         "scal_pc": well_obj.get_scal_pc_data(),
     }
 
+
+
+
+# ==============================================================================
+# Handover Archive Ingestion & Project Re-Hydration
+# ==============================================================================
+
+
+def inspect_handover_archive(zip_source: Any) -> Dict[str, Any]:
+    """Inspect a Petrophysical Handover Package (.zip) and return a metadata preview.
+
+    Args:
+        zip_source: File path, file-like object, or bytes of the zip archive.
+
+    Returns:
+        Dict[str, Any]: Preview containing project_name, project_description,
+            quick_pp_version, exported_at, wells_count, well_names, inventory_counts,
+            and whether a manifest was detected.
+    """
+    if isinstance(zip_source, (bytes, bytearray)):
+        zip_source = io.BytesIO(zip_source)
+
+    with zipfile.ZipFile(zip_source, "r") as zf:
+        namelist = zf.namelist()
+        manifest_name = next(
+            (
+                n
+                for n in namelist
+                if n.endswith("CPI_Parameters_Manifest.json") or n.endswith("manifest.json")
+            ),
+            None,
+        )
+        manifest_data: Dict[str, Any] = {}
+        if manifest_name:
+            try:
+                manifest_data = json.loads(zf.read(manifest_name).decode("utf-8"))
+            except Exception as e:
+                logger.warning(f"Failed to parse manifest in handover archive: {e}")
+
+        las_files = [
+            n
+            for n in namelist
+            if n.endswith(".las")
+            and not n.endswith("_RCA.las")
+            and not n.endswith("_MDT.las")
+        ]
+        well_names = (
+            list(manifest_data.get("wells", {}).keys())
+            if manifest_data.get("wells")
+            else [os.path.splitext(os.path.basename(f))[0] for f in las_files]
+        )
+        well_names = sorted(list(dict.fromkeys(well_names)))
+
+        inv = manifest_data.get("inventory_counts", {})
+        counts = {
+            "wells": len(well_names),
+            "formation_tops": inv.get("formation_tops", 0),
+            "fluid_contacts": inv.get("fluid_contacts", 0),
+            "perforations": inv.get("perforations", 0),
+            "well_surveys": inv.get("well_surveys", 0),
+            "core_rca_samples": inv.get("core_rca_samples", 0),
+            "pressure_tests": inv.get("pressure_tests", 0),
+        }
+
+        # If manifest was missing or counts are 0, check file presences directly
+        if counts["formation_tops"] == 0:
+            top_f = next((n for n in namelist if n.endswith("formation_tops.csv")), None)
+            if top_f:
+                try:
+                    df = pd.read_csv(io.BytesIO(zf.read(top_f)))
+                    counts["formation_tops"] = len(df)
+                except Exception:
+                    pass
+
+        if counts["fluid_contacts"] == 0:
+            c_f = next((n for n in namelist if n.endswith("fluid_contacts.csv")), None)
+            if c_f:
+                try:
+                    df = pd.read_csv(io.BytesIO(zf.read(c_f)))
+                    counts["fluid_contacts"] = len(df)
+                except Exception:
+                    pass
+
+        if counts["well_surveys"] == 0:
+            s_f = next((n for n in namelist if n.endswith("well_surveys.csv")), None)
+            if s_f:
+                try:
+                    df = pd.read_csv(io.BytesIO(zf.read(s_f)))
+                    counts["well_surveys"] = len(df)
+                except Exception:
+                    pass
+
+        if counts["pressure_tests"] == 0:
+            p_f = next(
+                (n for n in namelist if n.endswith("pressure_tests_mdt.csv")), None
+            )
+            if p_f:
+                try:
+                    df = pd.read_csv(io.BytesIO(zf.read(p_f)))
+                    counts["pressure_tests"] = len(df)
+                except Exception:
+                    pass
+
+        if counts["core_rca_samples"] == 0:
+            rca_f = next((n for n in namelist if n.endswith("core_rca_points.csv")), None)
+            if rca_f:
+                try:
+                    df = pd.read_csv(io.BytesIO(zf.read(rca_f)))
+                    counts["core_rca_samples"] = len(df)
+                except Exception:
+                    pass
+
+        project_name = manifest_data.get("project_name") or "Imported_Project"
+        project_description = manifest_data.get("project_description", "")
+        quick_pp_ver = manifest_data.get("quick_pp_version", "")
+        exported_at = manifest_data.get("exported_at", "")
+
+        return {
+            "project_name": project_name,
+            "project_description": project_description,
+            "quick_pp_version": quick_pp_ver,
+            "exported_at": exported_at,
+            "has_manifest": bool(manifest_name),
+            "wells_count": len(well_names),
+            "well_names": well_names,
+            "inventory_counts": counts,
+            "has_project_parameters": bool(manifest_data.get("project_parameters")),
+        }
+
+
+def import_handover_archive(
+    db_session: Any,
+    zip_source: Any,
+    target_project_name: Optional[str] = None,
+    target_project_id: Optional[int] = None,
+    created_by_user_id: Optional[int] = None,
+    overwrite_existing_wells: bool = True,
+) -> Dict[str, Any]:
+    """Import a complete Petrophysical Handover Package (.zip) into the quick_pp database.
+
+    Args:
+        db_session: Active SQLAlchemy session.
+        zip_source: File path, file-like object, or bytes of the zip archive.
+        target_project_name: Optional target project name override.
+        target_project_id: Optional existing project ID to merge wells into.
+        created_by_user_id: Optional user ID for ownership.
+        overwrite_existing_wells: Whether to update data if a well already exists in the project.
+
+    Returns:
+        Dict[str, Any]: Summary of imported project, wells, curves, and ancillary records.
+    """
+    from quick_pp.database import objects as db_objects
+    from quick_pp.database import models as db_models
+    from quick_pp.app.backend.services.database import invalidate_well_cache
+
+    if isinstance(zip_source, (bytes, bytearray)):
+        zip_source = io.BytesIO(zip_source)
+
+    with zipfile.ZipFile(zip_source, "r") as zf:
+        namelist = zf.namelist()
+        manifest_name = next(
+            (
+                n
+                for n in namelist
+                if n.endswith("CPI_Parameters_Manifest.json") or n.endswith("manifest.json")
+            ),
+            None,
+        )
+        manifest_data: Dict[str, Any] = {}
+        if manifest_name:
+            try:
+                manifest_data = json.loads(zf.read(manifest_name).decode("utf-8"))
+            except Exception as e:
+                logger.warning(f"Could not parse manifest: {e}")
+
+        # 1. Resolve Target Project
+        if target_project_id is not None:
+            proj = db_objects.Project.load(db_session, project_id=target_project_id)
+        else:
+            p_name = str(
+                target_project_name
+                or manifest_data.get("project_name")
+                or "Imported_Project"
+            ).strip()
+            p_desc = (
+                manifest_data.get("project_description")
+                or "Imported from handover package"
+            )
+            existing_proj_orm = (
+                db_session.query(db_models.Project).filter_by(name=p_name).first()
+            )
+            if existing_proj_orm:
+                proj = db_objects.Project.load(
+                    db_session, project_id=existing_proj_orm.project_id
+                )
+            else:
+                proj = db_objects.Project(
+                    db_session=db_session,
+                    name=p_name,
+                    description=p_desc,
+                    created_by_user_id=created_by_user_id,
+                )
+                proj.save()
+                if created_by_user_id is not None:
+                    if not db_session.get(
+                        db_models.ProjectMember,
+                        (proj.project_id, int(created_by_user_id)),
+                    ):
+                        db_session.add(
+                            db_models.ProjectMember(
+                                project_id=proj.project_id,
+                                user_id=int(created_by_user_id),
+                                role="admin",
+                            )
+                        )
+                        db_session.flush()
+
+        # Restore project parameters / config_data if present in manifest
+        proj_cfg = manifest_data.get("project_parameters")
+        if proj_cfg and isinstance(proj_cfg, dict):
+            cur_cfg = dict(proj._orm_project.config_data or {})
+            cur_cfg.update(proj_cfg)
+            proj._orm_project.config_data = cur_cfg
+            db_session.flush()
+
+        # 2. Ingest Continuous Well Logs from LAS files
+        las_entries = [
+            n
+            for n in namelist
+            if n.endswith(".las")
+            and not n.endswith("_RCA.las")
+            and not n.endswith("_MDT.las")
+        ]
+        imported_wells: Dict[str, Any] = {}
+        for las_entry in las_entries:
+            try:
+                las_bytes = zf.read(las_entry)
+                header_las, df = fast_read_las(
+                    io.BytesIO(las_bytes), filename=os.path.basename(las_entry)
+                )
+                meta = extract_las_metadata(header_las)
+                w_name = (
+                    meta.well_name
+                    or os.path.splitext(os.path.basename(las_entry))[0]
+                )
+                uwi = meta.uwi or w_name
+                depth_uom = meta.depth_unit or "m"
+
+                existing_names = set(proj.get_well_names())
+                if w_name in existing_names:
+                    well_obj = proj.get_well(w_name)
+                    if not well_obj.depth_uom:
+                        well_obj.depth_uom = depth_uom
+                else:
+                    well_obj = db_objects.Well(
+                        db_session,
+                        project_id=proj.project_id,
+                        name=w_name,
+                        uwi=uwi,
+                        depth_uom=depth_uom,
+                        header_data=meta.raw_well_header,
+                    )
+                    db_session.add(well_obj._orm_well)
+                    db_session.flush()
+
+                primary_header_df = _las_header_to_dataframe(header_las)
+                well_obj.update_data_from_las_parse(
+                    df, primary_header_df, metadata_override=meta.raw_well_header
+                )
+
+                # Check manifest for well CPI parameters
+                w_manifest = manifest_data.get("wells", {}).get(w_name, {})
+                w_params = dict(w_manifest.get("parameters") or {})
+                if meta.raw_parameters:
+                    for pk, pv in meta.raw_parameters.items():
+                        if pk.lower() not in w_params:
+                            w_params[pk.lower()] = pv
+                if w_params:
+                    cur_w_cfg = dict(well_obj._orm_well.config_data or {})
+                    cur_w_cfg.update(w_params)
+                    well_obj._orm_well.config_data = cur_w_cfg
+
+                db_session.flush()
+                invalidate_well_cache(
+                    project_id=proj.project_id, well_name=w_name
+                )
+                imported_wells[w_name] = well_obj
+            except Exception as e:
+                logger.warning(
+                    f"Failed to ingest LAS file '{las_entry}' from handover archive: {e}"
+                )
+
+        # 3. Ingest Well Headers & Datum
+        headers_entry = next(
+            (n for n in namelist if n.endswith("well_headers_and_datum.csv")), None
+        )
+        if headers_entry:
+            try:
+                hdr_df = pd.read_csv(io.BytesIO(zf.read(headers_entry)))
+                for _, row in hdr_df.iterrows():
+                    wn = str(
+                        row.get("WELL_NAME") or row.get("well_name") or ""
+                    ).strip()
+                    w_obj = imported_wells.get(wn) or (
+                        proj.get_well(wn)
+                        if wn in set(proj.get_well_names())
+                        else None
+                    )
+                    if w_obj:
+                        cur_hdr = dict(w_obj.header_data or {})
+                        for col in hdr_df.columns:
+                            val = row[col]
+                            if (
+                                pd.notna(val)
+                                and col.upper()
+                                not in ("WELL_NAME", "PROJECT_NAME")
+                            ):
+                                cur_hdr[col.lower()] = val
+                        w_obj.header_data = cur_hdr
+                        if "UWI" in hdr_df.columns and pd.notna(row["UWI"]):
+                            w_obj.uwi = str(row["UWI"])
+                        w_obj.save()
+            except Exception as e:
+                logger.warning(
+                    f"Error importing well headers from handover archive: {e}"
+                )
+
+        # 4. Ingest Well Surveys
+        surveys_entry = next(
+            (n for n in namelist if n.endswith("well_surveys.csv")), None
+        )
+        total_surveys = 0
+        if surveys_entry:
+            try:
+                surv_df = pd.read_csv(io.BytesIO(zf.read(surveys_entry)))
+                wn_col = next(
+                    (c for c in surv_df.columns if c.upper() == "WELL_NAME"),
+                    "WELL_NAME",
+                )
+                md_col = next(
+                    (c for c in surv_df.columns if c.upper() == "MD"), "MD"
+                )
+                inc_col = next(
+                    (c for c in surv_df.columns if c.upper() == "INC"), "INC"
+                )
+                azim_col = next(
+                    (c for c in surv_df.columns if c.upper() == "AZIM"), "AZIM"
+                )
+                for wn, group in surv_df.groupby(wn_col):
+                    wn_str = str(wn).strip()
+                    w_obj = imported_wells.get(wn_str) or (
+                        proj.get_well(wn_str)
+                        if wn_str in set(proj.get_well_names())
+                        else None
+                    )
+                    if w_obj:
+                        s_list = []
+                        for _, r in group.iterrows():
+                            if (
+                                pd.notna(r[md_col])
+                                and pd.notna(r[inc_col])
+                                and pd.notna(r[azim_col])
+                            ):
+                                s_list.append(
+                                    {
+                                        "md": float(r[md_col]),
+                                        "inc": float(r[inc_col]),
+                                        "azim": float(r[azim_col]),
+                                    }
+                                )
+                        if s_list:
+                            w_obj.add_well_surveys(s_list)
+                            total_surveys += len(s_list)
+            except Exception as e:
+                logger.warning(
+                    f"Error importing surveys from handover archive: {e}"
+                )
+
+        # 5. Ingest Formation Tops
+        tops_entry = next(
+            (n for n in namelist if n.endswith("formation_tops.csv")), None
+        )
+        total_tops = 0
+        if tops_entry:
+            try:
+                tops_df = pd.read_csv(io.BytesIO(zf.read(tops_entry)))
+                wn_col = next(
+                    (c for c in tops_df.columns if c.upper() == "WELL_NAME"),
+                    "WELL_NAME",
+                )
+                top_col = next(
+                    (
+                        c
+                        for c in tops_df.columns
+                        if c.upper() in ("TOP_NAME", "NAME", "FORMATION")
+                    ),
+                    "TOP_NAME",
+                )
+                d_col = next(
+                    (c for c in tops_df.columns if c.upper() in ("MD", "DEPTH", "TOP_DEPTH")),
+                    tops_df.columns[3] if len(tops_df.columns) > 3 else "MD",
+                )
+                for wn, group in tops_df.groupby(wn_col):
+                    wn_str = str(wn).strip()
+                    w_obj = imported_wells.get(wn_str) or (
+                        proj.get_well(wn_str)
+                        if wn_str in set(proj.get_well_names())
+                        else None
+                    )
+                    if w_obj:
+                        t_list = []
+                        for _, r in group.iterrows():
+                            if pd.notna(r[top_col]) and pd.notna(r[d_col]):
+                                t_list.append(
+                                    {
+                                        "name": str(r[top_col]).strip(),
+                                        "depth": float(r[d_col]),
+                                    }
+                                )
+                        if t_list:
+                            w_obj.add_formation_tops(t_list, replace=True)
+                            total_tops += len(t_list)
+            except Exception as e:
+                logger.warning(
+                    f"Error importing tops from handover archive: {e}"
+                )
+
+        # 6. Ingest Fluid Contacts
+        contacts_entry = next(
+            (n for n in namelist if n.endswith("fluid_contacts.csv")), None
+        )
+        total_contacts = 0
+        if contacts_entry:
+            try:
+                contacts_df = pd.read_csv(io.BytesIO(zf.read(contacts_entry)))
+                wn_col = next(
+                    (c for c in contacts_df.columns if c.upper() == "WELL_NAME"),
+                    "WELL_NAME",
+                )
+                c_col = next(
+                    (
+                        c
+                        for c in contacts_df.columns
+                        if c.upper() in ("CONTACT_NAME", "NAME", "CONTACT_TYPE")
+                    ),
+                    "CONTACT_NAME",
+                )
+                d_col = next(
+                    (c for c in contacts_df.columns if c.upper() in ("MD", "DEPTH", "CONTACT_DEPTH")),
+                    contacts_df.columns[3] if len(contacts_df.columns) > 3 else "MD",
+                )
+                for wn, group in contacts_df.groupby(wn_col):
+                    wn_str = str(wn).strip()
+                    w_obj = imported_wells.get(wn_str) or (
+                        proj.get_well(wn_str)
+                        if wn_str in set(proj.get_well_names())
+                        else None
+                    )
+                    if w_obj:
+                        c_list = []
+                        for _, r in group.iterrows():
+                            if pd.notna(r[c_col]) and pd.notna(r[d_col]):
+                                c_list.append(
+                                    {
+                                        "name": str(r[c_col]).strip(),
+                                        "depth": float(r[d_col]),
+                                    }
+                                )
+                        if c_list:
+                            w_obj.add_fluid_contacts(c_list, replace=True)
+                            total_contacts += len(c_list)
+            except Exception as e:
+                logger.warning(
+                    f"Error importing contacts from handover archive: {e}"
+                )
+
+        # 7. Ingest Perforations
+        perfs_entry = next(
+            (n for n in namelist if n.endswith("perforations.csv")), None
+        )
+        total_perfs = 0
+        if perfs_entry:
+            try:
+                perfs_df = pd.read_csv(io.BytesIO(zf.read(perfs_entry)))
+                wn_col = next(
+                    (c for c in perfs_df.columns if c.upper() == "WELL_NAME"),
+                    "WELL_NAME",
+                )
+                name_col = next(
+                    (
+                        c
+                        for c in perfs_df.columns
+                        if c.upper() in ("PERF_NAME", "NAME")
+                    ),
+                    "PERF_NAME",
+                )
+                top_col = next(
+                    (
+                        c
+                        for c in perfs_df.columns
+                        if c.upper() in ("TOP_MD", "TOP_DEPTH", "MD_TOP", "DEPTH")
+                    ),
+                    "TOP_MD",
+                )
+                bot_col = next(
+                    (c for c in perfs_df.columns if c.upper() in ("BOTTOM_MD", "BOTTOM_DEPTH", "MD_BOTTOM")),
+                    "BOTTOM_MD",
+                )
+                for wn, group in perfs_df.groupby(wn_col):
+                    wn_str = str(wn).strip()
+                    w_obj = imported_wells.get(wn_str) or (
+                        proj.get_well(wn_str)
+                        if wn_str in set(proj.get_well_names())
+                        else None
+                    )
+                    if w_obj and hasattr(w_obj, "add_perforations"):
+                        p_list = []
+                        for _, r in group.iterrows():
+                            if (
+                                pd.notna(r[name_col])
+                                and pd.notna(r[top_col])
+                                and pd.notna(r[bot_col])
+                            ):
+                                p_list.append(
+                                    {
+                                        "name": str(r[name_col]).strip(),
+                                        "top_depth": float(r[top_col]),
+                                        "bottom_depth": float(r[bot_col]),
+                                        "description": str(
+                                            r.get("DESCRIPTION")
+                                            or r.get("description")
+                                            or ""
+                                        ),
+                                    }
+                                )
+                        if p_list:
+                            w_obj.add_perforations(p_list)
+                            total_perfs += len(p_list)
+            except Exception as e:
+                logger.warning(
+                    f"Error importing perforations from handover archive: {e}"
+                )
+
+        # 8. Ingest Pressure Tests (MDT/RFT)
+        mdt_entry = next(
+            (n for n in namelist if n.endswith("pressure_tests_mdt.csv")), None
+        )
+        total_mdt = 0
+        if mdt_entry:
+            try:
+                mdt_df = pd.read_csv(io.BytesIO(zf.read(mdt_entry)))
+                wn_col = next(
+                    (c for c in mdt_df.columns if c.upper() == "WELL_NAME"),
+                    "WELL_NAME",
+                )
+                d_col = next(
+                    (c for c in mdt_df.columns if c.upper() == "DEPTH"), "DEPTH"
+                )
+                p_col = next(
+                    (c for c in mdt_df.columns if c.upper() == "PRESSURE"),
+                    "PRESSURE",
+                )
+                for wn, group in mdt_df.groupby(wn_col):
+                    wn_str = str(wn).strip()
+                    w_obj = imported_wells.get(wn_str) or (
+                        proj.get_well(wn_str)
+                        if wn_str in set(proj.get_well_names())
+                        else None
+                    )
+                    if w_obj:
+                        m_list = []
+                        for _, r in group.iterrows():
+                            if pd.notna(r[d_col]) and pd.notna(r[p_col]):
+                                m_list.append(
+                                    {
+                                        "depth": float(r[d_col]),
+                                        "pressure": float(r[p_col]),
+                                        "pressure_uom": str(
+                                            r.get("PRESSURE_UOM")
+                                            or r.get("pressure_uom")
+                                            or "psi"
+                                        ),
+                                        "mobility": (
+                                            float(r["MOBILITY"])
+                                            if pd.notna(r.get("MOBILITY"))
+                                            else None
+                                        ),
+                                        "permeability": (
+                                            float(r["PERMEABILITY"])
+                                            if pd.notna(r.get("PERMEABILITY"))
+                                            else None
+                                        ),
+                                        "temperature": (
+                                            float(r["TEMPERATURE"])
+                                            if pd.notna(r.get("TEMPERATURE"))
+                                            else None
+                                        ),
+                                        "fluid_type": str(
+                                            r.get("FLUID_TYPE")
+                                            or r.get("fluid_type")
+                                            or "UNASSIGNED"
+                                        ),
+                                        "test_quality": str(
+                                            r.get("TEST_QUALITY")
+                                            or r.get("test_quality")
+                                            or "VALID"
+                                        ),
+                                        "zone": str(
+                                            r.get("ZONE")
+                                            or r.get("zone")
+                                            or ""
+                                        ),
+                                        "remarks": str(
+                                            r.get("REMARKS")
+                                            or r.get("remarks")
+                                            or ""
+                                        ),
+                                    }
+                                )
+                        if m_list:
+                            w_obj.add_pressure_tests(m_list)
+                            total_mdt += len(m_list)
+            except Exception as e:
+                logger.warning(
+                    f"Error importing pressure tests from handover archive: {e}"
+                )
+
+        # 9. Ingest Core RCA Samples
+        core_entry = next(
+            (n for n in namelist if n.endswith("core_rca_points.csv")), None
+        )
+        total_core = 0
+        if core_entry:
+            try:
+                core_df = pd.read_csv(io.BytesIO(zf.read(core_entry)))
+                wn_col = next(
+                    (c for c in core_df.columns if c.upper() == "WELL_NAME"),
+                    "WELL_NAME",
+                )
+                d_col = next(
+                    (c for c in core_df.columns if c.upper() == "DEPTH"), "DEPTH"
+                )
+                for wn, group in core_df.groupby(wn_col):
+                    wn_str = str(wn).strip()
+                    w_obj = imported_wells.get(wn_str) or (
+                        proj.get_well(wn_str)
+                        if wn_str in set(proj.get_well_names())
+                        else None
+                    )
+                    if w_obj:
+                        samples_list = []
+                        for idx, r in group.iterrows():
+                            if pd.notna(r[d_col]):
+                                s_name = str(
+                                    r.get("SAMPLE_NAME")
+                                    or r.get("sample_name")
+                                    or f"RCA-{idx + 1}"
+                                )
+                                s_entry: Dict[str, Any] = {
+                                    "sample_name": s_name,
+                                    "depth": float(r[d_col]),
+                                    "description": str(
+                                        r.get("DESCRIPTION")
+                                        or r.get("description")
+                                        or ""
+                                    ),
+                                    "remark": str(
+                                        r.get("REMARK")
+                                        or r.get("remark")
+                                        or ""
+                                    ),
+                                }
+                                if pd.notna(r.get("CPORE")):
+                                    s_entry["porosity"] = float(r["CPORE"])
+                                if pd.notna(r.get("CPERM")):
+                                    s_entry["permeability"] = float(r["CPERM"])
+                                if pd.notna(r.get("CPORE_AMB")):
+                                    s_entry["porosity_amb"] = float(r["CPORE_AMB"])
+                                if pd.notna(r.get("CPERM_AIR")):
+                                    s_entry["perm_air"] = float(r["CPERM_AIR"])
+                                if pd.notna(r.get("RAW_DEPTH")):
+                                    s_entry["raw_depth"] = float(r["RAW_DEPTH"])
+                                if pd.notna(r.get("SHIFT_M")):
+                                    s_entry["shift_m"] = float(r["SHIFT_M"])
+                                samples_list.append(s_entry)
+                        if samples_list:
+                            w_obj.replace_rca_samples(samples_list)
+                            total_core += len(samples_list)
+            except Exception as e:
+                logger.warning(
+                    f"Error importing core RCA samples from handover archive: {e}"
+                )
+
+        db_session.flush()
+        db_session.commit()
+
+        # Invalidate caches
+        for wn in imported_wells:
+            invalidate_well_cache(project_id=proj.project_id, well_name=wn)
+
+        return {
+            "success": True,
+            "project_id": proj.project_id,
+            "project_name": proj.name,
+            "wells_imported": len(imported_wells),
+            "well_names": list(imported_wells.keys()),
+            "summary": {
+                "wells": len(imported_wells),
+                "formation_tops": total_tops,
+                "fluid_contacts": total_contacts,
+                "perforations": total_perfs,
+                "well_surveys": total_surveys,
+                "pressure_tests": total_mdt,
+                "core_samples": total_core,
+            },
+        }

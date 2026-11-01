@@ -439,7 +439,36 @@ class WorkbenchState {
 
 	// Global modal / drawer flags
 	importerOpen = $state<boolean>(false);
+	importerTab = $state<
+		| 'las'
+		| 'formation_tops'
+		| 'fluid_contacts'
+		| 'perforations'
+		| 'core_samples'
+		| 'scal_pc'
+		| 'pressure_tests'
+		| 'well_surveys'
+		| 'handover'
+	>('las');
 	aiDrawerOpen = $state<boolean>(false);
+
+	openImporter(
+		tab?:
+			| 'las'
+			| 'formation_tops'
+			| 'fluid_contacts'
+			| 'perforations'
+			| 'core_samples'
+			| 'scal_pc'
+			| 'pressure_tests'
+			| 'well_surveys'
+			| 'handover'
+	) {
+		if (tab) {
+			this.importerTab = tab;
+		}
+		this.importerOpen = true;
+	}
 
 	// Single-well left pane section collapse / expand / focus controls
 	sectionFocusMode = $state<boolean>(false);
