@@ -1193,16 +1193,14 @@ class WellDataState {
 			}));
 
 			// Ensure CPORE and CPERM curves are populated on the log depth grid from core_samples on initial load
+			// (1-to-1 nearest log row per discrete plug pair, keeping CPORE and CPERM strictly paired)
 			const baseDeptGrid = numericCurves['DEPT'] ?? numericCurves['DEPTH'] ?? [];
 			if (rawCoreList.length > 0 && baseDeptGrid.length > 0) {
-				const cporeGrid = numericCurves['CPORE']
-					? [...numericCurves['CPORE']]
-					: new Array(baseDeptGrid.length).fill(Number.NaN);
-				const cpermGrid = numericCurves['CPERM']
-					? [...numericCurves['CPERM']]
-					: new Array(baseDeptGrid.length).fill(Number.NaN);
-				let updatedCpore = !numericCurves['CPORE'];
-				let updatedCperm = !numericCurves['CPERM'];
+				const cporeGrid = new Array(baseDeptGrid.length).fill(Number.NaN);
+				const cpermGrid = new Array(baseDeptGrid.length).fill(Number.NaN);
+				const bestDistPlug = new Array(baseDeptGrid.length).fill(Number.POSITIVE_INFINITY);
+				let hasCpore = false;
+				let hasCperm = false;
 
 				for (const s of rawCoreList) {
 					const sd = Number(s.depth ?? s.DEPTH ?? s.raw_depth);
@@ -1227,26 +1225,84 @@ class WellDataState {
 					) {
 						lo = lo - 1;
 					}
-					if (Math.abs(baseDeptGrid[lo] - sd) <= 0.5) {
-						if (pVal !== null && !Number.isFinite(cporeGrid[lo])) {
-							cporeGrid[lo] = pVal;
-							updatedCpore = true;
-						}
-						if (kVal !== null && !Number.isFinite(cpermGrid[lo])) {
-							cpermGrid[lo] = kVal;
-							updatedCperm = true;
-						}
+					const dist = Math.abs(baseDeptGrid[lo] - sd);
+					if (dist <= 0.5 && dist <= bestDistPlug[lo]) {
+						bestDistPlug[lo] = dist;
+						cporeGrid[lo] = pVal !== null ? pVal : Number.NaN;
+						cpermGrid[lo] = kVal !== null ? kVal : Number.NaN;
+						if (pVal !== null) hasCpore = true;
+						if (kVal !== null) hasCperm = true;
 					}
 				}
-				if (updatedCpore && cporeGrid.some((v) => Number.isFinite(v))) {
+				if (hasCpore) {
 					numericCurves['CPORE'] = cporeGrid;
 					origCopy['CPORE'] = [...cporeGrid];
 					committedCopy['CPORE'] = [...cporeGrid];
 				}
-				if (updatedCperm && cpermGrid.some((v) => Number.isFinite(v))) {
+				if (hasCperm) {
 					numericCurves['CPERM'] = cpermGrid;
 					origCopy['CPERM'] = [...cpermGrid];
 					committedCopy['CPERM'] = [...cpermGrid];
+				}
+			} else if (baseDeptGrid.length > 1) {
+				// Clean up any legacy merge_asof duplicate core values across consecutive log rows
+				// jointly as an intact (CPORE, CPERM) plug pair so a plug's porosity and permeability stay paired at the same depth
+				const cpArr = numericCurves['CPORE'];
+				const ckArr = numericCurves['CPERM'];
+				const hasCp = Boolean(cpArr && cpArr.length === baseDeptGrid.length);
+				const hasCk = Boolean(ckArr && ckArr.length === baseDeptGrid.length);
+				if (hasCp || hasCk) {
+					const cpClean = hasCp ? [...cpArr] : new Array(baseDeptGrid.length).fill(Number.NaN);
+					const ckClean = hasCk ? [...ckArr] : new Array(baseDeptGrid.length).fill(Number.NaN);
+					let modified = false;
+					const sameValOrBothNan = (a: number, b: number): boolean => {
+						const aFin = Number.isFinite(a);
+						const bFin = Number.isFinite(b);
+						if (!aFin && !bFin) return true;
+						if (aFin !== bFin) return false;
+						return Math.abs(a - b) <= 1e-6;
+					};
+					let i = 0;
+					while (i < baseDeptGrid.length) {
+						if (!Number.isFinite(cpClean[i]) && !Number.isFinite(ckClean[i])) {
+							i++;
+							continue;
+						}
+						let j = i + 1;
+						while (
+							j < baseDeptGrid.length &&
+							(Number.isFinite(cpClean[j]) || Number.isFinite(ckClean[j])) &&
+							sameValOrBothNan(cpClean[j], cpClean[i]) &&
+							sameValOrBothNan(ckClean[j], ckClean[i]) &&
+							Math.abs(baseDeptGrid[j] - baseDeptGrid[j - 1]) <= 0.35
+						) {
+							j++;
+						}
+						const runLen = j - i;
+						if (runLen >= 2 && runLen <= 4) {
+							const keepIdx = i + Math.floor(runLen / 2);
+							for (let k = i; k < j; k++) {
+								if (k !== keepIdx) {
+									cpClean[k] = Number.NaN;
+									ckClean[k] = Number.NaN;
+									modified = true;
+								}
+							}
+						}
+						i = j;
+					}
+					if (modified) {
+						if (hasCp) {
+							numericCurves['CPORE'] = cpClean;
+							origCopy['CPORE'] = [...cpClean];
+							committedCopy['CPORE'] = [...cpClean];
+						}
+						if (hasCk) {
+							numericCurves['CPERM'] = ckClean;
+							origCopy['CPERM'] = [...ckClean];
+							committedCopy['CPERM'] = [...ckClean];
+						}
+					}
 				}
 			}
 
@@ -3047,11 +3103,10 @@ class WellDataState {
 		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		if (plugs.length === 0 || dept.length === 0) return;
 
+		// Shift all core plugs in the barrel together as intact (raw_depth, depth, porosity, permeability) pairs
+		// so plugs sitting just across a formation top boundary are never decoupled from the rest of the core
 		const updatedSamples = plugs.map((p) => {
-			const inActive = this.isCorePlugInActiveFilter(p.raw_depth, p.saved_depth);
-			const shifted = inActive
-				? Number(this.computeShiftedCoreDepth(p.raw_depth).toFixed(3))
-				: Number(p.saved_depth.toFixed(3));
+			const shifted = Number(this.computeShiftedCoreDepth(p.raw_depth).toFixed(3));
 			const dShift = Number((shifted - p.raw_depth).toFixed(3));
 			return {
 				...p.extra,
@@ -3070,10 +3125,12 @@ class WellDataState {
 		const unshiftedCperm = new Array(dept.length).fill(Number.NaN);
 		const newCporeAmb = new Array(dept.length).fill(Number.NaN);
 		const newCpermAir = new Array(dept.length).fill(Number.NaN);
+		const bestRawDist = new Array(dept.length).fill(Number.POSITIVE_INFINITY);
+		const bestShiftDist = new Array(dept.length).fill(Number.POSITIVE_INFINITY);
 		let hasAmb = false;
 		let hasAir = false;
 
-		const findClosestLogIdx = (targetD: number): number => {
+		const findClosestLogIdx = (targetD: number): { idx: number; dist: number } => {
 			let lo = 0;
 			let hi = dept.length - 1;
 			while (lo < hi) {
@@ -3084,36 +3141,43 @@ class WellDataState {
 			if (lo > 0 && Math.abs(dept[lo - 1] - targetD) < Math.abs(dept[lo] - targetD)) {
 				lo = lo - 1;
 			}
-			return Math.abs(dept[lo] - targetD) <= 0.5 ? lo : -1;
+			const dist = Math.abs(dept[lo] - targetD);
+			return { idx: dist <= 0.5 ? lo : -1, dist };
 		};
 
 		for (const s of updatedSamples) {
-			const rawIdx = findClosestLogIdx(s.raw_depth);
-			if (rawIdx >= 0) {
-				if (s.porosity !== null && Number.isFinite(s.porosity)) {
-					unshiftedCpore[rawIdx] = s.porosity;
-				}
-				if (s.permeability !== null && Number.isFinite(s.permeability)) {
-					unshiftedCperm[rawIdx] = s.permeability;
-				}
+			const { idx: rawIdx, dist: rawDist } = findClosestLogIdx(s.raw_depth);
+			if (rawIdx >= 0 && rawDist <= bestRawDist[rawIdx]) {
+				bestRawDist[rawIdx] = rawDist;
+				unshiftedCpore[rawIdx] =
+					s.porosity !== null && Number.isFinite(s.porosity) ? s.porosity : Number.NaN;
+				unshiftedCperm[rawIdx] =
+					s.permeability !== null && Number.isFinite(s.permeability)
+						? s.permeability
+						: Number.NaN;
 			}
-			const shiftIdx = findClosestLogIdx(s.depth);
-			if (shiftIdx >= 0) {
-				if (s.porosity !== null && Number.isFinite(s.porosity)) {
-					newCpore[shiftIdx] = s.porosity;
-				}
-				if (s.permeability !== null && Number.isFinite(s.permeability)) {
-					newCperm[shiftIdx] = s.permeability;
-				}
+			const { idx: shiftIdx, dist: shiftDist } = findClosestLogIdx(s.depth);
+			if (shiftIdx >= 0 && shiftDist <= bestShiftDist[shiftIdx]) {
+				bestShiftDist[shiftIdx] = shiftDist;
+				newCpore[shiftIdx] =
+					s.porosity !== null && Number.isFinite(s.porosity) ? s.porosity : Number.NaN;
+				newCperm[shiftIdx] =
+					s.permeability !== null && Number.isFinite(s.permeability)
+						? s.permeability
+						: Number.NaN;
 				const pAmb = Number((s as any).porosity_amb ?? (s as any).CPORE_AMB);
 				const kAir = Number((s as any).perm_air ?? (s as any).CPERM_AIR);
 				if (Number.isFinite(pAmb) && pAmb > 0) {
 					newCporeAmb[shiftIdx] = pAmb > 1 ? pAmb / 100 : pAmb;
 					hasAmb = true;
+				} else {
+					newCporeAmb[shiftIdx] = Number.NaN;
 				}
 				if (Number.isFinite(kAir) && kAir > 0) {
 					newCpermAir[shiftIdx] = kAir;
 					hasAir = true;
+				} else {
+					newCpermAir[shiftIdx] = Number.NaN;
 				}
 			}
 		}
@@ -3122,14 +3186,10 @@ class WellDataState {
 		if (this.originalScalPc.length > 0) {
 			this.scalPc = this.originalScalPc.map((r) => {
 				const rd = Number(r.raw_depth ?? r.depth ?? 0);
-				const savedPcDepth = Number(r.depth ?? rd);
-				const inActive = this.isCorePlugInActiveFilter(rd, savedPcDepth);
 				return {
 					...r,
 					raw_depth: rd,
-					depth: inActive
-						? Number(this.computeShiftedCoreDepth(rd).toFixed(3))
-						: Number(savedPcDepth.toFixed(3))
+					depth: Number(this.computeShiftedCoreDepth(rd).toFixed(3))
 				};
 			});
 		}

@@ -205,13 +205,32 @@ def _update_in_memory_well_cache(
                 merged_mem.drop(
                     columns=["_IN_UPD", "_DEPTH_KEY"], errors="ignore", inplace=True
                 )
+                sparse_core_cols = {
+                    "CPORE",
+                    "CPERM",
+                    "CPORE_UNSHIFTED",
+                    "CPERM_UNSHIFTED",
+                    "CPORE_AMB",
+                    "CPERM_AIR",
+                    "CPORE_ORI",
+                    "CPERM_ORI",
+                    "CORE_PORO",
+                    "CORE_PERM",
+                }
                 for c in overlap_cols:
                     if c in base_df.columns:
-                        merged_mem[c] = np.where(
-                            in_upd_mask & merged_mem[c].notna(),
-                            merged_mem[c],
-                            base_df[c],
-                        )
+                        if str(c).upper() in sparse_core_cols:
+                            merged_mem[c] = np.where(
+                                in_upd_mask,
+                                merged_mem[c],
+                                base_df[c],
+                            )
+                        else:
+                            merged_mem[c] = np.where(
+                                in_upd_mask & merged_mem[c].notna(),
+                                merged_mem[c],
+                                base_df[c],
+                            )
             _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (
                 time.time(),
                 merged_mem,

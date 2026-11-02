@@ -1429,7 +1429,20 @@ class Well(object):
 
         # Optimization 2: Batch collect all depths that need deletion across all curves
         all_depths_to_delete = {}
+        full_span_delete_curves = {}
         new_curves = []
+        sparse_core_mnemonics = {
+            "CPORE",
+            "CPERM",
+            "CPORE_UNSHIFTED",
+            "CPERM_UNSHIFTED",
+            "CPORE_AMB",
+            "CPERM_AIR",
+            "CPORE_ORI",
+            "CPERM_ORI",
+            "CORE_PORO",
+            "CORE_PERM",
+        }
 
         for mnemonic, values in data.items():
             # Determine data type from pandas series
@@ -1452,12 +1465,31 @@ class Well(object):
                 new_curves.append(mnemonic)
             else:
                 orm_curve.data_type = data_type
-                # Collect depths for this curve that need deletion
-                depths_to_update = data.index[data[mnemonic].notna()].tolist()
-                if depths_to_update:
-                    all_depths_to_delete[orm_curve.curve_id] = depths_to_update
+                if str(mnemonic).upper() in sparse_core_mnemonics and len(data.index) > 0:
+                    valid_idx = [float(d) for d in data.index if pd.notna(d)]
+                    if valid_idx:
+                        full_span_delete_curves[orm_curve.curve_id] = (
+                            min(valid_idx) - 0.01,
+                            max(valid_idx) + 0.01,
+                        )
+                else:
+                    # Collect depths for this curve that need deletion
+                    depths_to_update = data.index[data[mnemonic].notna()].tolist()
+                    if depths_to_update:
+                        all_depths_to_delete[orm_curve.curve_id] = depths_to_update
 
         # Optimization 3: Bulk delete old data points using primary keys after matching rounded depths
+        if full_span_delete_curves:
+            span_del_stmt = text(
+                "DELETE FROM curve_data "
+                "WHERE curve_id = :curve_id AND depth >= :min_d AND depth <= :max_d"
+            )
+            for curve_id, (min_d, max_d) in full_span_delete_curves.items():
+                self.db_session.execute(
+                    span_del_stmt,
+                    {"curve_id": curve_id, "min_d": min_d, "max_d": max_d},
+                )
+
         if all_depths_to_delete:
             sel_stmt = text(
                 "SELECT curve_data_id, depth FROM curve_data "

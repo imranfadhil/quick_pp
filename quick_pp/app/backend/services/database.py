@@ -1944,16 +1944,50 @@ def _get_merged_dataframe_sync(
             pressure_p = _prefixed(pressure_df, "pressure_")
 
             merged = df
+            log_depths = merged["depth"].to_numpy(dtype=float)
+            n_log = len(log_depths)
+
+            def _map_discrete_to_single_nearest_row(
+                disc_df: pd.DataFrame, max_tol: float
+            ) -> Dict[str, List[Any]]:
+                cols = [c for c in disc_df.columns if c != "depth"]
+                out_cols: Dict[str, List[Any]] = {
+                    c: [np.nan] * n_log for c in cols
+                }
+                if n_log == 0 or disc_df.empty or not cols:
+                    return out_cols
+                best_dist_at_idx: Dict[int, float] = {}
+                for _, d_row in disc_df.iterrows():
+                    try:
+                        d_val = float(d_row["depth"])
+                    except (TypeError, ValueError):
+                        continue
+                    if not np.isfinite(d_val):
+                        continue
+                    pos = int(np.searchsorted(log_depths, d_val))
+                    best_idx = -1
+                    best_dist = float("inf")
+                    for cand in (pos - 1, pos):
+                        if 0 <= cand < n_log:
+                            dist = abs(float(log_depths[cand]) - d_val)
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_idx = cand
+                    if best_idx < 0 or best_dist > max_tol:
+                        continue
+                    prev_dist = best_dist_at_idx.get(best_idx, float("inf"))
+                    if best_dist <= prev_dist:
+                        best_dist_at_idx[best_idx] = best_dist
+                        for c in cols:
+                            val = d_row[c]
+                            out_cols[c][best_idx] = val if pd.notna(val) else np.nan
+                return out_cols
 
             if tops_p is not None and not tops_p.empty:
-                merged = pd.merge_asof(
-                    merged,
-                    tops_p,
-                    on="depth",
-                    direction="nearest",
-                    tolerance=tol,
-                    suffixes=("", "_top"),
-                )
+                mapped_tops = _map_discrete_to_single_nearest_row(tops_p, tol)
+                for c, vals in mapped_tops.items():
+                    target_c = f"{c}_top" if c in merged.columns else c
+                    merged[target_c] = vals
                 if "top_name" in tops_p.columns:
                     # Deduplicate co-depth tops deterministically (prefer specific unit/sandstone over broad group)
                     def _top_specificity(name_val: Any) -> tuple:
@@ -1987,24 +2021,16 @@ def _get_merged_dataframe_sync(
                     merged["zones"] = merged["top_name"].ffill()
 
             if contacts_p is not None and not contacts_p.empty:
-                merged = pd.merge_asof(
-                    merged,
-                    contacts_p,
-                    on="depth",
-                    direction="nearest",
-                    tolerance=tol,
-                    suffixes=("", "_contact"),
-                )
+                mapped_contacts = _map_discrete_to_single_nearest_row(contacts_p, tol)
+                for c, vals in mapped_contacts.items():
+                    target_c = f"{c}_contact" if c in merged.columns else c
+                    merged[target_c] = vals
 
             if pressure_p is not None and not pressure_p.empty:
-                merged = pd.merge_asof(
-                    merged,
-                    pressure_p,
-                    on="depth",
-                    direction="nearest",
-                    tolerance=tol,
-                    suffixes=("", "_pressure"),
-                )
+                mapped_pressure = _map_discrete_to_single_nearest_row(pressure_p, tol)
+                for c, vals in mapped_pressure.items():
+                    target_c = f"{c}_pressure" if c in merged.columns else c
+                    merged[target_c] = vals
 
             core_rows_by_depth: Dict[float, Dict[str, Any]] = {}
             for dval, sname, prop_up, raw_val in rca_rows:
@@ -2030,22 +2056,70 @@ def _get_merged_dataframe_sync(
                     .sort_values("depth")
                     .reset_index(drop=True)
                 )
-                merged = pd.merge_asof(
-                    merged,
-                    core_df,
-                    on="depth",
-                    direction="nearest",
-                    tolerance=tol,
-                    suffixes=("", "_core"),
+                mapped_core = _map_discrete_to_single_nearest_row(
+                    core_df, max(tol, 0.5)
                 )
+                if "core_sample_name" in mapped_core:
+                    merged["core_sample_name"] = mapped_core["core_sample_name"]
                 for c_col in ("cpore", "cperm"):
-                    c_core = f"{c_col}_core"
-                    if c_core in merged.columns:
-                        if c_col in merged.columns:
-                            merged[c_col] = merged[c_core].combine_first(merged[c_col])
-                        else:
-                            merged[c_col] = merged[c_core]
-                        merged.drop(columns=[c_core], inplace=True)
+                    if c_col in mapped_core:
+                        s_mapped = pd.Series(mapped_core[c_col], index=merged.index, dtype=float)
+                        if s_mapped.notna().any():
+                            merged[c_col] = s_mapped
+            else:
+                # Clean up any legacy merge_asof duplicate core values across consecutive log rows
+                # jointly as a (cpore, cperm) plug pair so a plug's porosity and permeability stay paired at the same depth
+                has_cp = "cpore" in merged.columns
+                has_ck = "cperm" in merged.columns
+                if (has_cp or has_ck) and n_log > 1:
+                    cp_vals = (
+                        pd.to_numeric(merged["cpore"], errors="coerce").to_numpy(dtype=float)
+                        if has_cp
+                        else np.full(n_log, np.nan)
+                    )
+                    ck_vals = (
+                        pd.to_numeric(merged["cperm"], errors="coerce").to_numpy(dtype=float)
+                        if has_ck
+                        else np.full(n_log, np.nan)
+                    )
+                    cp_clean = cp_vals.copy()
+                    ck_clean = ck_vals.copy()
+
+                    def _same_val_or_both_nan(a: float, b: float) -> bool:
+                        a_fin = bool(np.isfinite(a))
+                        b_fin = bool(np.isfinite(b))
+                        if not a_fin and not b_fin:
+                            return True
+                        if a_fin != b_fin:
+                            return False
+                        return abs(a - b) <= 1e-6
+
+                    i = 0
+                    while i < n_log:
+                        if not np.isfinite(cp_vals[i]) and not np.isfinite(ck_vals[i]):
+                            i += 1
+                            continue
+                        j = i + 1
+                        while (
+                            j < n_log
+                            and (np.isfinite(cp_vals[j]) or np.isfinite(ck_vals[j]))
+                            and _same_val_or_both_nan(cp_vals[j], cp_vals[i])
+                            and _same_val_or_both_nan(ck_vals[j], ck_vals[i])
+                            and abs(log_depths[j] - log_depths[j - 1]) <= 0.35
+                        ):
+                            j += 1
+                        run_len = j - i
+                        if 2 <= run_len <= 4:
+                            keep_idx = i + (run_len // 2)
+                            for k in range(i, j):
+                                if k != keep_idx:
+                                    cp_clean[k] = np.nan
+                                    ck_clean[k] = np.nan
+                        i = j
+                    if has_cp:
+                        merged["cpore"] = cp_clean
+                    if has_ck:
+                        merged["cperm"] = ck_clean
 
             # Resolve TVD and TVDSS (= TVD - DF_elevation) from curves or directional survey (never assume TVD == MD)
             from quick_pp.las_handler import extract_las_metadata, extract_well_df_elevation

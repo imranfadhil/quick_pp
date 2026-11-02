@@ -562,69 +562,100 @@
 	let cpermTraceIdx = -1;
 
 	function buildCoreMarkerData(indices: number[], deptAll: number[]) {
-		const cporeRaw = wellData.curves['CPORE'] ?? wellData.curves['CORE_PORO'];
 		const cporeX: number[] = [];
 		const cporeY: number[] = [];
-		const cporeCustom: number[] = [];
-		if (cporeRaw && cporeRaw.length > 0) {
-			for (const i of indices) {
-				const v = cporeRaw[i];
-				const d = deptAll[i];
-				if (typeof v === 'number' && Number.isFinite(v) && v > 0 && Number.isFinite(d)) {
-					cporeX.push(v * 2.0);
-					cporeY.push(d);
-					cporeCustom.push(v);
-				}
-			}
-		}
-		if (cporeX.length === 0 && wellData.coreSamples.length > 0) {
-			for (const s of wellData.coreSamples) {
-				const d = Number(s.depth ?? s.DEPTH);
-				const p = Number(s.porosity ?? s.CPORE ?? s.poro);
-				if (
-					Number.isFinite(d) &&
-					Number.isFinite(p) &&
-					p > 0 &&
-					wellData.isDepthInActiveFilter(d)
-				) {
-					const normP = p > 1 ? p / 100 : p;
-					cporeX.push(normP * 2.0);
-					cporeY.push(d);
-					cporeCustom.push(normP);
-				}
-			}
-		}
-
-		const cpermRaw = wellData.curves['CPERM'] ?? wellData.curves['CORE_PERM'];
+		const cporeCustom: Array<[number, string]> = [];
 		const cpermX: number[] = [];
 		const cpermY: number[] = [];
-		if (cpermRaw && cpermRaw.length > 0) {
-			for (const i of indices) {
-				const v = cpermRaw[i];
-				const d = deptAll[i];
-				if (typeof v === 'number' && Number.isFinite(v) && v > 0 && Number.isFinite(d)) {
-					cpermX.push(v);
-					cpermY.push(d);
-				}
-			}
-		}
-		if (cpermX.length === 0 && wellData.coreSamples.length > 0) {
+		const cpermCustom: Array<[number, string]> = [];
+
+		// Prefer discrete core plug records (exact plug depths + sample IDs, updated live on depth shift)
+		if (wellData.coreSamples.length > 0) {
+			const seenPoro = new Set<string>();
+			const seenPerm = new Set<string>();
+			let sampleSeq = 1;
 			for (const s of wellData.coreSamples) {
 				const d = Number(s.depth ?? s.DEPTH);
-				const k = Number(s.permeability ?? s.CPERM ?? s.perm);
-				if (
-					Number.isFinite(d) &&
-					Number.isFinite(k) &&
-					k > 0 &&
-					wellData.isDepthInActiveFilter(d)
-				) {
-					cpermX.push(k);
-					cpermY.push(d);
+				if (!Number.isFinite(d) || !wellData.isDepthInActiveFilter(d)) continue;
+				const sName = String(s.sample_name ?? s.SAMPLE ?? `Plug #${sampleSeq++}`).trim();
+				const label = `${d.toFixed(2)}m${sName ? ` • ${sName}` : ''}`;
+
+				const p = Number(s.porosity ?? s.CPORE ?? s.poro);
+				if (Number.isFinite(p) && p > 0) {
+					const normP = p > 1 ? p / 100 : p;
+					const key = `${d.toFixed(3)}_${normP.toFixed(5)}`;
+					if (!seenPoro.has(key)) {
+						seenPoro.add(key);
+						cporeX.push(normP * 2.0);
+						cporeY.push(d);
+						cporeCustom.push([normP, label]);
+					}
 				}
+
+				const k = Number(s.permeability ?? s.CPERM ?? s.perm);
+				if (Number.isFinite(k) && k > 0) {
+					const key = `${d.toFixed(3)}_${k.toPrecision(6)}`;
+					if (!seenPerm.has(key)) {
+						seenPerm.add(key);
+						cpermX.push(k);
+						cpermY.push(d);
+						cpermCustom.push([k, label]);
+					}
+				}
+			}
+		} else {
+			// Fallback to log-grid CPORE / CPERM curves when discrete coreSamples are unavailable,
+			// collapsing any consecutive identical merge_asof duplicate rows jointly as a (CPORE, CPERM) plug pair
+			const cporeRaw = wellData.curves['CPORE'] ?? wellData.curves['CORE_PORO'];
+			const cpermRaw = wellData.curves['CPERM'] ?? wellData.curves['CORE_PERM'];
+			const rawPairs: Array<{ d: number; p: number | null; k: number | null }> = [];
+			for (const i of indices) {
+				const d = deptAll[i];
+				if (!Number.isFinite(d)) continue;
+				const pVal = cporeRaw ? cporeRaw[i] : Number.NaN;
+				const kVal = cpermRaw ? cpermRaw[i] : Number.NaN;
+				const p = typeof pVal === 'number' && Number.isFinite(pVal) && pVal > 0 ? pVal : null;
+				const k = typeof kVal === 'number' && Number.isFinite(kVal) && kVal > 0 ? kVal : null;
+				if (p !== null || k !== null) {
+					rawPairs.push({ d, p, k });
+				}
+			}
+			const sameNullable = (a: number | null, b: number | null): boolean => {
+				if (a === null && b === null) return true;
+				if (a === null || b === null) return false;
+				return Math.abs(a - b) <= 1e-6;
+			};
+			let i = 0;
+			while (i < rawPairs.length) {
+				let j = i + 1;
+				while (
+					j < rawPairs.length &&
+					sameNullable(rawPairs[j].p, rawPairs[i].p) &&
+					sameNullable(rawPairs[j].k, rawPairs[i].k) &&
+					Math.abs(rawPairs[j].d - rawPairs[j - 1].d) <= 0.35
+				) {
+					j++;
+				}
+				const runLen = j - i;
+				const pickIdx = runLen >= 2 && runLen <= 4 ? i + Math.floor(runLen / 2) : i;
+				const pt = rawPairs[pickIdx];
+				const lbl = `${pt.d.toFixed(2)}m`;
+				if (pt.p !== null) {
+					const normP = pt.p > 1 ? pt.p / 100 : pt.p;
+					cporeX.push(normP * 2.0);
+					cporeY.push(pt.d);
+					cporeCustom.push([normP, lbl]);
+				}
+				if (pt.k !== null) {
+					cpermX.push(pt.k);
+					cpermY.push(pt.d);
+					cpermCustom.push([pt.k, lbl]);
+				}
+				i = runLen >= 2 && runLen <= 4 ? j : i + 1;
 			}
 		}
 
-		return { cporeX, cporeY, cporeCustom, cpermX, cpermY };
+		return { cporeX, cporeY, cporeCustom, cpermX, cpermY, cpermCustom };
 	}
 
 	function buildTracesAndLayout() {
@@ -1436,7 +1467,10 @@
 		}
 
 		// Core Porosity & Core Permeability discrete points (filtered to non-null finite plugs)
-		const { cporeX, cporeY, cporeCustom, cpermX, cpermY } = buildCoreMarkerData(indices, deptAll);
+		const { cporeX, cporeY, cporeCustom, cpermX, cpermY, cpermCustom } = buildCoreMarkerData(
+			indices,
+			deptAll
+		);
 		if (cporeX.length > 0) {
 			cporeTraceIdx = traces.length;
 			traces.push({
@@ -1448,8 +1482,13 @@
 				y: cporeY,
 				xaxis: 'x4',
 				yaxis: 'y',
-				marker: { color: PETRO_COLORS.core, size: 5.5, symbol: 'circle' },
-				hovertemplate: 'Core Poro: %{customdata:.3f}<extra></extra>'
+				marker: {
+					color: PETRO_COLORS.core,
+					size: 6,
+					symbol: 'circle',
+					line: { color: '#FFFFFF', width: 0.9 }
+				},
+				hovertemplate: 'Core Poro: %{customdata[0]:.3f} v/v (%{customdata[1]})<extra></extra>'
 			});
 		}
 
@@ -1555,11 +1594,17 @@
 				mode: 'markers',
 				name: 'CPERM',
 				x: cpermX,
+				customdata: cpermCustom,
 				y: cpermY,
 				xaxis: 'x5',
 				yaxis: 'y',
-				marker: { color: PETRO_COLORS.core, size: 5.5, symbol: 'diamond' },
-				hovertemplate: 'Core Perm: %{x:.2f} mD<extra></extra>'
+				marker: {
+					color: PETRO_COLORS.core,
+					size: 6,
+					symbol: 'diamond',
+					line: { color: '#FFFFFF', width: 0.9 }
+				},
+				hovertemplate: 'Core Perm: %{x:.2f} mD (%{customdata[1]})<extra></extra>'
 			});
 		}
 
@@ -2217,7 +2262,7 @@
 			preRenderRaf = requestAnimationFrame(() => {
 				if (cancelled || !PlotlyLib || !plotContainer) return;
 				const deptAll = curves['DEPT'] ?? curves['DEPTH'] ?? [];
-				const { cporeX, cporeY, cporeCustom, cpermX, cpermY } = untrack(() =>
+				const { cporeX, cporeY, cporeCustom, cpermX, cpermY, cpermCustom } = untrack(() =>
 					buildCoreMarkerData(visIndices, deptAll)
 				);
 				if (cporeTraceIdx >= 0) {
@@ -2228,7 +2273,11 @@
 					);
 				}
 				if (cpermTraceIdx >= 0) {
-					PlotlyLib.restyle(plotContainer, { x: [cpermX], y: [cpermY] }, [cpermTraceIdx]);
+					PlotlyLib.restyle(
+						plotContainer,
+						{ x: [cpermX], y: [cpermY], customdata: [cpermCustom] },
+						[cpermTraceIdx]
+					);
 				}
 			});
 			return () => {
