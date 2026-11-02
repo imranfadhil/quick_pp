@@ -3562,22 +3562,22 @@
 						{/if}
 					</div>
 
-					<!-- Track 4: Lithology / Mineral Volumes -->
+					<!-- Track 4: Lithology & Porosity -->
 					<div
 						style="left: 46.8%; width: 14.6%;"
 						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
 						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
-							<span>T4 · FRACTIONS</span>
+							<span>T4 · LITH & PORO</span>
 							<span class="text-[7.5px] text-slate-300">v/v</span>
 						</div>
 						{#if tsOverlayActive && readout.VSH_LAM !== null && readout.VSH_LAM !== undefined}
 							<div class="flex items-center justify-between">
-								<span class="font-bold" style="color: {PETRO_COLORS.vshLamStroke}">VSH_LAM</span>
+								<span class="font-bold text-slate-300">VSH_LAM</span>
 								<span class="mono-num font-semibold">{fmtNum(readout.VSH_LAM, 3)}</span>
 							</div>
 							<div class="flex items-center justify-between">
-								<span class="font-bold" style="color: {PETRO_COLORS.vshDisStroke}">VSH_DIS</span>
+								<span class="font-bold text-sky-300">VSH_DIS</span>
 								<span class="mono-num font-semibold">{fmtNum(readout.VSH_DIS, 3)}</span>
 							</div>
 						{:else}
@@ -3590,6 +3590,12 @@
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-yellow-300">VSAND</span>
 								<span class="mono-num font-semibold">{fmtNum(readout.VSAND, 3)}</span>
+							</div>
+						{/if}
+						{#if readout.VSILT !== null && readout.VSILT !== undefined && readout.VSILT > 0.001}
+							<div class="flex items-center justify-between">
+								<span class="font-bold text-orange-300">VSILT</span>
+								<span class="mono-num font-semibold">{fmtNum(readout.VSILT, 3)}</span>
 							</div>
 						{/if}
 						{#if readout.VCALC !== null && readout.VCALC !== undefined && readout.VCALC > 0.001}
@@ -3610,6 +3616,34 @@
 								<span class="mono-num font-semibold">{fmtNum(readout.VCOAL, 3)}</span>
 							</div>
 						{/if}
+						{#if readout.VANHY !== null && readout.VANHY !== undefined && readout.VANHY > 0.001}
+							<div class="flex items-center justify-between">
+								<span class="font-bold text-indigo-300">VANHY</span>
+								<span class="mono-num font-semibold">{fmtNum(readout.VANHY, 3)}</span>
+							</div>
+						{/if}
+						{#if (readout.VPYRI ?? readout.VPYR ?? 0) > 0.001}
+							<div class="flex items-center justify-between">
+								<span class="font-bold text-amber-400">VPYR</span>
+								<span class="mono-num font-semibold">{fmtNum(readout.VPYRI ?? readout.VPYR, 3)}</span>
+							</div>
+						{/if}
+						{#if (readout.VSIDE ?? readout.VSID ?? 0) > 0.001}
+							<div class="flex items-center justify-between">
+								<span class="font-bold text-amber-500">VSID</span>
+								<span class="mono-num font-semibold">{fmtNum(readout.VSIDE ?? readout.VSID, 3)}</span>
+							</div>
+						{/if}
+						<div class="flex items-center justify-between border-t border-slate-700/60 pt-0.5 mt-0.5">
+							<span class="font-bold" style="color: {PETRO_COLORS.phie}">PHIT</span>
+							<span class="mono-num font-semibold">{fmtNum(readout.PHIT ?? readout.PHIE, 3)} <span class="text-[7px] text-slate-400">v/v</span></span>
+						</div>
+						{#if tsOverlayActive && readout.PHIT_SAND !== null && readout.PHIT_SAND !== undefined}
+							<div class="flex items-center justify-between">
+								<span class="font-bold" style="color: {PETRO_COLORS.phitSand}">PHIT_S</span>
+								<span class="mono-num font-semibold">{fmtNum(readout.PHIT_SAND, 3)} <span class="text-[7px] text-slate-400">v/v</span></span>
+							</div>
+						{/if}
 						{#if (readout.CPORE ?? readout.CORE_PORO) !== null && (readout.CPORE ?? readout.CORE_PORO) !== undefined}
 							<div class="flex items-center justify-between text-cyan-300">
 								<span class="font-bold">CPORE</span>
@@ -3618,31 +3652,15 @@
 						{/if}
 					</div>
 
-					<!-- Track 5: Porosity & Permeability -->
+					<!-- Track 5: Permeability -->
 					<div
 						style="left: 62.4%; width: 14.6%;"
 						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
 						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
-							<span>T5 · PHI & K</span>
-							<span class="text-[7.5px] text-slate-300">TOTAL</span>
+							<span>T5 · PERM</span>
+							<span class="text-[7.5px] text-slate-300">mD</span>
 						</div>
-						<div class="flex items-center justify-between">
-							<span class="font-bold" style="color: {PETRO_COLORS.phie}">PHIT</span>
-							<span class="mono-num font-semibold">{fmtNum(readout.PHIT ?? readout.PHIE, 3)} <span class="text-[7px] text-slate-400">v/v</span></span>
-						</div>
-						{#if tsOverlayActive && readout.PHIT_SAND !== null && readout.PHIT_SAND !== undefined}
-							<div class="flex items-center justify-between">
-								<span class="font-bold" style="color: {PETRO_COLORS.phitSand}">PHIT_S</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.PHIT_SAND, 3)}</span>
-							</div>
-						{/if}
-						{#if (readout.CPORE ?? readout.CORE_PORO) !== null && (readout.CPORE ?? readout.CORE_PORO) !== undefined}
-							<div class="flex items-center justify-between text-cyan-300">
-								<span class="font-bold">CPORE</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.CPORE ?? readout.CORE_PORO, 3)} <span class="text-[7px]">v/v</span></span>
-							</div>
-						{/if}
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.perm}">PERM</span>
 							<span class="mono-num font-semibold">{fmtPerm(readout.PERM)}</span>
@@ -3657,6 +3675,12 @@
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-purple-300">PERM_TR</span>
 								<span class="mono-num font-semibold">{fmtPerm(readout.PERM_TRANS)}</span>
+							</div>
+						{/if}
+						{#if (readout.PERM_BLK) !== null && (readout.PERM_BLK) !== undefined}
+							<div class="flex items-center justify-between text-slate-300">
+								<span class="font-bold">PERM_BLK</span>
+								<span class="mono-num font-semibold">{fmtPerm(readout.PERM_BLK)}</span>
 							</div>
 						{/if}
 					</div>
