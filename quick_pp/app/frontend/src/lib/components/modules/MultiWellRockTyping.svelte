@@ -1564,52 +1564,34 @@
 	</div>
 
 	<div
-		class="flex flex-col gap-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2"
+		class="grid grid-cols-2 gap-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2"
 	>
-		<div class="grid grid-cols-2 gap-1.5">
-			<button
-				type="button"
-				disabled={projectData.isComputingMultiWell}
-				onclick={() =>
-					executeRockTyping(
-						false,
-						Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
-						projectData.drtClassifierPropagated,
-						projectData.drtSelectedSavedModelKey || null
-					)}
-				class="h-7 w-full rounded-sm bg-[var(--accent-primary)] text-xs font-medium text-white transition-opacity hover:opacity-95 disabled:opacity-50"
-			>
-				{projectData.isComputingMultiWell ? 'Computing...' : activeMeta.computeLabel}
-			</button>
-			<button
-				type="button"
-				disabled={
-					projectData.isComputingMultiWell ||
-					!projectData.hasPendingMultiWell('rock-typing')
-				}
-				onclick={saveRockTyping}
-				title="Save ROCK_FLAG curves across all wells (without cascading downstream steps)"
-				class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
-			>
-				Save All Wells
-			</button>
-		</div>
+		<button
+			type="button"
+			disabled={projectData.isComputingMultiWell || projectData.isSavingMultiWell}
+			onclick={() =>
+				executeRockTyping(
+					false,
+					Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
+					projectData.drtClassifierPropagated,
+					projectData.drtSelectedSavedModelKey || null
+				)}
+			class="h-7 w-full rounded-sm bg-[var(--accent-primary)] text-xs font-medium text-white transition-opacity hover:opacity-95 disabled:opacity-50"
+		>
+			{projectData.isComputingMultiWell ? 'Computing...' : activeMeta.computeLabel}
+		</button>
 		<button
 			type="button"
 			disabled={
 				projectData.isComputingMultiWell ||
-				projectData.isCascadingMultiWell ||
-				projectData.wellsWithTvd.length === 0
+				projectData.isSavingMultiWell ||
+				!projectData.hasPendingMultiWell('rock-typing')
 			}
-			onclick={() => void projectData.cascadeMultiWellToStickPlot('rock-typing', true)}
-			title={projectData.wellsWithTvd.length === 0
-				? 'Disabled: No selected wells have TVD curve or directional survey'
-				: 'Intentionally cascade Rock Typing → Perm Transform → Swirr → SHF and open Multi-Well Stick Plot'}
-			class="h-6.5 w-full rounded-sm border border-indigo-300 bg-indigo-50 px-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-45"
+			onclick={saveRockTyping}
+			title="Save ROCK_FLAG curves across all wells"
+			class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
 		>
-			{projectData.isCascadingMultiWell
-				? 'Cascading to Stick Plot...'
-				: '⟳ Cascade Workflow → Stick Plot'}
+			{projectData.isSavingMultiWell ? 'Saving...' : 'Save All Wells'}
 		</button>
 	</div>
 </div>

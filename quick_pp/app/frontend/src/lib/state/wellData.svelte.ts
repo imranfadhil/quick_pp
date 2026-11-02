@@ -234,6 +234,7 @@ function computeSummaryStats(arr: number[], deptArr?: number[]): CurveSummarySta
 class WellDataState {
 	isLoading = $state<boolean>(false);
 	isCalculating = $state<boolean>(false);
+	isSaving = $state<boolean>(false);
 	isRenderingPlot = $state<boolean>(false);
 	logCanvasMounted = $state<boolean>(false);
 	wellLoadGeneration = $state<number>(0);
@@ -1794,7 +1795,7 @@ class WellDataState {
 		}
 		if (Object.keys(curvesPayload).length === 0 && !includeCoreShift) return false;
 
-		this.isCalculating = true;
+		this.isSaving = true;
 		this.lastError = null;
 		try {
 			if (includeCoreShift) {
@@ -1888,7 +1889,7 @@ class WellDataState {
 			this.lastError = e?.message || 'Failed to save computed curves';
 			return false;
 		} finally {
-			this.isCalculating = false;
+			this.isSaving = false;
 		}
 	}
 
@@ -3393,7 +3394,7 @@ class WellDataState {
 		const wid = workbench.wellId;
 		if (!pid || !wid) return;
 
-		this.isCalculating = true;
+		this.isSaving = true;
 		this.lastError = null;
 		try {
 			if (this.coreSamples.length > 0) {
@@ -3497,7 +3498,7 @@ class WellDataState {
 		} catch (e: any) {
 			this.lastError = e?.message || 'Failed to save core depth shift';
 		} finally {
-			this.isCalculating = false;
+			this.isSaving = false;
 		}
 	}
 

@@ -341,6 +341,12 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 			done: 'Multi-well SHF updated'
 		};
 	}
+	if (path.endsWith('/save_multi_well_computed')) {
+		return {
+			active: 'Saving computed curves across wells...',
+			done: 'Saved computed curves across wells'
+		};
+	}
 	if (path.endsWith('/ml_models/train')) {
 		return {
 			active: 'Training & evaluating multi-well Conformal PIML model...',

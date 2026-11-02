@@ -450,7 +450,7 @@
 
 	<!-- Right Pane Mode Switcher, Clear Calculated Curves & Live Status Pill -->
 	<div class="flex items-center gap-2">
-		{#if appStatus.isBusy || wellData.isCalculating || projectData.isComputingMultiWell}
+		{#if appStatus.isBusy || wellData.isCalculating || wellData.isSaving || projectData.isComputingMultiWell || projectData.isSavingMultiWell}
 			<button
 				type="button"
 				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}

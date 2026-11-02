@@ -1333,15 +1333,6 @@
 			</label>
 			<button
 				type="button"
-				disabled={projectData.isComputingMultiWell || projectData.isCascadingMultiWell}
-				onclick={() => void projectData.cascadeMultiWellToStickPlot('rock-typing', false)}
-				title="Intentionally cascade Multi-Well steps (Rock Typing → Perm Transform → Swirr → SHF), save across wells, and refresh Stick Plot"
-				class="h-5 rounded-sm border border-indigo-300 bg-indigo-50 px-1.5 text-[10px] font-semibold text-indigo-800 hover:bg-indigo-100 disabled:opacity-50"
-			>
-				{projectData.isCascadingMultiWell ? 'Cascading...' : '⟳ Cascade'}
-			</button>
-			<button
-				type="button"
 				disabled={projectData.isLoadingStickPlot}
 				onclick={() => void projectData.loadStickPlot(true)}
 				title="Reload latest saved curves across all wells"

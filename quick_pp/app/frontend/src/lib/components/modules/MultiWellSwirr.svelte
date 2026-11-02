@@ -335,40 +335,7 @@
 
 	async function saveAllWells() {
 		if (!workbench.projectId || !projectData.hasPendingMultiWell('swirr-corr')) return;
-		isApplying = true;
-		projectData.isComputingMultiWell = true;
-		projectData.error = null;
-		try {
-			const applyRes = await postJson<SwirrApplyResult>(
-				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/swirr/apply`,
-				{
-					well_names:
-						projectData.selectedWellNames.length > 0 ? projectData.selectedWellNames : null,
-					config: projectData.swirrConfig,
-					phie_col: projectData.swirrInputCols.phieCol,
-					perm_col: projectData.swirrInputCols.permCol,
-					rt_col: projectData.swirrInputCols.rtCol,
-					drt_method: projectData.drtMethod,
-					cutoffs: projectData.activeDrtCutoffs,
-					save: true
-				}
-			);
-			projectData.swirrApplyResult = applyRes;
-			projectData.pendingMultiWellModules = {
-				...projectData.pendingMultiWellModules,
-				'swirr-corr': false
-			};
-			applyActiveWellSwirrCurve(applyRes);
-			wellData.lastSavedMessage = `Saved SWIRR (${applyRes.saved_wells} wells) ✓`;
-			// Persist the Swirr correlation config once at project level, keyed by zone selection
-			await projectData.persistProjectParams(['swirr-corr'], ['swirr-corr']);
-			void projectData.refreshSummary(workbench.projectId);
-		} catch (e: any) {
-			projectData.error = e?.message || 'Failed to save SWIRR to wells';
-		} finally {
-			isApplying = false;
-			projectData.isComputingMultiWell = false;
-		}
+		await projectData.saveMultiWellComputed('swirr-corr');
 	}
 
 	function setExtractionMode(mode: SwirrExtractionMode) {
@@ -1525,7 +1492,7 @@
 		{#if workbench.scalSubMode === 'static'}
 			<button
 				type="button"
-				disabled={projectData.isComputingMultiWell || isApplying}
+				disabled={projectData.isComputingMultiWell || projectData.isSavingMultiWell || isApplying}
 				onclick={computeSwirrAndPc}
 				class="mr-1.5 h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
 			>
@@ -1533,16 +1500,23 @@
 			</button>
 			<button
 				type="button"
-				disabled={projectData.isComputingMultiWell || !projectData.hasPendingMultiWell('swirr-corr')}
+				disabled={
+					projectData.isComputingMultiWell ||
+					projectData.isSavingMultiWell ||
+					!projectData.hasPendingMultiWell('swirr-corr')
+				}
 				onclick={saveAllWells}
+				title={projectData.hasPendingMultiWell('swirr-corr')
+					? 'Save computed SWIRR curve across all project wells'
+					: 'Compute Swirr correlation first to enable saving'}
 				class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 			>
-				Save All Wells
+				{projectData.isSavingMultiWell ? 'Saving...' : 'Save All Wells'}
 			</button>
 		{:else}
 			<button
 				type="button"
-				disabled={projectData.isComputingMultiWell}
+				disabled={projectData.isComputingMultiWell || projectData.isSavingMultiWell}
 				onclick={computeScal}
 				class="mr-1.5 h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
 			>
@@ -1550,7 +1524,11 @@
 			</button>
 			<button
 				type="button"
-				disabled={projectData.isComputingMultiWell || !relpermPendingSave}
+				disabled={
+					projectData.isComputingMultiWell ||
+					projectData.isSavingMultiWell ||
+					!relpermPendingSave
+				}
 				onclick={saveRelpermParams}
 				class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 			>

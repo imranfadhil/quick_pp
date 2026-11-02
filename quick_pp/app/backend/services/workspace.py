@@ -7902,7 +7902,7 @@ class WorkspaceOptimizeFwlRequest(BaseModel):
     theta: float = Field(30.0)
     gw: float = Field(1.05)
     ghc: float = Field(0.80)
-    loss: str = Field("rmse")
+    loss: str = Field("bvw")
     pore_volume_weighted: bool = Field(False)
     equal_well_weights: bool = Field(False)
     mdt_fwl: Optional[float] = Field(None)
@@ -8807,15 +8807,18 @@ def workspace_optimize_fwl(
                 wdf["PERM"] = (10.0 ** (14.0 * wdf["PHIT"] - 1.5)).clip(
                     0.01, 10000.0
                 )
-            if (
-                ("SW" not in wdf.columns or not wdf["SW"].notna().any())
-                and "SHF" in wdf.columns
-                and wdf["SHF"].notna().any()
-            ):
-                wdf["SW"] = wdf["SHF"]
-            elif (
-                "SW" not in wdf.columns or not wdf["SW"].notna().any()
-            ) and "PHIT" in wdf.columns:
+            obs_sw_col = next(
+                (
+                    c
+                    for c in ("SW", "SWT", "SWE", "SW_WS", "SW_ARCHIE")
+                    if c in wdf.columns and pd.to_numeric(wdf[c], errors="coerce").notna().any()
+                ),
+                None,
+            )
+            if obs_sw_col:
+                wdf["SW"] = pd.to_numeric(wdf[obs_sw_col], errors="coerce")
+                wdf["SWT"] = wdf["SW"]
+            elif "PHIT" in wdf.columns:
                 rt_col = next(
                     (
                         c
@@ -8834,6 +8837,10 @@ def workspace_optimize_fwl(
                     wdf["SW"] = np.sqrt(0.05 / (rt_s * (phi_s**2))).clip(
                         0.02, 1.0
                     )
+                    wdf["SWT"] = wdf["SW"]
+            elif "SHF" in wdf.columns and wdf["SHF"].notna().any():
+                wdf["SW"] = pd.to_numeric(wdf["SHF"], errors="coerce")
+                wdf["SWT"] = wdf["SW"]
             dfs.append(wdf)
         if not dfs:
             raise ValueError(
@@ -8858,6 +8865,7 @@ def workspace_optimize_fwl(
         res = optimize_fwl(
             df=combined,
             depth_col="TVD",
+            sw_col="SWT",
             model=req.model,
             shm_params=req.shm_params,
             ift=req.ift,
