@@ -59,6 +59,7 @@
 	let showHcCorrected = $state(true);
 	let showTsOverlay = $state(true);
 	let showDtc = $state(true);
+	let showSpectralGr = $state(true);
 	let showInspectionLine = $state(false);
 	let isPointerOverPlot = $state(false);
 
@@ -73,6 +74,47 @@
 		}
 		return false;
 	});
+
+	const POTA_ALIASES = ['POTA', 'HFKO', 'POT', 'K'] as const;
+	const THOR_ALIASES = ['THOR', 'HTHO', 'TH', 'THO'] as const;
+	const URAN_ALIASES = ['URAN', 'HURA', 'U', 'URA'] as const;
+
+	let hasPota = $derived.by(() => {
+		for (const mnem of POTA_ALIASES) {
+			const arr = wellData.curves[mnem];
+			if (arr && arr.some((v) => typeof v === 'number' && Number.isFinite(v) && v > 0)) {
+				return true;
+			}
+		}
+		return false;
+	});
+
+	let hasThor = $derived.by(() => {
+		for (const mnem of THOR_ALIASES) {
+			const arr = wellData.curves[mnem];
+			if (arr && arr.some((v) => typeof v === 'number' && Number.isFinite(v) && v > 0)) {
+				return true;
+			}
+		}
+		return false;
+	});
+
+	let hasUran = $derived.by(() => {
+		for (const mnem of URAN_ALIASES) {
+			const arr = wellData.curves[mnem];
+			if (arr && arr.some((v) => typeof v === 'number' && Number.isFinite(v) && v > 0)) {
+				return true;
+			}
+		}
+		return false;
+	});
+
+	let hasCgr = $derived.by(() => {
+		const arr = wellData.curves['CGR'];
+		return Boolean(arr && arr.some((v) => typeof v === 'number' && Number.isFinite(v) && v > 0));
+	});
+
+	let hasSpectralGr = $derived(hasPota || hasThor || hasUran || hasCgr);
 
 	let hasTsComputed = $derived.by(() => {
 		const vlam = wellData.curves['VSH_LAM'];
@@ -875,6 +917,105 @@
 				line: { color: PETRO_COLORS.gr, width: 1.4 },
 				hovertemplate: 'GR: %{x:.1f} gAPI<extra></extra>'
 			});
+		}
+
+		// Track 1 Spectral GR overlay (POTA: 0-10%, THOR: 0-50 ppm, URAN: 0-20 ppm, CGR: 0-200 gAPI)
+		if (showSpectralGr) {
+			if (hasCgr) {
+				const cgrArr = pick('CGR');
+				if (cgrArr.length > 0 && cgrArr.some((v) => v !== null && v > 0)) {
+					const cgrDec = decimateSvg(cgrArr);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'CGR',
+						x: cgrDec,
+						y: svgDepth,
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: PETRO_COLORS.cgr, width: 1.2, dash: 'dash' },
+						hovertemplate: 'CGR: %{x:.1f} gAPI<extra></extra>'
+					});
+				}
+			}
+
+			if (hasPota) {
+				let potaData: (number | null)[] = [];
+				for (const mnem of POTA_ALIASES) {
+					const p = pick(mnem);
+					if (p.some((v) => v !== null && v > 0)) {
+						potaData = p;
+						break;
+					}
+				}
+				if (potaData.length > 0) {
+					const potaDec = decimateSvg(potaData);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'POTA',
+						x: potaDec.map((v) => (v !== null ? Math.max(0, Math.min(200, v * 20.0)) : null)), // 0-10% -> 0-200
+						customdata: potaDec,
+						y: svgDepth,
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: PETRO_COLORS.pota, width: 1.2 },
+						hovertemplate: 'POTA: %{customdata:.2f} %<extra></extra>'
+					});
+				}
+			}
+
+			if (hasThor) {
+				let thorData: (number | null)[] = [];
+				for (const mnem of THOR_ALIASES) {
+					const p = pick(mnem);
+					if (p.some((v) => v !== null && v > 0)) {
+						thorData = p;
+						break;
+					}
+				}
+				if (thorData.length > 0) {
+					const thorDec = decimateSvg(thorData);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'THOR',
+						x: thorDec.map((v) => (v !== null ? Math.max(0, Math.min(200, v * 4.0)) : null)), // 0-50 ppm -> 0-200
+						customdata: thorDec,
+						y: svgDepth,
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: PETRO_COLORS.thor, width: 1.2, dash: 'dash' },
+						hovertemplate: 'THOR: %{customdata:.1f} ppm<extra></extra>'
+					});
+				}
+			}
+
+			if (hasUran) {
+				let uranData: (number | null)[] = [];
+				for (const mnem of URAN_ALIASES) {
+					const p = pick(mnem);
+					if (p.some((v) => v !== null && v > 0)) {
+						uranData = p;
+						break;
+					}
+				}
+				if (uranData.length > 0) {
+					const uranDec = decimateSvg(uranData);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'URAN',
+						x: uranDec.map((v) => (v !== null ? Math.max(0, Math.min(200, v * 10.0)) : null)), // 0-20 ppm -> 0-200
+						customdata: uranDec,
+						y: svgDepth,
+						xaxis: 'x',
+						yaxis: 'y',
+						line: { color: PETRO_COLORS.uran, width: 1.2, dash: 'dot' },
+						hovertemplate: 'URAN: %{customdata:.1f} ppm<extra></extra>'
+					});
+				}
+			}
 		}
 		const cali = pick('CALI');
 		const bs = pick('BS');
@@ -2120,6 +2261,13 @@
 		'DEPT',
 		'DEPTH',
 		'GR',
+		'CGR',
+		'POTA',
+		'HFKO',
+		'THOR',
+		'HTHO',
+		'URAN',
+		'HURA',
 		'CALI',
 		'BS',
 		'BADHOLE',
@@ -2225,6 +2373,7 @@
 			perforations,
 			showHcCorrected,
 			showDtc,
+			showSpectralGr,
 			tsOverlayActive,
 			workbench.lithoParams.enableHcCorrection,
 			workbench.lithoParams.model,
@@ -2691,6 +2840,16 @@
 					<span style="color: {PETRO_COLORS.dt}" class="font-medium">DTC</span>
 				</label>
 			{/if}
+			{#if hasSpectralGr}
+				<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer" title="Toggle Spectral GR (POTA, THOR, URAN) on Track 1">
+					<input
+						type="checkbox"
+						bind:checked={showSpectralGr}
+						class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-pink-600 focus:ring-0"
+					/>
+					<span style="color: {PETRO_COLORS.pota}" class="font-medium">SGR</span>
+				</label>
+			{/if}
 			<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer">
 				<input
 					type="checkbox"
@@ -2757,13 +2916,32 @@
 					</span>
 					<span>16</span>
 				</div>
+				{#if hasSpectralGr && showSpectralGr}
+					<div class="flex items-center justify-between px-0.5 text-[7px] leading-none font-semibold">
+						{#if hasPota}
+							<span style="color: {PETRO_COLORS.pota}">K: 0-10%</span>
+						{/if}
+						{#if hasThor}
+							<span style="color: {PETRO_COLORS.thor}">Th: 0-50</span>
+						{/if}
+						{#if hasUran}
+							<span style="color: {PETRO_COLORS.uran}">U: 0-20</span>
+						{/if}
+					</div>
+				{/if}
 				<div class="flex flex-col">
 					<div
 						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
 						style="color: {PETRO_COLORS.gr}"
 					>
 						<span>0</span>
-						<span class="font-sans text-[9.5px] font-bold">GR (gAPI) ►</span>
+						<span class="font-sans text-[9.5px] font-bold">
+							{#if hasSpectralGr && showSpectralGr}
+								GR / SGR (gAPI) ►
+							{:else}
+								GR (gAPI) ►
+							{/if}
+						</span>
 						<span>200</span>
 					</div>
 					<div class="h-0.5 w-full rounded-full" style="background: {PETRO_COLORS.gr}"></div>
@@ -3273,6 +3451,32 @@
 							<span class="font-bold" style="color: {PETRO_COLORS.gr}">GR</span>
 							<span class="mono-num font-semibold">{fmtNum(readout.GR, 1)} <span class="text-[7px] text-slate-400">gAPI</span></span>
 						</div>
+						{#if hasSpectralGr && showSpectralGr}
+							{#if readout.CGR !== null && readout.CGR !== undefined}
+								<div class="flex items-center justify-between">
+									<span class="font-bold" style="color: {PETRO_COLORS.cgr}">CGR</span>
+									<span class="mono-num font-semibold">{fmtNum(readout.CGR, 1)} <span class="text-[7px] text-slate-400">gAPI</span></span>
+								</div>
+							{/if}
+							{#if readout.POTA !== null && readout.POTA !== undefined}
+								<div class="flex items-center justify-between">
+									<span class="font-bold" style="color: {PETRO_COLORS.pota}">POTA</span>
+									<span class="mono-num font-semibold">{fmtNum(readout.POTA, 2)} <span class="text-[7px] text-slate-400">%</span></span>
+								</div>
+							{/if}
+							{#if readout.THOR !== null && readout.THOR !== undefined}
+								<div class="flex items-center justify-between">
+									<span class="font-bold" style="color: {PETRO_COLORS.thor}">THOR</span>
+									<span class="mono-num font-semibold">{fmtNum(readout.THOR, 1)} <span class="text-[7px] text-slate-400">ppm</span></span>
+								</div>
+							{/if}
+							{#if readout.URAN !== null && readout.URAN !== undefined}
+								<div class="flex items-center justify-between">
+									<span class="font-bold" style="color: {PETRO_COLORS.uran}">URAN</span>
+									<span class="mono-num font-semibold">{fmtNum(readout.URAN, 1)} <span class="text-[7px] text-slate-400">ppm</span></span>
+								</div>
+							{/if}
+						{/if}
 						{#if readout.CALI !== null && readout.CALI !== undefined}
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-amber-300">CALI</span>
@@ -3568,6 +3772,26 @@
 					<strong style="color: {PETRO_COLORS.dt}">DTC:</strong>
 					{fmtNum(readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P, 1)}
 				</span>
+			{/if}
+			{#if hasSpectralGr && showSpectralGr}
+				{#if readout.POTA !== null && readout.POTA !== undefined}
+					<span>
+						<strong style="color: {PETRO_COLORS.pota}">POTA:</strong>
+						{fmtNum(readout.POTA, 2)}%
+					</span>
+				{/if}
+				{#if readout.THOR !== null && readout.THOR !== undefined}
+					<span>
+						<strong style="color: {PETRO_COLORS.thor}">THOR:</strong>
+						{fmtNum(readout.THOR, 1)}ppm
+					</span>
+				{/if}
+				{#if readout.URAN !== null && readout.URAN !== undefined}
+					<span>
+						<strong style="color: {PETRO_COLORS.uran}">URAN:</strong>
+						{fmtNum(readout.URAN, 1)}ppm
+					</span>
+				{/if}
 			{/if}
 			{#if readout.PEF !== null && readout.PEF !== undefined}
 				<span>

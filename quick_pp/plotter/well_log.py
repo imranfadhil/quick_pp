@@ -68,6 +68,24 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
                 style["fill"] = "tonextx"
             litho_count += 1
 
+        # For optional spectral GR curves, only add to Track 1 if available with non-zero data
+        if col in ["POTA", "THOR", "URAN", "CGR"]:
+            if (
+                col not in df.columns
+                or not df[col].notna().any()
+                or not (df[col].dropna() > 1e-4).any()
+            ):
+                continue
+
+        # For optional spectral GR curves, only add to Track 1 if available with non-zero data
+        if col in ["POTA", "THOR", "URAN", "CGR"]:
+            if (
+                col not in df.columns
+                or not df[col].notna().any()
+                or not (df[col].dropna() > 1e-4).any()
+            ):
+                continue
+
         trace_args = dict(
             x=round(df[col], 3) if df[col].dtype == "float64" else df[col],
             y=index,
@@ -418,7 +436,7 @@ def plotly_log(
     # but do NOT inject fake columns for optional lithology curves if absent from the data.
     for k in trace_defs.keys():
         if k not in df.columns:
-            if trace_defs[k].get("style", {}).get("stackgroup") == "litho":
+            if trace_defs[k].get("style", {}).get("stackgroup") == "litho" or k in ["POTA", "THOR", "URAN", "CGR"]:
                 continue
             df[k] = np.nan
 
