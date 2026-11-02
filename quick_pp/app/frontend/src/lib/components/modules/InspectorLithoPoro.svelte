@@ -6,7 +6,7 @@
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
-	import { workbench } from '$lib/state/workbench.svelte';
+	import { workbench, computeSiltIntersection } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import {
 		ALL_LITHOLOGY_CURVES,
@@ -149,6 +149,24 @@
 		if (pid && pid !== lastLoadedModelsProjectId) {
 			lastLoadedModelsProjectId = pid;
 			loadMlModelsStatus(pid);
+		}
+	});
+
+	$effect(() => {
+		// Keep drySiltNphi and drySiltRhob synchronized with silt line angle & rock line
+		const [siltNphi, siltRhob] = computeSiltIntersection(
+			[workbench.lithoParams.drySandNphi, workbench.lithoParams.drySandRhob],
+			[workbench.lithoParams.dryClayNphi, workbench.lithoParams.dryClayRhob],
+			[workbench.lithoParams.fluidNphi, workbench.lithoParams.fluidRhob],
+			workbench.lithoParams.siltLineAngle
+		);
+		const roundedNphi = Number(siltNphi.toFixed(3));
+		const roundedRhob = Number(siltRhob.toFixed(3));
+		if (Math.abs(workbench.lithoParams.drySiltNphi - roundedNphi) > 1e-4) {
+			workbench.lithoParams.drySiltNphi = roundedNphi;
+		}
+		if (Math.abs(workbench.lithoParams.drySiltRhob - roundedRhob) > 1e-4) {
+			workbench.lithoParams.drySiltRhob = roundedRhob;
 		}
 	});
 
@@ -625,6 +643,7 @@
 				label="NPHI Dry Silt"
 				bind:value={workbench.lithoParams.drySiltNphi}
 				unit="v/v"
+				disabled={true}
 				min={-0.05}
 				max={0.45}
 				step={0.005}
@@ -634,6 +653,7 @@
 				label="RHOB Dry Silt"
 				bind:value={workbench.lithoParams.drySiltRhob}
 				unit="g/cc"
+				disabled={true}
 				min={2.4}
 				max={2.9}
 				step={0.01}
@@ -664,6 +684,7 @@
 				min={95}
 				max={160}
 				step={0.5}
+				onchange={() => workbench.updateSiltEndpointFromAngle()}
 				onrun={() => executeLithoPoro(false)}
 			/>
 		</ParameterSection>

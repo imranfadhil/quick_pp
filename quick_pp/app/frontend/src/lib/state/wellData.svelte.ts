@@ -3792,32 +3792,93 @@ class WellDataState {
 			'TVD',
 			'TVDSS',
 			'GR',
+			'CALI',
+			'BS',
 			'RT',
+			'RD',
+			'RDEP',
+			'RM',
+			'RMED',
+			'RS',
+			'RSHAL',
+			'RT_MOD',
 			'NPHI',
-			'RHOB', 'DTC', 'DT', 'DTCO', 'AC', 'DT4P', 'PEF', 'DRHO',
+			'RHOB',
+			'DTC',
+			'DT',
+			'DTCO',
+			'AC',
+			'DT4P',
+			'PEF',
+			'DRHO',
 			'VCLAY',
+			'VSH',
+			'VSH_GR',
+			'VSH_LAM',
+			'VSH_DIS',
 			'VCALC',
 			'VDOLO',
 			'VSAND',
 			'VSILT',
+			'VCOAL',
 			'PHIT',
 			'PHIE',
+			'PHIT_SAND',
 			'PERM',
 			'PERM_TRANS',
+			'CPERM',
+			'CORE_PERM',
+			'CPERM_AIR',
+			'CPORE',
+			'CORE_PORO',
+			'CPORE_AMB',
 			'ROCK_FLAG',
 			'ROCK_FLAG_ML',
 			'DRT',
 			'FZI',
 			'R35',
 			'RFN',
+			'SW',
 			'SWT',
-			'SWE'
+			'SWE',
+			'SWIRR',
+			'SHF',
+			'SW_SHF',
+			'PAY',
+			'BADHOLE'
 		]) {
 			if (this.curves[k]) {
 				const v = this.curves[k][lo];
 				out[k] = Number.isFinite(v) ? v : null;
 			}
 		}
+
+		// Fallback to discrete core plug samples when nearest continuous log curve cell is empty
+		if (this.coreSamples.length > 0 && depth !== null) {
+			let bestSample: any = null;
+			let minDiff = 0.5; // within 0.5m of cursor depth
+			for (const s of this.coreSamples) {
+				const sd = Number(s.depth ?? s.DEPTH);
+				if (Number.isFinite(sd)) {
+					const diff = Math.abs(sd - depth);
+					if (diff <= minDiff) {
+						minDiff = diff;
+						bestSample = s;
+					}
+				}
+			}
+			if (bestSample) {
+				const p = Number(bestSample.porosity ?? bestSample.CPORE ?? bestSample.poro);
+				if (Number.isFinite(p) && p > 0 && (out['CPORE'] === null || out['CPORE'] === undefined)) {
+					out['CPORE'] = p > 1.0 ? p / 100.0 : p;
+				}
+				const k = Number(bestSample.permeability ?? bestSample.CPERM ?? bestSample.perm);
+				if (Number.isFinite(k) && k > 0 && (out['CPERM'] === null || out['CPERM'] === undefined)) {
+					out['CPERM'] = k;
+				}
+			}
+		}
+
 		return out;
 	}
 }

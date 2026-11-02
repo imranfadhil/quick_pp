@@ -251,6 +251,16 @@
 				const lp = workbench.lithoParams;
 				traces.push({
 					type: 'scatter',
+					mode: 'lines',
+					name: 'Silt Line',
+					x: [lp.fluidNphi, lp.drySiltNphi],
+					y: [lp.fluidRhob, lp.drySiltRhob],
+					line: { color: '#EA580C', width: 1.5, dash: 'dash' },
+					hovertemplate: 'Silt Line (θ=%{text}°)<extra></extra>',
+					text: [lp.siltLineAngle.toFixed(1), lp.siltLineAngle.toFixed(1)]
+				});
+				traces.push({
+					type: 'scatter',
 					mode: 'lines+markers+text',
 					name: 'SSC Endpoints',
 					x: [
@@ -815,6 +825,16 @@
 					}
 				});
 			} else {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'Silt Line',
+					x: [lp.fluidNphi, lp.drySiltNphi],
+					y: [lp.fluidRhob, lp.drySiltRhob],
+					line: { color: '#EA580C', width: 1.5, dash: 'dash' },
+					hovertemplate: 'Silt Line (θ=%{text}°)<extra></extra>',
+					text: [lp.siltLineAngle.toFixed(1), lp.siltLineAngle.toFixed(1)]
+				});
 				traces.push({
 					type: 'scatter',
 					mode: 'lines+markers+text',
@@ -3866,6 +3886,7 @@
 			void workbench.lithoParams.dryClayRhob;
 			void workbench.lithoParams.fluidNphi;
 			void workbench.lithoParams.fluidRhob;
+			void workbench.lithoParams.siltLineAngle;
 			void workbench.lithoParams.enableCoalFlagging;
 			void workbench.lithoParams.coalRhobMax;
 			void workbench.lithoParams.coalNphiMin;
@@ -4080,12 +4101,21 @@
 							if (activeEndpointKey === 'sand') {
 								workbench.lithoParams.drySandNphi = x;
 								workbench.lithoParams.drySandRhob = y;
+								workbench.updateSiltEndpointFromAngle();
 							} else if (activeEndpointKey === 'silt') {
-								workbench.lithoParams.drySiltNphi = x;
-								workbench.lithoParams.drySiltRhob = y;
+								const dx = x - workbench.lithoParams.fluidNphi;
+								const dy = y - workbench.lithoParams.fluidRhob;
+								const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+								if (Number.isFinite(angle)) {
+									workbench.lithoParams.siltLineAngle = Number(
+										Math.max(90, Math.min(170, angle)).toFixed(1)
+									);
+									workbench.updateSiltEndpointFromAngle();
+								}
 							} else if (activeEndpointKey === 'clay') {
 								workbench.lithoParams.dryClayNphi = x;
 								workbench.lithoParams.dryClayRhob = y;
+								workbench.updateSiltEndpointFromAngle();
 							}
 						} else if (effectiveMode === 'thomas-stieber') {
 							if (activeEndpointKey === 'ts-sand') {

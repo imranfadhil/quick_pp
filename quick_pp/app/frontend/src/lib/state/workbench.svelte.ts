@@ -498,6 +498,38 @@ export interface MultiWellVolumetricsState {
 	zoneConfigs: Record<string, VolumetricZoneParamConfig>;
 }
 
+/**
+ * Calculates the intersection point between:
+ * 1. The silt line emanating from the water/fluid point (fluidNphi, fluidRhob) at siltLineAngle (in degrees).
+ * 2. The rock line connecting the dry sand point (sandNphi, sandRhob) and dry clay point (clayNphi, clayRhob).
+ */
+export function computeSiltIntersection(
+	sand: [number, number],
+	clay: [number, number],
+	fluid: [number, number],
+	siltLineAngleDeg: number
+): [number, number] {
+	const rad = (siltLineAngleDeg * Math.PI) / 180;
+	const pSilt: [number, number] = [fluid[0] + Math.cos(rad), fluid[1] + Math.sin(rad)];
+
+	const xdiff0 = sand[0] - clay[0];
+	const ydiff0 = sand[1] - clay[1];
+	const d0 = sand[0] * clay[1] - sand[1] * clay[0];
+
+	const xdiff1 = fluid[0] - pSilt[0];
+	const ydiff1 = fluid[1] - pSilt[1];
+	const d1 = fluid[0] * pSilt[1] - fluid[1] * pSilt[0];
+
+	const div = xdiff0 * ydiff1 - xdiff1 * ydiff0;
+	if (Math.abs(div) < 1e-12) {
+		return [(sand[0] + clay[0]) / 2, (sand[1] + clay[1]) / 2];
+	}
+
+	const varX = (d0 * xdiff1 - d1 * xdiff0) / div;
+	const varY = (d0 * ydiff1 - d1 * ydiff0) / div;
+	return [varX, varY];
+}
+
 class WorkbenchState {
 	projectId = $state<string | null>(null);
 	wellId = $state<string | null>(null);
@@ -635,8 +667,8 @@ class WorkbenchState {
 		denCorrMismatchThreshold: 0.15,
 		drySandNphi: -0.02,
 		drySandRhob: 2.65,
-		drySiltNphi: 0.12,
-		drySiltRhob: 2.68,
+		drySiltNphi: 0.078,
+		drySiltRhob: 2.664,
 		dryClayNphi: 0.33,
 		dryClayRhob: 2.7,
 		fluidNphi: 1.0,
@@ -1001,6 +1033,17 @@ class WorkbenchState {
 	scrollToDepth(depth: number) {
 		this.targetScrollDepth = depth;
 		this.cursorDepth = depth;
+	}
+
+	updateSiltEndpointFromAngle() {
+		const [siltNphi, siltRhob] = computeSiltIntersection(
+			[this.lithoParams.drySandNphi, this.lithoParams.drySandRhob],
+			[this.lithoParams.dryClayNphi, this.lithoParams.dryClayRhob],
+			[this.lithoParams.fluidNphi, this.lithoParams.fluidRhob],
+			this.lithoParams.siltLineAngle
+		);
+		this.lithoParams.drySiltNphi = Number(siltNphi.toFixed(3));
+		this.lithoParams.drySiltRhob = Number(siltRhob.toFixed(3));
 	}
 
 	expandAllSections() {
