@@ -689,7 +689,7 @@ class WorkbenchState {
 		enabled: false,
 		useInPerm: true,
 		useInSaturation: true,
-		drySandPoro: 0.28,
+		drySandPoro: 0.32,
 		dryShalePoro: 0.1,
 		rsand: 20.0,
 		rvShale: 4.0,

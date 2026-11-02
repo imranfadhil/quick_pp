@@ -79,7 +79,7 @@ export const PETRO_COLORS = {
 	perm: '#0284C7',
 	phie: '#2563EB',
 	phit: '#0F172A',
-	phitSand: '#0D9488',
+	phitSand: '#047857',
 	pota: '#EC4899',
 	thor: '#06B6D4',
 	uran: '#8B5CF6',

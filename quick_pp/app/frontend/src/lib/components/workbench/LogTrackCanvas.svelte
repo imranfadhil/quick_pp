@@ -1552,7 +1552,7 @@
 						xaxis: 'x4',
 						yaxis: 'y',
 						fill: 'tonextx',
-						fillcolor: 'rgba(13, 148, 136, 0.16)',
+						fillcolor: 'rgba(4, 120, 87, 0.32)',
 						line: { width: 0, color: 'rgba(0,0,0,0)' },
 						hoverinfo: 'skip',
 						showlegend: false
@@ -1567,7 +1567,7 @@
 					y: svgDepth,
 					xaxis: 'x4',
 					yaxis: 'y',
-					line: { color: PETRO_COLORS.phitSand, width: 1.65, dash: '4px,2px' },
+					line: { color: PETRO_COLORS.phitSand, width: 2.2, dash: '6px,3px' },
 					hovertemplate: 'PHIT_SAND (TS): %{customdata:.3f} v/v<extra></extra>'
 				});
 			}
@@ -3174,7 +3174,7 @@
 							<span>0.5</span>
 						</div>
 						<div
-							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed"
+							class="mt-[1px] h-0 w-full border-t-[2.2px] border-dashed"
 							style="border-color: {PETRO_COLORS.phitSand}"
 						></div>
 					</div>
@@ -3421,6 +3421,7 @@
 
 			<!-- Toggleable Horizontal Inspection Crosshair & Track-Respective Hover Value Boxes -->
 			{#if showInspectionLine && inspectionPct !== null}
+				{@const isAbove = inspectionPct > 20}
 				<!-- Horizontal line spanning all tracks -->
 				<div
 					style="top: {inspectionPct}%;"
@@ -3433,15 +3434,15 @@
 					</span>
 				</div>
 
-				<!-- Track-respective hover boxes aligned with track domains with comfortable offset to view curve response -->
+				<!-- Track-respective hover boxes anchored with a 24px gap so curve response at the line is always visible -->
 				<div
-					style="top: {inspectionPct}%; transform: translateY({inspectionPct > 18 ? 'calc(-100% - 24px)' : '24px'});"
-					class="pointer-events-none absolute right-0 left-0 z-30 flex items-start"
+					style="{isAbove ? `bottom: ${100 - inspectionPct}%; margin-bottom: 24px;` : `top: ${inspectionPct}%; margin-top: 24px;`}"
+					class="pointer-events-none absolute right-0 left-0 z-30"
 				>
 					<!-- Track 1: Lithology / GR / CALI -->
 					<div
 						style="left: 0.0%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
 						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T1 · LITH</span>
@@ -3494,7 +3495,7 @@
 					<!-- Track 2: Resistivity -->
 					<div
 						style="left: 15.6%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
 						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T2 · RES</span>
@@ -3527,7 +3528,7 @@
 					<!-- Track 3: Density / Neutron / Sonic -->
 					<div
 						style="left: 31.2%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
 						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T3 · POR LOGS</span>
@@ -3564,7 +3565,7 @@
 					<!-- Track 4: Lithology / Mineral Volumes -->
 					<div
 						style="left: 46.8%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
 						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T4 · FRACTIONS</span>
@@ -3620,7 +3621,7 @@
 					<!-- Track 5: Porosity & Permeability -->
 					<div
 						style="left: 62.4%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
 						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T5 · PHI & K</span>
@@ -3663,7 +3664,7 @@
 					<!-- Track 6: Discrete Rock Type (DRT / ROCK_FLAG) -->
 					<div
 						style="left: 78.0%; width: 6.4%;"
-						class="absolute flex flex-col items-center gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-0.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col items-center gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-0.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
 						<span class="border-b border-slate-600/70 pb-0.5 font-bold text-[7.5px] text-slate-200">DRT</span>
 						{#if (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== null && (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== undefined && Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) >= 1}
@@ -3682,7 +3683,7 @@
 					<!-- Track 7: Water Saturation & Pay -->
 					<div
 						style="left: 85.4%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
 						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T7 · SAT</span>
