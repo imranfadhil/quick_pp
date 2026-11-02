@@ -184,6 +184,41 @@
 			readyCheck: () => workbench.multiWellReport !== null
 		}
 	];
+
+	function getActiveWorkflowGuideAnchor(): string {
+		if (workbench.scope === 'single-well') {
+			if (workbench.singleWellStep === 'scal') return 'sw-standalone-core-pc';
+			const map: Record<SingleWellStep, string> = {
+				'qaqc': 'sw-step-1-qaqc',
+				'ancillary': 'sw-step-2-ancillary',
+				'litho-poro': 'sw-step-3-litho-poro',
+				'perm': 'sw-step-4-perm',
+				'saturation': 'sw-step-5-saturation',
+				'ressum': 'sw-step-6-ressum',
+				'report': 'sw-step-7-report',
+				'scal': 'sw-standalone-core-pc'
+			};
+			return map[workbench.singleWellStep] ?? 'sw-step-1-qaqc';
+		}
+		if (workbench.multiWellStep === 'swirr-corr') return 'mw-standalone-scal-relperm';
+		if (workbench.multiWellStep === 'fpt') return 'mw-standalone-fpt';
+		if (workbench.multiWellStep === 'rt-classifier') return 'mw-standalone-rt-classifier';
+		if (workbench.multiWellStep === 'ml-training') return 'mw-standalone-ml-training';
+		const mwMap: Record<MultiWellStep, string> = {
+			'inventory': 'mw-step-1-inventory',
+			'qaqc': 'mw-step-2-qaqc',
+			'rock-typing': 'mw-step-3-rock-typing',
+			'perm-transform': 'mw-step-4-perm-transform',
+			'shf': 'mw-step-5-shf',
+			'volumetrics': 'mw-step-6-volumetrics',
+			'report': 'mw-step-7-report',
+			'swirr-corr': 'mw-standalone-scal-relperm',
+			'fpt': 'mw-standalone-fpt',
+			'rt-classifier': 'mw-standalone-rt-classifier',
+			'ml-training': 'mw-standalone-ml-training'
+		};
+		return mwMap[workbench.multiWellStep] ?? 'mw-step-1-inventory';
+	}
 </script>
 
 <nav
@@ -199,10 +234,7 @@
 				type="button"
 				title="Open Petrophysical Technical Reference for current workflow step"
 				onclick={() => {
-					const anchor = workbench.scope === 'single-well'
-						? `sw-step-${workbench.singleWellStep === 'qaqc' ? '1-qaqc' : workbench.singleWellStep === 'ancillary' ? '2-ancillary' : workbench.singleWellStep === 'litho-poro' ? '3-litho-poro' : workbench.singleWellStep === 'perm' ? '4-perm' : workbench.singleWellStep === 'saturation' ? '5-saturation' : workbench.singleWellStep === 'scal' ? '6-scal' : workbench.singleWellStep === 'ressum' ? '7-ressum' : '8-report'}`
-						: `mw-step-${workbench.multiWellStep === 'inventory' ? '1-inventory' : workbench.multiWellStep === 'qaqc' ? '2-qaqc' : workbench.multiWellStep === 'fpt' ? '3-fpt' : workbench.multiWellStep === 'rock-typing' ? '4-rock-typing' : (workbench.multiWellStep === 'rt-classifier' || workbench.multiWellStep === 'ml-training') ? '5-ml-training' : (workbench.multiWellStep === 'perm-transform' || workbench.multiWellStep === 'swirr-corr') ? '6-perm-swirr' : workbench.multiWellStep === 'shf' ? '7-shf' : workbench.multiWellStep === 'volumetrics' ? '8-volumetrics' : '9-report'}`;
-					workbench.openWorkflowGuide(workbench.scope, anchor);
+					workbench.openWorkflowGuide(workbench.scope, getActiveWorkflowGuideAnchor());
 				}}
 				class="flex h-4 w-4 items-center justify-center rounded-2xs text-[10px] text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--accent-primary)]"
 			>
