@@ -59,7 +59,7 @@
 	let showHcCorrected = $state(true);
 	let showTsOverlay = $state(true);
 	let showDtc = $state(true);
-	let showInspectionLine = $state(true);
+	let showInspectionLine = $state(false);
 	let isPointerOverPlot = $state(false);
 
 	const DTC_ALIASES = ['DTC', 'DT', 'DTCO', 'AC', 'DT4P'] as const;
@@ -233,6 +233,12 @@
 			vcalcCheck.some((v) => v !== null && v > 1e-4) ||
 			vdoloCheck.some((v) => v !== null && v > 1e-4);
 
+		const hasComplexCols = LITHOLOGY_TRACK_SPECS.some((s) => {
+			if (['VCLAY', 'VSILT', 'VSAND', 'VCOAL', 'VCALC', 'VDOLO'].includes(s.mnemonic)) return false;
+			const a = pick(s.mnemonic);
+			return a.some((v) => v !== null && v > 1e-4);
+		});
+
 		const activeModel = workbench.lithoParams.model;
 		const coalEnabled = workbench.lithoParams.enableCoalFlagging;
 		const allowedMultiMinSet = new Set(
@@ -247,12 +253,17 @@
 		const out: Array<{ spec: LithologyTrackSpec; arr: (number | null)[] }> = [];
 
 		for (const spec of LITHOLOGY_TRACK_SPECS) {
-			if (activeModel === 'multi_mineral' && !allowedMultiMinSet.has(spec.mnemonic)) {
+			if (
+				activeModel === 'multi_mineral' &&
+				!allowedMultiMinSet.has(spec.mnemonic) &&
+				!pick(spec.mnemonic).some((v) => v !== null && v > 1e-4)
+			) {
 				continue;
 			}
 			if (
 				activeModel === 'ssc' &&
 				!hasCarbonateCols &&
+				!hasComplexCols &&
 				!['VCLAY', 'VSILT', 'VSAND', ...(coalEnabled ? ['VCOAL'] : [])].includes(spec.mnemonic)
 			) {
 				continue;
@@ -260,6 +271,7 @@
 			if (
 				activeModel === 'vsh_gr' &&
 				!hasCarbonateCols &&
+				!hasComplexCols &&
 				!['VCLAY', 'VSAND', ...(coalEnabled ? ['VCOAL'] : [])].includes(spec.mnemonic)
 			) {
 				continue;
@@ -3243,19 +3255,19 @@
 					</span>
 				</div>
 
-				<!-- Track-respective hover boxes aligned with track domains -->
+				<!-- Track-respective hover boxes aligned with track domains with comfortable offset to view curve response -->
 				<div
-					style="top: {inspectionPct}%; transform: translateY({inspectionPct > 13 ? 'calc(-100% - 4px)' : '4px'});"
+					style="top: {inspectionPct}%; transform: translateY({inspectionPct > 18 ? 'calc(-100% - 24px)' : '24px'});"
 					class="pointer-events-none absolute right-0 left-0 z-30 flex items-start"
 				>
 					<!-- Track 1: Lithology / GR / CALI -->
 					<div
 						style="left: 0.0%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-700/70 bg-slate-900/92 px-1.5 py-1 text-[8px] leading-tight text-white shadow-md backdrop-blur-[2px]"
+						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-700/60 pb-0.5 font-bold text-slate-300">
+						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T1 · LITH</span>
-							<span class="mono-num text-[7.5px] text-slate-400">{fmtDepth(readout.DEPT ?? workbench.cursorDepth)}m</span>
+							<span class="mono-num text-[7.5px] text-slate-300">{fmtDepth(readout.DEPT ?? workbench.cursorDepth)}m</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.gr}">GR</span>
@@ -3268,7 +3280,7 @@
 							</div>
 						{/if}
 						{#if readout.BS !== null && readout.BS !== undefined}
-							<div class="flex items-center justify-between text-slate-400">
+							<div class="flex items-center justify-between text-slate-300">
 								<span class="font-semibold">BS</span>
 								<span class="mono-num">{fmtNum(readout.BS, 2)}<span class="text-[7px]">"</span></span>
 							</div>
@@ -3278,11 +3290,11 @@
 					<!-- Track 2: Resistivity -->
 					<div
 						style="left: 15.6%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-700/70 bg-slate-900/92 px-1.5 py-1 text-[8px] leading-tight text-white shadow-md backdrop-blur-[2px]"
+						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-700/60 pb-0.5 font-bold text-slate-300">
+						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T2 · RES</span>
-							<span class="text-[7.5px] text-slate-400">Ω·m</span>
+							<span class="text-[7.5px] text-slate-300">Ω·m</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.rt}">RT</span>
@@ -3311,11 +3323,11 @@
 					<!-- Track 3: Density / Neutron / Sonic -->
 					<div
 						style="left: 31.2%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-700/70 bg-slate-900/92 px-1.5 py-1 text-[8px] leading-tight text-white shadow-md backdrop-blur-[2px]"
+						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-700/60 pb-0.5 font-bold text-slate-300">
+						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T3 · POR LOGS</span>
-							<span class="text-[7.5px] text-slate-400">D-N-S</span>
+							<span class="text-[7.5px] text-slate-300">D-N-S</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.rhob}">RHOB</span>
@@ -3348,11 +3360,11 @@
 					<!-- Track 4: Lithology / Mineral Volumes -->
 					<div
 						style="left: 46.8%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-700/70 bg-slate-900/92 px-1.5 py-1 text-[8px] leading-tight text-white shadow-md backdrop-blur-[2px]"
+						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-700/60 pb-0.5 font-bold text-slate-300">
+						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T4 · FRACTIONS</span>
-							<span class="text-[7.5px] text-slate-400">v/v</span>
+							<span class="text-[7.5px] text-slate-300">v/v</span>
 						</div>
 						{#if tsOverlayActive && readout.VSH_LAM !== null && readout.VSH_LAM !== undefined}
 							<div class="flex items-center justify-between">
@@ -3404,11 +3416,11 @@
 					<!-- Track 5: Porosity & Permeability -->
 					<div
 						style="left: 62.4%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-700/70 bg-slate-900/92 px-1.5 py-1 text-[8px] leading-tight text-white shadow-md backdrop-blur-[2px]"
+						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-700/60 pb-0.5 font-bold text-slate-300">
+						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T5 · PHI & K</span>
-							<span class="text-[7.5px] text-slate-400">TOTAL</span>
+							<span class="text-[7.5px] text-slate-300">TOTAL</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.phie}">PHIT</span>
@@ -3447,9 +3459,9 @@
 					<!-- Track 6: Discrete Rock Type (DRT / ROCK_FLAG) -->
 					<div
 						style="left: 78.0%; width: 6.4%;"
-						class="absolute flex flex-col items-center gap-0.5 rounded-xs border border-slate-700/70 bg-slate-900/92 px-0.5 py-1 text-[8px] leading-tight text-white shadow-md backdrop-blur-[2px]"
+						class="absolute flex flex-col items-center gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-0.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<span class="border-b border-slate-700/60 pb-0.5 font-bold text-[7.5px] text-slate-300">DRT</span>
+						<span class="border-b border-slate-600/70 pb-0.5 font-bold text-[7.5px] text-slate-200">DRT</span>
 						{#if (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== null && (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== undefined && Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) >= 1}
 							{@const rfVal = Math.round(Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT))}
 							<span
@@ -3466,11 +3478,11 @@
 					<!-- Track 7: Water Saturation & Pay -->
 					<div
 						style="left: 85.4%; width: 14.6%;"
-						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-700/70 bg-slate-900/92 px-1.5 py-1 text-[8px] leading-tight text-white shadow-md backdrop-blur-[2px]"
+						class="absolute flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-700/60 pb-0.5 font-bold text-slate-300">
+						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
 							<span>T7 · SAT</span>
-							<span class="text-[7.5px] text-slate-400">FLUIDS</span>
+							<span class="text-[7.5px] text-slate-300">FLUIDS</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.water}">SW</span>

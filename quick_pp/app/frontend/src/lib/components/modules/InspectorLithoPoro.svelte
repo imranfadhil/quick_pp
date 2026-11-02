@@ -14,7 +14,28 @@
 		MINERAL_TO_CURVE_MNEMONIC
 	} from '$lib/utils/petrophysicsColors';
 
-	const AVAILABLE_MINERALS = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'HALITE', 'COAL'];
+	const AVAILABLE_MINERALS = [
+		'QUARTZ',
+		'CALCITE',
+		'DOLOMITE',
+		'SHALE',
+		'KAOLINITE',
+		'FELDSPAR',
+		'ANHYDRITE',
+		'GYPSUM',
+		'HALITE',
+		'PYRITE',
+		'COAL',
+		'ILLITE',
+		'SMECTITE',
+		'CHLORITE',
+		'GLAUCONITE',
+		'KFELD',
+		'ALBITE',
+		'SIDERITE',
+		'ANKERITE',
+		'KEROGEN'
+	];
 	const MINERAL_COLOR_MAP: Record<string, { fill: string; stroke: string; label: string }> =
 		Object.fromEntries(
 			LITHOLOGY_TRACK_SPECS.map((s) => [

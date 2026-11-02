@@ -1177,6 +1177,20 @@ class WellDataState {
 					detectedMinerals.push('SHALE');
 				if (hasPositiveCurve('VANHY')) detectedMinerals.push('ANHYDRITE');
 				if (hasPositiveCurve('VHALI')) detectedMinerals.push('HALITE');
+				if (hasPositiveCurve('VKAOL')) detectedMinerals.push('KAOLINITE');
+				if (hasPositiveCurve('VFELD')) detectedMinerals.push('FELDSPAR');
+				if (hasPositiveCurve('VGYPS')) detectedMinerals.push('GYPSUM');
+				if (hasPositiveCurve('VPYRI')) detectedMinerals.push('PYRITE');
+				if (hasPositiveCurve('VCOAL')) detectedMinerals.push('COAL');
+				if (hasPositiveCurve('VILLI')) detectedMinerals.push('ILLITE');
+				if (hasPositiveCurve('VSMEC')) detectedMinerals.push('SMECTITE');
+				if (hasPositiveCurve('VCHLO')) detectedMinerals.push('CHLORITE');
+				if (hasPositiveCurve('VGLAUC')) detectedMinerals.push('GLAUCONITE');
+				if (hasPositiveCurve('VKFELD')) detectedMinerals.push('KFELD');
+				if (hasPositiveCurve('VALBI')) detectedMinerals.push('ALBITE');
+				if (hasPositiveCurve('VSIDE')) detectedMinerals.push('SIDERITE');
+				if (hasPositiveCurve('VANKE')) detectedMinerals.push('ANKERITE');
+				if (hasPositiveCurve('VKERO')) detectedMinerals.push('KEROGEN');
 				if (detectedMinerals.length > 0) {
 					workbench.lithoParams.model = 'multi_mineral';
 					workbench.lithoParams.minerals = detectedMinerals;

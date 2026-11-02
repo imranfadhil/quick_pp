@@ -45,12 +45,29 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
         plotly.graph_objects.Figure: The figure with the added traces.
     """
     trace_ix = 0
+    litho_count = 0
     for col, trace_def in trace_defs.items():
         # Skip special cases handled separately
         if col in ["COAL_FLAG", "ZONES"]:
             continue
 
-        style = trace_def.get("style", {})
+        style = dict(trace_def.get("style", {}))
+        is_litho = style.get("stackgroup") == "litho"
+
+        # For lithology curves, only add to the track if available with non-zero data
+        if is_litho:
+            if (
+                col not in df.columns
+                or not df[col].notna().any()
+                or not (df[col].dropna() > 1e-4).any()
+            ):
+                continue
+            if litho_count == 0:
+                style["fill"] = "tozerox"
+            else:
+                style["fill"] = "tonextx"
+            litho_count += 1
+
         trace_args = dict(
             x=round(df[col], 3) if df[col].dtype == "float64" else df[col],
             y=index,
@@ -269,9 +286,14 @@ def fix_missing_volumetrics(df):
     Returns:
         pd.DataFrame: The DataFrame with NaNs filled in volumetric columns.
     """
-    volumetrics = ["VCLAY", "VSILT", "VSAND", "VCALC", "VDOLO", "VGAS", "VOIL", "VHC"]
+    volumetrics = [
+        "VCLAY", "VSILT", "VSAND", "VCALC", "VDOLO", "VGAS", "VOIL", "VHC",
+        "VFELD", "VKAOL", "VANHY", "VGYPS", "VHALI", "VPYRI", "VCOAL",
+        "VILLI", "VSMEC", "VCHLO", "VGLAUC", "VKFELD", "VALBI", "VSIDE", "VANKE", "VKERO",
+    ]
     for col in volumetrics:
-        df[col] = df[col].fillna(0) if col in df.columns else None
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
     return df
 
 
@@ -392,9 +414,12 @@ def plotly_log(
         elif swt_col in df.columns and (sw_col not in df.columns or df[sw_col].isna().all()):
             df[sw_col] = df[swt_col]
 
-    # Ensure all required columns exist (fill with NaN if missing)
+    # Ensure all required columns exist (fill with NaN if missing),
+    # but do NOT inject fake columns for optional lithology curves if absent from the data.
     for k in trace_defs.keys():
         if k not in df.columns:
+            if trace_defs[k].get("style", {}).get("stackgroup") == "litho":
+                continue
             df[k] = np.nan
 
     # One-hot encode ROCK_FLAG if present
