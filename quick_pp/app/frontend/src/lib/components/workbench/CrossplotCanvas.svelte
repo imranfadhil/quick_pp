@@ -1275,6 +1275,16 @@
 					const phisArr = rt.phis ?? [];
 					const vugFlags = rt.vuggy_flags ?? [];
 					const rfs = rt.rock_flags ?? [];
+					const carbZones = (rt as any).zones as (string | null)[] | undefined;
+					const carbWells =
+						projectData.wells.length > 0 &&
+						projectData.selectedWellNames.length < projectData.wells.length
+							? new Set(projectData.selectedWellNames)
+							: null;
+					const carbAllowedZones =
+						workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
+					const carbMinD = workbench.depthFilter?.min ?? -Infinity;
+					const carbMaxD = workbench.depthFilter?.max ?? Infinity;
 
 					const vugX: number[] = [];
 					const vugY: number[] = [];
@@ -1285,6 +1295,14 @@
 					const phitVsPhisColor: string[] = [];
 
 					for (let i = 0; i < phitArr.length; i++) {
+						const wn = rt.well_names?.[i] ?? '';
+						if (carbWells && !carbWells.has(wn)) continue;
+						const d = rt.depths?.[i];
+						if (d != null && (d < carbMinD || d > carbMaxD)) continue;
+						if (carbAllowedZones && carbZones && carbZones.length > i) {
+							const z = carbZones[i] || 'Unknown';
+							if (!carbAllowedZones.has(z)) continue;
+						}
 						const pt = phitArr[i];
 						const k = permArr[i];
 						const pip = phiIpArr[i] ?? pt;
@@ -1684,7 +1702,14 @@
 					}
 				}
 
-				if (lx.length > 0) {
+				const mwPrecomputeSource =
+					workbench.scope === 'multi-well'
+						? workbench.multiWellStep === 'perm-transform'
+							? projectData.permTransformDataSource
+							: projectData.drtDataSource
+						: null;
+
+				if (lx.length > 0 && mwPrecomputeSource !== 'core') {
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
@@ -1695,7 +1720,7 @@
 						marker: { size: 5, color: PETRO_COLORS.perm, opacity: 0.7 }
 					});
 				}
-				if (cx.length > 0) {
+				if (cx.length > 0 && mwPrecomputeSource !== 'log') {
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',

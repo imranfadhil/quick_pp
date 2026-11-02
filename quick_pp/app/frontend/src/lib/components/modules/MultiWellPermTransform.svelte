@@ -143,6 +143,9 @@
 						rock_flag_source: projectData.drtClassifierPropagated
 							? projectData.drtPropagationMode
 							: 'cutoff_only',
+						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+						min_depth: workbench.depthFilter?.min ?? null,
+						max_depth: workbench.depthFilter?.max ?? null,
 						fits: customFits,
 						save: false
 					} as any

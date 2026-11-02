@@ -116,17 +116,11 @@
 			const meta = DRT_METHOD_META[method];
 			const sortedCutoffs = [...projectData.activeDrtCutoffs].sort((a, b) => a - b);
 			const activeMinDepth =
-				projectData.drtPropagateFocusedOnly && workbench.depthFilter?.min != null
-					? workbench.depthFilter.min
-					: null;
+				workbench.depthFilter?.min != null ? workbench.depthFilter.min : null;
 			const activeMaxDepth =
-				projectData.drtPropagateFocusedOnly && workbench.depthFilter?.max != null
-					? workbench.depthFilter.max
-					: null;
+				workbench.depthFilter?.max != null ? workbench.depthFilter.max : null;
 			const activeZones =
-				projectData.drtPropagateFocusedOnly && workbench.selectedZones.length > 0
-					? workbench.selectedZones
-					: null;
+				workbench.selectedZones.length > 0 ? workbench.selectedZones : null;
 
 			const { data, error } = await api.POST(
 				'/quick_pp/workspace/projects/{project_id}/rock_typing/compute',

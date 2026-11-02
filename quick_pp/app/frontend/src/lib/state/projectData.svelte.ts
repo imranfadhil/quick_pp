@@ -1137,17 +1137,11 @@ class ProjectDataState {
 					const sortedCutoffs = [...this.activeDrtCutoffs].sort((a, b) => a - b);
 					const higherIsBetter = this.drtMethod !== 'lucia';
 					const activeMinDepth =
-						this.drtPropagateFocusedOnly && workbench.depthFilter?.min != null
-							? workbench.depthFilter.min
-							: null;
+						workbench.depthFilter?.min != null ? workbench.depthFilter.min : null;
 					const activeMaxDepth =
-						this.drtPropagateFocusedOnly && workbench.depthFilter?.max != null
-							? workbench.depthFilter.max
-							: null;
+						workbench.depthFilter?.max != null ? workbench.depthFilter.max : null;
 					const activeZones =
-						this.drtPropagateFocusedOnly && workbench.selectedZones.length > 0
-							? workbench.selectedZones
-							: null;
+						workbench.selectedZones.length > 0 ? workbench.selectedZones : null;
 
 					const { data, error } = await api.POST(
 						'/quick_pp/workspace/projects/{project_id}/rock_typing/compute',
@@ -1248,6 +1242,9 @@ class ProjectDataState {
 							rock_flag_source: this.drtClassifierPropagated
 								? this.drtPropagationMode
 								: 'cutoff_only',
+							zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+							min_depth: workbench.depthFilter?.min ?? null,
+							max_depth: workbench.depthFilter?.max ?? null,
 							fits: customFits,
 							save: false
 						} as any

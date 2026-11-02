@@ -108,15 +108,40 @@ def _compute_fzi_data_sync(
                 ):
                     df = df.copy()
                     df["ZONES"] = pd.NA
+                    d_num = pd.to_numeric(df["DEPTH"], errors="coerce")
+                    sorted_tops: List[Tuple[float, str, Optional[float]]] = []
                     for _, top in tops_df.iterrows():
                         try:
-                            top_depth = float(top.get("depth"))
-                            top_name = str(top.get("name"))
+                            top_depth = float(
+                                top.get("depth")
+                                if top.get("depth") is not None
+                                else top.get("top_depth")
+                            )
+                            top_name = str(
+                                top.get("name")
+                                or top.get("zone")
+                                or top.get("formation")
+                                or ""
+                            ).strip()
+                            base_val = top.get("base_depth")
+                            base_depth = (
+                                float(base_val)
+                                if base_val is not None and pd.notna(base_val)
+                                else None
+                            )
+                            if top_name:
+                                sorted_tops.append((top_depth, top_name, base_depth))
                         except Exception:
                             continue
-                        nearest_idx = (df["DEPTH"] - top_depth).abs().idxmin()
-                        df.at[nearest_idx, "ZONES"] = top_name
-                    df["ZONES"] = df["ZONES"].ffill()
+                    sorted_tops.sort(key=lambda t: t[0])
+                    for top_depth, top_name, base_depth in sorted_tops:
+                        if base_depth is not None:
+                            df.loc[
+                                (d_num >= top_depth) & (d_num <= base_depth),
+                                "ZONES",
+                            ] = top_name
+                        else:
+                            df.loc[d_num >= top_depth, "ZONES"] = top_name
 
             phit_col = None
             perm_col = None

@@ -1069,6 +1069,18 @@ class WorkspacePermTransformRequest(BaseModel):
         None,
         description="Which ROCK_FLAG source to use: 'cutoff_only', 'fill_missing', or 'full_ml'",
     )
+    zones: Optional[List[str]] = Field(
+        None,
+        description="Optional list of active zone names to restrict input datapoints",
+    )
+    min_depth: Optional[float] = Field(
+        None,
+        description="Optional minimum depth filter for input datapoints",
+    )
+    max_depth: Optional[float] = Field(
+        None,
+        description="Optional maximum depth filter for input datapoints",
+    )
     fits: Optional[Dict[str, Dict[str, float]]] = Field(
         None,
         description="Optional manual (a, b) fits per ROCK_FLAG. If None, auto-fitted from well data.",
@@ -4455,7 +4467,7 @@ def _execute_workspace_rock_typing(
     sonic_wells = list(raw_fzi_data.get("sonic_wells") or [])
     fzi_data = _filter_fzi_data_by_wells(raw_fzi_data, req.well_names)
 
-    # Apply optional zone / depth filter to fzi_data if requested and sufficient samples remain
+    # Strictly apply active zone / depth filter to fzi_data when requested
     if req.zones or req.min_depth is not None or req.max_depth is not None:
         w_arr_f = fzi_data.get("well_names") or []
         d_arr_f = fzi_data.get("depths") or []
@@ -4477,14 +4489,27 @@ def _execute_workspace_rock_typing(
             if allowed_z and str(zv or "Unknown").strip() not in allowed_z:
                 continue
             keep_indices.append(idx_f)
-        if len(keep_indices) >= 4:
-            filtered_fzi: Dict[str, Any] = {}
-            for k_f, arr_f in fzi_data.items():
-                if isinstance(arr_f, list) and len(arr_f) == len(w_arr_f):
-                    filtered_fzi[k_f] = [arr_f[i] for i in keep_indices]
-                else:
-                    filtered_fzi[k_f] = arr_f
-            fzi_data = filtered_fzi
+        filtered_fzi: Dict[str, Any] = {}
+        for k_f, arr_f in fzi_data.items():
+            if isinstance(arr_f, list) and len(arr_f) == len(w_arr_f):
+                filtered_fzi[k_f] = [arr_f[i] for i in keep_indices]
+            else:
+                filtered_fzi[k_f] = arr_f
+        fzi_data = filtered_fzi
+        if len(keep_indices) == 0:
+            src_desc = (
+                "Core (CPORE & CPERM)"
+                if data_source == "core"
+                else "Calculated Logs (PHIT & PERM)"
+            )
+            zone_desc = (
+                f"zone(s) [{', '.join(req.zones)}]"
+                if req.zones
+                else "the active depth interval"
+            )
+            raise ValueError(
+                f"No {src_desc} datapoints found in {zone_desc}. Select a zone with {src_desc} data or switch the input source."
+            )
 
     phit_arr = np.asarray(fzi_data["phit"], dtype=float)
     perm_arr = np.asarray(fzi_data["perm"], dtype=float)
@@ -4751,17 +4776,24 @@ def _execute_workspace_rock_typing(
         if well_dfs:
             combined_df = pd.concat(well_dfs, ignore_index=True)
             focused_mask_arr = combined_df["_FOCUSED_MASK"].to_numpy(dtype=bool)
-            # If propagate_focused_only caused 0 focused rows across all wells, fall back to all valid depth rows
-            if req.propagate_focused_only and not focused_mask_arr.any():
+            has_explicit_filter = bool(
+                req.zones or req.min_depth is not None or req.max_depth is not None
+            )
+            # Only fall back to all valid depth rows when no explicit zone/depth filter was requested
+            if (
+                req.propagate_focused_only
+                and not focused_mask_arr.any()
+                and not has_explicit_filter
+            ):
                 focused_mask_arr = pd.to_numeric(
                     combined_df["DEPTH"], errors="coerce"
                 ).notna().to_numpy(dtype=bool)
                 focused_well_samples = int(focused_mask_arr.sum())
 
-            # Subset DataFrame for training/prediction on focused interval if enough labeled samples exist
+            # Subset DataFrame for training/prediction on focused interval
             focused_df = (
                 combined_df.loc[focused_mask_arr].reset_index(drop=True)
-                if req.propagate_focused_only
+                if (req.propagate_focused_only or has_explicit_filter)
                 else combined_df
             )
             labeled_in_focused = int(
@@ -4769,7 +4801,11 @@ def _execute_workspace_rock_typing(
             )
             train_df = (
                 focused_df
-                if (not req.propagate_focused_only or labeled_in_focused >= 6)
+                if (
+                    has_explicit_filter
+                    or not req.propagate_focused_only
+                    or labeled_in_focused >= 6
+                )
                 else combined_df
             ).copy()
 
@@ -5203,9 +5239,7 @@ def _execute_workspace_rock_typing(
         if rf is not None:
             key = str(rf)
             flag_counts[key] = flag_counts.get(key, 0) + 1
-    if (
-        req.apply_classifier_propagation and prop_mode != "cutoff_only"
-    ) or req.include_non_reservoir:
+    if req.apply_classifier_propagation and prop_mode != "cutoff_only":
         for ext_rows in extra_propagated_by_well.values():
             for r_ext in ext_rows:
                 rf_e = r_ext.get("ROCK_FLAG")
@@ -5338,6 +5372,36 @@ def workspace_perm_transform_compute(
         fzi_data = _filter_fzi_data_by_wells(
             _compute_fzi_data_sync(project_id, data_source=data_source), req.well_names
         )
+        if req.zones or req.min_depth is not None or req.max_depth is not None:
+            w_arr_pt = fzi_data.get("well_names") or []
+            d_arr_pt = fzi_data.get("depths") or []
+            z_arr_pt = fzi_data.get("zones") or []
+            allowed_z_pt = (
+                {str(z).strip() for z in req.zones if str(z).strip()}
+                if req.zones
+                else set()
+            )
+            keep_idx_pt: List[int] = []
+            for idx_pt, (dv_pt, zv_pt) in enumerate(
+                zip(d_arr_pt, z_arr_pt, strict=False)
+            ):
+                if dv_pt is None:
+                    continue
+                d_flt_pt = float(dv_pt)
+                if req.min_depth is not None and d_flt_pt < float(req.min_depth):
+                    continue
+                if req.max_depth is not None and d_flt_pt > float(req.max_depth):
+                    continue
+                if allowed_z_pt and str(zv_pt or "Unknown").strip() not in allowed_z_pt:
+                    continue
+                keep_idx_pt.append(idx_pt)
+            filtered_fzi_pt: Dict[str, Any] = {}
+            for k_pt, arr_pt in fzi_data.items():
+                if isinstance(arr_pt, list) and len(arr_pt) == len(w_arr_pt):
+                    filtered_fzi_pt[k_pt] = [arr_pt[i] for i in keep_idx_pt]
+                else:
+                    filtered_fzi_pt[k_pt] = arr_pt
+            fzi_data = filtered_fzi_pt
         phit_arr = np.asarray(fzi_data["phit"], dtype=float)
         perm_arr = np.asarray(fzi_data["perm"], dtype=float)
         rock_flags = fzi_data["rock_flags"]
