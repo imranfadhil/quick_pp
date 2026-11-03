@@ -119,14 +119,6 @@
 				);
 			}
 		}
-		if (
-			!projectParams.status['shf']?.matched &&
-			(projectData.swirrResult ||
-				projectData.swirrApplyResult ||
-				Object.keys(projectData.swirrConfig.rules ?? {}).length > 0)
-		) {
-			projectData.shfParams.swirrSource = 'poro_perm';
-		}
 		if (!projectData.shfResult && projectData.swirrResult) {
 			projectData.recomputeScalFitsFromPlugs(false);
 		}
@@ -192,6 +184,9 @@
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/shf/compute`,
 				{
 					well_names: validTvdWells,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
 					model: sp.model,
 					j_sat_mode: jSatMode,
 					unit: sp.unit ?? 'metric',

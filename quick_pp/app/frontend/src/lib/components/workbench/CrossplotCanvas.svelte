@@ -1976,22 +1976,76 @@
 				return { traces, layout: baseLayout };
 			}
 
+			const SAMPLE_PALETTE = [
+				'#2563EB',
+				'#16A34A',
+				'#D97706',
+				'#DC2626',
+				'#9333EA',
+				'#0891B2',
+				'#DB2777',
+				'#4F46E5',
+				'#059669',
+				'#EA580C',
+				'#7C3AED',
+				'#0284C7',
+				'#65A30D',
+				'#E11D48',
+				'#0D9488',
+				'#B45309'
+			];
+			const SAMPLE_SYMBOLS = [
+				'circle',
+				'diamond',
+				'square',
+				'triangle-up',
+				'pentagon',
+				'hexagon',
+				'star',
+				'triangle-down'
+			];
+
 			const excludedSet = new Set(projectData.swirrConfig.excludedScalPointIds || []);
 			const selectedSet = new Set(projectData.selectedScalPointIds || []);
+			const groupMode = projectData.scalGroupMode;
+			const connectPlugs = projectData.scalConnectPlugs;
+			const showSampleLabels = projectData.scalShowSampleLabels;
+			const focusedPlugId = projectData.focusedScalPlugId
+				? projectData.normalizeScalPlugId(projectData.focusedScalPlugId)
+				: null;
+			const rtFilter = projectData.scalFilterRockType;
 
-			const byRt = new Map<
-				number,
-				{
-					swn: number[];
-					sw: number[];
-					j: number[];
-					pc: number[];
-					bvw: number[];
-					h: number[];
-					labels: string[];
-					ptIds: string[];
-				}
-			>();
+			// Map plug metadata from swirrResult.plugs for depth/zone fallback
+			const plugMetaMap = new Map<string, { depth: number; zone: string }>();
+			for (const p of projectData.swirrResult?.plugs ?? []) {
+				const pid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+				const zn = projectData.resolveScalSampleZone(p.well, p.depth, p.zone);
+				plugMetaMap.set(pid, { depth: p.depth ?? 0, zone: zn });
+			}
+
+			type ScalPointItem = {
+				idx: number;
+				rf: number;
+				well: string;
+				sample: string;
+				plugId: string;
+				rawPtId: string;
+				cdata: string;
+				depth: number;
+				zone: string;
+				pc: number;
+				sw: number;
+				swn: number;
+				swirrCalc: number | null;
+				j: number;
+				h: number;
+				bvw: number;
+				phit: number;
+				perm: number;
+				isExcl: boolean;
+			};
+
+			const byPlug = new Map<string, ScalPointItem[]>();
 			const exclPts = {
 				swn: [] as number[],
 				sw: [] as number[],
@@ -2013,12 +2067,33 @@
 
 			for (let i = 0; i < scal.pc.length; i++) {
 				const rf = scal.rock_flags?.[i] ?? 1;
-				const rawPtId =
-					scal.point_ids?.[i] ||
-					`${scal.well_names?.[i] ?? 'W'}::${scal.samples?.[i] ?? 'S'}::${i}`;
+				if (rtFilter !== 'all' && rf !== rtFilter) continue;
+				const wn = scal.well_names?.[i] ?? 'Well';
+				const sname = scal.samples?.[i] ?? 'Sample';
+				const plugId = projectData.normalizeScalPlugId(scal.plug_ids?.[i], wn, sname);
+				const meta = plugMetaMap.get(plugId);
+				const depthVal = scal.depths?.[i] ?? meta?.depth ?? 0;
+				const zoneVal = projectData.resolveScalSampleZone(
+					wn,
+					depthVal,
+					scal.zones?.[i] ?? meta?.zone
+				);
+				if (!projectData.isScalItemInActiveFilter(wn, depthVal, zoneVal)) continue;
+
+				const rawPtId = scal.point_ids?.[i] || `${plugId}::${i}`;
 				const isExcl = Boolean(scal.excluded?.[i]) || excludedSet.has(rawPtId);
 				const cdata = `scal_pt::${rawPtId}`;
-				const lbl = `${scal.samples?.[i] ?? 'Plug'} (${scal.well_names?.[i] ?? ''}) | Pc=${fmtNum(scal.pc[i], 2)} psi | Sw=${fmtNum(scal.sw[i], 3)}, Swn=${fmtNum(scal.swn[i], 3)}`;
+				const phitVal = scal.phit?.[i] ?? 0;
+				const permVal = scal.perm?.[i] ?? 0;
+				const swirrCalcVal =
+					typeof scal.swirr_calc?.[i] === 'number' && Number.isFinite(scal.swirr_calc[i])
+						? scal.swirr_calc[i]
+						: null;
+				const lbl =
+					`<b>${wn} · Sample ${sname}</b> [RT ${rf}]<br>` +
+					`Depth: ${depthVal > 0 ? fmtNum(depthVal, 2) + ' m' : '—'} | Zone: ${zoneVal}<br>` +
+					`CPORE: ${fmtNum(phitVal, 3)} v/v | CPERM: ${fmtNum(permVal, 2)} mD<br>` +
+					`Pc=${fmtNum(scal.pc[i], 2)} psi | Sw=${fmtNum(scal.sw[i], 3)}, Swirr=${swirrCalcVal !== null ? fmtNum(swirrCalcVal, 3) : '—'}, Swn=${fmtNum(scal.swn[i], 3)}`;
 
 				if (selectedSet.has(rawPtId)) {
 					selPts.swn.push(scal.swn[i]);
@@ -2041,102 +2116,249 @@
 					continue;
 				}
 
-				if (!byRt.has(rf)) {
-					byRt.set(rf, {
-						swn: [],
-						sw: [],
-						j: [],
-						pc: [],
-						bvw: [],
-						h: [],
-						labels: [],
-						ptIds: []
-					});
-				}
-				const grp = byRt.get(rf)!;
-				grp.swn.push(scal.swn[i]);
-				grp.sw.push(scal.sw[i]);
-				grp.j.push(scal.j[i]);
-				grp.pc.push(scal.pc[i]);
-				grp.bvw.push(scal.bvw[i]);
-				grp.h.push(scal.h[i]);
-				grp.labels.push(lbl);
-				grp.ptIds.push(cdata);
+				if (!byPlug.has(plugId)) byPlug.set(plugId, []);
+				byPlug.get(plugId)!.push({
+					idx: i,
+					rf,
+					well: wn,
+					sample: sname,
+					plugId,
+					rawPtId,
+					cdata,
+					depth: depthVal,
+					zone: zoneVal,
+					pc: scal.pc[i],
+					sw: scal.sw[i],
+					swn: scal.swn[i],
+					swirrCalc: swirrCalcVal,
+					j: scal.j[i],
+					h: scal.h[i],
+					bvw: scal.bvw[i],
+					phit: phitVal,
+					perm: permVal,
+					isExcl
+				});
 			}
 
-			const sortedRts = [...byRt.keys()].sort((a, b) => a - b);
-			const maxJ = Math.max(2.0, ...scal.j.filter(Number.isFinite));
-			const maxPc = Math.max(15.0, ...scal.pc.filter(Number.isFinite));
-			const maxH = Math.max(30.0, ...scal.h.filter(Number.isFinite));
-			const maxBvw = Math.max(0.25, ...scal.bvw.filter(Number.isFinite));
+			// Sort points within each plug in ascending Pc order so connected lines trace drainage monotonically
+			for (const [, pts] of byPlug.entries()) {
+				pts.sort((a, b) => a.pc - b.pc);
+			}
+
+			const allActivePts = Array.from(byPlug.values()).flat();
+			const maxJ = Math.max(
+				2.0,
+				...allActivePts.map((p) => p.j).filter(Number.isFinite)
+			);
+			const maxPc = Math.max(
+				15.0,
+				...allActivePts.map((p) => p.pc).filter(Number.isFinite)
+			);
+			const maxH = Math.max(
+				30.0,
+				...allActivePts.map((p) => p.h).filter(Number.isFinite)
+			);
+			const maxBvw = Math.max(
+				0.25,
+				...allActivePts.map((p) => p.bvw).filter(Number.isFinite)
+			);
 			const conv = (sp.unit ?? 'metric') === 'metric' ? 0.433 * 3.28084 : 0.433;
 			const gradPsi = Math.max((sp.gw - sp.ghc) * conv, 1e-4);
 			const useRawSw = (sp.jSatMode ?? 'swn') === 'sw';
 			const satSym = useRawSw ? 'Sw' : 'Swn';
 
-			for (const rf of sortedRts) {
-				const g = byRt.get(rf)!;
-				const color = getRockTypeColor(rf);
-				if (activeModel === 'leverett_j') {
+			const getPointX = (p: ScalPointItem) =>
+				activeModel === 'leverett_j'
+					? useRawSw
+						? p.sw
+						: p.swn
+					: activeModel === 'skelt_harrison'
+						? p.sw
+						: p.bvw;
+			const getPointY = (p: ScalPointItem) =>
+				activeModel === 'leverett_j' ? p.j : p.pc;
+			const formatPointHover = (p: ScalPointItem, stepIdx: number, totalSteps: number) =>
+				`<b>${p.well} · Sample ${p.sample}</b> (Step ${stepIdx + 1}/${totalSteps}) · RT ${p.rf}<br>` +
+				`Depth: ${p.depth > 0 ? fmtNum(p.depth, 2) + ' m' : '—'} | Zone: ${p.zone}<br>` +
+				`CPORE: ${fmtNum(p.phit, 3)} v/v | CPERM: ${fmtNum(p.perm, 2)} mD<br>` +
+				`Pc: ${fmtNum(p.pc, 2)} psi | Sw: ${fmtNum(p.sw, 3)} | Swirr: ${p.swirrCalc !== null ? fmtNum(p.swirrCalc, 3) : '—'} | Swn: ${fmtNum(p.swn, 3)} | J: ${fmtNum(p.j, 3)}<br>` +
+				`<i>Click to exclude ${projectData.scalClickFilterTarget === 'plug' ? 'sample' : 'point'} (Shift+Click for sample)</i>`;
+
+			if (groupMode === 'sample') {
+				const sortedPlugs = Array.from(byPlug.entries()).sort(([, a], [, b]) => {
+					const pa = a[0];
+					const pb = b[0];
+					if (pa.rf !== pb.rf) return pa.rf - pb.rf;
+					if (pa.well !== pb.well) return pa.well.localeCompare(pb.well);
+					return pa.sample.localeCompare(pb.sample, undefined, { numeric: true });
+				});
+
+				sortedPlugs.forEach(([plugId, pts], pIdx) => {
+					if (pts.length === 0) return;
+					const p0 = pts[0];
+					const isFocused = focusedPlugId === plugId;
+					const isDimmed = Boolean(focusedPlugId && !isFocused);
+					const col = SAMPLE_PALETTE[pIdx % SAMPLE_PALETTE.length];
+					const sym = SAMPLE_SYMBOLS[Math.floor(pIdx / SAMPLE_PALETTE.length) % SAMPLE_SYMBOLS.length];
+					const showTxt = showSampleLabels || isFocused;
+					const modeStr = connectPlugs
+						? showTxt
+							? 'lines+markers+text'
+							: 'lines+markers'
+						: showTxt
+							? 'markers+text'
+							: 'markers';
+
 					traces.push({
 						type: 'scatter',
-						mode: 'markers',
-						name: `SCAL RT ${rf} (${g.j.length})`,
-						x: useRawSw ? g.sw : g.swn,
-						y: g.j,
-						customdata: g.ptIds,
-						text: g.labels,
-						hovertemplate:
-							'%{text}<br>J=%{y:.3f}<br><i>Click to exclude point</i><extra>RT ' +
-							rf +
-							'</extra>',
+						mode: modeStr,
+						name: `${p0.sample} (${p0.well}) [RT${p0.rf}]`,
+						x: pts.map(getPointX),
+						y: pts.map(getPointY),
+						customdata: pts.map((p) => p.cdata),
+						text: pts.map((p, idx) =>
+							isFocused
+								? `${p.sample}#${idx + 1}`
+								: idx === pts.length - 1 || !connectPlugs
+									? p.sample
+									: ''
+						),
+						textposition: 'top center',
+						textfont: {
+							family: 'JetBrains Mono',
+							size: isFocused ? 9.5 : 8.5,
+							color: col
+						},
+						hovertext: pts.map((p, idx) => formatPointHover(p, idx, pts.length)),
+						hovertemplate: `%{hovertext}<extra>${p0.well} · ${p0.sample} (RT ${p0.rf})</extra>`,
+						line: connectPlugs
+							? {
+									color: col,
+									width: isFocused ? 2.6 : 1.35,
+									dash: 'solid'
+								}
+							: undefined,
+						marker: {
+							size: isFocused ? 9 : 7,
+							symbol: sym,
+							color: col,
+							opacity: isDimmed ? 0.2 : 0.92,
+							line: {
+								width: isFocused ? 1.5 : 0.7,
+								color: isFocused ? '#0F172A' : '#FFFFFF'
+							}
+						},
+						opacity: isDimmed ? 0.22 : 1.0
+					});
+				});
+			} else {
+				// Group by Rock Type (with optional per-plug line connections and focused sample spotlight)
+				const plugsByRt = new Map<number, Array<[string, ScalPointItem[]]>>();
+				for (const [plugId, pts] of byPlug.entries()) {
+					if (pts.length === 0) continue;
+					const rf = pts[0].rf;
+					if (!plugsByRt.has(rf)) plugsByRt.set(rf, []);
+					plugsByRt.get(rf)!.push([plugId, pts]);
+				}
+				const sortedRts = [...plugsByRt.keys()].sort((a, b) => a - b);
+
+				for (const rf of sortedRts) {
+					const plugEntries = plugsByRt.get(rf)!;
+					const color = getRockTypeColor(rf);
+					const xVals: (number | null)[] = [];
+					const yVals: (number | null)[] = [];
+					const cdataVals: (string | null)[] = [];
+					const hoverVals: (string | null)[] = [];
+					const txtVals: string[] = [];
+					let ptCount = 0;
+
+					for (const [, pts] of plugEntries) {
+						pts.forEach((p, idx) => {
+							xVals.push(getPointX(p));
+							yVals.push(getPointY(p));
+							cdataVals.push(p.cdata);
+							hoverVals.push(formatPointHover(p, idx, pts.length));
+							txtVals.push(
+								showSampleLabels && (idx === pts.length - 1 || !connectPlugs)
+									? p.sample
+									: ''
+							);
+							ptCount++;
+						});
+						if (connectPlugs) {
+							xVals.push(null);
+							yVals.push(null);
+							cdataVals.push(null);
+							hoverVals.push(null);
+							txtVals.push('');
+						}
+					}
+
+					const isDimmed = Boolean(focusedPlugId);
+					const modeStr = connectPlugs
+						? showSampleLabels
+							? 'lines+markers+text'
+							: 'lines+markers'
+						: showSampleLabels
+							? 'markers+text'
+							: 'markers';
+
+					traces.push({
+						type: 'scatter',
+						mode: modeStr,
+						name: `SCAL RT ${rf} (${ptCount})`,
+						x: xVals,
+						y: yVals,
+						customdata: cdataVals,
+						text: txtVals,
+						textposition: 'top center',
+						textfont: { family: 'JetBrains Mono', size: 8.5, color },
+						hovertext: hoverVals,
+						hovertemplate: `%{hovertext}<extra>RT ${rf}</extra>`,
+						connectgaps: false,
+						line: connectPlugs
+							? {
+									color,
+									width: 1.1,
+									dash: 'dot'
+								}
+							: undefined,
 						marker: {
 							size: 6.5,
 							color,
-							opacity: 0.85,
+							opacity: isDimmed ? 0.25 : 0.88,
 							line: { width: 0.5, color: '#fff' }
-						}
+						},
+						opacity: isDimmed ? 0.28 : 1.0
 					});
-				} else if (activeModel === 'skelt_harrison') {
-					traces.push({
-						type: 'scatter',
-						mode: 'markers',
-						name: `SCAL RT ${rf} (${g.pc.length})`,
-						x: g.sw,
-						y: g.pc,
-						customdata: g.ptIds,
-						text: g.labels,
-						hovertemplate:
-							'%{text}<br>Sw=%{x:.3f}, Pc=%{y:.2f} psi<br><i>Click to exclude point</i><extra>RT ' +
-							rf +
-							'</extra>',
-						marker: {
-							size: 6.5,
-							color,
-							opacity: 0.85,
-							line: { width: 0.5, color: '#fff' }
-						}
-					});
-				} else {
-					traces.push({
-						type: 'scatter',
-						mode: 'markers',
-						name: `SCAL RT ${rf} (${g.pc.length})`,
-						x: g.bvw,
-						y: g.pc,
-						customdata: g.ptIds,
-						text: g.labels,
-						hovertemplate:
-							'%{text}<br>BVW=%{x:.3f}, Pc=%{y:.2f} psi<br><i>Click to exclude point</i><extra>RT ' +
-							rf +
-							'</extra>',
-						marker: {
-							size: 6.5,
-							color,
-							opacity: 0.85,
-							line: { width: 0.5, color: '#fff' }
-						}
-					});
+				}
+
+				if (focusedPlugId && byPlug.has(focusedPlugId)) {
+					const fPts = byPlug.get(focusedPlugId)!;
+					if (fPts.length > 0) {
+						const p0 = fPts[0];
+						const rtCol = getRockTypeColor(p0.rf);
+						traces.push({
+							type: 'scatter',
+							mode: 'lines+markers+text',
+							name: `★ ${p0.sample} (${p0.well}) [RT ${p0.rf}]`,
+							x: fPts.map(getPointX),
+							y: fPts.map(getPointY),
+							customdata: fPts.map((p) => p.cdata),
+							text: fPts.map((p, idx) => `${p.sample}#${idx + 1}`),
+							textposition: 'top center',
+							textfont: { family: 'JetBrains Mono', size: 9.5, color: '#0F172A' },
+							hovertext: fPts.map((p, idx) => formatPointHover(p, idx, fPts.length)),
+							hovertemplate: `%{hovertext}<extra>FOCUSED · ${p0.well} · ${p0.sample}</extra>`,
+							line: { color: rtCol, width: 2.6, dash: 'solid' },
+							marker: {
+								size: 9.5,
+								symbol: 'diamond',
+								color: rtCol,
+								line: { width: 1.8, color: '#0F172A' }
+							}
+						});
+					}
 				}
 			}
 
@@ -3463,41 +3685,82 @@
 				return { traces, layout: baseLayout };
 			}
 
+			const filteredPlugs = sr.plugs.filter(
+				(p) =>
+					projectData.isScalItemInActiveFilter(p.well, p.depth, p.zone) &&
+					(projectData.scalFilterRockType === 'all' ||
+						(p.rt ?? 1) === projectData.scalFilterRockType)
+			);
+			const focusedPlugId = projectData.focusedScalPlugId
+				? projectData.normalizeScalPlugId(projectData.focusedScalPlugId)
+				: null;
+			const SAMPLE_PALETTE_PLUGS = [
+				'#2563EB',
+				'#16A34A',
+				'#D97706',
+				'#DC2626',
+				'#9333EA',
+				'#0891B2',
+				'#DB2777',
+				'#4F46E5',
+				'#059669',
+				'#EA580C',
+				'#7C3AED',
+				'#0284C7'
+			];
+
 			if (tab === 'pc-qc') {
 				const seenRt = new Set<number>();
-				for (const c of sr.plugs) {
-					if (!c.pc_curve?.length || !c.sw_curve?.length) continue;
+				filteredPlugs.forEach((c, cIdx) => {
+					if (!c.pc_curve?.length || !c.sw_curve?.length) return;
+					const normPid = projectData.normalizeScalPlugId(c.plug_id, c.well, c.sample);
+					const pZone = projectData.resolveScalSampleZone(c.well, c.depth, c.zone);
 					const rt = c.rt ?? 1;
-					const col = getRockTypeColor(rt);
-					const showLeg = !seenRt.has(rt);
+					const bySample = projectData.scalGroupMode === 'sample';
+					const isFocused = focusedPlugId === normPid;
+					const isDimmed = Boolean(focusedPlugId && !isFocused);
+					const col = bySample
+						? SAMPLE_PALETTE_PLUGS[cIdx % SAMPLE_PALETTE_PLUGS.length]
+						: getRockTypeColor(rt);
+					const showLeg = bySample ? true : !seenRt.has(rt);
 					seenRt.add(rt);
 					traces.push({
 						type: 'scatter',
-						mode: 'lines+markers',
-						name: `RT ${rt} Pc Curve`,
-						legendgroup: `rt-${rt}`,
+						mode:
+							projectData.scalShowSampleLabels || isFocused
+								? 'lines+markers+text'
+								: 'lines+markers',
+						name: bySample ? `${c.sample} (${c.well}) [RT${rt}]` : `RT ${rt} Pc Curve`,
+						legendgroup: bySample ? normPid : `rt-${rt}`,
 						showlegend: showLeg,
 						x: c.sw_curve,
 						y: c.pc_curve,
+						customdata: c.sw_curve.map((_, idx) => `scal_pt::${normPid}::${idx}`),
+						text: c.sw_curve.map((_, idx) =>
+							idx === c.sw_curve.length - 1 ? `${c.sample}` : ''
+						),
+						textposition: 'top left',
+						textfont: { family: 'JetBrains Mono', size: 8.5, color: col },
 						line: {
 							color: col,
-							width: c.included ? 1.6 : 1.0,
+							width: isFocused ? 2.6 : c.included ? 1.6 : 1.0,
 							dash: c.included ? 'solid' : 'dot'
 						},
 						marker: {
-							size: 4,
+							size: isFocused ? 7 : 4.5,
 							color: col,
-							opacity: c.included ? 0.85 : 0.35
+							opacity: isDimmed ? 0.18 : c.included ? 0.88 : 0.35
 						},
-						opacity: c.included ? 0.85 : 0.35,
+						opacity: isDimmed ? 0.2 : c.included ? 0.9 : 0.35,
 						hovertemplate:
-							`<b>${c.well} · ${c.sample}</b> (RT ${rt})<br>` +
+							`<b>${c.well} · Sample ${c.sample}</b> (RT ${rt})<br>` +
+							`Depth: ${c.depth > 0 ? fmtNum(c.depth, 2) + ' m' : '—'} | Zone: ${pZone}<br>` +
 							`CPORE: ${fmtNum(c.cpore, 3)} | CPERM: ${fmtNum(c.cperm, 2)} mD<br>` +
 							`Sw: %{x:.3f} v/v | Pc: %{y:.1f} psi<extra></extra>`
 					});
-				}
+				});
 
-				const extractedPlugs = sr.plugs.filter(
+				const extractedPlugs = filteredPlugs.filter(
 					(p) => p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr)
 				);
 				if (extractedPlugs.length > 0) {
@@ -3509,9 +3772,11 @@
 						y: extractedPlugs.map((p) =>
 							cfg.extractionMode === 'interp_pc' ? cfg.referencePcPsi : p.max_pc
 						),
-						customdata: extractedPlugs.map((p) => p.plug_id),
+						customdata: extractedPlugs.map((p) =>
+							projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample)
+						),
 						marker: {
-							size: 8,
+							size: 8.5,
 							symbol: extractedPlugs.map((p) => (p.included ? 'diamond' : 'x')),
 							color: extractedPlugs.map((p) =>
 								p.included ? getRockTypeColor(p.rt) : '#94A3B8'
@@ -3520,7 +3785,8 @@
 						},
 						text: extractedPlugs.map(
 							(p) =>
-								`<b>${p.well} · ${p.sample}</b> (RT ${p.rt})<br>` +
+								`<b>${p.well} · Sample ${p.sample}</b> (RT ${p.rt})<br>` +
+								`Depth: ${p.depth > 0 ? fmtNum(p.depth, 2) + ' m' : '—'} | Zone: ${projectData.resolveScalSampleZone(p.well, p.depth, p.zone)}<br>` +
 								`Extracted Swirr: ${fmtNum(p.extracted_swirr, 3)} v/v | Max Pc: ${fmtNum(p.max_pc, 1)} psi<br>` +
 								`<i>Click to ${p.included ? 'exclude' : 're-include'} plug</i>`
 						),
@@ -3557,11 +3823,11 @@
 					? Math.max(1e-4, p.cperm)
 					: Math.sqrt(Math.max(1e-6, p.cperm) / Math.max(1e-4, p.cpore));
 
-			const includedByRt = new Map<number, typeof sr.plugs>();
-			const excludedPlugs: typeof sr.plugs = [];
+			const includedByRt = new Map<number, typeof filteredPlugs>();
+			const excludedPlugs: typeof filteredPlugs = [];
 			const allValidX: number[] = [];
 
-			for (const p of sr.plugs) {
+			for (const p of filteredPlugs) {
 				const xv = getPlugX(p);
 				if (Number.isFinite(xv) && xv > 0) allValidX.push(xv);
 				if (p.included && p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr)) {
@@ -3576,31 +3842,92 @@
 				}
 			}
 
-			for (const [rt, grp] of Array.from(includedByRt.entries()).sort((a, b) => a[0] - b[0])) {
-				const col = getRockTypeColor(rt);
-				traces.push({
-					type: 'scatter',
-					mode: 'markers',
-					name: `RT ${rt} Plugs (n=${grp.length})`,
-					x: grp.map((p) => getPlugX(p)),
-					y: grp.map((p) => p.extracted_swirr),
-					customdata: grp.map((p) => p.plug_id),
-					marker: {
-						size: 7.5,
-						color: col,
-						symbol: 'circle',
-						opacity: 0.9,
-						line: { color: '#0F172A', width: 0.8 }
-					},
-					text: grp.map(
-						(p) =>
-							`<b>${p.well} · Sample ${p.sample}</b> (${p.depth !== null ? fmtNum(p.depth, 1) + 'm' : '—'}) · RT ${p.rt}<br>` +
-							`CPORE: ${fmtNum(p.cpore, 3)} v/v | CPERM: ${fmtNum(p.cperm, 2)} mD | √(k/φ): ${fmtNum(Math.sqrt(p.cperm / p.cpore), 2)}<br>` +
-							`Lab Swirr: ${fmtNum(p.extracted_swirr, 3)} | Modeled: ${fmtNum(p.modeled_swirr, 3)} | Residual: ${p.residual !== null ? (p.residual >= 0 ? '+' : '') + fmtNum(p.residual, 3) : '—'}<br>` +
-							`<i>Click point to exclude from regression</i>`
-					),
-					hovertemplate: '%{text}<extra></extra>'
-				});
+			if (projectData.scalGroupMode === 'sample') {
+				filteredPlugs
+					.filter((p) => p.included && p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr))
+					.forEach((p, idx) => {
+						const normPid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+						const isFocused = focusedPlugId === normPid;
+						const isDimmed = Boolean(focusedPlugId && !isFocused);
+						const col = SAMPLE_PALETTE_PLUGS[idx % SAMPLE_PALETTE_PLUGS.length];
+						const pZone = projectData.resolveScalSampleZone(p.well, p.depth, p.zone);
+						traces.push({
+							type: 'scatter',
+							mode:
+								projectData.scalShowSampleLabels || isFocused
+									? 'markers+text'
+									: 'markers',
+							name: `${p.sample} (${p.well}) [RT${p.rt}]`,
+							x: [getPlugX(p)],
+							y: [p.extracted_swirr],
+							customdata: [normPid],
+							text: [p.sample],
+							textposition: 'top center',
+							textfont: { family: 'JetBrains Mono', size: 8.5, color: col },
+							marker: {
+								size: isFocused ? 10 : 8,
+								color: col,
+								symbol: isFocused ? 'diamond' : 'circle',
+								opacity: isDimmed ? 0.22 : 0.92,
+								line: { color: '#0F172A', width: isFocused ? 1.5 : 0.8 }
+							},
+							hovertext: [
+								`<b>${p.well} · Sample ${p.sample}</b> (${p.depth > 0 ? fmtNum(p.depth, 1) + 'm' : '—'} · ${pZone}) · RT ${p.rt}<br>` +
+									`CPORE: ${fmtNum(p.cpore, 3)} v/v | CPERM: ${fmtNum(p.cperm, 2)} mD | √(k/φ): ${fmtNum(Math.sqrt(p.cperm / p.cpore), 2)}<br>` +
+									`Lab Swirr: ${fmtNum(p.extracted_swirr, 3)} | Modeled: ${fmtNum(p.modeled_swirr, 3)} | Residual: ${p.residual !== null ? (p.residual >= 0 ? '+' : '') + fmtNum(p.residual, 3) : '—'}<br>` +
+									`<i>Click point to exclude from regression</i>`
+							],
+							hovertemplate: '%{hovertext}<extra></extra>'
+						});
+					});
+			} else {
+				for (const [rt, grp] of Array.from(includedByRt.entries()).sort((a, b) => a[0] - b[0])) {
+					const col = getRockTypeColor(rt);
+					traces.push({
+						type: 'scatter',
+						mode: projectData.scalShowSampleLabels ? 'markers+text' : 'markers',
+						name: `RT ${rt} Plugs (n=${grp.length})`,
+						x: grp.map((p) => getPlugX(p)),
+						y: grp.map((p) => p.extracted_swirr),
+						customdata: grp.map((p) =>
+							projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample)
+						),
+						text: grp.map((p) => p.sample),
+						textposition: 'top center',
+						textfont: { family: 'JetBrains Mono', size: 8.5, color: col },
+						marker: {
+							size: grp.map((p) =>
+								focusedPlugId ===
+								projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample)
+									? 10.5
+									: 7.5
+							),
+							color: col,
+							symbol: grp.map((p) =>
+								focusedPlugId ===
+								projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample)
+									? 'diamond'
+									: 'circle'
+							),
+							opacity: grp.map((p) =>
+								focusedPlugId &&
+								focusedPlugId !==
+									projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample)
+									? 0.25
+									: 0.9
+							),
+							line: { color: '#0F172A', width: 0.8 }
+						},
+						hovertext: grp.map(
+							(p) =>
+								`<b>${p.well} · Sample ${p.sample}</b> (${p.depth > 0 ? fmtNum(p.depth, 1) + 'm' : '—'} · ${projectData.resolveScalSampleZone(p.well, p.depth, p.zone)}) · RT ${p.rt}<br>` +
+								`CPORE: ${fmtNum(p.cpore, 3)} v/v | CPERM: ${fmtNum(p.cperm, 2)} mD | √(k/φ): ${fmtNum(Math.sqrt(p.cperm / p.cpore), 2)}<br>` +
+								`Lab Swirr: ${fmtNum(p.extracted_swirr, 3)} | Modeled: ${fmtNum(p.modeled_swirr, 3)} | Residual: ${p.residual !== null ? (p.residual >= 0 ? '+' : '') + fmtNum(p.residual, 3) : '—'}<br>` +
+								`<i>Click point to exclude from regression</i>`
+						),
+						hovertemplate: '%{hovertext}<extra></extra>'
+					});
+				}
 			}
 
 			if (excludedPlugs.length > 0) {
@@ -3954,9 +4281,18 @@
 			void workbench.swirrCrossplotTab;
 			void swirrLogY;
 			void shfLogScale;
+			void projectData.scalGroupMode;
+			void projectData.scalConnectPlugs;
+			void projectData.scalShowSampleLabels;
+			void projectData.focusedScalPlugId;
+			void projectData.scalFilterRockType;
+			void projectData.shfParams.swirrSource;
+			void projectData.shfParams.jSatMode;
 		} else {
 			void wellData.curves;
 			void projectData.selectedWellNames;
+			void workbench.selectedZones;
+			void workbench.depthFilter;
 			void projectData.drtMethod;
 			void projectData.fziCutoffs;
 			void projectData.winlandCutoffs;
@@ -3972,6 +4308,13 @@
 			void projectData.shfResult;
 			void projectData.swirrConfig.excludedScalPointIds;
 			void projectData.selectedScalPointIds;
+			void projectData.scalGroupMode;
+			void projectData.scalConnectPlugs;
+			void projectData.scalShowSampleLabels;
+			void projectData.focusedScalPlugId;
+			void projectData.scalFilterRockType;
+			void projectData.shfParams.swirrSource;
+			void projectData.shfParams.jSatMode;
 			void projectData.shfParams.fwl;
 			void projectData.shfParams.fwlByZone;
 			void projectData.shfParams.model;
@@ -4059,10 +4402,21 @@
 							) {
 								const rawPtId = pt.customdata.slice('scal_pt::'.length);
 								const parts = rawPtId.split('::');
-								const plugId = parts.length >= 2 ? `${parts[0]}::${parts[1]}` : '';
+								const plugId =
+									parts.length >= 3
+										? `${parts[0]}::${parts[1]}`
+										: parts.length === 2
+											? projectData.normalizeScalPlugId(parts[0])
+											: '';
+								if (plugId && Boolean(ev?.event?.altKey)) {
+									projectData.toggleFocusedScalPlug(plugId);
+									return;
+								}
 								const isPlugExcluded =
 									plugId &&
-									(projectData.swirrConfig.excludedPlugIds || []).includes(plugId);
+									(projectData.swirrConfig.excludedPlugIds || []).some(
+										(id) => projectData.normalizeScalPlugId(id) === plugId
+									);
 								if (
 									plugId &&
 									(projectData.scalClickFilterTarget === 'plug' ||
@@ -4148,6 +4502,81 @@
 			count: depths.length,
 			min: Math.min(...depths),
 			max: Math.max(...depths)
+		};
+	});
+
+	let isScalCrossplotActive = $derived(
+		(effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab !== 'relperm') ||
+			(effectiveMode === 'shf' && shfView === 'scal_fit')
+	);
+
+	let scalQcSummary = $derived.by(() => {
+		const plugs = projectData.swirrResult?.plugs ?? [];
+		const scal = projectData.shfResult?.scal_data;
+		const sampleMap = new Map<
+			string,
+			{ plugId: string; well: string; sample: string; rt: number; depth: number; zone: string; pts: number }
+		>();
+		const rts = new Set<number>();
+
+		if (plugs.length > 0) {
+			for (const p of plugs) {
+				const zn = projectData.resolveScalSampleZone(p.well, p.depth, p.zone);
+				if (!projectData.isScalItemInActiveFilter(p.well, p.depth, zn)) continue;
+				const rt = p.rt ?? 1;
+				rts.add(rt);
+				if (projectData.scalFilterRockType !== 'all' && rt !== projectData.scalFilterRockType)
+					continue;
+				const pid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+				sampleMap.set(pid, {
+					plugId: pid,
+					well: p.well,
+					sample: p.sample,
+					rt,
+					depth: p.depth ?? 0,
+					zone: zn,
+					pts: p.pc_curve?.length ?? 0
+				});
+			}
+		} else if (scal && Array.isArray(scal.pc)) {
+			for (let i = 0; i < scal.pc.length; i++) {
+				const wn = scal.well_names?.[i] ?? 'Well';
+				const sname = scal.samples?.[i] ?? 'Sample';
+				const d = scal.depths?.[i] ?? 0;
+				const zn = projectData.resolveScalSampleZone(wn, d, scal.zones?.[i]);
+				if (!projectData.isScalItemInActiveFilter(wn, d, zn)) continue;
+				const rt = scal.rock_flags?.[i] ?? 1;
+				rts.add(rt);
+				if (projectData.scalFilterRockType !== 'all' && rt !== projectData.scalFilterRockType)
+					continue;
+				const pid = projectData.normalizeScalPlugId(scal.plug_ids?.[i], wn, sname);
+				const prev = sampleMap.get(pid);
+				if (prev) {
+					prev.pts += 1;
+				} else {
+					sampleMap.set(pid, {
+						plugId: pid,
+						well: wn,
+						sample: sname,
+						rt,
+						depth: d,
+						zone: zn,
+						pts: 1
+					});
+				}
+			}
+		}
+
+		const samples = Array.from(sampleMap.values()).sort((a, b) => {
+			if (a.rt !== b.rt) return a.rt - b.rt;
+			if (a.well !== b.well) return a.well.localeCompare(b.well);
+			return a.sample.localeCompare(b.sample, undefined, { numeric: true });
+		});
+		const totalPts = samples.reduce((acc, s) => acc + s.pts, 0);
+		return {
+			samples,
+			rts: Array.from(rts).sort((a, b) => a - b),
+			totalPts
 		};
 	});
 
@@ -4443,6 +4872,132 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if isScalCrossplotActive && scalQcSummary.samples.length > 0}
+		<div
+			class="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2 py-1 text-[10px]"
+		>
+			<div class="flex flex-wrap items-center gap-1.5">
+				<span class="font-semibold text-[var(--text-secondary)]">Sample QC:</span>
+				<div
+					class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+					title="Group and color SCAL data points by Individual Sample (Plug) or by Rock Type (RT)"
+				>
+					{#each [['sample', 'By Sample'], ['rt', 'By RT']] as [gKey, gLbl]}
+						<button
+							type="button"
+							onclick={() => (projectData.scalGroupMode = gKey as 'rt' | 'sample')}
+							class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {projectData.scalGroupMode ===
+							gKey
+								? 'bg-blue-600 font-semibold text-white'
+								: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{gLbl}
+						</button>
+					{/each}
+				</div>
+
+				<button
+					type="button"
+					onclick={() => (projectData.scalConnectPlugs = !projectData.scalConnectPlugs)}
+					title="Connect points belonging to the same core sample plug in ascending capillary pressure order"
+					class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {projectData.scalConnectPlugs
+						? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+				>
+					Plug Lines
+				</button>
+
+				<button
+					type="button"
+					onclick={() => (projectData.scalShowSampleLabels = !projectData.scalShowSampleLabels)}
+					title="Show sample name labels next to points on the crossplot"
+					class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {projectData.scalShowSampleLabels
+						? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+				>
+					Labels
+				</button>
+
+				{#if ((effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'scal-fit') || (effectiveMode === 'shf' && shfView === 'scal_fit')) && (projectData.shfParams.jSatMode ?? 'swn') === 'swn'}
+					<div
+						class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+						title="Choose how Swn is normalized: per-plug Lab Terminal Sw (each sample uses its own lab min Sw) or Poro-Perm Correlation Swirr(φ,k)"
+					>
+						{#each [['lab_min', 'Norm: Plug Swirr'], ['poro_perm', 'Norm: Poro-Perm']] as [nKey, nLbl]}
+							<button
+								type="button"
+								onclick={() => {
+									projectData.shfManualFitOverride = false;
+									projectData.setShfSwirrSource(nKey as 'lab_min' | 'poro_perm');
+								}}
+								class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {(projectData.shfParams.swirrSource ?? 'lab_min') === nKey
+									? 'bg-indigo-600 font-semibold text-white'
+									: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+							>
+								{nLbl}
+							</button>
+						{/each}
+					</div>
+				{/if}
+
+				<select
+					value={String(projectData.scalFilterRockType)}
+					onchange={(e) => {
+						const v = (e.currentTarget as HTMLSelectElement).value;
+						projectData.scalFilterRockType = v === 'all' ? 'all' : Number(v);
+					}}
+					class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] font-medium text-[var(--text-primary)]"
+					title="Filter SCAL points and samples by Rock Type"
+				>
+					<option value="all">All RTs ({scalQcSummary.rts.length})</option>
+					{#each scalQcSummary.rts as rtVal}
+						<option value={String(rtVal)}>RT {rtVal}</option>
+					{/each}
+				</select>
+
+				<select
+					value={projectData.focusedScalPlugId ?? ''}
+					onchange={(e) => {
+						const v = (e.currentTarget as HTMLSelectElement).value;
+						projectData.focusedScalPlugId = v ? v : null;
+					}}
+					class="h-5 max-w-[205px] truncate rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] font-medium text-[var(--text-primary)]"
+					title="Spotlight a specific SCAL core sample on the crossplot and table"
+				>
+					<option value="">All Samples ({scalQcSummary.samples.length})</option>
+					{#each scalQcSummary.samples as s (s.plugId)}
+						<option value={s.plugId}>
+							{s.sample} · {s.well} [RT {s.rt}] ({s.pts} pts{s.zone && s.zone !== 'Unknown' ? `, ${s.zone}` : ''})
+						</option>
+					{/each}
+				</select>
+
+				{#if projectData.focusedScalPlugId}
+					<button
+						type="button"
+						onclick={() => (projectData.focusedScalPlugId = null)}
+						class="h-5 rounded-xs border border-blue-300 bg-blue-100 px-1.5 text-[9.5px] font-semibold text-blue-800 hover:bg-blue-200"
+						title="Clear sample spotlight"
+					>
+						Clear Focus ×
+					</button>
+				{/if}
+			</div>
+
+			<div class="mono-num flex items-center gap-1.5 text-[9.5px] text-[var(--text-muted)]">
+				<span>
+					<strong>{scalQcSummary.samples.length}</strong> samples ·
+					<strong>{scalQcSummary.totalPts}</strong> pts
+				</span>
+				{#if workbench.selectedZones.length > 0}
+					<span class="rounded-xs bg-emerald-50 px-1 py-0.2 font-semibold text-emerald-800 border border-emerald-200">
+						Zones: {workbench.selectedZones.length}
+					</span>
+				{/if}
+			</div>
+		</div>
+	{/if}
 
 	{#if effectiveMode === 'core-qc'}
 		{@const cc = wellData.coreComparison}
