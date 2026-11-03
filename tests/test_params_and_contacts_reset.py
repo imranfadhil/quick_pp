@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -10,8 +11,8 @@ from quick_pp.app.backend.services.workspace import (
     WorkspaceModuleParamsRequest,
     workspace_delete_project_module_params,
     workspace_delete_well_module_params,
-    workspace_save_project_module_params,
     workspace_save_module_params,
+    workspace_save_project_module_params,
 )
 from quick_pp.database.models import Base
 from quick_pp.database.objects import Project, Well

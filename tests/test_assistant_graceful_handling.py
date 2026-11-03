@@ -1,10 +1,9 @@
-import pytest
 from quick_pp.app.backend.services.chat import (
-    AgentChatRequest,
-    _plan_native_tool_calls,
-    _handle_unrecognized_native_prompt,
     PRESET_QUICK_ACTIONS,
     SYSTEM_PROMPT,
+    AgentChatRequest,
+    _handle_unrecognized_native_prompt,
+    _plan_native_tool_calls,
 )
 
 
@@ -29,12 +28,12 @@ def test_unrecognized_native_prompt_highlights_low_confidence_and_quick_actions(
         provider="native_mcp",
     )
     reply, actions = _handle_unrecognized_native_prompt(req)
-    
+
     # Must highlight answer confidence
     assert "Answer Confidence: Low" in reply
     assert "Why the agent is not confident in this answer" in reply
     assert "Balmoral" in reply or "balmoral" in reply
-    
+
     # Must return all 7 preset quick actions
     assert len(actions) == 7
     assert len(actions) == len(PRESET_QUICK_ACTIONS)

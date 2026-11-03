@@ -2,9 +2,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from quick_pp.saturation import extract_fluid_contacts_and_limits
-from quick_pp.database.db_connector import DBConnector
 from quick_pp.database import objects as db_objects
+from quick_pp.database.db_connector import DBConnector
+from quick_pp.saturation import extract_fluid_contacts_and_limits
 
 
 def test_extract_fluid_contacts_oil_water_column():
