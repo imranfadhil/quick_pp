@@ -97,12 +97,12 @@ from quick_pp.rock_type import (
     train_and_validate_rock_type_classifier,
 )
 from quick_pp.saturation import (
-    extract_fluid_contacts_and_limits,
     archie_saturation,
     estimate_b_waxman_smits,
     estimate_qv,
     estimate_qvn,
     estimate_rw_temperature_salinity,
+    extract_fluid_contacts_and_limits,
     fit_swirr_correlation,
     optimize_fwl,
     swirr_rqi,

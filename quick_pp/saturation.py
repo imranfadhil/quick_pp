@@ -6,13 +6,13 @@ correlations (Timur, RQI, semi-log permeability), and capillary pressure / heigh
 above free water level (SHF) calculations.
 """
 
+from typing import Dict, Optional
+
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
-from typing import Any, Dict, List, Optional, Tuple, Union
 
 from quick_pp import logger
 from quick_pp.utils import min_max_line, remove_outliers
@@ -2581,14 +2581,37 @@ def extract_fluid_contacts_and_limits(
     min_sand_samples: int = 5,
     require_pay: bool = True,
 ) -> pd.DataFrame:
-    """Extract comprehensive petrophysical fluid limits and contacts per well and per zone:
-    - Gas limits & contacts: GUT, GDT, GOC, GWC
-    - Oil limits & contacts: OUT, ODT, OWC
-    - Water limits & contacts: WUT, FWL
-    Note: WDT is explicitly excluded as it carries no petrophysical utility.
+    """Extract comprehensive petrophysical fluid limits and contacts per well and per zone.
+
+    Identifies and classifies fluid contacts and transition limits from log saturation profiles,
+    formation pressure tests (MDT/RFT/FPT), and zonal intervals:
+    - Gas limits & contacts: GUT (Gas Up To), GDT (Gas Down To), GOC (Gas-Oil Contact), GWC (Gas-Water Contact)
+    - Oil limits & contacts: OUT (Oil Up To), ODT (Oil Down To), OWC (Oil-Water Contact)
+    - Water limits & contacts: WUT (Water Up To), FWL (Free Water Level)
+    Note: WDT (Water Down To) is explicitly excluded as it carries no petrophysical utility.
+
+    Args:
+        df (pd.DataFrame): Well log DataFrame containing depth, water saturation, porosity, and clay/shale curves.
+        depth_col (str, optional): Depth column name (TVDSS, TVD, or DEPTH). Defaults to "TVD".
+        sw_col (str, optional): Water saturation column name. Defaults to "SWT".
+        phit_col (str, optional): Total porosity column name. Defaults to "PHIT".
+        vsh_col (str, optional): Shale/clay volume column name. Defaults to "VSH".
+        well_col (str, optional): Well identifier column name. Defaults to "WELL_NAME".
+        zone_col (str, optional): Reservoir zonation column name. Defaults to "ZONES".
+        fault_block_col (str, optional): Fault block column name. Defaults to "FAULT_BLOCK".
+        pressure_df (pd.DataFrame, optional): Formation pressure test DataFrame with columns ['DEPTH', 'PRESSURE', 'FLUID_TYPE'].
+        fwl_dict (dict[str, float], optional): Optional dictionary mapping zone/well names to Free Water Level depths.
+        sw_pay_cutoff (float, optional): Maximum water saturation threshold for hydrocarbon pay. Defaults to 0.65.
+        sw_water_cutoff (float, optional): Minimum water saturation threshold for 100% water zone. Defaults to 0.90.
+        phit_cutoff (float, optional): Minimum porosity threshold for reservoir rock. Defaults to 0.05.
+        vsh_cutoff (float, optional): Maximum shale volume threshold for reservoir rock. Defaults to 0.50.
+        min_sand_thickness (float, optional): Minimum vertical net sand thickness required to declare a contact. Defaults to 1.0.
+        min_sand_samples (int, optional): Minimum consecutive reservoir samples. Defaults to 5.
+        require_pay (bool, optional): Whether to require active pay intervals when establishing contacts. Defaults to True.
 
     Returns:
-        pd.DataFrame: Columns ['well_name', 'zone', 'fault_block', 'contact_type', 'depth', 'source', 'remarks']
+        pd.DataFrame: Table of detected fluid contacts and limits with columns:
+            ['well_name', 'zone', 'fault_block', 'contact_type', 'depth', 'source', 'remarks'].
     """
     contact_cols = [
         "well_name",

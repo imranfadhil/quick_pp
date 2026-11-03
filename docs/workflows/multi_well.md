@@ -281,6 +281,13 @@ flowchart TD
       
       $$\min_{z_{\text{FWL}}, \mathbf{\theta}_{\text{SHF}}} \sum_{w=1}^{N_w} \sum_{i=1}^{M_w} \left( S_{w,\text{SHF}}(z_{w,i}; z_{\text{FWL}}, \mathbf{\theta}) - S_{w,\text{log},i} \right)^2$$
 
+    * **Fluid Contact & Transition Limits Delineation (`extract_fluid_contacts_and_limits`):**
+      Automatically establishes petrophysical fluid boundaries across all wells and zones:
+      * **Gas Limits & Contacts:** GUT (Gas Up To), GDT (Gas Down To), GOC (Gas-Oil Contact), GWC (Gas-Water Contact)
+      * **Oil Limits & Contacts:** OUT (Oil Up To), ODT (Oil Down To), OWC (Oil-Water Contact)
+      * **Water Limits & Contacts:** WUT (Water Up To), FWL (Free Water Level) — *Note: WDT (Water Down To) is explicitly excluded as it carries no petrophysical utility.*
+      * **Net Sand & Pay Conditioning:** Declared contacts require contiguous reservoir sand samples ($V_{\text{sh}} \le V_{\text{sh,cutoff}}$, $\phi_e \ge \phi_{\text{cutoff}}$, $h_{\text{sand}} \ge 1.0\,\text{m}$) and saturation discrimination ($S_w \le S_{w,\text{pay}}$ for hydrocarbon, $S_w \ge S_{w,\text{water}}$ for water).
+
 * **Input Data:** `TVDSS`, `PERM_FIELD`, `PHIE`, $z_{\text{FWL}}$, In-situ fluid densities ($\rho_w, \rho_{\text{hc}}$).
 * **Output Data:** `SW_SHF`, Reconciliation crossplots, Residual error statistics ($\text{RMSE}, R^2$).
 

@@ -15,8 +15,8 @@ authors:
     email: "imranfadhil@gmail.com"
 repository-code: "https://github.com/imranfadhil/quick_pp"
 url: "https://quick-pp.readthedocs.io"
-version: 0.3.3
-date-released: "2026-10-31"
+version: 0.3.4
+date-released: "2026-11-03"
 license: MIT
 keywords:
   - petrophysics
@@ -44,4 +44,4 @@ preferred-citation:
       orcid: "https://orcid.org/0000-0001-9392-8083"
   year: 2026
   url: "https://github.com/imranfadhil/quick_pp"
-  version: 0.3.3
+  version: 0.3.4

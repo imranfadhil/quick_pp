@@ -63,7 +63,7 @@ export interface AuditLogItem {
 class AuthState {
 	user = $state<AuthUser | null>(null);
 	token = $state<string | null>(null);
-	appVersion = $state<string>('0.3.3');
+	appVersion = $state<string>('0.3.4');
 	isInitializing = $state<boolean>(true);
 	uamModalOpen = $state<boolean>(false);
 	accountModalOpen = $state<boolean>(false);
