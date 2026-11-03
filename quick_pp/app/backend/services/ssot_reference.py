@@ -232,8 +232,24 @@ class SSOTReferenceRegistry:
     ) -> List[Dict[str, Any]]:
         """Search SSOT documentation for keywords or formulas."""
         self._ensure_loaded()
-        q_tokens = query.lower().split()
-        if not q_tokens:
+        stopwords = {
+            "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
+            "any", "are", "as", "at", "be", "because", "been", "before", "being", "below",
+            "between", "both", "but", "by", "can", "could", "did", "do", "does", "doing",
+            "down", "during", "each", "few", "for", "from", "further", "had", "has", "have",
+            "having", "he", "her", "here", "hers", "herself", "him", "himself", "his", "how",
+            "i", "if", "in", "into", "is", "it", "its", "itself", "just", "me", "more", "most",
+            "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once", "only",
+            "or", "other", "our", "ours", "ourselves", "out", "over", "own", "same", "she",
+            "should", "so", "some", "such", "than", "that", "the", "their", "theirs", "them",
+            "themselves", "then", "there", "these", "they", "this", "those", "through", "to",
+            "too", "under", "until", "up", "very", "was", "we", "were", "what", "when",
+            "where", "which", "while", "who", "whom", "why", "with", "would", "you", "your",
+            "yours", "yourself", "yourselves", "tell", "please", "average", "value"
+        }
+        raw_tokens = re.findall(r"\b[a-z0-9_-]{2,}\b", query.lower())
+        meaningful_tokens = [t for t in raw_tokens if t not in stopwords]
+        if not meaningful_tokens:
             return []
 
         results: List[Dict[str, Any]] = []
@@ -245,12 +261,14 @@ class SSOTReferenceRegistry:
 
             for anchor_id, content in anchors.items():
                 content_lower = content.lower()
-                # Score based on token frequency
-                score = sum(content_lower.count(token) for token in q_tokens)
-                if score > 0:
-                    # Extract header
-                    first_line = content.splitlines()[0] if content else anchor_id
-                    clean_header = re.sub(r"\{#[\w\-]+\}", "", first_line).lstrip("#").strip()
+                first_line = content.splitlines()[0] if content else anchor_id
+                clean_header = re.sub(r"\{#[\w\-]+\}", "", first_line).lstrip("#").strip()
+                header_lower = clean_header.lower()
+
+                title_matches = sum(1 for token in meaningful_tokens if token in header_lower or token in anchor_id.lower())
+                body_matches = sum(content_lower.count(token) for token in meaningful_tokens)
+                if title_matches > 0 or body_matches > 0:
+                    score = title_matches * 5 + body_matches
                     results.append(
                         {
                             "scope": sc,
