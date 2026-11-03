@@ -1164,17 +1164,26 @@ def estimate_mdt_fwl(
 
 
 def _normalize_shm_params_map(shm_params, model: str = "leverett_j") -> dict:
-    """Normalize `shm_params` into a lookup dict `{rock_flag_key: param_dict}` and `'default'` fallback."""
+    """Normalize `shm_params` into a lookup dict `{rock_flag_key: param_dict}`, `'default'` fallback, and `'poor_rock'`."""
     model_clean = model.strip().lower()
     is_skelt = model_clean in ("skelt_harrison", "skelt")
+    is_cuddy = model_clean == "cuddy"
+
+    # Very poor rock parameters (tight / non-reservoir rock where Sw -> 1.0, BVO -> 0)
+    if is_skelt:
+        poor_p = {"a": 0.0, "b": 100.0, "c": 1.5, "d": 2.0, "swirr": 0.95}
+    elif is_cuddy:
+        poor_p = {"a": 0.50, "b": 0.05, "swirr": 0.95}
+    else:
+        poor_p = {"a": 2.50, "b": 0.80, "swirr": 0.90}
 
     if shm_params is None:
         default_p = (
             {"a": 0.85, "b": 35.0, "c": 1.5, "d": 2.0, "swirr": 0.0}
             if is_skelt
-            else {"a": 0.15, "b": 1.5, "swirr": 0.0}
+            else ({"a": 0.12, "b": 0.40, "swirr": 0.0} if is_cuddy else {"a": 0.15, "b": 1.5, "swirr": 0.0})
         )
-        return {"default": default_p, "by_rock": {}}
+        return {"default": default_p, "poor_rock": poor_p, "by_rock": {}}
 
     # Case 1: List of dicts (e.g., output of core_analysis.auto_j_params)
     if isinstance(shm_params, list):
@@ -1188,14 +1197,14 @@ def _normalize_shm_params_map(shm_params, model: str = "leverett_j") -> dict:
                     by_rock[float(rf_val)] = item
                 except Exception:
                     pass
-        default_item = shm_params[0] if shm_params else {"a": 0.15, "b": 1.5}
-        return {"default": default_item, "by_rock": by_rock}
+        default_item = shm_params[len(shm_params) // 2] if shm_params else {"a": 0.15, "b": 1.5}
+        return {"default": default_item, "poor_rock": poor_p, "by_rock": by_rock}
 
     # Case 2: Dict
     if isinstance(shm_params, dict):
         # Single global parameter dict: e.g. {"a": 0.15, "b": 1.5}
         if "a" in shm_params and "b" in shm_params:
-            return {"default": shm_params, "by_rock": {}}
+            return {"default": shm_params, "poor_rock": poor_p, "by_rock": {}}
 
         # Mapping of rock_flag -> dict or tuple
         by_rock = {}
@@ -1230,8 +1239,16 @@ def _normalize_shm_params_map(shm_params, model: str = "leverett_j") -> dict:
             except Exception:
                 pass
 
+        numeric_keys = sorted(
+            [k for k in by_rock.keys() if str(k).replace(".", "", 1).isdigit()],
+            key=lambda x: float(x),
+        )
+        if numeric_keys:
+            default_item = by_rock[numeric_keys[len(numeric_keys) // 2]]
+
         return {
             "default": default_item or {"a": 0.15, "b": 1.5},
+            "poor_rock": poor_p,
             "by_rock": by_rock,
         }
 
@@ -1245,10 +1262,12 @@ def _normalize_shm_params_map(shm_params, model: str = "leverett_j") -> dict:
                     "c": float(shm_params[2]),
                     "d": float(shm_params[3]),
                 },
+                "poor_rock": poor_p,
                 "by_rock": {},
             }
         return {
             "default": {"a": float(shm_params[0]), "b": float(shm_params[1])},
+            "poor_rock": poor_p,
             "by_rock": {},
         }
 
@@ -1265,6 +1284,7 @@ def _extract_rock_param_arrays(
     """Map per-sample rock flags to parameter arrays (`a`, `b`, `c`, `d`, `swirr`, `is_non_res`)."""
     norm_map = _normalize_shm_params_map(shm_params, model=model)
     default_p = norm_map["default"]
+    poor_p = norm_map.get("poor_rock", default_p)
     by_rock = norm_map["by_rock"]
 
     a_arr = np.full(n, float(default_p.get("a", 0.15)), dtype=float)
@@ -1284,8 +1304,13 @@ def _extract_rock_param_arrays(
     if rock_flag_arr is not None and len(by_rock) > 0:
         for i in range(n):
             rf = rock_flag_arr[i]
-            if pd.isna(rf) or rf in non_res_set:
+            if not pd.isna(rf) and rf in non_res_set:
                 is_non_res[i] = True
+                a_arr[i] = float(poor_p.get("a", a_arr[i]))
+                b_arr[i] = float(poor_p.get("b", b_arr[i]))
+                c_arr[i] = float(poor_p.get("c", c_arr[i]))
+                d_arr[i] = float(poor_p.get("d", d_arr[i]))
+                swirr_arr[i] = float(poor_p.get("swirr", 0.95))
                 continue
             p = by_rock.get(rf)
             if p is None:
@@ -1296,7 +1321,7 @@ def _extract_rock_param_arrays(
                 except Exception:
                     p = None
             if p is None:
-                is_non_res[i] = True
+                # No specific SCAL fit for this rock type; keep representative reservoir default parameters
                 continue
             a_arr[i] = float(p.get("a", a_arr[i]))
             b_arr[i] = float(p.get("b", b_arr[i]))
@@ -1306,8 +1331,13 @@ def _extract_rock_param_arrays(
                 swirr_arr[i] = float(p["swirr"])
     elif rock_flag_arr is not None and len(non_res_set) > 0:
         for i in range(n):
-            if pd.isna(rock_flag_arr[i]) or rock_flag_arr[i] in non_res_set:
+            if not pd.isna(rock_flag_arr[i]) and rock_flag_arr[i] in non_res_set:
                 is_non_res[i] = True
+                a_arr[i] = float(poor_p.get("a", a_arr[i]))
+                b_arr[i] = float(poor_p.get("b", b_arr[i]))
+                c_arr[i] = float(poor_p.get("c", c_arr[i]))
+                d_arr[i] = float(poor_p.get("d", d_arr[i]))
+                swirr_arr[i] = float(poor_p.get("swirr", 0.95))
 
     return a_arr, b_arr, c_arr, d_arr, swirr_arr, is_non_res
 
@@ -1513,7 +1543,8 @@ def predict_sw_shm(
                 a_arr / ((pc ** b_abs) * np.maximum(phit_arr, 1e-6)),
                 1.0,
             )
-        sw_pred = swirr_use + (1.0 - swirr_use) * sw_pred
+        if np.any(swirr_use > 0):
+            sw_pred = np.maximum(sw_pred, swirr_use)
     else:
         raise ValueError(
             f"Unsupported SHM model '{model}'. Choose from 'leverett_j', 'skelt_harrison', or 'cuddy'."
@@ -1997,7 +2028,7 @@ def optimize_fwl(
             clip=True,
         )
         sw_obs = sw_log_arr[subset_mask]
-        if loss_clean == "bvw":
+        if loss_clean in ("bvw", "bvo"):
             phi_sub = phit_arr[subset_mask]
             resid = phi_sub * (sw_obs - sw_pred)
             base_err = float(np.sqrt(np.sum(subset_weights * (resid**2))))
@@ -2229,11 +2260,11 @@ def optimize_fwl(
             w_r = float(grid_fwls[min(n_grid - 1, w_best_i + 2)])
             if w_r > w_l:
                 w_opt = minimize_scalar(
-                    lambda f: _compute_loss(
+                    lambda f, _mask=w_mask, _weights=w_weights: _compute_loss(
                         float(f),
                         cand_params=active_shm_params,
-                        subset_mask=w_mask,
-                        subset_weights=w_weights,
+                        subset_mask=_mask,
+                        subset_weights=_weights,
                     ),
                     bounds=(w_l, w_r),
                     method="bounded",
@@ -2337,11 +2368,11 @@ def optimize_fwl(
             z_r = float(z_grid[min(len(z_grid) - 1, z_best_i + 2)])
             if z_r > z_l:
                 z_opt = minimize_scalar(
-                    lambda f: _compute_loss(
+                    lambda f, _mask=z_mask, _weights=z_w: _compute_loss(
                         float(f),
                         cand_params=active_shm_params,
-                        subset_mask=z_mask,
-                        subset_weights=z_w,
+                        subset_mask=_mask,
+                        subset_weights=_weights,
                     ),
                     bounds=(z_l, z_r),
                     method="bounded",

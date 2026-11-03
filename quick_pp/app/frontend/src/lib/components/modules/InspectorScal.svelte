@@ -830,7 +830,7 @@
 	>
 		<button
 			type="button"
-			disabled={wellData.isCalculating}
+			disabled={wellData.isCalculating || wellData.isSaving}
 			onclick={async () => {
 				await runCoreCorrections();
 				await runPcScaling();
@@ -841,7 +841,7 @@
 		</button>
 		<button
 			type="button"
-			disabled={wellData.isCalculating || !canSaveScal}
+			disabled={wellData.isCalculating || wellData.isSaving || !canSaveScal}
 			onclick={saveScalToWell}
 			title={wellData.getPendingSaveTooltip(
 				'scal',
@@ -849,7 +849,7 @@
 			)}
 			class="h-7 shrink-0 rounded-sm border border-emerald-600 bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:border-[var(--border-hairline)] disabled:bg-[var(--bg-surface)] disabled:text-[var(--text-muted)] disabled:opacity-45"
 		>
-			Save Core &amp; Pc
+			{wellData.isSaving ? 'Saving...' : 'Save Core &amp; Pc'}
 		</button>
 	</div>
 </div>

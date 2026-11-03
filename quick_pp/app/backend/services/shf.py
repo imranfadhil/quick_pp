@@ -17,7 +17,6 @@ from quick_pp.core_analysis import (
 )
 from quick_pp.rock_type import calc_fzi, rock_typing
 
-
 router = APIRouter(
     prefix="/database/projects/{project_id}", tags=["Saturation Height Function"]
 )

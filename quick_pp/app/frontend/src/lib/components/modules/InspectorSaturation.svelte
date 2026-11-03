@@ -390,7 +390,7 @@
 	>
 		<button
 			type="button"
-			disabled={wellData.isCalculating}
+			disabled={wellData.isCalculating || wellData.isSaving}
 			onclick={() => executeSaturation(false)}
 			class="h-7 flex-1 mr-1.5 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 		>
@@ -398,7 +398,7 @@
 		</button>
 		<button
 			type="button"
-			disabled={wellData.isCalculating || !wellData.hasPendingComputed('saturation')}
+			disabled={wellData.isCalculating || wellData.isSaving || !wellData.hasPendingComputed('saturation')}
 			onclick={saveSaturation}
 			title={wellData.hasPendingComputed('saturation')
 				? wellData.getPendingSaveTooltip(
@@ -408,7 +408,7 @@
 				: 'Run the calculation first to enable saving'}
 			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>
-			Save
+			{wellData.isSaving ? 'Saving...' : 'Save'}
 		</button>
 	</div>
 </div>

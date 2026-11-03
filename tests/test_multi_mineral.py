@@ -130,3 +130,123 @@ def test_optim_solve_fast_unity_constraint_weighting():
     np.testing.assert_allclose(np.sum(v_fast, axis=0), np.ones(25), atol=1e-6)
 
 
+
+
+def test_complex_lithology_minerals_and_spectral_gr():
+    """Verify newly added minerals (KFELD, GLAUCONITE, ILLITE) are resolved using
+    dynamic log ingestion with Spectral Gamma Ray (POTA, THOR, URAN).
+    """
+    minerals = ["QUARTZ", "KFELD", "GLAUCONITE", "ILLITE"]
+    fluids = ["WATER"]
+    fluid_props = {"WATER": {"density": 1.0, "nphi": 1.0, "pef": 0.36, "dtc": 190.0, "u": 0.36}}
+    mm = MultiMineral(minerals=minerals, fluid_properties=fluid_props)
+    mm.fluids = fluids
+    mm.bounds = mm.mineral_bounds + tuple({"WATER": (0.0, 1.0)}[f] for f in fluids)
+
+    log_names = ["GR", "NPHI", "RHOB", "PEF", "DTC", "POTA", "THOR"]
+    C = mm._build_response_matrix(log_names)
+
+    # 3 geological scenarios:
+    # 1. Clean sandstone (90% Quartz, 10% Water)
+    # 2. Arkosic sand with high K-Feldspar (60% Quartz, 30% K-Feldspar, 10% Water)
+    # 3. Greensand with Glauconite (50% Quartz, 40% Glauconite, 10% Water)
+    v_true = np.array([
+        [0.90, 0.00, 0.00, 0.00, 0.10],
+        [0.60, 0.30, 0.00, 0.00, 0.10],
+        [0.50, 0.00, 0.40, 0.00, 0.10],
+    ])
+
+    logs_synth = v_true @ C.T
+    gr = logs_synth[:, 0]
+    nphi = logs_synth[:, 1]
+    rhob = logs_synth[:, 2]
+    pef = logs_synth[:, 3]
+    dtc = logs_synth[:, 4]
+    pota = logs_synth[:, 5]
+    thor = logs_synth[:, 6]
+
+    res_df = mm.estimate_lithology(
+        gr=gr,
+        nphi=nphi,
+        rhob=rhob,
+        pef=pef,
+        dtc=dtc,
+        pota=pota,
+        thor=thor,
+    )
+
+    # Ensure expected mapped column names exist
+    assert "VSAND" in res_df.columns
+    assert "VKFELD" in res_df.columns
+    assert "VGLAUC" in res_df.columns
+    assert "VILLI" in res_df.columns
+    assert "VWATER" in res_df.columns
+    assert "POTA_RECONSTRUCTED" in res_df.columns
+    assert "THOR_RECONSTRUCTED" in res_df.columns
+
+    # Check that K-Feldspar scenario correctly isolates VKFELD > 0.25 without confusing with ILLITE
+    assert res_df["VKFELD"].iloc[1] > 0.25
+    assert res_df["VILLI"].iloc[1] < 0.05
+
+    # Check that Glauconite scenario correctly isolates VGLAUC > 0.35
+    assert res_df["VGLAUC"].iloc[2] > 0.35
+    assert res_df["VILLI"].iloc[2] < 0.05
+
+
+def test_custom_bounds_and_pef_linearization():
+    """Verify custom bounds clamp accessory minerals and linearize_pef computes exact U."""
+    # Constrain GLAUCONITE to maximum 20%
+    custom_bounds = {"GLAUCONITE": (0.0, 0.20)}
+    mm = MultiMineral(
+        minerals=["QUARTZ", "GLAUCONITE", "SHALE"],
+        mineral_bounds=custom_bounds,
+        linearize_pef=True,
+    )
+
+    # Synthetic logs forcing high glauconite
+    gr = np.array([180.0, 180.0])
+    nphi = np.array([0.25, 0.25])
+    rhob = np.array([2.80, 2.80])
+    pef = np.array([5.50, 5.50])
+    dtc = np.array([90.0, 90.0])
+
+    res_df = mm.estimate_lithology(gr=gr, nphi=nphi, rhob=rhob, pef=pef, dtc=dtc, linearize_pef=True)
+
+    # Verify GLAUCONITE volume does not exceed the custom upper bound of 0.20
+    assert np.all(res_df["VGLAUC"] <= 0.20 + 1e-4)
+    assert np.all(res_df["OPTIMIZER_SUCCESS"])
+    assert "PEF_RECONSTRUCTED" in res_df.columns
+
+
+def test_borehole_washout_weighting():
+    """Verify bad-hole weighting de-weights corrupted RHOB and PEF in washed-out intervals."""
+    mm = MultiMineral(minerals=["QUARTZ", "CALCITE", "SHALE"])
+
+    # 2 depth points:
+    # Point 0: Good hole
+    # Point 1: Severe washout (cali = 12.5 in, bit size = 8.5 in; density falsely drops to 1.80)
+    gr = np.array([5.0, 5.0])
+    nphi = np.array([0.02, 0.02])
+    rhob = np.array([2.60, 1.80])   # point 1 has severe washout density artifact
+    pef = np.array([1.9, 0.5])      # point 1 has severe PEF artifact
+    dtc = np.array([55.0, 55.0])    # DTC is unaffected by shallow washout
+
+    cali = np.array([8.5, 12.5])
+    bs = 8.5
+
+    # With bad hole weighting active, point 1 down-weights RHOB/PEF, relying on GR/DTC/NPHI
+    res_df = mm.estimate_lithology(
+        gr=gr,
+        nphi=nphi,
+        rhob=rhob,
+        pef=pef,
+        dtc=dtc,
+        cali=cali,
+        bs=bs,
+        bad_hole_weight=0.01,
+    )
+
+    # With bad hole weighting, point 1 avoids the false porosity blowout caused by rhob=1.80
+    assert res_df["PHIT_CONSTRUCTED"].iloc[1] < 0.05
+    assert res_df["RHOB_RECONSTRUCTED"].iloc[1] > 2.60
+    assert res_df["OPTIMIZER_SUCCESS"].iloc[1]

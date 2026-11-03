@@ -31,6 +31,9 @@
 	import MultiWellMlTrainer from '$lib/components/modules/MultiWellMlTrainer.svelte';
 	import MultiWellFpt from '$lib/components/modules/MultiWellFpt.svelte';
 	import FptPlotCanvas from '$lib/components/workbench/FptPlotCanvas.svelte';
+	import MultiWellVolumetrics from '$lib/components/modules/MultiWellVolumetrics.svelte';
+	import VolumetricsCanvas from '$lib/components/workbench/VolumetricsCanvas.svelte';
+	import VolumetricsRightPanel from '$lib/components/workbench/VolumetricsRightPanel.svelte';
 	import { fpt } from '$lib/state/fpt.svelte';
 
 	import {
@@ -82,6 +85,7 @@
 			(workbench.scope === 'multi-well' && workbench.multiWellStep === 'report')
 	);
 	let isFptMode = $derived(workbench.scope === 'multi-well' && workbench.multiWellStep === 'fpt');
+	let isVolumetricsMode = $derived(workbench.scope === 'multi-well' && workbench.multiWellStep === 'volumetrics');
 
 	/** FPT grid: clicking a row selects the point on the Pressure vs TVDSS plots. */
 	function handleRightGridRowClick(row: Record<string, any>) {
@@ -541,6 +545,53 @@
 			}
 
 			if (
+				workbench.scope === 'multi-well' &&
+				workbench.multiWellStep === 'volumetrics' &&
+				projectData.volumetricResult?.zonal_summary?.length
+			) {
+				const vr = projectData.volumetricResult;
+				const isOil = workbench.multiWellVolumetrics.fluidMetric === 'oil';
+				return {
+					title: `Zonal Volumetric Breakdown (${isOil ? 'STOIIP MMbbl' : 'GIIP Bcf'})`,
+					columns: [
+						{ key: 'zone', label: 'Formation' },
+						{ key: 'well_count', label: 'Wells', numeric: true, decimals: 0 },
+						{ key: 'mean_net_pay', label: 'Net Pay', unit: 'm', numeric: true, decimals: 1 },
+						{ key: 'ntg_pay', label: 'NTG', unit: 'v/v', numeric: true, decimals: 2 },
+						{ key: 'mean_phie', label: 'Φe', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'mean_sw', label: 'Sw', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'mean_hcpt', label: 'HCPT', unit: 'm', numeric: true, decimals: 2 },
+						...(isOil
+							? [
+									{ key: 'p90_vol', label: '1P (P90)', unit: 'MMbbl', numeric: true, decimals: 2 },
+									{ key: 'p50_vol', label: '2P (P50)', unit: 'MMbbl', numeric: true, decimals: 2 },
+									{ key: 'p10_vol', label: '3P (P10)', unit: 'MMbbl', numeric: true, decimals: 2 },
+									{ key: 'rec_vol', label: 'Rec Oil', unit: 'MMbbl', numeric: true, decimals: 2 }
+								]
+							: [
+									{ key: 'p90_vol', label: '1P (P90)', unit: 'Bcf', numeric: true, decimals: 2 },
+									{ key: 'p50_vol', label: '2P (P50)', unit: 'Bcf', numeric: true, decimals: 2 },
+									{ key: 'p10_vol', label: '3P (P10)', unit: 'Bcf', numeric: true, decimals: 2 },
+									{ key: 'rec_vol', label: 'Rec Gas', unit: 'Bcf', numeric: true, decimals: 2 }
+								])
+					],
+					rows: vr.zonal_summary.map((z) => ({
+						zone: z.zone,
+						well_count: z.well_count,
+						mean_net_pay: z.mean_net_pay,
+						ntg_pay: z.ntg_pay,
+						mean_phie: z.mean_phie,
+						mean_sw: z.mean_sw,
+						mean_hcpt: z.mean_hcpt,
+						p90_vol: isOil ? z.stoiip?.p90 : z.giip?.p90,
+						p50_vol: isOil ? z.stoiip?.p50 : z.giip?.p50,
+						p10_vol: isOil ? z.stoiip?.p10 : z.giip?.p10,
+						rec_vol: isOil ? z.rec_oil?.p50 : z.rec_gas?.p50
+					}))
+				};
+			}
+
+			if (
 				workbench.crossplotTemplateOverride === 'vsh-qc' &&
 				wellData.vshComparison.rows.length > 0
 			) {
@@ -777,6 +828,8 @@
 						<MultiWellMlTrainer />
 					{:else if workbench.multiWellStep === 'fpt'}
 						<MultiWellFpt />
+					{:else if workbench.multiWellStep === 'volumetrics'}
+						<MultiWellVolumetrics />
 					{:else if workbench.multiWellStep === 'report'}
 						<InspectorReport />
 					{:else}
@@ -800,6 +853,8 @@
 			<Pane defaultSize={45} minSize={28} class="h-full overflow-hidden">
 				{#if isFptMode}
 					<FptPlotCanvas initialMode="pressure" />
+				{:else if isVolumetricsMode}
+					<VolumetricsCanvas />
 				{:else if workbench.scope === 'multi-well' && workbench.centerPaneMultiWellView === 'stick-plot'}
 					<StickPlotCanvas />
 				{:else}
@@ -813,7 +868,9 @@
 
 			<!-- RIGHT PANE (30% default width): Crossplot & Zonal Data Grid -->
 			<Pane defaultSize={30} minSize={20} class="h-full overflow-hidden">
-				{#if workbench.rightPaneTab === 'crossplot'}
+				{#if isVolumetricsMode}
+					<VolumetricsRightPanel />
+				{:else if workbench.rightPaneTab === 'crossplot'}
 					{#if isFptMode}
 						<FptPlotCanvas initialMode="excess" />
 					{:else}

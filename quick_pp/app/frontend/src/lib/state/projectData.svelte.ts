@@ -2,7 +2,7 @@ import { API_BASE, api, authHeaders, deleteJson, getJson, patchJson, postJson } 
 import type { ProjectSummaryResponse, WellSummaryItem } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { wellData } from './wellData.svelte';
-import { workbench } from './workbench.svelte';
+import { workbench, type MultiWellVolumetricResult } from './workbench.svelte';
 import { assignKnown, clone } from './moduleParams.svelte';
 import {
 	isProjectParamModuleKey,
@@ -52,7 +52,7 @@ export interface MultiWellQaqcParams {
 }
 
 export interface ShfOptimizerParams {
-	optLoss: 'rmse' | 'mae' | 'huber' | 'bvw';
+	optLoss: 'rmse' | 'mae' | 'huber' | 'bvw' | 'bvo';
 	solvePerZone: boolean;
 	useMdtPrior: boolean;
 	mdtFwl: number;
@@ -93,7 +93,11 @@ const ROCK_TYPING_PARAM_KEYS = [
 	'dtFluid',
 	'drtPropagationMode',
 	'drtPropagateFocusedOnly',
-	'drtSelectedSavedModelKey'
+	'drtSelectedSavedModelKey',
+	'drtIncludeNonReservoir',
+	'drtNonResPhitCutoff',
+	'drtNonResVshCutoff',
+	'drtNonResPermCutoff'
 ] as const;
 
 const RT_CLASSIFIER_PARAM_KEYS = [
@@ -104,7 +108,11 @@ const RT_CLASSIFIER_PARAM_KEYS = [
 	'drtClassifierTestSize',
 	'drtPropagationMode',
 	'drtPropagateFocusedOnly',
-	'drtSelectedSavedModelKey'
+	'drtSelectedSavedModelKey',
+	'drtIncludeNonReservoir',
+	'drtNonResPhitCutoff',
+	'drtNonResVshCutoff',
+	'drtNonResPermCutoff'
 ] as const;
 
 export interface ProjectListItem {
@@ -222,6 +230,7 @@ class ProjectDataState {
 	summary = $state<ProjectSummaryResponse | null>(null);
 	isLoading = $state<boolean>(false);
 	isComputingMultiWell = $state<boolean>(false);
+	isSavingMultiWell = $state<boolean>(false);
 	error = $state<string | null>(null);
 
 	// Track which multi-well modules have unsaved computed results / parameter edits
@@ -254,6 +263,10 @@ class ProjectDataState {
 	drtPropagateFocusedOnly = $state<boolean>(true);
 	drtClassifierPropagated = $state<boolean>(false);
 	drtSelectedSavedModelKey = $state<string>('');
+	drtIncludeNonReservoir = $state<boolean>(true);
+	drtNonResPhitCutoff = $state<number>(0.05);
+	drtNonResVshCutoff = $state<number>(0.50);
+	drtNonResPermCutoff = $state<number>(0.01);
 	rtSavedModelsStatus = $state.raw<{
 		has_saved_models: boolean;
 		count: number;
@@ -510,7 +523,7 @@ class ProjectDataState {
 	});
 
 	shfOptParams = $state<ShfOptimizerParams>({
-		optLoss: 'rmse',
+		optLoss: 'bvw',
 		solvePerZone: false,
 		useMdtPrior: false,
 		mdtFwl: 3925.0,
@@ -538,6 +551,8 @@ class ProjectDataState {
 	projectModuleParams = $state.raw<ProjectModuleParamsMap>({});
 	/** Parameter + zone snapshots captured when each multi-well module was last computed. */
 	pendingProjectParamSnapshots: Partial<Record<ProjectParamModuleKey, ProjectParamsSnapshot>> = {};
+
+	volumetricResult = $state.raw<MultiWellVolumetricResult | null>(null);
 
 	shfResult = $state.raw<{
 		model?: 'leverett_j' | 'skelt_harrison' | 'cuddy';
@@ -1062,38 +1077,27 @@ class ProjectDataState {
 		'shf'
 	];
 
-	hasPendingMultiWell(upToModule: MultiWellSaveModule): boolean {
-		const idx = ProjectDataState.MULTI_WELL_PIPELINE.indexOf(upToModule);
-		const targets =
-			idx >= 0 ? ProjectDataState.MULTI_WELL_PIPELINE.slice(0, idx + 1) : [upToModule];
-		return targets.some((m) => Boolean(this.pendingMultiWellModules[m]));
+	hasPendingMultiWell(moduleKey: MultiWellSaveModule): boolean {
+		return Boolean(this.pendingMultiWellModules[moduleKey]);
 	}
 
-	async saveMultiWellComputed(upToModule: MultiWellSaveModule): Promise<boolean> {
+	hasAnyPendingMultiWell(): boolean {
+		return ProjectDataState.MULTI_WELL_PIPELINE.some((m) => Boolean(this.pendingMultiWellModules[m]));
+	}
+
+	async saveMultiWellComputed(moduleKey: MultiWellSaveModule): Promise<boolean> {
 		const pid = workbench.projectId;
-		if (!pid || !this.hasPendingMultiWell(upToModule)) return false;
+		if (!pid || !this.hasPendingMultiWell(moduleKey)) return false;
 
-		const idx = ProjectDataState.MULTI_WELL_PIPELINE.indexOf(upToModule);
-		const candidates =
-			idx >= 0 ? ProjectDataState.MULTI_WELL_PIPELINE.slice(0, idx + 1) : [upToModule];
-		const modulesToSave = candidates.filter((m) => Boolean(this.pendingMultiWellModules[m]));
-		if (modulesToSave.length === 0) return false;
+		const res = await this.saveSingleMultiWellModule(pid, moduleKey);
+		if (!res) return false;
 
-		const savedLabels: string[] = [];
-		let maxSavedWells = 0;
-		for (const moduleKey of modulesToSave) {
-			const res = await this.saveSingleMultiWellModule(pid, moduleKey);
-			if (!res) return false;
-			savedLabels.push(res.curveLabel);
-			maxSavedWells = Math.max(maxSavedWells, res.savedWells);
-		}
-		// Persist each saved module's parameters keyed by the zone selection active at compute time
-		await this.persistProjectParams(modulesToSave);
-		const msg = `Saved ${savedLabels.join(' + ')} (${maxSavedWells} wells) ✓`;
+		// Persist the saved module's parameters keyed by the zone selection active at compute time
+		await this.persistProjectParams([moduleKey]);
+		const msg = `Saved ${res.curveLabel} (${res.savedWells} wells) ✓`;
 		wellData.lastSavedMessage = msg;
 		appStatus.success(msg);
 		void this.refreshSummary(pid);
-		void this.loadStickPlot(true);
 		return true;
 	}
 
@@ -2322,7 +2326,7 @@ class ProjectDataState {
 
 		if (wellNames.length === 0 || depths.length === 0) return null;
 
-		this.isComputingMultiWell = true;
+		this.isSavingMultiWell = true;
 		this.error = null;
 		try {
 			const res = await postJson<{ saved_wells: number }>(
@@ -2343,7 +2347,7 @@ class ProjectDataState {
 			this.error = e?.message || `Failed to save ${curveLabel} across wells`;
 			return null;
 		} finally {
-			this.isComputingMultiWell = false;
+			this.isSavingMultiWell = false;
 		}
 	}
 
@@ -2404,6 +2408,7 @@ class ProjectDataState {
 		this.swirrResult = null;
 		this.swirrApplyResult = null;
 		this.shfResult = null;
+		this.volumetricResult = null;
 		this.stickPlotResult = null;
 		wellData.curves = {};
 		wellData.tops = [];
@@ -2442,6 +2447,7 @@ class ProjectDataState {
 			this.rockTypingResult = null;
 			this.permTransformResult = null;
 			this.shfResult = null;
+		this.volumetricResult = null;
 			this.stickPlotResult = null;
 		}
 		this.isLoading = true;

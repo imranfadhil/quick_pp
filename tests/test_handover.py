@@ -1,6 +1,5 @@
 import io
 import json
-import os
 import zipfile
 
 import lasio
@@ -345,3 +344,148 @@ def test_fastapi_handover_and_las_export_endpoints(db_session, monkeypatch):
     las_text = res_las.body.decode("utf-8")
     assert "~Params" in las_text
     assert "PHIT" in las_text
+
+    # 3. Test inspect_handover_package_endpoint
+    from starlette.datastructures import Headers
+
+    class DummyUploadFile:
+        def __init__(self, filename, data):
+            self.filename = filename
+            self.file = io.BytesIO(data)
+
+    upload_f = DummyUploadFile("handover.zip", res_zip.body)
+    preview_res = db_service.inspect_handover_package_endpoint(file=upload_f)
+    assert preview_res["project_name"] == "API_Handover_Test"
+    assert preview_res["wells_count"] == 1
+    assert preview_res["well_names"] == ["Well-1"]
+
+    # 4. Test commit_handover_package_endpoint
+    class DummyReq:
+        headers = Headers({})
+        cookies = {}
+
+    commit_upload_f = DummyUploadFile("handover.zip", res_zip.body)
+    commit_res = db_service.commit_handover_package_endpoint(
+        request=DummyReq(),
+        file=commit_upload_f,
+        project_name="API_Imported_Project",
+        project_id=None,
+        overwrite_existing=True,
+    )
+    assert commit_res["success"] is True
+    assert commit_res["project_name"] == "API_Imported_Project"
+    assert commit_res["wells_imported"] == 1
+
+
+def test_roundtrip_inspect_and_import_handover_package(db_session, tmp_path):
+    from quick_pp.handover import import_handover_archive, inspect_handover_archive
+
+    # 1. Create a rich project with full ancillary data
+    proj = Project(db_session=db_session, name='Original_Project', description='Original project description')
+    depths = np.linspace(2500.0, 2510.0, 11)
+    df = pd.DataFrame({
+        'WELL_NAME': 'WELL-ALPHA',
+        'DEPTH': depths,
+        'GR': np.linspace(40.0, 90.0, 11),
+        'RHOB': np.linspace(2.2, 2.5, 11),
+        'NPHI': np.linspace(0.25, 0.15, 11),
+        'PHIT': np.linspace(0.22, 0.12, 11),
+        'SWT': np.linspace(0.20, 0.85, 11),
+    })
+    proj.read_dataframe(df)
+    proj.update_ancillary_data({
+        'WELL-ALPHA': {
+            'formation_tops': [
+                {'name': 'Top_A', 'depth': 2500.0},
+                {'name': 'Top_B', 'depth': 2505.0},
+            ],
+            'fluid_contacts': [
+                {'name': 'OWC', 'depth': 2506.5},
+            ],
+            'well_surveys': [
+                {'md': 2500.0, 'inc': 0.0, 'azim': 0.0},
+                {'md': 2510.0, 'inc': 2.5, 'azim': 90.0},
+            ],
+            'pressure_tests': [
+                {'depth': 2502.0, 'pressure': 3500.0, 'pressure_uom': 'psi', 'fluid_type': 'OIL', 'test_quality': 'VALID'},
+                {'depth': 2508.0, 'pressure': 3510.0, 'pressure_uom': 'psi', 'fluid_type': 'WATER', 'test_quality': 'VALID'},
+            ],
+            'core_data': [
+                {
+                    'sample_name': 'CORE-1',
+                    'depth': 2503.0,
+                    'measurements': [
+                        {'property_name': 'CPORE', 'value': 0.21, 'unit': 'v/v'},
+                        {'property_name': 'CPERM', 'value': 150.0, 'unit': 'mD'},
+                    ],
+                },
+            ],
+        }
+    })
+    proj._orm_project.config_data = {'shf': {'fwl': 2506.5}}
+    db_session.commit()
+
+    # 2. Export handover package
+    zip_path = tmp_path / 'Exported_Handover.zip'
+    proj.export_handover_package(output_zip_path=str(zip_path))
+    assert zip_path.exists()
+
+    with open(zip_path, 'rb') as f:
+        zip_bytes = f.read()
+
+    # 3. Test inspect_handover_archive
+    preview = inspect_handover_archive(zip_bytes)
+    assert preview['project_name'] == 'Original_Project'
+    assert preview['wells_count'] == 1
+    assert preview['well_names'] == ['WELL-ALPHA']
+    assert preview['inventory_counts']['formation_tops'] == 2
+    assert preview['inventory_counts']['fluid_contacts'] == 1
+    assert preview['inventory_counts']['well_surveys'] == 2
+    assert preview['inventory_counts']['pressure_tests'] == 2
+    assert preview['inventory_counts']['core_rca_samples'] == 1
+
+    # 4. Test import_handover_archive into a new project
+    res = import_handover_archive(db_session, zip_bytes, target_project_name='Rehydrated_Project')
+    assert res['success'] is True
+    assert res['wells_imported'] == 1
+    assert res['project_name'] == 'Rehydrated_Project'
+
+    # 5. Verify rehydrated database entities
+    imported_proj = Project.load(db_session, project_id=res['project_id'])
+    assert 'WELL-ALPHA' in imported_proj.get_well_names()
+
+    rehydrated_well = imported_proj.get_well('WELL-ALPHA')
+    assert rehydrated_well.name == 'WELL-ALPHA'
+
+    # Check curve data
+    w_data = imported_proj.get_well_data('WELL-ALPHA')
+    assert not w_data.empty
+    assert 'DEPTH' in w_data.columns
+    assert 'PHIT' in w_data.columns
+    assert 'SWT' in w_data.columns
+    assert len(w_data) == 11
+
+    # Check tops
+    tops = rehydrated_well.get_formation_tops()
+    assert len(tops) == 2
+    assert set(tops['name']) == {'Top_A', 'Top_B'}
+
+    # Check contacts
+    contacts = rehydrated_well.get_fluid_contacts()
+    assert len(contacts) == 1
+    assert contacts.iloc[0]['depth'] == pytest.approx(2506.5)
+
+    # Check surveys
+    surveys = rehydrated_well.get_well_surveys()
+    assert len(surveys) == 2
+
+    # Check pressure tests
+    p_tests = rehydrated_well.get_pressure_tests()
+    assert len(p_tests) == 2
+
+    # Check core samples
+    core = rehydrated_well.get_core_data()
+    assert len(core) >= 1
+
+    # Check project config data restored
+    assert imported_proj._orm_project.config_data.get('shf', {}).get('fwl') == pytest.approx(2506.5)

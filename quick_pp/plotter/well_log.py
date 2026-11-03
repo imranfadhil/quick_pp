@@ -45,12 +45,47 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
         plotly.graph_objects.Figure: The figure with the added traces.
     """
     trace_ix = 0
+    litho_count = 0
     for col, trace_def in trace_defs.items():
         # Skip special cases handled separately
         if col in ["COAL_FLAG", "ZONES"]:
             continue
 
-        style = trace_def.get("style", {})
+        style = dict(trace_def.get("style", {}))
+        is_litho = style.get("stackgroup") == "litho"
+
+        # For lithology curves, only add to the track if available with non-zero data
+        if is_litho:
+            if (
+                col not in df.columns
+                or not df[col].notna().any()
+                or not (df[col].dropna() > 1e-4).any()
+            ):
+                continue
+            if litho_count == 0:
+                style["fill"] = "tozerox"
+            else:
+                style["fill"] = "tonextx"
+            litho_count += 1
+
+        # For optional spectral GR curves, only add to Track 1 if available with non-zero data
+        if col in ["POTA", "THOR", "URAN", "CGR"]:
+            if (
+                col not in df.columns
+                or not df[col].notna().any()
+                or not (df[col].dropna() > 1e-4).any()
+            ):
+                continue
+
+        # For optional spectral GR curves, only add to Track 1 if available with non-zero data
+        if col in ["POTA", "THOR", "URAN", "CGR"]:
+            if (
+                col not in df.columns
+                or not df[col].notna().any()
+                or not (df[col].dropna() > 1e-4).any()
+            ):
+                continue
+
         trace_args = dict(
             x=round(df[col], 3) if df[col].dtype == "float64" else df[col],
             y=index,
@@ -269,9 +304,14 @@ def fix_missing_volumetrics(df):
     Returns:
         pd.DataFrame: The DataFrame with NaNs filled in volumetric columns.
     """
-    volumetrics = ["VCLAY", "VSILT", "VSAND", "VCALC", "VDOLO", "VGAS", "VOIL", "VHC"]
+    volumetrics = [
+        "VCLAY", "VSILT", "VSAND", "VCALC", "VDOLO", "VGAS", "VOIL", "VHC",
+        "VFELD", "VKAOL", "VANHY", "VGYPS", "VHALI", "VPYRI", "VCOAL",
+        "VILLI", "VSMEC", "VCHLO", "VGLAUC", "VKFELD", "VALBI", "VSIDE", "VANKE", "VKERO",
+    ]
     for col in volumetrics:
-        df[col] = df[col].fillna(0) if col in df.columns else None
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
     return df
 
 
@@ -335,6 +375,7 @@ def plotly_log(
     trace_defs: dict = None,
     xaxis_defs: dict = None,
     column_widths: list = None,
+    datum_elevation: float = None,
 ):
     """Generate a multi-track well log plot using Plotly.
 
@@ -391,9 +432,12 @@ def plotly_log(
         elif swt_col in df.columns and (sw_col not in df.columns or df[sw_col].isna().all()):
             df[sw_col] = df[swt_col]
 
-    # Ensure all required columns exist (fill with NaN if missing)
+    # Ensure all required columns exist (fill with NaN if missing),
+    # but do NOT inject fake columns for optional lithology curves if absent from the data.
     for k in trace_defs.keys():
         if k not in df.columns:
+            if trace_defs[k].get("style", {}).get("stackgroup") == "litho" or k in ["POTA", "THOR", "URAN", "CGR"]:
+                continue
             df[k] = np.nan
 
     # One-hot encode ROCK_FLAG if present
@@ -480,16 +524,47 @@ def plotly_log(
                 secondary_y=False,
             )
 
-    # Add TVD to hover box in each tracks if available
-    if "TVD" in df.columns:
+    # Resolve TVDSS if not present but TVD and datum_elevation are provided
+    tvd_col = next((c for c in ("TVD", "tvd", "DEPT_TVD", "DEPTH_TVD") if c in df.columns), None)
+    tvdss_col = next((c for c in ("TVDSS", "tvdss", "DEPT_TVDSS", "DEPTH_TVDSS") if c in df.columns), None)
+
+    if tvdss_col is None and tvd_col is not None and datum_elevation is not None:
+        try:
+            df["TVDSS"] = pd.to_numeric(df[tvd_col], errors="coerce") - float(datum_elevation)
+            tvdss_col = "TVDSS"
+        except Exception:
+            pass
+
+    # Add TVD to hover box in each track if available
+    if tvd_col:
         for c in range(1, no_of_track + 1):
             fig.add_trace(
                 go.Scatter(
-                    x=df["TVD"],
+                    x=df[tvd_col],
                     y=index,
                     name="TVD",
                     line={"width": 0},
-                    hovertemplate="<b>TVD</b>: %{x}<extra></extra>",
+                    hovertemplate=f"<b>TVD</b>: %{{x:.2f}} {depth_uom}<extra></extra>"
+                    if depth_uom
+                    else "<b>TVD</b>: %{x:.2f}<extra></extra>",
+                ),
+                row=1,
+                col=c,
+                secondary_y=False,
+            )
+
+    # Add TVDSS to hover box in each track if available
+    if tvdss_col:
+        for c in range(1, no_of_track + 1):
+            fig.add_trace(
+                go.Scatter(
+                    x=df[tvdss_col],
+                    y=index,
+                    name="TVDSS",
+                    line={"width": 0},
+                    hovertemplate=f"<b>TVDSS</b>: %{{x:.2f}} {depth_uom}<extra></extra>"
+                    if depth_uom
+                    else "<b>TVDSS</b>: %{x:.2f}<extra></extra>",
                 ),
                 row=1,
                 col=c,
@@ -508,9 +583,17 @@ def plotly_log(
         for x in fig.data
         if k in visible_xaxis and x.name == k
     }
+    y_title_text = f"<b>DEPTH ({depth_uom.upper()}) MD</b>" if depth_uom else "<b>DEPTH MD</b>"
+    if tvdss_col and tvd_col:
+        y_title_text += "<br><span style='font-size:9px;color:#64748B'>[Hover: TVD & TVDSS]</span>"
+    elif tvdss_col:
+        y_title_text += "<br><span style='font-size:9px;color:#64748B'>[Hover: TVDSS]</span>"
+    elif tvd_col:
+        y_title_text += "<br><span style='font-size:9px;color:#64748B'>[Hover: TVD]</span>"
+
     layout_dict["yaxis"] = {
         "domain": [0, 0.84],
-        "title": {"text": f"<b>DEPTH ({depth_uom.upper()}) MD</b>", "font_size": 12},
+        "title": {"text": y_title_text, "font_size": 12},
     }
 
     for i in range(1, no_of_track * 2):

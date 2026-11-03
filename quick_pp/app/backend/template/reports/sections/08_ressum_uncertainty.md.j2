@@ -26,6 +26,19 @@ Probabilistic petrophysical uncertainty ranges were quantified across $N = 1000$
 | **{{ u.zone }}** | {{ u.metric }} | {{ u.p90 }} | **{{ u.p50 }}** | {{ u.p10 }} | {{ u.spread }} |
 {% endfor %}
 
+{% if volumetric_summary and volumetric_summary.field_totals %}
+### {{ sec_num }}.4 Volumetric Hydrocarbon Resources (SPE-PRMS Latin Hypercube Monte Carlo)
+
+Probabilistic in-place and recoverable volumes were evaluated under **{{ volumetric_summary.mode|default('Drainage Area')|upper }}** geometry across $N = {{ volumetric_summary.n_samples|default(5000) }}$ Latin Hypercube realizations:
+
+| Level / Reservoir Formation | 1P (P90) STOIIP (MMbbl) | 2P (P50) STOIIP (MMbbl) | 3P (P10) STOIIP (MMbbl) | Rec Oil (2P) (MMbbl) | 1P (P90) GIIP (Bcf) | 2P (P50) GIIP (Bcf) | 3P (P10) GIIP (Bcf) | Rec Gas (2P) (Bcf) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **FIELD ROLLUP (TOTAL)** | **{{ "%.2f"|format(volumetric_summary.field_totals.stoiip.p90) }}** | **{{ "%.2f"|format(volumetric_summary.field_totals.stoiip.p50) }}** | **{{ "%.2f"|format(volumetric_summary.field_totals.stoiip.p10) }}** | **{{ "%.2f"|format(volumetric_summary.field_totals.rec_oil.p50) }}** | **{{ "%.2f"|format(volumetric_summary.field_totals.giip.p90) }}** | **{{ "%.2f"|format(volumetric_summary.field_totals.giip.p50) }}** | **{{ "%.2f"|format(volumetric_summary.field_totals.giip.p10) }}** | **{{ "%.2f"|format(volumetric_summary.field_totals.rec_gas.p50) }}** |
+{% for z in volumetric_summary.zonal_summaries %}
+| **{{ z.zone }}** | {{ "%.2f"|format(z.stoiip.p90) }} | **{{ "%.2f"|format(z.stoiip.p50) }}** | {{ "%.2f"|format(z.stoiip.p10) }} | {{ "%.2f"|format(z.rec_oil.p50) }} | {{ "%.2f"|format(z.giip.p90) }} | **{{ "%.2f"|format(z.giip.p50) }}** | {{ "%.2f"|format(z.giip.p10) }} | {{ "%.2f"|format(z.rec_gas.p50) }} |
+{% endfor %}
+{% endif %}
+
 {% if include_ai_commentary and ai_commentary.uncertainty_narrative %}
 {{ ai_commentary.uncertainty_narrative }}
 {% endif %}

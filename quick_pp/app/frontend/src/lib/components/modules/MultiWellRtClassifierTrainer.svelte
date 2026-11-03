@@ -116,17 +116,11 @@
 			const meta = DRT_METHOD_META[method];
 			const sortedCutoffs = [...projectData.activeDrtCutoffs].sort((a, b) => a - b);
 			const activeMinDepth =
-				projectData.drtPropagateFocusedOnly && workbench.depthFilter?.min != null
-					? workbench.depthFilter.min
-					: null;
+				workbench.depthFilter?.min != null ? workbench.depthFilter.min : null;
 			const activeMaxDepth =
-				projectData.drtPropagateFocusedOnly && workbench.depthFilter?.max != null
-					? workbench.depthFilter.max
-					: null;
+				workbench.depthFilter?.max != null ? workbench.depthFilter.max : null;
 			const activeZones =
-				projectData.drtPropagateFocusedOnly && workbench.selectedZones.length > 0
-					? workbench.selectedZones
-					: null;
+				workbench.selectedZones.length > 0 ? workbench.selectedZones : null;
 
 			const { data, error } = await api.POST(
 				'/quick_pp/workspace/projects/{project_id}/rock_typing/compute',
@@ -167,6 +161,10 @@
 						include_vdl: projectData.drtSelectedFeatures.includes('VDL'),
 						test_size: projectData.drtClassifierTestSize,
 						saved_model_key: null,
+						include_non_reservoir: projectData.drtIncludeNonReservoir,
+						non_res_phit_cutoff: projectData.drtNonResPhitCutoff,
+						non_res_vsh_cutoff: projectData.drtNonResVshCutoff,
+						non_res_perm_cutoff: projectData.drtNonResPermCutoff,
 						save: false
 					} as any
 				}
@@ -423,7 +421,7 @@
 				>
 					<div>
 						<div class="font-semibold text-[var(--text-primary)]">
-							Target DRT: {activeMeta.label} ({projectData.activeDrtCutoffs.length + 1} Groups)
+							Target DRT: {activeMeta.label} ({projectData.activeDrtCutoffs.length + 1} Groups{projectData.drtIncludeNonReservoir ? ' + DRT 0 Non-Res' : ''})
 						</div>
 						<div class="mono-num text-[9.5px] text-[var(--text-secondary)]">
 							Cutoffs: {[...projectData.activeDrtCutoffs]
@@ -438,6 +436,23 @@
 					>
 						← Edit Cutoffs
 					</button>
+				</div>
+
+				<!-- Non-Reservoir Gate Toggle (DRT 0) -->
+				<div
+					class="flex items-center justify-between gap-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px]"
+				>
+					<label class="flex cursor-pointer items-center gap-1.5 font-medium text-[var(--text-primary)]">
+						<input
+							type="checkbox"
+							bind:checked={projectData.drtIncludeNonReservoir}
+							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] accent-[var(--accent-primary)]"
+						/>
+						<span>Include Non-Reservoir Gate (DRT 0)</span>
+					</label>
+					<span class="mono-num text-[9px] text-[var(--text-secondary)]">
+						Φ&lt;{projectData.drtNonResPhitCutoff} · Vsh&gt;{projectData.drtNonResVshCutoff} · K&lt;{projectData.drtNonResPermCutoff}
+					</span>
 				</div>
 
 				<!-- 1. Selectable Log Features -->
@@ -697,7 +712,9 @@
 									<tr class="border-b border-[var(--border-hairline)] bg-[var(--bg-app)] text-[var(--text-muted)]">
 										<th class="px-1.5 py-1 text-left font-medium">True \ Pred</th>
 										{#each ct.labels as colLbl}
-											<th class="mono-num px-1 py-1 font-semibold">DRT {colLbl}</th>
+											<th class="mono-num px-1 py-1 font-semibold">
+												{Number(colLbl) === 0 ? 'DRT 0' : `DRT ${colLbl}`}
+											</th>
 										{/each}
 										<th class="px-1.5 py-1 font-medium">Recall</th>
 									</tr>
@@ -712,7 +729,7 @@
 												<span
 													style="background-color: {getRockTypeColor(rowLbl)}"
 													class="mr-1 inline-block h-2 w-2 rounded-full"
-												></span>DRT {rowLbl}
+												></span>{Number(rowLbl) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${rowLbl}`}
 											</td>
 											{#each rowCounts as cellVal, cIdx}
 												{@const isDiag = rIdx === cIdx}

@@ -11,11 +11,9 @@ so neither the LLM nor the frontend ever has to pass 10,000+ log rows through to
 
 from __future__ import annotations
 
-import inspect
 import json
-import math
 import sys
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -25,20 +23,14 @@ from quick_pp import logger
 from quick_pp.app.backend.services.database import (
     _get_merged_dataframe_sync,
     dataframe_to_columnar,
-    dataframe_to_records,
-    filter_merged_dataframe,
     get_project_summary,
-    invalidate_well_cache,
 )
-from quick_pp.app.backend.services.rock_typing import _compute_fzi_data_sync
 from quick_pp.app.backend.services.workspace import (
     WorkspaceHCCorrectionRequest,
     WorkspaceLithologyRequest,
     WorkspaceOptimizeFwlRequest,
     WorkspacePermeabilityRequest,
     WorkspacePorosityRequest,
-    WorkspaceReservoirSummaryRequest,
-    WorkspaceSaturationRequest,
     WorkspaceShfRequest,
     _curve_summary_stats,
     _get_filtered_well_df,
@@ -49,26 +41,22 @@ from quick_pp.app.backend.services.workspace import (
     workspace_optimize_fwl,
     workspace_shf_compute,
 )
-from quick_pp.app.backend.utils.db import get_db
 from quick_pp.config import Config
-from quick_pp.database import objects as db_objects
-from quick_pp.lithology.multi_mineral import MultiMineral
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
-from quick_pp.machine_learning.config import CONFORMAL_ALPHA, FE_FEATURES, RAW_FEATURES
+from quick_pp.machine_learning.config import CONFORMAL_ALPHA
 from quick_pp.machine_learning.feature_engineering import (
     acoustic_impedance_feature,
     apparent_matrix_density,
     coal_flagging,
-    density_porosity as fe_density_porosity,
     gas_xover,
     mn_lithology_parameters,
-    rhob_integral,
-    rock_flag_gr,
     tight_streak_flagging,
+)
+from quick_pp.machine_learning.feature_engineering import (
+    density_porosity as fe_density_porosity,
 )
 from quick_pp.machine_learning.utils import (
     ConformalMultiOutputRegressor,
-    EnforceMineralSum,
     enforce_physical_constraints,
 )
 from quick_pp.permeability import choo_permeability
@@ -82,18 +70,14 @@ from quick_pp.qaqc import (
     apply_environmental_corrections,
     badhole_flagging,
     handle_outer_limit,
-    neu_den_xplot_hc_correction,
 )
-from quick_pp.ressum import calc_reservoir_summary
 from quick_pp.saturation import (
-    archie_saturation,
     estimate_b_waxman_smits,
     estimate_qvn,
     estimate_rw_temperature_salinity,
     estimate_temperature_gradient,
     waxman_smits_saturation,
 )
-
 
 # ---------------------------------------------------------------------------
 # Tool Metadata & Registry
@@ -515,6 +499,21 @@ class ExportReportToPdfArgs(BaseModel):
     report_id: str = Field(
         ...,
         description="Target report ID (or 'latest' to export the most recent report)",
+    )
+
+
+class GetTechnicalReferenceArgs(BaseModel):
+    scope: Optional[str] = Field(
+        "single-well",
+        description="Workflow space: 'single-well' or 'multi-well'",
+    )
+    step: Optional[str] = Field(
+        None,
+        description="Workflow step ID: 'qaqc', 'ancillary', 'litho-poro', 'perm', 'saturation', 'scal', 'ressum', 'inventory', 'fpt', 'rock-typing', 'ml-training', 'perm-transform', 'shf', 'volumetrics', 'report'",
+    )
+    query: Optional[str] = Field(
+        None,
+        description="Petrophysical formula, cutoff, or concept search query (e.g. 'Waxman-Smits', 'FZI', 'Leverett', 'Conformal', 'Choo', 'LHS')",
     )
 
 
@@ -1052,9 +1051,9 @@ def tool_run_shf_evaluation(
         shf_arr = shf_data["shf"]
         rf_arr = shf_data["rock_flags"]
 
-        w_depths = [d for wn, d in zip(wn_arr, d_arr) if wn == focal_well]
-        w_shf = [s for wn, s in zip(wn_arr, shf_arr) if wn == focal_well]
-        w_rf = [r for wn, r in zip(wn_arr, rf_arr) if wn == focal_well]
+        w_depths = [d for wn, d in zip(wn_arr, d_arr, strict=False) if wn == focal_well]
+        w_shf = [s for wn, s in zip(wn_arr, shf_arr, strict=False) if wn == focal_well]
+        w_rf = [r for wn, r in zip(wn_arr, rf_arr, strict=False) if wn == focal_well]
 
         if w_depths:
             w_df = pd.DataFrame({"DEPTH": w_depths, "SHF": w_shf, "ROCK_FLAG": w_rf})
@@ -1430,7 +1429,7 @@ def tool_evaluate_with_conformal_bounds(
 
     q_hats = {
         t: round(float(q), 4)
-        for t, q in zip(target_cols, getattr(conformal_model, "conformal_q_", []))
+        for t, q in zip(target_cols, getattr(conformal_model, "conformal_q_", []), strict=False)
     }
     stats = {
         col: _curve_summary_stats(out_df[col])
@@ -1648,6 +1647,54 @@ def tool_export_report_to_pdf(
     }
 
 
+def tool_get_workflow_technical_reference(
+    scope: Optional[str] = "single-well",
+    step: Optional[str] = None,
+    query: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Retrieve grounded petrophysical reference, equations, curve specs, and guidelines from docs/workflows/."""
+    from quick_pp.app.backend.services.ssot_reference import (
+        get_step_reference,
+        query_workflow_reference,
+    )
+
+    effective_scope = scope or "single-well"
+    if query:
+        # Search requested scope first, then fallback to global workflow search
+        matches = query_workflow_reference(query, scope=effective_scope, max_results=3)
+        if not matches:
+            matches = query_workflow_reference(query, scope=None, max_results=3)
+        if matches:
+            return {
+                "tool": "get_workflow_technical_reference",
+                "query": query,
+                "scope": matches[0]["scope"],
+                "matches_count": len(matches),
+                "primary_match": matches[0],
+                "reference_content": matches[0]["content"],
+                "source": f"docs/workflows/{'multi_well.md' if 'multi' in matches[0]['scope'] else 'single_well.md'}",
+            }
+
+    if step:
+        content = get_step_reference(effective_scope, step)
+        return {
+            "tool": "get_workflow_technical_reference",
+            "scope": effective_scope,
+            "step": step,
+            "reference_content": content,
+            "source": f"docs/workflows/{'multi_well.md' if 'multi' in effective_scope else 'single_well.md'}",
+        }
+
+    content = get_step_reference(effective_scope, "overview")
+    return {
+        "tool": "get_workflow_technical_reference",
+        "scope": effective_scope,
+        "step": "overview",
+        "reference_content": content,
+        "source": "docs/workflows/index.md",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Singleton MCP Server Instance
 # ---------------------------------------------------------------------------
@@ -1756,4 +1803,14 @@ petro_mcp_server.register_tool(
     ),
     schema_model=ExportReportToPdfArgs,
     fn=tool_export_report_to_pdf,
+)
+
+petro_mcp_server.register_tool(
+    name="get_workflow_technical_reference",
+    description=(
+        "Retrieve authoritative petrophysical equations, curve contracts, parameter "
+        "bounds, and diagnostic guidelines from the quick_pp SSOT technical foundation in docs/workflows/."
+    ),
+    schema_model=GetTechnicalReferenceArgs,
+    fn=tool_get_workflow_technical_reference,
 )

@@ -186,9 +186,18 @@
 		const drtNum = Number(drtStr);
 		const sorted = [...projectData.activeDrtCutoffs].sort((a, b) => a - b);
 		const n = sorted.length;
-		if (!Number.isFinite(drtNum) || n === 0) return '';
 		const meta = activeMeta;
 		const u = meta.unit ? ` ${meta.unit}` : '';
+		if (drtNum === 0) {
+			const lowestStr =
+				n > 0
+					? meta.higherIsBetter
+						? `${meta.shortName} < ${sorted[0]}${u}, `
+						: `${meta.shortName} ≥ ${sorted[n - 1]}${u}, `
+					: '';
+			return `${lowestStr}Φ≤${projectData.drtNonResPhitCutoff}, Vsh>${projectData.drtNonResVshCutoff}, K≤${projectData.drtNonResPermCutoff}`;
+		}
+		if (!Number.isFinite(drtNum) || n === 0) return '';
 		if (meta.higherIsBetter) {
 			const upperIdx = n - (drtNum - 1);
 			const lowerIdx = n - drtNum;
@@ -467,17 +476,11 @@
 			const meta = DRT_METHOD_META[method];
 			const sortedCutoffs = [...projectData.activeDrtCutoffs].sort((a, b) => a - b);
 			const activeMinDepth =
-				projectData.drtPropagateFocusedOnly && workbench.depthFilter?.min != null
-					? workbench.depthFilter.min
-					: null;
+				workbench.depthFilter?.min != null ? workbench.depthFilter.min : null;
 			const activeMaxDepth =
-				projectData.drtPropagateFocusedOnly && workbench.depthFilter?.max != null
-					? workbench.depthFilter.max
-					: null;
+				workbench.depthFilter?.max != null ? workbench.depthFilter.max : null;
 			const activeZones =
-				projectData.drtPropagateFocusedOnly && workbench.selectedZones.length > 0
-					? workbench.selectedZones
-					: null;
+				workbench.selectedZones.length > 0 ? workbench.selectedZones : null;
 
 			const { data, error } = await api.POST(
 				'/quick_pp/workspace/projects/{project_id}/rock_typing/compute',
@@ -518,6 +521,10 @@
 						include_vdl: projectData.drtSelectedFeatures.includes('VDL'),
 						test_size: projectData.drtClassifierTestSize,
 						saved_model_key: savedModelKey,
+						include_non_reservoir: projectData.drtIncludeNonReservoir,
+						non_res_phit_cutoff: projectData.drtNonResPhitCutoff,
+						non_res_vsh_cutoff: projectData.drtNonResVshCutoff,
+						non_res_perm_cutoff: projectData.drtNonResPermCutoff,
 						save: false
 					} as any
 				}
@@ -1067,6 +1074,56 @@
 					{activeMeta.addLabel}
 				</button>
 			</div>
+
+			<!-- Non-Reservoir Gate (ROCK_FLAG = 0 / DRT 0) -->
+			<div class="mt-2 space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]">
+				<label class="flex cursor-pointer items-center justify-between gap-2 font-semibold text-[var(--text-primary)]">
+					<span class="flex items-center gap-1.5">
+						<span
+							style="background-color: {getRockTypeColor(0)}"
+							class="inline-block h-2.5 w-2.5 rounded-full"
+						></span>
+						<span>Include Non-Reservoir Flag (DRT 0 / ROCK_FLAG = 0)</span>
+					</span>
+					<input
+						type="checkbox"
+						bind:checked={projectData.drtIncludeNonReservoir}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] accent-[var(--accent-primary)]"
+					/>
+				</label>
+				<div class="text-[9.5px] text-[var(--text-secondary)]">
+					Separates tight/shale/coal intervals into <strong>DRT 0 (Non-Reservoir)</strong> so
+					<strong>DRT 1..{projectData.activeDrtCutoffs.length + 1}</strong> remain strictly reservoir flow units and non-reservoir intervals are excluded from Perm Transform &amp; SHF regressions.
+				</div>
+				{#if projectData.drtIncludeNonReservoir}
+					<div class="space-y-1 pt-0.5">
+						<NumericScrubber
+							label="Min Reservoir Porosity (PHIT Cutoff)"
+							bind:value={projectData.drtNonResPhitCutoff}
+							unit="v/v"
+							min={0.0}
+							max={0.2}
+							step={0.005}
+						/>
+						<NumericScrubber
+							label="Max Reservoir Vshale / Vclay Cutoff"
+							bind:value={projectData.drtNonResVshCutoff}
+							unit="v/v"
+							min={0.1}
+							max={1.0}
+							step={0.05}
+						/>
+						<NumericScrubber
+							label="Min Reservoir Permeability (PERM Cutoff)"
+							bind:value={projectData.drtNonResPermCutoff}
+							unit="mD"
+							min={0.0}
+							max={10.0}
+							step={0.01}
+						/>
+					</div>
+				{/if}
+			</div>
 		</ParameterSection>
 
 		<ParameterSection
@@ -1303,7 +1360,7 @@
 													<span
 														style="background-color: {getRockTypeColor(row.drt)}"
 														class="mr-1 inline-block h-2 w-2 rounded-full"
-													></span>DRT {row.drt}
+													></span>{Number(row.drt) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${row.drt}`}
 												</td>
 												<td class="mono-num px-1 py-0.5">
 													{row.cutoff_count}
@@ -1485,7 +1542,7 @@
 									style="background-color: {getRockTypeColor(drt)}"
 									class="inline-block h-2.5 w-2.5 rounded-full"
 								></span>
-								<span>DRT {drt}</span>
+								<span>{Number(drt) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${drt}`}</span>
 								{#if rangeLbl}
 									<span class="mono-num text-[10px] font-normal text-[var(--text-muted)]">
 										({rangeLbl})
@@ -1511,7 +1568,7 @@
 	>
 		<button
 			type="button"
-			disabled={projectData.isComputingMultiWell}
+			disabled={projectData.isComputingMultiWell || projectData.isSavingMultiWell}
 			onclick={() =>
 				executeRockTyping(
 					false,
@@ -1525,12 +1582,16 @@
 		</button>
 		<button
 			type="button"
-			disabled={projectData.isComputingMultiWell ||
-				!projectData.hasPendingMultiWell('rock-typing')}
+			disabled={
+				projectData.isComputingMultiWell ||
+				projectData.isSavingMultiWell ||
+				!projectData.hasPendingMultiWell('rock-typing')
+			}
 			onclick={saveRockTyping}
+			title="Save ROCK_FLAG curves across all wells"
 			class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
 		>
-			Save All Wells
+			{projectData.isSavingMultiWell ? 'Saving...' : 'Save All Wells'}
 		</button>
 	</div>
 </div>

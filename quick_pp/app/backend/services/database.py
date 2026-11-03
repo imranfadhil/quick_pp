@@ -1,3 +1,5 @@
+import concurrent.futures
+import io
 import logging
 import os
 import pickle
@@ -10,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+import numpy as np
+import pandas as pd
 from fastapi import (
     APIRouter,
     File,
@@ -20,8 +24,6 @@ from fastapi import (
     Response,
     UploadFile,
 )
-import numpy as np
-import pandas as pd
 from sqlalchemy import bindparam, select, text
 
 from quick_pp.app.backend.utils.auth import (
@@ -32,6 +34,29 @@ from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_filename
 from quick_pp.database import models as db_models
 from quick_pp.database import objects as db_objects
+
+logger = logging.getLogger(__name__)
+
+
+class ZipStreamingResponse(Response):
+    """Chunked streaming response that keeps `.body` accessible for direct callers & test suites."""
+
+    def __init__(
+        self,
+        content: Any = b"",
+        status_code: int = 200,
+        headers: Optional[Dict[str, str]] = None,
+        media_type: Optional[str] = None,
+        background: Any = None,
+    ) -> None:
+        raw_bytes = content.getvalue() if isinstance(content, io.BytesIO) else bytes(content or b"")
+        super().__init__(
+            content=raw_bytes,
+            status_code=status_code,
+            headers=headers,
+            media_type=media_type,
+            background=background,
+        )
 
 
 router = APIRouter(prefix="/database", tags=["Database"])
@@ -701,7 +726,7 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
             tops_list_by_well: Dict[int, List[Dict[str, Any]]] = {
                 wid: [] for wid in well_ids
             }
-            tops_count_by_well: Dict[int, int] = {wid: 0 for wid in well_ids}
+            tops_count_by_well: Dict[int, int] = dict.fromkeys(well_ids, 0)
             all_zones_set = set()
             for wid, top_name, top_depth in top_rows:
                 tops_count_by_well[wid] = tops_count_by_well.get(wid, 0) + 1
@@ -816,7 +841,7 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
             contacts_stmt = text(
                 "SELECT well_id, name, depth FROM fluid_contacts WHERE well_id IN :well_ids ORDER BY depth"
             ).bindparams(bindparam("well_ids", expanding=True))
-            contact_counts: Dict[int, int] = {wid: 0 for wid in well_ids}
+            contact_counts: Dict[int, int] = dict.fromkeys(well_ids, 0)
             contacts_list_by_well: Dict[int, List[Dict[str, Any]]] = {
                 wid: [] for wid in well_ids
             }
@@ -849,7 +874,7 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 for r in session.execute(survey_stmt, {"well_ids": well_ids}).fetchall()
             }
 
-            perf_counts: Dict[int, int] = {wid: 0 for wid in well_ids}
+            perf_counts: Dict[int, int] = dict.fromkeys(well_ids, 0)
             perfs_list_by_well: Dict[int, List[Dict[str, Any]]] = {
                 wid: [] for wid in well_ids
             }
@@ -881,7 +906,10 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 except Exception:
                     pass
 
-            from quick_pp.las_handler import extract_las_metadata, extract_well_df_elevation
+            from quick_pp.las_handler import (
+                extract_las_metadata,
+                extract_well_df_elevation,
+            )
 
             wells_summary = []
             total_depth_sum = 0.0
@@ -1319,6 +1347,7 @@ def project_read_las(
             proj = db_objects.Project.load(session, project_id=project_id)
             if is_demo_mode():
                 import lasio
+
                 from quick_pp.las_handler import (
                     extract_las_metadata,
                     merge_well_curves_with_dedup,
@@ -1622,7 +1651,7 @@ def dataframe_to_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
         return []
     cols = [str(c) for c in df.columns]
     col_lists = [_series_to_py_list(df[col]) for col in cols]
-    return [dict(zip(cols, row)) for row in zip(*col_lists)]
+    return [dict(zip(cols, row, strict=False)) for row in zip(*col_lists, strict=False)]
 
 
 def filter_merged_dataframe(
@@ -1919,16 +1948,50 @@ def _get_merged_dataframe_sync(
             pressure_p = _prefixed(pressure_df, "pressure_")
 
             merged = df
+            log_depths = merged["depth"].to_numpy(dtype=float)
+            n_log = len(log_depths)
+
+            def _map_discrete_to_single_nearest_row(
+                disc_df: pd.DataFrame, max_tol: float
+            ) -> Dict[str, List[Any]]:
+                cols = [c for c in disc_df.columns if c != "depth"]
+                out_cols: Dict[str, List[Any]] = {
+                    c: [np.nan] * n_log for c in cols
+                }
+                if n_log == 0 or disc_df.empty or not cols:
+                    return out_cols
+                best_dist_at_idx: Dict[int, float] = {}
+                for _, d_row in disc_df.iterrows():
+                    try:
+                        d_val = float(d_row["depth"])
+                    except (TypeError, ValueError):
+                        continue
+                    if not np.isfinite(d_val):
+                        continue
+                    pos = int(np.searchsorted(log_depths, d_val))
+                    best_idx = -1
+                    best_dist = float("inf")
+                    for cand in (pos - 1, pos):
+                        if 0 <= cand < n_log:
+                            dist = abs(float(log_depths[cand]) - d_val)
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_idx = cand
+                    if best_idx < 0 or best_dist > max_tol:
+                        continue
+                    prev_dist = best_dist_at_idx.get(best_idx, float("inf"))
+                    if best_dist <= prev_dist:
+                        best_dist_at_idx[best_idx] = best_dist
+                        for c in cols:
+                            val = d_row[c]
+                            out_cols[c][best_idx] = val if pd.notna(val) else np.nan
+                return out_cols
 
             if tops_p is not None and not tops_p.empty:
-                merged = pd.merge_asof(
-                    merged,
-                    tops_p,
-                    on="depth",
-                    direction="nearest",
-                    tolerance=tol,
-                    suffixes=("", "_top"),
-                )
+                mapped_tops = _map_discrete_to_single_nearest_row(tops_p, tol)
+                for c, vals in mapped_tops.items():
+                    target_c = f"{c}_top" if c in merged.columns else c
+                    merged[target_c] = vals
                 if "top_name" in tops_p.columns:
                     # Deduplicate co-depth tops deterministically (prefer specific unit/sandstone over broad group)
                     def _top_specificity(name_val: Any) -> tuple:
@@ -1962,24 +2025,16 @@ def _get_merged_dataframe_sync(
                     merged["zones"] = merged["top_name"].ffill()
 
             if contacts_p is not None and not contacts_p.empty:
-                merged = pd.merge_asof(
-                    merged,
-                    contacts_p,
-                    on="depth",
-                    direction="nearest",
-                    tolerance=tol,
-                    suffixes=("", "_contact"),
-                )
+                mapped_contacts = _map_discrete_to_single_nearest_row(contacts_p, tol)
+                for c, vals in mapped_contacts.items():
+                    target_c = f"{c}_contact" if c in merged.columns else c
+                    merged[target_c] = vals
 
             if pressure_p is not None and not pressure_p.empty:
-                merged = pd.merge_asof(
-                    merged,
-                    pressure_p,
-                    on="depth",
-                    direction="nearest",
-                    tolerance=tol,
-                    suffixes=("", "_pressure"),
-                )
+                mapped_pressure = _map_discrete_to_single_nearest_row(pressure_p, tol)
+                for c, vals in mapped_pressure.items():
+                    target_c = f"{c}_pressure" if c in merged.columns else c
+                    merged[target_c] = vals
 
             core_rows_by_depth: Dict[float, Dict[str, Any]] = {}
             for dval, sname, prop_up, raw_val in rca_rows:
@@ -2005,25 +2060,75 @@ def _get_merged_dataframe_sync(
                     .sort_values("depth")
                     .reset_index(drop=True)
                 )
-                merged = pd.merge_asof(
-                    merged,
-                    core_df,
-                    on="depth",
-                    direction="nearest",
-                    tolerance=tol,
-                    suffixes=("", "_core"),
+                mapped_core = _map_discrete_to_single_nearest_row(
+                    core_df, max(tol, 0.5)
                 )
+                if "core_sample_name" in mapped_core:
+                    merged["core_sample_name"] = mapped_core["core_sample_name"]
                 for c_col in ("cpore", "cperm"):
-                    c_core = f"{c_col}_core"
-                    if c_core in merged.columns:
-                        if c_col in merged.columns:
-                            merged[c_col] = merged[c_core].combine_first(merged[c_col])
-                        else:
-                            merged[c_col] = merged[c_core]
-                        merged.drop(columns=[c_core], inplace=True)
+                    if c_col in mapped_core:
+                        s_mapped = pd.Series(mapped_core[c_col], index=merged.index, dtype=float)
+                        if s_mapped.notna().any():
+                            merged[c_col] = s_mapped
+            else:
+                # Clean up any legacy merge_asof duplicate core values across consecutive log rows
+                # jointly as a (cpore, cperm) plug pair so a plug's porosity and permeability stay paired at the same depth
+                has_cp = "cpore" in merged.columns
+                has_ck = "cperm" in merged.columns
+                if (has_cp or has_ck) and n_log > 1:
+                    cp_vals = (
+                        pd.to_numeric(merged["cpore"], errors="coerce").to_numpy(dtype=float)
+                        if has_cp
+                        else np.full(n_log, np.nan)
+                    )
+                    ck_vals = (
+                        pd.to_numeric(merged["cperm"], errors="coerce").to_numpy(dtype=float)
+                        if has_ck
+                        else np.full(n_log, np.nan)
+                    )
+                    cp_clean = cp_vals.copy()
+                    ck_clean = ck_vals.copy()
+
+                    def _same_val_or_both_nan(a: float, b: float) -> bool:
+                        a_fin = bool(np.isfinite(a))
+                        b_fin = bool(np.isfinite(b))
+                        if not a_fin and not b_fin:
+                            return True
+                        if a_fin != b_fin:
+                            return False
+                        return abs(a - b) <= 1e-6
+
+                    i = 0
+                    while i < n_log:
+                        if not np.isfinite(cp_vals[i]) and not np.isfinite(ck_vals[i]):
+                            i += 1
+                            continue
+                        j = i + 1
+                        while (
+                            j < n_log
+                            and (np.isfinite(cp_vals[j]) or np.isfinite(ck_vals[j]))
+                            and _same_val_or_both_nan(cp_vals[j], cp_vals[i])
+                            and _same_val_or_both_nan(ck_vals[j], ck_vals[i])
+                            and abs(log_depths[j] - log_depths[j - 1]) <= 0.35
+                        ):
+                            j += 1
+                        run_len = j - i
+                        if 2 <= run_len <= 4:
+                            keep_idx = i + (run_len // 2)
+                            for k in range(i, j):
+                                if k != keep_idx:
+                                    cp_clean[k] = np.nan
+                                    ck_clean[k] = np.nan
+                        i = j
+                    if has_cp:
+                        merged["cpore"] = cp_clean
+                    if has_ck:
+                        merged["cperm"] = ck_clean
 
             # Resolve TVD and TVDSS (= TVD - DF_elevation) from curves or directional survey (never assume TVD == MD)
-            from quick_pp.las_handler import extract_las_metadata, extract_well_df_elevation
+            from quick_pp.las_handler import (
+                extract_well_df_elevation,
+            )
 
             eph_hdr = _ephemeral_well_headers.get(
                 (project_id, well_name)
@@ -2220,8 +2325,8 @@ def _collect_project_handover_bundles(
     well_names_filter: Optional[List[str]] = None,
 ) -> tuple[str, str, List[Dict[str, Any]], Dict[str, Any]]:
     """Gather project metadata, project-level multi-well config, and per-well handover dictionaries (including ephemeral/cached live edits)."""
-    from quick_pp.handover import collect_well_handover_dict
     from quick_pp.app.backend.services.workspace import _ephemeral_well_configs
+    from quick_pp.handover import collect_well_handover_dict
 
     if project_id in _demo_deleted_projects:
         raise ValueError(f"Project {project_id} not found")
@@ -2249,18 +2354,20 @@ def _collect_project_handover_bundles(
         wells_bundle: List[Dict[str, Any]] = []
         seen_names = set()
 
+        target_wells: List[Tuple[int, str, str]] = []
         for orm_well in proj._orm_project.wells:
             curr_name = renamed_w_map.get(orm_well.name, orm_well.name)
             if orm_well.name in deleted_w_set or curr_name in deleted_w_set:
                 continue
             if allowed and curr_name not in allowed and orm_well.name not in allowed:
                 continue
-
             seen_names.add(curr_name)
-            well_obj = db_objects.Well(session, well_id=orm_well.well_id)
-            # Check if there is an updated merged/ephemeral dataframe in memory
+            target_wells.append((orm_well.well_id, orm_well.name, curr_name))
+
+        def _fetch_well_bundle(w_info: Tuple[int, str, str]) -> Dict[str, Any]:
+            w_id, orig_n, curr_n = w_info
             live_df = None
-            eph_entry = _ephemeral_wells.get(project_id, {}).get(curr_name)
+            eph_entry = _ephemeral_wells.get(project_id, {}).get(curr_n)
             if isinstance(eph_entry, pd.DataFrame):
                 live_df = eph_entry
             elif isinstance(eph_entry, dict) and isinstance(
@@ -2268,23 +2375,34 @@ def _collect_project_handover_bundles(
             ):
                 live_df = eph_entry["data"]
             else:
-                cached = _merged_data_cache.get(f"{project_id}_{curr_name}_0.16")
+                cached = _merged_data_cache.get(f"{project_id}_{curr_n}_0.16")
                 if cached is not None:
                     live_df = cached[1]
                 else:
                     try:
-                        live_df = _get_merged_dataframe_sync(project_id, curr_name)
+                        live_df = _get_merged_dataframe_sync(project_id, curr_n)
                     except Exception:
                         live_df = None
 
-            eph_w_cfg = _ephemeral_well_configs.get((project_id, curr_name)) or _ephemeral_well_configs.get((project_id, orm_well.name))
-            b_dict = collect_well_handover_dict(
-                well_obj,
-                override_df=live_df,
-                override_config=eph_w_cfg if isinstance(eph_w_cfg, dict) else None,
-            )
-            b_dict["name"] = curr_name
-            wells_bundle.append(b_dict)
+            eph_w_cfg = _ephemeral_well_configs.get((project_id, curr_n)) or _ephemeral_well_configs.get((project_id, orig_n))
+            with get_db() as w_session:
+                well_obj = db_objects.Well(w_session, well_id=w_id)
+                b_dict = collect_well_handover_dict(
+                    well_obj,
+                    override_df=live_df,
+                    override_config=eph_w_cfg if isinstance(eph_w_cfg, dict) else None,
+                )
+                b_dict["name"] = curr_n
+                return b_dict
+
+        if len(target_wells) > 1:
+            max_w = min(8, os.cpu_count() or 4)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as pool:
+                wells_bundle = list(pool.map(_fetch_well_bundle, target_wells))
+        elif len(target_wells) == 1:
+            wells_bundle = [_fetch_well_bundle(target_wells[0])]
+        else:
+            wells_bundle = []
 
         # Include any purely ephemeral uploaded wells in demo mode
         for eph_name, eph_val in _ephemeral_wells.get(project_id, {}).items():
@@ -2394,11 +2512,12 @@ def export_project_handover(
             project_config=proj_cfg,
         )
         filename = f"{_sanitize_name(bundle_title)}_Handover.zip"
-        return Response(
-            content=zip_bytes,
+        return ZipStreamingResponse(
+            io.BytesIO(zip_bytes),
             media_type="application/zip",
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(len(zip_bytes)),
             },
         )
     except ValueError as e:
@@ -2461,4 +2580,71 @@ def export_well_las_endpoint(project_id: int, well_name: str):
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to export LAS file: {e}"
+        ) from e
+
+
+
+@router.post(
+    "/projects/import-handover/inspect",
+    summary="Inspect a Petrophysical Handover Package (.zip) before ingestion",
+)
+def inspect_handover_package_endpoint(file: UploadFile = File(...)):
+    """Inspect an uploaded Petrophysical Handover Package (.zip) and return metadata preview."""
+    from quick_pp.handover import inspect_handover_archive
+
+    try:
+        content = file.file.read()
+        preview = inspect_handover_archive(content)
+        with get_db() as session:
+            existing = (
+                session.query(db_models.Project)
+                .filter_by(name=preview["project_name"])
+                .first()
+            )
+            preview["is_duplicate_name"] = bool(existing)
+            preview["suggested_name"] = (
+                f"{preview['project_name']}_Imported"
+                if existing
+                else preview["project_name"]
+            )
+        return preview
+    except Exception as e:
+        logger.exception("Failed to inspect handover package")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid handover package: {e}"
+        ) from e
+
+
+@router.post(
+    "/projects/import-handover/commit",
+    summary="Ingest a Petrophysical Handover Package (.zip) into database",
+)
+def commit_handover_package_endpoint(
+    request: Request,
+    file: UploadFile = File(...),
+    project_name: Optional[str] = Form(None),
+    project_id: Optional[int] = Form(None),
+    overwrite_existing: bool = Form(True),
+):
+    """Import a complete Petrophysical Handover Package (.zip) into database."""
+    from quick_pp.handover import import_handover_archive
+
+    try:
+        current_user = get_current_user_optional(request)
+        user_id = int(current_user["user_id"]) if current_user else None
+        content = file.file.read()
+        with get_db() as session:
+            res = import_handover_archive(
+                db_session=session,
+                zip_source=content,
+                target_project_name=project_name,
+                target_project_id=project_id,
+                created_by_user_id=user_id,
+                overwrite_existing_wells=overwrite_existing,
+            )
+            return res
+    except Exception as e:
+        logger.exception("Failed to import handover package")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to import handover package: {e}"
         ) from e

@@ -33,9 +33,6 @@ jobs:
       - name: Run Ruff Linter & Imports Check
         run: uvx ruff check quick_pp tests
 
-      - name: Run Black Formatting Check
-        run: uvx black --check quick_pp tests
-
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

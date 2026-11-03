@@ -363,7 +363,6 @@ def enforce_physical_constraints(
             df["PHIE_P90"] = np.minimum(df["PHIE_P90"], df["PHIT_P90"])
 
     # 3. Identify tight streaks and coal intervals
-    n_rows = len(df)
     tight_mask = pd.Series(False, index=df.index)
     if "TIGHT_FLAG" in df.columns:
         tight_mask = tight_mask | (df["TIGHT_FLAG"].fillna(0) >= 1.0)

@@ -34,6 +34,26 @@ export const PETRO_COLORS = {
 	vshDisFill: '#CBD5E1',
 	vshDisStroke: '#64748B',
 
+	// Extended minerals
+	illiFill: '#A1A1AA',
+	illiStroke: '#71717A',
+	smecFill: '#86EFAC',
+	smecStroke: '#22C55E',
+	chloFill: '#15803D',
+	chloStroke: '#14532D',
+	glaucFill: '#047857',
+	glaucStroke: '#064E3B',
+	kfeldFill: '#F472B6',
+	kfeldStroke: '#BE185D',
+	albiFill: '#E0E7FF',
+	albiStroke: '#818CF8',
+	sideFill: '#78350F',
+	sideStroke: '#451A03',
+	ankeFill: '#B45309',
+	ankeStroke: '#78350F',
+	keroFill: '#09090B',
+	keroStroke: '#27272A',
+
 	// Fluids & saturation
 	oil: '#16A34A',
 	gas: '#DC2626',
@@ -59,7 +79,11 @@ export const PETRO_COLORS = {
 	perm: '#0284C7',
 	phie: '#2563EB',
 	phit: '#0F172A',
-	phitSand: '#0D9488'
+	phitSand: '#047857',
+	pota: '#EC4899',
+	thor: '#06B6D4',
+	uran: '#8B5CF6',
+	cgr: '#16A34A'
 } as const;
 
 export interface GrEarthShadeBand {
@@ -222,6 +246,96 @@ export const LITHOLOGY_TRACK_SPECS: LithologyTrackSpec[] = [
 		rhobEndpoint: 1.3
 	},
 	{
+		mnemonic: 'VILLI',
+		mineralName: 'ILLITE',
+		shortLabel: 'Illite',
+		fillRgba: 'rgba(161, 161, 170, 0.65)',
+		fillHex: PETRO_COLORS.illiFill,
+		strokeHex: PETRO_COLORS.illiStroke,
+		nphiEndpoint: 0.25,
+		rhobEndpoint: 2.75
+	},
+	{
+		mnemonic: 'VSMEC',
+		mineralName: 'SMECTITE',
+		shortLabel: 'Smectite',
+		fillRgba: 'rgba(134, 239, 172, 0.55)',
+		fillHex: PETRO_COLORS.smecFill,
+		strokeHex: PETRO_COLORS.smecStroke,
+		nphiEndpoint: 0.45,
+		rhobEndpoint: 2.15
+	},
+	{
+		mnemonic: 'VCHLO',
+		mineralName: 'CHLORITE',
+		shortLabel: 'Chlorite',
+		fillRgba: 'rgba(21, 128, 61, 0.65)',
+		fillHex: PETRO_COLORS.chloFill,
+		strokeHex: PETRO_COLORS.chloStroke,
+		nphiEndpoint: 0.32,
+		rhobEndpoint: 2.85
+	},
+	{
+		mnemonic: 'VGLAUC',
+		mineralName: 'GLAUCONITE',
+		shortLabel: 'Glauconite',
+		fillRgba: 'rgba(4, 120, 87, 0.65)',
+		fillHex: PETRO_COLORS.glaucFill,
+		strokeHex: PETRO_COLORS.glaucStroke,
+		nphiEndpoint: 0.28,
+		rhobEndpoint: 2.85
+	},
+	{
+		mnemonic: 'VKFELD',
+		mineralName: 'KFELD',
+		shortLabel: 'K-Feldspar',
+		fillRgba: 'rgba(244, 114, 182, 0.58)',
+		fillHex: PETRO_COLORS.kfeldFill,
+		strokeHex: PETRO_COLORS.kfeldStroke,
+		nphiEndpoint: -0.02,
+		rhobEndpoint: 2.56
+	},
+	{
+		mnemonic: 'VALBI',
+		mineralName: 'ALBITE',
+		shortLabel: 'Albite',
+		fillRgba: 'rgba(224, 231, 255, 0.65)',
+		fillHex: PETRO_COLORS.albiFill,
+		strokeHex: PETRO_COLORS.albiStroke,
+		nphiEndpoint: -0.01,
+		rhobEndpoint: 2.62
+	},
+	{
+		mnemonic: 'VSIDE',
+		mineralName: 'SIDERITE',
+		shortLabel: 'Siderite',
+		fillRgba: 'rgba(120, 53, 15, 0.70)',
+		fillHex: PETRO_COLORS.sideFill,
+		strokeHex: PETRO_COLORS.sideStroke,
+		nphiEndpoint: 0.04,
+		rhobEndpoint: 3.96
+	},
+	{
+		mnemonic: 'VANKE',
+		mineralName: 'ANKERITE',
+		shortLabel: 'Ankerite',
+		fillRgba: 'rgba(180, 83, 9, 0.65)',
+		fillHex: PETRO_COLORS.ankeFill,
+		strokeHex: PETRO_COLORS.ankeStroke,
+		nphiEndpoint: 0.02,
+		rhobEndpoint: 3.05
+	},
+	{
+		mnemonic: 'VKERO',
+		mineralName: 'KEROGEN',
+		shortLabel: 'Kerogen',
+		fillRgba: 'rgba(9, 9, 11, 0.80)',
+		fillHex: PETRO_COLORS.keroFill,
+		strokeHex: PETRO_COLORS.keroStroke,
+		nphiEndpoint: 0.65,
+		rhobEndpoint: 1.20
+	},
+	{
 		mnemonic: 'VSAND',
 		mineralName: 'QUARTZ',
 		shortLabel: 'Quartz/Sand',
@@ -245,7 +359,16 @@ export const MINERAL_TO_CURVE_MNEMONIC: Record<string, string> = {
 	HALITE: 'VHALI',
 	PYRITE: 'VPYRI',
 	COAL: 'VCOAL',
-	SILT: 'VSILT'
+	SILT: 'VSILT',
+	ILLITE: 'VILLI',
+	SMECTITE: 'VSMEC',
+	CHLORITE: 'VCHLO',
+	GLAUCONITE: 'VGLAUC',
+	KFELD: 'VKFELD',
+	ALBITE: 'VALBI',
+	SIDERITE: 'VSIDE',
+	ANKERITE: 'VANKE',
+	KEROGEN: 'VKERO'
 };
 
 export const ALL_LITHOLOGY_CURVES = [
@@ -261,7 +384,16 @@ export const ALL_LITHOLOGY_CURVES = [
 	'VGYPS',
 	'VHALI',
 	'VPYRI',
-	'VCOAL'
+	'VCOAL',
+	'VILLI',
+	'VSMEC',
+	'VCHLO',
+	'VGLAUC',
+	'VKFELD',
+	'VALBI',
+	'VSIDE',
+	'VANKE',
+	'VKERO'
 ] as const;
 
 export const ROCK_TYPE_PALETTE = [
@@ -420,10 +552,12 @@ export function getCurveUnit(mnemonic: string): string {
 }
 
 export const ROCK_FLAG_0_COLOR = 'hsl(30, 70%, 97%)';
+export const ROCK_FLAG_0_ACCENT = '#94A3B8';
 
 export function getRockTypeColor(rockFlag: number | string | null | undefined): string {
 	const num = Number(rockFlag);
-	if (!Number.isFinite(num) || num <= 0) return ROCK_FLAG_0_COLOR;
+	if (!Number.isFinite(num) || num < 0) return ROCK_FLAG_0_COLOR;
+	if (Math.round(num) === 0) return ROCK_FLAG_0_ACCENT;
 	const idx = Math.max(0, Math.round(num) - 1);
 	return ROCK_TYPE_PALETTE[idx % ROCK_TYPE_PALETTE.length];
 }

@@ -52,7 +52,8 @@
 			wells: projectData.selectedWellNames,
 			ov: fpt.overrides,
 			ovz: fpt.overridesByZone,
-			ref: fpt.refDensity
+			ref: fpt.refDensity,
+			fluids: fpt.allowedFluids
 		});
 		if (!workbench.projectId) return;
 		void sig;
@@ -245,6 +246,64 @@
 			badge={fpt.pendingCount ? `${fpt.pendingCount} unsaved` : 'Saved'}
 			defaultOpen={true}
 		>
+			<!-- Reservoir Fluid System Selector -->
+			<div class="mb-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px]">
+				<div class="flex items-center justify-between">
+					<span class="font-semibold text-[var(--text-primary)]">Reservoir Fluid System</span>
+					<span class="mono-num text-[9px] text-[var(--text-muted)]">
+						{fpt.allowedFluids.map((f) => PHASE_LABEL[f]).join(' + ')}
+					</span>
+				</div>
+				<!-- Presets -->
+				<div class="mt-1 grid grid-cols-3 gap-1">
+					<button
+						type="button"
+						onclick={() => fpt.setFluidSystem('OIL_WATER')}
+						class="h-5 rounded-xs border px-1 text-[9.5px] font-semibold transition-colors {fpt.fluidSystem === 'OIL_WATER' ? 'border-emerald-400 bg-emerald-50 text-emerald-800' : 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)] hover:bg-slate-50'}"
+						title="Oil leg over aquifer (no free gas cap)"
+					>
+						Oil + Water
+					</button>
+					<button
+						type="button"
+						onclick={() => fpt.setFluidSystem('GAS_WATER')}
+						class="h-5 rounded-xs border px-1 text-[9.5px] font-semibold transition-colors {fpt.fluidSystem === 'GAS_WATER' ? 'border-rose-400 bg-rose-50 text-rose-800' : 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)] hover:bg-slate-50'}"
+						title="Gas reservoir over aquifer (no oil leg)"
+					>
+						Gas + Water
+					</button>
+					<button
+						type="button"
+						onclick={() => fpt.setFluidSystem('GAS_OIL_WATER')}
+						class="h-5 rounded-xs border px-1 text-[9.5px] font-semibold transition-colors {fpt.fluidSystem === 'GAS_OIL_WATER' ? 'border-sky-400 bg-sky-50 text-sky-800' : 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)] hover:bg-slate-50'}"
+						title="Full 3-phase system (gas cap + oil leg + aquifer)"
+					>
+						Gas + Oil + Wtr
+					</button>
+				</div>
+				<!-- Active fluid checkboxes -->
+				<div class="mt-1.5 flex items-center justify-between border-t border-[var(--border-hairline)] pt-1 text-[10px]">
+					<span class="text-[var(--text-muted)]">Active fluids:</span>
+					<div class="flex items-center gap-2">
+						{#each FPT_PHASES as ph (ph)}
+							{@const active = fpt.isFluidAllowed(ph)}
+							<label class="flex items-center gap-1 cursor-pointer" title="Enable or disable {PHASE_LABEL[ph]} in the reservoir">
+								<input
+									type="checkbox"
+									checked={active}
+									onchange={() => fpt.toggleAllowedFluid(ph)}
+									class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)] focus:ring-0"
+								/>
+								<span class="flex items-center gap-0.5 font-medium {active ? 'text-[var(--text-primary)]' : 'text-slate-400 line-through'}">
+									<span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color: {FPT_FLUID_COLORS[ph]}"></span>
+									{PHASE_LABEL[ph]}
+								</span>
+							</label>
+						{/each}
+					</div>
+				</div>
+			</div>
+
 			<p class="text-[10px] leading-snug text-[var(--text-secondary)]">
 				Lasso or click points on the plot to assign <strong>Gas / Oil / Water</strong> or flag
 				<strong>Supercharged / Tight / Excluded</strong>. Edits re-fit live and are saved to each well's
@@ -269,7 +328,7 @@
 				</label>
 				<label class="mt-0.5 flex items-center gap-1.5">
 					<input type="checkbox" bind:checked={fpt.autoAssignFluids} class="h-3 w-3" />
-					<span>Suggest phase for unassigned points (local gradient density)</span>
+					<span>Suggest phase for unassigned points (constrained to {fpt.allowedFluids.map((f) => PHASE_LABEL[f]).join(' / ')})</span>
 				</label>
 				<button
 					type="button"
@@ -359,12 +418,22 @@
 				{@const activeGrads = fpt.activeZone !== 'ALL' ? (res?.by_zone?.[fpt.activeZone]?.gradients ?? res?.gradients) : res?.gradients}
 				<div class="space-y-1.5">
 					{#each FPT_PHASES as ph (ph)}
+						{@const allowed = fpt.isFluidAllowed(ph)}
 						{@const g = activeGrads?.[ph]}
 						{@const ov = currentOverrides[ph]}
 						{@const hint = densityHint(ph, g?.density_gcc)}
-						<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px]" style="border-left: 3px solid {FPT_FLUID_COLORS[ph]}">
+						<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px] {allowed ? '' : 'opacity-50'}" style="border-left: 3px solid {allowed ? FPT_FLUID_COLORS[ph] : '#CBD5E1'}">
 							<div class="flex items-center justify-between">
-								<span class="font-semibold" style="color: {FPT_FLUID_COLORS[ph]}">{PHASE_LABEL[ph]}</span>
+								<label class="flex items-center gap-1.5 cursor-pointer">
+									<input
+										type="checkbox"
+										checked={allowed}
+										onchange={() => fpt.toggleAllowedFluid(ph)}
+										class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)] focus:ring-0"
+										title="Toggle {PHASE_LABEL[ph]} presence in reservoir"
+									/>
+									<span class="font-semibold {allowed ? '' : 'line-through text-slate-400'}" style="color: {allowed ? FPT_FLUID_COLORS[ph] : undefined}">{PHASE_LABEL[ph]}</span>
+								</label>
 								{#if g}
 									<span class="mono-num text-[9.5px] text-[var(--text-muted)]">
 										{g.method} · n={g.n_points}{g.r_squared !== null ? ` · R² ${fmtNum(g.r_squared, 4)}` : ''}
@@ -464,6 +533,13 @@
 			{@const allZoneContacts = fpt.activeZone === 'ALL' && res?.by_zone ? Object.entries(res.by_zone).flatMap(([zn, zr]) => Object.values(zr.contacts || {}).map((c) => ({ zone: zn, contact: c }))) : []}
 			{@const showList = fpt.activeZone !== 'ALL' ? Object.values(activeContacts || {}).map((c) => ({ zone: fpt.activeZone, contact: c })) : allZoneContacts}
 
+			{@const goc = activeContacts?.GOC}
+			{@const owc = activeContacts?.OWC}
+			{#if goc && owc && goc.tvdss_p50 > owc.tvdss_p50}
+				<div class="mb-1.5 rounded-xs border border-rose-300 bg-rose-50 p-1.5 text-[9.5px] text-rose-800">
+					<strong>⚠ Physical Inversion Detected:</strong> GOC ({fmtNum(goc.tvdss_p50, 1)} {res?.units?.depth}) is deeper than OWC ({fmtNum(owc.tvdss_p50, 1)} {res?.units?.depth}). In an unsegmented reservoir, Gas cap must lie above the Oil leg. Select <em>Oil + Water</em> if there is no gas cap.
+				</div>
+			{/if}
 			{#if showList.length > 0}
 				<div class="space-y-1.5">
 					{#each showList as item (item.zone + '::' + item.contact?.contact_type)}
@@ -551,23 +627,82 @@
 			{/if}
 		</ParameterSection>
 
-		<ParameterSection title="Excess Pressure Reference" badge={res ? `ρ ${fmtNum(res.reference.density_gcc, 3)} g/cc` : '—'}>
-			<label class="flex items-center justify-between gap-1 text-[10.5px]">
-				<span class="text-[var(--text-muted)]">Reference density (blank = water fit / 1.0)</span>
-				<input
-					type="number"
-					step="0.01"
-					value={fpt.refDensity ?? ''}
-					oninput={(e) => (fpt.refDensity = numOrNull((e.currentTarget as HTMLInputElement).value))}
-					class="mono-num h-5.5 w-16 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-right text-[11px]"
-				/>
-			</label>
-			{#if res}
-				<p class="mono-num mt-1 text-[9.5px] text-[var(--text-muted)]">
-					Datum {fmtNum(res.reference.datum_tvdss, 1)} {res.units.depth} @ {fmtNum(res.reference.datum_pressure, 1)}
-					{res.units.pressure} · {fmtNum(res.reference.gradient, 4)} {res.units.gradient}
-				</p>
-			{/if}
+		<ParameterSection title="Reference Gradients & Regimes" badge={res ? `ρ ${fmtNum(fpt.hydrostaticDensity, 2)} g/cc` : '—'}>
+			<div class="space-y-2 text-[10.5px]">
+				<!-- Hydrostatic Baseline Settings -->
+				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+					<div class="flex items-center justify-between">
+						<label class="flex items-center gap-1.5 font-semibold text-[var(--text-primary)] cursor-pointer">
+							<input
+								type="checkbox"
+								bind:checked={fpt.showHydrostaticLine}
+								class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)] focus:ring-0"
+							/>
+						<span>Normal Hydrostatic Baseline</span>
+						</label>
+						<span class="mono-num text-[9px] text-[var(--text-muted)]">= {eqGradient(fpt.hydrostaticDensity)}</span>
+					</div>
+					<p class="mt-0.5 text-[9.5px] text-[var(--text-muted)]">
+						Extrapolated from surface (P = 0 @ TVDSS = 0) to benchmark normal, over-, or under-pressure regimes.
+					</p>
+					<label class="mt-1 flex items-center justify-between gap-1 text-[10px]">
+						<span class="text-[var(--text-muted)]">Hydrostatic density (g/cc)</span>
+						<div class="flex items-center gap-1">
+							<input
+								type="number"
+								step="0.01"
+								min="0.8"
+								max="1.5"
+								value={fpt.hydrostaticDensity}
+								oninput={(e) => {
+									const n = numOrNull((e.currentTarget as HTMLInputElement).value);
+									if (n !== null) fpt.hydrostaticDensity = n;
+								}}
+								class="mono-num h-5.5 w-16 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-right text-[11px]"
+							/>
+							<div class="flex items-center gap-0.5">
+								<button
+									type="button"
+									onclick={() => (fpt.hydrostaticDensity = 1.00)}
+									class="rounded-xs border border-[var(--border-hairline)] bg-white px-1 py-0.5 text-[9px] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+									title="Freshwater (1.00 g/cc, 0.433 psi/ft)"
+								>
+									Fresh
+								</button>
+								<button
+									type="button"
+									onclick={() => (fpt.hydrostaticDensity = 1.03)}
+									class="rounded-xs border border-[var(--border-hairline)] bg-white px-1 py-0.5 text-[9px] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+									title="Nominal Brine / Seawater (1.03 g/cc, 0.446 psi/ft)"
+								>
+									Brine
+								</button>
+							</div>
+						</div>
+					</label>
+				</div>
+
+				<!-- Excess Pressure Reference -->
+				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+					<div class="font-semibold text-[var(--text-primary)]">Excess Pressure Reference</div>
+					<label class="mt-1 flex items-center justify-between gap-1 text-[10px]">
+						<span class="text-[var(--text-muted)]">Reference density (blank = water fit / 1.0)</span>
+						<input
+							type="number"
+							step="0.01"
+							value={fpt.refDensity ?? ''}
+							oninput={(e) => (fpt.refDensity = numOrNull((e.currentTarget as HTMLInputElement).value))}
+							class="mono-num h-5.5 w-16 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-right text-[11px]"
+						/>
+					</label>
+					{#if res}
+						<p class="mono-num mt-1 text-[9.5px] text-[var(--text-muted)]">
+							Datum {fmtNum(res.reference.datum_tvdss, 1)} {res.units.depth} @ {fmtNum(res.reference.datum_pressure, 1)}
+							{res.units.pressure} · {fmtNum(res.reference.gradient, 4)} {res.units.gradient}
+						</p>
+					{/if}
+				</div>
+			</div>
 		</ParameterSection>
 
 		{#if res?.warnings?.length}

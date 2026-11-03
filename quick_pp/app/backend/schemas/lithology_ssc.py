@@ -1,8 +1,9 @@
 """
 Schemas for sand-silt-clay lithology input.
 """
-from pydantic import BaseModel, Field
 from typing import List, Optional, Tuple
+
+from pydantic import BaseModel, Field
 
 
 class SSCData(BaseModel):

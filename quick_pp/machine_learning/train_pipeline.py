@@ -2,6 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 
+import joblib
 import mlflow
 import mlflow.sklearn as mlflow_sklearn
 import numpy as np
@@ -490,7 +491,9 @@ def train_multi_well_conformal_model(
         - Carbonate: `['PHIT', 'SWT', 'LOG_PERM', 'VCALC', 'VCLAY', 'VDOLO']` (+ `OIL_FLAG`, `GAS_FLAG`)
     """
     from datetime import datetime, timezone
+
     from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+
     from quick_pp.machine_learning.config import FE_FEATURES, RAW_FEATURES
     from quick_pp.machine_learning.predict_pipeline import save_pretrained_model_suite
 

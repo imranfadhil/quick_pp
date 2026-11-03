@@ -224,8 +224,7 @@ def test_normalize_by_zone_50_wells_histogram_matching_and_report():
     )
 
     assert len(report_df) == n_wells * 2
-    assert set(
-        [
+    assert {
             "WELL_NAME",
             "ZONE",
             "LOG",
@@ -235,8 +234,7 @@ def test_normalize_by_zone_50_wells_histogram_matching_and_report():
             "P_HIGH_ORIG",
             "SCALE_FACTOR",
             "DRIFT_SHIFT",
-        ]
-    ).issubset(report_df.columns)
+        }.issubset(report_df.columns)
 
     # Every single one of the 55 wells should match WELL-00's distribution in both zones
     key_sand = norm_df[

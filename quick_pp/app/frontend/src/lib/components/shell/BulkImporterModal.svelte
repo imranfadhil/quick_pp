@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { API_BASE, authHeaders } from '$lib/api/client';
 	import BulkAncillaryImporter from '$lib/components/BulkAncillaryImporter.svelte';
+	import HandoverImporter from '$lib/components/HandoverImporter.svelte';
 	import { authState } from '$lib/state/auth.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { appStatus } from '$lib/state/status.svelte';
@@ -16,7 +17,14 @@
 		| 'scal_pc'
 		| 'pressure_tests'
 		| 'well_surveys'
+		| 'handover'
 	>('las');
+
+	$effect(() => {
+		if (workbench.importerOpen && workbench.importerTab) {
+			activeTab = workbench.importerTab;
+		}
+	});
 
 	let lasFiles = $state<FileList | null>(null);
 	let inspectingLas = $state(false);
@@ -347,11 +355,15 @@
 					['core_samples', 'RCA Core Plugs'],
 					['scal_pc', 'SCAL (Pc)'],
 					['pressure_tests', 'Pressure Tests'],
-					['well_surveys', 'Deviation Survey']
+					['well_surveys', 'Deviation Survey'],
+					['handover', '📦 Handover Package (.zip)']
 				] as [tabKey, label]}
 					<button
 						type="button"
-						onclick={() => (activeTab = tabKey as any)}
+						onclick={() => {
+							activeTab = tabKey as any;
+							workbench.importerTab = tabKey as any;
+						}}
 						class="h-6 rounded-sm px-2 text-xs font-medium transition-colors {activeTab === tabKey
 							? 'bg-[var(--accent-primary)] text-white'
 							: 'text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
@@ -373,7 +385,9 @@
 					</div>
 				{/if}
 
-				{#if activeTab === 'las'}
+				{#if activeTab === 'handover'}
+					<HandoverImporter />
+				{:else if activeTab === 'las'}
 					<div class="space-y-3">
 						<!-- Step 1: Dropzone / File Input -->
 						<div class="flex flex-wrap items-center justify-between gap-2">

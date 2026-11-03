@@ -172,12 +172,53 @@
 			readyCheck: () => projectData.shfResult !== null
 		},
 		{
-			id: 'report',
+			id: 'volumetrics',
 			num: 6,
+			label: 'Volumetric Assessment',
+			readyCheck: () => projectData.volumetricResult !== null
+		},
+		{
+			id: 'report',
+			num: 7,
 			label: 'FDP Report',
 			readyCheck: () => workbench.multiWellReport !== null
 		}
 	];
+
+	function getActiveWorkflowGuideAnchor(): string {
+		if (workbench.scope === 'single-well') {
+			if (workbench.singleWellStep === 'scal') return 'sw-standalone-core-pc';
+			const map: Record<SingleWellStep, string> = {
+				'qaqc': 'sw-step-1-qaqc',
+				'ancillary': 'sw-step-2-ancillary',
+				'litho-poro': 'sw-step-3-litho-poro',
+				'perm': 'sw-step-4-perm',
+				'saturation': 'sw-step-5-saturation',
+				'ressum': 'sw-step-6-ressum',
+				'report': 'sw-step-7-report',
+				'scal': 'sw-standalone-core-pc'
+			};
+			return map[workbench.singleWellStep] ?? 'sw-step-1-qaqc';
+		}
+		if (workbench.multiWellStep === 'swirr-corr') return 'mw-standalone-scal-relperm';
+		if (workbench.multiWellStep === 'fpt') return 'mw-standalone-fpt';
+		if (workbench.multiWellStep === 'rt-classifier') return 'mw-standalone-rt-classifier';
+		if (workbench.multiWellStep === 'ml-training') return 'mw-standalone-ml-training';
+		const mwMap: Record<MultiWellStep, string> = {
+			'inventory': 'mw-step-1-inventory',
+			'qaqc': 'mw-step-2-qaqc',
+			'rock-typing': 'mw-step-3-rock-typing',
+			'perm-transform': 'mw-step-4-perm-transform',
+			'shf': 'mw-step-5-shf',
+			'volumetrics': 'mw-step-6-volumetrics',
+			'report': 'mw-step-7-report',
+			'swirr-corr': 'mw-standalone-scal-relperm',
+			'fpt': 'mw-standalone-fpt',
+			'rt-classifier': 'mw-standalone-rt-classifier',
+			'ml-training': 'mw-standalone-ml-training'
+		};
+		return mwMap[workbench.multiWellStep] ?? 'mw-step-1-inventory';
+	}
 </script>
 
 <nav
@@ -185,9 +226,21 @@
 >
 	<!-- Dynamic Workflow Step Tabs -->
 	<div class="flex items-center gap-1 overflow-x-auto">
-		<span class="mr-1 text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
-			Workflow:
-		</span>
+		<div class="flex items-center gap-1 mr-1">
+			<span class="text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
+				Workflow:
+			</span>
+			<button
+				type="button"
+				title="Open Petrophysical Technical Reference for current workflow step"
+				onclick={() => {
+					workbench.openWorkflowGuide(workbench.scope, getActiveWorkflowGuideAnchor());
+				}}
+				class="flex h-4 w-4 items-center justify-center rounded-2xs text-[10px] text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--accent-primary)]"
+			>
+				📖
+			</button>
+		</div>
 
 		{#if workbench.scope === 'single-well'}
 			{#each SINGLE_WELL_STEPS as step (step.id)}
@@ -265,6 +318,8 @@
 						workbench.multiWellStep = step.id;
 						if (step.id === 'shf' && projectData.wellsWithTvd.length > 0) {
 							workbench.centerPaneMultiWellView = 'stick-plot';
+						} else {
+							workbench.centerPaneMultiWellView = 'logs';
 						}
 					}}
 					class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-45 {isActive
@@ -325,7 +380,10 @@
 				Boolean(projectData.rockTypingResult?.diagnostics?.classifier?.trained)}
 			<button
 				type="button"
-				onclick={() => (workbench.multiWellStep = 'rt-classifier')}
+				onclick={() => {
+					workbench.multiWellStep = 'rt-classifier';
+					workbench.centerPaneMultiWellView = 'logs';
+				}}
 				title="Standalone Supervised Rock Type (DRT) Classifier Trainer, Contingency Matrix Validator & Model Registry"
 				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isRtClfActive
 					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
@@ -346,7 +404,10 @@
 			{@const isMlTrainDone = projectData.mlTrainingResult !== null}
 			<button
 				type="button"
-				onclick={() => (workbench.multiWellStep = 'ml-training')}
+				onclick={() => {
+					workbench.multiWellStep = 'ml-training';
+					workbench.centerPaneMultiWellView = 'logs';
+				}}
 				title="Standalone Multi-Well Conformal PIML Model Trainer & Global Bundle Exporter"
 				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isMlTrainActive
 					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
@@ -389,7 +450,7 @@
 
 	<!-- Right Pane Mode Switcher, Clear Calculated Curves & Live Status Pill -->
 	<div class="flex items-center gap-2">
-		{#if appStatus.isBusy || wellData.isCalculating || projectData.isComputingMultiWell}
+		{#if appStatus.isBusy || wellData.isCalculating || wellData.isSaving || projectData.isComputingMultiWell || projectData.isSavingMultiWell}
 			<button
 				type="button"
 				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}

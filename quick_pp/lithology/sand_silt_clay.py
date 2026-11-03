@@ -86,14 +86,6 @@ class SandSiltClay:
                 f"Updated wet clay point to: ({wetclay_NPHI:.3f}, {wetclay_RHOB:.3f})"
             )
 
-        # Redefine drysilt point
-        drysilt_NPHI = 1 - 1.68 * (
-            math.tan(float(self.silt_line_angle - 90) * math.pi / 180)
-        )
-        if not all(B):
-            B = self.dry_silt_point = (drysilt_NPHI, B[1])
-            logger.debug(f"Updated dry silt point to: ({drysilt_NPHI:.3f}, {B[1]:.3f})")
-
         # Define dryclay point
         if not all(C):
             # Calculate dryclay_NPHI given dryclay_RHOB
@@ -101,6 +93,21 @@ class SandSiltClay:
             dryclay_NPHI = ((C[1] - D[1]) / m) + D[0]
             C = self.dry_clay_point = (dryclay_NPHI, C[1])
             logger.debug(f"Updated dry clay point to: ({dryclay_NPHI:.3f}, {C[1]:.3f})")
+
+        # Redefine drysilt point by finding intersection between silt line and rock line
+        A = self.dry_sand_point
+        if not all(B) or B[0] is None:
+            rad = math.radians(float(self.silt_line_angle))
+            p_silt = (D[0] + math.cos(rad), D[1] + math.sin(rad))
+            silt_x, silt_y = line_intersection((A, C), (D, p_silt))
+            if np.isfinite(silt_x) and np.isfinite(silt_y):
+                B = self.dry_silt_point = (float(silt_x), float(silt_y))
+            else:
+                drysilt_NPHI = 1 - 1.68 * (
+                    math.tan(float(self.silt_line_angle - 90) * math.pi / 180)
+                )
+                B = self.dry_silt_point = (drysilt_NPHI, B[1] if B[1] is not None else 2.68)
+            logger.debug(f"Updated dry silt point to: ({B[0]:.3f}, {B[1]:.3f})")
 
         # Calculate lithology fraction
         vsand, vsilt, vcld = self.lithology_fraction_kuttan_modified(nphi, rhob)

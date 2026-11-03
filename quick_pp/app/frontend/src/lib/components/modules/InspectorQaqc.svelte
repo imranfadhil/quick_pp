@@ -2304,7 +2304,7 @@
 			<div class="mt-1 flex gap-1.5">
 				<button
 					type="button"
-					disabled={wellData.isCalculating}
+					disabled={wellData.isCalculating || wellData.isSaving}
 					onclick={() => runBadholeFlagging(false)}
 					class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 				>
@@ -2312,7 +2312,7 @@
 				</button>
 				<button
 					type="button"
-					disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-badhole')}
+					disabled={wellData.isCalculating || wellData.isSaving || !wellData.hasPendingComputed('qaqc-badhole')}
 					onclick={saveBadholeFlagging}
 					title={wellData.hasPendingComputed('qaqc-badhole')
 						? wellData.getPendingSaveTooltip(
@@ -2322,7 +2322,7 @@
 						: 'Click Flag Badhole first to preview flags before saving'}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 				>
-					Save
+					{wellData.isSaving ? 'Saving...' : 'Save'}
 				</button>
 			</div>
 		</ParameterSection>
@@ -2382,7 +2382,7 @@
 			<div class="mt-1 flex gap-1.5">
 				<button
 					type="button"
-					disabled={wellData.isCalculating}
+					disabled={wellData.isCalculating || wellData.isSaving}
 					onclick={() => runEnvCorrections(false)}
 					class="h-6 flex-1 rounded-sm bg-[var(--accent-primary)] px-2 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 				>
@@ -2390,7 +2390,7 @@
 				</button>
 				<button
 					type="button"
-					disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-env')}
+					disabled={wellData.isCalculating || wellData.isSaving || !wellData.hasPendingComputed('qaqc-env')}
 					onclick={saveEnvCorrections}
 					title={wellData.hasPendingComputed('qaqc-env')
 						? wellData.getPendingSaveTooltip(
@@ -2400,7 +2400,7 @@
 						: 'Apply Env Corrections first to enable saving'}
 					class="h-6 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[11px] font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 				>
-					Save
+					{wellData.isSaving ? 'Saving...' : 'Save'}
 				</button>
 			</div>
 		</ParameterSection>

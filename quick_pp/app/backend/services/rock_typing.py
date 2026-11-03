@@ -1,5 +1,7 @@
 """Rock typing, FZI/Winland/GHE classification, and vuggy/fracture porosity API endpoints."""
 
+from typing import List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
@@ -11,7 +13,6 @@ from quick_pp.app.backend.services.database import (
 )
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_list
-
 
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Rock Typing"])
 
@@ -47,6 +48,8 @@ def _compute_fzi_data_sync(
     cperm_list = []
     phis_list = []
     phi_sec_list = []
+    vsh_list = []
+    coal_flags_list = []
     zones_list = []
     rock_flags_list = []
     sonic_wells = []
@@ -106,15 +109,40 @@ def _compute_fzi_data_sync(
                 ):
                     df = df.copy()
                     df["ZONES"] = pd.NA
+                    d_num = pd.to_numeric(df["DEPTH"], errors="coerce")
+                    sorted_tops: List[Tuple[float, str, Optional[float]]] = []
                     for _, top in tops_df.iterrows():
                         try:
-                            top_depth = float(top.get("depth"))
-                            top_name = str(top.get("name"))
+                            top_depth = float(
+                                top.get("depth")
+                                if top.get("depth") is not None
+                                else top.get("top_depth")
+                            )
+                            top_name = str(
+                                top.get("name")
+                                or top.get("zone")
+                                or top.get("formation")
+                                or ""
+                            ).strip()
+                            base_val = top.get("base_depth")
+                            base_depth = (
+                                float(base_val)
+                                if base_val is not None and pd.notna(base_val)
+                                else None
+                            )
+                            if top_name:
+                                sorted_tops.append((top_depth, top_name, base_depth))
                         except Exception:
                             continue
-                        nearest_idx = (df["DEPTH"] - top_depth).abs().idxmin()
-                        df.at[nearest_idx, "ZONES"] = top_name
-                    df["ZONES"] = df["ZONES"].ffill()
+                    sorted_tops.sort(key=lambda t: t[0])
+                    for top_depth, top_name, base_depth in sorted_tops:
+                        if base_depth is not None:
+                            df.loc[
+                                (d_num >= top_depth) & (d_num <= base_depth),
+                                "ZONES",
+                            ] = top_name
+                        else:
+                            df.loc[d_num >= top_depth, "ZONES"] = top_name
 
             phit_col = None
             perm_col = None
@@ -289,23 +317,49 @@ def _compute_fzi_data_sync(
             else:
                 zones = ["Unknown"] * len(cpore)
 
+            # Resolve Vshale/Vclay and Coal/Non-Reservoir flags at common_index
+            vsh_s = pd.Series(np.nan, index=common_index, dtype=float)
+            for vcol in ("VSHALE", "VSH", "VSH_GR", "VSH_DN", "VSH_TS", "VCLAY", "VCL"):
+                if vcol in df.columns:
+                    vs_cand = pd.to_numeric(df.loc[common_index, vcol], errors="coerce")
+                    if vs_cand.notna().any():
+                        vsh_s = vsh_s.combine_first(vs_cand.clip(0.0, 1.0))
+            if (
+                vsh_s.isna().all()
+                and "VCLAY" in df.columns
+                and "VSILT" in df.columns
+            ):
+                vcl_c = pd.to_numeric(df.loc[common_index, "VCLAY"], errors="coerce")
+                vsl_c = pd.to_numeric(df.loc[common_index, "VSILT"], errors="coerce")
+                vsh_s = (vcl_c.fillna(0.0) + vsl_c.fillna(0.0)).clip(0.0, 1.0)
+                vsh_s.loc[vcl_c.isna() & vsl_c.isna()] = np.nan
+
+            coal_s = pd.Series(0, index=common_index, dtype=int)
+            for ccol in ("COAL_FLAG", "VCOAL"):
+                if ccol in df.columns:
+                    cs = pd.to_numeric(df.loc[common_index, ccol], errors="coerce").fillna(0.0)
+                    coal_s = np.maximum(coal_s, (cs >= 0.5).astype(int))
+            if "RES_FLAG" in df.columns:
+                res_s = pd.to_numeric(df.loc[common_index, "RES_FLAG"], errors="coerce")
+                coal_s = np.maximum(coal_s, (res_s.notna() & (res_s <= 0)).astype(int))
+
             if rock_flag_col:
                 rf_s = pd.to_numeric(
                     df.loc[common_index, rock_flag_col], errors="coerce"
                 )
-                rf_s = rf_s.where(rf_s >= 1, np.nan)
+                rf_s = rf_s.where(rf_s >= 0, np.nan)
                 if "ROCK_FLAG_ML" in df.columns:
                     ml_s = pd.to_numeric(
                         df.loc[common_index, "ROCK_FLAG_ML"], errors="coerce"
                     )
-                    ml_s = ml_s.where(ml_s >= 1, np.nan)
+                    ml_s = ml_s.where(ml_s >= 0, np.nan)
                     rf_s = rf_s.combine_first(ml_s)
                 rock_flags = rf_s.where(pd.notna(rf_s), None).tolist()
             elif "ROCK_FLAG_ML" in df.columns:
                 rf_s = pd.to_numeric(
                     df.loc[common_index, "ROCK_FLAG_ML"], errors="coerce"
                 )
-                rf_s = rf_s.where(rf_s >= 1, np.nan)
+                rf_s = rf_s.where(rf_s >= 0, np.nan)
                 rock_flags = rf_s.where(pd.notna(rf_s), None).tolist()
             else:
                 rock_flags = [None] * len(cpore)
@@ -317,6 +371,8 @@ def _compute_fzi_data_sync(
             cperm_list.append(cperm)
             phis_list.append(phis_s)
             phi_sec_list.append(phi_sec_s)
+            vsh_list.append(vsh_s)
+            coal_flags_list.extend(coal_s.tolist())
             zones_list.extend(zones)
             rock_flags_list.extend(rock_flags)
 
@@ -342,12 +398,14 @@ def _compute_fzi_data_sync(
         perm_all = pd.concat(cperm_list).tolist() if cperm_list else []
         phis_all = pd.concat(phis_list).tolist() if phis_list else []
         phi_sec_all = pd.concat(phi_sec_list).tolist() if phi_sec_list else []
+        vsh_all = pd.concat(vsh_list).tolist() if vsh_list else []
         tvd_all = pd.concat(tvd_list).tolist() if tvd_list else []
 
         phit_all = sanitize_list(phit_all)
         perm_all = sanitize_list(perm_all)
         phis_all = sanitize_list(phis_all)
         phi_sec_all = sanitize_list(phi_sec_all)
+        vsh_all = sanitize_list(vsh_all)
         tvd_all = sanitize_list(tvd_all)
         depths_list = sanitize_list(depths_list)
         rock_flags_list = [
@@ -367,6 +425,8 @@ def _compute_fzi_data_sync(
             "perm_label": "CPERM" if src_norm == "core" else "PERM",
             "phit": phit_all,
             "perm": perm_all,
+            "vsh": vsh_all,
+            "coal_flags": coal_flags_list,
             "phis": phis_all,
             "phi_sec": phi_sec_all,
             "has_sonic": len(sonic_wells) > 0,

@@ -17,6 +17,7 @@ export type MultiWellStep =
 	| 'rt-classifier'
 	| 'ml-training'
 	| 'fpt'
+	| 'volumetrics'
 	| 'report';
 
 export type ReportType = 'FDP_FULL' | 'SINGLE_WELL_CPI' | 'QAQC_SUMMARY' | 'RESSUM_ONLY';
@@ -248,6 +249,287 @@ export interface ResSumParams {
 	boP50: number;
 }
 
+export interface VolumetricPercentiles {
+	p90: number;
+	p50: number;
+	p10: number;
+	mean: number;
+	std: number;
+}
+
+export interface TornadoItem {
+	param: string;
+	label: string;
+	unit: string;
+	low_param?: number;
+	high_param?: number;
+	vol_at_low: number;
+	vol_at_high: number;
+	base_vol: number;
+	swing: number;
+}
+
+export interface ExceedancePoint {
+	volume: number;
+	prob: number;
+}
+
+export interface HistBin {
+	bin_start: number;
+	bin_end: number;
+	count: number;
+}
+
+export interface ShfProfilePoint {
+	depth_tvd: number;
+	height_above_fwl: number;
+	sw_shf: number;
+	pc_psi: number;
+	area_fraction: number;
+}
+
+export interface ShfComparison {
+	log_mean_sw: number;
+	shf_p50_sw: number;
+	delta_sw: number;
+	delta_volume_pct: number;
+	model: string;
+	parameters: {
+		a: number;
+		b: number;
+		swirr: number;
+		fwl_p50: number;
+		crest: number;
+	};
+}
+
+export interface InputDistSummary {
+	param: string;
+	label: string;
+	unit: string;
+	dist_type: string;
+	n_samples?: number;
+	mean: number;
+	std: number;
+	min: number;
+	max: number;
+	p90: number;
+	p50: number;
+	p10: number;
+	histogram: HistBin[];
+}
+
+export interface AssumptionsRegister {
+	evaluation_standard: string;
+	reservoir_type_applied: string;
+	contact_source_applied: string;
+	fluid_contacts: {
+		goc_tvdss: number | null;
+		owc_tvdss: number | null;
+		gwc_tvdss: number | null;
+		source: string;
+	};
+	cut_offs: {
+		vsh_max: number;
+		phit_min: number;
+		swt_max: number;
+	};
+	monte_carlo_engine: {
+		method: string;
+		realizations: number;
+		random_seed: number;
+	};
+	parameter_assumptions: Array<{
+		parameter: string;
+		distribution: string;
+		justification: string;
+	}>;
+}
+
+export interface ZonalVolumetricSummary {
+	zone: string;
+	well_count: number;
+	mean_gross: number;
+	mean_net_res: number;
+	ntg_res: number;
+	mean_net_pay: number;
+	ntg_pay: number;
+	mean_phie: number;
+	mean_sw: number;
+	mean_perm_geom: number;
+	mean_hcpt: number;
+	mode: 'area' | 'grv';
+	area_mean?: number | null;
+	grv_mean?: number | null;
+	stoiip: VolumetricPercentiles;
+	rec_oil: VolumetricPercentiles;
+	giip: VolumetricPercentiles;
+	rec_gas: VolumetricPercentiles;
+	assoc_gas: VolumetricPercentiles;
+	exceedance_curve: ExceedancePoint[];
+	histogram: HistBin[];
+	tornado: TornadoItem[];
+	input_distributions?: Record<string, InputDistSummary>;
+	assumptions_register?: AssumptionsRegister;
+	contacts?: {
+		goc: number | null;
+		owc: number | null;
+		gwc: number | null;
+		reservoir_type: string;
+		source: string;
+	};
+	shf_profile?: ShfProfilePoint[];
+	shf_comparison?: ShfComparison | null;
+	saturation_method?: 'log_average' | 'shf';
+}
+
+export interface FieldVolumetricTotals {
+	total_wells: number;
+	total_zones: number;
+	stoiip: VolumetricPercentiles;
+	rec_oil: VolumetricPercentiles;
+	giip: VolumetricPercentiles;
+	rec_gas: VolumetricPercentiles;
+	assoc_gas: VolumetricPercentiles;
+	total_gas: VolumetricPercentiles;
+	exceedance_curve: ExceedancePoint[];
+	histogram: HistBin[];
+	tornado: TornadoItem[];
+	input_distributions?: Record<string, InputDistSummary>;
+	assumptions_register?: AssumptionsRegister;
+	shf_profile?: ShfProfilePoint[];
+	shf_comparison?: ShfComparison | null;
+	saturation_method?: 'log_average' | 'shf';
+}
+
+export interface MultiWellVolumetricResult {
+	project_id: number;
+	mode: 'area' | 'grv';
+	cut_offs: Record<string, number>;
+	n_samples: number;
+	well_summary: Array<{
+		well_name: string;
+		zone: string;
+		top: number;
+		bottom: number;
+		gross: number;
+		net_res: number;
+		ntg_res: number;
+		net_pay: number;
+		ntg_pay: number;
+		phie: number;
+		sw: number;
+		perm_geom: number;
+		hcpt: number;
+	}>;
+	zonal_summary: ZonalVolumetricSummary[];
+	field_totals: FieldVolumetricTotals;
+	contacts?: {
+		goc: number | null;
+		owc: number | null;
+		gwc: number | null;
+		source: string;
+	};
+	assumptions_register?: AssumptionsRegister;
+}
+
+export interface VolumetricZoneParamConfig {
+	areaMean: number;
+	areaStd: number;
+	grvMean: number;
+	grvStd: number;
+	thickMean: number;
+	thickStd: number;
+	ntgMean: number;
+	ntgStd: number;
+	poroMean: number;
+	swMean: number;
+	boP50: number;
+	bgP50: number;
+	rs: number;
+	rfOil: number;
+	rfGas: number;
+}
+
+export const DEFAULT_VOLUMETRIC_ZONE_CONFIG: VolumetricZoneParamConfig = {
+	areaMean: 1200.0,
+	areaStd: 300.0,
+	grvMean: 50.0,
+	grvStd: 15.0,
+	thickMean: 25.0,
+	thickStd: 5.0,
+	ntgMean: 0.65,
+	ntgStd: 0.10,
+	poroMean: 0.18,
+	swMean: 0.35,
+	boP50: 1.25,
+	bgP50: 0.005,
+	rs: 500.0,
+	rfOil: 0.30,
+	rfGas: 0.70
+};
+
+export interface MultiWellVolumetricsState {
+	mode: 'area' | 'grv';
+	computeOil: boolean;
+	computeGas: boolean;
+	contactSource: 'inherit' | 'custom';
+	reservoirType: 'auto' | 'oil_only' | 'gas_only' | 'oil_and_gas';
+	owc: number;
+	goc: number;
+	gwc: number;
+	contactsByZone: Record<string, { owc?: number | null; goc?: number | null; gwc?: number | null }>;
+	saturationMethod: 'log_average' | 'shf';
+	fwlUncertainty: number;
+	crestDepth: number | null;
+	hypsometryModel: 'structural_dome' | 'well_tracks';
+	shfA: number;
+	shfB: number;
+	shfSwirr: number;
+	vshMax: number;
+	phitMin: number;
+	swtMax: number;
+	nSamples: number;
+	seed: number;
+	activeTab: 'exceedance' | 'inputs' | 'shf_profile' | 'assumptions' | 'tornado' | 'summary' | 'well_matrix';
+	rightTab: 'crossplot' | 'tornado' | 'summary' | 'well_matrix';
+	selectedZone: string;
+	fluidMetric: 'oil' | 'gas';
+	zoneConfigs: Record<string, VolumetricZoneParamConfig>;
+}
+
+/**
+ * Calculates the intersection point between:
+ * 1. The silt line emanating from the water/fluid point (fluidNphi, fluidRhob) at siltLineAngle (in degrees).
+ * 2. The rock line connecting the dry sand point (sandNphi, sandRhob) and dry clay point (clayNphi, clayRhob).
+ */
+export function computeSiltIntersection(
+	sand: [number, number],
+	clay: [number, number],
+	fluid: [number, number],
+	siltLineAngleDeg: number
+): [number, number] {
+	const rad = (siltLineAngleDeg * Math.PI) / 180;
+	const pSilt: [number, number] = [fluid[0] + Math.cos(rad), fluid[1] + Math.sin(rad)];
+
+	const xdiff0 = sand[0] - clay[0];
+	const ydiff0 = sand[1] - clay[1];
+	const d0 = sand[0] * clay[1] - sand[1] * clay[0];
+
+	const xdiff1 = fluid[0] - pSilt[0];
+	const ydiff1 = fluid[1] - pSilt[1];
+	const d1 = fluid[0] * pSilt[1] - fluid[1] * pSilt[0];
+
+	const div = xdiff0 * ydiff1 - xdiff1 * ydiff0;
+	if (Math.abs(div) < 1e-12) {
+		return [(sand[0] + clay[0]) / 2, (sand[1] + clay[1]) / 2];
+	}
+
+	const varX = (d0 * xdiff1 - d1 * xdiff0) / div;
+	const varY = (d0 * ydiff1 - d1 * ydiff0) / div;
+	return [varX, varY];
+}
+
 class WorkbenchState {
 	projectId = $state<string | null>(null);
 	wellId = $state<string | null>(null);
@@ -311,7 +593,50 @@ class WorkbenchState {
 
 	// Global modal / drawer flags
 	importerOpen = $state<boolean>(false);
+	importerTab = $state<
+		| 'las'
+		| 'formation_tops'
+		| 'fluid_contacts'
+		| 'perforations'
+		| 'core_samples'
+		| 'scal_pc'
+		| 'pressure_tests'
+		| 'well_surveys'
+		| 'handover'
+	>('las');
 	aiDrawerOpen = $state<boolean>(false);
+	workflowGuideOpen = $state<boolean>(false);
+	workflowGuideScope = $state<'single-well' | 'multi-well'>('single-well');
+	workflowGuideTargetAnchor = $state<string | null>(null);
+
+	openWorkflowGuide(scope?: 'single-well' | 'multi-well', anchor?: string) {
+		this.workflowGuideScope = scope ?? this.scope;
+		this.workflowGuideTargetAnchor = anchor ?? null;
+		this.workflowGuideOpen = true;
+	}
+
+	closeWorkflowGuide() {
+		this.workflowGuideOpen = false;
+		this.workflowGuideTargetAnchor = null;
+	}
+
+	openImporter(
+		tab?:
+			| 'las'
+			| 'formation_tops'
+			| 'fluid_contacts'
+			| 'perforations'
+			| 'core_samples'
+			| 'scal_pc'
+			| 'pressure_tests'
+			| 'well_surveys'
+			| 'handover'
+	) {
+		if (tab) {
+			this.importerTab = tab;
+		}
+		this.importerOpen = true;
+	}
 
 	// Single-well left pane section collapse / expand / focus controls
 	sectionFocusMode = $state<boolean>(false);
@@ -342,8 +667,8 @@ class WorkbenchState {
 		denCorrMismatchThreshold: 0.15,
 		drySandNphi: -0.02,
 		drySandRhob: 2.65,
-		drySiltNphi: 0.12,
-		drySiltRhob: 2.68,
+		drySiltNphi: 0.078,
+		drySiltRhob: 2.664,
 		dryClayNphi: 0.33,
 		dryClayRhob: 2.7,
 		fluidNphi: 1.0,
@@ -364,7 +689,7 @@ class WorkbenchState {
 		enabled: false,
 		useInPerm: true,
 		useInSaturation: true,
-		drySandPoro: 0.28,
+		drySandPoro: 0.32,
 		dryShalePoro: 0.1,
 		rsand: 20.0,
 		rvShale: 4.0,
@@ -489,6 +814,37 @@ class WorkbenchState {
 		poroMean: 0.18,
 		swMean: 0.28,
 		boP50: 1.22
+	});
+
+	multiWellVolumetrics = $state<MultiWellVolumetricsState>({
+		mode: 'area',
+		computeOil: true,
+		computeGas: true,
+		contactSource: 'inherit',
+		reservoirType: 'auto',
+		owc: -2500,
+		goc: -2400,
+		gwc: -2500,
+		contactsByZone: {},
+		saturationMethod: 'log_average',
+		fwlUncertainty: 5.0,
+		crestDepth: null,
+		hypsometryModel: 'structural_dome',
+		shfA: 0.35,
+		shfB: -0.45,
+		shfSwirr: 0.12,
+		vshMax: 0.4,
+		phitMin: 0.05,
+		swtMax: 0.8,
+		nSamples: 5000,
+		seed: 42,
+		activeTab: 'exceedance',
+		rightTab: 'crossplot',
+		selectedZone: 'ALL',
+		fluidMetric: 'oil',
+		zoneConfigs: {
+			ALL: { ...DEFAULT_VOLUMETRIC_ZONE_CONFIG }
+		}
 	});
 
 	// FDP Petrophysical Report Generation Workbench State
@@ -677,6 +1033,17 @@ class WorkbenchState {
 	scrollToDepth(depth: number) {
 		this.targetScrollDepth = depth;
 		this.cursorDepth = depth;
+	}
+
+	updateSiltEndpointFromAngle() {
+		const [siltNphi, siltRhob] = computeSiltIntersection(
+			[this.lithoParams.drySandNphi, this.lithoParams.drySandRhob],
+			[this.lithoParams.dryClayNphi, this.lithoParams.dryClayRhob],
+			[this.lithoParams.fluidNphi, this.lithoParams.fluidRhob],
+			this.lithoParams.siltLineAngle
+		);
+		this.lithoParams.drySiltNphi = Number(siltNphi.toFixed(3));
+		this.lithoParams.drySiltRhob = Number(siltRhob.toFixed(3));
 	}
 
 	expandAllSections() {

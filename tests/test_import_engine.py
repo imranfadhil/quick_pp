@@ -1,11 +1,9 @@
 import base64
 import io
-import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -20,7 +18,6 @@ from quick_pp.app.backend.services.ancillary import (
 from quick_pp.app.backend.services.las_handler import import_logs_router
 from quick_pp.config import Config
 from quick_pp.las_handler import (
-    compute_curve_qaqc,
     extract_las_metadata,
     fast_read_las,
     inspect_dlis,
@@ -33,6 +30,7 @@ from quick_pp.las_handler import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+TEST_DATA_DIR = Path(__file__).resolve().parent / "test_data"
 VOLVE_DIR = REPO_ROOT / "notebooks" / "data" / "01_raw" / "VOLVE"
 COSTA_DIR = REPO_ROOT / "notebooks" / "data" / "01_raw" / "COSTA"
 
@@ -50,7 +48,7 @@ client = TestClient(app)
 
 
 def test_fast_read_las_volve():
-    las_path = VOLVE_DIR / "15-9-19-A.las"
+    las_path = TEST_DATA_DIR / "sample.las"
     assert las_path.exists()
     with open(las_path, "rb") as f:
         header_las, df = fast_read_las(f, filename=las_path.name)
@@ -76,7 +74,7 @@ def test_fast_read_las_volve():
 
 
 def test_fast_read_las_costa_feet_conversion():
-    las_path = COSTA_DIR / "HW-10.las"
+    las_path = TEST_DATA_DIR / "sample_feet.las"
     assert las_path.exists()
     with open(las_path, "rb") as f:
         df, meta = read_las_file_fast(f, depth_uom="m")
@@ -136,7 +134,7 @@ def test_mnemonic_mapper_and_unit_standardization():
 
 
 def test_parse_volve_rca_xls_with_title_and_unit_row():
-    xls_path = VOLVE_DIR / "15-9-19-A_RCA.xls"
+    xls_path = TEST_DATA_DIR / "sample_rca.xls"
     assert xls_path.exists()
     raw_bytes = xls_path.read_bytes()
 
@@ -153,7 +151,7 @@ def test_parse_volve_rca_xls_with_title_and_unit_row():
 
 
 def test_parse_volve_facies_xlsx():
-    xlsx_path = VOLVE_DIR / "15_9-19A_Facies.xlsx"
+    xlsx_path = TEST_DATA_DIR / "sample_facies.xlsx"
     assert xlsx_path.exists()
     raw_bytes = xlsx_path.read_bytes()
 
@@ -173,7 +171,7 @@ def test_minimum_curvature_survey_calculation():
     ]
     traj = compute_survey_minimum_curvature(surveys, kb_elevation=25.0)
     assert len(traj) == 4
-    assert set(["md", "inc", "azim", "tvd", "tvdss", "dx", "dy", "dls"]).issubset(traj.columns)
+    assert {"md", "inc", "azim", "tvd", "tvdss", "dx", "dy", "dls"}.issubset(traj.columns)
     assert np.isclose(traj.loc[1, "tvd"], 500.0, atol=1e-2)
     assert np.isclose(traj.loc[1, "tvdss"], 475.0, atol=1e-2)
     # Inclined section should have TVD < MD and positive Easting (dx > 0)
@@ -271,9 +269,8 @@ RHOB.G/C3   : Bulk Density
 
 
 def test_dlis_inspect_and_read_frame():
-    dlis_path = VOLVE_DIR / "seismic" / "input" / "F10-WLC_PETRO_COMPUTED_INPUT_1.DLIS"
-    if not dlis_path.exists():
-        pytest.skip("Sample Volve DLIS file not present")
+    dlis_path = TEST_DATA_DIR / "sample.dlis"
+    assert dlis_path.exists()
 
     info = inspect_dlis(dlis_path)
     meta = info["metadata"]

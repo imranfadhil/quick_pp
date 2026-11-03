@@ -108,6 +108,8 @@ ENV/
 notebooks/outputs**
 notebooks/data/01_raw/VOLVE/seismic/*
 notebooks/data/01_raw/VOLVE/*.las
+# Whitelist demo reference well required by deploy/demo/Dockerfile
+!notebooks/data/01_raw/VOLVE/15-9-19-A.las
 notebooks/data/02_intermediate/*
 notebooks/data/03_processed/*
 notebooks/data/04_project/*

@@ -6,7 +6,7 @@
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
-	import { workbench } from '$lib/state/workbench.svelte';
+	import { workbench, computeSiltIntersection } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import {
 		ALL_LITHOLOGY_CURVES,
@@ -14,7 +14,28 @@
 		MINERAL_TO_CURVE_MNEMONIC
 	} from '$lib/utils/petrophysicsColors';
 
-	const AVAILABLE_MINERALS = ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE', 'ANHYDRITE', 'HALITE', 'COAL'];
+	const AVAILABLE_MINERALS = [
+		'QUARTZ',
+		'CALCITE',
+		'DOLOMITE',
+		'SHALE',
+		'KAOLINITE',
+		'FELDSPAR',
+		'ANHYDRITE',
+		'GYPSUM',
+		'HALITE',
+		'PYRITE',
+		'COAL',
+		'ILLITE',
+		'SMECTITE',
+		'CHLORITE',
+		'GLAUCONITE',
+		'KFELD',
+		'ALBITE',
+		'SIDERITE',
+		'ANKERITE',
+		'KEROGEN'
+	];
 	const MINERAL_COLOR_MAP: Record<string, { fill: string; stroke: string; label: string }> =
 		Object.fromEntries(
 			LITHOLOGY_TRACK_SPECS.map((s) => [
@@ -149,6 +170,24 @@
 		if (pid && pid !== lastLoadedModelsProjectId) {
 			lastLoadedModelsProjectId = pid;
 			loadMlModelsStatus(pid);
+		}
+	});
+
+	$effect(() => {
+		// Keep drySiltNphi and drySiltRhob synchronized with silt line angle & rock line
+		const [siltNphi, siltRhob] = computeSiltIntersection(
+			[workbench.lithoParams.drySandNphi, workbench.lithoParams.drySandRhob],
+			[workbench.lithoParams.dryClayNphi, workbench.lithoParams.dryClayRhob],
+			[workbench.lithoParams.fluidNphi, workbench.lithoParams.fluidRhob],
+			workbench.lithoParams.siltLineAngle
+		);
+		const roundedNphi = Number(siltNphi.toFixed(3));
+		const roundedRhob = Number(siltRhob.toFixed(3));
+		if (Math.abs(workbench.lithoParams.drySiltNphi - roundedNphi) > 1e-4) {
+			workbench.lithoParams.drySiltNphi = roundedNphi;
+		}
+		if (Math.abs(workbench.lithoParams.drySiltRhob - roundedRhob) > 1e-4) {
+			workbench.lithoParams.drySiltRhob = roundedRhob;
 		}
 	});
 
@@ -625,6 +664,7 @@
 				label="NPHI Dry Silt"
 				bind:value={workbench.lithoParams.drySiltNphi}
 				unit="v/v"
+				disabled={true}
 				min={-0.05}
 				max={0.45}
 				step={0.005}
@@ -634,6 +674,7 @@
 				label="RHOB Dry Silt"
 				bind:value={workbench.lithoParams.drySiltRhob}
 				unit="g/cc"
+				disabled={true}
 				min={2.4}
 				max={2.9}
 				step={0.01}
@@ -664,6 +705,7 @@
 				min={95}
 				max={160}
 				step={0.5}
+				onchange={() => workbench.updateSiltEndpointFromAngle()}
 				onrun={() => executeLithoPoro(false)}
 			/>
 		</ParameterSection>
@@ -1428,7 +1470,7 @@
 	>
 		<button
 			type="button"
-			disabled={wellData.isCalculating}
+			disabled={wellData.isCalculating || wellData.isSaving}
 			onclick={() => executeLithoPoro(false)}
 			class="h-7 flex-1 mr-1.5 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 		>
@@ -1436,7 +1478,7 @@
 		</button>
 		<button
 			type="button"
-			disabled={wellData.isCalculating || !wellData.hasPendingComputed('litho-poro')}
+			disabled={wellData.isCalculating || wellData.isSaving || !wellData.hasPendingComputed('litho-poro')}
 			onclick={saveLithoPoro}
 			title={wellData.hasPendingComputed('litho-poro')
 				? wellData.getPendingSaveTooltip(
@@ -1446,7 +1488,7 @@
 				: 'Run the calculation first to enable saving'}
 			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>
-			Save
+			{wellData.isSaving ? 'Saving...' : 'Save'}
 		</button>
 	</div>
 </div>

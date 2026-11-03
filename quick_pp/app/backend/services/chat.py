@@ -13,16 +13,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
-import socket
 import urllib3.connection as urllib3_conn
 import urllib3.util.connection as urllib3_cn
-from contextlib import contextmanager
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from quick_pp import logger
@@ -93,8 +93,9 @@ You have direct access to the Petrophysical MCP Server tools:
 - `generate_petrophysical_report`: Generate a complete FDP Petrophysical Evaluation Report (`FDP_FULL`, `SINGLE_WELL_CPI`, `QAQC_SUMMARY`, `RESSUM_ONLY`) with high-DPI plots and open the Report Workbench.
 - `update_report_section`: Rewrite or refine a specific section (`exec_summary`, `data_inventory`, `qaqc`, `litho_poro`, `rock_perm`, `saturation`, `shf_scal`, `ressum_uncert`, `upscaling`, `appendix_cpi`) in the active report.
 - `export_report_to_pdf`: Compile the active report into a downloadable A4 PDF document.
+- `get_workflow_technical_reference`: Retrieve authoritative petrophysical equations, curve contracts, parameter bounds, and diagnostic guidelines from the quick_pp SSOT technical foundation in docs/workflows/.
 
-Always ground your interpretation in the quantitative tool outputs: cite depth intervals, zonal means, P10–P90 conformal interval widths, and physical constraints (volumetric closure, washout impact, FWL transition zones).
+Always ground your interpretation in the quantitative tool outputs and the quick_pp SSOT technical foundations: cite depth intervals, zonal means, P10–P90 conformal interval widths, physical constraints (volumetric closure, washout impact, FWL transition zones), and reference governing equations from docs/workflows/ when explaining petrophysical methods.
 """
 
 
@@ -170,6 +171,31 @@ def _plan_native_tool_calls(req: AgentChatRequest) -> List[Dict[str, Any]]:
                 "arguments": {"scroll_to_depth": float(depth_match.group(1))},
             }
         )
+
+    # Workflow Theory, Equations & SSOT Reference Queries (independent of active project)
+    wants_theory = any(
+        kw in q
+        for kw in (
+            "equation", "formula", "theory", "foundation", "how is", "how do you calculate",
+            "what is the model", "cutoffs", "definition", "ssot", "reference",
+            "explain", "how does", "what model", "which model", "cite formula",
+            "what are the cutoffs", "best practice", "parameter tuning", "guideline",
+            "tell me about", "what is", "how to"
+        )
+    )
+    if wants_theory:
+        calls.append(
+            {
+                "name": "get_workflow_technical_reference",
+                "arguments": {
+                    "scope": req.scope or "single-well",
+                    "step": req.step,
+                    "query": req.message,
+                },
+            }
+        )
+        if pid is None:
+            return calls
 
     if pid is None:
         return calls
@@ -717,6 +743,14 @@ def _synthesize_petrophysical_explanation(
                 f"- **A4 Print View**: `{res.get('print_url')}`"
             )
 
+        elif t_name == "get_workflow_technical_reference":
+            ref_md = res.get("reference_content", "")
+            src = res.get("source", "docs/workflows/")
+            sections.append(
+                f"### 📖 Grounded Petrophysical Foundation (`{src}`)\n\n"
+                f"{ref_md}\n"
+            )
+
     return "\n\n".join(sections)
 
 
@@ -809,11 +843,18 @@ def _run_openai_compatible_agent(
         for r in executed_tools
     ]
 
+    from quick_pp.app.backend.services.ssot_reference import get_step_reference
+
+    step_grounding = get_step_reference(req.scope or "single-well", req.step or "overview")
+
     messages: List[Dict[str, Any]] = [
         {
             "role": "system",
             "content": (
-                f"{SYSTEM_PROMPT}\n\n{context_summary}\n\n"
+                f"{SYSTEM_PROMPT}\n\n"
+                f"### ACTIVE WORKFLOW STEP SSOT GROUNDING ({req.scope} :: {req.step}):\n"
+                f"{step_grounding}\n\n"
+                f"{context_summary}\n\n"
                 f"Executed MCP Tool Results:\n{json.dumps(compact_context, default=str, separators=(',', ':'))[:6000]}"
             ),
         }

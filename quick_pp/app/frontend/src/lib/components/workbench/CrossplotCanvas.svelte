@@ -251,6 +251,16 @@
 				const lp = workbench.lithoParams;
 				traces.push({
 					type: 'scatter',
+					mode: 'lines',
+					name: 'Silt Line',
+					x: [lp.fluidNphi, lp.drySiltNphi],
+					y: [lp.fluidRhob, lp.drySiltRhob],
+					line: { color: '#EA580C', width: 1.5, dash: 'dash' },
+					hovertemplate: 'Silt Line (θ=%{text}°)<extra></extra>',
+					text: [lp.siltLineAngle.toFixed(1), lp.siltLineAngle.toFixed(1)]
+				});
+				traces.push({
+					type: 'scatter',
 					mode: 'lines+markers+text',
 					name: 'SSC Endpoints',
 					x: [
@@ -817,6 +827,16 @@
 			} else {
 				traces.push({
 					type: 'scatter',
+					mode: 'lines',
+					name: 'Silt Line',
+					x: [lp.fluidNphi, lp.drySiltNphi],
+					y: [lp.fluidRhob, lp.drySiltRhob],
+					line: { color: '#EA580C', width: 1.5, dash: 'dash' },
+					hovertemplate: 'Silt Line (θ=%{text}°)<extra></extra>',
+					text: [lp.siltLineAngle.toFixed(1), lp.siltLineAngle.toFixed(1)]
+				});
+				traces.push({
+					type: 'scatter',
 					mode: 'lines+markers+text',
 					name: 'SSC Endpoints',
 					x: [
@@ -1275,6 +1295,16 @@
 					const phisArr = rt.phis ?? [];
 					const vugFlags = rt.vuggy_flags ?? [];
 					const rfs = rt.rock_flags ?? [];
+					const carbZones = (rt as any).zones as (string | null)[] | undefined;
+					const carbWells =
+						projectData.wells.length > 0 &&
+						projectData.selectedWellNames.length < projectData.wells.length
+							? new Set(projectData.selectedWellNames)
+							: null;
+					const carbAllowedZones =
+						workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
+					const carbMinD = workbench.depthFilter?.min ?? -Infinity;
+					const carbMaxD = workbench.depthFilter?.max ?? Infinity;
 
 					const vugX: number[] = [];
 					const vugY: number[] = [];
@@ -1285,6 +1315,14 @@
 					const phitVsPhisColor: string[] = [];
 
 					for (let i = 0; i < phitArr.length; i++) {
+						const wn = rt.well_names?.[i] ?? '';
+						if (carbWells && !carbWells.has(wn)) continue;
+						const d = rt.depths?.[i];
+						if (d != null && (d < carbMinD || d > carbMaxD)) continue;
+						if (carbAllowedZones && carbZones && carbZones.length > i) {
+							const z = carbZones[i] || 'Unknown';
+							if (!carbAllowedZones.has(z)) continue;
+						}
 						const pt = phitArr[i];
 						const k = permArr[i];
 						const pip = phiIpArr[i] ?? pt;
@@ -1433,7 +1471,7 @@
 						diag.classifier.feature_importances ?? [];
 					const compRows: Array<Record<string, any>> =
 						diag.classifier.comparison?.per_drt ?? [];
-					const strLabels = labels.map((l) => `DRT ${l}`);
+					const strLabels = labels.map((l) => (Number(l) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${l}`));
 
 					const textGrid = counts.map((row, rIdx) =>
 						row.map(
@@ -1461,7 +1499,9 @@
 					});
 
 					if (compRows.length > 0) {
-						const compLabels = compRows.map((r) => `DRT ${r.drt}`);
+						const compLabels = compRows.map((r) =>
+							Number(r.drt) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${r.drt}`
+						);
 						traces.push({
 							type: 'bar',
 							name: 'Pure Cutoffs (ROCK_FLAG_CUTOFF)',
@@ -1607,7 +1647,9 @@
 					)
 						return;
 					const k = rt.perm[i];
-					const rf = rt.rock_flags[i] ?? 1;
+					const rfRaw = rt.rock_flags[i];
+					if (rfRaw === null || rfRaw === undefined || !Number.isFinite(Number(rfRaw))) return;
+					const rf = Number(rfRaw);
 					if (Number.isFinite(p) && Number.isFinite(k) && k > 0) {
 						if (!grouped.has(rf)) grouped.set(rf, { x: [], y: [], wells: [] });
 						const g = grouped.get(rf)!;
@@ -1625,11 +1667,16 @@
 							: projectData.drtDataSource)) !== 'log';
 				const poroLbl = (mwSource as any)?.poro_label ?? (mwIsCore ? 'CPORE' : 'PHIT');
 				const permLbl = (mwSource as any)?.perm_label ?? (mwIsCore ? 'CPERM' : 'PERM');
-				for (const [rf, g] of grouped.entries()) {
+				const sortedGrouped = [...grouped.entries()].sort(([a], [b]) => {
+					if (a === 0 && b !== 0) return 1;
+					if (b === 0 && a !== 0) return -1;
+					return a - b;
+				});
+				for (const [rf, g] of sortedGrouped) {
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
-						name: `DRT ${rf} (${poroLbl}/${permLbl})`,
+						name: Number(rf) === 0 ? `DRT 0 Non-Res (${poroLbl}/${permLbl})` : `DRT ${rf} (${poroLbl}/${permLbl})`,
 						x: g.x,
 						y: g.y,
 						text: g.wells,
@@ -1675,7 +1722,14 @@
 					}
 				}
 
-				if (lx.length > 0) {
+				const mwPrecomputeSource =
+					workbench.scope === 'multi-well'
+						? workbench.multiWellStep === 'perm-transform'
+							? projectData.permTransformDataSource
+							: projectData.drtDataSource
+						: null;
+
+				if (lx.length > 0 && mwPrecomputeSource !== 'core') {
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
@@ -1686,7 +1740,7 @@
 						marker: { size: 5, color: PETRO_COLORS.perm, opacity: 0.7 }
 					});
 				}
-				if (cx.length > 0) {
+				if (cx.length > 0 && mwPrecomputeSource !== 'log') {
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
@@ -1769,10 +1823,11 @@
 				}
 			}
 
-			// Fitted power-law Perm Transform lines per Rock Type: K = a * phi^b
+			// Fitted power-law Perm Transform lines per Rock Type: K = a * phi^b (strictly reservoir DRTs >= 1)
 			if (workbench.scope === 'multi-well' && projectData.permTransformResult?.fits) {
 				for (const [rf, fit] of Object.entries(projectData.permTransformResult.fits)) {
-					if (!fit || !Number.isFinite(fit.a) || !Number.isFinite(fit.b)) continue;
+					if (!fit || Number(rf) < 1 || !Number.isFinite(fit.a) || !Number.isFinite(fit.b))
+						continue;
 					const kFit = phiGrid.map((phi) => fit.a * Math.pow(phi, fit.b));
 					const rtCol = getRockTypeColor(rf);
 					// High-contrast dark casing halo behind the fitted line so it stands out over same-color points
@@ -3831,6 +3886,7 @@
 			void workbench.lithoParams.dryClayRhob;
 			void workbench.lithoParams.fluidNphi;
 			void workbench.lithoParams.fluidRhob;
+			void workbench.lithoParams.siltLineAngle;
 			void workbench.lithoParams.enableCoalFlagging;
 			void workbench.lithoParams.coalRhobMax;
 			void workbench.lithoParams.coalNphiMin;
@@ -4045,12 +4101,21 @@
 							if (activeEndpointKey === 'sand') {
 								workbench.lithoParams.drySandNphi = x;
 								workbench.lithoParams.drySandRhob = y;
+								workbench.updateSiltEndpointFromAngle();
 							} else if (activeEndpointKey === 'silt') {
-								workbench.lithoParams.drySiltNphi = x;
-								workbench.lithoParams.drySiltRhob = y;
+								const dx = x - workbench.lithoParams.fluidNphi;
+								const dy = y - workbench.lithoParams.fluidRhob;
+								const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+								if (Number.isFinite(angle)) {
+									workbench.lithoParams.siltLineAngle = Number(
+										Math.max(90, Math.min(170, angle)).toFixed(1)
+									);
+									workbench.updateSiltEndpointFromAngle();
+								}
 							} else if (activeEndpointKey === 'clay') {
 								workbench.lithoParams.dryClayNphi = x;
 								workbench.lithoParams.dryClayRhob = y;
+								workbench.updateSiltEndpointFromAngle();
 							}
 						} else if (effectiveMode === 'thomas-stieber') {
 							if (activeEndpointKey === 'ts-sand') {

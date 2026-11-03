@@ -135,8 +135,8 @@
 	function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
 		if (projectData.shfParams.model === m && projectData.shfResult?.model === m) return;
 		projectData.shfParams.model = m;
-		if (projectData.swirrResult && !projectData.shfResult?.shf?.length) {
-			projectData.recomputeScalFitsFromPlugs(false);
+		if (projectData.swirrResult) {
+			projectData.recomputeScalFitsFromPlugs(true);
 		}
 	}
 
@@ -243,7 +243,6 @@
 					});
 				}
 			}
-			void projectData.loadStickPlot(true);
 		} catch (e: any) {
 			projectData.error = e?.message || 'SHF error';
 		} finally {
@@ -368,10 +367,10 @@
 					bind:value={so.optLoss}
 					class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
 				>
-					<option value="rmse">RMSE (L2)</option>
-					<option value="huber">Huber Robust</option>
-					<option value="mae">MAE (L1)</option>
-					<option value="bvw">Bulk Volume Water (BVW)</option>
+					<option value="bvw">BVO / BVW (Bulk Volume)</option>
+					<option value="rmse">RMSE (L2, Sw)</option>
+					<option value="huber">Huber Robust (Sw)</option>
+					<option value="mae">MAE (L1, Sw)</option>
 				</select>
 			</div>
 
@@ -712,16 +711,20 @@
 	</div>
 
 	<div
-		class="flex h-9 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5"
+		class="flex items-center justify-between gap-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-app)] p-2"
 	>
 		<button
 			type="button"
-			disabled={projectData.isComputingMultiWell || projectData.wellsWithTvd.length === 0}
+			disabled={
+				projectData.isComputingMultiWell ||
+				projectData.isSavingMultiWell ||
+				projectData.wellsWithTvd.length === 0
+			}
 			onclick={() => executeShf(false, true)}
 			title={projectData.wellsWithTvd.length === 0
 				? 'Disabled: No selected wells have TVD or directional survey (TVD is never assumed equal to MD)'
 				: `Compute SHF across ${projectData.wellsWithTvd.length} well(s) with valid TVD`}
-			class="h-7 flex-1 mr-1.5 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+			class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
 		>
 			{projectData.isComputingMultiWell
 				? 'Computing...'
@@ -731,14 +734,18 @@
 		</button>
 		<button
 			type="button"
-			disabled={projectData.isComputingMultiWell || !projectData.hasPendingMultiWell('shf')}
+			disabled={
+				projectData.isComputingMultiWell ||
+				projectData.isSavingMultiWell ||
+				!projectData.hasPendingMultiWell('shf')
+			}
 			onclick={saveShf}
 			title={projectData.hasPendingMultiWell('shf')
 				? 'Save computed SHF curves across all project wells'
 				: 'Compute or adjust SHF parameters first to enable saving'}
 			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>
-			Save All Wells
+			{projectData.isSavingMultiWell ? 'Saving...' : 'Save All Wells'}
 		</button>
 	</div>
 </div>

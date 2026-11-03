@@ -81,6 +81,7 @@ class AutoClassifyOptions(BaseModel):
         description="Supercharge threshold (display pressure unit); 0 = automatic (2.5 x MAD)",
     )
     assign_unassigned: bool = True
+    allowed_fluids: Optional[List[Literal["GAS", "OIL", "WATER"]]] = None
 
 
 class FPTAnalysisRequest(BaseModel):
@@ -96,6 +97,7 @@ class FPTAnalysisRequest(BaseModel):
     manual_overrides: Optional[Dict[str, ManualGradientOverride]] = None
     overrides_by_zone: Optional[Dict[str, Dict[str, ManualGradientOverride]]] = None
     point_overrides: Optional[Dict[str, PointOverride]] = None
+    allowed_fluids: Optional[List[Literal["GAS", "OIL", "WATER"]]] = None
     auto_classify: Optional[AutoClassifyOptions] = None
     n_simulations: int = Field(2000, ge=0, le=20000)
     ref_water_gradient: Optional[float] = None
@@ -277,12 +279,14 @@ def _analyze_subset(
         id_col="ID",
     )
 
+    allowed_fluids = req.allowed_fluids
     if req.auto_classify is not None:
         ac = req.auto_classify
         fpa.auto_classify_points(
             min_mobility=ac.min_mobility,
             ransac_residual_threshold=ac.ransac_residual_threshold,
             assign_unassigned=ac.assign_unassigned,
+            allowed_fluids=ac.allowed_fluids or allowed_fluids,
         )
 
     ov_dict: Dict[str, Dict[str, Any]] = {}
@@ -301,8 +305,8 @@ def _analyze_subset(
             "anchor_pressure": ov.anchor_pressure,
             "std_err_gradient": ov.std_err_gradient or 0.0,
         }
-    fpa.fit_all(method=req.regression_method, overrides=ov_dict)
-    contacts = fpa.estimate_contacts(n_simulations=req.n_simulations)
+    fpa.fit_all(method=req.regression_method, overrides=ov_dict, allowed_fluids=allowed_fluids)
+    contacts = fpa.estimate_contacts(n_simulations=req.n_simulations, allowed_fluids=allowed_fluids)
     excess = fpa.calculate_excess_pressure(
         req.ref_water_gradient, req.datum_tvdss, req.datum_pressure
     )

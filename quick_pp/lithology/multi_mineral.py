@@ -11,7 +11,27 @@ from quick_pp.config import Config
 from quick_pp.porosity import density_porosity, neu_den_xplot_poro_pt
 
 CONDUCTIVITY_MODELS = ("sandsiltclay_waxman_smits", "waxman_smits", "dual_water")
-CLAY_MINERAL_NAMES = ("SHALE", "CLAY", "KAOLINITE", "ILLITE", "SMECTITE", "CHLORITE")
+CLAY_MINERAL_NAMES = (
+    "SHALE",
+    "CLAY",
+    "KAOLINITE",
+    "ILLITE",
+    "SMECTITE",
+    "CHLORITE",
+    "GLAUCONITE",
+)
+DEFAULT_LOG_RANGES = {
+    "GR": 100.0,
+    "DTC": 100.0,
+    "NPHI": 0.40,
+    "RHOB": 0.80,
+    "PEF": 5.0,
+    "U": 15.0,
+    "POTA": 5.0,
+    "THOR": 20.0,
+    "URAN": 10.0,
+}
+
 
 
 def _project_bounded_simplex_batch(
@@ -34,7 +54,7 @@ def _project_bounded_simplex_batch(
     low = np.asarray(lower, dtype=float)[None, :]
     high = np.asarray(upper, dtype=float)[None, :]
 
-    # Bracket tau_i so thattau_lo gives sum >= target_sum and tau_hi gives sum <= target_sum
+    # Bracket tau_i so that tau_lo gives sum >= target_sum and tau_hi gives sum <= target_sum
     tau_lo = np.min(V_arr - high, axis=1, keepdims=True) - 1.0
     tau_hi = np.max(V_arr - low, axis=1, keepdims=True) + 1.0
 
@@ -316,6 +336,10 @@ class MultiMineral:
     mineral/fluid system (quadratic objective with linear closure sum(V_i) = 1 and
     box bounds 0 <= V_i <= 1), and reserves SLSQP only when non-linear conductivity
     (sandsiltclay_waxman_smits / dual_water) is enabled or explicitly requested.
+
+    Supports dynamic log channel ingestion (including Spectral GR and geochemical curves),
+    exact volumetric photoelectric cross-section linearization (U = PEF * RHOB),
+    depth-dependent environmental / bad hole weighting, and custom mineral bounds.
     """
 
     def __init__(
@@ -328,6 +352,10 @@ class MultiMineral:
         conductivity_params: Optional[Dict] = None,
         solver: str = "auto",
         n_jobs: int = 1,
+        responses: Optional[Dict[str, Dict[str, float]]] = None,
+        mineral_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        fluid_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        linearize_pef: bool = False,
     ):
         """Initialize the MultiMineral optimizer.
 
@@ -346,8 +374,20 @@ class MultiMineral:
             solver (str, optional): Optimization solver ('auto', 'active_set', 'bounded_lsq', 'slsqp').
                                     Defaults to 'auto' (vectorized active-set for linear, SLSQP for non-linear).
             n_jobs (int, optional): Number of parallel jobs via joblib.Parallel for batching. Defaults to 1.
+            responses (dict, optional): Custom mineral response dictionary overriding or extending
+                                        Config.MINERALS_LOG_VALUE.
+            mineral_bounds (dict, optional): Custom (min, max) bounds per mineral name (e.g. {'GLAUCONITE': (0, 0.25)}).
+            fluid_bounds (dict, optional): Custom (min, max) bounds per fluid name (e.g. {'GAS': (0, 0.4)}).
+            linearize_pef (bool, optional): If True, linearizes Photoelectric Factor via volumetric cross-section
+                                            U = PEF * RHOB (barns/cm^3) to ensure exact physical volumetric superposition.
+                                            Defaults to True.
         """
-        self.responses = Config.MINERALS_LOG_VALUE
+        # Load mineral endpoints (merging defaults with any user-supplied overrides)
+        base_responses = {k: dict(v) for k, v in Config.MINERALS_LOG_VALUE.items()}
+        if responses is not None:
+            for m_name, m_props in responses.items():
+                base_responses[m_name] = dict(m_props)
+        self.responses = base_responses
         available_minerals = list(self.responses.keys())
 
         # Default minerals if none specified
@@ -357,7 +397,7 @@ class MultiMineral:
         for mineral in minerals:
             if mineral not in available_minerals:
                 raise ValueError(
-                    f"Mineral '{mineral}' is not defined in Config.MINERALS_LOG_VALUE."
+                    f"Mineral '{mineral}' is not defined in Config.MINERALS_LOG_VALUE or provided responses."
                 )
 
         self.minerals = minerals
@@ -377,28 +417,33 @@ class MultiMineral:
         self.conductivity_params = conductivity_params or {}
         self.solver = solver.lower()
         self.n_jobs = n_jobs
+        self.linearize_pef = bool(linearize_pef)
 
         # Default fluid properties if none specified
         if fluid_properties is None:
             fluid_properties = {
-                "OIL": {"density": 0.8, "nphi": 0.0, "pef": 0.0, "dtc": 200.0},
-                "GAS": {"density": 0.2, "nphi": 0.0, "pef": 0.0, "dtc": 400.0},
-                "WATER": {"density": 1.0, "nphi": 1.0, "pef": 0.0, "dtc": 190.0},
+                "OIL": {"density": 0.8, "nphi": 0.0, "pef": 0.12, "dtc": 200.0, "u": 0.10},
+                "GAS": {"density": 0.2, "nphi": 0.0, "pef": 0.05, "dtc": 400.0, "u": 0.01},
+                "WATER": {"density": 1.0, "nphi": 1.0, "pef": 0.36, "dtc": 190.0, "u": 0.36},
             }
         self.fluid_properties = fluid_properties
         self.fluids = ["OIL", "GAS", "WATER"]
 
-        # Define bounds for each mineral type
-        mineral_bounds = dict.fromkeys(available_minerals, (0, 1))
+        # Define bounds for each mineral type (defaulting to (0, 1), overridden by mineral_bounds)
+        default_mineral_bounds = dict.fromkeys(available_minerals, (0.0, 1.0))
+        if mineral_bounds is not None:
+            default_mineral_bounds.update(mineral_bounds)
 
-        # Define bounds for fluid volumes (0 to 1 for each fluid)
-        fluid_bounds = {"OIL": (0, 1), "GAS": (0, 1), "WATER": (0, 1)}
+        # Define bounds for fluid volumes (0 to 1 for each fluid, overridden by fluid_bounds)
+        default_fluid_bounds = {"OIL": (0.0, 1.0), "GAS": (0.0, 1.0), "WATER": (0.0, 1.0)}
+        if fluid_bounds is not None:
+            default_fluid_bounds.update(fluid_bounds)
 
         # Set bounds based on selected minerals and fluids
         self.mineral_bounds = tuple(
-            mineral_bounds[mineral] for mineral in self.minerals
+            default_mineral_bounds[mineral] for mineral in self.minerals
         )
-        self.fluid_bounds = tuple(fluid_bounds[fluid] for fluid in self.fluids)
+        self.fluid_bounds = tuple(default_fluid_bounds[fluid] for fluid in self.fluids)
 
         # Combined bounds: minerals first, then fluids
         self.bounds = self.mineral_bounds + self.fluid_bounds
@@ -538,9 +583,6 @@ class MultiMineral:
             r_v = rhob[both_valid]
             c_int = r_v - m_ac * n_v
 
-            # Intersection of line ((0, c_int) -> (n_v, r_v)) with line (D -> A)
-            # Line 1: y = m_ac * x + c_int
-            # Line 2: y - D[1] = m_da * (x - D[0])
             m_da = (A[1] - D[1]) / (A[0] - D[0])
             c_da = D[1] - m_da * D[0]
             x_iso = (c_da - c_int) / (m_ac - m_da)
@@ -564,18 +606,11 @@ class MultiMineral:
         return init_poro
 
     def _calculate_matrix_density(self, mineral_volumes: np.ndarray) -> float:
-        """Calculate the average matrix density from mineral volumes.
-
-        Args:
-            mineral_volumes (np.ndarray): An array of mineral volumes.
-
-        Returns:
-            float: The calculated matrix density.
-        """
+        """Calculate the average matrix density from mineral volumes."""
         rho_ma = 0.0
         total_mineral_vol = np.sum(mineral_volumes)
         if total_mineral_vol < 1e-6:
-            return 2.65  # Return default if no minerals
+            return 2.65
 
         for i, mineral in enumerate(self.minerals):
             if mineral in self.responses and "RHOB" in self.responses[mineral]:
@@ -584,21 +619,18 @@ class MultiMineral:
         return float(rho_ma / total_mineral_vol)
 
     def _calculate_fluid_density(self, fluid_volumes: np.ndarray) -> float:
-        """Calculate the average fluid density from fluid volumes.
-
-        Args:
-            fluid_volumes (np.ndarray): An array of fluid volumes.
-
-        Returns:
-            float: The calculated average fluid density.
-        """
+        """Calculate the average fluid density from fluid volumes."""
         rho_fluid = 0.0
         for i, fluid in enumerate(self.fluids):
             rho_fluid += fluid_volumes[i] * self.fluid_properties[fluid]["density"]
         return float(rho_fluid)
 
     def _build_response_matrix(self, log_types: List[str]) -> np.ndarray:
-        """Construct the linear log response matrix C of shape (n_logs, n_vars)."""
+        """Construct the linear log response matrix C of shape (n_logs, n_vars).
+
+        Supports volumetric photoelectric cross-section U (barns/cm^3) for exact
+        linear superposition, as well as dynamic Spectral GR / geochemical channels.
+        """
         n_minerals = len(self.minerals)
         n_fluids = len(self.fluids)
         n_vars = n_minerals + n_fluids
@@ -613,14 +645,28 @@ class MultiMineral:
 
         for r_idx, log_type in enumerate(log_types):
             for m_idx, mineral in enumerate(self.minerals):
-                if mineral in self.responses and log_type in self.responses[mineral]:
-                    C[r_idx, m_idx] = float(self.responses[mineral][log_type])
-            prop_key = fluid_key_map.get(log_type)
-            if prop_key is not None:
+                if mineral in self.responses:
+                    m_dict = self.responses[mineral]
+                    if log_type == "U":
+                        pef_m = float(m_dict.get("PEF", 0.0))
+                        rho_m = float(m_dict.get("RHOB", 2.65))
+                        C[r_idx, m_idx] = float(m_dict.get("U", pef_m * rho_m))
+                    elif log_type in m_dict:
+                        C[r_idx, m_idx] = float(m_dict[log_type])
+
+            if log_type == "U":
                 for f_idx, fluid in enumerate(self.fluids):
-                    C[r_idx, n_minerals + f_idx] = float(
-                        self.fluid_properties[fluid].get(prop_key, 0.0)
-                    )
+                    f_dict = self.fluid_properties[fluid]
+                    pef_f = float(f_dict.get("pef", 0.0))
+                    rho_f = float(f_dict.get("density", 1.0))
+                    C[r_idx, n_minerals + f_idx] = float(f_dict.get("u", pef_f * rho_f))
+            else:
+                prop_key = fluid_key_map.get(log_type, log_type.lower())
+                for f_idx, fluid in enumerate(self.fluids):
+                    if prop_key in self.fluid_properties[fluid]:
+                        C[r_idx, n_minerals + f_idx] = float(
+                            self.fluid_properties[fluid][prop_key]
+                        )
         return C
 
     def _calculate_conductivity_response(self, volumes: np.ndarray) -> float:
@@ -675,56 +721,57 @@ class MultiMineral:
         raise ValueError(f"Unsupported conductivity model: {model}")
 
     def _calculate_log_response(self, volumes: np.ndarray, log_type: str) -> float:
-        """Calculate the reconstructed log response for a given log type.
-
-        Args:
-            volumes (np.ndarray): An array of combined mineral and fluid volumes.
-            log_type (str): The type of log to reconstruct (e.g., 'NPHI', 'RHOB').
-
-        Returns:
-            float: The reconstructed log value.
-        """
+        """Calculate the reconstructed log response for a given log type."""
         if log_type in ("RT", "CT") and self.conductivity_model is not None:
             ct = self._calculate_conductivity_response(volumes)
             return float(1.0 / max(ct, 1e-6)) if log_type == "RT" else float(ct)
+
+        if log_type == "PEF" and self.linearize_pef:
+            u_recon = self._calculate_log_response(volumes, "U")
+            rho_recon = self._calculate_log_response(volumes, "RHOB")
+            return float(u_recon / rho_recon) if rho_recon > 1e-4 else 0.0
 
         response = 0.0
 
         # Add mineral contributions
         n_minerals = len(self.minerals)
         for i, mineral in enumerate(self.minerals):
-            if mineral in self.responses and log_type in self.responses[mineral]:
-                response += volumes[i] * self.responses[mineral][log_type]
+            if mineral in self.responses:
+                m_dict = self.responses[mineral]
+                if log_type == "U":
+                    pef_m = float(m_dict.get("PEF", 0.0))
+                    rho_m = float(m_dict.get("RHOB", 2.65))
+                    response += volumes[i] * float(m_dict.get("U", pef_m * rho_m))
+                elif log_type in m_dict:
+                    response += volumes[i] * float(m_dict[log_type])
 
         # Add fluid contributions
         for i, fluid in enumerate(self.fluids):
             fluid_idx = n_minerals + i
             fluid_vol = volumes[fluid_idx]
+            props = self.fluid_properties[fluid]
 
             if log_type == "NPHI":
-                response += fluid_vol * self.fluid_properties[fluid]["nphi"]
+                response += fluid_vol * float(props.get("nphi", 0.0))
             elif log_type == "RHOB":
-                response += fluid_vol * self.fluid_properties[fluid]["density"]
+                response += fluid_vol * float(props.get("density", 1.0))
             elif log_type == "DTC":
-                response += fluid_vol * self.fluid_properties[fluid]["dtc"]
+                response += fluid_vol * float(props.get("dtc", 190.0))
             elif log_type == "PEF":
-                response += fluid_vol * self.fluid_properties[fluid]["pef"]
-            # GR doesn't change with fluid type (assuming fresh water)
+                response += fluid_vol * float(props.get("pef", 0.0))
+            elif log_type == "U":
+                pef_f = float(props.get("pef", 0.0))
+                rho_f = float(props.get("density", 1.0))
+                response += fluid_vol * float(props.get("u", pef_f * rho_f))
+            elif log_type.lower() in props:
+                response += fluid_vol * float(props[log_type.lower()])
 
         return float(response)
 
     def _calculate_average_error(
         self, volumes: np.ndarray, log_values: Dict[str, float]
     ) -> float:
-        """Calculate the average absolute error between measured and reconstructed logs.
-
-        Args:
-            volumes (np.ndarray): An array of combined mineral and fluid volumes.
-            log_values (dict): A dictionary of measured log values.
-
-        Returns:
-            float: The average absolute error.
-        """
+        """Calculate the average absolute error between measured and reconstructed logs."""
         total_error = 0.0
         valid_count = 0
 
@@ -742,15 +789,7 @@ class MultiMineral:
     def _error_function(
         self, volumes: np.ndarray, log_values: Dict[str, float]
     ) -> float:
-        """Calculate the sum of squared errors for the optimization.
-
-        Args:
-            volumes (np.ndarray): An array of combined mineral and fluid volumes.
-            log_values (dict): A dictionary of measured log values.
-
-        Returns:
-            float: The total squared error.
-        """
+        """Calculate the sum of squared errors for the optimization."""
         total_error = 0.0
 
         for log_type, measured_value in log_values.items():
@@ -775,7 +814,6 @@ class MultiMineral:
                     fluid_vols = volumes[len(self.minerals) :]
                     porosity = np.sum(fluid_vols)
 
-                    # For density porosity, RHOB is reconstructed from porosity and matrix density
                     rho_ma = self._calculate_matrix_density(mineral_vols)
                     rho_fluid = self._calculate_fluid_density(fluid_vols)
                     reconstructed_value = rho_ma * (1 - porosity) + rho_fluid
@@ -796,19 +834,7 @@ class MultiMineral:
         method: Optional[str] = None,
         initial_guess: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray, bool]:
-        """Perform the optimization to find the best-fit mineral and fluid volumes for a single depth point.
-
-        Uses the fast Active-Set Bounded Least Squares solver for the linear system,
-        reserving SLSQP for non-linear conductivity models or when method='slsqp'.
-
-        Args:
-            log_values (dict): A dictionary of measured log values for a single depth point.
-            method (str, optional): Solver method override ('auto', 'active_set', 'slsqp').
-            initial_guess (np.ndarray, optional): Warm-start initial volume guess.
-
-        Returns:
-            tuple: A tuple containing the optimized mineral volumes, fluid volumes, and a success flag.
-        """
+        """Perform the optimization to find the best-fit mineral and fluid volumes for a single depth point."""
         valid_logs = {
             k: float(v)
             for k, v in log_values.items()
@@ -850,19 +876,21 @@ class MultiMineral:
         )
 
         if not use_nonlinear:
-            linear_keys = [
-                k
-                for k in valid_logs.keys()
-                if k in ("GR", "NPHI", "RHOB", "PEF", "DTC")
-            ]
-            C = self._build_response_matrix(linear_keys)
+            linear_keys = [k for k in valid_logs.keys() if k not in ("RT", "CT")]
+            solve_keys = list(linear_keys)
+            solve_vals = [valid_logs[k] for k in linear_keys]
+
+            if self.linearize_pef and "PEF" in linear_keys and "RHOB" in valid_logs:
+                pef_idx = solve_keys.index("PEF")
+                solve_keys[pef_idx] = "U"
+                solve_vals[pef_idx] = valid_logs["PEF"] * valid_logs["RHOB"]
+
+            C = self._build_response_matrix(solve_keys)
             weights = np.array(
-                [self.scaling_factors.get(k, 1.0) for k in linear_keys], dtype=float
+                [self.scaling_factors.get(k, 1.0) for k in solve_keys], dtype=float
             )
             Cw = weights[:, None] * C
-            Yw = (
-                weights * np.array([valid_logs[k] for k in linear_keys], dtype=float)
-            )[None, :]
+            Yw = (weights * np.array(solve_vals, dtype=float))[None, :]
             lower = np.array([b[0] for b in self.bounds], dtype=float)
             upper = np.array([b[1] for b in self.bounds], dtype=float)
             V_opt, success_arr = solve_bounded_least_squares_batch(
@@ -871,7 +899,6 @@ class MultiMineral:
             x_opt = V_opt[0]
             return x_opt[:n_minerals], x_opt[n_minerals:], bool(success_arr[0])
 
-        # Run SLSQP optimization (reserved for non-linear conductivity or explicit method='slsqp')
         result = minimize(
             self._error_function,
             initial_guess,
@@ -897,32 +924,11 @@ class MultiMineral:
         n_jobs: Optional[int] = None,
         **kwargs,
     ) -> np.ndarray:
-        """Vectorized multi-mineral optimizer for linear systems A * V = b or non-linear conductivity systems.
-
-        Solves the bounded simplex quadratic program across all depth steps simultaneously using
-        a vectorized Active-Set Bounded Least Squares solver when the system is linear, and
-        reserves SLSQP (with optional joblib.Parallel batching) only when non-linear conductivity
-        (sandsiltclay_waxman_smits / dual_water) is enabled or method='slsqp'.
-
-        Args:
-            A (np.ndarray, optional): Response matrix of shape (n_logs, n_vars) or (n_logs, n_vars, n_samples)
-                                      or (n_logs, n_samples, n_vars). If b is None, A is treated as the
-                                      measured log array of shape (n_logs, n_samples).
-            b (np.ndarray, optional): Measured log array of shape (n_logs, n_samples) or (n_samples, n_logs).
-            bounds (tuple, optional): Bounds for each component, defaults to (0, 1) per component.
-            conductivity_model (str, optional): Non-linear conductivity model
-                                                ('sandsiltclay_waxman_smits' or 'dual_water').
-            rt (np.ndarray, optional): True resistivity log [ohm.m] for non-linear conductivity inversion.
-            method (str, optional): Solver ('auto', 'active_set', 'bounded_lsq', 'slsqp').
-            n_jobs (int, optional): Number of parallel workers via joblib.Parallel.
-
-        Returns:
-            np.ndarray: Optimized component volume fractions across all depth steps.
-        """
+        """Vectorized multi-mineral optimizer for linear systems A * V = b or non-linear conductivity systems."""
         if A is None and hasattr(self, "A"):
-            A = getattr(self, "A")
+            A = self.A
         if b is None and hasattr(self, "b"):
-            b = getattr(self, "b")
+            b = self.b
 
         if A is None:
             raise ValueError(
@@ -933,26 +939,23 @@ class MultiMineral:
         transposed_output = False
 
         if b is None:
-            # A_arr was provided as log curves (n_logs, n_samples); build response matrix from model
             log_names = ["GR", "NPHI", "RHOB", "PEF", "DTC"][: A_arr.shape[0]]
             C_mat = self._build_response_matrix(log_names)
-            Y_mat = A_arr.T  # (n_samples, n_logs)
+            Y_mat = A_arr.T
         else:
             b_arr = np.asarray(b, dtype=float)
             if b_arr.ndim == 1:
                 b_arr = b_arr[:, None]
 
             if A_arr.ndim == 2:
-                # Determine if A is (n_logs, n_vars) or if A and b are swapped
                 if b_arr.shape[0] == A_arr.shape[0]:
-                    C_mat = A_arr  # (m, p)
-                    Y_mat = b_arr.T  # (N, m)
+                    C_mat = A_arr
+                    Y_mat = b_arr.T
                 elif b_arr.shape[1] == A_arr.shape[0]:
-                    C_mat = A_arr  # (m, p)
-                    Y_mat = b_arr  # (N, m)
+                    C_mat = A_arr
+                    Y_mat = b_arr
                     transposed_output = True
                 elif A_arr.shape[1] == b_arr.shape[1] and b_arr.ndim == 2:
-                    # A was passed as log measurements (m, N) and b as (m, p)
                     C_mat = b_arr
                     Y_mat = A_arr.T
                 else:
@@ -960,26 +963,22 @@ class MultiMineral:
                         f"Incompatible shapes for A {A_arr.shape} and b {b_arr.shape}."
                     )
             elif A_arr.ndim == 3:
-                # 3D response matrix across depth steps
                 if (
                     b_arr.shape[0] == A_arr.shape[0]
                     and b_arr.shape[1] == A_arr.shape[1]
                 ):
-                    # A is (m, N, p), b is (m, N) -> len(A[0]) == N
-                    C_mat = np.transpose(A_arr, (1, 0, 2))  # (N, m, p)
-                    Y_mat = b_arr.T  # (N, m)
+                    C_mat = np.transpose(A_arr, (1, 0, 2))
+                    Y_mat = b_arr.T
                 elif (
                     b_arr.shape[0] == A_arr.shape[0]
                     and b_arr.shape[1] == A_arr.shape[2]
                 ):
-                    # A is (m, p, N), b is (m, N)
-                    C_mat = np.transpose(A_arr, (2, 0, 1))  # (N, m, p)
-                    Y_mat = b_arr.T  # (N, m)
+                    C_mat = np.transpose(A_arr, (2, 0, 1))
+                    Y_mat = b_arr.T
                 elif (
                     A_arr.shape[0] == b_arr.shape[0]
                     and A_arr.shape[1] == b_arr.shape[1]
                 ):
-                    # A is (N, m, p), b is (N, m)
                     C_mat = A_arr
                     Y_mat = b_arr
                     transposed_output = True
@@ -1023,14 +1022,11 @@ class MultiMineral:
         if not np.any(valid_row):
             return V_out if transposed_output else V_out.T
 
-        # Step 1: Fast vectorized Active-Set Bounded Least Squares solution
-        # (Serves as final solution for linear system, or warm-start for non-linear SLSQP)
         valid_indices = np.where(valid_row)[0]
         Y_valid = np.where(np.isfinite(Y_mat[valid_indices]), Y_mat[valid_indices], 0.0)
         mask_valid = np.isfinite(Y_mat[valid_indices]).astype(float)
 
         if C_mat.ndim == 2:
-            # Group by missingness pattern for exact weighted active-set solve
             patterns, inv = np.unique(mask_valid, axis=0, return_inverse=True)
 
             def _solve_pattern(pat_idx: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -1077,15 +1073,13 @@ class MultiMineral:
             )
             V_out[valid_indices] = V_sub
 
-        # Step 2: If non-linear conductivity (Waxman-Smits / Dual Water) or explicit SLSQP is enabled,
-        # refine with SLSQP (warm-started from the vectorized bounded least squares solution)
         if use_nonlinear:
             rt_arr = (
                 np.asarray(rt, dtype=float)
                 if rt is not None
                 else np.full(N, np.nan, dtype=float)
             )
-            bounds_seq = tuple(zip(lower, upper))
+            bounds_seq = tuple(zip(lower, upper, strict=False))
             constraints_seq = [{"type": "eq", "fun": lambda v: float(np.sum(v) - 1.0)}]
 
             def _solve_slsqp_row(idx: int) -> np.ndarray:
@@ -1143,9 +1137,9 @@ class MultiMineral:
 
     def estimate_lithology(
         self,
-        gr: np.ndarray,
-        nphi: np.ndarray,
-        rhob: np.ndarray,
+        gr: Optional[np.ndarray] = None,
+        nphi: Optional[np.ndarray] = None,
+        rhob: Optional[np.ndarray] = None,
         pef: Optional[np.ndarray] = None,
         dtc: Optional[np.ndarray] = None,
         rt: Optional[np.ndarray] = None,
@@ -1153,49 +1147,114 @@ class MultiMineral:
         conductivity_model: Optional[str] = None,
         method: Optional[str] = None,
         n_jobs: Optional[int] = None,
+        logs: Optional[Dict[str, np.ndarray]] = None,
+        bounds: Optional[Union[Dict[str, Tuple[float, float]], Tuple[Tuple[float, float], ...]]] = None,
+        bad_hole_mask: Optional[np.ndarray] = None,
+        cali: Optional[np.ndarray] = None,
+        bs: Optional[Union[float, np.ndarray]] = None,
+        drho: Optional[np.ndarray] = None,
+        log_weights: Optional[Dict[str, Union[float, np.ndarray]]] = None,
+        bad_hole_weight: float = 0.05,
+        linearize_pef: Optional[bool] = None,
+        **extra_logs: np.ndarray,
     ) -> pd.DataFrame:
         """Estimate mineral and fluid volumes for a set of log data points.
 
-        Uses the fast vectorized Bounded Least Squares / Active-Set solver across all depth
-        points simultaneously for the linear mineral system, reserving SLSQP (with optional
-        joblib.Parallel batching) only when non-linear conductivity
-        ('sandsiltclay_waxman_smits' or 'dual_water') is enabled or method='slsqp'.
+        Features:
+        - Fast vectorized Bounded Least Squares / Active-Set simplex solver.
+        - Dynamic log ingestion: supports any combination of standard logs (GR, NPHI, RHOB, PEF, DTC),
+          Spectral GR (POTA, THOR, URAN), and geochemical channels.
+        - Exact volumetric photoelectric cross-section linearization: U = PEF * RHOB.
+        - Borehole quality & bad-hole weighting: de-weights sensitive tools (RHOB, PEF, U)
+          in rugose or washed-out intervals using bad_hole_mask, cali/bs, or drho.
+        - Custom mineral/fluid bounds and Degrees-of-Freedom identifiability checking.
 
         Args:
-            gr (np.ndarray): Gamma Ray log [GAPI].
-            nphi (np.ndarray): Neutron Porosity log [v/v].
-            rhob (np.ndarray): Bulk Density log [g/cc].
-            pef (np.ndarray, optional): Photoelectric Factor log [barns/electron]. Defaults to None.
-            dtc (np.ndarray, optional): Compressional slowness log [us/ft]. Defaults to None.
+            gr (np.ndarray, optional): Gamma Ray log [GAPI].
+            nphi (np.ndarray, optional): Neutron Porosity log [v/v].
+            rhob (np.ndarray, optional): Bulk Density log [g/cc].
+            pef (np.ndarray, optional): Photoelectric Factor log [barns/electron].
+            dtc (np.ndarray, optional): Compressional slowness log [us/ft].
             rt (np.ndarray, optional): True Resistivity log [ohm.m] (used when conductivity_model is enabled).
-            auto_scale (bool, optional): If True, automatically calculates scaling factors. Defaults to True.
+            auto_scale (bool, optional): If True, dynamically scales logs based on percentiles. Defaults to True.
             conductivity_model (str, optional): Non-linear conductivity model override
                                                 ('sandsiltclay_waxman_smits', 'dual_water', or None).
             method (str, optional): Solver method override ('auto', 'active_set', 'bounded_lsq', 'slsqp').
             n_jobs (int, optional): Number of parallel jobs via joblib.Parallel. Defaults to self.n_jobs.
+            logs (dict, optional): Dictionary of arbitrary input log arrays (e.g. {'POTA': pota, 'THOR': thor}).
+            bounds (dict or tuple, optional): Custom bounds per component or full bounds tuple.
+            bad_hole_mask (np.ndarray, optional): Boolean array where True indicates bad borehole / washouts.
+            cali (np.ndarray, optional): Caliper log [in] used for automatic washout detection.
+            bs (float or np.ndarray, optional): Bit size [in] used for washout detection (cali > bs + 1.5).
+            drho (np.ndarray, optional): Density correction [g/cc] used for bad-hole detection (|drho| > 0.05).
+            log_weights (dict, optional): Custom weighting multipliers per log curve.
+            bad_hole_weight (float, optional): Multiplier for density/PEF curves in bad hole. Defaults to 0.05.
+            linearize_pef (bool, optional): Override for PEF linearization (U = PEF * RHOB).
+            **extra_logs (np.ndarray): Additional log arrays passed as keyword arguments (e.g., pota=..., thor=...).
 
         Returns:
-            pd.DataFrame: A DataFrame containing the estimated mineral and fluid volumes,
-                          constructed porosity, error metrics, and reconstructed logs for each depth point.
+            pd.DataFrame: A DataFrame containing estimated mineral/fluid volumes, constructed porosity,
+                          residual errors, and reconstructed logs.
         """
-
-        def _to_float_array(arr: Optional[np.ndarray], length: int) -> np.ndarray:
+        def _to_float_array(arr: Optional[Union[float, np.ndarray]], length: int) -> np.ndarray:
             if arr is None:
                 return np.full(length, np.nan, dtype=float)
             try:
-                return np.asarray(arr, dtype=float).ravel()
+                out = np.asarray(arr, dtype=float).ravel()
+                if len(out) == 1 and length > 1:
+                    return np.full(length, out[0], dtype=float)
+                return out
             except (ValueError, TypeError):
                 return np.array(
                     [np.nan if v is None else float(v) for v in arr], dtype=float
                 )
 
-        n_samples = len(gr)
-        gr_arr = _to_float_array(gr, n_samples)
-        nphi_arr = _to_float_array(nphi, n_samples)
-        rhob_arr = _to_float_array(rhob, n_samples)
-        pef_arr = _to_float_array(pef, n_samples)
-        dtc_arr = _to_float_array(dtc, n_samples)
-        rt_arr = _to_float_array(rt, n_samples)
+        # 1. Determine sample length from any provided valid input
+        candidate_arrays = [gr, nphi, rhob, pef, dtc, rt, cali, drho]
+        if logs is not None:
+            candidate_arrays.extend(logs.values())
+        candidate_arrays.extend(extra_logs.values())
+
+        valid_lens = [len(a) for a in candidate_arrays if a is not None and hasattr(a, "__len__")]
+        if not valid_lens:
+            raise ValueError("No input log arrays provided to estimate_lithology().")
+        n_samples = max(valid_lens)
+
+        # 2. Gather all input logs into a normalized dictionary
+        raw_inputs: Dict[str, np.ndarray] = {}
+        if gr is not None:
+            raw_inputs["GR"] = _to_float_array(gr, n_samples)
+        if nphi is not None:
+            raw_inputs["NPHI"] = _to_float_array(nphi, n_samples)
+        if rhob is not None:
+            raw_inputs["RHOB"] = _to_float_array(rhob, n_samples)
+        if pef is not None:
+            raw_inputs["PEF"] = _to_float_array(pef, n_samples)
+        if dtc is not None:
+            raw_inputs["DTC"] = _to_float_array(dtc, n_samples)
+
+        rt_arr = _to_float_array(rt, n_samples) if rt is not None else np.full(n_samples, np.nan, dtype=float)
+
+        if logs is not None:
+            for k, v in logs.items():
+                ku = k.upper()
+                if ku in ("RT", "CT"):
+                    rt_arr = _to_float_array(v, n_samples)
+                else:
+                    raw_inputs[ku] = _to_float_array(v, n_samples)
+
+        for k, v in extra_logs.items():
+            ku = k.upper()
+            if ku in ("RT", "CT"):
+                rt_arr = _to_float_array(v, n_samples)
+            else:
+                raw_inputs[ku] = _to_float_array(v, n_samples)
+
+        gr_arr = raw_inputs.get("GR", np.full(n_samples, np.nan, dtype=float))
+        nphi_arr = raw_inputs.get("NPHI", np.full(n_samples, np.nan, dtype=float))
+        rhob_arr = raw_inputs.get("RHOB", np.full(n_samples, np.nan, dtype=float))
+        pef_arr = raw_inputs.get("PEF", np.full(n_samples, np.nan, dtype=float))
+        dtc_arr = raw_inputs.get("DTC", np.full(n_samples, np.nan, dtype=float))
 
         active_cond_model = (
             conductivity_model.lower()
@@ -1214,49 +1273,113 @@ class MultiMineral:
         self.conductivity_model = active_cond_model
 
         try:
-            # Dynamic scaling based on log ranges for robustness
-            if auto_scale:
-                all_logs = {
-                    "GR": gr_arr,
-                    "NPHI": nphi_arr,
-                    "RHOB": rhob_arr,
-                    "PEF": pef_arr if pef is not None else None,
-                    "DTC": dtc_arr if dtc is not None else None,
-                }
-                for log_type, log_array in all_logs.items():
-                    if log_array is not None:
-                        valid_data = log_array[~np.isnan(log_array)]
-                        if len(valid_data) > 1:
-                            p05 = np.percentile(valid_data, 5)
-                            p95 = np.percentile(valid_data, 95)
-                            log_range = p95 - p05
-                            if log_range > 1e-6:
-                                self.scaling_factors[log_type] = round(
-                                    1.0 / log_range, 4
-                                )
-                            else:
-                                self.scaling_factors[log_type] = 1.0
+            # 3. Handle PEF linearization via U = PEF * RHOB
+            do_pef_lin = self.linearize_pef if linearize_pef is None else bool(linearize_pef)
+            use_u_channel = False
+            solve_inputs = dict(raw_inputs)
 
-            logger.info(f"Scaling factors: {self.scaling_factors}")
+            if do_pef_lin and "PEF" in solve_inputs and "RHOB" in solve_inputs:
+                u_meas = solve_inputs["PEF"] * solve_inputs["RHOB"]
+                # Invert with U instead of raw PEF
+                solve_inputs.pop("PEF")
+                solve_inputs["U"] = u_meas
+                use_u_channel = True
+
+            # 4. Identify linear solve log names (ordered: GR, NPHI, RHOB, U/PEF, DTC, then extra channels)
+            canonical_order = ["GR", "NPHI", "RHOB", "U" if use_u_channel else "PEF", "DTC"]
+            linear_log_names = [k for k in canonical_order if k in solve_inputs]
+            for k in solve_inputs.keys():
+                if k not in linear_log_names:
+                    # Include if at least one mineral defines this property
+                    if any(k in m_props for m_props in self.responses.values()):
+                        linear_log_names.append(k)
 
             n_minerals = len(self.minerals)
             n_fluids = len(self.fluids)
             n_vars = n_minerals + n_fluids
 
-            linear_log_names = ["GR", "NPHI", "RHOB", "PEF", "DTC"]
-            Y_linear = np.column_stack([gr_arr, nphi_arr, rhob_arr, pef_arr, dtc_arr])
+            # Degrees of Freedom (DoF) check
+            n_equations = len(linear_log_names) + 1  # log response rows + 1 closure constraint
+            if n_equations < n_vars:
+                logger.warning(
+                    f"MultiMineral model is under-determined: {len(linear_log_names)} log curves "
+                    f"+ 1 closure constraint ({n_equations} equations) < {n_vars} components "
+                    f"({n_minerals} minerals + {n_fluids} fluids). Solution will rely on regularization "
+                    f"or bounds. Consider providing additional logs (e.g. PEF, DTC, POTA, THOR) or "
+                    f"zoning to fewer active minerals."
+                )
+
+            # 5. Dynamic scaling factors based on percentile ranges
+            if auto_scale:
+                for log_type, log_array in solve_inputs.items():
+                    valid_data = log_array[np.isfinite(log_array)]
+                    fallback_r = DEFAULT_LOG_RANGES.get(log_type, 1.0)
+                    if len(valid_data) > 1:
+                        p05 = float(np.percentile(valid_data, 5))
+                        p95 = float(np.percentile(valid_data, 95))
+                        log_range = p95 - p05
+                        if log_range > 1e-4:
+                            self.scaling_factors[log_type] = round(1.0 / log_range, 4)
+                        else:
+                            self.scaling_factors[log_type] = round(1.0 / fallback_r, 4)
+                    else:
+                        self.scaling_factors[log_type] = round(1.0 / fallback_r, 4)
+
+            logger.info(f"Scaling factors: {self.scaling_factors}")
+
+            # 6. Borehole quality / bad hole detection & depth-dependent weighting
+            is_bad = np.zeros(n_samples, dtype=bool)
+            if bad_hole_mask is not None:
+                is_bad |= np.asarray(bad_hole_mask, dtype=bool).ravel()
+            if cali is not None and bs is not None:
+                cali_arr = _to_float_array(cali, n_samples)
+                bs_arr = _to_float_array(bs, n_samples)
+                is_bad |= (cali_arr > (bs_arr + 1.5))
+            if drho is not None:
+                drho_arr = _to_float_array(drho, n_samples)
+                is_bad |= (np.abs(drho_arr) > 0.05)
+
+            # Build weight matrix W (n_samples, n_logs)
+            custom_weights = log_weights or {}
+            base_weights = np.array(
+                [
+                    self.scaling_factors.get(k, 1.0) * float(custom_weights.get(k, 1.0))
+                    for k in linear_log_names
+                ],
+                dtype=float,
+            )
+            W_matrix = np.tile(base_weights, (n_samples, 1))
+
+            # Apply washout down-weighting for sensitive tools (RHOB, PEF, U)
+            has_depth_varying_weights = False
+            if np.any(is_bad):
+                has_depth_varying_weights = True
+                bad_channels = ("RHOB", "PEF", "U")
+                for col_i, l_name in enumerate(linear_log_names):
+                    if l_name in bad_channels:
+                        W_matrix[is_bad, col_i] *= float(bad_hole_weight)
+
+            # Check if any custom weights in custom_weights are arrays
+            for col_i, l_name in enumerate(linear_log_names):
+                cw = custom_weights.get(l_name)
+                if isinstance(cw, (list, tuple, np.ndarray)):
+                    cw_arr = _to_float_array(cw, n_samples)
+                    W_matrix[:, col_i] = self.scaling_factors.get(l_name, 1.0) * cw_arr
+                    has_depth_varying_weights = True
+
+            # 7. Stack log arrays into measured matrix Y_linear (n_samples, n_logs)
+            Y_linear = np.column_stack([solve_inputs[k] for k in linear_log_names])
             finite_mask = np.isfinite(Y_linear)
 
-            # Need at least 3 valid measurements (including RT if non-linear conductivity is active)
             has_rt = (
                 (np.isfinite(rt_arr) & (rt_arr > 0))
                 if active_cond_model is not None
                 else np.zeros(n_samples, dtype=bool)
             )
             valid_counts = np.sum(finite_mask, axis=1) + has_rt.astype(int)
-            valid_rows = valid_counts >= 3
+            valid_rows = valid_counts >= min(3, len(linear_log_names))
 
-            # Vectorized initial guesses across all depth steps
+            # Vectorized initial guesses
             init_poro = self._calculate_porosity_vectorized(
                 nphi_arr, rhob_arr, dtc_arr if dtc is not None else None
             )
@@ -1269,14 +1392,29 @@ class MultiMineral:
                 ]
             )
 
-            lower = np.array([b[0] for b in self.bounds], dtype=float)
-            upper = np.array([b[1] for b in self.bounds], dtype=float)
+            # Resolve lower and upper bounds
+            if bounds is not None:
+                if isinstance(bounds, dict):
+                    cur_lower = [b[0] for b in self.bounds]
+                    cur_upper = [b[1] for b in self.bounds]
+                    for j, m in enumerate(self.minerals):
+                        if m in bounds:
+                            cur_lower[j] = bounds[m][0]
+                            cur_upper[j] = bounds[m][1]
+                    for j, f in enumerate(self.fluids):
+                        if f in bounds:
+                            cur_lower[n_minerals + j] = bounds[f][0]
+                            cur_upper[n_minerals + j] = bounds[f][1]
+                    lower = np.array(cur_lower, dtype=float)
+                    upper = np.array(cur_upper, dtype=float)
+                else:
+                    lower = np.array([bd[0] for bd in bounds], dtype=float)
+                    upper = np.array([bd[1] for bd in bounds], dtype=float)
+            else:
+                lower = np.array([b[0] for b in self.bounds], dtype=float)
+                upper = np.array([b[1] for b in self.bounds], dtype=float)
 
             C_full = self._build_response_matrix(linear_log_names)
-            weights_full = np.array(
-                [self.scaling_factors.get(k, 1.0) for k in linear_log_names],
-                dtype=float,
-            )
 
             V_all = np.full((n_samples, n_vars), np.nan, dtype=float)
             success_flags = np.full(n_samples, False, dtype=bool)
@@ -1287,54 +1425,66 @@ class MultiMineral:
                 active_cond_model in CONDUCTIVITY_MODELS
             )
 
+            # 8. Solve bounded least squares across valid depth samples
             if np.any(valid_rows):
                 valid_idx = np.where(valid_rows)[0]
                 mask_sub = finite_mask[valid_idx]
-                patterns, inv = np.unique(mask_sub, axis=0, return_inverse=True)
 
-                def _solve_group(
-                    pat_i: int,
-                ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-                    local_rows = np.where(inv == pat_i)[0]
-                    global_rows = valid_idx[local_rows]
-                    col_mask = patterns[pat_i]
-                    if not np.any(col_mask):
-                        return (
-                            global_rows,
-                            V0[global_rows],
-                            np.ones(len(global_rows), dtype=bool),
+                if not has_depth_varying_weights:
+                    # Maximum speed: group by missingness pattern with static Cw
+                    patterns, inv = np.unique(mask_sub, axis=0, return_inverse=True)
+
+                    def _solve_group(
+                        pat_i: int,
+                    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                        local_rows = np.where(inv == pat_i)[0]
+                        global_rows = valid_idx[local_rows]
+                        col_mask = patterns[pat_i]
+                        if not np.any(col_mask):
+                            return (
+                                global_rows,
+                                V0[global_rows],
+                                np.ones(len(global_rows), dtype=bool),
+                            )
+                        Cw_sub = (base_weights[col_mask, None]) * C_full[col_mask, :]
+                        Yw_sub = (
+                            Y_linear[np.ix_(global_rows, col_mask)]
+                            * base_weights[None, col_mask]
                         )
-                    Cw_sub = (weights_full[col_mask, None]) * C_full[col_mask, :]
-                    Yw_sub = (
-                        Y_linear[np.ix_(global_rows, col_mask)]
-                        * weights_full[None, col_mask]
-                    )
-                    V_sub, ok_sub = solve_bounded_least_squares_batch(
-                        Cw_sub, Yw_sub, V0[global_rows], lower, upper
-                    )
-                    return global_rows, V_sub, ok_sub
+                        V_sub, ok_sub = solve_bounded_least_squares_batch(
+                            Cw_sub, Yw_sub, V0[global_rows], lower, upper
+                        )
+                        return global_rows, V_sub, ok_sub
 
-                if workers != 1 and len(patterns) > 1:
-                    group_results = Parallel(n_jobs=workers, prefer="threads")(
-                        delayed(_solve_group)(pi) for pi in range(len(patterns))
-                    )
+                    if workers != 1 and len(patterns) > 1:
+                        group_results = Parallel(n_jobs=workers, prefer="threads")(
+                            delayed(_solve_group)(pi) for pi in range(len(patterns))
+                        )
+                    else:
+                        group_results = [_solve_group(pi) for pi in range(len(patterns))]
+
+                    for g_rows, V_sub, ok_sub in group_results:
+                        V_all[g_rows] = V_sub
+                        success_flags[g_rows] = ok_sub
                 else:
-                    group_results = [_solve_group(pi) for pi in range(len(patterns))]
+                    # Depth-dependent weights: pass 3D Cw and 2D Yw to batch solver
+                    W_valid = W_matrix[valid_idx] * mask_sub
+                    Y_clean = np.where(mask_sub, Y_linear[valid_idx], 0.0)
+                    Yw_valid = Y_clean * W_valid
+                    Cw_3d = W_valid[:, :, None] * C_full[None, :, :]
+                    V_sub, ok_sub = solve_bounded_least_squares_batch(
+                        Cw_3d, Yw_valid, V0[valid_idx], lower, upper
+                    )
+                    V_all[valid_idx] = V_sub
+                    success_flags[valid_idx] = ok_sub
 
-                for g_rows, V_sub, ok_sub in group_results:
-                    V_all[g_rows] = V_sub
-                    success_flags[g_rows] = ok_sub
-
-                # Reserve SLSQP only when non-linear conductivity is enabled or method='slsqp'
+                # Reserve SLSQP for non-linear conductivity or explicit SLSQP solver
                 if use_nonlinear:
-
                     def _run_slsqp_depth(i: int) -> Tuple[int, np.ndarray, bool]:
                         log_values = {
-                            "GR": gr_arr[i] if finite_mask[i, 0] else None,
-                            "NPHI": nphi_arr[i] if finite_mask[i, 1] else None,
-                            "RHOB": rhob_arr[i] if finite_mask[i, 2] else None,
-                            "PEF": pef_arr[i] if finite_mask[i, 3] else None,
-                            "DTC": dtc_arr[i] if finite_mask[i, 4] else None,
+                            l_name: float(raw_inputs[l_name][i])
+                            for l_name in raw_inputs.keys()
+                            if np.isfinite(raw_inputs[l_name][i])
                         }
                         if (
                             active_cond_model is not None
@@ -1365,32 +1515,89 @@ class MultiMineral:
                         V_all[idx_i] = v_comb
                         success_flags[idx_i] = ok
 
-            # Vectorized log reconstruction and error calculation
-            recon_matrix = V_all @ C_full.T  # (n_samples, 5)
-            gr_reconstructed = np.where(finite_mask[:, 0], recon_matrix[:, 0], np.nan)
-            nphi_reconstructed = np.where(finite_mask[:, 1], recon_matrix[:, 1], np.nan)
-            rhob_reconstructed = np.where(finite_mask[:, 2], recon_matrix[:, 2], np.nan)
-            pef_reconstructed = np.where(finite_mask[:, 3], recon_matrix[:, 3], np.nan)
-            dtc_reconstructed = np.where(finite_mask[:, 4], recon_matrix[:, 4], np.nan)
+            # 9. Vectorized log reconstruction
+            recon_matrix = V_all @ C_full.T  # (n_samples, len(linear_log_names))
+            recon_dict: Dict[str, np.ndarray] = {}
+            for col_i, l_name in enumerate(linear_log_names):
+                recon_dict[l_name] = recon_matrix[:, col_i]
 
-            abs_diffs = np.where(
-                finite_mask & valid_rows[:, None],
-                np.abs(Y_linear - recon_matrix),
-                0.0,
-            )
-            linear_valid_counts = np.sum(finite_mask, axis=1)
-            with np.errstate(invalid="ignore", divide="ignore"):
-                average_errors = np.where(
-                    valid_rows & (linear_valid_counts > 0),
-                    np.sum(abs_diffs, axis=1) / linear_valid_counts,
+            # Reconstruct PEF from U and RHOB when PEF linearization is active
+            if use_u_channel:
+                u_recon = recon_dict.get("U", np.full(n_samples, np.nan, dtype=float))
+                rho_recon = recon_dict.get("RHOB", rhob_arr)
+                safe_rho = np.where(np.isfinite(rho_recon) & (rho_recon > 0.5), rho_recon, 2.65)
+                pef_reconstructed = np.where(
+                    valid_rows & np.isfinite(pef_arr),
+                    u_recon / safe_rho,
                     np.nan,
                 )
+            else:
+                pef_reconstructed = (
+                    np.where(valid_rows & np.isfinite(pef_arr), recon_dict["PEF"], np.nan)
+                    if "PEF" in recon_dict
+                    else np.full(n_samples, np.nan, dtype=float)
+                )
+
+            gr_reconstructed = (
+                np.where(valid_rows & np.isfinite(gr_arr), recon_dict["GR"], np.nan)
+                if "GR" in recon_dict
+                else np.full(n_samples, np.nan, dtype=float)
+            )
+            nphi_reconstructed = (
+                np.where(valid_rows & np.isfinite(nphi_arr), recon_dict["NPHI"], np.nan)
+                if "NPHI" in recon_dict
+                else np.full(n_samples, np.nan, dtype=float)
+            )
+            rhob_reconstructed = (
+                np.where(valid_rows & np.isfinite(rhob_arr), recon_dict["RHOB"], np.nan)
+                if "RHOB" in recon_dict
+                else np.full(n_samples, np.nan, dtype=float)
+            )
+            dtc_reconstructed = (
+                np.where(valid_rows & np.isfinite(dtc_arr), recon_dict["DTC"], np.nan)
+                if "DTC" in recon_dict
+                else np.full(n_samples, np.nan, dtype=float)
+            )
+
+            # Compute average absolute error across all measured logs
+            all_diffs = []
+            if np.any(np.isfinite(gr_arr)):
+                all_diffs.append(np.where(valid_rows & np.isfinite(gr_arr), np.abs(gr_arr - gr_reconstructed), np.nan))
+            if np.any(np.isfinite(nphi_arr)):
+                all_diffs.append(np.where(valid_rows & np.isfinite(nphi_arr), np.abs(nphi_arr - nphi_reconstructed), np.nan))
+            if np.any(np.isfinite(rhob_arr)):
+                all_diffs.append(np.where(valid_rows & np.isfinite(rhob_arr), np.abs(rhob_arr - rhob_reconstructed), np.nan))
+            if np.any(np.isfinite(pef_arr)):
+                all_diffs.append(np.where(valid_rows & np.isfinite(pef_arr), np.abs(pef_arr - pef_reconstructed), np.nan))
+            if np.any(np.isfinite(dtc_arr)):
+                all_diffs.append(np.where(valid_rows & np.isfinite(dtc_arr), np.abs(dtc_arr - dtc_reconstructed), np.nan))
+
+            for l_name in linear_log_names:
+                if l_name not in ("GR", "NPHI", "RHOB", "U", "PEF", "DTC"):
+                    meas_val = raw_inputs[l_name]
+                    diff_val = np.where(
+                        valid_rows & np.isfinite(meas_val),
+                        np.abs(meas_val - recon_dict[l_name]),
+                        np.nan,
+                    )
+                    all_diffs.append(diff_val)
+
+            if all_diffs:
+                diff_stack = np.column_stack(all_diffs)
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    average_errors = np.where(
+                        valid_rows,
+                        np.nanmean(diff_stack, axis=1),
+                        np.nan,
+                    )
+            else:
+                average_errors = np.full(n_samples, np.nan, dtype=float)
 
             porosity_constructed = np.where(
                 valid_rows, np.sum(V_all[:, n_minerals:], axis=1), np.nan
             )
 
-            # Create output DataFrame
+            # 10. Construct output DataFrame
             output_data = {}
 
             mineral_column_mapping = {
@@ -1407,17 +1614,26 @@ class MultiMineral:
                 output_data[column_name] = V_all[:, n_minerals + j]
 
             output_data["PHIT_CONSTRUCTED"] = porosity_constructed
-            output_data.update(
-                {
-                    "AVG_ERROR": average_errors,
-                    "OPTIMIZER_SUCCESS": success_flags,
-                    "GR_RECONSTRUCTED": gr_reconstructed,
-                    "NPHI_RECONSTRUCTED": nphi_reconstructed,
-                    "RHOB_RECONSTRUCTED": rhob_reconstructed,
-                    "PEF_RECONSTRUCTED": pef_reconstructed,
-                    "DTC_RECONSTRUCTED": dtc_reconstructed,
-                }
-            )
+            output_data["AVG_ERROR"] = average_errors
+            output_data["OPTIMIZER_SUCCESS"] = success_flags
+
+            # Standard reconstructed curves
+            output_data["GR_RECONSTRUCTED"] = gr_reconstructed
+            output_data["NPHI_RECONSTRUCTED"] = nphi_reconstructed
+            output_data["RHOB_RECONSTRUCTED"] = rhob_reconstructed
+            output_data["PEF_RECONSTRUCTED"] = pef_reconstructed
+            output_data["DTC_RECONSTRUCTED"] = dtc_reconstructed
+
+            # Extra reconstructed curves (e.g. POTA, THOR, URAN)
+            for l_name in linear_log_names:
+                if l_name not in ("GR", "NPHI", "RHOB", "U", "PEF", "DTC"):
+                    col_name = f"{l_name}_RECONSTRUCTED"
+                    meas_val = raw_inputs.get(l_name, np.full(n_samples, np.nan, dtype=float))
+                    output_data[col_name] = np.where(
+                        valid_rows & np.isfinite(meas_val),
+                        recon_dict[l_name],
+                        np.nan,
+                    )
 
             return pd.DataFrame(output_data)
         finally:
@@ -1444,6 +1660,10 @@ class Optim(MultiMineral):
         conductivity_params: Optional[Dict] = None,
         solver: str = "auto",
         n_jobs: int = 1,
+        responses: Optional[Dict[str, Dict[str, float]]] = None,
+        mineral_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        fluid_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        linearize_pef: bool = False,
     ):
         super().__init__(
             minerals=minerals,
@@ -1454,6 +1674,10 @@ class Optim(MultiMineral):
             conductivity_params=conductivity_params,
             solver=solver,
             n_jobs=n_jobs,
+            responses=responses,
+            mineral_bounds=mineral_bounds,
+            fluid_bounds=fluid_bounds,
+            linearize_pef=linearize_pef,
         )
         self.A = A
         self.b = b
@@ -1465,27 +1689,7 @@ class Optim(MultiMineral):
         unity_weight: float = 100.0,
         normalize: bool = True,
     ) -> np.ndarray:
-        """Solve non-negative mineral/fluid volumes via ``scipy.optimize.nnls`` with weighted unity closure.
-
-        Appends the volumetric closure row ``[1, 1, ..., 1] * unity_weight`` and target
-        ``1.0 * unity_weight`` (with default penalty weight :math:`\\lambda = 100.0`) before
-        calling ``scipy.optimize.nnls`` so that :math:`\\sum_i V_i \\approx 1.0` is enforced
-        natively during optimization without distorting log tool reconstruction via heavy
-        post-hoc rescaling.
-
-        Args:
-            A (np.ndarray, optional): Response matrix of shape ``(n_logs, n_vars)`` or 3D
-                ``(n_logs, n_vars, n_samples)`` / ``(n_logs, n_samples, n_vars)``. Defaults to ``self.A``.
-            b (np.ndarray, optional): Measured log vector ``(n_logs,)`` or matrix ``(n_logs, n_samples)``
-                or ``(n_samples, n_logs)``. Defaults to ``self.b``.
-            unity_weight (float, optional): Penalty weight :math:`\\lambda` on the unity constraint
-                row :math:`\\sum_i V_i = 1.0`. Defaults to ``100.0``.
-            normalize (bool, optional): Whether to apply final fine normalization ``x / sum(x)``.
-                Defaults to ``True``.
-
-        Returns:
-            np.ndarray: Optimized non-negative volume fractions summing to 1.0.
-        """
+        """Solve non-negative mineral/fluid volumes via scipy.optimize.nnls with weighted unity closure."""
         A_in = A if A is not None else getattr(self, "A", None)
         b_in = b if b is not None else getattr(self, "b", None)
 
@@ -1498,7 +1702,7 @@ class Optim(MultiMineral):
         if b_in is None:
             log_names = ["GR", "NPHI", "RHOB", "PEF", "DTC"][: A_arr.shape[0]]
             C_mat = self._build_response_matrix(log_names)
-            Y_mat = A_arr.T  # (n_samples, n_logs)
+            Y_mat = A_arr.T
             single_sample = False
             transposed_output = False
         else:
@@ -1510,8 +1714,8 @@ class Optim(MultiMineral):
                 Y_mat = b_arr[None, :]
             elif A_arr.ndim == 2:
                 if b_arr.shape[0] == A_arr.shape[0]:
-                    C_mat = A_arr  # (n_logs, n_vars)
-                    Y_mat = b_arr.T  # (n_samples, n_logs)
+                    C_mat = A_arr
+                    Y_mat = b_arr.T
                 elif b_arr.shape[1] == A_arr.shape[0]:
                     C_mat = A_arr
                     Y_mat = b_arr
@@ -1528,13 +1732,13 @@ class Optim(MultiMineral):
                     b_arr.shape[0] == A_arr.shape[0]
                     and b_arr.shape[1] == A_arr.shape[1]
                 ):
-                    C_mat = np.transpose(A_arr, (1, 0, 2))  # (N, m, p)
+                    C_mat = np.transpose(A_arr, (1, 0, 2))
                     Y_mat = b_arr.T
                 elif (
                     b_arr.shape[0] == A_arr.shape[0]
                     and b_arr.shape[1] == A_arr.shape[2]
                 ):
-                    C_mat = np.transpose(A_arr, (2, 0, 1))  # (N, m, p)
+                    C_mat = np.transpose(A_arr, (2, 0, 1))
                     Y_mat = b_arr.T
                 elif (
                     A_arr.shape[0] == b_arr.shape[0]

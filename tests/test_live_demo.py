@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import io
-import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,6 +17,7 @@ def seeded_demo_paths(tmp_path_factory):
     """Seed an isolated SQLite demo database once (cached in .pytest_cache) and copy per test module."""
     import shutil
     from pathlib import Path
+
     from deploy.demo.seed_demo import seed_demo_database
 
     cache_dir = Path(__file__).resolve().parent.parent / ".pytest_cache" / "demo_seed_v1"

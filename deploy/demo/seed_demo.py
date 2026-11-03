@@ -48,6 +48,8 @@ COSTA_DIR = ROOT_DIR / "notebooks" / "data" / "01_raw" / "COSTA"
 def _load_volve_15_9_19a() -> pd.DataFrame:
     """Load Volve 15/9-19 A reservoir section (3800–3966 m) and prepare clean petrophysical logs."""
     las_path = VOLVE_DIR / "15-9-19-A.las"
+    if not las_path.exists():
+        las_path = ROOT_DIR / "tests" / "test_data" / "sample.las"
     las = lasio.read(str(las_path))
     df = las.df().reset_index()
     df.columns = [str(c).upper() for c in df.columns]

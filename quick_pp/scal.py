@@ -29,7 +29,7 @@ Provides petrophysically rigorous core-to-log and lab-to-reservoir reconciliatio
   6. Two-Phase Relative Permeability ($k_{rw}, k_{ro}$) & Simulator Handover (`SWOF`):
      - `normalize_water_saturation`: Normalizes water saturation $S_w$ between $S_{wirr}$ and $1 - S_{or}$.
      - `corey_relperm`: Modified Corey (1954) power-law water-oil relative permeability model.
-     - `brooks_corey_relperm`: Brooks-Corey (1964) pore-size distribution ($\lambda$) relative permeability model.
+     - `brooks_corey_relperm`: Brooks-Corey (1964) pore-size distribution ($\\lambda$) relative permeability model.
      - `let_relperm`: Lomeland-Ebeltoft-Thomas (LET, 2005) 3-parameter flexible SCAL relative permeability model.
      - `fit_relperm`: Non-linear least-squares fitting of Corey or LET parameters to lab SCAL $(S_w, k_{rw}, k_{ro})$ data.
      - `generate_swof_table`: Generates dynamic reservoir simulator `SWOF` tables (`SW`, `KRW`, `KROW`, `PCOW`).

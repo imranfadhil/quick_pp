@@ -49,7 +49,7 @@
 
 	onMount(() => {
 		if (workbench.projectId) {
-			void projectData.loadStickPlot(true);
+			void projectData.loadStickPlot(false);
 		}
 	});
 
@@ -473,7 +473,7 @@
 
 		// Estimate permeability from porosity using permTransformResult fits or Timur-Coates correlation
 		let permEst = Math.max(0.05, 0.15 * Math.pow(10, 12.5 * phit));
-		const ptFits = projectData.permTransformResult?.fits;
+		const ptFits = untrack(() => projectData.permTransformResult?.fits);
 		if (ptFits && Object.keys(ptFits).length > 0) {
 			const firstFit = Object.values(ptFits)[0];
 			if (firstFit && Number.isFinite(firstFit.a) && Number.isFinite(firstFit.b)) {
@@ -486,7 +486,7 @@
 
 		// Determine Rock Type from active DRT cutoffs (FZI / Winland / Lucia)
 		let rt = 1;
-		const cutoffs = projectData.activeDrtCutoffs || [];
+		const cutoffs = untrack(() => projectData.activeDrtCutoffs) || [];
 		if (cutoffs.length > 0) {
 			const phiz = phit / Math.max(1.0 - phit, 0.01);
 			const rqi = 0.0314 * Math.sqrt(permEst / Math.max(phit, 0.005));
@@ -1159,7 +1159,6 @@
 		void projectData.shfParams.gw;
 		void projectData.shfParams.ghc;
 		void projectData.shfResult?.fits;
-		void projectData.permTransformResult?.fits;
 		void workbench.stickPlotZoneFilter;
 		void workbench.stickPlotShowPhit;
 		void workbench.stickPlotShowContacts;
@@ -1336,7 +1335,7 @@
 				type="button"
 				disabled={projectData.isLoadingStickPlot}
 				onclick={() => void projectData.loadStickPlot(true)}
-				title="Reload latest computed curves across all wells"
+				title="Reload latest saved curves across all wells"
 				class="h-5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
 			>
 				{projectData.isLoadingStickPlot ? 'Refreshing...' : '↻ Refresh'}

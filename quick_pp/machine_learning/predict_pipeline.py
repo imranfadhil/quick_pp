@@ -438,7 +438,7 @@ def get_pretrained_models_status(model_path: str | Path | None = None) -> dict:
         if suite_key == "mock" or not isinstance(suite_cfg, dict):
             continue
         targets = []
-        for mk, mcfg in suite_cfg.items():
+        for mcfg in suite_cfg.values():
             for t in mcfg.get("targets", []):
                 if t not in targets:
                     targets.append(str(t))
@@ -580,6 +580,7 @@ def predict_well_dataframe(
                     pred_df[f"{target_name}_P90"] = preds_p90[:, idx]
     else:
         from sklearn.ensemble import RandomForestRegressor
+
         from quick_pp.machine_learning.utils import ConformalMultiOutputRegressor
 
         reg_key = "CARBONATE" if suite == "carbonate" else "CLASTIC"

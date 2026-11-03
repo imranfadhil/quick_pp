@@ -2009,6 +2009,8 @@ def build_report_context(
         "well_zonal_summary": well_zonal_rows,
         "ressum_markdown_table": ressum_markdown_table,
         "uncertainty_summary": uncertainty_summary,
+        "volumetric_summary": merged_configs.get("volumetric_summary"),
+        "volumetric_params": merged_configs.get("volumetric_params"),
         "upscaling_params": upscaling_params,
         "upscaling_table": upscaling_table,
         "anomaly_flags": anomaly_flags,
@@ -2167,7 +2169,6 @@ def synthesize_domain_ai_commentary(
     rt_sum = context.get("rt_summary", {})
     unc_list = context.get("uncertainty_summary", [])
     cut = context.get("cutoffs", {"vsh": 0.40, "phie": 0.08, "sw": 0.65})
-    anomalies = context.get("anomaly_flags", [])
 
     eff_report_type = report_type or context.get("report_type", "FDP_FULL")
     is_single_well = eff_report_type == "SINGLE_WELL_CPI"
