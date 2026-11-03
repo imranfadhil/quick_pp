@@ -1,5 +1,6 @@
+from typing import List, Optional, Tuple
+
 from pydantic import BaseModel, Field
-from typing import List, Tuple, Optional
 
 
 class Data(BaseModel):

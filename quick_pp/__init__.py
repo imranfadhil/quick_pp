@@ -121,6 +121,7 @@ from quick_pp.uncertainty import (  # noqa: E402
     run_log_uncertainty,
     sample_lhs_parameters,
 )
+
 try:
     from quick_pp.machine_learning.utils import (  # noqa: E402
         ConformalMultiOutputRegressor,

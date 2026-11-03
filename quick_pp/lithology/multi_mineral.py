@@ -430,7 +430,7 @@ class MultiMineral:
         self.fluids = ["OIL", "GAS", "WATER"]
 
         # Define bounds for each mineral type (defaulting to (0, 1), overridden by mineral_bounds)
-        default_mineral_bounds = {m: (0.0, 1.0) for m in available_minerals}
+        default_mineral_bounds = dict.fromkeys(available_minerals, (0.0, 1.0))
         if mineral_bounds is not None:
             default_mineral_bounds.update(mineral_bounds)
 
@@ -926,9 +926,9 @@ class MultiMineral:
     ) -> np.ndarray:
         """Vectorized multi-mineral optimizer for linear systems A * V = b or non-linear conductivity systems."""
         if A is None and hasattr(self, "A"):
-            A = getattr(self, "A")
+            A = self.A
         if b is None and hasattr(self, "b"):
-            b = getattr(self, "b")
+            b = self.b
 
         if A is None:
             raise ValueError(
@@ -1079,7 +1079,7 @@ class MultiMineral:
                 if rt is not None
                 else np.full(N, np.nan, dtype=float)
             )
-            bounds_seq = tuple(zip(lower, upper))
+            bounds_seq = tuple(zip(lower, upper, strict=False))
             constraints_seq = [{"type": "eq", "fun": lambda v: float(np.sum(v) - 1.0)}]
 
             def _solve_slsqp_row(idx: int) -> np.ndarray:

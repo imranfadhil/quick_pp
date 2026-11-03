@@ -1,5 +1,7 @@
 """Rock typing, FZI/Winland/GHE classification, and vuggy/fracture porosity API endpoints."""
 
+from typing import List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
@@ -11,7 +13,6 @@ from quick_pp.app.backend.services.database import (
 )
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.app.backend.utils.utils import sanitize_list
-
 
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Rock Typing"])
 

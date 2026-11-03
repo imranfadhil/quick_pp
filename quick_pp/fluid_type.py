@@ -8,13 +8,13 @@ This module provides petrophysical fluid typing and formation pressure analysis 
 - Haworth (1985) mud-gas composition ratios (`gas_composition_analysis`) and physical fluid segregation (`fix_fluid_segregation`)
 """
 
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
-
 from tqdm import tqdm
 
 from quick_pp import logger
@@ -785,7 +785,7 @@ class FormationPressureAnalyzer:
             elif method == "ransac" and n >= 4:
                 inl = _ransac_inliers(z, p)
                 m, c, cov, r2 = _linear_fit_stats(z[inl], p[inl])
-                ids = [i for i, keep in zip(ids, inl) if keep]
+                ids = [i for i, keep in zip(ids, inl, strict=False) if keep]
                 n = int(inl.sum())
             else:
                 m, c, cov, r2 = _linear_fit_stats(z, p)

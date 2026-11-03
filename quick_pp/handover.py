@@ -11,12 +11,12 @@ Generates a structured, zero-friction `.zip` archive (or directory) containing:
 - Ready-to-run `import_to_techlog.py` and `import_to_geolog.tcl` automation scripts
 """
 
+import concurrent.futures
 import datetime
 import io
 import json
-import re
-import concurrent.futures
 import os
+import re
 import zipfile
 from typing import Any, Dict, List, Optional
 
@@ -27,11 +27,11 @@ from quick_pp import __version__ as quick_pp_version
 from quick_pp import logger
 from quick_pp.config import Config
 from quick_pp.las_handler import (
+    _las_header_to_dataframe,
+    export_to_las_string,
     extract_las_metadata,
     extract_well_df_elevation,
-    export_to_las_string,
     fast_read_las,
-    _las_header_to_dataframe,
 )
 from quick_pp.ressum import calc_reservoir_summary
 from quick_pp.scal import generate_swof_table
@@ -735,7 +735,7 @@ def _process_single_well_bundle(
             dtype=float
         )
         tvds = _interpolate_tvd(mds, w_df, surveys_df)
-        for (_, row), tvd_val in zip(tops_df.iterrows(), tvds):
+        for (_, row), tvd_val in zip(tops_df.iterrows(), tvds, strict=False):
             tvd_clean = (
                 round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
             )
@@ -758,7 +758,7 @@ def _process_single_well_bundle(
             dtype=float
         )
         tvds = _interpolate_tvd(mds, w_df, surveys_df)
-        for (_, row), tvd_val in zip(contacts_df.iterrows(), tvds):
+        for (_, row), tvd_val in zip(contacts_df.iterrows(), tvds, strict=False):
             tvd_clean = (
                 round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
             )
@@ -800,7 +800,7 @@ def _process_single_well_bundle(
         top_tvds = _interpolate_tvd(top_mds, w_df, surveys_df)
         bot_tvds = _interpolate_tvd(bot_mds, w_df, surveys_df)
         for (_, row), t_tvd, b_tvd in zip(
-            perfs_df.iterrows(), top_tvds, bot_tvds
+            perfs_df.iterrows(), top_tvds, bot_tvds, strict=False
         ):
             t_tvd_clean = (
                 round(float(t_tvd), 4) if np.isfinite(t_tvd) else None
@@ -831,7 +831,7 @@ def _process_single_well_bundle(
             dtype=float
         )
         tvds = _interpolate_tvd(mds, w_df, surveys_df)
-        for (_, row), tvd_val in zip(surveys_df.iterrows(), tvds):
+        for (_, row), tvd_val in zip(surveys_df.iterrows(), tvds, strict=False):
             tvd_clean = (
                 round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
             )
@@ -863,7 +863,7 @@ def _process_single_well_bundle(
                 return None
             return round(f, nd) if np.isfinite(f) else None
 
-        for (_, row), tvd_val in zip(pressure_df.iterrows(), tvds):
+        for (_, row), tvd_val in zip(pressure_df.iterrows(), tvds, strict=False):
             tvd_clean = (
                 round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
             )
@@ -938,7 +938,7 @@ def _process_single_well_bundle(
     if valid_samples:
         d_arr = np.array([v[2] for v in valid_samples], dtype=float)
         tvds_arr = _interpolate_tvd(d_arr, w_df, surveys_df)
-        for (sname, _, _), tvd_v in zip(valid_samples, tvds_arr):
+        for (sname, _, _), tvd_v in zip(valid_samples, tvds_arr, strict=False):
             s_depth_tvd_map[sname] = round(float(tvd_v), 4) if np.isfinite(tvd_v) else None
 
     for sample_name, s_info in core_data.items():
@@ -1807,7 +1807,7 @@ def inspect_handover_archive(zip_source: Any) -> Dict[str, Any]:
             if manifest_data.get("wells")
             else [os.path.splitext(os.path.basename(f))[0] for f in las_files]
         )
-        well_names = sorted(list(dict.fromkeys(well_names)))
+        well_names = sorted(dict.fromkeys(well_names))
 
         inv = manifest_data.get("inventory_counts", {})
         counts = {
@@ -1907,9 +1907,9 @@ def import_handover_archive(
     Returns:
         Dict[str, Any]: Summary of imported project, wells, curves, and ancillary records.
     """
-    from quick_pp.database import objects as db_objects
-    from quick_pp.database import models as db_models
     from quick_pp.app.backend.services.database import invalidate_well_cache
+    from quick_pp.database import models as db_models
+    from quick_pp.database import objects as db_objects
 
     if isinstance(zip_source, (bytes, bytearray)):
         zip_source = io.BytesIO(zip_source)

@@ -26,7 +26,6 @@ from quick_pp import logger
 from quick_pp.config import Config
 
 
-
 class _LASHeaderDataFrame(pd.DataFrame):
     """DataFrame subclass for LAS headers that also supports dict-like metadata key lookup."""
 
@@ -2466,7 +2465,7 @@ def compute_curve_qaqc(
             roll_std = s.rolling(window=window_pts, min_periods=window_pts).std()
             flat_count = int((roll_std == 0.0).sum())
             if flat_count > 0 or (valid_count > 10 and float(valid.std()) == 0.0):
-                warnings.append(f"Flatlined interval detected (>10m constant value)")
+                warnings.append("Flatlined interval detected (>10m constant value)")
 
         # Physics bounds check
         if col_up in physics_bounds and valid_count > 0:
@@ -2640,7 +2639,9 @@ def inspect_dlis(
         `'frames'` (`List[DlisFrameInfo]`), and `'curves'` (`List[CurveInspectionItem]`).
     """
     import tempfile
+
     from dlisio import dlis
+
     from quick_pp.app.backend.schemas.well_metadata import (
         CurveInspectionItem,
         DlisFrameInfo,
@@ -2876,6 +2877,7 @@ def read_dlis_frame(
             - Dictionary mapping standardized curve mnemonics to their units.
     """
     import tempfile
+
     from dlisio import dlis
 
     tmp_path: Optional[Path] = None

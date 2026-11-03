@@ -1,10 +1,10 @@
 import io
-import numpy as np
 import os
 import re
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Union
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import bindparam, select, text
 from sqlalchemy.orm import Session, selectinload
@@ -14,17 +14,41 @@ from quick_pp import logger
 from quick_pp.config import Config
 from quick_pp.database.models import (
     CapillaryPressure as ORMCapillaryPressure,
+)
+from quick_pp.database.models import (
     CoreMeasurement as ORMCoreMeasurement,
+)
+from quick_pp.database.models import (
     CoreSample as ORMCoreSample,
+)
+from quick_pp.database.models import (
     Curve as ORMCurve,
+)
+from quick_pp.database.models import (
     CurveData as ORMCurveData,
+)
+from quick_pp.database.models import (
     FluidContact as ORMFluidContact,
+)
+from quick_pp.database.models import (
     FormationTop as ORMFormationTop,
+)
+from quick_pp.database.models import (
     Perforation as ORMPerforation,
+)
+from quick_pp.database.models import (
     PressureTest as ORMPressureTest,
+)
+from quick_pp.database.models import (
     Project as ORMProject,
+)
+from quick_pp.database.models import (
     RelativePermeability as ORMRelativePermeability,
+)
+from quick_pp.database.models import (
     Well as ORMWell,
+)
+from quick_pp.database.models import (
     WellSurvey as ORMWellSurvey,
 )
 
@@ -1308,7 +1332,7 @@ class Well(object):
                     v_depths = depths_arr[valid_mask].tolist()
                     v_vals = vals_arr[valid_mask].tolist()
                     sio.writelines(
-                        f"{cid}\t{d}\t{v}\t\\N\n" for d, v in zip(v_depths, v_vals)
+                        f"{cid}\t{d}\t{v}\t\\N\n" for d, v in zip(v_depths, v_vals, strict=False)
                     )
                     buffered_rows += len(v_depths)
                 else:
@@ -1321,7 +1345,7 @@ class Well(object):
                         continue
                     v_depths = depths_arr[valid_mask].tolist()
                     v_vals = values.iloc[np.flatnonzero(valid_mask)].astype(str).tolist()
-                    for d, v in zip(v_depths, v_vals):
+                    for d, v in zip(v_depths, v_vals, strict=False):
                         safe_v = (
                             v.replace("\\", "\\\\")
                             .replace("\t", " ")
@@ -1366,7 +1390,7 @@ class Well(object):
                             "value_numeric": v,
                             "value_text": None,
                         }
-                        for d, v in zip(v_depths, v_vals)
+                        for d, v in zip(v_depths, v_vals, strict=False)
                     )
                 else:
                     valid_mask = (
@@ -1385,7 +1409,7 @@ class Well(object):
                             "value_numeric": None,
                             "value_text": v,
                         }
-                        for d, v in zip(v_depths, v_vals)
+                        for d, v in zip(v_depths, v_vals, strict=False)
                     )
 
                 while len(batch_buffer) >= BATCH_FLUSH_SIZE:
@@ -1548,7 +1572,7 @@ class Well(object):
                     v_depths = depths_arr[valid_mask].tolist()
                     v_vals = vals_arr[valid_mask].tolist()
                     sio.writelines(
-                        f"{cid}\t{d}\t{v}\t\\N\n" for d, v in zip(v_depths, v_vals)
+                        f"{cid}\t{d}\t{v}\t\\N\n" for d, v in zip(v_depths, v_vals, strict=False)
                     )
                     total_inserted += len(v_depths)
                 else:
@@ -1561,7 +1585,7 @@ class Well(object):
                         continue
                     v_depths = depths_arr[valid_mask].tolist()
                     v_vals = values.iloc[np.flatnonzero(valid_mask)].astype(str).tolist()
-                    for d, v in zip(v_depths, v_vals):
+                    for d, v in zip(v_depths, v_vals, strict=False):
                         safe_v = (
                             v.replace("\\", "\\\\")
                             .replace("\t", " ")

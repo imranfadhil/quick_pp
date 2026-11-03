@@ -4,15 +4,13 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 
-from quick_pp.core_analysis import fit_poroperm_curve
-from quick_pp.database import objects as db_objects
-
 from quick_pp.app.backend.services.database import (
     _get_merged_dataframe_sync,
     invalidate_well_cache,
 )
 from quick_pp.app.backend.utils.db import get_db
-
+from quick_pp.core_analysis import fit_poroperm_curve
+from quick_pp.database import objects as db_objects
 
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Perm Transform"])
 

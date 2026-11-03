@@ -13,12 +13,11 @@ import subprocess
 import sys
 import time
 import webbrowser
-from importlib import metadata, resources
+from importlib import resources
 from pathlib import Path
 from subprocess import Popen
 
 import click
-
 
 from quick_pp import __version__ as quick_ppVersion
 
@@ -858,7 +857,9 @@ def create_admin(username, email, password, reset_mfa):
     """Create or reset a global Administrator account for quick_pp UAM."""
     import secrets
     from datetime import datetime, timezone
+
     from sqlalchemy import func, select
+
     from quick_pp.app.backend.utils.auth import generate_temp_password, hash_password
     from quick_pp.app.backend.utils.db import get_db
     from quick_pp.database import models as db_models

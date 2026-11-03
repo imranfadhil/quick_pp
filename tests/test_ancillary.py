@@ -1,8 +1,7 @@
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from quick_pp.app.backend.router import api_router
-from fastapi import FastAPI
-
 
 app = FastAPI()
 app.include_router(api_router)

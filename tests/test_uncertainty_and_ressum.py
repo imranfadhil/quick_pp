@@ -9,6 +9,8 @@ from quick_pp.plotter.well_log import plotly_log
 from quick_pp.ressum import (
     calc_reservoir_summary,
     mc_volumetric_method,
+)
+from quick_pp.ressum import (
     mc_volumetric_uncertainty as ressum_mc_unc,
 )
 from quick_pp.uncertainty import (
@@ -218,7 +220,9 @@ def test_log_blocking_and_upscaling_static_geomodeling_handover():
     - Zone-bounded blocking (`by_zone=True`), `net_only` filtering, step-log expansion, and FastAPI endpoint.
     """
     import asyncio
+
     import matplotlib.pyplot as plt
+
     from quick_pp.app.backend.schemas.ressum import UpscaleData, UpscaleInputData
     from quick_pp.app.backend.services.reservoir_summary import upscale_cpi_logs_
     from quick_pp.ressum import (
@@ -229,7 +233,6 @@ def test_log_blocking_and_upscaling_static_geomodeling_handover():
         geom_upscale,
         harm_upscale,
         plot_upscaled_logs,
-        pore_volume_upscale,
         power_law_upscale,
         upscale_logs,
         upscale_permeability,

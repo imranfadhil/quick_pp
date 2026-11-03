@@ -2,8 +2,9 @@
 Schemas for Vshale from GR log input.
 """
 
-from pydantic import BaseModel, Field
 from typing import List
+
+from pydantic import BaseModel, Field
 
 
 class GRData(BaseModel):

@@ -19,7 +19,6 @@ from quick_pp import logger
 from quick_pp.app.backend.fastapi_mlflow.applications import build_app
 from quick_pp.machine_learning.utils import get_model_info, run_mlflow_server
 
-
 app = FastAPI(
     title="quick_pp - ML Models",
     description="API for quick_pp library.",

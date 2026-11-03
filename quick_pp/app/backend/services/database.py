@@ -1,6 +1,6 @@
-import logging
 import concurrent.futures
 import io
+import logging
 import os
 import pickle
 import re
@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+import numpy as np
+import pandas as pd
 from fastapi import (
     APIRouter,
     File,
@@ -22,8 +24,6 @@ from fastapi import (
     Response,
     UploadFile,
 )
-import numpy as np
-import pandas as pd
 from sqlalchemy import bindparam, select, text
 
 from quick_pp.app.backend.utils.auth import (
@@ -726,7 +726,7 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
             tops_list_by_well: Dict[int, List[Dict[str, Any]]] = {
                 wid: [] for wid in well_ids
             }
-            tops_count_by_well: Dict[int, int] = {wid: 0 for wid in well_ids}
+            tops_count_by_well: Dict[int, int] = dict.fromkeys(well_ids, 0)
             all_zones_set = set()
             for wid, top_name, top_depth in top_rows:
                 tops_count_by_well[wid] = tops_count_by_well.get(wid, 0) + 1
@@ -841,7 +841,7 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
             contacts_stmt = text(
                 "SELECT well_id, name, depth FROM fluid_contacts WHERE well_id IN :well_ids ORDER BY depth"
             ).bindparams(bindparam("well_ids", expanding=True))
-            contact_counts: Dict[int, int] = {wid: 0 for wid in well_ids}
+            contact_counts: Dict[int, int] = dict.fromkeys(well_ids, 0)
             contacts_list_by_well: Dict[int, List[Dict[str, Any]]] = {
                 wid: [] for wid in well_ids
             }
@@ -874,7 +874,7 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 for r in session.execute(survey_stmt, {"well_ids": well_ids}).fetchall()
             }
 
-            perf_counts: Dict[int, int] = {wid: 0 for wid in well_ids}
+            perf_counts: Dict[int, int] = dict.fromkeys(well_ids, 0)
             perfs_list_by_well: Dict[int, List[Dict[str, Any]]] = {
                 wid: [] for wid in well_ids
             }
@@ -906,7 +906,10 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 except Exception:
                     pass
 
-            from quick_pp.las_handler import extract_las_metadata, extract_well_df_elevation
+            from quick_pp.las_handler import (
+                extract_las_metadata,
+                extract_well_df_elevation,
+            )
 
             wells_summary = []
             total_depth_sum = 0.0
@@ -1344,6 +1347,7 @@ def project_read_las(
             proj = db_objects.Project.load(session, project_id=project_id)
             if is_demo_mode():
                 import lasio
+
                 from quick_pp.las_handler import (
                     extract_las_metadata,
                     merge_well_curves_with_dedup,
@@ -1647,7 +1651,7 @@ def dataframe_to_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
         return []
     cols = [str(c) for c in df.columns]
     col_lists = [_series_to_py_list(df[col]) for col in cols]
-    return [dict(zip(cols, row)) for row in zip(*col_lists)]
+    return [dict(zip(cols, row, strict=False)) for row in zip(*col_lists, strict=False)]
 
 
 def filter_merged_dataframe(
@@ -2122,7 +2126,9 @@ def _get_merged_dataframe_sync(
                         merged["cperm"] = ck_clean
 
             # Resolve TVD and TVDSS (= TVD - DF_elevation) from curves or directional survey (never assume TVD == MD)
-            from quick_pp.las_handler import extract_las_metadata, extract_well_df_elevation
+            from quick_pp.las_handler import (
+                extract_well_df_elevation,
+            )
 
             eph_hdr = _ephemeral_well_headers.get(
                 (project_id, well_name)
@@ -2319,8 +2325,8 @@ def _collect_project_handover_bundles(
     well_names_filter: Optional[List[str]] = None,
 ) -> tuple[str, str, List[Dict[str, Any]], Dict[str, Any]]:
     """Gather project metadata, project-level multi-well config, and per-well handover dictionaries (including ephemeral/cached live edits)."""
-    from quick_pp.handover import collect_well_handover_dict
     from quick_pp.app.backend.services.workspace import _ephemeral_well_configs
+    from quick_pp.handover import collect_well_handover_dict
 
     if project_id in _demo_deleted_projects:
         raise ValueError(f"Project {project_id} not found")

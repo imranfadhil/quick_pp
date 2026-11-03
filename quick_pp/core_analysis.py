@@ -537,7 +537,7 @@ def fit_poroperm_curve(poro, perm):
         return 1, 1
 
 
-from quick_pp.scal import (  # noqa: E402
+from quick_pp.scal import (  # noqa: E402, F401 - public re-exports
     brooks_corey_relperm,
     corey_relperm,
     correct_core_data,

@@ -47,7 +47,8 @@ from quick_pp.core_analysis import (
     sw_shf_leverett_j,
     sw_skelt_harrison,
 )
-from quick_pp.database import models as db_models, objects as db_objects
+from quick_pp.database import models as db_models
+from quick_pp.database import objects as db_objects
 from quick_pp.las_handler import extract_las_metadata
 from quick_pp.lithology import gr_index
 from quick_pp.lithology.multi_mineral import MultiMineral
@@ -108,7 +109,10 @@ from quick_pp.saturation import (
     swirr_timur,
     waxman_smits_saturation,
 )
-from quick_pp.uncertainty import calc_stochastic_reservoir_summary, sample_lhs_parameters
+from quick_pp.uncertainty import (
+    calc_stochastic_reservoir_summary,
+    sample_lhs_parameters,
+)
 from quick_pp.upscaling import expand_blocked_logs, upscale_logs
 from quick_pp.utils import nd_triangle_coords
 
@@ -12322,7 +12326,9 @@ def workspace_multi_well_volumetrics(
             tornado_items = []
             med_vals = {col: float(np.median(lhs_df[col])) for col in lhs_df.columns}
 
-            def _eval_vol(params_dict: Dict[str, float]) -> float:
+            def _eval_vol(
+                params_dict: Dict[str, float], f_oil: float = f_oil, f_gas: float = f_gas
+            ) -> float:
                 p = params_dict.get("porosity", 0.15)
                 sw = params_dict.get("water_saturation", 0.40)
                 bo = max(1e-4, params_dict.get("bo", 1.25))

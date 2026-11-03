@@ -1,6 +1,5 @@
 import io
 import json
-import os
 import zipfile
 
 import lasio
@@ -379,7 +378,7 @@ def test_fastapi_handover_and_las_export_endpoints(db_session, monkeypatch):
 
 
 def test_roundtrip_inspect_and_import_handover_package(db_session, tmp_path):
-    from quick_pp.handover import inspect_handover_archive, import_handover_archive
+    from quick_pp.handover import import_handover_archive, inspect_handover_archive
 
     # 1. Create a rich project with full ancillary data
     proj = Project(db_session=db_session, name='Original_Project', description='Original project description')

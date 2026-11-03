@@ -2260,11 +2260,11 @@ def optimize_fwl(
             w_r = float(grid_fwls[min(n_grid - 1, w_best_i + 2)])
             if w_r > w_l:
                 w_opt = minimize_scalar(
-                    lambda f: _compute_loss(
+                    lambda f, _mask=w_mask, _weights=w_weights: _compute_loss(
                         float(f),
                         cand_params=active_shm_params,
-                        subset_mask=w_mask,
-                        subset_weights=w_weights,
+                        subset_mask=_mask,
+                        subset_weights=_weights,
                     ),
                     bounds=(w_l, w_r),
                     method="bounded",
@@ -2368,11 +2368,11 @@ def optimize_fwl(
             z_r = float(z_grid[min(len(z_grid) - 1, z_best_i + 2)])
             if z_r > z_l:
                 z_opt = minimize_scalar(
-                    lambda f: _compute_loss(
+                    lambda f, _mask=z_mask, _weights=z_w: _compute_loss(
                         float(f),
                         cand_params=active_shm_params,
-                        subset_mask=z_mask,
-                        subset_weights=z_w,
+                        subset_mask=_mask,
+                        subset_weights=_weights,
                     ),
                     bounds=(z_l, z_r),
                     method="bounded",

@@ -5,7 +5,6 @@ from typing import Any, Generator
 
 from quick_pp.database.db_connector import DBConnector
 
-
 log = logging.getLogger(__name__)
 
 

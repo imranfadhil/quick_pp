@@ -1,7 +1,6 @@
 import logging
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -9,7 +8,6 @@ from fastapi.responses import JSONResponse
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.database import objects as db_objects
 from quick_pp.plotter import well_log as wl
-
 
 router = APIRouter(prefix="/plotter", tags=["Plotter"])
 

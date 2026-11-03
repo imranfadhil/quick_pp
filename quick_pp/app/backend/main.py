@@ -1,5 +1,4 @@
 import logging
-import os
 from contextlib import asynccontextmanager
 from importlib import resources
 
@@ -15,7 +14,6 @@ except Exception:
     FastApiMCP = None
 
 from quick_pp import __version__
-from quick_pp.database.db_connector import DBConnector
 
 from .exceptions import return_exception_message
 from .router import api_router

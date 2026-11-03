@@ -22,7 +22,6 @@ from quick_pp.saturation import (
     estimate_rw_temperature_salinity,
     estimate_temperature_gradient,
     optimize_fwl,
-    predict_sw_shm,
     waxman_smits_saturation,
 )
 

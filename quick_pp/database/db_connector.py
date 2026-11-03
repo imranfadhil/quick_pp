@@ -177,7 +177,8 @@ class DBConnector:
         """Ensure existing `users` tables have all Cognito-style UAM columns."""
         if DBConnector._engine is None:
             return
-        from sqlalchemy import inspect as sa_inspect, text
+        from sqlalchemy import inspect as sa_inspect
+        from sqlalchemy import text
 
         try:
             inspector = sa_inspect(DBConnector._engine)
@@ -208,7 +209,8 @@ class DBConnector:
         """Ensure existing `projects` tables have the project-level `config_data` JSON column."""
         if DBConnector._engine is None:
             return
-        from sqlalchemy import inspect as sa_inspect, text
+        from sqlalchemy import inspect as sa_inspect
+        from sqlalchemy import text
 
         try:
             inspector = sa_inspect(DBConnector._engine)
@@ -232,7 +234,8 @@ class DBConnector:
         columns (tvdss, fluid_type, test_quality, zone)."""
         if DBConnector._engine is None:
             return
-        from sqlalchemy import inspect as sa_inspect, text
+        from sqlalchemy import inspect as sa_inspect
+        from sqlalchemy import text
 
         try:
             inspector = sa_inspect(DBConnector._engine)

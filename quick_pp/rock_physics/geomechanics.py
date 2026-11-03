@@ -1,11 +1,12 @@
-import numpy as np
-import math
-import matplotlib.pyplot as plt
 import collections.abc
+import math
 
-from quick_pp.saturation import estimate_rt_water_trend
-from quick_pp.rock_type import estimate_vsh_gr
+import matplotlib.pyplot as plt
+import numpy as np
+
 from quick_pp import logger
+from quick_pp.rock_type import estimate_vsh_gr
+from quick_pp.saturation import estimate_rt_water_trend
 
 
 def extrapolate_rhob(rhob, tvd, a, b):
@@ -542,7 +543,7 @@ def plot_mohrs_circle(sigma1, sigma3, ax=None, **kwargs):
 
     centers = (np.asarray(sigma1) + np.asarray(sigma3)) / 2
     radii = (np.asarray(sigma1) - np.asarray(sigma3)) / 2
-    for s1, s3 in zip(sigma1, sigma3):
+    for s1, s3 in zip(sigma1, sigma3, strict=False):
         shear_stress, normal_stress = estimate_mohrs_circle(s1, s3)
         (line,) = ax.plot(normal_stress, shear_stress, **kwargs)
         # Plot lines from center to tangent points

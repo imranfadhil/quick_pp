@@ -2,7 +2,7 @@ import asyncio
 import os
 import shutil
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,8 +14,6 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from quick_pp.app.backend.schemas.well_metadata import (
     CurveInspectionItem,
-    DlisFrameInfo,
-    LogCommitFileConfig,
     LogCommitRequest,
     LogInspectFileResult,
     LogInspectResponse,

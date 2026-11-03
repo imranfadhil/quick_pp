@@ -19,7 +19,6 @@ from pydantic import BaseModel, Field
 from quick_pp.qaqc import (
     apply_environmental_corrections,
     neu_den_xplot_hc_correction,
-    normalize_by_zone,
     stratigraphic_normalization,
 )
 

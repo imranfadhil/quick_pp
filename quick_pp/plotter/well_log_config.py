@@ -7,7 +7,6 @@ can be overridden by passing custom dictionaries to the plotting function.
 
 import numpy as np
 
-
 COLOR_DICT = {
     "BADHOLE": "rgba(0, 0, 0, .25)",
     "BS": "black",

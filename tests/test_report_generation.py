@@ -266,7 +266,6 @@ def test_end_to_end_report_service_and_mcp_tools(synthetic_well_df: pd.DataFrame
             },
         )
         assert resp.status_code == 200
-        body = resp.json()
         # 8. Test Single-Well CPI Dossier context & numbering (not FDP)
         sw_req = ReportGenerationRequest(
             project_id="99",

@@ -1943,9 +1943,9 @@ def compute_rock_flag_comparison(
     overlap_count = 0
     exact_match = 0
     within_one = 0
-    all_labels_set: set[int] = set(
+    all_labels_set: set[int] = {
         int(x) for x in (labels or []) if x is not None and int(x) >= 0
-    )
+    }
 
     for i in range(n):
         cv_raw = c_list[i] if i < len(c_list) else None
@@ -2241,7 +2241,7 @@ def train_and_validate_rock_type_classifier(
     feature_importances = sorted(
         [
             {"feature": fname, "importance": round(float(imp), 4)}
-            for fname, imp in zip(features_used, importances_raw)
+            for fname, imp in zip(features_used, importances_raw, strict=False)
         ],
         key=lambda d: d["importance"],
         reverse=True,

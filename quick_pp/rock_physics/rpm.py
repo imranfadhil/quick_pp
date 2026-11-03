@@ -1,16 +1,16 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from rockphypy import QI, GM, EM, Fluid
+from rockphypy import EM, GM, QI, Fluid
 from rockphypy.Emp import Empirical as emp
 
+from quick_pp.config import Config
 from quick_pp.rock_physics.geomechanics import (
-    estimate_shear_velocity,
+    estimate_bulk_modulus,
     estimate_compressional_velocity,
     estimate_shear_modulus,
-    estimate_bulk_modulus,
+    estimate_shear_velocity,
 )
 from quick_pp.rock_type import estimate_vsh_gr
-from quick_pp.config import Config
 
 
 def qaqc_xplots(rhob, vp=None, vs=None):

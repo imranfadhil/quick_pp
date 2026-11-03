@@ -1,6 +1,7 @@
 """Pydantic schemas for Well Header Metadata and Two-Pass Import Workflows."""
 
 from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 

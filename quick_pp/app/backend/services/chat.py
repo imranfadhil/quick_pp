@@ -13,16 +13,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
-import socket
 import urllib3.connection as urllib3_conn
 import urllib3.util.connection as urllib3_cn
-from contextlib import contextmanager
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from quick_pp import logger
