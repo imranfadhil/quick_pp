@@ -590,8 +590,27 @@ def build_report_context(
             raw_upper_map[k] for k in priority_order if k in raw_upper_map
         ] + [c for c in raw_curves if str(c).upper() not in priority_order]
 
-        w_df = _ensure_evaluated_curves(w_df, w_name)
-        unfiltered_dfs.append(w_df)
+        has_real_logs = any(
+            str(c).upper()
+            in (
+                "GR",
+                "RT",
+                "RD",
+                "RDEP",
+                "RILD",
+                "LLD",
+                "NPHI",
+                "RHOB",
+                "PHIT",
+                "PHIE",
+                "PERM",
+                "SWT",
+            )
+            for c in raw_curves
+        )
+        if has_real_logs:
+            w_df = _ensure_evaluated_curves(w_df, w_name)
+            unfiltered_dfs.append(w_df)
 
         d_s = pd.to_numeric(w_df["DEPTH"], errors="coerce").dropna()
         d_min = float(d_s.min()) if not d_s.empty else 0.0
@@ -2876,17 +2895,85 @@ def _generate_all_report_plots(
     if "10_appendix_cpi" in enabled_section_ids:
         cpi_list = []
         cpi_candidate_wells = []
+        candidate_scores = []
         if not full_df.empty and "WELL_NAME" in full_df.columns:
             for wn in well_names:
                 w_sub = full_df[full_df["WELL_NAME"].astype(str) == str(wn)]
-                if not w_sub.empty:
-                    has_eval = False
-                    for c_col in ("PHIT", "PHIE", "VCLAY", "SWT", "PERM"):
-                        if c_col in w_sub.columns and w_sub[c_col].notna().any():
-                            has_eval = True
-                            break
-                    if has_eval:
-                        cpi_candidate_wells.append(wn)
+                if w_sub.empty or "DEPTH" not in w_sub.columns:
+                    continue
+
+                # Target reservoir interval subset
+                d_min, d_max = report_plots._resolve_target_depth_window(
+                    w_sub, target_zones=target_zones, max_span=480.0
+                )
+                d_col = pd.to_numeric(w_sub["DEPTH"], errors="coerce")
+                w_win = w_sub[(d_col >= d_min) & (d_col <= d_max)]
+                if w_win.empty:
+                    w_win = w_sub
+
+                # Count valid evaluated samples in target window
+                phi_cnt = int(
+                    pd.to_numeric(
+                        w_win.get("PHIT", w_win.get("PHIE", pd.Series(dtype=float))),
+                        errors="coerce",
+                    )
+                    .notna()
+                    .sum()
+                )
+                swt_cnt = int(
+                    pd.to_numeric(
+                        w_win.get("SWT", pd.Series(dtype=float)), errors="coerce"
+                    )
+                    .notna()
+                    .sum()
+                )
+                perm_cnt = int(
+                    pd.to_numeric(
+                        w_win.get("PERM", pd.Series(dtype=float)), errors="coerce"
+                    )
+                    .notna()
+                    .sum()
+                )
+                gr_cnt = int(
+                    pd.to_numeric(
+                        w_win.get("GR", pd.Series(dtype=float)), errors="coerce"
+                    )
+                    .notna()
+                    .sum()
+                )
+                rt_cnt = int(
+                    pd.to_numeric(
+                        w_win.get("RT", pd.Series(dtype=float)), errors="coerce"
+                    )
+                    .notna()
+                    .sum()
+                )
+
+                # Strict requirement: well must have evaluated porosity and at least one other key curve (RT, SWT, or PERM)
+                if phi_cnt < 10 or (swt_cnt < 5 and perm_cnt < 5 and rt_cnt < 5):
+                    # Empty or uninterpreted in target window -> skip!
+                    continue
+
+                has_core = (
+                    "CPORE" in w_win.columns
+                    and pd.to_numeric(w_win["CPORE"], errors="coerce").notna().sum() > 0
+                ) or (
+                    "PORO_CORE" in w_win.columns
+                    and pd.to_numeric(w_win["PORO_CORE"], errors="coerce").notna().sum()
+                    > 0
+                )
+                score = (
+                    (10000 if has_core else 0)
+                    + phi_cnt
+                    + swt_cnt
+                    + perm_cnt
+                    + gr_cnt
+                    + rt_cnt
+                )
+                candidate_scores.append((score, wn))
+
+            candidate_scores.sort(key=lambda x: x[0], reverse=True)
+            cpi_candidate_wells = [wn for _, wn in candidate_scores]
 
         for wn in cpi_candidate_wells[:4]:
             cpi_url = report_plots.generate_well_cpi_plot(

@@ -665,10 +665,9 @@ def generate_nd_crossplot(
         ax1.set_ylim(2.95, 1.85)
         ax1.set_xlabel("Neutron Porosity NPHI (v/v)", fontsize=8.5, fontweight="bold")
         ax1.set_ylabel("Bulk Density RHOB (g/cc)", fontsize=8.5, fontweight="bold")
-        tz_suffix = f" — {', '.join(target_zones)}" if target_zones else ""
         model_title = "SSC" if str(litho_model).lower() == "ssc" else "Lithology"
         ax1.set_title(
-            f"Neutron-Density {model_title} Crossplot{tz_suffix}", fontsize=8.5, fontweight="bold"
+            f"Neutron-Density {model_title} Crossplot", fontsize=9.0, fontweight="bold"
         )
         ax1.legend(loc="lower left", fontsize=6.8)
         ax1.grid(True, linestyle=":", alpha=0.5)
@@ -983,9 +982,8 @@ def generate_rock_typing_perm_plot(
         ax1.set_ylim(1e-2, 1e4)
         ax1.set_xlabel("Porosity Φ (v/v)", fontsize=9, fontweight="bold")
         ax1.set_ylabel("Permeability K (mD)", fontsize=9, fontweight="bold")
-        tz_title = f" — {', '.join(target_zones)}" if target_zones else ""
         ax1.set_title(
-            f"Porosity-Permeability by FZI Rock Type{tz_title}",
+            "Porosity-Permeability by FZI Rock Type",
             fontsize=9.0,
             fontweight="bold",
         )
@@ -1154,9 +1152,8 @@ def generate_pickett_plot(
         ax1.set_ylim(0.02, 0.50)
         ax1.set_xlabel("True Resistivity Rt (Ω·m)", fontsize=9, fontweight="bold")
         ax1.set_ylabel("Porosity Φ (v/v)", fontsize=9, fontweight="bold")
-        tz_title = f" — {', '.join(target_zones)}" if target_zones else ""
         ax1.set_title(
-            f"Pickett Plot{tz_title} (Rw={rw:.3f} Ω·m, a={a}, m={m}, n={n})",
+            f"Pickett Plot (Rw={rw:.3f} Ω·m, a={a:.1f}, m={m:.1f}, n={n:.1f})",
             fontsize=9.0,
             fontweight="bold",
         )
@@ -1345,9 +1342,8 @@ def generate_shf_j_function_plot(
     ax1.set_ylabel(
         "Leverett J-Function J(Sw) [dimensionless]", fontsize=9, fontweight="bold"
     )
-    tz_title = f" — {', '.join(target_zones)}" if target_zones else ""
     ax1.set_title(
-        f"Capillary Pressure Leverett J-Function{tz_title}",
+        "Capillary Pressure Leverett J-Function by Rock Type",
         fontsize=9.0,
         fontweight="bold",
     )
@@ -1816,6 +1812,15 @@ def generate_well_cpi_plot(
         .sort_values(by="DEPTH")
         .reset_index(drop=True)
     )
+    # Guard against uninterpreted / empty wells: verify valid curves exist in target window
+    valid_curves = 0
+    for curve in ("GR", "RT", "NPHI", "RHOB", "PHIT", "PHIE", "PERM", "SWT"):
+        s = _get_numeric_series(sub_full, curve)
+        if s.notna().sum() >= 5:
+            valid_curves += 1
+    if valid_curves < 2:
+        return None
+
     d_full = pd.to_numeric(sub_full["DEPTH"], errors="coerce").to_numpy(dtype=float)
 
     cut = cutoffs or {"vsh": 0.40, "phie": 0.08, "sw": 0.65}
