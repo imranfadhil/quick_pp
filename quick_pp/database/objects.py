@@ -2200,31 +2200,67 @@ class Well(object):
 
         Args:
             contacts (List[Dict[str, Any]]): A list of dictionaries, where each
-                                              dictionary represents a contact and must
-                                              contain 'name' (or 'contact_type') and 'depth'.
+                                              dictionary represents a contact and contains
+                                              'name' or 'contact_type', and 'depth'.
+                                              Optional keys: 'zone', 'fault_block', 'source', 'remarks'.
             replace (bool): If True, deletes all existing fluid contacts for this well before inserting.
         """
         logger.info(
             f"Adding/updating {len(contacts)} fluid contacts for well '{self.name}' (replace={replace})."
         )
-        dedup_contacts: Dict[str, float] = {}
+        parsed_contacts: Dict[str, Dict[str, Any]] = {}
         for contact_data in contacts or []:
             if not isinstance(contact_data, dict):
                 continue
-            c_name = str(
-                contact_data.get("name") or contact_data.get("contact_type") or ""
-            ).strip()
+            raw_c_type = str(
+                contact_data.get("contact_type") or contact_data.get("type") or ""
+            ).strip().upper()
+            raw_name = str(contact_data.get("name") or "").strip()
+            zone = str(contact_data.get("zone") or "").strip() or None
+            fb = str(
+                contact_data.get("fault_block")
+                or contact_data.get("faultblock")
+                or contact_data.get("block")
+                or ""
+            ).strip() or None
+            source = str(contact_data.get("source") or "").strip() or None
+            remarks = str(
+                contact_data.get("remarks")
+                or contact_data.get("remark")
+                or contact_data.get("comment")
+                or ""
+            ).strip() or None
+
+            c_type = raw_c_type
+            if not c_type and raw_name:
+                parts = [p.strip().upper() for p in raw_name.replace(":", " - ").split(" - ")]
+                c_type = parts[-1] if parts else raw_name.upper()
+
+            c_name = raw_name
+            if not c_name:
+                c_name = f"{zone} - {c_type}" if (zone and c_type) else (c_type or "CONTACT")
+            elif zone and zone.lower() not in c_name.lower() and c_type:
+                c_name = f"{zone} - {c_type}"
+
             d_raw = contact_data.get("depth")
-            if not c_name or d_raw is None:
-                logger.warning(f"Skipping invalid fluid contact data: {contact_data}")
+            if d_raw is None or not c_name:
                 continue
             try:
                 d_val = float(d_raw)
             except (TypeError, ValueError):
                 continue
-            dedup_contacts[c_name] = d_val
 
-        if not dedup_contacts and not replace:
+            parsed_contacts[c_name] = {
+                "name": c_name,
+                "depth": d_val,
+                "zone": zone,
+                "contact_type": c_type or c_name,
+                "fault_block": fb,
+                "source": source,
+                "remarks": remarks,
+            }
+
+        if not parsed_contacts and not replace:
             return
 
         if replace:
@@ -2234,13 +2270,20 @@ class Well(object):
         else:
             self.db_session.query(ORMFluidContact).filter(
                 ORMFluidContact.well_id == self.well_id,
-                ORMFluidContact.name.in_(list(dedup_contacts.keys())),
+                ORMFluidContact.name.in_(list(parsed_contacts.keys())),
             ).delete(synchronize_session="fetch")
         self.db_session.flush()
 
-        for c_name, d_val in dedup_contacts.items():
+        for c_name, item in parsed_contacts.items():
             orm_contact = ORMFluidContact(
-                well_id=self.well_id, name=c_name, depth=d_val
+                well_id=self.well_id,
+                name=c_name,
+                depth=item["depth"],
+                zone=item["zone"],
+                contact_type=item["contact_type"],
+                fault_block=item["fault_block"],
+                source=item["source"],
+                remarks=item["remarks"],
             )
             self.db_session.add(orm_contact)
         self.db_session.flush()
@@ -2248,10 +2291,23 @@ class Well(object):
     def get_fluid_contacts(self) -> pd.DataFrame:
         """Retrieves all fluid contacts for the well as a DataFrame."""
         contacts = self._orm_well.fluid_contacts
+        cols = ["name", "depth", "zone", "contact_type", "fault_block", "source", "remarks"]
         if not contacts:
-            return pd.DataFrame(columns=["name", "depth"])
+            return pd.DataFrame(columns=cols)
 
-        data = [{"name": c.name, "depth": c.depth} for c in contacts]
+        data = [
+            {
+                "contact_id": c.contact_id,
+                "name": c.name,
+                "depth": c.depth,
+                "zone": c.zone,
+                "contact_type": c.contact_type or c.name,
+                "fault_block": c.fault_block,
+                "source": c.source,
+                "remarks": c.remarks,
+            }
+            for c in contacts
+        ]
         df = pd.DataFrame(data).sort_values(by="depth").reset_index(drop=True)
         logger.debug(f"Retrieved {len(df)} fluid contacts for well '{self.name}'.")
         return df

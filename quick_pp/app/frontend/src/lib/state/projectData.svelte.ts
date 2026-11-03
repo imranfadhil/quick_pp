@@ -59,6 +59,7 @@ export interface ShfOptimizerParams {
 	mdtWeight: number;
 	poreVolumeWeighted: boolean;
 	equalWellWeights: boolean;
+	payWeighted?: boolean;
 }
 
 export interface MlTrainerParams {
@@ -535,7 +536,8 @@ class ProjectDataState {
 		mdtFwl: 3925.0,
 		mdtWeight: 1.0,
 		poreVolumeWeighted: true,
-		equalWellWeights: true
+		equalWellWeights: true,
+		payWeighted: true
 	});
 
 	mlTrainerParams = $state<MlTrainerParams>({

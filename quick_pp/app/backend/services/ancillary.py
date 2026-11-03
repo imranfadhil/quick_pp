@@ -188,6 +188,10 @@ ANCILLARY_TARGET_SCHEMAS: Dict[str, Dict[str, List[str]]] = {
             "depth_m",
             "depth_ft",
         ],
+        "ZONE": ["zone", "formation", "reservoir", "unit", "compartment"],
+        "FAULT_BLOCK": ["fault_block", "faultblock", "block", "compartment_block"],
+        "SOURCE": ["source", "method", "determination_method", "lineage", "basis"],
+        "REMARKS": ["remarks", "remark", "comment", "comments", "description"],
     },
     "perforations": {
         "WELL_NAME": ["well", "well_name", "wellname", "uwi", "wellbore", "well_id"],
@@ -2564,12 +2568,24 @@ def commit_ancillary_data(
                 elif dtype == "contacts":
                     c_col, _ = col_map.get("CONTACT_TYPE", ("contact_type", None))
                     d_col, d_unit = col_map.get("DEPTH", ("depth", None))
+                    z_col, _ = col_map.get("ZONE", ("zone", None))
+                    fb_col, _ = col_map.get("FAULT_BLOCK", ("fault_block", None))
+                    src_col, _ = col_map.get("SOURCE", ("source", None))
+                    rem_col, _ = col_map.get("REMARKS", ("remarks", None))
                     contacts_payload = []
                     for r in w_rows:
                         c_type = str(r.get(c_col, "")).strip().upper()
                         d_v = _convert_ancillary_numeric(r.get(d_col), d_unit, "DEPTH")
                         if c_type and d_v is not None:
-                            contacts_payload.append({"name": c_type, "depth": d_v})
+                            contacts_payload.append({
+                                "name": str(r.get("name") or c_type).strip(),
+                                "contact_type": c_type,
+                                "depth": d_v,
+                                "zone": str(r.get(z_col, "")).strip() or None if z_col in r else None,
+                                "fault_block": str(r.get(fb_col, "")).strip() or None if fb_col in r else None,
+                                "source": str(r.get(src_col, "")).strip() or None if src_col in r else None,
+                                "remarks": str(r.get(rem_col, "")).strip() or None if rem_col in r else None,
+                            })
                     if contacts_payload:
                         well.add_fluid_contacts(contacts_payload, replace=True)
                         summary_by_well[wn] = len(contacts_payload)

@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS "fluid_contacts" (
     "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
     "name" VARCHAR(100) NOT NULL,
     "depth" REAL NOT NULL,
+    "zone" VARCHAR(255),
+    "contact_type" VARCHAR(50),
+    "fault_block" VARCHAR(100),
+    "source" VARCHAR(100),
+    "remarks" TEXT,
     UNIQUE("well_id", "name")
 );
 

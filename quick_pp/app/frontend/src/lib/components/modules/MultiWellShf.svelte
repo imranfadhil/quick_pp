@@ -4,6 +4,7 @@
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
+	import { appStatus } from '$lib/state/status.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { projectParams } from '$lib/state/projectParams.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -276,6 +277,7 @@
 					shm_params: projectData.shfResult?.fits ?? null,
 					loss: so.optLoss,
 					solve_per_zone: so.solvePerZone,
+					pay_weighted: so.payWeighted ?? true,
 					ift: sp.ift,
 					theta: sp.theta,
 					gw: sp.gw,
@@ -304,6 +306,32 @@
 			projectData.error = e?.message || 'FWL optimization error';
 		} finally {
 			projectData.isComputingMultiWell = false;
+		}
+	}
+
+	let isSavingContacts = $state(false);
+	async function saveContactsToAncillary() {
+		if (!workbench.projectId) return;
+		isSavingContacts = true;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/contacts/extract_and_save`,
+				{
+					well_names: projectData.wellsWithTvd.map((w) => w.name),
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					save: true,
+					replace: false
+				}
+			);
+			const count = res.saved_count ?? res.contacts_count ?? 0;
+			appStatus.success(`Saved ${count} fluid contacts (ODT, OWC, FWL, etc.) to well ancillary data.`);
+			if (workbench.projectId) {
+				await projectData.selectProject(workbench.projectId);
+			}
+		} catch (e: any) {
+			projectData.error = e?.message || 'Failed to save fluid contacts';
+		} finally {
+			isSavingContacts = false;
 		}
 	}
 </script>
@@ -390,6 +418,14 @@
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span>Φ-Weighted</span>
+				</label>
+				<label class="flex items-center gap-1 cursor-pointer" title="Weight residuals by hydrocarbon pore volume (Phi * (1 - Sw)) so oil pay samples drive the FWL depth">
+					<input
+						type="checkbox"
+						bind:checked={so.payWeighted}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+					/>
+					<span>Pay-Weighted</span>
 				</label>
 				<label class="flex items-center gap-1 cursor-pointer">
 					<input
@@ -540,6 +576,19 @@
 					</div>
 				{/if}
 			{/if}
+			<button
+				type="button"
+				onclick={saveContactsToAncillary}
+				disabled={isSavingContacts || projectData.isComputingMultiWell}
+				class="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-sm border border-emerald-600 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+				title="Extract and commit discrete zonal contacts (ODT, OUT, OWC, FWL, WUT, GOC, GWC) with full lineage to well ancillary data"
+			>
+				{#if isSavingContacts}
+					Saving Contacts...
+				{:else}
+					Commit Contacts to Well Ancillary
+				{/if}
+			</button>
 		</ParameterSection>
 
 		<ParameterSection

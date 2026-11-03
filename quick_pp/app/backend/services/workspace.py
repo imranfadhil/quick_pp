@@ -97,6 +97,7 @@ from quick_pp.rock_type import (
     train_and_validate_rock_type_classifier,
 )
 from quick_pp.saturation import (
+    extract_fluid_contacts_and_limits,
     archie_saturation,
     estimate_b_waxman_smits,
     estimate_qv,
@@ -8047,6 +8048,7 @@ class WorkspaceOptimizeFwlRequest(BaseModel):
     mdt_weight: Optional[float] = Field(None)
     solve_per_well: bool = Field(True)
     solve_per_zone: bool = Field(True)
+    pay_weighted: bool = Field(True)
     optimize_shm_params: bool = Field(False)
     unit: str = Field("metric")
     save: bool = Field(False)
@@ -9016,20 +9018,38 @@ def workspace_optimize_fwl(
             mdt_penalty_weight=penalty_w,
             solve_per_well=req.solve_per_well,
             solve_per_zone=req.solve_per_zone,
+            pay_weighted=req.pay_weighted,
             zone_col="ZONES",
             optimize_shm_params=req.optimize_shm_params,
             unit=req.unit,
         )
 
         saved_wells = 0
-        if req.save and "SW_SHM" in res["df"].columns:
-            for wn, grp in res["df"].groupby("WELL_NAME"):
-                _save_curves_to_well(
-                    project_id,
-                    str(wn),
-                    grp[["DEPTH", "SW_SHM"]].rename(columns={"SW_SHM": "SHF"}),
-                )
-                saved_wells += 1
+        contacts_records = []
+        if "fluid_contacts" in res and isinstance(res["fluid_contacts"], pd.DataFrame) and not res["fluid_contacts"].empty:
+            contacts_records = dataframe_to_records(res["fluid_contacts"])
+
+        if req.save:
+            if "SW_SHM" in res["df"].columns:
+                for wn, grp in res["df"].groupby("WELL_NAME"):
+                    _save_curves_to_well(
+                        project_id,
+                        str(wn),
+                        grp[["DEPTH", "SW_SHM"]].rename(columns={"SW_SHM": "SHF"}),
+                    )
+                    saved_wells += 1
+            if "fluid_contacts" in res and isinstance(res["fluid_contacts"], pd.DataFrame) and not res["fluid_contacts"].empty:
+                try:
+                    with get_db() as session:
+                        proj_obj = db_objects.Project.load(session, project_id=project_id)
+                        for wn, grp in res["fluid_contacts"].groupby("well_name"):
+                            try:
+                                well_obj = proj_obj.get_well(str(wn))
+                                well_obj.add_fluid_contacts(grp.to_dict(orient="records"), replace=False)
+                            except Exception:
+                                continue
+                except Exception:
+                    pass
 
         zone_metrics_df = res.get("zone_metrics")
         zone_metrics_records = (
@@ -9058,6 +9078,7 @@ def workspace_optimize_fwl(
             "well_metrics": dataframe_to_records(res["well_metrics"].round(4)),
             "zone_metrics": zone_metrics_records,
             "grid_profile": dataframe_to_records(res["grid_profile"].round(4)),
+            "fluid_contacts": contacts_records,
             "saved": req.save,
             "saved_wells": saved_wells,
         }
@@ -9065,6 +9086,102 @@ def workspace_optimize_fwl(
         raise HTTPException(
             status_code=400, detail=f"FWL optimization failed: {e}"
         ) from e
+
+
+class WorkspaceExtractContactsRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(None, description="Subset of wells to extract contacts for")
+    zones: Optional[List[str]] = Field(None, description="Subset of zones")
+    save: bool = Field(True, description="Save extracted contacts into each well's ancillary data table")
+    replace: bool = Field(False, description="Replace existing contacts for target wells")
+    sw_pay_cutoff: float = Field(0.65, description="Max Sw for hydrocarbon pay")
+    sw_water_cutoff: float = Field(0.90, description="Min Sw for 100% water leg")
+    phit_cutoff: float = Field(0.05, description="Min porosity for reservoir rock")
+    vsh_cutoff: float = Field(0.50, description="Max Vshale for reservoir rock")
+
+
+@router.post(
+    "/contacts/extract_and_save",
+    summary="Extract and save fluid limits & contacts (GUT, GDT, GOC, GWC, OUT, ODT, OWC, WUT, FWL) per well and zone",
+)
+def workspace_extract_and_save_contacts(
+    project_id: int, req: WorkspaceExtractContactsRequest
+) -> Dict[str, Any]:
+    """Extract petrophysical fluid limits and contacts across project wells with full data lineage."""
+    try:
+        proj_summary = get_project_summary(project_id)
+        all_well_names = [w["name"] for w in proj_summary.get("wells", [])]
+        target_wells = req.well_names if req.well_names else all_well_names
+        dfs = _load_multi_well_dfs(project_id, well_names=target_wells)
+        if not dfs:
+            raise ValueError("No well log data available for contact extraction.")
+        comb = pd.concat(dfs, ignore_index=True)
+        if req.zones and "ZONES" in comb.columns:
+            comb = comb[comb["ZONES"].isin(req.zones)]
+
+        contacts_df = extract_fluid_contacts_and_limits(
+            df=comb,
+            sw_pay_cutoff=req.sw_pay_cutoff,
+            sw_water_cutoff=req.sw_water_cutoff,
+            phit_cutoff=req.phit_cutoff,
+            vsh_cutoff=req.vsh_cutoff,
+        )
+
+        saved_count = 0
+        if req.save and not contacts_df.empty:
+            with get_db() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                for wn, grp in contacts_df.groupby("well_name"):
+                    try:
+                        w = proj.get_well(str(wn))
+                        w.add_fluid_contacts(grp.to_dict(orient="records"), replace=req.replace)
+                        saved_count += len(grp)
+                    except Exception:
+                        continue
+
+        records = dataframe_to_records(contacts_df)
+        return {
+            "project_id": project_id,
+            "contacts_count": len(records),
+            "saved_count": saved_count,
+            "contacts": records,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to extract fluid contacts: {exc}"
+        ) from exc
+
+
+@router.get(
+    "/contacts/summary",
+    summary="Get multi-well & zonal fluid contacts and limits summary for project",
+)
+def workspace_contacts_summary(
+    project_id: int, well_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """Retrieve all fluid contacts across project wells structured with lineage."""
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            target_wells = [well_name] if well_name else proj.get_well_names()
+            all_rows = []
+            for wn in target_wells:
+                try:
+                    w = proj.get_well(wn)
+                    df = w.get_fluid_contacts()
+                    for r in df.to_dict(orient="records"):
+                        r["well_name"] = wn
+                        all_rows.append(r)
+                except Exception:
+                    continue
+        return {
+            "project_id": project_id,
+            "contacts_count": len(all_rows),
+            "contacts": all_rows,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get fluid contacts summary: {exc}"
+        ) from exc
 
 
 class WorkspaceMlInferenceRequest(WorkspaceFilterBase):

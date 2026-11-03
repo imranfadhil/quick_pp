@@ -1983,6 +1983,113 @@ def build_report_context(
         "omega": 0.33,
     }
 
+    # Query all committed fluid contacts for selected project wells
+    well_name_by_id = {w["id"]: w["name"] for w in selected_wells_meta}
+    fluid_contacts_rows: List[Dict[str, Any]] = []
+    with get_db() as session:
+        fc_res = session.execute(
+            select(
+                db_objects.ORMFluidContact.well_id,
+                db_objects.ORMFluidContact.name,
+                db_objects.ORMFluidContact.depth,
+                db_objects.ORMFluidContact.zone,
+                db_objects.ORMFluidContact.contact_type,
+                db_objects.ORMFluidContact.fault_block,
+                db_objects.ORMFluidContact.source,
+                db_objects.ORMFluidContact.remarks,
+            )
+            .where(db_objects.ORMFluidContact.well_id.in_(list(well_name_by_id.keys())))
+            .order_by(db_objects.ORMFluidContact.depth)
+        ).all()
+        for r in fc_res:
+            c_type = str(r.contact_type or r.name or "CONTACT").upper()
+            if c_type == "WDT":  # Excluded per user instruction
+                continue
+            wn = well_name_by_id.get(r.well_id, f"Well-{r.well_id}")
+            fluid_contacts_rows.append({
+                "well_name": wn,
+                "name": str(r.name),
+                "depth": round(float(r.depth), 1) if r.depth is not None else None,
+                "zone": str(r.zone) if r.zone else "All Zones",
+                "contact_type": c_type,
+                "fault_block": str(r.fault_block) if r.fault_block else None,
+                "source": str(r.source) if r.source else "Petrophysical Log Evaluation",
+                "remarks": str(r.remarks) if r.remarks else "",
+            })
+
+    # If no stored contacts in DB, dynamically extract them from full_df
+    if not fluid_contacts_rows and not full_df.empty:
+        try:
+            from quick_pp.saturation import extract_fluid_contacts_and_limits
+            extracted_df = extract_fluid_contacts_and_limits(
+                df=full_df,
+                fwl_dict={"default": fwl_val},
+                sw_pay_cutoff=sw_cut,
+                phit_cutoff=phie_cut,
+                vsh_cutoff=vsh_cut,
+            )
+            if not extracted_df.empty:
+                for r in extracted_df.to_dict(orient="records"):
+                    c_type = str(r.get("contact_type") or "").upper()
+                    if c_type == "WDT":
+                        continue
+                    fluid_contacts_rows.append({
+                        "well_name": str(r.get("well_name") or "Field"),
+                        "name": str(r.get("name") or c_type),
+                        "depth": round(float(r["depth"]), 1) if r.get("depth") is not None else None,
+                        "zone": str(r.get("zone")) if r.get("zone") else "All Zones",
+                        "contact_type": c_type,
+                        "fault_block": str(r.get("fault_block")) if r.get("fault_block") else None,
+                        "source": str(r.get("source") or "Petrophysical Log Interpretation"),
+                        "remarks": str(r.get("remarks") or ""),
+                    })
+        except Exception:
+            pass
+
+    # Summarize proved column and uncertainty brackets by (zone, fault_block)
+    zonal_contact_groups: Dict[Tuple[str, Optional[str]], Dict[str, Any]] = {}
+    for r in fluid_contacts_rows:
+        key = (r["zone"], r.get("fault_block"))
+        if key not in zonal_contact_groups:
+            zonal_contact_groups[key] = {
+                "zone": r["zone"],
+                "fault_block": r.get("fault_block"),
+                "gut": None,
+                "gdt": None,
+                "out": None,
+                "odt": None,
+                "wut": None,
+                "goc": None,
+                "gwc": None,
+                "owc": None,
+                "fwl": None,
+            }
+        g = zonal_contact_groups[key]
+        ctype = r["contact_type"]
+        d = r["depth"]
+        if d is None:
+            continue
+        if ctype == "GUT":
+            g["gut"] = min(g["gut"], d) if g["gut"] is not None else d
+        elif ctype == "GDT":
+            g["gdt"] = max(g["gdt"], d) if g["gdt"] is not None else d
+        elif ctype == "OUT":
+            g["out"] = min(g["out"], d) if g["out"] is not None else d
+        elif ctype == "ODT":
+            g["odt"] = max(g["odt"], d) if g["odt"] is not None else d
+        elif ctype == "WUT":
+            g["wut"] = min(g["wut"], d) if g["wut"] is not None else d
+        elif ctype == "GOC":
+            g["goc"] = d
+        elif ctype == "GWC":
+            g["gwc"] = d
+        elif ctype == "OWC":
+            g["owc"] = d
+        elif ctype == "FWL":
+            g["fwl"] = d
+
+    fluid_contacts_summary = list(zonal_contact_groups.values())
+
     ctx_payload: Dict[str, Any] = {
         "project_id": pid,
         "project_name": project_name,
@@ -2008,6 +2115,8 @@ def build_report_context(
         "zonal_summary": zonal_summary,
         "well_zonal_summary": well_zonal_rows,
         "ressum_markdown_table": ressum_markdown_table,
+        "fluid_contacts_rows": fluid_contacts_rows,
+        "fluid_contacts_summary": fluid_contacts_summary,
         "uncertainty_summary": uncertainty_summary,
         "volumetric_summary": merged_configs.get("volumetric_summary"),
         "volumetric_params": merged_configs.get("volumetric_params"),
