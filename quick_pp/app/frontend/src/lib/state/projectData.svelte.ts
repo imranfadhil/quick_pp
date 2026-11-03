@@ -8,6 +8,7 @@ import {
 	isProjectParamModuleKey,
 	PROJECT_PARAM_MODULE_KEYS,
 	projectParams,
+	resolveMatchingProjectParamsEntry,
 	zoneSelectionKey,
 	zoneSelectionLabel,
 	type ProjectModuleParamsMap,
@@ -1012,21 +1013,28 @@ class ProjectDataState {
 		projectParams.loadGeneration += 1;
 	}
 
-	/** Apply exact zone-key matches from saved project parameters to all multi-well modules. */
+	/** Apply zone-key matches (exact, bundle subset, or fallback) from saved project parameters to all multi-well modules. */
 	applyProjectParamsForCurrentSelection() {
 		const mp = this.projectModuleParams || {};
 		const key = zoneSelectionKey();
 		const label = zoneSelectionLabel();
 		for (const module of PROJECT_PARAM_MODULE_KEYS) {
-			const entry = mp[module]?.[key] ?? null;
-			if (entry?.params) {
+			const modMap = mp[module];
+			const resolved = resolveMatchingProjectParamsEntry(modMap, workbench.selectedZones);
+			if (resolved?.entry?.params) {
 				try {
-					this.applyProjectParams(module, entry.params);
+					this.applyProjectParams(module, resolved.entry.params);
 				} catch {
 					// Ignore malformed saved entry; keep current values
 				}
 			}
-			projectParams.setStatus(module, key, label, entry);
+			projectParams.setStatus(
+				module,
+				key,
+				label,
+				resolved?.entry ?? null,
+				resolved?.matchType ?? 'exact'
+			);
 		}
 		projectParams.setCounts(mp);
 	}
@@ -1096,16 +1104,44 @@ class ProjectDataState {
 		return ProjectDataState.MULTI_WELL_PIPELINE.some((m) => Boolean(this.pendingMultiWellModules[m]));
 	}
 
-	async saveMultiWellComputed(moduleKey: MultiWellSaveModule): Promise<boolean> {
+	async saveMultiWellComputed(
+		moduleKey: MultiWellSaveModule,
+		savePrecedingPending: boolean = true
+	): Promise<boolean> {
 		const pid = workbench.projectId;
-		if (!pid || !this.hasPendingMultiWell(moduleKey)) return false;
+		if (!pid) return false;
 
-		const res = await this.saveSingleMultiWellModule(pid, moduleKey);
-		if (!res) return false;
+		const pipeline = ProjectDataState.MULTI_WELL_PIPELINE;
+		const targetIdx = pipeline.indexOf(moduleKey);
+		const modulesToSave: MultiWellSaveModule[] = [];
 
-		// Persist the saved module's parameters keyed by the zone selection active at compute time
-		await this.persistProjectParams([moduleKey]);
-		const msg = `Saved ${res.curveLabel} (${res.savedWells} wells) ✓`;
+		if (savePrecedingPending && targetIdx >= 0) {
+			for (let i = 0; i <= targetIdx; i++) {
+				const m = pipeline[i];
+				if (this.hasPendingMultiWell(m)) {
+					modulesToSave.push(m);
+				}
+			}
+		} else if (this.hasPendingMultiWell(moduleKey)) {
+			modulesToSave.push(moduleKey);
+		}
+
+		if (modulesToSave.length === 0) return false;
+
+		const savedLabels: string[] = [];
+		let lastWellsCount = 0;
+		for (const m of modulesToSave) {
+			const res = await this.saveSingleMultiWellModule(pid, m);
+			if (res) {
+				savedLabels.push(res.curveLabel);
+				lastWellsCount = res.savedWells;
+			}
+		}
+		if (savedLabels.length === 0) return false;
+
+		// Persist parameters for all saved pipeline modules
+		await this.persistProjectParams(modulesToSave);
+		const msg = `Saved ${savedLabels.join(', ')} (${lastWellsCount} wells) ✓`;
 		wellData.lastSavedMessage = msg;
 		appStatus.success(msg);
 		void this.refreshSummary(pid);
@@ -1835,6 +1871,51 @@ class ProjectDataState {
 			total_plug_count: finalPlugs.length
 		};
 		this.recomputeScalFitsFromPlugs(true);
+	}
+
+	/** Ensure multi-well Swirr & SCAL plug dataset is loaded and fitted, avoiding manual roundtrips to Swirr. */
+	async ensureSwirrDataLoaded(force: boolean = false): Promise<boolean> {
+		const pid = workbench.projectId;
+		if (!pid) return false;
+		if (!force && this.swirrResult && Array.isArray(this.swirrResult.plugs) && this.swirrResult.plugs.length > 0) {
+			return true;
+		}
+		try {
+			const cfg = this.swirrConfig;
+			const res = await postJson<SwirrFitResult>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/swirr/fit`,
+				{
+					well_names: this.selectedWellNames.length > 0 ? this.selectedWellNames : null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
+					extraction_mode: cfg.extractionMode,
+					reference_pc_psi: cfg.referencePcPsi,
+					equation_type: cfg.equationType,
+					fit_scope: cfg.fitScope,
+					swirr_min: cfg.swirrMin,
+					swirr_max: cfg.swirrMax,
+					excluded_plug_ids: cfg.excludedPlugIds,
+					rules: cfg.rules,
+					auto_fit: !this.swirrManualRuleOverride,
+					drt_method: this.drtMethod,
+					cutoffs: this.activeDrtCutoffs,
+					ift: this.shfParams.ift,
+					theta: this.shfParams.theta
+				}
+			);
+			if (res && Array.isArray(res.plugs) && res.plugs.length > 0) {
+				if (!this.swirrManualRuleOverride && res.rules) {
+					this.swirrConfig.rules = res.rules;
+				}
+				this.swirrResult = res;
+				this.recomputeScalFitsFromPlugs(!this.shfManualFitOverride);
+				return true;
+			}
+		} catch {
+			// Project might not have SCAL data
+		}
+		return false;
 	}
 
 	recomputeScalFitsFromPlugs(resetFits: boolean = true) {

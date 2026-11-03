@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
@@ -19,6 +20,12 @@
 	let isApplying = $state(false);
 	let copiedSwof = $state(false);
 	let relpermPendingSave = $state(false);
+
+	onMount(() => {
+		if (!projectData.swirrResult) {
+			void projectData.ensureSwirrDataLoaded();
+		}
+	});
 	// Manual override flags live in shared project state so they are saved/restored with project params
 
 	function switchScalSubMode(mode: 'static' | 'relperm') {
@@ -273,6 +280,7 @@
 			projectData.swirrConfig.rules = res.rules || {};
 			projectData.swirrResult = res;
 			projectData.recomputeScalFitsFromPlugs(!projectData.shfManualFitOverride);
+			void projectData.persistProjectParams([], ['swirr-corr']);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Swirr correlation fit failed';
 		} finally {
@@ -330,6 +338,7 @@
 			);
 			projectData.swirrApplyResult = applyRes;
 			projectData.markMultiWellComputed('swirr-corr');
+			void projectData.persistProjectParams([], ['swirr-corr']);
 			applyActiveWellSwirrCurve(applyRes);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Failed to compute Swirr & Pc fit';

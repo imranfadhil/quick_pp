@@ -120,8 +120,12 @@
 				);
 			}
 		}
-		if (!projectData.shfResult && projectData.swirrResult) {
-			projectData.recomputeScalFitsFromPlugs(false);
+		if (!projectData.shfResult) {
+			if (projectData.swirrResult) {
+				projectData.recomputeScalFitsFromPlugs(false);
+			} else {
+				void projectData.ensureSwirrDataLoaded();
+			}
 		}
 	});
 
@@ -159,9 +163,8 @@
 		try {
 			const sp = projectData.shfParams;
 			const jSatMode = sp.jSatMode ?? 'swn';
-			// Restored SHF fits (from saved project params) are used once on the next non-reset run
+			// Restored SHF fits (from saved project params) are used on non-reset runs
 			const saved = projectData.shfSavedFits;
-			projectData.shfSavedFits = null;
 			const restoredFits =
 				!resetFits &&
 				saved &&
@@ -217,6 +220,8 @@
 			};
 			if (markDirty) {
 				projectData.markMultiWellComputed('shf');
+				// Auto-persist SHF parameters & fits for the active zone selection
+				void projectData.persistProjectParams([], ['shf']);
 			}
 
 			// Live-merge SHF curve into active well so LogTrackCanvas Track 6 updates in real time!
@@ -677,7 +682,11 @@
 						? 'J = a · Sw^(-b)'
 						: 'J = a · Swn^(-b)'
 					: meta.formula}
-			{@const fitEntries = Object.entries(projectData.shfResult?.fits ?? {})}
+			{@const activeFits =
+				projectData.shfResult?.fits && Object.keys(projectData.shfResult.fits).length > 0
+					? projectData.shfResult.fits
+					: (projectData.shfSavedFits?.fits ?? {})}
+			{@const fitEntries = Object.entries(activeFits)}
 			<ParameterSection title="Resultant SCAL Fit Parameters" badge={activeFormula}>
 				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
 					<span>
@@ -741,7 +750,7 @@
 					</div>
 				{:else}
 					<div class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2 text-[10px] text-[var(--text-secondary)]">
-						No SCAL curve fits available yet. Fit Swirr &amp; J/Pc curves in the <strong>[SCAL] SCAL &amp; Rel-Perm</strong> standalone module, or run <strong>Compute SHF</strong> to auto-fit from project SCAL data.
+						No SCAL curve fits cached yet. Click <strong>Compute SHF</strong> to auto-fit curves directly from project SCAL plugs and compute Saturation Height across all wells.
 					</div>
 				{/if}
 			</ParameterSection>
@@ -785,7 +794,7 @@
 			}
 			onclick={saveShf}
 			title={projectData.hasPendingMultiWell('shf')
-				? 'Save computed SHF curves across all project wells'
+				? 'Save computed SHF curves (and any pending upstream Rock Type & Swirr curves) across all project wells'
 				: 'Compute or adjust SHF parameters first to enable saving'}
 			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>

@@ -255,7 +255,7 @@ class ModuleParamsState {
 	/** Number of saved selections per module for the loaded well. */
 	savedCounts = $state<Partial<Record<ParamModuleKey, number>>>({});
 
-	/** Apply exact-match saved params for the current selection to all registered modules. */
+	/** Apply saved params (exact, bundle subset, or whole well fallback) for the current selection. */
 	applyForCurrentSelection(config: Record<string, any> | null | undefined) {
 		const cfg = (config || {}) as Record<string, any>;
 		const mp = (cfg.module_params || {}) as ModuleParamsMap;
@@ -268,6 +268,25 @@ class ModuleParamsState {
 			const modMap = mp[module] || {};
 			nextCounts[module] = Object.keys(modMap).length;
 			let entry: SavedModuleParamsEntry | null = modMap[key] ?? null;
+			let matchType: 'exact' | 'bundle' | 'fallback_all' = 'exact';
+			if (!entry && sel.zones && sel.zones.length > 0) {
+				const normSel = [...new Set(sel.zones.map((s) => String(s).trim()).filter(Boolean))].sort();
+				const bundles = Object.entries(modMap)
+					.filter(([, e]) => {
+						const ez = (e.selection?.zones ?? []).map((s) => String(s).trim()).filter(Boolean);
+						const s = new Set(ez);
+						return normSel.every((z) => s.has(z));
+					})
+					.sort((a, b) => (a[1].selection?.zones?.length ?? 99) - (b[1].selection?.zones?.length ?? 99));
+				if (bundles.length > 0) {
+					entry = bundles[0][1];
+					matchType = 'bundle';
+				}
+			}
+			if (!entry && key !== 'well' && modMap['well']) {
+				entry = modMap['well'];
+				matchType = 'fallback_all';
+			}
 			if (!entry && key === 'well' && Object.keys(modMap).length === 0) {
 				entry = legacyWellEntry(module, cfg);
 			}
@@ -278,11 +297,17 @@ class ModuleParamsState {
 					// Ignore malformed saved entry; keep current values
 				}
 			}
+			let displayLabel = entry?.label ?? null;
+			if (entry && matchType === 'bundle') {
+				displayLabel = `${entry.label || 'Saved bundle'} (bundle)`;
+			} else if (entry && matchType === 'fallback_all') {
+				displayLabel = `${entry.label || 'Whole well'} (default)`;
+			}
 			nextStatus[module] = {
 				key,
 				label,
 				matched: Boolean(entry),
-				savedLabel: entry?.label ?? null,
+				savedLabel: displayLabel,
 				savedAt: entry?.saved_at || null
 			};
 		}

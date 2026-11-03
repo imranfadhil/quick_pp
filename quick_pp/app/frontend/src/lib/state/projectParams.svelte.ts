@@ -3,8 +3,8 @@
  *
  * Parameters are stored in `projects.config_data.module_params[module][zoneKey]`, keyed only by the
  * shared zone selection (`zone:A+B`, or `all` when no zone is selected). Each entry also records the
- * wells it was computed on. Saved parameters are restored on exact zone-key match when the project
- * loads or the zone selection changes while in multi-well scope.
+ * wells it was computed on. Saved parameters are restored on zone match (exact or hierarchical bundle match)
+ * when the project loads or the zone selection changes while in multi-well scope.
  */
 import { workbench } from './workbench.svelte';
 
@@ -64,7 +64,7 @@ export function isProjectParamModuleKey(k: string): k is ProjectParamModuleKey {
 	return (PROJECT_PARAM_MODULE_KEYS as string[]).includes(k);
 }
 
-function normZones(zones: string[] | null | undefined): string[] {
+export function normZones(zones: string[] | null | undefined): string[] {
 	return [...new Set((zones ?? []).map((s) => String(s).trim()).filter(Boolean))].sort();
 }
 
@@ -82,6 +82,92 @@ export function zoneSelectionLabel(
 	return z.length === 1 ? `Zone ${z[0]}` : `Zones ${z.join(' + ')}`;
 }
 
+export type ProjectParamMatchType = 'exact' | 'bundle' | 'fallback_all' | 'superset';
+
+export interface ResolvedProjectParamsEntry {
+	entry: SavedProjectParamsEntry;
+	matchType: ProjectParamMatchType;
+	key: string;
+}
+
+/**
+ * Resolve the best matching saved parameter entry for the active zone selection.
+ * Priority:
+ * 1. Exact zone match (e.g. `zone:A+B` or `zone:A` or `all`)
+ * 2. Bundle match (the selected zones are a subset of a saved bundle, e.g. selecting `Zone A`
+ *    matches a saved `Zones A + B` bundle; most specific bundle wins)
+ * 3. Overlap / superset match (e.g. selecting `Zones A + B` matches a saved `Zone A`)
+ * 4. Project-wide fallback (`all`)
+ */
+export function resolveMatchingProjectParamsEntry(
+	modMap: Record<string, SavedProjectParamsEntry> | undefined,
+	selectedZones: string[] | null | undefined = workbench.selectedZones
+): ResolvedProjectParamsEntry | null {
+	if (!modMap || Object.keys(modMap).length === 0) return null;
+
+	const curKey = zoneSelectionKey(selectedZones);
+	// 1. Exact match
+	if (modMap[curKey]) {
+		return { entry: modMap[curKey], matchType: 'exact', key: curKey };
+	}
+
+	const normSelected = normZones(selectedZones);
+
+	// 2. If specific zones selected, check if they are contained in a saved bundle
+	if (normSelected.length > 0) {
+		const candidateBundles: Array<{ key: string; entry: SavedProjectParamsEntry; zoneCount: number }> = [];
+
+		for (const [k, e] of Object.entries(modMap)) {
+			const entryZones = normZones(e.selection?.zones);
+			if (entryZones.length === 0) continue;
+			const entryZoneSet = new Set(entryZones);
+			const containsAll = normSelected.every((z) => entryZoneSet.has(z));
+			if (containsAll) {
+				candidateBundles.push({ key: k, entry: e, zoneCount: entryZones.length });
+			}
+		}
+
+		if (candidateBundles.length > 0) {
+			// Smallest bundle size first (most specific), then latest saved_at
+			candidateBundles.sort((a, b) => {
+				if (a.zoneCount !== b.zoneCount) return a.zoneCount - b.zoneCount;
+				const tA = new Date(a.entry.saved_at || 0).getTime();
+				const tB = new Date(b.entry.saved_at || 0).getTime();
+				return tB - tA;
+			});
+			return { entry: candidateBundles[0].entry, matchType: 'bundle', key: candidateBundles[0].key };
+		}
+
+		// 3. Check for overlap/superset match
+		const candidateSubsets: Array<{ key: string; entry: SavedProjectParamsEntry; overlap: number }> = [];
+		for (const [k, e] of Object.entries(modMap)) {
+			const entryZones = normZones(e.selection?.zones);
+			if (entryZones.length === 0) continue;
+			const selSet = new Set(normSelected);
+			const overlapCount = entryZones.filter((z) => selSet.has(z)).length;
+			if (overlapCount > 0) {
+				candidateSubsets.push({ key: k, entry: e, overlap: overlapCount });
+			}
+		}
+		if (candidateSubsets.length > 0) {
+			candidateSubsets.sort((a, b) => {
+				if (b.overlap !== a.overlap) return b.overlap - a.overlap;
+				const tA = new Date(a.entry.saved_at || 0).getTime();
+				const tB = new Date(b.entry.saved_at || 0).getTime();
+				return tB - tA;
+			});
+			return { entry: candidateSubsets[0].entry, matchType: 'superset', key: candidateSubsets[0].key };
+		}
+	}
+
+	// 4. Fallback to 'all'
+	if (modMap['all']) {
+		return { entry: modMap['all'], matchType: 'fallback_all', key: 'all' };
+	}
+
+	return null;
+}
+
 export interface ProjectParamsStatus {
 	key: string;
 	label: string;
@@ -89,6 +175,7 @@ export interface ProjectParamsStatus {
 	savedLabel: string | null;
 	savedAt: string | null;
 	wellCount: number | null;
+	matchType?: ProjectParamMatchType | null;
 }
 
 class ProjectParamsState {
@@ -101,19 +188,29 @@ class ProjectParamsState {
 		module: ProjectParamModuleKey,
 		key: string,
 		label: string,
-		entry: SavedProjectParamsEntry | null
+		entry: SavedProjectParamsEntry | null,
+		matchType: ProjectParamMatchType = 'exact'
 	) {
+		let displayLabel = entry?.label ?? null;
+		if (entry && matchType === 'bundle') {
+			displayLabel = `${entry.label || 'Saved bundle'} (bundle)`;
+		} else if (entry && matchType === 'fallback_all' && key !== 'all') {
+			displayLabel = `${entry.label || 'All zones'} (default)`;
+		} else if (entry && matchType === 'superset') {
+			displayLabel = `${entry.label || 'Saved zone'}`;
+		}
 		this.status = {
 			...this.status,
 			[module]: {
 				key,
 				label,
 				matched: Boolean(entry),
-				savedLabel: entry?.label ?? null,
+				savedLabel: displayLabel,
 				savedAt: entry?.saved_at || null,
 				wellCount: Array.isArray(entry?.selection?.well_names)
 					? entry!.selection.well_names!.length
-					: null
+					: null,
+				matchType: entry ? matchType : null
 			}
 		};
 	}
@@ -131,4 +228,3 @@ class ProjectParamsState {
 }
 
 export const projectParams = new ProjectParamsState();
-
