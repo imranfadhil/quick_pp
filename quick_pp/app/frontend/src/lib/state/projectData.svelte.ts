@@ -1,4 +1,4 @@
-import { API_BASE, api, authHeaders, deleteJson, getJson, patchJson, postJson } from '$lib/api/client';
+import { API_BASE, api, authHeaders, deleteFluidContacts, deleteJson, deleteProjectModuleParams, getJson, patchJson, postJson } from '$lib/api/client';
 import type { ProjectSummaryResponse, WellSummaryItem } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { wellData } from './wellData.svelte';
@@ -1086,6 +1086,90 @@ class ProjectDataState {
 		} catch (e: any) {
 			appStatus.warn(`Parameters could not be saved: ${e?.message ?? e}`);
 			return false;
+		}
+	}
+
+	/** Reset rock typing and classifier results and saved parameters to defaults. */
+	async resetRockTyping(): Promise<void> {
+		this.rockTypingResult = null;
+		if (workbench.projectId) {
+			await projectParams.deleteAllForModule(workbench.projectId, 'rock-typing', this.projectModuleParams);
+			await projectParams.deleteAllForModule(workbench.projectId, 'rt-classifier', this.projectModuleParams);
+		}
+		appStatus.success('Rock typing and classifier reset to regional defaults');
+	}
+
+	/** Reset SCAL plug fittings, Swirr correlation, and SWOF simulation deck. */
+	async resetScalFits(): Promise<void> {
+		this.swirrConfig.referencePcPsi = 100.0;
+		this.swirrConfig.extractionMode = 'cutoff_pc';
+		this.swirrConfig.equationType = 'rqi_power';
+		this.swirrConfig.fitScope = 'global';
+		this.swirrConfig.excludedPlugIds = [];
+		this.swirrConfig.excludedScalPointIds = [];
+		this.swirrResult = null;
+		workbench.scalResult = null;
+		this.focusedScalPlugId = null;
+		this.selectedScalPointIds = [];
+		if (workbench.projectId) {
+			await projectParams.deleteAllForModule(workbench.projectId, 'swirr-corr', this.projectModuleParams);
+		}
+		appStatus.success('SCAL & Swirr fittings reset to regional defaults');
+	}
+
+	/** Reset SHF model parameters, Leverett-J fits, and FWL datum. */
+	async resetShf(): Promise<void> {
+		this.shfParams.model = 'leverett_j';
+		this.shfParams.jSatMode = 'swn';
+		this.shfParams.swirrSource = 'lab_min';
+		this.shfParams.unit = 'metric';
+		this.shfParams.fwl = 2500.0;
+		this.shfParams.fwlByZone = {};
+		this.shfParams.ift = 30.0;
+		this.shfParams.theta = 30.0;
+		this.shfParams.gw = 1.05;
+		this.shfParams.ghc = 0.8;
+		this.shfOptParams.solvePerZone = false;
+		this.shfResult = null;
+		this.shfSavedFits = null;
+		if (workbench.projectId) {
+			await projectParams.deleteAllForModule(workbench.projectId, 'shf', this.projectModuleParams);
+		}
+		appStatus.success('SHF model and FWL reset to regional defaults');
+	}
+
+	/** Delete auto-generated / optimized fluid contacts across project wells. */
+	async deleteAutoContacts(zone?: string): Promise<number> {
+		const pid = workbench.projectId;
+		if (!pid) return 0;
+		try {
+			const res = await deleteFluidContacts(pid, { autoOnly: true, zone });
+			const count = res?.deleted_count ?? 0;
+			const autoNames = new Set(['GUT', 'GDT', 'OUT', 'ODT', 'WUT']);
+			wellData.contacts = wellData.contacts.filter((c: any) => {
+				if (zone && c.zone && c.zone !== zone) return true;
+				const cName = c.name || c.type;
+				if (autoNames.has(cName)) return false;
+				const src = String(c.source || '').toLowerCase();
+				if (src.includes('log evaluation') || src.includes('calculated') || src.includes('optimizer') || src.includes('fpt')) return false;
+				return true;
+			});
+			for (const w of this.wells) {
+				if (Array.isArray(w.fluid_contacts)) {
+					w.fluid_contacts = w.fluid_contacts.filter((c: any) => {
+						const cName = c.name || c.type;
+						if (autoNames.has(cName)) return false;
+						const src = String(c.source || '').toLowerCase();
+						if (src.includes('log evaluation') || src.includes('calculated') || src.includes('optimizer') || src.includes('fpt')) return false;
+						return true;
+					});
+				}
+			}
+			appStatus.success(`Deleted ${count} auto-generated fluid contact(s) across project`);
+			return count;
+		} catch (e: any) {
+			appStatus.error(`Failed to delete fluid contacts: ${e?.message ?? e}`);
+			return 0;
 		}
 	}
 

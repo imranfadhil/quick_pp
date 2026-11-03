@@ -10,6 +10,7 @@
 	import CompactDataGrid, {
 		type GridColumn
 	} from '$lib/components/workbench/CompactDataGrid.svelte';
+	import ParametersManagementPanel from '$lib/components/workbench/ParametersManagementPanel.svelte';
 	import ReportPreviewCanvas from '$lib/components/workbench/ReportPreviewCanvas.svelte';
 
 	import InspectorQaqc from '$lib/components/modules/InspectorQaqc.svelte';
@@ -166,6 +167,12 @@
 		);
 		replaceState(url, {});
 	});
+
+	let totalSavedParamsCount = $derived(
+		workbench.scope === 'multi-well'
+			? Object.values(projectParams.savedCounts).reduce((a, b) => a + (b ?? 0), 0)
+			: Object.values(moduleParams.savedCounts).reduce((a, b) => a + (b ?? 0), 0)
+	);
 
 	// Dynamic columns & rows for the Bottom-Right Quick Zonal / Context Data Grid
 	let rightGridConfig = $derived.by(
@@ -970,16 +977,49 @@
 				{:else if workbench.rightPaneTab === 'grid'}
 					<div class="flex h-full flex-col bg-[var(--bg-surface)]">
 						<div
-							class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 text-[11px] font-semibold text-[var(--text-primary)]"
+							class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[11px]"
 						>
-							<span>{rightGridConfig.title}</span>
+							<div class="flex items-center gap-1">
+								<button
+									type="button"
+									onclick={() => (workbench.rightGridSubTab = 'data')}
+									class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'data'
+										? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+										: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+								>
+									<span>📊</span>
+									<span class="truncate max-w-[200px]">{rightGridConfig.title}</span>
+									<span class="mono-num ml-0.5 text-[9.5px] text-[var(--text-muted)]">
+										({rightGridConfig.rows.length})
+									</span>
+								</button>
+								<button
+									type="button"
+									onclick={() => (workbench.rightGridSubTab = 'params')}
+									class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'params'
+										? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+										: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+								>
+									<span>⚙</span>
+									<span>Parameters & Fits</span>
+									{#if totalSavedParamsCount > 0}
+										<span class="ml-1 rounded-2xs bg-emerald-500/15 px-1 py-0.2 text-[9px] font-semibold text-emerald-700">
+											{totalSavedParamsCount}
+										</span>
+									{/if}
+								</button>
+							</div>
 						</div>
 						<div class="min-h-0 flex-1">
-							<CompactDataGrid
-								columns={rightGridConfig.columns}
-								rows={rightGridConfig.rows}
-								onrowclick={handleRightGridRowClick}
-							/>
+							{#if workbench.rightGridSubTab === 'data'}
+								<CompactDataGrid
+									columns={rightGridConfig.columns}
+									rows={rightGridConfig.rows}
+									onrowclick={handleRightGridRowClick}
+								/>
+							{:else}
+								<ParametersManagementPanel />
+							{/if}
 						</div>
 					</div>
 				{:else}
@@ -1003,21 +1043,49 @@
 						<Pane defaultSize={42} minSize={20} class="w-full overflow-hidden">
 							<div class="flex h-full flex-col bg-[var(--bg-surface)]">
 								<div
-									class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 text-[11px] font-semibold text-[var(--text-primary)]"
+									class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[11px]"
 								>
-									<span>{rightGridConfig.title}</span>
-									<span
-										class="mono-num text-[10px] font-normal text-[var(--text-muted)]"
-									>
-										{rightGridConfig.rows.length} rows
-									</span>
+									<div class="flex items-center gap-1">
+										<button
+											type="button"
+											onclick={() => (workbench.rightGridSubTab = 'data')}
+											class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'data'
+												? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+												: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+										>
+											<span>📊</span>
+											<span class="truncate max-w-[200px]">{rightGridConfig.title}</span>
+											<span class="mono-num ml-0.5 text-[9.5px] text-[var(--text-muted)]">
+												({rightGridConfig.rows.length})
+											</span>
+										</button>
+										<button
+											type="button"
+											onclick={() => (workbench.rightGridSubTab = 'params')}
+											class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'params'
+												? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+												: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+										>
+											<span>⚙</span>
+											<span>Parameters & Fits</span>
+											{#if totalSavedParamsCount > 0}
+												<span class="ml-1 rounded-2xs bg-emerald-500/15 px-1 py-0.2 text-[9px] font-semibold text-emerald-700">
+													{totalSavedParamsCount}
+												</span>
+											{/if}
+										</button>
+									</div>
 								</div>
 								<div class="min-h-0 flex-1">
-									<CompactDataGrid
-										columns={rightGridConfig.columns}
-										rows={rightGridConfig.rows}
-										onrowclick={handleRightGridRowClick}
-									/>
+									{#if workbench.rightGridSubTab === 'data'}
+										<CompactDataGrid
+											columns={rightGridConfig.columns}
+											rows={rightGridConfig.rows}
+											onrowclick={handleRightGridRowClick}
+										/>
+									{:else}
+										<ParametersManagementPanel />
+									{/if}
 								</div>
 							</div>
 						</Pane>

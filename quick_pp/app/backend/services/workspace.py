@@ -9891,6 +9891,171 @@ def workspace_save_project_module_params(
         ) from e
 
 
+@router.delete(
+    "/wells/{well_name}/module_params",
+    summary="Delete or reset single-well module parameters",
+)
+def workspace_delete_well_module_params(
+    project_id: int,
+    well_name: str,
+    module: Optional[str] = None,
+    key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Delete saved single-well module parameters for a given module and/or selection key."""
+    try:
+        well_keys = {well_name, resolve_db_well_name(project_id, well_name)}
+        merged: Dict[str, Any] = {}
+        persisted = False
+        if not is_demo_mode():
+            with get_db() as session:
+                db_name = resolve_db_well_name(project_id, well_name)
+                well_orm = session.scalar(
+                    select(db_models.Well).filter_by(project_id=project_id, name=db_name)
+                )
+                if well_orm:
+                    current_cfg = (
+                        dict(well_orm.config_data)
+                        if isinstance(well_orm.config_data, dict)
+                        else {}
+                    )
+                    merged = dict(current_cfg.get(MODULE_PARAMS_CONFIG_KEY) or {})
+                    if module:
+                        if key and module in merged:
+                            mod_map = dict(merged[module])
+                            mod_map.pop(key, None)
+                            if mod_map:
+                                merged[module] = mod_map
+                            else:
+                                merged.pop(module, None)
+                        else:
+                            merged.pop(module, None)
+                    else:
+                        merged = {}
+
+                    current_cfg[MODULE_PARAMS_CONFIG_KEY] = merged
+                    well_orm.config_data = _sanitize_for_json(current_cfg)
+                    flag_modified(well_orm, "config_data")
+                    session.add(well_orm)
+                    persisted = True
+
+            for w_key in well_keys:
+                eph = _ephemeral_well_configs.get((project_id, w_key))
+                if eph and MODULE_PARAMS_CONFIG_KEY in eph:
+                    eph = dict(eph)
+                    eph[MODULE_PARAMS_CONFIG_KEY] = merged
+                    _ephemeral_well_configs[(project_id, w_key)] = eph
+
+        if not persisted:
+            base: Any = None
+            for w_key in well_keys:
+                eph = _ephemeral_well_configs.get((project_id, w_key)) or {}
+                if isinstance(eph.get(MODULE_PARAMS_CONFIG_KEY), dict):
+                    base = eph[MODULE_PARAMS_CONFIG_KEY]
+                    break
+            merged = dict(base or {})
+            if module:
+                if key and module in merged:
+                    mod_map = dict(merged[module])
+                    mod_map.pop(key, None)
+                    if mod_map:
+                        merged[module] = mod_map
+                    else:
+                        merged.pop(module, None)
+                else:
+                    merged.pop(module, None)
+            else:
+                merged = {}
+            for w_key in well_keys:
+                eph = dict(_ephemeral_well_configs.get((project_id, w_key), {}))
+                eph[MODULE_PARAMS_CONFIG_KEY] = merged
+                _ephemeral_well_configs[(project_id, w_key)] = eph
+
+        return _sanitize_for_json({
+            "well_name": well_name,
+            "module_params": merged,
+            "deleted": True,
+            "persisted": persisted,
+        })
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete module parameters: {e}"
+        ) from e
+
+
+@router.delete(
+    "/module_params",
+    summary="Delete or reset project-level module parameters",
+)
+def workspace_delete_project_module_params(
+    project_id: int,
+    module: Optional[str] = None,
+    key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Delete saved multi-well module parameters for a given module and/or zone key."""
+    try:
+        merged: Dict[str, Any] = {}
+        persisted = False
+        if not is_demo_mode():
+            try:
+                with get_db() as session:
+                    proj = session.get(db_models.Project, project_id)
+                    if proj is not None:
+                        cfg = (
+                            dict(proj.config_data)
+                            if isinstance(proj.config_data, dict)
+                            else {}
+                        )
+                        merged = dict(cfg.get(MODULE_PARAMS_CONFIG_KEY) or {})
+                        if module:
+                            if key and module in merged:
+                                mod_map = dict(merged[module])
+                                mod_map.pop(key, None)
+                                if mod_map:
+                                    merged[module] = mod_map
+                                else:
+                                    merged.pop(module, None)
+                            else:
+                                merged.pop(module, None)
+                        else:
+                            merged = {}
+                        cfg[MODULE_PARAMS_CONFIG_KEY] = merged
+                        proj.config_data = _sanitize_for_json(cfg)
+                        flag_modified(proj, "config_data")
+                        session.add(proj)
+                        persisted = True
+            except Exception:
+                persisted = False
+
+        if not persisted:
+            merged = dict(_ephemeral_project_module_params.get(project_id) or {})
+            if module:
+                if key and module in merged:
+                    mod_map = dict(merged[module])
+                    mod_map.pop(key, None)
+                    if mod_map:
+                        merged[module] = mod_map
+                    else:
+                        merged.pop(module, None)
+                else:
+                    merged.pop(module, None)
+            else:
+                merged = {}
+            _ephemeral_project_module_params[project_id] = merged
+        else:
+            _ephemeral_project_module_params.pop(project_id, None)
+
+        return _sanitize_for_json({
+            "project_id": project_id,
+            "module_params": merged,
+            "deleted": True,
+            "persisted": persisted,
+        })
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete project module parameters: {e}"
+        ) from e
+
+
 @router.post(
     "/demo/reset",
     summary="Reset ephemeral demo session edits back to pre-seeded Volve/Costa state",

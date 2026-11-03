@@ -6,7 +6,47 @@
  * wells it was computed on. Saved parameters are restored on zone match (exact or hierarchical bundle match)
  * when the project loads or the zone selection changes while in multi-well scope.
  */
+import { deleteProjectModuleParams } from '$lib/api/client';
 import { workbench } from './workbench.svelte';
+
+export const MULTI_WELL_REGIONAL_DEFAULTS: Record<ProjectParamModuleKey, Record<string, any>> = {
+	'mw-qaqc': {
+		normalizeCurves: ['GR', 'NPHI', 'RHOB'],
+		badholeThreshold: 2.0,
+		activeCurve: 'GR'
+	},
+	'rock-typing': {
+		method: 'rqi_fzi',
+		numClusters: 3,
+		cutoffs: [1.0, 3.0]
+	},
+	'perm-transform': {
+		modelType: 'power',
+		defaultA: 1000.0,
+		defaultB: 3.5
+	},
+	'swirr-corr': {
+		referencePcPsi: 100.0,
+		method: 'power',
+		defaultA: 0.15,
+		defaultB: -0.5
+	},
+	shf: {
+		modelType: 'leverett_j',
+		iftDynesCm: 30.0,
+		contactAngleDeg: 0.0,
+		fwlTvdss: 2500.0
+	},
+	'rt-classifier': {
+		classifierType: 'rf',
+		featureCurves: ['NPHI', 'RHOB', 'GR', 'RT']
+	},
+	'ml-training': {
+		algorithm: 'gbm',
+		targetCurve: 'PHIT',
+		featureCurves: ['GR', 'RT', 'NPHI', 'RHOB']
+	}
+};
 
 export type ProjectParamModuleKey =
 	| 'mw-qaqc'
@@ -224,6 +264,88 @@ class ProjectParamsState {
 	reset() {
 		this.status = {};
 		this.savedCounts = {};
+	}
+
+	getRegionalDefaults(module: ProjectParamModuleKey): Record<string, any> {
+		return JSON.parse(JSON.stringify(MULTI_WELL_REGIONAL_DEFAULTS[module] ?? {}));
+	}
+
+	/** Delete a specific saved preset for a multi-well module & zone key. */
+	async deleteSavedEntry(
+		projectId: string | number,
+		module: ProjectParamModuleKey,
+		key: string,
+		modMap?: ProjectModuleParamsMap
+	): Promise<boolean> {
+		try {
+			await deleteProjectModuleParams(projectId, module, key);
+			if (modMap?.[module]?.[key]) {
+				delete modMap[module]![key];
+			}
+			this.setCounts(modMap ?? {});
+			this.loadGeneration++;
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/** Delete all saved presets for a multi-well module across all zones. */
+	async deleteAllForModule(
+		projectId: string | number,
+		module: ProjectParamModuleKey,
+		modMap?: ProjectModuleParamsMap
+	): Promise<boolean> {
+		try {
+			await deleteProjectModuleParams(projectId, module);
+			if (modMap?.[module]) {
+				delete modMap[module];
+			}
+			this.setCounts(modMap ?? {});
+			this.loadGeneration++;
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/** Extract a flat list of all saved multi-well entries for table presentation. */
+	getAllSavedEntries(modMap?: ProjectModuleParamsMap): Array<{
+		module: ProjectParamModuleKey;
+		moduleLabel: string;
+		key: string;
+		label: string;
+		saved_at: string;
+		wellCount: number | null;
+		params: Record<string, any>;
+	}> {
+		const mp = modMap || {};
+		const rows: Array<{
+			module: ProjectParamModuleKey;
+			moduleLabel: string;
+			key: string;
+			label: string;
+			saved_at: string;
+			wellCount: number | null;
+			params: Record<string, any>;
+		}> = [];
+		for (const m of PROJECT_PARAM_MODULE_KEYS) {
+			const mEntries = mp[m] || {};
+			for (const [k, e] of Object.entries(mEntries)) {
+				rows.push({
+					module: m,
+					moduleLabel: PROJECT_PARAM_MODULE_LABELS[m],
+					key: k,
+					label: e.label || k,
+					saved_at: e.saved_at || '',
+					wellCount: Array.isArray(e.selection?.well_names)
+						? e.selection.well_names.length
+						: null,
+					params: e.params || {}
+				});
+			}
+		}
+		return rows;
 	}
 }
 

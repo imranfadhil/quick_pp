@@ -84,14 +84,22 @@
 					<span class="text-[var(--text-secondary)]">for {activeLabel}</span>
 				{/if}
 			</span>
-			<span class="shrink-0 font-mono text-[9px] text-[var(--text-secondary)]">
-				{#if r.matched && r.savedAt}{r.savedAt}{/if}
+			<div class="flex items-center gap-1 shrink-0 font-mono text-[9px] text-[var(--text-secondary)]">
+				{#if r.matched && r.savedAt}<span>{r.savedAt}</span>{/if}
 				{#if r.count > 0}
-					<span class="ml-1 rounded-2xs bg-slate-200/70 px-1" title="Saved selections"
+					<span class="rounded-2xs bg-slate-200/70 px-1" title="Saved selections"
 						>{r.count} saved</span
 					>
 				{/if}
-			</span>
+				<button
+					type="button"
+					onclick={() => workbench.openParametersTab()}
+					title="Open Parameters & Fits management tab in bottom-right grid"
+					class="ml-1 rounded-2xs px-1 text-[9px] text-[var(--accent-primary)] hover:bg-[var(--accent-primary)]/10 font-sans font-medium transition-colors"
+				>
+					Manage ↗
+				</button>
+			</div>
 		</div>
 	{/each}
 </div>
