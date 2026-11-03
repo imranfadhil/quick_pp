@@ -254,3 +254,115 @@ def test_fdp_report_saturation_contacts_rendering():
     assert "Proved Oil Column:" in rendered
     assert "Free Water Level (FWL):" in rendered
     assert "WDT" not in rendered
+
+
+def test_extract_fluid_contacts_wut_never_shallower_than_out():
+    """Verify that when a wet interval exists at the top of a zone (shallower than OUT),
+    WUT is picked strictly from the basal water leg beneath the hydrocarbon accumulation."""
+    depths = np.linspace(2800, 2900, 21)  # 2800, 2805, ..., 2900
+    sw = np.ones_like(depths)
+    # 2800 - 2820: wet sand (Sw = 1.0)
+    # 2825 - 2860: clean oil pay (Sw = 0.20) -> OUT = 2825, ODT = 2860
+    # 2865 - 2900: basal water leg (Sw = 1.0) -> WUT = 2865
+    for i, d in enumerate(depths):
+        if d < 2825:
+            sw[i] = 1.00
+        elif d <= 2860:
+            sw[i] = 0.20
+        else:
+            sw[i] = 1.00
+
+    df = pd.DataFrame({
+        "WELL_NAME": ["Well-TopWet"] * len(depths),
+        "ZONES": ["Balmoral Sandstone"] * len(depths),
+        "TVDSS": depths,
+        "SWT": sw,
+        "PHIT": [0.22] * len(depths),
+        "VSH": [0.05] * len(depths),
+    })
+
+    contacts = extract_fluid_contacts_and_limits(df=df)
+    types = contacts["contact_type"].tolist()
+
+    assert "OUT" in types
+    assert "ODT" in types
+    assert "WUT" in types
+    out_row = contacts[contacts["contact_type"] == "OUT"].iloc[0]
+    odt_row = contacts[contacts["contact_type"] == "ODT"].iloc[0]
+    wut_row = contacts[contacts["contact_type"] == "WUT"].iloc[0]
+
+    assert out_row["depth"] == 2825.0
+    assert odt_row["depth"] == 2860.0
+    # WUT MUST be at 2865.0 (below ODT), NOT at 2800.0 or 2820.0 (above OUT)!
+    assert wut_row["depth"] == 2865.0
+    assert wut_row["depth"] >= odt_row["depth"]
+    assert wut_row["depth"] > out_row["depth"]
+
+
+def test_extract_fluid_contacts_no_sand_and_no_pay_skips_zone():
+    """Verify that:
+    1. A shale zone with NO reservoir sand (e.g. Sele / Balder Tuff) registers ZERO contacts.
+    2. A clean sand zone with NO hydrocarbon pay (100% wet sand) registers ZERO contacts by default,
+       avoiding phantom WUT lines at the top of the formation.
+    3. A pay zone in the same well registers valid contacts."""
+    # Build 3 zones in one well:
+    # Zone 1: 'Sele' (Pure Shale: VSH = 0.85, PHIT = 0.02)
+    # Zone 2: 'Andrew Sandstone' (Clean Sand, 100% Wet: VSH = 0.08, PHIT = 0.22, SWT = 1.00)
+    # Zone 3: 'Balmoral Sandstone' (Oil Reservoir: VSH = 0.05, PHIT = 0.25, SWT = 0.20 in pay, 1.00 in water leg)
+    z1_depths = np.linspace(2700, 2750, 11)  # Sele shale
+    z2_depths = np.linspace(2760, 2800, 9)   # Andrew wet sand
+    z3_depths = np.linspace(2810, 2880, 15)  # Balmoral oil reservoir
+
+    d_all = np.concatenate([z1_depths, z2_depths, z3_depths])
+    zones_all = (
+        ["Sele"] * len(z1_depths)
+        + ["Andrew Sandstone"] * len(z2_depths)
+        + ["Balmoral Sandstone"] * len(z3_depths)
+    )
+
+    vsh_all = (
+        [0.85] * len(z1_depths)
+        + [0.08] * len(z2_depths)
+        + [0.05] * len(z3_depths)
+    )
+    phit_all = (
+        [0.02] * len(z1_depths)
+        + [0.22] * len(z2_depths)
+        + [0.25] * len(z3_depths)
+    )
+    sw_all = (
+        [1.0] * len(z1_depths)
+        + [1.0] * len(z2_depths)
+        + [0.20 if d <= 2840 else 1.0 for d in z3_depths]
+    )
+
+    df = pd.DataFrame({
+        "WELL_NAME": ["Well-MultiZone"] * len(d_all),
+        "ZONES": zones_all,
+        "TVDSS": d_all,
+        "SWT": sw_all,
+        "PHIT": phit_all,
+        "VSH": vsh_all,
+    })
+
+    contacts = extract_fluid_contacts_and_limits(df=df, require_pay=True)
+
+    # 1. Sele (no sand) must have ZERO contacts
+    sele_contacts = contacts[contacts["zone"] == "Sele"]
+    assert len(sele_contacts) == 0, f"Expected 0 contacts in shale zone Sele, found: {sele_contacts}"
+
+    # 2. Andrew Sandstone (clean sand, but 100% wet / no pay) must have ZERO contacts
+    andrew_contacts = contacts[contacts["zone"] == "Andrew Sandstone"]
+    assert len(andrew_contacts) == 0, f"Expected 0 contacts in 100% wet sand Andrew, found: {andrew_contacts}"
+
+    # 3. Balmoral Sandstone (oil reservoir) must have OUT, ODT, WUT, OWC
+    balm_contacts = contacts[contacts["zone"] == "Balmoral Sandstone"]
+    assert len(balm_contacts) > 0
+    balm_types = balm_contacts["contact_type"].tolist()
+    assert "OUT" in balm_types
+    assert "ODT" in balm_types
+    assert "WUT" in balm_types
+    assert "OWC" in balm_types
+    assert "WDT" not in balm_types
+
+

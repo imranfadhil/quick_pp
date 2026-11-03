@@ -2577,6 +2577,9 @@ def extract_fluid_contacts_and_limits(
     sw_water_cutoff: float = 0.90,
     phit_cutoff: float = 0.05,
     vsh_cutoff: float = 0.50,
+    min_sand_thickness: float = 1.0,
+    min_sand_samples: int = 5,
+    require_pay: bool = True,
 ) -> pd.DataFrame:
     """Extract comprehensive petrophysical fluid limits and contacts per well and per zone:
     - Gas limits & contacts: GUT, GDT, GOC, GWC
@@ -2667,14 +2670,25 @@ def extract_fluid_contacts_and_limits(
             & (grp["_VSH_CALC"] <= vsh_cutoff)
         ].sort_values(by="_DEPTH_CALC")
 
-        if len(valid) == 0:
+        # Petrophysical Sand Validation:
+        # A zone without minimum reservoir sand cannot contain or produce fluids.
+        # Eliminates non-reservoir shale/tuff/marl formations (e.g. Sele, Balder Tuff, Montrose shale).
+        if len(valid) < min_sand_samples:
             continue
 
         depths = valid["_DEPTH_CALC"].to_numpy()
-        sws = valid["_SW_CALC"].to_numpy()
+        sand_thickness = float(np.max(depths) - np.min(depths))
+        if sand_thickness < min_sand_thickness and len(valid) < 10:
+            continue
 
+        sws = valid["_SW_CALC"].to_numpy()
         is_hc = sws < sw_pay_cutoff
         is_water = sws >= sw_water_cutoff
+
+        # If require_pay is True, do not register contacts for 100% wet / non-pay zones
+        # (prevents auto-setting WUT at the top of purely wet zones where no hydrocarbon exists)
+        if require_pay and not np.any(is_hc):
+            continue
 
         # Gas vs Oil separation if gas indicator available
         if has_gas_curve:
@@ -2731,18 +2745,42 @@ def extract_fluid_contacts_and_limits(
                 "remarks": f"Proved Oil Down To at {odt:.1f} m TVDss in {zone_val or 'reservoir'} ({well_val})",
             })
 
-        # 3. Water Up To (WUT) - note: WDT is explicitly omitted
-        if np.any(is_water):
-            wut = float(np.min(depths[is_water]))
-            records.append({
-                "well_name": well_val,
-                "zone": zone_val,
-                "fault_block": fb_val,
-                "contact_type": "WUT",
-                "depth": wut,
-                "source": "Log Evaluation (100% Sw water leg)",
-                "remarks": f"Proved Water Up To at {wut:.1f} m TVDss in {zone_val or 'reservoir'}",
-            })
+        # Lowest confirmed hydrocarbon base (ODT or GDT)
+        hc_base = None
+        if np.any(is_oil):
+            hc_base = float(np.max(depths[is_oil]))
+        elif np.any(is_gas):
+            hc_base = float(np.max(depths[is_gas]))
+
+        # 3. Water Up To (WUT) - shallowest proved water in the basal water leg
+        # Note: WDT is explicitly omitted
+        if hc_base is not None:
+            # When hydrocarbon is present in the zone, WUT is the shallowest proved 100% water BELOW the HC column
+            basal_water_mask = is_water & (depths >= hc_base)
+            if np.any(basal_water_mask):
+                wut = float(np.min(depths[basal_water_mask]))
+                records.append({
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "WUT",
+                    "depth": wut,
+                    "source": "Log Evaluation (100% Sw water leg below HC)",
+                    "remarks": f"Proved Water Up To at {wut:.1f} m TVDss in {zone_val or 'reservoir'} (below ODT {hc_base:.1f}m)",
+                })
+        else:
+            # 100% wet reservoir interval without confirmed hydrocarbon pay (only reached if require_pay=False)
+            if np.any(is_water):
+                wut = float(np.min(depths[is_water]))
+                records.append({
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "WUT",
+                    "depth": wut,
+                    "source": "Log Evaluation (100% Water-bearing Sand)",
+                    "remarks": f"Proved Water-bearing Sand top at {wut:.1f} m TVDss in {zone_val or 'reservoir'} (aquifer interval)",
+                })
 
         # 4. Inferred Discrete Contacts (GOC, GWC, OWC)
         if np.any(is_gas) and np.any(is_oil):

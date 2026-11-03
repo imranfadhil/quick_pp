@@ -142,6 +142,7 @@
 		id: string;
 		name: string;
 		depth: number;
+		plotDepth?: number;
 	} | null>(null);
 
 	// Interactive Depth Interval Selection state (Well Plot -> Crossplot brushing)
@@ -2684,6 +2685,53 @@
 		window.addEventListener('pointerup', onUp);
 	}
 
+	// Convert TVDSS depth to MD depth using well log depth arrays (if TVDSS curve present)
+	function tvdssToMd(tvdss: number): number {
+		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'];
+		const tvdssArr = wellData.curves['TVDSS'] ?? wellData.curves['TVD'];
+		if (!deptArr || !tvdssArr || deptArr.length === 0 || tvdssArr.length === 0) {
+			return tvdss;
+		}
+		for (let i = 0; i < tvdssArr.length - 1; i++) {
+			const z0 = tvdssArr[i];
+			const z1 = tvdssArr[i + 1];
+			if (z0 === null || z1 === null || !Number.isFinite(z0) || !Number.isFinite(z1)) continue;
+			if ((z0 <= tvdss && tvdss <= z1) || (z1 <= tvdss && tvdss <= z0)) {
+				const dz = z1 - z0;
+				const md0 = deptArr[i];
+				const md1 = deptArr[i + 1];
+				if (md0 !== null && md1 !== null && Number.isFinite(md0) && Number.isFinite(md1)) {
+					const frac = Math.abs(dz) > 1e-4 ? (tvdss - z0) / dz : 0.0;
+					return md0 + frac * (md1 - md0);
+				}
+			}
+		}
+		return tvdss;
+	}
+
+	function mdToTvdss(md: number): number {
+		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'];
+		const tvdssArr = wellData.curves['TVDSS'] ?? wellData.curves['TVD'];
+		if (!deptArr || !tvdssArr || deptArr.length === 0 || tvdssArr.length === 0) {
+			return md;
+		}
+		for (let i = 0; i < deptArr.length - 1; i++) {
+			const m0 = deptArr[i];
+			const m1 = deptArr[i + 1];
+			if (m0 === null || m1 === null || !Number.isFinite(m0) || !Number.isFinite(m1)) continue;
+			if ((m0 <= md && md <= m1) || (m1 <= md && md <= m0)) {
+				const dm = m1 - m0;
+				const z0 = tvdssArr[i];
+				const z1 = tvdssArr[i + 1];
+				if (z0 !== null && z1 !== null && Number.isFinite(z0) && Number.isFinite(z1)) {
+					const frac = Math.abs(dm) > 1e-4 ? (md - m0) / dm : 0.0;
+					return z0 + frac * (z1 - z0);
+				}
+			}
+		}
+		return md;
+	}
+
 	function startMarkerDrag(
 		e: PointerEvent,
 		kind: 'top' | 'contact',
@@ -2695,7 +2743,8 @@
 		e.stopPropagation();
 		if (!plotContainer) return;
 
-		draggingMarker = { kind, id, name, depth: initialDepth };
+		const initialPlotD = kind === 'contact' ? tvdssToMd(initialDepth) : initialDepth;
+		draggingMarker = { kind, id, name, depth: initialDepth, plotDepth: initialPlotD };
 		const rect = plotContainer.getBoundingClientRect();
 		const plotTop = rect.top + 6;
 		const plotHeight = Math.max(1, rect.height - 14);
@@ -2704,9 +2753,10 @@
 		const onMove = (moveEvent: PointerEvent) => {
 			if (!draggingMarker) return;
 			const relY = Math.min(1, Math.max(0, (moveEvent.clientY - plotTop) / plotHeight));
-			const newDepth = Number((minD + relY * (maxD - minD)).toFixed(1));
-			draggingMarker = { ...draggingMarker, depth: newDepth };
-			workbench.cursorDepth = newDepth;
+			const newMd = Number((minD + relY * (maxD - minD)).toFixed(1));
+			const newTvdss = draggingMarker.kind === 'contact' ? Number(mdToTvdss(newMd).toFixed(1)) : newMd;
+			draggingMarker = { ...draggingMarker, depth: newTvdss, plotDepth: newMd };
+			workbench.cursorDepth = newMd;
 		};
 
 		const onUp = () => {
@@ -2873,6 +2923,16 @@
 						class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-blue-600 focus:ring-0"
 					/>
 					<span class="font-medium text-blue-600 dark:text-blue-400">Tops</span>
+				</label>
+			{/if}
+			{#if wellData.contacts.length > 0}
+				<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer" title="Show or hide fluid contact marker lines across well plot tracks">
+					<input
+						type="checkbox"
+						bind:checked={workbench.logShowContacts}
+						class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-rose-600 focus:ring-0"
+					/>
+					<span class="font-medium text-rose-600 dark:text-rose-400">Contacts</span>
 				</label>
 			{/if}
 			<button
@@ -3426,32 +3486,38 @@
 				{/if}
 			{/if}
 
-			{#each wellData.contacts as contact (contact.id)}
-				{@const activeDepth =
-					draggingMarker?.kind === 'contact' && draggingMarker.id === contact.id
-						? draggingMarker.depth
-						: contact.depth}
-				{@const pct = depthToPercent(activeDepth)}
-				{#if pct !== null}
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<div
-						onpointerdown={(e) =>
-							startMarkerDrag(e, 'contact', contact.id, contact.type, activeDepth)}
-						style="top: {pct}%;"
-						title="Drag vertically to adjust Fluid Contact ({contact.type})"
-						class="pointer-events-auto group absolute right-0 left-0 -translate-y-1/2 cursor-ns-resize py-1"
-					>
+			{#if workbench.logShowContacts}
+				{#each wellData.contacts as contact (contact.id)}
+					{@const isDragging =
+						draggingMarker?.kind === 'contact' && draggingMarker.id === contact.id}
+					{@const activeDepth =
+						isDragging && draggingMarker ? draggingMarker.depth : contact.depth}
+					{@const activePlotDepth =
+						isDragging && draggingMarker?.plotDepth !== undefined
+							? draggingMarker.plotDepth
+							: tvdssToMd(contact.depth)}
+					{@const pct = depthToPercent(activePlotDepth)}
+					{#if pct !== null}
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<div
-							class="w-full border-t-2 border-dotted border-rose-600/90 group-hover:border-solid"
-						></div>
-						<span
-							class="mono-num absolute -top-2.5 right-2 rounded-xs border border-rose-200 bg-rose-50/95 px-1 py-0 text-[9px] font-semibold text-rose-800 shadow-2xs"
+							onpointerdown={(e) =>
+								startMarkerDrag(e, 'contact', contact.id, contact.type, activeDepth)}
+							style="top: {pct}%;"
+							title="Drag vertically to adjust Fluid Contact ({contact.type}) — TVDSS: {activeDepth.toFixed(1)}m{Math.abs(activePlotDepth - activeDepth) > 0.5 ? ` (MD: ${activePlotDepth.toFixed(1)}m)` : ''}"
+							class="pointer-events-auto group absolute right-0 left-0 -translate-y-1/2 cursor-ns-resize py-1"
 						>
-							◆ {contact.type} ({activeDepth.toFixed(1)}m)
-						</span>
-					</div>
-				{/if}
-			{/each}
+							<div
+								class="w-full border-t-2 border-dotted border-rose-600/90 group-hover:border-solid"
+							></div>
+							<span
+								class="mono-num absolute -top-2.5 right-2 rounded-xs border border-rose-200 bg-rose-50/95 px-1 py-0 text-[9px] font-semibold text-rose-800 shadow-2xs"
+							>
+								◆ {contact.type} ({activeDepth.toFixed(1)}m{Math.abs(activePlotDepth - activeDepth) > 0.5 ? ` TVDss / ${activePlotDepth.toFixed(1)}m MD` : ''})
+							</span>
+						</div>
+					{/if}
+				{/each}
+			{/if}
 
 			<!-- Toggleable Horizontal Inspection Crosshair & Track-Respective Hover Value Boxes -->
 			{#if showInspectionLine && inspectionPct !== null}

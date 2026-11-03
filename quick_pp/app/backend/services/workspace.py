@@ -9097,6 +9097,8 @@ class WorkspaceExtractContactsRequest(BaseModel):
     sw_water_cutoff: float = Field(0.90, description="Min Sw for 100% water leg")
     phit_cutoff: float = Field(0.05, description="Min porosity for reservoir rock")
     vsh_cutoff: float = Field(0.50, description="Max Vshale for reservoir rock")
+    min_sand_thickness: float = Field(1.0, description="Min cumulative sand thickness (m) to consider a zone reservoir-bearing")
+    require_pay: bool = Field(True, description="Only extract contacts for zones containing confirmed hydrocarbon pay")
 
 
 @router.post(
@@ -9124,6 +9126,8 @@ def workspace_extract_and_save_contacts(
             sw_water_cutoff=req.sw_water_cutoff,
             phit_cutoff=req.phit_cutoff,
             vsh_cutoff=req.vsh_cutoff,
+            min_sand_thickness=req.min_sand_thickness,
+            require_pay=req.require_pay,
         )
 
         saved_count = 0
