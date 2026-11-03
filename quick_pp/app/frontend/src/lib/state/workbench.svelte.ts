@@ -139,6 +139,7 @@ export interface ThomasStieberParams {
 }
 
 export interface SaturationModelParams {
+	fwl: number;
 	method: 'waxman_smits' | 'archie';
 	rwMode: 'salinity_temp' | 'pickett';
 	measSystem: 'metric' | 'imperial';
@@ -730,7 +731,8 @@ class WorkbenchState {
 		bMethod: 'waxman_smits',
 		qvMethod: 'cec',
 		cecClay: 0.1,
-		rhoDryClay: 2.71
+		rhoDryClay: 2.71,
+		fwl: 0
 	});
 
 	scalParams = $state<ScalModelParams>({

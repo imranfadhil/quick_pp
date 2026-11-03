@@ -7,8 +7,9 @@ never conflict with interactive GUI backends.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
 import numpy as np
@@ -18,6 +19,7 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 
 from quick_pp import logger
+from quick_pp.utils import line_intersection
 
 matplotlib.use("Agg", force=False)
 
@@ -125,8 +127,7 @@ def _ensure_df_well_filter(
         and "WELL_NAME" in df.columns
     ):
         sub = df[df["WELL_NAME"].astype(str).isin([str(w) for w in well_names])]
-        if not sub.empty:
-            return sub.copy()
+        return sub.copy()
     return df.copy()
 
 
@@ -524,6 +525,12 @@ def generate_nd_crossplot(
     target_zones: Optional[Sequence[str]] = None,
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
+    litho_model: str = "ssc",
+    dry_sand_point: Tuple[float, float] = (-0.02, 2.65),
+    dry_silt_point: Optional[Tuple[Optional[float], Optional[float]]] = None,
+    dry_clay_point: Tuple[float, float] = (0.33, 2.70),
+    fluid_point: Tuple[float, float] = (1.0, 1.0),
+    silt_line_angle: float = 119.0,
 ) -> str:
     """Generate Figure 4.1: Neutron-Density Crossplot, Core Porosity Calibration & Matrix Grain Density (RHOMA) QC.
 
@@ -534,6 +541,12 @@ def generate_nd_crossplot(
         target_zones (Optional[Sequence[str]]): Optional target reservoir zone names to focus calibration.
         output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
         url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
+        litho_model (str): Active lithology model ('ssc', 'multi_mineral', etc.). Defaults to 'ssc'.
+        dry_sand_point (Tuple[float, float]): (NPHI, RHOB) coordinates for dry sand.
+        dry_silt_point (Optional[Tuple]): (NPHI, RHOB) coordinates for dry silt.
+        dry_clay_point (Tuple[float, float]): (NPHI, RHOB) coordinates for dry clay.
+        fluid_point (Tuple[float, float]): (NPHI, RHOB) coordinates for formation fluid.
+        silt_line_angle (float): Angle of silt line in degrees from horizontal. Defaults to 119.0.
 
     Returns:
         str: File path or URL to the generated `fig_4_1_nd_crossplot.png`.
@@ -582,46 +595,82 @@ def generate_nd_crossplot(
         cbar = fig.colorbar(sc, ax=ax1, pad=0.02, fraction=0.046)
         cbar.set_label(color_by, fontsize=8)
 
-        # Plot clean sandstone, limestone, dolomite, and clay endpoints
-        phi_grid = np.linspace(0.0, 0.40, 50)
-        ax1.plot(
-            phi_grid - 0.02 * (1 - phi_grid),
-            2.65 * (1 - phi_grid) + 1.0 * phi_grid,
-            "k-",
-            lw=1.3,
-            label="Quartz (2.65 g/cc)",
-        )
-        ax1.plot(
-            phi_grid,
-            2.71 * (1 - phi_grid) + 1.0 * phi_grid,
-            "b--",
-            lw=1.2,
-            label="Calcite (2.71 g/cc)",
-        )
-        ax1.plot(
-            phi_grid + 0.02 * (1 - phi_grid),
-            2.87 * (1 - phi_grid) + 1.0 * phi_grid,
-            "m:",
-            lw=1.2,
-            label="Dolomite (2.87 g/cc)",
-        )
-        ax1.scatter(
-            [0.33],
-            [2.70],
-            color="#dc2626",
-            marker="^",
-            s=65,
-            zorder=5,
-            label="Dry Clay Endpoint",
-        )
+        if str(litho_model).lower() == "ssc":
+            # Sand-Silt-Clay (SSC) Ternary Endpoints & Lines
+            A = dry_sand_point or (-0.02, 2.65)
+            C = dry_clay_point or (0.33, 2.70)
+            D = fluid_point or (1.0, 1.0)
+
+            # Compute dry silt point B if not specified
+            if (
+                dry_silt_point
+                and dry_silt_point[0] is not None
+                and dry_silt_point[1] is not None
+            ):
+                B = (float(dry_silt_point[0]), float(dry_silt_point[1]))
+            else:
+                rad = math.radians(float(silt_line_angle))
+                p_silt = (D[0] + math.cos(rad), D[1] + math.sin(rad))
+                silt_inter = line_intersection((A, C), (D, p_silt))
+                if silt_inter is not None and np.isfinite(silt_inter[0]) and np.isfinite(silt_inter[1]):
+                    B = (float(silt_inter[0]), float(silt_inter[1]))
+                else:
+                    drysilt_NPHI = 1.0 - 1.68 * math.tan(float(silt_line_angle - 90) * math.pi / 180.0)
+                    B = (drysilt_NPHI, 2.68)
+
+            # Plot SSC ternary model lines
+            ax1.plot([D[0], A[0]], [D[1], A[1]], color="#1e40af", lw=1.3, label=f"Sand Line ({A[1]:.2f} g/cc)")
+            ax1.plot([D[0], B[0]], [D[1], B[1]], color="#16a34a", lw=1.3, linestyle="-", label=f"Silt Line ({silt_line_angle:.0f}°)")
+            ax1.plot([D[0], C[0]], [D[1], C[1]], color="#9333ea", lw=1.2, linestyle="--", label=f"Clay Line ({C[1]:.2f} g/cc)")
+            ax1.plot([A[0], C[0]], [A[1], C[1]], color="#0f172a", lw=1.4, linestyle="-", label="Rock Line")
+
+            # Endpoint markers
+            ax1.scatter([A[0]], [A[1]], color="#eab308", marker="s", s=50, zorder=6, label=f"Dry Sand ({A[0]:.2f}, {A[1]:.2f})")
+            ax1.scatter([B[0]], [B[1]], color="#16a34a", marker="D", s=45, zorder=6, label=f"Dry Silt ({B[0]:.2f}, {B[1]:.2f})")
+            ax1.scatter([C[0]], [C[1]], color="#dc2626", marker="^", s=60, zorder=6, label=f"Dry Clay ({C[0]:.2f}, {C[1]:.2f})")
+        else:
+            # Fallback Standard Quartz / Calcite / Dolomite lithology lines
+            phi_grid = np.linspace(0.0, 0.40, 50)
+            ax1.plot(
+                phi_grid - 0.02 * (1 - phi_grid),
+                2.65 * (1 - phi_grid) + 1.0 * phi_grid,
+                "k-",
+                lw=1.3,
+                label="Quartz (2.65 g/cc)",
+            )
+            ax1.plot(
+                phi_grid,
+                2.71 * (1 - phi_grid) + 1.0 * phi_grid,
+                "b--",
+                lw=1.2,
+                label="Calcite (2.71 g/cc)",
+            )
+            ax1.plot(
+                phi_grid + 0.02 * (1 - phi_grid),
+                2.87 * (1 - phi_grid) + 1.0 * phi_grid,
+                "m:",
+                lw=1.2,
+                label="Dolomite (2.87 g/cc)",
+            )
+            ax1.scatter(
+                [0.33],
+                [2.70],
+                color="#dc2626",
+                marker="^",
+                s=65,
+                zorder=5,
+                label="Dry Clay Endpoint",
+            )
         ax1.set_xlim(-0.05, 0.50)
         ax1.set_ylim(2.95, 1.85)
         ax1.set_xlabel("Neutron Porosity NPHI (v/v)", fontsize=8.5, fontweight="bold")
         ax1.set_ylabel("Bulk Density RHOB (g/cc)", fontsize=8.5, fontweight="bold")
+        tz_suffix = f" — {', '.join(target_zones)}" if target_zones else ""
+        model_title = "SSC" if str(litho_model).lower() == "ssc" else "Lithology"
         ax1.set_title(
-            "Neutron-Density Lithology Crossplot", fontsize=9.0, fontweight="bold"
+            f"Neutron-Density {model_title} Crossplot{tz_suffix}", fontsize=8.5, fontweight="bold"
         )
-        ax1.legend(loc="lower left", fontsize=7.0)
+        ax1.legend(loc="lower left", fontsize=6.8)
         ax1.grid(True, linestyle=":", alpha=0.5)
     else:
         ax1.text(0.5, 0.5, "NPHI / RHOB curves not available", ha="center", va="center")
@@ -819,6 +868,8 @@ def generate_rock_typing_perm_plot(
     df: pd.DataFrame,
     well_names: Optional[List[str]] = None,
     rock_types: Optional[List[Dict[str, Any]]] = None,
+    fzi_cutoffs: Optional[List[float]] = None,
+    target_zones: Optional[Sequence[str]] = None,
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
@@ -828,6 +879,8 @@ def generate_rock_typing_perm_plot(
         df (pd.DataFrame): Multi-well log DataFrame containing porosity and permeability curves.
         well_names (Optional[List[str]]): Optional subset of well names to filter.
         rock_types (Optional[List[Dict[str, Any]]]): Optional list of rock type definitions.
+        fzi_cutoffs (Optional[List[float]]): Configured FZI cutoff boundaries. Defaults to [0.5, 1.5, 3.0].
+        target_zones (Optional[Sequence[str]]): Optional target reservoir zone names to focus rock typing.
         output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
         url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
 
@@ -835,7 +888,13 @@ def generate_rock_typing_perm_plot(
         str: File path or URL to the generated `fig_5_1_perm_crossplot.png`.
     """
     sub = _ensure_df_well_filter(df, well_names)
-    fig = Figure(figsize=(10.5, 4.5))
+    if target_zones and "ZONES" in sub.columns and sub["ZONES"].notna().any():
+        tz_set = {str(z).strip().upper() for z in target_zones if z}
+        tz_df = sub[sub["ZONES"].astype(str).str.strip().str.upper().isin(tz_set)]
+        if not tz_df.empty:
+            sub = tz_df
+
+    fig = Figure(figsize=(11.0, 4.5))
     gs = GridSpec(1, 2, figure=fig, width_ratios=[1.2, 1.0], wspace=0.28)
     ax1 = fig.add_subplot(gs[0, 0])
     ax2 = fig.add_subplot(gs[0, 1])
@@ -857,7 +916,26 @@ def generate_rock_typing_perm_plot(
         rqi = 0.0314 * np.sqrt(k_arr / np.clip(p_arr, 1e-4, 0.99))
         phiz = p_arr / np.clip(1.0 - p_arr, 1e-4, 1.0)
         fzi = rqi / np.clip(phiz, 1e-4, 100.0)
-        rt_bins = np.digitize(fzi, bins=[0.5, 1.5, 3.0]) + 1
+
+        # Parse and resolve cutoffs
+        cutoffs: List[float] = []
+        if fzi_cutoffs and len(fzi_cutoffs) > 0:
+            cutoffs = sorted(float(c) for c in fzi_cutoffs if float(c) > 0)
+        elif rock_types:
+            import re
+            for rt in rock_types:
+                fzi_r = str(rt.get("fzi_range", ""))
+                nums = re.findall(r"[-+]?\d*\.\d+|\d+", fzi_r)
+                for num in nums:
+                    val = float(num)
+                    if val > 0 and val not in cutoffs:
+                        cutoffs.append(val)
+            cutoffs = sorted(cutoffs)
+        if not cutoffs:
+            cutoffs = [0.5, 1.5, 3.0]
+
+        rt_bins = np.digitize(fzi, bins=cutoffs) + 1
+        n_rts = len(cutoffs) + 1
 
         if len(p_arr) > 2000:
             idx = np.linspace(0, len(p_arr) - 1, 2000, dtype=int)
@@ -865,53 +943,100 @@ def generate_rock_typing_perm_plot(
         else:
             p_plot, k_plot, rt_plot = p_arr, k_arr, rt_bins
 
-        rt_names = {
-            1: "RT1 (Nano/Micro-Poro, FZI < 0.5)",
-            2: "RT2 (Meso-Poro, 0.5 ≤ FZI < 1.5)",
-            3: "RT3 (Macro-Poro, 1.5 ≤ FZI < 3.0)",
-            4: "RT4 (Mega-Poro, FZI ≥ 3.0)",
-        }
-        phi_line = np.linspace(0.03, 0.36, 50)
-        for rt_code in (1, 2, 3, 4):
+        # Plot data points by partitioned rock type
+        phi_line = np.linspace(0.03, 0.38, 60)
+        for rt_code in range(1, n_rts + 1):
             mask = rt_plot == rt_code
             color = PALETTE[(rt_code - 1) % len(PALETTE)]
+            if rt_code == 1:
+                lbl = f"RT1 (FZI < {cutoffs[0]:.2f})"
+            elif rt_code == n_rts:
+                lbl = f"RT{rt_code} (FZI ≥ {cutoffs[-1]:.2f})"
+            else:
+                lbl = f"RT{rt_code} ({cutoffs[rt_code-2]:.2f} ≤ FZI < {cutoffs[rt_code-1]:.2f})"
+
             if np.any(mask):
                 ax1.scatter(
                     p_plot[mask],
                     k_plot[mask],
                     color=color,
                     s=14,
-                    alpha=0.7,
-                    label=rt_names[rt_code],
+                    alpha=0.75,
+                    label=lbl,
                 )
-            # Iso-FZI transform curve
-            fzi_rep = {1: 0.3, 2: 0.9, 3: 2.1, 4: 4.5}[rt_code]
-            k_iso = 1014.0 * (fzi_rep**2) * (phi_line**3) / ((1.0 - phi_line) ** 2)
-            ax1.plot(phi_line, k_iso, color=color, linestyle="--", lw=1.2)
+
+        # Plot explicit cutoff boundary curves so points and cutoffs align perfectly
+        for i, c_val in enumerate(cutoffs):
+            k_cutoff = 1014.24 * (c_val**2) * (phi_line**3) / ((1.0 - phi_line) ** 2)
+            ax1.plot(
+                phi_line,
+                k_cutoff,
+                color="#334155",
+                linestyle="--",
+                lw=1.1,
+                alpha=0.85,
+                label=f"Cutoff {c_val:.2f} µm",
+            )
 
         ax1.set_yscale("log")
         ax1.set_xlim(0.0, 0.40)
         ax1.set_ylim(1e-2, 1e4)
         ax1.set_xlabel("Porosity Φ (v/v)", fontsize=9, fontweight="bold")
         ax1.set_ylabel("Permeability K (mD)", fontsize=9, fontweight="bold")
+        tz_title = f" — {', '.join(target_zones)}" if target_zones else ""
         ax1.set_title(
-            "Porosity-Permeability Crossplot by FZI Rock Type",
-            fontsize=9.5,
+            f"Porosity-Permeability by FZI Rock Type{tz_title}",
+            fontsize=9.0,
             fontweight="bold",
         )
-        ax1.legend(loc="lower right", fontsize=7.5)
+        ax1.legend(loc="lower right", fontsize=7.0)
         ax1.grid(True, which="both", linestyle=":", alpha=0.5)
 
-        # Panel 2: Stratigraphic Modified Lorenz Plot (Cumulative Flow vs Storage Capacity)
-        kh_cum = np.cumsum(k_arr) / max(float(np.sum(k_arr)), 1e-9)
-        phih_cum = np.cumsum(p_arr) / max(float(np.sum(p_arr)), 1e-9)
+        # Panel 2: Stratigraphic Modified Lorenz Plot (Ordered by stratigraphic depth on key cored/evaluated well)
+        well_col = (
+            sub["WELL_NAME"]
+            if "WELL_NAME" in sub.columns
+            else pd.Series("Project", index=sub.index)
+        )
+        wells_with_pts = well_col[valid].value_counts()
+        key_well = str(wells_with_pts.index[0]) if not wells_with_pts.empty else "Key Well"
+        well_mask = valid & (well_col == key_well)
+        if not well_mask.any():
+            well_mask = valid
+            key_well = "Field"
+
+        w_sub = sub[well_mask].copy()
+        if "DEPTH" in w_sub.columns and w_sub["DEPTH"].notna().any():
+            w_sub = w_sub.dropna(subset=["DEPTH"]).sort_values("DEPTH").reset_index(drop=True)
+            w_p = _get_numeric_series(w_sub, "CPORE", "PHIE", "PHIT").to_numpy(dtype=float)
+            w_p = np.where(w_p > 1.0, w_p / 100.0, w_p)
+            w_k = _get_numeric_series(w_sub, "CPERM", "PERM").to_numpy(dtype=float)
+            d_vals = pd.to_numeric(w_sub["DEPTH"], errors="coerce").to_numpy(dtype=float)
+            dh = np.diff(d_vals, prepend=d_vals[0])
+            dh = np.where((dh > 0) & (dh < 5.0), dh, 0.1524)
+        else:
+            w_p = p_arr
+            w_k = k_arr
+            dh = np.full_like(w_p, 0.1524)
+
+        flow_cap = np.cumsum(np.clip(w_k, 1e-4, 5e4) * dh)
+        store_cap = np.cumsum(np.clip(w_p, 1e-4, 0.45) * dh)
+        kh_cum = flow_cap / max(float(flow_cap[-1]), 1e-9)
+        phih_cum = store_cap / max(float(store_cap[-1]), 1e-9)
+
+        # Calculate Lorenz coefficient L
+        try:
+            lorenz_val = max(0.0, min(1.0, float(np.trapz(kh_cum, phih_cum) - 0.5) * 2.0))
+        except Exception:
+            lorenz_val = 0.50
+
         ax2.plot([0, 1], [0, 1], "k--", lw=1.1, label="Homogeneous (Lorenz = 0)")
         ax2.plot(
             phih_cum,
             kh_cum,
             color="#1d4ed8",
             lw=2.2,
-            label="Stratigraphic Flow Profile",
+            label=f"Stratigraphic Flow Profile (L = {abs(lorenz_val):.2f})",
         )
         ax2.fill_between(phih_cum, phih_cum, kh_cum, color="#93c5fd", alpha=0.35)
         ax2.set_xlim(0, 1)
@@ -923,9 +1048,11 @@ def generate_rock_typing_perm_plot(
             "Cumulative Flow Capacity Σ(K·h) [frac]", fontsize=9, fontweight="bold"
         )
         ax2.set_title(
-            "Stratigraphic Modified Lorenz Plot (SMLP)", fontsize=9.5, fontweight="bold"
+            f"Stratigraphic Modified Lorenz Plot (SMLP — {key_well})",
+            fontsize=9.0,
+            fontweight="bold",
         )
-        ax2.legend(loc="lower right", fontsize=8)
+        ax2.legend(loc="lower right", fontsize=7.5)
         ax2.grid(True, linestyle=":", alpha=0.5)
     else:
         ax1.text(
@@ -948,6 +1075,8 @@ def generate_pickett_plot(
     m: float = 2.0,
     n: float = 2.0,
     fwl: Optional[float] = None,
+    fwl_basis: Optional[str] = None,
+    target_zones: Optional[Sequence[str]] = None,
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
@@ -961,6 +1090,8 @@ def generate_pickett_plot(
         m (float): Cementation exponent. Defaults to 2.0.
         n (float): Saturation exponent. Defaults to 2.0.
         fwl (Optional[float]): Optional Free Water Level depth (`m`) to overlay on the saturation profile.
+        fwl_basis (Optional[str]): Source / basis of the FWL value (e.g. 'Log Transition Zone', 'Fluid Contacts DB').
+        target_zones (Optional[Sequence[str]]): Optional target reservoir zone names to focus Pickett evaluation.
         output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
         url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
 
@@ -968,8 +1099,14 @@ def generate_pickett_plot(
         str: File path or URL to the generated `fig_6_1_pickett_shf_plot.png`.
     """
     sub = _ensure_df_well_filter(df, well_names)
-    fig = Figure(figsize=(10.5, 4.5))
-    gs = GridSpec(1, 2, figure=fig, width_ratios=[1.15, 1.0], wspace=0.28)
+    if target_zones and "ZONES" in sub.columns and sub["ZONES"].notna().any():
+        tz_set = {str(z).strip().upper() for z in target_zones if z}
+        tz_df = sub[sub["ZONES"].astype(str).str.strip().str.upper().isin(tz_set)]
+        if not tz_df.empty:
+            sub = tz_df
+
+    fig = Figure(figsize=(11.8, 4.5))
+    gs = GridSpec(1, 2, figure=fig, width_ratios=[1.15, 1.0], wspace=0.38)
     ax1 = fig.add_subplot(gs[0, 0])
     ax2 = fig.add_subplot(gs[0, 1])
 
@@ -992,8 +1129,8 @@ def generate_pickett_plot(
             rt_v, phi_v, c_v = rt_v[idx], phi_v[idx], c_v[idx]
 
         sc = ax1.scatter(rt_v, phi_v, c=c_v, cmap="YlGnBu_r", s=13, alpha=0.65)
-        cbar = fig.colorbar(sc, ax=ax1, pad=0.02, fraction=0.046)
-        cbar.set_label("VCLAY / Shaliness", fontsize=8)
+        cbar = fig.colorbar(sc, ax=ax1, pad=0.03, fraction=0.046)
+        cbar.set_label("VCLAY (v/v)", fontsize=8.5, fontweight="bold")
 
         phi_grid = np.logspace(np.log10(0.02), np.log10(0.45), 60)
         for sw_iso, col, ls in [
@@ -1017,12 +1154,13 @@ def generate_pickett_plot(
         ax1.set_ylim(0.02, 0.50)
         ax1.set_xlabel("True Resistivity Rt (Ω·m)", fontsize=9, fontweight="bold")
         ax1.set_ylabel("Porosity Φ (v/v)", fontsize=9, fontweight="bold")
+        tz_title = f" — {', '.join(target_zones)}" if target_zones else ""
         ax1.set_title(
-            f"Pickett Plot (Rw={rw:.3f} Ω·m, a={a}, m={m}, n={n})",
-            fontsize=9.5,
+            f"Pickett Plot{tz_title} (Rw={rw:.3f} Ω·m, a={a}, m={m}, n={n})",
+            fontsize=9.0,
             fontweight="bold",
         )
-        ax1.legend(loc="lower left", fontsize=8)
+        ax1.legend(loc="lower left", fontsize=7.5)
         ax1.grid(True, which="both", linestyle=":", alpha=0.5)
     else:
         ax1.text(
@@ -1035,6 +1173,7 @@ def generate_pickett_plot(
 
     # Panel 2: Water Saturation vs Depth & Free Water Level (FWL)
     depth = _get_numeric_series(sub, "TVDSS", "TVD", "DEPTH")
+    depth_label = "Depth TVDss (m)" if "TVDSS" in sub.columns else ("Depth TVD (m)" if "TVD" in sub.columns else "Depth (m)")
     swt = _get_numeric_series(sub, "SWT", "SW")
     shf = _get_numeric_series(sub, "SHF")
     if (depth.notna() & swt.notna()).any():
@@ -1058,23 +1197,24 @@ def generate_pickett_plot(
                 shf_arr, sd_arr, color="#dc2626", s=8, alpha=0.45, label="Capillary SHF"
             )
         if fwl is not None and np.isfinite(fwl):
+            fwl_basis_label = f" [{fwl_basis}]" if fwl_basis else ""
             ax2.axhline(
                 float(fwl),
                 color="#0f172a",
                 linestyle="--",
                 lw=1.5,
-                label=f"FWL ({float(fwl):.1f} m)",
+                label=f"FWL: {float(fwl):.1f} m{fwl_basis_label}",
             )
         ax2.invert_yaxis()
         ax2.set_xlim(0.0, 1.05)
         ax2.set_xlabel("Water Saturation Sw (v/v)", fontsize=9, fontweight="bold")
-        ax2.set_ylabel("Depth (m)", fontsize=9, fontweight="bold")
+        ax2.set_ylabel(depth_label, fontsize=9, fontweight="bold")
         ax2.set_title(
             "Water Saturation Profile & Contact Reconciliation",
-            fontsize=9.5,
+            fontsize=9.0,
             fontweight="bold",
         )
-        ax2.legend(loc="lower left", fontsize=8)
+        ax2.legend(loc="lower left", fontsize=7.5)
         ax2.grid(True, linestyle=":", alpha=0.5)
     else:
         ax2.axis("off")
@@ -1087,6 +1227,9 @@ def generate_shf_j_function_plot(
     rock_types: Optional[List[Dict[str, Any]]] = None,
     fwl: Optional[float] = None,
     is_analogue_scal: bool = True,
+    scal_params: Optional[Dict[str, Any]] = None,
+    shf_params: Optional[Dict[str, Any]] = None,
+    target_zones: Optional[Sequence[str]] = None,
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
 ) -> str:
@@ -1098,14 +1241,24 @@ def generate_shf_j_function_plot(
         fwl (Optional[float]): Optional Free Water Level depth (`m`).
         is_analogue_scal (bool): Whether the SCAL curves represent analogue defaults vs. measured project SCAL.
             Defaults to True.
+        scal_params (Optional[Dict[str, Any]]): Project SCAL parameters (Corey/LET exponents, Swirr, Sor, etc.).
+        shf_params (Optional[Dict[str, Any]]): Project SHF parameters (IFT, contact angle, fluid densities).
+        target_zones (Optional[Sequence[str]]): Optional target reservoir zone names.
         output_dir (Optional[Union[str, Path]]): Directory where the rendered PNG will be written.
         url_prefix (Optional[str]): Optional URL prefix to prepend to the returned filename.
 
     Returns:
         str: File path or URL to the generated `fig_7_1_shf_scal_plot.png`.
     """
-    fig = Figure(figsize=(10.5, 4.4))
-    gs = GridSpec(1, 2, figure=fig, wspace=0.28)
+    sub = df
+    if target_zones and "ZONES" in df.columns and df["ZONES"].notna().any():
+        tz_set = {str(z).strip().upper() for z in target_zones if z}
+        tz_df = df[df["ZONES"].astype(str).str.strip().str.upper().isin(tz_set)]
+        if not tz_df.empty:
+            sub = tz_df
+
+    fig = Figure(figsize=(11.2, 4.5))
+    gs = GridSpec(1, 2, figure=fig, width_ratios=[1.05, 1.0], wspace=0.30)
     ax1 = fig.add_subplot(gs[0, 0])
     ax2 = fig.add_subplot(gs[0, 1])
 
@@ -1117,14 +1270,73 @@ def generate_shf_j_function_plot(
         ("RT3 (Macro-Porous)", 0.22, -0.50, PALETTE[2]),
         ("RT4 (Mega-Porous Sand)", 0.12, -0.60, PALETTE[3]),
     ]
+    if rock_types and len(rock_types) >= 2:
+        new_fits = []
+        for i, rt in enumerate(rock_types):
+            r_name = rt.get("name", f"RT{i+1}")
+            # Use specific J-fit coefficients if present
+            a_p = float(rt.get("j_a", rt_fits[i % len(rt_fits)][1]))
+            b_p = float(rt.get("j_b", rt_fits[i % len(rt_fits)][2]))
+            new_fits.append((r_name.split("—")[0].strip(), a_p, b_p, PALETTE[i % len(PALETTE)]))
+        if new_fits:
+            rt_fits = new_fits
+
+    # Plot actual project data points if Sw, Phi, Perm, and Depth exist
+    sw_s = _get_numeric_series(sub, "SWT", "SW")
+    phi_s = _get_numeric_series(sub, "CPORE", "PHIE", "PHIT")
+    phi_s = pd.Series(np.where(phi_s > 1.0, phi_s / 100.0, phi_s), index=sub.index)
+    k_s = _get_numeric_series(sub, "CPERM", "PERM")
+    d_s = _get_numeric_series(sub, "TVDSS", "TVD", "DEPTH")
+
+    shf_dict = shf_params or {}
+    ift_val = float(shf_dict.get("ift", 30.0))
+    theta_val = float(shf_dict.get("theta", 30.0))
+    gw_val = float(shf_dict.get("gw", 1.05))
+    ghc_val = float(shf_dict.get("ghc", 0.80))
+    d_rho = max(gw_val - ghc_val, 0.05)
+    sigma_cos = max(abs(ift_val * math.cos(math.radians(theta_val))), 1.0)
+
+    if fwl is not None and (sw_s.notna() & phi_s.notna() & k_s.notna() & d_s.notna()).any():
+        v_mask = (
+            sw_s.notna()
+            & (sw_s > 0.02)
+            & (sw_s <= 1.0)
+            & phi_s.notna()
+            & (phi_s > 0.02)
+            & k_s.notna()
+            & (k_s > 1e-3)
+            & d_s.notna()
+        )
+        if v_mask.sum() >= 10:
+            sw_pts = sw_s[v_mask].to_numpy(dtype=float)
+            phi_pts = phi_s[v_mask].to_numpy(dtype=float)
+            k_pts = k_s[v_mask].to_numpy(dtype=float)
+            depth_pts = d_s[v_mask].to_numpy(dtype=float)
+            h_pts = np.maximum(float(fwl) - depth_pts, 0.2)
+            pc_psi = 0.433 * d_rho * h_pts * 3.28084
+            j_pts = 0.21645 * (pc_psi / sigma_cos) * np.sqrt(k_pts / phi_pts)
+            valid_j = (j_pts > 0.01) & (j_pts < 12.0)
+            if valid_j.sum() >= 5:
+                sub_n = min(valid_j.sum(), 400)
+                idx_j = np.linspace(0, valid_j.sum() - 1, sub_n, dtype=int)
+                ax1.scatter(
+                    sw_pts[valid_j][idx_j],
+                    j_pts[valid_j][idx_j],
+                    color="#94a3b8",
+                    s=11,
+                    alpha=0.45,
+                    edgecolors="none",
+                    label=f"Measured Log/Plug J(Sw) (n={sub_n})",
+                )
+
     for label, a_param, b_param, col in rt_fits:
-        sw_j = np.clip(a_param * (j_grid**b_param), 0.08, 1.0)
+        sw_j = np.clip(a_param * (j_grid**b_param), 0.05, 1.0)
         ax1.plot(
             sw_j,
             j_grid,
             color=col,
             lw=2.0,
-            label=f"{label}: Sw={a_param}·J^({b_param})",
+            label=f"{label}: Sw={a_param:.2f}·J^({b_param:.2f})",
         )
 
     ax1.set_xlim(0.0, 1.0)
@@ -1133,43 +1345,66 @@ def generate_shf_j_function_plot(
     ax1.set_ylabel(
         "Leverett J-Function J(Sw) [dimensionless]", fontsize=9, fontweight="bold"
     )
+    tz_title = f" — {', '.join(target_zones)}" if target_zones else ""
     ax1.set_title(
-        "Capillary Pressure Leverett J-Function by Rock Type",
-        fontsize=9.5,
+        f"Capillary Pressure Leverett J-Function{tz_title}",
+        fontsize=9.0,
         fontweight="bold",
     )
-    ax1.legend(loc="upper right", fontsize=7.5)
+    ax1.legend(loc="upper right", fontsize=7.0)
     ax1.grid(True, linestyle=":", alpha=0.5)
 
-    # Panel 2: Corey / LET Water-Oil Relative Permeability Curves
-    sw = np.linspace(0.15, 0.80, 80)
-    se = (sw - 0.15) / (1.0 - 0.15 - 0.20)
-    krw = 0.45 * (np.clip(se, 0.0, 1.0) ** 2.5)
-    kro = 0.90 * (np.clip(1.0 - se, 0.0, 1.0) ** 2.5)
+    # Panel 2: Project SCAL Water-Oil Relative Permeability Curves (Corey or LET)
+    scal = scal_params or {}
+    model_type = str(scal.get("model", "corey")).lower()
+    swirr = float(scal.get("swirr", 0.15))
+    sor = float(scal.get("sor", 0.20))
+    krw0 = float(scal.get("krw_max", 0.45))
+    kro0 = float(scal.get("kro_max", 0.90))
+    nw = float(scal.get("nw", 2.5))
+    no = float(scal.get("no", 2.5))
 
-    ax2.plot(
-        sw, krw, color="#2563eb", lw=2.2, label="Water RelPerm Krw (Nw=2.5, Krw0=0.45)"
-    )
-    ax2.plot(
-        sw, kro, color="#059669", lw=2.2, label="Oil RelPerm Kro (No=2.5, Kro0=0.90)"
-    )
-    ax2.axvline(0.15, color="#64748b", linestyle=":", lw=1.1, label="Swc = 0.15")
-    ax2.axvline(0.80, color="#dc2626", linestyle=":", lw=1.1, label="1 - Sor = 0.80")
+    sw = np.linspace(swirr, max(1.0 - sor, swirr + 0.05), 100)
+    denom_se = max(1.0 - swirr - sor, 0.01)
+    se = np.clip((sw - swirr) / denom_se, 0.0, 1.0)
+
+    if model_type == "let":
+        lw = float(scal.get("lw", 2.0))
+        ew = float(scal.get("ew", 1.5))
+        tw = float(scal.get("tw", 2.0))
+        lo = float(scal.get("lo", 2.0))
+        eo = float(scal.get("eo", 1.5))
+        to = float(scal.get("to", 2.0))
+        krw = krw0 * (lw * (se**ew)) / np.maximum(lw * (se**ew) + tw * ((1.0 - se) ** ew), 1e-9)
+        kro = kro0 * (lo * ((1.0 - se) ** eo)) / np.maximum(lo * ((1.0 - se) ** eo) + to * (se**eo), 1e-9)
+        krw_label = f"Krw LET (L={lw:.1f}, E={ew:.1f}, T={tw:.1f})"
+        kro_label = f"Kro LET (L={lo:.1f}, E={eo:.1f}, T={to:.1f})"
+    else:
+        krw = krw0 * (se**nw)
+        kro = kro0 * ((1.0 - se) ** no)
+        krw_label = f"Krw Corey (Nw={nw:.1f}, Krw0={krw0:.2f})"
+        kro_label = f"Kro Corey (No={no:.1f}, Kro0={kro0:.2f})"
+
+    ax2.plot(sw, krw, color="#2563eb", lw=2.2, label=krw_label)
+    ax2.plot(sw, kro, color="#059669", lw=2.2, label=kro_label)
+    ax2.axvline(swirr, color="#64748b", linestyle=":", lw=1.1, label=f"Swirr = {swirr:.2f}")
+    ax2.axvline(1.0 - sor, color="#dc2626", linestyle=":", lw=1.1, label=f"1 - Sor = {1.0 - sor:.2f}")
     ax2.set_xlim(0.0, 1.0)
     ax2.set_ylim(0.0, 1.0)
     ax2.set_xlabel("Water Saturation Sw (v/v)", fontsize=9, fontweight="bold")
     ax2.set_ylabel("Relative Permeability Kr (fraction)", fontsize=9, fontweight="bold")
-    scal_title = (
+
+    scal_source = scal.get("source_label") or (
         "Analogue / Default Corey SCAL RelPerm"
         if is_analogue_scal
-        else "Measured Project SCAL Water-Oil Relative Permeability"
+        else f"Measured Project SCAL {model_type.upper()} RelPerm"
     )
     ax2.set_title(
-        scal_title,
-        fontsize=9.0,
+        scal_source,
+        fontsize=8.5,
         fontweight="bold",
     )
-    ax2.legend(loc="center right", fontsize=7.5)
+    ax2.legend(loc="center right", fontsize=7.2)
     ax2.grid(True, linestyle=":", alpha=0.5)
 
     return _save_fig(fig, "fig_7_1_shf_scal_plot.png", output_dir, url_prefix)
@@ -1542,7 +1777,7 @@ def generate_well_cpi_plot(
     Returns:
         str: File path or URL to the generated `cpi_<well_name>.png`.
     """
-    sub_well = _trim_to_logged_interval(_ensure_df_well_filter(df, [well_name]))
+    sub_well = _ensure_df_well_filter(df, [well_name])
     safe_well = "".join(
         c if c.isalnum() or c in ("-", "_") else "_" for c in str(well_name)
     )
@@ -1562,12 +1797,25 @@ def generate_well_cpi_plot(
         axes[0].text(0.5, 0.5, f"No log data for {well_name}", ha="center", va="center")
         return _save_fig(fig, filename, output_dir, url_prefix)
 
+    # Ensure strictly sorted monotonic depth index to prevent any zig-zag line rendering
+    sub_well = (
+        sub_well.dropna(subset=["DEPTH"])
+        .sort_values(by="DEPTH")
+        .reset_index(drop=True)
+    )
+    sub_well = _trim_to_logged_interval(sub_well)
+
     # Auto-zoom to target reservoir window (CHK-06: vertical span <= 500 m)
     d_min, d_max = _resolve_target_depth_window(sub_well, target_zones=zones, max_span=480.0)
     d_col = pd.to_numeric(sub_well["DEPTH"], errors="coerce")
     sub_full = sub_well[(d_col >= d_min) & (d_col <= d_max)].copy()
     if sub_full.empty:
         sub_full = sub_well.copy()
+    sub_full = (
+        sub_full.dropna(subset=["DEPTH"])
+        .sort_values(by="DEPTH")
+        .reset_index(drop=True)
+    )
     d_full = pd.to_numeric(sub_full["DEPTH"], errors="coerce").to_numpy(dtype=float)
 
     cut = cutoffs or {"vsh": 0.40, "phie": 0.08, "sw": 0.65}

@@ -1264,12 +1264,41 @@ def build_report_context(
                     break
 
     # Spec 2.2: Dynamic Rock Typing & Permeability Regression via `scipy.stats.linregress`
-    rt_Specs = [
-        (1, "RT1 — Nano/Micro-Porous Argillaceous", "DRT 1 (FZI < 0.5)", "< 0.50", 12.4, -1.85, 0.79),
-        (2, "RT2 — Meso-Porous Lower Shoreface", "DRT 2 (0.5–1.5)", "0.50 – 1.50", 14.2, -1.35, 0.85),
-        (3, "RT3 — Macro-Porous Upper Shoreface", "DRT 3 (1.5–3.0)", "1.50 – 3.00", 15.6, -0.92, 0.89),
-        (4, "RT4 — Mega-Porous Clean Channel Sand", "DRT 4 (FZI ≥ 3.0)", "≥ 3.00", 16.8, -0.45, 0.92),
-    ]
+    cfg_fzi_cutoffs = (
+        (model_params.get("fzi_cutoffs") or model_params.get("fziCutoffs"))
+        if isinstance(model_params, dict)
+        else None
+    ) or merged_configs.get("fzi_cutoffs") or merged_configs.get("fziCutoffs")
+    if cfg_fzi_cutoffs and isinstance(cfg_fzi_cutoffs, (list, tuple)):
+        resolved_fzi_cutoffs = sorted([float(c) for c in cfg_fzi_cutoffs if float(c) > 0])
+    else:
+        resolved_fzi_cutoffs = [0.5, 1.5, 3.0]
+
+    rt_Specs = []
+    n_cuts = len(resolved_fzi_cutoffs)
+    for i in range(n_cuts + 1):
+        idx = i + 1
+        if i == 0:
+            c_high = resolved_fzi_cutoffs[0]
+            name = "RT1 — Nano/Micro-Porous Argillaceous"
+            code = f"DRT 1 (FZI < {c_high:.2f})"
+            fzi_str = f"< {c_high:.2f}"
+            def_m, def_c, def_r2 = 12.4, -1.85, 0.79
+        elif i == n_cuts:
+            c_low = resolved_fzi_cutoffs[-1]
+            name = f"RT{idx} — Mega-Porous Clean Channel Sand"
+            code = f"DRT {idx} (FZI ≥ {c_low:.2f})"
+            fzi_str = f"≥ {c_low:.2f}"
+            def_m, def_c, def_r2 = 16.8, -0.45, 0.92
+        else:
+            c_low = resolved_fzi_cutoffs[i - 1]
+            c_high = resolved_fzi_cutoffs[i]
+            name = f"RT{idx} — Meso/Macro-Porous Shoreface"
+            code = f"DRT {idx} ({c_low:.2f}–{c_high:.2f})"
+            fzi_str = f"{c_low:.2f} – {c_high:.2f}"
+            def_m, def_c, def_r2 = 14.2 + (i - 1) * 1.4, -1.35 + (i - 1) * 0.43, 0.85
+        rt_Specs.append((idx, name, code, fzi_str, def_m, def_c, def_r2))
+
     rock_types: List[Dict[str, Any]] = []
     rt34_share_pct = 43.5
     rt34_kh_pct = 82.0
@@ -1319,7 +1348,7 @@ def build_report_context(
             rqi = 0.0314 * np.sqrt(k_arr / np.clip(p_arr, 1e-4, 0.99))
             phiz = p_arr / np.clip(1.0 - p_arr, 1e-4, 1.0)
             fzi = rqi / np.clip(phiz, 1e-4, 100.0)
-            rt_bins = np.digitize(fzi, bins=[0.5, 1.5, 3.0]) + 1
+            rt_bins = np.digitize(fzi, bins=resolved_fzi_cutoffs) + 1
             total_n = max(len(p_arr), 1)
             total_kh = max(float(np.sum(k_arr)), 1e-9)
 
@@ -1422,6 +1451,7 @@ def build_report_context(
             inferred_fwl_tvdss = round(median_target_tvdss + 15.0, 1)
 
     explicit_fwl = fwl_tvdss if fwl_tvdss is not None else merged_configs.get("fwl")
+    fwl_basis_str = "Target-Zone Hydrocarbon-Water Transition Zone (TVDss)"
     if explicit_fwl is not None:
         cand_fwl = _safe_float(explicit_fwl, inferred_fwl_tvdss)
         if abs(cand_fwl - median_target_tvdss) > 300.0:
@@ -1434,10 +1464,13 @@ def build_report_context(
                 }
             )
             fwl_val = inferred_fwl_tvdss
+            fwl_basis_str = "Overridden to Target-Zone Transition Zone (TVDss)"
         else:
             fwl_val = round(cand_fwl, 1)
+            fwl_basis_str = "Configured / Project Parameters (TVDss)"
     else:
         fwl_val = inferred_fwl_tvdss
+        fwl_basis_str = "Inferred from Hydrocarbon-Water Transition Zone (TVDss)"
 
     # Spec 3.2, CHK-04, CHK-05: True Probabilistic Monte Carlo / Latin Hypercube Uncertainty Engine (N=1000)
     uncertainty_summary: List[Dict[str, Any]] = []
@@ -1737,6 +1770,12 @@ def build_report_context(
         "hi_hc": _safe_float(merged_configs.get("hi_hc"), 0.90),
         "norm_method": "Stratigraphic Zonal P10–P90 Quantile Alignment",
     }
+    dry_sand_pt = merged_configs.get("dry_sand_point") or (-0.02, 2.65)
+    dry_clay_pt = merged_configs.get("dry_clay_point") or (round(nphi_clay_cfg, 2), round(rho_clay_cfg, 2))
+    dry_silt_pt = merged_configs.get("dry_silt_point")
+    silt_angle_cfg = _safe_float(merged_configs.get("silt_line_angle"), 119.0)
+    fluid_pt = merged_configs.get("fluid_point") or (1.0, 1.0)
+
     litho_params = {
         "model_key": resolved_litho_key,
         "model_name": litho_model_display,
@@ -1744,6 +1783,11 @@ def build_report_context(
         "nphi_clay": round(nphi_clay_cfg, 2),
         "gr_clean": round(gr_clean_cfg, 1),
         "gr_shale": round(gr_clay_cfg, 1),
+        "dry_sand_point": dry_sand_pt,
+        "dry_clay_point": dry_clay_pt,
+        "dry_silt_point": dry_silt_pt,
+        "silt_line_angle": silt_angle_cfg,
+        "fluid_point": fluid_pt,
     }
     scal_cfg = (
         merged_configs.get("scal_params")
@@ -1887,7 +1931,7 @@ def build_report_context(
         "model_key": raw_sw_key,
         "model_name": sw_model_display,
         "fwl": fwl_val,
-        "fwl_basis": "Target-Zone Hydrocarbon-Water Transition Zone (TVDss)",
+        "fwl_basis": fwl_basis_str,
         "median_target_tvdss": median_target_tvdss,
         "salinity": int(_safe_float(merged_configs.get("water_salinity"), 35000.0)),
         "rw": round(_safe_float(merged_configs.get("rw_val"), 0.080), 3),
@@ -2104,6 +2148,7 @@ def build_report_context(
         "litho_params": litho_params,
         "poro_params": poro_params,
         "rock_types": rock_types,
+        "fzi_cutoffs": resolved_fzi_cutoffs,
         "rt_summary": {
             "basis": rt_basis_source,
             "rt34_share_pct": rt34_share_pct,
@@ -2757,12 +2802,19 @@ def _generate_all_report_plots(
         assets["norm_plot"] = report_plots.generate_qaqc_norm_plot(
             full_df, well_names, output_dir=out_dir, url_prefix=url_prefix
         )
+    litho_p = context.get("litho_params", {})
     if "04_lithology_porosity" in enabled_section_ids:
         assets["litho_poro_crossplot"] = report_plots.generate_nd_crossplot(
             full_df,
             well_names,
             color_by="GR",
             target_zones=target_zones,
+            litho_model=litho_p.get("model_key", "ssc"),
+            dry_sand_point=litho_p.get("dry_sand_point", (-0.02, 2.65)),
+            dry_silt_point=litho_p.get("dry_silt_point"),
+            dry_clay_point=litho_p.get("dry_clay_point", (0.33, 2.70)),
+            fluid_point=litho_p.get("fluid_point", (1.0, 1.0)),
+            silt_line_angle=_safe_float(litho_p.get("silt_line_angle"), 119.0),
             output_dir=out_dir,
             url_prefix=url_prefix,
         )
@@ -2771,6 +2823,8 @@ def _generate_all_report_plots(
             full_df,
             well_names,
             rock_types=context.get("rock_types"),
+            fzi_cutoffs=context.get("fzi_cutoffs"),
+            target_zones=target_zones,
             output_dir=out_dir,
             url_prefix=url_prefix,
         )
@@ -2783,6 +2837,8 @@ def _generate_all_report_plots(
             m=_safe_float(sw_p.get("m"), 2.0),
             n=_safe_float(sw_p.get("n"), 2.0),
             fwl=_safe_float(sw_p.get("fwl"), 2500.0),
+            fwl_basis=sw_p.get("fwl_basis"),
+            target_zones=target_zones,
             output_dir=out_dir,
             url_prefix=url_prefix,
         )
@@ -2792,6 +2848,9 @@ def _generate_all_report_plots(
             rock_types=context.get("rock_types"),
             fwl=_safe_float(sw_p.get("fwl"), 2500.0),
             is_analogue_scal=is_analogue_scal,
+            scal_params=scal_p,
+            shf_params=context.get("shf_params", {}),
+            target_zones=target_zones,
             output_dir=out_dir,
             url_prefix=url_prefix,
         )
@@ -2816,7 +2875,20 @@ def _generate_all_report_plots(
         )
     if "10_appendix_cpi" in enabled_section_ids:
         cpi_list = []
-        for wn in well_names[:4]:
+        cpi_candidate_wells = []
+        if not full_df.empty and "WELL_NAME" in full_df.columns:
+            for wn in well_names:
+                w_sub = full_df[full_df["WELL_NAME"].astype(str) == str(wn)]
+                if not w_sub.empty:
+                    has_eval = False
+                    for c_col in ("PHIT", "PHIE", "VCLAY", "SWT", "PERM"):
+                        if c_col in w_sub.columns and w_sub[c_col].notna().any():
+                            has_eval = True
+                            break
+                    if has_eval:
+                        cpi_candidate_wells.append(wn)
+
+        for wn in cpi_candidate_wells[:4]:
             cpi_url = report_plots.generate_well_cpi_plot(
                 full_df,
                 wn,
@@ -2825,7 +2897,8 @@ def _generate_all_report_plots(
                 output_dir=out_dir,
                 url_prefix=url_prefix,
             )
-            cpi_list.append({"well_name": wn, "url": cpi_url})
+            if cpi_url:
+                cpi_list.append({"well_name": wn, "plot_url": cpi_url, "url": cpi_url})
         assets["cpi_plots"] = cpi_list
 
     return assets

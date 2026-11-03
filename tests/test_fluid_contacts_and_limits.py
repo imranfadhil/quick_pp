@@ -366,3 +366,62 @@ def test_extract_fluid_contacts_no_sand_and_no_pay_skips_zone():
     assert "WDT" not in balm_types
 
 
+def test_clean_slate_for_zone_under_purview():
+    """Verify that identifying and saving new contacts starts a clean slate for the zones
+    under purview, clearing old obsolete/stale contacts for that zone without altering other zones."""
+    db_conn = DBConnector(db_url="sqlite:///:memory:")
+    db_conn.setup_db()
+    with db_conn.get_session() as session:
+        proj = db_objects.Project(session, name="CleanSlateProj")
+        proj.save()
+        well = db_objects.Well(session, project_id=proj.project_id, name="Well-CS", uwi="CS-01")
+        well.save()
+
+        # Step 1: Initial state has contacts across 3 zones:
+        # - 'Balmoral Sandstone': OUT, ODT, and an old obsolete WUT
+        # - 'Forties': OUT, ODT (unrelated zone)
+        # - 'Sele': a bogus WUT
+        initial_contacts = [
+            {"zone": "Balmoral Sandstone", "contact_type": "OUT", "depth": 2830.0},
+            {"zone": "Balmoral Sandstone", "contact_type": "ODT", "depth": 2840.0},
+            {"zone": "Balmoral Sandstone", "contact_type": "WUT", "depth": 2820.0},  # Old shallow WUT
+            {"zone": "Forties", "contact_type": "OUT", "depth": 2500.0},
+            {"zone": "Forties", "contact_type": "ODT", "depth": 2550.0},
+            {"zone": "Sele", "contact_type": "WUT", "depth": 2740.0},  # Bogus shale contact
+        ]
+        well.add_fluid_contacts(initial_contacts, replace=True)
+        assert len(well.get_fluid_contacts()) == 6
+
+        # Step 2: Re-evaluating Balmoral Sandstone with fresh consistent contacts:
+        # [OUT at 2833.0, ODT at 2839.0, FWL at 2895.0] (notice: NO WUT, and new OUT/ODT depths)
+        fresh_balm_contacts = [
+            {"zone": "Balmoral Sandstone", "contact_type": "OUT", "depth": 2833.0},
+            {"zone": "Balmoral Sandstone", "contact_type": "ODT", "depth": 2839.0},
+            {"zone": "Balmoral Sandstone", "contact_type": "FWL", "depth": 2895.0},
+        ]
+        well.add_fluid_contacts(fresh_balm_contacts)
+
+        df_after_balm = well.get_fluid_contacts()
+        balm_df = df_after_balm[df_after_balm["zone"] == "Balmoral Sandstone"]
+
+        # Balmoral Sandstone MUST have only the 3 new contacts.
+        # The old obsolete WUT (2820.0) and old OUT/ODT must be completely gone!
+        assert len(balm_df) == 3
+        assert set(balm_df["contact_type"]) == {"OUT", "ODT", "FWL"}
+        assert set(balm_df["depth"]) == {2833.0, 2839.0, 2895.0}
+
+        # Forties and Sele must still be intact at this point
+        assert len(df_after_balm[df_after_balm["zone"] == "Forties"]) == 2
+        assert len(df_after_balm[df_after_balm["zone"] == "Sele"]) == 1
+
+        # Step 3: Cleaning the slate for Sele (which is under purview and determined to have no sand/pay)
+        deleted = well.delete_fluid_contacts(zones=["Sele"])
+        assert deleted == 1
+
+        df_final = well.get_fluid_contacts()
+        assert len(df_final[df_final["zone"] == "Sele"]) == 0
+        assert len(df_final[df_final["zone"] == "Forties"]) == 2
+        assert len(df_final[df_final["zone"] == "Balmoral Sandstone"]) == 3
+
+
+

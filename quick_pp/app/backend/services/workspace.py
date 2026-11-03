@@ -9093,6 +9093,7 @@ class WorkspaceExtractContactsRequest(BaseModel):
     zones: Optional[List[str]] = Field(None, description="Subset of zones")
     save: bool = Field(True, description="Save extracted contacts into each well's ancillary data table")
     replace: bool = Field(False, description="Replace existing contacts for target wells")
+    clean_slate: bool = Field(True, description="Clean slate: delete existing contacts for the zones under purview before inserting new ones")
     sw_pay_cutoff: float = Field(0.65, description="Max Sw for hydrocarbon pay")
     sw_water_cutoff: float = Field(0.90, description="Min Sw for 100% water leg")
     phit_cutoff: float = Field(0.05, description="Min porosity for reservoir rock")
@@ -9131,16 +9132,34 @@ def workspace_extract_and_save_contacts(
         )
 
         saved_count = 0
-        if req.save and not contacts_df.empty:
+        if req.save:
             with get_db() as session:
                 proj = db_objects.Project.load(session, project_id=project_id)
-                for wn, grp in contacts_df.groupby("well_name"):
-                    try:
-                        w = proj.get_well(str(wn))
-                        w.add_fluid_contacts(grp.to_dict(orient="records"), replace=req.replace)
-                        saved_count += len(grp)
-                    except Exception:
-                        continue
+                zones_purview = [str(z).strip() for z in req.zones if str(z).strip()] if req.zones else None
+
+                # Clean slate for target wells in the zones under purview
+                if req.clean_slate or req.replace:
+                    for wn in target_wells:
+                        try:
+                            w = proj.get_well(str(wn))
+                            if req.replace or not zones_purview:
+                                w.delete_fluid_contacts()
+                            else:
+                                w.delete_fluid_contacts(zones=zones_purview)
+                        except Exception:
+                            continue
+
+                if not contacts_df.empty:
+                    for wn, grp in contacts_df.groupby("well_name"):
+                        try:
+                            w = proj.get_well(str(wn))
+                            w.add_fluid_contacts(
+                                grp.to_dict(orient="records"),
+                                replace=False,
+                            )
+                            saved_count += len(grp)
+                        except Exception:
+                            continue
 
         records = dataframe_to_records(contacts_df)
         return {

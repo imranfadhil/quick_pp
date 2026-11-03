@@ -325,6 +325,7 @@
 					well_names: projectData.wellsWithTvd.map((w) => w.name),
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
 					save: true,
+					clean_slate: true,
 					replace: false
 				}
 			);

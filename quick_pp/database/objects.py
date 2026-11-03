@@ -2193,10 +2193,41 @@ class Well(object):
         logger.debug(f"Retrieved {len(df)} formation tops for well '{self.name}'.")
         return df
 
+    def delete_fluid_contacts(self, zones: Optional[List[str]] = None) -> int:
+        """Deletes fluid contacts for the well, optionally filtered by zone(s).
+
+        Args:
+            zones (Optional[List[str]]): If provided, only deletes contacts belonging to these zones.
+                                         If None, deletes all fluid contacts for this well.
+
+        Returns:
+            int: Number of deleted contact records.
+        """
+        query = self.db_session.query(ORMFluidContact).filter_by(well_id=self.well_id)
+        if zones is not None:
+            clean_z = [str(z).strip() for z in zones if str(z).strip()]
+            if clean_z:
+                query = query.filter(ORMFluidContact.zone.in_(clean_z))
+        deleted_count = query.delete(synchronize_session="fetch")
+        self.db_session.flush()
+        try:
+            self.db_session.expire(self._orm_well, ["fluid_contacts"])
+        except Exception:
+            pass
+        logger.info(
+            f"Deleted {deleted_count} fluid contacts for well '{self.name}' (zones={zones})."
+        )
+        return deleted_count
+
     def add_fluid_contacts(
-        self, contacts: List[Dict[str, Any]], replace: bool = False
+        self,
+        contacts: List[Dict[str, Any]],
+        replace: bool = False,
+        clean_zones: Optional[List[str]] = None,
     ):
         """Adds or updates a list of fluid contacts for the well.
+
+        Provides a clean slate for the zones under purview to maintain consistency.
 
         Args:
             contacts (List[Dict[str, Any]]): A list of dictionaries, where each
@@ -2204,9 +2235,12 @@ class Well(object):
                                               'name' or 'contact_type', and 'depth'.
                                               Optional keys: 'zone', 'fault_block', 'source', 'remarks'.
             replace (bool): If True, deletes all existing fluid contacts for this well before inserting.
+            clean_zones (Optional[List[str]]): Specific zones under purview to clear before inserting.
+                                               If None and replace=False, defaults to cleaning all zones
+                                               present in the incoming contacts payload.
         """
         logger.info(
-            f"Adding/updating {len(contacts)} fluid contacts for well '{self.name}' (replace={replace})."
+            f"Adding/updating {len(contacts)} fluid contacts for well '{self.name}' (replace={replace}, clean_zones={clean_zones})."
         )
         parsed_contacts: Dict[str, Dict[str, Any]] = {}
         for contact_data in contacts or []:
@@ -2260,19 +2294,31 @@ class Well(object):
                 "remarks": remarks,
             }
 
-        if not parsed_contacts and not replace:
-            return
-
+        # 1. Clean slate execution:
         if replace:
-            self.db_session.query(ORMFluidContact).filter_by(
-                well_id=self.well_id
-            ).delete(synchronize_session="fetch")
+            self.delete_fluid_contacts()
+        elif clean_zones is not None:
+            self.delete_fluid_contacts(zones=clean_zones)
         else:
-            self.db_session.query(ORMFluidContact).filter(
-                ORMFluidContact.well_id == self.well_id,
-                ORMFluidContact.name.in_(list(parsed_contacts.keys())),
-            ).delete(synchronize_session="fetch")
-        self.db_session.flush()
+            # Default clean-slate behavior: wipe existing contacts for the zones present in this payload
+            zones_to_clean = set(
+                item["zone"] for item in parsed_contacts.values() if item.get("zone")
+            )
+            if zones_to_clean:
+                self.delete_fluid_contacts(zones=list(zones_to_clean))
+            # Also clean matching names for any unassigned general contacts (zone is None)
+            unassigned_names = [
+                name for name, item in parsed_contacts.items() if not item.get("zone")
+            ]
+            if unassigned_names:
+                self.db_session.query(ORMFluidContact).filter(
+                    ORMFluidContact.well_id == self.well_id,
+                    ORMFluidContact.name.in_(unassigned_names),
+                ).delete(synchronize_session="fetch")
+                self.db_session.flush()
+
+        if not parsed_contacts:
+            return
 
         for c_name, item in parsed_contacts.items():
             orm_contact = ORMFluidContact(
@@ -2287,9 +2333,17 @@ class Well(object):
             )
             self.db_session.add(orm_contact)
         self.db_session.flush()
+        try:
+            self.db_session.expire(self._orm_well, ["fluid_contacts"])
+        except Exception:
+            pass
 
     def get_fluid_contacts(self) -> pd.DataFrame:
         """Retrieves all fluid contacts for the well as a DataFrame."""
+        try:
+            self.db_session.expire(self._orm_well, ["fluid_contacts"])
+        except Exception:
+            pass
         contacts = self._orm_well.fluid_contacts
         cols = ["name", "depth", "zone", "contact_type", "fault_block", "source", "remarks"]
         if not contacts:
