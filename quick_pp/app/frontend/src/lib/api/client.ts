@@ -323,6 +323,18 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 			done: 'Rock Type classifier saved'
 		};
 	}
+	if (path.includes('/module_params') && m === 'DELETE') {
+		return {
+			active: 'Resetting saved module parameters...',
+			done: 'Saved module parameters reset'
+		};
+	}
+	if (path.includes('/fluid_contacts') && m === 'DELETE') {
+		return {
+			active: 'Deleting fluid contacts...',
+			done: 'Fluid contacts deleted'
+		};
+	}
 	if (path.includes('/rock_typing/models/') && m === 'DELETE') {
 		return {
 			active: 'Deleting saved Rock Type classifier...',
@@ -692,6 +704,58 @@ export const apiGet = getJson;
 export const apiPost = postJson;
 export const apiPatch = patchJson;
 export const apiDelete = deleteJson;
+
+/**
+ * Delete saved single-well module parameters (optionally for a specific module and/or selection key).
+ */
+export async function deleteWellModuleParams(
+	projectId: string | number,
+	wellName: string,
+	module?: string,
+	key?: string
+): Promise<{ well_name: string; module_params: Record<string, any>; deleted: boolean }> {
+	const params = new URLSearchParams();
+	if (module) params.set('module', module);
+	if (key) params.set('key', key);
+	const qs = params.toString();
+	return deleteJson(
+		`/quick_pp/workspace/projects/${encodeURIComponent(String(projectId))}/wells/${encodeURIComponent(wellName)}/module_params${qs ? `?${qs}` : ''}`
+	);
+}
+
+/**
+ * Delete saved project-level (multi-well) module parameters (optionally for a specific module and/or zone key).
+ */
+export async function deleteProjectModuleParams(
+	projectId: string | number,
+	module?: string,
+	key?: string
+): Promise<{ project_id: number; module_params: Record<string, any>; deleted: boolean }> {
+	const params = new URLSearchParams();
+	if (module) params.set('module', module);
+	if (key) params.set('key', key);
+	const qs = params.toString();
+	return deleteJson(
+		`/quick_pp/workspace/projects/${encodeURIComponent(String(projectId))}/module_params${qs ? `?${qs}` : ''}`
+	);
+}
+
+/**
+ * Delete fluid contacts across project or for a well (optionally auto-generated only).
+ */
+export async function deleteFluidContacts(
+	projectId: string | number,
+	options?: { wellName?: string; autoOnly?: boolean; zone?: string }
+): Promise<{ deleted_count: number; wells_affected: string[]; auto_only: boolean }> {
+	const params = new URLSearchParams();
+	if (options?.wellName) params.set('well_name', options.wellName);
+	if (options?.autoOnly !== undefined) params.set('auto_only', String(options.autoOnly));
+	if (options?.zone) params.set('zone', options.zone);
+	const qs = params.toString();
+	return deleteJson(
+		`/quick_pp/workspace/projects/${encodeURIComponent(String(projectId))}/fluid_contacts${qs ? `?${qs}` : ''}`
+	);
+}
 
 /**
  * Download the complete Petrophysical Handover Package (.zip) for a project or well.

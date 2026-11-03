@@ -4,6 +4,8 @@
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
+	import { appStatus } from '$lib/state/status.svelte';
+	import { zoneSelectionLabel } from '$lib/state/projectParams.svelte';
 	import {
 		projectData,
 		type DrtCutoffMethod,
@@ -436,6 +438,8 @@
 					: undefined
 			};
 			projectData.markMultiWellComputed('rock-typing');
+			// Auto-persist cutoffs and parameters for active zone selection
+			void projectData.persistProjectParams([], ['rock-typing']);
 
 			if (workbench.wellId && Array.isArray(rt.log_well_names) && Array.isArray(rt.log_depths)) {
 				const lDepths: number[] = [];
@@ -1065,13 +1069,24 @@
 				{/each}
 			</div>
 
-			<div class="mt-1.5">
+			<div class="mt-1.5 flex items-center gap-1.5">
 				<button
 					type="button"
 					onclick={addCutoff}
-					class="h-6 w-full rounded-sm border border-dashed border-[var(--border-hairline)] bg-[var(--bg-app)] text-[10.5px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
+					class="h-6 flex-1 rounded-sm border border-dashed border-[var(--border-hairline)] bg-[var(--bg-app)] text-[10.5px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
 				>
 					{activeMeta.addLabel}
+				</button>
+				<button
+					type="button"
+					onclick={async () => {
+						await projectData.persistProjectParams([], ['rock-typing']);
+						appStatus.success(`Saved ${activeMeta.shortName} cutoffs for ${zoneSelectionLabel(workbench.selectedZones)} ✓`);
+					}}
+					class="h-6 rounded-sm border border-emerald-600 bg-emerald-50 px-2 text-[10px] font-medium text-emerald-800 hover:bg-emerald-100"
+					title="Save cutoffs and settings for the active zone selection"
+				>
+					Save Cutoffs
 				</button>
 			</div>
 

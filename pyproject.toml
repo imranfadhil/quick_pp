@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quick-pp"
-version = "0.3.3"
+version = "0.3.4"
 description = "Comprehensive Python package and web platform for deterministic and probabilistic petrophysical evaluation, SCAL & relative permeability modeling, multi-well FWL optimization, stratigraphic normalization, and geomodel log upscaling."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "MIT"
@@ -187,7 +187,13 @@ quick_pp = [
     "app/frontend/.svelte-kit",
     "app/frontend/.svelte-kit/**/*",
     "app/backend/static/reports",
-    "app/backend/static/reports/**/*"
+    "app/backend/static/reports/**/*",
+    "**/*.db",
+    "**/*.db*",
+    "**/*.sqlite",
+    "**/*.sqlite3",
+    "**/.env",
+    "**/.env.*"
 ]
 
 # Development tools configuration

@@ -220,6 +220,11 @@ class FluidContact(Base):
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     depth: Mapped[float] = mapped_column(REAL, nullable=False)
+    zone: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    contact_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    fault_block: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     well: Mapped["Well"] = relationship("Well", back_populates="fluid_contacts")
 
@@ -228,7 +233,10 @@ class FluidContact(Base):
     )
 
     def __repr__(self):
-        return f"<FluidContact(contact_id={self.contact_id}, name='{self.name}', depth={self.depth})>"
+        return (
+            f"<FluidContact(contact_id={self.contact_id}, name='{self.name}', "
+            f"depth={self.depth}, zone='{self.zone}', contact_type='{self.contact_type}')>"
+        )
 
 
 class PressureTest(Base):

@@ -48,7 +48,7 @@ logging.getLogger("mlflow").setLevel(logging.WARNING)
 
 __author__ = """Imran Fadhil"""
 __email__ = "imranfadhil@gmail.com"
-__version__ = "0.3.3"  # Need to be updated manually when releasing a new version/ change in pyproject.toml
+__version__ = "0.3.4"  # Need to be updated manually when releasing a new version/ change in pyproject.toml
 
 # Expose core petrophysical submodules and key public functions at top-level package namespace
 from quick_pp import (  # noqa: E402
@@ -71,6 +71,8 @@ from quick_pp.fluid_type import (  # noqa: E402
 from quick_pp.handover import (  # noqa: E402
     build_handover_archive_bytes,
     collect_well_handover_dict,
+    import_handover_archive,
+    inspect_handover_archive,
 )
 from quick_pp.qaqc import (  # noqa: E402
     apply_environmental_corrections,
@@ -87,6 +89,7 @@ from quick_pp.saturation import (  # noqa: E402
     ContactOptimizer,
     analyze_transition_zone,
     estimate_mdt_fwl,
+    extract_fluid_contacts_and_limits,
     fit_swirr_correlation,
     optimize_fwl,
     plot_fwl_reconciliation,
@@ -182,6 +185,7 @@ __all__ = [
     "enforce_physical_constraints",
     "estimate_cbw_from_qv",
     "estimate_mdt_fwl",
+    "extract_fluid_contacts_and_limits",
     "expand_blocked_logs",
     "fit_relperm",
     "fit_swirr_correlation",
@@ -192,6 +196,8 @@ __all__ = [
     "handover",
     "harm_upscale",
     "humidity_to_total_porosity",
+    "import_handover_archive",
+    "inspect_handover_archive",
     "klinkenberg_permeability_correction",
     "let_relperm",
     "logger",

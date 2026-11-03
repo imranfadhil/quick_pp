@@ -10,6 +10,7 @@
 	import CompactDataGrid, {
 		type GridColumn
 	} from '$lib/components/workbench/CompactDataGrid.svelte';
+	import ParametersManagementPanel from '$lib/components/workbench/ParametersManagementPanel.svelte';
 	import ReportPreviewCanvas from '$lib/components/workbench/ReportPreviewCanvas.svelte';
 
 	import InspectorQaqc from '$lib/components/modules/InspectorQaqc.svelte';
@@ -79,6 +80,25 @@
 		untrack(() => projectData.applyProjectParamsForCurrentSelection());
 	});
 
+	// Keep SCAL Swirr & Leverett-J / Pc curve fits synchronized with active Well, Zone, and Depth filters
+	let lastScalFilterKey = '';
+	$effect(() => {
+		const wellsKey = Array.from(projectData.selectedWellNames).sort().join(',');
+		const zonesKey = zoneSelectionKey(workbench.selectedZones);
+		const depthKey = workbench.depthFilter
+			? `${workbench.depthFilter.min}:${workbench.depthFilter.max}`
+			: 'all';
+		const scopeKey = `${workbench.scope}:${workbench.wellId ?? ''}`;
+		const hasSwirr = Boolean(projectData.swirrResult?.plugs?.length);
+		if (!hasSwirr) return;
+		const nextKey = `${scopeKey}|${wellsKey}|${zonesKey}|${depthKey}`;
+		if (nextKey === lastScalFilterKey) return;
+		lastScalFilterKey = nextKey;
+		untrack(() => {
+			projectData.recomputeSwirrClientSide(!projectData.swirrManualRuleOverride);
+		});
+	});
+
 	let initialized = $state(false);
 	let isReportMode = $derived(
 		(workbench.scope === 'single-well' && workbench.singleWellStep === 'report') ||
@@ -87,10 +107,14 @@
 	let isFptMode = $derived(workbench.scope === 'multi-well' && workbench.multiWellStep === 'fpt');
 	let isVolumetricsMode = $derived(workbench.scope === 'multi-well' && workbench.multiWellStep === 'volumetrics');
 
-	/** FPT grid: clicking a row selects the point on the Pressure vs TVDSS plots. */
+	/** FPT grid: clicking a row selects the point on the Pressure vs TVDSS plots. SCAL grids: clicking a row spotlights that sample plug. */
 	function handleRightGridRowClick(row: Record<string, any>) {
 		if (isFptMode && typeof row?._id === 'number') {
 			fpt.selectedIds = [row._id];
+			return;
+		}
+		if (typeof row?._scalPlugId === 'string' && row._scalPlugId) {
+			projectData.toggleFocusedScalPlug(row._scalPlugId);
 		}
 	}
 
@@ -143,6 +167,12 @@
 		);
 		replaceState(url, {});
 	});
+
+	let totalSavedParamsCount = $derived(
+		workbench.scope === 'multi-well'
+			? Object.values(projectParams.savedCounts).reduce((a, b) => a + (b ?? 0), 0)
+			: Object.values(moduleParams.savedCounts).reduce((a, b) => a + (b ?? 0), 0)
+	);
 
 	// Dynamic columns & rows for the Bottom-Right Quick Zonal / Context Data Grid
 	let rightGridConfig = $derived.by(
@@ -376,32 +406,78 @@
 				projectData.shfResult?.scal_data?.pc?.length
 			) {
 				const scal = projectData.shfResult.scal_data;
+				const plugMeta = new Map<string, { depth: number; zone: string }>();
+				for (const p of projectData.swirrResult?.plugs ?? []) {
+					const pid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+					plugMeta.set(pid, {
+						depth: p.depth ?? 0,
+						zone: projectData.resolveScalSampleZone(p.well, p.depth, p.zone)
+					});
+				}
+				const focusedPid = projectData.focusedScalPlugId
+					? projectData.normalizeScalPlugId(projectData.focusedScalPlugId)
+					: null;
+				const rtFilter = projectData.scalFilterRockType;
+				const rows = scal.pc
+					.map((pcVal, i) => {
+						const wn = scal.well_names?.[i] ?? '';
+						const sname = scal.samples?.[i] ?? '';
+						const pid = projectData.normalizeScalPlugId(scal.plug_ids?.[i], wn, sname);
+						const meta = plugMeta.get(pid);
+						const d = scal.depths?.[i] ?? meta?.depth ?? null;
+						const zn = projectData.resolveScalSampleZone(
+							wn,
+							d,
+							scal.zones?.[i] ?? meta?.zone
+						);
+						const rf = scal.rock_flags?.[i] ?? null;
+						const isExcl = Boolean(scal.excluded?.[i]);
+						const isFocused = focusedPid === pid;
+						return {
+							_scalPlugId: pid,
+							Well: wn,
+							Sample: isFocused ? `★ ${sname}` : sname,
+							ZONE: zn,
+							DEPTH: d,
+							ROCK_FLAG: rf,
+							PC: pcVal,
+							SW: scal.sw?.[i] ?? null,
+							SWIRR_CALC: scal.swirr_calc?.[i] ?? null,
+							SWN: scal.swn?.[i] ?? null,
+							J: scal.j?.[i] ?? null,
+							H: scal.h?.[i] ?? null,
+							PHIT: scal.phit?.[i] ?? null,
+							PERM: scal.perm?.[i] ?? null,
+							STATUS: isExcl ? 'Excluded' : isFocused ? 'Focused' : 'Active'
+						};
+					})
+					.filter((r) => {
+						if (!projectData.isScalItemInActiveFilter(r.Well, r.DEPTH, r.ZONE)) return false;
+						if (rtFilter !== 'all' && r.ROCK_FLAG !== rtFilter) return false;
+						if (focusedPid && r._scalPlugId !== focusedPid) return false;
+						return true;
+					});
 				return {
-					title: 'Multi-Well SCAL Capillary Pressure & Leverett-J Table',
+					title: focusedPid
+						? `SCAL Capillary Pressure & Leverett-J — Sample ${focusedPid.replace('::', ' · ')} (click row to clear focus)`
+						: 'Multi-Well SCAL Capillary Pressure & Leverett-J Table (click row to spotlight sample)',
 					columns: [
 						{ key: 'Well', label: 'Well' },
 						{ key: 'Sample', label: 'Sample' },
+						{ key: 'ZONE', label: 'Zone' },
+						{ key: 'DEPTH', label: 'Depth', unit: 'm', numeric: true, decimals: 1 },
 						{ key: 'ROCK_FLAG', label: 'RT', numeric: true, decimals: 0 },
 						{ key: 'PC', label: 'Pc', unit: 'psi', numeric: true, decimals: 2 },
 						{ key: 'SW', label: 'Sw', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'SWIRR_CALC', label: 'Swirr', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'SWN', label: 'Swn', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'J', label: 'J', numeric: true, decimals: 3 },
 						{ key: 'H', label: 'Height', unit: 'm', numeric: true, decimals: 1 },
 						{ key: 'PHIT', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'PERM', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2 }
+						{ key: 'PERM', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2 },
+						{ key: 'STATUS', label: 'Status' }
 					],
-					rows: scal.pc.map((pcVal, i) => ({
-						Well: scal.well_names?.[i] ?? '',
-						Sample: scal.samples?.[i] ?? '',
-						ROCK_FLAG: scal.rock_flags?.[i] ?? null,
-						PC: pcVal,
-						SW: scal.sw?.[i] ?? null,
-						SWN: scal.swn?.[i] ?? null,
-						J: scal.j?.[i] ?? null,
-						H: scal.h?.[i] ?? null,
-						PHIT: scal.phit?.[i] ?? null,
-						PERM: scal.perm?.[i] ?? null
-					}))
+					rows
 				};
 			}
 
@@ -410,12 +486,22 @@
 				workbench.multiWellStep === 'swirr-corr' &&
 				projectData.swirrResult?.plugs?.length
 			) {
-				const plugs = projectData.swirrResult.plugs;
+				const focusedPid = projectData.focusedScalPlugId
+					? projectData.normalizeScalPlugId(projectData.focusedScalPlugId)
+					: null;
+				const rtFilter = projectData.scalFilterRockType;
+				const plugs = projectData.swirrResult.plugs.filter((p) => {
+					const zn = projectData.resolveScalSampleZone(p.well, p.depth, p.zone);
+					if (!projectData.isScalItemInActiveFilter(p.well, p.depth, zn)) return false;
+					if (rtFilter !== 'all' && (p.rt ?? 1) !== rtFilter) return false;
+					return true;
+				});
 				return {
-					title: `Multi-Well SCAL Plug Swirr Summary (Ref Pc=${projectData.swirrConfig.referencePcPsi} psi | n=${plugs.filter((p) => p.included).length}/${plugs.length} included)`,
+					title: `Multi-Well SCAL Plug Swirr Summary (Ref Pc=${projectData.swirrConfig.referencePcPsi} psi | n=${plugs.filter((p) => p.included).length}/${plugs.length} in filter — click row to spotlight)`,
 					columns: [
 						{ key: 'WELL', label: 'Well' },
 						{ key: 'SAMPLE', label: 'Sample' },
+						{ key: 'ZONE', label: 'Zone' },
 						{ key: 'DEPTH', label: 'Depth', unit: 'm', numeric: true, decimals: 1 },
 						{ key: 'RT', label: 'RT', numeric: true, decimals: 0 },
 						{ key: 'CPORE', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3 },
@@ -428,21 +514,33 @@
 						{ key: 'RESIDUAL', label: 'Residual', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'STATUS', label: 'Status' }
 					],
-					rows: plugs.map((p) => ({
-						WELL: p.well,
-						SAMPLE: p.sample,
-						DEPTH: p.depth,
-						RT: p.rt,
-						CPORE: p.cpore,
-						CPERM: p.cperm,
-						RQI: p.rqi,
-						MAX_PC: p.max_pc,
-						SW_AT_MAX_PC: p.sw_at_max_pc,
-						EXTRACTED_SWIRR: p.extracted_swirr,
-						MODELED_SWIRR: p.modeled_swirr,
-						RESIDUAL: p.residual,
-						STATUS: p.included ? 'Included' : !p.valid_pc ? 'Low Pc (< Ref)' : 'Excluded'
-					}))
+					rows: plugs.map((p) => {
+						const pid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+						const isFocused = focusedPid === pid;
+						return {
+							_scalPlugId: pid,
+							WELL: p.well,
+							SAMPLE: isFocused ? `★ ${p.sample}` : p.sample,
+							ZONE: projectData.resolveScalSampleZone(p.well, p.depth, p.zone),
+							DEPTH: p.depth,
+							RT: p.rt,
+							CPORE: p.cpore,
+							CPERM: p.cperm,
+							RQI: p.rqi,
+							MAX_PC: p.max_pc,
+							SW_AT_MAX_PC: p.sw_at_max_pc,
+							EXTRACTED_SWIRR: p.extracted_swirr,
+							MODELED_SWIRR: p.modeled_swirr,
+							RESIDUAL: p.residual,
+							STATUS: isFocused
+								? 'Focused'
+								: p.included
+									? 'Included'
+									: !p.valid_pc
+										? 'Low Pc (< Ref)'
+										: 'Excluded'
+						};
+					})
 				};
 			}
 
@@ -879,16 +977,49 @@
 				{:else if workbench.rightPaneTab === 'grid'}
 					<div class="flex h-full flex-col bg-[var(--bg-surface)]">
 						<div
-							class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 text-[11px] font-semibold text-[var(--text-primary)]"
+							class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[11px]"
 						>
-							<span>{rightGridConfig.title}</span>
+							<div class="flex items-center gap-1">
+								<button
+									type="button"
+									onclick={() => (workbench.rightGridSubTab = 'data')}
+									class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'data'
+										? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+										: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+								>
+									<span>📊</span>
+									<span class="truncate max-w-[200px]">{rightGridConfig.title}</span>
+									<span class="mono-num ml-0.5 text-[9.5px] text-[var(--text-muted)]">
+										({rightGridConfig.rows.length})
+									</span>
+								</button>
+								<button
+									type="button"
+									onclick={() => (workbench.rightGridSubTab = 'params')}
+									class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'params'
+										? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+										: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+								>
+									<span>⚙</span>
+									<span>Parameters & Fits</span>
+									{#if totalSavedParamsCount > 0}
+										<span class="ml-1 rounded-2xs bg-emerald-500/15 px-1 py-0.2 text-[9px] font-semibold text-emerald-700">
+											{totalSavedParamsCount}
+										</span>
+									{/if}
+								</button>
+							</div>
 						</div>
 						<div class="min-h-0 flex-1">
-							<CompactDataGrid
-								columns={rightGridConfig.columns}
-								rows={rightGridConfig.rows}
-								onrowclick={handleRightGridRowClick}
-							/>
+							{#if workbench.rightGridSubTab === 'data'}
+								<CompactDataGrid
+									columns={rightGridConfig.columns}
+									rows={rightGridConfig.rows}
+									onrowclick={handleRightGridRowClick}
+								/>
+							{:else}
+								<ParametersManagementPanel />
+							{/if}
 						</div>
 					</div>
 				{:else}
@@ -912,21 +1043,49 @@
 						<Pane defaultSize={42} minSize={20} class="w-full overflow-hidden">
 							<div class="flex h-full flex-col bg-[var(--bg-surface)]">
 								<div
-									class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 text-[11px] font-semibold text-[var(--text-primary)]"
+									class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[11px]"
 								>
-									<span>{rightGridConfig.title}</span>
-									<span
-										class="mono-num text-[10px] font-normal text-[var(--text-muted)]"
-									>
-										{rightGridConfig.rows.length} rows
-									</span>
+									<div class="flex items-center gap-1">
+										<button
+											type="button"
+											onclick={() => (workbench.rightGridSubTab = 'data')}
+											class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'data'
+												? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+												: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+										>
+											<span>📊</span>
+											<span class="truncate max-w-[200px]">{rightGridConfig.title}</span>
+											<span class="mono-num ml-0.5 text-[9.5px] text-[var(--text-muted)]">
+												({rightGridConfig.rows.length})
+											</span>
+										</button>
+										<button
+											type="button"
+											onclick={() => (workbench.rightGridSubTab = 'params')}
+											class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'params'
+												? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+												: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+										>
+											<span>⚙</span>
+											<span>Parameters & Fits</span>
+											{#if totalSavedParamsCount > 0}
+												<span class="ml-1 rounded-2xs bg-emerald-500/15 px-1 py-0.2 text-[9px] font-semibold text-emerald-700">
+													{totalSavedParamsCount}
+												</span>
+											{/if}
+										</button>
+									</div>
 								</div>
 								<div class="min-h-0 flex-1">
-									<CompactDataGrid
-										columns={rightGridConfig.columns}
-										rows={rightGridConfig.rows}
-										onrowclick={handleRightGridRowClick}
-									/>
+									{#if workbench.rightGridSubTab === 'data'}
+										<CompactDataGrid
+											columns={rightGridConfig.columns}
+											rows={rightGridConfig.rows}
+											onrowclick={handleRightGridRowClick}
+										/>
+									{:else}
+										<ParametersManagementPanel />
+									{/if}
 								</div>
 							</div>
 						</Pane>

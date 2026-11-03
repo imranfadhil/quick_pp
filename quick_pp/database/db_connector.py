@@ -167,6 +167,7 @@ class DBConnector:
             self._migrate_uam_columns()
             self._migrate_project_columns()
             self._migrate_pressure_test_columns()
+            self._migrate_fluid_contact_columns()
         except Exception as exc:
             if "readonly" in str(exc).lower() or os.environ.get("QPP_DEMO_MODE", "").lower() in ("1", "true", "yes"):
                 pass
@@ -225,6 +226,37 @@ class DBConnector:
                 conn.execute(
                     text(f'ALTER TABLE "projects" ADD COLUMN "config_data" {col_type}')
                 )
+        except Exception:
+            pass
+
+    def _migrate_fluid_contact_columns(self):
+        """Ensure existing `fluid_contacts` tables have per-zone, fault block,
+        contact type, source lineage, and remarks columns."""
+        if DBConnector._engine is None:
+            return
+        from sqlalchemy import inspect as sa_inspect
+        from sqlalchemy import text
+
+        try:
+            inspector = sa_inspect(DBConnector._engine)
+            if not inspector.has_table("fluid_contacts"):
+                return
+            existing_cols = {c["name"] for c in inspector.get_columns("fluid_contacts")}
+            migrations = [
+                ("zone", "VARCHAR(255)"),
+                ("contact_type", "VARCHAR(50)"),
+                ("fault_block", "VARCHAR(100)"),
+                ("source", "VARCHAR(100)"),
+                ("remarks", "TEXT"),
+            ]
+            with DBConnector._engine.begin() as conn:
+                for col_name, col_def in migrations:
+                    if col_name not in existing_cols:
+                        conn.execute(
+                            text(
+                                f'ALTER TABLE "fluid_contacts" ADD COLUMN "{col_name}" {col_def}'
+                            )
+                        )
         except Exception:
             pass
 

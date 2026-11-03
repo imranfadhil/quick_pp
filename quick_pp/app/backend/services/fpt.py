@@ -569,7 +569,13 @@ def fpt_apply_contacts(project_id: int, req: FPTApplyContactsRequest) -> Dict[st
                 for name, z in contacts.items():
                     if tvd_ok[0] <= z <= tvd_ok[-1]:
                         md_c = float(np.interp(z, tvd_ok, md_ok))
-                        payload.append({"name": name, "depth": round(md_c, 3)})
+                        payload.append({
+                            "name": name,
+                            "depth": round(md_c, 3),
+                            "contact_type": name,
+                            "source": "FPT Analysis",
+                            "remarks": "Formation Pressure Test gradient intersection",
+                        })
                         written[name] = round(md_c, 3)
                     else:
                         outside.append(name)

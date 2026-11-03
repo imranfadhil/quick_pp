@@ -4,6 +4,7 @@
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
+	import { appStatus } from '$lib/state/status.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { projectParams } from '$lib/state/projectParams.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -119,16 +120,12 @@
 				);
 			}
 		}
-		if (
-			!projectParams.status['shf']?.matched &&
-			(projectData.swirrResult ||
-				projectData.swirrApplyResult ||
-				Object.keys(projectData.swirrConfig.rules ?? {}).length > 0)
-		) {
-			projectData.shfParams.swirrSource = 'poro_perm';
-		}
-		if (!projectData.shfResult && projectData.swirrResult) {
-			projectData.recomputeScalFitsFromPlugs(false);
+		if (!projectData.shfResult) {
+			if (projectData.swirrResult) {
+				projectData.recomputeScalFitsFromPlugs(false);
+			} else {
+				void projectData.ensureSwirrDataLoaded();
+			}
 		}
 	});
 
@@ -166,9 +163,8 @@
 		try {
 			const sp = projectData.shfParams;
 			const jSatMode = sp.jSatMode ?? 'swn';
-			// Restored SHF fits (from saved project params) are used once on the next non-reset run
+			// Restored SHF fits (from saved project params) are used on non-reset runs
 			const saved = projectData.shfSavedFits;
-			projectData.shfSavedFits = null;
 			const restoredFits =
 				!resetFits &&
 				saved &&
@@ -192,6 +188,9 @@
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/shf/compute`,
 				{
 					well_names: validTvdWells,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
 					model: sp.model,
 					j_sat_mode: jSatMode,
 					unit: sp.unit ?? 'metric',
@@ -221,6 +220,8 @@
 			};
 			if (markDirty) {
 				projectData.markMultiWellComputed('shf');
+				// Auto-persist SHF parameters & fits for the active zone selection
+				void projectData.persistProjectParams([], ['shf']);
 			}
 
 			// Live-merge SHF curve into active well so LogTrackCanvas Track 6 updates in real time!
@@ -281,6 +282,7 @@
 					shm_params: projectData.shfResult?.fits ?? null,
 					loss: so.optLoss,
 					solve_per_zone: so.solvePerZone,
+					pay_weighted: so.payWeighted ?? true,
 					ift: sp.ift,
 					theta: sp.theta,
 					gw: sp.gw,
@@ -309,6 +311,33 @@
 			projectData.error = e?.message || 'FWL optimization error';
 		} finally {
 			projectData.isComputingMultiWell = false;
+		}
+	}
+
+	let isSavingContacts = $state(false);
+	async function saveContactsToAncillary() {
+		if (!workbench.projectId) return;
+		isSavingContacts = true;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/contacts/extract_and_save`,
+				{
+					well_names: projectData.wellsWithTvd.map((w) => w.name),
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					save: true,
+					clean_slate: true,
+					replace: false
+				}
+			);
+			const count = res.saved_count ?? res.contacts_count ?? 0;
+			appStatus.success(`Saved ${count} fluid contacts (ODT, OWC, FWL, etc.) to well ancillary data.`);
+			if (workbench.projectId) {
+				await projectData.selectProject(workbench.projectId);
+			}
+		} catch (e: any) {
+			projectData.error = e?.message || 'Failed to save fluid contacts';
+		} finally {
+			isSavingContacts = false;
 		}
 	}
 </script>
@@ -395,6 +424,14 @@
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 					/>
 					<span>Φ-Weighted</span>
+				</label>
+				<label class="flex items-center gap-1 cursor-pointer" title="Weight residuals by hydrocarbon pore volume (Phi * (1 - Sw)) so oil pay samples drive the FWL depth">
+					<input
+						type="checkbox"
+						bind:checked={so.payWeighted}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+					/>
+					<span>Pay-Weighted</span>
 				</label>
 				<label class="flex items-center gap-1 cursor-pointer">
 					<input
@@ -545,6 +582,19 @@
 					</div>
 				{/if}
 			{/if}
+			<button
+				type="button"
+				onclick={saveContactsToAncillary}
+				disabled={isSavingContacts || projectData.isComputingMultiWell}
+				class="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-sm border border-emerald-600 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+				title="Extract and commit discrete zonal contacts (ODT, OUT, OWC, FWL, WUT, GOC, GWC) with full lineage to well ancillary data"
+			>
+				{#if isSavingContacts}
+					Saving Contacts...
+				{:else}
+					Commit Contacts to Well Ancillary
+				{/if}
+			</button>
 		</ParameterSection>
 
 		<ParameterSection
@@ -633,7 +683,11 @@
 						? 'J = a · Sw^(-b)'
 						: 'J = a · Swn^(-b)'
 					: meta.formula}
-			{@const fitEntries = Object.entries(projectData.shfResult?.fits ?? {})}
+			{@const activeFits =
+				projectData.shfResult?.fits && Object.keys(projectData.shfResult.fits).length > 0
+					? projectData.shfResult.fits
+					: (projectData.shfSavedFits?.fits ?? {})}
+			{@const fitEntries = Object.entries(activeFits)}
 			<ParameterSection title="Resultant SCAL Fit Parameters" badge={activeFormula}>
 				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
 					<span>
@@ -697,7 +751,7 @@
 					</div>
 				{:else}
 					<div class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2 text-[10px] text-[var(--text-secondary)]">
-						No SCAL curve fits available yet. Fit Swirr &amp; J/Pc curves in the <strong>[SCAL] SCAL &amp; Rel-Perm</strong> standalone module, or run <strong>Compute SHF</strong> to auto-fit from project SCAL data.
+						No SCAL curve fits cached yet. Click <strong>Compute SHF</strong> to auto-fit curves directly from project SCAL plugs and compute Saturation Height across all wells.
 					</div>
 				{/if}
 			</ParameterSection>
@@ -741,7 +795,7 @@
 			}
 			onclick={saveShf}
 			title={projectData.hasPendingMultiWell('shf')
-				? 'Save computed SHF curves across all project wells'
+				? 'Save computed SHF curves (and any pending upstream Rock Type & Swirr curves) across all project wells'
 				: 'Compute or adjust SHF parameters first to enable saving'}
 			class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 		>

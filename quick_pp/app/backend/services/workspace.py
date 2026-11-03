@@ -102,6 +102,7 @@ from quick_pp.saturation import (
     estimate_qv,
     estimate_qvn,
     estimate_rw_temperature_salinity,
+    extract_fluid_contacts_and_limits,
     fit_swirr_correlation,
     optimize_fwl,
     swirr_rqi,
@@ -1160,7 +1161,68 @@ class WorkspaceShfRequest(BaseModel):
         None,
         description="Optional SwirrModelConfig dict used when swirr_source == 'poro_perm'",
     )
+    zones: Optional[List[str]] = Field(
+        None,
+        description="Optional subset of zones to filter SCAL core data",
+    )
+    min_depth: Optional[float] = Field(
+        None,
+        description="Optional minimum depth filter for SCAL core data",
+    )
+    max_depth: Optional[float] = Field(
+        None,
+        description="Optional maximum depth filter for SCAL core data",
+    )
     save: bool = Field(False)
+
+
+def _resolve_scal_sample_zone(
+    s_depth: float,
+    well_df: Optional[pd.DataFrame],
+    anc: Optional[Dict[str, Any]],
+) -> str:
+    """Resolve the geological zone name for a SCAL core sample at `s_depth`."""
+    if s_depth > 0:
+        if (
+            well_df is not None
+            and not well_df.empty
+            and "DEPTH" in well_df.columns
+            and "ZONES" in well_df.columns
+        ):
+            try:
+                depth_diff = (well_df["DEPTH"] - s_depth).abs()
+                idx_near = depth_diff.idxmin()
+                if float(depth_diff.loc[idx_near]) <= 5.0:
+                    z_val = well_df.loc[idx_near, "ZONES"]
+                    if pd.notna(z_val):
+                        z_str = str(z_val).strip()
+                        if z_str and z_str.lower() not in ("unknown", "none", "nan"):
+                            return z_str
+            except Exception:
+                pass
+        tops = (anc or {}).get("formation_tops")
+        if isinstance(tops, list) and tops:
+            valid_tops = []
+            for t in tops:
+                if isinstance(t, dict):
+                    td = t.get("depth")
+                    tn = str(t.get("name") or t.get("zone") or "").strip()
+                    if td is not None and tn:
+                        try:
+                            valid_tops.append((float(td), tn))
+                        except (TypeError, ValueError):
+                            pass
+            if valid_tops:
+                valid_tops.sort(key=lambda x: x[0])
+                chosen = "Unknown"
+                for td, tn in valid_tops:
+                    if s_depth >= td:
+                        chosen = tn
+                    else:
+                        break
+                if chosen != "Unknown":
+                    return chosen
+    return "Unknown"
 
 
 def _filter_fzi_data_by_wells(
@@ -5937,15 +5999,38 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
             )
             if str(pid).strip()
         }
-        excl_pt_set = {
-            str(ptid).strip()
-            for ptid in (
-                swirr_cfg_dict.get("excludedScalPointIds")
-                or swirr_cfg_dict.get("excluded_scal_point_ids")
-                or []
-            )
-            if str(ptid).strip()
-        }
+        excl_plug_set = set()
+        for pid in (
+            swirr_cfg_dict.get("excludedPlugIds")
+            or swirr_cfg_dict.get("excluded_plug_ids")
+            or []
+        ):
+            p_str = str(pid).strip()
+            if p_str:
+                excl_plug_set.add(p_str)
+                if "::" in p_str:
+                    excl_plug_set.add(p_str.replace("::", ":", 1))
+                elif ":" in p_str:
+                    excl_plug_set.add(p_str.replace(":", "::", 1))
+        excl_pt_set = set()
+        for ptid in (
+            swirr_cfg_dict.get("excludedScalPointIds")
+            or swirr_cfg_dict.get("excluded_scal_point_ids")
+            or []
+        ):
+            pt_str = str(ptid).strip()
+            if pt_str:
+                excl_pt_set.add(pt_str)
+                if pt_str.count("::") == 1 and ":" in pt_str.split("::")[0]:
+                    p_part, idx_part = pt_str.split("::", 1)
+                    excl_pt_set.add(f"{p_part.replace(':', '::', 1)}::{idx_part}")
+        allowed_zones_set = (
+            {str(z).strip() for z in req.zones if str(z).strip()}
+            if req.zones
+            else None
+        )
+        min_d_filter = float(req.min_depth) if req.min_depth is not None else None
+        max_d_filter = float(req.max_depth) if req.max_depth is not None else None
         core_rows: List[Dict[str, Any]] = []
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
@@ -5959,12 +6044,16 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 core_data = (anc or {}).get("core_data") or {}
                 well_df_cache: Optional[pd.DataFrame] = None
                 for sname, sample in core_data.items():
-                    if f"{wn}::{sname}" in excl_plug_set:
+                    if f"{wn}::{sname}" in excl_plug_set or f"{wn}:{sname}" in excl_plug_set:
                         continue
                     pc_df = sample.get("pc")
                     if pc_df is None or pc_df.empty:
                         continue
                     s_depth = float(sample.get("depth") or 0.0)
+                    if min_d_filter is not None and s_depth > 0 and s_depth < min_d_filter:
+                        continue
+                    if max_d_filter is not None and s_depth > 0 and s_depth > max_d_filter:
+                        continue
                     meas = sample.get("measurements")
                     cperm = None
                     cpore = None
@@ -6087,6 +6176,15 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
 
                     # Fallback 2: lookup well's merged CPORE/CPERM (within ±0.50m) or log PHIT & PERM_TRANS/PERM at nearest depth
                     near_rock_flag: Optional[int] = None
+                    if s_depth > 0 or allowed_zones_set is not None:
+                        try:
+                            if well_df_cache is None:
+                                well_df_cache = _get_filtered_well_df(project_id, wn)
+                        except Exception:
+                            pass
+                    s_zone = _resolve_scal_sample_zone(s_depth, well_df_cache, anc)
+                    if allowed_zones_set is not None and s_zone not in allowed_zones_set:
+                        continue
                     if s_depth > 0:
                         try:
                             if well_df_cache is None:
@@ -6220,39 +6318,30 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         cpore, cperm, rf_val, getattr(req, "swirr_config", None)
                     )
                     if swirr_src_mode == "poro_perm":
-                        raw_swn = (sw_vals - swirr_calc_plug) / max(
-                            0.05, 1.0 - swirr_calc_plug
+                        eff_swirr = float(np.clip(swirr_calc_plug, 0.01, 0.85))
+                        raw_swn = (sw_vals - eff_swirr) / max(
+                            0.05, 1.0 - eff_swirr
                         )
                         swn_vals = np.clip(raw_swn, 0.005, 0.99)
-                    elif (
-                        len(sw_vals) >= 4
-                        and (np.nanmax(sw_vals) - np.nanmin(sw_vals)) > 0.25
-                    ):
-                        # Use a poro-perm bounded Swirr estimate so incomplete drainage curves
-                        # (e.g., tight plugs terminating at Sw=0.41) are not artificially stretched to Swn=0.030
-                        sw_min_plug = float(np.nanmin(sw_vals))
-                        swirr_est = float(
-                            np.clip(
-                                0.08
-                                * (
-                                    (max(float(cperm), 0.01) / max(float(cpore), 0.01))
-                                    ** -0.12
-                                ),
-                                0.04,
-                                0.22,
-                            )
-                        )
-                        eff_swirr = min(sw_min_plug * 0.92, swirr_est)
-                        raw_swn = (sw_vals - eff_swirr) / max(1.0 - eff_swirr, 1e-3)
-                        swn_vals = np.clip(raw_swn, 0.02, 0.98)
                     else:
-                        swn_vals = np.clip(sw_vals, 0.02, 0.98)
+                        # Per-plug Lab Terminal Sw normalization: each sample is normalized by its own
+                        # minimum/terminal lab Sw (with a 0.96 asymptote factor so the terminal point remains > 0 on log-log J fits)
+                        sw_min_plug = float(np.nanmin(sw_vals))
+                        eff_swirr = float(np.clip(sw_min_plug * 0.96, 0.01, 0.85))
+                        raw_swn = (sw_vals - eff_swirr) / max(1.0 - eff_swirr, 0.05)
+                        swn_vals = np.clip(raw_swn, 0.005, 0.99)
+                    swirr_used_plug = eff_swirr
+                    order_pc = np.argsort(pc_vals)
+                    pc_vals = pc_vals[order_pc]
+                    sw_vals = sw_vals[order_pc]
+                    swn_vals = swn_vals[order_pc]
                     for pt_idx, (pc_v, sw_v, swn_v) in enumerate(zip(pc_vals, sw_vals, swn_vals, strict=False)):
-                        if (
+                        is_pt_excl = (
                             f"{wn}::{sname}::{pt_idx}" in excl_pt_set
+                            or f"{wn}:{sname}::{pt_idx}" in excl_pt_set
                             or f"{wn}::{sname}::{round(float(pc_v), 2)}" in excl_pt_set
-                        ):
-                            continue
+                            or f"{wn}:{sname}::{round(float(pc_v), 2)}" in excl_pt_set
+                        )
                         if not (0.004 <= swn_v <= 0.995 and pc_v > 0):
                             continue
                         j_v = float(leverett_j(pc_v, req.ift, req.theta, cperm, cpore))
@@ -6271,7 +6360,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                                 "PC": round(float(pc_v), 4),
                                 "SW": round(float(sw_v), 4),
                                 "SWN": round(float(swn_v), 4),
-                                "SWIRR_CALC": round(float(swirr_calc_plug), 4),
+                                "SWIRR_CALC": round(float(swirr_used_plug), 4),
                                 "J": round(float(j_v), 4),
                                 "H": round(float(h_v), 4),
                                 "BVW": round(float(bvw_v), 4),
@@ -6280,74 +6369,93 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                                 "Well": wn,
                                 "Sample": str(sname),
                                 "DEPTH": round(float(s_depth), 2),
+                                "ZONE": s_zone,
+                                "POINT_ID": f"{wn}::{sname}::{pt_idx}",
+                                "PLUG_ID": f"{wn}::{sname}",
+                                "EXCLUDED": bool(is_pt_excl),
                             }
                         )
 
-        # Synthesize representative SCAL capillary pressure curves for reservoir rock types with < 3 plugs
+        # Synthesize representative SCAL capillary pressure curves only if project has < 3 real SCAL points
         rf_arr_full = np.array(
             [int(r) if r is not None else -1 for r in rock_flags], dtype=int
         )
         default_well = well_names[0] if well_names else "Project"
-        for rf_int in reservoir_flags:
-            existing_rf = [r for r in core_rows if int(r["ROCK_FLAG"]) == rf_int]
-            if len(existing_rf) >= 3:
-                continue
-            mask_rf = (
-                (rf_arr_full == rf_int)
-                & np.isfinite(phit_arr)
-                & np.isfinite(perm_arr)
-                & (phit_arr > 0)
-                & (perm_arr > 0)
-            )
-            p_med = (
-                float(np.nanmedian(phit_arr[mask_rf]))
-                if np.any(mask_rf)
-                else max(0.24 - 0.04 * (rf_int - 1), 0.06)
-            )
-            k_med = (
-                float(np.nanmedian(perm_arr[mask_rf]))
-                if np.any(mask_rf)
-                else max(250.0 / (4.0 ** (rf_int - 1)), 0.5)
-            )
-            swirr = float(np.clip(0.06 + 0.05 * (rf_int - 1), 0.05, 0.35))
-            j_a = float(
-                np.clip(
-                    0.12
-                    * ((max(k_med, 0.01) / max(p_med, 0.01)) ** -0.06)
-                    * (1.0 + 0.22 * (rf_int - 1)),
-                    0.05,
-                    0.65,
+        if len(core_rows) < 3:
+            for rf_int in reservoir_flags:
+                existing_rf = [r for r in core_rows if int(r["ROCK_FLAG"]) == rf_int]
+                if len(existing_rf) >= 3:
+                    continue
+                mask_rf = (
+                    (rf_arr_full == rf_int)
+                    & np.isfinite(phit_arr)
+                    & np.isfinite(perm_arr)
+                    & (phit_arr > 0)
+                    & (perm_arr > 0)
                 )
-            )
-            j_b = float(np.clip(0.24 + 0.06 * (rf_int - 1), 0.15, 0.65))
-            cos_t = max(abs(math.cos(math.radians(req.theta))), 0.1)
-            sqrt_kp = max(math.sqrt(max(k_med, 1e-4) / max(p_med, 1e-4)), 1e-3)
-            for idx_pt, swn_v in enumerate(
-                (0.08, 0.14, 0.22, 0.32, 0.45, 0.60, 0.76, 0.90)
-            ):
-                noise = 1.0 + 0.03 * ((-1.0) ** idx_pt)
-                j_v = float(j_a * (swn_v ** (-j_b)) * noise)
-                pc_v = float(max((j_v * req.ift * cos_t) / (0.2166 * sqrt_kp), 0.05))
-                sw_v = float(np.clip(swirr + swn_v * (1.0 - swirr), 0.02, 0.99))
-                h_v = float(pc_v / grad_psi)
-                bvw_v = float(p_med * sw_v)
-                core_rows.append(
-                    {
-                        "ROCK_FLAG": rf_int,
-                        "PC": round(pc_v, 4),
-                        "SW": round(sw_v, 4),
-                        "SWN": round(float(swn_v), 4),
-                        "J": round(j_v, 4),
-                        "H": round(h_v, 4),
-                        "BVW": round(bvw_v, 4),
-                        "PHIT": round(p_med, 4),
-                        "PERM": round(k_med, 4),
-                        "Well": default_well,
-                        "Sample": f"SYN_RT{rf_int}_{idx_pt + 1}",
-                    }
+                p_med = (
+                    float(np.nanmedian(phit_arr[mask_rf]))
+                    if np.any(mask_rf)
+                    else max(0.24 - 0.04 * (rf_int - 1), 0.06)
                 )
+                k_med = (
+                    float(np.nanmedian(perm_arr[mask_rf]))
+                    if np.any(mask_rf)
+                    else max(250.0 / (4.0 ** (rf_int - 1)), 0.5)
+                )
+                swirr = float(np.clip(0.06 + 0.05 * (rf_int - 1), 0.05, 0.35))
+                j_a = float(
+                    np.clip(
+                        0.12
+                        * ((max(k_med, 0.01) / max(p_med, 0.01)) ** -0.06)
+                        * (1.0 + 0.22 * (rf_int - 1)),
+                        0.05,
+                        0.65,
+                    )
+                )
+                j_b = float(np.clip(0.24 + 0.06 * (rf_int - 1), 0.15, 0.65))
+                cos_t = max(abs(math.cos(math.radians(req.theta))), 0.1)
+                sqrt_kp = max(math.sqrt(max(k_med, 1e-4) / max(p_med, 1e-4)), 1e-3)
+                for idx_pt, swn_v in enumerate(
+                    (0.08, 0.14, 0.22, 0.32, 0.45, 0.60, 0.76, 0.90)
+                ):
+                    noise = 1.0 + 0.03 * ((-1.0) ** idx_pt)
+                    j_v = float(j_a * (swn_v ** (-j_b)) * noise)
+                    pc_v = float(max((j_v * req.ift * cos_t) / (0.2166 * sqrt_kp), 0.05))
+                    sw_v = float(np.clip(swirr + swn_v * (1.0 - swirr), 0.02, 0.99))
+                    h_v = float(pc_v / grad_psi)
+                    bvw_v = float(p_med * sw_v)
+                    sname_syn = f"SYN_RT{rf_int}_{idx_pt + 1}"
+                    core_rows.append(
+                        {
+                            "ROCK_FLAG": rf_int,
+                            "PC": round(pc_v, 4),
+                            "SW": round(sw_v, 4),
+                            "SWN": round(float(swn_v), 4),
+                            "SWIRR_CALC": round(float(swirr), 4),
+                            "J": round(j_v, 4),
+                            "H": round(h_v, 4),
+                            "BVW": round(bvw_v, 4),
+                            "PHIT": round(p_med, 4),
+                            "PERM": round(k_med, 4),
+                            "Well": default_well,
+                            "Sample": sname_syn,
+                            "DEPTH": round(1500.0 + rf_int * 25.0 + idx_pt * 2.0, 2),
+                            "ZONE": "Unknown",
+                            "POINT_ID": f"{default_well}::{sname_syn}::{idx_pt}",
+                            "PLUG_ID": f"{default_well}::{sname_syn}",
+                            "EXCLUDED": False,
+                        }
+                    )
 
         scal_df = pd.DataFrame(core_rows)
+        scal_df_fit = (
+            scal_df[~scal_df["EXCLUDED"].astype(bool)]
+            if (not scal_df.empty and "EXCLUDED" in scal_df.columns)
+            else scal_df
+        )
+        if scal_df_fit.empty and not scal_df.empty:
+            scal_df_fit = scal_df
         j_sat_mode = (
             "sw"
             if str(getattr(req, "j_sat_mode", "swn") or "swn").strip().lower() == "sw"
@@ -6355,8 +6463,8 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         )
         fits_swn: Dict[str, Dict[str, float]] = {}
         fits_sw: Dict[str, Dict[str, float]] = {}
-        if model == "leverett_j" and not scal_df.empty:
-            for param in auto_j_params(scal_df):
+        if model == "leverett_j" and not scal_df_fit.empty:
+            for param in auto_j_params(scal_df_fit):
                 fits_swn[str(param["ROCK_FLAG"])] = {
                     "a": float(param["a"]),
                     "b": float(param["b"]),
@@ -6364,7 +6472,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     "r2": float(param.get("r2", 0.0)),
                     "count": int(param.get("count", 0)),
                 }
-            scal_df_sw = scal_df.assign(SWN=scal_df["SW"])
+            scal_df_sw = scal_df_fit.assign(SWN=scal_df_fit["SW"])
             for param in auto_j_params(scal_df_sw):
                 fits_sw[str(param["ROCK_FLAG"])] = {
                     "a": float(param["a"]),
@@ -6396,9 +6504,9 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         "r2": 1.0,
                         "count": 0,
                     }
-            elif not scal_df.empty:
+            elif not scal_df_fit.empty:
                 if model == "skelt_harrison":
-                    for param in auto_skelt_harrison_params(scal_df):
+                    for param in auto_skelt_harrison_params(scal_df_fit):
                         fits[str(param["ROCK_FLAG"])] = {
                             "a": float(param["a"]),
                             "b": float(param["b"]),
@@ -6409,7 +6517,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                             "count": int(param.get("count", 0)),
                         }
                 elif model == "cuddy":
-                    for param in auto_cuddy_params(scal_df):
+                    for param in auto_cuddy_params(scal_df_fit):
                         fits[str(param["ROCK_FLAG"])] = {
                             "a": float(param["a"]),
                             "b": float(param["b"]),
@@ -6423,14 +6531,14 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         fits[rf_k] = dict(f_val)
 
         # Recompute fit diagnostics (rmse, r2, count) against SCAL points for all entries in fits
-        if not scal_df.empty and fits:
+        if not scal_df_fit.empty and fits:
             j_sat_col = "SW" if j_sat_mode == "sw" else "SWN"
             for rf_key, fit_entry in list(fits.items()):
                 try:
                     rf_int = int(rf_key)
                 except ValueError:
                     continue
-                sub_scal = scal_df[scal_df["ROCK_FLAG"] == rf_int]
+                sub_scal = scal_df_fit[scal_df_fit["ROCK_FLAG"] == rf_int]
                 if sub_scal.empty:
                     continue
                 a_f = float(fit_entry.get("a", 0.2))
@@ -6960,6 +7068,31 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
             else [],
             "well_names": scal_df["Well"].tolist() if not scal_df.empty else [],
             "samples": scal_df["Sample"].tolist() if not scal_df.empty else [],
+            "depths": (
+                scal_df["DEPTH"].tolist()
+                if (not scal_df.empty and "DEPTH" in scal_df.columns)
+                else []
+            ),
+            "zones": (
+                scal_df["ZONE"].tolist()
+                if (not scal_df.empty and "ZONE" in scal_df.columns)
+                else []
+            ),
+            "point_ids": (
+                scal_df["POINT_ID"].tolist()
+                if (not scal_df.empty and "POINT_ID" in scal_df.columns)
+                else []
+            ),
+            "plug_ids": (
+                scal_df["PLUG_ID"].tolist()
+                if (not scal_df.empty and "PLUG_ID" in scal_df.columns)
+                else []
+            ),
+            "excluded": (
+                [bool(x) for x in scal_df["EXCLUDED"].tolist()]
+                if (not scal_df.empty and "EXCLUDED" in scal_df.columns)
+                else []
+            ),
         }
 
         return {
@@ -7915,6 +8048,7 @@ class WorkspaceOptimizeFwlRequest(BaseModel):
     mdt_weight: Optional[float] = Field(None)
     solve_per_well: bool = Field(True)
     solve_per_zone: bool = Field(True)
+    pay_weighted: bool = Field(True)
     optimize_shm_params: bool = Field(False)
     unit: str = Field("metric")
     save: bool = Field(False)
@@ -8884,20 +9018,38 @@ def workspace_optimize_fwl(
             mdt_penalty_weight=penalty_w,
             solve_per_well=req.solve_per_well,
             solve_per_zone=req.solve_per_zone,
+            pay_weighted=req.pay_weighted,
             zone_col="ZONES",
             optimize_shm_params=req.optimize_shm_params,
             unit=req.unit,
         )
 
         saved_wells = 0
-        if req.save and "SW_SHM" in res["df"].columns:
-            for wn, grp in res["df"].groupby("WELL_NAME"):
-                _save_curves_to_well(
-                    project_id,
-                    str(wn),
-                    grp[["DEPTH", "SW_SHM"]].rename(columns={"SW_SHM": "SHF"}),
-                )
-                saved_wells += 1
+        contacts_records = []
+        if "fluid_contacts" in res and isinstance(res["fluid_contacts"], pd.DataFrame) and not res["fluid_contacts"].empty:
+            contacts_records = dataframe_to_records(res["fluid_contacts"])
+
+        if req.save:
+            if "SW_SHM" in res["df"].columns:
+                for wn, grp in res["df"].groupby("WELL_NAME"):
+                    _save_curves_to_well(
+                        project_id,
+                        str(wn),
+                        grp[["DEPTH", "SW_SHM"]].rename(columns={"SW_SHM": "SHF"}),
+                    )
+                    saved_wells += 1
+            if "fluid_contacts" in res and isinstance(res["fluid_contacts"], pd.DataFrame) and not res["fluid_contacts"].empty:
+                try:
+                    with get_db() as session:
+                        proj_obj = db_objects.Project.load(session, project_id=project_id)
+                        for wn, grp in res["fluid_contacts"].groupby("well_name"):
+                            try:
+                                well_obj = proj_obj.get_well(str(wn))
+                                well_obj.add_fluid_contacts(grp.to_dict(orient="records"), replace=False)
+                            except Exception:
+                                continue
+                except Exception:
+                    pass
 
         zone_metrics_df = res.get("zone_metrics")
         zone_metrics_records = (
@@ -8926,6 +9078,7 @@ def workspace_optimize_fwl(
             "well_metrics": dataframe_to_records(res["well_metrics"].round(4)),
             "zone_metrics": zone_metrics_records,
             "grid_profile": dataframe_to_records(res["grid_profile"].round(4)),
+            "fluid_contacts": contacts_records,
             "saved": req.save,
             "saved_wells": saved_wells,
         }
@@ -8933,6 +9086,125 @@ def workspace_optimize_fwl(
         raise HTTPException(
             status_code=400, detail=f"FWL optimization failed: {e}"
         ) from e
+
+
+class WorkspaceExtractContactsRequest(BaseModel):
+    well_names: Optional[List[str]] = Field(None, description="Subset of wells to extract contacts for")
+    zones: Optional[List[str]] = Field(None, description="Subset of zones")
+    save: bool = Field(True, description="Save extracted contacts into each well's ancillary data table")
+    replace: bool = Field(False, description="Replace existing contacts for target wells")
+    clean_slate: bool = Field(True, description="Clean slate: delete existing contacts for the zones under purview before inserting new ones")
+    sw_pay_cutoff: float = Field(0.65, description="Max Sw for hydrocarbon pay")
+    sw_water_cutoff: float = Field(0.90, description="Min Sw for 100% water leg")
+    phit_cutoff: float = Field(0.05, description="Min porosity for reservoir rock")
+    vsh_cutoff: float = Field(0.50, description="Max Vshale for reservoir rock")
+    min_sand_thickness: float = Field(1.0, description="Min cumulative sand thickness (m) to consider a zone reservoir-bearing")
+    require_pay: bool = Field(True, description="Only extract contacts for zones containing confirmed hydrocarbon pay")
+
+
+@router.post(
+    "/contacts/extract_and_save",
+    summary="Extract and save fluid limits & contacts (GUT, GDT, GOC, GWC, OUT, ODT, OWC, WUT, FWL) per well and zone",
+)
+def workspace_extract_and_save_contacts(
+    project_id: int, req: WorkspaceExtractContactsRequest
+) -> Dict[str, Any]:
+    """Extract petrophysical fluid limits and contacts across project wells with full data lineage."""
+    try:
+        proj_summary = get_project_summary(project_id)
+        all_well_names = [w["name"] for w in proj_summary.get("wells", [])]
+        target_wells = req.well_names if req.well_names else all_well_names
+        dfs = _load_multi_well_dfs(project_id, well_names=target_wells)
+        if not dfs:
+            raise ValueError("No well log data available for contact extraction.")
+        comb = pd.concat(dfs, ignore_index=True)
+        if req.zones and "ZONES" in comb.columns:
+            comb = comb[comb["ZONES"].isin(req.zones)]
+
+        contacts_df = extract_fluid_contacts_and_limits(
+            df=comb,
+            sw_pay_cutoff=req.sw_pay_cutoff,
+            sw_water_cutoff=req.sw_water_cutoff,
+            phit_cutoff=req.phit_cutoff,
+            vsh_cutoff=req.vsh_cutoff,
+            min_sand_thickness=req.min_sand_thickness,
+            require_pay=req.require_pay,
+        )
+
+        saved_count = 0
+        if req.save:
+            with get_db() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                zones_purview = [str(z).strip() for z in req.zones if str(z).strip()] if req.zones else None
+
+                # Clean slate for target wells in the zones under purview
+                if req.clean_slate or req.replace:
+                    for wn in target_wells:
+                        try:
+                            w = proj.get_well(str(wn))
+                            if req.replace or not zones_purview:
+                                w.delete_fluid_contacts()
+                            else:
+                                w.delete_fluid_contacts(zones=zones_purview)
+                        except Exception:
+                            continue
+
+                if not contacts_df.empty:
+                    for wn, grp in contacts_df.groupby("well_name"):
+                        try:
+                            w = proj.get_well(str(wn))
+                            w.add_fluid_contacts(
+                                grp.to_dict(orient="records"),
+                                replace=False,
+                            )
+                            saved_count += len(grp)
+                        except Exception:
+                            continue
+
+        records = dataframe_to_records(contacts_df)
+        return {
+            "project_id": project_id,
+            "contacts_count": len(records),
+            "saved_count": saved_count,
+            "contacts": records,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to extract fluid contacts: {exc}"
+        ) from exc
+
+
+@router.get(
+    "/contacts/summary",
+    summary="Get multi-well & zonal fluid contacts and limits summary for project",
+)
+def workspace_contacts_summary(
+    project_id: int, well_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """Retrieve all fluid contacts across project wells structured with lineage."""
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            target_wells = [well_name] if well_name else proj.get_well_names()
+            all_rows = []
+            for wn in target_wells:
+                try:
+                    w = proj.get_well(wn)
+                    df = w.get_fluid_contacts()
+                    for r in df.to_dict(orient="records"):
+                        r["well_name"] = wn
+                        all_rows.append(r)
+                except Exception:
+                    continue
+        return {
+            "project_id": project_id,
+            "contacts_count": len(all_rows),
+            "contacts": all_rows,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get fluid contacts summary: {exc}"
+        ) from exc
 
 
 class WorkspaceMlInferenceRequest(WorkspaceFilterBase):
@@ -9616,6 +9888,171 @@ def workspace_save_project_module_params(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to save project module parameters: {e}"
+        ) from e
+
+
+@router.delete(
+    "/wells/{well_name}/module_params",
+    summary="Delete or reset single-well module parameters",
+)
+def workspace_delete_well_module_params(
+    project_id: int,
+    well_name: str,
+    module: Optional[str] = None,
+    key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Delete saved single-well module parameters for a given module and/or selection key."""
+    try:
+        well_keys = {well_name, resolve_db_well_name(project_id, well_name)}
+        merged: Dict[str, Any] = {}
+        persisted = False
+        if not is_demo_mode():
+            with get_db() as session:
+                db_name = resolve_db_well_name(project_id, well_name)
+                well_orm = session.scalar(
+                    select(db_models.Well).filter_by(project_id=project_id, name=db_name)
+                )
+                if well_orm:
+                    current_cfg = (
+                        dict(well_orm.config_data)
+                        if isinstance(well_orm.config_data, dict)
+                        else {}
+                    )
+                    merged = dict(current_cfg.get(MODULE_PARAMS_CONFIG_KEY) or {})
+                    if module:
+                        if key and module in merged:
+                            mod_map = dict(merged[module])
+                            mod_map.pop(key, None)
+                            if mod_map:
+                                merged[module] = mod_map
+                            else:
+                                merged.pop(module, None)
+                        else:
+                            merged.pop(module, None)
+                    else:
+                        merged = {}
+
+                    current_cfg[MODULE_PARAMS_CONFIG_KEY] = merged
+                    well_orm.config_data = _sanitize_for_json(current_cfg)
+                    flag_modified(well_orm, "config_data")
+                    session.add(well_orm)
+                    persisted = True
+
+            for w_key in well_keys:
+                eph = _ephemeral_well_configs.get((project_id, w_key))
+                if eph and MODULE_PARAMS_CONFIG_KEY in eph:
+                    eph = dict(eph)
+                    eph[MODULE_PARAMS_CONFIG_KEY] = merged
+                    _ephemeral_well_configs[(project_id, w_key)] = eph
+
+        if not persisted:
+            base: Any = None
+            for w_key in well_keys:
+                eph = _ephemeral_well_configs.get((project_id, w_key)) or {}
+                if isinstance(eph.get(MODULE_PARAMS_CONFIG_KEY), dict):
+                    base = eph[MODULE_PARAMS_CONFIG_KEY]
+                    break
+            merged = dict(base or {})
+            if module:
+                if key and module in merged:
+                    mod_map = dict(merged[module])
+                    mod_map.pop(key, None)
+                    if mod_map:
+                        merged[module] = mod_map
+                    else:
+                        merged.pop(module, None)
+                else:
+                    merged.pop(module, None)
+            else:
+                merged = {}
+            for w_key in well_keys:
+                eph = dict(_ephemeral_well_configs.get((project_id, w_key), {}))
+                eph[MODULE_PARAMS_CONFIG_KEY] = merged
+                _ephemeral_well_configs[(project_id, w_key)] = eph
+
+        return _sanitize_for_json({
+            "well_name": well_name,
+            "module_params": merged,
+            "deleted": True,
+            "persisted": persisted,
+        })
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete module parameters: {e}"
+        ) from e
+
+
+@router.delete(
+    "/module_params",
+    summary="Delete or reset project-level module parameters",
+)
+def workspace_delete_project_module_params(
+    project_id: int,
+    module: Optional[str] = None,
+    key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Delete saved multi-well module parameters for a given module and/or zone key."""
+    try:
+        merged: Dict[str, Any] = {}
+        persisted = False
+        if not is_demo_mode():
+            try:
+                with get_db() as session:
+                    proj = session.get(db_models.Project, project_id)
+                    if proj is not None:
+                        cfg = (
+                            dict(proj.config_data)
+                            if isinstance(proj.config_data, dict)
+                            else {}
+                        )
+                        merged = dict(cfg.get(MODULE_PARAMS_CONFIG_KEY) or {})
+                        if module:
+                            if key and module in merged:
+                                mod_map = dict(merged[module])
+                                mod_map.pop(key, None)
+                                if mod_map:
+                                    merged[module] = mod_map
+                                else:
+                                    merged.pop(module, None)
+                            else:
+                                merged.pop(module, None)
+                        else:
+                            merged = {}
+                        cfg[MODULE_PARAMS_CONFIG_KEY] = merged
+                        proj.config_data = _sanitize_for_json(cfg)
+                        flag_modified(proj, "config_data")
+                        session.add(proj)
+                        persisted = True
+            except Exception:
+                persisted = False
+
+        if not persisted:
+            merged = dict(_ephemeral_project_module_params.get(project_id) or {})
+            if module:
+                if key and module in merged:
+                    mod_map = dict(merged[module])
+                    mod_map.pop(key, None)
+                    if mod_map:
+                        merged[module] = mod_map
+                    else:
+                        merged.pop(module, None)
+                else:
+                    merged.pop(module, None)
+            else:
+                merged = {}
+            _ephemeral_project_module_params[project_id] = merged
+        else:
+            _ephemeral_project_module_params.pop(project_id, None)
+
+        return _sanitize_for_json({
+            "project_id": project_id,
+            "module_params": merged,
+            "deleted": True,
+            "persisted": persisted,
+        })
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete project module parameters: {e}"
         ) from e
 
 
@@ -10736,6 +11173,9 @@ def workspace_clear_calculated_curves(
 
 class WorkspaceSwirrFitRequest(BaseModel):
     well_names: Optional[List[str]] = Field(None)
+    zones: Optional[List[str]] = Field(None)
+    min_depth: Optional[float] = Field(None)
+    max_depth: Optional[float] = Field(None)
     extraction_mode: Optional[str] = Field(None)
     extractionMode: Optional[str] = Field(None)
     reference_pc_psi: Optional[float] = Field(None)
@@ -10821,6 +11261,9 @@ def _extract_project_scal_plugs_for_swirr(
     cutoffs: Optional[List[float]] = None,
     ift: float = 30.0,
     theta: float = 30.0,
+    zones: Optional[List[str]] = None,
+    min_depth: Optional[float] = None,
+    max_depth: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Extract plug-level SCAL drainage curves and matched CPORE/CPERM/ROCK_FLAG across project wells."""
     cutoffs_list = sorted(float(c) for c in (cutoffs or [0.5, 1.2, 2.5, 5.0]))
@@ -10850,6 +11293,14 @@ def _extract_project_scal_plugs_for_swirr(
         rf for rf in valid_flags if highest_flag is None or rf < highest_flag
     ] or ([1, 2, 3] if not valid_flags else valid_flags)
 
+    allowed_zones_set = (
+        {str(z).strip() for z in zones if str(z).strip()}
+        if zones
+        else None
+    )
+    min_d_filter = float(min_depth) if min_depth is not None else None
+    max_d_filter = float(max_depth) if max_depth is not None else None
+
     plug_records: List[Dict[str, Any]] = []
     with get_db() as session:
         proj = db_objects.Project.load(session, project_id=project_id)
@@ -10867,6 +11318,10 @@ def _extract_project_scal_plugs_for_swirr(
                 if pc_df is None or pc_df.empty:
                     continue
                 s_depth = float(sample.get("depth") or 0.0)
+                if min_d_filter is not None and s_depth > 0 and s_depth < min_d_filter:
+                    continue
+                if max_d_filter is not None and s_depth > 0 and s_depth > max_d_filter:
+                    continue
                 meas = sample.get("measurements")
                 cperm = None
                 cpore = None
@@ -10974,6 +11429,15 @@ def _extract_project_scal_plugs_for_swirr(
                         has_core_perm = True
 
                 near_rock_flag: Optional[int] = None
+                if s_depth > 0 or allowed_zones_set is not None:
+                    try:
+                        if well_df_cache is None:
+                            well_df_cache = _get_filtered_well_df(project_id, wn)
+                    except Exception:
+                        pass
+                s_zone = _resolve_scal_sample_zone(s_depth, well_df_cache, anc)
+                if allowed_zones_set is not None and s_zone not in allowed_zones_set:
+                    continue
                 if s_depth > 0:
                     try:
                         if well_df_cache is None:
@@ -11078,10 +11542,11 @@ def _extract_project_scal_plugs_for_swirr(
 
                 plug_records.append(
                     {
-                        "plug_id": f"{wn}:{sname}",
+                        "plug_id": f"{wn}::{sname}",
                         "well": str(wn),
                         "sample": str(sname),
                         "depth": round(float(s_depth), 2),
+                        "zone": s_zone,
                         "rt": int(rf_val),
                         "cpore": round(float(cpore), 4),
                         "cperm": round(float(cperm), 4),
@@ -11095,7 +11560,7 @@ def _extract_project_scal_plugs_for_swirr(
         [int(r) if r is not None else -1 for r in rock_flags], dtype=int
     )
     default_well = fzi_wells[0] if fzi_wells else "Project"
-    if len(plug_records) < 3:
+    if len(plug_records) < 3 and not allowed_zones_set:
         for rf_int in reservoir_flags:
             mask_rf = (
                 (rf_arr_full == rf_int)
@@ -11138,10 +11603,11 @@ def _extract_project_scal_plugs_for_swirr(
                 sname_syn = f"SYN_RT{rf_int}_{p_idx + 1}"
                 plug_records.append(
                     {
-                        "plug_id": f"{default_well}:{sname_syn}",
+                        "plug_id": f"{default_well}::{sname_syn}",
                         "well": str(default_well),
                         "sample": sname_syn,
                         "depth": round(1500.0 + rf_int * 25.0 + p_idx * 3.5, 2),
+                        "zone": "Unknown",
                         "rt": int(rf_int),
                         "cpore": round(p_plug, 4),
                         "cperm": round(k_plug, 4),
@@ -11201,7 +11667,14 @@ def workspace_swirr_fit(
             if req.excluded_plug_ids is not None
             else (req.excludedPlugIds or [])
         )
-        excluded_set = {str(x).strip() for x in excl_raw if str(x).strip()}
+        excluded_set = set()
+        for x in excl_raw:
+            x_s = str(x).strip()
+            if x_s:
+                if "::" not in x_s and ":" in x_s:
+                    excluded_set.add(x_s.replace(":", "::", 1))
+                else:
+                    excluded_set.add(x_s)
 
         raw_plugs = _extract_project_scal_plugs_for_swirr(
             project_id,
@@ -11210,6 +11683,9 @@ def workspace_swirr_fit(
             cutoffs=req.cutoffs,
             ift=req.ift,
             theta=req.theta,
+            zones=req.zones,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
         )
 
         plug_rows: List[Dict[str, Any]] = []
@@ -11224,7 +11700,7 @@ def workspace_swirr_fit(
             rqi_ratio = math.sqrt(cperm / max(0.001, cpore))
             rqi_um = 0.0314 * rqi_ratio
             pid = str(p["plug_id"])
-            is_excl = pid in excluded_set
+            is_excl = pid in excluded_set or pid.replace("::", ":", 1) in excluded_set
             is_incl = bool(valid_pc and not is_excl)
 
             plug_rows.append(

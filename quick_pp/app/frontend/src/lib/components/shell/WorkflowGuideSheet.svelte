@@ -797,7 +797,8 @@
 							Capillary Pressure: Pc = 0.433527 · (ρ_w - ρ_hc) · h<br />
 							Leverett J: J = (0.2166 · Pc / (σ · cos θ)) · √(k / φ_e)<br />
 							Inversion: Sw_SHF = Swirr + (1 - Swirr) · (J / A_J)^(-1 / B_J)<br />
-							Skelt-Harrison: Sw_SHF(h) = 1 - A · exp(- (B / (h + D))^C)
+							Skelt-Harrison: Sw_SHF(h) = 1 - A · exp(- (B / (h + D))^C)<br />
+							Fluid Limits & Contacts: GUT, GDT, GOC, GWC | OUT, ODT, OWC | WUT, FWL
 						</div>
 					</div>
 				</section>
@@ -1027,7 +1028,7 @@
 
 	<!-- Bottom Footer -->
 	<div class="flex h-9 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-4 text-[10px] text-[var(--text-muted)]">
-		<span>quick_pp SSOT Technical Reference v0.3.3</span>
+		<span>quick_pp SSOT Technical Reference v0.3.4</span>
 		<div class="flex items-center gap-2">
 			<span>Press <strong>Esc</strong> to close</span>
 		</div>

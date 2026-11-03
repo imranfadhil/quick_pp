@@ -1673,7 +1673,15 @@ def tool_get_workflow_technical_reference(
                 "primary_match": matches[0],
                 "reference_content": matches[0]["content"],
                 "source": f"docs/workflows/{'multi_well.md' if 'multi' in matches[0]['scope'] else 'single_well.md'}",
+                "found": True,
             }
+        return {
+            "tool": "get_workflow_technical_reference",
+            "query": query,
+            "matches_count": 0,
+            "reference_content": f"No workflow technical reference found matching query '{query}'.",
+            "found": False,
+        }
 
     if step:
         content = get_step_reference(effective_scope, step)

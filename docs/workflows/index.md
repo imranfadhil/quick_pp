@@ -85,7 +85,7 @@ The tables below define the 1-to-1 correspondence between the SvelteKit workbenc
 | **Step 2** | `qaqc` | `MultiWellQaqc.svelte` | [`#mw-step-2-qaqc`](multi_well.md#mw-step-2-qaqc) | Key-well designation & stratigraphic quantile normalization |
 | **Step 3** | `rock-typing` | `MultiWellRockTyping.svelte` | [`#mw-step-3-rock-typing`](multi_well.md#mw-step-3-rock-typing) | Core Hydraulic Flow Units (FZI), Winland $r_{35}$ & Lucia RFN |
 | **Step 4** | `perm-transform` | `MultiWellPermTransform.svelte` | [`#mw-step-4-perm-transform`](multi_well.md#mw-step-4-perm-transform) | Rock-type partitioned poro-perm regression ($k = a \cdot e^{b\phi}$) |
-| **Step 5** | `shf` | `MultiWellShf.svelte` | [`#mw-step-5-shf`](multi_well.md#mw-step-5-shf) | Saturation-Height Modeling (Leverett $J$ / Skelt-Harrison) & log reconciliation |
+| **Step 5** | `shf` | `MultiWellShf.svelte` | [`#mw-step-5-shf`](multi_well.md#mw-step-5-shf) | Saturation-Height Modeling (Leverett $J$ / Skelt-Harrison), fluid contacts & log reconciliation |
 | **Step 6** | `volumetrics` | `MultiWellVolumetrics.svelte` | [`#mw-step-6-volumetrics`](multi_well.md#mw-step-6-volumetrics) | Probabilistic Monte Carlo LHS STOIIP/GIIP (P90/P50/P10) & Tornado |
 | **Step 7** | `report` | `InspectorReport.svelte` | [`#mw-step-7-report`](multi_well.md#mw-step-7-report) | Field Development Plan (FDP) comprehensive report generation |
 | **Standalone** | `swirr-corr` | `MultiWellSwirr.svelte` | [`#mw-standalone-scal-relperm`](multi_well.md#mw-standalone-scal-relperm) | **SCAL & Rel-Perm**: Field Swirr fit, Brooks-Corey, LET & SWOF decks |

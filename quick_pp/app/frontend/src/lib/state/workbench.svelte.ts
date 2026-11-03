@@ -139,6 +139,7 @@ export interface ThomasStieberParams {
 }
 
 export interface SaturationModelParams {
+	fwl: number;
 	method: 'waxman_smits' | 'archie';
 	rwMode: 'salinity_temp' | 'pickett';
 	measSystem: 'metric' | 'imperial';
@@ -548,6 +549,15 @@ class WorkbenchState {
 
 	// Right pane view mode
 	rightPaneTab = $state<'crossplot' | 'grid' | 'split'>('split');
+	/** Sub-tab within the right bottom data dock: 'data' (Step Data / QC) or 'params' (Parameters & Fits). */
+	rightGridSubTab = $state<'data' | 'params'>('data');
+
+	openParametersTab() {
+		this.rightGridSubTab = 'params';
+		if (this.rightPaneTab === 'crossplot') {
+			this.rightPaneTab = 'split';
+		}
+	}
 	crossplotTemplateOverride = $state<
 		| 'auto'
 		| 'nphi-rhob'
@@ -590,6 +600,7 @@ class WorkbenchState {
 	stickPlotShowContacts = $state<boolean>(true);
 	stickPlotShowTops = $state<boolean>(true);
 	stickPlotShowPerfs = $state<boolean>(true);
+	logShowContacts = $state<boolean>(true);
 
 	// Global modal / drawer flags
 	importerOpen = $state<boolean>(false);
@@ -729,7 +740,8 @@ class WorkbenchState {
 		bMethod: 'waxman_smits',
 		qvMethod: 'cec',
 		cecClay: 0.1,
-		rhoDryClay: 2.71
+		rhoDryClay: 2.71,
+		fwl: 0
 	});
 
 	scalParams = $state<ScalModelParams>({

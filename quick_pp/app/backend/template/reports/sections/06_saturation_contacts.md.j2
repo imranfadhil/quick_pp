@@ -32,3 +32,41 @@ $$S_w^n + R_w \cdot B \cdot Q_v \cdot S_w^{n-1} = \frac{a \cdot R_w}{\phi_t^m \c
 
 ![Figure {{ sec_num }}.1: Pickett Plot & Water Saturation Profile vs. Free Water Level]({{ assets.pickett_shf_plot }})
 {% endif %}
+
+### {{ sec_num }}.2 Multi-Well & Zonal Fluid Contacts, Proved Column & Uncertainty Brackets
+
+Accurate delineation of fluid contacts is fundamental to volumetric in-place estimation and dynamic reservoir simulation. The proved hydrocarbon column is bounded by the shallowest and deepest proved fluid limits, while discrete contacts (OWC, GOC, GWC) and Free Water Levels (FWL) define the hydrostatic equilibrium boundaries.
+
+{% if fluid_contacts_rows and fluid_contacts_rows|length > 0 %}
+| Well Name | Zone | Fault Block | Contact / Limit Type | Depth (m TVDss) | Determination Method / Source | Geological Notes / Remarks |
+| :--- | :--- | :--- | :---: | :---: | :--- | :--- |
+{% for row in fluid_contacts_rows %}
+| {{ row.well_name }} | {{ row.zone or "General" }} | {{ row.fault_block or "-" }} | **{{ row.contact_type }}** | {{ "%.1f"|format(row.depth) if row.depth is not none else "-" }} | {{ row.source or "Petrophysical Log Evaluation" }} | {{ row.remarks or "-" }} |
+{% endfor %}
+
+{% if fluid_contacts_summary and fluid_contacts_summary|length > 0 %}
+#### Hydrocarbon Column & Uncertainty Bracket Summary by Zone
+
+{% for z in fluid_contacts_summary %}
+* **Zone: `{{ z.zone }}`**{% if z.fault_block %} (Fault Block: `{{ z.fault_block }}`){% endif %}:
+  {% if z.gut is not none and z.gdt is not none %}
+  - **Proved Gas Column:** ${{ "%.1f"|format(z.gut) }}\text{ m}$ (GUT) to ${{ "%.1f"|format(z.gdt) }}\text{ m TVDss}$ (GDT) [Proved Gross Gas Column: ${{ "%.1f"|format(z.gdt - z.gut) }}\text{ m}$].
+  {% endif %}
+  {% if z.out is not none and z.odt is not none %}
+  - **Proved Oil Column:** ${{ "%.1f"|format(z.out) }}\text{ m}$ (OUT) to ${{ "%.1f"|format(z.odt) }}\text{ m TVDss}$ (ODT) [Proved Gross Oil Column: ${{ "%.1f"|format(z.odt - z.out) }}\text{ m}$].
+  {% endif %}
+  {% if z.goc is not none %}
+  - **Gas-Oil Contact (GOC):** ${{ "%.1f"|format(z.goc) }}\text{ m TVDss}$ (Bracket: ${{ "%.1f"|format(z.gdt) if z.gdt else "N/A" }}\text{ m}$ to ${{ "%.1f"|format(z.out) if z.out else "N/A" }}\text{ m}$).
+  {% endif %}
+  {% if z.owc is not none %}
+  - **Oil-Water Contact (OWC):** ${{ "%.1f"|format(z.owc) }}\text{ m TVDss}$ (Bracket: ${{ "%.1f"|format(z.odt) if z.odt else "N/A" }}\text{ m}$ to ${{ "%.1f"|format(z.wut) if z.wut else "N/A" }}\text{ m}$).
+  {% endif %}
+  {% if z.fwl is not none %}
+  - **Free Water Level (FWL):** ${{ "%.1f"|format(z.fwl) }}\text{ m TVDss}$ (Capillary $P_c = 0$ Datum).
+  {% endif %}
+{% endfor %}
+{% endif %}
+{% else %}
+> [!NOTE]
+> Discrete single-well fluid contact markers (GUT/GDT/OUT/ODT/WUT/OWC/GOC/FWL) have not yet been extracted or committed to ancillary data for this project. Global saturation model uses $FWL = {{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$.
+{% endif %}

@@ -12,7 +12,8 @@ Running `python scripts/release.py --bump <VERSION>` automatically updates:
 3. [`CITATION.cff`](../CITATION.cff) (`version: <VERSION>`)
 4. [`quick_pp/app/frontend/package.json`](../quick_pp/app/frontend/package.json) (`"version": "<VERSION>"`)
 5. [`quick_pp/app/frontend/src/lib/state/auth.svelte.ts`](../quick_pp/app/frontend/src/lib/state/auth.svelte.ts) (`appVersion` fallback)
-6. [`uv.lock`](../uv.lock) (via `uv lock`)
+6. [`quick_pp/app/frontend/src/lib/components/shell/WorkflowGuideSheet.svelte`](../quick_pp/app/frontend/src/lib/components/shell/WorkflowGuideSheet.svelte) (`quick_pp SSOT Technical Reference v<VERSION>`)
+7. [`uv.lock`](../uv.lock) (via `uv lock`)
 
 > **Note:** Remember to also add release notes for the new version in [`docs/community/changelog.md`](../docs/community/changelog.md).
 

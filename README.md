@@ -331,6 +331,6 @@ If you use `quick_pp` in your academic research, coursework, publications, or te
   publisher    = {GitHub},
   journal      = {GitHub repository},
   howpublished = {\url{https://github.com/imranfadhil/quick_pp}},
-  version      = {0.3.3}
+  version      = {0.3.4}
 }
 ```

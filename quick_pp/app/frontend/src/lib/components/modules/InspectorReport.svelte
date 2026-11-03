@@ -46,17 +46,34 @@
 			[]) as AnomalyFlagItem[]
 	);
 
+	let evaluatedWells = $derived(
+		projectData.wells.filter((w) => {
+			const c = w.curves || (w as any).available_curves || [];
+			return c.length > 0 && (w.row_count ?? (w as any).depth_count ?? 1) > 0;
+		})
+	);
+
+	function getTargetWells(): string[] {
+		if (isSingleWell) {
+			return workbench.wellId
+				? [workbench.wellId]
+				: (evaluatedWells[0]?.name ? [evaluatedWells[0].name] : projectData.wells.slice(0, 1).map((w) => w.name));
+		}
+		if (projectData.selectedWellNames.length > 0) {
+			const evalSet = new Set(evaluatedWells.map((w) => w.name));
+			const validSel = projectData.selectedWellNames.filter((name) => evalSet.has(name));
+			return validSel.length > 0 ? validSel : evaluatedWells.map((w) => w.name);
+		}
+		return evaluatedWells.length > 0
+			? evaluatedWells.map((w) => w.name)
+			: projectData.wells.map((w) => w.name);
+	}
+
 	async function runPreRenderAudit() {
 		if (!workbench.projectId) return;
 		isRunningPreCheck = true;
 		try {
-			const targetWells = isSingleWell
-				? workbench.wellId
-					? [workbench.wellId]
-					: projectData.wells.slice(0, 1).map((w) => w.name)
-				: projectData.selectedWellNames.length > 0
-					? projectData.selectedWellNames
-					: projectData.wells.map((w) => w.name);
+			const targetWells = getTargetWells();
 			const params = new URLSearchParams();
 			if (targetWells.length > 0) {
 				params.set('wells', targetWells.join(','));
@@ -104,10 +121,14 @@
 	}
 
 	function toggleWellSelection(wellName: string) {
-		if (projectData.selectedWellNames.includes(wellName)) {
-			projectData.selectedWellNames = projectData.selectedWellNames.filter((w) => w !== wellName);
+		const currentSel =
+			projectData.selectedWellNames.length > 0
+				? [...projectData.selectedWellNames]
+				: evaluatedWells.map((w) => w.name);
+		if (currentSel.includes(wellName)) {
+			projectData.selectedWellNames = currentSel.filter((w) => w !== wellName);
 		} else {
-			projectData.selectedWellNames = [...projectData.selectedWellNames, wellName];
+			projectData.selectedWellNames = [...currentSel, wellName];
 		}
 	}
 
@@ -119,13 +140,7 @@
 		const reportType: ReportType = isSingleWell
 			? 'SINGLE_WELL_CPI'
 			: workbench.reportConfig.reportType;
-		const targetWells = isSingleWell
-			? workbench.wellId
-				? [workbench.wellId]
-				: projectData.wells.slice(0, 1).map((w) => w.name)
-			: projectData.selectedWellNames.length > 0
-				? projectData.selectedWellNames
-				: projectData.wells.map((w) => w.name);
+		const targetWells = getTargetWells();
 
 		const defaultTitle = isSingleWell
 			? `Well ${targetWells[0] || ''} — Petrophysical CPI & Evaluation Dossier`
@@ -157,6 +172,7 @@
 				well_names: targetWells,
 				zones: activeZones,
 				target_zones: activeZones,
+				fwl_tvdss: workbench.saturationParams.fwl ?? projectData.shfParams.fwl ?? undefined,
 				min_depth: workbench.depthFilter ? workbench.depthFilter.min : undefined,
 				max_depth: workbench.depthFilter ? workbench.depthFilter.max : undefined,
 				model_params: {
@@ -170,6 +186,14 @@
 					nphi_clay: workbench.lithoParams.dryClayNphi,
 					rho_clay: workbench.lithoParams.dryClayRhob,
 					rho_fl: workbench.lithoParams.fluidRhob,
+					dry_sand_point: [-0.02, workbench.lithoParams.drySandRhob ?? 2.65],
+					dry_clay_point: [workbench.lithoParams.dryClayNphi ?? 0.33, workbench.lithoParams.dryClayRhob ?? 2.70],
+					dry_silt_point: (workbench.lithoParams as any).drySiltPoint ?? undefined,
+					silt_line_angle: (workbench.lithoParams as any).siltLineAngle ?? 119.0,
+					fluid_point: [1.0, workbench.lithoParams.fluidRhob ?? 1.0],
+					fzi_cutoffs: projectData.fziCutoffs,
+					fziCutoffs: projectData.fziCutoffs,
+					fwl: workbench.saturationParams.fwl ?? projectData.shfParams.fwl ?? undefined,
 					badhole_treatment: workbench.lithoParams.badholeTreatment,
 					cali_threshold: workbench.badholeParams.caliThreshold,
 					bitsize_default: workbench.badholeParams.bitsizeDefault,
@@ -369,7 +393,7 @@
 			title={isSingleWell ? 'Well Net Pay Cutoffs' : 'Evaluated Wells & Pay Cutoffs'}
 			badge={isSingleWell
 				? 'Pay Flags'
-				: `${projectData.selectedWellNames.length || projectData.wells.length} wells`}
+				: `${projectData.selectedWellNames.length || evaluatedWells.length} wells`}
 		>
 			{#if !isSingleWell && projectData.wells.length > 0}
 				<div class="mb-2">
@@ -381,10 +405,10 @@
 							<button
 								type="button"
 								onclick={() =>
-									(projectData.selectedWellNames = projectData.wells.map((w) => w.name))}
+									(projectData.selectedWellNames = evaluatedWells.map((w) => w.name))}
 								class="font-medium text-blue-600 hover:underline"
 							>
-								All ({projectData.wells.length})
+								Evaluated ({evaluatedWells.length})
 							</button>
 							<span class="text-[var(--text-muted)]">·</span>
 							<button
@@ -404,14 +428,25 @@
 						class="max-h-28 space-y-1 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
 					>
 						{#each projectData.wells as w (w.name)}
+							{@const hasCurves =
+								(w.curves?.length ?? 0) > 0 ||
+								((w as any).available_curves?.length ?? 0) > 0}
+							{@const isChecked =
+								hasCurves &&
+								(projectData.selectedWellNames.length > 0
+									? projectData.selectedWellNames.includes(w.name)
+									: true)}
 							<label
-								class="flex cursor-pointer items-center justify-between gap-1.5 rounded-xs px-1 py-0.5 text-xs hover:bg-[var(--bg-subtle)]"
+								class="flex items-center justify-between gap-1.5 rounded-xs px-1 py-0.5 text-xs {hasCurves
+									? 'cursor-pointer hover:bg-[var(--bg-subtle)]'
+									: 'opacity-40 cursor-not-allowed'}"
 							>
 								<span class="flex items-center gap-1.5 min-w-0">
 									<input
 										type="checkbox"
-										checked={projectData.selectedWellNames.includes(w.name)}
-										onchange={() => toggleWellSelection(w.name)}
+										disabled={!hasCurves}
+										checked={isChecked}
+										onchange={() => hasCurves && toggleWellSelection(w.name)}
 										class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 									/>
 									<span class="mono-num truncate font-medium text-[var(--text-primary)]">
@@ -419,7 +454,11 @@
 									</span>
 								</span>
 								<span class="mono-num text-[10px] text-[var(--text-muted)]">
-									{(w.depth_count ?? (w as any).row_count)?.toLocaleString() ?? ''} pts
+									{#if !hasCurves}
+										No Logs
+									{:else}
+										{(w.depth_count ?? (w as any).row_count)?.toLocaleString() ?? ''} pts
+									{/if}
 								</span>
 							</label>
 						{/each}

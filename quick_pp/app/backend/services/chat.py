@@ -81,6 +81,45 @@ PROVIDERS_CATALOG = [
     },
 ]
 
+
+PRESET_QUICK_ACTIONS: List[Dict[str, str]] = [
+    {
+        "label": "Inspect Well",
+        "prompt": "Inspect this well and summarize available curves, zones, and core coverage.",
+        "description": "Inventory well curves, depth intervals, formation tops, and core coverage.",
+    },
+    {
+        "label": "Run QAQC",
+        "prompt": "Run qaqc.py on this well (badhole flagging and NPHI/RHOB hydrocarbon correction).",
+        "description": "Identify out-of-limit spikes, borehole washouts (BADHOLE), and hydrocarbon effects.",
+    },
+    {
+        "label": "Multi-Mineral",
+        "prompt": "Execute multi_mineral.py lithology and porosity optimization on this well.",
+        "description": "Simultaneous solver for mineral fractions (Quartz, Calcite, Clay) and effective porosity.",
+    },
+    {
+        "label": "Run SHF",
+        "prompt": "Execute shf.py saturation height function and reconcile Sw vs SHF.",
+        "description": "FZI rock typing, Leverett-J saturation height modeling, and Sw vs SHF reconciliation.",
+    },
+    {
+        "label": "Conformal Bounds",
+        "prompt": "Calibrate conformal prediction on the fly and explain the interpretation with P10-P90 bounds.",
+        "description": "Locally weighted split conformal prediction for distribution-free P10–P90 uncertainty intervals.",
+    },
+    {
+        "label": "Full Evaluation",
+        "prompt": "Run a full petrophysical evaluation (QAQC, multi-mineral, SHF, and conformal prediction bounds) and explain the results.",
+        "description": "End-to-end automated petrophysical pipeline combining QAQC, lithology, SHF, and conformal intervals.",
+    },
+    {
+        "label": "FDP Report",
+        "prompt": "Generate a full FDP Petrophysical Evaluation Report for this project with AI executive summary and figures.",
+        "description": "Compile an FDP Petrophysical Evaluation Report with high-DPI figures and export options.",
+    },
+]
+
 SYSTEM_PROMPT = """You are the quick_pp Petrophysical AI Assistant embedded inside the Svelte Subsurface Workbench.
 You have direct access to the Petrophysical MCP Server tools:
 - `inspect_well`: Inspect well curves, depth range, formation tops, fluid contacts, core count, and zonal stats.
@@ -95,7 +134,34 @@ You have direct access to the Petrophysical MCP Server tools:
 - `export_report_to_pdf`: Compile the active report into a downloadable A4 PDF document.
 - `get_workflow_technical_reference`: Retrieve authoritative petrophysical equations, curve contracts, parameter bounds, and diagnostic guidelines from the quick_pp SSOT technical foundation in docs/workflows/.
 
-Always ground your interpretation in the quantitative tool outputs and the quick_pp SSOT technical foundations: cite depth intervals, zonal means, P10–P90 conformal interval widths, physical constraints (volumetric closure, washout impact, FWL transition zones), and reference governing equations from docs/workflows/ when explaining petrophysical methods.
+CRITICAL DIRECTIVE — SELF-ASSESSED ANSWER CONFIDENCE & EPISTEMIC HUMILITY:
+You must critically assess and explicitly state your level of confidence in the answer you provide.
+Subsurface and petrophysical evaluations involve high-stakes technical and financial decisions. Unwarranted certainty, guessing, or hallucinating numbers can cause severe errors.
+
+1. Explicit Confidence Assessment:
+   In EVERY response, you must explicitly evaluate your own confidence in your answer:
+   - **High Confidence**: The answer is directly proven by executed quantitative tool outputs or authoritative quick_pp SSOT documentation.
+   - **Medium Confidence**: The answer is based on general petrophysical rules-of-thumb or empirical correlations, but you lack local calibration, key logs are missing, or the prompt has minor ambiguities.
+   - **Low Confidence**: You are making assumptions, extrapolating beyond available project data, recalling regional literature/analogues from general pre-training without local well verification, or estimating numbers without direct measurements.
+
+2. Mandatory Callout When NOT Confident:
+   Whenever your confidence in the answer is **Medium** or **Low**, you MUST highlight this prominently at the start of your response or in a dedicated callout block:
+   ```markdown
+   > ⚠️ **Answer Confidence: [Low / Medium]**
+   > - **Why I am not confident in this answer**: [Explain specifically what information is unverified, missing, or approximate in what you are saying].
+   > - **Knowledge Gaps & Uncertainties in this Answer**: [Detail what you do not know for sure, what assumptions you made, and what might differ in reality].
+   > - **How to Verify**: [State what specific tool or action the user should run, e.g. "Run `Inspect Well` or `Multi-Mineral` on the active well to compute the true local porosity."].
+   ```
+
+3. Regional Literature Queries (e.g., "what is the average porosity in balmoral sandstone"):
+   - If the user asks about an external formation, regional analogue, or literature property, state clearly that your confidence regarding the active well is **Low** because regional values are external generalizations.
+   - Provide the known literature context (e.g. Paleocene Balmoral turbidite sandstones in the UK North Sea typically have high average porosities between 28% and 35%, with permeabilities ranging from 500 to 3000 mD), BUT immediately highlight:
+     - The gap in the answer: This is an uncalibrated regional reference only. Actual local porosity is governed by burial compaction, cementation (calcite/quartz), and clay content.
+     - You cannot confirm whether the currently loaded well penetrates this formation without running inspection tools.
+     - Instruct the user to run the relevant quick action (`Inspect Well` or `Multi-Mineral`) to evaluate their loaded well logs directly.
+
+4. Never Fake Confidence:
+   Never present speculative estimates as authoritative facts. If you do not have enough data to give a confident answer, openly state your uncertainty and guide the user on how to resolve it.
 """
 
 
@@ -173,16 +239,26 @@ def _plan_native_tool_calls(req: AgentChatRequest) -> List[Dict[str, Any]]:
         )
 
     # Workflow Theory, Equations & SSOT Reference Queries (independent of active project)
-    wants_theory = any(
+    # Require explicit theory/methodology keywords combined with petrophysical terms
+    has_theory_kw = any(
         kw in q
         for kw in (
-            "equation", "formula", "theory", "foundation", "how is", "how do you calculate",
-            "what is the model", "cutoffs", "definition", "ssot", "reference",
-            "explain", "how does", "what model", "which model", "cite formula",
-            "what are the cutoffs", "best practice", "parameter tuning", "guideline",
-            "tell me about", "what is", "how to"
+            "equation", "formula", "governing equation", "cite formula",
+            "how do you calculate", "how is", "mathematical model",
+            "ssot reference", "technical reference", "workflow reference",
+            "cutoffs definition", "parameter bounds", "theoretical foundation"
         )
     )
+    has_petro_topic = any(
+        topic in q
+        for topic in (
+            "qaqc", "badhole", "washout", "multimineral", "multi-mineral", "lithology",
+            "porosity", "shf", "leverett", "j-function", "capillary", "conformal",
+            "uncertainty", "archie", "simandoux", "permeability", "fzi", "vshale",
+            "clay", "fwl", "fluid contact", "water saturation"
+        )
+    )
+    wants_theory = has_theory_kw and has_petro_topic
     if wants_theory:
         calls.append(
             {
@@ -534,23 +610,64 @@ def _plan_native_tool_calls(req: AgentChatRequest) -> List[Dict[str, Any]]:
         )
         return calls
 
-    # Default fallback if user asks a general question on an active well: inspect + conformal bounds
-    if not calls and well:
-        calls.append({"name": "inspect_well", "arguments": common_filter})
-        calls.append(
-            {
-                "name": "evaluate_with_conformal_bounds",
-                "arguments": {
-                    **common_filter,
-                    "alpha": req.alpha,
-                    "save": True,
-                },
-            }
-        )
-    elif not calls and pid is not None:
-        calls.append({"name": "inspect_well", "arguments": {"project_id": int(pid)}})
-
+    # Do not execute arbitrary tools if no specific petrophysical intent was recognized.
+    # Return empty list so the caller handles unrecognized prompts gracefully with preset quick actions.
     return calls
+
+
+
+def _handle_unrecognized_native_prompt(
+    req: AgentChatRequest,
+) -> tuple[str, List[Dict[str, str]]]:
+    """Gracefully handle prompts that the deterministic built-in agent cannot answer directly."""
+    q = req.message.strip()
+    well = req.well_name or "active well"
+
+    # Check if user is asking about external formation/analogue or regional literature
+    is_regional_or_literature = any(
+        term in q.lower()
+        for term in (
+            "sandstone", "formation", "group", "basin", "field", "balmoral", "brent",
+            "statfjord", "forties", "ekofisk", "clifton", "average porosity", "typical",
+            "analogue", "analog", "literature", "benchmark", "regional"
+        )
+    )
+
+    if is_regional_or_literature:
+        confidence_details = (
+            f"> ⚠️ **Answer Confidence: Low / Cannot Determine**\n"
+            f"> The Built-in Petrophysical Agent cannot reliably answer this question from the loaded project data.\n"
+            f"> \n"
+            f"> **Why the agent is not confident in this answer:**\n"
+            f"> - **Regional / Literature Gap**: The prompt asks about regional formation properties (*{q}*), which are not present in the active well logs (`{well}`).\n"
+            f"> - **Deterministic Boundary**: The Built-in Agent operates strictly on deterministic quantitative tools (`inspect_well`, `run_well_qaqc`, `run_multi_mineral`, `run_shf_evaluation`, `evaluate_with_conformal_bounds`). It does not have an open-domain neural memory of worldwide formation literature.\n"
+            f"> - **How to Get an Answer**: Switch to an external LLM provider (**OpenRouter** or **Ollama**) in **Stack Settings (⚙)**. With an LLM enabled, the assistant can provide published regional literature benchmarks (such as North Sea Paleocene Balmoral turbidite porosities of ~28–35%) while explicitly highlighting any uncertainties."
+        )
+    else:
+        confidence_details = (
+            f"> ⚠️ **Answer Confidence: Low / Unrecognized Intent**\n"
+            f"> The Built-in Agent cannot determine the intended subsurface workflow from this prompt.\n"
+            f"> \n"
+            f"> **Why the agent is not confident in this answer:**\n"
+            f"> - **Unrecognized Command**: The prompt (*{q}*) does not match a supported petrophysical tool command on `{well}`.\n"
+            f"> - **Deterministic Boundary**: The Built-in Agent only executes verified petrophysical algorithms (Log QAQC, multi-mineral lithology/porosity inversion, saturation height modeling, conformal P10–P90 bounds, and FDP reports).\n"
+            f"> - **Recommendation**: Choose from the preset quick actions below, or switch to an external LLM provider (**OpenRouter** or **Ollama**) in **Stack Settings (⚙)** for open-ended queries."
+        )
+
+    actions_md = "\n".join(
+        f"- ⚡ **{act['label']}**: {act['description']}"
+        for act in PRESET_QUICK_ACTIONS
+    )
+
+    reply = (
+        f"### ℹ️ Built-in Agent Notice\n\n"
+        f"{confidence_details}\n\n"
+        f"---\n\n"
+        f"#### ⚡ Preset Quick Actions for `{well}`\n"
+        f"Instead of guessing or executing unrequested operations, you can run any of these verified workflows:\n\n"
+        f"{actions_md}\n"
+    )
+    return reply, PRESET_QUICK_ACTIONS
 
 
 def _synthesize_petrophysical_explanation(
@@ -565,6 +682,30 @@ def _synthesize_petrophysical_explanation(
         )
 
     sections: List[str] = []
+
+    # Check for confidence degraders across tool outputs
+    has_washout = any(
+        (rec.get("result") or {}).get("badhole", {}).get("flagged_count", 0) > 0
+        for rec in tool_records
+    )
+    no_core = any(
+        rec.get("name") == "inspect_well" and (rec.get("result") or {}).get("core_sample_count", 0) == 0
+        for rec in tool_records
+    )
+
+    if has_washout or no_core:
+        reasons: List[str] = []
+        if has_washout:
+            reasons.append("washout intervals detected where density/neutron log measurements are degraded by pad standoff")
+        if no_core:
+            reasons.append("lack of routine core calibration points (CPORE/CPERM) to anchor porosity and permeability transforms")
+        confidence_badge = (
+            f"> ⚠️ **Answer Confidence: Medium** — Quantitative results computed from active well logs, but note: "
+            f"{'; '.join(reasons)}.\n"
+        )
+        sections.append(confidence_badge)
+    else:
+        sections.append("> ✅ **Answer Confidence: High** — Grounded directly in quantitative MCP tool execution on active well logs.\n")
 
     for rec in tool_records:
         t_name = rec["name"]
@@ -750,6 +891,69 @@ def _synthesize_petrophysical_explanation(
                 f"### 📖 Grounded Petrophysical Foundation (`{src}`)\n\n"
                 f"{ref_md}\n"
             )
+
+    # Synthesize comprehensive Gaps & Uncertainty Analysis section across all executed tools
+    gaps: List[str] = []
+    uncerts: List[str] = []
+
+    for rec in tool_records:
+        t_name = rec["name"]
+        res = rec.get("result") or {}
+        if t_name == "inspect_well":
+            core_pts = res.get("core_sample_count", 0)
+            if core_pts == 0:
+                gaps.append(
+                    "**Core Calibration Gap**: No core samples (`CPORE` / `CPERM`) available in this well. "
+                    "Porosity, permeability, and saturation height models rely on uncalibrated empirical log transforms."
+                )
+            curves = set(res.get("available_curves", []))
+            missing_essential = [c for c in ("RHOB", "NPHI", "GR", "RT", "CALI") if c not in curves]
+            if missing_essential:
+                gaps.append(
+                    f"**Missing Essential Curves**: Curves {', '.join(f'`{c}`' for c in missing_essential)} "
+                    f"are not present in the well log dataset."
+                )
+        elif t_name == "run_well_qaqc":
+            bh = res.get("badhole") or {}
+            if bh.get("flagged_count", 0) > 0:
+                gaps.append(
+                    f"**Borehole Washout Gap**: `{bh.get('flagged_pct')}%` (`{bh.get('flagged_count')}` samples) "
+                    f"flagged as badhole. Density (`RHOB`) and neutron (`NPHI`) readings in washout intervals "
+                    f"are degraded by pad standoff."
+                )
+        elif t_name == "run_shf_evaluation":
+            rec_cmp = res.get("sw_vs_shf_reconciliation") or {}
+            if rec_cmp:
+                uncerts.append(
+                    f"**Sw vs. SHF Reconciliation Spread**: Transition zone uncertainty indicated by RMSE of "
+                    f"`{rec_cmp.get('rmse_sw_vs_shf')} v/v` and mean bias of `{rec_cmp.get('mean_bias_sw_minus_shf')} v/v`."
+                )
+        elif t_name == "evaluate_with_conformal_bounds":
+            iw = res.get("interval_width_summary") or {}
+            if iw:
+                uncerts.append(
+                    f"**Conformal P10–P90 Interval Spreads**: Porosity uncertainty is `±{round(iw.get('phit_mean_width_vv', 0)/2, 4)} v/v`, "
+                    f"Sw uncertainty is `±{round(iw.get('sw_mean_width_vv', 0)/2, 4)} v/v`, and Permeability spread is "
+                    f"`{iw.get('perm_median_p90_p10_factor')}×` between P10 and P90."
+                )
+            z_conf = res.get("zonal_conformal_summary") or []
+            if z_conf:
+                cert_pay = [f"{z['zone']} ({round(z['certifiable_pay_fraction']*100, 1)}% P10 vs {round(z['upside_pay_fraction']*100, 1)}% P90)" for z in z_conf[:3]]
+                uncerts.append(
+                    f"**Pay Confidence Disparity**: Certifiable pay (P10) vs upside pay (P90): {', '.join(cert_pay)}."
+                )
+
+    if gaps or uncerts:
+        unc_lines = ["### ⚠️ Gaps & Uncertainty Analysis"]
+        if gaps:
+            unc_lines.append("**Identified Data & Coverage Gaps**:")
+            for g in gaps:
+                unc_lines.append(f"- {g}")
+        if uncerts:
+            unc_lines.append("**Petrophysical Model Uncertainties**:")
+            for u in uncerts:
+                unc_lines.append(f"- {u}")
+        sections.append("\n".join(unc_lines))
 
     return "\n\n".join(sections)
 
@@ -955,6 +1159,7 @@ async def list_assistant_providers():
     return {
         "providers": providers_out,
         "mcp_tools": petro_mcp_server.list_tools(),
+        "preset_quick_actions": PRESET_QUICK_ACTIONS,
     }
 
 
@@ -982,6 +1187,20 @@ async def assistant_chat(req: AgentChatRequest):
         else:
             # Built-in Petrophysical MCP Agent
             planned = _plan_native_tool_calls(req)
+            if not planned:
+                # Built-in agent cannot answer this prompt; handle gracefully with preset quick actions
+                reply_text, suggested_actions = _handle_unrecognized_native_prompt(req)
+                return {
+                    "reply": reply_text,
+                    "provider": provider,
+                    "used_fallback": False,
+                    "tool_calls": [],
+                    "computed_curves": {},
+                    "stats": {},
+                    "report_data": None,
+                    "ui_actions": [],
+                    "quick_actions": suggested_actions,
+                }
             for call_spec in planned:
                 try:
                     t_out = petro_mcp_server.call_tool(
@@ -1077,6 +1296,7 @@ async def assistant_chat(req: AgentChatRequest):
         "stats": merged_stats,
         "report_data": latest_report_data,
         "ui_actions": ui_actions,
+        "quick_actions": PRESET_QUICK_ACTIONS if not executed_tools else [],
     }
 
 

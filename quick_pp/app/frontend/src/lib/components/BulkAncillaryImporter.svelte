@@ -87,8 +87,12 @@
     ],
     fluid_contacts: [
       { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
-      { key: 'CONTACT_TYPE', label: 'CONTACT_TYPE — Fluid Contact (OWC/GOC/FWL) *', required: true },
-      { key: 'DEPTH', label: 'DEPTH — Contact Depth *', required: true }
+      { key: 'CONTACT_TYPE', label: 'CONTACT_TYPE — Fluid Contact (OWC/GOC/GWC/FWL/ODT/OUT/GDT/GUT/WUT) *', required: true },
+      { key: 'DEPTH', label: 'DEPTH — Contact Depth *', required: true },
+      { key: 'ZONE', label: 'ZONE — Reservoir Zone / Formation' },
+      { key: 'FAULT_BLOCK', label: 'FAULT_BLOCK — Fault Block / Compartment' },
+      { key: 'SOURCE', label: 'SOURCE — Method / Determination Lineage' },
+      { key: 'REMARKS', label: 'REMARKS — Geological Notes / Comments' }
     ],
     perforations: [
       { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },

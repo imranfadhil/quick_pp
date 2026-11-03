@@ -31,6 +31,7 @@
 		text: string;
 		provider?: string;
 		toolCalls?: ToolCallRecord[];
+		quickActions?: Array<{ label: string; prompt: string; description?: string }>;
 		timestamp: string;
 	}
 
@@ -302,6 +303,7 @@
 					text: data.reply || 'Evaluation completed.',
 					provider: data.provider || selectedProvider,
 					toolCalls: data.tool_calls || [],
+					quickActions: Array.isArray(data.quick_actions) ? data.quick_actions : [],
 					timestamp: new Date().toLocaleTimeString([], {
 						hour: '2-digit',
 						minute: '2-digit'
@@ -991,8 +993,12 @@
 									</table>
 								</div>
 							{:else if block.type === 'blockquote'}
+								{@const rawQuote = block.tokens.map((t) => t.value).join(' ')}
+								{@const isWarning = rawQuote.includes('⚠️') || rawQuote.toLowerCase().includes('confidence: low')}
 								<div
-									class="rounded-xs border-l-3 border-indigo-500 bg-indigo-50/60 px-2.5 py-2 text-[11px] leading-snug text-slate-800"
+									class="rounded-xs border-l-3 px-2.5 py-2 text-[11px] leading-snug {isWarning
+										? 'border-amber-500 bg-amber-50/80 text-amber-950 shadow-2xs'
+										: 'border-indigo-500 bg-indigo-50/60 text-slate-800'}"
 								>
 									{@render renderInline(block.tokens)}
 								</div>
@@ -1008,6 +1014,30 @@
 							{/if}
 						{/each}
 					</div>
+
+					<!-- Interactive Preset Quick Actions embedded in Assistant Message -->
+					{#if msg.quickActions && msg.quickActions.length > 0}
+						<div class="mt-2.5 pt-2 border-t border-[var(--border-hairline)]">
+							<div class="mb-1.5 flex items-center justify-between text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+								<span>Preset Quick Actions</span>
+								<span class="text-[9px] font-normal normal-case text-[var(--text-muted)]">Click to execute</span>
+							</div>
+							<div class="flex flex-wrap gap-1">
+								{#each msg.quickActions as act}
+									<button
+										type="button"
+										disabled={chatLoading}
+										onclick={() => sendPrompt(act.prompt)}
+										title={act.description || act.prompt}
+										class="inline-flex items-center gap-1 rounded-xs border border-blue-200 bg-blue-50/90 px-2 py-0.5 text-[10.5px] font-medium text-blue-900 shadow-2xs transition-colors hover:border-blue-400 hover:bg-blue-100 disabled:opacity-50"
+									>
+										<span class="text-amber-500 font-bold">⚡</span>
+										<span>{act.label}</span>
+									</button>
+								{/each}
+							</div>
+						</div>
+					{/if}
 				{/if}
 			</div>
 		{/each}

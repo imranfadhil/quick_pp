@@ -6,6 +6,8 @@ correlations (Timur, RQI, semi-log permeability), and capillary pressure / heigh
 above free water level (SHF) calculations.
 """
 
+from typing import Dict, Optional
+
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
@@ -1697,6 +1699,7 @@ def optimize_fwl(
     non_reservoir_flags=None,
     loss: str = "rmse",
     pore_volume_weighted: bool = False,
+    pay_weighted: bool = False,
     equal_well_weights: bool = False,
     mdt_fwl: float = None,
     pressure_df: pd.DataFrame = None,
@@ -1961,23 +1964,39 @@ def optimize_fwl(
     if not np.any(res_mask):
         res_mask = np.isfinite(depth_arr) & np.isfinite(sw_log_arr)
 
-    # Compute sample weights (pore-volume weighting & equal well weighting)
+    # Compute sample weights (pore-volume weighting, pay-weighting & equal well weighting)
     weights = np.ones(len(work_df), dtype=float)
     if pore_volume_weighted:
         weights = weights * np.maximum(phit_arr, 1e-4)
+    if pay_weighted:
+        # Hydrocarbon pay confidence weighting: phi * (1 - Sw)
+        # Floor at 0.01 so wet intervals retain gentle regularization without overpowering the oil column
+        bvh_proxy = np.maximum(phit_arr * (1.0 - sw_log_arr), 0.01)
+        weights = weights * bvh_proxy
     if equal_well_weights:
         for w in np.unique(wells_arr[res_mask]):
             w_m = res_mask & (wells_arr == w)
-            n_w = np.sum(w_m)
-            if n_w > 0:
-                weights[w_m] = weights[w_m] / float(n_w)
+            sum_w = np.sum(weights[w_m])
+            if sum_w > 0:
+                weights[w_m] = weights[w_m] / sum_w
     w_res = weights[res_mask]
     w_res = w_res / np.maximum(np.sum(w_res), 1e-12)
 
-    # 4. Determine FWL search bounds
+    # 4. Determine FWL search bounds and physical constraints (FWL >= ODT)
     d_min = float(np.nanmin(depth_arr[res_mask]))
     d_max = float(np.nanmax(depth_arr[res_mask]))
     d_span = max(d_max - d_min, 50.0)
+
+    # Detect lowest confirmed hydrocarbon depth (Oil Down To / Gas Down To)
+    hc_sample_mask = (
+        res_mask
+        & (sw_log_arr < 0.75)
+        & (phit_arr >= max(phit_cutoff, 0.05))
+    )
+    if is_leverett:
+        hc_sample_mask = hc_sample_mask & (perm_arr >= max(perm_cutoff, 0.1))
+
+    odt = float(np.nanmax(depth_arr[hc_sample_mask])) if np.any(hc_sample_mask) else None
 
     if fwl_bounds is not None:
         fwl_low, fwl_high = float(fwl_bounds[0]), float(fwl_bounds[1])
@@ -1991,8 +2010,12 @@ def optimize_fwl(
             fwl_low = min(fwl_low, float(mdt_fwl) - 0.25 * d_span)
             fwl_high = max(fwl_high, float(mdt_fwl) + 0.25 * d_span)
 
+    # Physical constraint: Free Water Level (Pc = 0) must be at or below lowest confirmed hydrocarbon (ODT)
+    if odt is not None:
+        fwl_low = max(fwl_low, odt)
+
     if fwl_high <= fwl_low:
-        fwl_high = fwl_low + 100.0
+        fwl_high = fwl_low + max(0.20 * d_span, 50.0)
 
     loss_clean = loss.strip().lower()
 
@@ -2160,12 +2183,16 @@ def optimize_fwl(
         dtype=float,
     )
 
+    # Evaluate transition zone on representative pay samples (so tight shaly samples don't inflate TTZ)
+    tz_phit = phit_arr[hc_sample_mask] if np.any(hc_sample_mask) else phit_arr[res_mask]
+    tz_perm = perm_arr[hc_sample_mask] if np.any(hc_sample_mask) else perm_arr[res_mask]
+
     tz_info = analyze_transition_zone(
         fwl=opt_fwl,
         model=model,
         shm_params=active_shm_params,
-        phit=phit_arr[res_mask],
-        perm=perm_arr[res_mask],
+        phit=tz_phit,
+        perm=tz_perm,
         ift=ift,
         theta=theta,
         gw=gw,
@@ -2345,8 +2372,21 @@ def optimize_fwl(
             z_span = max(z_d_max - z_d_min, 25.0)
             z_low = z_d_min - 0.15 * z_span
             z_high = z_d_max + 0.60 * z_span
+
+            # Physical constraint per zone: FWL >= ODT within this zone
+            z_hc_mask = (
+                z_mask
+                & (sw_log_arr < 0.75)
+                & (phit_arr >= max(phit_cutoff, 0.05))
+            )
+            if is_leverett:
+                z_hc_mask = z_hc_mask & (perm_arr >= max(perm_cutoff, 0.1))
+            if np.any(z_hc_mask):
+                z_odt = float(np.nanmax(depth_arr[z_hc_mask]))
+                z_low = max(z_low, z_odt)
+
             if z_high <= z_low:
-                z_high = z_low + 50.0
+                z_high = z_low + max(0.25 * z_span, 30.0)
 
             z_w = weights[z_mask]
             z_w = z_w / np.maximum(np.sum(z_w), 1e-12)
@@ -2387,12 +2427,14 @@ def optimize_fwl(
 
             z_phi = phit_arr[z_mask]
             z_perm = perm_arr[z_mask]
+            z_tz_phi = phit_arr[z_hc_mask] if np.any(z_hc_mask) else z_phi
+            z_tz_perm = perm_arr[z_hc_mask] if np.any(z_hc_mask) else z_perm
             z_tz = analyze_transition_zone(
                 fwl=fwl_zone_opt,
                 model=model,
                 shm_params=active_shm_params,
-                phit=z_phi,
-                perm=z_perm,
+                phit=z_tz_phi,
+                perm=z_tz_perm,
                 ift=ift,
                 theta=theta,
                 gw=gw,
@@ -2486,6 +2528,17 @@ def optimize_fwl(
         float(opt_fwl - float(mdt_fwl)) if mdt_fwl is not None else None
     )
 
+    # Extract comprehensive fluid limits and contacts per well and zone
+    contacts_df = extract_fluid_contacts_and_limits(
+        df=work_df,
+        depth_col=depth_col,
+        sw_col=sw_col,
+        well_col=well_col,
+        zone_col=zone_col,
+        pressure_df=pressure_df,
+        fwl_dict=fwl_by_zone or {"default": opt_fwl},
+    )
+
     return {
         "fwl": opt_fwl,
         "fwl_by_zone": fwl_by_zone,
@@ -2504,8 +2557,361 @@ def optimize_fwl(
         "well_metrics": well_metrics_df,
         "zone_metrics": zone_metrics_df,
         "grid_profile": grid_profile_df,
+        "fluid_contacts": contacts_df,
         "df": work_df,
     }
+
+
+def extract_fluid_contacts_and_limits(
+    df: pd.DataFrame,
+    depth_col: str = "TVD",
+    sw_col: str = "SWT",
+    phit_col: str = "PHIT",
+    vsh_col: str = "VSH",
+    well_col: str = "WELL_NAME",
+    zone_col: Optional[str] = "ZONES",
+    fault_block_col: Optional[str] = "FAULT_BLOCK",
+    pressure_df: Optional[pd.DataFrame] = None,
+    fwl_dict: Optional[Dict[str, float]] = None,
+    sw_pay_cutoff: float = 0.65,
+    sw_water_cutoff: float = 0.90,
+    phit_cutoff: float = 0.05,
+    vsh_cutoff: float = 0.50,
+    min_sand_thickness: float = 1.0,
+    min_sand_samples: int = 5,
+    require_pay: bool = True,
+) -> pd.DataFrame:
+    """Extract comprehensive petrophysical fluid limits and contacts per well and per zone.
+
+    Identifies and classifies fluid contacts and transition limits from log saturation profiles,
+    formation pressure tests (MDT/RFT/FPT), and zonal intervals:
+    - Gas limits & contacts: GUT (Gas Up To), GDT (Gas Down To), GOC (Gas-Oil Contact), GWC (Gas-Water Contact)
+    - Oil limits & contacts: OUT (Oil Up To), ODT (Oil Down To), OWC (Oil-Water Contact)
+    - Water limits & contacts: WUT (Water Up To), FWL (Free Water Level)
+    Note: WDT (Water Down To) is explicitly excluded as it carries no petrophysical utility.
+
+    Args:
+        df (pd.DataFrame): Well log DataFrame containing depth, water saturation, porosity, and clay/shale curves.
+        depth_col (str, optional): Depth column name (TVDSS, TVD, or DEPTH). Defaults to "TVD".
+        sw_col (str, optional): Water saturation column name. Defaults to "SWT".
+        phit_col (str, optional): Total porosity column name. Defaults to "PHIT".
+        vsh_col (str, optional): Shale/clay volume column name. Defaults to "VSH".
+        well_col (str, optional): Well identifier column name. Defaults to "WELL_NAME".
+        zone_col (str, optional): Reservoir zonation column name. Defaults to "ZONES".
+        fault_block_col (str, optional): Fault block column name. Defaults to "FAULT_BLOCK".
+        pressure_df (pd.DataFrame, optional): Formation pressure test DataFrame with columns ['DEPTH', 'PRESSURE', 'FLUID_TYPE'].
+        fwl_dict (dict[str, float], optional): Optional dictionary mapping zone/well names to Free Water Level depths.
+        sw_pay_cutoff (float, optional): Maximum water saturation threshold for hydrocarbon pay. Defaults to 0.65.
+        sw_water_cutoff (float, optional): Minimum water saturation threshold for 100% water zone. Defaults to 0.90.
+        phit_cutoff (float, optional): Minimum porosity threshold for reservoir rock. Defaults to 0.05.
+        vsh_cutoff (float, optional): Maximum shale volume threshold for reservoir rock. Defaults to 0.50.
+        min_sand_thickness (float, optional): Minimum vertical net sand thickness required to declare a contact. Defaults to 1.0.
+        min_sand_samples (int, optional): Minimum consecutive reservoir samples. Defaults to 5.
+        require_pay (bool, optional): Whether to require active pay intervals when establishing contacts. Defaults to True.
+
+    Returns:
+        pd.DataFrame: Table of detected fluid contacts and limits with columns:
+            ['well_name', 'zone', 'fault_block', 'contact_type', 'depth', 'source', 'remarks'].
+    """
+    contact_cols = [
+        "well_name",
+        "zone",
+        "fault_block",
+        "contact_type",
+        "depth",
+        "source",
+        "remarks",
+    ]
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=contact_cols)
+
+    work_df = df.copy()
+
+    # Depth column resolution (prefer TVDSS)
+    z_col = None
+    for cand in ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS", depth_col, "TVD", "DEPTH"):
+        if cand in work_df.columns and pd.to_numeric(work_df[cand], errors="coerce").notna().sum() >= 2:
+            z_col = cand
+            break
+    if z_col is None:
+        return pd.DataFrame(columns=contact_cols)
+
+    # Coerce depth to positive TVDSS
+    z_vals = pd.to_numeric(work_df[z_col], errors="coerce")
+    if (z_vals.dropna() < 0).mean() > 0.8:
+        z_vals = z_vals.abs()
+    work_df["_DEPTH_CALC"] = z_vals
+
+    # Resolve well, zone, fault block
+    w_col = next((c for c in (well_col, "WELL_NAME", "WELL", "UWI") if c in work_df.columns), None)
+    if w_col is None:
+        work_df["_WELL_NAME"] = "Field"
+        w_col = "_WELL_NAME"
+
+    z_name_col = next((c for c in (zone_col, "ZONES", "ZONE", "FORMATION") if c in work_df.columns), None)
+    fb_col = next((c for c in (fault_block_col, "FAULT_BLOCK", "FAULTBLOCK", "BLOCK") if c in work_df.columns), None)
+
+    # Saturation, porosity, vsh
+    s_col = next((c for c in (sw_col, "SW", "SWT", "SWE", "SW_WS", "SW_ARCHIE") if c in work_df.columns), None)
+    if s_col is None:
+        return pd.DataFrame(columns=contact_cols)
+    work_df["_SW_CALC"] = pd.to_numeric(work_df[s_col], errors="coerce").clip(0.0, 1.0)
+
+    p_col = next((c for c in (phit_col, "PHIT", "POR", "PHIE", "POROSITY") if c in work_df.columns), None)
+    if p_col is not None:
+        work_df["_PHIT_CALC"] = pd.to_numeric(work_df[p_col], errors="coerce").clip(0.0, 0.5)
+    else:
+        work_df["_PHIT_CALC"] = 0.20
+
+    v_col = next((c for c in (vsh_col, "VSH", "VCL", "VSHALE", "GR_NORM") if c in work_df.columns), None)
+    if v_col is not None:
+        work_df["_VSH_CALC"] = pd.to_numeric(work_df[v_col], errors="coerce").clip(0.0, 1.0)
+    else:
+        work_df["_VSH_CALC"] = 0.0
+
+    # Gas indicator (either explicit GAS flag/RHOB crossover or RHO_HC)
+    has_gas_curve = "GAS_FLAG" in work_df.columns or "IS_GAS" in work_df.columns
+
+    records = []
+
+    # Group by well and optionally zone
+    group_cols = [w_col]
+    if z_name_col:
+        group_cols.append(z_name_col)
+
+    for keys, grp in work_df.groupby(group_cols):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        well_val = str(keys[0])
+        zone_val = str(keys[1]) if len(keys) > 1 and pd.notna(keys[1]) else None
+        fb_val = str(grp[fb_col].dropna().iloc[0]) if fb_col and fb_col in grp.columns and grp[fb_col].notna().any() else None
+
+        valid = grp[
+            grp["_DEPTH_CALC"].notna()
+            & grp["_SW_CALC"].notna()
+            & (grp["_PHIT_CALC"] >= phit_cutoff)
+            & (grp["_VSH_CALC"] <= vsh_cutoff)
+        ].sort_values(by="_DEPTH_CALC")
+
+        # Petrophysical Sand Validation:
+        # A zone without minimum reservoir sand cannot contain or produce fluids.
+        # Eliminates non-reservoir shale/tuff/marl formations (e.g. Sele, Balder Tuff, Montrose shale).
+        if len(valid) < min_sand_samples:
+            continue
+
+        depths = valid["_DEPTH_CALC"].to_numpy()
+        sand_thickness = float(np.max(depths) - np.min(depths))
+        if sand_thickness < min_sand_thickness and len(valid) < 10:
+            continue
+
+        sws = valid["_SW_CALC"].to_numpy()
+        is_hc = sws < sw_pay_cutoff
+        is_water = sws >= sw_water_cutoff
+
+        # If require_pay is True, do not register contacts for 100% wet / non-pay zones
+        # (prevents auto-setting WUT at the top of purely wet zones where no hydrocarbon exists)
+        if require_pay and not np.any(is_hc):
+            continue
+
+        # Gas vs Oil separation if gas indicator available
+        if has_gas_curve:
+            gas_col = "GAS_FLAG" if "GAS_FLAG" in valid.columns else "IS_GAS"
+            is_gas = is_hc & (valid[gas_col].to_numpy() > 0.5)
+            is_oil = is_hc & ~is_gas
+        else:
+            is_gas = np.zeros(len(depths), dtype=bool)
+            is_oil = is_hc
+
+        # 1. Gas Up To (GUT) & Gas Down To (GDT)
+        if np.any(is_gas):
+            gut = float(np.min(depths[is_gas]))
+            gdt = float(np.max(depths[is_gas]))
+            records.append({
+                "well_name": well_val,
+                "zone": zone_val,
+                "fault_block": fb_val,
+                "contact_type": "GUT",
+                "depth": gut,
+                "source": "Log Evaluation (Gas column top)",
+                "remarks": f"Proved Gas Up To at {gut:.1f} m TVDss in {zone_val or 'reservoir'}",
+            })
+            records.append({
+                "well_name": well_val,
+                "zone": zone_val,
+                "fault_block": fb_val,
+                "contact_type": "GDT",
+                "depth": gdt,
+                "source": "Log Evaluation (Lowest proved gas pay)",
+                "remarks": f"Proved Gas Down To at {gdt:.1f} m TVDss in {zone_val or 'reservoir'}",
+            })
+
+        # 2. Oil Up To (OUT) & Oil Down To (ODT)
+        if np.any(is_oil):
+            out = float(np.min(depths[is_oil]))
+            odt = float(np.max(depths[is_oil]))
+            records.append({
+                "well_name": well_val,
+                "zone": zone_val,
+                "fault_block": fb_val,
+                "contact_type": "OUT",
+                "depth": out,
+                "source": "Log Evaluation (Oil column top)",
+                "remarks": f"Proved Oil Up To at {out:.1f} m TVDss in {zone_val or 'reservoir'}",
+            })
+            records.append({
+                "well_name": well_val,
+                "zone": zone_val,
+                "fault_block": fb_val,
+                "contact_type": "ODT",
+                "depth": odt,
+                "source": "Log Evaluation (Lowest proved oil pay, Sw < 0.65)",
+                "remarks": f"Proved Oil Down To at {odt:.1f} m TVDss in {zone_val or 'reservoir'} ({well_val})",
+            })
+
+        # Lowest confirmed hydrocarbon base (ODT or GDT)
+        hc_base = None
+        if np.any(is_oil):
+            hc_base = float(np.max(depths[is_oil]))
+        elif np.any(is_gas):
+            hc_base = float(np.max(depths[is_gas]))
+
+        # 3. Water Up To (WUT) - shallowest proved water in the basal water leg
+        # Note: WDT is explicitly omitted
+        if hc_base is not None:
+            # When hydrocarbon is present in the zone, WUT is the shallowest proved 100% water BELOW the HC column
+            basal_water_mask = is_water & (depths >= hc_base)
+            if np.any(basal_water_mask):
+                wut = float(np.min(depths[basal_water_mask]))
+                records.append({
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "WUT",
+                    "depth": wut,
+                    "source": "Log Evaluation (100% Sw water leg below HC)",
+                    "remarks": f"Proved Water Up To at {wut:.1f} m TVDss in {zone_val or 'reservoir'} (below ODT {hc_base:.1f}m)",
+                })
+        else:
+            # 100% wet reservoir interval without confirmed hydrocarbon pay (only reached if require_pay=False)
+            if np.any(is_water):
+                wut = float(np.min(depths[is_water]))
+                records.append({
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "WUT",
+                    "depth": wut,
+                    "source": "Log Evaluation (100% Water-bearing Sand)",
+                    "remarks": f"Proved Water-bearing Sand top at {wut:.1f} m TVDss in {zone_val or 'reservoir'} (aquifer interval)",
+                })
+
+        # 4. Inferred Discrete Contacts (GOC, GWC, OWC)
+        if np.any(is_gas) and np.any(is_oil):
+            gdt_val = float(np.max(depths[is_gas]))
+            out_val = float(np.min(depths[is_oil]))
+            if gdt_val <= out_val:
+                goc = round(float((gdt_val + out_val) / 2.0), 1)
+                records.append({
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "GOC",
+                    "depth": goc,
+                    "source": "Calculated (GDT-OUT midpoint bracket)",
+                    "remarks": f"Gas-Oil Contact bracketed between GDT ({gdt_val:.1f}m) and OUT ({out_val:.1f}m)",
+                })
+        elif np.any(is_gas) and np.any(is_water):
+            gdt_val = float(np.max(depths[is_gas]))
+            wut_val = float(np.min(depths[is_water]))
+            if gdt_val <= wut_val:
+                gwc = round(float((gdt_val + wut_val) / 2.0), 1)
+                records.append({
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "GWC",
+                    "depth": gwc,
+                    "source": "Calculated (GDT-WUT midpoint bracket)",
+                    "remarks": f"Gas-Water Contact bracketed between GDT ({gdt_val:.1f}m) and WUT ({wut_val:.1f}m)",
+                })
+
+        if np.any(is_oil) and np.any(is_water):
+            odt_val = float(np.max(depths[is_oil]))
+            wut_val = float(np.min(depths[is_water]))
+            if odt_val <= wut_val:
+                owc = round(float((odt_val + wut_val) / 2.0), 1)
+                records.append({
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "OWC",
+                    "depth": owc,
+                    "source": "Calculated (ODT-WUT midpoint bracket)",
+                    "remarks": f"Oil-Water Contact bracketed between ODT ({odt_val:.1f}m) and WUT ({wut_val:.1f}m)",
+                })
+
+        # 5. Zonal or Well FWL if supplied
+        if fwl_dict:
+            z_fwl = fwl_dict.get(zone_val) or fwl_dict.get(well_val) or fwl_dict.get("default")
+            if z_fwl is not None:
+                records.append({
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "FWL",
+                    "depth": round(float(z_fwl), 1),
+                    "source": "FWL Optimizer (Capillary Pc = 0 datum)",
+                    "remarks": f"Optimized Free Water Level (Pc = 0 datum) for {zone_val or 'zone'}",
+                })
+
+    # 6. Pressure Test Integration (if pressure_df provided)
+    if pressure_df is not None and not pressure_df.empty:
+        p_df = pressure_df.copy()
+        if "TVD" in p_df.columns or "DEPTH" in p_df.columns:
+            p_z_col = "TVD" if "TVD" in p_df.columns else "DEPTH"
+            for _, prow in p_df.iterrows():
+                p_fl = str(prow.get("FLUID_TYPE") or prow.get("FLUID") or "").upper()
+                p_wn = str(prow.get("WELL_NAME") or prow.get("WELL") or "Field")
+                p_z = str(prow.get("ZONE") or prow.get("ZONES") or "") or None
+                p_fb = str(prow.get("FAULT_BLOCK") or "") or None
+                p_d = float(prow[p_z_col]) if pd.notna(prow[p_z_col]) else None
+                if p_d is None:
+                    continue
+                if "GAS" in p_fl:
+                    records.append({
+                        "well_name": p_wn,
+                        "zone": p_z,
+                        "fault_block": p_fb,
+                        "contact_type": "GDT",
+                        "depth": p_d,
+                        "source": "MDT Pre-test (Gas gradient point)",
+                        "remarks": f"Proved gas by pressure testing at {p_d} m TVDss",
+                    })
+                elif "OIL" in p_fl:
+                    records.append({
+                        "well_name": p_wn,
+                        "zone": p_z,
+                        "fault_block": p_fb,
+                        "contact_type": "ODT",
+                        "depth": p_d,
+                        "source": "MDT Pre-test (Oil gradient point)",
+                        "remarks": f"Proved oil by pressure testing at {p_d} m TVDss",
+                    })
+                elif "WATER" in p_fl:
+                    records.append({
+                        "well_name": p_wn,
+                        "zone": p_z,
+                        "fault_block": p_fb,
+                        "contact_type": "WUT",
+                        "depth": p_d,
+                        "source": "MDT Pre-test (Water gradient point)",
+                        "remarks": f"Proved formation water by pressure testing at {p_d} m TVDss",
+                    })
+
+    out_df = pd.DataFrame(records, columns=contact_cols)
+    if not out_df.empty:
+        out_df = out_df.sort_values(by=["well_name", "depth"]).reset_index(drop=True)
+    return out_df
 
 
 def plot_fwl_reconciliation(

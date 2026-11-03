@@ -1,4 +1,4 @@
-import { API_BASE, api, authHeaders, deleteJson, getJson, patchJson, postJson } from '$lib/api/client';
+import { API_BASE, api, authHeaders, deleteFluidContacts, deleteJson, deleteProjectModuleParams, getJson, patchJson, postJson } from '$lib/api/client';
 import type { ProjectSummaryResponse, WellSummaryItem } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { wellData } from './wellData.svelte';
@@ -8,6 +8,7 @@ import {
 	isProjectParamModuleKey,
 	PROJECT_PARAM_MODULE_KEYS,
 	projectParams,
+	resolveMatchingProjectParamsEntry,
 	zoneSelectionKey,
 	zoneSelectionLabel,
 	type ProjectModuleParamsMap,
@@ -59,6 +60,7 @@ export interface ShfOptimizerParams {
 	mdtWeight: number;
 	poreVolumeWeighted: boolean;
 	equalWellWeights: boolean;
+	payWeighted?: boolean;
 }
 
 export interface MlTrainerParams {
@@ -155,6 +157,7 @@ export interface SwirrPlugRow {
 	well: string;
 	sample: string;
 	depth: number;
+	zone?: string;
 	rt: number;
 	cpore: number;
 	cperm: number;
@@ -467,6 +470,11 @@ class ProjectDataState {
 
 	selectedScalPointIds = $state<string[]>([]);
 	scalClickFilterTarget = $state<'point' | 'plug'>('point');
+	scalGroupMode = $state<'rt' | 'sample'>('sample');
+	scalConnectPlugs = $state<boolean>(true);
+	scalShowSampleLabels = $state<boolean>(false);
+	focusedScalPlugId = $state<string | null>(null);
+	scalFilterRockType = $state<number | 'all'>('all');
 
 	swirrInputCols = $state<{ phieCol: string; permCol: string; rtCol: string }>({
 		phieCol: 'PHIT',
@@ -529,7 +537,8 @@ class ProjectDataState {
 		mdtFwl: 3925.0,
 		mdtWeight: 1.0,
 		poreVolumeWeighted: true,
-		equalWellWeights: true
+		equalWellWeights: true,
+		payWeighted: true
 	});
 
 	mlTrainerParams = $state<MlTrainerParams>({
@@ -598,6 +607,7 @@ class ProjectDataState {
 			pc: number[];
 			sw: number[];
 			swn: number[];
+			swirr_calc?: number[];
 			j: number[];
 			h: number[];
 			bvw: number[];
@@ -606,6 +616,8 @@ class ProjectDataState {
 			rock_flags: number[];
 			well_names: string[];
 			samples: string[];
+			depths?: number[];
+			zones?: string[];
 			point_ids?: string[];
 			plug_ids?: string[];
 			excluded?: boolean[];
@@ -1001,21 +1013,28 @@ class ProjectDataState {
 		projectParams.loadGeneration += 1;
 	}
 
-	/** Apply exact zone-key matches from saved project parameters to all multi-well modules. */
+	/** Apply zone-key matches (exact, bundle subset, or fallback) from saved project parameters to all multi-well modules. */
 	applyProjectParamsForCurrentSelection() {
 		const mp = this.projectModuleParams || {};
 		const key = zoneSelectionKey();
 		const label = zoneSelectionLabel();
 		for (const module of PROJECT_PARAM_MODULE_KEYS) {
-			const entry = mp[module]?.[key] ?? null;
-			if (entry?.params) {
+			const modMap = mp[module];
+			const resolved = resolveMatchingProjectParamsEntry(modMap, workbench.selectedZones);
+			if (resolved?.entry?.params) {
 				try {
-					this.applyProjectParams(module, entry.params);
+					this.applyProjectParams(module, resolved.entry.params);
 				} catch {
 					// Ignore malformed saved entry; keep current values
 				}
 			}
-			projectParams.setStatus(module, key, label, entry);
+			projectParams.setStatus(
+				module,
+				key,
+				label,
+				resolved?.entry ?? null,
+				resolved?.matchType ?? 'exact'
+			);
 		}
 		projectParams.setCounts(mp);
 	}
@@ -1070,6 +1089,90 @@ class ProjectDataState {
 		}
 	}
 
+	/** Reset rock typing and classifier results and saved parameters to defaults. */
+	async resetRockTyping(): Promise<void> {
+		this.rockTypingResult = null;
+		if (workbench.projectId) {
+			await projectParams.deleteAllForModule(workbench.projectId, 'rock-typing', this.projectModuleParams);
+			await projectParams.deleteAllForModule(workbench.projectId, 'rt-classifier', this.projectModuleParams);
+		}
+		appStatus.success('Rock typing and classifier reset to regional defaults');
+	}
+
+	/** Reset SCAL plug fittings, Swirr correlation, and SWOF simulation deck. */
+	async resetScalFits(): Promise<void> {
+		this.swirrConfig.referencePcPsi = 100.0;
+		this.swirrConfig.extractionMode = 'cutoff_pc';
+		this.swirrConfig.equationType = 'rqi_power';
+		this.swirrConfig.fitScope = 'global';
+		this.swirrConfig.excludedPlugIds = [];
+		this.swirrConfig.excludedScalPointIds = [];
+		this.swirrResult = null;
+		workbench.scalResult = null;
+		this.focusedScalPlugId = null;
+		this.selectedScalPointIds = [];
+		if (workbench.projectId) {
+			await projectParams.deleteAllForModule(workbench.projectId, 'swirr-corr', this.projectModuleParams);
+		}
+		appStatus.success('SCAL & Swirr fittings reset to regional defaults');
+	}
+
+	/** Reset SHF model parameters, Leverett-J fits, and FWL datum. */
+	async resetShf(): Promise<void> {
+		this.shfParams.model = 'leverett_j';
+		this.shfParams.jSatMode = 'swn';
+		this.shfParams.swirrSource = 'lab_min';
+		this.shfParams.unit = 'metric';
+		this.shfParams.fwl = 2500.0;
+		this.shfParams.fwlByZone = {};
+		this.shfParams.ift = 30.0;
+		this.shfParams.theta = 30.0;
+		this.shfParams.gw = 1.05;
+		this.shfParams.ghc = 0.8;
+		this.shfOptParams.solvePerZone = false;
+		this.shfResult = null;
+		this.shfSavedFits = null;
+		if (workbench.projectId) {
+			await projectParams.deleteAllForModule(workbench.projectId, 'shf', this.projectModuleParams);
+		}
+		appStatus.success('SHF model and FWL reset to regional defaults');
+	}
+
+	/** Delete auto-generated / optimized fluid contacts across project wells. */
+	async deleteAutoContacts(zone?: string): Promise<number> {
+		const pid = workbench.projectId;
+		if (!pid) return 0;
+		try {
+			const res = await deleteFluidContacts(pid, { autoOnly: true, zone });
+			const count = res?.deleted_count ?? 0;
+			const autoNames = new Set(['GUT', 'GDT', 'OUT', 'ODT', 'WUT']);
+			wellData.contacts = wellData.contacts.filter((c: any) => {
+				if (zone && c.zone && c.zone !== zone) return true;
+				const cName = c.name || c.type;
+				if (autoNames.has(cName)) return false;
+				const src = String(c.source || '').toLowerCase();
+				if (src.includes('log evaluation') || src.includes('calculated') || src.includes('optimizer') || src.includes('fpt')) return false;
+				return true;
+			});
+			for (const w of this.wells) {
+				if (Array.isArray(w.fluid_contacts)) {
+					w.fluid_contacts = w.fluid_contacts.filter((c: any) => {
+						const cName = c.name || c.type;
+						if (autoNames.has(cName)) return false;
+						const src = String(c.source || '').toLowerCase();
+						if (src.includes('log evaluation') || src.includes('calculated') || src.includes('optimizer') || src.includes('fpt')) return false;
+						return true;
+					});
+				}
+			}
+			appStatus.success(`Deleted ${count} auto-generated fluid contact(s) across project`);
+			return count;
+		} catch (e: any) {
+			appStatus.error(`Failed to delete fluid contacts: ${e?.message ?? e}`);
+			return 0;
+		}
+	}
+
 	private static readonly MULTI_WELL_PIPELINE: MultiWellSaveModule[] = [
 		'rock-typing',
 		'perm-transform',
@@ -1085,16 +1188,44 @@ class ProjectDataState {
 		return ProjectDataState.MULTI_WELL_PIPELINE.some((m) => Boolean(this.pendingMultiWellModules[m]));
 	}
 
-	async saveMultiWellComputed(moduleKey: MultiWellSaveModule): Promise<boolean> {
+	async saveMultiWellComputed(
+		moduleKey: MultiWellSaveModule,
+		savePrecedingPending: boolean = true
+	): Promise<boolean> {
 		const pid = workbench.projectId;
-		if (!pid || !this.hasPendingMultiWell(moduleKey)) return false;
+		if (!pid) return false;
 
-		const res = await this.saveSingleMultiWellModule(pid, moduleKey);
-		if (!res) return false;
+		const pipeline = ProjectDataState.MULTI_WELL_PIPELINE;
+		const targetIdx = pipeline.indexOf(moduleKey);
+		const modulesToSave: MultiWellSaveModule[] = [];
 
-		// Persist the saved module's parameters keyed by the zone selection active at compute time
-		await this.persistProjectParams([moduleKey]);
-		const msg = `Saved ${res.curveLabel} (${res.savedWells} wells) ✓`;
+		if (savePrecedingPending && targetIdx >= 0) {
+			for (let i = 0; i <= targetIdx; i++) {
+				const m = pipeline[i];
+				if (this.hasPendingMultiWell(m)) {
+					modulesToSave.push(m);
+				}
+			}
+		} else if (this.hasPendingMultiWell(moduleKey)) {
+			modulesToSave.push(moduleKey);
+		}
+
+		if (modulesToSave.length === 0) return false;
+
+		const savedLabels: string[] = [];
+		let lastWellsCount = 0;
+		for (const m of modulesToSave) {
+			const res = await this.saveSingleMultiWellModule(pid, m);
+			if (res) {
+				savedLabels.push(res.curveLabel);
+				lastWellsCount = res.savedWells;
+			}
+		}
+		if (savedLabels.length === 0) return false;
+
+		// Persist parameters for all saved pipeline modules
+		await this.persistProjectParams(modulesToSave);
+		const msg = `Saved ${savedLabels.join(', ')} (${lastWellsCount} wells) ✓`;
 		wellData.lastSavedMessage = msg;
 		appStatus.success(msg);
 		void this.refreshSummary(pid);
@@ -1509,6 +1640,103 @@ class ProjectDataState {
 		return Math.min(sMax, Math.max(sMin, Number.isFinite(raw) ? raw : sMin));
 	}
 
+	normalizeScalPlugId(id: string | undefined | null, well?: string, sample?: string): string {
+		const raw = String(id || '').trim();
+		if (raw.includes('::')) return raw;
+		if (raw.includes(':')) return raw.replace(':', '::');
+		if (well && sample) return `${well}::${sample}`;
+		return raw;
+	}
+
+	resolveScalSampleZone(
+		wellName: string | undefined | null,
+		depth: number | undefined | null,
+		rawZone?: string | null
+	): string {
+		const rz = String(rawZone || '').trim();
+		if (rz && rz !== 'Unknown' && rz !== 'None' && rz !== 'nan') {
+			return rz;
+		}
+		const wn = String(wellName || '').trim();
+		const d = Number(depth);
+		if (!wn || !Number.isFinite(d) || d <= 0) return rz || 'Unknown';
+		const wMeta = this.wells.find((w) => w.name === wn) as any;
+		const stickWell = this.stickPlotResult?.wells?.find((w) => w.well_name === wn);
+		const tops =
+			wMeta?.ancillary_data?.formation_tops ??
+			stickWell?.tops ??
+			(wn === workbench.wellId ? wellData.tops : null);
+		if (Array.isArray(tops) && tops.length > 0) {
+			const sorted = [...tops]
+				.filter((t) => Number.isFinite(Number(t?.depth)) && (t?.name || (t as any)?.zone))
+				.sort((a, b) => Number(a.depth) - Number(b.depth));
+			let chosen = 'Unknown';
+			for (const t of sorted) {
+				if (d >= Number(t.depth)) {
+					chosen = String(t.name || (t as any).zone).trim();
+				} else {
+					break;
+				}
+			}
+			if (chosen !== 'Unknown') return chosen;
+		}
+		const shf = this.shfResult;
+		if (shf?.well_names?.length && shf?.depths?.length && shf?.zones?.length) {
+			let bestDist = 5.0;
+			let bestZone = '';
+			for (let i = 0; i < shf.well_names.length; i++) {
+				if (shf.well_names[i] !== wn) continue;
+				const dist = Math.abs((shf.depths[i] ?? 0) - d);
+				if (dist <= bestDist && shf.zones[i] && shf.zones[i] !== 'Unknown') {
+					bestDist = dist;
+					bestZone = shf.zones[i];
+				}
+			}
+			if (bestZone) return bestZone;
+		}
+		return rz || 'Unknown';
+	}
+
+	isScalItemInActiveFilter(
+		wellName: string | undefined | null,
+		depth?: number | null,
+		rawZone?: string | null
+	): boolean {
+		const wn = String(wellName || '').trim();
+		if (wn) {
+			if (workbench.scope === 'single-well' && workbench.wellId) {
+				if (wn !== workbench.wellId) return false;
+			} else if (
+				this.selectedWellNames.length > 0 &&
+				!this.selectedWellNames.includes(wn)
+			) {
+				return false;
+			}
+		}
+		const d = typeof depth === 'number' && Number.isFinite(depth) ? depth : null;
+		if (workbench.depthFilter && d !== null && d > 0) {
+			if (d < workbench.depthFilter.min || d > workbench.depthFilter.max) return false;
+		}
+		if (workbench.selectedZones.length > 0) {
+			const zn = this.resolveScalSampleZone(wn, d, rawZone);
+			if (zn && zn !== 'Unknown') {
+				if (!workbench.selectedZones.includes(zn)) return false;
+			} else if (d !== null && d > 0) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	toggleFocusedScalPlug(plugId: string | null) {
+		if (!plugId) {
+			this.focusedScalPlugId = null;
+			return;
+		}
+		const norm = this.normalizeScalPlugId(plugId);
+		this.focusedScalPlugId = this.focusedScalPlugId === norm ? null : norm;
+	}
+
 	recomputeSwirrClientSide(autoFit: boolean = true) {
 		const sr = this.swirrResult;
 		if (!sr || !Array.isArray(sr.plugs) || sr.plugs.length === 0) return;
@@ -1516,10 +1744,14 @@ class ProjectDataState {
 		const refPc = Math.max(0.1, Number(cfg.referencePcPsi) || 50.0);
 		const sMin = Number(cfg.swirrMin) || 0.03;
 		const sMax = Math.max(sMin + 0.05, Number(cfg.swirrMax) || 0.85);
-		const exclSet = new Set(cfg.excludedPlugIds || []);
+		const exclSet = new Set(
+			(cfg.excludedPlugIds || []).map((id) => this.normalizeScalPlugId(id))
+		);
 
-		// 1. Re-extract Swirr per plug at referencePcPsi
+		// 1. Re-extract Swirr per plug at referencePcPsi and respect active Well/Zone/Depth filters
 		const updatedPlugs: SwirrPlugRow[] = sr.plugs.map((p) => {
+			const normPid = this.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+			const resolvedZone = this.resolveScalSampleZone(p.well, p.depth, p.zone);
 			const pcArr = p.pc_curve || [];
 			const swArr = p.sw_curve || [];
 			const maxPc = pcArr.length > 0 ? Math.max(...pcArr) : p.max_pc;
@@ -1547,24 +1779,30 @@ class ProjectDataState {
 					}
 				}
 			}
-			const isExcl = exclSet.has(p.plug_id);
+			const isExcl = exclSet.has(normPid) || exclSet.has(p.plug_id);
+			const inFilter = this.isScalItemInActiveFilter(p.well, p.depth, resolvedZone);
 			return {
 				...p,
+				plug_id: normPid,
+				zone: resolvedZone,
 				max_pc: Number(maxPc.toFixed(2)),
 				sw_at_max_pc: Number(minSw.toFixed(4)),
 				extracted_swirr: Number(extSwirr.toFixed(4)),
 				valid_pc: validPc,
 				excluded: isExcl,
-				included: validPc && !isExcl
+				included: validPc && !isExcl && inFilter
 			};
 		});
 
-		let inclPlugs = updatedPlugs.filter((p) => p.included);
+		const filterMatchedPlugs = updatedPlugs.filter((p) =>
+			this.isScalItemInActiveFilter(p.well, p.depth, p.zone)
+		);
+		let inclPlugs = filterMatchedPlugs.filter((p) => p.included);
 		if (inclPlugs.length === 0) {
-			inclPlugs = updatedPlugs.filter((p) => !p.excluded);
+			inclPlugs = filterMatchedPlugs.filter((p) => !p.excluded);
 		}
 		if (inclPlugs.length === 0) {
-			inclPlugs = updatedPlugs;
+			inclPlugs = filterMatchedPlugs.length > 0 ? filterMatchedPlugs : updatedPlugs;
 		}
 
 		const fitSubset = (subset: SwirrPlugRow[], scopeKey: string): SwirrCorrelationRule => {
@@ -1719,6 +1957,51 @@ class ProjectDataState {
 		this.recomputeScalFitsFromPlugs(true);
 	}
 
+	/** Ensure multi-well Swirr & SCAL plug dataset is loaded and fitted, avoiding manual roundtrips to Swirr. */
+	async ensureSwirrDataLoaded(force: boolean = false): Promise<boolean> {
+		const pid = workbench.projectId;
+		if (!pid) return false;
+		if (!force && this.swirrResult && Array.isArray(this.swirrResult.plugs) && this.swirrResult.plugs.length > 0) {
+			return true;
+		}
+		try {
+			const cfg = this.swirrConfig;
+			const res = await postJson<SwirrFitResult>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/swirr/fit`,
+				{
+					well_names: this.selectedWellNames.length > 0 ? this.selectedWellNames : null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
+					extraction_mode: cfg.extractionMode,
+					reference_pc_psi: cfg.referencePcPsi,
+					equation_type: cfg.equationType,
+					fit_scope: cfg.fitScope,
+					swirr_min: cfg.swirrMin,
+					swirr_max: cfg.swirrMax,
+					excluded_plug_ids: cfg.excludedPlugIds,
+					rules: cfg.rules,
+					auto_fit: !this.swirrManualRuleOverride,
+					drt_method: this.drtMethod,
+					cutoffs: this.activeDrtCutoffs,
+					ift: this.shfParams.ift,
+					theta: this.shfParams.theta
+				}
+			);
+			if (res && Array.isArray(res.plugs) && res.plugs.length > 0) {
+				if (!this.swirrManualRuleOverride && res.rules) {
+					this.swirrConfig.rules = res.rules;
+				}
+				this.swirrResult = res;
+				this.recomputeScalFitsFromPlugs(!this.shfManualFitOverride);
+				return true;
+			}
+		} catch {
+			// Project might not have SCAL data
+		}
+		return false;
+	}
+
 	recomputeScalFitsFromPlugs(resetFits: boolean = true) {
 		const sr = this.swirrResult;
 		if (!sr || !Array.isArray(sr.plugs) || sr.plugs.length === 0) return;
@@ -1726,7 +2009,7 @@ class ProjectDataState {
 		const sp = this.shfParams;
 		const activeModel = sp.model ?? 'leverett_j';
 		const jSatMode = sp.jSatMode ?? 'swn';
-		const swirrSource = sp.swirrSource ?? 'poro_perm';
+		const swirrSource = sp.swirrSource ?? 'lab_min';
 		const iftCos = Math.max(
 			1e-4,
 			(sp.ift || 30.0) * Math.cos(((sp.theta ?? 30.0) * Math.PI) / 180.0)
@@ -1737,6 +2020,7 @@ class ProjectDataState {
 		const pcArr: number[] = [];
 		const swArr: number[] = [];
 		const swnArr: number[] = [];
+		const swirrCalcArr: number[] = [];
 		const jArr: number[] = [];
 		const hArr: number[] = [];
 		const bvwArr: number[] = [];
@@ -1745,6 +2029,8 @@ class ProjectDataState {
 		const rfArr: number[] = [];
 		const wellArr: string[] = [];
 		const sampleArr: string[] = [];
+		const depthArr: number[] = [];
+		const zoneArr: string[] = [];
 		const pointIdArr: string[] = [];
 		const plugIdArr: string[] = [];
 		const excludedArr: boolean[] = [];
@@ -1753,27 +2039,30 @@ class ProjectDataState {
 			(this.swirrConfig.excludedScalPointIds || []).map((id) => String(id).trim())
 		);
 		const excludedPlugsSet = new Set(
-			(this.swirrConfig.excludedPlugIds || []).map((id) => String(id).trim())
+			(this.swirrConfig.excludedPlugIds || []).map((id) => this.normalizeScalPlugId(id))
 		);
 
 		for (const p of sr.plugs) {
+			const pZone = this.resolveScalSampleZone(p.well, p.depth, p.zone);
+			if (!this.isScalItemInActiveFilter(p.well, p.depth, pZone)) continue;
 			const pCurve = p.pc_curve || [];
 			const sCurve = p.sw_curve || [];
 			const phi = Math.max(1e-4, p.cpore || 0.15);
 			const k = Math.max(1e-4, p.cperm || 10.0);
 			const rf = p.rt ?? 1;
-			const plugId = p.plug_id || `${p.well}::${p.sample}`;
-			const isPlugExcluded = Boolean(p.excluded) || excludedPlugsSet.has(plugId);
+			const plugId = this.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+			const legacyPlugId = `${p.well}:${p.sample}`;
+			const isPlugExcluded =
+				Boolean(p.excluded) ||
+				excludedPlugsSet.has(plugId) ||
+				excludedPlugsSet.has(legacyPlugId);
 			const swMinPlug =
 				sCurve.length > 0 ? Math.min(...sCurve) : (p.sw_at_max_pc ?? 0.12);
 
 			const swirrNorm =
 				swirrSource === 'poro_perm'
-					? this.evalSwirrValue(phi, k, rf)
-					: Math.min(
-							swMinPlug * 0.92,
-							Math.min(0.22, Math.max(0.04, 0.08 * Math.pow(k / phi, -0.12)))
-						);
+					? Math.min(0.85, Math.max(0.01, this.evalSwirrValue(phi, k, rf)))
+					: Math.min(0.85, Math.max(0.01, swMinPlug * 0.96));
 
 			for (let i = 0; i < Math.min(pCurve.length, sCurve.length); i++) {
 				const pc = Number(pCurve[i]);
@@ -1787,13 +2076,18 @@ class ProjectDataState {
 				const h = pc / gradPsi;
 				const bvw = phi * sw;
 				const ptId = `${plugId}::${i}`;
+				const legacyPtId = `${legacyPlugId}::${i}`;
 				const ptIdByPc = `${plugId}::${Number(pc.toFixed(2))}`;
 				const isPtExcluded =
-					isPlugExcluded || excludedPtsSet.has(ptId) || excludedPtsSet.has(ptIdByPc);
+					isPlugExcluded ||
+					excludedPtsSet.has(ptId) ||
+					excludedPtsSet.has(legacyPtId) ||
+					excludedPtsSet.has(ptIdByPc);
 
 				pcArr.push(Number(pc.toFixed(3)));
 				swArr.push(Number(sw.toFixed(4)));
 				swnArr.push(Number(swn.toFixed(4)));
+				swirrCalcArr.push(Number(swirrNorm.toFixed(4)));
 				jArr.push(Number(j.toFixed(4)));
 				hArr.push(Number(h.toFixed(2)));
 				bvwArr.push(Number(bvw.toFixed(4)));
@@ -1802,6 +2096,8 @@ class ProjectDataState {
 				rfArr.push(rf);
 				wellArr.push(p.well);
 				sampleArr.push(p.sample);
+				depthArr.push(Number((p.depth ?? 0).toFixed(2)));
+				zoneArr.push(pZone);
 				pointIdArr.push(ptId);
 				plugIdArr.push(plugId);
 				excludedArr.push(isPtExcluded);
@@ -1920,6 +2216,7 @@ class ProjectDataState {
 				pc: pcArr,
 				sw: swArr,
 				swn: swnArr,
+				swirr_calc: swirrCalcArr,
 				j: jArr,
 				h: hArr,
 				bvw: bvwArr,
@@ -1928,6 +2225,8 @@ class ProjectDataState {
 				rock_flags: rfArr,
 				well_names: wellArr,
 				samples: sampleArr,
+				depths: depthArr,
+				zones: zoneArr,
 				point_ids: pointIdArr,
 				plug_ids: plugIdArr,
 				excluded: excludedArr
@@ -1943,9 +2242,11 @@ class ProjectDataState {
 	}
 
 	toggleSwirrPlugExclusion(plugId: string) {
-		const id = String(plugId || '').trim();
+		const id = this.normalizeScalPlugId(plugId);
 		if (!id) return;
-		const cur = new Set(this.swirrConfig.excludedPlugIds || []);
+		const cur = new Set(
+			(this.swirrConfig.excludedPlugIds || []).map((x) => this.normalizeScalPlugId(x))
+		);
 		if (cur.has(id)) {
 			cur.delete(id);
 		} else {
@@ -1999,11 +2300,15 @@ class ProjectDataState {
 
 	excludeSelectedScalPlugs() {
 		if (this.selectedScalPointIds.length === 0) return;
-		const curPlugs = new Set(this.swirrConfig.excludedPlugIds || []);
+		const curPlugs = new Set(
+			(this.swirrConfig.excludedPlugIds || []).map((x) => this.normalizeScalPlugId(x))
+		);
 		for (const ptId of this.selectedScalPointIds) {
 			const parts = ptId.split('::');
-			if (parts.length >= 2) {
+			if (parts.length >= 3) {
 				curPlugs.add(`${parts[0]}::${parts[1]}`);
+			} else if (parts.length === 2) {
+				curPlugs.add(this.normalizeScalPlugId(parts[0]));
 			}
 		}
 		this.swirrConfig.excludedPlugIds = Array.from(curPlugs);
@@ -2013,11 +2318,15 @@ class ProjectDataState {
 
 	includeSelectedScalPlugs() {
 		if (this.selectedScalPointIds.length === 0) return;
-		const curPlugs = new Set(this.swirrConfig.excludedPlugIds || []);
+		const curPlugs = new Set(
+			(this.swirrConfig.excludedPlugIds || []).map((x) => this.normalizeScalPlugId(x))
+		);
 		for (const ptId of this.selectedScalPointIds) {
 			const parts = ptId.split('::');
-			if (parts.length >= 2) {
+			if (parts.length >= 3) {
 				curPlugs.delete(`${parts[0]}::${parts[1]}`);
+			} else if (parts.length === 2) {
+				curPlugs.delete(this.normalizeScalPlugId(parts[0]));
 			}
 		}
 		this.swirrConfig.excludedPlugIds = Array.from(curPlugs);
@@ -2134,6 +2443,10 @@ class ProjectDataState {
 
 	setShfSwirrSource(source: 'lab_min' | 'poro_perm') {
 		this.shfParams.swirrSource = source;
+		if (this.swirrResult?.plugs?.length) {
+			this.recomputeScalFitsFromPlugs(true);
+			return;
+		}
 		const sr = this.shfResult;
 		if (!sr || !sr.scal_data || !Array.isArray(sr.scal_data.sw)) return;
 		const swArr = sr.scal_data.sw;
@@ -2146,7 +2459,7 @@ class ProjectDataState {
 		// Group by plug to compute lab_min per plug or poro_perm per point
 		const plugMinSw = new Map<string, number>();
 		for (let i = 0; i < swArr.length; i++) {
-			const pk = `${wellsArr[i] ?? 'W'}:${samplesArr[i] ?? i}`;
+			const pk = `${wellsArr[i] ?? 'W'}::${samplesArr[i] ?? i}`;
 			const sv = swArr[i];
 			if (typeof sv === 'number' && Number.isFinite(sv)) {
 				const prev = plugMinSw.get(pk);
@@ -2155,25 +2468,24 @@ class ProjectDataState {
 		}
 
 		const nextSwn: number[] = [];
+		const nextSwirrCalc: number[] = [];
 		for (let i = 0; i < swArr.length; i++) {
 			const sw = swArr[i];
 			const phi = phitArr[i] ?? 0.18;
 			const k = permArr[i] ?? 50.0;
 			const rf = rfArr[i] ?? 1;
 			if (source === 'poro_perm') {
-				const swirrCalc = this.evalSwirrValue(phi, k, rf);
+				const swirrCalc = Math.min(0.85, Math.max(0.01, this.evalSwirrValue(phi, k, rf)));
 				const swn = Math.min(0.99, Math.max(0.005, (sw - swirrCalc) / Math.max(0.05, 1.0 - swirrCalc)));
 				nextSwn.push(Number(swn.toFixed(4)));
+				nextSwirrCalc.push(Number(swirrCalc.toFixed(4)));
 			} else {
-				const pk = `${wellsArr[i] ?? 'W'}:${samplesArr[i] ?? i}`;
+				const pk = `${wellsArr[i] ?? 'W'}::${samplesArr[i] ?? i}`;
 				const swMinPlug = plugMinSw.get(pk) ?? 0.1;
-				const swirrEst = Math.min(
-					0.22,
-					Math.max(0.04, 0.08 * Math.pow(Math.max(k, 0.01) / Math.max(phi, 0.01), -0.12))
-				);
-				const effSwirr = Math.min(swMinPlug * 0.92, swirrEst);
-				const swn = Math.min(0.98, Math.max(0.02, (sw - effSwirr) / Math.max(1.0 - effSwirr, 1e-3)));
+				const effSwirr = Math.min(0.85, Math.max(0.01, swMinPlug * 0.96));
+				const swn = Math.min(0.99, Math.max(0.005, (sw - effSwirr) / Math.max(1.0 - effSwirr, 0.05)));
 				nextSwn.push(Number(swn.toFixed(4)));
+				nextSwirrCalc.push(Number(effSwirr.toFixed(4)));
 			}
 		}
 
@@ -2182,7 +2494,8 @@ class ProjectDataState {
 			fits_swn: undefined,
 			scal_data: {
 				...sr.scal_data,
-				swn: nextSwn
+				swn: nextSwn,
+				swirr_calc: nextSwirrCalc
 			}
 		};
 		// Force refit of Swn J-curves

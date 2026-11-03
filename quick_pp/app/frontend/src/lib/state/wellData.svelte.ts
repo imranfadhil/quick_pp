@@ -1140,6 +1140,18 @@ class WellDataState {
 				committedCopy['DEPT'] = [...numericCurves['DEPTH']];
 			}
 
+			// If a curve ends with '.' (common in LAS files with blank units, e.g. POTA.), also map the clean name
+			for (const col of Object.keys(numericCurves)) {
+				if (col.endsWith('.')) {
+					const clean = col.replace(/\.+$/, '').trim();
+					if (clean && !numericCurves[clean]) {
+						numericCurves[clean] = numericCurves[col];
+						origCopy[clean] = origCopy[col];
+						committedCopy[clean] = committedCopy[col];
+					}
+				}
+			}
+
 			// Detect carbonate / multi-mineral curves on well load and clean up legacy duplicate VSAND==VCALC / VSILT==VDOLO
 			const hasPositiveCurve = (col: string) =>
 				Array.isArray(numericCurves[col]) &&
@@ -3873,9 +3885,18 @@ class WellDataState {
 			'PAY',
 			'BADHOLE'
 		]) {
-			if (this.curves[k]) {
-				const v = this.curves[k][lo];
+			const arr = this.curves[k] ?? this.curves[k + "."];
+			if (arr) {
+				const v = arr[lo];
 				out[k] = Number.isFinite(v) ? v : null;
+			}
+		}
+
+		// Normalize POTA to percent (%) if stored as decimal fraction (max <= 0.5 v/v)
+		if (out['POTA'] !== null && out['POTA'] !== undefined) {
+			const potaArr = this.curves['POTA'] ?? this.curves['POTA.'];
+			if (potaArr && !potaArr.some((v) => Number.isFinite(v) && v > 0.5)) {
+				out['POTA'] = out['POTA'] * 100.0;
 			}
 		}
 

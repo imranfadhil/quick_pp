@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from quick_pp.app.backend.schemas.well_metadata import (
     AncillaryColumnMapping,
@@ -188,6 +188,10 @@ ANCILLARY_TARGET_SCHEMAS: Dict[str, Dict[str, List[str]]] = {
             "depth_m",
             "depth_ft",
         ],
+        "ZONE": ["zone", "formation", "reservoir", "unit", "compartment"],
+        "FAULT_BLOCK": ["fault_block", "faultblock", "block", "compartment_block"],
+        "SOURCE": ["source", "method", "determination_method", "lineage", "basis"],
+        "REMARKS": ["remarks", "remark", "comment", "comments", "description"],
     },
     "perforations": {
         "WELL_NAME": ["well", "well_name", "wellname", "uwi", "wellbore", "well_id"],
@@ -1327,6 +1331,79 @@ def delete_fluid_contact_project(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to delete fluid contact: {e}"
+        ) from e
+
+
+@router.delete(
+    "/fluid_contacts",
+    summary="Delete fluid contacts across project or for a well (optionally auto-generated only)",
+    tags=["Fluid Contacts"],
+)
+@router.delete(
+    "/wells/{well_name}/fluid_contacts",
+    include_in_schema=False,
+)
+def delete_fluid_contacts_project(
+    project_id: int,
+    well_name: Optional[str] = None,
+    auto_only: bool = True,
+    zone: Optional[str] = None,
+):
+    """Delete fluid contacts. If `auto_only=True` (default), only auto-generated/optimized contacts are deleted."""
+    try:
+        deleted_count = 0
+        wells_affected = set()
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            if well_name:
+                wells = [proj.get_well(well_name)]
+            else:
+                wells = [proj.get_well(wn) for wn in proj.get_well_names()]
+
+            for well in wells:
+                query = session.query(db_objects.ORMFluidContact).filter_by(well_id=well.well_id)
+                if zone:
+                    query = query.filter(db_objects.ORMFluidContact.zone == str(zone).strip())
+
+                if auto_only:
+                    auto_conditions = [
+                        db_objects.ORMFluidContact.source.ilike("%Log Evaluation%"),
+                        db_objects.ORMFluidContact.source.ilike("%Calculated%"),
+                        db_objects.ORMFluidContact.source.ilike("%Optimizer%"),
+                        db_objects.ORMFluidContact.source.ilike("%FPT%"),
+                        db_objects.ORMFluidContact.source.ilike("%Auto%"),
+                        db_objects.ORMFluidContact.name.in_(["GUT", "GDT", "OUT", "ODT", "WUT"]),
+                        db_objects.ORMFluidContact.remarks.ilike("%Proved Gas%"),
+                        db_objects.ORMFluidContact.remarks.ilike("%Proved Oil%"),
+                        db_objects.ORMFluidContact.remarks.ilike("%Proved Water%"),
+                        db_objects.ORMFluidContact.remarks.ilike("%bracketed%"),
+                        db_objects.ORMFluidContact.remarks.ilike("%Optimized Free Water Level%"),
+                        db_objects.ORMFluidContact.remarks.ilike("%Formation Pressure Test%"),
+                    ]
+                    query = query.filter(or_(*auto_conditions))
+
+                count = query.delete(synchronize_session="fetch")
+                if count > 0:
+                    deleted_count += count
+                    wells_affected.add(well.name)
+                    try:
+                        session.expire(well._orm_well, ["fluid_contacts"])
+                    except Exception:
+                        pass
+
+            session.flush()
+
+        for w_name in wells_affected:
+            invalidate_well_cache(project_id=project_id, well_name=str(w_name))
+
+        return {
+            "deleted_count": deleted_count,
+            "wells_affected": list(wells_affected),
+            "auto_only": auto_only,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete fluid contacts: {e}"
         ) from e
 
 
@@ -2564,12 +2641,24 @@ def commit_ancillary_data(
                 elif dtype == "contacts":
                     c_col, _ = col_map.get("CONTACT_TYPE", ("contact_type", None))
                     d_col, d_unit = col_map.get("DEPTH", ("depth", None))
+                    z_col, _ = col_map.get("ZONE", ("zone", None))
+                    fb_col, _ = col_map.get("FAULT_BLOCK", ("fault_block", None))
+                    src_col, _ = col_map.get("SOURCE", ("source", None))
+                    rem_col, _ = col_map.get("REMARKS", ("remarks", None))
                     contacts_payload = []
                     for r in w_rows:
                         c_type = str(r.get(c_col, "")).strip().upper()
                         d_v = _convert_ancillary_numeric(r.get(d_col), d_unit, "DEPTH")
                         if c_type and d_v is not None:
-                            contacts_payload.append({"name": c_type, "depth": d_v})
+                            contacts_payload.append({
+                                "name": str(r.get("name") or c_type).strip(),
+                                "contact_type": c_type,
+                                "depth": d_v,
+                                "zone": str(r.get(z_col, "")).strip() or None if z_col in r else None,
+                                "fault_block": str(r.get(fb_col, "")).strip() or None if fb_col in r else None,
+                                "source": str(r.get(src_col, "")).strip() or None if src_col in r else None,
+                                "remarks": str(r.get(rem_col, "")).strip() or None if rem_col in r else None,
+                            })
                     if contacts_payload:
                         well.add_fluid_contacts(contacts_payload, replace=True)
                         summary_by_well[wn] = len(contacts_payload)

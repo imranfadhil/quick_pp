@@ -6,7 +6,88 @@
  * window, falling back to `well` when no filter is active. Saved parameters are restored
  * automatically on exact selection-key match when the well is loaded or the selection changes.
  */
+import { deleteWellModuleParams } from '$lib/api/client';
 import { workbench } from './workbench.svelte';
+
+export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string, any>> = {
+	'qaqc-badhole': {
+		useCali: true,
+		caliThreshold: 2.0,
+		autoBitsize: true,
+		useDrift: true,
+		driftWindowM: 50.0,
+		driftThresholdSigma: 2.5,
+		useDensityWashout: false,
+		caliSpikeThreshold: 0.5
+	},
+	'qaqc-env': {
+		bitsizeDefault: 8.5,
+		mudWeight: 9.5,
+		surfaceTemp: 75.0,
+		tempGradient: 1.5,
+		salinityPpm: 30000.0
+	},
+	'litho-poro': {
+		litho: {
+			model: 'ssc',
+			porosityMethod: 'den',
+			logCorrectionMode: 'none',
+			grClean: 20.0,
+			grClay: 120.0,
+			drySandNphi: -0.02,
+			drySandRhob: 2.65,
+			dryClayNphi: 0.44,
+			dryClayRhob: 2.78,
+			fluidNphi: 1.0,
+			fluidRhob: 1.0,
+			badholeTreatment: 'interpolate'
+		},
+		ts: {
+			cleanSandPoint: [-0.02, 2.65],
+			pureShalePoint: [0.44, 2.78],
+			fluidPoint: [1.0, 1.0],
+			useInSaturation: false,
+			useInPerm: false
+		}
+	},
+	perm: {
+		method: 'choo',
+		m: 2.0,
+		A: 1000000,
+		coatesA: 10000.0,
+		coatesB: 2.0,
+		coatesC: 2.0,
+		useTsInPerm: false
+	},
+	saturation: {
+		method: 'waxman_smits',
+		rwMode: 'salinity_temp',
+		measSystem: 'metric',
+		a: 1.0,
+		m: 2.0,
+		n: 2.0,
+		rwVal: 0.05,
+		waterSalinity: 30000,
+		fwl: 0,
+		useTsInSaturation: false
+	},
+	scal: {
+		model: 'let',
+		swirr: 0.15,
+		sor: 0.2,
+		l_w: 2.0,
+		e_w: 1.0,
+		t_w: 1.0,
+		l_o: 2.0,
+		e_o: 1.0,
+		t_o: 1.0
+	},
+	ressum: {
+		vclCutoff: 0.4,
+		phieCutoff: 0.08,
+		swCutoff: 0.6
+	}
+};
 
 export type ParamModuleKey =
 	| 'qaqc-badhole'
@@ -255,7 +336,7 @@ class ModuleParamsState {
 	/** Number of saved selections per module for the loaded well. */
 	savedCounts = $state<Partial<Record<ParamModuleKey, number>>>({});
 
-	/** Apply exact-match saved params for the current selection to all registered modules. */
+	/** Apply saved params (exact, bundle subset, or whole well fallback) for the current selection. */
 	applyForCurrentSelection(config: Record<string, any> | null | undefined) {
 		const cfg = (config || {}) as Record<string, any>;
 		const mp = (cfg.module_params || {}) as ModuleParamsMap;
@@ -268,6 +349,25 @@ class ModuleParamsState {
 			const modMap = mp[module] || {};
 			nextCounts[module] = Object.keys(modMap).length;
 			let entry: SavedModuleParamsEntry | null = modMap[key] ?? null;
+			let matchType: 'exact' | 'bundle' | 'fallback_all' = 'exact';
+			if (!entry && sel.zones && sel.zones.length > 0) {
+				const normSel = [...new Set(sel.zones.map((s) => String(s).trim()).filter(Boolean))].sort();
+				const bundles = Object.entries(modMap)
+					.filter(([, e]) => {
+						const ez = (e.selection?.zones ?? []).map((s) => String(s).trim()).filter(Boolean);
+						const s = new Set(ez);
+						return normSel.every((z) => s.has(z));
+					})
+					.sort((a, b) => (a[1].selection?.zones?.length ?? 99) - (b[1].selection?.zones?.length ?? 99));
+				if (bundles.length > 0) {
+					entry = bundles[0][1];
+					matchType = 'bundle';
+				}
+			}
+			if (!entry && key !== 'well' && modMap['well']) {
+				entry = modMap['well'];
+				matchType = 'fallback_all';
+			}
 			if (!entry && key === 'well' && Object.keys(modMap).length === 0) {
 				entry = legacyWellEntry(module, cfg);
 			}
@@ -278,11 +378,17 @@ class ModuleParamsState {
 					// Ignore malformed saved entry; keep current values
 				}
 			}
+			let displayLabel = entry?.label ?? null;
+			if (entry && matchType === 'bundle') {
+				displayLabel = `${entry.label || 'Saved bundle'} (bundle)`;
+			} else if (entry && matchType === 'fallback_all') {
+				displayLabel = `${entry.label || 'Whole well'} (default)`;
+			}
 			nextStatus[module] = {
 				key,
 				label,
 				matched: Boolean(entry),
-				savedLabel: entry?.label ?? null,
+				savedLabel: displayLabel,
 				savedAt: entry?.saved_at || null
 			};
 		}
@@ -314,6 +420,89 @@ class ModuleParamsState {
 	reset() {
 		this.status = {};
 		this.savedCounts = {};
+	}
+
+	getRegionalDefaults(module: ParamModuleKey): Record<string, any> {
+		return clone(SINGLE_WELL_REGIONAL_DEFAULTS[module]);
+	}
+
+	/** Reset the current active reactive parameters in the workbench to regional default presets. */
+	resetToRegionalDefaults(module: ParamModuleKey) {
+		const defs = this.getRegionalDefaults(module);
+		REGISTRY[module].set(defs);
+	}
+
+	/** Delete a specific saved preset for a module & selection key in the well config & backend. */
+	async deleteSavedEntry(
+		projectId: string | number,
+		wellName: string,
+		module: ParamModuleKey,
+		key: string,
+		wellConfig?: Record<string, any>
+	): Promise<boolean> {
+		try {
+			await deleteWellModuleParams(projectId, wellName, module, key);
+			if (wellConfig?.module_params?.[module]?.[key]) {
+				delete wellConfig.module_params[module][key];
+			}
+			this.applyForCurrentSelection(wellConfig);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/** Delete all saved presets for a module across all intervals in the well. */
+	async deleteAllForModule(
+		projectId: string | number,
+		wellName: string,
+		module: ParamModuleKey,
+		wellConfig?: Record<string, any>
+	): Promise<boolean> {
+		try {
+			await deleteWellModuleParams(projectId, wellName, module);
+			if (wellConfig?.module_params?.[module]) {
+				delete wellConfig.module_params[module];
+			}
+			this.applyForCurrentSelection(wellConfig);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/** Extract a flat list of all saved entries for convenient tabular presentation. */
+	getAllSavedEntries(wellConfig?: Record<string, any>): Array<{
+		module: ParamModuleKey;
+		moduleLabel: string;
+		key: string;
+		label: string;
+		saved_at: string;
+		params: Record<string, any>;
+	}> {
+		const mp = ((wellConfig?.module_params || {}) as ModuleParamsMap);
+		const rows: Array<{
+			module: ParamModuleKey;
+			moduleLabel: string;
+			key: string;
+			label: string;
+			saved_at: string;
+			params: Record<string, any>;
+		}> = [];
+		for (const m of PARAM_MODULE_KEYS) {
+			const modMap = mp[m] || {};
+			for (const [k, e] of Object.entries(modMap)) {
+				rows.push({
+					module: m,
+					moduleLabel: PARAM_MODULE_LABELS[m],
+					key: k,
+					label: e.label || k,
+					saved_at: e.saved_at || '',
+					params: e.params || {}
+				});
+			}
+		}
+		return rows;
 	}
 }
 

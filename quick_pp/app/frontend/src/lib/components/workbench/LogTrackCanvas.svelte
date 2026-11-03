@@ -56,10 +56,10 @@
 	});
 
 	// Track visibility toggles
-	let showHcCorrected = $state(true);
 	let showTsOverlay = $state(true);
 	let showDtc = $state(true);
 	let showSpectralGr = $state(true);
+	let showTopLabels = $state(true);
 	let showInspectionLine = $state(false);
 	let isPointerOverPlot = $state(false);
 
@@ -75,15 +75,24 @@
 		return false;
 	});
 
-	const POTA_ALIASES = ['POTA', 'HFKO', 'POT', 'K'] as const;
-	const THOR_ALIASES = ['THOR', 'HTHO', 'TH', 'THO'] as const;
-	const URAN_ALIASES = ['URAN', 'HURA', 'U', 'URA'] as const;
+	const POTA_ALIASES = ['POTA', 'POTA.', 'HFKO', 'HFKO.', 'POT', 'POT.', 'K', 'K.', 'POTA_NORM'] as const;
+	const THOR_ALIASES = ['THOR', 'THOR.', 'HTHO', 'HTHO.', 'TH', 'TH.', 'THO'] as const;
+	const URAN_ALIASES = ['URAN', 'URAN.', 'HURA', 'HURA.', 'U', 'U.', 'URA'] as const;
 
 	let hasPota = $derived.by(() => {
 		for (const mnem of POTA_ALIASES) {
 			const arr = wellData.curves[mnem];
 			if (arr && arr.some((v) => typeof v === 'number' && Number.isFinite(v) && v > 0)) {
 				return true;
+			}
+		}
+		for (const key of Object.keys(wellData.curves)) {
+			const clean = key.toUpperCase().replace(/\.+$/, '').trim();
+			if (clean === 'POTA' || clean === 'HFKO' || clean === 'POT' || clean === 'K') {
+				const arr = wellData.curves[key];
+				if (arr && arr.some((v) => typeof v === 'number' && Number.isFinite(v) && v > 0)) {
+					return true;
+				}
 			}
 		}
 		return false;
@@ -133,6 +142,7 @@
 		id: string;
 		name: string;
 		depth: number;
+		plotDepth?: number;
 	} | null>(null);
 
 	// Interactive Depth Interval Selection state (Well Plot -> Crossplot brushing)
@@ -264,7 +274,16 @@
 		arr: (number | null)[];
 	}> {
 		const pick = (mnemonic: string): (number | null)[] => {
-			const arr = wellData.curves[mnemonic];
+			let arr = wellData.curves[mnemonic];
+			if (!arr) {
+				const clean = mnemonic.toUpperCase().replace(/\.+$/, '').trim();
+				for (const key of Object.keys(wellData.curves)) {
+					if (key.toUpperCase().replace(/\.+$/, '').trim() === clean) {
+						arr = wellData.curves[key];
+						break;
+					}
+				}
+			}
 			if (!arr) return [];
 			return indices.map((i) => (Number.isFinite(arr[i]) ? arr[i] : null));
 		};
@@ -949,7 +968,11 @@
 					}
 				}
 				if (potaData.length > 0) {
-					const potaDec = decimateSvg(potaData);
+					// If POTA is stored as decimal fraction (e.g. 0.02 for 2%), normalize to percentage
+					const maxPota = potaData.reduce<number>((m, v) => (v !== null && v > m ? v : m), 0);
+					const potaScaleToPct = maxPota > 0 && maxPota <= 0.5 ? 100.0 : 1.0;
+					const potaPct = potaData.map((v) => (v !== null ? v * potaScaleToPct : null));
+					const potaDec = decimateSvg(potaPct);
 					traces.push({
 						type: 'scatter',
 						mode: 'lines',
@@ -1363,7 +1386,7 @@
 				hovertemplate: `${activeDtcMnem}: %{customdata:.1f} µs/ft<extra></extra>`
 			});
 		}
-		if (showHcCorrected && workbench.lithoParams.enableHcCorrection) {
+		if (workbench.lithoParams.enableHcCorrection) {
 			const nphiHc = pick('NPHI_HC');
 			const rhobHc = pick('RHOB_HC');
 			if (nphiHc.some((v) => v !== null)) {
@@ -2072,22 +2095,24 @@
 				line: { color: 'rgba(37, 99, 235, 0.8)', width: 1, dash: 'dash' },
 				layer: 'above'
 			});
-			annotations.push({
-				xref: 'paper',
-				yref: 'y',
-				x: 0.003,
-				y: topD,
-				xanchor: 'left',
-				yanchor: 'bottom',
-				text: `▲ ${sortedTops[i].name} (${topD.toFixed(1)}m)`,
-				showarrow: false,
-				captureevents: false,
-				font: { family: 'JetBrains Mono, monospace', size: 9, color: '#1E40AF' },
-				bgcolor: 'rgba(239, 246, 255, 0.94)',
-				bordercolor: '#BFDBFE',
-				borderwidth: 1,
-				borderpad: 1.5
-			});
+			if (showTopLabels) {
+				annotations.push({
+					xref: 'paper',
+					yref: 'y',
+					x: 0.003,
+					y: topD,
+					xanchor: 'left',
+					yanchor: 'bottom',
+					text: `▲ ${sortedTops[i].name} (${topD.toFixed(1)}m)`,
+					showarrow: false,
+					captureevents: false,
+					font: { family: 'JetBrains Mono, monospace', size: 9, color: '#1E40AF' },
+					bgcolor: 'rgba(239, 246, 255, 0.94)',
+					bordercolor: '#BFDBFE',
+					borderwidth: 1,
+					borderpad: 1.5
+				});
+			}
 		}
 
 		// Perforation intervals: translucent band across all tracks + hoverable perf-gun strip on Track 1 left edge
@@ -2263,11 +2288,17 @@
 		'GR',
 		'CGR',
 		'POTA',
+		'POTA.',
 		'HFKO',
+		'HFKO.',
 		'THOR',
+		'THOR.',
 		'HTHO',
+		'HTHO.',
 		'URAN',
+		'URAN.',
 		'HURA',
+		'HURA.',
 		'CALI',
 		'BS',
 		'BADHOLE',
@@ -2371,9 +2402,9 @@
 			visIndices,
 			tops,
 			perforations,
-			showHcCorrected,
 			showDtc,
 			showSpectralGr,
+			showTopLabels,
 			tsOverlayActive,
 			workbench.lithoParams.enableHcCorrection,
 			workbench.lithoParams.model,
@@ -2654,6 +2685,53 @@
 		window.addEventListener('pointerup', onUp);
 	}
 
+	// Convert TVDSS depth to MD depth using well log depth arrays (if TVDSS curve present)
+	function tvdssToMd(tvdss: number): number {
+		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'];
+		const tvdssArr = wellData.curves['TVDSS'] ?? wellData.curves['TVD'];
+		if (!deptArr || !tvdssArr || deptArr.length === 0 || tvdssArr.length === 0) {
+			return tvdss;
+		}
+		for (let i = 0; i < tvdssArr.length - 1; i++) {
+			const z0 = tvdssArr[i];
+			const z1 = tvdssArr[i + 1];
+			if (z0 === null || z1 === null || !Number.isFinite(z0) || !Number.isFinite(z1)) continue;
+			if ((z0 <= tvdss && tvdss <= z1) || (z1 <= tvdss && tvdss <= z0)) {
+				const dz = z1 - z0;
+				const md0 = deptArr[i];
+				const md1 = deptArr[i + 1];
+				if (md0 !== null && md1 !== null && Number.isFinite(md0) && Number.isFinite(md1)) {
+					const frac = Math.abs(dz) > 1e-4 ? (tvdss - z0) / dz : 0.0;
+					return md0 + frac * (md1 - md0);
+				}
+			}
+		}
+		return tvdss;
+	}
+
+	function mdToTvdss(md: number): number {
+		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'];
+		const tvdssArr = wellData.curves['TVDSS'] ?? wellData.curves['TVD'];
+		if (!deptArr || !tvdssArr || deptArr.length === 0 || tvdssArr.length === 0) {
+			return md;
+		}
+		for (let i = 0; i < deptArr.length - 1; i++) {
+			const m0 = deptArr[i];
+			const m1 = deptArr[i + 1];
+			if (m0 === null || m1 === null || !Number.isFinite(m0) || !Number.isFinite(m1)) continue;
+			if ((m0 <= md && md <= m1) || (m1 <= md && md <= m0)) {
+				const dm = m1 - m0;
+				const z0 = tvdssArr[i];
+				const z1 = tvdssArr[i + 1];
+				if (z0 !== null && z1 !== null && Number.isFinite(z0) && Number.isFinite(z1)) {
+					const frac = Math.abs(dm) > 1e-4 ? (md - m0) / dm : 0.0;
+					return z0 + frac * (z1 - z0);
+				}
+			}
+		}
+		return md;
+	}
+
 	function startMarkerDrag(
 		e: PointerEvent,
 		kind: 'top' | 'contact',
@@ -2665,7 +2743,8 @@
 		e.stopPropagation();
 		if (!plotContainer) return;
 
-		draggingMarker = { kind, id, name, depth: initialDepth };
+		const initialPlotD = kind === 'contact' ? tvdssToMd(initialDepth) : initialDepth;
+		draggingMarker = { kind, id, name, depth: initialDepth, plotDepth: initialPlotD };
 		const rect = plotContainer.getBoundingClientRect();
 		const plotTop = rect.top + 6;
 		const plotHeight = Math.max(1, rect.height - 14);
@@ -2674,9 +2753,10 @@
 		const onMove = (moveEvent: PointerEvent) => {
 			if (!draggingMarker) return;
 			const relY = Math.min(1, Math.max(0, (moveEvent.clientY - plotTop) / plotHeight));
-			const newDepth = Number((minD + relY * (maxD - minD)).toFixed(1));
-			draggingMarker = { ...draggingMarker, depth: newDepth };
-			workbench.cursorDepth = newDepth;
+			const newMd = Number((minD + relY * (maxD - minD)).toFixed(1));
+			const newTvdss = draggingMarker.kind === 'contact' ? Number(mdToTvdss(newMd).toFixed(1)) : newMd;
+			draggingMarker = { ...draggingMarker, depth: newTvdss, plotDepth: newMd };
+			workbench.cursorDepth = newMd;
 		};
 
 		const onUp = () => {
@@ -2799,22 +2879,7 @@
 			<span class="mono-num text-[var(--text-muted)]">
 				[{fmtDepth(Math.min(yRange[0], yRange[1]))} – {fmtDepth(Math.max(yRange[0], yRange[1]))}]
 			</span>
-			{#if activeLithoSpecs.length > 0}
-				<div class="hidden xl:flex items-center gap-1 border-l border-[var(--border-hairline)] pl-2">
-					{#each activeLithoSpecs as item (item.spec.mnemonic)}
-						<span
-							class="inline-flex items-center gap-1 rounded-xs border border-slate-200 bg-white px-1 py-0 text-[9px] font-medium text-slate-700"
-							title="{item.spec.mnemonic} ({item.spec.shortLabel})"
-						>
-							<span
-								class="inline-block h-2 w-2 rounded-2xs border"
-								style="background-color: {item.spec.fillHex}; border-color: {item.spec.strokeHex};"
-							></span>
-							<span>{item.spec.mnemonic}</span>
-						</span>
-					{/each}
-				</div>
-			{/if}
+
 		</div>
 
 		<div class="flex shrink-0 items-center gap-2">
@@ -2850,14 +2915,26 @@
 					<span style="color: {PETRO_COLORS.pota}" class="font-medium">SGR</span>
 				</label>
 			{/if}
-			<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer">
-				<input
-					type="checkbox"
-					bind:checked={showHcCorrected}
-					class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)] focus:ring-0"
-				/>
-				<span>HC Overlay</span>
-			</label>
+			{#if wellData.tops.length > 0}
+				<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer" title="Show or hide formation top names on track 1">
+					<input
+						type="checkbox"
+						bind:checked={showTopLabels}
+						class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-blue-600 focus:ring-0"
+					/>
+					<span class="font-medium text-blue-600 dark:text-blue-400">Tops</span>
+				</label>
+			{/if}
+			{#if wellData.contacts.length > 0}
+				<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer" title="Show or hide fluid contact marker lines across well plot tracks">
+					<input
+						type="checkbox"
+						bind:checked={workbench.logShowContacts}
+						class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-rose-600 focus:ring-0"
+					/>
+					<span class="font-medium text-rose-600 dark:text-rose-400">Contacts</span>
+				</label>
+			{/if}
 			<button
 				type="button"
 				title="Toggle horizontal cursor inspection line across all tracks (Shortcut: 'I' or 'C')"
@@ -3180,23 +3257,40 @@
 					</div>
 				{:else}
 					<div class="flex flex-col">
-						<div class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-slate-700">
+						<div class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none text-slate-700">
 							<span>0</span>
-							<span class="font-sans text-[9px] font-bold">LITHOLOGY ►</span>
+							<span class="font-sans text-[8px] font-bold">LITHOLOGY ►</span>
 							<span>1.0</span>
 						</div>
-						<div class="h-[1.5px] w-full bg-slate-400"></div>
+						{#if activeLithoSpecs.length > 0}
+							<div class="mt-0.5 flex flex-wrap items-center justify-center gap-1">
+								{#each activeLithoSpecs as item (item.spec.mnemonic)}
+									<span
+										class="inline-flex items-center gap-0.5 rounded-2xs border border-slate-200/80 bg-white/95 px-1 py-0 text-[7px] font-semibold text-slate-700 shadow-2xs leading-tight"
+										title="{item.spec.mnemonic} ({item.spec.shortLabel})"
+									>
+										<span
+											class="inline-block h-1.5 w-1.5 rounded-2xs border"
+											style="background-color: {item.spec.fillHex}; border-color: {item.spec.strokeHex};"
+										></span>
+										<span>{item.spec.mnemonic}</span>
+									</span>
+								{/each}
+							</div>
+						{:else}
+							<div class="mt-0.5 h-[1.5px] w-full bg-slate-400"></div>
+						{/if}
 					</div>
 					<div class="flex flex-col">
 						<div
-							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
+							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
 							style="color: {PETRO_COLORS.phie}"
 						>
 							<span>0</span>
-							<span class="font-sans text-[9px] font-bold">PHIT / CORE ►</span>
+							<span class="font-sans text-[8px] font-bold">PHIT / CORE ►</span>
 							<span>0.5</span>
 						</div>
-						<div class="h-[1.5px] w-full" style="background: {PETRO_COLORS.phie}"></div>
+						<div class="mt-0.5 h-[1.5px] w-full" style="background: {PETRO_COLORS.phie}"></div>
 					</div>
 				{/if}
 			</div>
@@ -3392,32 +3486,38 @@
 				{/if}
 			{/if}
 
-			{#each wellData.contacts as contact (contact.id)}
-				{@const activeDepth =
-					draggingMarker?.kind === 'contact' && draggingMarker.id === contact.id
-						? draggingMarker.depth
-						: contact.depth}
-				{@const pct = depthToPercent(activeDepth)}
-				{#if pct !== null}
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<div
-						onpointerdown={(e) =>
-							startMarkerDrag(e, 'contact', contact.id, contact.type, activeDepth)}
-						style="top: {pct}%;"
-						title="Drag vertically to adjust Fluid Contact ({contact.type})"
-						class="pointer-events-auto group absolute right-0 left-0 -translate-y-1/2 cursor-ns-resize py-1"
-					>
+			{#if workbench.logShowContacts}
+				{#each wellData.contacts as contact (contact.id)}
+					{@const isDragging =
+						draggingMarker?.kind === 'contact' && draggingMarker.id === contact.id}
+					{@const activeDepth =
+						isDragging && draggingMarker ? draggingMarker.depth : contact.depth}
+					{@const activePlotDepth =
+						isDragging && draggingMarker?.plotDepth !== undefined
+							? draggingMarker.plotDepth
+							: tvdssToMd(contact.depth)}
+					{@const pct = depthToPercent(activePlotDepth)}
+					{#if pct !== null}
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<div
-							class="w-full border-t-2 border-dotted border-rose-600/90 group-hover:border-solid"
-						></div>
-						<span
-							class="mono-num absolute -top-2.5 right-2 rounded-xs border border-rose-200 bg-rose-50/95 px-1 py-0 text-[9px] font-semibold text-rose-800 shadow-2xs"
+							onpointerdown={(e) =>
+								startMarkerDrag(e, 'contact', contact.id, contact.type, activeDepth)}
+							style="top: {pct}%;"
+							title="Drag vertically to adjust Fluid Contact ({contact.type}) — TVDSS: {activeDepth.toFixed(1)}m{Math.abs(activePlotDepth - activeDepth) > 0.5 ? ` (MD: ${activePlotDepth.toFixed(1)}m)` : ''}"
+							class="pointer-events-auto group absolute right-0 left-0 -translate-y-1/2 cursor-ns-resize py-1"
 						>
-							◆ {contact.type} ({activeDepth.toFixed(1)}m)
-						</span>
-					</div>
-				{/if}
-			{/each}
+							<div
+								class="w-full border-t-2 border-dotted border-rose-600/90 group-hover:border-solid"
+							></div>
+							<span
+								class="mono-num absolute -top-2.5 right-2 rounded-xs border border-rose-200 bg-rose-50/95 px-1 py-0 text-[9px] font-semibold text-rose-800 shadow-2xs"
+							>
+								◆ {contact.type} ({activeDepth.toFixed(1)}m{Math.abs(activePlotDepth - activeDepth) > 0.5 ? ` TVDss / ${activePlotDepth.toFixed(1)}m MD` : ''})
+							</span>
+						</div>
+					{/if}
+				{/each}
+			{/if}
 
 			<!-- Toggleable Horizontal Inspection Crosshair & Track-Respective Hover Value Boxes -->
 			{#if showInspectionLine && inspectionPct !== null}
@@ -3426,13 +3526,7 @@
 				<div
 					style="top: {inspectionPct}%;"
 					class="pointer-events-none absolute right-0 left-0 -translate-y-1/2 border-t-[1.5px] border-indigo-500/95 shadow-[0_0_8px_rgba(99,102,241,0.45)] z-25"
-				>
-					<span
-						class="mono-num absolute -top-2.5 left-0.5 rounded-2xs border border-indigo-400 bg-indigo-950/95 px-1 py-0 text-[8px] font-bold text-white shadow-xs"
-					>
-						{fmtDepth(readout.DEPT ?? workbench.cursorDepth)}m
-					</span>
-				</div>
+				></div>
 
 				<!-- Track-respective hover boxes anchored with a 24px gap so curve response at the line is always visible -->
 				<div

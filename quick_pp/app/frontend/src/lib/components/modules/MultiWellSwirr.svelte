@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
@@ -19,6 +20,12 @@
 	let isApplying = $state(false);
 	let copiedSwof = $state(false);
 	let relpermPendingSave = $state(false);
+
+	onMount(() => {
+		if (!projectData.swirrResult) {
+			void projectData.ensureSwirrDataLoaded();
+		}
+	});
 	// Manual override flags live in shared project state so they are saved/restored with project params
 
 	function switchScalSubMode(mode: 'static' | 'relperm') {
@@ -252,6 +259,9 @@
 				{
 					well_names:
 						projectData.selectedWellNames.length > 0 ? projectData.selectedWellNames : null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
 					extraction_mode: cfg.extractionMode,
 					reference_pc_psi: cfg.referencePcPsi,
 					equation_type: cfg.equationType,
@@ -270,6 +280,7 @@
 			projectData.swirrConfig.rules = res.rules || {};
 			projectData.swirrResult = res;
 			projectData.recomputeScalFitsFromPlugs(!projectData.shfManualFitOverride);
+			void projectData.persistProjectParams([], ['swirr-corr']);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Swirr correlation fit failed';
 		} finally {
@@ -289,6 +300,9 @@
 				{
 					well_names:
 						projectData.selectedWellNames.length > 0 ? projectData.selectedWellNames : null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
 					extraction_mode: cfg.extractionMode,
 					reference_pc_psi: cfg.referencePcPsi,
 					equation_type: cfg.equationType,
@@ -324,6 +338,7 @@
 			);
 			projectData.swirrApplyResult = applyRes;
 			projectData.markMultiWellComputed('swirr-corr');
+			void projectData.persistProjectParams([], ['swirr-corr']);
 			applyActiveWellSwirrCurve(applyRes);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Failed to compute Swirr & Pc fit';
@@ -765,22 +780,22 @@
 								Swn Swirr Normalization
 							</span>
 							<span class="mono-num text-[9.5px] text-[var(--text-muted)]">
-								{(projectData.shfParams.swirrSource ?? 'poro_perm') === 'poro_perm'
+								{(projectData.shfParams.swirrSource ?? 'lab_min') === 'poro_perm'
 									? 'Modeled Swirr(k, φ)'
-									: 'Plug min(Sw)'}
+									: 'Per-Plug Lab min(Sw)'}
 							</span>
 						</div>
 						<div class="grid grid-cols-2 gap-1">
-							{#each [['poro_perm', 'Poro-Perm Correlation'], ['lab_min', 'Lab Terminal Sw']] as [srcKey, srcLabel]}
+							{#each [['lab_min', 'Lab Terminal Sw (Per-Plug)'], ['poro_perm', 'Poro-Perm Correlation']] as [srcKey, srcLabel]}
 								<button
 									type="button"
 									onclick={() => {
 										workbench.swirrCrossplotTab = 'scal-fit';
-										projectData.shfParams.swirrSource = srcKey as 'lab_min' | 'poro_perm';
 										projectData.shfManualFitOverride = false;
+										projectData.setShfSwirrSource(srcKey as 'lab_min' | 'poro_perm');
 									}}
 									class="h-6 rounded-sm border px-1.5 text-[10px] font-medium {(projectData
-										.shfParams.swirrSource ?? 'poro_perm') === srcKey
+										.shfParams.swirrSource ?? 'lab_min') === srcKey
 										? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
 										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
 								>
@@ -848,34 +863,66 @@
 			</div>
 
 			<!-- SCAL Data Point & Core Sample QC & Outlier Filtering Controls -->
-			{@const allPlugs = projectData.swirrResult?.plugs ?? []}
+			{@const rawPlugs = projectData.swirrResult?.plugs ?? []}
+			{@const allPlugs = rawPlugs.filter(
+				(p) =>
+					projectData.isScalItemInActiveFilter(p.well, p.depth, p.zone) &&
+					(projectData.scalFilterRockType === 'all' ||
+						(p.rt ?? 1) === projectData.scalFilterRockType)
+			)}
 			{@const excludedPlugIds = projectData.swirrConfig.excludedPlugIds ?? []}
-			{@const activePlugCount = Math.max(0, allPlugs.length - excludedPlugIds.length)}
+			{@const activePlugCount = allPlugs.filter(
+				(p) =>
+					!p.excluded &&
+					!excludedPlugIds.includes(projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample)) &&
+					!excludedPlugIds.includes(p.plug_id)
+			).length}
 			<div
 				class="mb-2 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-1.5 text-[10px]"
 			>
-				<div class="mb-1.5 flex items-center justify-between gap-1">
+				<div class="mb-1.5 flex flex-wrap items-center justify-between gap-1">
 					<span class="font-semibold text-[var(--text-primary)]">
-						SCAL Point & Core Sample Filter
+						SCAL Sample &amp; Point QC
 					</span>
-					<div
-						class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
-						title="Choose whether clicking a point on the SCAL crossplot toggles that individual point or its entire core sample (or hold Shift+Click for core sample)"
-					>
-						{#each [['point', 'Click: Point'], ['plug', 'Click: Sample']] as [tKey, tLbl]}
-							<button
-								type="button"
-								onclick={() => {
-									projectData.scalClickFilterTarget = tKey as 'point' | 'plug';
-								}}
-								class="px-1.5 py-0.5 text-[9px] font-medium first:border-r first:border-[var(--border-hairline)] {projectData.scalClickFilterTarget ===
-								tKey
-									? 'bg-slate-800 font-semibold text-white'
-									: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
-							>
-								{tLbl}
-							</button>
-						{/each}
+					<div class="flex items-center gap-1">
+						<div
+							class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+							title="Color and group crossplot SCAL points by Rock Type or by Individual Core Sample"
+						>
+							{#each [['sample', 'By Sample'], ['rt', 'By RT']] as [gKey, gLbl]}
+								<button
+									type="button"
+									onclick={() => {
+										projectData.scalGroupMode = gKey as 'rt' | 'sample';
+									}}
+									class="px-1.5 py-0.5 text-[9px] font-medium first:border-r first:border-[var(--border-hairline)] {projectData.scalGroupMode ===
+									gKey
+										? 'bg-[var(--accent-primary)] font-semibold text-white'
+										: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+								>
+									{gLbl}
+								</button>
+							{/each}
+						</div>
+						<div
+							class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+							title="Choose whether clicking a point on the SCAL crossplot toggles that individual point or its entire core sample (or hold Shift+Click for core sample)"
+						>
+							{#each [['point', 'Click: Pt'], ['plug', 'Click: Sample']] as [tKey, tLbl]}
+								<button
+									type="button"
+									onclick={() => {
+										projectData.scalClickFilterTarget = tKey as 'point' | 'plug';
+									}}
+									class="px-1.5 py-0.5 text-[9px] font-medium first:border-r first:border-[var(--border-hairline)] {projectData.scalClickFilterTarget ===
+									tKey
+										? 'bg-slate-800 font-semibold text-white'
+										: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+								>
+									{tLbl}
+								</button>
+							{/each}
+						</div>
 					</div>
 				</div>
 				<div class="flex flex-wrap items-center gap-1">
@@ -965,65 +1012,113 @@
 					</div>
 				{/if}
 
-				{#if allPlugs.length > 0}
-					<details class="mt-1.5 border-t border-[var(--border-hairline)] pt-1">
+				{#if allPlugs.length > 0 || rawPlugs.length > 0}
+					<details class="mt-1.5 border-t border-[var(--border-hairline)] pt-1" open>
 						<summary
 							class="flex cursor-pointer select-none items-center justify-between text-[9.5px] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
 						>
 							<span>
-								Filter Core Samples / Plugs (<strong class="mono-num text-[var(--text-primary)]"
+								Core Samples in Filter (<strong class="mono-num text-[var(--text-primary)]"
 									>{activePlugCount} / {allPlugs.length}</strong
-								> active)
+								>
+								active{#if allPlugs.length < rawPlugs.length}
+									<span class="text-[8.5px] text-slate-400">of {rawPlugs.length} total</span>
+								{/if})
 							</span>
-							{#if excludedPlugIds.length > 0}
-								<span class="rounded-xs bg-amber-100 px-1 py-0.2 font-mono text-[8.5px] font-semibold text-amber-800">
-									{excludedPlugIds.length} sample{excludedPlugIds.length > 1 ? 's' : ''} excl
-								</span>
-							{/if}
+							<div class="flex items-center gap-1">
+								{#if projectData.focusedScalPlugId}
+									<button
+										type="button"
+										onclick={(e) => {
+											e.preventDefault();
+											e.stopPropagation();
+											projectData.focusedScalPlugId = null;
+										}}
+										class="rounded-xs bg-blue-100 px-1 py-0.2 font-mono text-[8.5px] font-semibold text-blue-800 hover:bg-blue-200"
+										title="Clear focused sample highlight"
+									>
+										Focused: {projectData.focusedScalPlugId.split('::')[1] ?? projectData.focusedScalPlugId} ×
+									</button>
+								{/if}
+								{#if excludedPlugIds.length > 0}
+									<span class="rounded-xs bg-amber-100 px-1 py-0.2 font-mono text-[8.5px] font-semibold text-amber-800">
+										{excludedPlugIds.length} excl
+									</span>
+								{/if}
+							</div>
 						</summary>
-						<div class="mt-1 max-h-36 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+						<div class="mt-1 max-h-44 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
 							<table class="w-full border-collapse text-left text-[9.5px]">
 								<thead class="sticky top-0 bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 									<tr class="h-5 border-b border-[var(--border-hairline)]">
-										<th class="w-5 px-1 text-center font-semibold">Use</th>
+										<th class="w-5 px-1 text-center font-semibold" title="Include/Exclude sample from fit">Use</th>
+										<th class="w-5 px-0.5 text-center font-semibold" title="Spotlight sample on crossplot">QC</th>
 										<th class="px-1 font-semibold">Sample</th>
 										<th class="px-1 font-semibold">Well</th>
+										<th class="px-1 font-semibold">Zone</th>
+										<th class="px-1 text-right font-semibold">Depth</th>
 										<th class="px-1 text-center font-semibold">RT</th>
 										<th class="px-1 text-right font-semibold">φ</th>
-										<th class="px-1 text-right font-semibold">k (mD)</th>
+										<th class="px-1 text-right font-semibold">k</th>
 										<th class="px-1 text-right font-semibold">Pts</th>
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-[var(--border-hairline)]">
 									{#each allPlugs as plug (plug.plug_id)}
+										{@const normPid = projectData.normalizeScalPlugId(
+											plug.plug_id,
+											plug.well,
+											plug.sample
+										)}
 										{@const isExcl =
-											Boolean(plug.excluded) || excludedPlugIds.includes(plug.plug_id)}
+											Boolean(plug.excluded) ||
+											excludedPlugIds.includes(normPid) ||
+											excludedPlugIds.includes(plug.plug_id)}
+										{@const isFocused = projectData.focusedScalPlugId === normPid}
+										{@const plugZone = projectData.resolveScalSampleZone(
+											plug.well,
+											plug.depth,
+											plug.zone
+										)}
 										{@const rtColor = getRockTypeColor(plug.rt ?? 1)}
 										<tr
-											class="h-5 cursor-pointer hover:bg-slate-50 {isExcl
-												? 'bg-slate-50/70 text-slate-400 line-through'
-												: ''}"
+											class="h-5 cursor-pointer transition-colors {isFocused
+												? 'bg-blue-50/90 font-semibold text-blue-950'
+												: isExcl
+													? 'bg-slate-50/70 text-slate-400 line-through hover:bg-slate-50'
+													: 'hover:bg-slate-50'}"
 											onclick={() => {
-												projectData.swirrManualRuleOverride = false;
-												projectData.shfManualFitOverride = false;
-												projectData.toggleSwirrPlugExclusion(plug.plug_id);
+												projectData.toggleFocusedScalPlug(normPid);
 											}}
+											title="Click row to spotlight {plug.well} · {plug.sample} on crossplot; use checkbox to include/exclude"
 										>
-											<td class="px-1 text-center">
+											<td class="px-1 text-center" onclick={(e) => e.stopPropagation()}>
 												<input
 													type="checkbox"
 													checked={!isExcl}
-													onclick={(e) => e.stopPropagation()}
 													onchange={() => {
 														projectData.swirrManualRuleOverride = false;
 														projectData.shfManualFitOverride = false;
-														projectData.toggleSwirrPlugExclusion(plug.plug_id);
+														projectData.toggleSwirrPlugExclusion(normPid);
 													}}
 													class="h-3 w-3 accent-blue-600"
 												/>
 											</td>
+											<td class="px-0.5 text-center">
+												<span
+													class="inline-block text-[10px] {isFocused
+														? 'text-blue-600 font-bold'
+														: 'text-slate-300'}"
+												>
+													{isFocused ? '●' : '◎'}
+												</span>
+											</td>
 											<td class="mono-num px-1 font-semibold">{plug.sample}</td>
-											<td class="truncate px-1 max-w-[70px]" title={plug.well}>{plug.well}</td>
+											<td class="truncate px-1 max-w-[60px]" title={plug.well}>{plug.well}</td>
+											<td class="truncate px-1 max-w-[54px] text-[9px] text-[var(--text-secondary)]" title={plugZone}>
+												{plugZone}
+											</td>
+											<td class="mono-num px-1 text-right">{fmtNum(plug.depth, 1)}</td>
 											<td class="px-1 text-center whitespace-nowrap">
 												<span
 													class="mr-0.5 inline-block h-1.5 w-1.5 rounded-full"
