@@ -10,7 +10,12 @@
 		PETRO_COLORS
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
-	import { fillMissingCurve, fitBqvCrossplot } from '$lib/utils/saturation';
+	import {
+		fillMissingCurve,
+		fitBqvCrossplot,
+		fitBqvCrossplotLine,
+		getBqvFitIndices
+	} from '$lib/utils/saturation';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 
@@ -50,6 +55,70 @@
 			default:
 				return 'nphi-rhob';
 		}
+	});
+
+	let bqvPlotData = $derived.by(() => {
+		const visibleIndices = wellData.visibleIndices;
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const tsPhit = wellData.curves['PHIT_SAND'];
+		const useTs =
+			workbench.tsParams.useInSaturation &&
+			Boolean(tsPhit?.some((value) => Number.isFinite(value)));
+		const rawRt = wellData.curves['RT'] ?? [];
+		const rawPhi = wellData.curves['PHIT'] ?? [];
+		const rawVcl = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
+		const rtArr = useTs ? fillMissingCurve(wellData.curves['RSAND_TS'], rawRt) : rawRt;
+		const phiArr = useTs ? fillMissingCurve(tsPhit, rawPhi) : rawPhi;
+		const vclKey =
+			useTs && wellData.curves['VSH_DIS'] !== undefined
+				? 'VSH_DIS'
+				: wellData.curves['VCLAY'] !== undefined
+					? 'VCLAY'
+					: 'VSHALE';
+		const vclArr =
+			useTs && vclKey === 'VSH_DIS'
+				? fillMissingCurve(wellData.curves['VSH_DIS'], rawVcl)
+				: rawVcl;
+		const rtKey = useTs && wellData.curves['RSAND_TS'] !== undefined ? 'RSAND_TS' : 'RT';
+		const phiKey = useTs && tsPhit !== undefined ? 'PHIT_SAND' : 'PHIT';
+		const m = workbench.saturationParams.m;
+		const allFit = fitBqvCrossplot(rtArr, phiArr, vclArr, dept, visibleIndices, m);
+		const selectedFit = fitBqvCrossplot(
+			rtArr,
+			phiArr,
+			vclArr,
+			dept,
+			getBqvFitIndices(visibleIndices, workbench.brushedDepthIndices),
+			m
+		);
+		const params = workbench.saturationParams;
+		const fit =
+			params.bqvFitMode === 'manual'
+				? fitBqvCrossplotLine(
+						selectedFit.points,
+						params.bqvManualSlope,
+						params.bqvManualIntercept
+					)
+				: selectedFit;
+		return { allFit, fit, rtKey, phiKey, vclKey, m };
+	});
+
+	let bqvPlotSummary = $derived.by(() => {
+		const points = bqvPlotData.fit.points;
+		const depths = points.map((point) => point.depth);
+		return {
+			visibleCount: bqvPlotData.allFit.points.length,
+			fitCount: points.length,
+			minDepth: depths.length > 0 ? Math.min(...depths) : null,
+			maxDepth: depths.length > 0 ? Math.max(...depths) : null,
+			hasSelection: workbench.brushedDepthIndices.size > 0,
+			fit: bqvPlotData.fit,
+			mode: workbench.saturationParams.bqvFitMode,
+			effectiveBqv:
+				bqvPlotData.fit.slope === null
+					? null
+					: bqvPlotData.fit.slope * workbench.saturationParams.a
+		};
 	});
 
 	const MW_PALETTE = [
@@ -2003,39 +2072,17 @@
 		}
 
 		if (effectiveMode === 'bqv') {
-			const tsPhit = wellData.curves['PHIT_SAND'];
-			const useTs =
-				workbench.tsParams.useInSaturation &&
-				Boolean(tsPhit?.some((value) => Number.isFinite(value)));
-			const rawRt = wellData.curves['RT'] ?? [];
-			const rawPhi = wellData.curves['PHIT'] ?? [];
-			const rawVcl = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
-			const rtArr = useTs
-				? fillMissingCurve(wellData.curves['RSAND_TS'], rawRt)
-				: rawRt;
-			const phiArr = useTs ? fillMissingCurve(tsPhit, rawPhi) : rawPhi;
-			const vclKey = useTs && wellData.curves['VSH_DIS'] !== undefined
-				? 'VSH_DIS'
-				: wellData.curves['VCLAY'] !== undefined
-					? 'VCLAY'
-					: 'VSHALE';
-			const vclArr =
-				useTs && vclKey === 'VSH_DIS'
-					? fillMissingCurve(wellData.curves['VSH_DIS'], rawVcl)
-					: rawVcl;
-			const rtKey = useTs && wellData.curves['RSAND_TS'] !== undefined ? 'RSAND_TS' : 'RT';
-			const phiKey = useTs && tsPhit !== undefined ? 'PHIT_SAND' : 'PHIT';
-			const m = workbench.saturationParams.m;
-			const fit = fitBqvCrossplot(rtArr, phiArr, vclArr, deptAll, indices, m);
-			const xs = fit.points.map((point) => point.x);
-			const ys = fit.points.map((point) => point.y);
-			const depths = fit.points.map((point) => point.depth);
-			const customIdx = fit.points.map((point) => point.index);
+			const { allFit, fit, rtKey, phiKey, vclKey, m } = bqvPlotData;
+			const xs = allFit.points.map((point) => point.x);
+			const ys = allFit.points.map((point) => point.y);
+			const depths = allFit.points.map((point) => point.depth);
+			const customIdx = allFit.points.map((point) => point.index);
 
 			traces.push({
 				type: 'scatter',
 				mode: 'markers',
 				name: 'Log samples',
+				showlegend: false,
 				x: xs,
 				y: ys,
 				customdata: customIdx,
@@ -2055,12 +2102,14 @@
 				const { slope, intercept, r2 } = fit;
 				const a = workbench.saturationParams.a;
 				const effectiveBqv = slope * a;
-				const minX = Math.min(...xs);
-				const maxX = Math.max(...xs);
+				const fitXs = fit.points.map((point) => point.x);
+				const minX = Math.min(...fitXs);
+				const maxX = Math.max(...fitXs);
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
-					name: `Linear fit · a×slope=${fmtNum(effectiveBqv, 3)}`,
+					name: 'BQv fit',
+					showlegend: false,
 					x: [minX, maxX],
 					y: [slope * minX + intercept, slope * maxX + intercept],
 					line: { color: '#DC2626', width: 2, dash: 'dash' },
@@ -2070,30 +2119,10 @@
 						`Intercept (1/aRw): ${fmtNum(intercept, 4)} 1/ohm·m<br>` +
 						`R²: ${r2 === null ? '—' : fmtNum(r2, 4)}<extra></extra>`
 				});
-				baseLayout.annotations = [
-					{
-						xref: 'paper',
-						yref: 'paper',
-						x: 0.02,
-						y: 1.04,
-						xanchor: 'left',
-						yanchor: 'bottom',
-						showarrow: false,
-						text:
-							`Fit slope (BQv/a): ${fmtNum(slope, 4)} · ` +
-							`a×slope: ${fmtNum(effectiveBqv, 4)} · ` +
-							`1/aRw intercept: ${fmtNum(intercept, 4)} · ` +
-							`R²: ${r2 === null ? '—' : fmtNum(r2, 4)} · n=${xs.length}`,
-						font: { family: 'Inter', size: 10, color: '#334155' }
-					}
-				];
 			}
 
-			baseLayout.title = {
-				text: 'Waxman–Smits Conductivity Crossplot',
-				font: { family: 'Inter', size: 13, color: '#0F172A' }
-			};
-			baseLayout.margin.t = 58;
+			baseLayout.showlegend = false;
+			baseLayout.margin.t = 10;
 			baseLayout.xaxis.title = { text: `${vclKey} / ${phiKey} (v/v)` };
 			baseLayout.xaxis.rangemode = 'tozero';
 			baseLayout.yaxis.title = {
@@ -4468,6 +4497,10 @@
 			void wellData.curves['VSH_DIS'];
 			void workbench.tsParams.useInSaturation;
 			void workbench.saturationParams.m;
+			void workbench.saturationParams.a;
+			void workbench.saturationParams.bqvFitMode;
+			void workbench.saturationParams.bqvManualSlope;
+			void workbench.saturationParams.bqvManualIntercept;
 		} else if (mode === 'pickett') {
 			void wellData.curves['PHIT'];
 			void wellData.curves['RT'];
@@ -5114,6 +5147,43 @@
 		{/if}
 	</div>
 
+	{#if effectiveMode === 'bqv'}
+		<div
+			class="mono-num flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
+		>
+			<div class="flex flex-wrap items-center gap-x-1.5">
+				<strong class="text-slate-800">Fit interval:</strong>
+				<span>
+					{bqvPlotSummary.hasSelection ? 'Lasso selection' : 'All visible samples'} —
+					<strong>{bqvPlotSummary.fitCount}</strong> valid of {bqvPlotSummary.visibleCount}
+				</span>
+				{#if bqvPlotSummary.minDepth !== null && bqvPlotSummary.maxDepth !== null}
+					<span class="text-[var(--text-muted)]">
+						({fmtDepth(bqvPlotSummary.minDepth)}–{fmtDepth(bqvPlotSummary.maxDepth)})
+					</span>
+				{:else if bqvPlotSummary.hasSelection}
+					<span class="text-amber-800">No valid BQv points in this selection</span>
+				{/if}
+				{#if bqvPlotSummary.hasSelection}
+					<button
+						type="button"
+						onclick={() => workbench.setBrushedIndices([])}
+						class="font-semibold text-blue-700 hover:underline"
+					>
+						Clear selection
+					</button>
+				{/if}
+			</div>
+			<div class="flex flex-wrap items-center gap-x-2 text-slate-700">
+				<span>{bqvPlotSummary.mode === 'manual' ? 'Manual' : 'Autofit'}</span>
+				<span>Slope: <strong>{fmtNum(bqvPlotSummary.fit.slope, 4)}</strong></span>
+				<span>Intercept: <strong>{fmtNum(bqvPlotSummary.fit.intercept, 4)}</strong></span>
+				<span>R²: <strong>{fmtNum(bqvPlotSummary.fit.r2, 3)}</strong></span>
+				<span>a×slope: <strong>{fmtNum(bqvPlotSummary.effectiveBqv, 4)}</strong></span>
+			</div>
+		</div>
+	{/if}
+
 	{#if isScalCrossplotActive && scalQcSummary.samples.length > 0}
 		<div
 			class="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2 py-1 text-[10px]"
@@ -5424,7 +5494,7 @@
 		</div>
 	{/if}
 
-	{#if brushedSummary}
+	{#if brushedSummary && effectiveMode !== 'bqv'}
 		<div
 			class="mono-num flex h-6 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-blue-50/70 px-2.5 text-[11px] text-blue-900"
 		>

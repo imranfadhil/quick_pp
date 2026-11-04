@@ -5,7 +5,12 @@
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
-	import { fillMissingCurve, fitBqvCrossplot } from '$lib/utils/saturation';
+	import {
+		fillMissingCurve,
+		fitBqvCrossplot,
+		fitBqvCrossplotLine,
+		getBqvFitIndices
+	} from '$lib/utils/saturation';
 
 	// Default reference depth is the bottom of the active filtered interval (or well max depth)
 	let defaultRefDepth = $derived.by(() => {
@@ -82,7 +87,7 @@
 				: refDepth;
 		return estimateTempAndRwAtDepth(temperatureDepth);
 	});
-	let bqvFit = $derived.by(() => {
+	let bqvAutoFit = $derived.by(() => {
 		const rawRt = wellData.curves['RT'] ?? [];
 		const rawPhit = wellData.curves['PHIT'] ?? [];
 		const rawVclay = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
@@ -95,10 +100,19 @@
 			useTs ? fillMissingCurve(phitSand, rawPhit) : rawPhit,
 			useTs ? fillMissingCurve(wellData.curves['VSH_DIS'], rawVclay) : rawVclay,
 			wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [],
-			wellData.visibleIndices,
+			getBqvFitIndices(wellData.visibleIndices, workbench.brushedDepthIndices),
 			workbench.saturationParams.m
 		);
 	});
+	let bqvFit = $derived.by(() =>
+		workbench.saturationParams.bqvFitMode === 'manual'
+			? fitBqvCrossplotLine(
+					bqvAutoFit.points,
+					workbench.saturationParams.bqvManualSlope,
+					workbench.saturationParams.bqvManualIntercept
+				)
+			: bqvAutoFit
+	);
 	let crossplotCalibration = $derived.by(() => {
 		const fit = bqvFit;
 		if (fit.slope === null || fit.slope <= 0) return null;
@@ -240,6 +254,14 @@
 		sp.bqvAppliedRefDepth = refDepth;
 		sp.bqvAppliedRhoClay = sp.rhoDryClay;
 		sp.qvMethod = 'crossplot';
+	}
+
+	function useManualBqvFit() {
+		const sp = workbench.saturationParams;
+		if (sp.bqvFitMode === 'manual') return;
+		if (bqvAutoFit.slope !== null) sp.bqvManualSlope = bqvAutoFit.slope;
+		if (bqvAutoFit.intercept !== null) sp.bqvManualIntercept = bqvAutoFit.intercept;
+		sp.bqvFitMode = 'manual';
 	}
 </script>
 
@@ -546,12 +568,57 @@
 				<div
 					class="mt-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px] text-[var(--text-secondary)]"
 				>
+					<div class="mb-1 flex items-center justify-between gap-2">
+						<span class="font-semibold text-[var(--text-primary)]">Fit interval and line</span>
+						<div class="flex items-center gap-1">
+							<button
+								type="button"
+								onclick={() => (workbench.saturationParams.bqvFitMode = 'auto')}
+								class="rounded-xs border px-1.5 py-0.5 font-semibold {workbench.saturationParams.bqvFitMode ===
+								'auto'
+									? 'border-blue-600 bg-blue-600 text-white'
+									: 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)]'}"
+							>
+								Autofit
+							</button>
+							<button
+								type="button"
+								disabled={bqvAutoFit.points.length < 2}
+								onclick={useManualBqvFit}
+								class="rounded-xs border px-1.5 py-0.5 font-semibold {workbench.saturationParams.bqvFitMode ===
+								'manual'
+									? 'border-blue-600 bg-blue-600 text-white'
+									: 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)]'} disabled:cursor-not-allowed disabled:opacity-45"
+							>
+								Manual
+							</button>
+						</div>
+					</div>
+					{#if workbench.saturationParams.bqvFitMode === 'manual'}
+						<NumericScrubber
+							label="Fit slope (BQv/a)"
+							bind:value={workbench.saturationParams.bqvManualSlope}
+							min={0}
+							step={0.001}
+							decimals={5}
+						/>
+						<NumericScrubber
+							label="Y-intercept (1/aRw)"
+							bind:value={workbench.saturationParams.bqvManualIntercept}
+							step={0.001}
+							decimals={5}
+						/>
+					{/if}
 					<div>
-						{#if bqvFit.slope !== null && crossplotCalibration}
-							Current filtered fit slope: <strong class="mono-num"
+						{#if bqvFit.slope !== null && bqvFit.intercept !== null}
+							{workbench.saturationParams.bqvFitMode === 'manual'
+								? 'Manual fit'
+								: 'Autofit'}:
+							<strong class="mono-num"
 								>{bqvFit.slope.toFixed(4)}</strong
 							>
 							(<span class="mono-num">BQv/a</span>),
+							intercept <strong class="mono-num">{bqvFit.intercept?.toFixed(4)}</strong>,
 							<strong class="mono-num"
 								>a × slope = {(bqvFit.slope * workbench.saturationParams.a).toFixed(
 									4
@@ -560,10 +627,13 @@
 							<strong class="mono-num"
 								>R² = {bqvFit.r2 === null ? '—' : bqvFit.r2.toFixed(3)}</strong
 							>,
-							<strong class="mono-num">n = {bqvFit.points.length}</strong>. At {refDepth.toFixed(
-								1
-							)} m, B = {crossplotCalibration.b.toFixed(3)} and implied CEC =
-							{crossplotCalibration.cec.toFixed(4)} meq/g.
+							<strong class="mono-num">n = {bqvFit.points.length}</strong>.
+							{#if crossplotCalibration}
+								At {refDepth.toFixed(1)} m, B = {crossplotCalibration.b.toFixed(3)} and
+								implied CEC = {crossplotCalibration.cec.toFixed(4)} meq/g.
+							{:else}
+								A positive slope and valid reference-depth inputs are required for CEC.
+							{/if}
 						{:else}
 							Select an interval with at least two valid crossplot samples and a
 							positive fitted slope.
@@ -571,8 +641,9 @@
 					</div>
 					<div class="mt-1 flex items-start justify-between gap-2">
 						<span class="text-[9.5px]">
-							Fit uses the current depth/zone filters. Use a water-bearing interval;
-							the crossplot slope is an effective estimate.
+							Lasso water-bearing and clean-shale samples on the BQv plot; depth/zone filters
+							also constrain the interval. The intercept sets the plotted line only and does
+							not override the configured Rw.
 						</span>
 						<button
 							type="button"

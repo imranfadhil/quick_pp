@@ -12,11 +12,45 @@ export interface BqvCrossplotFit {
 	r2: number | null;
 }
 
+export function getBqvFitIndices(
+	visibleIndices: number[],
+	brushedIndices: ReadonlySet<number>
+): number[] {
+	return brushedIndices.size > 0
+		? visibleIndices.filter((index) => brushedIndices.has(index))
+		: visibleIndices;
+}
+
 export function fillMissingCurve(primary: number[] | undefined, fallback: number[]): number[] {
 	if (!primary) return fallback;
 	return fallback.map((value, index) =>
 		Number.isFinite(primary[index]) ? primary[index] : value
 	);
+}
+
+export function fitBqvCrossplotLine(
+	points: BqvCrossplotPoint[],
+	slope: number,
+	intercept: number
+): BqvCrossplotFit {
+	if (points.length < 2 || !Number.isFinite(slope) || !Number.isFinite(intercept)) {
+		return { points, slope: null, intercept: null, r2: null };
+	}
+
+	const meanY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+	let totalVarianceY = 0;
+	let residualSumSquares = 0;
+	for (const point of points) {
+		totalVarianceY += Math.pow(point.y - meanY, 2);
+		residualSumSquares += Math.pow(point.y - (slope * point.x + intercept), 2);
+	}
+
+	return {
+		points,
+		slope,
+		intercept,
+		r2: totalVarianceY > 0 ? 1 - residualSumSquares / totalVarianceY : null
+	};
 }
 
 export function fitBqvCrossplot(

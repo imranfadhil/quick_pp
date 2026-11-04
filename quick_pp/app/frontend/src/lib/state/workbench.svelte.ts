@@ -154,6 +154,9 @@ export interface SaturationModelParams {
 	qvMethod: 'cec' | 'qvn' | 'crossplot';
 	cecClay: number;
 	rhoDryClay: number;
+	bqvFitMode: 'auto' | 'manual';
+	bqvManualSlope: number;
+	bqvManualIntercept: number;
 	bqvAppliedSlope: number | null;
 	bqvAppliedRefDepth: number | null;
 	bqvAppliedRhoClay: number | null;
@@ -737,6 +740,9 @@ class WorkbenchState {
 		qvMethod: 'cec',
 		cecClay: 0.1,
 		rhoDryClay: 2.71,
+		bqvFitMode: 'auto',
+		bqvManualSlope: 0.1,
+		bqvManualIntercept: 0,
 		bqvAppliedSlope: null,
 		bqvAppliedRefDepth: null,
 		bqvAppliedRhoClay: null,
