@@ -6,7 +6,7 @@ instead of round-tripping 10,000+ log rows on every parameter adjustment.
 """
 
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -98,13 +98,16 @@ from quick_pp.rock_type import (
 )
 from quick_pp.saturation import (
     archie_saturation,
+    dual_water_saturation,
     estimate_b_waxman_smits,
     estimate_qv,
     estimate_qvn,
     estimate_rw_temperature_salinity,
     extract_fluid_contacts_and_limits,
     fit_swirr_correlation,
+    indonesian_saturation,
     optimize_fwl,
+    simandoux_saturation,
     swirr_rqi,
     swirr_semilog_k,
     swirr_timur,
@@ -780,9 +783,11 @@ class WorkspacePermeabilityRequest(WorkspaceFilterBase):
 
 
 class WorkspaceSaturationRequest(WorkspaceFilterBase):
-    method: str = Field(
-        "waxman_smits",
-        description="Primary saturation curve to save/highlight: 'waxman_smits' or 'archie'",
+    method: Literal[
+        "archie", "waxman_smits", "simandoux", "indonesian", "dual_water"
+    ] = Field(
+        "archie",
+        description="Primary saturation curve to save: 'archie', 'waxman_smits', 'simandoux', 'indonesian', or 'dual_water'",
     )
     rw_mode: str = Field(
         "salinity_temp",
@@ -810,11 +815,23 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     )
     cec_clay: float = Field(0.1, description="Clay cation exchange capacity (meq/g)")
     rho_dry_clay: float = Field(2.71, description="Dry clay bulk density (g/cc)")
+    rsh: float = Field(
+        2.0, gt=0, description="Shale resistivity used by Simandoux and Indonesian (ohm.m)"
+    )
+    swb: float = Field(
+        0.2, ge=0, le=1, description="Bound-water saturation used by Dual Water (fraction)"
+    )
+    rwb: float = Field(
+        0.1, gt=0, description="Bound-water resistivity used by Dual Water (ohm.m)"
+    )
     depths: Optional[List[float]] = Field(
         None, description="Optional client-side depth array fallback"
     )
     phit: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side PHIT array fallback"
+    )
+    phie: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side PHIE array fallback"
     )
     vclay: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side VCLAY array fallback"
@@ -3747,12 +3764,12 @@ def workspace_permeability(
 
 @router.post(
     "/wells/{well_name}/saturation",
-    summary="Compute single-pass depth-aligned water saturation (Archie + Waxman-Smits) on server",
+    summary="Compute depth-aligned Archie and shaly-sand water saturation models on server",
 )
 def workspace_saturation(
     project_id: int, well_name: str, req: WorkspaceSaturationRequest
 ) -> Dict[str, Any]:
-    """Compute TEMP_GRAD, RW, B, QVN, M_STAR, SWT_ARCHIE, SWT_WAXMAN, and crossplot data in one pass."""
+    """Compute Archie and alternative water saturation curves in one depth-aligned pass."""
     try:
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
@@ -3762,6 +3779,7 @@ def workspace_saturation(
             depths=req.depths,
             curve_arrays={
                 "PHIT": req.phit,
+                "PHIE": req.phie,
                 "VCLAY": req.vclay,
                 "PHIT_SAND": req.phit_sand,
                 "VSH_LAM": req.vsh_lam,
@@ -3811,6 +3829,12 @@ def workspace_saturation(
             pd.to_numeric(df["VSH_DIS"], errors="coerce").fillna(vclay_bulk)
             if (use_ts and "VSH_DIS" in df.columns)
             else vclay_bulk
+        )
+        phie_fallback = phit * (1.0 - vclay.fillna(0.0).clip(0.0, 1.0))
+        phie = (
+            pd.to_numeric(df["PHIE"], errors="coerce").fillna(phie_fallback)
+            if "PHIE" in df.columns and not use_ts
+            else phie_fallback
         )
         vsh_lam_s = (
             pd.to_numeric(df["VSH_LAM"], errors="coerce").fillna(0.0).clip(0.0, 0.99)
@@ -3969,6 +3993,64 @@ def workspace_saturation(
                 np.asarray(swt_w, dtype=float).ravel(), 0.0, 1.0
             )
 
+        shale_mask = archie_mask & vclay.notna()
+        swt_simandoux_s = pd.Series(np.nan, index=df.index, dtype=float)
+        if shale_mask.any():
+            swt_simandoux = simandoux_saturation(
+                rt[shale_mask].to_numpy(dtype=float),
+                rw_s[shale_mask].to_numpy(dtype=float),
+                phit[shale_mask].to_numpy(dtype=float),
+                vclay[shale_mask].clip(0.0, 1.0).to_numpy(dtype=float),
+                float(req.rsh),
+                float(req.a),
+                float(req.m),
+            )
+            swt_simandoux_s.loc[shale_mask] = np.clip(
+                np.asarray(swt_simandoux, dtype=float).ravel(), 0.0, 1.0
+            )
+
+        indonesian_mask = (
+            rt.notna()
+            & (rt > 0)
+            & rw_s.notna()
+            & (rw_s > 0)
+            & phie.notna()
+            & (phie > 0)
+            & vclay.notna()
+        )
+        swt_indonesian_s = pd.Series(np.nan, index=df.index, dtype=float)
+        if indonesian_mask.any():
+            swt_indonesian = indonesian_saturation(
+                rt[indonesian_mask].to_numpy(dtype=float),
+                rw_s[indonesian_mask].to_numpy(dtype=float),
+                phie[indonesian_mask].to_numpy(dtype=float),
+                vclay[indonesian_mask].clip(0.0, 1.0).to_numpy(dtype=float),
+                np.full(int(indonesian_mask.sum()), float(req.rsh), dtype=float),
+                float(req.a),
+                float(req.m),
+                float(req.n),
+            )
+            swt_indonesian_s.loc[indonesian_mask] = np.clip(
+                np.asarray(swt_indonesian, dtype=float).ravel(), 0.0, 1.0
+            )
+
+        dual_water_mask = archie_mask & phit.notna()
+        swt_dual_water_s = pd.Series(np.nan, index=df.index, dtype=float)
+        if dual_water_mask.any():
+            swt_dual_water = dual_water_saturation(
+                rt[dual_water_mask].to_numpy(dtype=float),
+                rw_s[dual_water_mask].to_numpy(dtype=float),
+                phit[dual_water_mask].to_numpy(dtype=float),
+                float(req.a),
+                float(req.m),
+                float(req.n),
+                float(req.swb),
+                float(req.rwb),
+            )
+            swt_dual_water_s.loc[dual_water_mask] = np.clip(
+                np.asarray(swt_dual_water, dtype=float).ravel(), 0.0, 1.0
+            )
+
         coal_or_zero_phi = rt.notna() & phit.notna() & (phit <= 0.0)
         if "COAL_FLAG" in df.columns:
             coal_or_zero_phi = coal_or_zero_phi | (
@@ -3981,13 +4063,22 @@ def workspace_saturation(
         if coal_or_zero_phi.any():
             swt_archie_s.loc[coal_or_zero_phi] = 1.0
             swt_ws_s.loc[coal_or_zero_phi] = 1.0
+            swt_simandoux_s.loc[coal_or_zero_phi] = 1.0
+            swt_indonesian_s.loc[coal_or_zero_phi] = 1.0
+            swt_dual_water_s.loc[coal_or_zero_phi] = 1.0
 
         if use_ts:
             # Map sand-lamina water saturation Sw_sand back to bulk SWT so bulk HCPV = PHIT_bulk * (1 - SWT)
             # equals thin-bed sand HCPV = (1 - VSH_LAM) * PHIT_SAND * (1 - Sw_sand)
             sand_frac = (1.0 - vsh_lam_s).clip(0.0, 1.0)
             denom_phi = phit_bulk.clip(lower=1e-4)
-            for sw_series in (swt_archie_s, swt_ws_s):
+            for sw_series in (
+                swt_archie_s,
+                swt_ws_s,
+                swt_simandoux_s,
+                swt_indonesian_s,
+                swt_dual_water_s,
+            ):
                 valid_sw = sw_series.notna() & phit_bulk.notna() & (phit_bulk > 1e-4)
                 if valid_sw.any():
                     hcpv_lam = (
@@ -4002,7 +4093,14 @@ def workspace_saturation(
                         sw_series.loc[valid_sw], swt_bulk_mapped
                     )
 
-        primary_swt = swt_ws_s if req.method.lower() == "waxman_smits" else swt_archie_s
+        saturation_curves = {
+            "archie": swt_archie_s,
+            "waxman_smits": swt_ws_s,
+            "simandoux": swt_simandoux_s,
+            "indonesian": swt_indonesian_s,
+            "dual_water": swt_dual_water_s,
+        }
+        primary_swt = saturation_curves[req.method.lower()]
         bvw_s = phit_bulk * primary_swt
 
         # Crossplot helper columns (CWA vs VCLAY/PHIT)
@@ -4030,6 +4128,9 @@ def workspace_saturation(
                 "M_STAR": m_star_s,
                 "SWT_ARCHIE": swt_archie_s,
                 "SWT_WAXMAN": swt_ws_s,
+                "SWT_SIMANDOUX": swt_simandoux_s,
+                "SWT_INDONESIAN": swt_indonesian_s,
+                "SWT_DUAL_WATER": swt_dual_water_s,
                 "SWT": primary_swt,
                 "BVW": bvw_s,
                 "VCL_OVER_PHI": vcl_phi_s,
@@ -4062,6 +4163,9 @@ def workspace_saturation(
                 "sw_n": float(req.n),
                 "water_salinity": float(salinity_ppm),
                 "rw_val": float(np.nanmedian(rw_arr)) if len(rw_arr) > 0 else 0.08,
+                "sw_rsh": float(req.rsh),
+                "sw_swb": float(req.swb),
+                "sw_rwb": float(req.rwb),
             },
             persist_db=bool(req.save),
         )
@@ -4074,6 +4178,9 @@ def workspace_saturation(
                 "SWT": _curve_summary_stats(primary_swt),
                 "SWT_ARCHIE": _curve_summary_stats(swt_archie_s),
                 "SWT_WAXMAN": _curve_summary_stats(swt_ws_s),
+                "SWT_SIMANDOUX": _curve_summary_stats(swt_simandoux_s),
+                "SWT_INDONESIAN": _curve_summary_stats(swt_indonesian_s),
+                "SWT_DUAL_WATER": _curve_summary_stats(swt_dual_water_s),
                 "RW": _curve_summary_stats(rw_s),
             },
             **dataframe_to_columnar(out_df),

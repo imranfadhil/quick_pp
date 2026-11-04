@@ -140,7 +140,7 @@ export interface ThomasStieberParams {
 
 export interface SaturationModelParams {
 	fwl: number;
-	method: 'waxman_smits' | 'archie';
+	method: 'waxman_smits' | 'archie' | 'simandoux' | 'indonesian' | 'dual_water';
 	rwMode: 'salinity_temp' | 'pickett';
 	measSystem: 'metric' | 'imperial';
 	waterSalinity: number;
@@ -154,6 +154,9 @@ export interface SaturationModelParams {
 	qvMethod: string;
 	cecClay: number;
 	rhoDryClay: number;
+	rsh: number;
+	swb: number;
+	rwb: number;
 }
 
 export interface ScalModelParams {
@@ -564,6 +567,7 @@ class WorkbenchState {
 		| 'thomas-stieber'
 		| 'phi-k'
 		| 'pickett'
+		| 'sw-comparison'
 		| 'histogram'
 		| 'mw-distribution'
 		| 'swirr-fit'
@@ -727,7 +731,7 @@ class WorkbenchState {
 	});
 
 	saturationParams = $state<SaturationModelParams>({
-		method: 'waxman_smits',
+		method: 'archie',
 		rwMode: 'salinity_temp',
 		measSystem: 'metric',
 		waterSalinity: 35000,
@@ -741,6 +745,9 @@ class WorkbenchState {
 		qvMethod: 'cec',
 		cecClay: 0.1,
 		rhoDryClay: 2.71,
+		rsh: 2.0,
+		swb: 0.2,
+		rwb: 0.1,
 		fwl: 0
 	});
 

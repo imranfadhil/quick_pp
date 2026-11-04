@@ -206,7 +206,7 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert perm_body["saved_rows"] == 10
     assert perm_body["core_metrics"]["count"] == 5
 
-    # 5. Saturation (single-pass Archie + Waxman-Smits, save=True)
+    # 5. Saturation (single-pass Archie and alternative models, save=True)
     r_sat = client.post(
         f"/quick_pp/workspace/projects/{pid}/wells/Well-A/saturation",
         json={"method": "waxman_smits", "water_salinity": 35000.0, "save": True},
@@ -366,6 +366,40 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     )
     assert r_put.status_code == 200
     assert r_put.json()["rows"] == 2
+
+
+def test_saturation_model_comparison_curves_and_archie_default(client_and_project):
+    client, pid = client_and_project
+    endpoint = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/saturation"
+    fallback = {
+        "depths": np.linspace(1000.0, 1009.0, 10).tolist(),
+        "phit": np.linspace(0.12, 0.25, 10).tolist(),
+        "phie": np.linspace(0.1, 0.2, 10).tolist(),
+        "vclay": np.linspace(0.1, 0.4, 10).tolist(),
+        "save": False,
+    }
+
+    default_response = client.post(endpoint, json=fallback)
+    assert default_response.status_code == 200, default_response.text
+    default_body = default_response.json()
+    assert default_body["method"] == "archie"
+    assert default_body["data"]["SWT"] == default_body["data"]["SWT_ARCHIE"]
+
+    model_curves = {
+        "waxman_smits": "SWT_WAXMAN",
+        "simandoux": "SWT_SIMANDOUX",
+        "indonesian": "SWT_INDONESIAN",
+        "dual_water": "SWT_DUAL_WATER",
+    }
+    for method, curve in model_curves.items():
+        response = client.post(endpoint, json={**fallback, "method": method})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["method"] == method
+        assert len(body["data"][curve]) == 10
+        assert any(value is not None for value in body["data"][curve])
+        assert body["data"]["SWT"] == body["data"][curve]
+        assert len(body["data"]["SWT_ARCHIE"]) == 10
 
 
 def test_petrophysical_mcp_server_and_agent_assistant(client_and_project):

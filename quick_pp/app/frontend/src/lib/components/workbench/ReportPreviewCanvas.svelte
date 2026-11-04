@@ -275,7 +275,10 @@
 						sw_m: workbench.saturationParams.m,
 						sw_n: workbench.saturationParams.n,
 						water_salinity: workbench.saturationParams.waterSalinity,
-						rw_val: workbench.saturationParams.rwPickett
+						rw_val: workbench.saturationParams.rwPickett,
+						sw_rsh: workbench.saturationParams.rsh,
+						sw_swb: workbench.saturationParams.swb,
+						sw_rwb: workbench.saturationParams.rwb
 					},
 					sections: activeCfg.sections,
 					cutoffs: activeCfg.cutoffs,

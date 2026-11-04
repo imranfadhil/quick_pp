@@ -43,7 +43,7 @@
 			case 'perm':
 				return 'phi-k';
 			case 'saturation':
-				return 'pickett';
+				return 'sw-comparison';
 			case 'scal':
 				return 'core-qc';
 			default:
@@ -1893,10 +1893,82 @@
 			return { traces, layout: baseLayout };
 		}
 
+		if (effectiveMode === 'sw-comparison') {
+			const archie = wellData.curves['SWT_ARCHIE'] ?? [];
+			const models = [
+				{ key: 'SWT_WAXMAN', label: 'Waxman-Smits', color: '#2563EB', method: 'waxman_smits' },
+				{ key: 'SWT_SIMANDOUX', label: 'Simandoux', color: '#D97706', method: 'simandoux' },
+				{ key: 'SWT_INDONESIAN', label: 'Indonesian', color: '#059669', method: 'indonesian' },
+				{ key: 'SWT_DUAL_WATER', label: 'Dual Water', color: '#7C3AED', method: 'dual_water' }
+			] as const;
+
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: '1:1 agreement',
+				x: [0, 1],
+				y: [0, 1],
+				line: { color: '#64748B', width: 1.2, dash: 'dash' },
+				hoverinfo: 'skip'
+			});
+
+			for (const model of models) {
+				const modelSw = wellData.curves[model.key] ?? [];
+				const xs: number[] = [];
+				const ys: number[] = [];
+				const customIdx: number[] = [];
+				const depths: number[] = [];
+				for (const idx of indices) {
+					const archieSw = archie[idx];
+					const modelValue = modelSw[idx];
+					if (
+						Number.isFinite(archieSw) &&
+						Number.isFinite(modelValue) &&
+						archieSw >= 0 &&
+						archieSw <= 1 &&
+						modelValue >= 0 &&
+						modelValue <= 1
+					) {
+						xs.push(archieSw);
+						ys.push(modelValue);
+						customIdx.push(idx);
+						depths.push(deptAll[idx]);
+					}
+				}
+				const isSelected = workbench.saturationParams.method === model.method;
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `${model.label} vs Archie`,
+					x: xs,
+					y: ys,
+					customdata: customIdx,
+					text: depths,
+					marker: {
+						size: isSelected ? 7 : 5,
+						color: model.color,
+						opacity: isSelected ? 0.9 : 0.45,
+						line: { color: '#FFFFFF', width: 0.5 }
+					},
+					hovertemplate:
+						'Depth: %{text:.2f} m<br>Archie Sw: %{x:.3f}<br>' +
+						`${model.label} Sw: %{y:.3f}<extra></extra>`
+				});
+			}
+
+			baseLayout.dragmode = 'lasso';
+			baseLayout.xaxis.title = { text: 'Archie Water Saturation (v/v)' };
+			baseLayout.xaxis.range = [0, 1];
+			baseLayout.yaxis.title = { text: 'Alternative Model Water Saturation (v/v)' };
+			baseLayout.yaxis.range = [0, 1];
+			return { traces, layout: baseLayout };
+		}
+
 		if (effectiveMode === 'pickett') {
 			const phiArr =
 				wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? wellData.curves['NPHI'] ?? [];
 			const rtArr = wellData.curves['RT'] ?? [];
+			const colorCurve = wellData.curves['VCLAY'] !== undefined ? 'VCLAY' : 'GR';
 			const vclArr = wellData.curves['VCLAY'] ?? wellData.curves['GR'] ?? [];
 
 			const xs: number[] = [];
@@ -1926,7 +1998,14 @@
 					size: 5.5,
 					color: cols,
 					colorscale: 'YlGnBu',
-					opacity: 0.85
+					showscale: true,
+					opacity: 0.85,
+					colorbar: {
+						title: { text: colorCurve, font: { size: 9 } },
+						thickness: 10,
+						len: 0.75,
+						tickfont: { family: 'JetBrains Mono', size: 8 }
+					}
 				},
 				hovertemplate: 'Rt: %{x:.2f} ohm.m<br>Φ: %{y:.3f} v/v<extra></extra>'
 			});
@@ -4231,6 +4310,13 @@
 			void wellData.curves[cName];
 			void wellData.curves[`${cName}_ORI`];
 			void wellData.stats[cName];
+		} else if (mode === 'sw-comparison') {
+			void wellData.curves['SWT_ARCHIE'];
+			void wellData.curves['SWT_WAXMAN'];
+			void wellData.curves['SWT_SIMANDOUX'];
+			void wellData.curves['SWT_INDONESIAN'];
+			void wellData.curves['SWT_DUAL_WATER'];
+			void workbench.saturationParams.method;
 		} else if (mode === 'pickett') {
 			void wellData.curves['PHIT'];
 			void wellData.curves['PHIE'];
@@ -4612,6 +4698,7 @@
 				>
 				<option value="core-qc">Core Parity &amp; Error (Φ &amp; K)</option>
 				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
+				<option value="sw-comparison">Saturation Models vs Archie</option>
 				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>
 				<option value="swirr-fit">Swirr &amp; Pc Fit (SCAL)</option>
 				<option value="shf">Sw vs. Height (SHF)</option>

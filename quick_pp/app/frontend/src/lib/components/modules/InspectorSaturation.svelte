@@ -54,6 +54,13 @@
 
 	let estimatedRwAtSurface = $derived.by(() => estimateTempAndRwAtDepth(0));
 	let estimatedRwAtRefDepth = $derived.by(() => estimateTempAndRwAtDepth(refDepth));
+	const saturationModelLabels: Record<string, string> = {
+		archie: 'ARCHIE',
+		waxman_smits: 'WAXMAN-SMITS',
+		simandoux: 'SIMANDOUX',
+		indonesian: 'INDONESIAN',
+		dual_water: 'DUAL WATER'
+	};
 
 	let hasTsAvailable = $derived.by(() => {
 		const ps = wellData.curves['PHIT_SAND'];
@@ -100,9 +107,13 @@
 						qv_method: sp.qvMethod,
 						cec_clay: sp.cecClay,
 						rho_dry_clay: sp.rhoDryClay,
+						rsh: sp.rsh,
+						swb: sp.swb,
+						rwb: sp.rwb,
 						use_thomas_stieber: useTs,
 						depths: cleanArr(deptArr) as number[] | undefined,
 						phit: cleanArr(phitArr),
+						phie: cleanArr(wellData.curves['PHIE'] ?? []),
 						vclay: cleanArr(vclayArr),
 						phit_sand: useTs ? cleanArr(phitSandArr) : undefined,
 						vsh_lam: useTs ? cleanArr(vshLamArr) : undefined,
@@ -148,18 +159,59 @@
 		<SavedParamsIndicator modules={['saturation']} />
 		<ParameterSection
 			title="Water Saturation Model"
-			badge={workbench.saturationParams.method === 'waxman_smits' ? 'WAXMAN-SMITS' : 'ARCHIE'}
+			badge={saturationModelLabels[workbench.saturationParams.method]}
 		>
 			<div class="grid grid-cols-[1fr_130px] items-center gap-x-2 py-0.5">
 				<span class="text-xs font-medium text-[var(--text-primary)]">Primary Solver</span>
 				<select
 					bind:value={workbench.saturationParams.method}
+					onchange={() => executeSaturation(false)}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
-					<option value="waxman_smits">Waxman-Smits</option>
 					<option value="archie">Archie</option>
+					<option value="waxman_smits">Waxman-Smits</option>
+					<option value="simandoux">Simandoux</option>
+					<option value="indonesian">Indonesian</option>
+					<option value="dual_water">Dual Water</option>
 				</select>
 			</div>
+			{#if workbench.saturationParams.method === 'simandoux' ||
+				workbench.saturationParams.method === 'indonesian'}
+				<NumericScrubber
+					label="Shale Resistivity (Rsh)"
+					bind:value={workbench.saturationParams.rsh}
+					unit="ohm.m"
+					min={0.01}
+					max={1000}
+					step={0.1}
+					decimals={2}
+				/>
+				<div class="text-[10px] text-[var(--text-muted)]">
+					Indonesian uses PHIE when available, otherwise PHIT × (1 − VCLAY).
+				</div>
+			{:else if workbench.saturationParams.method === 'dual_water'}
+				<NumericScrubber
+					label="Bound Water Saturation (Swb)"
+					bind:value={workbench.saturationParams.swb}
+					unit="v/v"
+					min={0}
+					max={1}
+					step={0.01}
+					decimals={2}
+				/>
+				<NumericScrubber
+					label="Bound Water Resistivity (Rwb)"
+					bind:value={workbench.saturationParams.rwb}
+					unit="ohm.m"
+					min={0.001}
+					max={10}
+					step={0.01}
+					decimals={3}
+				/>
+				<div class="text-[10px] text-[var(--text-muted)]">
+					Dual Water uses constant bound-water Swb and Rwb values.
+				</div>
+			{/if}
 
 			<div class="grid grid-cols-[1fr_130px] items-center gap-x-2 py-0.5">
 				<span class="text-xs font-medium text-[var(--text-primary)]">Rw Source Mode</span>
