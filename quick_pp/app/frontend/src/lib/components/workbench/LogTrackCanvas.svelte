@@ -535,7 +535,7 @@
 
 		// Live fallback calculation from PHIT & PERM if ROCK_FLAG is still absent
 		if (!flags.some((v) => v !== null && v >= 1)) {
-			const phitCurve = wellData.curves['PHIT'] ?? wellData.curves['PHIE'];
+			const phitCurve = wellData.curves['PHIT'];
 			const permCurve =
 				wellData.curves['PERM'] ?? wellData.curves['PERM_TRANS'] ?? wellData.curves['CPERM'];
 			if (phitCurve && permCurve) {
@@ -1420,7 +1420,8 @@
 		}
 
 		// Track 4 (xaxis4): Evaluated Lithology & Porosity (stacked mineral volumes + PHIT + CPORE)
-		const phit = pick('PHIT').length ? pick('PHIT') : pick('PHIE');
+		const phit = pick('PHIT');
+		const phie = pick('PHIE');
 		const lithoToPlot = activeLithoSpecs;
 		if (lithoToPlot.length > 0) {
 			const decLithArrs = lithoToPlot.map(({ arr }) => decimateSvg(arr));
@@ -1528,8 +1529,23 @@
 				y: svgDepth,
 				xaxis: 'x4',
 				yaxis: 'y',
-				line: { color: PETRO_COLORS.phie, width: 1.6 },
+				line: { color: PETRO_COLORS.phit, width: 1.6 },
 				hovertemplate: 'PHIT: %{customdata:.3f} v/v<extra></extra>'
+			});
+		}
+		if (phie.some((v) => v !== null)) {
+			const phieDec = decimateSvg(phie);
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'PHIE (QC)',
+				x: scalePoro(phieDec),
+				customdata: phieDec,
+				y: svgDepth,
+				xaxis: 'x4',
+				yaxis: 'y',
+				line: { color: '#64748B', width: 1.2, dash: '4px,3px' },
+				hovertemplate: 'PHIE (QC): %{customdata:.3f} v/v<extra></extra>'
 			});
 		}
 
@@ -3233,7 +3249,7 @@
 					<div class="flex flex-col">
 						<div
 							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
-							style="color: {PETRO_COLORS.phie}"
+							style="color: {PETRO_COLORS.phit}"
 						>
 							<span>0</span>
 							<span class="font-sans text-[8px] font-bold">PHIT / CORE ►</span>
@@ -3290,7 +3306,7 @@
 							<span class="font-sans text-[8px] font-bold">PHIT / CORE ►</span>
 							<span>0.5</span>
 						</div>
-						<div class="mt-0.5 h-[1.5px] w-full" style="background: {PETRO_COLORS.phie}"></div>
+						<div class="mt-0.5 h-[1.5px] w-full" style="background: {PETRO_COLORS.phit}"></div>
 					</div>
 				{/if}
 			</div>
@@ -3729,9 +3745,15 @@
 							</div>
 						{/if}
 						<div class="flex items-center justify-between border-t border-slate-700/60 pt-0.5 mt-0.5">
-							<span class="font-bold" style="color: {PETRO_COLORS.phie}">PHIT</span>
-							<span class="mono-num font-semibold">{fmtNum(readout.PHIT ?? readout.PHIE, 3)} <span class="text-[7px] text-slate-400">v/v</span></span>
+							<span class="font-bold" style="color: {PETRO_COLORS.phit}">PHIT</span>
+							<span class="mono-num font-semibold">{fmtNum(readout.PHIT, 3)} <span class="text-[7px] text-slate-400">v/v</span></span>
 						</div>
+						{#if readout.PHIE !== null && readout.PHIE !== undefined}
+							<div class="flex items-center justify-between text-slate-400">
+								<span class="font-bold">PHIE (QC)</span>
+								<span class="mono-num font-semibold">{fmtNum(readout.PHIE, 3)} <span class="text-[7px]">v/v</span></span>
+							</div>
+						{/if}
 						{#if tsOverlayActive && readout.PHIT_SAND !== null && readout.PHIT_SAND !== undefined}
 							<div class="flex items-center justify-between">
 								<span class="font-bold" style="color: {PETRO_COLORS.phitSand}">PHIT_S</span>
@@ -3952,9 +3974,15 @@
 				</span>
 			{/if}
 			<span>
-				<strong style="color: {PETRO_COLORS.phie}">PHIT:</strong>
-				{fmtNum(readout.PHIT ?? readout.PHIE, 3)}
+				<strong style="color: {PETRO_COLORS.phit}">PHIT:</strong>
+				{fmtNum(readout.PHIT, 3)}
 			</span>
+			{#if readout.PHIE !== null && readout.PHIE !== undefined}
+				<span class="text-slate-500">
+					<strong>PHIE QC:</strong>
+					{fmtNum(readout.PHIE, 3)}
+				</span>
+			{/if}
 			{#if tsOverlayActive && readout.PHIT_SAND !== null && readout.PHIT_SAND !== undefined}
 				<span>
 					<strong style="color: {PETRO_COLORS.phitSand}">PHIT_SAND:</strong>

@@ -106,7 +106,7 @@
 			id: 'litho-poro',
 			num: 3,
 			label: 'Lithology & Porosity',
-			readyCheck: () => Boolean(wellData.curves['PHIE'] || wellData.curves['PHIT'])
+			readyCheck: () => Boolean(wellData.curves['PHIT'])
 		},
 		{
 			id: 'perm',

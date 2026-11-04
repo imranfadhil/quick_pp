@@ -23,7 +23,7 @@
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-		const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+		const phitArr = wellData.curves['PHIT'] ?? [];
 		const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
 		const vsiltArr = wellData.curves['VSILT'] ?? [];
 		const phitSandArr = wellData.curves['PHIT_SAND'] ?? [];

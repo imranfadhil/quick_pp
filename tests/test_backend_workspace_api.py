@@ -374,7 +374,7 @@ def test_saturation_model_comparison_curves_and_archie_default(client_and_projec
     fallback = {
         "depths": np.linspace(1000.0, 1009.0, 10).tolist(),
         "phit": np.linspace(0.12, 0.25, 10).tolist(),
-        "phie": np.linspace(0.1, 0.2, 10).tolist(),
+        "phie": np.full(10, 0.01).tolist(),
         "vclay": np.linspace(0.1, 0.4, 10).tolist(),
         "save": False,
     }
@@ -384,6 +384,16 @@ def test_saturation_model_comparison_curves_and_archie_default(client_and_projec
     default_body = default_response.json()
     assert default_body["method"] == "archie"
     assert default_body["data"]["SWT"] == default_body["data"]["SWT_ARCHIE"]
+    expected_archie = np.sqrt(
+        np.asarray(default_body["data"]["RW"], dtype=float)
+        / (
+            np.asarray(default_body["data"]["RT"], dtype=float)
+            * np.asarray(fallback["phit"], dtype=float) ** 2
+        )
+    ).clip(0.0, 1.0)
+    np.testing.assert_allclose(
+        default_body["data"]["SWT_ARCHIE"], expected_archie, equal_nan=True
+    )
 
     model_curves = {
         "waxman_smits": "SWT_WAXMAN",

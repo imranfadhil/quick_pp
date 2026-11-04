@@ -311,7 +311,7 @@ class WellDataState {
 	);
 	hcFlagCurve = $derived(this.curves['HC_FLAG'] ?? WellDataState.EMPTY_ARR);
 	swCurve = $derived(this.curves['SWT'] ?? this.curves['SWE'] ?? WellDataState.EMPTY_ARR);
-	phitCurve = $derived(this.curves['PHIT'] ?? this.curves['PHIE'] ?? WellDataState.EMPTY_ARR);
+	phitCurve = $derived(this.curves['PHIT'] ?? WellDataState.EMPTY_ARR);
 	permCurve = $derived(
 		this.curves['PERM'] ?? this.curves['PERM_TRANS'] ?? WellDataState.EMPTY_ARR
 	);
@@ -3255,7 +3255,7 @@ class WellDataState {
 		const maxShift = opts?.maxShiftM ?? 5.0;
 
 		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
-		const phitArr = this.curves['PHIT'] ?? this.curves['PHIE'] ?? [];
+		const phitArr = this.curves['PHIT'] ?? [];
 		const permArr = this.curves['PERM'] ?? this.curves['PERM_TRANS'] ?? [];
 
 		const allPlugs = this.getBaseCorePlugs();

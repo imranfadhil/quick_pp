@@ -830,9 +830,6 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     phit: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side PHIT array fallback"
     )
-    phie: Optional[List[Optional[float]]] = Field(
-        None, description="Optional client-side PHIE array fallback"
-    )
     vclay: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side VCLAY array fallback"
     )
@@ -3556,12 +3553,6 @@ def _merge_request_fallback_curves(
         except Exception:
             pass
 
-    if (
-        "PHIT" not in out.columns
-        or pd.to_numeric(out["PHIT"], errors="coerce").isna().all()
-    ) and "PHIE" in out.columns:
-        out["PHIT"] = pd.to_numeric(out["PHIE"], errors="coerce")
-
     return out
 
 
@@ -3779,7 +3770,6 @@ def workspace_saturation(
             depths=req.depths,
             curve_arrays={
                 "PHIT": req.phit,
-                "PHIE": req.phie,
                 "VCLAY": req.vclay,
                 "PHIT_SAND": req.phit_sand,
                 "VSH_LAM": req.vsh_lam,
@@ -3829,12 +3819,6 @@ def workspace_saturation(
             pd.to_numeric(df["VSH_DIS"], errors="coerce").fillna(vclay_bulk)
             if (use_ts and "VSH_DIS" in df.columns)
             else vclay_bulk
-        )
-        phie_fallback = phit * (1.0 - vclay.fillna(0.0).clip(0.0, 1.0))
-        phie = (
-            pd.to_numeric(df["PHIE"], errors="coerce").fillna(phie_fallback)
-            if "PHIE" in df.columns and not use_ts
-            else phie_fallback
         )
         vsh_lam_s = (
             pd.to_numeric(df["VSH_LAM"], errors="coerce").fillna(0.0).clip(0.0, 0.99)
@@ -4014,8 +3998,8 @@ def workspace_saturation(
             & (rt > 0)
             & rw_s.notna()
             & (rw_s > 0)
-            & phie.notna()
-            & (phie > 0)
+            & phit.notna()
+            & (phit > 0)
             & vclay.notna()
         )
         swt_indonesian_s = pd.Series(np.nan, index=df.index, dtype=float)
@@ -4023,7 +4007,7 @@ def workspace_saturation(
             swt_indonesian = indonesian_saturation(
                 rt[indonesian_mask].to_numpy(dtype=float),
                 rw_s[indonesian_mask].to_numpy(dtype=float),
-                phie[indonesian_mask].to_numpy(dtype=float),
+                phit[indonesian_mask].to_numpy(dtype=float),
                 vclay[indonesian_mask].clip(0.0, 1.0).to_numpy(dtype=float),
                 np.full(int(indonesian_mask.sum()), float(req.rsh), dtype=float),
                 float(req.a),
@@ -4541,14 +4525,14 @@ def _populate_well_zones_and_focused_mask(
             mask &= False
 
     # If propagate_focused_only is True and no explicit zone/depth filter narrowed the well,
-    # restrict to the evaluated porosity interval [min_eval_depth, max_eval_depth] if PHIT/PHIE/CPORE is present on a sub-interval
+    # restrict to the evaluated porosity interval if PHIT/CPORE is present on a sub-interval
     if (
         propagate_focused_only
         and not allowed_zones
         and eff_min_d is None
         and eff_max_d is None
     ):
-        for pcol in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR", "CORE_POR"):
+        for pcol in ("PHIT", "CPORE", "POROSITY", "POR", "CORE_POR"):
             if pcol in df_out.columns:
                 ps = pd.to_numeric(df_out[pcol], errors="coerce")
                 valid_p = ps.notna() & (ps > 0) & d_num.notna()
@@ -4582,7 +4566,7 @@ def _compute_well_non_res_mask(
         return pd.Series(dtype=bool)
 
     phit_s = pd.Series(np.nan, index=w_df.index, dtype=float)
-    for pcol in ("PHIT", "PHIE", "POROSITY", "POR", "PHIT_CONSTRUCTED", "CPORE"):
+    for pcol in ("PHIT", "POROSITY", "POR", "PHIT_CONSTRUCTED", "CPORE"):
         if pcol in w_df.columns:
             ps = pd.to_numeric(w_df[pcol], errors="coerce")
             if ps.notna().any():
@@ -5782,9 +5766,9 @@ def workspace_perm_transform_compute(
 
             d_series = pd.to_numeric(w_df["DEPTH"], errors="coerce")
 
-            # Resolve continuous log PHIT first, with fallback estimation when no PHIT/PHIE exists
+            # Resolve continuous log PHIT first, with fallback estimation when it is absent
             phit_s = pd.Series(np.nan, index=w_df.index, dtype=float)
-            for pcol in ("PHIT", "PHIE", "POROSITY", "POR"):
+            for pcol in ("PHIT", "POROSITY", "POR"):
                 if pcol in w_df.columns:
                     ps = pd.to_numeric(w_df[pcol], errors="coerce")
                     ps = ps.where(ps > 0, np.nan)
@@ -5826,7 +5810,7 @@ def workspace_perm_transform_compute(
                         ks = ks.where(ks > 0, np.nan)
                         scatter_perm_s = scatter_perm_s.combine_first(ks)
             else:
-                for pcol in ("PHIT", "PHIE", "POROSITY", "POR"):
+                for pcol in ("PHIT", "POROSITY", "POR"):
                     if pcol in w_df.columns:
                         ps = pd.to_numeric(w_df[pcol], errors="coerce")
                         ps = ps.where(ps > 0, np.nan)
@@ -6327,7 +6311,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                                         has_core_perm = True
 
                                 if cpore is None:
-                                    for pcol in ("CPORE", "PHIT", "PHIE"):
+                                    for pcol in ("CPORE", "PHIT"):
                                         if (
                                             pcol in near_row
                                             and pd.notna(near_row[pcol])
@@ -6813,9 +6797,9 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     continue
                 wells_with_tvd.add(wn)
 
-                # Continuous porosity: PHIT -> PHIE -> POROSITY -> POR -> CPORE
+                # Continuous porosity: PHIT -> POROSITY -> POR -> CPORE
                 p_s = pd.Series(np.nan, index=w_sorted.index, dtype=float)
-                for pcol in ("PHIT", "PHIE", "POROSITY", "POR", "CPORE", "CORE_POR"):
+                for pcol in ("PHIT", "POROSITY", "POR", "CPORE", "CORE_POR"):
                     if pcol in w_sorted.columns:
                         ps = pd.to_numeric(w_sorted[pcol], errors="coerce")
                         ps = ps.where(ps > 0, np.nan)
@@ -7826,9 +7810,9 @@ def workspace_stick_plot(
                 if full_well_ref_df is None or full_well_ref_df.empty:
                     full_well_ref_df = wdf_sorted
 
-                # Resolve PHIT (combine across PHIT, PHIE, CPORE, POROSITY, POR so sparse gaps are filled)
+                # Resolve PHIT (combine across PHIT, CPORE, POROSITY, and POR so sparse gaps are filled)
                 phit_s = pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
-                for c in ("PHIT", "PHIE", "CPORE", "POROSITY", "POR"):
+                for c in ("PHIT", "CPORE", "POROSITY", "POR"):
                     if c in wdf_sorted.columns and wdf_sorted[c].notna().any():
                         phit_s = phit_s.combine_first(
                             pd.to_numeric(wdf_sorted[c], errors="coerce").clip(0.0, 0.5)
@@ -11578,7 +11562,7 @@ def _extract_project_scal_plugs_for_swirr(
                                     cperm = float(valid_ck.loc[ck_idx])
                                     has_core_perm = True
                             if cpore is None:
-                                for pcol in ("CPORE", "PHIT", "PHIE"):
+                                for pcol in ("CPORE", "PHIT"):
                                     if pcol in near_row and pd.notna(near_row[pcol]) and float(near_row[pcol]) > 0:
                                         cpore = float(near_row[pcol])
                                         break
@@ -12266,7 +12250,7 @@ def workspace_multi_well_volumetrics(
             raise ValueError("No wells with valid data found for volumetric evaluation.")
 
         vsh_cut = float(req.cut_offs.get("VSHALE", 0.40))
-        phi_cut = float(req.cut_offs.get("PHIT", req.cut_offs.get("PHIE", 0.05)))
+        phi_cut = float(req.cut_offs.get("PHIT", 0.05))
         sw_cut = float(req.cut_offs.get("SWT", req.cut_offs.get("SWE", 0.80)))
         cutoffs_dict = {"VSHALE": vsh_cut, "PHIT": phi_cut, "SWT": sw_cut}
 

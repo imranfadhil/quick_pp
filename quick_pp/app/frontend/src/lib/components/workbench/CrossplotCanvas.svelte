@@ -875,7 +875,7 @@
 		}
 
 		if (effectiveMode === 'thomas-stieber') {
-			const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+			const phitArr = wellData.curves['PHIT'] ?? [];
 			const vshTsArr = wellData.curves['VSH_TS'];
 			const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
 			const grArr = wellData.curves['GR'] ?? [];
@@ -1689,11 +1689,7 @@
 					});
 				}
 			} else {
-				const phitArr =
-					wellData.curves['PHIT'] ??
-					wellData.curves['PHIE'] ??
-					wellData.curves['NPHI'] ??
-					[];
+				const phitArr = wellData.curves['PHIT'] ?? [];
 				const permArr = wellData.curves['PERM'] ?? [];
 				const cporeArr = wellData.curves['CPORE'] ?? [];
 				const cpermArr = wellData.curves['CPERM'] ?? [];
@@ -1965,8 +1961,7 @@
 		}
 
 		if (effectiveMode === 'pickett') {
-			const phiArr =
-				wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? wellData.curves['NPHI'] ?? [];
+			const phiArr = wellData.curves['PHIT'] ?? [];
 			const rtArr = wellData.curves['RT'] ?? [];
 			const colorCurve = wellData.curves['VCLAY'] !== undefined ? 'VCLAY' : 'GR';
 			const vclArr = wellData.curves['VCLAY'] ?? wellData.curves['GR'] ?? [];
@@ -4298,7 +4293,6 @@
 			void workbench.lithoParams.coalNphiMin;
 		} else if (mode === 'thomas-stieber') {
 			void wellData.curves['PHIT'];
-			void wellData.curves['PHIE'];
 			void wellData.curves['VSH_TS'];
 			void wellData.curves['VCLAY'];
 			void wellData.curves['VSHALE'];
@@ -4319,8 +4313,6 @@
 			void workbench.saturationParams.method;
 		} else if (mode === 'pickett') {
 			void wellData.curves['PHIT'];
-			void wellData.curves['PHIE'];
-			void wellData.curves['NPHI'];
 			void wellData.curves['RT'];
 			void wellData.curves['VCLAY'];
 			void wellData.curves['GR'];

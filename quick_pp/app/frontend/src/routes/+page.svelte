@@ -763,7 +763,8 @@
 			if (wellData.tops.length > 0) {
 				const sorted = [...wellData.tops].sort((a, b) => a.depth - b.depth);
 				const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-				const phie = wellData.curves['PHIE'] ?? wellData.curves['PHIT'] ?? [];
+				const phit = wellData.curves['PHIT'] ?? [];
+				const phie = wellData.curves['PHIE'] ?? [];
 				const vcl = wellData.curves['VCLAY'] ?? wellData.curves['GR'] ?? [];
 				const sw = wellData.curves['SWT'] ?? wellData.curves['SWE'] ?? [];
 
@@ -773,8 +774,10 @@
 						idx + 1 < sorted.length ? sorted[idx + 1].depth : wellData.depthRange.max;
 					const gross = Math.max(0, botD - topD);
 
-					let phiSum = 0;
-					let phiN = 0;
+					let phitSum = 0;
+					let phitN = 0;
+					let phieSum = 0;
+					let phieN = 0;
 					let vclSum = 0;
 					let vclN = 0;
 					let swSum = 0;
@@ -782,9 +785,13 @@
 
 					dept.forEach((d, i) => {
 						if (d >= topD && d < botD) {
+							if (Number.isFinite(phit[i])) {
+								phitSum += phit[i];
+								phitN++;
+							}
 							if (Number.isFinite(phie[i])) {
-								phiSum += phie[i];
-								phiN++;
+								phieSum += phie[i];
+								phieN++;
 							}
 							if (Number.isFinite(vcl[i])) {
 								vclSum += vcl[i];
@@ -801,7 +808,8 @@
 						Zone: t.name,
 						depth: topD,
 						Gross: gross,
-						PHIE: phiN > 0 ? phiSum / phiN : null,
+						PHIT: phitN > 0 ? phitSum / phitN : null,
+						PHIE_QC: phieN > 0 ? phieSum / phieN : null,
 						VCLAY: vclN > 0 ? vclSum / vclN : null,
 						SW: swN > 0 ? swSum / swN : null
 					};
@@ -813,7 +821,8 @@
 						{ key: 'Zone', label: 'Zone' },
 						{ key: 'depth', label: 'Top', unit: 'm', numeric: true, decimals: 1 },
 						{ key: 'Gross', label: 'Gross', unit: 'm', numeric: true, decimals: 1 },
-						{ key: 'PHIE', label: 'PHIE', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'PHIT', label: 'PHIT', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'PHIE_QC', label: 'PHIE (QC)', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'VCLAY', label: 'VCLAY', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'SW', label: 'SW', unit: 'v/v', numeric: true, decimals: 3 }
 					],

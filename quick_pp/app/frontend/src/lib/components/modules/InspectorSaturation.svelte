@@ -75,7 +75,7 @@
 		wellData.lastError = null;
 		const sp = workbench.saturationParams;
 		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-		const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+		const phitArr = wellData.curves['PHIT'] ?? [];
 		const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
 		const phitSandArr = wellData.curves['PHIT_SAND'] ?? [];
 		const vshLamArr = wellData.curves['VSH_LAM'] ?? [];
@@ -113,7 +113,6 @@
 						use_thomas_stieber: useTs,
 						depths: cleanArr(deptArr) as number[] | undefined,
 						phit: cleanArr(phitArr),
-						phie: cleanArr(wellData.curves['PHIE'] ?? []),
 						vclay: cleanArr(vclayArr),
 						phit_sand: useTs ? cleanArr(phitSandArr) : undefined,
 						vsh_lam: useTs ? cleanArr(vshLamArr) : undefined,
@@ -187,7 +186,7 @@
 					decimals={2}
 				/>
 				<div class="text-[10px] text-[var(--text-muted)]">
-					Indonesian uses PHIE when available, otherwise PHIT × (1 − VCLAY).
+					Indonesian uses bulk PHIT with the shale correction from VCLAY.
 				</div>
 			{:else if workbench.saturationParams.method === 'dual_water'}
 				<NumericScrubber

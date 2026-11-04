@@ -456,7 +456,7 @@
 					</div>
 
 					<div class="grid grid-cols-2 gap-2 text-[10px]">
-						<div><span class="font-bold text-[var(--text-primary)]">Inputs:</span> RT, PHIT, PHIE, VSH, VCLAY, Formation Temp</div>
+						<div><span class="font-bold text-[var(--text-primary)]">Inputs:</span> RT, PHIT, VSH, VCLAY, Formation Temp. PHIE is retained as a QC curve.</div>
 						<div><span class="font-bold text-[var(--text-primary)]">Outputs:</span> SWT, SWE, BVW, BVW_IRR, Hydrocarbon Bulk Vol (BVHC)</div>
 					</div>
 				</section>
