@@ -11,9 +11,11 @@
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 	import {
+		estimateBqvReferenceRw,
 		fillMissingCurve,
 		fitBqvCrossplot,
 		fitBqvCrossplotLine,
+		fitBqvCrossplotWithFixedIntercept,
 		getBqvFitIndices
 	} from '$lib/utils/saturation';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
@@ -92,6 +94,28 @@
 			m
 		);
 		const params = workbench.saturationParams;
+		const defaultReferenceDepth = visibleIndices.reduce(
+			(maxDepth, index) =>
+				Number.isFinite(dept[index]) ? Math.max(maxDepth, dept[index]) : maxDepth,
+			wellData.depthRange.max
+		);
+		const referenceDepth = params.bqvReferenceDepth ?? defaultReferenceDepth;
+		const tvd = wellData.curves['TVDSS'] ?? wellData.curves['TVD'] ?? dept;
+		const fallbackTvd = wellData.curves['DEPTH'] ?? dept;
+		const referenceRw = estimateBqvReferenceRw(
+			params,
+			dept,
+			tvd,
+			fallbackTvd,
+			visibleIndices,
+			referenceDepth
+		);
+		const anchoredAutoFit = fitBqvCrossplotWithFixedIntercept(
+			selectedFit.points,
+			params.a > 0 && referenceRw.rw > 0
+				? 1 / (params.a * referenceRw.rw)
+				: Number.NaN
+		);
 		const fit =
 			params.bqvFitMode === 'manual'
 				? fitBqvCrossplotLine(
@@ -99,8 +123,8 @@
 						params.bqvManualSlope,
 						params.bqvManualIntercept
 					)
-				: selectedFit;
-		return { allFit, fit, rtKey, phiKey, vclKey, m };
+				: anchoredAutoFit;
+		return { allFit, fit, rtKey, phiKey, vclKey, m, referenceRw };
 	});
 
 	let bqvPlotSummary = $derived.by(() => {
@@ -114,6 +138,7 @@
 			hasSelection: workbench.brushedDepthIndices.size > 0,
 			fit: bqvPlotData.fit,
 			mode: workbench.saturationParams.bqvFitMode,
+			rw: bqvPlotData.referenceRw.rw,
 			effectiveBqv:
 				bqvPlotData.fit.slope === null
 					? null
@@ -1960,8 +1985,24 @@
 		}
 
 		if (effectiveMode === 'sw-comparison') {
-			const vshKey = wellData.curves['VSHALE'] !== undefined ? 'VSHALE' : 'VCLAY';
-			const vshale = wellData.curves[vshKey] ?? [];
+			const vshKey = 'VSHALE';
+			const vclay = wellData.curves['VCLAY'] ?? [];
+			const vsilt = wellData.curves['VSILT'] ?? [];
+			const savedVshale = wellData.curves['VSHALE'] ?? [];
+			const isSscModel = workbench.lithoParams.model === 'ssc';
+			const getVshale = (index: number) => {
+				const saved = savedVshale[index];
+				if (Number.isFinite(saved) && saved >= 0 && saved <= 1) return saved;
+				const clay = vclay[index];
+				const silt = vsilt[index];
+				if (isSscModel && Number.isFinite(clay) && Number.isFinite(silt)) {
+					return clay + silt;
+				}
+				if (!isSscModel && Number.isFinite(clay)) {
+					return clay;
+				}
+				return savedVshale[index];
+			};
 			const models = [
 				{ key: 'SWT_ARCHIE', label: 'Archie', color: '#64748B', method: 'archie' },
 				{
@@ -1989,7 +2030,7 @@
 			const vshY: number[] = [];
 			const vshIndices: number[] = [];
 			for (const idx of indices) {
-				const vsh = vshale[idx];
+				const vsh = getVshale(idx);
 				const depth = deptAll[idx];
 				if (Number.isFinite(vsh) && vsh >= 0 && vsh <= 1 && Number.isFinite(depth)) {
 					vshX.push(vsh);
@@ -2029,8 +2070,10 @@
 						xs.push(modelValue);
 						ys.push(deptAll[idx]);
 						customIdx.push(idx);
-						const vsh = vshale[idx];
-						vshAtDepth.push(Number.isFinite(vsh) ? vsh : null);
+						const vsh = getVshale(idx);
+						vshAtDepth.push(
+							Number.isFinite(vsh) && vsh >= 0 && vsh <= 1 ? vsh : null
+						);
 					}
 				}
 				const isSelected = workbench.saturationParams.method === model.method;
@@ -2063,7 +2106,7 @@
 				...baseLayout.xaxis,
 				domain: [0.34, 1],
 				title: { text: 'Water Saturation Sw (v/v)' },
-				range: [0, 1],
+				range: [1, 0],
 				anchor: 'y'
 			};
 			baseLayout.yaxis.autorange = 'reversed';
@@ -2124,11 +2167,11 @@
 			baseLayout.showlegend = false;
 			baseLayout.margin.t = 10;
 			baseLayout.xaxis.title = { text: `${vclKey} / ${phiKey} (v/v)` };
-			baseLayout.xaxis.rangemode = 'tozero';
+			baseLayout.xaxis.range = [0, 5];
 			baseLayout.yaxis.title = {
 				text: `1 / (${rtKey} · ${phiKey}<sup>${m}</sup>) (1 / ohm·m)`
 			};
-			baseLayout.yaxis.rangemode = 'tozero';
+			baseLayout.yaxis.range = [0, 50];
 			return { traces, layout: baseLayout };
 		}
 
@@ -4481,12 +4524,14 @@
 			void wellData.curves['DEPTH'];
 			void wellData.curves['VSHALE'];
 			void wellData.curves['VCLAY'];
+			void wellData.curves['VSILT'];
 			void wellData.curves['SWT_ARCHIE'];
 			void wellData.curves['SWT_WAXMAN'];
 			void wellData.curves['SWT_SIMANDOUX'];
 			void wellData.curves['SWT_INDONESIAN'];
 			void wellData.curves['SWT_DUAL_WATER'];
 			void workbench.saturationParams.method;
+			void workbench.lithoParams.model;
 		} else if (mode === 'bqv') {
 			void wellData.curves['RT'];
 			void wellData.curves['PHIT'];
@@ -4498,6 +4543,13 @@
 			void workbench.tsParams.useInSaturation;
 			void workbench.saturationParams.m;
 			void workbench.saturationParams.a;
+			void workbench.saturationParams.rwMode;
+			void workbench.saturationParams.rwPickett;
+			void workbench.saturationParams.measSystem;
+			void workbench.saturationParams.waterSalinity;
+			void workbench.saturationParams.surfaceTemp;
+			void workbench.saturationParams.tempGradient;
+			void workbench.saturationParams.bqvReferenceDepth;
 			void workbench.saturationParams.bqvFitMode;
 			void workbench.saturationParams.bqvManualSlope;
 			void workbench.saturationParams.bqvManualIntercept;
@@ -4627,6 +4679,18 @@
 				})
 			).then(() => {
 				if (cancelled || !plotEl) return;
+				for (const axisName of ['xaxis', 'xaxis2', 'yaxis', 'yaxis2']) {
+					const axisLayout = layout[axisName];
+					const fullAxis = (plotEl as any)._fullLayout?.[axisName];
+					if (!axisLayout || !fullAxis) continue;
+					const initialRange = Array.isArray(axisLayout.range)
+						? axisLayout.range
+						: fullAxis.range;
+					if (Array.isArray(initialRange) && initialRange.length === 2) {
+						fullAxis._rangeInitial0 = initialRange[0];
+						fullAxis._rangeInitial1 = initialRange[1];
+					}
+				}
 				if (!eventsBound && plotEl) {
 					eventsBound = true;
 					(plotEl as any).on('plotly_selected', (ev: any) => {
@@ -5177,8 +5241,15 @@
 			<div class="flex flex-wrap items-center gap-x-2 text-slate-700">
 				<span>{bqvPlotSummary.mode === 'manual' ? 'Manual' : 'Autofit'}</span>
 				<span>Slope: <strong>{fmtNum(bqvPlotSummary.fit.slope, 4)}</strong></span>
-				<span>Intercept: <strong>{fmtNum(bqvPlotSummary.fit.intercept, 4)}</strong></span>
+				{#if bqvPlotSummary.mode === 'manual'}
+					<span>Intercept: <strong>{fmtNum(bqvPlotSummary.fit.intercept, 4)}</strong></span>
+				{:else}
+					<span>Fixed 1/(a·Rw): <strong>{fmtNum(bqvPlotSummary.fit.intercept, 4)}</strong></span>
+				{/if}
 				<span>R²: <strong>{fmtNum(bqvPlotSummary.fit.r2, 3)}</strong></span>
+				{#if bqvPlotSummary.mode === 'auto'}
+					<span>Rw: <strong>{fmtNum(bqvPlotSummary.rw, 4)} Ω·m</strong></span>
+				{/if}
 				<span>a×slope: <strong>{fmtNum(bqvPlotSummary.effectiveBqv, 4)}</strong></span>
 			</div>
 		</div>

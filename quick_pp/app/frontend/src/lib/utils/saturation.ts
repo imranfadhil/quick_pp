@@ -12,6 +12,15 @@ export interface BqvCrossplotFit {
 	r2: number | null;
 }
 
+export interface BqvRwSettings {
+	rwMode: 'salinity_temp' | 'pickett';
+	rwPickett: number;
+	measSystem: 'metric' | 'imperial';
+	surfaceTemp: number;
+	tempGradient: number;
+	waterSalinity: number;
+}
+
 export function getBqvFitIndices(
 	visibleIndices: number[],
 	brushedIndices: ReadonlySet<number>
@@ -28,6 +37,52 @@ export function fillMissingCurve(primary: number[] | undefined, fallback: number
 	);
 }
 
+export function estimateBqvReferenceRw(
+	settings: BqvRwSettings,
+	measuredDepths: number[],
+	tvdDepths: number[],
+	fallbackDepths: number[],
+	visibleIndices: number[],
+	referenceDepth: number
+): { rw: number; tempC: number } {
+	let closestIndex = -1;
+	let closestDistance = Infinity;
+	for (const index of visibleIndices) {
+		const measuredDepth = measuredDepths[index];
+		if (
+			Number.isFinite(measuredDepth) &&
+			Math.abs(measuredDepth - referenceDepth) < closestDistance
+		) {
+			closestIndex = index;
+			closestDistance = Math.abs(measuredDepth - referenceDepth);
+		}
+	}
+
+	const temperatureDepth =
+		closestIndex >= 0
+			? Number.isFinite(tvdDepths[closestIndex])
+				? tvdDepths[closestIndex]
+				: (fallbackDepths[closestIndex] ?? referenceDepth)
+			: referenceDepth;
+	let tempC: number;
+	if (settings.measSystem === 'imperial') {
+		const tvdKft = (temperatureDepth * 3.28084) / 1000;
+		const tempF = settings.surfaceTemp + settings.tempGradient * tvdKft;
+		tempC = Math.max(5, Math.min(250, ((tempF - 32) * 5) / 9));
+	} else {
+		tempC = Math.max(
+			5,
+			Math.min(250, settings.surfaceTemp + settings.tempGradient * (temperatureDepth / 1000))
+		);
+	}
+
+	const rw =
+		settings.rwMode === 'pickett'
+			? settings.rwPickett
+			: Math.pow(400000 / (Math.max(100, settings.waterSalinity) * (tempC * 9 / 5 + 32)), 0.88);
+	return { rw, tempC };
+}
+
 export function fitBqvCrossplotLine(
 	points: BqvCrossplotPoint[],
 	slope: number,
@@ -37,6 +92,44 @@ export function fitBqvCrossplotLine(
 		return { points, slope: null, intercept: null, r2: null };
 	}
 
+	const meanY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+	let totalVarianceY = 0;
+	let residualSumSquares = 0;
+	for (const point of points) {
+		totalVarianceY += Math.pow(point.y - meanY, 2);
+		residualSumSquares += Math.pow(point.y - (slope * point.x + intercept), 2);
+	}
+
+	return {
+		points,
+		slope,
+		intercept,
+		r2: totalVarianceY > 0 ? 1 - residualSumSquares / totalVarianceY : null
+	};
+}
+
+export function fitBqvCrossplotWithFixedIntercept(
+	points: BqvCrossplotPoint[],
+	intercept: number
+): BqvCrossplotFit {
+	if (!Number.isFinite(intercept)) {
+		return { points, slope: null, intercept: null, r2: null };
+	}
+	if (points.length < 2) {
+		return { points, slope: null, intercept, r2: null };
+	}
+
+	let numerator = 0;
+	let denominator = 0;
+	for (const point of points) {
+		numerator += point.x * (point.y - intercept);
+		denominator += point.x * point.x;
+	}
+	if (denominator <= 0) {
+		return { points, slope: null, intercept, r2: null };
+	}
+
+	const slope = numerator / denominator;
 	const meanY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
 	let totalVarianceY = 0;
 	let residualSumSquares = 0;

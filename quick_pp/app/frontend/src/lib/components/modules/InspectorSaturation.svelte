@@ -7,8 +7,10 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import {
 		fillMissingCurve,
+		estimateBqvReferenceRw,
 		fitBqvCrossplot,
 		fitBqvCrossplotLine,
+		fitBqvCrossplotWithFixedIntercept,
 		getBqvFitIndices
 	} from '$lib/utils/saturation';
 
@@ -32,11 +34,9 @@
 		return Number(wellData.depthRange.max.toFixed(1));
 	});
 
-	let refDepth = $state<number>(0);
-
-	$effect(() => {
-		refDepth = defaultRefDepth;
-	});
+	let refDepth = $derived(
+		workbench.saturationParams.bqvReferenceDepth ?? defaultRefDepth
+	);
 
 	function estimateTempAndRwAtDepth(depthM: number) {
 		const sp = workbench.saturationParams;
@@ -67,25 +67,14 @@
 		const tvd =
 			wellData.curves['TVDSS'] ?? wellData.curves['TVD'] ?? wellData.curves['DEPTH'] ?? md;
 		const fallbackTvd = wellData.curves['DEPTH'] ?? md;
-		let closestIndex = -1;
-		let closestDistance = Infinity;
-		for (const index of wellData.visibleIndices) {
-			const measuredDepth = md[index];
-			if (
-				Number.isFinite(measuredDepth) &&
-				Math.abs(measuredDepth - refDepth) < closestDistance
-			) {
-				closestIndex = index;
-				closestDistance = Math.abs(measuredDepth - refDepth);
-			}
-		}
-		const temperatureDepth =
-			closestIndex >= 0
-				? Number.isFinite(tvd[closestIndex])
-					? tvd[closestIndex]
-					: (fallbackTvd[closestIndex] ?? refDepth)
-				: refDepth;
-		return estimateTempAndRwAtDepth(temperatureDepth);
+		return estimateBqvReferenceRw(
+			workbench.saturationParams,
+			md,
+			tvd,
+			fallbackTvd,
+			wellData.visibleIndices,
+			refDepth
+		);
 	});
 	let bqvAutoFit = $derived.by(() => {
 		const rawRt = wellData.curves['RT'] ?? [];
@@ -95,7 +84,7 @@
 		const useTs =
 			workbench.tsParams.useInSaturation &&
 			Boolean(phitSand?.some((value) => Number.isFinite(value)));
-		return fitBqvCrossplot(
+		const fit = fitBqvCrossplot(
 			useTs ? fillMissingCurve(wellData.curves['RSAND_TS'], rawRt) : rawRt,
 			useTs ? fillMissingCurve(phitSand, rawPhit) : rawPhit,
 			useTs ? fillMissingCurve(wellData.curves['VSH_DIS'], rawVclay) : rawVclay,
@@ -103,6 +92,12 @@
 			getBqvFitIndices(wellData.visibleIndices, workbench.brushedDepthIndices),
 			workbench.saturationParams.m
 		);
+		const sp = workbench.saturationParams;
+		const intercept =
+			bqvReferenceRw.rw > 0 && sp.a > 0
+				? 1 / (sp.a * bqvReferenceRw.rw)
+				: Number.NaN;
+		return fitBqvCrossplotWithFixedIntercept(fit.points, intercept);
 	});
 	let bqvFit = $derived.by(() =>
 		workbench.saturationParams.bqvFitMode === 'manual'
@@ -117,8 +112,8 @@
 		const fit = bqvFit;
 		if (fit.slope === null || fit.slope <= 0) return null;
 		const sp = workbench.saturationParams;
-		const rw = sp.rwMode === 'pickett' ? sp.rwPickett : bqvReferenceRw.rwExact;
-		const tempC = bqvReferenceRw.tempCExact;
+		const rw = sp.rwMode === 'pickett' ? sp.rwPickett : bqvReferenceRw.rw;
+		const tempC = bqvReferenceRw.tempC;
 		const b =
 			(-1.28 + 0.225 * tempC - 0.0004059 * tempC ** 2) /
 			(1 + (0.045 * tempC - 0.27) * Math.pow(rw, 1.23));
@@ -464,7 +459,13 @@
 							type="number"
 							step="1"
 							min="0"
-							bind:value={refDepth}
+							value={refDepth}
+							oninput={(event) => {
+								const value = Number(event.currentTarget.value);
+								workbench.saturationParams.bqvReferenceDepth = Number.isFinite(value)
+									? value
+									: null;
+							}}
 							title="Reference depth for Rw calculation (defaults to bottom of filtered interval)"
 							class="mono-num h-5 w-16 rounded-2xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0 text-right text-[10px] font-semibold text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:ring-1 focus:ring-[var(--border-focus)] focus:outline-none"
 						/>
@@ -476,7 +477,7 @@
 							<button
 								type="button"
 								onclick={() => {
-									refDepth = defaultRefDepth;
+									workbench.saturationParams.bqvReferenceDepth = null;
 								}}
 								title="Reset to bottom of filtered interval ({defaultRefDepth} m)"
 								class="ml-0.5 text-[9.5px] font-medium text-[var(--text-muted)] hover:text-[var(--accent-primary)]"
@@ -642,8 +643,9 @@
 					<div class="mt-1 flex items-start justify-between gap-2">
 						<span class="text-[9.5px]">
 							Lasso water-bearing and clean-shale samples on the BQv plot; depth/zone filters
-							also constrain the interval. The intercept sets the plotted line only and does
-							not override the configured Rw.
+							also constrain the interval. Autofit fixes the intercept at 1/(a·Rw) from the
+							active Rw source and optimizes slope only. Manual mode lets you edit both;
+							neither mode changes the configured Rw.
 						</span>
 						<button
 							type="button"

@@ -2691,6 +2691,13 @@ def workspace_lithology(
                     if extra_c in out_df.columns:
                         out_df.loc[active_badhole, extra_c] = np.nan
 
+        if model == "ssc":
+            out_df["VSHALE"] = out_df["VCLAY"] + out_df["VSILT"]
+        else:
+            out_df["VSHALE"] = out_df["VCLAY"]
+        if "VSHALE" not in save_cols:
+            save_cols.append("VSHALE")
+
         saved_rows = 0
         if save_cols:
             valid_save_mask = out_df[save_cols].notna().any(axis=1) | active_badhole

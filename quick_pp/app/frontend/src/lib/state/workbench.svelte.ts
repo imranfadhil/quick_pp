@@ -157,6 +157,7 @@ export interface SaturationModelParams {
 	bqvFitMode: 'auto' | 'manual';
 	bqvManualSlope: number;
 	bqvManualIntercept: number;
+	bqvReferenceDepth: number | null;
 	bqvAppliedSlope: number | null;
 	bqvAppliedRefDepth: number | null;
 	bqvAppliedRhoClay: number | null;
@@ -743,6 +744,7 @@ class WorkbenchState {
 		bqvFitMode: 'auto',
 		bqvManualSlope: 0.1,
 		bqvManualIntercept: 0,
+		bqvReferenceDepth: null,
 		bqvAppliedSlope: null,
 		bqvAppliedRefDepth: null,
 		bqvAppliedRhoClay: null,

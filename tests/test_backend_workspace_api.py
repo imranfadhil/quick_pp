@@ -190,6 +190,14 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert lith_body["saved_rows"] == 10
     assert "VSAND" in lith_body["data"]
     assert "VCLAY" in lith_body["data"]
+    assert "VSHALE" in lith_body["data"]
+    for vclay, vsilt, vshale in zip(
+        lith_body["data"]["VCLAY"],
+        lith_body["data"]["VSILT"],
+        lith_body["data"]["VSHALE"],
+        strict=True,
+    ):
+        assert np.isclose(vshale, vclay + vsilt)
     assert lith_body["crossplot"]["dry_silt_point"][1] == 2.68
     expected_silt_nphi = 1.0 + (
         (2.68 - 1.0) / np.tan(np.deg2rad(116.0))
@@ -594,6 +602,7 @@ def test_badhole_flagging_and_litho_poro_badhole_treatments(client_and_project):
     lith_ign = r_lith_ign.json()["data"]
     assert lith_ign["VCLAY"][2] is None
     assert lith_ign["VSAND"][2] is None
+    assert lith_ign["VSHALE"][2] is None
     assert lith_ign["VCLAY"][1] is not None
 
     r_poro_ign = client.post(
@@ -618,6 +627,11 @@ def test_badhole_flagging_and_litho_poro_badhole_treatments(client_and_project):
         lith_interp["VCLAY"][2],
         0.5 * (lith_interp["VCLAY"][1] + lith_interp["VCLAY"][3]),
         atol=1e-4,
+    )
+    assert np.isclose(
+        lith_interp["VSHALE"][2],
+        lith_interp["VCLAY"][2] + lith_interp["VSILT"][2],
+        atol=1e-6,
     )
 
     r_poro_interp = client.post(
@@ -647,6 +661,20 @@ def test_badhole_flagging_and_litho_poro_badhole_treatments(client_and_project):
     lith_gr = r_lith_gr.json()["data"]
     assert lith_gr["VSILT"][2] == 0.0
     assert lith_gr["VCLAY"][2] is not None and 0.0 <= lith_gr["VCLAY"][2] <= 1.0
+    assert np.isclose(lith_gr["VSHALE"][2], lith_gr["VCLAY"][2])
+
+    r_lith_vsh_gr = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/lithology",
+        json={
+            "model": "vsh_gr",
+            "gr_clean": 30.0,
+            "gr_clay": 110.0,
+            "save": False,
+        },
+    )
+    assert r_lith_vsh_gr.status_code == 200
+    lith_vsh_gr = r_lith_vsh_gr.json()["data"]
+    assert np.allclose(lith_vsh_gr["VSHALE"], lith_vsh_gr["VCLAY"])
 
     r_poro_gr = client.post(
         f"/quick_pp/workspace/projects/{pid}/wells/Well-A/porosity",
