@@ -18,7 +18,6 @@ CLAY_MINERAL_NAMES = (
     "ILLITE",
     "SMECTITE",
     "CHLORITE",
-    "GLAUCONITE",
 )
 DEFAULT_LOG_RANGES = {
     "GR": 100.0,
@@ -31,7 +30,6 @@ DEFAULT_LOG_RANGES = {
     "THOR": 20.0,
     "URAN": 10.0,
 }
-
 
 
 def _project_bounded_simplex_batch(
@@ -422,9 +420,27 @@ class MultiMineral:
         # Default fluid properties if none specified
         if fluid_properties is None:
             fluid_properties = {
-                "OIL": {"density": 0.8, "nphi": 0.0, "pef": 0.12, "dtc": 200.0, "u": 0.10},
-                "GAS": {"density": 0.2, "nphi": 0.0, "pef": 0.05, "dtc": 400.0, "u": 0.01},
-                "WATER": {"density": 1.0, "nphi": 1.0, "pef": 0.36, "dtc": 190.0, "u": 0.36},
+                "OIL": {
+                    "density": 0.8,
+                    "nphi": 0.0,
+                    "pef": 0.12,
+                    "dtc": 200.0,
+                    "u": 0.10,
+                },
+                "GAS": {
+                    "density": 0.2,
+                    "nphi": 0.0,
+                    "pef": 0.05,
+                    "dtc": 400.0,
+                    "u": 0.01,
+                },
+                "WATER": {
+                    "density": 1.0,
+                    "nphi": 1.0,
+                    "pef": 0.36,
+                    "dtc": 190.0,
+                    "u": 0.36,
+                },
             }
         self.fluid_properties = fluid_properties
         self.fluids = ["OIL", "GAS", "WATER"]
@@ -435,7 +451,11 @@ class MultiMineral:
             default_mineral_bounds.update(mineral_bounds)
 
         # Define bounds for fluid volumes (0 to 1 for each fluid, overridden by fluid_bounds)
-        default_fluid_bounds = {"OIL": (0.0, 1.0), "GAS": (0.0, 1.0), "WATER": (0.0, 1.0)}
+        default_fluid_bounds = {
+            "OIL": (0.0, 1.0),
+            "GAS": (0.0, 1.0),
+            "WATER": (0.0, 1.0),
+        }
         if fluid_bounds is not None:
             default_fluid_bounds.update(fluid_bounds)
 
@@ -1148,7 +1168,9 @@ class MultiMineral:
         method: Optional[str] = None,
         n_jobs: Optional[int] = None,
         logs: Optional[Dict[str, np.ndarray]] = None,
-        bounds: Optional[Union[Dict[str, Tuple[float, float]], Tuple[Tuple[float, float], ...]]] = None,
+        bounds: Optional[
+            Union[Dict[str, Tuple[float, float]], Tuple[Tuple[float, float], ...]]
+        ] = None,
         bad_hole_mask: Optional[np.ndarray] = None,
         cali: Optional[np.ndarray] = None,
         bs: Optional[Union[float, np.ndarray]] = None,
@@ -1196,7 +1218,10 @@ class MultiMineral:
             pd.DataFrame: A DataFrame containing estimated mineral/fluid volumes, constructed porosity,
                           residual errors, and reconstructed logs.
         """
-        def _to_float_array(arr: Optional[Union[float, np.ndarray]], length: int) -> np.ndarray:
+
+        def _to_float_array(
+            arr: Optional[Union[float, np.ndarray]], length: int
+        ) -> np.ndarray:
             if arr is None:
                 return np.full(length, np.nan, dtype=float)
             try:
@@ -1215,7 +1240,9 @@ class MultiMineral:
             candidate_arrays.extend(logs.values())
         candidate_arrays.extend(extra_logs.values())
 
-        valid_lens = [len(a) for a in candidate_arrays if a is not None and hasattr(a, "__len__")]
+        valid_lens = [
+            len(a) for a in candidate_arrays if a is not None and hasattr(a, "__len__")
+        ]
         if not valid_lens:
             raise ValueError("No input log arrays provided to estimate_lithology().")
         n_samples = max(valid_lens)
@@ -1233,7 +1260,11 @@ class MultiMineral:
         if dtc is not None:
             raw_inputs["DTC"] = _to_float_array(dtc, n_samples)
 
-        rt_arr = _to_float_array(rt, n_samples) if rt is not None else np.full(n_samples, np.nan, dtype=float)
+        rt_arr = (
+            _to_float_array(rt, n_samples)
+            if rt is not None
+            else np.full(n_samples, np.nan, dtype=float)
+        )
 
         if logs is not None:
             for k, v in logs.items():
@@ -1274,7 +1305,9 @@ class MultiMineral:
 
         try:
             # 3. Handle PEF linearization via U = PEF * RHOB
-            do_pef_lin = self.linearize_pef if linearize_pef is None else bool(linearize_pef)
+            do_pef_lin = (
+                self.linearize_pef if linearize_pef is None else bool(linearize_pef)
+            )
             use_u_channel = False
             solve_inputs = dict(raw_inputs)
 
@@ -1286,7 +1319,13 @@ class MultiMineral:
                 use_u_channel = True
 
             # 4. Identify linear solve log names (ordered: GR, NPHI, RHOB, U/PEF, DTC, then extra channels)
-            canonical_order = ["GR", "NPHI", "RHOB", "U" if use_u_channel else "PEF", "DTC"]
+            canonical_order = [
+                "GR",
+                "NPHI",
+                "RHOB",
+                "U" if use_u_channel else "PEF",
+                "DTC",
+            ]
             linear_log_names = [k for k in canonical_order if k in solve_inputs]
             for k in solve_inputs.keys():
                 if k not in linear_log_names:
@@ -1299,7 +1338,9 @@ class MultiMineral:
             n_vars = n_minerals + n_fluids
 
             # Degrees of Freedom (DoF) check
-            n_equations = len(linear_log_names) + 1  # log response rows + 1 closure constraint
+            n_equations = (
+                len(linear_log_names) + 1
+            )  # log response rows + 1 closure constraint
             if n_equations < n_vars:
                 logger.warning(
                     f"MultiMineral model is under-determined: {len(linear_log_names)} log curves "
@@ -1334,10 +1375,10 @@ class MultiMineral:
             if cali is not None and bs is not None:
                 cali_arr = _to_float_array(cali, n_samples)
                 bs_arr = _to_float_array(bs, n_samples)
-                is_bad |= (cali_arr > (bs_arr + 1.5))
+                is_bad |= cali_arr > (bs_arr + 1.5)
             if drho is not None:
                 drho_arr = _to_float_array(drho, n_samples)
-                is_bad |= (np.abs(drho_arr) > 0.05)
+                is_bad |= np.abs(drho_arr) > 0.05
 
             # Build weight matrix W (n_samples, n_logs)
             custom_weights = log_weights or {}
@@ -1461,7 +1502,9 @@ class MultiMineral:
                             delayed(_solve_group)(pi) for pi in range(len(patterns))
                         )
                     else:
-                        group_results = [_solve_group(pi) for pi in range(len(patterns))]
+                        group_results = [
+                            _solve_group(pi) for pi in range(len(patterns))
+                        ]
 
                     for g_rows, V_sub, ok_sub in group_results:
                         V_all[g_rows] = V_sub
@@ -1480,6 +1523,7 @@ class MultiMineral:
 
                 # Reserve SLSQP for non-linear conductivity or explicit SLSQP solver
                 if use_nonlinear:
+
                     def _run_slsqp_depth(i: int) -> Tuple[int, np.ndarray, bool]:
                         log_values = {
                             l_name: float(raw_inputs[l_name][i])
@@ -1525,7 +1569,9 @@ class MultiMineral:
             if use_u_channel:
                 u_recon = recon_dict.get("U", np.full(n_samples, np.nan, dtype=float))
                 rho_recon = recon_dict.get("RHOB", rhob_arr)
-                safe_rho = np.where(np.isfinite(rho_recon) & (rho_recon > 0.5), rho_recon, 2.65)
+                safe_rho = np.where(
+                    np.isfinite(rho_recon) & (rho_recon > 0.5), rho_recon, 2.65
+                )
                 pef_reconstructed = np.where(
                     valid_rows & np.isfinite(pef_arr),
                     u_recon / safe_rho,
@@ -1533,7 +1579,9 @@ class MultiMineral:
                 )
             else:
                 pef_reconstructed = (
-                    np.where(valid_rows & np.isfinite(pef_arr), recon_dict["PEF"], np.nan)
+                    np.where(
+                        valid_rows & np.isfinite(pef_arr), recon_dict["PEF"], np.nan
+                    )
                     if "PEF" in recon_dict
                     else np.full(n_samples, np.nan, dtype=float)
                 )
@@ -1562,15 +1610,45 @@ class MultiMineral:
             # Compute average absolute error across all measured logs
             all_diffs = []
             if np.any(np.isfinite(gr_arr)):
-                all_diffs.append(np.where(valid_rows & np.isfinite(gr_arr), np.abs(gr_arr - gr_reconstructed), np.nan))
+                all_diffs.append(
+                    np.where(
+                        valid_rows & np.isfinite(gr_arr),
+                        np.abs(gr_arr - gr_reconstructed),
+                        np.nan,
+                    )
+                )
             if np.any(np.isfinite(nphi_arr)):
-                all_diffs.append(np.where(valid_rows & np.isfinite(nphi_arr), np.abs(nphi_arr - nphi_reconstructed), np.nan))
+                all_diffs.append(
+                    np.where(
+                        valid_rows & np.isfinite(nphi_arr),
+                        np.abs(nphi_arr - nphi_reconstructed),
+                        np.nan,
+                    )
+                )
             if np.any(np.isfinite(rhob_arr)):
-                all_diffs.append(np.where(valid_rows & np.isfinite(rhob_arr), np.abs(rhob_arr - rhob_reconstructed), np.nan))
+                all_diffs.append(
+                    np.where(
+                        valid_rows & np.isfinite(rhob_arr),
+                        np.abs(rhob_arr - rhob_reconstructed),
+                        np.nan,
+                    )
+                )
             if np.any(np.isfinite(pef_arr)):
-                all_diffs.append(np.where(valid_rows & np.isfinite(pef_arr), np.abs(pef_arr - pef_reconstructed), np.nan))
+                all_diffs.append(
+                    np.where(
+                        valid_rows & np.isfinite(pef_arr),
+                        np.abs(pef_arr - pef_reconstructed),
+                        np.nan,
+                    )
+                )
             if np.any(np.isfinite(dtc_arr)):
-                all_diffs.append(np.where(valid_rows & np.isfinite(dtc_arr), np.abs(dtc_arr - dtc_reconstructed), np.nan))
+                all_diffs.append(
+                    np.where(
+                        valid_rows & np.isfinite(dtc_arr),
+                        np.abs(dtc_arr - dtc_reconstructed),
+                        np.nan,
+                    )
+                )
 
             for l_name in linear_log_names:
                 if l_name not in ("GR", "NPHI", "RHOB", "U", "PEF", "DTC"):
@@ -1628,7 +1706,9 @@ class MultiMineral:
             for l_name in linear_log_names:
                 if l_name not in ("GR", "NPHI", "RHOB", "U", "PEF", "DTC"):
                     col_name = f"{l_name}_RECONSTRUCTED"
-                    meas_val = raw_inputs.get(l_name, np.full(n_samples, np.nan, dtype=float))
+                    meas_val = raw_inputs.get(
+                        l_name, np.full(n_samples, np.nan, dtype=float)
+                    )
                     output_data[col_name] = np.where(
                         valid_rows & np.isfinite(meas_val),
                         recon_dict[l_name],

@@ -30,6 +30,8 @@
 		'SMECTITE',
 		'CHLORITE',
 		'GLAUCONITE',
+		'MUSCOVITE',
+		'BIOTITE',
 		'KFELD',
 		'ALBITE',
 		'SIDERITE',

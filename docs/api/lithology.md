@@ -25,4 +25,3 @@ Deterministic and optimization-based mineral volume models for clastics, carbona
 ## Thin Beds
 
 ::: quick_pp.lithology.thin_beds
-

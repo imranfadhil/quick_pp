@@ -1171,12 +1171,15 @@ class WellDataState {
 				return compared > 0;
 			};
 
-			const hasCarbonateMinerals =
+			const hasMultiMineralCurves =
 				hasPositiveCurve('VCALC') ||
 				hasPositiveCurve('VDOLO') ||
 				hasPositiveCurve('VANHY') ||
-				hasPositiveCurve('VHALI');
-			if (hasCarbonateMinerals) {
+				hasPositiveCurve('VHALI') ||
+				hasPositiveCurve('VGLAUC') ||
+				hasPositiveCurve('VMUSC') ||
+				hasPositiveCurve('VBIOT');
+			if (hasMultiMineralCurves) {
 				if (isDuplicateArray(numericCurves['VSAND'], numericCurves['VCALC'])) {
 					numericCurves['VSAND'] = new Array(numericCurves['VSAND'].length).fill(0);
 					origCopy['VSAND'] = [...numericCurves['VSAND']];
@@ -1202,6 +1205,8 @@ class WellDataState {
 				if (hasPositiveCurve('VSMEC')) detectedMinerals.push('SMECTITE');
 				if (hasPositiveCurve('VCHLO')) detectedMinerals.push('CHLORITE');
 				if (hasPositiveCurve('VGLAUC')) detectedMinerals.push('GLAUCONITE');
+				if (hasPositiveCurve('VMUSC')) detectedMinerals.push('MUSCOVITE');
+				if (hasPositiveCurve('VBIOT')) detectedMinerals.push('BIOTITE');
 				if (hasPositiveCurve('VKFELD')) detectedMinerals.push('KFELD');
 				if (hasPositiveCurve('VALBI')) detectedMinerals.push('ALBITE');
 				if (hasPositiveCurve('VSIDE')) detectedMinerals.push('SIDERITE');
