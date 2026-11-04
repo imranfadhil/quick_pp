@@ -813,7 +813,21 @@ class WellDataState {
 		const D: [number, number] = [lp.fluidNphi, lp.fluidRhob];
 
 		const rockLen = Math.max(1e-6, Math.hypot(A[0] - C[0], A[1] - C[1]));
-		const resLen = Math.max(1e-6, Math.hypot(A[0] - B[0], A[1] - B[1]));
+		const xdiff0 = A[0] - C[0];
+		const ydiff0 = A[1] - C[1];
+		const d0 = A[0] * C[1] - A[1] * C[0];
+		const xdiff1 = D[0] - B[0];
+		const ydiff1 = D[1] - B[1];
+		const d1 = D[0] * B[1] - D[1] * B[0];
+		const resDiv = xdiff0 * ydiff1 - xdiff1 * ydiff0;
+		if (Math.abs(resDiv) < 1e-12) {
+			throw new Error(
+				'Cannot calculate live VSH preview: fluid-silt line does not intersect the sand-clay line'
+			);
+		}
+		const resIntersectionX = (d0 * xdiff1 - d1 * xdiff0) / resDiv;
+		const resIntersectionY = (d0 * ydiff1 - d1 * ydiff0) / resDiv;
+		const resLen = Math.hypot(A[0] - resIntersectionX, A[1] - resIntersectionY);
 		const resRatio = Math.max(0.05, Math.min(0.95, resLen / rockLen));
 		const nonResLen = Math.max(1e-6, rockLen * (1 - resRatio));
 		const siltClayRatio = 0.25;
@@ -835,10 +849,6 @@ class WellDataState {
 			REGIME_LABEL: string;
 			logIndex: number;
 		}> = [];
-
-		const xdiff0 = A[0] - C[0];
-		const ydiff0 = A[1] - C[1];
-		const d0 = A[0] * C[1] - A[1] * C[0];
 
 		for (const idx of indices) {
 			const d = dept[idx];

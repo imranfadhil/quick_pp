@@ -505,36 +505,24 @@ export interface MultiWellVolumetricsState {
 	zoneConfigs: Record<string, VolumetricZoneParamConfig>;
 }
 
-/**
- * Calculates the intersection point between:
- * 1. The silt line emanating from the water/fluid point (fluidNphi, fluidRhob) at siltLineAngle (in degrees).
- * 2. The rock line connecting the dry sand point (sandNphi, sandRhob) and dry clay point (clayNphi, clayRhob).
- */
+const DRY_SILT_RHOB = 2.68;
+
+/** Calculates the silt-line intersection with the configured dry-silt RHOB. */
 export function computeSiltIntersection(
-	sand: [number, number],
-	clay: [number, number],
 	fluid: [number, number],
-	siltLineAngleDeg: number
+	siltLineAngleDeg: number,
+	targetRhob: number = DRY_SILT_RHOB
 ): [number, number] {
 	const rad = (siltLineAngleDeg * Math.PI) / 180;
-	const pSilt: [number, number] = [fluid[0] + Math.cos(rad), fluid[1] + Math.sin(rad)];
-
-	const xdiff0 = sand[0] - clay[0];
-	const ydiff0 = sand[1] - clay[1];
-	const d0 = sand[0] * clay[1] - sand[1] * clay[0];
-
-	const xdiff1 = fluid[0] - pSilt[0];
-	const ydiff1 = fluid[1] - pSilt[1];
-	const d1 = fluid[0] * pSilt[1] - fluid[1] * pSilt[0];
-
-	const div = xdiff0 * ydiff1 - xdiff1 * ydiff0;
-	if (Math.abs(div) < 1e-12) {
-		return [(sand[0] + clay[0]) / 2, (sand[1] + clay[1]) / 2];
+	const sinAngle = Math.sin(rad);
+	if (Math.abs(sinAngle) < 1e-12) {
+		throw new Error(
+			'Cannot calculate dry silt point: silt line is parallel to the RHOB target'
+		);
 	}
 
-	const varX = (d0 * xdiff1 - d1 * xdiff0) / div;
-	const varY = (d0 * ydiff1 - d1 * ydiff0) / div;
-	return [varX, varY];
+	const distance = (targetRhob - fluid[1]) / sinAngle;
+	return [fluid[0] + distance * Math.cos(rad), targetRhob];
 }
 
 class WorkbenchState {
@@ -686,8 +674,8 @@ class WorkbenchState {
 		denCorrMismatchThreshold: 0.15,
 		drySandNphi: -0.02,
 		drySandRhob: 2.65,
-		drySiltNphi: 0.078,
-		drySiltRhob: 2.664,
+		drySiltNphi: 0.069,
+		drySiltRhob: DRY_SILT_RHOB,
 		dryClayNphi: 0.33,
 		dryClayRhob: 2.7,
 		fluidNphi: 1.0,
@@ -1063,8 +1051,6 @@ class WorkbenchState {
 
 	updateSiltEndpointFromAngle() {
 		const [siltNphi, siltRhob] = computeSiltIntersection(
-			[this.lithoParams.drySandNphi, this.lithoParams.drySandRhob],
-			[this.lithoParams.dryClayNphi, this.lithoParams.dryClayRhob],
 			[this.lithoParams.fluidNphi, this.lithoParams.fluidRhob],
 			this.lithoParams.siltLineAngle
 		);

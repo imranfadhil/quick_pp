@@ -177,13 +177,26 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     # 2. Lithology SSC (save=True, using HC corrected logs)
     r_lith = client.post(
         f"/quick_pp/workspace/projects/{pid}/wells/Well-A/lithology",
-        json={"model": "ssc", "use_hc_corrected": True, "save": True},
+        json={
+            "model": "ssc",
+            "use_hc_corrected": True,
+            "dry_silt_point": [0.151, 2.74],
+            "silt_line_angle": 116.0,
+            "save": True,
+        },
     )
     assert r_lith.status_code == 200
     lith_body = r_lith.json()
     assert lith_body["saved_rows"] == 10
     assert "VSAND" in lith_body["data"]
     assert "VCLAY" in lith_body["data"]
+    assert lith_body["crossplot"]["dry_silt_point"][1] == 2.68
+    expected_silt_nphi = 1.0 + (
+        (2.68 - 1.0) / np.tan(np.deg2rad(116.0))
+    )
+    assert np.isclose(
+        lith_body["crossplot"]["dry_silt_point"][0], expected_silt_nphi
+    )
 
     # 3. Porosity (save=True)
     r_poro = client.post(

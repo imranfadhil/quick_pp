@@ -176,10 +176,8 @@
 	});
 
 	$effect(() => {
-		// Keep drySiltNphi and drySiltRhob synchronized with silt line angle & rock line
+		// Keep the dry silt point on the silt line at the fixed 2.68 g/cc RHOB.
 		const [siltNphi, siltRhob] = computeSiltIntersection(
-			[workbench.lithoParams.drySandNphi, workbench.lithoParams.drySandRhob],
-			[workbench.lithoParams.dryClayNphi, workbench.lithoParams.dryClayRhob],
 			[workbench.lithoParams.fluidNphi, workbench.lithoParams.fluidRhob],
 			workbench.lithoParams.siltLineAngle
 		);

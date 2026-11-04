@@ -339,7 +339,13 @@ def _vectorized_ssc_neu_den(
     D = fluid_point
 
     rock_len = float(length_a_b(A, C))
-    res_len = float(length_a_b(A, B))
+    reservoir_intersection = line_intersection((A, C), (D, B))
+    if not all(np.isfinite(coord) for coord in reservoir_intersection):
+        raise ValueError(
+            "Cannot calculate reservoir length: fluid-silt line does not "
+            "intersect the sand-clay line"
+        )
+    res_len = float(length_a_b(A, reservoir_intersection))
     if rock_len <= 1e-9:
         rock_len = 1.0
     res_ratio = np.clip(res_len / rock_len, 1e-6, 1.0 - 1e-6)
@@ -857,4 +863,3 @@ def calc_stochastic_reservoir_summary(
         "summary_df": summary_df,
         "volumetrics": volumetrics_by_zone,
     }
-

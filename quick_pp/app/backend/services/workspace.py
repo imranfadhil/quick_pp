@@ -120,6 +120,8 @@ from quick_pp.uncertainty import (
 from quick_pp.upscaling import expand_blocked_logs, upscale_logs
 from quick_pp.utils import nd_triangle_coords
 
+DRY_SILT_RHOB = float(Config.SSC_ENDPOINTS["DRY_SILT_POINT"][1])
+
 router = APIRouter(
     prefix="/workspace/projects/{project_id}",
     tags=["Workspace Compute"],
@@ -2269,11 +2271,8 @@ def workspace_lithology(
                     "No valid NPHI and RHOB pairs found in the selected interval"
                 )
 
-            silt_pt = (
-                req.dry_silt_point
-                if req.dry_silt_point and req.dry_silt_point[1] is not None
-                else (None, 2.68)
-            )
+            # The workspace silt endpoint is derived at the configured dry-silt RHOB.
+            silt_pt = (None, DRY_SILT_RHOB)
             ssc_model = SandSiltClay(
                 dry_sand_point=req.dry_sand_point,
                 dry_silt_point=silt_pt,
@@ -3008,11 +3007,8 @@ def workspace_porosity(
                 "No valid NPHI and RHOB pairs found in the selected interval"
             )
 
-        silt_pt = (
-            req.dry_silt_point
-            if req.dry_silt_point and req.dry_silt_point[1] is not None
-            else (None, 2.68)
-        )
+        # Match workspace lithology: derive the silt endpoint at configured RHOB.
+        silt_pt = (None, DRY_SILT_RHOB)
         ssc_model = SandSiltClay(
             dry_sand_point=req.dry_sand_point,
             dry_silt_point=silt_pt,
