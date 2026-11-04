@@ -1544,7 +1544,7 @@
 				y: svgDepth,
 				xaxis: 'x4',
 				yaxis: 'y',
-				line: { color: '#64748B', width: 1.2, dash: '4px,3px' },
+				line: { color: PETRO_COLORS.phie, width: 1.2, dash: '4px,3px' },
 				hovertemplate: 'PHIE (QC): %{customdata:.3f} v/v<extra></extra>'
 			});
 		}

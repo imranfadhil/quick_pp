@@ -151,9 +151,12 @@ export interface SaturationModelParams {
 	tempGradient: number;
 	surfaceTemp: number;
 	bMethod: string;
-	qvMethod: string;
+	qvMethod: 'cec' | 'qvn' | 'crossplot';
 	cecClay: number;
 	rhoDryClay: number;
+	bqvAppliedSlope: number | null;
+	bqvAppliedRefDepth: number | null;
+	bqvAppliedRhoClay: number | null;
 	rsh: number;
 	swb: number;
 	rwb: number;
@@ -568,6 +571,7 @@ class WorkbenchState {
 		| 'phi-k'
 		| 'pickett'
 		| 'sw-comparison'
+		| 'bqv'
 		| 'histogram'
 		| 'mw-distribution'
 		| 'swirr-fit'
@@ -745,6 +749,9 @@ class WorkbenchState {
 		qvMethod: 'cec',
 		cecClay: 0.1,
 		rhoDryClay: 2.71,
+		bqvAppliedSlope: null,
+		bqvAppliedRefDepth: null,
+		bqvAppliedRhoClay: null,
 		rsh: 2.0,
 		swb: 0.2,
 		rwb: 0.1,

@@ -5,6 +5,7 @@
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
+	import { fillMissingCurve, fitBqvCrossplot } from '$lib/utils/saturation';
 
 	// Default reference depth is the bottom of the active filtered interval (or well max depth)
 	let defaultRefDepth = $derived.by(() => {
@@ -34,7 +35,7 @@
 
 	function estimateTempAndRwAtDepth(depthM: number) {
 		const sp = workbench.saturationParams;
-		const d = Number.isFinite(depthM) ? Math.max(0, depthM) : 0;
+		const d = Number.isFinite(depthM) ? depthM : 0;
 		let tempC: number;
 		if (sp.measSystem === 'imperial') {
 			const tvdKft = (d * 3.28084) / 1000.0;
@@ -48,12 +49,84 @@
 		const rw = Math.pow(400000.0 / (sal * tempF), 0.88);
 		return {
 			tempC: Number(tempC.toFixed(1)),
-			rw: Number(rw.toFixed(4))
+			rw: Number(rw.toFixed(4)),
+			tempCExact: tempC,
+			rwExact: rw
 		};
 	}
 
 	let estimatedRwAtSurface = $derived.by(() => estimateTempAndRwAtDepth(0));
 	let estimatedRwAtRefDepth = $derived.by(() => estimateTempAndRwAtDepth(refDepth));
+	let bqvReferenceRw = $derived.by(() => {
+		const md = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const tvd =
+			wellData.curves['TVDSS'] ?? wellData.curves['TVD'] ?? wellData.curves['DEPTH'] ?? md;
+		const fallbackTvd = wellData.curves['DEPTH'] ?? md;
+		let closestIndex = -1;
+		let closestDistance = Infinity;
+		for (const index of wellData.visibleIndices) {
+			const measuredDepth = md[index];
+			if (
+				Number.isFinite(measuredDepth) &&
+				Math.abs(measuredDepth - refDepth) < closestDistance
+			) {
+				closestIndex = index;
+				closestDistance = Math.abs(measuredDepth - refDepth);
+			}
+		}
+		const temperatureDepth =
+			closestIndex >= 0
+				? Number.isFinite(tvd[closestIndex])
+					? tvd[closestIndex]
+					: (fallbackTvd[closestIndex] ?? refDepth)
+				: refDepth;
+		return estimateTempAndRwAtDepth(temperatureDepth);
+	});
+	let bqvFit = $derived.by(() => {
+		const rawRt = wellData.curves['RT'] ?? [];
+		const rawPhit = wellData.curves['PHIT'] ?? [];
+		const rawVclay = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
+		const phitSand = wellData.curves['PHIT_SAND'];
+		const useTs =
+			workbench.tsParams.useInSaturation &&
+			Boolean(phitSand?.some((value) => Number.isFinite(value)));
+		return fitBqvCrossplot(
+			useTs ? fillMissingCurve(wellData.curves['RSAND_TS'], rawRt) : rawRt,
+			useTs ? fillMissingCurve(phitSand, rawPhit) : rawPhit,
+			useTs ? fillMissingCurve(wellData.curves['VSH_DIS'], rawVclay) : rawVclay,
+			wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [],
+			wellData.visibleIndices,
+			workbench.saturationParams.m
+		);
+	});
+	let crossplotCalibration = $derived.by(() => {
+		const fit = bqvFit;
+		if (fit.slope === null || fit.slope <= 0) return null;
+		const sp = workbench.saturationParams;
+		const rw = sp.rwMode === 'pickett' ? sp.rwPickett : bqvReferenceRw.rwExact;
+		const tempC = bqvReferenceRw.tempCExact;
+		const b =
+			(-1.28 + 0.225 * tempC - 0.0004059 * tempC ** 2) /
+			(1 + (0.045 * tempC - 0.27) * Math.pow(rw, 1.23));
+		const cec = (fit.slope * sp.a) / (b * sp.rhoDryClay);
+		return Number.isFinite(b) && b > 0 && Number.isFinite(cec) && cec > 0 ? { b, cec } : null;
+	});
+	let isCrossplotCalibrationStale = $derived.by(() => {
+		const sp = workbench.saturationParams;
+		if (sp.qvMethod !== 'crossplot') return false;
+		const fit = bqvFit;
+		return (
+			fit.slope === null ||
+			!crossplotCalibration ||
+			sp.bqvAppliedSlope === null ||
+			sp.bqvAppliedRefDepth === null ||
+			sp.bqvAppliedRhoClay === null ||
+			Math.abs(fit.slope - sp.bqvAppliedSlope) > Math.max(1e-6, Math.abs(fit.slope) * 1e-4) ||
+			Math.abs(refDepth - sp.bqvAppliedRefDepth) > 0.05 ||
+			Math.abs(sp.rhoDryClay - sp.bqvAppliedRhoClay) > 1e-6 ||
+			Math.abs(crossplotCalibration.cec - sp.cecClay) > 1e-4
+		);
+	});
 	const saturationModelLabels: Record<string, string> = {
 		archie: 'ARCHIE',
 		waxman_smits: 'WAXMAN-SMITS',
@@ -71,6 +144,11 @@
 
 	async function executeSaturation(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		if (workbench.saturationParams.qvMethod === 'crossplot' && isCrossplotCalibrationStale) {
+			wellData.lastError =
+				'Apply the current BQv crossplot fit before calculating Waxman-Smits saturation.';
+			return;
+		}
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const sp = workbench.saturationParams;
@@ -150,6 +228,18 @@
 
 	async function saveSaturation() {
 		await wellData.saveModuleComputed('saturation', 'Saturation Saved ✓');
+	}
+
+	function applyCrossplotCalibration() {
+		const fit = bqvFit;
+		const calibration = crossplotCalibration;
+		if (fit.slope === null || !calibration) return;
+		const sp = workbench.saturationParams;
+		sp.cecClay = Number(calibration.cec.toFixed(4));
+		sp.bqvAppliedSlope = fit.slope;
+		sp.bqvAppliedRefDepth = refDepth;
+		sp.bqvAppliedRhoClay = sp.rhoDryClay;
+		sp.qvMethod = 'crossplot';
 	}
 </script>
 
@@ -391,7 +481,11 @@
 		{#if workbench.saturationParams.method === 'waxman_smits'}
 			<ParameterSection
 				title="Shale Conductivity (B & Qv)"
-				badge={workbench.saturationParams.qvMethod === 'qvn' ? 'JUHASZ Qvn' : 'CLAY CEC Qv'}
+				badge={workbench.saturationParams.qvMethod === 'qvn'
+					? 'JUHASZ Qvn'
+					: workbench.saturationParams.qvMethod === 'crossplot'
+						? 'CROSSPLOT CEC'
+						: 'CLAY CEC Qv'}
 			>
 				<div class="mb-1 grid grid-cols-[1fr_130px] items-center gap-x-2 py-0.5">
 					<span class="text-xs font-medium text-[var(--text-primary)]">Qv Method</span>
@@ -401,10 +495,11 @@
 					>
 						<option value="cec">Clay CEC & Density</option>
 						<option value="qvn">Juhasz Normalized Qvn</option>
+						<option value="crossplot">Crossplot-calibrated CEC</option>
 					</select>
 				</div>
 
-				{#if workbench.saturationParams.qvMethod !== 'qvn'}
+				{#if workbench.saturationParams.qvMethod === 'cec'}
 					<NumericScrubber
 						label="Clay CEC"
 						bind:value={workbench.saturationParams.cecClay}
@@ -413,6 +508,31 @@
 						max={1.5}
 						step={0.01}
 					/>
+				{:else if workbench.saturationParams.qvMethod === 'crossplot'}
+					<div
+						class="rounded-xs border border-blue-200 bg-blue-50/70 p-1.5 text-[10.5px] text-blue-950"
+					>
+						<div class="font-semibold">
+							Applied clay CEC: {workbench.saturationParams.cecClay.toFixed(4)} meq/g
+						</div>
+						{#if isCrossplotCalibrationStale}
+							<div class="mt-0.5 text-amber-800">
+								The fit, reference depth, or clay density has changed. Apply the
+								current fit again before running saturation.
+							</div>
+						{/if}
+					</div>
+				{:else}
+					<div
+						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px] text-[var(--text-secondary)]"
+					>
+						Computes normalized <strong class="mono-num"
+							>Qvn = VCLAY × PHIT_SH / PHIT</strong
+						> from log-derived shale porosity (Juhasz, 1981).
+					</div>
+				{/if}
+
+				{#if workbench.saturationParams.qvMethod !== 'qvn'}
 					<NumericScrubber
 						label="Dry Clay Density"
 						bind:value={workbench.saturationParams.rhoDryClay}
@@ -421,11 +541,59 @@
 						max={2.95}
 						step={0.01}
 					/>
-				{:else}
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px] text-[var(--text-secondary)]">
-						Computes normalized <strong class="mono-num">Qvn = VCLAY × PHIT_SH / PHIT</strong> from log-derived shale porosity (Juhasz, 1981).
-					</div>
 				{/if}
+
+				<div
+					class="mt-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px] text-[var(--text-secondary)]"
+				>
+					<div>
+						{#if bqvFit.slope !== null && crossplotCalibration}
+							Current filtered fit slope: <strong class="mono-num"
+								>{bqvFit.slope.toFixed(4)}</strong
+							>
+							(<span class="mono-num">BQv/a</span>),
+							<strong class="mono-num"
+								>a × slope = {(bqvFit.slope * workbench.saturationParams.a).toFixed(
+									4
+								)}</strong
+							>,
+							<strong class="mono-num"
+								>R² = {bqvFit.r2 === null ? '—' : bqvFit.r2.toFixed(3)}</strong
+							>,
+							<strong class="mono-num">n = {bqvFit.points.length}</strong>. At {refDepth.toFixed(
+								1
+							)} m, B = {crossplotCalibration.b.toFixed(3)} and implied CEC =
+							{crossplotCalibration.cec.toFixed(4)} meq/g.
+						{:else}
+							Select an interval with at least two valid crossplot samples and a
+							positive fitted slope.
+						{/if}
+					</div>
+					<div class="mt-1 flex items-start justify-between gap-2">
+						<span class="text-[9.5px]">
+							Fit uses the current depth/zone filters. Use a water-bearing interval;
+							the crossplot slope is an effective estimate.
+						</span>
+						<button
+							type="button"
+							disabled={!bqvFit ||
+								!crossplotCalibration ||
+								crossplotCalibration.cec < 0.01 ||
+								crossplotCalibration.cec > 1.5}
+							onclick={applyCrossplotCalibration}
+							class="shrink-0 rounded-xs border border-blue-300 bg-white px-1.5 py-0.5 font-semibold text-blue-800 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-45"
+							title="Apply BQv slope as effective CEC at the reference depth"
+						>
+							Apply fit
+						</button>
+					</div>
+					{#if crossplotCalibration && (crossplotCalibration.cec < 0.01 || crossplotCalibration.cec > 1.5)}
+						<div class="mt-1 text-[var(--status-error)]">
+							Implied CEC is outside the supported 0.01–1.5 meq/g range; adjust the
+							fit interval or reference depth.
+						</div>
+					{/if}
+				</div>
 			</ParameterSection>
 		{/if}
 

@@ -10,6 +10,7 @@
 		PETRO_COLORS
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
+	import { fillMissingCurve, fitBqvCrossplot } from '$lib/utils/saturation';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 
@@ -1890,22 +1891,56 @@
 		}
 
 		if (effectiveMode === 'sw-comparison') {
-			const archie = wellData.curves['SWT_ARCHIE'] ?? [];
+			const vshKey = wellData.curves['VSHALE'] !== undefined ? 'VSHALE' : 'VCLAY';
+			const vshale = wellData.curves[vshKey] ?? [];
 			const models = [
-				{ key: 'SWT_WAXMAN', label: 'Waxman-Smits', color: '#2563EB', method: 'waxman_smits' },
+				{ key: 'SWT_ARCHIE', label: 'Archie', color: '#64748B', method: 'archie' },
+				{
+					key: 'SWT_WAXMAN',
+					label: 'Waxman-Smits',
+					color: '#2563EB',
+					method: 'waxman_smits'
+				},
 				{ key: 'SWT_SIMANDOUX', label: 'Simandoux', color: '#D97706', method: 'simandoux' },
-				{ key: 'SWT_INDONESIAN', label: 'Indonesian', color: '#059669', method: 'indonesian' },
-				{ key: 'SWT_DUAL_WATER', label: 'Dual Water', color: '#7C3AED', method: 'dual_water' }
+				{
+					key: 'SWT_INDONESIAN',
+					label: 'Indonesian',
+					color: '#059669',
+					method: 'indonesian'
+				},
+				{
+					key: 'SWT_DUAL_WATER',
+					label: 'Dual Water',
+					color: '#7C3AED',
+					method: 'dual_water'
+				}
 			] as const;
+
+			const vshX: number[] = [];
+			const vshY: number[] = [];
+			const vshIndices: number[] = [];
+			for (const idx of indices) {
+				const vsh = vshale[idx];
+				const depth = deptAll[idx];
+				if (Number.isFinite(vsh) && vsh >= 0 && vsh <= 1 && Number.isFinite(depth)) {
+					vshX.push(vsh);
+					vshY.push(depth);
+					vshIndices.push(idx);
+				}
+			}
 
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
-				name: '1:1 agreement',
-				x: [0, 1],
-				y: [0, 1],
-				line: { color: '#64748B', width: 1.2, dash: 'dash' },
-				hoverinfo: 'skip'
+				name: vshKey,
+				x: vshX,
+				y: vshY,
+				xaxis: 'x',
+				customdata: vshIndices,
+				line: { color: '#16A34A', width: 1.5 },
+				fill: 'tozerox',
+				fillcolor: 'rgba(22, 163, 74, 0.16)',
+				hovertemplate: `${vshKey}: %{x:.3f} v/v<br>Depth: %{y:.2f} m<extra></extra>`
 			});
 
 			for (const model of models) {
@@ -1913,50 +1948,158 @@
 				const xs: number[] = [];
 				const ys: number[] = [];
 				const customIdx: number[] = [];
-				const depths: number[] = [];
+				const vshAtDepth: (number | null)[] = [];
 				for (const idx of indices) {
-					const archieSw = archie[idx];
 					const modelValue = modelSw[idx];
 					if (
-						Number.isFinite(archieSw) &&
 						Number.isFinite(modelValue) &&
-						archieSw >= 0 &&
-						archieSw <= 1 &&
 						modelValue >= 0 &&
-						modelValue <= 1
+						modelValue <= 1 &&
+						Number.isFinite(deptAll[idx])
 					) {
-						xs.push(archieSw);
-						ys.push(modelValue);
+						xs.push(modelValue);
+						ys.push(deptAll[idx]);
 						customIdx.push(idx);
-						depths.push(deptAll[idx]);
+						const vsh = vshale[idx];
+						vshAtDepth.push(Number.isFinite(vsh) ? vsh : null);
 					}
 				}
 				const isSelected = workbench.saturationParams.method === model.method;
 				traces.push({
 					type: 'scatter',
-					mode: 'markers',
-					name: `${model.label} vs Archie`,
+					mode: 'lines+markers',
+					name: model.label,
 					x: xs,
 					y: ys,
+					xaxis: 'x2',
 					customdata: customIdx,
-					text: depths,
+					text: vshAtDepth,
 					marker: {
-						size: isSelected ? 7 : 5,
+						size: isSelected ? 4 : 2.5,
 						color: model.color,
-						opacity: isSelected ? 0.9 : 0.45,
-						line: { color: '#FFFFFF', width: 0.5 }
+						opacity: isSelected ? 0.95 : 0.65,
+						line: { color: '#FFFFFF', width: 0.4 }
 					},
-					hovertemplate:
-						'Depth: %{text:.2f} m<br>Archie Sw: %{x:.3f}<br>' +
-						`${model.label} Sw: %{y:.3f}<extra></extra>`
+					line: { color: model.color, width: isSelected ? 2.2 : 1.2 },
+					hovertemplate: `Depth: %{y:.2f} m<br>${model.label} Sw: %{x:.3f}<br>${vshKey}: %{text:.3f}<extra></extra>`
 				});
 			}
 
 			baseLayout.dragmode = 'lasso';
-			baseLayout.xaxis.title = { text: 'Archie Water Saturation (v/v)' };
+			baseLayout.xaxis.domain = [0, 0.24];
+			baseLayout.xaxis.title = { text: `${vshKey} (v/v)` };
 			baseLayout.xaxis.range = [0, 1];
-			baseLayout.yaxis.title = { text: 'Alternative Model Water Saturation (v/v)' };
-			baseLayout.yaxis.range = [0, 1];
+			baseLayout.xaxis.anchor = 'y';
+			baseLayout.xaxis2 = {
+				...baseLayout.xaxis,
+				domain: [0.34, 1],
+				title: { text: 'Water Saturation Sw (v/v)' },
+				range: [0, 1],
+				anchor: 'y'
+			};
+			baseLayout.yaxis.autorange = 'reversed';
+			baseLayout.yaxis.title = { text: 'Depth (m)' };
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'bqv') {
+			const tsPhit = wellData.curves['PHIT_SAND'];
+			const useTs =
+				workbench.tsParams.useInSaturation &&
+				Boolean(tsPhit?.some((value) => Number.isFinite(value)));
+			const rawRt = wellData.curves['RT'] ?? [];
+			const rawPhi = wellData.curves['PHIT'] ?? [];
+			const rawVcl = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
+			const rtArr = useTs
+				? fillMissingCurve(wellData.curves['RSAND_TS'], rawRt)
+				: rawRt;
+			const phiArr = useTs ? fillMissingCurve(tsPhit, rawPhi) : rawPhi;
+			const vclKey = useTs && wellData.curves['VSH_DIS'] !== undefined
+				? 'VSH_DIS'
+				: wellData.curves['VCLAY'] !== undefined
+					? 'VCLAY'
+					: 'VSHALE';
+			const vclArr =
+				useTs && vclKey === 'VSH_DIS'
+					? fillMissingCurve(wellData.curves['VSH_DIS'], rawVcl)
+					: rawVcl;
+			const rtKey = useTs && wellData.curves['RSAND_TS'] !== undefined ? 'RSAND_TS' : 'RT';
+			const phiKey = useTs && tsPhit !== undefined ? 'PHIT_SAND' : 'PHIT';
+			const m = workbench.saturationParams.m;
+			const fit = fitBqvCrossplot(rtArr, phiArr, vclArr, deptAll, indices, m);
+			const xs = fit.points.map((point) => point.x);
+			const ys = fit.points.map((point) => point.y);
+			const depths = fit.points.map((point) => point.depth);
+			const customIdx = fit.points.map((point) => point.index);
+
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: 'Log samples',
+				x: xs,
+				y: ys,
+				customdata: customIdx,
+				text: depths,
+				marker: {
+					size: 6,
+					color: '#2563EB',
+					opacity: 0.7,
+					line: { color: '#FFFFFF', width: 0.6 }
+				},
+				hovertemplate:
+					`Depth: %{text:.2f} m<br>${vclKey}/${phiKey}: %{x:.4f}<br>` +
+					`1/(${rtKey}·${phiKey}<sup>${m}</sup>): %{y:.4f} 1/ohm·m<extra></extra>`
+			});
+
+			if (fit.slope !== null && fit.intercept !== null) {
+				const { slope, intercept, r2 } = fit;
+				const a = workbench.saturationParams.a;
+				const effectiveBqv = slope * a;
+				const minX = Math.min(...xs);
+				const maxX = Math.max(...xs);
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: `Linear fit · a×slope=${fmtNum(effectiveBqv, 3)}`,
+					x: [minX, maxX],
+					y: [slope * minX + intercept, slope * maxX + intercept],
+					line: { color: '#DC2626', width: 2, dash: 'dash' },
+					hovertemplate:
+						`Fit slope (BQv/a): ${fmtNum(slope, 4)}<br>` +
+						`Effective BQv (a×slope): ${fmtNum(effectiveBqv, 4)}<br>` +
+						`Intercept (1/aRw): ${fmtNum(intercept, 4)} 1/ohm·m<br>` +
+						`R²: ${r2 === null ? '—' : fmtNum(r2, 4)}<extra></extra>`
+				});
+				baseLayout.annotations = [
+					{
+						xref: 'paper',
+						yref: 'paper',
+						x: 0.02,
+						y: 1.04,
+						xanchor: 'left',
+						yanchor: 'bottom',
+						showarrow: false,
+						text:
+							`Fit slope (BQv/a): ${fmtNum(slope, 4)} · ` +
+							`a×slope: ${fmtNum(effectiveBqv, 4)} · ` +
+							`1/aRw intercept: ${fmtNum(intercept, 4)} · ` +
+							`R²: ${r2 === null ? '—' : fmtNum(r2, 4)} · n=${xs.length}`,
+						font: { family: 'Inter', size: 10, color: '#334155' }
+					}
+				];
+			}
+
+			baseLayout.title = {
+				text: 'Waxman–Smits Conductivity Crossplot',
+				font: { family: 'Inter', size: 13, color: '#0F172A' }
+			};
+			baseLayout.margin.t = 58;
+			baseLayout.xaxis.title = { text: `${vclKey} / ${phiKey} (v/v)` };
+			baseLayout.xaxis.rangemode = 'tozero';
+			baseLayout.yaxis.title = {
+				text: `1 / (${rtKey} · ${phiKey}<sup>${m}</sup>) (1 / ohm·m)`
+			};
+			baseLayout.yaxis.rangemode = 'tozero';
 			return { traces, layout: baseLayout };
 		}
 
@@ -4305,12 +4448,26 @@
 			void wellData.curves[`${cName}_ORI`];
 			void wellData.stats[cName];
 		} else if (mode === 'sw-comparison') {
+			void wellData.curves['DEPT'];
+			void wellData.curves['DEPTH'];
+			void wellData.curves['VSHALE'];
+			void wellData.curves['VCLAY'];
 			void wellData.curves['SWT_ARCHIE'];
 			void wellData.curves['SWT_WAXMAN'];
 			void wellData.curves['SWT_SIMANDOUX'];
 			void wellData.curves['SWT_INDONESIAN'];
 			void wellData.curves['SWT_DUAL_WATER'];
 			void workbench.saturationParams.method;
+		} else if (mode === 'bqv') {
+			void wellData.curves['RT'];
+			void wellData.curves['PHIT'];
+			void wellData.curves['VCLAY'];
+			void wellData.curves['VSHALE'];
+			void wellData.curves['PHIT_SAND'];
+			void wellData.curves['RSAND_TS'];
+			void wellData.curves['VSH_DIS'];
+			void workbench.tsParams.useInSaturation;
+			void workbench.saturationParams.m;
 		} else if (mode === 'pickett') {
 			void wellData.curves['PHIT'];
 			void wellData.curves['RT'];
@@ -4676,7 +4833,11 @@
 				bind:value={workbench.crossplotTemplateOverride}
 				class="h-5 max-w-[195px] truncate rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
 			>
-				<option value="auto">Auto ({effectiveMode.toUpperCase()})</option>
+				<option value="auto"
+					>Auto ({effectiveMode === 'sw-comparison'
+						? 'SW vs Depth'
+						: effectiveMode.toUpperCase()})</option
+				>
 				<option value="mw-distribution">Multi-Well Distribution (QAQC)</option>
 				<option value="nphi-rhob">NPHI vs. RHOB (SSC)</option>
 				<option value="vsh-qc">Vsh Calibration (VSH_GR × VSH_DN)</option>
@@ -4690,7 +4851,8 @@
 				>
 				<option value="core-qc">Core Parity &amp; Error (Φ &amp; K)</option>
 				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
-				<option value="sw-comparison">Saturation Models vs Archie</option>
+				<option value="sw-comparison">Saturation vs Depth + VSHALE</option>
+				<option value="bqv">Waxman–Smits BQv</option>
 				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>
 				<option value="swirr-fit">Swirr &amp; Pc Fit (SCAL)</option>
 				<option value="shf">Sw vs. Height (SHF)</option>

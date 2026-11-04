@@ -218,6 +218,20 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert len(sat_body["data"]["SWT_ARCHIE"]) == 10
     assert len(sat_body["data"]["SWT_WAXMAN"]) == 10
 
+    r_sat_crossplot = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/saturation",
+        json={
+            "method": "waxman_smits",
+            "qv_method": "crossplot",
+            "cec_clay": 0.2,
+            "rho_dry_clay": 2.71,
+            "water_salinity": 35000.0,
+            "save": False,
+        },
+    )
+    assert r_sat_crossplot.status_code == 200
+    assert len(r_sat_crossplot.json()["data"]["SWT_WAXMAN"]) == 10
+
     # 6. Rock Typing across project (including empty well) & Perm Transform
     r_rt_winland = client.post(
         f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",

@@ -809,9 +809,9 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     b_intercept: Optional[float] = Field(
         None, description="Optional Waxman-Smits m* intercept override (defaults to m)"
     )
-    qv_method: str = Field(
+    qv_method: Literal["cec", "qvn", "crossplot"] = Field(
         "cec",
-        description="Qv estimation method: 'cec' (from cec_clay & rho_dry_clay) or 'qvn' (Juhasz normalized Qvn)",
+        description="Qv estimation method: 'cec' (from cec_clay & rho_dry_clay), 'qvn' (Juhasz normalized Qvn), or 'crossplot' (crossplot-calibrated effective CEC)",
     )
     cec_clay: float = Field(0.1, description="Clay cation exchange capacity (meq/g)")
     rho_dry_clay: float = Field(2.71, description="Dry clay bulk density (g/cc)")
@@ -3913,8 +3913,8 @@ def workspace_saturation(
                     ),
                     dtype=float,
                 ).ravel()
-        else:
-            # Default 'cec': compute Qv (meq/cm3) from VCLAY, dry clay density, and clay CEC
+        elif req.qv_method.lower() in {"cec", "crossplot"}:
+            # Crossplot mode supplies its calibrated effective CEC through cec_clay.
             qv_mask = vclay.notna() & phit.notna() & (phit > 0)
             if qv_mask.any():
                 qvn_s.loc[qv_mask] = np.asarray(
@@ -3926,6 +3926,11 @@ def workspace_saturation(
                     ),
                     dtype=float,
                 ).ravel()
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported Qv estimation method: {req.qv_method}",
+            )
 
         # 3. Archie SWT (strictly depth-aligned)
         swt_archie_s = pd.Series(np.nan, index=df.index, dtype=float)

@@ -78,7 +78,7 @@ export const PETRO_COLORS = {
 	core: '#0F172A',
 	perm: '#0284C7',
 	phie: '#2563EB',
-	phit: '#0F172A',
+	phit: '#2563EB',
 	phitSand: '#047857',
 	pota: '#EC4899',
 	thor: '#06B6D4',
@@ -577,4 +577,3 @@ export function getRockTypeFillRgba(
 	}
 	return hex;
 }
-
