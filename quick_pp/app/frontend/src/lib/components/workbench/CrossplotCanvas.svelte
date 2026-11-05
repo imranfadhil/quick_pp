@@ -5567,20 +5567,37 @@
 
 	{#if brushedSummary && effectiveMode !== 'bqv'}
 		<div
-			class="mono-num flex h-6 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-blue-50/70 px-2.5 text-[11px] text-blue-900"
+			class="mono-num flex min-h-6 shrink-0 flex-wrap items-center justify-between gap-1 border-t border-[var(--border-hairline)] bg-blue-50/70 px-2.5 py-0.5 text-[11px] text-blue-900"
 		>
 			<span>
 				Lasso: <strong>{brushedSummary.count} pts</strong> ({fmtDepth(
 					brushedSummary.min
 				)}–{fmtDepth(brushedSummary.max)})
 			</span>
-			<button
-				type="button"
-				onclick={() => workbench.setBrushedIndices([])}
-				class="text-[10px] font-semibold text-blue-700 hover:underline"
-			>
-				Clear Selection ×
-			</button>
+			<div class="flex items-center gap-2">
+				{#if workbench.scope === 'single-well'}
+					<label
+						class="flex items-center gap-1 rounded-xs border px-1.5 py-0.5 text-[10px] font-medium {workbench.useBrushedCalculationFilter
+							? 'border-amber-300 bg-amber-100 text-amber-900'
+							: 'border-blue-200 bg-blue-50 text-blue-700'}"
+						title="When enabled, calculation results update only the selected rows. Other rows are preserved."
+					>
+						<input
+							type="checkbox"
+							bind:checked={workbench.useBrushedCalculationFilter}
+							class="h-3 w-3 rounded-sm"
+						/>
+						Apply to selection
+					</label>
+				{/if}
+				<button
+					type="button"
+					onclick={() => workbench.setBrushedIndices([])}
+					class="text-[10px] font-semibold text-blue-700 hover:underline"
+				>
+					Clear Selection ×
+				</button>
+			</div>
 		</div>
 	{/if}
 </div>

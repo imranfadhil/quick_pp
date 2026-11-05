@@ -20,6 +20,12 @@
 
 	async function executePerm(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
@@ -58,18 +64,22 @@
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,
 						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-						save: persist
+						save: persist && !selectionMode
 					} as any
 				}
 			);
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Permeability calculation failed'));
 			}
-			wellData.mergeComputedCurves(data.data, data.stats);
+			wellData.mergeComputedCurves(data.data, data.stats, selectionIndices);
 			wellData.markModuleComputed('perm', data.data);
 			wellData.permCoreMetrics = data.core_metrics;
 			if (persist) {
-				wellData.lastSavedMessage = 'Permeability Saved ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed('perm', 'Permeability Saved ✓');
+				} else {
+					wellData.lastSavedMessage = 'Permeability Saved ✓';
+				}
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Permeability error';

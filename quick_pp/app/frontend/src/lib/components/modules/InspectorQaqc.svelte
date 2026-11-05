@@ -673,6 +673,12 @@
 
 	async function runBadholeFlagging(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const bp = workbench.badholeParams;
@@ -698,18 +704,22 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					save: persist
+					save: persist && !selectionMode
 				}
 			);
 			if (res.data) {
-				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.mergeComputedCurves(res.data, res.stats, selectionIndices);
 				wellData.markModuleComputed('qaqc-badhole', res.data);
 			}
 			if (res.badhole_summary) {
 				badholeSummary = res.badhole_summary;
 			}
 			if (persist) {
-				wellData.lastSavedMessage = 'Badhole Flags Saved ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed('qaqc-badhole', 'Badhole Flags Saved ✓');
+				} else {
+					wellData.lastSavedMessage = 'Badhole Flags Saved ✓';
+				}
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Badhole flagging error';
@@ -739,6 +749,12 @@
 
 	async function runEnvCorrections(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		try {
@@ -753,15 +769,19 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					save: persist
+					save: persist && !selectionMode
 				}
 			);
 			if (res.data) {
-				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.mergeComputedCurves(res.data, res.stats, selectionIndices);
 				wellData.markModuleComputed('qaqc-env', res.data);
 			}
 			if (persist) {
-				wellData.lastSavedMessage = 'Env Corrections Saved ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed('qaqc-env', 'Env Corrections Saved ✓');
+				} else {
+					wellData.lastSavedMessage = 'Env Corrections Saved ✓';
+				}
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Environmental corrections error';

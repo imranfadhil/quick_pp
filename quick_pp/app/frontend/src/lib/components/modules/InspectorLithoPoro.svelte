@@ -233,6 +233,12 @@
 
 	async function executeLithoPoro(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		const runId = ++lithoPoroRunId;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
@@ -248,7 +254,7 @@
 			min_depth: workbench.depthFilter?.min ?? null,
 			max_depth: workbench.depthFilter?.max ?? null,
 			zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-			save: persist
+			save: persist && !selectionMode
 		};
 
 		const coalArgs = {
@@ -430,17 +436,21 @@
 
 			// Apply all computed curves from Steps 1–4 in a single atomic reactive update
 			if (Object.keys(batchedCurves).length > 0) {
-				wellData.mergeComputedCurves(batchedCurves, batchedStats);
+				wellData.mergeComputedCurves(batchedCurves, batchedStats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', batchedCurves);
 			}
 
 			if (persist) {
-				wellData.lastSavedMessage = 'Litho & Poro Saved ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed('litho-poro', 'Litho & Poro Saved ✓');
+				} else {
+					wellData.lastSavedMessage = 'Litho & Poro Saved ✓';
+				}
 			}
 		} catch (e: any) {
 			if (runId !== lithoPoroRunId) return;
 			if (Object.keys(batchedCurves).length > 0) {
-				wellData.mergeComputedCurves(batchedCurves, batchedStats);
+				wellData.mergeComputedCurves(batchedCurves, batchedStats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', batchedCurves);
 			}
 			wellData.lastError = e?.message || 'Lithology/Porosity error';
@@ -453,6 +463,12 @@
 
 	async function executeThomasStieber(persist: boolean = false, chained: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		if (!chained) {
 			wellData.isCalculating = true;
 			wellData.lastError = null;
@@ -477,11 +493,11 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					save: persist
+					save: persist && !selectionMode
 				}
 			);
 			if (res.data) {
-				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.mergeComputedCurves(res.data, res.stats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', res.data);
 			}
 			workbench.tsParams.enabled = true;
@@ -489,7 +505,11 @@
 				tsSummary = res.summary;
 			}
 			if (persist && !chained) {
-				wellData.lastSavedMessage = 'Thomas-Stieber Saved ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed('litho-poro', 'Thomas-Stieber Saved ✓');
+				} else {
+					wellData.lastSavedMessage = 'Thomas-Stieber Saved ✓';
+				}
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Thomas-Stieber estimation failed';
@@ -514,6 +534,12 @@
 
 	async function executePretrainedMlInference(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		try {
@@ -526,14 +552,14 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					save: persist
+					save: persist && !selectionMode
 				}
 			);
 			if (res.data) {
-				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.mergeComputedCurves(res.data, res.stats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', res.data);
 			} else if (res.computed_curves) {
-				wellData.mergeComputedCurves(res.computed_curves, res.stats);
+				wellData.mergeComputedCurves(res.computed_curves, res.stats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', res.computed_curves);
 			}
 			mlSummary = {
@@ -546,7 +572,14 @@
 				perm_median_p90_p10_factor: res.interval_width_summary?.perm_median_p90_p10_factor ?? 1
 			};
 			if (persist) {
-				wellData.lastSavedMessage = 'Pre-Trained Conformal Bounds Applied ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed(
+						'litho-poro',
+						'Pre-Trained Conformal Bounds Applied ✓'
+					);
+				} else {
+					wellData.lastSavedMessage = 'Pre-Trained Conformal Bounds Applied ✓';
+				}
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Pre-trained ML inference failed';

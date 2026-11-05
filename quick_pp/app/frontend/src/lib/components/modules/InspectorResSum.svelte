@@ -45,6 +45,12 @@
 
 	async function executeResSum(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		try {
@@ -66,20 +72,28 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					save: persist
+					save: persist && !selectionMode
 				}
 			);
 
 			if (data.flags?.data) {
-				wellData.mergeComputedCurves(data.flags.data);
+				wellData.mergeComputedCurves(data.flags.data, undefined, selectionIndices);
 				wellData.markModuleComputed('ressum', data.flags.data);
 			}
 			if (data.upscaling?.step_log?.data) {
-				wellData.mergeComputedCurves(data.upscaling.step_log.data);
+				wellData.mergeComputedCurves(
+					data.upscaling.step_log.data,
+					undefined,
+					selectionIndices
+				);
 				wellData.markModuleComputed('ressum', data.upscaling.step_log.data);
 			}
 			if (data.uncertainty?.cpi?.data) {
-				wellData.mergeComputedCurves(data.uncertainty.cpi.data);
+				wellData.mergeComputedCurves(
+					data.uncertainty.cpi.data,
+					undefined,
+					selectionIndices
+				);
 				wellData.markModuleComputed('ressum', data.uncertainty.cpi.data);
 			}
 			wellData.zonalSummary = data.summary || [];
@@ -113,7 +127,11 @@
 			}
 
 			if (persist) {
-				wellData.lastSavedMessage = 'Pay Flags Saved ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed('ressum', 'Pay Flags Saved ✓');
+				} else {
+					wellData.lastSavedMessage = 'Pay Flags Saved ✓';
+				}
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Reservoir summary error';
@@ -558,5 +576,4 @@
 		</button>
 	</div>
 </div>
-
 

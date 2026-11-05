@@ -543,6 +543,7 @@ class WorkbenchState {
 	// Synchronized cursor & crossplot lasso brushing
 	cursorDepth = $state<number | null>(null);
 	brushedDepthIndices = $state<Set<number>>(new Set());
+	useBrushedCalculationFilter = $state<boolean>(false);
 	targetScrollDepth = $state<number | null>(null);
 
 	// Right pane view mode
@@ -1046,10 +1047,14 @@ class WorkbenchState {
 		this.depthFilter = null;
 		this.selectedZones = [];
 		this.brushedDepthIndices = new Set();
+		this.useBrushedCalculationFilter = false;
 	}
 
 	setBrushedIndices(indices: number[]) {
 		this.brushedDepthIndices = new Set(indices);
+		if (this.brushedDepthIndices.size === 0) {
+			this.useBrushedCalculationFilter = false;
+		}
 	}
 
 	scrollToDepth(depth: number) {

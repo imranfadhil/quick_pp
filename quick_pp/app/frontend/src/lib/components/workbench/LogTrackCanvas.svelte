@@ -4039,13 +4039,30 @@
 		</div>
 
 		{#if workbench.brushedDepthIndices.size > 0}
-			<button
-				type="button"
-				onclick={() => workbench.setBrushedIndices([])}
-				class="rounded-xs border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 hover:bg-blue-100"
-			>
-				Lasso: {workbench.brushedDepthIndices.size} pts (Clear ×)
-			</button>
+			<div class="flex items-center gap-1">
+				{#if workbench.scope === 'single-well'}
+					<label
+						class="flex items-center gap-1 rounded-xs border px-1.5 py-0.5 text-[10px] font-medium {workbench.useBrushedCalculationFilter
+							? 'border-amber-300 bg-amber-100 text-amber-900'
+							: 'border-blue-200 bg-blue-50 text-blue-700'}"
+						title="When enabled, calculation results update only the selected rows. Other rows are preserved."
+					>
+						<input
+							type="checkbox"
+							bind:checked={workbench.useBrushedCalculationFilter}
+							class="h-3 w-3 rounded-sm"
+						/>
+						Apply to selection
+					</label>
+				{/if}
+				<button
+					type="button"
+					onclick={() => workbench.setBrushedIndices([])}
+					class="rounded-xs border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 hover:bg-blue-100"
+				>
+					Lasso: {workbench.brushedDepthIndices.size} pts (Clear ×)
+				</button>
+			</div>
 		{/if}
 	</div>
 </div>

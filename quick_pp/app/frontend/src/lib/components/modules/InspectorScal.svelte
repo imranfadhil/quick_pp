@@ -45,6 +45,11 @@
 	}
 
 	async function runCoreCorrections() {
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const sp = workbench.scalParams;
@@ -63,6 +68,21 @@
 				wellData.originalCurves['CPERM'] ??
 				wellData.curves['CPERM'] ??
 				[];
+			const isDepthInSelection = (depth: number) => {
+				if (!selectionIndices) return true;
+				let closestIndex = -1;
+				let closestDelta = Infinity;
+				for (const idx of selectionIndices) {
+					const selectedDepth = dept[idx];
+					if (!Number.isFinite(selectedDepth)) continue;
+					const delta = Math.abs(selectedDepth - depth);
+					if (delta < closestDelta) {
+						closestIndex = idx;
+						closestDelta = delta;
+					}
+				}
+				return closestIndex >= 0 && closestDelta <= 0.5;
+			};
 
 			const records: Array<{ DEPTH: number; CPORE: number; CPERM: number }> = [];
 			const validSampleIndices: number[] = [];
@@ -73,7 +93,10 @@
 					const origS = wellData.originalCoreSamples[idx];
 					const dCur = Number(s.depth ?? s.DEPTH ?? origS?.depth ?? idx + 1);
 					const dRaw = Number(s.raw_depth ?? origS?.raw_depth ?? dCur);
-					if (!wellData.isCorePlugInActiveFilter(dRaw, dCur)) {
+					if (
+						!wellData.isCorePlugInActiveFilter(dRaw, dCur) ||
+						!isDepthInSelection(dCur)
+					) {
 						return;
 					}
 					// Always read from ambient/uncorrected baseline so repeated Compute runs never double-correct
@@ -109,6 +132,7 @@
 				});
 			} else if (dept.length > 0 && (cporeBaseCurve.length > 0 || cpermBaseCurve.length > 0)) {
 				for (const i of wellData.visibleIndices) {
+					if (selectionIndices && !selectionIndices.has(i)) continue;
 					const dRaw = dept[i];
 					const pRaw = cporeBaseCurve[i];
 					const kRaw = cpermBaseCurve[i];
@@ -127,7 +151,7 @@
 						validCurveIndices.push(i);
 					}
 				}
-			} else {
+			} else if (!selectionIndices) {
 				// Fallback synthetic plugs when well has no core samples loaded
 				[
 					{ depth: 2010, porosity: 0.18, perm: 45 },
@@ -280,7 +304,7 @@
 					CPERM_AIR: newCpermAir,
 					CPORE_ORI: newCporeAmb,
 					CPERM_ORI: newCpermAir
-				});
+				}, undefined, selectionIndices);
 				wellData.markModuleComputed('scal', [
 					'CPORE',
 					'CPERM',

@@ -1432,6 +1432,7 @@ class WellDataState {
 			this.pendingParamSnapshots = {};
 			moduleParams.reset();
 			workbench.brushedDepthIndices = new Set();
+			workbench.useBrushedCalculationFilter = false;
 			workbench.tsParams.enabled = false;
 
 			// Restore persisted SCAL, Core Overburden/Klinkenberg & Pc scaling parameters from well config
@@ -1623,14 +1624,19 @@ class WellDataState {
 	 */
 	mergeComputedCurves(
 		computedData: Record<string, (number | string | null)[]>,
-		newStats?: Record<string, CurveSummaryStats>
+		newStats?: Record<string, CurveSummaryStats>,
+		targetIndices?: ReadonlySet<number> | null
 	) {
 		const baseDept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		const incomingDept = (computedData['DEPTH'] ?? computedData['DEPT'] ?? []) as (number | null)[];
+		const selectedIndices = targetIndices ?? null;
+		if (selectedIndices && selectedIndices.size === 0) {
+			throw new Error('Select at least one visible row before calculating on the selection.');
+		}
 
 		const updated = { ...this.curves };
 
-		if (incomingDept.length === baseDept.length || baseDept.length === 0) {
+		if (!selectedIndices && (incomingDept.length === baseDept.length || baseDept.length === 0)) {
 			for (const [col, vals] of Object.entries(computedData)) {
 				if (col === 'WELL_NAME' || col === 'ZONES') continue;
 				updated[col] = vals.map((v) =>
@@ -1639,7 +1645,7 @@ class WellDataState {
 			}
 			if (updated['DEPTH']) updated['DEPT'] = updated['DEPTH'];
 		} else {
-			// Depth-indexed merge for filtered interval calculations
+			// Depth-indexed merge for filtered interval and selected-row calculations
 			const depthToIdx = new Map<number, number>();
 			baseDept.forEach((d, idx) => {
 				if (Number.isFinite(d)) depthToIdx.set(Number(d.toFixed(4)), idx);
@@ -1650,15 +1656,26 @@ class WellDataState {
 				const targetArr = updated[col]
 					? [...updated[col]]
 					: new Array(baseDept.length).fill(Number.NaN);
-				incomingDept.forEach((d, i) => {
-					if (d === null || d === undefined) return;
-					const targetIdx = depthToIdx.get(Number(Number(d).toFixed(4)));
-					if (targetIdx !== undefined) {
+				const positionalRows = vals.length === baseDept.length;
+				const rowCount = incomingDept.length || (positionalRows ? vals.length : 0);
+				for (let i = 0; i < rowCount; i++) {
+					const d = incomingDept[i];
+					if ((d === null || d === undefined) && !positionalRows) continue;
+					const targetIdx =
+						d !== null && d !== undefined
+							? depthToIdx.get(Number(Number(d).toFixed(4)))
+							: positionalRows && i < baseDept.length
+								? i
+								: undefined;
+					if (
+						targetIdx !== undefined &&
+						(!selectedIndices || selectedIndices.has(targetIdx))
+					) {
 						const v = vals[i];
 						targetArr[targetIdx] =
 							typeof v === 'number' && Number.isFinite(v) ? v : Number.NaN;
 					}
-				});
+				}
 				updated[col] = targetArr;
 			}
 		}
@@ -1672,14 +1689,23 @@ class WellDataState {
 				const calcSt = computeSummaryStats(updated[col], finalDept);
 				mergedStats[col] = {
 					...calcSt,
-					...(newStats?.[col] || {}),
-					top: newStats?.[col]?.top ?? calcSt.top,
-					bottom: newStats?.[col]?.bottom ?? calcSt.bottom,
-					std: newStats?.[col]?.std ?? calcSt.std
+					...(selectedIndices ? {} : newStats?.[col] || {}),
+					top: selectedIndices ? calcSt.top : (newStats?.[col]?.top ?? calcSt.top),
+					bottom: selectedIndices ? calcSt.bottom : (newStats?.[col]?.bottom ?? calcSt.bottom),
+					std: selectedIndices ? calcSt.std : (newStats?.[col]?.std ?? calcSt.std)
 				};
 			}
 		}
 		this.stats = mergedStats;
+	}
+
+	getBrushedCalculationIndices(): Set<number> | null {
+		if (workbench.scope !== 'single-well' || !workbench.useBrushedCalculationFilter) {
+			return null;
+		}
+		return new Set(
+			this.visibleIndices.filter((idx) => workbench.brushedDepthIndices.has(idx))
+		);
 	}
 
 	/**

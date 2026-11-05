@@ -158,6 +158,12 @@
 				'Apply the current BQv crossplot fit before calculating Waxman-Smits saturation.';
 			return;
 		}
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const sp = workbench.saturationParams;
@@ -208,14 +214,14 @@
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,
 						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-						save: persist
+						save: persist && !selectionMode
 					} as any
 				}
 			);
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Saturation calculation failed'));
 			}
-			wellData.mergeComputedCurves(data.data, data.stats);
+			wellData.mergeComputedCurves(data.data, data.stats, selectionIndices);
 			wellData.markModuleComputed('saturation', data.data);
 			// If using Salinity & Temp Gradient mode, sync the median computed Rw to rwPickett for the Pickett Plot line
 			if (sp.rwMode === 'salinity_temp') {
@@ -226,7 +232,11 @@
 				}
 			}
 			if (persist) {
-				wellData.lastSavedMessage = 'Saturation Saved ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed('saturation', 'Saturation Saved ✓');
+				} else {
+					wellData.lastSavedMessage = 'Saturation Saved ✓';
+				}
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Saturation error';
