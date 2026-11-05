@@ -487,10 +487,22 @@ def neu_den_xplot_hc_correction(
         flag = flag & valid
 
         # 2. Correction ray direction, expressed in the (phi, vcl) frame
-        rad = np.radians(float(corr_angle))
-        ux, uy = float(np.cos(rad)), float(np.sin(rad))
-        dphi, dvcl = nd_triangle_coords(A[0] + ux, A[1] + uy, A, C, D)
-        dphi, dvcl = float(dphi), float(dvcl)
+        angle = np.asarray(corr_angle, dtype=float)
+        if angle.ndim == 0:
+            rad = np.radians(float(angle))
+            ux, uy = float(np.cos(rad)), float(np.sin(rad))
+            dphi, dvcl = nd_triangle_coords(A[0] + ux, A[1] + uy, A, C, D)
+            dphi, dvcl = float(dphi), float(dvcl)
+        else:
+            try:
+                angle = np.broadcast_to(angle, nphi.shape)
+            except ValueError as exc:
+                raise ValueError(
+                    "corr_angle must be scalar or match the shape of nphi."
+                ) from exc
+            rad = np.radians(angle)
+            ux, uy = np.cos(rad), np.sin(rad)
+            dphi, dvcl = nd_triangle_coords(A[0] + ux, A[1] + uy, A, C, D)
 
         # 3. Exact ray length to reach the target iso-Vshale line
         if target_mode == "bulk":
@@ -500,10 +512,13 @@ def neu_den_xplot_hc_correction(
             denom = dvcl + target_vsh * dphi
             numer = target_vsh * (1.0 - phi0) - vcl0
         s = np.where(np.abs(denom) > 1e-12, numer / denom, np.nan)
-
         # Do not cross the zero-porosity (A-C) line
-        if dphi < 0:
-            s = np.minimum(s, -phi0 / dphi)
+        # Do not cross the zero-porosity (A-C) line
+        if np.ndim(dphi) == 0:
+            if dphi < 0:
+                s = np.minimum(s, -phi0 / dphi)
+        else:
+            s = np.where(dphi < 0, np.minimum(s, -phi0 / dphi), s)
 
         move = flag & np.isfinite(s) & (s > 0)
         nphi_corrected = np.where(move, nphi + s * ux, nphi)
@@ -532,12 +547,16 @@ def neu_den_xplot_hc_correction_angle(rho_water=1.0, rho_hc=0.3, HI_hc=None):
             (liquids). Defaults to None.
 
     Returns:
-        float: The hydrocarbon correction angle in degrees (90 for HI_hc = 1, > 90 for HI_hc > 1).
+        float or np.ndarray: The hydrocarbon correction angle in degrees (90 for
+            HI_hc = 1, > 90 for HI_hc > 1).
     """
     if HI_hc is None:
-        HI_hc = min(2.2 * float(rho_hc), 1.0)
-    return float(
-        np.degrees(np.arctan2(float(rho_water) - float(rho_hc), 1.0 - float(HI_hc)))
+        HI_hc = np.minimum(2.2 * np.asarray(rho_hc, dtype=float), 1.0)
+    return np.degrees(
+        np.arctan2(
+            np.asarray(rho_water, dtype=float) - np.asarray(rho_hc, dtype=float),
+            1.0 - np.asarray(HI_hc, dtype=float),
+        )
     )
 
 
@@ -1626,5 +1645,3 @@ def apply_environmental_corrections(
         out_df["INVASION_FLAG"] = inv_flag
 
     return out_df
-
-

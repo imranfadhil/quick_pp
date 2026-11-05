@@ -198,6 +198,8 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
         strict=True,
     ):
         assert np.isclose(vshale, vclay + vsilt)
+
+
     assert lith_body["crossplot"]["dry_silt_point"][1] == 2.68
     expected_silt_nphi = 1.0 + (
         (2.68 - 1.0) / np.tan(np.deg2rad(116.0))
@@ -401,6 +403,95 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     )
     assert r_put.status_code == 200
     assert r_put.json()["rows"] == 2
+
+
+def test_dynamic_hc_correction_returns_depth_aligned_fluid_curves(client_and_project):
+    client, pid = client_and_project
+    response = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/hc_correction",
+        json={
+            "mode": "dynamic",
+            "temp_grad": 35.0,
+            "pres_grad": 12.0,
+            "gas_gravity": 0.7,
+            "oil_api": 32.0,
+            "gor": 250.0,
+            "salinity_ppm": 45000.0,
+        },
+    )
+
+    assert response.status_code == 200
+    curves = response.json()["data"]
+    for curve in (
+        "TEMP_FL",
+        "PRES_FL",
+        "RHO_W",
+        "RHO_O",
+        "RHO_G",
+        "HI_W",
+        "HI_O",
+        "HI_G",
+        "RHO_H",
+        "HI_H",
+        "Z_FACTOR",
+    ):
+        assert len(curves[curve]) == 10
+    np.testing.assert_allclose(curves["RHO_H"], curves["RHO_O"])
+    np.testing.assert_allclose(curves["HI_H"], curves["HI_O"])
+    assert response.json()["stats"]["RHO_H"]["count"] == 10
+
+
+def test_dynamic_hc_correction_rejects_measured_depth_without_tvd(
+    client_and_project, monkeypatch
+):
+    client, pid = client_and_project
+    well_df = ws_service._get_filtered_well_df(
+        pid, "Well-A", min_depth=None, max_depth=None, zones=None
+    )
+    well_df = well_df.drop(
+        columns=[
+            "DEPT_TVD",
+            "DEPTH_TVD",
+            "TVDSS",
+            "DEPT_TVDSS",
+            "DEPTH_TVDSS",
+            "TVD_SS",
+        ],
+        errors="ignore",
+    )
+    well_df["TVD"] = np.nan
+    monkeypatch.setattr(
+        ws_service, "_get_filtered_well_df", lambda *args, **kwargs: well_df
+    )
+
+    response = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/hc_correction",
+        json={"mode": "dynamic"},
+    )
+
+    assert response.status_code == 400
+    assert "TVD or TVDSS curve" in response.json()["detail"]
+    assert "Measured depth" in response.json()["detail"]
+
+
+def test_dynamic_hc_correction_accepts_tvdss(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    well_df = ws_service._get_filtered_well_df(
+        pid, "Well-A", min_depth=None, max_depth=None, zones=None
+    )
+    well_df = well_df.drop(columns=["TVD"])
+    well_df["TVDSS"] = np.linspace(900.0, 909.0, len(well_df))
+    monkeypatch.setattr(
+        ws_service, "_get_filtered_well_df", lambda *args, **kwargs: well_df
+    )
+
+    response = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/hc_correction",
+        json={"mode": "dynamic"},
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()["data"]["RHO_H"]) == len(well_df)
 
 
 def test_saturation_model_comparison_curves_and_archie_default(client_and_project):

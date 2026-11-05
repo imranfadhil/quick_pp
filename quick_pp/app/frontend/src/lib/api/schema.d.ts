@@ -183,6 +183,16 @@ export interface paths {
 						rho_water?: number;
 						rho_hc?: number;
 						hi_hc?: number;
+						mode?: 'constant' | 'dynamic';
+						use_apparent_elec_density?: boolean;
+						temp_grad?: number;
+						surf_temp?: number;
+						pres_grad?: number;
+						surf_pres?: number;
+						gas_gravity?: number;
+						oil_api?: number;
+						gor?: number;
+						salinity_ppm?: number;
 						buffer?: number;
 						flag_mode?: 'strict' | 'vsh_gr';
 						vsh_tol?: number;
@@ -542,4 +552,3 @@ export interface paths {
 		};
 	};
 }
-

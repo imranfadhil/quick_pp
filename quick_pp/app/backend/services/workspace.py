@@ -49,6 +49,7 @@ from quick_pp.core_analysis import (
 )
 from quick_pp.database import models as db_models
 from quick_pp.database import objects as db_objects
+from quick_pp.fluid_type import estimate_fluid_properties
 from quick_pp.las_handler import extract_las_metadata
 from quick_pp.lithology import gr_index
 from quick_pp.lithology.multi_mineral import MultiMineral
@@ -563,6 +564,20 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
     rho_water: float = Field(1.0, description="Water density (g/cc)")
     rho_hc: float = Field(0.8, description="Hydrocarbon density (g/cc)")
     hi_hc: float = Field(0.9, description="Hydrocarbon hydrogen index")
+    mode: Literal["constant", "dynamic"] = Field(
+        "constant", description="Constant fluid properties or dynamic P-T EOS modeling"
+    )
+    use_apparent_elec_density: bool = Field(
+        False, description="Use apparent electron density when deriving correction angles"
+    )
+    temp_grad: float = Field(30.0, ge=5.0, le=100.0)
+    surf_temp: float = Field(25.0, ge=0.0, le=60.0)
+    pres_grad: float = Field(10.2, ge=5.0, le=25.0)
+    surf_pres: float = Field(0.1013, ge=0.0, le=5.0)
+    gas_gravity: float = Field(0.65, ge=0.55, le=1.5)
+    oil_api: float = Field(35.0, ge=5.0, le=70.0)
+    gor: float = Field(100.0, ge=0.0, le=5000.0)
+    salinity_ppm: float = Field(30000.0, ge=0.0, le=350000.0)
     buffer: float = Field(
         0.0,
         description="Flagging tolerance (crossplot distance along matrix-clay line); only widens HC flagging",
@@ -1747,7 +1762,155 @@ def workspace_hc_correction(
                 "No valid NPHI and RHOB pairs found in the selected interval"
             )
 
-        if req.corr_angle is not None:
+        fluid_curves: Dict[str, np.ndarray] = {}
+        tvd: Optional[np.ndarray] = None
+        if req.mode == "dynamic":
+            curve_lookup = {str(column).upper(): column for column in df.columns}
+            for name in (
+                "TVD",
+                "DEPT_TVD",
+                "DEPTH_TVD",
+                "TVDSS",
+                "DEPT_TVDSS",
+                "DEPTH_TVDSS",
+                "TVD_SS",
+            ):
+                tvd_column = curve_lookup.get(name)
+                if tvd_column is None:
+                    continue
+                candidate_tvd = pd.to_numeric(
+                    df[tvd_column], errors="coerce"
+                ).to_numpy(dtype=float)
+                if np.isfinite(candidate_tvd).any():
+                    tvd = candidate_tvd
+                    break
+            if tvd is None:
+                raise ValueError(
+                    "Dynamic fluid modeling requires at least one finite sample in a "
+                    "TVD or TVDSS curve. Measured depth (DEPT/DEPTH) cannot be used "
+                    "as a substitute."
+                )
+            temp_column = next(
+                (
+                    curve_lookup[name]
+                    for name in ("TEMP", "TEMPERATURE")
+                    if name in curve_lookup
+                ),
+                None,
+            )
+            pres_column = next(
+                (
+                    curve_lookup[name]
+                    for name in ("PRES", "PRESSURE")
+                    if name in curve_lookup
+                ),
+                None,
+            )
+            temp_curve = (
+                pd.to_numeric(df[temp_column], errors="coerce").to_numpy(dtype=float)
+                if temp_column is not None
+                else None
+            )
+            pres_curve = (
+                pd.to_numeric(df[pres_column], errors="coerce").to_numpy(dtype=float)
+                if pres_column is not None
+                else None
+            )
+            fluid_curves = estimate_fluid_properties(
+                tvd=tvd,
+                temp_grad=req.temp_grad,
+                surf_temp=req.surf_temp,
+                pres_grad=req.pres_grad,
+                surf_pres=req.surf_pres,
+                gas_gravity=req.gas_gravity,
+                oil_api=req.oil_api,
+                gor=req.gor,
+                salinity_ppm=req.salinity_ppm,
+                temp_curve=temp_curve,
+                pres_curve=pres_curve,
+            )
+
+            oil_column = next(
+                (
+                    curve_lookup[name]
+                    for name in ("OIL_FLAG", "VOIL")
+                    if name in curve_lookup
+                ),
+                None,
+            )
+            gas_column = next(
+                (
+                    curve_lookup[name]
+                    for name in ("GAS_FLAG", "VGAS")
+                    if name in curve_lookup
+                ),
+                None,
+            )
+            oil_weight = (
+                np.maximum(
+                    np.nan_to_num(
+                        pd.to_numeric(df[oil_column], errors="coerce").to_numpy(
+                            dtype=float
+                        ),
+                        nan=0.0,
+                    ),
+                    0.0,
+                )
+                if oil_column is not None
+                else np.ones(len(df), dtype=float)
+            )
+            gas_weight = (
+                np.maximum(
+                    np.nan_to_num(
+                        pd.to_numeric(df[gas_column], errors="coerce").to_numpy(
+                            dtype=float
+                        ),
+                        nan=0.0,
+                    ),
+                    0.0,
+                )
+                if gas_column is not None
+                else np.zeros(len(df), dtype=float)
+            )
+            total_hc_weight = oil_weight + gas_weight
+            oil_fraction = np.divide(
+                oil_weight,
+                total_hc_weight,
+                out=np.ones_like(oil_weight),
+                where=total_hc_weight > 0,
+            )
+            gas_fraction = np.divide(
+                gas_weight,
+                total_hc_weight,
+                out=np.zeros_like(gas_weight),
+                where=total_hc_weight > 0,
+            )
+            fluid_curves["RHO_H"] = (
+                oil_fraction * fluid_curves["RHO_O"]
+                + gas_fraction * fluid_curves["RHO_G"]
+            )
+            fluid_curves["RHO_H_APP"] = (
+                oil_fraction * fluid_curves["RHO_O_APP"]
+                + gas_fraction * fluid_curves["RHO_G_APP"]
+            )
+            fluid_curves["HI_H"] = (
+                oil_fraction * fluid_curves["HI_O"]
+                + gas_fraction * fluid_curves["HI_G"]
+            )
+            corr_angle = neu_den_xplot_hc_correction_angle(
+                rho_water=fluid_curves["RHO_W"],
+                rho_hc=(
+                    fluid_curves["RHO_H_APP"]
+                    if req.use_apparent_elec_density
+                    else fluid_curves["RHO_H"]
+                ),
+                HI_hc=fluid_curves["HI_H"],
+            )
+            if not np.isfinite(corr_angle).any():
+                raise ValueError(
+                    "Dynamic fluid modeling produced no finite correction angles."
+                )
+        elif req.corr_angle is not None:
             corr_angle = float(req.corr_angle)
         else:
             corr_angle = neu_den_xplot_hc_correction_angle(
@@ -1769,6 +1932,11 @@ def workspace_hc_correction(
             else None
         )
 
+        corr_angle_for_valid = (
+            np.asarray(corr_angle, dtype=float)[valid_mask.to_numpy()]
+            if np.ndim(corr_angle) > 0
+            else corr_angle
+        )
         nphi_c, rhob_c, hc_flag = neu_den_xplot_hc_correction(
             nphi[valid_mask].to_numpy(dtype=float),
             rhob[valid_mask].to_numpy(dtype=float),
@@ -1776,7 +1944,7 @@ def workspace_hc_correction(
             dry_min1_point=req.dry_sand_point,
             dry_clay_point=req.dry_clay_point,
             water_point=req.water_point,
-            corr_angle=corr_angle,
+            corr_angle=corr_angle_for_valid,
             buffer=req.buffer,
             target_mode=req.target_mode,
             flag_mode=req.flag_mode,
@@ -1874,6 +2042,10 @@ def workspace_hc_correction(
             "HC_FLAG": hc_flag_full,
             "DEN_CORR_FLAG": pd.Series(0.0, index=df.index, dtype=float),
         }
+        for curve_name, curve_values in fluid_curves.items():
+            out_cols_dict[curve_name] = pd.Series(
+                curve_values, index=df.index, dtype=float
+            )
         if vsh_gr_s.notna().any():
             out_cols_dict["VSH_GR"] = vsh_gr_s
         out_df = pd.DataFrame(out_cols_dict)
@@ -1896,8 +2068,15 @@ def workspace_hc_correction(
             if n_hc > 0
             else 0.0
         )
+        finite_corr_angles = np.asarray(corr_angle, dtype=float)
+        finite_corr_angles = finite_corr_angles[np.isfinite(finite_corr_angles)]
+        mean_corr_angle = (
+            float(np.mean(finite_corr_angles))
+            if finite_corr_angles.size > 0
+            else float(corr_angle)
+        )
         hc_summary = {
-            "corr_angle": round(corr_angle, 2),
+            "corr_angle": round(mean_corr_angle, 2),
             "hc_flagged_count": n_hc,
             "valid_count": n_valid,
             "hc_flagged_pct": round((n_hc / n_valid) * 100.0, 1) if n_valid > 0 else 0.0,
@@ -1908,16 +2087,42 @@ def workspace_hc_correction(
             "mean_drhob": mean_drhob,
         }
 
-        save_cols = [c for c in ("NPHI_HC", "RHOB_HC", "HC_FLAG", "VSH_GR") if c in out_df.columns]
+        save_cols = [
+            c
+            for c in (
+                "NPHI_HC",
+                "RHOB_HC",
+                "HC_FLAG",
+                "VSH_GR",
+                "TEMP_FL",
+                "PRES_FL",
+                "RHO_W",
+                "RHO_O",
+                "RHO_G",
+                "RHO_O_APP",
+                "RHO_G_APP",
+                "HI_W",
+                "HI_O",
+                "HI_G",
+                "Z_FACTOR",
+                "RHO_H",
+                "RHO_H_APP",
+                "HI_H",
+            )
+            if c in out_df.columns
+        ]
         saved_rows = 0
+        save_mask = valid_mask.copy()
+        if tvd is not None:
+            save_mask |= pd.Series(np.isfinite(tvd), index=df.index, dtype=bool)
         if req.save:
-            save_df = out_df.loc[valid_mask, ["DEPTH"] + save_cols]
+            save_df = out_df.loc[save_mask, ["DEPTH"] + save_cols]
             saved_rows = _save_curves_to_well(project_id, well_name, save_df)
         else:
             _update_in_memory_well_cache(
                 project_id,
                 well_name,
-                out_df.loc[valid_mask, ["DEPTH"] + save_cols],
+                out_df.loc[save_mask, ["DEPTH"] + save_cols],
             )
 
         stats_out = {
@@ -1927,10 +2132,12 @@ def workspace_hc_correction(
         }
         if "VSH_GR" in out_df.columns:
             stats_out["VSH_GR"] = _curve_summary_stats(out_df["VSH_GR"])
+        for curve_name in fluid_curves:
+            stats_out[curve_name] = _curve_summary_stats(out_df[curve_name])
 
         return {
             "well_name": well_name,
-            "corr_angle": round(corr_angle, 3),
+            "corr_angle": round(mean_corr_angle, 3),
             "hc_summary": hc_summary,
             "saved": req.save,
             "saved_rows": saved_rows,

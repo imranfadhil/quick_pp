@@ -118,6 +118,27 @@
 		executeLithoPoro(false);
 	}
 
+	function syncFluidPtFromSaturation() {
+		workbench.lithoParams.fluidTempGrad = workbench.saturationParams.tempGradient;
+		workbench.lithoParams.fluidSurfTemp = workbench.saturationParams.surfaceTemp;
+		workbench.lithoParams.fluidSalinityPpm = workbench.saturationParams.waterSalinity;
+		executeLithoPoro(false);
+	}
+
+	function medianVisibleCurve(mnemonic: string): number | null {
+		const curve = wellData.curves[mnemonic];
+		if (!curve) return null;
+		const values = wellData.visibleIndices
+			.map((index) => curve[index])
+			.filter((value) => Number.isFinite(value))
+			.sort((a, b) => a - b);
+		if (values.length === 0) return null;
+		const middle = Math.floor(values.length / 2);
+		return values.length % 2 === 0
+			? (values[middle - 1] + values[middle]) / 2
+			: values[middle];
+	}
+
 	async function loadMlModelsStatus(projectId: string | number) {
 		try {
 			const status = await getJson<any>(
@@ -270,31 +291,35 @@
 			// 1. Mutually exclusive NPHI/RHOB Log Correction: HC Correction OR Density Correction
 			if (lp.logCorrectionMode === 'hc') {
 				denSummary = null;
-				const { data: hcData, error: hcErr } = await api.POST(
-					'/quick_pp/workspace/projects/{project_id}/wells/{well_name}/hc_correction',
+				const hcData = await postJson<any>(
+					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/hc_correction`,
 					{
-						params: {
-							path: { project_id: workbench.projectId, well_name: workbench.wellId }
-						},
-						body: {
-							dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
-							dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
-							water_point: [lp.fluidNphi, lp.fluidRhob],
-							rho_water: lp.rhoWater,
-							rho_hc: lp.rhoHc,
-							hi_hc: lp.hiHc,
-							buffer: lp.hcBuffer,
-							flag_mode: lp.hcFlagMode ?? 'strict',
-							vsh_tol: lp.hcVshTol ?? 0.05,
-							gr_clean: lp.grClean,
-							gr_clay: lp.grClay,
-							...coalArgs,
-							...filterArgs
-						} as any
+						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
+						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
+						water_point: [lp.fluidNphi, lp.fluidRhob],
+						rho_water: lp.rhoWater,
+						rho_hc: lp.rhoHc,
+						hi_hc: lp.hiHc,
+						mode: lp.hcFluidMode,
+						use_apparent_elec_density: lp.hcUseApparentDensity,
+						temp_grad: lp.fluidTempGrad,
+						surf_temp: lp.fluidSurfTemp,
+						pres_grad: lp.fluidPresGrad,
+						surf_pres: lp.fluidSurfPres,
+						gas_gravity: lp.fluidGasGravity,
+						oil_api: lp.fluidOilApi,
+						gor: lp.fluidGor,
+						salinity_ppm: lp.fluidSalinityPpm,
+						buffer: lp.hcBuffer,
+						flag_mode: lp.hcFlagMode ?? 'strict',
+						vsh_tol: lp.hcVshTol ?? 0.05,
+						gr_clean: lp.grClean,
+						gr_clay: lp.grClay,
+						...coalArgs,
+						...filterArgs
 					}
 				);
 				if (runId !== lithoPoroRunId) return;
-				if (hcErr) throw new Error(String((hcErr as any)?.detail ?? 'HC Correction failed'));
 				if (hcData) {
 					if (hcData.data) Object.assign(batchedCurves, hcData.data);
 					if (hcData.stats) Object.assign(batchedStats, hcData.stats);
@@ -831,33 +856,175 @@
 				<div class="my-1.5 rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] leading-snug text-emerald-950">
 					Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle until crossplot <span class="mono-num font-semibold">VSH_DN</span> matches calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>).
 				</div>
-				<NumericScrubber
-					label="Water Density"
-					bind:value={workbench.lithoParams.rhoWater}
-					unit="g/cc"
-					min={0.9}
-					max={1.25}
-					step={0.01}
-					onrun={() => executeLithoPoro(false)}
-				/>
-				<NumericScrubber
-					label="HC Fluid Density"
-					bind:value={workbench.lithoParams.rhoHc}
-					unit="g/cc"
-					min={0.1}
-					max={0.95}
-					step={0.01}
-					onrun={() => executeLithoPoro(false)}
-				/>
-				<NumericScrubber
-					label="HC Hydrogen Index"
-					bind:value={workbench.lithoParams.hiHc}
-					unit="v/v"
-					min={0.1}
-					max={1.1}
-					step={0.02}
-					onrun={() => executeLithoPoro(false)}
-				/>
+				<div class="mb-1.5 grid grid-cols-2 gap-1">
+					{#each [['constant', 'Constant'], ['dynamic', 'Dynamic (P-T)']] as [mode, label]}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.lithoParams.hcFluidMode = mode as 'constant' | 'dynamic';
+								executeLithoPoro(false);
+							}}
+							class="h-6 rounded-xs border px-1.5 text-[10.5px] font-semibold transition-colors {workbench.lithoParams.hcFluidMode ===
+							mode
+								? 'border-emerald-700 bg-emerald-700 text-white'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{label}
+						</button>
+					{/each}
+				</div>
+				{#if workbench.lithoParams.hcFluidMode === 'constant'}
+					<NumericScrubber
+						label="Water Density"
+						bind:value={workbench.lithoParams.rhoWater}
+						unit="g/cc"
+						min={0.9}
+						max={1.25}
+						step={0.01}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="HC Fluid Density"
+						bind:value={workbench.lithoParams.rhoHc}
+						unit="g/cc"
+						min={0.1}
+						max={0.95}
+						step={0.01}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="HC Hydrogen Index"
+						bind:value={workbench.lithoParams.hiHc}
+						unit="v/v"
+						min={0.1}
+						max={1.1}
+						step={0.02}
+						onrun={() => executeLithoPoro(false)}
+					/>
+				{:else}
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[10px] font-semibold uppercase text-[var(--text-secondary)]">
+						P-T Regime
+					</div>
+					<button
+						type="button"
+						onclick={syncFluidPtFromSaturation}
+						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[10px] font-semibold text-[var(--text-secondary)] hover:bg-slate-100"
+					>
+						Sync from Saturation
+					</button>
+					<NumericScrubber
+						label="Temperature Gradient"
+						bind:value={workbench.lithoParams.fluidTempGrad}
+						unit="°C/km"
+						min={5}
+						max={100}
+						step={1}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Surface Temperature"
+						bind:value={workbench.lithoParams.fluidSurfTemp}
+						unit="°C"
+						min={0}
+						max={60}
+						step={1}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Pressure Gradient"
+						bind:value={workbench.lithoParams.fluidPresGrad}
+						unit="MPa/km"
+						min={5}
+						max={25}
+						step={0.1}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Surface Pressure"
+						bind:value={workbench.lithoParams.fluidSurfPres}
+						unit="MPa"
+						min={0}
+						max={5}
+						step={0.01}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[10px] font-semibold uppercase text-[var(--text-secondary)]">
+						Fluid Composition
+					</div>
+					<NumericScrubber
+						label="Gas Gravity"
+						bind:value={workbench.lithoParams.fluidGasGravity}
+						unit="air = 1"
+						min={0.55}
+						max={1.5}
+						step={0.01}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Oil API"
+						bind:value={workbench.lithoParams.fluidOilApi}
+						unit="°API"
+						min={5}
+						max={70}
+						step={1}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Solution GOR"
+						bind:value={workbench.lithoParams.fluidGor}
+						unit="Sm³/Sm³"
+						min={0}
+						max={5000}
+						step={10}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Brine Salinity"
+						bind:value={workbench.lithoParams.fluidSalinityPpm}
+						unit="ppm"
+						min={0}
+						max={350000}
+						step={1000}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<label class="flex items-center gap-2 py-0.5 text-[10px] font-medium">
+						<input
+							type="checkbox"
+							bind:checked={workbench.lithoParams.hcUseApparentDensity}
+							onchange={() => executeLithoPoro(false)}
+							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+						/>
+						<span>Use apparent electron density in correction angle</span>
+					</label>
+					<div class="grid grid-cols-3 gap-1 text-[10px]">
+						{#each [
+							['RHO_W', 'ρw'],
+							['RHO_O', 'ρo'],
+							['RHO_G', 'ρg']
+						] as [curve, label]}
+							<div class="rounded-xs border border-[var(--border-hairline)] px-1.5 py-1 text-center">
+								<span class="text-[var(--text-secondary)]">{label}</span>
+								<div class="mono-num font-semibold">
+									{fmtNum(medianVisibleCurve(curve), 2)} g/cc
+								</div>
+							</div>
+						{/each}
+					</div>
+					<div class="grid grid-cols-3 gap-1 text-[10px]">
+						{#each [
+							['HI_W', 'HIw'],
+							['HI_O', 'HIo'],
+							['HI_G', 'HIg']
+						] as [curve, label]}
+							<div class="rounded-xs border border-[var(--border-hairline)] px-1.5 py-1 text-center">
+								<span class="text-[var(--text-secondary)]">{label}</span>
+								<div class="mono-num font-semibold">
+									{fmtNum(medianVisibleCurve(curve), 2)} v/v
+								</div>
+							</div>
+						{/each}
+					</div>
+				{/if}
 				<NumericScrubber
 					label="HC Flag Buffer"
 					bind:value={workbench.lithoParams.hcBuffer}

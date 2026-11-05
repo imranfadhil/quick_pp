@@ -157,6 +157,22 @@ def test_scalar_inputs_and_none_vsh():
     assert float(flag) == 1.0
 
 
+def test_per_sample_correction_angles_are_supported():
+    nphi, rhob = forward(0.25, 0.0, 0.5)
+    nc, rc, flag = correct(
+        np.full(2, nphi),
+        np.full(2, rhob),
+        np.zeros(2),
+        corr_angle=np.array([GAS_ANGLE - 5.0, GAS_ANGLE + 5.0]),
+    )
+
+    assert np.all(flag == 1.0)
+    assert nc.shape == rc.shape == flag.shape == (2,)
+    assert np.isfinite(nc).all()
+    assert np.isfinite(rc).all()
+    assert nc[0] != pytest.approx(nc[1])
+
+
 def test_invalid_modes_raise():
     with pytest.raises(ValueError):
         correct(np.array([0.1]), np.array([2.2]), None, flag_mode="bogus")
@@ -178,4 +194,3 @@ def test_den_correction_params_reproduce_triangle_model():
 def test_den_correction_requires_gr_or_vsh():
     with pytest.raises(ValueError):
         den_correction(0.2)
-

@@ -97,6 +97,16 @@ export interface LithoEndpointParams {
 	rhoWater: number;
 	rhoHc: number;
 	hiHc: number;
+	hcFluidMode: 'constant' | 'dynamic';
+	hcUseApparentDensity: boolean;
+	fluidTempGrad: number;
+	fluidSurfTemp: number;
+	fluidPresGrad: number;
+	fluidSurfPres: number;
+	fluidGasGravity: number;
+	fluidOilApi: number;
+	fluidGor: number;
+	fluidSalinityPpm: number;
 	hcBuffer: number;
 	hcFlagMode: 'strict' | 'vsh_gr';
 	hcVshTol: number;
@@ -677,6 +687,16 @@ class WorkbenchState {
 		rhoWater: 1.0,
 		rhoHc: 0.8,
 		hiHc: 0.9,
+		hcFluidMode: 'constant',
+		hcUseApparentDensity: false,
+		fluidTempGrad: 30.0,
+		fluidSurfTemp: 25.0,
+		fluidPresGrad: 10.2,
+		fluidSurfPres: 0.1013,
+		fluidGasGravity: 0.65,
+		fluidOilApi: 35.0,
+		fluidGor: 100.0,
+		fluidSalinityPpm: 30000.0,
 		hcBuffer: 0.0,
 		hcFlagMode: 'strict',
 		hcVshTol: 0.05,
