@@ -74,6 +74,7 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'NPHI_HC',
 			'RHOB_HC',
 			'HC_FLAG',
+			'SHC_INV',
 			'RHOB_DEN_CORR',
 			'DEN_CORR_FLAG'
 		]

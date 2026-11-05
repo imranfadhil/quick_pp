@@ -444,6 +444,8 @@ CTRY.  UK           : COUNTRY
 CTRY.               : DUPLICATE EMPTY COUNTRY SHOULD NOT OVERWRITE
 SRVC.  ATLAS        : SERVICE COMPANY
 DATE.  06-JAN-1981  : LOG DATE
+MFSAL.PPM 200000    : MUD FILTRATE SALINITY
+MFDEN.G/CC 1.0      : MUD FILTRATE DENSITY
 LATI.  56 41 57.80 N: LATITUDE SPACE SEPARATED DMS
 LONG.  02 15 23.30 E: LONGITUDE SPACE SEPARATED DMS
 GDAT.  MSL          : GEODETIC DATUM
@@ -470,6 +472,8 @@ GR  .GAPI : Gamma Ray
     assert meta["country"] == "UK"
     assert meta["field"] == "JOANNE"
     assert meta["service_company"] == "ATLAS"
+    assert meta["mud_filtrate_salinity"] == 200000.0
+    assert meta["mud_filtrate_density"] == 1.0
     assert meta["location"] == "CENTRAL NORTH SEA"
     assert meta["province"] == "UKCS"
     assert meta["log_date"] == "06-JAN-1981"
@@ -504,6 +508,8 @@ GR  .GAPI : Gamma Ray
     assert hdr["country"] == "UK"
     assert hdr["field"] == "JOANNE"
     assert hdr["service_company"] == "ATLAS"
+    assert hdr["mud_filtrate_salinity"] == 200000.0
+    assert hdr["mud_filtrate_density"] == 1.0
     assert hdr["location"] == "CENTRAL NORTH SEA"
     assert hdr["province"] == "UKCS"
     assert np.isclose(hdr["latitude"], 56.6993889, atol=1e-5)
@@ -517,6 +523,28 @@ GR  .GAPI : Gamma Ray
     assert res_cfg.status_code == 200
     assert res_cfg.json()["header"]["company"] == "Updated Operator"
     assert res_cfg.json()["header"]["country"] == "United Kingdom"
+    res_cfg = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{w_name}/config",
+        json={
+            "header": {
+                "mud_filtrate_salinity": 200000,
+                "mud_filtrate_density": 1.0,
+            }
+        },
+    )
+    assert res_cfg.status_code == 200
+    assert res_cfg.json()["header"]["mud_filtrate_salinity"] == 200000
+    assert res_cfg.json()["header"]["mud_filtrate_density"] == 1.0
+    res_invalid_salinity = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{w_name}/config",
+        json={"header": {"mud_filtrate_salinity": -1}},
+    )
+    assert res_invalid_salinity.status_code == 422
+    res_invalid_density = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{w_name}/config",
+        json={"header": {"mud_filtrate_density": 0}},
+    )
+    assert res_invalid_density.status_code == 422
 
 
 def test_same_well_las_import_append_skip_identical_and_suffix_different():
@@ -630,5 +658,3 @@ NPHI.V/V    : Neutron Porosity
     assert np.allclose(curves_data["RHOB"], [2.35, 2.40, 2.45], atol=1e-3)
     assert np.allclose(curves_data["RHOB_1"], [2.50, 2.55, 2.60], atol=1e-3)
     assert np.allclose(curves_data["NPHI"], [0.22, 0.20, 0.18], atol=1e-3)
-
-

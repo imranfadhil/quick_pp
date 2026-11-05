@@ -93,6 +93,7 @@
 		mean_vsh_gr_hc: number | null;
 		mean_dnphi: number;
 		mean_drhob: number;
+		mean_invaded_hc_saturation?: number | null;
 	} | null>(null);
 
 	let denSummary = $state<{
@@ -302,6 +303,10 @@
 						hi_hc: lp.hiHc,
 						mode: lp.hcFluidMode,
 						use_apparent_elec_density: lp.hcUseApparentDensity,
+						correction_method: lp.hcCorrectionMethod,
+						mud_filtrate_density: wellData.header?.mud_filtrate_density ?? null,
+						mud_filtrate_salinity: wellData.header?.mud_filtrate_salinity ?? null,
+						lithology_coeff: lp.hcLithologyCoeff,
 						temp_grad: lp.fluidTempGrad,
 						surf_temp: lp.fluidSurfTemp,
 						pres_grad: lp.fluidPresGrad,
@@ -854,8 +859,50 @@
 
 			{#if workbench.lithoParams.logCorrectionMode === 'hc'}
 				<div class="my-1.5 rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] leading-snug text-emerald-950">
-					Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle until crossplot <span class="mono-num font-semibold">VSH_DN</span> matches calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>).
+					{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
+						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to best match VSH<sub>DN</sub> to VSH<sub>GR</sub>.
+					{:else}
+						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle until crossplot <span class="mono-num font-semibold">VSH_DN</span> matches calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>).
+					{/if}
 				</div>
+				<div class="grid grid-cols-2 gap-1">
+					{#each [
+						['crossplot', 'Crossplot'],
+						['invaded_zone_standard', 'Invaded Zone (Standard)']
+					] as [method, label]}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.lithoParams.hcCorrectionMethod =
+									method as 'crossplot' | 'invaded_zone_standard';
+								executeLithoPoro(false);
+							}}
+							class="h-6 rounded-xs border px-1.5 text-[10px] font-semibold transition-colors {workbench.lithoParams.hcCorrectionMethod ===
+							method
+								? 'border-emerald-700 bg-emerald-700 text-white'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{label}
+						</button>
+					{/each}
+				</div>
+				{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
+					<div class="mt-1 rounded-xs border border-amber-200 bg-amber-50/70 px-2 py-1 text-[10px] leading-snug text-amber-950">
+						Uses mud-filtrate density/salinity from well metadata and estimates invaded-zone HC saturation in 0.01 increments to best match VSH_DN to VSH_GR.
+						{#if wellData.header?.mud_filtrate_density == null || wellData.header?.mud_filtrate_salinity == null}
+							<span class="font-bold"> Set both mud-filtrate properties in QAQC → Well Header before running.</span>
+						{/if}
+					</div>
+					<NumericScrubber
+						label="Lithology Coefficient (K)"
+						bind:value={workbench.lithoParams.hcLithologyCoeff}
+						min={0}
+						max={5}
+						step={0.1}
+						decimals={1}
+						onrun={() => executeLithoPoro(false)}
+					/>
+				{/if}
 				<div class="mb-1.5 grid grid-cols-2 gap-1">
 					{#each [['constant', 'Constant'], ['dynamic', 'Dynamic (P-T)']] as [mode, label]}
 						<button
@@ -987,15 +1034,17 @@
 						step={1000}
 						onrun={() => executeLithoPoro(false)}
 					/>
-					<label class="flex items-center gap-2 py-0.5 text-[10px] font-medium">
-						<input
-							type="checkbox"
-							bind:checked={workbench.lithoParams.hcUseApparentDensity}
-							onchange={() => executeLithoPoro(false)}
-							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
-						/>
-						<span>Use apparent electron density in correction angle</span>
-					</label>
+					{#if workbench.lithoParams.hcCorrectionMethod === 'crossplot'}
+						<label class="flex items-center gap-2 py-0.5 text-[10px] font-medium">
+							<input
+								type="checkbox"
+								bind:checked={workbench.lithoParams.hcUseApparentDensity}
+								onchange={() => executeLithoPoro(false)}
+								class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+							/>
+							<span>Use apparent electron density in correction angle</span>
+						</label>
+					{/if}
 					<div class="grid grid-cols-3 gap-1 text-[10px]">
 						{#each [
 							['RHO_W', 'ρw'],
@@ -1088,6 +1137,16 @@
 								</div>
 							</div>
 						</div>
+						{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
+							<div class="mt-1 border-t border-emerald-100 pt-1 text-center">
+								<span class="text-[var(--text-muted)]">Mean S<sub>hi</sub>:</span>
+								<strong class="mono-num ml-1 text-emerald-900">
+									{hcSummary.mean_invaded_hc_saturation != null
+										? fmtNum(hcSummary.mean_invaded_hc_saturation, 2)
+										: '—'}
+								</strong>
+							</div>
+						{/if}
 					</div>
 				{/if}
 			{:else if workbench.lithoParams.logCorrectionMode === 'den'}

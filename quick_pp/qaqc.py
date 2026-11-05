@@ -560,6 +560,123 @@ def neu_den_xplot_hc_correction_angle(rho_water=1.0, rho_hc=0.3, HI_hc=None):
     )
 
 
+def invaded_zone_hc_correction(
+    nphi,
+    rhob,
+    vsh_gr,
+    rho_hc,
+    rho_mf,
+    salinity_ppm,
+    dry_sand_point,
+    dry_clay_point,
+    hc_flag,
+    lithology_coeff=1.0,
+    target_mode="bulk",
+):
+    """Correct NPHI/RHOB using the standard invaded-zone saturation iteration.
+
+    The invaded-zone hydrocarbon saturation is searched from 0 to 1 in 0.01
+    increments. For each candidate, the mud-filtrate and hydrocarbon mixing
+    terms plus neutron excavation effect are calculated; the candidate whose
+    corrected density-neutron shale volume is closest to the GR target is used.
+
+    Density porosity is estimated from the dry-sand density endpoint and
+    mud-filtrate density; the corrected VSH_DN is evaluated in the matrix /
+    clay / mud-filtrate crossplot triangle.
+    """
+    target_mode = str(target_mode).strip().lower()
+    if target_mode not in ("bulk", "solid"):
+        raise ValueError("target_mode must be 'bulk' or 'solid'")
+
+    nphi = np.asarray(nphi, dtype=float)
+    rhob = np.asarray(rhob, dtype=float)
+    rho_hc = np.broadcast_to(np.asarray(rho_hc, dtype=float), nphi.shape)
+    vsh_gr = np.broadcast_to(np.asarray(vsh_gr, dtype=float), nphi.shape)
+    hc_flag = np.broadcast_to(np.asarray(hc_flag, dtype=bool), nphi.shape)
+    if nphi.ndim != 1 or rhob.shape != nphi.shape:
+        raise ValueError("nphi and rhob must be matching one-dimensional arrays.")
+    if not np.isfinite(rho_mf) or rho_mf <= 0:
+        raise ValueError("Mud-filtrate density must be finite and positive.")
+    if not np.isfinite(salinity_ppm) or not 0 <= salinity_ppm <= 1_000_000:
+        raise ValueError("Mud-filtrate salinity must be between 0 and 1,000,000 ppm.")
+    if not np.isfinite(lithology_coeff) or lithology_coeff < 0:
+        raise ValueError("lithology_coeff must be finite and non-negative.")
+    if np.any(rho_hc[np.isfinite(rho_hc)] < 0):
+        raise ValueError("Hydrocarbon density must be non-negative.")
+    hc_flag = hc_flag & np.isfinite(rho_hc) & np.isfinite(nphi) & np.isfinite(rhob)
+
+    salinity = float(salinity_ppm) / 1_000_000.0
+    hw = float(rho_mf) * (1.0 - salinity)
+    if hw <= 0:
+        raise ValueError("Mud-filtrate hydrogen index must be positive.")
+    light_hc = rho_hc <= 0.25
+    hh = np.where(light_hc, 2.2 * rho_hc, rho_hc + 0.3)
+    coeff_a = np.where(
+        light_hc,
+        (1.19 - 0.16 * salinity) * rho_mf - 1.33 * rho_hc,
+        (1.19 - 0.16 * salinity) * rho_mf - 1.19 * rho_hc - 0.032,
+    )
+    coeff_b = 1.0 - hh / hw
+    matrix_density = float(dry_sand_point[1])
+    if abs(matrix_density - rho_mf) < 1e-8:
+        raise ValueError("Dry-sand density must differ from mud-filtrate density.")
+    phi_d = (matrix_density - rhob) / (matrix_density - rho_mf)
+    phi_dn = np.maximum(0.5 * (phi_d + nphi), 0.0)
+    target_vsh = np.clip(vsh_gr, 0.0, 1.0)
+    target_vsh = np.where(np.isfinite(target_vsh), target_vsh, 0.0)
+
+    corrected_nphi = nphi.copy()
+    corrected_rhob = rhob.copy()
+    selected_saturation = np.full(nphi.shape, np.nan, dtype=float)
+    best_error = np.full(nphi.shape, np.inf, dtype=float)
+    best_angle = np.full(nphi.shape, np.nan, dtype=float)
+
+    for saturation in np.linspace(0.0, 1.0, 101):
+        mixed_hi = saturation * hh + (1.0 - saturation) * hw
+        delta_rhob = coeff_a * phi_dn * saturation
+        delta_nphi = (
+            coeff_b * phi_dn * saturation
+            + lithology_coeff
+            * mixed_hi
+            * (2.0 * phi_dn**2 * mixed_hi + 0.04 * phi_dn)
+        )
+        candidate_nphi = nphi + delta_nphi
+        candidate_rhob = rhob + delta_rhob
+        phi, vcl = nd_triangle_coords(
+            candidate_nphi,
+            candidate_rhob,
+            dry_sand_point,
+            dry_clay_point,
+            (hw, float(rho_mf)),
+        )
+        candidate_vsh = (
+            vcl
+            if target_mode == "bulk"
+            else np.divide(
+                vcl,
+                1.0 - phi,
+                out=np.full_like(vcl, np.nan, dtype=float),
+                where=np.abs(1.0 - phi) > 1e-12,
+            )
+        )
+        error = np.abs(candidate_vsh - target_vsh)
+        better = hc_flag & np.isfinite(error) & (error < best_error)
+        corrected_nphi[better] = candidate_nphi[better]
+        corrected_rhob[better] = candidate_rhob[better]
+        selected_saturation[better] = saturation
+        best_error[better] = error[better]
+        best_angle[better] = np.degrees(
+            np.arctan2(delta_rhob[better], delta_nphi[better])
+        )
+
+    return (
+        corrected_nphi,
+        corrected_rhob,
+        selected_saturation,
+        best_angle,
+    )
+
+
 def den_correction_params_from_endpoints(
     dry_sand_point: tuple, dry_clay_point: tuple, rho_water: float = 1.0
 ):

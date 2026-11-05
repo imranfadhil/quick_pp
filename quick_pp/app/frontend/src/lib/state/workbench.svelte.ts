@@ -98,6 +98,8 @@ export interface LithoEndpointParams {
 	rhoHc: number;
 	hiHc: number;
 	hcFluidMode: 'constant' | 'dynamic';
+	hcCorrectionMethod: 'crossplot' | 'invaded_zone_standard';
+	hcLithologyCoeff: number;
 	hcUseApparentDensity: boolean;
 	fluidTempGrad: number;
 	fluidSurfTemp: number;
@@ -688,6 +690,8 @@ class WorkbenchState {
 		rhoHc: 0.8,
 		hiHc: 0.9,
 		hcFluidMode: 'constant',
+		hcCorrectionMethod: 'crossplot',
+		hcLithologyCoeff: 1.0,
 		hcUseApparentDensity: false,
 		fluidTempGrad: 30.0,
 		fluidSurfTemp: 25.0,

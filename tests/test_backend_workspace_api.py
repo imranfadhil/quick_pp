@@ -494,6 +494,34 @@ def test_dynamic_hc_correction_accepts_tvdss(client_and_project, monkeypatch):
     assert len(response.json()["data"]["RHO_H"]) == len(well_df)
 
 
+def test_standard_invaded_zone_correction_returns_saturation_curve(client_and_project):
+    client, pid = client_and_project
+    endpoint = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/hc_correction"
+    missing_metadata = client.post(
+        endpoint,
+        json={"correction_method": "invaded_zone_standard"},
+    )
+    assert missing_metadata.status_code == 400
+    assert "mud-filtrate density" in missing_metadata.json()["detail"]
+
+    response = client.post(
+        endpoint,
+        json={
+            "mode": "dynamic",
+            "correction_method": "invaded_zone_standard",
+            "mud_filtrate_density": 1.0,
+            "mud_filtrate_salinity": 200000.0,
+            "lithology_coeff": 1.0,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["hc_summary"]["correction_method"] == "invaded_zone_standard"
+    assert len(body["data"]["SHC_INV"]) == 10
+    assert body["stats"]["SHC_INV"]["count"] > 0
+
+
 def test_saturation_model_comparison_curves_and_archie_default(client_and_project):
     client, pid = client_and_project
     endpoint = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/saturation"

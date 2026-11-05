@@ -76,6 +76,7 @@ from quick_pp.qaqc import (
     den_correction,
     den_correction_params_from_endpoints,
     handle_outer_limit,
+    invaded_zone_hc_correction,
     neu_den_xplot_hc_correction,
     neu_den_xplot_hc_correction_angle,
     stratigraphic_normalization,
@@ -566,6 +567,21 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
     hi_hc: float = Field(0.9, description="Hydrocarbon hydrogen index")
     mode: Literal["constant", "dynamic"] = Field(
         "constant", description="Constant fluid properties or dynamic P-T EOS modeling"
+    )
+    correction_method: Literal["crossplot", "invaded_zone_standard"] = Field(
+        "crossplot", description="Hydrocarbon correction formulation"
+    )
+    mud_filtrate_density: Optional[float] = Field(
+        None, gt=0, description="Mud-filtrate density from well metadata (g/cc)"
+    )
+    mud_filtrate_salinity: Optional[float] = Field(
+        None,
+        ge=0,
+        le=1_000_000,
+        description="Mud-filtrate salinity from well metadata (ppm)",
+    )
+    lithology_coeff: float = Field(
+        1.0, ge=0, description="Lithology coefficient for neutron excavation effect"
     )
     use_apparent_elec_density: bool = Field(
         False, description="Use apparent electron density when deriving correction angles"
@@ -1922,6 +1938,7 @@ def workspace_hc_correction(
         nphi_hc_full = pd.Series(np.nan, index=df.index, dtype=float)
         rhob_hc_full = pd.Series(np.nan, index=df.index, dtype=float)
         hc_flag_full = pd.Series(np.nan, index=df.index, dtype=float)
+        invaded_saturation_full = pd.Series(np.nan, index=df.index, dtype=float)
 
         vsh_gr_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
         # Keep NaN where GR is missing so those samples are skipped rather than
@@ -1950,6 +1967,47 @@ def workspace_hc_correction(
             flag_mode=req.flag_mode,
             vsh_tol=req.vsh_tol,
         )
+        correction_angles = corr_angle_for_valid
+        if req.correction_method == "invaded_zone_standard":
+            if req.mud_filtrate_density is None:
+                raise ValueError(
+                    "Standard invaded-zone correction requires mud-filtrate density "
+                    "in well metadata (g/cc)."
+                )
+            if req.mud_filtrate_salinity is None:
+                raise ValueError(
+                    "Standard invaded-zone correction requires mud-filtrate salinity "
+                    "in well metadata (ppm)."
+                )
+            rho_hc_for_valid = (
+                fluid_curves["RHO_H"][valid_mask.to_numpy()]
+                if req.mode == "dynamic"
+                else np.full(int(valid_mask.sum()), req.rho_hc, dtype=float)
+            )
+            vsh_target = (
+                vsh_gr_arr
+                if vsh_gr_arr is not None
+                else np.zeros(int(valid_mask.sum()), dtype=float)
+            )
+            (
+                nphi_c,
+                rhob_c,
+                invaded_saturation,
+                correction_angles,
+            ) = invaded_zone_hc_correction(
+                nphi=nphi[valid_mask].to_numpy(dtype=float),
+                rhob=rhob[valid_mask].to_numpy(dtype=float),
+                vsh_gr=vsh_target,
+                rho_hc=rho_hc_for_valid,
+                rho_mf=req.mud_filtrate_density,
+                salinity_ppm=req.mud_filtrate_salinity,
+                dry_sand_point=req.dry_sand_point,
+                dry_clay_point=req.dry_clay_point,
+                hc_flag=np.asarray(hc_flag) >= 0.5,
+                lithology_coeff=req.lithology_coeff,
+                target_mode=req.target_mode,
+            )
+            invaded_saturation_full.loc[valid_mask] = invaded_saturation
 
         nphi_hc_full.loc[valid_mask] = np.asarray(nphi_c, dtype=float)
         rhob_hc_full.loc[valid_mask] = np.asarray(rhob_c, dtype=float)
@@ -1968,6 +2026,7 @@ def workspace_hc_correction(
                 nphi_hc_full.loc[coal_mask] = nphi.loc[coal_mask]
                 rhob_hc_full.loc[coal_mask] = rhob.loc[coal_mask]
                 hc_flag_full.loc[coal_mask] = 0.0
+                invaded_saturation_full.loc[coal_mask] = np.nan
         else:
             coal_mask = pd.Series(False, index=df.index, dtype=bool)
 
@@ -1980,6 +2039,7 @@ def workspace_hc_correction(
                 nphi_hc_full.loc[badhole_mask] = nphi.loc[badhole_mask]
                 rhob_hc_full.loc[badhole_mask] = rhob.loc[badhole_mask]
                 hc_flag_full.loc[badhole_mask] = 0.0
+                invaded_saturation_full.loc[badhole_mask] = np.nan
                 if bh_mode in ("vsh_gr", "gr") and "GR" in df.columns:
                     vsh_bh_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
                     bh_gr = badhole_mask & vsh_bh_s.notna()
@@ -2042,6 +2102,8 @@ def workspace_hc_correction(
             "HC_FLAG": hc_flag_full,
             "DEN_CORR_FLAG": pd.Series(0.0, index=df.index, dtype=float),
         }
+        if req.correction_method == "invaded_zone_standard":
+            out_cols_dict["SHC_INV"] = invaded_saturation_full
         for curve_name, curve_values in fluid_curves.items():
             out_cols_dict[curve_name] = pd.Series(
                 curve_values, index=df.index, dtype=float
@@ -2068,14 +2130,18 @@ def workspace_hc_correction(
             if n_hc > 0
             else 0.0
         )
-        finite_corr_angles = np.asarray(corr_angle, dtype=float)
+        finite_corr_angles = np.asarray(correction_angles, dtype=float)
         finite_corr_angles = finite_corr_angles[np.isfinite(finite_corr_angles)]
-        mean_corr_angle = (
-            float(np.mean(finite_corr_angles))
-            if finite_corr_angles.size > 0
-            else float(corr_angle)
-        )
+        if finite_corr_angles.size == 0:
+            fallback_angles = np.asarray(corr_angle, dtype=float)
+            fallback_angles = fallback_angles[np.isfinite(fallback_angles)]
+            mean_corr_angle = (
+                float(np.mean(fallback_angles)) if fallback_angles.size else 0.0
+            )
+        else:
+            mean_corr_angle = float(np.mean(finite_corr_angles))
         hc_summary = {
+            "correction_method": req.correction_method,
             "corr_angle": round(mean_corr_angle, 2),
             "hc_flagged_count": n_hc,
             "valid_count": n_valid,
@@ -2085,6 +2151,12 @@ def workspace_hc_correction(
             "mean_vsh_gr_hc": mean_vsh_gr_hc,
             "mean_dnphi": mean_dnphi,
             "mean_drhob": mean_drhob,
+            "mean_invaded_hc_saturation": (
+                round(float(invaded_saturation_full.loc[hc_active].mean()), 4)
+                if req.correction_method == "invaded_zone_standard"
+                and invaded_saturation_full.loc[hc_active].notna().any()
+                else None
+            ),
         }
 
         save_cols = [
@@ -2108,6 +2180,7 @@ def workspace_hc_correction(
                 "RHO_H",
                 "RHO_H_APP",
                 "HI_H",
+                "SHC_INV",
             )
             if c in out_df.columns
         ]
@@ -2130,6 +2203,8 @@ def workspace_hc_correction(
             "RHOB_HC": _curve_summary_stats(rhob_hc_full),
             "HC_FLAG": _curve_summary_stats(hc_flag_full),
         }
+        if req.correction_method == "invaded_zone_standard":
+            stats_out["SHC_INV"] = _curve_summary_stats(invaded_saturation_full)
         if "VSH_GR" in out_df.columns:
             stats_out["VSH_GR"] = _curve_summary_stats(out_df["VSH_GR"])
         for curve_name in fluid_curves:
@@ -9908,6 +9983,29 @@ def workspace_update_well_config(
             for hk, hv in req.header.items():
                 if hk in ("raw_well_header", "raw_parameters"):
                     continue
+                if hk in ("mud_filtrate_salinity", "mud_filtrate_density") and hv is not None:
+                    try:
+                        hv = float(hv)
+                    except (TypeError, ValueError) as e:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"{hk} must be a positive number with valid units.",
+                        ) from e
+                    invalid = not np.isfinite(hv) or (
+                        hv < 0
+                        if hk == "mud_filtrate_salinity"
+                        else hv <= 0
+                    )
+                    if invalid:
+                        requirement = (
+                            "non-negative"
+                            if hk == "mud_filtrate_salinity"
+                            else "positive"
+                        )
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"{hk} must be a {requirement} number with valid units.",
+                        )
                 clean_header_updates[hk] = hv
             eph.update(clean_header_updates)
             curr_eph_hdr = dict(_ephemeral_well_headers.get((project_id, well_name), {}))
@@ -9982,6 +10080,8 @@ def workspace_update_well_config(
             "header": saved_hdr,
             "saved": True,
         })
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to update well configuration: {e}"

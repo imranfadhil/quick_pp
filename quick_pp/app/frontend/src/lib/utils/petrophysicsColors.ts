@@ -548,6 +548,14 @@ export const STANDARD_CURVE_META: Record<string, CurveMeta> = {
 		max: 1.0,
 		color: '#06b6d4'
 	},
+	SHC_INV: {
+		mnemonic: 'SHC_INV',
+		label: 'Invaded-Zone HC Saturation',
+		unit: 'v/v',
+		min: 0.0,
+		max: 1.0,
+		color: '#7C3AED'
+	},
 	Z_FACTOR: { mnemonic: 'Z_FACTOR', label: 'Gas Compressibility Factor', unit: '—', min: 0.3, max: 3.0, color: '#7C3AED' },
 	DTC: { mnemonic: 'DTC', label: 'Compressional Sonic', unit: 'us/ft', min: 40, max: 140, color: PETRO_COLORS.dt, reversed: true },
 	PEF: { mnemonic: 'PEF', label: 'Photoelectric Factor', unit: 'b/e', min: 0, max: 10, color: PETRO_COLORS.pef },

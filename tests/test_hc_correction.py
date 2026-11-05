@@ -8,6 +8,7 @@ import pytest
 from quick_pp.qaqc import (
     den_correction,
     den_correction_params_from_endpoints,
+    invaded_zone_hc_correction,
     neu_den_xplot_hc_correction,
     neu_den_xplot_hc_correction_angle,
 )
@@ -46,6 +47,48 @@ def test_angle_liquid_defaults_and_hi_above_one():
     assert neu_den_xplot_hc_correction_angle(1.0, 0.8) == pytest.approx(90.0)
     # HI > 1 means NPHI reads high in HC: correction angle exceeds 90 degrees
     assert neu_den_xplot_hc_correction_angle(1.0, 0.8, 1.05) > 90.0
+
+
+def test_invaded_zone_correction_selects_best_saturation_step():
+    nphi, rhob, saturation, angle = invaded_zone_hc_correction(
+        nphi=np.array([0.1]),
+        rhob=np.array([2.35]),
+        vsh_gr=np.array([0.0]),
+        rho_hc=np.array([0.1]),
+        rho_mf=1.0,
+        salinity_ppm=0.0,
+        dry_sand_point=SAND,
+        dry_clay_point=CLAY,
+        hc_flag=np.array([True]),
+        lithology_coeff=0.0,
+    )
+
+    assert saturation[0] == pytest.approx(0.32)
+    phi_dn = ((2.65 - 2.35) / 1.65 + 0.1) / 2
+    assert rhob[0] == pytest.approx(2.35 + 1.057 * phi_dn * 0.32)
+    assert nphi[0] == pytest.approx(0.1 + 0.78 * phi_dn * 0.32)
+    assert np.isfinite(angle[0])
+
+
+def test_invaded_zone_correction_leaves_unflagged_samples_unchanged():
+    nphi0 = np.array([0.1])
+    rhob0 = np.array([2.35])
+    nphi, rhob, saturation, angle = invaded_zone_hc_correction(
+        nphi=nphi0,
+        rhob=rhob0,
+        vsh_gr=np.array([0.0]),
+        rho_hc=np.array([0.1]),
+        rho_mf=1.0,
+        salinity_ppm=0.0,
+        dry_sand_point=SAND,
+        dry_clay_point=CLAY,
+        hc_flag=np.array([False]),
+    )
+
+    np.testing.assert_array_equal(nphi, nphi0)
+    np.testing.assert_array_equal(rhob, rhob0)
+    assert np.isnan(saturation[0])
+    assert np.isnan(angle[0])
 
 
 # --------------------------------------------------------------------------- core

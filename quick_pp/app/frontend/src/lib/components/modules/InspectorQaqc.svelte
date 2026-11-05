@@ -622,7 +622,9 @@
 			bht_unit: h.bht_unit || 'degC',
 			bit_size: h.bit_size ?? null,
 			rmf: h.rmf ?? null,
-			mud_density: h.mud_density ?? null
+			mud_density: h.mud_density ?? null,
+			mud_filtrate_salinity: h.mud_filtrate_salinity ?? null,
+			mud_filtrate_density: h.mud_filtrate_density ?? null
 		};
 		editingWellHeader = true;
 	}
@@ -930,6 +932,12 @@
 							{hdr.bht != null ? `${hdr.bht}°` : '—'} • {hdr.bit_size != null ? `${hdr.bit_size}"` : '—'} • {hdr.rmf != null ? `${hdr.rmf} Ωm` : '—'}
 						</div>
 					</div>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Mud Filtrate Density / Salinity</div>
+						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+							{hdr.mud_filtrate_density != null ? `${fmtNum(hdr.mud_filtrate_density, 3)} g/cc` : '—'} • {hdr.mud_filtrate_salinity != null ? `${fmtNum(hdr.mud_filtrate_salinity, 0)} ppm` : '—'}
+						</div>
+					</div>
 				</div>
 
 				{#if (hdr.raw_well_header && Object.keys(hdr.raw_well_header).length > 0) || (hdr.raw_parameters && Object.keys(hdr.raw_parameters).length > 0)}
@@ -1074,6 +1082,27 @@
 								type="number"
 								step="0.125"
 								bind:value={headerDraft.bit_size}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Mud Filtrate Salinity (ppm)</span>
+							<input
+								type="number"
+								min="0"
+								step="1000"
+								bind:value={headerDraft.mud_filtrate_salinity}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Mud Filtrate Density (g/cc)</span>
+							<input
+								type="number"
+								min="0.1"
+								max="2"
+								step="0.01"
+								bind:value={headerDraft.mud_filtrate_density}
 								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
 							/>
 						</label>

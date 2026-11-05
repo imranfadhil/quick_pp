@@ -1382,6 +1382,12 @@ def extract_las_metadata(
     mud_density, _ = _find_float(
         ["MW", "FD", "DFD", "MDEN", "MUD_WEIGHT", "MUD_DENSITY", "MUDW", "MUDD"]
     )
+    mud_filtrate_salinity, _ = _find_float(
+        ["MF_SALINITY", "MUD_FILTRATE_SALINITY", "MFSAL", "MFSS", "MFS"]
+    )
+    mud_filtrate_density, _ = _find_float(
+        ["MF_DENSITY", "MUD_FILTRATE_DENSITY", "MFDEN", "MF_RHO", "MFRHO"]
+    )
 
     lat_aliases = ["LATI", "LAT", "LATITUDE", "SURF_LAT", "SLAT", "Y_LAT"]
     lon_aliases = [
@@ -1520,6 +1526,8 @@ def extract_las_metadata(
         rmc=rmc,
         mud_density=mud_density,
         mud_weight=mud_density,
+        mud_filtrate_salinity=mud_filtrate_salinity,
+        mud_filtrate_density=mud_filtrate_density,
         raw_well_header=_sanitize_json_value(
             {
                 k: v.get("value")
@@ -2948,4 +2956,3 @@ def read_dlis_frame(
             pass
 
     return df, meta_dict, std_units
-
