@@ -1476,6 +1476,39 @@ class WellDataState {
 				'net_confining_stress',
 				workbench.scalParams.net_confining_stress
 			);
+			workbench.scalParams.use_log_stress_profile = Boolean(
+				savedScal.use_log_stress_profile ?? false
+			);
+			workbench.scalParams.stress_tvd_curve =
+				typeof savedScal.stress_tvd_curve === 'string'
+					? savedScal.stress_tvd_curve
+					: workbench.scalParams.stress_tvd_curve;
+			workbench.scalParams.stress_rhob_curve =
+				typeof savedScal.stress_rhob_curve === 'string'
+					? savedScal.stress_rhob_curve
+					: workbench.scalParams.stress_rhob_curve;
+			workbench.scalParams.stress_dtc_curve =
+				typeof savedScal.stress_dtc_curve === 'string'
+					? savedScal.stress_dtc_curve
+					: workbench.scalParams.stress_dtc_curve;
+			workbench.scalParams.stress_dts_curve =
+				typeof savedScal.stress_dts_curve === 'string'
+					? savedScal.stress_dts_curve
+					: workbench.scalParams.stress_dts_curve;
+			workbench.scalParams.stress_depth_unit =
+				savedScal.stress_depth_unit === 'ft' ? 'ft' : 'm';
+			workbench.scalParams.stress_pore_pressure_gradient = pickNum(
+				'stress_pore_pressure_gradient',
+				workbench.scalParams.stress_pore_pressure_gradient
+			);
+			workbench.scalParams.stress_biot_coefficient = pickNum(
+				'stress_biot_coefficient',
+				workbench.scalParams.stress_biot_coefficient
+			);
+			workbench.scalParams.stress_poisson_ratio = pickNum(
+				'stress_poisson_ratio',
+				workbench.scalParams.stress_poisson_ratio
+			);
 			workbench.scalParams.mean_pore_pressure = pickNum(
 				'mean_pore_pressure',
 				workbench.scalParams.mean_pore_pressure

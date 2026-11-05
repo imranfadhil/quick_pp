@@ -330,6 +330,8 @@ flowchart TD
       
       where $C_\phi$ and $C_k$ are rock-specific compaction coefficients (sandstone, friable sandstone, carbonate).
 
+      **Log-derived option:** Integrates bulk density over positive-down TVD to calculate vertical stress, estimates pore pressure from a user-selected gradient, and applies Biot's coefficient. When both DTC and DTS are available, dynamic Poisson's ratio is calculated from their velocity ratio; otherwise a configured fallback is used. Equivalent effective confining stress is the mean of vertical and two uniaxial-strain horizontal effective stresses. The profile assumes density at the shallowest valid sample continues to the depth datum; measured depth is only a TVD approximation when no TVD curve is available. It does not infer pore pressure from sonic compaction trends.
+
     * **Klinkenberg Gas Slippage Correction:**
       Corrects air permeability ($k_{\text{air}}$) to equivalent liquid permeability ($k_{\infty}$):
       
@@ -343,4 +345,4 @@ flowchart TD
       $$P_{c,\text{res}} = P_{c,\text{lab}} \cdot \frac{(\sigma \cos\theta)_{\text{res}}}{(\sigma \cos\theta)_{\text{lab}}}$$
 
 * **Input Data:** Core plugs table (`DEPTH`, `CPORE`, `CPERM`), Overburden stress parameters, Lab IFT and contact angle  
-* **Output Data:** `CPOR_SHIFTED`, `CPERM_SHIFTED`, Stress-corrected core properties, Scaled $P_c$ curves
+* **Output Data:** `CPOR_SHIFTED`, `CPERM_SHIFTED`, `SV_EST`, `PP_EST`, `NU_DYN`, `NCS_EST`, Stress-corrected core properties, Scaled $P_c$ curves

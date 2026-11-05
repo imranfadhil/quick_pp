@@ -21,6 +21,7 @@ from quick_pp.scal import (
     let_relperm,
     pc_lab_to_reservoir,
 )
+from quick_pp.rock_physics.geomechanics import estimate_log_stress_profile
 
 router = APIRouter(prefix="/scal", tags=["SCAL"])
 
@@ -134,6 +135,28 @@ class CoreCorrectionsInput(BaseModel):
         False, description="Overwrite CPORE/CPERM in-place instead of preserving _AMB/_AIR columns"
     )
     data: List[Dict[str, Any]] = Field(..., description="Core/log records")
+
+
+class StressProfileInput(BaseModel):
+    md: List[Optional[float]] = Field(..., description="Measured depth aligned with the log arrays")
+    tvd: List[Optional[float]] = Field(
+        ..., description="Positive-down true vertical depth aligned with the log arrays"
+    )
+    rhob: List[Optional[float]] = Field(..., description="Bulk density [g/cm³]")
+    dtc: Optional[List[Optional[float]]] = Field(
+        default=None, description="Compressional sonic slowness"
+    )
+    dts: Optional[List[Optional[float]]] = Field(
+        default=None, description="Shear sonic slowness; same units as DTC"
+    )
+    depth_unit: str = Field("m", description="'m' or 'ft', matching TVD")
+    pore_pressure_gradient: float = Field(
+        1.42, ge=0.0, description="Pore-pressure gradient [psi per selected depth unit]"
+    )
+    biot_coefficient: float = Field(1.0, ge=0.0, le=1.0)
+    poisson_ratio: float = Field(
+        0.25, ge=0.0, lt=0.5, description="Fallback Poisson's ratio when sonic data are invalid"
+    )
 
 
 class PcLabToReservoirInput(BaseModel):
@@ -290,6 +313,64 @@ async def generate_swof_endpoint(inputs: SWOFTableInput):
 
 
 @router.post(
+    "/stress_profile",
+    summary="Estimate a Log-Based Effective Confining Stress Profile",
+    operation_id="estimate_scal_stress_profile",
+)
+async def estimate_stress_profile_endpoint(inputs: StressProfileInput):
+    """Estimate vertical, pore, and equivalent effective confining stress from logs."""
+    try:
+        if not (len(inputs.md) == len(inputs.tvd) == len(inputs.rhob)):
+            raise ValueError("md, tvd, and rhob must have matching lengths.")
+        if (inputs.dtc is None) != (inputs.dts is None):
+            raise ValueError("Provide both DTC and DTS for dynamic Poisson's ratio.")
+        if inputs.dtc is not None and (
+            len(inputs.dtc) != len(inputs.md) or len(inputs.dts or []) != len(inputs.md)
+        ):
+            raise ValueError("DTC and DTS must match the lengths of the other log arrays.")
+
+        def to_array(values):
+            if values is None:
+                return None
+            return np.asarray(
+                [np.nan if value is None else value for value in values], dtype=float
+            )
+
+        result = estimate_log_stress_profile(
+            md=to_array(inputs.md),
+            tvd=to_array(inputs.tvd),
+            rhob=to_array(inputs.rhob),
+            dtc=to_array(inputs.dtc),
+            dts=to_array(inputs.dts),
+            depth_unit=inputs.depth_unit.strip().lower(),
+            pore_pressure_gradient=inputs.pore_pressure_gradient,
+            biot_coefficient=inputs.biot_coefficient,
+            poisson_ratio=inputs.poisson_ratio,
+        )
+        rows = [
+            {
+                "DEPTH": float(md) if np.isfinite(md) else None,
+                "SV_EST": float(sv) if np.isfinite(sv) else None,
+                "PP_EST": float(pp) if np.isfinite(pp) else None,
+                "NU_DYN": float(nu) if np.isfinite(nu) else None,
+                "NCS_EST": float(ncs) if np.isfinite(ncs) else None,
+            }
+            for md, sv, pp, nu, ncs in zip(
+                result["md"],
+                result["sv_psi"],
+                result["pp_psi"],
+                result["nu"],
+                result["ncs_equivalent_psi"],
+            )
+        ]
+        return {"data": rows}
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Error estimating log-based stress profile: {e}"
+        ) from e
+
+
+@router.post(
     "/core_corrections",
     summary="Apply Overburden, Klinkenberg, and Clay-Bound Water Corrections to Core Data",
     operation_id="apply_scal_core_corrections",
@@ -366,4 +447,3 @@ async def convert_pc_lab_to_reservoir_endpoint(inputs: PcLabToReservoirInput):
         raise HTTPException(
             status_code=400, detail=f"Error converting capillary pressure: {e}"
         ) from e
-

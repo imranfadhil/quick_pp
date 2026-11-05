@@ -9,7 +9,40 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 
+	type StressProfileRow = {
+		DEPTH: number | null;
+		SV_EST: number | null;
+		PP_EST: number | null;
+		NU_DYN: number | null;
+		NCS_EST: number | null;
+	};
+
 	let scalPendingSave = $state(false);
+	let stressProfile = $state<StressProfileRow[] | null>(null);
+	const stressProfileNcsRange = $derived.by(() => {
+		if (!stressProfile) return null;
+		let min = Infinity;
+		let max = -Infinity;
+		for (const row of stressProfile) {
+			if (typeof row.NCS_EST !== 'number' || !Number.isFinite(row.NCS_EST)) continue;
+			min = Math.min(min, row.NCS_EST);
+			max = Math.max(max, row.NCS_EST);
+		}
+		return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+	});
+
+	const stressDepthCurves = $derived(
+		Object.keys(wellData.curves).filter((curve) => ['TVD', 'DEPT', 'DEPTH'].includes(curve))
+	);
+	const stressRhobCurves = $derived(
+		Object.keys(wellData.curves).filter((curve) => /RHOB|DEN/i.test(curve))
+	);
+	const stressDtcCurves = $derived(
+		Object.keys(wellData.curves).filter((curve) => /^(DTC|DTCO|DT|AC)$/i.test(curve))
+	);
+	const stressDtsCurves = $derived(
+		Object.keys(wellData.curves).filter((curve) => /^(DTS|DTSM|DTSS)$/i.test(curve))
+	);
 
 	const canSaveScal = $derived(
 		Boolean(workbench.projectId && workbench.wellId) &&
@@ -44,6 +77,121 @@
 		scalPendingSave = true;
 	}
 
+	function setStressDepthUnit(unit: 'm' | 'ft') {
+		const sp = workbench.scalParams;
+		if (sp.stress_depth_unit === unit) return;
+		sp.stress_pore_pressure_gradient =
+			unit === 'ft'
+				? sp.stress_pore_pressure_gradient * 0.3048
+				: sp.stress_pore_pressure_gradient / 0.3048;
+		sp.stress_depth_unit = unit;
+		scalPendingSave = true;
+	}
+
+	async function estimateStressProfile(): Promise<StressProfileRow[]> {
+		const sp = workbench.scalParams;
+		const md = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const tvd = wellData.curves[sp.stress_tvd_curve] ?? md;
+		const rhob = wellData.curves[sp.stress_rhob_curve];
+		if (md.length < 2 || tvd.length !== md.length || !rhob || rhob.length !== md.length) {
+			throw new Error('Select aligned MD/TVD and RHOB curves with at least two rows.');
+		}
+
+		const dtcSelected = sp.stress_dtc_curve ? wellData.curves[sp.stress_dtc_curve] : undefined;
+		const dtsSelected = sp.stress_dts_curve ? wellData.curves[sp.stress_dts_curve] : undefined;
+		const hasSonicPair = Boolean(dtcSelected && dtsSelected);
+		const dtc = hasSonicPair ? dtcSelected : undefined;
+		const dts = hasSonicPair ? dtsSelected : undefined;
+		if ((dtc && dtc.length !== md.length) || (dts && dts.length !== md.length)) {
+			throw new Error('Selected sonic curves must align with the well depth grid.');
+		}
+
+		const nullable = (values: number[]) =>
+			values.map((value) => (Number.isFinite(value) ? value : null));
+		const result = await postJson<{ data: StressProfileRow[] }>('/quick_pp/scal/stress_profile', {
+			md: nullable(md),
+			tvd: nullable(tvd),
+			rhob: nullable(rhob),
+			dtc: dtc ? nullable(dtc) : null,
+			dts: dts ? nullable(dts) : null,
+			depth_unit: sp.stress_depth_unit,
+			pore_pressure_gradient: sp.stress_pore_pressure_gradient,
+			biot_coefficient: sp.stress_biot_coefficient,
+			poisson_ratio: sp.stress_poisson_ratio
+		});
+		const rows = result.data ?? [];
+		const uniqueStressDepths = new Set<number>();
+		for (const row of rows) {
+			if (
+				typeof row.DEPTH === 'number' &&
+				Number.isFinite(row.DEPTH) &&
+				typeof row.NCS_EST === 'number' &&
+				Number.isFinite(row.NCS_EST)
+			) {
+				uniqueStressDepths.add(row.DEPTH);
+			}
+		}
+		if (uniqueStressDepths.size < 2) {
+			throw new Error('At least two valid depth/density samples are required for a stress profile.');
+		}
+
+		stressProfile = rows;
+		wellData.mergeComputedCurves({
+			DEPTH: md,
+			SV_EST: rows.map((row) => row.SV_EST),
+			PP_EST: rows.map((row) => row.PP_EST),
+			NU_DYN: rows.map((row) => row.NU_DYN),
+			NCS_EST: rows.map((row) => row.NCS_EST)
+		});
+		wellData.markModuleComputed('scal', ['SV_EST', 'PP_EST', 'NU_DYN', 'NCS_EST']);
+		scalPendingSave = true;
+		return rows;
+	}
+
+	function makeStressInterpolator(rows: StressProfileRow[]) {
+		const samples = rows
+			.filter(
+				(row): row is StressProfileRow & { DEPTH: number; NCS_EST: number } =>
+					typeof row.DEPTH === 'number' &&
+					Number.isFinite(row.DEPTH) &&
+					typeof row.NCS_EST === 'number' &&
+					Number.isFinite(row.NCS_EST)
+			)
+			.sort((a, b) => a.DEPTH - b.DEPTH);
+		return (depth: number): number | null => {
+			if (
+				samples.length < 2 ||
+				depth < samples[0].DEPTH ||
+				depth > samples[samples.length - 1].DEPTH
+			) {
+				return null;
+			}
+			for (let i = 1; i < samples.length; i++) {
+				const upper = samples[i];
+				if (depth > upper.DEPTH) continue;
+				const lower = samples[i - 1];
+				const span = upper.DEPTH - lower.DEPTH;
+				if (span <= 0) continue;
+				const fraction = (depth - lower.DEPTH) / span;
+				return lower.NCS_EST + fraction * (upper.NCS_EST - lower.NCS_EST);
+			}
+			return null;
+		};
+	}
+
+	async function estimateStressProfileFromButton() {
+		wellData.isCalculating = true;
+		wellData.lastError = null;
+		try {
+			await estimateStressProfile();
+			appStatus.success('Log-based stress profile estimated and added to the well curves');
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Failed to estimate log-based stress profile';
+		} finally {
+			wellData.isCalculating = false;
+		}
+	}
+
 	async function runCoreCorrections() {
 		const selectionIndices = wellData.getBrushedCalculationIndices();
 		if (selectionIndices && selectionIndices.size === 0) {
@@ -54,6 +202,18 @@
 		wellData.lastError = null;
 		const sp = workbench.scalParams;
 		try {
+			const stressRows = sp.use_log_stress_profile ? await estimateStressProfile() : null;
+			const interpolateStress = stressRows ? makeStressInterpolator(stressRows) : null;
+			const stressForRecord = (depth: number) => {
+				if (!interpolateStress) return {};
+				const value = interpolateStress(depth);
+				if (value === null) {
+					throw new Error(
+						`Core depth ${depth} is outside the estimated stress profile coverage.`
+					);
+				}
+				return { NCS_EST: value };
+			};
 			const hasCoreSamples = wellData.coreSamples.length > 0;
 			const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 			const cporeBaseCurve =
@@ -84,7 +244,12 @@
 				return closestIndex >= 0 && closestDelta <= 0.5;
 			};
 
-			const records: Array<{ DEPTH: number; CPORE: number; CPERM: number }> = [];
+			const records: Array<{
+				DEPTH: number;
+				CPORE: number;
+				CPERM: number;
+				NCS_EST?: number;
+			}> = [];
 			const validSampleIndices: number[] = [];
 			const validCurveIndices: number[] = [];
 
@@ -125,7 +290,8 @@
 						records.push({
 							DEPTH: dCur,
 							CPORE: pRaw > 1 ? pRaw / 100 : pRaw,
-							CPERM: kRaw
+							CPERM: kRaw,
+							...stressForRecord(dCur)
 						});
 						validSampleIndices.push(idx);
 					}
@@ -146,12 +312,13 @@
 						records.push({
 							DEPTH: dRaw,
 							CPORE: pRaw > 1 ? pRaw / 100 : pRaw,
-							CPERM: kRaw
+							CPERM: kRaw,
+							...stressForRecord(dRaw)
 						});
 						validCurveIndices.push(i);
 					}
 				}
-			} else if (!selectionIndices) {
+			} else if (!selectionIndices && !stressRows) {
 				// Fallback synthetic plugs when well has no core samples loaded
 				[
 					{ depth: 2010, porosity: 0.18, perm: 45 },
@@ -188,7 +355,7 @@
 			const res = await postJson<{
 				data: Array<Record<string, any>>;
 			}>('/quick_pp/scal/core_corrections', {
-				net_confining_stress: sp.net_confining_stress,
+				net_confining_stress: stressRows ? 'NCS_EST' : sp.net_confining_stress,
 				mean_pore_pressure: sp.mean_pore_pressure,
 				compaction_coeff: compactionCoeff,
 				perm_compaction_coeff: permCompactionCoeff,
@@ -218,7 +385,10 @@
 					: wellData.hasActiveFilter
 						? ' [Active Interval]'
 						: '';
-			const lineageTag = `NOB=${Math.round(sp.net_confining_stress)}psi, Pm=${Math.round(sp.mean_pore_pressure)}psi (${sp.core_lithology})${zoneSuffix}`;
+			const stressLabel = stressRows
+				? 'log-derived equivalent NCS'
+				: `${Math.round(sp.net_confining_stress)}psi NCS`;
+			const lineageTag = `NOB=${stressLabel}, Pm=${Math.round(sp.mean_pore_pressure)}psi (${sp.core_lithology})${zoneSuffix}`;
 
 			// 1. Update discrete core samples in-memory (preserving porosity_amb & perm_air baseline)
 			if (hasCoreSamples && validSampleIndices.length > 0) {
@@ -653,15 +823,140 @@
 				</span>
 			</div>
 
-			<NumericScrubber
-				label="Net Overburden Stress"
-				bind:value={workbench.scalParams.net_confining_stress}
-				unit="psi"
-				min={500}
-				max={12000}
-				step={250}
-				onrun={runCoreCorrections}
-			/>
+			<div class="mt-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<label class="flex items-center gap-1.5 text-[10px] font-semibold text-[var(--text-primary)]">
+					<input type="checkbox" bind:checked={workbench.scalParams.use_log_stress_profile} />
+					Estimate stress profile from logs
+				</label>
+				{#if workbench.scalParams.use_log_stress_profile}
+					<div class="mt-1 grid grid-cols-2 gap-1">
+						<label class="text-[9px] text-[var(--text-muted)]">
+							TVD curve
+							<select
+								bind:value={workbench.scalParams.stress_tvd_curve}
+								class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] text-[var(--text-primary)]"
+							>
+								{#each stressDepthCurves as curve (curve)}
+									<option value={curve}>{curve}</option>
+								{/each}
+							</select>
+						</label>
+						<label class="text-[9px] text-[var(--text-muted)]">
+							Bulk density (g/cm³)
+							<select
+								bind:value={workbench.scalParams.stress_rhob_curve}
+								class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] text-[var(--text-primary)]"
+							>
+								{#each stressRhobCurves as curve (curve)}
+									<option value={curve}>{curve}</option>
+								{/each}
+							</select>
+						</label>
+						<label class="text-[9px] text-[var(--text-muted)]">
+							DTC (optional)
+							<select
+								bind:value={workbench.scalParams.stress_dtc_curve}
+								class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] text-[var(--text-primary)]"
+							>
+								<option value="">Use fixed ν</option>
+								{#each stressDtcCurves as curve (curve)}
+									<option value={curve}>{curve}</option>
+								{/each}
+							</select>
+						</label>
+						<label class="text-[9px] text-[var(--text-muted)]">
+							DTS (optional)
+							<select
+								bind:value={workbench.scalParams.stress_dts_curve}
+								class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] text-[var(--text-primary)]"
+							>
+								<option value="">Use fixed ν</option>
+								{#each stressDtsCurves as curve (curve)}
+									<option value={curve}>{curve}</option>
+								{/each}
+							</select>
+						</label>
+					</div>
+					<div class="mt-1 grid grid-cols-2 gap-1">
+						<label class="text-[9px] text-[var(--text-muted)]">
+							Depth units
+							<select
+								value={workbench.scalParams.stress_depth_unit}
+								onchange={(event) =>
+									setStressDepthUnit((event.currentTarget as HTMLSelectElement).value as 'm' | 'ft')}
+								class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] text-[var(--text-primary)]"
+							>
+								<option value="m">meters</option>
+								<option value="ft">feet</option>
+							</select>
+						</label>
+						<label class="text-[9px] text-[var(--text-muted)]">
+							Pore-pressure gradient (psi/{workbench.scalParams.stress_depth_unit})
+							<input
+								type="number"
+								min="0"
+								step="0.01"
+								bind:value={workbench.scalParams.stress_pore_pressure_gradient}
+								class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-right text-[10px] text-[var(--text-primary)]"
+							/>
+						</label>
+						<label class="text-[9px] text-[var(--text-muted)]">
+							Biot coefficient α
+							<input
+								type="number"
+								min="0"
+								max="1"
+								step="0.05"
+								bind:value={workbench.scalParams.stress_biot_coefficient}
+								class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-right text-[10px] text-[var(--text-primary)]"
+							/>
+						</label>
+						<label class="text-[9px] text-[var(--text-muted)]">
+							Fallback Poisson’s ratio ν
+							<input
+								type="number"
+								min="0"
+								max="0.49"
+								step="0.01"
+								bind:value={workbench.scalParams.stress_poisson_ratio}
+								class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-right text-[10px] text-[var(--text-primary)]"
+							/>
+						</label>
+					</div>
+					<p class="mt-1 text-[9px] leading-snug text-[var(--text-muted)]">
+						Use positive-down TVD from the surface; DEPT is only an MD-as-TVD approximation.
+						This assumes an onshore/surface datum, integrates RHOB to depth, and uses the selected
+						pore-pressure gradient. DTC/DTS provide dynamic ν when both are valid; NCS is the
+						mean effective stress under a uniaxial-strain assumption.
+					</p>
+					<button
+						type="button"
+						disabled={wellData.isCalculating || stressRhobCurves.length === 0}
+						onclick={estimateStressProfileFromButton}
+						class="mt-1 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[10px] font-semibold text-[var(--text-primary)] hover:bg-slate-200 disabled:opacity-50"
+					>
+						Estimate &amp; Add Stress Curves
+					</button>
+					{#if stressProfile && stressProfileNcsRange}
+						<div class="mt-1 text-[9px] text-emerald-700">
+							Profile ready: {stressProfile.length} rows • NCS {fmtNum(
+								stressProfileNcsRange.min,
+								0
+							)}–{fmtNum(stressProfileNcsRange.max, 0)} psi
+						</div>
+					{/if}
+				{:else}
+					<NumericScrubber
+						label="Net Confining Stress"
+						bind:value={workbench.scalParams.net_confining_stress}
+						unit="psi"
+						min={500}
+						max={12000}
+						step={250}
+						onrun={runCoreCorrections}
+					/>
+				{/if}
+			</div>
 			<NumericScrubber
 				label="Lab Mean Gas Pressure"
 				bind:value={workbench.scalParams.mean_pore_pressure}

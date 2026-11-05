@@ -190,6 +190,15 @@ export interface ScalModelParams {
 	// Core Overburden & Klinkenberg Correction Parameters
 	core_lithology: 'sandstone' | 'friable_sandstone' | 'carbonate';
 	net_confining_stress: number;
+	use_log_stress_profile: boolean;
+	stress_tvd_curve: string;
+	stress_rhob_curve: string;
+	stress_dtc_curve: string;
+	stress_dts_curve: string;
+	stress_depth_unit: 'm' | 'ft';
+	stress_pore_pressure_gradient: number;
+	stress_biot_coefficient: number;
+	stress_poisson_ratio: number;
 	mean_pore_pressure: number;
 	compaction_coeff: number;
 	perm_compaction_coeff: number;
@@ -778,6 +787,15 @@ class WorkbenchState {
 		n_points: 25,
 		core_lithology: 'sandstone',
 		net_confining_stress: 3500,
+		use_log_stress_profile: false,
+		stress_tvd_curve: 'TVD',
+		stress_rhob_curve: 'RHOB',
+		stress_dtc_curve: 'DTC',
+		stress_dts_curve: 'DTS',
+		stress_depth_unit: 'm',
+		stress_pore_pressure_gradient: 1.42,
+		stress_biot_coefficient: 1.0,
+		stress_poisson_ratio: 0.25,
 		mean_pore_pressure: 45,
 		compaction_coeff: 6e-6,
 		perm_compaction_coeff: 3e-5,
