@@ -108,17 +108,20 @@
 
 		const nullable = (values: number[]) =>
 			values.map((value) => (Number.isFinite(value) ? value : null));
-		const result = await postJson<{ data: StressProfileRow[] }>('/quick_pp/scal/stress_profile', {
-			md: nullable(md),
-			tvd: nullable(tvd),
-			rhob: nullable(rhob),
-			dtc: dtc ? nullable(dtc) : null,
-			dts: dts ? nullable(dts) : null,
-			depth_unit: sp.stress_depth_unit,
-			pore_pressure_gradient: sp.stress_pore_pressure_gradient,
-			biot_coefficient: sp.stress_biot_coefficient,
-			poisson_ratio: sp.stress_poisson_ratio
-		});
+		const result = await postJson<{ data: StressProfileRow[] }>(
+			'/quick_pp/scal/stress_profile',
+			{
+				md: nullable(md),
+				tvd: nullable(tvd),
+				rhob: nullable(rhob),
+				dtc: dtc ? nullable(dtc) : null,
+				dts: dts ? nullable(dts) : null,
+				depth_unit: sp.stress_depth_unit,
+				pore_pressure_gradient: sp.stress_pore_pressure_gradient,
+				biot_coefficient: sp.stress_biot_coefficient,
+				poisson_ratio: sp.stress_poisson_ratio
+			}
+		);
 		const rows = result.data ?? [];
 		const uniqueStressDepths = new Set<number>();
 		for (const row of rows) {
@@ -132,7 +135,9 @@
 			}
 		}
 		if (uniqueStressDepths.size < 2) {
-			throw new Error('At least two valid depth/density samples are required for a stress profile.');
+			throw new Error(
+				'At least two valid depth/density samples are required for a stress profile.'
+			);
 		}
 
 		stressProfile = rows;
@@ -296,7 +301,10 @@
 						validSampleIndices.push(idx);
 					}
 				});
-			} else if (dept.length > 0 && (cporeBaseCurve.length > 0 || cpermBaseCurve.length > 0)) {
+			} else if (
+				dept.length > 0 &&
+				(cporeBaseCurve.length > 0 || cpermBaseCurve.length > 0)
+			) {
 				for (const i of wellData.visibleIndices) {
 					if (selectionIndices && !selectionIndices.has(i)) continue;
 					const dRaw = dept[i];
@@ -438,7 +446,9 @@
 
 				if (hasCoreSamples && validSampleIndices.length > 0) {
 					validSampleIndices.forEach((sampleIdx, i) => {
-						const sd = Number(wellData.coreSamples[sampleIdx]?.depth ?? records[i].DEPTH);
+						const sd = Number(
+							wellData.coreSamples[sampleIdx]?.depth ?? records[i].DEPTH
+						);
 						if (!Number.isFinite(sd)) return;
 						let lo = 0;
 						let hi = dept.length - 1;
@@ -466,15 +476,19 @@
 					});
 				}
 
-				wellData.mergeComputedCurves({
-					DEPTH: dept,
-					CPORE: newCpore,
-					CPERM: newCperm,
-					CPORE_AMB: newCporeAmb,
-					CPERM_AIR: newCpermAir,
-					CPORE_ORI: newCporeAmb,
-					CPERM_ORI: newCpermAir
-				}, undefined, selectionIndices);
+				wellData.mergeComputedCurves(
+					{
+						DEPTH: dept,
+						CPORE: newCpore,
+						CPERM: newCperm,
+						CPORE_AMB: newCporeAmb,
+						CPERM_AIR: newCpermAir,
+						CPORE_ORI: newCporeAmb,
+						CPERM_ORI: newCpermAir
+					},
+					undefined,
+					selectionIndices
+				);
 				wellData.markModuleComputed('scal', [
 					'CPORE',
 					'CPERM',
@@ -486,7 +500,8 @@
 			}
 
 			scalPendingSave = true;
-			wellData.lastSavedMessage = 'Core Overburden & Klinkenberg Previewed (Click Save to Persist)';
+			wellData.lastSavedMessage =
+				'Core Overburden & Klinkenberg Previewed (Click Save to Persist)';
 			appStatus.info(
 				wellData.hasActiveFilter
 					? `Previewed Core Overburden & Klinkenberg on ${records.length} active-zone plugs — click Save to persist`
@@ -510,7 +525,8 @@
 				if (!wellData.isCorePlugInActiveFilter(dRaw, dCur)) {
 					return s;
 				}
-				const ambPhi = s.porosity_amb ?? origS?.porosity_amb ?? origS?.porosity ?? s.porosity;
+				const ambPhi =
+					s.porosity_amb ?? origS?.porosity_amb ?? origS?.porosity ?? s.porosity;
 				const airK = s.perm_air ?? origS?.perm_air ?? origS?.permeability ?? s.permeability;
 				return {
 					...s,
@@ -782,7 +798,7 @@
 			badge={wellData.coreShiftDirty
 				? `Shift ${wellData.coreShiftDelta >= 0 ? '+' : ''}${fmtNum(wellData.coreShiftDelta, 2)}m`
 				: `${totalCorePlugCount} PLUGS`}
-			defaultOpen={true}
+			defaultOpen={false}
 		>
 			<CoreDepthShiftPanel defaultTarget="combined" />
 		</ParameterSection>
@@ -794,21 +810,17 @@
 				: workbench.scalParams.core_corrected
 					? `${totalCorePlugCount} PLUGS • RES`
 					: `${totalCorePlugCount} PLUGS`}
-			defaultOpen={true}
+			defaultOpen={false}
 		>
 			<div class="grid grid-cols-3 gap-1">
-				{#each [
-					['sandstone', 'Consolidated Sand', '4.5e-6 (1/psi) — well-consolidated sandstone'],
-					['friable_sandstone', 'Friable Sand', '8.0e-6 (1/psi) — friable / poorly cemented sandstone'],
-					['carbonate', 'Carbonate', '2.5e-6 (1/psi) — stiff / well-cemented limestone or dolomite']
-				] as [l, lbl, tip]}
+				{#each [['sandstone', 'Consolidated Sand', '4.5e-6 (1/psi) — well-consolidated sandstone'], ['friable_sandstone', 'Friable Sand', '8.0e-6 (1/psi) — friable / poorly cemented sandstone'], ['carbonate', 'Carbonate', '2.5e-6 (1/psi) — stiff / well-cemented limestone or dolomite']] as [l, lbl, tip]}
 					<button
 						type="button"
 						title={tip}
 						onclick={() =>
 							setCoreLithology(l as 'sandstone' | 'friable_sandstone' | 'carbonate')}
-						class="h-6 rounded-sm border px-1 text-[10.5px] font-medium {workbench.scalParams
-							.core_lithology === l
+						class="h-6 rounded-sm border px-1 text-[10.5px] font-medium {workbench
+							.scalParams.core_lithology === l
 							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 					>
@@ -816,16 +828,27 @@
 					</button>
 				{/each}
 			</div>
-			<div class="mt-0.5 flex items-center justify-between text-[9.5px] text-[var(--text-muted)]">
+			<div
+				class="mt-0.5 flex items-center justify-between text-[9.5px] text-[var(--text-muted)]"
+			>
 				<span>Compaction Coeff (c<sub>φ</sub> / c<sub>k</sub>):</span>
 				<span class="mono-num font-semibold text-[var(--text-secondary)]">
-					{workbench.scalParams.compaction_coeff.toExponential(1)} / {workbench.scalParams.perm_compaction_coeff.toExponential(1)} psi⁻¹
+					{workbench.scalParams.compaction_coeff.toExponential(1)} / {workbench.scalParams.perm_compaction_coeff.toExponential(
+						1
+					)} psi⁻¹
 				</span>
 			</div>
 
-			<div class="mt-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
-				<label class="flex items-center gap-1.5 text-[10px] font-semibold text-[var(--text-primary)]">
-					<input type="checkbox" bind:checked={workbench.scalParams.use_log_stress_profile} />
+			<div
+				class="mt-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+			>
+				<label
+					class="flex items-center gap-1.5 text-[10px] font-semibold text-[var(--text-primary)]"
+				>
+					<input
+						type="checkbox"
+						bind:checked={workbench.scalParams.use_log_stress_profile}
+					/>
 					Estimate stress profile from logs
 				</label>
 				{#if workbench.scalParams.use_log_stress_profile}
@@ -883,7 +906,11 @@
 							<select
 								value={workbench.scalParams.stress_depth_unit}
 								onchange={(event) =>
-									setStressDepthUnit((event.currentTarget as HTMLSelectElement).value as 'm' | 'ft')}
+									setStressDepthUnit(
+										(event.currentTarget as HTMLSelectElement).value as
+											| 'm'
+											| 'ft'
+									)}
 								class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] text-[var(--text-primary)]"
 							>
 								<option value="m">meters</option>
@@ -924,10 +951,11 @@
 						</label>
 					</div>
 					<p class="mt-1 text-[9px] leading-snug text-[var(--text-muted)]">
-						Use positive-down TVD from the surface; DEPT is only an MD-as-TVD approximation.
-						This assumes an onshore/surface datum, integrates RHOB to depth, and uses the selected
-						pore-pressure gradient. DTC/DTS provide dynamic ν when both are valid; NCS is the
-						mean effective stress under a uniaxial-strain assumption.
+						Use positive-down TVD from the surface; DEPT is only an MD-as-TVD
+						approximation. This assumes an onshore/surface datum, integrates RHOB to
+						depth, and uses the selected pore-pressure gradient. DTC/DTS provide dynamic
+						ν when both are valid; NCS is the mean effective stress under a
+						uniaxial-strain assumption.
 					</p>
 					<button
 						type="button"
@@ -1036,7 +1064,7 @@
 				: wellData.scalPc.length > 0
 					? `${wellData.scalPc.length} PTS`
 					: undefined}
-			defaultOpen={true}
+			defaultOpen={false}
 		>
 			<NumericScrubber
 				label="Lab Capillary Pressure"
@@ -1108,7 +1136,9 @@
 					class="mt-1 rounded-sm border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-900"
 				>
 					<div class="mono-num flex items-center justify-between font-semibold">
-						<span>Reservoir Pc = {fmtNum(workbench.scalParams.pc_res_output, 3)} psi</span>
+						<span
+							>Reservoir Pc = {fmtNum(workbench.scalParams.pc_res_output, 3)} psi</span
+						>
 						{#if workbench.scalParams.pc_scale_factor !== null}
 							<span class="text-[10px] text-blue-700">
 								Factor = {fmtNum(workbench.scalParams.pc_scale_factor, 4)}×

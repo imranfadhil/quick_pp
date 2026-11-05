@@ -19,11 +19,21 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
 
-	const ALL_RT_FEATURES: Array<{ key: DrtFeatureKey; label: string; short: string; title: string }> = [
+	const ALL_RT_FEATURES: Array<{
+		key: DrtFeatureKey;
+		label: string;
+		short: string;
+		title: string;
+	}> = [
 		{ key: 'GR', label: 'GR', short: 'GR', title: 'Gamma Ray (API)' },
 		{ key: 'NPHI', label: 'NPHI', short: 'NPHI', title: 'Neutron Porosity (v/v)' },
 		{ key: 'RHOB', label: 'RHOB', short: 'RHOB', title: 'Bulk Density (g/cc)' },
-		{ key: 'LOG_RT', label: 'log₁₀(RT)', short: 'log(RT)', title: 'Log10 Deep Resistivity (ohm.m)' },
+		{
+			key: 'LOG_RT',
+			label: 'log₁₀(RT)',
+			short: 'log(RT)',
+			title: 'Log10 Deep Resistivity (ohm.m)'
+		},
 		{ key: 'PEF', label: 'PEF', short: 'PEF', title: 'Photoelectric Factor (b/e)' },
 		{ key: 'VDL', label: 'VDL', short: 'VDL', title: 'Velocity Deviation Log (Φ_T − Φ_sonic)' },
 		{ key: 'PHIT', label: 'PHIT', short: 'PHIT', title: 'Total Porosity (v/v)' },
@@ -124,11 +134,19 @@
 	let hasSonicCurvesInProject = $derived(
 		Boolean(
 			carbonateDiag?.has_sonic_data ||
-				projectData.allCurves.some((c) =>
-					['DT', 'DTC', 'AC', 'DTCO', 'PHIS', 'PHI_SONIC', 'PHI_SEC', 'PHIS_SEC', 'SPI'].includes(
-						c.toUpperCase()
-					)
-				)
+			projectData.allCurves.some((c) =>
+				[
+					'DT',
+					'DTC',
+					'AC',
+					'DTCO',
+					'PHIS',
+					'PHI_SONIC',
+					'PHI_SEC',
+					'PHIS_SEC',
+					'SPI'
+				].includes(c.toUpperCase())
+			)
 		)
 	);
 
@@ -287,7 +305,8 @@
 					: classifierDiag.model_type === 'gradient_boosting'
 						? 'GB'
 						: 'RF';
-			const defaultName = `${algoShort} (${(classifierDiag.features_used ?? []).join('+')}) ${activeMeta.shortName} ${accPct}`.trim();
+			const defaultName =
+				`${algoShort} (${(classifierDiag.features_used ?? []).join('+')}) ${activeMeta.shortName} ${accPct}`.trim();
 			const nameToUse = customModelName.trim() || defaultName;
 			const keySlug = nameToUse
 				.toLowerCase()
@@ -404,12 +423,14 @@
 				if (mode === 'full_ml') return ml ?? cb ?? null;
 				return cb ?? ml ?? null;
 			});
-			const nextLogRf = (rt.log_rock_flags_cutoff ?? rt.log_rock_flags ?? []).map((cb, idx) => {
-				const ml = rt.log_rock_flags_ml?.[idx] ?? null;
-				if (mode === 'cutoff_only') return cb ?? null;
-				if (mode === 'full_ml') return ml ?? cb ?? null;
-				return cb ?? ml ?? null;
-			});
+			const nextLogRf = (rt.log_rock_flags_cutoff ?? rt.log_rock_flags ?? []).map(
+				(cb, idx) => {
+					const ml = rt.log_rock_flags_ml?.[idx] ?? null;
+					if (mode === 'cutoff_only') return cb ?? null;
+					if (mode === 'full_ml') return ml ?? cb ?? null;
+					return cb ?? ml ?? null;
+				}
+			);
 			const nextCounts: Record<string, number> = {};
 			const countSource = nextLogRf.length > 0 ? nextLogRf : nextCoreRf;
 			for (const v of countSource) {
@@ -441,7 +462,11 @@
 			// Auto-persist cutoffs and parameters for active zone selection
 			void projectData.persistProjectParams([], ['rock-typing']);
 
-			if (workbench.wellId && Array.isArray(rt.log_well_names) && Array.isArray(rt.log_depths)) {
+			if (
+				workbench.wellId &&
+				Array.isArray(rt.log_well_names) &&
+				Array.isArray(rt.log_depths)
+			) {
 				const lDepths: number[] = [];
 				const lRf: (number | null)[] = [];
 				for (let i = 0; i < rt.log_well_names.length; i++) {
@@ -458,11 +483,6 @@
 				}
 			}
 		}
-
-
-
-
-
 	}
 
 	async function executeRockTyping(
@@ -483,8 +503,7 @@
 				workbench.depthFilter?.min != null ? workbench.depthFilter.min : null;
 			const activeMaxDepth =
 				workbench.depthFilter?.max != null ? workbench.depthFilter.max : null;
-			const activeZones =
-				workbench.selectedZones.length > 0 ? workbench.selectedZones : null;
+			const activeZones = workbench.selectedZones.length > 0 ? workbench.selectedZones : null;
 
 			const { data, error } = await api.POST(
 				'/quick_pp/workspace/projects/{project_id}/rock_typing/compute',
@@ -579,7 +598,8 @@
 				const wnArr = data.data.well_names;
 				const dArr = data.data.depths;
 				const rfArr = data.data.rock_flags;
-				const rfCutArr = (data.data as any).rock_flags_cutoff ?? (data.data as any).rock_flags_binned;
+				const rfCutArr =
+					(data.data as any).rock_flags_cutoff ?? (data.data as any).rock_flags_binned;
 				const rfMlArr = (data.data as any).rock_flags_ml;
 				const vdlArr = (data.data as any).vdl;
 				const fziArr = data.data.fzi;
@@ -631,8 +651,12 @@
 				const logWnArr = (data.data as any).log_well_names as string[] | undefined;
 				const logDArr = (data.data as any).log_depths as number[] | undefined;
 				const logRfArr = (data.data as any).log_rock_flags as (number | null)[] | undefined;
-				const logRfCutArr = (data.data as any).log_rock_flags_cutoff as (number | null)[] | undefined;
-				const logRfMlArr = (data.data as any).log_rock_flags_ml as (number | null)[] | undefined;
+				const logRfCutArr = (data.data as any).log_rock_flags_cutoff as
+					| (number | null)[]
+					| undefined;
+				const logRfMlArr = (data.data as any).log_rock_flags_ml as
+					| (number | null)[]
+					| undefined;
 				const logVdlArr = (data.data as any).log_vdl as (number | null)[] | undefined;
 				if (Array.isArray(logWnArr) && Array.isArray(logDArr) && logWnArr.length > 0) {
 					const lDepths: number[] = [];
@@ -689,11 +713,15 @@
 		<SavedParamsIndicator modules={['rock-typing', 'rt-classifier']} />
 		<ParameterSection
 			title="Rock Typing Method (DRT)"
-			badge="{projectData.drtDataSource === 'core' ? 'Core (CPORE & CPERM)' : 'Log (PHIT & PERM)'} · {activeMeta.badge}"
-			defaultOpen={true}
+			badge="{projectData.drtDataSource === 'core'
+				? 'Core (CPORE & CPERM)'
+				: 'Log (PHIT & PERM)'} · {activeMeta.badge}"
+			defaultOpen={false}
 		>
 			<!-- Input Data Source Selector (Core CPORE/CPERM vs Calculated Log PHIT/PERM) -->
-			<div class="mb-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+			<div
+				class="mb-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+			>
 				<div class="mb-1 flex items-center justify-between text-[9.5px]">
 					<span class="font-semibold text-[var(--text-primary)]">
 						Input Porosity &amp; Permeability Source (Φ &amp; K):
@@ -722,12 +750,15 @@
 					>
 						<div class="flex w-full items-center justify-between gap-1 text-[10px]">
 							<span>Core Data</span>
-							<span class="mono-num rounded-xs bg-amber-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-amber-800">
+							<span
+								class="mono-num py-0.2 rounded-xs bg-amber-100/80 px-1 text-[8.5px] font-semibold text-amber-800"
+							>
 								CPORE &amp; CPERM
 							</span>
 						</div>
 						<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
-							{projectData.wellsWithCorePhiK.length}/{projectData.activeWells.length} wells · {projectData.totalCorePlugCount} RCA plugs
+							{projectData.wellsWithCorePhiK.length}/{projectData.activeWells.length} wells
+							· {projectData.totalCorePlugCount} RCA plugs
 						</span>
 					</button>
 					<button
@@ -740,30 +771,41 @@
 					>
 						<div class="flex w-full items-center justify-between gap-1 text-[10px]">
 							<span>Calculated Logs</span>
-							<span class="mono-num rounded-xs bg-indigo-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-indigo-800">
+							<span
+								class="mono-num py-0.2 rounded-xs bg-indigo-100/80 px-1 text-[8.5px] font-semibold text-indigo-800"
+							>
 								PHIT &amp; PERM
 							</span>
 						</div>
 						<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
-							{projectData.wellsWithLogPhiK.length}/{projectData.activeWells.length} wells with PHIT &amp; PERM
+							{projectData.wellsWithLogPhiK.length}/{projectData.activeWells.length} wells
+							with PHIT &amp; PERM
 						</span>
 					</button>
 				</div>
 				<div class="mt-1 text-[9px] leading-snug text-[var(--text-secondary)]">
 					{#if projectData.drtDataSource === 'core'}
-						Modelling <span class="mono-num font-semibold">{activeMeta.shortName}</span> and cutoff DRT labels strictly from
-						<strong class="mono-num text-[var(--text-primary)]">Core Plugs (CPORE &amp; CPERM)</strong>.
+						Modelling <span class="mono-num font-semibold">{activeMeta.shortName}</span>
+						and cutoff DRT labels strictly from
+						<strong class="mono-num text-[var(--text-primary)]"
+							>Core Plugs (CPORE &amp; CPERM)</strong
+						>.
 						{#if projectData.wellsWithCorePhiK.length === 0}
 							<span class="font-semibold text-amber-700">
-								No selected wells have RCA core data — switch to Calculated Logs (PHIT &amp; PERM).
+								No selected wells have RCA core data — switch to Calculated Logs
+								(PHIT &amp; PERM).
 							</span>
 						{/if}
 					{:else}
-						Modelling <span class="mono-num font-semibold">{activeMeta.shortName}</span> and cutoff DRT labels strictly from
-						<strong class="mono-num text-[var(--text-primary)]">Calculated Logs (PHIT &amp; PERM)</strong>.
+						Modelling <span class="mono-num font-semibold">{activeMeta.shortName}</span>
+						and cutoff DRT labels strictly from
+						<strong class="mono-num text-[var(--text-primary)]"
+							>Calculated Logs (PHIT &amp; PERM)</strong
+						>.
 						{#if projectData.wellsWithLogPhiK.length === 0}
 							<span class="font-semibold text-amber-700">
-								No selected wells have both PHIT and PERM curves — switch to Core Data (CPORE &amp; CPERM).
+								No selected wells have both PHIT and PERM curves — switch to Core
+								Data (CPORE &amp; CPERM).
 							</span>
 						{/if}
 					{/if}
@@ -891,12 +933,15 @@
 									? `Lorenz Inflection Scores (Lc = ${lorenzDiag?.lorenz_coeff ?? '—'})`
 									: 'GMM Silhouette & BIC Scores by Group Count (k)'}
 							</span>
-							<span class="mono-num text-[9.5px] text-[var(--text-muted)]">Click k to apply</span>
+							<span class="mono-num text-[9.5px] text-[var(--text-muted)]"
+								>Click k to apply</span
+							>
 						</div>
 						<div class="grid grid-cols-6 gap-1">
 							{#each activeKScores as row}
 								{@const isOptimal = row.k === diagnostics?.optimal_k}
-								{@const isSelected = row.k === projectData.activeDrtCutoffs.length + 1}
+								{@const isSelected =
+									row.k === projectData.activeDrtCutoffs.length + 1}
 								<button
 									type="button"
 									onclick={() => selectCandidateK(row.k)}
@@ -930,9 +975,9 @@
 					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px] text-[var(--text-secondary)]"
 				>
 					When sonic porosity (<span class="mono-num font-semibold">Φ_sonic</span> or
-					<span class="mono-num font-semibold">DT/DTC</span>) is available, secondary vuggy
-					porosity <span class="mono-num font-semibold">Φ_sec = Φ_T − Φ_sonic</span> is separated
-					from matrix interparticle porosity
+					<span class="mono-num font-semibold">DT/DTC</span>) is available, secondary
+					vuggy porosity <span class="mono-num font-semibold">Φ_sec = Φ_T − Φ_sonic</span>
+					is separated from matrix interparticle porosity
 					<span class="mono-num font-semibold">Φ_ip = Φ_T − Φ_sec</span> for Lucia
 					<span class="mono-num font-semibold">RFN</span> rock typing.
 				</div>
@@ -944,7 +989,6 @@
 					<input
 						type="checkbox"
 						bind:checked={projectData.useInterparticlePorosity}
-
 						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] accent-[var(--accent-primary)]"
 					/>
 				</label>
@@ -957,7 +1001,6 @@
 						<input
 							type="checkbox"
 							bind:checked={projectData.luciaVuggyOverride}
-	
 							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] accent-[var(--accent-primary)]"
 						/>
 					</label>
@@ -970,7 +1013,6 @@
 					min={0.005}
 					max={0.15}
 					step={0.005}
-
 				/>
 
 				<NumericScrubber
@@ -980,7 +1022,6 @@
 					min={40.0}
 					max={65.0}
 					step={0.5}
-
 				/>
 
 				{#if carbonateDiag}
@@ -989,7 +1030,9 @@
 					>
 						<span class="text-[var(--text-secondary)]">
 							{#if carbonateDiag.has_sonic_data}
-								Vuggy pts (<span class="mono-num">Φ_sec ≥ {projectData.phiSecCutoff}</span>):
+								Vuggy pts (<span class="mono-num"
+									>Φ_sec ≥ {projectData.phiSecCutoff}</span
+								>):
 								<strong class="mono-num text-[var(--text-primary)]"
 									>{carbonateDiag.vuggy_count}</strong
 								>
@@ -1033,7 +1076,6 @@
 									min={activeMeta.min}
 									max={activeMeta.max}
 									step={activeMeta.step}
-				
 								/>
 							{:else if projectData.drtMethod === 'lucia'}
 								<NumericScrubber
@@ -1043,7 +1085,6 @@
 									min={activeMeta.min}
 									max={activeMeta.max}
 									step={activeMeta.step}
-				
 								/>
 							{:else}
 								<NumericScrubber
@@ -1053,7 +1094,6 @@
 									min={activeMeta.min}
 									max={activeMeta.max}
 									step={activeMeta.step}
-				
 								/>
 							{/if}
 						</div>
@@ -1081,7 +1121,9 @@
 					type="button"
 					onclick={async () => {
 						await projectData.persistProjectParams([], ['rock-typing']);
-						appStatus.success(`Saved ${activeMeta.shortName} cutoffs for ${zoneSelectionLabel(workbench.selectedZones)} ✓`);
+						appStatus.success(
+							`Saved ${activeMeta.shortName} cutoffs for ${zoneSelectionLabel(workbench.selectedZones)} ✓`
+						);
 					}}
 					class="h-6 rounded-sm border border-emerald-600 bg-emerald-50 px-2 text-[10px] font-medium text-emerald-800 hover:bg-emerald-100"
 					title="Save cutoffs and settings for the active zone selection"
@@ -1091,8 +1133,12 @@
 			</div>
 
 			<!-- Non-Reservoir Gate (ROCK_FLAG = 0 / DRT 0) -->
-			<div class="mt-2 space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]">
-				<label class="flex cursor-pointer items-center justify-between gap-2 font-semibold text-[var(--text-primary)]">
+			<div
+				class="mt-2 space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]"
+			>
+				<label
+					class="flex cursor-pointer items-center justify-between gap-2 font-semibold text-[var(--text-primary)]"
+				>
 					<span class="flex items-center gap-1.5">
 						<span
 							style="background-color: {getRockTypeColor(0)}"
@@ -1107,8 +1153,11 @@
 					/>
 				</label>
 				<div class="text-[9.5px] text-[var(--text-secondary)]">
-					Separates tight/shale/coal intervals into <strong>DRT 0 (Non-Reservoir)</strong> so
-					<strong>DRT 1..{projectData.activeDrtCutoffs.length + 1}</strong> remain strictly reservoir flow units and non-reservoir intervals are excluded from Perm Transform &amp; SHF regressions.
+					Separates tight/shale/coal intervals into <strong>DRT 0 (Non-Reservoir)</strong>
+					so
+					<strong>DRT 1..{projectData.activeDrtCutoffs.length + 1}</strong> remain strictly
+					reservoir flow units and non-reservoir intervals are excluded from Perm Transform
+					&amp; SHF regressions.
 				</div>
 				{#if projectData.drtIncludeNonReservoir}
 					<div class="space-y-1 pt-0.5">
@@ -1184,7 +1233,10 @@
 										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)]'}"
 								>
 									<div class="flex items-center justify-between gap-1">
-										<span class="truncate font-semibold text-[var(--text-primary)]" title={sm.model_name}>
+										<span
+											class="truncate font-semibold text-[var(--text-primary)]"
+											title={sm.model_name}
+										>
 											{sm.model_name}
 										</span>
 										<div class="flex shrink-0 items-center gap-1">
@@ -1199,27 +1251,36 @@
 											<button
 												type="button"
 												disabled={projectData.isComputingMultiWell}
-												onclick={() => applySavedClassifierModel(sm.model_key)}
+												onclick={() =>
+													applySavedClassifierModel(sm.model_key)}
 												class="rounded-xs border border-emerald-600 bg-emerald-600 px-1.5 py-0.5 text-[9px] font-semibold text-white hover:opacity-95 disabled:opacity-50"
 												title="Propagate DRTs using this saved classifier"
 											>
-												{isActiveModel && classifierDiag?.propagated ? 'Active ✓' : 'Propagate'}
+												{isActiveModel && classifierDiag?.propagated
+													? 'Active ✓'
+													: 'Propagate'}
 											</button>
 										</div>
 									</div>
-									<div class="mt-0.5 flex flex-wrap items-center justify-between gap-1 text-[9px] text-[var(--text-secondary)]">
+									<div
+										class="mt-0.5 flex flex-wrap items-center justify-between gap-1 text-[9px] text-[var(--text-secondary)]"
+									>
 										<span class="mono-num flex items-center gap-1">
 											<span
-												class="rounded-xs px-1 py-0.2 text-[8px] font-semibold {sm.data_source ===
+												class="py-0.2 rounded-xs px-1 text-[8px] font-semibold {sm.data_source ===
 												'log'
 													? 'bg-indigo-100/80 text-indigo-800'
 													: 'bg-amber-100/80 text-amber-800'}"
 											>
-												{sm.data_source === 'log' ? 'Log: PHIT/PERM' : 'Core: CPORE/CPERM'}
+												{sm.data_source === 'log'
+													? 'Log: PHIT/PERM'
+													: 'Core: CPORE/CPERM'}
 											</span>
 											<span>{(sm.features_used ?? []).join('·')}</span>
 										</span>
-										<span class="mono-num font-medium text-[var(--text-primary)]">
+										<span
+											class="mono-num font-medium text-[var(--text-primary)]"
+										>
 											Acc:{smAcc} · F1:{smF1} · κ:{smKappa}
 										</span>
 									</div>
@@ -1231,9 +1292,12 @@
 							class="flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-1 text-[9.5px]"
 						>
 							<span>
-								In-memory model ({(classifierDiag.features_used ?? []).join('+')}) · Acc:
+								In-memory model ({(classifierDiag.features_used ?? []).join('+')}) ·
+								Acc:
 								<strong class="mono-num"
-									>{(Number(classifierDiag.metrics?.accuracy ?? 0) * 100).toFixed(1)}%</strong
+									>{(Number(classifierDiag.metrics?.accuracy ?? 0) * 100).toFixed(
+										1
+									)}%</strong
 								>
 							</span>
 							<button
@@ -1246,8 +1310,13 @@
 							</button>
 						</div>
 					{:else}
-						<div class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2 text-[9.5px] text-[var(--text-secondary)]">
-							No saved Rock Type classifier models yet. Use the <strong>[DRT] RT Classifier</strong> standalone module to train, validate with a Contingency Matrix, and save a model.
+						<div
+							class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-surface)] p-2 text-[9.5px] text-[var(--text-secondary)]"
+						>
+							No saved Rock Type classifier models yet. Use the <strong
+								>[DRT] RT Classifier</strong
+							> standalone module to train, validate with a Contingency Matrix, and save
+							a model.
 						</div>
 					{/if}
 				</div>
@@ -1267,17 +1336,19 @@
 						/>
 					</label>
 					<div class="text-[9.5px] text-[var(--text-secondary)]">
-						Restricts ML DRT propagation to active zone filters, depth filter bounds, and evaluated
-						reservoir intervals.
+						Restricts ML DRT propagation to active zone filters, depth filter bounds,
+						and evaluated reservoir intervals.
 					</div>
 					{#if projectData.allZones.length > 0}
 						<div class="flex flex-wrap items-center gap-1 pt-0.5">
-							<span class="text-[9px] font-medium text-[var(--text-muted)]">Zones:</span>
+							<span class="text-[9px] font-medium text-[var(--text-muted)]"
+								>Zones:</span
+							>
 							<button
 								type="button"
 								onclick={() => (workbench.selectedZones = [])}
-								class="rounded-xs border px-1 py-0.5 text-[9px] {workbench.selectedZones.length ===
-								0
+								class="rounded-xs border px-1 py-0.5 text-[9px] {workbench
+									.selectedZones.length === 0
 									? 'border-slate-700 bg-slate-800 font-semibold text-white'
 									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 							>
@@ -1308,7 +1379,9 @@
 									>{fi.focused_samples} / {fi.total_well_samples}</strong
 								>
 								{#if fi.excluded_samples > 0}
-									<span class="text-[var(--text-muted)]">({fi.excluded_samples} excluded)</span>
+									<span class="text-[var(--text-muted)]"
+										>({fi.excluded_samples} excluded)</span
+									>
 								{/if}
 							</span>
 							{#if fi.min_depth !== null && fi.max_depth !== null}
@@ -1331,25 +1404,37 @@
 								3. Cutoff vs. ML ROCK_FLAG Comparison
 							</span>
 							<span class="mono-num text-[9px] font-semibold text-emerald-700">
-								Agree: {(Number(comp.exact_agreement ?? 0) * 100).toFixed(1)}% (±1: {(Number(comp.within_one_agreement ?? 0) * 100).toFixed(1)}%)
+								Agree: {(Number(comp.exact_agreement ?? 0) * 100).toFixed(1)}% (±1: {(
+									Number(comp.within_one_agreement ?? 0) * 100
+								).toFixed(1)}%)
 							</span>
 						</div>
 
 						<div class="grid grid-cols-3 gap-1 text-center text-[9px]">
-							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
-								<div class="text-[8.5px] text-[var(--text-muted)]">Pure Cutoffs</div>
+							<div
+								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5"
+							>
+								<div class="text-[8.5px] text-[var(--text-muted)]">
+									Pure Cutoffs
+								</div>
 								<div class="mono-num font-bold text-[var(--text-primary)]">
 									{comp.cutoff_total} pts
 								</div>
 							</div>
-							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
+							<div
+								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5"
+							>
 								<div class="text-[8.5px] text-[var(--text-muted)]">ML Focused</div>
 								<div class="mono-num font-bold text-[var(--text-primary)]">
 									{comp.ml_total} pts
 								</div>
 							</div>
-							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5">
-								<div class="text-[8.5px] text-[var(--text-muted)]">Uncored Filled</div>
+							<div
+								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0.5"
+							>
+								<div class="text-[8.5px] text-[var(--text-muted)]">
+									Uncored Filled
+								</div>
 								<div class="mono-num font-bold text-emerald-700">
 									+{comp.uncored_filled_count} pts
 								</div>
@@ -1360,7 +1445,9 @@
 							<div class="overflow-x-auto">
 								<table class="w-full border-collapse text-center text-[9px]">
 									<thead>
-										<tr class="border-b border-[var(--border-hairline)] text-[var(--text-muted)]">
+										<tr
+											class="border-b border-[var(--border-hairline)] text-[var(--text-muted)]"
+										>
 											<th class="px-1 py-0.5 text-left font-medium">Group</th>
 											<th class="px-1 py-0.5 font-medium">Cutoffs</th>
 											<th class="px-1 py-0.5 font-medium">ML Pred</th>
@@ -1370,22 +1457,32 @@
 									</thead>
 									<tbody>
 										{#each comp.per_drt as row}
-											<tr class="border-b border-[var(--border-hairline)] last:border-b-0">
-												<td class="mono-num px-1 py-0.5 text-left font-semibold">
+											<tr
+												class="border-b border-[var(--border-hairline)] last:border-b-0"
+											>
+												<td
+													class="mono-num px-1 py-0.5 text-left font-semibold"
+												>
 													<span
-														style="background-color: {getRockTypeColor(row.drt)}"
+														style="background-color: {getRockTypeColor(
+															row.drt
+														)}"
 														class="mr-1 inline-block h-2 w-2 rounded-full"
-													></span>{Number(row.drt) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${row.drt}`}
+													></span>{Number(row.drt) === 0
+														? 'DRT 0 (Non-Res)'
+														: `DRT ${row.drt}`}
 												</td>
 												<td class="mono-num px-1 py-0.5">
 													{row.cutoff_count}
-													<span class="text-[8.5px] text-[var(--text-muted)]"
+													<span
+														class="text-[8.5px] text-[var(--text-muted)]"
 														>({row.cutoff_pct}%)</span
 													>
 												</td>
 												<td class="mono-num px-1 py-0.5">
 													{row.ml_count}
-													<span class="text-[8.5px] text-[var(--text-muted)]"
+													<span
+														class="text-[8.5px] text-[var(--text-muted)]"
 														>({row.ml_pct}%)</span
 													>
 												</td>
@@ -1393,13 +1490,16 @@
 													{row.hybrid_count}
 												</td>
 												<td
-													class="mono-num px-1 py-0.5 font-semibold {row.delta_count > 0
+													class="mono-num px-1 py-0.5 font-semibold {row.delta_count >
+													0
 														? 'text-emerald-700'
 														: row.delta_count < 0
 															? 'text-amber-700'
 															: 'text-[var(--text-muted)]'}"
 												>
-													{row.delta_count > 0 ? `+${row.delta_count}` : row.delta_count}
+													{row.delta_count > 0
+														? `+${row.delta_count}`
+														: row.delta_count}
 												</td>
 											</tr>
 										{/each}
@@ -1411,7 +1511,8 @@
 						<!-- Active ROCK_FLAG Selector for Next Workflow -->
 						<div class="space-y-1 pt-0.5">
 							<div class="text-[9.5px] font-semibold text-[var(--text-primary)]">
-								4. Select Active ROCK_FLAG for Next Workflow (Perm Transform &amp; SHF):
+								4. Select Active ROCK_FLAG for Next Workflow (Perm Transform &amp;
+								SHF):
 							</div>
 							<div class="grid grid-cols-3 gap-1">
 								<button
@@ -1425,7 +1526,9 @@
 									title="Use purely cutoff-binned ROCK_FLAG_CUTOFF for downstream Perm Transform and SHF"
 								>
 									<span class="text-[9.5px]">Pure Cutoffs</span>
-									<span class="mono-num text-[8.5px] opacity-80">{comp.cutoff_total} pts</span>
+									<span class="mono-num text-[8.5px] opacity-80"
+										>{comp.cutoff_total} pts</span
+									>
 								</button>
 								<button
 									type="button"
@@ -1453,7 +1556,9 @@
 									title="Use ML predicted ROCK_FLAG_ML across the entire focused interval"
 								>
 									<span class="text-[9.5px]">Full ML Pred</span>
-									<span class="mono-num text-[8.5px] opacity-80">{comp.ml_total} pts</span>
+									<span class="mono-num text-[8.5px] opacity-80"
+										>{comp.ml_total} pts</span
+									>
 								</button>
 							</div>
 						</div>
@@ -1481,12 +1586,10 @@
 							</button>
 							<button
 								type="button"
-								disabled={
-									projectData.isComputingMultiWell ||
+								disabled={projectData.isComputingMultiWell ||
 									(!projectData.drtSelectedSavedModelKey &&
 										!savedModelsList[0]?.model_key &&
-										!classifierDiag?.trained)
-								}
+										!classifierDiag?.trained)}
 								onclick={() => {
 									const keyToUse =
 										projectData.drtSelectedSavedModelKey ||
@@ -1506,12 +1609,10 @@
 							</button>
 							<button
 								type="button"
-								disabled={
-									projectData.isComputingMultiWell ||
+								disabled={projectData.isComputingMultiWell ||
 									(!projectData.drtSelectedSavedModelKey &&
 										!savedModelsList[0]?.model_key &&
-										!classifierDiag?.trained)
-								}
+										!classifierDiag?.trained)}
 								onclick={() => {
 									const keyToUse =
 										projectData.drtSelectedSavedModelKey ||
@@ -1538,7 +1639,10 @@
 		{#if projectData.rockTypingResult?.rock_type_counts}
 			<ParameterSection
 				title="Active Discrete Rock Type (DRT) Counts"
-				badge="{(projectData.rockTypingResult.data_source ?? projectData.drtDataSource) === 'log' ? 'Log: PHIT & PERM' : 'Core: CPORE & CPERM'} · {projectData.drtClassifierPropagated
+				badge="{(projectData.rockTypingResult.data_source ?? projectData.drtDataSource) ===
+				'log'
+					? 'Log: PHIT & PERM'
+					: 'Core: CPORE & CPERM'} · {projectData.drtClassifierPropagated
 					? projectData.drtPropagationMode === 'full_ml'
 						? 'Full ML Predicted'
 						: `${activeMeta.shortName} + ML Fill`
@@ -1559,12 +1663,16 @@
 								></span>
 								<span>{Number(drt) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${drt}`}</span>
 								{#if rangeLbl}
-									<span class="mono-num text-[10px] font-normal text-[var(--text-muted)]">
+									<span
+										class="mono-num text-[10px] font-normal text-[var(--text-muted)]"
+									>
 										({rangeLbl})
 									</span>
 								{/if}
 							</span>
-							<span class="mono-num font-semibold text-[var(--text-primary)]">{count} pts</span>
+							<span class="mono-num font-semibold text-[var(--text-primary)]"
+								>{count} pts</span
+							>
 						</div>
 					{/each}
 				</div>
@@ -1572,7 +1680,9 @@
 		{/if}
 
 		{#if projectData.error}
-			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
+			<div
+				class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]"
+			>
 				{projectData.error}
 			</div>
 		{/if}
@@ -1597,11 +1707,9 @@
 		</button>
 		<button
 			type="button"
-			disabled={
-				projectData.isComputingMultiWell ||
+			disabled={projectData.isComputingMultiWell ||
 				projectData.isSavingMultiWell ||
-				!projectData.hasPendingMultiWell('rock-typing')
-			}
+				!projectData.hasPendingMultiWell('rock-typing')}
 			onclick={saveRockTyping}
 			title="Save ROCK_FLAG curves across all wells"
 			class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"

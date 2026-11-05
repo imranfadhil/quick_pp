@@ -42,7 +42,8 @@
 		const plugs = (projectData.swirrResult?.plugs ?? []).filter(
 			(p) => p.included && p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr)
 		);
-		if (plugs.length === 0) return [] as Array<{ key: string; label: string; value: number; rt?: number }>;
+		if (plugs.length === 0)
+			return [] as Array<{ key: string; label: string; value: number; rt?: number }>;
 		const items: Array<{ key: string; label: string; value: number; rt?: number }> = [];
 		const meanAll =
 			plugs.reduce((acc, p) => acc + (p.extracted_swirr as number), 0) / plugs.length;
@@ -258,7 +259,9 @@
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/swirr/fit`,
 				{
 					well_names:
-						projectData.selectedWellNames.length > 0 ? projectData.selectedWellNames : null,
+						projectData.selectedWellNames.length > 0
+							? projectData.selectedWellNames
+							: null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
@@ -299,7 +302,9 @@
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/swirr/fit`,
 				{
 					well_names:
-						projectData.selectedWellNames.length > 0 ? projectData.selectedWellNames : null,
+						projectData.selectedWellNames.length > 0
+							? projectData.selectedWellNames
+							: null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
@@ -326,7 +331,9 @@
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/swirr/apply`,
 				{
 					well_names:
-						projectData.selectedWellNames.length > 0 ? projectData.selectedWellNames : null,
+						projectData.selectedWellNames.length > 0
+							? projectData.selectedWellNames
+							: null,
 					config: projectData.swirrConfig,
 					phie_col: projectData.swirrInputCols.phieCol,
 					perm_col: projectData.swirrInputCols.permCol,
@@ -462,7 +469,9 @@
 	<div
 		class="shrink-0 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 py-1.5"
 	>
-		<div class="grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-0.5">
+		<div
+			class="grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-0.5"
+		>
 			{#each [['static', '1. Swirr & Pc Fit (Static)'], ['relperm', '2. Rel-Perm & SWOF (Dynamic)']] as [mKey, mLbl]}
 				<button
 					type="button"
@@ -481,1095 +490,1211 @@
 	<div class="flex-1 overflow-y-auto">
 		<SavedParamsIndicator modules={['swirr-corr']} />
 		{#if workbench.scalSubMode === 'static'}
-		<!-- Section 1: SCAL Reference Swirr Extraction -->
-		<ParameterSection
-			title="1. SCAL Reference Swirr Extraction"
-			badge="{projectData.swirrConfig.referencePcPsi} psi"
-			defaultOpen={true}
-		>
-			<p class="mb-2 text-[10.5px] leading-relaxed text-[var(--text-muted)]">
-				Extract plug-level irreducible water saturation (<span
-					class="mono-num font-semibold text-[var(--text-primary)]">Swirr</span
-				>) from SCAL drainage curves at a reference capillary pressure.
-			</p>
+			<!-- Section 1: SCAL Reference Swirr Extraction -->
+			<ParameterSection
+				title="1. SCAL Reference Swirr Extraction"
+				badge="{projectData.swirrConfig.referencePcPsi} psi"
+				defaultOpen={false}
+			>
+				<p class="mb-2 text-[10.5px] leading-relaxed text-[var(--text-muted)]">
+					Extract plug-level irreducible water saturation (<span
+						class="mono-num font-semibold text-[var(--text-primary)]">Swirr</span
+					>) from SCAL drainage curves at a reference capillary pressure.
+				</p>
 
-			<div class="mb-2">
-				<span
-					class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
-				>
-					Extraction Method
-				</span>
-				<div class="grid grid-cols-2 gap-1">
-					{#each [['cutoff_pc', 'Max Pc Cutoff'], ['interp_pc', 'Interpolate @ Ref Pc']] as [mKey, mLbl]}
-						<button
-							type="button"
-							onclick={() => setExtractionMode(mKey as SwirrExtractionMode)}
-							class="h-6 rounded-sm border text-[10px] font-medium transition-colors {projectData
-								.swirrConfig.extractionMode === mKey
-								? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
-								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
-						>
-							{mLbl}
-						</button>
-					{/each}
-				</div>
-			</div>
-
-			<NumericScrubber
-				label="Reference / Cutoff Pc"
-				unit="psi"
-				min={5}
-				max={500}
-				step={5}
-				decimals={1}
-				bind:value={projectData.swirrConfig.referencePcPsi}
-				onchange={() => {
-					projectData.swirrManualRuleOverride = false;
-				}}
-			/>
-
-			{#if projectData.swirrResult}
-				<div
-					class="mt-2 flex items-center justify-between rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[10px]"
-				>
-					<div class="flex items-center gap-1.5">
-						<span class="text-[var(--text-secondary)]">Valid Plugs:</span>
-						<span class="mono-num font-bold text-[var(--accent-primary)]">
-							{projectData.swirrResult.valid_plug_count} / {projectData.swirrResult.total_plug_count}
-						</span>
-					</div>
-					<div class="flex items-center gap-1.5">
-						{#if projectData.swirrConfig.excludedPlugIds.length > 0}
-							<span
-								class="rounded-xs bg-amber-100 px-1 py-0.5 font-mono text-[9px] font-semibold text-amber-800"
-							>
-								{projectData.swirrConfig.excludedPlugIds.length} excl
-							</span>
+				<div class="mb-2">
+					<span
+						class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+					>
+						Extraction Method
+					</span>
+					<div class="grid grid-cols-2 gap-1">
+						{#each [['cutoff_pc', 'Max Pc Cutoff'], ['interp_pc', 'Interpolate @ Ref Pc']] as [mKey, mLbl]}
 							<button
 								type="button"
-								class="text-[9.5px] font-medium text-blue-700 hover:underline"
-								onclick={clearExcludedPlugs}
+								onclick={() => setExtractionMode(mKey as SwirrExtractionMode)}
+								class="h-6 rounded-sm border text-[10px] font-medium transition-colors {projectData
+									.swirrConfig.extractionMode === mKey
+									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
 							>
-								Reset
+								{mLbl}
 							</button>
-						{:else}
-							<button
-								type="button"
-								onclick={() => (workbench.swirrCrossplotTab = 'pc-qc')}
-								class="text-[9.5px] font-medium text-blue-700 hover:underline"
-							>
-								Inspect Pc vs Sw →
-							</button>
-						{/if}
+						{/each}
 					</div>
 				</div>
-			{/if}
-		</ParameterSection>
 
-		<!-- Section 2: Swirr Correlation Model & Fit -->
-		<ParameterSection
-			title="2. Swirr Correlation Fit"
-			badge={projectData.swirrConfig.equationType === 'rqi_power'
-				? 'a·√(k/φ)^(-b)'
-				: projectData.swirrConfig.equationType === 'semilog_k'
-					? 'a - b·log10(k)'
-					: 'a·φ^b / k^c'}
-			defaultOpen={true}
-		>
-			<div class="mb-2">
-				<label
-					for="swirr-eq-select"
-					class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
-				>
-					Correlation Equation
-				</label>
-				<select
-					id="swirr-eq-select"
-					class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 font-mono text-[10.5px] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:outline-none"
-					value={projectData.swirrConfig.equationType}
-					onchange={(e) => setEquationType(e.currentTarget.value as SwirrEquationType)}
-				>
-					<option value="rqi_power">RQI Power-Law: a · √(k/φ)^(-b)</option>
-					<option value="semilog_k">Semi-Log Perm: a - b · log10(k)</option>
-					<option value="timur">Timur: a · (φ^b / k^c)</option>
-				</select>
-			</div>
-
-			<div class="mb-2">
-				<span
-					class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
-				>
-					Fit Scope
-				</span>
-				<div class="grid grid-cols-2 gap-1">
-					{#each [['global', 'Global Fit (All RTs)'], ['per_rt', 'Per Rock Type (RT 1..N)']] as [sKey, sLbl]}
-						<button
-							type="button"
-							onclick={() => setFitScope(sKey as SwirrFitScope)}
-							class="h-6 rounded-sm border text-[10px] font-medium transition-colors {projectData
-								.swirrConfig.fitScope === sKey
-								? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
-								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
-						>
-							{sLbl}
-						</button>
-					{/each}
-				</div>
-			</div>
-
-			<div class="grid grid-cols-2 gap-2">
 				<NumericScrubber
-					label="Swirr Min"
-					unit="v/v"
-					min={0.005}
-					max={0.4}
-					step={0.005}
-					decimals={3}
-					bind:value={projectData.swirrConfig.swirrMin}
-				/>
-				<NumericScrubber
-					label="Swirr Max"
-					unit="v/v"
-					min={0.3}
-					max={0.99}
-					step={0.01}
-					decimals={2}
-					bind:value={projectData.swirrConfig.swirrMax}
-				/>
-			</div>
-
-			<div class="mt-2 mb-1 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
-				<span class="font-semibold text-[var(--text-primary)]">Swirr Fit Coefficients</span>
-				<button
-					type="button"
-					disabled={projectData.isComputingMultiWell}
-					onclick={() => {
-						workbench.swirrCrossplotTab = 'swirr-corr';
-						void runAutoFit(true);
+					label="Reference / Cutoff Pc"
+					unit="psi"
+					min={5}
+					max={500}
+					step={5}
+					decimals={1}
+					bind:value={projectData.swirrConfig.referencePcPsi}
+					onchange={() => {
+						projectData.swirrManualRuleOverride = false;
 					}}
-					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)] disabled:opacity-50"
-				>
-					{projectData.isComputingMultiWell ? 'Fitting...' : 'Reset Auto-Fit'}
-				</button>
-			</div>
+				/>
 
-			{#if displayedRules.length > 0}
-				<div class="overflow-x-auto border border-[var(--border-hairline)]">
-					<table class="w-full border-collapse text-left text-[11px]">
-						<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
-							<tr class="h-6 border-b border-[var(--border-hairline)]">
-								<th class="px-1.5 font-semibold">Scope</th>
-								<th class="px-1 text-right font-semibold">a</th>
-								<th class="px-1 text-right font-semibold">b</th>
-								{#if projectData.swirrConfig.equationType === 'timur'}
-									<th class="px-1 text-right font-semibold">c</th>
-								{/if}
-								<th class="px-1.5 text-right font-semibold">RMSE</th>
-								<th class="px-1.5 text-right font-semibold">R²</th>
-							</tr>
-						</thead>
-						<tbody class="divide-y divide-[var(--border-hairline)]">
-							{#each displayedRules as [scopeKey, rule] (scopeKey)}
-								{@const isGlobal = scopeKey === 'global'}
-								{@const rtColor = isGlobal ? '#0F172A' : getRockTypeColor(Number(scopeKey))}
-								<tr class="h-6">
-									<td class="px-1.5 font-semibold whitespace-nowrap">
-										<span
-											class="mr-1 inline-block h-2 w-2 rounded-full"
-											style="background:{rtColor}"
-										></span>{isGlobal ? 'Global' : `RT ${scopeKey}`}
-									</td>
-									<td class="px-1 text-right">
-										<input
-											type="number"
-											step="0.01"
-											value={rule.a}
-											onchange={(e) => updateRuleCoeff(scopeKey, 'a', e.currentTarget.value)}
-											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
-										/>
-									</td>
-									<td class="px-1 text-right">
-										<input
-											type="number"
-											step="0.01"
-											value={rule.b}
-											onchange={(e) => updateRuleCoeff(scopeKey, 'b', e.currentTarget.value)}
-											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
-										/>
-									</td>
+				{#if projectData.swirrResult}
+					<div
+						class="mt-2 flex items-center justify-between rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[10px]"
+					>
+						<div class="flex items-center gap-1.5">
+							<span class="text-[var(--text-secondary)]">Valid Plugs:</span>
+							<span class="mono-num font-bold text-[var(--accent-primary)]">
+								{projectData.swirrResult.valid_plug_count} / {projectData
+									.swirrResult.total_plug_count}
+							</span>
+						</div>
+						<div class="flex items-center gap-1.5">
+							{#if projectData.swirrConfig.excludedPlugIds.length > 0}
+								<span
+									class="rounded-xs bg-amber-100 px-1 py-0.5 font-mono text-[9px] font-semibold text-amber-800"
+								>
+									{projectData.swirrConfig.excludedPlugIds.length} excl
+								</span>
+								<button
+									type="button"
+									class="text-[9.5px] font-medium text-blue-700 hover:underline"
+									onclick={clearExcludedPlugs}
+								>
+									Reset
+								</button>
+							{:else}
+								<button
+									type="button"
+									onclick={() => (workbench.swirrCrossplotTab = 'pc-qc')}
+									class="text-[9.5px] font-medium text-blue-700 hover:underline"
+								>
+									Inspect Pc vs Sw →
+								</button>
+							{/if}
+						</div>
+					</div>
+				{/if}
+			</ParameterSection>
+
+			<!-- Section 2: Swirr Correlation Model & Fit -->
+			<ParameterSection
+				title="2. Swirr Correlation Fit"
+				badge={projectData.swirrConfig.equationType === 'rqi_power'
+					? 'a·√(k/φ)^(-b)'
+					: projectData.swirrConfig.equationType === 'semilog_k'
+						? 'a - b·log10(k)'
+						: 'a·φ^b / k^c'}
+				defaultOpen={false}
+			>
+				<div class="mb-2">
+					<label
+						for="swirr-eq-select"
+						class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+					>
+						Correlation Equation
+					</label>
+					<select
+						id="swirr-eq-select"
+						class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 font-mono text-[10.5px] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:outline-none"
+						value={projectData.swirrConfig.equationType}
+						onchange={(e) =>
+							setEquationType(e.currentTarget.value as SwirrEquationType)}
+					>
+						<option value="rqi_power">RQI Power-Law: a · √(k/φ)^(-b)</option>
+						<option value="semilog_k">Semi-Log Perm: a - b · log10(k)</option>
+						<option value="timur">Timur: a · (φ^b / k^c)</option>
+					</select>
+				</div>
+
+				<div class="mb-2">
+					<span
+						class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+					>
+						Fit Scope
+					</span>
+					<div class="grid grid-cols-2 gap-1">
+						{#each [['global', 'Global Fit (All RTs)'], ['per_rt', 'Per Rock Type (RT 1..N)']] as [sKey, sLbl]}
+							<button
+								type="button"
+								onclick={() => setFitScope(sKey as SwirrFitScope)}
+								class="h-6 rounded-sm border text-[10px] font-medium transition-colors {projectData
+									.swirrConfig.fitScope === sKey
+									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+							>
+								{sLbl}
+							</button>
+						{/each}
+					</div>
+				</div>
+
+				<div class="grid grid-cols-2 gap-2">
+					<NumericScrubber
+						label="Swirr Min"
+						unit="v/v"
+						min={0.005}
+						max={0.4}
+						step={0.005}
+						decimals={3}
+						bind:value={projectData.swirrConfig.swirrMin}
+					/>
+					<NumericScrubber
+						label="Swirr Max"
+						unit="v/v"
+						min={0.3}
+						max={0.99}
+						step={0.01}
+						decimals={2}
+						bind:value={projectData.swirrConfig.swirrMax}
+					/>
+				</div>
+
+				<div
+					class="mt-2 mb-1 flex items-center justify-between text-[10px] text-[var(--text-secondary)]"
+				>
+					<span class="font-semibold text-[var(--text-primary)]"
+						>Swirr Fit Coefficients</span
+					>
+					<button
+						type="button"
+						disabled={projectData.isComputingMultiWell}
+						onclick={() => {
+							workbench.swirrCrossplotTab = 'swirr-corr';
+							void runAutoFit(true);
+						}}
+						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)] disabled:opacity-50"
+					>
+						{projectData.isComputingMultiWell ? 'Fitting...' : 'Reset Auto-Fit'}
+					</button>
+				</div>
+
+				{#if displayedRules.length > 0}
+					<div class="overflow-x-auto border border-[var(--border-hairline)]">
+						<table class="w-full border-collapse text-left text-[11px]">
+							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+								<tr class="h-6 border-b border-[var(--border-hairline)]">
+									<th class="px-1.5 font-semibold">Scope</th>
+									<th class="px-1 text-right font-semibold">a</th>
+									<th class="px-1 text-right font-semibold">b</th>
 									{#if projectData.swirrConfig.equationType === 'timur'}
+										<th class="px-1 text-right font-semibold">c</th>
+									{/if}
+									<th class="px-1.5 text-right font-semibold">RMSE</th>
+									<th class="px-1.5 text-right font-semibold">R²</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-[var(--border-hairline)]">
+								{#each displayedRules as [scopeKey, rule] (scopeKey)}
+									{@const isGlobal = scopeKey === 'global'}
+									{@const rtColor = isGlobal
+										? '#0F172A'
+										: getRockTypeColor(Number(scopeKey))}
+									<tr class="h-6">
+										<td class="px-1.5 font-semibold whitespace-nowrap">
+											<span
+												class="mr-1 inline-block h-2 w-2 rounded-full"
+												style="background:{rtColor}"
+											></span>{isGlobal ? 'Global' : `RT ${scopeKey}`}
+										</td>
 										<td class="px-1 text-right">
 											<input
 												type="number"
 												step="0.01"
-												value={rule.c ?? 0.5}
-												onchange={(e) => updateRuleCoeff(scopeKey, 'c', e.currentTarget.value)}
-												class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+												value={rule.a}
+												onchange={(e) =>
+													updateRuleCoeff(
+														scopeKey,
+														'a',
+														e.currentTarget.value
+													)}
+												class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
 											/>
 										</td>
-									{/if}
-									<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(rule.rmse, 3)}</td>
-									<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(rule.r2, 3)}</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
-		</ParameterSection>
-
-		<!-- Section 3: SCAL J / Pc Curve Fit -->
-		{#if true}
-		{@const activeShfModel = projectData.shfParams.model}
-		{@const isSwMode = (projectData.shfParams.jSatMode ?? 'swn') === 'sw'}
-		{@const activeShfFormula =
-			activeShfModel === 'leverett_j'
-				? isSwMode
-					? 'J = a · Sw^(-b)'
-					: 'J = a · Swn^(-b)'
-				: SHF_MODEL_META[activeShfModel].formula}
-		<ParameterSection
-			title="3. SCAL J / Pc Curve Fit"
-			badge={activeShfFormula}
-			defaultOpen={true}
-		>
-			<div class="grid grid-cols-3 gap-1">
-				{#each [['leverett_j', 'Leverett-J'], ['skelt_harrison', 'Skelt-Harrison'], ['cuddy', 'Cuddy Bvw']] as [m, lbl]}
-					<button
-						type="button"
-						onclick={() => selectShfModel(m as any)}
-						class="h-6 rounded-sm border text-[10px] font-medium {projectData.shfParams.model === m
-							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
-							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
-					>
-						{lbl}
-					</button>
-				{/each}
-			</div>
-
-			{#if activeShfModel === 'leverett_j'}
-				<div class="mt-2 grid grid-cols-2 gap-2">
-					<NumericScrubber
-						label="IFT"
-						bind:value={projectData.shfParams.ift}
-						unit="dyn/cm"
-						min={1.0}
-						max={80.0}
-						step={0.5}
-						onchange={() => {
-							projectData.shfManualFitOverride = false;
-						}}
-					/>
-					<NumericScrubber
-						label="Contact Angle (θ)"
-						bind:value={projectData.shfParams.theta}
-						unit="deg"
-						min={0}
-						max={90}
-						step={1.0}
-						onchange={() => {
-							projectData.shfManualFitOverride = false;
-						}}
-					/>
-				</div>
-
-				{#if !isSwMode}
-					<div class="mt-1.5">
-						<div class="mb-1 flex items-center justify-between text-[10px]">
-							<span class="font-semibold text-[var(--text-primary)]">
-								Swn Swirr Normalization
-							</span>
-							<span class="mono-num text-[9.5px] text-[var(--text-muted)]">
-								{(projectData.shfParams.swirrSource ?? 'lab_min') === 'poro_perm'
-									? 'Modeled Swirr(k, φ)'
-									: 'Per-Plug Lab min(Sw)'}
-							</span>
-						</div>
-						<div class="grid grid-cols-2 gap-1">
-							{#each [['lab_min', 'Lab Terminal Sw (Per-Plug)'], ['poro_perm', 'Poro-Perm Correlation']] as [srcKey, srcLabel]}
-								<button
-									type="button"
-									onclick={() => {
-										workbench.swirrCrossplotTab = 'scal-fit';
-										projectData.shfManualFitOverride = false;
-										projectData.setShfSwirrSource(srcKey as 'lab_min' | 'poro_perm');
-									}}
-									class="h-6 rounded-sm border px-1.5 text-[10px] font-medium {(projectData
-										.shfParams.swirrSource ?? 'lab_min') === srcKey
-										? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
-										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
-								>
-									{srcLabel}
-								</button>
-							{/each}
-						</div>
+										<td class="px-1 text-right">
+											<input
+												type="number"
+												step="0.01"
+												value={rule.b}
+												onchange={(e) =>
+													updateRuleCoeff(
+														scopeKey,
+														'b',
+														e.currentTarget.value
+													)}
+												class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+											/>
+										</td>
+										{#if projectData.swirrConfig.equationType === 'timur'}
+											<td class="px-1 text-right">
+												<input
+													type="number"
+													step="0.01"
+													value={rule.c ?? 0.5}
+													onchange={(e) =>
+														updateRuleCoeff(
+															scopeKey,
+															'c',
+															e.currentTarget.value
+														)}
+													class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+												/>
+											</td>
+										{/if}
+										<td class="mono-num px-1.5 text-right text-[10px]"
+											>{fmtNum(rule.rmse, 3)}</td
+										>
+										<td class="mono-num px-1.5 text-right text-[10px]"
+											>{fmtNum(rule.r2, 3)}</td
+										>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
 					</div>
 				{/if}
-			{/if}
+			</ParameterSection>
 
-			{@const totalScalPts = projectData.shfResult?.scal_data?.pc?.length ?? 0}
-			{@const excludedScalIds = projectData.swirrConfig.excludedScalPointIds ?? []}
-			{@const excludedScalCount = (projectData.shfResult?.scal_data?.excluded ?? []).filter(Boolean).length || excludedScalIds.length}
-			{@const activeScalPts = Math.max(0, totalScalPts - excludedScalCount)}
-			<div class="mt-2 mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
-				<span class="flex items-center gap-1">
-					SCAL points:
-					<strong class="mono-num text-[var(--text-primary)]">
-						{activeScalPts} / {totalScalPts}
-					</strong>
-					{#if excludedScalCount > 0}
-						<span
-							class="rounded-xs bg-amber-100 px-1 py-0.5 font-mono text-[9px] font-semibold text-amber-800"
-						>
-							{excludedScalCount} excl
-						</span>
-					{/if}
-				</span>
-				<div class="flex items-center gap-1">
-					{#if activeShfModel === 'leverett_j'}
-						<div
-							class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
-						>
-							{#each [['swn', 'J vs Swn'], ['sw', 'J vs Sw']] as [sKey, sLbl]}
-								<button
-									type="button"
-									onclick={() => {
-										workbench.swirrCrossplotTab = 'scal-fit';
-										projectData.setShfJSatMode(sKey as 'swn' | 'sw');
-										projectData.shfManualFitOverride = false;
-									}}
-									class="px-1.5 py-0.5 text-[10px] font-medium first:border-r first:border-[var(--border-hairline)] {(projectData
-										.shfParams.jSatMode ?? 'swn') === sKey
-										? 'bg-blue-600 font-semibold text-white'
-										: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
-								>
-									{sLbl}
-								</button>
-							{/each}
-						</div>
-					{/if}
-					<button
-						type="button"
-						onclick={() => {
-							workbench.swirrCrossplotTab = 'scal-fit';
-							projectData.shfManualFitOverride = false;
-							projectData.recomputeScalFitsFromPlugs(true);
-						}}
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)]"
-					>
-						Reset Auto-Fit
-					</button>
-				</div>
-			</div>
-
-			<!-- SCAL Data Point & Core Sample QC & Outlier Filtering Controls -->
-			{@const rawPlugs = projectData.swirrResult?.plugs ?? []}
-			{@const allPlugs = rawPlugs.filter(
-				(p) =>
-					projectData.isScalItemInActiveFilter(p.well, p.depth, p.zone) &&
-					(projectData.scalFilterRockType === 'all' ||
-						(p.rt ?? 1) === projectData.scalFilterRockType)
-			)}
-			{@const excludedPlugIds = projectData.swirrConfig.excludedPlugIds ?? []}
-			{@const activePlugCount = allPlugs.filter(
-				(p) =>
-					!p.excluded &&
-					!excludedPlugIds.includes(projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample)) &&
-					!excludedPlugIds.includes(p.plug_id)
-			).length}
-			<div
-				class="mb-2 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-1.5 text-[10px]"
-			>
-				<div class="mb-1.5 flex flex-wrap items-center justify-between gap-1">
-					<span class="font-semibold text-[var(--text-primary)]">
-						SCAL Sample &amp; Point QC
-					</span>
-					<div class="flex items-center gap-1">
-						<div
-							class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
-							title="Color and group crossplot SCAL points by Rock Type or by Individual Core Sample"
-						>
-							{#each [['sample', 'By Sample'], ['rt', 'By RT']] as [gKey, gLbl]}
-								<button
-									type="button"
-									onclick={() => {
-										projectData.scalGroupMode = gKey as 'rt' | 'sample';
-									}}
-									class="px-1.5 py-0.5 text-[9px] font-medium first:border-r first:border-[var(--border-hairline)] {projectData.scalGroupMode ===
-									gKey
-										? 'bg-[var(--accent-primary)] font-semibold text-white'
-										: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
-								>
-									{gLbl}
-								</button>
-							{/each}
-						</div>
-						<div
-							class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
-							title="Choose whether clicking a point on the SCAL crossplot toggles that individual point or its entire core sample (or hold Shift+Click for core sample)"
-						>
-							{#each [['point', 'Click: Pt'], ['plug', 'Click: Sample']] as [tKey, tLbl]}
-								<button
-									type="button"
-									onclick={() => {
-										projectData.scalClickFilterTarget = tKey as 'point' | 'plug';
-									}}
-									class="px-1.5 py-0.5 text-[9px] font-medium first:border-r first:border-[var(--border-hairline)] {projectData.scalClickFilterTarget ===
-									tKey
-										? 'bg-slate-800 font-semibold text-white'
-										: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
-								>
-									{tLbl}
-								</button>
-							{/each}
-						</div>
+			<!-- Section 3: SCAL J / Pc Curve Fit -->
+			{#if true}
+				{@const activeShfModel = projectData.shfParams.model}
+				{@const isSwMode = (projectData.shfParams.jSatMode ?? 'swn') === 'sw'}
+				{@const activeShfFormula =
+					activeShfModel === 'leverett_j'
+						? isSwMode
+							? 'J = a · Sw^(-b)'
+							: 'J = a · Swn^(-b)'
+						: SHF_MODEL_META[activeShfModel].formula}
+				<ParameterSection
+					title="3. SCAL J / Pc Curve Fit"
+					badge={activeShfFormula}
+					defaultOpen={false}
+				>
+					<div class="grid grid-cols-3 gap-1">
+						{#each [['leverett_j', 'Leverett-J'], ['skelt_harrison', 'Skelt-Harrison'], ['cuddy', 'Cuddy Bvw']] as [m, lbl]}
+							<button
+								type="button"
+								onclick={() => selectShfModel(m as any)}
+								class="h-6 rounded-sm border text-[10px] font-medium {projectData
+									.shfParams.model === m
+									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+							>
+								{lbl}
+							</button>
+						{/each}
 					</div>
-				</div>
-				<div class="flex flex-wrap items-center gap-1">
-					<button
-						type="button"
-						onclick={() => {
-							workbench.swirrCrossplotTab = 'scal-fit';
-							projectData.shfManualFitOverride = false;
-							projectData.autoFilterCorruptedScalPoints('all');
-						}}
-						class="rounded-xs border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-amber-900 hover:bg-amber-100"
-						title="Automatically detect and exclude non-monotonic Pc steps, high log-J outliers, and boundary asymptotes"
-					>
-						Auto-Filter Corrupted / Outliers
-					</button>
-					<button
-						type="button"
-						onclick={() => {
-							workbench.swirrCrossplotTab = 'scal-fit';
-							projectData.shfManualFitOverride = false;
-							projectData.autoFilterCorruptedScalPoints('asymptotes');
-						}}
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0.5 text-[9.5px] font-medium text-[var(--text-secondary)] hover:bg-slate-100"
-						title="Exclude extreme saturation asymptote pile-ups (Swn ≤ 0.035 or Swn ≥ 0.94)"
-					>
-						Trim Asymptotes
-					</button>
-					{#if excludedScalIds.length > 0}
-						<button
-							type="button"
-							onclick={() => {
-								projectData.shfManualFitOverride = false;
-								projectData.clearExcludedScalPoints();
-							}}
-							class="ml-auto text-[9.5px] font-semibold text-blue-700 hover:underline"
-						>
-							Restore Pts ({excludedScalIds.length})
-						</button>
-					{/if}
-					{#if excludedPlugIds.length > 0}
-						<button
-							type="button"
-							onclick={clearExcludedPlugs}
-							class="text-[9.5px] font-semibold text-blue-700 hover:underline"
-						>
-							Restore Samples ({excludedPlugIds.length})
-						</button>
-					{/if}
-				</div>
 
-				{#if projectData.selectedScalPointIds.length > 0}
+					{#if activeShfModel === 'leverett_j'}
+						<div class="mt-2 grid grid-cols-2 gap-2">
+							<NumericScrubber
+								label="IFT"
+								bind:value={projectData.shfParams.ift}
+								unit="dyn/cm"
+								min={1.0}
+								max={80.0}
+								step={0.5}
+								onchange={() => {
+									projectData.shfManualFitOverride = false;
+								}}
+							/>
+							<NumericScrubber
+								label="Contact Angle (θ)"
+								bind:value={projectData.shfParams.theta}
+								unit="deg"
+								min={0}
+								max={90}
+								step={1.0}
+								onchange={() => {
+									projectData.shfManualFitOverride = false;
+								}}
+							/>
+						</div>
+
+						{#if !isSwMode}
+							<div class="mt-1.5">
+								<div class="mb-1 flex items-center justify-between text-[10px]">
+									<span class="font-semibold text-[var(--text-primary)]">
+										Swn Swirr Normalization
+									</span>
+									<span class="mono-num text-[9.5px] text-[var(--text-muted)]">
+										{(projectData.shfParams.swirrSource ?? 'lab_min') ===
+										'poro_perm'
+											? 'Modeled Swirr(k, φ)'
+											: 'Per-Plug Lab min(Sw)'}
+									</span>
+								</div>
+								<div class="grid grid-cols-2 gap-1">
+									{#each [['lab_min', 'Lab Terminal Sw (Per-Plug)'], ['poro_perm', 'Poro-Perm Correlation']] as [srcKey, srcLabel]}
+										<button
+											type="button"
+											onclick={() => {
+												workbench.swirrCrossplotTab = 'scal-fit';
+												projectData.shfManualFitOverride = false;
+												projectData.setShfSwirrSource(
+													srcKey as 'lab_min' | 'poro_perm'
+												);
+											}}
+											class="h-6 rounded-sm border px-1.5 text-[10px] font-medium {(projectData
+												.shfParams.swirrSource ?? 'lab_min') === srcKey
+												? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+												: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+										>
+											{srcLabel}
+										</button>
+									{/each}
+								</div>
+							</div>
+						{/if}
+					{/if}
+
+					{@const totalScalPts = projectData.shfResult?.scal_data?.pc?.length ?? 0}
+					{@const excludedScalIds = projectData.swirrConfig.excludedScalPointIds ?? []}
+					{@const excludedScalCount =
+						(projectData.shfResult?.scal_data?.excluded ?? []).filter(Boolean).length ||
+						excludedScalIds.length}
+					{@const activeScalPts = Math.max(0, totalScalPts - excludedScalCount)}
 					<div
-						class="mt-1.5 flex items-center justify-between rounded-xs border border-amber-300 bg-amber-100/70 px-1.5 py-1 text-[9.5px] text-amber-950"
+						class="mt-2 mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-secondary)]"
 					>
-						<span class="font-semibold">
-							{projectData.selectedScalPointIds.length} pts selected
+						<span class="flex items-center gap-1">
+							SCAL points:
+							<strong class="mono-num text-[var(--text-primary)]">
+								{activeScalPts} / {totalScalPts}
+							</strong>
+							{#if excludedScalCount > 0}
+								<span
+									class="rounded-xs bg-amber-100 px-1 py-0.5 font-mono text-[9px] font-semibold text-amber-800"
+								>
+									{excludedScalCount} excl
+								</span>
+							{/if}
 						</span>
 						<div class="flex items-center gap-1">
+							{#if activeShfModel === 'leverett_j'}
+								<div
+									class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+								>
+									{#each [['swn', 'J vs Swn'], ['sw', 'J vs Sw']] as [sKey, sLbl]}
+										<button
+											type="button"
+											onclick={() => {
+												workbench.swirrCrossplotTab = 'scal-fit';
+												projectData.setShfJSatMode(sKey as 'swn' | 'sw');
+												projectData.shfManualFitOverride = false;
+											}}
+											class="px-1.5 py-0.5 text-[10px] font-medium first:border-r first:border-[var(--border-hairline)] {(projectData
+												.shfParams.jSatMode ?? 'swn') === sKey
+												? 'bg-blue-600 font-semibold text-white'
+												: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+										>
+											{sLbl}
+										</button>
+									{/each}
+								</div>
+							{/if}
 							<button
 								type="button"
 								onclick={() => {
+									workbench.swirrCrossplotTab = 'scal-fit';
 									projectData.shfManualFitOverride = false;
-									projectData.excludeSelectedScalPoints();
+									projectData.recomputeScalFitsFromPlugs(true);
 								}}
-								class="rounded-xs bg-rose-600 px-1.5 py-0.5 font-semibold text-white hover:bg-rose-700"
+								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-blue-50 hover:text-[var(--accent-primary)]"
 							>
-								Exclude Pts
-							</button>
-							<button
-								type="button"
-								onclick={() => {
-									projectData.shfManualFitOverride = false;
-									projectData.excludeSelectedScalPlugs();
-								}}
-								class="rounded-xs border border-amber-400 bg-white px-1.5 py-0.5 font-semibold text-amber-900 hover:bg-amber-50"
-							>
-								Exclude Samples
-							</button>
-							<button
-								type="button"
-								onclick={() => projectData.setSelectedScalPoints([])}
-								class="px-1 text-slate-600 hover:underline"
-							>
-								×
+								Reset Auto-Fit
 							</button>
 						</div>
 					</div>
-				{/if}
 
-				{#if allPlugs.length > 0 || rawPlugs.length > 0}
-					<details class="mt-1.5 border-t border-[var(--border-hairline)] pt-1" open>
-						<summary
-							class="flex cursor-pointer select-none items-center justify-between text-[9.5px] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-						>
-							<span>
-								Core Samples in Filter (<strong class="mono-num text-[var(--text-primary)]"
-									>{activePlugCount} / {allPlugs.length}</strong
-								>
-								active{#if allPlugs.length < rawPlugs.length}
-									<span class="text-[8.5px] text-slate-400">of {rawPlugs.length} total</span>
-								{/if})
+					<!-- SCAL Data Point & Core Sample QC & Outlier Filtering Controls -->
+					{@const rawPlugs = projectData.swirrResult?.plugs ?? []}
+					{@const allPlugs = rawPlugs.filter(
+						(p) =>
+							projectData.isScalItemInActiveFilter(p.well, p.depth, p.zone) &&
+							(projectData.scalFilterRockType === 'all' ||
+								(p.rt ?? 1) === projectData.scalFilterRockType)
+					)}
+					{@const excludedPlugIds = projectData.swirrConfig.excludedPlugIds ?? []}
+					{@const activePlugCount = allPlugs.filter(
+						(p) =>
+							!p.excluded &&
+							!excludedPlugIds.includes(
+								projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample)
+							) &&
+							!excludedPlugIds.includes(p.plug_id)
+					).length}
+					<div
+						class="mb-2 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-1.5 text-[10px]"
+					>
+						<div class="mb-1.5 flex flex-wrap items-center justify-between gap-1">
+							<span class="font-semibold text-[var(--text-primary)]">
+								SCAL Sample &amp; Point QC
 							</span>
 							<div class="flex items-center gap-1">
-								{#if projectData.focusedScalPlugId}
+								<div
+									class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+									title="Color and group crossplot SCAL points by Rock Type or by Individual Core Sample"
+								>
+									{#each [['sample', 'By Sample'], ['rt', 'By RT']] as [gKey, gLbl]}
+										<button
+											type="button"
+											onclick={() => {
+												projectData.scalGroupMode = gKey as 'rt' | 'sample';
+											}}
+											class="px-1.5 py-0.5 text-[9px] font-medium first:border-r first:border-[var(--border-hairline)] {projectData.scalGroupMode ===
+											gKey
+												? 'bg-[var(--accent-primary)] font-semibold text-white'
+												: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+										>
+											{gLbl}
+										</button>
+									{/each}
+								</div>
+								<div
+									class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+									title="Choose whether clicking a point on the SCAL crossplot toggles that individual point or its entire core sample (or hold Shift+Click for core sample)"
+								>
+									{#each [['point', 'Click: Pt'], ['plug', 'Click: Sample']] as [tKey, tLbl]}
+										<button
+											type="button"
+											onclick={() => {
+												projectData.scalClickFilterTarget = tKey as
+													| 'point'
+													| 'plug';
+											}}
+											class="px-1.5 py-0.5 text-[9px] font-medium first:border-r first:border-[var(--border-hairline)] {projectData.scalClickFilterTarget ===
+											tKey
+												? 'bg-slate-800 font-semibold text-white'
+												: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+										>
+											{tLbl}
+										</button>
+									{/each}
+								</div>
+							</div>
+						</div>
+						<div class="flex flex-wrap items-center gap-1">
+							<button
+								type="button"
+								onclick={() => {
+									workbench.swirrCrossplotTab = 'scal-fit';
+									projectData.shfManualFitOverride = false;
+									projectData.autoFilterCorruptedScalPoints('all');
+								}}
+								class="rounded-xs border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-amber-900 hover:bg-amber-100"
+								title="Automatically detect and exclude non-monotonic Pc steps, high log-J outliers, and boundary asymptotes"
+							>
+								Auto-Filter Corrupted / Outliers
+							</button>
+							<button
+								type="button"
+								onclick={() => {
+									workbench.swirrCrossplotTab = 'scal-fit';
+									projectData.shfManualFitOverride = false;
+									projectData.autoFilterCorruptedScalPoints('asymptotes');
+								}}
+								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0.5 text-[9.5px] font-medium text-[var(--text-secondary)] hover:bg-slate-100"
+								title="Exclude extreme saturation asymptote pile-ups (Swn ≤ 0.035 or Swn ≥ 0.94)"
+							>
+								Trim Asymptotes
+							</button>
+							{#if excludedScalIds.length > 0}
+								<button
+									type="button"
+									onclick={() => {
+										projectData.shfManualFitOverride = false;
+										projectData.clearExcludedScalPoints();
+									}}
+									class="ml-auto text-[9.5px] font-semibold text-blue-700 hover:underline"
+								>
+									Restore Pts ({excludedScalIds.length})
+								</button>
+							{/if}
+							{#if excludedPlugIds.length > 0}
+								<button
+									type="button"
+									onclick={clearExcludedPlugs}
+									class="text-[9.5px] font-semibold text-blue-700 hover:underline"
+								>
+									Restore Samples ({excludedPlugIds.length})
+								</button>
+							{/if}
+						</div>
+
+						{#if projectData.selectedScalPointIds.length > 0}
+							<div
+								class="mt-1.5 flex items-center justify-between rounded-xs border border-amber-300 bg-amber-100/70 px-1.5 py-1 text-[9.5px] text-amber-950"
+							>
+								<span class="font-semibold">
+									{projectData.selectedScalPointIds.length} pts selected
+								</span>
+								<div class="flex items-center gap-1">
 									<button
 										type="button"
-										onclick={(e) => {
-											e.preventDefault();
-											e.stopPropagation();
-											projectData.focusedScalPlugId = null;
+										onclick={() => {
+											projectData.shfManualFitOverride = false;
+											projectData.excludeSelectedScalPoints();
 										}}
-										class="rounded-xs bg-blue-100 px-1 py-0.2 font-mono text-[8.5px] font-semibold text-blue-800 hover:bg-blue-200"
-										title="Clear focused sample highlight"
+										class="rounded-xs bg-rose-600 px-1.5 py-0.5 font-semibold text-white hover:bg-rose-700"
 									>
-										Focused: {projectData.focusedScalPlugId.split('::')[1] ?? projectData.focusedScalPlugId} ×
+										Exclude Pts
 									</button>
-								{/if}
-								{#if excludedPlugIds.length > 0}
-									<span class="rounded-xs bg-amber-100 px-1 py-0.2 font-mono text-[8.5px] font-semibold text-amber-800">
-										{excludedPlugIds.length} excl
-									</span>
-								{/if}
+									<button
+										type="button"
+										onclick={() => {
+											projectData.shfManualFitOverride = false;
+											projectData.excludeSelectedScalPlugs();
+										}}
+										class="rounded-xs border border-amber-400 bg-white px-1.5 py-0.5 font-semibold text-amber-900 hover:bg-amber-50"
+									>
+										Exclude Samples
+									</button>
+									<button
+										type="button"
+										onclick={() => projectData.setSelectedScalPoints([])}
+										class="px-1 text-slate-600 hover:underline"
+									>
+										×
+									</button>
+								</div>
 							</div>
-						</summary>
-						<div class="mt-1 max-h-44 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
-							<table class="w-full border-collapse text-left text-[9.5px]">
-								<thead class="sticky top-0 bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
-									<tr class="h-5 border-b border-[var(--border-hairline)]">
-										<th class="w-5 px-1 text-center font-semibold" title="Include/Exclude sample from fit">Use</th>
-										<th class="w-5 px-0.5 text-center font-semibold" title="Spotlight sample on crossplot">QC</th>
-										<th class="px-1 font-semibold">Sample</th>
-										<th class="px-1 font-semibold">Well</th>
-										<th class="px-1 font-semibold">Zone</th>
-										<th class="px-1 text-right font-semibold">Depth</th>
-										<th class="px-1 text-center font-semibold">RT</th>
-										<th class="px-1 text-right font-semibold">φ</th>
-										<th class="px-1 text-right font-semibold">k</th>
-										<th class="px-1 text-right font-semibold">Pts</th>
+						{/if}
+
+						{#if allPlugs.length > 0 || rawPlugs.length > 0}
+							<details
+								class="mt-1.5 border-t border-[var(--border-hairline)] pt-1"
+								open
+							>
+								<summary
+									class="flex cursor-pointer items-center justify-between text-[9.5px] font-medium text-[var(--text-secondary)] select-none hover:text-[var(--text-primary)]"
+								>
+									<span>
+										Core Samples in Filter (<strong
+											class="mono-num text-[var(--text-primary)]"
+											>{activePlugCount} / {allPlugs.length}</strong
+										>
+										active{#if allPlugs.length < rawPlugs.length}
+											<span class="text-[8.5px] text-slate-400"
+												>of {rawPlugs.length} total</span
+											>
+										{/if})
+									</span>
+									<div class="flex items-center gap-1">
+										{#if projectData.focusedScalPlugId}
+											<button
+												type="button"
+												onclick={(e) => {
+													e.preventDefault();
+													e.stopPropagation();
+													projectData.focusedScalPlugId = null;
+												}}
+												class="py-0.2 rounded-xs bg-blue-100 px-1 font-mono text-[8.5px] font-semibold text-blue-800 hover:bg-blue-200"
+												title="Clear focused sample highlight"
+											>
+												Focused: {projectData.focusedScalPlugId.split(
+													'::'
+												)[1] ?? projectData.focusedScalPlugId} ×
+											</button>
+										{/if}
+										{#if excludedPlugIds.length > 0}
+											<span
+												class="py-0.2 rounded-xs bg-amber-100 px-1 font-mono text-[8.5px] font-semibold text-amber-800"
+											>
+												{excludedPlugIds.length} excl
+											</span>
+										{/if}
+									</div>
+								</summary>
+								<div
+									class="mt-1 max-h-44 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+								>
+									<table class="w-full border-collapse text-left text-[9.5px]">
+										<thead
+											class="sticky top-0 bg-[var(--bg-subtle)] text-[var(--text-secondary)]"
+										>
+											<tr
+												class="h-5 border-b border-[var(--border-hairline)]"
+											>
+												<th
+													class="w-5 px-1 text-center font-semibold"
+													title="Include/Exclude sample from fit">Use</th
+												>
+												<th
+													class="w-5 px-0.5 text-center font-semibold"
+													title="Spotlight sample on crossplot">QC</th
+												>
+												<th class="px-1 font-semibold">Sample</th>
+												<th class="px-1 font-semibold">Well</th>
+												<th class="px-1 font-semibold">Zone</th>
+												<th class="px-1 text-right font-semibold">Depth</th>
+												<th class="px-1 text-center font-semibold">RT</th>
+												<th class="px-1 text-right font-semibold">φ</th>
+												<th class="px-1 text-right font-semibold">k</th>
+												<th class="px-1 text-right font-semibold">Pts</th>
+											</tr>
+										</thead>
+										<tbody class="divide-y divide-[var(--border-hairline)]">
+											{#each allPlugs as plug (plug.plug_id)}
+												{@const normPid = projectData.normalizeScalPlugId(
+													plug.plug_id,
+													plug.well,
+													plug.sample
+												)}
+												{@const isExcl =
+													Boolean(plug.excluded) ||
+													excludedPlugIds.includes(normPid) ||
+													excludedPlugIds.includes(plug.plug_id)}
+												{@const isFocused =
+													projectData.focusedScalPlugId === normPid}
+												{@const plugZone =
+													projectData.resolveScalSampleZone(
+														plug.well,
+														plug.depth,
+														plug.zone
+													)}
+												{@const rtColor = getRockTypeColor(plug.rt ?? 1)}
+												<tr
+													class="h-5 cursor-pointer transition-colors {isFocused
+														? 'bg-blue-50/90 font-semibold text-blue-950'
+														: isExcl
+															? 'bg-slate-50/70 text-slate-400 line-through hover:bg-slate-50'
+															: 'hover:bg-slate-50'}"
+													onclick={() => {
+														projectData.toggleFocusedScalPlug(normPid);
+													}}
+													title="Click row to spotlight {plug.well} · {plug.sample} on crossplot; use checkbox to include/exclude"
+												>
+													<td
+														class="px-1 text-center"
+														onclick={(e) => e.stopPropagation()}
+													>
+														<input
+															type="checkbox"
+															checked={!isExcl}
+															onchange={() => {
+																projectData.swirrManualRuleOverride = false;
+																projectData.shfManualFitOverride = false;
+																projectData.toggleSwirrPlugExclusion(
+																	normPid
+																);
+															}}
+															class="h-3 w-3 accent-blue-600"
+														/>
+													</td>
+													<td class="px-0.5 text-center">
+														<span
+															class="inline-block text-[10px] {isFocused
+																? 'font-bold text-blue-600'
+																: 'text-slate-300'}"
+														>
+															{isFocused ? '●' : '◎'}
+														</span>
+													</td>
+													<td class="mono-num px-1 font-semibold"
+														>{plug.sample}</td
+													>
+													<td
+														class="max-w-[60px] truncate px-1"
+														title={plug.well}>{plug.well}</td
+													>
+													<td
+														class="max-w-[54px] truncate px-1 text-[9px] text-[var(--text-secondary)]"
+														title={plugZone}
+													>
+														{plugZone}
+													</td>
+													<td class="mono-num px-1 text-right"
+														>{fmtNum(plug.depth, 1)}</td
+													>
+													<td class="px-1 text-center whitespace-nowrap">
+														<span
+															class="mr-0.5 inline-block h-1.5 w-1.5 rounded-full"
+															style="background:{rtColor}"
+														></span>{plug.rt ?? 1}
+													</td>
+													<td class="mono-num px-1 text-right"
+														>{fmtNum(plug.cpore, 3)}</td
+													>
+													<td class="mono-num px-1 text-right"
+														>{fmtNum(plug.cperm, 1)}</td
+													>
+													<td class="mono-num px-1 text-right"
+														>{plug.pc_curve?.length ?? 0}</td
+													>
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							</details>
+						{/if}
+
+						{#if excludedScalIds.length > 0}
+							<details class="mt-1">
+								<summary
+									class="cursor-pointer text-[9.5px] font-medium text-[var(--text-secondary)] select-none hover:text-[var(--text-primary)]"
+								>
+									Excluded Individual Points ({excludedScalIds.length}) — click
+									chip to restore
+								</summary>
+								<div
+									class="mt-1 flex max-h-24 flex-wrap gap-1 overflow-y-auto pt-0.5"
+								>
+									{#each excludedScalIds as ptId (ptId)}
+										{@const parts = ptId.split('::')}
+										{@const shortLabel =
+											parts.length >= 3
+												? `${parts[1]}#${Number(parts[2]) + 1}`
+												: ptId}
+										<button
+											type="button"
+											onclick={() => {
+												projectData.shfManualFitOverride = false;
+												projectData.toggleScalPointExclusion(ptId);
+											}}
+											class="inline-flex items-center gap-0.5 rounded-xs border border-slate-300 bg-white px-1 py-0.5 font-mono text-[9px] text-slate-700 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-800"
+											title={`Restore ${ptId}`}
+										>
+											<span>{shortLabel}</span>
+											<span class="text-slate-400">×</span>
+										</button>
+									{/each}
+								</div>
+							</details>
+						{/if}
+					</div>
+
+					{#if projectData.shfResult?.fits && Object.keys(projectData.shfResult.fits).length > 0}
+						<div class="overflow-x-auto border border-[var(--border-hairline)]">
+							<table class="w-full border-collapse text-left text-[11px]">
+								<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+									<tr class="h-6 border-b border-[var(--border-hairline)]">
+										<th class="px-1.5 font-semibold">RT</th>
+										<th class="px-1 text-right font-semibold">a</th>
+										<th class="px-1 text-right font-semibold">b</th>
+										{#if activeShfModel === 'skelt_harrison'}
+											<th class="px-1 text-right font-semibold">c</th>
+											<th class="px-1 text-right font-semibold">d</th>
+										{/if}
+										<th class="px-1.5 text-right font-semibold">RMSE</th>
+										{#if activeShfModel !== 'skelt_harrison'}
+											<th class="px-1.5 text-right font-semibold">R²</th>
+										{/if}
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-[var(--border-hairline)]">
-									{#each allPlugs as plug (plug.plug_id)}
-										{@const normPid = projectData.normalizeScalPlugId(
-											plug.plug_id,
-											plug.well,
-											plug.sample
-										)}
-										{@const isExcl =
-											Boolean(plug.excluded) ||
-											excludedPlugIds.includes(normPid) ||
-											excludedPlugIds.includes(plug.plug_id)}
-										{@const isFocused = projectData.focusedScalPlugId === normPid}
-										{@const plugZone = projectData.resolveScalSampleZone(
-											plug.well,
-											plug.depth,
-											plug.zone
-										)}
-										{@const rtColor = getRockTypeColor(plug.rt ?? 1)}
-										<tr
-											class="h-5 cursor-pointer transition-colors {isFocused
-												? 'bg-blue-50/90 font-semibold text-blue-950'
-												: isExcl
-													? 'bg-slate-50/70 text-slate-400 line-through hover:bg-slate-50'
-													: 'hover:bg-slate-50'}"
-											onclick={() => {
-												projectData.toggleFocusedScalPlug(normPid);
-											}}
-											title="Click row to spotlight {plug.well} · {plug.sample} on crossplot; use checkbox to include/exclude"
-										>
-											<td class="px-1 text-center" onclick={(e) => e.stopPropagation()}>
+									{#each Object.entries(projectData.shfResult.fits) as [rf, fit]}
+										{@const rtColor = getRockTypeColor(Number(rf))}
+										<tr class="h-6">
+											<td class="px-1.5 font-semibold whitespace-nowrap">
+												<span
+													class="mr-1 inline-block h-2 w-2 rounded-full"
+													style="background:{rtColor}"
+												></span>RT {rf}
+											</td>
+											<td class="px-1 text-right">
 												<input
-													type="checkbox"
-													checked={!isExcl}
-													onchange={() => {
-														projectData.swirrManualRuleOverride = false;
-														projectData.shfManualFitOverride = false;
-														projectData.toggleSwirrPlugExclusion(normPid);
-													}}
-													class="h-3 w-3 accent-blue-600"
+													type="number"
+													step="0.005"
+													value={fit.a}
+													onchange={(e) =>
+														updateShfFitParam(
+															rf,
+															'a',
+															(e.currentTarget as HTMLInputElement)
+																.value
+														)}
+													class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
 												/>
 											</td>
-											<td class="px-0.5 text-center">
-												<span
-													class="inline-block text-[10px] {isFocused
-														? 'text-blue-600 font-bold'
-														: 'text-slate-300'}"
+											<td class="px-1 text-right">
+												<input
+													type="number"
+													step="0.01"
+													value={fit.b}
+													onchange={(e) =>
+														updateShfFitParam(
+															rf,
+															'b',
+															(e.currentTarget as HTMLInputElement)
+																.value
+														)}
+													class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+												/>
+											</td>
+											{#if activeShfModel === 'skelt_harrison'}
+												<td class="px-1 text-right">
+													<input
+														type="number"
+														step="0.05"
+														value={fit.c ?? 1.5}
+														onchange={(e) =>
+															updateShfFitParam(
+																rf,
+																'c',
+																(
+																	e.currentTarget as HTMLInputElement
+																).value
+															)}
+														class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+													/>
+												</td>
+												<td class="px-1 text-right">
+													<input
+														type="number"
+														step="0.1"
+														value={fit.d ?? 0.5}
+														onchange={(e) =>
+															updateShfFitParam(
+																rf,
+																'd',
+																(
+																	e.currentTarget as HTMLInputElement
+																).value
+															)}
+														class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
+													/>
+												</td>
+											{/if}
+											<td class="mono-num px-1.5 text-right text-[10px]"
+												>{fmtNum(fit.rmse, 3)}</td
+											>
+											{#if activeShfModel !== 'skelt_harrison'}
+												<td class="mono-num px-1.5 text-right text-[10px]"
+													>{fmtNum(fit.r2, 3)}</td
 												>
-													{isFocused ? '●' : '◎'}
-												</span>
-											</td>
-											<td class="mono-num px-1 font-semibold">{plug.sample}</td>
-											<td class="truncate px-1 max-w-[60px]" title={plug.well}>{plug.well}</td>
-											<td class="truncate px-1 max-w-[54px] text-[9px] text-[var(--text-secondary)]" title={plugZone}>
-												{plugZone}
-											</td>
-											<td class="mono-num px-1 text-right">{fmtNum(plug.depth, 1)}</td>
-											<td class="px-1 text-center whitespace-nowrap">
-												<span
-													class="mr-0.5 inline-block h-1.5 w-1.5 rounded-full"
-													style="background:{rtColor}"
-												></span>{plug.rt ?? 1}
-											</td>
-											<td class="mono-num px-1 text-right">{fmtNum(plug.cpore, 3)}</td>
-											<td class="mono-num px-1 text-right">{fmtNum(plug.cperm, 1)}</td>
-											<td class="mono-num px-1 text-right">{plug.pc_curve?.length ?? 0}</td>
+											{/if}
 										</tr>
 									{/each}
 								</tbody>
 							</table>
 						</div>
-					</details>
-				{/if}
+					{/if}
+				</ParameterSection>
+			{/if}
 
-				{#if excludedScalIds.length > 0}
-					<details class="mt-1">
-						<summary
-							class="cursor-pointer select-none text-[9.5px] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+			<!-- Section 4: Apply & Propagate SWIRR to Logs -->
+			<ParameterSection
+				title="4. Apply & Propagate SWIRR to Logs"
+				badge="Track 7 SWIRR"
+				defaultOpen={false}
+			>
+				<div class="space-y-2">
+					<div class="grid grid-cols-3 gap-1.5">
+						<div>
+							<label
+								for="swirr-phie-col"
+								class="mb-0.5 block text-[9px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+							>
+								Porosity
+							</label>
+							<select
+								id="swirr-phie-col"
+								bind:value={projectData.swirrInputCols.phieCol}
+								class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
+							>
+								{#each availablePoroCurves as c (c)}
+									<option value={c}>{c}</option>
+								{/each}
+							</select>
+						</div>
+						<div>
+							<label
+								for="swirr-perm-col"
+								class="mb-0.5 block text-[9px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+							>
+								Permeability
+							</label>
+							<select
+								id="swirr-perm-col"
+								bind:value={projectData.swirrInputCols.permCol}
+								class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
+							>
+								{#each availablePermCurves as c (c)}
+									<option value={c}>{c}</option>
+								{/each}
+							</select>
+						</div>
+						<div>
+							<label
+								for="swirr-rt-col"
+								class="mb-0.5 block text-[9px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+							>
+								Rock Type
+							</label>
+							<select
+								id="swirr-rt-col"
+								bind:value={projectData.swirrInputCols.rtCol}
+								class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
+							>
+								{#each availableRtCurves as c (c)}
+									<option value={c}>{c}</option>
+								{/each}
+							</select>
+						</div>
+					</div>
+
+					{#if projectData.swirrApplyResult}
+						<div
+							class="rounded-sm border border-emerald-300 bg-emerald-50/80 px-2 py-1.5 text-[10px] text-emerald-950"
 						>
-							Excluded Individual Points ({excludedScalIds.length}) — click chip to restore
-						</summary>
-						<div class="mt-1 flex max-h-24 flex-wrap gap-1 overflow-y-auto pt-0.5">
-							{#each excludedScalIds as ptId (ptId)}
-								{@const parts = ptId.split('::')}
-								{@const shortLabel =
-									parts.length >= 3
-										? `${parts[1]}#${Number(parts[2]) + 1}`
-										: ptId}
+							<div class="flex items-center justify-between font-semibold">
+								<span
+									>SWIRR Applied ({projectData.swirrApplyResult.well_summaries
+										.length} wells)</span
+								>
+								<span class="mono-num">
+									Mean: {projectData.swirrApplyResult.mean_swirr?.toFixed(3) ??
+										'—'}
+								</span>
+							</div>
+							<div
+								class="mt-0.5 flex items-center justify-between text-[9.5px] text-emerald-800"
+							>
+								<span class="mono-num">
+									Range: {projectData.swirrApplyResult.min_swirr?.toFixed(3) ??
+										'—'} – {projectData.swirrApplyResult.max_swirr?.toFixed(
+										3
+									) ?? '—'}
+								</span>
+							</div>
+						</div>
+					{/if}
+				</div>
+			</ParameterSection>
+		{:else}
+			<!-- Mode 2: Rel-Perm & SWOF (Dynamic) -->
+			<ParameterSection
+				title="1. Relative Permeability Model"
+				badge={workbench.scalParams.model.toUpperCase()}
+				defaultOpen={false}
+			>
+				<div class="grid grid-cols-3 gap-1">
+					{#each [['let', 'LET (3-Param)'], ['corey', 'Corey'], ['brooks_corey', 'Brooks-Corey']] as [m, lbl]}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.scalParams.model = m as any;
+							}}
+							class="h-6 rounded-sm border text-[10.5px] font-medium {workbench
+								.scalParams.model === m
+								? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+						>
+							{lbl}
+						</button>
+					{/each}
+				</div>
+
+				{#if scalSwirrPresets.length > 0}
+					<div
+						class="mt-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-1.5"
+					>
+						<div
+							class="mb-1 flex items-center justify-between text-[9.5px] text-[var(--text-secondary)]"
+						>
+							<span class="font-semibold">Sync Sw,irr from SCAL Plugs:</span>
+							<span class="mono-num text-[9px] text-[var(--text-muted)]"
+								>Click to apply</span
+							>
+						</div>
+						<div class="flex flex-wrap gap-1">
+							{#each scalSwirrPresets as preset (preset.key)}
 								<button
 									type="button"
 									onclick={() => {
-										projectData.shfManualFitOverride = false;
-										projectData.toggleScalPointExclusion(ptId);
+										workbench.scalParams.swirr = preset.value;
 									}}
-									class="inline-flex items-center gap-0.5 rounded-xs border border-slate-300 bg-white px-1 py-0.5 font-mono text-[9px] text-slate-700 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-800"
-									title={`Restore ${ptId}`}
+									class="mono-num inline-flex h-5 items-center gap-1 rounded-xs border px-1.5 text-[9.5px] font-medium transition-colors {Math.abs(
+										workbench.scalParams.swirr - preset.value
+									) < 0.001
+										? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
 								>
-									<span>{shortLabel}</span>
-									<span class="text-slate-400">×</span>
+									{#if preset.rt !== undefined}
+										<span
+											class="inline-block h-1.5 w-1.5 rounded-full"
+											style="background:{getRockTypeColor(preset.rt)}"
+										></span>
+									{/if}
+									{preset.label}
 								</button>
 							{/each}
 						</div>
-					</details>
-				{/if}
-			</div>
-
-			{#if projectData.shfResult?.fits && Object.keys(projectData.shfResult.fits).length > 0}
-				<div class="overflow-x-auto border border-[var(--border-hairline)]">
-					<table class="w-full border-collapse text-left text-[11px]">
-						<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
-							<tr class="h-6 border-b border-[var(--border-hairline)]">
-								<th class="px-1.5 font-semibold">RT</th>
-								<th class="px-1 text-right font-semibold">a</th>
-								<th class="px-1 text-right font-semibold">b</th>
-								{#if activeShfModel === 'skelt_harrison'}
-									<th class="px-1 text-right font-semibold">c</th>
-									<th class="px-1 text-right font-semibold">d</th>
-								{/if}
-								<th class="px-1.5 text-right font-semibold">RMSE</th>
-								{#if activeShfModel !== 'skelt_harrison'}
-									<th class="px-1.5 text-right font-semibold">R²</th>
-								{/if}
-							</tr>
-						</thead>
-						<tbody class="divide-y divide-[var(--border-hairline)]">
-							{#each Object.entries(projectData.shfResult.fits) as [rf, fit]}
-								{@const rtColor = getRockTypeColor(Number(rf))}
-								<tr class="h-6">
-									<td class="px-1.5 font-semibold whitespace-nowrap">
-										<span
-											class="mr-1 inline-block h-2 w-2 rounded-full"
-											style="background:{rtColor}"
-										></span>RT {rf}
-									</td>
-									<td class="px-1 text-right">
-										<input
-											type="number"
-											step="0.005"
-											value={fit.a}
-											onchange={(e) =>
-												updateShfFitParam(
-													rf,
-													'a',
-													(e.currentTarget as HTMLInputElement).value
-												)}
-											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
-										/>
-									</td>
-									<td class="px-1 text-right">
-										<input
-											type="number"
-											step="0.01"
-											value={fit.b}
-											onchange={(e) =>
-												updateShfFitParam(
-													rf,
-													'b',
-													(e.currentTarget as HTMLInputElement).value
-												)}
-											class="mono-num h-5 w-14 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
-										/>
-									</td>
-									{#if activeShfModel === 'skelt_harrison'}
-										<td class="px-1 text-right">
-											<input
-												type="number"
-												step="0.05"
-												value={fit.c ?? 1.5}
-												onchange={(e) =>
-													updateShfFitParam(
-														rf,
-														'c',
-														(e.currentTarget as HTMLInputElement).value
-													)}
-												class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
-											/>
-										</td>
-										<td class="px-1 text-right">
-											<input
-												type="number"
-												step="0.1"
-												value={fit.d ?? 0.5}
-												onchange={(e) =>
-													updateShfFitParam(
-														rf,
-														'd',
-														(e.currentTarget as HTMLInputElement).value
-													)}
-												class="mono-num h-5 w-12 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px]"
-											/>
-										</td>
-									{/if}
-									<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.rmse, 3)}</td>
-									{#if activeShfModel !== 'skelt_harrison'}
-										<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.r2, 3)}</td>
-									{/if}
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
-		</ParameterSection>
-		{/if}
-
-		<!-- Section 4: Apply & Propagate SWIRR to Logs -->
-		<ParameterSection title="4. Apply & Propagate SWIRR to Logs" badge="Track 7 SWIRR" defaultOpen={true}>
-			<div class="space-y-2">
-				<div class="grid grid-cols-3 gap-1.5">
-					<div>
-						<label
-							for="swirr-phie-col"
-							class="mb-0.5 block text-[9px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
-						>
-							Porosity
-						</label>
-						<select
-							id="swirr-phie-col"
-							bind:value={projectData.swirrInputCols.phieCol}
-							class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
-						>
-							{#each availablePoroCurves as c (c)}
-								<option value={c}>{c}</option>
-							{/each}
-						</select>
-					</div>
-					<div>
-						<label
-							for="swirr-perm-col"
-							class="mb-0.5 block text-[9px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
-						>
-							Permeability
-						</label>
-						<select
-							id="swirr-perm-col"
-							bind:value={projectData.swirrInputCols.permCol}
-							class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
-						>
-							{#each availablePermCurves as c (c)}
-								<option value={c}>{c}</option>
-							{/each}
-						</select>
-					</div>
-					<div>
-						<label
-							for="swirr-rt-col"
-							class="mb-0.5 block text-[9px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
-						>
-							Rock Type
-						</label>
-						<select
-							id="swirr-rt-col"
-							bind:value={projectData.swirrInputCols.rtCol}
-							class="h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
-						>
-							{#each availableRtCurves as c (c)}
-								<option value={c}>{c}</option>
-							{/each}
-						</select>
-					</div>
-				</div>
-
-				{#if projectData.swirrApplyResult}
-					<div
-						class="rounded-sm border border-emerald-300 bg-emerald-50/80 px-2 py-1.5 text-[10px] text-emerald-950"
-					>
-						<div class="flex items-center justify-between font-semibold">
-							<span>SWIRR Applied ({projectData.swirrApplyResult.well_summaries.length} wells)</span>
-							<span class="mono-num">
-								Mean: {projectData.swirrApplyResult.mean_swirr?.toFixed(3) ?? '—'}
-							</span>
-						</div>
-						<div class="mt-0.5 flex items-center justify-between text-[9.5px] text-emerald-800">
-							<span class="mono-num">
-								Range: {projectData.swirrApplyResult.min_swirr?.toFixed(3) ?? '—'} – {projectData.swirrApplyResult.max_swirr?.toFixed(3) ?? '—'}
-							</span>
-						</div>
 					</div>
 				{/if}
-			</div>
-		</ParameterSection>
-		{:else}
-		<!-- Mode 2: Rel-Perm & SWOF (Dynamic) -->
-		<ParameterSection
-			title="1. Relative Permeability Model"
-			badge={workbench.scalParams.model.toUpperCase()}
-			defaultOpen={true}
-		>
-			<div class="grid grid-cols-3 gap-1">
-				{#each [['let', 'LET (3-Param)'], ['corey', 'Corey'], ['brooks_corey', 'Brooks-Corey']] as [m, lbl]}
-					<button
-						type="button"
-						onclick={() => {
-							workbench.scalParams.model = m as any;
-						}}
-						class="h-6 rounded-sm border text-[10.5px] font-medium {workbench.scalParams.model ===
-						m
-							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
-							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
-					>
-						{lbl}
-					</button>
-				{/each}
-			</div>
 
-			{#if scalSwirrPresets.length > 0}
-				<div class="mt-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-1.5">
-					<div class="mb-1 flex items-center justify-between text-[9.5px] text-[var(--text-secondary)]">
-						<span class="font-semibold">Sync Sw,irr from SCAL Plugs:</span>
-						<span class="mono-num text-[9px] text-[var(--text-muted)]">Click to apply</span>
+				<NumericScrubber
+					label="Connate Water (Sw,irr)"
+					bind:value={workbench.scalParams.swirr}
+					unit="v/v"
+					min={0.01}
+					max={0.5}
+					step={0.01}
+				/>
+				<NumericScrubber
+					label="Residual Oil (Sor)"
+					bind:value={workbench.scalParams.sor}
+					unit="v/v"
+					min={0.01}
+					max={0.5}
+					step={0.01}
+				/>
+				<NumericScrubber
+					label="Max Water Rel-Perm (krw,max)"
+					bind:value={workbench.scalParams.krw_max}
+					unit="frac"
+					min={0.05}
+					max={1.0}
+					step={0.02}
+				/>
+				<NumericScrubber
+					label="Max Oil Rel-Perm (kro,max)"
+					bind:value={workbench.scalParams.kro_max}
+					unit="frac"
+					min={0.1}
+					max={1.0}
+					step={0.02}
+				/>
+
+				{#if workbench.scalParams.model === 'corey'}
+					<NumericScrubber
+						label="Water Corey Exponent (nw)"
+						bind:value={workbench.scalParams.nw}
+						min={1.0}
+						max={8.0}
+						step={0.1}
+					/>
+					<NumericScrubber
+						label="Oil Corey Exponent (no)"
+						bind:value={workbench.scalParams.no}
+						min={1.0}
+						max={8.0}
+						step={0.1}
+					/>
+				{:else if workbench.scalParams.model === 'brooks_corey'}
+					<NumericScrubber
+						label="Pore-Size Distribution (λ)"
+						bind:value={workbench.scalParams.lam}
+						min={0.3}
+						max={6.0}
+						step={0.1}
+					/>
+				{:else}
+					<div class="grid grid-cols-2 gap-x-2">
+						<NumericScrubber
+							label="Water L (Lw)"
+							bind:value={workbench.scalParams.lw}
+							min={0.5}
+							max={6.0}
+							step={0.1}
+						/>
+						<NumericScrubber
+							label="Oil L (Lo)"
+							bind:value={workbench.scalParams.lo}
+							min={0.5}
+							max={6.0}
+							step={0.1}
+						/>
+						<NumericScrubber
+							label="Water E (Ew)"
+							bind:value={workbench.scalParams.ew}
+							min={0.1}
+							max={10.0}
+							step={0.2}
+						/>
+						<NumericScrubber
+							label="Oil E (Eo)"
+							bind:value={workbench.scalParams.eo}
+							min={0.1}
+							max={10.0}
+							step={0.2}
+						/>
+						<NumericScrubber
+							label="Water T (Tw)"
+							bind:value={workbench.scalParams.tw}
+							min={0.5}
+							max={6.0}
+							step={0.1}
+						/>
+						<NumericScrubber
+							label="Oil T (To)"
+							bind:value={workbench.scalParams.to}
+							min={0.5}
+							max={6.0}
+							step={0.1}
+						/>
 					</div>
-					<div class="flex flex-wrap gap-1">
-						{#each scalSwirrPresets as preset (preset.key)}
-							<button
-								type="button"
-								onclick={() => {
-									workbench.scalParams.swirr = preset.value;
-								}}
-								class="mono-num inline-flex h-5 items-center gap-1 rounded-xs border px-1.5 text-[9.5px] font-medium transition-colors {Math.abs(
-									workbench.scalParams.swirr - preset.value
-								) < 0.001
-									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
-									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
-							>
-								{#if preset.rt !== undefined}
-									<span
-										class="inline-block h-1.5 w-1.5 rounded-full"
-										style="background:{getRockTypeColor(preset.rt)}"
-									></span>
-								{/if}
-								{preset.label}
-							</button>
-						{/each}
-					</div>
+				{/if}
+
+				<div class="grid grid-cols-2 gap-x-2">
+					<NumericScrubber
+						label="Water Viscosity (μw)"
+						bind:value={workbench.scalParams.mu_w}
+						unit="cP"
+						min={0.1}
+						max={5.0}
+						step={0.1}
+					/>
+					<NumericScrubber
+						label="Oil Viscosity (μo)"
+						bind:value={workbench.scalParams.mu_o}
+						unit="cP"
+						min={0.1}
+						max={50.0}
+						step={0.2}
+					/>
 				</div>
-			{/if}
+			</ParameterSection>
 
-			<NumericScrubber
-				label="Connate Water (Sw,irr)"
-				bind:value={workbench.scalParams.swirr}
-				unit="v/v"
-				min={0.01}
-				max={0.5}
-				step={0.01}
-			/>
-			<NumericScrubber
-				label="Residual Oil (Sor)"
-				bind:value={workbench.scalParams.sor}
-				unit="v/v"
-				min={0.01}
-				max={0.5}
-				step={0.01}
-			/>
-			<NumericScrubber
-				label="Max Water Rel-Perm (krw,max)"
-				bind:value={workbench.scalParams.krw_max}
-				unit="frac"
-				min={0.05}
-				max={1.0}
-				step={0.02}
-			/>
-			<NumericScrubber
-				label="Max Oil Rel-Perm (kro,max)"
-				bind:value={workbench.scalParams.kro_max}
-				unit="frac"
-				min={0.1}
-				max={1.0}
-				step={0.02}
-			/>
-
-			{#if workbench.scalParams.model === 'corey'}
+			<ParameterSection
+				title="2. Eclipse SWOF Simulation Deck"
+				badge={`${workbench.scalResult?.swofTable.length ?? 0} rows`}
+				defaultOpen={false}
+			>
 				<NumericScrubber
-					label="Water Corey Exponent (nw)"
-					bind:value={workbench.scalParams.nw}
-					min={1.0}
-					max={8.0}
-					step={0.1}
+					label="Entry Capillary Pressure (Pd)"
+					bind:value={workbench.scalParams.pc_entry}
+					unit="psi"
+					min={0.1}
+					max={25.0}
+					step={0.2}
 				/>
 				<NumericScrubber
-					label="Oil Corey Exponent (no)"
-					bind:value={workbench.scalParams.no}
-					min={1.0}
-					max={8.0}
-					step={0.1}
-				/>
-			{:else if workbench.scalParams.model === 'brooks_corey'}
-				<NumericScrubber
-					label="Pore-Size Distribution (λ)"
-					bind:value={workbench.scalParams.lam}
-					min={0.3}
+					label="Capillary Exponent (1/λ)"
+					bind:value={workbench.scalParams.pc_exponent}
+					min={0.5}
 					max={6.0}
 					step={0.1}
 				/>
-			{:else}
-				<div class="grid grid-cols-2 gap-x-2">
-					<NumericScrubber
-						label="Water L (Lw)"
-						bind:value={workbench.scalParams.lw}
-						min={0.5}
-						max={6.0}
-						step={0.1}
-					/>
-					<NumericScrubber
-						label="Oil L (Lo)"
-						bind:value={workbench.scalParams.lo}
-						min={0.5}
-						max={6.0}
-						step={0.1}
-					/>
-					<NumericScrubber
-						label="Water E (Ew)"
-						bind:value={workbench.scalParams.ew}
-						min={0.1}
-						max={10.0}
-						step={0.2}
-					/>
-					<NumericScrubber
-						label="Oil E (Eo)"
-						bind:value={workbench.scalParams.eo}
-						min={0.1}
-						max={10.0}
-						step={0.2}
-					/>
-					<NumericScrubber
-						label="Water T (Tw)"
-						bind:value={workbench.scalParams.tw}
-						min={0.5}
-						max={6.0}
-						step={0.1}
-					/>
-					<NumericScrubber
-						label="Oil T (To)"
-						bind:value={workbench.scalParams.to}
-						min={0.5}
-						max={6.0}
-						step={0.1}
-					/>
+				<NumericScrubber
+					label="Max Capillary Pressure"
+					bind:value={workbench.scalParams.pc_max}
+					unit="psi"
+					min={5.0}
+					max={200.0}
+					step={5.0}
+				/>
+
+				<div class="mt-1.5 flex gap-1.5">
+					<button
+						type="button"
+						disabled={!workbench.scalResult?.swofKeyword}
+						onclick={copySwofKeyword}
+						class="h-7 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-xs font-semibold text-[var(--text-primary)] hover:bg-slate-200 disabled:opacity-40"
+					>
+						{copiedSwof ? 'Copied SWOF ✓' : 'Copy SWOF Keyword'}
+					</button>
+					<button
+						type="button"
+						disabled={!workbench.scalResult?.swofKeyword}
+						onclick={downloadSwofInc}
+						class="h-7 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-semibold text-[var(--accent-primary)] hover:bg-blue-50 disabled:opacity-40"
+					>
+						Download SWOF.INC
+					</button>
 				</div>
-			{/if}
-
-			<div class="grid grid-cols-2 gap-x-2">
-				<NumericScrubber
-					label="Water Viscosity (μw)"
-					bind:value={workbench.scalParams.mu_w}
-					unit="cP"
-					min={0.1}
-					max={5.0}
-					step={0.1}
-				/>
-				<NumericScrubber
-					label="Oil Viscosity (μo)"
-					bind:value={workbench.scalParams.mu_o}
-					unit="cP"
-					min={0.1}
-					max={50.0}
-					step={0.2}
-				/>
-			</div>
-		</ParameterSection>
-
-		<ParameterSection
-			title="2. Eclipse SWOF Simulation Deck"
-			badge={`${workbench.scalResult?.swofTable.length ?? 0} rows`}
-			defaultOpen={true}
-		>
-			<NumericScrubber
-				label="Entry Capillary Pressure (Pd)"
-				bind:value={workbench.scalParams.pc_entry}
-				unit="psi"
-				min={0.1}
-				max={25.0}
-				step={0.2}
-			/>
-			<NumericScrubber
-				label="Capillary Exponent (1/λ)"
-				bind:value={workbench.scalParams.pc_exponent}
-				min={0.5}
-				max={6.0}
-				step={0.1}
-			/>
-			<NumericScrubber
-				label="Max Capillary Pressure"
-				bind:value={workbench.scalParams.pc_max}
-				unit="psi"
-				min={5.0}
-				max={200.0}
-				step={5.0}
-			/>
-
-			<div class="mt-1.5 flex gap-1.5">
-				<button
-					type="button"
-					disabled={!workbench.scalResult?.swofKeyword}
-					onclick={copySwofKeyword}
-					class="h-7 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-xs font-semibold text-[var(--text-primary)] hover:bg-slate-200 disabled:opacity-40"
-				>
-					{copiedSwof ? 'Copied SWOF ✓' : 'Copy SWOF Keyword'}
-				</button>
-				<button
-					type="button"
-					disabled={!workbench.scalResult?.swofKeyword}
-					onclick={downloadSwofInc}
-					class="h-7 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-semibold text-[var(--accent-primary)] hover:bg-blue-50 disabled:opacity-40"
-				>
-					Download SWOF.INC
-				</button>
-			</div>
-		</ParameterSection>
+			</ParameterSection>
 		{/if}
 
 		{#if projectData.error}
@@ -1587,7 +1712,9 @@
 		{#if workbench.scalSubMode === 'static'}
 			<button
 				type="button"
-				disabled={projectData.isComputingMultiWell || projectData.isSavingMultiWell || isApplying}
+				disabled={projectData.isComputingMultiWell ||
+					projectData.isSavingMultiWell ||
+					isApplying}
 				onclick={computeSwirrAndPc}
 				class="mr-1.5 h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
 			>
@@ -1595,11 +1722,9 @@
 			</button>
 			<button
 				type="button"
-				disabled={
-					projectData.isComputingMultiWell ||
+				disabled={projectData.isComputingMultiWell ||
 					projectData.isSavingMultiWell ||
-					!projectData.hasPendingMultiWell('swirr-corr')
-				}
+					!projectData.hasPendingMultiWell('swirr-corr')}
 				onclick={saveAllWells}
 				title={projectData.hasPendingMultiWell('swirr-corr')
 					? 'Save computed SWIRR curve across all project wells'
@@ -1619,11 +1744,9 @@
 			</button>
 			<button
 				type="button"
-				disabled={
-					projectData.isComputingMultiWell ||
+				disabled={projectData.isComputingMultiWell ||
 					projectData.isSavingMultiWell ||
-					!relpermPendingSave
-				}
+					!relpermPendingSave}
 				onclick={saveRelpermParams}
 				class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
 			>

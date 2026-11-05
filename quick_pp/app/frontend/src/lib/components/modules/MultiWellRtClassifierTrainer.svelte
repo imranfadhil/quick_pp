@@ -12,16 +12,31 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
 
-	const RAW_RT_FEATURES: Array<{ key: DrtFeatureKey; label: string; short: string; title: string }> = [
+	const RAW_RT_FEATURES: Array<{
+		key: DrtFeatureKey;
+		label: string;
+		short: string;
+		title: string;
+	}> = [
 		{ key: 'GR', label: 'GR', short: 'GR', title: 'Gamma Ray (API)' },
 		{ key: 'NPHI', label: 'NPHI', short: 'NPHI', title: 'Neutron Porosity (v/v)' },
 		{ key: 'RHOB', label: 'RHOB', short: 'RHOB', title: 'Bulk Density (g/cc)' },
-		{ key: 'LOG_RT', label: 'log₁₀(RT)', short: 'log(RT)', title: 'Log10 Deep Resistivity (ohm.m)' },
+		{
+			key: 'LOG_RT',
+			label: 'log₁₀(RT)',
+			short: 'log(RT)',
+			title: 'Log10 Deep Resistivity (ohm.m)'
+		},
 		{ key: 'PEF', label: 'PEF', short: 'PEF', title: 'Photoelectric Factor (b/e)' },
 		{ key: 'VDL', label: 'VDL', short: 'VDL', title: 'Velocity Deviation Log (Φ_T − Φ_sonic)' }
 	];
 
-	const CALC_RT_FEATURES: Array<{ key: DrtFeatureKey; label: string; short: string; title: string }> = [
+	const CALC_RT_FEATURES: Array<{
+		key: DrtFeatureKey;
+		label: string;
+		short: string;
+		title: string;
+	}> = [
 		{ key: 'PHIT', label: 'PHIT', short: 'PHIT', title: 'Total Porosity (v/v)' },
 		{ key: 'VSAND', label: 'VSAND', short: 'VSAND', title: 'Sand Volume Fraction (v/v)' },
 		{ key: 'VSHALE', label: 'VSHALE', short: 'VSHALE', title: 'Shale Volume Fraction (v/v)' },
@@ -29,10 +44,12 @@
 		{ key: 'VCLAY', label: 'VCLAY', short: 'VCLAY', title: 'Clay Volume Fraction (v/v)' }
 	];
 
-	const ALL_RT_FEATURES: Array<{ key: DrtFeatureKey; label: string; short: string; title: string }> = [
-		...RAW_RT_FEATURES,
-		...CALC_RT_FEATURES
-	];
+	const ALL_RT_FEATURES: Array<{
+		key: DrtFeatureKey;
+		label: string;
+		short: string;
+		title: string;
+	}> = [...RAW_RT_FEATURES, ...CALC_RT_FEATURES];
 
 	const DRT_METHOD_META: Record<
 		DrtMethod,
@@ -119,8 +136,7 @@
 				workbench.depthFilter?.min != null ? workbench.depthFilter.min : null;
 			const activeMaxDepth =
 				workbench.depthFilter?.max != null ? workbench.depthFilter.max : null;
-			const activeZones =
-				workbench.selectedZones.length > 0 ? workbench.selectedZones : null;
+			const activeZones = workbench.selectedZones.length > 0 ? workbench.selectedZones : null;
 
 			const { data, error } = await api.POST(
 				'/quick_pp/workspace/projects/{project_id}/rock_typing/compute',
@@ -170,7 +186,9 @@
 				}
 			);
 			if (error || !data) {
-				throw new Error(String((error as any)?.detail ?? 'Rock type classifier training failed'));
+				throw new Error(
+					String((error as any)?.detail ?? 'Rock type classifier training failed')
+				);
 			}
 			if ((data as any).diagnostics?.models_status) {
 				projectData.rtSavedModelsStatus = (data as any).diagnostics.models_status;
@@ -221,7 +239,8 @@
 						? 'GB'
 						: 'RF';
 			const srcTag = projectData.drtDataSource === 'log' ? 'Log' : 'Core';
-			const defaultName = `${algoShort} (${(classifierDiag.features_used ?? []).join('+')}) ${activeMeta.shortName}-${srcTag} ${accPct}`.trim();
+			const defaultName =
+				`${algoShort} (${(classifierDiag.features_used ?? []).join('+')}) ${activeMeta.shortName}-${srcTag} ${accPct}`.trim();
 			const nameToUse = customModelName.trim() || defaultName;
 			const keySlug = nameToUse
 				.toLowerCase()
@@ -352,12 +371,17 @@
 		<SavedParamsIndicator modules={['rt-classifier']} />
 		<ParameterSection
 			title="Target DRT Labels & Log Features"
-			badge="{projectData.drtDataSource === 'core' ? 'Core (CPORE & CPERM)' : 'Log (PHIT & PERM)'} · {projectData.drtSelectedFeatures.length}/{ALL_RT_FEATURES.length} Inputs"
-			defaultOpen={true}
+			badge="{projectData.drtDataSource === 'core'
+				? 'Core (CPORE & CPERM)'
+				: 'Log (PHIT & PERM)'} · {projectData.drtSelectedFeatures
+				.length}/{ALL_RT_FEATURES.length} Inputs"
+			defaultOpen={false}
 		>
 			<div class="space-y-2">
 				<!-- Target DRT Label Data Source Selector (Core vs Log) -->
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]"
+				>
 					<div class="mb-1 flex items-center justify-between text-[9.5px]">
 						<span class="font-semibold text-[var(--text-primary)]">
 							Target DRT Ground-Truth Label Source:
@@ -377,12 +401,15 @@
 						>
 							<div class="flex w-full items-center justify-between gap-1 text-[10px]">
 								<span>Core Data</span>
-								<span class="mono-num rounded-xs bg-amber-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-amber-800">
+								<span
+									class="mono-num py-0.2 rounded-xs bg-amber-100/80 px-1 text-[8.5px] font-semibold text-amber-800"
+								>
 									CPORE &amp; CPERM
 								</span>
 							</div>
 							<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
-								{projectData.wellsWithCorePhiK.length}/{projectData.activeWells.length} wells · {projectData.totalCorePlugCount} plugs
+								{projectData.wellsWithCorePhiK.length}/{projectData.activeWells
+									.length} wells · {projectData.totalCorePlugCount} plugs
 							</span>
 						</button>
 						<button
@@ -395,22 +422,35 @@
 						>
 							<div class="flex w-full items-center justify-between gap-1 text-[10px]">
 								<span>Calculated Logs</span>
-								<span class="mono-num rounded-xs bg-indigo-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-indigo-800">
+								<span
+									class="mono-num py-0.2 rounded-xs bg-indigo-100/80 px-1 text-[8.5px] font-semibold text-indigo-800"
+								>
 									PHIT &amp; PERM
 								</span>
 							</div>
 							<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
-								{projectData.wellsWithLogPhiK.length}/{projectData.activeWells.length} wells with PHIT &amp; PERM
+								{projectData.wellsWithLogPhiK.length}/{projectData.activeWells
+									.length} wells with PHIT &amp; PERM
 							</span>
 						</button>
 					</div>
 					<div class="mt-1 text-[9px] leading-snug text-[var(--text-secondary)]">
 						{#if projectData.drtDataSource === 'core'}
-							Classifier trains against <span class="mono-num font-semibold">{activeMeta.shortName}</span> DRT labels derived from
-							<strong class="mono-num text-[var(--text-primary)]">Core Data (CPORE &amp; CPERM)</strong>.
+							Classifier trains against <span class="mono-num font-semibold"
+								>{activeMeta.shortName}</span
+							>
+							DRT labels derived from
+							<strong class="mono-num text-[var(--text-primary)]"
+								>Core Data (CPORE &amp; CPERM)</strong
+							>.
 						{:else}
-							Classifier trains against <span class="mono-num font-semibold">{activeMeta.shortName}</span> DRT labels derived from
-							<strong class="mono-num text-[var(--text-primary)]">Calculated Logs (PHIT &amp; PERM)</strong>.
+							Classifier trains against <span class="mono-num font-semibold"
+								>{activeMeta.shortName}</span
+							>
+							DRT labels derived from
+							<strong class="mono-num text-[var(--text-primary)]"
+								>Calculated Logs (PHIT &amp; PERM)</strong
+							>.
 						{/if}
 					</div>
 				</div>
@@ -421,7 +461,10 @@
 				>
 					<div>
 						<div class="font-semibold text-[var(--text-primary)]">
-							Target DRT: {activeMeta.label} ({projectData.activeDrtCutoffs.length + 1} Groups{projectData.drtIncludeNonReservoir ? ' + DRT 0 Non-Res' : ''})
+							Target DRT: {activeMeta.label} ({projectData.activeDrtCutoffs.length +
+								1} Groups{projectData.drtIncludeNonReservoir
+								? ' + DRT 0 Non-Res'
+								: ''})
 						</div>
 						<div class="mono-num text-[9.5px] text-[var(--text-secondary)]">
 							Cutoffs: {[...projectData.activeDrtCutoffs]
@@ -442,7 +485,9 @@
 				<div
 					class="flex items-center justify-between gap-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px]"
 				>
-					<label class="flex cursor-pointer items-center gap-1.5 font-medium text-[var(--text-primary)]">
+					<label
+						class="flex cursor-pointer items-center gap-1.5 font-medium text-[var(--text-primary)]"
+					>
 						<input
 							type="checkbox"
 							bind:checked={projectData.drtIncludeNonReservoir}
@@ -451,7 +496,8 @@
 						<span>Include Non-Reservoir Gate (DRT 0)</span>
 					</label>
 					<span class="mono-num text-[9px] text-[var(--text-secondary)]">
-						Φ&lt;{projectData.drtNonResPhitCutoff} · Vsh&gt;{projectData.drtNonResVshCutoff} · K&lt;{projectData.drtNonResPermCutoff}
+						Φ&lt;{projectData.drtNonResPhitCutoff} · Vsh&gt;{projectData.drtNonResVshCutoff}
+						· K&lt;{projectData.drtNonResPermCutoff}
 					</span>
 				</div>
 
@@ -461,13 +507,21 @@
 				>
 					<div class="flex flex-wrap items-center justify-between gap-1">
 						<span class="font-semibold text-[var(--text-primary)]">
-							1. Selectable Input Curves ({projectData.drtSelectedFeatures.length}/{ALL_RT_FEATURES.length})
+							1. Selectable Input Curves ({projectData.drtSelectedFeatures
+								.length}/{ALL_RT_FEATURES.length})
 						</span>
 						<div class="flex flex-wrap items-center gap-1">
 							<button
 								type="button"
 								onclick={() =>
-									setFeaturePreset(['GR', 'NPHI', 'RHOB', 'LOG_RT', 'PEF', 'VDL'])}
+									setFeaturePreset([
+										'GR',
+										'NPHI',
+										'RHOB',
+										'LOG_RT',
+										'PEF',
+										'VDL'
+									])}
 								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0.5 text-[9px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
 								title="Select raw & sonic logs (GR, NPHI, RHOB, log10(RT), PEF, VDL)"
 							>
@@ -515,12 +569,16 @@
 					</div>
 
 					<div class="space-y-1">
-						<div class="text-[8.5px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+						<div
+							class="text-[8.5px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+						>
 							Raw &amp; Sonic Logs
 						</div>
 						<div class="grid grid-cols-3 gap-1">
 							{#each RAW_RT_FEATURES as feat}
-								{@const isSelected = projectData.drtSelectedFeatures.includes(feat.key)}
+								{@const isSelected = projectData.drtSelectedFeatures.includes(
+									feat.key
+								)}
 								<button
 									type="button"
 									title={feat.title}
@@ -538,14 +596,18 @@
 
 					<div class="space-y-1 pt-0.5">
 						<div class="flex items-center justify-between text-[8.5px]">
-							<span class="font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+							<span
+								class="font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+							>
 								Calculated Curves (Litho &amp; Porosity)
 							</span>
 							<span class="text-[8px] text-[var(--text-muted)]">v/v</span>
 						</div>
 						<div class="grid grid-cols-3 gap-1">
 							{#each CALC_RT_FEATURES as feat}
-								{@const isSelected = projectData.drtSelectedFeatures.includes(feat.key)}
+								{@const isSelected = projectData.drtSelectedFeatures.includes(
+									feat.key
+								)}
 								<button
 									type="button"
 									title={feat.title}
@@ -577,17 +639,19 @@
 						/>
 					</label>
 					<div class="text-[9.5px] text-[var(--text-secondary)]">
-						Restricts training &amp; validation samples to active zone filters, depth filter bounds,
-						and evaluated reservoir intervals.
+						Restricts training &amp; validation samples to active zone filters, depth
+						filter bounds, and evaluated reservoir intervals.
 					</div>
 					{#if projectData.allZones.length > 0}
 						<div class="flex flex-wrap items-center gap-1 pt-0.5">
-							<span class="text-[9px] font-medium text-[var(--text-muted)]">Zones:</span>
+							<span class="text-[9px] font-medium text-[var(--text-muted)]"
+								>Zones:</span
+							>
 							<button
 								type="button"
 								onclick={() => (workbench.selectedZones = [])}
-								class="rounded-xs border px-1 py-0.5 text-[9px] {workbench.selectedZones.length ===
-								0
+								class="rounded-xs border px-1 py-0.5 text-[9px] {workbench
+									.selectedZones.length === 0
 									? 'border-slate-700 bg-slate-800 font-semibold text-white'
 									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 							>
@@ -618,7 +682,9 @@
 									>{fi.focused_samples} / {fi.total_well_samples}</strong
 								>
 								{#if fi.excluded_samples > 0}
-									<span class="text-[var(--text-muted)]">({fi.excluded_samples} excluded)</span>
+									<span class="text-[var(--text-muted)]"
+										>({fi.excluded_samples} excluded)</span
+									>
 								{/if}
 							</span>
 							{#if fi.min_depth !== null && fi.max_depth !== null}
@@ -662,18 +728,21 @@
 				badge={m?.accuracy !== undefined
 					? `Acc: ${(Number(m.accuracy) * 100).toFixed(1)}%`
 					: 'Validated'}
-				defaultOpen={true}
+				defaultOpen={false}
 			>
 				<div class="space-y-2 text-[10px]">
 					{#if activeDisplayedClassifier.saved_model_name}
 						<div
 							class="flex items-center justify-between rounded-xs bg-blue-50 px-1.5 py-1 text-[9.5px] font-semibold text-[var(--accent-primary)]"
 						>
-							<span class="truncate">Inspecting: {activeDisplayedClassifier.saved_model_name}</span>
+							<span class="truncate"
+								>Inspecting: {activeDisplayedClassifier.saved_model_name}</span
+							>
 							{#if previewedSavedModel}
 								<button
 									type="button"
-									onclick={() => useModelInRockTyping(previewedSavedModel?.model_key)}
+									onclick={() =>
+										useModelInRockTyping(previewedSavedModel?.model_key)}
 									class="underline"
 								>
 									Use in Rock Typing →
@@ -684,19 +753,25 @@
 
 					<!-- Validation KPI Banner -->
 					<div class="grid grid-cols-3 gap-1 text-center">
-						<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] py-1">
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] py-1"
+						>
 							<div class="text-[9px] text-[var(--text-muted)]">Accuracy</div>
 							<div class="mono-num font-bold text-[var(--text-primary)]">
 								{(Number(m?.accuracy ?? 0) * 100).toFixed(1)}%
 							</div>
 						</div>
-						<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] py-1">
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] py-1"
+						>
 							<div class="text-[9px] text-[var(--text-muted)]">Weighted F1</div>
 							<div class="mono-num font-bold text-[var(--text-primary)]">
 								{Number(m?.f1_weighted ?? 0).toFixed(3)}
 							</div>
 						</div>
-						<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] py-1">
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] py-1"
+						>
 							<div class="text-[9px] text-[var(--text-muted)]">Cohen's κ</div>
 							<div class="mono-num font-bold text-[var(--text-primary)]">
 								{Number(m?.cohen_kappa ?? 0).toFixed(3)}
@@ -706,11 +781,17 @@
 
 					<!-- Compact Contingency Table (Confusion Matrix) -->
 					{#if ct?.labels?.length && ct?.counts?.length}
-						<div class="overflow-x-auto rounded-xs border border-[var(--border-hairline)]">
+						<div
+							class="overflow-x-auto rounded-xs border border-[var(--border-hairline)]"
+						>
 							<table class="w-full border-collapse text-center text-[9.5px]">
 								<thead>
-									<tr class="border-b border-[var(--border-hairline)] bg-[var(--bg-app)] text-[var(--text-muted)]">
-										<th class="px-1.5 py-1 text-left font-medium">True \ Pred</th>
+									<tr
+										class="border-b border-[var(--border-hairline)] bg-[var(--bg-app)] text-[var(--text-muted)]"
+									>
+										<th class="px-1.5 py-1 text-left font-medium"
+											>True \ Pred</th
+										>
 										{#each ct.labels as colLbl}
 											<th class="mono-num px-1 py-1 font-semibold">
 												{Number(colLbl) === 0 ? 'DRT 0' : `DRT ${colLbl}`}
@@ -724,12 +805,20 @@
 										{@const rowCounts = ct.counts[rIdx] ?? []}
 										{@const rowNorm = ct.norm_recall?.[rIdx] ?? []}
 										{@const diagRec = Number(rowNorm[rIdx] ?? 0)}
-										<tr class="border-b border-[var(--border-hairline)] last:border-b-0">
-											<td class="mono-num px-1.5 py-1 text-left font-semibold">
+										<tr
+											class="border-b border-[var(--border-hairline)] last:border-b-0"
+										>
+											<td
+												class="mono-num px-1.5 py-1 text-left font-semibold"
+											>
 												<span
-													style="background-color: {getRockTypeColor(rowLbl)}"
+													style="background-color: {getRockTypeColor(
+														rowLbl
+													)}"
 													class="mr-1 inline-block h-2 w-2 rounded-full"
-												></span>{Number(rowLbl) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${rowLbl}`}
+												></span>{Number(rowLbl) === 0
+													? 'DRT 0 (Non-Res)'
+													: `DRT ${rowLbl}`}
 											</td>
 											{#each rowCounts as cellVal, cIdx}
 												{@const isDiag = rIdx === cIdx}
@@ -744,7 +833,9 @@
 													{cellVal}
 												</td>
 											{/each}
-											<td class="mono-num px-1.5 py-1 font-semibold text-[var(--text-primary)]">
+											<td
+												class="mono-num px-1.5 py-1 font-semibold text-[var(--text-primary)]"
+											>
 												{(diagRec * 100).toFixed(0)}%
 											</td>
 										</tr>
@@ -762,16 +853,22 @@
 							</div>
 							{#each activeDisplayedClassifier.feature_importances as fi}
 								<div class="flex items-center gap-1.5 text-[9.5px]">
-									<span class="mono-num w-12 font-medium text-[var(--text-primary)]"
+									<span
+										class="mono-num w-12 font-medium text-[var(--text-primary)]"
 										>{fi.feature}</span
 									>
 									<div class="h-2 flex-1 overflow-hidden rounded-xs bg-slate-200">
 										<div
 											class="h-full bg-[var(--accent-primary)]"
-											style="width: {Math.min(100, Math.round(Number(fi.importance) * 100))}%"
+											style="width: {Math.min(
+												100,
+												Math.round(Number(fi.importance) * 100)
+											)}%"
 										></div>
 									</div>
-									<span class="mono-num w-8 text-right text-[var(--text-secondary)]">
+									<span
+										class="mono-num w-8 text-right text-[var(--text-secondary)]"
+									>
 										{(Number(fi.importance) * 100).toFixed(0)}%
 									</span>
 								</div>
@@ -810,11 +907,13 @@
 		<ParameterSection
 			title="Saved Classifier Models Registry"
 			badge={`${savedModelsList.length} Saved`}
-			defaultOpen={true}
+			defaultOpen={false}
 		>
 			{#if savedModelsList.length === 0}
 				<p class="text-[10.5px] text-[var(--text-secondary)]">
-					No saved Rock Type classifiers yet. Train a model above and click <strong>Save Model &amp; CM</strong> to register it for selection in Step 3 (Rock Typing).
+					No saved Rock Type classifiers yet. Train a model above and click <strong
+						>Save Model &amp; CM</strong
+					> to register it for selection in Step 3 (Rock Typing).
 				</p>
 			{:else}
 				<div class="space-y-1.5 text-[10px]">
@@ -840,7 +939,10 @@
 								: 'border-[var(--border-hairline)] bg-[var(--bg-app)]'}"
 						>
 							<div class="flex items-center justify-between gap-1">
-								<span class="truncate font-semibold text-[var(--text-primary)]" title={sm.model_name}>
+								<span
+									class="truncate font-semibold text-[var(--text-primary)]"
+									title={sm.model_name}
+								>
 									{sm.model_name}
 								</span>
 								<div class="flex shrink-0 items-center gap-1">
@@ -875,12 +977,14 @@
 							>
 								<span class="mono-num flex items-center gap-1">
 									<span
-										class="rounded-xs px-1 py-0.2 text-[8px] font-semibold {sm.data_source ===
+										class="py-0.2 rounded-xs px-1 text-[8px] font-semibold {sm.data_source ===
 										'log'
 											? 'bg-indigo-100/80 text-indigo-800'
 											: 'bg-amber-100/80 text-amber-800'}"
 									>
-										{sm.data_source === 'log' ? 'Log: PHIT/PERM' : 'Core: CPORE/CPERM'}
+										{sm.data_source === 'log'
+											? 'Log: PHIT/PERM'
+											: 'Core: CPORE/CPERM'}
 									</span>
 									<span>
 										{(sm.features_used ?? []).join('·')}
@@ -900,7 +1004,9 @@
 		</ParameterSection>
 
 		{#if projectData.error}
-			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
+			<div
+				class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]"
+			>
 				{projectData.error}
 			</div>
 		{/if}
@@ -914,13 +1020,14 @@
 				onclick={trainAndValidateClassifier}
 				class="h-7 rounded-sm bg-[var(--accent-primary)] text-xs font-medium text-white transition-opacity hover:opacity-95 disabled:opacity-50"
 			>
-				{projectData.isComputingMultiWell
-					? 'Training...'
-					: 'Train & Validate (⌘+Enter)'}
+				{projectData.isComputingMultiWell ? 'Training...' : 'Train & Validate (⌘+Enter)'}
 			</button>
 			<button
 				type="button"
-				disabled={!classifierDiag || Boolean(previewedSavedModel) || isSavingModel || projectData.isComputingMultiWell}
+				disabled={!classifierDiag ||
+					Boolean(previewedSavedModel) ||
+					isSavingModel ||
+					projectData.isComputingMultiWell}
 				onclick={saveTrainedClassifierModel}
 				class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40"
 			>
@@ -936,4 +1043,3 @@
 		</button>
 	</div>
 </div>
-
