@@ -867,6 +867,12 @@ def test_hc_correction_angle_and_den_correction_protects_hc_rows(client_and_proj
     assert r_den.status_code == 200
     den_body = r_den.json()
     den_data = den_body["data"]
+    assert "RHOB_DEN_CORR" in den_data
+    assert "RHOB_CORR" not in den_data
+    np.testing.assert_allclose(
+        np.asarray(den_data["RHOB_DEN_CORR"], dtype=float),
+        np.asarray(den_data["RHOB_HC"], dtype=float),
+    )
     hc_rows = hc_flag >= 0.5
     np.testing.assert_allclose(
         np.asarray(den_data["HC_FLAG"], dtype=float)[hc_rows], 1.0

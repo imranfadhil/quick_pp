@@ -2232,7 +2232,7 @@ def workspace_hc_correction(
 def workspace_den_correction(
     project_id: int, well_name: str, req: WorkspaceDenCorrectionRequest
 ) -> Dict[str, Any]:
-    """Reconstruct RHOB from NPHI and calibrated VSH_GR using den_correction and store in RHOB_HC / RHOB_CORR."""
+    """Reconstruct RHOB from NPHI and calibrated VSH_GR using den_correction."""
     try:
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
@@ -2348,7 +2348,7 @@ def workspace_den_correction(
             "DEPTH": df["DEPTH"],
             "NPHI_HC": nphi_hc_full,
             "RHOB_HC": rhob_hc_full,
-            "RHOB_CORR": rhob_hc_full,
+            "RHOB_DEN_CORR": rhob_hc_full,
             "DEN_CORR_FLAG": den_flag_full,
             "HC_FLAG": hc_flag_full,
             "VSH_GR": vsh_gr_s,
@@ -2386,7 +2386,7 @@ def workspace_den_correction(
         save_cols = [
             "NPHI_HC",
             "RHOB_HC",
-            "RHOB_CORR",
+            "RHOB_DEN_CORR",
             "DEN_CORR_FLAG",
             "HC_FLAG",
             "VSH_GR",
@@ -8442,7 +8442,7 @@ class WorkspaceOptimizeFwlRequest(BaseModel):
 def workspace_environmental_corrections(
     project_id: int, well_name: str, req: WorkspaceEnvCorrectionRequest
 ) -> Dict[str, Any]:
-    """Apply environmental corrections (GR_CORR, NPHI_CORR, RHOB_CORR, RT_CORR) to a well."""
+    """Apply environmental corrections (GR_ENV_CORR, NPHI_ENV_CORR, RHOB_ENV_CORR, RT_ENV_CORR) to a well."""
     try:
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
@@ -8458,7 +8458,13 @@ def workspace_environmental_corrections(
         )
         corr_cols = [
             c
-            for c in ("GR_CORR", "NPHI_CORR", "RHOB_CORR", "RT_CORR", "BAD_HOLE_FLAG")
+            for c in (
+                "GR_ENV_CORR",
+                "NPHI_ENV_CORR",
+                "RHOB_ENV_CORR",
+                "RT_ENV_CORR",
+                "INVASION_FLAG",
+            )
             if c in corr_df.columns
         ]
         out_df = corr_df[["DEPTH"] + corr_cols].copy()
@@ -9051,10 +9057,10 @@ def workspace_multi_well_environmental_corrections(
             corr_cols = [
                 c
                 for c in (
-                    "GR_CORR",
-                    "NPHI_CORR",
-                    "RHOB_CORR",
-                    "RT_CORR",
+                    "GR_ENV_CORR",
+                    "NPHI_ENV_CORR",
+                    "RHOB_ENV_CORR",
+                    "RT_ENV_CORR",
                     "INVASION_FLAG",
                 )
                 if c in corr_df.columns
@@ -11096,10 +11102,11 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
         "BAD_HOLE_FLAG",
         "BS",
         "DCALI",
-        "GR_CORR",
-        "NPHI_CORR",
-        "RHOB_CORR",
-        "RT_CORR",
+        "GR_ENV_CORR",
+        "NPHI_ENV_CORR",
+        "RHOB_ENV_CORR",
+        "RT_ENV_CORR",
+        "INVASION_FLAG",
         "GR_NORM",
         "NPHI_NORM",
         "NPHI_HC",

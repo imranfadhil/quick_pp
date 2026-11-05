@@ -40,14 +40,14 @@ class Config:
             "min": 0,
             "max": 200,
         },
-        "GR_CORR": {
+        "GR_ENV_CORR": {
             "name": "Environmentally Corrected Gamma Ray",
             "unit": "GAPI",
             "min": 0,
             "max": 200,
         },
         "RT": {"name": "True Resistivity", "unit": "ohm.m", "min": 0, "max": 2000},
-        "RT_CORR": {
+        "RT_ENV_CORR": {
             "name": "Environmentally Corrected Resistivity",
             "unit": "ohm.m",
             "min": 0,
@@ -60,7 +60,7 @@ class Config:
             "min": -0.05,
             "max": 1.0,
         },
-        "NPHI_CORR": {
+        "NPHI_ENV_CORR": {
             "name": "Environmentally Corrected Neutron Porosity",
             "unit": "v/v",
             "min": -0.05,
@@ -73,8 +73,14 @@ class Config:
             "min": 1.0,
             "max": 3.0,
         },
-        "RHOB_CORR": {
+        "RHOB_ENV_CORR": {
             "name": "Environmentally Corrected Bulk Density",
+            "unit": "g/cc",
+            "min": 1.0,
+            "max": 3.0,
+        },
+        "RHOB_DEN_CORR": {
+            "name": "Density-Reconstructed Bulk Density",
             "unit": "g/cc",
             "min": 1.0,
             "max": 3.0,

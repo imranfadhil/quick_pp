@@ -20,7 +20,7 @@
 	// Keep selectedQaqcCurve valid and auto-toggle log scale for resistivity/permeability
 	$effect(() => {
 		const c = workbench.selectedQaqcCurve;
-		if (c === 'RT' || c === 'PERM' || c === 'CPERM' || c === 'RT_CORR') {
+		if (c === 'RT' || c === 'PERM' || c === 'CPERM' || c === 'RT_ENV_CORR') {
 			workbench.mwQaqcLogScale = true;
 		} else if (c === 'GR' || c === 'NPHI' || c === 'RHOB' || c === 'DTC' || c === 'CALI') {
 			workbench.mwQaqcLogScale = false;
@@ -177,13 +177,23 @@
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/multi_well_qaqc/conditioning`,
 				{
 					action,
-					well_names: overrides.well_names ?? (batchTargetWells ? [batchTargetWells] : activeWellSubset()),
+					well_names:
+						overrides.well_names ??
+						(batchTargetWells ? [batchTargetWells] : activeWellSubset()),
 					zones: activeZoneSubset(),
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					fill: overrides.fill ?? qp.outerLimitFill,
-					source_curve: overrides.source_curve ?? (aliasSourceCurve.trim() || workbench.selectedQaqcCurve),
-					target_curve: overrides.target_curve ?? (action === 'harmonize_aliases' ? (aliasSourceCurve.trim() ? aliasTargetCurve : null) : workbench.selectedQaqcCurve),
+					source_curve:
+						overrides.source_curve ??
+						(aliasSourceCurve.trim() || workbench.selectedQaqcCurve),
+					target_curve:
+						overrides.target_curve ??
+						(action === 'harmonize_aliases'
+							? aliasSourceCurve.trim()
+								? aliasTargetCurve
+								: null
+							: workbench.selectedQaqcCurve),
 					scale: overrides.scale ?? qp.batchScaleFactor,
 					offset: overrides.offset ?? qp.batchOffset,
 					save: persist
@@ -400,7 +410,8 @@
 				>
 					{#each availableCurves as c (c)}
 						<option value={c}>
-							{c} {getCurveUnit(c) ? `(${getCurveUnit(c)})` : ''}
+							{c}
+							{getCurveUnit(c) ? `(${getCurveUnit(c)})` : ''}
 						</option>
 					{/each}
 				</select>
@@ -408,7 +419,7 @@
 
 			<!-- Grouping Mode: By Well vs By Zone vs Well x Zone -->
 			<div class="mt-1.5">
-				<div class="mb-0.5 text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+				<div class="mb-0.5 text-[10px] font-semibold text-[var(--text-muted)] uppercase">
 					Group Distributions By
 				</div>
 				<div class="grid grid-cols-3 gap-1">
@@ -429,7 +440,7 @@
 
 			<!-- Plot Type Switcher -->
 			<div class="mt-1.5">
-				<div class="mb-0.5 text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+				<div class="mb-0.5 text-[10px] font-semibold text-[var(--text-muted)] uppercase">
 					Distribution Plot Mode
 				</div>
 				<div class="grid grid-cols-5 gap-1">
@@ -452,8 +463,10 @@
 			</div>
 
 			<!-- Overlay & Filter Toggles -->
-			<div class="mt-1.5 flex flex-wrap items-center justify-between gap-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10.5px]">
-				<label class="flex items-center gap-1 cursor-pointer text-[var(--text-secondary)]">
+			<div
+				class="mt-1.5 flex flex-wrap items-center justify-between gap-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10.5px]"
+			>
+				<label class="flex cursor-pointer items-center gap-1 text-[var(--text-secondary)]">
 					<input
 						type="checkbox"
 						bind:checked={workbench.mwQaqcExcludeBadhole}
@@ -461,7 +474,7 @@
 					/>
 					<span>Exclude BADHOLE</span>
 				</label>
-				<label class="flex items-center gap-1 cursor-pointer text-[var(--text-secondary)]">
+				<label class="flex cursor-pointer items-center gap-1 text-[var(--text-secondary)]">
 					<input
 						type="checkbox"
 						bind:checked={workbench.mwQaqcLogScale}
@@ -475,7 +488,7 @@
 						<button
 							type="button"
 							onclick={() => (workbench.mwQaqcCompareMode = mKey as any)}
-							class="mono-num rounded-xs border px-1 py-0.2 text-[9.5px] font-medium {workbench.mwQaqcCompareMode ===
+							class="mono-num py-0.2 rounded-xs border px-1 text-[9.5px] font-medium {workbench.mwQaqcCompareMode ===
 							mKey
 								? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
 								: 'border-[var(--border-hairline)] bg-white text-[var(--text-muted)]'}"
@@ -488,7 +501,9 @@
 
 			<!-- Field Reference Quantile Summary Strip -->
 			{#if activeFieldStat && activeFieldStat.count > 0}
-				<div class="mt-1.5 grid grid-cols-4 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-center text-[10px]">
+				<div
+					class="mt-1.5 grid grid-cols-4 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-center text-[10px]"
+				>
 					<div>
 						<div class="text-[var(--text-muted)]">Samples</div>
 						<div class="mono-num font-semibold text-[var(--text-primary)]">
@@ -497,15 +512,21 @@
 					</div>
 					<div>
 						<div class="text-amber-700">Field P10</div>
-						<div class="mono-num font-bold text-amber-700">{fmtNum(activeFieldStat.p10, 2)}</div>
+						<div class="mono-num font-bold text-amber-700">
+							{fmtNum(activeFieldStat.p10, 2)}
+						</div>
 					</div>
 					<div>
 						<div class="text-emerald-700">Field P50</div>
-						<div class="mono-num font-bold text-emerald-700">{fmtNum(activeFieldStat.p50, 2)}</div>
+						<div class="mono-num font-bold text-emerald-700">
+							{fmtNum(activeFieldStat.p50, 2)}
+						</div>
 					</div>
 					<div>
 						<div class="text-red-700">Field P90</div>
-						<div class="mono-num font-bold text-red-700">{fmtNum(activeFieldStat.p90, 2)}</div>
+						<div class="mono-num font-bold text-red-700">
+							{fmtNum(activeFieldStat.p90, 2)}
+						</div>
 					</div>
 				</div>
 			{/if}
@@ -607,7 +628,9 @@
 						</button>
 					{/each}
 				</div>
-				<label class="flex items-center gap-1 text-[10.5px] text-[var(--text-secondary)] cursor-pointer">
+				<label
+					class="flex cursor-pointer items-center gap-1 text-[10.5px] text-[var(--text-secondary)]"
+				>
 					<input
 						type="checkbox"
 						bind:checked={qp.normExcludeBadhole}
@@ -659,12 +682,19 @@
 								>
 									<td class="mono-num px-1 font-medium">{r.WELL_NAME}</td>
 									<td class="px-1 text-[var(--text-secondary)]">{r.ZONE}</td>
-									<td class="mono-num px-1 font-semibold text-[var(--accent-primary)]">{r.LOG}</td>
+									<td
+										class="mono-num px-1 font-semibold text-[var(--accent-primary)]"
+										>{r.LOG}</td
+									>
 									<td class="mono-num px-1 text-right text-[var(--text-muted)]">
 										{fmtNum(r.P_LOW_ORIG, 2)}→{fmtNum(r.P_LOW_REF, 2)}
 									</td>
-									<td class="mono-num px-1 text-right">{fmtNum(r.SHIFT ?? r.DRIFT_SHIFT, 2)}</td>
-									<td class="mono-num px-1 text-right">{fmtNum(r.SCALE ?? r.SCALE_FACTOR, 3)}</td>
+									<td class="mono-num px-1 text-right"
+										>{fmtNum(r.SHIFT ?? r.DRIFT_SHIFT, 2)}</td
+									>
+									<td class="mono-num px-1 text-right"
+										>{fmtNum(r.SCALE ?? r.SCALE_FACTOR, 3)}</td
+									>
 								</tr>
 							{/each}
 						</tbody>
@@ -697,13 +727,18 @@
 			{#if condTab === 'anomalies'}
 				<div class="mt-1.5 space-y-1">
 					{#if anomalies.length === 0}
-						<div class="rounded-sm border border-emerald-200 bg-emerald-50/60 p-2 text-[11px] text-emerald-800">
-							✓ No unit mismatches, unmapped standard aliases, or outer-limit spikes detected across selected wells.
+						<div
+							class="rounded-sm border border-emerald-200 bg-emerald-50/60 p-2 text-[11px] text-emerald-800"
+						>
+							✓ No unit mismatches, unmapped standard aliases, or outer-limit spikes
+							detected across selected wells.
 						</div>
 					{:else}
 						<div class="max-h-40 space-y-1 overflow-y-auto pr-0.5">
 							{#each anomalies as anom}
-								<div class="flex items-center justify-between gap-1.5 rounded-xs border border-amber-200 bg-amber-50/70 px-2 py-1 text-[10.5px]">
+								<div
+									class="flex items-center justify-between gap-1.5 rounded-xs border border-amber-200 bg-amber-50/70 px-2 py-1 text-[10.5px]"
+								>
 									<span class="truncate text-amber-950" title={anom.message}>
 										{anom.message}
 									</span>
@@ -730,12 +765,21 @@
 				</div>
 			{:else if condTab === 'aliases'}
 				<div class="mt-1.5 space-y-1.5 text-[11px]">
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px] text-[var(--text-secondary)]">
-						Automatically maps common vendor mnemonics (e.g., <span class="mono-num">ILD/LLD/RDEP → RT</span>, <span class="mono-num">TNPH/CNC → NPHI</span>, <span class="mono-num">RHOZ/ZDEN → RHOB</span>, <span class="mono-num">DT/AC → DTC</span>) across all wells missing standard curves.
+					<div
+						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px] text-[var(--text-secondary)]"
+					>
+						Automatically maps common vendor mnemonics (e.g., <span class="mono-num"
+							>ILD/LLD/RDEP → RT</span
+						>, <span class="mono-num">TNPH/CNC → NPHI</span>,
+						<span class="mono-num">RHOZ/ZDEN → RHOB</span>,
+						<span class="mono-num">DT/AC → DTC</span>) across all wells missing standard
+						curves.
 					</div>
 					<div class="grid grid-cols-2 gap-1.5">
 						<label class="block">
-							<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Custom Source Alias</span>
+							<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]"
+								>Custom Source Alias</span
+							>
 							<input
 								type="text"
 								placeholder="Optional (e.g. RDEP)"
@@ -744,7 +788,9 @@
 							/>
 						</label>
 						<label class="block">
-							<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Standard Target</span>
+							<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]"
+								>Standard Target</span
+							>
 							<select
 								bind:value={aliasTargetCurve}
 								class="mono-num h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-semibold"
@@ -776,8 +822,13 @@
 				</div>
 			{:else if condTab === 'limits'}
 				<div class="mt-1.5 space-y-1.5 text-[11px]">
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px] text-[var(--text-secondary)]">
-						Applies physical petrophysical range limits (<span class="mono-num">Config.VARS</span>) across selected wells to strip dead-sensor spikes and un-nulled <span class="mono-num">-999.25</span> values.
+					<div
+						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px] text-[var(--text-secondary)]"
+					>
+						Applies physical petrophysical range limits (<span class="mono-num"
+							>Config.VARS</span
+						>) across selected wells to strip dead-sensor spikes and un-nulled
+						<span class="mono-num">-999.25</span> values.
 					</div>
 					<div class="grid grid-cols-2 gap-1">
 						<button
@@ -896,7 +947,9 @@
 			defaultOpen={false}
 		>
 			<div class="space-y-1 text-[11px]">
-				<label class="flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 cursor-pointer">
+				<label
+					class="flex cursor-pointer items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+				>
 					<span class="flex items-center gap-1.5 font-medium">
 						<input
 							type="checkbox"
@@ -932,7 +985,9 @@
 					</div>
 				{/if}
 
-				<label class="flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 cursor-pointer">
+				<label
+					class="flex cursor-pointer items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+				>
 					<span class="flex items-center gap-1.5 font-medium">
 						<input
 							type="checkbox"
@@ -959,7 +1014,9 @@
 					</div>
 				{/if}
 
-				<label class="flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 cursor-pointer">
+				<label
+					class="flex cursor-pointer items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+				>
 					<span class="flex items-center gap-1.5 font-medium">
 						<input
 							type="checkbox"
@@ -970,7 +1027,9 @@
 					</span>
 				</label>
 
-				<label class="flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 cursor-pointer">
+				<label
+					class="flex cursor-pointer items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+				>
 					<span class="flex items-center gap-1.5 font-medium">
 						<input
 							type="checkbox"
@@ -1020,7 +1079,9 @@
 									<td class="mono-num px-1 text-right font-semibold text-red-700">
 										{b.FLAGGED} / {b.TOTAL}
 									</td>
-									<td class="mono-num px-1 text-right">{fmtNum(b.FLAGGED_PCT, 1)}%</td>
+									<td class="mono-num px-1 text-right"
+										>{fmtNum(b.FLAGGED_PCT, 1)}%</td
+									>
 									<td class="mono-num px-1 text-right">{b.CALI}</td>
 									<td class="mono-num px-1 text-right">{b.DRHO}</td>
 								</tr>
@@ -1100,20 +1161,27 @@
 			</div>
 
 			{#if envSummaryRows.length > 0}
-				<div class="mt-1.5 rounded-xs border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-800">
-					Updated environmental corrections across <strong>{envSummaryRows.length}</strong> wells.
+				<div
+					class="mt-1.5 rounded-xs border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-800"
+				>
+					Updated environmental corrections across <strong>{envSummaryRows.length}</strong
+					> wells.
 				</div>
 			{/if}
 		</ParameterSection>
 
 		{#if statusBanner}
-			<div class="mono-num m-2 rounded-sm border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-800">
+			<div
+				class="mono-num m-2 rounded-sm border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-800"
+			>
 				{statusBanner}
 			</div>
 		{/if}
 
 		{#if projectData.error}
-			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
+			<div
+				class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]"
+			>
 				{projectData.error}
 			</div>
 		{/if}
@@ -1123,8 +1191,11 @@
 		class="flex h-9 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5"
 	>
 		<span class="text-[11px] text-[var(--text-muted)]">
-			Curve: <strong class="mono-num text-[var(--text-primary)]">{workbench.selectedQaqcCurve}</strong>
-			· Group: <strong class="uppercase text-[var(--text-primary)]">{workbench.mwQaqcGroupBy}</strong>
+			Curve: <strong class="mono-num text-[var(--text-primary)]"
+				>{workbench.selectedQaqcCurve}</strong
+			>
+			· Group:
+			<strong class="text-[var(--text-primary)] uppercase">{workbench.mwQaqcGroupBy}</strong>
 		</span>
 		<button
 			type="button"
@@ -1136,4 +1207,3 @@
 		</button>
 	</div>
 </div>
-

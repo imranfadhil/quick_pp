@@ -2,6 +2,10 @@
 
 Borehole environmental corrections, neutron-density hydrocarbon corrections, bad-hole flagging, and multi-well zone-by-zone quantile/histogram normalization.
 
+Environmental correction outputs use distinct `*_ENV_CORR` mnemonics. Density reconstruction
+has its own `RHOB_DEN_CORR` output.
+They remain preview/derived curves; downstream calculations do not select them automatically.
+
 ## Invaded-zone hydrocarbon correction
 
 The workspace HC-correction endpoint offers an optional **Standard invaded-zone**

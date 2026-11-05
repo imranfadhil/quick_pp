@@ -1631,7 +1631,7 @@ def apply_environmental_corrections(
     salinity_ppm: float | str = 0.0,
     rho_mudcake: float = 1.5,
     inplace: bool = False,
-    suffix: str = "_CORR",
+    suffix: str = "_ENV_CORR",
 ) -> pd.DataFrame:
     """Apply automated borehole environmental and invasion corrections to a well log DataFrame.
 
@@ -1662,7 +1662,7 @@ def apply_environmental_corrections(
         rho_mudcake (float, optional): Mudcake density (g/cc). Defaults to 1.5.
         inplace (bool, optional): If True, overwrites `GR`, `NPHI`, `RHOB`, `RT` in place
             in addition to writing `<LOG><suffix>`. Defaults to False.
-        suffix (str, optional): Suffix for corrected log columns. Defaults to `'_CORR'`.
+        suffix (str, optional): Suffix for corrected log columns. Defaults to `'_ENV_CORR'`.
 
     Returns:
         pd.DataFrame: DataFrame with environmentally corrected curves and `INVASION_FLAG`.

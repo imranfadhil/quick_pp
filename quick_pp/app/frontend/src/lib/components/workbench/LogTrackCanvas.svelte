@@ -42,7 +42,9 @@
 			rafId = requestAnimationFrame(() => {
 				if (!plotContainer) return;
 				if (PlotlyLib && (plotContainer as any)._fullLayout) {
-					PlotlyLib.Plots.resize(plotContainer).then(syncPlotBounds).catch(syncPlotBounds);
+					PlotlyLib.Plots.resize(plotContainer)
+						.then(syncPlotBounds)
+						.catch(syncPlotBounds);
 				} else {
 					syncPlotBounds();
 				}
@@ -59,6 +61,7 @@
 	let showTsOverlay = $state(true);
 	let showDtc = $state(true);
 	let showSpectralGr = $state(true);
+	let showEnvCorrections = $state(true);
 	let showTopLabels = $state(true);
 	let showInspectionLine = $state(false);
 	let isPointerOverPlot = $state(false);
@@ -75,7 +78,17 @@
 		return false;
 	});
 
-	const POTA_ALIASES = ['POTA', 'POTA.', 'HFKO', 'HFKO.', 'POT', 'POT.', 'K', 'K.', 'POTA_NORM'] as const;
+	const POTA_ALIASES = [
+		'POTA',
+		'POTA.',
+		'HFKO',
+		'HFKO.',
+		'POT',
+		'POT.',
+		'K',
+		'K.',
+		'POTA_NORM'
+	] as const;
 	const THOR_ALIASES = ['THOR', 'THOR.', 'HTHO', 'HTHO.', 'TH', 'TH.', 'THO'] as const;
 	const URAN_ALIASES = ['URAN', 'URAN.', 'HURA', 'HURA.', 'U', 'U.', 'URA'] as const;
 
@@ -120,17 +133,30 @@
 
 	let hasCgr = $derived.by(() => {
 		const arr = wellData.curves['CGR'];
-		return Boolean(arr && arr.some((v) => typeof v === 'number' && Number.isFinite(v) && v > 0));
+		return Boolean(
+			arr && arr.some((v) => typeof v === 'number' && Number.isFinite(v) && v > 0)
+		);
 	});
 
 	let hasSpectralGr = $derived(hasPota || hasThor || hasUran || hasCgr);
+	const ENV_CORRECTION_CURVES = [
+		'GR_ENV_CORR',
+		'RT_ENV_CORR',
+		'NPHI_ENV_CORR',
+		'RHOB_ENV_CORR'
+	] as const;
+	let hasEnvCorrections = $derived.by(() =>
+		ENV_CORRECTION_CURVES.some((mnemonic) =>
+			wellData.curves[mnemonic]?.some((value) => Number.isFinite(value))
+		)
+	);
 
 	let hasTsComputed = $derived.by(() => {
 		const vlam = wellData.curves['VSH_LAM'];
 		const psand = wellData.curves['PHIT_SAND'];
 		return Boolean(
 			(vlam && vlam.some((v) => Number.isFinite(v))) ||
-				(psand && psand.some((v) => Number.isFinite(v)))
+			(psand && psand.some((v) => Number.isFinite(v)))
 		);
 	});
 
@@ -170,7 +196,8 @@
 	function syncYRangeIfFilterChanged(): [number, number] {
 		const indices = wellData.visibleIndices;
 		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-		const minD = indices.length > 0 && dept.length > 0 ? dept[indices[0]] : wellData.depthRange.min;
+		const minD =
+			indices.length > 0 && dept.length > 0 ? dept[indices[0]] : wellData.depthRange.min;
 		const maxD =
 			indices.length > 0 && dept.length > 0
 				? dept[indices[indices.length - 1]]
@@ -295,7 +322,8 @@
 			vdoloCheck.some((v) => v !== null && v > 1e-4);
 
 		const hasComplexCols = LITHOLOGY_TRACK_SPECS.some((s) => {
-			if (['VCLAY', 'VSILT', 'VSAND', 'VCOAL', 'VCALC', 'VDOLO'].includes(s.mnemonic)) return false;
+			if (['VCLAY', 'VSILT', 'VSAND', 'VCOAL', 'VCALC', 'VDOLO'].includes(s.mnemonic))
+				return false;
 			const a = pick(s.mnemonic);
 			return a.some((v) => v !== null && v > 1e-4);
 		});
@@ -325,7 +353,9 @@
 				activeModel === 'ssc' &&
 				!hasCarbonateCols &&
 				!hasComplexCols &&
-				!['VCLAY', 'VSILT', 'VSAND', ...(coalEnabled ? ['VCOAL'] : [])].includes(spec.mnemonic)
+				!['VCLAY', 'VSILT', 'VSAND', ...(coalEnabled ? ['VCOAL'] : [])].includes(
+					spec.mnemonic
+				)
 			) {
 				continue;
 			}
@@ -537,7 +567,9 @@
 		if (!flags.some((v) => v !== null && v >= 1)) {
 			const phitCurve = wellData.curves['PHIT'];
 			const permCurve =
-				wellData.curves['PERM'] ?? wellData.curves['PERM_TRANS'] ?? wellData.curves['CPERM'];
+				wellData.curves['PERM'] ??
+				wellData.curves['PERM_TRANS'] ??
+				wellData.curves['CPERM'];
 			if (phitCurve && permCurve) {
 				const cutoffs = [...projectData.activeDrtCutoffs]
 					.filter((c) => Number.isFinite(c))
@@ -689,8 +721,10 @@
 				if (!Number.isFinite(d)) continue;
 				const pVal = cporeRaw ? cporeRaw[i] : Number.NaN;
 				const kVal = cpermRaw ? cpermRaw[i] : Number.NaN;
-				const p = typeof pVal === 'number' && Number.isFinite(pVal) && pVal > 0 ? pVal : null;
-				const k = typeof kVal === 'number' && Number.isFinite(kVal) && kVal > 0 ? kVal : null;
+				const p =
+					typeof pVal === 'number' && Number.isFinite(pVal) && pVal > 0 ? pVal : null;
+				const k =
+					typeof kVal === 'number' && Number.isFinite(kVal) && kVal > 0 ? kVal : null;
 				if (p !== null || k !== null) {
 					rawPairs.push({ d, p, k });
 				}
@@ -936,6 +970,20 @@
 				line: { color: PETRO_COLORS.gr, width: 1.4 },
 				hovertemplate: 'GR: %{x:.1f} gAPI<extra></extra>'
 			});
+			const grEnvCorr = pick('GR_ENV_CORR');
+			if (showEnvCorrections && grEnvCorr.some((v) => v !== null)) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'GR_ENV_CORR',
+					x: decimateSvg(grEnvCorr),
+					y: svgDepth,
+					xaxis: 'x',
+					yaxis: 'y',
+					line: { color: PETRO_COLORS.gr, width: 1.7, dash: 'dash' },
+					hovertemplate: 'GR_ENV_CORR: %{x:.1f} gAPI<extra></extra>'
+				});
+			}
 		}
 
 		// Track 1 Spectral GR overlay (POTA: 0-10%, THOR: 0-50 ppm, URAN: 0-20 ppm, CGR: 0-200 gAPI)
@@ -969,7 +1017,10 @@
 				}
 				if (potaData.length > 0) {
 					// If POTA is stored as decimal fraction (e.g. 0.02 for 2%), normalize to percentage
-					const maxPota = potaData.reduce<number>((m, v) => (v !== null && v > m ? v : m), 0);
+					const maxPota = potaData.reduce<number>(
+						(m, v) => (v !== null && v > m ? v : m),
+						0
+					);
 					const potaScaleToPct = maxPota > 0 && maxPota <= 0.5 ? 100.0 : 1.0;
 					const potaPct = potaData.map((v) => (v !== null ? v * potaScaleToPct : null));
 					const potaDec = decimateSvg(potaPct);
@@ -977,7 +1028,9 @@
 						type: 'scatter',
 						mode: 'lines',
 						name: 'POTA',
-						x: potaDec.map((v) => (v !== null ? Math.max(0, Math.min(200, v * 20.0)) : null)), // 0-10% -> 0-200
+						x: potaDec.map((v) =>
+							v !== null ? Math.max(0, Math.min(200, v * 20.0)) : null
+						), // 0-10% -> 0-200
 						customdata: potaDec,
 						y: svgDepth,
 						xaxis: 'x',
@@ -1003,7 +1056,9 @@
 						type: 'scatter',
 						mode: 'lines',
 						name: 'THOR',
-						x: thorDec.map((v) => (v !== null ? Math.max(0, Math.min(200, v * 4.0)) : null)), // 0-50 ppm -> 0-200
+						x: thorDec.map((v) =>
+							v !== null ? Math.max(0, Math.min(200, v * 4.0)) : null
+						), // 0-50 ppm -> 0-200
 						customdata: thorDec,
 						y: svgDepth,
 						xaxis: 'x',
@@ -1029,7 +1084,9 @@
 						type: 'scatter',
 						mode: 'lines',
 						name: 'URAN',
-						x: uranDec.map((v) => (v !== null ? Math.max(0, Math.min(200, v * 10.0)) : null)), // 0-20 ppm -> 0-200
+						x: uranDec.map((v) =>
+							v !== null ? Math.max(0, Math.min(200, v * 10.0)) : null
+						), // 0-20 ppm -> 0-200
 						customdata: uranDec,
 						y: svgDepth,
 						xaxis: 'x',
@@ -1182,6 +1239,21 @@
 			}
 		}
 
+		const rtEnvCorr = pick('RT_ENV_CORR');
+		if (showEnvCorrections && rtEnvCorr.some((v) => v !== null && v > 0)) {
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'RT_ENV_CORR',
+				x: decimateSvg(rtEnvCorr).map((v) => (v !== null && v > 0 ? v : null)),
+				y: svgDepth,
+				xaxis: 'x2',
+				yaxis: 'y',
+				line: { color: PETRO_COLORS.rt, width: 1.7, dash: 'dash' },
+				hovertemplate: 'RT_ENV_CORR: %{x:.2f} ohm.m<extra></extra>'
+			});
+		}
+
 		if (tsOverlayActive) {
 			const rtMod = pick('RT_MOD');
 			if (rtMod.some((v) => v !== null && v > 0)) {
@@ -1205,6 +1277,8 @@
 		// Normalize onto NPHI scale [0.45 -> -0.15]: x_eq = 0.45 - ((val - min) / (max - min)) * 0.6
 		const nphi = pick('NPHI');
 		const rhob = pick('RHOB');
+		const nphiEnvCorr = pick('NPHI_ENV_CORR');
+		const rhobEnvCorr = pick('RHOB_ENV_CORR');
 		let activeDtcMnem = 'DTC';
 		let dtc = pick('DTC');
 		if (!dtc.some((v) => v !== null && v > 0)) {
@@ -1237,10 +1311,16 @@
 				}
 			}
 		}
-		const rhobAsNphi = rhob.map((r) => (r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null));
-		const dtcAsNphi = dtc.map((v) => (v !== null && v > 0 ? 0.45 - ((140 - v) / (140 - 40)) * 0.6 : null));
+		const rhobAsNphi = rhob.map((r) =>
+			r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null
+		);
+		const dtcAsNphi = dtc.map((v) =>
+			v !== null && v > 0 ? 0.45 - ((140 - v) / (140 - 40)) * 0.6 : null
+		);
 		const pefAsNphi = pef.map((p) => (p !== null && p >= 0 ? 0.45 - (p / 10.0) * 0.6 : null));
-		const drhoAsNphi = drho.map((d) => (d !== null ? 0.45 - ((d - -0.25) / (0.25 - -0.25)) * 0.6 : null));
+		const drhoAsNphi = drho.map((d) =>
+			d !== null ? 0.45 - ((d - -0.25) / (0.25 - -0.25)) * 0.6 : null
+		);
 
 		if (nphi.length && rhob.length) {
 			// Gas Crossover Shading: fill yellow ONLY where NPHI crosses to the right of RHOB (nphi < rhobAsNphi).
@@ -1358,6 +1438,19 @@
 				hovertemplate: 'NPHI: %{x:.3f} v/v<extra></extra>'
 			});
 		}
+		if (showEnvCorrections && nphiEnvCorr.some((v) => v !== null)) {
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'NPHI_ENV_CORR',
+				x: decimateSvg(nphiEnvCorr),
+				y: svgDepth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { color: PETRO_COLORS.nphi, width: 1.7, dash: 'dash' },
+				hovertemplate: 'NPHI_ENV_CORR: %{x:.3f} v/v<extra></extra>'
+			});
+		}
 		if (rhob.length) {
 			traces.push({
 				type: 'scatter',
@@ -1370,6 +1463,23 @@
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.rhob, width: 1.45 },
 				hovertemplate: 'RHOB: %{customdata:.3f} g/cc<extra></extra>'
+			});
+		}
+		if (showEnvCorrections && rhobEnvCorr.some((v) => v !== null)) {
+			const rhobEnvAsNphi = rhobEnvCorr.map((r) =>
+				r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null
+			);
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'RHOB_ENV_CORR',
+				x: decimateSvg(rhobEnvAsNphi),
+				customdata: decimateSvg(rhobEnvCorr),
+				y: svgDepth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { color: PETRO_COLORS.rhob, width: 1.7, dash: 'dash' },
+				hovertemplate: 'RHOB_ENV_CORR: %{customdata:.3f} g/cc<extra></extra>'
 			});
 		}
 		if (showDtc && dtc.some((v) => v !== null && v > 0)) {
@@ -1408,7 +1518,9 @@
 					type: 'scatter',
 					mode: 'lines',
 					name: 'RHOB_HC',
-					x: rhobHcDec.map((r) => (r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null)),
+					x: rhobHcDec.map((r) =>
+						r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null
+					),
 					customdata: rhobHcDec,
 					y: svgDepth,
 					xaxis: 'x3',
@@ -1558,18 +1670,29 @@
 					const upliftBaseRaw = svgDepth.map((_, i) => {
 						const p = phitFill[i];
 						const ps = psandFill[i];
-						return p !== null && Number.isFinite(p) && ps !== null && Number.isFinite(ps)
+						return p !== null &&
+							Number.isFinite(p) &&
+							ps !== null &&
+							Number.isFinite(ps)
 							? p * 2.0
 							: null;
 					});
 					const upliftTopRaw = svgDepth.map((_, i) => {
 						const p = phitFill[i];
 						const ps = psandFill[i];
-						return p !== null && Number.isFinite(p) && ps !== null && Number.isFinite(ps)
+						return p !== null &&
+							Number.isFinite(p) &&
+							ps !== null &&
+							Number.isFinite(ps)
 							? Math.max(p, ps) * 2.0
 							: null;
 					});
-					const upliftPinched = buildPairPinchedFill(upliftBaseRaw, upliftTopRaw, svgDepth, 0);
+					const upliftPinched = buildPairPinchedFill(
+						upliftBaseRaw,
+						upliftTopRaw,
+						svgDepth,
+						0
+					);
 					traces.push({
 						type: 'scatter',
 						mode: 'lines',
@@ -1682,7 +1805,8 @@
 					symbol: 'circle',
 					line: { color: '#FFFFFF', width: 0.9 }
 				},
-				hovertemplate: 'Core Poro: %{customdata[0]:.3f} v/v (%{customdata[1]})<extra></extra>'
+				hovertemplate:
+					'Core Poro: %{customdata[0]:.3f} v/v (%{customdata[1]})<extra></extra>'
 			});
 		}
 
@@ -1721,7 +1845,9 @@
 				}
 			}
 			if (depthToPt.size > 0) {
-				permTrans = indices.map((i) => depthToPt.get(Math.round(Number(deptAll[i]) * 100)) ?? null);
+				permTrans = indices.map(
+					(i) => depthToPt.get(Math.round(Number(deptAll[i]) * 100)) ?? null
+				);
 			}
 		}
 		if (permTrans.some((v) => v !== null && v > 0)) {
@@ -1906,7 +2032,7 @@
 			const stepX = svgDepth.map((_, sIdx) => {
 				const f = svgFlags[sIdx];
 				if (!f || f < 1) return null;
-				return Number((0.92 - ((f - 1) / Math.max(1, maxF - 1)) * 0.80).toFixed(3));
+				return Number((0.92 - ((f - 1) / Math.max(1, maxF - 1)) * 0.8).toFixed(3));
 			});
 			const hoverText = svgDepth.map((_, sIdx) => {
 				const rawIdx = sampleGrid[sIdx]?.visIdx ?? -1;
@@ -2302,6 +2428,7 @@
 		'DEPT',
 		'DEPTH',
 		'GR',
+		'GR_ENV_CORR',
 		'CGR',
 		'POTA',
 		'POTA.',
@@ -2321,6 +2448,7 @@
 		'BAD_HOLE',
 		'BAD_HOLE_FLAG',
 		'RT',
+		'RT_ENV_CORR',
 		'RD',
 		'RDEP',
 		'RDEEP',
@@ -2346,6 +2474,8 @@
 		'RT_MOD',
 		'NPHI',
 		'RHOB',
+		'NPHI_ENV_CORR',
+		'RHOB_ENV_CORR',
 		'DTC',
 		'DT',
 		'DTCO',
@@ -2420,6 +2550,7 @@
 			perforations,
 			showDtc,
 			showSpectralGr,
+			showEnvCorrections,
 			showTopLabels,
 			tsOverlayActive,
 			workbench.lithoParams.enableHcCorrection,
@@ -2711,7 +2842,8 @@
 		for (let i = 0; i < tvdssArr.length - 1; i++) {
 			const z0 = tvdssArr[i];
 			const z1 = tvdssArr[i + 1];
-			if (z0 === null || z1 === null || !Number.isFinite(z0) || !Number.isFinite(z1)) continue;
+			if (z0 === null || z1 === null || !Number.isFinite(z0) || !Number.isFinite(z1))
+				continue;
 			if ((z0 <= tvdss && tvdss <= z1) || (z1 <= tvdss && tvdss <= z0)) {
 				const dz = z1 - z0;
 				const md0 = deptArr[i];
@@ -2734,7 +2866,8 @@
 		for (let i = 0; i < deptArr.length - 1; i++) {
 			const m0 = deptArr[i];
 			const m1 = deptArr[i + 1];
-			if (m0 === null || m1 === null || !Number.isFinite(m0) || !Number.isFinite(m1)) continue;
+			if (m0 === null || m1 === null || !Number.isFinite(m0) || !Number.isFinite(m1))
+				continue;
 			if ((m0 <= md && md <= m1) || (m1 <= md && md <= m0)) {
 				const dm = m1 - m0;
 				const z0 = tvdssArr[i];
@@ -2770,7 +2903,8 @@
 			if (!draggingMarker) return;
 			const relY = Math.min(1, Math.max(0, (moveEvent.clientY - plotTop) / plotHeight));
 			const newMd = Number((minD + relY * (maxD - minD)).toFixed(1));
-			const newTvdss = draggingMarker.kind === 'contact' ? Number(mdToTvdss(newMd).toFixed(1)) : newMd;
+			const newTvdss =
+				draggingMarker.kind === 'contact' ? Number(mdToTvdss(newMd).toFixed(1)) : newMd;
 			draggingMarker = { ...draggingMarker, depth: newTvdss, plotDepth: newMd };
 			workbench.cursorDepth = newMd;
 		};
@@ -2871,8 +3005,10 @@
 					</button>
 					<button
 						type="button"
-						disabled={projectData.activeWells.length > 0 && projectData.wellsWithTvd.length === 0}
-						title={projectData.activeWells.length > 0 && projectData.wellsWithTvd.length === 0
+						disabled={projectData.activeWells.length > 0 &&
+							projectData.wellsWithTvd.length === 0}
+						title={projectData.activeWells.length > 0 &&
+						projectData.wellsWithTvd.length === 0
 							? 'Disabled: No selected wells have TVD curve or directional survey (TVD is never assumed equal to MD)'
 							: 'Switch to Multi-Well TVD Stick Plot'}
 						onclick={() => {
@@ -2893,15 +3029,16 @@
 				{workbench.wellId ?? 'No Well Selected'}
 			</span>
 			<span class="mono-num text-[var(--text-muted)]">
-				[{fmtDepth(Math.min(yRange[0], yRange[1]))} – {fmtDepth(Math.max(yRange[0], yRange[1]))}]
+				[{fmtDepth(Math.min(yRange[0], yRange[1]))} – {fmtDepth(
+					Math.max(yRange[0], yRange[1])
+				)}]
 			</span>
-
 		</div>
 
 		<div class="flex shrink-0 items-center gap-2">
 			{#if workbench.tsParams.enabled && hasTsComputed}
 				<label
-					class="flex items-center gap-1 rounded-xs border border-teal-200 bg-teal-50/70 px-1.5 py-0.5 text-[10.5px] font-medium text-teal-900 cursor-pointer"
+					class="flex cursor-pointer items-center gap-1 rounded-xs border border-teal-200 bg-teal-50/70 px-1.5 py-0.5 text-[10.5px] font-medium text-teal-900"
 				>
 					<input
 						type="checkbox"
@@ -2912,7 +3049,9 @@
 				</label>
 			{/if}
 			{#if hasDtc}
-				<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer">
+				<label
+					class="flex cursor-pointer items-center gap-1 text-[11px] text-[var(--text-secondary)]"
+				>
 					<input
 						type="checkbox"
 						bind:checked={showDtc}
@@ -2921,8 +3060,24 @@
 					<span style="color: {PETRO_COLORS.dt}" class="font-medium">DTC</span>
 				</label>
 			{/if}
+			{#if hasEnvCorrections}
+				<label
+					class="flex cursor-pointer items-center gap-1 text-[11px] text-[var(--text-secondary)]"
+					title="Show or hide environmental-correction overlays on GR, resistivity, neutron, and density tracks"
+				>
+					<input
+						type="checkbox"
+						bind:checked={showEnvCorrections}
+						class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-amber-600 focus:ring-0"
+					/>
+					<span class="font-medium text-amber-700">Env Corr</span>
+				</label>
+			{/if}
 			{#if hasSpectralGr}
-				<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer" title="Toggle Spectral GR (POTA, THOR, URAN) on Track 1">
+				<label
+					class="flex cursor-pointer items-center gap-1 text-[11px] text-[var(--text-secondary)]"
+					title="Toggle Spectral GR (POTA, THOR, URAN) on Track 1"
+				>
 					<input
 						type="checkbox"
 						bind:checked={showSpectralGr}
@@ -2932,7 +3087,10 @@
 				</label>
 			{/if}
 			{#if wellData.tops.length > 0}
-				<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer" title="Show or hide formation top names on track 1">
+				<label
+					class="flex cursor-pointer items-center gap-1 text-[11px] text-[var(--text-secondary)]"
+					title="Show or hide formation top names on track 1"
+				>
 					<input
 						type="checkbox"
 						bind:checked={showTopLabels}
@@ -2942,7 +3100,10 @@
 				</label>
 			{/if}
 			{#if wellData.contacts.length > 0}
-				<label class="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] cursor-pointer" title="Show or hide fluid contact marker lines across well plot tracks">
+				<label
+					class="flex cursor-pointer items-center gap-1 text-[11px] text-[var(--text-secondary)]"
+					title="Show or hide fluid contact marker lines across well plot tracks"
+				>
 					<input
 						type="checkbox"
 						bind:checked={workbench.logShowContacts}
@@ -2955,11 +3116,17 @@
 				type="button"
 				title="Toggle horizontal cursor inspection line across all tracks (Shortcut: 'I' or 'C')"
 				onclick={() => (showInspectionLine = !showInspectionLine)}
-				class="flex items-center gap-1 h-5 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {showInspectionLine
-					? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-500'
+				class="flex h-5 items-center gap-1 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {showInspectionLine
+					? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:border-indigo-500 dark:bg-indigo-950/60 dark:text-indigo-300'
 					: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
 			>
-				<svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<svg
+					class="h-3 w-3"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+				>
 					<path d="M4 12h16" stroke-width="2.5" />
 					<path d="M12 4v16" stroke-dasharray="2 2" stroke-width="1.5" />
 				</svg>
@@ -2994,23 +3161,29 @@
 			<!-- Track 1: GR (0 - 200 gAPI) & CALI / BS (6 - 16 in) -->
 			<div
 				style="left: 0%; width: 14.6%;"
-				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+				class="absolute inset-y-0 flex flex-col justify-between overflow-hidden border-x border-slate-200/70 px-1 py-0.5"
 			>
 				<div
-					class="mono-num flex items-center justify-between font-medium whitespace-nowrap text-[8px]"
+					class="mono-num flex items-center justify-between text-[8px] font-medium whitespace-nowrap"
 					style="color: {PETRO_COLORS.cali}"
 				>
 					<span>6</span>
 					<span class="font-sans text-[8px] font-semibold">
-						CALI{#if wellData.curves['BS']} / BS{/if} (in)
+						CALI{#if wellData.curves['BS']}
+							/ BS{/if} (in)
 						{#if wellData.curves['BADHOLE']}
-							<span class="ml-0.5 rounded-2xs bg-red-100 px-0.5 text-[7.5px] font-bold text-red-700">BH</span>
+							<span
+								class="rounded-2xs ml-0.5 bg-red-100 px-0.5 text-[7.5px] font-bold text-red-700"
+								>BH</span
+							>
 						{/if}
 					</span>
 					<span>16</span>
 				</div>
 				{#if hasSpectralGr && showSpectralGr}
-					<div class="flex items-center justify-between px-0.5 text-[7px] leading-none font-semibold">
+					<div
+						class="flex items-center justify-between px-0.5 text-[7px] leading-none font-semibold"
+					>
 						{#if hasPota}
 							<span style="color: {PETRO_COLORS.pota}">K: 0-10%</span>
 						{/if}
@@ -3037,33 +3210,39 @@
 						</span>
 						<span>200</span>
 					</div>
-					<div class="h-0.5 w-full rounded-full" style="background: {PETRO_COLORS.gr}"></div>
+					<div
+						class="h-0.5 w-full rounded-full"
+						style="background: {PETRO_COLORS.gr}"
+					></div>
 				</div>
 			</div>
 
 			<!-- Track 2: RT, RM, RS (0.2 - 2000 ohm.m, 4-decade log scale) -->
 			<div
 				style="left: 15.6%; width: 14.6%;"
-				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+				class="absolute inset-y-0 flex flex-col justify-between overflow-hidden border-x border-slate-200/70 px-1 py-0.5"
 			>
 				<!-- Deep Resistivity: RT (solid red) -->
 				<div class="flex flex-col">
 					<div
-						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+						class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap"
 						style="color: {PETRO_COLORS.rt}"
 					>
 						<span>0.2</span>
 						<span class="font-sans text-[8px] font-bold">RT (Ω·m) ►</span>
 						<span>2000</span>
 					</div>
-					<div class="mt-[1px] h-[1.5px] w-full" style="background: {PETRO_COLORS.rt}"></div>
+					<div
+						class="mt-[1px] h-[1.5px] w-full"
+						style="background: {PETRO_COLORS.rt}"
+					></div>
 				</div>
 
 				{#if tsOverlayActive && wellData.curves['RT_MOD']}
 					<!-- Hagiwara Modeled Resistivity: RT_MOD (dashed purple) -->
 					<div class="flex flex-col">
 						<div
-							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap"
 							style="color: {PETRO_COLORS.rtMod}"
 						>
 							<span>0.2</span>
@@ -3079,15 +3258,22 @@
 					<!-- Dimmed RM / RS & Log Decade Ticks -->
 					<div class="flex flex-col">
 						<div
-							class="mono-num flex items-center justify-between font-medium whitespace-nowrap text-[7.5px] leading-none opacity-45"
+							class="mono-num flex items-center justify-between text-[7.5px] leading-none font-medium whitespace-nowrap opacity-45"
 						>
 							<span style="color: {PETRO_COLORS.rm}">RM</span>
-							<span class="font-sans text-[7.5px] text-slate-500">RM / RS (dimmed)</span>
+							<span class="font-sans text-[7.5px] text-slate-500"
+								>RM / RS (dimmed)</span
+							>
 							<span style="color: {PETRO_COLORS.rs}">RS</span>
 						</div>
-						<div class="relative h-2.5 w-full text-[7px] font-medium text-slate-500 mono-num">
+						<div
+							class="mono-num relative h-2.5 w-full text-[7px] font-medium text-slate-500"
+						>
 							{#each [[1, '1'], [10, '10'], [100, '100'], [1000, '1k']] as [val, lbl]}
-								{@const pct = ((Math.log10(Number(val)) - Math.log10(0.2)) / (Math.log10(2000) - Math.log10(0.2))) * 100}
+								{@const pct =
+									((Math.log10(Number(val)) - Math.log10(0.2)) /
+										(Math.log10(2000) - Math.log10(0.2))) *
+									100}
 								<span
 									style="left: {pct}%;"
 									class="absolute bottom-0 -translate-x-1/2 leading-none"
@@ -3101,7 +3287,7 @@
 					<!-- Medium Resistivity: RM (dashed blue) -->
 					<div class="flex flex-col">
 						<div
-							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap"
 							style="color: {PETRO_COLORS.rm}"
 						>
 							<span>0.2</span>
@@ -3117,7 +3303,7 @@
 					<!-- Shallow Resistivity: RS (dotted teal) + Log Decade Ticks -->
 					<div class="flex flex-col">
 						<div
-							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap"
 							style="color: {PETRO_COLORS.rs}"
 						>
 							<span>0.2</span>
@@ -3128,9 +3314,14 @@
 							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dotted"
 							style="border-color: {PETRO_COLORS.rs}"
 						></div>
-						<div class="relative h-2.5 w-full text-[7px] font-medium text-slate-500 mono-num">
+						<div
+							class="mono-num relative h-2.5 w-full text-[7px] font-medium text-slate-500"
+						>
 							{#each [[1, '1'], [10, '10'], [100, '100'], [1000, '1k']] as [val, lbl]}
-								{@const pct = ((Math.log10(Number(val)) - Math.log10(0.2)) / (Math.log10(2000) - Math.log10(0.2))) * 100}
+								{@const pct =
+									((Math.log10(Number(val)) - Math.log10(0.2)) /
+										(Math.log10(2000) - Math.log10(0.2))) *
+									100}
 								<span
 									style="left: {pct}%;"
 									class="absolute bottom-0 -translate-x-1/2 leading-none"
@@ -3146,25 +3337,28 @@
 			<!-- Track 3: Vertically Stacked RHOB (1.95 -> 2.95), NPHI (0.45 -> -0.15), PEF (0 -> 10), DRHO (-0.25 -> 0.25) -->
 			<div
 				style="left: 31.2%; width: 14.6%;"
-				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+				class="absolute inset-y-0 flex flex-col justify-between overflow-hidden border-x border-slate-200/70 px-1 py-0.5"
 			>
 				<!-- Row 1: RHOB (1.95 -> 2.95 g/cc, increases left to right, solid red) -->
 				<div class="flex flex-col">
 					<div
-						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+						class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap"
 						style="color: {PETRO_COLORS.rhob}"
 					>
 						<span>1.95</span>
 						<span class="font-sans text-[8px] font-bold">RHOB (g/cc) ►</span>
 						<span>2.95</span>
 					</div>
-					<div class="mt-[1px] h-[1.5px] w-full" style="background: {PETRO_COLORS.rhob}"></div>
+					<div
+						class="mt-[1px] h-[1.5px] w-full"
+						style="background: {PETRO_COLORS.rhob}"
+					></div>
 				</div>
 
 				<!-- Row 2: NPHI (0.45 <- -0.15 v/v, increases right to left, dashed blue) -->
 				<div class="flex flex-col">
 					<div
-						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+						class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap"
 						style="color: {PETRO_COLORS.nphi}"
 					>
 						<span>0.45</span>
@@ -3181,7 +3375,7 @@
 					<!-- Row 2b: DTC (140 <- 40 us/ft, increases right to left, dash-dot emerald) -->
 					<div class="flex flex-col">
 						<div
-							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap"
 							style="color: {PETRO_COLORS.dt}"
 						>
 							<span>140</span>
@@ -3198,7 +3392,7 @@
 				<!-- Row 3: PEF (0 -> 10 b/e, increases left to right, light dotted purple) -->
 				<div class="flex flex-col opacity-75">
 					<div
-						class="mono-num flex items-center justify-between font-medium whitespace-nowrap text-[8px] leading-none"
+						class="mono-num flex items-center justify-between text-[8px] leading-none font-medium whitespace-nowrap"
 						style="color: {PETRO_COLORS.pef}"
 					>
 						<span>0</span>
@@ -3214,7 +3408,7 @@
 				<!-- Row 4: DRHO (-0.25 -> 0.25 g/cc, increases left to right, light dotted amber with zero-fill) -->
 				<div class="flex flex-col opacity-80">
 					<div
-						class="mono-num flex items-center justify-between font-medium whitespace-nowrap text-[8px] leading-none"
+						class="mono-num flex items-center justify-between text-[8px] leading-none font-medium whitespace-nowrap"
 						style="color: {PETRO_COLORS.drho}"
 					>
 						<span>-0.25</span>
@@ -3231,35 +3425,49 @@
 			<!-- Track 4: LITH (0 -> 1 v/v) & PHIT / CPORE (0 -> 0.5 v/v) -->
 			<div
 				style="left: 46.8%; width: 14.6%;"
-				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+				class="absolute inset-y-0 flex flex-col justify-between overflow-hidden border-x border-slate-200/70 px-1 py-0.5"
 			>
 				{#if tsOverlayActive}
 					<div class="flex flex-col">
-						<div class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none text-slate-700">
+						<div
+							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-slate-700"
+						>
 							<span>0</span>
 							<span class="font-sans text-[8px] font-bold">LITH (LAM / DIS) ►</span>
 							<span>1.0</span>
 						</div>
 						<div class="mt-[1px] flex h-[2px] w-full overflow-hidden rounded-full">
-							<div class="h-full w-1/3" style="background: {PETRO_COLORS.vshLamFill}"></div>
-							<div class="h-full w-1/3" style="background: {PETRO_COLORS.vshDisFill}"></div>
-							<div class="h-full w-1/3" style="background: {PETRO_COLORS.sandFill}"></div>
+							<div
+								class="h-full w-1/3"
+								style="background: {PETRO_COLORS.vshLamFill}"
+							></div>
+							<div
+								class="h-full w-1/3"
+								style="background: {PETRO_COLORS.vshDisFill}"
+							></div>
+							<div
+								class="h-full w-1/3"
+								style="background: {PETRO_COLORS.sandFill}"
+							></div>
 						</div>
 					</div>
 					<div class="flex flex-col">
 						<div
-							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap"
 							style="color: {PETRO_COLORS.phit}"
 						>
 							<span>0</span>
 							<span class="font-sans text-[8px] font-bold">PHIT / CORE ►</span>
 							<span>0.5</span>
 						</div>
-						<div class="mt-[1px] h-[1.5px] w-full" style="background: {PETRO_COLORS.phie}"></div>
+						<div
+							class="mt-[1px] h-[1.5px] w-full"
+							style="background: {PETRO_COLORS.phie}"
+						></div>
 					</div>
 					<div class="flex flex-col">
 						<div
-							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap"
 							style="color: {PETRO_COLORS.phitSand}"
 						>
 							<span>0</span>
@@ -3273,7 +3481,9 @@
 					</div>
 				{:else}
 					<div class="flex flex-col">
-						<div class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none text-slate-700">
+						<div
+							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-slate-700"
+						>
 							<span>0</span>
 							<span class="font-sans text-[8px] font-bold">LITHOLOGY ►</span>
 							<span>1.0</span>
@@ -3282,12 +3492,13 @@
 							<div class="mt-0.5 flex flex-wrap items-center justify-center gap-1">
 								{#each activeLithoSpecs as item (item.spec.mnemonic)}
 									<span
-										class="inline-flex items-center gap-0.5 rounded-2xs border border-slate-200/80 bg-white/95 px-1 py-0 text-[7px] font-semibold text-slate-700 shadow-2xs leading-tight"
+										class="rounded-2xs inline-flex items-center gap-0.5 border border-slate-200/80 bg-white/95 px-1 py-0 text-[7px] leading-tight font-semibold text-slate-700 shadow-2xs"
 										title="{item.spec.mnemonic} ({item.spec.shortLabel})"
 									>
 										<span
-											class="inline-block h-1.5 w-1.5 rounded-2xs border"
-											style="background-color: {item.spec.fillHex}; border-color: {item.spec.strokeHex};"
+											class="rounded-2xs inline-block h-1.5 w-1.5 border"
+											style="background-color: {item.spec
+												.fillHex}; border-color: {item.spec.strokeHex};"
 										></span>
 										<span>{item.spec.mnemonic}</span>
 									</span>
@@ -3299,14 +3510,17 @@
 					</div>
 					<div class="flex flex-col">
 						<div
-							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none"
+							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap"
 							style="color: {PETRO_COLORS.phie}"
 						>
 							<span>0</span>
 							<span class="font-sans text-[8px] font-bold">PHIT / CORE ►</span>
 							<span>0.5</span>
 						</div>
-						<div class="mt-0.5 h-[1.5px] w-full" style="background: {PETRO_COLORS.phit}"></div>
+						<div
+							class="mt-0.5 h-[1.5px] w-full"
+							style="background: {PETRO_COLORS.phit}"
+						></div>
 					</div>
 				{/if}
 			</div>
@@ -3314,7 +3528,7 @@
 			<!-- Track 5: PERM & PERM_TRANS (0.01 - 10000 mD, 6-decade log scale) -->
 			<div
 				style="left: 62.4%; width: 14.6%;"
-				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+				class="absolute inset-y-0 flex flex-col justify-between overflow-hidden border-x border-slate-200/70 px-1 py-0.5"
 			>
 				<div
 					class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
@@ -3322,14 +3536,21 @@
 				>
 					<span>0.01</span>
 					<span class="font-sans text-[8.5px] font-bold">
-						PERM / CORE{#if wellData.curves['PERM_TRANS']}<span style="color: #7C3AED"> / P_TR</span>{/if} (mD) ►
+						PERM / CORE{#if wellData.curves['PERM_TRANS']}<span style="color: #7C3AED">
+								/ P_TR</span
+							>{/if} (mD) ►
 					</span>
 					<span>10k</span>
 				</div>
 				<div class="flex flex-col">
-					<div class="relative h-3 w-full text-[7.5px] font-medium text-slate-500 mono-num">
+					<div
+						class="mono-num relative h-3 w-full text-[7.5px] font-medium text-slate-500"
+					>
 						{#each [[0.1, '.1'], [1, '1'], [10, '10'], [100, '100'], [1000, '1k']] as [val, lbl]}
-							{@const pct = ((Math.log10(Number(val)) - Math.log10(0.01)) / (Math.log10(10000) - Math.log10(0.01))) * 100}
+							{@const pct =
+								((Math.log10(Number(val)) - Math.log10(0.01)) /
+									(Math.log10(10000) - Math.log10(0.01))) *
+								100}
 							<span
 								style="left: {pct}%;"
 								class="absolute bottom-0.5 -translate-x-1/2 leading-none"
@@ -3345,7 +3566,9 @@
 					<div class="flex w-full items-center gap-0.5">
 						<div class="h-[1.5px] flex-1" style="background: {PETRO_COLORS.perm}"></div>
 						{#if wellData.curves['PERM_TRANS']}
-							<div class="h-[1.5px] flex-1 border-t border-dashed border-[#7C3AED]"></div>
+							<div
+								class="h-[1.5px] flex-1 border-t border-dashed border-[#7C3AED]"
+							></div>
 						{/if}
 					</div>
 				</div>
@@ -3354,14 +3577,20 @@
 			<!-- Track 6: ROCK_FLAG / DRT (Compact Rock Type Track between PERM and SW) -->
 			<div
 				style="left: 78.0%; width: 6.4%;"
-				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-0.5 py-0.5 overflow-hidden bg-slate-50/40"
-				title="Discrete Rock Type (ROCK_FLAG) — {activeRockTypeInfo.indicatorLabel} ({activeRockTypeInfo.isPreview ? 'Live Preview from PHIT & PERM' : 'Computed'})"
+				class="absolute inset-y-0 flex flex-col justify-between overflow-hidden border-x border-slate-200/70 bg-slate-50/40 px-0.5 py-0.5"
+				title="Discrete Rock Type (ROCK_FLAG) — {activeRockTypeInfo.indicatorLabel} ({activeRockTypeInfo.isPreview
+					? 'Live Preview from PHIT & PERM'
+					: 'Computed'})"
 			>
 				<div class="flex flex-col items-center">
-					<span class="font-sans text-[8px] font-bold tracking-tight text-slate-800 leading-none">
+					<span
+						class="font-sans text-[8px] leading-none font-bold tracking-tight text-slate-800"
+					>
 						ROCK_FLAG
 					</span>
-					<span class="mt-0.5 rounded-2xs bg-slate-200/80 px-1 py-0 text-[7px] font-semibold text-slate-700 leading-tight">
+					<span
+						class="rounded-2xs mt-0.5 bg-slate-200/80 px-1 py-0 text-[7px] leading-tight font-semibold text-slate-700"
+					>
 						{activeRockTypeInfo.indicatorLabel}{activeRockTypeInfo.hasMl ? ' · ML' : ''}
 					</span>
 				</div>
@@ -3369,7 +3598,7 @@
 					<div class="flex flex-wrap items-center justify-center gap-0.5 px-0.5">
 						{#each activeRockTypeInfo.uniqueFlags.slice(0, 6) as rf (rf)}
 							<span
-								class="mono-num inline-flex h-3 min-w-[12px] items-center justify-center rounded-2xs px-0.5 text-[7px] font-bold text-white shadow-2xs"
+								class="mono-num rounded-2xs inline-flex h-3 min-w-[12px] items-center justify-center px-0.5 text-[7px] font-bold text-white shadow-2xs"
 								style="background-color: {getRockTypeColor(rf)}"
 								title="DRT {rf}"
 							>
@@ -3379,7 +3608,10 @@
 					</div>
 					<div class="flex h-0.5 w-full overflow-hidden rounded-full">
 						{#each activeRockTypeInfo.uniqueFlags as rf (rf)}
-							<div class="h-full flex-1" style="background: {getRockTypeColor(rf)}"></div>
+							<div
+								class="h-full flex-1"
+								style="background: {getRockTypeColor(rf)}"
+							></div>
 						{/each}
 					</div>
 				{:else}
@@ -3391,20 +3623,24 @@
 			<!-- Track 7: SW (1.0 <- 0.0 v/v) & SHF / SWIRR / PAY -->
 			<div
 				style="left: 85.4%; width: 14.6%;"
-				class="absolute inset-y-0 flex flex-col justify-between border-x border-slate-200/70 px-1 py-0.5 overflow-hidden"
+				class="absolute inset-y-0 flex flex-col justify-between overflow-hidden border-x border-slate-200/70 px-1 py-0.5"
 			>
 				{#if wellData.curves['SHF'] || wellData.curves['SW_SHF']}
 					<div class="flex flex-col">
 						<div
-							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none text-[#DC2626]"
+							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-[#DC2626]"
 						>
 							<span>1.0</span>
 							<span class="font-sans text-[8px] font-bold">
-								◄ {wellData.curves['SW_SHF'] && !wellData.curves['SHF'] ? 'SW_SHF' : 'SHF'}
+								◄ {wellData.curves['SW_SHF'] && !wellData.curves['SHF']
+									? 'SW_SHF'
+									: 'SHF'}
 							</span>
 							<span>0.0</span>
 						</div>
-						<div class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed border-[#DC2626]"></div>
+						<div
+							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed border-[#DC2626]"
+						></div>
 					</div>
 				{:else if !wellData.curves['SWIRR']}
 					<div></div>
@@ -3412,13 +3648,15 @@
 				{#if wellData.curves['SWIRR']}
 					<div class="flex flex-col">
 						<div
-							class="mono-num flex items-center justify-between font-semibold whitespace-nowrap text-[8px] leading-none text-[#D97706]"
+							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-[#D97706]"
 						>
 							<span>1.0</span>
 							<span class="font-sans text-[8px] font-bold">◄ SWIRR</span>
 							<span>0.0</span>
 						</div>
-						<div class="mt-[1px] h-0 w-full border-t-[1.5px] border-dotted border-[#D97706]"></div>
+						<div
+							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dotted border-[#D97706]"
+						></div>
 					</div>
 				{/if}
 				<div class="flex flex-col">
@@ -3430,7 +3668,10 @@
 						<span class="font-sans text-[9.5px] font-bold">◄ SW / PAY</span>
 						<span>0.0</span>
 					</div>
-					<div class="h-0.5 w-full rounded-full" style="background: {PETRO_COLORS.water}"></div>
+					<div
+						class="h-0.5 w-full rounded-full"
+						style="background: {PETRO_COLORS.water}"
+					></div>
 				</div>
 			</div>
 		</div>
@@ -3443,7 +3684,9 @@
 		onpointermove={handlePlotPointerMove}
 		onpointerenter={() => (isPointerOverPlot = true)}
 		onpointerleave={() => (isPointerOverPlot = false)}
-		class="relative min-h-0 flex-1 overflow-hidden {intervalSelectMode ? 'cursor-crosshair' : ''}"
+		class="relative min-h-0 flex-1 overflow-hidden {intervalSelectMode
+			? 'cursor-crosshair'
+			: ''}"
 	>
 		<div bind:this={plotContainer} class="h-full w-full"></div>
 
@@ -3476,7 +3719,7 @@
 				{#if box !== null}
 					<div
 						style="top: {box.topPct}%; height: {box.heightPct}%; min-height: 3px;"
-						class="pointer-events-none absolute right-0 left-0 border-y border-blue-600/85 border-l-4 border-l-blue-600 bg-blue-500/22"
+						class="pointer-events-none absolute right-0 left-0 border-y border-l-4 border-blue-600/85 border-l-blue-600 bg-blue-500/22"
 					></div>
 				{/if}
 			{/each}
@@ -3492,10 +3735,18 @@
 						class="pointer-events-none absolute right-0 left-0 border-y-2 border-dashed border-blue-700 bg-blue-500/28"
 					>
 						<span
-							class="mono-num absolute top-0.5 left-1.5 rounded-xs border border-blue-300 bg-blue-950/90 px-1.5 py-0.2 text-[9.5px] font-semibold text-white shadow-xs"
+							class="mono-num py-0.2 absolute top-0.5 left-1.5 rounded-xs border border-blue-300 bg-blue-950/90 px-1.5 text-[9.5px] font-semibold text-white shadow-xs"
 						>
-							{fmtDepth(Math.min(selectingInterval.startDepth, selectingInterval.currentDepth))} – {fmtDepth(
-								Math.max(selectingInterval.startDepth, selectingInterval.currentDepth)
+							{fmtDepth(
+								Math.min(
+									selectingInterval.startDepth,
+									selectingInterval.currentDepth
+								)
+							)} – {fmtDepth(
+								Math.max(
+									selectingInterval.startDepth,
+									selectingInterval.currentDepth
+								)
 							)}
 						</span>
 					</div>
@@ -3517,10 +3768,20 @@
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<div
 							onpointerdown={(e) =>
-								startMarkerDrag(e, 'contact', contact.id, contact.type, activeDepth)}
+								startMarkerDrag(
+									e,
+									'contact',
+									contact.id,
+									contact.type,
+									activeDepth
+								)}
 							style="top: {pct}%;"
-							title="Drag vertically to adjust Fluid Contact ({contact.type}) — TVDSS: {activeDepth.toFixed(1)}m{Math.abs(activePlotDepth - activeDepth) > 0.5 ? ` (MD: ${activePlotDepth.toFixed(1)}m)` : ''}"
-							class="pointer-events-auto group absolute right-0 left-0 -translate-y-1/2 cursor-ns-resize py-1"
+							title="Drag vertically to adjust Fluid Contact ({contact.type}) — TVDSS: {activeDepth.toFixed(
+								1
+							)}m{Math.abs(activePlotDepth - activeDepth) > 0.5
+								? ` (MD: ${activePlotDepth.toFixed(1)}m)`
+								: ''}"
+							class="group pointer-events-auto absolute right-0 left-0 -translate-y-1/2 cursor-ns-resize py-1"
 						>
 							<div
 								class="w-full border-t-2 border-dotted border-rose-600/90 group-hover:border-solid"
@@ -3528,7 +3789,11 @@
 							<span
 								class="mono-num absolute -top-2.5 right-2 rounded-xs border border-rose-200 bg-rose-50/95 px-1 py-0 text-[9px] font-semibold text-rose-800 shadow-2xs"
 							>
-								◆ {contact.type} ({activeDepth.toFixed(1)}m{Math.abs(activePlotDepth - activeDepth) > 0.5 ? ` TVDss / ${activePlotDepth.toFixed(1)}m MD` : ''})
+								◆ {contact.type} ({activeDepth.toFixed(1)}m{Math.abs(
+									activePlotDepth - activeDepth
+								) > 0.5
+									? ` TVDss / ${activePlotDepth.toFixed(1)}m MD`
+									: ''})
 							</span>
 						</div>
 					{/if}
@@ -3541,63 +3806,100 @@
 				<!-- Horizontal line spanning all tracks -->
 				<div
 					style="top: {inspectionPct}%;"
-					class="pointer-events-none absolute right-0 left-0 -translate-y-1/2 border-t-[1.5px] border-indigo-500/95 shadow-[0_0_8px_rgba(99,102,241,0.45)] z-25"
+					class="pointer-events-none absolute right-0 left-0 z-25 -translate-y-1/2 border-t-[1.5px] border-indigo-500/95 shadow-[0_0_8px_rgba(99,102,241,0.45)]"
 				></div>
 
 				<!-- Track-respective hover boxes anchored with a 24px gap so curve response at the line is always visible -->
 				<div
-					style="{isAbove ? `bottom: ${100 - inspectionPct}%; margin-bottom: 24px;` : `top: ${inspectionPct}%; margin-top: 24px;`}"
+					style={isAbove
+						? `bottom: ${100 - inspectionPct}%; margin-bottom: 24px;`
+						: `top: ${inspectionPct}%; margin-top: 24px;`}
 					class="pointer-events-none absolute right-0 left-0 z-30"
 				>
 					<!-- Track 1: Lithology / GR / CALI -->
 					<div
 						style="left: 0.0%; width: 14.6%;"
-						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove
+							? 'bottom-0'
+							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
+						<div
+							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+						>
 							<span>T1 · LITH</span>
-							<span class="mono-num text-[7.5px] text-slate-300">{fmtDepth(readout.DEPT ?? workbench.cursorDepth)}m</span>
+							<span class="mono-num text-[7.5px] text-slate-300"
+								>{fmtDepth(readout.DEPT ?? workbench.cursorDepth)}m</span
+							>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.gr}">GR</span>
-							<span class="mono-num font-semibold">{fmtNum(readout.GR, 1)} <span class="text-[7px] text-slate-400">gAPI</span></span>
+							<span class="mono-num font-semibold"
+								>{fmtNum(readout.GR, 1)}
+								<span class="text-[7px] text-slate-400">gAPI</span></span
+							>
 						</div>
 						{#if hasSpectralGr && showSpectralGr}
 							{#if readout.CGR !== null && readout.CGR !== undefined}
 								<div class="flex items-center justify-between">
-									<span class="font-bold" style="color: {PETRO_COLORS.cgr}">CGR</span>
-									<span class="mono-num font-semibold">{fmtNum(readout.CGR, 1)} <span class="text-[7px] text-slate-400">gAPI</span></span>
+									<span class="font-bold" style="color: {PETRO_COLORS.cgr}"
+										>CGR</span
+									>
+									<span class="mono-num font-semibold"
+										>{fmtNum(readout.CGR, 1)}
+										<span class="text-[7px] text-slate-400">gAPI</span></span
+									>
 								</div>
 							{/if}
 							{#if readout.POTA !== null && readout.POTA !== undefined}
 								<div class="flex items-center justify-between">
-									<span class="font-bold" style="color: {PETRO_COLORS.pota}">POTA</span>
-									<span class="mono-num font-semibold">{fmtNum(readout.POTA, 2)} <span class="text-[7px] text-slate-400">%</span></span>
+									<span class="font-bold" style="color: {PETRO_COLORS.pota}"
+										>POTA</span
+									>
+									<span class="mono-num font-semibold"
+										>{fmtNum(readout.POTA, 2)}
+										<span class="text-[7px] text-slate-400">%</span></span
+									>
 								</div>
 							{/if}
 							{#if readout.THOR !== null && readout.THOR !== undefined}
 								<div class="flex items-center justify-between">
-									<span class="font-bold" style="color: {PETRO_COLORS.thor}">THOR</span>
-									<span class="mono-num font-semibold">{fmtNum(readout.THOR, 1)} <span class="text-[7px] text-slate-400">ppm</span></span>
+									<span class="font-bold" style="color: {PETRO_COLORS.thor}"
+										>THOR</span
+									>
+									<span class="mono-num font-semibold"
+										>{fmtNum(readout.THOR, 1)}
+										<span class="text-[7px] text-slate-400">ppm</span></span
+									>
 								</div>
 							{/if}
 							{#if readout.URAN !== null && readout.URAN !== undefined}
 								<div class="flex items-center justify-between">
-									<span class="font-bold" style="color: {PETRO_COLORS.uran}">URAN</span>
-									<span class="mono-num font-semibold">{fmtNum(readout.URAN, 1)} <span class="text-[7px] text-slate-400">ppm</span></span>
+									<span class="font-bold" style="color: {PETRO_COLORS.uran}"
+										>URAN</span
+									>
+									<span class="mono-num font-semibold"
+										>{fmtNum(readout.URAN, 1)}
+										<span class="text-[7px] text-slate-400">ppm</span></span
+									>
 								</div>
 							{/if}
 						{/if}
 						{#if readout.CALI !== null && readout.CALI !== undefined}
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-amber-300">CALI</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.CALI, 2)}<span class="text-[7px] text-slate-400">"</span></span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.CALI, 2)}<span
+										class="text-[7px] text-slate-400">"</span
+									></span
+								>
 							</div>
 						{/if}
 						{#if readout.BS !== null && readout.BS !== undefined}
 							<div class="flex items-center justify-between text-slate-300">
 								<span class="font-semibold">BS</span>
-								<span class="mono-num">{fmtNum(readout.BS, 2)}<span class="text-[7px]">"</span></span>
+								<span class="mono-num"
+									>{fmtNum(readout.BS, 2)}<span class="text-[7px]">"</span></span
+								>
 							</div>
 						{/if}
 					</div>
@@ -3605,32 +3907,46 @@
 					<!-- Track 2: Resistivity -->
 					<div
 						style="left: 15.6%; width: 14.6%;"
-						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove
+							? 'bottom-0'
+							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
+						<div
+							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+						>
 							<span>T2 · RES</span>
 							<span class="text-[7.5px] text-slate-300">Ω·m</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.rt}">RT</span>
-							<span class="mono-num font-semibold">{fmtNum(readout.RT ?? readout.RD ?? readout.RDEP, 2)}</span>
+							<span class="mono-num font-semibold"
+								>{fmtNum(readout.RT ?? readout.RD ?? readout.RDEP, 2)}</span
+							>
 						</div>
 						{#if tsOverlayActive && readout.RT_MOD !== null && readout.RT_MOD !== undefined}
 							<div class="flex items-center justify-between">
-								<span class="font-bold" style="color: {PETRO_COLORS.rtMod}">RT_MOD</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.RT_MOD, 2)}</span>
+								<span class="font-bold" style="color: {PETRO_COLORS.rtMod}"
+									>RT_MOD</span
+								>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.RT_MOD, 2)}</span
+								>
 							</div>
 						{/if}
 						{#if (readout.RM ?? readout.RMED) !== null && (readout.RM ?? readout.RMED) !== undefined}
 							<div class="flex items-center justify-between">
 								<span class="font-bold" style="color: {PETRO_COLORS.rm}">RM</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.RM ?? readout.RMED, 2)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.RM ?? readout.RMED, 2)}</span
+								>
 							</div>
 						{/if}
 						{#if (readout.RS ?? readout.RSHAL) !== null && (readout.RS ?? readout.RSHAL) !== undefined}
 							<div class="flex items-center justify-between">
 								<span class="font-bold" style="color: {PETRO_COLORS.rs}">RS</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.RS ?? readout.RSHAL, 2)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.RS ?? readout.RSHAL, 2)}</span
+								>
 							</div>
 						{/if}
 					</div>
@@ -3638,24 +3954,43 @@
 					<!-- Track 3: Density / Neutron / Sonic -->
 					<div
 						style="left: 31.2%; width: 14.6%;"
-						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove
+							? 'bottom-0'
+							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
+						<div
+							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+						>
 							<span>T3 · POR LOGS</span>
 							<span class="text-[7.5px] text-slate-300">D-N-S</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.rhob}">RHOB</span>
-							<span class="mono-num font-semibold">{fmtNum(readout.RHOB, 3)} <span class="text-[7px] text-slate-400">g/cc</span></span>
+							<span class="mono-num font-semibold"
+								>{fmtNum(readout.RHOB, 3)}
+								<span class="text-[7px] text-slate-400">g/cc</span></span
+							>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.nphi}">NPHI</span>
-							<span class="mono-num font-semibold">{fmtNum(readout.NPHI, 3)} <span class="text-[7px] text-slate-400">v/v</span></span>
+							<span class="mono-num font-semibold"
+								>{fmtNum(readout.NPHI, 3)}
+								<span class="text-[7px] text-slate-400">v/v</span></span
+							>
 						</div>
 						{#if hasDtc && showDtc && (readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P) !== null && (readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P) !== undefined}
 							<div class="flex items-center justify-between">
 								<span class="font-bold" style="color: {PETRO_COLORS.dt}">DTC</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P, 1)} <span class="text-[7px] text-slate-400">µs/ft</span></span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(
+										readout.DTC ??
+											readout.DT ??
+											readout.DTCO ??
+											readout.AC ??
+											readout.DT4P,
+										1
+									)} <span class="text-[7px] text-slate-400">µs/ft</span></span
+								>
 							</div>
 						{/if}
 						{#if readout.PEF !== null && readout.PEF !== undefined}
@@ -3666,8 +4001,11 @@
 						{/if}
 						{#if readout.DRHO !== null && readout.DRHO !== undefined}
 							<div class="flex items-center justify-between">
-								<span class="font-bold" style="color: {PETRO_COLORS.drho}">DRHO</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.DRHO, 3)}</span>
+								<span class="font-bold" style="color: {PETRO_COLORS.drho}"
+									>DRHO</span
+								>
+								<span class="mono-num font-semibold">{fmtNum(readout.DRHO, 3)}</span
+								>
 							</div>
 						{/if}
 					</div>
@@ -3675,95 +4013,144 @@
 					<!-- Track 4: Lithology & Porosity -->
 					<div
 						style="left: 46.8%; width: 14.6%;"
-						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove
+							? 'bottom-0'
+							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
+						<div
+							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+						>
 							<span>T4 · LITH & PORO</span>
 							<span class="text-[7.5px] text-slate-300">v/v</span>
 						</div>
 						{#if tsOverlayActive && readout.VSH_LAM !== null && readout.VSH_LAM !== undefined}
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-slate-300">VSH_LAM</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.VSH_LAM, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.VSH_LAM, 3)}</span
+								>
 							</div>
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-sky-300">VSH_DIS</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.VSH_DIS, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.VSH_DIS, 3)}</span
+								>
 							</div>
 						{:else}
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-amber-200">VCLAY</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.VCLAY ?? readout.VSH ?? readout.VSH_GR, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(
+										readout.VCLAY ?? readout.VSH ?? readout.VSH_GR,
+										3
+									)}</span
+								>
 							</div>
 						{/if}
 						{#if readout.VSAND !== null && readout.VSAND !== undefined && readout.VSAND > 0.001}
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-yellow-300">VSAND</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.VSAND, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.VSAND, 3)}</span
+								>
 							</div>
 						{/if}
 						{#if readout.VSILT !== null && readout.VSILT !== undefined && readout.VSILT > 0.001}
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-orange-300">VSILT</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.VSILT, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.VSILT, 3)}</span
+								>
 							</div>
 						{/if}
 						{#if readout.VCALC !== null && readout.VCALC !== undefined && readout.VCALC > 0.001}
 							<div class="flex items-center justify-between">
-								<span class="font-bold" style="color: {PETRO_COLORS.calcStroke}">VCALC</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.VCALC, 3)}</span>
+								<span class="font-bold" style="color: {PETRO_COLORS.calcStroke}"
+									>VCALC</span
+								>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.VCALC, 3)}</span
+								>
 							</div>
 						{/if}
 						{#if readout.VDOLO !== null && readout.VDOLO !== undefined && readout.VDOLO > 0.001}
 							<div class="flex items-center justify-between">
-								<span class="font-bold" style="color: {PETRO_COLORS.doloStroke}">VDOLO</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.VDOLO, 3)}</span>
+								<span class="font-bold" style="color: {PETRO_COLORS.doloStroke}"
+									>VDOLO</span
+								>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.VDOLO, 3)}</span
+								>
 							</div>
 						{/if}
 						{#if readout.VCOAL !== null && readout.VCOAL !== undefined && readout.VCOAL > 0.001}
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-slate-300">VCOAL</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.VCOAL, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.VCOAL, 3)}</span
+								>
 							</div>
 						{/if}
 						{#if readout.VANHY !== null && readout.VANHY !== undefined && readout.VANHY > 0.001}
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-indigo-300">VANHY</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.VANHY, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.VANHY, 3)}</span
+								>
 							</div>
 						{/if}
 						{#if (readout.VPYRI ?? readout.VPYR ?? 0) > 0.001}
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-amber-400">VPYR</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.VPYRI ?? readout.VPYR, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.VPYRI ?? readout.VPYR, 3)}</span
+								>
 							</div>
 						{/if}
 						{#if (readout.VSIDE ?? readout.VSID ?? 0) > 0.001}
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-amber-500">VSID</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.VSIDE ?? readout.VSID, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.VSIDE ?? readout.VSID, 3)}</span
+								>
 							</div>
 						{/if}
-						<div class="flex items-center justify-between border-t border-slate-700/60 pt-0.5 mt-0.5">
+						<div
+							class="mt-0.5 flex items-center justify-between border-t border-slate-700/60 pt-0.5"
+						>
 							<span class="font-bold" style="color: {PETRO_COLORS.phit}">PHIT</span>
-							<span class="mono-num font-semibold">{fmtNum(readout.PHIT, 3)} <span class="text-[7px] text-slate-400">v/v</span></span>
+							<span class="mono-num font-semibold"
+								>{fmtNum(readout.PHIT, 3)}
+								<span class="text-[7px] text-slate-400">v/v</span></span
+							>
 						</div>
 						{#if readout.PHIE !== null && readout.PHIE !== undefined}
 							<div class="flex items-center justify-between text-slate-400">
 								<span class="font-bold">PHIE (QC)</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.PHIE, 3)} <span class="text-[7px]">v/v</span></span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.PHIE, 3)}
+									<span class="text-[7px]">v/v</span></span
+								>
 							</div>
 						{/if}
 						{#if tsOverlayActive && readout.PHIT_SAND !== null && readout.PHIT_SAND !== undefined}
 							<div class="flex items-center justify-between">
-								<span class="font-bold" style="color: {PETRO_COLORS.phitSand}">PHIT_S</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.PHIT_SAND, 3)} <span class="text-[7px] text-slate-400">v/v</span></span>
+								<span class="font-bold" style="color: {PETRO_COLORS.phitSand}"
+									>PHIT_S</span
+								>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.PHIT_SAND, 3)}
+									<span class="text-[7px] text-slate-400">v/v</span></span
+								>
 							</div>
 						{/if}
 						{#if (readout.CPORE ?? readout.CORE_PORO) !== null && (readout.CPORE ?? readout.CORE_PORO) !== undefined}
 							<div class="flex items-center justify-between text-cyan-300">
 								<span class="font-bold">CPORE</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.CPORE ?? readout.CORE_PORO, 3)} <span class="text-[7px]">v/v</span></span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.CPORE ?? readout.CORE_PORO, 3)}
+									<span class="text-[7px]">v/v</span></span
+								>
 							</div>
 						{/if}
 					</div>
@@ -3771,9 +4158,13 @@
 					<!-- Track 5: Permeability -->
 					<div
 						style="left: 62.4%; width: 14.6%;"
-						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove
+							? 'bottom-0'
+							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
+						<div
+							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+						>
 							<span>T5 · PERM</span>
 							<span class="text-[7.5px] text-slate-300">mD</span>
 						</div>
@@ -3784,19 +4175,25 @@
 						{#if (readout.CPERM ?? readout.CORE_PERM) !== null && (readout.CPERM ?? readout.CORE_PERM) !== undefined}
 							<div class="flex items-center justify-between text-cyan-300">
 								<span class="font-bold">CPERM</span>
-								<span class="mono-num font-semibold">{fmtPerm(readout.CPERM ?? readout.CORE_PERM)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtPerm(readout.CPERM ?? readout.CORE_PERM)}</span
+								>
 							</div>
 						{/if}
 						{#if readout.PERM_TRANS !== null && readout.PERM_TRANS !== undefined}
 							<div class="flex items-center justify-between">
 								<span class="font-bold text-purple-300">PERM_TR</span>
-								<span class="mono-num font-semibold">{fmtPerm(readout.PERM_TRANS)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtPerm(readout.PERM_TRANS)}</span
+								>
 							</div>
 						{/if}
-						{#if (readout.PERM_BLK) !== null && (readout.PERM_BLK) !== undefined}
+						{#if readout.PERM_BLK !== null && readout.PERM_BLK !== undefined}
 							<div class="flex items-center justify-between text-slate-300">
 								<span class="font-bold">PERM_BLK</span>
-								<span class="mono-num font-semibold">{fmtPerm(readout.PERM_BLK)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtPerm(readout.PERM_BLK)}</span
+								>
 							</div>
 						{/if}
 					</div>
@@ -3804,49 +4201,71 @@
 					<!-- Track 6: Discrete Rock Type (DRT / ROCK_FLAG) -->
 					<div
 						style="left: 78.0%; width: 6.4%;"
-						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col items-center gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-0.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove
+							? 'bottom-0'
+							: 'top-0'} flex flex-col items-center gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-0.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<span class="border-b border-slate-600/70 pb-0.5 font-bold text-[7.5px] text-slate-200">DRT</span>
+						<span
+							class="border-b border-slate-600/70 pb-0.5 text-[7.5px] font-bold text-slate-200"
+							>DRT</span
+						>
 						{#if (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== null && (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== undefined && Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) >= 1}
-							{@const rfVal = Math.round(Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT))}
+							{@const rfVal = Math.round(
+								Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT)
+							)}
 							<span
-								class="mono-num rounded-2xs px-1 py-0 text-[8px] font-bold text-white shadow-2xs mt-0.5"
+								class="mono-num rounded-2xs mt-0.5 px-1 py-0 text-[8px] font-bold text-white shadow-2xs"
 								style="background-color: {getRockTypeColor(rfVal)}"
 							>
 								{rfVal}
 							</span>
 						{:else}
-							<span class="text-[7.5px] text-slate-400 mt-0.5">—</span>
+							<span class="mt-0.5 text-[7.5px] text-slate-400">—</span>
 						{/if}
 					</div>
 
 					<!-- Track 7: Water Saturation & Pay -->
 					<div
 						style="left: 85.4%; width: 14.6%;"
-						class="absolute {isAbove ? 'bottom-0' : 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+						class="absolute {isAbove
+							? 'bottom-0'
+							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
 					>
-						<div class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200">
+						<div
+							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+						>
 							<span>T7 · SAT</span>
 							<span class="text-[7.5px] text-slate-300">FLUIDS</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.water}">SW</span>
-							<span class="mono-num font-semibold">{fmtNum(readout.SWT ?? readout.SWE ?? readout.SW, 3)} <span class="text-[7px] text-slate-400">v/v</span></span>
+							<span class="mono-num font-semibold"
+								>{fmtNum(readout.SWT ?? readout.SWE ?? readout.SW, 3)}
+								<span class="text-[7px] text-slate-400">v/v</span></span
+							>
 						</div>
 						{#if (readout.SHF ?? readout.SW_SHF) !== null && (readout.SHF ?? readout.SW_SHF) !== undefined}
 							<div class="flex items-center justify-between text-red-400">
 								<span class="font-bold">SHF</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.SHF ?? readout.SW_SHF, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.SHF ?? readout.SW_SHF, 3)}</span
+								>
 							</div>
 						{/if}
 						{#if readout.SWIRR !== null && readout.SWIRR !== undefined}
 							<div class="flex items-center justify-between text-amber-400">
 								<span class="font-bold">SWIRR</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.SWIRR, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.SWIRR, 3)}</span
+								>
 							</div>
 						{/if}
 						{#if readout.BADHOLE !== null && readout.BADHOLE !== undefined && readout.BADHOLE >= 0.5}
-							<div class="mt-0.5 text-center rounded-2xs bg-red-800/90 text-[7px] font-bold text-white">BADHOLE</div>
+							<div
+								class="rounded-2xs mt-0.5 bg-red-800/90 text-center text-[7px] font-bold text-white"
+							>
+								BADHOLE
+							</div>
 						{/if}
 					</div>
 				</div>
@@ -3911,7 +4330,10 @@
 			{#if hasDtc && showDtc && (readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P) !== null && (readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P) !== undefined}
 				<span>
 					<strong style="color: {PETRO_COLORS.dt}">DTC:</strong>
-					{fmtNum(readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P, 1)}
+					{fmtNum(
+						readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P,
+						1
+					)}
 				</span>
 			{/if}
 			{#if hasSpectralGr && showSpectralGr}
@@ -4012,7 +4434,9 @@
 				</span>
 			{/if}
 			{#if (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== null && (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== undefined && Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) >= 1}
-				{@const rfVal = Math.round(Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT))}
+				{@const rfVal = Math.round(
+					Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT)
+				)}
 				<span class="inline-flex items-center gap-1">
 					<strong style="color: {getRockTypeColor(rfVal)}">RT:</strong>
 					<span
@@ -4024,15 +4448,16 @@
 				</span>
 			{/if}
 			{#if false}
-				<span>
-				</span>
+				<span> </span>
 			{/if}
 			<span>
 				<strong style="color: {PETRO_COLORS.water}">SW:</strong>
 				{fmtNum(readout.SWT ?? readout.SWE, 3)}
 			</span>
 			{#if readout.BADHOLE !== null && readout.BADHOLE !== undefined && readout.BADHOLE >= 0.5}
-				<span class="rounded-xs bg-red-100 px-1.5 py-0.2 text-[10px] font-bold text-red-800">
+				<span
+					class="py-0.2 rounded-xs bg-red-100 px-1.5 text-[10px] font-bold text-red-800"
+				>
 					BADHOLE
 				</span>
 			{/if}

@@ -314,7 +314,7 @@ class RunQaqcArgs(BaseModel):
     )
     run_env_correction: bool = Field(
         False,
-        description="Apply borehole environmental corrections (GR_CORR, NPHI_CORR, RHOB_CORR)",
+        description="Apply borehole environmental corrections (GR_ENV_CORR, NPHI_ENV_CORR, RHOB_ENV_CORR, RT_ENV_CORR)",
     )
     rho_hc: float = Field(
         0.8, description="Hydrocarbon density (g/cc) for HC correction"
@@ -806,7 +806,7 @@ def tool_run_well_qaqc(
         corr_df = apply_environmental_corrections(df)
         env_cols = [
             c
-            for c in ("GR_CORR", "NPHI_CORR", "RHOB_CORR", "RT_CORR")
+            for c in ("GR_ENV_CORR", "NPHI_ENV_CORR", "RHOB_ENV_CORR", "RT_ENV_CORR")
             if c in corr_df.columns
         ]
         for c in env_cols:

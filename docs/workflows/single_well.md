@@ -125,7 +125,9 @@ flowchart TD
       Corrupted pad readings are reconstructed via multivariate regression or Random Forest models trained on in-gauge intervals ($\text{BADHOLE} = 0$) using deep-reading, borehole-insensitive logs ($\text{GR}, \text{DTC}, \ln(\text{RT})$).
 
 * **Input Curves:** `CALI`, `BS`, `GR`, `RHOB`, `NPHI`, `DTC`, `RT`  
-* **Output Curves:** `BADHOLE` (flag), `RHOB_CORR`, `NPHI_CORR`, `GR_CORR`
+* **Output Curves:** `BADHOLE` (flag), `GR_ENV_CORR`, `NPHI_ENV_CORR`, `RHOB_ENV_CORR`, `RT_ENV_CORR`.
+  Environmental-correction outputs are preview curves; downstream calculations continue to use
+  their configured raw or hydrocarbon-corrected inputs until explicitly selected.
 
 ---
 
