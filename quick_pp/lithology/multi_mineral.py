@@ -8,7 +8,6 @@ from tqdm import tqdm
 
 from quick_pp import logger
 from quick_pp.config import Config
-from quick_pp.porosity import density_porosity, neu_den_xplot_poro_pt
 
 CONDUCTIVITY_MODELS = ("sandsiltclay_waxman_smits", "waxman_smits", "dual_water")
 CLAY_MINERAL_NAMES = (
@@ -344,8 +343,6 @@ class MultiMineral:
         self,
         minerals: Optional[List[str]] = None,
         fluid_properties: Optional[Dict] = None,
-        porosity_method: str = "density",
-        porosity_endpoints: Optional[Dict] = None,
         conductivity_model: Optional[str] = None,
         conductivity_params: Optional[Dict] = None,
         solver: str = "auto",
@@ -361,9 +358,6 @@ class MultiMineral:
             minerals (list, optional): A list of minerals for the optimization.
                                        Defaults to ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'].
             fluid_properties (dict, optional): Properties for oil, gas, and water. Defaults to standard values.
-            porosity_method (str, optional): The method for initial porosity estimation
-                                             ('neutron_density', 'density', 'sonic'). Defaults to 'density'.
-            porosity_endpoints (dict, optional): Endpoints for the 'neutron_density' porosity method.
             conductivity_model (str, optional): Optional non-linear conductivity model
                                                 ('sandsiltclay_waxman_smits', 'waxman_smits', 'dual_water', or None).
                                                 When enabled, SLSQP is used to solve the non-linear conductivity term.
@@ -399,8 +393,6 @@ class MultiMineral:
                 )
 
         self.minerals = minerals
-        self.porosity_method = porosity_method
-        self.porosity_endpoints = porosity_endpoints or {}
         self.conductivity_model = (
             conductivity_model.lower() if conductivity_model is not None else None
         )
@@ -490,160 +482,6 @@ class MultiMineral:
     def _volume_constraint(self, volumes: np.ndarray) -> float:
         """Ensure that the sum of all mineral and fluid volumes equals 1."""
         return float(np.sum(volumes) - 1.0)
-
-    def _calculate_porosity(
-        self, nphi: float, rhob: float, dtc: Optional[float] = None
-    ) -> float:
-        """Calculate an initial porosity estimate based on the selected method.
-
-        Args:
-            nphi (float): Neutron porosity value.
-            rhob (float): Bulk density value.
-            dtc (float, optional): Sonic transit time value. Defaults to None.
-
-        Returns:
-            float: The initial porosity estimate.
-        """
-        if self.porosity_method == "density":
-            initial_rho_ma = sum(
-                self.responses[mineral].get("RHOB", 0)
-                for mineral in self.minerals
-                if mineral in self.responses
-            )
-            count_minerals_with_density = sum(
-                1
-                for mineral in self.minerals
-                if mineral in self.responses and "RHOB" in self.responses[mineral]
-            )
-
-            if count_minerals_with_density > 0:
-                rho_ma = initial_rho_ma / count_minerals_with_density
-            else:
-                rho_ma = 2.65  # Default matrix density (Quartz)
-
-            rho_fluid_avg = float(
-                np.mean([prop["density"] for prop in self.fluid_properties.values()])
-            )
-
-            return float(density_porosity(rhob, rho_ma, rho_fluid_avg))
-
-        elif self.porosity_method == "neutron_density":
-            dry_min1_point = self.porosity_endpoints.get(
-                "dry_min1_point", (-0.02, 2.65)
-            )
-            dry_clay_point = self.porosity_endpoints.get("dry_clay_point", (0.37, 2.41))
-            fluid_point = self.porosity_endpoints.get("fluid_point", (1.0, 1.0))
-
-            return float(
-                neu_den_xplot_poro_pt(
-                    nphi,
-                    rhob,
-                    model="ss",
-                    dry_min1_point=dry_min1_point,
-                    dry_clay_point=dry_clay_point,
-                    fluid_point=fluid_point,
-                )
-            )
-
-        elif self.porosity_method == "sonic":
-            if dtc is None or np.isnan(dtc):
-                return 0.0
-            dt_ma = 55.0  # Default matrix slowness
-            dt_fluid = 190.0  # Default fluid slowness
-            return float((dtc - dt_ma) / (dt_fluid - dt_ma))
-
-        else:
-            raise ValueError(f"Unknown porosity method: {self.porosity_method}")
-
-    def _calculate_porosity_vectorized(
-        self,
-        nphi: np.ndarray,
-        rhob: np.ndarray,
-        dtc: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        """Vectorized initial porosity estimation across all depth steps."""
-        n_samples = len(rhob)
-        both_valid = np.isfinite(nphi) & np.isfinite(rhob)
-        init_poro = np.full(n_samples, 0.1, dtype=float)
-
-        if not np.any(both_valid):
-            return init_poro
-
-        if self.porosity_method == "density":
-            initial_rho_ma = sum(
-                self.responses[mineral].get("RHOB", 0)
-                for mineral in self.minerals
-                if mineral in self.responses
-            )
-            count_minerals = sum(
-                1
-                for mineral in self.minerals
-                if mineral in self.responses and "RHOB" in self.responses[mineral]
-            )
-            rho_ma = initial_rho_ma / count_minerals if count_minerals > 0 else 2.65
-            rho_fluid_avg = float(
-                np.mean([prop["density"] for prop in self.fluid_properties.values()])
-            )
-            poro_vals = (rho_ma - rhob[both_valid]) / (rho_ma - rho_fluid_avg)
-            init_poro[both_valid] = np.clip(poro_vals, 0.0, 0.4)
-
-        elif self.porosity_method == "neutron_density":
-            dry_min1_point = self.porosity_endpoints.get(
-                "dry_min1_point", (-0.02, 2.65)
-            )
-            dry_clay_point = self.porosity_endpoints.get("dry_clay_point", (0.37, 2.41))
-            fluid_point = self.porosity_endpoints.get("fluid_point", (1.0, 1.0))
-
-            # Vectorized line-intersection porosity equivalent to neu_den_xplot_poro_pt(..., model='ss')
-            A = np.asarray(dry_min1_point, dtype=float)
-            C = np.asarray(dry_clay_point, dtype=float)
-            D = np.asarray(fluid_point, dtype=float)
-            m_ac = (A[1] - C[1]) / (A[0] - C[0])
-            n_v = nphi[both_valid]
-            r_v = rhob[both_valid]
-            c_int = r_v - m_ac * n_v
-
-            m_da = (A[1] - D[1]) / (A[0] - D[0])
-            c_da = D[1] - m_da * D[0]
-            x_iso = (c_da - c_int) / (m_ac - m_da)
-            y_iso = m_ac * x_iso + c_int
-            iso_len = np.hypot(x_iso - A[0], y_iso - A[1])
-            poro_len = float(np.hypot(D[0] - A[0], D[1] - A[1]))
-            poro_vals = iso_len / poro_len
-            init_poro[both_valid] = np.clip(poro_vals, 0.0, 0.4)
-
-        elif self.porosity_method == "sonic":
-            if dtc is not None:
-                valid_s = both_valid & np.isfinite(dtc)
-                poro_vals = (dtc[valid_s] - 55.0) / (190.0 - 55.0)
-                init_poro[valid_s] = np.clip(poro_vals, 0.0, 0.4)
-                init_poro[both_valid & ~np.isfinite(dtc)] = 0.0
-            else:
-                init_poro[both_valid] = 0.0
-        else:
-            raise ValueError(f"Unknown porosity method: {self.porosity_method}")
-
-        return init_poro
-
-    def _calculate_matrix_density(self, mineral_volumes: np.ndarray) -> float:
-        """Calculate the average matrix density from mineral volumes."""
-        rho_ma = 0.0
-        total_mineral_vol = np.sum(mineral_volumes)
-        if total_mineral_vol < 1e-6:
-            return 2.65
-
-        for i, mineral in enumerate(self.minerals):
-            if mineral in self.responses and "RHOB" in self.responses[mineral]:
-                rho_ma += mineral_volumes[i] * self.responses[mineral]["RHOB"]
-
-        return float(rho_ma / total_mineral_vol)
-
-    def _calculate_fluid_density(self, fluid_volumes: np.ndarray) -> float:
-        """Calculate the average fluid density from fluid volumes."""
-        rho_fluid = 0.0
-        for i, fluid in enumerate(self.fluids):
-            rho_fluid += fluid_volumes[i] * self.fluid_properties[fluid]["density"]
-        return float(rho_fluid)
 
     def _build_response_matrix(self, log_types: List[str]) -> np.ndarray:
         """Construct the linear log response matrix C of shape (n_logs, n_vars).
@@ -829,18 +667,7 @@ class MultiMineral:
                     total_error += (scaling * (ct_meas - ct_recon)) ** 2
                     continue
 
-                if self.porosity_method == "density" and log_type == "RHOB":
-                    mineral_vols = volumes[: len(self.minerals)]
-                    fluid_vols = volumes[len(self.minerals) :]
-                    porosity = np.sum(fluid_vols)
-
-                    rho_ma = self._calculate_matrix_density(mineral_vols)
-                    rho_fluid = self._calculate_fluid_density(fluid_vols)
-                    reconstructed_value = rho_ma * (1 - porosity) + rho_fluid
-                else:
-                    reconstructed_value = self._calculate_log_response(
-                        volumes, log_type
-                    )
+                reconstructed_value = self._calculate_log_response(volumes, log_type)
 
                 scaling = self.scaling_factors.get(log_type, 1.0)
                 error = (scaling * (measured_value - reconstructed_value)) ** 2
@@ -868,25 +695,11 @@ class MultiMineral:
         n_fluids = len(self.fluids)
 
         if initial_guess is None:
-            nphi = log_values.get("NPHI", 0.0)
-            rhob = log_values.get("RHOB", 2.65)
-            dtc = log_values.get("DTC", None)
-
-            if (
-                nphi is not None
-                and rhob is not None
-                and not np.isnan(nphi)
-                and not np.isnan(rhob)
-            ):
-                initial_porosity = self._calculate_porosity(nphi, rhob, dtc)
-                initial_porosity = max(0.0, min(0.4, initial_porosity))
-            else:
-                initial_porosity = 0.1
-
-            mineral_volume = (1.0 - initial_porosity) / n_minerals
-            fluid_volume = initial_porosity / n_fluids
-            initial_guess = np.concatenate(
-                [np.full(n_minerals, mineral_volume), np.full(n_fluids, fluid_volume)]
+            n_vars = n_minerals + n_fluids
+            initial_guess = _project_bounded_simplex_batch(
+                np.full(n_vars, 1.0 / n_vars),
+                np.array([b[0] for b in self.bounds], dtype=float),
+                np.array([b[1] for b in self.bounds], dtype=float),
             )
 
         solver_choice = (method or self.solver or "auto").lower()
@@ -1216,7 +1029,8 @@ class MultiMineral:
 
         Returns:
             pd.DataFrame: A DataFrame containing estimated mineral/fluid volumes, constructed porosity,
-                          residual errors, and reconstructed logs.
+                          residual errors, and reconstructed logs. ``PHIT_CONSTRUCTED`` is the optimized
+                          sum of fluid volumes; porosity logs are not used to initialize the inversion.
         """
 
         def _to_float_array(
@@ -1420,18 +1234,8 @@ class MultiMineral:
             valid_counts = np.sum(finite_mask, axis=1) + has_rt.astype(int)
             valid_rows = valid_counts >= min(3, len(linear_log_names))
 
-            # Vectorized initial guesses
-            init_poro = self._calculate_porosity_vectorized(
-                nphi_arr, rhob_arr, dtc_arr if dtc is not None else None
-            )
-            mineral_init = ((1.0 - init_poro) / n_minerals)[:, None]
-            fluid_init = (init_poro / n_fluids)[:, None]
-            V0 = np.hstack(
-                [
-                    np.repeat(mineral_init, n_minerals, axis=1),
-                    np.repeat(fluid_init, n_fluids, axis=1),
-                ]
-            )
+            # Start from an equal-volume simplex point; the measured logs determine porosity.
+            V0 = np.full((n_samples, n_vars), 1.0 / n_vars, dtype=float)
 
             # Resolve lower and upper bounds
             if bounds is not None:
@@ -1734,8 +1538,6 @@ class Optim(MultiMineral):
         b: Optional[np.ndarray] = None,
         minerals: Optional[List[str]] = None,
         fluid_properties: Optional[Dict] = None,
-        porosity_method: str = "density",
-        porosity_endpoints: Optional[Dict] = None,
         conductivity_model: Optional[str] = None,
         conductivity_params: Optional[Dict] = None,
         solver: str = "auto",
@@ -1748,8 +1550,6 @@ class Optim(MultiMineral):
         super().__init__(
             minerals=minerals,
             fluid_properties=fluid_properties,
-            porosity_method=porosity_method,
-            porosity_endpoints=porosity_endpoints,
             conductivity_model=conductivity_model,
             conductivity_params=conductivity_params,
             solver=solver,

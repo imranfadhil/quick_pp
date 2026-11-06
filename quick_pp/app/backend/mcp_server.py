@@ -345,10 +345,6 @@ class RunMultiMineralArgs(BaseModel):
         default_factory=lambda: ["QUARTZ", "CALCITE", "DOLOMITE", "SHALE"],
         description="Minerals to solve for when model='multi_mineral'",
     )
-    porosity_method: str = Field(
-        "neutron_density",
-        description="Porosity method: 'density', 'neutron_density', or 'sonic'",
-    )
     use_hc_corrected: bool = Field(
         True, description="Use NPHI_HC and RHOB_HC if available"
     )
@@ -850,7 +846,6 @@ def tool_run_multi_mineral(
     well_name: str,
     model: str = "multi_mineral",
     minerals: Optional[List[str]] = None,
-    porosity_method: str = "neutron_density",
     use_hc_corrected: bool = True,
     min_depth: Optional[float] = None,
     max_depth: Optional[float] = None,
@@ -862,7 +857,6 @@ def tool_run_multi_mineral(
     lith_req = WorkspaceLithologyRequest(
         model=model,
         minerals=mineral_list,
-        porosity_method=porosity_method,
         use_hc_corrected=use_hc_corrected,
         min_depth=min_depth,
         max_depth=max_depth,
@@ -933,7 +927,6 @@ def tool_run_multi_mineral(
         "minerals": mineral_list
         if model == "multi_mineral"
         else ["VSAND", "VSILT", "VCLAY"],
-        "porosity_method": porosity_method,
         "saved": save,
         "saved_rows": lith_res.get("saved_rows", 0),
         "solver_diagnostics": diagnostics,

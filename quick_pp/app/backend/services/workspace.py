@@ -2663,18 +2663,6 @@ def workspace_lithology(
 
             mm_model = MultiMineral(
                 minerals=selected_minerals,
-                porosity_method=req.porosity_method,
-                porosity_endpoints={
-                    "dry_min1_point": req.dry_sand_point,
-                    "dry_clay_point": (
-                        req.dry_clay_point
-                        if req.dry_clay_point
-                        and req.dry_clay_point[0] is not None
-                        and req.dry_clay_point[1] is not None
-                        else (0.33, 2.7)
-                    ),
-                    "fluid_point": req.fluid_point,
-                },
             )
             # Apply user GR clean / GR clay endpoints to instance-local mineral responses without mutating global Config
             mm_model.responses = {

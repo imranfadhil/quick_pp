@@ -18,10 +18,6 @@ class LithologyMultiMineralInput(BaseModel):
         ["QUARTZ", "CALCITE", "DOLOMITE", "SHALE"],
         description="List of minerals for the optimization",
     )
-    porosity_method: str = Field(
-        "density",
-        description="Method for initial porosity estimation ('density', 'neutron_density', 'sonic')",
-    )
     auto_scale: bool = Field(
         True,
         description="If True, automatically calculates scaling factors for robustness",

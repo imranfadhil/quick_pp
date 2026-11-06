@@ -236,7 +236,35 @@ def test_mica_minerals_have_endpoints_and_volume_curves():
         expected_volumes[:, 1:4],
         atol=1e-4,
     )
+    np.testing.assert_allclose(
+        result["PHIT_CONSTRUCTED"].to_numpy(), expected_volumes[:, 4], atol=1e-4
+    )
+    np.testing.assert_allclose(
+        result["URAN_RECONSTRUCTED"].to_numpy(), synthetic_logs[:, 7], atol=1e-4
+    )
+    assert "URAN" in mm.scaling_factors
+    assert "U" not in mm.scaling_factors
     assert "GLAUCONITE" not in CLAY_MINERAL_NAMES
+
+
+def test_slsqp_rhob_objective_uses_linear_endpoint_responses():
+    minerals = ["QUARTZ", "CALCITE", "DOLOMITE", "SHALE"]
+    fluid_properties = {
+        "WATER": {
+            "density": 1.0,
+            "nphi": 1.0,
+            "pef": 0.36,
+            "dtc": 190.0,
+            "u": 0.36,
+        }
+    }
+    model = MultiMineral(minerals=minerals, fluid_properties=fluid_properties)
+    model.fluids = ["WATER"]
+    volumes = np.array([0.4, 0.2, 0.1, 0.1, 0.2])
+    rhob_response = model._build_response_matrix(["RHOB"])[0]
+    measured_rhob = float(volumes @ rhob_response)
+
+    assert model._error_function(volumes, {"RHOB": measured_rhob}) == 0.0
 
 
 def test_custom_bounds_and_pef_linearization():

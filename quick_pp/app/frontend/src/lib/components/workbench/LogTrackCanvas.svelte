@@ -1533,7 +1533,9 @@
 
 		// Track 4 (xaxis4): Evaluated Lithology & Porosity (stacked mineral volumes + PHIT + CPORE)
 		const phit = pick('PHIT');
+		const phitConstructed = pick('PHIT_CONSTRUCTED');
 		const phie = pick('PHIE');
+		const isMultiMineral = workbench.lithoParams.model === 'multi_mineral';
 		const lithoToPlot = activeLithoSpecs;
 		if (lithoToPlot.length > 0) {
 			const decLithArrs = lithoToPlot.map(({ arr }) => decimateSvg(arr));
@@ -1643,6 +1645,25 @@
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.phit, width: 1.6 },
 				hovertemplate: 'PHIT: %{customdata:.3f} v/v<extra></extra>'
+			});
+		}
+		if (
+			isMultiMineral &&
+			phit.some((v) => v !== null) &&
+			phitConstructed.some((v) => v !== null)
+		) {
+			const phitConstructedDec = decimateSvg(phitConstructed);
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'PHIT_CONSTRUCTED',
+				x: scalePoro(phitConstructedDec),
+				customdata: phitConstructedDec,
+				y: svgDepth,
+				xaxis: 'x4',
+				yaxis: 'y',
+				line: { color: 'rgba(71, 85, 105, 0.72)', width: 1.2, dash: '5px,3px' },
+				hovertemplate: 'PHIT (constructed): %{customdata:.3f} v/v<extra></extra>'
 			});
 		}
 		if (phie.some((v) => v !== null)) {

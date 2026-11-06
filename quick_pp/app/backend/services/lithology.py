@@ -349,14 +349,12 @@ async def estimate_hc_correction(inputs: LithologyHCCorrectionInput):
 
         Request body must be a JSON object with the following fields:
         - minerals: list of strings (optional, defaults to ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'])
-        - porosity_method: string (optional, defaults to 'density', options: 'density', 'neutron_density', 'sonic')
         - auto_scale: boolean (optional, defaults to True)
         - data: list of objects with keys 'gr', 'nphi', 'rhob', and optionally 'pef', 'dtc' (required)
 
         Example:
         {
             'minerals': ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'],
-            'porosity_method': 'density',
             'auto_scale': True,
             'data': [
                 {'gr': 85.0, 'nphi': 0.25, 'rhob': 2.45, 'pef': 2.5, 'dtc': 65.0},
@@ -374,10 +372,9 @@ async def estimate_multi_mineral(inputs: LithologyMultiMineralInput):
     Parameters
     ----------
     inputs : LithologyMultiMineralInput
-        Pydantic model containing:
-            - minerals: List[str] of mineral names
-            - porosity_method: str ('density', 'neutron_density', or 'sonic')
-            - auto_scale: bool whether to apply automatic scaling
+    Pydantic model containing:
+        - minerals: List[str] of mineral names
+        - auto_scale: bool whether to apply automatic scaling
             - data: List[dict] with 'gr', 'nphi', 'rhob' keys and optional 'pef', 'dtc'
 
     Returns
@@ -398,7 +395,7 @@ async def estimate_multi_mineral(inputs: LithologyMultiMineralInput):
 
     Technical Details
     ----------------
-    - Initializes a MultiMineral model with specified minerals and porosity calculation method.
+    - Initializes a MultiMineral model with the specified minerals.
     - Extracts log arrays from input data, replacing None with np.nan for optional logs.
     - Estimates lithology for each depth point using scipy.optimize.minimize with SLSQP method.
     - Returns results as a list of dictionaries, preserving input order.
@@ -409,7 +406,6 @@ async def estimate_multi_mineral(inputs: LithologyMultiMineralInput):
     # Initialize the MultiMineral model
     mm_model = MultiMineral(
         minerals=input_dict["minerals"],
-        porosity_method=input_dict["porosity_method"],
     )
 
     # Prepare log arrays, handling optional columns and None values
