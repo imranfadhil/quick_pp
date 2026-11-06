@@ -135,6 +135,14 @@ flowchart TD
 
 * **Objective:** Establish the True Vertical Depth Sub-Sea ($\text{TVDSS}$) coordinate frame, ingest stratigraphic formation tops, and manage wellbore survey geometry.
 
+* **Formation-test mobility:** Enter or import optional drawdown mobility with formation pressure
+  tests. The well plot displays positive mobility values as pink triangles at measured depth in
+  Track 5, with a separate 0.01–10,000 mD/cP logarithmic scale and an FPT mobility toggle.
+  Points outside that scale are counted as off-scale; depth and zone filters apply. Hover a
+  point for its value, depth, and available fluid, quality, and remarks. Mobility is not
+  permeability: matching numerical positions on the two scales do not imply equivalent
+  properties, and no viscosity or permeability conversion is assumed.
+
 * **Technical Foundation:**
 
     * **Minimum Curvature Directional Survey Inversion:**

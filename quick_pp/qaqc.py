@@ -143,7 +143,9 @@ def badhole_flagging(
         return s_clean.where(s < m, med)
 
     bit_sizes = {6.0: 6.0, 8.5: 8.5, 12.25: 12.25, 17.5: 17.5}
-    default_bs = float(bitsize_default) if bitsize_default and bitsize_default > 0 else 8.5
+    default_bs = (
+        float(bitsize_default) if bitsize_default and bitsize_default > 0 else 8.5
+    )
 
     if "BS" not in df.columns:
         df["BS"] = np.nan
@@ -191,7 +193,11 @@ def badhole_flagging(
                         signal_data.ffill().bfill().to_numpy(dtype=float)
                     )
                     n_bkps = min(len(peaks), max(0, (len(signal_data) // jump) - 1))
-                    my_bkps = algo.predict(n_bkps=n_bkps) if n_bkps > 0 else [len(signal_data)]
+                    my_bkps = (
+                        algo.predict(n_bkps=n_bkps)
+                        if n_bkps > 0
+                        else [len(signal_data)]
+                    )
 
                     indices = [0] + my_bkps
                     bins = list(zip(indices[:-1], indices[1:], strict=True))
@@ -207,15 +213,23 @@ def badhole_flagging(
                             if len(valid_seg) > 0
                             else fallback_q05
                         )
-                        bit_ = bit_sizes[min(bit_sizes.keys(), key=lambda k: abs(k - val))]
+                        bit_ = bit_sizes[
+                            min(bit_sizes.keys(), key=lambda k: abs(k - val))
+                        ]
                         estimated_bits.append(bit_)
 
                     if len(estimated_bits) >= 2:
-                        bits_diff_1 = np.array(estimated_bits[1:] + [estimated_bits[-1]])
-                        bits_diff_neg1 = np.array([estimated_bits[0]] + estimated_bits[:-1])
+                        bits_diff_1 = np.array(
+                            estimated_bits[1:] + [estimated_bits[-1]]
+                        )
+                        bits_diff_neg1 = np.array(
+                            [estimated_bits[0]] + estimated_bits[:-1]
+                        )
                         estimated_bits_arr = np.array(estimated_bits, dtype=float)
                         estimated_bits_arr = np.where(
-                            bits_diff_1 == bits_diff_neg1, bits_diff_1, estimated_bits_arr
+                            bits_diff_1 == bits_diff_neg1,
+                            bits_diff_1,
+                            estimated_bits_arr,
                         )
                     else:
                         estimated_bits_arr = np.array(estimated_bits, dtype=float)
@@ -228,18 +242,24 @@ def badhole_flagging(
                     well_data["ESTIMATED_BITSIZE"] = est_bs_arr
                     estimated_ok = True
                 except Exception as e:
-                    logger.debug(f"[badhole_flagging] Change-point fallback on well {well}: {e}")
+                    logger.debug(
+                        f"[badhole_flagging] Change-point fallback on well {well}: {e}"
+                    )
 
             if not estimated_ok and not clean_signal.empty:
                 # Fallback for short intervals or when ruptures breakpoints are not applicable:
                 # snap 5th percentile of caliper to nearest standard bit size
                 p05 = float(np.nanpercentile(clean_signal, 5))
-                nearest_bs = bit_sizes[min(bit_sizes.keys(), key=lambda k: abs(k - p05))]
+                nearest_bs = bit_sizes[
+                    min(bit_sizes.keys(), key=lambda k: abs(k - p05))
+                ]
                 well_data["ESTIMATED_BITSIZE"] = float(nearest_bs)
 
         processed_wells.append(well_data)
 
-    return_df = pd.concat(processed_wells, ignore_index=True) if processed_wells else df.copy()
+    return_df = (
+        pd.concat(processed_wells, ignore_index=True) if processed_wells else df.copy()
+    )
 
     if auto_bitsize:
         bitsize_arr = np.where(
@@ -276,12 +296,16 @@ def badhole_flagging(
     if exclude_coal:
         if "COAL_FLAG" in return_df.columns:
             coal_mask |= (
-                pd.to_numeric(return_df["COAL_FLAG"], errors="coerce").fillna(0.0).to_numpy()
+                pd.to_numeric(return_df["COAL_FLAG"], errors="coerce")
+                .fillna(0.0)
+                .to_numpy()
                 >= 0.5
             )
         if "VCOAL" in return_df.columns:
             coal_mask |= (
-                pd.to_numeric(return_df["VCOAL"], errors="coerce").fillna(0.0).to_numpy()
+                pd.to_numeric(return_df["VCOAL"], errors="coerce")
+                .fillna(0.0)
+                .to_numpy()
                 >= 0.5
             )
         if (
@@ -305,7 +329,9 @@ def badhole_flagging(
         )
         if drho_col is not None:
             drho_num = pd.to_numeric(return_df[drho_col], errors="coerce").to_numpy()
-            drho_flag = np.isfinite(drho_num) & (np.abs(drho_num) > float(drho_threshold))
+            drho_flag = np.isfinite(drho_num) & (
+                np.abs(drho_num) > float(drho_threshold)
+            )
 
     # 3. Bulk Density / Neutron Pad Standoff Bounds criterion
     if use_rhob_nphi:
@@ -354,7 +380,9 @@ def badhole_flagging(
         "total_rows": int(n_rows),
         "total_samples": int(n_rows),
         "flagged_count": int(np.sum(combined_flag)),
-        "flagged_pct": round(float(np.mean(combined_flag) * 100.0), 2) if n_rows > 0 else 0.0,
+        "flagged_pct": round(float(np.mean(combined_flag) * 100.0), 2)
+        if n_rows > 0
+        else 0.0,
         "cali_count": int(np.sum(cali_flag)),
         "cali_flagged": int(np.sum(cali_flag)),
         "drho_count": int(np.sum(drho_flag)),
@@ -513,7 +541,6 @@ def neu_den_xplot_hc_correction(
             numer = target_vsh * (1.0 - phi0) - vcl0
         s = np.where(np.abs(denom) > 1e-12, numer / denom, np.nan)
         # Do not cross the zero-porosity (A-C) line
-        # Do not cross the zero-porosity (A-C) line
         if np.ndim(dphi) == 0:
             if dphi < 0:
                 s = np.minimum(s, -phi0 / dphi)
@@ -634,11 +661,8 @@ def invaded_zone_hc_correction(
     for saturation in np.linspace(0.0, 1.0, 101):
         mixed_hi = saturation * hh + (1.0 - saturation) * hw
         delta_rhob = coeff_a * phi_dn * saturation
-        delta_nphi = (
-            coeff_b * phi_dn * saturation
-            + lithology_coeff
-            * mixed_hi
-            * (2.0 * phi_dn**2 * mixed_hi + 0.04 * phi_dn)
+        delta_nphi = coeff_b * phi_dn * saturation + lithology_coeff * mixed_hi * (
+            2.0 * phi_dn**2 * mixed_hi + 0.04 * phi_dn
         )
         candidate_nphi = nphi + delta_nphi
         candidate_rhob = rhob + delta_rhob
@@ -1205,8 +1229,9 @@ def normalize_by_zone(
                     for bh_col in ("BADHOLE", "BAD_HOLE", "BAD_HOLE_FLAG"):
                         if bh_col in well_zone_df.columns:
                             bh_mask = (
-                                pd.to_numeric(well_zone_df[bh_col], errors="coerce")
-                                .fillna(0.0)
+                                pd.to_numeric(
+                                    well_zone_df[bh_col], errors="coerce"
+                                ).fillna(0.0)
                                 >= 0.5
                             )
                             if (~bh_mask & val_series.notna()).sum() >= 5:
@@ -1335,7 +1360,6 @@ def normalize_by_zone(
 stratigraphic_normalization = normalize_by_zone
 
 
-
 def gr_borehole_correction(
     gr: np.ndarray | pd.Series | float,
     cali: np.ndarray | pd.Series | float,
@@ -1379,7 +1403,9 @@ def gr_borehole_correction(
     rho_mud_ref = 9.0 / 8.3454  # 9.0 ppg reference calibration mud weight (~1.08 g/cc)
 
     # Effective fluid annulus thickness change relative to reference 8.5" borehole & 9 ppg mud
-    d_hole = np.clip(np.where(np.isnan(cali_arr), bs_arr, cali_arr), tool_diameter, 36.0)
+    d_hole = np.clip(
+        np.where(np.isnan(cali_arr), bs_arr, cali_arr), tool_diameter, 36.0
+    )
     d_ref = np.clip(bs_arr, tool_diameter, 36.0)
 
     geom_factor = 0.65 if tool_position.lower().startswith("ecc") else 1.0
@@ -1391,10 +1417,7 @@ def gr_borehole_correction(
         mu
         * half_inch_to_cm
         * geom_factor
-        * (
-            rho_mud * (d_hole - tool_diameter)
-            - rho_mud_ref * (d_ref - tool_diameter)
-        )
+        * (rho_mud * (d_hole - tool_diameter) - rho_mud_ref * (d_ref - tool_diameter))
     )
     cf = np.clip(np.exp(exponent), 0.5, 2.5)
     gr_corr = np.maximum(0.0, gr_arr * cf)
@@ -1461,7 +1484,7 @@ def nphi_environmental_correction(
 
     # Additive chartbook approximations (in porosity units v/v)
     corr_hole = -0.012 * delta_hole
-    corr_temp = 0.004 * (( np.where(np.isnan(temp_arr), 75.0, temp_arr) - 75.0) / 100.0)
+    corr_temp = 0.004 * ((np.where(np.isnan(temp_arr), 75.0, temp_arr) - 75.0) / 100.0)
     corr_pres = -0.0015 * (np.where(np.isnan(pres_arr), 0.0, pres_arr) / 1000.0)
     mw_ppg = np.where(mw_arr <= 3.0, mw_arr * 8.3454, mw_arr)
     corr_mw = 0.002 * (np.where(np.isnan(mw_ppg), 9.0, mw_ppg) - 9.0)
@@ -1515,7 +1538,9 @@ def density_mudcake_correction(
     bs_arr = np.asarray(bitsize, dtype=float)
 
     # Effective standoff / washout wall gap (inches)
-    gap_in = np.clip((np.where(np.isnan(cali_arr), bs_arr, cali_arr) - bs_arr) / 2.0, 0.0, 6.0)
+    gap_in = np.clip(
+        (np.where(np.isnan(cali_arr), bs_arr, cali_arr) - bs_arr) / 2.0, 0.0, 6.0
+    )
     # Pad sensitivity factor per inch of wall gap beyond compensation
     pad_factor = 0.06
     delta_rhob = pad_factor * gap_in * np.maximum(rhob_arr - rho_mudcake, 0.0)
@@ -1689,7 +1714,11 @@ def apply_environmental_corrections(
     )
 
     # Resolve temperature (°F) and hydrostatic pressure (psi)
-    depth_col = "TVD" if "TVD" in out_df.columns else ("DEPTH" if "DEPTH" in out_df.columns else None)
+    depth_col = (
+        "TVD"
+        if "TVD" in out_df.columns
+        else ("DEPTH" if "DEPTH" in out_df.columns else None)
+    )
     if "TEMP" in out_df.columns:
         temp = out_df["TEMP"]
     elif depth_col is not None:
@@ -1706,14 +1735,18 @@ def apply_environmental_corrections(
         d_vals = pd.to_numeric(out_df[depth_col], errors="coerce").fillna(0.0)
         depth_ft = d_vals * 3.28084 if d_vals.max() < 6000 else d_vals
         mw_val = mw if not isinstance(mw, pd.Series) else mw.fillna(9.0)
-        mw_ppg = np.where(np.asarray(mw_val) <= 3.0, np.asarray(mw_val) * 8.3454, np.asarray(mw_val))
+        mw_ppg = np.where(
+            np.asarray(mw_val) <= 3.0, np.asarray(mw_val) * 8.3454, np.asarray(mw_val)
+        )
         pressure = 0.052 * mw_ppg * depth_ft
     else:
         pressure = 0.0
 
     # 1. Gamma Ray borehole correction
     if "GR" in out_df.columns:
-        gr_corr = gr_borehole_correction(out_df["GR"], cali=cali, bitsize=bs, mud_weight=mw)
+        gr_corr = gr_borehole_correction(
+            out_df["GR"], cali=cali, bitsize=bs, mud_weight=mw
+        )
         if suffix:
             out_df[f"GR{suffix}"] = gr_corr
         if inplace:
@@ -1748,8 +1781,13 @@ def apply_environmental_corrections(
 
     # 4. Deep Resistivity invasion correction
     if "RT" in out_df.columns:
-        rm_col = next((c for c in ("RM", "ILM", "RMED", "RLA3") if c in out_df.columns), None)
-        rxo_col = next((c for c in ("RXO", "MSFL", "RSHAL", "RS", "RLA1") if c in out_df.columns), None)
+        rm_col = next(
+            (c for c in ("RM", "ILM", "RMED", "RLA3") if c in out_df.columns), None
+        )
+        rxo_col = next(
+            (c for c in ("RXO", "MSFL", "RSHAL", "RS", "RLA1") if c in out_df.columns),
+            None,
+        )
         rt_corr, inv_flag = resistivity_invasion_correction(
             out_df["RT"],
             rm=out_df[rm_col] if rm_col else None,

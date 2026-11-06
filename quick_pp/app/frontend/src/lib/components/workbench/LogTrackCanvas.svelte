@@ -16,6 +16,7 @@
 		type LithologyTrackSpec
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum, fmtPerm } from '$lib/utils/formatters';
+	import { buildMobilityPoints, MOBILITY_RANGE } from '$lib/utils/mobility';
 
 	let plotContainer = $state<HTMLDivElement | null>(null);
 	let PlotlyLib: any = $state(null);
@@ -62,6 +63,7 @@
 	let showDtc = $state(true);
 	let showSpectralGr = $state(true);
 	let showEnvCorrections = $state(true);
+	let showMobility = $state(true);
 	let showTopLabels = $state(true);
 	let showInspectionLine = $state(false);
 	let isPointerOverPlot = $state(false);
@@ -161,6 +163,9 @@
 	});
 
 	let tsOverlayActive = $derived(workbench.tsParams.enabled && showTsOverlay && hasTsComputed);
+	let mobilityData = $derived.by(() =>
+		buildMobilityPoints(wellData.pressureTests, (depth) => wellData.isDepthInActiveFilter(depth))
+	);
 
 	// Interactive dragging state for Formation Tops & Fluid Contacts
 	let draggingMarker = $state<{
@@ -1948,6 +1953,26 @@
 				hovertemplate: 'Core Perm: %{x:.2f} mD (%{customdata[1]})<extra></extra>'
 			});
 		}
+		if (showMobility && mobilityData.points.length > 0) {
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: 'FPT mobility',
+				x: mobilityData.points.map((point) => point.mobility),
+				y: mobilityData.points.map((point) => point.depth),
+				customdata: mobilityData.points.map((point) => point.details),
+				xaxis: 'x8',
+				yaxis: 'y',
+				marker: {
+					color: '#DB2777',
+					size: 8,
+					symbol: 'triangle-up',
+					line: { color: '#FFFFFF', width: 0.9 }
+				},
+				hovertemplate:
+					'FPT mobility: %{x:.4g} mD/cP<br>Depth: %{y:.2f} m%{customdata}<extra></extra>'
+			});
+		}
 
 		// Track 6 (xaxis6): Discrete Rock Type (ROCK_FLAG) small track between PERM and SW
 		// Emulates ROCK_FLAG from well_log_config.py (one-hot color-filled bands + ROCK_FLAG_0 warm background)
@@ -2439,6 +2464,14 @@
 				domain: [0.854, 1.0],
 				range: [1, 0],
 				dtick: 0.25
+			},
+			xaxis8: {
+				...axisCommon,
+				overlaying: 'x5',
+				anchor: 'y',
+				type: 'log',
+				range: MOBILITY_RANGE.map(Math.log10),
+				showgrid: false
 			}
 		};
 
@@ -2572,6 +2605,8 @@
 			showDtc,
 			showSpectralGr,
 			showEnvCorrections,
+			showMobility,
+			mobilityData,
 			showTopLabels,
 			tsOverlayActive,
 			workbench.lithoParams.enableHcCorrection,
@@ -3057,6 +3092,25 @@
 		</div>
 
 		<div class="flex shrink-0 items-center gap-2">
+			{#if mobilityData.points.length > 0 || mobilityData.outsideRange > 0}
+				<label
+					class="flex cursor-pointer items-center gap-1 text-[11px] text-[var(--text-secondary)]"
+					title="Show or hide formation pressure test mobility on Track 5"
+				>
+					<input
+						type="checkbox"
+						bind:checked={showMobility}
+						class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-pink-600 focus:ring-0"
+					/>
+					<span class="font-medium text-pink-700">FPT mobility</span>
+				</label>
+				{#if showMobility && mobilityData.outsideRange > 0}
+					<span
+						class="text-[10px] font-medium text-pink-700"
+						title="Positive mobility values outside 0.01–10,000 mD/cP in the active depth filter are not shown."
+					>{mobilityData.outsideRange} mobility off-scale</span>
+				{/if}
+			{/if}
 			{#if workbench.tsParams.enabled && hasTsComputed}
 				<label
 					class="flex cursor-pointer items-center gap-1 rounded-xs border border-teal-200 bg-teal-50/70 px-1.5 py-0.5 text-[10.5px] font-medium text-teal-900"
@@ -3563,6 +3617,16 @@
 					</span>
 					<span>10k</span>
 				</div>
+				{#if showMobility && (mobilityData.points.length > 0 || mobilityData.outsideRange > 0)}
+					<div
+						class="flex items-center justify-between text-[8px] font-semibold whitespace-nowrap text-pink-700"
+						title="Separate mobility scale; equal positions do not imply equal permeability. {mobilityData.outsideRange} valid mobility point(s) outside 0.01–10,000 mD/cP in the active depth filter."
+					>
+						<span>0.01</span>
+						<span>▲ MOBILITY (mD/cP)</span>
+						<span>10k</span>
+					</div>
+				{/if}
 				<div class="flex flex-col">
 					<div
 						class="mono-num relative h-3 w-full text-[7.5px] font-medium text-slate-500"
