@@ -8,6 +8,7 @@ export type CrossplotId =
 	| 'sw-comparison'
 	| 'bqv'
 	| 'histogram'
+	| 'curve-depth'
 	| 'mw-distribution'
 	| 'swirr-fit'
 	| 'shf'
@@ -37,6 +38,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 		id: 'histogram',
 		label: 'Single-Well Histogram',
 		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'], autoFor: ['qaqc'] }
+	},
+	{
+		id: 'curve-depth',
+		label: 'Curve Editor · Log vs Depth',
+		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'] }
 	},
 	{
 		id: 'nphi-rhob',

@@ -129,6 +129,13 @@ flowchart TD
   Environmental-correction outputs are preview curves; downstream calculations continue to use
   their configured raw or hydrocarbon-corrected inputs until explicitly selected.
 
+* **Curve editing and splicing:** In Curve Editor & Management, select **View log vs depth in
+  right pane** to compare the selected curve with its original backup or edit source. In splice
+  mode the selected runs are shown alongside the applied splice result; apply the splice to
+  update the result. The plot follows the active depth and zone filters and preserves gaps.
+  Use the plot selector to return to the histogram or another view. Log-versus-depth plots lock
+  the horizontal scale; the mouse wheel zooms depth, while selection tools remain available.
+
 ---
 
 ### Step 2: Tops & Ancillary Data (`InspectorAncillary`) {#sw-step-2-ancillary}

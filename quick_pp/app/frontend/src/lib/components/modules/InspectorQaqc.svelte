@@ -7,6 +7,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { postJson } from '$lib/api/client';
+	import ImputationControls from '$lib/components/modules/ImputationControls.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
@@ -55,6 +56,11 @@
 	let spliceInterpGaps = $state<boolean>(false);
 	let spliceMaxGapM = $state<number>(2.0);
 	let spliceTargetName = $state<string>('');
+
+	$effect(() => {
+		workbench.qaqcEditorMode = editorMode;
+		workbench.qaqcSpliceRuns = [...spliceRuns];
+	});
 
 	// Curve Management (Duplicate / Rename / Delete) state
 	let duplicateTargetName = $state<string>('');
@@ -314,7 +320,7 @@
 			wellData.lastError = 'Please select at least 2 distinct curves to splice.';
 			return;
 		}
-		const target = (spliceTargetName.trim() || validCols[0]).toUpperCase();
+		const target = (spliceTargetName.trim() || validCols[0]).toUpperCase().replace(/\s+/g, '_');
 		try {
 			await wellData.spliceCurves({
 				sourceCurves: validCols,
@@ -326,6 +332,14 @@
 				maxGapMeters: spliceMaxGapM,
 				persist
 			});
+			workbench.qaqcEditComparison = {
+				projectId: workbench.projectId,
+				wellId: workbench.wellId,
+				wellLoadGeneration: wellData.wellLoadGeneration,
+				target,
+				sources: [...validCols],
+				kind: 'splice'
+			};
 			const st = wellData.stats[target];
 			editStatusMsg = persist
 				? `Saved spliced curve ${target} (${st?.top ?? '—'}–${st?.bottom ?? '—'} m) ✓`
@@ -415,6 +429,14 @@
 				scope: editScope,
 				persist
 			});
+			workbench.qaqcEditComparison = {
+				projectId: workbench.projectId,
+				wellId: workbench.wellId,
+				wellLoadGeneration: wellData.wellLoadGeneration,
+				target,
+				sources: [src],
+				kind: 'math'
+			};
 			const hasOri = target === src && !src.endsWith('_ORI');
 			editStatusMsg = persist
 				? hasOri
@@ -800,6 +822,7 @@
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
 		<SavedParamsIndicator modules={['qaqc-badhole', 'qaqc-env']} />
+		<ImputationControls />
 		<ParameterSection
 			title="Well Header & Metadata"
 			badge={wellData.header?.uwi ? `UWI: ${wellData.header.uwi}` : (workbench.wellId ?? '')}
@@ -1443,6 +1466,16 @@
 			title="Curve Editor & Management"
 			badge={workbench.selectedQaqcCurve || 'Select Curve'}
 		>
+			<button
+				type="button"
+				onclick={() => {
+					workbench.crossplotTemplateOverride = 'curve-depth';
+					if (workbench.rightPaneTab === 'grid') workbench.rightPaneTab = 'split';
+				}}
+				class="h-6 w-full rounded-sm border border-blue-200 bg-blue-50 text-[10px] font-semibold text-blue-700 hover:bg-blue-100"
+			>
+				View log vs depth in right pane
+			</button>
 			<!-- Target Curve Picker + Revert Button -->
 			<div class="flex items-center gap-1.5">
 				<span class="shrink-0 text-[11px] font-medium text-[var(--text-secondary)]">Curve:</span>

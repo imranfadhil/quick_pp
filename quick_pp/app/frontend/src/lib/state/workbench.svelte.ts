@@ -570,13 +570,14 @@ class WorkbenchState {
 	targetScrollDepth = $state<number | null>(null);
 
 	// Right pane view mode
-	rightPaneTab = $state<'crossplot' | 'grid' | 'split'>('split');
+	rightPaneTab = $state<'crossplot' | 'grid' | 'split' | 'missing'>('split');
+	missingMatrixRevision = $state(0);
 	/** Sub-tab within the right bottom data dock: 'data' (Step Data / QC) or 'params' (Parameters & Fits). */
 	rightGridSubTab = $state<'data' | 'params'>('data');
 
 	openParametersTab() {
 		this.rightGridSubTab = 'params';
-		if (this.rightPaneTab === 'crossplot') {
+		if (this.rightPaneTab === 'crossplot' || this.rightPaneTab === 'missing') {
 			this.rightPaneTab = 'split';
 		}
 	}
@@ -594,6 +595,16 @@ class WorkbenchState {
 
 	// Active curve selected in QAQC for histogram / multi-well distribution inspection
 	selectedQaqcCurve = $state<string>('GR');
+	qaqcEditorMode = $state<'math' | 'splice' | 'manage'>('math');
+	qaqcSpliceRuns = $state<string[]>([]);
+	qaqcEditComparison = $state<{
+		projectId: string | null;
+		wellId: string | null;
+		wellLoadGeneration: number;
+		target: string;
+		sources: string[];
+		kind: 'math' | 'splice';
+	} | null>(null);
 	scalSubMode = $state<'static' | 'relperm'>('static');
 	swirrCrossplotTab = $state<'swirr-corr' | 'pc-qc' | 'scal-fit' | 'relperm'>('swirr-corr');
 	coreQcView = $state<'dual' | 'poro' | 'perm' | 'depth-error'>('dual');

@@ -5,12 +5,14 @@
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import {
+		getCurveUnit,
 		getRockTypeColor,
 		LITHOLOGY_TRACK_SPECS,
 		PETRO_COLORS
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 	import { crossplotGroups, crossplotLabel, resolveCrossplot } from '$lib/utils/crossplots';
+	import { curveDepthSeries } from '$lib/utils/curveDepth';
 	import {
 		estimateBqvReferenceRw,
 		fillMissingCurve,
@@ -53,7 +55,11 @@
 					(Array.isArray(trace.x) ? trace.x.length > 0 : Array.isArray(trace.y) && trace.y.length > 0)
 			);
 		switch (mode) {
-			case 'histogram':
+		case 'curve-depth':
+			return traces.some((trace) => trace.x?.some((value: number | null) => value !== null))
+				? null
+				: 'No curve values in the current depth and zone selection.';
+		case 'histogram':
 				return hasTrace(() => true) ? null : 'No values for the selected curve. Select a populated curve or adjust the depth and zone filters.';
 			case 'mw-distribution':
 				return projectData.multiWellQaqcResult?.plot_data?.well_names?.length
@@ -256,6 +262,52 @@
 				titlefont: { family: 'Inter', size: 11, color: '#0F172A' }
 			}
 		};
+
+		if (effectiveMode === 'curve-depth') {
+			const selected = workbench.selectedQaqcCurve;
+			const comparison = workbench.qaqcEditComparison;
+			const currentComparison =
+				comparison?.projectId === workbench.projectId &&
+				comparison?.wellId === workbench.wellId &&
+				comparison?.wellLoadGeneration === wellData.wellLoadGeneration
+					? comparison
+					: null;
+			const series = curveDepthSeries(
+				wellData.curves,
+				deptAll,
+				indices,
+				selected,
+				workbench.qaqcEditorMode,
+				workbench.qaqcSpliceRuns,
+				currentComparison
+			);
+			const colors = ['#64748B', '#D97706', '#0D9488', '#9333EA', '#EA580C'];
+			series.forEach((item, index) => {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: item.name,
+					x: item.x,
+					y: item.y,
+					customdata: item.customdata,
+					connectgaps: false,
+					line: {
+						color: item.role === 'result' ? '#2563EB' : colors[index % colors.length],
+						width: item.role === 'result' ? 2 : 1.3,
+						dash: item.role === 'result' ? 'solid' : 'dash'
+					},
+					hovertemplate: `${item.name}<br>Value: %{x:.4g}<br>Depth: %{y:.2f} m<extra></extra>`
+				});
+			});
+			const unit = getCurveUnit(selected);
+			baseLayout.xaxis.title = { text: unit ? `Curve value (${unit})` : 'Curve value' };
+			baseLayout.xaxis.fixedrange = true;
+			baseLayout.yaxis.autorange = 'reversed';
+			baseLayout.yaxis.title = { text: 'Depth (m)' };
+			baseLayout.dragmode = 'zoom';
+			baseLayout.uirevision = `curve-depth-${workbench.projectId}-${workbench.wellId}-${selected}`;
+			return { traces, layout: baseLayout };
+		}
 
 		if (effectiveMode === 'histogram') {
 			const curveName = workbench.selectedQaqcCurve || 'GR';
@@ -2135,6 +2187,7 @@
 			baseLayout.xaxis.title = { text: `${vshKey} (v/v)` };
 			baseLayout.xaxis.range = [0, 1];
 			baseLayout.xaxis.anchor = 'y';
+			baseLayout.xaxis.fixedrange = true;
 			baseLayout.xaxis2 = {
 				...baseLayout.xaxis,
 				domain: [0.34, 1],
@@ -4552,6 +4605,15 @@
 			void wellData.curves[cName];
 			void wellData.curves[`${cName}_ORI`];
 			void wellData.stats[cName];
+		} else if (mode === 'curve-depth') {
+			void wellData.curves;
+			void workbench.selectedQaqcCurve;
+			void workbench.qaqcEditorMode;
+			void workbench.qaqcSpliceRuns;
+			void workbench.qaqcEditComparison;
+			void workbench.projectId;
+			void workbench.wellId;
+			void wellData.wellLoadGeneration;
 		} else if (mode === 'sw-comparison') {
 			void wellData.curves['DEPT'];
 			void wellData.curves['DEPTH'];
@@ -4692,6 +4754,12 @@
 			});
 			emptyPlotMessage = untrack(() => getEmptyPlotMessage(mode, traces));
 			layout.autosize = true;
+			const depthPlot = mode === 'curve-depth' || mode === 'sw-comparison' ||
+				(mode === 'core-qc' && workbench.coreQcView !== 'dual') ||
+				(mode === 'vsh-qc' && workbench.vshQcView !== 'gr-fit');
+			if (depthPlot && !layout.uirevision) {
+				layout.uirevision = `${mode}-${workbench.projectId}-${workbench.wellId}-${workbench.coreQcView}-${workbench.vshQcView}`;
+			}
 			const visibleLegendTraces = traces.filter(
 				(t: any) => t.showlegend !== false && t.name
 			).length;
@@ -4709,6 +4777,7 @@
 				PlotlyLib.react(plotEl, traces, layout, {
 					responsive: true,
 					displaylogo: false,
+					scrollZoom: depthPlot,
 					modeBarButtonsToAdd: ['lasso2d', 'select2d']
 				})
 			).then(() => {

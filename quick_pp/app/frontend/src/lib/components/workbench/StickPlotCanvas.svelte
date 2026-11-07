@@ -1166,6 +1166,7 @@
 			PlotlyLib.react(plotContainer, traces, layout, {
 				responsive: true,
 				displaylogo: false,
+				scrollZoom: true,
 				modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d']
 			})
 		).then(() => {
