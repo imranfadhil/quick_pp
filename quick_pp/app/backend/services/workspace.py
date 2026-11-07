@@ -7574,6 +7574,23 @@ class WorkspaceMultiWellConditioningRequest(BaseModel):
     save: bool = Field(False)
 
 
+class WorkspaceImputationRequest(BaseModel):
+    well_names: Optional[List[str]] = None
+    zones: Optional[List[str]] = None
+    min_depth: Optional[float] = None
+    max_depth: Optional[float] = None
+    curves: List[str] = Field(..., min_length=1)
+    method: Literal["mean", "median", "most_frequent", "ffill", "bfill", "knn", "iterative"]
+    neighbors: int = Field(5, ge=1, le=100)
+
+
+class WorkspaceMissingMatrixRequest(BaseModel):
+    well_name: str
+    zones: Optional[List[str]] = None
+    min_depth: Optional[float] = None
+    max_depth: Optional[float] = None
+
+
 STANDARD_ALIAS_MAP: Dict[str, List[str]] = {
     "GR": ["GR_EDTC", "SGR", "CGR", "GAMMA", "GRC", "GR_RAW", "GRD"],
     "RT": ["ILD", "LLD", "RDEP", "RT_HRLT", "RESD", "RLLD", "RTRUE", "RD", "AT90", "HDRS"],
@@ -7667,6 +7684,134 @@ def _load_multi_well_dfs(
             dfs.append(wdf)
 
     return dfs
+
+
+@router.post("/qaqc/missing_matrix")
+def workspace_missing_matrix(
+    project_id: int, req: WorkspaceMissingMatrixRequest
+) -> Dict[str, Any]:
+    """Return depth-binned missing fractions for the selected well."""
+    try:
+        dfs = _load_multi_well_dfs(
+            project_id, [req.well_name], req.min_depth, req.max_depth, req.zones
+        )
+        if not dfs:
+            raise ValueError("No samples in the selected well and filters.")
+        df = dfs[0]
+        depth = pd.to_numeric(df["DEPTH"], errors="coerce")
+        valid = np.isfinite(depth)
+        if not valid.any():
+            raise ValueError("The selected well has no valid depths.")
+        df = df.loc[valid]
+        depth = depth.loc[valid]
+        columns = [
+            c for c in df.columns
+            if c not in {"DEPTH", "DEPT", "WELL_NAME", "ZONES"}
+            and pd.to_numeric(df[c], errors="coerce")[df[c].notna()].notna().all()
+        ]
+        if not columns:
+            raise ValueError("No numeric curves are available for this well.")
+        low, high = float(depth.min()), float(depth.max())
+        count = min(300, len(df))
+        if low == high:
+            bins = np.zeros(len(df), dtype=int)
+            count = 1
+        else:
+            bins = np.minimum(((high - depth.to_numpy()) / (high - low) * count).astype(int), count - 1)
+        samples = np.bincount(bins, minlength=count)
+        matrix = []
+        for column in columns:
+            values = pd.to_numeric(df[column], errors="coerce").to_numpy(dtype=float)
+            missing = np.bincount(bins, weights=(~np.isfinite(values)).astype(int), minlength=count)
+            matrix.append([float(missing[i] / samples[i]) if samples[i] else None for i in range(count)])
+        return {"well_name": req.well_name, "curves": columns, "matrix": matrix,
+                "min_depth": low, "max_depth": high, "samples": samples.tolist()}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/qaqc/impute")
+def workspace_impute(project_id: int, req: WorkspaceImputationRequest) -> Dict[str, Any]:
+    """Impute selected curves using pooled wells and save separate _IMP curves."""
+    try:
+        curves = [c.strip().upper() for c in req.curves]
+        if any(not c or c in {"DEPTH", "DEPT", "WELL_NAME", "ZONES"} for c in curves):
+            raise ValueError("Select valid numeric log curves, not depth or metadata.")
+        if len(set(curves)) != len(curves):
+            raise ValueError("Each curve may only be selected once.")
+        dfs = _load_multi_well_dfs(
+            project_id, req.well_names, req.min_depth, req.max_depth, req.zones
+        )
+        if not dfs:
+            raise ValueError("No samples in the selected wells and filters.")
+        for df in dfs:
+            if "DEPTH" not in df or not np.isfinite(pd.to_numeric(df["DEPTH"], errors="coerce")).all():
+                raise ValueError(f"Invalid depth values in {df['WELL_NAME'].iloc[0]}.")
+            for curve in curves:
+                if f"{curve}_IMP" in df.columns:
+                    raise ValueError(f"{curve}_IMP already exists in {df['WELL_NAME'].iloc[0]}; rename or delete it before running.")
+                if curve in df and not pd.to_numeric(df[curve], errors="coerce")[df[curve].notna()].notna().all():
+                    raise ValueError(f"{curve} is not a numeric curve.")
+
+        frames = [
+            pd.DataFrame({c: pd.to_numeric(df[c], errors="coerce") if c in df else np.nan for c in curves}, index=df.index)
+            .replace([np.inf, -np.inf], np.nan).reset_index(drop=True)
+            for df in dfs
+        ]
+        pooled = pd.concat(frames, ignore_index=True)
+        empty = [c for c in curves if pooled[c].notna().sum() == 0]
+        if empty:
+            raise ValueError(f"No observed values for: {', '.join(empty)}.")
+        if req.method in {"knn", "iterative"} and len(curves) < 2:
+            raise ValueError("Multivariate imputation requires at least two curves.")
+
+        if req.method in {"ffill", "bfill"}:
+            outputs = []
+            for df, frame in zip(dfs, frames, strict=True):
+                order = np.argsort(pd.to_numeric(df["DEPTH"], errors="coerce").to_numpy(), kind="stable")
+                ordered = frame.iloc[order]
+                filled = ordered.ffill() if req.method == "ffill" else ordered.bfill()
+                outputs.append(filled.iloc[np.argsort(order)].reset_index(drop=True))
+        else:
+            if req.method == "knn":
+                from sklearn.impute import KNNImputer
+                from sklearn.preprocessing import StandardScaler
+
+                imputer = KNNImputer(n_neighbors=req.neighbors)
+                scaler = StandardScaler()
+            elif req.method == "iterative":
+                from sklearn.experimental import enable_iterative_imputer  # noqa: F401
+                from sklearn.impute import IterativeImputer
+
+                imputer = IterativeImputer(random_state=0)
+            else:
+                from sklearn.impute import SimpleImputer
+
+                imputer = SimpleImputer(strategy=req.method)
+            if req.method == "knn":
+                filled_values = scaler.inverse_transform(imputer.fit_transform(scaler.fit_transform(pooled)))
+            else:
+                filled_values = imputer.fit_transform(pooled)
+            filled = pooled.combine_first(pd.DataFrame(filled_values, columns=curves))
+            outputs = []
+            start = 0
+            for frame in frames:
+                outputs.append(filled.iloc[start:start + len(frame)].reset_index(drop=True))
+                start += len(frame)
+
+        summaries = []
+        for df, before, after in zip(dfs, frames, outputs, strict=True):
+            wn = str(df["WELL_NAME"].iloc[0])
+            out = pd.DataFrame({"DEPTH": df["DEPTH"].to_numpy()})
+            for curve in curves:
+                out[f"{curve}_IMP"] = after[curve].to_numpy()
+                summaries.append({"well_name": wn, "curve": curve,
+                                  "filled": int((before[curve].isna() & after[curve].notna()).sum()),
+                                  "remaining": int(after[curve].isna().sum())})
+            _save_curves_to_well(project_id, wn, out)
+        return {"saved": True, "summaries": summaries}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 class WorkspaceStickPlotRequest(BaseModel):

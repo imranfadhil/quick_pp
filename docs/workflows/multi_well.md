@@ -2,6 +2,8 @@
 
 The Multi-Well workspace harmonizes multi-vintage logging suites across the entire field, establishes consistent stratigraphic baselines, models core-calibrated Petrophysical Rock Types and permeability transforms, calculates field-wide Saturation-Height Functions ($\text{SHF}$), and runs Monte Carlo volumetric uncertainty.
 
+In Field QA/QC, **Missing Data Imputation** uses selected wells and the active depth and zone filters. Mean, median, most frequent, KNN, and iterative models fit pooled samples; KNN scales curves before computing distances. Forward/backward fill follows increasing depth independently within each well. Results are saved as separate `_IMP` curves, leaving original logs unchanged. Existing outputs must be renamed or deleted before re-running, and curves with no observed values across the selected wells cannot be imputed. The right-pane **Missing Matrix** displays one selected well at a time, with deeper depths at the top and colors showing the missing fraction in each depth bin.
+
 The workflow is structured into **7 Primary Sequential Steps** for end-to-end field evaluation, complemented by **4 Standalone Specialized Modules** (SCAL & Dynamic Relative Permeability, Formation Pressure & Contacts, Discrete Rock Type Classifier Trainer, and Conformal Physics-Informed ML Trainer).
 
 ---

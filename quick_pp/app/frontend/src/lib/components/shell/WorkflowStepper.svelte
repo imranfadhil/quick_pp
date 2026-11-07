@@ -724,6 +724,12 @@
 					{lbl}
 				</button>
 			{/each}
+			{#if (workbench.scope === 'single-well' && workbench.singleWellStep === 'qaqc') || (workbench.scope === 'multi-well' && workbench.multiWellStep === 'qaqc')}
+				<button type="button" onclick={() => (workbench.rightPaneTab = 'missing')}
+					class="h-5 shrink-0 whitespace-nowrap rounded-xs px-1.5 font-medium {workbench.rightPaneTab === 'missing' ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-2xs' : 'text-[var(--text-muted)]'}">
+					Missing Matrix
+				</button>
+			{/if}
 		</div>
 	</div>
 </nav>

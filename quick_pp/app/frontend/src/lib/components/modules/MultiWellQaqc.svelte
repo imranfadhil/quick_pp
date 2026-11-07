@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { postJson } from '$lib/api/client';
+	import ImputationControls from '$lib/components/modules/ImputationControls.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
@@ -377,6 +378,7 @@
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
 		<SavedParamsIndicator modules={['mw-qaqc']} />
+		<ImputationControls />
 		<!-- 1. Multi-Well Curve Distributions & Grouping -->
 		<ParameterSection
 			title="Multi-Well Curve Distributions"

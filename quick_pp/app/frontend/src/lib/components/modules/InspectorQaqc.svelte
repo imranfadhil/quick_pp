@@ -822,7 +822,6 @@
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
 		<SavedParamsIndicator modules={['qaqc-badhole', 'qaqc-env']} />
-		<ImputationControls />
 		<ParameterSection
 			title="Well Header & Metadata"
 			badge={wellData.header?.uwi ? `UWI: ${wellData.header.uwi}` : (workbench.wellId ?? '')}
@@ -2132,6 +2131,8 @@
 				</div>
 			{/if}
 		</ParameterSection>
+
+		<ImputationControls />
 
 		<ParameterSection
 			title="Badhole Flagging"

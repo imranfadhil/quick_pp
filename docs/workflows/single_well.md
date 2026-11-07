@@ -2,6 +2,8 @@
 
 The Single-Well space delivers deterministic, optimization-driven, and core-calibrated formation evaluation along a single wellbore trajectory. It is structured into **7 Primary Sequential Workflow Steps** culminating in a Computer Processed Interpretation (CPI) report, accompanied by a **Standalone Core & Pc Prep Lab Module**.
 
+In Data & QAQC, **Missing Data Imputation** saves selected logs as new `_IMP` curves without changing the source logs. Choose mean, median, most frequent, forward/backward fill, KNN, or iterative imputation; multivariate methods require at least two curves. Directional fills follow increasing depth within the well and may leave end gaps unfilled. Active depth and zone filters apply; existing `_IMP` curves must be renamed or deleted before re-running. The right-pane **Missing Matrix** shows binned missing fractions by curve, with deeper depths at the top and grey bins indicating no samples.
+
 ---
 
 ## 1. Workflow Architecture (Level 1 & Level 2) {#sw-level-1-2-diagrams}

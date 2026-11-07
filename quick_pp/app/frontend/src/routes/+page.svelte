@@ -7,6 +7,7 @@
 	import LogTrackCanvas from '$lib/components/workbench/LogTrackCanvas.svelte';
 	import StickPlotCanvas from '$lib/components/workbench/StickPlotCanvas.svelte';
 	import CrossplotCanvas from '$lib/components/workbench/CrossplotCanvas.svelte';
+	import MissingDataMatrix from '$lib/components/workbench/MissingDataMatrix.svelte';
 	import CompactDataGrid, {
 		type GridColumn
 	} from '$lib/components/workbench/CompactDataGrid.svelte';
@@ -983,6 +984,8 @@
 			<Pane defaultSize={30} minSize={20} class="h-full overflow-hidden">
 				{#if isVolumetricsMode}
 					<VolumetricsRightPanel />
+				{:else if workbench.rightPaneTab === 'missing'}
+					<MissingDataMatrix />
 				{:else if workbench.rightPaneTab === 'crossplot'}
 					{#if isFptMode}
 						<FptPlotCanvas initialMode="excess" />

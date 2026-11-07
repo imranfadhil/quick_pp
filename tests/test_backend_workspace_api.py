@@ -123,6 +123,42 @@ def test_project_summary_endpoint(client_and_project):
     assert well_a["core_availability_pct"] == 50.0
 
 
+def test_imputation_persists_new_curve_and_matrix(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    monkeypatch.setattr(ws_service, "is_demo_mode", lambda: False)
+    endpoint = f"/quick_pp/workspace/projects/{pid}/qaqc"
+    matrix = client.post(f"{endpoint}/missing_matrix", json={"well_name": "Well-A"})
+    assert matrix.status_code == 200, matrix.text
+    matrix_data = matrix.json()
+    assert matrix_data["matrix"][matrix_data["curves"].index("CPORE")] == [1, 0] * 5
+    response = client.post(f"{endpoint}/impute", json={
+        "well_names": ["Well-A"], "curves": ["CPORE"], "method": "mean"
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["summaries"][0]["filled"] == 5
+    db_service.invalidate_well_cache()
+    merged = db_service._get_merged_dataframe_sync(pid, "Well-A")
+    assert merged["CPORE"].isna().sum() == 5
+    assert merged["CPORE_IMP"].notna().sum() == 10
+    assert merged.loc[merged["CPORE"].isna(), "CPORE_IMP"].tolist() == pytest.approx([0.172] * 5)
+
+
+def test_imputation_persists_only_filtered_depths(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    monkeypatch.setattr(ws_service, "is_demo_mode", lambda: False)
+    endpoint = f"/quick_pp/workspace/projects/{pid}/qaqc/impute"
+    response = client.post(endpoint, json={
+        "well_names": ["Well-A"], "curves": ["CPORE"], "method": "mean",
+        "min_depth": 1002, "max_depth": 1006,
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["summaries"][0]["filled"] == 2
+    db_service.invalidate_well_cache()
+    merged = db_service._get_merged_dataframe_sync(pid, "Well-A")
+    assert merged.loc[~merged["DEPTH"].between(1002, 1006), "CPORE_IMP"].isna().all()
+    assert merged.loc[merged["DEPTH"].between(1002, 1006), "CPORE_IMP"].notna().all()
+
+
 def test_merged_well_data_columnar_and_cache(client_and_project):
     client, pid = client_and_project
     # Columnar request
