@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildMobilityPoints, MOBILITY_RANGE } from '../src/lib/utils/mobility.ts';
+import {
+	buildMobilityPoints,
+	buildMobilityTrace,
+	MOBILITY_RANGE,
+	PERMEABILITY_TRACK_RANGE
+} from '../src/lib/utils/mobility.ts';
 
 test('preserves discrete values, depths, metadata and duplicate tests', () => {
 	const result = buildMobilityPoints(
@@ -57,4 +62,23 @@ test('escapes user-supplied hover text and omits blank metadata', () => {
 		result.points[0].details,
 		'<br>Remarks: &lt;tag&gt; &amp; &quot;quotes&quot; &#39;test&#39;'
 	);
+});
+
+test('mobility markers use the existing permeability track geometry and retain raw hover values', () => {
+	const points = [
+		{ depth: 1000, mobility: MOBILITY_RANGE[0], details: '<br>QC: VALID' },
+		{ depth: 1001, mobility: 10, details: '' },
+		{ depth: 1002, mobility: MOBILITY_RANGE[1], details: '' }
+	];
+	const trace = buildMobilityTrace(points);
+	assert.equal(trace.xaxis, 'x5');
+	assert.equal(trace.yaxis, 'y');
+	assert.deepEqual(trace.x, [PERMEABILITY_TRACK_RANGE[0], 10, PERMEABILITY_TRACK_RANGE[1]]);
+	assert.deepEqual(trace.y, [1000, 1001, 1002]);
+	assert.deepEqual(trace.customdata, [
+		[0.01, '<br>QC: VALID'],
+		[10, ''],
+		[10000, '']
+	]);
+	assert.match(trace.hovertemplate, /customdata\[0\].*mD\/cP/);
 });

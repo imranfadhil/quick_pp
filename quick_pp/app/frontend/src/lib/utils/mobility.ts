@@ -1,4 +1,5 @@
 export const MOBILITY_RANGE = [0.01, 10000] as const;
+export const PERMEABILITY_TRACK_RANGE = [0.01, 10000] as const;
 
 export interface PressureTestMobility {
 	depth?: unknown;
@@ -12,6 +13,33 @@ export interface MobilityPoint {
 	depth: number;
 	mobility: number;
 	details: string;
+}
+
+export function buildMobilityTrace(points: readonly MobilityPoint[]) {
+	const [mobMin, mobMax] = MOBILITY_RANGE.map(Math.log10);
+	const [permMin, permMax] = PERMEABILITY_TRACK_RANGE.map(Math.log10);
+	return {
+		type: 'scatter',
+		mode: 'markers',
+		name: 'FPT mobility',
+		// Map between display scales only; this does not convert mobility to permeability.
+		x: points.map((point) => {
+			const fraction = (Math.log10(point.mobility) - mobMin) / (mobMax - mobMin);
+			return 10 ** (permMin + fraction * (permMax - permMin));
+		}),
+		y: points.map((point) => point.depth),
+		customdata: points.map((point) => [point.mobility, point.details]),
+		xaxis: 'x5',
+		yaxis: 'y',
+		marker: {
+			color: '#DB2777',
+			size: 8,
+			symbol: 'triangle-up',
+			line: { color: '#FFFFFF', width: 0.9 }
+		},
+		hovertemplate:
+			'FPT mobility: %{customdata[0]:.4g} mD/cP<br>Depth: %{y:.2f} m%{customdata[1]}<extra></extra>'
+	};
 }
 
 function finiteNumber(value: unknown): number | null {

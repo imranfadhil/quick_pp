@@ -16,7 +16,11 @@
 		type LithologyTrackSpec
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum, fmtPerm } from '$lib/utils/formatters';
-	import { buildMobilityPoints, MOBILITY_RANGE } from '$lib/utils/mobility';
+	import {
+		buildMobilityPoints,
+		buildMobilityTrace,
+		PERMEABILITY_TRACK_RANGE
+	} from '$lib/utils/mobility';
 
 	let plotContainer = $state<HTMLDivElement | null>(null);
 	let PlotlyLib: any = $state(null);
@@ -1954,24 +1958,7 @@
 			});
 		}
 		if (showMobility && mobilityData.points.length > 0) {
-			traces.push({
-				type: 'scatter',
-				mode: 'markers',
-				name: 'FPT mobility',
-				x: mobilityData.points.map((point) => point.mobility),
-				y: mobilityData.points.map((point) => point.depth),
-				customdata: mobilityData.points.map((point) => point.details),
-				xaxis: 'x8',
-				yaxis: 'y',
-				marker: {
-					color: '#DB2777',
-					size: 8,
-					symbol: 'triangle-up',
-					line: { color: '#FFFFFF', width: 0.9 }
-				},
-				hovertemplate:
-					'FPT mobility: %{x:.4g} mD/cP<br>Depth: %{y:.2f} m%{customdata}<extra></extra>'
-			});
+			traces.push(buildMobilityTrace(mobilityData.points));
 		}
 
 		// Track 6 (xaxis6): Discrete Rock Type (ROCK_FLAG) small track between PERM and SW
@@ -2441,7 +2428,7 @@
 				...axisCommon,
 				domain: [0.624, 0.77],
 				type: 'log',
-				range: [Math.log10(0.01), Math.log10(10000)],
+				range: PERMEABILITY_TRACK_RANGE.map(Math.log10),
 				dtick: 1,
 				gridcolor: '#CBD5E1',
 				gridwidth: 1.2,
@@ -2464,14 +2451,6 @@
 				domain: [0.854, 1.0],
 				range: [1, 0],
 				dtick: 0.25
-			},
-			xaxis8: {
-				...axisCommon,
-				overlaying: 'x5',
-				anchor: 'y',
-				type: 'log',
-				range: MOBILITY_RANGE.map(Math.log10),
-				showgrid: false
 			}
 		};
 
