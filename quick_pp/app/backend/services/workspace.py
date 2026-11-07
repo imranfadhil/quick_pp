@@ -8158,36 +8158,21 @@ def workspace_stick_plot(
 
                 contact_items: List[Dict[str, Any]] = []
                 contact_dict_tvd: Dict[str, float] = {}
+                ancillary_mds: List[float] = []
                 for c in contacts_list:
                     c_depth = c.get("depth")
                     if c_depth is None or pd.isna(c_depth):
                         continue
                     c_md = float(c_depth)
                     c_name = str(c.get("name") or c.get("type") or "OWC").strip().upper()
-                    c_tvd = float(
-                        _resolve_well_tvd_array(
-                            np.array([c_md], dtype=float), full_well_ref_df, surveys_df
-                        )[0]
-                    )
                     contact_items.append(
                         {
                             "type": c_name,
                             "name": c_name,
                             "depth": round(c_md, 2),
-                            "tvd": round(c_tvd, 2),
                         }
                     )
-                    contact_dict_tvd[c_name] = round(c_tvd, 2)
-
-                # Also compute legacy update_fluid_contacts FLUID_FLAG on wdf_sorted using TVDSS contacts
-                wdf_sorted["PHIT"] = phit_s
-                wdf_sorted["SWT"] = swt_s
-                wdf_sorted["BVO"] = bvo_s
-                wdf_sorted["BVOH"] = bvoh_s
-                try:
-                    wdf_sorted = update_fluid_contacts(wdf_sorted, contact_dict_tvd)
-                except Exception:
-                    wdf_sorted["FLUID_FLAG"] = -1
+                    ancillary_mds.append(c_md)
 
                 # Extract formation tops & map MD -> TVDSS
                 tops_raw = anc.get("formation_tops")
@@ -8209,20 +8194,14 @@ def workspace_stick_plot(
                     t_name = str(t.get("name") or "").strip()
                     if not t_name:
                         continue
-                    t_tvd = float(
-                        _resolve_well_tvd_array(
-                            np.array([t_md], dtype=float), full_well_ref_df, surveys_df
-                        )[0]
-                    )
                     top_items.append(
                         {
                             "name": t_name,
                             "depth": round(t_md, 2),
-                            "tvd": round(t_tvd, 2),
                         }
                     )
+                    ancillary_mds.append(t_md)
                     all_zones_set.add(t_name)
-                top_items.sort(key=lambda x: x["tvd"])
 
                 # Extract perforations & map top/bottom MD -> TVDSS
                 perfs_raw = anc.get("perforations")
@@ -8236,6 +8215,7 @@ def workspace_stick_plot(
                     perfs_list = []
 
                 perf_items: List[Dict[str, Any]] = []
+                perf_md_pairs: List[Tuple[float, float]] = []
                 for p_idx, p in enumerate(perfs_list):
                     p_top = p.get("top")
                     p_bot = p.get("bottom", p_top)
@@ -8247,24 +8227,48 @@ def workspace_stick_plot(
                         t_md, b_md = b_md, t_md
                     p_name = str(p.get("name") or f"Perf-{p_idx + 1}").strip()
                     p_desc = str(p.get("description") or "").strip()
-                    tvd_pair = _resolve_well_tvd_array(
-                        np.array([t_md, b_md], dtype=float), full_well_ref_df, surveys_df
-                    )
-                    t_tvd = float(tvd_pair[0]) if np.isfinite(tvd_pair[0]) else t_md
-                    b_tvd = float(tvd_pair[1]) if np.isfinite(tvd_pair[1]) else b_md
-                    if b_tvd < t_tvd:
-                        t_tvd, b_tvd = b_tvd, t_tvd
                     perf_items.append(
                         {
                             "name": p_name,
                             "top": round(t_md, 2),
                             "bottom": round(b_md, 2),
-                            "top_tvd": round(t_tvd, 2),
-                            "bottom_tvd": round(b_tvd, 2),
                             "description": p_desc,
                         }
                     )
+                    perf_md_pairs.append((t_md, b_md))
+                    ancillary_mds.extend((t_md, b_md))
+
+                ancillary_tvd = iter(
+                    _resolve_well_tvd_array(
+                        np.asarray(ancillary_mds, dtype=float), full_well_ref_df, surveys_df
+                    )
+                )
+                for item in contact_items:
+                    item["tvd"] = round(float(next(ancillary_tvd)), 2)
+                    contact_dict_tvd[item["name"]] = item["tvd"]
+                for item in top_items:
+                    item["tvd"] = round(float(next(ancillary_tvd)), 2)
+                top_items.sort(key=lambda x: x["tvd"])
+                for item, (t_md, b_md) in zip(perf_items, perf_md_pairs):
+                    t_tvd = next(ancillary_tvd)
+                    b_tvd = next(ancillary_tvd)
+                    t_tvd = float(t_tvd) if np.isfinite(t_tvd) else t_md
+                    b_tvd = float(b_tvd) if np.isfinite(b_tvd) else b_md
+                    if b_tvd < t_tvd:
+                        t_tvd, b_tvd = b_tvd, t_tvd
+                    item["top_tvd"] = round(t_tvd, 2)
+                    item["bottom_tvd"] = round(b_tvd, 2)
                 perf_items.sort(key=lambda x: (x["top_tvd"], x["bottom_tvd"]))
+
+                # Also compute legacy update_fluid_contacts FLUID_FLAG on wdf_sorted using TVDSS contacts
+                wdf_sorted["PHIT"] = phit_s
+                wdf_sorted["SWT"] = swt_s
+                wdf_sorted["BVO"] = bvo_s
+                wdf_sorted["BVOH"] = bvoh_s
+                try:
+                    wdf_sorted = update_fluid_contacts(wdf_sorted, contact_dict_tvd)
+                except Exception:
+                    wdf_sorted["FLUID_FLAG"] = -1
 
                 # Cumulative hydrocarbon pore volume column height (m) = integral of BVO over TVD
                 valid_bvo = bvo_s.notna() & pd.Series(tvd_full).notna()

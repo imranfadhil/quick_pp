@@ -863,6 +863,108 @@ def test_workspace_stick_plot(client_and_project):
     assert len(w["tops"]) == 2
 
 
+def test_stick_plot_batches_ancillary_depths_using_full_well(
+    client_and_project, monkeypatch
+):
+    client, pid = client_and_project
+    get_ancillary = Project.get_well_ancillary_data
+    get_merged = ws_service._get_merged_dataframe_sync
+    resolve_tvd = ws_service._resolve_well_tvd_array
+    resolved_depths = []
+
+    def nonlinear_tvd(project_id, well_name):
+        df = get_merged(project_id, well_name)
+        if not df.empty:
+            tvd = 1000 + (df["DEPTH"] - 1000) ** 2 * 0.1
+            df["TVD"] = tvd
+            df["TVDSS"] = tvd
+        return df
+
+    def ancillary_with_contacts_and_perfs(project, well_name):
+        anc = get_ancillary(project, well_name)
+        anc["fluid_contacts"] = [{"name": "OWC", "depth": 1003.5}]
+        anc["perforations"] = [
+            {"name": "P1", "top": 1008.0, "bottom": 1007.0},
+            {"name": "P2", "top": 999.0},
+        ]
+        return anc
+
+    def track_resolutions(md_values, well_df, surveys_df, df_elev=0.0):
+        resolved_depths.append(md_values.copy())
+        return resolve_tvd(md_values, well_df, surveys_df, df_elev)
+
+    monkeypatch.setattr(
+        Project, "get_well_ancillary_data", ancillary_with_contacts_and_perfs
+    )
+    monkeypatch.setattr(ws_service, "_get_merged_dataframe_sync", nonlinear_tvd)
+    monkeypatch.setattr(ws_service, "_resolve_well_tvd_array", track_resolutions)
+
+    res = client.post(
+        f"/quick_pp/workspace/projects/{pid}/stick_plot",
+        json={"min_depth": 1003, "max_depth": 1006},
+    )
+    assert res.status_code == 200, res.text
+    well = res.json()["wells"][0]
+    assert well["contacts"] == [
+        {"name": "OWC", "type": "OWC", "depth": 1003.5, "tvd": 1001.25}
+    ]
+    assert well["tops"] == [
+        {"name": "Zone-1", "depth": 1000.0, "tvd": 1000.0},
+        {"name": "Zone-2", "depth": 1005.0, "tvd": 1002.5},
+    ]
+    assert well["perforations"] == [
+        {
+            "name": "P2",
+            "top": 999.0,
+            "bottom": 999.0,
+            "top_tvd": 999.5,
+            "bottom_tvd": 999.5,
+            "description": "",
+        },
+        {
+            "name": "P1",
+            "top": 1007.0,
+            "bottom": 1008.0,
+            "top_tvd": 1004.9,
+            "bottom_tvd": 1006.4,
+            "description": "",
+        },
+    ]
+    assert well["fluid_flag"] == [-1, 0, 0, 0]
+    assert len(resolved_depths) == 2
+    np.testing.assert_array_equal(
+        resolved_depths[1], [1003.5, 1000, 1005, 1007, 1008, 999, 999]
+    )
+
+
+@pytest.mark.parametrize(
+    ("well_df", "surveys"),
+    [
+        (pd.DataFrame({"DEPTH": [100, 200, 300], "TVDSS": [-90, -180, -260]}), None),
+        (
+            pd.DataFrame({"DEPTH": [100, 200, 300]}),
+            pd.DataFrame({"md": [100, 200, 300], "tvd": [90, 180, 260]}),
+        ),
+        (
+            pd.DataFrame({"DEPTH": [100, 200, 300]}),
+            pd.DataFrame(
+                {"md": [0, 200, 300], "inc": [5, 15, 30], "azim": [0, 10, 20]}
+            ),
+        ),
+    ],
+)
+def test_batched_tvd_resolution_matches_individual_depths(well_df, surveys):
+    depths = np.array([50.0, 150.0, 300.0, 350.0])
+    expected = np.concatenate(
+        [
+            ws_service._resolve_well_tvd_array(np.array([depth]), well_df, surveys)
+            for depth in depths
+        ]
+    )
+    actual = ws_service._resolve_well_tvd_array(depths, well_df, surveys)
+    np.testing.assert_allclose(actual, expected)
+
+
 def test_hc_correction_angle_and_den_correction_protects_hc_rows(client_and_project):
     client, pid = client_and_project
     base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
