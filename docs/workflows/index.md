@@ -64,6 +64,8 @@ flowchart TD
 
 The tables below define the 1-to-1 correspondence between the SvelteKit workbench UI (`WorkflowStepper.svelte`), backend modules, and technical documentation anchors.
 
+The right-pane crossplot selector shows only plots supported by the active single- or multi-well space. Plots relevant to the current step appear first; other plots are grouped by workflow step or standalone module. Auto follows the current step, or shows an empty state when that step has no recommended crossplot. A manual selection remains active across steps in the same space; switching spaces resets it to Auto if the plot is unavailable there. Relevant plots remain listed even when their input data is not yet available.
+
 ### Single-Well Space
 
 | Step Category | Stepper ID | UI Component | Markdown Anchor | Primary Petrophysical Function |

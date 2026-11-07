@@ -50,6 +50,14 @@
 		selectionKey
 	} from '$lib/state/moduleParams.svelte';
 	import { projectParams, zoneSelectionKey } from '$lib/state/projectParams.svelte';
+	import { isCrossplotAvailable } from '$lib/utils/crossplots';
+
+	$effect(() => {
+		const selected = workbench.crossplotTemplateOverride;
+		if (selected !== 'auto' && !isCrossplotAvailable(selected, workbench.scope)) {
+			workbench.crossplotTemplateOverride = 'auto';
+		}
+	});
 
 	// Auto-restore saved single-well module parameters on exact zone / depth-interval match.
 	// Re-applies only when the loaded well, the selection key, or the scope changes (not on every
@@ -178,11 +186,9 @@
 	let rightGridConfig = $derived.by(
 		(): { title: string; columns: GridColumn[]; rows: Record<string, any>[] } => {
 			if (
-				(workbench.crossplotTemplateOverride === 'relperm' ||
-					(workbench.scope === 'multi-well' &&
-						workbench.multiWellStep === 'swirr-corr' &&
-						(workbench.scalSubMode === 'relperm' ||
-							workbench.swirrCrossplotTab === 'relperm'))) &&
+				(workbench.effectiveCrossplot === 'relperm' ||
+					(workbench.effectiveCrossplot === 'swirr-fit' &&
+						workbench.swirrCrossplotTab === 'relperm')) &&
 				workbench.scalResult?.swofTable?.length
 			) {
 				return {
@@ -690,7 +696,7 @@
 			}
 
 			if (
-				workbench.crossplotTemplateOverride === 'vsh-qc' &&
+				workbench.effectiveCrossplot === 'vsh-qc' &&
 				wellData.vshComparison.rows.length > 0
 			) {
 				const vc = wellData.vshComparison;
@@ -714,7 +720,7 @@
 
 			if (
 				wellData.coreComparison.rows.length > 0 &&
-				(workbench.crossplotTemplateOverride === 'core-qc' ||
+				(workbench.effectiveCrossplot === 'core-qc' ||
 					(workbench.scope === 'single-well' &&
 						(workbench.singleWellStep === 'litho-poro' ||
 							workbench.singleWellStep === 'perm' ||

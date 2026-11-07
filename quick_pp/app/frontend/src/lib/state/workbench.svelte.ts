@@ -1,3 +1,5 @@
+import { resolveCrossplot, type CrossplotContext, type CrossplotId } from '../utils/crossplots';
+
 export type SingleWellStep =
 	| 'qaqc'
 	| 'ancillary'
@@ -578,23 +580,17 @@ class WorkbenchState {
 			this.rightPaneTab = 'split';
 		}
 	}
-	crossplotTemplateOverride = $state<
-		| 'auto'
-		| 'nphi-rhob'
-		| 'thomas-stieber'
-		| 'phi-k'
-		| 'pickett'
-		| 'sw-comparison'
-		| 'bqv'
-		| 'histogram'
-		| 'mw-distribution'
-		| 'swirr-fit'
-		| 'shf'
-		| 'shf'
-		| 'relperm'
-		| 'core-qc'
-		| 'vsh-qc'
-	>('auto');
+	crossplotTemplateOverride = $state<CrossplotId | 'auto'>('auto');
+
+	get crossplotContext(): CrossplotContext {
+		return this.scope === 'single-well'
+			? { scope: 'single-well', step: this.singleWellStep }
+			: { scope: 'multi-well', step: this.multiWellStep };
+	}
+
+	get effectiveCrossplot(): CrossplotId | null {
+		return resolveCrossplot(this.crossplotContext, this.crossplotTemplateOverride);
+	}
 
 	// Active curve selected in QAQC for histogram / multi-well distribution inspection
 	selectedQaqcCurve = $state<string>('GR');

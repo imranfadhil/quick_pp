@@ -10,6 +10,7 @@
 		PETRO_COLORS
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
+	import { crossplotGroups, crossplotLabel, resolveCrossplot } from '$lib/utils/crossplots';
 	import {
 		estimateBqvReferenceRw,
 		fillMissingCurve,
@@ -34,30 +35,62 @@
 	let swirrLogY = $state<boolean>(false);
 	let showCoreShiftDrawer = $state<boolean>(false);
 	let showVshCalibDrawer = $state<boolean>(false);
+	let emptyPlotMessage = $state<string | null>(null);
 
-	let effectiveMode = $derived.by(() => {
-		if (workbench.crossplotTemplateOverride !== 'auto') {
-			return workbench.crossplotTemplateOverride;
-		}
-		if (workbench.scope === 'multi-well') {
-			if (workbench.multiWellStep === 'qaqc') return 'mw-distribution';
-			if (workbench.multiWellStep === 'swirr-corr') return 'swirr-fit';
-			if (workbench.multiWellStep === 'shf') return 'shf';
-			return 'phi-k';
-		}
-		switch (workbench.singleWellStep) {
-			case 'qaqc':
-				return 'histogram';
-			case 'perm':
-				return 'phi-k';
-			case 'saturation':
-				return 'sw-comparison';
-			case 'scal':
-				return 'core-qc';
+	let effectiveMode = $derived(workbench.effectiveCrossplot);
+	let autoMode = $derived(resolveCrossplot(workbench.crossplotContext, 'auto'));
+	let plotGroups = $derived(crossplotGroups(workbench.crossplotContext));
+
+	function plotLabel(id: NonNullable<typeof effectiveMode>) {
+		return crossplotLabel(id, workbench.scope === 'multi-well' ? projectData.drtMethod : 'fzi');
+	}
+
+	function getEmptyPlotMessage(mode: typeof effectiveMode, traces: any[]): string | null {
+		const hasTrace = (matches: (name: string) => boolean) =>
+			traces.some(
+				(trace) =>
+					matches(String(trace.name ?? '')) &&
+					(Array.isArray(trace.x) ? trace.x.length > 0 : Array.isArray(trace.y) && trace.y.length > 0)
+			);
+		switch (mode) {
+			case 'histogram':
+				return hasTrace(() => true) ? null : 'No values for the selected curve. Select a populated curve or adjust the depth and zone filters.';
+			case 'mw-distribution':
+				return projectData.multiWellQaqcResult?.plot_data?.well_names?.length
+					? null
+					: 'No multi-well distribution data. Load wells and run Data & QAQC.';
+			case 'nphi-rhob':
+				return hasTrace((name) => name.startsWith('Log Data') || name.startsWith('Coal Flagged') || name.startsWith('Badhole Flagged'))
+					? null
+					: 'No paired NPHI and RHOB values in the current selection. Load the curves or adjust the filters.';
+			case 'thomas-stieber':
+				return hasTrace((name) => name.startsWith('Log Data'))
+					? null
+					: 'No paired porosity and shale-volume values in the current selection. Calculate them or adjust the filters.';
+			case 'pickett':
+				return hasTrace((name) => name === 'Pickett (Rt vs Φ)')
+					? null
+					: 'No valid RT and PHIT pairs in the current selection. Load or calculate the curves, or adjust the filters.';
+			case 'bqv':
+				return hasTrace((name) => name === 'Log samples')
+					? null
+					: 'No valid RT, porosity and shale-volume samples in the current selection. Check the curves and filters.';
+			case 'sw-comparison':
+				return hasTrace(() => true)
+					? null
+					: 'No saturation or shale-volume data in the current selection. Calculate the curves or adjust the filters.';
+			case 'core-qc':
+				return wellData.coreComparison.rows.length
+					? null
+					: 'No matched core and log data in the current selection. Load core samples and calculate porosity or permeability.';
+			case 'vsh-qc':
+				return wellData.vshComparison.rows.length
+					? null
+					: 'No Vsh calibration data in the current selection. Check GR, NPHI and RHOB curves and filters.';
 			default:
-				return 'nphi-rhob';
+				return null;
 		}
-	});
+	}
 
 	let bqvPlotData = $derived.by(() => {
 		const visibleIndices = wellData.visibleIndices;
@@ -4657,6 +4690,7 @@
 				applyBrushedSelectionOverlay(res.traces);
 				return res;
 			});
+			emptyPlotMessage = untrack(() => getEmptyPlotMessage(mode, traces));
 			layout.autosize = true;
 			const visibleLegendTraces = traces.filter(
 				(t: any) => t.showlegend !== false && t.name
@@ -4930,30 +4964,14 @@
 				bind:value={workbench.crossplotTemplateOverride}
 				class="h-5 max-w-[195px] truncate rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
 			>
-				<option value="auto"
-					>Auto ({effectiveMode === 'sw-comparison'
-						? 'SW vs Depth'
-						: effectiveMode.toUpperCase()})</option
-				>
-				<option value="mw-distribution">Multi-Well Distribution (QAQC)</option>
-				<option value="nphi-rhob">NPHI vs. RHOB (SSC)</option>
-				<option value="vsh-qc">Vsh Calibration (VSH_GR × VSH_DN)</option>
-				<option value="thomas-stieber">Thomas-Stieber (Vsh vs. Φ)</option>
-				<option value="phi-k"
-					>Porosity vs. Perm ({projectData.drtMethod === 'winland'
-						? 'Winland R35'
-						: projectData.drtMethod === 'lucia'
-							? 'Lucia RFN'
-							: 'FZI'})</option
-				>
-				<option value="core-qc">Core Parity &amp; Error (Φ &amp; K)</option>
-				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
-				<option value="sw-comparison">Saturation vs Depth + VSHALE</option>
-				<option value="bqv">Waxman–Smits BQv</option>
-				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>
-				<option value="swirr-fit">Swirr &amp; Pc Fit (SCAL)</option>
-				<option value="shf">Sw vs. Height (SHF)</option>
-				<option value="histogram">Single-Well Histogram</option>
+				<option value="auto">Auto — {autoMode ? plotLabel(autoMode) : 'No recommended plot'}</option>
+				{#each plotGroups as group (group.label)}
+					<optgroup label={group.label}>
+						{#each group.plots as plot (plot.id)}
+							<option value={plot.id}>{plotLabel(plot.id)}</option>
+						{/each}
+					</optgroup>
+				{/each}
 			</select>
 		</div>
 
@@ -5512,6 +5530,16 @@
 
 	<div class="relative min-h-0 flex-1 overflow-hidden">
 		<div bind:this={plotEl} class="absolute inset-0 h-full w-full"></div>
+		{#if effectiveMode !== null && emptyPlotMessage}
+			<div role="status" class="pointer-events-none absolute inset-x-2 top-1 rounded-xs border border-amber-200 bg-amber-50/95 px-2 py-1 text-center text-[10px] text-amber-900">
+				{emptyPlotMessage}
+			</div>
+		{/if}
+		{#if effectiveMode === null}
+			<div class="absolute inset-0 flex items-center justify-center bg-[var(--bg-surface)] p-4 text-center text-xs text-[var(--text-secondary)]">
+				No crossplot is recommended for this step. Choose a plot from another workflow step or standalone module.
+			</div>
+		{/if}
 	</div>
 
 	{#if projectData.selectedScalPointIds.length > 0}
