@@ -140,7 +140,7 @@ def test_buffer_only_widens_flagging():
 def test_shaly_gas_sand_strict_vs_vsh_gr_mode():
     nphi, rhob = forward(0.22, 0.30, 0.6)
     nphi_wet, rhob_wet = forward(0.22, 0.30, 0.0)
-    args = (np.array([nphi]), np.array([rhob]), np.array([0.30]))
+    args = (np.array([nphi]), np.array([rhob]), np.array([0.30 / 0.78]))
 
     nc, rc, flag = correct(*args, flag_mode="strict")
     assert flag[0] == 0.0
@@ -155,7 +155,7 @@ def test_shaly_gas_sand_strict_vs_vsh_gr_mode():
 def test_vsh_gr_mode_does_not_touch_water_bearing_points():
     nphi, rhob = forward(0.22, 0.30, 0.0)
     nc, rc, flag = correct(
-        np.array([nphi]), np.array([rhob]), np.array([0.30]), flag_mode="vsh_gr"
+        np.array([nphi]), np.array([rhob]), np.array([0.30 / 0.78]), flag_mode="vsh_gr"
     )
     assert flag[0] == 0.0
     assert rc[0] == pytest.approx(float(rhob))
@@ -173,6 +173,43 @@ def test_bulk_target_recovers_shaly_gas_and_solid_target_matches_projection():
     nc, rc, _ = correct(*args, target_mode="solid")
     phi, vcl = nd_triangle_coords(nc, rc, SAND, CLAY, WATER)
     assert (vcl / (1.0 - phi))[0] == pytest.approx(0.20, abs=1e-10)
+
+
+def test_default_target_is_solid_and_differs_from_bulk():
+    nphi, rhob = forward(0.22, 0.20, 0.6)
+    args = (np.array([nphi]), np.array([rhob]), np.array([0.20]))
+
+    default = correct(*args)
+    solid = correct(*args, target_mode="solid")
+    bulk = correct(*args, target_mode="bulk")
+    for actual, expected in zip(default, solid, strict=True):
+        np.testing.assert_allclose(actual, expected)
+    assert default[2][0] == 1.0
+    phi, vcl = nd_triangle_coords(default[0], default[1], SAND, CLAY, WATER)
+    assert (vcl / (1.0 - phi))[0] == pytest.approx(0.20, abs=1e-10)
+    assert default[0][0] < bulk[0][0]
+    assert default[1][0] < bulk[1][0]
+
+
+def test_invaded_zone_default_target_is_solid():
+    kwargs = dict(
+        nphi=np.array([0.1]),
+        rhob=np.array([2.35]),
+        vsh_gr=np.array([0.2]),
+        rho_hc=np.array([0.1]),
+        rho_mf=1.0,
+        salinity_ppm=0.0,
+        dry_sand_point=SAND,
+        dry_clay_point=CLAY,
+        hc_flag=np.array([True]),
+        lithology_coeff=0.0,
+    )
+    default = invaded_zone_hc_correction(**kwargs)
+    solid = invaded_zone_hc_correction(**kwargs, target_mode="solid")
+    bulk = invaded_zone_hc_correction(**kwargs, target_mode="bulk")
+    for actual, expected in zip(default, solid, strict=True):
+        np.testing.assert_allclose(actual, expected)
+    assert default[2][0] != bulk[2][0]
 
 
 def test_nan_vsh_gr_is_skipped():

@@ -404,7 +404,7 @@ def neu_den_xplot_hc_correction(
     water_point: tuple = (1.0, 1.0),
     corr_angle: float = 50,
     buffer: float = 0.0,
-    target_mode: str = "bulk",
+    target_mode: str = "solid",
     flag_mode: str = "strict",
     vsh_tol: float = 0.05,
     nphi_max: float = 0.45,
@@ -429,17 +429,21 @@ def neu_den_xplot_hc_correction(
           ``buffer / |A - C|``. ``buffer`` (crossplot distance along A-C) only
           widens this flagging region; it does not move the correction target.
         * ``flag_mode="vsh_gr"``: additionally flags points inside the triangle
-          whose crossplot clay volume is below ``vsh_gr - vsh_tol``. This
+          whose crossplot clay estimate in ``target_mode`` is below
+          ``vsh_gr - vsh_tol``. This
           captures shaly gas sands, but may produce false positives where the
           gamma ray overestimates shale (e.g. radioactive/feldspathic sands).
 
     Target:
-        * ``target_mode="bulk"`` (default): ``vsh_gr`` is treated as bulk clay
+        * ``target_mode="solid"`` (default): ``vsh_gr`` is treated as clay fraction
+          of the solids, i.e. the target is the line from D through
+          ``C + (1 - vsh_gr)(A - C)``.
+        * ``target_mode="bulk"``: ``vsh_gr`` is treated as bulk clay
           volume; the target is the iso-Vcl line through ``A + vsh_gr (C - A)``
           parallel to D-A. Consistent with :func:`den_correction`.
-        * ``target_mode="solid"``: ``vsh_gr`` is treated as clay fraction of the
-          solids, i.e. the target is the line from D through
-          ``C + (1 - vsh_gr)(A - C)`` (legacy convention).
+
+    The solid target is a binary sand-clay projection, not the piecewise
+    sand-silt-clay (SSC) shale estimate.
 
     Corrected points never move backwards along the ray (flagged points already
     on the shaly side of the target are left unchanged) and never cross the
@@ -459,7 +463,7 @@ def neu_den_xplot_hc_correction(
             :func:`neu_den_xplot_hc_correction_angle`. Defaults to 50.
         buffer (float, optional): Flagging tolerance as crossplot distance along A-C. Only widens
             the strict flagging region. Defaults to 0.0.
-        target_mode (str, optional): 'bulk' or 'solid'. Defaults to 'bulk'.
+        target_mode (str, optional): 'bulk' or 'solid'. Defaults to 'solid'.
         flag_mode (str, optional): 'strict' or 'vsh_gr'. Defaults to 'strict'.
         vsh_tol (float, optional): Tolerance for ``flag_mode='vsh_gr'``. Defaults to 0.05.
         nphi_max (float, optional): Points with NPHI >= nphi_max are never corrected. Defaults to 0.45.
@@ -598,7 +602,7 @@ def invaded_zone_hc_correction(
     dry_clay_point,
     hc_flag,
     lithology_coeff=1.0,
-    target_mode="bulk",
+    target_mode="solid",
 ):
     """Correct NPHI/RHOB using the standard invaded-zone saturation iteration.
 
@@ -609,7 +613,8 @@ def invaded_zone_hc_correction(
 
     Density porosity is estimated from the dry-sand density endpoint and
     mud-filtrate density; the corrected VSH_DN is evaluated in the matrix /
-    clay / mud-filtrate crossplot triangle.
+    clay / mud-filtrate crossplot triangle. ``target_mode="solid"`` (default)
+    compares the clay fraction of solids; ``"bulk"`` compares bulk clay volume.
     """
     target_mode = str(target_mode).strip().lower()
     if target_mode not in ("bulk", "solid"):

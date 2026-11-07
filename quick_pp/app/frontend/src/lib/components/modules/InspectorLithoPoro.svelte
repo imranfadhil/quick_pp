@@ -860,9 +860,9 @@
 			{#if workbench.lithoParams.logCorrectionMode === 'hc'}
 				<div class="my-1.5 rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] leading-snug text-emerald-950">
 					{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
-						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to best match VSH<sub>DN</sub> to VSH<sub>GR</sub>.
+						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to match the binary solid-relative clay fraction to VSH<sub>GR</sub>.
 					{:else}
-						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle until crossplot <span class="mono-num font-semibold">VSH_DN</span> matches calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>).
+						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward a binary solid-relative clay fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>). This target differs from SSC VSH<sub>DN</sub>.
 					{/if}
 				</div>
 				<div class="grid grid-cols-2 gap-1">
@@ -888,7 +888,7 @@
 				</div>
 				{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
 					<div class="mt-1 rounded-xs border border-amber-200 bg-amber-50/70 px-2 py-1 text-[10px] leading-snug text-amber-950">
-						Uses mud-filtrate density/salinity from well metadata and estimates invaded-zone HC saturation in 0.01 increments to best match VSH_DN to VSH_GR.
+						Uses mud-filtrate density/salinity from well metadata and estimates invaded-zone HC saturation in 0.01 increments to best match the binary solid-relative clay fraction to VSH_GR.
 						{#if wellData.header?.mud_filtrate_density == null || wellData.header?.mud_filtrate_salinity == null}
 							<span class="font-bold"> Set both mud-filtrate properties in QAQC → Well Header before running.</span>
 						{/if}
@@ -1093,7 +1093,7 @@
 						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 					>
 						<option value="strict">Beyond Clean-Sand Line</option>
-						<option value="vsh_gr">VSH_DN &lt; VSH_GR − Tol</option>
+						<option value="vsh_gr">Solid clay &lt; VSH_GR − Tol</option>
 					</select>
 				</div>
 				{#if workbench.lithoParams.hcFlagMode === 'vsh_gr'}

@@ -602,15 +602,16 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
         "strict",
         description=(
             "'strict': flag only points beyond the clean-sand line; "
-            "'vsh_gr': also flag points whose crossplot Vcl < VSH_GR - vsh_tol (shaly gas sands)"
+            "'vsh_gr': also flag points whose crossplot clay estimate in target_mode "
+            "is below VSH_GR - vsh_tol (shaly gas sands)"
         ),
     )
     vsh_tol: float = Field(
         0.05, description="Vshale tolerance used when flag_mode='vsh_gr'"
     )
     target_mode: str = Field(
-        "bulk",
-        description="Interpret VSH_GR as 'bulk' clay volume (default) or 'solid' clay fraction of solids",
+        "solid",
+        description="Interpret VSH_GR as 'solid' clay fraction of solids (default) or 'bulk' clay volume",
     )
     gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
     gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")

@@ -494,6 +494,36 @@ def test_dynamic_hc_correction_accepts_tvdss(client_and_project, monkeypatch):
     assert len(response.json()["data"]["RHO_H"]) == len(well_df)
 
 
+@pytest.mark.parametrize("method", ["crossplot", "invaded_zone_standard"])
+def test_hc_correction_defaults_to_solid_target(client_and_project, method):
+    client, pid = client_and_project
+    endpoint = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/hc_correction"
+    params = {
+        "correction_method": method,
+        "mud_filtrate_density": 1.0,
+        "mud_filtrate_salinity": 0.0,
+        "rho_hc": 0.1,
+        "hi_hc": 0.22,
+        "gr_clean": 30.0,
+        "gr_clay": 110.0,
+        "flag_mode": "vsh_gr",
+        "vsh_tol": 0.0,
+    }
+    results = []
+    for mode in (None, "solid", "bulk"):
+        payload = dict(params)
+        if mode is not None:
+            payload["target_mode"] = mode
+        response = client.post(endpoint, json=payload)
+        assert response.status_code == 200, response.text
+        results.append(response.json()["data"])
+
+    default, solid, bulk = results
+    for curve in ("NPHI_HC", "RHOB_HC", "HC_FLAG"):
+        np.testing.assert_allclose(default[curve], solid[curve])
+    assert not np.allclose(default["RHOB_HC"], bulk["RHOB_HC"])
+
+
 def test_standard_invaded_zone_correction_returns_saturation_curve(client_and_project):
     client, pid = client_and_project
     endpoint = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/hc_correction"
