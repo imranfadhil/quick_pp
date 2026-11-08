@@ -23,6 +23,8 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { getCurveUnit } from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
+	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
+	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
 
 	const REQUIRED_STANDARD = ['GR', 'RT', 'NPHI', 'RHOB', 'CALI', 'DTC', 'PEF'];
 	const EVALUATED_CURVES = ALL_CALCULATED_CURVE_MNEMONICS;
@@ -549,18 +551,22 @@
 	$effect(() => {
 		const dr = wellData.depthRange;
 		const df = workbench.depthFilter;
-		workingTopDepth = Number((df ? df.min : dr.min).toFixed(1));
-		workingBottomDepth = Number((df ? df.max : dr.max).toFixed(1));
+		workingTopDepth = Number(depthFromMeters(df ? df.min : dr.min, depthDisplay.unit).toFixed(4));
+		workingBottomDepth = Number(depthFromMeters(df ? df.max : dr.max, depthDisplay.unit).toFixed(4));
 	});
 
 	async function applyWorkingDepthInterval(persist: boolean = true) {
-		await wellData.saveWellFocusDepth(workingTopDepth, workingBottomDepth, persist);
+		await wellData.saveWellFocusDepth(
+			depthToMeters(workingTopDepth, depthDisplay.unit),
+			depthToMeters(workingBottomDepth, depthDisplay.unit),
+			persist
+		);
 	}
 
 	async function resetWorkingDepthInterval() {
 		const dr = wellData.depthRange;
-		workingTopDepth = Number(dr.min.toFixed(1));
-		workingBottomDepth = Number(dr.max.toFixed(1));
+		workingTopDepth = Number(depthFromMeters(dr.min, depthDisplay.unit).toFixed(4));
+		workingBottomDepth = Number(depthFromMeters(dr.max, depthDisplay.unit).toFixed(4));
 		await wellData.saveWellFocusDepth(null, null, true);
 	}
 
@@ -570,9 +576,9 @@
 		if (topD === undefined) return;
 		const botD =
 			topIdx + 1 < sorted.length ? sorted[topIdx + 1].depth : wellData.depthRange.max;
-		workingTopDepth = Number(topD.toFixed(1));
-		workingBottomDepth = Number(botD.toFixed(1));
-		await wellData.saveWellFocusDepth(workingTopDepth, workingBottomDepth, true);
+		workingTopDepth = Number(depthFromMeters(topD, depthDisplay.unit).toFixed(4));
+		workingBottomDepth = Number(depthFromMeters(botD, depthDisplay.unit).toFixed(4));
+		await wellData.saveWellFocusDepth(topD, botD, true);
 	}
 
 	// Borehole Environmental Correction parameters
@@ -1158,7 +1164,7 @@
 				<span>
 					Full Log Range:
 					<strong class="mono-num text-[var(--text-secondary)]">
-						{fmtDepth(wellData.depthRange.min)} – {fmtDepth(wellData.depthRange.max)}
+						{fmtDepth(depthFromMeters(wellData.depthRange.min, depthDisplay.unit), depthDisplay.unit)} – {fmtDepth(depthFromMeters(wellData.depthRange.max, depthDisplay.unit), depthDisplay.unit)}
 					</strong>
 				</span>
 				{#if hasCustomWorkingInterval}
@@ -1171,26 +1177,26 @@
 			<div class="grid grid-cols-2 gap-2">
 				<label class="block rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
 					<span class="mb-0.5 block text-[10px] font-medium text-[var(--text-muted)]">
-						Top Depth (m)
+						Top Depth ({depthDisplay.unit})
 					</span>
 					<input
 						type="number"
-						step="0.5"
-						min={wellData.depthRange.min}
-						max={wellData.depthRange.max}
+						step="any"
+						min={depthFromMeters(wellData.depthRange.min, depthDisplay.unit)}
+						max={depthFromMeters(wellData.depthRange.max, depthDisplay.unit)}
 						bind:value={workingTopDepth}
 						class="mono-num h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs font-semibold text-[var(--text-primary)]"
 					/>
 				</label>
 				<label class="block rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
 					<span class="mb-0.5 block text-[10px] font-medium text-[var(--text-muted)]">
-						Bottom Depth (m)
+						Bottom Depth ({depthDisplay.unit})
 					</span>
 					<input
 						type="number"
-						step="0.5"
-						min={wellData.depthRange.min}
-						max={wellData.depthRange.max}
+						step="any"
+						min={depthFromMeters(wellData.depthRange.min, depthDisplay.unit)}
+						max={depthFromMeters(wellData.depthRange.max, depthDisplay.unit)}
 						bind:value={workingBottomDepth}
 						class="mono-num h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs font-semibold text-[var(--text-primary)]"
 					/>

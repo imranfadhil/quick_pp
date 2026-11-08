@@ -1,13 +1,18 @@
 import base64
 import io
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from quick_pp.app.backend.router import api_router
+from quick_pp.app.backend.services import las_handler as log_import_service
 from quick_pp.app.backend.services.ancillary import (
     align_and_shift_core_depths,
     compute_survey_minimum_curvature,
@@ -15,8 +20,13 @@ from quick_pp.app.backend.services.ancillary import (
     parse_tabular_ancillary_file,
     resolve_ancillary_columns,
 )
-from quick_pp.app.backend.services.las_handler import import_logs_router
+from quick_pp.app.backend.services.las_handler import (
+    _parse_single_log_file_worker,
+    import_logs_router,
+)
 from quick_pp.config import Config
+from quick_pp.database.models import Base
+from quick_pp.database.objects import Project
 from quick_pp.las_handler import (
     extract_las_metadata,
     fast_read_las,
@@ -84,6 +94,117 @@ def test_fast_read_las_costa_feet_conversion():
     assert meta["depth_unit"] == "m"
     # Original HW-10.las starts at 8440.0 ft (2572.512 m)
     assert np.isclose(float(df["DEPTH"].min()), 2572.512, atol=1e-2)
+
+
+@pytest.mark.parametrize("mnemonic", ["DEPT", "MD", "DEPTH"])
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    ("target_unit", "expected"), [("m", [304.8, 305.1048]), ("ft", [1000, 1001])]
+)
+def test_log_import_converts_depth_index_from_feet(tmp_path, mnemonic, wrapped, target_unit, expected):
+    las_text = f"""~Version
+VERS. 2.0 : VERSION
+WRAP. {"YES" if wrapped else "NO"} : WRAPPED
+~Well
+STRT.FT 1000 : START
+STOP.FT 1001 : STOP
+STEP.FT 1 : STEP
+NULL. -999.25 : NULL
+WELL. TEST : WELL
+~Curve
+{mnemonic}.FT : DEPTH
+GR.API : GAMMA RAY
+~Ascii
+1000 50
+1001 60
+"""
+    path = tmp_path / "feet.las"
+    path.write_text(las_text)
+    result = _parse_single_log_file_worker(
+        {"file_path": str(path), "target_depth_uom": target_unit}
+    )
+    assert result["well_data"]["DEPTH"].tolist() == pytest.approx(expected)
+    assert result["units"]["DEPTH"].lower() == target_unit
+
+
+def test_log_import_respects_depth_source_unit_override(tmp_path):
+    path = tmp_path / "override.las"
+    path.write_text("""~Version
+VERS. 2.0 : VERSION
+WRAP. NO : WRAPPED
+~Well
+STRT.M 1000 : START
+STOP.M 1001 : STOP
+STEP.M 1 : STEP
+NULL. -999.25 : NULL
+WELL. TEST : WELL
+~Curve
+DEPT.M : DEPTH
+GR.API : GAMMA RAY
+~Ascii
+1000 50
+1001 60
+""")
+    result = _parse_single_log_file_worker(
+        {"file_path": str(path), "target_depth_uom": "m", "unit_map": {"DEPT": "ft"}}
+    )
+    assert result["well_data"]["DEPTH"].tolist() == pytest.approx([304.8, 305.1048])
+    assert result["units"]["DEPTH"] == "m"
+
+
+def test_log_import_persists_converted_depths(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(log_import_service, "STAGING_DIR", tmp_path / "staging")
+    monkeypatch.setattr(log_import_service, "is_demo_mode", lambda: False)
+    engine = create_engine(f"sqlite:///{(tmp_path / 'test.db').as_posix()}")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+
+    @contextmanager
+    def test_db():
+        with session_factory() as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    monkeypatch.setattr(log_import_service, "get_db", test_db)
+    with test_db() as session:
+        project_id = Project(session, name="DepthConversionTest").project_id
+
+    las_bytes = (TEST_DATA_DIR / "sample_feet.las").read_bytes()
+    inspect = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("sample_feet.las", las_bytes, "text/plain"))],
+    )
+    assert inspect.status_code == 200
+    info = inspect.json()["files"][0]
+    depth_curve = info["curves"][0]
+    assert depth_curve["unit_conversion_applied"] is True
+    commit = client.post(
+        "/api/v1/import/logs/commit",
+        json={
+            "project_id": project_id,
+            "target_depth_uom": "m",
+            "files": [{
+                "file_id": info["file_id"],
+                "filename": info["filename"],
+                "metadata_overrides": info["metadata"],
+                "mnemonic_map": {depth_curve["raw_mnemonic"]: "DEPTH"},
+                "unit_map": {depth_curve["raw_mnemonic"]: depth_curve["raw_unit"]},
+            }],
+        },
+    )
+    assert commit.status_code == 200, commit.text
+    well_name = commit.json()["wells_imported"][0]["well_name"]
+    with test_db() as session:
+        project = Project.load(session, project_id=project_id)
+        assert project.get_well(well_name).depth_uom == "m"
+        data = project.get_well_data_optimized(well_name)
+        assert data["DEPTH"].min() == pytest.approx(2572.512, abs=1e-4)
+    engine.dispose()
 
 
 def test_mnemonic_mapper_and_unit_standardization():

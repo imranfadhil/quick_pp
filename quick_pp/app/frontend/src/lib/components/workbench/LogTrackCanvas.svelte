@@ -2,6 +2,7 @@
 	import { onDestroy, untrack } from 'svelte';
 	import { browser } from '$app/environment';
 	import { projectData } from '$lib/state/projectData.svelte';
+	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import {
@@ -15,7 +16,8 @@
 		getRockTypeFillRgba,
 		type LithologyTrackSpec
 	} from '$lib/utils/petrophysicsColors';
-	import { fmtDepth, fmtNum, fmtPerm } from '$lib/utils/formatters';
+	import { fmtNum, fmtPerm } from '$lib/utils/formatters';
+	import { depthAxisTicks, depthFromMeters } from '$lib/utils/depthUnits';
 	import {
 		buildMobilityPoints,
 		buildMobilityTrace,
@@ -25,6 +27,19 @@
 	let plotContainer = $state<HTMLDivElement | null>(null);
 	let PlotlyLib: any = $state(null);
 	let plotReady = $state(false);
+	function formatLogDepth(value: number | null | undefined, decimals = 1): string {
+		if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+		return `${depthFromMeters(value, depthDisplay.unit).toFixed(decimals)}${depthDisplay.unit}`;
+	}
+
+	function updateDepthTicks(range: [number, number]) {
+		if (!plotContainer || !PlotlyLib || depthDisplay.unit !== 'ft') return;
+		const { tickvals, ticktext } = depthAxisTicks(range, depthDisplay.unit);
+		PlotlyLib.relayout(plotContainer, {
+			'yaxis.tickvals': tickvals,
+			'yaxis.ticktext': ticktext
+		});
+	}
 	// Track actual Plotly plot area left/right insets for pixel-accurate header & overlay alignment
 	let plotAreaLeft = $state(54);
 	let plotAreaRight = $state(8);
@@ -694,7 +709,7 @@
 				const d = Number(s.depth ?? s.DEPTH);
 				if (!Number.isFinite(d) || !wellData.isDepthInActiveFilter(d)) continue;
 				const sName = String(s.sample_name ?? s.SAMPLE ?? `Plug #${sampleSeq++}`).trim();
-				const label = `${d.toFixed(2)}m${sName ? ` • ${sName}` : ''}`;
+				const label = `${formatLogDepth(d, 2)}${sName ? ` • ${sName}` : ''}`;
 
 				const p = Number(s.porosity ?? s.CPORE ?? s.poro);
 				if (Number.isFinite(p) && p > 0) {
@@ -757,7 +772,7 @@
 				const runLen = j - i;
 				const pickIdx = runLen >= 2 && runLen <= 4 ? i + Math.floor(runLen / 2) : i;
 				const pt = rawPairs[pickIdx];
-				const lbl = `${pt.d.toFixed(2)}m`;
+				const lbl = formatLogDepth(pt.d, 2);
 				if (pt.p !== null) {
 					const normP = pt.p > 1 ? pt.p / 100 : pt.p;
 					cporeX.push(normP * 2.0);
@@ -1958,7 +1973,7 @@
 			});
 		}
 		if (showMobility && mobilityData.points.length > 0) {
-			traces.push(buildMobilityTrace(mobilityData.points));
+			traces.push(buildMobilityTrace(mobilityData.points, (depth) => formatLogDepth(depth, 2)));
 		}
 
 		// Track 6 (xaxis6): Discrete Rock Type (ROCK_FLAG) small track between PERM and SW
@@ -2278,7 +2293,7 @@
 					y: topD,
 					xanchor: 'left',
 					yanchor: 'bottom',
-					text: `▲ ${sortedTops[i].name} (${topD.toFixed(1)}m)`,
+					text: `▲ ${sortedTops[i].name} (${formatLogDepth(topD)})`,
 					showarrow: false,
 					captureevents: false,
 					font: { family: 'JetBrains Mono, monospace', size: 9, color: '#1E40AF' },
@@ -2301,8 +2316,8 @@
 			const descTxt = perf.description ? `<br>${perf.description}` : '';
 			const hoverTxt =
 				`<b>Perforation: ${perf.name}</b><br>` +
-				`MD: ${pTop.toFixed(1)} – ${pBot.toFixed(1)} m<br>` +
-				`Thickness: ${thick.toFixed(1)} m${descTxt}`;
+				`MD: ${formatLogDepth(pTop)} – ${formatLogDepth(pBot)}<br>` +
+				`Thickness: ${formatLogDepth(thick)}${descTxt}`;
 			shapes.push({
 				type: 'rect',
 				xref: 'paper',
@@ -2385,11 +2400,14 @@
 			annotations,
 			yaxis: {
 				range: currentYRange,
+				...(depthDisplay.unit === 'ft'
+					? { tickmode: 'array', ...depthAxisTicks(currentYRange, depthDisplay.unit) }
+					: { tickmode: 'auto' }),
 				showgrid: true,
 				gridcolor: gridColor,
 				automargin: false,
 				tickfont: { family: 'JetBrains Mono', size: 10, color: '#0F172A' },
-				title: { text: 'DEPTH (m)', font: { family: 'Inter', size: 10, color: '#64748B' } }
+				title: { text: `DEPTH (${depthDisplay.unit})`, font: { family: 'Inter', size: 10, color: '#64748B' } }
 			},
 			xaxis: {
 				...axisCommon,
@@ -2587,6 +2605,7 @@
 			showMobility,
 			mobilityData,
 			showTopLabels,
+			depthDisplay.unit,
 			tsOverlayActive,
 			workbench.lithoParams.enableHcCorrection,
 			workbench.lithoParams.model,
@@ -2727,6 +2746,7 @@
 						});
 						(plotContainer as any).on('plotly_relayout', (ev: any) => {
 							cancelAnimationFrame(relayoutRaf);
+							if (ev?.['yaxis.tickvals'] !== undefined) return;
 							const nextRange = extractRelayoutRange(ev);
 							if (
 								nextRange &&
@@ -2734,6 +2754,7 @@
 								Number.isFinite(nextRange[1])
 							) {
 								yRange = [nextRange[0], nextRange[1]];
+								updateDepthTicks(yRange);
 							}
 							relayoutRaf = requestAnimationFrame(() => {
 								syncPlotBounds();
@@ -3064,13 +3085,20 @@
 				{workbench.wellId ?? 'No Well Selected'}
 			</span>
 			<span class="mono-num text-[var(--text-muted)]">
-				[{fmtDepth(Math.min(yRange[0], yRange[1]))} – {fmtDepth(
+				[{formatLogDepth(Math.min(yRange[0], yRange[1]))} – {formatLogDepth(
 					Math.max(yRange[0], yRange[1])
 				)}]
 			</span>
 		</div>
 
 		<div class="flex shrink-0 items-center gap-2">
+			<label class="flex items-center gap-1 text-[10px] text-[var(--text-secondary)]" title="Changes the single-well log, working interval, filter, and meter-valued tables; other plots and exports retain their own units">
+				Log / interval
+				<select value={depthDisplay.unit} onchange={(e) => depthDisplay.setUnit(e.currentTarget.value === 'ft' ? 'ft' : 'm')} class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]">
+					<option value="m">m</option>
+					<option value="ft">ft</option>
+				</select>
+			</label>
 			{#if mobilityData.points.length > 0 || mobilityData.outsideRange > 0}
 				<label
 					class="flex cursor-pointer items-center gap-1 text-[11px] text-[var(--text-secondary)]"
@@ -3801,12 +3829,12 @@
 						<span
 							class="mono-num py-0.2 absolute top-0.5 left-1.5 rounded-xs border border-blue-300 bg-blue-950/90 px-1.5 text-[9.5px] font-semibold text-white shadow-xs"
 						>
-							{fmtDepth(
+							{formatLogDepth(
 								Math.min(
 									selectingInterval.startDepth,
 									selectingInterval.currentDepth
 								)
-							)} – {fmtDepth(
+							)} – {formatLogDepth(
 								Math.max(
 									selectingInterval.startDepth,
 									selectingInterval.currentDepth
@@ -3840,10 +3868,8 @@
 									activeDepth
 								)}
 							style="top: {pct}%;"
-							title="Drag vertically to adjust Fluid Contact ({contact.type}) — TVDSS: {activeDepth.toFixed(
-								1
-							)}m{Math.abs(activePlotDepth - activeDepth) > 0.5
-								? ` (MD: ${activePlotDepth.toFixed(1)}m)`
+							title="Drag vertically to adjust Fluid Contact ({contact.type}) — TVDSS: {formatLogDepth(activeDepth)}{Math.abs(activePlotDepth - activeDepth) > 0.5
+								? ` (MD: ${formatLogDepth(activePlotDepth)})`
 								: ''}"
 							class="group pointer-events-auto absolute right-0 left-0 -translate-y-1/2 cursor-ns-resize py-1"
 						>
@@ -3853,10 +3879,10 @@
 							<span
 								class="mono-num absolute -top-2.5 right-2 rounded-xs border border-rose-200 bg-rose-50/95 px-1 py-0 text-[9px] font-semibold text-rose-800 shadow-2xs"
 							>
-								◆ {contact.type} ({activeDepth.toFixed(1)}m{Math.abs(
+								◆ {contact.type} ({formatLogDepth(activeDepth)}{Math.abs(
 									activePlotDepth - activeDepth
 								) > 0.5
-									? ` TVDss / ${activePlotDepth.toFixed(1)}m MD`
+									? ` TVDss / ${formatLogDepth(activePlotDepth)} MD`
 									: ''})
 							</span>
 						</div>
@@ -3892,7 +3918,7 @@
 						>
 							<span>T1 · LITH</span>
 							<span class="mono-num text-[7.5px] text-slate-300"
-								>{fmtDepth(readout.DEPT ?? workbench.cursorDepth)}m</span
+								>{formatLogDepth(readout.DEPT ?? workbench.cursorDepth)}</span
 							>
 						</div>
 						<div class="flex items-center justify-between">
@@ -4344,17 +4370,17 @@
 		<div class="flex flex-wrap items-center gap-x-3">
 			<span>
 				<strong class="text-[var(--text-primary)]">MD:</strong>
-				{fmtDepth(readout.DEPT ?? workbench.cursorDepth)}
+				{formatLogDepth(readout.DEPT ?? workbench.cursorDepth)}
 			</span>
 			{#if readout.TVDSS !== null && readout.TVDSS !== undefined}
 				<span>
 					<strong class="text-sky-600">TVDSS:</strong>
-					{fmtDepth(readout.TVDSS)}
+					{formatLogDepth(readout.TVDSS)}
 				</span>
 			{:else if readout.TVD !== null && readout.TVD !== undefined}
 				<span>
 					<strong class="text-sky-600">TVD:</strong>
-					{fmtDepth(readout.TVD)}
+					{formatLogDepth(readout.TVD)}
 				</span>
 			{/if}
 			<span>

@@ -76,9 +76,12 @@ test('mobility markers use the existing permeability track geometry and retain r
 	assert.deepEqual(trace.x, [PERMEABILITY_TRACK_RANGE[0], 10, PERMEABILITY_TRACK_RANGE[1]]);
 	assert.deepEqual(trace.y, [1000, 1001, 1002]);
 	assert.deepEqual(trace.customdata, [
-		[0.01, '<br>QC: VALID'],
-		[10, ''],
-		[10000, '']
+		[0.01, '<br>QC: VALID', '1000.00m'],
+		[10, '', '1001.00m'],
+		[10000, '', '1002.00m']
 	]);
 	assert.match(trace.hovertemplate, /customdata\[0\].*mD\/cP/);
+	const feetTrace = buildMobilityTrace(points, (depth) => `${(depth / 0.3048).toFixed(2)}ft`);
+	assert.equal(feetTrace.customdata[0][2], '3280.84ft');
+	assert.equal(feetTrace.y[0], 1000);
 });

@@ -15,7 +15,10 @@ export interface MobilityPoint {
 	details: string;
 }
 
-export function buildMobilityTrace(points: readonly MobilityPoint[]) {
+export function buildMobilityTrace(
+	points: readonly MobilityPoint[],
+	formatDepth: (depth: number) => string = (depth) => `${depth.toFixed(2)}m`
+) {
 	const [mobMin, mobMax] = MOBILITY_RANGE.map(Math.log10);
 	const [permMin, permMax] = PERMEABILITY_TRACK_RANGE.map(Math.log10);
 	return {
@@ -28,7 +31,7 @@ export function buildMobilityTrace(points: readonly MobilityPoint[]) {
 			return 10 ** (permMin + fraction * (permMax - permMin));
 		}),
 		y: points.map((point) => point.depth),
-		customdata: points.map((point) => [point.mobility, point.details]),
+		customdata: points.map((point) => [point.mobility, point.details, formatDepth(point.depth)]),
 		xaxis: 'x5',
 		yaxis: 'y',
 		marker: {
@@ -38,7 +41,7 @@ export function buildMobilityTrace(points: readonly MobilityPoint[]) {
 			line: { color: '#FFFFFF', width: 0.9 }
 		},
 		hovertemplate:
-			'FPT mobility: %{customdata[0]:.4g} mD/cP<br>Depth: %{y:.2f} m%{customdata[1]}<extra></extra>'
+			'FPT mobility: %{customdata[0]:.4g} mD/cP<br>Depth: %{customdata[2]}%{customdata[1]}<extra></extra>'
 	};
 }
 

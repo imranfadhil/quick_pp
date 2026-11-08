@@ -7,6 +7,7 @@
  * `projects.config_data.module_params.fpt[zoneKey]`.
  */
 import { getJson, patchJson, postJson } from '$lib/api/client';
+import { METERS_PER_FOOT, type DepthUnit } from '$lib/utils/depthUnits';
 import { appStatus } from './status.svelte';
 import { projectData } from './projectData.svelte';
 import { zoneSelectionKey, zoneSelectionLabel } from './projectParams.svelte';
@@ -16,7 +17,7 @@ export type FptFluid = 'GAS' | 'OIL' | 'WATER' | 'UNASSIGNED';
 export type FptPhase = 'GAS' | 'OIL' | 'WATER';
 export type FptQuality = 'VALID' | 'TIGHT' | 'SUPERCHARGED' | 'LOST_SEAL' | 'EXCLUDED';
 export type FptPressureUnit = 'psi' | 'bar' | 'kPa';
-export type FptDepthUnit = 'm' | 'ft';
+export type FptDepthUnit = DepthUnit;
 export type FptMethod = 'ols' | 'huber' | 'ransac';
 export type FptFluidSystem = 'OIL_WATER' | 'GAS_WATER' | 'GAS_OIL_WATER' | 'CUSTOM';
 
@@ -44,7 +45,7 @@ export const FPT_DENSITY_BOUNDS: Record<FptPhase, [number, number]> = {
 };
 
 const PRESSURE_TO_PA: Record<FptPressureUnit, number> = { psi: 6894.757293168, bar: 1e5, kPa: 1e3 };
-const DEPTH_TO_M: Record<FptDepthUnit, number> = { m: 1, ft: 0.3048 };
+const DEPTH_TO_M: Record<FptDepthUnit, number> = { m: 1, ft: METERS_PER_FOOT };
 
 export function densityToGradient(rho: number, pu: FptPressureUnit, du: FptDepthUnit): number {
 	return (rho * 1000 * 9.80665 * DEPTH_TO_M[du]) / PRESSURE_TO_PA[pu];

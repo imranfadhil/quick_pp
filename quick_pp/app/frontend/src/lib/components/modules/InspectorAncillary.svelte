@@ -7,6 +7,8 @@
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
+	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
+	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
 
 	type AncillaryTab = 'tops' | 'contacts' | 'perfs' | 'core' | 'scal' | 'pressure' | 'survey';
 	let activeTab = $state<AncillaryTab>('tops');
@@ -104,6 +106,10 @@
 
 	async function addQuickRow() {
 		if (!workbench.projectId || !workbench.wellId) return;
+		if (!Number.isFinite(newDepth) || (activeTab === 'perfs' && !Number.isFinite(newPerfBottom))) {
+			statusMsg = 'Enter a valid depth before adding a row.';
+			return;
+		}
 		if (activeTab === 'tops') {
 			const name = newName.trim() || `Zone-${wellData.tops.length + 1}`;
 			wellData.tops = [
@@ -481,8 +487,10 @@
 			<input
 				type="number"
 				step="0.5"
-				placeholder="Depth (m)"
-				bind:value={newDepth}
+				placeholder="Depth"
+				aria-label="Depth ({depthDisplay.unit})"
+				title="Depth ({depthDisplay.unit})"
+				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
 				class="mono-num h-6 w-20 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
 		{:else if activeTab === 'perfs'}
@@ -496,16 +504,16 @@
 				type="number"
 				step="0.5"
 				placeholder="Top"
-				title="Perforation Top MD (m)"
-				bind:value={newDepth}
+				title="Perforation Top MD ({depthDisplay.unit})"
+				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
 				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="number"
 				step="0.5"
 				placeholder="Bottom"
-				title="Perforation Bottom MD (m)"
-				bind:value={newPerfBottom}
+				title="Perforation Bottom MD ({depthDisplay.unit})"
+				bind:value={() => depthFromMeters(newPerfBottom, depthDisplay.unit), (v) => (newPerfBottom = depthToMeters(v, depthDisplay.unit))}
 				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
@@ -525,7 +533,8 @@
 				type="number"
 				step="0.5"
 				placeholder="Depth"
-				bind:value={newDepth}
+				title="Sample Depth ({depthDisplay.unit})"
+				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
 				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
@@ -554,8 +563,8 @@
 				type="number"
 				step="0.5"
 				placeholder="Depth"
-				bind:value={newDepth}
-				title="Sample Depth (m)"
+				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
+				title="Sample Depth ({depthDisplay.unit})"
 				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
@@ -581,8 +590,8 @@
 				type="number"
 				step="0.5"
 				placeholder="Depth"
-				title="Test Depth MD (m)"
-				bind:value={newDepth}
+				title="Test Depth MD ({depthDisplay.unit})"
+				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
 				class="mono-num h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
@@ -629,7 +638,8 @@
 				type="number"
 				step="1"
 				placeholder="Depth / MD"
-				bind:value={newDepth}
+				title="Depth / MD ({depthDisplay.unit})"
+				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
 				class="mono-num h-6 w-20 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
@@ -640,6 +650,7 @@
 				class="mono-num h-6 flex-1 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 		{/if}
+		<span class="text-[10px] text-[var(--text-muted)]">{depthDisplay.unit}</span>
 		<button
 			type="button"
 			onclick={addQuickRow}

@@ -234,6 +234,10 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
     original_filename = task_spec.get("filename") or file_path.name
     target_depth_uom = task_spec.get("target_depth_uom", "m")
     custom_mnemonic_map = task_spec.get("mnemonic_map") or {}
+    unit_overrides = {
+        str(k).strip().upper(): str(v or "").strip()
+        for k, v in (task_spec.get("unit_map") or {}).items()
+    }
     excluded_curves = {str(c).upper() for c in (task_spec.get("excluded_curves") or [])}
     metadata_overrides = task_spec.get("metadata_overrides") or {}
     selected_frames = task_spec.get("selected_dlis_frames")
@@ -309,8 +313,17 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
             str(c.mnemonic).strip().upper(): str(getattr(c, "unit", "") or "").strip()
             for c in las_header.curves
         }
-        # Ensure first curve is mapped to DEPTH if it's the index curve
+        raw_units.update(unit_overrides)
+        # fast_read_las may rename the index curve before its header units and
+        # user overrides are applied.
+        index_mnemonic = str(las_header.curves[0].mnemonic).strip().upper()
         first_col = str(raw_df.columns[0]).strip().upper()
+        if first_col != index_mnemonic:
+            raw_units[first_col] = raw_units.get(index_mnemonic, "")
+            custom_upper = {str(k).strip().upper(): v for k, v in custom_mnemonic_map.items()}
+            if index_mnemonic in custom_upper:
+                custom_mnemonic_map = {**custom_mnemonic_map, first_col: custom_upper[index_mnemonic]}
+        # Ensure first curve is mapped to DEPTH if it's the index curve
         if first_col not in custom_mnemonic_map and Config.resolve_mnemonic_alias(first_col) == "DEPTH":
             custom_mnemonic_map = {"DEPTH": "DEPTH", first_col: "DEPTH", **custom_mnemonic_map}
 

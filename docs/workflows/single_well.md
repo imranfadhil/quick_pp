@@ -2,6 +2,10 @@
 
 The Single-Well space delivers deterministic, optimization-driven, and core-calibrated formation evaluation along a single wellbore trajectory. It is structured into **7 Primary Sequential Workflow Steps** culminating in a Computer Processed Interpretation (CPI) report, accompanied by a **Standalone Core & Pc Prep Lab Module**.
 
+When importing LAS logs, check the depth curve's **Source Unit** in the uploader. Feet are converted to meters by multiplying the depth values by 0.3048; edit the source unit if the LAS curve header is incorrect. Previously imported wells are not automatically corrected, and importing into an existing well merges data rather than replacing it.
+
+The **Log / interval** unit selector (m or ft) affects the single-well log plot and readouts, working interval and top-bar depth filter, and shared tables whose values are in meters. Table edits, pasted values, and ancillary quick-entry depths are converted back to meters for processing. The preference is saved in the browser; it does not change stored data. Other plots, reports, and exports retain their existing units.
+
 In Data & QAQC, **Missing Data Imputation** saves selected logs as new `_IMP` curves without changing the source logs. Choose mean, median, most frequent, forward/backward fill, KNN, or iterative imputation; multivariate methods require at least two curves. Directional fills follow increasing depth within the well and may leave end gaps unfilled. Active depth and zone filters apply; existing `_IMP` curves must be renamed or deleted before re-running. The right-pane **Missing Matrix** shows binned missing fractions by curve, with deeper depths at the top and grey bins indicating no samples.
 
 ---

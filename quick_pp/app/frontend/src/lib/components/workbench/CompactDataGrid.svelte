@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { fmtNum, parseClipboardTsv, toTsv } from '$lib/utils/formatters';
 	import { workbench } from '$lib/state/workbench.svelte';
+	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
+	import { depthFromMeters, depthToMeters, type DepthUnit } from '$lib/utils/depthUnits';
 
 	export interface GridColumn {
 		key: string;
@@ -40,6 +42,7 @@
 
 	let editingCell = $state<{ row: number; key: string } | null>(null);
 	let editDraft = $state<string>('');
+	let editDepthUnit: DepthUnit = 'm';
 	let selectedRowIdx = $state<number | null>(null);
 	let selectedIndices = $state<Set<number>>(new Set());
 	let lastToggledIdx = $state<number | null>(null);
@@ -163,13 +166,19 @@
 		if (!editable && !col.editable) return;
 		editingCell = { row: rowIdx, key: col.key };
 		const cur = rows[rowIdx]?.[col.key];
-		editDraft = cur === null || cur === undefined ? '' : String(cur);
+		editDepthUnit = depthDisplay.unit;
+		editDraft = cur === null || cur === undefined ? '' : String(
+			col.unit === 'm' && Number.isFinite(Number(cur))
+				? depthFromMeters(Number(cur), editDepthUnit) : cur
+		);
 	}
 
 	function commitEdit(rowIdx: number, col: GridColumn) {
 		if (!editingCell) return;
 		const parsed = col.numeric ? parseFloat(editDraft) : editDraft.trim();
-		const finalVal = col.numeric ? (Number.isNaN(parsed as number) ? null : parsed) : parsed;
+		const finalVal = col.numeric
+			? (Number.isNaN(parsed as number) ? null : col.unit === 'm' ? depthToMeters(parsed as number, editDepthUnit) : parsed)
+			: parsed;
 		if (rows[rowIdx]) {
 			rows[rowIdx] = { ...rows[rowIdx], [col.key]: finalVal };
 			oncellchange?.(rowIdx, col.key, finalVal);
@@ -195,7 +204,17 @@
 	function handleCopy(e: ClipboardEvent) {
 		if (!rows.length) return;
 		const keys = columns.map((c) => c.key);
-		const tsv = toTsv(keys, rows);
+		const displayRows = rows.map((row) => {
+			const out = { ...row };
+			for (const col of columns) {
+				const value = row[col.key];
+				if (col.unit === 'm' && value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))) {
+					out[col.key] = depthFromMeters(Number(value), depthDisplay.unit);
+				}
+			}
+			return out;
+		});
+		const tsv = toTsv(keys, displayRows);
 		e.clipboardData?.setData('text/plain', tsv);
 		e.preventDefault();
 	}
@@ -223,7 +242,9 @@
 				const cellVal = cells[cIdx] ?? '';
 				if (col.numeric) {
 					const n = parseFloat(cellVal);
-					obj[col.key] = Number.isFinite(n) ? n : null;
+					obj[col.key] = Number.isFinite(n)
+						? (col.unit === 'm' ? depthToMeters(n, depthDisplay.unit) : n)
+						: null;
 				} else {
 					obj[col.key] = cellVal;
 				}
@@ -347,7 +368,7 @@
 							<span>{col.label}</span>
 							{#if col.unit}
 								<span class="mono-num ml-1 text-[10px] font-normal text-[var(--text-muted)]">
-									[{col.unit}]
+									[{col.unit === 'm' ? depthDisplay.unit : col.unit}]
 								</span>
 							{/if}
 						</th>
@@ -422,7 +443,7 @@
 											class="mono-num h-5 w-full rounded-sm border border-[var(--border-focus)] bg-white px-1 py-0 text-xs focus:outline-none"
 										/>
 									{:else if col.numeric}
-										{fmtNum(row[col.key], col.decimals ?? 3)}
+										{fmtNum(col.unit === 'm' && row[col.key] !== null && row[col.key] !== undefined && row[col.key] !== '' ? depthFromMeters(Number(row[col.key]), depthDisplay.unit) : row[col.key], col.decimals ?? 3)}
 									{:else}
 										{row[col.key] ?? '—'}
 									{/if}
