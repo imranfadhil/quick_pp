@@ -10,7 +10,7 @@
 
 ::: quick_pp.plotter.report_plots
 
-## Multi-Format LAS / DLIS Handler (`quick_pp.las_handler`)
+## Multi-Format LAS / DLIS / LIS Handler (`quick_pp.las_handler`)
 
 ::: quick_pp.las_handler
 

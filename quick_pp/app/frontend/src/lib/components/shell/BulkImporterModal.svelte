@@ -380,7 +380,7 @@
 						class="mb-3 rounded-sm border border-blue-200 bg-blue-50/70 px-3 py-2 text-[11px] text-blue-900"
 					>
 						<strong>Ephemeral Session Guardrail:</strong> Uploads are capped at <strong>5 MB</strong>
-						in memory so visitors can test custom <code>.las</code>/<code>.dlis</code>/<code>.csv</code>
+						in memory so visitors can test custom <code>.las</code>/<code>.dlis</code>/<code>.lis</code>/<code>.csv</code>
 						files without overwriting the pre-seeded Volve &amp; Costa multi-well projects.
 					</div>
 				{/if}
@@ -393,7 +393,7 @@
 						<div class="flex flex-wrap items-center justify-between gap-2">
 							<p class="text-xs text-[var(--text-secondary)]">
 								Upload one or more <code>.las</code> (LAS 2.0 / 3.0), <code>.dlis</code>,
-								<code>.csv</code>, or <code>.parquet</code> well log files for pre-import QA/QC inspection,
+								<code>.lis</code> (LIS79), <code>.csv</code>, or <code>.parquet</code> well log files for pre-import QA/QC inspection,
 								mnemonic mapping, and multi-run splicing.
 							</p>
 						</div>
@@ -402,7 +402,7 @@
 							<input
 								type="file"
 								multiple
-								accept=".las,.LAS,.dlis,.DLIS,.csv,.parquet"
+								accept=".las,.LAS,.dlis,.DLIS,.lis,.LIS,.csv,.CSV,.parquet,.PARQUET"
 								onchange={handleFileSelect}
 								class="block flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-xs"
 							/>
@@ -509,7 +509,7 @@
 
 											{#if fileItem.dlis_frames && fileItem.dlis_frames.length > 0}
 												<div class="flex items-center gap-1 text-[11px]">
-													<span class="font-medium text-[var(--text-secondary)]">DLIS Frame:</span>
+													<span class="font-medium text-[var(--text-secondary)]">Log Set / Frame:</span>
 													<select
 														bind:value={fileItem.selectedFrame}
 														class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 text-[11px]"
@@ -751,7 +751,7 @@
 														{#if (fileItem.metadata.raw_well_header && Object.keys(fileItem.metadata.raw_well_header).length > 0) || (fileItem.metadata.raw_parameters && Object.keys(fileItem.metadata.raw_parameters).length > 0)}
 															<details class="text-[10.5px] text-[var(--text-secondary)]">
 																<summary class="cursor-pointer font-semibold hover:text-[var(--text-primary)]">
-																	View Raw LAS/DLIS Header Tags ({Object.keys(fileItem.metadata.raw_well_header || {}).length} ~Well, {Object.keys(fileItem.metadata.raw_parameters || {}).length} ~Parameter)
+																	View Raw File Header Tags ({Object.keys(fileItem.metadata.raw_well_header || {}).length} well, {Object.keys(fileItem.metadata.raw_parameters || {}).length} parameter)
 																</summary>
 																<div class="mt-1.5 grid max-h-36 grid-cols-3 gap-x-3 gap-y-1 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-white p-2 font-mono text-[10px]">
 																	{#each Object.entries({ ...(fileItem.metadata.raw_well_header || {}), ...(fileItem.metadata.raw_parameters || {}) }) as [rk, rv]}

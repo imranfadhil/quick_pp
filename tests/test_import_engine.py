@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from dlisio import lis as dlisio_lis
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -31,10 +32,12 @@ from quick_pp.las_handler import (
     extract_las_metadata,
     fast_read_las,
     inspect_dlis,
+    inspect_lis,
     mnemonic_mapper,
     normalize_las3_to_las2_stream,
     read_dlis_frame,
     read_las_file_fast,
+    read_lis_frame,
     splice_and_regularize_runs,
     standardize_curve_units,
 )
@@ -408,6 +411,124 @@ def test_dlis_inspect_and_read_frame():
     # Verify 0.1 in depth index was converted to meters (~4850 m - 5320 m)
     assert 4500.0 < float(df["DEPTH"].min()) < 5000.0
     assert 5000.0 < float(df["DEPTH"].max()) < 5500.0
+
+
+def test_lis_inspect_read_and_api_upload(tmp_path, monkeypatch):
+    class FakeDfsr:
+        index_mnem = "DEPT"
+        index_units = ".1IN"
+        spacing = 10
+        absent_value = -999.25
+        specs = [
+            type("Spec", (), {"mnem": "DEPT", "units": ".1IN"})(),
+            type("Spec", (), {"mnem": "GR", "units": "GAPI"})(),
+            type("Spec", (), {"mnem": "NPHI", "units": "%"})(),
+        ]
+
+        def sample_rates(self):
+            return {1, 2}
+
+    class FakeLogicalFile:
+        def data_format_specs(self):
+            return [FakeDfsr()]
+
+    class FakePhysicalFile:
+        logical_files = [FakeLogicalFile()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def __len__(self):
+            return len(self.logical_files)
+
+        def __iter__(self):
+            return iter(self.logical_files)
+
+        def __getitem__(self, index):
+            return self.logical_files[index]
+
+    def fake_curves(_logical_file, _dfsr, sample_rate=None):
+        if sample_rate == 1:
+            return np.rec.fromarrays(
+                [[1000.0, 1010.0], [10.0, 20.0]], names=["DEPT", "GR"]
+            )
+        return np.rec.fromarrays(
+            [[1000.0, 1005.0, 1010.0], [20.0, 30.0, 40.0]],
+            names=["DEPT", "NPHI"],
+        )
+
+    monkeypatch.setattr(dlisio_lis, "load", lambda _path: FakePhysicalFile())
+    monkeypatch.setattr(dlisio_lis, "curves", fake_curves)
+    monkeypatch.setattr(log_import_service, "STAGING_DIR", tmp_path / "staging")
+
+    inspected = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("legacy.lis", b"fixture", "application/octet-stream"))],
+    )
+    assert inspected.status_code == 200, inspected.text
+    file_info = inspected.json()["files"][0]
+    assert file_info["format"] == "LIS79"
+    assert file_info["metadata"]["well_name"] == "legacy"
+    assert file_info["dlis_frames"][0]["frame_name"] == "LIS-LF0-DFSR0"
+    depth_curve = next(curve for curve in file_info["curves"] if curve["raw_mnemonic"] == "DEPT")
+    assert depth_curve["target_mnemonic"] == "DEPTH"
+    assert depth_curve["unit_conversion_applied"] is True
+
+    staged_path = log_import_service._STAGED_FILES[file_info["file_id"]]["path"]
+    parser_info = inspect_lis(staged_path, filename=file_info["filename"])
+    direct_df, _, _ = read_lis_frame(
+        staged_path, frame_name=parser_info["frames"][0].frame_name, filename=file_info["filename"]
+    )
+    assert direct_df["DEPTH"].tolist() == pytest.approx([2.54, 2.5527, 2.5654])
+
+    result = _parse_single_log_file_worker(
+        {
+            "file_path": staged_path,
+            "filename": file_info["filename"],
+            "selected_dlis_frames": ["LIS-LF0-DFSR0"],
+            "target_depth_uom": "m",
+        }
+    )
+    well_data = result["well_data"]
+    assert well_data["DEPTH"].tolist() == pytest.approx([2.54, 2.5527, 2.5654])
+    assert well_data["GR"].tolist()[0] == pytest.approx(10.0)
+    assert well_data["NPHI"].tolist() == pytest.approx([0.2, 0.3, 0.4])
+
+    project_response = client.post(
+        "/quick_pp/database/projects", json={"name": "LIS79ImportTest"}
+    )
+    assert project_response.status_code == 200
+    committed = client.post(
+        "/api/v1/import/logs/commit",
+        json={
+            "project_id": project_response.json()["project_id"],
+            "target_depth_uom": "m",
+            "files": [
+                {
+                    "file_id": file_info["file_id"],
+                    "filename": file_info["filename"],
+                    "metadata_overrides": file_info["metadata"],
+                    "mnemonic_map": {
+                        curve["raw_mnemonic"]: curve["target_mnemonic"]
+                        for curve in file_info["curves"]
+                    },
+                    "unit_map": {
+                        curve["raw_mnemonic"]: curve["raw_unit"]
+                        for curve in file_info["curves"]
+                    },
+                    "selected_dlis_frames": ["LIS-LF0-DFSR0"],
+                }
+            ],
+        },
+    )
+    assert committed.status_code == 200, committed.text
+    assert committed.json()["status"] == "success"
+    assert committed.json()["wells_imported"][0]["row_count"] == 3
+
+    log_import_service._STAGED_FILES.pop(file_info["file_id"], None)
 
 
 def test_api_two_pass_log_inspect_and_commit_with_int64_headers():

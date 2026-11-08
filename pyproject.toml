@@ -59,7 +59,7 @@ dependencies = [
     "tqdm",
     "wellpathpy",
     "welly",
-    "dlisio",
+    "dlisio>=0.3.0",
     "openpyxl",
     "xlrd",
 ]
@@ -82,7 +82,7 @@ core = [
     "tqdm",
     "wellpathpy",
     "welly",
-    "dlisio",
+    "dlisio>=0.3.0",
     "openpyxl",
     "xlrd",
 ]
