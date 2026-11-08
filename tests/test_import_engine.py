@@ -450,6 +450,11 @@ def test_lis_inspect_read_and_api_upload(tmp_path, monkeypatch):
         def __getitem__(self, index):
             return self.logical_files[index]
 
+    class EmptyPhysicalFile(FakePhysicalFile):
+        logical_files = [
+            type("EmptyLogicalFile", (), {"data_format_specs": lambda self: []})()
+        ]
+
     def fake_curves(_logical_file, _dfsr, sample_rate=None):
         if sample_rate == 1:
             return np.rec.fromarrays(
@@ -460,7 +465,9 @@ def test_lis_inspect_read_and_api_upload(tmp_path, monkeypatch):
             names=["DEPT", "NPHI"],
         )
 
-    monkeypatch.setattr(dlisio_lis, "load", lambda _path: FakePhysicalFile())
+    monkeypatch.setattr(
+        dlisio_lis, "load", lambda _path, error_handler=None: FakePhysicalFile()
+    )
     monkeypatch.setattr(dlisio_lis, "curves", fake_curves)
     monkeypatch.setattr(log_import_service, "STAGING_DIR", tmp_path / "staging")
 
@@ -529,6 +536,41 @@ def test_lis_inspect_read_and_api_upload(tmp_path, monkeypatch):
     assert committed.json()["wells_imported"][0]["row_count"] == 3
 
     log_import_service._STAGED_FILES.pop(file_info["file_id"], None)
+
+    def load_with_predecessor_warning(_path, error_handler=None):
+        error_handler.critical(
+            "Problem: iodevice::index_record: predecessor/successor inconsistency\n"
+            "Action taken: Indexing stopped at physical tell 1934 (dec)"
+        )
+        return FakePhysicalFile()
+
+    monkeypatch.setattr(dlisio_lis, "load", load_with_predecessor_warning)
+    partial_inspection = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("partial.lis", b"fixture", "application/octet-stream"))],
+    )
+    assert partial_inspection.status_code == 200, partial_inspection.text
+    partial_file = partial_inspection.json()["files"][0]
+    assert any("indexing stopped early" in warning.lower() for warning in partial_file["qaqc_warnings"])
+    log_import_service._STAGED_FILES.pop(partial_file["file_id"], None)
+
+    def load_truncated_without_log_sets(_path, error_handler=None):
+        error_handler.critical(
+            "Problem: iodevice::index_record: physical record truncated\n"
+            "Action taken: Indexing stopped at physical tell 44432 (dec)"
+        )
+        return EmptyPhysicalFile()
+
+    monkeypatch.setattr(dlisio_lis, "load", load_truncated_without_log_sets)
+    staged_files_before_failure = set((tmp_path / "staging").iterdir())
+    failed_inspection = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("truncated.lis", b"fixture", "application/octet-stream"))],
+    )
+    assert failed_inspection.status_code == 400
+    assert "physical record truncated" in failed_inspection.json()["detail"]
+    assert "44432" in failed_inspection.json()["detail"]
+    assert set((tmp_path / "staging").iterdir()) == staged_files_before_failure
 
 
 def test_api_two_pass_log_inspect_and_commit_with_int64_headers():

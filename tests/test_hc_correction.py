@@ -39,7 +39,9 @@ def correct(nphi, rhob, vsh, **kwargs):
 
 # --------------------------------------------------------------------------- angle
 def test_angle_measured_from_horizontal():
-    assert neu_den_xplot_hc_correction_angle(1.0, 0.3, 0.66) == pytest.approx(64.09, abs=0.01)
+    assert neu_den_xplot_hc_correction_angle(1.0, 0.3, 0.66) == pytest.approx(
+        64.09, abs=0.01
+    )
 
 
 def test_angle_liquid_defaults_and_hi_above_one():
@@ -192,18 +194,18 @@ def test_default_target_is_solid_and_differs_from_bulk():
 
 
 def test_invaded_zone_default_target_is_solid():
-    kwargs = dict(
-        nphi=np.array([0.1]),
-        rhob=np.array([2.35]),
-        vsh_gr=np.array([0.2]),
-        rho_hc=np.array([0.1]),
-        rho_mf=1.0,
-        salinity_ppm=0.0,
-        dry_sand_point=SAND,
-        dry_clay_point=CLAY,
-        hc_flag=np.array([True]),
-        lithology_coeff=0.0,
-    )
+    kwargs = {
+        "nphi": np.array([0.1]),
+        "rhob": np.array([2.35]),
+        "vsh_gr": np.array([0.2]),
+        "rho_hc": np.array([0.1]),
+        "rho_mf": 1.0,
+        "salinity_ppm": 0.0,
+        "dry_sand_point": SAND,
+        "dry_clay_point": CLAY,
+        "hc_flag": np.array([True]),
+        "lithology_coeff": 0.0,
+    }
     default = invaded_zone_hc_correction(**kwargs)
     solid = invaded_zone_hc_correction(**kwargs, target_mode="solid")
     bulk = invaded_zone_hc_correction(**kwargs, target_mode="bulk")
@@ -266,7 +268,12 @@ def test_den_correction_params_reproduce_triangle_model():
     for phi, vcl in [(0.25, 0.2), (0.15, 0.3), (0.0, 1.0), (0.3, 0.0)]:
         nphi, rhob = forward(phi, vcl, 0.0)
         rr = den_correction(
-            nphi, vsh_gr=vcl, phin_sh=phin_sh, phid_sh=phid_sh, rho_ma=rho_ma, rho_water=1.0
+            nphi,
+            vsh_gr=vcl,
+            phin_sh=phin_sh,
+            phid_sh=phid_sh,
+            rho_ma=rho_ma,
+            rho_water=1.0,
         )
         assert float(rr) == pytest.approx(float(rhob), abs=1e-10)
 

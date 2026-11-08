@@ -126,7 +126,7 @@ def _inspect_single_log_file_worker(
             dlis_frames=log_info["frames"],
             has_embedded_core=False,
             has_embedded_tops=False,
-            qaqc_warnings=[],
+            qaqc_warnings=log_info.get("qaqc_warnings", []),
             inspection_ms=elapsed_ms,
         )
         return res.model_dump()
@@ -535,6 +535,17 @@ async def inspect_log_files(files: List[UploadFile] = File(...)) -> LogInspectRe
             )
             results.append(LogInspectFileResult(**inspected_dict))
         except Exception as e:
+            _STAGED_FILES.pop(fid, None)
+            try:
+                staged_path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"Failed to inspect '{orig_name}': {e}. "
+                        f"Could not remove the failed upload from staging: {cleanup_error}"
+                    ),
+                ) from e
             raise HTTPException(
                 status_code=400,
                 detail=f"Failed to inspect '{orig_name}': {e}",

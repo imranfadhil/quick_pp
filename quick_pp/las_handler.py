@@ -2906,7 +2906,8 @@ def inspect_lis(
             return value.decode("utf-8", errors="replace").strip()
         return str(value).strip()
 
-    with lis.load(str(p)) as logical_files:
+    logical_files, index_warnings = _load_lis_file(lis, p)
+    with logical_files:
         for lf_idx, logical_file in enumerate(logical_files):
             for method_name in info_record_methods:
                 record_method = getattr(logical_file, method_name, None)
@@ -3043,6 +3044,22 @@ def inspect_lis(
                     )
                 )
 
+    if not frames:
+        if index_warnings:
+            issue_summary = "; ".join(
+                re.sub(r"\s+", " ", warning).strip().split(" Where:")[0].replace("Problem:", "").strip()
+                for warning in index_warnings
+            )
+            raise ValueError(
+                "The LIS79 file has no readable log sets after a critical indexing "
+                f"issue ({issue_summary}). No curves could be recovered."
+            )
+        raise ValueError(
+            "The LIS79 file contains no readable log sets. Its index is incomplete, "
+            "and no curves could be recovered. The file may use an unsupported layout "
+            "or contain an error before its log data."
+        )
+
     if frames:
         best_idx = max(
             range(len(frames)),
@@ -3059,11 +3076,64 @@ def inspect_lis(
         metadata_values["stop_depth"] = selected_frame.stop_depth
 
     metadata_values["raw_well_header"] = raw_header
+    qaqc_warnings = []
+    if index_warnings:
+        issue_summary = "; ".join(
+            re.sub(r"\s+", " ", warning).strip().split(" Where:")[0].replace("Problem:", "").strip()
+            for warning in index_warnings
+        )
+        qaqc_warnings.append(
+            "LIS79 indexing stopped early after a critical file issue "
+            f"({issue_summary}). Recovered {len(frames)} log set(s), but additional "
+            "data may not have been indexed. Check the imported depth range and curves "
+            "before using the results."
+        )
     return {
         "metadata": WellHeaderMetadata(**metadata_values),
         "frames": frames,
         "curves": curves,
+        "qaqc_warnings": qaqc_warnings,
     }
+
+
+def _load_lis_file(lis_module: Any, file_path: Path):
+    from dlisio.common import ErrorHandler
+
+    warnings: List[str] = []
+
+    try:
+        logical_files = lis_module.load(
+            str(file_path), error_handler=ErrorHandler(critical=warnings.append)
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        if "physical record truncated" in message.lower():
+            match = re.search(r"physical tell\s+(\d+)", message, flags=re.IGNORECASE)
+            offset = f" at byte {match.group(1)}" if match else ""
+            raise ValueError(
+                f"The LIS79 file is truncated{offset}. Request a complete re-export "
+                "of the file; the remaining log data cannot be read."
+            ) from exc
+        raise ValueError(f"Could not index the LIS79 file: {message}") from exc
+
+    unsupported_warnings = [
+        warning
+        for warning in warnings
+        if not any(
+            known_issue in warning.lower()
+            for known_issue in (
+                "physical record truncated",
+                "predecessor/successor inconsistency",
+            )
+        )
+    ]
+    if unsupported_warnings:
+        logical_files.close()
+        raise ValueError(
+            "Could not safely recover the LIS79 file after a critical indexing issue: "
+            + "; ".join(unsupported_warnings)
+        )
+    return logical_files, warnings
 
 
 def read_lis_frame(
@@ -3087,7 +3157,8 @@ def read_lis_frame(
     else:
         logical_file_idx, dfsr_idx = 0, 0
 
-    with lis.load(str(p)) as logical_files:
+    logical_files, _ = _load_lis_file(lis, p)
+    with logical_files:
         if logical_file_idx >= len(logical_files):
             raise ValueError(f"LIS logical file index {logical_file_idx} is out of range")
         logical_file = logical_files[logical_file_idx]
